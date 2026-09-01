@@ -161,6 +161,11 @@ function installDeterminism(): () => void {
   setEnv("MULTIREMI_LARK_APP_SECRET", "snapshot-lark-secret");
   setEnv("MULTIREMI_LARK_DOMAIN", "https://open.feishu.cn");
   setEnv("MULTIREMI_WEBHOOK_SECRET", "snapshot-webhook-secret");
+  // Pinned so `encryption_available` does not flip with whatever key the
+  // capturing machine happens to export. Snapshot-only: it protects nothing
+  // beyond an in-memory database that is discarded at the end of the run.
+  setEnv("MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY", "DRQbIikwNz5FTFNaYWhvdn2Ei5KZoKeutbzDytHY3+Y=");
+  setEnv("MULTIREMI_FEISHU_BOT_ENCRYPTION_PREVIOUS_KEYS", undefined);
   setEnv("GOOGLE_CLIENT_ID", "snapshot-google-client");
   setEnv("POSTHOG_API_KEY", undefined);
   setEnv("POSTHOG_HOST", undefined);
@@ -981,6 +986,9 @@ function resolveParam(pattern: string, name: string, refs: SeedRefs): string {
       if (pattern.includes("/models/")) return refs.runtimeModelRequestId;
       break;
     case "sessionId":
+      // Concierge registration sessions live in memory, never in the seeded
+      // store, so the sweep can only ever probe the not-found path.
+      if (pattern.includes("/feishu-bot/registration/")) return "fbreg_snapshot";
       if (pattern.includes("/lark/install/")) return "lark_snapshot_session";
       if (pattern.includes("/cloud-billing/")) return "cs_snapshot";
       if (pattern.includes("/issues/") || pattern.includes("/sessions/")) {
@@ -1729,6 +1737,34 @@ flow("attachments", async (rec, refs) => {
   });
   const attachmentId = created.body?.id ?? created.body?.attachment?.id ?? refs.attachmentId;
   await rec.call("DELETE", `/api/attachments/${attachmentId}`);
+});
+
+// -- feishu concierge bot ---------------------------------------------------
+flow("feishu-bot", async (rec, refs) => {
+  const base = `/api/workspaces/${refs.workspaceId}/feishu-bot`;
+  await rec.json("PUT", base, {
+    agent_id: refs.agentId,
+    runtime_id: refs.runtimeId,
+    app_id: "cli_snapshot_bot",
+    app_secret: "snapshot-bot-secret",
+    domain: "feishu",
+    enabled: false,
+  });
+  // A second write with no secret proves the stored credential survives an
+  // ordinary form save; the response must still report it as configured.
+  await rec.json("PUT", base, {
+    agent_id: refs.agentId,
+    runtime_id: refs.runtimeId,
+    app_id: "cli_snapshot_bot",
+    domain: "lark",
+    enabled: true,
+  });
+  await rec.json("POST", `${base}/test`, {});
+  await rec.json("POST", `${base}/deploy`, {});
+  await rec.json("POST", `${base}/stop`, {});
+  await rec.json("POST", `${base}/registration`, { brand: "feishu" });
+  await rec.call("DELETE", `${base}/registration/fbreg_snapshot`);
+  await rec.call("DELETE", base);
 });
 
 // -- settings / misc --------------------------------------------------------

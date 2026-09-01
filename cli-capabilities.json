@@ -535,6 +535,198 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "workspace.feishu-bot.get": {
+      "command": "remi workspace feishu-bot get",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.feishu-bot.status": {
+      "command": "remi workspace feishu-bot status",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.status",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.feishu-bot.candidates": {
+      "command": "remi workspace feishu-bot candidates",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.candidates",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.feishu-bot.audit": {
+      "command": "remi workspace feishu-bot audit",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.audit",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.feishu-bot.set": {
+      "command": "remi workspace feishu-bot set",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.set",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.feishu-bot.test": {
+      "command": "remi workspace feishu-bot test",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.test",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.feishu-bot.deploy": {
+      "command": "remi workspace feishu-bot deploy",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.deploy",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.feishu-bot.stop": {
+      "command": "remi workspace feishu-bot stop",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.stop",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.feishu-bot.register": {
+      "command": "remi workspace feishu-bot register",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.register",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.feishu-bot.register-status": {
+      "command": "remi workspace feishu-bot register-status",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.register-status",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.feishu-bot.register-cancel": {
+      "command": "remi workspace feishu-bot register-cancel",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.register-cancel",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.feishu-bot.delete": {
+      "command": "remi workspace feishu-bot delete",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.delete",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "workspace.prompt.get": {
       "command": "remi workspace prompt get",
       "aliases": [],
@@ -8913,6 +9105,12 @@
     "DELETE /api/workspaces/:id": {
       "command": "workspace.delete"
     },
+    "DELETE /api/workspaces/:id/feishu-bot": {
+      "command": "workspace.feishu-bot.delete"
+    },
+    "DELETE /api/workspaces/:id/feishu-bot/registration/:sessionId": {
+      "command": "workspace.feishu-bot.register-cancel"
+    },
     "DELETE /api/workspaces/:id/invitations/:invitationId": {
       "command": "invite.revoke"
     },
@@ -9096,6 +9294,11 @@
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
     "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "GET /api/daemon/runtimes/:runtimeId/feishu-bot": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
@@ -9730,6 +9933,21 @@
     "GET /api/workspaces/:id/env": {
       "command": "workspace.env.get"
     },
+    "GET /api/workspaces/:id/feishu-bot": {
+      "command": "workspace.feishu-bot.get"
+    },
+    "GET /api/workspaces/:id/feishu-bot/audit": {
+      "command": "workspace.feishu-bot.audit"
+    },
+    "GET /api/workspaces/:id/feishu-bot/candidates": {
+      "command": "workspace.feishu-bot.candidates"
+    },
+    "GET /api/workspaces/:id/feishu-bot/registration/:sessionId": {
+      "command": "workspace.feishu-bot.register-status"
+    },
+    "GET /api/workspaces/:id/feishu-bot/status": {
+      "command": "workspace.feishu-bot.status"
+    },
     "GET /api/workspaces/:id/invitations": {
       "command": "invite.list"
     },
@@ -10115,6 +10333,11 @@
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
     "POST /api/daemon/runtimes/:runtimeId/directory-scans/claim": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/runtimes/:runtimeId/feishu-bot/status": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
@@ -10734,6 +10957,18 @@
     "POST /api/workspaces/:id/bot-menu/publish": {
       "command": "workspace.bot-menu.publish"
     },
+    "POST /api/workspaces/:id/feishu-bot/deploy": {
+      "command": "workspace.feishu-bot.deploy"
+    },
+    "POST /api/workspaces/:id/feishu-bot/registration": {
+      "command": "workspace.feishu-bot.register"
+    },
+    "POST /api/workspaces/:id/feishu-bot/stop": {
+      "command": "workspace.feishu-bot.stop"
+    },
+    "POST /api/workspaces/:id/feishu-bot/test": {
+      "command": "workspace.feishu-bot.test"
+    },
     "POST /api/workspaces/:id/lark/install/begin": {
       "command": "lark.install.begin"
     },
@@ -10958,6 +11193,9 @@
     },
     "PUT /api/workspaces/:id/env": {
       "command": "workspace.env.update"
+    },
+    "PUT /api/workspaces/:id/feishu-bot": {
+      "command": "workspace.feishu-bot.set"
     },
     "PUT /api/workspaces/:id/issue-archive": {
       "command": "workspace.issue-archive.update"

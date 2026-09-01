@@ -40,8 +40,12 @@ import {
   daemonTaskWireResponse,
   workspaceReposResponse,
 } from "../wire/index.js";
+import { FEISHU_CONCIERGE_PROTOCOL_VERSION } from "@multiremi/contracts/types.js";
+import { FeishuBotEncryptionError } from "@multiremi/feishu-bot/credentials.js";
+import { normalizeFeishuBotErrorCode, redactFeishuBotError } from "@multiremi/feishu-bot/diagnostics.js";
 import type {
   MultiremiDaemonSshMeshStatus,
+  MultiremiFeishuBotDaemonPayload,
   ReportBotMenuPublishInput,
   MultiremiIssueWorkspaceRepo,
   MultiremiIssueWorkspaceStatus,
@@ -349,6 +353,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       bot_agent_id?: string;
       include_bot_projects?: boolean;
       supports_bot_menu?: boolean;
+      feishu_concierge_protocol?: number;
     }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const runtimeId = body.runtime_id ?? "";
@@ -369,11 +374,19 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     ) {
       return c.json({ error: "daemon token required", code: "daemon_token_required" }, 403);
     }
+    // A daemon that can host the concierge says so on every heartbeat, so
+    // silence is an answer: the build is older, or this process is already
+    // running the bot from its own environment (the legacy MUL-190 path) and
+    // must not be offered a second one. Letting the flag stay true from an
+    // earlier run is how a Runtime ends up hosting two connectors at once.
+    const feishuConciergeProtocol = normalizeDaemonProtocolVersion(body.feishu_concierge_protocol);
+    const supportsFeishuBotConfig = feishuConciergeProtocol >= FEISHU_CONCIERGE_PROTOCOL_VERSION;
     const ack = store.heartbeatRuntime(runtimeId, {
       supportsBatchImport: body.supports_batch_import ?? false,
       supportsDirectoryScan: body.supports_directory_scan ?? false,
       agentPluginProtocol: reportsAgentPluginProtocol ? body.agent_plugin_protocol : undefined,
       supportsBotMenu: body.supports_bot_menu,
+      supportsFeishuBotConfig,
     });
     if (ack.status === "runtime_gone") return c.json({ error: "runtime not found" }, 404);
     if (reportsSshMeshProtocol) {
@@ -416,10 +429,97 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     if (body.include_bot_projects) {
       response.bot_projects = daemonBotProjects(store, workspaceId, runtime?.daemonId ?? "");
     }
+    if (supportsFeishuBotConfig) {
+      // Carries a revision and a desired state, never a credential — the daemon
+      // fetches the payload itself over its own runtime-scoped route.
+      const directive = store.feishuBotDirectiveForRuntime(workspaceId, runtimeId);
+      if (directive) response.feishu_bot = directive;
+    }
     if (botAgent.agent || body.include_bot_projects) {
       c.header("Cache-Control", "no-store");
     }
     return c.json(response);
+  });
+
+  /**
+   * The only route that hands out decrypted Feishu credentials, and it is
+   * scoped twice over: the daemon token must be bound to this Runtime, and the
+   * store returns null unless this Runtime is the one selected to host the bot.
+   */
+  app.get("/api/daemon/runtimes/:runtimeId/feishu-bot", (c) => {
+    const runtimeId = c.req.param("runtimeId");
+    if (currentAccessToken(c)?.type !== "daemon") {
+      return c.json({ error: "daemon token required", code: "daemon_token_required" }, 403);
+    }
+    const denied = denyDaemonTokenRuntimeIdentity(c, store, runtimeId);
+    if (denied) return denied;
+    const runtime = store.getRuntime(runtimeId);
+    if (!runtime) return c.json({ error: "runtime not found" }, 404);
+    try {
+      const workspaceId = runtime.workspaceId ?? "local";
+      const config = store.getFeishuBotDaemonConfig(workspaceId, runtimeId);
+      if (!config) return c.json({ error: "feishu bot is not assigned to this runtime" }, 404);
+      // The Agent ships with the credentials so the daemon can boot the channel
+      // from one fetch. An archived Agent already disables the config, so a
+      // missing row here means it was deleted outright: say so with a code the
+      // daemon can report instead of a generic start failure.
+      const agent = store.getAgent(config.agent_id);
+      if (!agent || agent.workspaceId !== workspaceId || agent.archivedAt) {
+        return c.json({ error: "feishu bot agent is unavailable", code: "agent_unavailable" }, 409);
+      }
+      const payload: MultiremiFeishuBotDaemonPayload = {
+        ...config,
+        bot_agent: daemonBotAgentResponse(agent),
+        bot_projects: daemonBotProjects(store, workspaceId, runtime.daemonId ?? ""),
+      };
+      c.header("Cache-Control", "no-store");
+      return c.json(payload);
+    } catch (error) {
+      if (error instanceof FeishuBotEncryptionError) {
+        return c.json({ error: error.message, code: error.code }, 503);
+      }
+      throw error;
+    }
+  });
+
+  app.post("/api/daemon/runtimes/:runtimeId/feishu-bot/status", async (c) => {
+    const runtimeId = c.req.param("runtimeId");
+    const denied = denyDaemonTokenRuntimeIdentity(c, store, runtimeId);
+    if (denied) return denied;
+    const runtime = store.getRuntime(runtimeId);
+    if (!runtime) return c.json({ error: "runtime not found" }, 404);
+    const body = await readJsonStrict<{
+      applied_revision?: number;
+      state?: string;
+      bot_name?: string | null;
+      bot_open_id?: string | null;
+      error_code?: string | null;
+      error_message?: string | null;
+    }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const state = String(body.state ?? "");
+    if (state !== "stopped" && state !== "starting" && state !== "online" && state !== "failed") {
+      return c.json({ error: "invalid feishu bot runtime state" }, 400);
+    }
+    const appliedRevision = Number(body.applied_revision);
+    const workspaceId = runtime.workspaceId ?? "local";
+    store.reportFeishuBotRuntimeStatus(workspaceId, runtimeId, {
+      appliedRevision: Number.isSafeInteger(appliedRevision) && appliedRevision >= 0 ? appliedRevision : 0,
+      state,
+      botName: cleanString(body.bot_name) ?? null,
+      botOpenId: cleanString(body.bot_open_id) ?? null,
+      errorCode: normalizeFeishuBotErrorCode(body.error_code),
+      // The daemon already redacts, but a second pass costs nothing and this
+      // string is rendered to admins verbatim.
+      errorMessage: body.error_message ? redactFeishuBotError(body.error_message) : null,
+    });
+    c.header("Cache-Control", "no-store");
+    // Echo the current directive so a daemon that just confirmed `stopped` can
+    // act on the handover in the same round trip.
+    return c.json({
+      status: "ok",
+      directive: store.feishuBotDirectiveForRuntime(workspaceId, runtimeId),
+    });
   });
   app.post("/api/daemon/runtimes/:runtimeId/bot-menu/:requestId/result", async (c) => {
     const runtimeId = c.req.param("runtimeId");

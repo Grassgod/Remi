@@ -8,6 +8,17 @@ import { isRuntimeEffectivelyOnline } from "@multiremi/store/repos/runtimes-repo
 type Row = Record<string, unknown>;
 
 const BLOCKING_TASK_STATUSES = ["dispatched", "running", "waiting_local_directory", "awaiting_human"] as const;
+
+/**
+ * Columns that identify a row in a runtime-auxiliary table, for the retirement
+ * snapshot. Most of these tables have their own `id`; the ones listed here are
+ * keyed by something else, and querying `id` on them fails outright.
+ */
+const RUNTIME_AUXILIARY_IDENTITY_COLUMNS: Partial<Record<(typeof RUNTIME_AUXILIARY_TABLES)[number], string[]>> = {
+  multiremi_runtime_models: ["runtime_id", "model_id"],
+  multiremi_runtime_provision_states: ["runtime_id", "provision_id"],
+  multiremi_feishu_bot_runtime_states: ["runtime_id", "workspace_id"],
+};
 export type DaemonRetirementBlockingReason =
   | "active_tasks"
   | "local_directory_resources"
@@ -767,11 +778,7 @@ export class DaemonRetirementRepo {
     table: (typeof RUNTIME_AUXILIARY_TABLES)[number],
     runtimeIds: string[],
   ): Array<Record<string, string>> {
-    const identityColumns = table === "multiremi_runtime_models"
-      ? ["runtime_id", "model_id"]
-      : table === "multiremi_runtime_provision_states"
-        ? ["runtime_id", "provision_id"]
-        : ["runtime_id", "id"];
+    const identityColumns = RUNTIME_AUXILIARY_IDENTITY_COLUMNS[table] ?? ["runtime_id", "id"];
     const rows = this.rowsForRuntimeIds(
       `SELECT ${identityColumns.join(", ")}
        FROM ${table}

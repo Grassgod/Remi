@@ -24,8 +24,13 @@ import type {
   MultiremiDaemonSshMeshConfig,
   MultiremiDaemonSshMeshStatus,
   ReportAgentPluginRuntimeStateInput,
+  FeishuBotErrorCode,
+  FeishuBotRuntimeState,
+  MultiremiFeishuBotDaemonConfig,
+  MultiremiFeishuBotDaemonPayload,
 } from "@multiremi/contracts/types.js";
 import {
+  FEISHU_CONCIERGE_PROTOCOL_VERSION,
   MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
   MULTIREMI_SSH_MESH_PROTOCOL_VERSION,
 } from "@multiremi/contracts/types.js";
@@ -153,6 +158,27 @@ export class MultiremiDaemonHttpError extends Error {
   }
 }
 
+/**
+ * The concierge assignment as the daemon uses it: credentials, plus the Agent
+ * row and projects normalized out of the same response.
+ */
+export interface MultiremiFeishuBotAssignment {
+  config: MultiremiFeishuBotDaemonConfig;
+  agent: MultiremiAgent;
+  projects: MultiremiDaemonBotProject[];
+}
+
+/**
+ * A named reason the assignment could not be used. Carrying the code means the
+ * admin sees "agent unavailable" rather than a generic start failure.
+ */
+export class MultiremiFeishuBotAssignmentError extends Error {
+  constructor(message: string, readonly code: FeishuBotErrorCode) {
+    super(message);
+    this.name = "MultiremiFeishuBotAssignmentError";
+  }
+}
+
 /** Authentication/retirement failures require operator action, not polling. */
 export function isTerminalDaemonAuthorityError(error: unknown): boolean {
   return error instanceof MultiremiDaemonHttpError
@@ -249,6 +275,7 @@ export class MultiremiDaemonClient {
     botAgentId?: string | null,
     includeBotProjects = false,
     supportsBotMenu = false,
+    supportsFeishuConcierge = false,
   ): Promise<MultiremiDaemonHeartbeatConfigAck> {
     let resp: Partial<MultiremiDaemonHeartbeatConfigAck>;
     try {
@@ -268,6 +295,11 @@ export class MultiremiDaemonClient {
           : {}),
         ...(botAgentId ? { bot_agent_id: botAgentId } : {}),
         ...(includeBotProjects ? { include_bot_projects: true } : {}),
+        // Only claimed when this process can actually host the connector, so
+        // the control plane never hands the bot to a Runtime that cannot run it.
+        ...(supportsFeishuConcierge
+          ? { feishu_concierge_protocol: FEISHU_CONCIERGE_PROTOCOL_VERSION }
+          : {}),
       });
     } catch (error) {
       if (isRuntimeGoneHeartbeatError(error)) {
@@ -293,6 +325,56 @@ export class MultiremiDaemonClient {
   ): Promise<void> {
     await this.post(
       `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/bot-menu/${encodeURIComponent(requestId)}/result`,
+      input,
+    );
+  }
+
+  /**
+   * Fetch the decrypted concierge assignment for this Runtime. Returns null
+   * when the control plane has not assigned the bot here — including on servers
+   * from before MUL-206, which answer with an unstructured 404.
+   */
+  async getFeishuBotConfig(runtimeId: string): Promise<MultiremiFeishuBotAssignment | null> {
+    const path = `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/feishu-bot`;
+    let payload: MultiremiFeishuBotDaemonPayload;
+    try {
+      payload = await this.get<MultiremiFeishuBotDaemonPayload>(path);
+    } catch (error) {
+      if (
+        error instanceof MultiremiDaemonHttpError
+        && (error.status === 404 || error.status === 405)
+        && error.code !== "runtime_not_found"
+      ) {
+        return null;
+      }
+      // The control plane names the failures it can name; anything else stays
+      // an ordinary transport error for the caller to classify.
+      if (error instanceof MultiremiDaemonHttpError && error.code === "agent_unavailable") {
+        throw new MultiremiFeishuBotAssignmentError("the configured bot Agent is unavailable", "agent_unavailable");
+      }
+      throw error;
+    }
+    const { bot_agent: rawAgent, bot_projects: rawProjects, ...config } = payload;
+    const agent = normalizeDaemonAgent(rawAgent);
+    if (!agent) {
+      throw new MultiremiFeishuBotAssignmentError("the control plane returned no bot Agent", "agent_unavailable");
+    }
+    return { config, agent, projects: Array.isArray(rawProjects) ? rawProjects : [] };
+  }
+
+  async reportFeishuBotRuntimeStatus(
+    runtimeId: string,
+    input: {
+      applied_revision: number;
+      state: FeishuBotRuntimeState;
+      bot_name?: string | null;
+      bot_open_id?: string | null;
+      error_code?: FeishuBotErrorCode | null;
+      error_message?: string | null;
+    },
+  ): Promise<void> {
+    await this.post(
+      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/feishu-bot/status`,
       input,
     );
   }

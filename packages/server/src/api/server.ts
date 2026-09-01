@@ -26,6 +26,11 @@ import { registerWorkspaceRoutes } from "./routers/workspaces.js";
 import { registerScmRoutes } from "./routers/scm.js";
 import { registerFeishuCompatRoutes } from "./routers/feishu-compat.js";
 import { registerMessagingRoutes } from "./routers/messaging.js";
+import { registerFeishuBotRoutes } from "./routers/feishu-bot.js";
+import {
+  FeishuBotRegistrationService,
+  type FeishuBotRegistrationOptions,
+} from "@multiremi/feishu-bot/registration.js";
 import { registerMemberRoutes } from "./routers/members.js";
 import { registerInvitationRoutes } from "./routers/invitations.js";
 import { registerAgentRoutes } from "./routers/agents.js";
@@ -209,6 +214,8 @@ export interface MultiremiApiOptions {
   messaging?: MessagingScheduler | null;
   /** Providers this server can reach. Defaults to everything this build ships. */
   messagingProviders?: MessageProviderRegistry;
+  /** Injectable Feishu app registration (device flow) dependencies for tests. */
+  feishuBotRegistrations?: FeishuBotRegistrationOptions;
   /** Undefined enables server-owned Issue title scanning; null explicitly disables it. */
   issueTitleScheduler?: IssueTitleScheduler | null;
   issueRetitle?: typeof retitleIssue;
@@ -522,6 +529,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   registerScmRoutes(app, deps);
   registerMessagingRoutes(app, deps);
   registerFeishuCompatRoutes(app, deps);
+  registerFeishuBotRoutes(app, deps, new FeishuBotRegistrationService(options.feishuBotRegistrations));
   registerMemberRoutes(app, deps);
   registerInvitationRoutes(app, deps);
   app.post("/api/lark/binding/redeem", async (c) => {

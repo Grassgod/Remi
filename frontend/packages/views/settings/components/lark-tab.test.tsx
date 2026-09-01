@@ -746,3 +746,50 @@ describe("LarkTab connected bots list (agent identity rendering)", () => {
     expect(screen.getByRole("button", { name: /Disconnect/i })).toBeTruthy();
   });
 });
+
+describe("LarkTab as a legacy-only panel (MUL-206)", () => {
+  beforeEach(resetFixtures);
+
+  it("renders nothing when the workspace has no per-Agent installation to manage", () => {
+    installationsRef.current = { installations: [], configured: true, install_supported: true };
+    const { container } = render(<LarkTab />, { wrapper: I18nWrapper });
+    // The concierge section owns the "you have no bot" story now. An empty
+    // panel here only pointed at the agent-detail device flow, which cannot
+    // complete in this build.
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("no longer advertises the at-rest key or the unwired device flow", () => {
+    installationsRef.current = { installations: [], configured: false, install_supported: false };
+    render(<LarkTab />, { wrapper: I18nWrapper });
+    expect(screen.queryByText(/MULTIMIRA_LARK_SECRET_KEY/)).toBeNull();
+    expect(screen.queryByText(/coming soon/i)).toBeNull();
+  });
+
+  it("keeps existing installations manageable and labels them as legacy", () => {
+    agentNameByIdRef.current = new Map([["agent-1", "Bohan's Helper"]]);
+    installationsRef.current = {
+      installations: [
+        {
+          id: "inst-1",
+          workspace_id: "ws-1",
+          agent_id: "agent-1",
+          app_id: "cli_legacy",
+          bot_open_id: "ou_legacy",
+          installer_user_id: "user-1",
+          status: "active",
+          installed_at: "2026-06-03T00:00:00Z",
+          created_at: "2026-06-03T00:00:00Z",
+          updated_at: "2026-06-03T00:00:00Z",
+        },
+      ],
+      // Even with the install path reported as unavailable, the rows stay:
+      // a workspace must always be able to disconnect what it already has.
+      configured: false,
+      install_supported: false,
+    };
+    render(<LarkTab />, { wrapper: I18nWrapper });
+    expect(screen.getByText("Bohan's Helper")).toBeTruthy();
+    expect(screen.getByText(/older per-Agent flow/)).toBeTruthy();
+  });
+});

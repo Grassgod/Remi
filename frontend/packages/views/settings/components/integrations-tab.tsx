@@ -1,24 +1,28 @@
 "use client";
 
+import { FeishuBotSection } from "./feishu-bot-section";
 import { LarkTab } from "./lark-tab";
 import { BotMenuSection } from "./bot-menu-section";
-import { useT } from "../../i18n";
 
 // Integrations is the umbrella tab for third-party platform connections.
-// Source control has its own top-level tab; everything else
-// — currently just Lark, with Slack/Linear etc. to follow — lives in
-// here under its own section heading so additional integrations slot in
-// without changing the IA. IntegrationsTab is just the host; each
-// integration owns its own description and install flow.
+// Source control has its own top-level tab; everything else lives here under
+// its own section heading so additional integrations slot in without changing
+// the IA.
+//
+// The Feishu concierge (MUL-206) leads, because it is the one bot a workspace
+// actually runs: Agent, host Runtime, credentials, start/stop and status all
+// live in `FeishuBotSection`. The bot menu follows it directly — the menu is
+// published *to that bot*, so separating them made admins configure a bot in
+// one place and publish its menu in another.
+//
+// `LarkTab` renders only when a workspace still has legacy per-Agent Lark
+// installations to manage; it is not an entry point for new ones.
 export function IntegrationsTab() {
-  const { t } = useT("settings");
   return (
     <div className="space-y-10">
-      <section className="space-y-4">
-        <h2 className="text-sm font-semibold">{t(($) => $.lark.section_title)}</h2>
-        <LarkTab />
-      </section>
+      <FeishuBotSection />
       <BotMenuSection />
+      <LarkTab />
     </div>
   );
 }

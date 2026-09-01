@@ -323,6 +323,9 @@ export class AgentsSkillsRepo {
         [now, id],
       );
       this.ctx.agentPlugins().reconcileAgentPluginDesiredStateWithinLock(agent.workspaceId);
+      // An archived Agent can no longer answer Feishu messages, so the
+      // concierge stops rather than routing to a dead Agent id.
+      this.ctx.feishuBot().disableFeishuBotConfigsReferencingAgent(id);
     });
     tx();
     this.publishClearedProjectDefaults(affectedProjects, now);

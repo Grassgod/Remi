@@ -492,6 +492,73 @@ export function runMigrations(db: SqlDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_multiremi_bot_menu_publish_workspace
       ON multiremi_bot_menu_publish_requests(workspace_id, created_at);
 
+    -- MUL-206: one Feishu concierge bot per workspace. workspace_id is the
+    -- primary key rather than a UNIQUE index so a second config physically
+    -- cannot exist. Secrets are stored only in the *_encrypted columns; the
+    -- *_hint columns hold a non-reversible display prefix.
+    CREATE TABLE IF NOT EXISTS multiremi_feishu_bot_configs (
+      workspace_id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      runtime_id TEXT NOT NULL,
+      app_id TEXT NOT NULL,
+      app_secret_encrypted TEXT NOT NULL,
+      app_secret_hint TEXT,
+      verification_token_encrypted TEXT,
+      encrypt_key_encrypted TEXT,
+      domain TEXT NOT NULL DEFAULT 'feishu',
+      enabled INTEGER NOT NULL DEFAULT 0,
+      revision INTEGER NOT NULL DEFAULT 1,
+      bot_name TEXT,
+      bot_open_id TEXT,
+      last_tested_at TEXT,
+      last_test_error TEXT,
+      last_test_error_code TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      updated_by TEXT,
+      FOREIGN KEY(workspace_id) REFERENCES multiremi_workspaces(id) ON DELETE CASCADE
+    );
+
+    -- Reported state per Runtime, not per workspace: keeping a row for a
+    -- Runtime that is no longer selected is what lets the control plane see a
+    -- stale connector and refuse to hand over until it confirms it stopped.
+    CREATE TABLE IF NOT EXISTS multiremi_feishu_bot_runtime_states (
+      workspace_id TEXT NOT NULL,
+      runtime_id TEXT NOT NULL,
+      applied_revision INTEGER NOT NULL DEFAULT 0,
+      state TEXT NOT NULL DEFAULT 'stopped',
+      bot_name TEXT,
+      bot_open_id TEXT,
+      error_code TEXT,
+      error_message TEXT,
+      reported_at TEXT NOT NULL,
+      PRIMARY KEY (workspace_id, runtime_id),
+      FOREIGN KEY(runtime_id) REFERENCES multiremi_runtimes(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_runtime_states_workspace
+      ON multiremi_feishu_bot_runtime_states(workspace_id, state);
+
+    -- Who changed the concierge, when, and what changed. The details column
+    -- records which fields moved and whether a secret was replaced, never a value.
+    CREATE TABLE IF NOT EXISTS multiremi_feishu_bot_audit (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      -- Per-workspace insertion order. created_at is millisecond-resolution
+      -- and the id is random, so two entries written in the same millisecond
+      -- (a stop immediately followed by a deploy) would otherwise come back in
+      -- an arbitrary order — and the order is the whole point of an audit list.
+      seq INTEGER NOT NULL DEFAULT 0,
+      action TEXT NOT NULL,
+      actor_type TEXT NOT NULL DEFAULT 'member',
+      actor_id TEXT,
+      details TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_audit_workspace
+      ON multiremi_feishu_bot_audit(workspace_id, seq);
+
     CREATE TABLE IF NOT EXISTS multiremi_users (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -2460,6 +2527,10 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_tasks", "holds_workspace INTEGER NOT NULL DEFAULT 1");
   addColumnIfMissing(db, "multiremi_tasks", "assignment_event_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "assignment_source_event_id TEXT");
+  // The audit table shipped inside MUL-206 before it had a seq; a branch
+  // checkout that already created it needs the column added rather than the
+  // CREATE TABLE above, which is a no-op once the table exists.
+  addColumnIfMissing(db, "multiremi_feishu_bot_audit", "seq INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(db, "multiremi_tasks", "projection_from_seq INTEGER");
   addColumnIfMissing(db, "multiremi_tasks", "projection_to_seq INTEGER");
   addColumnIfMissing(db, "multiremi_tasks", "projection_mode TEXT");

@@ -28,7 +28,8 @@ import {
   saveMultiremiConfig,
   type MultiremiCliConfig,
 } from "@multiremi/config.js";
-import { bootFeishuChannel, feishuConfigured } from "./agent.js";
+import { bootFeishuChannel, feishuConfigured, type FeishuChannelHandle } from "./agent.js";
+import { FeishuConciergeError, type FeishuConciergeHost } from "@multiremi/worker/feishu-concierge.js";
 import { ensureAcpBridges, type ProvisionProvider } from "@acp/provision.js";
 import { IssueWorkspaceLifecycleLocker } from "@daemon/agent-runtime/workspace/lifecycle-lock.js";
 import {
@@ -422,18 +423,23 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
     const issueWorkspaceLifecycleLocker = new IssueWorkspaceLifecycleLocker();
     const botAgentId = String(process.env.MULTIREMI_BOT_AGENT_ID ?? "").trim();
     const hasFeishuEnvironment = !Boolean(options.once) && feishuConfigured();
-    const shouldStartFeishu = !Boolean(options.once) && (hasFeishuEnvironment || Boolean(botAgentId));
+    // `MULTIREMI_BOT_AGENT_ID` is what pins a bot to this machine, and it is
+    // the legacy MUL-190 path. Without it the concierge is driven from
+    // Workspace settings (MUL-206) instead. The two are exclusive on purpose:
+    // the control plane is never offered a Runtime already running its own bot.
+    const shouldStartFeishu = !Boolean(options.once) && Boolean(botAgentId);
+    const conciergeFromControlPlane = !Boolean(options.once) && !shouldStartFeishu;
     if (shouldStartFeishu && !hasFeishuEnvironment) {
       throw new Error("Feishu channel cannot start; missing env: FEISHU_APP_ID, FEISHU_APP_SECRET");
+    }
+    if (conciergeFromControlPlane && hasFeishuEnvironment) {
+      console.warn("FEISHU_APP_ID/FEISHU_APP_SECRET are set but MULTIREMI_BOT_AGENT_ID is not; ignoring them and taking the bot from Workspace settings");
     }
     const feishuWorkspaceId = shouldStartFeishu
       ? configuredWorkerWorkspaceId(options, loadMultiremiConfig())
       : undefined;
     if (shouldStartFeishu && !feishuWorkspaceId) {
       throw new Error("Feishu requires an explicitly configured Multiremi workspace");
-    }
-    if (shouldStartFeishu && !botAgentId) {
-      throw new Error("MULTIREMI_BOT_AGENT_ID is required when the Feishu channel is configured");
     }
     let resolveBotAgent!: (agent: MultiremiAgent) => void;
     const botAgentReady = new Promise<MultiremiAgent>((resolve) => { resolveBotAgent = resolve; });
@@ -455,7 +461,10 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
         resolvedBotAgentId = agent.id;
         resolveBotAgent(agent);
       },
-      onBotProjectsUpdated: shouldStartFeishu
+      // A control-plane concierge needs the same project list, and it can be
+      // switched on at any moment, so the heartbeat carries projects whenever
+      // this process is capable of hosting a bot at all.
+      onBotProjectsUpdated: shouldStartFeishu || conciergeFromControlPlane
         ? (projects) => {
             feishu?.updateProjects(projects);
             if (botProjectsResolved) return;
@@ -481,9 +490,21 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
       throw new Error(`Nothing to start: no healthy runtime provider (install/authenticate one of: ${SUPPORTED_DAEMON_PROVIDERS.join(", ")}) and Feishu is not configured.`);
     }
 
+    /**
+     * Tear down whichever concierge is running. The supervisor goes first so
+     * the control plane hears `stopped` from this Runtime before the process
+     * disappears; otherwise a workspace whose bot was moved elsewhere waits out
+     * the staleness window before the new Runtime is allowed to start.
+     */
+    const stopFeishu = async (): Promise<void> => {
+      await daemons[0]?.shutdownFeishuConcierge();
+      const handle = feishu;
+      feishu = null;
+      if (handle) await handle.stop();
+    };
     stopAll = (): void => {
       for (const runtimeDaemon of daemons) runtimeDaemon.stop();
-      feishu?.stop().catch(() => {});
+      stopFeishu().catch(() => {});
     };
     process.on("SIGINT", stopAll);
     process.on("SIGTERM", stopAll);
@@ -498,7 +519,7 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
           for (const runtimeDaemon of daemons) {
             runtimeDaemon.stopForWorkspaceOwnershipLoss(error);
           }
-          feishu?.stop().catch(() => {});
+          stopFeishu().catch(() => {});
         }
       }, 250);
       ownerWatch.unref?.();
@@ -532,7 +553,15 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
         daemons[0]!.setBotMenuPublisher(feishu.publishBotMenu);
         running.push(feishu.start);
       }
-      stopChannelWhenProvidersFinish(providerRuns, feishu);
+      if (conciergeFromControlPlane) {
+        daemons[0]!.setFeishuConciergeHost(controlPlaneConciergeHost({
+          daemon: () => daemons[0],
+          workspacesRoot: () => workspaceSupervisor?.workspaceRoot,
+          current: () => feishu,
+          attach: (handle) => { feishu = handle; },
+        }));
+      }
+      stopChannelWhenProvidersFinish(providerRuns, { stop: stopFeishu });
       await Promise.all(running);
     } catch (error) {
       // Promise.all returns on the first provider failure. Keep ownership until
@@ -555,6 +584,83 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
   if (restartRequested) {
     restartForegroundDaemonProcess(options, programName);
   }
+}
+
+/**
+ * Host the Workspace-configured Feishu concierge (MUL-206).
+ *
+ * The supervisor in `packages/server/src/worker/feishu-concierge.ts` decides
+ * *whether* the bot should run; this decides *how*, and it is the only place
+ * that knows how to boot a Remi core. Everything the channel needs — the Agent
+ * row, the project list, the credentials — arrives in the assignment, so
+ * switching the workspace to a different bot or a different Agent never
+ * requires touching this machine.
+ *
+ * The accessors exist because `runDaemonForeground` owns the daemon list, the
+ * workspace lease and the channel handle, and any of them can be replaced while
+ * the process runs; reading them at call time is what keeps a restart from
+ * binding to a stale one.
+ */
+export function controlPlaneConciergeHost(deps: {
+  daemon: () => MultiremiDaemon | undefined;
+  workspacesRoot: () => string | undefined;
+  current: () => FeishuChannelHandle | null;
+  attach: (handle: FeishuChannelHandle | null) => void;
+  /** Overridden by tests; booting a real channel needs a Feishu app. */
+  boot?: typeof bootFeishuChannel;
+}): FeishuConciergeHost {
+  const boot = deps.boot ?? bootFeishuChannel;
+  return {
+    async start(assignment) {
+      const daemon = deps.daemon();
+      const workspacesRoot = deps.workspacesRoot();
+      // Membership is checked against the daemon's authenticated control plane,
+      // so a process without one must refuse rather than answer strangers.
+      if (!daemon || !workspacesRoot) {
+        throw new FeishuConciergeError(
+          "the Multiremi daemon is not available to gate workspace membership",
+          "runtime_unavailable",
+        );
+      }
+      const { config, agent, projects } = assignment;
+      const handle = await boot(
+        agent,
+        projects,
+        (senderOpenId) => daemon.checkExternalWorkspaceMembership(config.workspace_id, senderOpenId),
+        {
+          daemonPort: daemon.localPort(),
+          workspacesRoot,
+          ensureTopicWorkspace: (sessionKey, topicId) => daemon.ensureTopicWorkspace(sessionKey, topicId),
+          credentials: {
+            appId: config.app_id,
+            appSecret: config.app_secret,
+            domain: config.domain,
+            verificationToken: config.verification_token,
+            encryptKey: config.encrypt_key,
+          },
+        },
+      );
+      deps.attach(handle);
+      daemon.setBotMenuPublisher(handle.publishBotMenu);
+      // `handle.start` runs for the life of the channel. Nobody awaits it here —
+      // the daemon loop owns the process lifetime — so a connector that dies on
+      // its own is reported back rather than leaving the settings page showing
+      // `online` for a bot that stopped answering.
+      void handle.start.catch((error: unknown) => {
+        if (deps.current() !== handle) return;
+        deps.attach(null);
+        daemon.setBotMenuPublisher(null);
+        void daemon.reportFeishuConciergeFailure(error);
+      });
+      return { botName: agent.name };
+    },
+    async stop() {
+      const handle = deps.current();
+      deps.attach(null);
+      deps.daemon()?.setBotMenuPublisher(null);
+      if (handle) await handle.stop();
+    },
+  };
 }
 
 export function stopChannelWhenProvidersFinish(

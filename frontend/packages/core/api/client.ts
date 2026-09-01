@@ -32,6 +32,7 @@ import { SessionArchivesEndpoints } from "./endpoints/session-archives";
 import { ScmEndpoints } from "./endpoints/scm";
 import { PlatformEndpoints } from "./endpoints/platform";
 import { FeishuEndpoints } from "./endpoints/feishu";
+import { FeishuBotEndpoints } from "./endpoints/feishu-bot";
 import { KnowledgeEndpoints } from "./endpoints/knowledge";
 
 export { ApiError, PreviewTooLargeError, PreviewUnsupportedError } from "./http";
@@ -88,6 +89,7 @@ export const ENDPOINT_FACTORIES: ReadonlyArray<(http: HttpClient) => object> = [
   (http: HttpClient) => new ScmEndpoints(http),
   (http: HttpClient) => new PlatformEndpoints(http),
   (http: HttpClient) => new FeishuEndpoints(http),
+  (http: HttpClient) => new FeishuBotEndpoints(http),
   (http: HttpClient) => new KnowledgeEndpoints(http),
 ];
 
@@ -135,6 +137,7 @@ export interface ApiClient extends
     ScmEndpoints,
     PlatformEndpoints,
     FeishuEndpoints,
+    FeishuBotEndpoints,
     KnowledgeEndpoints {}
 
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging -- see the interface above

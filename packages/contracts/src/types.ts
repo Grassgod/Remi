@@ -874,6 +874,12 @@ export interface MultiremiDaemonHeartbeatAck {
     config: ResolvedBotMenuConfig;
     dry_run: boolean;
   };
+  /**
+   * Feishu concierge assignment for this Runtime. Present only when the daemon
+   * advertised `feishu_concierge_protocol`. Carries no credentials — see
+   * `MultiremiFeishuBotDirective`.
+   */
+  feishu_bot?: MultiremiFeishuBotDirective;
   ssh_mesh?: MultiremiSshMeshHeartbeatAck;
   /** Platform maintenance directive: daemons must pause task claims while draining. */
   drain?: MultiremiDaemonDrainDirective;
@@ -3653,6 +3659,260 @@ export interface ReportBotMenuPublishInput {
   status: "completed" | "failed";
   result?: BotMenuPublishResult | null;
   error?: string | null;
+}
+
+/**
+ * Workspace Feishu concierge bot (MUL-206).
+ *
+ * One bot per workspace: `multiremi_feishu_bot_configs` is keyed by workspace
+ * so the control plane, not a daemon machine's environment, owns which Agent
+ * answers Feishu messages and which Runtime hosts the connector.
+ */
+
+/** Capability a Runtime must advertise before it can be selected to host the bot. */
+export const FEISHU_CONCIERGE_CONFIG_CAPABILITY = "feishu_concierge_config_v1";
+
+/** Protocol version a daemon reports in register/heartbeat when it can host the bot. */
+export const FEISHU_CONCIERGE_PROTOCOL_VERSION = 1;
+
+export type FeishuBotDomain = "feishu" | "lark" | "bytedance";
+
+/** What the control plane wants the selected Runtime to do with the connector. */
+export type FeishuBotDesiredState = "running" | "stopped";
+
+/** What a Runtime reports back about the connector it is hosting. */
+export type FeishuBotRuntimeState = "stopped" | "starting" | "online" | "failed";
+
+/**
+ * Aggregate status shown in Workspace Settings. Derived from the config row,
+ * the selected Runtime's liveness, and the reported per-Runtime states — it is
+ * never stored directly, so it cannot drift from those inputs.
+ */
+export type FeishuBotStatus =
+  | "not_configured"
+  | "stopped"
+  | "deploying"
+  | "connecting"
+  | "online"
+  | "degraded"
+  | "failed"
+  | "runtime_offline";
+
+/** Stable, non-sensitive failure vocabulary safe to render in the browser. */
+export type FeishuBotErrorCode =
+  | "invalid_credentials"
+  | "insufficient_permissions"
+  | "agent_unavailable"
+  | "runtime_unavailable"
+  | "connector_start_failed"
+  | "network_unreachable"
+  | "unknown";
+
+/** Server-side config row. Secrets live only in the `*Encrypted` fields. */
+export interface MultiremiFeishuBotConfig {
+  workspaceId: string;
+  agentId: string;
+  runtimeId: string;
+  appId: string;
+  domain: FeishuBotDomain;
+  enabled: boolean;
+  /** Bumped on every mutation; daemons refetch when their applied revision lags. */
+  revision: number;
+  hasAppSecret: boolean;
+  /** Non-reversible display prefix of the stored app secret, e.g. `abcd••••`. */
+  appSecretHint: string | null;
+  hasVerificationToken: boolean;
+  hasEncryptKey: boolean;
+  botName: string | null;
+  botOpenId: string | null;
+  lastTestedAt: string | null;
+  lastTestError: string | null;
+  lastTestErrorCode: FeishuBotErrorCode | null;
+  createdAt: string;
+  updatedAt: string;
+  updatedBy: string | null;
+}
+
+/**
+ * Admin-facing view. Secret fields are reported as `configured` booleans plus a
+ * short hint; the plaintext never leaves the server.
+ */
+export interface FeishuBotConfigView {
+  configured: boolean;
+  workspace_id: string;
+  agent_id: string | null;
+  agent_name: string | null;
+  agent_archived: boolean;
+  runtime_id: string | null;
+  runtime_name: string | null;
+  runtime_online: boolean;
+  runtime_supports_config: boolean;
+  app_id: string;
+  domain: FeishuBotDomain;
+  enabled: boolean;
+  revision: number;
+  app_secret_configured: boolean;
+  app_secret_hint: string | null;
+  verification_token_configured: boolean;
+  encrypt_key_configured: boolean;
+  bot_name: string | null;
+  bot_open_id: string | null;
+  last_tested_at: string | null;
+  last_test_error: string | null;
+  last_test_error_code: FeishuBotErrorCode | null;
+  created_at: string | null;
+  updated_at: string | null;
+  updated_by: string | null;
+}
+
+/**
+ * Member-visible projection: whether the bot is usable, and nothing else. No
+ * credentials, no Runtime identity, no error detail.
+ */
+export interface FeishuBotAvailabilityView {
+  configured: boolean;
+  available: boolean;
+  bot_name: string | null;
+}
+
+export interface FeishuBotStatusView {
+  status: FeishuBotStatus;
+  workspace_id: string;
+  enabled: boolean;
+  revision: number;
+  desired_state: FeishuBotDesiredState;
+  runtime_id: string | null;
+  runtime_name: string | null;
+  runtime_online: boolean;
+  applied_revision: number | null;
+  bot_name: string | null;
+  last_heartbeat_at: string | null;
+  error_code: FeishuBotErrorCode | null;
+  /** Already redacted server-side; safe to render verbatim. */
+  error_message: string | null;
+  /** Runtimes other than the selected one that still report a live connector. */
+  stale_runtime_ids: string[];
+}
+
+/**
+ * `keep` preserves the stored secret, `set` replaces it, `clear` removes it.
+ * Editing a non-secret field therefore cannot silently wipe a credential.
+ */
+export type FeishuBotSecretOp = "keep" | "set" | "clear";
+
+export interface UpsertFeishuBotConfigInput {
+  agentId: string;
+  runtimeId: string;
+  appId: string;
+  domain: FeishuBotDomain;
+  enabled: boolean;
+  appSecretOp: FeishuBotSecretOp;
+  appSecret?: string;
+  verificationTokenOp: FeishuBotSecretOp;
+  verificationToken?: string;
+  encryptKeyOp: FeishuBotSecretOp;
+  encryptKey?: string;
+  actor?: string | null;
+}
+
+/** Per-Runtime reported state, used to derive status and detect double-runs. */
+export interface MultiremiFeishuBotRuntimeStatus {
+  workspaceId: string;
+  runtimeId: string;
+  appliedRevision: number;
+  state: FeishuBotRuntimeState;
+  botName: string | null;
+  botOpenId: string | null;
+  errorCode: FeishuBotErrorCode | null;
+  errorMessage: string | null;
+  reportedAt: string;
+}
+
+export interface ReportFeishuBotRuntimeStatusInput {
+  appliedRevision: number;
+  state: FeishuBotRuntimeState;
+  botName?: string | null;
+  botOpenId?: string | null;
+  errorCode?: FeishuBotErrorCode | null;
+  errorMessage?: string | null;
+}
+
+/**
+ * Heartbeat/register ack fragment. Deliberately carries no credentials: the
+ * daemon learns only that its assignment changed and then fetches the payload
+ * over its own authenticated, runtime-scoped route.
+ */
+export interface MultiremiFeishuBotDirective {
+  revision: number;
+  desired_state: FeishuBotDesiredState;
+  /** False while another Runtime still holds the connector (two-phase handover). */
+  config_available: boolean;
+}
+
+/** Runtime-scoped payload returned to the daemon. Contains decrypted secrets. */
+export interface MultiremiFeishuBotDaemonConfig {
+  workspace_id: string;
+  runtime_id: string;
+  agent_id: string;
+  revision: number;
+  desired_state: FeishuBotDesiredState;
+  app_id: string;
+  app_secret: string;
+  domain: FeishuBotDomain;
+  verification_token: string | null;
+  encrypt_key: string | null;
+}
+
+/**
+ * What the daemon actually fetches before starting the connector: the
+ * credentials plus the Agent row and project list the channel needs.
+ *
+ * They travel together on purpose. The daemon could read the Agent off a
+ * heartbeat instead, but then a start would mix one revision's credentials
+ * with whatever Agent the last heartbeat happened to carry; here the whole
+ * assignment is consistent as of a single revision.
+ */
+export interface MultiremiFeishuBotDaemonPayload extends MultiremiFeishuBotDaemonConfig {
+  /** Wire-shaped Agent row (snake_case), or null when the Agent has vanished. */
+  bot_agent: Record<string, unknown> | null;
+  bot_projects: MultiremiDaemonBotProject[];
+}
+
+/** Result of validating credentials against the Feishu open platform. */
+export interface FeishuBotTestResult {
+  ok: boolean;
+  bot_name: string | null;
+  bot_open_id: string | null;
+  app_name: string | null;
+  runtime_online: boolean;
+  runtime_supports_config: boolean;
+  error_code: FeishuBotErrorCode | null;
+  error_message: string | null;
+}
+
+export type FeishuBotAuditAction =
+  | "configured"
+  | "updated"
+  | "deleted"
+  | "enabled"
+  | "disabled"
+  | "redeployed"
+  | "tested"
+  | "registration_started"
+  | "registration_used";
+
+/**
+ * One audited change to the concierge. `details` records which fields moved and
+ * whether a secret was replaced — never a secret's value.
+ */
+export interface MultiremiFeishuBotAuditEntry {
+  id: string;
+  workspaceId: string;
+  action: FeishuBotAuditAction;
+  actorType: string;
+  actorId: string | null;
+  details: Record<string, unknown>;
+  createdAt: string;
 }
 
 export interface MultiremiPromptSettings {

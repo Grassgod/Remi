@@ -29,6 +29,10 @@ import {
 import { MessagingRepo } from "@multiremi/store/repos/messaging-repo.js";
 import { MessagingOutcomeService } from "@multiremi/messaging/outcomes.js";
 import {
+  FeishuBotRepo,
+  type FeishuBotStatusSnapshot,
+} from "@multiremi/store/repos/feishu-bot-repo.js";
+import {
   FeishuIngestRepo,
   type CreateFeishuInboxOutcomeInput,
   type CreateFeishuInboxOutcomeResult,
@@ -381,13 +385,21 @@ import type {
   MultiremiScmSyncCursor,
   MultiremiScmSyncStream,
   CreateMultiremiFeishuSourceInput,
+  FeishuBotAuditAction,
+  MultiremiFeishuBotAuditEntry,
+  MultiremiFeishuBotConfig,
+  MultiremiFeishuBotDaemonConfig,
+  MultiremiFeishuBotDirective,
+  MultiremiFeishuBotRuntimeStatus,
   MultiremiFeishuMessage,
   MultiremiFeishuMessageOutcome,
   MultiremiFeishuSource,
   MultiremiFeishuSyncCursor,
   MultiremiFeishuSourceStatus,
   RecordScmCanonicalEventInput,
+  ReportFeishuBotRuntimeStatusInput,
   ResolveMultiremiFeishuMessageInput,
+  UpsertFeishuBotConfigInput,
   ReleaseScmSyncStreamInput,
   UpdateMultiremiFeishuSourceInput,
   UpdateScmConnectionInput,
@@ -416,6 +428,7 @@ export class MultiremiStore {
   private workspaces: WorkspacesRepo;
   private scm: ScmRepo;
   private feishuIngest: FeishuIngestRepo;
+  private feishuBot: FeishuBotRepo;
   /**
    * The Messaging Core's persistence, exposed whole rather than through
    * per-method delegates.
@@ -485,6 +498,7 @@ export class MultiremiStore {
     this.workspaces = new WorkspacesRepo(this.ctx);
     this.scm = new ScmRepo(this.ctx);
     this.feishuIngest = new FeishuIngestRepo(this.ctx);
+    this.feishuBot = new FeishuBotRepo(this.ctx);
     this.messaging = new MessagingRepo(this.ctx);
     this.messagingOutcomes = new MessagingOutcomeService(this.ctx, this.messaging);
     this.usage = new UsageRepo(this.ctx);
@@ -1632,6 +1646,86 @@ runMigrations(this.db);
     return this.feishuIngest.deleteExpiredMessages(now);
   }
 
+  // ── Workspace Feishu concierge bot (MUL-206) ──────────────────────────────
+  // Secrets stay inside the repo: only `getFeishuBotDaemonConfig` and
+  // `revealFeishuBotSecrets` decrypt, and both are reachable solely from the
+  // daemon route and the admin-only test route.
+
+  getFeishuBotConfig(workspaceId: string): MultiremiFeishuBotConfig | null {
+    return this.feishuBot.getConfig(workspaceId);
+  }
+
+  upsertFeishuBotConfig(workspaceId: string, input: UpsertFeishuBotConfigInput): MultiremiFeishuBotConfig {
+    return this.feishuBot.upsertConfig(workspaceId, input);
+  }
+
+  deleteFeishuBotConfig(workspaceId: string): boolean {
+    return this.feishuBot.deleteConfig(workspaceId);
+  }
+
+  setFeishuBotEnabled(workspaceId: string, enabled: boolean, actor?: string | null): MultiremiFeishuBotConfig | null {
+    return this.feishuBot.setEnabled(workspaceId, enabled, actor);
+  }
+
+  bumpFeishuBotRevision(workspaceId: string, actor?: string | null): MultiremiFeishuBotConfig | null {
+    return this.feishuBot.bumpRevision(workspaceId, actor);
+  }
+
+  recordFeishuBotTestResult(
+    workspaceId: string,
+    result: Parameters<FeishuBotRepo["recordTestResult"]>[1],
+  ): MultiremiFeishuBotConfig | null {
+    return this.feishuBot.recordTestResult(workspaceId, result);
+  }
+
+  revealFeishuBotSecrets(workspaceId: string): ReturnType<FeishuBotRepo["revealSecrets"]> {
+    return this.feishuBot.revealSecrets(workspaceId);
+  }
+
+  getFeishuBotDaemonConfig(workspaceId: string, runtimeId: string): MultiremiFeishuBotDaemonConfig | null {
+    return this.feishuBot.getDaemonConfig(workspaceId, runtimeId);
+  }
+
+  feishuBotDirectiveForRuntime(workspaceId: string, runtimeId: string): MultiremiFeishuBotDirective | null {
+    return this.feishuBot.directiveForRuntime(workspaceId, runtimeId);
+  }
+
+  reportFeishuBotRuntimeStatus(
+    workspaceId: string,
+    runtimeId: string,
+    input: ReportFeishuBotRuntimeStatusInput,
+  ): MultiremiFeishuBotRuntimeStatus {
+    return this.feishuBot.reportRuntimeStatus(workspaceId, runtimeId, input);
+  }
+
+  listFeishuBotRuntimeStatuses(workspaceId: string): MultiremiFeishuBotRuntimeStatus[] {
+    return this.feishuBot.listRuntimeStatuses(workspaceId);
+  }
+
+  feishuBotStatusSnapshot(workspaceId: string): FeishuBotStatusSnapshot {
+    return this.feishuBot.statusSnapshot(workspaceId);
+  }
+
+  recordFeishuBotAudit(
+    workspaceId: string,
+    action: FeishuBotAuditAction,
+    input?: { actorType?: string; actorId?: string | null; details?: Record<string, unknown> },
+  ): MultiremiFeishuBotAuditEntry {
+    return this.feishuBot.recordAudit(workspaceId, action, input);
+  }
+
+  listFeishuBotAudit(workspaceId: string, limit?: number): MultiremiFeishuBotAuditEntry[] {
+    return this.feishuBot.listAudit(workspaceId, limit);
+  }
+
+  disableFeishuBotConfigsReferencingAgent(agentId: string, actor?: string | null): string[] {
+    return this.feishuBot.disableConfigsReferencingAgent(agentId, actor);
+  }
+
+  disableFeishuBotConfigsReferencingRuntime(runtimeId: string, actor?: string | null): string[] {
+    return this.feishuBot.disableConfigsReferencingRuntime(runtimeId, actor);
+  }
+
   listScmConnections(input: {
     workspaceId?: string | null;
     provider?: MultiremiScmProvider | null;
@@ -2572,6 +2666,7 @@ runMigrations(this.db);
     supportsDirectoryScan?: boolean;
     agentPluginProtocol?: number;
     supportsBotMenu?: boolean;
+    supportsFeishuBotConfig?: boolean;
   } = {}): MultiremiDaemonHeartbeatAck {
     return this.runtimes.heartbeatRuntime(runtimeId, options);
   }
