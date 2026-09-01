@@ -1,100 +1,133 @@
 # Feishu message ingestion
 
-Feishu message sources reference an operator-configured endpoint by name. They
-never store or accept a fetchable URL from a user or task. Configure one or more
-entries on the API process:
+Feishu is one channel of the Messaging Core. The Core owns scheduling,
+deduplication, cursors, retention, and outcomes; a Provider owns everything
+channel-specific. `LarkCliMessageProvider` is the Provider for Feishu, and it
+reaches Feishu by running `lark-cli` with argv — no shell, no HTTP service, no
+long-lived credential in Remi's own storage.
 
-```dotenv
-MULTIREMI_FEISHU_SIDECAR_ENDPOINTS=personal=http://127.0.0.1:8042
+A workspace wires a channel in two objects:
+
+- a **Connection** names a Provider and holds its configuration. For lark-cli
+  the configuration is which executable to run and how long to wait; the
+  credential belongs to lark-cli, not to the Connection.
+- a **Source** binds a Connection to a set of conversations, plus the allowlist,
+  poll interval, and retention.
+
+```bash
+remi messaging connection add --provider lark_cli --name "Feishu (personal)"
+remi messaging source add --connection <connection> --name "Team chats"
 ```
 
-Separate entries with commas or newlines. Names use lowercase letters, numbers,
-`_`, and `-`. Values must be absolute HTTP or HTTPS URLs without credentials,
-query strings, or fragments. When the variable is empty or absent, the API
-starts normally but refuses to create or enable any Feishu source. This is a
-fail-closed deployment state, not an instruction to discover a sidecar.
+The older `remi feishu ...` commands and the `/feishu` API still work: they are
+the same workflow bound to one channel and the legacy id space, kept for shipped
+clients.
 
-## Compose topology
+## Deployment
 
-`personal_automation` intentionally binds port 8042 to loopback and rejects a
-non-loopback dashboard listener. A normal bridge-network sibling therefore
-cannot be reached at `http://feishu-sidecar:8042`. `deploy/docker/compose.application.yml`
-runs it as a sibling service that shares the API service's network namespace, so
-both processes see the same loopback interface while no sidecar port is
-published on the host or bridge network.
+There is no ingestion service, port, or endpoint registry. `lark-cli` is baked
+into the API image at a pinned version whose archive digest is verified during
+the build (`LARK_CLI_VERSION` and the two `LARK_CLI_SHA256_*` args in
+`deploy/docker/Dockerfile.api`), and the API server spawns it in its own
+container. `LARK_CLI_MINIMUM_VERSION` in the Provider is the floor the image
+must stay at or above; a lower version reports the Connection as
+`incompatible` rather than failing at some later call.
 
-The service is behind the `feishu-sidecar` Compose profile and is inert until an
-operator enables it. Enabling it is a controlled deployment change made in the
-platform env file — never an API call, and never a URL submitted from a browser
-or a task token:
+Authorize it once, inside the API container:
 
-```dotenv
-COMPOSE_PROFILES=feishu-sidecar
-REMI_FEISHU_SIDECAR_IMAGE=<registry>/personal-automation:<version>
-REMI_FEISHU_SIDECAR_ENDPOINTS=personal=http://127.0.0.1:8042
+```bash
+docker compose exec api lark-cli login
 ```
 
-`MULTIREMI_FEISHU_SIDECAR_ENDPOINTS` is set from Compose, so this value takes
-precedence over the same key in the API env file. Leaving
-`REMI_FEISHU_SIDECAR_ENDPOINTS` unset keeps the API fail-closed.
+lark-cli writes its credential under `$HOME`, which in the API container is the
+`REMI_HOME_DIR` bind mount. It therefore survives image upgrades, stays under
+the operator's control, and never appears in Compose, an env file, a log line,
+or Git. No Remi component reads or writes that file.
 
-The source is then created with `--endpoint-name personal`; the URL remains an
-API deployment secret. The sidecar must not define `ports`, `expose`, or a
-separate `networks` entry under this shared-namespace topology — any published
-port belongs to the `api` service, which owns the namespace. Because the
-namespace belongs to the API container, `DockerComposeDriver` removes the
-sidecar before it replaces the API container and recreates it after the health
-check passes, on both the update and the rollback path. A sidecar that fails to
-start never fails the platform release: the API stays up and the endpoint shows
-as Unreachable.
+The Connection reports what it finds, so each failure mode is a visible status
+rather than a silent stall:
 
-The sidecar holds personal Feishu credentials in its own volumes and is set up
-through its own first-run wizard. It never reads the API env file, and no Remi
-component writes to it.
+| Situation | Connection status | Error code |
+| --- | --- | --- |
+| lark-cli not on PATH | `unavailable` | `provider_unavailable` |
+| Not logged in, or the credential expired | `unauthenticated` | `unauthenticated` |
+| Version below the Provider's floor | `incompatible` | `provider_incompatible` |
+| Required subcommand missing | `incompatible` | `capability_unsupported` |
+| Feishu throttled the call | `ready` | `rate_limited` (retried with backoff) |
+| Command exceeded its timeout | `ready` | `timeout` (retried) |
+
+`rate_limited` and `timeout` are retryable and never disable a Source; the
+others need an operator and say which one.
+
+An access token that has aged out is **not** one of these. lark-cli reports it
+as `needs_refresh` and mints a new one on the next call, so the Connection stays
+`ready`. Only a dead *refresh* token — roughly a week without use — reads as
+`unauthenticated`, and only that needs a new `lark-cli login`.
+
+### What lark-cli 1.0.90 cannot do yet
+
+Constraints the Provider works within, verified against a live CLI by
+`tests/integration/lark-cli-message-provider.test.ts`:
+
+- **Page sizes are capped per subcommand** — 50 for `im +messages-search`, 100
+  for `im +chat-search`. A Source configured for more gets the cap, not an
+  error.
+- **Timestamps arrive as a zoneless `YYYY-MM-DD HH:MM`**, rendered in the CLI's
+  own timezone and with no seconds. The Provider runs lark-cli with `TZ=UTC` so
+  the value means one instant everywhere; do not override `TZ` for the API
+  container without changing the Provider to match. Ordering within a minute is
+  not recoverable, which is why message identity is `(connection, message id)`
+  rather than anything time-based.
+- **Attachments are not addressable.** lark-cli renders them into the message
+  text (`[Image: img_v3_…]`) and exposes no file key, so ingested messages carry
+  their text but no attachment refs. Recovering the key by parsing that string
+  would mean reading human-facing output, which this Provider does not do —
+  closing the gap needs a structured attachment field in lark-cli.
 
 ## Production rollout runbook
 
 Each step needs explicit per-session authorization from the platform owner.
 Nothing here runs as part of ordinary development.
 
-1. **Stage first.** Enable the profile on a non-production stack, then confirm
-   `docker compose ps feishu-sidecar` is healthy and, from inside the API
-   container, that `GET /healthz` and `GET /api/agent/feishu` both answer on
-   `127.0.0.1:8042`.
-2. **Point the registry at the sidecar.** Add the three settings above to the
-   platform env file, keeping mode `0600`. Do not copy them into Git or the API
-   env file.
-3. **Apply through the controlled path.** Re-run the application Compose stack
-   (or a platform operation). The API container is never given the Docker
-   socket, and no API route may reconfigure the sidecar.
-4. **Verify the control plane.** In Settings → 飞书消息, the 接入服务 panel must
-   report the endpoint as Ready with a version. `remi feishu endpoint list`
-   returns names and health only; assert that no response body contains an
-   internal host, port, or URL.
-5. **Create the source disabled with an empty allowlist.** An empty allowlist
+1. **Stage first.** Deploy the new API image to a non-production stack and run
+   `docker compose exec api lark-cli --version`, then `lark-cli login`.
+2. **Add the Connection and check it.** `remi messaging connection add
+   --provider lark_cli`, then `remi messaging connection check <connection>`
+   must report `ready`.
+   Assert that no response body contains a credential path or a command line.
+3. **Create the source disabled with an empty allowlist.** An empty allowlist
    ingests nothing, which is the intended state until the owner picks chats.
-6. **Enable chats, then the source.** Confirm the activation watermark by
+4. **Enable chats, then the source.** Confirm the activation watermark by
    checking that no message older than the enable time is stored, then verify
    ingestion, cursor advance, deduplication, and the Inbox/proposal paths on a
    low-traffic chat before adding busy ones.
-7. **Leave the existing deployment in place.** The pre-existing
-   `personal-automation.service` (or equivalent container) stays installed and
-   running until the new path has been stable in production. Do not delete it as
-   part of this rollout, and never attach a running deployment's volumes to the
-   sidecar at the same time.
+
+### Upgrading from the retired sidecar
+
+Installations before this release ran ingestion in a `feishu-sidecar` container
+that shared the API container's network namespace. Nothing needs to be migrated
+by hand:
+
+- Existing sources, messages, outcomes, and cursors are carried over by the
+  `20260831_messaging_core_v1` migration, which maps each legacy source to a
+  Connection and re-keys messages by `(connection, external message id)`. It
+  copies rather than moves, so history is not re-processed and nothing is lost
+  if the release is rolled back.
+- `DockerComposeDriver` removes the leftover sidecar container before it
+  replaces the API container — Docker would otherwise refuse the switch, since
+  the sidecar borrowed that namespace. Its named data volumes are left alone;
+  deleting them is the operator's call.
+- The pre-existing `personal-automation` deployment, if any, is untouched and
+  needs no restoration step. It is no longer a runtime dependency.
 
 ### Rollback
 
 1. Disable the source in the control panel. Ingestion stops immediately; stored
    messages and outcomes are retained.
-2. Remove `REMI_FEISHU_SIDECAR_ENDPOINTS` from the platform env file and apply.
-   The API returns to the fail-closed state and refuses to create or enable any
-   source; existing rows stay untouched.
-3. Drop `feishu-sidecar` from `COMPOSE_PROFILES` and apply. The sidecar
-   container is removed; API, Web, and the control plane are unaffected because
-   the namespace belongs to the API container, not the sidecar.
-4. The original `personal-automation` deployment is still running and needs no
-   restoration step.
+2. Roll the API image back through the platform updater. Legacy rows were copied,
+   not moved, so the previous release finds its own data where it left it.
+3. To stop ingestion without a rollback, delete the Connection. The Sources bound
+   to it stop polling and their stored messages stay readable.
 
 ## Processing guarantees
 

@@ -18,6 +18,8 @@ const FEISHU_INGEST_ALERT_DELIVERY_V3_MIGRATION = "20260825_feishu_ingest_alert_
 const CODEBASE_CHANGE_REQUEST_CURSOR_RESET_MIGRATION = "20260825_codebase_change_request_cursor_reset";
 const SESSION_ARCHIVE_RETRY_BUDGET_MIGRATION = "20260826_session_archive_retry_budget";
 const FEISHU_ISSUE_PROPOSALS_V4_MIGRATION = "20260826_feishu_issue_proposals_v4";
+const MESSAGING_CORE_V1_MIGRATION = "20260831_messaging_core_v1";
+const MESSAGING_MIGRATION_BATCH_SIZE = 500;
 const AGENT_ISSUE_PROPOSAL_POLICY_MIGRATION = "20260826_agent_issue_proposal_policy";
 const TASK_ISSUE_PROPOSAL_POLICY_MIGRATION = "20260826_task_issue_proposal_policy";
 const AUTOPILOT_ISSUE_PROPOSAL_POLICY_MIGRATION = "20260826_autopilot_issue_proposal_policy";
@@ -1621,6 +1623,140 @@ export function runMigrations(db: SqlDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_message_outcomes_task
       ON multiremi_feishu_message_outcomes(task_id, created_at)
       WHERE task_id IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS multiremi_message_connections (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL DEFAULT 'local',
+      provider TEXT NOT NULL,
+      channel TEXT NOT NULL,
+      name TEXT NOT NULL,
+      external_account_id TEXT,
+      external_account_name TEXT,
+      status TEXT NOT NULL DEFAULT 'unknown',
+      config TEXT NOT NULL DEFAULT '{}',
+      last_checked_at TEXT,
+      last_error_code TEXT,
+      last_error_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_message_connections_workspace
+      ON multiremi_message_connections(workspace_id, provider, channel, updated_at);
+
+    CREATE TABLE IF NOT EXISTS multiremi_message_sources (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL DEFAULT 'local',
+      connection_id TEXT NOT NULL,
+      name TEXT NOT NULL DEFAULT '',
+      allowlist TEXT NOT NULL DEFAULT '[]',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      retention_days INTEGER NOT NULL DEFAULT 90,
+      poll_interval_seconds INTEGER NOT NULL DEFAULT 15,
+      unprocessed_retry_seconds INTEGER NOT NULL DEFAULT 900,
+      unprocessed_retry_limit INTEGER NOT NULL DEFAULT 3,
+      last_successful_ingest_at TEXT,
+      last_error_code TEXT,
+      last_error_at TEXT,
+      consecutive_failures INTEGER NOT NULL DEFAULT 0,
+      connection_alerted_at TEXT,
+      connection_alert_delivery_failure_count INTEGER NOT NULL DEFAULT 0,
+      connection_alert_delivery_error_code TEXT,
+      connection_alert_delivery_failed_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(connection_id) REFERENCES multiremi_message_connections(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_message_sources_poll
+      ON multiremi_message_sources(enabled, workspace_id, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_message_sources_connection
+      ON multiremi_message_sources(connection_id, created_at);
+
+    CREATE TABLE IF NOT EXISTS multiremi_message_sync_cursors (
+      source_id TEXT NOT NULL,
+      stream TEXT NOT NULL,
+      cursor TEXT,
+      watermark TEXT,
+      last_started_at TEXT,
+      last_completed_at TEXT,
+      last_error TEXT,
+      lease_owner TEXT,
+      lease_until TEXT,
+      lease_token TEXT,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(source_id, stream),
+      FOREIGN KEY(source_id) REFERENCES multiremi_message_sources(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_message_sync_cursors_lease
+      ON multiremi_message_sync_cursors(lease_until, source_id, stream);
+
+    CREATE TABLE IF NOT EXISTS multiremi_message_messages (
+      connection_id TEXT NOT NULL,
+      external_message_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL DEFAULT 'local',
+      source_id TEXT NOT NULL,
+      external_conversation_id TEXT NOT NULL,
+      conversation_kind TEXT NOT NULL DEFAULT 'unknown',
+      conversation_name TEXT,
+      external_thread_id TEXT,
+      external_root_id TEXT,
+      external_parent_id TEXT,
+      sender TEXT NOT NULL DEFAULT '{}',
+      searchable_text TEXT NOT NULL DEFAULT '',
+      attachments TEXT NOT NULL DEFAULT '[]',
+      mentions TEXT NOT NULL DEFAULT '[]',
+      reactions TEXT NOT NULL DEFAULT '[]',
+      raw TEXT NOT NULL DEFAULT '{}',
+      content_fingerprint TEXT NOT NULL,
+      message_url TEXT,
+      sent_at TEXT NOT NULL,
+      edited_at TEXT,
+      recalled INTEGER NOT NULL DEFAULT 0,
+      ingested_at TEXT NOT NULL,
+      processed_at TEXT,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      last_retry_at TEXT,
+      PRIMARY KEY(connection_id, external_message_id),
+      FOREIGN KEY(connection_id) REFERENCES multiremi_message_connections(id) ON DELETE CASCADE,
+      FOREIGN KEY(source_id) REFERENCES multiremi_message_sources(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_message_messages_unprocessed
+      ON multiremi_message_messages(workspace_id, processed_at, sent_at, connection_id, external_message_id);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_message_messages_conversation
+      ON multiremi_message_messages(connection_id, external_conversation_id, sent_at, external_message_id);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_message_messages_source
+      ON multiremi_message_messages(source_id, ingested_at, external_message_id);
+
+    CREATE TABLE IF NOT EXISTS multiremi_message_outcomes (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL DEFAULT 'local',
+      connection_id TEXT NOT NULL,
+      external_message_id TEXT NOT NULL,
+      outcome_kind TEXT NOT NULL,
+      ref TEXT,
+      reason TEXT,
+      task_id TEXT,
+      proposal_payload TEXT NOT NULL DEFAULT '{}',
+      proposal_status TEXT NOT NULL DEFAULT 'not_applicable',
+      proposal_resolved_at TEXT,
+      proposal_resolved_by TEXT,
+      -- Per-message ordinal. created_at alone is not a stable sort: two outcomes
+      -- recorded in the same millisecond would otherwise fall back to a random id.
+      sequence INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(connection_id, external_message_id)
+        REFERENCES multiremi_message_messages(connection_id, external_message_id) ON DELETE CASCADE,
+      FOREIGN KEY(task_id) REFERENCES multiremi_tasks(id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_message_outcomes_message
+      ON multiremi_message_outcomes(connection_id, external_message_id, sequence, id);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_message_outcomes_task
+      ON multiremi_message_outcomes(task_id, created_at)
+      WHERE task_id IS NOT NULL;
     CREATE TABLE IF NOT EXISTS multiremi_webhook_deliveries (
       id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL DEFAULT 'local',
@@ -2432,6 +2568,7 @@ export function runMigrations(db: SqlDatabase): void {
   runMigrationOnce(db, FEISHU_INGEST_V2_MIGRATION, () => ensureFeishuIngestV2Schema(db));
   runMigrationOnce(db, FEISHU_INGEST_ALERT_DELIVERY_V3_MIGRATION, () => ensureFeishuIngestAlertDeliveryV3Schema(db));
   runMigrationOnce(db, FEISHU_ISSUE_PROPOSALS_V4_MIGRATION, () => ensureFeishuIssueProposalsV4Schema(db));
+  runMigrationOnce(db, MESSAGING_CORE_V1_MIGRATION, () => migrateLegacyFeishuMessagingData(db));
   runMigrationOnce(db, MARKDOWN_ATTACHMENT_OWNERSHIP_MIGRATION, () => backfillMarkdownAttachmentOwnership(db));
   addColumnIfMissing(db, "multiremi_autopilots", "created_by_type TEXT NOT NULL DEFAULT 'member'");
   addColumnIfMissing(db, "multiremi_autopilots", "created_by_id TEXT NOT NULL DEFAULT 'local'");
@@ -2907,6 +3044,7 @@ function ensureFeishuIssueProposalsV4Schema(db: SqlDatabase): void {
   );
   addColumnIfMissing(db, "multiremi_feishu_message_outcomes", "proposal_resolved_at TEXT");
   addColumnIfMissing(db, "multiremi_feishu_message_outcomes", "proposal_resolved_by TEXT");
+  addColumnIfMissing(db, "multiremi_message_outcomes", "sequence INTEGER NOT NULL DEFAULT 0");
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_feishu_issue_proposals_message
       ON multiremi_feishu_message_outcomes(message_id)
@@ -2914,6 +3052,353 @@ function ensureFeishuIssueProposalsV4Schema(db: SqlDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_issue_proposals_status
       ON multiremi_feishu_message_outcomes(workspace_id, outcome_kind, proposal_status, created_at);
   `);
+}
+
+/**
+ * The retired product name the legacy repo filled in for an unnamed source.
+ *
+ * It was never something an operator typed: `createSource` substituted it
+ * whenever `name` was omitted, so carrying it over verbatim would put
+ * "Personal Automation" back on screen in the new panel on every upgraded
+ * install. Only this exact string is replaced — a name an operator did choose,
+ * including one that merely contains these words, is their data and is left
+ * alone.
+ */
+const LEGACY_DEFAULT_SOURCE_NAME = "Personal Automation";
+const MIGRATED_DEFAULT_SOURCE_NAME = "飞书消息";
+
+function migratedSourceName(value: unknown): string {
+  const name = String(value ?? "");
+  return name.trim() === LEGACY_DEFAULT_SOURCE_NAME ? MIGRATED_DEFAULT_SOURCE_NAME : name;
+}
+
+function migrateLegacyFeishuMessagingData(db: SqlDatabase): void {
+  type LegacyRow = Record<string, unknown>;
+  assertLegacyMessagingIntegrity(db);
+  let lastSourceId = "";
+  while (true) {
+    const sources = db.query(
+      `SELECT * FROM multiremi_feishu_sources
+       WHERE id > ? ORDER BY id ASC LIMIT ?`,
+    ).all(lastSourceId, MESSAGING_MIGRATION_BATCH_SIZE) as LegacyRow[];
+    for (const source of sources) {
+      const sourceId = String(source.id);
+      const connectionId = legacyMessageConnectionId(sourceId);
+      const workspaceId = String(source.workspace_id ?? "local");
+      const createdAt = String(source.created_at ?? new Date().toISOString());
+      const updatedAt = String(source.updated_at ?? createdAt);
+      const endpointName = stringOrNull(source.endpoint_name);
+
+      db.run(
+        `INSERT OR IGNORE INTO multiremi_message_connections (
+          id, workspace_id, provider, channel, name, external_account_id,
+          external_account_name, status, config, last_checked_at,
+          last_error_code, last_error_at, created_at, updated_at
+        ) VALUES (?, ?, 'lark_cli', 'feishu', ?, NULL, NULL, 'unknown', ?, NULL, ?, ?, ?, ?)`,
+        [
+          connectionId,
+          workspaceId,
+          endpointName ?? migratedSourceName(source.name ?? sourceId),
+          JSON.stringify({
+            migrated_from: "multiremi_feishu_sources",
+            ...(endpointName ? { legacy_endpoint_name: endpointName } : {}),
+          }),
+          stringOrNull(source.last_error_code),
+          stringOrNull(source.last_error_at),
+          createdAt,
+          updatedAt,
+        ],
+      );
+
+      db.run(
+        `INSERT OR IGNORE INTO multiremi_message_sources (
+          id, workspace_id, connection_id, name, allowlist, enabled,
+          retention_days, poll_interval_seconds, unprocessed_retry_seconds,
+          unprocessed_retry_limit, last_successful_ingest_at, last_error_code,
+          last_error_at, consecutive_failures, connection_alerted_at,
+          connection_alert_delivery_failure_count,
+          connection_alert_delivery_error_code,
+          connection_alert_delivery_failed_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          sourceId,
+          workspaceId,
+          connectionId,
+          migratedSourceName(source.name),
+          JSON.stringify(migrateLegacyAllowlist(source.allowlist, createdAt)),
+          Number(source.enabled ?? 1),
+          Number(source.retention_days ?? 90),
+          Number(source.poll_interval_seconds ?? 15),
+          Number(source.unprocessed_retry_seconds ?? 900),
+          Number(source.unprocessed_retry_limit ?? 3),
+          stringOrNull(source.last_successful_ingest_at),
+          stringOrNull(source.last_error_code),
+          stringOrNull(source.last_error_at),
+          Number(source.consecutive_failures ?? 0),
+          stringOrNull(source.connection_alerted_at),
+          Number(source.connection_alert_delivery_failure_count ?? 0),
+          stringOrNull(source.connection_alert_delivery_error_code),
+          stringOrNull(source.connection_alert_delivery_failed_at),
+          createdAt,
+          updatedAt,
+        ],
+      );
+      lastSourceId = sourceId;
+    }
+    if (sources.length < MESSAGING_MIGRATION_BATCH_SIZE) break;
+  }
+
+  let lastCursorSourceId = "";
+  let lastCursorStream = "";
+  while (true) {
+    const cursors = db.query(
+      `SELECT * FROM multiremi_feishu_sync_cursors
+       WHERE source_id > ? OR (source_id = ? AND stream > ?)
+       ORDER BY source_id ASC, stream ASC LIMIT ?`,
+    ).all(
+      lastCursorSourceId,
+      lastCursorSourceId,
+      lastCursorStream,
+      MESSAGING_MIGRATION_BATCH_SIZE,
+    ) as LegacyRow[];
+    for (const cursor of cursors) {
+      const sourceId = String(cursor.source_id);
+      const stream = String(cursor.stream);
+      db.run(
+        `INSERT OR IGNORE INTO multiremi_message_sync_cursors (
+          source_id, stream, cursor, watermark, last_started_at, last_completed_at,
+          last_error, lease_owner, lease_until, lease_token, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          sourceId,
+          stream,
+          stringOrNull(cursor.cursor),
+          stringOrNull(cursor.watermark),
+          stringOrNull(cursor.last_started_at),
+          stringOrNull(cursor.last_completed_at),
+          stringOrNull(cursor.last_error),
+          stringOrNull(cursor.lease_owner),
+          stringOrNull(cursor.lease_until),
+          stringOrNull(cursor.lease_token),
+          String(cursor.updated_at ?? new Date().toISOString()),
+        ],
+      );
+      lastCursorSourceId = sourceId;
+      lastCursorStream = stream;
+    }
+    if (cursors.length < MESSAGING_MIGRATION_BATCH_SIZE) break;
+  }
+
+  let lastMessageId = "";
+  while (true) {
+    const messages = db.query(
+      `SELECT * FROM multiremi_feishu_messages
+       WHERE message_id > ? ORDER BY message_id ASC LIMIT ?`,
+    ).all(lastMessageId, MESSAGING_MIGRATION_BATCH_SIZE) as LegacyRow[];
+    for (const message of messages) {
+      const sourceId = String(message.source_id);
+      const connectionId = legacyMessageConnectionId(sourceId);
+      const externalMessageId = String(message.message_id);
+      const raw = parseLegacyJsonRecord(message.content);
+      const searchableText = String(message.searchable_text ?? "");
+      const sentAt = String(message.created_at);
+      db.run(
+        `INSERT OR IGNORE INTO multiremi_message_messages (
+          connection_id, external_message_id, workspace_id, source_id,
+          external_conversation_id, conversation_kind, conversation_name,
+          external_thread_id, external_root_id, external_parent_id, sender,
+          searchable_text, attachments, mentions, reactions, raw,
+          content_fingerprint, message_url, sent_at, edited_at, recalled,
+          ingested_at, processed_at, retry_count, last_retry_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', '[]', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          connectionId,
+          externalMessageId,
+          String(message.workspace_id ?? "local"),
+          sourceId,
+          String(message.chat_id),
+          migrateLegacyConversationKind(message.chat_type),
+          stringOrNull(message.chat_name),
+          stringOrNull(message.thread_id),
+          stringOrNull(message.root_id),
+          stringOrNull(message.parent_id),
+          JSON.stringify(migrateLegacySender(message.sender)),
+          searchableText,
+          JSON.stringify(raw),
+          String(message.content_fingerprint ?? createHash("sha256").update(JSON.stringify(raw)).digest("hex")),
+          stringOrNull(message.message_app_link),
+          sentAt,
+          Number(message.edited ?? 0) === 1 ? stringOrNull(message.updated_at) : null,
+          Number(message.recalled ?? 0),
+          String(message.ingested_at ?? sentAt),
+          stringOrNull(message.processed_at),
+          Number(message.retry_count ?? 0),
+          stringOrNull(message.last_retry_at),
+        ],
+      );
+      lastMessageId = externalMessageId;
+    }
+    if (messages.length < MESSAGING_MIGRATION_BATCH_SIZE) break;
+  }
+
+  let lastOutcomeId = "";
+  while (true) {
+    const outcomes = db.query(
+      `SELECT o.*, m.source_id AS legacy_source_id
+       FROM multiremi_feishu_message_outcomes o
+       JOIN multiremi_feishu_messages m ON m.message_id = o.message_id
+       WHERE o.id > ? ORDER BY o.id ASC LIMIT ?`,
+    ).all(lastOutcomeId, MESSAGING_MIGRATION_BATCH_SIZE) as LegacyRow[];
+    for (const outcome of outcomes) {
+      const externalMessageId = String(outcome.message_id);
+      const connectionId = legacyMessageConnectionId(String(outcome.legacy_source_id));
+      const outcomeId = String(outcome.id);
+      db.run(
+        `INSERT OR IGNORE INTO multiremi_message_outcomes (
+          id, workspace_id, connection_id, external_message_id, outcome_kind,
+          ref, reason, task_id, proposal_payload, proposal_status,
+          proposal_resolved_at, proposal_resolved_by, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          outcomeId,
+          String(outcome.workspace_id ?? "local"),
+          connectionId,
+          externalMessageId,
+          String(outcome.outcome_kind),
+          stringOrNull(outcome.ref),
+          stringOrNull(outcome.reason),
+          stringOrNull(outcome.task_id),
+          JSON.stringify(parseLegacyJsonRecord(outcome.proposal_payload)),
+          String(outcome.proposal_status ?? "not_applicable"),
+          stringOrNull(outcome.proposal_resolved_at),
+          stringOrNull(outcome.proposal_resolved_by),
+          String(outcome.created_at),
+        ],
+      );
+      lastOutcomeId = outcomeId;
+    }
+    if (outcomes.length < MESSAGING_MIGRATION_BATCH_SIZE) break;
+  }
+}
+
+function assertLegacyMessagingIntegrity(db: SqlDatabase): void {
+  const checks: Array<{ label: string; sql: string }> = [
+    {
+      label: "cursor rows without a source",
+      sql: `SELECT COUNT(*) AS count
+            FROM multiremi_feishu_sync_cursors c
+            LEFT JOIN multiremi_feishu_sources s ON s.id = c.source_id
+            WHERE s.id IS NULL`,
+    },
+    {
+      label: "message rows without a source",
+      sql: `SELECT COUNT(*) AS count
+            FROM multiremi_feishu_messages m
+            LEFT JOIN multiremi_feishu_sources s ON s.id = m.source_id
+            WHERE s.id IS NULL`,
+    },
+    {
+      label: "outcome rows without a message",
+      sql: `SELECT COUNT(*) AS count
+            FROM multiremi_feishu_message_outcomes o
+            LEFT JOIN multiremi_feishu_messages m ON m.message_id = o.message_id
+            WHERE m.message_id IS NULL`,
+    },
+  ];
+  for (const check of checks) {
+    const row = db.query(check.sql).get() as { count?: unknown } | null;
+    const count = Number(row?.count ?? 0);
+    if (count > 0) {
+      throw new Error(`Cannot migrate legacy messaging data: ${count} ${check.label}`);
+    }
+  }
+}
+
+function legacyMessageConnectionId(sourceId: string): string {
+  return `mconn_${sourceId}`;
+}
+
+function migrateLegacyAllowlist(value: unknown, fallbackAddedAt: string): Array<{
+  externalConversationId: string;
+  addedAt: string;
+}> {
+  let parsed: unknown = value;
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(parsed)) return [];
+  return parsed.flatMap((entry) => {
+    if (typeof entry === "string") {
+      const externalConversationId = entry.trim();
+      return externalConversationId ? [{ externalConversationId, addedAt: fallbackAddedAt }] : [];
+    }
+    if (!entry || typeof entry !== "object") return [];
+    const row = entry as Record<string, unknown>;
+    const externalConversationId = String(
+      row.externalConversationId ?? row.external_conversation_id ?? row.chatId ?? row.chat_id ?? "",
+    ).trim();
+    const addedAt = String(row.addedAt ?? row.added_at ?? fallbackAddedAt).trim();
+    return externalConversationId && addedAt ? [{ externalConversationId, addedAt }] : [];
+  });
+}
+
+function migrateLegacyConversationKind(value: unknown): "direct" | "group" | "thread" | "unknown" {
+  const kind = String(value ?? "").toLowerCase();
+  if (kind === "p2p" || kind === "direct" || kind === "single") return "direct";
+  if (kind === "group") return "group";
+  if (kind === "thread" || kind === "topic") return "thread";
+  return "unknown";
+}
+
+function migrateLegacySender(value: unknown): {
+  externalSenderId: string | null;
+  displayName: string | null;
+  kind: "user" | "bot" | "system" | "unknown";
+  isSelf: boolean;
+} {
+  const sender = parseLegacyJsonRecord(value);
+  const senderType = String(sender.kind ?? sender.sender_type ?? sender.type ?? "").toLowerCase();
+  const kind = senderType === "user"
+    ? "user"
+    : senderType === "bot" || senderType === "app"
+      ? "bot"
+      : senderType === "system"
+        ? "system"
+        : "unknown";
+  return {
+    externalSenderId: stringOrNull(
+      sender.externalSenderId
+      ?? sender.external_sender_id
+      ?? sender.open_id
+      ?? sender.user_id
+      ?? sender.id,
+    ),
+    displayName: stringOrNull(sender.displayName ?? sender.display_name ?? sender.name),
+    kind,
+    isSelf: false,
+  };
+}
+
+function parseLegacyJsonRecord(value: unknown): Record<string, unknown> {
+  let parsed = value;
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return {};
+    }
+  }
+  return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+    ? parsed as Record<string, unknown>
+    : {};
+}
+
+function stringOrNull(value: unknown): string | null {
+  return value === null || value === undefined || value === "" ? null : String(value);
 }
 
 function runMigrationOnce(db: SqlDatabase, id: string, migrate: () => void): void {

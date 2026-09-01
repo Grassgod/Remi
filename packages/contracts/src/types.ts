@@ -4777,7 +4777,6 @@ export type MultiremiPlatformServiceId =
   | "api"
   | "web"
   | "ssh-mesh-control-plane"
-  | "feishu-sidecar"
   | "postgres"
   | "openviking";
 export type MultiremiPlatformServiceStatus = "ready" | "degraded" | "stopped" | "unknown";

@@ -36,7 +36,7 @@ export const FeishuSourceSchema = z.object({
   id: z.string().default(""),
   workspaceId: z.string().default(""),
   name: z.string().default(""),
-  type: z.string().default("personal_automation"),
+  type: z.string().default("feishu"),
   endpointName: z.string().default(""),
   allowlist: z.array(FeishuAllowlistEntrySchema).default([]),
   enabled: z.boolean().default(false),
@@ -225,7 +225,7 @@ export type FeishuProposalList = z.infer<typeof FeishuProposalListResponseSchema
 
 /** Fail-closed fallback: an unparseable endpoint list reads as "nothing is
  *  configured", which renders the operator-setup hint rather than pretending a
- *  sidecar is reachable. */
+ *  connection is reachable. */
 export const EMPTY_FEISHU_ENDPOINT_LIST: FeishuEndpointList = { configured: false, endpoints: [] };
 export const EMPTY_FEISHU_SOURCE_LIST: FeishuSourceList = { sources: [], total: 0 };
 export const EMPTY_FEISHU_MESSAGE_LIST: FeishuMessageList = {

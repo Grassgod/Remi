@@ -87,6 +87,7 @@ describe("remi CLI dispatcher", () => {
       "daemon",
       "autopilot",
       "scm",
+      "messaging",
       "feishu",
       "inbox",
       "notification",

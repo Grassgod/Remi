@@ -1,6 +1,7 @@
-// MUL-155: the application Compose stack is the only controlled path that can
-// wire the Feishu ingestion sidecar. These assertions guard the deployment
-// invariants that the API cannot enforce at runtime.
+// MUL-205: Feishu ingestion runs inside the API container through lark-cli,
+// so the deployment has no ingestion service, port, or endpoint registry left
+// to get wrong. These assertions guard the invariants the API cannot enforce
+// at runtime.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -12,34 +13,49 @@ const compose = parse(readFileSync(resolve(repoRoot, "deploy/docker/compose.appl
   volumes?: Record<string, unknown>;
 };
 const envExample = readFileSync(resolve(repoRoot, "deploy/docker/application.env.example"), "utf8");
+const apiEnvExample = readFileSync(resolve(repoRoot, "deploy/docker/api.env.example"), "utf8");
+const apiDockerfile = readFileSync(resolve(repoRoot, "deploy/docker/Dockerfile.api"), "utf8");
 
 describe("application compose stack", () => {
-  test("keeps the Feishu sidecar profile-gated and off by default", () => {
-    const sidecar = compose.services["feishu-sidecar"];
-    expect(sidecar?.profiles).toEqual(["feishu-sidecar"]);
-    // An existing installation that never sets COMPOSE_PROFILES must keep the
-    // exact API/Web/control-plane topology it has today.
+  test("ships no ingestion service, profile, or endpoint registry", () => {
+    // The sidecar is retired. Anything left behind here — a service, a profile
+    // to enable it, an endpoint name to point at it — would be config that
+    // nothing reads, which is how an operator ends up debugging a dead process.
+    expect(Object.keys(compose.services).sort()).toEqual(["api", "ssh-mesh-control-plane", "web"]);
+    expect(compose.volumes).toBeUndefined();
     expect(envExample).not.toMatch(/^COMPOSE_PROFILES=/mu);
-    expect(envExample).not.toMatch(/^REMI_FEISHU_SIDECAR_ENDPOINTS=/mu);
+    expect(envExample).not.toMatch(/^REMI_FEISHU_SIDECAR/mu);
+    for (const [name, service] of Object.entries(compose.services)) {
+      const environment: Record<string, unknown> = service.environment ?? {};
+      for (const key of Object.keys(environment)) {
+        expect(key, `${name} env ${key}`).not.toContain("SIDECAR");
+      }
+    }
   });
 
-  test("binds the sidecar to the API network namespace with no reachable surface", () => {
-    const sidecar = compose.services["feishu-sidecar"]!;
-    expect(sidecar.network_mode).toBe("service:api");
-    // The sidecar listens on loopback only. Publishing or bridging it would
-    // both break that contract and expose an unauthenticated agent API.
-    expect(sidecar.ports).toBeUndefined();
-    expect(sidecar.expose).toBeUndefined();
-    expect(sidecar.networks).toBeUndefined();
-    expect(sidecar.healthcheck.test.join(" ")).toContain("http://127.0.0.1:8042/healthz");
+  test("bakes a pinned, checksum-verified lark-cli into the API image", () => {
+    // The Provider spawns `lark-cli` by name, so it has to be on PATH in the
+    // API container. Pinning it keeps the image reproducible, and the digest
+    // check is what makes downloading a binary at build time acceptable.
+    expect(apiDockerfile).toMatch(/^ARG LARK_CLI_VERSION=\d+\.\d+\.\d+$/mu);
+    expect(apiDockerfile).toMatch(/^ARG LARK_CLI_SHA256_AMD64=[a-f0-9]{64}$/mu);
+    expect(apiDockerfile).toMatch(/^ARG LARK_CLI_SHA256_ARM64=[a-f0-9]{64}$/mu);
+    expect(apiDockerfile).toContain("sha256sum -c -");
+    expect(apiDockerfile).toContain("/usr/local/bin/lark-cli");
   });
 
-  test("passes the endpoint registry as deployment configuration, defaulting to fail-closed", () => {
-    // The registry maps a name to an internal URL server-side. Nothing in the
-    // browser may supply a URL, so it can only arrive through this file.
-    expect(compose.services.api!.environment.MULTIREMI_FEISHU_SIDECAR_ENDPOINTS)
-      .toBe("${REMI_FEISHU_SIDECAR_ENDPOINTS:-}");
-    expect(envExample).toContain("REMI_FEISHU_SIDECAR_ENDPOINTS=personal=http://127.0.0.1:8042");
+  test("keeps the Feishu credential out of every file in this repository", () => {
+    // lark-cli writes its credential into the container's home, which is a bind
+    // mount an operator owns. It must never travel through Compose or an env
+    // file, both of which are committed as examples and read by the whole team.
+    const home = (compose.services.api!.volumes as string[])
+      .find((entry) => entry.endsWith(":/srv/multiremi"));
+    expect(home).toBe("${REMI_HOME_DIR:?set REMI_HOME_DIR}:/srv/multiremi");
+    expect(compose.services.api!.environment.HOME).toBe("/srv/multiremi");
+    for (const source of [envExample, apiEnvExample]) {
+      expect(source).not.toMatch(/^[A-Z_]*LARK[A-Z_]*=/mu);
+      expect(source).not.toMatch(/^MULTIREMI_FEISHU_(?:APP_SECRET|SIDECAR)[A-Z_]*=/mu);
+    }
   });
 
   test("grants no container the Docker socket or host control", () => {

@@ -90,15 +90,22 @@ The updater may use this Compose file after cutover. Set
 `MULTIREMI_PLATFORM_OPENVIKING_CONTAINER` so externally managed dependencies
 still appear in the service status panel.
 
-Feishu message ingestion uses an operator-owned endpoint registry instead of
-accepting arbitrary URLs from users or agents. The `feishu-sidecar` service in
-`compose.application.yml` is inert until `COMPOSE_PROFILES=feishu-sidecar` and
-`REMI_FEISHU_SIDECAR_ENDPOINTS` are set in the platform env file; it shares the
-API container's network namespace and publishes no port. The updater removes and
-recreates it around every API container replacement, and a sidecar that fails to
-start degrades ingestion without failing the release. See
-[`docs/feishu-message-ingestion.md`](../docs/feishu-message-ingestion.md) for
-the fail-closed environment contract, the rollout runbook, and rollback.
+Message ingestion needs no service of its own. `lark-cli` is baked into the API
+image at a pinned, checksum-verified version, and the API server runs it
+directly, so there is no ingestion container, port, or endpoint registry to
+configure. Enable it by logging in once inside the API container:
+
+```bash
+docker compose exec api lark-cli login
+```
+
+The credential lands in the container's home directory, which is the
+`REMI_HOME_DIR` bind mount, so it survives image upgrades and never enters
+Compose, an env file, or Git. An installation upgrading from the retired
+`feishu-sidecar` needs no action: the updater removes that leftover container
+before it replaces the API container, and leaves its named data volumes alone.
+See [`docs/feishu-message-ingestion.md`](../docs/feishu-message-ingestion.md)
+for the connection model, the rollout runbook, and rollback.
 
 ## Direct Session Archive uploads (MUL-144)
 

@@ -72,6 +72,11 @@ describe("store migrations", () => {
       "multiremi_access_tokens",
       "multiremi_session_archives",
       "multiremi_schema_migrations",
+      "multiremi_message_connections",
+      "multiremi_message_sources",
+      "multiremi_message_sync_cursors",
+      "multiremi_message_messages",
+      "multiremi_message_outcomes",
     ]) {
       expect(tables).toContain(table);
     }
@@ -621,6 +626,292 @@ describe("store migrations", () => {
     expect(database.query(
       "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260825_feishu_ingest_alert_delivery_v3'",
     ).get()).toEqual({ count: 1 });
+  });
+
+  it("migrates processed Feishu history without making it eligible for processing again", () => {
+    const database = freshDb();
+    database.exec(`
+      CREATE TABLE multiremi_feishu_sources (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        name TEXT NOT NULL DEFAULT '',
+        type TEXT NOT NULL DEFAULT 'personal_automation',
+        endpoint_name TEXT NOT NULL,
+        allowlist TEXT NOT NULL DEFAULT '[]',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        retention_days INTEGER NOT NULL DEFAULT 90,
+        poll_interval_seconds INTEGER NOT NULL DEFAULT 15,
+        unprocessed_retry_seconds INTEGER NOT NULL DEFAULT 900,
+        unprocessed_retry_limit INTEGER NOT NULL DEFAULT 3,
+        last_successful_ingest_at TEXT,
+        last_error_code TEXT,
+        last_error_at TEXT,
+        consecutive_failures INTEGER NOT NULL DEFAULT 0,
+        connection_alerted_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE multiremi_feishu_sync_cursors (
+        source_id TEXT NOT NULL,
+        stream TEXT NOT NULL,
+        cursor TEXT,
+        watermark TEXT,
+        last_started_at TEXT,
+        last_completed_at TEXT,
+        last_error TEXT,
+        lease_owner TEXT,
+        lease_until TEXT,
+        lease_token TEXT,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(source_id, stream)
+      );
+      CREATE TABLE multiremi_feishu_messages (
+        message_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        source_id TEXT NOT NULL,
+        chat_id TEXT NOT NULL,
+        chat_type TEXT,
+        chat_name TEXT,
+        thread_id TEXT,
+        root_id TEXT,
+        parent_id TEXT,
+        sender TEXT NOT NULL DEFAULT '{}',
+        content TEXT NOT NULL DEFAULT '{}',
+        searchable_text TEXT NOT NULL DEFAULT '',
+        content_fingerprint TEXT NOT NULL,
+        message_app_link TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+        recalled INTEGER NOT NULL DEFAULT 0,
+        edited INTEGER NOT NULL DEFAULT 0,
+        ingested_at TEXT NOT NULL,
+        processed_at TEXT,
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        last_retry_at TEXT
+      );
+      CREATE TABLE multiremi_feishu_message_outcomes (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        message_id TEXT NOT NULL,
+        outcome_kind TEXT NOT NULL,
+        ref TEXT,
+        reason TEXT,
+        task_id TEXT,
+        created_at TEXT NOT NULL
+      );
+
+      INSERT INTO multiremi_feishu_sources (
+        id, workspace_id, name, endpoint_name, allowlist, created_at, updated_at
+      ) VALUES (
+        'fsrc_history', 'ws_history', 'Historical source', 'legacy_endpoint',
+        '[{"chatId":"oc_original","addedAt":"2026-08-01T12:34:56.000Z"}]',
+        '2026-08-01T12:00:00.000Z', '2026-08-02T12:00:00.000Z'
+      );
+      INSERT INTO multiremi_feishu_sync_cursors (
+        source_id, stream, cursor, watermark, last_completed_at, updated_at
+      ) VALUES (
+        'fsrc_history', 'messages', '{"pageToken":"next-original"}',
+        '2026-08-02T00:00:00.000Z', '2026-08-02T00:05:00.000Z',
+        '2026-08-02T00:05:00.000Z'
+      );
+      INSERT INTO multiremi_feishu_messages (
+        message_id, workspace_id, source_id, chat_id, chat_type, chat_name,
+        sender, content, searchable_text, content_fingerprint, message_app_link,
+        created_at, updated_at, recalled, edited, ingested_at, processed_at,
+        retry_count, last_retry_at
+      ) VALUES (
+        'om_original', 'ws_history', 'fsrc_history', 'oc_original', 'group', 'Original group',
+        '{"id":"ou_original"}', '{"message_id":"om_original","text":"original"}',
+        'original', 'fingerprint-original', 'https://example.invalid/original',
+        '2026-08-01T12:36:00.000Z', '2026-08-01T12:37:00.000Z', 0, 1,
+        '2026-08-01T12:38:00.000Z', '2026-08-01T12:40:00.000Z', 2,
+        '2026-08-01T12:39:00.000Z'
+      );
+      INSERT INTO multiremi_feishu_message_outcomes (
+        id, workspace_id, message_id, outcome_kind, ref, reason, created_at
+      ) VALUES (
+        'fout_original', 'ws_history', 'om_original', 'ignored', NULL,
+        'already_handled', '2026-08-01T12:40:00.000Z'
+      );
+    `);
+
+    database.transaction(() => {
+      for (let index = 0; index < 501; index += 1) {
+        const messageId = `om_batch_${String(index).padStart(4, "0")}`;
+        database.run(
+          `INSERT INTO multiremi_feishu_messages (
+             message_id, workspace_id, source_id, chat_id, sender, content,
+             searchable_text, content_fingerprint, created_at, ingested_at, processed_at
+           ) VALUES (?, 'ws_history', 'fsrc_history', 'oc_original', '{}', '{}',
+                     '', ?, '2026-08-01T12:36:00.000Z',
+                     '2026-08-01T12:38:00.000Z', '2026-08-01T12:40:00.000Z')`,
+          [messageId, `fingerprint-${index}`],
+        );
+        database.run(
+          `INSERT INTO multiremi_feishu_message_outcomes (
+             id, workspace_id, message_id, outcome_kind, reason, created_at
+           ) VALUES (?, 'ws_history', ?, 'ignored', 'batch_history',
+                     '2026-08-01T12:40:00.000Z')`,
+          [`fout_batch_${String(index).padStart(4, "0")}`, messageId],
+        );
+      }
+    })();
+
+    migrate(database);
+
+    expect(database.query(
+      `SELECT provider, channel, status FROM multiremi_message_connections
+       WHERE id = 'mconn_fsrc_history'`,
+    ).get()).toEqual({ provider: "lark_cli", channel: "feishu", status: "unknown" });
+    expect(database.query(
+      `SELECT connection_id, allowlist FROM multiremi_message_sources
+       WHERE id = 'fsrc_history'`,
+    ).get()).toEqual({
+      connection_id: "mconn_fsrc_history",
+      allowlist: '[{"externalConversationId":"oc_original","addedAt":"2026-08-01T12:34:56.000Z"}]',
+    });
+    expect(database.query(
+      `SELECT cursor, watermark FROM multiremi_message_sync_cursors
+       WHERE source_id = 'fsrc_history' AND stream = 'messages'`,
+    ).get()).toEqual({
+      cursor: '{"pageToken":"next-original"}',
+      watermark: "2026-08-02T00:00:00.000Z",
+    });
+    expect(database.query(
+      `SELECT connection_id, external_message_id, external_conversation_id,
+              sender, processed_at, retry_count, last_retry_at
+       FROM multiremi_message_messages
+       WHERE connection_id = 'mconn_fsrc_history' AND external_message_id = 'om_original'`,
+    ).get()).toEqual({
+      connection_id: "mconn_fsrc_history",
+      external_message_id: "om_original",
+      external_conversation_id: "oc_original",
+      sender: '{"externalSenderId":"ou_original","displayName":null,"kind":"unknown","isSelf":false}',
+      processed_at: "2026-08-01T12:40:00.000Z",
+      retry_count: 2,
+      last_retry_at: "2026-08-01T12:39:00.000Z",
+    });
+    expect(database.query(
+      `SELECT connection_id, external_message_id, outcome_kind, reason
+       FROM multiremi_message_outcomes WHERE id = 'fout_original'`,
+    ).get()).toEqual({
+      connection_id: "mconn_fsrc_history",
+      external_message_id: "om_original",
+      outcome_kind: "ignored",
+      reason: "already_handled",
+    });
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_message_messages WHERE processed_at IS NULL",
+    ).get()).toEqual({ count: 0 });
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_message_messages WHERE connection_id = 'mconn_fsrc_history'",
+    ).get()).toEqual({ count: 502 });
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_message_outcomes WHERE connection_id = 'mconn_fsrc_history'",
+    ).get()).toEqual({ count: 502 });
+
+    database.run(
+      "DELETE FROM multiremi_schema_migrations WHERE id = '20260831_messaging_core_v1'",
+    );
+    migrate(database);
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_message_messages WHERE connection_id = 'mconn_fsrc_history'",
+    ).get()).toEqual({ count: 502 });
+    expect(database.query(
+      `SELECT processed_at, retry_count, last_retry_at FROM multiremi_message_messages
+       WHERE connection_id = 'mconn_fsrc_history' AND external_message_id = 'om_original'`,
+    ).get()).toEqual({
+      processed_at: "2026-08-01T12:40:00.000Z",
+      retry_count: 2,
+      last_retry_at: "2026-08-01T12:39:00.000Z",
+    });
+  });
+
+  it("drops the retired product name the legacy default left on unnamed sources", () => {
+    const database = freshDb();
+    database.exec(`
+      CREATE TABLE multiremi_feishu_sources (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        name TEXT NOT NULL DEFAULT '',
+        type TEXT NOT NULL DEFAULT 'personal_automation',
+        endpoint_name TEXT NOT NULL,
+        allowlist TEXT NOT NULL DEFAULT '[]',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        retention_days INTEGER NOT NULL DEFAULT 90,
+        poll_interval_seconds INTEGER NOT NULL DEFAULT 15,
+        unprocessed_retry_seconds INTEGER NOT NULL DEFAULT 900,
+        unprocessed_retry_limit INTEGER NOT NULL DEFAULT 3,
+        last_successful_ingest_at TEXT,
+        last_error_code TEXT,
+        last_error_at TEXT,
+        consecutive_failures INTEGER NOT NULL DEFAULT 0,
+        connection_alerted_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO multiremi_feishu_sources (id, name, endpoint_name, created_at, updated_at)
+      VALUES
+        ('fsrc_unnamed', 'Personal Automation', '',
+         '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z'),
+        ('fsrc_named', 'Personal Automation (staging)', 'legacy_endpoint',
+         '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z');
+    `);
+
+    migrate(database);
+
+    // The legacy repo substituted this string whenever a source was created
+    // without a name, so it is the old code's default rather than the
+    // operator's wording. Carrying it over would put the retired product name
+    // back in the new panel on every upgraded install.
+    expect(database.query(
+      "SELECT name FROM multiremi_message_sources WHERE id = 'fsrc_unnamed'",
+    ).get()).toEqual({ name: "飞书消息" });
+    // The connection is named after the legacy endpoint, which an earlier
+    // migration has already backfilled to `legacy_<id>` for rows that had none.
+    // Asserted so the retired name cannot reach the panel by this route either.
+    expect(database.query(
+      "SELECT name FROM multiremi_message_connections WHERE id = 'mconn_fsrc_unnamed'",
+    ).get()).toEqual({ name: "legacy_fsrc_unnamed" });
+
+    // A name an operator chose is their data, even when it contains the retired
+    // words. Only the exact default is replaced.
+    expect(database.query(
+      "SELECT name FROM multiremi_message_sources WHERE id = 'fsrc_named'",
+    ).get()).toEqual({ name: "Personal Automation (staging)" });
+  });
+
+  it("refuses to stamp the messaging migration when legacy rows are orphaned", () => {
+    const database = freshDb();
+    database.exec(`
+      CREATE TABLE multiremi_feishu_messages (
+        message_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        source_id TEXT NOT NULL,
+        chat_id TEXT NOT NULL,
+        sender TEXT NOT NULL DEFAULT '{}',
+        content TEXT NOT NULL DEFAULT '{}',
+        searchable_text TEXT NOT NULL DEFAULT '',
+        content_fingerprint TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        ingested_at TEXT NOT NULL,
+        processed_at TEXT
+      );
+      INSERT INTO multiremi_feishu_messages (
+        message_id, source_id, chat_id, content_fingerprint, created_at, ingested_at
+      ) VALUES (
+        'om_orphan', 'fsrc_missing', 'oc_orphan', 'fingerprint',
+        '2026-08-31T00:00:00.000Z', '2026-08-31T00:01:00.000Z'
+      );
+    `);
+
+    expect(() => migrate(database)).toThrow("message rows without a source");
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260831_messaging_core_v1'",
+    ).get()).toEqual({ count: 0 });
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_message_messages",
+    ).get()).toEqual({ count: 0 });
   });
 
   it("upgrades Feishu outcome rows from v3 to issue proposal v4 idempotently", () => {
