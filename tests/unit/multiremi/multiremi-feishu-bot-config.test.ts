@@ -371,6 +371,24 @@ describe("workspace Feishu bot config API", () => {
     expect(entries.at(-1)?.details).toMatchObject({ app_secret_op: "set", domain: "feishu" });
     expect(entries[2]?.details).toMatchObject({ app_secret_op: "keep", domain: "lark" });
   });
+
+  it("keeps the audit order when every entry lands in the same millisecond", () => {
+    const { store } = scaffold();
+    // The trail above already exercises ordering, but through HTTP round-trips
+    // that usually straddle a millisecond boundary — which is how a broken
+    // tiebreak stayed green on a slow machine and failed on CI. Writing
+    // directly, and then forcing one shared timestamp, removes the clock from
+    // the question: only the seq can still order these.
+    const actions = ["configured", "updated", "disabled", "enabled", "tested"] as const;
+    for (const action of actions) store.recordFeishuBotAudit("local", action, { details: { step: action } });
+    db?.run("UPDATE multiremi_feishu_bot_audit SET created_at = ? WHERE workspace_id = ?", [
+      "2026-09-01T00:00:00.000Z",
+      "local",
+    ]);
+
+    const entries = store.listFeishuBotAudit("local");
+    expect(entries.map((entry) => entry.action)).toEqual([...actions].reverse());
+  });
 });
 
 describe("workspace Feishu bot config permissions", () => {

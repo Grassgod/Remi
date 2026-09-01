@@ -415,11 +415,20 @@ export class FeishuBotRepo {
     const id = createId("fba");
     const createdAt = nowIso();
     const details = input.details ?? {};
+    // `created_at` only resolves to the millisecond and the id is random, so
+    // back-to-back entries — a stop and the deploy that follows it — cannot be
+    // ordered by either. The per-workspace seq is what makes the trail readable.
+    const seq = Number(
+      (this.ctx.db
+        .query("SELECT COALESCE(MAX(seq), 0) AS seq FROM multiremi_feishu_bot_audit WHERE workspace_id = ?")
+        .get(workspaceId) as { seq?: number } | null)?.seq ?? 0,
+    ) + 1;
     this.ctx.db.run(
-      `INSERT INTO multiremi_feishu_bot_audit (id, workspace_id, action, actor_type, actor_id, details, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO multiremi_feishu_bot_audit (id, workspace_id, seq, action, actor_type, actor_id, details, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       id,
       workspaceId,
+      seq,
       action,
       input.actorType ?? "member",
       cleanOptionalString(input.actorId),
@@ -442,7 +451,7 @@ export class FeishuBotRepo {
       .query(
         `SELECT * FROM multiremi_feishu_bot_audit
           WHERE workspace_id = ?
-          ORDER BY created_at DESC, id DESC
+          ORDER BY seq DESC
           LIMIT ?`,
       )
       .all(workspaceId, Math.max(1, Math.min(200, Math.trunc(limit) || 50))) as Row[];

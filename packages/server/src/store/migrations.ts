@@ -542,6 +542,11 @@ export function runMigrations(db: SqlDatabase): void {
     CREATE TABLE IF NOT EXISTS multiremi_feishu_bot_audit (
       id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL,
+      -- Per-workspace insertion order. created_at is millisecond-resolution
+      -- and the id is random, so two entries written in the same millisecond
+      -- (a stop immediately followed by a deploy) would otherwise come back in
+      -- an arbitrary order — and the order is the whole point of an audit list.
+      seq INTEGER NOT NULL DEFAULT 0,
       action TEXT NOT NULL,
       actor_type TEXT NOT NULL DEFAULT 'member',
       actor_id TEXT,
@@ -550,7 +555,7 @@ export function runMigrations(db: SqlDatabase): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_audit_workspace
-      ON multiremi_feishu_bot_audit(workspace_id, created_at);
+      ON multiremi_feishu_bot_audit(workspace_id, seq);
 
     CREATE TABLE IF NOT EXISTS multiremi_users (
       id TEXT PRIMARY KEY,
@@ -2386,6 +2391,10 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_tasks", "holds_workspace INTEGER NOT NULL DEFAULT 1");
   addColumnIfMissing(db, "multiremi_tasks", "assignment_event_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "assignment_source_event_id TEXT");
+  // The audit table shipped inside MUL-206 before it had a seq; a branch
+  // checkout that already created it needs the column added rather than the
+  // CREATE TABLE above, which is a no-op once the table exists.
+  addColumnIfMissing(db, "multiremi_feishu_bot_audit", "seq INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(db, "multiremi_tasks", "projection_from_seq INTEGER");
   addColumnIfMissing(db, "multiremi_tasks", "projection_to_seq INTEGER");
   addColumnIfMissing(db, "multiremi_tasks", "projection_mode TEXT");
