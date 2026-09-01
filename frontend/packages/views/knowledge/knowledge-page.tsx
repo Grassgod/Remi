@@ -7,8 +7,10 @@ import {
   ArrowDownUp,
   BookOpen,
   Brain,
+  Check,
   ChevronRight,
   Clock3,
+  ExternalLink,
   FileInput,
   Files,
   FolderKanban,
@@ -16,6 +18,7 @@ import {
   GitFork,
   GitPullRequest,
   Library,
+  Loader2,
   Search,
   Sparkles,
 } from "lucide-react";
@@ -23,10 +26,17 @@ import { Badge } from "@multiremi/ui/components/ui/badge";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { Input } from "@multiremi/ui/components/ui/input";
 import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@multiremi/ui/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multiremi/ui/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@multiremi/ui/components/ui/tooltip";
 import { workspaceDocListOptions } from "@multiremi/core/project-docs";
-import { knowledgeRunsOptions, knowledgeSubmissionsOptions } from "@multiremi/core/knowledge";
+import { knowledgeRunOptions, knowledgeRunsOptions, knowledgeSubmissionsOptions } from "@multiremi/core/knowledge";
 import { projectListOptions } from "@multiremi/core/projects/queries";
 import { repositoryListOptions, repositoryWikiSummariesOptions } from "@multiremi/core/repositories";
 import { useWorkspaceId } from "@multiremi/core/hooks";
@@ -284,6 +294,237 @@ function statusVariant(status: string): "default" | "secondary" | "destructive" 
   return "outline";
 }
 
+function syntheticKnowledgeTask(detail: KnowledgeRunDetail): AgentTask | null {
+  const { run } = detail;
+  if (!run.task_id) return null;
+  return {
+    id: run.task_id,
+    agent_id: run.agent_id ?? "",
+    runtime_id: "",
+    issue_id: "",
+    status: run.status === "processing" || run.status === "validating"
+      ? "running"
+      : run.status === "failed" ? "failed" : "completed",
+    priority: 0,
+    dispatched_at: null,
+    started_at: run.created_at || null,
+    completed_at: run.completed_at,
+    result: null,
+    error: run.status === "failed" ? run.result_summary : null,
+    created_at: run.created_at,
+  };
+}
+
+function runDuration(createdAt: string, completedAt: string | null): string | null {
+  if (!createdAt || !completedAt) return null;
+  const durationMs = Date.parse(completedAt) - Date.parse(createdAt);
+  if (!Number.isFinite(durationMs) || durationMs < 0) return null;
+  const seconds = Math.round(durationMs / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return remainingSeconds > 0 ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
+}
+
+function KnowledgeRunSheet({
+  selected,
+  onOpenChange,
+}: {
+  selected: KnowledgeRunDetail | null;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const { t } = useT("projects");
+  const workspaceId = useWorkspaceId();
+  const paths = useWorkspacePaths();
+  const { getAgentName } = useActorName();
+  const formatRelativeDate = useFormatRelativeDate();
+  const detailQuery = useQuery(knowledgeRunOptions(workspaceId, selected?.run.id));
+  const detail = detailQuery.data ?? selected;
+  const run = detail?.run;
+  const sources = detail?.sources ?? [];
+  const outputs = detail?.outputs ?? [];
+  const provenance = run?.provenance;
+  const agentName = run
+    ? run.agent?.name || (run.agent_id ? getAgentName(run.agent_id) : t(($) => $.knowledge.provenance_manual))
+    : t(($) => $.knowledge.provenance_unknown);
+  const task = detail ? syntheticKnowledgeTask(detail) : null;
+  const duration = run ? runDuration(run.created_at, run.completed_at) : null;
+
+  const modeLabel = (() => {
+    switch (run?.mode) {
+      case "repository_update": return t(($) => $.knowledge.run_mode_repository_update);
+      case "issue_ingest": return t(($) => $.knowledge.run_mode_issue_ingest);
+      case "memory_curate": return t(($) => $.knowledge.run_mode_memory_curate);
+      default: return run?.mode || t(($) => $.knowledge.provenance_unknown);
+    }
+  })();
+  const triggerLabel = (() => {
+    switch (provenance?.event_type ?? provenance?.automation_source) {
+      case "change.merged": return t(($) => $.knowledge.run_trigger_change_merged);
+      case "default_branch.updated": return t(($) => $.knowledge.run_trigger_default_branch);
+      case "schedule": return t(($) => $.knowledge.run_trigger_schedule);
+      case "manual": return t(($) => $.knowledge.run_trigger_manual);
+      default: return provenance?.event_type || provenance?.automation_source || t(($) => $.knowledge.run_trigger_unknown);
+    }
+  })();
+
+  return (
+    <Sheet open={Boolean(selected)} onOpenChange={onOpenChange}>
+      <SheetContent side="right" className="w-[min(440px,100vw)] gap-0 p-0 sm:max-w-[440px]">
+        <SheetHeader className="border-b pr-12">
+          <SheetTitle>{t(($) => $.knowledge.run_details_title)}</SheetTitle>
+          <SheetDescription className="truncate font-mono text-xs">
+            {provenance?.automation_title || run?.id || t(($) => $.knowledge.run_details_description)}
+          </SheetDescription>
+        </SheetHeader>
+
+        {!detail && detailQuery.isPending ? (
+          <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" />{t(($) => $.knowledge.run_details_loading)}
+          </div>
+        ) : !detail ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+            <AlertCircle className="size-5 text-destructive" />
+            <p className="text-sm text-muted-foreground">{t(($) => $.knowledge.provenance_unavailable)}</p>
+            <Button type="button" variant="outline" size="sm" onClick={() => void detailQuery.refetch()}>
+              {t(($) => $.knowledge.load_error_retry)}
+            </Button>
+          </div>
+        ) : (
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <div className="flex flex-wrap gap-1.5 border-b px-4 py-3">
+              <Badge variant="outline" className="font-normal">{modeLabel}</Badge>
+              <Badge variant="secondary" className="font-normal">{triggerLabel}</Badge>
+              <Badge variant={statusVariant(detail.run.status)} className="font-normal">{detail.run.status}</Badge>
+              {duration && <Badge variant="outline" className="font-normal">{duration}</Badge>}
+            </div>
+
+            <section className="border-b px-4 py-4">
+              <h3 className="text-xs font-medium text-muted-foreground">{t(($) => $.knowledge.run_stage_trigger)}</h3>
+              <div className="mt-3 space-y-2 text-sm">
+                {provenance ? (
+                  <>
+                    <div className="flex min-w-0 items-center gap-2">
+                      <Sparkles className="size-4 shrink-0 text-muted-foreground" />
+                      <AppLink href={paths.autopilotDetail(provenance.automation_id)} className="truncate hover:underline">
+                        {provenance.automation_title || provenance.automation_id}
+                      </AppLink>
+                    </div>
+                    {provenance.change_number !== null ? (
+                      <div className="flex min-w-0 items-center gap-2 text-muted-foreground">
+                        <GitPullRequest className="size-4 shrink-0" />
+                        {provenance.change_url ? (
+                          <a href={provenance.change_url} target="_blank" rel="noreferrer" className="flex min-w-0 items-center gap-1 hover:text-foreground hover:underline">
+                            <span className="truncate">#{provenance.change_number}{provenance.change_title ? ` ${provenance.change_title}` : ""}</span>
+                            <ExternalLink className="size-3 shrink-0" />
+                          </a>
+                        ) : <span className="truncate">#{provenance.change_number}{provenance.change_title ? ` ${provenance.change_title}` : ""}</span>}
+                      </div>
+                    ) : null}
+                    {(provenance.repository_name || provenance.target_branch || provenance.source_revision) && (
+                      <div className="flex min-w-0 items-center gap-2 text-muted-foreground">
+                        <GitBranch className="size-4 shrink-0" />
+                        <span className="truncate font-mono text-xs">
+                          {[provenance.repository_name, provenance.target_branch, provenance.source_revision?.slice(0, 7)].filter(Boolean).join(" · ")}
+                        </span>
+                      </div>
+                    )}
+                  </>
+                ) : <p className="text-muted-foreground">{t(($) => $.knowledge.run_trigger_unknown)}</p>}
+              </div>
+            </section>
+
+            <section className="border-b px-4 py-4">
+              <h3 className="text-xs font-medium text-muted-foreground">
+                {t(($) => $.knowledge.run_stage_inputs)} · {sources.length}
+              </h3>
+              <div className="mt-3 divide-y">
+                {sources.length > 0 ? sources.map((source) => (
+                  <div key={source.id} className="py-2 first:pt-0 last:pb-0">
+                    <div className="flex min-w-0 items-center gap-2 text-sm">
+                      <FileInput className="size-4 shrink-0 text-muted-foreground" />
+                      <span className="truncate font-mono text-xs">{source.submission_id || source.source_ref || source.source_type}</span>
+                    </div>
+                    {source.submission?.body && (
+                      <p className="mt-1.5 line-clamp-3 whitespace-pre-wrap break-words pl-6 text-xs leading-relaxed text-muted-foreground">
+                        {source.submission.body}
+                      </p>
+                    )}
+                  </div>
+                )) : <p className="text-sm text-muted-foreground">{t(($) => $.knowledge.provenance_no_sources)}</p>}
+              </div>
+            </section>
+
+            <section className="border-b px-4 py-4">
+              <h3 className="text-xs font-medium text-muted-foreground">{t(($) => $.knowledge.run_stage_agent)}</h3>
+              <div className="mt-3 flex items-start gap-2">
+                <ActorAvatar actorType={detail.run.agent_id ? "agent" : "system"} actorId={detail.run.agent_id ?? "manual"} size={20} />
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm">{agentName}</div>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {detail.run.skill_names.length > 0
+                      ? detail.run.skill_names.map((skill) => <Badge key={skill} variant="outline" className="font-mono font-normal">{skill}</Badge>)
+                      : <span className="text-xs text-muted-foreground">{modeLabel}</span>}
+                  </div>
+                </div>
+                {task && (
+                  <div className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+                    <span>{t(($) => $.knowledge.run_task_transcript)}</span>
+                    <TranscriptButton
+                      task={task}
+                      agentName={agentName}
+                      isLive={task.status === "running"}
+                      title={t(($) => $.knowledge.run_task_transcript)}
+                    />
+                  </div>
+                )}
+              </div>
+            </section>
+
+            <section className="px-4 py-4">
+              <h3 className="text-xs font-medium text-muted-foreground">
+                {t(($) => $.knowledge.run_stage_outputs)} · {outputs.length}
+              </h3>
+              <div className="mt-3 divide-y">
+                {outputs.length > 0 ? outputs.map((output) => (
+                  <div key={output.id} className="flex min-w-0 items-start gap-2 py-2 first:pt-0 last:pb-0">
+                    <span className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+                      <Check className="size-3" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex min-w-0 items-center gap-1.5 text-sm">
+                        <Badge variant="outline" className="shrink-0 font-normal">{output.action}</Badge>
+                        <span className="truncate">{output.artifact?.title || output.artifact?.path || output.doc_id || output.artifact_scope}</span>
+                        {output.version !== null && <span className="shrink-0 text-xs text-muted-foreground">{t(($) => $.knowledge.version_short, { version: output.version })}</span>}
+                      </div>
+                      {output.artifact?.path && <div className="mt-1 truncate font-mono text-xs text-muted-foreground">{output.artifact.path}</div>}
+                    </div>
+                  </div>
+                )) : <p className="text-sm text-muted-foreground">{t(($) => $.knowledge.provenance_no_outputs)}</p>}
+              </div>
+              {detail.run.result_summary && (
+                <div className="mt-4 border-t pt-3">
+                  <div className="text-xs font-medium text-muted-foreground">{t(($) => $.knowledge.run_result)}</div>
+                  <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed">{detail.run.result_summary}</p>
+                </div>
+              )}
+            </section>
+          </div>
+        )}
+
+        {run && (
+          <div className="border-t px-4 py-3 text-xs text-muted-foreground">
+            <div className="flex items-center justify-between gap-3">
+              <span className="truncate font-mono" title={run.id}>{run.id}</span>
+              <span className="shrink-0">{run.created_at ? formatRelativeDate(run.created_at) : "--"}</span>
+            </div>
+          </div>
+        )}
+      </SheetContent>
+    </Sheet>
+  );
+}
+
 function RawBodyPreview({ body, fallback }: { body: string; fallback: string }) {
   const content = body || fallback;
   return (
@@ -364,6 +605,7 @@ function RunPane({ runs, search }: { runs: KnowledgeRunDetail[]; search: string 
   const paths = useWorkspacePaths();
   const { getAgentName } = useActorName();
   const formatRelativeDate = useFormatRelativeDate();
+  const [selected, setSelected] = useState<KnowledgeRunDetail | null>(null);
   const query = search.trim().toLowerCase();
   const rows = runs.filter(({ run, sources, outputs }) => !query || [
     run.id, run.mode, run.status, run.result_summary ?? "", run.agent?.name ?? run.agent_id ?? "",
@@ -403,22 +645,6 @@ function RunPane({ runs, search }: { runs: KnowledgeRunDetail[]; search: string 
               default: return provenance?.event_type || provenance?.automation_source || t(($) => $.knowledge.run_trigger_unknown);
             }
           })();
-          const syntheticTask: AgentTask | null = run.task_id ? {
-            id: run.task_id,
-            agent_id: run.agent_id ?? "",
-            runtime_id: "",
-            issue_id: "",
-            status: run.status === "processing" || run.status === "validating"
-              ? "running"
-              : run.status === "failed" ? "failed" : "completed",
-            priority: 0,
-            dispatched_at: null,
-            started_at: run.created_at || null,
-            completed_at: run.completed_at,
-            result: null,
-            error: run.status === "failed" ? run.result_summary : null,
-            created_at: run.created_at,
-          } : null;
           return (
             <article key={run.id} className="border-b px-4 py-3 last:border-b-0">
               <div className="grid gap-3 lg:grid-cols-[minmax(230px,1.2fr)_minmax(145px,.7fr)_minmax(150px,.8fr)_minmax(220px,1.3fr)_120px] lg:items-start">
@@ -481,23 +707,21 @@ function RunPane({ runs, search }: { runs: KnowledgeRunDetail[]; search: string 
                 </div>
                 <div className="flex items-center gap-2 lg:justify-end">
                   <Badge variant={statusVariant(run.status)} className="w-fit font-normal">{run.status}</Badge>
-                  {syntheticTask && (
-                    <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                      <span className="hidden xl:inline">{t(($) => $.knowledge.run_view_log)}</span>
-                      <TranscriptButton
-                        task={syntheticTask}
-                        agentName={agentName}
-                        isLive={syntheticTask.status === "running"}
-                        title={t(($) => $.knowledge.run_view_log)}
-                      />
-                    </span>
-                  )}
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                    onClick={() => setSelected({ run, sources, outputs })}
+                  >
+                    <span className="hidden xl:inline">{t(($) => $.knowledge.run_view_log)}</span>
+                    <ChevronRight className="size-3.5" />
+                  </button>
                 </div>
               </div>
             </article>
           );
         })}
       </div>
+      <KnowledgeRunSheet selected={selected} onOpenChange={(open) => { if (!open) setSelected(null); }} />
     </div>
   );
 }

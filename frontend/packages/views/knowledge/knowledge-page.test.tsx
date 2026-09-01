@@ -25,9 +25,11 @@ const state = vi.hoisted(() => ({
   summaries: [] as unknown[],
   submissions: [] as unknown[],
   runs: [] as unknown[],
+  runDetail: null as unknown,
   basePending: false,
   submissionsPending: false,
   runsPending: false,
+  runDetailPending: false,
   baseError: null as unknown,
   submissionsError: null as unknown,
   runsError: null as unknown,
@@ -44,9 +46,10 @@ vi.mock("@tanstack/react-query", () => ({
     state.observedQueries.push({ key, enabled: (options as { enabled?: boolean }).enabled });
     if (key[0] === "knowledge") {
       const submissions = key[2] === "submissions";
+      const runDetail = key[2] === "runs" && key.length > 3;
       return {
-        data: submissions ? state.submissions : state.runs,
-        isPending: submissions ? state.submissionsPending : state.runsPending,
+        data: submissions ? state.submissions : runDetail ? state.runDetail : state.runs,
+        isPending: submissions ? state.submissionsPending : runDetail ? state.runDetailPending : state.runsPending,
         isError: (submissions ? state.submissionsError : state.runsError) !== null,
         error: submissions ? state.submissionsError : state.runsError,
         refetch: submissions ? refetchSubmissions : refetchRuns,
@@ -79,6 +82,10 @@ vi.mock("@multiremi/core/project-docs", () => ({
 vi.mock("@multiremi/core/knowledge", () => ({
   knowledgeSubmissionsOptions: () => ({ queryKey: ["knowledge", "ws-1", "submissions"] }),
   knowledgeRunsOptions: () => ({ queryKey: ["knowledge", "ws-1", "runs"] }),
+  knowledgeRunOptions: (_workspaceId: string, runId: string | null | undefined) => ({
+    queryKey: ["knowledge", "ws-1", "runs", runId ?? ""],
+    enabled: Boolean(runId),
+  }),
 }));
 vi.mock("@multiremi/core/projects/queries", () => ({
   projectListOptions: () => ({ queryKey: ["projects"] }),
@@ -197,8 +204,8 @@ function renderPage() {
 describe("KnowledgePage", () => {
   beforeEach(() => {
     Object.assign(state, {
-      projects: [], docs: [], repositories: [], summaries: [], submissions: [], runs: [],
-      basePending: false, submissionsPending: false, runsPending: false,
+      projects: [], docs: [], repositories: [], summaries: [], submissions: [], runs: [], runDetail: null,
+      basePending: false, submissionsPending: false, runsPending: false, runDetailPending: false,
       baseError: null, submissionsError: null, runsError: null,
     });
     refetchBase.mockClear();
@@ -291,7 +298,7 @@ describe("KnowledgePage", () => {
   });
 
   it("renders a compilation run with multiple Raw inputs and multiple outputs", () => {
-    state.runs = [runDetail({
+    const detail = runDetail({
       run: {
         ...runDetail().run,
         provenance: {
@@ -318,7 +325,15 @@ describe("KnowledgePage", () => {
         { id: "out-1", run_id: "krun-1", artifact_scope: "project_wiki", doc_id: "doc-1", revision_id: "rev-1", version: 2, action: "merge", content_sha256: null, created_at: "", artifact: { id: "doc-1", title: "Overview", path: "overview.md" } },
         { id: "out-2", run_id: "krun-1", artifact_scope: "memory", doc_id: "doc-2", revision_id: "rev-2", version: 1, action: "split", content_sha256: null, created_at: "", artifact: { id: "doc-2", title: "Runtime fact", path: "runtime-fact.md" } },
       ],
-    })];
+    });
+    state.runs = [detail];
+    state.runDetail = {
+      ...detail,
+      sources: detail.sources.map((source, index) => ({
+        ...source,
+        submission: submission({ id: source.submission_id ?? `raw-${index}`, body: `Complete Raw input ${index + 1}` }),
+      })),
+    };
     renderPage();
     fireEvent.click(screen.getByRole("tab", { name: /Compilation runs/ }));
 
@@ -333,6 +348,13 @@ describe("KnowledgePage", () => {
     expect(screen.getByText("Overview")).toBeInTheDocument();
     expect(screen.getByText("Runtime fact")).toBeInTheDocument();
     expect(screen.getByText("Merged two Raw inputs")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "View run log" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("Run details");
+    expect(screen.getByRole("dialog")).toHaveTextContent("Repository Wiki maintenance");
+    expect(screen.getByRole("dialog")).toHaveTextContent("Complete Raw input 1");
+    expect(screen.getByRole("dialog")).toHaveTextContent("Agent transcript");
+    expect(screen.getByRole("dialog")).toHaveTextContent("Formal outputs · 2");
   });
 
   it("searches within the active formal view", async () => {
