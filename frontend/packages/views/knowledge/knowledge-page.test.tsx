@@ -31,6 +31,7 @@ const state = vi.hoisted(() => ({
   baseError: null as unknown,
   submissionsError: null as unknown,
   runsError: null as unknown,
+  observedQueries: [] as Array<{ key: readonly unknown[]; enabled: boolean | undefined }>,
 }));
 const refetchBase = vi.hoisted(() => vi.fn());
 const refetchSubmissions = vi.hoisted(() => vi.fn());
@@ -40,6 +41,7 @@ vi.mock("@tanstack/react-query", () => ({
   queryOptions: <T,>(options: T) => options,
   useQuery: (options: { queryKey: readonly unknown[] }) => {
     const key = options.queryKey;
+    state.observedQueries.push({ key, enabled: (options as { enabled?: boolean }).enabled });
     if (key[0] === "knowledge") {
       const submissions = key[2] === "submissions";
       return {
@@ -89,6 +91,7 @@ vi.mock("@multiremi/core/paths", () => ({
     projectWikiPage: (id: string, ref: string) => `/ws/projects/${id}/wiki/${ref}`,
     repositoryWiki: (id: string) => `/ws/repos/${id}/wiki`,
     repositoryWikiPage: (id: string, path: string) => `/ws/repos/${id}/wiki/${path}`,
+    autopilotDetail: (id: string) => `/ws/autopilots/${id}`,
   }),
 }));
 vi.mock("@multiremi/core/workspace/hooks", () => ({
@@ -99,6 +102,9 @@ vi.mock("@multiremi/core/workspace/hooks", () => ({
 }));
 vi.mock("../common/actor-avatar", () => ({
   ActorAvatar: ({ actorId }: { actorId: string }) => <span data-testid="actor-avatar">{actorId}</span>,
+}));
+vi.mock("../common/task-transcript", () => ({
+  TranscriptButton: ({ title }: { title: string }) => <button type="button">{title}</button>,
 }));
 vi.mock("../projects/components/project-icon", () => ({
   ProjectIcon: ({ project }: { project: Project }) => <span>{project.icon ?? "folder"}</span>,
@@ -176,7 +182,7 @@ function runDetail(partial: Partial<KnowledgeRunDetail> = {}): KnowledgeRunDetai
       task_id: "task-atlas", agent_id: "agent-atlas", autopilot_run_id: null,
       mode: "issue_ingest", status: "published", result_summary: "Merged two Raw inputs",
       dedupe_key: "batch-1", created_at: "2026-08-31T01:00:00Z", completed_at: "2026-08-31T01:01:00Z",
-      agent: { id: "agent-atlas", name: "Atlas" }, skill_names: ["code-to-wiki"],
+      agent: { id: "agent-atlas", name: "Atlas" }, skill_names: ["code-to-wiki"], provenance: null,
     },
     sources: [],
     outputs: [],
@@ -198,6 +204,7 @@ describe("KnowledgePage", () => {
     refetchBase.mockClear();
     refetchSubmissions.mockClear();
     refetchRuns.mockClear();
+    state.observedQueries.length = 0;
   });
 
   it("renders four peer knowledge views", () => {
@@ -206,6 +213,12 @@ describe("KnowledgePage", () => {
     expect(screen.getByRole("tab", { name: /Raw/ })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Memory/ })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Compilation runs/ })).toBeInTheDocument();
+  });
+
+  it("does not request Raw or compilation data on the Wiki landing view", () => {
+    renderPage();
+    expect(state.observedQueries.find(({ key }) => key[0] === "knowledge" && key[2] === "submissions")?.enabled).toBe(false);
+    expect(state.observedQueries.find(({ key }) => key[0] === "knowledge" && key[2] === "runs")?.enabled).toBe(false);
   });
 
   it("keeps the Wiki pane loading until its formal sources resolve", () => {
@@ -279,6 +292,24 @@ describe("KnowledgePage", () => {
 
   it("renders a compilation run with multiple Raw inputs and multiple outputs", () => {
     state.runs = [runDetail({
+      run: {
+        ...runDetail().run,
+        provenance: {
+          automation_id: "auto-wiki",
+          automation_title: "Repository Wiki maintenance",
+          automation_run_id: "run-auto-1",
+          automation_source: "scm_event",
+          event_type: "change.merged",
+          repository_id: "repo-1",
+          repository_name: "web",
+          change_number: 42,
+          change_title: "Refresh architecture docs",
+          change_url: "https://example.com/pull/42",
+          target_branch: "main",
+          source_revision: "abcdef123456",
+          occurred_at: "2026-08-31T00:59:00Z",
+        },
+      },
       sources: [
         { id: "src-1", run_id: "krun-1", submission_id: "raw-1", source_type: "submission", source_ref: null, metadata: {}, created_at: "", submission: null },
         { id: "src-2", run_id: "krun-1", submission_id: "raw-2", source_type: "submission", source_ref: null, metadata: {}, created_at: "", submission: null },
@@ -293,6 +324,10 @@ describe("KnowledgePage", () => {
 
     expect(screen.getByText("Atlas")).toBeInTheDocument();
     expect(screen.getByText("code-to-wiki")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Repository Wiki maintenance" })).toHaveAttribute("href", "/ws/autopilots/auto-wiki");
+    expect(screen.getByRole("link", { name: "#42 Refresh architecture docs" })).toHaveAttribute("href", "https://example.com/pull/42");
+    expect(screen.getByText("PR/MR merged")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "View run log" })).toBeInTheDocument();
     expect(screen.getByText("raw-1")).toBeInTheDocument();
     expect(screen.getByText("raw-2")).toBeInTheDocument();
     expect(screen.getByText("Overview")).toBeInTheDocument();

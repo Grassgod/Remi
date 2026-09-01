@@ -55,7 +55,7 @@ export interface ProjectKnowledgeServiceContract {
   listProjectDocRevisions(projectId: string, ref: string): Promise<ProjectKnowledgeRevision[]>;
   searchProjectDocs(projectId: string, query: string, input?: ProjectKnowledgeSearchOptions): Promise<ProjectKnowledgeDoc[]>;
   recallProjectDocs(projectId: string, query: string, input?: ProjectKnowledgeSearchOptions): Promise<ProjectKnowledgeSearchHit[]>;
-  listWorkspaceDocs(workspaceId: string, input?: { kind?: string | null; q?: string | null; limit?: number }): Promise<ProjectKnowledgeWorkspaceDoc[]>;
+  listWorkspaceDocs(workspaceId: string, input?: { kind?: string | null; q?: string | null; limit?: number; includeBody?: boolean }): Promise<ProjectKnowledgeWorkspaceDoc[]>;
   backlinks(projectId: string, ref: string): Promise<ProjectKnowledgeDoc[]>;
   migrationStatus(workspaceId: string): Promise<ProjectKnowledgeMigrationStatus>;
   backfill(workspaceId: string, input?: { dryRun?: boolean; resume?: boolean; projectId?: string | null; statuses?: string[] }): Promise<ProjectKnowledgeMigrationResult>;
@@ -273,13 +273,16 @@ export class ProjectKnowledgeService implements ProjectKnowledgeServiceContract 
 
   async listWorkspaceDocs(
     workspaceId: string,
-    input: { kind?: string | null; q?: string | null; limit?: number } = {},
+    input: { kind?: string | null; q?: string | null; limit?: number; includeBody?: boolean } = {},
   ): Promise<ProjectKnowledgeWorkspaceDoc[]> {
     const query = String(input.q ?? "").trim();
     if (this.mode !== "openviking" || !query) {
       const docs = this.store.listWorkspaceDocs(workspaceId, this.mode === "openviking" ? { ...input, q: null } : input);
       const available = this.mode === "openviking" ? docs.filter(isReadyOpenVikingDoc) : docs;
       const limited = available.slice(0, clampLimit(input.limit, 200, 500));
+      if (input.includeBody === false) {
+        return limited.map((doc) => ({ ...asWorkspaceKnowledgeDoc(doc), body: "" }));
+      }
       if (this.mode !== "openviking") return limited.map(asWorkspaceKnowledgeDoc);
       return this.hydrateBounded(limited, "workspace doc", (doc, source) => ({ ...doc, projectTitle: source.projectTitle }));
     }

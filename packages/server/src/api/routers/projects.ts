@@ -681,6 +681,7 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
         kind: cleanString(c.req.query("kind")),
         q: cleanString(c.req.query("q")),
         limit: parseOptionalInt(c.req.query("limit")),
+        includeBody: c.req.query("include_body") !== "false",
       });
       return c.json({
         docs: docs.map((doc) => ({ ...projectDocCompatibilityResponse(doc), project_title: doc.projectTitle })),

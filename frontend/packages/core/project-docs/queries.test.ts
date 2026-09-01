@@ -93,7 +93,7 @@ describe("workspaceDocListOptions", () => {
   it("keys on the workspace and selects the docs array", () => {
     const options = workspaceDocListOptions("ws-1");
 
-    expect(options.queryKey).toEqual(projectDocKeys.workspaceList("ws-1"));
+    expect(options.queryKey).toEqual([...projectDocKeys.workspaceList("ws-1"), "all", "metadata"]);
     expect(options.select?.({ docs: [{ id: "pdoc_1" }] } as never)).toEqual([
       { id: "pdoc_1" },
     ]);
@@ -104,7 +104,7 @@ describe("workspaceDocListOptions", () => {
 
     await workspaceDocListOptions("ws-1").queryFn?.({} as never);
 
-    expect(listWorkspaceDocsMock).toHaveBeenCalledWith({ workspaceId: "ws-1" });
+    expect(listWorkspaceDocsMock).toHaveBeenCalledWith({ workspaceId: "ws-1", kind: undefined, includeBody: false });
   });
 });
 

@@ -275,6 +275,30 @@ describe("ProjectKnowledgeService OpenViking mode", () => {
     expect(results.every((doc) => doc.projectTitle === "Workspace search")).toBe(true);
   });
 
+  it("lists workspace metadata without reading OpenViking document bodies", async () => {
+    const store = createStore();
+    const client = new FakeOpenViking();
+    const service = new ProjectKnowledgeService(store, client, "openviking");
+    const project = store.createProject({ title: "Fast knowledge index" });
+    await service.createProjectDoc(project.id, {
+      kind: "wiki",
+      title: "Architecture",
+      summary: "System boundaries",
+      body: "A deliberately remote document body.",
+    });
+
+    client.readCalls.length = 0;
+    const results = await service.listWorkspaceDocs(project.workspaceId, { includeBody: false });
+
+    expect(results.find((doc) => doc.title === "Architecture")).toMatchObject({
+      title: "Architecture",
+      summary: "System boundaries",
+      body: "",
+    });
+    expect(results.every((doc) => doc.body === "")).toBe(true);
+    expect(client.readCalls).toHaveLength(0);
+  });
+
   it("caps hydration concurrency instead of fanning out one read per doc at once", async () => {
     const store = createStore();
     const client = new FakeOpenViking();

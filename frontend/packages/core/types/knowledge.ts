@@ -14,6 +14,22 @@ export interface KnowledgeTaskSummary {
   status: string;
 }
 
+export interface KnowledgeRunProvenance {
+  automation_id: string;
+  automation_title: string | null;
+  automation_run_id: string;
+  automation_source: string;
+  event_type: string | null;
+  repository_id: string | null;
+  repository_name: string | null;
+  change_number: number | null;
+  change_title: string | null;
+  change_url: string | null;
+  target_branch: string | null;
+  source_revision: string | null;
+  occurred_at: string | null;
+}
+
 export interface KnowledgeSubmission {
   id: string;
   workspace_id: string;
@@ -55,6 +71,7 @@ export interface KnowledgeCompilationRun {
   completed_at: string | null;
   agent: KnowledgeAgentSummary | null;
   skill_names: string[];
+  provenance: KnowledgeRunProvenance | null;
 }
 
 export interface KnowledgeCompilationSource {

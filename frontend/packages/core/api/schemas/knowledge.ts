@@ -24,6 +24,22 @@ const KnowledgeTaskSummarySchema = z.object({
   status: z.string().default("unknown"),
 }).loose();
 
+const KnowledgeRunProvenanceSchema = z.object({
+  automation_id: z.string(),
+  automation_title: nullableString,
+  automation_run_id: z.string(),
+  automation_source: z.string().catch("unknown").default("unknown"),
+  event_type: nullableString,
+  repository_id: nullableString,
+  repository_name: nullableString,
+  change_number: z.number().int().positive().nullable().catch(null).default(null),
+  change_title: nullableString,
+  change_url: nullableString,
+  target_branch: nullableString,
+  source_revision: nullableString,
+  occurred_at: nullableString,
+}).loose();
+
 export const KnowledgeSubmissionSchema = z.object({
   id: z.string(),
   workspace_id: z.string().default(""),
@@ -65,6 +81,7 @@ export const KnowledgeCompilationRunSchema = z.object({
   completed_at: nullableString,
   agent: KnowledgeAgentSummarySchema.nullable().catch(null).default(null),
   skill_names: z.array(z.string()).catch([]).default([]),
+  provenance: KnowledgeRunProvenanceSchema.nullable().catch(null).default(null),
 }).loose();
 
 export const KnowledgeCompilationSourceSchema = z.object({
@@ -157,6 +174,7 @@ export const EMPTY_KNOWLEDGE_RUN_DETAIL: KnowledgeRunDetail = {
     completed_at: null,
     agent: null,
     skill_names: [],
+    provenance: null,
   },
   sources: [],
   outputs: [],

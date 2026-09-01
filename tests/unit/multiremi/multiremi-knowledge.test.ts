@@ -161,9 +161,15 @@ describe("knowledge compilation control plane", () => {
       skill_names: ["code-to-wiki"],
     });
     expect(runDetail.sources).toHaveLength(2);
-    expect(runDetail.sources.map((source: any) => source.submission?.id).sort()).toEqual([first.id, second.id].sort());
+    expect(runDetail.sources.every((source: any) => source.submission === null)).toBe(true);
     expect(runDetail.outputs).toHaveLength(3);
     expect(runDetail.outputs.some((output: any) => output.artifact?.title === "Overview")).toBe(true);
+
+    const detailResponse = await app.request(`/api/knowledge/runs/${published.run.id}`, {
+      headers: { Authorization: "Bearer root-secret" },
+    });
+    const detailedRun = await detailResponse.json() as any;
+    expect(detailedRun.sources.map((source: any) => source.submission?.id).sort()).toEqual([first.id, second.id].sort());
 
     const duplicate = await app.request(`/api/projects/${project.id}/knowledge/publish`, {
       method: "POST",

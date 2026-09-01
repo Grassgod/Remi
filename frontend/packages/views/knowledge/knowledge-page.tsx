@@ -12,7 +12,9 @@ import {
   FileInput,
   Files,
   FolderKanban,
+  GitBranch,
   GitFork,
+  GitPullRequest,
   Library,
   Search,
   Sparkles,
@@ -37,10 +39,12 @@ import type {
   WorkspaceDoc,
   WorkspaceRepository,
 } from "@multiremi/core/types";
+import type { AgentTask } from "@multiremi/core/types/agent";
 import { useActorName } from "@multiremi/core/workspace/hooks";
 import { AppLink } from "../navigation";
 import { ActorAvatar } from "../common/actor-avatar";
 import { EmptyState } from "../common/empty-state";
+import { TranscriptButton } from "../common/task-transcript";
 import { PageHeader } from "../layout/page-header";
 import { ProjectIcon } from "../projects/components/project-icon";
 import { MemoryCard } from "../projects/components/wiki/project-wiki-section";
@@ -357,11 +361,14 @@ function RawPane({ submissions, search }: { submissions: KnowledgeSubmission[]; 
 
 function RunPane({ runs, search }: { runs: KnowledgeRunDetail[]; search: string }) {
   const { t } = useT("projects");
+  const paths = useWorkspacePaths();
   const { getAgentName } = useActorName();
   const formatRelativeDate = useFormatRelativeDate();
   const query = search.trim().toLowerCase();
   const rows = runs.filter(({ run, sources, outputs }) => !query || [
     run.id, run.mode, run.status, run.result_summary ?? "", run.agent?.name ?? run.agent_id ?? "",
+    run.provenance?.automation_title ?? "", run.provenance?.event_type ?? "",
+    run.provenance?.repository_name ?? "", run.provenance?.change_title ?? "",
     ...run.skill_names, ...sources.flatMap((source) => [source.submission_id ?? "", source.source_ref ?? ""]),
     ...outputs.flatMap((output) => [output.doc_id ?? "", output.artifact?.title ?? "", output.artifact?.path ?? ""]),
   ].some((value) => value.toLowerCase().includes(query)));
@@ -369,18 +376,89 @@ function RunPane({ runs, search }: { runs: KnowledgeRunDetail[]; search: string 
   return (
     <div className="p-4">
       <div className="overflow-hidden rounded-md border">
+        <div className="hidden h-8 grid-cols-[minmax(230px,1.2fr)_minmax(145px,.7fr)_minmax(150px,.8fr)_minmax(220px,1.3fr)_120px] items-center gap-3 border-b bg-muted/20 px-4 text-xs text-muted-foreground lg:grid">
+          <span>{t(($) => $.knowledge.run_origin)}</span>
+          <span>{t(($) => $.knowledge.raw_agent)}</span>
+          <span>{t(($) => $.knowledge.run_inputs)}</span>
+          <span>{t(($) => $.knowledge.run_outputs)}</span>
+          <span className="text-right">{t(($) => $.knowledge.raw_status)}</span>
+        </div>
         {rows.map(({ run, sources, outputs }) => {
           const agentName = run.agent?.name || (run.agent_id ? getAgentName(run.agent_id) : t(($) => $.knowledge.provenance_manual));
+          const provenance = run.provenance;
+          const modeLabel = (() => {
+            switch (run.mode) {
+              case "repository_update": return t(($) => $.knowledge.run_mode_repository_update);
+              case "issue_ingest": return t(($) => $.knowledge.run_mode_issue_ingest);
+              case "memory_curate": return t(($) => $.knowledge.run_mode_memory_curate);
+              default: return run.mode;
+            }
+          })();
+          const triggerLabel = (() => {
+            switch (provenance?.event_type ?? provenance?.automation_source) {
+              case "change.merged": return t(($) => $.knowledge.run_trigger_change_merged);
+              case "default_branch.updated": return t(($) => $.knowledge.run_trigger_default_branch);
+              case "schedule": return t(($) => $.knowledge.run_trigger_schedule);
+              case "manual": return t(($) => $.knowledge.run_trigger_manual);
+              default: return provenance?.event_type || provenance?.automation_source || t(($) => $.knowledge.run_trigger_unknown);
+            }
+          })();
+          const syntheticTask: AgentTask | null = run.task_id ? {
+            id: run.task_id,
+            agent_id: run.agent_id ?? "",
+            runtime_id: "",
+            issue_id: "",
+            status: run.status === "processing" || run.status === "validating"
+              ? "running"
+              : run.status === "failed" ? "failed" : "completed",
+            priority: 0,
+            dispatched_at: null,
+            started_at: run.created_at || null,
+            completed_at: run.completed_at,
+            result: null,
+            error: run.status === "failed" ? run.result_summary : null,
+            created_at: run.created_at,
+          } : null;
           return (
             <article key={run.id} className="border-b px-4 py-3 last:border-b-0">
-              <div className="grid gap-3 lg:grid-cols-[minmax(170px,.8fr)_minmax(150px,.7fr)_minmax(160px,1fr)_minmax(220px,1.4fr)_110px] lg:items-start">
+              <div className="grid gap-3 lg:grid-cols-[minmax(230px,1.2fr)_minmax(145px,.7fr)_minmax(150px,.8fr)_minmax(220px,1.3fr)_120px] lg:items-start">
                 <div className="min-w-0">
-                  <div className="flex items-center gap-1.5 text-xs font-medium"><Sparkles className="size-3.5 text-muted-foreground" /><span className="truncate" title={run.id}>{run.id}</span></div>
-                  <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground"><Clock3 className="size-3" />{run.created_at ? formatRelativeDate(run.created_at) : "--"}</div>
+                  <div className="flex min-w-0 items-center gap-1.5 text-xs font-medium">
+                    <Sparkles className="size-3.5 shrink-0 text-muted-foreground" />
+                    {provenance ? (
+                      <AppLink href={paths.autopilotDetail(provenance.automation_id)} className="truncate hover:underline">
+                        {provenance.automation_title || provenance.automation_id}
+                      </AppLink>
+                    ) : <span className="truncate" title={run.id}>{run.id}</span>}
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-1">
+                    <Badge variant="outline" className="font-normal">{modeLabel}</Badge>
+                    <Badge variant="secondary" className="font-normal">{triggerLabel}</Badge>
+                  </div>
+                  <div className="mt-1.5 min-w-0 text-xs text-muted-foreground">
+                    {provenance?.change_number !== null && provenance?.change_number !== undefined ? (
+                      <span className="flex min-w-0 items-center gap-1">
+                        <GitPullRequest className="size-3 shrink-0" />
+                        {provenance.change_url ? (
+                          <a href={provenance.change_url} target="_blank" rel="noreferrer" className="truncate hover:underline">
+                            #{provenance.change_number}{provenance.change_title ? ` ${provenance.change_title}` : ""}
+                          </a>
+                        ) : <span className="truncate">#{provenance.change_number}{provenance.change_title ? ` ${provenance.change_title}` : ""}</span>}
+                      </span>
+                    ) : provenance?.repository_name || provenance?.target_branch || provenance?.source_revision ? (
+                      <span className="flex min-w-0 items-center gap-1">
+                        <GitBranch className="size-3 shrink-0" />
+                        <span className="truncate">
+                          {[provenance.repository_name, provenance.target_branch, provenance.source_revision?.slice(0, 7)].filter(Boolean).join(" · ")}
+                        </span>
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
                 <div className="min-w-0 text-xs">
                   <div className="flex items-center gap-1.5"><ActorAvatar actorType={run.agent_id ? "agent" : "system"} actorId={run.agent_id ?? "manual"} size={16} /><span className="truncate">{agentName}</span></div>
-                  <div className="mt-1 truncate text-muted-foreground">{run.skill_names.join(", ") || run.mode}</div>
+                  <div className="mt-1 truncate text-muted-foreground">{run.skill_names.join(", ") || modeLabel}</div>
+                  <div className="mt-1 flex items-center gap-1 text-muted-foreground"><Clock3 className="size-3" />{run.created_at ? formatRelativeDate(run.created_at) : "--"}</div>
                 </div>
                 <div className="min-w-0">
                   <div className="text-xs text-muted-foreground">{t(($) => $.knowledge.run_inputs)} · {sources.length}</div>
@@ -401,7 +479,20 @@ function RunPane({ runs, search }: { runs: KnowledgeRunDetail[]; search: string 
                   </div>
                   <p className="mt-1 truncate text-xs text-muted-foreground" title={run.result_summary ?? undefined}>{run.result_summary || run.mode}</p>
                 </div>
-                <Badge variant={statusVariant(run.status)} className="w-fit font-normal">{run.status}</Badge>
+                <div className="flex items-center gap-2 lg:justify-end">
+                  <Badge variant={statusVariant(run.status)} className="w-fit font-normal">{run.status}</Badge>
+                  {syntheticTask && (
+                    <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                      <span className="hidden xl:inline">{t(($) => $.knowledge.run_view_log)}</span>
+                      <TranscriptButton
+                        task={syntheticTask}
+                        agentName={agentName}
+                        isLive={syntheticTask.status === "running"}
+                        title={t(($) => $.knowledge.run_view_log)}
+                      />
+                    </span>
+                  )}
+                </div>
               </div>
             </article>
           );
@@ -414,34 +505,53 @@ function RunPane({ runs, search }: { runs: KnowledgeRunDetail[]; search: string 
 export function KnowledgePage() {
   const { t } = useT("projects");
   const workspaceId = useWorkspaceId();
-  const projectsQuery = useQuery(projectListOptions(workspaceId));
-  const docsQuery = useQuery(workspaceDocListOptions(workspaceId));
-  const repositoriesQuery = useQuery(repositoryListOptions(workspaceId));
-  const repositoryWikiQuery = useQuery(repositoryWikiSummariesOptions(workspaceId));
-  const submissionsQuery = useQuery(knowledgeSubmissionsOptions(workspaceId));
-  const runsQuery = useQuery(knowledgeRunsOptions(workspaceId));
   const [activeTab, setActiveTab] = useState<KnowledgeTab>("wiki");
   const [search, setSearch] = useState("");
   const [sortOrder, setSortOrder] = useState<SortOrder>("newest");
+  const needsProjects = activeTab === "wiki" || activeTab === "memory";
+  const projectsQuery = useQuery({ ...projectListOptions(workspaceId), enabled: Boolean(workspaceId) && needsProjects });
+  const docsQuery = useQuery({
+    ...workspaceDocListOptions(workspaceId, { includeBody: Boolean(search.trim()) }),
+    enabled: Boolean(workspaceId) && activeTab === "wiki",
+  });
+  const memoryDocsQuery = useQuery({
+    ...workspaceDocListOptions(workspaceId, { kind: "memory", includeBody: true }),
+    enabled: Boolean(workspaceId) && activeTab === "memory",
+  });
+  const repositoriesQuery = useQuery({ ...repositoryListOptions(workspaceId), enabled: Boolean(workspaceId) && activeTab === "wiki" });
+  const repositoryWikiQuery = useQuery({ ...repositoryWikiSummariesOptions(workspaceId), enabled: Boolean(workspaceId) && activeTab === "wiki" });
+  const submissionsQuery = useQuery({ ...knowledgeSubmissionsOptions(workspaceId), enabled: Boolean(workspaceId) && activeTab === "raw" });
+  const runsQuery = useQuery({ ...knowledgeRunsOptions(workspaceId), enabled: Boolean(workspaceId) && activeTab === "runs" });
   const projects = projectsQuery.data ?? [];
   const docs = docsQuery.data ?? [];
+  const memoryDocs = memoryDocsQuery.data ?? [];
   const repositories = repositoriesQuery.data?.repositories ?? [];
   const summaries = repositoryWikiQuery.data ?? [];
   const submissions = submissionsQuery.data ?? [];
   const runs = runsQuery.data ?? [];
-  const formalMemoryCount = docs.filter((doc) => doc.kind === "memory").length;
+  const formalMemoryCount = memoryDocs.length;
   const formalWikiCount = docs.filter((doc) => doc.kind === "wiki" && doc.slug !== "_schema").length
     + summaries.reduce((total, summary) => total + summary.page_count, 0);
-  const counts = { wiki: formalWikiCount, raw: submissions.length, memory: formalMemoryCount, runs: runs.length };
+  const counts: Record<KnowledgeTab, number | undefined> = {
+    wiki: docsQuery.data && repositoryWikiQuery.data ? formalWikiCount : undefined,
+    raw: submissionsQuery.data ? submissions.length : undefined,
+    memory: memoryDocsQuery.data ? formalMemoryCount : undefined,
+    runs: runsQuery.data ? runs.length : undefined,
+  };
   const total = counts[activeTab];
-  const basePending = projectsQuery.isPending || docsQuery.isPending || repositoriesQuery.isPending || repositoryWikiQuery.isPending;
-  const baseError = projectsQuery.error ?? docsQuery.error ?? repositoriesQuery.error ?? repositoryWikiQuery.error;
-  const panelPending = activeTab === "raw" ? submissionsQuery.isPending : activeTab === "runs" ? runsQuery.isPending : basePending;
-  const panelError = activeTab === "raw" ? submissionsQuery.error : activeTab === "runs" ? runsQuery.error : baseError;
+  const wikiPending = projectsQuery.isPending || docsQuery.isPending || repositoriesQuery.isPending || repositoryWikiQuery.isPending;
+  const wikiError = projectsQuery.error ?? docsQuery.error ?? repositoriesQuery.error ?? repositoryWikiQuery.error;
+  const memoryPending = projectsQuery.isPending || memoryDocsQuery.isPending;
+  const memoryError = projectsQuery.error ?? memoryDocsQuery.error;
+  const panelPending = activeTab === "raw" ? submissionsQuery.isPending : activeTab === "runs" ? runsQuery.isPending : activeTab === "memory" ? memoryPending : wikiPending;
+  const panelError = activeTab === "raw" ? submissionsQuery.error : activeTab === "runs" ? runsQuery.error : activeTab === "memory" ? memoryError : wikiError;
   const retry = () => {
     if (activeTab === "raw") void submissionsQuery.refetch();
     else if (activeTab === "runs") void runsQuery.refetch();
-    else {
+    else if (activeTab === "memory") {
+      void projectsQuery.refetch();
+      void memoryDocsQuery.refetch();
+    } else {
       void projectsQuery.refetch();
       void docsQuery.refetch();
       void repositoriesQuery.refetch();
@@ -469,10 +579,10 @@ export function KnowledgePage() {
         <div className="flex min-h-12 shrink-0 flex-col gap-2 border-b px-4 py-2 sm:flex-row sm:items-center sm:py-0">
           <div className="overflow-x-auto pb-1 sm:pb-0">
             <TabsList variant="line" aria-label={t(($) => $.knowledge.views_label)}>
-              <TabsTrigger value="wiki" className="px-3"><BookOpen />{t(($) => $.knowledge.tab_wiki)}<span className="tabular-nums text-muted-foreground">{counts.wiki}</span></TabsTrigger>
-              <TabsTrigger value="raw" className="px-3"><FileInput />{t(($) => $.knowledge.tab_raw)}<span className="tabular-nums text-muted-foreground">{counts.raw}</span></TabsTrigger>
-              <TabsTrigger value="memory" className="px-3"><Brain />{t(($) => $.knowledge.tab_memory)}<span className="tabular-nums text-muted-foreground">{counts.memory}</span></TabsTrigger>
-              <TabsTrigger value="runs" className="px-3"><Sparkles />{t(($) => $.knowledge.tab_runs)}<span className="tabular-nums text-muted-foreground">{counts.runs}</span></TabsTrigger>
+              <TabsTrigger value="wiki" className="px-3"><BookOpen />{t(($) => $.knowledge.tab_wiki)}{counts.wiki !== undefined && <span className="tabular-nums text-muted-foreground">{counts.wiki}</span>}</TabsTrigger>
+              <TabsTrigger value="raw" className="px-3"><FileInput />{t(($) => $.knowledge.tab_raw)}{counts.raw !== undefined && <span className="tabular-nums text-muted-foreground">{counts.raw}</span>}</TabsTrigger>
+              <TabsTrigger value="memory" className="px-3"><Brain />{t(($) => $.knowledge.tab_memory)}{counts.memory !== undefined && <span className="tabular-nums text-muted-foreground">{counts.memory}</span>}</TabsTrigger>
+              <TabsTrigger value="runs" className="px-3"><Sparkles />{t(($) => $.knowledge.tab_runs)}{counts.runs !== undefined && <span className="tabular-nums text-muted-foreground">{counts.runs}</span>}</TabsTrigger>
             </TabsList>
           </div>
           <div className="relative min-w-0 flex-1 sm:ml-auto sm:max-w-72">
@@ -490,7 +600,7 @@ export function KnowledgePage() {
           <>
             <TabsContent value="wiki" className="min-h-0 overflow-y-auto"><WikiPane projects={projects} docs={docs} repositories={repositories} summaries={summaries} search={search} sortOrder={sortOrder} /></TabsContent>
             <TabsContent value="raw" className="min-h-0 overflow-y-auto"><RawPane submissions={submissions} search={search} /></TabsContent>
-            <TabsContent value="memory" className="min-h-0 overflow-y-auto"><MemoryPane projects={projects} docs={docs} search={search} /></TabsContent>
+            <TabsContent value="memory" className="min-h-0 overflow-y-auto"><MemoryPane projects={projects} docs={memoryDocs} search={search} /></TabsContent>
             <TabsContent value="runs" className="min-h-0 overflow-y-auto"><RunPane runs={runs} search={search} /></TabsContent>
           </>
         )}
