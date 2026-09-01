@@ -417,6 +417,8 @@ function messagingSpecs(): CommandSpec[] {
       }),
     }),
     op({ id: "messaging.connection.get", path: ["messaging", "connection", "get"], description: "Get a message connection", method: "GET", apiPath: connection, auth: HUMAN, positionals: [ref("connection")] }),
+    op({ id: "messaging.connection.authorization.start", path: ["messaging", "connection", "authorization", "start"], description: "Start interactive authorization for a message connection", method: "POST", apiPath: (i) => `${connection(i)}/authorization-sessions`, mutation: "write", auth: HUMAN, positionals: [ref("connection")] }),
+    op({ id: "messaging.connection.authorization.get", path: ["messaging", "connection", "authorization", "get"], description: "Get an interactive authorization session", method: "GET", apiPath: (i) => `${connection(i)}/authorization-sessions/${encodePath(positional(i, 1, "session"))}`, auth: HUMAN, positionals: [ref("connection"), ref("session")] }),
     op({
       id: "messaging.connection.update",
       path: ["messaging", "connection", "update"],

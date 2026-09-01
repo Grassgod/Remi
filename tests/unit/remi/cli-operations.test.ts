@@ -81,6 +81,38 @@ describe("operations CLI contracts", () => {
     }
   });
 
+  it("starts and reads a message connection authorization session", async () => {
+    useCliEnv();
+    const start = specById("messaging.connection.authorization.start");
+    const get = specById("messaging.connection.authorization.get");
+    const requests: Request[] = [];
+    globalThis.fetch = (async (input, init) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      const path = new URL(request.url).pathname;
+      if (path === "/api/cli/capabilities") {
+        return Response.json({ identity: "human", commands: [
+          { id: start.id, allowed: true },
+          { id: get.id, allowed: true },
+        ] });
+      }
+      requests.push(request);
+      return Response.json({ authorization: { id: "auth_1", status: "pending" } });
+    }) as typeof fetch;
+
+    await capture(() => registryFor([start, get]).execute([
+      "messaging", "connection", "authorization", "start", "mconn_1", "--output", "json",
+    ]));
+    await capture(() => registryFor([start, get]).execute([
+      "messaging", "connection", "authorization", "get", "mconn_1", "auth_1", "--output", "json",
+    ]));
+
+    expect(requests.map((request) => request.method)).toEqual(["POST", "GET"]);
+    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+      "/api/workspaces/ws_1/messaging/connections/mconn_1/authorization-sessions",
+      "/api/workspaces/ws_1/messaging/connections/mconn_1/authorization-sessions/auth_1",
+    ]);
+  });
+
   it("keeps local daemon lifecycle and update aliases on byte-compatible legacy dispatch", () => {
     const registry = registryFor([
       ...["start", "stop", "restart", "status", "logs", "service", "update"].map(legacyParent),

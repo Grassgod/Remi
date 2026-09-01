@@ -111,6 +111,8 @@ const TASK_PARITY_DENIED_COMMAND_IDS = new Set([
   // Wiring a workspace to a channel, and creating an Issue from what arrived,
   // are the two things the Messaging API refuses a task token outright.
   "messaging.connection.add",
+  "messaging.connection.authorization.get",
+  "messaging.connection.authorization.start",
   "messaging.connection.check",
   "messaging.connection.delete",
   "messaging.connection.update",

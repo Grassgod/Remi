@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 706,
+    "routeCount": 713,
     "routeCountByPrefix": {
       "native": 209,
-      "compat": 484,
+      "compat": 491,
       "root": 13
     },
-    "getRoutes": 303,
-    "getRoutesWithBody": 300,
+    "getRoutes": 304,
+    "getRoutesWithBody": 301,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 403,
+    "mutationRoutes": 409,
     "mutationRoutesCovered": 282,
     "flows": [
       "agents-compat",
@@ -414,6 +414,7 @@
     "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId/status",
     "GET /api/workspaces/:workspaceId/messaging/connections",
     "GET /api/workspaces/:workspaceId/messaging/connections/:connectionId",
+    "GET /api/workspaces/:workspaceId/messaging/connections/:connectionId/authorization-sessions/:sessionId",
     "GET /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId",
     "GET /api/workspaces/:workspaceId/messaging/conversations",
     "GET /api/workspaces/:workspaceId/messaging/messages",
@@ -506,6 +507,10 @@
     "POST /api/daemon/runtimes/:runtimeId/commands/claim",
     "POST /api/daemon/runtimes/:runtimeId/directory-scans/:requestId/result",
     "POST /api/daemon/runtimes/:runtimeId/directory-scans/claim",
+    "POST /api/daemon/runtimes/:runtimeId/feishu-bot/messages",
+    "POST /api/daemon/runtimes/:runtimeId/feishu-bot/session/cancel",
+    "POST /api/daemon/runtimes/:runtimeId/feishu-bot/session/inspect",
+    "POST /api/daemon/runtimes/:runtimeId/feishu-bot/session/reset",
     "POST /api/daemon/runtimes/:runtimeId/feishu-bot/status",
     "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/complete",
     "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/failure",
@@ -526,6 +531,7 @@
     "POST /api/daemon/tasks/:taskId/fail",
     "POST /api/daemon/tasks/:taskId/human-requests",
     "POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire",
+    "POST /api/daemon/tasks/:taskId/human-requests/:requestId/respond",
     "POST /api/daemon/tasks/:taskId/messages",
     "POST /api/daemon/tasks/:taskId/progress",
     "POST /api/daemon/tasks/:taskId/prompt",
@@ -710,6 +716,7 @@
     "POST /api/workspaces/:workspaceId/feishu/proposals/:proposalId/reject",
     "POST /api/workspaces/:workspaceId/feishu/sources",
     "POST /api/workspaces/:workspaceId/messaging/connections",
+    "POST /api/workspaces/:workspaceId/messaging/connections/:connectionId/authorization-sessions",
     "POST /api/workspaces/:workspaceId/messaging/connections/:connectionId/check",
     "POST /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId/create-issue",
     "POST /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId/draft-reply",
@@ -1108,6 +1115,7 @@
     "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId/status",
     "GET /api/workspaces/:workspaceId/messaging/connections",
     "GET /api/workspaces/:workspaceId/messaging/connections/:connectionId",
+    "GET /api/workspaces/:workspaceId/messaging/connections/:connectionId/authorization-sessions/:sessionId",
     "GET /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId",
     "GET /api/workspaces/:workspaceId/messaging/conversations",
     "GET /api/workspaces/:workspaceId/messaging/messages",
@@ -1642,7 +1650,6 @@
           "skills": [],
           "maxConcurrentTasks": 6,
           "max_concurrent_tasks": 6,
-          "cwd": null,
           "executable": null,
           "model": null,
           "allowedTools": [],
@@ -1707,7 +1714,6 @@
           ],
           "maxConcurrentTasks": 6,
           "max_concurrent_tasks": 6,
-          "cwd": null,
           "executable": null,
           "model": "claude-sonnet-4",
           "allowedTools": [
@@ -1786,7 +1792,6 @@
           "skills": [],
           "maxConcurrentTasks": 6,
           "max_concurrent_tasks": 6,
-          "cwd": null,
           "executable": null,
           "model": null,
           "allowedTools": [],
@@ -1828,7 +1833,6 @@
           "skills": [],
           "maxConcurrentTasks": 6,
           "max_concurrent_tasks": 6,
-          "cwd": null,
           "executable": null,
           "model": null,
           "allowedTools": [],
@@ -1901,7 +1905,6 @@
           ],
           "maxConcurrentTasks": 6,
           "max_concurrent_tasks": 6,
-          "cwd": null,
           "executable": null,
           "model": "claude-sonnet-4",
           "allowedTools": [
@@ -3948,7 +3951,6 @@
             "mcp_config": null,
             "model": "claude-sonnet-4",
             "thinking_level": "",
-            "cwd": "",
             "executable": "",
             "allowed_tools": [
               "Read"
@@ -4183,7 +4185,6 @@
             "mcp_config": null,
             "model": "claude-sonnet-4",
             "thinking_level": "",
-            "cwd": "",
             "executable": "",
             "allowed_tools": [
               "Read"
@@ -4253,7 +4254,6 @@
             "mcp_config": null,
             "model": "claude-sonnet-4",
             "thinking_level": "",
-            "cwd": "",
             "executable": "",
             "allowed_tools": [
               "Read"
@@ -4445,7 +4445,6 @@
             "mcp_config": null,
             "model": "claude-sonnet-4",
             "thinking_level": "",
-            "cwd": "",
             "executable": "",
             "allowed_tools": [
               "Read"
@@ -5004,7 +5003,6 @@
             "mcp_config": null,
             "model": "claude-sonnet-4",
             "thinking_level": "",
-            "cwd": "",
             "executable": "",
             "allowed_tools": [
               "Read"
@@ -5359,7 +5357,7 @@
         "agent_name": "Snapshot Agent",
         "agent_archived": false,
         "runtime_id": "rt_snapshot",
-        "runtime_name": "snapshot-runtime",
+        "runtime_name": "dmn_snapshot",
         "runtime_online": true,
         "runtime_supports_config": false,
         "app_id": "cli_snapshot_bot",
@@ -5368,8 +5366,6 @@
         "revision": 1,
         "app_secret_configured": true,
         "app_secret_hint": "snap••••••",
-        "verification_token_configured": false,
-        "encrypt_key_configured": false,
         "bot_name": null,
         "bot_open_id": null,
         "last_tested_at": null,
@@ -5392,7 +5388,7 @@
         "agent_name": "Snapshot Agent",
         "agent_archived": false,
         "runtime_id": "rt_snapshot",
-        "runtime_name": "snapshot-runtime",
+        "runtime_name": "dmn_snapshot",
         "runtime_online": true,
         "runtime_supports_config": false,
         "app_id": "cli_snapshot_bot",
@@ -5401,8 +5397,6 @@
         "revision": 2,
         "app_secret_configured": true,
         "app_secret_hint": "snap••••••",
-        "verification_token_configured": false,
-        "encrypt_key_configured": false,
         "bot_name": null,
         "bot_open_id": null,
         "last_tested_at": null,
@@ -5441,7 +5435,7 @@
         "revision": 3,
         "desired_state": "running",
         "runtime_id": "rt_snapshot",
-        "runtime_name": "snapshot-runtime",
+        "runtime_name": "dmn_snapshot",
         "runtime_online": true,
         "applied_revision": null,
         "bot_name": null,
@@ -5463,7 +5457,7 @@
         "revision": 4,
         "desired_state": "stopped",
         "runtime_id": "rt_snapshot",
-        "runtime_name": "snapshot-runtime",
+        "runtime_name": "dmn_snapshot",
         "runtime_online": true,
         "applied_revision": null,
         "bot_name": null,
@@ -5510,8 +5504,6 @@
         "revision": 0,
         "app_secret_configured": false,
         "app_secret_hint": null,
-        "verification_token_configured": false,
-        "encrypt_key_configured": false,
         "bot_name": null,
         "bot_open_id": null,
         "last_tested_at": null,
@@ -9550,6 +9542,28 @@
             "allowed": true
           },
           {
+            "id": "messaging.connection.authorization.get",
+            "command": "remi messaging connection authorization get",
+            "capability": "messaging.connection.authorization.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "messaging.connection.authorization.start",
+            "command": "remi messaging connection authorization start",
+            "capability": "messaging.connection.authorization.start",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "messaging.connection.check",
             "command": "remi messaging connection check",
             "capability": "messaging.connection.check",
@@ -12940,7 +12954,23 @@
       "path": "/api/daemon/tasks/tsk_snapshot/status",
       "status": 200,
       "body": {
-        "status": "completed"
+        "task_id": "tsk_snapshot",
+        "status": "completed",
+        "result": null,
+        "error": null,
+        "session_id": "",
+        "work_dir": "",
+        "usage": [
+          {
+            "provider": "unknown",
+            "model": "claude-sonnet-4",
+            "inputTokens": 10,
+            "outputTokens": 5,
+            "cacheReadTokens": 0,
+            "cacheWriteTokens": 0,
+            "totalTokens": 0
+          }
+        ]
       }
     },
     {
@@ -14737,6 +14767,7 @@
             "completed_at": null,
             "agent": null,
             "skill_names": [],
+            "provenance": null,
             "sources": [],
             "outputs": []
           }
@@ -14764,7 +14795,8 @@
           "created_at": "<timestamp>",
           "completed_at": null,
           "agent": null,
-          "skill_names": []
+          "skill_names": [],
+          "provenance": null
         },
         "sources": [],
         "outputs": []
@@ -15825,7 +15857,6 @@
             ],
             "maxConcurrentTasks": 6,
             "max_concurrent_tasks": 6,
-            "cwd": null,
             "executable": null,
             "model": "claude-sonnet-4",
             "allowedTools": [
@@ -15895,7 +15926,6 @@
           ],
           "maxConcurrentTasks": 6,
           "max_concurrent_tasks": 6,
-          "cwd": null,
           "executable": null,
           "model": "claude-sonnet-4",
           "allowedTools": [
@@ -19992,7 +20022,6 @@
             ],
             "maxConcurrentTasks": 6,
             "max_concurrent_tasks": 6,
-            "cwd": null,
             "executable": null,
             "model": "claude-sonnet-4",
             "allowedTools": [
@@ -21561,8 +21590,6 @@
         "revision": 0,
         "app_secret_configured": false,
         "app_secret_hint": null,
-        "verification_token_configured": false,
-        "encrypt_key_configured": false,
         "bot_name": null,
         "bot_open_id": null,
         "last_tested_at": null,
@@ -21600,7 +21627,8 @@
         "runtimes": [
           {
             "id": "rt_snapshot",
-            "name": "snapshot-runtime",
+            "name": "dmn_snapshot",
+            "provider": "claude",
             "daemon_id": "dmn_snapshot",
             "online": true,
             "supports_config": false,
@@ -22208,6 +22236,15 @@
       }
     },
     {
+      "key": "get-sweep GET /api/workspaces/:workspaceId/messaging/connections/:connectionId/authorization-sessions/:sessionId",
+      "route": "GET /api/workspaces/:workspaceId/messaging/connections/:connectionId/authorization-sessions/:sessionId",
+      "path": "/api/workspaces/local/messaging/connections/mconn_snapshot/authorization-sessions/mauth_snapshot",
+      "status": 404,
+      "body": {
+        "error": "Message connection not found"
+      }
+    },
+    {
       "key": "get-sweep GET /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId",
       "route": "GET /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId",
       "path": "/api/workspaces/local/messaging/connections/mconn_snapshot/messages/om_snapshot",
@@ -22279,7 +22316,9 @@
               "mention": false,
               "reaction": false,
               "edit": true,
-              "recall": true
+              "recall": true,
+              "connectionProvisioning": true,
+              "interactiveAuthorization": true
             },
             "displayName": "Lark CLI"
           }
@@ -25008,7 +25047,6 @@
             ],
             "maxConcurrentTasks": 6,
             "max_concurrent_tasks": 6,
-            "cwd": null,
             "executable": null,
             "model": "claude-sonnet-4",
             "allowedTools": [
@@ -25081,7 +25119,6 @@
             ],
             "maxConcurrentTasks": 6,
             "max_concurrent_tasks": 6,
-            "cwd": null,
             "executable": null,
             "model": "claude-sonnet-4",
             "allowedTools": [

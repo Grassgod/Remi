@@ -991,6 +991,7 @@ function resolveParam(pattern: string, name: string, refs: SeedRefs): string {
       if (pattern.includes("/feishu-bot/registration/")) return "fbreg_snapshot";
       if (pattern.includes("/lark/install/")) return "lark_snapshot_session";
       if (pattern.includes("/cloud-billing/")) return "cs_snapshot";
+      if (pattern.includes("/messaging/")) return "mauth_snapshot";
       if (pattern.includes("/issues/") || pattern.includes("/sessions/")) {
         return pattern.includes("/chat/sessions/") || pattern.includes("/chat-sessions/")
           ? refs.chatSessionId
