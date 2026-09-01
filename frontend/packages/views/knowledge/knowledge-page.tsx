@@ -22,6 +22,7 @@ import { Button } from "@multiremi/ui/components/ui/button";
 import { Input } from "@multiremi/ui/components/ui/input";
 import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multiremi/ui/components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@multiremi/ui/components/ui/tooltip";
 import { workspaceDocListOptions } from "@multiremi/core/project-docs";
 import { knowledgeRunsOptions, knowledgeSubmissionsOptions } from "@multiremi/core/knowledge";
 import { projectListOptions } from "@multiremi/core/projects/queries";
@@ -279,6 +280,28 @@ function statusVariant(status: string): "default" | "secondary" | "destructive" 
   return "outline";
 }
 
+function RawBodyPreview({ body, fallback }: { body: string; fallback: string }) {
+  const content = body || fallback;
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button type="button" className="mt-1 block w-full truncate text-left text-xs text-muted-foreground">
+            {content}
+          </button>
+        }
+      />
+      <TooltipContent
+        side="bottom"
+        align="start"
+        className="max-h-80 w-[min(32rem,calc(100vw-2rem))] max-w-none items-start overflow-y-auto whitespace-pre-wrap break-words px-3 py-2 leading-relaxed"
+      >
+        {content}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 function RawPane({ submissions, search }: { submissions: KnowledgeSubmission[]; search: string }) {
   const { t } = useT("projects");
   const paths = useWorkspacePaths();
@@ -293,40 +316,42 @@ function RawPane({ submissions, search }: { submissions: KnowledgeSubmission[]; 
   ].some((value) => value.toLowerCase().includes(query)));
   if (rows.length === 0) return <EmptyState icon={FileInput} title={query ? t(($) => $.knowledge.no_results) : t(($) => $.knowledge.raw_empty)} />;
   return (
-    <div className="p-4">
-      <div className="overflow-hidden rounded-md border">
-        <div className="hidden h-8 grid-cols-[minmax(160px,1fr)_120px_130px_minmax(180px,1.2fr)_110px_96px] items-center gap-3 border-b bg-muted/20 px-4 text-xs text-muted-foreground lg:grid">
-          <span>{t(($) => $.knowledge.raw_source)}</span><span>{t(($) => $.knowledge.raw_issue)}</span><span>{t(($) => $.knowledge.raw_agent)}</span><span>{t(($) => $.knowledge.raw_target)}</span><span>{t(($) => $.knowledge.raw_status)}</span><span>{t(($) => $.knowledge.raw_created)}</span>
+    <TooltipProvider delay={100}>
+      <div className="p-4">
+        <div className="overflow-hidden rounded-md border">
+          <div className="hidden h-8 grid-cols-[minmax(160px,1fr)_120px_130px_minmax(180px,1.2fr)_110px_96px] items-center gap-3 border-b bg-muted/20 px-4 text-xs text-muted-foreground lg:grid">
+            <span>{t(($) => $.knowledge.raw_source)}</span><span>{t(($) => $.knowledge.raw_issue)}</span><span>{t(($) => $.knowledge.raw_agent)}</span><span>{t(($) => $.knowledge.raw_target)}</span><span>{t(($) => $.knowledge.raw_status)}</span><span>{t(($) => $.knowledge.raw_created)}</span>
+          </div>
+          {rows.map((submission) => {
+            const issueLabel = submission.source_issue?.key || submission.source_issue?.title || submission.source_issue_id;
+            const agentLabel = submission.author_agent?.name
+              || (submission.author_agent_id ? getAgentName(submission.author_agent_id) : null);
+            const target = submission.proposed_path || submission.proposed_slug || t(($) => $.knowledge.raw_unspecified_target);
+            return (
+              <article key={submission.id} className="grid gap-2 border-b px-4 py-3 last:border-b-0 lg:grid-cols-[minmax(160px,1fr)_120px_130px_minmax(180px,1.2fr)_110px_96px] lg:items-center lg:gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5"><FileInput className="size-3.5 shrink-0 text-muted-foreground" /><span className="truncate text-xs font-medium">{submission.source_type}</span></div>
+                  <RawBodyPreview body={submission.body} fallback={submission.id} />
+                </div>
+                <div className="min-w-0 text-xs">
+                  {issueLabel && submission.source_issue_id ? <AppLink href={paths.issueDetail(submission.source_issue_id)} className="block truncate hover:underline">{issueLabel}</AppLink> : <span className="text-muted-foreground">--</span>}
+                </div>
+                <div className="flex min-w-0 items-center gap-1.5 text-xs">
+                  {submission.author_agent_id && <ActorAvatar actorType="agent" actorId={submission.author_agent_id} size={16} />}
+                  <span className="truncate">{agentLabel || t(($) => $.knowledge.provenance_unknown)}</span>
+                </div>
+                <div className="min-w-0 text-xs">
+                  <Badge variant="outline" className="mr-1.5 font-normal">{submission.scope}</Badge>
+                  <span className="break-all font-mono text-muted-foreground">{target}</span>
+                </div>
+                <Badge variant={statusVariant(submission.status)} className="w-fit font-normal">{submission.status}</Badge>
+                <span className="text-xs text-muted-foreground">{submission.created_at ? formatRelativeDate(submission.created_at) : "--"}</span>
+              </article>
+            );
+          })}
         </div>
-        {rows.map((submission) => {
-          const issueLabel = submission.source_issue?.key || submission.source_issue?.title || submission.source_issue_id;
-          const agentLabel = submission.author_agent?.name
-            || (submission.author_agent_id ? getAgentName(submission.author_agent_id) : null);
-          const target = submission.proposed_path || submission.proposed_slug || t(($) => $.knowledge.raw_unspecified_target);
-          return (
-            <article key={submission.id} className="grid gap-2 border-b px-4 py-3 last:border-b-0 lg:grid-cols-[minmax(160px,1fr)_120px_130px_minmax(180px,1.2fr)_110px_96px] lg:items-center lg:gap-3">
-              <div className="min-w-0">
-                <div className="flex items-center gap-1.5"><FileInput className="size-3.5 shrink-0 text-muted-foreground" /><span className="truncate text-xs font-medium">{submission.source_type}</span></div>
-                <p className="mt-1 truncate text-xs text-muted-foreground" title={submission.body}>{submission.body || submission.id}</p>
-              </div>
-              <div className="min-w-0 text-xs">
-                {issueLabel && submission.source_issue_id ? <AppLink href={paths.issueDetail(submission.source_issue_id)} className="block truncate hover:underline">{issueLabel}</AppLink> : <span className="text-muted-foreground">--</span>}
-              </div>
-              <div className="flex min-w-0 items-center gap-1.5 text-xs">
-                {submission.author_agent_id && <ActorAvatar actorType="agent" actorId={submission.author_agent_id} size={16} />}
-                <span className="truncate">{agentLabel || t(($) => $.knowledge.provenance_unknown)}</span>
-              </div>
-              <div className="min-w-0 text-xs">
-                <Badge variant="outline" className="mr-1.5 font-normal">{submission.scope}</Badge>
-                <span className="break-all font-mono text-muted-foreground">{target}</span>
-              </div>
-              <Badge variant={statusVariant(submission.status)} className="w-fit font-normal">{submission.status}</Badge>
-              <span className="text-xs text-muted-foreground">{submission.created_at ? formatRelativeDate(submission.created_at) : "--"}</span>
-            </article>
-          );
-        })}
       </div>
-    </div>
+    </TooltipProvider>
   );
 }
 

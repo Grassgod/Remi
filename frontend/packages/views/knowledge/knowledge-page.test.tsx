@@ -112,6 +112,12 @@ vi.mock("../projects/components/wiki/project-wiki-section", () => ({
 vi.mock("../navigation", () => ({
   AppLink: ({ href, children, ...props }: { href: string; children: ReactNode }) => <a href={href} {...props}>{children}</a>,
 }));
+vi.mock("@multiremi/ui/components/ui/tooltip", () => ({
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ render }: { render: ReactNode }) => <>{render}</>,
+  TooltipContent: ({ children }: { children: ReactNode }) => <div role="tooltip">{children}</div>,
+}));
 
 import { KnowledgePage } from "./knowledge-page";
 
@@ -240,7 +246,7 @@ describe("KnowledgePage", () => {
     expect(screen.queryByText("Memory waiting for Atlas")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("tab", { name: /Raw/ }));
-    expect(screen.getByText("Memory waiting for Atlas")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Memory waiting for Atlas" })).toBeInTheDocument();
     expect(screen.queryByText("Formal memory")).not.toBeInTheDocument();
   });
 
@@ -258,6 +264,17 @@ describe("KnowledgePage", () => {
     expect(screen.getByText("Executor")).toBeInTheDocument();
     expect(screen.getByText("guides/deploy.md")).toBeInTheDocument();
     expect(screen.getByText("processing")).toBeInTheDocument();
+  });
+
+  it("pairs the truncated Raw preview with its complete tooltip content", () => {
+    const body = "A complete Raw submission body that is intentionally longer than the table preview.";
+    state.submissions = [submission({ id: "ksub-long", body })];
+    renderPage();
+    fireEvent.click(screen.getByRole("tab", { name: /Raw/ }));
+
+    const preview = screen.getByRole("button", { name: body });
+    expect(preview).toHaveClass("truncate");
+    expect(screen.getByRole("tooltip")).toHaveTextContent(body);
   });
 
   it("renders a compilation run with multiple Raw inputs and multiple outputs", () => {
