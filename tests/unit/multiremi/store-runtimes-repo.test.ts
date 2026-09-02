@@ -169,7 +169,6 @@ describe("RuntimesRepo", () => {
       ["sess-cleanup", runtime.id, "claude", "/tmp/cleanup", issueSession.id, agent.id],
     );
     repo.createRuntimeModelListRequest(runtime.id);
-    repo.createRuntimeUpdateRequest(runtime.id, { targetVersion: "2.0.0" });
     repo.createRuntimeLocalSkillListRequest(runtime.id);
     repo.createRuntimeLocalSkillImportRequest(runtime.id, { skillKey: "cleanup-skill" });
     repo.createRuntimeDirectoryScanRequest(runtime.id, { root: "/tmp" });
@@ -189,6 +188,7 @@ describe("RuntimesRepo", () => {
     });
     expect(store!.claimTask(runtime.id)?.id).toBe(runningTask.id);
     store!.startTask(runningTask.id);
+    repo.createRuntimeUpdateRequest(runtime.id, { targetVersion: "2.0.0" });
     expect(repo.deleteRuntime(runtime.id)).toBeFalse();
     expect(repo.getRuntime(runtime.id)).not.toBeNull();
     expect(store!.getAgent(agent.id)?.runtimeId).toBe(runtime.id);
