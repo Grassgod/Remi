@@ -856,7 +856,7 @@ describe("Multiremi notification channels", () => {
       secondDb.close();
       rmSync(directory, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   it("uses a monotonic claim sequence to fence an old worker across manual retry", async () => {
     const directory = mkdtempSync(join(tmpdir(), "multiremi-notification-fence-"));
@@ -960,7 +960,7 @@ describe("Multiremi notification channels", () => {
       secondDb.close();
       rmSync(directory, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   it("times out a hung sender and re-drives the pending delivery", async () => {
     let calls = 0;

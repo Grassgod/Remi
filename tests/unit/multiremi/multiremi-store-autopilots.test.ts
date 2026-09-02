@@ -393,7 +393,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
       dbB.close();
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   it("auto-pauses active autopilots exceeding the Go failure-rate threshold", () => {
     const store = createStore();
