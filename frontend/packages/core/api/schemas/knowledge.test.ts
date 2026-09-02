@@ -40,7 +40,7 @@ describe("knowledge response schemas", () => {
 
     expect(parsed.runs).toHaveLength(1);
     expect(parsed.runs[0]).toMatchObject({
-      run: { id: "krun_1", agent: null, skill_names: [] },
+      run: { id: "krun_1", agent: null },
       sources: [],
       outputs: [],
     });
@@ -64,7 +64,7 @@ describe("knowledge response schemas", () => {
 
   it("preserves unknown server enums and drops malformed relationship decorations", () => {
     const parsed = KnowledgeRunDetailSchema.parse({
-      run: { ...run, status: "future_terminal_state", skill_names: null },
+      run: { ...run, status: "future_terminal_state" },
       sources: null,
       outputs: [{
         id: "kout_1",
@@ -75,7 +75,6 @@ describe("knowledge response schemas", () => {
     });
 
     expect(parsed.run.status).toBe("future_terminal_state");
-    expect(parsed.run.skill_names).toEqual([]);
     expect(parsed.sources).toEqual([]);
     expect(parsed.outputs[0]).toMatchObject({
       action: "future_action",

@@ -80,7 +80,6 @@ export const KnowledgeCompilationRunSchema = z.object({
   created_at: z.string().catch("").default(""),
   completed_at: nullableString,
   agent: KnowledgeAgentSummarySchema.nullable().catch(null).default(null),
-  skill_names: z.array(z.string()).catch([]).default([]),
   provenance: KnowledgeRunProvenanceSchema.nullable().catch(null).default(null),
 }).loose();
 
@@ -173,7 +172,6 @@ export const EMPTY_KNOWLEDGE_RUN_DETAIL: KnowledgeRunDetail = {
     created_at: "",
     completed_at: null,
     agent: null,
-    skill_names: [],
     provenance: null,
   },
   sources: [],

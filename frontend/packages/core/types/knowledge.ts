@@ -70,7 +70,6 @@ export interface KnowledgeCompilationRun {
   created_at: string;
   completed_at: string | null;
   agent: KnowledgeAgentSummary | null;
-  skill_names: string[];
   provenance: KnowledgeRunProvenance | null;
 }
 

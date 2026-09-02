@@ -59,14 +59,14 @@ describe("KnowledgeProvenance", () => {
     expect(screen.getByText(/remains readable and recallable/)).toBeInTheDocument();
   });
 
-  it("shows the Atlas, Skill, decision, all Raw sources, outputs, task, issue, and commit", () => {
+  it("shows the Atlas, decision, all Raw sources, outputs, task, issue, and commit", () => {
     queryState.data = {
       run: {
         id: "krun-1", workspace_id: "ws-1", project_id: "proj-1", repository_id: null,
         task_id: "atlas-task", agent_id: "atlas-agent", autopilot_run_id: null,
         mode: "issue_ingest", status: "published", result_summary: "Merged related facts",
         dedupe_key: "batch", created_at: "", completed_at: "", agent: { id: "atlas-agent", name: "Atlas" },
-        skill_names: ["code-to-wiki"], provenance: null,
+        provenance: null,
       },
       sources: [
         {
@@ -92,7 +92,6 @@ describe("KnowledgeProvenance", () => {
     renderPanel("krun-1");
 
     expect(screen.getByText("Atlas")).toBeInTheDocument();
-    expect(screen.getByText("code-to-wiki")).toBeInTheDocument();
     expect(screen.getByText("Merged related facts")).toBeInTheDocument();
     expect(screen.getByText(/raw-1/)).toBeInTheDocument();
     expect(screen.getByText("raw-2")).toBeInTheDocument();

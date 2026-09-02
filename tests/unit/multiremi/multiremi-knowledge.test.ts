@@ -158,7 +158,6 @@ describe("knowledge compilation control plane", () => {
     expect(runDetail).toMatchObject({
       id: published.run.id,
       agent: { id: agent.id, name: agent.name },
-      skill_names: ["code-to-wiki"],
     });
     expect(runDetail.sources).toHaveLength(2);
     expect(runDetail.sources.every((source: any) => source.submission === null)).toBe(true);

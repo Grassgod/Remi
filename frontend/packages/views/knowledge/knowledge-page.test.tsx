@@ -189,7 +189,7 @@ function runDetail(partial: Partial<KnowledgeRunDetail> = {}): KnowledgeRunDetai
       task_id: "task-atlas", agent_id: "agent-atlas", autopilot_run_id: null,
       mode: "issue_ingest", status: "published", result_summary: "Merged two Raw inputs",
       dedupe_key: "batch-1", created_at: "2026-08-31T01:00:00Z", completed_at: "2026-08-31T01:01:00Z",
-      agent: { id: "agent-atlas", name: "Atlas" }, skill_names: ["code-to-wiki"], provenance: null,
+      agent: { id: "agent-atlas", name: "Atlas" }, provenance: null,
     },
     sources: [],
     outputs: [],
@@ -338,9 +338,10 @@ describe("KnowledgePage", () => {
     fireEvent.click(screen.getByRole("tab", { name: /Compilation runs/ }));
 
     expect(screen.getByText("Atlas")).toBeInTheDocument();
-    expect(screen.getByText("code-to-wiki")).toBeInTheDocument();
+    expect(screen.getByText("web")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Repository Wiki maintenance" })).toHaveAttribute("href", "/ws/autopilots/auto-wiki");
     expect(screen.getByRole("link", { name: "#42 Refresh architecture docs" })).toHaveAttribute("href", "https://example.com/pull/42");
+    expect(screen.getByText("main · abcdef1")).toBeInTheDocument();
     expect(screen.getByText("PR/MR merged")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "View run log" })).toBeInTheDocument();
     expect(screen.getByText("raw-1")).toBeInTheDocument();
@@ -352,6 +353,7 @@ describe("KnowledgePage", () => {
     fireEvent.click(screen.getByRole("button", { name: "View run log" }));
     expect(screen.getByRole("dialog")).toHaveTextContent("Run details");
     expect(screen.getByRole("dialog")).toHaveTextContent("Repository Wiki maintenance");
+    expect(screen.getByRole("dialog")).not.toHaveTextContent("Code to Wiki");
     expect(screen.getByRole("dialog")).toHaveTextContent("Complete Raw input 1");
     expect(screen.getByRole("dialog")).toHaveTextContent("Agent transcript");
     expect(screen.getByRole("dialog")).toHaveTextContent("Formal outputs · 2");

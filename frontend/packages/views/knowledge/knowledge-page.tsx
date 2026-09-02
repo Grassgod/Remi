@@ -344,6 +344,7 @@ function KnowledgeRunSheet({
   const sources = detail?.sources ?? [];
   const outputs = detail?.outputs ?? [];
   const provenance = run?.provenance;
+  const repositoryLabel = provenance?.repository_name || provenance?.repository_id || run?.repository_id;
   const agentName = run
     ? run.agent?.name || (run.agent_id ? getAgentName(run.agent_id) : t(($) => $.knowledge.provenance_manual))
     : t(($) => $.knowledge.provenance_unknown);
@@ -404,6 +405,12 @@ function KnowledgeRunSheet({
               <div className="mt-3 space-y-2 text-sm">
                 {provenance ? (
                   <>
+                    {repositoryLabel && (
+                      <div className="flex min-w-0 items-center gap-2">
+                        <GitFork className="size-4 shrink-0 text-muted-foreground" />
+                        <span className="truncate font-medium">{repositoryLabel}</span>
+                      </div>
+                    )}
                     <div className="flex min-w-0 items-center gap-2">
                       <Sparkles className="size-4 shrink-0 text-muted-foreground" />
                       <AppLink href={paths.autopilotDetail(provenance.automation_id)} className="truncate hover:underline">
@@ -421,11 +428,11 @@ function KnowledgeRunSheet({
                         ) : <span className="truncate">#{provenance.change_number}{provenance.change_title ? ` ${provenance.change_title}` : ""}</span>}
                       </div>
                     ) : null}
-                    {(provenance.repository_name || provenance.target_branch || provenance.source_revision) && (
+                    {(provenance.target_branch || provenance.source_revision) && (
                       <div className="flex min-w-0 items-center gap-2 text-muted-foreground">
                         <GitBranch className="size-4 shrink-0" />
                         <span className="truncate font-mono text-xs">
-                          {[provenance.repository_name, provenance.target_branch, provenance.source_revision?.slice(0, 7)].filter(Boolean).join(" · ")}
+                          {[provenance.target_branch, provenance.source_revision?.slice(0, 7)].filter(Boolean).join(" · ")}
                         </span>
                       </div>
                     )}
@@ -461,11 +468,6 @@ function KnowledgeRunSheet({
                 <ActorAvatar actorType={detail.run.agent_id ? "agent" : "system"} actorId={detail.run.agent_id ?? "manual"} size={20} />
                 <div className="min-w-0 flex-1">
                   <div className="text-sm">{agentName}</div>
-                  <div className="mt-1 flex flex-wrap gap-1">
-                    {detail.run.skill_names.length > 0
-                      ? detail.run.skill_names.map((skill) => <Badge key={skill} variant="outline" className="font-mono font-normal">{skill}</Badge>)
-                      : <span className="text-xs text-muted-foreground">{modeLabel}</span>}
-                  </div>
                 </div>
                 {task && (
                   <div className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
@@ -611,7 +613,7 @@ function RunPane({ runs, search }: { runs: KnowledgeRunDetail[]; search: string 
     run.id, run.mode, run.status, run.result_summary ?? "", run.agent?.name ?? run.agent_id ?? "",
     run.provenance?.automation_title ?? "", run.provenance?.event_type ?? "",
     run.provenance?.repository_name ?? "", run.provenance?.change_title ?? "",
-    ...run.skill_names, ...sources.flatMap((source) => [source.submission_id ?? "", source.source_ref ?? ""]),
+    ...sources.flatMap((source) => [source.submission_id ?? "", source.source_ref ?? ""]),
     ...outputs.flatMap((output) => [output.doc_id ?? "", output.artifact?.title ?? "", output.artifact?.path ?? ""]),
   ].some((value) => value.toLowerCase().includes(query)));
   if (rows.length === 0) return <EmptyState icon={Sparkles} title={query ? t(($) => $.knowledge.no_results) : t(($) => $.knowledge.runs_empty)} />;
@@ -628,6 +630,7 @@ function RunPane({ runs, search }: { runs: KnowledgeRunDetail[]; search: string 
         {rows.map(({ run, sources, outputs }) => {
           const agentName = run.agent?.name || (run.agent_id ? getAgentName(run.agent_id) : t(($) => $.knowledge.provenance_manual));
           const provenance = run.provenance;
+          const repositoryLabel = provenance?.repository_name || provenance?.repository_id || run.repository_id;
           const modeLabel = (() => {
             switch (run.mode) {
               case "repository_update": return t(($) => $.knowledge.run_mode_repository_update);
@@ -650,13 +653,23 @@ function RunPane({ runs, search }: { runs: KnowledgeRunDetail[]; search: string 
               <div className="grid gap-3 lg:grid-cols-[minmax(230px,1.2fr)_minmax(145px,.7fr)_minmax(150px,.8fr)_minmax(220px,1.3fr)_120px] lg:items-start">
                 <div className="min-w-0">
                   <div className="flex min-w-0 items-center gap-1.5 text-xs font-medium">
-                    <Sparkles className="size-3.5 shrink-0 text-muted-foreground" />
-                    {provenance ? (
+                    {repositoryLabel ? <GitFork className="size-3.5 shrink-0 text-muted-foreground" /> : <Sparkles className="size-3.5 shrink-0 text-muted-foreground" />}
+                    {repositoryLabel ? (
+                      <span className="truncate" title={repositoryLabel}>{repositoryLabel}</span>
+                    ) : provenance ? (
                       <AppLink href={paths.autopilotDetail(provenance.automation_id)} className="truncate hover:underline">
                         {provenance.automation_title || provenance.automation_id}
                       </AppLink>
                     ) : <span className="truncate" title={run.id}>{run.id}</span>}
                   </div>
+                  {repositoryLabel && provenance && (
+                    <div className="mt-1 flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+                      <Sparkles className="size-3 shrink-0" />
+                      <AppLink href={paths.autopilotDetail(provenance.automation_id)} className="truncate hover:underline">
+                        {provenance.automation_title || provenance.automation_id}
+                      </AppLink>
+                    </div>
+                  )}
                   <div className="mt-1 flex flex-wrap items-center gap-1">
                     <Badge variant="outline" className="font-normal">{modeLabel}</Badge>
                     <Badge variant="secondary" className="font-normal">{triggerLabel}</Badge>
@@ -671,11 +684,14 @@ function RunPane({ runs, search }: { runs: KnowledgeRunDetail[]; search: string 
                           </a>
                         ) : <span className="truncate">#{provenance.change_number}{provenance.change_title ? ` ${provenance.change_title}` : ""}</span>}
                       </span>
-                    ) : provenance?.repository_name || provenance?.target_branch || provenance?.source_revision ? (
+                    ) : null}
+                  </div>
+                  <div className="mt-1 min-w-0 text-xs text-muted-foreground">
+                    {provenance?.target_branch || provenance?.source_revision ? (
                       <span className="flex min-w-0 items-center gap-1">
                         <GitBranch className="size-3 shrink-0" />
                         <span className="truncate">
-                          {[provenance.repository_name, provenance.target_branch, provenance.source_revision?.slice(0, 7)].filter(Boolean).join(" · ")}
+                          {[provenance.target_branch, provenance.source_revision?.slice(0, 7)].filter(Boolean).join(" · ")}
                         </span>
                       </span>
                     ) : null}
@@ -683,7 +699,6 @@ function RunPane({ runs, search }: { runs: KnowledgeRunDetail[]; search: string 
                 </div>
                 <div className="min-w-0 text-xs">
                   <div className="flex items-center gap-1.5"><ActorAvatar actorType={run.agent_id ? "agent" : "system"} actorId={run.agent_id ?? "manual"} size={16} /><span className="truncate">{agentName}</span></div>
-                  <div className="mt-1 truncate text-muted-foreground">{run.skill_names.join(", ") || modeLabel}</div>
                   <div className="mt-1 flex items-center gap-1 text-muted-foreground"><Clock3 className="size-3" />{run.created_at ? formatRelativeDate(run.created_at) : "--"}</div>
                 </div>
                 <div className="min-w-0">
@@ -709,7 +724,7 @@ function RunPane({ runs, search }: { runs: KnowledgeRunDetail[]; search: string 
                   <Badge variant={statusVariant(run.status)} className="w-fit font-normal">{run.status}</Badge>
                   <button
                     type="button"
-                    className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                    className="inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                     onClick={() => setSelected({ run, sources, outputs })}
                   >
                     <span className="hidden xl:inline">{t(($) => $.knowledge.run_view_log)}</span>
