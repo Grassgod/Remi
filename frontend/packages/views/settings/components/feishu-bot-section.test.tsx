@@ -253,6 +253,9 @@ describe("FeishuBotSection (admin form)", () => {
     expect(selectors[0]).toHaveTextContent("Remi");
     expect(selectors[1]).toHaveTextContent("mac-mini");
     expect(selectors[1]).not.toHaveTextContent(/claude|codex/i);
+    for (const selector of selectors) {
+      expect(selector).toHaveClass("w-full", "min-w-0");
+    }
   });
 
   it("keeps the stored secret and the enabled state when only the App ID changes", async () => {

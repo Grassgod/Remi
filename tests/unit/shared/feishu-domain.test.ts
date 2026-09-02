@@ -1,5 +1,18 @@
 import { describe, expect, it } from "bun:test";
-import { resolveApiBase } from "@shared/feishu-domain.js";
+import { resolveApiBase, resolveApiOrigin } from "@shared/feishu-domain.js";
+
+describe("resolveApiOrigin", () => {
+  it("routes the supported deployment domains", () => {
+    expect(resolveApiOrigin()).toBe("https://open.feishu.cn");
+    expect(resolveApiOrigin("feishu")).toBe("https://open.feishu.cn");
+    expect(resolveApiOrigin("lark")).toBe("https://open.larksuite.com");
+    expect(resolveApiOrigin("bytedance")).toBe("https://fsopen.bytedance.net");
+  });
+
+  it("preserves a custom http(s) origin and strips trailing slashes", () => {
+    expect(resolveApiOrigin("https://feishu.example.com///")).toBe("https://feishu.example.com");
+  });
+});
 
 describe("resolveApiBase", () => {
   it("defaults to the Feishu cloud", () => {
@@ -17,7 +30,7 @@ describe("resolveApiBase", () => {
     expect(resolveApiBase("https://feishu.example.com///")).toBe("https://feishu.example.com/open-apis");
   });
 
-  it("falls back to the Feishu cloud for an unrecognised, non-URL domain", () => {
-    expect(resolveApiBase("bytedance")).toBe("https://open.feishu.cn/open-apis");
+  it("routes bytedance to the internal Feishu cloud", () => {
+    expect(resolveApiBase("bytedance")).toBe("https://fsopen.bytedance.net/open-apis");
   });
 });

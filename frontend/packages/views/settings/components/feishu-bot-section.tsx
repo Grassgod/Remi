@@ -336,7 +336,7 @@ function FeishuBotAdminPanel({
                   edit({ agentId: value, runtimeId: matchingRuntime?.id ?? "" });
                 }}
               >
-                <SelectTrigger>
+                <SelectTrigger className="w-full min-w-0">
                   <SelectValue>
                     {() => selectedAgent?.name ?? t(($) => $.feishu.concierge.agent_placeholder)}
                   </SelectValue>
@@ -360,7 +360,7 @@ function FeishuBotAdminPanel({
                 value={draft.runtimeId}
                 onValueChange={(value) => value && edit({ runtimeId: value })}
               >
-                <SelectTrigger>
+                <SelectTrigger className="w-full min-w-0">
                   <SelectValue>
                     {() => selectedMachine?.name ?? t(($) => $.feishu.concierge.runtime_placeholder)}
                   </SelectValue>
@@ -403,7 +403,7 @@ function FeishuBotAdminPanel({
                 value={draft.domain}
                 onValueChange={(value) => value && edit({ domain: value as FeishuBotDomain })}
               >
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger className="w-full min-w-0"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="feishu">{t(($) => $.feishu.concierge.domain_feishu)}</SelectItem>
                   <SelectItem value="lark">{t(($) => $.feishu.concierge.domain_lark)}</SelectItem>
