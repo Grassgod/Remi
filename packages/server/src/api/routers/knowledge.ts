@@ -752,7 +752,7 @@ function runResponse(
     created_at: run.createdAt,
     completed_at: run.completedAt,
     agent: agent ? { id: agent.id, name: agent.name } : null,
-    skill_names: agent ? agentKnowledgePublishPluginNames(store, agent) : [],
+    plugin_names: agent ? agentKnowledgePublishPluginNames(store, agent) : [],
     provenance: autopilotRun ? {
       automation_id: autopilotRun.autopilotId,
       automation_title: autopilot?.title ?? null,

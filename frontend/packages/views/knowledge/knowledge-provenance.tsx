@@ -167,11 +167,11 @@ export function KnowledgeProvenance({ compilationRunId }: { compilationRunId?: s
         <div className="min-w-0">
           <dt className="flex items-center gap-1 text-muted-foreground">
             <Boxes className="size-3.5" />
-            {t(($) => $.knowledge.provenance_skill)}
+            {t(($) => $.knowledge.provenance_plugin)}
           </dt>
           <dd className="mt-1 truncate">
-            {run.skill_names.length > 0
-              ? run.skill_names.join(", ")
+            {run.plugin_names.length > 0
+              ? run.plugin_names.map((plugin) => plugin === "code-to-wiki" ? "Code to Wiki" : plugin).join(", ")
               : run.mode === "manual_edit"
                 ? t(($) => $.knowledge.provenance_manual)
                 : t(($) => $.knowledge.provenance_unknown)}
