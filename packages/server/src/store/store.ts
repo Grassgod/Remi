@@ -1083,11 +1083,20 @@ runMigrations(this.db);
     return this.workspaces.getUserByExternalId(externalId);
   }
 
+  getUserByFeishuUnionId(unionId: string | null | undefined): MultiremiUser | null {
+    return this.workspaces.getUserByFeishuUnionId(unionId);
+  }
+
   getUserByEmail(email: string | null | undefined): MultiremiUser | null {
     return this.workspaces.getUserByEmail(email);
   }
 
-  getOrCreateUser(identity: { externalId?: string | null; email?: string | null; name?: string | null }): MultiremiUser {
+  getOrCreateUser(identity: {
+    externalId?: string | null;
+    feishuUnionId?: string | null;
+    email?: string | null;
+    name?: string | null;
+  }): MultiremiUser {
     return this.workspaces.getOrCreateUser(identity);
   }
 

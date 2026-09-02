@@ -241,6 +241,7 @@ export interface AnalyticsSurface {
 
 export interface WorkspacesSurface {
   getUser(id: string): MultiremiUser | null;
+  getUserByFeishuUnionId(unionId: string | null | undefined): MultiremiUser | null;
   listWorkspaces(): MultiremiWorkspace[];
   getWorkspace(id: string): MultiremiWorkspace | null;
   findWorkspaceMemberForUser(userId: string | null | undefined, workspaceId: string): MultiremiWorkspaceMember | null;

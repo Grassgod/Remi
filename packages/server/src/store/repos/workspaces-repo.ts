@@ -257,6 +257,13 @@ export class WorkspacesRepo {
     return row ? toUser(row) : null;
   }
 
+  getUserByFeishuUnionId(unionId: string | null | undefined): MultiremiUser | null {
+    const value = cleanOptionalString(unionId);
+    if (!value) return null;
+    const row = this.ctx.db.query("SELECT * FROM multiremi_users WHERE feishu_union_id = ?").get(value) as Row | null;
+    return row ? toUser(row) : null;
+  }
+
   getUserByEmail(email: string | null | undefined): MultiremiUser | null {
     const value = cleanOptionalString(email)?.toLowerCase();
     if (!value) return null;
@@ -265,14 +272,27 @@ export class WorkspacesRepo {
   }
 
   // Resolve (or provision) the distinct user record behind a login identity.
-  // Match order: stable external id (Feishu open_id) → email → mint a new user.
+  // Match order: cross-app Feishu union_id → legacy app-scoped open_id → email
+  // → mint a new user. The open_id remains for compatibility with accounts
+  // created before union_id was persisted.
   // Never rewrites a different user's id — each identity keeps its own record so
   // concurrent logins can't overwrite one another.
-  getOrCreateUser(identity: { externalId?: string | null; email?: string | null; name?: string | null }): MultiremiUser {
+  getOrCreateUser(identity: {
+    externalId?: string | null;
+    feishuUnionId?: string | null;
+    email?: string | null;
+    name?: string | null;
+  }): MultiremiUser {
     const externalId = cleanOptionalString(identity.externalId);
+    const feishuUnionId = cleanOptionalString(identity.feishuUnionId);
     const email = cleanOptionalString(identity.email)?.toLowerCase() ?? null;
     const name = cleanOptionalString(identity.name);
-    let user = externalId ? this.getUserByExternalId(externalId) : null;
+    const byUnionId = feishuUnionId ? this.getUserByFeishuUnionId(feishuUnionId) : null;
+    const byExternalId = externalId ? this.getUserByExternalId(externalId) : null;
+    if (byUnionId && byExternalId && byUnionId.id !== byExternalId.id) {
+      throw new Error("Feishu identity is already linked to another user");
+    }
+    let user = byUnionId ?? byExternalId;
     // Legacy/seed users may predate external_id; claim by email so we don't fork.
     // But never let an email match resolve to an account already bound to a
     // DIFFERENT external identity — that would let email login hijack an SSO user.
@@ -280,29 +300,41 @@ export class WorkspacesRepo {
       const byEmail = this.getUserByEmail(email);
       if (byEmail && (!byEmail.externalId || byEmail.externalId === externalId)) user = byEmail;
     }
-    if (user) return this.reconcileUserIdentity(user, { externalId, email, name });
+    if (user) return this.reconcileUserIdentity(user, { externalId, feishuUnionId, email, name });
     const id = createId("usr");
     const now = nowIso();
     this.ctx.db.run(
       `INSERT INTO multiremi_users (
-        id, external_id, name, email, avatar_url, language, timezone, onboarded_at,
+        id, external_id, feishu_union_id, name, email, avatar_url, language, timezone, onboarded_at,
         onboarding_questionnaire, starter_content_state, profile_description,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, NULL, NULL, NULL, NULL, '{}', NULL, '', ?, ?)`,
-      [id, externalId ?? null, name || email || "User", email ?? `${id}@multiremi.local`, now, now],
+      ) VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, '{}', NULL, '', ?, ?)`,
+      [id, externalId ?? null, feishuUnionId ?? null, name || email || "User", email ?? `${id}@multiremi.local`, now, now],
     );
     return this.getUser(id)!;
   }
 
   private reconcileUserIdentity(
     user: MultiremiUser,
-    identity: { externalId?: string | null; email?: string | null; name?: string | null },
+    identity: {
+      externalId?: string | null;
+      feishuUnionId?: string | null;
+      email?: string | null;
+      name?: string | null;
+    },
   ): MultiremiUser {
     const updates: string[] = [];
     const params: unknown[] = [];
     if (identity.externalId && user.externalId !== identity.externalId) {
       updates.push("external_id = ?");
       params.push(identity.externalId);
+    }
+    if (identity.feishuUnionId) {
+      const current = this.ctx.db.query("SELECT feishu_union_id FROM multiremi_users WHERE id = ?").get(user.id) as Row | null;
+      if (cleanOptionalString(current?.feishu_union_id) !== identity.feishuUnionId) {
+        updates.push("feishu_union_id = ?");
+        params.push(identity.feishuUnionId);
+      }
     }
     if (identity.email && user.email.toLowerCase() !== identity.email) {
       updates.push("email = ?");

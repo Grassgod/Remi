@@ -124,14 +124,19 @@ export async function larkExchangeCode(cfg: LarkSsoConfig, code: string, redirec
   return result.access_token;
 }
 
-export async function larkFetchUserInfo(cfg: LarkSsoConfig, userAccessToken: string): Promise<{ name: string; email: string | null; openId: string | null }> {
+export async function larkFetchUserInfo(cfg: LarkSsoConfig, userAccessToken: string): Promise<{
+  name: string;
+  email: string | null;
+  openId: string | null;
+  unionId: string | null;
+}> {
   const resp = await fetch(`${cfg.apiBase}/authen/v1/user_info`, {
     headers: { Authorization: `Bearer ${userAccessToken}` },
   });
   const result = (await resp.json()) as {
     code?: number;
     msg?: string;
-    data?: { name?: string; email?: string; enterprise_email?: string; open_id?: string };
+    data?: { name?: string; email?: string; enterprise_email?: string; open_id?: string; union_id?: string };
   };
   if (result.code && result.code !== 0) throw new Error(`Feishu user_info failed: ${result.msg ?? result.code}`);
   const data = result.data ?? {};
@@ -139,5 +144,6 @@ export async function larkFetchUserInfo(cfg: LarkSsoConfig, userAccessToken: str
     name: data.name?.trim() || "Feishu User",
     email: (data.enterprise_email || data.email || "").trim() || null,
     openId: data.open_id ?? null,
+    unionId: data.union_id ?? null,
   };
 }

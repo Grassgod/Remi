@@ -2729,10 +2729,16 @@ export function runMigrations(db: SqlDatabase): void {
   // explicit user↔member link so membership no longer relies solely on the
   // legacy `mem_<ws>_<userId>` id convention.
   addColumnIfMissing(db, "multiremi_users", "external_id TEXT");
+  addColumnIfMissing(db, "multiremi_users", "feishu_union_id TEXT");
   addColumnIfMissing(db, "multiremi_workspace_members", "user_id TEXT");
+  addColumnIfMissing(db, "multiremi_tasks", "requesting_user_name TEXT");
+  addColumnIfMissing(db, "multiremi_tasks", "requesting_user_profile_description TEXT");
   addColumnIfMissing(db, "multiremi_runtime_command_requests", "provision_id TEXT");
   addColumnIfMissing(db, "multiremi_workspace_runtime_provisions", "version_check INTEGER NOT NULL DEFAULT 1");
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_users_external_id ON multiremi_users(external_id)");
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_users_feishu_union_id
+    ON multiremi_users(feishu_union_id)
+    WHERE feishu_union_id IS NOT NULL AND feishu_union_id != ''`);
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_workspace_members_user ON multiremi_workspace_members(user_id, workspace_id)");
   backfillMemberUserIds(db);
   backfillOwnerExternalId(db);

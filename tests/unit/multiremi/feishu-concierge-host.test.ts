@@ -1,12 +1,9 @@
 /**
  * The daemon-side host that actually boots the concierge channel (MUL-206).
  *
- * MUL-190 put a fail-closed member gate in front of the Feishu bot: a sender
- * whose `open_id` is not a member of the workspace gets nothing — no Agent run,
- * no Issue, no tool call. MUL-206 made the workspace a per-start value instead
- * of `MULTIREMI_WORKSPACE_ID`, so the gate now has to be wired from the
- * assignment. These tests exist to keep that wiring honest: if the workspace
- * ever stops flowing through, the bot answers strangers.
+ * Sender identity is classified by the canonical Task bridge using union_id.
+ * The connector only transports messages; it must not reject a sender by the
+ * bot app's app-scoped open_id.
  */
 
 import { describe, expect, it } from "bun:test";
@@ -40,26 +37,20 @@ function assignment(overrides: Partial<MultiremiFeishuBotDaemonConfig> = {}): Mu
 
 interface FakeDaemon {
   daemon: MultiremiDaemon;
-  membershipCalls: Array<{ workspaceId: string; externalId: string }>;
   botMenuPublishers: unknown[];
   failures: unknown[];
 }
 
-function fakeDaemon(options: { isMember?: boolean } = {}): FakeDaemon {
-  const membershipCalls: Array<{ workspaceId: string; externalId: string }> = [];
+function fakeDaemon(): FakeDaemon {
   const botMenuPublishers: unknown[] = [];
   const failures: unknown[] = [];
   const daemon = {
     localPort: () => 4242,
-    checkExternalWorkspaceMembership: async (workspaceId: string, externalId: string) => {
-      membershipCalls.push({ workspaceId, externalId });
-      return options.isMember ?? false;
-    },
     ensureTopicWorkspace: async () => null,
     setBotMenuPublisher: (publisher: unknown) => { botMenuPublishers.push(publisher); },
     reportFeishuConciergeFailure: async (error: unknown) => { failures.push(error); },
   } as unknown as MultiremiDaemon;
-  return { daemon, membershipCalls, botMenuPublishers, failures };
+  return { daemon, botMenuPublishers, failures };
 }
 
 type BootArgs = Parameters<typeof bootFeishuChannel>;
@@ -107,10 +98,8 @@ function host(input: {
 }
 
 describe("control-plane Feishu concierge host", () => {
-  it("gates senders against the workspace the assignment names", async () => {
-    // Not the daemon's own workspace and not an environment variable: the
-    // workspace that owns the credentials this start is using.
-    const fake = fakeDaemon({ isMember: false });
+  it("admits senders for server-side union_id classification", async () => {
+    const fake = fakeDaemon();
     const test = host({ daemon: fake.daemon });
 
     const result = await test.conciergeHost.start(assignment());
@@ -118,22 +107,10 @@ describe("control-plane Feishu concierge host", () => {
     expect(result).toEqual({ botName: "Concierge" });
     expect(test.calls).toHaveLength(1);
     const authorized = await test.calls[0]!.authorize("ou_stranger");
-    expect(authorized).toBe(false);
-    expect(fake.membershipCalls).toEqual([{ workspaceId: "ws_configured", externalId: "ou_stranger" }]);
+    expect(authorized).toBe(true);
   });
 
-  it("admits a sender the control plane recognises as a member", async () => {
-    const fake = fakeDaemon({ isMember: true });
-    const test = host({ daemon: fake.daemon });
-    await test.conciergeHost.start(assignment({ workspace_id: "ws_other" }));
-
-    expect(await test.calls[0]!.authorize("ou_member")).toBe(true);
-    expect(fake.membershipCalls).toEqual([{ workspaceId: "ws_other", externalId: "ou_member" }]);
-  });
-
-  it("refuses to boot without a daemon to ask about membership", async () => {
-    // Failing closed here is the point: booting anyway would put a bot on a
-    // real Feishu app with nothing deciding who may talk to it.
+  it("refuses to boot without the canonical Task bridge", async () => {
     const noDaemon = host({ daemon: undefined });
     await expect(noDaemon.conciergeHost.start(assignment())).rejects.toMatchObject({
       code: "runtime_unavailable",

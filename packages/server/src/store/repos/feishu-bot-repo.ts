@@ -42,6 +42,8 @@ import type {
   MultiremiFeishuBotDirective,
   MultiremiFeishuBotRuntimeStatus,
   MultiremiTask,
+  MultiremiUser,
+  MultiremiWorkspaceMember,
   SubmitFeishuBotMessageInput,
   SubmitFeishuBotMessageResult,
   ReportFeishuBotRuntimeStatusInput,
@@ -49,6 +51,17 @@ import type {
 } from "@multiremi/contracts/types.js";
 
 type Row = Record<string, unknown>;
+
+type FeishuSenderMembership = SubmitFeishuBotMessageResult["senderMembership"];
+
+interface ResolvedFeishuSender {
+  membership: FeishuSenderMembership;
+  user: MultiremiUser | null;
+  member: MultiremiWorkspaceMember | null;
+  displayName: string;
+  actorId: string;
+  profileDescription: string;
+}
 
 const DOMAINS: ReadonlySet<FeishuBotDomain> = new Set<FeishuBotDomain>(["feishu", "lark", "bytedance"]);
 const RUNTIME_STATES: ReadonlySet<FeishuBotRuntimeState> = new Set<FeishuBotRuntimeState>([
@@ -336,6 +349,7 @@ export class FeishuBotRepo {
     const externalSessionKey = requiredBoundedString(input.externalSessionKey, "external_session_key", 1_024);
     const externalMessageId = requiredBoundedString(input.externalMessageId, "external_message_id", 512);
     const text = requiredBoundedString(input.text, "text", 200_000);
+    const sender = this.resolveSender(workspaceId, config.appId, input);
     let enqueuedTask: MultiremiTask | null = null;
 
     const result = this.ctx.db.transaction((): SubmitFeishuBotMessageResult => {
@@ -353,6 +367,7 @@ export class FeishuBotRepo {
           status: String(duplicate.status) as SubmitFeishuBotMessageResult["status"],
           duplicate: true,
           steered: false,
+          senderMembership: sender.membership,
         };
       }
 
@@ -364,7 +379,7 @@ export class FeishuBotRepo {
         const chat = this.ctx.chat().createChatSession({
           workspaceId,
           agentId: config.agentId,
-          creatorId: cleanOptionalString(input.senderOpenId) ?? "feishu",
+          creatorId: sender.user?.id ?? sender.actorId,
           title: "Feishu conversation",
         });
         const bindingId = createId("fcb");
@@ -395,8 +410,8 @@ export class FeishuBotRepo {
           taskId: activeTask.id,
           kind: "steer",
           content: text,
-          authorType: "member",
-          authorId: cleanOptionalString(input.senderOpenId),
+          authorType: sender.membership === "member" ? "member" : "external",
+          authorId: sender.member?.id ?? sender.actorId,
         });
         task = activeTask;
         steered = true;
@@ -407,6 +422,9 @@ export class FeishuBotRepo {
           chatSessionId,
           workspaceId,
           prompt: text,
+          requestingUserName: sender.displayName,
+          requestingUserProfileDescription: sender.profileDescription,
+          issueCreationRestricted: sender.membership !== "member",
         });
         enqueuedTask = task;
       }
@@ -447,10 +465,45 @@ export class FeishuBotRepo {
         status: task.status,
         duplicate: false,
         steered,
+        senderMembership: sender.membership,
       };
     })();
     if (enqueuedTask) this.ctx.notifyTaskEnqueued(enqueuedTask);
     return result;
+  }
+
+  private resolveSender(
+    workspaceId: string,
+    appId: string,
+    input: SubmitFeishuBotMessageInput,
+  ): ResolvedFeishuSender {
+    const unionId = optionalBoundedString(input.senderUnionId, "sender_union_id", 512);
+    const openId = optionalBoundedString(input.senderOpenId, "sender_open_id", 512);
+    const userId = optionalBoundedString(input.senderUserId, "sender_user_id", 512);
+    const tenantKey = optionalBoundedString(input.senderTenantKey, "sender_tenant_key", 512);
+    const eventName = optionalBoundedString(input.senderName, "sender_name", 512);
+    const user = unionId ? this.ctx.workspaces().getUserByFeishuUnionId(unionId) : null;
+    const member = user
+      ? this.ctx.workspaces().findWorkspaceMemberForUser(user.id, workspaceId)
+      : null;
+    const activeMember = member && !member.archivedAt ? member : null;
+    const membership: FeishuSenderMembership = activeMember
+      ? "member"
+      : user
+        ? "non_member"
+        : "unbound";
+    const displayName = activeMember?.name || user?.name || eventName || "Feishu user";
+    const actorId = user?.id
+      ?? (unionId ? `feishu:union:${unionId}` : null)
+      ?? (openId ? `feishu:open:${appId}:${openId}` : null)
+      ?? (userId ? `feishu:user:${tenantKey ?? "unknown"}:${userId}` : null)
+      ?? `feishu:session:${input.externalSessionKey}`;
+    const profileDescription = [
+      "Source: Feishu personal bot",
+      `Workspace membership: ${membership}`,
+      ...(activeMember ? [`Workspace role: ${activeMember.role}`] : []),
+    ].join("\n");
+    return { membership, user, member: activeMember, displayName, actorId, profileDescription };
   }
 
   resetSession(workspaceId: string, runtimeId: string, revision: number, externalSessionKey: string): boolean {
@@ -838,6 +891,14 @@ function requiredBoundedString(value: unknown, field: string, maxLength: number)
   const normalized = String(value ?? "").trim();
   if (!normalized) throw new FeishuBotConfigError(`${field} is required`, 400, `${field}_required`);
   if (normalized.length > maxLength) {
+    throw new FeishuBotConfigError(`${field} is too long`, 400, `${field}_too_long`);
+  }
+  return normalized;
+}
+
+function optionalBoundedString(value: unknown, field: string, maxLength: number): string | null {
+  const normalized = cleanOptionalString(value);
+  if (normalized && normalized.length > maxLength) {
     throw new FeishuBotConfigError(`${field} is too long`, 400, `${field}_too_long`);
   }
   return normalized;
