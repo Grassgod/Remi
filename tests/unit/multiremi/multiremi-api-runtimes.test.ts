@@ -1091,7 +1091,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
 
     const staleRunning = store.createRuntimeUpdateRequest("rt_update_flow", { target_version: "v2.1.0" });
     await app.request("/api/daemon/runtimes/rt_update_flow/update/claim", { method: "POST" });
-    const oldRunningAt = new Date(Date.now() - 151_000).toISOString();
+    const oldRunningAt = new Date(Date.now() - 20 * 60 * 1000 - 1_000).toISOString();
     db!.run("UPDATE multiremi_runtime_update_requests SET run_started_at = ?, updated_at = ? WHERE id = ?", [
       oldRunningAt,
       oldRunningAt,
@@ -1100,7 +1100,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
     const staleRunningPoll = await app.request(`/api/multiremi/runtimes/rt_update_flow/update/${staleRunning.id}`);
     const staleRunningBody = await staleRunningPoll.json();
     expect(staleRunningBody.status).toBe("timeout");
-    expect(staleRunningBody.error).toBe("update did not complete within 150 seconds");
+    expect(staleRunningBody.error).toBe("update did not complete within 20 minutes");
 
     const lateUpdateReport = await app.request(`/api/daemon/runtimes/rt_update_flow/update/${staleRunning.id}/result`, {
       method: "POST",

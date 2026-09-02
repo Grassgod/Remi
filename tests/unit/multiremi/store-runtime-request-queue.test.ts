@@ -67,8 +67,8 @@ function goldenClaimSelect(table: string, limit: "1" | "?"): string {
 function goldenClaimUpdate(table: string): string {
   return `UPDATE ${table} SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ?`;
 }
-function goldenExpirePending(table: string, message: string): string {
-  return `UPDATE ${table}${NL}SET status = 'timeout', error = '${message}', updated_at = ?${NL}WHERE runtime_id = ? AND status = 'pending' AND created_at < ?`;
+function goldenExpirePending(table: string, message: string, column = "created_at"): string {
+  return `UPDATE ${table}${NL}SET status = 'timeout', error = '${message}', updated_at = ?${NL}WHERE runtime_id = ? AND status = 'pending' AND ${column} < ?`;
 }
 function goldenExpireRunning(table: string, message: string): string {
   return `UPDATE ${table}${NL}SET status = 'timeout', error = '${message}', updated_at = ?${NL}WHERE runtime_id = ? AND status = 'running' AND run_started_at IS NOT NULL AND run_started_at < ?`;
@@ -85,6 +85,7 @@ interface Family {
   drive: (repo: RuntimesRepo) => void;
   /** `claimBatchIds` (LIMIT ?) instead of `claim` (LIMIT 1). */
   batchClaim?: boolean;
+  pendingDeadlineColumn?: "created_at" | "updated_at";
 }
 
 const FAMILIES: Family[] = [
@@ -114,7 +115,8 @@ const FAMILIES: Family[] = [
     name: "update",
     table: "multiremi_runtime_update_requests",
     pendingTimeoutError: "daemon did not respond within 120 seconds",
-    runningTimeoutError: "update did not complete within 150 seconds",
+    runningTimeoutError: "update did not complete within 20 minutes",
+    pendingDeadlineColumn: "updated_at",
     drive: (repo) => {
       const request = repo.createRuntimeUpdateRequest("rt_q", { targetVersion: "1.2.3" });
       repo.getRuntimeUpdateRequest("rt_q", request.id);
@@ -168,7 +170,7 @@ describe("RuntimeRequestQueue SQL", () => {
         goldenGet(family.table),
         goldenClaimSelect(family.table, family.batchClaim ? "?" : "1"),
         goldenClaimUpdate(family.table),
-        goldenExpirePending(family.table, family.pendingTimeoutError),
+        goldenExpirePending(family.table, family.pendingTimeoutError, family.pendingDeadlineColumn),
         goldenExpireRunning(family.table, family.runningTimeoutError),
       ]) {
         expect(emitted).toContain(expected);
@@ -250,6 +252,20 @@ describe("RuntimeRequestQueue lifecycle", () => {
     expect(expired?.status).toBe("timeout");
     expect(expired?.error).toBe("daemon did not respond within 30 seconds");
     expect(repo.claimRuntimeModelListRequest("rt_q")).toBeNull();
+  });
+
+  it("uses heartbeat activity as the pending deadline for CLI updates", () => {
+    const repo = createRepo();
+    const request = repo.createRuntimeUpdateRequest("rt_q", { targetVersion: "1.2.3" });
+    const stale = new Date(Date.now() - 121_000).toISOString();
+    db!.run(
+      "UPDATE multiremi_runtime_update_requests SET created_at = ?, updated_at = ? WHERE id = ?",
+      [stale, new Date().toISOString(), request.id],
+    );
+
+    expect(repo.getRuntimeUpdateRequest("rt_q", request.id)?.status).toBe("pending");
+    db!.run("UPDATE multiremi_runtime_update_requests SET updated_at = ? WHERE id = ?", [stale, request.id]);
+    expect(repo.getRuntimeUpdateRequest("rt_q", request.id)?.status).toBe("timeout");
   });
 
   it("times out a running request past its own deadline", () => {

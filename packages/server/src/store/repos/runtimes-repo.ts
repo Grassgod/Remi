@@ -29,6 +29,7 @@ import {
 import { type StoreContext } from "@multiremi/store/context.js";
 import { canonicalizeDaemonRoutingWithinTransaction } from "@multiremi/store/daemon-routing.js";
 import { RuntimeRequestQueue, type RuntimeRequestSpec } from "@multiremi/store/repos/runtime-request-queue.js";
+import { runtimeDaemonAliases } from "@multiremi/store/runtime-affinity.js";
 import {
   redactRuntimeCommandArgs,
   redactRuntimeCommandText,
@@ -114,7 +115,8 @@ export type ArchiveAgentsAndDeleteRuntimeResult =
 const RUNTIME_MODEL_LIST_PENDING_TIMEOUT_MS = 30 * 1000;
 const RUNTIME_MODEL_LIST_RUNNING_TIMEOUT_MS = 60 * 1000;
 const RUNTIME_UPDATE_PENDING_TIMEOUT_MS = 120 * 1000;
-const RUNTIME_UPDATE_RUNNING_TIMEOUT_MS = 150 * 1000;
+const RUNTIME_UPDATE_RUNNING_TIMEOUT_MS = 20 * 60 * 1000;
+const RUNTIME_UPDATE_RECENT_DISPATCH_MS = 90 * 1000;
 const RUNTIME_LOCAL_SKILL_PENDING_TIMEOUT_MS = 3 * 60 * 1000;
 const RUNTIME_LOCAL_SKILL_RUNNING_TIMEOUT_MS = 60 * 1000;
 const RUNTIME_DIRECTORY_SCAN_PENDING_TIMEOUT_MS = 3 * 60 * 1000;
@@ -147,9 +149,10 @@ const UPDATE_REQUESTS: RuntimeRequestSpec<MultiremiRuntimeUpdateRequest> = {
   table: "multiremi_runtime_update_requests",
   idPrefix: "rup",
   pendingTimeoutMs: RUNTIME_UPDATE_PENDING_TIMEOUT_MS,
+  pendingDeadlineColumn: "updated_at",
   runningTimeoutMs: RUNTIME_UPDATE_RUNNING_TIMEOUT_MS,
   pendingTimeoutError: "daemon did not respond within 120 seconds",
-  runningTimeoutError: "update did not complete within 150 seconds",
+  runningTimeoutError: "update did not complete within 20 minutes",
   hydrate: toRuntimeUpdateRequest,
 };
 
@@ -1079,7 +1082,51 @@ export class RuntimesRepo {
   }
 
   claimRuntimeUpdateRequest(runtimeId: string): MultiremiRuntimeUpdateRequest | null {
-    return this.updateQueue.claim(runtimeId);
+    return this.withRuntimeLifecycleLock(runtimeId, (runtime) => {
+      const pending = this.ctx.db.query(
+        `SELECT id, scope FROM multiremi_runtime_update_requests
+         WHERE runtime_id = ? AND status = 'pending'
+         ORDER BY created_at ASC
+         LIMIT 1`,
+      ).get(runtimeId) as { id?: string; scope?: string } | null;
+      if (pending?.scope === "cli" && this.hasExecutingTasksForDaemon(runtime)) {
+        // Heartbeats are the lease renewal while the old daemon drains. The
+        // request remains pending, so every provider on this daemon stays
+        // fenced from claiming replacement work.
+        this.ctx.db.run(
+          "UPDATE multiremi_runtime_update_requests SET updated_at = ? WHERE id = ? AND status = 'pending'",
+          [nowIso(), String(pending.id)],
+        );
+        return null;
+      }
+      return this.updateQueue.claim(runtimeId);
+    });
+  }
+
+  /** Whether Task dispatch must pause while this physical daemon drains/upgrades. */
+  hasCliUpdateDrainForRuntime(runtimeId: string): boolean {
+    const runtime = this.getRuntime(runtimeId);
+    if (!runtime) return false;
+    const runtimeIds = this.runtimeIdsForDaemon(runtime);
+    if (!runtimeIds.length) return false;
+    const activeRows = this.ctx.db.query(
+      `SELECT runtime_id FROM multiremi_runtime_update_requests
+       WHERE runtime_id IN (${runtimeIds.map(() => "?").join(", ")})
+         AND scope = 'cli'
+         AND status IN ('pending', 'running')`,
+    ).all(...runtimeIds) as Array<{ runtime_id?: unknown }>;
+    if (!activeRows.length) return false;
+    for (const id of new Set(activeRows.map((row) => String(row.runtime_id)))) {
+      this.updateQueue.expire(id);
+    }
+    const row = this.ctx.db.query(
+      `SELECT id FROM multiremi_runtime_update_requests
+       WHERE runtime_id IN (${runtimeIds.map(() => "?").join(", ")})
+         AND scope = 'cli'
+         AND status IN ('pending', 'running')
+       LIMIT 1`,
+    ).get(...runtimeIds) as { id?: string } | null;
+    return Boolean(row?.id);
   }
 
   reportRuntimeUpdateResult(runtimeId: string, requestId: string, input: ReportRuntimeUpdateInput): MultiremiRuntimeUpdateRequest {
@@ -1105,6 +1152,55 @@ export class RuntimesRepo {
       );
     }
     return this.getRuntimeUpdateRequest(runtimeId, requestId)!;
+  }
+
+  /**
+   * Queue one CLI update per physical daemon after a formal platform release is live.
+   * Release history is the idempotency key: the updater heartbeat may run every few
+   * seconds, but a daemon sees a given target version at most once automatically.
+   */
+  reconcileRuntimeCliRelease(targetVersion: string): MultiremiRuntimeUpdateRequest[] {
+    const target = parseFormalReleaseVersion(targetVersion);
+    if (!target) return [];
+
+    const runtimesByDaemon = new Map<string, MultiremiRuntime[]>();
+    for (const runtime of this.listRuntimes()) {
+      const daemonKey = runtime.daemonId?.trim();
+      if (runtime.status !== "online" || runtime.runtimeMode !== "local" || !daemonKey) continue;
+      const group = runtimesByDaemon.get(daemonKey) ?? [];
+      group.push(runtime);
+      runtimesByDaemon.set(daemonKey, group);
+    }
+
+    const queued: MultiremiRuntimeUpdateRequest[] = [];
+    for (const runtimes of runtimesByDaemon.values()) {
+      if (runtimes.some((runtime) => runtimeLaunchOwner(runtime) === "desktop")) continue;
+      if (runtimes.some((runtime) => {
+        const current = parseReleaseVersion(runtimeCliVersion(runtime));
+        return current ? compareReleaseVersionParts(current, target.parts) >= 0 : false;
+      })) continue;
+
+      const previous = runtimes.flatMap((runtime) => this.ctx.db.query(
+        `SELECT status, target_version FROM multiremi_runtime_update_requests
+         WHERE runtime_id = ? AND scope = 'cli'`,
+      ).all(runtime.id) as Array<{ status?: string; target_version?: string }>);
+      if (previous.some((request) => {
+        const version = parseReleaseVersion(request.target_version);
+        return version ? compareReleaseVersionParts(version, target.parts) === 0 : false;
+      })) continue;
+      if (previous.some((request) => request.status === "pending" || request.status === "running")) continue;
+
+      const runtime = [...runtimes].sort((left, right) => {
+        const providerPriority = Number(right.provider === "claude") - Number(left.provider === "claude");
+        return providerPriority || left.id.localeCompare(right.id);
+      })[0];
+      if (!runtime) continue;
+      queued.push(this.createRuntimeUpdateRequest(runtime.id, {
+        scope: "cli",
+        targetVersion: target.canonical,
+      }));
+    }
+    return queued;
   }
 
   createRuntimeLocalSkillListRequest(runtimeId: string): MultiremiRuntimeLocalSkillListRequest {
@@ -1635,6 +1731,35 @@ export class RuntimesRepo {
     if (runtime.status !== "online") throw new Error("runtime is offline");
   }
 
+  private runtimeIdsForDaemon(runtime: MultiremiRuntime): string[] {
+    const aliases = runtimeDaemonAliases(runtime);
+    if (!aliases.length) return [];
+    const placeholders = aliases.map(() => "?").join(", ");
+    const rows = this.ctx.db.query(
+      `SELECT id FROM multiremi_runtimes
+       WHERE id IN (${placeholders})
+          OR daemon_id IN (${placeholders})
+          OR legacy_daemon_id IN (${placeholders})`,
+    ).all(...aliases, ...aliases, ...aliases) as Array<{ id?: unknown }>;
+    return rows.map((row) => String(row.id));
+  }
+
+  private hasExecutingTasksForDaemon(runtime: MultiremiRuntime): boolean {
+    const runtimeIds = this.runtimeIdsForDaemon(runtime);
+    if (!runtimeIds.length) return false;
+    const dispatchedCutoff = new Date(Date.now() - RUNTIME_UPDATE_RECENT_DISPATCH_MS).toISOString();
+    const row = this.ctx.db.query(
+      `SELECT id FROM multiremi_tasks
+       WHERE runtime_id IN (${runtimeIds.map(() => "?").join(", ")})
+         AND (
+           status IN ('running', 'waiting_local_directory', 'awaiting_human')
+           OR (status = 'dispatched' AND dispatched_at IS NOT NULL AND dispatched_at >= ?)
+         )
+       LIMIT 1`,
+    ).get(...runtimeIds, dispatchedCutoff) as { id?: string } | null;
+    return Boolean(row?.id);
+  }
+
   /**
    * Serialize every new Runtime-owned row with daemon retirement. The initial
    * read only finds the workspace row to lock; the Runtime is authoritative
@@ -1741,6 +1866,37 @@ function normalizeAgentPluginProtocol(value: unknown): number {
 function readAgentPluginProtocol(metadata: Record<string, unknown>): number | null {
   if (!("agent_plugin_protocol" in metadata || "agentPluginProtocol" in metadata)) return null;
   return normalizeAgentPluginProtocol(metadata.agent_plugin_protocol ?? metadata.agentPluginProtocol);
+}
+
+function runtimeCliVersion(runtime: MultiremiRuntime): string {
+  const value = runtime.metadata.cli_version ?? runtime.metadata.cliVersion;
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function runtimeLaunchOwner(runtime: MultiremiRuntime): string {
+  const value = runtime.metadata.launched_by ?? runtime.metadata.launchedBy;
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function parseFormalReleaseVersion(value: string): { canonical: string; parts: number[] } | null {
+  const match = value.trim().match(/^v?(\d+)\.(\d+)\.(\d+)$/);
+  if (!match) return null;
+  const parts = match.slice(1, 4).map(Number);
+  return { canonical: parts.join("."), parts };
+}
+
+function parseReleaseVersion(value: unknown): number[] | null {
+  if (typeof value !== "string") return null;
+  const match = value.trim().match(/^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/);
+  return match ? match.slice(1, 4).map(Number) : null;
+}
+
+function compareReleaseVersionParts(left: number[], right: number[]): number {
+  for (let index = 0; index < 3; index += 1) {
+    const delta = (left[index] ?? 0) - (right[index] ?? 0);
+    if (delta !== 0) return delta;
+  }
+  return 0;
 }
 
 function normalizeRuntimeVisibility(value: string | undefined): MultiremiRuntimeVisibility {
