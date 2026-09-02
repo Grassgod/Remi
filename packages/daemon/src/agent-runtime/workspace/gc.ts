@@ -141,6 +141,26 @@ export async function runWorkspaceGcOnce(options: RunWorkspaceGcOnceOptions): Pr
   log.debug(`Workspace GC outbox flush finished: ${root}`);
 
   const workspaces = safeReadDir(root) ?? [];
+  // Scan the topic snapshot before Issue workspaces. A terminal Issue can move
+  // back under `_topics` during this sweep; deferring that new path prevents
+  // one logical workspace from being counted twice based on readdir order.
+  const topicsRoot = workspaces.find((workspace) =>
+    workspace.isDirectory() && workspace.name === TOPIC_WORKSPACE_ROOT
+  );
+  if (topicsRoot) {
+    const topicsRootDir = join(root, topicsRoot.name);
+    const topics = safeReadDir(topicsRootDir) ?? [];
+    for (const topic of topics) {
+      if (!topic.isDirectory()) continue;
+      await collectTopicWorkspace(
+        root,
+        join(topicsRootDir, topic.name),
+        topic.name,
+        options,
+        summary,
+      );
+    }
+  }
   for (const workspace of workspaces) {
     if (
       !workspace.isDirectory()
@@ -159,19 +179,7 @@ export async function runWorkspaceGcOnce(options: RunWorkspaceGcOnceOptions): Pr
       }
       continue;
     }
-    if (workspace.name === TOPIC_WORKSPACE_ROOT) {
-      for (const topic of safeReadDir(workspaceDir) ?? []) {
-        if (!topic.isDirectory()) continue;
-        await collectTopicWorkspace(
-          root,
-          join(workspaceDir, topic.name),
-          topic.name,
-          options,
-          summary,
-        );
-      }
-      continue;
-    }
+    if (workspace.name === TOPIC_WORKSPACE_ROOT) continue;
     if (workspace.name === DISCUSSION_SESSION_ROOT) {
       const issues = safeReadDir(workspaceDir) ?? [];
       for (const issue of issues) {
