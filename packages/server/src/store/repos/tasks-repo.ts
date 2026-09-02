@@ -420,13 +420,14 @@ export class TasksRepo {
     this.ctx.db.run(
       `INSERT INTO multiremi_tasks (
         id, task_kind, agent_id, runtime_id, issue_id, issue_session_id, issue_session_generation, holds_workspace, chat_session_id,
-        trigger_comment_id, trigger_summary, workspace_id, status, priority, prompt,
+        trigger_comment_id, trigger_summary, requesting_user_name,
+        requesting_user_profile_description, workspace_id, status, priority, prompt,
         attempt, max_attempts, parent_task_id, issue_creation_restricted, delegation_id, delegated_by_agent_id,
         assignment_event_id, assignment_source_event_id, projection_degrade_level,
         provider, plugin_snapshot, execution_fingerprint,
         session_id, work_dir, created_at, updated_at
       ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?,
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?,
         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       )`,
       [
@@ -441,6 +442,8 @@ export class TasksRepo {
         input.chatSessionId ?? null,
         triggerCommentId,
         triggerSummary,
+        cleanOptionalString(input.requestingUserName ?? input.requesting_user_name),
+        cleanOptionalString(input.requestingUserProfileDescription ?? input.requesting_user_profile_description),
         // A task ALWAYS belongs to its agent's workspace — never the
         // caller-supplied one. Otherwise a member could create a task in
         // their own workspace referencing another workspace's agent, then
@@ -3023,6 +3026,10 @@ function toTask(row: Row): MultiremiTask {
     autopilotRunId: nullableString(row.autopilot_run_id),
     triggerCommentId: nullableString(row.trigger_comment_id),
     triggerSummary: nullableString(row.trigger_summary),
+    requestingUserName: nullableString(row.requesting_user_name),
+    requesting_user_name: nullableString(row.requesting_user_name),
+    requestingUserProfileDescription: nullableString(row.requesting_user_profile_description),
+    requesting_user_profile_description: nullableString(row.requesting_user_profile_description),
     workspaceId: String(row.workspace_id ?? "local"),
     status: String(row.status) as MultiremiTaskStatus,
     priority: Number(row.priority ?? 0),

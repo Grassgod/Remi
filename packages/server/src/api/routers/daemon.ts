@@ -512,6 +512,10 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       external_message_id?: unknown;
       reply_to_message_id?: unknown;
       sender_open_id?: unknown;
+      sender_user_id?: unknown;
+      sender_union_id?: unknown;
+      sender_tenant_key?: unknown;
+      sender_name?: unknown;
       chat_id?: unknown;
       thread_id?: unknown;
       text?: unknown;
@@ -524,6 +528,10 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       externalMessageId: cleanString(typeof body.external_message_id === "string" ? body.external_message_id : null) ?? "",
       replyToMessageId: cleanString(typeof body.reply_to_message_id === "string" ? body.reply_to_message_id : null),
       senderOpenId: cleanString(typeof body.sender_open_id === "string" ? body.sender_open_id : null),
+      senderUserId: cleanString(typeof body.sender_user_id === "string" ? body.sender_user_id : null),
+      senderUnionId: cleanString(typeof body.sender_union_id === "string" ? body.sender_union_id : null),
+      senderTenantKey: cleanString(typeof body.sender_tenant_key === "string" ? body.sender_tenant_key : null),
+      senderName: cleanString(typeof body.sender_name === "string" ? body.sender_name : null),
       chatId: cleanString(typeof body.chat_id === "string" ? body.chat_id : null),
       threadId: cleanString(typeof body.thread_id === "string" ? body.thread_id : null),
       text: typeof body.text === "string" ? body.text : "",

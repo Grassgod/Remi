@@ -17,13 +17,23 @@ function uniqueMessageId(label: string): string {
 function messageEvent(options: {
   messageId: string;
   senderOpenId: string;
+  senderUserId?: string;
+  senderUnionId?: string;
+  senderTenantKey?: string;
   text?: string;
   chatType?: "p2p" | "group";
   chatId?: string;
   mentions?: FeishuMessageEvent["message"]["mentions"];
 }): FeishuMessageEvent {
   return {
-    sender: { sender_id: { open_id: options.senderOpenId } },
+    sender: {
+      sender_id: {
+        open_id: options.senderOpenId,
+        user_id: options.senderUserId,
+        union_id: options.senderUnionId,
+      },
+      tenant_key: options.senderTenantKey,
+    },
     message: {
       message_id: options.messageId,
       chat_id: options.chatId ?? "oc_private_chat",
@@ -32,6 +42,20 @@ function messageEvent(options: {
       content: JSON.stringify({ text: options.text ?? "hello" }),
       mentions: options.mentions,
     },
+  };
+}
+
+function clientWithBasicBatchSender(name: string): { client: any; requests: unknown[] } {
+  const requests: unknown[] = [];
+  return {
+    client: {
+      request: async (input: unknown) => {
+        requests.push(input);
+        return { data: { users: [{ name }] } };
+      },
+      contact: { user: { get: async () => { throw new Error("fallback should not run"); } } },
+    },
+    requests,
   };
 }
 
@@ -94,6 +118,40 @@ describe("Feishu workspace membership admission", () => {
     expect(result).toMatchObject({ senderOpenId, chatType: "p2p" });
     expect(getSenderCalls()).toBe(1);
     expect(gate.deniedReasons).toEqual([]);
+  });
+
+  it("resolves the sender with basic_batch and preserves cross-app identity fields", async () => {
+    const senderOpenId = "ou_basic_batch";
+    const { client, requests } = clientWithBasicBatchSender("External Alice");
+    const gate = admission(async () => true);
+
+    const result = await processFeishuMessageEvent(
+      client,
+      messageEvent({
+        messageId: uniqueMessageId("basic-batch-sender"),
+        senderOpenId,
+        senderUserId: "7d9g83",
+        senderUnionId: "on_union_alice",
+        senderTenantKey: "tenant_a",
+      }),
+      undefined,
+      gate.options,
+    );
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      method: "POST",
+      url: "/open-apis/contact/v3/users/basic_batch",
+      params: { user_id_type: "open_id" },
+      data: { user_ids: [senderOpenId] },
+    });
+    expect(result).toMatchObject({
+      senderOpenId,
+      senderUserId: "7d9g83",
+      senderUnionId: "on_union_alice",
+      senderTenantKey: "tenant_a",
+      senderName: "External Alice",
+    });
   });
 
   it("allows a workspace member in an admitted group", async () => {

@@ -44,6 +44,25 @@ const bearer = (token: string) => ({ headers: { Authorization: `Bearer ${token}`
 const jsonAuth = (token: string) => ({ "Content-Type": "application/json", Authorization: `Bearer ${token}` });
 
 describe("Multiremi multi-user auth", () => {
+  it("links the same Feishu user across apps by union_id without duplicating data", () => {
+    const store = seedDeployment();
+    const first = store.getOrCreateUser({
+      externalId: OWNER_OPEN_ID,
+      email: "hehuajie@corp.com",
+      name: "贺华杰",
+    });
+
+    const linked = store.getOrCreateUser({
+      externalId: OWNER_OPEN_ID,
+      feishuUnionId: "on_owner_union",
+      email: "hehuajie@corp.com",
+      name: "贺华杰",
+    });
+
+    expect(linked.id).toBe(first.id);
+    expect(store.getUserByFeishuUnionId("on_owner_union")?.id).toBe(first.id);
+  });
+
   it("AC1/AC7: preserves the existing owner and creates a distinct user for a second login", async () => {
     const store = freshStore();
     store.getCurrentUser(); // seed the legacy single-user "local" record

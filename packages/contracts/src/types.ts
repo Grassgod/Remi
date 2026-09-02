@@ -1503,6 +1503,10 @@ export interface CreateTaskInput {
   workspaceId?: string | null;
   priority?: number;
   prompt: string;
+  requestingUserName?: string | null;
+  requesting_user_name?: string | null;
+  requestingUserProfileDescription?: string | null;
+  requesting_user_profile_description?: string | null;
   workDir?: string | null;
   sessionId?: string | null;
   attempt?: number | null;
@@ -3871,6 +3875,10 @@ export interface SubmitFeishuBotMessageInput {
   externalMessageId: string;
   replyToMessageId?: string | null;
   senderOpenId?: string | null;
+  senderUserId?: string | null;
+  senderUnionId?: string | null;
+  senderTenantKey?: string | null;
+  senderName?: string | null;
   chatId?: string | null;
   threadId?: string | null;
   text: string;
@@ -3883,6 +3891,7 @@ export interface SubmitFeishuBotMessageResult {
   status: MultiremiTaskStatus;
   duplicate: boolean;
   steered: boolean;
+  senderMembership: "member" | "non_member" | "unbound";
 }
 
 /** Runtime-facing Task snapshot used by connector delivery polling. */

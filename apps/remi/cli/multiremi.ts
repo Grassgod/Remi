@@ -427,8 +427,7 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
       onRestartRequested: () => stopAll(),
     });
     // Co-resident Feishu requires the daemon's authenticated workspace control
-    // plane. Starting it without that gate would admit messages without proof
-    // of workspace membership.
+    // plane because every message is submitted through the canonical Task API.
     if (daemons.length === 0) {
       workspaceSupervisor.release();
       workspaceSupervisor = null;
@@ -536,17 +535,19 @@ export function controlPlaneConciergeHost(deps: {
     async start(assignment) {
       const daemon = deps.daemon();
       const workspacesRoot = deps.workspacesRoot();
-      // Membership is checked against the daemon's authenticated control plane,
-      // so a process without one must refuse rather than answer strangers.
+      // The daemon and workspace root are still mandatory because the channel
+      // submits every message through the canonical Chat/Task path. Sender
+      // identity and membership are classified there using union_id; an
+      // app-scoped open_id must not be used as an admission gate.
       if (!daemon || !workspacesRoot) {
         throw new FeishuConciergeError(
-          "the Multiremi daemon is not available to gate workspace membership",
+          "the Multiremi daemon is not available to run Feishu tasks",
           "runtime_unavailable",
         );
       }
       const { config, agent } = assignment;
       const handle = await boot(
-        (senderOpenId) => daemon.checkExternalWorkspaceMembership(config.workspace_id, senderOpenId),
+        async () => true,
         {
           daemonPort: daemon.localPort(),
           workspacesRoot,
@@ -628,6 +629,10 @@ function createFeishuTaskHandler(
       externalMessageId,
       replyToMessageId: externalMessageId,
       senderOpenId: String(message.metadata?.senderOpenId ?? "").trim() || null,
+      senderUserId: String(message.metadata?.senderUserId ?? "").trim() || null,
+      senderUnionId: String(message.metadata?.senderUnionId ?? "").trim() || null,
+      senderTenantKey: String(message.metadata?.senderTenantKey ?? "").trim() || null,
+      senderName: String(message.metadata?.senderName ?? "").trim() || null,
       chatId: message.chatId,
       threadId: String(message.metadata?.rootId ?? "").trim() || null,
       text: message.text,

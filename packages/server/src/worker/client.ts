@@ -366,12 +366,17 @@ export class MultiremiDaemonClient {
       status: MultiremiTaskStatus;
       duplicate: boolean;
       steered: boolean;
+      senderMembership: SubmitFeishuBotMessageResult["senderMembership"];
     }>(`/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/feishu-bot/messages`, {
       revision: input.revision,
       external_session_key: input.externalSessionKey,
       external_message_id: input.externalMessageId,
       reply_to_message_id: input.replyToMessageId ?? undefined,
       sender_open_id: input.senderOpenId ?? undefined,
+      sender_user_id: input.senderUserId ?? undefined,
+      sender_union_id: input.senderUnionId ?? undefined,
+      sender_tenant_key: input.senderTenantKey ?? undefined,
+      sender_name: input.senderName ?? undefined,
       chat_id: input.chatId ?? undefined,
       thread_id: input.threadId ?? undefined,
       text: input.text,

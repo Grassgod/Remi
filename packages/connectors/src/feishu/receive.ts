@@ -123,6 +123,34 @@ async function resolveSenderName(
   if (cached && cached.expireAt > now) return cached.name || undefined;
 
   try {
+    const response = await client.request<{
+      data?: {
+        users?: Array<{
+          name?: string;
+          i18n_name?: { en_us?: string; zh_cn?: string; ja_jp?: string };
+        }>;
+      };
+    }>({
+      method: "POST",
+      url: "/open-apis/contact/v3/users/basic_batch",
+      params: { user_id_type: "open_id" },
+      data: { user_ids: [senderOpenId] },
+    });
+    const user = response?.data?.users?.[0];
+    const name: string | undefined = user?.name
+      || user?.i18n_name?.en_us
+      || user?.i18n_name?.zh_cn
+      || user?.i18n_name?.ja_jp;
+    if (name && typeof name === "string") {
+      senderNameCache.set(senderOpenId, { name, expireAt: now + SENDER_NAME_TTL_MS });
+      return name;
+    }
+  } catch {
+    // Older/private deployments may not expose basic_batch; use the regular
+    // contact endpoint for users inside the app's address-book scope.
+  }
+
+  try {
     const res: any = await client.contact.user.get({
       path: { user_id: senderOpenId },
       params: { user_id_type: "open_id" },
@@ -354,6 +382,9 @@ export function parseFeishuMessageEvent(
     messageId: event.message.message_id,
     senderId: event.sender.sender_id.user_id || event.sender.sender_id.open_id || "",
     senderOpenId: event.sender.sender_id.open_id || "",
+    senderUserId: event.sender.sender_id.user_id || "",
+    senderUnionId: event.sender.sender_id.union_id || "",
+    senderTenantKey: event.sender.tenant_key || "",
     chatType: event.message.chat_type,
     mentionedBot,
     rootId: event.message.root_id || undefined,
@@ -424,6 +455,9 @@ export type ParsedFeishuMessage = {
   rawContent: string;
   chatId: string;
   senderOpenId: string;
+  senderUserId: string;
+  senderUnionId: string;
+  senderTenantKey: string;
   senderName?: string;
   messageId: string;
   chatType: "p2p" | "group";
@@ -590,6 +624,9 @@ export async function processFeishuMessageEvent(
     rawContent: ctx.content,
     chatId: ctx.chatId,
     senderOpenId: ctx.senderOpenId,
+    senderUserId: ctx.senderUserId,
+    senderUnionId: ctx.senderUnionId,
+    senderTenantKey: ctx.senderTenantKey,
     senderName,
     messageId: ctx.messageId,
     chatType: ctx.chatType,

@@ -76,10 +76,16 @@ export function registerAuthRoutes(app: Hono, deps: RouterDeps): void {
     try {
       const userAccessToken = await larkExchangeCode(cfg, code, redirectUri);
       const profile = await larkFetchUserInfo(cfg, userAccessToken);
-      // open_id is the stable per-user identity; Feishu often returns no email,
-      // so synthesize one from open_id purely for display/uniqueness.
+      // union_id links this login to events from other apps owned by the same
+      // service provider. Keep open_id for compatibility with existing users;
+      // Feishu often returns no email, so synthesize one only as a fallback.
       const email = profile.email ?? `${profile.openId ?? "feishu-user"}@feishu.local`;
-      const payload = await localAuthResponse(store, { externalId: profile.openId, email, name: profile.name });
+      const payload = await localAuthResponse(store, {
+        externalId: profile.openId,
+        feishuUnionId: profile.unionId,
+        email,
+        name: profile.name,
+      });
       setAuthCookie(c, payload.token);
       return c.json(payload);
     } catch (e) {

@@ -17,6 +17,13 @@ afterEach(() => {
 
 function scaffold() {
   const store = createLocalStore();
+  const owner = store.getCurrentUser();
+  store.getOrCreateUser({
+    externalId: "ou_sso_owner",
+    feishuUnionId: "on_owner",
+    email: owner.email,
+    name: "Workspace Owner",
+  });
   const agent = store.createAgent({ name: "Remi", provider: "codex", workspaceId: "local" });
   store.registerRuntime({
     id: "rt_bot",
@@ -46,16 +53,26 @@ describe("Feishu bot standard Task bridge", () => {
       externalSessionKey: "oc_chat_1",
       externalMessageId: "om_1",
       senderOpenId: "ou_member",
+      senderUnionId: "on_owner",
+      senderName: "Owner from Feishu",
       text: "first message",
     });
 
-    expect(first).toMatchObject({ duplicate: false, steered: false, status: "queued" });
+    expect(first).toMatchObject({
+      duplicate: false,
+      steered: false,
+      status: "queued",
+      senderMembership: "member",
+    });
     const task = store.getTask(first.taskId)!;
     expect(task).toMatchObject({
       chatSessionId: first.chatSessionId,
       runtimeId: "rt_bot",
       prompt: "first message",
       workDir: null,
+      requestingUserName: "Workspace Owner",
+      requestingUserProfileDescription: "Source: Feishu personal bot\nWorkspace membership: member\nWorkspace role: owner",
+      issueCreationRestricted: false,
     });
 
     const duplicate = store.submitFeishuBotMessage("local", "rt_bot", {
@@ -63,6 +80,7 @@ describe("Feishu bot standard Task bridge", () => {
       externalSessionKey: "oc_chat_1",
       externalMessageId: "om_1",
       senderOpenId: "ou_member",
+      senderUnionId: "on_owner",
       text: "redelivered payload",
     });
     expect(duplicate).toEqual({ ...first, duplicate: true });
@@ -73,6 +91,7 @@ describe("Feishu bot standard Task bridge", () => {
       externalSessionKey: "oc_chat_1",
       externalMessageId: "om_2",
       senderOpenId: "ou_member",
+      senderUnionId: "on_owner",
       text: "add this while running",
     });
     expect(steered).toMatchObject({
@@ -83,6 +102,53 @@ describe("Feishu bot standard Task bridge", () => {
     });
     expect(store.listPendingTaskSteerMessages(first.taskId)).toHaveLength(1);
     expect(store.listPendingTaskSteerMessages(first.taskId)[0]?.content).toBe("add this while running");
+  });
+
+  it("admits an unbound sender but attenuates Issue creation and labels the requester", () => {
+    const { store, config } = scaffold();
+    const submitted = store.submitFeishuBotMessage("local", "rt_bot", {
+      revision: config.revision,
+      externalSessionKey: "oc_external_chat",
+      externalMessageId: "om_external",
+      senderOpenId: "ou_external",
+      senderUnionId: "on_external",
+      senderName: "External Alice",
+      text: "help me understand this workspace",
+    });
+
+    expect(submitted.senderMembership).toBe("unbound");
+    expect(store.getTask(submitted.taskId)).toMatchObject({
+      requestingUserName: "External Alice",
+      requestingUserProfileDescription: "Source: Feishu personal bot\nWorkspace membership: unbound",
+      issueCreationRestricted: true,
+    });
+  });
+
+  it("distinguishes a known non-member from an unbound Feishu identity", () => {
+    const { store, config } = scaffold();
+    const outsider = store.getOrCreateUser({
+      externalId: "ou_sso_outsider",
+      feishuUnionId: "on_outsider",
+      email: "outsider@example.com",
+      name: "Known Outsider",
+    });
+    expect(store.getUserRoleInWorkspace(outsider.id, "local")).toBeNull();
+
+    const submitted = store.submitFeishuBotMessage("local", "rt_bot", {
+      revision: config.revision,
+      externalSessionKey: "oc_known_outsider",
+      externalMessageId: "om_known_outsider",
+      senderUnionId: "on_outsider",
+      senderName: "Stale Event Name",
+      text: "hello from another workspace",
+    });
+
+    expect(submitted.senderMembership).toBe("non_member");
+    expect(store.getTask(submitted.taskId)).toMatchObject({
+      requestingUserName: "Known Outsider",
+      requestingUserProfileDescription: "Source: Feishu personal bot\nWorkspace membership: non_member",
+      issueCreationRestricted: true,
+    });
   });
 
   it("keeps the Chat Session across a config revision change", () => {

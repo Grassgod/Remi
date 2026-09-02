@@ -84,7 +84,7 @@ export function setAuthCookie(c: Context, token: string): void {
 
 export async function localAuthResponse(
   store: MultiremiStore,
-  identity: { externalId?: string | null; email: string; name?: string | null },
+  identity: { externalId?: string | null; feishuUnionId?: string | null; email: string; name?: string | null },
 ): Promise<{
   ok: true;
   token: string;
@@ -97,6 +97,7 @@ export async function localAuthResponse(
   // logging in each get their own record and their own token.
   const user = store.getOrCreateUser({
     externalId: identity.externalId ?? null,
+    feishuUnionId: identity.feishuUnionId ?? null,
     email: identity.email,
     name: identity.name ?? null,
   });

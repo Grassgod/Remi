@@ -499,8 +499,10 @@ function appendDaemonClaimWorkspaceContext(store: MultiremiStore, task: Multirem
 
   const runtime = task.runtimeId ? store.getRuntime(task.runtimeId) : null;
   const owner = runtime?.ownerId ? store.getUser(runtime.ownerId) : null;
-  if (owner?.name?.trim()) response.requesting_user_name = owner.name.trim();
-  if (owner?.profileDescription?.trim()) response.requesting_user_profile_description = owner.profileDescription.trim();
+  const requestingUserName = task.requestingUserName?.trim() || owner?.name?.trim();
+  const requestingUserProfile = task.requestingUserProfileDescription?.trim() || owner?.profileDescription?.trim();
+  if (requestingUserName) response.requesting_user_name = requestingUserName;
+  if (requestingUserProfile) response.requesting_user_profile_description = requestingUserProfile;
 }
 
 function appendDaemonClaimChatContext(store: MultiremiStore, task: MultiremiTaskWithAgent, response: Record<string, unknown>): void {
