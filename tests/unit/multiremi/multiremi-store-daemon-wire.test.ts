@@ -2,6 +2,7 @@
 // plus the issue-update paths that dispatch a task.
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
+import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
 import { buildTaskPrompt } from "@multiremi/prompt.js";
 import { configureRepositoryWikiAutomation, createStore, db, jsonResponse, mockFetch, resetMultiremiTestEnv } from "./helpers.js";
@@ -9,6 +10,80 @@ import { configureRepositoryWikiAutomation, createStore, db, jsonResponse, mockF
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi store — Go daemon wire shapes", () => {
+  it("preserves repository Wiki hydration diagnostics through daemon claim normalization", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    store.updateWorkspace("local", {
+      repos: [{
+        id: "repo_wiki_diagnostic",
+        name: "wiki-diagnostic",
+        url: "https://github.com/example/wiki-diagnostic",
+        source: "github",
+        default_branch: "main",
+      }],
+    });
+    const runtime = store.registerRuntime({
+      id: "rt_wiki_diagnostic",
+      name: "Wiki diagnostic runtime",
+      provider: "codex",
+      workspaceId: "local",
+    });
+    const agent = store.createAgent({
+      id: "agt_wiki_diagnostic",
+      name: "Wiki diagnostic agent",
+      provider: "codex",
+      runtimeId: runtime.id,
+    });
+    const task = store.createTask({ agentId: agent.id, prompt: "Inspect repository Wiki" });
+    const stored = store.createRepositoryWikiDoc("local", "repo_wiki_diagnostic", {
+      title: "Architecture",
+      path: "architecture.md",
+      body: "last known good body",
+    });
+    const diagnostic = `Repository wiki body unavailable for ${stored.id}: object not found`;
+    const hydrated = {
+      ...store.getTaskWithAgent(task.id)!,
+      repositoryWikiContexts: [{
+        repository: {
+          id: "repo_wiki_diagnostic",
+          name: "wiki-diagnostic",
+          url: "https://github.com/example/wiki-diagnostic",
+          defaultBranch: "main",
+        },
+        docs: [{
+          ...stored,
+          body: "",
+          status: "failed" as const,
+          statusMessage: diagnostic,
+          syncStatus: "failed" as const,
+          syncError: diagnostic,
+        }],
+      }],
+    };
+
+    const wire = daemonTaskClaimResponse(store, hydrated, null);
+    const wireDoc = (wire.repository_wiki_contexts as any[])[0].docs[0];
+    expect(wireDoc).toMatchObject({
+      id: stored.id,
+      body: "",
+      status: "failed",
+      status_message: diagnostic,
+      sync_status: "failed",
+      sync_error: diagnostic,
+    });
+
+    mockFetch(() => jsonResponse({ task: wire }));
+    const normalized = await new MultiremiDaemonClient("https://remi.example").claimTask(runtime.id);
+    expect(normalized?.repositoryWikiContexts?.[0]?.docs[0]).toMatchObject({
+      id: stored.id,
+      body: "",
+      status: "failed",
+      statusMessage: diagnostic,
+      syncStatus: "failed",
+      syncError: diagnostic,
+    });
+  });
+
   it("lists daemon pending tasks like Go runtime polling", async () => {
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_pending_codex", name: "pending", provider: "codex", workspaceId: "local" });

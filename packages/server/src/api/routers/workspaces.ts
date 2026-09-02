@@ -537,8 +537,8 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const hasPublishedWiki = store.listRepositoryWikiDocs(workspaceId, repositoryId).length > 0;
     const mode = hasPublishedWiki ? "lint" : "bootstrap_repository";
     const prompt = hasPublishedWiki
-      ? "Review and organize the existing Repository Wiki in Atlas lint mode. Read the complete current Wiki and repository evidence, repair structure and durable content, maintain root index.md and overview.md, append this run to root log.md, inspect remi wiki status and diff, then publish the coherent working copy."
-      : "Bootstrap the Repository Wiki from the checked-out default branch. Create root index.md, overview.md, and log.md plus functional-domain pages and directory overviews; resolve the checked-out HEAD revision, inspect remi wiki status and diff, then publish with remi wiki push --source-revision <sha>.";
+      ? "Review and organize the existing Repository Wiki in Atlas lint mode. Read the complete current Wiki and repository evidence, repair structure and durable content, maintain a non-empty root index.md, append this run to the non-empty root log.md without rewriting its history, and let repository semantics determine every other page and directory. Inspect remi wiki status and diff, then publish the coherent working copy."
+      : "Bootstrap the Repository Wiki from the checked-out default branch. Create a non-empty root index.md reading map and a non-empty append-only root log.md; let repository semantics determine whether overview.md, directories, or nesting are useful, without fixed directories or arbitrary depth limits. Resolve the checked-out HEAD revision, inspect remi wiki status and diff, then publish with remi wiki push --source-revision <sha>.";
     const run = store.runAutopilot(automation.id, {
       source: "api",
       prompt,

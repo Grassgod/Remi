@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { prepareIssueWikiWorkspace } from "@daemon/agent-runtime/workspace/wiki.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
+import { buildTaskPrompt } from "@multiremi/prompt.js";
 
 const roots: string[] = [];
 
@@ -136,6 +137,82 @@ describe("Issue Wiki workspace", () => {
       { id: "repo_empty", name: "empty", directory: "empty-po_empty" },
     ]);
     expect(manifest.docs).toMatchObject([{ id: "rwdoc_1", repositoryId: "repo_alpha", path: "alpha-po_alpha/architecture/overview.md" }]);
+  });
+
+  test("does not materialize unavailable repository Wiki bodies and reports them in the prompt", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-unavailable-repository-wiki-"));
+    roots.push(root);
+    const value = task("project", 1);
+    const repository = {
+      id: "repo_alpha",
+      name: "alpha",
+      url: "git@github.com:org/alpha.git",
+      defaultBranch: "main",
+    };
+    const prior = {
+      id: "rwdoc_prior",
+      workspaceId: "local",
+      repositoryId: repository.id,
+      path: "architecture/overview.md",
+      slug: "architecture/overview",
+      title: "Architecture",
+      summary: null,
+      body: "last known good facts",
+      tags: [],
+      refs: [],
+      sourceRevision: "abc123",
+      status: "healthy",
+      syncStatus: "ready",
+      version: 1,
+      updatedAt: "2026-08-18T00:00:00.000Z",
+    };
+    value.repositoryWikiContexts = [{ repository, docs: [prior] }];
+    await prepareIssueWikiWorkspace(root, value);
+
+    value.repositoryWikiContexts = [{
+      repository,
+      docs: [{
+        ...prior,
+        body: "",
+        status: "failed",
+        statusMessage: "Repository wiki body unavailable: checksum mismatch",
+        syncStatus: "failed",
+        syncError: "Repository wiki body unavailable: checksum mismatch",
+        version: 2,
+      }, {
+        ...prior,
+        id: "rwdoc_missing",
+        path: "operations/missing.md",
+        slug: "operations/missing",
+        title: "Missing runbook",
+        body: "",
+        status: "unavailable",
+        statusMessage: "Repository wiki body unavailable: object not found",
+        syncStatus: "failed",
+        syncError: "Repository wiki body unavailable: object not found",
+      }],
+    }];
+    await prepareIssueWikiWorkspace(root, value);
+
+    const repositoryRoot = join(root, "wiki", "repositories", "alpha-po_alpha");
+    expect(readFileSync(join(repositoryRoot, "architecture", "overview.md"), "utf8"))
+      .toBe("last known good facts\n");
+    expect(existsSync(join(repositoryRoot, "operations", "missing.md"))).toBeFalse();
+    const manifest = JSON.parse(readFileSync(
+      join(root, ".multiremi", "wiki-base", "repositories", "manifest.json"),
+      "utf8",
+    ));
+    expect(manifest.docs).toMatchObject([{ id: "rwdoc_prior", version: 1 }]);
+    expect(manifest.docs.some((doc: { id: string }) => doc.id === "rwdoc_missing")).toBeFalse();
+
+    const prompt = buildTaskPrompt(value);
+    expect(prompt).toContain("## Repository Wiki Availability Warnings");
+    expect(prompt).toContain("were not materialized as empty files");
+    expect(prompt).toContain("architecture/overview.md");
+    expect(prompt).toContain("checksum mismatch");
+    expect(prompt).toContain("operations/missing.md");
+    expect(prompt).toContain("object not found");
+    expect(prompt).toContain("report the page as blocked");
   });
 
   test("materializes repository Wiki for an SCM task without an Issue or Project", async () => {

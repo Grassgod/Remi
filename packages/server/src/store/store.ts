@@ -237,6 +237,7 @@ import type {
   MultiremiKnowledgeCompilationRun,
   MultiremiKnowledgeCompilationRunSource,
   MultiremiKnowledgeCompilationStatus,
+  MultiremiKnowledgeCursorPage,
   MultiremiKnowledgeSubmission,
   MultiremiKnowledgeSubmissionStatus,
   MultiremiIssueShare,
@@ -3472,6 +3473,10 @@ runMigrations(this.db);
     return this.knowledge.listSubmissions(input);
   }
 
+  listKnowledgeSubmissionsPage(input: KnowledgeListInput): MultiremiKnowledgeCursorPage<MultiremiKnowledgeSubmission> {
+    return this.knowledge.listSubmissionsPage(input);
+  }
+
   updateKnowledgeSubmissionStatus(
     id: string,
     status: MultiremiKnowledgeSubmissionStatus,
@@ -3492,6 +3497,10 @@ runMigrations(this.db);
 
   listKnowledgeCompilationRuns(input: KnowledgeRunListInput): MultiremiKnowledgeCompilationRun[] {
     return this.knowledge.listRuns(input);
+  }
+
+  listKnowledgeCompilationRunsPage(input: KnowledgeRunListInput): MultiremiKnowledgeCursorPage<MultiremiKnowledgeCompilationRun> {
+    return this.knowledge.listRunsPage(input);
   }
 
   completeKnowledgeCompilationRun(

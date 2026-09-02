@@ -73,6 +73,7 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
   appendTriggerCommentSection(sections, task);
 
   appendRepositoryWarnings(sections, opts.repoWarnings ?? []);
+  appendRepositoryWikiAvailabilityWarnings(sections, task);
 
   appendProjectPromptSections(sections, task, mode);
   if (mode === "bootstrap" && task.issue) appendProjectDiscoverySection(sections);
@@ -207,6 +208,29 @@ function appendRepositoryWarnings(sections: string[], warnings: TaskRepoWarning[
       sections.push(`- ${repoUrl}: checkout is unavailable because repository preparation failed. Do not claim that you inspected its source code. Diagnostic: ${message}`);
     }
   }
+}
+
+function appendRepositoryWikiAvailabilityWarnings(sections: string[], task: AgentTask): void {
+  const contexts = task.repositoryWikiContexts ?? task.repository_wiki_contexts ?? [];
+  const unavailable = contexts.flatMap((context) => context.docs
+    .filter(repositoryWikiDocUnavailable)
+    .map((doc) => ({ repository: context.repository, doc })));
+  if (!unavailable.length) return;
+  sections.push("");
+  sections.push("## Repository Wiki Availability Warnings");
+  sections.push("The current published bodies below could not be loaded and were not materialized as empty files. Treat any existing local copy as last-known-good rather than current. Do not claim that you inspected the current contents; reconstruct only from repository evidence, or report the page as blocked with its diagnostic.");
+  for (const { repository, doc } of unavailable) {
+    const diagnostic = doc.syncError ?? doc.sync_error ?? doc.statusMessage ?? doc.status_message
+      ?? "repository Wiki body unavailable";
+    sections.push(`- Repository ${inlineCode(repository.name)} (${inlineCode(repository.id)}), page ${inlineCode(doc.path)} (${inlineCode(doc.id)}): ${repositoryWarningMessage(diagnostic)}`);
+  }
+}
+
+function repositoryWikiDocUnavailable(doc: NonNullable<AgentTask["repositoryWikiContexts"]>[number]["docs"][number]): boolean {
+  const status = String(doc.status ?? "").trim().toLowerCase();
+  const syncStatus = String(doc.syncStatus ?? doc.sync_status ?? "").trim().toLowerCase();
+  return status === "failed" || status === "unavailable"
+    || syncStatus === "failed" || syncStatus === "unavailable";
 }
 
 function repositoryWarningMessage(value: string): string {
@@ -588,7 +612,7 @@ function appendProjectKnowledgeSections(sections: string[], projectId: string): 
   sections.push("");
   sections.push("Project Wiki is materialized in `./wiki`. Repository code facts are materialized in `./wiki/repositories/<repository>/`. Edit files only below `./wiki`; `.multiremi/wiki-base` is a read-only merge baseline and must not be edited.");
   sections.push("Repository Wiki is shared by every Project that references the same repository. Keep code-level facts there; keep cross-repository decisions and synthesis in the Project Wiki.");
-  sections.push("Organize new Wiki pages by functional domain in directories no deeper than five levels. Put each new page in the best existing directory, maintain an `overview.md` index for every functional directory, and keep directory prefixes out of page titles.");
+  sections.push("For every non-empty Wiki, maintain a non-empty root `index.md` as its curated reading map and append every publication to a non-empty root `log.md` without rewriting earlier entries. Beyond those two root files, let project and repository semantics determine whether `overview.md`, directories, or nesting are useful; do not impose fixed directory names, per-directory overview pages, or arbitrary depth limits, and do not mechanically mirror source paths.");
   sections.push("Search before creating a page. When facts overlap across pages, merge them into the authoritative page with all source references preserved instead of adding another near-duplicate page.");
   sections.push("Before finishing, run `remi wiki status` and `remi wiki push`. Push performs a three-way merge; resolve any reported conflicts in `./wiki`, then retry the push.");
   sections.push(`When durable Memory changes, search before writing and update an existing entry instead of creating a duplicate. Use \`remi memory create|update\` (project ${projectId}), cite \`issue:\`/\`task:\`/\`url:\` provenance, and skip one-off details.`);

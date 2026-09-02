@@ -1478,6 +1478,9 @@ function normalizeDaemonClaimRepositoryWikiContexts(raw: any): NonNullable<Multi
           refs: Array.isArray(doc.refs) ? doc.refs : [],
           sourceRevision: stringOrNull(doc.source_revision ?? doc.sourceRevision),
           status: stringOrNull(doc.status) ?? "healthy",
+          statusMessage: stringOrNull(doc.status_message ?? doc.statusMessage),
+          syncStatus: stringOrNull(doc.sync_status ?? doc.syncStatus),
+          syncError: stringOrNull(doc.sync_error ?? doc.syncError),
           version: numberOrDefault(doc.version, 1),
           updatedAt: stringOrNull(doc.updated_at ?? doc.updatedAt) ?? "",
         }];

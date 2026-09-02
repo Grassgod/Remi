@@ -299,6 +299,50 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(store.listProjectDocRevisions(doc.id)[0]?.compilationRunId).toBe(run.id);
     expect(store.listKnowledgeRunSources(run.id)).toHaveLength(1);
     expect(store.listKnowledgeRunOutputs(run.id)).toHaveLength(1);
+
+    const submissions = [
+      submission,
+      ...Array.from({ length: 2 }, (_, index) => store.createKnowledgeSubmission({
+        workspaceId,
+        projectId: project.id,
+        scope: "project_wiki",
+        sourceType: "external",
+        body: `pg-raw-${index}`,
+      }).submission),
+    ];
+    const firstSubmissions = store.listKnowledgeSubmissionsPage({ workspaceId, projectId: project.id, limit: 2 });
+    const remainingSubmissions = store.listKnowledgeSubmissionsPage({
+      workspaceId,
+      projectId: project.id,
+      cursor: firstSubmissions.nextCursor,
+      limit: 2,
+    });
+    expect(firstSubmissions.nextCursor).not.toBeNull();
+    expect(remainingSubmissions.nextCursor).toBeNull();
+    expect([...firstSubmissions.items, ...remainingSubmissions.items].map(({ id }) => id).sort()).toEqual(
+      submissions.map(({ id }) => id).sort(),
+    );
+
+    const runs = [
+      run,
+      ...Array.from({ length: 2 }, () => store.createKnowledgeCompilationRun({
+        workspaceId,
+        projectId: project.id,
+        mode: "manual_edit",
+      }).run),
+    ];
+    const firstRuns = store.listKnowledgeCompilationRunsPage({ workspaceId, projectId: project.id, limit: 2 });
+    const remainingRuns = store.listKnowledgeCompilationRunsPage({
+      workspaceId,
+      projectId: project.id,
+      cursor: firstRuns.nextCursor,
+      limit: 2,
+    });
+    expect(firstRuns.nextCursor).not.toBeNull();
+    expect(remainingRuns.nextCursor).toBeNull();
+    expect([...firstRuns.items, ...remainingRuns.items].map(({ id }) => id).sort()).toEqual(
+      runs.map(({ id }) => id).sort(),
+    );
   });
 
   const createDelegationFixture = () => {
