@@ -181,7 +181,6 @@ describe("Multiremi API — realtime websockets", () => {
     const unsubscribeWorkspaceEvents = store.onWorkspaceEvent((event) => workspaceEvents.push(event));
     const runtime = store.registerRuntime({ id: "rt_ws", name: "WS runtime", provider: "codex" });
     const agent = store.createAgent({ name: "WS Codex", provider: "codex" });
-    const updateRequest = store.createRuntimeUpdateRequest(runtime.id, { target_version: "v3.0.0" });
     const modelRequest = store.createRuntimeModelListRequest(runtime.id);
     const localSkillRequest = store.createRuntimeLocalSkillListRequest(runtime.id);
     const importOne = store.createRuntimeLocalSkillImportRequest(runtime.id, { skill_key: "ws-one" });
@@ -273,6 +272,8 @@ describe("Multiremi API — realtime websockets", () => {
         },
       });
 
+      store.cancelTask(queued.id);
+      const updateRequest = store.createRuntimeUpdateRequest(runtime.id, { target_version: "v3.0.0" });
       ws.send(JSON.stringify({
         type: "daemon:heartbeat",
         payload: { runtime_id: "rt_ws", supports_batch_import: true },
@@ -291,7 +292,6 @@ describe("Multiremi API — realtime websockets", () => {
       });
       expect(heartbeatAck.payload.pending_local_skill_imports.map((item: any) => item.id)).toEqual([importOne.id, importTwo.id]);
 
-      store.cancelTask(queued.id);
       expect(store.deleteRuntime(runtime.id)).toBeTrue();
       ws.send(JSON.stringify({
         type: "daemon:heartbeat",
