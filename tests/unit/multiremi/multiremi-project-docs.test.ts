@@ -427,11 +427,20 @@ describe("Bun Multiremi project docs", () => {
     expect(schema.authorType).toBeNull();
     expect(schema.version).toBe(1);
     expect(schema.body).toContain("# Wiki Schema");
+    expect(schema.body).toContain("进入不可变 Raw");
+    expect(schema.body).toContain("Repository Wiki 记录单仓库事实");
+    expect(schema.body).toContain("Memory 只保存未来任务会反复使用的稳定环境事实");
     expect(schema.body).toContain("能 update 就不要 create");
+    expect(schema.body).toContain("superseded 跳转页");
+    expect(schema.body).toContain("不得硬删");
+    expect(schema.body).toContain("两个非空根文件");
     expect(schema.body).toContain("index.md");
     expect(schema.body).toContain("overview.md");
     expect(schema.body).toContain("log.md");
-    expect(schema.body).toContain("目录深度不超过 5 层");
+    expect(schema.body).toContain("不预设 `overview.md`、固定目录、逐级目录入口或目录深度");
+    expect(schema.body).not.toContain("三个根文件");
+    expect(schema.body).not.toContain("目录深度不超过 5 层");
+    expect(schema.body).not.toContain("每个功能目录维护");
 
     // A second doc reuses the seeded one instead of seeding again.
     store.createProjectDoc(project.id, { kind: "wiki", title: "Second page" });

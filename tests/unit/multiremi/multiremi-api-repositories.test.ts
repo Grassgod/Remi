@@ -55,8 +55,10 @@ describe("Multiremi API - workspace repositories", () => {
       workspaceId: workspace.id,
       agentId: agent.id,
       autopilotRunId: expect.any(String),
-      prompt: expect.stringContaining("Create root index.md, overview.md, and log.md"),
+      prompt: expect.stringContaining("Create a non-empty root index.md reading map and a non-empty append-only root log.md"),
     });
+    expect(store.getTask(buildBody.task_id)?.prompt).toContain("let repository semantics determine whether overview.md, directories, or nesting are useful");
+    expect(store.getTask(buildBody.task_id)?.prompt).not.toContain("functional-domain pages and directory overviews");
     expect(store.getAutopilotRun(buildBody.run_id)?.payload).toEqual({
       repository_wiki_repository_id: "repo_wiki",
       repository_wiki_mode: "bootstrap_repository",
@@ -146,6 +148,9 @@ describe("Multiremi API - workspace repositories", () => {
     const firstBody = await first.json() as any;
     expect(firstBody).toMatchObject({ status: "running" });
     expect(store.getTask(firstBody.task_id)?.prompt).toContain("Atlas lint mode");
+    expect(store.getTask(firstBody.task_id)?.prompt).toContain("maintain a non-empty root index.md");
+    expect(store.getTask(firstBody.task_id)?.prompt).toContain("append this run to the non-empty root log.md without rewriting its history");
+    expect(store.getTask(firstBody.task_id)?.prompt).not.toContain("maintain root index.md and overview.md");
     expect(store.getAutopilotRun(firstBody.run_id)?.payload).toEqual({
       repository_wiki_repository_id: "repo_atlas",
       repository_wiki_mode: "lint",

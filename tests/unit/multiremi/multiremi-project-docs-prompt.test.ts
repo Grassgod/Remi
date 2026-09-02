@@ -106,8 +106,11 @@ describe("bootstrap and delta task prompts", () => {
     expect(artifact.prompt).toContain("`./.multiremi/sessions/`");
     expect(artifact.prompt).toContain("`remi wiki status`");
     expect(artifact.prompt).toContain("`remi wiki push`");
-    expect(artifact.prompt).toContain("`overview.md`");
-    expect(artifact.prompt).toContain("no deeper than five levels");
+    expect(artifact.prompt).toContain("non-empty root `index.md`");
+    expect(artifact.prompt).toContain("non-empty root `log.md`");
+    expect(artifact.prompt).toContain("let project and repository semantics determine whether `overview.md`, directories, or nesting are useful");
+    expect(artifact.prompt).not.toContain("no deeper than five levels");
+    expect(artifact.prompt).not.toContain("`overview.md` index for every functional directory");
   });
 
   it("does not claim repositories are mounted for a discussion Session", () => {

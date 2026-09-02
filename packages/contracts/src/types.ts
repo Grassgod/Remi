@@ -2802,6 +2802,30 @@ export interface MultiremiKnowledgeCompilationRun {
   completedAt: string | null;
 }
 
+export interface MultiremiKnowledgeSubmissionListInput {
+  workspaceId: string;
+  projectId?: string | null;
+  repositoryId?: string | null;
+  scope?: string | null;
+  status?: string | null;
+  cursor?: string | null;
+  limit?: number | null;
+}
+
+export interface MultiremiKnowledgeCompilationRunListInput {
+  workspaceId: string;
+  projectId?: string | null;
+  repositoryId?: string | null;
+  status?: string | null;
+  cursor?: string | null;
+  limit?: number | null;
+}
+
+export interface MultiremiKnowledgeCursorPage<T> {
+  items: T[];
+  nextCursor: string | null;
+}
+
 export interface MultiremiKnowledgeCompilationRunSource {
   id: string;
   runId: string;

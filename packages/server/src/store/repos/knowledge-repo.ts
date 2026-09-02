@@ -8,32 +8,21 @@ import type {
   MultiremiIssue,
   MultiremiKnowledgeCompilationAction,
   MultiremiKnowledgeCompilationOutput,
+  MultiremiKnowledgeCompilationRunListInput,
   MultiremiKnowledgeCompilationRun,
   MultiremiKnowledgeCompilationRunSource,
   MultiremiKnowledgeCompilationStatus,
+  MultiremiKnowledgeCursorPage,
   MultiremiKnowledgeScope,
   MultiremiKnowledgeSubmission,
+  MultiremiKnowledgeSubmissionListInput,
   MultiremiKnowledgeSubmissionStatus,
 } from "@multiremi/contracts/types.js";
 
 type Row = Record<string, unknown>;
 
-export interface KnowledgeListInput {
-  workspaceId: string;
-  projectId?: string | null;
-  repositoryId?: string | null;
-  scope?: string | null;
-  status?: string | null;
-  limit?: number | null;
-}
-
-export interface KnowledgeRunListInput {
-  workspaceId: string;
-  projectId?: string | null;
-  repositoryId?: string | null;
-  status?: string | null;
-  limit?: number | null;
-}
+export type KnowledgeListInput = MultiremiKnowledgeSubmissionListInput;
+export type KnowledgeRunListInput = MultiremiKnowledgeCompilationRunListInput;
 
 export interface RecordKnowledgeOutputInput {
   runId: string;
@@ -112,13 +101,11 @@ export class KnowledgeRepo {
   }
 
   listSubmissions(input: KnowledgeListInput): MultiremiKnowledgeSubmission[] {
-    const { sql, params } = knowledgeScopeWhere(input);
-    const limit = normalizeLimit(input.limit, 100);
-    const rows = this.ctx.db.query(
-      `SELECT * FROM multiremi_knowledge_submissions WHERE ${sql}
-       ORDER BY created_at DESC LIMIT ?`,
-    ).all(...params, limit) as Row[];
-    return rows.map(toSubmission);
+    return this.listSubmissionsPage(input).items;
+  }
+
+  listSubmissionsPage(input: KnowledgeListInput): MultiremiKnowledgeCursorPage<MultiremiKnowledgeSubmission> {
+    return this.listPage("multiremi_knowledge_submissions", "submission", input, toSubmission);
   }
 
   updateSubmissionStatus(id: string, status: MultiremiKnowledgeSubmissionStatus): MultiremiKnowledgeSubmission {
@@ -172,12 +159,11 @@ export class KnowledgeRepo {
   }
 
   listRuns(input: KnowledgeRunListInput): MultiremiKnowledgeCompilationRun[] {
-    const { sql, params } = knowledgeScopeWhere(input);
-    const limit = normalizeLimit(input.limit, 100);
-    return (this.ctx.db.query(
-      `SELECT * FROM multiremi_knowledge_compilation_runs WHERE ${sql}
-       ORDER BY created_at DESC LIMIT ?`,
-    ).all(...params, limit) as Row[]).map(toRun);
+    return this.listRunsPage(input).items;
+  }
+
+  listRunsPage(input: KnowledgeRunListInput): MultiremiKnowledgeCursorPage<MultiremiKnowledgeCompilationRun> {
+    return this.listPage("multiremi_knowledge_compilation_runs", "compilation run", input, toRun);
   }
 
   completeRun(
@@ -392,6 +378,38 @@ export class KnowledgeRepo {
        WHERE workspace_id = ? AND dedupe_key = ?`,
     ).get(workspaceId, dedupeKey) as Row | null;
     return row ? toRun(row) : null;
+  }
+
+  private listPage<T>(
+    table: "multiremi_knowledge_submissions" | "multiremi_knowledge_compilation_runs",
+    kind: "submission" | "compilation run",
+    input: KnowledgeListInput | KnowledgeRunListInput,
+    convert: (row: Row) => T,
+  ): MultiremiKnowledgeCursorPage<T> {
+    const { sql, params } = knowledgeScopeWhere(input);
+    const limit = normalizeLimit(input.limit, 100);
+    const cursor = cleanOptionalString(input.cursor);
+    let pageSql = sql;
+    const pageParams = [...params];
+    if (cursor) {
+      const cursorRow = this.ctx.db.query(
+        `SELECT id, created_at FROM ${table} WHERE ${sql} AND id = ?`,
+      ).get(...params, cursor) as Row | null;
+      if (!cursorRow) {
+        throw new Error(`Knowledge ${kind} cursor is invalid or does not match the requested scope`);
+      }
+      pageSql += " AND (created_at < ? OR (created_at = ? AND id < ?))";
+      pageParams.push(String(cursorRow.created_at), String(cursorRow.created_at), String(cursorRow.id));
+    }
+    const rows = this.ctx.db.query(
+      `SELECT * FROM ${table} WHERE ${pageSql}
+       ORDER BY created_at DESC, id DESC LIMIT ?`,
+    ).all(...pageParams, limit + 1) as Row[];
+    const pageRows = rows.length > limit ? rows.slice(0, limit) : rows;
+    return {
+      items: pageRows.map(convert),
+      nextCursor: rows.length > limit ? String(pageRows.at(-1)!.id) : null,
+    };
   }
 
   private findDuplicateSubmission(input: {

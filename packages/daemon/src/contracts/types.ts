@@ -209,6 +209,12 @@ export interface AgentTaskRepositoryWikiDoc {
   refs?: Array<{ type: string; value: string }>;
   sourceRevision?: string | null;
   status?: string;
+  statusMessage?: string | null;
+  status_message?: string | null;
+  syncStatus?: string | null;
+  sync_status?: string | null;
+  syncError?: string | null;
+  sync_error?: string | null;
   version?: number;
   updatedAt: string;
 }

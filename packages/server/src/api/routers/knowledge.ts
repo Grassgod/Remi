@@ -128,14 +128,19 @@ export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     try {
-      return c.json({ submissions: store.listKnowledgeSubmissions({
+      const page = store.listKnowledgeSubmissionsPage({
         workspaceId,
         projectId: clean(c.req.query("project_id")),
         repositoryId: clean(c.req.query("repository_id")),
         scope: clean(c.req.query("scope")),
         status: clean(c.req.query("status")),
+        cursor: clean(c.req.query("cursor")),
         limit: optionalInt(c.req.query("limit")),
-      }).map((submission) => submissionResponse(store, submission)) });
+      });
+      return c.json({
+        submissions: page.items.map((submission) => submissionResponse(store, submission)),
+        next_cursor: page.nextCursor,
+      });
     } catch (error) {
       return knowledgeError(c, error);
     }
@@ -153,30 +158,38 @@ export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
     const workspaceId = knowledgeWorkspaceId(c, c.req.query("workspace_id"));
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    const runs = store.listKnowledgeCompilationRuns({
-      workspaceId,
-      projectId: clean(c.req.query("project_id")),
-      repositoryId: clean(c.req.query("repository_id")),
-      status: clean(c.req.query("status")),
-      limit: optionalInt(c.req.query("limit")),
-    });
-    const repositories = new Map(
-      listWorkspaceRepositories(store, workspaceId).map((repository) => [repository.id, repository]),
-    );
-    const repositoryDocs = new Map<string, ReturnType<typeof store.listRepositoryWikiDocs>>();
-    return c.json({ runs: runs.map((run) => {
-      const docs = run.repositoryId
-        ? repositoryDocs.get(run.repositoryId)
-          ?? store.listRepositoryWikiDocs(run.workspaceId, run.repositoryId)
-        : [];
-      if (run.repositoryId && !repositoryDocs.has(run.repositoryId)) repositoryDocs.set(run.repositoryId, docs);
-      const detail = runRelationshipsResponse(store, run, { repositoryDocs: docs, includeSubmissions: false });
-      return {
-        ...runResponse(store, run, (repositoryId) => repositories.get(repositoryId)?.name ?? null),
-        sources: detail.sources,
-        outputs: detail.outputs,
-      };
-    }) });
+    try {
+      const page = store.listKnowledgeCompilationRunsPage({
+        workspaceId,
+        projectId: clean(c.req.query("project_id")),
+        repositoryId: clean(c.req.query("repository_id")),
+        status: clean(c.req.query("status")),
+        cursor: clean(c.req.query("cursor")),
+        limit: optionalInt(c.req.query("limit")),
+      });
+      const repositories = new Map(
+        listWorkspaceRepositories(store, workspaceId).map((repository) => [repository.id, repository]),
+      );
+      const repositoryDocs = new Map<string, ReturnType<typeof store.listRepositoryWikiDocs>>();
+      return c.json({
+        runs: page.items.map((run) => {
+          const docs = run.repositoryId
+            ? repositoryDocs.get(run.repositoryId)
+              ?? store.listRepositoryWikiDocs(run.workspaceId, run.repositoryId)
+            : [];
+          if (run.repositoryId && !repositoryDocs.has(run.repositoryId)) repositoryDocs.set(run.repositoryId, docs);
+          const detail = runRelationshipsResponse(store, run, { repositoryDocs: docs, includeSubmissions: false });
+          return {
+            ...runResponse(store, run, (repositoryId) => repositories.get(repositoryId)?.name ?? null),
+            sources: detail.sources,
+            outputs: detail.outputs,
+          };
+        }),
+        next_cursor: page.nextCursor,
+      });
+    } catch (error) {
+      return knowledgeError(c, error);
+    }
   });
 
   app.get("/api/knowledge/runs/:id", (c) => {

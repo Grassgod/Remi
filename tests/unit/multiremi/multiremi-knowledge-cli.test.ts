@@ -48,13 +48,13 @@ describe("knowledge CLI control plane", () => {
           return Response.json({ submission: { id: "ksub_1", status: "pending" }, deduplicated: false }, { status: 201 });
         }
         if (url.pathname === "/api/knowledge/submissions" && request.method === "GET") {
-          return Response.json({ submissions: [{ id: "ksub_1", status: "pending" }] });
+          return Response.json({ submissions: [{ id: "ksub_1", status: "pending" }], next_cursor: "ksub_next" });
         }
         if (url.pathname === "/api/knowledge/submissions/ksub_1") {
           return Response.json({ submission: { id: "ksub_1", status: "pending" } });
         }
         if (url.pathname === "/api/knowledge/runs" && request.method === "GET") {
-          return Response.json({ runs: [{ id: "krun_1", status: "published" }] });
+          return Response.json({ runs: [{ id: "krun_1", status: "published" }], next_cursor: "krun_next" });
         }
         if (url.pathname === "/api/knowledge/runs/krun_1") {
           return Response.json({ run: { id: "krun_1", status: "published" }, sources: [], outputs: [] });
@@ -73,9 +73,9 @@ describe("knowledge CLI control plane", () => {
     const common = ["--server", `http://127.0.0.1:${server.port}`, "--token", "task-token", "--workspace", "local", "--output", "json"];
     try {
       await dispatch(["knowledge", "submit", "--scope", "memory", "--project", "prj_1", "--slug", "fact", "--content", "raw body", ...common]);
-      await dispatch(["knowledge", "submissions", "--scope", "memory", "--status", "pending", ...common]);
+      await dispatch(["knowledge", "submissions", "--scope", "memory", "--status", "pending", "--limit", "1", "--cursor", "ksub_cursor", ...common]);
       await dispatch(["knowledge", "inspect", "ksub_1", ...common]);
-      await dispatch(["knowledge", "runs", "--status", "published", ...common]);
+      await dispatch(["knowledge", "runs", "--status", "published", "--limit", "1", "--cursor", "krun_cursor", ...common]);
       await dispatch(["knowledge", "run", "show", "krun_1", ...common]);
       await dispatch(["knowledge", "migrate-legacy", "--project", "prj_1", "--dry-run", "--batch-size", "25", ...common]);
       await dispatch(["memory", "publish", "--project", "prj_1", "--submission", "ksub_1", "--dedupe-key", "memory-1", "--title", "Fact", "--content", "curated", ...common]);
@@ -97,6 +97,20 @@ describe("knowledge CLI control plane", () => {
       dry_run: true,
       execute: false,
     });
+    const submissionListUrl = new URL(
+      requests.find((entry) => entry.method === "GET" && entry.path.startsWith("/api/knowledge/submissions?"))!.path,
+      "http://localhost",
+    );
+    expect(submissionListUrl.searchParams.get("limit")).toBe("1");
+    expect(submissionListUrl.searchParams.get("cursor")).toBe("ksub_cursor");
+    const runListUrl = new URL(
+      requests.find((entry) => entry.method === "GET" && entry.path.startsWith("/api/knowledge/runs?"))!.path,
+      "http://localhost",
+    );
+    expect(runListUrl.searchParams.get("limit")).toBe("1");
+    expect(runListUrl.searchParams.get("cursor")).toBe("krun_cursor");
+    expect(logs.join("\n")).toContain('"next_cursor": "ksub_next"');
+    expect(logs.join("\n")).toContain('"next_cursor": "krun_next"');
     expect(requests.find((entry) => entry.path === "/api/projects/prj_1/knowledge/publish")?.body).toMatchObject({
       submission_ids: ["ksub_1"],
       dedupe_key: "memory-1",

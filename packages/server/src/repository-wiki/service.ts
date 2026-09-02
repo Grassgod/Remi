@@ -1,4 +1,5 @@
 import { createId, nowIso } from "@multiremi/ids.js";
+import { createLogger } from "@shared/logger.js";
 import type {
   CreateRepositoryWikiDocInput,
   MultiremiRepositoryWikiDoc,
@@ -38,6 +39,8 @@ export interface RepositoryWikiServiceContract {
 
 export class RepositoryWikiUnavailableError extends Error {}
 
+const log = createLogger("repository-wiki");
+
 export class RepositoryWikiService implements RepositoryWikiServiceContract {
   constructor(
     private readonly store: MultiremiStore,
@@ -47,7 +50,23 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
 
   async list(workspaceId: string, repositoryId: string): Promise<MultiremiRepositoryWikiDoc[]> {
     const docs = this.store.listRepositoryWikiDocs(workspaceId, repositoryId);
-    return this.mode === "sql" ? docs : Promise.all(docs.map((doc) => this.hydrate(doc)));
+    if (this.mode === "sql") return docs;
+    return Promise.all(docs.map(async (doc) => {
+      try {
+        return await this.hydrate(doc);
+      } catch (error) {
+        const message = repositoryWikiHydrationError(doc, error);
+        log.warn(message);
+        return {
+          ...doc,
+          body: "",
+          status: "failed",
+          statusMessage: message,
+          syncStatus: "failed",
+          syncError: message,
+        };
+      }
+    }));
   }
 
   async listWorkspace(workspaceId: string): Promise<MultiremiRepositoryWikiDoc[]> {
@@ -290,3 +309,7 @@ function clampLimit(value: number): number { return Math.max(1, Math.min(100, Ma
 function positiveInt(value: string | undefined, fallback: number): number { const parsed = Number.parseInt(String(value ?? ""), 10); return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback; }
 function parseMode(value: string | undefined): ProjectKnowledgeMode { const mode = String(value ?? "sql").toLowerCase(); if (mode === "sql" || mode === "shadow" || mode === "openviking") return mode; throw new Error("invalid knowledge mode"); }
 function requireSnapshot(value: string | null): string { if (!value) throw new RepositoryWikiUnavailableError("OpenViking snapshot commit returned no OID"); return value; }
+function repositoryWikiHydrationError(doc: MultiremiRepositoryWikiDoc, error: unknown): string {
+  const detail = error instanceof Error ? error.message : String(error);
+  return `Repository wiki body unavailable for ${doc.id}: ${detail}`.slice(0, 1_000);
+}

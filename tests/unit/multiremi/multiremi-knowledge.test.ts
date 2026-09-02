@@ -44,6 +44,144 @@ describe("knowledge compilation control plane", () => {
     expect(next.submission.id).not.toBe(first.submission.id);
   });
 
+  it("paginates submissions and compilation runs with stable composite ordering", () => {
+    const store = createStore();
+    const project = store.createProject({ title: "Knowledge pagination" });
+    const submissions = Array.from({ length: 3 }, (_, index) => store.createKnowledgeSubmission({
+      workspaceId: "local",
+      projectId: project.id,
+      scope: "memory",
+      sourceType: "external",
+      body: `raw-${index}`,
+    }).submission);
+    const runs = Array.from({ length: 3 }, () => store.createKnowledgeCompilationRun({
+      workspaceId: "local",
+      projectId: project.id,
+      mode: "manual_edit",
+    }).run);
+    const createdAt = "2026-09-03T10:00:00.000Z";
+    for (const submission of submissions) {
+      db!.run("UPDATE multiremi_knowledge_submissions SET created_at = ? WHERE id = ?", [createdAt, submission.id]);
+    }
+    for (const run of runs) {
+      db!.run("UPDATE multiremi_knowledge_compilation_runs SET created_at = ? WHERE id = ?", [createdAt, run.id]);
+    }
+
+    const expectedSubmissionIds = submissions.map(({ id }) => id).sort().reverse();
+    const firstSubmissions = store.listKnowledgeSubmissionsPage({
+      workspaceId: "local",
+      projectId: project.id,
+      limit: 2,
+    });
+    expect(firstSubmissions.items.map(({ id }) => id)).toEqual(expectedSubmissionIds.slice(0, 2));
+    expect(firstSubmissions.nextCursor).toBe(expectedSubmissionIds[1]);
+    const remainingSubmissions = store.listKnowledgeSubmissionsPage({
+      workspaceId: "local",
+      projectId: project.id,
+      cursor: firstSubmissions.nextCursor,
+      limit: 2,
+    });
+    expect(remainingSubmissions.items.map(({ id }) => id)).toEqual(expectedSubmissionIds.slice(2));
+    expect(remainingSubmissions.nextCursor).toBeNull();
+
+    const expectedRunIds = runs.map(({ id }) => id).sort().reverse();
+    const firstRuns = store.listKnowledgeCompilationRunsPage({
+      workspaceId: "local",
+      projectId: project.id,
+      limit: 2,
+    });
+    expect(firstRuns.items.map(({ id }) => id)).toEqual(expectedRunIds.slice(0, 2));
+    expect(firstRuns.nextCursor).toBe(expectedRunIds[1]);
+    const remainingRuns = store.listKnowledgeCompilationRunsPage({
+      workspaceId: "local",
+      projectId: project.id,
+      cursor: firstRuns.nextCursor,
+      limit: 2,
+    });
+    expect(remainingRuns.items.map(({ id }) => id)).toEqual(expectedRunIds.slice(2));
+    expect(remainingRuns.nextCursor).toBeNull();
+
+    const otherProject = store.createProject({ title: "Other pagination scope" });
+    expect(() => store.listKnowledgeSubmissionsPage({
+      workspaceId: "local",
+      projectId: otherProject.id,
+      cursor: firstSubmissions.nextCursor,
+    })).toThrow("cursor is invalid or does not match the requested scope");
+    expect(() => store.listKnowledgeCompilationRunsPage({
+      workspaceId: "local",
+      projectId: otherProject.id,
+      cursor: firstRuns.nextCursor,
+    })).toThrow("cursor is invalid or does not match the requested scope");
+  });
+
+  it("returns and consumes next_cursor for submission and run API pages", async () => {
+    const store = createStore();
+    const project = store.createProject({ title: "Knowledge API pagination" });
+    const submissions = Array.from({ length: 3 }, (_, index) => store.createKnowledgeSubmission({
+      workspaceId: "local",
+      projectId: project.id,
+      scope: "project_wiki",
+      sourceType: "external",
+      body: `api-raw-${index}`,
+    }).submission);
+    const runs = Array.from({ length: 3 }, () => store.createKnowledgeCompilationRun({
+      workspaceId: "local",
+      projectId: project.id,
+      mode: "issue_ingest",
+    }).run);
+    const createdAt = "2026-09-03T11:00:00.000Z";
+    for (const submission of submissions) {
+      db!.run("UPDATE multiremi_knowledge_submissions SET created_at = ? WHERE id = ?", [createdAt, submission.id]);
+    }
+    for (const run of runs) {
+      db!.run("UPDATE multiremi_knowledge_compilation_runs SET created_at = ? WHERE id = ?", [createdAt, run.id]);
+    }
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const headers = { Authorization: "Bearer root-secret" };
+
+    const firstSubmissionResponse = await app.request(
+      `/api/knowledge/submissions?workspace_id=local&project_id=${project.id}&limit=2`,
+      { headers },
+    );
+    expect(firstSubmissionResponse.status).toBe(200);
+    const firstSubmissions = await firstSubmissionResponse.json() as any;
+    expect(firstSubmissions.submissions).toHaveLength(2);
+    expect(firstSubmissions.next_cursor).toBe(firstSubmissions.submissions[1].id);
+    const secondSubmissions = await (await app.request(
+      `/api/knowledge/submissions?workspace_id=local&project_id=${project.id}&limit=2&cursor=${firstSubmissions.next_cursor}`,
+      { headers },
+    )).json() as any;
+    expect(secondSubmissions.submissions).toHaveLength(1);
+    expect(secondSubmissions.next_cursor).toBeNull();
+    expect(new Set([...firstSubmissions.submissions, ...secondSubmissions.submissions].map(({ id }: any) => id))).toEqual(
+      new Set(submissions.map(({ id }) => id)),
+    );
+
+    const firstRunResponse = await app.request(
+      `/api/knowledge/runs?workspace_id=local&project_id=${project.id}&limit=2`,
+      { headers },
+    );
+    expect(firstRunResponse.status).toBe(200);
+    const firstRuns = await firstRunResponse.json() as any;
+    expect(firstRuns.runs).toHaveLength(2);
+    expect(firstRuns.next_cursor).toBe(firstRuns.runs[1].id);
+    const secondRuns = await (await app.request(
+      `/api/knowledge/runs?workspace_id=local&project_id=${project.id}&limit=2&cursor=${firstRuns.next_cursor}`,
+      { headers },
+    )).json() as any;
+    expect(secondRuns.runs).toHaveLength(1);
+    expect(secondRuns.next_cursor).toBeNull();
+    expect(new Set([...firstRuns.runs, ...secondRuns.runs].map(({ id }: any) => id))).toEqual(
+      new Set(runs.map(({ id }) => id)),
+    );
+
+    const invalidCursor = await app.request(
+      `/api/knowledge/runs?workspace_id=local&project_id=${project.id}&cursor=krun_missing`,
+      { headers },
+    );
+    expect(invalidCursor.status).toBe(400);
+  });
+
   it("derives publish capability from maintainer role and an enabled allowlisted plugin", () => {
     const store = createStore();
     store.ensureLocalWorkspace();

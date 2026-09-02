@@ -411,6 +411,56 @@ describe("ProjectKnowledgeService OpenViking mode", () => {
 });
 
 describe("RepositoryWikiService OpenViking mode", () => {
+  it("isolates unreadable pages in repository lists and marks their bodies unavailable", async () => {
+    const store = createStore();
+    const client = new FakeOpenViking();
+    const service = new RepositoryWikiService(store, client, "openviking");
+    const healthy = await service.create("local", "repo_alpha", {
+      title: "Healthy page",
+      path: "healthy.md",
+      body: "Readable repository knowledge",
+    });
+    const missing = await service.create("local", "repo_alpha", {
+      title: "Missing page",
+      path: "missing.md",
+      body: "This object will disappear",
+    });
+    const corrupt = await service.create("local", "repo_alpha", {
+      title: "Corrupt page",
+      path: "corrupt.md",
+      body: "This object will fail its checksum",
+    });
+    client.files.delete(missing.contentUri!);
+    client.files.set(corrupt.contentUri!, `${client.files.get(corrupt.contentUri!)}\ncorrupt`);
+
+    const docs = await service.list("local", "repo_alpha");
+
+    expect(docs).toHaveLength(3);
+    expect(docs.find((doc) => doc.id === healthy.id)).toMatchObject({
+      body: "Readable repository knowledge",
+      status: "healthy",
+      syncStatus: "ready",
+    });
+    for (const [unavailable, cause] of [[missing, "not found"], [corrupt, "checksum mismatch"]] as const) {
+      const result = docs.find((doc) => doc.id === unavailable.id);
+      expect(result).toMatchObject({
+        body: "",
+        status: "failed",
+        syncStatus: "failed",
+      });
+      expect(result?.statusMessage)
+        .toContain(`Repository wiki body unavailable for ${unavailable.id}`);
+      expect(result?.statusMessage).toContain(cause);
+      expect(result?.syncError).toBe(result?.statusMessage);
+      expect(store.getRepositoryWikiDocByRef("local", "repo_alpha", unavailable.id)).toMatchObject({
+        status: "healthy",
+        statusMessage: null,
+        syncStatus: "ready",
+        syncError: null,
+      });
+    }
+  });
+
   it("keeps repository bodies scoped in OpenViking and preserves generated document ids", async () => {
     const store = createStore();
     const client = new FakeOpenViking();

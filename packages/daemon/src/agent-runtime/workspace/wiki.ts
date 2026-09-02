@@ -200,6 +200,11 @@ function prepareRepositoryWikiWorkspaces(workDir: string, task: AgentTask): void
     });
     ensureSafeDirectory(workDir, join(wikiRoot, repositoryDirectory));
     for (const doc of context.docs) {
+      if (repositoryWikiDocUnavailable(doc)) {
+        const prior = previousById.get(doc.id);
+        if (prior) next.push(prior);
+        continue;
+      }
       const relativePath = validRepositoryManifestPath(doc.path) ? doc.path : null;
       if (!relativePath) throw new Error(`Repository Wiki path is invalid: ${doc.path}`);
       const path = join(repositoryDirectory, ...relativePath.split("/"));
@@ -227,6 +232,13 @@ function prepareRepositoryWikiWorkspaces(workDir: string, task: AgentTask): void
     repositories: repositories.sort((left, right) => left.name.localeCompare(right.name)),
     docs: next.sort((left, right) => left.path.localeCompare(right.path)),
   } satisfies RepositoryWikiManifest);
+}
+
+function repositoryWikiDocUnavailable(doc: AgentTaskRepositoryWikiDoc): boolean {
+  const status = String(doc.status ?? "").trim().toLowerCase();
+  const syncStatus = String(doc.syncStatus ?? doc.sync_status ?? "").trim().toLowerCase();
+  return status === "failed" || status === "unavailable"
+    || syncStatus === "failed" || syncStatus === "unavailable";
 }
 
 function repositoryManifestEntry(
