@@ -29,6 +29,7 @@ import {
 import { type StoreContext } from "@multiremi/store/context.js";
 import { canonicalizeDaemonRoutingWithinTransaction } from "@multiremi/store/daemon-routing.js";
 import { RuntimeRequestQueue, type RuntimeRequestSpec } from "@multiremi/store/repos/runtime-request-queue.js";
+import { runtimeDaemonAliases } from "@multiremi/store/runtime-affinity.js";
 import {
   redactRuntimeCommandArgs,
   redactRuntimeCommandText,
@@ -115,6 +116,7 @@ const RUNTIME_MODEL_LIST_PENDING_TIMEOUT_MS = 30 * 1000;
 const RUNTIME_MODEL_LIST_RUNNING_TIMEOUT_MS = 60 * 1000;
 const RUNTIME_UPDATE_PENDING_TIMEOUT_MS = 120 * 1000;
 const RUNTIME_UPDATE_RUNNING_TIMEOUT_MS = 20 * 60 * 1000;
+const RUNTIME_UPDATE_RECENT_DISPATCH_MS = 90 * 1000;
 const RUNTIME_LOCAL_SKILL_PENDING_TIMEOUT_MS = 3 * 60 * 1000;
 const RUNTIME_LOCAL_SKILL_RUNNING_TIMEOUT_MS = 60 * 1000;
 const RUNTIME_DIRECTORY_SCAN_PENDING_TIMEOUT_MS = 3 * 60 * 1000;
@@ -147,6 +149,7 @@ const UPDATE_REQUESTS: RuntimeRequestSpec<MultiremiRuntimeUpdateRequest> = {
   table: "multiremi_runtime_update_requests",
   idPrefix: "rup",
   pendingTimeoutMs: RUNTIME_UPDATE_PENDING_TIMEOUT_MS,
+  pendingDeadlineColumn: "updated_at",
   runningTimeoutMs: RUNTIME_UPDATE_RUNNING_TIMEOUT_MS,
   pendingTimeoutError: "daemon did not respond within 120 seconds",
   runningTimeoutError: "update did not complete within 20 minutes",
@@ -1079,7 +1082,51 @@ export class RuntimesRepo {
   }
 
   claimRuntimeUpdateRequest(runtimeId: string): MultiremiRuntimeUpdateRequest | null {
-    return this.updateQueue.claim(runtimeId);
+    return this.withRuntimeLifecycleLock(runtimeId, (runtime) => {
+      const pending = this.ctx.db.query(
+        `SELECT id, scope FROM multiremi_runtime_update_requests
+         WHERE runtime_id = ? AND status = 'pending'
+         ORDER BY created_at ASC
+         LIMIT 1`,
+      ).get(runtimeId) as { id?: string; scope?: string } | null;
+      if (pending?.scope === "cli" && this.hasExecutingTasksForDaemon(runtime)) {
+        // Heartbeats are the lease renewal while the old daemon drains. The
+        // request remains pending, so every provider on this daemon stays
+        // fenced from claiming replacement work.
+        this.ctx.db.run(
+          "UPDATE multiremi_runtime_update_requests SET updated_at = ? WHERE id = ? AND status = 'pending'",
+          [nowIso(), String(pending.id)],
+        );
+        return null;
+      }
+      return this.updateQueue.claim(runtimeId);
+    });
+  }
+
+  /** Whether Task dispatch must pause while this physical daemon drains/upgrades. */
+  hasCliUpdateDrainForRuntime(runtimeId: string): boolean {
+    const runtime = this.getRuntime(runtimeId);
+    if (!runtime) return false;
+    const runtimeIds = this.runtimeIdsForDaemon(runtime);
+    if (!runtimeIds.length) return false;
+    const activeRows = this.ctx.db.query(
+      `SELECT runtime_id FROM multiremi_runtime_update_requests
+       WHERE runtime_id IN (${runtimeIds.map(() => "?").join(", ")})
+         AND scope = 'cli'
+         AND status IN ('pending', 'running')`,
+    ).all(...runtimeIds) as Array<{ runtime_id?: unknown }>;
+    if (!activeRows.length) return false;
+    for (const id of new Set(activeRows.map((row) => String(row.runtime_id)))) {
+      this.updateQueue.expire(id);
+    }
+    const row = this.ctx.db.query(
+      `SELECT id FROM multiremi_runtime_update_requests
+       WHERE runtime_id IN (${runtimeIds.map(() => "?").join(", ")})
+         AND scope = 'cli'
+         AND status IN ('pending', 'running')
+       LIMIT 1`,
+    ).get(...runtimeIds) as { id?: string } | null;
+    return Boolean(row?.id);
   }
 
   reportRuntimeUpdateResult(runtimeId: string, requestId: string, input: ReportRuntimeUpdateInput): MultiremiRuntimeUpdateRequest {
@@ -1128,7 +1175,6 @@ export class RuntimesRepo {
     const queued: MultiremiRuntimeUpdateRequest[] = [];
     for (const runtimes of runtimesByDaemon.values()) {
       if (runtimes.some((runtime) => runtimeLaunchOwner(runtime) === "desktop")) continue;
-      if (runtimes.some((runtime) => runtime.activeTaskCount > 0)) continue;
       if (runtimes.some((runtime) => {
         const current = parseReleaseVersion(runtimeCliVersion(runtime));
         return current ? compareReleaseVersionParts(current, target.parts) >= 0 : false;
@@ -1683,6 +1729,35 @@ export class RuntimesRepo {
 
   private assertRuntimeOnline(runtime: MultiremiRuntime): void {
     if (runtime.status !== "online") throw new Error("runtime is offline");
+  }
+
+  private runtimeIdsForDaemon(runtime: MultiremiRuntime): string[] {
+    const aliases = runtimeDaemonAliases(runtime);
+    if (!aliases.length) return [];
+    const placeholders = aliases.map(() => "?").join(", ");
+    const rows = this.ctx.db.query(
+      `SELECT id FROM multiremi_runtimes
+       WHERE id IN (${placeholders})
+          OR daemon_id IN (${placeholders})
+          OR legacy_daemon_id IN (${placeholders})`,
+    ).all(...aliases, ...aliases, ...aliases) as Array<{ id?: unknown }>;
+    return rows.map((row) => String(row.id));
+  }
+
+  private hasExecutingTasksForDaemon(runtime: MultiremiRuntime): boolean {
+    const runtimeIds = this.runtimeIdsForDaemon(runtime);
+    if (!runtimeIds.length) return false;
+    const dispatchedCutoff = new Date(Date.now() - RUNTIME_UPDATE_RECENT_DISPATCH_MS).toISOString();
+    const row = this.ctx.db.query(
+      `SELECT id FROM multiremi_tasks
+       WHERE runtime_id IN (${runtimeIds.map(() => "?").join(", ")})
+         AND (
+           status IN ('running', 'waiting_local_directory', 'awaiting_human')
+           OR (status = 'dispatched' AND dispatched_at IS NOT NULL AND dispatched_at >= ?)
+         )
+       LIMIT 1`,
+    ).get(...runtimeIds, dispatchedCutoff) as { id?: string } | null;
+    return Boolean(row?.id);
   }
 
   /**

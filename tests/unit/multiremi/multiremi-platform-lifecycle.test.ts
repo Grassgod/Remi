@@ -142,6 +142,10 @@ describe("platform lifecycle", () => {
         metadata: { cli_version: "v0.2.56", launched_by: "cli" },
       });
     }
+    const busyAgent = store.createAgent({ name: "Wiki curator", provider: "codex" });
+    const busyTask = store.createTask({ agentId: busyAgent.id, prompt: "curate the wiki" });
+    expect(store.claimTask("rt_old_codex")?.id).toBe(busyTask.id);
+    store.startTask(busyTask.id);
     store.registerRuntime({
       id: "rt_current",
       name: "current",
@@ -187,6 +191,23 @@ describe("platform lifecycle", () => {
       target_version: "0.2.58",
       status: "pending",
     }]);
+
+    // The update intent fences every provider on the physical daemon. The
+    // running Wiki task drains normally, but replacement work cannot starve
+    // the upgrade and heartbeat does not deliver it while execution is live.
+    const replacement = store.createTask({ agentId: busyAgent.id, prompt: "next wiki job" });
+    expect(store.claimTask("rt_old_codex")).toBeNull();
+    expect(store.heartbeatRuntime("rt_old_claude").pending_update).toBeUndefined();
+
+    store.completeTask(busyTask.id, { output: "done" });
+    const updateAck = store.heartbeatRuntime("rt_old_claude");
+    expect(updateAck.pending_update).toMatchObject({ target_version: "0.2.58", scope: "cli" });
+    expect(store.claimTask("rt_old_codex")).toBeNull();
+    store.reportRuntimeUpdateResult("rt_old_claude", updateAck.pending_update!.id, {
+      status: "completed",
+      output: "updated",
+    });
+    expect(store.claimTask("rt_old_codex")?.id).toBe(replacement.id);
 
     // Updater heartbeats are frequent; release history keeps reconciliation idempotent.
     expect((await heartbeat()).status).toBe(200);

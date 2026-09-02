@@ -876,6 +876,11 @@ export class TasksRepo {
       }
       this.ctx.runtimes().heartbeatRuntime(runtimeId, { claimPending: false });
 
+      // A pending/running CLI update is a daemon-wide drain fence. Do not let
+      // another provider on the same machine fill the idle slot between the
+      // last in-flight Task finishing and the daemon claiming its update.
+      if (this.ctx.runtimes().hasCliUpdateDrainForRuntime(runtimeId)) return null;
+
       const stale = this.reclaimStaleDispatchedTaskForRuntime(runtimeId);
       if (stale) return this.snapshotTaskExecution(stale, lockedRuntime);
 

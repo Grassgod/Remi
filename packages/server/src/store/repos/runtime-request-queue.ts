@@ -28,6 +28,8 @@ export interface RuntimeRequestSpec<T> {
   idPrefix: string;
   /** How long a row may sit `pending` before the daemon is presumed unreachable. */
   pendingTimeoutMs: number;
+  /** Column used as the pending deadline anchor. Defaults to the immutable creation time. */
+  pendingDeadlineColumn?: "created_at" | "updated_at";
   /** How long a row may stay `running` before the daemon is presumed stuck. */
   runningTimeoutMs: number;
   /** `error` written when `pendingTimeoutMs` elapses. */
@@ -102,10 +104,11 @@ export class RuntimeRequestQueue<T> {
     const now = nowIso();
     const pendingCutoff = new Date(Date.now() - this.spec.pendingTimeoutMs).toISOString();
     const runningCutoff = new Date(Date.now() - this.spec.runningTimeoutMs).toISOString();
+    const pendingDeadlineColumn = this.spec.pendingDeadlineColumn ?? "created_at";
     this.db.run(
       `UPDATE ${this.spec.table}
        SET status = 'timeout', error = '${this.spec.pendingTimeoutError}', updated_at = ?
-       WHERE runtime_id = ? AND status = 'pending' AND created_at < ?`,
+       WHERE runtime_id = ? AND status = 'pending' AND ${pendingDeadlineColumn} < ?`,
       [now, runtimeId, pendingCutoff],
     );
     this.db.run(

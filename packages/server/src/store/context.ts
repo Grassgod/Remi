@@ -365,6 +365,7 @@ export interface IssueSessionsSurface {
 export interface RuntimesSurface {
   getRuntime(id: string): MultiremiRuntime | null;
   listRuntimes(): MultiremiRuntime[];
+  hasCliUpdateDrainForRuntime(runtimeId: string): boolean;
   createRuntimeCommandRequest(runtimeId: string, input: import("@multiremi/contracts/types.js").CreateRuntimeCommandInput): MultiremiRuntimeCommandRequest;
   getRuntimeCommandRequest(runtimeId: string, requestId: string): MultiremiRuntimeCommandRequest | null;
   getRuntimeByDaemonAndProvider(daemonId: string, provider: string): MultiremiRuntime | null;

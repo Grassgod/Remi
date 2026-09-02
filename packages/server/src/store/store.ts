@@ -2533,6 +2533,10 @@ runMigrations(this.db);
     return this.runtimes.getRuntimeUpdateRequest(runtimeId, requestId);
   }
 
+  hasCliUpdateDrainForRuntime(runtimeId: string): boolean {
+    return this.runtimes.hasCliUpdateDrainForRuntime(runtimeId);
+  }
+
   claimRuntimeUpdateRequest(runtimeId: string): MultiremiRuntimeUpdateRequest | null {
     return this.runtimes.claimRuntimeUpdateRequest(runtimeId);
   }
