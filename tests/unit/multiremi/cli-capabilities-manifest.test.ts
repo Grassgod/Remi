@@ -188,7 +188,7 @@ describe("CLI capabilities manifest", () => {
       deprecated_since: "0.3.0",
     });
     expect(Object.values(manifest.routes).filter((route) => "planned_command" in route)).toEqual([]);
-    expect(Object.keys(manifest.aliases)).toHaveLength(46);
+    expect(Object.keys(manifest.aliases)).toHaveLength(47);
     for (const [legacy, alias] of Object.entries(manifest.aliases)) {
       expect(migrationDoc, legacy).toContain(`| \`${legacy}\` | \`${alias.replacement}\` |`);
     }

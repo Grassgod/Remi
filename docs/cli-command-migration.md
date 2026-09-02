@@ -82,6 +82,11 @@ remi platform operation cancel <operation> --yes
 
 ## Deprecated aliases
 
+`remi wiki lint` is deprecated since `0.2.58` with no CLI replacement. Wiki
+review and organization now belong to Atlas lint mode; the legacy heuristic
+scan remains hidden and executable for one release so in-flight task prompts
+do not fail. It must be removed after that compatibility window.
+
 All aliases below are deprecated since `0.3.0`. They remain executable for at
 least one complete release cycle. Removal requires all supported platform and
 daemon versions to advertise the canonical capability, prompt and skill audits
@@ -90,6 +95,7 @@ remove any alias.
 
 | Deprecated command | Canonical replacement | Lifecycle |
 | --- | --- | --- |
+| `remi wiki lint` | `remi wiki internal-lint` | Hidden one-release compatibility only; use Atlas lint mode for review |
 | `remi project delete` | `remi project archive` | One-release compatibility alias |
 | `remi repo import` | `remi repo create` | One-release compatibility alias |
 | `remi memory recall` | `remi memory search` | One-release compatibility alias |

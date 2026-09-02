@@ -23,6 +23,8 @@ const state = vi.hoisted(() => ({
   docs: [] as unknown[],
   repositories: [] as unknown[],
   summaries: [] as unknown[],
+  projectDetails: {} as Record<string, unknown>,
+  repositoryDocs: {} as Record<string, unknown[]>,
   submissions: [] as unknown[],
   runs: [] as unknown[],
   runDetail: null as unknown,
@@ -57,8 +59,22 @@ vi.mock("@tanstack/react-query", () => ({
     }
     if (key[0] === "repositories") {
       const summaries = key[2] === "wiki-summaries";
+      const docs = key[3] === "wiki";
       return {
-        data: summaries ? state.summaries : { repositories: state.repositories, total: state.repositories.length },
+        data: summaries
+          ? state.summaries
+          : docs
+            ? state.repositoryDocs[String(key[2])] ?? []
+            : { repositories: state.repositories, total: state.repositories.length },
+        isPending: state.basePending,
+        isError: state.baseError !== null,
+        error: state.baseError,
+        refetch: refetchBase,
+      };
+    }
+    if (key[0] === "project-docs") {
+      return {
+        data: state.projectDetails[String(key.at(-1))],
         isPending: state.basePending,
         isError: state.baseError !== null,
         error: state.baseError,
@@ -77,7 +93,12 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 
 vi.mock("@multiremi/core/project-docs", () => ({
-  workspaceDocListOptions: () => ({ queryKey: ["workspace-docs"] }),
+  workspaceDocListOptions: (_workspaceId: string, input?: { kind?: string; includeBody?: boolean }) => ({
+    queryKey: ["workspace-docs", input?.kind ?? "all", input?.includeBody ? "body" : "metadata"],
+  }),
+  projectDocDetailOptions: (_workspaceId: string, projectId: string, ref: string) => ({
+    queryKey: ["project-docs", "ws-1", projectId, "detail", ref],
+  }),
 }));
 vi.mock("@multiremi/core/knowledge", () => ({
   knowledgeSubmissionsOptions: () => ({ queryKey: ["knowledge", "ws-1", "submissions"] }),
@@ -112,6 +133,9 @@ vi.mock("../common/actor-avatar", () => ({
 }));
 vi.mock("../common/task-transcript", () => ({
   TranscriptButton: ({ title }: { title: string }) => <button type="button">{title}</button>,
+}));
+vi.mock("../editor", () => ({
+  ReadonlyContent: ({ content }: { content: string }) => <div data-testid="wiki-body">{content}</div>,
 }));
 vi.mock("../projects/components/project-icon", () => ({
   ProjectIcon: ({ project }: { project: Project }) => <span>{project.icon ?? "folder"}</span>,
@@ -204,7 +228,8 @@ function renderPage() {
 describe("KnowledgePage", () => {
   beforeEach(() => {
     Object.assign(state, {
-      projects: [], docs: [], repositories: [], summaries: [], submissions: [], runs: [], runDetail: null,
+      projects: [], docs: [], repositories: [], summaries: [], projectDetails: {}, repositoryDocs: {},
+      submissions: [], runs: [], runDetail: null,
       basePending: false, submissionsPending: false, runsPending: false, runDetailPending: false,
       baseError: null, submissionsError: null, runsError: null,
     });
@@ -226,6 +251,9 @@ describe("KnowledgePage", () => {
     renderPage();
     expect(state.observedQueries.find(({ key }) => key[0] === "knowledge" && key[2] === "submissions")?.enabled).toBe(false);
     expect(state.observedQueries.find(({ key }) => key[0] === "knowledge" && key[2] === "runs")?.enabled).toBe(false);
+    expect(state.observedQueries.some(({ key, enabled }) => (
+      key[0] === "workspace-docs" && key[2] === "body" && enabled !== false
+    ))).toBe(false);
   });
 
   it("keeps the Wiki pane loading until its formal sources resolve", () => {
@@ -234,25 +262,34 @@ describe("KnowledgePage", () => {
     expect(screen.getByTestId("knowledge-loading")).toBeInTheDocument();
   });
 
-  it("keeps Project Wiki and Repository Wiki as separate formal groups", () => {
+  it("browses Project Wiki and Repository Wiki as separate formal sources", () => {
     state.projects = [project({ id: "proj-1", title: "Apollo" })];
     state.docs = [
       doc({ id: "schema", slug: "_schema", title: "Schema" }),
       doc({ id: "memory", kind: "memory", title: "Agent-only memory" }),
-      doc({ id: "runbook", title: "Deployment runbook" }),
+      doc({ id: "index", slug: "index", path: "index.md", title: "Reading map", body: "" }),
+      doc({ id: "runbook", slug: "runbook", path: "operations/runbook.md", title: "Deployment runbook", body: "" }),
     ];
+    state.projectDetails.index = doc({ id: "index", slug: "index", path: "index.md", title: "Reading map", body: "Project Wiki index body" });
     state.repositories = [repository({ id: "repo-1", name: "web" })];
     state.summaries = [summary({ repository_id: "repo-1", page_count: 3 })];
+    state.repositoryDocs["repo-1"] = [
+      doc({ id: "repo-index", slug: "index", path: "index.md", title: "Repository map", body: "Repository Wiki index body" }),
+      doc({ id: "repo-overview", slug: "overview", path: "overview.md", title: "Overview" }),
+      doc({ id: "repo-log", slug: "log", path: "log.md", title: "Change log" }),
+    ];
     renderPage();
 
-    expect(screen.getByText("Projects")).toBeInTheDocument();
-    expect(screen.getByText("Repositories")).toBeInTheDocument();
-    const row = screen.getByTestId("knowledge-project-proj-1");
-    expect(row).toHaveAttribute("href", "/ws/projects/proj-1/wiki/runbook");
-    expect(row).toHaveTextContent("Apollo");
-    expect(row).toHaveTextContent("1");
+    const projectSource = screen.getByTestId("knowledge-project-proj-1");
+    expect(projectSource).toHaveTextContent("Apollo");
+    expect(projectSource).toHaveTextContent("2");
+    expect(screen.getByTestId("wiki-body")).toHaveTextContent("Project Wiki index body");
+    expect(screen.getByRole("link", { name: /Full page/ })).toHaveAttribute("href", "/ws/projects/proj-1/wiki/index");
     expect(screen.queryByText("Agent-only memory")).not.toBeInTheDocument();
-    expect(screen.getByText("3 code pages")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("knowledge-repository-repo-1"));
+    expect(screen.getByTestId("wiki-body")).toHaveTextContent("Repository Wiki index body");
+    expect(screen.getByRole("link", { name: /Full page/ })).toHaveAttribute("href", "/ws/repos/repo-1/wiki/index.md");
   });
 
   it("shows only formal memory in Memory and keeps memory Raw in Raw", () => {
@@ -362,12 +399,22 @@ describe("KnowledgePage", () => {
   it("searches within the active formal view", async () => {
     const user = userEvent.setup();
     state.projects = [project({ id: "proj-1", title: "Apollo" }), project({ id: "proj-2", title: "Borealis" })];
-    state.docs = [doc({ id: "runbook", title: "Deployment runbook" })];
+    state.docs = [
+      doc({ id: "runbook", path: "operations/deploy.md", title: "Deployment runbook" }),
+      doc({ id: "release", path: "operations/release.md", title: "Release checklist" }),
+      doc({ id: "borealis", project_id: "proj-2", project_title: "Borealis", path: "index.md", title: "Borealis index" }),
+    ];
+    state.projectDetails.runbook = doc({ id: "runbook", path: "operations/deploy.md", title: "Deployment runbook" });
     renderPage();
     const input = screen.getByPlaceholderText("Search Project or Repository Wiki...");
     await user.type(input, "deployment");
     expect(screen.getByText("Apollo")).toBeInTheDocument();
-    expect(screen.queryByText("Borealis")).not.toBeInTheDocument();
+    expect(screen.getByText("Borealis")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Deployment runbook/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Release checklist/ })).not.toBeInTheDocument();
+    expect(state.observedQueries.some(({ key, enabled }) => (
+      key[0] === "workspace-docs" && key[2] === "body" && enabled !== false
+    ))).toBe(false);
   });
 
   it("retries only the active control-plane query", () => {

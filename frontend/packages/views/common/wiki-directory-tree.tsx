@@ -32,6 +32,7 @@ export function WikiDirectoryTree({
   pages,
   selectedId,
   hrefFor,
+  onSelect,
   filter = "",
   noMatches,
   baseDepth = 0,
@@ -39,7 +40,8 @@ export function WikiDirectoryTree({
 }: {
   pages: readonly WikiTreePage[];
   selectedId?: string;
-  hrefFor: (page: WikiTreePage) => string;
+  hrefFor?: (page: WikiTreePage) => string;
+  onSelect?: (page: WikiTreePage) => void;
   filter?: string;
   noMatches: string;
   baseDepth?: number;
@@ -68,25 +70,14 @@ export function WikiDirectoryTree({
       <div role="list" aria-label="Wiki search results">
         {matches.map((page) => (
           <div key={page.id} role="listitem">
-            <AppLink
-              href={hrefFor(page)}
-              onClick={onNavigate}
-              aria-current={selectedId === page.id ? "page" : undefined}
-              className={cn(
-                "flex min-h-11 min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-sm",
-                selectedId === page.id
-                  ? "bg-accent font-medium text-foreground"
-                  : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
-              )}
-            >
-              <FileText className="size-3.5 shrink-0" />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate" title={page.title}>{displayWikiTitle(page)}</span>
-                <span className="block truncate text-xs font-normal text-muted-foreground" title={parentWikiPath(page.path)}>
-                  {parentWikiPath(page.path) || "/"}
-                </span>
-              </span>
-            </AppLink>
+            <WikiPageControl
+              page={page}
+              hrefFor={hrefFor}
+              onSelect={onSelect}
+              onNavigate={onNavigate}
+              active={selectedId === page.id}
+              searchResult
+            />
           </div>
         ))}
       </div>
@@ -104,6 +95,7 @@ export function WikiDirectoryTree({
           selectedFolders={selectedFolders}
           expanded={expanded}
           hrefFor={hrefFor}
+          onSelect={onSelect}
           onNavigate={onNavigate}
           onToggle={(path) => setExpanded((current) => {
             const next = new Set(current);
@@ -124,6 +116,7 @@ function WikiTreeNodeRow({
   selectedFolders,
   expanded,
   hrefFor,
+  onSelect,
   onNavigate,
   onToggle,
 }: {
@@ -132,7 +125,8 @@ function WikiTreeNodeRow({
   selectedId?: string;
   selectedFolders: readonly string[];
   expanded: ReadonlySet<string>;
-  hrefFor: (page: WikiTreePage) => string;
+  hrefFor?: (page: WikiTreePage) => string;
+  onSelect?: (page: WikiTreePage) => void;
   onNavigate?: () => void;
   onToggle: (path: string) => void;
 }) {
@@ -140,21 +134,14 @@ function WikiTreeNodeRow({
     const active = selectedId === node.page.id;
     return (
       <div role="treeitem">
-        <AppLink
-          href={hrefFor(node.page)}
-          onClick={onNavigate}
-          aria-current={active ? "page" : undefined}
-          className={cn(
-            "flex h-8 min-w-0 items-center gap-2 rounded-md pr-2 text-sm",
-            active
-              ? "bg-accent font-medium text-foreground"
-              : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
-          )}
+        <WikiPageControl
+          page={node.page}
+          hrefFor={hrefFor}
+          onSelect={onSelect}
+          onNavigate={onNavigate}
+          active={active}
           style={{ paddingLeft: `${8 + depth * 16 + 16}px` }}
-        >
-          <FileText className="size-3.5 shrink-0" />
-          <span className="truncate" title={node.page.title}>{displayWikiTitle(node.page)}</span>
-        </AppLink>
+        />
       </div>
     );
   }
@@ -205,6 +192,7 @@ function WikiTreeNodeRow({
               selectedFolders={selectedFolders}
               expanded={expanded}
               hrefFor={hrefFor}
+              onSelect={onSelect}
               onNavigate={onNavigate}
               onToggle={onToggle}
             />
@@ -212,6 +200,73 @@ function WikiTreeNodeRow({
         </div>
       )}
     </div>
+  );
+}
+
+function WikiPageControl({
+  page,
+  hrefFor,
+  onSelect,
+  onNavigate,
+  active,
+  searchResult = false,
+  style,
+}: {
+  page: WikiTreePage;
+  hrefFor?: (page: WikiTreePage) => string;
+  onSelect?: (page: WikiTreePage) => void;
+  onNavigate?: () => void;
+  active: boolean;
+  searchResult?: boolean;
+  style?: { paddingLeft: string };
+}) {
+  const className = cn(
+    searchResult
+      ? "flex min-h-11 w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm"
+      : "flex h-8 w-full min-w-0 items-center gap-2 rounded-md pr-2 text-left text-sm",
+    active
+      ? "bg-accent font-medium text-foreground"
+      : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+  );
+  const content = (
+    <>
+      <FileText className="size-3.5 shrink-0" />
+      {searchResult ? (
+        <span className="min-w-0 flex-1">
+          <span className="block truncate" title={page.title}>{displayWikiTitle(page)}</span>
+          <span className="block truncate text-xs font-normal text-muted-foreground" title={parentWikiPath(page.path)}>
+            {parentWikiPath(page.path) || "/"}
+          </span>
+        </span>
+      ) : <span className="truncate" title={page.title}>{displayWikiTitle(page)}</span>}
+    </>
+  );
+  if (hrefFor) {
+    return (
+      <AppLink
+        href={hrefFor(page)}
+        onClick={onNavigate}
+        aria-current={active ? "page" : undefined}
+        className={className}
+        style={style}
+      >
+        {content}
+      </AppLink>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        onSelect?.(page);
+        onNavigate?.();
+      }}
+      aria-current={active ? "page" : undefined}
+      className={className}
+      style={style}
+    >
+      {content}
+    </button>
   );
 }
 

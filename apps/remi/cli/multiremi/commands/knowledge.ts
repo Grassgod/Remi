@@ -76,6 +76,7 @@ export async function wiki(positional: string[], options: CliOptions): Promise<v
     return;
   }
   if (action === "lint") {
+    console.error("Deprecated command: multiremi wiki lint. Atlas lint mode now owns Wiki review and organization.");
     await wikiLint(options, requireProject("wiki", "lint", options));
     return;
   }
@@ -125,7 +126,7 @@ export async function wiki(positional: string[], options: CliOptions): Promise<v
     await backlinks("wiki", positional[1], options);
     return;
   }
-  throw new Error("usage: multiremi wiki list|search|read|create|update|delete|history|backlinks|pull|status|diff|mv|lint|merge|push ...");
+  throw new Error("usage: multiremi wiki list|search|read|create|update|delete|history|backlinks|pull|status|diff|mv|merge|push ...");
 }
 
 async function listKnowledge(kind: KnowledgeKind, options: CliOptions): Promise<void> {

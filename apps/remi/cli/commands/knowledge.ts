@@ -450,14 +450,15 @@ function wikiWorkingCopySpecs(): CommandSpec[] {
       );
     },
   ));
-  specs.push(spec(
-    "wiki.lint",
-    ["wiki", "lint"],
-    "Report duplicate, contradictory, orphaned, and broken-link Wiki pages",
+  specs.push({ ...spec(
+    "wiki.lint.compat",
+    ["wiki", "internal-lint"],
+    "Legacy heuristic Wiki scan retained for one compatibility release",
     "read",
     [],
     [PROJECT_OPTION],
     async (invocation) => {
+      console.error("Deprecated command: remi wiki lint. Atlas lint mode now owns Wiki review and organization.");
       const project = await resolveProject(
         await clientFor(invocation),
         requiredWorkspace(invocation),
@@ -465,7 +466,8 @@ function wikiWorkingCopySpecs(): CommandSpec[] {
       );
       await wikiLint(legacyOptions(invocation), String(project.id));
     },
-  ));
+    [{ path: ["wiki", "lint"], deprecatedSince: "0.2.58", hidden: true }],
+  ), hidden: true });
   specs.push(spec(
     "wiki.merge",
     ["wiki", "merge"],
@@ -635,7 +637,9 @@ function legacyOptions(invocation: CommandInvocation): CliOptions {
 function group(kind: KnowledgeKind | "knowledge", description: string): CommandSpec {
   const usage = kind === "knowledge"
     ? "submit|submissions|inspect|runs|run show|migrate-legacy"
-    : "list|search|get|create|update|delete|backlinks|publish";
+    : kind === "wiki"
+      ? "list|search|get|create|update|delete|backlinks|publish|pull|status|diff|mv|merge|push"
+      : "list|search|get|create|update|delete|backlinks|publish";
   return { id: kind, path: [kind], description, parse: "passthrough", run: async () => { throw new CliError("usage", `usage: remi ${kind} ${usage} ...`); } };
 }
 

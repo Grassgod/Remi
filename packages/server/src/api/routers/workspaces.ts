@@ -534,12 +534,17 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
         code: "repository_wiki_automation_required",
       }, 409);
     }
+    const hasPublishedWiki = store.listRepositoryWikiDocs(workspaceId, repositoryId).length > 0;
+    const mode = hasPublishedWiki ? "lint" : "bootstrap_repository";
+    const prompt = hasPublishedWiki
+      ? "Review and organize the existing Repository Wiki in Atlas lint mode. Read the complete current Wiki and repository evidence, repair structure and durable content, maintain root index.md and overview.md, append this run to root log.md, inspect remi wiki status and diff, then publish the coherent working copy."
+      : "Bootstrap the Repository Wiki from the checked-out default branch. Create root index.md, overview.md, and log.md plus functional-domain pages and directory overviews; resolve the checked-out HEAD revision, inspect remi wiki status and diff, then publish with remi wiki push --source-revision <sha>.";
     const run = store.runAutopilot(automation.id, {
       source: "api",
-      prompt: "Bootstrap or refresh the target repository LLM Wiki from its checked-out default branch. Use the code-to-wiki plugin for analysis, preserve durable repository facts, resolve the checked-out HEAD revision, publish changes with remi wiki push --source-revision <sha>, then run remi wiki lint --output json and resolve supported findings.",
-      payload: { repository_wiki_repository_id: repositoryId, repository_wiki_mode: "bootstrap_repository" },
+      prompt,
+      payload: { repository_wiki_repository_id: repositoryId, repository_wiki_mode: mode },
       repositoryId,
-      dedupeKey: repositoryWikiBuildDedupeKey(repositoryId, "bootstrap_repository", null),
+      dedupeKey: repositoryWikiBuildDedupeKey(repositoryId, mode, null),
       sourceTaskId: currentTaskParentId(c),
     });
     if (run.deduplicated) {

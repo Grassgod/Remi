@@ -55,7 +55,11 @@ describe("Multiremi API - workspace repositories", () => {
       workspaceId: workspace.id,
       agentId: agent.id,
       autopilotRunId: expect.any(String),
-      prompt: expect.stringContaining("repository LLM Wiki"),
+      prompt: expect.stringContaining("Create root index.md, overview.md, and log.md"),
+    });
+    expect(store.getAutopilotRun(buildBody.run_id)?.payload).toEqual({
+      repository_wiki_repository_id: "repo_wiki",
+      repository_wiki_mode: "bootstrap_repository",
     });
     const buildToken = await store.createTaskAccessToken(store.getTask(buildBody.task_id)!, "local");
     expect(buildToken.scopes).toContain("repository-wiki:maintainer");
@@ -141,6 +145,11 @@ describe("Multiremi API - workspace repositories", () => {
     expect(first.status).toBe(202);
     const firstBody = await first.json() as any;
     expect(firstBody).toMatchObject({ status: "running" });
+    expect(store.getTask(firstBody.task_id)?.prompt).toContain("Atlas lint mode");
+    expect(store.getAutopilotRun(firstBody.run_id)?.payload).toEqual({
+      repository_wiki_repository_id: "repo_atlas",
+      repository_wiki_mode: "lint",
+    });
 
     // A second click while the build is in flight returns the existing run.
     const duplicate = await app.request(buildPath, { method: "POST" });

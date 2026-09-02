@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   AlertCircle,
@@ -19,6 +19,7 @@ import {
   GitPullRequest,
   Library,
   Loader2,
+  PanelLeft,
   Search,
   Sparkles,
 } from "lucide-react";
@@ -35,16 +36,20 @@ import {
 } from "@multiremi/ui/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multiremi/ui/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@multiremi/ui/components/ui/tooltip";
-import { workspaceDocListOptions } from "@multiremi/core/project-docs";
+import { projectDocDetailOptions, workspaceDocListOptions } from "@multiremi/core/project-docs";
 import { knowledgeRunOptions, knowledgeRunsOptions, knowledgeSubmissionsOptions } from "@multiremi/core/knowledge";
 import { projectListOptions } from "@multiremi/core/projects/queries";
-import { repositoryListOptions, repositoryWikiSummariesOptions } from "@multiremi/core/repositories";
+import { repositoryListOptions, repositoryWikiDocsOptions, repositoryWikiSummariesOptions } from "@multiremi/core/repositories";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useWorkspacePaths } from "@multiremi/core/paths";
 import type {
   KnowledgeRunDetail,
+  KnowledgeCompilationOutput,
+  KnowledgeCompilationRun,
   KnowledgeSubmission,
   Project,
+  ProjectDoc,
+  RepositoryWikiDoc,
   RepositoryWikiSummary,
   WorkspaceDoc,
   WorkspaceRepository,
@@ -54,22 +59,31 @@ import { useActorName } from "@multiremi/core/workspace/hooks";
 import { AppLink } from "../navigation";
 import { ActorAvatar } from "../common/actor-avatar";
 import { EmptyState } from "../common/empty-state";
+import { DocRefs } from "../common/doc-refs";
+import { WikiDirectoryTree, WikiPathBreadcrumb, type WikiTreePage } from "../common/wiki-directory-tree";
+import { ReadonlyContent } from "../editor";
 import { TranscriptButton } from "../common/task-transcript";
 import { PageHeader } from "../layout/page-header";
 import { ProjectIcon } from "../projects/components/project-icon";
 import { MemoryCard } from "../projects/components/wiki/project-wiki-section";
 import { useFormatRelativeDate } from "../projects/components/labels";
-import { matchesPinyin } from "../editor/extensions/pinyin-match";
 import { useT } from "../i18n";
 
 type KnowledgeTab = "wiki" | "raw" | "memory" | "runs";
 type SortOrder = "newest" | "oldest";
 
-interface ProjectWikiRow {
-  project: Project;
-  docs: WorkspaceDoc[];
-  latestUpdatedAt: string | null;
+interface WikiSource {
+  key: string;
+  kind: "project" | "repository";
+  id: string;
+  name: string;
+  pageCount: number;
+  updatedAt: string | null;
 }
+
+type ReadableWikiDoc = Pick<ProjectDoc | RepositoryWikiDoc,
+  "id" | "path" | "title" | "summary" | "body" | "tags" | "refs" | "version" | "updated_at" | "compilation_run_id"
+> & { slug: string };
 
 function KnowledgeShell({ count, children }: { count?: number; children: ReactNode }) {
   const { t } = useT("projects");
@@ -120,74 +134,6 @@ function matchesDoc(doc: WorkspaceDoc, query: string): boolean {
     .some((value) => value.toLowerCase().includes(query));
 }
 
-function ProjectMaintainer({ project }: { project: Project }) {
-  const { getActorName } = useActorName();
-  if (!project.lead_type || !project.lead_id) return <span className="text-xs text-muted-foreground">--</span>;
-  return (
-    <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-      <ActorAvatar actorType={project.lead_type} actorId={project.lead_id} size={20} profileLink={false} />
-      <span className="truncate">{getActorName(project.lead_type, project.lead_id)}</span>
-    </span>
-  );
-}
-
-function ProjectWikiRowView({ row }: { row: ProjectWikiRow }) {
-  const { t } = useT("projects");
-  const paths = useWorkspacePaths();
-  const formatRelativeDate = useFormatRelativeDate();
-  const first = row.docs[0];
-  const href = first
-    ? paths.projectWikiPage(row.project.id, first.slug || first.id)
-    : paths.projectWiki(row.project.id);
-  return (
-    <AppLink
-      href={href}
-      data-testid={`knowledge-project-${row.project.id}`}
-      className="group grid min-h-14 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b px-4 transition-colors last:border-b-0 hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:min-h-11 sm:grid-cols-[minmax(220px,1fr)_80px_108px_minmax(128px,180px)_20px]"
-    >
-      <span className="flex min-w-0 items-center gap-2.5">
-        <span className="flex size-6 shrink-0 items-center justify-center rounded border bg-muted/50">
-          {row.project.icon ? <ProjectIcon project={row.project} size="sm" /> : <FolderKanban className="size-3.5 text-muted-foreground" />}
-        </span>
-        <span className="min-w-0">
-          <span className="block truncate text-sm font-medium">{row.project.title}</span>
-          <span className="mt-0.5 block text-xs text-muted-foreground sm:hidden">
-            {t(($) => $.knowledge.wiki_pages, { count: row.docs.length })}
-          </span>
-        </span>
-      </span>
-      <span className="hidden text-xs tabular-nums text-muted-foreground sm:block">
-        {row.docs.length || "--"}
-      </span>
-      <span className="hidden text-xs tabular-nums text-muted-foreground sm:block">
-        {row.latestUpdatedAt ? formatRelativeDate(row.latestUpdatedAt) : "--"}
-      </span>
-      <span className="hidden min-w-0 sm:block"><ProjectMaintainer project={row.project} /></span>
-      <ChevronRight className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-    </AppLink>
-  );
-}
-
-function RepositoryRow({ repository, summary }: { repository: WorkspaceRepository; summary?: RepositoryWikiSummary }) {
-  const { t } = useT("projects");
-  const paths = useWorkspacePaths();
-  return (
-    <AppLink href={paths.repositoryWiki(repository.id)} className="group grid min-h-12 grid-cols-[minmax(0,1fr)_auto_20px] items-center gap-3 border-b px-4 last:border-b-0 hover:bg-accent/40">
-      <span className="flex min-w-0 items-center gap-2.5">
-        <span className="flex size-6 shrink-0 items-center justify-center rounded border bg-muted/50"><GitFork className="size-3.5 text-muted-foreground" /></span>
-        <span className="min-w-0">
-          <span className="block truncate text-sm font-medium">{repository.name}</span>
-          <span className="block truncate font-mono text-xs text-muted-foreground">{repository.url}</span>
-        </span>
-      </span>
-      <span className="text-xs tabular-nums text-muted-foreground">
-        {summary?.page_count ? t(($) => $.knowledge.repository_pages, { count: summary.page_count }) : t(($) => $.knowledge.repository_unbuilt)}
-      </span>
-      <ChevronRight className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-    </AppLink>
-  );
-}
-
 function WikiPane({
   projects,
   docs,
@@ -204,59 +150,172 @@ function WikiPane({
   sortOrder: SortOrder;
 }) {
   const { t } = useT("projects");
-  const query = search.trim().toLowerCase();
-  const rows = useMemo(() => {
-    const docsByProject = new Map<string, WorkspaceDoc[]>();
+  const workspaceId = useWorkspaceId();
+  const paths = useWorkspacePaths();
+  const formatRelativeDate = useFormatRelativeDate();
+  const [sourceKey, setSourceKey] = useState("");
+  const [selectedPageId, setSelectedPageId] = useState("");
+  const docsByProject = useMemo(() => {
+    const grouped = new Map<string, WorkspaceDoc[]>();
     for (const doc of docs) {
       if (doc.kind !== "wiki" || doc.slug === "_schema") continue;
-      const current = docsByProject.get(doc.project_id) ?? [];
-      current.push(doc);
-      docsByProject.set(doc.project_id, current);
+      grouped.set(doc.project_id, [...(grouped.get(doc.project_id) ?? []), doc]);
     }
-    return projects.map<ProjectWikiRow>((project) => {
-      const projectDocs = (docsByProject.get(project.id) ?? []).sort((a, b) => b.updated_at.localeCompare(a.updated_at));
-      return { project, docs: projectDocs, latestUpdatedAt: projectDocs[0]?.updated_at ?? null };
-    }).filter((row) => !query
-      || row.project.title.toLowerCase().includes(query)
-      || matchesPinyin(row.project.title, query)
-      || (row.project.description ?? "").toLowerCase().includes(query)
-      || row.docs.some((doc) => matchesDoc(doc, query)))
-      .sort((a, b) => {
-        if (!a.latestUpdatedAt && !b.latestUpdatedAt) return a.project.title.localeCompare(b.project.title);
-        if (!a.latestUpdatedAt) return 1;
-        if (!b.latestUpdatedAt) return -1;
-        const delta = b.latestUpdatedAt.localeCompare(a.latestUpdatedAt);
-        return sortOrder === "newest" ? delta : -delta;
-      });
-  }, [docs, projects, query, sortOrder]);
-  const summariesByRepository = new Map(summaries.map((summary) => [summary.repository_id, summary]));
-  const repositoryRows = repositories.filter((repository) => !query
-    || [repository.name, repository.url, repository.description ?? ""].some((value) => value.toLowerCase().includes(query)));
+    return grouped;
+  }, [docs]);
+  const summariesByRepository = useMemo(
+    () => new Map(summaries.map((summary) => [summary.repository_id, summary])),
+    [summaries],
+  );
+  const projectById = new Map(projects.map((project) => [project.id, project]));
+  const sources = useMemo<WikiSource[]>(() => {
+    const projectSources = projects.map((project) => {
+      const projectDocs = docsByProject.get(project.id) ?? [];
+      const latest = projectDocs.reduce<string | null>((value, doc) => !value || doc.updated_at > value ? doc.updated_at : value, null);
+      return { key: `project:${project.id}`, kind: "project" as const, id: project.id, name: project.title, pageCount: projectDocs.length, updatedAt: latest };
+    }).filter((source) => source.pageCount > 0);
+    const repositorySources = repositories.map((repository) => {
+      const summary = summariesByRepository.get(repository.id);
+      return { key: `repository:${repository.id}`, kind: "repository" as const, id: repository.id, name: repository.name, pageCount: summary?.page_count ?? 0, updatedAt: summary?.updated_at ?? null };
+    }).filter((source) => source.pageCount > 0);
+    const direction = sortOrder === "newest" ? -1 : 1;
+    return [...projectSources, ...repositorySources].sort((left, right) => {
+      if (!left.updatedAt && !right.updatedAt) return left.name.localeCompare(right.name);
+      if (!left.updatedAt) return 1;
+      if (!right.updatedAt) return -1;
+      return left.updatedAt.localeCompare(right.updatedAt) * direction;
+    });
+  }, [docsByProject, projects, repositories, sortOrder, summariesByRepository]);
 
-  if (rows.length === 0 && repositoryRows.length === 0) {
-    return <EmptyState icon={BookOpen} title={t(($) => $.knowledge.no_results)} />;
-  }
+  useEffect(() => {
+    if (!sources.some((source) => source.key === sourceKey)) setSourceKey(sources[0]?.key ?? "");
+  }, [sourceKey, sources]);
+
+  const selectedSource = sources.find((source) => source.key === sourceKey) ?? sources[0] ?? null;
+  const selectedRepositoryId = selectedSource?.kind === "repository" ? selectedSource.id : "";
+  const repositoryDocsQuery = useQuery({
+    ...repositoryWikiDocsOptions(workspaceId, selectedRepositoryId),
+    enabled: Boolean(workspaceId && selectedRepositoryId),
+  });
+  const sourceDocs = useMemo<ReadableWikiDoc[]>(() => {
+    if (!selectedSource) return [];
+    if (selectedSource.kind === "project") return (docsByProject.get(selectedSource.id) ?? []) as ReadableWikiDoc[];
+    return (repositoryDocsQuery.data ?? []) as ReadableWikiDoc[];
+  }, [docsByProject, repositoryDocsQuery.data, selectedSource]);
+
+  useEffect(() => {
+    if (sourceDocs.some((doc) => doc.id === selectedPageId)) return;
+    const preferred = sourceDocs.find((doc) => doc.path === "index.md")
+      ?? sourceDocs.find((doc) => doc.path === "overview.md")
+      ?? sourceDocs[0];
+    setSelectedPageId(preferred?.id ?? "");
+  }, [selectedPageId, sourceDocs]);
+
+  const selectedMetadata = sourceDocs.find((doc) => doc.id === selectedPageId)
+    ?? sourceDocs.find((doc) => doc.path === "index.md")
+    ?? sourceDocs[0]
+    ?? null;
+  const projectDetailQuery = useQuery({
+    ...projectDocDetailOptions(
+      workspaceId,
+      selectedSource?.kind === "project" ? selectedSource.id : "",
+      selectedSource?.kind === "project" ? selectedMetadata?.slug || selectedMetadata?.id || "" : "",
+    ),
+    enabled: Boolean(selectedSource?.kind === "project" && selectedMetadata),
+  });
+  const selectedDoc = selectedSource?.kind === "project"
+    ? (projectDetailQuery.data as ReadableWikiDoc | undefined) ?? selectedMetadata
+    : selectedMetadata;
+  const selectedHref = selectedSource && selectedDoc
+    ? selectedSource.kind === "project"
+      ? paths.projectWikiPage(selectedSource.id, selectedDoc.slug || selectedDoc.id)
+      : paths.repositoryWikiPage(selectedSource.id, selectedDoc.path)
+    : null;
+  const treePages = sourceDocs.map<WikiTreePage>((doc) => ({
+    id: doc.id,
+    path: doc.path,
+    title: doc.title,
+    searchText: `${doc.summary ?? ""}\n${doc.tags.join(" ")}`,
+  }));
+
+  if (sources.length === 0) return <EmptyState icon={BookOpen} title={t(($) => $.knowledge.wiki_empty)} />;
   return (
-    <div className="space-y-5 p-4">
-      {rows.length > 0 && (
-        <section>
-          <h2 className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground"><Files className="size-3.5" />{t(($) => $.knowledge.projects_group)}</h2>
-          <div className="overflow-hidden rounded-md border">
-            <div className="hidden h-8 grid-cols-[minmax(220px,1fr)_80px_108px_minmax(128px,180px)_20px] items-center gap-3 border-b bg-muted/20 px-4 text-xs text-muted-foreground sm:grid">
-              <span>{t(($) => $.knowledge.column_project)}</span><span>{t(($) => $.knowledge.column_wiki)}</span><span>{t(($) => $.knowledge.column_updated)}</span><span>{t(($) => $.knowledge.column_maintainer)}</span><span />
+    <div className="grid min-h-[30rem] flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[220px_280px_minmax(0,1fr)]">
+      <aside className="border-b lg:border-b-0 lg:border-r">
+        <div className="border-b px-3 py-2 text-xs font-medium text-muted-foreground">{t(($) => $.knowledge.wiki_sources)}</div>
+        <div className="max-h-48 overflow-y-auto p-2 lg:max-h-none">
+          {sources.map((source) => {
+            const active = source.key === selectedSource?.key;
+            const project = source.kind === "project" ? projectById.get(source.id) : null;
+            return (
+              <button
+                key={source.key}
+                type="button"
+                data-testid={`knowledge-${source.kind}-${source.id}`}
+                aria-current={active ? "page" : undefined}
+                onClick={() => {
+                  setSourceKey(source.key);
+                  setSelectedPageId("");
+                }}
+                className={`flex min-h-10 w-full items-center gap-2 rounded px-2 text-left text-sm ${active ? "bg-accent font-medium" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"}`}
+              >
+                <span className="flex size-5 shrink-0 items-center justify-center">
+                  {project?.icon ? <ProjectIcon project={project} size="sm" /> : source.kind === "project" ? <FolderKanban className="size-4" /> : <GitFork className="size-4" />}
+                </span>
+                <span className="min-w-0 flex-1 truncate">{source.name}</span>
+                <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{source.pageCount}</span>
+              </button>
+            );
+          })}
+        </div>
+      </aside>
+      <nav className="min-h-52 border-b lg:border-b-0 lg:border-r">
+        <div className="flex items-center justify-between border-b px-3 py-2 text-xs text-muted-foreground">
+          <span className="font-medium">{t(($) => $.knowledge.wiki_directory)}</span>
+          {selectedSource?.updatedAt && <span>{formatRelativeDate(selectedSource.updatedAt)}</span>}
+        </div>
+        <div className="max-h-72 overflow-y-auto p-2 lg:max-h-none">
+          {repositoryDocsQuery.isPending && selectedSource?.kind === "repository" ? <LoadingPane />
+            : repositoryDocsQuery.error && selectedSource?.kind === "repository" ? (
+              <ErrorPane error={repositoryDocsQuery.error} retry={() => { void repositoryDocsQuery.refetch(); }} />
+            ) : (
+            <WikiDirectoryTree
+              pages={treePages}
+              selectedId={selectedDoc?.id}
+              filter={search}
+              noMatches={t(($) => $.knowledge.no_results)}
+              onSelect={(page) => setSelectedPageId(page.id)}
+            />
+          )}
+        </div>
+      </nav>
+      <main className="min-h-0 overflow-y-auto">
+        {projectDetailQuery.isPending && selectedSource?.kind === "project" ? <LoadingPane />
+          : projectDetailQuery.error && selectedSource?.kind === "project" ? (
+            <ErrorPane error={projectDetailQuery.error} retry={() => { void projectDetailQuery.refetch(); }} />
+          ) : selectedDoc ? (
+          <article className="mx-auto max-w-3xl px-5 py-5 sm:px-7 sm:py-7">
+            <div className="flex items-start justify-between gap-4 border-b pb-4">
+              <div className="min-w-0">
+                <WikiPathBreadcrumb path={selectedDoc.path} />
+                <h2 className="mt-1 text-xl font-semibold">{selectedDoc.title}</h2>
+                {selectedDoc.summary && <p className="mt-1 text-sm text-muted-foreground">{selectedDoc.summary}</p>}
+              </div>
+              {selectedHref && (
+                <AppLink href={selectedHref} className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground hover:underline">
+                  <PanelLeft className="size-3.5" />{t(($) => $.knowledge.wiki_open_full)}
+                </AppLink>
+              )}
             </div>
-            {rows.map((row) => <ProjectWikiRowView key={row.project.id} row={row} />)}
-          </div>
-        </section>
-      )}
-      {repositoryRows.length > 0 && (
-        <section>
-          <h2 className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground"><GitFork className="size-3.5" />{t(($) => $.knowledge.repositories_group)}</h2>
-          <div className="overflow-hidden rounded-md border">
-            {repositoryRows.map((repository) => <RepositoryRow key={repository.id} repository={repository} summary={summariesByRepository.get(repository.id)} />)}
-          </div>
-        </section>
-      )}
+            <DocRefs refs={selectedDoc.refs} className="mt-3" />
+            <div className="mt-5"><ReadonlyContent content={selectedDoc.body} /></div>
+            <footer className="mt-8 flex gap-3 border-t pt-3 text-xs text-muted-foreground">
+              <span>{t(($) => $.knowledge.version_short, { version: selectedDoc.version })}</span>
+              <span>{formatRelativeDate(selectedDoc.updated_at)}</span>
+            </footer>
+          </article>
+          ) : <EmptyState icon={Files} title={t(($) => $.knowledge.no_results)} />}
+      </main>
     </div>
   );
 }
@@ -324,6 +383,21 @@ function runDuration(createdAt: string, completedAt: string | null): string | nu
   const minutes = Math.floor(seconds / 60);
   const remainingSeconds = seconds % 60;
   return remainingSeconds > 0 ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
+}
+
+function knowledgeOutputHref(
+  paths: ReturnType<typeof useWorkspacePaths>,
+  run: KnowledgeCompilationRun,
+  output: KnowledgeCompilationOutput,
+): string | null {
+  if (!output.artifact) return null;
+  if (output.artifact_scope === "repository_wiki" && run.repository_id) {
+    return paths.repositoryWikiPage(run.repository_id, output.artifact.path || output.artifact.id);
+  }
+  if (output.artifact_scope === "project_wiki" && run.project_id) {
+    return paths.projectWikiPage(run.project_id, output.artifact.id);
+  }
+  return null;
 }
 
 function KnowledgeRunSheet({
@@ -488,7 +562,9 @@ function KnowledgeRunSheet({
                 {t(($) => $.knowledge.run_stage_outputs)} · {outputs.length}
               </h3>
               <div className="mt-3 divide-y">
-                {outputs.length > 0 ? outputs.map((output) => (
+                {outputs.length > 0 ? outputs.map((output) => {
+                  const outputHref = knowledgeOutputHref(paths, detail.run, output);
+                  return (
                   <div key={output.id} className="flex min-w-0 items-start gap-2 py-2 first:pt-0 last:pb-0">
                     <span className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
                       <Check className="size-3" />
@@ -496,13 +572,21 @@ function KnowledgeRunSheet({
                     <div className="min-w-0 flex-1">
                       <div className="flex min-w-0 items-center gap-1.5 text-sm">
                         <Badge variant="outline" className="shrink-0 font-normal">{output.action}</Badge>
-                        <span className="truncate">{output.artifact?.title || output.artifact?.path || output.doc_id || output.artifact_scope}</span>
+                        {output.artifact && outputHref ? (
+                          <AppLink
+                            href={outputHref}
+                            className="truncate hover:underline"
+                          >
+                            {output.artifact.title || output.artifact.path || output.doc_id || output.artifact_scope}
+                          </AppLink>
+                        ) : <span className="truncate">{output.artifact?.title || output.artifact?.path || output.doc_id || output.artifact_scope}</span>}
                         {output.version !== null && <span className="shrink-0 text-xs text-muted-foreground">{t(($) => $.knowledge.version_short, { version: output.version })}</span>}
                       </div>
                       {output.artifact?.path && <div className="mt-1 truncate font-mono text-xs text-muted-foreground">{output.artifact.path}</div>}
                     </div>
                   </div>
-                )) : <p className="text-sm text-muted-foreground">{t(($) => $.knowledge.provenance_no_outputs)}</p>}
+                  );
+                }) : <p className="text-sm text-muted-foreground">{t(($) => $.knowledge.provenance_no_outputs)}</p>}
               </div>
               {detail.run.result_summary && (
                 <div className="mt-4 border-t pt-3">
@@ -562,14 +646,22 @@ function RawPane({ submissions, search }: { submissions: KnowledgeSubmission[]; 
     submission.author_agent?.name ?? submission.author_agent_id ?? "",
   ].some((value) => value.toLowerCase().includes(query)));
   if (rows.length === 0) return <EmptyState icon={FileInput} title={query ? t(($) => $.knowledge.no_results) : t(($) => $.knowledge.raw_empty)} />;
+  const groups = [
+    { key: "evidence", title: t(($) => $.knowledge.raw_evidence_group), rows: rows.filter((submission) => submission.source_type !== "agent") },
+    { key: "drafts", title: t(($) => $.knowledge.raw_drafts_group), rows: rows.filter((submission) => submission.source_type === "agent") },
+  ].filter((group) => group.rows.length > 0);
   return (
     <TooltipProvider delay={100}>
-      <div className="p-4">
-        <div className="overflow-hidden rounded-md border">
-          <div className="hidden h-8 grid-cols-[minmax(160px,1fr)_120px_130px_minmax(180px,1.2fr)_110px_96px] items-center gap-3 border-b bg-muted/20 px-4 text-xs text-muted-foreground lg:grid">
-            <span>{t(($) => $.knowledge.raw_source)}</span><span>{t(($) => $.knowledge.raw_issue)}</span><span>{t(($) => $.knowledge.raw_agent)}</span><span>{t(($) => $.knowledge.raw_target)}</span><span>{t(($) => $.knowledge.raw_status)}</span><span>{t(($) => $.knowledge.raw_created)}</span>
-          </div>
-          {rows.map((submission) => {
+      <div className="space-y-5 p-4">
+        {groups.map((group) => <section key={group.key}>
+          <h2 className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground">
+            <FileInput className="size-3.5" />{group.title}<span className="tabular-nums">{group.rows.length}</span>
+          </h2>
+          <div className="overflow-hidden rounded-md border">
+            <div className="hidden h-8 grid-cols-[minmax(160px,1fr)_120px_130px_minmax(180px,1.2fr)_110px_96px] items-center gap-3 border-b bg-muted/20 px-4 text-xs text-muted-foreground lg:grid">
+              <span>{t(($) => $.knowledge.raw_source)}</span><span>{t(($) => $.knowledge.raw_issue)}</span><span>{t(($) => $.knowledge.raw_agent)}</span><span>{t(($) => $.knowledge.raw_target)}</span><span>{t(($) => $.knowledge.raw_status)}</span><span>{t(($) => $.knowledge.raw_created)}</span>
+            </div>
+            {group.rows.map((submission) => {
             const issueLabel = submission.source_issue?.key || submission.source_issue?.title || submission.source_issue_id;
             const agentLabel = submission.author_agent?.name
               || (submission.author_agent_id ? getAgentName(submission.author_agent_id) : null);
@@ -595,8 +687,9 @@ function RawPane({ submissions, search }: { submissions: KnowledgeSubmission[]; 
                 <span className="text-xs text-muted-foreground">{submission.created_at ? formatRelativeDate(submission.created_at) : "--"}</span>
               </article>
             );
-          })}
-        </div>
+            })}
+          </div>
+        </section>)}
       </div>
     </TooltipProvider>
   );
@@ -710,13 +803,24 @@ function RunPane({ runs, search }: { runs: KnowledgeRunDetail[]; search: string 
                 <div className="min-w-0">
                   <div className="text-xs text-muted-foreground">{t(($) => $.knowledge.run_outputs)} · {outputs.length}</div>
                   <div className="mt-1 space-y-1">
-                    {outputs.length > 0 ? outputs.map((output) => (
+                    {outputs.length > 0 ? outputs.map((output) => {
+                      const outputHref = knowledgeOutputHref(paths, run, output);
+                      return (
                       <div key={output.id} className="flex min-w-0 items-center gap-1.5 text-xs">
                         <Badge variant="outline" className="shrink-0 font-normal">{output.action}</Badge>
-                        <span className="truncate" title={output.artifact?.path || output.doc_id || output.action}>{output.artifact?.title || output.artifact?.path || output.doc_id || output.artifact_scope}</span>
+                        {output.artifact && outputHref ? (
+                          <AppLink
+                            href={outputHref}
+                            className="truncate hover:underline"
+                            title={output.artifact.path || output.doc_id || output.action}
+                          >
+                            {output.artifact.title || output.artifact.path || output.doc_id || output.artifact_scope}
+                          </AppLink>
+                        ) : <span className="truncate" title={output.artifact?.path || output.doc_id || output.action}>{output.artifact?.title || output.artifact?.path || output.doc_id || output.artifact_scope}</span>}
                         {output.version !== null && <span className="shrink-0 text-muted-foreground">{t(($) => $.knowledge.version_short, { version: output.version })}</span>}
                       </div>
-                    )) : <span className="text-xs text-muted-foreground">--</span>}
+                      );
+                    }) : <span className="text-xs text-muted-foreground">--</span>}
                   </div>
                   <p className="mt-1 truncate text-xs text-muted-foreground" title={run.result_summary ?? undefined}>{run.result_summary || run.mode}</p>
                 </div>
@@ -750,7 +854,7 @@ export function KnowledgePage() {
   const needsProjects = activeTab === "wiki" || activeTab === "memory";
   const projectsQuery = useQuery({ ...projectListOptions(workspaceId), enabled: Boolean(workspaceId) && needsProjects });
   const docsQuery = useQuery({
-    ...workspaceDocListOptions(workspaceId, { includeBody: Boolean(search.trim()) }),
+    ...workspaceDocListOptions(workspaceId, { includeBody: false }),
     enabled: Boolean(workspaceId) && activeTab === "wiki",
   });
   const memoryDocsQuery = useQuery({
@@ -820,8 +924,8 @@ export function KnowledgePage() {
             <TabsList variant="line" aria-label={t(($) => $.knowledge.views_label)}>
               <TabsTrigger value="wiki" className="px-3"><BookOpen />{t(($) => $.knowledge.tab_wiki)}{counts.wiki !== undefined && <span className="tabular-nums text-muted-foreground">{counts.wiki}</span>}</TabsTrigger>
               <TabsTrigger value="raw" className="px-3"><FileInput />{t(($) => $.knowledge.tab_raw)}{counts.raw !== undefined && <span className="tabular-nums text-muted-foreground">{counts.raw}</span>}</TabsTrigger>
-              <TabsTrigger value="memory" className="px-3"><Brain />{t(($) => $.knowledge.tab_memory)}{counts.memory !== undefined && <span className="tabular-nums text-muted-foreground">{counts.memory}</span>}</TabsTrigger>
               <TabsTrigger value="runs" className="px-3"><Sparkles />{t(($) => $.knowledge.tab_runs)}{counts.runs !== undefined && <span className="tabular-nums text-muted-foreground">{counts.runs}</span>}</TabsTrigger>
+              <TabsTrigger value="memory" className="px-3"><Brain />{t(($) => $.knowledge.tab_memory)}{counts.memory !== undefined && <span className="tabular-nums text-muted-foreground">{counts.memory}</span>}</TabsTrigger>
             </TabsList>
           </div>
           <div className="relative min-w-0 flex-1 sm:ml-auto sm:max-w-72">

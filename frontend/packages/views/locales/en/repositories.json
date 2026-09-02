@@ -30,7 +30,7 @@
     "build_agent_name": "Wiki maintainer",
     "build_failed": "Could not start the repository Wiki build",
     "building_action": "Building Wiki",
-    "rebuild_action": "Rebuild",
+    "rebuild_action": "Organize Wiki",
     "build_in_progress": "A Wiki build is already in progress",
     "build_failed_title": "Wiki build failed",
     "view_build_log": "View build process",

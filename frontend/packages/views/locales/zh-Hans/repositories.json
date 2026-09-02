@@ -30,7 +30,7 @@
     "build_agent_name": "Wiki 维护智能体",
     "build_failed": "无法启动仓库 Wiki 构建",
     "building_action": "正在构建 Wiki",
-    "rebuild_action": "重新构建",
+    "rebuild_action": "整理知识库",
     "build_in_progress": "已有构建进行中",
     "build_failed_title": "Wiki 构建失败",
     "view_build_log": "查看执行过程",
