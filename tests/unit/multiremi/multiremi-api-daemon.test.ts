@@ -1090,6 +1090,14 @@ describe("Multiremi API — daemon endpoints", () => {
     expect(claim.status).toBe(200);
     expect((await claim.json()).task.id).toBe(task.id);
 
+    const stale = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+    db!.run("UPDATE multiremi_tasks SET dispatched_at = ?, updated_at = ? WHERE id = ?", [stale, stale, task.id]);
+    const lease = await app.request(`/api/daemon/tasks/${task.id}/dispatch-lease`, { method: "POST" });
+    expect(lease.status).toBe(200);
+    expect(await lease.json()).toEqual({ status: "dispatched" });
+    expect(Date.parse(store.getTask(task.id)!.dispatchedAt!)).toBeGreaterThan(Date.parse(stale));
+    expect(store.claimTask(runtime.id)).toBeNull();
+
     const start = await app.request(`/api/daemon/tasks/${task.id}/start`, { method: "POST" });
     expect(start.status).toBe(200);
     const startBody = await start.json();

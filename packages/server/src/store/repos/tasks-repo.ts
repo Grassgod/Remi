@@ -1366,6 +1366,25 @@ export class TasksRepo {
     return task;
   }
 
+  /**
+   * Keep a claimed-but-not-started task owned while the daemon waits on local
+   * preparation (for example, the per-Issue workspace lifecycle lock).
+   * `dispatched_at` already acts as the stale-claim lease timestamp, so renewing
+   * it prevents a live handler from being returned by claimTask again.
+   */
+  renewTaskDispatchLease(taskId: string): MultiremiTask {
+    const now = nowIso();
+    this.ctx.db.run(
+      `UPDATE multiremi_tasks
+       SET dispatched_at = ?, updated_at = ?
+       WHERE id = ? AND status = 'dispatched' AND started_at IS NULL`,
+      [now, now, taskId],
+    );
+    const task = this.getTask(taskId);
+    if (!task) throw new Error(`Task not found: ${taskId}`);
+    return task;
+  }
+
   markTaskWaitingLocalDirectory(taskId: string, reason?: string | null): MultiremiTask {
     const cleanReason = cleanOptionalString(reason);
     const now = nowIso();

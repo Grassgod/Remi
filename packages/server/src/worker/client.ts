@@ -582,6 +582,24 @@ export class MultiremiDaemonClient {
     await this.post(`/api/daemon/tasks/${taskId}/start`, {});
   }
 
+  async renewTaskDispatchLease(taskId: string): Promise<MultiremiTaskStatus> {
+    try {
+      const resp = await this.post<{ status: MultiremiTaskStatus }>(
+        `/api/daemon/tasks/${taskId}/dispatch-lease`,
+        {},
+      );
+      return resp.status;
+    } catch (error) {
+      // Rolling upgrades may briefly run a new daemon against an older control
+      // plane. Fall back to the legacy read-only status endpoint; a genuinely
+      // missing task also returns 404 there and remains distinguishable.
+      if (error instanceof MultiremiDaemonHttpError && error.status === 404) {
+        return await this.getTaskStatus(taskId);
+      }
+      throw error;
+    }
+  }
+
   async markTaskWaitingLocalDirectory(taskId: string, reason: string): Promise<void> {
     await this.post(`/api/daemon/tasks/${taskId}/wait-local-directory`, { reason });
   }

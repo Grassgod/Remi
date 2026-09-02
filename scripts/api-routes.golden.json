@@ -1,10 +1,10 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 713,
+    "routeCount": 714,
     "routeCountByPrefix": {
       "native": 209,
-      "compat": 491,
+      "compat": 492,
       "root": 13
     },
     "getRoutes": 304,
@@ -14,7 +14,7 @@
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 409,
+    "mutationRoutes": 410,
     "mutationRoutesCovered": 282,
     "flows": [
       "agents-compat",
@@ -528,6 +528,7 @@
     "POST /api/daemon/runtimes/:runtimeId/update/claim",
     "POST /api/daemon/scm/git-credentials",
     "POST /api/daemon/tasks/:taskId/complete",
+    "POST /api/daemon/tasks/:taskId/dispatch-lease",
     "POST /api/daemon/tasks/:taskId/fail",
     "POST /api/daemon/tasks/:taskId/human-requests",
     "POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire",

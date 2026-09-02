@@ -3889,6 +3889,10 @@ runMigrations(this.db);
     return this.tasks.startTask(taskId);
   }
 
+  renewTaskDispatchLease(taskId: string): MultiremiTask {
+    return this.tasks.renewTaskDispatchLease(taskId);
+  }
+
   markTaskWaitingLocalDirectory(taskId: string, reason?: string | null): MultiremiTask {
     return this.tasks.markTaskWaitingLocalDirectory(taskId, reason);
   }

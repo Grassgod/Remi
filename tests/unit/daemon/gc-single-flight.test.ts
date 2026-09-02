@@ -151,10 +151,12 @@ describe("daemon Session archive GC orchestration", () => {
     const events: string[] = [];
     Object.assign(daemon, {
       activeTaskCount: 0,
+      activeTaskIds: new Set<string>(),
       activeTaskAborts: new Set<AbortController>(),
       issueWorkspaceLifecycleLocks: locker,
       options: { taskTimeoutMs: 0, workspacesRoot: "/tmp/multiremi-lifecycle-test" },
       client: {
+        renewTaskDispatchLease: async () => "dispatched",
         getTaskStatus: async () => "running",
         failTask: async () => {},
       },
@@ -177,6 +179,16 @@ describe("daemon Session archive GC orchestration", () => {
       agent: { provider: "claude" },
     });
     await providerStarted;
+    await (daemon as unknown as {
+      handleTask(task: Record<string, unknown>): Promise<void>;
+    }).handleTask({
+      id: "tsk_lifecycle",
+      issueId: "iss_lifecycle",
+      sessionId: null,
+      workDir: null,
+      agent: { provider: "claude" },
+    });
+    expect((daemon as unknown as { activeTaskCount: number }).activeTaskCount).toBe(1);
     const gcRun = locker.runExclusive("iss_lifecycle", async () => {
       events.push("gc-archive-and-delete");
     });
