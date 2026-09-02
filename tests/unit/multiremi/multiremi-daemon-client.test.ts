@@ -88,6 +88,25 @@ describe("MultiremiDaemonClient HTTP failures", () => {
 });
 
 describe("MultiremiDaemonClient daemon protocol", () => {
+  it("falls back to the legacy status endpoint while the control plane rolls forward", async () => {
+    const requests: Array<{ method: string; path: string }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input)).pathname;
+      requests.push({ method: init?.method ?? "GET", path });
+      if (path.endsWith("/dispatch-lease")) return new Response("Not Found", { status: 404 });
+      return Response.json({ status: "running" });
+    }) as unknown as typeof globalThis.fetch;
+
+    const status = await new MultiremiDaemonClient("https://remi.example", "daemon-token")
+      .renewTaskDispatchLease("tsk_rolling");
+
+    expect(status).toBe("running");
+    expect(requests).toEqual([
+      { method: "POST", path: "/api/daemon/tasks/tsk_rolling/dispatch-lease" },
+      { method: "GET", path: "/api/daemon/tasks/tsk_rolling/status" },
+    ]);
+  });
+
   it("does not advertise the removed personal-bot side channel", async () => {
     const requestBodies: Record<string, unknown>[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {

@@ -1,10 +1,10 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 713,
+    "routeCount": 714,
     "routeCountByPrefix": {
       "native": 209,
-      "compat": 491,
+      "compat": 492,
       "root": 13
     },
     "getRoutes": 304,
@@ -14,7 +14,7 @@
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 409,
+    "mutationRoutes": 410,
     "mutationRoutesCovered": 282,
     "flows": [
       "agents-compat",
@@ -528,6 +528,7 @@
     "POST /api/daemon/runtimes/:runtimeId/update/claim",
     "POST /api/daemon/scm/git-credentials",
     "POST /api/daemon/tasks/:taskId/complete",
+    "POST /api/daemon/tasks/:taskId/dispatch-lease",
     "POST /api/daemon/tasks/:taskId/fail",
     "POST /api/daemon/tasks/:taskId/human-requests",
     "POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire",
@@ -11845,9 +11846,9 @@
             "allowed": true
           },
           {
-            "id": "wiki.lint",
-            "command": "remi wiki lint",
-            "capability": "wiki.lint",
+            "id": "wiki.lint.compat",
+            "command": "remi wiki internal-lint",
+            "capability": "wiki.lint.compat",
             "outputs": [
               "table",
               "json",
@@ -20265,7 +20266,7 @@
                 "updatedAt": "<timestamp>"
               }
             ],
-            "schema": "# Wiki Schema（本项目知识库维护规则）\n\n本文档约束 agent 如何维护本项目的 wiki 与 memory，人和 agent 都可修订本文档。\n\n## 分层\n- 原始来源（issue 讨论、task transcript、代码库）不可修改；wiki/memory 是从来源蒸馏出的知识。\n- memory 条目 = 未整合的快速记录；wiki 页 = 整合后的长期知识。\n\n## 维护纪律\n- 按功能域建立目录，目录深度不超过 5 层；新页面必须放到最合适的目录，不要把目录前缀重复写进页面标题。\n- 每个功能目录维护 `overview.md` 作为入口，链接该目录的主要页面；根级只保留跨域导航和确实无法分类的页面。\n- 写入前先用 `remi wiki search` / `remi wiki get` 查已有条目；能 update 就不要 create。\n- 发现跨页重复时，把内容和全部 `--ref` 来源合并到权威页面，再显式移除冗余页，不要继续创建近似页面。\n- 新事实与旧条目矛盾时：更新旧条目并在正文注明变化与依据（引用 issue/task），不要静默并存两个版本。\n- 写入时用 --ref 引用来源（issue/task/url）；页面间用 [[slug]] 交叉链接。\n- 一次性细节、只对当前 issue 有效的信息不要入库。\n"
+            "schema": "# Wiki Schema（本项目知识库维护规则）\n\n本文档约束 agent 如何维护本项目的 wiki 与 memory，人和 agent 都可修订本文档。\n\n## 分层\n- 原始来源（issue 讨论、task transcript、代码库）不可修改；wiki/memory 是从来源蒸馏出的知识。\n- memory 条目 = 未整合的快速记录；wiki 页 = 整合后的长期知识。\n\n## 维护纪律\n- 每个非空 Wiki 必须维护三个根文件：`index.md` 是经过整理的阅读地图，`overview.md` 是稳定的项目总览，`log.md` 是 Atlas 追加写入的加工记录。\n- 按功能域建立目录，目录深度不超过 5 层；新页面必须放到最合适的目录，不要把目录前缀重复写进页面标题。\n- 每个功能目录维护 `overview.md` 作为入口，链接该目录的主要页面；根级只保留跨域导航和确实无法分类的页面。\n- 每次正式发布必须在同一批修改中更新受影响页面和 `index.md`，并在 `log.md` 末尾追加一条记录；不得覆盖或重写既有日志。\n- `log.md` 每条记录至少包含日期、处理模式、仓库或项目、可用的 MR/Issue 与 revision、运行或 Task 标识、变更页面和变更原因。\n- 写入前先用 `remi wiki search` / `remi wiki get` 查已有条目；能 update 就不要 create。\n- 发现跨页重复时，把内容和全部 `--ref` 来源合并到权威页面，再显式移除冗余页，不要继续创建近似页面。\n- 新事实与旧条目矛盾时：更新旧条目并在正文注明变化与依据（引用 issue/task），不要静默并存两个版本。\n- 写入时用 --ref 引用来源（issue/task/url）；页面间用 [[slug]] 交叉链接。\n- 一次性细节、只对当前 issue 有效的信息不要入库。\n"
           },
           "projectContexts": [],
           "repos": [
@@ -20492,7 +20493,7 @@
             "path": "_schema.md",
             "title": "Wiki Schema",
             "summary": null,
-            "body": "# Wiki Schema（本项目知识库维护规则）\n\n本文档约束 agent 如何维护本项目的 wiki 与 memory，人和 agent 都可修订本文档。\n\n## 分层\n- 原始来源（issue 讨论、task transcript、代码库）不可修改；wiki/memory 是从来源蒸馏出的知识。\n- memory 条目 = 未整合的快速记录；wiki 页 = 整合后的长期知识。\n\n## 维护纪律\n- 按功能域建立目录，目录深度不超过 5 层；新页面必须放到最合适的目录，不要把目录前缀重复写进页面标题。\n- 每个功能目录维护 `overview.md` 作为入口，链接该目录的主要页面；根级只保留跨域导航和确实无法分类的页面。\n- 写入前先用 `remi wiki search` / `remi wiki get` 查已有条目；能 update 就不要 create。\n- 发现跨页重复时，把内容和全部 `--ref` 来源合并到权威页面，再显式移除冗余页，不要继续创建近似页面。\n- 新事实与旧条目矛盾时：更新旧条目并在正文注明变化与依据（引用 issue/task），不要静默并存两个版本。\n- 写入时用 --ref 引用来源（issue/task/url）；页面间用 [[slug]] 交叉链接。\n- 一次性细节、只对当前 issue 有效的信息不要入库。\n",
+            "body": "# Wiki Schema（本项目知识库维护规则）\n\n本文档约束 agent 如何维护本项目的 wiki 与 memory，人和 agent 都可修订本文档。\n\n## 分层\n- 原始来源（issue 讨论、task transcript、代码库）不可修改；wiki/memory 是从来源蒸馏出的知识。\n- memory 条目 = 未整合的快速记录；wiki 页 = 整合后的长期知识。\n\n## 维护纪律\n- 每个非空 Wiki 必须维护三个根文件：`index.md` 是经过整理的阅读地图，`overview.md` 是稳定的项目总览，`log.md` 是 Atlas 追加写入的加工记录。\n- 按功能域建立目录，目录深度不超过 5 层；新页面必须放到最合适的目录，不要把目录前缀重复写进页面标题。\n- 每个功能目录维护 `overview.md` 作为入口，链接该目录的主要页面；根级只保留跨域导航和确实无法分类的页面。\n- 每次正式发布必须在同一批修改中更新受影响页面和 `index.md`，并在 `log.md` 末尾追加一条记录；不得覆盖或重写既有日志。\n- `log.md` 每条记录至少包含日期、处理模式、仓库或项目、可用的 MR/Issue 与 revision、运行或 Task 标识、变更页面和变更原因。\n- 写入前先用 `remi wiki search` / `remi wiki get` 查已有条目；能 update 就不要 create。\n- 发现跨页重复时，把内容和全部 `--ref` 来源合并到权威页面，再显式移除冗余页，不要继续创建近似页面。\n- 新事实与旧条目矛盾时：更新旧条目并在正文注明变化与依据（引用 issue/task），不要静默并存两个版本。\n- 写入时用 --ref 引用来源（issue/task/url）；页面间用 [[slug]] 交叉链接。\n- 一次性细节、只对当前 issue 有效的信息不要入库。\n",
             "tags": [],
             "pinned": false,
             "refs": [],
@@ -20641,7 +20642,7 @@
             "path": "_schema.md",
             "title": "Wiki Schema",
             "summary": null,
-            "body": "# Wiki Schema（本项目知识库维护规则）\n\n本文档约束 agent 如何维护本项目的 wiki 与 memory，人和 agent 都可修订本文档。\n\n## 分层\n- 原始来源（issue 讨论、task transcript、代码库）不可修改；wiki/memory 是从来源蒸馏出的知识。\n- memory 条目 = 未整合的快速记录；wiki 页 = 整合后的长期知识。\n\n## 维护纪律\n- 按功能域建立目录，目录深度不超过 5 层；新页面必须放到最合适的目录，不要把目录前缀重复写进页面标题。\n- 每个功能目录维护 `overview.md` 作为入口，链接该目录的主要页面；根级只保留跨域导航和确实无法分类的页面。\n- 写入前先用 `remi wiki search` / `remi wiki get` 查已有条目；能 update 就不要 create。\n- 发现跨页重复时，把内容和全部 `--ref` 来源合并到权威页面，再显式移除冗余页，不要继续创建近似页面。\n- 新事实与旧条目矛盾时：更新旧条目并在正文注明变化与依据（引用 issue/task），不要静默并存两个版本。\n- 写入时用 --ref 引用来源（issue/task/url）；页面间用 [[slug]] 交叉链接。\n- 一次性细节、只对当前 issue 有效的信息不要入库。\n",
+            "body": "# Wiki Schema（本项目知识库维护规则）\n\n本文档约束 agent 如何维护本项目的 wiki 与 memory，人和 agent 都可修订本文档。\n\n## 分层\n- 原始来源（issue 讨论、task transcript、代码库）不可修改；wiki/memory 是从来源蒸馏出的知识。\n- memory 条目 = 未整合的快速记录；wiki 页 = 整合后的长期知识。\n\n## 维护纪律\n- 每个非空 Wiki 必须维护三个根文件：`index.md` 是经过整理的阅读地图，`overview.md` 是稳定的项目总览，`log.md` 是 Atlas 追加写入的加工记录。\n- 按功能域建立目录，目录深度不超过 5 层；新页面必须放到最合适的目录，不要把目录前缀重复写进页面标题。\n- 每个功能目录维护 `overview.md` 作为入口，链接该目录的主要页面；根级只保留跨域导航和确实无法分类的页面。\n- 每次正式发布必须在同一批修改中更新受影响页面和 `index.md`，并在 `log.md` 末尾追加一条记录；不得覆盖或重写既有日志。\n- `log.md` 每条记录至少包含日期、处理模式、仓库或项目、可用的 MR/Issue 与 revision、运行或 Task 标识、变更页面和变更原因。\n- 写入前先用 `remi wiki search` / `remi wiki get` 查已有条目；能 update 就不要 create。\n- 发现跨页重复时，把内容和全部 `--ref` 来源合并到权威页面，再显式移除冗余页，不要继续创建近似页面。\n- 新事实与旧条目矛盾时：更新旧条目并在正文注明变化与依据（引用 issue/task），不要静默并存两个版本。\n- 写入时用 --ref 引用来源（issue/task/url）；页面间用 [[slug]] 交叉链接。\n- 一次性细节、只对当前 issue 有效的信息不要入库。\n",
             "tags": [],
             "pinned": false,
             "refs": [],

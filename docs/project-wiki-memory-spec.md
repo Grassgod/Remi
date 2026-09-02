@@ -3,7 +3,7 @@
 > 状态：实现中（codex/llm_wiki 分支）
 > 编排：Fable（本文档 = 各构建 agent 的唯一契约来源，冲突以本文档为准）
 > 范围：Phase 1 = 表 + Store + REST API + agent CLI + task prompt 注入 + 前端 Wiki tab（只读）
-> 明确不做（后续阶段）：前端编辑器、project_ref 知识继承、FTS/向量检索、librarian 蒸馏、审核队列、workspace 级 memory
+> 明确不做（后续阶段）：前端编辑器、project_ref 知识继承、FTS/向量检索、审核队列、workspace 级 memory。Wiki 的语义整理由 Atlas lint 模式负责，不另建启发式 CLI 工作流。
 
 ## 0. 概念
 
@@ -19,11 +19,11 @@
 |---|---|
 | 三层：不可变来源 / LLM 拥有的 wiki / schema 约定文档 | 来源层 = multiremi 原生的 issue 讨论、task transcript、代码库（本就不可变）；wiki 层 = project_docs；**schema 层 = 每 project 一个保留 slug `_schema` 的 wiki 文档**（本次新增，见 §3/§6） |
 | wiki 内容从来源蒸馏并引用来源 | source_task_id/source_issue_id（自动出处）+ **refs 引用数组**（本次新增：多来源引用 issue/task/comment/url） |
-| 整合优于堆积：新信息更新既有页面、矛盾要显式标注，而不是无限追加 | prompt 写回纪律改写（§6）：先 search/get → 能 update 不 create → 矛盾时修订旧条目并注明依据；librarian（phase 2）负责把 memory 快速记录合并进 wiki 页 |
-| [[wiki-links]] 页面互链 | 写入约定 + 前端渲染 [[slug]] 内链（本次进 phase 1）；反链图/orphan 检测留 phase 2 lint |
-| index.md 目录先读、~100 源内不需要向量检索 | 我们的注入索引由表生成（DB 原生等价物，无需手工维护）；L1 LIKE 检索先行、向量推迟——原方案已对齐 ✓ |
-| log.md 追加式日志 | revisions 全表按 created_at 即时间线（DB 原生等价物）✓ |
-| lint：矛盾/过时/孤儿页/缺页检查 | phase 2 librarian 的检查清单（见 §10） |
+| 整合优于堆积：新信息更新既有页面、矛盾要显式标注，而不是无限追加 | prompt 写回纪律改写（§6）：先 search/get → 能 update 不 create → 矛盾时修订旧条目并注明依据；Atlas 的 lint 模式负责把 memory 快速记录合并进 wiki 页。 |
+| [[wiki-links]] 页面互链 | 写入约定 + 前端渲染 [[slug]] 内链；反链图和 orphan 检查由 Atlas 在 lint 模式下结合语义判断。 |
+| index.md 目录先读、~100 源内不需要向量检索 | 每个非空 Wiki 由 Atlas 维护实际的根级 `index.md`，作为经过整理的阅读地图；数据库索引只负责检索和元数据，不替代可读入口。 |
+| log.md 追加式日志 | 每次 Atlas 正式发布在根级 `log.md` 追加来源、revision、运行和页面变化；revision 表负责回滚，不替代面向读者的加工日志。 |
+| lint：矛盾/过时/孤儿页/缺页检查 | Atlas lint 模式的检查和修订清单（见 §10）；不再把启发式 CLI 输出当成结论。 |
 | markdown 为载体、git 为版本 | body 即纯 markdown；revisions 即版本史；DB 替代文件系统的理由不变（多 repo/零 repo、前端浏览、多机 agent、实时推送）；后续可选把 wiki 物化进 task workdir（对齐 skills 物化机制） |
 
 **memory 与 wiki 的关系（叙事修正）**：memory 条目 = 未整合的快速捕获（hot path，对齐老 remi 的 daily），wiki 页 = 整合后的长期知识（对齐长期记忆）；librarian 蒸馏 = compaction。
@@ -300,5 +300,5 @@ remi memory update|delete|backlinks <slug-or-id> --project <project-id>
 
 ## 10. Phase 2 备忘（本期不做）
 
-- **librarian lint**（对齐 Karpathy lint）：矛盾检测（页面间冲突声明）、过时检测（新来源推翻旧条目）、孤儿页（无入链）、缺页（被 [[引用]] 但不存在）、memory→wiki 整合压缩。触发：task 完成后或定时。
+- **Atlas lint 模式**（对齐 Karpathy 的定期整理）：由 Agent 阅读事实和上下文，完成矛盾检测、过时修订、孤儿页归位、缺页补齐与 memory→wiki 整合压缩。触发：手动整理、task 完成后或定时；CLI 只提供读写与 diff，不替 Agent 做语义判断。
 - 反链图 / orphan 可视化；wiki 物化进 task workdir（对齐 skills 物化）；project_ref 知识继承；FTS/向量检索（qmd 式混合检索）；审核队列。

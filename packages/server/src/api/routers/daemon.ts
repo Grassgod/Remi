@@ -722,6 +722,15 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     const task = store.startTask(taskId);
     return c.json(daemonTaskWireResponse(task, store.getTaskTriggerMetadata(task)));
   });
+  app.post("/api/daemon/tasks/:taskId/dispatch-lease", (c) => {
+    const taskId = c.req.param("taskId");
+    const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
+    if (identityDenied) return identityDenied;
+    const existing = store.getTask(taskId);
+    if (!existing) return c.json({ error: "task not found" }, 404);
+    const task = store.renewTaskDispatchLease(taskId);
+    return c.json({ status: task.status });
+  });
   app.post("/api/daemon/tasks/:taskId/wait-local-directory", async (c) => {
     const taskId = c.req.param("taskId");
     const body = await readJsonStrictAllowEmpty<{ reason?: string }>(c);

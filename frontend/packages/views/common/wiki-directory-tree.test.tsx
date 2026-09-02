@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import type { ReactNode } from "react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -60,5 +62,22 @@ describe("WikiDirectoryTree", () => {
     expect(screen.queryByRole("tree")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Release/ })).toBeInTheDocument();
     expect(screen.getByText("operations")).toBeInTheDocument();
+  });
+
+  it("selects a page in place when no route builder is provided", async () => {
+    const user = userEvent.setup();
+    const onSelect = vi.fn();
+    render(
+      <WikiDirectoryTree
+        pages={pages}
+        selectedId="current"
+        onSelect={onSelect}
+        noMatches="No matches"
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Runtime" }));
+    expect(onSelect).toHaveBeenCalledWith(pages[1]);
+    expect(screen.queryByRole("link", { name: "Runtime" })).not.toBeInTheDocument();
   });
 });

@@ -298,6 +298,22 @@ describe("Multiremi store — task message ingress, completion, and capacity", (
     expect(Date.parse(store.getTask(task.id)!.dispatchedAt!)).toBeGreaterThan(Date.parse(stale));
   });
 
+  it("keeps a dispatched task claimed while its daemon renews the preparation lease", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Codex", provider: "codex" });
+    const runtime = store.registerRuntime({ name: "local-codex", provider: "codex", maxConcurrency: 1 });
+    const task = store.createTask({ agentId: agent.id, prompt: "Wait for workspace preparation" });
+
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    const stale = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+    db!.run("UPDATE multiremi_tasks SET dispatched_at = ?, updated_at = ? WHERE id = ?", [stale, stale, task.id]);
+
+    const renewed = store.renewTaskDispatchLease(task.id);
+    expect(renewed.status).toBe("dispatched");
+    expect(Date.parse(renewed.dispatchedAt!)).toBeGreaterThan(Date.parse(stale));
+    expect(store.claimTask(runtime.id)).toBeNull();
+  });
+
   it("tracks waiting_local_directory as an active in-flight state", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Codex", provider: "codex", maxConcurrentTasks: 2 });

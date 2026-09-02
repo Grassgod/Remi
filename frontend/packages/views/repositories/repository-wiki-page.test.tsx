@@ -193,7 +193,7 @@ describe("RepositoryWikiPage build state", () => {
     const user = userEvent.setup();
     renderPage();
 
-    const rebuild = screen.getByRole("button", { name: /Rebuild/ });
+    const rebuild = screen.getByRole("button", { name: /Organize Wiki/ });
     expect(rebuild).toBeEnabled();
     await user.click(rebuild);
     expect(mockMutate).toHaveBeenCalledTimes(1);
@@ -263,7 +263,7 @@ describe("RepositoryWikiPage build state", () => {
     // Docs from the previous successful build stay visible.
     expect(screen.getByText("The architecture body")).toBeInTheDocument();
 
-    const rebuild = screen.getByRole("button", { name: /Rebuild/ });
+    const rebuild = screen.getByRole("button", { name: /Organize Wiki/ });
     expect(rebuild).toBeEnabled();
     await user.click(rebuild);
     expect(mockMutate).toHaveBeenCalledTimes(1);

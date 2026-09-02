@@ -159,6 +159,7 @@ import type {
   MultiremiRuntimeUpdateScope,
   MultiremiTaskHumanRequest,
   MultiremiTaskMessage,
+  MultiremiTaskStatus,
   MultiremiTaskSteerMessage,
   MultiremiTaskWithAgent,
   MultiremiSshMeshHeartbeatAck,
@@ -591,6 +592,7 @@ export class MultiremiDaemon {
   private drainingTaskCount = 0;
   private pendingClaimCount = 0;
   private inflight = new Set<Promise<void>>();
+  private activeTaskIds = new Set<string>();
   private activeTaskAborts = new Set<AbortController>();
   private claimsPaused = false;
   /**
@@ -2351,11 +2353,19 @@ export class MultiremiDaemon {
   }
 
   private async handleTask(task: MultiremiTaskWithAgent): Promise<void> {
+    if (this.activeTaskIds.has(task.id)) {
+      log.warn(`Ignored duplicate claim for active task ${task.id}`);
+      return;
+    }
+    this.activeTaskIds.add(task.id);
     this.activeTaskCount++;
     log.info(`Claimed task ${task.id}`);
     const abort = new AbortController();
     this.activeTaskAborts.add(abort);
-    const cancelWatcher = this.watchCancellation(task.id, abort);
+    let serverTerminalStatus: Extract<MultiremiTaskStatus, "completed" | "failed" | "cancelled"> | null = null;
+    const taskStateWatcher = this.watchTaskState(task.id, abort, (status) => {
+      serverTerminalStatus = status;
+    });
     let timedOut = false;
     const timeoutMs = Number.isFinite(this.options.taskTimeoutMs) ? Math.max(0, this.options.taskTimeoutMs) : 0;
     const timeout = timeoutMs > 0
@@ -2525,6 +2535,12 @@ export class MultiremiDaemon {
       await awaitFinalReportDrain();
     } catch (err) {
       const error = timedOut ? `Agent timed out after ${timeoutMs}ms` : err instanceof Error ? err.message : String(err);
+      if (!timedOut && abort.signal.aborted && serverTerminalStatus) {
+        if (serverTerminalStatus === "cancelled") this.outbox?.purgeTask(task.id);
+        log.info(`Task ${task.id} is already ${serverTerminalStatus} on the server; stopped local execution`);
+        this.finalizeTaskProgress(progressSummarizer, serverTerminalStatus);
+        return;
+      }
       if (!timedOut && abort.signal.aborted && await this.wasTaskCancelledByServer(task.id)) {
         this.outbox?.purgeTask(task.id);
         log.info(`Task ${task.id} was cancelled by the server`);
@@ -2563,10 +2579,11 @@ export class MultiremiDaemon {
       resolvedWorkDir?.release?.();
       releaseIssueWorkspaceLifecycle?.();
       this.activeTaskAborts.delete(abort);
+      this.activeTaskIds.delete(task.id);
       if (!activeExecutionReleased) {
         this.activeTaskCount = Math.max(0, this.activeTaskCount - 1);
       }
-      clearInterval(cancelWatcher);
+      clearInterval(taskStateWatcher);
       if (timeout) clearTimeout(timeout);
     }
   }
@@ -3328,20 +3345,34 @@ export class MultiremiDaemon {
     }
   }
 
-  private watchCancellation(taskId: string, abort: AbortController): ReturnType<typeof setInterval> {
-    return setInterval(() => {
-      if (abort.signal.aborted) return;
-      this.client.getTaskStatus(taskId).then((status) => {
-        if (status === "cancelled") {
-          this.outbox?.purgeTask(taskId);
+  private watchTaskState(
+    taskId: string,
+    abort: AbortController,
+    onTerminal: (status: Extract<MultiremiTaskStatus, "completed" | "failed" | "cancelled">) => void,
+  ): ReturnType<typeof setInterval> {
+    let checking = false;
+    const check = async () => {
+      if (abort.signal.aborted || checking) return;
+      checking = true;
+      try {
+        let status = await this.client.getTaskStatus(taskId);
+        if (status === "dispatched") {
+          status = await this.client.renewTaskDispatchLease(taskId);
+        }
+        if (status === "completed" || status === "failed" || status === "cancelled") {
+          onTerminal(status);
+          if (status === "cancelled") this.outbox?.purgeTask(taskId);
           abort.abort();
         }
-      }).catch((error) => {
+      } catch (error) {
         if (error instanceof MultiremiDaemonHttpError && error.status === 404) {
           abort.abort();
         }
-      });
-    }, 2500);
+      } finally {
+        checking = false;
+      }
+    };
+    return setInterval(() => void check(), 2500);
   }
 
   private async wasTaskCancelledByServer(taskId: string): Promise<boolean> {

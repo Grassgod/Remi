@@ -2289,21 +2289,23 @@
       "hidden": false,
       "migration_status": "native"
     },
-    "wiki.lint": {
-      "command": "remi wiki lint",
-      "aliases": [],
+    "wiki.lint.compat": {
+      "command": "remi wiki internal-lint",
+      "aliases": [
+        "remi wiki lint"
+      ],
       "auth": [
         "human",
         "task"
       ],
-      "capability": "wiki.lint",
+      "capability": "wiki.lint.compat",
       "mutation": "read",
       "output": [
         "table",
         "json",
         "jsonl"
       ],
-      "hidden": false,
+      "hidden": true,
       "migration_status": "native"
     },
     "wiki.merge": {
@@ -8778,6 +8780,12 @@
       "replacement": "remi memory migration retry",
       "hidden": false
     },
+    "remi wiki lint": {
+      "command": "wiki.lint.compat",
+      "deprecated_since": "0.2.58",
+      "replacement": "remi wiki internal-lint",
+      "hidden": true
+    },
     "remi issue comment list": {
       "command": "comment.list",
       "deprecated_since": "0.3.0",
@@ -10473,6 +10481,11 @@
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
     "POST /api/daemon/tasks/:taskId/complete": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/tasks/:taskId/dispatch-lease": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."

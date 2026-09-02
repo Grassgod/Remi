@@ -1624,13 +1624,13 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
-    "wiki.lint": {
-      "command": "remi wiki lint",
+    "wiki.lint.compat": {
+      "command": "remi wiki internal-lint",
       "auth": [
         "human",
         "task"
       ],
-      "capability": "wiki.lint",
+      "capability": "wiki.lint.compat",
       "output": [
         "table",
         "json",
