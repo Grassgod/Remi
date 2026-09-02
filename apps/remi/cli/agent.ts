@@ -48,6 +48,21 @@ export interface FeishuChannelHandle {
   publishBotMenu: (config: ResolvedBotMenuConfig, dryRun: boolean) => Promise<BotMenuPublishResult>;
 }
 
+export async function waitForFeishuConnectorStart(
+  connector: Pick<FeishuConnector, "waitUntilReady" | "stop">,
+  start: Promise<void>,
+): Promise<void> {
+  const stoppedBeforeReady = start.then(() => {
+    throw new Error("Feishu connector stopped before becoming ready");
+  });
+  try {
+    await Promise.race([connector.waitUntilReady(), stoppedBeforeReady]);
+  } catch (error) {
+    await connector.stop();
+    throw error;
+  }
+}
+
 /**
  * Workspace settings are the only credential source. The control plane hands
  * the decrypted identity down for this start; it is never persisted locally.
@@ -75,8 +90,10 @@ export async function bootFeishuChannel(
     domain: config.feishu.domain,
   });
   log.info("Starting Feishu channel");
+  const start = connector.startTask(options.taskHandler);
+  await waitForFeishuConnectorStart(connector, start);
   return {
-    start: connector.startTask(options.taskHandler),
+    start,
     stop: () => connector.stop(),
     publishBotMenu: (menu, dryRun) => menuSyncer.syncAll(menu, { dryRun }),
   };

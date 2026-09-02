@@ -12,7 +12,13 @@ import { createLogger } from "@shared/logger.js";
 
 const log = createLogger("feishu");
 import type { FeishuMessageEvent, FeishuMessageContext, FeishuMediaInfo } from "./types.js";
-import { createFeishuClient, createFeishuWSClient, createEventDispatcher, probeFeishu } from "./client.js";
+import {
+  createEventDispatcher,
+  createFeishuClient,
+  createFeishuWSClient,
+  probeFeishu,
+  waitForFeishuWSReady,
+} from "./client.js";
 
 /** Group policy injected by the caller (remi's GroupConfigStore). */
 let _groupPolicy: GroupPolicy | undefined;
@@ -600,6 +606,7 @@ export async function processFeishuMessageEvent(
 export type FeishuMessageCallback = (msg: ParsedFeishuMessage) => Promise<void>;
 
 export type FeishuWSHandle = {
+  ready: Promise<void>;
   stop(): void;
 };
 
@@ -731,13 +738,16 @@ export function startWebSocketListener(
   });
 
   const wsClient = createFeishuWSClient(creds);
-  wsClient.start({ eventDispatcher });
-  log.info("WebSocket client started");
+  const ready = wsClient.start({ eventDispatcher })
+    .then(() => waitForFeishuWSReady(wsClient))
+    .then(() => log.info("WebSocket client connected"));
+  log.info("WebSocket client starting");
 
   return {
+    ready,
     stop() {
       stopped = true;
-      // WSClient doesn't expose a close method; setting flag prevents further processing
+      wsClient.close({ force: true });
     },
   };
 }

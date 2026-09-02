@@ -113,6 +113,10 @@ export class FeishuConnector implements Connector {
     return this._channel.connect();
   }
 
+  waitUntilReady(): Promise<void> {
+    return this._channel.waitUntilReady();
+  }
+
   async stop(): Promise<void> {
     this._channel.disconnect();
     this._handler = null;

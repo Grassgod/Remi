@@ -97,7 +97,7 @@ export class FeishuChannel {
     return this;
   }
 
-  /** Start WebSocket listener. Returns a promise that never resolves (runs forever). */
+  /** Start WebSocket listener. Rejects if the initial connection fails. */
   connect(): Promise<void> {
     if (!this._config.appId || !this._config.appSecret) {
       throw new Error("FeishuChannel: appId and appSecret are required");
@@ -116,9 +116,16 @@ export class FeishuChannel {
       this._senderAuthorizer,
     );
 
-    return new Promise<void>(() => {
+    return this._wsHandle.ready.then(() => new Promise<void>(() => {
       // Intentionally never resolves — runs until disconnect() is called.
-    });
+    }));
+  }
+
+  waitUntilReady(): Promise<void> {
+    if (!this._wsHandle) {
+      return Promise.reject(new Error("FeishuChannel: connection has not started"));
+    }
+    return this._wsHandle.ready;
   }
 
   disconnect(): void {

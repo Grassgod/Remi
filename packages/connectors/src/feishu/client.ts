@@ -4,6 +4,7 @@
  */
 
 import * as Lark from "@larksuiteoapi/node-sdk";
+import { resolveApiOrigin } from "@shared/feishu-domain.js";
 import type { FeishuDomain, FeishuProbeResult } from "./types.js";
 
 type Credentials = {
@@ -14,10 +15,10 @@ type Credentials = {
 
 let cachedClient: { client: Lark.Client; key: string } | null = null;
 
-function resolveDomain(domain: FeishuDomain | undefined): Lark.Domain | string {
+export function resolveLarkSdkDomain(domain?: FeishuDomain): Lark.Domain | string {
   if (domain === "lark") return Lark.Domain.Lark;
   if (domain === "feishu" || !domain) return Lark.Domain.Feishu;
-  return domain.replace(/\/+$/, "");
+  return resolveApiOrigin(domain);
 }
 
 /** Create or get a cached Feishu HTTP client. */
@@ -31,7 +32,7 @@ export function createFeishuClient(creds: Credentials): Lark.Client {
     appId: creds.appId,
     appSecret: creds.appSecret,
     appType: Lark.AppType.SelfBuild,
-    domain: resolveDomain(creds.domain),
+    domain: resolveLarkSdkDomain(creds.domain),
   });
 
   cachedClient = { client, key };
@@ -47,9 +48,40 @@ export function createFeishuWSClient(creds: Credentials): Lark.WSClient {
   return new Lark.WSClient({
     appId: creds.appId,
     appSecret: creds.appSecret,
-    domain: resolveDomain(creds.domain),
+    domain: resolveLarkSdkDomain(creds.domain),
     loggerLevel: Lark.LoggerLevel.info,
   });
+}
+
+type FeishuWSClientInternals = {
+  wsConfig?: {
+    getWSInstance?: () => { readyState?: number } | null;
+  };
+};
+
+/**
+ * The SDK's start() resolves before its initial WebSocket handshake. Keep the
+ * version-specific readiness probe isolated here so callers cannot mistake a
+ * scheduled connection attempt for an online connector.
+ */
+export async function waitForFeishuWSReady(
+  client: Lark.WSClient,
+  options: { timeoutMs?: number; pollIntervalMs?: number } = {},
+): Promise<void> {
+  const timeoutMs = options.timeoutMs ?? 20_000;
+  const pollIntervalMs = options.pollIntervalMs ?? 50;
+  const wsConfig = (client as unknown as FeishuWSClientInternals).wsConfig;
+  if (typeof wsConfig?.getWSInstance !== "function") {
+    throw new Error("Feishu SDK does not expose WebSocket readiness state");
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  do {
+    if (wsConfig.getWSInstance()?.readyState === 1) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, pollIntervalMs));
+  } while (Date.now() < deadline);
+
+  throw new Error(`Feishu WebSocket did not connect within ${timeoutMs}ms`);
 }
 
 /**
