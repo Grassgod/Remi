@@ -2525,6 +2525,10 @@ runMigrations(this.db);
     return this.runtimes.createRuntimeUpdateRequest(runtimeId, input);
   }
 
+  reconcileRuntimeCliRelease(targetVersion: string): MultiremiRuntimeUpdateRequest[] {
+    return this.runtimes.reconcileRuntimeCliRelease(targetVersion);
+  }
+
   getRuntimeUpdateRequest(runtimeId: string, requestId: string): MultiremiRuntimeUpdateRequest | null {
     return this.runtimes.getRuntimeUpdateRequest(runtimeId, requestId);
   }

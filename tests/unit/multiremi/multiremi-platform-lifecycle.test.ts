@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, setSystemTime } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { PlatformOperationConflictError } from "@multiremi/store/repos/platform-operations-repo.js";
-import { createLocalStore, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(() => {
   setSystemTime();
@@ -128,6 +128,95 @@ describe("platform lifecycle", () => {
     expect(store.getActivePlatformOperation()).toBeNull();
     expect(store.listPlatformOperations(20)).toHaveLength(1);
     expect(store.getPlatformState().autoUpdateLastResult).toBe("blocked");
+  });
+
+  it("queues one CLI update per eligible daemon after the platform release is live", async () => {
+    const store = createLocalStore();
+    for (const [id, provider] of [["rt_old_claude", "claude"], ["rt_old_codex", "codex"]] as const) {
+      store.registerRuntime({
+        id,
+        name: id,
+        provider,
+        daemonId: "dmn_old",
+        workspaceId: "local",
+        metadata: { cli_version: "v0.2.56", launched_by: "cli" },
+      });
+    }
+    store.registerRuntime({
+      id: "rt_current",
+      name: "current",
+      provider: "claude",
+      daemonId: "dmn_current",
+      workspaceId: "local",
+      metadata: { cli_version: "v0.2.58", launched_by: "cli" },
+    });
+    store.registerRuntime({
+      id: "rt_desktop",
+      name: "desktop",
+      provider: "claude",
+      daemonId: "dmn_desktop",
+      workspaceId: "local",
+      metadata: { cli_version: "v0.2.56", launched_by: "desktop" },
+    });
+    store.registerRuntime({
+      id: "rt_cloud",
+      name: "cloud",
+      provider: "claude",
+      daemonId: "dmn_cloud",
+      runtimeMode: "cloud",
+      workspaceId: "local",
+      metadata: { cli_version: "v0.2.56", launched_by: "cli" },
+    });
+
+    const app = createMultiremiApp({ store, platformUpdaterToken: "updater-secret" });
+    const heartbeat = () => app.request("/api/platform-updater/heartbeat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Multiremi-Updater-Token": "updater-secret" },
+      body: JSON.stringify({
+        driver: "docker_compose",
+        currentRelease: release("0.2.58"),
+        latestRelease: release("0.2.58"),
+      }),
+    });
+
+    expect((await heartbeat()).status).toBe(200);
+    expect(db!.query(
+      "SELECT runtime_id, target_version, status FROM multiremi_runtime_update_requests ORDER BY runtime_id",
+    ).all()).toEqual([{
+      runtime_id: "rt_old_claude",
+      target_version: "0.2.58",
+      status: "pending",
+    }]);
+
+    // Updater heartbeats are frequent; release history keeps reconciliation idempotent.
+    expect((await heartbeat()).status).toBe(200);
+    expect(db!.query("SELECT COUNT(*) AS count FROM multiremi_runtime_update_requests").get()).toEqual({ count: 1 });
+  });
+
+  it("defers daemon CLI updates while a platform operation is active", async () => {
+    const store = createLocalStore();
+    store.registerRuntime({
+      id: "rt_deferred",
+      name: "deferred",
+      provider: "claude",
+      daemonId: "dmn_deferred",
+      workspaceId: "local",
+      metadata: { cli_version: "v0.2.56", launched_by: "cli" },
+    });
+    const operation = store.createPlatformOperation({ kind: "restart" }, "local");
+    const app = createMultiremiApp({ store, platformUpdaterToken: "updater-secret" });
+    const heartbeat = () => app.request("/api/platform-updater/heartbeat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Multiremi-Updater-Token": "updater-secret" },
+      body: JSON.stringify({ driver: "systemd_release", currentRelease: release("0.2.58") }),
+    });
+
+    expect((await heartbeat()).status).toBe(200);
+    expect(db!.query("SELECT COUNT(*) AS count FROM multiremi_runtime_update_requests").get()).toEqual({ count: 0 });
+
+    store.reportPlatformOperation(operation.id, { status: "succeeded" });
+    expect((await heartbeat()).status).toBe(200);
+    expect(db!.query("SELECT COUNT(*) AS count FROM multiremi_runtime_update_requests").get()).toEqual({ count: 1 });
   });
 
   it("validates and returns the complete automatic update schedule", async () => {

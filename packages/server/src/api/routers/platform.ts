@@ -149,6 +149,12 @@ export function registerPlatformRoutes(app: Hono, deps: RouterDeps): void {
     if (due) {
       store.setPlatformAutoUpdateResult(runScheduledUpdateDecision(store, due));
     }
+    // A successful platform switch is observed here as currentRelease. Reconcile
+    // daemons only after that switch is complete, and never compete with a release
+    // operation that is still draining or replacing the API.
+    if (!store.getActivePlatformOperation() && state.currentRelease?.version) {
+      store.reconcileRuntimeCliRelease(state.currentRelease.version);
+    }
     return c.json({ state: store.getPlatformState() });
   });
 

@@ -114,7 +114,7 @@ const FAMILIES: Family[] = [
     name: "update",
     table: "multiremi_runtime_update_requests",
     pendingTimeoutError: "daemon did not respond within 120 seconds",
-    runningTimeoutError: "update did not complete within 150 seconds",
+    runningTimeoutError: "update did not complete within 20 minutes",
     drive: (repo) => {
       const request = repo.createRuntimeUpdateRequest("rt_q", { targetVersion: "1.2.3" });
       repo.getRuntimeUpdateRequest("rt_q", request.id);
