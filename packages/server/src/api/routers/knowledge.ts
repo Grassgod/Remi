@@ -29,7 +29,6 @@ import { normalizeProjectWikiPath, projectDocSlug } from "@multiremi/store/repos
 import { normalizeRepositoryWikiPath } from "@multiremi/store/repos/repository-wiki-repo.js";
 import { sha256Text } from "@multiremi/project-knowledge/codec.js";
 import { resolveTaskRepositoryWikiRepositories } from "@multiremi/repository-wiki/task-scope.js";
-import { agentKnowledgePublishPluginNames } from "@multiremi/knowledge/capability.js";
 import { autopilotRunTriggerSummary } from "../wire/autopilots.js";
 
 interface KnowledgeSubmitBody {
@@ -752,7 +751,6 @@ function runResponse(
     created_at: run.createdAt,
     completed_at: run.completedAt,
     agent: agent ? { id: agent.id, name: agent.name } : null,
-    plugin_names: agent ? agentKnowledgePublishPluginNames(store, agent) : [],
     provenance: autopilotRun ? {
       automation_id: autopilotRun.autopilotId,
       automation_title: autopilot?.title ?? null,

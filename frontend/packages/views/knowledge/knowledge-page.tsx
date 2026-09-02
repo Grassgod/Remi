@@ -65,10 +65,6 @@ import { useT } from "../i18n";
 type KnowledgeTab = "wiki" | "raw" | "memory" | "runs";
 type SortOrder = "newest" | "oldest";
 
-function knowledgePluginLabel(name: string): string {
-  return name === "code-to-wiki" ? "Code to Wiki" : name;
-}
-
 interface ProjectWikiRow {
   project: Project;
   docs: WorkspaceDoc[];
@@ -472,29 +468,6 @@ function KnowledgeRunSheet({
                 <ActorAvatar actorType={detail.run.agent_id ? "agent" : "system"} actorId={detail.run.agent_id ?? "manual"} size={20} />
                 <div className="min-w-0 flex-1">
                   <div className="text-sm">{agentName}</div>
-                  {detail.run.plugin_names.length > 0 && (
-                    <div className="mt-2">
-                      <div className="mb-1 text-xs text-muted-foreground">{t(($) => $.knowledge.run_plugins)}</div>
-                      <TooltipProvider delay={100}>
-                        <div className="flex flex-wrap gap-1">
-                          {detail.run.plugin_names.map((plugin) => (
-                            <Tooltip key={plugin}>
-                              <TooltipTrigger render={
-                                <button type="button" className="rounded border px-2 py-0.5 text-xs hover:bg-accent">
-                                  {knowledgePluginLabel(plugin)}
-                                </button>
-                              } />
-                              <TooltipContent>
-                                {plugin === "code-to-wiki"
-                                  ? t(($) => $.knowledge.plugin_code_to_wiki_description)
-                                  : plugin}
-                              </TooltipContent>
-                            </Tooltip>
-                          ))}
-                        </div>
-                      </TooltipProvider>
-                    </div>
-                  )}
                 </div>
                 {task && (
                   <div className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
@@ -640,7 +613,7 @@ function RunPane({ runs, search }: { runs: KnowledgeRunDetail[]; search: string 
     run.id, run.mode, run.status, run.result_summary ?? "", run.agent?.name ?? run.agent_id ?? "",
     run.provenance?.automation_title ?? "", run.provenance?.event_type ?? "",
     run.provenance?.repository_name ?? "", run.provenance?.change_title ?? "",
-    ...run.plugin_names, ...sources.flatMap((source) => [source.submission_id ?? "", source.source_ref ?? ""]),
+    ...sources.flatMap((source) => [source.submission_id ?? "", source.source_ref ?? ""]),
     ...outputs.flatMap((output) => [output.doc_id ?? "", output.artifact?.title ?? "", output.artifact?.path ?? ""]),
   ].some((value) => value.toLowerCase().includes(query)));
   if (rows.length === 0) return <EmptyState icon={Sparkles} title={query ? t(($) => $.knowledge.no_results) : t(($) => $.knowledge.runs_empty)} />;

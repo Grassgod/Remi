@@ -65,14 +65,7 @@ export const KnowledgeSubmissionSchema = z.object({
   source_task: KnowledgeTaskSummarySchema.nullable().catch(null).default(null),
 }).loose();
 
-export const KnowledgeCompilationRunSchema = z.preprocess((value) => {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
-  const run = { ...value } as Record<string, unknown>;
-  if (!Array.isArray(run.plugin_names) && Array.isArray(run.skill_names)) {
-    run.plugin_names = run.skill_names;
-  }
-  return run;
-}, z.object({
+export const KnowledgeCompilationRunSchema = z.object({
   id: z.string(),
   workspace_id: z.string().default(""),
   project_id: nullableString,
@@ -87,9 +80,8 @@ export const KnowledgeCompilationRunSchema = z.preprocess((value) => {
   created_at: z.string().catch("").default(""),
   completed_at: nullableString,
   agent: KnowledgeAgentSummarySchema.nullable().catch(null).default(null),
-  plugin_names: z.array(z.string()).catch([]).default([]),
   provenance: KnowledgeRunProvenanceSchema.nullable().catch(null).default(null),
-}).loose());
+}).loose();
 
 export const KnowledgeCompilationSourceSchema = z.object({
   id: z.string(),
@@ -180,7 +172,6 @@ export const EMPTY_KNOWLEDGE_RUN_DETAIL: KnowledgeRunDetail = {
     created_at: "",
     completed_at: null,
     agent: null,
-    plugin_names: [],
     provenance: null,
   },
   sources: [],

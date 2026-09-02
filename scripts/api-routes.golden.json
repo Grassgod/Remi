@@ -14766,7 +14766,6 @@
             "created_at": "<timestamp>",
             "completed_at": null,
             "agent": null,
-            "plugin_names": [],
             "provenance": null,
             "sources": [],
             "outputs": []
@@ -14795,7 +14794,6 @@
           "created_at": "<timestamp>",
           "completed_at": null,
           "agent": null,
-          "plugin_names": [],
           "provenance": null
         },
         "sources": [],

@@ -149,7 +149,7 @@ export function KnowledgeProvenance({ compilationRunId }: { compilationRunId?: s
         <Badge variant="outline" className="font-normal">{run.status}</Badge>
       </div>
 
-      <dl className="mt-3 grid gap-3 text-xs sm:grid-cols-3">
+      <dl className="mt-3 grid gap-3 text-xs sm:grid-cols-2">
         <div className="min-w-0">
           <dt className="flex items-center gap-1 text-muted-foreground">
             <Bot className="size-3.5" />
@@ -162,19 +162,6 @@ export function KnowledgeProvenance({ compilationRunId }: { compilationRunId?: s
                 {run.agent?.name || run.agent_id}
               </span>
             ) : t(($) => $.knowledge.provenance_manual)}
-          </dd>
-        </div>
-        <div className="min-w-0">
-          <dt className="flex items-center gap-1 text-muted-foreground">
-            <Boxes className="size-3.5" />
-            {t(($) => $.knowledge.provenance_plugin)}
-          </dt>
-          <dd className="mt-1 truncate">
-            {run.plugin_names.length > 0
-              ? run.plugin_names.map((plugin) => plugin === "code-to-wiki" ? "Code to Wiki" : plugin).join(", ")
-              : run.mode === "manual_edit"
-                ? t(($) => $.knowledge.provenance_manual)
-                : t(($) => $.knowledge.provenance_unknown)}
           </dd>
         </div>
         <div className="min-w-0">
