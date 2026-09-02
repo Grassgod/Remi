@@ -231,6 +231,7 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
       }
       return null;
     });
+    const outboxPath = join(root, "outbox.db");
     const daemon = new MultiremiDaemon({
       serverUrl: `http://127.0.0.1:${proxy.port}`,
       token: daemonToken.token,
@@ -242,7 +243,7 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
       daemonPort: 0,
       workspacesRoot: join(root, "workspaces"),
       repoCacheRoot: join(root, ".repo-cache"),
-      outboxPath: join(root, "outbox.db"),
+      outboxPath,
       outboxBackoffMs: [100],
       taskDrainTimeoutMs: 5_000,
       providerFactory: () => ({
@@ -274,6 +275,55 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
     } finally {
       daemon.stop();
       await daemonRun.catch(() => {});
+      proxy.stop(true);
+      server.stop(true);
+    }
+  }, 10_000);
+
+  it("purges stale reports after their task reaches a terminal state", async () => {
+    const { store, root } = testBed("multiremi-terminal-report-purge-");
+    const agent = store.createAgent({ name: "Terminal Purge Bot", provider: "claude" });
+    const task = store.createTask({ agentId: agent.id, prompt: "finish despite stale transcript reports" });
+    const daemonToken = await store.createAccessToken({ name: "terminal purge daemon", type: "daemon", workspaceId: "local" });
+    const server = startMultiremiServer({ store, scheduler: null, authToken: "root-terminal-purge-secret", hostname: "127.0.0.1", port: 0 });
+    const proxy = apiProxy(server.port, (request, url) => {
+      if (request.method === "POST" && url.pathname === `/api/daemon/tasks/${task.id}/messages`) {
+        return new Response("messages unavailable", { status: 503 });
+      }
+      return null;
+    });
+    const outboxPath = join(root, "outbox.db");
+    const daemon = new MultiremiDaemon({
+      serverUrl: `http://127.0.0.1:${proxy.port}`,
+      token: daemonToken.token,
+      daemonId: "daemon-terminal-report-purge",
+      provider: "claude",
+      workspaceId: "local",
+      once: true,
+      pollIntervalMs: 25,
+      daemonPort: 0,
+      workspacesRoot: join(root, "workspaces"),
+      repoCacheRoot: join(root, ".repo-cache"),
+      outboxPath,
+      outboxBackoffMs: [20],
+      taskDrainTimeoutMs: 50,
+      providerFactory: () => ({
+        async *sendStream() {
+          yield { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "done" }] } as any;
+        },
+        getLastResponse: () => RESPONSE,
+        close: async () => {},
+      }),
+    });
+    try {
+      await daemon.start();
+
+      expect(store.getTask(task.id)).toMatchObject({ status: "completed", result: "done" });
+      const persisted = new MultiremiTaskReportOutbox({ path: outboxPath, deliver: async () => {} });
+      expect(persisted.stats()).toMatchObject({ pending: 0, pendingTasks: 0 });
+      await persisted.close();
+    } finally {
+      daemon.stop();
       proxy.stop(true);
       server.stop(true);
     }
@@ -360,11 +410,10 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
       // Replayed messages arrive complete and in the original seq order.
       const messages = store.listTaskMessages(task.id);
       expect(messages.map((message) => [message.seq, message.type, message.content ?? ""])).toEqual([
-        [1, "text", "before "],
-        [2, "text", "during "],
-        [3, "tool_use", ""],
-        [4, "tool_result", ""],
-        [5, "text", "after"],
+        [1, "text", "before during "],
+        [2, "tool_use", ""],
+        [3, "tool_result", ""],
+        [4, "text", "after"],
       ]);
     } finally {
       daemon.stop();

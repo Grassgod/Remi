@@ -73,7 +73,7 @@ describe("MultiremiTaskReportOutbox", () => {
 
     apiDown = false;
     expect(await outbox.waitForTaskDrain("tsk_1")).toBe("delivered");
-    expect(delivered).toEqual(["messages:1", "messages:2", "usage:3", "complete:4"]);
+    expect(delivered).toEqual(["messages:1", "usage:3", "complete:4"]);
     expect(outbox.stats()).toMatchObject({ pending: 0 });
   });
 
@@ -91,6 +91,58 @@ describe("MultiremiTaskReportOutbox", () => {
     outbox.enqueue("tsk_ok", "complete", { output: "done" });
     expect(await outbox.waitForTaskDrain("tsk_ok")).toBe("delivered");
     expect(delivered).toEqual(["tsk_ok:1"]);
+  });
+
+  it("does not let new token reports bypass retry backoff", async () => {
+    let attempts = 0;
+    const outbox = track(new MultiremiTaskReportOutbox({
+      path: ":memory:",
+      backoffScheduleMs: [100],
+      deliver: async () => {
+        attempts += 1;
+        throw new Error("connection refused");
+      },
+    }));
+    outbox.enqueue("tsk_backoff", "messages", { messages: [{ seq: 1, type: "text", content: "a" }] });
+    await until(() => attempts === 1);
+
+    for (let seq = 2; seq <= 20; seq += 1) {
+      outbox.enqueue("tsk_backoff", "messages", { messages: [{ seq, type: "text", content: "x" }] });
+    }
+    await Bun.sleep(30);
+
+    expect(attempts).toBe(1);
+    expect(outbox.stats().pending).toBe(20);
+  });
+
+  it("batches and coalesces consecutive persisted message records on replay", async () => {
+    const path = tempPath();
+    const first = track(new MultiremiTaskReportOutbox({
+      path,
+      backoffScheduleMs: [60_000],
+      deliver: async () => { throw new Error("api unavailable"); },
+    }));
+    for (let seq = 1; seq <= 100; seq += 1) {
+      first.enqueue("tsk_batch", "messages", { messages: [{ seq, type: "thinking", content: "x" }] });
+    }
+    await Bun.sleep(20);
+    await first.close();
+
+    const delivered: MultiremiOutboxRecord[] = [];
+    const second = track(new MultiremiTaskReportOutbox({
+      path,
+      deliver: async (record) => { delivered.push(record); },
+    }));
+    await second.flushAll();
+
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]).toMatchObject({ kind: "messages", seq: 1 });
+    expect(delivered[0]?.payload.messages).toEqual([{
+      seq: 1,
+      type: "thinking",
+      content: "x".repeat(100),
+    }]);
+    expect(second.stats().pending).toBe(0);
   });
 
   it("honors a shutdown signal that was already aborted before drain starts", async () => {

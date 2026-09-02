@@ -42,7 +42,9 @@ import {
   type MultiremiOutboxKind,
   type MultiremiOutboxRecord,
   type MultiremiOutboxStats,
+  type MultiremiOutboxDrainResult,
 } from "./outbox.js";
+import { TaskMessageBatcher } from "./task-message-batcher.js";
 import {
   browseRuntimeDirectory,
   listRuntimeLocalSkills,
@@ -2141,7 +2143,7 @@ export class MultiremiDaemon {
     return this.outbox;
   }
 
-  private async awaitTaskReportDrain(taskId: string): Promise<void> {
+  private async awaitTaskReportDrain(taskId: string): Promise<MultiremiOutboxDrainResult> {
     const outbox = this.outbox;
     const drainAbort = new AbortController();
     const shutdownSignal = this.outboxAbort?.signal;
@@ -2155,11 +2157,27 @@ export class MultiremiDaemon {
     }, this.options.taskDrainTimeoutMs);
     timer.unref?.();
     try {
-      if (!outbox) return;
+      if (!outbox) return "delivered";
       const result = await outbox.waitForTaskDrain(taskId, drainAbort.signal);
       if (result === "blocked") {
         log.error(`task ${taskId} still has undelivered reports blocked on a permanent error`);
       } else if (result === "aborted" && timedOut) {
+        try {
+          const status = await this.client.getTaskStatus(taskId);
+          if (status === "completed" || status === "failed" || status === "cancelled") {
+            const purged = outbox.purgeTask(taskId);
+            log.warn(
+              `task ${taskId} report delivery exceeded ${this.options.taskDrainTimeoutMs}ms after reaching ${status}; `
+              + `discarded ${purged} stale report(s) instead of replaying them indefinitely`,
+            );
+            return "delivered";
+          }
+        } catch (error) {
+          log.warn(
+            `could not reconcile timed-out outbox reports for task ${taskId}; preserving them: `
+            + (error instanceof Error ? error.message : String(error)),
+          );
+        }
         log.warn(
           `task ${taskId} report delivery exceeded ${this.options.taskDrainTimeoutMs}ms; `
           + "continuing while the durable outbox retries in the background",
@@ -2167,6 +2185,7 @@ export class MultiremiDaemon {
       } else if (result === "aborted") {
         log.warn(`task ${taskId} report delivery interrupted by shutdown; will replay on next start`);
       }
+      return result;
     } finally {
       clearTimeout(timer);
       shutdownSignal?.removeEventListener("abort", onShutdown);
@@ -3141,10 +3160,24 @@ export class MultiremiDaemon {
     let sawCompaction = false;
     let seq = 1;
     const nextSeq = () => seq++;
-    const resetElicitationContextOffset = this.attachHumanInputHandlers(provider, task, signal, nextSeq);
+    let messageBatcher: TaskMessageBatcher | null = null;
+    const nextExternalSeq = () => {
+      // Human-request and steer messages use a separate producer. Flush ACP
+      // chunks first so their durable record and sequence stay chronological.
+      messageBatcher?.flush();
+      return nextSeq();
+    };
+    const resetElicitationContextOffset = this.attachHumanInputHandlers(provider, task, signal, nextExternalSeq);
     let finalSessionId: string | null = task.sessionId;
     let usage: TaskUsageEntry[] = [];
     const toMessages = createEventMapper(createAdapter(config.agentType));
+    messageBatcher = new TaskMessageBatcher({
+      emit: (messages) => {
+        const sequenced = messages.map((message) => ({ ...message, seq: nextSeq() }));
+        this.enqueueTaskReport(task.id, "messages", { messages: sequenced });
+        progressSummarizer?.onMessages(sequenced);
+      },
+    });
 
     // Steer channel: the feed polls for mid-run user directives; each batch
     // soft-interrupts the streaming turn (ACP session/cancel) and is injected
@@ -3186,7 +3219,7 @@ export class MultiremiDaemon {
           log.warn(`Failed to mark steer consumed for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
         });
         for (const message of messages) {
-          await this.reportHumanRequestMessage(task.id, nextSeq(), "steer", message.content, {
+          await this.reportHumanRequestMessage(task.id, nextExternalSeq(), "steer", message.content, {
             steer_id: message.id,
             steer_kind: message.kind,
             author_type: message.authorType,
@@ -3233,24 +3266,21 @@ export class MultiremiDaemon {
         try {
           resetElicitationContextOffset();
           for await (const event of session.run(prompt)) {
-            // One event may yield several messages (e.g. a completed tool_call →
-            // tool_use + tool_result). Each gets its own seq so none collides.
-            const emitted = toMessages(event).map((m) => ({ ...m, seq: nextSeq() }));
+            const emitted = toMessages(event);
             for (const message of emitted) {
               if (message.type === "compaction") sawCompaction = true;
               // Assistant text becomes the task result / issue activity body.
               if (message.type === "text" && message.content) output += message.content;
             }
-            // Enqueue-only: a transient API outage must never unwind this loop and
-            // close the provider mid-session. The outbox delivers in seq order.
-            if (emitted.length) {
-              this.enqueueTaskReport(task.id, "messages", { messages: emitted });
-              progressSummarizer?.onMessages(emitted);
-            }
+            // The front buffer coalesces token chunks for up to 200ms while
+            // tool/lifecycle boundaries flush immediately. Delivery remains
+            // enqueue-only, so a transient API outage never closes the provider.
+            messageBatcher.push(emitted);
           }
         } catch (err) {
           turnError = err;
         } finally {
+          messageBatcher.flush();
           steerFeed.setInterrupt(null);
           signal.removeEventListener("abort", onTaskAbort);
           if (graceTimer) clearTimeout(graceTimer);
@@ -3337,6 +3367,7 @@ export class MultiremiDaemon {
         return { output: candidate, sessionId: finalSessionId, workDir, usage, completed: true };
       }
     } finally {
+      messageBatcher?.close();
       steerFeed.stop();
       await this.reportIssueWorkspaceAfterRun(task, workDir, preparedWorkspace.repos).catch((err) => {
         log.warn(`Failed to report final workspace state for ${task.id}: ${err instanceof Error ? err.message : String(err)}`);

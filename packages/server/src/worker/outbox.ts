@@ -2,7 +2,12 @@ import { Database } from "bun:sqlite";
 import { chmodSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { createLogger } from "@shared/logger.js";
+import type { TaskMessageInput } from "@multiremi/contracts/types.js";
 import { MultiremiDaemonHttpError } from "./client.js";
+import {
+  coalesceTaskMessages,
+  DEFAULT_TASK_MESSAGE_BATCH_COUNT,
+} from "./task-message-batcher.js";
 
 const log = createLogger("multiremi-outbox");
 
@@ -53,6 +58,8 @@ export interface MultiremiTaskReportOutboxOptions {
   maxBytes?: number;
   /** Called once when a task's queue enters the blocked state. */
   onTaskBlocked?: (taskId: string, error: string) => void;
+  /** Maximum consecutive message records delivered in one API request. */
+  deliveryBatchSize?: number;
 }
 
 const DEFAULT_BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000, 60_000];
@@ -78,6 +85,7 @@ export class MultiremiTaskReportOutbox {
   private readonly backoff: number[];
   private readonly maxBytes: number;
   private readonly onTaskBlocked: ((taskId: string, error: string) => void) | null;
+  private readonly deliveryBatchSize: number;
   private readonly pumps = new Map<string, Promise<void>>();
   private readonly wakes = new Map<string, () => void>();
   private readonly drainWaiters = new Map<string, Array<(result: MultiremiOutboxDrainResult) => void>>();
@@ -127,6 +135,7 @@ export class MultiremiTaskReportOutbox {
     this.backoff = options.backoffScheduleMs?.length ? options.backoffScheduleMs : DEFAULT_BACKOFF_MS;
     this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
     this.onTaskBlocked = options.onTaskBlocked ?? null;
+    this.deliveryBatchSize = Math.max(1, Math.floor(options.deliveryBatchSize ?? DEFAULT_TASK_MESSAGE_BATCH_COUNT));
   }
 
   /** Persist a report and wake the task's delivery pump. Never throws on queue pressure. */
@@ -298,10 +307,10 @@ export class MultiremiTaskReportOutbox {
 
   private ensurePump(taskId: string): void {
     if (this.closed) return;
-    if (this.pumps.has(taskId)) {
-      this.wakes.get(taskId)?.();
-      return;
-    }
+    // An active pump already observes newly appended rows on its next loop.
+    // Waking its retry sleep here would let a high-volume token stream bypass
+    // backoff and hammer an unavailable API once per token.
+    if (this.pumps.has(taskId)) return;
     const run = this.runPump(taskId)
       .catch((error) => {
         log.error(`outbox pump for ${taskId} crashed: ${error instanceof Error ? error.message : String(error)}`);
@@ -319,18 +328,16 @@ export class MultiremiTaskReportOutbox {
 
   private async runPump(taskId: string): Promise<void> {
     while (!this.closed) {
-      const row = this.db.query(
-        "SELECT * FROM outbox_events WHERE task_id = ? ORDER BY seq ASC LIMIT 1",
-      ).get(taskId) as Record<string, unknown> | null;
-      if (!row) return;
-      if (String(row.status) === "blocked") return;
-      const record = toRecord(row);
+      const delivery = this.nextDelivery(taskId);
+      if (!delivery) return;
+      if (delivery.blocked) return;
+      const { record, recordIds } = delivery;
       try {
         await this.deliver(record);
-        this.db.run("DELETE FROM outbox_events WHERE id = ?", [record.id]);
+        this.deleteRecords(recordIds);
       } catch (error) {
         if (isDeliveredEquivalent(error, record)) {
-          this.db.run("DELETE FROM outbox_events WHERE id = ?", [record.id]);
+          this.deleteRecords(recordIds);
           continue;
         }
         const message = error instanceof Error ? error.message : String(error);
@@ -363,6 +370,54 @@ export class MultiremiTaskReportOutbox {
         await this.sleepWithWake(taskId, record.id, delay);
       }
     }
+  }
+
+  private nextDelivery(taskId: string): OutboxDelivery | null {
+    const rows = this.db.query(
+      "SELECT * FROM outbox_events WHERE task_id = ? ORDER BY seq ASC LIMIT ?",
+    ).all(taskId, this.deliveryBatchSize) as Array<Record<string, unknown>>;
+    const firstRow = rows[0];
+    if (!firstRow) return null;
+    const first = toRecord(firstRow);
+    if (String(firstRow.status) === "blocked") {
+      return { record: first, recordIds: [first.id], blocked: true };
+    }
+    if (first.kind !== "messages") {
+      return { record: first, recordIds: [first.id], blocked: false };
+    }
+
+    const records: MultiremiOutboxRecord[] = [];
+    const messages: TaskMessageInput[] = [];
+    for (const row of rows) {
+      if (String(row.status) === "blocked") break;
+      const record = toRecord(row);
+      if (record.kind !== "messages") break;
+      const recordMessages = Array.isArray(record.payload.messages)
+        ? record.payload.messages as TaskMessageInput[]
+        : [];
+      if (records.length > 0 && messages.length + recordMessages.length > DEFAULT_TASK_MESSAGE_BATCH_COUNT) break;
+      records.push(record);
+      messages.push(...recordMessages);
+      if (messages.length >= DEFAULT_TASK_MESSAGE_BATCH_COUNT) break;
+    }
+
+    return {
+      record: {
+        ...first,
+        payload: { messages: coalesceTaskMessages(messages) },
+      },
+      recordIds: records.map((record) => record.id),
+      blocked: false,
+    };
+  }
+
+  private deleteRecords(recordIds: number[]): void {
+    if (recordIds.length === 1) {
+      this.db.run("DELETE FROM outbox_events WHERE id = ?", [recordIds[0]!]);
+      return;
+    }
+    const placeholders = recordIds.map(() => "?").join(", ");
+    this.db.run(`DELETE FROM outbox_events WHERE id IN (${placeholders})`, recordIds);
   }
 
   private async sleepWithWake(taskId: string, recordId: number, ms: number): Promise<void> {
@@ -424,6 +479,12 @@ export class MultiremiTaskReportOutbox {
       [key, value],
     );
   }
+}
+
+interface OutboxDelivery {
+  record: MultiremiOutboxRecord;
+  recordIds: number[];
+  blocked: boolean;
 }
 
 function toRecord(row: Record<string, unknown>): MultiremiOutboxRecord {
