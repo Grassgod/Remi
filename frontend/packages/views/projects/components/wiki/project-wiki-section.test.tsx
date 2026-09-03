@@ -319,7 +319,7 @@ describe("ProjectWikiSection", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("opens on the memory stream: title, body, author, pinned badge, source issue", () => {
+  it("opens on the memory stream: title, body, author, pinned marker, source issue", () => {
     state.docs = [
       doc({
         id: "d1",
@@ -339,7 +339,7 @@ describe("ProjectWikiSection", () => {
     expect(screen.getByTestId("wiki-body")).toHaveTextContent(
       "Cold cache doubles it.",
     );
-    expect(screen.getByText("Pinned")).toBeInTheDocument();
+    expect(screen.getByLabelText("Pinned")).toHaveAttribute("title", "Pinned");
     expect(screen.getByText("agent:agent-7")).toBeInTheDocument();
     expect(
       screen.getByRole("link", { name: "Source issue" }),
@@ -348,6 +348,24 @@ describe("ProjectWikiSection", () => {
       screen.getAllByRole("link", { name: "Build takes 4 minutes" })
         .some((link) => link.getAttribute("href") === "/ws/projects/proj-1/wiki/d1"),
     ).toBe(true);
+  });
+
+  it("renders compact pinned and unverified markers with accessible names", () => {
+    renderMemoryCard(
+      doc({
+        id: "memory-markers",
+        kind: "memory",
+        title: "Historical pinned fact",
+        pinned: true,
+        compilation_run_id: null,
+      }),
+    );
+
+    expect(screen.getByLabelText("Pinned")).toHaveAttribute("title", "Pinned");
+    expect(screen.getByLabelText("Unverified history")).toHaveAttribute(
+      "title",
+      "Unverified history",
+    );
   });
 
   it("resolves a memory slug from the URL and renders its detail after refresh", () => {

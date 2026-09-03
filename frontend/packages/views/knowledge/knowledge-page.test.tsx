@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import type {
@@ -21,6 +21,7 @@ const TEST_RESOURCES = { en: { common: enCommon, projects: enProjects } };
 const state = vi.hoisted(() => ({
   projects: [] as unknown[],
   docs: [] as unknown[],
+  memoryDocs: [] as unknown[],
   repositories: [] as unknown[],
   summaries: [] as unknown[],
   projectDetails: {} as Record<string, unknown>,
@@ -82,8 +83,9 @@ vi.mock("@tanstack/react-query", () => ({
       };
     }
     const projects = key[0] === "projects";
+    const memoryDocs = key[0] === "workspace-docs" && key[1] === "memory";
     return {
-      data: projects ? state.projects : state.docs,
+      data: projects ? state.projects : memoryDocs ? state.memoryDocs : state.docs,
       isPending: state.basePending,
       isError: state.baseError !== null,
       error: state.baseError,
@@ -144,7 +146,12 @@ vi.mock("../projects/components/labels", () => ({
   useFormatRelativeDate: () => (value: string) => `relative:${value}`,
 }));
 vi.mock("../projects/components/wiki/project-wiki-section", () => ({
-  MemoryCard: ({ doc }: { doc: WorkspaceDoc }) => <div data-testid={`memory-${doc.id}`}>{doc.title}</div>,
+  MemoryMarkers: ({ pinned, unverified }: { pinned: boolean; unverified: boolean }) => (
+    <span>
+      {pinned && <span aria-label="Pinned" title="Pinned" />}
+      {unverified && <span aria-label="Unverified history" title="Unverified history" />}
+    </span>
+  ),
 }));
 vi.mock("../navigation", () => ({
   AppLink: ({ href, children, ...props }: { href: string; children: ReactNode }) => <a href={href} {...props}>{children}</a>,
@@ -222,13 +229,13 @@ function runDetail(partial: Partial<KnowledgeRunDetail> = {}): KnowledgeRunDetai
 }
 
 function renderPage() {
-  render(<I18nProvider locale="en" resources={TEST_RESOURCES}><KnowledgePage /></I18nProvider>);
+  return render(<I18nProvider locale="en" resources={TEST_RESOURCES}><KnowledgePage /></I18nProvider>);
 }
 
 describe("KnowledgePage", () => {
   beforeEach(() => {
     Object.assign(state, {
-      projects: [], docs: [], repositories: [], summaries: [], projectDetails: {}, repositoryDocs: {},
+      projects: [], docs: [], memoryDocs: [], repositories: [], summaries: [], projectDetails: {}, repositoryDocs: {},
       submissions: [], runs: [], runDetail: null,
       basePending: false, submissionsPending: false, runsPending: false, runDetailPending: false,
       baseError: null, submissionsError: null, runsError: null,
@@ -284,6 +291,8 @@ describe("KnowledgePage", () => {
     expect(projectSource).toHaveTextContent("Apollo");
     expect(projectSource).toHaveTextContent("2");
     expect(screen.getByTestId("wiki-body")).toHaveTextContent("Project Wiki index body");
+    expect(screen.getByText("Projects")).toBeInTheDocument();
+    expect(screen.getByText("Repositories")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Full page/ })).toHaveAttribute("href", "/ws/projects/proj-1/wiki/index");
     expect(screen.queryByText("Agent-only memory")).not.toBeInTheDocument();
 
@@ -292,19 +301,141 @@ describe("KnowledgePage", () => {
     expect(screen.getByRole("link", { name: /Full page/ })).toHaveAttribute("href", "/ws/repos/repo-1/wiki/index.md");
   });
 
+  it("groups same-named project and repository sources under distinct headings", () => {
+    state.projects = [project({ id: "proj-remi", title: "Remi" })];
+    state.docs = [
+      doc({ id: "project-index", project_id: "proj-remi", project_title: "Remi", path: "index.md" }),
+    ];
+    state.projectDetails["project-index"] = state.docs[0];
+    state.repositories = [repository({ id: "repo-remi", name: "Remi" })];
+    state.summaries = [summary({ repository_id: "repo-remi", page_count: 1 })];
+
+    renderPage();
+
+    const scope = screen.getByText("Knowledge scope").parentElement!;
+    expect(within(scope).getByText("Projects")).toBeInTheDocument();
+    expect(within(scope).getByText("Repositories")).toBeInTheDocument();
+    expect(screen.getByTestId("knowledge-project-proj-remi")).toHaveTextContent("Remi");
+    expect(screen.getByTestId("knowledge-repository-repo-remi")).toHaveTextContent("Remi");
+  });
+
   it("shows only formal memory in Memory and keeps memory Raw in Raw", () => {
     state.projects = [project({ id: "proj-1", title: "Apollo" })];
-    state.docs = [doc({ id: "formal", kind: "memory", title: "Formal memory" })];
+    state.memoryDocs = [doc({ id: "formal", kind: "memory", title: "Formal memory" })];
     state.submissions = [submission({ id: "raw-memory", body: "Memory waiting for Atlas" })];
     renderPage();
 
     fireEvent.click(screen.getByRole("tab", { name: /Memory/ }));
-    expect(screen.getByTestId("memory-formal")).toHaveTextContent("Formal memory");
+    expect(screen.getByRole("heading", { name: "Formal memory" })).toBeInTheDocument();
     expect(screen.queryByText("Memory waiting for Atlas")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("tab", { name: /Raw/ }));
     expect(screen.getByRole("button", { name: "Memory waiting for Atlas" })).toBeInTheDocument();
     expect(screen.queryByText("Formal memory")).not.toBeInTheDocument();
+  });
+
+  it("renders memory scope, directory, and full detail with Wiki links resolved", () => {
+    const longBody = `Read [[runbook]].\n${"Full memory detail. ".repeat(30)}`;
+    state.projects = [
+      project({ id: "proj-1", title: "Apollo" }),
+      project({ id: "proj-empty", title: "Empty project" }),
+    ];
+    state.docs = [
+      doc({ id: "wiki-runbook", slug: "runbook", title: "Runbook", body: "" }),
+    ];
+    state.memoryDocs = [
+      doc({
+        id: "memory-full",
+        kind: "memory",
+        slug: "full-memory",
+        title: "Full memory",
+        summary: "A concise summary",
+        body: longBody,
+        pinned: true,
+        source_issue_id: "issue-7",
+        version: 3,
+      }),
+    ];
+
+    const { container } = renderPage();
+    fireEvent.click(screen.getByRole("tab", { name: /Memory/ }));
+
+    expect(screen.getByTestId("knowledge-memory-project-proj-1")).toHaveTextContent("Apollo1");
+    expect(screen.queryByTestId("knowledge-memory-project-proj-empty")).not.toBeInTheDocument();
+    const directory = screen.getByRole("navigation", { name: "Directory" });
+    expect(within(directory).getByRole("button", { name: "Full memory" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("heading", { name: "Full memory" })).toBeInTheDocument();
+    expect(screen.getByText("A concise summary")).toBeInTheDocument();
+    expect(screen.getByTestId("wiki-body")).toHaveTextContent("[Runbook](/ws/projects/proj-1/wiki/runbook)");
+    expect(screen.getByTestId("wiki-body")).toHaveTextContent("Full memory detail.");
+    expect(screen.queryByRole("button", { name: "Show more" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Full page/ })).toHaveAttribute("href", "/ws/projects/proj-1/wiki/full-memory");
+    expect(screen.getByRole("link", { name: "Source issue" })).toHaveAttribute("href", "/ws/issues/issue-7");
+    expect(container.querySelector(".lg\\:grid-cols-\\[220px_280px_minmax\\(0\\,1fr\\)\\]")).toBeInTheDocument();
+    expect(state.observedQueries.some(({ key, enabled }) => (
+      key[0] === "workspace-docs"
+      && key[1] === "all"
+      && key[2] === "metadata"
+      && enabled === true
+    ))).toBe(true);
+  });
+
+  it("switches the memory detail when another directory entry is selected", () => {
+    state.projects = [project({ id: "proj-1", title: "Apollo" })];
+    state.memoryDocs = [
+      doc({
+        id: "memory-first",
+        kind: "memory",
+        title: "Pinned memory",
+        body: "Pinned body",
+        pinned: true,
+        updated_at: "2026-07-01T00:00:00Z",
+      }),
+      doc({
+        id: "memory-second",
+        kind: "memory",
+        title: "Recent memory",
+        body: "Recent body",
+        updated_at: "2026-07-09T00:00:00Z",
+      }),
+    ];
+
+    renderPage();
+    fireEvent.click(screen.getByRole("tab", { name: /Memory/ }));
+    expect(screen.getByTestId("wiki-body")).toHaveTextContent("Pinned body");
+
+    fireEvent.click(screen.getByRole("button", { name: "Recent memory" }));
+
+    expect(screen.getByRole("heading", { name: "Recent memory" })).toBeInTheDocument();
+    expect(screen.getByTestId("wiki-body")).toHaveTextContent("Recent body");
+  });
+
+  it("filters only the memory directory and restores it when search is cleared", async () => {
+    const user = userEvent.setup();
+    state.projects = [project({ id: "proj-1", title: "Apollo" })];
+    state.memoryDocs = [
+      doc({ id: "memory-deploy", kind: "memory", title: "Deploy fact", body: "Use the release job." }),
+      doc({ id: "memory-local", kind: "memory", title: "Local database", body: "Port 5432." }),
+    ];
+
+    renderPage();
+    fireEvent.click(screen.getByRole("tab", { name: /Memory/ }));
+    const input = screen.getByPlaceholderText("Search formal memory...");
+    const directory = screen.getByRole("navigation", { name: "Directory" });
+
+    await user.type(input, "database");
+    expect(screen.getByTestId("knowledge-memory-project-proj-1")).toBeInTheDocument();
+    expect(within(directory).queryByRole("button", { name: "Deploy fact" })).not.toBeInTheDocument();
+    expect(within(directory).getByRole("button", { name: "Local database" })).toBeInTheDocument();
+    expect(screen.getByTestId("wiki-body")).toHaveTextContent("Port 5432.");
+
+    await user.clear(input);
+    await user.type(input, "missing");
+    expect(within(directory).getByText("Nothing matches your search")).toBeInTheDocument();
+
+    await user.clear(input);
+    expect(within(directory).getByRole("button", { name: "Deploy fact" })).toBeInTheDocument();
+    expect(within(directory).getByRole("button", { name: "Local database" })).toBeInTheDocument();
   });
 
   it("renders Raw source, issue, agent, proposed target, and status", () => {

@@ -20,6 +20,7 @@ import {
   Library,
   Loader2,
   PanelLeft,
+  Pin,
   Search,
   Sparkles,
 } from "lucide-react";
@@ -65,8 +66,9 @@ import { ReadonlyContent } from "../editor";
 import { TranscriptButton } from "../common/task-transcript";
 import { PageHeader } from "../layout/page-header";
 import { ProjectIcon } from "../projects/components/project-icon";
-import { MemoryCard } from "../projects/components/wiki/project-wiki-section";
+import { MemoryMarkers } from "../projects/components/wiki/project-wiki-section";
 import { useFormatRelativeDate } from "../projects/components/labels";
+import { replaceWikiLinkMarkers } from "../projects/components/wiki/wiki-links";
 import { useT } from "../i18n";
 
 type KnowledgeTab = "wiki" | "raw" | "memory" | "runs";
@@ -344,29 +346,227 @@ function WikiPane({
   );
 }
 
-function MemoryPane({ projects, docs, search }: { projects: Project[]; docs: WorkspaceDoc[]; search: string }) {
+function MemoryPane({
+  projects,
+  docs,
+  wikiPages,
+  search,
+}: {
+  projects: Project[];
+  docs: WorkspaceDoc[];
+  wikiPages: WorkspaceDoc[];
+  search: string;
+}) {
   const { t } = useT("projects");
+  const paths = useWorkspacePaths();
+  const formatRelativeDate = useFormatRelativeDate();
+  const [projectId, setProjectId] = useState("");
+  const [selectedDocId, setSelectedDocId] = useState("");
   const query = search.trim().toLowerCase();
-  const allWikiPages = docs.filter((doc) => doc.kind === "wiki" && doc.slug !== "_schema");
-  const groups = projects.map((project) => ({
-    project,
-    docs: docs.filter((doc) => doc.project_id === project.id && doc.kind === "memory" && (!query || matchesDoc(doc, query)))
-      .sort((a, b) => b.updated_at.localeCompare(a.updated_at)),
-  })).filter((group) => group.docs.length > 0);
-  if (groups.length === 0) return <EmptyState icon={Brain} title={query ? t(($) => $.knowledge.no_results) : t(($) => $.knowledge.memory_empty)} />;
+  const docsByProject = useMemo(() => {
+    const grouped = new Map<string, WorkspaceDoc[]>();
+    for (const doc of docs) {
+      if (doc.kind !== "memory") continue;
+      grouped.set(doc.project_id, [...(grouped.get(doc.project_id) ?? []), doc]);
+    }
+    for (const projectDocs of grouped.values()) {
+      projectDocs.sort((left, right) => (
+        Number(right.pinned) - Number(left.pinned)
+        || right.updated_at.localeCompare(left.updated_at)
+      ));
+    }
+    return grouped;
+  }, [docs]);
+  const memoryProjects = useMemo(
+    () => projects.filter((project) => (docsByProject.get(project.id)?.length ?? 0) > 0),
+    [docsByProject, projects],
+  );
+
+  useEffect(() => {
+    if (!memoryProjects.some((project) => project.id === projectId)) {
+      setProjectId(memoryProjects[0]?.id ?? "");
+    }
+  }, [memoryProjects, projectId]);
+
+  const selectedProject = memoryProjects.find((project) => project.id === projectId)
+    ?? memoryProjects[0]
+    ?? null;
+  const visibleDocs = useMemo(() => {
+    const projectDocs = selectedProject
+      ? docsByProject.get(selectedProject.id) ?? []
+      : [];
+    return projectDocs.filter((doc) => matchesDoc(doc, query));
+  }, [docsByProject, query, selectedProject]);
+
+  useEffect(() => {
+    if (!visibleDocs.some((doc) => doc.id === selectedDocId)) {
+      setSelectedDocId(visibleDocs[0]?.id ?? "");
+    }
+  }, [selectedDocId, visibleDocs]);
+
+  const selectedDoc = visibleDocs.find((doc) => doc.id === selectedDocId)
+    ?? visibleDocs[0]
+    ?? null;
+  const selectedWikiPages = wikiPages.filter((page) => (
+    page.project_id === selectedProject?.id
+    && page.kind === "wiki"
+    && page.slug !== "_schema"
+  ));
+  const body = selectedDoc
+    ? replaceWikiLinkMarkers(selectedDoc.body, (slug) => {
+        const target = selectedWikiPages.find((page) => page.slug === slug);
+        return target
+          ? {
+              title: target.title,
+              href: paths.projectWikiPage(
+                selectedDoc.project_id,
+                target.slug || target.id,
+              ),
+            }
+          : null;
+      })
+    : "";
+
+  if (memoryProjects.length === 0) {
+    return <EmptyState icon={Brain} title={t(($) => $.knowledge.memory_empty)} />;
+  }
+
   return (
-    <div className="space-y-6 p-4">
-      {groups.map(({ project, docs: memoryDocs }) => (
-        <section key={project.id}>
-          <h2 className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground">
-            <FolderKanban className="size-3.5" />{project.title}<span className="tabular-nums">{memoryDocs.length}</span>
-          </h2>
-          <div className="grid gap-3 xl:grid-cols-2">
-            {memoryDocs.map((doc) => <MemoryCard key={doc.id} doc={doc} pages={allWikiPages.filter((page) => page.project_id === project.id)} />)}
+    <TooltipProvider delay={100}>
+      <div className="grid min-h-[30rem] flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[220px_280px_minmax(0,1fr)]">
+        <aside
+          className="border-b lg:border-b-0 lg:border-r"
+          aria-label={t(($) => $.knowledge.wiki_sources)}
+        >
+          <div className="border-b px-3 py-2 text-xs font-medium text-muted-foreground">
+            {t(($) => $.knowledge.wiki_sources)}
           </div>
-        </section>
-      ))}
-    </div>
+          <div className="max-h-48 overflow-y-auto p-2 lg:max-h-none">
+            {memoryProjects.map((project) => {
+              const active = project.id === selectedProject?.id;
+              return (
+                <button
+                  key={project.id}
+                  type="button"
+                  data-testid={`knowledge-memory-project-${project.id}`}
+                  aria-current={active ? "page" : undefined}
+                  onClick={() => {
+                    setProjectId(project.id);
+                    setSelectedDocId("");
+                  }}
+                  className={`flex min-h-10 w-full items-center gap-2 rounded px-2 text-left text-sm ${active ? "bg-accent font-medium" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"}`}
+                >
+                  <span className="flex size-5 shrink-0 items-center justify-center">
+                    {project.icon
+                      ? <ProjectIcon project={project} size="sm" />
+                      : <FolderKanban className="size-4" />}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">{project.title}</span>
+                  <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                    {docsByProject.get(project.id)?.length ?? 0}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </aside>
+
+        <nav
+          className="min-h-52 border-b lg:border-b-0 lg:border-r"
+          aria-label={t(($) => $.knowledge.wiki_directory)}
+        >
+          <div className="border-b px-3 py-2 text-xs font-medium text-muted-foreground">
+            {t(($) => $.knowledge.wiki_directory)}
+          </div>
+          <div className="max-h-72 overflow-y-auto p-2 lg:max-h-none">
+            {visibleDocs.length > 0 ? (
+              <div role="list">
+                {visibleDocs.map((doc) => {
+                  const active = doc.id === selectedDoc?.id;
+                  return (
+                    <div key={doc.id} role="listitem">
+                      <button
+                        type="button"
+                        aria-current={active ? "page" : undefined}
+                        onClick={() => setSelectedDocId(doc.id)}
+                        className={`flex h-8 w-full min-w-0 items-center gap-2 rounded-md pr-2 text-left text-sm ${active ? "bg-accent font-medium text-foreground" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"}`}
+                        style={{ paddingLeft: "8px" }}
+                      >
+                        {doc.pinned
+                          ? <Pin className="size-3.5 shrink-0" />
+                          : <Brain className="size-3.5 shrink-0" />}
+                        <span className="truncate" title={doc.title}>{doc.title}</span>
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="p-2 text-xs text-muted-foreground">
+                {t(($) => $.knowledge.no_results)}
+              </p>
+            )}
+          </div>
+        </nav>
+
+        <main className="min-h-0 overflow-y-auto">
+          {selectedDoc ? (
+            <article className="mx-auto max-w-3xl px-5 py-5 sm:px-7 sm:py-7">
+              <div className="flex items-start justify-between gap-4 border-b pb-4">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                    <Brain className="size-3.5" />
+                    <span>{t(($) => $.wiki.memory_node)}</span>
+                    <MemoryMarkers
+                      pinned={selectedDoc.pinned}
+                      unverified={!selectedDoc.compilation_run_id}
+                    />
+                  </div>
+                  <h2 className="mt-1 break-words text-xl font-semibold">
+                    {selectedDoc.title}
+                  </h2>
+                  {selectedDoc.summary && (
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      {selectedDoc.summary}
+                    </p>
+                  )}
+                </div>
+                <AppLink
+                  href={paths.projectWikiPage(
+                    selectedDoc.project_id,
+                    selectedDoc.slug || selectedDoc.id,
+                  )}
+                  className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground hover:underline"
+                >
+                  <PanelLeft className="size-3.5" />
+                  {t(($) => $.knowledge.wiki_open_full)}
+                </AppLink>
+              </div>
+              <DocRefs refs={selectedDoc.refs} className="mt-3" />
+              {body && (
+                <div className="mt-5">
+                  <ReadonlyContent content={body} />
+                </div>
+              )}
+              <footer className="mt-8 flex flex-wrap items-center gap-3 border-t pt-3 text-xs text-muted-foreground">
+                <span>{t(($) => $.knowledge.version_short, { version: selectedDoc.version })}</span>
+                <span>{formatRelativeDate(selectedDoc.updated_at)}</span>
+                {selectedDoc.source_issue_id && (
+                  <AppLink
+                    href={paths.issueDetail(selectedDoc.source_issue_id)}
+                    className="hover:text-foreground hover:underline"
+                  >
+                    {t(($) => $.wiki.source_issue)}
+                  </AppLink>
+                )}
+              </footer>
+            </article>
+          ) : (
+            <EmptyState icon={Files} title={t(($) => $.knowledge.no_results)} />
+          )}
+        </main>
+      </div>
+    </TooltipProvider>
   );
 }
 
@@ -879,7 +1079,7 @@ export function KnowledgePage() {
   const projectsQuery = useQuery({ ...projectListOptions(workspaceId), enabled: Boolean(workspaceId) && needsProjects });
   const docsQuery = useQuery({
     ...workspaceDocListOptions(workspaceId, { includeBody: false }),
-    enabled: Boolean(workspaceId) && activeTab === "wiki",
+    enabled: Boolean(workspaceId) && (activeTab === "wiki" || activeTab === "memory"),
   });
   const memoryDocsQuery = useQuery({
     ...workspaceDocListOptions(workspaceId, { kind: "memory", includeBody: true }),
@@ -908,8 +1108,8 @@ export function KnowledgePage() {
   const total = counts[activeTab];
   const wikiPending = projectsQuery.isPending || docsQuery.isPending || repositoriesQuery.isPending || repositoryWikiQuery.isPending;
   const wikiError = projectsQuery.error ?? docsQuery.error ?? repositoriesQuery.error ?? repositoryWikiQuery.error;
-  const memoryPending = projectsQuery.isPending || memoryDocsQuery.isPending;
-  const memoryError = projectsQuery.error ?? memoryDocsQuery.error;
+  const memoryPending = projectsQuery.isPending || docsQuery.isPending || memoryDocsQuery.isPending;
+  const memoryError = projectsQuery.error ?? docsQuery.error ?? memoryDocsQuery.error;
   const panelPending = activeTab === "raw" ? submissionsQuery.isPending : activeTab === "runs" ? runsQuery.isPending : activeTab === "memory" ? memoryPending : wikiPending;
   const panelError = activeTab === "raw" ? submissionsQuery.error : activeTab === "runs" ? runsQuery.error : activeTab === "memory" ? memoryError : wikiError;
   const retry = () => {
@@ -917,6 +1117,7 @@ export function KnowledgePage() {
     else if (activeTab === "runs") void runsQuery.refetch();
     else if (activeTab === "memory") {
       void projectsQuery.refetch();
+      void docsQuery.refetch();
       void memoryDocsQuery.refetch();
     } else {
       void projectsQuery.refetch();
@@ -967,7 +1168,7 @@ export function KnowledgePage() {
           <>
             <TabsContent value="wiki" className="min-h-0 overflow-y-auto"><WikiPane projects={projects} docs={docs} repositories={repositories} summaries={summaries} search={search} sortOrder={sortOrder} /></TabsContent>
             <TabsContent value="raw" className="min-h-0 overflow-y-auto"><RawPane submissions={submissions} search={search} /></TabsContent>
-            <TabsContent value="memory" className="min-h-0 overflow-y-auto"><MemoryPane projects={projects} docs={memoryDocs} search={search} /></TabsContent>
+            <TabsContent value="memory" className="min-h-0 overflow-y-auto"><MemoryPane projects={projects} docs={memoryDocs} wikiPages={docs} search={search} /></TabsContent>
             <TabsContent value="runs" className="min-h-0 overflow-y-auto"><RunPane runs={runs} search={search} /></TabsContent>
           </>
         )}

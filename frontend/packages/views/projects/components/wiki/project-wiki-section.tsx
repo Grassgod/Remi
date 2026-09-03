@@ -21,6 +21,12 @@ import { Button } from "@multiremi/ui/components/ui/button";
 import { Input } from "@multiremi/ui/components/ui/input";
 import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
 import { Sheet, SheetContent, SheetTitle } from "@multiremi/ui/components/ui/sheet";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@multiremi/ui/components/ui/tooltip";
 import { projectDocListOptions } from "@multiremi/core/project-docs";
 import { projectResourcesOptions } from "@multiremi/core/projects";
 import { repositoryListOptions } from "@multiremi/core/repositories";
@@ -327,8 +333,51 @@ function matchesMemoryQuery(doc: ProjectDoc, query: string): boolean {
   ].some((value) => value.toLowerCase().includes(query));
 }
 
-// Exported for the workspace-wide Knowledge page, which renders the same
-// memory entries grouped by project.
+export function MemoryMarkers({
+  pinned,
+  unverified,
+}: {
+  pinned: boolean;
+  unverified: boolean;
+}) {
+  const { t } = useT("projects");
+  const pinnedLabel = t(($) => $.wiki.pinned_badge);
+  const unverifiedLabel = t(($) => $.knowledge.history_unverified);
+
+  if (!pinned && !unverified) return null;
+
+  return (
+    <span className="flex shrink-0 items-center gap-1">
+      {pinned && (
+        <Tooltip>
+          <TooltipTrigger render={<span className="inline-flex" />}>
+            <Pin
+              className="size-3.5 text-muted-foreground"
+              aria-label={pinnedLabel}
+              {...({ title: pinnedLabel } as Record<string, string>)}
+            />
+          </TooltipTrigger>
+          <TooltipContent>{pinnedLabel}</TooltipContent>
+        </Tooltip>
+      )}
+      {unverified && (
+        <Tooltip>
+          <TooltipTrigger render={<span className="inline-flex" />}>
+            <History
+              className="size-3.5 text-muted-foreground"
+              aria-label={unverifiedLabel}
+              {...({ title: unverifiedLabel } as Record<string, string>)}
+            />
+          </TooltipTrigger>
+          <TooltipContent>
+            {t(($) => $.knowledge.history_unverified_hint)}
+          </TooltipContent>
+        </Tooltip>
+      )}
+    </span>
+  );
+}
+
 export function MemoryCard({
   doc,
   pages,
@@ -374,18 +423,10 @@ export function MemoryCard({
         >
           {doc.title}
         </AppLink>
-        {doc.pinned && (
-          <Badge variant="secondary" className="shrink-0 gap-1">
-            <Pin className="h-3 w-3" />
-            {t(($) => $.wiki.pinned_badge)}
-          </Badge>
-        )}
-        {!doc.compilation_run_id && (
-          <Badge variant="outline" className="shrink-0 gap-1 font-normal text-muted-foreground">
-            <History className="size-3" />
-            {t(($) => $.knowledge.history_unverified)}
-          </Badge>
-        )}
+        <MemoryMarkers
+          pinned={doc.pinned}
+          unverified={!doc.compilation_run_id}
+        />
       </div>
       {body && (
         <div className="mt-1.5">
@@ -465,61 +506,61 @@ function MemoryDetailPane({
     : "";
 
   return (
-    <article
-      className="mx-auto w-full max-w-3xl px-6 py-6"
-      data-testid="memory-detail"
-    >
-      <div className="flex items-start gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-            <Brain className="size-3.5" />
-            <span>{t(($) => $.wiki.memory_node)}</span>
+    <TooltipProvider delay={100}>
+      <article
+        className="mx-auto w-full max-w-3xl px-6 py-6"
+        data-testid="memory-detail"
+      >
+        <div className="flex items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+              <Brain className="size-3.5" />
+              <span>{t(($) => $.wiki.memory_node)}</span>
+            </div>
+            <h1 className="mt-1 break-words text-xl font-semibold">
+              {doc.title}
+            </h1>
           </div>
-          <h1 className="mt-1 break-words text-xl font-semibold">
-            {doc.title}
-          </h1>
+          <MemoryMarkers
+            pinned={doc.pinned}
+            unverified={!doc.compilation_run_id}
+          />
         </div>
-        {doc.pinned && (
-          <Badge variant="secondary" className="shrink-0 gap-1">
-            <Pin className="size-3" />
-            {t(($) => $.wiki.pinned_badge)}
-          </Badge>
-        )}
-      </div>
 
-      <DocRefs refs={doc.refs ?? []} className="mt-3" />
-      <KnowledgeProvenance compilationRunId={doc.compilation_run_id} />
+        <DocRefs refs={doc.refs ?? []} className="mt-3" />
+        <KnowledgeProvenance compilationRunId={doc.compilation_run_id} />
 
-      {body && (
-        <div className="mt-5">
-          <ReadonlyContent content={body} />
-        </div>
-      )}
+        {body && (
+          <div className="mt-5">
+            <ReadonlyContent content={body} />
+          </div>
+        )}
 
-      <footer className="mt-8 flex flex-wrap items-center gap-1.5 border-t pt-3 text-xs text-muted-foreground">
-        {doc.author_type && doc.author_id && (
-          <>
-            <ActorAvatar actorType={doc.author_type} actorId={doc.author_id} size={16} />
-            <ActorName actorType={doc.author_type} actorId={doc.author_id} />
-            <span>·</span>
-          </>
-        )}
-        <span>{formatRelativeDate(doc.updated_at)}</span>
-        {doc.source_issue_id && (
-          <>
-            <span>·</span>
-            <span>{t(($) => $.wiki.source_issue)}</span>
-            <AppLink
-              href={paths.issueDetail(doc.source_issue_id)}
-              className="font-medium hover:text-foreground hover:underline"
-              aria-label={`${t(($) => $.wiki.source_issue)} ${doc.source_issue_id}`}
-            >
-              {doc.source_issue_id}
-            </AppLink>
-          </>
-        )}
-      </footer>
-    </article>
+        <footer className="mt-8 flex flex-wrap items-center gap-1.5 border-t pt-3 text-xs text-muted-foreground">
+          {doc.author_type && doc.author_id && (
+            <>
+              <ActorAvatar actorType={doc.author_type} actorId={doc.author_id} size={16} />
+              <ActorName actorType={doc.author_type} actorId={doc.author_id} />
+              <span>·</span>
+            </>
+          )}
+          <span>{formatRelativeDate(doc.updated_at)}</span>
+          {doc.source_issue_id && (
+            <>
+              <span>·</span>
+              <span>{t(($) => $.wiki.source_issue)}</span>
+              <AppLink
+                href={paths.issueDetail(doc.source_issue_id)}
+                className="font-medium hover:text-foreground hover:underline"
+                aria-label={`${t(($) => $.wiki.source_issue)} ${doc.source_issue_id}`}
+              >
+                {doc.source_issue_id}
+              </AppLink>
+            </>
+          )}
+        </footer>
+      </article>
+    </TooltipProvider>
   );
 }
 
@@ -533,26 +574,28 @@ function MemoryOverviewPane({
   const { t } = useT("projects");
 
   return (
-    <div className="h-full overflow-y-auto" data-testid="memory-overview">
-      <div className="mx-auto w-full max-w-3xl px-6 py-6">
-        <h1 className="text-xl font-semibold">{t(($) => $.wiki.memory_node)}</h1>
-        <p className="mt-0.5 text-sm text-muted-foreground">
-          {t(($) => $.wiki.memory_description)}
-        </p>
-
-        {docs.length === 0 ? (
-          <p className="mt-5 text-sm text-muted-foreground">
-            {t(($) => $.wiki.memory_empty)}
+    <TooltipProvider delay={100}>
+      <div className="h-full overflow-y-auto" data-testid="memory-overview">
+        <div className="mx-auto w-full max-w-3xl px-6 py-6">
+          <h1 className="text-xl font-semibold">{t(($) => $.wiki.memory_node)}</h1>
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            {t(($) => $.wiki.memory_description)}
           </p>
-        ) : (
-          <div className="mt-5 space-y-3">
-            {docs.map((doc) => (
-              <MemoryCard key={doc.id} doc={doc} pages={pages} />
-            ))}
-          </div>
-        )}
+
+          {docs.length === 0 ? (
+            <p className="mt-5 text-sm text-muted-foreground">
+              {t(($) => $.wiki.memory_empty)}
+            </p>
+          ) : (
+            <div className="mt-5 space-y-3">
+              {docs.map((doc) => (
+                <MemoryCard key={doc.id} doc={doc} pages={pages} />
+              ))}
+            </div>
+          )}
+        </div>
       </div>
-    </div>
+    </TooltipProvider>
   );
 }
 
