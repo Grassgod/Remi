@@ -179,12 +179,16 @@ function WikiPane({
       return { key: `repository:${repository.id}`, kind: "repository" as const, id: repository.id, name: repository.name, pageCount: summary?.page_count ?? 0, updatedAt: summary?.updated_at ?? null };
     }).filter((source) => source.pageCount > 0);
     const direction = sortOrder === "newest" ? -1 : 1;
-    return [...projectSources, ...repositorySources].sort((left, right) => {
+    const sortSources = (left: WikiSource, right: WikiSource) => {
       if (!left.updatedAt && !right.updatedAt) return left.name.localeCompare(right.name);
       if (!left.updatedAt) return 1;
       if (!right.updatedAt) return -1;
       return left.updatedAt.localeCompare(right.updatedAt) * direction;
-    });
+    };
+    return [
+      ...projectSources.sort(sortSources),
+      ...repositorySources.sort(sortSources),
+    ];
   }, [docsByProject, projects, repositories, sortOrder, summariesByRepository]);
 
   useEffect(() => {
@@ -244,27 +248,47 @@ function WikiPane({
       <aside className="border-b lg:border-b-0 lg:border-r">
         <div className="border-b px-3 py-2 text-xs font-medium text-muted-foreground">{t(($) => $.knowledge.wiki_sources)}</div>
         <div className="max-h-48 overflow-y-auto p-2 lg:max-h-none">
-          {sources.map((source) => {
-            const active = source.key === selectedSource?.key;
-            const project = source.kind === "project" ? projectById.get(source.id) : null;
+          {([
+            {
+              kind: "project" as const,
+              title: t(($) => $.knowledge.projects_group),
+            },
+            {
+              kind: "repository" as const,
+              title: t(($) => $.knowledge.repositories_group),
+            },
+          ]).map((group) => {
+            const groupSources = sources.filter((source) => source.kind === group.kind);
+            if (groupSources.length === 0) return null;
             return (
-              <button
-                key={source.key}
-                type="button"
-                data-testid={`knowledge-${source.kind}-${source.id}`}
-                aria-current={active ? "page" : undefined}
-                onClick={() => {
-                  setSourceKey(source.key);
-                  setSelectedPageId("");
-                }}
-                className={`flex min-h-10 w-full items-center gap-2 rounded px-2 text-left text-sm ${active ? "bg-accent font-medium" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"}`}
-              >
-                <span className="flex size-5 shrink-0 items-center justify-center">
-                  {project?.icon ? <ProjectIcon project={project} size="sm" /> : source.kind === "project" ? <FolderKanban className="size-4" /> : <GitFork className="size-4" />}
-                </span>
-                <span className="min-w-0 flex-1 truncate">{source.name}</span>
-                <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{source.pageCount}</span>
-              </button>
+              <div key={group.kind}>
+                <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
+                  {group.title}
+                </div>
+                {groupSources.map((source) => {
+                  const active = source.key === selectedSource?.key;
+                  const project = source.kind === "project" ? projectById.get(source.id) : null;
+                  return (
+                    <button
+                      key={source.key}
+                      type="button"
+                      data-testid={`knowledge-${source.kind}-${source.id}`}
+                      aria-current={active ? "page" : undefined}
+                      onClick={() => {
+                        setSourceKey(source.key);
+                        setSelectedPageId("");
+                      }}
+                      className={`flex min-h-10 w-full items-center gap-2 rounded px-2 text-left text-sm ${active ? "bg-accent font-medium" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"}`}
+                    >
+                      <span className="flex size-5 shrink-0 items-center justify-center">
+                        {project?.icon ? <ProjectIcon project={project} size="sm" /> : source.kind === "project" ? <FolderKanban className="size-4" /> : <GitFork className="size-4" />}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate">{source.name}</span>
+                      <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{source.pageCount}</span>
+                    </button>
+                  );
+                })}
+              </div>
             );
           })}
         </div>
