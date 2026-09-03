@@ -1,6 +1,6 @@
 {
   "name": "remi",
-  "version": "0.2.58",
+  "version": "0.2.59",
   "packageManager": "bun@1.3.14",
   "description": "Remi - Multiremi agent runtime with multi-connector messaging and ACP provider integration.",
   "type": "module",
