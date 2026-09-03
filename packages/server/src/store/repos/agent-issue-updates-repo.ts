@@ -33,8 +33,6 @@ const DELIVERABLE_EVENT_TYPES = new Set([
 ]);
 
 const SOURCE_TASK_KEYS = [
-  "taskId",
-  "task_id",
   "sourceTaskId",
   "source_task_id",
   "parentTaskId",
@@ -151,9 +149,17 @@ export class AgentIssueUpdatesRepo {
     let delivered = 0;
     let dropped = 0;
     for (const row of rows) {
-      const outcome = this.flushOne(String(row.chat_session_id), now);
-      if (outcome === "delivered") delivered += 1;
-      else if (outcome === "dropped") dropped += 1;
+      const chatSessionId = String(row.chat_session_id);
+      try {
+        const outcome = this.flushOne(chatSessionId, now);
+        if (outcome === "delivered") delivered += 1;
+        else if (outcome === "dropped") dropped += 1;
+      } catch (error) {
+        log.warn(
+          `agent issue update delivery failed chat=${chatSessionId}: `
+          + `${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     }
     return { delivered, dropped };
   }

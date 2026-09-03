@@ -261,6 +261,7 @@ export interface NotificationChannelsSurface {
     memberId?: string | null;
     createdBy?: string | null;
   }): MultiremiNotificationChannel;
+  deleteAgentChatNotificationChannel(chatSessionId: string): boolean;
   matchNotificationRoutes(
     workspaceId: string,
     memberId: string,

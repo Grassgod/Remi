@@ -76,6 +76,7 @@ import { ChatRepo } from "@multiremi/store/repos/chat-repo.js";
 import {
   IssuesRepo,
   type BeginIssueDeletionResult,
+  type IssueMutationActivityContext,
 } from "@multiremi/store/repos/issues-repo.js";
 import { IssueWorkspacesRepo } from "@multiremi/store/repos/issue-workspaces-repo.js";
 import {
@@ -1397,6 +1398,10 @@ runMigrations(this.db);
     createdBy?: string | null;
   }): MultiremiNotificationChannel {
     return this.notificationChannels.upsertAgentChatChannel(input);
+  }
+
+  deleteAgentChatNotificationChannel(chatSessionId: string): boolean {
+    return this.notificationChannels.deleteAgentChatChannel(chatSessionId);
   }
 
   getAgentIssueUpdateSubscription(chatSessionId: string): MultiremiAgentIssueUpdateSubscription {
@@ -2906,16 +2911,24 @@ runMigrations(this.db);
     return this.issues.listIssueDependencies(issueId);
   }
 
-  createIssueDependency(issueId: string, input: CreateIssueDependencyInput): MultiremiIssueDependency {
-    return this.issues.createIssueDependency(issueId, input);
+  createIssueDependency(
+    issueId: string,
+    input: CreateIssueDependencyInput,
+    activity?: IssueMutationActivityContext,
+  ): MultiremiIssueDependency {
+    return this.issues.createIssueDependency(issueId, input, activity);
   }
 
   getIssueDependency(id: string): MultiremiIssueDependency | null {
     return this.issues.getIssueDependency(id);
   }
 
-  deleteIssueDependency(issueId: string, dependencyId: string): void {
-    return this.issues.deleteIssueDependency(issueId, dependencyId);
+  deleteIssueDependency(
+    issueId: string,
+    dependencyId: string,
+    activity?: IssueMutationActivityContext,
+  ): void {
+    return this.issues.deleteIssueDependency(issueId, dependencyId, activity);
   }
 
   updateIssue(id: string, input: UpdateIssueInput): MultiremiIssue {
@@ -3066,12 +3079,20 @@ runMigrations(this.db);
     return this.issues.listLabelsForIssue(issueId);
   }
 
-  attachLabelToIssue(issueId: string, labelId: string): MultiremiLabel[] {
-    return this.issues.attachLabelToIssue(issueId, labelId);
+  attachLabelToIssue(
+    issueId: string,
+    labelId: string,
+    activity?: IssueMutationActivityContext,
+  ): MultiremiLabel[] {
+    return this.issues.attachLabelToIssue(issueId, labelId, activity);
   }
 
-  detachLabelFromIssue(issueId: string, labelId: string): MultiremiLabel[] {
-    return this.issues.detachLabelFromIssue(issueId, labelId);
+  detachLabelFromIssue(
+    issueId: string,
+    labelId: string,
+    activity?: IssueMutationActivityContext,
+  ): MultiremiLabel[] {
+    return this.issues.detachLabelFromIssue(issueId, labelId, activity);
   }
 
   listInboxItems(memberId?: string | null): MultiremiInboxItem[] {
@@ -3162,12 +3183,21 @@ runMigrations(this.db);
     return this.issues.listIssueMetadata(issueId);
   }
 
-  setIssueMetadataKey(issueId: string, key: string, value: unknown): MultiremiIssue["metadata"] {
-    return this.issues.setIssueMetadataKey(issueId, key, value);
+  setIssueMetadataKey(
+    issueId: string,
+    key: string,
+    value: unknown,
+    activity?: IssueMutationActivityContext,
+  ): MultiremiIssue["metadata"] {
+    return this.issues.setIssueMetadataKey(issueId, key, value, activity);
   }
 
-  deleteIssueMetadataKey(issueId: string, key: string): MultiremiIssue["metadata"] {
-    return this.issues.deleteIssueMetadataKey(issueId, key);
+  deleteIssueMetadataKey(
+    issueId: string,
+    key: string,
+    activity?: IssueMutationActivityContext,
+  ): MultiremiIssue["metadata"] {
+    return this.issues.deleteIssueMetadataKey(issueId, key, activity);
   }
 
   setIssueAutoTitleMetadata(

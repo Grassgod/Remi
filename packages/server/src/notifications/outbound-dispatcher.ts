@@ -89,7 +89,11 @@ export class OutboundNotificationDispatcher {
 
   async sweep(): Promise<void> {
     const now = new Date().toISOString();
-    this.store.flushDueAgentIssueUpdates(now);
+    try {
+      this.store.flushDueAgentIssueUpdates(now);
+    } catch (error) {
+      log.warn(`agent issue update sweep failed: ${redactNotificationError(error)}`);
+    }
     const pending = this.store.listPendingNotificationDeliveries(now, 100);
     await Promise.allSettled(pending.map((delivery) => this.dispatch(delivery.id)));
   }

@@ -215,9 +215,19 @@ export class NotificationChannelsRepo {
     return this.getChannel(id)!;
   }
 
+  deleteAgentChatChannel(chatSessionId: string): boolean {
+    const channel = this.getAgentChatChannel(chatSessionId);
+    return channel ? this.deleteChannel(channel.id) : false;
+  }
+
   updateChannel(id: string, input: UpdateNotificationChannelInput): MultiremiNotificationChannel | null {
     const current = this.getChannel(id);
     if (!current) return null;
+    if (current.kind === "agent_chat") {
+      throw new NotificationChannelValidationError(
+        "agent_chat channels must be managed through the Chat Issue updates API",
+      );
+    }
     const fields: string[] = [];
     const values: unknown[] = [];
     if (input.name !== undefined) {

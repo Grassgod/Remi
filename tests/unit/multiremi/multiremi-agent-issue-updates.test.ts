@@ -96,7 +96,7 @@ describe("agent-facing Issue update delivery", () => {
       actorId: "system",
       type: "comment_created",
       body: "System wrapper around the target agent's result",
-      data: { taskId: sourceTask.id },
+      data: { sourceTaskId: sourceTask.id },
     });
 
     expect(store.flushDueAgentIssueUpdates(new Date(Date.now() + 1_000))).toEqual({
@@ -155,6 +155,43 @@ describe("agent-facing Issue update delivery", () => {
       enabled: true,
       target: { chatId: chat.id },
     });
+
+    const sourceTask = store.createTask({ agentId: agent.id, prompt: "Update the bound Issue" });
+    const taskToken = await store.createTaskAccessToken(sourceTask, owner.id);
+    const taskHeaders = { Authorization: `Bearer ${taskToken.token}` };
+    expect((await app.request(
+      `/api/chat/sessions/${chat.id}/issue-updates`,
+      { headers: taskHeaders },
+    )).status).toBe(403);
+    expect((await app.request(`/api/chat/sessions/${chat.id}/issue-updates`, {
+      method: "PUT",
+      headers: { ...taskHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: false }),
+    })).status).toBe(403);
+
+    const label = store.createLabel({ name: "Agent-applied", color: "#336699", workspaceId: "local" });
+    const labelResponse = await app.request(`/api/issues/${issue.id}/labels`, {
+      method: "POST",
+      headers: { ...taskHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ label_id: label.id }),
+    });
+    expect(labelResponse.status).toBe(200);
+    expect(store.flushDueAgentIssueUpdates(new Date(Date.now() + 60_000))).toEqual({
+      delivered: 0,
+      dropped: 0,
+    });
+    expect(store.listChatMessages(chat.id)).toHaveLength(0);
+
+    const channel = store.getAgentChatNotificationChannel(chat.id)!;
+    const genericPatch = await app.request(`/api/multiremi/notification-channels/${channel.id}`, {
+      method: "PATCH",
+      headers: jsonHeaders,
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(genericPatch.status).toBe(400);
+
+    expect(store.deleteChatSession(chat.id)).toBe(true);
+    expect(store.getAgentChatNotificationChannel(chat.id)).toBeNull();
   });
 
   it("debounces dense Issue activity into one Chat task", () => {

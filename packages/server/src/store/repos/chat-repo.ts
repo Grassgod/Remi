@@ -187,6 +187,7 @@ export class ChatRepo {
     this.ctx.db.run("UPDATE multiremi_tasks SET chat_session_id = NULL WHERE chat_session_id = ?", [id]);
     this.ctx.db.run("DELETE FROM multiremi_attachments WHERE chat_session_id = ?", [id]);
     this.ctx.db.run("DELETE FROM multiremi_chat_messages WHERE chat_session_id = ?", [id]);
+    this.ctx.notificationChannels().deleteAgentChatNotificationChannel(id);
     const result = this.ctx.db.run("DELETE FROM multiremi_chat_sessions WHERE id = ?", [id]);
     if (result.changes > 0) {
       this.ctx.emitChatEvent(current, "chat:session_deleted", {});

@@ -892,7 +892,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<CreateIssueDependencyInput>(c);
-    return c.json({ dependency: store.createIssueDependency(issue.id, body) }, 201);
+    return c.json({ dependency: store.createIssueDependency(issue.id, body, issueMutationActivity(c)) }, 201);
   });
   app.post("/api/issues/:id/dependencies", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
@@ -902,7 +902,11 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJsonStrict<CreateIssueDependencyInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     try {
-      return c.json({ dependency: issueDependencyCompatibilityResponse(store.createIssueDependency(issue.id, body)) }, 201);
+      return c.json({
+        dependency: issueDependencyCompatibilityResponse(
+          store.createIssueDependency(issue.id, body, issueMutationActivity(c)),
+        ),
+      }, 201);
     } catch (err) {
       const response = issueDependencyErrorResponse(c, err);
       if (response) return response;
@@ -914,7 +918,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
-    store.deleteIssueDependency(issue.id, c.req.param("dependencyId"));
+    store.deleteIssueDependency(issue.id, c.req.param("dependencyId"), issueMutationActivity(c));
     return c.json({ ok: true });
   });
   app.delete("/api/issues/:id/dependencies/:dependencyId", (c) => {
@@ -923,7 +927,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     try {
-      store.deleteIssueDependency(issue.id, c.req.param("dependencyId"));
+      store.deleteIssueDependency(issue.id, c.req.param("dependencyId"), issueMutationActivity(c));
       return c.json({ status: "ok" });
     } catch (err) {
       const response = issueDependencyErrorResponse(c, err);
@@ -1392,7 +1396,11 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<{ labelId?: string; label_id?: string }>(c);
-    const labels = store.attachLabelToIssue(issue.id, body.labelId ?? body.label_id ?? "");
+    const labels = store.attachLabelToIssue(
+      issue.id,
+      body.labelId ?? body.label_id ?? "",
+      issueMutationActivity(c),
+    );
     return c.json({ labels, total: labels.length }, 201);
   });
   app.delete("/api/multiremi/issues/:id/labels/:labelId", (c) => {
@@ -1400,7 +1408,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
-    const labels = store.detachLabelFromIssue(issue.id, c.req.param("labelId"));
+    const labels = store.detachLabelFromIssue(issue.id, c.req.param("labelId"), issueMutationActivity(c));
     return c.json({ labels, total: labels.length });
   });
   app.get("/api/issues/:id/labels", (c) => {
@@ -1421,7 +1429,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const labelId = body.label_id ?? "";
     if (!labelId) return c.json({ error: "label_id is required" }, 400);
     try {
-      const labels = store.attachLabelToIssue(issue.id, labelId);
+      const labels = store.attachLabelToIssue(issue.id, labelId, issueMutationActivity(c));
       return c.json({ labels: labels.map(labelCompatibilityResponse) });
     } catch (error) {
       return labelCompatibilityErrorResponse(c, error);
@@ -1433,7 +1441,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     try {
-      const labels = store.detachLabelFromIssue(issue.id, c.req.param("labelId"));
+      const labels = store.detachLabelFromIssue(issue.id, c.req.param("labelId"), issueMutationActivity(c));
       return c.json({ labels: labels.map(labelCompatibilityResponse) });
     } catch (error) {
       return labelCompatibilityErrorResponse(c, error);
@@ -1546,7 +1554,14 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     const body = await readJson<{ value?: unknown }>(c);
     try {
-      return c.json({ metadata: store.setIssueMetadataKey(issue.id, c.req.param("key"), body.value) });
+      return c.json({
+        metadata: store.setIssueMetadataKey(
+          issue.id,
+          c.req.param("key"),
+          body.value,
+          issueMutationActivity(c),
+        ),
+      });
     } catch (err) {
       const response = issueErrorResponse(c, err);
       if (response) return response;
@@ -1560,7 +1575,12 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     const body = await readJson<{ value?: unknown }>(c);
     try {
-      return c.json(store.setIssueMetadataKey(issue.id, c.req.param("key"), body.value));
+      return c.json(store.setIssueMetadataKey(
+        issue.id,
+        c.req.param("key"),
+        body.value,
+        issueMutationActivity(c),
+      ));
     } catch (err) {
       const response = issueErrorResponse(c, err);
       if (response) return response;
@@ -1573,7 +1593,9 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     try {
-      return c.json({ metadata: store.deleteIssueMetadataKey(issue.id, c.req.param("key")) });
+      return c.json({
+        metadata: store.deleteIssueMetadataKey(issue.id, c.req.param("key"), issueMutationActivity(c)),
+      });
     } catch (err) {
       const response = issueErrorResponse(c, err);
       if (response) return response;
@@ -1586,11 +1608,24 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     try {
-      return c.json(store.deleteIssueMetadataKey(issue.id, c.req.param("key")));
+      return c.json(store.deleteIssueMetadataKey(issue.id, c.req.param("key"), issueMutationActivity(c)));
     } catch (err) {
       const response = issueErrorResponse(c, err);
       if (response) return response;
       throw err;
     }
   });
+}
+
+function issueMutationActivity(c: Context): {
+  actorType: string;
+  actorId: string;
+  sourceTaskId: string | null;
+} {
+  const caller = issueSubscriberCaller(c);
+  return {
+    actorType: caller.actorType,
+    actorId: caller.actorId,
+    sourceTaskId: currentTaskParentId(c),
+  };
 }
