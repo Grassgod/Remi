@@ -3,10 +3,15 @@
 import { createId, nowIso } from "@multiremi/ids.js";
 import { cleanOptionalString, isActiveTaskStatus, nullableString } from "@multiremi/store/helpers.js";
 import { type StoreContext } from "@multiremi/store/context.js";
+import { buildSessionProjection } from "@multiremi/store/session-projection.js";
+import { resolveProjectionTokenBudget } from "@multiremi/store/session-projection-budget.js";
+import { createLogger } from "@shared/logger.js";
 import type {
   CreateChatSessionInput,
   MultiremiChatMessage,
   MultiremiChatSession,
+  MultiremiSessionEvent,
+  MultiremiSessionProjection,
   MultiremiTask,
   SendChatMessageInput,
   SendChatMessageResult,
@@ -14,6 +19,8 @@ import type {
 } from "@multiremi/contracts/types.js";
 
 type Row = Record<string, unknown>;
+
+const log = createLogger("multiremi-store");
 
 export const CHAT_BOOTSTRAP_MAX_MESSAGES = 64;
 export const CHAT_BOOTSTRAP_MAX_BYTES = 64 * 1024;
@@ -218,9 +225,66 @@ export class ChatRepo {
   listChatMessages(chatSessionId: string): MultiremiChatMessage[] {
     if (!this.getChatSession(chatSessionId)) throw new Error(`Chat session not found: ${chatSessionId}`);
     const rows = this.ctx.db.query(
-      "SELECT * FROM multiremi_chat_messages WHERE chat_session_id = ? ORDER BY created_at ASC",
+      "SELECT * FROM multiremi_chat_messages WHERE chat_session_id = ? ORDER BY created_at ASC, rowid ASC",
     ).all(chatSessionId) as Row[];
     return rows.map(toChatMessage);
+  }
+
+  buildTaskSessionProjection(taskId: string): MultiremiSessionProjection | null {
+    return this.ctx.db.transaction(() => {
+      const task = this.ctx.tasks().getTask(taskId);
+      if (!task?.chatSessionId || task.issueSessionId) return null;
+      const session = this.getChatSession(task.chatSessionId);
+      if (!session) return null;
+      const agent = this.ctx.agents().getAgent(task.agentId);
+      const messages = this.listChatMessages(session.id);
+      const currentLineageTaskIds = chatTaskLineageIds(this.ctx, task);
+      const events = chatMessagesAsSessionEvents(messages, session, task.id, currentLineageTaskIds);
+      const warmProviderSessionId = task.sessionId;
+      const tokenBudget = resolveProjectionTokenBudget({
+        provider: agent?.provider,
+        model: agent?.model,
+        degradeLevel: task.projectionDegradeLevel,
+      });
+      const projection = buildSessionProjection({
+        sessionId: session.id,
+        targetAgentId: task.agentId,
+        events,
+        // createTask persists session_id only when resolveTaskAffinity concluded
+        // that this exact provider lineage is resumable. Stored Chat messages are
+        // already in that lineage; the current request is rendered separately.
+        cursorSeq: warmProviderSessionId ? events.length : 0,
+        providerSessionId: warmProviderSessionId,
+        tokenBudget,
+        currentTaskId: task.id,
+        resolveAuthorName: (type, id) => type === "agent" && id === agent?.id ? agent.name : null,
+      });
+      this.ctx.db.run(
+        `UPDATE multiremi_tasks
+         SET projection_from_seq = ?, projection_to_seq = ?, projection_mode = ?,
+             projection_truncated = ?, projection_omitted_events = ?, projection_estimated_tokens = ?,
+             updated_at = ?
+         WHERE id = ?`,
+        [
+          projection.fromSeq,
+          projection.toSeq,
+          projection.mode,
+          projection.truncated ? 1 : 0,
+          projection.omittedEvents,
+          projection.estimatedTokens,
+          nowIso(),
+          taskId,
+        ],
+      );
+      if (projection.truncated) {
+        log.warn(
+          `chat session projection truncated for task ${taskId}: omitted=${projection.omittedEvents} `
+          + `estimated_tokens=${projection.estimatedTokens} budget=${tokenBudget} `
+          + `degrade_level=${task.projectionDegradeLevel}`,
+        );
+      }
+      return projection;
+    })();
   }
 
   sendChatMessage(chatSessionId: string, input: SendChatMessageInput): SendChatMessageResult {
@@ -270,6 +334,55 @@ export class ChatRepo {
     const row = this.ctx.db.query("SELECT * FROM multiremi_chat_messages WHERE id = ?").get(id) as Row | null;
     return row ? toChatMessage(row) : null;
   }
+}
+
+function chatTaskLineageIds(ctx: StoreContext, task: MultiremiTask): Set<string> {
+  const ids = new Set<string>();
+  let current: MultiremiTask | null = task;
+  while (
+    current?.chatSessionId === task.chatSessionId
+    && current.prompt.trim() === task.prompt.trim()
+    && !ids.has(current.id)
+  ) {
+    ids.add(current.id);
+    current = current.parentTaskId ? ctx.tasks().getTask(current.parentTaskId) : null;
+  }
+  return ids;
+}
+
+function chatMessagesAsSessionEvents(
+  messages: MultiremiChatMessage[],
+  session: MultiremiChatSession,
+  currentTaskId: string,
+  currentLineageTaskIds: Set<string>,
+): MultiremiSessionEvent[] {
+  return messages.map((message, index) => {
+    const currentRequest = message.role === "user"
+      && !!message.taskId
+      && currentLineageTaskIds.has(message.taskId);
+    const authorType = message.role === "assistant"
+      ? "agent"
+      : message.role === "user"
+        ? "member"
+        : "system";
+    return {
+      id: message.id,
+      sessionId: session.id,
+      seq: index + 1,
+      authorType,
+      authorId: message.role === "assistant"
+        ? session.agentId
+        : message.role === "user"
+          ? session.creatorId
+          : null,
+      kind: message.role === "user" ? "task_assigned" : `chat_${message.role}`,
+      body: message.body,
+      taskId: currentRequest ? currentTaskId : message.taskId,
+      sourceCommentId: null,
+      metadata: { role: message.role },
+      createdAt: message.createdAt,
+    };
+  });
 }
 
 function toChatSession(row: Row): MultiremiChatSession {

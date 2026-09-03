@@ -288,7 +288,7 @@ function appendClaimContextSections(sections: string[], task: AgentTask, mode: T
     sections.push("The native provider session was unavailable. Continue from this canonical, product-stored history; do not assume any provider-local history survived.");
     sections.push("");
     sections.push(chatBootstrapTranscript);
-  } else if (chatMessage) {
+  } else if (chatMessage && chatMessage.trim() !== currentTaskRequest(task).trim()) {
     sections.push("");
     sections.push("## Chat Message");
     sections.push(chatMessage);

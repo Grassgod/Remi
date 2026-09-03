@@ -118,6 +118,24 @@ describe("Issue Session provider home", () => {
     expect(existsSync(firstHome.home)).toBe(true);
   });
 
+  it("keeps an Issue-bound Chat in the Chat provider home", () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-bound-chat-home-"));
+    roots.push(root);
+    const workspaces = join(root, "workspaces");
+    const boundChat = {
+      ...task("claude"),
+      id: "tsk_bound_chat",
+      chatSessionId: "chat_1",
+    } as AgentTask;
+
+    expect(resolveTaskProviderHome(boundChat, join(root, "issue-runtime"), workspaces))
+      .toMatchObject({
+        root: join(workspaces, ".runtime", "chat_1", "agt_1", "1"),
+        sessionId: "chat_1",
+        runtimeStateRoot: join(workspaces, ".runtime", "chat_1"),
+      });
+  });
+
   it("cleans the whole temporary non-Issue task runtime", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-task-home-cleanup-"));
     roots.push(root);
