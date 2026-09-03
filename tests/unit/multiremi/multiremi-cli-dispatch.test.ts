@@ -78,6 +78,7 @@ describe("remi CLI dispatcher", () => {
       "share",
       "label",
       "chat",
+      "chat.issue",
       "task",
       "agent",
       "squad",

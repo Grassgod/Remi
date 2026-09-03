@@ -1842,10 +1842,10 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(sendOptions).toHaveLength(4);
       expect(sendOptions[2]?.sessionId).toBe("sess-chat-2");
       expect(sendOptions[3]?.sessionId ?? null).toBeNull();
-      expect(prompts[3]).toContain("## Product Chat History");
-      expect(prompts[3]).toContain("[user]\nStart the chat");
-      expect(prompts[3]).toContain("[assistant]\nSecond answer");
-      expect(prompts[3]).toContain("[user]\nRecover from product history");
+      expect(prompts[3]).toContain("## Current Session Context");
+      expect(prompts[3]).toContain(`"body":"Start the chat"`);
+      expect(prompts[3]).toContain(`"body":"Second answer"`);
+      expect(prompts[3]?.match(/Recover from product history/g)).toHaveLength(1);
       expect(prompts[3]).toContain("`remi context`");
       expect(prompts[3]).not.toContain("## Available Repositories");
       expect(store.listChatMessages(session.id).map((message) => message.role)).toEqual([
