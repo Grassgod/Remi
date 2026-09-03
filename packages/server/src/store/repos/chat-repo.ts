@@ -1,7 +1,7 @@
 // Chat domain (chat sessions and chat messages), extracted verbatim from MultiremiStore
 // (the facade delegates every public method here).
 import { createId, nowIso } from "@multiremi/ids.js";
-import { isActiveTaskStatus, nullableString } from "@multiremi/store/helpers.js";
+import { cleanOptionalString, isActiveTaskStatus, nullableString } from "@multiremi/store/helpers.js";
 import { type StoreContext } from "@multiremi/store/context.js";
 import type {
   CreateChatSessionInput,
@@ -102,15 +102,19 @@ export class ChatRepo {
     if (agent.archivedAt) throw new Error(`Agent is archived: ${agentId}`);
     const workspaceId = input.workspaceId ?? input.workspace_id ?? "local";
     if (agent.workspaceId !== workspaceId) throw new Error("Agent belongs to another workspace");
+    const issueId = cleanOptionalString(input.issueId ?? input.issue_id);
+    const issue = issueId ? this.ctx.issues().getIssue(issueId) : null;
+    if (issueId && !issue) throw new Error(`Issue not found: ${issueId}`);
+    if (issue && issue.workspaceId !== workspaceId) throw new Error("Issue belongs to another workspace");
     const id = input.id ?? createId("chat");
     const now = nowIso();
     const title = input.title?.trim() || `Chat with ${agent.name}`;
     this.ctx.db.run(
       `INSERT INTO multiremi_chat_sessions (
-        id, workspace_id, creator_id, agent_id, title, status, session_id, work_dir, latest_task_id,
+        id, workspace_id, creator_id, agent_id, issue_id, title, status, session_id, work_dir, latest_task_id,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, 'active', NULL, NULL, NULL, ?, ?)`,
-      [id, workspaceId, input.creatorId ?? input.creator_id ?? "local", agentId, title, now, now],
+      ) VALUES (?, ?, ?, ?, ?, ?, 'active', NULL, NULL, NULL, ?, ?)`,
+      [id, workspaceId, input.creatorId ?? input.creator_id ?? "local", agentId, issue?.id ?? null, title, now, now],
     );
     return this.getChatSession(id)!;
   }
@@ -142,16 +146,24 @@ export class ChatRepo {
   updateChatSession(id: string, input: UpdateChatSessionInput): MultiremiChatSession {
     const current = this.getChatSession(id);
     if (!current) throw new Error(`Chat session not found: ${id}`);
+    const issueFieldProvided = Object.hasOwn(input, "issueId") || Object.hasOwn(input, "issue_id");
+    const requestedIssueId = issueFieldProvided
+      ? cleanOptionalString(input.issueId ?? input.issue_id)
+      : current.issueId;
+    const issue = requestedIssueId ? this.ctx.issues().getIssue(requestedIssueId) : null;
+    if (requestedIssueId && !issue) throw new Error(`Issue not found: ${requestedIssueId}`);
+    if (issue && issue.workspaceId !== current.workspaceId) throw new Error("Issue belongs to another workspace");
     const now = nowIso();
     this.ctx.db.run(
       `UPDATE multiremi_chat_sessions
-       SET title = ?, status = ?, updated_at = ?
+       SET title = ?, status = ?, issue_id = ?, updated_at = ?
        WHERE id = ?`,
-      [input.title?.trim() || current.title, input.status ?? current.status, now, id],
+      [input.title?.trim() || current.title, input.status ?? current.status, issue?.id ?? null, now, id],
     );
     const updated = this.getChatSession(id)!;
     this.ctx.emitChatEvent(updated, "chat:session_updated", {
       title: updated.title,
+      issue_id: updated.issueId,
       updated_at: updated.updatedAt,
     });
     return updated;
@@ -266,6 +278,7 @@ function toChatSession(row: Row): MultiremiChatSession {
     workspaceId: String(row.workspace_id ?? "local"),
     creatorId: nullableString(row.creator_id) ?? "local",
     agentId: String(row.agent_id),
+    issueId: nullableString(row.issue_id),
     title: String(row.title ?? ""),
     status: String(row.status ?? "active") as MultiremiChatSession["status"],
     sessionId: nullableString(row.session_id),

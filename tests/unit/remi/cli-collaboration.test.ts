@@ -134,6 +134,44 @@ describe("native collaboration CLI contracts", () => {
     expect(JSON.parse(jsonl.stdout)).toMatchObject({ id: "lbl_1", name: "Urgent" });
   });
 
+  it("binds and unbinds a Chat Issue through registered commands", async () => {
+    useCliEnv();
+    const requests: Array<{ method: string; path: string; body: unknown }> = [];
+    globalThis.fetch = (async (input, init) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      const path = new URL(request.url).pathname;
+      if (path === "/api/cli/capabilities") {
+        return Response.json({ commands: [
+          { id: "chat.issue.bind", allowed: true },
+          { id: "chat.issue.unbind", allowed: true },
+        ] });
+      }
+      if (path === "/api/chat/sessions" && request.method === "GET") {
+        return Response.json([{ id: "chat_1", title: "Work" }]);
+      }
+      if (path === "/api/issues/MUL-226" && request.method === "GET") {
+        return Response.json({ id: "iss_226", key: "MUL-226", title: "Bound" });
+      }
+      if (path === "/api/chat/sessions/chat_1" && request.method === "PATCH") {
+        requests.push({ method: request.method, path, body: await request.json() });
+        return Response.json({ id: "chat_1", issue_id: (requests.at(-1)?.body as any).issue_id });
+      }
+      throw new Error(`unexpected request ${request.method} ${path}`);
+    }) as typeof fetch;
+
+    await capture(() => registryFor([specById("chat.issue.bind")]).execute([
+      "chat", "issue", "bind", "Work", "MUL-226", "--output", "json",
+    ]));
+    await capture(() => registryFor([specById("chat.issue.unbind")]).execute([
+      "chat", "issue", "unbind", "Work", "--output", "json",
+    ]));
+
+    expect(requests).toEqual([
+      { method: "PATCH", path: "/api/chat/sessions/chat_1", body: { issue_id: "iss_226" } },
+      { method: "PATCH", path: "/api/chat/sessions/chat_1", body: { issue_id: null } },
+    ]);
+  });
+
   it("creates workspace Sessions by default and supports discussion Sessions", async () => {
     useCliEnv();
     const bodies: Array<Record<string, unknown>> = [];

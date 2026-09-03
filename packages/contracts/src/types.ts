@@ -4169,6 +4169,8 @@ export interface MultiremiChatSession {
   workspaceId: string;
   creatorId: string | null;
   agentId: string;
+  /** Optional Issue whose context is attached to tasks created from this Chat. */
+  issueId: string | null;
   title: string;
   status: MultiremiChatSessionStatus;
   sessionId: string | null;
@@ -4207,12 +4209,16 @@ export interface CreateChatSessionInput {
   workspace_id?: string | null;
   creatorId?: string | null;
   creator_id?: string | null;
+  issueId?: string | null;
+  issue_id?: string | null;
   title?: string | null;
 }
 
 export interface UpdateChatSessionInput {
   title?: string;
   status?: MultiremiChatSessionStatus;
+  issueId?: string | null;
+  issue_id?: string | null;
 }
 
 export interface SendChatMessageInput {

@@ -307,13 +307,13 @@ export class TasksRepo {
       || parentTask?.issueCreationRestricted
       || agent.issueCreationRequiresProposal,
     );
-    const issueId = input.issueId ?? triggerComment?.issueId ?? null;
-    const issue = issueId ? this.ctx.issues().getIssue(issueId) : null;
-    if (issueId && !issue) throw new Error(`Issue not found: ${issueId}`);
-    if (triggerComment && issue && triggerComment.issueId !== issue.id) throw new Error("Trigger comment does not belong to task issue");
     const chatSession = input.chatSessionId ? this.ctx.chat().getChatSession(input.chatSessionId) : null;
     if (input.chatSessionId && !chatSession) throw new Error(`Chat session not found: ${input.chatSessionId}`);
     if (chatSession && chatSession.agentId !== input.agentId) throw new Error("Chat session agent does not match task agent");
+    const issueId = input.issueId ?? triggerComment?.issueId ?? chatSession?.issueId ?? null;
+    const issue = issueId ? this.ctx.issues().getIssue(issueId) : null;
+    if (issueId && !issue) throw new Error(`Issue not found: ${issueId}`);
+    if (triggerComment && issue && triggerComment.issueId !== issue.id) throw new Error("Trigger comment does not belong to task issue");
     // The task always runs in the agent's workspace (stamped below). Reject any
     // issue / chat session from a DIFFERENT workspace so we never create a task
     // in workspace B linked to an issue/project in workspace A (a cross-tenant

@@ -3930,6 +3930,50 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "chat.issue": {
+      "command": "remi chat.issue",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "chat.issue.bind": {
+      "command": "remi chat issue bind",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "chat.issue.bind",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "chat.issue.unbind": {
+      "command": "remi chat issue unbind",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "chat.issue.unbind",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "chat.delete": {
       "command": "remi chat delete",
       "aliases": [],

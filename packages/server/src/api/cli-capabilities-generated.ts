@@ -2817,6 +2817,32 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "chat.issue.bind": {
+      "command": "remi chat issue bind",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "chat.issue.bind",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "chat.issue.unbind": {
+      "command": "remi chat issue unbind",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "chat.issue.unbind",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "chat.delete": {
       "command": "remi chat delete",
       "auth": [

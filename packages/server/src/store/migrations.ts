@@ -2041,6 +2041,7 @@ export function runMigrations(db: SqlDatabase): void {
       workspace_id TEXT NOT NULL DEFAULT 'local',
       creator_id TEXT,
       agent_id TEXT NOT NULL,
+      issue_id TEXT,
       title TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'active',
       session_id TEXT,
@@ -2049,7 +2050,8 @@ export function runMigrations(db: SqlDatabase): void {
       unread_since TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
-      FOREIGN KEY(agent_id) REFERENCES multiremi_agents(id)
+      FOREIGN KEY(agent_id) REFERENCES multiremi_agents(id),
+      FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE SET NULL
     );
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_chat_sessions_workspace ON multiremi_chat_sessions(workspace_id, updated_at);
@@ -2540,6 +2542,11 @@ export function runMigrations(db: SqlDatabase): void {
   ensureIssueSubscriberTypedSchema(db);
   addColumnIfMissing(db, "multiremi_chat_sessions", "creator_id TEXT");
   addColumnIfMissing(db, "multiremi_chat_sessions", "unread_since TEXT");
+  addColumnIfMissing(
+    db,
+    "multiremi_chat_sessions",
+    "issue_id TEXT REFERENCES multiremi_issues(id) ON DELETE SET NULL",
+  );
   // Pool scheduling records the machine + engine that produced the promoted
   // provider session as atomic metadata on the session itself, so follow-ups
   // don't have to (mis)infer them from "the latest task with a runtime_id".
