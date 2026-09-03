@@ -333,6 +333,11 @@ function matchesMemoryQuery(doc: ProjectDoc, query: string): boolean {
   ].some((value) => value.toLowerCase().includes(query));
 }
 
+// Pinned and "no compilation run" are two independent facts about a memory, and
+// as two text badges they ate the whole title row on a card. They collapse to
+// icons instead: the meaning survives on hover (tooltip) and for assistive tech
+// (`role="img"` + label), without a native `title` that would stack a second,
+// duplicate browser tooltip on top of the first.
 export function MemoryMarkers({
   pinned,
   unverified,
@@ -353,8 +358,8 @@ export function MemoryMarkers({
           <TooltipTrigger render={<span className="inline-flex" />}>
             <Pin
               className="size-3.5 text-muted-foreground"
+              role="img"
               aria-label={pinnedLabel}
-              {...({ title: pinnedLabel } as Record<string, string>)}
             />
           </TooltipTrigger>
           <TooltipContent>{pinnedLabel}</TooltipContent>
@@ -365,8 +370,8 @@ export function MemoryMarkers({
           <TooltipTrigger render={<span className="inline-flex" />}>
             <History
               className="size-3.5 text-muted-foreground"
+              role="img"
               aria-label={unverifiedLabel}
-              {...({ title: unverifiedLabel } as Record<string, string>)}
             />
           </TooltipTrigger>
           <TooltipContent>

@@ -339,7 +339,7 @@ describe("ProjectWikiSection", () => {
     expect(screen.getByTestId("wiki-body")).toHaveTextContent(
       "Cold cache doubles it.",
     );
-    expect(screen.getByLabelText("Pinned")).toHaveAttribute("title", "Pinned");
+    expect(screen.getByRole("img", { name: "Pinned" })).toBeInTheDocument();
     expect(screen.getByText("agent:agent-7")).toBeInTheDocument();
     expect(
       screen.getByRole("link", { name: "Source issue" }),
@@ -361,11 +361,12 @@ describe("ProjectWikiSection", () => {
       }),
     );
 
-    expect(screen.getByLabelText("Pinned")).toHaveAttribute("title", "Pinned");
-    expect(screen.getByLabelText("Unverified history")).toHaveAttribute(
-      "title",
-      "Unverified history",
-    );
+    expect(screen.getByRole("img", { name: "Pinned" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("img", { name: "Unverified history" }),
+    ).toBeInTheDocument();
+    // The badge text is gone from the row; only the icons carry the meaning.
+    expect(screen.queryByText("Unverified history")).not.toBeInTheDocument();
   });
 
   it("resolves a memory slug from the URL and renders its detail after refresh", () => {

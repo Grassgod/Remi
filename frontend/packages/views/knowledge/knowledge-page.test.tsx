@@ -148,8 +148,8 @@ vi.mock("../projects/components/labels", () => ({
 vi.mock("../projects/components/wiki/project-wiki-section", () => ({
   MemoryMarkers: ({ pinned, unverified }: { pinned: boolean; unverified: boolean }) => (
     <span>
-      {pinned && <span aria-label="Pinned" title="Pinned" />}
-      {unverified && <span aria-label="Unverified history" title="Unverified history" />}
+      {pinned && <span role="img" aria-label="Pinned" />}
+      {unverified && <span role="img" aria-label="Unverified history" />}
     </span>
   ),
 }));
