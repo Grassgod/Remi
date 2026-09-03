@@ -11,7 +11,8 @@
     "./inbox": "./src/inbox.ts",
     "./attachments": "./src/attachments.ts",
     "./runtime-health": "./src/runtime-health.ts",
-    "./wiki-path": "./src/wiki-path.ts"
+    "./wiki-path": "./src/wiki-path.ts",
+    "./wiki-links": "./src/wiki-links.ts"
   },
   "dependencies": {}
 }

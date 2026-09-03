@@ -88,4 +88,16 @@ export class ProjectDocsEndpoints {
       { endpoint: "GET /api/projects/:id/docs/:ref/revisions" },
     );
   }
+
+  async listProjectDocBacklinks(projectId: string, ref: string): Promise<ProjectDoc[]> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/projects/${projectId}/docs/${encodeURIComponent(ref)}/backlinks`,
+    );
+    return parseWithFallback(
+      raw,
+      ListProjectDocsResponseSchema,
+      EMPTY_LIST_PROJECT_DOCS_RESPONSE,
+      { endpoint: "GET /api/projects/:id/docs/:ref/backlinks" },
+    ).docs;
+  }
 }

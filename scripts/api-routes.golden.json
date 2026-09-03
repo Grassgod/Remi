@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 714,
+    "routeCount": 716,
     "routeCountByPrefix": {
       "native": 209,
-      "compat": 492,
+      "compat": 494,
       "root": 13
     },
-    "getRoutes": 304,
-    "getRoutesWithBody": 301,
+    "getRoutes": 305,
+    "getRoutesWithBody": 302,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 410,
+    "mutationRoutes": 411,
     "mutationRoutesCovered": 282,
     "flows": [
       "agents-compat",
@@ -397,6 +397,7 @@
     "GET /api/workspaces/:id/repos",
     "GET /api/workspaces/:id/repos/:repositoryId/wiki",
     "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
+    "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/backlinks",
     "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/revisions",
     "GET /api/workspaces/:id/repository-wikis",
     "GET /api/workspaces/:id/runtime-provisions",
@@ -701,6 +702,7 @@
     "POST /api/workspaces/:id/relay-config/:engine/reveal",
     "POST /api/workspaces/:id/repos",
     "POST /api/workspaces/:id/repos/:repositoryId/wiki",
+    "POST /api/workspaces/:id/repos/:repositoryId/wiki/batch",
     "POST /api/workspaces/:id/repos/:repositoryId/wiki/build",
     "POST /api/workspaces/:id/repos/:repositoryId/wiki/publish",
     "POST /api/workspaces/:id/repos/inspect",
@@ -1099,6 +1101,7 @@
     "GET /api/workspaces/:id/repos",
     "GET /api/workspaces/:id/repos/:repositoryId/wiki",
     "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
+    "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/backlinks",
     "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/revisions",
     "GET /api/workspaces/:id/repository-wikis",
     "GET /api/workspaces/:id/runtime-provisions",
@@ -11923,6 +11926,17 @@
             "allowed": true
           },
           {
+            "id": "wiki.repository.backlinks",
+            "command": "remi wiki repository backlinks",
+            "capability": "wiki.repository.backlinks",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "wiki.repository.build",
             "command": "remi wiki repository build",
             "capability": "wiki.repository.build",
@@ -22008,6 +22022,15 @@
       "key": "get-sweep GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
       "route": "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
       "path": "/api/workspaces/local/repos/repo_snapshot/wiki/spec",
+      "status": 404,
+      "body": {
+        "error": "repository wiki doc not found"
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/backlinks",
+      "route": "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/backlinks",
+      "path": "/api/workspaces/local/repos/repo_snapshot/wiki/spec/backlinks",
       "status": 404,
       "body": {
         "error": "repository wiki doc not found"

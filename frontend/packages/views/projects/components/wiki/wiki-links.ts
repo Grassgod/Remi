@@ -1,26 +1,20 @@
 // `[[slug]]` cross-links between wiki pages. Agents are told to write them
 // when a page references another page (see the project `_schema` doc), so the
-// syntax arrives from the model, not from a structured editor — parsing stays
-// forgiving: any run of characters that isn't a bracket or a newline counts as
-// a slug, and whitespace around it is trimmed.
+// syntax arrives from the model, not from a structured editor.
 //
 // Code is exempt. A wiki page written by an agent is full of shell snippets,
 // and bash's `[[ … ]]` test syntax is indistinguishable from a link once the
-// fences are gone. One scanner alternates a code branch — fenced ``` blocks
-// first, then inline `…` spans — ahead of the link branch, so whatever a code
-// region covers is consumed before the link branch can see it. Both exported
-// functions drive this same regex, so what gets linked and what gets rewritten
-// can never disagree.
+// fences are gone. The shared tokenizer consumes fenced and inline code before
+// looking for Wiki markers, keeping these legacy memory cards aligned with all
+// canonical Wiki readers.
 //
-// Group 1 = a code region (passed through verbatim), group 2 = a link's slug.
-const WIKI_SCAN_RE = /(```[\s\S]*?```|`[^`\n]*`)|\[\[([^[\]\n]+)\]\]/g;
+import { normalizeWikiHeadingAnchor, tokenizeWikiLinks } from "@multiremi/core/knowledge";
 
 /** Slugs referenced by `body`, de-duplicated, in the order they appear. */
 export function extractWikiLinkSlugs(body: string): string[] {
   const slugs: string[] = [];
-  for (const match of body.matchAll(WIKI_SCAN_RE)) {
-    if (match[1] !== undefined) continue;
-    const slug = match[2]?.trim();
+  for (const token of tokenizeWikiLinks(body)) {
+    const slug = token.ref;
     if (slug && !slugs.includes(slug)) slugs.push(slug);
   }
   return slugs;
@@ -46,14 +40,23 @@ export function replaceWikiLinkMarkers(
   body: string,
   resolve: (slug: string) => { title: string; href: string } | null,
 ): string {
-  return body.replace(
-    WIKI_SCAN_RE,
-    (_match, code: string | undefined, rawSlug: string | undefined) => {
-      if (code !== undefined) return code;
-      const slug = (rawSlug ?? "").trim();
-      const target = resolve(slug);
-      if (!target) return `\`${slug}\``;
-      return `[${escapeLinkText(target.title)}](${target.href})`;
-    },
-  );
+  const tokens = tokenizeWikiLinks(body);
+  if (tokens.length === 0) return body;
+  let cursor = 0;
+  let rendered = "";
+  for (const token of tokens) {
+    rendered += body.slice(cursor, token.start);
+    if (token.ref === null && token.anchor) {
+      const anchor = normalizeWikiHeadingAnchor(token.anchor);
+      rendered += `[${escapeLinkText(token.label || token.anchor)}](#${encodeURIComponent(anchor)})`;
+    } else {
+      const target = token.ref ? resolve(token.ref) : null;
+      const anchor = token.anchor ? normalizeWikiHeadingAnchor(token.anchor) : "";
+      rendered += target
+        ? `[${escapeLinkText(token.label || target.title)}](${target.href}${anchor ? `#${encodeURIComponent(anchor)}` : ""})`
+        : `\`${token.label || token.ref || token.anchor || token.raw}\``;
+    }
+    cursor = token.end;
+  }
+  return rendered + body.slice(cursor);
 }

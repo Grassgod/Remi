@@ -16,7 +16,6 @@ import {
   Search,
 } from "lucide-react";
 import { cn } from "@multiremi/ui/lib/utils";
-import { Badge } from "@multiremi/ui/components/ui/badge";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { Input } from "@multiremi/ui/components/ui/input";
 import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
@@ -42,8 +41,9 @@ import { ReadonlyContent } from "../../../editor";
 import { AppLink } from "../../../navigation";
 import { useT } from "../../../i18n";
 import { KnowledgeProvenance } from "../../../knowledge/knowledge-provenance";
+import { WikiDocumentContent } from "../../../common/wiki-document-content";
 import { useFormatRelativeDate } from "../labels";
-import { extractWikiLinkSlugs, replaceWikiLinkMarkers } from "./wiki-links";
+import { replaceWikiLinkMarkers } from "./wiki-links";
 
 function byUpdatedAtDesc(a: ProjectDoc, b: ProjectDoc): number {
   return b.updated_at.localeCompare(a.updated_at);
@@ -189,83 +189,11 @@ function SidebarExpandableRow({
 // Right pane — a wiki page
 // ---------------------------------------------------------------------------
 
-/** `[[slug]]` targets of the open page, rendered as chips below the body. */
-function WikiLinkChips({
-  slugs,
-  pages,
-}: {
-  slugs: string[];
-  pages: ProjectDoc[];
-}) {
-  const { t } = useT("projects");
-  const paths = useWorkspacePaths();
-  if (slugs.length === 0) return null;
-
-  return (
-    <div className="mt-5 flex flex-wrap items-center gap-1.5">
-      <span className="text-xs text-muted-foreground">
-        {t(($) => $.wiki.links_label)}
-      </span>
-      {slugs.map((slug) => {
-        const target = pages.find((page) => page.slug === slug);
-        // Page titles and slugs are agent-authored strings of unbounded
-        // length. Without a width bound a single long (or CJK) title makes the
-        // chip wider than the content column and hands the whole scrolling
-        // pane a horizontal scrollbar — same bound DocRefs uses.
-        return target ? (
-          <Badge
-            key={slug}
-            variant="secondary"
-            className="max-w-64 cursor-pointer hover:bg-accent"
-            render={
-              <AppLink
-                href={paths.projectWikiPage(
-                  target.project_id,
-                  target.slug || target.id,
-                )}
-              />
-            }
-            title={target.title}
-          >
-            <span className="truncate">{target.title}</span>
-          </Badge>
-        ) : (
-          <Badge
-            key={slug}
-            variant="outline"
-            className="max-w-64 text-muted-foreground"
-            title={t(($) => $.wiki.link_missing)}
-          >
-            <span className="truncate">{slug}</span>
-          </Badge>
-        );
-      })}
-    </div>
-  );
-}
-
 function WikiPagePane({ doc, pages }: { doc: ProjectDoc; pages: ProjectDoc[] }) {
   const { t } = useT("projects");
-  const paths = useWorkspacePaths();
   const formatRelativeDate = useFormatRelativeDate();
   const updatedByType = doc.updated_by_type ?? doc.author_type;
   const updatedById = doc.updated_by_id ?? doc.author_id;
-  const linkedSlugs = extractWikiLinkSlugs(doc.body);
-  // Links are built from the doc's own project rather than the section's, so
-  // the pane stays correct wherever a doc is rendered.
-  const body = replaceWikiLinkMarkers(doc.body, (slug) => {
-    const target = pages.find((page) => page.slug === slug);
-    return target
-      ? {
-          title: target.title,
-          href: paths.projectWikiPage(
-            doc.project_id,
-            target.slug || target.id,
-          ),
-        }
-      : null;
-  });
-
   return (
     <article className="mx-auto w-full max-w-3xl px-6 py-6">
       <WikiPathBreadcrumb path={projectWikiPath(doc)} />
@@ -276,9 +204,12 @@ function WikiPagePane({ doc, pages }: { doc: ProjectDoc; pages: ProjectDoc[] }) 
       <DocRefs refs={doc.refs ?? []} className="mt-3" />
       <KnowledgeProvenance compilationRunId={doc.compilation_run_id} />
       <div className="mt-5">
-        <ReadonlyContent content={body} />
+        <WikiDocumentContent
+          doc={doc}
+          pages={pages}
+          scope={{ kind: "project", projectId: doc.project_id }}
+        />
       </div>
-      <WikiLinkChips slugs={linkedSlugs} pages={pages} />
       <footer className="mt-8 flex flex-wrap items-center gap-1.5 border-t pt-3 text-xs text-muted-foreground">
         <span>{t(($) => $.wiki.updated_by)}</span>
         {updatedByType && updatedById ? (
@@ -909,7 +840,7 @@ export function ProjectWikiSection({
         <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
           {selectedDoc?.kind === "wiki" ? (
             <div className="h-full overflow-y-auto">
-              <WikiPagePane doc={selectedDoc} pages={wikiDocs} />
+              <WikiPagePane doc={selectedDoc} pages={visibleWikiDocs} />
             </div>
           ) : selectedDoc?.kind === "memory" ? (
             <div className="h-full overflow-y-auto">

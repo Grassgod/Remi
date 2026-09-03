@@ -73,7 +73,7 @@ prompt/archive settings, and Repository Wiki administration through:
 remi issue restore
 remi workspace prompt get|update
 remi workspace issue-archive get|update
-remi wiki repository list|get|create|update|delete|revisions|build
+remi wiki repository list|get|create|update|delete|revisions|backlinks|build
 remi knowledge submit|submissions|inspect|runs|run show|migrate-legacy
 remi wiki publish
 remi memory publish

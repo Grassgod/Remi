@@ -20,6 +20,7 @@ import { isValidElement, memo, useMemo, useRef } from "react";
 import ReactMarkdown, {
   defaultUrlTransform,
   type Components,
+  type Options,
 } from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkBreaks from "remark-breaks";
@@ -32,6 +33,7 @@ import { toHtml } from "hast-util-to-html";
 import { cn } from "@multiremi/ui/lib/utils";
 import { useWorkspacePaths, useWorkspaceSlug } from "@multiremi/core/paths";
 import type { Attachment } from "@multiremi/core/types";
+import { normalizeWikiHeadingAnchor } from "@multiremi/core/knowledge";
 import { useNavigation } from "../navigation";
 import { IssueMentionCard } from "../issues/components/issue-mention-card";
 import { ProjectChip } from "../projects/components/project-chip";
@@ -170,6 +172,12 @@ function ReadonlyLink({
 
   if (href?.startsWith("slash://skill/")) {
     return <span className="slash-command">{children}</span>;
+  }
+
+  // Fragment-only links belong to the current document. Let the browser move
+  // focus/scroll normally instead of treating the fragment as an external URL.
+  if (href?.startsWith("#")) {
+    return <a href={href}>{children}</a>;
   }
 
   if (isMentionHref(href)) {
@@ -330,6 +338,39 @@ function buildComponents(): Partial<Components> {
   };
 }
 
+interface HastNode {
+  type?: string;
+  tagName?: string;
+  value?: string;
+  properties?: Record<string, unknown>;
+  children?: HastNode[];
+}
+
+/** Adds GitHub-style stable ids only when a Wiki reader opts in. */
+function rehypeWikiHeadingAnchors() {
+  return (tree: HastNode) => {
+    const seen = new Map<string, number>();
+    const visit = (node: HastNode) => {
+      if (node.type === "element" && /^h[1-6]$/.test(node.tagName ?? "")) {
+        const base = normalizeWikiHeadingAnchor(hastText(node));
+        if (base) {
+          const duplicate = seen.get(base) ?? 0;
+          seen.set(base, duplicate + 1);
+          node.properties ??= {};
+          node.properties.id = duplicate === 0 ? base : `${base}-${duplicate}`;
+        }
+      }
+      node.children?.forEach(visit);
+    };
+    visit(tree);
+  };
+}
+
+function hastText(node: HastNode): string {
+  if (node.type === "text") return node.value ?? "";
+  return node.children?.map(hastText).join("") ?? "";
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -363,6 +404,8 @@ interface ReadonlyContentProps {
    * `className` rescales the whole block instead of only the container.
    */
   density?: "default" | "compact";
+  /** Add stable heading fragments for Wiki page-local links. */
+  headingAnchors?: boolean;
 }
 
 // Memoized so a long timeline of comments (Inbox + IssueDetail) does not
@@ -375,6 +418,7 @@ export const ReadonlyContent = memo(function ReadonlyContent({
   className,
   attachments,
   density = "default",
+  headingAnchors = false,
 }: ReadonlyContentProps) {
   const processed = useMemo(
     () => highlightToHtml(preprocessMarkdown(content)),
@@ -386,6 +430,9 @@ export const ReadonlyContent = memo(function ReadonlyContent({
   // Components map is now static — all attachment-aware logic lives in
   // <Attachment>, which reads the surrounding AttachmentDownloadProvider.
   const components = useMemo(() => buildComponents(), []);
+  const rehypePlugins: NonNullable<Options["rehypePlugins"]> = headingAnchors
+    ? [rehypeRaw, [rehypeSanitize, sanitizeSchema], rehypeWikiHeadingAnchors, rehypeKatex]
+    : [rehypeRaw, [rehypeSanitize, sanitizeSchema], rehypeKatex];
 
   return (
     <AttachmentDownloadProvider attachments={attachments}>
@@ -401,7 +448,7 @@ export const ReadonlyContent = memo(function ReadonlyContent({
       >
         <ReactMarkdown
           remarkPlugins={[remarkMath, remarkBreaks, [remarkGfm, { singleTilde: false }]]}
-          rehypePlugins={[rehypeRaw, [rehypeSanitize, sanitizeSchema], rehypeKatex]}
+          rehypePlugins={rehypePlugins}
           urlTransform={urlTransform}
           components={components}
         >

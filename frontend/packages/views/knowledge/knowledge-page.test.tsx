@@ -25,6 +25,7 @@ const state = vi.hoisted(() => ({
   repositories: [] as unknown[],
   summaries: [] as unknown[],
   projectDetails: {} as Record<string, unknown>,
+  backlinks: {} as Record<string, unknown[]>,
   repositoryDocs: {} as Record<string, unknown[]>,
   submissions: [] as unknown[],
   runs: [] as unknown[],
@@ -82,6 +83,15 @@ vi.mock("@tanstack/react-query", () => ({
         refetch: refetchBase,
       };
     }
+    if (key[0] === "wiki-backlinks") {
+      return {
+        data: state.backlinks[`${String(key[2])}:${String(key[3])}:${String(key[4])}`] ?? [],
+        isPending: false,
+        isError: false,
+        error: null,
+        refetch: vi.fn(),
+      };
+    }
     const projects = key[0] === "projects";
     const memoryDocs = key[0] === "workspace-docs" && key[1] === "memory";
     return {
@@ -102,14 +112,18 @@ vi.mock("@multiremi/core/project-docs", () => ({
     queryKey: ["project-docs", "ws-1", projectId, "detail", ref],
   }),
 }));
-vi.mock("@multiremi/core/knowledge", () => ({
-  knowledgeSubmissionsOptions: () => ({ queryKey: ["knowledge", "ws-1", "submissions"] }),
-  knowledgeRunsOptions: () => ({ queryKey: ["knowledge", "ws-1", "runs"] }),
-  knowledgeRunOptions: (_workspaceId: string, runId: string | null | undefined) => ({
-    queryKey: ["knowledge", "ws-1", "runs", runId ?? ""],
-    enabled: Boolean(runId),
-  }),
-}));
+vi.mock("@multiremi/core/knowledge", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@multiremi/core/knowledge")>();
+  return {
+    ...actual,
+    knowledgeSubmissionsOptions: () => ({ queryKey: ["knowledge", "ws-1", "submissions"] }),
+    knowledgeRunsOptions: () => ({ queryKey: ["knowledge", "ws-1", "runs"] }),
+    knowledgeRunOptions: (_workspaceId: string, runId: string | null | undefined) => ({
+      queryKey: ["knowledge", "ws-1", "runs", runId ?? ""],
+      enabled: Boolean(runId),
+    }),
+  };
+});
 vi.mock("@multiremi/core/projects/queries", () => ({
   projectListOptions: () => ({ queryKey: ["projects"] }),
 }));
@@ -235,7 +249,7 @@ function renderPage() {
 describe("KnowledgePage", () => {
   beforeEach(() => {
     Object.assign(state, {
-      projects: [], docs: [], memoryDocs: [], repositories: [], summaries: [], projectDetails: {}, repositoryDocs: {},
+      projects: [], docs: [], memoryDocs: [], repositories: [], summaries: [], projectDetails: {}, backlinks: {}, repositoryDocs: {},
       submissions: [], runs: [], runDetail: null,
       basePending: false, submissionsPending: false, runsPending: false, runDetailPending: false,
       baseError: null, submissionsError: null, runsError: null,
@@ -277,12 +291,14 @@ describe("KnowledgePage", () => {
       doc({ id: "index", slug: "index", path: "index.md", title: "Reading map", body: "" }),
       doc({ id: "runbook", slug: "runbook", path: "operations/runbook.md", title: "Deployment runbook", body: "" }),
     ];
-    state.projectDetails.index = doc({ id: "index", slug: "index", path: "index.md", title: "Reading map", body: "Project Wiki index body" });
+    state.projectDetails.index = doc({ id: "index", slug: "index", path: "index.md", title: "Reading map", body: "Project Wiki index body. See [[operations/runbook.md]]." });
+    state.projectDetails.runbook = doc({ id: "runbook", slug: "runbook", path: "operations/runbook.md", title: "Deployment runbook", body: "Return to [[index]]." });
+    state.backlinks["project:proj-1:index"] = [state.projectDetails.runbook!];
     state.repositories = [repository({ id: "repo-1", name: "web" })];
     state.summaries = [summary({ repository_id: "repo-1", page_count: 3 })];
     state.repositoryDocs["repo-1"] = [
-      doc({ id: "repo-index", slug: "index", path: "index.md", title: "Repository map", body: "Repository Wiki index body" }),
-      doc({ id: "repo-overview", slug: "overview", path: "overview.md", title: "Overview" }),
+      doc({ id: "repo-index", slug: "index", path: "index.md", title: "Repository map", body: "Repository Wiki index body. See [[overview.md]]." }),
+      doc({ id: "repo-overview", slug: "overview", path: "overview.md", title: "Overview", body: "Return to [[index.md]]." }),
       doc({ id: "repo-log", slug: "log", path: "log.md", title: "Change log" }),
     ];
     renderPage();
@@ -290,14 +306,22 @@ describe("KnowledgePage", () => {
     const projectSource = screen.getByTestId("knowledge-project-proj-1");
     expect(projectSource).toHaveTextContent("Apollo");
     expect(projectSource).toHaveTextContent("2");
-    expect(screen.getByTestId("wiki-body")).toHaveTextContent("Project Wiki index body");
+    expect(screen.getByTestId("wiki-body")).toHaveTextContent(
+      "Project Wiki index body. See [Deployment runbook](/ws/projects/proj-1/wiki/runbook).",
+    );
+    expect(screen.getByRole("group", { name: "References" })).toHaveTextContent("Deployment runbook");
+    expect(screen.getByRole("group", { name: "Referenced by" })).toHaveTextContent("Deployment runbook");
     expect(screen.getByText("Projects")).toBeInTheDocument();
     expect(screen.getByText("Repositories")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Full page/ })).toHaveAttribute("href", "/ws/projects/proj-1/wiki/index");
     expect(screen.queryByText("Agent-only memory")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId("knowledge-repository-repo-1"));
-    expect(screen.getByTestId("wiki-body")).toHaveTextContent("Repository Wiki index body");
+    expect(screen.getByTestId("wiki-body")).toHaveTextContent(
+      "Repository Wiki index body. See [Overview](/ws/repos/repo-1/wiki/overview.md).",
+    );
+    expect(screen.getByRole("group", { name: "References" })).toHaveTextContent("Overview");
+    expect(screen.getByRole("group", { name: "Referenced by" })).toHaveTextContent("Overview");
     expect(screen.getByRole("link", { name: /Full page/ })).toHaveAttribute("href", "/ws/repos/repo-1/wiki/index.md");
   });
 

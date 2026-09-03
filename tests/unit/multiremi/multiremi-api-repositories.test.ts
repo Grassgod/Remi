@@ -372,6 +372,121 @@ describe("Multiremi API - workspace repositories", () => {
       .toEqual([2, 1]);
   });
 
+  it("validates direct Repository Wiki links and returns resolver-backed backlinks", async () => {
+    const store = createStore();
+    const workspace = store.ensureLocalWorkspace();
+    store.updateWorkspaceRepositories(workspace.id, [{
+      id: "repo_links",
+      name: "links",
+      url: "git@github.com:acme/links.git",
+      source: "github",
+    }]);
+    const app = createMultiremiApp({ store });
+    const root = `/api/workspaces/${workspace.id}/repos/repo_links/wiki`;
+    const create = async (input: Record<string, unknown>) => app.request(root, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+
+    const targetResponse = await create({ path: "guides/details.md", title: "Details", body: "Target" });
+    expect(targetResponse.status).toBe(201);
+    const target = (await targetResponse.json() as any).doc;
+    const sourceResponse = await create({
+      path: "guides/index.md",
+      title: "Index",
+      body: "Read [[details#usage|the details]] and [[#summary]].",
+    });
+    expect(sourceResponse.status).toBe(201);
+    const source = (await sourceResponse.json() as any).doc;
+    expect((await create({
+      path: "guides/examples.md",
+      title: "Examples",
+      body: "`[[missing-inline]]`\n```md\n[[missing-fenced]]\n```",
+    })).status).toBe(201);
+
+    const backlinks = await app.request(`${root}/${target.id}/backlinks`);
+    expect(backlinks.status).toBe(200);
+    expect((await backlinks.json() as any).docs.map((doc: any) => doc.id)).toEqual([source.id]);
+
+    const missing = await create({ path: "broken.md", title: "Broken", body: "Read [[missing]]." });
+    expect(missing.status).toBe(409);
+    expect((await missing.json() as any).error).toContain("unresolved repository wiki link");
+
+    expect((await create({ path: "one/setup.md", title: "Setup one", body: "One" })).status).toBe(201);
+    expect((await create({ path: "two/setup.md", title: "Setup two", body: "Two" })).status).toBe(201);
+    const ambiguous = await create({ path: "ambiguous.md", title: "Ambiguous", body: "Read [[setup]]." });
+    expect(ambiguous.status).toBe(409);
+    expect((await ambiguous.json() as any).error).toContain("ambiguous repository wiki link");
+
+    expect((await create({ path: "other/details.md", title: "Other details", body: "Other" })).status).toBe(201);
+    const retargeted = await app.request(`${root}/${target.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        path: "archive/local-details.md",
+        expected_version: target.version,
+      }),
+    });
+    expect(retargeted.status).toBe(409);
+    expect((await retargeted.json() as any).error).toContain("changed target");
+
+    const deleted = await app.request(`${root}/${target.id}?expected_version=${target.version}`, { method: "DELETE" });
+    expect(deleted.status).toBe(409);
+    expect((await deleted.json() as any).error).toContain("changed target");
+  });
+
+  it("publishes a coherent Repository Wiki graph atomically through the batch route", async () => {
+    const store = createStore();
+    const workspace = store.ensureLocalWorkspace();
+    store.updateWorkspaceRepositories(workspace.id, [{
+      id: "repo_batch_links",
+      name: "batch-links",
+      url: "git@github.com:acme/batch-links.git",
+      source: "github",
+    }]);
+    const app = createMultiremiApp({ store });
+    const root = `/api/workspaces/${workspace.id}/repos/repo_batch_links/wiki`;
+    const target = store.createRepositoryWikiDoc(workspace.id, "repo_batch_links", {
+      path: "guides/details.md", title: "Details", body: "Target",
+    });
+    const source = store.createRepositoryWikiDoc(workspace.id, "repo_batch_links", {
+      path: "guides/index.md", title: "Index", body: "Read [[details]].",
+    });
+
+    const publish = await app.request(`${root}/batch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ operations: [
+        { kind: "update", ref: target.id, input: { path: "archive/details.md", expected_version: 1 } },
+        { kind: "update", ref: source.id, input: { body: "Read [[archive/details]].", expected_version: 1 } },
+      ] }),
+    });
+    expect(publish.status).toBe(200);
+    expect(store.getRepositoryWikiDocByRef(workspace.id, "repo_batch_links", target.id)).toMatchObject({
+      path: "archive/details.md", version: 2,
+    });
+    expect(store.getRepositoryWikiDocByRef(workspace.id, "repo_batch_links", source.id)).toMatchObject({
+      body: "Read [[archive/details]].", version: 2,
+    });
+
+    const stale = await app.request(`${root}/batch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ operations: [
+        { kind: "update", ref: target.id, input: { title: "Must not persist", expected_version: 2 } },
+        { kind: "update", ref: source.id, input: { body: "Must not persist", expected_version: 1 } },
+      ] }),
+    });
+    expect(stale.status).toBe(409);
+    expect(store.getRepositoryWikiDocByRef(workspace.id, "repo_batch_links", target.id)).toMatchObject({
+      title: "Details", version: 2,
+    });
+    expect(store.getRepositoryWikiDocByRef(workspace.id, "repo_batch_links", source.id)).toMatchObject({
+      body: "Read [[archive/details]].", version: 2,
+    });
+  });
+
   it("preserves scoped task reads while routing repository Wiki writes to Raw", async () => {
     const store = createStore();
     const workspace = store.ensureLocalWorkspace();

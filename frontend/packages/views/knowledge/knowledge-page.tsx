@@ -38,7 +38,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multiremi/ui/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@multiremi/ui/components/ui/tooltip";
 import { projectDocDetailOptions, workspaceDocListOptions } from "@multiremi/core/project-docs";
-import { knowledgeRunOptions, knowledgeRunsOptions, knowledgeSubmissionsOptions } from "@multiremi/core/knowledge";
+import { knowledgeRunOptions, knowledgeRunsOptions, knowledgeSubmissionsOptions, wikiBacklinksOptions } from "@multiremi/core/knowledge";
 import { projectListOptions } from "@multiremi/core/projects/queries";
 import { repositoryListOptions, repositoryWikiDocsOptions, repositoryWikiSummariesOptions } from "@multiremi/core/repositories";
 import { useWorkspaceId } from "@multiremi/core/hooks";
@@ -62,6 +62,7 @@ import { ActorAvatar } from "../common/actor-avatar";
 import { EmptyState } from "../common/empty-state";
 import { DocRefs } from "../common/doc-refs";
 import { WikiDirectoryTree, WikiPathBreadcrumb, type WikiTreePage } from "../common/wiki-directory-tree";
+import { WikiDocumentContent } from "../common/wiki-document-content";
 import { ReadonlyContent } from "../editor";
 import { TranscriptButton } from "../common/task-transcript";
 import { PageHeader } from "../layout/page-header";
@@ -232,6 +233,17 @@ function WikiPane({
   const selectedDoc = selectedSource?.kind === "project"
     ? (projectDetailQuery.data as ReadableWikiDoc | undefined) ?? selectedMetadata
     : selectedMetadata;
+  const projectBacklinksQuery = useQuery({
+    ...wikiBacklinksOptions(
+      workspaceId,
+      {
+        kind: "project",
+        projectId: selectedSource?.kind === "project" ? selectedSource.id : "",
+      },
+      selectedSource?.kind === "project" ? selectedMetadata?.id ?? "" : "",
+    ),
+    enabled: Boolean(selectedSource?.kind === "project" && selectedMetadata),
+  });
   const selectedHref = selectedSource && selectedDoc
     ? selectedSource.kind === "project"
       ? paths.projectWikiPage(selectedSource.id, selectedDoc.slug || selectedDoc.id)
@@ -319,7 +331,7 @@ function WikiPane({
         {projectDetailQuery.isPending && selectedSource?.kind === "project" ? <LoadingPane />
           : projectDetailQuery.error && selectedSource?.kind === "project" ? (
             <ErrorPane error={projectDetailQuery.error} retry={() => { void projectDetailQuery.refetch(); }} />
-          ) : selectedDoc ? (
+          ) : selectedDoc && selectedSource ? (
           <article className="mx-auto max-w-3xl px-5 py-5 sm:px-7 sm:py-7">
             <div className="flex items-start justify-between gap-4 border-b pb-4">
               <div className="min-w-0">
@@ -334,7 +346,19 @@ function WikiPane({
               )}
             </div>
             <DocRefs refs={selectedDoc.refs} className="mt-3" />
-            <div className="mt-5"><ReadonlyContent content={selectedDoc.body} /></div>
+            <div className="mt-5">
+              <WikiDocumentContent
+                doc={selectedDoc}
+                pages={sourceDocs}
+                backlinks={selectedSource.kind === "project"
+                  ? (projectBacklinksQuery.data as ReadableWikiDoc[] | undefined) ?? []
+                  : undefined}
+                backlinksPending={selectedSource.kind === "project" && projectBacklinksQuery.isPending}
+                scope={selectedSource.kind === "project"
+                  ? { kind: "project", projectId: selectedSource.id }
+                  : { kind: "repository", repositoryId: selectedSource.id }}
+              />
+            </div>
             <footer className="mt-8 flex gap-3 border-t pt-3 text-xs text-muted-foreground">
               <span>{t(($) => $.knowledge.version_short, { version: selectedDoc.version })}</span>
               <span>{formatRelativeDate(selectedDoc.updated_at)}</span>

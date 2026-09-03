@@ -54,12 +54,19 @@ import type {
   MultiremiBotMenuPublishRequest,
   MultiremiRepositoryWikiDoc,
   MultiremiRepositoryWikiDocRevision,
+  RepositoryWikiBatchInput,
+  RepositoryWikiBatchOperation,
   UpdateRepositoryWikiDocInput,
   UpdateMultiremiPromptSettingsInput,
   UpdateWorkspaceRuntimeProvisionInput,
 } from "@multiremi/contracts/types.js";
-import { nowIso } from "@multiremi/ids.js";
+import { createId, nowIso } from "@multiremi/ids.js";
 import { RepositoryWikiUnavailableError } from "@multiremi/repository-wiki/service.js";
+import { normalizeRepositoryWikiPath } from "@multiremi/store/repos/repository-wiki-repo.js";
+import {
+  defaultRepositoryWikiPath,
+  RepositoryWikiLinkValidationError,
+} from "@multiremi/repository-wiki/links.js";
 import {
   mergeWorkspacePromptSettings,
   readWorkspacePromptSettings,
@@ -479,8 +486,11 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     try {
       const actor = resolveKnowledgeWriteActor(c, store);
       assertRepositoryKnowledgeTarget(actor, store, repositoryId);
+      const id = body.id ?? createId("rwdoc");
       const input: CreateRepositoryWikiDocInput = {
         ...body,
+        id,
+        path: normalizeRepositoryWikiPath(body.path ?? body.slug ?? defaultRepositoryWikiPath(body.title, id)),
         sourceTaskId: actor.task?.id ?? null,
         source_task_id: actor.task?.id ?? null,
         sourceIssueId: actor.issue?.id ?? null,
@@ -516,6 +526,105 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
       return c.json({ doc: repositoryWikiDocResponse(doc) }, 201);
     } catch (error) {
       if (runId) store.completeKnowledgeCompilationRun(runId, "failed", error instanceof Error ? error.message : "repository wiki create failed");
+      return knowledgePolicyErrorResponse(c, error) ?? repositoryWikiError(c, error);
+    }
+  });
+  app.post("/api/workspaces/:id/repos/:repositoryId/wiki/batch", async (c) => {
+    const workspaceId = c.req.param("id");
+    const repositoryId = c.req.param("repositoryId");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    if (requireWorkspaceRepository(store, workspaceId, repositoryId)) return c.json({ error: "repository not found" }, 404);
+    const body = await readJsonStrict<RepositoryWikiBatchInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    let runId: string | null = null;
+    try {
+      const actor = resolveKnowledgeWriteActor(c, store);
+      assertRepositoryKnowledgeTarget(actor, store, repositoryId);
+      const operations = normalizeRepositoryWikiBatchOperations({
+        operations: body.operations,
+        workspaceId,
+        repositoryId,
+        actor,
+        memberId: authenticatedRequestUserId(c),
+      });
+      if (actor.kind === "agent" && !actor.canPublish) {
+        const currentByRef = new Map<string, MultiremiRepositoryWikiDoc>();
+        for (const operation of operations) {
+          if (operation.kind === "create") continue;
+          const current = await deps.repositoryWiki.get(workspaceId, repositoryId, operation.ref);
+          if (!current) throw new Error(`repository wiki doc not found: ${operation.ref}`);
+          const expectedVersion = operation.kind === "update"
+            ? operation.input.expectedVersion ?? operation.input.expected_version
+            : operation.expectedVersion ?? operation.expected_version;
+          if (!Number.isInteger(expectedVersion) || Number(expectedVersion) !== current.version) {
+            throw new Error("repository wiki version conflict");
+          }
+          currentByRef.set(operation.ref, current);
+        }
+        const submissions = [];
+        for (const operation of operations) {
+          if (operation.kind === "create") {
+            submissions.push(createRepositoryMutationSubmission({
+              store, actor, workspaceId, repositoryId, operation: "create", body: operation.input,
+            }));
+            continue;
+          }
+          const current = currentByRef.get(operation.ref)!;
+          submissions.push(createRepositoryMutationSubmission({
+            store,
+            actor,
+            workspaceId,
+            repositoryId,
+            operation: operation.kind,
+            body: operation.kind === "update"
+              ? operation.input
+              : { expectedVersion: operation.expectedVersion, expected_version: operation.expected_version },
+            current,
+          }));
+        }
+        return c.json({
+          submitted: true,
+          submissions: submissions.map(rawSubmissionResponse),
+        }, 202);
+      }
+
+      const run = createFormalWriteRun({
+        store, actor, workspaceId, repositoryId, scope: "repository_wiki",
+      });
+      runId = run.id;
+      const results = await deps.repositoryWiki.applyBatch(workspaceId, repositoryId, operations);
+      for (const result of results) {
+        if (result.kind === "delete") {
+          store.recordKnowledgeCompilationOutput({
+            runId: run.id,
+            artifactScope: "repository_wiki",
+            docId: result.doc.id,
+            version: result.doc.version,
+            action: "reject",
+            contentSha256: result.doc.contentSha256 ?? sha256Text(result.doc.body),
+          });
+        } else {
+          store.linkKnowledgeFormalVersion({
+            runId: run.id,
+            artifactScope: "repository_wiki",
+            docId: result.doc.id,
+            version: result.doc.version,
+            action: result.kind,
+            contentSha256: result.doc.contentSha256 ?? sha256Text(result.doc.body),
+          });
+        }
+      }
+      store.completeKnowledgeCompilationRun(run.id, "published", `published ${results.length} repository wiki operation(s)`);
+      return c.json({
+        run_id: run.id,
+        results: results.map((result) => ({
+          kind: result.kind,
+          doc: repositoryWikiDocResponse({ ...result.doc, compilationRunId: run.id }),
+        })),
+      });
+    } catch (error) {
+      if (runId) store.completeKnowledgeCompilationRun(runId, "failed", error instanceof Error ? error.message : "repository wiki batch failed");
       return knowledgePolicyErrorResponse(c, error) ?? repositoryWikiError(c, error);
     }
   });
@@ -556,6 +665,19 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
       }, 409);
     }
     return c.json({ run_id: run.id, task_id: run.taskId, status: run.status }, 202);
+  });
+  app.get("/api/workspaces/:id/repos/:repositoryId/wiki/:ref/backlinks", async (c) => {
+    const workspaceId = c.req.param("id");
+    const repositoryId = c.req.param("repositoryId");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    if (requireWorkspaceRepository(store, workspaceId, repositoryId)) return c.json({ error: "repository not found" }, 404);
+    try {
+      const docs = await deps.repositoryWiki.backlinks(workspaceId, repositoryId, c.req.param("ref"));
+      return c.json({ docs: docs.map(repositoryWikiDocResponse) });
+    } catch (error) {
+      return repositoryWikiError(c, error);
+    }
   });
   app.get("/api/workspaces/:id/repos/:repositoryId/wiki/:ref", async (c) => {
     const workspaceId = c.req.param("id");
@@ -1081,6 +1203,80 @@ function requireWorkspaceRepository(store: RouterDeps["store"], workspaceId: str
   return !listWorkspaceRepositories(store, workspaceId).some((repository) => repository.id === repositoryId);
 }
 
+function normalizeRepositoryWikiBatchOperations(input: {
+  operations: unknown;
+  workspaceId: string;
+  repositoryId: string;
+  actor: ReturnType<typeof resolveKnowledgeWriteActor>;
+  memberId: string | null;
+}): RepositoryWikiBatchOperation[] {
+  if (!Array.isArray(input.operations) || input.operations.length === 0) {
+    throw new Error("repository wiki batch operations are required");
+  }
+  if (input.operations.length > 256) throw new Error("repository wiki batch supports at most 256 operations");
+  const operations: RepositoryWikiBatchOperation[] = [];
+  for (const value of input.operations) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid repository wiki batch operation");
+    const raw = value as Record<string, unknown>;
+    const kind = String(raw.kind ?? "");
+    const rawInput = raw.input;
+    if (!rawInput || typeof rawInput !== "object" || Array.isArray(rawInput)) {
+      if (kind !== "delete") throw new Error(`input is required for repository wiki ${kind || "batch"}`);
+    }
+    const operationInput = (rawInput && typeof rawInput === "object" && !Array.isArray(rawInput)
+      ? rawInput
+      : {}) as Record<string, unknown>;
+
+    if (kind === "create") {
+      const id = typeof operationInput.id === "string" && operationInput.id.trim()
+        ? operationInput.id.trim()
+        : createId("rwdoc");
+      const requestedSourceRevision = (operationInput.sourceRevision ?? operationInput.source_revision) as string | null | undefined;
+      const createInput: CreateRepositoryWikiDocInput = {
+        ...operationInput,
+        id,
+        path: normalizeRepositoryWikiPath(operationInput.path ?? operationInput.slug ?? defaultRepositoryWikiPath(operationInput.title, id)),
+        sourceTaskId: input.actor.task?.id ?? null,
+        source_task_id: input.actor.task?.id ?? null,
+        sourceIssueId: input.actor.issue?.id ?? null,
+        source_issue_id: input.actor.issue?.id ?? null,
+        sourceRevision: input.actor.sourceRevision ?? requestedSourceRevision,
+        source_revision: input.actor.sourceRevision ?? requestedSourceRevision,
+        authorType: input.actor.kind,
+        author_type: input.actor.kind,
+        authorId: input.actor.agent?.id ?? input.memberId,
+        author_id: input.actor.agent?.id ?? input.memberId,
+      };
+      operations.push({ kind, input: createInput });
+      continue;
+    }
+
+    const ref = String(raw.ref ?? "").trim();
+    if (!ref) throw new Error(`ref is required for repository wiki ${kind || "batch"}`);
+    if (kind === "update") {
+      const requestedSourceRevision = (operationInput.sourceRevision ?? operationInput.source_revision) as string | null | undefined;
+      const updateInput: UpdateRepositoryWikiDocInput = {
+        ...operationInput,
+        sourceRevision: input.actor.sourceRevision ?? requestedSourceRevision,
+        source_revision: input.actor.sourceRevision ?? requestedSourceRevision,
+        updatedByType: input.actor.kind,
+        updated_by_type: input.actor.kind,
+        updatedById: input.actor.agent?.id ?? input.memberId,
+        updated_by_id: input.actor.agent?.id ?? input.memberId,
+      };
+      operations.push({ kind, ref, input: updateInput });
+      continue;
+    }
+    if (kind === "delete") {
+      const expectedVersion = Number(raw.expectedVersion ?? raw.expected_version);
+      operations.push({ kind, ref, expectedVersion, expected_version: expectedVersion });
+      continue;
+    }
+    throw new Error(`unknown repository wiki batch operation: ${kind || "missing kind"}`);
+  }
+  return operations;
+}
+
 interface RepositoryWikiBuildState {
   status: "idle" | "queued" | "building" | "failed";
   run_id: string | null;
@@ -1255,6 +1451,7 @@ function repositoryWikiRevisionResponse(revision: MultiremiRepositoryWikiDocRevi
 function repositoryWikiError(c: Context, error: unknown): Response {
   const message = error instanceof Error ? error.message : "repository wiki request failed";
   if (error instanceof RepositoryWikiUnavailableError) return c.json({ error: message }, 503);
+  if (error instanceof RepositoryWikiLinkValidationError) return c.json({ error: message }, 409);
   if (message.includes("not found")) return c.json({ error: message }, 404);
   if (message.includes("conflict") || message.includes("already exists")) return c.json({ error: message }, 409);
   return c.json({ error: message }, 400);

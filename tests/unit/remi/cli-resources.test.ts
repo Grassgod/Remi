@@ -485,6 +485,32 @@ describe("native CLI resource contracts", () => {
     });
   });
 
+  it("lists Repository Wiki backlinks through the resolved repository", async () => {
+    useCliEnv();
+    const backlinks = specById("wiki.repository.backlinks");
+    const requests: Request[] = [];
+    globalThis.fetch = mockFetch(backlinks.id, requests, async (request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/workspaces/ws_1/repos" && request.method === "GET") {
+        return Response.json({ repositories: [{ id: "repo_123456", name: "Remi", url: "https://example.test/remi.git" }] });
+      }
+      if (path === "/api/workspaces/ws_1/repos/repo_123456/wiki/architecture%2Foverview/backlinks" && request.method === "GET") {
+        return Response.json({ docs: [{ id: "rwd_index", path: "index.md", title: "Index" }] });
+      }
+      throw new Error(`unexpected request ${request.method} ${path}`);
+    });
+
+    const output = await execute(backlinks, ["Remi", "architecture/overview", "--output", "json"]);
+
+    expect(JSON.parse(output).docs).toEqual([{ id: "rwd_index", path: "index.md", title: "Index" }]);
+    expect(requests.map((request) => `${request.method} ${new URL(request.url).pathname}`)).toEqual([
+      "GET /api/cli/capabilities",
+      "GET /api/workspaces/ws_1/repos",
+      "GET /api/workspaces/ws_1/repos",
+      "GET /api/workspaces/ws_1/repos/repo_123456/wiki/architecture%2Foverview/backlinks",
+    ]);
+  });
+
   it("keeps native Repository Wiki status and push usable without a project", async () => {
     useCliEnv();
     delete process.env.MULTIREMI_PROJECT_ID;

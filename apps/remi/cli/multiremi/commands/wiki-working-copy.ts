@@ -261,6 +261,9 @@ export async function wikiPush(options: CliOptions, projectId: string | null): P
       if (!isRecord(value)) return;
       const id = typeof value.submission_id === "string" ? value.submission_id.trim() : "";
       if (id) submissionIds.add(id);
+      if (Array.isArray(value.submissions)) {
+        for (const submission of value.submissions) collectSubmission(submission);
+      }
     };
     const sourceRevision = rawStringOption(options, "source-revision", "sourceRevision")?.trim()
       || process.env.MULTIREMI_SCM_REVISION?.trim()
@@ -328,35 +331,47 @@ export async function wikiPush(options: CliOptions, projectId: string | null): P
       ));
     }
 
+    const repositoryActions = new Map<string, RepositoryPushAction[]>();
     for (const action of repositoryPlan.actions) {
-      const root = `/api/workspaces/${encodeURIComponent(repositoryState.manifest!.workspaceId)}/repos/${encodeURIComponent(action.repositoryId)}/wiki`;
-      if (action.kind === "create") {
-        const body: Record<string, unknown> = {
-          path: action.repositoryPath,
-          title: wikiTitle(action.repositoryPath.replace(/\.md$/i, ""), action.body),
-          body: apiBody(action.body),
-          status: "healthy",
-        };
-        if (sourceRevision) body.source_revision = sourceRevision;
-        const taskId = process.env.MULTIREMI_TASK_ID?.trim();
-        if (taskId) body.source_task_id = taskId;
-        collectSubmission(await multiremiApiRequest("POST", root, body, options));
-      } else if (action.kind === "update") {
-        collectSubmission(await multiremiApiRequest("PUT", `${root}/${encodeURIComponent(action.id)}`, {
-          path: action.repositoryPath,
-          body: apiBody(action.body),
+      const actions = repositoryActions.get(action.repositoryId) ?? [];
+      actions.push(action);
+      repositoryActions.set(action.repositoryId, actions);
+    }
+    for (const [repositoryId, actions] of repositoryActions) {
+      const root = `/api/workspaces/${encodeURIComponent(repositoryState.manifest!.workspaceId)}/repos/${encodeURIComponent(repositoryId)}/wiki`;
+      const operations = actions.map((action): Record<string, unknown> => {
+        if (action.kind === "create") {
+          const input: Record<string, unknown> = {
+            path: action.repositoryPath,
+            title: wikiTitle(action.repositoryPath.replace(/\.md$/i, ""), action.body),
+            body: apiBody(action.body),
+            status: "healthy",
+          };
+          if (sourceRevision) input.source_revision = sourceRevision;
+          const taskId = process.env.MULTIREMI_TASK_ID?.trim();
+          if (taskId) input.source_task_id = taskId;
+          return { kind: "create", input };
+        }
+        if (action.kind === "update") {
+          return {
+            kind: "update",
+            ref: action.id,
+            input: {
+              path: action.repositoryPath,
+              body: apiBody(action.body),
+              expected_version: action.version,
+              status: "healthy",
+              ...(sourceRevision ? { source_revision: sourceRevision } : {}),
+            },
+          };
+        }
+        return {
+          kind: "delete",
+          ref: action.id,
           expected_version: action.version,
-          status: "healthy",
-          ...(sourceRevision ? { source_revision: sourceRevision } : {}),
-        }, options));
-      } else {
-        collectSubmission(await multiremiApiRequest(
-          "DELETE",
-          `${root}/${encodeURIComponent(action.id)}?expected_version=${action.version}`,
-          undefined,
-          options,
-        ));
-      }
+        };
+      });
+      collectSubmission(await multiremiApiRequest("POST", `${root}/batch`, { operations }, options));
     }
 
     if (submissionIds.size) {

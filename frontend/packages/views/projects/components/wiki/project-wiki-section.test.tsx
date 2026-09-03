@@ -670,7 +670,7 @@ describe("ProjectWikiSection", () => {
     // Only the prose link becomes a chip — bash tests are not wiki pages.
     const chipRow = screen.getAllByRole("link", { name: "Runbook" });
     expect(chipRow).toHaveLength(2); // sidebar row + one chip
-    expect(screen.queryByTitle("No page with this slug yet")).not.toBeInTheDocument();
+    expect(screen.queryByTitle("No Wiki page matches this reference")).not.toBeInTheDocument();
   });
 
   it("leaves a [[slug]] with no page as a non-clickable chip showing the slug", () => {
@@ -686,9 +686,9 @@ describe("ProjectWikiSection", () => {
     renderSection("index");
 
     expect(screen.getByTestId("wiki-body").textContent).toBe(
-      "See `missing-page` once it exists.",
+      'See <code title="No Wiki page matches this reference">missing-page</code> once it exists.',
     );
-    const chip = screen.getByTitle("No page with this slug yet");
+    const chip = screen.getByTitle("No Wiki page matches this reference");
     expect(chip).toHaveTextContent("missing-page");
     expect(
       screen.queryByRole("link", { name: "missing-page" }),

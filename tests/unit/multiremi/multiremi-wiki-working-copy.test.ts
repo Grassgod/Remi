@@ -428,10 +428,10 @@ describe("Wiki working copy", () => {
       expect(repositoryDocs.has("architecture/overview.md")).toBe(false);
       expect(repositoryDocs.get("design/overview.md")).toMatchObject({ id: "rwdoc_overview", body: "after", version: 2 });
       expect(repositoryDocs.get("getting-started.md")).toMatchObject({ title: "Getting started", body: "# Getting started\n\nFirst page." });
-      expect(requests.filter((request) => request.method === "PUT" || request.method === "POST")
-        .every((request) => request.body?.source_revision === "deadbeef")).toBe(true);
+      const batch = requests.find((request) => request.path.endsWith("/repos/repo_alpha/wiki/batch"));
+      expect(batch?.body.operations.every((operation: any) => operation.input?.source_revision === "deadbeef")).toBe(true);
       expect(requests.filter((request) => request.path.includes("/repos/repo_alpha/wiki")).map((request) => request.method))
-        .toEqual(["GET", "PUT", "POST", "GET"]);
+        .toEqual(["GET", "POST", "GET"]);
     }, { repositoryDocs });
   });
 });
@@ -465,6 +465,60 @@ async function withWikiServer(
         };
         hooks.repositoryDocs?.set(path, created);
         return Response.json({ doc: wireRepositoryDoc(created) }, { status: 201 });
+      }
+      if (url.pathname === "/api/workspaces/local/repos/repo_alpha/wiki/batch" && request.method === "POST") {
+        const operations = Array.isArray(body.operations) ? body.operations : [];
+        if (hooks.rawSubmissions) {
+          return Response.json({
+            submitted: true,
+            submissions: operations.map((_: unknown, index: number) => ({
+              submission_id: `ksub_test_${index + 1}`,
+              status: "pending",
+            })),
+          }, { status: 202 });
+        }
+        const next = new Map(hooks.repositoryDocs ?? []);
+        const results: Array<{ kind: string; doc: Record<string, unknown> }> = [];
+        for (const operation of operations) {
+          if (operation.kind === "create") {
+            const input = operation.input ?? {};
+            const path = String(input.path);
+            if (next.has(path)) return Response.json({ error: "already exists" }, { status: 409 });
+            const created: RepositoryDocState = {
+              id: `rwdoc_${path.replace(/[^a-z0-9]+/gi, "_")}`,
+              path,
+              title: String(input.title),
+              body: String(input.body ?? ""),
+              version: 1,
+            };
+            next.set(path, created);
+            results.push({ kind: "create", doc: wireRepositoryDoc(created) });
+            continue;
+          }
+          const current = [...next.values()].find((doc) => doc.id === String(operation.ref));
+          if (!current) return Response.json({ error: "not found" }, { status: 404 });
+          const expected = operation.kind === "update"
+            ? Number(operation.input?.expected_version)
+            : Number(operation.expected_version);
+          if (expected !== current.version) return Response.json({ error: "version conflict" }, { status: 409 });
+          next.delete(current.path);
+          if (operation.kind === "delete") {
+            results.push({ kind: "delete", doc: wireRepositoryDoc(current) });
+            continue;
+          }
+          const input = operation.input ?? {};
+          const updated = {
+            ...current,
+            path: String(input.path ?? current.path),
+            body: String(input.body ?? current.body),
+            version: current.version + 1,
+          };
+          next.set(updated.path, updated);
+          results.push({ kind: "update", doc: wireRepositoryDoc(updated) });
+        }
+        hooks.repositoryDocs?.clear();
+        for (const [path, doc] of next) hooks.repositoryDocs?.set(path, doc);
+        return Response.json({ results });
       }
       const repositoryMatch = url.pathname.match(/^\/api\/workspaces\/local\/repos\/repo_alpha\/wiki\/([^/]+)$/);
       if (repositoryMatch) {

@@ -6,7 +6,7 @@ import {
   sha256Text,
 } from "@multiremi/project-knowledge/codec.js";
 import { ProjectKnowledgeService } from "@multiremi/project-knowledge/service.js";
-import { repositoryWikiDocUri } from "@multiremi/repository-wiki/codec.js";
+import { repositoryWikiDocUri, repositoryWikiStorageRootUri } from "@multiremi/repository-wiki/codec.js";
 import { RepositoryWikiService } from "@multiremi/repository-wiki/service.js";
 import type {
   OpenVikingClientContract,
@@ -23,6 +23,8 @@ class FakeOpenViking implements OpenVikingClientContract {
   readonly tags = new Map<string, string[]>();
   readonly commits: Array<{ oid: string; message: string; files: Map<string, string> }> = [];
   failWrites = 0;
+  failWriteAt: number | null = null;
+  writeAttempts = 0;
   failCommits = 0;
   failRemoves = 0;
   failRemovesAfterDelete = 0;
@@ -106,6 +108,8 @@ class FakeOpenViking implements OpenVikingClientContract {
     return content;
   }
   private maybeFail(): void {
+    this.writeAttempts++;
+    if (this.failWriteAt === this.writeAttempts) throw new Error("planned OpenViking write failure");
     if (this.failWrites <= 0) return;
     this.failWrites--;
     throw new Error("planned OpenViking write failure");
@@ -197,7 +201,16 @@ describe("ProjectKnowledgeService OpenViking mode", () => {
     const service = new ProjectKnowledgeService(store, client, "openviking");
     const project = store.createProject({ title: "Links" });
     const target = await service.createProjectDoc(project.id, { kind: "wiki", title: "Runbook", body: "v1" });
-    await service.createProjectDoc(project.id, { kind: "wiki", title: "Index", body: "See [[runbook]]." });
+    await service.createProjectDoc(project.id, {
+      kind: "wiki",
+      title: "Index",
+      body: "See [[runbook#deploy|deployment guide]] and [[#summary]].",
+    });
+    await service.createProjectDoc(project.id, {
+      kind: "wiki",
+      title: "Examples",
+      body: "`[[runbook]]`\n```md\n[[runbook]]\n```",
+    });
     expect((await service.backlinks(project.id, target.slug)).map((doc) => doc.slug)).toEqual(["index"]);
 
     const moved = await service.updateProjectDoc(project.id, target.slug, { slug: "release-runbook", body: "v2" });
@@ -485,7 +498,8 @@ describe("RepositoryWikiService OpenViking mode", () => {
       body: "Alpha service graph",
       sourceRevision: "abc123",
     });
-    expect(client.files.get(repositoryWikiDocUri("local", "repo_alpha", "architecture/overview.md"))).toContain(`id: ${first.id}`);
+    expect(client.files.get(repositoryWikiDocUri("local", "repo_alpha", "architecture/overview.md")))
+      .toContain(`id: ${first.id}`);
     expect((await service.search("local", "repo_alpha", "service graph")).map((doc) => doc.repositoryId)).toEqual(["repo_alpha"]);
     expect(db!.query("SELECT body, storage_backend, sync_status FROM multiremi_repository_wiki_docs ORDER BY repository_id").all())
       .toEqual([
@@ -502,6 +516,189 @@ describe("RepositoryWikiService OpenViking mode", () => {
       .rejects.toThrow("repository wiki version conflict");
     expect((await service.revisions("local", "repo_alpha", first.id)).map((revision) => revision.body))
       .toEqual(["Alpha graph v2", "Alpha service graph"]);
+  });
+
+  it("resolves Repository Wiki backlinks with anchors while ignoring code examples", async () => {
+    const store = createStore();
+    const service = new RepositoryWikiService(store, new FakeOpenViking(), "openviking");
+    const target = await service.create("local", "repo_alpha", {
+      title: "Architecture",
+      path: "guides/architecture.md",
+      body: "Architecture",
+    });
+    const source = await service.create("local", "repo_alpha", {
+      title: "Index",
+      path: "guides/index.md",
+      body: "Read [[architecture#overview|the overview]].",
+    });
+    await service.create("local", "repo_alpha", {
+      title: "Examples",
+      path: "guides/examples.md",
+      body: "`[[architecture]]`\n```md\n[[architecture]]\n```",
+    });
+
+    expect((await service.backlinks("local", "repo_alpha", target.id)).map((doc) => doc.id))
+      .toEqual([source.id]);
+  });
+
+  it("fails closed when a Repository Wiki body cannot be read for graph operations", async () => {
+    const store = createStore();
+    const client = new FakeOpenViking();
+    const service = new RepositoryWikiService(store, client, "openviking");
+    const target = await service.create("local", "repo_alpha", {
+      title: "Target", path: "target.md", body: "Target",
+    });
+    const source = await service.create("local", "repo_alpha", {
+      title: "Source", path: "source.md", body: "Read [[target]].",
+    });
+    client.failReadUris.add(source.contentUri!);
+
+    await expect(service.backlinks("local", "repo_alpha", target.id))
+      .rejects.toThrow("planned unreadable content");
+    await expect(service.applyBatch("local", "repo_alpha", [{
+      kind: "update",
+      ref: target.id,
+      input: { body: "Must not publish", expected_version: target.version },
+    }])).rejects.toThrow("planned unreadable content");
+    expect(store.getRepositoryWikiDocByRef("local", "repo_alpha", target.id)).toMatchObject({ version: 1 });
+  });
+
+  it("compensates staged OpenViking writes when a repository batch fails before metadata commit", async () => {
+    const store = createStore();
+    const client = new FakeOpenViking();
+    const service = new RepositoryWikiService(store, client, "openviking");
+    const target = await service.create("local", "repo_alpha", {
+      title: "Target", path: "guides/target.md", body: "Target v1",
+    });
+    const source = await service.create("local", "repo_alpha", {
+      title: "Source", path: "guides/index.md", body: "Read [[target]].",
+    });
+    const filesBefore = new Map(client.files);
+    client.failWriteAt = client.writeAttempts + 2;
+
+    await expect(service.applyBatch("local", "repo_alpha", [
+      {
+        kind: "update",
+        ref: target.id,
+        input: { path: "archive/target.md", expected_version: target.version },
+      },
+      {
+        kind: "update",
+        ref: source.id,
+        input: { body: "Read [[archive/target]].", expected_version: source.version },
+      },
+    ])).rejects.toThrow("planned OpenViking write failure");
+
+    expect(client.files).toEqual(filesBefore);
+    expect(store.getRepositoryWikiDocByRef("local", "repo_alpha", target.id)).toMatchObject({
+      path: "guides/target.md", version: 1,
+    });
+    expect(store.getRepositoryWikiDocByRef("local", "repo_alpha", source.id)).toMatchObject({ version: 1 });
+  });
+
+  it("repairs a deferred canonical promotion on the next repository read", async () => {
+    const store = createStore();
+    const client = new FakeOpenViking();
+    const service = new RepositoryWikiService(store, client, "openviking");
+    const canonicalUri = repositoryWikiDocUri("local", "repo_alpha", "guides/target.md");
+    client.failWriteAt = 2;
+
+    const created = await service.create("local", "repo_alpha", {
+      title: "Target", path: "guides/target.md", body: "Target v1",
+    });
+
+    expect(created.contentUri).toStartWith(`${repositoryWikiStorageRootUri("local", "repo_alpha")}/batches/`);
+    expect(client.files.has(canonicalUri)).toBeFalse();
+    const repaired = await new RepositoryWikiService(store, client, "openviking")
+      .get("local", "repo_alpha", created.id);
+    expect(repaired).toMatchObject({ contentUri: canonicalUri, body: "Target v1", syncStatus: "ready" });
+    expect(store.getRepositoryWikiDocByRef("local", "repo_alpha", created.id)?.contentUri).toBe(canonicalUri);
+    expect(client.files.get(canonicalUri)).toContain("Target v1");
+    expect(client.files.has(created.contentUri!)).toBeFalse();
+  });
+
+  it("repairs a moved page and removes its obsolete canonical URI after restart", async () => {
+    const store = createStore();
+    const client = new FakeOpenViking();
+    const service = new RepositoryWikiService(store, client, "openviking");
+    const oldUri = repositoryWikiDocUri("local", "repo_alpha", "old/target.md");
+    const newUri = repositoryWikiDocUri("local", "repo_alpha", "new/target.md");
+    const created = await service.create("local", "repo_alpha", {
+      title: "Target", path: "old/target.md", body: "Target v1",
+    });
+    client.failWriteAt = client.writeAttempts + 2;
+
+    const moved = await service.update("local", "repo_alpha", created.id, {
+      path: "new/target.md", expectedVersion: created.version,
+    });
+
+    expect(moved.contentUri).toStartWith(`${repositoryWikiStorageRootUri("local", "repo_alpha")}/batches/`);
+    expect(client.files.has(oldUri)).toBeTrue();
+    expect(store.listRepositoryWikiStorageJobs("local", "repo_alpha")).toHaveLength(1);
+    const repaired = await new RepositoryWikiService(store, client, "openviking")
+      .get("local", "repo_alpha", created.id);
+    expect(repaired).toMatchObject({ path: "new/target.md", contentUri: newUri, body: "Target v1" });
+    expect(client.files.has(oldUri)).toBeFalse();
+    expect(client.files.has(newUri)).toBeTrue();
+    expect(store.listRepositoryWikiStorageJobs("local", "repo_alpha")).toEqual([]);
+  });
+
+  it("does not start another repository batch while storage repair is failing", async () => {
+    const store = createStore();
+    const client = new FakeOpenViking();
+    const service = new RepositoryWikiService(store, client, "openviking");
+    const created = await service.create("local", "repo_alpha", {
+      title: "Target", path: "target.md", body: "Version one",
+    });
+    client.failWriteAt = client.writeAttempts + 2;
+    const deferred = await service.update("local", "repo_alpha", created.id, {
+      path: "moved.md", expectedVersion: created.version,
+    });
+    client.failWrites = 10;
+
+    await expect(service.update("local", "repo_alpha", created.id, {
+      body: "Must not be committed", expectedVersion: deferred.version,
+    })).rejects.toThrow("storage repair is still pending");
+
+    expect(store.getRepositoryWikiDocByRef("local", "repo_alpha", created.id)).toMatchObject({
+      path: "moved.md", version: 2,
+    });
+    expect(store.listRepositoryWikiStorageJobs("local", "repo_alpha")).toHaveLength(1);
+  });
+
+  it("retries delete-only canonical cleanup after restart", async () => {
+    const store = createStore();
+    const client = new FakeOpenViking();
+    const service = new RepositoryWikiService(store, client, "openviking");
+    const canonicalUri = repositoryWikiDocUri("local", "repo_alpha", "delete-me.md");
+    const created = await service.create("local", "repo_alpha", {
+      title: "Delete me", path: "delete-me.md", body: "Temporary",
+    });
+    client.failRemoves = 1;
+
+    await service.delete("local", "repo_alpha", created.id, created.version);
+
+    expect(store.getRepositoryWikiDocByRef("local", "repo_alpha", created.id)).toBeNull();
+    expect(client.files.has(canonicalUri)).toBeTrue();
+    expect(store.listRepositoryWikiStorageJobs("local", "repo_alpha")).toHaveLength(1);
+    expect(await new RepositoryWikiService(store, client, "openviking").listWorkspace("local"))
+      .toEqual([]);
+    expect(client.files.has(canonicalUri)).toBeFalse();
+    expect(store.listRepositoryWikiStorageJobs("local", "repo_alpha")).toEqual([]);
+  });
+
+  it("does not confuse a public __revisions path with internal staging", async () => {
+    const store = createStore();
+    const client = new FakeOpenViking();
+    const service = new RepositoryWikiService(store, client, "openviking");
+    const canonicalUri = repositoryWikiDocUri("local", "repo_alpha", "__revisions/page.md");
+    const created = await service.create("local", "repo_alpha", {
+      title: "Public page", path: "__revisions/page.md", body: "Visible",
+    });
+
+    expect((await service.get("local", "repo_alpha", created.id))?.contentUri).toBe(canonicalUri);
+    expect(client.files.has(canonicalUri)).toBeTrue();
+    expect(store.listRepositoryWikiStorageJobs("local", "repo_alpha")).toEqual([]);
   });
 
   it("hydrates an SCM automation task with its trusted repository checkout and Wiki", async () => {

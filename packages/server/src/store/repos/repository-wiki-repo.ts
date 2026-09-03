@@ -7,6 +7,7 @@ import type {
   MultiremiRepositoryWikiDoc,
   MultiremiRepositoryWikiDocRevision,
   MultiremiRepositoryWikiStatus,
+  RepositoryWikiBatchResult,
   UpdateRepositoryWikiDocInput,
 } from "@multiremi/contracts/types.js";
 import { normalizeWikiPath } from "@multiremi/contracts/wiki-path";
@@ -20,6 +21,61 @@ export interface RepositoryWikiWriteControl {
   syncStatus?: "pending" | "ready" | "failed" | "deleting";
   syncError?: string | null;
 }
+
+export interface RepositoryWikiStorageFinalization {
+  docId: string;
+  version: number;
+  control: RepositoryWikiWriteControl;
+}
+
+export interface RepositoryWikiStoragePromotion {
+  docId: string;
+  version: number;
+  stagedUri: string;
+  finalUri: string;
+  contentSha256: string;
+}
+
+export interface RepositoryWikiStorageJobManifest {
+  promotions: RepositoryWikiStoragePromotion[];
+  cleanupUris: string[];
+}
+
+export interface RepositoryWikiStorageJobInput {
+  id: string;
+  workspaceId: string;
+  repositoryId: string;
+  batchId: string;
+  manifest: RepositoryWikiStorageJobManifest;
+}
+
+export interface RepositoryWikiStorageJob extends RepositoryWikiStorageJobInput {
+  state: "pending" | "cleanup";
+  attemptCount: number;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type RepositoryWikiStoreBatchOperation =
+  | {
+      kind: "create";
+      workspaceId: string;
+      repositoryId: string;
+      input: CreateRepositoryWikiDocInput;
+      control?: RepositoryWikiWriteControl;
+    }
+  | {
+      kind: "update";
+      current: MultiremiRepositoryWikiDoc;
+      input: UpdateRepositoryWikiDocInput;
+      control?: RepositoryWikiWriteControl;
+    }
+  | {
+      kind: "delete";
+      current: MultiremiRepositoryWikiDoc;
+      expectedVersion: number;
+    };
 
 export class RepositoryWikiRepo {
   constructor(private readonly ctx: StoreContext) {}
@@ -60,6 +116,15 @@ export class RepositoryWikiRepo {
     input: CreateRepositoryWikiDocInput,
     control?: RepositoryWikiWriteControl,
   ): MultiremiRepositoryWikiDoc {
+    return this.ctx.db.transaction(() => this.createWithinTransaction(workspaceId, repositoryId, input, control))();
+  }
+
+  private createWithinTransaction(
+    workspaceId: string,
+    repositoryId: string,
+    input: CreateRepositoryWikiDocInput,
+    control?: RepositoryWikiWriteControl,
+  ): MultiremiRepositoryWikiDoc {
     const title = String(input.title ?? "").trim();
     if (!title) throw new Error("title is required");
     const id = input.id ?? createId("rwdoc");
@@ -70,8 +135,7 @@ export class RepositoryWikiRepo {
     const body = control ? "" : String(input.body ?? "");
     const storageBackend = control ? "openviking" : "sql";
     const syncStatus = control?.syncStatus ?? (control ? "ready" : "sql");
-    const tx = this.ctx.db.transaction(() => {
-      this.ctx.db.run(
+    this.ctx.db.run(
         `INSERT INTO multiremi_repository_wiki_docs (
           id, repository_id, workspace_id, path, title, summary, body, tags, refs,
           source_task_id, source_issue_id, author_type, author_id, updated_by_type, updated_by_id,
@@ -87,15 +151,21 @@ export class RepositoryWikiRepo {
           storageBackend, control?.contentUri ?? null, control?.contentSha256 ?? null,
           syncStatus, control?.syncError ?? null, control?.snapshotOid ?? null, now, now,
         ],
-      );
-      this.insertRevision(id, 1, path, title, cleanOptionalString(input.summary), body,
-        cleanOptionalString(input.sourceRevision ?? input.source_revision), authorType, authorId, now, control);
-      return this.getByRef(workspaceId, repositoryId, id)!;
-    });
-    return tx();
+    );
+    this.insertRevision(id, 1, path, title, cleanOptionalString(input.summary), body,
+      cleanOptionalString(input.sourceRevision ?? input.source_revision), authorType, authorId, now, control);
+    return this.getByRef(workspaceId, repositoryId, id)!;
   }
 
   replaceExact(
+    current: MultiremiRepositoryWikiDoc,
+    input: UpdateRepositoryWikiDocInput,
+    control?: RepositoryWikiWriteControl,
+  ): MultiremiRepositoryWikiDoc {
+    return this.ctx.db.transaction(() => this.replaceExactWithinTransaction(current, input, control))();
+  }
+
+  private replaceExactWithinTransaction(
     current: MultiremiRepositoryWikiDoc,
     input: UpdateRepositoryWikiDocInput,
     control?: RepositoryWikiWriteControl,
@@ -124,8 +194,7 @@ export class RepositoryWikiRepo {
     const version = current.version + 1;
     const now = nowIso();
     const storedBody = control ? "" : body;
-    return this.ctx.db.transaction(() => {
-      const result = this.ctx.db.run(
+    const result = this.ctx.db.run(
         `UPDATE multiremi_repository_wiki_docs SET
           path = ?, title = ?, summary = ?, body = ?, tags = ?, refs = ?, updated_by_type = ?,
           updated_by_id = ?, source_revision = ?, status = ?, status_message = ?, version = ?,
@@ -138,22 +207,165 @@ export class RepositoryWikiRepo {
           control?.syncStatus ?? current.syncStatus, control?.syncError ?? current.syncError,
           control?.snapshotOid ?? current.snapshotOid, now, current.id, current.version,
         ],
-      );
-      if (result.changes !== 1) throw new Error("repository wiki version conflict");
-      this.insertRevision(current.id, version, path, title, summary, storedBody, sourceRevision,
-        updatedByType, updatedById, now, control);
-      return this.getByRef(current.workspaceId, current.repositoryId, current.id)!;
-    })();
+    );
+    if (result.changes !== 1) throw new Error("repository wiki version conflict");
+    this.insertRevision(current.id, version, path, title, summary, storedBody, sourceRevision,
+      updatedByType, updatedById, now, control);
+    return this.getByRef(current.workspaceId, current.repositoryId, current.id)!;
   }
 
   delete(workspaceId: string, repositoryId: string, ref: string): MultiremiRepositoryWikiDoc {
     const current = this.getByRef(workspaceId, repositoryId, ref);
     if (!current) throw new Error("repository wiki doc not found");
-    this.ctx.db.transaction(() => {
-      this.ctx.db.run("DELETE FROM multiremi_repository_wiki_doc_revisions WHERE doc_id = ?", [current.id]);
-      this.ctx.db.run("DELETE FROM multiremi_repository_wiki_docs WHERE id = ?", [current.id]);
-    })();
+    this.ctx.db.transaction(() => this.deleteWithinTransaction(current))();
     return current;
+  }
+
+  applyBatch(
+    operations: readonly RepositoryWikiStoreBatchOperation[],
+    storageJob?: RepositoryWikiStorageJobInput,
+  ): RepositoryWikiBatchResult[] {
+    if (!operations.length) return [];
+    return this.ctx.db.transaction(() => {
+      const touched = new Set<string>();
+      for (const operation of operations) {
+        if (operation.kind === "create") continue;
+        if (touched.has(operation.current.id)) throw new Error(`repository wiki batch touches document more than once: ${operation.current.id}`);
+        touched.add(operation.current.id);
+        const locked = this.getByRef(operation.current.workspaceId, operation.current.repositoryId, operation.current.id);
+        if (!locked || locked.version !== operation.current.version) throw new Error("repository wiki version conflict");
+        if (operation.kind === "delete" && operation.expectedVersion !== locked.version) {
+          throw new Error("repository wiki version conflict");
+        }
+      }
+
+      const batchId = createId("rwbatch");
+      for (const operation of operations) {
+        if (operation.kind !== "update") continue;
+        const nextPath = normalizeRepositoryWikiPath(operation.input.path ?? operation.input.slug ?? operation.current.path);
+        if (nextPath === operation.current.path) continue;
+        const temporaryPath = normalizeRepositoryWikiPath(`__batch/${batchId}/${operation.current.id}.md`);
+        const moved = this.ctx.db.run(
+          "UPDATE multiremi_repository_wiki_docs SET path = ? WHERE id = ? AND version = ?",
+          [temporaryPath, operation.current.id, operation.current.version],
+        );
+        if (moved.changes !== 1) throw new Error("repository wiki version conflict");
+      }
+
+      const results = new Map<number, RepositoryWikiBatchResult>();
+      for (const [index, operation] of operations.entries()) {
+        if (operation.kind !== "delete") continue;
+        this.deleteWithinTransaction(operation.current);
+        results.set(index, { kind: "delete", doc: operation.current });
+      }
+      for (const [index, operation] of operations.entries()) {
+        if (operation.kind !== "update") continue;
+        results.set(index, {
+          kind: "update",
+          doc: this.replaceExactWithinTransaction(operation.current, operation.input, operation.control),
+        });
+      }
+      for (const [index, operation] of operations.entries()) {
+        if (operation.kind !== "create") continue;
+        results.set(index, {
+          kind: "create",
+          doc: this.createWithinTransaction(operation.workspaceId, operation.repositoryId, operation.input, operation.control),
+        });
+      }
+      if (storageJob) this.createStorageJobWithinTransaction(storageJob);
+      return operations.map((_, index) => results.get(index)!);
+    })();
+  }
+
+  finalizeBatchStorage(
+    entries: readonly RepositoryWikiStorageFinalization[],
+    storageJobId?: string,
+  ): MultiremiRepositoryWikiDoc[] {
+    if (!entries.length && !storageJobId) return [];
+    return this.ctx.db.transaction(() => {
+      const docs = entries.map((entry) => {
+      const result = this.ctx.db.run(
+        `UPDATE multiremi_repository_wiki_docs SET
+           storage_backend = 'openviking', content_uri = ?, content_sha256 = ?, sync_status = ?,
+           sync_error = ?, snapshot_oid = ? WHERE id = ? AND version = ?`,
+        [
+          entry.control.contentUri,
+          entry.control.contentSha256,
+          entry.control.syncStatus ?? "ready",
+          entry.control.syncError ?? null,
+          entry.control.snapshotOid,
+          entry.docId,
+          entry.version,
+        ],
+      );
+      if (result.changes !== 1) throw new Error("repository wiki version conflict");
+      this.ctx.db.run(
+        `UPDATE multiremi_repository_wiki_doc_revisions SET
+           content_uri = ?, content_sha256 = ?, snapshot_oid = ?
+         WHERE doc_id = ? AND version = ?`,
+        [
+          entry.control.contentUri,
+          entry.control.contentSha256,
+          entry.control.snapshotOid,
+          entry.docId,
+          entry.version,
+        ],
+      );
+      return this.getById(entry.docId)!;
+      });
+      if (storageJobId) {
+        const updated = this.ctx.db.run(
+          `UPDATE multiremi_repository_wiki_storage_jobs
+           SET state = 'cleanup', last_error = NULL, updated_at = ?
+           WHERE id = ?`,
+          [nowIso(), storageJobId],
+        );
+        if (updated.changes !== 1) throw new Error("repository wiki storage job not found");
+      }
+      return docs;
+    })();
+  }
+
+  listStorageJobs(workspaceId: string, repositoryId: string): RepositoryWikiStorageJob[] {
+    return (this.ctx.db.query(
+      `SELECT * FROM multiremi_repository_wiki_storage_jobs
+       WHERE workspace_id = ? AND repository_id = ? ORDER BY created_at, id`,
+    ).all(workspaceId, repositoryId) as Row[]).map(toRepositoryWikiStorageJob);
+  }
+
+  listWorkspaceStorageJobs(workspaceId: string): RepositoryWikiStorageJob[] {
+    return (this.ctx.db.query(
+      `SELECT * FROM multiremi_repository_wiki_storage_jobs
+       WHERE workspace_id = ? ORDER BY repository_id, created_at, id`,
+    ).all(workspaceId) as Row[]).map(toRepositoryWikiStorageJob);
+  }
+
+  recordStorageJobFailure(id: string, error: string): void {
+    this.ctx.db.run(
+      `UPDATE multiremi_repository_wiki_storage_jobs
+       SET attempt_count = attempt_count + 1, last_error = ?, updated_at = ? WHERE id = ?`,
+      [error.slice(0, 1_000), nowIso(), id],
+    );
+  }
+
+  completeStorageJob(id: string): void {
+    this.ctx.db.run("DELETE FROM multiremi_repository_wiki_storage_jobs WHERE id = ?", [id]);
+  }
+
+  private createStorageJobWithinTransaction(input: RepositoryWikiStorageJobInput): void {
+    const now = nowIso();
+    this.ctx.db.run(
+      `INSERT INTO multiremi_repository_wiki_storage_jobs (
+         id, workspace_id, repository_id, batch_id, state, manifest, attempt_count,
+         last_error, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, 'pending', ?, 0, NULL, ?, ?)`,
+      [input.id, input.workspaceId, input.repositoryId, input.batchId, toJson(input.manifest), now, now],
+    );
+  }
+
+  private getById(id: string): MultiremiRepositoryWikiDoc | null {
+    const row = this.ctx.db.query("SELECT * FROM multiremi_repository_wiki_docs WHERE id = ?").get(id) as Row | null;
+    return row ? toRepositoryWikiDoc(row) : null;
   }
 
   revisions(docId: string): MultiremiRepositoryWikiDocRevision[] {
@@ -183,6 +395,15 @@ export class RepositoryWikiRepo {
       [createId("rwrev"), docId, version, path, title, summary, body, sourceRevision, authorType, authorId,
         control?.contentUri ?? null, control?.contentSha256 ?? null, control?.snapshotOid ?? null, createdAt],
     );
+  }
+
+  private deleteWithinTransaction(current: MultiremiRepositoryWikiDoc): void {
+    this.ctx.db.run("DELETE FROM multiremi_repository_wiki_doc_revisions WHERE doc_id = ?", [current.id]);
+    const result = this.ctx.db.run(
+      "DELETE FROM multiremi_repository_wiki_docs WHERE id = ? AND version = ?",
+      [current.id, current.version],
+    );
+    if (result.changes !== 1) throw new Error("repository wiki version conflict");
   }
 }
 
@@ -258,4 +479,26 @@ function toRepositoryWikiRevision(row: Row): MultiremiRepositoryWikiDocRevision 
 function normalizeSyncStatus(value: unknown): MultiremiRepositoryWikiDoc["syncStatus"] {
   const status = String(value ?? "sql");
   return status === "pending" || status === "ready" || status === "failed" || status === "deleting" ? status : "sql";
+}
+
+function toRepositoryWikiStorageJob(row: Row): RepositoryWikiStorageJob {
+  const manifest = parseJson(
+    String(row.manifest ?? "{}"),
+    { promotions: [], cleanupUris: [] },
+  ) as RepositoryWikiStorageJobManifest;
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id),
+    repositoryId: String(row.repository_id),
+    batchId: String(row.batch_id),
+    state: row.state === "cleanup" ? "cleanup" : "pending",
+    manifest: {
+      promotions: Array.isArray(manifest.promotions) ? manifest.promotions : [],
+      cleanupUris: Array.isArray(manifest.cleanupUris) ? manifest.cleanupUris.map(String) : [],
+    },
+    attemptCount: Number(row.attempt_count ?? 0),
+    lastError: cleanOptionalString(row.last_error),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
 }

@@ -95,6 +95,38 @@ describe("agent templates metadata", () => {
   }
 });
 
+describe("Atlas Wiki maintenance contract", () => {
+  const atlas = JSON.parse(
+    readFileSync(join(TEMPLATES_DIR, "atlas-llm-wiki.json"), "utf8"),
+  ) as { instructions: string };
+
+  test("uses the six-part agent prompt skeleton", () => {
+    expect(atlas.instructions).toStartWith("You are Atlas");
+    for (const heading of [
+      "## Responsibilities and boundaries",
+      "## Prohibited actions",
+      "## Tools and CLI conventions",
+      "## Deliverable shape",
+      "## When to stop and ask",
+    ]) {
+      expect(atlas.instructions, `missing Atlas prompt section: ${heading}`).toContain(heading);
+    }
+  });
+
+  test("keeps link identity and publication validation explicit", () => {
+    expect(atlas.instructions).toContain("Project Wiki links use stable slugs");
+    expect(atlas.instructions).toContain("repository-root-relative canonical path");
+    expect(atlas.instructions).toContain("same-directory short reference");
+    expect(atlas.instructions).toContain("enumerate every inbound link");
+    expect(atlas.instructions).toContain("Repository Wiki publishing validates the complete final repository link graph");
+  });
+
+  test("does not direct Atlas to deprecated or unsafe one-step commands", () => {
+    expect(atlas.instructions).not.toContain("remi wiki lint");
+    expect(atlas.instructions).not.toContain("remi wiki merge");
+  });
+});
+
 interface Frontmatter {
   name: string | null;
   description: string | null;
