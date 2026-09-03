@@ -31,7 +31,9 @@ tests/
 
 - **`*.test.ts`** → `bun test` **自动发现并运行**。日常单测、接口单测都用这个后缀。
   - 例:`tests/unit/multiremi/multiremi-api-issues.test.ts`(用 `createMultiremiApp()` + `app.request()` 在进程内打接口,是接口级单测的范式)。共用装置(`createStore`/`mockFetch`/`signTestJwt`/WebSocket 等待)统一从 `tests/unit/multiremi/helpers.ts` 导入,不要在测试文件里重抄一份。
-- **`*.ts`(无 `.test`)** → 是**独立 harness**,`bun test` 不碰,必须通过 `package.json` 里的脚本入口手动跑(见下)。这样做是因为它们依赖真实 provider / 浏览器 / Postgres,不能在普通单测里跑。
+- **`*.ts`(无 `.test`)** → 是**独立 harness**,`bun test` 不碰,必须通过 `package.json` 里的脚本入口手动跑(见下)。需要真实 provider / 浏览器 / Postgres 才能成立的强依赖场景放在这里。
+
+自动发现的 `*.test.ts` **没有必需的 CI secret 或外部服务**,但不等于完全不创建连接:测试会启动 `127.0.0.1` 随机端口服务,会用保留域名验证网络失败降级,也有 Postgres/Voyage 等可选 integration block;依赖不可用时这些 block 自行 skip。CI 的安全前提是"外部依赖非必需且不注入真实凭据",不是"测试进程绝不发起连接"。
 
 > 新增一个后端测试时:能不依赖外部服务就写成 `tests/unit/**/*.test.ts`;需要起真实服务/浏览器的写成 `tests/integration/*.ts` 并**在 `package.json` 加一个入口脚本**(否则会变成没人跑的孤儿)。
 
@@ -79,7 +81,7 @@ cd frontend && bunx playwright test
 
 | 脚本 | 跑什么 | 前置依赖 |
 |---|---|---|
-| `bun test` | 后端全部 `*.test.ts` | 无 |
+| `bun test` | 后端全部 `*.test.ts` | 无必需外部依赖;可选 integration block 在依赖不可用时 skip |
 | `bun run test:frontend` | 前端 Vitest 单元/组件 | 根目录 `bun install`(frontend 在 root workspaces 里) |
 | `bun run smoke:multiremi:acp` | multiremi ACP 冒烟 | 真实 ACP agent |
 | `bun run e2e:multiremi` | 内置 dashboard 全栈 e2e(真 server+daemon+**真 LLM 任务**) | provider CLI + Chromium |
@@ -112,7 +114,7 @@ bun run tests/manual/test-permission-ui.ts      # 等
 
 - **前端 Vitest + typecheck 在 CI 上跑**(release-build-check)。
 - **后端全量 `bun test` 在 CI 上跑**(MUL-129)。此前这一步是**手写的 ~20 个文件列表**,列表外的文件在 CI 里从不执行——`tests/unit/multiremi/multiremi-api-auth.test.ts` 就因此自 `5e8ee09f` 起在 `main` 上稳定失败而门禁全绿。同时 `paths` 过滤器**不含 `tests/**`**,纯测试改动的 PR 根本不触发该 workflow。两个洞现已一起补上。
-- **e2e / 冒烟 harness 仍不在 CI 上**:需要真实 provider/浏览器/Postgres,要么配 secrets,要么用 mock provider。这些文件命名为 `*.ts`(无 `.test`),因此不会被 `bun test` 发现——这正是"全量跑"安全的前提。
+- **需要真实依赖的 e2e / 冒烟 harness 仍不在 CI 上**:它们要真实 provider/浏览器/Postgres,文件命名为 `*.ts`(无 `.test`),不会被 `bun test` 发现。自动发现集合里的本地服务测试与可选 integration block 不需要 CI secret;后者在依赖不可用时 skip。
 
 ### 本地跑 `bun test` 的两个环境陷阱
 
