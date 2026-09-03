@@ -330,6 +330,39 @@ export class ChatRepo {
     return result;
   }
 
+  /** Caller owns the transaction and publishes the task/chat event after commit. */
+  createSystemChatMessageWithinTransaction(chatSessionId: string, bodyInput: string): SendChatMessageResult {
+    const session = this.getChatSession(chatSessionId);
+    if (!session) throw new Error(`Chat session not found: ${chatSessionId}`);
+    if (session.status === "archived") throw new Error(`Chat session is archived: ${chatSessionId}`);
+    const body = bodyInput.trim();
+    if (!body) throw new Error("Chat message body is required");
+    const now = nowIso();
+    const messageId = createId("msg");
+    const task = this.ctx.tasks().createTaskWithinTransaction({
+      agentId: session.agentId,
+      chatSessionId: session.id,
+      workspaceId: session.workspaceId,
+      prompt: body,
+      sessionId: session.sessionId,
+      workDir: session.workDir,
+    });
+    this.ctx.db.run(
+      `INSERT INTO multiremi_chat_messages (id, chat_session_id, task_id, role, body, created_at)
+       VALUES (?, ?, ?, 'system', ?, ?)`,
+      [messageId, session.id, task.id, body, now],
+    );
+    this.ctx.db.run(
+      "UPDATE multiremi_chat_sessions SET latest_task_id = ?, updated_at = ? WHERE id = ?",
+      [task.id, now, session.id],
+    );
+    return {
+      session: this.getChatSession(session.id)!,
+      message: this.getChatMessage(messageId)!,
+      task,
+    };
+  }
+
   getChatMessage(id: string): MultiremiChatMessage | null {
     const row = this.ctx.db.query("SELECT * FROM multiremi_chat_messages WHERE id = ?").get(id) as Row | null;
     return row ? toChatMessage(row) : null;

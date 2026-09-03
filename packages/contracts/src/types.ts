@@ -2324,7 +2324,7 @@ export interface MultiremiInboxItem {
   issue: MultiremiIssue | null;
 }
 
-export type MultiremiNotificationChannelKind = "inapp" | "feishu_group";
+export type MultiremiNotificationChannelKind = "inapp" | "feishu_group" | "agent_chat";
 export type MultiremiNotificationDeliveryStatus = "pending" | "sent" | "failed";
 
 export interface MultiremiNotificationChannel {
@@ -2358,6 +2358,16 @@ export interface MultiremiNotificationDelivery {
   lastAttemptAt: string | null;
   deliveredAt: string | null;
   createdAt: string;
+}
+
+export interface MultiremiAgentIssueUpdateSubscription {
+  chatSessionId: string;
+  issueId: string | null;
+  channelId: string | null;
+  enabled: boolean;
+  debounceWindowSeconds: number;
+  rateLimitWindowSeconds: number;
+  maxDeliveriesPerWindow: number;
 }
 
 export interface MultiremiIssueReaction {

@@ -2072,6 +2072,33 @@ export function runMigrations(db: SqlDatabase): void {
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_chat_messages_session ON multiremi_chat_messages(chat_session_id, created_at);
 
+    CREATE TABLE IF NOT EXISTS multiremi_agent_issue_update_state (
+      chat_session_id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL DEFAULT 'local',
+      issue_id TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      pending_count INTEGER NOT NULL DEFAULT 0,
+      pending_since TEXT,
+      deliver_after TEXT,
+      latest_activity_id TEXT,
+      latest_event_type TEXT,
+      latest_actor_type TEXT,
+      latest_actor_id TEXT,
+      latest_body TEXT,
+      latest_data TEXT,
+      window_started_at TEXT,
+      deliveries_in_window INTEGER NOT NULL DEFAULT 0,
+      last_delivered_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(chat_session_id) REFERENCES multiremi_chat_sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE,
+      FOREIGN KEY(channel_id) REFERENCES multiremi_notification_channels(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_agent_issue_updates_due
+      ON multiremi_agent_issue_update_state(deliver_after, pending_count);
+
     CREATE TABLE IF NOT EXISTS multiremi_tasks (
       id TEXT PRIMARY KEY,
       task_kind TEXT NOT NULL DEFAULT 'direct',

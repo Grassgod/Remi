@@ -47,6 +47,7 @@ describe("store migrations", () => {
       "multiremi_inbox_items",
       "multiremi_notification_channels",
       "multiremi_notification_deliveries",
+      "multiremi_agent_issue_update_state",
       "multiremi_tasks",
       "multiremi_task_messages",
       "multiremi_workspaces",
@@ -1352,6 +1353,9 @@ describe("store migrations", () => {
     migrate(database);
     migrate(database);
     expect(columnNames(database, "multiremi_chat_sessions")).toContain("issue_id");
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_notification_channels WHERE kind = 'agent_chat'",
+    ).get()).toEqual({ count: 0 });
 
     const now = "2026-09-03T00:00:00.000Z";
     database.run(

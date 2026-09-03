@@ -13,6 +13,11 @@ import {
   type UpdateNotificationChannelInput,
 } from "@multiremi/store/repos/notification-channels-repo.js";
 import {
+  AgentIssueUpdatesRepo,
+  type AgentIssueUpdateFlushResult,
+  type QueueAgentIssueUpdateInput,
+} from "@multiremi/store/repos/agent-issue-updates-repo.js";
+import {
   OutboundNotificationDispatcher,
   type NotificationSenderRegistry,
 } from "@multiremi/notifications/outbound-dispatcher.js";
@@ -252,6 +257,7 @@ import type {
   MultiremiNotificationChannel,
   MultiremiNotificationDelivery,
   MultiremiNotificationDeliveryStatus,
+  MultiremiAgentIssueUpdateSubscription,
   MultiremiOrganizerAction,
   MultiremiOrganizerActionKind,
   MultiremiPinnedItem,
@@ -421,6 +427,7 @@ export class MultiremiStore {
   private issueShares: IssueSharesRepo;
   private notificationChannels: NotificationChannelsRepo;
   private notificationDispatcher: OutboundNotificationDispatcher;
+  private agentIssueUpdates: AgentIssueUpdatesRepo;
   private cloudNodes: CloudRuntimeNodesRepo;
   private platformOperations: PlatformOperationsRepo;
   private platformMaintenance: PlatformMaintenanceRepo;
@@ -473,6 +480,9 @@ export class MultiremiStore {
     notificationSweepIntervalMs?: number;
     notificationLeaseMs?: number;
     notificationSendTimeoutMs?: number;
+    agentIssueUpdateDebounceMs?: number;
+    agentIssueUpdateRateLimitWindowMs?: number;
+    agentIssueUpdateMaxDeliveries?: number;
     publicUrl?: string | null;
   } = {}) {
     this.db = db ?? openMultiremiDatabase();
@@ -513,6 +523,11 @@ export class MultiremiStore {
     this.knowledge = new KnowledgeRepo(this.ctx);
     this.sessions = new IssueSessionsRepo(this.ctx);
     this.chat = new ChatRepo(this.ctx);
+    this.agentIssueUpdates = new AgentIssueUpdatesRepo(this.ctx, {
+      debounceMs: options.agentIssueUpdateDebounceMs,
+      rateLimitWindowMs: options.agentIssueUpdateRateLimitWindowMs,
+      maxDeliveries: options.agentIssueUpdateMaxDeliveries,
+    });
     this.issues = new IssuesRepo(this.ctx);
     this.issueWorkspaces = new IssueWorkspacesRepo(this.ctx);
     this.sessionArchives = new SessionArchivesRepo(this.ctx);
@@ -1367,6 +1382,42 @@ runMigrations(this.db);
 
   getNotificationChannel(id: string): MultiremiNotificationChannel | null {
     return this.notificationChannels.getChannel(id);
+  }
+
+  getAgentChatNotificationChannel(chatSessionId: string): MultiremiNotificationChannel | null {
+    return this.notificationChannels.getAgentChatChannel(chatSessionId);
+  }
+
+  upsertAgentChatNotificationChannel(input: {
+    workspaceId: string;
+    chatSessionId: string;
+    name: string;
+    enabled: boolean;
+    memberId?: string | null;
+    createdBy?: string | null;
+  }): MultiremiNotificationChannel {
+    return this.notificationChannels.upsertAgentChatChannel(input);
+  }
+
+  getAgentIssueUpdateSubscription(chatSessionId: string): MultiremiAgentIssueUpdateSubscription {
+    return this.agentIssueUpdates.getSubscription(chatSessionId);
+  }
+
+  setAgentIssueUpdateSubscription(input: {
+    chatSessionId: string;
+    enabled: boolean;
+    memberId?: string | null;
+    createdBy?: string | null;
+  }): MultiremiAgentIssueUpdateSubscription {
+    return this.agentIssueUpdates.setSubscription(input);
+  }
+
+  queueAgentIssueUpdate(input: QueueAgentIssueUpdateInput): void {
+    return this.agentIssueUpdates.queue(input);
+  }
+
+  flushDueAgentIssueUpdates(now?: string | Date): AgentIssueUpdateFlushResult {
+    return this.agentIssueUpdates.flushDue(now);
   }
 
   listNotificationChannels(workspaceId: string): MultiremiNotificationChannel[] {
@@ -3823,6 +3874,10 @@ runMigrations(this.db);
 
   sendChatMessage(chatSessionId: string, input: SendChatMessageInput): SendChatMessageResult {
     return this.chat.sendChatMessage(chatSessionId, input);
+  }
+
+  createSystemChatMessageWithinTransaction(chatSessionId: string, body: string): SendChatMessageResult {
+    return this.chat.createSystemChatMessageWithinTransaction(chatSessionId, body);
   }
 
   getChatMessage(id: string): MultiremiChatMessage | null {

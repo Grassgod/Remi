@@ -509,6 +509,19 @@ function chatCommandSpecs(): CommandSpec[] {
       const chat = await resolveChat(invocation, positional(invocation, 0, "chat"));
       await mutateAndRender(invocation, "PATCH", `/api/chat/sessions/${encodePath(String(chat.id))}`, { issue_id: null });
     }),
+    groupSpec("chat.issue.updates", "Manage Issue updates sent to a Chat agent"),
+    nativeSpec("chat.issue.updates.get", ["chat", "issue", "updates", "get"], "Show Issue update delivery settings", "read", HUMAN, [refPositional("chat")], [], async (invocation) => {
+      const chat = await resolveChat(invocation, positional(invocation, 0, "chat"));
+      await getAndRender(invocation, `/api/chat/sessions/${encodePath(String(chat.id))}/issue-updates`);
+    }),
+    nativeSpec("chat.issue.updates.enable", ["chat", "issue", "updates", "enable"], "Send bound Issue updates to the Chat agent", "write", HUMAN, [refPositional("chat")], [], async (invocation) => {
+      const chat = await resolveChat(invocation, positional(invocation, 0, "chat"));
+      await mutateAndRender(invocation, "PUT", `/api/chat/sessions/${encodePath(String(chat.id))}/issue-updates`, { enabled: true });
+    }),
+    nativeSpec("chat.issue.updates.disable", ["chat", "issue", "updates", "disable"], "Stop sending bound Issue updates to the Chat agent", "write", HUMAN, [refPositional("chat")], [], async (invocation) => {
+      const chat = await resolveChat(invocation, positional(invocation, 0, "chat"));
+      await mutateAndRender(invocation, "PUT", `/api/chat/sessions/${encodePath(String(chat.id))}/issue-updates`, { enabled: false });
+    }),
     nativeSpec("chat.delete", ["chat", "delete"], "Delete a chat", "destructive", HUMAN, [refPositional("chat")], [YES_OPTION], async (invocation) => {
       requireConfirmation(invocation);
       const chat = await resolveChat(invocation, positional(invocation, 0, "chat"));
