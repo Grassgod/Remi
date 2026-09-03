@@ -275,7 +275,13 @@ describe("knowledge compilation control plane", () => {
         submission_ids: [first.id, second.id],
         dedupe_key: "atlas-project-batch-1",
         outputs: [
-          { action: "create", kind: "wiki", path: "guides/overview.md", title: "Overview", body: "See [[details]]." },
+          {
+            action: "create",
+            kind: "wiki",
+            path: "guides/overview.md",
+            title: "Overview",
+            body: "See [[details#usage|Details]] and [[#summary]]. `[[code-example]]` is not a link.",
+          },
           { action: "create", kind: "wiki", path: "guides/details.md", title: "Details", body: "Compiled details." },
         ],
       }),
@@ -410,6 +416,71 @@ describe("knowledge compilation control plane", () => {
     const doc = store.getRepositoryWikiDocByRef("local", "repo_publish", "overview.md")!;
     expect(doc).toMatchObject({ sourceRevision: revision, compilationRunId: result.run.id });
     expect(store.listRepositoryWikiDocRevisions(doc.id)[0]?.compilationRunId).toBe(result.run.id);
+
+    const sourceDoc = store.createRepositoryWikiDoc("local", "repo_publish", {
+      path: "guide.md",
+      title: "Guide",
+      body: "Read [[architecture/details]].",
+    });
+    const targetDoc = store.createRepositoryWikiDoc("local", "repo_publish", {
+      path: "architecture/details.md",
+      title: "Details",
+      body: "Details",
+    });
+    const moveSource = store.createKnowledgeSubmission({
+      workspaceId: "local",
+      repositoryId: "repo_publish",
+      scope: "repository_wiki",
+      sourceType: "agent",
+      body: "move details",
+      sourceTaskId: task.id,
+      sourceRevision: revision,
+      authorAgentId: agent.id,
+    }).submission;
+    const brokenMove = await app.request("/api/workspaces/local/repos/repo_publish/wiki/publish", {
+      method: "POST",
+      headers: { ...JSON_HEADERS, Authorization: `Bearer ${credential.token}` },
+      body: JSON.stringify({
+        submission_ids: [moveSource.id],
+        dedupe_key: "repo-publish-broken-move",
+        output: {
+          action: "update",
+          ref: targetDoc.id,
+          expected_version: targetDoc.version,
+          path: "operations/details.md",
+        },
+      }),
+    });
+    expect(brokenMove.status).toBe(409);
+    expect((await brokenMove.json() as any).error).toContain("unresolved repository wiki link");
+    expect(store.getRepositoryWikiDocByRef("local", "repo_publish", targetDoc.id)?.path)
+      .toBe("architecture/details.md");
+
+    const coherentMove = await app.request("/api/workspaces/local/repos/repo_publish/wiki/publish", {
+      method: "POST",
+      headers: { ...JSON_HEADERS, Authorization: `Bearer ${credential.token}` },
+      body: JSON.stringify({
+        submission_ids: [moveSource.id],
+        dedupe_key: "repo-publish-coherent-move",
+        outputs: [
+          {
+            action: "update",
+            ref: targetDoc.id,
+            expected_version: targetDoc.version,
+            path: "operations/details.md",
+          },
+          {
+            action: "update",
+            ref: sourceDoc.id,
+            expected_version: sourceDoc.version,
+            body: "Read [[operations/details]].",
+          },
+        ],
+      }),
+    });
+    expect(coherentMove.status).toBe(200);
+    expect(store.getRepositoryWikiDocByRef("local", "repo_publish", targetDoc.id)?.path)
+      .toBe("operations/details.md");
 
     const project = store.createProject({
       title: "Repository publishing",

@@ -28,8 +28,8 @@ import { AppLink } from "../navigation";
 import { DocRefs } from "../common/doc-refs";
 import { EmptyState } from "../common/empty-state";
 import { WikiDirectoryTree, WikiPathBreadcrumb } from "../common/wiki-directory-tree";
+import { WikiDocumentContent } from "../common/wiki-document-content";
 import { TranscriptButton } from "../common/task-transcript";
-import { ReadonlyContent } from "../editor";
 import { PageHeader } from "../layout/page-header";
 import { useT } from "../i18n";
 import { KnowledgeProvenance } from "../knowledge/knowledge-provenance";
@@ -296,7 +296,13 @@ export function RepositoryWikiPage({ repositoryId, wikiPath }: { repositoryId: s
                 </div>
                 <DocRefs refs={selected.refs} className="mt-3" />
                 <KnowledgeProvenance compilationRunId={selected.compilation_run_id} />
-                <div className="mt-5"><ReadonlyContent content={selected.body} /></div>
+                <div className="mt-5">
+                  <WikiDocumentContent
+                    doc={selected}
+                    pages={docs}
+                    scope={{ kind: "repository", repositoryId }}
+                  />
+                </div>
                 <footer className="mt-8 flex flex-wrap gap-2 border-t pt-3 text-xs text-muted-foreground">
                   {selected.source_revision && <span className="font-mono">{t(($) => $.wiki.source_revision, { revision: selected.source_revision.slice(0, 12) })}</span>}
                   <span>{t(($) => $.wiki.updated, { time: new Date(selected.updated_at).toLocaleString() })}</span>

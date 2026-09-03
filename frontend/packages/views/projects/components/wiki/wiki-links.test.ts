@@ -31,6 +31,12 @@ describe("replaceWikiLinkMarkers", () => {
     expect(rendered).not.toContain("](");
   });
 
+  it("normalizes page and self heading anchors like the Wiki renderer", () => {
+    expect(replaceWikiLinkMarkers("[[runbook#Deploy Now]] [[#Local Setup]]", resolve)).toBe(
+      "[Runbook](/acme/projects/p1/wiki/runbook#deploy-now) [Local Setup](#local-setup)",
+    );
+  });
+
   it("leaves fenced blocks and inline code byte-for-byte alone", () => {
     const body = [
       "Prose links to [[runbook]].",

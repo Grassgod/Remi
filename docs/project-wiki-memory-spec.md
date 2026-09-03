@@ -20,13 +20,20 @@
 | 三层：不可变来源 / LLM 拥有的 wiki / schema 约定文档 | 来源层 = multiremi 原生的 issue 讨论、task transcript、代码库（本就不可变）；wiki 层 = project_docs；**schema 层 = 每 project 一个保留 slug `_schema` 的 wiki 文档**（本次新增，见 §3/§6） |
 | wiki 内容从来源蒸馏并引用来源 | source_task_id/source_issue_id（自动出处）+ **refs 引用数组**（本次新增：多来源引用 issue/task/comment/url） |
 | 整合优于堆积：新信息更新既有页面、矛盾要显式标注，而不是无限追加 | prompt 写回纪律改写（§6）：先 search/get → 能 update 不 create → 矛盾时修订旧条目并注明依据；Atlas 的 lint 模式负责把 memory 快速记录合并进 wiki 页。 |
-| [[wiki-links]] 页面互链 | 写入约定 + 前端渲染 [[slug]] 内链；反链图和 orphan 检查由 Atlas 在 lint 模式下结合语义判断。 |
+| [[wiki-links]] 页面互链 | Project Wiki 使用稳定 slug；Repository Wiki 使用仓库根相对 canonical path（省略 `.md`）。Repository Wiki 的最终链接图由服务端发布校验；Project Wiki 由稳定 slug、backlinks 与 Atlas 发布前检查共同保证，语义整理仍由 Atlas lint 模式负责。 |
 | index.md 目录先读、~100 源内不需要向量检索 | 每个非空 Wiki 由 Atlas 维护实际的根级 `index.md`，作为经过整理的阅读地图；数据库索引只负责检索和元数据，不替代可读入口。 |
 | log.md 追加式日志 | 每次 Atlas 正式发布在根级 `log.md` 追加来源、revision、运行和页面变化；revision 表负责回滚，不替代面向读者的加工日志。 |
 | lint：矛盾/过时/孤儿页/缺页检查 | Atlas lint 模式的检查和修订清单（见 §10）；不再把启发式 CLI 输出当成结论。 |
 | markdown 为载体、git 为版本 | body 即纯 markdown；revisions 即版本史；DB 替代文件系统的理由不变（多 repo/零 repo、前端浏览、多机 agent、实时推送）；后续可选把 wiki 物化进 task workdir（对齐 skills 物化机制） |
 
 **memory 与 wiki 的关系（叙事修正）**：memory 条目 = 未整合的快速捕获（hot path，对齐老 remi 的 daily），wiki 页 = 整合后的长期知识（对齐长期记忆）；librarian 蒸馏 = compaction。
+
+### 0.6 双链命名与发布契约
+
+- Project Wiki 的页面身份是稳定 slug，链接写作 `[[deployment-model]]`；标题变化不改变引用。
+- Repository Wiki 的页面身份是仓库根相对 canonical path，链接省略 `.md`，例如 `[[architecture/runtime]]`。只有目标在来源页同目录内且解析唯一时，才能使用 `[[details]]` 这类短名；有歧义时必须写 canonical path。
+- 页面移动或内容归并前，Atlas 必须先搜索并枚举全部入链，逐条改写为目标页面的 canonical 引用，再执行移动、更新或删除。不得用一步式合并掩盖未更新的入链。
+- CLI 负责读取、编辑和提交内容。Repository Wiki 服务端在发布边界解析最终文档图，并拒绝本次变更新引入的断链或歧义；Atlas 根据返回的来源页和引用诊断修复后重试，不能绕过该校验。Project Wiki 使用稳定 slug，并要求 Atlas 在移动或归并前通过 backlinks 完成入链检查与改写。
 
 ## 1. DDL（加入 migrations.ts 的启动 DDL 块，跟随现有风格：无 CHECK 约束，验证在 store 层）
 
@@ -184,7 +191,7 @@ Create/Update 输入类型接受 camel/snake 双写（store 层 `input.x ?? inpu
 ## 维护纪律
 - 写入前先 `doc search` / `doc get` 查已有条目；能 update 就不要 create。
 - 新事实与旧条目矛盾时：更新旧条目并在正文注明变化与依据（引用 issue/task），不要静默并存两个版本。
-- 写入时用 --ref 引用来源（issue/task/url）；页面间用 [[slug]] 交叉链接。
+- 写入时用 --ref 引用来源（issue/task/url）；Project 页面用稳定 `[[slug]]`，Repository 页面按 §0.6 使用 canonical path 交叉链接。
 - 一次性细节、只对当前 issue 有效的信息不要入库。
 ```
 - `getTaskWithAgent`（store.ts:7201）返回对象增加 `projectDocs: project ? this.getProjectDocsIndex(project.id) : null`。

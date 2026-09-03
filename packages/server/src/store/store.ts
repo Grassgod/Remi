@@ -56,6 +56,10 @@ import { SquadsRepo } from "@multiremi/store/repos/squads-repo.js";
 import { ProjectsRepo, type ProjectInstructionsWriteContext } from "@multiremi/store/repos/projects-repo.js";
 import {
   RepositoryWikiRepo,
+  type RepositoryWikiStorageJob,
+  type RepositoryWikiStorageJobInput,
+  type RepositoryWikiStorageFinalization,
+  type RepositoryWikiStoreBatchOperation,
   type RepositoryWikiWriteControl,
 } from "@multiremi/store/repos/repository-wiki-repo.js";
 import {
@@ -267,6 +271,7 @@ import type {
   MultiremiProjectDocRevision,
   MultiremiRepositoryWikiDoc,
   MultiremiRepositoryWikiDocRevision,
+  RepositoryWikiBatchResult,
   MultiremiProjectDocsIndex,
   MultiremiProjectResource,
   MultiremiProjectSearchResult,
@@ -3452,6 +3457,36 @@ runMigrations(this.db);
 
   deleteRepositoryWikiDoc(workspaceId: string, repositoryId: string, ref: string): MultiremiRepositoryWikiDoc {
     return this.repositoryWiki.delete(workspaceId, repositoryId, ref);
+  }
+
+  applyRepositoryWikiBatch(
+    operations: readonly RepositoryWikiStoreBatchOperation[],
+    storageJob?: RepositoryWikiStorageJobInput,
+  ): RepositoryWikiBatchResult[] {
+    return this.repositoryWiki.applyBatch(operations, storageJob);
+  }
+
+  finalizeRepositoryWikiBatchStorage(
+    entries: readonly RepositoryWikiStorageFinalization[],
+    storageJobId?: string,
+  ): MultiremiRepositoryWikiDoc[] {
+    return this.repositoryWiki.finalizeBatchStorage(entries, storageJobId);
+  }
+
+  listRepositoryWikiStorageJobs(workspaceId: string, repositoryId: string): RepositoryWikiStorageJob[] {
+    return this.repositoryWiki.listStorageJobs(workspaceId, repositoryId);
+  }
+
+  listWorkspaceRepositoryWikiStorageJobs(workspaceId: string): RepositoryWikiStorageJob[] {
+    return this.repositoryWiki.listWorkspaceStorageJobs(workspaceId);
+  }
+
+  recordRepositoryWikiStorageJobFailure(id: string, error: string): void {
+    this.repositoryWiki.recordStorageJobFailure(id, error);
+  }
+
+  completeRepositoryWikiStorageJob(id: string): void {
+    this.repositoryWiki.completeStorageJob(id);
   }
 
   listRepositoryWikiDocRevisions(docId: string): MultiremiRepositoryWikiDocRevision[] {

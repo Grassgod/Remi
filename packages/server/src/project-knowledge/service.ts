@@ -44,10 +44,12 @@ import type {
   ProjectKnowledgeSearchOptions,
   ProjectKnowledgeWorkspaceDoc,
 } from "./types.js";
+import { resolveProjectWikiRef, tokenizeWikiLinks } from "@multiremi/contracts/wiki-links";
 
 export interface ProjectKnowledgeServiceContract {
   readonly mode: ProjectKnowledgeMode;
   listProjectDocs(projectId: string, input?: { kind?: string | null }): Promise<ProjectKnowledgeDoc[]>;
+  listProjectDocsStrict(projectId: string, input?: { kind?: string | null }): Promise<ProjectKnowledgeDoc[]>;
   getProjectDocByRef(projectId: string, ref: string): Promise<ProjectKnowledgeDoc | null>;
   createProjectDoc(projectId: string, input: CreateProjectDocInput): Promise<ProjectKnowledgeDoc>;
   updateProjectDoc(projectId: string, ref: string, input: UpdateProjectDocInput): Promise<ProjectKnowledgeDoc>;
@@ -85,6 +87,17 @@ export class ProjectKnowledgeService implements ProjectKnowledgeServiceContract 
     const docs = this.store.listProjectDocs(projectId, input);
     if (this.mode !== "openviking") return docs.map(asKnowledgeDoc);
     return Promise.all(docs.filter(isReadyOpenVikingDoc).map((doc) => this.hydrate(doc)));
+  }
+
+  async listProjectDocsStrict(projectId: string, input: { kind?: string | null } = {}): Promise<ProjectKnowledgeDoc[]> {
+    const docs = this.store.listProjectDocs(projectId, input);
+    if (this.mode !== "openviking") return docs.map(asKnowledgeDoc);
+    return Promise.all(docs.map((doc) => {
+      if (!isReadyOpenVikingDoc(doc)) {
+        throw new ProjectKnowledgeUnavailableError(`Project knowledge content is not ready for ${doc.id}`);
+      }
+      return this.hydrate(doc);
+    }));
   }
 
   async getProjectDocByRef(projectId: string, ref: string): Promise<ProjectKnowledgeDoc | null> {
@@ -340,9 +353,11 @@ export class ProjectKnowledgeService implements ProjectKnowledgeServiceContract 
 
   async backlinks(projectId: string, ref: string): Promise<ProjectKnowledgeDoc[]> {
     const target = await this.requireDoc(projectId, ref);
-    const needle = `[[${target.slug}]]`;
-    const docs = await this.listProjectDocs(projectId);
-    return docs.filter((doc) => doc.id !== target.id && doc.body.includes(needle));
+    const docs = await this.listProjectDocsStrict(projectId);
+    return docs.filter((doc) => doc.id !== target.id && tokenizeWikiLinks(doc.body).some((token) => {
+      const resolution = resolveProjectWikiRef(token.ref, doc.path, docs);
+      return resolution.status === "resolved" && resolution.document.id === target.id;
+    }));
   }
 
   async migrationStatus(workspaceId: string): Promise<ProjectKnowledgeMigrationStatus> {

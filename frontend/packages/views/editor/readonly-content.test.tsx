@@ -64,6 +64,7 @@ Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
 
 import mermaid from "mermaid";
 import { ReadonlyContent } from "./readonly-content";
+import { openLink } from "./utils/link-handler";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -123,6 +124,54 @@ describe("ReadonlyContent line breaks", () => {
   it("renders a blank-line gap as separate paragraphs", () => {
     const { container } = render(<ReadonlyContent content={"para one\n\npara two"} />);
     expect(container.querySelectorAll("p").length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("ReadonlyContent document anchors", () => {
+  it("assigns stable heading ids and keeps fragment navigation in the document", () => {
+    const { container } = render(
+      <ReadonlyContent content={"## Deploy checks\n\n[Jump](#deploy-checks)"} headingAnchors />,
+    );
+
+    expect(container.querySelector("h2")).toHaveAttribute("id", "deploy-checks");
+    const link = container.querySelector<HTMLAnchorElement>('a[href="#deploy-checks"]');
+    expect(link).not.toBeNull();
+    fireEvent.click(link!);
+    expect(openLink).not.toHaveBeenCalled();
+  });
+
+  it("keeps CJK text when generating a heading anchor", () => {
+    const { container } = render(<ReadonlyContent content={"### 发布 流程"} headingAnchors />);
+    expect(container.querySelector("h3")).toHaveAttribute("id", "发布-流程");
+  });
+
+  it("does not add ids on non-Wiki readonly surfaces", () => {
+    const { container } = render(<ReadonlyContent content={"## Timeline heading"} />);
+    expect(container.querySelector("h2")).not.toHaveAttribute("id");
+  });
+
+  it("adds deterministic suffixes to duplicate Wiki headings", () => {
+    const { container } = render(
+      <ReadonlyContent
+        content={"## Deploy checks\n\n## Deploy checks\n\n## Deploy checks"}
+        headingAnchors
+      />,
+    );
+    expect([...container.querySelectorAll("h2")].map((heading) => heading.id)).toEqual([
+      "deploy-checks",
+      "deploy-checks-1",
+      "deploy-checks-2",
+    ]);
+  });
+
+  it("preserves a safe title on unresolved Wiki inline code", () => {
+    const { container } = render(
+      <ReadonlyContent content={'<code title="No matching Wiki page">missing</code>'} />,
+    );
+    expect(container.querySelector("code")).toHaveAttribute(
+      "title",
+      "No matching Wiki page",
+    );
   });
 });
 

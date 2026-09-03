@@ -89,7 +89,7 @@ vi.mock("../common/task-transcript", () => ({
 }));
 
 vi.mock("../editor", () => ({
-  ReadonlyContent: ({ content }: { content: string }) => <div>{content}</div>,
+  ReadonlyContent: ({ content }: { content: string }) => <div data-testid="wiki-body">{content}</div>,
 }));
 
 import { toast } from "sonner";
@@ -279,6 +279,35 @@ describe("RepositoryWikiPage build state", () => {
     expect(mockInvalidate).toHaveBeenCalledWith({
       queryKey: ["repositories", "workspace-1", "repo-1", "wiki"],
     });
+  });
+
+  it("resolves Repository Wiki links and exposes backlinks from the complete page set", () => {
+    mockDocs.value = [
+      doc({
+        id: "overview",
+        path: "operations/overview.md",
+        slug: "overview",
+        title: "Overview",
+        body: "Continue with [[runbook.md]].",
+      }),
+      doc({
+        id: "runbook",
+        path: "operations/runbook.md",
+        slug: "runbook",
+        title: "Runbook",
+        body: "Return to [[operations/overview.md]].",
+      }),
+    ];
+
+    renderPage();
+
+    expect(screen.getByTestId("wiki-body")).toHaveTextContent(
+      "Continue with [Runbook](/workspace/repos/repo-1/wiki/operations/runbook.md).",
+    );
+    expect(screen.getByRole("group", { name: "References" }))
+      .toHaveTextContent("Runbook");
+    expect(screen.getByRole("group", { name: "Referenced by" }))
+      .toHaveTextContent("Runbook");
   });
 
   it("forces the mobile Wiki drawer to the specified 280px width", async () => {

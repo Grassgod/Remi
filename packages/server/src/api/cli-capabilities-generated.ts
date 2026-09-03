@@ -1546,6 +1546,19 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "wiki.repository.backlinks": {
+      "command": "remi wiki repository backlinks",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.repository.backlinks",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "wiki.repository.build": {
       "command": "remi wiki repository build",
       "auth": [

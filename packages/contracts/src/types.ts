@@ -2696,6 +2696,33 @@ export interface UpdateRepositoryWikiDocInput {
   updated_by_id?: string | null;
 }
 
+/** One final-graph mutation submitted by `remi wiki push`. */
+export type RepositoryWikiBatchOperation =
+  | {
+      kind: "create";
+      input: CreateRepositoryWikiDocInput;
+    }
+  | {
+      kind: "update";
+      ref: string;
+      input: UpdateRepositoryWikiDocInput;
+    }
+  | {
+      kind: "delete";
+      ref: string;
+      expectedVersion?: number | null;
+      expected_version?: number | null;
+    };
+
+export interface RepositoryWikiBatchInput {
+  operations: RepositoryWikiBatchOperation[];
+}
+
+export interface RepositoryWikiBatchResult {
+  kind: RepositoryWikiBatchOperation["kind"];
+  doc: MultiremiRepositoryWikiDoc;
+}
+
 /** Workspace-wide doc listing entry: a doc plus its project's title for grouping. */
 export interface MultiremiWorkspaceProjectDoc extends MultiremiProjectDoc {
   projectTitle: string;

@@ -5,6 +5,7 @@ import type {
   MultiremiKnowledgeCompilationAction,
   MultiremiKnowledgeScope,
   MultiremiKnowledgeSubmission,
+  RepositoryWikiBatchOperation,
   UpdateProjectDocInput,
   UpdateRepositoryWikiDocInput,
 } from "@multiremi/contracts/types.js";
@@ -30,6 +31,15 @@ import { normalizeRepositoryWikiPath } from "@multiremi/store/repos/repository-w
 import { sha256Text } from "@multiremi/project-knowledge/codec.js";
 import { resolveTaskRepositoryWikiRepositories } from "@multiremi/repository-wiki/task-scope.js";
 import { autopilotRunTriggerSummary } from "../wire/autopilots.js";
+import { createId } from "@multiremi/ids.js";
+import { resolveProjectWikiRef, tokenizeWikiLinks } from "@multiremi/contracts/wiki-links";
+import {
+  assertNoIntroducedRepositoryWikiLinks,
+  defaultRepositoryWikiPath,
+  repositoryWikiGraphWithUpserts,
+  RepositoryWikiLinkValidationError,
+  type RepositoryWikiGraphDoc,
+} from "@multiremi/repository-wiki/links.js";
 
 interface KnowledgeSubmitBody {
   workspace_id?: string;
@@ -233,7 +243,10 @@ export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
       runId = runResult.run.id;
       for (const submission of submissions) store.addKnowledgeRunSubmissionSource(runId, submission.id);
       const batchRefs = new Set(outputs.flatMap(projectOutputRefs));
-      for (const output of outputs) await assertProjectLinks(projectKnowledge, project.id, String(output.body ?? ""), batchRefs);
+      const projectDocs = await projectKnowledge.listProjectDocs(project.id);
+      for (const output of outputs) {
+        assertProjectLinks(projectDocs, clean(output.path) ?? "index.md", String(output.body ?? ""), batchRefs);
+      }
       for (const output of outputs) {
         const action = normalizeAction(output.action);
         const scope: MultiremiKnowledgeScope = output.kind === "memory" ? "memory" : "project_wiki";
@@ -296,7 +309,7 @@ export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
         repositoryId,
         issueId: actor.issue?.id,
       });
-      await preflightRepositoryOutputs(repositoryWiki, workspaceId, repositoryId, outputs);
+      const plannedOutputs = await preflightRepositoryOutputs(repositoryWiki, workspaceId, repositoryId, outputs);
       const runResult = store.createKnowledgeCompilationRun({
         workspaceId,
         repositoryId,
@@ -310,17 +323,12 @@ export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
       if (runResult.deduplicated) throw new KnowledgeWritePolicyError("dedupe_key has already been processed", 409);
       runId = runResult.run.id;
       for (const submission of submissions) store.addKnowledgeRunSubmissionSource(runId, submission.id);
-      const batchRefs = new Set(outputs.flatMap(repositoryOutputRefs));
-      for (const output of outputs) await assertRepositoryLinks(repositoryWiki, workspaceId, repositoryId, String(output.body ?? ""), batchRefs);
       const sourceRevision = compiledSourceRevision(actor.sourceRevision, submissions);
-      for (const output of outputs) {
-        const action = normalizeAction(output.action);
-        if (action === "reject" || action === "noop") {
-          store.recordKnowledgeCompilationOutput({ runId, artifactScope: "repository_wiki", action });
-          continue;
-        }
+      const active = plannedOutputs.filter(({ action }) => action !== "reject" && action !== "noop");
+      const operations = active.map(({ output, action, document }): RepositoryWikiBatchOperation => {
         const stamped = {
           ...output,
+          ...(document ? { id: document.id, path: document.path, body: document.body } : {}),
           sourceTaskId: actor.task!.id,
           source_task_id: actor.task!.id,
           sourceIssueId: actor.issue?.id ?? null,
@@ -336,9 +344,21 @@ export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
           updatedById: actor.agent!.id,
           updated_by_id: actor.agent!.id,
         };
-        const doc = action === "create" || action === "split"
-          ? await repositoryWiki.create(workspaceId, repositoryId, stamped)
-          : await repositoryWiki.update(workspaceId, repositoryId, requireRef(output), stamped);
+        return action === "create" || action === "split"
+          ? { kind: "create", input: stamped }
+          : { kind: "update", ref: document!.id, input: stamped };
+      });
+      const written = operations.length
+        ? await repositoryWiki.applyBatch(workspaceId, repositoryId, operations)
+        : [];
+      let writtenIndex = 0;
+      for (const planned of plannedOutputs) {
+        const { action } = planned;
+        if (action === "reject" || action === "noop") {
+          store.recordKnowledgeCompilationOutput({ runId, artifactScope: "repository_wiki", action });
+          continue;
+        }
+        const doc = written[writtenIndex++]!.doc;
         store.linkKnowledgeFormalVersion({
           runId,
           artifactScope: "repository_wiki",
@@ -600,13 +620,29 @@ async function preflightRepositoryOutputs(
   workspaceId: string,
   repositoryId: string,
   outputs: PublishOutputBody[],
-): Promise<void> {
+): Promise<PlannedRepositoryOutput[]> {
+  const before = await service.listStrict(workspaceId, repositoryId);
+  const planned: PlannedRepositoryOutput[] = [];
+  const mutatedIds = new Set<string>();
   for (const output of outputs) {
     const action = normalizeAction(output.action);
-    if (action === "reject" || action === "noop") continue;
+    if (action === "reject" || action === "noop") {
+      planned.push({ output, action, document: null });
+      continue;
+    }
     if (action === "create" || action === "split") {
       if (!String(output.title ?? "").trim()) throw new KnowledgeWritePolicyError("output title is required", 400);
-      normalizeRepositoryWikiPath(output.path ?? output.slug ?? `${String(output.title)}.md`);
+      const id = clean(output.id) ?? createId("rwdoc");
+      const path = normalizeRepositoryWikiPath(output.path ?? output.slug ?? defaultRepositoryWikiPath(output.title, id));
+      if (before.some((document) => document.id === id) || mutatedIds.has(id)) {
+        throw new KnowledgeWritePolicyError(`repository wiki doc already exists: ${id}`, 409);
+      }
+      mutatedIds.add(id);
+      planned.push({
+        output,
+        action,
+        document: { id, path, body: String(output.body ?? "") },
+      });
       continue;
     }
     const current = await service.get(workspaceId, repositoryId, requireRef(output));
@@ -615,35 +651,63 @@ async function preflightRepositoryOutputs(
     if (expected == null || Number(expected) !== current.version) {
       throw new KnowledgeWritePolicyError(`repository wiki version conflict: ${requireRef(output)}`, 409);
     }
-    if (output.path != null) normalizeRepositoryWikiPath(output.path);
+    if (mutatedIds.has(current.id)) {
+      throw new KnowledgeWritePolicyError(`repository wiki doc appears more than once: ${current.id}`, 409);
+    }
+    if (output.title !== undefined && !String(output.title ?? "").trim()) {
+      throw new KnowledgeWritePolicyError("output title is required", 400);
+    }
+    mutatedIds.add(current.id);
+    const pathValue = output.path !== undefined
+      ? output.path
+      : output.slug !== undefined
+        ? output.slug
+        : current.path;
+    planned.push({
+      output,
+      action,
+      document: {
+        id: current.id,
+        path: normalizeRepositoryWikiPath(pathValue),
+        body: output.body === undefined ? current.body : String(output.body ?? ""),
+      },
+    });
   }
+  const after = repositoryWikiGraphWithUpserts(
+    before,
+    planned.flatMap((entry) => entry.document ? [entry.document] : []),
+  );
+  assertUniqueRepositoryWikiPaths(after);
+  try {
+    assertNoIntroducedRepositoryWikiLinks(before, after);
+  } catch (error) {
+    if (error instanceof RepositoryWikiLinkValidationError) {
+      throw new KnowledgeWritePolicyError(error.message, 409);
+    }
+    throw error;
+  }
+  return planned;
 }
 
-async function assertProjectLinks(
-  service: RouterDeps["projectKnowledge"],
-  projectId: string,
+function assertProjectLinks(
+  documents: Awaited<ReturnType<RouterDeps["projectKnowledge"]["listProjectDocs"]>>,
+  sourcePath: string,
   body: string,
   batchRefs: Set<string>,
-): Promise<void> {
-  for (const ref of wikiLinks(body)) {
+): void {
+  for (const token of tokenizeWikiLinks(body)) {
+    const ref = token.ref;
+    if (ref === null) continue;
     if (batchRefs.has(ref)) continue;
-    if (!await service.getProjectDocByRef(projectId, ref)) {
+    const resolution = resolveProjectWikiRef(ref, sourcePath, documents);
+    if (resolution.status === "missing") {
       throw new KnowledgeWritePolicyError(`unresolved wiki link: [[${ref}]]`, 409);
     }
-  }
-}
-
-async function assertRepositoryLinks(
-  service: RouterDeps["repositoryWiki"],
-  workspaceId: string,
-  repositoryId: string,
-  body: string,
-  batchRefs: Set<string>,
-): Promise<void> {
-  for (const ref of wikiLinks(body)) {
-    if (batchRefs.has(ref)) continue;
-    if (!await service.get(workspaceId, repositoryId, ref)) {
-      throw new KnowledgeWritePolicyError(`unresolved wiki link: [[${ref}]]`, 409);
+    if (resolution.status === "ambiguous") {
+      throw new KnowledgeWritePolicyError(
+        `ambiguous wiki link: [[${ref}]]; candidates: ${resolution.candidates.map((doc) => doc.path).join(", ")}`,
+        409,
+      );
     }
   }
 }
@@ -665,19 +729,26 @@ function finalizePublishSources(
 function projectOutputRefs(output: PublishOutputBody): string[] {
   const title = clean(output.title);
   const generatedSlug = title ? projectDocSlug(clean(output.slug), title, "") : null;
-  const values = [clean(output.slug), generatedSlug, clean(output.path)?.replace(/\.md$/i, "")];
+  const path = clean(output.path);
+  const values = [clean(output.id), clean(output.slug), generatedSlug, path, path?.replace(/\.md$/i, "")];
   return values.filter((value): value is string => Boolean(value));
 }
 
-function repositoryOutputRefs(output: PublishOutputBody): string[] {
-  const path = clean(output.path ?? output.slug);
-  return path ? [path, path.replace(/\.md$/i, "")] : [];
+interface PlannedRepositoryOutput {
+  output: PublishOutputBody;
+  action: MultiremiKnowledgeCompilationAction;
+  document: RepositoryWikiGraphDoc | null;
 }
 
-function wikiLinks(body: string): string[] {
-  return [...body.matchAll(/\[\[([^\]\n]+)\]\]/g)]
-    .map((match) => match[1]!.trim())
-    .filter(Boolean);
+function assertUniqueRepositoryWikiPaths(documents: readonly RepositoryWikiGraphDoc[]): void {
+  const byPath = new Map<string, string>();
+  for (const document of documents) {
+    const existing = byPath.get(document.path);
+    if (existing && existing !== document.id) {
+      throw new KnowledgeWritePolicyError(`repository wiki path already exists: ${document.path}`, 409);
+    }
+    byPath.set(document.path, document.id);
+  }
 }
 
 function normalizeAction(value: unknown): MultiremiKnowledgeCompilationAction {

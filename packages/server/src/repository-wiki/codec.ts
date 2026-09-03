@@ -11,6 +11,10 @@ export function repositoryWikiRootUri(workspaceId: string, repositoryId: string)
   return `${ROOT}/workspaces/${knowledgeUriSegment(workspaceId, "workspaceId")}/repositories/${knowledgeUriSegment(repositoryId, "repositoryId")}/knowledge/wiki`;
 }
 
+export function repositoryWikiStorageRootUri(workspaceId: string, repositoryId: string): string {
+  return `${ROOT}/internal/repository-wiki/${knowledgeUriSegment(workspaceId, "workspaceId")}/${knowledgeUriSegment(repositoryId, "repositoryId")}`;
+}
+
 export function repositoryWikiDocUri(workspaceId: string, repositoryId: string, path: string): string {
   const encodedPath = normalizeRepositoryWikiPath(path)
     .split("/")

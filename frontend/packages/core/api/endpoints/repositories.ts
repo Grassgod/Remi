@@ -161,4 +161,13 @@ export class RepositoriesEndpoints {
       endpoint: "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/revisions",
     }).revisions;
   }
+
+  async listRepositoryWikiBacklinks(workspaceId: string, repositoryId: string, ref: string): Promise<RepositoryWikiDoc[]> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repositoryId)}/wiki/${encodeURIComponent(ref)}/backlinks`,
+    );
+    return parseWithFallback(raw, repositoryWikiDocsResponseSchema, { docs: [] }, {
+      endpoint: "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/backlinks",
+    }).docs;
+  }
 }

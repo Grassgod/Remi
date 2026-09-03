@@ -289,6 +289,11 @@ function repositoryWikiSpecs(): CommandSpec[] {
       const response = await target.client.request({ method: "GET", path: target.path });
       renderResource(invocation, response.data, ["revisions"]);
     }),
+    spec("wiki.repository.backlinks", ["wiki", "repository", "backlinks"], "List backlinks to a repository Wiki document", "read", [refPositional("repository"), refPositional("document")], [], async (invocation) => {
+      const target = await requestPath(invocation, repositoryRef(invocation, 0), `/${encodePath(positional(invocation, 1, "document"))}/backlinks`);
+      const response = await target.client.request({ method: "GET", path: target.path });
+      renderResource(invocation, response.data, ["docs"]);
+    }),
     spec("wiki.repository.build", ["wiki", "repository", "build"], "Build or refresh one repository Wiki", "destructive", [refPositional("repository")], [YES_OPTION], async (invocation) => {
       requireConfirmation(invocation);
       const target = await requestPath(invocation, repositoryRef(invocation, 0), "/build");

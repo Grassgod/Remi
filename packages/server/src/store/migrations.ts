@@ -1278,6 +1278,25 @@ export function runMigrations(db: SqlDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_multiremi_repository_wiki_revisions_doc
       ON multiremi_repository_wiki_doc_revisions(doc_id, version);
 
+    CREATE TABLE IF NOT EXISTS multiremi_repository_wiki_storage_jobs (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      repository_id TEXT NOT NULL,
+      batch_id TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'pending',
+      manifest TEXT NOT NULL DEFAULT '{}',
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(workspace_id, repository_id, batch_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_repository_wiki_storage_jobs_scope
+      ON multiremi_repository_wiki_storage_jobs(workspace_id, repository_id, created_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_repository_wiki_storage_jobs_active
+      ON multiremi_repository_wiki_storage_jobs(workspace_id, repository_id);
+
     CREATE TABLE IF NOT EXISTS multiremi_knowledge_submissions (
       id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL,
