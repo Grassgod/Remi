@@ -88,6 +88,28 @@ describe("MultiremiDaemonClient HTTP failures", () => {
 });
 
 describe("MultiremiDaemonClient daemon protocol", () => {
+  it("normalizes pending bound Issue updates from a task claim", async () => {
+    globalThis.fetch = (async () => Response.json({
+      task: {
+        id: "tsk_bound_updates",
+        prompt: "Continue",
+        status: "dispatched",
+        agent_id: "agt_bound_updates",
+        workspace_id: "local",
+        bound_issue_updates: ["First update", "Second update"],
+        bound_issue_updates_omitted_count: 7,
+      },
+    })) as unknown as typeof globalThis.fetch;
+
+    const task = await new MultiremiDaemonClient("https://remi.example", "daemon-token")
+      .claimTask("runtime-1");
+
+    expect(task).toMatchObject({
+      boundIssueUpdates: ["First update", "Second update"],
+      boundIssueUpdatesOmittedCount: 7,
+    });
+  });
+
   it("falls back to the legacy status endpoint while the control plane rolls forward", async () => {
     const requests: Array<{ method: string; path: string }> = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {

@@ -230,7 +230,5 @@ function agentIssueUpdateSubscriptionResponse(subscription: import("@multiremi/c
     channel_id: subscription.channelId,
     enabled: subscription.enabled,
     debounce_window_seconds: subscription.debounceWindowSeconds,
-    rate_limit_window_seconds: subscription.rateLimitWindowSeconds,
-    max_deliveries_per_window: subscription.maxDeliveriesPerWindow,
   };
 }

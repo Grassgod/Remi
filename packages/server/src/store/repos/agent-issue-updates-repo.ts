@@ -1,7 +1,7 @@
 import type {
   MultiremiAgentIssueUpdateSubscription,
+  MultiremiChatMessage,
   MultiremiChatSession,
-  SendChatMessageResult,
 } from "@multiremi/contracts/types.js";
 import type { StoreContext } from "@multiremi/store/context.js";
 import { nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
@@ -10,8 +10,6 @@ import { createLogger } from "@shared/logger.js";
 type Row = Record<string, unknown>;
 
 export const DEFAULT_AGENT_ISSUE_UPDATE_DEBOUNCE_MS = 30_000;
-export const DEFAULT_AGENT_ISSUE_UPDATE_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1_000;
-export const DEFAULT_AGENT_ISSUE_UPDATE_MAX_DELIVERIES = 12;
 
 const DELIVERABLE_EVENT_TYPES = new Set([
   "comment_created",
@@ -61,23 +59,14 @@ export class AgentIssueUpdateValidationError extends Error {}
 
 export class AgentIssueUpdatesRepo {
   private readonly debounceMs: number;
-  private readonly rateLimitWindowMs: number;
-  private readonly maxDeliveries: number;
 
   constructor(
     private readonly ctx: StoreContext,
     options: {
       debounceMs?: number;
-      rateLimitWindowMs?: number;
-      maxDeliveries?: number;
     } = {},
   ) {
     this.debounceMs = positiveInteger(options.debounceMs, DEFAULT_AGENT_ISSUE_UPDATE_DEBOUNCE_MS);
-    this.rateLimitWindowMs = positiveInteger(
-      options.rateLimitWindowMs,
-      DEFAULT_AGENT_ISSUE_UPDATE_RATE_LIMIT_WINDOW_MS,
-    );
-    this.maxDeliveries = positiveInteger(options.maxDeliveries, DEFAULT_AGENT_ISSUE_UPDATE_MAX_DELIVERIES);
   }
 
   getSubscription(chatSessionId: string): MultiremiAgentIssueUpdateSubscription {
@@ -88,10 +77,8 @@ export class AgentIssueUpdatesRepo {
       chatSessionId: chat.id,
       issueId: chat.issueId,
       channelId: channel?.id ?? null,
-      enabled: channel?.enabled ?? false,
+      enabled: Boolean(chat.issueId && channel?.enabled),
       debounceWindowSeconds: this.debounceMs / 1_000,
-      rateLimitWindowSeconds: this.rateLimitWindowMs / 1_000,
-      maxDeliveriesPerWindow: this.maxDeliveries,
     };
   }
 
@@ -114,7 +101,10 @@ export class AgentIssueUpdatesRepo {
       memberId: input.memberId,
       createdBy: input.createdBy,
     });
-    if (!input.enabled) this.clearPending(chat.id);
+    if (!input.enabled) {
+      this.clearPending(chat.id);
+      this.ctx.chat().discardPendingAgentIssueUpdatesWithinTransaction(chat.id);
+    }
     return this.getSubscription(chat.id);
   }
 
@@ -187,48 +177,22 @@ export class AgentIssueUpdatesRepo {
         return { kind: "dropped" as const, result: null };
       }
 
-      const activeWindow = state.windowStartedAt !== null
-        && now.getTime() - state.windowStartedAt < this.rateLimitWindowMs;
-      const windowStartedAt = activeWindow ? state.windowStartedAt! : now.getTime();
-      const deliveriesInWindow = activeWindow ? state.deliveriesInWindow : 0;
-      if (deliveriesInWindow >= this.maxDeliveries) {
-        this.clearPending(chatSessionId, {
-          windowStartedAt: new Date(windowStartedAt).toISOString(),
-          deliveriesInWindow,
-        });
-        return {
-          kind: "dropped" as const,
-          result: null,
-          reason: "rate_limit",
-          issueId: state.issueId,
-          pendingCount: state.pendingCount,
-        };
-      }
-
       const issue = this.ctx.issues().getIssue(state.issueId);
       if (!issue) {
         this.clearPending(chatSessionId);
         return { kind: "dropped" as const, result: null };
       }
-      const result = this.ctx.chat().createSystemChatMessageWithinTransaction(
+      const result = this.ctx.chat().createPendingAgentIssueUpdateWithinTransaction(
         chat.id,
-        buildUpdatePrompt(issue.key, issue.title, state),
+        buildUpdateMessage(issue.key, issue.title, state),
       );
       this.clearPending(chatSessionId, {
-        windowStartedAt: new Date(windowStartedAt).toISOString(),
-        deliveriesInWindow: deliveriesInWindow + 1,
         lastDeliveredAt: now.toISOString(),
       });
       return { kind: "delivered" as const, result };
     })();
 
     if (outcome.kind === "delivered" && outcome.result) this.publish(outcome.result);
-    if (outcome.kind === "dropped" && outcome.reason === "rate_limit") {
-      log.warn(
-        `agent issue update dropped reason=rate_limit issue=${outcome.issueId} chat=${chatSessionId} `
-        + `pending=${outcome.pendingCount} max=${this.maxDeliveries} window_ms=${this.rateLimitWindowMs}`,
-      );
-    }
     return outcome.kind;
   }
 
@@ -282,16 +246,6 @@ export class AgentIssueUpdatesRepo {
         latest_actor_id = excluded.latest_actor_id,
         latest_body = excluded.latest_body,
         latest_data = excluded.latest_data,
-        window_started_at = CASE
-          WHEN multiremi_agent_issue_update_state.issue_id = excluded.issue_id
-            THEN multiremi_agent_issue_update_state.window_started_at
-          ELSE NULL
-        END,
-        deliveries_in_window = CASE
-          WHEN multiremi_agent_issue_update_state.issue_id = excluded.issue_id
-            THEN multiremi_agent_issue_update_state.deliveries_in_window
-          ELSE 0
-        END,
         updated_at = excluded.updated_at`,
       [
         chat.id,
@@ -329,14 +283,10 @@ export class AgentIssueUpdatesRepo {
       latestActorId: nullableString(row.latest_actor_id),
       latestBody: nullableString(row.latest_body),
       latestData: parseJson<Record<string, unknown>>(row.latest_data, {}),
-      windowStartedAt: timestamp(row.window_started_at),
-      deliveriesInWindow: Number(row.deliveries_in_window ?? 0),
     };
   }
 
   private clearPending(chatSessionId: string, input: {
-    windowStartedAt?: string | null;
-    deliveriesInWindow?: number;
     lastDeliveredAt?: string | null;
   } = {}): void {
     this.ctx.db.run(
@@ -345,14 +295,10 @@ export class AgentIssueUpdatesRepo {
            latest_activity_id = NULL, latest_event_type = NULL,
            latest_actor_type = NULL, latest_actor_id = NULL,
            latest_body = NULL, latest_data = NULL,
-           window_started_at = COALESCE(?, window_started_at),
-           deliveries_in_window = COALESCE(?, deliveries_in_window),
            last_delivered_at = COALESCE(?, last_delivered_at),
            updated_at = ?
        WHERE chat_session_id = ?`,
       [
-        input.windowStartedAt ?? null,
-        input.deliveriesInWindow ?? null,
         input.lastDeliveredAt ?? null,
         new Date().toISOString(),
         chatSessionId,
@@ -360,13 +306,12 @@ export class AgentIssueUpdatesRepo {
     );
   }
 
-  private publish(result: SendChatMessageResult): void {
-    this.ctx.notifyTaskEnqueued(result.task);
+  private publish(result: { session: MultiremiChatSession; message: MultiremiChatMessage }): void {
     this.ctx.emitChatEvent(result.session, "chat:message", {
       message_id: result.message.id,
       role: "system",
       content: result.message.body,
-      task_id: result.task.id,
+      task_id: null,
       created_at: result.message.createdAt,
     }, { actorType: "system", actorId: null });
   }
@@ -384,11 +329,9 @@ interface AgentIssueUpdateState {
   latestActorId: string | null;
   latestBody: string | null;
   latestData: Record<string, unknown>;
-  windowStartedAt: number | null;
-  deliveriesInWindow: number;
 }
 
-function buildUpdatePrompt(issueKey: string, issueTitle: string, state: AgentIssueUpdateState): string {
+function buildUpdateMessage(issueKey: string, issueTitle: string, state: AgentIssueUpdateState): string {
   const details = state.latestBody?.trim()
     || summarizeData(state.latestData)
     || "No textual details were provided.";
@@ -396,10 +339,7 @@ function buildUpdatePrompt(issueKey: string, issueTitle: string, state: AgentIss
     ? `${state.latestActorType}:${state.latestActorId}`
     : state.latestActorType;
   return [
-    "A bound Issue has new activity. Review the update and take any appropriate follow-up action.",
-    "Do not post a reply merely to acknowledge this notification.",
-    "",
-    `Issue: ${issueKey} - ${issueTitle}`,
+    `Bound Issue update: ${issueKey} - ${issueTitle}`,
     `Updates aggregated: ${state.pendingCount}`,
     `Latest event: ${state.latestEventType}`,
     `Latest actor: ${actor}`,

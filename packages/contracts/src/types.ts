@@ -1276,6 +1276,10 @@ export interface MultiremiTask {
   auth_token?: string | null;
   chatMessage?: string | null;
   chat_message?: string | null;
+  boundIssueUpdates?: string[];
+  bound_issue_updates?: string[];
+  boundIssueUpdatesOmittedCount?: number;
+  bound_issue_updates_omitted_count?: number;
   chatMessageAttachments?: unknown[];
   chat_message_attachments?: unknown[];
   autopilotId?: string | null;
@@ -2366,8 +2370,6 @@ export interface MultiremiAgentIssueUpdateSubscription {
   channelId: string | null;
   enabled: boolean;
   debounceWindowSeconds: number;
-  rateLimitWindowSeconds: number;
-  maxDeliveriesPerWindow: number;
 }
 
 export interface MultiremiIssueReaction {

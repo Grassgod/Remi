@@ -482,8 +482,6 @@ export class MultiremiStore {
     notificationLeaseMs?: number;
     notificationSendTimeoutMs?: number;
     agentIssueUpdateDebounceMs?: number;
-    agentIssueUpdateRateLimitWindowMs?: number;
-    agentIssueUpdateMaxDeliveries?: number;
     publicUrl?: string | null;
   } = {}) {
     this.db = db ?? openMultiremiDatabase();
@@ -526,8 +524,6 @@ export class MultiremiStore {
     this.chat = new ChatRepo(this.ctx);
     this.agentIssueUpdates = new AgentIssueUpdatesRepo(this.ctx, {
       debounceMs: options.agentIssueUpdateDebounceMs,
-      rateLimitWindowMs: options.agentIssueUpdateRateLimitWindowMs,
-      maxDeliveries: options.agentIssueUpdateMaxDeliveries,
     });
     this.issues = new IssuesRepo(this.ctx);
     this.issueWorkspaces = new IssueWorkspacesRepo(this.ctx);
@@ -3906,8 +3902,26 @@ runMigrations(this.db);
     return this.chat.sendChatMessage(chatSessionId, input);
   }
 
-  createSystemChatMessageWithinTransaction(chatSessionId: string, body: string): SendChatMessageResult {
-    return this.chat.createSystemChatMessageWithinTransaction(chatSessionId, body);
+  createPendingAgentIssueUpdateWithinTransaction(chatSessionId: string, body: string): {
+    session: MultiremiChatSession;
+    message: MultiremiChatMessage;
+  } {
+    return this.chat.createPendingAgentIssueUpdateWithinTransaction(chatSessionId, body);
+  }
+
+  preparePendingAgentIssueUpdatesForTask(chatSessionId: string, taskId: string): {
+    messages: MultiremiChatMessage[];
+    omittedCount: number;
+  } {
+    return this.chat.preparePendingAgentIssueUpdatesForTask(chatSessionId, taskId);
+  }
+
+  completePendingAgentIssueUpdatesForTaskWithinTransaction(chatSessionId: string, taskId: string): number {
+    return this.chat.completePendingAgentIssueUpdatesForTaskWithinTransaction(chatSessionId, taskId);
+  }
+
+  discardPendingAgentIssueUpdatesWithinTransaction(chatSessionId: string): number {
+    return this.chat.discardPendingAgentIssueUpdatesWithinTransaction(chatSessionId);
   }
 
   getChatMessage(id: string): MultiremiChatMessage | null {

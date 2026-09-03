@@ -350,7 +350,16 @@ export interface ChatSurface {
   getChatSession(id: string): MultiremiChatSession | null;
   getChatMessage(id: string): MultiremiChatMessage | null;
   getPendingChatTask(chatSessionId: string): MultiremiTask | null;
-  createSystemChatMessageWithinTransaction(chatSessionId: string, body: string): import("@multiremi/contracts/types.js").SendChatMessageResult;
+  createPendingAgentIssueUpdateWithinTransaction(chatSessionId: string, body: string): {
+    session: MultiremiChatSession;
+    message: MultiremiChatMessage;
+  };
+  preparePendingAgentIssueUpdatesForTask(chatSessionId: string, taskId: string): {
+    messages: MultiremiChatMessage[];
+    omittedCount: number;
+  };
+  completePendingAgentIssueUpdatesForTaskWithinTransaction(chatSessionId: string, taskId: string): number;
+  discardPendingAgentIssueUpdatesWithinTransaction(chatSessionId: string): number;
 }
 
 export interface IssueSessionsSurface {

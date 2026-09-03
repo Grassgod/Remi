@@ -7271,9 +7271,7 @@
           "issue_id": null,
           "channel_id": null,
           "enabled": false,
-          "debounce_window_seconds": 30,
-          "rate_limit_window_seconds": 3600,
-          "max_deliveries_per_window": 12
+          "debounce_window_seconds": 30
         }
       }
     },
