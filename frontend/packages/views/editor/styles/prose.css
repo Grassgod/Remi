@@ -341,6 +341,13 @@
   text-decoration-color: color-mix(in srgb, var(--brand) 40%, transparent);
   text-underline-offset: 2px;
   cursor: pointer;
+  /* A bare URL is one unbreakable token. Without this it sets the column's
+     min-content width and the whole reading pane scrolls sideways — code
+     blocks scroll inside their own <pre>, but a link has no such box.
+     `anywhere` rather than `break-word` because only `anywhere` shrinks
+     min-content, which is what a flex/grid column measures. Same treatment
+     the compact density already applies. */
+  overflow-wrap: anywhere;
 }
 
 .rich-text-editor a:hover {
