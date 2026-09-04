@@ -36,6 +36,27 @@ describe("ChatRepo", () => {
     expect(() => repo.createChatSession({ agentId: "agt_nope", workspaceId: "local" })).toThrow("Agent not found: agt_nope");
   });
 
+  it("binds and unbinds an Issue in the same workspace", () => {
+    const repo = createRepo();
+    const agent = store!.createAgent({ name: "Chatty", provider: "codex", workspaceId: "local" });
+    const issue = store!.createIssue({ title: "Bound work", workspaceId: "local" });
+    const session = repo.createChatSession({ agentId: agent.id, workspaceId: "local" });
+
+    expect(session.issueId).toBeNull();
+    expect(repo.updateChatSession(session.id, { issueId: issue.id }).issueId).toBe(issue.id);
+    expect(repo.updateChatSession(session.id, { title: "Still bound" }).issueId).toBe(issue.id);
+    expect(repo.updateChatSession(session.id, { issue_id: null }).issueId).toBeNull();
+  });
+
+  it("rejects an Issue binding from another workspace", () => {
+    const repo = createRepo();
+    const agent = store!.createAgent({ name: "Chatty", provider: "codex", workspaceId: "local" });
+    const issue = store!.createIssue({ title: "Foreign", workspaceId: "other" });
+    const session = repo.createChatSession({ agentId: agent.id, workspaceId: "local" });
+
+    expect(() => repo.updateChatSession(session.id, { issueId: issue.id })).toThrow("Issue belongs to another workspace");
+  });
+
   it("sends a message, spawning the task through ctx.tasks()", () => {
     const repo = createRepo();
     const agent = store!.createAgent({ name: "Sender", provider: "claude", workspaceId: "local" });

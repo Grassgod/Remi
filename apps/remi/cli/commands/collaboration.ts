@@ -499,6 +499,16 @@ function chatCommandSpecs(): CommandSpec[] {
       const chat = await resolveChat(invocation, positional(invocation, 0, "chat"));
       await mutateAndRender(invocation, "PATCH", `/api/chat/sessions/${encodePath(String(chat.id))}`, await requestBody(invocation, { title: stringOption(invocation, "title") ?? undefined, status: stringOption(invocation, "status") ?? undefined }));
     }),
+    groupSpec("chat.issue", "Manage a Chat's bound Issue"),
+    nativeSpec("chat.issue.bind", ["chat", "issue", "bind"], "Bind a Chat to an Issue", "write", HUMAN, [refPositional("chat"), refPositional("issue")], [], async (invocation) => {
+      const chat = await resolveChat(invocation, positional(invocation, 0, "chat"));
+      const issue = await resolveIssue(invocation, positional(invocation, 1, "issue"));
+      await mutateAndRender(invocation, "PATCH", `/api/chat/sessions/${encodePath(String(chat.id))}`, { issue_id: issue.id });
+    }),
+    nativeSpec("chat.issue.unbind", ["chat", "issue", "unbind"], "Unbind a Chat from its Issue", "write", HUMAN, [refPositional("chat")], [], async (invocation) => {
+      const chat = await resolveChat(invocation, positional(invocation, 0, "chat"));
+      await mutateAndRender(invocation, "PATCH", `/api/chat/sessions/${encodePath(String(chat.id))}`, { issue_id: null });
+    }),
     nativeSpec("chat.delete", ["chat", "delete"], "Delete a chat", "destructive", HUMAN, [refPositional("chat")], [YES_OPTION], async (invocation) => {
       requireConfirmation(invocation);
       const chat = await resolveChat(invocation, positional(invocation, 0, "chat"));
@@ -722,6 +732,16 @@ async function resolveChat(invocation: CommandInvocation, ref: string): Promise<
     id: (chat) => String(chat.id ?? ""),
     name: (chat) => typeof chat.title === "string" ? chat.title : typeof chat.name === "string" ? chat.name : null,
   }).resolve(ref);
+}
+
+async function resolveIssue(invocation: CommandInvocation, ref: string): Promise<Record<string, unknown>> {
+  const client = await clientFor(invocation);
+  const response = await client.request<Record<string, unknown>>({
+    method: "GET",
+    path: `/api/issues/${encodePath(ref)}`,
+    query: { workspace_id: requiredWorkspace(invocation) },
+  });
+  return response.data;
 }
 
 async function contentOption(invocation: CommandInvocation): Promise<string | undefined> {

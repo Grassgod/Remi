@@ -74,6 +74,18 @@ test("chat Tasks use one stable directory per Chat Session", () => {
   });
 });
 
+test("Issue-bound Chat Tasks stay in their Chat workspace", () => {
+  expect(resolveWorkDir(task({
+    id: "t10",
+    chatSessionId: "chat_1",
+    issueId: "iss_1",
+    issue: { id: "iss_1", key: "MUL-226" },
+  }), ROOT)).toEqual({
+    workDir: join(ROOT, "chats", "chat_1"),
+    ensureDir: true,
+  });
+});
+
 test("one-shot work defaults to the per-Task directory", () => {
   expect(resolveWorkDir(task({ id: "t2", workspaceId: "wsY" }), ROOT)).toEqual({
     workDir: join(ROOT, "tasks", "t2"),

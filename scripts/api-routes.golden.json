@@ -2840,6 +2840,7 @@
         "id": "chat_wk1mrnyfwl4x",
         "workspace_id": "local",
         "agent_id": "agt_snapshot",
+        "issue_id": null,
         "creator_id": "local",
         "title": "Compat chat",
         "status": "active",
@@ -2875,6 +2876,7 @@
         "id": "chat_wk1mrnyfwl4x",
         "workspace_id": "local",
         "agent_id": "agt_snapshot",
+        "issue_id": null,
         "creator_id": "local",
         "title": "Compat chat renamed",
         "status": "active",
@@ -2901,6 +2903,7 @@
           "workspaceId": "local",
           "creatorId": "local",
           "agentId": "agt_snapshot",
+          "issueId": null,
           "title": "Native chat",
           "status": "active",
           "sessionId": null,
@@ -2927,6 +2930,7 @@
           "workspaceId": "local",
           "creatorId": "local",
           "agentId": "agt_snapshot",
+          "issueId": null,
           "title": "Snapshot chat",
           "status": "active",
           "sessionId": null,
@@ -3034,6 +3038,7 @@
           "workspaceId": "local",
           "creatorId": "local",
           "agentId": "agt_snapshot",
+          "issueId": null,
           "title": "Native chat renamed",
           "status": "active",
           "sessionId": null,
@@ -4037,6 +4042,17 @@
               "createdAt": "<timestamp>"
             }
           ],
+          "session_projection": {
+            "session_id": "ises_cdyoy133keds",
+            "target_agent_id": "agt_snapshot",
+            "mode": "bootstrap",
+            "from_seq": 0,
+            "to_seq": 5,
+            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"ises_cdyoy133keds\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":5}\n{\"type\":\"session_event\",\"seq\":1,\"kind\":\"task_assigned\",\"perspective\":\"operator\",\"author_type\":\"system\",\"author_id\":null,\"author_name\":null,\"body\":\"Snapshot prompt\",\"task_id\":\"tsk_snapshot\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"attempt\":1,\"parent_task_id\":null,\"source_event_id\":null},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":2,\"kind\":\"task_completed\",\"perspective\":\"assistant_history\",\"author_type\":\"agent\",\"author_id\":\"agt_snapshot\",\"author_name\":\"Snapshot Agent\",\"body\":\"\",\"task_id\":\"tsk_snapshot\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"failure_reason\":null,\"result_available\":false,\"status\":\"completed\"},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":3,\"kind\":\"message\",\"perspective\":\"user\",\"author_type\":\"member\",\"author_id\":\"mem_snapshot_one\",\"author_name\":\"Snapshot Member\",\"body\":\"Snapshot comment body\",\"task_id\":null,\"source_comment_id\":\"cmt_xgqkr5l2r04q\",\"metadata\":{\"parent_comment_id\":null},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":5,\"kind\":\"task_assigned\",\"perspective\":\"operator\",\"author_type\":\"system\",\"author_id\":null,\"author_name\":null,\"body\":\"Snapshot lifecycle task\",\"task_id\":\"tsk_wk1mrnyfwl4x\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"attempt\":1,\"parent_task_id\":null,\"source_event_id\":null},\"created_at\":\"<timestamp>\"}",
+            "truncated": false,
+            "omitted_events": 0,
+            "estimated_tokens": 454
+          },
           "issue_session": {
             "id": "ises_cdyoy133keds",
             "issueId": "iss_snapshot",
@@ -4058,17 +4074,6 @@
             "created_at": "<timestamp>",
             "updatedAt": "<timestamp>",
             "updated_at": "<timestamp>"
-          },
-          "session_projection": {
-            "session_id": "ises_cdyoy133keds",
-            "target_agent_id": "agt_snapshot",
-            "mode": "bootstrap",
-            "from_seq": 0,
-            "to_seq": 5,
-            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"ises_cdyoy133keds\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":5}\n{\"type\":\"session_event\",\"seq\":1,\"kind\":\"task_assigned\",\"perspective\":\"operator\",\"author_type\":\"system\",\"author_id\":null,\"author_name\":null,\"body\":\"Snapshot prompt\",\"task_id\":\"tsk_snapshot\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"attempt\":1,\"parent_task_id\":null,\"source_event_id\":null},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":2,\"kind\":\"task_completed\",\"perspective\":\"assistant_history\",\"author_type\":\"agent\",\"author_id\":\"agt_snapshot\",\"author_name\":\"Snapshot Agent\",\"body\":\"\",\"task_id\":\"tsk_snapshot\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"failure_reason\":null,\"result_available\":false,\"status\":\"completed\"},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":3,\"kind\":\"message\",\"perspective\":\"user\",\"author_type\":\"member\",\"author_id\":\"mem_snapshot_one\",\"author_name\":\"Snapshot Member\",\"body\":\"Snapshot comment body\",\"task_id\":null,\"source_comment_id\":\"cmt_xgqkr5l2r04q\",\"metadata\":{\"parent_comment_id\":null},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":5,\"kind\":\"task_assigned\",\"perspective\":\"operator\",\"author_type\":\"system\",\"author_id\":null,\"author_name\":null,\"body\":\"Snapshot lifecycle task\",\"task_id\":\"tsk_wk1mrnyfwl4x\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"attempt\":1,\"parent_task_id\":null,\"source_event_id\":null},\"created_at\":\"<timestamp>\"}",
-            "truncated": false,
-            "omitted_events": 0,
-            "estimated_tokens": 454
           },
           "issue_session_results": [
             {
@@ -4203,6 +4208,17 @@
             ],
             "max_concurrent_tasks": 6
           },
+          "session_projection": {
+            "session_id": "cht_snapshot",
+            "target_agent_id": "agt_snapshot",
+            "mode": "bootstrap",
+            "from_seq": 0,
+            "to_seq": 1,
+            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"cht_snapshot\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":1}",
+            "truncated": false,
+            "omitted_events": 0,
+            "estimated_tokens": 42
+          },
           "workspace_bootstrap_prompt": "## Code Delivery Contract\n\nWhen a task changes code:\n- Push the working branch and create a GitHub pull request or Codebase merge request before reporting completion.\n- Include the issue key in the PR/MR title or description so Multiremi can associate it automatically.\n- Reuse an existing open PR/MR for the same source branch. Create at most one PR/MR per changed repository.\n- Creating a PR/MR does not require approval. Merging it or pushing directly to the default branch requires explicit user authorization.\n- Return every PR/MR URL in the final result. If creation fails, report the exact failure and preserve the pushed branch for recovery.\n- Do not create empty PRs/MRs. A squad leader must ensure delegated code changes have a PR/MR before completing the parent task.",
           "requesting_user_name": "Local User",
           "chat_message": "Snapshot chat message",
@@ -4300,6 +4316,17 @@
             "labels": [],
             "attachments": []
           },
+          "session_projection": {
+            "session_id": "ises_j3m15clzy3p6",
+            "target_agent_id": "agt_snapshot",
+            "mode": "bootstrap",
+            "from_seq": 0,
+            "to_seq": 1,
+            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"ises_j3m15clzy3p6\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":1}",
+            "truncated": false,
+            "omitted_events": 0,
+            "estimated_tokens": 43
+          },
           "issue_session": {
             "id": "ises_j3m15clzy3p6",
             "issueId": "iss_i244sp2mewms",
@@ -4321,17 +4348,6 @@
             "created_at": "<timestamp>",
             "updatedAt": "<timestamp>",
             "updated_at": "<timestamp>"
-          },
-          "session_projection": {
-            "session_id": "ises_j3m15clzy3p6",
-            "target_agent_id": "agt_snapshot",
-            "mode": "bootstrap",
-            "from_seq": 0,
-            "to_seq": 1,
-            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"ises_j3m15clzy3p6\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":1}",
-            "truncated": false,
-            "omitted_events": 0,
-            "estimated_tokens": 43
           },
           "issue_session_results": [],
           "project_id": "prj_snapshot",
@@ -4491,6 +4507,17 @@
             "labels": [],
             "attachments": []
           },
+          "session_projection": {
+            "session_id": "ises_gbmah1mhgwob",
+            "target_agent_id": "agt_snapshot",
+            "mode": "bootstrap",
+            "from_seq": 0,
+            "to_seq": 1,
+            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"ises_gbmah1mhgwob\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":1}",
+            "truncated": false,
+            "omitted_events": 0,
+            "estimated_tokens": 43
+          },
           "issue_session": {
             "id": "ises_gbmah1mhgwob",
             "issueId": "iss_8rcx9z88woyu",
@@ -4512,17 +4539,6 @@
             "created_at": "<timestamp>",
             "updatedAt": "<timestamp>",
             "updated_at": "<timestamp>"
-          },
-          "session_projection": {
-            "session_id": "ises_gbmah1mhgwob",
-            "target_agent_id": "agt_snapshot",
-            "mode": "bootstrap",
-            "from_seq": 0,
-            "to_seq": 1,
-            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"ises_gbmah1mhgwob\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":1}",
-            "truncated": false,
-            "omitted_events": 0,
-            "estimated_tokens": 43
           },
           "issue_session_results": [],
           "project_id": "prj_snapshot",
@@ -5089,6 +5105,17 @@
               "createdAt": "<timestamp>"
             }
           ],
+          "session_projection": {
+            "session_id": "ises_cdyoy133keds",
+            "target_agent_id": "agt_snapshot",
+            "mode": "bootstrap",
+            "from_seq": 0,
+            "to_seq": 4,
+            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"ises_cdyoy133keds\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":4}\n{\"type\":\"session_event\",\"seq\":1,\"kind\":\"task_assigned\",\"perspective\":\"operator\",\"author_type\":\"system\",\"author_id\":null,\"author_name\":null,\"body\":\"Snapshot prompt\",\"task_id\":\"tsk_snapshot\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"attempt\":1,\"parent_task_id\":null,\"source_event_id\":null},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":2,\"kind\":\"task_completed\",\"perspective\":\"assistant_history\",\"author_type\":\"agent\",\"author_id\":\"agt_snapshot\",\"author_name\":\"Snapshot Agent\",\"body\":\"\",\"task_id\":\"tsk_snapshot\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"failure_reason\":null,\"result_available\":false,\"status\":\"completed\"},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":3,\"kind\":\"message\",\"perspective\":\"user\",\"author_type\":\"member\",\"author_id\":\"mem_snapshot_one\",\"author_name\":\"Snapshot Member\",\"body\":\"Snapshot comment body\",\"task_id\":null,\"source_comment_id\":\"cmt_xgqkr5l2r04q\",\"metadata\":{\"parent_comment_id\":null},\"created_at\":\"<timestamp>\"}",
+            "truncated": false,
+            "omitted_events": 0,
+            "estimated_tokens": 348
+          },
           "issue_session": {
             "id": "ises_cdyoy133keds",
             "issueId": "iss_snapshot",
@@ -5110,17 +5137,6 @@
             "created_at": "<timestamp>",
             "updatedAt": "<timestamp>",
             "updated_at": "<timestamp>"
-          },
-          "session_projection": {
-            "session_id": "ises_cdyoy133keds",
-            "target_agent_id": "agt_snapshot",
-            "mode": "bootstrap",
-            "from_seq": 0,
-            "to_seq": 4,
-            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"ises_cdyoy133keds\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":4}\n{\"type\":\"session_event\",\"seq\":1,\"kind\":\"task_assigned\",\"perspective\":\"operator\",\"author_type\":\"system\",\"author_id\":null,\"author_name\":null,\"body\":\"Snapshot prompt\",\"task_id\":\"tsk_snapshot\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"attempt\":1,\"parent_task_id\":null,\"source_event_id\":null},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":2,\"kind\":\"task_completed\",\"perspective\":\"assistant_history\",\"author_type\":\"agent\",\"author_id\":\"agt_snapshot\",\"author_name\":\"Snapshot Agent\",\"body\":\"\",\"task_id\":\"tsk_snapshot\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"failure_reason\":null,\"result_available\":false,\"status\":\"completed\"},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":3,\"kind\":\"message\",\"perspective\":\"user\",\"author_type\":\"member\",\"author_id\":\"mem_snapshot_one\",\"author_name\":\"Snapshot Member\",\"body\":\"Snapshot comment body\",\"task_id\":null,\"source_comment_id\":\"cmt_xgqkr5l2r04q\",\"metadata\":{\"parent_comment_id\":null},\"created_at\":\"<timestamp>\"}",
-            "truncated": false,
-            "omitted_events": 0,
-            "estimated_tokens": 348
           },
           "issue_session_results": [
             {
@@ -7216,6 +7232,7 @@
           "id": "cht_snapshot",
           "workspace_id": "local",
           "agent_id": "agt_snapshot",
+          "issue_id": null,
           "creator_id": "local",
           "title": "Snapshot chat",
           "status": "active",
@@ -7234,6 +7251,7 @@
         "id": "cht_snapshot",
         "workspace_id": "local",
         "agent_id": "agt_snapshot",
+        "issue_id": null,
         "creator_id": "local",
         "title": "Snapshot chat",
         "status": "active",
@@ -7881,6 +7899,28 @@
             "id": "chat.get",
             "command": "remi chat get",
             "capability": "chat.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "chat.issue.bind",
+            "command": "remi chat issue bind",
+            "capability": "chat.issue.bind",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "chat.issue.unbind",
+            "command": "remi chat issue unbind",
+            "capability": "chat.issue.unbind",
             "outputs": [
               "table",
               "json",
@@ -16886,6 +16926,7 @@
             "workspaceId": "local",
             "creatorId": "local",
             "agentId": "agt_snapshot",
+            "issueId": null,
             "title": "Snapshot chat",
             "status": "active",
             "sessionId": null,
@@ -16914,6 +16955,7 @@
           "workspaceId": "local",
           "creatorId": "local",
           "agentId": "agt_snapshot",
+          "issueId": null,
           "title": "Snapshot chat",
           "status": "active",
           "sessionId": null,

@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
+import { buildTaskPrompt } from "@multiremi/prompt.js";
 import { createLocalStore, resetMultiremiTestEnv } from "./helpers.js";
 
 const APP_SECRET = "wJ4tQ7xR2nB8vC5mZ1kL0pS6dF3gH9jA";
@@ -46,6 +48,63 @@ function scaffold() {
 }
 
 describe("Feishu bot standard Task bridge", () => {
+  it("switches the bound Chat from bootstrap to delta after the provider session is promoted", () => {
+    const { store, agent, config } = scaffold();
+    store.updateAgent(agent.id, { instructions: "Follow the workspace rules.\n".repeat(400) });
+    const skill = store.createSkill({
+      name: "Feishu prompt fixture",
+      description: "Static bootstrap content",
+      content: "Inspect the repository carefully.\n".repeat(400),
+    });
+    store.setAgentSkills(agent.id, { skillIds: [skill.id!] });
+
+    const firstSubmission = store.submitFeishuBotMessage("local", "rt_bot", {
+      revision: config.revision,
+      externalSessionKey: "oc_chat_delta",
+      externalMessageId: "om_delta_1",
+      senderOpenId: "ou_member",
+      senderUnionId: "on_owner",
+      text: "first Feishu request",
+    });
+    const firstTask = store.claimTask("rt_bot")!;
+    expect(firstTask.id).toBe(firstSubmission.taskId);
+    const firstWire = daemonTaskClaimResponse(store, firstTask);
+    expect((firstWire.session_projection as { mode?: string } | undefined)?.mode).toBe("bootstrap");
+    const firstPrompt = buildTaskPrompt({
+      ...firstTask,
+      sessionProjection: firstWire.session_projection,
+      chatMessage: firstWire.chat_message,
+    } as any);
+
+    store.startTask(firstTask.id);
+    store.completeTask(firstTask.id, { output: "first answer", sessionId: "sess_feishu_delta" });
+    const issue = store.createIssue({ title: "Feishu bound Chat", workspaceId: "local" });
+    store.updateChatSession(firstSubmission.chatSessionId, { issueId: issue.id });
+    const secondSubmission = store.submitFeishuBotMessage("local", "rt_bot", {
+      revision: config.revision,
+      externalSessionKey: "oc_chat_delta",
+      externalMessageId: "om_delta_2",
+      senderOpenId: "ou_member",
+      senderUnionId: "on_owner",
+      text: "second Feishu request",
+    });
+    const secondTask = store.claimTask("rt_bot")!;
+    expect(secondTask.id).toBe(secondSubmission.taskId);
+    const secondWire = daemonTaskClaimResponse(store, secondTask);
+    expect((secondWire.session_projection as { mode?: string } | undefined)?.mode).toBe("delta");
+    const secondPrompt = buildTaskPrompt({
+      ...secondTask,
+      sessionProjection: secondWire.session_projection,
+      chatMessage: secondWire.chat_message,
+    } as any);
+
+    expect(secondPrompt).toContain(`## Issue\nKey: ${issue.key}`);
+    expect(secondPrompt.match(/second Feishu request/g)).toHaveLength(1);
+    expect(secondPrompt).not.toContain("## Agent Instructions");
+    expect(secondPrompt).not.toContain("## Skills");
+    expect(Buffer.byteLength(secondPrompt)).toBeLessThan(Buffer.byteLength(firstPrompt) / 2);
+  });
+
   it("deduplicates events and steers an active Task in the bound Chat Session", () => {
     const { store, config } = scaffold();
     const first = store.submitFeishuBotMessage("local", "rt_bot", {

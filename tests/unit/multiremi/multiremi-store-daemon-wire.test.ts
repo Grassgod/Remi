@@ -726,10 +726,64 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     });
     expect(retry).not.toHaveProperty("session_id");
     expect(retry).not.toHaveProperty("work_dir");
-    expect(retry.chat_bootstrap_transcript).toContain("[user]\nOriginal question");
-    expect(retry.chat_bootstrap_transcript).toContain("[assistant]\nOriginal answer");
-    expect(retry.chat_bootstrap_transcript).toContain("[user]\nContinue from that");
-    expect(retry).not.toHaveProperty("chat_message");
+    expect(retry.session_projection.mode).toBe("bootstrap");
+    expect(retry.session_projection.jsonl).toContain("Original question");
+    expect(retry.session_projection.jsonl).toContain("Original answer");
+    expect(retry.session_projection.jsonl).not.toContain("Continue from that");
+    expect(retry.chat_message).toBe("Continue from that");
+    expect(retry).not.toHaveProperty("chat_bootstrap_transcript");
+  });
+
+  it("switches a bound Chat from bootstrap to delta and removes repeated static prompt bytes", async () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_chat_delta", name: "chat delta", provider: "codex" });
+    const agent = store.createAgent({
+      name: "Chat Delta",
+      provider: "codex",
+      instructions: "Follow the workspace rules.\n".repeat(400),
+    });
+    const skill = store.createSkill({
+      name: "Large prompt skill",
+      description: "Static bootstrap content",
+      content: "Inspect the repository carefully.\n".repeat(400),
+    });
+    store.setAgentSkills(agent.id, { skillIds: [skill.id!] });
+    const issue = store.createIssue({ title: "Bound delta", workspaceId: "local" });
+    const chat = store.createChatSession({ agentId: agent.id, issueId: issue.id, title: "Bound delta" });
+    const app = createMultiremiApp({ store });
+
+    const first = store.sendChatMessage(chat.id, { body: "First bound request" });
+    const firstResponse = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+    expect(firstResponse.status).toBe(200);
+    const firstClaim = (await firstResponse.json()).task;
+    expect(firstClaim.session_projection.mode).toBe("bootstrap");
+    const firstPrompt = buildTaskPrompt({
+      ...store.getTaskWithAgent(first.task.id)!,
+      sessionProjection: firstClaim.session_projection,
+      chatMessage: firstClaim.chat_message,
+    } as any);
+    expect(firstPrompt.match(/First bound request/g)).toHaveLength(1);
+    expect(firstPrompt).toContain("## Agent Instructions");
+    expect(firstPrompt).toContain("## Skills");
+
+    store.startTask(first.task.id);
+    store.completeTask(first.task.id, { output: "First answer", sessionId: "sess_chat_delta" });
+    const second = store.sendChatMessage(chat.id, { body: "Second bound request" });
+    const secondResponse = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+    expect(secondResponse.status).toBe(200);
+    const secondClaim = (await secondResponse.json()).task;
+    expect(secondClaim.session_projection.mode).toBe("delta");
+    const secondPrompt = buildTaskPrompt({
+      ...store.getTaskWithAgent(second.task.id)!,
+      sessionProjection: secondClaim.session_projection,
+      chatMessage: secondClaim.chat_message,
+    } as any);
+    expect(secondPrompt).toContain("# Delta Prompt");
+    expect(secondPrompt).toContain(`## Issue\nKey: ${issue.key}`);
+    expect(secondPrompt.match(/Second bound request/g)).toHaveLength(1);
+    expect(secondPrompt).not.toContain("## Agent Instructions");
+    expect(secondPrompt).not.toContain("## Skills");
+    expect(Buffer.byteLength(secondPrompt)).toBeLessThan(Buffer.byteLength(firstPrompt) / 2);
   });
 
   it("includes Go pending task optional chat, autopilot, and workdir fields", async () => {

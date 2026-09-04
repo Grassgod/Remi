@@ -3227,7 +3227,10 @@ runMigrations(this.db);
   }
 
   buildTaskSessionProjection(taskId: string): MultiremiSessionProjection | null {
-    return this.sessions.buildTaskSessionProjection(taskId);
+    const task = this.tasks.getTask(taskId);
+    if (task?.issueSessionId) return this.sessions.buildTaskSessionProjection(taskId);
+    if (task?.chatSessionId) return this.chat.buildTaskSessionProjection(taskId);
+    return null;
   }
 
   createSessionTask(sessionId: string, input: CreateSessionTaskInput): MultiremiTask {

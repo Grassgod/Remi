@@ -22,6 +22,16 @@ export function resolveWorkDir(
   task: AgentTask,
   workspacesRoot = join(homedir(), ".remi", "multiremi", "workspaces"),
 ): ResolvedWorkDir {
+  if (task.chatSessionId) {
+    return {
+      workDir: task.workDir ?? join(
+        workspacesRoot,
+        "chats",
+        safePathSegment(task.chatSessionId, "chat session id"),
+      ),
+      ensureDir: true,
+    };
+  }
   if (task.issue?.key) {
     const issueKey = safePathSegment(task.issue.key, "issue key");
     if (task.holdsWorkspace === false || task.holds_workspace === false) {
@@ -40,12 +50,6 @@ export function resolveWorkDir(
     return { workDir: join(workspacesRoot, "issues", issueKey), ensureDir: true };
   }
   if (task.workDir) return { workDir: task.workDir, ensureDir: true };
-  if (task.chatSessionId) {
-    return {
-      workDir: join(workspacesRoot, "chats", safePathSegment(task.chatSessionId, "chat session id")),
-      ensureDir: true,
-    };
-  }
   return { workDir: join(workspacesRoot, "tasks", safePathSegment(task.id, "task id")), ensureDir: true };
 }
 

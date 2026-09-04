@@ -83,6 +83,19 @@ describe("Multiremi store — chat sessions and private agent access", () => {
     expect(store.getChatSession(session.id)?.hasUnread).toBe(false);
   });
 
+  it("stamps a bound Issue onto Chat tasks without creating an Issue Session", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Bound chat", provider: "codex" });
+    const issue = store.createIssue({ title: "Bound Issue", workspaceId: "local" });
+    const session = store.createChatSession({ agentId: agent.id, issueId: issue.id });
+
+    const sent = store.sendChatMessage(session.id, { body: "Continue the Issue" });
+
+    expect(sent.task.issueId).toBe(issue.id);
+    expect(sent.task.issueSessionId).toBeNull();
+    expect(store.getTaskWithAgent(sent.task.id)?.issue?.key).toBe(issue.key);
+  });
+
   it("scopes chat session HTTP routes to the current creator", async () => {
     const store = createStore();
     const runtime = store.registerRuntime({ name: "Chat runtime", provider: "codex" });
@@ -110,6 +123,7 @@ describe("Multiremi store — chat sessions and private agent access", () => {
       "creator_id",
       "has_unread",
       "id",
+      "issue_id",
       "status",
       "title",
       "updated_at",
@@ -117,6 +131,7 @@ describe("Multiremi store — chat sessions and private agent access", () => {
     ]);
     expect(createdBody.creator_id).toBe("alice");
     expect(createdBody.agent_id).toBe(agent.id);
+    expect(createdBody.issue_id).toBeNull();
     expect(createdBody.has_unread).toBe(false);
 
     const aliceList = await app.request("/api/chat/sessions", { headers: aliceAuthHeaders });

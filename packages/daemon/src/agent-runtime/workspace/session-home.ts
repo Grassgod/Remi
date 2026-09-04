@@ -184,7 +184,7 @@ export function resolveTaskProviderHome(
   workspacesRoot: string,
 ): IssueSessionProviderHome | null {
   const issueId = cleanString(task.issueId ?? task.issue_id);
-  if (issueId) {
+  if (issueId && !cleanString(task.chatSessionId)) {
     const issueHome = resolveIssueSessionProviderHome(task, issueRuntimeStateRoot, workspacesRoot);
     return issueHome;
   }

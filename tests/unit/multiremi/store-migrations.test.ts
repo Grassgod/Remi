@@ -92,6 +92,7 @@ describe("store migrations", () => {
       "proposal_payload", "proposal_status", "proposal_resolved_at", "proposal_resolved_by",
     ]));
     expect(columnNames(database, "multiremi_tasks")).toContain("task_kind");
+    expect(columnNames(database, "multiremi_chat_sessions")).toContain("issue_id");
     expect(columnNames(database, "multiremi_tasks")).toContain("issue_creation_restricted");
     expect(columnNames(database, "multiremi_autopilot_runs")).toContain("source_task_id");
     expect(columnNames(database, "multiremi_autopilots")).toEqual(expect.arrayContaining([
@@ -1328,6 +1329,50 @@ describe("store migrations", () => {
     expect(tableNames(database)).toEqual(first);
     const row = database.query("SELECT name FROM multiremi_agents WHERE id = ?").get("agt_keep") as { name?: string } | null;
     expect(row?.name).toBe("Keep me");
+  });
+
+  it("adds the Chat Issue binding to an existing schema and clears it when the Issue is deleted", () => {
+    const database = freshDb();
+    database.exec(`
+      CREATE TABLE multiremi_chat_sessions (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        creator_id TEXT,
+        agent_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        session_id TEXT,
+        work_dir TEXT,
+        latest_task_id TEXT,
+        unread_since TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
+    migrate(database);
+    migrate(database);
+    expect(columnNames(database, "multiremi_chat_sessions")).toContain("issue_id");
+
+    const now = "2026-09-03T00:00:00.000Z";
+    database.run(
+      "INSERT INTO multiremi_agents (id, name, provider, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+      ["agt_chat_issue", "Chat Issue", "codex", now, now],
+    );
+    database.run(
+      "INSERT INTO multiremi_issues (id, title, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+      ["iss_chat_issue", "Bound", "todo", now, now],
+    );
+    database.run(
+      `INSERT INTO multiremi_chat_sessions (
+         id, workspace_id, agent_id, issue_id, title, status, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ["chat_issue", "local", "agt_chat_issue", "iss_chat_issue", "Bound", "active", now, now],
+    );
+
+    database.exec("PRAGMA foreign_keys = ON");
+    database.run("DELETE FROM multiremi_issues WHERE id = ?", ["iss_chat_issue"]);
+    expect(database.query("SELECT issue_id FROM multiremi_chat_sessions WHERE id = ?").get("chat_issue"))
+      .toEqual({ issue_id: null });
   });
 
   it("backfills completed_at for legacy terminal issues", () => {

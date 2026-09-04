@@ -9,6 +9,80 @@ import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi store — local_directory affinity, retries, and agent re-homing", () => {
+  function warmChat() {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_projection", name: "projection", provider: "claude" });
+    const agent = store.createAgent({ name: "Projection", provider: "claude" });
+    const chat = store.createChatSession({ agentId: agent.id, title: "Projection" });
+    const first = store.sendChatMessage(chat.id, { body: "first" });
+    expect(store.claimTask(runtime.id)?.id).toBe(first.task.id);
+    store.startTask(first.task.id);
+    store.completeTask(first.task.id, { output: "answer", sessionId: "sess_projection" });
+    return { store, runtime, agent, chat };
+  }
+
+  it("uses the inherited provider lineage as the Chat delta decision", () => {
+    const { store, chat } = warmChat();
+    const followUp = store.sendChatMessage(chat.id, { body: "again" }).task;
+
+    expect(followUp.sessionId).toBe("sess_projection");
+    expect(store.buildTaskSessionProjection(followUp.id)?.mode).toBe("delta");
+  });
+
+  it("bootstraps a Chat projection when the promoted session id is empty", () => {
+    const { store, chat } = warmChat();
+    db!.run("UPDATE multiremi_chat_sessions SET session_id = NULL WHERE id = ?", [chat.id]);
+    const followUp = store.sendChatMessage(chat.id, { body: "again" }).task;
+
+    expect(followUp.sessionId).toBeNull();
+    expect(store.buildTaskSessionProjection(followUp.id)?.mode).toBe("bootstrap");
+  });
+
+  it("bootstraps a Chat projection when the promoted runtime disappeared", () => {
+    const { store, chat } = warmChat();
+    db!.run("UPDATE multiremi_chat_sessions SET session_runtime_id = ? WHERE id = ?", ["rt_missing", chat.id]);
+    const followUp = store.sendChatMessage(chat.id, { body: "again" }).task;
+
+    expect(followUp.sessionId).toBeNull();
+    expect(store.buildTaskSessionProjection(followUp.id)?.mode).toBe("bootstrap");
+  });
+
+  it("bootstraps a Chat projection when the promoted runtime provider changed", () => {
+    const { store, runtime, chat } = warmChat();
+    db!.run("UPDATE multiremi_runtimes SET provider = 'codex' WHERE id = ?", [runtime.id]);
+    const followUp = store.sendChatMessage(chat.id, { body: "again" }).task;
+
+    expect(followUp.sessionId).toBeNull();
+    expect(store.buildTaskSessionProjection(followUp.id)?.mode).toBe("bootstrap");
+  });
+
+  it("bootstraps a Chat projection when the execution fingerprint changed", () => {
+    const { store, chat } = warmChat();
+    db!.run("UPDATE multiremi_chat_sessions SET session_execution_fingerprint = ? WHERE id = ?", ["stale", chat.id]);
+    const followUp = store.sendChatMessage(chat.id, { body: "again" }).task;
+
+    expect(followUp.sessionId).toBeNull();
+    expect(store.buildTaskSessionProjection(followUp.id)?.mode).toBe("bootstrap");
+  });
+
+  it("bootstraps a Chat projection when the Agent Plugin set changed", () => {
+    const { store, runtime, agent, chat } = warmChat();
+    const plugin = store.importAgentPlugin({
+      provider: "claude",
+      manifest: { name: "projection-plugin", version: "1.0.0" },
+      files: [{ path: "skills/projection/SKILL.md", content: "# Projection\n" }],
+    });
+    store.createAgentPluginBinding(agent.id, { pluginId: plugin.id });
+    store.reportAgentPluginRuntimeState(runtime.id, plugin.activeVersionId!, {
+      status: "ready",
+      observedDigest: plugin.activeVersion!.artifactDigest,
+    });
+    const followUp = store.sendChatMessage(chat.id, { body: "again" }).task;
+
+    expect(followUp.sessionId).toBeNull();
+    expect(store.buildTaskSessionProjection(followUp.id)?.mode).toBe("bootstrap");
+  });
+
   it("prefers local_directory affinity over chat session affinity", () => {
     const store = createStore();
     const dirRuntime = store.registerRuntime({ id: "rt_pref_dir", name: "dir", provider: "codex", daemonId: "daemon-pref-dir" });
