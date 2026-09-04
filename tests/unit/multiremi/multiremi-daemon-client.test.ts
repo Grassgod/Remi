@@ -110,6 +110,54 @@ describe("MultiremiDaemonClient daemon protocol", () => {
     });
   });
 
+  it("normalizes a bound Issue identity from either daemon wire casing", async () => {
+    globalThis.fetch = (async () => Response.json({
+      task: {
+        id: "tsk_bound_issue",
+        prompt: "Continue",
+        status: "dispatched",
+        agent_id: "agt_bound_issue",
+        workspace_id: "local",
+        bound_issue: {
+          id: "iss_bound_issue",
+          key: "MUL-236",
+          title: "Caller ID",
+          status: "in_progress",
+        },
+      },
+    })) as unknown as typeof globalThis.fetch;
+
+    const task = await new MultiremiDaemonClient("https://remi.example", "daemon-token")
+      .claimTask("runtime-1");
+
+    expect(task?.boundIssue).toEqual({
+      id: "iss_bound_issue",
+      key: "MUL-236",
+      title: "Caller ID",
+      status: "in_progress",
+    });
+
+    globalThis.fetch = (async () => Response.json({
+      task: {
+        id: "tsk_bound_issue_camel",
+        prompt: "Continue",
+        status: "dispatched",
+        agentId: "agt_bound_issue",
+        workspaceId: "local",
+        boundIssue: {
+          id: "iss_bound_issue",
+          key: "MUL-236",
+          title: "Caller ID",
+          status: "in_progress",
+        },
+      },
+    })) as unknown as typeof globalThis.fetch;
+
+    const camelTask = await new MultiremiDaemonClient("https://remi.example", "daemon-token")
+      .claimTask("runtime-1");
+    expect(camelTask?.boundIssue).toEqual(task?.boundIssue);
+  });
+
   it("falls back to the legacy status endpoint while the control plane rolls forward", async () => {
     const requests: Array<{ method: string; path: string }> = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {

@@ -1219,6 +1219,14 @@ export interface CreateTaskSteerMessageInput {
   authorId?: string | null;
 }
 
+/** Safe Issue identity attached to a Chat task whose conversation is bound to an Issue. */
+export interface MultiremiBoundIssue {
+  id: string;
+  key: string;
+  title: string;
+  status: string;
+}
+
 export interface MultiremiTask {
   id: string;
   taskKind: "direct" | "quick_create";
@@ -1282,6 +1290,9 @@ export interface MultiremiTask {
   bound_issue_updates?: string[];
   boundIssueUpdatesOmittedCount?: number;
   bound_issue_updates_omitted_count?: number;
+  /** Issue attached to a Chat session, distinct from the task's owned Issue. */
+  boundIssue?: MultiremiBoundIssue | null;
+  bound_issue?: MultiremiBoundIssue | null;
   chatMessageAttachments?: unknown[];
   chat_message_attachments?: unknown[];
   autopilotId?: string | null;

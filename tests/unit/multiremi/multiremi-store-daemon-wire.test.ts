@@ -786,6 +786,94 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     expect(Buffer.byteLength(secondPrompt)).toBeLessThan(Buffer.byteLength(firstPrompt) / 2);
   });
 
+  it("ships bound Issue caller ID for chat tasks and keeps task-owned Issues separate", async () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Caller ID agent", provider: "codex" });
+    const issue = store.createIssue({ title: "Caller ID issue", workspaceId: "local" });
+    const boundChat = store.createChatSession({
+      agentId: agent.id,
+      workspaceId: "local",
+      title: "Bound topic",
+    });
+    const boundChatTask = store.sendChatMessage(boundChat.id, { body: "What is the status?" }).task;
+    store.updateChatSession(boundChat.id, { issueId: issue.id });
+    const boundTask = store.getTaskWithAgent(boundChatTask.id)!;
+    const boundWire = daemonTaskClaimResponse(store, boundTask);
+
+    expect(boundWire.bound_issue).toEqual({
+      id: issue.id,
+      key: issue.key,
+      title: issue.title,
+      status: issue.status,
+    });
+    const boundPrompt = buildTaskPrompt({
+      ...boundTask,
+      boundIssue: boundWire.bound_issue,
+    } as any);
+    expect(boundPrompt).toContain("## Bound Issue");
+    expect(boundPrompt).toContain(`This Feishu topic is bound to ${issue.key} — ${issue.title} (status: ${issue.status}).`);
+    expect(boundPrompt).toContain("Do not treat these updates as the full picture.");
+    expect(boundPrompt).toContain(`remi issue get ${issue.id} --output json`);
+    expect(boundPrompt).toContain(`remi comment list ${issue.id} --recent 30 --output json`);
+    expect(boundPrompt).not.toContain("--tail");
+
+    const unboundChat = store.createChatSession({ agentId: agent.id, workspaceId: "local", title: "Unbound topic" });
+    const unboundTask = store.sendChatMessage(unboundChat.id, { body: "No issue here" }).task;
+    const unboundWire = daemonTaskClaimResponse(store, store.getTaskWithAgent(unboundTask.id)!);
+    expect(unboundWire).not.toHaveProperty("bound_issue");
+
+    const ownedTask = store.createTask({
+      agentId: agent.id,
+      issueId: issue.id,
+      chatSessionId: boundChat.id,
+      workspaceId: "local",
+      prompt: "Owned Issue work",
+    });
+    const ownedWire = daemonTaskClaimResponse(store, store.getTaskWithAgent(ownedTask.id)!);
+    expect(ownedWire.bound_issue).toEqual({
+      id: issue.id,
+      key: issue.key,
+      title: issue.title,
+      status: issue.status,
+    });
+  });
+
+  it("keeps a real bound topic task from mutating its Issue or adding an automatic comment", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_bound_topic", name: "bound topic", provider: "codex" });
+    const agent = store.createAgent({ name: "Bound topic agent", provider: "codex", runtimeId: runtime.id });
+    const issue = store.createIssue({ title: "Real bound topic", workspaceId: "local" });
+    const chat = store.createChatSession({
+      agentId: agent.id,
+      issueId: issue.id,
+      workspaceId: "local",
+      title: "Real bound topic",
+    });
+    const task = store.sendChatMessage(chat.id, { body: "Please summarize the topic" }).task;
+    expect(task.issueId).toBe(issue.id);
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+
+    const claimed = store.getTaskWithAgent(task.id)!;
+    const wire = daemonTaskClaimResponse(store, claimed);
+    expect(wire.bound_issue).toEqual({
+      id: issue.id,
+      key: issue.key,
+      title: issue.title,
+      status: issue.status,
+    });
+    const prompt = buildTaskPrompt({ ...claimed, boundIssue: wire.bound_issue } as any);
+    expect(prompt).toContain("## Bound Issue");
+    expect(prompt).toContain(`remi issue get ${issue.id} --output json`);
+
+    const initialStatus = store.getIssue(issue.id)?.status;
+    store.startTask(task.id);
+    store.completeTask(task.id, { output: "Topic summary" });
+
+    expect(store.getIssue(issue.id)?.status).toBe(initialStatus);
+    expect(store.listIssueComments(issue.id)).toHaveLength(0);
+    expect(store.listIssueActivity(issue.id).length).toBeGreaterThan(0);
+  });
+
   it("includes Go pending task optional chat, autopilot, and workdir fields", async () => {
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_pending_optional", name: "pending optional", provider: "claude", workspaceId: "local" });

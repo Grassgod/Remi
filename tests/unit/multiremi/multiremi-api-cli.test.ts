@@ -77,6 +77,7 @@ describe("Multiremi API - CLI context and capabilities", () => {
     expect(taskContext.current).toMatchObject({
       task: { id: fixture.taskId, status: "queued" },
       issue: { id: fixture.issueId, title: "CLI context issue" },
+      bound_issue: null,
       project: { id: fixture.projectId, name: "CLI context project" },
       agent: { id: fixture.agentId, name: "CLI Agent" },
     });
@@ -102,6 +103,42 @@ describe("Multiremi API - CLI context and capabilities", () => {
     const shareContext = bodies[3] as any;
     expect(shareContext.current.issue).toEqual(expect.objectContaining({ id: fixture.issueId }));
     expect(shareContext.catalog).toEqual({ projects: [], repositories: [], next_cursor: null });
+  });
+
+  it("exposes a chat session's bound Issue without changing the task-owned Issue", async () => {
+    const fixture = await cliFixture();
+    const chat = fixture.store.createChatSession({
+      agentId: fixture.agentId,
+      workspaceId: "local",
+      title: "Bound Issue topic",
+    });
+    const chatTask = fixture.store.sendChatMessage(chat.id, { body: "How is this going?" }).task;
+    fixture.store.updateChatSession(chat.id, { issueId: fixture.issueId });
+    const taskCredential = await fixture.store.createTaskAccessToken(chatTask, "local");
+
+    const response = await fixture.app.request("/api/cli/context", {
+      headers: bearer(taskCredential.token),
+    });
+    expect(response.status).toBe(200);
+    const body = await response.json() as any;
+
+    expect(body.current).toMatchObject({
+      task: {
+        id: chatTask.id,
+        issue_id: null,
+        chat_id: chat.id,
+      },
+      chat: {
+        id: chat.id,
+        issue_id: fixture.issueId,
+      },
+      issue: null,
+      bound_issue: {
+        id: fixture.issueId,
+        key: fixture.store.getIssue(fixture.issueId)!.key,
+        title: "CLI context issue",
+      },
+    });
   });
 
   it("gives task tokens owner parity inside their workspace while hard-denying identity and lifecycle operations", async () => {

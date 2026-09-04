@@ -319,6 +319,19 @@ function appendClaimContextSections(sections: string[], task: AgentTask, mode: T
     });
   }
 
+  const boundIssue = task.boundIssue ?? task.bound_issue ?? null;
+  if (boundIssue && task.chatSessionId) {
+    sections.push("");
+    sections.push("## Bound Issue");
+    sections.push(`This Feishu topic is bound to ${boundIssue.key} — ${boundIssue.title} (status: ${boundIssue.status}).`);
+    sections.push("");
+    sections.push("Bound Issue Updates are an incremental digest: each batch keeps only the latest body, is capped at 12 entries, and is never re-sent. Do not treat these updates as the full picture.");
+    sections.push("");
+    sections.push("Before answering progress questions, read the current Issue and its recent comments:");
+    sections.push(`  remi issue get ${boundIssue.id} --output json`);
+    sections.push(`  remi comment list ${boundIssue.id} --recent 30 --output json`);
+  }
+
   const autopilotTitle = stringField(task, "autopilotTitle", "autopilot_title");
   const autopilotDescription = stringField(task, "autopilotDescription", "autopilot_description");
   const uniqueAutopilotDescription = autopilotDescription === currentTaskRequest(task)
