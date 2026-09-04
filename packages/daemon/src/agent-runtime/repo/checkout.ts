@@ -693,10 +693,24 @@ async function gitFetch(
       }
     }
     if (remote === "origin") {
-      git(barePath, ["remote", "set-head", "origin", "--auto"], {
-        allowFailure: true,
-        env: options.env,
-      });
+      try {
+        await gitNetwork(barePath, ["remote", "set-head", "origin", "--auto"], {
+          env: options.env,
+          signal: options.signal,
+          timeoutMs,
+          killGraceMs,
+        });
+      } catch (error) {
+        options.signal?.throwIfAborted();
+        if (error instanceof GitProcessTimeoutError) {
+          log.warn("Repo remote HEAD refresh timed out; continuing", {
+            event: "repo_remote_head_refresh_timeout",
+            barePath,
+            timeoutMs,
+            error: redactGitCredentialError(errorMessage(error)),
+          });
+        }
+      }
     }
     return true;
   } catch (err) {
