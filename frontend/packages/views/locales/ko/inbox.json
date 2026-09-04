@@ -26,6 +26,7 @@
   "list": {
     "empty": "알림이 없습니다",
     "filtered_empty": "이 필터와 일치하는 알림이 없습니다",
+    "load_more": "더 보기",
     "mark_group_read": "그룹을 읽음으로 표시",
     "mark_done_tooltip": "완료로 표시",
     "archive_tooltip": "보관",

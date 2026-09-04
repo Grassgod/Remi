@@ -3,11 +3,11 @@
  */
 import type { ReactNode } from "react";
 import { act, renderHook } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, type InfiniteData } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setApiInstance } from "../api";
 import type { ApiClient } from "../api/client";
-import type { InboxItem } from "../types";
+import type { InboxItem, InboxPage } from "../types";
 import { useArchiveInbox, useArchiveInboxItems } from "./mutations";
 import { inboxKeys } from "./queries";
 
@@ -107,5 +107,34 @@ describe("useArchiveInbox", () => {
         { id: "run-earlier", archived: true },
         { id: "run-failed", archived: false },
       ]);
+  });
+
+  it("updates the paged inbox cache optimistically", async () => {
+    const key = inboxKeys.pages("ws-1");
+    queryClient.setQueryData<InfiniteData<InboxPage>>(key, {
+      pages: [{
+        items: [
+          makeItem("run-latest", "autopilot_run_completed"),
+          makeItem("run-earlier", "autopilot_run_completed"),
+        ],
+        limit: 50,
+        has_more: false,
+        next_cursor: null,
+      }],
+      pageParams: [null],
+    });
+    const { result } = renderHook(() => useArchiveInboxItems(), {
+      wrapper: createWrapper(queryClient),
+    });
+
+    await act(async () => {
+      await result.current.mutateAsync(["run-latest"]);
+    });
+
+    const after = queryClient.getQueryData<InfiniteData<InboxPage>>(key);
+    expect(after?.pages[0]?.items.map(({ id, archived }) => ({ id, archived }))).toEqual([
+      { id: "run-latest", archived: true },
+      { id: "run-earlier", archived: false },
+    ]);
   });
 });

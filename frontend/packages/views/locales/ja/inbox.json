@@ -26,6 +26,7 @@
   "list": {
     "empty": "通知はありません",
     "filtered_empty": "このフィルターに一致する通知はありません",
+    "load_more": "さらに読み込む",
     "mark_group_read": "グループを既読にする",
     "mark_done_tooltip": "完了にする",
     "archive_tooltip": "アーカイブ",

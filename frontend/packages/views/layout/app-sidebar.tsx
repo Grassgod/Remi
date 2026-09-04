@@ -71,8 +71,7 @@ import { useCurrentWorkspace, useWorkspacePaths, paths } from "@multiremi/core/p
 import { workspaceListOptions, myInvitationListOptions, workspaceKeys } from "@multiremi/core/workspace/queries";
 import { resolvePublicFileUrl } from "@multiremi/core/workspace/avatar-url";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { inboxKeys } from "@multiremi/core/inbox/queries";
-import { countAttentionUnreadInboxItems } from "@multiremi/core/inbox";
+import { useInboxAttentionUnreadCount } from "@multiremi/core/inbox/queries";
 import { api, ApiError } from "@multiremi/core/api";
 import { useModalStore } from "@multiremi/core/modals";
 import { useConfigStore } from "@multiremi/core/config";
@@ -103,7 +102,6 @@ function isNavActive(pathname: string, href: string): boolean {
 const EMPTY_PINS: PinnedItem[] = [];
 const EMPTY_WORKSPACES: Awaited<ReturnType<typeof api.listWorkspaces>> = [];
 const EMPTY_INVITATIONS: Awaited<ReturnType<typeof api.listMyInvitations>> = [];
-const EMPTY_INBOX: Awaited<ReturnType<typeof api.listInbox>> = [];
 
 // Nav items reference WorkspacePaths method names so they can be resolved
 // against the current workspace slug at render time (see AppSidebar body).
@@ -370,15 +368,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
   const workspaceCreationDisabled = useConfigStore((s) => s.workspaceCreationDisabled);
 
   const wsId = workspace?.id;
-  const { data: inboxItems = EMPTY_INBOX } = useQuery({
-    queryKey: wsId ? inboxKeys.list(wsId) : ["inbox", "disabled"],
-    queryFn: () => api.listInbox(),
-    enabled: !!wsId,
-  });
-  const inboxAttentionCount = React.useMemo(
-    () => countAttentionUnreadInboxItems(inboxItems),
-    [inboxItems],
-  );
+  const inboxAttentionCount = useInboxAttentionUnreadCount(wsId);
   const hasRuntimeUpdates = useMyRuntimesNeedUpdate(wsId);
   const workbenchPendingCount = useWorkbenchPendingCount(wsId);
   const { data: pinnedItems = EMPTY_PINS } = useQuery({

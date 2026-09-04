@@ -1,8 +1,41 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient, type InfiniteData, type QueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { inboxKeys } from "./queries";
 import { useWorkspaceId } from "../hooks";
-import type { InboxItem } from "../types";
+import type { InboxItem, InboxPage } from "../types";
+
+interface InboxCacheSnapshot {
+  list: InboxItem[] | undefined;
+  pages: InfiniteData<InboxPage> | undefined;
+}
+
+function snapshotInboxCache(qc: QueryClient, wsId: string): InboxCacheSnapshot {
+  return {
+    list: qc.getQueryData<InboxItem[]>(inboxKeys.list(wsId)),
+    pages: qc.getQueryData<InfiniteData<InboxPage>>(inboxKeys.pages(wsId)),
+  };
+}
+
+function updateInboxCache(
+  qc: QueryClient,
+  wsId: string,
+  update: (items: InboxItem[]) => InboxItem[],
+): void {
+  qc.setQueryData<InboxItem[]>(inboxKeys.list(wsId), (old) => old ? update(old) : old);
+  qc.setQueryData<InfiniteData<InboxPage>>(inboxKeys.pages(wsId), (old) => old
+    ? { ...old, pages: old.pages.map((page) => ({ ...page, items: update(page.items) })) }
+    : old);
+}
+
+function restoreInboxCache(qc: QueryClient, wsId: string, snapshot?: InboxCacheSnapshot): void {
+  if (!snapshot) return;
+  qc.setQueryData(inboxKeys.list(wsId), snapshot.list);
+  qc.setQueryData(inboxKeys.pages(wsId), snapshot.pages);
+}
+
+function invalidateInbox(qc: QueryClient, wsId: string): void {
+  void qc.invalidateQueries({ queryKey: inboxKeys.all(wsId) });
+}
 
 export function useMarkInboxRead() {
   const qc = useQueryClient();
@@ -10,18 +43,17 @@ export function useMarkInboxRead() {
   return useMutation({
     mutationFn: (id: string) => api.markInboxRead(id),
     onMutate: async (id) => {
-      await qc.cancelQueries({ queryKey: inboxKeys.list(wsId) });
-      const prev = qc.getQueryData<InboxItem[]>(inboxKeys.list(wsId));
-      qc.setQueryData<InboxItem[]>(inboxKeys.list(wsId), (old) =>
-        old?.map((item) => (item.id === id ? { ...item, read: true } : item)),
-      );
-      return { prev };
+      await qc.cancelQueries({ queryKey: inboxKeys.all(wsId) });
+      const snapshot = snapshotInboxCache(qc, wsId);
+      updateInboxCache(qc, wsId, (items) =>
+        items.map((item) => (item.id === id ? { ...item, read: true } : item)));
+      return snapshot;
     },
     onError: (_err, _id, ctx) => {
-      if (ctx?.prev) qc.setQueryData(inboxKeys.list(wsId), ctx.prev);
+      restoreInboxCache(qc, wsId, ctx);
     },
     onSettled: () => {
-      qc.invalidateQueries({ queryKey: inboxKeys.list(wsId) });
+      invalidateInbox(qc, wsId);
     },
   });
 }
@@ -32,20 +64,20 @@ export function useArchiveInbox() {
   return useMutation({
     mutationFn: (id: string) => api.archiveInbox(id),
     onMutate: async (id) => {
-      await qc.cancelQueries({ queryKey: inboxKeys.list(wsId) });
-      const prev = qc.getQueryData<InboxItem[]>(inboxKeys.list(wsId));
-      qc.setQueryData<InboxItem[]>(inboxKeys.list(wsId), (old) =>
-        old?.map((item) => item.id === id
+      await qc.cancelQueries({ queryKey: inboxKeys.all(wsId) });
+      const snapshot = snapshotInboxCache(qc, wsId);
+      updateInboxCache(qc, wsId, (items) =>
+        items.map((item) => item.id === id
           ? { ...item, archived: true, read: true }
           : item),
       );
-      return { prev };
+      return snapshot;
     },
     onError: (_err, _id, ctx) => {
-      if (ctx?.prev) qc.setQueryData(inboxKeys.list(wsId), ctx.prev);
+      restoreInboxCache(qc, wsId, ctx);
     },
     onSettled: () => {
-      qc.invalidateQueries({ queryKey: inboxKeys.list(wsId) });
+      invalidateInbox(qc, wsId);
     },
   });
 }
@@ -56,21 +88,21 @@ export function useArchiveInboxItems() {
   return useMutation({
     mutationFn: (ids: string[]) => Promise.all(ids.map((id) => api.archiveInbox(id))),
     onMutate: async (ids) => {
-      await qc.cancelQueries({ queryKey: inboxKeys.list(wsId) });
-      const prev = qc.getQueryData<InboxItem[]>(inboxKeys.list(wsId));
+      await qc.cancelQueries({ queryKey: inboxKeys.all(wsId) });
+      const snapshot = snapshotInboxCache(qc, wsId);
       const selected = new Set(ids);
-      qc.setQueryData<InboxItem[]>(inboxKeys.list(wsId), (old) =>
-        old?.map((item) => selected.has(item.id)
+      updateInboxCache(qc, wsId, (items) =>
+        items.map((item) => selected.has(item.id)
           ? { ...item, archived: true, read: true }
           : item),
       );
-      return { prev };
+      return snapshot;
     },
     onError: (_err, _ids, ctx) => {
-      if (ctx?.prev) qc.setQueryData(inboxKeys.list(wsId), ctx.prev);
+      restoreInboxCache(qc, wsId, ctx);
     },
     onSettled: () => {
-      qc.invalidateQueries({ queryKey: inboxKeys.list(wsId) });
+      invalidateInbox(qc, wsId);
     },
   });
 }
@@ -81,20 +113,20 @@ export function useMarkAllInboxRead() {
   return useMutation({
     mutationFn: () => api.markAllInboxRead(),
     onMutate: async () => {
-      await qc.cancelQueries({ queryKey: inboxKeys.list(wsId) });
-      const prev = qc.getQueryData<InboxItem[]>(inboxKeys.list(wsId));
-      qc.setQueryData<InboxItem[]>(inboxKeys.list(wsId), (old) =>
-        old?.map((item) =>
+      await qc.cancelQueries({ queryKey: inboxKeys.all(wsId) });
+      const snapshot = snapshotInboxCache(qc, wsId);
+      updateInboxCache(qc, wsId, (items) =>
+        items.map((item) =>
           !item.archived ? { ...item, read: true } : item,
         ),
       );
-      return { prev };
+      return snapshot;
     },
     onError: (_err, _vars, ctx) => {
-      if (ctx?.prev) qc.setQueryData(inboxKeys.list(wsId), ctx.prev);
+      restoreInboxCache(qc, wsId, ctx);
     },
     onSettled: () => {
-      qc.invalidateQueries({ queryKey: inboxKeys.list(wsId) });
+      invalidateInbox(qc, wsId);
     },
   });
 }
@@ -105,19 +137,18 @@ export function useMarkInboxItemsRead() {
   return useMutation({
     mutationFn: (ids: string[]) => Promise.all(ids.map((id) => api.markInboxRead(id))),
     onMutate: async (ids) => {
-      await qc.cancelQueries({ queryKey: inboxKeys.list(wsId) });
-      const prev = qc.getQueryData<InboxItem[]>(inboxKeys.list(wsId));
+      await qc.cancelQueries({ queryKey: inboxKeys.all(wsId) });
+      const snapshot = snapshotInboxCache(qc, wsId);
       const selected = new Set(ids);
-      qc.setQueryData<InboxItem[]>(inboxKeys.list(wsId), (old) =>
-        old?.map((item) => selected.has(item.id) ? { ...item, read: true } : item),
-      );
-      return { prev };
+      updateInboxCache(qc, wsId, (items) =>
+        items.map((item) => selected.has(item.id) ? { ...item, read: true } : item));
+      return snapshot;
     },
     onError: (_err, _ids, ctx) => {
-      if (ctx?.prev) qc.setQueryData(inboxKeys.list(wsId), ctx.prev);
+      restoreInboxCache(qc, wsId, ctx);
     },
     onSettled: () => {
-      qc.invalidateQueries({ queryKey: inboxKeys.list(wsId) });
+      invalidateInbox(qc, wsId);
     },
   });
 }
@@ -128,7 +159,7 @@ export function useArchiveAllInbox() {
   return useMutation({
     mutationFn: () => api.archiveAllInbox(),
     onSettled: () => {
-      qc.invalidateQueries({ queryKey: inboxKeys.list(wsId) });
+      invalidateInbox(qc, wsId);
     },
   });
 }
@@ -139,7 +170,7 @@ export function useArchiveAllReadInbox() {
   return useMutation({
     mutationFn: () => api.archiveAllReadInbox(),
     onSettled: () => {
-      qc.invalidateQueries({ queryKey: inboxKeys.list(wsId) });
+      invalidateInbox(qc, wsId);
     },
   });
 }
@@ -150,7 +181,7 @@ export function useArchiveCompletedInbox() {
   return useMutation({
     mutationFn: () => api.archiveCompletedInbox(),
     onSettled: () => {
-      qc.invalidateQueries({ queryKey: inboxKeys.list(wsId) });
+      invalidateInbox(qc, wsId);
     },
   });
 }

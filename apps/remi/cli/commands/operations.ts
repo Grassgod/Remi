@@ -839,9 +839,17 @@ function feishuSpecs(): CommandSpec[] {
 }
 
 function inboxSpecs(): CommandSpec[] {
+  const timezoneOffsetOption: CliOptionSpec = {
+    name: "timezone-offset",
+    type: "integer",
+    valueName: "minutes",
+    description: "Browser-style UTC offset used for grouped counts",
+  };
   return [
     group("inbox", "Read and archive inbox items"),
     op({ id: "inbox.list", path: ["inbox", "list"], description: "List inbox items", method: "GET", apiPath: "/api/inbox", auth: HUMAN_TASK, collections: ["items"] }),
+    op({ id: "inbox.page", path: ["inbox", "page"], description: "List one inbox page", method: "GET", apiPath: "/api/inbox/page", auth: HUMAN_TASK, options: PAGE_OPTIONS, query: queryOptions, collections: ["items"] }),
+    op({ id: "inbox.summary", path: ["inbox", "summary"], description: "Get grouped inbox counts", method: "GET", apiPath: "/api/inbox/summary", auth: HUMAN_TASK, options: [timezoneOffsetOption], query: (i) => ({ timezone_offset: integerOption(i, "timezone-offset") }) }),
     op({ id: "inbox.unread-count", path: ["inbox", "unread-count"], description: "Get unread inbox count", method: "GET", apiPath: "/api/inbox/unread-count", auth: HUMAN_TASK }),
     ...["read", "archive"].map((action) => op({ id: `inbox.${action}`, path: ["inbox", action], description: `${capital(action)} an inbox item`, method: "POST", apiPath: (i) => `/api/inbox/${encodePath(positional(i, 0, "item"))}/${action}`, mutation: "write", auth: HUMAN_TASK, positionals: [ref("item")] })),
     ...[
