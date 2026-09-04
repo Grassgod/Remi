@@ -203,6 +203,28 @@ describe("Feishu bot standard Task bridge", () => {
     expect(store.listPendingTaskSteerMessages(inbound.taskId)).toEqual([
       expect.objectContaining({ content: expect.stringContaining(`completed a work round for ${issue.key}`) }),
     ]);
+    store.cancelTask(leaderTask.id);
+
+    expect(store.claimTask("rt_bot")?.id).toBe(inbound.taskId);
+    store.startTask(inbound.taskId);
+    store.failTask(inbound.taskId, {
+      error: "temporary inbound task timeout",
+      failureReason: "timeout",
+    });
+    const retry = store.listTasks().find((task) => task.parentTaskId === inbound.taskId)!;
+    expect(store.claimTask("rt_bot")?.id).toBe(retry.id);
+    daemonTaskClaimResponse(store, store.getTaskWithAgent(retry.id)!);
+    store.startTask(retry.id);
+    store.completeTask(retry.id, { output: "The steered round is complete." });
+    store.reportFeishuBotRuntimeStatus("local", "rt_bot", {
+      appliedRevision: config.revision,
+      state: "online",
+    });
+    expect(store.claimFeishuBotOutbound("local", "rt_bot")).toMatchObject({
+      body: "The steered round is complete.",
+      chatId: "oc_busy",
+      replyToMessageId: "om_busy_1",
+    });
   });
 
   it("waits for delegated work and the leader return before waking the bound Chat", () => {

@@ -581,8 +581,8 @@ export class FeishuBotRepo {
   retargetRoundPushTaskWithinTransaction(fromTaskId: string, toTaskId: string): void {
     this.ctx.db.run(
       `UPDATE multiremi_feishu_bot_round_pushes
-       SET wake_task_id = ?, updated_at = ?
-       WHERE wake_task_id = ? AND delivery_mode = 'proactive'`,
+       SET wake_task_id = ?, delivery_mode = 'proactive', updated_at = ?
+       WHERE wake_task_id = ?`,
       [toTaskId, nowIso(), fromTaskId],
     );
   }
