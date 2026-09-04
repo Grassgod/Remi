@@ -1266,6 +1266,7 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
       raw.bound_issue_updates_omitted_count ?? raw.boundIssueUpdatesOmittedCount,
       0,
     ),
+    boundIssue: normalizeDaemonClaimBoundIssue(raw.bound_issue ?? raw.boundIssue),
     chatBootstrapTranscript: stringOrNull(raw.chat_bootstrap_transcript ?? raw.chatBootstrapTranscript),
     chatMessageAttachments: Array.isArray(raw.chat_message_attachments)
       ? raw.chat_message_attachments
@@ -1339,6 +1340,16 @@ function normalizeDaemonClaimSquadContext(raw: any): any | null {
       })).filter((member: any) => member.agentId && member.name)
       : [],
   };
+}
+
+function normalizeDaemonClaimBoundIssue(raw: any): MultiremiTaskWithAgent["boundIssue"] {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const id = stringOrNull(raw.id);
+  const key = stringOrNull(raw.key ?? raw.identifier);
+  const title = stringOrNull(raw.title);
+  const status = stringOrNull(raw.status);
+  if (!id || !key || !title || !status) return null;
+  return { id, key, title, status };
 }
 
 export function normalizeDaemonAgent(raw: any): MultiremiAgent | null {

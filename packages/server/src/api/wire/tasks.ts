@@ -480,11 +480,36 @@ function appendDaemonClaimExecutionContext(
 ): void {
   appendDaemonClaimWorkspaceContext(store, task, response);
   appendDaemonClaimChatContext(store, task, response);
+  appendDaemonClaimBoundIssue(store, task, response);
   appendDaemonClaimBoundIssueUpdates(store, task, response);
   appendDaemonClaimAutopilotContext(store, task, response);
 
   const quickCreatePrompt = daemonQuickCreatePrompt(task);
   if (quickCreatePrompt) response.quick_create_prompt = quickCreatePrompt;
+}
+
+function appendDaemonClaimBoundIssue(
+  store: MultiremiStore,
+  task: MultiremiTaskWithAgent,
+  response: Record<string, unknown>,
+): void {
+  if (!task.chatSessionId || task.issueId) return;
+  try {
+    const chat = store.getChatSession(task.chatSessionId);
+    const issue = chat?.issueId ? store.getIssue(chat.issueId) : null;
+    if (!issue) return;
+    response.bound_issue = {
+      id: issue.id,
+      key: issue.key,
+      title: issue.title,
+      status: issue.status,
+    };
+  } catch (error) {
+    log.debug(
+      `Failed to load bound Issue for claimed task ${task.id}: `
+      + `${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
 }
 
 function appendDaemonClaimWorkspaceContext(store: MultiremiStore, task: MultiremiTaskWithAgent, response: Record<string, unknown>): void {
