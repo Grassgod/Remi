@@ -2510,7 +2510,9 @@ export class TasksRepo {
       // Compute status after the return task is present. Otherwise the child
       // completion can mark the Issue done and the queued leader follow-up is
       // deliberately unable to reopen that explicit terminal state.
-      const issueStatus = this.nextIssueStatusAfterTaskTerminal(task, status, retry != null || replacementPlanned);
+      const issueStatus = task.chatSessionId
+        ? null
+        : this.nextIssueStatusAfterTaskTerminal(task, status, retry != null || replacementPlanned);
       if (issueStatus) {
         if (workspaceLockHeld) this.syncIssueStatusFromTaskWithinTransaction(task, issueStatus);
         else this.syncIssueStatusFromTask(task, issueStatus);
@@ -2753,7 +2755,7 @@ export class TasksRepo {
   // triggering comment when the task came from an @mention. Legacy daemons
   // still report the "Task completed." placeholder — skip it, it says nothing.
   private postAgentReplyComment(task: MultiremiTask, output: string | null): void {
-    if (!task.issueId || !task.agentId) return;
+    if (!task.issueId || !task.agentId || task.chatSessionId) return;
     const body = (output ?? "").trim();
     if (!body || body === "Task completed.") return;
     try {
@@ -2782,7 +2784,7 @@ export class TasksRepo {
   }
 
   private postContextOverflowSystemComment(task: MultiremiTask): void {
-    if (!task.issueId) return;
+    if (!task.issueId || task.chatSessionId) return;
     const body = "The agent could not complete this task because its context still exceeded the provider limit "
       + `at attempt ${task.attempt} of ${task.maxAttempts}. Automatic retries use progressively smaller Session `
       + "projections. Start a new Session, or publish and condense a checkpoint before retrying.";
@@ -2855,7 +2857,7 @@ export class TasksRepo {
 
   /** Caller owns the task/Issue/outbox transaction. */
   private syncIssueStatusFromTaskWithinTransaction(task: MultiremiTask, status: string): void {
-    if (!task.issueId) return;
+    if (!task.issueId || task.chatSessionId) return;
     // Serialize against direct Issue mutations before checking terminal state.
     // The no-op write acquires a row lock on Postgres and the writer lock on
     // SQLite, so a late worker can never reopen a concurrently accepted or

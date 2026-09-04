@@ -320,7 +320,7 @@ function appendClaimContextSections(sections: string[], task: AgentTask, mode: T
   }
 
   const boundIssue = task.boundIssue ?? task.bound_issue ?? null;
-  if (boundIssue && !task.issueId && task.chatSessionId) {
+  if (boundIssue && task.chatSessionId) {
     sections.push("");
     sections.push("## Bound Issue");
     sections.push(`This Feishu topic is bound to ${boundIssue.key} — ${boundIssue.title} (status: ${boundIssue.status}).`);

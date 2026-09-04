@@ -493,10 +493,11 @@ function appendDaemonClaimBoundIssue(
   task: MultiremiTaskWithAgent,
   response: Record<string, unknown>,
 ): void {
-  if (!task.chatSessionId || task.issueId) return;
+  if (!task.chatSessionId) return;
   try {
     const chat = store.getChatSession(task.chatSessionId);
-    const issue = chat?.issueId ? store.getIssue(chat.issueId) : null;
+    const issueId = task.issueId ?? chat?.issueId ?? null;
+    const issue = issueId ? store.getIssue(issueId) : null;
     if (!issue) return;
     response.bound_issue = {
       id: issue.id,

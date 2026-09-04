@@ -830,7 +830,48 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       prompt: "Owned Issue work",
     });
     const ownedWire = daemonTaskClaimResponse(store, store.getTaskWithAgent(ownedTask.id)!);
-    expect(ownedWire).not.toHaveProperty("bound_issue");
+    expect(ownedWire.bound_issue).toEqual({
+      id: issue.id,
+      key: issue.key,
+      title: issue.title,
+      status: issue.status,
+    });
+  });
+
+  it("keeps a real bound topic task from mutating its Issue or adding an automatic comment", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_bound_topic", name: "bound topic", provider: "codex" });
+    const agent = store.createAgent({ name: "Bound topic agent", provider: "codex", runtimeId: runtime.id });
+    const issue = store.createIssue({ title: "Real bound topic", workspaceId: "local" });
+    const chat = store.createChatSession({
+      agentId: agent.id,
+      issueId: issue.id,
+      workspaceId: "local",
+      title: "Real bound topic",
+    });
+    const task = store.sendChatMessage(chat.id, { body: "Please summarize the topic" }).task;
+    expect(task.issueId).toBe(issue.id);
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+
+    const claimed = store.getTaskWithAgent(task.id)!;
+    const wire = daemonTaskClaimResponse(store, claimed);
+    expect(wire.bound_issue).toEqual({
+      id: issue.id,
+      key: issue.key,
+      title: issue.title,
+      status: issue.status,
+    });
+    const prompt = buildTaskPrompt({ ...claimed, boundIssue: wire.bound_issue } as any);
+    expect(prompt).toContain("## Bound Issue");
+    expect(prompt).toContain(`remi issue get ${issue.id} --output json`);
+
+    const initialStatus = store.getIssue(issue.id)?.status;
+    store.startTask(task.id);
+    store.completeTask(task.id, { output: "Topic summary" });
+
+    expect(store.getIssue(issue.id)?.status).toBe(initialStatus);
+    expect(store.listIssueComments(issue.id)).toHaveLength(0);
+    expect(store.listIssueActivity(issue.id).length).toBeGreaterThan(0);
   });
 
   it("includes Go pending task optional chat, autopilot, and workdir fields", async () => {
