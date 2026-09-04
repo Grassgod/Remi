@@ -3909,6 +3909,13 @@ runMigrations(this.db);
     return this.chat.getChatSession(id);
   }
 
+  bindChatSessionIssueIfUnbound(chatSessionId: string, issueId: string): {
+    session: MultiremiChatSession;
+    bound: boolean;
+  } {
+    return this.chat.bindChatSessionIssueIfUnbound(chatSessionId, issueId);
+  }
+
   updateChatSession(id: string, input: UpdateChatSessionInput): MultiremiChatSession {
     return this.chat.updateChatSession(id, input);
   }

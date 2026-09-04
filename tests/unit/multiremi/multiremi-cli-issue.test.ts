@@ -180,6 +180,21 @@ describe("Multiremi CLI — issues, attachments, and sessions", () => {
       await create("--status", "backlog", "--assignee", "agt_1", "--assignee-type", "agent");
       expect(warnings.join("\n")).not.toContain("NOT dispatched");
 
+      // A Chat that is already bound is never silently switched to the newly
+      // created Issue; the structured response remains on stdout and the
+      // operator gets the server-authored switch hint on stderr.
+      warnings.length = 0;
+      createResponse = {
+        id: "iss_5b",
+        identifier: "MUL-13B",
+        task_id: null,
+        dispatch_status: "skipped",
+        dispatch_skipped_reason: "backlog_status",
+        chat_issue_binding_hint: "Chat chat_1 remains bound to MUL-12; MUL-13B was not auto-bound.",
+      };
+      await create("--status", "backlog", "--assignee", "agt_1", "--assignee-type", "agent");
+      expect(warnings).toContain("Chat chat_1 remains bound to MUL-12; MUL-13B was not auto-bound.");
+
       // Generic assignment failure: warn with the server's error message.
       warnings.length = 0;
       createResponse = {

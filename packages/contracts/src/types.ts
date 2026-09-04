@@ -2279,6 +2279,8 @@ export interface PublishSessionResultInput {
   published_by_type?: string;
   publishedById?: string | null;
   published_by_id?: string | null;
+  /** Server-internal creator lineage. Public routes derive this from the task credential. */
+  sourceTaskId?: string | null;
 }
 
 // ─── Inbox, reactions, attachments, labels & pins ────────────────────────────────────────────────

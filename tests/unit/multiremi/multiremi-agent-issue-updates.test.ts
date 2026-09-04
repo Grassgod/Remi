@@ -85,35 +85,82 @@ describe("agent-facing Issue update delivery", () => {
     expect(prompt).toContain("This should be recorded without waking the agent.");
   });
 
-  it("filters repeated updates produced by the target agent", () => {
+  it("delivers same-agent Issue-lane updates while filtering the target Chat lane", () => {
     const store = createStore({ debounceMs: 10 });
     const { agent, issue, chat } = scaffold(store);
-
-    store.createIssueComment(issue.id, {
-      authorType: "agent",
-      authorId: agent.id,
-      body: "First agent result",
+    const session = store.getOrCreateDefaultIssueSession(issue.id);
+    const issueTask = store.createSessionTask(session.id, {
+      agentId: agent.id,
+      prompt: "Summarize the Issue lane",
     });
     store.createIssueComment(issue.id, {
       authorType: "agent",
       authorId: agent.id,
-      body: "Second agent result",
+      taskId: issueTask.id,
+      body: "Issue-lane summary from the same agent",
     });
-    const sourceTask = store.createTask({ agentId: agent.id, prompt: "Produce a system-authored result" });
-    store.appendIssueActivity(issue.id, {
-      actorType: "system",
-      actorId: "system",
-      type: "comment_created",
-      body: "System wrapper around the target agent's result",
-      data: { sourceTaskId: sourceTask.id },
+    const chatTask = store.sendChatMessage(chat.id, { body: "Update the Issue" }).task;
+    store.createIssueComment(issue.id, {
+      authorType: "agent",
+      authorId: agent.id,
+      taskId: chatTask.id,
+      body: "Chat-lane comment that must not feed back",
     });
 
     expect(store.flushDueAgentIssueUpdates(new Date(Date.now() + 1_000))).toEqual({
-      delivered: 0,
+      delivered: 1,
       dropped: 0,
     });
-    expect(store.listChatMessages(chat.id)).toHaveLength(0);
-    expect(store.listTasksForIssue(issue.id)).toHaveLength(0);
+    const delivered = store.listChatMessages(chat.id).filter((message) => message.role === "system");
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]?.body).toContain("Issue-lane summary from the same agent");
+    expect(delivered[0]?.body).not.toContain("Chat-lane comment that must not feed back");
+  });
+
+  it("delivers published Session results with task lineage and the existing body cap", async () => {
+    const store = createStore({ debounceMs: 10 });
+    const { agent, issue, chat } = scaffold(store);
+    const session = store.getOrCreateDefaultIssueSession(issue.id);
+    const issueTask = store.createSessionTask(session.id, {
+      agentId: agent.id,
+      prompt: "Publish the implementation result",
+    });
+    const credential = await store.createTaskAccessToken(issueTask, "local");
+    const app = createMultiremiApp({ store });
+    const oversizedBody = `${"result-detail ".repeat(700)}SHOULD_BE_TRUNCATED`;
+
+    const response = await app.request(`/api/issues/${issue.id}/sessions/${session.id}/results`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${credential.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ title: "Implementation complete", body: oversizedBody }),
+    });
+    expect(response.status).toBe(201);
+    expect(store.flushDueAgentIssueUpdates(new Date(Date.now() + 1_000))).toEqual({
+      delivered: 1,
+      dropped: 0,
+    });
+    const pending = store.listChatMessages(chat.id).filter((message) => message.role === "system");
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.body).toContain("Published result: Implementation complete");
+    expect(pending[0]?.body).not.toContain("SHOULD_BE_TRUNCATED");
+
+    const userTurn = store.sendChatMessage(chat.id, { body: "What did the team finish?" });
+    const wire = daemonTaskClaimResponse(store, store.getTaskWithAgent(userTurn.task.id)!);
+    expect(wire.bound_issue_updates).toEqual([
+      expect.stringContaining("Published result: Implementation complete"),
+    ]);
+    const prompt = buildTaskPrompt({
+      ...store.getTaskWithAgent(userTurn.task.id)!,
+      sessionProjection: wire.session_projection,
+      chatMessage: wire.chat_message,
+      boundIssueUpdates: wire.bound_issue_updates,
+      boundIssueUpdatesOmittedCount: wire.bound_issue_updates_omitted_count,
+    } as any);
+    expect(prompt).toContain("## Bound Issue Updates");
+    expect(prompt).toContain("Published result: Implementation complete");
   });
 
   it("exposes an explicit human-only subscription toggle", async () => {
@@ -181,7 +228,11 @@ describe("agent-facing Issue update delivery", () => {
       target: { chatId: chat.id },
     });
 
-    const sourceTask = store.createTask({ agentId: agent.id, prompt: "Update the bound Issue" });
+    const sourceTask = store.createTask({
+      agentId: agent.id,
+      chatSessionId: chat.id,
+      prompt: "Update the bound Issue",
+    });
     const taskToken = await store.createTaskAccessToken(sourceTask, owner.id);
     const taskHeaders = { Authorization: `Bearer ${taskToken.token}` };
     expect((await app.request(

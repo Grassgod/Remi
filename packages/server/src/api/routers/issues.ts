@@ -1,6 +1,7 @@
 import type { Context, Hono } from "hono";
 import {
   assigneeFrequencyQuery,
+  bindCreatedIssueToRequestChat,
   canCurrentUserAccessAgent,
   currentTaskParentId,
   denyCurrentUserWorkspaceAccess,
@@ -556,9 +557,16 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       const sourceIssueId = issueInput.source_issue_id ?? null;
       if (sourceIssueId) {
         const existing = store.findGeneratedIssueByTitle(sourceIssueId, issueInput.title);
-        if (existing) return c.json(existingIssueDispatchResponse(store, existing), 200);
+        if (existing) {
+          const chatBinding = bindCreatedIssueToRequestChat(c, store, existing);
+          return c.json({
+            ...existingIssueDispatchResponse(store, existing),
+            ...(chatBinding ?? {}),
+          }, 200);
+        }
       }
       const issue = store.createIssue(issueInput);
+      const chatBinding = bindCreatedIssueToRequestChat(c, store, issue);
       publishIssueCreated(c, store, issue, issueCompatibilityResponse(issue));
       // go-compat (maybeEnqueueOnAssign): creating an issue assigned to an agent/squad
       // dispatches a task, unless it's in backlog (a parking lot for pre-assignment).
@@ -599,6 +607,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       }
       const response: Record<string, unknown> = {
         ...issueCompatibilityResponse(finalIssue),
+        ...(chatBinding ?? {}),
         task_id: task?.id ?? null,
         dispatch_status: task ? "dispatched" : "skipped",
         dispatch_skipped_reason: task ? null : dispatchSkippedReason,
@@ -1249,6 +1258,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
         ...body,
         publishedByType: publisher.actorType,
         publishedById: publisher.actorId,
+        sourceTaskId: currentTaskParentId(c),
       })), 201);
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
