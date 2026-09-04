@@ -905,6 +905,23 @@
       "scan_error_generic": "Bot を作成できませんでした。",
       "scan_retry": "再試行"
     },
+    "issueTopics": {
+      "title": "Issue トピック同期",
+      "description": "新しい Issue ごとに Feishu グループのトピックを作成し、以降の進捗と返信を同じスレッドに保持します。",
+      "enabled": "新しい Issue のトピックを作成",
+      "enabled_hint": "新しい Issue のみ同期します。既存の Feishu 会話から作成した Issue はその会話を引き続き使用します。",
+      "chat_id": "Feishu グループ chat_id",
+      "chat_id_hint": "メッセージはこのグループに新しいトピックのルートとして送信されます。",
+      "project_filter": "選択したプロジェクトのみ",
+      "project_filter_hint": "オフにすると、すべてのプロジェクトとプロジェクト未設定の Issue が対象になります。",
+      "no_projects": "有効なプロジェクトがありません",
+      "project_required": "プロジェクトを 1 つ以上選択してください。",
+      "read_only": "Workspace Owner と Admin のみ Issue トピック同期を変更できます。",
+      "save": "保存",
+      "saving": "保存中…",
+      "toast_saved": "Issue トピック設定を保存しました",
+      "toast_save_failed": "Issue トピック設定を保存できませんでした"
+    },
     "botMenu": {
       "title": "Feishu Bot メニュー", "description": "Workspace の Bot メニューと対象別メニューを管理します。",
       "save": "保存", "saving": "保存中…", "saved": "保存しました", "save_failed": "保存できませんでした",

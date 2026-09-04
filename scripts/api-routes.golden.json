@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 717,
+    "routeCount": 721,
     "routeCountByPrefix": {
       "native": 209,
-      "compat": 495,
+      "compat": 499,
       "root": 13
     },
-    "getRoutes": 305,
-    "getRoutesWithBody": 302,
+    "getRoutes": 307,
+    "getRoutesWithBody": 304,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 412,
+    "mutationRoutes": 414,
     "mutationRoutesCovered": 282,
     "flows": [
       "agents-compat",
@@ -388,6 +388,7 @@
     "GET /api/workspaces/:id/feishu-bot/status",
     "GET /api/workspaces/:id/invitations",
     "GET /api/workspaces/:id/issue-archive",
+    "GET /api/workspaces/:id/issue-topics",
     "GET /api/workspaces/:id/lark/install/:sessionId/status",
     "GET /api/workspaces/:id/lark/installations",
     "GET /api/workspaces/:id/members",
@@ -776,6 +777,7 @@
     "PUT /api/workspaces/:id/env",
     "PUT /api/workspaces/:id/feishu-bot",
     "PUT /api/workspaces/:id/issue-archive",
+    "PUT /api/workspaces/:id/issue-topics",
     "PUT /api/workspaces/:id/organizer",
     "PUT /api/workspaces/:id/prompts",
     "PUT /api/workspaces/:id/relay-config/:engine",
@@ -1095,6 +1097,7 @@
     "GET /api/workspaces/:id/feishu-bot/status",
     "GET /api/workspaces/:id/invitations",
     "GET /api/workspaces/:id/issue-archive",
+    "GET /api/workspaces/:id/issue-topics",
     "GET /api/workspaces/:id/lark/install/:sessionId/status",
     "GET /api/workspaces/:id/lark/installations",
     "GET /api/workspaces/:id/members",
@@ -12403,6 +12406,28 @@
             "allowed": true
           },
           {
+            "id": "workspace.issue-topics.get",
+            "command": "remi workspace issue-topics get",
+            "capability": "workspace.issue-topics.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.issue-topics.set",
+            "command": "remi workspace issue-topics set",
+            "capability": "workspace.issue-topics.set",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "workspace.leave",
             "command": "remi workspace leave",
             "capability": "workspace.leave",
@@ -21952,6 +21977,20 @@
         "config": {
           "ttl_ms": 0,
           "sweep_interval_ms": 0
+        }
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/issue-topics",
+      "route": "GET /api/workspaces/:id/issue-topics",
+      "path": "/api/workspaces/local/issue-topics",
+      "status": 200,
+      "body": {
+        "workspace_id": "local",
+        "config": {
+          "enabled": false,
+          "chat_id": "",
+          "project_ids": null
         }
       }
     },

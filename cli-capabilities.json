@@ -10149,6 +10149,9 @@
     "GET /api/workspaces/:id/issue-archive": {
       "command": "workspace.issue-archive.get"
     },
+    "GET /api/workspaces/:id/issue-topics": {
+      "command": "workspace.issue-topics.get"
+    },
     "GET /api/workspaces/:id/lark/install/:sessionId/status": {
       "command": "lark.install.status"
     },
@@ -11444,6 +11447,9 @@
     },
     "PUT /api/workspaces/:id/issue-archive": {
       "command": "workspace.issue-archive.update"
+    },
+    "PUT /api/workspaces/:id/issue-topics": {
+      "command": "workspace.issue-topics.set"
     },
     "PUT /api/workspaces/:id/organizer": {
       "command": "workspace.organizer.update"

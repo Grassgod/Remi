@@ -15,6 +15,7 @@ export const feishuBotKeys = {
   audit: (workspaceId: string, limit: number) => ["feishu-bot", workspaceId, "audit", limit] as const,
   registration: (workspaceId: string, sessionId: string) =>
     ["feishu-bot", workspaceId, "registration", sessionId] as const,
+  issueTopics: (workspaceId: string) => ["feishu-bot", workspaceId, "issue-topics"] as const,
 };
 
 export function feishuBotOptions(workspaceId: string, enabled = true) {
@@ -24,6 +25,15 @@ export function feishuBotOptions(workspaceId: string, enabled = true) {
     enabled: enabled && workspaceId.length > 0,
     // A 403 here is a role answer, not a transient failure — retrying it just
     // burns requests on a permission the user will not gain mid-session.
+    retry: false,
+  });
+}
+
+export function issueTopicConfigOptions(workspaceId: string, enabled = true) {
+  return queryOptions({
+    queryKey: feishuBotKeys.issueTopics(workspaceId),
+    queryFn: () => api.getIssueTopicConfig(workspaceId),
+    enabled: enabled && workspaceId.length > 0,
     retry: false,
   });
 }
