@@ -12697,6 +12697,7 @@
           "task": null,
           "chat": null,
           "issue": null,
+          "bound_issue": null,
           "session": null,
           "project": null,
           "runtime": null,
