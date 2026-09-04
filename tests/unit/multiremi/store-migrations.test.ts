@@ -148,6 +148,72 @@ describe("store migrations", () => {
     ]));
   });
 
+  it("makes Feishu outbound reply targets nullable without losing queued deliveries", () => {
+    const database = freshDb();
+    migrate(database);
+    database.exec(`
+      DROP TABLE multiremi_feishu_bot_outbound_deliveries;
+      CREATE TABLE multiremi_feishu_bot_outbound_deliveries (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        binding_id TEXT NOT NULL,
+        task_id TEXT UNIQUE,
+        chat_id TEXT NOT NULL,
+        thread_id TEXT,
+        reply_to_message_id TEXT NOT NULL,
+        body TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        claim_token TEXT,
+        leased_until TEXT,
+        available_at TEXT NOT NULL,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        external_message_id TEXT,
+        last_error TEXT,
+        sent_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO multiremi_feishu_bot_outbound_deliveries (
+        id, workspace_id, binding_id, task_id, chat_id, thread_id,
+        reply_to_message_id, body, status, available_at, created_at, updated_at
+      ) VALUES (
+        'fbo_legacy', 'local', 'fcb_legacy', NULL, 'oc_legacy', 'om_root',
+        'om_root', 'Legacy delivery', 'pending',
+        '2026-09-04T00:00:00.000Z', '2026-09-04T00:00:00.000Z', '2026-09-04T00:00:00.000Z'
+      );
+      DELETE FROM multiremi_schema_migrations
+      WHERE id = '20260904_feishu_issue_topic_outbound_nullable';
+    `);
+
+    migrate(database);
+    migrate(database);
+
+    const replyColumn = (database.query(
+      "PRAGMA table_info(multiremi_feishu_bot_outbound_deliveries)",
+    ).all() as Array<{ name: string; notnull: number }>)
+      .find((column) => column.name === "reply_to_message_id");
+    expect(replyColumn?.notnull).toBe(0);
+    expect(database.query(
+      "SELECT id, reply_to_message_id, body FROM multiremi_feishu_bot_outbound_deliveries WHERE id = 'fbo_legacy'",
+    ).get()).toEqual({ id: "fbo_legacy", reply_to_message_id: "om_root", body: "Legacy delivery" });
+    expect(() => database.run(
+      `INSERT INTO multiremi_feishu_bot_outbound_deliveries (
+         id, workspace_id, binding_id, task_id, chat_id, thread_id,
+         reply_to_message_id, body, status, available_at, created_at, updated_at
+       ) VALUES (?, ?, ?, NULL, ?, NULL, NULL, ?, 'pending', ?, ?, ?)`,
+      [
+        "fbo_seed",
+        "local",
+        "fcb_seed",
+        "oc_topics",
+        "Issue topic",
+        "2026-09-04T00:00:00.000Z",
+        "2026-09-04T00:00:00.000Z",
+        "2026-09-04T00:00:00.000Z",
+      ],
+    )).not.toThrow();
+  });
+
   it("drops removed Agent cwd and Feishu webhook credential columns", () => {
     const database = freshDb();
     migrate(database);

@@ -588,7 +588,7 @@ export function controlPlaneConciergeHost(deps: {
       if (!handle) throw new Error("Feishu concierge channel is not running");
       return handle.sendProactiveThreadReply({
         chatId: delivery.chatId,
-        replyToMessageId: delivery.replyToMessageId,
+        replyToMessageId: delivery.replyToMessageId ?? undefined,
         body: delivery.body,
         idempotencyKey: delivery.idempotencyKey,
       });

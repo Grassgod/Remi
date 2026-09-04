@@ -337,6 +337,39 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "workspace.issue-topics.get": {
+      "command": "remi workspace issue-topics get",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.issue-topics.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.issue-topics.set": {
+      "command": "remi workspace issue-topics set",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.issue-topics.set",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "workspace.ssh-mesh.get": {
       "command": "remi workspace ssh-mesh get",
       "aliases": [],

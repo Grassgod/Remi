@@ -298,7 +298,9 @@ export class MultiremiDaemonClient {
           threadId: typeof (rawOutbound.thread_id ?? rawOutbound.threadId) === "string"
             ? String(rawOutbound.thread_id ?? rawOutbound.threadId)
             : null,
-          replyToMessageId: String(rawOutbound.reply_to_message_id ?? rawOutbound.replyToMessageId ?? ""),
+          replyToMessageId: typeof (rawOutbound.reply_to_message_id ?? rawOutbound.replyToMessageId) === "string"
+            ? String(rawOutbound.reply_to_message_id ?? rawOutbound.replyToMessageId)
+            : null,
           body: String(rawOutbound.body ?? ""),
           idempotencyKey: String(rawOutbound.idempotency_key ?? rawOutbound.idempotencyKey ?? rawOutbound.id ?? ""),
         }

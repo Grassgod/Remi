@@ -270,6 +270,8 @@ function mappedResourceCommand(route: string): string | null {
     [/^PUT \/api\/workspaces\/:id\/prompts$/, "workspace.prompt.update"],
     [/^GET \/api\/workspaces\/:id\/issue-archive$/, "workspace.issue-archive.get"],
     [/^PUT \/api\/workspaces\/:id\/issue-archive$/, "workspace.issue-archive.update"],
+    [/^GET \/api\/workspaces\/:id\/issue-topics$/, "workspace.issue-topics.get"],
+    [/^PUT \/api\/workspaces\/:id\/issue-topics$/, "workspace.issue-topics.set"],
     [/^GET \/api\/workspaces\/:id\/runtime-provisions$/, "workspace.runtime-provision.list"],
     [/^POST \/api\/workspaces\/:id\/runtime-provisions$/, "workspace.runtime-provision.create"],
     [/^GET \/api\/workspaces\/:id\/runtime-provisions\/:provisionId$/, "workspace.runtime-provision.get"],

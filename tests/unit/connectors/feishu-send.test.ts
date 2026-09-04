@@ -31,4 +31,32 @@ describe("Feishu message sending", () => {
       }),
     }]);
   });
+
+  it("passes the durable delivery id as a new message uuid", async () => {
+    const calls: unknown[] = [];
+    const client = {
+      im: {
+        message: {
+          create: async (input: unknown) => {
+            calls.push(input);
+            return { code: 0, data: { message_id: "om_root" } };
+          },
+        },
+      },
+    } as unknown as Lark.Client;
+
+    const result = await sendMessageFeishu(client, "oc_topic", "Issue topic", {
+      idempotencyKey: "fbo_stable_root",
+    });
+
+    expect(result.messageId).toBe("om_root");
+    expect(calls).toEqual([{
+      params: { receive_id_type: "chat_id" },
+      data: expect.objectContaining({
+        receive_id: "oc_topic",
+        msg_type: "post",
+        uuid: "fbo_stable_root",
+      }),
+    }]);
+  });
 });

@@ -128,7 +128,7 @@ export class FeishuConnector implements Connector {
 
   async sendProactiveThreadReply(input: {
     chatId: string;
-    replyToMessageId: string;
+    replyToMessageId?: string;
     body: string;
     idempotencyKey: string;
   }): Promise<{ messageId: string }> {
