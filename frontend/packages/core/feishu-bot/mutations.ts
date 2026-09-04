@@ -3,6 +3,7 @@ import { api } from "../api";
 import type {
   FeishuBotRegistrationBrand,
   FeishuBotTestRequest,
+  UpdateIssueTopicConfigRequest,
   UpsertFeishuBotRequest,
 } from "../types";
 import { feishuBotKeys } from "./queries";
@@ -27,6 +28,14 @@ export function useSaveFeishuBot(workspaceId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (input: UpsertFeishuBotRequest) => api.saveFeishuBot(workspaceId, input),
+    onSettled: () => invalidateBot(queryClient, workspaceId),
+  });
+}
+
+export function useSaveIssueTopicConfig(workspaceId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: UpdateIssueTopicConfigRequest) => api.saveIssueTopicConfig(workspaceId, input),
     onSettled: () => invalidateBot(queryClient, workspaceId),
   });
 }

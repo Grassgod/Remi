@@ -3748,6 +3748,14 @@ export const FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION = 2;
 
 export type FeishuBotDomain = "feishu" | "lark" | "bytedance";
 
+/** Workspace policy for creating one Feishu topic per newly created Issue. */
+export interface IssueTopicConfig {
+  enabled: boolean;
+  chatId: string;
+  /** Omitted means every project, including projectless Issues. */
+  projectIds?: string[];
+}
+
 /** What the control plane wants the selected Runtime to do with the connector. */
 export type FeishuBotDesiredState = "running" | "stopped";
 
@@ -3762,8 +3770,8 @@ export interface MultiremiFeishuBotOutboundDelivery {
   chat_id?: string;
   threadId: string | null;
   thread_id?: string | null;
-  replyToMessageId: string;
-  reply_to_message_id?: string;
+  replyToMessageId: string | null;
+  reply_to_message_id?: string | null;
   body: string;
   /** Stable across retries so Feishu can deduplicate send-success/ack-failure. */
   idempotencyKey: string;

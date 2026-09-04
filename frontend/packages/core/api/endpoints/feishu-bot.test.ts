@@ -51,6 +51,33 @@ describe("FeishuBotEndpoints.getFeishuBot (role-polymorphic GET)", () => {
 });
 
 describe("FeishuBotEndpoints control routes", () => {
+  it("falls back to disabled empty Issue topics when the response drifts", async () => {
+    const { api } = endpoints({
+      workspace_id: 42,
+      config: { enabled: "sometimes", chat_id: false, project_ids: "all" },
+    });
+    await expect(api.getIssueTopicConfig("ws_1")).resolves.toEqual({
+      workspace_id: "",
+      config: { enabled: false, chat_id: "", project_ids: null },
+    });
+  });
+
+  it("sends the Issue topic project filter without changing null semantics", async () => {
+    const { api, fetchMock } = endpoints({
+      workspace_id: "ws_1",
+      config: { enabled: true, chat_id: "oc_topics", project_ids: null },
+    });
+    await api.saveIssueTopicConfig("ws_1", {
+      enabled: true,
+      chat_id: "oc_topics",
+      project_ids: null,
+    });
+    expect(fetchMock).toHaveBeenCalledWith("/api/workspaces/ws_1/issue-topics", {
+      method: "PUT",
+      body: JSON.stringify({ enabled: true, chat_id: "oc_topics", project_ids: null }),
+    });
+  });
+
   it("sends deploy and stop with an explicit empty JSON body", async () => {
     // The server parses these with `readJsonStrictAllowEmpty`, which only
     // tolerates an empty body when there is no content-type at all — so the

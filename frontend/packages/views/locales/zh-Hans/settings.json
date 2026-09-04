@@ -906,6 +906,23 @@
       "scan_error_generic": "创建机器人失败。",
       "scan_retry": "重试"
     },
+    "issueTopics": {
+      "title": "Issue 话题同步",
+      "description": "为每个新建 Issue 在指定飞书群创建一个话题，后续工作进展和群内回复都保留在该话题中。",
+      "enabled": "为新建 Issue 创建话题",
+      "enabled_hint": "仅同步新建 Issue；从已有飞书会话创建的 Issue 会继续使用原会话。",
+      "chat_id": "飞书群 chat_id",
+      "chat_id_hint": "消息会作为新话题的根消息发送到这个群。",
+      "project_filter": "仅同步选中的项目",
+      "project_filter_hint": "关闭时会同步所有项目以及未归属项目的 Issue。",
+      "no_projects": "暂无活跃项目",
+      "project_required": "请至少选择一个项目。",
+      "read_only": "只有 Workspace Owner 和 Admin 可以修改 Issue 话题同步配置。",
+      "save": "保存",
+      "saving": "保存中……",
+      "toast_saved": "Issue 话题同步配置已保存",
+      "toast_save_failed": "Issue 话题同步配置保存失败"
+    },
     "botMenu": {
       "title": "飞书机器人菜单",
       "description": "管理当前 workspace 的飞书机器人菜单及成员定向覆盖。",

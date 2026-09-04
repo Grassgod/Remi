@@ -9,6 +9,7 @@ import {
 } from "@multiremi/session-archive/retry-policy.js";
 import { createLogger } from "@shared/logger.js";
 import { canonicalizeDaemonRoutingWithinTransaction } from "@multiremi/store/daemon-routing.js";
+import { isPostgresConfigured } from "@multiremi/store/db/postgres.js";
 
 const log = createLogger("multiremi-store");
 const SCM_CONNECTION_ORIGIN_MIGRATION = "20260822_scm_connection_origins";
@@ -27,6 +28,7 @@ const DAEMON_PROFILES_MIGRATION = "20260827_daemon_profiles";
 const MARKDOWN_ATTACHMENT_OWNERSHIP_MIGRATION = "20260827_markdown_attachment_ownership";
 const AGENT_ROLE_MIGRATION = "20260827_agent_roles";
 const PROJECT_DEVICE_DAEMON_CANONICALIZATION_MIGRATION = "20260831_project_device_daemon_canonicalization";
+const FEISHU_ISSUE_TOPIC_OUTBOUND_MIGRATION = "20260904_feishu_issue_topic_outbound_nullable";
 
 // Stable Feishu open_id of the deployment owner (hehuajie / 贺华杰). The seed
 // `local` user is tagged with this on migration so SSO login re-binds to it
@@ -2291,7 +2293,7 @@ export function runMigrations(db: SqlDatabase): void {
       task_id TEXT UNIQUE,
       chat_id TEXT NOT NULL,
       thread_id TEXT,
-      reply_to_message_id TEXT NOT NULL,
+      reply_to_message_id TEXT,
       body TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending',
       claim_token TEXT,
@@ -2682,6 +2684,9 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_feishu_bot_chat_bindings", "thread_id TEXT");
   addColumnIfMissing(db, "multiremi_feishu_bot_chat_bindings", "reply_to_message_id TEXT");
   backfillFeishuBotReplyDestinations(db);
+  runMigrationOnce(db, FEISHU_ISSUE_TOPIC_OUTBOUND_MIGRATION, () => {
+    allowNullableFeishuOutboundReplyToMessageId(db);
+  });
   addColumnIfMissing(db, "multiremi_tasks", "projection_from_seq INTEGER");
   addColumnIfMissing(db, "multiremi_tasks", "projection_to_seq INTEGER");
   addColumnIfMissing(db, "multiremi_tasks", "projection_mode TEXT");
@@ -3578,6 +3583,58 @@ function runMigrationOnce(db: SqlDatabase, id: string, migrate: () => void): voi
     if (claimed !== 1) return;
     migrate();
   })();
+}
+
+function allowNullableFeishuOutboundReplyToMessageId(db: SqlDatabase): void {
+  const column = (db.query("PRAGMA table_info(multiremi_feishu_bot_outbound_deliveries)").all() as Array<{
+    name: string;
+    notnull: number;
+  }>).find((entry) => entry.name === "reply_to_message_id");
+  if (!column || Number(column.notnull) === 0) return;
+  if (isPostgresConfigured()) {
+    db.exec("ALTER TABLE multiremi_feishu_bot_outbound_deliveries ALTER COLUMN reply_to_message_id DROP NOT NULL");
+    return;
+  }
+
+  db.exec(`
+    ALTER TABLE multiremi_feishu_bot_outbound_deliveries
+      RENAME TO multiremi_feishu_bot_outbound_deliveries_legacy;
+    CREATE TABLE multiremi_feishu_bot_outbound_deliveries (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      binding_id TEXT NOT NULL,
+      task_id TEXT UNIQUE,
+      chat_id TEXT NOT NULL,
+      thread_id TEXT,
+      reply_to_message_id TEXT,
+      body TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      claim_token TEXT,
+      leased_until TEXT,
+      available_at TEXT NOT NULL,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      external_message_id TEXT,
+      last_error TEXT,
+      sent_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(binding_id) REFERENCES multiremi_feishu_bot_chat_bindings(id) ON DELETE CASCADE,
+      FOREIGN KEY(task_id) REFERENCES multiremi_tasks(id) ON DELETE SET NULL
+    );
+    INSERT INTO multiremi_feishu_bot_outbound_deliveries (
+      id, workspace_id, binding_id, task_id, chat_id, thread_id,
+      reply_to_message_id, body, status, claim_token, leased_until, available_at,
+      attempt_count, external_message_id, last_error, sent_at, created_at, updated_at
+    )
+    SELECT
+      id, workspace_id, binding_id, task_id, chat_id, thread_id,
+      reply_to_message_id, body, status, claim_token, leased_until, available_at,
+      attempt_count, external_message_id, last_error, sent_at, created_at, updated_at
+    FROM multiremi_feishu_bot_outbound_deliveries_legacy;
+    DROP TABLE multiremi_feishu_bot_outbound_deliveries_legacy;
+    CREATE INDEX idx_multiremi_feishu_bot_outbound_pending
+      ON multiremi_feishu_bot_outbound_deliveries(status, available_at, leased_until, created_at);
+  `);
 }
 
 function backfillCanonicalDaemonRouting(db: SqlDatabase): void {

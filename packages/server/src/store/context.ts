@@ -429,6 +429,7 @@ export interface RuntimesSurface {
 export interface FeishuBotSurface {
   disableFeishuBotConfigsReferencingAgent(agentId: string, actor?: string | null): string[];
   disableFeishuBotConfigsReferencingRuntime(runtimeId: string, actor?: string | null): string[];
+  prepareFeishuIssueTopicWithinTransaction(issue: MultiremiIssue): boolean;
   prepareFeishuIssueRoundPushesWithinTransaction(input: {
     issue: MultiremiIssue;
     leaderTask: MultiremiTask;

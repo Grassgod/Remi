@@ -44,6 +44,11 @@ import {
   WorkspaceSshMeshCleanupRequiredError,
 } from "@multiremi/store/repos/workspaces-repo.js";
 import {
+  IssueTopicConfigError,
+  parseIssueTopicConfig,
+  readWorkspaceIssueTopics,
+} from "@multiremi/issue-topics/config.js";
+import {
   SshMeshMutationConflictError,
   SshMeshProbeConflictError,
 } from "@multiremi/store/repos/ssh-mesh-repo.js";
@@ -51,6 +56,7 @@ import type {
   CreateRepositoryWikiDocInput,
   CreateWorkspaceRuntimeProvisionInput,
   CreateWorkspaceInput,
+  IssueTopicConfig,
   MultiremiBotMenuPublishRequest,
   MultiremiRepositoryWikiDoc,
   MultiremiRepositoryWikiDocRevision,
@@ -220,6 +226,56 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     if (!mode) return c.json({ error: "mode must be report_only or act", code: "organizer_mode_invalid" }, 400);
     store.updateWorkspace(workspaceId, { settings: organizerSettings(workspace, mode) });
     return c.json({ workspace_id: workspaceId, mode });
+  });
+  app.get("/api/workspaces/:id/issue-topics", (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const workspace = store.getWorkspace(workspaceId);
+    if (!workspace) return c.json({ error: "workspace not found" }, 404);
+    try {
+      return c.json(issueTopicConfigResponse(workspaceId, readWorkspaceIssueTopics(workspace.settings)));
+    } catch (error) {
+      return issueTopicConfigErrorResponse(c, error);
+    }
+  });
+  app.put("/api/workspaces/:id/issue-topics", async (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId)
+      ?? requireHumanWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    const workspace = store.getWorkspace(workspaceId);
+    if (!workspace) return c.json({ error: "workspace not found" }, 404);
+    const body = await readJsonStrict<{
+      enabled?: unknown;
+      chat_id?: unknown;
+      project_ids?: unknown;
+    }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const fields = Object.keys(body);
+    if (fields.some((key) => key !== "enabled" && key !== "chat_id" && key !== "project_ids")) {
+      return c.json({ error: "only enabled, chat_id, and project_ids are allowed" }, 400);
+    }
+    try {
+      const issueTopics = parseIssueTopicConfig({
+        enabled: body.enabled,
+        chatId: body.chat_id,
+        projectIds: body.project_ids,
+      });
+      for (const projectId of issueTopics.projectIds ?? []) {
+        const project = store.getProject(projectId);
+        if (!project || project.workspaceId !== workspaceId) {
+          throw new IssueTopicConfigError(`project does not belong to this workspace: ${projectId}`);
+        }
+      }
+      const updated = store.updateWorkspace(workspaceId, {
+        settings: { ...workspace.settings, issueTopics },
+      });
+      publishWorkspaceEvent(c, store, "workspace:updated", workspaceId, { workspace: updated });
+      return c.json(issueTopicConfigResponse(workspaceId, issueTopics));
+    } catch (error) {
+      return issueTopicConfigErrorResponse(c, error);
+    }
   });
   app.get("/api/workspaces/:id/bot-menu", (c) => {
     const workspaceId = c.req.param("id");
@@ -1418,6 +1474,25 @@ function botMenuPublishResponse(request: MultiremiBotMenuPublishRequest): Record
     created_at: request.createdAt,
     updated_at: request.updatedAt,
   };
+}
+
+function issueTopicConfigResponse(workspaceId: string, config: IssueTopicConfig): Record<string, unknown> {
+  return {
+    workspace_id: workspaceId,
+    config: {
+      enabled: config.enabled,
+      chat_id: config.chatId,
+      project_ids: config.projectIds ?? null,
+    },
+  };
+}
+
+function issueTopicConfigErrorResponse(c: Context, error: unknown): Response {
+  if (error instanceof IssueTopicConfigError) {
+    return c.json({ error: error.message, code: error.code }, 400);
+  }
+  const message = error instanceof Error ? error.message : "issue topic configuration failed";
+  return c.json({ error: message }, 400);
 }
 
 function botMenuError(c: Context, error: unknown): Response {

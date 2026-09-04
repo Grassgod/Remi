@@ -906,6 +906,23 @@
       "scan_error_generic": "Could not create the bot.",
       "scan_retry": "Try again"
     },
+    "issueTopics": {
+      "title": "Issue topics",
+      "description": "Create one Feishu group topic for each new Issue and keep later work updates and replies in that thread.",
+      "enabled": "Create topics for new Issues",
+      "enabled_hint": "Only new Issues are synchronized. Issues created from an existing Feishu conversation keep that conversation instead.",
+      "chat_id": "Feishu group chat ID",
+      "chat_id_hint": "Messages are posted as new topic roots in this group.",
+      "project_filter": "Only selected projects",
+      "project_filter_hint": "Leave off to include all projects and projectless Issues.",
+      "no_projects": "No active projects",
+      "project_required": "Select at least one project.",
+      "read_only": "Only workspace owners and admins can change Issue topic synchronization.",
+      "save": "Save",
+      "saving": "Saving…",
+      "toast_saved": "Issue topic settings saved",
+      "toast_save_failed": "Could not save Issue topic settings"
+    },
     "botMenu": {
       "title": "Feishu bot menu",
       "description": "Manage the workspace menu shown by the co-resident Feishu bot.",

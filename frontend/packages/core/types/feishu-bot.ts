@@ -38,6 +38,24 @@ export type FeishuBotErrorCode =
  *  or the domain can never wipe a credential the admin did not retype. */
 export type FeishuBotSecretOp = "keep" | "set" | "clear" | "registration";
 
+export interface IssueTopicConfig {
+  enabled: boolean;
+  chat_id: string;
+  /** Null means every project, including projectless Issues. */
+  project_ids: string[] | null;
+}
+
+export interface IssueTopicConfigResponse {
+  workspace_id: string;
+  config: IssueTopicConfig;
+}
+
+export interface UpdateIssueTopicConfigRequest {
+  enabled: boolean;
+  chat_id: string;
+  project_ids: string[] | null;
+}
+
 export interface FeishuBotConfig {
   configured: boolean;
   workspace_id: string;
