@@ -69,6 +69,16 @@ const log = createLogger("multiremi-store");
 
 type Row = Record<string, unknown>;
 
+export interface IssueMutationActivityContext {
+  actorType?: string;
+  actorId?: string | null;
+  sourceTaskId?: string | null;
+}
+
+function sourceTaskActivityData(sourceTaskId: string | null | undefined): Record<string, string> {
+  return sourceTaskId ? { sourceTaskId, source_task_id: sourceTaskId } : {};
+}
+
 const ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "done", "blocked", "cancelled"] as const;
 const CLOSED_ISSUE_STATUSES = new Set(["done", "completed", "closed", "cancelled", "failed"]);
 const SYSTEM_AUTHOR_ID = "00000000-0000-0000-0000-000000000000";
@@ -780,7 +790,11 @@ export class IssuesRepo {
     return rows.map((row) => this.hydrateIssueDependency(toIssueDependency(row)));
   }
 
-  createIssueDependency(issueId: string, input: CreateIssueDependencyInput): MultiremiIssueDependency {
+  createIssueDependency(
+    issueId: string,
+    input: CreateIssueDependencyInput,
+    activity: IssueMutationActivityContext = {},
+  ): MultiremiIssueDependency {
     const issue = this.getIssue(issueId);
     if (!issue) throw new Error(`Issue not found: ${issueId}`);
     const dependsOnIssueId = input.dependsOnIssueId ?? input.depends_on_issue_id ?? "";
@@ -803,11 +817,16 @@ export class IssuesRepo {
       [id, issue.workspaceId, issue.id, dependsOnIssue.id, type, now],
     );
     this.ctx.appendIssueActivity(issue.id, {
-      actorType: "system",
-      actorId: null,
+      actorType: activity.actorType ?? "system",
+      actorId: activity.actorId ?? null,
       type: "issue_dependency_added",
       body: `${type} ${dependsOnIssue.key}`,
-      data: { dependencyId: id, dependsOnIssueId: dependsOnIssue.id, type },
+      data: {
+        dependencyId: id,
+        dependsOnIssueId: dependsOnIssue.id,
+        type,
+        ...sourceTaskActivityData(activity.sourceTaskId),
+      },
     });
     return this.getIssueDependency(id)!;
   }
@@ -817,7 +836,11 @@ export class IssuesRepo {
     return row ? this.hydrateIssueDependency(toIssueDependency(row)) : null;
   }
 
-  deleteIssueDependency(issueId: string, dependencyId: string): void {
+  deleteIssueDependency(
+    issueId: string,
+    dependencyId: string,
+    activity: IssueMutationActivityContext = {},
+  ): void {
     const dependency = this.getIssueDependency(dependencyId);
     if (!dependency) return;
     if (dependency.issueId !== issueId && dependency.dependsOnIssueId !== issueId) {
@@ -825,11 +848,17 @@ export class IssuesRepo {
     }
     this.ctx.db.run("DELETE FROM multiremi_issue_dependencies WHERE id = ?", [dependencyId]);
     this.ctx.appendIssueActivity(issueId, {
-      actorType: "system",
-      actorId: null,
+      actorType: activity.actorType ?? "system",
+      actorId: activity.actorId ?? null,
       type: "issue_dependency_removed",
       body: dependency.type,
-      data: { dependencyId, issueId: dependency.issueId, dependsOnIssueId: dependency.dependsOnIssueId, type: dependency.type },
+      data: {
+        dependencyId,
+        issueId: dependency.issueId,
+        dependsOnIssueId: dependency.dependsOnIssueId,
+        type: dependency.type,
+        ...sourceTaskActivityData(activity.sourceTaskId),
+      },
     });
   }
 
@@ -1092,6 +1121,8 @@ export class IssuesRepo {
       type: "task_failure",
       taskId,
       task_id: taskId,
+      sourceTaskId: taskId,
+      source_task_id: taskId,
     }, taskId, issueSessionId);
   }
 
@@ -1278,7 +1309,10 @@ export class IssuesRepo {
         actorId,
         type: "issue_unassigned",
         body: null,
-        data: { cancelled },
+        data: {
+          cancelled,
+          ...sourceTaskActivityData(input.parentTaskId ?? input.parent_task_id),
+        },
       });
       return { issue: this.getIssue(id)!, task: null };
     }
@@ -1347,6 +1381,7 @@ export class IssuesRepo {
         to_id: assigneeId,
         taskId: task?.id ?? null,
         task_id: task?.id ?? null,
+        ...sourceTaskActivityData(input.parentTaskId ?? input.parent_task_id),
         cancelled,
       },
     });
@@ -2067,7 +2102,11 @@ export class IssuesRepo {
     return rows.map(toLabel);
   }
 
-  attachLabelToIssue(issueId: string, labelId: string): MultiremiLabel[] {
+  attachLabelToIssue(
+    issueId: string,
+    labelId: string,
+    activity: IssueMutationActivityContext = {},
+  ): MultiremiLabel[] {
     const issueRow = this.ctx.db.query("SELECT * FROM multiremi_issues WHERE id = ?").get(issueId) as Row | null;
     if (!issueRow) throw new Error(`Issue not found: ${issueId}`);
     const issue = toIssue(issueRow);
@@ -2085,16 +2124,20 @@ export class IssuesRepo {
     const now = nowIso();
     this.ctx.db.run("UPDATE multiremi_issues SET updated_at = ? WHERE id = ?", [now, issueId]);
     this.ctx.appendIssueActivity(issueId, {
-      actorType: "system",
-      actorId: null,
+      actorType: activity.actorType ?? "system",
+      actorId: activity.actorId ?? null,
       type: "label_attached",
       body: label.name,
-      data: { labelId, color: label.color },
+      data: { labelId, color: label.color, ...sourceTaskActivityData(activity.sourceTaskId) },
     });
     return this.listLabelsForIssue(issueId);
   }
 
-  detachLabelFromIssue(issueId: string, labelId: string): MultiremiLabel[] {
+  detachLabelFromIssue(
+    issueId: string,
+    labelId: string,
+    activity: IssueMutationActivityContext = {},
+  ): MultiremiLabel[] {
     const issueRow = this.ctx.db.query("SELECT * FROM multiremi_issues WHERE id = ?").get(issueId) as Row | null;
     if (!issueRow) throw new Error(`Issue not found: ${issueId}`);
     const issue = toIssue(issueRow);
@@ -2109,11 +2152,11 @@ export class IssuesRepo {
     const now = nowIso();
     this.ctx.db.run("UPDATE multiremi_issues SET updated_at = ? WHERE id = ?", [now, issueId]);
     this.ctx.appendIssueActivity(issueId, {
-      actorType: "system",
-      actorId: null,
+      actorType: activity.actorType ?? "system",
+      actorId: activity.actorId ?? null,
       type: "label_detached",
       body: label.name,
-      data: { labelId, color: label.color },
+      data: { labelId, color: label.color, ...sourceTaskActivityData(activity.sourceTaskId) },
     });
     return this.listLabelsForIssue(issueId);
   }
@@ -2420,7 +2463,12 @@ export class IssuesRepo {
     return issue.metadata;
   }
 
-  setIssueMetadataKey(issueId: string, key: string, value: unknown): Record<string, string | number | boolean> {
+  setIssueMetadataKey(
+    issueId: string,
+    key: string,
+    value: unknown,
+    activity: IssueMutationActivityContext = {},
+  ): Record<string, string | number | boolean> {
     validateIssueMetadataKey(key);
     validatePublicIssueMetadataKey(key);
     const normalized = validateIssueMetadataValue(value);
@@ -2440,11 +2488,11 @@ export class IssuesRepo {
       [toJson(metadata), now, issueId],
     );
     this.ctx.appendIssueActivity(issueId, {
-      actorType: "system",
-      actorId: null,
+      actorType: activity.actorType ?? "system",
+      actorId: activity.actorId ?? null,
       type: "issue_metadata_set",
       body: `${key}=${String(normalized)}`,
-      data: { key, value: normalized },
+      data: { key, value: normalized, ...sourceTaskActivityData(activity.sourceTaskId) },
     });
     return this.listIssueMetadata(issueId);
   }
@@ -2487,7 +2535,11 @@ export class IssuesRepo {
     this.ctx.appendIssueActivity(issueId, input);
   }
 
-  deleteIssueMetadataKey(issueId: string, key: string): Record<string, string | number | boolean> {
+  deleteIssueMetadataKey(
+    issueId: string,
+    key: string,
+    activity: IssueMutationActivityContext = {},
+  ): Record<string, string | number | boolean> {
     validateIssueMetadataKey(key);
     validatePublicIssueMetadataKey(key);
     const issue = this.getIssue(issueId);
@@ -2501,11 +2553,11 @@ export class IssuesRepo {
       [toJson(metadata), now, issueId],
     );
     this.ctx.appendIssueActivity(issueId, {
-      actorType: "system",
-      actorId: null,
+      actorType: activity.actorType ?? "system",
+      actorId: activity.actorId ?? null,
       type: "issue_metadata_deleted",
       body: key,
-      data: { key },
+      data: { key, ...sourceTaskActivityData(activity.sourceTaskId) },
     });
     return this.listIssueMetadata(issueId);
   }

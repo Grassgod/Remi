@@ -13,6 +13,11 @@ import {
   type UpdateNotificationChannelInput,
 } from "@multiremi/store/repos/notification-channels-repo.js";
 import {
+  AgentIssueUpdatesRepo,
+  type AgentIssueUpdateFlushResult,
+  type QueueAgentIssueUpdateInput,
+} from "@multiremi/store/repos/agent-issue-updates-repo.js";
+import {
   OutboundNotificationDispatcher,
   type NotificationSenderRegistry,
 } from "@multiremi/notifications/outbound-dispatcher.js";
@@ -75,6 +80,7 @@ import { ChatRepo } from "@multiremi/store/repos/chat-repo.js";
 import {
   IssuesRepo,
   type BeginIssueDeletionResult,
+  type IssueMutationActivityContext,
 } from "@multiremi/store/repos/issues-repo.js";
 import { IssueWorkspacesRepo } from "@multiremi/store/repos/issue-workspaces-repo.js";
 import {
@@ -256,6 +262,7 @@ import type {
   MultiremiNotificationChannel,
   MultiremiNotificationDelivery,
   MultiremiNotificationDeliveryStatus,
+  MultiremiAgentIssueUpdateSubscription,
   MultiremiOrganizerAction,
   MultiremiOrganizerActionKind,
   MultiremiPinnedItem,
@@ -426,6 +433,7 @@ export class MultiremiStore {
   private issueShares: IssueSharesRepo;
   private notificationChannels: NotificationChannelsRepo;
   private notificationDispatcher: OutboundNotificationDispatcher;
+  private agentIssueUpdates: AgentIssueUpdatesRepo;
   private cloudNodes: CloudRuntimeNodesRepo;
   private platformOperations: PlatformOperationsRepo;
   private platformMaintenance: PlatformMaintenanceRepo;
@@ -478,6 +486,7 @@ export class MultiremiStore {
     notificationSweepIntervalMs?: number;
     notificationLeaseMs?: number;
     notificationSendTimeoutMs?: number;
+    agentIssueUpdateDebounceMs?: number;
     publicUrl?: string | null;
   } = {}) {
     this.db = db ?? openMultiremiDatabase();
@@ -518,6 +527,9 @@ export class MultiremiStore {
     this.knowledge = new KnowledgeRepo(this.ctx);
     this.sessions = new IssueSessionsRepo(this.ctx);
     this.chat = new ChatRepo(this.ctx);
+    this.agentIssueUpdates = new AgentIssueUpdatesRepo(this.ctx, {
+      debounceMs: options.agentIssueUpdateDebounceMs,
+    });
     this.issues = new IssuesRepo(this.ctx);
     this.issueWorkspaces = new IssueWorkspacesRepo(this.ctx);
     this.sessionArchives = new SessionArchivesRepo(this.ctx);
@@ -1372,6 +1384,46 @@ runMigrations(this.db);
 
   getNotificationChannel(id: string): MultiremiNotificationChannel | null {
     return this.notificationChannels.getChannel(id);
+  }
+
+  getAgentChatNotificationChannel(chatSessionId: string): MultiremiNotificationChannel | null {
+    return this.notificationChannels.getAgentChatChannel(chatSessionId);
+  }
+
+  upsertAgentChatNotificationChannel(input: {
+    workspaceId: string;
+    chatSessionId: string;
+    name: string;
+    enabled: boolean;
+    memberId?: string | null;
+    createdBy?: string | null;
+  }): MultiremiNotificationChannel {
+    return this.notificationChannels.upsertAgentChatChannel(input);
+  }
+
+  deleteAgentChatNotificationChannel(chatSessionId: string): boolean {
+    return this.notificationChannels.deleteAgentChatChannel(chatSessionId);
+  }
+
+  getAgentIssueUpdateSubscription(chatSessionId: string): MultiremiAgentIssueUpdateSubscription {
+    return this.agentIssueUpdates.getSubscription(chatSessionId);
+  }
+
+  setAgentIssueUpdateSubscription(input: {
+    chatSessionId: string;
+    enabled: boolean;
+    memberId?: string | null;
+    createdBy?: string | null;
+  }): MultiremiAgentIssueUpdateSubscription {
+    return this.agentIssueUpdates.setSubscription(input);
+  }
+
+  queueAgentIssueUpdate(input: QueueAgentIssueUpdateInput): void {
+    return this.agentIssueUpdates.queue(input);
+  }
+
+  flushDueAgentIssueUpdates(now?: string | Date): AgentIssueUpdateFlushResult {
+    return this.agentIssueUpdates.flushDue(now);
   }
 
   listNotificationChannels(workspaceId: string): MultiremiNotificationChannel[] {
@@ -2860,16 +2912,24 @@ runMigrations(this.db);
     return this.issues.listIssueDependencies(issueId);
   }
 
-  createIssueDependency(issueId: string, input: CreateIssueDependencyInput): MultiremiIssueDependency {
-    return this.issues.createIssueDependency(issueId, input);
+  createIssueDependency(
+    issueId: string,
+    input: CreateIssueDependencyInput,
+    activity?: IssueMutationActivityContext,
+  ): MultiremiIssueDependency {
+    return this.issues.createIssueDependency(issueId, input, activity);
   }
 
   getIssueDependency(id: string): MultiremiIssueDependency | null {
     return this.issues.getIssueDependency(id);
   }
 
-  deleteIssueDependency(issueId: string, dependencyId: string): void {
-    return this.issues.deleteIssueDependency(issueId, dependencyId);
+  deleteIssueDependency(
+    issueId: string,
+    dependencyId: string,
+    activity?: IssueMutationActivityContext,
+  ): void {
+    return this.issues.deleteIssueDependency(issueId, dependencyId, activity);
   }
 
   updateIssue(id: string, input: UpdateIssueInput): MultiremiIssue {
@@ -3020,12 +3080,20 @@ runMigrations(this.db);
     return this.issues.listLabelsForIssue(issueId);
   }
 
-  attachLabelToIssue(issueId: string, labelId: string): MultiremiLabel[] {
-    return this.issues.attachLabelToIssue(issueId, labelId);
+  attachLabelToIssue(
+    issueId: string,
+    labelId: string,
+    activity?: IssueMutationActivityContext,
+  ): MultiremiLabel[] {
+    return this.issues.attachLabelToIssue(issueId, labelId, activity);
   }
 
-  detachLabelFromIssue(issueId: string, labelId: string): MultiremiLabel[] {
-    return this.issues.detachLabelFromIssue(issueId, labelId);
+  detachLabelFromIssue(
+    issueId: string,
+    labelId: string,
+    activity?: IssueMutationActivityContext,
+  ): MultiremiLabel[] {
+    return this.issues.detachLabelFromIssue(issueId, labelId, activity);
   }
 
   listInboxItems(memberId?: string | null): MultiremiInboxItem[] {
@@ -3116,12 +3184,21 @@ runMigrations(this.db);
     return this.issues.listIssueMetadata(issueId);
   }
 
-  setIssueMetadataKey(issueId: string, key: string, value: unknown): MultiremiIssue["metadata"] {
-    return this.issues.setIssueMetadataKey(issueId, key, value);
+  setIssueMetadataKey(
+    issueId: string,
+    key: string,
+    value: unknown,
+    activity?: IssueMutationActivityContext,
+  ): MultiremiIssue["metadata"] {
+    return this.issues.setIssueMetadataKey(issueId, key, value, activity);
   }
 
-  deleteIssueMetadataKey(issueId: string, key: string): MultiremiIssue["metadata"] {
-    return this.issues.deleteIssueMetadataKey(issueId, key);
+  deleteIssueMetadataKey(
+    issueId: string,
+    key: string,
+    activity?: IssueMutationActivityContext,
+  ): MultiremiIssue["metadata"] {
+    return this.issues.deleteIssueMetadataKey(issueId, key, activity);
   }
 
   setIssueAutoTitleMetadata(
@@ -3858,6 +3935,28 @@ runMigrations(this.db);
 
   sendChatMessage(chatSessionId: string, input: SendChatMessageInput): SendChatMessageResult {
     return this.chat.sendChatMessage(chatSessionId, input);
+  }
+
+  createPendingAgentIssueUpdateWithinTransaction(chatSessionId: string, body: string): {
+    session: MultiremiChatSession;
+    message: MultiremiChatMessage;
+  } {
+    return this.chat.createPendingAgentIssueUpdateWithinTransaction(chatSessionId, body);
+  }
+
+  preparePendingAgentIssueUpdatesForTask(chatSessionId: string, taskId: string): {
+    messages: MultiremiChatMessage[];
+    omittedCount: number;
+  } {
+    return this.chat.preparePendingAgentIssueUpdatesForTask(chatSessionId, taskId);
+  }
+
+  completePendingAgentIssueUpdatesForTaskWithinTransaction(chatSessionId: string, taskId: string): number {
+    return this.chat.completePendingAgentIssueUpdatesForTaskWithinTransaction(chatSessionId, taskId);
+  }
+
+  discardPendingAgentIssueUpdatesWithinTransaction(chatSessionId: string): number {
+    return this.chat.discardPendingAgentIssueUpdatesWithinTransaction(chatSessionId);
   }
 
   getChatMessage(id: string): MultiremiChatMessage | null {

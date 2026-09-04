@@ -47,6 +47,7 @@ describe("store migrations", () => {
       "multiremi_inbox_items",
       "multiremi_notification_channels",
       "multiremi_notification_deliveries",
+      "multiremi_agent_issue_update_state",
       "multiremi_tasks",
       "multiremi_task_messages",
       "multiremi_workspaces",
@@ -1331,7 +1332,7 @@ describe("store migrations", () => {
     expect(row?.name).toBe("Keep me");
   });
 
-  it("adds the Chat Issue binding to an existing schema and clears it when the Issue is deleted", () => {
+  it("enables bound Chat updates on upgrade and removes legacy delivery limits", () => {
     const database = freshDb();
     database.exec(`
       CREATE TABLE multiremi_chat_sessions (
@@ -1352,6 +1353,13 @@ describe("store migrations", () => {
     migrate(database);
     migrate(database);
     expect(columnNames(database, "multiremi_chat_sessions")).toContain("issue_id");
+    expect(columnNames(database, "multiremi_chat_messages")).toEqual(expect.arrayContaining([
+      "pending_agent_delivery",
+      "agent_delivery_task_id",
+    ]));
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_notification_channels WHERE kind = 'agent_chat'",
+    ).get()).toEqual({ count: 0 });
 
     const now = "2026-09-03T00:00:00.000Z";
     database.run(
@@ -1368,6 +1376,33 @@ describe("store migrations", () => {
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       ["chat_issue", "local", "agt_chat_issue", "iss_chat_issue", "Bound", "active", now, now],
     );
+    database.exec(`
+      ALTER TABLE multiremi_agent_issue_update_state ADD COLUMN window_started_at TEXT;
+      ALTER TABLE multiremi_agent_issue_update_state ADD COLUMN deliveries_in_window INTEGER NOT NULL DEFAULT 0;
+    `);
+
+    migrate(database);
+
+    expect(database.query(
+      `SELECT enabled, target
+       FROM multiremi_notification_channels
+       WHERE kind = 'agent_chat' AND id = ?`,
+    ).get("nch_agent_chat_chat_issue")).toEqual({
+      enabled: 1,
+      target: '{"chatId":"chat_issue"}',
+    });
+    expect(columnNames(database, "multiremi_agent_issue_update_state")).not.toEqual(expect.arrayContaining([
+      "window_started_at",
+      "deliveries_in_window",
+    ]));
+    database.run(
+      "UPDATE multiremi_notification_channels SET enabled = 0 WHERE id = ?",
+      ["nch_agent_chat_chat_issue"],
+    );
+    migrate(database);
+    expect(database.query(
+      "SELECT enabled FROM multiremi_notification_channels WHERE id = ?",
+    ).get("nch_agent_chat_chat_issue")).toEqual({ enabled: 0 });
 
     database.exec("PRAGMA foreign_keys = ON");
     database.run("DELETE FROM multiremi_issues WHERE id = ?", ["iss_chat_issue"]);

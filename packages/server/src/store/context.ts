@@ -252,6 +252,16 @@ export interface WorkspacesSurface {
 }
 
 export interface NotificationChannelsSurface {
+  getAgentChatNotificationChannel(chatSessionId: string): MultiremiNotificationChannel | null;
+  upsertAgentChatNotificationChannel(input: {
+    workspaceId: string;
+    chatSessionId: string;
+    name: string;
+    enabled: boolean;
+    memberId?: string | null;
+    createdBy?: string | null;
+  }): MultiremiNotificationChannel;
+  deleteAgentChatNotificationChannel(chatSessionId: string): boolean;
   matchNotificationRoutes(
     workspaceId: string,
     memberId: string,
@@ -263,6 +273,16 @@ export interface NotificationChannelsSurface {
     channel: MultiremiNotificationChannel,
   ): MultiremiNotificationDelivery;
   dispatchNotificationDelivery(id: string): Promise<void>;
+  queueAgentIssueUpdate(input: {
+    activityId: string;
+    issueId: string;
+    actorType: string;
+    actorId?: string | null;
+    type: string;
+    body?: string | null;
+    data?: unknown | null;
+    createdAt: string;
+  }): void;
 }
 
 export interface SquadsSurface {
@@ -330,6 +350,16 @@ export interface ChatSurface {
   getChatSession(id: string): MultiremiChatSession | null;
   getChatMessage(id: string): MultiremiChatMessage | null;
   getPendingChatTask(chatSessionId: string): MultiremiTask | null;
+  createPendingAgentIssueUpdateWithinTransaction(chatSessionId: string, body: string): {
+    session: MultiremiChatSession;
+    message: MultiremiChatMessage;
+  };
+  preparePendingAgentIssueUpdatesForTask(chatSessionId: string, taskId: string): {
+    messages: MultiremiChatMessage[];
+    omittedCount: number;
+  };
+  completePendingAgentIssueUpdatesForTaskWithinTransaction(chatSessionId: string, taskId: string): number;
+  discardPendingAgentIssueUpdatesWithinTransaction(chatSessionId: string): number;
 }
 
 export interface IssueSessionsSurface {
@@ -488,6 +518,10 @@ export class StoreContext {
   }
 
   workspaces(): WorkspacesSurface {
+    return this.resolveHost();
+  }
+
+  notificationChannels(): NotificationChannelsSurface {
     return this.resolveHost();
   }
 
@@ -706,6 +740,20 @@ export class StoreContext {
         now,
       ],
     );
+    try {
+      this.host.queueAgentIssueUpdate({
+        activityId: id,
+        issueId,
+        actorType: input.actorType,
+        actorId: input.actorId ?? null,
+        type: input.type,
+        body: input.body ?? null,
+        data: input.data ?? null,
+        createdAt: now,
+      });
+    } catch (err) {
+      log.warn(`agent issue update queue skipped for ${issueId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
     // Browsers listen for activity:created to append the timeline row live.
     // Emitting here (not in the HTTP layer) covers agent/daemon-driven writes,
     // which never pass through an HTTP mutation. `entry` mirrors the activity

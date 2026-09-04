@@ -3991,6 +3991,64 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "chat.issue.updates": {
+      "command": "remi chat.issue.updates",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "chat.issue.updates.get": {
+      "command": "remi chat issue updates get",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "chat.issue.updates.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "chat.issue.updates.enable": {
+      "command": "remi chat issue updates enable",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "chat.issue.updates.enable",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "chat.issue.updates.disable": {
+      "command": "remi chat issue updates disable",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "chat.issue.updates.disable",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "chat.delete": {
       "command": "remi chat delete",
       "aliases": [],
@@ -9319,6 +9377,9 @@
     "GET /api/chat/sessions/:sessionId": {
       "command": "chat.get"
     },
+    "GET /api/chat/sessions/:sessionId/issue-updates": {
+      "command": "chat.issue.updates.get"
+    },
     "GET /api/chat/sessions/:sessionId/messages": {
       "command": "chat.message.list"
     },
@@ -11245,6 +11306,9 @@
     },
     "PUT /api/autopilots/:id/triggers/:triggerId/signing-secret": {
       "command": "autopilot.trigger.set-secret"
+    },
+    "PUT /api/chat/sessions/:sessionId/issue-updates": {
+      "command": "chat.issue.updates.enable"
     },
     "PUT /api/comments/:id": {
       "command": "comment.update"

@@ -155,6 +155,7 @@
     "GET /api/chat/pending-tasks",
     "GET /api/chat/sessions",
     "GET /api/chat/sessions/:sessionId",
+    "GET /api/chat/sessions/:sessionId/issue-updates",
     "GET /api/chat/sessions/:sessionId/messages",
     "GET /api/chat/sessions/:sessionId/messages/page",
     "GET /api/chat/sessions/:sessionId/pending-task",
@@ -742,6 +743,7 @@
     "PUT /api/agents/:id/skills",
     "PUT /api/agents/:id/supervisor",
     "PUT /api/autopilots/:id/triggers/:triggerId/signing-secret",
+    "PUT /api/chat/sessions/:sessionId/issue-updates",
     "PUT /api/comments/:id",
     "PUT /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
     "PUT /api/daemon/runtimes/:runtimeId/models",
@@ -859,6 +861,7 @@
     "GET /api/chat/pending-tasks",
     "GET /api/chat/sessions",
     "GET /api/chat/sessions/:sessionId",
+    "GET /api/chat/sessions/:sessionId/issue-updates",
     "GET /api/chat/sessions/:sessionId/messages",
     "GET /api/chat/sessions/:sessionId/messages/page",
     "GET /api/chat/sessions/:sessionId/pending-task",
@@ -7261,6 +7264,21 @@
       }
     },
     {
+      "key": "get-sweep GET /api/chat/sessions/:sessionId/issue-updates",
+      "route": "GET /api/chat/sessions/:sessionId/issue-updates",
+      "path": "/api/chat/sessions/cht_snapshot/issue-updates",
+      "status": 200,
+      "body": {
+        "subscription": {
+          "chat_session_id": "cht_snapshot",
+          "issue_id": null,
+          "channel_id": null,
+          "enabled": false,
+          "debounce_window_seconds": 30
+        }
+      }
+    },
+    {
       "key": "get-sweep GET /api/chat/sessions/:sessionId/messages",
       "route": "GET /api/chat/sessions/:sessionId/messages",
       "path": "/api/chat/sessions/cht_snapshot/messages",
@@ -7921,6 +7939,39 @@
             "id": "chat.issue.unbind",
             "command": "remi chat issue unbind",
             "capability": "chat.issue.unbind",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "chat.issue.updates.disable",
+            "command": "remi chat issue updates disable",
+            "capability": "chat.issue.updates.disable",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "chat.issue.updates.enable",
+            "command": "remi chat issue updates enable",
+            "capability": "chat.issue.updates.enable",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "chat.issue.updates.get",
+            "command": "remi chat issue updates get",
+            "capability": "chat.issue.updates.get",
             "outputs": [
               "table",
               "json",

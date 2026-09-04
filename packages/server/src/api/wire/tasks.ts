@@ -480,6 +480,7 @@ function appendDaemonClaimExecutionContext(
 ): void {
   appendDaemonClaimWorkspaceContext(store, task, response);
   appendDaemonClaimChatContext(store, task, response);
+  appendDaemonClaimBoundIssueUpdates(store, task, response);
   appendDaemonClaimAutopilotContext(store, task, response);
 
   const quickCreatePrompt = daemonQuickCreatePrompt(task);
@@ -518,6 +519,28 @@ function appendDaemonClaimChatContext(store: MultiremiStore, task: MultiremiTask
     if (chatMessage) response.chat_message = chatMessage;
   } catch (error) {
     log.debug(`Failed to load chat context for claimed task ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function appendDaemonClaimBoundIssueUpdates(
+  store: MultiremiStore,
+  task: MultiremiTaskWithAgent,
+  response: Record<string, unknown>,
+): void {
+  if (!task.chatSessionId) return;
+  try {
+    const pending = store.preparePendingAgentIssueUpdatesForTask(task.chatSessionId, task.id);
+    if (pending.messages.length) {
+      response.bound_issue_updates = pending.messages.map((message) => message.body);
+    }
+    if (pending.omittedCount > 0) {
+      response.bound_issue_updates_omitted_count = pending.omittedCount;
+    }
+  } catch (error) {
+    log.debug(
+      `Failed to load bound Issue updates for claimed task ${task.id}: `
+      + `${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 }
 

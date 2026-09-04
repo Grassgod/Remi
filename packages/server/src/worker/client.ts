@@ -1218,6 +1218,15 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
     priorWorkDir: stringOrNull(raw.prior_work_dir ?? raw.priorWorkDir ?? raw.work_dir ?? raw.workDir),
     authToken: stringOrNull(raw.auth_token ?? raw.authToken),
     chatMessage: stringOrNull(raw.chat_message ?? raw.chatMessage),
+    boundIssueUpdates: Array.isArray(raw.bound_issue_updates)
+      ? raw.bound_issue_updates.filter((value: unknown): value is string => typeof value === "string")
+      : Array.isArray(raw.boundIssueUpdates)
+        ? raw.boundIssueUpdates.filter((value: unknown): value is string => typeof value === "string")
+        : [],
+    boundIssueUpdatesOmittedCount: numberOrDefault(
+      raw.bound_issue_updates_omitted_count ?? raw.boundIssueUpdatesOmittedCount,
+      0,
+    ),
     chatBootstrapTranscript: stringOrNull(raw.chat_bootstrap_transcript ?? raw.chatBootstrapTranscript),
     chatMessageAttachments: Array.isArray(raw.chat_message_attachments)
       ? raw.chat_message_attachments

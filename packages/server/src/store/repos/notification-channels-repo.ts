@@ -149,9 +149,85 @@ export class NotificationChannelsRepo {
     return this.getChannel(id)!;
   }
 
+  getAgentChatChannel(chatSessionId: string): MultiremiNotificationChannel | null {
+    const target = toJson({ chatId: requiredString(chatSessionId, "chatSessionId") });
+    const row = this.ctx.db.query(
+      `SELECT * FROM multiremi_notification_channels
+       WHERE kind = 'agent_chat' AND target = ?
+       ORDER BY created_at ASC, id ASC LIMIT 1`,
+    ).get(target) as Row | null;
+    return row ? toNotificationChannel(row) : null;
+  }
+
+  upsertAgentChatChannel(input: {
+    workspaceId: string;
+    chatSessionId: string;
+    name: string;
+    enabled: boolean;
+    memberId?: string | null;
+    createdBy?: string | null;
+  }): MultiremiNotificationChannel {
+    const workspaceId = requiredString(input.workspaceId, "workspaceId");
+    const chatSessionId = requiredString(input.chatSessionId, "chatSessionId");
+    const existing = this.getAgentChatChannel(chatSessionId);
+    const now = nowIso();
+    if (existing) {
+      if (existing.workspaceId !== workspaceId) {
+        throw new NotificationChannelValidationError("agent chat channel belongs to another workspace");
+      }
+      this.ctx.db.run(
+        `UPDATE multiremi_notification_channels
+         SET name = ?, enabled = ?, member_id = ?, updated_at = ?
+         WHERE id = ?`,
+        [
+          requiredString(input.name, "name"),
+          input.enabled ? 1 : 0,
+          ownerMemberId(input.memberId),
+          now,
+          existing.id,
+        ],
+      );
+      return this.getChannel(existing.id)!;
+    }
+    const id = `nch_agent_chat_${chatSessionId}`;
+    this.ctx.db.run(
+      `INSERT INTO multiremi_notification_channels (
+        id, workspace_id, member_id, kind, name, enabled, target, event_types, min_severity,
+        created_by, created_at, updated_at
+      ) VALUES (?, ?, ?, 'agent_chat', ?, ?, ?, '["*"]', 'info', ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        member_id = excluded.member_id,
+        name = excluded.name,
+        enabled = excluded.enabled,
+        updated_at = excluded.updated_at`,
+      [
+        id,
+        workspaceId,
+        ownerMemberId(input.memberId),
+        requiredString(input.name, "name"),
+        input.enabled ? 1 : 0,
+        toJson({ chatId: chatSessionId }),
+        nullableString(input.createdBy),
+        now,
+        now,
+      ],
+    );
+    return this.getChannel(id)!;
+  }
+
+  deleteAgentChatChannel(chatSessionId: string): boolean {
+    const channel = this.getAgentChatChannel(chatSessionId);
+    return channel ? this.deleteChannel(channel.id) : false;
+  }
+
   updateChannel(id: string, input: UpdateNotificationChannelInput): MultiremiNotificationChannel | null {
     const current = this.getChannel(id);
     if (!current) return null;
+    if (current.kind === "agent_chat") {
+      throw new NotificationChannelValidationError(
+        "agent_chat channels must be managed through the Chat Issue updates API",
+      );
+    }
     const fields: string[] = [];
     const values: unknown[] = [];
     if (input.name !== undefined) {

@@ -23,6 +23,17 @@ type Row = Record<string, unknown>;
 const log = createLogger("multiremi-store");
 
 export const CHAT_BOOTSTRAP_MAX_MESSAGES = 64;
+export const AGENT_ISSUE_UPDATE_PROMPT_LIMIT = 12;
+
+export interface PendingAgentIssueUpdateWriteResult {
+  session: MultiremiChatSession;
+  message: MultiremiChatMessage;
+}
+
+export interface PendingAgentIssueUpdateBatch {
+  messages: MultiremiChatMessage[];
+  omittedCount: number;
+}
 export const CHAT_BOOTSTRAP_MAX_BYTES = 64 * 1024;
 export const CHAT_BOOTSTRAP_OMITTED_NOTICE = "[Earlier product chat history omitted.]";
 const CHAT_BOOTSTRAP_TRUNCATED_NOTICE = "[Message truncated.]";
@@ -123,7 +134,9 @@ export class ChatRepo {
       ) VALUES (?, ?, ?, ?, ?, ?, 'active', NULL, NULL, NULL, ?, ?)`,
       [id, workspaceId, input.creatorId ?? input.creator_id ?? "local", agentId, issue?.id ?? null, title, now, now],
     );
-    return this.getChatSession(id)!;
+    const session = this.getChatSession(id)!;
+    if (session.issueId) this.ensureDefaultAgentIssueUpdatesChannel(session);
+    return session;
   }
 
   listChatSessions(workspaceId?: string | null, options: { creatorId?: string | null; includeArchived?: boolean } = {}): MultiremiChatSession[] {
@@ -161,6 +174,10 @@ export class ChatRepo {
     if (requestedIssueId && !issue) throw new Error(`Issue not found: ${requestedIssueId}`);
     if (issue && issue.workspaceId !== current.workspaceId) throw new Error("Issue belongs to another workspace");
     const now = nowIso();
+    if (issueFieldProvided && requestedIssueId !== current.issueId) {
+      this.ctx.db.run("DELETE FROM multiremi_agent_issue_update_state WHERE chat_session_id = ?", [id]);
+      this.discardPendingAgentIssueUpdatesWithinTransaction(id);
+    }
     this.ctx.db.run(
       `UPDATE multiremi_chat_sessions
        SET title = ?, status = ?, issue_id = ?, updated_at = ?
@@ -168,6 +185,9 @@ export class ChatRepo {
       [input.title?.trim() || current.title, input.status ?? current.status, issue?.id ?? null, now, id],
     );
     const updated = this.getChatSession(id)!;
+    if (updated.issueId && !this.ctx.notificationChannels().getAgentChatNotificationChannel(updated.id)) {
+      this.ensureDefaultAgentIssueUpdatesChannel(updated);
+    }
     this.ctx.emitChatEvent(updated, "chat:session_updated", {
       title: updated.title,
       issue_id: updated.issueId,
@@ -187,6 +207,7 @@ export class ChatRepo {
     this.ctx.db.run("UPDATE multiremi_tasks SET chat_session_id = NULL WHERE chat_session_id = ?", [id]);
     this.ctx.db.run("DELETE FROM multiremi_attachments WHERE chat_session_id = ?", [id]);
     this.ctx.db.run("DELETE FROM multiremi_chat_messages WHERE chat_session_id = ?", [id]);
+    this.ctx.notificationChannels().deleteAgentChatNotificationChannel(id);
     const result = this.ctx.db.run("DELETE FROM multiremi_chat_sessions WHERE id = ?", [id]);
     if (result.changes > 0) {
       this.ctx.emitChatEvent(current, "chat:session_deleted", {});
@@ -330,9 +351,96 @@ export class ChatRepo {
     return result;
   }
 
+  /** Caller owns the transaction and publishes the chat event after commit. */
+  createPendingAgentIssueUpdateWithinTransaction(
+    chatSessionId: string,
+    bodyInput: string,
+  ): PendingAgentIssueUpdateWriteResult {
+    const session = this.getChatSession(chatSessionId);
+    if (!session) throw new Error(`Chat session not found: ${chatSessionId}`);
+    if (session.status === "archived") throw new Error(`Chat session is archived: ${chatSessionId}`);
+    const body = bodyInput.trim();
+    if (!body) throw new Error("Chat message body is required");
+    const now = nowIso();
+    const messageId = createId("msg");
+    this.ctx.db.run(
+      `INSERT INTO multiremi_chat_messages (
+        id, chat_session_id, task_id, role, body, pending_agent_delivery, agent_delivery_task_id, created_at
+       ) VALUES (?, ?, NULL, 'system', ?, 1, NULL, ?)`,
+      [messageId, session.id, body, now],
+    );
+    this.ctx.db.run(
+      `UPDATE multiremi_chat_sessions
+       SET unread_since = COALESCE(unread_since, ?), updated_at = ?
+       WHERE id = ?`,
+      [now, now, session.id],
+    );
+    return {
+      session: this.getChatSession(session.id)!,
+      message: this.getChatMessage(messageId)!,
+    };
+  }
+
+  preparePendingAgentIssueUpdatesForTask(
+    chatSessionId: string,
+    taskId: string,
+    limit = AGENT_ISSUE_UPDATE_PROMPT_LIMIT,
+  ): PendingAgentIssueUpdateBatch {
+    const safeLimit = Math.max(1, Math.floor(limit));
+    return this.ctx.db.transaction(() => {
+      const rows = this.ctx.db.query(
+        `SELECT * FROM multiremi_chat_messages
+         WHERE chat_session_id = ? AND pending_agent_delivery = 1
+         ORDER BY created_at ASC, rowid ASC`,
+      ).all(chatSessionId) as Row[];
+      if (!rows.length) return { messages: [], omittedCount: 0 };
+      this.ctx.db.run(
+        `UPDATE multiremi_chat_messages
+         SET agent_delivery_task_id = ?
+         WHERE chat_session_id = ? AND pending_agent_delivery = 1`,
+        [taskId, chatSessionId],
+      );
+      const selected = rows.slice(-safeLimit);
+      return {
+        messages: selected.map(toChatMessage),
+        omittedCount: rows.length - selected.length,
+      };
+    })();
+  }
+
+  completePendingAgentIssueUpdatesForTaskWithinTransaction(chatSessionId: string, taskId: string): number {
+    return this.ctx.db.run(
+      `UPDATE multiremi_chat_messages
+       SET pending_agent_delivery = 0, agent_delivery_task_id = NULL
+       WHERE chat_session_id = ? AND pending_agent_delivery = 1 AND agent_delivery_task_id = ?`,
+      [chatSessionId, taskId],
+    ).changes;
+  }
+
+  discardPendingAgentIssueUpdatesWithinTransaction(chatSessionId: string): number {
+    return this.ctx.db.run(
+      `UPDATE multiremi_chat_messages
+       SET pending_agent_delivery = 0, agent_delivery_task_id = NULL
+       WHERE chat_session_id = ? AND pending_agent_delivery = 1`,
+      [chatSessionId],
+    ).changes;
+  }
+
   getChatMessage(id: string): MultiremiChatMessage | null {
     const row = this.ctx.db.query("SELECT * FROM multiremi_chat_messages WHERE id = ?").get(id) as Row | null;
     return row ? toChatMessage(row) : null;
+  }
+
+  private ensureDefaultAgentIssueUpdatesChannel(session: MultiremiChatSession): void {
+    const member = this.ctx.workspaces().findWorkspaceMemberForUser(session.creatorId, session.workspaceId);
+    this.ctx.notificationChannels().upsertAgentChatNotificationChannel({
+      workspaceId: session.workspaceId,
+      chatSessionId: session.id,
+      name: `${session.title} Issue updates`,
+      enabled: true,
+      memberId: member?.id ?? null,
+      createdBy: session.creatorId,
+    });
   }
 }
 

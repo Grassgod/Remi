@@ -10,6 +10,7 @@ import {
 } from "../helpers.js";
 import {
   currentTaskAccessToken,
+  currentWorkspaceMember,
   chatMessageCompatibilityResponse,
   chatSessionCompatibilityResponse,
   currentRequestUserId,
@@ -22,6 +23,7 @@ import type {
   UpdateChatSessionInput,
 } from "@multiremi/contracts/types.js";
 import type { RouterDeps } from "./deps.js";
+import { AgentIssueUpdateValidationError } from "@multiremi/store/repos/agent-issue-updates-repo.js";
 
 export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
   const { store } = deps;
@@ -175,6 +177,38 @@ export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
     store.markChatSessionRead(loaded.session.id);
     return c.body(null, 204);
   });
+  app.get("/api/chat/sessions/:sessionId/issue-updates", (c) => {
+    if (currentTaskAccessToken(c)) {
+      return c.json({ error: "forbidden for task token", code: "task_token_hard_denied" }, 403);
+    }
+    const loaded = loadChatSessionForCurrentUser(c, store, c.req.param("sessionId"));
+    if (loaded instanceof Response) return loaded;
+    return c.json({ subscription: agentIssueUpdateSubscriptionResponse(
+      store.getAgentIssueUpdateSubscription(loaded.session.id),
+    ) });
+  });
+  app.put("/api/chat/sessions/:sessionId/issue-updates", async (c) => {
+    if (currentTaskAccessToken(c)) {
+      return c.json({ error: "forbidden for task token", code: "task_token_hard_denied" }, 403);
+    }
+    const loaded = loadChatSessionForCurrentUser(c, store, c.req.param("sessionId"));
+    if (loaded instanceof Response) return loaded;
+    const body = await readJson<{ enabled?: unknown }>(c);
+    if (typeof body.enabled !== "boolean") return c.json({ error: "enabled must be a boolean" }, 400);
+    try {
+      const member = currentWorkspaceMember(c, store, loaded.session.workspaceId);
+      const subscription = store.setAgentIssueUpdateSubscription({
+        chatSessionId: loaded.session.id,
+        enabled: body.enabled,
+        memberId: member?.id ?? null,
+        createdBy: currentRequestUserId(c),
+      });
+      return c.json({ subscription: agentIssueUpdateSubscriptionResponse(subscription) });
+    } catch (error) {
+      if (error instanceof AgentIssueUpdateValidationError) return c.json({ error: error.message }, 400);
+      throw error;
+    }
+  });
   app.get("/api/chat/pending-tasks", (c) => {
     const workspaceId = requestedChatWorkspaceId(c);
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
@@ -187,4 +221,14 @@ export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
       .map((task) => ({ task_id: task.id, status: task.status, chat_session_id: task.chatSessionId }));
     return c.json({ tasks });
   });
+}
+
+function agentIssueUpdateSubscriptionResponse(subscription: import("@multiremi/contracts/types.js").MultiremiAgentIssueUpdateSubscription) {
+  return {
+    chat_session_id: subscription.chatSessionId,
+    issue_id: subscription.issueId,
+    channel_id: subscription.channelId,
+    enabled: subscription.enabled,
+    debounce_window_seconds: subscription.debounceWindowSeconds,
+  };
 }

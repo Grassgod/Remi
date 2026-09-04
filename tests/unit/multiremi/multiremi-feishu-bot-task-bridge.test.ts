@@ -80,6 +80,18 @@ describe("Feishu bot standard Task bridge", () => {
     store.completeTask(firstTask.id, { output: "first answer", sessionId: "sess_feishu_delta" });
     const issue = store.createIssue({ title: "Feishu bound Chat", workspaceId: "local" });
     store.updateChatSession(firstSubmission.chatSessionId, { issueId: issue.id });
+    const taskCountBeforeIssueUpdate = store.listTasks().length;
+    store.createIssueComment(issue.id, {
+      authorType: "member",
+      authorId: "member_reviewer",
+      body: "The Feishu reviewer approved the bound Issue.",
+    });
+    expect(store.flushDueAgentIssueUpdates(new Date(Date.now() + 60_000))).toEqual({
+      delivered: 1,
+      dropped: 0,
+    });
+    expect(store.listTasks()).toHaveLength(taskCountBeforeIssueUpdate);
+
     const secondSubmission = store.submitFeishuBotMessage("local", "rt_bot", {
       revision: config.revision,
       externalSessionKey: "oc_chat_delta",
@@ -96,9 +108,13 @@ describe("Feishu bot standard Task bridge", () => {
       ...secondTask,
       sessionProjection: secondWire.session_projection,
       chatMessage: secondWire.chat_message,
+      boundIssueUpdates: secondWire.bound_issue_updates,
+      boundIssueUpdatesOmittedCount: secondWire.bound_issue_updates_omitted_count,
     } as any);
 
     expect(secondPrompt).toContain(`## Issue\nKey: ${issue.key}`);
+    expect(secondPrompt).toContain("## Bound Issue Updates");
+    expect(secondPrompt).toContain("The Feishu reviewer approved the bound Issue.");
     expect(secondPrompt.match(/second Feishu request/g)).toHaveLength(1);
     expect(secondPrompt).not.toContain("## Agent Instructions");
     expect(secondPrompt).not.toContain("## Skills");

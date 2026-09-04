@@ -2084,12 +2084,39 @@ export function runMigrations(db: SqlDatabase): void {
       body TEXT NOT NULL,
       failure_reason TEXT,
       elapsed_ms INTEGER,
+      pending_agent_delivery INTEGER NOT NULL DEFAULT 0,
+      agent_delivery_task_id TEXT,
       created_at TEXT NOT NULL,
       FOREIGN KEY(chat_session_id) REFERENCES multiremi_chat_sessions(id) ON DELETE CASCADE,
       FOREIGN KEY(task_id) REFERENCES multiremi_tasks(id) ON DELETE SET NULL
     );
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_chat_messages_session ON multiremi_chat_messages(chat_session_id, created_at);
+
+    CREATE TABLE IF NOT EXISTS multiremi_agent_issue_update_state (
+      chat_session_id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL DEFAULT 'local',
+      issue_id TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      pending_count INTEGER NOT NULL DEFAULT 0,
+      pending_since TEXT,
+      deliver_after TEXT,
+      latest_activity_id TEXT,
+      latest_event_type TEXT,
+      latest_actor_type TEXT,
+      latest_actor_id TEXT,
+      latest_body TEXT,
+      latest_data TEXT,
+      last_delivered_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(chat_session_id) REFERENCES multiremi_chat_sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE,
+      FOREIGN KEY(channel_id) REFERENCES multiremi_notification_channels(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_agent_issue_updates_due
+      ON multiremi_agent_issue_update_state(deliver_after, pending_count);
 
     CREATE TABLE IF NOT EXISTS multiremi_tasks (
       id TEXT PRIMARY KEY,
@@ -2574,6 +2601,12 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_chat_sessions", "session_execution_fingerprint TEXT");
   addColumnIfMissing(db, "multiremi_chat_messages", "failure_reason TEXT");
   addColumnIfMissing(db, "multiremi_chat_messages", "elapsed_ms INTEGER");
+  addColumnIfMissing(db, "multiremi_chat_messages", "pending_agent_delivery INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "multiremi_chat_messages", "agent_delivery_task_id TEXT");
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_chat_messages_agent_delivery
+    ON multiremi_chat_messages(chat_session_id, pending_agent_delivery, created_at)`);
+  dropColumnIfExists(db, "multiremi_agent_issue_update_state", "window_started_at");
+  dropColumnIfExists(db, "multiremi_agent_issue_update_state", "deliveries_in_window");
   addColumnIfMissing(db, "multiremi_tasks", "chat_session_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "task_kind TEXT NOT NULL DEFAULT 'direct'");
   addColumnIfMissing(db, "multiremi_tasks", "wait_reason TEXT");
@@ -2767,6 +2800,7 @@ export function runMigrations(db: SqlDatabase): void {
     WHERE feishu_union_id IS NOT NULL AND feishu_union_id != ''`);
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_workspace_members_user ON multiremi_workspace_members(user_id, workspace_id)");
   backfillMemberUserIds(db);
+  backfillBoundChatAgentChannels(db);
   backfillOwnerExternalId(db);
   normalizeSquadLeaderRoles(db);
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_trigger_comment ON multiremi_tasks(trigger_comment_id)");
@@ -3975,6 +4009,37 @@ function backfillMemberUserIds(db: SqlDatabase): void {
     if (!userId) continue;
     db.run("UPDATE multiremi_workspace_members SET user_id = ? WHERE id = ?", [userId, id]);
   }
+}
+
+function backfillBoundChatAgentChannels(db: SqlDatabase): void {
+  db.run(
+    `INSERT INTO multiremi_notification_channels (
+       id, workspace_id, member_id, kind, name, enabled, target, event_types,
+       min_severity, created_by, created_at, updated_at
+     )
+     SELECT
+       'nch_agent_chat_' || chat.id,
+       chat.workspace_id,
+       (
+         SELECT member.id
+         FROM multiremi_workspace_members member
+         WHERE member.workspace_id = chat.workspace_id AND member.user_id = chat.creator_id
+         ORDER BY member.created_at ASC, member.id ASC
+         LIMIT 1
+       ),
+       'agent_chat',
+       chat.title || ' Issue updates',
+       1,
+       '{"chatId":"' || chat.id || '"}',
+       '["*"]',
+       'info',
+       chat.creator_id,
+       chat.created_at,
+       chat.updated_at
+     FROM multiremi_chat_sessions chat
+     WHERE chat.issue_id IS NOT NULL
+     ON CONFLICT(id) DO NOTHING`,
+  );
 }
 
 // Tag the seed `local` user with the deployment owner's stable Feishu open_id so

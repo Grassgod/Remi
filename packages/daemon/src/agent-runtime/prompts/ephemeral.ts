@@ -299,6 +299,26 @@ function appendClaimContextSections(sections: string[], task: AgentTask, mode: T
     appendPromptAttachments(sections, chatAttachments, false);
   }
 
+  const boundIssueUpdates = arrayField(task, "boundIssueUpdates", "bound_issue_updates")
+    .flatMap((value) => typeof value === "string" && value.trim() ? [value.trim()] : []);
+  const omittedBoundIssueUpdates = numberField(
+    task,
+    "boundIssueUpdatesOmittedCount",
+    "bound_issue_updates_omitted_count",
+  ) ?? 0;
+  if (boundIssueUpdates.length || omittedBoundIssueUpdates > 0) {
+    sections.push("");
+    sections.push("## Bound Issue Updates");
+    if (omittedBoundIssueUpdates > 0) {
+      sections.push(`${omittedBoundIssueUpdates} earlier bound Issue update(s) omitted.`);
+    }
+    boundIssueUpdates.forEach((update, index) => {
+      sections.push("");
+      sections.push(`Update ${index + 1}:`);
+      sections.push(update);
+    });
+  }
+
   const autopilotTitle = stringField(task, "autopilotTitle", "autopilot_title");
   const autopilotDescription = stringField(task, "autopilotDescription", "autopilot_description");
   const uniqueAutopilotDescription = autopilotDescription === currentTaskRequest(task)

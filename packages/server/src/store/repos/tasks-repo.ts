@@ -2375,6 +2375,9 @@ export class TasksRepo {
     const retry = status === "failed" ? this.maybeRetryFailedTask(task, workspaceLockHeld) : null;
     let delegationReturn: MultiremiTask | null = null;
     this.ctx.accessTokens().revokeTaskAccessTokens(task.id);
+    if (status === "completed" && task.chatSessionId) {
+      this.ctx.chat().completePendingAgentIssueUpdatesForTaskWithinTransaction(task.chatSessionId, task.id);
+    }
     if (task.chatSessionId && (status === "completed" || (status === "failed" && !retry))) {
       const role = "assistant";
       const messageBody = status === "completed" ? (body || "Task completed.") : (body || `Task ${status}`);

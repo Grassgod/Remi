@@ -17,6 +17,7 @@ const log = createLogger("notification-dispatcher");
 export type NotificationSenderRegistry = Partial<Record<MultiremiNotificationChannelKind, OutboundNotificationSender>>;
 
 export interface NotificationDispatcherStore {
+  flushDueAgentIssueUpdates(now?: string | Date): { delivered: number; dropped: number };
   getNotificationDeliveryContext(id: string): NotificationDeliveryContext | null;
   listPendingNotificationDeliveries(now: string, limit?: number): MultiremiNotificationDelivery[];
   claimNotificationDeliveryAttempt(
@@ -87,7 +88,13 @@ export class OutboundNotificationDispatcher {
   }
 
   async sweep(): Promise<void> {
-    const pending = this.store.listPendingNotificationDeliveries(new Date().toISOString(), 100);
+    const now = new Date().toISOString();
+    try {
+      this.store.flushDueAgentIssueUpdates(now);
+    } catch (error) {
+      log.warn(`agent issue update sweep failed: ${redactNotificationError(error)}`);
+    }
+    const pending = this.store.listPendingNotificationDeliveries(now, 100);
     await Promise.allSettled(pending.map((delivery) => this.dispatch(delivery.id)));
   }
 

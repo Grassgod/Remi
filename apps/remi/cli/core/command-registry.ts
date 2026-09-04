@@ -162,6 +162,8 @@ const TASK_PARITY_DENIED_COMMAND_PREFIXES = [
   // the read commands — a task token must not learn which Agent answers, and
   // must certainly not be able to redeploy the bot.
   "workspace.feishu-bot.",
+  // An agent must not be able to opt its own Issue-triggered wakeups in or out.
+  "chat.issue.updates.",
 ];
 
 function taskParityCommandSpec(spec: CommandSpec): CommandSpec {
