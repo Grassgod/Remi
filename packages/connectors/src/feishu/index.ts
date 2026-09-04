@@ -24,6 +24,7 @@ import {
 } from "./sdk.js";
 import { createFeishuClient } from "./sdk.js";
 import { createAdapter } from "./sdk.js";
+import { sendMessageFeishu } from "./send.js";
 
 const log = createLogger("feishu");
 
@@ -123,6 +124,24 @@ export class FeishuConnector implements Connector {
     this._streamHandler = null;
     this._taskStreamHandler = null;
     log.info("connector stopped");
+  }
+
+  async sendProactiveThreadReply(input: {
+    chatId: string;
+    replyToMessageId: string;
+    body: string;
+    idempotencyKey: string;
+  }): Promise<{ messageId: string }> {
+    const client = createFeishuClient({
+      appId: this._config.appId,
+      appSecret: this._config.appSecret,
+      domain: this._config.domain,
+    });
+    const result = await sendMessageFeishu(client, input.chatId, input.body, {
+      replyToMessageId: input.replyToMessageId,
+      idempotencyKey: input.idempotencyKey,
+    });
+    return { messageId: result.messageId };
   }
 
   async reply(chatId: string, response: AgentResponse): Promise<void> {

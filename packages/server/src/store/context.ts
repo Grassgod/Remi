@@ -65,6 +65,7 @@ import type {
   MultiremiTask,
   MultiremiTaskMessage,
   MultiremiTaskStatus,
+  MultiremiFeishuBotOutboundDelivery,
   MultiremiUser,
   MultiremiWebhookDelivery,
   MultiremiWorkspaceMember,
@@ -283,6 +284,10 @@ export interface NotificationChannelsSurface {
     data?: unknown | null;
     createdAt: string;
   }): void;
+  flushAgentIssueUpdatesForIssueWithinTransaction(
+    issueId: string,
+    now?: string | Date,
+  ): { delivered: number; dropped: number };
 }
 
 export interface SquadsSurface {
@@ -362,6 +367,10 @@ export interface ChatSurface {
     messages: MultiremiChatMessage[];
     omittedCount: number;
   };
+  preparePendingAgentIssueUpdatesForTaskWithinTransaction(chatSessionId: string, taskId: string): {
+    messages: MultiremiChatMessage[];
+    omittedCount: number;
+  };
   completePendingAgentIssueUpdatesForTaskWithinTransaction(chatSessionId: string, taskId: string): number;
   discardPendingAgentIssueUpdatesWithinTransaction(chatSessionId: string): number;
 }
@@ -420,6 +429,29 @@ export interface RuntimesSurface {
 export interface FeishuBotSurface {
   disableFeishuBotConfigsReferencingAgent(agentId: string, actor?: string | null): string[];
   disableFeishuBotConfigsReferencingRuntime(runtimeId: string, actor?: string | null): string[];
+  prepareFeishuIssueRoundPushesWithinTransaction(input: {
+    issue: MultiremiIssue;
+    leaderTask: MultiremiTask;
+  }): MultiremiTask[];
+  retargetFeishuRoundPushTaskWithinTransaction(fromTaskId: string, toTaskId: string): void;
+  completeFeishuRoundPushTaskWithinTransaction(task: MultiremiTask, body: string): void;
+  claimFeishuBotOutbound(
+    workspaceId: string,
+    runtimeId: string,
+    now?: string | Date,
+  ): MultiremiFeishuBotOutboundDelivery | null;
+  reportFeishuBotOutbound(
+    workspaceId: string,
+    runtimeId: string,
+    deliveryId: string,
+    input: {
+      claimToken: string;
+      status: "sent" | "failed";
+      externalMessageId?: string | null;
+      error?: string | null;
+    },
+    now?: string | Date,
+  ): boolean;
 }
 
 export interface KnowledgeSurface {

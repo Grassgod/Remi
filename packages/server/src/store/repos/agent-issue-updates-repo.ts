@@ -29,6 +29,7 @@ const DELIVERABLE_EVENT_TYPES = new Set([
   "title_renamed",
   "organizer_action",
   "result_published",
+  "leader_round_completed",
 ]);
 
 const SOURCE_TASK_KEYS = [
@@ -155,53 +156,96 @@ export class AgentIssueUpdatesRepo {
     return { delivered, dropped };
   }
 
-  private flushOne(chatSessionId: string, now: Date): "delivered" | "dropped" | "skipped" {
-    const outcome = this.ctx.db.transaction(() => {
-      this.ctx.db.run(
-        "UPDATE multiremi_agent_issue_update_state SET updated_at = updated_at WHERE chat_session_id = ?",
-        [chatSessionId],
-      );
-      const state = this.getState(chatSessionId);
-      if (!state || state.pendingCount <= 0 || !state.deliverAfter || state.deliverAfter > now.getTime()) {
-        return { kind: "skipped" as const, result: null };
-      }
-      const chat = this.ctx.chat().getChatSession(chatSessionId);
-      const channel = this.ctx.notificationChannels().getAgentChatNotificationChannel(chatSessionId);
-      if (
-        !chat
-        || chat.status !== "active"
-        || chat.issueId !== state.issueId
-        || !channel?.enabled
-        || channel.id !== state.channelId
-      ) {
-        this.clearPending(chatSessionId);
-        return { kind: "dropped" as const, result: null };
-      }
+  /** Caller owns the transaction; used immediately before a leader-round wake. */
+  flushIssueNowWithinTransaction(issueId: string, nowInput: string | Date = new Date()): AgentIssueUpdateFlushResult {
+    const now = nowInput instanceof Date ? nowInput : new Date(nowInput);
+    if (!Number.isFinite(now.getTime())) throw new Error("now must be a valid date");
+    const rows = this.ctx.db.query(
+      `SELECT chat_session_id FROM multiremi_agent_issue_update_state
+       WHERE issue_id = ? AND pending_count > 0
+       ORDER BY pending_since ASC, chat_session_id ASC`,
+    ).all(issueId) as Row[];
+    let delivered = 0;
+    let dropped = 0;
+    for (const row of rows) {
+      const outcome = this.flushOneWithinTransaction(String(row.chat_session_id), now, true);
+      if (outcome.kind === "delivered") delivered += 1;
+      else if (outcome.kind === "dropped") dropped += 1;
+      if (outcome.kind === "delivered" && outcome.result) this.publish(outcome.result);
+    }
+    return { delivered, dropped };
+  }
 
-      const issue = this.ctx.issues().getIssue(state.issueId);
-      if (!issue) {
-        this.clearPending(chatSessionId);
-        return { kind: "dropped" as const, result: null };
-      }
-      const result = this.ctx.chat().createPendingAgentIssueUpdateWithinTransaction(
-        chat.id,
-        buildUpdateMessage(issue.key, issue.title, state),
-      );
-      this.clearPending(chatSessionId, {
-        lastDeliveredAt: now.toISOString(),
-      });
-      return { kind: "delivered" as const, result };
-    })();
+  private flushOne(chatSessionId: string, now: Date): "delivered" | "dropped" | "skipped" {
+    const outcome = this.ctx.db.transaction(() => this.flushOneWithinTransaction(chatSessionId, now, false))();
 
     if (outcome.kind === "delivered" && outcome.result) this.publish(outcome.result);
     return outcome.kind;
+  }
+
+  private flushOneWithinTransaction(
+    chatSessionId: string,
+    now: Date,
+    force: boolean,
+  ): {
+    kind: "delivered" | "dropped" | "skipped";
+    result: { session: MultiremiChatSession; message: MultiremiChatMessage } | null;
+  } {
+    this.ctx.db.run(
+      "UPDATE multiremi_agent_issue_update_state SET updated_at = updated_at WHERE chat_session_id = ?",
+      [chatSessionId],
+    );
+    const state = this.getState(chatSessionId);
+    if (
+      !state
+      || state.pendingCount <= 0
+      || (!force && (!state.deliverAfter || state.deliverAfter > now.getTime()))
+    ) {
+      return { kind: "skipped", result: null };
+    }
+    const chat = this.ctx.chat().getChatSession(chatSessionId);
+    const channel = this.ctx.notificationChannels().getAgentChatNotificationChannel(chatSessionId);
+    if (
+      !chat
+      || chat.status !== "active"
+      || chat.issueId !== state.issueId
+      || !channel?.enabled
+      || channel.id !== state.channelId
+    ) {
+      this.clearPending(chatSessionId);
+      return { kind: "dropped", result: null };
+    }
+    const issue = this.ctx.issues().getIssue(state.issueId);
+    if (!issue) {
+      this.clearPending(chatSessionId);
+      return { kind: "dropped", result: null };
+    }
+    const result = this.ctx.chat().createPendingAgentIssueUpdateWithinTransaction(
+      chat.id,
+      buildUpdateMessage(issue.key, issue.title, state),
+    );
+    this.clearPending(chatSessionId, { lastDeliveredAt: now.toISOString() });
+    return { kind: "delivered", result };
   }
 
   private isTargetChatEvent(chatSessionId: string, input: QueueAgentIssueUpdateInput): boolean {
     const data = recordValue(input.data);
     for (const key of SOURCE_TASK_KEYS) {
       const taskId = nullableString(data[key]);
-      if (taskId && this.ctx.tasks().getTask(taskId)?.chatSessionId === chatSessionId) return true;
+      if (!taskId) continue;
+      if (this.ctx.tasks().getTask(taskId)?.chatSessionId === chatSessionId) return true;
+      // The leader-round marker already carries this task's final output. The
+      // automatic Issue comment is posted just after the terminal transaction;
+      // suppress only that covered copy so it cannot become a second pending
+      // update for the next Chat turn.
+      if (input.type === "comment_created") {
+        const covered = this.ctx.db.query(
+          `SELECT 1 AS present FROM multiremi_feishu_bot_round_pushes r
+           JOIN multiremi_feishu_bot_chat_bindings b ON b.id = r.binding_id
+           WHERE b.chat_session_id = ? AND r.leader_task_id = ? LIMIT 1`,
+        ).get(chatSessionId, taskId) as Row | null;
+        if (covered) return true;
+      }
     }
     return false;
   }

@@ -2259,6 +2259,57 @@ export function runMigrations(db: SqlDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_deliveries_task
       ON multiremi_feishu_bot_deliveries(task_id);
 
+    -- A completed Issue-lead round may wake the bound Chat. The source-task
+    -- uniqueness is the transaction-level idempotency boundary for retries of
+    -- the same terminal report.
+    CREATE TABLE IF NOT EXISTS multiremi_feishu_bot_round_pushes (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      binding_id TEXT NOT NULL,
+      issue_id TEXT NOT NULL,
+      leader_task_id TEXT NOT NULL,
+      wake_task_id TEXT NOT NULL,
+      delivery_mode TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(binding_id, leader_task_id),
+      FOREIGN KEY(binding_id) REFERENCES multiremi_feishu_bot_chat_bindings(id) ON DELETE CASCADE,
+      FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE,
+      FOREIGN KEY(leader_task_id) REFERENCES multiremi_tasks(id) ON DELETE CASCADE,
+      FOREIGN KEY(wake_task_id) REFERENCES multiremi_tasks(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_round_pushes_wake
+      ON multiremi_feishu_bot_round_pushes(wake_task_id, delivery_mode);
+
+    -- The completed Chat reply is committed here before the daemon sends it.
+    -- Leases make daemon crashes recoverable; id is also Feishu's stable uuid.
+    CREATE TABLE IF NOT EXISTS multiremi_feishu_bot_outbound_deliveries (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      binding_id TEXT NOT NULL,
+      task_id TEXT UNIQUE,
+      chat_id TEXT NOT NULL,
+      thread_id TEXT,
+      reply_to_message_id TEXT NOT NULL,
+      body TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      claim_token TEXT,
+      leased_until TEXT,
+      available_at TEXT NOT NULL,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      external_message_id TEXT,
+      last_error TEXT,
+      sent_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(binding_id) REFERENCES multiremi_feishu_bot_chat_bindings(id) ON DELETE CASCADE,
+      FOREIGN KEY(task_id) REFERENCES multiremi_tasks(id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_outbound_pending
+      ON multiremi_feishu_bot_outbound_deliveries(status, available_at, leased_until, created_at);
+
     CREATE TABLE IF NOT EXISTS multiremi_task_prompts (
       task_id TEXT PRIMARY KEY,
       mode TEXT NOT NULL,
@@ -2627,6 +2678,10 @@ export function runMigrations(db: SqlDatabase): void {
   // checkout that already created it needs the column added rather than the
   // CREATE TABLE above, which is a no-op once the table exists.
   addColumnIfMissing(db, "multiremi_feishu_bot_audit", "seq INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "multiremi_feishu_bot_chat_bindings", "chat_id TEXT");
+  addColumnIfMissing(db, "multiremi_feishu_bot_chat_bindings", "thread_id TEXT");
+  addColumnIfMissing(db, "multiremi_feishu_bot_chat_bindings", "reply_to_message_id TEXT");
+  backfillFeishuBotReplyDestinations(db);
   addColumnIfMissing(db, "multiremi_tasks", "projection_from_seq INTEGER");
   addColumnIfMissing(db, "multiremi_tasks", "projection_to_seq INTEGER");
   addColumnIfMissing(db, "multiremi_tasks", "projection_mode TEXT");
@@ -4135,6 +4190,43 @@ function normalizeActiveDaemonTokenExpiry(db: SqlDatabase): void {
        AND expires_at > ?`,
     [now],
   );
+}
+
+function backfillFeishuBotReplyDestinations(db: SqlDatabase): void {
+  const rows = db.query(
+    `SELECT id, external_session_key, chat_id, thread_id, reply_to_message_id
+     FROM multiremi_feishu_bot_chat_bindings`,
+  ).all() as Array<Record<string, unknown>>;
+  for (const row of rows) {
+    const bindingId = String(row.id);
+    const sessionKey = String(row.external_session_key ?? "");
+    const threadMarker = ":thread:";
+    const markerAt = sessionKey.indexOf(threadMarker);
+    const parsedChatId = markerAt >= 0 ? sessionKey.slice(0, markerAt) : sessionKey.split(":closed:")[0];
+    const parsedThreadId = markerAt >= 0
+      ? sessionKey.slice(markerAt + threadMarker.length).split(":closed:")[0]
+      : null;
+    const latest = db.query(
+      `SELECT COALESCE(reply_to_message_id, external_message_id) AS reply_to_message_id
+       FROM multiremi_feishu_bot_deliveries
+       WHERE binding_id = ?
+       ORDER BY created_at DESC, external_message_id DESC
+       LIMIT 1`,
+    ).get(bindingId) as Record<string, unknown> | null;
+    db.run(
+      `UPDATE multiremi_feishu_bot_chat_bindings
+       SET chat_id = COALESCE(chat_id, ?),
+           thread_id = COALESCE(thread_id, ?),
+           reply_to_message_id = COALESCE(reply_to_message_id, ?)
+       WHERE id = ?`,
+      [
+        parsedChatId || null,
+        parsedThreadId || null,
+        stringOrNull(latest?.reply_to_message_id),
+        bindingId,
+      ],
+    );
+  }
 }
 
 function backfillSessionArchiveRetryBudget(db: SqlDatabase): void {

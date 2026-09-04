@@ -48,6 +48,249 @@ function scaffold() {
 }
 
 describe("Feishu bot standard Task bridge", () => {
+  it("wakes once after a lead round and durably retries the proactive topic reply", () => {
+    const { store, agent, config } = scaffold();
+    const inbound = store.submitFeishuBotMessage("local", "rt_bot", {
+      revision: config.revision,
+      externalSessionKey: "oc_round_push:thread:omt_round_push",
+      externalMessageId: "om_round_push_1",
+      replyToMessageId: "om_round_push_1",
+      chatId: "oc_round_push",
+      threadId: "omt_round_push",
+      senderUnionId: "on_owner",
+      text: "Create and track this Issue.",
+    });
+    store.cancelTask(inbound.taskId);
+    const issue = store.createIssue({
+      title: "Proactive Feishu round",
+      workspaceId: "local",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    store.updateChatSession(inbound.chatSessionId, { issueId: issue.id });
+    const session = store.getOrCreateDefaultIssueSession(issue.id);
+    const leaderTask = store.createSessionTask(session.id, {
+      agentId: agent.id,
+      prompt: "Complete the assigned work.",
+    });
+    expect(store.claimTask("rt_bot")?.id).toBe(leaderTask.id);
+    store.startTask(leaderTask.id);
+
+    const taskCountBeforeComment = store.listTasks().length;
+    store.queueAgentIssueUpdate({
+      activityId: "act_round_progress",
+      issueId: issue.id,
+      actorType: "member",
+      actorId: "local",
+      type: "comment_created",
+      body: "Include the migration result in the final summary.",
+      createdAt: new Date().toISOString(),
+    });
+    expect(store.listTasks()).toHaveLength(taskCountBeforeComment);
+
+    store.completeTask(leaderTask.id, {
+      output: "The implementation and migration are complete.",
+      sessionId: "sess_leader_round",
+    });
+    const roundTasks = store.listTasks().filter((task) =>
+      task.chatSessionId === inbound.chatSessionId && task.status === "queued"
+    );
+    expect(roundTasks).toHaveLength(1);
+    expect(store.listIssueSessions(issue.id)).toHaveLength(1);
+
+    const roundTask = roundTasks[0]!;
+    expect(store.claimTask("rt_bot")?.id).toBe(roundTask.id);
+    const wire = daemonTaskClaimResponse(store, store.getTaskWithAgent(roundTask.id)!);
+    expect(wire.bound_issue_updates).toEqual([
+      expect.stringContaining("The implementation and migration are complete."),
+    ]);
+    store.startTask(roundTask.id);
+    store.failTask(roundTask.id, {
+      error: "temporary provider timeout",
+      failureReason: "timeout",
+      sessionId: "sess_round_push_retry",
+    });
+    const retryTask = store.listTasks().find((task) => task.parentTaskId === roundTask.id)!;
+    expect(retryTask).toMatchObject({ status: "queued", chatSessionId: inbound.chatSessionId });
+    expect(store.claimTask("rt_bot")?.id).toBe(retryTask.id);
+    const retryWire = daemonTaskClaimResponse(store, store.getTaskWithAgent(retryTask.id)!);
+    expect(retryWire.bound_issue_updates).toEqual([
+      expect.stringContaining("The implementation and migration are complete."),
+    ]);
+    store.startTask(retryTask.id);
+    store.completeTask(retryTask.id, {
+      output: "MUL work is complete and ready for review.",
+      sessionId: "sess_round_push_chat",
+    });
+
+    expect(store.flushDueAgentIssueUpdates(new Date(Date.now() + 60_000))).toEqual({
+      delivered: 0,
+      dropped: 0,
+    });
+
+    store.reportFeishuBotRuntimeStatus("local", "rt_bot", {
+      appliedRevision: config.revision,
+      state: "online",
+    });
+    const firstClaim = store.claimFeishuBotOutbound("local", "rt_bot")!;
+    expect(firstClaim).toMatchObject({
+      chatId: "oc_round_push",
+      threadId: "omt_round_push",
+      replyToMessageId: "om_round_push_1",
+      body: "MUL work is complete and ready for review.",
+    });
+    expect(store.claimFeishuBotOutbound("local", "rt_bot")).toBeNull();
+
+    const failedAt = new Date();
+    expect(store.reportFeishuBotOutbound("local", "rt_bot", firstClaim.id, {
+      claimToken: firstClaim.claimToken,
+      status: "failed",
+      error: "temporary network failure",
+    }, failedAt)).toBe(true);
+    const retryClaim = store.claimFeishuBotOutbound(
+      "local",
+      "rt_bot",
+      new Date(failedAt.getTime() + 6_000),
+    )!;
+    expect(retryClaim.id).toBe(firstClaim.id);
+    expect(retryClaim.idempotencyKey).toBe(firstClaim.idempotencyKey);
+    expect(retryClaim.claimToken).not.toBe(firstClaim.claimToken);
+    expect(store.reportFeishuBotOutbound("local", "rt_bot", retryClaim.id, {
+      claimToken: retryClaim.claimToken,
+      status: "sent",
+      externalMessageId: "om_proactive_result",
+    })).toBe(true);
+    expect(store.claimFeishuBotOutbound("local", "rt_bot", new Date(Date.now() + 60_000))).toBeNull();
+
+    const failedLeader = store.createSessionTask(session.id, {
+      agentId: agent.id,
+      prompt: "This round will fail.",
+    });
+    expect(store.claimTask("rt_bot")?.id).toBe(failedLeader.id);
+    store.startTask(failedLeader.id);
+    const countBeforeFailure = store.listTasks().length;
+    store.failTask(failedLeader.id, {
+      error: "final failure",
+      failureReason: "agent_error",
+    });
+    expect(store.listTasks()).toHaveLength(countBeforeFailure);
+  });
+
+  it("steers an existing inbound Chat task instead of creating a second round task", () => {
+    const { store, agent, config } = scaffold();
+    const inbound = store.submitFeishuBotMessage("local", "rt_bot", {
+      revision: config.revision,
+      externalSessionKey: "oc_busy:thread:omt_busy",
+      externalMessageId: "om_busy_1",
+      replyToMessageId: "om_busy_1",
+      chatId: "oc_busy",
+      threadId: "omt_busy",
+      text: "I am already waiting for a response.",
+    });
+    const issue = store.createIssue({ title: "Busy Feishu topic", workspaceId: "local" });
+    store.updateChatSession(inbound.chatSessionId, { issueId: issue.id });
+    const session = store.getOrCreateDefaultIssueSession(issue.id);
+    const leaderTask = store.createSessionTask(session.id, {
+      agentId: agent.id,
+      prompt: "Finish the Issue round.",
+    });
+    const taskCount = store.listTasks().length;
+
+    const created = store.prepareFeishuIssueRoundPushesWithinTransaction({ issue, leaderTask });
+
+    expect(created).toHaveLength(0);
+    expect(store.listTasks()).toHaveLength(taskCount);
+    expect(store.listPendingTaskSteerMessages(inbound.taskId)).toEqual([
+      expect.objectContaining({ content: expect.stringContaining(`completed a work round for ${issue.key}`) }),
+    ]);
+    store.cancelTask(leaderTask.id);
+
+    expect(store.claimTask("rt_bot")?.id).toBe(inbound.taskId);
+    store.startTask(inbound.taskId);
+    store.failTask(inbound.taskId, {
+      error: "temporary inbound task timeout",
+      failureReason: "timeout",
+    });
+    const retry = store.listTasks().find((task) => task.parentTaskId === inbound.taskId)!;
+    expect(store.claimTask("rt_bot")?.id).toBe(retry.id);
+    daemonTaskClaimResponse(store, store.getTaskWithAgent(retry.id)!);
+    store.startTask(retry.id);
+    store.completeTask(retry.id, { output: "The steered round is complete." });
+    store.reportFeishuBotRuntimeStatus("local", "rt_bot", {
+      appliedRevision: config.revision,
+      state: "online",
+    });
+    expect(store.claimFeishuBotOutbound("local", "rt_bot")).toMatchObject({
+      body: "The steered round is complete.",
+      chatId: "oc_busy",
+      replyToMessageId: "om_busy_1",
+    });
+  });
+
+  it("waits for delegated work and the leader return before waking the bound Chat", () => {
+    const { store, agent, config } = scaffold();
+    const inbound = store.submitFeishuBotMessage("local", "rt_bot", {
+      revision: config.revision,
+      externalSessionKey: "oc_delegated:thread:omt_delegated",
+      externalMessageId: "om_delegated_1",
+      replyToMessageId: "om_delegated_1",
+      chatId: "oc_delegated",
+      threadId: "omt_delegated",
+      senderUnionId: "on_owner",
+      text: "Create and track the delegated work.",
+    });
+    store.cancelTask(inbound.taskId);
+    const teammate = store.createAgent({ name: "Teammate", provider: "codex", workspaceId: "local" });
+    const squad = store.createSquad({
+      name: "Delivery Squad",
+      workspaceId: "local",
+      leaderId: agent.id,
+      memberIds: [teammate.id],
+    });
+    const issue = store.createIssue({
+      title: "Delegated Feishu round",
+      workspaceId: "local",
+      assigneeType: "squad",
+      assigneeId: squad.id,
+    });
+    store.updateChatSession(inbound.chatSessionId, { issueId: issue.id });
+    const session = store.getOrCreateDefaultIssueSession(issue.id);
+    const leaderTask = store.createSessionTask(session.id, {
+      agentId: agent.id,
+      prompt: "Delegate and review the work.",
+    });
+    expect(store.claimTask("rt_bot")?.id).toBe(leaderTask.id);
+    store.startTask(leaderTask.id);
+    store.createIssueComment(issue.id, {
+      authorType: "agent",
+      authorId: agent.id,
+      taskId: leaderTask.id,
+      body: `Please implement this [@Teammate](mention://agent/${teammate.id})`,
+    });
+    const teammateTask = store.listTasksForIssue(issue.id).find((task) => task.agentId === teammate.id)!;
+    const baselineChatTaskCount = store.listTasks().filter((task) => task.chatSessionId === inbound.chatSessionId).length;
+
+    store.completeTask(leaderTask.id, { output: "Delegated; waiting for implementation." });
+    expect(store.listTasks().filter((task) => task.chatSessionId === inbound.chatSessionId)).toHaveLength(baselineChatTaskCount);
+    expect(store.claimTask("rt_bot")?.id).toBe(teammateTask.id);
+    store.startTask(teammateTask.id);
+    store.completeTask(teammateTask.id, { output: "Implementation complete." });
+    expect(store.listTasks().filter((task) => task.chatSessionId === inbound.chatSessionId)).toHaveLength(baselineChatTaskCount);
+
+    const leaderReturn = store.listTasksForIssue(issue.id).find((task) =>
+      task.agentId === agent.id && task.parentTaskId === teammateTask.id
+    )!;
+    expect(store.claimTask("rt_bot")?.id).toBe(leaderReturn.id);
+    store.startTask(leaderReturn.id);
+    store.completeTask(leaderReturn.id, { output: "Reviewed the implementation; this round is complete." });
+
+    const proactive = store.listTasks().filter((task) =>
+      task.chatSessionId === inbound.chatSessionId && task.status === "queued"
+    );
+    expect(proactive).toHaveLength(1);
+    expect(proactive[0]?.prompt).toContain(`completed a work round for ${issue.key}`);
+  });
+
   it("switches the bound Chat from bootstrap to delta after the provider session is promoted", () => {
     const { store, agent, config } = scaffold();
     store.updateAgent(agent.id, { instructions: "Follow the workspace rules.\n".repeat(400) });

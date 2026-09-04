@@ -40,7 +40,9 @@ import type {
   MultiremiFeishuBotConfig,
   MultiremiFeishuBotDaemonConfig,
   MultiremiFeishuBotDirective,
+  MultiremiFeishuBotOutboundDelivery,
   MultiremiFeishuBotRuntimeStatus,
+  MultiremiIssue,
   MultiremiTask,
   MultiremiUser,
   MultiremiWorkspaceMember,
@@ -387,19 +389,39 @@ export class FeishuBotRepo {
         this.ctx.db.run(
           `INSERT INTO multiremi_feishu_bot_chat_bindings (
              id, workspace_id, app_id, agent_id, external_session_key,
-             chat_session_id, created_at, updated_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+             chat_session_id, chat_id, thread_id, reply_to_message_id,
+             created_at, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           bindingId,
           workspaceId,
           config.appId,
           config.agentId,
           externalSessionKey,
           chat.id,
+          cleanOptionalString(input.chatId),
+          cleanOptionalString(input.threadId),
+          cleanOptionalString(input.replyToMessageId) ?? externalMessageId,
           now,
           now,
         );
         binding = { id: bindingId, chat_session_id: chat.id };
       }
+
+      this.ctx.db.run(
+        `UPDATE multiremi_feishu_bot_chat_bindings
+         SET chat_id = COALESCE(?, chat_id),
+             thread_id = COALESCE(?, thread_id),
+             reply_to_message_id = ?,
+             updated_at = ?
+         WHERE id = ?`,
+        [
+          cleanOptionalString(input.chatId),
+          cleanOptionalString(input.threadId),
+          cleanOptionalString(input.replyToMessageId) ?? externalMessageId,
+          nowIso(),
+          String(binding.id),
+        ],
+      );
 
       const chatSessionId = String(binding.chat_session_id);
       const activeTask = this.ctx.chat().getPendingChatTask(chatSessionId);
@@ -470,6 +492,223 @@ export class FeishuBotRepo {
     })();
     if (enqueuedTask) this.ctx.notifyTaskEnqueued(enqueuedTask);
     return result;
+  }
+
+  /** Caller owns the terminal-task transaction. */
+  prepareIssueRoundPushesWithinTransaction(input: {
+    issue: MultiremiIssue;
+    leaderTask: MultiremiTask;
+  }): MultiremiTask[] {
+    const config = this.getConfig(input.issue.workspaceId);
+    if (!config?.enabled) return [];
+    const rows = this.ctx.db.query(
+      `SELECT b.* FROM multiremi_feishu_bot_chat_bindings b
+       JOIN multiremi_chat_sessions c ON c.id = b.chat_session_id
+       WHERE b.workspace_id = ? AND b.app_id = ? AND b.agent_id = ?
+         AND c.issue_id = ? AND c.status = 'active'
+         AND b.chat_id IS NOT NULL AND b.reply_to_message_id IS NOT NULL
+       ORDER BY b.created_at ASC, b.id ASC`,
+    ).all(input.issue.workspaceId, config.appId, config.agentId, input.issue.id) as Row[];
+    const enqueued: MultiremiTask[] = [];
+    const seenChats = new Set<string>();
+    for (const binding of rows) {
+      const chatSessionId = String(binding.chat_session_id);
+      if (seenChats.has(chatSessionId)) continue;
+      seenChats.add(chatSessionId);
+      if (!this.ctx.notificationChannels().getAgentChatNotificationChannel(chatSessionId)?.enabled) continue;
+      const bindingId = String(binding.id);
+      const alreadyPrepared = this.ctx.db.query(
+        `SELECT 1 AS present FROM multiremi_feishu_bot_round_pushes
+         WHERE binding_id = ? AND leader_task_id = ?`,
+      ).get(bindingId, input.leaderTask.id) as Row | null;
+      if (alreadyPrepared) continue;
+
+      let wakeTask = this.ctx.chat().getPendingChatTask(chatSessionId);
+      let deliveryMode: "inbound" | "proactive";
+      if (wakeTask) {
+        const proactive = this.ctx.db.query(
+          `SELECT 1 AS present FROM multiremi_feishu_bot_round_pushes
+           WHERE wake_task_id = ? AND delivery_mode = 'proactive' LIMIT 1`,
+        ).get(wakeTask.id) as Row | null;
+        deliveryMode = proactive ? "proactive" : "inbound";
+        const pending = wakeTask.status === "queued"
+          ? { messages: [], omittedCount: 0 }
+          : this.ctx.chat().preparePendingAgentIssueUpdatesForTaskWithinTransaction(chatSessionId, wakeTask.id);
+        this.ctx.tasks().createTaskSteerMessage({
+          taskId: wakeTask.id,
+          kind: "steer",
+          content: roundPushPrompt(input.issue, pending.messages.map((message) => message.body), pending.omittedCount),
+          authorType: "system",
+          authorId: null,
+        });
+      } else {
+        deliveryMode = "proactive";
+        wakeTask = this.ctx.tasks().createTaskWithinTransaction({
+          agentId: config.agentId,
+          runtimeId: config.runtimeId,
+          chatSessionId,
+          workspaceId: input.issue.workspaceId,
+          prompt: roundPushPrompt(input.issue),
+          requestingUserName: "Multiremi",
+          requestingUserProfileDescription: "System-triggered summary for a completed Issue work round.",
+        });
+        enqueued.push(wakeTask);
+      }
+      const now = nowIso();
+      this.ctx.db.run(
+        `INSERT INTO multiremi_feishu_bot_round_pushes (
+           id, workspace_id, binding_id, issue_id, leader_task_id,
+           wake_task_id, delivery_mode, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(binding_id, leader_task_id) DO NOTHING`,
+        [
+          createId("frp"),
+          input.issue.workspaceId,
+          bindingId,
+          input.issue.id,
+          input.leaderTask.id,
+          wakeTask.id,
+          deliveryMode,
+          now,
+          now,
+        ],
+      );
+    }
+    return enqueued;
+  }
+
+  /** Caller owns the failed-task transaction. */
+  retargetRoundPushTaskWithinTransaction(fromTaskId: string, toTaskId: string): void {
+    this.ctx.db.run(
+      `UPDATE multiremi_feishu_bot_round_pushes
+       SET wake_task_id = ?, delivery_mode = 'proactive', updated_at = ?
+       WHERE wake_task_id = ?`,
+      [toTaskId, nowIso(), fromTaskId],
+    );
+  }
+
+  /** Caller owns the Chat task completion transaction. */
+  completeRoundPushTaskWithinTransaction(task: MultiremiTask, body: string): void {
+    const row = this.ctx.db.query(
+      `SELECT b.* FROM multiremi_feishu_bot_round_pushes r
+       JOIN multiremi_feishu_bot_chat_bindings b ON b.id = r.binding_id
+       WHERE r.wake_task_id = ? AND r.delivery_mode = 'proactive'
+       ORDER BY r.created_at ASC, r.id ASC LIMIT 1`,
+    ).get(task.id) as Row | null;
+    if (!row) return;
+    const chatId = cleanOptionalString(row.chat_id);
+    const replyToMessageId = cleanOptionalString(row.reply_to_message_id);
+    if (!chatId || !replyToMessageId) return;
+    const now = nowIso();
+    this.ctx.db.run(
+      `INSERT INTO multiremi_feishu_bot_outbound_deliveries (
+         id, workspace_id, binding_id, task_id, chat_id, thread_id,
+         reply_to_message_id, body, status, available_at, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+       ON CONFLICT(task_id) DO NOTHING`,
+      [
+        createId("fbo"),
+        task.workspaceId,
+        String(row.id),
+        task.id,
+        chatId,
+        cleanOptionalString(row.thread_id),
+        replyToMessageId,
+        body,
+        now,
+        now,
+        now,
+      ],
+    );
+  }
+
+  claimOutbound(
+    workspaceId: string,
+    runtimeId: string,
+    nowInput: string | Date = new Date(),
+  ): MultiremiFeishuBotOutboundDelivery | null {
+    const now = nowInput instanceof Date ? nowInput : new Date(nowInput);
+    if (!Number.isFinite(now.getTime())) throw new Error("now must be a valid date");
+    const config = this.getConfig(workspaceId);
+    const runtimeStatus = this.getRuntimeStatus(workspaceId, runtimeId);
+    if (
+      !config?.enabled
+      || config.runtimeId !== runtimeId
+      || runtimeStatus?.state !== "online"
+      || runtimeStatus.appliedRevision !== config.revision
+    ) return null;
+    return this.ctx.db.transaction(() => {
+      const nowIsoValue = now.toISOString();
+      const row = this.ctx.db.query(
+        `SELECT o.* FROM multiremi_feishu_bot_outbound_deliveries o
+         JOIN multiremi_feishu_bot_chat_bindings b ON b.id = o.binding_id
+         WHERE o.workspace_id = ? AND b.app_id = ? AND b.agent_id = ?
+           AND ((o.status = 'pending' AND o.available_at <= ?)
+             OR (o.status = 'sending' AND o.leased_until IS NOT NULL AND o.leased_until <= ?))
+         ORDER BY o.created_at ASC, o.id ASC LIMIT 1`,
+      ).get(workspaceId, config.appId, config.agentId, nowIsoValue, nowIsoValue) as Row | null;
+      if (!row) return null;
+      const claimToken = createId("foc");
+      const leasedUntil = new Date(now.getTime() + 30_000).toISOString();
+      const updated = this.ctx.db.run(
+        `UPDATE multiremi_feishu_bot_outbound_deliveries
+         SET status = 'sending', claim_token = ?, leased_until = ?,
+             attempt_count = attempt_count + 1, updated_at = ?
+         WHERE id = ?
+           AND ((status = 'pending' AND available_at <= ?)
+             OR (status = 'sending' AND leased_until IS NOT NULL AND leased_until <= ?))`,
+        [claimToken, leasedUntil, nowIsoValue, String(row.id), nowIsoValue, nowIsoValue],
+      );
+      if (updated.changes !== 1) return null;
+      return outboundDelivery(row, claimToken);
+    })();
+  }
+
+  reportOutbound(
+    workspaceId: string,
+    runtimeId: string,
+    deliveryId: string,
+    input: {
+      claimToken: string;
+      status: "sent" | "failed";
+      externalMessageId?: string | null;
+      error?: string | null;
+    },
+    nowInput: string | Date = new Date(),
+  ): boolean {
+    const config = this.getConfig(workspaceId);
+    if (!config || config.runtimeId !== runtimeId) return false;
+    const now = nowInput instanceof Date ? nowInput : new Date(nowInput);
+    if (!Number.isFinite(now.getTime())) throw new Error("now must be a valid date");
+    if (input.status === "sent") {
+      return this.ctx.db.run(
+        `UPDATE multiremi_feishu_bot_outbound_deliveries
+         SET status = 'sent', external_message_id = ?, sent_at = ?,
+             claim_token = NULL, leased_until = NULL, last_error = NULL, updated_at = ?
+         WHERE id = ? AND workspace_id = ? AND status = 'sending' AND claim_token = ?`,
+        [cleanOptionalString(input.externalMessageId), now.toISOString(), now.toISOString(), deliveryId, workspaceId, input.claimToken],
+      ).changes === 1;
+    }
+    const row = this.ctx.db.query(
+      `SELECT attempt_count FROM multiremi_feishu_bot_outbound_deliveries
+       WHERE id = ? AND workspace_id = ? AND status = 'sending' AND claim_token = ?`,
+    ).get(deliveryId, workspaceId, input.claimToken) as Row | null;
+    if (!row) return false;
+    const delayMs = Math.min(5 * 60_000, 5_000 * 2 ** Math.min(6, Math.max(0, Number(row.attempt_count) - 1)));
+    return this.ctx.db.run(
+      `UPDATE multiremi_feishu_bot_outbound_deliveries
+       SET status = 'pending', claim_token = NULL, leased_until = NULL,
+           available_at = ?, last_error = ?, updated_at = ?
+       WHERE id = ? AND workspace_id = ? AND status = 'sending' AND claim_token = ?`,
+      [
+        new Date(now.getTime() + delayMs).toISOString(),
+        cleanOptionalString(input.error)?.slice(0, 2_000) ?? "Feishu send failed",
+        now.toISOString(),
+        deliveryId,
+        workspaceId,
+        input.claimToken,
+      ],
+    ).changes === 1;
   }
 
   private resolveSender(
@@ -943,6 +1182,40 @@ function mapRuntimeStatus(row: Row): MultiremiFeishuBotRuntimeStatus {
     errorCode: normalizeFeishuBotErrorCode(row.error_code),
     errorMessage: nullableString(row.error_message),
     reportedAt: String(row.reported_at ?? ""),
+  };
+}
+
+function roundPushPrompt(
+  issue: Pick<MultiremiIssue, "key" | "title">,
+  updates: string[] = [],
+  omittedCount = 0,
+): string {
+  const lines = [
+    `The responsible agent completed a work round for ${issue.key} - ${issue.title}.`,
+    "Report the current result to the users in this Feishu topic. Use the Bound Issue Updates context below when present.",
+  ];
+  if (updates.length) {
+    lines.push("", "Updates delivered while the current Chat task was already active:", ...updates);
+  }
+  if (omittedCount > 0) lines.push("", `${omittedCount} earlier update aggregate(s) were omitted.`);
+  return lines.join("\n");
+}
+
+function outboundDelivery(row: Row, claimToken: string): MultiremiFeishuBotOutboundDelivery {
+  const id = String(row.id);
+  return {
+    id,
+    claimToken,
+    claim_token: claimToken,
+    chatId: String(row.chat_id),
+    chat_id: String(row.chat_id),
+    threadId: nullableString(row.thread_id),
+    thread_id: nullableString(row.thread_id),
+    replyToMessageId: String(row.reply_to_message_id),
+    reply_to_message_id: String(row.reply_to_message_id),
+    body: String(row.body),
+    idempotencyKey: id,
+    idempotency_key: id,
   };
 }
 

@@ -1,10 +1,10 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 716,
+    "routeCount": 717,
     "routeCountByPrefix": {
       "native": 209,
-      "compat": 494,
+      "compat": 495,
       "root": 13
     },
     "getRoutes": 305,
@@ -14,7 +14,7 @@
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 411,
+    "mutationRoutes": 412,
     "mutationRoutesCovered": 282,
     "flows": [
       "agents-compat",
@@ -510,6 +510,7 @@
     "POST /api/daemon/runtimes/:runtimeId/directory-scans/:requestId/result",
     "POST /api/daemon/runtimes/:runtimeId/directory-scans/claim",
     "POST /api/daemon/runtimes/:runtimeId/feishu-bot/messages",
+    "POST /api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/result",
     "POST /api/daemon/runtimes/:runtimeId/feishu-bot/session/cancel",
     "POST /api/daemon/runtimes/:runtimeId/feishu-bot/session/inspect",
     "POST /api/daemon/runtimes/:runtimeId/feishu-bot/session/reset",

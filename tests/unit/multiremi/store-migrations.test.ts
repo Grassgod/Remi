@@ -1403,6 +1403,29 @@ describe("store migrations", () => {
     expect(database.query(
       "SELECT enabled FROM multiremi_notification_channels WHERE id = ?",
     ).get("nch_agent_chat_chat_issue")).toEqual({ enabled: 0 });
+    database.run(
+      `INSERT INTO multiremi_feishu_bot_chat_bindings (
+         id, workspace_id, app_id, agent_id, external_session_key,
+         chat_session_id, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        "fcb_legacy_destination",
+        "local",
+        "cli_legacy",
+        "agt_chat_issue",
+        "oc_legacy:thread:omt_legacy",
+        "chat_issue",
+        now,
+        now,
+      ],
+    );
+    migrate(database);
+    expect(database.query(
+      "SELECT chat_id, thread_id FROM multiremi_feishu_bot_chat_bindings WHERE id = ?",
+    ).get("fcb_legacy_destination")).toEqual({
+      chat_id: "oc_legacy",
+      thread_id: "omt_legacy",
+    });
 
     database.exec("PRAGMA foreign_keys = ON");
     database.run("DELETE FROM multiremi_issues WHERE id = ?", ["iss_chat_issue"]);

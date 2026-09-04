@@ -415,26 +415,34 @@ export class ChatRepo {
     taskId: string,
     limit = AGENT_ISSUE_UPDATE_PROMPT_LIMIT,
   ): PendingAgentIssueUpdateBatch {
+    return this.ctx.db.transaction(() =>
+      this.preparePendingAgentIssueUpdatesForTaskWithinTransaction(chatSessionId, taskId, limit)
+    )();
+  }
+
+  preparePendingAgentIssueUpdatesForTaskWithinTransaction(
+    chatSessionId: string,
+    taskId: string,
+    limit = AGENT_ISSUE_UPDATE_PROMPT_LIMIT,
+  ): PendingAgentIssueUpdateBatch {
     const safeLimit = Math.max(1, Math.floor(limit));
-    return this.ctx.db.transaction(() => {
-      const rows = this.ctx.db.query(
-        `SELECT * FROM multiremi_chat_messages
-         WHERE chat_session_id = ? AND pending_agent_delivery = 1
-         ORDER BY created_at ASC, rowid ASC`,
-      ).all(chatSessionId) as Row[];
-      if (!rows.length) return { messages: [], omittedCount: 0 };
-      this.ctx.db.run(
-        `UPDATE multiremi_chat_messages
-         SET agent_delivery_task_id = ?
-         WHERE chat_session_id = ? AND pending_agent_delivery = 1`,
-        [taskId, chatSessionId],
-      );
-      const selected = rows.slice(-safeLimit);
-      return {
-        messages: selected.map(toChatMessage),
-        omittedCount: rows.length - selected.length,
-      };
-    })();
+    const rows = this.ctx.db.query(
+      `SELECT * FROM multiremi_chat_messages
+       WHERE chat_session_id = ? AND pending_agent_delivery = 1
+       ORDER BY created_at ASC, rowid ASC`,
+    ).all(chatSessionId) as Row[];
+    if (!rows.length) return { messages: [], omittedCount: 0 };
+    this.ctx.db.run(
+      `UPDATE multiremi_chat_messages
+       SET agent_delivery_task_id = ?
+       WHERE chat_session_id = ? AND pending_agent_delivery = 1`,
+      [taskId, chatSessionId],
+    );
+    const selected = rows.slice(-safeLimit);
+    return {
+      messages: selected.map(toChatMessage),
+      omittedCount: rows.length - selected.length,
+    };
   }
 
   completePendingAgentIssueUpdatesForTaskWithinTransaction(chatSessionId: string, taskId: string): number {

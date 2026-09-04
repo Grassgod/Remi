@@ -583,6 +583,16 @@ export function controlPlaneConciergeHost(deps: {
       deps.daemon()?.setBotMenuPublisher(null);
       if (handle) await handle.stop();
     },
+    async sendOutbound(delivery) {
+      const handle = deps.current();
+      if (!handle) throw new Error("Feishu concierge channel is not running");
+      return handle.sendProactiveThreadReply({
+        chatId: delivery.chatId,
+        replyToMessageId: delivery.replyToMessageId,
+        body: delivery.body,
+        idempotencyKey: delivery.idempotencyKey,
+      });
+    },
   };
 }
 

@@ -30,6 +30,7 @@ import {
 } from "./client.js";
 import { createEventMapper, responseToUsage } from "./acp-event-mapper.js";
 import { FeishuConciergeSupervisor, type FeishuConciergeHost } from "./feishu-concierge.js";
+import { redactFeishuBotError } from "@multiremi/feishu-bot/diagnostics.js";
 import {
   buildSteerInjectionPrompt,
   DEFAULT_FORCE_ANSWER_GRACE_MS,
@@ -1216,6 +1217,9 @@ export class MultiremiDaemon {
       await this.handleBotMenuPublish(runtimeId, ack.pending_bot_menu);
     }
     this.applyFeishuBotDirective(ack);
+    if (ack.pending_feishu_outbound) {
+      await this.handleFeishuBotOutbound(runtimeId, ack.pending_feishu_outbound);
+    }
     if (ack.ssh_mesh) {
       await this.sshMeshManager.reconcile(ack.ssh_mesh);
     }
@@ -1434,6 +1438,28 @@ export class MultiremiDaemon {
       .catch((error) => {
         log.warn(`Feishu concierge reconcile failed: ${error instanceof Error ? error.message : String(error)}`);
       });
+  }
+
+  private async handleFeishuBotOutbound(
+    runtimeId: string,
+    delivery: NonNullable<MultiremiDaemonHeartbeatConfigAck["pending_feishu_outbound"]>,
+  ): Promise<void> {
+    const supervisor = this.feishuConcierge;
+    try {
+      if (!supervisor) throw new Error("Feishu concierge is unavailable");
+      const sent = await supervisor.sendOutbound(delivery);
+      await this.client.reportFeishuBotOutboundResult(runtimeId, delivery.id, {
+        claimToken: delivery.claimToken,
+        status: "sent",
+        externalMessageId: sent.messageId,
+      });
+    } catch (error) {
+      await this.client.reportFeishuBotOutboundResult(runtimeId, delivery.id, {
+        claimToken: delivery.claimToken,
+        status: "failed",
+        error: redactFeishuBotError(error),
+      });
+    }
   }
 
   private async refreshAndReportRuntimeModels(signal: AbortSignal): Promise<MultiremiRuntimeModel[]> {

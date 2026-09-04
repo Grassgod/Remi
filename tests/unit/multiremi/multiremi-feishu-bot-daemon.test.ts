@@ -15,7 +15,11 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
 import { deriveStatus } from "@multiremi/store/repos/feishu-bot-repo.js";
-import type { MultiremiFeishuBotRuntimeStatus } from "@multiremi/contracts/types.js";
+import {
+  FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION,
+  FEISHU_CONCIERGE_PROTOCOL_VERSION,
+  type MultiremiFeishuBotRuntimeStatus,
+} from "@multiremi/contracts/types.js";
 import type { MultiremiStore } from "@multiremi/store.js";
 
 const MASTER = { Authorization: "Bearer MASTER", "content-type": "application/json" };
@@ -92,7 +96,11 @@ async function heartbeat(scaffolded: Scaffold, runtimeId: string, body: Record<s
   return scaffolded.app.request("/api/daemon/heartbeat", {
     method: "POST",
     headers: daemonHeaders(scaffolded.tokens[runtimeId]!),
-    body: JSON.stringify({ runtime_id: runtimeId, feishu_concierge_protocol: 1, ...body }),
+    body: JSON.stringify({
+      runtime_id: runtimeId,
+      feishu_concierge_protocol: FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION,
+      ...body,
+    }),
   });
 }
 
@@ -232,6 +240,70 @@ describe("Feishu bot control-plane delivery", () => {
       body: JSON.stringify({ revision: 1, external_session_key: "oc_chat_1" }),
     });
     expect(crossRuntime.status).toBe(403);
+  });
+
+  it("leases one proactive reply in heartbeat and acknowledges it by claim token", async () => {
+    const test = await scaffold();
+    const submitted = test.store.submitFeishuBotMessage("local", "rt_a", {
+      revision: 1,
+      externalSessionKey: "oc_outbound:thread:omt_outbound",
+      externalMessageId: "om_outbound_root",
+      replyToMessageId: "om_outbound_root",
+      chatId: "oc_outbound",
+      threadId: "omt_outbound",
+      text: "seed destination",
+    });
+    const binding = db!.query(
+      "SELECT id FROM multiremi_feishu_bot_chat_bindings WHERE chat_session_id = ?",
+    ).get(submitted.chatSessionId) as { id: string };
+    const now = new Date().toISOString();
+    db!.run(
+      `INSERT INTO multiremi_feishu_bot_outbound_deliveries (
+         id, workspace_id, binding_id, task_id, chat_id, thread_id,
+         reply_to_message_id, body, status, available_at, created_at, updated_at
+       ) VALUES (?, 'local', ?, NULL, 'oc_outbound', 'omt_outbound',
+         'om_outbound_root', 'Round completed.', 'pending', ?, ?, ?)`,
+      ["fbo_http", binding.id, now, now, now],
+    );
+    await report(test, "rt_a", { applied_revision: 1, state: "online" });
+
+    db!.run("UPDATE multiremi_feishu_bot_chat_bindings SET app_id = 'cli_stale' WHERE id = ?", [binding.id]);
+    const wrongBot = await heartbeat(test, "rt_a");
+    expect(await wrongBot.json()).not.toHaveProperty("pending_feishu_outbound");
+    db!.run("UPDATE multiremi_feishu_bot_chat_bindings SET app_id = 'cli_a1b2c3d4e5f6g7h8' WHERE id = ?", [binding.id]);
+
+    const v1 = await heartbeat(test, "rt_a", {
+      feishu_concierge_protocol: FEISHU_CONCIERGE_PROTOCOL_VERSION,
+    });
+    const v1Body = await v1.json();
+    expect(v1Body.feishu_bot).toMatchObject({ desired_state: "running", config_available: true });
+    expect(v1Body).not.toHaveProperty("pending_feishu_outbound");
+
+    const ack = await heartbeat(test, "rt_a");
+    const body = await ack.json();
+    expect(body.pending_feishu_outbound).toMatchObject({
+      id: "fbo_http",
+      chat_id: "oc_outbound",
+      thread_id: "omt_outbound",
+      reply_to_message_id: "om_outbound_root",
+      body: "Round completed.",
+      idempotency_key: "fbo_http",
+    });
+
+    const result = await test.app.request(
+      "/api/daemon/runtimes/rt_a/feishu-bot/outbound/fbo_http/result",
+      {
+        method: "POST",
+        headers: daemonHeaders(test.tokens.rt_a!),
+        body: JSON.stringify({
+          claim_token: body.pending_feishu_outbound.claim_token,
+          status: "sent",
+          external_message_id: "om_outbound_sent",
+        }),
+      },
+    );
+    expect(result.status).toBe(200);
+    expect((await (await heartbeat(test, "rt_a")).json())).not.toHaveProperty("pending_feishu_outbound");
   });
 
   it("names a deleted Agent instead of failing the start generically", async () => {

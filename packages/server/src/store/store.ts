@@ -403,6 +403,7 @@ import type {
   MultiremiFeishuBotConfig,
   MultiremiFeishuBotDaemonConfig,
   MultiremiFeishuBotDirective,
+  MultiremiFeishuBotOutboundDelivery,
   MultiremiFeishuBotRuntimeStatus,
   MultiremiFeishuMessage,
   MultiremiFeishuMessageOutcome,
@@ -1426,6 +1427,13 @@ runMigrations(this.db);
     return this.agentIssueUpdates.flushDue(now);
   }
 
+  flushAgentIssueUpdatesForIssueWithinTransaction(
+    issueId: string,
+    now?: string | Date,
+  ): AgentIssueUpdateFlushResult {
+    return this.agentIssueUpdates.flushIssueNowWithinTransaction(issueId, now);
+  }
+
   listNotificationChannels(workspaceId: string): MultiremiNotificationChannel[] {
     return this.notificationChannels.listChannels(workspaceId);
   }
@@ -1759,6 +1767,39 @@ runMigrations(this.db);
     input: Parameters<FeishuBotRepo["submitMessage"]>[2],
   ): ReturnType<FeishuBotRepo["submitMessage"]> {
     return this.feishuBot.submitMessage(workspaceId, runtimeId, input);
+  }
+
+  prepareFeishuIssueRoundPushesWithinTransaction(input: {
+    issue: MultiremiIssue;
+    leaderTask: MultiremiTask;
+  }): MultiremiTask[] {
+    return this.feishuBot.prepareIssueRoundPushesWithinTransaction(input);
+  }
+
+  retargetFeishuRoundPushTaskWithinTransaction(fromTaskId: string, toTaskId: string): void {
+    this.feishuBot.retargetRoundPushTaskWithinTransaction(fromTaskId, toTaskId);
+  }
+
+  completeFeishuRoundPushTaskWithinTransaction(task: MultiremiTask, body: string): void {
+    this.feishuBot.completeRoundPushTaskWithinTransaction(task, body);
+  }
+
+  claimFeishuBotOutbound(
+    workspaceId: string,
+    runtimeId: string,
+    now?: string | Date,
+  ): MultiremiFeishuBotOutboundDelivery | null {
+    return this.feishuBot.claimOutbound(workspaceId, runtimeId, now);
+  }
+
+  reportFeishuBotOutbound(
+    workspaceId: string,
+    runtimeId: string,
+    deliveryId: string,
+    input: Parameters<FeishuBotRepo["reportOutbound"]>[3],
+    now?: string | Date,
+  ): boolean {
+    return this.feishuBot.reportOutbound(workspaceId, runtimeId, deliveryId, input, now);
   }
 
   resetFeishuBotSession(
@@ -3956,6 +3997,13 @@ runMigrations(this.db);
     omittedCount: number;
   } {
     return this.chat.preparePendingAgentIssueUpdatesForTask(chatSessionId, taskId);
+  }
+
+  preparePendingAgentIssueUpdatesForTaskWithinTransaction(chatSessionId: string, taskId: string): {
+    messages: MultiremiChatMessage[];
+    omittedCount: number;
+  } {
+    return this.chat.preparePendingAgentIssueUpdatesForTaskWithinTransaction(chatSessionId, taskId);
   }
 
   completePendingAgentIssueUpdatesForTaskWithinTransaction(chatSessionId: string, taskId: string): number {

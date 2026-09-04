@@ -49,6 +49,7 @@ interface Harness {
   starts: MultiremiFeishuBotAssignment[];
   stops: number;
   reports: FeishuConciergeStatusReport[];
+  sent: string[];
   advance: (ms: number) => void;
 }
 
@@ -61,6 +62,7 @@ function harness(options: {
     starts: [] as MultiremiFeishuBotAssignment[],
     stops: 0,
     reports: [] as FeishuConciergeStatusReport[],
+    sent: [] as string[],
     nowMs: 1_000_000,
   };
   const supervisor = new FeishuConciergeSupervisor({
@@ -70,6 +72,10 @@ function harness(options: {
         return (await options.start?.(input)) ?? { botName: "Concierge" };
       },
       stop: async () => { state.stops += 1; },
+      sendOutbound: async (delivery) => {
+        state.sent.push(delivery.id);
+        return { messageId: `om_${delivery.id}` };
+      },
     },
     fetchConfig: options.fetch ?? (async () => assignment(1)),
     report: async (input) => { state.reports.push(input); },
@@ -81,11 +87,29 @@ function harness(options: {
     get starts() { return state.starts; },
     get stops() { return state.stops; },
     get reports() { return state.reports; },
+    get sent() { return state.sent; },
     advance: (ms) => { state.nowMs += ms; },
   };
 }
 
 describe("FeishuConciergeSupervisor", () => {
+  it("sends leased outbound work only while the connector is online", async () => {
+    const test = harness();
+    const delivery = {
+      id: "fbo_1",
+      claimToken: "claim_1",
+      chatId: "oc_1",
+      threadId: "omt_1",
+      replyToMessageId: "om_root",
+      body: "Round complete.",
+      idempotencyKey: "fbo_1",
+    };
+    await expect(test.supervisor.sendOutbound(delivery)).rejects.toThrow("not online");
+    await test.supervisor.apply(directive());
+    await expect(test.supervisor.sendOutbound(delivery)).resolves.toEqual({ messageId: "om_fbo_1" });
+    expect(test.sent).toEqual(["fbo_1"]);
+  });
+
   it("starts the channel and applies the revision the fetch actually returned", async () => {
     // The directive's revision is a hint; the fetched payload is authoritative,
     // because an admin can save again between the heartbeat and the fetch.

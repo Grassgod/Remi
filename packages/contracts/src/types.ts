@@ -877,6 +877,8 @@ export interface MultiremiDaemonHeartbeatAck {
    * `MultiremiFeishuBotDirective`.
    */
   feishu_bot?: MultiremiFeishuBotDirective;
+  /** One leased proactive reply for the Runtime hosting the Feishu concierge. */
+  pending_feishu_outbound?: MultiremiFeishuBotOutboundDelivery;
   ssh_mesh?: MultiremiSshMeshHeartbeatAck;
   /** Platform maintenance directive: daemons must pause task claims while draining. */
   drain?: MultiremiDaemonDrainDirective;
@@ -3741,6 +3743,9 @@ export const FEISHU_CONCIERGE_CONFIG_CAPABILITY = "feishu_concierge_config_v1";
 /** Protocol version a daemon reports in register/heartbeat when it can host the bot. */
 export const FEISHU_CONCIERGE_PROTOCOL_VERSION = 1;
 
+/** Adds durable proactive topic replies without removing v1 inbound support. */
+export const FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION = 2;
+
 export type FeishuBotDomain = "feishu" | "lark" | "bytedance";
 
 /** What the control plane wants the selected Runtime to do with the connector. */
@@ -3748,6 +3753,22 @@ export type FeishuBotDesiredState = "running" | "stopped";
 
 /** What a Runtime reports back about the connector it is hosting. */
 export type FeishuBotRuntimeState = "stopped" | "starting" | "online" | "failed";
+
+export interface MultiremiFeishuBotOutboundDelivery {
+  id: string;
+  claimToken: string;
+  claim_token?: string;
+  chatId: string;
+  chat_id?: string;
+  threadId: string | null;
+  thread_id?: string | null;
+  replyToMessageId: string;
+  reply_to_message_id?: string;
+  body: string;
+  /** Stable across retries so Feishu can deduplicate send-success/ack-failure. */
+  idempotencyKey: string;
+  idempotency_key?: string;
+}
 
 /**
  * Aggregate status shown in Workspace Settings. Derived from the config row,
