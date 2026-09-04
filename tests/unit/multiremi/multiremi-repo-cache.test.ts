@@ -273,6 +273,46 @@ describe("Multiremi repo cache", () => {
     }
   });
 
+  it("bounds a hung remote set-head without blocking the event loop", async () => {
+    const source = createRepo("main", "hung remote set-head cache");
+    const cacheRoot = tempDir("multiremi-repo-hung-set-head-cache-");
+    const initialCache = new MultiremiRepoCache(cacheRoot);
+    await initialCache.sync("local", [{ url: source }]);
+    const barePath = initialCache.lookup("local", source)!;
+    const wrapperRoot = tempDir("multiremi-repo-hung-set-head-wrapper-");
+    const restorePath = installHangingGitWrapper(wrapperRoot, "remote-set-head", 3);
+    const cache = new MultiremiRepoCache(cacheRoot, {
+      fetchRetryDelaysMs: [],
+      fetchTimeoutMs: 250,
+      repoSyncTimeoutMs: 900,
+      processKillGraceMs: 20,
+    });
+    let ticks = 0;
+    let lastTickAt = Date.now();
+    let maxTickGapMs = 0;
+    const ticker = setInterval(() => {
+      const now = Date.now();
+      ticks += 1;
+      maxTickGapMs = Math.max(maxTickGapMs, now - lastTickAt);
+      lastTickAt = now;
+    }, 5);
+    const startedAt = Date.now();
+    try {
+      const result = await cache.sync("local", [{ url: source }]);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(result).toEqual([{ repoUrl: source, status: "fresh", error: null }]);
+      expect(readFetchAttempts(wrapperRoot)).toBe(1);
+      expect(ticks).toBeGreaterThan(0);
+      expect(maxTickGapMs).toBeLessThan(1_500);
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+      expect(existsSync(multiremiRepoCacheLockPath(barePath))).toBe(false);
+      await expectRecordedProcessesToExit(wrapperRoot);
+    } finally {
+      clearInterval(ticker);
+      restorePath();
+    }
+  });
+
   it("returns a bounded failure when a first clone hangs", async () => {
     const source = createRepo("main", "hung clone");
     const cacheRoot = tempDir("multiremi-repo-hung-clone-cache-");
@@ -771,21 +811,28 @@ exec ${shellQuote(realGit)} "$@"
   return prependPath(wrapperDir);
 }
 
-function installHangingGitWrapper(root: string, operation: "fetch" | "clone"): () => void {
+function installHangingGitWrapper(
+  root: string,
+  operation: "fetch" | "clone" | "remote-set-head",
+  hangSeconds = 30,
+): () => void {
   const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
   const wrapperDir = join(root, "bin");
   const attemptsFile = join(root, "attempts");
   const pidsFile = join(root, "pids");
+  const operationCondition = operation === "remote-set-head"
+    ? '[ "$1" = "remote" ] && [ "$2" = "set-head" ]'
+    : `[ "$1" = ${shellQuote(operation)} ]`;
   mkdirSync(wrapperDir);
   writeFileSync(join(wrapperDir, "git"), `#!/bin/sh
-if [ "$1" = ${shellQuote(operation)} ]; then
+if ${operationCondition}; then
   attempts=0
   if [ -f ${shellQuote(attemptsFile)} ]; then attempts=$(cat ${shellQuote(attemptsFile)}); fi
   attempts=$((attempts + 1))
   printf '%s' "$attempts" > ${shellQuote(attemptsFile)}
   printf '%s\\n' "$$" >> ${shellQuote(pidsFile)}
   trap '' TERM
-  sleep 30 &
+  sh -c 'trap "" TERM; exec sleep ${hangSeconds}' &
   printf '%s\\n' "$!" >> ${shellQuote(pidsFile)}
   wait
 fi
