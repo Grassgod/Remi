@@ -48,7 +48,7 @@ export interface FeishuChannelHandle {
   publishBotMenu: (config: ResolvedBotMenuConfig, dryRun: boolean) => Promise<BotMenuPublishResult>;
   sendProactiveThreadReply: (input: {
     chatId: string;
-    replyToMessageId: string;
+    replyToMessageId?: string;
     body: string;
     idempotencyKey: string;
   }) => Promise<{ messageId: string }>;

@@ -148,6 +148,21 @@ export function workspaceCommandSpecs(): CommandSpec[] {
     scopedWrite("workspace.organizer.update", ["workspace", "organizer", "update"], "Update Organizer mode", "/organizer", "PUT", [
       { name: "mode", type: "string", valueName: "report_only|act", description: "Organizer action mode" },
     ], organizerBody),
+    scopedRead("workspace.issue-topics.get", ["workspace", "issue-topics", "get"], "Read automatic Feishu Issue topic settings", "/issue-topics"),
+    scopedWrite(
+      "workspace.issue-topics.set",
+      ["workspace", "issue-topics", "set"],
+      "Configure automatic Feishu Issue topics",
+      "/issue-topics",
+      "PUT",
+      [
+        { name: "chat-id", type: "string", valueName: "chat-id", description: "Feishu group chat ID" },
+        { name: "project", type: "string", valueName: "project-id", repeatable: true, description: "Limit topics to a project" },
+        { name: "enabled", type: "boolean", description: "Create topics for new Issues" },
+        { name: "disabled", type: "boolean", description: "Stop creating topics" },
+      ],
+      issueTopicsBody,
+    ),
     scopedRead("workspace.ssh-mesh.get", ["workspace", "ssh-mesh", "get"], "Read SSH mesh settings", "/ssh-mesh"),
     scopedWrite("workspace.ssh-mesh.update", ["workspace", "ssh-mesh", "update"], "Update SSH mesh settings", "/ssh-mesh", "PUT"),
     scopedWrite("workspace.ssh-mesh.rotate", ["workspace", "ssh-mesh", "rotate"], "Rotate SSH mesh key material", "/ssh-mesh/rotate", "POST"),
@@ -511,6 +526,24 @@ async function organizerBody(invocation: CommandInvocation): Promise<Record<stri
   const body = await requestBody(invocation, { mode: stringOption(invocation, "mode") ?? undefined });
   if (body.mode !== "report_only" && body.mode !== "act") {
     throw new CliError("usage", "workspace organizer update requires --mode report_only|act or input JSON");
+  }
+  return body;
+}
+
+async function issueTopicsBody(invocation: CommandInvocation): Promise<Record<string, unknown>> {
+  const projects = stringOptions(invocation, "project");
+  const body = await requestBody(invocation, {
+    enabled: booleanOption(invocation, "disabled") === true
+      ? false
+      : booleanOption(invocation, "enabled") ?? undefined,
+    chat_id: stringOption(invocation, "chat-id") ?? undefined,
+    project_ids: projects.length ? projects : undefined,
+  });
+  if (typeof body.enabled !== "boolean") {
+    throw new CliError("usage", "workspace issue-topics set requires --enabled or --disabled");
+  }
+  if (body.enabled && (typeof body.chat_id !== "string" || !body.chat_id.trim())) {
+    throw new CliError("usage", "workspace issue-topics set requires --chat-id when enabled");
   }
   return body;
 }

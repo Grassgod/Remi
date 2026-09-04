@@ -8,6 +8,8 @@ import type {
   FeishuBotStatusSnapshot,
   FeishuBotTestRequest,
   FeishuBotTestResult,
+  IssueTopicConfigResponse,
+  UpdateIssueTopicConfigRequest,
   UpsertFeishuBotRequest,
 } from "../../types";
 import type { HttpClient } from "../http";
@@ -17,12 +19,14 @@ import {
   EMPTY_FEISHU_BOT_CANDIDATES,
   EMPTY_FEISHU_BOT_CONFIG,
   EMPTY_FEISHU_BOT_STATUS,
+  EMPTY_ISSUE_TOPIC_CONFIG,
   FeishuBotAuditListSchema,
   FeishuBotAvailabilitySchema,
   FeishuBotCandidatesSchema,
   FeishuBotConfigSchema,
   FeishuBotRegistrationSessionSchema,
   FeishuBotStatusSchema,
+  IssueTopicConfigResponseSchema,
   FeishuBotTestResultSchema,
 } from "../schemas/feishu-bot";
 
@@ -94,6 +98,26 @@ export class FeishuBotEndpoints {
       { workspace_id: workspaceId, entries: [] },
       { endpoint: "GET /api/workspaces/:id/feishu-bot/audit" },
     );
+  }
+
+  async getIssueTopicConfig(workspaceId: string): Promise<IssueTopicConfigResponse> {
+    const raw = await this.http.fetch<unknown>(`/api/workspaces/${workspaceId}/issue-topics`);
+    return parseWithFallback(raw, IssueTopicConfigResponseSchema, EMPTY_ISSUE_TOPIC_CONFIG, {
+      endpoint: "GET /api/workspaces/:id/issue-topics",
+    });
+  }
+
+  async saveIssueTopicConfig(
+    workspaceId: string,
+    input: UpdateIssueTopicConfigRequest,
+  ): Promise<IssueTopicConfigResponse> {
+    const raw = await this.http.fetch<unknown>(`/api/workspaces/${workspaceId}/issue-topics`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    });
+    return parseWithFallback(raw, IssueTopicConfigResponseSchema, EMPTY_ISSUE_TOPIC_CONFIG, {
+      endpoint: "PUT /api/workspaces/:id/issue-topics",
+    });
   }
 
   /**

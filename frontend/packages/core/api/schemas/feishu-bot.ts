@@ -4,6 +4,7 @@ import type {
   FeishuBotCandidates,
   FeishuBotConfig,
   FeishuBotStatusSnapshot,
+  IssueTopicConfigResponse,
 } from "../../types";
 
 // ---------------------------------------------------------------------------
@@ -55,6 +56,15 @@ export const FeishuBotAvailabilitySchema = z.object({
   configured: z.boolean().default(false),
   available: z.boolean().default(false),
   bot_name: z.string().nullable().default(null),
+}).loose();
+
+export const IssueTopicConfigResponseSchema = z.object({
+  workspace_id: z.string().default(""),
+  config: z.object({
+    enabled: z.boolean().default(false),
+    chat_id: z.string().default(""),
+    project_ids: z.array(z.string()).nullable().default(null),
+  }).loose(),
 }).loose();
 
 export const FeishuBotStatusSchema = z.object({
@@ -160,6 +170,15 @@ export const EMPTY_FEISHU_BOT_AVAILABILITY: FeishuBotAvailability = {
   configured: false,
   available: false,
   bot_name: null,
+};
+
+export const EMPTY_ISSUE_TOPIC_CONFIG: IssueTopicConfigResponse = {
+  workspace_id: "",
+  config: {
+    enabled: false,
+    chat_id: "",
+    project_ids: null,
+  },
 };
 
 export const EMPTY_FEISHU_BOT_STATUS: FeishuBotStatusSnapshot = {

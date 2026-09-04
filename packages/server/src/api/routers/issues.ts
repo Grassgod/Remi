@@ -567,6 +567,15 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       }
       const issue = store.createIssue(issueInput);
       const chatBinding = bindCreatedIssueToRequestChat(c, store, issue);
+      if (!chatBinding) {
+        try {
+          store.prepareFeishuIssueTopicWithinTransaction(issue);
+        } catch (error) {
+          log.warn(
+            `Feishu issue topic creation skipped for ${issue.id}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
       publishIssueCreated(c, store, issue, issueCompatibilityResponse(issue));
       // go-compat (maybeEnqueueOnAssign): creating an issue assigned to an agent/squad
       // dispatches a task, unless it's in backlog (a parking lot for pre-assignment).

@@ -221,6 +221,31 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "workspace.issue-topics.get": {
+      "command": "remi workspace issue-topics get",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.issue-topics.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.issue-topics.set": {
+      "command": "remi workspace issue-topics set",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.issue-topics.set",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "workspace.ssh-mesh.get": {
       "command": "remi workspace ssh-mesh get",
       "auth": [

@@ -214,6 +214,10 @@ describe("native CLI resource contracts", () => {
         bodies.set(path, await request.json());
         return Response.json({ config: await bodies.get(path) });
       }
+      if (path === "/api/workspaces/ws_1/issue-topics" && request.method === "PUT") {
+        bodies.set(path, await request.json());
+        return Response.json({ config: await bodies.get(path) });
+      }
       throw new Error(`unexpected request ${request.method} ${path}`);
     };
     const prompts = specById("workspace.prompt.update");
@@ -229,6 +233,26 @@ describe("native CLI resource contracts", () => {
     globalThis.fetch = mockFetch(archive.id, [], handler);
     await execute(archive, ["ws_1", "--ttl-ms", "86400000", "--sweep-interval-ms", "60000", "--output", "json"]);
     expect(bodies.get("/api/workspaces/ws_1/issue-archive")).toEqual({ ttl_ms: 86400000, sweep_interval_ms: 60000 });
+
+    const issueTopics = specById("workspace.issue-topics.set");
+    globalThis.fetch = mockFetch(issueTopics.id, [], handler);
+    await execute(issueTopics, [
+      "ws_1",
+      "--enabled",
+      "--chat-id",
+      "oc_topics",
+      "--project",
+      "prj_a",
+      "--project",
+      "prj_b",
+      "--output",
+      "json",
+    ]);
+    expect(bodies.get("/api/workspaces/ws_1/issue-topics")).toEqual({
+      enabled: true,
+      chat_id: "oc_topics",
+      project_ids: ["prj_a", "prj_b"],
+    });
 
     const organizer = specById("workspace.organizer.update");
     globalThis.fetch = mockFetch(organizer.id, [], async (request) => {

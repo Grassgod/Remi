@@ -68,7 +68,12 @@ export async function sendMessageFeishu(
 
   const response = await client.im.message.create({
     params: { receive_id_type: receiveIdType },
-    data: { receive_id: receiveId, content, msg_type: msgType },
+    data: {
+      receive_id: receiveId,
+      content,
+      msg_type: msgType,
+      ...(options?.idempotencyKey ? { uuid: options.idempotencyKey } : {}),
+    },
   });
   if (response.code !== 0) {
     throw new Error(`Feishu send failed: ${response.msg || `code ${response.code}`}`);

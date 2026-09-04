@@ -142,6 +142,7 @@ const TASK_PARITY_DENIED_COMMAND_IDS = new Set([
   "workspace.bot-menu.publish-status",
   "workspace.bot-menu.update",
   "workspace.delete",
+  "workspace.issue-topics.set",
   "workspace.leave",
   "workspace.organizer.update",
   "workspace.relay.reveal",

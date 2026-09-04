@@ -1771,6 +1771,10 @@ runMigrations(this.db);
     return this.feishuBot.submitMessage(workspaceId, runtimeId, input);
   }
 
+  prepareFeishuIssueTopicWithinTransaction(issue: MultiremiIssue): boolean {
+    return this.feishuBot.prepareIssueTopicWithinTransaction(issue);
+  }
+
   prepareFeishuIssueRoundPushesWithinTransaction(input: {
     issue: MultiremiIssue;
     leaderTask: MultiremiTask;

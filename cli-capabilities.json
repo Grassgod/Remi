@@ -337,6 +337,39 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "workspace.issue-topics.get": {
+      "command": "remi workspace issue-topics get",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.issue-topics.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.issue-topics.set": {
+      "command": "remi workspace issue-topics set",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.issue-topics.set",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "workspace.ssh-mesh.get": {
       "command": "remi workspace ssh-mesh get",
       "aliases": [],
@@ -10156,6 +10189,9 @@
     "GET /api/workspaces/:id/issue-archive": {
       "command": "workspace.issue-archive.get"
     },
+    "GET /api/workspaces/:id/issue-topics": {
+      "command": "workspace.issue-topics.get"
+    },
     "GET /api/workspaces/:id/lark/install/:sessionId/status": {
       "command": "lark.install.status"
     },
@@ -11451,6 +11487,9 @@
     },
     "PUT /api/workspaces/:id/issue-archive": {
       "command": "workspace.issue-archive.update"
+    },
+    "PUT /api/workspaces/:id/issue-topics": {
+      "command": "workspace.issue-topics.set"
     },
     "PUT /api/workspaces/:id/organizer": {
       "command": "workspace.organizer.update"
