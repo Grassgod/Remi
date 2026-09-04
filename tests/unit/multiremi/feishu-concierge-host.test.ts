@@ -61,8 +61,14 @@ interface BootCall {
 }
 
 /** A channel handle whose run promise the test controls. */
-function fakeChannel(): { handle: FeishuChannelHandle; fail: (error: unknown) => void; stops: () => number } {
+function fakeChannel(): {
+  handle: FeishuChannelHandle;
+  fail: (error: unknown) => void;
+  stops: () => number;
+  sent: Array<{ chatId: string; idempotencyKey: string }>;
+} {
   let stops = 0;
+  const sent: Array<{ chatId: string; idempotencyKey: string }> = [];
   let fail!: (error: unknown) => void;
   const start = new Promise<void>((_resolve, reject) => { fail = reject; });
   return {
@@ -70,9 +76,14 @@ function fakeChannel(): { handle: FeishuChannelHandle; fail: (error: unknown) =>
       start,
       stop: async () => { stops += 1; },
       publishBotMenu: async () => ({ dryRun: true, defaultPublished: false, userMenuCount: 0 }),
+      sendProactiveThreadReply: async (input: { chatId: string; idempotencyKey: string }) => {
+        sent.push({ chatId: input.chatId, idempotencyKey: input.idempotencyKey });
+        return { messageId: "om_proactive" };
+      },
     } as unknown as FeishuChannelHandle,
     fail,
     stops: () => stops,
+    sent,
   };
 }
 
@@ -98,6 +109,25 @@ function host(input: {
 }
 
 describe("control-plane Feishu concierge host", () => {
+  it("routes proactive delivery through the running connector handle", async () => {
+    const fake = fakeDaemon();
+    const test = host({ daemon: fake.daemon });
+    await test.conciergeHost.start(assignment());
+
+    const result = await test.conciergeHost.sendOutbound!({
+      id: "fbo_host",
+      claimToken: "claim_host",
+      chatId: "oc_host",
+      threadId: "omt_host",
+      replyToMessageId: "om_root",
+      body: "Round complete.",
+      idempotencyKey: "fbo_host",
+    });
+
+    expect(result).toEqual({ messageId: "om_proactive" });
+    expect(test.channel.sent).toEqual([{ chatId: "oc_host", idempotencyKey: "fbo_host" }]);
+  });
+
   it("admits senders for server-side union_id classification", async () => {
     const fake = fakeDaemon();
     const test = host({ daemon: fake.daemon });

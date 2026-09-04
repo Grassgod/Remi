@@ -26,6 +26,7 @@ import type {
   FeishuBotErrorCode,
   FeishuBotRuntimeState,
   MultiremiFeishuBotDirective,
+  MultiremiFeishuBotOutboundDelivery,
 } from "@multiremi/contracts/types.js";
 import { normalizeFeishuBotErrorCode, redactFeishuBotError } from "@multiremi/feishu-bot/diagnostics.js";
 import type { MultiremiFeishuBotAssignment } from "./client.js";
@@ -44,6 +45,7 @@ export interface FeishuConciergeStartResult {
 export interface FeishuConciergeHost {
   start(assignment: MultiremiFeishuBotAssignment): Promise<FeishuConciergeStartResult>;
   stop(): Promise<void>;
+  sendOutbound?(delivery: MultiremiFeishuBotOutboundDelivery): Promise<{ messageId: string }>;
 }
 
 /**
@@ -154,6 +156,12 @@ export class FeishuConciergeSupervisor {
     this.noteFailure();
     this.options.log?.warn(`Feishu concierge stopped unexpectedly: ${this.errorMessage}`);
     await this.report(true);
+  }
+
+  async sendOutbound(delivery: MultiremiFeishuBotOutboundDelivery): Promise<{ messageId: string }> {
+    if (this.state !== "online") throw new Error("Feishu concierge is not online");
+    if (!this.options.host.sendOutbound) throw new Error("Feishu concierge host cannot send outbound messages");
+    return this.options.host.sendOutbound(delivery);
   }
 
   private async reconcile(directive: MultiremiFeishuBotDirective): Promise<void> {

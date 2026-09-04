@@ -27,6 +27,7 @@ import type {
   FeishuBotRuntimeState,
   MultiremiFeishuBotDaemonConfig,
   MultiremiFeishuBotDaemonPayload,
+  MultiremiFeishuBotOutboundDelivery,
   MultiremiTaskMessage,
   FeishuBotTaskSnapshot,
   FeishuBotSessionSnapshot,
@@ -34,7 +35,7 @@ import type {
   SubmitFeishuBotMessageResult,
 } from "@multiremi/contracts/types.js";
 import {
-  FEISHU_CONCIERGE_PROTOCOL_VERSION,
+  FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION,
   MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
   MULTIREMI_SSH_MESH_PROTOCOL_VERSION,
 } from "@multiremi/contracts/types.js";
@@ -279,7 +280,7 @@ export class MultiremiDaemonClient {
         // Only claimed when this process can actually host the connector, so
         // the control plane never hands the bot to a Runtime that cannot run it.
         ...(supportsFeishuConcierge
-          ? { feishu_concierge_protocol: FEISHU_CONCIERGE_PROTOCOL_VERSION }
+          ? { feishu_concierge_protocol: FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION }
           : {}),
       });
     } catch (error) {
@@ -288,10 +289,25 @@ export class MultiremiDaemonClient {
       }
       throw error;
     }
+    const rawOutbound = resp.pending_feishu_outbound as Record<string, unknown> | undefined;
+    const pendingFeishuOutbound: MultiremiFeishuBotOutboundDelivery | undefined = rawOutbound
+      ? {
+          id: String(rawOutbound.id ?? ""),
+          claimToken: String(rawOutbound.claim_token ?? rawOutbound.claimToken ?? ""),
+          chatId: String(rawOutbound.chat_id ?? rawOutbound.chatId ?? ""),
+          threadId: typeof (rawOutbound.thread_id ?? rawOutbound.threadId) === "string"
+            ? String(rawOutbound.thread_id ?? rawOutbound.threadId)
+            : null,
+          replyToMessageId: String(rawOutbound.reply_to_message_id ?? rawOutbound.replyToMessageId ?? ""),
+          body: String(rawOutbound.body ?? ""),
+          idempotencyKey: String(rawOutbound.idempotency_key ?? rawOutbound.idempotencyKey ?? rawOutbound.id ?? ""),
+        }
+      : undefined;
     return {
       runtime_id: runtimeId,
       status: resp.status ?? "ok",
       ...resp,
+      ...(pendingFeishuOutbound ? { pending_feishu_outbound: pendingFeishuOutbound } : {}),
     } as MultiremiDaemonHeartbeatConfigAck;
   }
 
@@ -353,6 +369,27 @@ export class MultiremiDaemonClient {
     await this.post(
       `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/feishu-bot/status`,
       input,
+    );
+  }
+
+  async reportFeishuBotOutboundResult(
+    runtimeId: string,
+    deliveryId: string,
+    input: {
+      claimToken: string;
+      status: "sent" | "failed";
+      externalMessageId?: string | null;
+      error?: string | null;
+    },
+  ): Promise<void> {
+    await this.post(
+      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/feishu-bot/outbound/${encodeURIComponent(deliveryId)}/result`,
+      {
+        claim_token: input.claimToken,
+        status: input.status,
+        external_message_id: input.externalMessageId ?? undefined,
+        error: input.error ?? undefined,
+      },
     );
   }
 

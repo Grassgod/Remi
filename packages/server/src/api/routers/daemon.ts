@@ -40,7 +40,10 @@ import {
   daemonTaskWireResponse,
   workspaceReposResponse,
 } from "../wire/index.js";
-import { FEISHU_CONCIERGE_PROTOCOL_VERSION } from "@multiremi/contracts/types.js";
+import {
+  FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION,
+  FEISHU_CONCIERGE_PROTOCOL_VERSION,
+} from "@multiremi/contracts/types.js";
 import { FeishuBotEncryptionError } from "@multiremi/feishu-bot/credentials.js";
 import { normalizeFeishuBotErrorCode, redactFeishuBotError } from "@multiremi/feishu-bot/diagnostics.js";
 import type {
@@ -417,6 +420,20 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       // fetches the payload itself over its own runtime-scoped route.
       const directive = store.feishuBotDirectiveForRuntime(workspaceId, runtimeId);
       if (directive) response.feishu_bot = directive;
+      const outbound = feishuConciergeProtocol >= FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION
+        ? store.claimFeishuBotOutbound(workspaceId, runtimeId)
+        : null;
+      if (outbound) {
+        response.pending_feishu_outbound = {
+          id: outbound.id,
+          claim_token: outbound.claimToken,
+          chat_id: outbound.chatId,
+          thread_id: outbound.threadId,
+          reply_to_message_id: outbound.replyToMessageId,
+          body: outbound.body,
+          idempotency_key: outbound.idempotencyKey,
+        };
+      }
     }
     return c.json(response);
   });
@@ -499,6 +516,36 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       status: "ok",
       directive: store.feishuBotDirectiveForRuntime(workspaceId, runtimeId),
     });
+  });
+  app.post("/api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/result", async (c) => {
+    const runtimeId = c.req.param("runtimeId");
+    const denied = denyDaemonTokenRuntimeIdentity(c, store, runtimeId);
+    if (denied) return denied;
+    const runtime = store.getRuntime(runtimeId);
+    if (!runtime) return c.json({ error: "runtime not found", code: "runtime_not_found" }, 404);
+    const body = await readJsonStrict<{
+      claim_token?: unknown;
+      status?: unknown;
+      external_message_id?: unknown;
+      error?: unknown;
+    }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const claimToken = cleanString(typeof body.claim_token === "string" ? body.claim_token : null);
+    const status = body.status === "sent" || body.status === "failed" ? body.status : null;
+    if (!claimToken || !status) return c.json({ error: "claim_token and a valid status are required" }, 400);
+    const accepted = store.reportFeishuBotOutbound(
+      runtime.workspaceId ?? "local",
+      runtimeId,
+      c.req.param("deliveryId"),
+      {
+        claimToken,
+        status,
+        externalMessageId: cleanString(typeof body.external_message_id === "string" ? body.external_message_id : null),
+        error: body.error ? redactFeishuBotError(String(body.error)) : null,
+      },
+    );
+    if (!accepted) return c.json({ error: "outbound delivery lease is stale", code: "stale_lease" }, 409);
+    return c.json({ status: "ok" });
   });
   app.post("/api/daemon/runtimes/:runtimeId/feishu-bot/messages", async (c) => {
     const runtimeId = c.req.param("runtimeId");

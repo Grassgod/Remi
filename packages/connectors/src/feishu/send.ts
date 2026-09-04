@@ -35,6 +35,7 @@ export async function sendMessageFeishu(
   options?: {
     replyToMessageId?: string;
     mentions?: MentionTarget[];
+    idempotencyKey?: string;
   },
 ): Promise<FeishuSendResult> {
   const receiveId = to.trim();
@@ -52,7 +53,12 @@ export async function sendMessageFeishu(
   if (options?.replyToMessageId) {
     const response = await client.im.message.reply({
       path: { message_id: options.replyToMessageId },
-      data: { content, msg_type: msgType, reply_in_thread: true },
+      data: {
+        content,
+        msg_type: msgType,
+        reply_in_thread: true,
+        ...(options.idempotencyKey ? { uuid: options.idempotencyKey } : {}),
+      },
     });
     if (response.code !== 0) {
       throw new Error(`Feishu reply failed: ${response.msg || `code ${response.code}`}`);

@@ -46,6 +46,12 @@ export interface FeishuChannelHandle {
   start: Promise<void>;
   stop: () => Promise<void>;
   publishBotMenu: (config: ResolvedBotMenuConfig, dryRun: boolean) => Promise<BotMenuPublishResult>;
+  sendProactiveThreadReply: (input: {
+    chatId: string;
+    replyToMessageId: string;
+    body: string;
+    idempotencyKey: string;
+  }) => Promise<{ messageId: string }>;
 }
 
 export async function waitForFeishuConnectorStart(
@@ -96,5 +102,6 @@ export async function bootFeishuChannel(
     start,
     stop: () => connector.stop(),
     publishBotMenu: (menu, dryRun) => menuSyncer.syncAll(menu, { dryRun }),
+    sendProactiveThreadReply: (input) => connector.sendProactiveThreadReply(input),
   };
 }
