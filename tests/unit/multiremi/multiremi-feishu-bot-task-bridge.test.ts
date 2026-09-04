@@ -205,6 +205,70 @@ describe("Feishu bot standard Task bridge", () => {
     ]);
   });
 
+  it("waits for delegated work and the leader return before waking the bound Chat", () => {
+    const { store, agent, config } = scaffold();
+    const inbound = store.submitFeishuBotMessage("local", "rt_bot", {
+      revision: config.revision,
+      externalSessionKey: "oc_delegated:thread:omt_delegated",
+      externalMessageId: "om_delegated_1",
+      replyToMessageId: "om_delegated_1",
+      chatId: "oc_delegated",
+      threadId: "omt_delegated",
+      senderUnionId: "on_owner",
+      text: "Create and track the delegated work.",
+    });
+    store.cancelTask(inbound.taskId);
+    const teammate = store.createAgent({ name: "Teammate", provider: "codex", workspaceId: "local" });
+    const squad = store.createSquad({
+      name: "Delivery Squad",
+      workspaceId: "local",
+      leaderId: agent.id,
+      memberIds: [teammate.id],
+    });
+    const issue = store.createIssue({
+      title: "Delegated Feishu round",
+      workspaceId: "local",
+      assigneeType: "squad",
+      assigneeId: squad.id,
+    });
+    store.updateChatSession(inbound.chatSessionId, { issueId: issue.id });
+    const session = store.getOrCreateDefaultIssueSession(issue.id);
+    const leaderTask = store.createSessionTask(session.id, {
+      agentId: agent.id,
+      prompt: "Delegate and review the work.",
+    });
+    expect(store.claimTask("rt_bot")?.id).toBe(leaderTask.id);
+    store.startTask(leaderTask.id);
+    store.createIssueComment(issue.id, {
+      authorType: "agent",
+      authorId: agent.id,
+      taskId: leaderTask.id,
+      body: `Please implement this [@Teammate](mention://agent/${teammate.id})`,
+    });
+    const teammateTask = store.listTasksForIssue(issue.id).find((task) => task.agentId === teammate.id)!;
+    const baselineChatTaskCount = store.listTasks().filter((task) => task.chatSessionId === inbound.chatSessionId).length;
+
+    store.completeTask(leaderTask.id, { output: "Delegated; waiting for implementation." });
+    expect(store.listTasks().filter((task) => task.chatSessionId === inbound.chatSessionId)).toHaveLength(baselineChatTaskCount);
+    expect(store.claimTask("rt_bot")?.id).toBe(teammateTask.id);
+    store.startTask(teammateTask.id);
+    store.completeTask(teammateTask.id, { output: "Implementation complete." });
+    expect(store.listTasks().filter((task) => task.chatSessionId === inbound.chatSessionId)).toHaveLength(baselineChatTaskCount);
+
+    const leaderReturn = store.listTasksForIssue(issue.id).find((task) =>
+      task.agentId === agent.id && task.parentTaskId === teammateTask.id
+    )!;
+    expect(store.claimTask("rt_bot")?.id).toBe(leaderReturn.id);
+    store.startTask(leaderReturn.id);
+    store.completeTask(leaderReturn.id, { output: "Reviewed the implementation; this round is complete." });
+
+    const proactive = store.listTasks().filter((task) =>
+      task.chatSessionId === inbound.chatSessionId && task.status === "queued"
+    );
+    expect(proactive).toHaveLength(1);
+    expect(proactive[0]?.prompt).toContain(`completed a work round for ${issue.key}`);
+  });
+
   it("switches the bound Chat from bootstrap to delta after the provider session is promoted", () => {
     const { store, agent, config } = scaffold();
     store.updateAgent(agent.id, { instructions: "Follow the workspace rules.\n".repeat(400) });
