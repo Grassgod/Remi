@@ -495,6 +495,8 @@ function mappedOperationsCommand(route: string): string | null {
     "GET /api/scm/capabilities": "scm.capabilities",
     "GET /api/inbox": "inbox.list",
     "GET /api/multiremi/inbox": "inbox.list",
+    "GET /api/inbox/page": "inbox.page",
+    "GET /api/inbox/summary": "inbox.summary",
     "GET /api/inbox/unread-count": "inbox.unread-count",
     "POST /api/inbox/mark-all-read": "inbox.mark-all-read",
     "POST /api/inbox/archive-all": "inbox.archive-all",

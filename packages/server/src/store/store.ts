@@ -234,6 +234,8 @@ import type {
   MultiremiDaemonSshMeshStatus,
   MultiremiSshMeshHeartbeatAck,
   MultiremiInboxItem,
+  MultiremiInboxPage,
+  MultiremiInboxSummary,
   MultiremiIssueActivity,
   MultiremiIssueChildProgress,
   MultiremiIssueComment,
@@ -3139,6 +3141,17 @@ runMigrations(this.db);
 
   listInboxItems(memberId?: string | null): MultiremiInboxItem[] {
     return this.issues.listInboxItems(memberId);
+  }
+
+  listInboxItemsPage(
+    memberId?: string | null,
+    options: { limit?: number; cursor?: string | null } = {},
+  ): MultiremiInboxPage {
+    return this.issues.listInboxItemsPage(memberId, options);
+  }
+
+  getInboxSummary(memberId?: string | null, timezoneOffsetMinutes = 0): MultiremiInboxSummary {
+    return this.issues.getInboxSummary(memberId, timezoneOffsetMinutes);
   }
 
   markInboxItemRead(id: string): MultiremiInboxItem {

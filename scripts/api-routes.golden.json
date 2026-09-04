@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 717,
+    "routeCount": 721,
     "routeCountByPrefix": {
       "native": 209,
-      "compat": 495,
+      "compat": 499,
       "root": 13
     },
-    "getRoutes": 305,
-    "getRoutesWithBody": 302,
+    "getRoutes": 308,
+    "getRoutesWithBody": 305,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 412,
+    "mutationRoutes": 413,
     "mutationRoutesCovered": 282,
     "flows": [
       "agents-compat",
@@ -196,6 +196,8 @@
     "GET /api/dashboard/usage/by-agent",
     "GET /api/dashboard/usage/daily",
     "GET /api/inbox",
+    "GET /api/inbox/page",
+    "GET /api/inbox/summary",
     "GET /api/inbox/unread-count",
     "GET /api/invitations",
     "GET /api/invitations/:id",
@@ -903,6 +905,8 @@
     "GET /api/dashboard/usage/by-agent",
     "GET /api/dashboard/usage/daily",
     "GET /api/inbox",
+    "GET /api/inbox/page",
+    "GET /api/inbox/summary",
     "GET /api/inbox/unread-count",
     "GET /api/invitations",
     "GET /api/invitations/:id",
@@ -8641,9 +8645,31 @@
             "allowed": true
           },
           {
+            "id": "inbox.page",
+            "command": "remi inbox page",
+            "capability": "inbox.page",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "inbox.read",
             "command": "remi inbox read",
             "capability": "inbox.read",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "inbox.summary",
+            "command": "remi inbox summary",
+            "capability": "inbox.summary",
             "outputs": [
               "table",
               "json",
@@ -13318,6 +13344,83 @@
           }
         }
       ]
+    },
+    {
+      "key": "get-sweep GET /api/inbox/page",
+      "route": "GET /api/inbox/page",
+      "path": "/api/inbox/page",
+      "status": 200,
+      "body": {
+        "items": [
+          {
+            "id": "inb_m21cp1q6gys4",
+            "workspaceId": "local",
+            "workspace_id": "local",
+            "issueId": "iss_snapshot_blocked",
+            "issue_id": "iss_snapshot_blocked",
+            "memberId": "mem_local_local",
+            "member_id": "mem_local_local",
+            "recipientType": "member",
+            "recipient_type": "member",
+            "recipientId": "mem_local_local",
+            "recipient_id": "mem_local_local",
+            "actorType": "system",
+            "actor_type": "system",
+            "actorId": null,
+            "actor_id": null,
+            "type": "issue_assigned",
+            "severity": "info",
+            "title": "MUL-3 assigned to you",
+            "body": "Snapshot blocked issue",
+            "details": null,
+            "read": false,
+            "archived": false,
+            "createdAt": "<timestamp>",
+            "created_at": "<timestamp>",
+            "issue": {
+              "id": "iss_snapshot_blocked",
+              "key": "MUL-3",
+              "number": 3,
+              "title": "Snapshot blocked issue",
+              "description": null,
+              "status": "todo",
+              "priority": "none",
+              "workspaceId": "local",
+              "projectId": null,
+              "parentIssueId": null,
+              "issueKind": "execution",
+              "sourceIssueId": null,
+              "assigneeType": "member",
+              "assigneeId": "mem_local_local",
+              "position": 0,
+              "startDate": null,
+              "dueDate": null,
+              "acceptanceCriteria": [],
+              "contextRefs": [],
+              "metadata": {},
+              "labels": [],
+              "createdBy": "mem_snapshot_one",
+              "completedAt": null,
+              "archivedAt": null,
+              "createdAt": "<timestamp>",
+              "updatedAt": "<timestamp>"
+            }
+          }
+        ],
+        "limit": 50,
+        "has_more": false,
+        "next_cursor": null
+      }
+    },
+    {
+      "key": "get-sweep GET /api/inbox/summary",
+      "route": "GET /api/inbox/summary",
+      "path": "/api/inbox/summary",
+      "status": 200,
+      "body": {
+        "unread": 1,
+        "attention": 0
+      }
     },
     {
       "key": "get-sweep GET /api/inbox/unread-count",

@@ -990,6 +990,7 @@ export function runMigrations(db: SqlDatabase): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_inbox_member ON multiremi_inbox_items(member_id, archived, read, created_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_inbox_page ON multiremi_inbox_items(member_id, archived, created_at DESC, id DESC);
 
     CREATE TABLE IF NOT EXISTS multiremi_notification_channels (
       id TEXT PRIMARY KEY,
@@ -3825,6 +3826,8 @@ function ensureInboxGenericSchema(db: SqlDatabase): void {
     DROP TABLE multiremi_inbox_items_legacy;
     CREATE INDEX IF NOT EXISTS idx_multiremi_inbox_member
       ON multiremi_inbox_items(member_id, archived, read, created_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_inbox_page
+      ON multiremi_inbox_items(member_id, archived, created_at DESC, id DESC);
     CREATE INDEX IF NOT EXISTS idx_multiremi_inbox_recipient
       ON multiremi_inbox_items(workspace_id, recipient_type, recipient_id, archived, read, created_at);
   `);

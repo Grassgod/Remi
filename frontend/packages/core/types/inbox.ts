@@ -105,3 +105,15 @@ export interface InboxItem {
   created_at: string;
   details: InboxItemDetails | null;
 }
+
+export interface InboxPage {
+  items: InboxItem[];
+  limit: number;
+  has_more: boolean;
+  next_cursor: string | null;
+}
+
+export interface InboxSummary {
+  unread: number;
+  attention: number;
+}

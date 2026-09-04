@@ -45,9 +45,17 @@ vi.mock("@multiremi/core/issues/stores/draft-store", () => ({
 
 vi.mock("@multiremi/core/inbox/queries", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@multiremi/core/inbox/queries")>()),
-  inboxListOptions: (wsId: string) => ({
-    queryKey: ["inbox", wsId],
-    queryFn: listInbox,
+  inboxPageOptions: (wsId: string) => ({
+    queryKey: ["inbox", wsId, "pages"],
+    queryFn: async ({ pageParam }: { pageParam: string | null }) => {
+      const result = await listInbox(pageParam);
+      return Array.isArray(result)
+        ? { items: result, limit: 50, has_more: false, next_cursor: null }
+        : result;
+    },
+    initialPageParam: null,
+    getNextPageParam: (lastPage: { next_cursor: string | null }) =>
+      lastPage.next_cursor ?? undefined,
   }),
   useInboxUnreadCount: () => 0,
 }));
@@ -198,6 +206,39 @@ describe("InboxPage", () => {
 
     expect(await screen.findByText("No notifications")).toBeInTheDocument();
     expect(screen.queryByText("Something went wrong")).not.toBeInTheDocument();
+  });
+
+  it("loads older notifications one page at a time", async () => {
+    const item = (id: string, createdAt: string) => ({
+      id,
+      type: "comment_mention",
+      issue_id: id,
+      title: id,
+      severity: "info",
+      read: true,
+      archived: false,
+      created_at: createdAt,
+    });
+    listInbox
+      .mockResolvedValueOnce({
+        items: [item("newer", "2026-09-04T10:00:00.000Z")],
+        limit: 1,
+        has_more: true,
+        next_cursor: "cursor-1",
+      })
+      .mockResolvedValueOnce({
+        items: [item("older", "2026-09-03T10:00:00.000Z")],
+        limit: 1,
+        has_more: false,
+        next_cursor: null,
+      });
+    renderInbox();
+
+    expect(await screen.findByText("newer")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+    expect(await screen.findByText("older")).toBeInTheDocument();
+    expect(listInbox).toHaveBeenNthCalledWith(1, null);
+    expect(listInbox).toHaveBeenNthCalledWith(2, "cursor-1");
   });
 
   it("groups notifications by date and filters by source", async () => {

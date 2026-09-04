@@ -7576,6 +7576,40 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "inbox.page": {
+      "command": "remi inbox page",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "inbox.page",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "inbox.summary": {
+      "command": "remi inbox summary",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "inbox.summary",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "inbox.unread-count": {
       "command": "remi inbox unread-count",
       "aliases": [],
@@ -9537,6 +9571,12 @@
     },
     "GET /api/inbox": {
       "command": "inbox.list"
+    },
+    "GET /api/inbox/page": {
+      "command": "inbox.page"
+    },
+    "GET /api/inbox/summary": {
+      "command": "inbox.summary"
     },
     "GET /api/inbox/unread-count": {
       "command": "inbox.unread-count"

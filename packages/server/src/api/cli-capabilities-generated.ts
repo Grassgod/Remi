@@ -5384,6 +5384,32 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "inbox.page": {
+      "command": "remi inbox page",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "inbox.page",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "inbox.summary": {
+      "command": "remi inbox summary",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "inbox.summary",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "inbox.unread-count": {
       "command": "remi inbox unread-count",
       "auth": [

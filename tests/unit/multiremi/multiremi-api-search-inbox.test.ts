@@ -325,4 +325,40 @@ describe("Multiremi API — pins, search, and inbox", () => {
     const afterRead = await app.request("/api/inbox/unread-count?member_id=user-rev");
     expect((await afterRead.json()).count).toBe(0);
   });
+
+  it("paginates the compat inbox and returns grouped counts without loading every item", async () => {
+    const store = createStore();
+    const app = createMultiremiApp({ store });
+    const reviewer = store.createWorkspaceMember({ name: "Paged Reviewer", userId: "user-page" });
+    const author = store.createWorkspaceMember({ name: "Paged Author", userId: "user-page-author" });
+    for (const title of ["First page issue", "Second page issue", "Third page issue"]) {
+      const issue = store.createIssue({ title, createdBy: reviewer.id });
+      store.createIssueComment(issue.id, {
+        authorType: "member",
+        authorId: author.id,
+        body: `Notification for ${title}`,
+      });
+    }
+
+    const firstResponse = await app.request("/api/inbox/page?member_id=user-page&limit=2");
+    expect(firstResponse.status).toBe(200);
+    const first = await firstResponse.json();
+    expect(first.items).toHaveLength(2);
+    expect(first.has_more).toBe(true);
+    expect(first.next_cursor).toBeTruthy();
+    expect(first.items.every((item: any) => item.issue?.title)).toBe(true);
+
+    const secondResponse = await app.request(
+      `/api/inbox/page?member_id=user-page&limit=2&cursor=${encodeURIComponent(first.next_cursor)}`,
+    );
+    const second = await secondResponse.json();
+    expect(second.items).toHaveLength(1);
+    expect(second.has_more).toBe(false);
+    expect(second.next_cursor).toBeNull();
+    expect(new Set([...first.items, ...second.items].map((item: any) => item.id)).size).toBe(3);
+
+    const summaryResponse = await app.request("/api/inbox/summary?member_id=user-page&timezone_offset=-480");
+    expect(summaryResponse.status).toBe(200);
+    expect(await summaryResponse.json()).toEqual({ unread: 3, attention: 0 });
+  });
 });

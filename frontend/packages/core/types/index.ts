@@ -113,6 +113,8 @@ export type {
   AutopilotRunTriggerObject,
   InboxItem,
   InboxItemDetails,
+  InboxPage,
+  InboxSummary,
   InboxSeverity,
   InboxItemType,
 } from "./inbox";

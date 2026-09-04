@@ -26,6 +26,7 @@
   "list": {
     "empty": "暂无通知",
     "filtered_empty": "当前筛选条件下没有通知",
+    "load_more": "加载更多",
     "mark_group_read": "本组标为已读",
     "mark_done_tooltip": "标为已完成",
     "archive_tooltip": "归档",

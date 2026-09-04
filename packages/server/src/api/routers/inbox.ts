@@ -4,6 +4,7 @@ import {
 } from "../helpers.js";
 import {
   inboxCompatibilityResponse,
+  parseOptionalInt,
 } from "../wire/index.js";
 import type { RouterDeps } from "./deps.js";
 
@@ -21,6 +22,23 @@ export function registerInboxRoutes(app: Hono, deps: RouterDeps): void {
     return c.json({ item: store.archiveInboxItem(c.req.param("id")) });
   });
   app.get("/api/inbox", (c) => c.json(store.listInboxItems(compatibilityInboxMemberId(c, store)).map(inboxCompatibilityResponse)));
+  app.get("/api/inbox/page", (c) => {
+    const page = store.listInboxItemsPage(compatibilityInboxMemberId(c, store), {
+      limit: parseOptionalInt(c.req.query("limit")),
+      cursor: c.req.query("cursor") ?? null,
+    });
+    return c.json({
+      items: page.items.map(inboxCompatibilityResponse),
+      limit: page.limit,
+      has_more: page.hasMore,
+      next_cursor: page.nextCursor,
+    });
+  });
+  app.get("/api/inbox/summary", (c) => {
+    const rawOffset = parseOptionalInt(c.req.query("timezone_offset"));
+    const timezoneOffset = Math.max(-840, Math.min(rawOffset ?? 0, 840));
+    return c.json(store.getInboxSummary(compatibilityInboxMemberId(c, store), timezoneOffset));
+  });
   app.get("/api/inbox/unread-count", (c) => c.json({ count: store.countUnreadInboxItems(compatibilityInboxMemberId(c, store)) }));
   app.post("/api/inbox/mark-all-read", (c) => c.json({ count: store.markAllInboxItemsRead(compatibilityInboxMemberId(c, store)) }));
   app.post("/api/inbox/archive-all", (c) => c.json({ count: store.archiveAllInboxItems(compatibilityInboxMemberId(c, store), "all") }));

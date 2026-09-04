@@ -2,13 +2,13 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useDefaultLayout } from "react-resizable-panels";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useWorkspacePaths } from "@multiremi/core/paths";
 import { useModalStore } from "@multiremi/core/modals";
 import { useIssueDraftStore } from "@multiremi/core/issues/stores/draft-store";
 import {
-  inboxListOptions,
+  inboxPageOptions,
   deduplicateInboxItems,
   useInboxUnreadCount,
 } from "@multiremi/core/inbox/queries";
@@ -46,6 +46,8 @@ import {
   BookCheck,
   ListChecks,
   ArrowLeft,
+  ChevronDown,
+  LoaderCircle,
 } from "lucide-react";
 import type { InboxItem } from "@multiremi/core/types";
 import { Button } from "@multiremi/ui/components/ui/button";
@@ -126,11 +128,19 @@ export function InboxPage() {
 
   const wsId = useWorkspaceId();
   const {
-    data: rawItems = [],
+    data: inboxPages,
     isLoading: loading,
     isError: loadFailed,
     refetch: refetchInbox,
-  } = useQuery(inboxListOptions(wsId));
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    isFetchNextPageError,
+  } = useInfiniteQuery(inboxPageOptions(wsId));
+  const rawItems = useMemo(
+    () => inboxPages?.pages.flatMap((page) => page.items) ?? [],
+    [inboxPages],
+  );
   const items = useMemo(() => deduplicateInboxItems(rawItems), [rawItems]);
   const filteredItems = useMemo(
     () => filterInboxItemsBySource(items, sourceFilter),
@@ -194,6 +204,11 @@ export function InboxPage() {
     if (loadFailed) return;
     if (!selectedKey) return;
     if (selected) return;
+    if (hasNextPage && !isFetchNextPageError) {
+      if (!isFetchingNextPage) void fetchNextPage();
+      return;
+    }
+    if (isFetchingNextPage || isFetchNextPageError) return;
     if (lastResolvedKeyRef.current === selectedKey) {
       setSelectedKey("");
       return;
@@ -215,6 +230,10 @@ export function InboxPage() {
     loadFailed,
     selectedKey,
     selected,
+    hasNextPage,
+    isFetchingNextPage,
+    isFetchNextPageError,
+    fetchNextPage,
     selectedKind,
     replace,
     wsPaths,
@@ -494,6 +513,22 @@ export function InboxPage() {
           </section>
         );
       })}
+      {hasNextPage && (
+        <div className="flex justify-center border-t px-3 py-3">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={isFetchingNextPage}
+            onClick={() => void fetchNextPage()}
+          >
+            {isFetchingNextPage
+              ? <LoaderCircle className="animate-spin" />
+              : <ChevronDown />}
+            {t(($) => $.list.load_more)}
+          </Button>
+        </div>
+      )}
     </div>
   );
 

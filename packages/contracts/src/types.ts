@@ -2332,6 +2332,18 @@ export interface MultiremiInboxItem {
   issue: MultiremiIssue | null;
 }
 
+export interface MultiremiInboxPage {
+  items: MultiremiInboxItem[];
+  limit: number;
+  hasMore: boolean;
+  nextCursor: string | null;
+}
+
+export interface MultiremiInboxSummary {
+  unread: number;
+  attention: number;
+}
+
 export type MultiremiNotificationChannelKind = "inapp" | "feishu_group" | "agent_chat";
 export type MultiremiNotificationDeliveryStatus = "pending" | "sent" | "failed";
 

@@ -1,4 +1,4 @@
-import type { InboxItem } from "../../types";
+import type { InboxItem, InboxPage, InboxSummary } from "../../types";
 import type { HttpClient } from "../http";
 
 export class InboxEndpoints {
@@ -7,6 +7,18 @@ export class InboxEndpoints {
   // Inbox
   async listInbox(): Promise<InboxItem[]> {
     return this.http.fetch("/api/inbox");
+  }
+
+  async listInboxPage(options: { limit?: number; cursor?: string | null } = {}): Promise<InboxPage> {
+    const params = new URLSearchParams();
+    if (options.limit) params.set("limit", String(options.limit));
+    if (options.cursor) params.set("cursor", options.cursor);
+    const query = params.size > 0 ? `?${params.toString()}` : "";
+    return this.http.fetch(`/api/inbox/page${query}`);
+  }
+
+  async getInboxSummary(timezoneOffset = new Date().getTimezoneOffset()): Promise<InboxSummary> {
+    return this.http.fetch(`/api/inbox/summary?timezone_offset=${timezoneOffset}`);
   }
 
   async markInboxRead(id: string): Promise<InboxItem> {
