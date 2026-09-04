@@ -182,6 +182,48 @@ export function withIssueCreateRequestContext(
   return out;
 }
 
+export interface IssueCreateChatBindingResponse {
+  chat_issue_binding: {
+    status: "bound" | "preserved";
+    chat_session_id: string;
+    issue_id: string;
+    existing_issue_id: string | null;
+  };
+  chat_issue_binding_hint?: string;
+}
+
+export function bindCreatedIssueToRequestChat(
+  c: Context,
+  store: MultiremiStore,
+  issue: MultiremiIssue,
+): IssueCreateChatBindingResponse | null {
+  const taskId = currentTaskAccessToken(c)?.taskId;
+  const sourceTask = taskId ? store.getTask(taskId) : null;
+  if (!sourceTask?.chatSessionId) return null;
+  const outcome = store.bindChatSessionIssueIfUnbound(sourceTask.chatSessionId, issue.id);
+  if (outcome.bound || outcome.session.issueId === issue.id) {
+    return {
+      chat_issue_binding: {
+        status: "bound",
+        chat_session_id: outcome.session.id,
+        issue_id: issue.id,
+        existing_issue_id: null,
+      },
+    };
+  }
+  const existingIssue = outcome.session.issueId ? store.getIssue(outcome.session.issueId) : null;
+  const existingRef = existingIssue?.key ?? outcome.session.issueId ?? "another Issue";
+  return {
+    chat_issue_binding: {
+      status: "preserved",
+      chat_session_id: outcome.session.id,
+      issue_id: issue.id,
+      existing_issue_id: outcome.session.issueId,
+    },
+    chat_issue_binding_hint: `Chat ${outcome.session.id} remains bound to ${existingRef}; ${issue.key} was not auto-bound. Use remi chat issue bind ${outcome.session.id} ${issue.key} to switch.`,
+  };
+}
+
 // A request that carries no assignee fields at all inherits the project's
 // default executor — assign-on-create is what dispatches the first task, so
 // dropping the default here would strand the issue. Explicitly sending

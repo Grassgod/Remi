@@ -401,7 +401,26 @@ export class IssueSessionsRepo {
       body,
       metadata: { result_id: id, title: input.title?.trim() ?? "" },
     });
-    return this.getSessionResult(id)!;
+    const result = this.getSessionResult(id)!;
+    try {
+      this.ctx.notificationChannels().queueAgentIssueUpdate({
+        activityId: result.id,
+        issueId: session.issueId,
+        actorType: publishedByType,
+        actorId: publishedById,
+        type: "result_published",
+        body: [result.title ? `Published result: ${result.title}` : "Published result", result.body].join("\n\n"),
+        data: {
+          resultId: result.id,
+          sourceSessionId: sessionId,
+          ...(input.sourceTaskId ? { sourceTaskId: input.sourceTaskId } : {}),
+        },
+        createdAt: now,
+      });
+    } catch (error) {
+      log.warn(`agent issue result update queue skipped for ${session.issueId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return result;
   }
 
   getSessionResult(id: string): MultiremiSessionResult | null {

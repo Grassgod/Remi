@@ -28,6 +28,7 @@ const DELIVERABLE_EVENT_TYPES = new Set([
   "issue_metadata_deleted",
   "title_renamed",
   "organizer_action",
+  "result_published",
 ]);
 
 const SOURCE_TASK_KEYS = [
@@ -122,7 +123,7 @@ export class AgentIssueUpdatesRepo {
       const channel = this.ctx.notificationChannels().getAgentChatNotificationChannel(chat.id);
       if (!channel?.enabled) continue;
       if (!channel.eventTypes.includes("*") && !channel.eventTypes.includes(input.type)) continue;
-      if (this.isTargetAgentEvent(chat.agentId, input)) continue;
+      if (this.isTargetChatEvent(chat.id, input)) continue;
       this.upsertPending(chat, channel.id, input);
     }
   }
@@ -196,12 +197,11 @@ export class AgentIssueUpdatesRepo {
     return outcome.kind;
   }
 
-  private isTargetAgentEvent(agentId: string, input: QueueAgentIssueUpdateInput): boolean {
-    if (input.actorType === "agent" && input.actorId === agentId) return true;
+  private isTargetChatEvent(chatSessionId: string, input: QueueAgentIssueUpdateInput): boolean {
     const data = recordValue(input.data);
     for (const key of SOURCE_TASK_KEYS) {
       const taskId = nullableString(data[key]);
-      if (taskId && this.ctx.tasks().getTask(taskId)?.agentId === agentId) return true;
+      if (taskId && this.ctx.tasks().getTask(taskId)?.chatSessionId === chatSessionId) return true;
     }
     return false;
   }

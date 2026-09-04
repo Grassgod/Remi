@@ -1521,7 +1521,7 @@ export class IssuesRepo {
       actorId: input.authorId ?? null,
       type: "comment_created",
       body,
-      data: { commentId: id },
+      data: { commentId: id, ...(taskId ? { sourceTaskId: taskId } : {}) },
     });
     const comment = this.getIssueComment(id)!;
     // Live-update open issue pages. Emitted from the store (not the HTTP

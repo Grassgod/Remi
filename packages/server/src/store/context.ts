@@ -348,6 +348,10 @@ export interface TasksSurface {
 export interface ChatSurface {
   createChatSession(input: CreateChatSessionInput): MultiremiChatSession;
   getChatSession(id: string): MultiremiChatSession | null;
+  bindChatSessionIssueIfUnbound(chatSessionId: string, issueId: string): {
+    session: MultiremiChatSession;
+    bound: boolean;
+  };
   getChatMessage(id: string): MultiremiChatMessage | null;
   getPendingChatTask(chatSessionId: string): MultiremiTask | null;
   createPendingAgentIssueUpdateWithinTransaction(chatSessionId: string, body: string): {

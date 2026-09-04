@@ -7,6 +7,72 @@ import { createStore, resetMultiremiTestEnv } from "./helpers.js";
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi API — issue endpoints", () => {
+  it("auto-binds an Issue created by a Chat task without replacing an existing binding", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const agent = store.createAgent({ name: "Chat issue creator", provider: "codex" });
+    const chat = store.createChatSession({
+      agentId: agent.id,
+      workspaceId: "local",
+      creatorId: "local",
+      title: "Issue creation topic",
+    });
+    const chatTask = store.sendChatMessage(chat.id, { body: "Create an Issue" }).task;
+    const chatCredential = await store.createTaskAccessToken(chatTask, "local");
+    const app = createMultiremiApp({ store });
+    const createFromChat = (title: string) => app.request("/api/issues", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${chatCredential.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ title }),
+    });
+
+    const first = await createFromChat("Created from Chat");
+    expect(first.status).toBe(201);
+    const firstBody = await first.json();
+    expect(firstBody.chat_issue_binding).toEqual({
+      status: "bound",
+      chat_session_id: chat.id,
+      issue_id: firstBody.id,
+      existing_issue_id: null,
+    });
+    expect(firstBody.chat_issue_binding_hint).toBeUndefined();
+    expect(store.getChatSession(chat.id)?.issueId).toBe(firstBody.id);
+    expect(store.getAgentIssueUpdateSubscription(chat.id).enabled).toBe(true);
+
+    const second = await createFromChat("Second Issue from the same Chat task");
+    expect(second.status).toBe(201);
+    const secondBody = await second.json();
+    expect(secondBody.chat_issue_binding).toEqual({
+      status: "preserved",
+      chat_session_id: chat.id,
+      issue_id: secondBody.id,
+      existing_issue_id: firstBody.id,
+    });
+    expect(secondBody.chat_issue_binding_hint).toContain(`${firstBody.identifier}; ${secondBody.identifier} was not auto-bound`);
+    expect(store.getChatSession(chat.id)?.issueId).toBe(firstBody.id);
+
+    const issueSession = store.getOrCreateDefaultIssueSession(firstBody.id);
+    const issueTask = store.createSessionTask(issueSession.id, {
+      agentId: agent.id,
+      prompt: "Create a child Issue",
+    });
+    const issueCredential = await store.createTaskAccessToken(issueTask, "local");
+    const issueLaneCreate = await app.request("/api/issues", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${issueCredential.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ title: "Created from Issue lane" }),
+    });
+    expect(issueLaneCreate.status).toBe(201);
+    expect((await issueLaneCreate.json()).chat_issue_binding).toBeUndefined();
+    expect(store.getChatSession(chat.id)?.issueId).toBe(firstBody.id);
+  });
+
   it("configures issue archiving and exposes archived list and restore APIs", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();

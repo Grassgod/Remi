@@ -163,6 +163,35 @@ export class ChatRepo {
     return row ? toChatSession(row) : null;
   }
 
+  bindChatSessionIssueIfUnbound(chatSessionId: string, issueId: string): {
+    session: MultiremiChatSession;
+    bound: boolean;
+  } {
+    const current = this.getChatSession(chatSessionId);
+    if (!current) throw new Error(`Chat session not found: ${chatSessionId}`);
+    const issue = this.ctx.issues().getIssue(issueId);
+    if (!issue) throw new Error(`Issue not found: ${issueId}`);
+    if (issue.workspaceId !== current.workspaceId) throw new Error("Issue belongs to another workspace");
+    if (current.issueId) return { session: current, bound: false };
+
+    const now = nowIso();
+    const updated = this.ctx.db.run(
+      `UPDATE multiremi_chat_sessions
+       SET issue_id = ?, updated_at = ?
+       WHERE id = ? AND issue_id IS NULL`,
+      [issue.id, now, current.id],
+    );
+    const session = this.getChatSession(current.id)!;
+    if (updated.changes === 0) return { session, bound: false };
+    this.ensureDefaultAgentIssueUpdatesChannel(session);
+    this.ctx.emitChatEvent(session, "chat:session_updated", {
+      title: session.title,
+      issue_id: session.issueId,
+      updated_at: session.updatedAt,
+    });
+    return { session, bound: true };
+  }
+
   updateChatSession(id: string, input: UpdateChatSessionInput): MultiremiChatSession {
     const current = this.getChatSession(id);
     if (!current) throw new Error(`Chat session not found: ${id}`);

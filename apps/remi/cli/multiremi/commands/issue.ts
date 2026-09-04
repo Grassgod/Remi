@@ -580,6 +580,9 @@ export async function issueCreate(options: CliOptions): Promise<void> {
     }
   }
   printJson(topicMigration && isRecord(response) ? { ...response, topic_migration: topicMigration } : response);
+  if (isRecord(response) && typeof response.chat_issue_binding_hint === "string") {
+    console.error(response.chat_issue_binding_hint);
+  }
   warnUndispatchedIssue(response, projectId ?? null, !hasExplicitAssignee && !noProjectDefaults);
 }
 
