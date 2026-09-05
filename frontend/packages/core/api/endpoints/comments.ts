@@ -10,6 +10,7 @@ import type {
   SessionParticipant,
   SessionResult,
   TimelineEntry,
+  TimelinePage,
 } from "../../types";
 import type { HttpClient } from "../http";
 import { parseWithFallback } from "../schema";
@@ -29,7 +30,12 @@ import {
   SessionParticipantSchema,
   SessionResultListSchema,
 } from "../schemas/comments";
-import { EMPTY_TIMELINE_ENTRIES, TimelineEntriesSchema } from "../schemas/timeline";
+import {
+  EMPTY_TIMELINE_ENTRIES,
+  EMPTY_TIMELINE_PAGE,
+  TimelineEntriesSchema,
+  TimelinePageSchema,
+} from "../schemas/timeline";
 
 export class CommentsEndpoints {
   constructor(readonly http: HttpClient) {}
@@ -72,6 +78,21 @@ export class CommentsEndpoints {
     );
     return parseWithFallback(raw, TimelineEntriesSchema, EMPTY_TIMELINE_ENTRIES, {
       endpoint: "GET /api/issues/:id/timeline",
+    });
+  }
+
+  async listTimelinePage(
+    issueId: string,
+    params: { issueSessionId?: string; before?: string | null; limit?: number } = {},
+  ): Promise<TimelinePage> {
+    const query = new URLSearchParams({ limit: String(params.limit ?? 40) });
+    if (params.issueSessionId) query.set("issue_session_id", params.issueSessionId);
+    if (params.before) query.set("before", params.before);
+    const raw = await this.http.fetch<unknown>(
+      `/api/issues/${issueId}/timeline?${query.toString()}`,
+    );
+    return parseWithFallback(raw, TimelinePageSchema, EMPTY_TIMELINE_PAGE, {
+      endpoint: "GET /api/issues/:id/timeline?limit",
     });
   }
 

@@ -16,6 +16,7 @@ import type {
   MultiremiSessionParticipant,
   MultiremiSessionResult,
   MultiremiTimelineEntry,
+  MultiremiTimelinePage,
   QuickCreateIssueInput,
   UpdateIssueInput,
 } from "@multiremi/contracts/types.js";
@@ -336,36 +337,53 @@ export function issueTimelineResponse(
   store: MultiremiStore,
   issueId: string,
   c: { req: { query: (name: string) => string | undefined } },
-): MultiremiTimelineEntry[] | {
-  entries: MultiremiTimelineEntry[];
-  next_cursor: null;
-  prev_cursor: null;
-  has_more_before: false;
-  has_more_after: false;
-  target_index?: number;
-} | null {
+): MultiremiTimelineEntry[] | MultiremiTimelinePage | null {
   if (!store.getIssue(issueId)) return null;
-  const issueSessionId = cleanString(c.req.query("issue_session_id")) || null;
+  const rawIssueSessionId = cleanString(c.req.query("issue_session_id")) || null;
+  const paged = c.req.query("limit") != null || c.req.query("before") != null;
+  let issueSessionId = rawIssueSessionId;
+  if (paged && rawIssueSessionId === "@default") {
+    const sessions = store.listIssueSessions(issueId);
+    issueSessionId = sessions.find((session) => session.isDefault)?.id ?? sessions[0]?.id ?? null;
+  }
   if (issueSessionId) {
     const session = store.getIssueSession(issueSessionId);
     if (!session || session.issueId !== issueId) return null;
   }
   const wrapped = ["limit", "before", "after", "around"].some((name) => c.req.query(name) != null);
   if (!wrapped) return store.listIssueTimeline(issueId, { ascending: true, issueSessionId });
+  if (paged) {
+    const limit = parseTimelineLimit(c.req.query("limit"));
+    const before = parseTimelineCursor(c.req.query("before"));
+    const page = store.listIssueTimelinePage(issueId, { issueSessionId, before, limit });
+    const oldest = page.entries[0];
+    const response: MultiremiTimelinePage = {
+      entries: page.entries,
+      limit,
+      next_cursor: page.hasMore && oldest ? encodeTimelineCursor(oldest) : null,
+      prev_cursor: null,
+      has_more: page.hasMore,
+      has_more_before: page.hasMore,
+      has_more_after: false,
+      issue_session_id: issueSessionId,
+    };
+    const anchor = c.req.query("around");
+    if (anchor) {
+      const index = page.entries.findIndex((entry) => entry.id === anchor);
+      if (index >= 0) response.target_index = index;
+    }
+    return response;
+  }
   const entries = store.listIssueTimeline(issueId, { ascending: false, issueSessionId });
-  const response: {
-    entries: MultiremiTimelineEntry[];
-    next_cursor: null;
-    prev_cursor: null;
-    has_more_before: false;
-    has_more_after: false;
-    target_index?: number;
-  } = {
+  const response: MultiremiTimelinePage = {
     entries,
+    limit: entries.length,
     next_cursor: null,
     prev_cursor: null,
+    has_more: false,
     has_more_before: false,
     has_more_after: false,
+    issue_session_id: issueSessionId,
   };
   const anchor = c.req.query("around");
   if (anchor) {
@@ -373,6 +391,41 @@ export function issueTimelineResponse(
     if (index >= 0) response.target_index = index;
   }
   return response;
+}
+
+export class IssueTimelineRequestError extends Error {}
+
+function parseTimelineLimit(raw: string | undefined): number {
+  if (raw == null || raw === "") return 40;
+  const limit = Number(raw);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    throw new IssueTimelineRequestError("invalid limit");
+  }
+  return limit;
+}
+
+function parseTimelineCursor(raw: string | undefined): { createdAt: string; id: string } | null {
+  if (raw == null) return null;
+  try {
+    const value = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as unknown;
+    if (
+      !Array.isArray(value)
+      || value.length !== 2
+      || typeof value[0] !== "string"
+      || typeof value[1] !== "string"
+      || !value[1]
+      || !Number.isFinite(Date.parse(value[0]))
+    ) {
+      throw new Error("invalid payload");
+    }
+    return { createdAt: value[0], id: value[1] };
+  } catch {
+    throw new IssueTimelineRequestError("invalid cursor");
+  }
+}
+
+function encodeTimelineCursor(entry: MultiremiTimelineEntry): string {
+  return Buffer.from(JSON.stringify([entry.createdAt, entry.id]), "utf8").toString("base64url");
 }
 
 function timelineEntryCompatibilityResponse(entry: MultiremiTimelineEntry): Record<string, unknown> {
@@ -411,10 +464,13 @@ export function issueTimelineCompatibilityResponse(
   c: { req: { query: (name: string) => string | undefined } },
 ): Record<string, unknown>[] | {
   entries: Record<string, unknown>[];
-  next_cursor: null;
+  limit: number;
+  next_cursor: string | null;
   prev_cursor: null;
-  has_more_before: false;
+  has_more: boolean;
+  has_more_before: boolean;
   has_more_after: false;
+  issue_session_id: string | null;
   target_index?: number;
 } | null {
   const response = issueTimelineResponse(store, issueId, c);

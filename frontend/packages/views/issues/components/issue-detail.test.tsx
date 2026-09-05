@@ -1,6 +1,6 @@
 import { forwardRef, useRef, useState, useImperativeHandle } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Issue, TimelineEntry } from "@multiremi/core/types";
 import { I18nProvider } from "@multiremi/core/i18n/react";
@@ -12,6 +12,10 @@ const TEST_RESOURCES = { en: { common: enCommon, issues: enIssues } };
 const mockViewport = vi.hoisted(() => ({ isMobile: false }));
 const mockNavigationReplace = vi.hoisted(() => vi.fn());
 const mockToast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
+const timelinePageControl = vi.hoisted(() => ({
+  hasMore: false,
+  olderEntries: [] as TimelineEntry[],
+}));
 
 vi.mock("@multiremi/ui/hooks/use-mobile", () => ({
   useIsMobile: () => mockViewport.isMobile,
@@ -217,6 +221,30 @@ const mockApiObj = vi.hoisted(() => ({
   createIssueSession: vi.fn(),
   addSessionParticipant: vi.fn(),
   listTimeline: vi.fn().mockResolvedValue([]),
+  listTimelinePage: vi.fn(async (
+    issueId: string,
+    params: { issueSessionId?: string; before?: string | null; limit?: number },
+  ) => {
+    let resolvedSessionId = params.issueSessionId;
+    if (resolvedSessionId === "@default") {
+      const sessions = await mockApiObj.listIssueSessions(issueId);
+      resolvedSessionId = sessions.find((session: { is_default?: boolean }) => session.is_default)?.id
+        ?? sessions[0]?.id;
+    }
+    const entries = params.before
+      ? timelinePageControl.olderEntries
+      : await mockApiObj.listTimeline(issueId, resolvedSessionId);
+    return {
+      entries,
+      limit: params.limit ?? 40,
+      has_more: !params.before && timelinePageControl.hasMore,
+      has_more_before: !params.before && timelinePageControl.hasMore,
+      has_more_after: false,
+      next_cursor: !params.before && timelinePageControl.hasMore ? "older-cursor" : null,
+      prev_cursor: null,
+      issue_session_id: resolvedSessionId ?? null,
+    };
+  }),
   listComments: vi.fn().mockResolvedValue([]),
   createComment: vi.fn(),
   updateComment: vi.fn(),
@@ -520,7 +548,19 @@ function renderIssueDetailWithHighlight(
     // the issue itself has finished loading, so the effect that scrolls to
     // the comment fires once with `loading=true` (skeleton still rendered,
     // no comment DOM) and must re-fire when `loading` flips to false.
-    queryClient.setQueryData(["issues", "timeline", issueId, "session-main"], mockTimeline);
+    queryClient.setQueryData(["issues", "timeline", issueId, "session-main"], {
+      pages: [{
+        entries: mockTimeline,
+        limit: 40,
+        has_more: false,
+        has_more_before: false,
+        has_more_after: false,
+        next_cursor: null,
+        prev_cursor: null,
+        issue_session_id: "session-main",
+      }],
+      pageParams: [null],
+    });
   }
   const result = render(
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
@@ -539,6 +579,8 @@ function renderIssueDetailWithHighlight(
 describe("IssueDetail (shared)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    timelinePageControl.hasMore = false;
+    timelinePageControl.olderEntries = [];
     mockViewport.isMobile = false;
     // Default: issue loads successfully
     mockApiObj.getIssue.mockResolvedValue(mockIssue);
@@ -807,16 +849,45 @@ describe("IssueDetail (shared)", () => {
     expect(screen.queryByRole("button", { name: "Complete issue" })).not.toBeInTheDocument();
   });
 
-  it("opens the conversation landed on its newest entry", async () => {
+  it("opens the conversation directly at its newest entry without an imperative jump", async () => {
     renderIssueDetail();
 
     await waitFor(() => {
-      expect(virtuosoScrollToIndexSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ index: expect.any(Number), align: "end" }),
-      );
+      expect(screen.getByTestId("virtuoso-mock")).toBeInTheDocument();
     });
-    // One-shot: the landing effect must not re-fire on subsequent renders.
-    expect(virtuosoScrollToIndexSpy).toHaveBeenCalledTimes(1);
+    expect(virtuosoLatestProps.current?.initialTopMostItemIndex).toEqual({
+      index: "LAST",
+      align: "end",
+    });
+    expect(virtuosoScrollToIndexSpy).not.toHaveBeenCalled();
+  });
+
+  it("loads older timeline rows from the top while preserving the logical anchor", async () => {
+    timelinePageControl.hasMore = true;
+    timelinePageControl.olderEntries = [{
+      type: "comment",
+      id: "older-comment",
+      actor_type: "member",
+      actor_id: "user-1",
+      content: "older",
+      parent_id: null,
+      created_at: "2026-01-15T00:00:00Z",
+    }];
+    renderIssueDetail();
+
+    await waitFor(() => expect(virtuosoLatestProps.current?.startReached).toBeTypeOf("function"));
+    await act(async () => {
+      const startReached = virtuosoLatestProps.current?.startReached as () => void;
+      startReached();
+    });
+
+    await waitFor(() => {
+      expect(mockApiObj.listTimelinePage).toHaveBeenCalledWith(
+        "issue-1",
+        expect.objectContaining({ before: "older-cursor", limit: 40 }),
+      );
+      expect(virtuosoLatestProps.current?.firstItemIndex).toBe(999_999);
+    });
   });
 
   it("offers a jump-to-latest chip when scrolled away from the newest entry", async () => {
@@ -883,6 +954,20 @@ describe("IssueDetail (shared)", () => {
     await waitFor(() => {
       expect(mockApiObj.listTimeline).toHaveBeenCalledWith("issue-1", "session-review");
     });
+  });
+
+  it("skips the default-session primer for an explicit Session deep link", async () => {
+    renderIssueDetail("issue-1", "session-main");
+
+    await waitFor(() => {
+      expect(mockApiObj.listTimelinePage).toHaveBeenCalledWith(
+        "issue-1",
+        expect.objectContaining({ issueSessionId: "session-main" }),
+      );
+    });
+    expect(mockApiObj.listTimelinePage.mock.calls.some(([, params]) =>
+      params.issueSessionId === "@default",
+    )).toBe(false);
   });
 
   it("does not leave an embedding surface when the default Session resolves", async () => {
@@ -1362,6 +1447,10 @@ describe("IssueDetail (shared)", () => {
     renderIssueDetail();
 
     await screen.findByText("Activity");
+    expect(mockApiObj.listTimelinePage).toHaveBeenCalledWith(
+      "issue-1",
+      expect.objectContaining({ issueSessionId: "@default", limit: 40 }),
+    );
     expect(mockApiObj.listTimeline).not.toHaveBeenCalled();
     expect(
       screen.getAllByRole("generic").some((el) => el.getAttribute("data-slot") === "skeleton"),
@@ -1395,7 +1484,7 @@ describe("IssueDetail (shared)", () => {
     expect(
       await screen.findByText("Couldn't load this issue's sessions"),
     ).toBeInTheDocument();
-    expect(mockApiObj.listTimeline).not.toHaveBeenCalled();
+    expect(mockApiObj.listTimeline).toHaveBeenCalledWith("issue-1", undefined);
   });
 
   it("renders the issue title leaf as a link to the issue detail page", async () => {
@@ -2101,6 +2190,32 @@ describe("IssueDetail (shared)", () => {
   });
 
   describe("highlightCommentId scroll-to-comment", () => {
+    it("loads older pages until the highlighted comment is available", async () => {
+      timelinePageControl.hasMore = true;
+      timelinePageControl.olderEntries = [{
+        type: "comment",
+        id: "historical-comment",
+        actor_type: "member",
+        actor_id: "user-1",
+        content: "Historical target",
+        parent_id: null,
+        created_at: "2026-01-15T00:00:00Z",
+      }];
+
+      renderIssueDetailWithHighlight("historical-comment");
+
+      await waitFor(() => {
+        expect(mockApiObj.listTimelinePage).toHaveBeenCalledWith(
+          "issue-1",
+          expect.objectContaining({ before: "older-cursor", limit: 40 }),
+        );
+        expect(document.getElementById("comment-historical-comment")).not.toBeNull();
+      });
+      expect(scrollIntoViewSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ block: "center" }),
+      );
+    });
+
     it("scrolls to the highlighted comment after both issue and timeline finish loading", async () => {
       renderIssueDetailWithHighlight("comment-2");
 

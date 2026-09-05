@@ -1,4 +1,10 @@
-import { keepPreviousData, queryOptions, type QueryClient } from "@tanstack/react-query";
+import {
+  infiniteQueryOptions,
+  keepPreviousData,
+  queryOptions,
+  type InfiniteData,
+  type QueryClient,
+} from "@tanstack/react-query";
 import { api } from "../api";
 import type {
   GroupedIssuesResponse,
@@ -8,6 +14,7 @@ import type {
   ListGroupedIssuesParams,
   ListIssuesParams,
   ListIssuesCache,
+  TimelinePage,
 } from "../types";
 import { BOARD_STATUSES } from "./config";
 
@@ -82,6 +89,10 @@ export const issueKeys = {
   /** Full timeline query key, optionally scoped to one Product Session. */
   timeline: (issueId: string, issueSessionId?: string) =>
     [...issueKeys.timelineAll(issueId), issueSessionId ?? "all"] as const,
+  timelinePrimer: (issueId: string) => ["issues", "timeline-primer", issueId] as const,
+  timelineSyncVersion: (issueId: string) => ["issues", "timeline-sync", issueId, "version"] as const,
+  timelineSyncApplied: (issueId: string, issueSessionId?: string) =>
+    ["issues", "timeline-sync", issueId, issueSessionId ?? "all"] as const,
   sessions: (issueId: string) => ["issues", "sessions", issueId] as const,
   sessionTasks: (issueId: string, issueSessionId: string) =>
     ["issues", "sessions", issueId, issueSessionId, "tasks"] as const,
@@ -117,6 +128,9 @@ export type AssigneeGroupedIssuesFilter = Omit<
 export const ISSUE_PAGE_SIZE = 50;
 
 export const ARCHIVED_ISSUE_PAGE_SIZE = 50;
+
+/** QA tuning point for the latest timeline window. */
+export const ISSUE_TIMELINE_PAGE_SIZE = 40;
 
 /** Statuses the issues/my-issues pages paginate. Cancelled is intentionally excluded — it has never been surfaced in the list/board views. */
 export const PAGINATED_STATUSES: readonly IssueStatus[] = BOARD_STATUSES;
@@ -557,17 +571,36 @@ export function childrenByParentsOptions(
   });
 }
 
-/**
- * Single-fetch timeline options. The endpoint returns the full ordered set of
- * comments + activities for an issue (server caps at 2000 as a safety net).
- * Cursor pagination was removed in #1929 — at observed data sizes (p99 ~30
- * entries per issue) it added complexity without a UX win and broke reply
- * threads at page boundaries.
- */
-export function issueTimelineOptions(issueId: string, issueSessionId?: string) {
-  return queryOptions({
+/** Page zero is the latest chronological window; subsequent pages are older. */
+export function issueTimelinePageOptions(issueId: string, issueSessionId?: string) {
+  return infiniteQueryOptions<
+    TimelinePage,
+    Error,
+    InfiniteData<TimelinePage, string | null>,
+    ReturnType<typeof issueKeys.timeline>,
+    string | null
+  >({
     queryKey: issueKeys.timeline(issueId, issueSessionId),
-    queryFn: () => api.listTimeline(issueId, issueSessionId),
+    queryFn: ({ pageParam }) => api.listTimelinePage(issueId, {
+      issueSessionId,
+      before: pageParam,
+      limit: ISSUE_TIMELINE_PAGE_SIZE,
+    }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) =>
+      lastPage.has_more ? lastPage.next_cursor ?? undefined : undefined,
+    staleTime: Infinity,
+  });
+}
+
+export function issueTimelinePrimerOptions(issueId: string) {
+  return queryOptions({
+    queryKey: issueKeys.timelinePrimer(issueId),
+    queryFn: () => api.listTimelinePage(issueId, {
+      issueSessionId: "@default",
+      limit: ISSUE_TIMELINE_PAGE_SIZE,
+    }),
+    staleTime: 0,
   });
 }
 

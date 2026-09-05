@@ -20,6 +20,7 @@ import {
   EMPTY_LIST_PROJECT_DOC_REVISIONS_RESPONSE,
   EMPTY_PROJECT_DOC,
   EMPTY_TIMELINE_ENTRIES,
+  EMPTY_TIMELINE_PAGE,
   EMPTY_USER,
   ListIssuesResponseSchema,
   IssueRetitleResponseSchema,
@@ -43,6 +44,7 @@ import {
   SquadListSchema,
   SquadSchema,
   TimelineEntriesSchema,
+  TimelinePageSchema,
   UserSchema,
 } from "./schemas";
 import { parseWithFallback } from "./schema";
@@ -517,6 +519,38 @@ describe("TimelineEntriesSchema null actor_id", () => {
     expect(parsed).toHaveLength(3);
     expect(parsed[1]).toMatchObject({ action: "issue_assigned", actor_id: "" });
     expect(parsed[2]).toMatchObject({ type: "comment", content: "Remi 是一个 AI 消息路由器。" });
+  });
+});
+
+describe("TimelinePageSchema", () => {
+  const opts = { endpoint: "GET /api/issues/:id/timeline?limit (test)" };
+
+  it("keeps unknown fields and defaults compatibility booleans", () => {
+    const parsed = parseWithFallback({
+      entries: [],
+      limit: 40,
+      issue_session_id: "session-1",
+      server_extension: "kept",
+    }, TimelinePageSchema, EMPTY_TIMELINE_PAGE, opts);
+
+    expect(parsed).toMatchObject({
+      entries: [],
+      limit: 40,
+      has_more: false,
+      has_more_before: false,
+      has_more_after: false,
+      issue_session_id: "session-1",
+      server_extension: "kept",
+    });
+  });
+
+  it("falls back instead of blanking the view on a malformed envelope", () => {
+    const parsed = parseWithFallback({
+      entries: null,
+      issue_session_id: "session-1",
+    }, TimelinePageSchema, EMPTY_TIMELINE_PAGE, opts);
+
+    expect(parsed).toBe(EMPTY_TIMELINE_PAGE);
   });
 });
 

@@ -53,6 +53,7 @@ import {
   issueSubscriberCompatibilityResponse,
   issueSubscriberTargetErrorResponse,
   issueTimelineCompatibilityResponse,
+  IssueTimelineRequestError,
   issueTimelineResponse,
   issueUpdateCompatibilityInput,
   issueUsageResponse,
@@ -739,7 +740,13 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
-    const response = issueTimelineResponse(store, issue.id, c);
+    let response;
+    try {
+      response = issueTimelineResponse(store, issue.id, c);
+    } catch (error) {
+      if (error instanceof IssueTimelineRequestError) return c.json({ error: error.message }, 400);
+      throw error;
+    }
     if (!response) return c.json({ error: "issue not found" }, 404);
     return c.json(response);
   });
@@ -748,7 +755,13 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
-    const response = issueTimelineCompatibilityResponse(store, issue.id, c);
+    let response;
+    try {
+      response = issueTimelineCompatibilityResponse(store, issue.id, c);
+    } catch (error) {
+      if (error instanceof IssueTimelineRequestError) return c.json({ error: error.message }, 400);
+      throw error;
+    }
     if (!response) return c.json({ error: "issue not found" }, 404);
     return c.json(response);
   });

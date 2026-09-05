@@ -1919,10 +1919,13 @@ export interface MultiremiTimelineEntry {
 
 export interface MultiremiTimelinePage {
   entries: MultiremiTimelineEntry[];
-  next_cursor: null;
+  limit: number;
+  next_cursor: string | null;
   prev_cursor: null;
-  has_more_before: false;
+  has_more: boolean;
+  has_more_before: boolean;
   has_more_after: false;
+  issue_session_id: string | null;
   target_index?: number;
 }
 

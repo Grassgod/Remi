@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { TimelineEntry } from "../../types";
+import type { TimelineEntry, TimelinePage } from "../../types";
 import { AttachmentSchema, ReactionSchema } from "./primitives";
 
 // All object schemas use `.loose()` so unknown server-side fields pass
@@ -9,7 +9,7 @@ import { AttachmentSchema, ReactionSchema } from "./primitives";
 // wasn't updated in lock-step. `.loose()` removes that synchronisation
 // hazard — the schema validates the shape it knows about and leaves the
 // rest alone.
-const TimelineEntrySchema = z.object({
+export const TimelineEntrySchema = z.object({
   type: z.string(),
   id: z.string(),
   actor_type: z.string(),
@@ -31,9 +31,30 @@ const TimelineEntrySchema = z.object({
   coalesced_count: z.number().optional(),
 }).loose();
 
-// /timeline returns a flat array of TimelineEntry, oldest first. The
-// previously cursor-paginated wrapper was removed (#1929) — at observed data
-// sizes (p99 ~30 entries per issue) paged delivery only created bugs.
+// The no-parameter compatibility endpoint still returns this legacy shape.
 export const TimelineEntriesSchema = z.array(TimelineEntrySchema);
 
+export const TimelinePageSchema = z.object({
+  entries: TimelineEntriesSchema,
+  limit: z.number().int().positive().default(40),
+  has_more: z.boolean().default(false),
+  has_more_before: z.boolean().default(false),
+  has_more_after: z.boolean().default(false),
+  next_cursor: z.string().nullable().optional(),
+  prev_cursor: z.string().nullable().optional(),
+  issue_session_id: z.string().nullable(),
+  target_index: z.number().int().nonnegative().optional(),
+}).loose();
+
 export const EMPTY_TIMELINE_ENTRIES: TimelineEntry[] = [];
+
+export const EMPTY_TIMELINE_PAGE: TimelinePage = {
+  entries: [],
+  limit: 40,
+  has_more: false,
+  has_more_before: false,
+  has_more_after: false,
+  next_cursor: null,
+  prev_cursor: null,
+  issue_session_id: null,
+};

@@ -424,7 +424,8 @@
     "coalesced_badge": "×{{count}}",
     "activity_count_other": "アクティビティ {{count}} 件",
     "show_more_activities_other": "アクティビティをさらに {{count}} 件表示",
-    "jump_to_latest": "最新へ移動"
+    "jump_to_latest": "最新へ移動",
+    "loading_older": "以前のアクティビティを読み込み中..."
   },
   "comment": {
     "delete_title": "コメントを削除",

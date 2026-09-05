@@ -3,9 +3,10 @@ import { QueryClient } from "@tanstack/react-query";
 
 import { setApiInstance } from "../api";
 import type { ApiClient } from "../api/client";
-import type { Issue, ListIssuesParams, ListIssuesResponse } from "../types";
+import type { Issue, ListIssuesParams, ListIssuesResponse, TimelinePage } from "../types";
 import {
   CHILDREN_BY_PARENTS_CHUNK_SIZE,
+  ISSUE_TIMELINE_PAGE_SIZE,
   archivedIssueCountOptions,
   archivedIssueListOptions,
   PROJECT_GANTT_MAX_ISSUES,
@@ -13,11 +14,68 @@ import {
   childrenByParentsOptions,
   findCachedIssue,
   issueKeys,
+  issueTimelinePageOptions,
+  issueTimelinePrimerOptions,
   projectGanttIssuesOptions,
 } from "./queries";
 
 const WS_ID = "ws-1";
 const PROJECT_ID = "project-1";
+
+describe("issue timeline query options", () => {
+  const page = (hasMore: boolean): TimelinePage => ({
+    entries: [],
+    limit: ISSUE_TIMELINE_PAGE_SIZE,
+    has_more: hasMore,
+    has_more_before: hasMore,
+    has_more_after: false,
+    next_cursor: hasMore ? "older-cursor" : null,
+    prev_cursor: null,
+    issue_session_id: "session-main",
+  });
+
+  it("uses page zero as latest and advances only through before cursors", async () => {
+    const listTimelinePage = vi.fn().mockResolvedValue(page(true));
+    setApiInstance({ listTimelinePage } as unknown as ApiClient);
+    const options = issueTimelinePageOptions("issue-1", "session-main");
+
+    expect(options.initialPageParam).toBeNull();
+    expect(options.staleTime).toBe(Infinity);
+    expect(options.getNextPageParam?.(page(true), [page(true)], null, [null])).toBe("older-cursor");
+    expect(options.getNextPageParam?.(page(false), [page(false)], null, [null])).toBeUndefined();
+
+    await options.queryFn?.({
+      queryKey: options.queryKey,
+      pageParam: "older-cursor",
+      direction: "forward",
+      signal: new AbortController().signal,
+      client: new QueryClient(),
+      meta: undefined,
+    });
+    expect(listTimelinePage).toHaveBeenCalledWith("issue-1", {
+      issueSessionId: "session-main",
+      before: "older-cursor",
+      limit: ISSUE_TIMELINE_PAGE_SIZE,
+    });
+  });
+
+  it("primes the server-resolved default session without waiting for session data", async () => {
+    const listTimelinePage = vi.fn().mockResolvedValue(page(false));
+    setApiInstance({ listTimelinePage } as unknown as ApiClient);
+    const options = issueTimelinePrimerOptions("issue-1");
+
+    await options.queryFn?.({
+      queryKey: options.queryKey,
+      signal: new AbortController().signal,
+      client: new QueryClient(),
+      meta: undefined,
+    });
+    expect(listTimelinePage).toHaveBeenCalledWith("issue-1", {
+      issueSessionId: "@default",
+      limit: ISSUE_TIMELINE_PAGE_SIZE,
+    });
+  });
+});
 
 function makeIssue(idx: number): Issue {
   return {
