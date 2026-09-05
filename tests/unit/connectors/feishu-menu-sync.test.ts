@@ -32,7 +32,7 @@ describe("Feishu bot menu publisher", () => {
     // A 5xx from the gateway in front of the open API is HTML, not JSON.
     // Parsing it blindly reported "Unexpected token <", which says nothing
     // about which call broke.
-    globalThis.fetch = (async () =>
+    globalThis.fetch = (async (_input: RequestInfo | URL, _init?: RequestInit) =>
       new Response("<html>504 Gateway Time-out</html>", { status: 504 })) as typeof globalThis.fetch;
 
     const syncer = new MenuSyncer({ appId: "test-app", appSecret: "test-secret" });

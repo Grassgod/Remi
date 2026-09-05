@@ -171,6 +171,40 @@ describe("workspace bot menu API", () => {
     expect((await publish.json()).error).toContain("Feishu concierge");
   });
 
+  it("hands the claimed publish to the daemon over HTTP, not just to the store", async () => {
+    // The bug behind MUL-238. `heartbeatRuntime` claims the request — the row
+    // goes `running` and the deadline starts — but the ack is serialized by an
+    // allowlist, and `pending_bot_menu` was missing from it. Every other test
+    // here reads the ack straight off the store, so the field looked delivered
+    // while the wire response never carried it: the concierge was blamed for
+    // dropping work it was never told about. Assert on the HTTP body.
+    const { store, app } = menuScaffold();
+    registerPublisher(store, "rt_concierge", 1_000);
+    configureConcierge(store, "rt_concierge");
+
+    const publish = await app.request("/api/workspaces/local/bot-menu/publish", {
+      method: "POST",
+      headers: MASTER,
+      body: JSON.stringify({ dry_run: false }),
+    });
+    const request = await publish.json();
+
+    const heartbeat = await app.request("/api/daemon/heartbeat", {
+      method: "POST",
+      headers: MASTER,
+      body: JSON.stringify({ runtime_id: "rt_concierge", supports_bot_menu: true }),
+    });
+    expect(heartbeat.status).toBe(200);
+    expect((await heartbeat.json()).pending_bot_menu).toEqual({
+      id: request.id,
+      dry_run: false,
+      config: { default: [{ name: "Default", behaviors: [{ type: "send_message" }] }] },
+    });
+    // The claim is irreversible, which is what made the omission fatal rather
+    // than merely late: nothing re-queues this for the next heartbeat.
+    expect(store.getBotMenuPublishRequest("rt_concierge", request.id)?.status).toBe("running");
+  });
+
   it("keeps the concierge's real error when the report lands after the deadline", async () => {
     // Production only ever showed "bot menu publish did not finish in time":
     // the request expired while the concierge was still talking to Feishu, and
