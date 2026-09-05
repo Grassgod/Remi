@@ -338,6 +338,17 @@ describe("agent-facing Issue update delivery", () => {
     });
 
     const userTurn = store.sendChatMessage(chat.id, { body: "Review the latest status." });
+    const pendingSystemMessage = store.listChatMessages(chat.id)
+      .find((message) => message.role === "system" && message.taskId === null)!;
+    const tiedAt = userTurn.message.createdAt;
+    db!.run(
+      "UPDATE multiremi_chat_messages SET id = ?, created_at = ? WHERE id = ?",
+      ["msg_zzzzzzzzzzzz", tiedAt, pendingSystemMessage.id],
+    );
+    db!.run(
+      "UPDATE multiremi_chat_messages SET created_at = ? WHERE id = ?",
+      [tiedAt, userTurn.message.id],
+    );
     const claimedUserTurn = store.claimTask(runtime.id)!;
     expect(claimedUserTurn).toMatchObject({
       id: userTurn.task.id,

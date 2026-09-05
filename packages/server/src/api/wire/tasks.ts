@@ -544,7 +544,7 @@ function appendDaemonClaimChatContext(store: MultiremiStore, task: MultiremiTask
   if (!task.chatSessionId) return;
   try {
     const allMessages = store.listChatMessages(task.chatSessionId);
-    const messages = trailingDaemonUserMessages(allMessages);
+    const messages = daemonUserMessagesForTask(store, task, allMessages);
     const chatMessage = messages.map((message) => message.body.trim()).filter(Boolean).join("\n\n");
     if (chatMessage) response.chat_message = chatMessage;
   } catch (error) {
@@ -591,6 +591,38 @@ function appendDaemonClaimAutopilotContext(store: MultiremiStore, task: Multirem
   if (!autopilot) return;
   response.autopilot_title = autopilot.title;
   if (autopilot.description) response.autopilot_description = autopilot.description;
+}
+
+function daemonUserMessagesForTask(
+  store: MultiremiStore,
+  task: MultiremiTaskWithAgent,
+  messages: MultiremiChatMessage[],
+): MultiremiChatMessage[] {
+  const lineageTaskIds = new Set<string>();
+  let current: MultiremiTask | null = task;
+  while (current && !lineageTaskIds.has(current.id)) {
+    lineageTaskIds.add(current.id);
+    current = current.parentTaskId ? store.getTask(current.parentTaskId) : null;
+  }
+
+  let anchor = -1;
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index];
+    if (message?.role === "user" && message.taskId && lineageTaskIds.has(message.taskId)) {
+      anchor = index;
+    }
+  }
+  if (anchor < 0) return trailingDaemonUserMessages(messages);
+
+  // Chat rows can share a millisecond timestamp. The portable SQL tie-breaker
+  // is the opaque message id, so a pending system update may sort on either
+  // side of the current user message. Anchor the request to its Task lineage
+  // and use assistant replies—not system notifications—as turn boundaries.
+  let start = anchor;
+  while (start > 0 && messages[start - 1]?.role !== "assistant") start--;
+  let end = anchor + 1;
+  while (end < messages.length && messages[end]?.role !== "assistant") end++;
+  return messages.slice(start, end).filter((message) => message.role === "user");
 }
 
 function trailingDaemonUserMessages(messages: MultiremiChatMessage[]): MultiremiChatMessage[] {

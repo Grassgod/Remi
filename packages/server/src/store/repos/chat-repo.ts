@@ -275,7 +275,7 @@ export class ChatRepo {
   listChatMessages(chatSessionId: string): MultiremiChatMessage[] {
     if (!this.getChatSession(chatSessionId)) throw new Error(`Chat session not found: ${chatSessionId}`);
     const rows = this.ctx.db.query(
-      "SELECT * FROM multiremi_chat_messages WHERE chat_session_id = ? ORDER BY created_at ASC, rowid ASC",
+      "SELECT * FROM multiremi_chat_messages WHERE chat_session_id = ? ORDER BY created_at ASC, id ASC",
     ).all(chatSessionId) as Row[];
     return rows.map(toChatMessage);
   }
@@ -429,7 +429,7 @@ export class ChatRepo {
     const rows = this.ctx.db.query(
       `SELECT * FROM multiremi_chat_messages
        WHERE chat_session_id = ? AND pending_agent_delivery = 1
-       ORDER BY created_at ASC, rowid ASC`,
+       ORDER BY created_at ASC, id ASC`,
     ).all(chatSessionId) as Row[];
     if (!rows.length) return { messages: [], omittedCount: 0 };
     this.ctx.db.run(
