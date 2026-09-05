@@ -431,7 +431,9 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       if (outbound) {
         const body = feishuConciergeProtocol >= FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION
           ? outbound.body
-          : degradeMarkdownImages(outbound.body);
+          : degradeMarkdownImages(outbound.body, {
+              publicUrl: process.env.MULTIREMI_PUBLIC_URL?.trim() || null,
+            });
         response.pending_feishu_outbound = {
           id: outbound.id,
           claim_token: outbound.claimToken,
@@ -439,6 +441,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
           thread_id: outbound.threadId,
           reply_to_message_id: outbound.replyToMessageId,
           body,
+          body_origin: outbound.bodyOrigin,
           idempotency_key: outbound.idempotencyKey,
         };
       }

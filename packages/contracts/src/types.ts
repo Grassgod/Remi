@@ -3788,6 +3788,8 @@ export type FeishuBotDesiredState = "running" | "stopped";
 /** What a Runtime reports back about the connector it is hosting. */
 export type FeishuBotRuntimeState = "stopped" | "starting" | "online" | "failed";
 
+export type FeishuBotOutboundBodyOrigin = "issue" | "agent";
+
 export interface MultiremiFeishuBotOutboundDelivery {
   id: string;
   claimToken: string;
@@ -3799,6 +3801,8 @@ export interface MultiremiFeishuBotOutboundDelivery {
   replyToMessageId: string | null;
   reply_to_message_id?: string | null;
   body: string;
+  bodyOrigin: FeishuBotOutboundBodyOrigin;
+  body_origin?: FeishuBotOutboundBodyOrigin;
   /** Stable across retries so Feishu can deduplicate send-success/ack-failure. */
   idempotencyKey: string;
   idempotency_key?: string;

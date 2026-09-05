@@ -1,4 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { classifyMarkdownImageSource, rewriteMarkdownImages } from "@shared/feishu-markdown-images.js";
 import {
   assertPublicFeishuImageHost,
@@ -104,6 +107,38 @@ describe("Feishu outbound image loading", () => {
     expect(await rewriteMarkdownImages(input, resolver)).toBe("![capture](feishu-image:img_cached)");
     expect(loads).toBe(1);
     expect(uploads).toBe(1);
+  });
+
+  it("rejects Issue local paths while preserving Agent local image uploads", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "feishu-image-origin-"));
+    const imagePath = join(directory, "chart.png");
+    await writeFile(imagePath, Buffer.from("png"));
+    const input = `![chart](${imagePath})`;
+    const uploaded: Buffer[] = [];
+    try {
+      const issueResolver = createFeishuImageResolver({
+        allow: { local: false },
+        uploadImage: async (image) => {
+          uploaded.push(image.buffer);
+          return "img_issue_unexpected";
+        },
+      });
+      expect(await rewriteMarkdownImages(input, issueResolver)).toBe("[图片: chart]");
+      expect(uploaded).toHaveLength(0);
+
+      const agentResolver = createFeishuImageResolver({
+        allow: { local: true },
+        uploadImage: async (image) => {
+          uploaded.push(image.buffer);
+          return "img_agent_chart";
+        },
+      });
+      expect(await rewriteMarkdownImages(input, agentResolver))
+        .toBe("![chart](feishu-image:img_agent_chart)");
+      expect(uploaded).toEqual([Buffer.from("png")]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("degrades loader failures instead of retaining broken image syntax", async () => {

@@ -1453,6 +1453,7 @@ export class MultiremiDaemon {
     try {
       if (!supervisor) throw new Error("Feishu concierge is unavailable");
       const resolveImage = createFeishuImageResolver({
+        allow: { local: delivery.bodyOrigin === "agent" },
         loadAttachment: async (source) => responseToFeishuImage(
           await this.client.fetchFeishuBotOutboundAttachment(
             runtimeId,
@@ -1464,7 +1465,9 @@ export class MultiremiDaemon {
         ),
         uploadImage: async (image) => (await supervisor.uploadImage(image.buffer)).imageKey,
       });
-      const body = await rewriteMarkdownImages(delivery.body, resolveImage);
+      const body = await rewriteMarkdownImages(delivery.body, resolveImage, {
+        publicUrl: this.options.serverUrl,
+      });
       const sent = await supervisor.sendOutbound({ ...delivery, body });
       await this.client.reportFeishuBotOutboundResult(runtimeId, delivery.id, {
         claimToken: delivery.claimToken,

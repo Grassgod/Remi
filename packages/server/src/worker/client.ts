@@ -303,6 +303,7 @@ export class MultiremiDaemonClient {
             ? String(rawOutbound.reply_to_message_id ?? rawOutbound.replyToMessageId)
             : null,
           body: String(rawOutbound.body ?? ""),
+          bodyOrigin: (rawOutbound.body_origin ?? rawOutbound.bodyOrigin) === "agent" ? "agent" : "issue",
           idempotencyKey: String(rawOutbound.idempotency_key ?? rawOutbound.idempotencyKey ?? rawOutbound.id ?? ""),
         }
       : undefined;

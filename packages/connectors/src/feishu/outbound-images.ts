@@ -24,6 +24,12 @@ export type FeishuAttachmentImageLoader = (
 export type FeishuImageFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 export type FeishuImageHostGuard = (hostname: string) => Promise<void>;
 
+export interface FeishuImageSourceAllowlist {
+  attachment?: boolean;
+  local?: boolean;
+  http?: boolean;
+}
+
 export interface FeishuImageResolverOptions {
   uploadImage: (image: LoadedFeishuImage) => Promise<string | null | undefined>;
   loadAttachment?: FeishuAttachmentImageLoader;
@@ -32,12 +38,15 @@ export interface FeishuImageResolverOptions {
   timeoutMs?: number;
   assertRemoteHost?: FeishuImageHostGuard;
   cache?: Map<string, Promise<string | null>>;
+  /** Omitted entries preserve the existing behavior and remain enabled. */
+  allow?: FeishuImageSourceAllowlist;
 }
 
 export function createFeishuImageResolver(options: FeishuImageResolverOptions): MarkdownImageResolver {
   const cache = options.cache ?? new Map<string, Promise<string | null>>();
   return async (source) => {
     if (source.kind === "feishu") return source.imageKey;
+    if (!isFeishuImageSourceAllowed(source, options.allow)) return null;
     const existing = cache.get(source.src);
     if (existing) return existing;
     const pending = (async () => {
@@ -55,17 +64,19 @@ export async function loadFeishuImage(
   source: MarkdownImageSource,
   options: Pick<
     FeishuImageResolverOptions,
-    "loadAttachment" | "fetchFn" | "maxBytes" | "timeoutMs" | "assertRemoteHost"
+    "loadAttachment" | "fetchFn" | "maxBytes" | "timeoutMs" | "assertRemoteHost" | "allow"
   > = {},
 ): Promise<LoadedFeishuImage | null> {
   const maxBytes = positiveLimit(options.maxBytes, FEISHU_IMAGE_MAX_BYTES);
   if (source.kind === "feishu" || source.kind === "unsupported") return null;
   if (source.kind === "attachment") {
+    if (!isFeishuImageSourceAllowed(source, options.allow)) return null;
     if (!options.loadAttachment) return null;
     const loaded = await options.loadAttachment(source);
     return loaded ? validateFeishuImage(loaded, maxBytes) : null;
   }
   if (source.kind === "local") {
+    if (!isFeishuImageSourceAllowed(source, options.allow)) return null;
     const info = await stat(source.filePath);
     if (!info.isFile()) throw new Error("image source is not a file");
     if (info.size > maxBytes) throw new Error("image exceeds the Feishu 10MB limit");
@@ -75,6 +86,7 @@ export async function loadFeishuImage(
       fileName: source.name,
     }, maxBytes);
   }
+  if (!isFeishuImageSourceAllowed(source, options.allow)) return null;
   return fetchImageWithTimeout(
     source.url,
     options.fetchFn ?? fetch,
@@ -83,6 +95,16 @@ export async function loadFeishuImage(
     maxBytes,
     options.assertRemoteHost ?? assertPublicFeishuImageHost,
   );
+}
+
+function isFeishuImageSourceAllowed(
+  source: MarkdownImageSource,
+  allow: FeishuImageSourceAllowlist | undefined,
+): boolean {
+  if (source.kind === "attachment") return allow?.attachment !== false;
+  if (source.kind === "local") return allow?.local !== false;
+  if (source.kind === "http") return allow?.http !== false;
+  return source.kind === "feishu";
 }
 
 export function validateFeishuImage(image: LoadedFeishuImage, maxBytes = FEISHU_IMAGE_MAX_BYTES): LoadedFeishuImage {

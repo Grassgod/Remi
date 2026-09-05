@@ -102,6 +102,7 @@ describe("FeishuConciergeSupervisor", () => {
       threadId: "omt_1",
       replyToMessageId: "om_root",
       body: "Round complete.",
+      bodyOrigin: "agent" as const,
       idempotencyKey: "fbo_1",
     };
     await expect(test.supervisor.sendOutbound(delivery)).rejects.toThrow("not online");

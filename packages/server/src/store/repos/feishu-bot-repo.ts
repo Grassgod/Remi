@@ -1332,6 +1332,7 @@ function issueTopicBody(issue: Pick<MultiremiIssue, "key" | "title" | "descripti
 
 function outboundDelivery(row: Row, claimToken: string): MultiremiFeishuBotOutboundDelivery {
   const id = String(row.id);
+  const bodyOrigin = row.task_id == null ? "issue" : "agent";
   return {
     id,
     claimToken,
@@ -1343,6 +1344,8 @@ function outboundDelivery(row: Row, claimToken: string): MultiremiFeishuBotOutbo
     replyToMessageId: nullableString(row.reply_to_message_id),
     reply_to_message_id: nullableString(row.reply_to_message_id),
     body: String(row.body),
+    bodyOrigin,
+    body_origin: bodyOrigin,
     idempotencyKey: id,
     idempotency_key: id,
   };

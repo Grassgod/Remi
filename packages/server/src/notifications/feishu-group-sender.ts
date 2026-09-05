@@ -55,6 +55,7 @@ export function createFeishuGroupSender(
           domain: env.MULTIREMI_FEISHU_DOMAIN?.trim() || undefined,
         });
         const resolveImage = createFeishuImageResolver({
+          allow: { local: false },
           loadAttachment: async (source) => {
             const attachment = dependencies.getAttachment?.(source.attachmentId);
             if (!attachment || attachment.workspaceId !== notification.item.workspaceId) return null;

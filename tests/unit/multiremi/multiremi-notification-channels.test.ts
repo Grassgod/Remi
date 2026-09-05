@@ -167,7 +167,7 @@ describe("Multiremi notification channels", () => {
     expect(current.listInboxItems(member.id).some((item) => item.issueId === issue.id)).toBe(true);
   });
 
-  it("uploads a local inbox attachment and falls back to its link when upload fails", async () => {
+  it("uploads inbox attachments, falls back to links, and refuses local paths", async () => {
     const uploadDir = mkdtempSync(join(tmpdir(), "multiremi-inbox-image-"));
     const originalUploadDir = process.env.MULTIREMI_UPLOAD_DIR;
     process.env.MULTIREMI_UPLOAD_DIR = uploadDir;
@@ -244,6 +244,23 @@ describe("Multiremi notification channels", () => {
       const fallback = JSON.stringify(sentCard);
       expect(fallback).toContain("[图片: capture](https://remi.example.test/api/attachments/att_inbox_image/content)");
       expect(fallback).not.toContain("![capture]");
+
+      let localUploadAttempted = false;
+      dependencies.uploadImage = (async () => {
+        localUploadAttempted = true;
+        return { imageKey: "img_local_unexpected" };
+      }) as any;
+      await createFeishuGroupSender({
+        MULTIREMI_FEISHU_APP_ID: "app",
+        MULTIREMI_FEISHU_APP_SECRET: "secret",
+      }, dependencies).send({
+        ...notification,
+        item: { ...notification.item, body: "See ![host-only](/tmp/runtime-only.png)" },
+      });
+      expect(localUploadAttempted).toBe(false);
+      const localFallback = JSON.stringify(sentCard);
+      expect(localFallback).toContain("[图片: host-only]");
+      expect(localFallback).not.toContain("![host-only]");
     } finally {
       restoreEnv("MULTIREMI_UPLOAD_DIR", originalUploadDir);
       rmSync(uploadDir, { recursive: true, force: true });

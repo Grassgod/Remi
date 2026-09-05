@@ -128,6 +128,7 @@ describe("control-plane Feishu concierge host", () => {
       threadId: "omt_host",
       replyToMessageId: "om_root",
       body: "Round complete.",
+      bodyOrigin: "agent",
       idempotencyKey: "fbo_host",
     });
 

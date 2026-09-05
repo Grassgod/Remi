@@ -31,15 +31,20 @@ const MASTER = { Authorization: "Bearer MASTER", "content-type": "application/js
 const APP_SECRET = "wJ4tQ7xR2nB8vC5mZ1kL0pS6dF3gH9jA";
 
 let previousEncryptionKey: string | undefined;
+let previousPublicUrl: string | undefined;
 
 beforeEach(() => {
   previousEncryptionKey = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
+  previousPublicUrl = process.env.MULTIREMI_PUBLIC_URL;
   process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 11).toString("base64");
+  delete process.env.MULTIREMI_PUBLIC_URL;
 });
 
 afterEach(() => {
   if (previousEncryptionKey === undefined) delete process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
   else process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = previousEncryptionKey;
+  if (previousPublicUrl === undefined) delete process.env.MULTIREMI_PUBLIC_URL;
+  else process.env.MULTIREMI_PUBLIC_URL = previousPublicUrl;
   resetMultiremiTestEnv();
 });
 
@@ -292,6 +297,7 @@ describe("Feishu bot control-plane delivery", () => {
       thread_id: "omt_outbound",
       reply_to_message_id: "om_outbound_root",
       body: "Round completed.",
+      body_origin: "issue",
       idempotency_key: "fbo_http",
     });
 
@@ -312,6 +318,7 @@ describe("Feishu bot control-plane delivery", () => {
   });
 
   it("degrades image syntax for v2 daemons while v3 daemons receive the resolvable body", async () => {
+    process.env.MULTIREMI_PUBLIC_URL = "https://remi.example.test";
     const test = await scaffold();
     const submitted = test.store.submitFeishuBotMessage("local", "rt_a", {
       revision: 1,
@@ -340,7 +347,10 @@ describe("Feishu bot control-plane delivery", () => {
       feishu_concierge_protocol: FEISHU_CONCIERGE_OUTBOUND_LEGACY_PROTOCOL_VERSION,
     });
     const legacyBody = await legacy.json();
-    expect(legacyBody.pending_feishu_outbound.body).toContain("[图片: capture]");
+    expect(legacyBody.pending_feishu_outbound).toMatchObject({
+      body: "[图片: capture](https://remi.example.test/api/attachments/att_protocol/content)",
+      body_origin: "issue",
+    });
     expect(legacyBody.pending_feishu_outbound.body).not.toContain("![capture]");
 
     db!.run(
@@ -350,8 +360,10 @@ describe("Feishu bot control-plane delivery", () => {
       [legacyBody.pending_feishu_outbound.id],
     );
     const current = await heartbeat(test, "rt_a");
-    expect((await current.json()).pending_feishu_outbound.body)
-      .toContain("![capture](/api/attachments/att_protocol/content)");
+    expect((await current.json()).pending_feishu_outbound).toMatchObject({
+      body: "![capture](/api/attachments/att_protocol/content)",
+      body_origin: "issue",
+    });
   });
 
   it("serves outbound attachment bytes only for the active runtime, lease, workspace, and body reference", async () => {
