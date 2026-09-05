@@ -365,6 +365,18 @@ export interface ChatSurface {
     session: MultiremiChatSession;
     message: MultiremiChatMessage;
   };
+  appendChatMessageWithinTransaction(input: {
+    id?: string;
+    chatSessionId: string;
+    taskId?: string | null;
+    role: MultiremiChatMessage["role"];
+    body: string;
+    failureReason?: string | null;
+    elapsedMs?: number | null;
+    pendingAgentDelivery?: boolean;
+    agentDeliveryTaskId?: string | null;
+    createdAt?: string;
+  }): MultiremiChatMessage;
   preparePendingAgentIssueUpdatesForTask(chatSessionId: string, taskId: string): {
     messages: MultiremiChatMessage[];
     omittedCount: number;
