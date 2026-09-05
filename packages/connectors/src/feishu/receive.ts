@@ -6,7 +6,7 @@
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import type { FeishuChannelConfig, FeishuSenderAuthorizer, GroupPolicy } from "./config.js";
 import { createLogger } from "@shared/logger.js";
@@ -65,7 +65,7 @@ import { handleFormSubmission, handleButtonClick, hasPendingAction } from "./car
 const DEDUP_TTL_MS = 30 * 60 * 1000;
 const DEDUP_MAX_SIZE = 1_000;
 const DEDUP_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
-const DEDUP_CACHE_PATH = join(homedir(), ".remi", "dedup-cache.json");
+let dedupCachePath = join(homedir(), ".remi", "dedup-cache.json");
 const processedMessageIds = new Map<string, number>();
 let lastCleanupTime = Date.now();
 let dedupDirty = false;
@@ -74,8 +74,8 @@ let dedupFlushTimer: ReturnType<typeof setTimeout> | null = null;
 /** Load persisted dedup cache from disk (best-effort). */
 function loadDedupCache(): void {
   try {
-    if (!existsSync(DEDUP_CACHE_PATH)) return;
-    const raw = readFileSync(DEDUP_CACHE_PATH, "utf-8");
+    if (!existsSync(dedupCachePath)) return;
+    const raw = readFileSync(dedupCachePath, "utf-8");
     const entries: [string, number][] = JSON.parse(raw);
     const now = Date.now();
     for (const [id, ts] of entries) {
@@ -104,13 +104,25 @@ function scheduleDedupFlush(): void {
 export function flushDedupCacheSync(): void {
   if (!dedupDirty) return;
   try {
-    const dir = join(homedir(), ".remi");
+    const dir = dirname(dedupCachePath);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(DEDUP_CACHE_PATH, JSON.stringify([...processedMessageIds]));
+    writeFileSync(dedupCachePath, JSON.stringify([...processedMessageIds]));
     dedupDirty = false;
   } catch {
     // Non-critical
   }
+}
+
+/** Isolate the persisted dedup cache in tests without changing production defaults. */
+export function setDedupCachePathForTesting(path: string): void {
+  if (dedupFlushTimer) {
+    clearTimeout(dedupFlushTimer);
+    dedupFlushTimer = null;
+  }
+  dedupCachePath = path;
+  processedMessageIds.clear();
+  lastCleanupTime = Date.now();
+  dedupDirty = false;
 }
 
 // Load on module init

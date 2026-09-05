@@ -71,8 +71,8 @@ export class FeishuConnector implements Connector {
       connectionMode: config.connectionMode as any,
     });
 
-    // Group policy is injected by the constructing layer (remi/core) so the
-    // connector never reaches up into the remi product for its store.
+    // Group policy only supplies optional monitor/reply behavior. A missing
+    // entry does not block explicit bot mentions or slash commands.
     this._groupPolicy = groupPolicy ?? { getByChatId: () => null };
     this._channel.setGroupPolicy(this._groupPolicy);
     if (authorizeSender) this._channel.setSenderAuthorizer(authorizeSender);
