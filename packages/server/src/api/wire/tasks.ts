@@ -16,6 +16,8 @@ type InternalTaskField =
   | "delegation_id"
   | "delegatedByAgentId"
   | "delegated_by_agent_id"
+  | "delegationReturnTaskId"
+  | "delegation_return_task_id"
   | "issueCreationRestricted"
   | "issue_creation_restricted";
 
@@ -25,6 +27,8 @@ export function taskPublicResponse<T extends MultiremiTask>(task: T): Omit<T, In
     delegation_id: _delegationIdSnake,
     delegatedByAgentId: _delegatedByAgentId,
     delegated_by_agent_id: _delegatedByAgentIdSnake,
+    delegationReturnTaskId: _delegationReturnTaskId,
+    delegation_return_task_id: _delegationReturnTaskIdSnake,
     issueCreationRestricted: _issueCreationRestricted,
     issue_creation_restricted: _issueCreationRestrictedSnake,
     ...publicTask

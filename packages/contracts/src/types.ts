@@ -1338,6 +1338,9 @@ export interface MultiremiTask {
    *  agentId === delegatedByAgentId, which prevents a return from bouncing. */
   delegatedByAgentId: string | null;
   delegated_by_agent_id?: string | null;
+  /** Return task that has claimed this delegated task's terminal report. */
+  delegationReturnTaskId: string | null;
+  delegation_return_task_id?: string | null;
   assignmentEventId: string | null;
   assignment_event_id?: string | null;
   /** System event that caused the automation-owned task to be assigned. This

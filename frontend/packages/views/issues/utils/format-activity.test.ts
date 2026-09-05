@@ -138,6 +138,17 @@ describe("formatActivity", () => {
     ).toBe(
       'activity.delegation_return_skipped {"reason":"activity.delegation_return_reason_already_covered"}',
     );
+    for (const reason of [
+      "coalesced_into_pending_return",
+      "covered_by_queued_task",
+      "deferred_lane_busy",
+    ]) {
+      expect(
+        formatActivity(activity("delegation_return_skipped", { details: { reason } }), t),
+      ).toBe(
+        `activity.delegation_return_skipped {"reason":"activity.delegation_return_reason_${reason}"}`,
+      );
+    }
     expect(
       formatActivity(
         activity("delegation_return_skipped", { details: { reason: "new_reason" } }),

@@ -93,6 +93,7 @@ describe("store migrations", () => {
       "proposal_payload", "proposal_status", "proposal_resolved_at", "proposal_resolved_by",
     ]));
     expect(columnNames(database, "multiremi_tasks")).toContain("task_kind");
+    expect(columnNames(database, "multiremi_tasks")).toContain("delegation_return_task_id");
     expect(columnNames(database, "multiremi_chat_sessions")).toContain("issue_id");
     expect(columnNames(database, "multiremi_tasks")).toContain("issue_creation_restricted");
     expect(columnNames(database, "multiremi_autopilot_runs")).toContain("source_task_id");
