@@ -1350,9 +1350,6 @@ export class TasksRepo {
     if (!row) return null;
 
     const task = this.getTaskWithAgent(String(row.id));
-    if (task) {
-      this.syncIssueStatusFromTaskWithinTransaction(task, "in_progress", { rederive: true });
-    }
     if (task) this.ctx.notifyTaskEvent("task:dispatch", task);
     return task;
   }
@@ -2530,7 +2527,7 @@ export class TasksRepo {
         && !task.chatSessionId
         && issue
         && lead?.id === task.agentId
-        && !this.hasActiveTaskForIssue(issue.id, true)
+        && !this.hasActiveTaskForIssue(issue.id)
       ) {
         this.ctx.notificationChannels().queueAgentIssueUpdate({
           activityId: `leader-round:${task.id}`,
@@ -2841,7 +2838,9 @@ export class TasksRepo {
   private issueStatusForRemainingTasks(issueId: string): string | null {
     const rows = this.ctx.db.query(
       `SELECT status FROM multiremi_tasks
-       WHERE issue_id = ? AND status NOT IN ('completed', 'failed', 'cancelled')`,
+       WHERE issue_id = ?
+         AND chat_session_id IS NULL
+         AND status NOT IN ('completed', 'failed', 'cancelled')`,
     ).all(issueId) as Array<{ status: string }>;
     const statuses = new Set(rows.map((row) => row.status));
     if (statuses.has("awaiting_human")) return "in_review";
@@ -2923,17 +2922,19 @@ export class TasksRepo {
     const row = this.ctx.db.query(
       `SELECT 1 AS present FROM multiremi_tasks
        WHERE issue_id = ?
+         AND chat_session_id IS NULL
          AND status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')
        LIMIT 1`,
     ).get(issueId) as { present: number } | null;
     return Boolean(row);
   }
 
-  private hasActiveTaskForIssue(issueId: string, issueLaneOnly = false): boolean {
+  private hasActiveTaskForIssue(issueId: string): boolean {
     const row = this.ctx.db.query(
       `SELECT 1 AS present FROM multiremi_tasks
-       WHERE issue_id = ? AND status NOT IN ('completed', 'failed', 'cancelled')
-         ${issueLaneOnly ? "AND chat_session_id IS NULL" : ""}
+       WHERE issue_id = ?
+         AND chat_session_id IS NULL
+         AND status NOT IN ('completed', 'failed', 'cancelled')
        LIMIT 1`,
     ).get(issueId) as { present: number } | null;
     return Boolean(row);
