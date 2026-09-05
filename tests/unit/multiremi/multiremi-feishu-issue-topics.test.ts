@@ -130,12 +130,108 @@ describe("Feishu Issue topics", () => {
     expect(store.getChatSession(inbound.chatSessionId)?.issueId).toBe(issue.id);
   });
 
+  it("keeps a private Feishu chat independent when its Agent creates an Issue", async () => {
+    const { store, revision } = scaffold();
+    configureTopics(store);
+    const inbound = store.submitFeishuBotMessage("local", "rt_bot", {
+      revision,
+      chatType: "p2p",
+      externalSessionKey: "oc_private",
+      externalMessageId: "om_private_message",
+      replyToMessageId: "om_private_message",
+      chatId: "oc_private",
+      senderUnionId: "on_issue_topic_owner",
+      text: "Create an Issue, but keep this private chat independent.",
+    });
+    const task = store.getTask(inbound.taskId)!;
+    const credential = await store.createTaskAccessToken(task, "local");
+    const app = createMultiremiApp({ store, authToken: "MASTER" });
+
+    const response = await app.request("/api/issues", {
+      method: "POST",
+      headers: { ...JSON_HEADERS, Authorization: `Bearer ${credential.token}` },
+      body: JSON.stringify({ title: "Created from a private chat" }),
+    });
+    expect(response.status).toBe(201);
+    const body = await response.json();
+    expect(body.chat_issue_binding).toEqual({
+      status: "independent",
+      chat_session_id: inbound.chatSessionId,
+      issue_id: body.id,
+      existing_issue_id: null,
+    });
+    expect(store.getChatSession(inbound.chatSessionId)?.issueId).toBeNull();
+
+    const delivery = store.claimFeishuBotOutbound("local", "rt_bot");
+    expect(delivery).toMatchObject({
+      chatId: "oc_issue_topics",
+      threadId: null,
+      body: expect.stringContaining("Created from a private chat"),
+      bodyOrigin: "issue",
+    });
+    expect(store.listChatSessions("local").filter((chat) => chat.issueId === body.id)).toHaveLength(1);
+  });
+
+  it("turns a new configured group topic into one Issue and reuses it for replies", () => {
+    const { store, revision } = scaffold();
+    configureTopics(store);
+    const first = store.submitFeishuBotMessage("local", "rt_bot", {
+      revision,
+      chatType: "group",
+      externalSessionKey: "oc_issue_topics:thread:om_group_root",
+      externalMessageId: "om_group_root",
+      replyToMessageId: "om_group_root",
+      chatId: "oc_issue_topics",
+      senderUnionId: "on_issue_topic_owner",
+      text: "Implement natural Issue creation from this group topic.",
+    });
+
+    const chat = store.getChatSession(first.chatSessionId)!;
+    const issue = store.getIssue(chat.issueId!)!;
+    expect(issue).toMatchObject({
+      title: "Implement natural Issue creation from this group topic.",
+      status: "in_progress",
+      assigneeType: "agent",
+    });
+    expect(store.getTask(first.taskId)?.issueId).toBe(issue.id);
+    expect(store.listIssues({ workspaceId: "local" })).toHaveLength(1);
+    expect(store.claimFeishuBotOutbound("local", "rt_bot")).toBeNull();
+
+    const duplicate = store.submitFeishuBotMessage("local", "rt_bot", {
+      revision,
+      chatType: "group",
+      externalSessionKey: "oc_issue_topics:thread:om_group_root",
+      externalMessageId: "om_group_root",
+      replyToMessageId: "om_group_root",
+      chatId: "oc_issue_topics",
+      senderUnionId: "on_issue_topic_owner",
+      text: "Implement natural Issue creation from this group topic.",
+    });
+    expect(duplicate).toMatchObject({ duplicate: true, taskId: first.taskId, chatSessionId: first.chatSessionId });
+
+    const reply = store.submitFeishuBotMessage("local", "rt_bot", {
+      revision,
+      chatType: "group",
+      externalSessionKey: "oc_issue_topics:thread:om_group_root",
+      externalMessageId: "om_group_reply",
+      replyToMessageId: "om_group_reply",
+      chatId: "oc_issue_topics",
+      threadId: "om_group_root",
+      senderUnionId: "on_issue_topic_owner",
+      text: "Add this detail to the same Issue.",
+    });
+    expect(reply).toMatchObject({ steered: true, taskId: first.taskId, chatSessionId: first.chatSessionId });
+    expect(store.listIssues({ workspaceId: "local" })).toHaveLength(1);
+    expect(store.listTasks().filter((task) => task.chatSessionId === first.chatSessionId)).toHaveLength(1);
+  });
+
   it("skips a second topic when the Issue was created from a Feishu Chat task", async () => {
     const { store, revision } = scaffold();
     configureTopics(store);
     const inbound = store.submitFeishuBotMessage("local", "rt_bot", {
       revision,
       externalSessionKey: "oc_source:thread:om_source_root",
+      chatType: "group",
       externalMessageId: "om_source_message",
       replyToMessageId: "om_source_message",
       chatId: "oc_source",

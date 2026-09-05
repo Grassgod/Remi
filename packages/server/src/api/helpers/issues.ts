@@ -184,7 +184,7 @@ export function withIssueCreateRequestContext(
 
 export interface IssueCreateChatBindingResponse {
   chat_issue_binding: {
-    status: "bound" | "preserved";
+    status: "bound" | "preserved" | "independent";
     chat_session_id: string;
     issue_id: string;
     existing_issue_id: string | null;
@@ -200,6 +200,28 @@ export function bindCreatedIssueToRequestChat(
   const taskId = currentTaskAccessToken(c)?.taskId;
   const sourceTask = taskId ? store.getTask(taskId) : null;
   if (!sourceTask?.chatSessionId) return null;
+  if (store.getFeishuBotChatConversationKind(sourceTask.chatSessionId) === "p2p") {
+    const current = store.getChatSession(sourceTask.chatSessionId);
+    if (current?.issueId) {
+      const previousIssue = store.getIssue(current.issueId);
+      store.updateChatSession(current.id, { issueId: null });
+      if (previousIssue) {
+        try {
+          store.prepareFeishuIssueTopicWithinTransaction(previousIssue);
+        } catch {
+          // Lazy repair is best-effort; the newly created Issue must still succeed.
+        }
+      }
+    }
+    return {
+      chat_issue_binding: {
+        status: "independent",
+        chat_session_id: sourceTask.chatSessionId,
+        issue_id: issue.id,
+        existing_issue_id: null,
+      },
+    };
+  }
   const outcome = store.bindChatSessionIssueIfUnbound(sourceTask.chatSessionId, issue.id);
   if (outcome.bound || outcome.session.issueId === issue.id) {
     return {

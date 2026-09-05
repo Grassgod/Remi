@@ -355,6 +355,31 @@ export class FeishuBotRepo {
     const externalMessageId = requiredBoundedString(input.externalMessageId, "external_message_id", 512);
     const text = requiredBoundedString(input.text, "text", 200_000);
     const sender = this.resolveSender(workspaceId, config.appId, input);
+    const chatId = cleanOptionalString(input.chatId);
+    const chatType = resolveFeishuBotChatType(input, externalSessionKey);
+    const workspace = this.ctx.workspaces().getWorkspace(workspaceId);
+    const topicConfig = workspace ? readWorkspaceIssueTopics(workspace.settings) : null;
+    const autoCreateGroupIssue = sender.membership === "member"
+      && chatType === "group"
+      && Boolean(chatId)
+      && topicConfig?.enabled === true
+      && topicConfig.chatId === chatId;
+    const createGroupIssue = () => this.ctx.issues().createIssue({
+      title: issueTitleFromFeishuMessage(text),
+      description: text,
+      status: "in_progress",
+      workspaceId,
+      projectId: topicConfig?.projectIds?.length === 1 ? topicConfig.projectIds[0] : null,
+      assigneeType: "agent",
+      assigneeId: config.agentId,
+      createdBy: sender.user?.id ?? null,
+      contextRefs: [{
+        type: "feishu_bot_message",
+        message_id: externalMessageId,
+        chat_id: chatId,
+        thread_id: cleanOptionalString(input.threadId) ?? externalMessageId,
+      }],
+    });
     let enqueuedTask: MultiremiTask | null = null;
 
     const result = this.ctx.db.transaction((): SubmitFeishuBotMessageResult => {
@@ -381,11 +406,13 @@ export class FeishuBotRepo {
           WHERE workspace_id = ? AND app_id = ? AND agent_id = ? AND external_session_key = ?`,
       ).get(workspaceId, config.appId, config.agentId, externalSessionKey) as Row | null;
       if (!binding) {
+        const issue = autoCreateGroupIssue ? createGroupIssue() : null;
         const chat = this.ctx.chat().createChatSession({
           workspaceId,
           agentId: config.agentId,
           creatorId: sender.user?.id ?? sender.actorId,
-          title: "Feishu conversation",
+          issueId: issue?.id ?? null,
+          title: issue ? `${issue.key}: ${issue.title}` : "Feishu conversation",
         });
         const bindingId = createId("fcb");
         const now = nowIso();
@@ -401,13 +428,23 @@ export class FeishuBotRepo {
           config.agentId,
           externalSessionKey,
           chat.id,
-          cleanOptionalString(input.chatId),
+          chatId,
           cleanOptionalString(input.threadId),
           cleanOptionalString(input.replyToMessageId) ?? externalMessageId,
           now,
           now,
         );
         binding = { id: bindingId, chat_session_id: chat.id };
+      } else if (autoCreateGroupIssue) {
+        const chatSessionId = String(binding.chat_session_id);
+        const chat = this.ctx.chat().getChatSession(chatSessionId);
+        if (chat && !chat.issueId) {
+          const issue = createGroupIssue();
+          this.ctx.chat().updateChatSession(chat.id, {
+            issueId: issue.id,
+            title: `${issue.key}: ${issue.title}`,
+          });
+        }
       }
 
       this.ctx.db.run(
@@ -418,7 +455,7 @@ export class FeishuBotRepo {
              updated_at = ?
          WHERE id = ?`,
         [
-          cleanOptionalString(input.chatId),
+          chatId,
           cleanOptionalString(input.threadId),
           cleanOptionalString(input.replyToMessageId) ?? externalMessageId,
           nowIso(),
@@ -495,6 +532,20 @@ export class FeishuBotRepo {
     })();
     if (enqueuedTask) this.ctx.notifyTaskEnqueued(enqueuedTask);
     return result;
+  }
+
+  getChatConversationKind(chatSessionId: string): "p2p" | "group" | null {
+    const row = this.ctx.db.query(
+      `SELECT external_session_key, thread_id
+       FROM multiremi_feishu_bot_chat_bindings
+       WHERE chat_session_id = ?
+       ORDER BY created_at ASC, id ASC
+       LIMIT 1`,
+    ).get(chatSessionId) as Row | null;
+    if (!row) return null;
+    return row.thread_id != null || String(row.external_session_key ?? "").includes(":thread:")
+      ? "group"
+      : "p2p";
   }
 
   prepareIssueTopicWithinTransaction(issue: MultiremiIssue): boolean {
@@ -1323,6 +1374,24 @@ function roundPushPrompt(
   }
   if (omittedCount > 0) lines.push("", `${omittedCount} earlier update aggregate(s) were omitted.`);
   return lines.join("\n");
+}
+
+function resolveFeishuBotChatType(
+  input: SubmitFeishuBotMessageInput,
+  externalSessionKey: string,
+): "p2p" | "group" {
+  if (input.chatType === "group" || input.chatType === "p2p") return input.chatType;
+  if (cleanOptionalString(input.threadId) || externalSessionKey.includes(":thread:")) return "group";
+  return "p2p";
+}
+
+function issueTitleFromFeishuMessage(text: string): string {
+  const compact = text.replace(/\s+/g, " ").trim();
+  if (!compact) return "Feishu group request";
+  const maxLength = 120;
+  return compact.length <= maxLength
+    ? compact
+    : `${compact.slice(0, maxLength - 1).trimEnd()}…`;
 }
 
 function issueTopicBody(issue: Pick<MultiremiIssue, "key" | "title" | "description">): string {
