@@ -1,5 +1,14 @@
 import { createFeishuClient } from "@connectors/feishu/client.js";
 import { sendCardFeishu } from "@connectors/feishu/send.js";
+import { uploadImageFeishu } from "@connectors/feishu/media.js";
+import {
+  createFeishuImageResolver,
+  FEISHU_IMAGE_MAX_BYTES,
+} from "@connectors/feishu/outbound-images.js";
+import { buildInboxNotificationCardWithImages } from "./inbox-card.js";
+import type { MultiremiAttachment } from "@multiremi/contracts/types.js";
+import { uploadedAttachmentPath } from "@multiremi/api/helpers/uploads.js";
+import { readFile } from "node:fs/promises";
 import { validateFeishuGroupTarget } from "@multiremi/store/repos/notification-channels-repo.js";
 import {
   PermanentNotificationDeliveryError,
@@ -9,6 +18,8 @@ import {
 export interface FeishuGroupSenderDependencies {
   createClient?: typeof createFeishuClient;
   sendCard?: typeof sendCardFeishu;
+  uploadImage?: typeof uploadImageFeishu;
+  getAttachment?: (attachmentId: string) => MultiremiAttachment | null;
 }
 
 type FeishuDeliveryFailureCategory =
@@ -43,7 +54,29 @@ export function createFeishuGroupSender(
           appSecret,
           domain: env.MULTIREMI_FEISHU_DOMAIN?.trim() || undefined,
         });
-        await (dependencies.sendCard ?? sendCardFeishu)(client, chatId, notification.card);
+        const resolveImage = createFeishuImageResolver({
+          loadAttachment: async (source) => {
+            const attachment = dependencies.getAttachment?.(source.attachmentId);
+            if (!attachment || attachment.workspaceId !== notification.item.workspaceId) return null;
+            if (!attachment.url.startsWith("/api/attachments/")) return null;
+            if (!attachment.contentType.trim().toLowerCase().startsWith("image/")) return null;
+            if (attachment.sizeBytes > FEISHU_IMAGE_MAX_BYTES) return null;
+            return {
+              buffer: await readFile(uploadedAttachmentPath(attachment)),
+              contentType: attachment.contentType,
+              fileName: attachment.filename,
+            };
+          },
+          uploadImage: async (image) => (
+            await (dependencies.uploadImage ?? uploadImageFeishu)(client, image.buffer)
+          ).imageKey,
+        });
+        const card = await buildInboxNotificationCardWithImages({
+          item: notification.item,
+          workspace: notification.workspace,
+          publicUrl: notification.publicUrl,
+        }, resolveImage);
+        await (dependencies.sendCard ?? sendCardFeishu)(client, chatId, card);
       } catch (error) {
         const failure = controlledFeishuFailure(error, [appId, appSecret]);
         if (failure.permanent) {

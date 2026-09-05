@@ -106,6 +106,7 @@ import {
   denyDaemonTokenRuntimeIdentity,
   denyDaemonTokenTaskRuntimeIdentity,
   isDaemonGcCheckRequest,
+  isFeishuBotOutboundAttachmentRequest,
   isDaemonTokenAllowedRequest,
   taskTokenHardDenyCategory,
   log,
@@ -463,7 +464,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
   app.use("/api/daemon/runtimes/:runtimeId/*", async (c, next) => {
     const denied = denyDaemonTokenRuntimeIdentity(c, store, c.req.param("runtimeId"), {
-      hideForbiddenAsNotFound: isDaemonGcCheckRequest(c),
+      hideForbiddenAsNotFound: isDaemonGcCheckRequest(c) || isFeishuBotOutboundAttachmentRequest(c),
     });
     if (denied) return denied;
     await next();

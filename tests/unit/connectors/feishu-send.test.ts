@@ -59,4 +59,26 @@ describe("Feishu message sending", () => {
       }),
     }]);
   });
+
+  it("converts internal image markers to Feishu image keys in post markdown", async () => {
+    let payload: Record<string, any> | null = null;
+    const client = {
+      im: {
+        message: {
+          create: async (input: Record<string, any>) => {
+            payload = input;
+            return { code: 0, data: { message_id: "om_image" } };
+          },
+        },
+      },
+    } as unknown as Lark.Client;
+
+    await sendMessageFeishu(client, "oc_topic", "![capture](feishu-image:img_uploaded)");
+
+    const content = JSON.parse(payload!.data.content);
+    expect(content.zh_cn.content[0][0]).toEqual({
+      tag: "md",
+      text: "![capture](img_uploaded)",
+    });
+  });
 });

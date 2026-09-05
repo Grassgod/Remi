@@ -1,6 +1,7 @@
 import type {
   MultiremiNotificationChannelKind,
   MultiremiNotificationDelivery,
+  MultiremiAttachment,
   MultiremiWorkspace,
 } from "@multiremi/contracts/types.js";
 import type { NotificationDeliveryContext } from "@multiremi/store/repos/notification-channels-repo.js";
@@ -33,6 +34,7 @@ export interface NotificationDispatcherStore {
   recordNotificationDeliveryError(id: string, error: string, expectedClaimSeq: number): MultiremiNotificationDelivery | null;
   resetNotificationDeliveryForRetry(id: string, retryAt: string): MultiremiNotificationDelivery | null;
   getWorkspace(id: string): MultiremiWorkspace | null;
+  getAttachment(id: string): MultiremiAttachment | null;
 }
 
 export interface OutboundNotificationDispatcherOptions {
@@ -62,7 +64,7 @@ export class OutboundNotificationDispatcher {
   constructor(options: OutboundNotificationDispatcherOptions) {
     this.store = options.store;
     this.senders = {
-      feishu_group: lazyFeishuGroupSender(),
+      feishu_group: lazyFeishuGroupSender(this.store),
       ...options.senders,
     };
     this.maxAttempts = positiveInteger(options.maxAttempts, 3);
@@ -174,6 +176,8 @@ export class OutboundNotificationDispatcher {
           channel: context.channel!,
           delivery: claimed,
           item: context.item!,
+          workspace,
+          publicUrl: this.publicUrl,
         })),
         this.sendTimeoutMs,
       );
@@ -201,13 +205,15 @@ export class OutboundNotificationDispatcher {
   }
 }
 
-function lazyFeishuGroupSender(): OutboundNotificationSender {
+function lazyFeishuGroupSender(store: NotificationDispatcherStore): OutboundNotificationSender {
   let sender: OutboundNotificationSender | null = null;
   return {
     async send(notification): Promise<void> {
       if (!sender) {
         const { createFeishuGroupSender } = await import("./feishu-group-sender.js");
-        sender = createFeishuGroupSender();
+        sender = createFeishuGroupSender(process.env, {
+          getAttachment: (attachmentId) => store.getAttachment(attachmentId),
+        });
       }
       await sender.send(notification);
     },

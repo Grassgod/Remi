@@ -1,4 +1,11 @@
 import type { MultiremiInboxItem, MultiremiWorkspace } from "@multiremi/contracts/types.js";
+import { buildContentElements } from "@connectors/feishu/send.js";
+import {
+  degradeMarkdownImages,
+  findMarkdownImages,
+  rewriteMarkdownImages,
+  type MarkdownImageResolver,
+} from "@shared/feishu-markdown-images.js";
 
 const EVENT_LABELS: Record<string, string> = {
   issue_assigned: "Issue assigned",
@@ -32,11 +39,31 @@ export function buildInboxNotificationCard(input: {
   workspace: MultiremiWorkspace | null;
   publicUrl?: string | null;
 }): Record<string, unknown> {
+  return buildInboxNotificationCardInternal(input, formatInboxSummary(input));
+}
+
+export async function buildInboxNotificationCardWithImages(
+  input: {
+    item: MultiremiInboxItem;
+    workspace: MultiremiWorkspace | null;
+    publicUrl?: string | null;
+  },
+  resolveImage: MarkdownImageResolver,
+): Promise<Record<string, unknown>> {
+  if (structuredAutopilotCard(input.item)) return buildInboxNotificationCard(input);
+  return buildInboxNotificationCardInternal(input, await formatInboxSummaryWithImages(input, resolveImage));
+}
+
+function buildInboxNotificationCardInternal(input: {
+  item: MultiremiInboxItem;
+  workspace: MultiremiWorkspace | null;
+  publicUrl?: string | null;
+}, formattedSummary: string): Record<string, unknown> {
   const { item } = input;
   const eventLabel = humanizeEventType(item.type);
   const source = notificationSource(item);
   const autopilot = structuredAutopilotCard(item);
-  const summary = autopilot?.plainConclusion ?? truncateSummary(item.body ?? item.title);
+  const summary = autopilot?.plainConclusion ?? plainInboxSummary(item.body ?? item.title);
   const content = autopilot
     ? [
         `**结论**  ${autopilot.conclusion}`,
@@ -46,15 +73,10 @@ export function buildInboxNotificationCard(input: {
     : [
         `**Event**  ${escapeMarkdown(eventLabel)}`,
         `**Source**  ${escapeMarkdown(source)}`,
-        `**Result**  ${escapeMarkdown(summary)}`,
+        `**Result**  ${formattedSummary}`,
         `**Occurred**  ${escapeMarkdown(formatOccurredAt(item.createdAt))}`,
       ].join("\n");
-  const elements: Array<Record<string, unknown>> = [
-    {
-      tag: "markdown",
-      content,
-    },
-  ];
+  const elements: Array<Record<string, unknown>> = buildContentElements(content);
   const detailUrl = notificationDetailUrl(item, input.workspace, input.publicUrl, Boolean(autopilot));
   if (detailUrl) {
     elements.push({
@@ -77,6 +99,60 @@ export function buildInboxNotificationCard(input: {
     },
     body: { elements },
   };
+}
+
+function formatInboxSummary(
+  input: { item: MultiremiInboxItem; publicUrl?: string | null },
+): string {
+  const summary = truncateSummary(input.item.body ?? input.item.title);
+  const matches = findMarkdownImages(summary, { publicUrl: input.publicUrl });
+  if (matches.length === 0) return escapeMarkdown(summary);
+  return formatInboxSummaryWithoutResolver(summary, matches, input.publicUrl);
+}
+
+async function formatInboxSummaryWithImages(
+  input: { item: MultiremiInboxItem; publicUrl?: string | null },
+  resolveImage: MarkdownImageResolver,
+): Promise<string> {
+  const summary = truncateSummary(input.item.body ?? input.item.title);
+  const matches = findMarkdownImages(summary, { publicUrl: input.publicUrl });
+  if (matches.length === 0) return escapeMarkdown(summary);
+  let output = "";
+  let cursor = 0;
+  for (const match of matches) {
+    output += escapeMarkdown(summary.slice(cursor, match.start));
+    output += await rewriteMarkdownImages(match.raw, resolveImage, { publicUrl: input.publicUrl });
+    cursor = match.end;
+  }
+  return output + escapeMarkdown(summary.slice(cursor));
+}
+
+function formatInboxSummaryWithoutResolver(
+  summary: string,
+  matches: ReturnType<typeof findMarkdownImages>,
+  publicUrl: string | null | undefined,
+): string {
+  let output = "";
+  let cursor = 0;
+  for (const match of matches) {
+    output += escapeMarkdown(summary.slice(cursor, match.start));
+    output += degradeMarkdownImages(match.raw, { publicUrl });
+    cursor = match.end;
+  }
+  return output + escapeMarkdown(summary.slice(cursor));
+}
+
+function plainInboxSummary(value: string): string {
+  const matches = findMarkdownImages(value);
+  if (matches.length === 0) return truncateSummary(value);
+  let output = "";
+  let cursor = 0;
+  for (const match of matches) {
+    output += value.slice(cursor, match.start);
+    output += `图片: ${match.alt.trim() || match.source.name || "image"}`;
+    cursor = match.end;
+  }
+  return truncateSummary(output + value.slice(cursor));
 }
 
 export function humanizeEventType(type: string): string {

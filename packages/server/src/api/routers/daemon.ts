@@ -26,6 +26,7 @@ import {
   registerDaemonRuntimes,
   promoteLegacyCliPatForDaemonHeartbeat,
   promoteLegacyCliPatForDaemonRegistration,
+  localAttachmentFileResponse,
 } from "../helpers.js";
 import {
   authenticatedRequestUserId,
@@ -42,8 +43,12 @@ import {
 } from "../wire/index.js";
 import {
   FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION,
+  FEISHU_CONCIERGE_OUTBOUND_LEGACY_PROTOCOL_VERSION,
+  FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER,
   FEISHU_CONCIERGE_PROTOCOL_VERSION,
 } from "@multiremi/contracts/types.js";
+import { degradeMarkdownImages } from "@shared/feishu-markdown-images.js";
+import { FEISHU_IMAGE_MAX_BYTES } from "@connectors/feishu/outbound-images.js";
 import { FeishuBotEncryptionError } from "@multiremi/feishu-bot/credentials.js";
 import { normalizeFeishuBotErrorCode, redactFeishuBotError } from "@multiremi/feishu-bot/diagnostics.js";
 import type {
@@ -420,17 +425,20 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       // fetches the payload itself over its own runtime-scoped route.
       const directive = store.feishuBotDirectiveForRuntime(workspaceId, runtimeId);
       if (directive) response.feishu_bot = directive;
-      const outbound = feishuConciergeProtocol >= FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION
+      const outbound = feishuConciergeProtocol >= FEISHU_CONCIERGE_OUTBOUND_LEGACY_PROTOCOL_VERSION
         ? store.claimFeishuBotOutbound(workspaceId, runtimeId)
         : null;
       if (outbound) {
+        const body = feishuConciergeProtocol >= FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION
+          ? outbound.body
+          : degradeMarkdownImages(outbound.body);
         response.pending_feishu_outbound = {
           id: outbound.id,
           claim_token: outbound.claimToken,
           chat_id: outbound.chatId,
           thread_id: outbound.threadId,
           reply_to_message_id: outbound.replyToMessageId,
-          body: outbound.body,
+          body,
           idempotency_key: outbound.idempotencyKey,
         };
       }
@@ -547,6 +555,37 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     if (!accepted) return c.json({ error: "outbound delivery lease is stale", code: "stale_lease" }, 409);
     return c.json({ status: "ok" });
   });
+  app.get(
+    "/api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/attachments/:attachmentId",
+    async (c) => {
+      if (currentAccessToken(c)?.type !== "daemon") {
+        return c.json({ error: "daemon token required", code: "daemon_token_required" }, 403);
+      }
+      const runtimeId = c.req.param("runtimeId");
+      const denied = denyDaemonTokenRuntimeIdentity(c, store, runtimeId, { hideForbiddenAsNotFound: true });
+      if (denied) return c.json({ error: "attachment not available" }, 404);
+      const runtime = store.getRuntime(runtimeId);
+      if (!runtime) return c.json({ error: "attachment not available" }, 404);
+      const claimToken = cleanString(c.req.header(FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER));
+      if (!claimToken) return c.json({ error: "attachment not available" }, 404);
+      const attachment = store.getFeishuBotOutboundAttachment(
+        runtime.workspaceId ?? "local",
+        runtimeId,
+        c.req.param("deliveryId"),
+        claimToken,
+        c.req.param("attachmentId"),
+      );
+      if (!attachment) return c.json({ error: "attachment not available" }, 404);
+      if (
+        !attachment.url.startsWith("/api/attachments/")
+        || !attachment.contentType.trim().toLowerCase().startsWith("image/")
+        || attachment.sizeBytes > FEISHU_IMAGE_MAX_BYTES
+      ) {
+        return c.json({ error: "attachment not available" }, 404);
+      }
+      return localAttachmentFileResponse(attachment);
+    },
+  );
   app.post("/api/daemon/runtimes/:runtimeId/feishu-bot/messages", async (c) => {
     const runtimeId = c.req.param("runtimeId");
     const denied = denyDaemonTokenRuntimeIdentity(c, store, runtimeId);

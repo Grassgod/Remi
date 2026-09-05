@@ -3767,7 +3767,10 @@ export const FEISHU_CONCIERGE_CONFIG_CAPABILITY = "feishu_concierge_config_v1";
 export const FEISHU_CONCIERGE_PROTOCOL_VERSION = 1;
 
 /** Adds durable proactive topic replies without removing v1 inbound support. */
-export const FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION = 2;
+/** v2 can claim text deliveries; v3 adds guarded image attachment fetching. */
+export const FEISHU_CONCIERGE_OUTBOUND_LEGACY_PROTOCOL_VERSION = 2;
+export const FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION = 3;
+export const FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER = "X-Multiremi-Feishu-Claim-Token";
 
 export type FeishuBotDomain = "feishu" | "lark" | "bytedance";
 

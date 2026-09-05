@@ -13,14 +13,19 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore, db, resetMultiremiTestEnv, useUploadDir } from "./helpers.js";
 import { deriveStatus } from "@multiremi/store/repos/feishu-bot-repo.js";
 import {
+  FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER,
+  FEISHU_CONCIERGE_OUTBOUND_LEGACY_PROTOCOL_VERSION,
   FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION,
   FEISHU_CONCIERGE_PROTOCOL_VERSION,
   type MultiremiFeishuBotRuntimeStatus,
 } from "@multiremi/contracts/types.js";
 import type { MultiremiStore } from "@multiremi/store.js";
+import { uploadedAttachmentPath } from "@multiremi/api/helpers/uploads.js";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 
 const MASTER = { Authorization: "Bearer MASTER", "content-type": "application/json" };
 const APP_SECRET = "wJ4tQ7xR2nB8vC5mZ1kL0pS6dF3gH9jA";
@@ -304,6 +309,161 @@ describe("Feishu bot control-plane delivery", () => {
     );
     expect(result.status).toBe(200);
     expect((await (await heartbeat(test, "rt_a")).json())).not.toHaveProperty("pending_feishu_outbound");
+  });
+
+  it("degrades image syntax for v2 daemons while v3 daemons receive the resolvable body", async () => {
+    const test = await scaffold();
+    const submitted = test.store.submitFeishuBotMessage("local", "rt_a", {
+      revision: 1,
+      externalSessionKey: "oc_protocol:thread:omt_protocol",
+      externalMessageId: "om_protocol_root",
+      replyToMessageId: "om_protocol_root",
+      chatId: "oc_protocol",
+      threadId: "omt_protocol",
+      text: "seed destination",
+    });
+    const binding = db!.query(
+      "SELECT id FROM multiremi_feishu_bot_chat_bindings WHERE chat_session_id = ?",
+    ).get(submitted.chatSessionId) as { id: string };
+    const now = new Date().toISOString();
+    db!.run(
+      `INSERT INTO multiremi_feishu_bot_outbound_deliveries (
+         id, workspace_id, binding_id, task_id, chat_id, thread_id,
+         reply_to_message_id, body, status, available_at, created_at, updated_at
+       ) VALUES ('fbo_protocol', 'local', ?, NULL, 'oc_protocol', 'omt_protocol',
+         'om_protocol_root', ?, 'pending', ?, ?, ?)`,
+      [binding.id, "![capture](/api/attachments/att_protocol/content)", now, now, now],
+    );
+    await report(test, "rt_a", { applied_revision: 1, state: "online" });
+
+    const legacy = await heartbeat(test, "rt_a", {
+      feishu_concierge_protocol: FEISHU_CONCIERGE_OUTBOUND_LEGACY_PROTOCOL_VERSION,
+    });
+    const legacyBody = await legacy.json();
+    expect(legacyBody.pending_feishu_outbound.body).toContain("[图片: capture]");
+    expect(legacyBody.pending_feishu_outbound.body).not.toContain("![capture]");
+
+    db!.run(
+      `UPDATE multiremi_feishu_bot_outbound_deliveries
+       SET status = 'pending', claim_token = NULL, leased_until = NULL
+       WHERE id = ?`,
+      [legacyBody.pending_feishu_outbound.id],
+    );
+    const current = await heartbeat(test, "rt_a");
+    expect((await current.json()).pending_feishu_outbound.body)
+      .toContain("![capture](/api/attachments/att_protocol/content)");
+  });
+
+  it("serves outbound attachment bytes only for the active runtime, lease, workspace, and body reference", async () => {
+    useUploadDir();
+    const test = await scaffold();
+    const submitted = test.store.submitFeishuBotMessage("local", "rt_a", {
+      revision: 1,
+      externalSessionKey: "oc_images:thread:omt_images",
+      externalMessageId: "om_images_root",
+      replyToMessageId: "om_images_root",
+      chatId: "oc_images",
+      threadId: "omt_images",
+      text: "seed destination",
+    });
+    const binding = db!.query(
+      "SELECT id FROM multiremi_feishu_bot_chat_bindings WHERE chat_session_id = ?",
+    ).get(submitted.chatSessionId) as { id: string };
+    const now = new Date().toISOString();
+    db!.run(
+      `INSERT INTO multiremi_feishu_bot_outbound_deliveries (
+         id, workspace_id, binding_id, task_id, chat_id, thread_id,
+         reply_to_message_id, body, status, available_at, created_at, updated_at
+       ) VALUES ('fbo_images', 'local', ?, NULL, 'oc_images', 'omt_images',
+         'om_images_root', ?, 'pending', ?, ?, ?)`,
+      [binding.id, "![allowed](/api/attachments/att_allowed/content)", now, now, now],
+    );
+    const allowed = test.store.createAttachment({
+      id: "att_allowed",
+      workspaceId: "local",
+      filename: "allowed.png",
+      url: "/api/attachments/att_allowed/content",
+      contentType: "image/png",
+      sizeBytes: 3,
+      uploaderType: "member",
+      uploaderId: "local",
+    });
+    test.store.createAttachment({
+      id: "att_unreferenced",
+      workspaceId: "local",
+      filename: "unreferenced.png",
+      url: "/api/attachments/att_unreferenced/content",
+      contentType: "image/png",
+      sizeBytes: 3,
+      uploaderType: "member",
+      uploaderId: "local",
+    });
+    const otherWorkspace = test.store.createWorkspace({
+      id: "ws_outbound_other",
+      name: "Outbound other",
+      slug: "outbound-other",
+    });
+    test.store.createAttachment({
+      id: "att_cross_workspace",
+      workspaceId: otherWorkspace.id,
+      filename: "cross.png",
+      url: "/api/attachments/att_cross_workspace/content",
+      contentType: "image/png",
+      sizeBytes: 3,
+      uploaderType: "member",
+      uploaderId: "local",
+    });
+    const allowedPath = uploadedAttachmentPath(allowed);
+    mkdirSync(dirname(allowedPath), { recursive: true });
+    writeFileSync(allowedPath, Buffer.from("png"));
+    await report(test, "rt_a", { applied_revision: 1, state: "online" });
+    const claimed = await (await heartbeat(test, "rt_a")).json();
+    const claimToken = claimed.pending_feishu_outbound.claim_token as string;
+    const path = (runtimeId: string, attachmentId: string) =>
+      `/api/daemon/runtimes/${runtimeId}/feishu-bot/outbound/fbo_images/attachments/${attachmentId}`;
+    const authorizedHeaders = {
+      ...daemonHeaders(test.tokens.rt_a!),
+      [FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER]: claimToken,
+    };
+
+    expect((await test.app.request(path("rt_a", "att_allowed"), {
+      headers: {
+        ...daemonHeaders(test.tokens.rt_b!),
+        [FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER]: claimToken,
+      },
+    })).status).toBe(404);
+    const wrongRuntime = await test.app.request(path("rt_b", "att_allowed"), {
+      headers: {
+        ...daemonHeaders(test.tokens.rt_b!),
+        [FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER]: claimToken,
+      },
+    });
+    expect(wrongRuntime.status).toBe(404);
+    expect((await test.app.request(path("rt_a", "att_allowed"), {
+      headers: {
+        ...daemonHeaders(test.tokens.rt_a!),
+        [FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER]: "wrong-claim",
+      },
+    })).status).toBe(404);
+    expect((await test.app.request(path("rt_a", "att_cross_workspace"), {
+      headers: authorizedHeaders,
+    })).status).toBe(404);
+    expect((await test.app.request(path("rt_a", "att_unreferenced"), {
+      headers: authorizedHeaders,
+    })).status).toBe(404);
+
+    const response = await test.app.request(path("rt_a", "att_allowed"), { headers: authorizedHeaders });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("image/png");
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(Buffer.from("png"));
+
+    db!.run(
+      "UPDATE multiremi_feishu_bot_outbound_deliveries SET status = 'sent' WHERE id = ?",
+      ["fbo_images"],
+    );
+    expect((await test.app.request(path("rt_a", "att_allowed"), {
+      headers: authorizedHeaders,
+    })).status).toBe(404);
   });
 
   it("names a deleted Agent instead of failing the start generically", async () => {

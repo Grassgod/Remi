@@ -1,14 +1,16 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
 import type {
+  MultiremiAttachment,
   MultiremiNotificationChannel,
   MultiremiNotificationDelivery,
   MultiremiWorkspaceMember,
 } from "@multiremi/contracts/types.js";
 import { createMultiremiApp } from "@multiremi/api/server.js";
+import { uploadedAttachmentPath } from "@multiremi/api/helpers/uploads.js";
 import {
   PermanentNotificationDeliveryError,
   type OutboundNotification,
@@ -163,6 +165,89 @@ describe("Multiremi notification channels", () => {
     expect(failed.attempts).toBe(1);
     expect(failed.lastError).toBe("feishu credentials not configured");
     expect(current.listInboxItems(member.id).some((item) => item.issueId === issue.id)).toBe(true);
+  });
+
+  it("uploads a local inbox attachment and falls back to its link when upload fails", async () => {
+    const uploadDir = mkdtempSync(join(tmpdir(), "multiremi-inbox-image-"));
+    const originalUploadDir = process.env.MULTIREMI_UPLOAD_DIR;
+    process.env.MULTIREMI_UPLOAD_DIR = uploadDir;
+    const attachment: MultiremiAttachment = {
+      id: "att_inbox_image",
+      workspaceId: "local",
+      issueId: "issue-inbox-image",
+      commentId: null,
+      chatSessionId: null,
+      chatMessageId: null,
+      uploaderType: "member",
+      uploaderId: "local",
+      filename: "capture.png",
+      url: "/api/attachments/att_inbox_image/content",
+      contentType: "image/png",
+      sizeBytes: 3,
+      createdAt: new Date().toISOString(),
+    };
+    const filePath = uploadedAttachmentPath(attachment);
+    mkdirSync(dirname(filePath), { recursive: true });
+    writeFileSync(filePath, Buffer.from("png"));
+    const notification = {
+      chatId: "oc_inbox_images",
+      card: {},
+      channel: {},
+      delivery: {},
+      workspace: { slug: "local" },
+      publicUrl: "https://remi.example.test",
+      item: {
+        id: "inbox-image",
+        workspaceId: "local",
+        issueId: "issue-inbox-image",
+        type: "comment_created",
+        severity: "info",
+        title: "Image reply",
+        body: "See ![capture](/api/attachments/att_inbox_image/content)",
+        details: null,
+        createdAt: "2026-09-05T08:00:00.000Z",
+        issue: null,
+      },
+    } as OutboundNotification;
+
+    try {
+      const { createFeishuGroupSender } = await import("@multiremi/notifications/feishu-group-sender.js");
+      const uploaded: Buffer[] = [];
+      let sentCard: Record<string, unknown> | null = null;
+      const dependencies = {
+        createClient: (() => ({})) as any,
+        getAttachment: (id: string) => id === attachment.id ? attachment : null,
+        uploadImage: (async (_client: unknown, image: Buffer | string) => {
+          if (Buffer.isBuffer(image)) uploaded.push(image);
+          return { imageKey: "img_inbox_uploaded" };
+        }) as any,
+        sendCard: (async (_client: unknown, _chatId: string, card: Record<string, unknown>) => {
+          sentCard = card;
+          return { messageId: "om_inbox_image", chatId: "oc_inbox_images" };
+        }) as any,
+      };
+      await createFeishuGroupSender({
+        MULTIREMI_FEISHU_APP_ID: "app",
+        MULTIREMI_FEISHU_APP_SECRET: "secret",
+      }, dependencies).send(notification);
+
+      expect(uploaded).toEqual([Buffer.from("png")]);
+      expect(JSON.stringify(sentCard)).toContain("img_inbox_uploaded");
+
+      dependencies.uploadImage = (async () => {
+        throw new Error("upload unavailable");
+      }) as any;
+      await createFeishuGroupSender({
+        MULTIREMI_FEISHU_APP_ID: "app",
+        MULTIREMI_FEISHU_APP_SECRET: "secret",
+      }, dependencies).send(notification);
+      const fallback = JSON.stringify(sentCard);
+      expect(fallback).toContain("[图片: capture](https://remi.example.test/api/attachments/att_inbox_image/content)");
+      expect(fallback).not.toContain("![capture]");
+    } finally {
+      restoreEnv("MULTIREMI_UPLOAD_DIR", originalUploadDir);
+      rmSync(uploadDir, { recursive: true, force: true });
+    }
   });
 
   it("lets an owner create, list, update, and delete a channel through the API", async () => {

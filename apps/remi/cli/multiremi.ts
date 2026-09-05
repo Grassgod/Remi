@@ -593,6 +593,11 @@ export function controlPlaneConciergeHost(deps: {
         idempotencyKey: delivery.idempotencyKey,
       });
     },
+    async uploadImage(image) {
+      const handle = deps.current();
+      if (!handle) throw new Error("Feishu concierge channel is not running");
+      return handle.uploadImage(image);
+    },
   };
 }
 

@@ -1798,6 +1798,22 @@ runMigrations(this.db);
     return this.feishuBot.claimOutbound(workspaceId, runtimeId, now);
   }
 
+  getFeishuBotOutboundAttachment(
+    workspaceId: string,
+    runtimeId: string,
+    deliveryId: string,
+    claimToken: string,
+    attachmentId: string,
+  ): MultiremiAttachment | null {
+    return this.feishuBot.getOutboundAttachment(
+      workspaceId,
+      runtimeId,
+      deliveryId,
+      claimToken,
+      attachmentId,
+    );
+  }
+
   reportFeishuBotOutbound(
     workspaceId: string,
     runtimeId: string,

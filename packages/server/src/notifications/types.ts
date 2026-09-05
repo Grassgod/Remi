@@ -2,6 +2,7 @@ import type {
   MultiremiInboxItem,
   MultiremiNotificationChannel,
   MultiremiNotificationDelivery,
+  MultiremiWorkspace,
 } from "@multiremi/contracts/types.js";
 
 export interface OutboundNotification {
@@ -10,6 +11,8 @@ export interface OutboundNotification {
   channel: MultiremiNotificationChannel;
   delivery: MultiremiNotificationDelivery;
   item: MultiremiInboxItem;
+  workspace: MultiremiWorkspace | null;
+  publicUrl: string | null;
 }
 
 export interface OutboundNotificationSender {

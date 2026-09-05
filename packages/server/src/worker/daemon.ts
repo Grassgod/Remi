@@ -31,6 +31,11 @@ import {
 import { createEventMapper, responseToUsage } from "./acp-event-mapper.js";
 import { FeishuConciergeSupervisor, type FeishuConciergeHost } from "./feishu-concierge.js";
 import { redactFeishuBotError } from "@multiremi/feishu-bot/diagnostics.js";
+import { rewriteMarkdownImages } from "@shared/feishu-markdown-images.js";
+import {
+  createFeishuImageResolver,
+  responseToFeishuImage,
+} from "@connectors/feishu/outbound-images.js";
 import {
   buildSteerInjectionPrompt,
   DEFAULT_FORCE_ANSWER_GRACE_MS,
@@ -1447,7 +1452,20 @@ export class MultiremiDaemon {
     const supervisor = this.feishuConcierge;
     try {
       if (!supervisor) throw new Error("Feishu concierge is unavailable");
-      const sent = await supervisor.sendOutbound(delivery);
+      const resolveImage = createFeishuImageResolver({
+        loadAttachment: async (source) => responseToFeishuImage(
+          await this.client.fetchFeishuBotOutboundAttachment(
+            runtimeId,
+            delivery.id,
+            delivery.claimToken,
+            source.attachmentId,
+          ),
+          source.name,
+        ),
+        uploadImage: async (image) => (await supervisor.uploadImage(image.buffer)).imageKey,
+      });
+      const body = await rewriteMarkdownImages(delivery.body, resolveImage);
+      const sent = await supervisor.sendOutbound({ ...delivery, body });
       await this.client.reportFeishuBotOutboundResult(runtimeId, delivery.id, {
         claimToken: delivery.claimToken,
         status: "sent",

@@ -28,6 +28,7 @@ import {
 import { normalizeFeishuBotErrorCode } from "@multiremi/feishu-bot/diagnostics.js";
 import { isRuntimeEffectivelyOnline } from "@multiremi/store/repos/runtimes-repo.js";
 import { readWorkspaceIssueTopics } from "@multiremi/issue-topics/config.js";
+import { findMarkdownImages } from "@shared/feishu-markdown-images.js";
 import type {
   FeishuBotAuditAction,
   FeishuBotDesiredState,
@@ -43,6 +44,7 @@ import type {
   MultiremiFeishuBotDirective,
   MultiremiFeishuBotOutboundDelivery,
   MultiremiFeishuBotRuntimeStatus,
+  MultiremiAttachment,
   MultiremiIssue,
   MultiremiTask,
   MultiremiUser,
@@ -733,6 +735,27 @@ export class FeishuBotRepo {
       if (updated.changes !== 1) return null;
       return outboundDelivery(row, claimToken);
     })();
+  }
+
+  getOutboundAttachment(
+    workspaceId: string,
+    runtimeId: string,
+    deliveryId: string,
+    claimToken: string,
+    attachmentId: string,
+  ): MultiremiAttachment | null {
+    const config = this.getConfig(workspaceId);
+    if (!config || config.runtimeId !== runtimeId) return null;
+    const delivery = this.ctx.db.query(
+      `SELECT body FROM multiremi_feishu_bot_outbound_deliveries
+       WHERE id = ? AND workspace_id = ? AND status = 'sending' AND claim_token = ?`,
+    ).get(deliveryId, workspaceId, claimToken) as Row | null;
+    if (!delivery) return null;
+    const attachment = this.ctx.issues().getAttachment(attachmentId);
+    if (!attachment || attachment.workspaceId !== workspaceId) return null;
+    const referenced = findMarkdownImages(String(delivery.body ?? ""))
+      .some((match) => match.source.kind === "attachment" && match.source.attachmentId === attachmentId);
+    return referenced ? attachment : null;
   }
 
   reportOutbound(

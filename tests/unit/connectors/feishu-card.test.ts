@@ -49,6 +49,18 @@ describe("Feishu final card", () => {
     expect(json).toContain("\"input_type\":\"multiline_text\"");
     expect(json).toContain("\"rows\":8");
   });
+
+  it("renders resolved Feishu image markers as image elements", () => {
+    const card = buildFinalCard({
+      text: "Before\n\n![capture](feishu-image:img_uploaded)\n\nAfter",
+    }) as { body: { elements: Array<Record<string, any>> } };
+
+    expect(card.body.elements).toEqual([
+      { tag: "markdown", content: "Before" },
+      { tag: "img", img_key: "img_uploaded", alt: { tag: "plain_text", content: "capture" } },
+      { tag: "markdown", content: "After" },
+    ]);
+  });
 });
 
 describe("Feishu card actions", () => {

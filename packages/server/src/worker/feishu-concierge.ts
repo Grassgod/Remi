@@ -46,6 +46,7 @@ export interface FeishuConciergeHost {
   start(assignment: MultiremiFeishuBotAssignment): Promise<FeishuConciergeStartResult>;
   stop(): Promise<void>;
   sendOutbound?(delivery: MultiremiFeishuBotOutboundDelivery): Promise<{ messageId: string }>;
+  uploadImage?(image: Buffer): Promise<{ imageKey: string }>;
 }
 
 /**
@@ -162,6 +163,12 @@ export class FeishuConciergeSupervisor {
     if (this.state !== "online") throw new Error("Feishu concierge is not online");
     if (!this.options.host.sendOutbound) throw new Error("Feishu concierge host cannot send outbound messages");
     return this.options.host.sendOutbound(delivery);
+  }
+
+  async uploadImage(image: Buffer): Promise<{ imageKey: string }> {
+    if (this.state !== "online") throw new Error("Feishu concierge is not online");
+    if (!this.options.host.uploadImage) throw new Error("Feishu concierge host cannot upload images");
+    return this.options.host.uploadImage(image);
   }
 
   private async reconcile(directive: MultiremiFeishuBotDirective): Promise<void> {
