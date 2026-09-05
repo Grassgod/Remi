@@ -1,4 +1,5 @@
 import { readFile, stat } from "node:fs/promises";
+import { lookup as dnsLookup } from "node:dns/promises";
 import { extname } from "node:path";
 import type {
   MarkdownImageResolver,
@@ -8,6 +9,7 @@ import { isFeishuImageKey } from "@shared/feishu-markdown-images.js";
 
 export const FEISHU_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 export const FEISHU_IMAGE_DOWNLOAD_TIMEOUT_MS = 10_000;
+const FEISHU_IMAGE_MAX_REDIRECTS = 3;
 
 export interface LoadedFeishuImage {
   buffer: Buffer;
@@ -20,6 +22,7 @@ export type FeishuAttachmentImageLoader = (
 ) => Promise<LoadedFeishuImage | null>;
 
 export type FeishuImageFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+export type FeishuImageHostGuard = (hostname: string) => Promise<void>;
 
 export interface FeishuImageResolverOptions {
   uploadImage: (image: LoadedFeishuImage) => Promise<string | null | undefined>;
@@ -27,6 +30,7 @@ export interface FeishuImageResolverOptions {
   fetchFn?: FeishuImageFetch;
   maxBytes?: number;
   timeoutMs?: number;
+  assertRemoteHost?: FeishuImageHostGuard;
   cache?: Map<string, Promise<string | null>>;
 }
 
@@ -49,7 +53,10 @@ export function createFeishuImageResolver(options: FeishuImageResolverOptions): 
 
 export async function loadFeishuImage(
   source: MarkdownImageSource,
-  options: Pick<FeishuImageResolverOptions, "loadAttachment" | "fetchFn" | "maxBytes" | "timeoutMs"> = {},
+  options: Pick<
+    FeishuImageResolverOptions,
+    "loadAttachment" | "fetchFn" | "maxBytes" | "timeoutMs" | "assertRemoteHost"
+  > = {},
 ): Promise<LoadedFeishuImage | null> {
   const maxBytes = positiveLimit(options.maxBytes, FEISHU_IMAGE_MAX_BYTES);
   if (source.kind === "feishu" || source.kind === "unsupported") return null;
@@ -74,6 +81,7 @@ export async function loadFeishuImage(
     positiveLimit(options.timeoutMs, FEISHU_IMAGE_DOWNLOAD_TIMEOUT_MS),
     source.name,
     maxBytes,
+    options.assertRemoteHost ?? assertPublicFeishuImageHost,
   );
 }
 
@@ -105,16 +113,67 @@ async function fetchImageWithTimeout(
   timeoutMs: number,
   fileName: string,
   maxBytes: number,
+  assertRemoteHost: FeishuImageHostGuard,
 ): Promise<LoadedFeishuImage> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetchFn(url, { signal: controller.signal, redirect: "follow" });
-    if (!response.ok) throw new Error(`image download returned HTTP ${response.status}`);
-    return await responseToFeishuImage(response, fileName, maxBytes);
+    let currentUrl = new URL(url);
+    for (let redirects = 0; redirects <= FEISHU_IMAGE_MAX_REDIRECTS; redirects += 1) {
+      if (currentUrl.protocol !== "http:" && currentUrl.protocol !== "https:") {
+        throw new Error("image redirect used an unsupported protocol");
+      }
+      await assertRemoteHost(currentUrl.hostname);
+      const response = await fetchFn(currentUrl, { signal: controller.signal, redirect: "manual" });
+      const location = redirectLocation(response);
+      if (location) {
+        await response.body?.cancel().catch(() => undefined);
+        if (redirects === FEISHU_IMAGE_MAX_REDIRECTS) throw new Error("image download exceeded redirect limit");
+        currentUrl = new URL(location, currentUrl);
+        continue;
+      }
+      if (!response.ok) throw new Error(`image download returned HTTP ${response.status}`);
+      return await responseToFeishuImage(response, fileName, maxBytes);
+    }
+    throw new Error("image download exceeded redirect limit");
   } finally {
     clearTimeout(timer);
   }
+}
+
+export async function assertPublicFeishuImageHost(hostname: string): Promise<void> {
+  const addresses = await dnsLookup(hostname, { all: true });
+  if (addresses.length === 0 || addresses.some(({ address }) => isPrivateIp(address))) {
+    throw new Error("image host resolves to a private address");
+  }
+}
+
+function redirectLocation(response: Response): string | null {
+  if (![301, 302, 303, 307, 308].includes(response.status)) return null;
+  const location = response.headers.get("location")?.trim();
+  if (!location) throw new Error("image redirect is missing a location");
+  return location;
+}
+
+function isPrivateIp(value: string): boolean {
+  let address = value.toLowerCase();
+  const mapped = address.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/u);
+  if (mapped) address = mapped[1]!;
+  const ipv4 = address.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/u);
+  if (ipv4) {
+    const first = Number(ipv4[1]);
+    const second = Number(ipv4[2]);
+    return first === 0 || first === 10 || first === 127 || first >= 224
+      || (first === 100 && second >= 64 && second <= 127)
+      || (first === 169 && second === 254)
+      || (first === 172 && second >= 16 && second <= 31)
+      || (first === 192 && second === 168)
+      || (first === 198 && (second === 18 || second === 19));
+  }
+  return address === "::" || address === "::1"
+    || /^fe[89ab]/u.test(address)
+    || address.startsWith("fc")
+    || address.startsWith("fd");
 }
 
 async function readResponseWithinLimit(response: Response, maxBytes: number): Promise<Buffer> {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { classifyMarkdownImageSource, rewriteMarkdownImages } from "@shared/feishu-markdown-images.js";
 import {
+  assertPublicFeishuImageHost,
   createFeishuImageResolver,
   loadFeishuImage,
   responseToFeishuImage,
@@ -39,6 +40,7 @@ describe("Feishu outbound image loading", () => {
     const source = classifyMarkdownImageSource("https://cdn.example/not-image.txt");
     await expect(loadFeishuImage(source, {
       fetchFn: async () => new Response("plain", { headers: { "content-type": "text/plain" } }),
+      assertRemoteHost: async () => undefined,
     })).rejects.toThrow("non-image");
   });
 
@@ -53,7 +55,34 @@ describe("Feishu outbound image loading", () => {
       { headers: { "content-type": "image/png" } },
     );
 
-    await expect(loadFeishuImage(source, { fetchFn, timeoutMs: 5 })).rejects.toThrow();
+    await expect(loadFeishuImage(source, {
+      fetchFn,
+      timeoutMs: 5,
+      assertRemoteHost: async () => undefined,
+    })).rejects.toThrow();
+  });
+
+  it("rejects private hosts before fetching and checks every redirect target", async () => {
+    await expect(assertPublicFeishuImageHost("127.0.0.1")).rejects.toThrow("private address");
+
+    const checked: string[] = [];
+    let fetches = 0;
+    const source = classifyMarkdownImageSource("https://cdn.example/start.png");
+    await expect(loadFeishuImage(source, {
+      assertRemoteHost: async (hostname) => {
+        checked.push(hostname);
+        if (hostname === "127.0.0.1") throw new Error("private redirect blocked");
+      },
+      fetchFn: async () => {
+        fetches += 1;
+        return new Response(null, {
+          status: 302,
+          headers: { location: "http://127.0.0.1/internal.png" },
+        });
+      },
+    })).rejects.toThrow("private redirect blocked");
+    expect(checked).toEqual(["cdn.example", "127.0.0.1"]);
+    expect(fetches).toBe(1);
   });
 
   it("uploads duplicate sources once and reuses the image key across rewrites", async () => {
