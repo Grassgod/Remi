@@ -250,6 +250,42 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     return store.createWorkspace({ name: `PG Test ${wsCounter}`, slug }).id;
   };
 
+  it("builds Chat task projections and pending updates without SQLite rowid", () => {
+    const workspaceId = freshWorkspace();
+    const runtime = store.registerRuntime({
+      name: `PG Chat runtime ${wsCounter}`,
+      provider: "claude",
+      workspaceId,
+    });
+    const agent = store.createAgent({
+      name: `PG Chat agent ${wsCounter}`,
+      provider: "claude",
+      runtimeId: runtime.id,
+      workspaceId,
+    });
+    const chat = store.createChatSession({
+      agentId: agent.id,
+      title: "PG portable Chat ordering",
+      workspaceId,
+    });
+    const sent = store.sendChatMessage(chat.id, { body: "Build the PostgreSQL projection." });
+
+    expect(store.claimTask(runtime.id)?.id).toBe(sent.task.id);
+    expect(() => store.buildTaskSessionProjection(sent.task.id)).not.toThrow();
+    expect(store.listChatMessages(chat.id).map((message) => message.body)).toEqual([
+      "Build the PostgreSQL projection.",
+    ]);
+
+    store.createPendingAgentIssueUpdateWithinTransaction(chat.id, "First pending update.");
+    store.createPendingAgentIssueUpdateWithinTransaction(chat.id, "Second pending update.");
+    const pending = store.preparePendingAgentIssueUpdatesForTask(chat.id, sent.task.id);
+    expect(pending.omittedCount).toBe(0);
+    expect(pending.messages.map((message) => message.body).sort()).toEqual([
+      "First pending update.",
+      "Second pending update.",
+    ]);
+  });
+
   it("migrates knowledge control-plane tables and nullable provenance columns", () => {
     for (const table of [
       "multiremi_knowledge_submissions",
