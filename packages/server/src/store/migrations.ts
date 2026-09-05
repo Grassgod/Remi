@@ -2143,6 +2143,7 @@ export function runMigrations(db: SqlDatabase): void {
       issue_creation_restricted INTEGER NOT NULL DEFAULT 0,
       delegation_id TEXT,
       delegated_by_agent_id TEXT,
+      delegation_return_task_id TEXT,
       assignment_event_id TEXT,
       assignment_source_event_id TEXT,
       projection_from_seq INTEGER,
@@ -2670,6 +2671,7 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_tasks", "parent_task_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "delegation_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "delegated_by_agent_id TEXT");
+  addColumnIfMissing(db, "multiremi_tasks", "delegation_return_task_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "trigger_comment_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "trigger_summary TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "issue_session_id TEXT");

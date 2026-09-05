@@ -3111,6 +3111,8 @@ function toTask(row: Row): MultiremiTask {
     delegation_id: nullableString(row.delegation_id),
     delegatedByAgentId: nullableString(row.delegated_by_agent_id),
     delegated_by_agent_id: nullableString(row.delegated_by_agent_id),
+    delegationReturnTaskId: nullableString(row.delegation_return_task_id),
+    delegation_return_task_id: nullableString(row.delegation_return_task_id),
     assignmentEventId: nullableString(row.assignment_event_id),
     assignment_event_id: nullableString(row.assignment_event_id),
     assignmentSourceEventId: nullableString(row.assignment_source_event_id),
