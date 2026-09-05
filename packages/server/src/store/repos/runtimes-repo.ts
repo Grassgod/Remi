@@ -186,13 +186,19 @@ const COMMAND_REQUESTS: RuntimeRequestSpec<MultiremiRuntimeCommandRequest> = {
   hydrate: toRuntimeCommandRequest,
 };
 
+/**
+ * Publishing walks every configured personalized menu, one Feishu API call per
+ * recipient, so the running budget has to cover the whole loop rather than a
+ * single request. At 60s the deadline fired before the concierge could report,
+ * and every failure — including real Feishu errors — surfaced as a timeout.
+ */
 const BOT_MENU_PUBLISH_REQUESTS: RuntimeRequestSpec<MultiremiBotMenuPublishRequest> = {
   table: "multiremi_bot_menu_publish_requests",
   idPrefix: "bmp",
   pendingTimeoutMs: 3 * 60 * 1000,
-  runningTimeoutMs: 60 * 1000,
+  runningTimeoutMs: 5 * 60 * 1000,
   pendingTimeoutError: "bot menu publisher did not respond within 3 minutes",
-  runningTimeoutError: "bot menu publish did not finish within 60 seconds",
+  runningTimeoutError: "bot menu publish did not finish within 5 minutes",
   hydrate: toBotMenuPublishRequest,
 };
 
@@ -1503,7 +1509,11 @@ export class RuntimesRepo {
   ): MultiremiBotMenuPublishRequest {
     const current = this.getBotMenuPublishRequest(runtimeId, requestId);
     if (!current) throw new Error("request not found");
-    if (isTerminalRuntimeRequestStatus(current.status)) return current;
+    // A late report still overwrites a timeout: the concierge's own outcome —
+    // the Feishu error message, or a success that merely ran long — is the one
+    // worth showing. Only a settled result is left alone, so a duplicate report
+    // cannot flip a recorded answer.
+    if (current.status === "completed" || current.status === "failed") return current;
     const now = nowIso();
     const status = input.status === "completed" ? "completed" : "failed";
     this.ctx.db.run(

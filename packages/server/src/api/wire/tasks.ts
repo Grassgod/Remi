@@ -16,6 +16,8 @@ type InternalTaskField =
   | "delegation_id"
   | "delegatedByAgentId"
   | "delegated_by_agent_id"
+  | "delegationReturnTaskId"
+  | "delegation_return_task_id"
   | "issueCreationRestricted"
   | "issue_creation_restricted";
 
@@ -25,6 +27,8 @@ export function taskPublicResponse<T extends MultiremiTask>(task: T): Omit<T, In
     delegation_id: _delegationIdSnake,
     delegatedByAgentId: _delegatedByAgentId,
     delegated_by_agent_id: _delegatedByAgentIdSnake,
+    delegationReturnTaskId: _delegationReturnTaskId,
+    delegation_return_task_id: _delegationReturnTaskIdSnake,
     issueCreationRestricted: _issueCreationRestricted,
     issue_creation_restricted: _issueCreationRestrictedSnake,
     ...publicTask
@@ -56,6 +60,11 @@ export function daemonHeartbeatHttpResponse(ack: MultiremiDaemonHeartbeatAck): R
   if (ack.pending_local_skill_import) response.pending_local_skill_import = ack.pending_local_skill_import;
   if (ack.pending_local_skill_imports?.length) response.pending_local_skill_imports = ack.pending_local_skill_imports;
   if (ack.pending_command) response.pending_command = ack.pending_command;
+  // Every `pending_*` the store can claim must be listed here. `heartbeatRuntime`
+  // marks the work as handed out before this runs, so a field missing from this
+  // allowlist is not a dropped field — it is a request consumed and destroyed,
+  // which the operator only sees minutes later as an unexplained timeout.
+  if (ack.pending_bot_menu) response.pending_bot_menu = ack.pending_bot_menu;
   if (ack.ssh_mesh) response.ssh_mesh = ack.ssh_mesh;
   if (ack.drain) response.drain = ack.drain;
   return response;
@@ -540,7 +549,7 @@ function appendDaemonClaimChatContext(store: MultiremiStore, task: MultiremiTask
   if (!task.chatSessionId) return;
   try {
     const allMessages = store.listChatMessages(task.chatSessionId);
-    const messages = trailingDaemonUserMessages(allMessages);
+    const messages = daemonUserMessagesForTask(store, task, allMessages);
     const chatMessage = messages.map((message) => message.body.trim()).filter(Boolean).join("\n\n");
     if (chatMessage) response.chat_message = chatMessage;
   } catch (error) {
@@ -587,6 +596,38 @@ function appendDaemonClaimAutopilotContext(store: MultiremiStore, task: Multirem
   if (!autopilot) return;
   response.autopilot_title = autopilot.title;
   if (autopilot.description) response.autopilot_description = autopilot.description;
+}
+
+function daemonUserMessagesForTask(
+  store: MultiremiStore,
+  task: MultiremiTaskWithAgent,
+  messages: MultiremiChatMessage[],
+): MultiremiChatMessage[] {
+  const lineageTaskIds = new Set<string>();
+  let current: MultiremiTask | null = task;
+  while (current && !lineageTaskIds.has(current.id)) {
+    lineageTaskIds.add(current.id);
+    current = current.parentTaskId ? store.getTask(current.parentTaskId) : null;
+  }
+
+  let anchor = -1;
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index];
+    if (message?.role === "user" && message.taskId && lineageTaskIds.has(message.taskId)) {
+      anchor = index;
+    }
+  }
+  if (anchor < 0) return trailingDaemonUserMessages(messages);
+
+  // Chat rows can share a millisecond timestamp. The portable SQL tie-breaker
+  // is the opaque message id, so a pending system update may sort on either
+  // side of the current user message. Anchor the request to its Task lineage
+  // and use assistant replies—not system notifications—as turn boundaries.
+  let start = anchor;
+  while (start > 0 && messages[start - 1]?.role !== "assistant") start--;
+  let end = anchor + 1;
+  while (end < messages.length && messages[end]?.role !== "assistant") end++;
+  return messages.slice(start, end).filter((message) => message.role === "user");
 }
 
 function trailingDaemonUserMessages(messages: MultiremiChatMessage[]): MultiremiChatMessage[] {

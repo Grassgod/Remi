@@ -42,6 +42,13 @@ import {
   permissionElementIds,
 } from "./streaming/permission-form.js";
 import { CardKitElements, type CardRef } from "./streaming/cardkit-elements.js";
+import { uploadImageFeishu } from "./media.js";
+import { createFeishuImageResolver } from "./outbound-images.js";
+import {
+  degradeMarkdownImages,
+  rewriteMarkdownImages,
+  type MarkdownImageResolver,
+} from "@shared/feishu-markdown-images.js";
 
 export { buildFinalCard };
 export type { StepInfo };
@@ -130,6 +137,8 @@ export class FeishuStreamingSession {
   private log: (msg: string) => void;
   private _tokenProvider: TokenProvider | null;
   private cardkit: CardKitElements;
+  private readonly imageResolver: MarkdownImageResolver;
+  private currentRawText = "";
 
   // Independent throttle per element — thinking and content don't interfere
   private throttler = new ElementThrottler();
@@ -181,6 +190,9 @@ export class FeishuStreamingSession {
     this.creds = creds;
     this.log = options?.log ?? ((msg) => console.log(`[streaming] ${msg}`));
     this._tokenProvider = options?.tokenProvider ?? null;
+    this.imageResolver = createFeishuImageResolver({
+      uploadImage: async (image) => (await uploadImageFeishu(this.client, image.buffer)).imageKey,
+    });
     this.cardkit = new CardKitElements({
       domain: creds.domain,
       getToken: () => this._getToken(),
@@ -484,7 +496,8 @@ export class FeishuStreamingSession {
 
   async update(text: string): Promise<void> {
     if (!text) return;
-    this._throttledUpdate("content", text, "currentText");
+    this.currentRawText = text;
+    this._throttledUpdate("content", degradeMarkdownImages(text), "currentText");
   }
 
   async updateThinking(text: string): Promise<void> {
@@ -772,15 +785,16 @@ export class FeishuStreamingSession {
 
     // Append abort notice to content if user interrupted
     const aborted = typeof finalTextOrOptions === "object" && finalTextOrOptions?.aborted;
-    const rawText = finalText ?? this.state.currentText;
+    const rawText = finalText ?? (this.currentRawText || this.state.currentText);
     const text = aborted ? (rawText ? rawText + "\n\n---\n⏹ *已被用户中断*" : "⏹ *已被用户中断*") : rawText;
+    const streamingText = degradeMarkdownImages(text);
     const thinkingText = thinking ?? this.state.currentThinking;
     const apiBase = resolveApiBase(this.creds.domain);
 
     if (!this._degraded) {
       // Send final element updates BEFORE marking closed (_updateElementRaw checks this.closed)
-      if (text && text !== this.state.currentText) {
-        await this._updateElementRaw("content", text);
+      if (streamingText && streamingText !== this.state.currentText) {
+        await this._updateElementRaw("content", streamingText);
       }
       if (stats) {
         await this._updateElementRaw("stats_text", stats);
@@ -792,7 +806,7 @@ export class FeishuStreamingSession {
 
     // Close streaming mode via PATCH /settings (skip if degraded — streaming already expired)
     if (!this._degraded) {
-      await this._closeStreamingMode(text);
+      await this._closeStreamingMode(streamingText);
     } else {
       this.log(`Close: skipping settings PATCH (degraded mode)`);
     }
@@ -807,8 +821,9 @@ export class FeishuStreamingSession {
 
     // Replace with static card — process panel collapsed with icon divs
     try {
+      const renderedText = await rewriteMarkdownImages(text, this.imageResolver);
       const finalCard = buildFinalCard({
-        text,
+        text: renderedText,
         thinking: thinkingText,
         toolEntries,
         steps: this._steps.length > 0 ? this._steps : undefined,

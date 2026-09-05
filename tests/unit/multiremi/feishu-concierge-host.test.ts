@@ -66,9 +66,11 @@ function fakeChannel(): {
   fail: (error: unknown) => void;
   stops: () => number;
   sent: Array<{ chatId: string; idempotencyKey: string }>;
+  uploads: Buffer[];
 } {
   let stops = 0;
   const sent: Array<{ chatId: string; idempotencyKey: string }> = [];
+  const uploads: Buffer[] = [];
   let fail!: (error: unknown) => void;
   const start = new Promise<void>((_resolve, reject) => { fail = reject; });
   return {
@@ -80,10 +82,15 @@ function fakeChannel(): {
         sent.push({ chatId: input.chatId, idempotencyKey: input.idempotencyKey });
         return { messageId: "om_proactive" };
       },
+      uploadImage: async (image: Buffer) => {
+        uploads.push(image);
+        return { imageKey: "img_uploaded" };
+      },
     } as unknown as FeishuChannelHandle,
     fail,
     stops: () => stops,
     sent,
+    uploads,
   };
 }
 
@@ -121,11 +128,22 @@ describe("control-plane Feishu concierge host", () => {
       threadId: "omt_host",
       replyToMessageId: "om_root",
       body: "Round complete.",
+      bodyOrigin: "agent",
       idempotencyKey: "fbo_host",
     });
 
     expect(result).toEqual({ messageId: "om_proactive" });
     expect(test.channel.sent).toEqual([{ chatId: "oc_host", idempotencyKey: "fbo_host" }]);
+  });
+
+  it("routes image uploads through the running connector handle", async () => {
+    const fake = fakeDaemon();
+    const test = host({ daemon: fake.daemon });
+    await test.conciergeHost.start(assignment());
+
+    await expect(test.conciergeHost.uploadImage!(Buffer.from("png")))
+      .resolves.toEqual({ imageKey: "img_uploaded" });
+    expect(test.channel.uploads).toEqual([Buffer.from("png")]);
   });
 
   it("admits senders for server-side union_id classification", async () => {

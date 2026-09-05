@@ -31,6 +31,11 @@ import {
 import { createEventMapper, responseToUsage } from "./acp-event-mapper.js";
 import { FeishuConciergeSupervisor, type FeishuConciergeHost } from "./feishu-concierge.js";
 import { redactFeishuBotError } from "@multiremi/feishu-bot/diagnostics.js";
+import { rewriteMarkdownImages } from "@shared/feishu-markdown-images.js";
+import {
+  createFeishuImageResolver,
+  responseToFeishuImage,
+} from "@connectors/feishu/outbound-images.js";
 import {
   buildSteerInjectionPrompt,
   DEFAULT_FORCE_ANSWER_GRACE_MS,
@@ -647,6 +652,7 @@ export class MultiremiDaemon {
   private runtimeModelRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private runtimeModelRetryWake: (() => void) | null = null;
   private botMenuPublisher: ((config: ResolvedBotMenuConfig, dryRun: boolean) => Promise<BotMenuPublishResult>) | null = null;
+  private botMenuPublishChain: Promise<void> = Promise.resolve();
   private feishuConcierge: FeishuConciergeSupervisor | null = null;
   private feishuConciergeReconcile: Promise<void> = Promise.resolve();
 
@@ -1214,7 +1220,7 @@ export class MultiremiDaemon {
       await this.handleRuntimeCommand(runtimeId, ack.pending_command);
     }
     if (ack.pending_bot_menu) {
-      await this.handleBotMenuPublish(runtimeId, ack.pending_bot_menu);
+      this.queueBotMenuPublish(runtimeId, ack.pending_bot_menu);
     }
     this.applyFeishuBotDirective(ack);
     if (ack.pending_feishu_outbound) {
@@ -1396,6 +1402,27 @@ export class MultiremiDaemon {
     });
   }
 
+  /**
+   * Publish on its own chain instead of inside the heartbeat.
+   *
+   * A publish walks the Feishu open API once per personalized menu, which can
+   * take tens of seconds; the heartbeat loop is also what claims tasks, so
+   * awaiting here stalled the concierge's Runtime — and the bot with it — for
+   * the whole call. Chaining rather than firing in parallel keeps two publishes
+   * from racing onto the same bot menu.
+   */
+  private queueBotMenuPublish(
+    runtimeId: string,
+    request: NonNullable<MultiremiDaemonHeartbeatAck["pending_bot_menu"]>,
+  ): void {
+    this.botMenuPublishChain = this.botMenuPublishChain
+      .catch(() => {})
+      .then(() => this.handleBotMenuPublish(runtimeId, request))
+      .catch((error) => {
+        log.warn(`bot menu publish ${request.id} could not be reported: ${error instanceof Error ? error.message : String(error)}`);
+      });
+  }
+
   private async handleBotMenuPublish(
     runtimeId: string,
     request: NonNullable<MultiremiDaemonHeartbeatAck["pending_bot_menu"]>,
@@ -1407,16 +1434,24 @@ export class MultiremiDaemon {
       });
       return;
     }
+    const startedAt = Date.now();
+    // The control plane only records the outcome; when a publish is slow enough
+    // to outlive its deadline, this line is the only place the duration and the
+    // Feishu message survive.
+    log.info(`bot menu publish ${request.id} started (dry_run=${request.dry_run})`);
     try {
       const result = await this.botMenuPublisher(request.config, request.dry_run);
+      log.info(`bot menu publish ${request.id} finished in ${Date.now() - startedAt}ms`);
       await this.client.reportBotMenuPublishResult(runtimeId, request.id, {
         status: "completed",
         result,
       });
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log.warn(`bot menu publish ${request.id} failed after ${Date.now() - startedAt}ms: ${message}`);
       await this.client.reportBotMenuPublishResult(runtimeId, request.id, {
         status: "failed",
-        error: error instanceof Error ? error.message : String(error),
+        error: message,
       });
     }
   }
@@ -1447,7 +1482,23 @@ export class MultiremiDaemon {
     const supervisor = this.feishuConcierge;
     try {
       if (!supervisor) throw new Error("Feishu concierge is unavailable");
-      const sent = await supervisor.sendOutbound(delivery);
+      const resolveImage = createFeishuImageResolver({
+        allow: { local: delivery.bodyOrigin === "agent" },
+        loadAttachment: async (source) => responseToFeishuImage(
+          await this.client.fetchFeishuBotOutboundAttachment(
+            runtimeId,
+            delivery.id,
+            delivery.claimToken,
+            source.attachmentId,
+          ),
+          source.name,
+        ),
+        uploadImage: async (image) => (await supervisor.uploadImage(image.buffer)).imageKey,
+      });
+      const body = await rewriteMarkdownImages(delivery.body, resolveImage, {
+        publicUrl: this.options.serverUrl,
+      });
+      const sent = await supervisor.sendOutbound({ ...delivery, body });
       await this.client.reportFeishuBotOutboundResult(runtimeId, delivery.id, {
         claimToken: delivery.claimToken,
         status: "sent",

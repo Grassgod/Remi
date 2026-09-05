@@ -138,6 +138,7 @@ describe("Feishu bot standard Task bridge", () => {
       threadId: "omt_round_push",
       replyToMessageId: "om_round_push_1",
       body: "MUL work is complete and ready for review.",
+      bodyOrigin: "agent",
     });
     expect(store.claimFeishuBotOutbound("local", "rt_bot")).toBeNull();
 
@@ -222,6 +223,7 @@ describe("Feishu bot standard Task bridge", () => {
     });
     expect(store.claimFeishuBotOutbound("local", "rt_bot")).toMatchObject({
       body: "The steered round is complete.",
+      bodyOrigin: "agent",
       chatId: "oc_busy",
       replyToMessageId: "om_busy_1",
     });

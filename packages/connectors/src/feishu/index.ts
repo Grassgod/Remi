@@ -25,6 +25,9 @@ import {
 import { createFeishuClient } from "./sdk.js";
 import { createAdapter } from "./sdk.js";
 import { sendMessageFeishu } from "./send.js";
+import { uploadImageFeishu } from "./media.js";
+import { createFeishuImageResolver } from "./outbound-images.js";
+import { rewriteMarkdownImages } from "@shared/feishu-markdown-images.js";
 
 const log = createLogger("feishu");
 
@@ -71,8 +74,8 @@ export class FeishuConnector implements Connector {
       connectionMode: config.connectionMode as any,
     });
 
-    // Group policy is injected by the constructing layer (remi/core) so the
-    // connector never reaches up into the remi product for its store.
+    // Group policy only supplies optional monitor/reply behavior. A missing
+    // entry does not block explicit bot mentions or slash commands.
     this._groupPolicy = groupPolicy ?? { getByChatId: () => null };
     this._channel.setGroupPolicy(this._groupPolicy);
     if (authorizeSender) this._channel.setSenderAuthorizer(authorizeSender);
@@ -137,11 +140,21 @@ export class FeishuConnector implements Connector {
       appSecret: this._config.appSecret,
       domain: this._config.domain,
     });
-    const result = await sendMessageFeishu(client, input.chatId, input.body, {
+    const body = await this._rewriteImages(client, input.body);
+    const result = await sendMessageFeishu(client, input.chatId, body, {
       replyToMessageId: input.replyToMessageId,
       idempotencyKey: input.idempotencyKey,
     });
     return { messageId: result.messageId };
+  }
+
+  async uploadImage(image: Buffer): Promise<{ imageKey: string }> {
+    const client = createFeishuClient({
+      appId: this._config.appId,
+      appSecret: this._config.appSecret,
+      domain: this._config.domain,
+    });
+    return uploadImageFeishu(client, image);
   }
 
   async reply(chatId: string, response: AgentResponse): Promise<void> {
@@ -150,7 +163,7 @@ export class FeishuConnector implements Connector {
       appSecret: this._config.appSecret,
       domain: this._config.domain,
     });
-    const text = response.text;
+    const text = await this._rewriteImages(client, response.text);
     const stats = this._formatStats(response);
     if (response.thinking || stats) {
       const card = buildFinalCard({ text, thinking: response.thinking, stats });
@@ -336,7 +349,7 @@ export class FeishuConnector implements Connector {
       appSecret: this._config.appSecret,
       domain: this._config.domain,
     });
-    const text = response.text;
+    const text = await this._rewriteImages(client, response.text);
     const stats = this._formatStats(response);
     if (response.thinking || stats) {
       const card = buildFinalCard({ text, thinking: response.thinking, stats });
@@ -350,6 +363,13 @@ export class FeishuConnector implements Connector {
     if (msg.rootId) return `${msg.chatId}:thread:${msg.rootId}`;
     if (msg.chatType === "group") return `${msg.chatId}:thread:${msg.messageId}`;
     return msg.chatId;
+  }
+
+  private async _rewriteImages(client: ReturnType<typeof createFeishuClient>, text: string): Promise<string> {
+    const resolveImage = createFeishuImageResolver({
+      uploadImage: async (image) => (await uploadImageFeishu(client, image.buffer)).imageKey,
+    });
+    return rewriteMarkdownImages(text, resolveImage);
   }
 
   private _inferMediaType(placeholder: string): MediaAttachment["mediaType"] {

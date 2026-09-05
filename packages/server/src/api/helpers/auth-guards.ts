@@ -568,6 +568,11 @@ export function isDaemonGcCheckRequest(c: Context): boolean {
   return new URL(c.req.url).pathname.endsWith("/gc-check");
 }
 
+export function isFeishuBotOutboundAttachmentRequest(c: Context): boolean {
+  return /^\/api\/daemon\/runtimes\/[^/]+\/feishu-bot\/outbound\/[^/]+\/attachments\/[^/]+$/
+    .test(new URL(c.req.url).pathname);
+}
+
 export function denyDaemonTokenWorkspace(c: Context, workspaceId?: string | null, options: DaemonWorkspaceDenyOptions = {}): Response | null {
   const token = currentAccessToken(c);
   if (token?.type !== "daemon") return null;

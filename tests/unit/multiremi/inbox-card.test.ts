@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import type { MultiremiInboxItem, MultiremiWorkspace } from "@multiremi/contracts/types.js";
 import {
   buildInboxNotificationCard,
+  buildInboxNotificationCardWithImages,
   escapeMarkdown,
   humanizeEventType,
 } from "@multiremi/notifications/inbox-card.js";
@@ -184,5 +185,37 @@ describe("autopilot inbox notification cards", () => {
   it("escapes formatting markers but leaves ordinary punctuation and URLs intact", () => {
     expect(escapeMarkdown("*Result* | https://example.com/a-b_(c)."))
       .toBe("\\*Result\\* | https://example.com/a-b_(c).");
+  });
+
+  it("renders uploaded body images as card image elements", async () => {
+    const card = await buildInboxNotificationCardWithImages({
+      item: item({ type: "comment_created", body: "See ![capture](/tmp/capture.png) now" }),
+      workspace,
+      publicUrl: "https://remi.example.com",
+    }, async () => "img_notification");
+    const elements = (card.body as { elements: Array<Record<string, any>> }).elements;
+
+    expect(elements).toContainEqual({
+      tag: "img",
+      img_key: "img_notification",
+      alt: { tag: "plain_text", content: "capture" },
+    });
+    expect(JSON.stringify(card)).not.toContain("/tmp/capture.png");
+  });
+
+  it("degrades notification body images to clickable links without changing ordinary escaping", () => {
+    const card = buildInboxNotificationCard({
+      item: item({
+        type: "comment_created",
+        body: "*Result* ![capture](/api/attachments/att_card/content)",
+      }),
+      workspace,
+      publicUrl: "https://remi.example.com",
+    });
+    const json = JSON.stringify(card);
+
+    expect(json).toContain("\\\\*Result\\\\*");
+    expect(json).toContain("[图片: capture](https://remi.example.com/api/attachments/att_card/content)");
+    expect(json).not.toContain("![capture]");
   });
 });
