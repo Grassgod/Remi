@@ -67,13 +67,29 @@ describe("Feishu bot standard Task bridge", () => {
       assigneeType: "agent",
       assigneeId: agent.id,
     });
+    store.registerRuntime({
+      id: "rt_issue_workspace",
+      name: "issue-codex",
+      provider: "codex",
+      workspaceId: "local",
+      daemonId: "n37-206-133-hehuajie",
+    });
+    store.reportIssueWorkspace({
+      issueId: issue.id,
+      runtimeId: "rt_issue_workspace",
+      rootPath: "/tmp/MUL-topic-report",
+      branchName: `agent/${issue.key}`,
+      status: "ready",
+      repos: [],
+    });
     store.updateChatSession(inbound.chatSessionId, { issueId: issue.id });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const leaderTask = store.createSessionTask(session.id, {
       agentId: agent.id,
       prompt: "Complete the assigned work.",
     });
-    expect(store.claimTask("rt_bot")?.id).toBe(leaderTask.id);
+    expect(store.claimTask("rt_bot")).toBeNull();
+    expect(store.claimTask("rt_issue_workspace")?.id).toBe(leaderTask.id);
     store.startTask(leaderTask.id);
 
     const taskCountBeforeComment = store.listTasks().length;
@@ -99,6 +115,8 @@ describe("Feishu bot standard Task bridge", () => {
     expect(store.listIssueSessions(issue.id)).toHaveLength(1);
 
     const roundTask = roundTasks[0]!;
+    expect(roundTask).toMatchObject({ holdsWorkspace: false, runtimeId: "rt_bot" });
+    expect(store.getTaskWithAgent(roundTask.id)?.repos).toEqual([]);
     expect(store.claimTask("rt_bot")?.id).toBe(roundTask.id);
     const wire = daemonTaskClaimResponse(store, store.getTaskWithAgent(roundTask.id)!);
     expect(wire.bound_issue_updates).toEqual([
@@ -167,7 +185,7 @@ describe("Feishu bot standard Task bridge", () => {
       agentId: agent.id,
       prompt: "This round will fail.",
     });
-    expect(store.claimTask("rt_bot")?.id).toBe(failedLeader.id);
+    expect(store.claimTask("rt_issue_workspace")?.id).toBe(failedLeader.id);
     store.startTask(failedLeader.id);
     const countBeforeFailure = store.listTasks().length;
     store.failTask(failedLeader.id, {
@@ -347,6 +365,8 @@ describe("Feishu bot standard Task bridge", () => {
     });
     const secondTask = store.claimTask("rt_bot")!;
     expect(secondTask.id).toBe(secondSubmission.taskId);
+    expect(secondTask.holdsWorkspace).toBe(false);
+    expect(store.getTaskWithAgent(secondTask.id)?.repos).toEqual([]);
     const secondWire = daemonTaskClaimResponse(store, secondTask);
     expect((secondWire.session_projection as { mode?: string } | undefined)?.mode).toBe("delta");
     const secondPrompt = buildTaskPrompt({

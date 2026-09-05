@@ -29,6 +29,7 @@ const MARKDOWN_ATTACHMENT_OWNERSHIP_MIGRATION = "20260827_markdown_attachment_ow
 const AGENT_ROLE_MIGRATION = "20260827_agent_roles";
 const PROJECT_DEVICE_DAEMON_CANONICALIZATION_MIGRATION = "20260831_project_device_daemon_canonicalization";
 const FEISHU_ISSUE_TOPIC_OUTBOUND_MIGRATION = "20260904_feishu_issue_topic_outbound_nullable";
+const FEISHU_TOPIC_REPORT_SCHEDULING_MIGRATION = "20260905_feishu_topic_report_scheduling";
 
 // Stable Feishu open_id of the deployment owner (hehuajie / 贺华杰). The seed
 // `local` user is tagged with this on migration so SSO login re-binds to it
@@ -2692,6 +2693,9 @@ export function runMigrations(db: SqlDatabase): void {
   runMigrationOnce(db, FEISHU_ISSUE_TOPIC_OUTBOUND_MIGRATION, () => {
     allowNullableFeishuOutboundReplyToMessageId(db);
   });
+  runMigrationOnce(db, FEISHU_TOPIC_REPORT_SCHEDULING_MIGRATION, () => {
+    releaseQueuedFeishuTopicReports(db);
+  });
   addColumnIfMissing(db, "multiremi_tasks", "projection_from_seq INTEGER");
   addColumnIfMissing(db, "multiremi_tasks", "projection_to_seq INTEGER");
   addColumnIfMissing(db, "multiremi_tasks", "projection_mode TEXT");
@@ -3588,6 +3592,19 @@ function runMigrationOnce(db: SqlDatabase, id: string, migrate: () => void): voi
     if (claimed !== 1) return;
     migrate();
   })();
+}
+
+function releaseQueuedFeishuTopicReports(db: SqlDatabase): void {
+  db.run(
+    `UPDATE multiremi_tasks
+        SET holds_workspace = 0,
+            updated_at = ?
+      WHERE status = 'queued'
+        AND issue_id IS NOT NULL
+        AND chat_session_id IS NOT NULL
+        AND holds_workspace <> 0`,
+    [new Date().toISOString()],
+  );
 }
 
 function allowNullableFeishuOutboundReplyToMessageId(db: SqlDatabase): void {
