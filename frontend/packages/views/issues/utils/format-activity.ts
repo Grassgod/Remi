@@ -13,6 +13,12 @@ function delegationReturnReason(reason: string | undefined, t: IssuesT): string 
       return t(($) => $.activity.delegation_return_reason_delegator_unavailable);
     case "already_covered":
       return t(($) => $.activity.delegation_return_reason_already_covered);
+    case "coalesced_into_pending_return":
+      return t(($) => $.activity.delegation_return_reason_coalesced_into_pending_return);
+    case "covered_by_queued_task":
+      return t(($) => $.activity.delegation_return_reason_covered_by_queued_task);
+    case "deferred_lane_busy":
+      return t(($) => $.activity.delegation_return_reason_deferred_lane_busy);
     default:
       return reason?.trim() || t(($) => $.activity.reason_unknown);
   }

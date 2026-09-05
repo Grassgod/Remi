@@ -2675,6 +2675,8 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_tasks", "trigger_comment_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "trigger_summary TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "issue_session_id TEXT");
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_delegation_return_pending
+    ON multiremi_tasks(issue_session_id, delegated_by_agent_id, delegation_return_task_id, status)`);
   addColumnIfMissing(db, "multiremi_tasks", "issue_session_generation INTEGER");
   addColumnIfMissing(db, "multiremi_tasks", "holds_workspace INTEGER NOT NULL DEFAULT 1");
   addColumnIfMissing(db, "multiremi_tasks", "assignment_event_id TEXT");
