@@ -16,10 +16,6 @@ export function timelineEntries(data: IssueTimelineData | undefined): TimelineEn
   return [...(data?.pages ?? [])].reverse().flatMap((page) => page.entries);
 }
 
-export function timelineOlderEntryCount(data: IssueTimelineData | undefined): number {
-  return (data?.pages ?? []).slice(1).reduce((count, page) => count + page.entries.length, 0);
-}
-
 export function mapTimelineEntries(
   data: IssueTimelineData | undefined,
   update: (entry: TimelineEntry) => TimelineEntry | null,
@@ -91,33 +87,50 @@ export function mergeTimelineLatestPage(
   latest: TimelinePage,
 ): IssueTimelineData {
   // A short latest page is the complete server timeline, so it is also
-  // authoritative for removals. A full page with older history only replaces
-  // its covered range; rows shifted past its oldest key must be retained.
+  // authoritative for removals. A full page only replaces its covered range;
+  // rows below its oldest key cannot be verified and are retained.
   if (!current?.pages.length || !latest.has_more || latest.entries.length === 0) {
     return timelineDataFromPage(latest);
   }
 
-  const latestIds = new Set(latest.entries.map((entry) => entry.id));
+  const head = current.pages[0]!;
+  const newestLoaded = head.entries[head.entries.length - 1];
   const oldestLatest = latest.entries[0]!;
-  const seenOlderIds = new Set<string>();
-  const olderEntries = current.pages
-    .flatMap((page) => page.entries)
-    .filter((entry) => !latestIds.has(entry.id) && compareTimelineEntries(entry, oldestLatest) < 0)
-    .sort(compareTimelineEntries)
-    .filter((entry) => {
-      if (seenOlderIds.has(entry.id)) return false;
-      seenOlderIds.add(entry.id);
-      return true;
-    });
-  if (!olderEntries.length) return timelineDataFromPage(latest);
+  // No overlap: more than a page of history landed while this client was away,
+  // so the rows between the loaded head and the fresh window are on neither
+  // side. Stitching them together would leave a permanent hole in the middle
+  // of the rendered timeline; restart from the latest page instead and let
+  // upward scrolling re-fetch history contiguously.
+  if (!newestLoaded || compareTimelineEntries(newestLoaded, oldestLatest) < 0) {
+    return timelineDataFromPage(latest);
+  }
 
-  const oldestLoadedPage = current.pages[current.pages.length - 1]!;
+  const latestIds = new Set(latest.entries.map((entry) => entry.id));
+  const retained = head.entries.filter(
+    (entry) => !latestIds.has(entry.id) && compareTimelineEntries(entry, oldestLatest) < 0,
+  );
+
+  // The refreshed window is absorbed into page zero rather than splitting rows
+  // off into the older bucket. Virtuoso derives its prepend delta from the size
+  // of page zero, so migrating rows downward would read as a prepend and shift
+  // the scroll position of a reader sitting in history.
+  //
+  // The backwards cursor has to describe the merged page's own oldest row.
+  // Deletions can let the refreshed window reach further back than the loaded
+  // head did, and reusing the stale cursor would then re-fetch rows page zero
+  // already holds.
+  const cursorSource = retained.length ? head : latest;
   return {
-    pages: [
-      latest,
-      { ...oldestLoadedPage, entries: olderEntries },
-    ],
-    pageParams: [null, current.pageParams[current.pageParams.length - 1] ?? null],
+    ...current,
+    pages: current.pages.map((page, index) => index === 0
+      ? {
+          ...page,
+          entries: [...retained, ...latest.entries],
+          has_more: cursorSource.has_more,
+          has_more_before: cursorSource.has_more_before,
+          next_cursor: cursorSource.next_cursor,
+        }
+      : page),
   };
 }
 

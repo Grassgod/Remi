@@ -34,7 +34,6 @@ import {
   refreshIssueTimelineLatestPage,
   removeTimelineCommentTree,
   timelineEntries,
-  timelineOlderEntryCount,
   type IssueTimelineData,
 } from "@multiremi/core/issues/timeline-cache";
 import {
@@ -105,7 +104,6 @@ export function useIssueTimeline(
     () => data?.pages[0]?.entries ?? [],
     [data],
   );
-  const olderEntryCount = useMemo(() => timelineOlderEntryCount(data), [data]);
 
   // Stable mutation handles. TanStack v5 returns a fresh result wrapper from
   // useMutation per render, but the inner mutateAsync / mutate functions are
@@ -477,7 +475,6 @@ export function useIssueTimeline(
     fetchOlderTimeline: fetchNextPage,
     hasOlderTimeline: hasNextPage,
     isFetchingOlderTimeline: isFetchingNextPage,
-    olderEntryCount,
     submitComment,
     submitReply,
     editComment,

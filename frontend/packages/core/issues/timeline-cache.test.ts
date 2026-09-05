@@ -10,7 +10,6 @@ import {
   removeTimelineCommentTree,
   seedIssueTimelinePage,
   timelineEntries,
-  timelineOlderEntryCount,
   type IssueTimelineData,
 } from "./timeline-cache";
 
@@ -61,7 +60,6 @@ describe("issue timeline infinite cache", () => {
     expect(appended.pages[0]!.entries.map((item) => item.id)).toEqual(["c3", "c4", "c5"]);
     expect(appended.pages[1]).toBe(current.pages[1]);
     expect(timelineEntries(appended).map((item) => item.id)).toEqual(["c1", "c2", "c3", "c4", "c5"]);
-    expect(timelineOlderEntryCount(appended)).toBe(2);
 
     expect(appendTimelineEntry(appended, entry("c2", 2))).toBe(appended);
   });
@@ -120,6 +118,58 @@ describe("issue timeline infinite cache", () => {
     expect(timelineEntries(merged).map((item) => item.id)).toEqual(["c1", "c2", "c3", "c4", "c5"]);
     expect(timelineEntries(merged).find((item) => item.id === "c4")?.content).toBe("server edit");
     expect(new Set(timelineEntries(merged).map((item) => item.id)).size).toBe(5);
+  });
+
+  it("keeps loaded history stable when a reconnect slides the newest window", () => {
+    const current = data([
+      page([entry("c3", 3), entry("c4", 4)], { hasMore: true, cursor: "c3" }),
+      page([entry("c1", 1), entry("c2", 2)], { hasMore: false }),
+    ]);
+    // Two entries were published while this client was disconnected, so the
+    // refreshed window no longer reaches back to c3.
+    const merged = mergeTimelineLatestPage(
+      current,
+      page([entry("c4", 4), entry("c5", 5), entry("c6", 6)], { hasMore: true, cursor: "c4" }),
+    );
+
+    expect(timelineEntries(merged).map((item) => item.id))
+      .toEqual(["c1", "c2", "c3", "c4", "c5", "c6"]);
+    // c3 stays in page zero. Virtuoso reads a shrinking page zero as a prepend
+    // and would scroll a reader sitting in history.
+    expect(merged.pages[0]!.entries.map((item) => item.id)).toEqual(["c3", "c4", "c5", "c6"]);
+    expect(merged.pages[1]).toBe(current.pages[1]);
+    expect(merged.pageParams).toEqual(current.pageParams);
+  });
+
+  it("restarts from the latest page when the refreshed window skips past loaded history", () => {
+    const current = data([
+      page([entry("c3", 3), entry("c4", 4)], { hasMore: true, cursor: "c3" }),
+      page([entry("c1", 1), entry("c2", 2)], { hasMore: false }),
+    ]);
+    // More than a page landed while away: c5..c7 exist on the server but sit
+    // between the loaded head and the refreshed window. Keeping both sides
+    // would render a permanent hole, so history is dropped and re-fetched.
+    const merged = mergeTimelineLatestPage(
+      current,
+      page([entry("c8", 8), entry("c9", 9)], { hasMore: true, cursor: "c8" }),
+    );
+
+    expect(timelineEntries(merged).map((item) => item.id)).toEqual(["c8", "c9"]);
+    expect(merged.pages).toHaveLength(1);
+  });
+
+  it("adopts the refreshed cursor when deletions widen the newest window", () => {
+    const current = data([
+      page([entry("c3", 3), entry("c4", 4)], { hasMore: true, cursor: "c3" }),
+    ]);
+    // c3 was deleted, so the same-sized window now reaches back to c2.
+    const merged = mergeTimelineLatestPage(
+      current,
+      page([entry("c2", 2), entry("c4", 4)], { hasMore: true, cursor: "c2" }),
+    );
+
+    expect(timelineEntries(merged).map((item) => item.id)).toEqual(["c2", "c4"]);
+    expect(merged.pages[0]!.next_cursor).toBe("c2");
   });
 
   it("treats a short latest page as authoritative for reconnect deletions", () => {
