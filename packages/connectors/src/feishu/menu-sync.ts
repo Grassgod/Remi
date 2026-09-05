@@ -26,20 +26,58 @@ interface FsopenCredentials {
   domain?: string;
 }
 
-let _cachedToken: { token: string; expiresAt: number } | null = null;
+/**
+ * Ceiling for a single call to the Feishu open API.
+ *
+ * `fetch` has no default timeout, so without this a stalled gateway hangs the
+ * publish forever: the control plane eventually expires the request and the
+ * operator only ever sees "did not finish in time" instead of the real fault.
+ * Publishing happens on a human's button press, so failing loudly after 20s
+ * beats waiting indefinitely.
+ */
+const REQUEST_TIMEOUT_MS = 20_000;
 
-async function getFsopenToken(creds: FsopenCredentials): Promise<string> {
-  if (_cachedToken && Date.now() < _cachedToken.expiresAt) return _cachedToken.token;
-  const base = getBaseUrl(creds.domain);
-  const res = await fetch(`${base}/auth/v3/tenant_access_token/internal`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ app_id: creds.appId, app_secret: creds.appSecret }),
-  });
-  const data = await res.json() as { code: number; tenant_access_token?: string; expire?: number; msg?: string };
-  if (data.code !== 0 || !data.tenant_access_token) throw new Error(`Failed to get fsopen token: ${data.msg ?? `code ${data.code}`}`);
-  _cachedToken = { token: data.tenant_access_token, expiresAt: Date.now() + ((data.expire ?? 7200) - 300) * 1000 };
-  return _cachedToken.token;
+/**
+ * One Feishu API call, bounded in time and reported with the endpoint that
+ * failed. Gateways in front of the open API answer 5xx with HTML or an empty
+ * body, which `res.json()` alone surfaces as an opaque parse error.
+ */
+async function callFsopenApi(
+  url: string,
+  init: RequestInit,
+  label: string,
+  timeoutMs: number,
+): Promise<Record<string, unknown>> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  timer.unref?.();
+  try {
+    let res: Response;
+    let body: string;
+    try {
+      res = await fetch(url, { ...init, signal: controller.signal });
+      body = await res.text();
+    } catch (error) {
+      if (controller.signal.aborted) throw new Error(`${label} timed out after ${timeoutMs}ms (${url})`);
+      throw new Error(`${label} could not reach ${url}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    try {
+      return JSON.parse(body) as Record<string, unknown>;
+    } catch {
+      throw new Error(`${label} returned HTTP ${res.status} with a non-JSON body: ${body.slice(0, 200) || "<empty>"}`);
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function apiCode(data: Record<string, unknown>): number | undefined {
+  return typeof data.code === "number" ? data.code : undefined;
+}
+
+function apiMessage(data: Record<string, unknown>): string {
+  if (typeof data.msg === "string" && data.msg) return data.msg;
+  return `code ${apiCode(data) ?? "unknown"}`;
 }
 
 interface ApiMenuBehavior {
@@ -97,10 +135,19 @@ function menuItemToApi(item: BotMenuItemConfig): ApiMenuItem {
 export class MenuSyncer {
   private _creds: FsopenCredentials;
   private _menuApi: string;
+  private _tokenApi: string;
+  private _timeoutMs: number;
+  // Per-instance, not module-global: a workspace that rotates its App Secret
+  // gets a fresh MenuSyncer, and a shared cache would hand it the old tenant
+  // token — or another workspace's — until the two-hour expiry.
+  private _cachedToken: { token: string; expiresAt: number } | null = null;
 
-  constructor(creds: FsopenCredentials) {
+  constructor(creds: FsopenCredentials, options: { requestTimeoutMs?: number } = {}) {
     this._creds = creds;
-    this._menuApi = `${getBaseUrl(creds.domain)}/bot/v3/bot_menu`;
+    const base = getBaseUrl(creds.domain);
+    this._menuApi = `${base}/bot/v3/bot_menu`;
+    this._tokenApi = `${base}/auth/v3/tenant_access_token/internal`;
+    this._timeoutMs = options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
   }
 
   async syncAll(config: ResolvedBotMenuConfig, options: { dryRun?: boolean } = {}): Promise<BotMenuPublishResult> {
@@ -127,29 +174,51 @@ export class MenuSyncer {
   }
 
   async getMenu(userId?: string, userIdType = "open_id"): Promise<any> {
-    const token = await getFsopenToken(this._creds);
+    const token = await this._token();
     const params = new URLSearchParams();
     if (userId) { params.set("user_id", userId); params.set("user_id_type", userIdType); }
     const url = `${this._menuApi}${params.toString() ? `?${params}` : ""}`;
-    const res = await fetch(url, { method: "GET", headers: { Authorization: `Bearer ${token}` } });
-    const data = await res.json();
-    if ((data as any).code !== 0) log.warn(`GET menu failed: ${(data as any).msg} (code ${(data as any).code})`);
+    const data = await callFsopenApi(url, { method: "GET", headers: { Authorization: `Bearer ${token}` } }, "GET bot menu", this._timeoutMs);
+    if (apiCode(data) !== 0) log.warn(`GET menu failed: ${apiMessage(data)}`);
     return data;
   }
 
   async deleteUserMenu(userId: string, userIdType = "open_id"): Promise<void> {
-    const token = await getFsopenToken(this._creds);
+    const token = await this._token();
     const url = `${this._menuApi}?${new URLSearchParams({ user_id_type: userIdType })}`;
-    const res = await fetch(url, { method: "DELETE", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json; charset=utf-8" }, body: JSON.stringify({ user_id: userId }) });
-    const data = await res.json();
-    if ((data as any).code !== 0) log.warn(`DELETE menu for ${userId} failed: ${(data as any).msg} (code ${(data as any).code})`);
+    const data = await callFsopenApi(url, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json; charset=utf-8" },
+      body: JSON.stringify({ user_id: userId }),
+    }, "DELETE bot menu", this._timeoutMs);
+    if (apiCode(data) !== 0) log.warn(`DELETE menu for ${userId} failed: ${apiMessage(data)}`);
+  }
+
+  private async _token(): Promise<string> {
+    if (this._cachedToken && Date.now() < this._cachedToken.expiresAt) return this._cachedToken.token;
+    const data = await callFsopenApi(this._tokenApi, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ app_id: this._creds.appId, app_secret: this._creds.appSecret }),
+    }, "Feishu tenant access token", this._timeoutMs);
+    const token = typeof data.tenant_access_token === "string" ? data.tenant_access_token : "";
+    if (apiCode(data) !== 0 || !token) throw new Error(`Failed to get fsopen token: ${apiMessage(data)}`);
+    const expire = typeof data.expire === "number" ? data.expire : 7200;
+    this._cachedToken = { token, expiresAt: Date.now() + (expire - 300) * 1000 };
+    return token;
   }
 
   private async _postMenu(payload: ApiMenuPayload, userIdType = "open_id"): Promise<void> {
-    const token = await getFsopenToken(this._creds);
+    const token = await this._token();
     const url = `${this._menuApi}?${new URLSearchParams({ user_id_type: userIdType })}`;
-    const res = await fetch(url, { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json; charset=utf-8" }, body: JSON.stringify(payload) });
-    const data = await res.json();
-    if ((data as any).code !== 0) { log.warn(`POST menu failed: ${(data as any).msg} (code ${(data as any).code})`); throw new Error(`Bot menu sync failed: ${(data as any).msg}`); }
+    const data = await callFsopenApi(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json; charset=utf-8" },
+      body: JSON.stringify(payload),
+    }, "POST bot menu", this._timeoutMs);
+    if (apiCode(data) !== 0) {
+      log.warn(`POST menu failed: ${apiMessage(data)}`);
+      throw new Error(`Bot menu sync failed: ${apiMessage(data)}`);
+    }
   }
 }
