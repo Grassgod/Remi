@@ -99,6 +99,7 @@ describe("Feishu Issue topics", () => {
       threadId: null,
       replyToMessageId: null,
       body: expect.stringContaining("Ship issue topics"),
+      bodyOrigin: "issue",
     });
     expect(store.reportFeishuBotOutbound("local", "rt_bot", delivery.id, {
       claimToken: delivery.claimToken,

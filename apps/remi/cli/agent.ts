@@ -52,6 +52,7 @@ export interface FeishuChannelHandle {
     body: string;
     idempotencyKey: string;
   }) => Promise<{ messageId: string }>;
+  uploadImage: (image: Buffer) => Promise<{ imageKey: string }>;
 }
 
 export async function waitForFeishuConnectorStart(
@@ -103,5 +104,6 @@ export async function bootFeishuChannel(
     stop: () => connector.stop(),
     publishBotMenu: (menu, dryRun) => menuSyncer.syncAll(menu, { dryRun }),
     sendProactiveThreadReply: (input) => connector.sendProactiveThreadReply(input),
+    uploadImage: (image) => connector.uploadImage(image),
   };
 }

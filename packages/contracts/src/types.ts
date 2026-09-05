@@ -3770,7 +3770,10 @@ export const FEISHU_CONCIERGE_CONFIG_CAPABILITY = "feishu_concierge_config_v1";
 export const FEISHU_CONCIERGE_PROTOCOL_VERSION = 1;
 
 /** Adds durable proactive topic replies without removing v1 inbound support. */
-export const FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION = 2;
+/** v2 can claim text deliveries; v3 adds guarded image attachment fetching. */
+export const FEISHU_CONCIERGE_OUTBOUND_LEGACY_PROTOCOL_VERSION = 2;
+export const FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION = 3;
+export const FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER = "X-Multiremi-Feishu-Claim-Token";
 
 export type FeishuBotDomain = "feishu" | "lark" | "bytedance";
 
@@ -3788,6 +3791,8 @@ export type FeishuBotDesiredState = "running" | "stopped";
 /** What a Runtime reports back about the connector it is hosting. */
 export type FeishuBotRuntimeState = "stopped" | "starting" | "online" | "failed";
 
+export type FeishuBotOutboundBodyOrigin = "issue" | "agent";
+
 export interface MultiremiFeishuBotOutboundDelivery {
   id: string;
   claimToken: string;
@@ -3799,6 +3804,8 @@ export interface MultiremiFeishuBotOutboundDelivery {
   replyToMessageId: string | null;
   reply_to_message_id?: string | null;
   body: string;
+  bodyOrigin: FeishuBotOutboundBodyOrigin;
+  body_origin?: FeishuBotOutboundBodyOrigin;
   /** Stable across retries so Feishu can deduplicate send-success/ack-failure. */
   idempotencyKey: string;
   idempotency_key?: string;

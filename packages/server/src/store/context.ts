@@ -30,6 +30,7 @@ import type {
   MultiremiAgentPluginRuntimeState,
   MultiremiTaskPluginSnapshotEntry,
   MultiremiAnalyticsEvent,
+  MultiremiAttachment,
   MultiremiAutopilotRun,
   MultiremiDaemonHeartbeatAck,
   MultiremiProjectDocsIndex,
@@ -183,6 +184,7 @@ export interface IssuesSurface {
   getIssue(id: string): MultiremiIssue | null;
   getIssueByRef(ref: string, workspaceId?: string | null): MultiremiIssue | null;
   getIssueComment(id: string): MultiremiIssueComment | null;
+  getAttachment(id: string): MultiremiAttachment | null;
   linkAttachmentsToChatMessage(chatSessionId: string, chatMessageId: string, attachmentIds: string[]): void;
   listIssues(input?: ListIssuesInput): MultiremiIssue[];
   listGeneratedIssues(sourceIssueId: string): MultiremiIssue[];
@@ -441,6 +443,13 @@ export interface FeishuBotSurface {
     runtimeId: string,
     now?: string | Date,
   ): MultiremiFeishuBotOutboundDelivery | null;
+  getFeishuBotOutboundAttachment(
+    workspaceId: string,
+    runtimeId: string,
+    deliveryId: string,
+    claimToken: string,
+    attachmentId: string,
+  ): MultiremiAttachment | null;
   reportFeishuBotOutbound(
     workspaceId: string,
     runtimeId: string,

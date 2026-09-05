@@ -16,7 +16,10 @@ function buildFeishuPostMessagePayload(params: { messageText: string }): {
   content: string;
   msgType: string;
 } {
-  const { messageText } = params;
+  const messageText = params.messageText.replace(
+    /!\[([^\]]*)\]\(feishu-image:(img_[A-Za-z0-9_-]+)\)/gu,
+    "![$1]($2)",
+  );
   return {
     content: JSON.stringify({
       zh_cn: {

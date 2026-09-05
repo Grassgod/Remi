@@ -36,6 +36,7 @@ import type {
 } from "@multiremi/contracts/types.js";
 import {
   FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION,
+  FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER,
   MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
   MULTIREMI_SSH_MESH_PROTOCOL_VERSION,
 } from "@multiremi/contracts/types.js";
@@ -302,6 +303,7 @@ export class MultiremiDaemonClient {
             ? String(rawOutbound.reply_to_message_id ?? rawOutbound.replyToMessageId)
             : null,
           body: String(rawOutbound.body ?? ""),
+          bodyOrigin: (rawOutbound.body_origin ?? rawOutbound.bodyOrigin) === "agent" ? "agent" : "issue",
           idempotencyKey: String(rawOutbound.idempotency_key ?? rawOutbound.idempotencyKey ?? rawOutbound.id ?? ""),
         }
       : undefined;
@@ -393,6 +395,23 @@ export class MultiremiDaemonClient {
         error: input.error ?? undefined,
       },
     );
+  }
+
+  async fetchFeishuBotOutboundAttachment(
+    runtimeId: string,
+    deliveryId: string,
+    claimToken: string,
+    attachmentId: string,
+  ): Promise<Response> {
+    const path = `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/feishu-bot/outbound/${encodeURIComponent(deliveryId)}/attachments/${encodeURIComponent(attachmentId)}`;
+    const headers = new Headers(this.headers());
+    headers.set(FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER, claimToken);
+    const response = await fetch(this.baseUrl + path, { headers });
+    if (!response.ok) {
+      const responseBody = (await response.text()).slice(0, 2_000);
+      throw new MultiremiDaemonHttpError(response.status, "GET", path, responseBody, null);
+    }
+    return response;
   }
 
   async submitFeishuBotMessage(

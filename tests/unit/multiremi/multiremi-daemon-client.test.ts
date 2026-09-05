@@ -88,6 +88,26 @@ describe("MultiremiDaemonClient HTTP failures", () => {
 });
 
 describe("MultiremiDaemonClient daemon protocol", () => {
+  it("normalizes outbound body origin and defaults old-server payloads to Issue", async () => {
+    let bodyOrigin: string | undefined = "agent";
+    globalThis.fetch = (async () => Response.json({
+      status: "ok",
+      pending_feishu_outbound: {
+        id: "fbo_origin",
+        claim_token: "claim_origin",
+        chat_id: "oc_origin",
+        body: "done",
+        ...(bodyOrigin ? { body_origin: bodyOrigin } : {}),
+        idempotency_key: "fbo_origin",
+      },
+    })) as unknown as typeof globalThis.fetch;
+    const client = new MultiremiDaemonClient("https://remi.example", "daemon-token");
+
+    expect((await client.heartbeatRuntime("runtime-1")).pending_feishu_outbound?.bodyOrigin).toBe("agent");
+    bodyOrigin = undefined;
+    expect((await client.heartbeatRuntime("runtime-1")).pending_feishu_outbound?.bodyOrigin).toBe("issue");
+  });
+
   it("normalizes pending bound Issue updates from a task claim", async () => {
     globalThis.fetch = (async () => Response.json({
       task: {
