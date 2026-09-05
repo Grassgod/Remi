@@ -171,6 +171,69 @@ describe("workspace bot menu API", () => {
     expect((await publish.json()).error).toContain("Feishu concierge");
   });
 
+  it("keeps the concierge's real error when the report lands after the deadline", async () => {
+    // Production only ever showed "bot menu publish did not finish in time":
+    // the request expired while the concierge was still talking to Feishu, and
+    // the report that followed was dropped for arriving at a settled row.
+    const { store, app } = menuScaffold();
+    registerPublisher(store, "rt_concierge", 1_000);
+    configureConcierge(store, "rt_concierge");
+
+    const publish = await app.request("/api/workspaces/local/bot-menu/publish", {
+      method: "POST",
+      headers: MASTER,
+      body: JSON.stringify({ dry_run: false }),
+    });
+    const request = await publish.json();
+    expect(store.heartbeatRuntime("rt_concierge", { supportsBotMenu: true }).pending_bot_menu?.id).toBe(request.id);
+
+    db?.run("UPDATE multiremi_bot_menu_publish_requests SET run_started_at = ? WHERE id = ?", [
+      new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+      request.id,
+    ]);
+    expect(store.getBotMenuPublishRequest("rt_concierge", request.id)?.status).toBe("timeout");
+
+    const late = await app.request(`/api/daemon/runtimes/rt_concierge/bot-menu/${request.id}/result`, {
+      method: "POST",
+      headers: MASTER,
+      body: JSON.stringify({ status: "failed", error: "Bot menu sync failed: no permission to bot menu" }),
+    });
+    expect(late.status).toBe(200);
+    const settled = store.getBotMenuPublishRequest("rt_concierge", request.id);
+    expect(settled?.status).toBe("failed");
+    expect(settled?.error).toBe("Bot menu sync failed: no permission to bot menu");
+
+    // A recorded answer stays put: a duplicate report cannot flip it.
+    await app.request(`/api/daemon/runtimes/rt_concierge/bot-menu/${request.id}/result`, {
+      method: "POST",
+      headers: MASTER,
+      body: JSON.stringify({ status: "completed", result: { dryRun: false, defaultPublished: true, userMenuCount: 0 } }),
+    });
+    expect(store.getBotMenuPublishRequest("rt_concierge", request.id)?.status).toBe("failed");
+  });
+
+  it("leaves a publish running past the old one-minute budget", async () => {
+    // Publishing walks one Feishu call per personalized menu, so a minute was
+    // never enough headroom for a workspace with a handful of recipients.
+    const { store, app } = menuScaffold();
+    registerPublisher(store, "rt_concierge", 1_000);
+    configureConcierge(store, "rt_concierge");
+
+    const publish = await app.request("/api/workspaces/local/bot-menu/publish", {
+      method: "POST",
+      headers: MASTER,
+      body: JSON.stringify({ dry_run: false }),
+    });
+    const request = await publish.json();
+    store.heartbeatRuntime("rt_concierge", { supportsBotMenu: true });
+    db?.run("UPDATE multiremi_bot_menu_publish_requests SET run_started_at = ? WHERE id = ?", [
+      new Date(Date.now() - 90 * 1000).toISOString(),
+      request.id,
+    ]);
+
+    expect(store.getBotMenuPublishRequest("rt_concierge", request.id)?.status).toBe("running");
+  });
+
   it("does not fall back to an env-driven bot when the workspace has no config", async () => {
     const { store, app } = menuScaffold();
     registerPublisher(store, "rt_old", 20_000);

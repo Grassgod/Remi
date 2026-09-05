@@ -28,6 +28,37 @@ describe("Feishu bot menu publisher", () => {
     expect(fetchCount).toBe(0);
   });
 
+  it("names the failing endpoint when the gateway answers with a non-JSON body", async () => {
+    // A 5xx from the gateway in front of the open API is HTML, not JSON.
+    // Parsing it blindly reported "Unexpected token <", which says nothing
+    // about which call broke.
+    globalThis.fetch = (async () =>
+      new Response("<html>504 Gateway Time-out</html>", { status: 504 })) as typeof globalThis.fetch;
+
+    const syncer = new MenuSyncer({ appId: "test-app", appSecret: "test-secret" });
+    const publish = syncer.syncAll({ default: [{ name: "Default", behaviors: [{ type: "send_message" }] }] });
+
+    await expect(publish).rejects.toThrow(/Feishu tenant access token returned HTTP 504/);
+  });
+
+  it("gives up on a stalled Feishu call instead of hanging the publish", async () => {
+    // `fetch` has no default timeout: before this bound, one unanswered call
+    // held the publish open until the control plane expired the request.
+    const signals: Array<AbortSignal | null | undefined> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      signals.push(init?.signal);
+      return await new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+      });
+    }) as typeof globalThis.fetch;
+
+    const syncer = new MenuSyncer({ appId: "test-app", appSecret: "test-secret" }, { requestTimeoutMs: 25 });
+    const publish = syncer.syncAll({ default: [{ name: "Default", behaviors: [{ type: "send_message" }] }] });
+
+    await expect(publish).rejects.toThrow(/Feishu tenant access token timed out after 25ms/);
+    expect(signals[0]).toBeInstanceOf(AbortSignal);
+  });
+
   it("keeps the resolved identifier type when publishing personalized menus", async () => {
     const requests: Array<{ url: string; init?: RequestInit }> = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {

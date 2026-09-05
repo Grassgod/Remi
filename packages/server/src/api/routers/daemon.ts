@@ -664,7 +664,10 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     const requestId = c.req.param("requestId");
     const request = store.getBotMenuPublishRequest(runtimeId, requestId);
     if (!request) return c.json({ error: "request not found" }, 404);
-    if (request.status === "completed" || request.status === "failed" || request.status === "timeout") {
+    // `timeout` is deliberately absent: a report that arrives after the
+    // deadline carries the concierge's real outcome, and dropping it here left
+    // operators staring at a generic timeout with the Feishu error discarded.
+    if (request.status === "completed" || request.status === "failed") {
       return c.json({ status: "ok" });
     }
     const body = await readJsonStrict<ReportBotMenuPublishInput>(c);
