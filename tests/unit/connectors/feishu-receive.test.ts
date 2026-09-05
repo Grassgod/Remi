@@ -177,6 +177,46 @@ describe("Feishu workspace membership admission", () => {
     });
   });
 
+  it("keeps sender lookup diagnostics while redacting identifiers and credentials", async () => {
+    const senderOpenId = "ou_sender_lookup_sensitive";
+    const appSecret = "sender-lookup-secret";
+    const client = {
+      request: async () => {
+        throw new Error("basic batch unavailable");
+      },
+      contact: {
+        user: {
+          get: async () => {
+            throw new TypeError(
+              `contact lookup failed for ${senderOpenId} via cli_sensitive_app app_secret=${appSecret}`,
+            );
+          },
+        },
+      },
+    };
+    const gate = admission(async () => true);
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+
+    try {
+      const result = await processFeishuMessageEvent(
+        client as any,
+        messageEvent({ messageId: uniqueMessageId("sender-lookup-redaction"), senderOpenId }),
+        undefined,
+        gate.options,
+      );
+
+      expect(result).toMatchObject({ senderOpenId, senderName: undefined });
+      const logs = logSpy.mock.calls.flat().join(" ");
+      expect(logs).toContain("resolveSenderName failed: TypeError: contact lookup failed");
+      expect(logs).toContain("<id:");
+      expect(logs).not.toContain(senderOpenId);
+      expect(logs).not.toContain("cli_sensitive_app");
+      expect(logs).not.toContain(appSecret);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
   it("allows a workspace member in an admitted group", async () => {
     const senderOpenId = "ou_member_group";
     const { client } = clientWithSender();

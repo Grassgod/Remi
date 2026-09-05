@@ -4,11 +4,11 @@
  */
 
 import * as Lark from "@larksuiteoapi/node-sdk";
-import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import type { FeishuChannelConfig, FeishuSenderAuthorizer, GroupPolicy } from "./config.js";
+import { hashIdentifier, redactFeishuError } from "./log-redaction.js";
 import { createLogger } from "@shared/logger.js";
 
 const log = createLogger("feishu");
@@ -29,10 +29,6 @@ function gcStore(): GroupPolicy {
 /** Set the group policy implementation (called by FeishuChannel on init). */
 export function setGroupPolicy(policy: GroupPolicy): void {
   _groupPolicy = policy;
-}
-
-function hashIdentifier(value: string): string {
-  return createHash("sha256").update(value).digest("hex").slice(0, 8);
 }
 
 type GroupMessageDropReason =
@@ -203,8 +199,8 @@ async function resolveSenderName(
       senderNameCache.set(senderOpenId, { name, expireAt: now + SENDER_NAME_TTL_MS });
       return name;
     }
-  } catch {
-    log.info("resolveSenderName failed");
+  } catch (err) {
+    log.info(`resolveSenderName failed: ${redactFeishuError(err)}`);
     // Negative cache: avoid repeated failed API calls for the same open_id
     senderNameCache.set(senderOpenId, { name: "", expireAt: now + SENDER_NAME_TTL_MS });
   }
@@ -809,7 +805,7 @@ export function startWebSocketListener(
           await onMessage(msg);
         }
       } catch (err) {
-        log.error("error handling message");
+        log.error(`error handling message: ${redactFeishuError(err, [creds.appId, creds.appSecret])}`);
         logDroppedGroupMessage(event, "processing_error", "error");
       }
     },
