@@ -30,6 +30,7 @@ const AGENT_ROLE_MIGRATION = "20260827_agent_roles";
 const PROJECT_DEVICE_DAEMON_CANONICALIZATION_MIGRATION = "20260831_project_device_daemon_canonicalization";
 const FEISHU_ISSUE_TOPIC_OUTBOUND_MIGRATION = "20260904_feishu_issue_topic_outbound_nullable";
 const FEISHU_TOPIC_REPORT_SCHEDULING_MIGRATION = "20260905_feishu_topic_report_scheduling";
+const CHAT_MESSAGE_SEQUENCE_MIGRATION = "20260905_chat_message_sequence";
 
 // Stable Feishu open_id of the deployment owner (hehuajie / 贺华杰). The seed
 // `local` user is tagged with this on migration so SSO login re-binds to it
@@ -2071,6 +2072,7 @@ export function runMigrations(db: SqlDatabase): void {
       work_dir TEXT,
       latest_task_id TEXT,
       unread_since TEXT,
+      message_sequence INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY(agent_id) REFERENCES multiremi_agents(id),
@@ -2090,12 +2092,15 @@ export function runMigrations(db: SqlDatabase): void {
       elapsed_ms INTEGER,
       pending_agent_delivery INTEGER NOT NULL DEFAULT 0,
       agent_delivery_task_id TEXT,
+      sequence INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       FOREIGN KEY(chat_session_id) REFERENCES multiremi_chat_sessions(id) ON DELETE CASCADE,
       FOREIGN KEY(task_id) REFERENCES multiremi_tasks(id) ON DELETE SET NULL
     );
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_chat_messages_session ON multiremi_chat_messages(chat_session_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_chat_messages_session_sequence
+      ON multiremi_chat_messages(chat_session_id, sequence, id);
 
     CREATE TABLE IF NOT EXISTS multiremi_agent_issue_update_state (
       chat_session_id TEXT PRIMARY KEY,
@@ -2655,12 +2660,17 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_chat_sessions", "session_runtime_id TEXT");
   addColumnIfMissing(db, "multiremi_chat_sessions", "session_provider TEXT");
   addColumnIfMissing(db, "multiremi_chat_sessions", "session_execution_fingerprint TEXT");
+  addColumnIfMissing(db, "multiremi_chat_sessions", "message_sequence INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(db, "multiremi_chat_messages", "failure_reason TEXT");
   addColumnIfMissing(db, "multiremi_chat_messages", "elapsed_ms INTEGER");
   addColumnIfMissing(db, "multiremi_chat_messages", "pending_agent_delivery INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(db, "multiremi_chat_messages", "agent_delivery_task_id TEXT");
+  addColumnIfMissing(db, "multiremi_chat_messages", "sequence INTEGER NOT NULL DEFAULT 0");
+  runMigrationOnce(db, CHAT_MESSAGE_SEQUENCE_MIGRATION, () => backfillChatMessageSequences(db));
   db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_chat_messages_agent_delivery
     ON multiremi_chat_messages(chat_session_id, pending_agent_delivery, created_at)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_chat_messages_session_sequence
+    ON multiremi_chat_messages(chat_session_id, sequence, id)`);
   dropColumnIfExists(db, "multiremi_agent_issue_update_state", "window_started_at");
   dropColumnIfExists(db, "multiremi_agent_issue_update_state", "deliveries_in_window");
   addColumnIfMissing(db, "multiremi_tasks", "chat_session_id TEXT");
@@ -3605,6 +3615,23 @@ function releaseQueuedFeishuTopicReports(db: SqlDatabase): void {
         AND holds_workspace <> 0`,
     [new Date().toISOString()],
   );
+}
+
+function backfillChatMessageSequences(db: SqlDatabase): void {
+  const sessions = db.query("SELECT id FROM multiremi_chat_sessions ORDER BY id ASC").all() as Array<{ id: string }>;
+  for (const session of sessions) {
+    const messages = db.query(
+      `SELECT id FROM multiremi_chat_messages
+       WHERE chat_session_id = ? ORDER BY created_at ASC, id ASC`,
+    ).all(session.id) as Array<{ id: string }>;
+    messages.forEach((message, index) => {
+      db.run("UPDATE multiremi_chat_messages SET sequence = ? WHERE id = ?", [index + 1, message.id]);
+    });
+    db.run(
+      "UPDATE multiremi_chat_sessions SET message_sequence = ? WHERE id = ?",
+      [messages.length, session.id],
+    );
+  }
 }
 
 function allowNullableFeishuOutboundReplyToMessageId(db: SqlDatabase): void {

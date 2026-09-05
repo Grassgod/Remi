@@ -446,6 +446,7 @@ export class FeishuBotRepo {
           runtimeId,
           chatSessionId,
           workspaceId,
+          holdsWorkspace: false,
           prompt: text,
           requestingUserName: sender.displayName,
           requestingUserProfileDescription: sender.profileDescription,
@@ -456,15 +457,14 @@ export class FeishuBotRepo {
 
       const now = nowIso();
       const messageId = createId("msg");
-      this.ctx.db.run(
-        `INSERT INTO multiremi_chat_messages (id, chat_session_id, task_id, role, body, created_at)
-         VALUES (?, ?, ?, 'user', ?, ?)`,
-        messageId,
+      this.ctx.chat().appendChatMessageWithinTransaction({
+        id: messageId,
         chatSessionId,
-        task.id,
-        text,
-        now,
-      );
+        taskId: task.id,
+        role: "user",
+        body: text,
+        createdAt: now,
+      });
       this.ctx.db.run(
         "UPDATE multiremi_chat_sessions SET latest_task_id = ?, updated_at = ? WHERE id = ?",
         task.id,
