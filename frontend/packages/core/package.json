@@ -32,6 +32,7 @@
     "./issues/comment-mutations": "./issues/comment-mutations.ts",
     "./issues/session-mutations": "./issues/session-mutations.ts",
     "./issues/timeline-sort": "./issues/timeline-sort.ts",
+    "./issues/timeline-cache": "./issues/timeline-cache.ts",
     "./issues/date": "./issues/date.ts",
     "./issues/ws-updaters": "./issues/ws-updaters.ts",
     "./issues/config": "./issues/config/index.ts",

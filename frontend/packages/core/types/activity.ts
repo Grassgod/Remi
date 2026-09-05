@@ -35,3 +35,15 @@ export interface TimelineEntry {
   /** Set by frontend coalescing when consecutive identical activities are merged. */
   coalesced_count?: number;
 }
+
+export interface TimelinePage {
+  entries: TimelineEntry[];
+  limit: number;
+  has_more: boolean;
+  has_more_before: boolean;
+  has_more_after: boolean;
+  next_cursor?: string | null;
+  prev_cursor?: string | null;
+  issue_session_id: string | null;
+  target_index?: number;
+}

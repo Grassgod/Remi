@@ -28,6 +28,21 @@ function setCommentTime(db: Database, id: string, createdAt: string): void {
 }
 
 describe("issue timeline reverse pagination", () => {
+  it("keeps the no-parameter endpoint as the legacy naked array", async () => {
+    const { store } = createStore();
+    const app = createMultiremiApp({ store, authToken: AUTH_TOKEN });
+    const issue = store.createIssue({ title: "Legacy timeline", workspaceId: "local" });
+    store.createIssueComment(issue.id, { body: "legacy comment" });
+
+    const response = await app.request(`/api/issues/${issue.id}/timeline`, {
+      headers: AUTH_HEADERS,
+    });
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(Array.isArray(body)).toBe(true);
+    expect(body.some((entry: { type: string }) => entry.type === "comment")).toBe(true);
+  });
+
   it("returns the latest page first and walks to the oldest page without duplicates", async () => {
     const { store, db } = createStore();
     const app = createMultiremiApp({ store, authToken: AUTH_TOKEN });
@@ -52,6 +67,7 @@ describe("issue timeline reverse pagination", () => {
       comments[3]!.id,
       comments[4]!.id,
     ]);
+    expect(first.limit).toBe(2);
     expect(first.has_more).toBe(true);
     expect(first.has_more_before).toBe(true);
     expect(first.next_cursor).toBeTruthy();
@@ -119,6 +135,7 @@ describe("issue timeline reverse pagination", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
       entries: [],
+      limit: 40,
       has_more: false,
       has_more_before: false,
       next_cursor: null,

@@ -1916,6 +1916,7 @@ export interface MultiremiTimelineEntry {
 
 export interface MultiremiTimelinePage {
   entries: MultiremiTimelineEntry[];
+  limit: number;
   next_cursor: string | null;
   prev_cursor: null;
   has_more: boolean;

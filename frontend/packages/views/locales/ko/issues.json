@@ -428,7 +428,8 @@
     "activity_count_other": "활동 {{count}}개",
     "show_more_activities_one": "활동 {{count}}개 더 보기",
     "show_more_activities_other": "활동 {{count}}개 더 보기",
-    "jump_to_latest": "최신으로 이동"
+    "jump_to_latest": "최신으로 이동",
+    "loading_older": "이전 활동 불러오는 중..."
   },
   "comment": {
     "delete_title": "댓글 삭제",

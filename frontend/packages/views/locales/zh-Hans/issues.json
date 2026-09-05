@@ -426,7 +426,8 @@
     "activity_count_other": "{{count}} 条动态",
     "show_more_activities_one": "展开更早 {{count}} 条动态",
     "show_more_activities_other": "展开更早 {{count}} 条动态",
-    "jump_to_latest": "回到最新"
+    "jump_to_latest": "回到最新",
+    "loading_older": "正在加载更早动态..."
   },
   "comment": {
     "delete_title": "删除评论",

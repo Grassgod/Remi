@@ -359,6 +359,7 @@ export function issueTimelineResponse(
     const oldest = page.entries[0];
     const response: MultiremiTimelinePage = {
       entries: page.entries,
+      limit,
       next_cursor: page.hasMore && oldest ? encodeTimelineCursor(oldest) : null,
       prev_cursor: null,
       has_more: page.hasMore,
@@ -376,6 +377,7 @@ export function issueTimelineResponse(
   const entries = store.listIssueTimeline(issueId, { ascending: false, issueSessionId });
   const response: MultiremiTimelinePage = {
     entries,
+    limit: entries.length,
     next_cursor: null,
     prev_cursor: null,
     has_more: false,
@@ -462,6 +464,7 @@ export function issueTimelineCompatibilityResponse(
   c: { req: { query: (name: string) => string | undefined } },
 ): Record<string, unknown>[] | {
   entries: Record<string, unknown>[];
+  limit: number;
   next_cursor: string | null;
   prev_cursor: null;
   has_more: boolean;

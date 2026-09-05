@@ -78,6 +78,44 @@ describe("ApiClient schema fallback", () => {
     });
   });
 
+  describe("listTimelinePage", () => {
+    it("sends the reverse cursor and session id and parses the page envelope", async () => {
+      stubFetchJson({
+        entries: [],
+        limit: 40,
+        has_more: true,
+        has_more_before: true,
+        has_more_after: false,
+        next_cursor: "next/cursor+value",
+        prev_cursor: null,
+        issue_session_id: "session-main",
+      });
+      const client = new ApiClient("https://api.example.test");
+      const page = await client.listTimelinePage("issue-1", {
+        issueSessionId: "session-main",
+        before: "old/cursor+value",
+        limit: 40,
+      });
+
+      expect(page).toMatchObject({ has_more: true, issue_session_id: "session-main" });
+      const url = new URL(String(vi.mocked(fetch).mock.calls[0]?.[0]));
+      expect(url.searchParams.get("issue_session_id")).toBe("session-main");
+      expect(url.searchParams.get("before")).toBe("old/cursor+value");
+      expect(url.searchParams.get("limit")).toBe("40");
+    });
+
+    it("falls back to an empty page when the envelope is malformed", async () => {
+      stubFetchJson({ entries: null, issue_session_id: "session-main" });
+      const client = new ApiClient("https://api.example.test");
+
+      await expect(client.listTimelinePage("issue-1", { limit: 40 })).resolves.toMatchObject({
+        entries: [],
+        has_more: false,
+        issue_session_id: null,
+      });
+    });
+  });
+
   describe("listIssues", () => {
     it("falls back to an empty list when the response is malformed", async () => {
       // `issues` having the wrong type triggers the fallback. An object

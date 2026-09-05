@@ -2,13 +2,14 @@
 
 import { useEffect, useRef, useCallback, useMemo } from "react";
 import {
-  useQuery,
+  useInfiniteQuery,
   useQueryClient,
   useMutationState,
 } from "@tanstack/react-query";
 import type {
   Comment,
   TimelineEntry,
+  TimelinePage,
   Reaction,
 } from "@multiremi/core/types";
 import type {
@@ -22,9 +23,20 @@ import type {
   ReactionRemovedPayload,
 } from "@multiremi/core/types";
 import {
-  issueTimelineOptions,
+  issueTimelinePageOptions,
   issueKeys,
 } from "@multiremi/core/issues/queries";
+import {
+  appendTimelineEntry,
+  isIssueTimelineDirty,
+  markIssueTimelineDirty,
+  mapTimelineEntries,
+  refreshIssueTimelineLatestPage,
+  removeTimelineCommentTree,
+  timelineEntries,
+  timelineOlderEntryCount,
+  type IssueTimelineData,
+} from "@multiremi/core/issues/timeline-cache";
 import {
   useCreateComment,
   useUpdateComment,
@@ -33,12 +45,9 @@ import {
   useToggleCommentReaction,
   type ToggleCommentReactionVars,
 } from "@multiremi/core/issues/comment-mutations";
-import { sortTimelineEntriesAsc } from "@multiremi/core/issues/timeline-sort";
 import { useWSEvent, useWSReconnect } from "@multiremi/core/realtime";
 import { toast } from "sonner";
 import { useT } from "../../i18n";
-
-type TLCache = TimelineEntry[];
 
 function commentToTimelineEntry(c: Comment): TimelineEntry {
   return {
@@ -73,13 +82,30 @@ export function useIssueTimeline(
   const { t } = useT("issues");
   const qc = useQueryClient();
 
-  const query = useQuery({
-    ...issueTimelineOptions(issueId, issueSessionId),
+  const query = useInfiniteQuery<
+    TimelinePage,
+    Error,
+    IssueTimelineData,
+    ReturnType<typeof issueKeys.timeline>,
+    string | null
+  >({
+    ...issueTimelinePageOptions(issueId, issueSessionId),
     enabled,
   });
-  const { data, isLoading: loading } = query;
+  const {
+    data,
+    isLoading: loading,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = query;
 
-  const timeline = useMemo<TimelineEntry[]>(() => data ?? [], [data]);
+  const timeline = useMemo<TimelineEntry[]>(() => timelineEntries(data), [data]);
+  const latestTimeline = useMemo<TimelineEntry[]>(
+    () => data?.pages[0]?.entries ?? [],
+    [data],
+  );
+  const olderEntryCount = useMemo(() => timelineOlderEntryCount(data), [data]);
 
   // Stable mutation handles. TanStack v5 returns a fresh result wrapper from
   // useMutation per render, but the inner mutateAsync / mutate functions are
@@ -92,12 +118,18 @@ export function useIssueTimeline(
   const { mutateAsync: resolveCommentAsync } = useResolveComment(issueId, issueSessionId);
   const { mutate: toggleCommentReaction } = useToggleCommentReaction(issueId, issueSessionId);
 
-  // Reconnect recovery: invalidate so the next render refetches the full
-  // timeline. Cheaper than diffing across a possibly-long disconnect.
+  const refreshLatestPage = useCallback(() => {
+    void refreshIssueTimelineLatestPage(qc, issueId, issueSessionId).catch(() => {
+      // Leave a separate dirty marker so a later mount retries without making
+      // TanStack refetch every loaded history page.
+      markIssueTimelineDirty(qc, issueId);
+    });
+  }, [qc, issueId, issueSessionId]);
+
+  // Reconnect recovery refreshes only the authoritative latest window and
+  // merges it with already-loaded history.
   useWSReconnect(
-    useCallback(() => {
-      qc.invalidateQueries({ queryKey: issueKeys.timeline(issueId, issueSessionId) });
-    }, [qc, issueId, issueSessionId]),
+    refreshLatestPage,
   );
 
   // --- WS event handlers ---
@@ -109,12 +141,10 @@ export function useIssueTimeline(
         const { comment } = payload as CommentCreatedPayload;
         if (comment.issue_id !== issueId) return;
         if (issueSessionId && comment.issue_session_id !== issueSessionId) return;
-        qc.setQueryData<TLCache>(issueKeys.timeline(issueId, issueSessionId), (old) => {
-          const entry = commentToTimelineEntry(comment);
-          if (!old) return [entry];
-          if (old.some((e) => e.id === comment.id)) return old;
-          return sortTimelineEntriesAsc([...old, entry]);
-        });
+        qc.setQueryData<IssueTimelineData>(
+          issueKeys.timeline(issueId, issueSessionId),
+          (old) => appendTimelineEntry(old, commentToTimelineEntry(comment)),
+        );
       },
       [qc, issueId, issueSessionId],
     ),
@@ -127,10 +157,10 @@ export function useIssueTimeline(
         const { comment } = payload as CommentUpdatedPayload;
         if (comment.issue_id !== issueId) return;
         if (issueSessionId && comment.issue_session_id !== issueSessionId) return;
-        qc.setQueryData<TLCache>(issueKeys.timeline(issueId, issueSessionId), (old) =>
-          old?.map((e) =>
-            e.id === comment.id ? commentToTimelineEntry(comment) : e,
-          ),
+        qc.setQueryData<IssueTimelineData>(
+          issueKeys.timeline(issueId, issueSessionId),
+          (old) => mapTimelineEntries(old, (entry) =>
+            entry.id === comment.id ? commentToTimelineEntry(comment) : entry),
         );
       },
       [qc, issueId, issueSessionId],
@@ -141,8 +171,8 @@ export function useIssueTimeline(
   // carries the full Comment with the new resolved_at/resolved_by_* fields,
   // which `commentToTimelineEntry` already preserves, so the existing
   // entry can simply be replaced in place. Without these handlers the only
-  // path that updated the cache was `useRealtimeSync`'s global invalidate,
-  // which forces a full timeline refetch and busts every CommentCard memo.
+  // fallback would be the next page-zero dirty-generation reconciliation,
+  // leaving the current CommentCard stale until that refresh.
   useWSEvent(
     "comment:resolved",
     useCallback(
@@ -150,10 +180,10 @@ export function useIssueTimeline(
         const { comment } = payload as CommentResolvedPayload;
         if (comment.issue_id !== issueId) return;
         if (issueSessionId && comment.issue_session_id !== issueSessionId) return;
-        qc.setQueryData<TLCache>(issueKeys.timeline(issueId, issueSessionId), (old) =>
-          old?.map((e) =>
-            e.id === comment.id ? commentToTimelineEntry(comment) : e,
-          ),
+        qc.setQueryData<IssueTimelineData>(
+          issueKeys.timeline(issueId, issueSessionId),
+          (old) => mapTimelineEntries(old, (entry) =>
+            entry.id === comment.id ? commentToTimelineEntry(comment) : entry),
         );
       },
       [qc, issueId, issueSessionId],
@@ -167,10 +197,10 @@ export function useIssueTimeline(
         const { comment } = payload as CommentUnresolvedPayload;
         if (comment.issue_id !== issueId) return;
         if (issueSessionId && comment.issue_session_id !== issueSessionId) return;
-        qc.setQueryData<TLCache>(issueKeys.timeline(issueId, issueSessionId), (old) =>
-          old?.map((e) =>
-            e.id === comment.id ? commentToTimelineEntry(comment) : e,
-          ),
+        qc.setQueryData<IssueTimelineData>(
+          issueKeys.timeline(issueId, issueSessionId),
+          (old) => mapTimelineEntries(old, (entry) =>
+            entry.id === comment.id ? commentToTimelineEntry(comment) : entry),
         );
       },
       [qc, issueId, issueSessionId],
@@ -183,27 +213,10 @@ export function useIssueTimeline(
       (payload: unknown) => {
         const { comment_id, issue_id } = payload as CommentDeletedPayload;
         if (issue_id !== issueId) return;
-        qc.setQueryData<TLCache>(issueKeys.timeline(issueId, issueSessionId), (old) => {
-          if (!old) return old;
-          // Cascade through replies (full timeline now lives in this single
-          // cache, so a flat sweep is sufficient).
-          const idsToRemove = new Set<string>([comment_id]);
-          let changed = true;
-          while (changed) {
-            changed = false;
-            for (const e of old) {
-              if (
-                e.parent_id &&
-                idsToRemove.has(e.parent_id) &&
-                !idsToRemove.has(e.id)
-              ) {
-                idsToRemove.add(e.id);
-                changed = true;
-              }
-            }
-          }
-          return old.filter((e) => !idsToRemove.has(e.id));
-        });
+        qc.setQueryData<IssueTimelineData>(
+          issueKeys.timeline(issueId, issueSessionId),
+          (old) => removeTimelineCommentTree(old, comment_id),
+        );
       },
       [qc, issueId, issueSessionId],
     ),
@@ -218,11 +231,10 @@ export function useIssueTimeline(
         if (issueSessionId) return;
         const entry = p.entry;
         if (!entry || !entry.id) return;
-        qc.setQueryData<TLCache>(issueKeys.timeline(issueId, issueSessionId), (old) => {
-          if (!old) return [entry];
-          if (old.some((e) => e.id === entry.id)) return old;
-          return sortTimelineEntriesAsc([...old, entry]);
-        });
+        qc.setQueryData<IssueTimelineData>(
+          issueKeys.timeline(issueId, issueSessionId),
+          (old) => appendTimelineEntry(old, entry),
+        );
       },
       [qc, issueId, issueSessionId],
     ),
@@ -234,12 +246,13 @@ export function useIssueTimeline(
       (payload: unknown) => {
         const { reaction, issue_id } = payload as ReactionAddedPayload;
         if (issue_id !== issueId) return;
-        qc.setQueryData<TLCache>(issueKeys.timeline(issueId, issueSessionId), (old) =>
-          old?.map((e) => {
-            if (e.id !== reaction.comment_id) return e;
-            const existing = e.reactions ?? [];
-            if (existing.some((r) => r.id === reaction.id)) return e;
-            return { ...e, reactions: [...existing, reaction] };
+        qc.setQueryData<IssueTimelineData>(
+          issueKeys.timeline(issueId, issueSessionId),
+          (old) => mapTimelineEntries(old, (entry) => {
+            if (entry.id !== reaction.comment_id) return entry;
+            const existing = entry.reactions ?? [];
+            if (existing.some((r) => r.id === reaction.id)) return entry;
+            return { ...entry, reactions: [...existing, reaction] };
           }),
         );
       },
@@ -253,12 +266,13 @@ export function useIssueTimeline(
       (payload: unknown) => {
         const p = payload as ReactionRemovedPayload;
         if (p.issue_id !== issueId) return;
-        qc.setQueryData<TLCache>(issueKeys.timeline(issueId, issueSessionId), (old) =>
-          old?.map((e) => {
-            if (e.id !== p.comment_id) return e;
+        qc.setQueryData<IssueTimelineData>(
+          issueKeys.timeline(issueId, issueSessionId),
+          (old) => mapTimelineEntries(old, (entry) => {
+            if (entry.id !== p.comment_id) return entry;
             return {
-              ...e,
-              reactions: (e.reactions ?? []).filter(
+              ...entry,
+              reactions: (entry.reactions ?? []).filter(
                 (r) =>
                   !(
                     r.emoji === p.emoji &&
@@ -274,18 +288,24 @@ export function useIssueTimeline(
     ),
   );
 
+  const dirtyScopeCheckedRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || !data) return;
+    const scope = `${issueId}:${issueSessionId ?? "all"}`;
+    if (dirtyScopeCheckedRef.current === scope) return;
+    dirtyScopeCheckedRef.current = scope;
     const queryKey = issueKeys.timeline(issueId, issueSessionId);
     const state = qc.getQueryState(queryKey);
-    if (state?.isInvalidated && state.fetchStatus === "idle") {
-      // Global realtime sync is mounted above IssueDetail and can invalidate
-      // this cache after render but before the local granular WS subscriptions
-      // attach. Reconcile once after those subscriptions are registered so an
-      // event in that mount gap cannot leave staleTime: Infinity data visible.
-      void qc.refetchQueries({ queryKey, type: "active" });
+    if (
+      state?.fetchStatus === "idle"
+      && (state.isInvalidated || isIssueTimelineDirty(qc, issueId, issueSessionId))
+    ) {
+      // Reconcile once after local subscriptions register. Keeping this check
+      // mount-scoped matters: a normal granular setQueryData update re-renders
+      // the hook, but must not turn every WS event into a page-zero request.
+      refreshLatestPage();
     }
-  }, [qc, issueId, issueSessionId, enabled]);
+  }, [qc, issueId, issueSessionId, enabled, data, refreshLatestPage]);
 
   // --- Mutation functions ---
 
@@ -452,7 +472,12 @@ export function useIssueTimeline(
 
   return {
     timeline: optimisticTimeline,
+    latestTimeline,
     loading,
+    fetchOlderTimeline: fetchNextPage,
+    hasOlderTimeline: hasNextPage,
+    isFetchingOlderTimeline: isFetchingNextPage,
+    olderEntryCount,
     submitComment,
     submitReply,
     editComment,

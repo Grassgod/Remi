@@ -2,7 +2,12 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { issueKeys } from "./queries";
 import type { Reaction, TimelineEntry } from "../types";
-import { sortTimelineEntriesAsc } from "./timeline-sort";
+import {
+  appendTimelineEntry,
+  mapTimelineEntries,
+  removeTimelineCommentTree,
+  type IssueTimelineData,
+} from "./timeline-cache";
 
 // ---------------------------------------------------------------------------
 // Comments / Timeline
@@ -17,8 +22,6 @@ export type ToggleCommentReactionVars = {
   emoji: string;
   existing: Reaction | undefined;
 };
-
-type TimelineCache = TimelineEntry[];
 
 export function useCreateComment(issueId: string, issueSessionId?: string) {
   const qc = useQueryClient();
@@ -38,6 +41,7 @@ export function useCreateComment(issueId: string, issueSessionId?: string) {
       const entry: TimelineEntry = {
         type: "comment",
         id: comment.id,
+        issue_session_id: comment.issue_session_id ?? null,
         actor_type: comment.author_type,
         actor_id: comment.author_id,
         task_id: comment.task_id ?? null,
@@ -52,15 +56,14 @@ export function useCreateComment(issueId: string, issueSessionId?: string) {
       // Dedupe by id: the `comment:created` WS event may have already added
       // this entry from the broadcast path before this onSuccess fires. Skip
       // the append if the entry is already in the cache.
-      qc.setQueryData<TimelineCache>(issueKeys.timeline(issueId, issueSessionId), (old) => {
-        if (!old) return [entry];
-        if (old.some((e) => e.id === entry.id)) return old;
-        return sortTimelineEntriesAsc([...old, entry]);
-      });
+      qc.setQueryData<IssueTimelineData>(
+        issueKeys.timeline(issueId, issueSessionId),
+        (old) => appendTimelineEntry(old, entry),
+      );
     },
     // No onSettled invalidate. The `comment:created` WS broadcast keeps
     // the timeline cache fresh after a successful create, and reconnect
-    // recovery in useIssueTimeline already invalidates if the connection
+    // recovery in useIssueTimeline refreshes page zero if the connection
     // dropped. Re-fetching on every submit replaces every entry's
     // reference, which forces every memoized CommentCard subtree to
     // re-render (visible as a flash across sibling threads during AI
@@ -75,14 +78,12 @@ export function useUpdateComment(issueId: string, issueSessionId?: string) {
       api.updateComment(commentId, content, attachmentIds),
     onMutate: async ({ commentId, content, attachmentIds }) => {
       await qc.cancelQueries({ queryKey: issueKeys.timeline(issueId, issueSessionId) });
-      const prev = qc.getQueryData<TimelineCache>(issueKeys.timeline(issueId, issueSessionId));
+      const prev = qc.getQueryData<IssueTimelineData>(issueKeys.timeline(issueId, issueSessionId));
       const kept = new Set(attachmentIds);
-      qc.setQueryData<TimelineCache>(issueKeys.timeline(issueId, issueSessionId), (old) =>
-        old?.map((e) =>
-          e.id === commentId
-            ? { ...e, content, attachments: e.attachments?.filter((a) => kept.has(a.id)) }
-            : e,
-        ),
+      qc.setQueryData<IssueTimelineData>(issueKeys.timeline(issueId, issueSessionId), (old) =>
+        mapTimelineEntries(old, (entry) => entry.id === commentId
+          ? { ...entry, content, attachments: entry.attachments?.filter((attachment) => kept.has(attachment.id)) }
+          : entry),
       );
       return { prev };
     },
@@ -90,9 +91,6 @@ export function useUpdateComment(issueId: string, issueSessionId?: string) {
       if (ctx?.prev !== undefined) {
         qc.setQueryData(issueKeys.timeline(issueId, issueSessionId), ctx.prev);
       }
-    },
-    onSettled: () => {
-      qc.invalidateQueries({ queryKey: issueKeys.timeline(issueId, issueSessionId) });
     },
   });
 }
@@ -103,29 +101,9 @@ export function useDeleteComment(issueId: string, issueSessionId?: string) {
     mutationFn: (commentId: string) => api.deleteComment(commentId),
     onMutate: async (commentId) => {
       await qc.cancelQueries({ queryKey: issueKeys.timeline(issueId, issueSessionId) });
-      const prev = qc.getQueryData<TimelineCache>(issueKeys.timeline(issueId, issueSessionId));
-
-      // Cascade: collect all descendants of the deleted comment.
-      const toRemove = new Set<string>([commentId]);
-      if (prev) {
-        let changed = true;
-        while (changed) {
-          changed = false;
-          for (const e of prev) {
-            if (
-              e.parent_id &&
-              toRemove.has(e.parent_id) &&
-              !toRemove.has(e.id)
-            ) {
-              toRemove.add(e.id);
-              changed = true;
-            }
-          }
-        }
-      }
-
-      qc.setQueryData<TimelineCache>(issueKeys.timeline(issueId, issueSessionId), (old) =>
-        old?.filter((e) => !toRemove.has(e.id)),
+      const prev = qc.getQueryData<IssueTimelineData>(issueKeys.timeline(issueId, issueSessionId));
+      qc.setQueryData<IssueTimelineData>(issueKeys.timeline(issueId, issueSessionId), (old) =>
+        removeTimelineCommentTree(old, commentId),
       );
       return { prev };
     },
@@ -133,9 +111,6 @@ export function useDeleteComment(issueId: string, issueSessionId?: string) {
       if (ctx?.prev !== undefined) {
         qc.setQueryData(issueKeys.timeline(issueId, issueSessionId), ctx.prev);
       }
-    },
-    onSettled: () => {
-      qc.invalidateQueries({ queryKey: issueKeys.timeline(issueId, issueSessionId) });
     },
   });
 }
@@ -147,18 +122,16 @@ export function useResolveComment(issueId: string, issueSessionId?: string) {
       resolved ? api.resolveComment(commentId) : api.unresolveComment(commentId),
     onMutate: async ({ commentId, resolved }) => {
       await qc.cancelQueries({ queryKey: issueKeys.timeline(issueId, issueSessionId) });
-      const prev = qc.getQueryData<TimelineCache>(issueKeys.timeline(issueId, issueSessionId));
-      qc.setQueryData<TimelineCache>(issueKeys.timeline(issueId, issueSessionId), (old) =>
-        old?.map((e) =>
-          e.id === commentId
-            ? {
-                ...e,
+      const prev = qc.getQueryData<IssueTimelineData>(issueKeys.timeline(issueId, issueSessionId));
+      qc.setQueryData<IssueTimelineData>(issueKeys.timeline(issueId, issueSessionId), (old) =>
+        mapTimelineEntries(old, (entry) => entry.id === commentId
+          ? {
+                ...entry,
                 resolved_at: resolved ? new Date().toISOString() : null,
-                resolved_by_type: resolved ? e.resolved_by_type ?? null : null,
-                resolved_by_id: resolved ? e.resolved_by_id ?? null : null,
+                resolved_by_type: resolved ? entry.resolved_by_type ?? null : null,
+                resolved_by_id: resolved ? entry.resolved_by_id ?? null : null,
               }
-            : e,
-        ),
+          : entry),
       );
       return { prev };
     },
@@ -166,9 +139,6 @@ export function useResolveComment(issueId: string, issueSessionId?: string) {
       if (ctx?.prev !== undefined) {
         qc.setQueryData(issueKeys.timeline(issueId, issueSessionId), ctx.prev);
       }
-    },
-    onSettled: () => {
-      qc.invalidateQueries({ queryKey: issueKeys.timeline(issueId, issueSessionId) });
     },
   });
 }
@@ -188,8 +158,25 @@ export function useToggleCommentReaction(issueId: string, issueSessionId?: strin
       }
       return api.addReaction(commentId, emoji);
     },
-    onSettled: () => {
-      qc.invalidateQueries({ queryKey: issueKeys.timeline(issueId, issueSessionId) });
+    onSuccess: (reaction, { commentId, existing }) => {
+      qc.setQueryData<IssueTimelineData>(
+        issueKeys.timeline(issueId, issueSessionId),
+        (old) => mapTimelineEntries(old, (entry) => {
+          if (entry.id !== commentId) return entry;
+          if (!reaction) {
+            return {
+              ...entry,
+              reactions: (entry.reactions ?? []).filter(
+                (candidate) => candidate.id !== existing?.id,
+              ),
+            };
+          }
+          if ((entry.reactions ?? []).some((candidate) => candidate.id === reaction.id)) {
+            return entry;
+          }
+          return { ...entry, reactions: [...(entry.reactions ?? []), reaction] };
+        }),
+      );
     },
   });
 }

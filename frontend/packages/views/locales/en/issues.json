@@ -428,7 +428,8 @@
     "activity_count_other": "{{count}} activities",
     "show_more_activities_one": "Show {{count}} more activity",
     "show_more_activities_other": "Show {{count}} more activities",
-    "jump_to_latest": "Jump to latest"
+    "jump_to_latest": "Jump to latest",
+    "loading_older": "Loading earlier activity..."
   },
   "comment": {
     "delete_title": "Delete comment",
