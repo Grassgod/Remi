@@ -1512,6 +1512,10 @@ export interface CreateTaskInput {
   issueId?: string | null;
   issueSessionId?: string | null;
   issue_session_id?: string | null;
+  /** Server-internal workspace lease override. Discussion/reporting tasks can
+   * retain Issue context without claiming its code workspace. */
+  holdsWorkspace?: boolean;
+  holds_workspace?: boolean;
   /** Server-internal lane generation. Public task creation strips this field. */
   issueSessionGeneration?: number | null;
   issue_session_generation?: number | null;

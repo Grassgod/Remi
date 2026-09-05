@@ -68,6 +68,8 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
       execution_fingerprint: _executionFingerprintSnake,
       issueSessionGeneration: _issueSessionGeneration,
       issue_session_generation: _issueSessionGenerationSnake,
+      holdsWorkspace: _holdsWorkspace,
+      holds_workspace: _holdsWorkspaceSnake,
       parentTaskId: _parentTaskId,
       parent_task_id: _parentTaskIdSnake,
       issueCreationRestricted: _issueCreationRestricted,

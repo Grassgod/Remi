@@ -621,6 +621,7 @@ export class FeishuBotRepo {
           runtimeId: config.runtimeId,
           chatSessionId,
           workspaceId: input.issue.workspaceId,
+          holdsWorkspace: false,
           prompt: roundPushPrompt(input.issue),
           requestingUserName: "Multiremi",
           requestingUserProfileDescription: "System-triggered summary for a completed Issue work round.",

@@ -204,6 +204,7 @@ export class TasksRepo {
                   AND active.issue_session_id = queued.issue_session_id THEN 'session'
                 WHEN queued.issue_id IS NOT NULL
                   AND queued.issue_session_id IS NULL
+                  AND queued.holds_workspace = 1
                   AND active.issue_id = queued.issue_id THEN 'legacy_issue'
                 ELSE 'issue_workspace'
               END AS blocker_reason
@@ -215,7 +216,6 @@ export class TasksRepo {
          AND queued.status = 'queued'
          AND (
            (queued.issue_session_id IS NOT NULL AND active.issue_session_id = queued.issue_session_id)
-           OR (queued.issue_id IS NOT NULL AND queued.issue_session_id IS NULL AND active.issue_id = queued.issue_id)
            OR (
              queued.issue_id IS NOT NULL
              AND queued.holds_workspace = 1
@@ -347,7 +347,13 @@ export class TasksRepo {
     // Snapshot the lease decision on the Task. A Session setting may change
     // later, but an in-flight Task must keep the workspace ownership it was
     // created with. Historical Issue Tasks without a Session stay exclusive.
-    const holdsWorkspace = issueId ? (issueSession?.holdsWorkspace ?? true) : true;
+    const requestedHoldsWorkspace = input.holdsWorkspace ?? input.holds_workspace;
+    if (requestedHoldsWorkspace !== undefined && typeof requestedHoldsWorkspace !== "boolean") {
+      throw new Error("holds_workspace must be a boolean");
+    }
+    const holdsWorkspace = issueId
+      ? (requestedHoldsWorkspace ?? (chatSession ? false : issueSession?.holdsWorkspace ?? true))
+      : true;
     let runtimeId = resolveOptionalStringField(input, "runtimeId", "runtime_id", agent.runtimeId);
     if (runtimeId && !this.ctx.runtimes().getRuntime(runtimeId)) throw new Error(`Runtime not found: ${runtimeId}`);
     // Pool scheduling: tasks stay unbound so any provider-matching runtime can
@@ -372,6 +378,7 @@ export class TasksRepo {
       agent,
       input.resetProviderSession ? null : chatSession,
       issue,
+      holdsWorkspace,
       expectedExecutionFingerprint,
       currentPluginSnapshot.length > 0,
     );
@@ -588,6 +595,7 @@ export class TasksRepo {
     agent: MultiremiAgent,
     chatSession: MultiremiChatSession | null,
     issue: MultiremiIssue | null,
+    holdsWorkspace: boolean,
     executionFingerprint: string,
     hasPlugins: boolean,
   ): { runtimeId: string | null; inheritChatSession: boolean } {
@@ -597,7 +605,7 @@ export class TasksRepo {
     // A task carrying both a chat session and a directory issue must go to the
     // directory's machine; the session is only inherited if that machine is
     // also where the session lives.
-    if (issue?.projectId && issue.issueKind !== "intake") {
+    if (holdsWorkspace && issue?.projectId && issue.issueKind !== "intake") {
       for (const resource of this.ctx.projects().listProjectResources(issue.projectId)) {
         if (resource.resourceType !== "local_directory") continue;
         const daemonId = String(resource.resourceRef.daemonId ?? resource.resourceRef.daemon_id ?? "").trim();
@@ -698,7 +706,7 @@ export class TasksRepo {
       // Homepage Chat discovers repositories through the database-backed CLI
       // directory and checks out only on explicit request. Never attach the
       // workspace repository catalog to its daemon claim as eager Git work.
-      repos: task.chatSessionId && !task.issueId
+      repos: task.holdsWorkspace === false || (task.chatSessionId && !task.issueId)
         ? []
         : projectContexts.length
           ? normalizeRepos(projectContexts.flatMap((context) => context.repos))
@@ -1127,8 +1135,8 @@ export class TasksRepo {
       && !task.agent.archivedAt
       && this.ctx.runtimes().runtimeCanRunAgent(runtime, task.agent)
       && this.runtimeHasReadyTaskPlugins(runtime, task)
-      && (!task.issueId || runtimeSupportsIssueWorkspaces(runtime))
-      && this.runtimePassesProjectDeviceRouting(runtime, task.id);
+      && (!task.issueId || !task.holdsWorkspace || runtimeSupportsIssueWorkspaces(runtime))
+      && (!task.issueId || !task.holdsWorkspace || this.runtimePassesProjectDeviceRouting(runtime, task.id));
   }
 
   private reclaimStaleDispatchedTaskForRuntime(runtimeId: string): MultiremiTaskWithAgent | null {
@@ -1258,9 +1266,10 @@ export class TasksRepo {
                AND runtime_active.status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')
            ) < ?
            ${workspaceFilter}
-           AND (t.issue_id IS NULL OR ? = 1)
+           AND (t.issue_id IS NULL OR t.holds_workspace = 0 OR ? = 1)
            AND (
              t.issue_id IS NULL
+             OR t.holds_workspace = 0
              OR NOT EXISTS (
                SELECT 1 FROM multiremi_issue_workspaces issue_workspace
                WHERE issue_workspace.issue_id = t.issue_id
@@ -1279,7 +1288,7 @@ export class TasksRepo {
                  )
              )
            )
-           AND ${PROJECT_DEVICE_ROUTING_ELIGIBILITY_SQL}
+           AND (t.holds_workspace = 0 OR ${PROJECT_DEVICE_ROUTING_ELIGIBILITY_SQL})
            AND (t.runtime_id IS NULL OR t.runtime_id = ?)
            AND (a.runtime_id IS NULL OR a.runtime_id = ?)
            AND (? = 'any' OR a.provider = ?)
@@ -1339,7 +1348,6 @@ export class TasksRepo {
              WHERE active.status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')
                AND (
                  (t.issue_session_id IS NOT NULL AND active.issue_session_id = t.issue_session_id)
-                 OR (t.issue_id IS NOT NULL AND t.issue_session_id IS NULL AND active.issue_id = t.issue_id)
                  OR (
                    t.issue_id IS NOT NULL
                    AND t.holds_workspace = 1
@@ -1936,6 +1944,7 @@ export class TasksRepo {
       issueId: current.issueId,
       issueSessionId: current.issueSessionId,
       chatSessionId: current.chatSessionId,
+      holdsWorkspace: current.holdsWorkspace,
       triggerCommentId: current.triggerCommentId,
       triggerSummary: current.triggerSummary,
       workspaceId: current.workspaceId,
@@ -2121,6 +2130,7 @@ export class TasksRepo {
       issueId: parent.issueId,
       issueSessionId: parent.issueSessionId,
       chatSessionId: parent.chatSessionId,
+      holdsWorkspace: parent.holdsWorkspace,
       triggerCommentId: parent.triggerCommentId,
       triggerSummary: parent.triggerSummary,
       workspaceId: parent.workspaceId,
