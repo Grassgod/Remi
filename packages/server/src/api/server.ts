@@ -463,10 +463,15 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     await next();
   });
   app.use("/api/daemon/runtimes/:runtimeId/*", async (c, next) => {
+    const hideFeishuAttachment = isFeishuBotOutboundAttachmentRequest(c);
     const denied = denyDaemonTokenRuntimeIdentity(c, store, c.req.param("runtimeId"), {
-      hideForbiddenAsNotFound: isDaemonGcCheckRequest(c) || isFeishuBotOutboundAttachmentRequest(c),
+      hideForbiddenAsNotFound: isDaemonGcCheckRequest(c) || hideFeishuAttachment,
     });
-    if (denied) return denied;
+    if (denied) {
+      return hideFeishuAttachment && denied.status === 404
+        ? c.json({ error: "attachment not available" }, 404)
+        : denied;
+    }
     await next();
   });
   app.use("/api/daemon/tasks/:taskId/*", async (c, next) => {

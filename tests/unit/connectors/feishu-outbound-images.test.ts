@@ -6,12 +6,62 @@ import { classifyMarkdownImageSource, rewriteMarkdownImages } from "@shared/feis
 import {
   assertPublicFeishuImageHost,
   createFeishuImageResolver,
+  isNonGlobalFeishuImageIp,
   loadFeishuImage,
   responseToFeishuImage,
   validateFeishuImage,
 } from "@connectors/feishu/outbound-images.js";
 
 describe("Feishu outbound image loading", () => {
+  it.each([
+    "0.0.0.1",
+    "10.0.0.1",
+    "100.64.0.1",
+    "127.0.0.1",
+    "169.254.0.1",
+    "172.16.0.1",
+    "192.0.0.1",
+    "192.0.2.1",
+    "192.88.99.1",
+    "192.168.0.1",
+    "198.18.0.1",
+    "198.51.100.1",
+    "203.0.113.1",
+    "224.0.0.1",
+    "240.0.0.1",
+    "::",
+    "::1",
+    "64:ff9b::1",
+    "64:ff9b:1::1",
+    "100::1",
+    "100:0:0:1::1",
+    "2001:2::1",
+    "2001:db8::1",
+    "2002::1",
+    "3fff::1",
+    "5f00::1",
+    "fc00::1",
+    "fe80::1",
+    "ff02::1",
+    "::ffff:192.0.2.1",
+    "::ffff:c000:201",
+  ])("classifies non-global address %s", (address) => {
+    expect(isNonGlobalFeishuImageIp(address)).toBe(true);
+  });
+
+  it.each([
+    "8.8.8.8",
+    "192.0.0.9",
+    "192.31.196.1",
+    "2001:1::1",
+    "2001:3::1",
+    "2001:4860:4860::8888",
+    "2606:4700:4700::1111",
+    "::ffff:8.8.8.8",
+  ])("keeps globally reachable address %s eligible", (address) => {
+    expect(isNonGlobalFeishuImageIp(address)).toBe(false);
+  });
+
   it("rejects non-image and oversized content before upload", async () => {
     expect(() => validateFeishuImage({
       buffer: Buffer.from("not an image"),
@@ -66,7 +116,7 @@ describe("Feishu outbound image loading", () => {
   });
 
   it("rejects private hosts before fetching and checks every redirect target", async () => {
-    await expect(assertPublicFeishuImageHost("127.0.0.1")).rejects.toThrow("private address");
+    await expect(assertPublicFeishuImageHost("127.0.0.1")).rejects.toThrow("non-global address");
 
     const checked: string[] = [];
     let fetches = 0;
@@ -86,6 +136,66 @@ describe("Feishu outbound image loading", () => {
     })).rejects.toThrow("private redirect blocked");
     expect(checked).toEqual(["cdn.example", "127.0.0.1"]);
     expect(fetches).toBe(1);
+  });
+
+  it("rejects a DNS answer set when any address is non-global before connecting", async () => {
+    const source = classifyMarkdownImageSource("https://mixed.example/image.png");
+
+    await expect(loadFeishuImage(source, {
+      lookupFn: (_hostname, _options, callback) => callback(null, [
+        { address: "8.8.8.8", family: 4 },
+        { address: "127.0.0.1", family: 4 },
+      ]),
+    })).rejects.toThrow("non-global address");
+  });
+
+  it("rejects non-global IP literals before Bun can bypass the lookup hook", async () => {
+    let localConnections = 0;
+    const local = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () => {
+        localConnections += 1;
+        return new Response(Buffer.from("png"), { headers: { "content-type": "image/png" } });
+      },
+    });
+    const source = classifyMarkdownImageSource(`http://127.0.0.1:${local.port}/image.png`);
+    try {
+      await expect(loadFeishuImage(source)).rejects.toThrow("non-global address");
+      expect(localConnections).toBe(0);
+    } finally {
+      local.stop(true);
+    }
+  });
+
+  it("uses one pinned DNS answer and never reconnects with a rebound private answer", async () => {
+    let localConnections = 0;
+    let lookupCalls = 0;
+    const local = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () => {
+        localConnections += 1;
+        return new Response(Buffer.from("png"), { headers: { "content-type": "image/png" } });
+      },
+    });
+    const source = classifyMarkdownImageSource(`http://rebind.example:${local.port}/image.png`);
+    try {
+      await expect(loadFeishuImage(source, {
+        timeoutMs: 20,
+        lookupFn: (_hostname, _options, callback) => {
+          lookupCalls += 1;
+          callback(null, [{
+            address: lookupCalls === 1 ? "8.8.8.8" : "127.0.0.1",
+            family: 4,
+          }]);
+        },
+      })).rejects.toThrow();
+      expect(lookupCalls).toBe(1);
+      expect(localConnections).toBe(0);
+    } finally {
+      local.stop(true);
+    }
   });
 
   it("uploads duplicate sources once and reuses the image key across rewrites", async () => {

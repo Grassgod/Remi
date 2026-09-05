@@ -388,7 +388,19 @@ describe("Feishu bot control-plane delivery", () => {
          reply_to_message_id, body, status, available_at, created_at, updated_at
        ) VALUES ('fbo_images', 'local', ?, NULL, 'oc_images', 'omt_images',
          'om_images_root', ?, 'pending', ?, ?, ?)`,
-      [binding.id, "![allowed](/api/attachments/att_allowed/content)", now, now, now],
+      [
+        binding.id,
+        [
+          "![allowed](/api/attachments/att_allowed/content)",
+          "![remote](/api/attachments/att_remote/content)",
+          "![text](/api/attachments/att_text/content)",
+          "![large](/api/attachments/att_large/content)",
+          "![cross](/api/attachments/att_cross_workspace/content)",
+        ].join("\n"),
+        now,
+        now,
+        now,
+      ],
     );
     const allowed = test.store.createAttachment({
       id: "att_allowed",
@@ -407,6 +419,36 @@ describe("Feishu bot control-plane delivery", () => {
       url: "/api/attachments/att_unreferenced/content",
       contentType: "image/png",
       sizeBytes: 3,
+      uploaderType: "member",
+      uploaderId: "local",
+    });
+    test.store.createAttachment({
+      id: "att_remote",
+      workspaceId: "local",
+      filename: "remote.png",
+      url: "https://cdn.example/remote.png",
+      contentType: "image/png",
+      sizeBytes: 3,
+      uploaderType: "member",
+      uploaderId: "local",
+    });
+    test.store.createAttachment({
+      id: "att_text",
+      workspaceId: "local",
+      filename: "not-image.txt",
+      url: "/api/attachments/att_text/content",
+      contentType: "text/plain",
+      sizeBytes: 3,
+      uploaderType: "member",
+      uploaderId: "local",
+    });
+    test.store.createAttachment({
+      id: "att_large",
+      workspaceId: "local",
+      filename: "large.png",
+      url: "/api/attachments/att_large/content",
+      contentType: "image/png",
+      sizeBytes: 10 * 1024 * 1024 + 1,
       uploaderType: "member",
       uploaderId: "local",
     });
@@ -431,51 +473,125 @@ describe("Feishu bot control-plane delivery", () => {
     await report(test, "rt_a", { applied_revision: 1, state: "online" });
     const claimed = await (await heartbeat(test, "rt_a")).json();
     const claimToken = claimed.pending_feishu_outbound.claim_token as string;
+    db!.run(
+      `INSERT INTO multiremi_feishu_bot_outbound_deliveries (
+         id, workspace_id, binding_id, task_id, chat_id, thread_id,
+         reply_to_message_id, body, status, claim_token, leased_until,
+         available_at, attempt_count, created_at, updated_at
+       ) VALUES ('fbo_other_claim', 'local', ?, NULL, 'oc_images', 'omt_images',
+         'om_images_root', 'other delivery', 'sending', 'claim_other_delivery', ?,
+         ?, 1, ?, ?)`,
+      [
+        binding.id,
+        new Date(Date.now() + 60_000).toISOString(),
+        now,
+        now,
+        now,
+      ],
+    );
     const path = (runtimeId: string, attachmentId: string) =>
       `/api/daemon/runtimes/${runtimeId}/feishu-bot/outbound/fbo_images/attachments/${attachmentId}`;
     const authorizedHeaders = {
       ...daemonHeaders(test.tokens.rt_a!),
       [FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER]: claimToken,
     };
+    const unavailableBody = { error: "attachment not available" };
+    const expectUnavailable = async (response: Response, label: string) => {
+      expect(response.status, label).toBe(404);
+      expect(await response.json(), label).toEqual(unavailableBody);
+    };
 
-    expect((await test.app.request(path("rt_a", "att_allowed"), {
-      headers: {
-        ...daemonHeaders(test.tokens.rt_b!),
-        [FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER]: claimToken,
-      },
-    })).status).toBe(404);
-    const wrongRuntime = await test.app.request(path("rt_b", "att_allowed"), {
-      headers: {
-        ...daemonHeaders(test.tokens.rt_b!),
-        [FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER]: claimToken,
-      },
+    const pat = await test.store.createAccessToken({
+      name: "Attachment PAT",
+      type: "pat",
+      workspaceId: "local",
+      userId: "local",
     });
-    expect(wrongRuntime.status).toBe(404);
-    expect((await test.app.request(path("rt_a", "att_allowed"), {
+    const expired = await test.store.createAccessToken({
+      name: "Expired attachment PAT",
+      type: "pat",
+      workspaceId: "local",
+      userId: "local",
+    });
+    db!.run(
+      "UPDATE multiremi_access_tokens SET expires_at = '2000-01-01T00:00:00.000Z' WHERE id = ?",
+      [expired.id],
+    );
+    const task = test.store.createTask({ agentId: test.agentId, prompt: "Attachment task credential" });
+    const taskToken = await test.store.createTaskAccessToken(task, "local");
+
+    for (const [label, headers] of [
+      ["missing token", {}],
+      ["invalid token", { Authorization: "Bearer invalid" }],
+      ["expired token", { Authorization: `Bearer ${expired.token}` }],
+    ] as const) {
+      const denied = await test.app.request(path("rt_a", "att_allowed"), { headers });
+      expect(denied.status, label).toBe(401);
+      expect(await denied.json(), label).toEqual({ error: "unauthorized" });
+    }
+    for (const [label, headers, expected] of [
+      ["master token", MASTER, { error: "daemon token required", code: "daemon_token_required" }],
+      ["PAT", daemonHeaders(pat.token), { error: "daemon token required", code: "daemon_token_required" }],
+      ["task token", daemonHeaders(taskToken.token), { error: "forbidden for task token", code: "task_token_hard_denied" }],
+    ] as const) {
+      const denied = await test.app.request(path("rt_a", "att_allowed"), { headers });
+      expect(denied.status, label).toBe(403);
+      expect(await denied.json(), label).toEqual(expected);
+    }
+
+    await expectUnavailable(await test.app.request(path("rt_a", "att_allowed"), {
+      headers: {
+        ...daemonHeaders(test.tokens.rt_b!),
+        [FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER]: claimToken,
+      },
+    }), "wrong daemon identity");
+    await expectUnavailable(await test.app.request(path("rt_b", "att_allowed"), {
+      headers: {
+        ...daemonHeaders(test.tokens.rt_b!),
+        [FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER]: claimToken,
+      },
+    }), "wrong runtime");
+    await expectUnavailable(await test.app.request(path("rt_a", "att_allowed"), {
+      headers: daemonHeaders(test.tokens.rt_a!),
+    }), "missing claim");
+    await expectUnavailable(await test.app.request(path("rt_a", "att_allowed"), {
       headers: {
         ...daemonHeaders(test.tokens.rt_a!),
         [FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER]: "wrong-claim",
       },
-    })).status).toBe(404);
-    expect((await test.app.request(path("rt_a", "att_cross_workspace"), {
+    }), "wrong claim");
+    await expectUnavailable(await test.app.request(path("rt_a", "att_allowed"), {
+      headers: {
+        ...daemonHeaders(test.tokens.rt_a!),
+        [FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER]: "claim_other_delivery",
+      },
+    }), "another delivery claim");
+    await expectUnavailable(await test.app.request(path("rt_a", "att_cross_workspace"), {
       headers: authorizedHeaders,
-    })).status).toBe(404);
-    expect((await test.app.request(path("rt_a", "att_unreferenced"), {
+    }), "cross-workspace attachment");
+    await expectUnavailable(await test.app.request(path("rt_a", "att_unreferenced"), {
       headers: authorizedHeaders,
-    })).status).toBe(404);
+    }), "unreferenced attachment");
+    for (const attachmentId of ["att_remote", "att_text", "att_large"]) {
+      await expectUnavailable(await test.app.request(path("rt_a", attachmentId), {
+        headers: authorizedHeaders,
+      }), `invalid attachment ${attachmentId}`);
+    }
 
     const response = await test.app.request(path("rt_a", "att_allowed"), { headers: authorizedHeaders });
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("image/png");
     expect(Buffer.from(await response.arrayBuffer())).toEqual(Buffer.from("png"));
 
-    db!.run(
-      "UPDATE multiremi_feishu_bot_outbound_deliveries SET status = 'sent' WHERE id = ?",
-      ["fbo_images"],
-    );
-    expect((await test.app.request(path("rt_a", "att_allowed"), {
-      headers: authorizedHeaders,
-    })).status).toBe(404);
+    for (const status of ["pending", "sent", "failed"] as const) {
+      db!.run(
+        "UPDATE multiremi_feishu_bot_outbound_deliveries SET status = ? WHERE id = ?",
+        [status, "fbo_images"],
+      );
+      await expectUnavailable(await test.app.request(path("rt_a", "att_allowed"), {
+        headers: authorizedHeaders,
+      }), `delivery status ${status}`);
+    }
   });
 
   it("names a deleted Agent instead of failing the start generically", async () => {

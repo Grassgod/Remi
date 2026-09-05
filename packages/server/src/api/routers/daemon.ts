@@ -565,8 +565,6 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
         return c.json({ error: "daemon token required", code: "daemon_token_required" }, 403);
       }
       const runtimeId = c.req.param("runtimeId");
-      const denied = denyDaemonTokenRuntimeIdentity(c, store, runtimeId, { hideForbiddenAsNotFound: true });
-      if (denied) return c.json({ error: "attachment not available" }, 404);
       const runtime = store.getRuntime(runtimeId);
       if (!runtime) return c.json({ error: "attachment not available" }, 404);
       const claimToken = cleanString(c.req.header(FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER));
