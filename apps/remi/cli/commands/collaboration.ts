@@ -278,7 +278,13 @@ function issueExtendedSpecs(): CommandSpec[] {
     nativeSpec("issue.timeline", ["issue", "timeline"], "Show an issue timeline", "read", HUMAN_TASK, [refPositional("issue")], [
       { name: "session", type: "string", valueName: "session-id", description: "Session scope" },
     ], async (invocation) => {
-      await getAndRender(invocation, `/api/issues/${encodePath(positional(invocation, 0, "issue"))}/timeline`, ["timeline"], { issue_session_id: stringOption(invocation, "session") });
+      const limit = integerOption(invocation, "limit");
+      const cursor = stringOption(invocation, "cursor");
+      await getAndRender(invocation, `/api/issues/${encodePath(positional(invocation, 0, "issue"))}/timeline`, ["entries", "timeline"], {
+        issue_session_id: stringOption(invocation, "session"),
+        limit,
+        before: cursor,
+      });
     }),
     nativeSpec("issue.active-task", ["issue", "active-task"], "Show an issue's active task", "read", HUMAN_TASK, [refPositional("issue")], [], async (invocation) => {
       await getAndRender(invocation, `/api/issues/${encodePath(positional(invocation, 0, "issue"))}/active-task`);
