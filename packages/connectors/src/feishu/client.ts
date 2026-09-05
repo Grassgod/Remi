@@ -101,14 +101,17 @@ export function createEventDispatcher(_creds?: {
 const probeCache = new Map<string, { result: FeishuProbeResult; ts: number }>();
 const PROBE_TTL_MS = 15 * 60 * 1000;
 
-export async function probeFeishu(creds: Credentials): Promise<FeishuProbeResult> {
+export async function probeFeishu(
+  creds: Credentials,
+  options: { skipCache?: boolean } = {},
+): Promise<FeishuProbeResult> {
   if (!creds.appId || !creds.appSecret) {
     return { ok: false, error: "missing credentials" };
   }
 
   const key = `${creds.appId}:${creds.domain ?? "feishu"}`;
   const cached = probeCache.get(key);
-  if (cached && Date.now() - cached.ts < PROBE_TTL_MS) {
+  if (!options.skipCache && cached && Date.now() - cached.ts < PROBE_TTL_MS) {
     return cached.result;
   }
 

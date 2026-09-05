@@ -4,6 +4,7 @@
  */
 
 import * as Lark from "@larksuiteoapi/node-sdk";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -28,6 +29,32 @@ function gcStore(): GroupPolicy {
 /** Set the group policy implementation (called by FeishuChannel on init). */
 export function setGroupPolicy(policy: GroupPolicy): void {
   _groupPolicy = policy;
+}
+
+function hashIdentifier(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 8);
+}
+
+type GroupMessageDropReason =
+  | "duplicate"
+  | "membership_gate_unconfigured"
+  | "membership_unavailable"
+  | "not_member"
+  | "bot_open_id_unresolved"
+  | "directed_at_others"
+  | "not_mentioned"
+  | "connector_stopped"
+  | "processing_error";
+
+function logDroppedGroupMessage(
+  event: FeishuMessageEvent,
+  reason: GroupMessageDropReason,
+  level: "info" | "warn" | "error" = "info",
+): void {
+  if (event.message.chat_type !== "group") return;
+  log[level](
+    `dropped group message message_id=${event.message.message_id} chat_hash=${hashIdentifier(event.message.chat_id)} reason=${reason}`,
+  );
 }
 import { downloadImageFeishu, downloadMessageResourceFeishu } from "./media.js";
 import { extractMentionTargets, extractMessageBody } from "./mention.js";
@@ -164,8 +191,8 @@ async function resolveSenderName(
       senderNameCache.set(senderOpenId, { name, expireAt: now + SENDER_NAME_TTL_MS });
       return name;
     }
-  } catch (err) {
-    log.info(`resolveSenderName failed for ${senderOpenId}: ${String(err)}`);
+  } catch {
+    log.info("resolveSenderName failed");
     // Negative cache: avoid repeated failed API calls for the same open_id
     senderNameCache.set(senderOpenId, { name: "", expireAt: now + SENDER_NAME_TTL_MS });
   }
@@ -329,9 +356,11 @@ async function resolveMergeForward(client: Lark.Client, messageId: string): Prom
     if (text) parts.push(text);
   }
 
-  // Log anonymous open_id mapping for traceability
+  // Log an anonymized mapping for traceability without exposing open_id values.
   if (anonymousMap.size > 0) {
-    const mapping = [...anonymousMap.entries()].map(([id, n]) => `用户${n}=${id}`).join(", ");
+    const mapping = [...anonymousMap.entries()]
+      .map(([id, n]) => `用户${n}=${hashIdentifier(id)}`)
+      .join(", ");
     log.info(`merge_forward sender mapping: ${mapping}`);
   }
 
@@ -508,7 +537,10 @@ export async function processFeishuMessageEvent(
   const messageId = event.message.message_id;
 
   // Dedup
-  if (!tryRecordMessage(messageId)) return null;
+  if (!tryRecordMessage(messageId)) {
+    logDroppedGroupMessage(event, "duplicate");
+    return null;
+  }
 
   // Parse
   const ctx = parseFeishuMessageEvent(event, botOpenId);
@@ -518,6 +550,7 @@ export async function processFeishuMessageEvent(
 
   if (!admission) {
     log.error("workspace membership gate is not configured");
+    logDroppedGroupMessage(event, "membership_gate_unconfigured", "error");
     return null;
   }
 
@@ -526,48 +559,41 @@ export async function processFeishuMessageEvent(
     admitted = Boolean(ctx.senderOpenId) && await admission.authorizeSender(ctx.senderOpenId);
   } catch {
     log.error("workspace membership lookup failed; message denied");
+    logDroppedGroupMessage(event, "membership_unavailable", "warn");
     return shouldNotifyAdmissionDenial
       ? denyFeishuMessage(admission, ctx, "unavailable")
       : null;
   }
   if (!admitted) {
     log.warn("workspace membership denied");
+    logDroppedGroupMessage(event, "not_member", "warn");
     return shouldNotifyAdmissionDenial
       ? denyFeishuMessage(admission, ctx, "not_member")
       : null;
   }
   log.info("workspace membership allowed");
 
-  // Group message filtering:
-  // 1) allowedGroups whitelist — empty means no restriction
-  // 2) Skip messages directed at other users (has @mentions, none are the bot)
-  // 3) monitorGroups auto-reply for messages without explicit @mentions
+  // Explicit bot mentions and slash commands are always admitted. Group policy
+  // only adds monitor mode; a missing policy entry is not a deny rule.
   let monitored = false;
   if (ctx.chatType === "group") {
-    // DB-based group filtering — group must exist in group_configs
-    const groupConfig = gcStore().getByChatId(ctx.chatId);
-    if (!groupConfig) {
-      log.info(`blocked group message ${messageId} (chatId=${ctx.chatId}, not in group_configs)`);
-      return null;
-    }
-
-    const isMonitor = groupConfig.monitor === true;
     const mentions = event.message.mentions ?? [];
     const directedAtOthers = mentions.length > 0 && !ctx.mentionedBot;
 
     if (ctx.mentionedBot || isSlashCommand) {
-      // Always respond when bot is @mentioned or slash command
+      // Explicitly addressed messages do not require additional group config.
+    } else if (mentions.length > 0 && !botOpenId) {
+      logDroppedGroupMessage(event, "bot_open_id_unresolved");
+      return null;
     } else if (directedAtOthers) {
-      log.info(`skipped group message ${messageId} (directed at other users, not bot)`);
+      logDroppedGroupMessage(event, "directed_at_others");
       return null;
-    } else if (!isMonitor) {
-      log.info(`skipped group message ${messageId} (chatId=${ctx.chatId}, not mentioned, not monitored)`);
-      return null;
-    } else if (isMonitor && directedAtOthers) {
-      log.info(`skipped group message ${messageId} (monitor group but directed at other users)`);
+    } else if (gcStore().getByChatId(ctx.chatId)?.monitor === true) {
+      monitored = true;
+    } else {
+      logDroppedGroupMessage(event, "not_mentioned");
       return null;
     }
-    monitored = isMonitor && !ctx.mentionedBot;
   }
 
   // Resolve sender name (best-effort)
@@ -644,8 +670,88 @@ export type FeishuMessageCallback = (msg: ParsedFeishuMessage) => Promise<void>;
 
 export type FeishuWSHandle = {
   ready: Promise<void>;
+  botOpenIdReady: Promise<void>;
   stop(): void;
 };
+
+export interface FeishuBotIdentityState {
+  botOpenId?: string;
+  botOpenIdReady: Promise<void>;
+}
+
+export interface FeishuBotIdentityOptions {
+  backoffMs?: readonly number[];
+  probe?: typeof probeFeishu;
+  sleep?: (delayMs: number) => Promise<void>;
+}
+
+const DEFAULT_BOT_OPEN_ID_BACKOFF_MS = [1_000, 2_000, 4_000] as const;
+const BOT_OPEN_ID_WAIT_TIMEOUT_MS = 10_000;
+
+export function createFeishuBotIdentityState(
+  creds: Parameters<typeof probeFeishu>[0],
+  options: FeishuBotIdentityOptions = {},
+): FeishuBotIdentityState {
+  const backoffMs = options.backoffMs ?? DEFAULT_BOT_OPEN_ID_BACKOFF_MS;
+  const probe = options.probe ?? probeFeishu;
+  const sleep = options.sleep ?? ((delayMs: number) => new Promise<void>((resolve) => {
+    setTimeout(resolve, delayMs);
+  }));
+  const state: FeishuBotIdentityState = {
+    botOpenIdReady: Promise.resolve(),
+  };
+
+  state.botOpenIdReady = (async () => {
+    for (let attempt = 0; attempt <= backoffMs.length; attempt += 1) {
+      if (attempt > 0) await sleep(backoffMs[attempt - 1]!);
+
+      try {
+        const result = await probe(creds, { skipCache: attempt > 0 });
+        if (result.ok && result.botOpenId) {
+          state.botOpenId = result.botOpenId;
+          log.info(`bot identity resolved attempt=${attempt + 1}`);
+          return;
+        }
+      } catch {
+        // Retry below. The final error intentionally omits provider payloads.
+      }
+    }
+
+    log.error(
+      `bot identity unresolved after attempts=${backoffMs.length + 1}; group @mention detection is degraded`,
+    );
+  })();
+
+  return state;
+}
+
+async function waitForBotOpenIdReady(
+  botOpenIdReady: Promise<void>,
+  timeoutMs = BOT_OPEN_ID_WAIT_TIMEOUT_MS,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      botOpenIdReady,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+export async function processFeishuMessageEventWithBotIdentity(
+  client: Lark.Client,
+  event: FeishuMessageEvent,
+  botIdentity: FeishuBotIdentityState,
+  admission: FeishuMessageAdmissionOptions,
+  timeoutMs = BOT_OPEN_ID_WAIT_TIMEOUT_MS,
+): Promise<ParsedFeishuMessage | null> {
+  await waitForBotOpenIdReady(botIdentity.botOpenIdReady, timeoutMs);
+  return processFeishuMessageEvent(client, event, botIdentity.botOpenId, admission);
+}
 
 /** Start WebSocket listener. Returns a handle to stop it. */
 export function startWebSocketListener(
@@ -660,18 +766,8 @@ export function startWebSocketListener(
   };
 
   const client = createFeishuClient(creds);
-  let botOpenId: string | undefined;
+  const botIdentity = createFeishuBotIdentityState(creds);
   let stopped = false;
-
-  // Probe bot open_id in background
-  probeFeishu(creds).then((result) => {
-    if (result.ok && result.botOpenId) {
-      botOpenId = result.botOpenId;
-      log.info(`bot open_id resolved: ${botOpenId} (${result.botName ?? ""})`);
-    } else {
-      log.warn(`failed to resolve bot open_id: ${result.error ?? "unknown"}`);
-    }
-  });
 
   // Create event dispatcher + WS client
   const eventDispatcher = createEventDispatcher({
@@ -683,10 +779,13 @@ export function startWebSocketListener(
 
   eventDispatcher.register({
     "im.message.receive_v1": async (data) => {
-      if (stopped) return;
+      const event = data as unknown as FeishuMessageEvent;
+      if (stopped) {
+        logDroppedGroupMessage(event, "connector_stopped");
+        return;
+      }
       try {
-        const event = data as unknown as FeishuMessageEvent;
-        const msg = await processFeishuMessageEvent(client, event, botOpenId, {
+        const msg = await processFeishuMessageEventWithBotIdentity(client, event, botIdentity, {
           authorizeSender,
           onDenied: async (context, reason) => {
             await sendMarkdownCardFeishu(client, context.chatId, feishuAdmissionDenialMessage(reason), {
@@ -698,7 +797,8 @@ export function startWebSocketListener(
           await onMessage(msg);
         }
       } catch (err) {
-        log.error(`error handling message: ${String(err)}`);
+        log.error("error handling message");
+        logDroppedGroupMessage(event, "processing_error", "error");
       }
     },
     "im.message.message_read_v1": async () => {
@@ -706,11 +806,11 @@ export function startWebSocketListener(
     },
     "im.chat.member.bot.added_v1": async (data) => {
       const event = data as unknown as { chat_id: string };
-      log.info(`bot added to chat ${event.chat_id}`);
+      log.info(`bot added to chat chat_hash=${hashIdentifier(event.chat_id)}`);
     },
     "im.chat.member.bot.deleted_v1": async (data) => {
       const event = data as unknown as { chat_id: string };
-      log.info(`bot removed from chat ${event.chat_id}`);
+      log.info(`bot removed from chat chat_hash=${hashIdentifier(event.chat_id)}`);
     },
     // Card action callback — handles form submissions and button clicks
     // Must return a toast response within 3s for Feishu to acknowledge the interaction
@@ -782,6 +882,7 @@ export function startWebSocketListener(
 
   return {
     ready,
+    botOpenIdReady: botIdentity.botOpenIdReady,
     stop() {
       stopped = true;
       wsClient.close({ force: true });
