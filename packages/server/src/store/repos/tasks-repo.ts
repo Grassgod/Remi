@@ -1350,6 +1350,9 @@ export class TasksRepo {
     if (!row) return null;
 
     const task = this.getTaskWithAgent(String(row.id));
+    if (task) {
+      this.syncIssueStatusFromTaskWithinTransaction(task, "in_progress", { rederive: true });
+    }
     if (task) this.ctx.notifyTaskEvent("task:dispatch", task);
     return task;
   }
@@ -1365,7 +1368,7 @@ export class TasksRepo {
       );
       if (result.changes === 0) throw new Error(`Task not found or not dispatched: ${taskId}`);
       const started = this.getTask(taskId)!;
-      this.syncIssueStatusFromTaskWithinTransaction(started, "in_progress");
+      this.syncIssueStatusFromTaskWithinTransaction(started, "in_progress", { rederive: true });
       return started;
     })();
     this.ctx.notifyTaskEvent("task:running", task);
@@ -1433,7 +1436,7 @@ export class TasksRepo {
       );
       if (transition.changes > 0) {
         transitionedTask = this.getTask(input.taskId);
-        if (transitionedTask) this.syncIssueStatusFromTaskWithinTransaction(transitionedTask, "in_review");
+        if (transitionedTask) this.syncIssueStatusFromTaskWithinTransaction(transitionedTask, "in_review", { rederive: true });
       }
       return this.getTaskHumanRequest(id)!;
     })();
@@ -1510,7 +1513,7 @@ export class TasksRepo {
     if (result.changes > 0) {
       const task = this.getTask(taskId);
       if (task) {
-        this.syncIssueStatusFromTaskWithinTransaction(task, "in_progress");
+        this.syncIssueStatusFromTaskWithinTransaction(task, "in_progress", { rederive: true });
         return task;
       }
     }
@@ -2856,7 +2859,11 @@ export class TasksRepo {
   }
 
   /** Caller owns the task/Issue/outbox transaction. */
-  private syncIssueStatusFromTaskWithinTransaction(task: MultiremiTask, status: string): void {
+  private syncIssueStatusFromTaskWithinTransaction(
+    task: MultiremiTask,
+    status: string,
+    options: { rederive?: boolean } = {},
+  ): void {
     if (!task.issueId || task.chatSessionId) return;
     // Serialize against direct Issue mutations before checking terminal state.
     // The no-op write acquires a row lock on Postgres and the writer lock on
@@ -2864,6 +2871,10 @@ export class TasksRepo {
     // cancelled Issue from a stale pre-lock read.
     const locked = this.ctx.db.run("UPDATE multiremi_issues SET id = id WHERE id = ?", [task.issueId]);
     if (locked.changes === 0) return;
+    // Once the Issue row is locked, derive lifecycle state from the current
+    // task rows. Explicit terminal/retry decisions pass rederive=false because
+    // they are not recoverable from the remaining-task set alone.
+    if (options.rederive) status = this.issueStatusForRemainingTasks(task.issueId) ?? status;
     const issue = this.ctx.issues().getIssue(task.issueId);
     // Explicit issue terminal states are user decisions. A late worker event
     // (or a cancellation racing with it) must not reopen accepted/cancelled

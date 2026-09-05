@@ -24,16 +24,21 @@ export function setBucket(
 }
 
 /** Locate which status bucket holds `id`, if any. */
-export function findIssueLocation(
+export function findIssueLocations(
   resp: ListIssuesCache,
   id: string,
-): { status: IssueStatus; issue: Issue } | null {
+): Array<{ status: IssueStatus; issue: Issue }> {
+  const locations: Array<{ status: IssueStatus; issue: Issue }> = [];
   for (const status of PAGINATED_STATUSES) {
     const bucket = resp.byStatus[status];
     const found = bucket?.issues.find((i) => i.id === id);
-    if (found) return { status, issue: found };
+    if (found) locations.push({ status, issue: found });
   }
-  return null;
+  return locations;
+}
+
+export function findIssueLocation(resp: ListIssuesCache, id: string) {
+  return findIssueLocations(resp, id)[0] ?? null;
 }
 
 /** Add an issue to its status bucket (no-op if already present). */
@@ -54,13 +59,15 @@ export function removeIssueFromBuckets(
   resp: ListIssuesCache,
   id: string,
 ): ListIssuesCache {
-  const loc = findIssueLocation(resp, id);
-  if (!loc) return resp;
-  const bucket = getBucket(resp, loc.status);
-  return setBucket(resp, loc.status, {
-    issues: bucket.issues.filter((i) => i.id !== id),
-    total: Math.max(0, bucket.total - 1),
-  });
+  let next = resp;
+  for (const loc of findIssueLocations(resp, id)) {
+    const bucket = getBucket(next, loc.status);
+    next = setBucket(next, loc.status, {
+      issues: bucket.issues.filter((i) => i.id !== id),
+      total: Math.max(0, bucket.total - 1),
+    });
+  }
+  return next;
 }
 
 /**
@@ -73,25 +80,12 @@ export function patchIssueInBuckets(
   id: string,
   patch: Partial<Issue>,
 ): ListIssuesCache {
-  const loc = findIssueLocation(resp, id);
+  const loc = findIssueLocations(resp, id)[0];
   if (!loc) return resp;
   const merged: Issue = { ...loc.issue, ...patch };
   const nextStatus = patch.status ?? loc.status;
-
-  if (nextStatus === loc.status) {
-    const bucket = getBucket(resp, loc.status);
-    return setBucket(resp, loc.status, {
-      ...bucket,
-      issues: bucket.issues.map((i) => (i.id === id ? merged : i)),
-    });
-  }
-
-  const fromBucket = getBucket(resp, loc.status);
-  const toBucket = getBucket(resp, nextStatus);
-  let next = setBucket(resp, loc.status, {
-    issues: fromBucket.issues.filter((i) => i.id !== id),
-    total: Math.max(0, fromBucket.total - 1),
-  });
+  let next = removeIssueFromBuckets(resp, id);
+  const toBucket = getBucket(next, nextStatus);
   next = setBucket(next, nextStatus, {
     issues: [...toBucket.issues, merged],
     total: toBucket.total + 1,

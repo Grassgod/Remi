@@ -121,6 +121,25 @@ export const ARCHIVED_ISSUE_PAGE_SIZE = 50;
 /** Statuses the issues/my-issues pages paginate. Cancelled is intentionally excluded — it has never been surfaced in the list/board views. */
 export const PAGINATED_STATUSES: readonly IssueStatus[] = BOARD_STATUSES;
 
+/** Reconcile fan-out responses against each issue's authoritative status. */
+export function reconcileIssueBuckets(
+  responses: Array<{ status: IssueStatus; issues: Issue[]; total: number }>,
+): ListIssuesCache {
+  const byStatus: ListIssuesCache["byStatus"] = {};
+  const seen = new Set<string>();
+  for (const status of PAGINATED_STATUSES) byStatus[status] = { issues: [], total: 0 };
+  for (const response of responses) {
+    for (const issue of response.issues) {
+      if (seen.has(issue.id)) continue;
+      seen.add(issue.id);
+      const target = byStatus[issue.status];
+      if (target) target.issues.push(issue);
+    }
+  }
+  for (const status of PAGINATED_STATUSES) byStatus[status]!.total = byStatus[status]!.issues.length;
+  return { byStatus };
+}
+
 /** Flatten a bucketed response to a single Issue[] for consumers that want the whole list. */
 export function flattenIssueBuckets(data: ListIssuesCache) {
   const out = [];
@@ -137,12 +156,7 @@ async function fetchFirstPages(filter: MyIssuesFilter = {}, sort?: IssueSortPara
       api.listIssues({ status, limit: ISSUE_PAGE_SIZE, offset: 0, ...sort, ...filter }),
     ),
   );
-  const byStatus: ListIssuesCache["byStatus"] = {};
-  PAGINATED_STATUSES.forEach((status, i) => {
-    const res = responses[i]!;
-    byStatus[status] = { issues: res.issues, total: res.total };
-  });
-  return { byStatus };
+  return reconcileIssueBuckets(responses.map((res, i) => ({ ...res, status: PAGINATED_STATUSES[i]! })));
 }
 
 /**
