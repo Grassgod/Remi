@@ -12,10 +12,9 @@ import {
 import { projectKeys } from "../projects/queries";
 import {
   addIssueToBuckets,
+  appendLoadedPage,
   findIssueLocation,
-  getBucket,
   patchIssueInBuckets,
-  setBucket,
 } from "./cache-helpers";
 import {
   cleanupDeletedIssueCaches,
@@ -91,16 +90,9 @@ export function useLoadMoreByStatus(
         ...sort,
         ...myIssues?.filter,
       });
-      qc.setQueryData<ListIssuesCache>(activeKey, (old) => {
-        if (!old) return old;
-        const prev = getBucket(old, status);
-        const existingIds = new Set(prev.issues.map((i) => i.id));
-        const appended = res.issues.filter((i) => !existingIds.has(i.id));
-        return setBucket(old, status, {
-          issues: [...prev.issues, ...appended],
-          total: res.total,
-        });
-      });
+      qc.setQueryData<ListIssuesCache>(activeKey, (old) =>
+        old ? appendLoadedPage(old, status, res) : old,
+      );
     } finally {
       setIsLoading(false);
     }

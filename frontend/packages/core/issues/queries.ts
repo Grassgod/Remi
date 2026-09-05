@@ -121,6 +121,43 @@ export const ARCHIVED_ISSUE_PAGE_SIZE = 50;
 /** Statuses the issues/my-issues pages paginate. Cancelled is intentionally excluded — it has never been surfaced in the list/board views. */
 export const PAGINATED_STATUSES: readonly IssueStatus[] = BOARD_STATUSES;
 
+/**
+ * Reconcile a per-status fan-out into buckets keyed by each issue's own
+ * `status` field rather than by the status that was requested.
+ *
+ * The fan-out is not a consistent snapshot — it is one request per status,
+ * issued in parallel — so an Issue whose status changes while it is in
+ * flight comes back from two of them. Bucketing by the requested status
+ * then leaves the same id in two columns, and the board's `issueMap`
+ * (last write wins, in `BOARD_STATUSES` order) renders every copy using
+ * the *last* bucket's row. That is how an `in_progress` Issue ends up
+ * drawn under 审核中 while its detail view says 进行中.
+ *
+ * `total` deliberately stays the server's count for the *requested*
+ * status: it is what drives `hasMore` in `useLoadMoreByStatus`, so
+ * replacing it with the reconciled length would report "nothing more to
+ * load" for every column and cap the board at its first page.
+ */
+export function reconcileIssueBuckets(
+  responses: Array<{ status: IssueStatus; issues: Issue[]; total: number }>,
+): ListIssuesCache {
+  const byStatus: ListIssuesCache["byStatus"] = {};
+  for (const status of PAGINATED_STATUSES) byStatus[status] = { issues: [], total: 0 };
+  for (const response of responses) {
+    const requested = byStatus[response.status];
+    if (requested) requested.total = response.total;
+  }
+  const seen = new Set<string>();
+  for (const response of responses) {
+    for (const issue of response.issues) {
+      if (seen.has(issue.id)) continue;
+      seen.add(issue.id);
+      byStatus[issue.status]?.issues.push(issue);
+    }
+  }
+  return { byStatus };
+}
+
 /** Flatten a bucketed response to a single Issue[] for consumers that want the whole list. */
 export function flattenIssueBuckets(data: ListIssuesCache) {
   const out = [];
@@ -137,12 +174,7 @@ async function fetchFirstPages(filter: MyIssuesFilter = {}, sort?: IssueSortPara
       api.listIssues({ status, limit: ISSUE_PAGE_SIZE, offset: 0, ...sort, ...filter }),
     ),
   );
-  const byStatus: ListIssuesCache["byStatus"] = {};
-  PAGINATED_STATUSES.forEach((status, i) => {
-    const res = responses[i]!;
-    byStatus[status] = { issues: res.issues, total: res.total };
-  });
-  return { byStatus };
+  return reconcileIssueBuckets(responses.map((res, i) => ({ ...res, status: PAGINATED_STATUSES[i]! })));
 }
 
 /**

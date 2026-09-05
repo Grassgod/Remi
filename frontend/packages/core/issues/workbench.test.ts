@@ -90,6 +90,59 @@ describe("partitionReviewIssues", () => {
     expect(awaitingInput).toEqual([]);
     expect(awaitingReview).toHaveLength(1);
   });
+
+  // MUL-253: the snapshot and the in_review list are two independent
+  // queries, so they are routinely out of step. Neither direction may drop
+  // an issue or move it out of 审核中 entirely.
+  it("keeps an issue missing from the snapshot in the review bucket", () => {
+    const { awaitingInput, awaitingReview } = partitionReviewIssues(
+      [issue("a"), issue("b")],
+      [task("b", "awaiting_human")],
+    );
+    expect(awaitingReview.map((i) => i.id)).toEqual(["a"]);
+    expect(awaitingInput.map((i) => i.id)).toEqual(["b"]);
+  });
+
+  it("still routes to awaiting-input when the snapshot is stale", () => {
+    // The human already answered and the task went back to `running`, but
+    // this snapshot predates that. The issue stays in 待回复 until the
+    // snapshot refetches — it must not vanish from the workbench.
+    const { awaitingInput, awaitingReview } = partitionReviewIssues(
+      [issue("a")],
+      [task("a", "awaiting_human")],
+    );
+    expect(awaitingInput.map((i) => i.id)).toEqual(["a"]);
+    expect(awaitingReview).toEqual([]);
+  });
+
+  it("ignores snapshot tasks for issues outside the in_review list", () => {
+    const { awaitingInput, awaitingReview } = partitionReviewIssues(
+      [issue("a")],
+      [task("zzz", "awaiting_human"), task("a", "completed")],
+    );
+    expect(awaitingInput).toEqual([]);
+    expect(awaitingReview.map((i) => i.id)).toEqual(["a"]);
+  });
+
+  it("ignores an awaiting_human task with no issue", () => {
+    const orphan = {
+      ...task("a", "awaiting_human"),
+      issue_id: null,
+    } as unknown as AgentTask;
+    const { awaitingInput, awaitingReview } = partitionReviewIssues([issue("a")], [orphan]);
+    expect(awaitingInput).toEqual([]);
+    expect(awaitingReview.map((i) => i.id)).toEqual(["a"]);
+  });
+
+  it("routes an issue with both an awaiting_human and a running task to awaiting-input", () => {
+    // A squad issue can have several live tasks. One agent blocked on a
+    // question is enough to need the human, regardless of the siblings.
+    const { awaitingInput } = partitionReviewIssues(
+      [issue("a")],
+      [task("a", "running"), task("a", "awaiting_human")],
+    );
+    expect(awaitingInput.map((i) => i.id)).toEqual(["a"]);
+  });
 });
 
 describe("useWorkbenchPendingCount", () => {
