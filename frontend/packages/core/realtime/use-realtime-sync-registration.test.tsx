@@ -6,6 +6,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import type { WSClient } from "../api/ws-client";
+import { setApiInstance, type ApiClient } from "../api";
 import { issueKeys } from "../issues/queries";
 import type { WSEventType, WSMessage } from "../types/events";
 import { useRealtimeSync, type RealtimeSyncStores } from "./use-realtime-sync";
@@ -151,6 +152,7 @@ describe("useRealtimeSync — registration / teardown parity", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it("subscribes to exactly the pre-split event set, in the same order", () => {
@@ -287,7 +289,7 @@ describe("useRealtimeSync — registration / teardown parity", () => {
     expect(calls).toContainEqual(["issues", "sessions"]);
   });
 
-  it("invalidates every cached Product Session timeline when a comment arrives before IssueDetail mounts", () => {
+  it("marks every Product Session timeline dirty without invalidating its history pages", () => {
     const issueId = "issue-1";
     const mainTimeline = issueKeys.timeline(issueId, "session-main");
     const reviewTimeline = issueKeys.timeline(issueId, "session-review");
@@ -307,22 +309,70 @@ describe("useRealtimeSync — registration / teardown parity", () => {
       },
     });
 
-    expect(qc.getQueryState(mainTimeline)?.isInvalidated).toBe(true);
-    expect(qc.getQueryState(reviewTimeline)?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(mainTimeline)?.isInvalidated).toBe(false);
+    expect(qc.getQueryState(reviewTimeline)?.isInvalidated).toBe(false);
     expect(qc.getQueryState(otherTimeline)?.isInvalidated).toBe(false);
+    expect(qc.getQueryData(issueKeys.timelineSyncVersion(issueId))).toBe(1);
+    expect(qc.getQueryData(issueKeys.timelineSyncVersion("issue-2"))).toBeUndefined();
   });
 
-  it("restarts an in-flight Product Session timeline request after a newer comment event", async () => {
+  it("reconciles only the latest page after an in-flight timeline request is cancelled", async () => {
     const issueId = "issue-1";
     const queryKey = issueKeys.timeline(issueId, "session-main");
-    let resolveStaleRequest!: (value: Array<{ id: string }>) => void;
-    const staleRequest = new Promise<Array<{ id: string }>>((resolve) => {
+    const oldData = {
+      pages: [
+        {
+          entries: [
+            { type: "comment", id: "c3", actor_type: "member", actor_id: "u", created_at: "2026-01-03T00:00:00Z" },
+            { type: "comment", id: "c4", actor_type: "member", actor_id: "u", created_at: "2026-01-04T00:00:00Z" },
+          ],
+          limit: 2,
+          has_more: true,
+          has_more_before: true,
+          has_more_after: false,
+          next_cursor: "cursor-c3",
+          prev_cursor: null,
+          issue_session_id: "session-main",
+        },
+        {
+          entries: [
+            { type: "comment", id: "c1", actor_type: "member", actor_id: "u", created_at: "2026-01-01T00:00:00Z" },
+            { type: "comment", id: "c2", actor_type: "member", actor_id: "u", created_at: "2026-01-02T00:00:00Z" },
+          ],
+          limit: 2,
+          has_more: false,
+          has_more_before: false,
+          has_more_after: false,
+          next_cursor: null,
+          prev_cursor: null,
+          issue_session_id: "session-main",
+        },
+      ],
+      pageParams: [null, "cursor-c3"],
+    };
+    qc.setQueryData(queryKey, oldData);
+    let resolveStaleRequest!: (value: typeof oldData) => void;
+    const staleRequest = new Promise<typeof oldData>((resolve) => {
       resolveStaleRequest = resolve;
     });
     const queryFn = vi
-      .fn<() => Promise<Array<{ id: string }>>>()
-      .mockImplementationOnce(() => staleRequest)
-      .mockResolvedValue([{ id: "agent-reply" }]);
+      .fn<() => Promise<typeof oldData>>()
+      .mockImplementation(() => staleRequest);
+    const latestPage = {
+      entries: [
+        { type: "comment" as const, id: "c4", actor_type: "member", actor_id: "u", created_at: "2026-01-04T00:00:00Z", content: "edited" },
+        { type: "comment" as const, id: "agent-reply", actor_type: "agent", actor_id: "a", created_at: "2026-01-05T00:00:00Z" },
+      ],
+      limit: 2,
+      has_more: true,
+      has_more_before: true,
+      has_more_after: false,
+      next_cursor: "cursor-c4",
+      prev_cursor: null,
+      issue_session_id: "session-main",
+    };
+    const latestSpy = vi.fn().mockResolvedValue(latestPage);
+    setApiInstance({ listTimelinePage: latestSpy } as unknown as ApiClient);
     const mock = createRecordingWs();
 
     const { result } = renderHook(
@@ -344,12 +394,22 @@ describe("useRealtimeSync — registration / teardown parity", () => {
       });
     });
 
-    await waitFor(() => expect(queryFn).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(result.current.data).toEqual([{ id: "agent-reply" }]));
+    await waitFor(() => expect(latestSpy).toHaveBeenCalledWith(issueId, {
+      issueSessionId: "session-main",
+      limit: 40,
+    }));
+    await waitFor(() => {
+      const ids = result.current.data?.pages
+        .slice()
+        .reverse()
+        .flatMap((page) => page.entries.map((entry) => entry.id));
+      expect(ids).toEqual(["c1", "c2", "c3", "c4", "agent-reply"]);
+    });
+    expect(queryFn).toHaveBeenCalledTimes(1);
 
-    resolveStaleRequest([{ id: "stale-user-comment" }]);
+    resolveStaleRequest(oldData);
     await Promise.resolve();
-    expect(result.current.data).toEqual([{ id: "agent-reply" }]);
+    expect(result.current.data?.pages[0]?.entries.at(-1)?.id).toBe("agent-reply");
   });
 
   it("flushes buffered task:message frames on unmount", () => {

@@ -134,6 +134,7 @@ export type {
 export type { Label, CreateLabelRequest, UpdateLabelRequest, ListLabelsResponse, IssueLabelsResponse } from "./label";
 export type {
   TimelineEntry,
+  TimelinePage,
   AssigneeFrequencyEntry,
 } from "./activity";
 export type { IssueSubscriber } from "./subscriber";

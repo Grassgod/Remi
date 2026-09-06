@@ -79,6 +79,8 @@ import { IssueSessionsRepo } from "@multiremi/store/repos/issue-sessions-repo.js
 import { ChatRepo } from "@multiremi/store/repos/chat-repo.js";
 import {
   IssuesRepo,
+  type IssueTimelineCursor,
+  type IssueTimelinePageResult,
   type BeginIssueDeletionResult,
   type IssueMutationActivityContext,
 } from "@multiremi/store/repos/issues-repo.js";
@@ -3094,6 +3096,14 @@ runMigrations(this.db);
     return this.issues.listIssueTimeline(issueId, options);
   }
 
+  listIssueTimelinePage(issueId: string, options: {
+    issueSessionId?: string | null;
+    before?: IssueTimelineCursor | null;
+    limit: number;
+  }): IssueTimelinePageResult {
+    return this.issues.listIssueTimelinePage(issueId, options);
+  }
+
   listIssueSubscribers(issueId: string): MultiremiIssueSubscriber[] {
     return this.issues.listIssueSubscribers(issueId);
   }
@@ -3210,6 +3220,10 @@ runMigrations(this.db);
     return this.issues.listCommentReactions(commentId);
   }
 
+  listCommentReactionsForComments(commentIds: string[]): Map<string, MultiremiCommentReaction[]> {
+    return this.issues.listCommentReactionsForComments(commentIds);
+  }
+
   addCommentReaction(commentId: string, input: { actorType?: string; actorId?: string | null; emoji: string }): MultiremiCommentReaction {
     return this.issues.addCommentReaction(commentId, input);
   }
@@ -3236,6 +3250,10 @@ runMigrations(this.db);
 
   listAttachmentsForComment(commentId: string): MultiremiAttachment[] {
     return this.issues.listAttachmentsForComment(commentId);
+  }
+
+  listAttachmentsForComments(commentIds: string[]): Map<string, MultiremiAttachment[]> {
+    return this.issues.listAttachmentsForComments(commentIds);
   }
 
   listAttachmentsForChatMessage(chatMessageId: string): MultiremiAttachment[] {

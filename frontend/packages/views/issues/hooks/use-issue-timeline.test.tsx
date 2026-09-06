@@ -18,6 +18,10 @@ const stableHandles = vi.hoisted(() => ({
 // WS event registry — captured handlers per event name so tests can simulate
 // server pushes by invoking them directly.
 const wsHandlers = vi.hoisted(() => new Map<string, (payload: unknown) => void>());
+const reconnectHandlers = vi.hoisted(() => [] as Array<() => void>);
+const timelineCacheSpies = vi.hoisted(() => ({
+  refreshLatest: vi.fn(async () => {}),
+}));
 
 vi.mock("@multiremi/core/issues/comment-mutations", () => ({
   useCreateComment: () => ({
@@ -48,9 +52,9 @@ vi.mock("@multiremi/core/issues/comment-mutations", () => ({
 }));
 
 vi.mock("@multiremi/core/issues/queries", () => ({
-  issueTimelineOptions: (id: string, sessionId?: string) => ({
+  issueTimelinePageOptions: (id: string, sessionId?: string) => ({
     queryKey: ["issues", "timeline", id, sessionId ?? "all"],
-    queryFn: () => Promise.resolve([]),
+    queryFn: () => Promise.resolve({ pages: [], pageParams: [] }),
   }),
   issueKeys: {
     timeline: (id: string, sessionId?: string) => [
@@ -59,8 +63,25 @@ vi.mock("@multiremi/core/issues/queries", () => ({
       id,
       sessionId ?? "all",
     ],
+    timelineSyncVersion: (id: string) => ["issues", "timeline-sync", id, "version"],
+    timelineSyncApplied: (id: string, sessionId?: string) => [
+      "issues",
+      "timeline-sync",
+      id,
+      sessionId ?? "all",
+    ],
   },
 }));
+
+vi.mock("@multiremi/core/issues/timeline-cache", async () => {
+  const actual = await vi.importActual<typeof import("@multiremi/core/issues/timeline-cache")>(
+    "@multiremi/core/issues/timeline-cache",
+  );
+  return {
+    ...actual,
+    refreshIssueTimelineLatestPage: timelineCacheSpies.refreshLatest,
+  };
+});
 
 // Hoisted state controllable from tests — represents what useQuery would
 // return for the current render.
@@ -73,11 +94,13 @@ const queryState = vi.hoisted(() => ({
 // can assert what would have been written.
 const cacheUpdates = vi.hoisted(() => ({
   last: null as unknown,
+  raw: null as unknown,
 }));
 
 const queryClientSpies = vi.hoisted(() => ({
   getQueryState: vi.fn(),
-  refetchQueries: vi.fn(),
+  getQueryData: vi.fn(),
+  invalidateQueries: vi.fn(),
 }));
 
 vi.mock("@tanstack/react-query", async () => {
@@ -86,21 +109,58 @@ vi.mock("@tanstack/react-query", async () => {
   );
   return {
     ...actual,
-    useQuery: () => ({
-      data: queryState.data,
+    useInfiniteQuery: () => ({
+      data: Array.isArray(queryState.data)
+        ? {
+            pages: [{
+              entries: queryState.data,
+              limit: 40,
+              has_more: false,
+              has_more_before: false,
+              has_more_after: false,
+              next_cursor: null,
+              prev_cursor: null,
+              issue_session_id: null,
+            }],
+            pageParams: [null],
+          }
+        : queryState.data,
       isLoading: queryState.isLoading,
+      fetchNextPage: vi.fn(async () => {}),
+      hasNextPage: false,
+      isFetchingNextPage: false,
     }),
     useQueryClient: () => ({
-      invalidateQueries: vi.fn(),
+      invalidateQueries: queryClientSpies.invalidateQueries,
       setQueryData: vi.fn((_key: unknown, updater: unknown) => {
-        cacheUpdates.last = typeof updater === "function"
-          ? (updater as (old: unknown) => unknown)(queryState.data)
+        const current = Array.isArray(queryState.data)
+          ? {
+              pages: [{
+                entries: queryState.data,
+                limit: 40,
+                has_more: false,
+                has_more_before: false,
+                has_more_after: false,
+                next_cursor: null,
+                prev_cursor: null,
+                issue_session_id: null,
+              }],
+              pageParams: [null],
+            }
+          : queryState.data;
+        const updated = typeof updater === "function"
+          ? (updater as (old: unknown) => unknown)(current)
           : updater;
+        cacheUpdates.raw = updated;
+        cacheUpdates.last = updated && typeof updated === "object" && "pages" in updated
+          ? [...((updated as { pages: Array<{ entries: unknown[] }> }).pages)]
+              .reverse()
+              .flatMap((page) => page.entries)
+          : updated;
       }),
-      getQueryData: vi.fn(),
+      getQueryData: queryClientSpies.getQueryData,
       getQueryState: queryClientSpies.getQueryState,
       cancelQueries: vi.fn(),
-      refetchQueries: queryClientSpies.refetchQueries,
     }),
     useMutationState: () => [],
   };
@@ -110,7 +170,9 @@ vi.mock("@multiremi/core/realtime", () => ({
   useWSEvent: (event: string, handler: (payload: unknown) => void) => {
     wsHandlers.set(event, handler);
   },
-  useWSReconnect: vi.fn(),
+  useWSReconnect: (handler: () => void) => {
+    reconnectHandlers.push(handler);
+  },
 }));
 
 vi.mock("sonner", () => ({
@@ -122,11 +184,15 @@ import { useIssueTimeline } from "./use-issue-timeline";
 describe("useIssueTimeline", () => {
   beforeEach(() => {
     wsHandlers.clear();
+    reconnectHandlers.length = 0;
     queryState.data = [];
     queryState.isLoading = false;
     cacheUpdates.last = null;
+    cacheUpdates.raw = null;
     queryClientSpies.getQueryState.mockReset();
-    queryClientSpies.refetchQueries.mockReset();
+    queryClientSpies.getQueryData.mockReset().mockReturnValue(0);
+    queryClientSpies.invalidateQueries.mockReset();
+    timelineCacheSpies.refreshLatest.mockClear();
   });
 
   // CommentCard is wrapped in React.memo (perf fix for long timelines, see
@@ -166,7 +232,7 @@ describe("useIssueTimeline", () => {
     expect(result.current.timeline.map((e) => e.id)).toEqual(["c1", "c2", "c3"]);
   });
 
-  it("refetches an invalidated idle timeline after local WS subscriptions mount", () => {
+  it("refreshes only the latest page after local WS subscriptions mount", () => {
     queryClientSpies.getQueryState.mockReturnValue({
       isInvalidated: true,
       fetchStatus: "idle",
@@ -174,13 +240,14 @@ describe("useIssueTimeline", () => {
 
     renderHook(() => useIssueTimeline("issue-1", "user-1", "session-main"));
 
-    expect(queryClientSpies.refetchQueries).toHaveBeenCalledWith({
-      queryKey: ["issues", "timeline", "issue-1", "session-main"],
-      type: "active",
-    });
+    expect(timelineCacheSpies.refreshLatest).toHaveBeenCalledWith(
+      expect.anything(),
+      "issue-1",
+      "session-main",
+    );
   });
 
-  it("does not refetch a fresh timeline during mount reconciliation", () => {
+  it("does not refresh a fresh timeline during mount reconciliation", () => {
     queryClientSpies.getQueryState.mockReturnValue({
       isInvalidated: false,
       fetchStatus: "idle",
@@ -188,7 +255,73 @@ describe("useIssueTimeline", () => {
 
     renderHook(() => useIssueTimeline("issue-1", "user-1", "session-main"));
 
-    expect(queryClientSpies.refetchQueries).not.toHaveBeenCalled();
+    expect(timelineCacheSpies.refreshLatest).not.toHaveBeenCalled();
+  });
+
+  it("reconciles a global dirty generation without invalidating history pages", () => {
+    queryClientSpies.getQueryState.mockReturnValue({
+      isInvalidated: false,
+      fetchStatus: "idle",
+    });
+    queryClientSpies.getQueryData.mockImplementation((key: unknown) =>
+      Array.isArray(key) && key.at(-1) === "version" ? 2 : 1,
+    );
+
+    renderHook(() => useIssueTimeline("issue-1", "user-1", "session-main"));
+
+    expect(timelineCacheSpies.refreshLatest).toHaveBeenCalledWith(
+      expect.anything(),
+      "issue-1",
+      "session-main",
+    );
+    expect(queryClientSpies.invalidateQueries).not.toHaveBeenCalled();
+  });
+
+  it("does not turn a granular WS cache update into a latest-page refetch", () => {
+    queryClientSpies.getQueryState.mockReturnValue({
+      isInvalidated: false,
+      fetchStatus: "idle",
+    });
+    const { rerender } = renderHook(() =>
+      useIssueTimeline("issue-1", "user-1", "session-main"),
+    );
+    expect(timelineCacheSpies.refreshLatest).not.toHaveBeenCalled();
+
+    queryClientSpies.getQueryData.mockImplementation((key: unknown) =>
+      Array.isArray(key) && key.at(-1) === "version" ? 1 : 0,
+    );
+    act(() => wsHandlers.get("comment:created")!({
+      comment: {
+        id: "new-comment",
+        issue_id: "issue-1",
+        issue_session_id: "session-main",
+        author_type: "member",
+        author_id: "user-1",
+        content: "new",
+        parent_id: null,
+        created_at: "2026-05-06T04:00:00Z",
+        updated_at: "2026-05-06T04:00:00Z",
+        type: "comment",
+        reactions: [],
+        attachments: [],
+      },
+    }));
+    queryState.data = cacheUpdates.raw;
+    rerender();
+
+    expect(timelineCacheSpies.refreshLatest).not.toHaveBeenCalled();
+  });
+
+  it("refreshes only the latest page after a websocket reconnect", () => {
+    renderHook(() => useIssueTimeline("issue-1", "user-1", "session-main"));
+
+    act(() => reconnectHandlers[0]!());
+
+    expect(timelineCacheSpies.refreshLatest).toHaveBeenCalledWith(
+      expect.anything(),
+      "issue-1",
+      "session-main",
+    );
   });
 
   it("comment:created appends the new entry to the cache", () => {
@@ -243,7 +376,7 @@ describe("useIssueTimeline", () => {
     expect(updated[0]?.task_id).toBe("tsk_run_1");
   });
 
-  it("comment:created inserts at the correct sorted position by created_at", () => {
+  it("comment:created appends to the newest page without re-sorting", () => {
     queryState.data = [
       { type: "comment", id: "c1", actor_type: "member", actor_id: "u", created_at: "2026-05-06T01:00:00Z" },
       { type: "comment", id: "c3", actor_type: "member", actor_id: "u", created_at: "2026-05-06T03:00:00Z" },
@@ -268,10 +401,10 @@ describe("useIssueTimeline", () => {
       });
     });
     const updated = cacheUpdates.last as Array<{ id: string }>;
-    expect(updated.map((e) => e.id)).toEqual(["c1", "c2", "c3"]);
+    expect(updated.map((e) => e.id)).toEqual(["c1", "c3", "c2"]);
   });
 
-  it("comment:created re-sorts when the new entry is oldest", () => {
+  it("comment:created still appends when an event carries an older timestamp", () => {
     queryState.data = [
       { type: "comment", id: "c2", actor_type: "member", actor_id: "u", created_at: "2026-05-06T02:00:00Z" },
       { type: "comment", id: "c3", actor_type: "member", actor_id: "u", created_at: "2026-05-06T03:00:00Z" },
@@ -296,7 +429,7 @@ describe("useIssueTimeline", () => {
       });
     });
     const updated = cacheUpdates.last as Array<{ id: string }>;
-    expect(updated.map((e) => e.id)).toEqual(["c1", "c2", "c3"]);
+    expect(updated.map((e) => e.id)).toEqual(["c2", "c3", "c1"]);
   });
 
   it("ignores WS events for other issues", () => {
@@ -324,13 +457,94 @@ describe("useIssueTimeline", () => {
     expect(cacheUpdates.last).toBeNull();
   });
 
-  // The global useRealtimeSync handler now uses refetchType: "none" for
-  // timeline events, which means useIssueTimeline must own the granular
-  // cache update for every event that mutates the timeline — including
-  // comment:resolved / comment:unresolved. Without these handlers the
-  // resolve toggle on a thread root would only update the cache when the
-  // user remounts IssueDetail (the stale flag triggers a refetch), so the
-  // bar/expanded view would lag the click by a navigation cycle.
+  it("comment:updated traverses older loaded pages", () => {
+    queryState.data = {
+      pages: [
+        { entries: [{ type: "comment", id: "newer", actor_type: "member", actor_id: "u", created_at: "2026-05-06T02:00:00Z" }] },
+        { entries: [{ type: "comment", id: "older", actor_type: "member", actor_id: "u", content: "old", created_at: "2026-05-06T01:00:00Z" }] },
+      ],
+      pageParams: [null, "cursor"],
+    };
+    renderHook(() => useIssueTimeline("issue-1", "user-1", "session-main"));
+
+    act(() => wsHandlers.get("comment:updated")!({
+      comment: {
+        id: "older",
+        issue_id: "issue-1",
+        issue_session_id: "session-main",
+        author_type: "member",
+        author_id: "u",
+        content: "edited",
+        parent_id: null,
+        created_at: "2026-05-06T01:00:00Z",
+        updated_at: "2026-05-06T03:00:00Z",
+        type: "comment",
+        reactions: [],
+        attachments: [],
+      },
+    }));
+
+    const updated = cacheUpdates.raw as { pages: Array<{ entries: Array<{ id: string; content?: string }> }> };
+    expect(updated.pages[1]!.entries[0]).toMatchObject({ id: "older", content: "edited" });
+  });
+
+  it("comment:deleted cascades through parent and replies split across pages", () => {
+    queryState.data = {
+      pages: [
+        { entries: [
+          { type: "comment", id: "child", parent_id: "root", actor_type: "member", actor_id: "u", created_at: "2026-05-06T02:00:00Z" },
+          { type: "comment", id: "grandchild", parent_id: "child", actor_type: "member", actor_id: "u", created_at: "2026-05-06T03:00:00Z" },
+        ] },
+        { entries: [
+          { type: "comment", id: "root", actor_type: "member", actor_id: "u", created_at: "2026-05-06T01:00:00Z" },
+          { type: "comment", id: "sibling", actor_type: "member", actor_id: "u", created_at: "2026-05-06T01:30:00Z" },
+        ] },
+      ],
+      pageParams: [null, "cursor"],
+    };
+    renderHook(() => useIssueTimeline("issue-1", "user-1", "session-main"));
+
+    act(() => wsHandlers.get("comment:deleted")!({
+      issue_id: "issue-1",
+      comment_id: "root",
+    }));
+
+    const updated = cacheUpdates.last as Array<{ id: string }>;
+    expect(updated.map((entry) => entry.id)).toEqual(["sibling"]);
+  });
+
+  it("reaction:added updates a comment in an older page", () => {
+    queryState.data = {
+      pages: [
+        { entries: [{ type: "comment", id: "newer", actor_type: "member", actor_id: "u", created_at: "2026-05-06T02:00:00Z" }] },
+        { entries: [{ type: "comment", id: "older", actor_type: "member", actor_id: "u", reactions: [], created_at: "2026-05-06T01:00:00Z" }] },
+      ],
+      pageParams: [null, "cursor"],
+    };
+    renderHook(() => useIssueTimeline("issue-1", "user-1", "session-main"));
+
+    act(() => wsHandlers.get("reaction:added")!({
+      issue_id: "issue-1",
+      reaction: {
+        id: "reaction-1",
+        comment_id: "older",
+        actor_type: "member",
+        actor_id: "user-1",
+        emoji: "thumbsup",
+        created_at: "2026-05-06T03:00:00Z",
+      },
+    }));
+
+    const updated = cacheUpdates.raw as { pages: Array<{ entries: Array<{ id: string; reactions?: Array<{ id: string }> }> }> };
+    expect(updated.pages[1]!.entries[0]?.reactions).toEqual([
+      expect.objectContaining({ id: "reaction-1" }),
+    ]);
+  });
+
+  // The global fallback only records a dirty generation, so useIssueTimeline
+  // must own the immediate granular update for every event — including
+  // comment:resolved / comment:unresolved. Without these handlers the bar or
+  // expanded view would lag until the next page-zero reconciliation.
   it("comment:resolved updates the matching entry in place with the new resolved fields", () => {
     queryState.data = [
       {

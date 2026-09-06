@@ -423,7 +423,7 @@ describe("Multiremi API — comments, reactions, and attachments", () => {
     expect(wrappedTimelineBody.entries[0].createdAt).toBeDefined();
     expect(wrappedTimelineBody.entries[wrappedTimelineBody.target_index].id).toBe(rootBody.comment.id);
     for (let index = 1; index < wrappedTimelineBody.entries.length; index++) {
-      expect(wrappedTimelineBody.entries[index - 1].created_at >= wrappedTimelineBody.entries[index].created_at).toBe(true);
+      expect(wrappedTimelineBody.entries[index - 1].created_at <= wrappedTimelineBody.entries[index].created_at).toBe(true);
     }
 
     const deleteTarget = store.createIssueComment(issue.id, { body: "Compatibility delete target" });

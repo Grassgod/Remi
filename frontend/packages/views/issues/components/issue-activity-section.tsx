@@ -54,6 +54,8 @@ interface IssueActivitySectionProps {
   onShowKeyResults: () => void;
 }
 
+const ISSUE_TIMELINE_INITIAL_FIRST_ITEM_INDEX = 1_000_000;
+
 /**
  * The issue's conversation: subscribers header, live agent card, published
  * results, the timeline itself (virtualized or flat) and the single composer.
@@ -80,7 +82,8 @@ export function IssueActivitySection({
   const { getActorName } = useActorName();
 
   const {
-    timeline, loading: timelineLoading,
+    timeline, latestTimeline, loading: timelineLoading,
+    fetchOlderTimeline, hasOlderTimeline, isFetchingOlderTimeline,
     submitComment, submitReply,
     editComment, deleteComment, toggleResolveComment, toggleReaction: handleToggleReaction,
   } = useIssueTimeline(issueId, currentUserId, activeIssueSessionId || undefined, Boolean(activeIssueSessionId));
@@ -147,25 +150,43 @@ export function IssueActivitySection({
     () => flattenGroups(timelineView.groups, expandedResolved),
     [timelineView.groups, expandedResolved],
   );
+  const latestItems = useMemo<TimelineItem[]>(
+    () => flattenGroups(buildTimelineView(latestTimeline).groups, expandedResolved),
+    [latestTimeline, expandedResolved],
+  );
+  // Activity events can collapse into a single visual group. Derive the
+  // prepend delta from rendered rows so Virtuoso's logical index decreases by
+  // exactly the number of rows inserted above the current viewport.
+  const olderItemCount = Math.max(0, items.length - latestItems.length);
+  const firstItemIndex = items.length > 0
+    ? ISSUE_TIMELINE_INITIAL_FIRST_ITEM_INDEX - olderItemCount
+    : 0;
 
-  // ── Open at latest ────────────────────────────────────────────────
-  // The timeline reads oldest→newest, so a long conversation used to open
-  // with its newest activity below the fold. Land the first render of each
-  // (issue, session) on the last entry instead. One-shot by design:
-  // followOutput stays off (see the Virtuoso props), so after landing the
-  // scroll position belongs to the user — the sticky "jump to latest" chip
-  // (visible whenever the viewport is away from the bottom) is the way back.
-  const virtuosoRef = useRef<VirtuosoHandle | null>(null);
-  const landedKeyRef = useRef<string | null>(null);
-  const [atBottom, setAtBottom] = useState(true);
-  const landKey = `${wsId}:${issueId}:${activeIssueSessionId}`;
+  const highlightLoaded = !highlightCommentId
+    || timeline.some((entry) => entry.id === highlightCommentId);
   useEffect(() => {
-    if (highlightCommentId) return; // the deep-link path owns positioning
-    if (landedKeyRef.current === landKey) return;
-    if (timelineLoading || items.length === 0 || !virtuosoRef.current) return;
-    landedKeyRef.current = landKey;
-    virtuosoRef.current.scrollToIndex({ index: items.length - 1, align: "end" });
-  }, [highlightCommentId, landKey, timelineLoading, items.length, scrollContainerEl]);
+    if (
+      !highlightCommentId
+      || highlightLoaded
+      || !hasOlderTimeline
+      || isFetchingOlderTimeline
+    ) return;
+    // The explicit deep-link render path is flat rather than virtualized, so
+    // it has no startReached callback to pull a target outside page zero.
+    void fetchOlderTimeline();
+  }, [
+    fetchOlderTimeline,
+    hasOlderTimeline,
+    highlightCommentId,
+    highlightLoaded,
+    isFetchingOlderTimeline,
+  ]);
+
+  // The initial window is chronological and mounts directly at its last row.
+  // There is no post-fetch imperative scroll, so opening does not first paint
+  // at the top and then jump to the bottom.
+  const virtuosoRef = useRef<VirtuosoHandle | null>(null);
+  const [atBottom, setAtBottom] = useState(true);
 
   const jumpToLatest = useCallback(() => {
     virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end", behavior: "smooth" });
@@ -396,16 +417,28 @@ export function IssueActivitySection({
                 key={`${wsId}:${issueId}:${activeIssueSessionId}`}
                 customScrollParent={scrollContainerEl}
                 data={items}
+                firstItemIndex={firstItemIndex}
+                initialTopMostItemIndex={{ index: "LAST", align: "end" }}
                 increaseViewportBy={{ top: 800, bottom: 800 }}
                 computeItemKey={(_i, item) => `${item.kind}:${item.id}`}
                 skipAnimationFrameInResizeObserver
                 atBottomThreshold={120}
                 atBottomStateChange={setAtBottom}
-                // followOutput intentionally NOT set. Virtuoso treats
-                // it as a sticky "is at bottom" flag and resets
-                // scrollTop to maxScrollTop on every height-change
-                // tick — issue-detail is document-shaped, not chat.
-                // The open-at-latest effect + jump chip above replace it.
+                followOutput={() => (
+                  !isFetchingOlderTimeline && atBottom ? "smooth" : false
+                )}
+                startReached={() => {
+                  if (hasOlderTimeline && !isFetchingOlderTimeline) {
+                    void fetchOlderTimeline();
+                  }
+                }}
+                components={{
+                  Header: () => isFetchingOlderTimeline ? (
+                    <div className="pb-3 text-center text-xs text-muted-foreground">
+                      {t(($) => $.activity.loading_older)}
+                    </div>
+                  ) : null,
+                }}
                 itemContent={renderItem}
               />
               {!atBottom && (

@@ -18,8 +18,10 @@ import { useRecentContextStore } from "@multiremi/core/chat";
 import {
   findCachedIssue,
   issueDetailOptions,
+  issueTimelinePrimerOptions,
   issueUsageOptions,
 } from "@multiremi/core/issues/queries";
+import { seedIssueTimelinePage } from "@multiremi/core/issues/timeline-cache";
 import { projectDetailOptions } from "@multiremi/core/projects/queries";
 import { issueLabelsOptions } from "@multiremi/core/labels";
 import { memberListOptions, agentListOptions } from "@multiremi/core/workspace/queries";
@@ -81,6 +83,25 @@ export function IssueDetail({
   const paths = useWorkspacePaths();
 
   const wsId = useWorkspaceId();
+  const queryClient = useQueryClient();
+  const timelinePrimerStartRef = useRef({ issueId: id, startedAt: Date.now() });
+  if (timelinePrimerStartRef.current.issueId !== id) {
+    timelinePrimerStartRef.current = { issueId: id, startedAt: Date.now() };
+  }
+  const timelinePrimer = useQuery({
+    ...issueTimelinePrimerOptions(id),
+    enabled: !initialIssueSessionId,
+  });
+  useEffect(() => {
+    if (timelinePrimer.data) {
+      seedIssueTimelinePage(
+        queryClient,
+        id,
+        timelinePrimer.data,
+        timelinePrimerStartRef.current.startedAt,
+      );
+    }
+  }, [id, queryClient, timelinePrimer.data]);
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const sessions = useIssueSessionSelection(
@@ -95,7 +116,6 @@ export function IssueDetail({
     members.find((m) => m.user_id === user?.id)?.role ?? null;
   const canModerateComments =
     currentUserRole === "owner" || currentUserRole === "admin";
-  const queryClient = useQueryClient();
   const { getActorName } = useActorName();
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: layoutId,
