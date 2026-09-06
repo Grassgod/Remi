@@ -14,6 +14,38 @@ EnvironmentFile=%h/.config/remi/66-8-remi.env
 Run `systemd-analyze verify` on the completed unit before restarting it. Do not
 paste the populated file into source control, logs, issues, or pull requests.
 
+## Heartbeats and network recovery
+
+Runtime availability is derived from control-plane heartbeats and the
+[freshness window](../../packages/contracts/src/runtime-health.ts), not from SSH
+connectivity or whether the machine is powered on. A ready local `/health`
+response does not prove that the control plane is still receiving heartbeats.
+
+The [daemon client](../../packages/server/src/worker/client.ts) applies a default
+30-second deadline to control-plane JSON requests, including connection setup,
+response headers, and body reads for both successful and error responses. This
+bounds heartbeat, plugin configuration, and task claim requests that would
+otherwise block subsequent polling. Archive content uploads retain their
+separate timeout budget.
+
+The running [poll loop](../../packages/server/src/worker/daemon.ts) logs transient
+failures and retries at the polling interval (3 seconds by default). Timeout
+errors identify the method, path, and deadline. The same daemon resumes polling
+when the connection recovers; the HTTP client does not automatically replay
+writes. Authority failures such as 401, 403, and 410 still enter terminal cleanup,
+and `--once` still surfaces request failures to its caller.
+
+Stopping the daemon cancels pending heartbeat and plugin configuration requests.
+Task claims, execution, and durable reports keep their existing drain semantics.
+These deadlines do not resolve operating-system network permissions, service
+launch configuration, or synchronous event-loop blocking.
+
+The [client tests](../../tests/unit/multiremi/multiremi-daemon-client.test.ts) and
+[HTTP recovery tests](../../tests/integration/multiremi-daemon-heartbeat.test.ts)
+cover connection loss/reopening, stalled headers and bodies, stalled plugin
+queries and claims, 503 responses, and shutdown cancellation using isolated
+databases and directories without contacting a production Runtime.
+
 ## Required settings
 
 | Variable | Purpose | Missing or invalid behavior |

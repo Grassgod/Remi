@@ -17,6 +17,7 @@ import type { ElicitationCreateParams, ElicitationResult, PermissionOutcome, Req
 import { answersToElicitationContent, elicitationToQuestions } from "@shared/contracts/acp-elicitation.js";
 import type { AgentResponse, Provider } from "@shared/contracts/provider-types.js";
 import {
+  DEFAULT_DAEMON_REQUEST_TIMEOUT_MS,
   isTerminalDaemonAuthorityError,
   MultiremiDaemonClient,
   MultiremiDaemonHttpError,
@@ -351,6 +352,8 @@ export interface MultiremiDaemonOptions {
   provider?: string;
   workspaceId?: string | null;
   pollIntervalMs?: number;
+  /** Deadline for control-plane JSON requests; archive uploads have a separate budget. */
+  requestTimeoutMs?: number;
   maxConcurrency?: number;
   once?: boolean;
   providerFactory?: MultiremiDaemonProviderFactory;
@@ -594,6 +597,7 @@ export class MultiremiDaemon {
   private workspaceSettings = new Map<string, Record<string, unknown>>();
   private workspaceRelays = new Map<string, MultiremiRelayWire | undefined>();
   private stopped = false;
+  private pollAbort = new AbortController();
   private startedAt = new Date();
   private ready = false;
   private activeTaskCount = 0;
@@ -695,6 +699,7 @@ export class MultiremiDaemon {
       provider: options.provider ?? process.env.MULTIREMI_PROVIDER ?? "claude",
       workspaceId: options.workspaceId ?? process.env.MULTIREMI_WORKSPACE_ID ?? "local",
       pollIntervalMs: options.pollIntervalMs ?? parseInt(process.env.MULTIREMI_POLL_INTERVAL_MS ?? "3000", 10),
+      requestTimeoutMs: options.requestTimeoutMs ?? DEFAULT_DAEMON_REQUEST_TIMEOUT_MS,
       maxConcurrency: resolveDaemonConcurrency(options.maxConcurrency ?? numberEnv(process.env.MULTIREMI_MAX_CONCURRENCY, 0)),
       once: options.once ?? false,
       launchedBy: options.launchedBy ?? process.env.MULTIREMI_LAUNCHED_BY ?? null,
@@ -759,6 +764,7 @@ export class MultiremiDaemon {
       : [...TERMINAL_AUTHORITY_CLEANUP_RETRY_DELAYS_MS];
     this.localSkillRoots = options.localSkillRoots ?? {};
     this.client = new MultiremiDaemonClient(options.serverUrl, this.options.token, {
+      requestTimeoutMs: this.options.requestTimeoutMs,
       sessionArchiveUploadBaseUrl: options.sessionArchiveUploadBaseUrl === undefined
         ? process.env.MULTIREMI_ARCHIVE_UPLOAD_BASE_URL ?? null
         : options.sessionArchiveUploadBaseUrl,
@@ -928,6 +934,7 @@ export class MultiremiDaemon {
     this.startedAt = new Date();
     this.ready = false;
     this.stopped = false;
+    this.pollAbort = new AbortController();
     this.claimsPaused = false;
     this.serverDrainActive = false;
     this.appliedDrainGeneration = 0;
@@ -986,6 +993,7 @@ export class MultiremiDaemon {
             },
             this.botMenuPublisher !== null,
             this.feishuConcierge !== null,
+            this.pollAbort.signal,
           );
           const skipClaim = await this.handleHeartbeatAck(this.options.runtimeId!, ack);
           if (!skipClaim && !this.stopped) {
@@ -1042,7 +1050,8 @@ export class MultiremiDaemon {
             await this.stopAfterTerminalAuthority();
             break;
           }
-          if (this.stopped || this.options.once) throw err;
+          if (this.stopped) break;
+          if (this.options.once) throw err;
           log.warn(`daemon poll loop error, retrying in ${this.options.pollIntervalMs}ms: ${err instanceof Error ? err.message : String(err)}`);
           await sleep(this.options.pollIntervalMs);
         }
@@ -1797,7 +1806,7 @@ export class MultiremiDaemon {
     const abort = new AbortController();
     this.agentPluginReconcileAbort = abort;
     try {
-      const desired = await this.client.getRuntimeAgentPluginDesired(runtimeId);
+      const desired = await this.client.getRuntimeAgentPluginDesired(runtimeId, abort.signal);
       if (desired.runtime_id && desired.runtime_id !== runtimeId) {
         throw new Error(`Agent Plugin desired state belongs to Runtime ${desired.runtime_id}, expected ${runtimeId}`);
       }
@@ -1866,6 +1875,7 @@ export class MultiremiDaemon {
 
   stop(): void {
     this.stopped = true;
+    this.pollAbort.abort();
     // stop() is synchronous and may be called while start() is sleeping. Clear
     // the timer immediately; start()'s finally block waits for any current run.
     this.stopGcLoop();
