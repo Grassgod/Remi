@@ -55,6 +55,12 @@ describe("Multiremi store — chat sessions and private agent access", () => {
       workDir: "/tmp/multiremi-chat",
     });
 
+    // Preserve insertion order even when the database timestamp cannot break ties.
+    (store as any).db.run(
+      "UPDATE multiremi_chat_messages SET created_at = ? WHERE chat_session_id = ?",
+      ["2026-09-05T00:00:00.000Z", session.id],
+    );
+
     const messages = store.listChatMessages(session.id);
     expect(messages.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(messages[1]?.body).toBe("Start with a small patch.");
@@ -93,6 +99,7 @@ describe("Multiremi store — chat sessions and private agent access", () => {
 
     expect(sent.task.issueId).toBe(issue.id);
     expect(sent.task.issueSessionId).toBeNull();
+    expect(sent.task.holdsWorkspace).toBe(false);
     expect(store.getTaskWithAgent(sent.task.id)?.issue?.key).toBe(issue.key);
   });
 

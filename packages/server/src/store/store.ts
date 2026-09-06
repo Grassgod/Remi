@@ -4018,6 +4018,10 @@ runMigrations(this.db);
     return this.chat.sendChatMessage(chatSessionId, input);
   }
 
+  appendChatMessageWithinTransaction(input: Parameters<ChatRepo["appendChatMessageWithinTransaction"]>[0]): MultiremiChatMessage {
+    return this.chat.appendChatMessageWithinTransaction(input);
+  }
+
   createPendingAgentIssueUpdateWithinTransaction(chatSessionId: string, body: string): {
     session: MultiremiChatSession;
     message: MultiremiChatMessage;

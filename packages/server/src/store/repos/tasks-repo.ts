@@ -352,7 +352,7 @@ export class TasksRepo {
       throw new Error("holds_workspace must be a boolean");
     }
     const holdsWorkspace = issueId
-      ? (requestedHoldsWorkspace ?? (chatSession ? false : issueSession?.holdsWorkspace ?? true))
+      ? (requestedHoldsWorkspace ?? issueSession?.holdsWorkspace ?? true)
       : true;
     let runtimeId = resolveOptionalStringField(input, "runtimeId", "runtime_id", agent.runtimeId);
     if (runtimeId && !this.ctx.runtimes().getRuntime(runtimeId)) throw new Error(`Runtime not found: ${runtimeId}`);
@@ -2701,12 +2701,16 @@ export class TasksRepo {
       const failureReason = status === "failed" ? task.failureReason : null;
       const elapsedMs = computeChatElapsedMs(task);
       const messageId = createId("msg");
-      this.ctx.db.run(
-        `INSERT INTO multiremi_chat_messages (
-          id, chat_session_id, task_id, role, body, failure_reason, elapsed_ms, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [messageId, task.chatSessionId, task.id, role, messageBody, failureReason, elapsedMs, now],
-      );
+      const message = this.ctx.chat().appendChatMessageWithinTransaction({
+        id: messageId,
+        chatSessionId: task.chatSessionId,
+        taskId: task.id,
+        role,
+        body: messageBody,
+        failureReason,
+        elapsedMs,
+        createdAt: now,
+      });
       // Promote the session ATOMICALLY as one unit — session_id together with
       // its machine (runtime) and engine (provider) — and ONLY when this task
       // actually produced a new session id. Otherwise a task that promotes but
@@ -2753,7 +2757,7 @@ export class TasksRepo {
           payload: {
             chat_session_id: task.chatSessionId,
             task_id: task.id,
-            message_id: messageId,
+            message_id: message.id,
             content: messageBody,
             elapsed_ms: elapsedMs,
             created_at: now,
