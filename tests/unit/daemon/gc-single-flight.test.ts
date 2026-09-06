@@ -321,6 +321,7 @@ describe("daemon Session archive GC orchestration", () => {
   it("fails closed before GC when workspace ownership is lost", async () => {
     const daemon = Object.create(MultiremiDaemon.prototype) as MultiremiDaemon & Record<string, unknown>;
     const taskAbort = new AbortController();
+    const pollAbort = new AbortController();
     const readyStates: boolean[] = [];
     Object.assign(daemon, {
       workspaceRootFence: () => {
@@ -331,6 +332,7 @@ describe("daemon Session archive GC orchestration", () => {
       claimsPaused: false,
       ready: true,
       stopped: false,
+      pollAbort,
       gcTimer: null,
       terminalAuthorityCleanupRetryWake: null,
       agentPluginReconcileAbort: null,
@@ -344,6 +346,7 @@ describe("daemon Session archive GC orchestration", () => {
       executeGcOnce(): Promise<MultiremiDaemonGcSummary>;
     }).executeGcOnce()).rejects.toThrow("workspace root identity changed");
     expect(taskAbort.signal.aborted).toBe(true);
+    expect(pollAbort.signal.aborted).toBe(true);
     expect((daemon as unknown as { stopped: boolean }).stopped).toBe(true);
     expect(readyStates).toEqual([false]);
   });
