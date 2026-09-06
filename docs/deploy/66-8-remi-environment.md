@@ -33,9 +33,12 @@ failures and retries at the polling interval (3 seconds by default). Timeout
 errors identify the method, path, and deadline. The same daemon resumes polling
 when the connection recovers; the HTTP client does not automatically replay
 writes. Authority failures such as 401, 403, and 410 still enter terminal cleanup,
-and `--once` still surfaces request failures to its caller.
+including when their response headers arrive but the error body times out or is
+interrupted. `--once` still surfaces request failures to its caller.
 
 Stopping the daemon cancels pending heartbeat and plugin configuration requests.
+Cancelling the initial plugin query also finishes startup cleanly; workspace
+ownership loss and other startup failures still propagate to the caller.
 Task claims, execution, and durable reports keep their existing drain semantics.
 These deadlines do not resolve operating-system network permissions, service
 launch configuration, or synchronous event-loop blocking.

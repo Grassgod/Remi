@@ -1062,6 +1062,13 @@ export class MultiremiDaemon {
           `daemon authorization was revoked or retired during startup; entering cleanup-only mode: ${error instanceof Error ? error.message : String(error)}`,
         );
         await this.stopAfterTerminalAuthority();
+      } else if (
+        this.stopped
+        && !this.workspaceOwnershipLost
+        && this.pollAbort.signal.aborted
+        && error === this.pollAbort.signal.reason
+      ) {
+        return;
       }
       throw error;
     } finally {
@@ -1880,7 +1887,7 @@ export class MultiremiDaemon {
     // the timer immediately; start()'s finally block waits for any current run.
     this.stopGcLoop();
     this.terminalAuthorityCleanupRetryWake?.();
-    this.agentPluginReconcileAbort?.abort();
+    this.agentPluginReconcileAbort?.abort(this.pollAbort.signal.reason);
     this.cancelRuntimeModelRefresh();
     // Release any handleTask waiting on report delivery; undelivered rows are
     // durable and replay on the next start().

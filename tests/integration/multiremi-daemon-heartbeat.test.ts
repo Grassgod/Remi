@@ -7,7 +7,7 @@ import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiDaemon } from "@multiremi/daemon.js";
 import { MultiremiStore } from "@multiremi/store.js";
 
-type Fault = "heartbeat-headers" | "heartbeat-body" | "plugins" | "claim" | "unavailable";
+type Fault = "heartbeat-headers" | "heartbeat-body" | "plugins" | "claim" | "unavailable" | "retired-body";
 
 // Real Bun HTTP transport and daemon polling against an isolated API/database.
 // No production Runtime, provider credentials, or operating-system service is used.
@@ -20,7 +20,7 @@ async function faultTestBed(fault: Fault, requestTimeoutMs = 250) {
     name: "Heartbeat recovery test", type: "daemon", workspaceId: "local", daemonId: "heartbeat-test",
   });
   const app = createMultiremiApp({ store, authToken: "heartbeat-test-root" });
-  const state = { armed: false, failures: 0, heartbeats: 0, claims: 0, registrations: 0 };
+  const state = { armed: false, failures: 0, heartbeats: 0, claims: 0, registrations: 0, cleanupCalls: 0, authorityStatus: 0 };
   const pending: Array<() => void> = [];
   const serve = (port: number) => Bun.serve({
     hostname: "127.0.0.1",
@@ -32,7 +32,7 @@ async function faultTestBed(fault: Fault, requestTimeoutMs = 250) {
       const claim = path.endsWith("/tasks/claim");
       const matches = fault === "plugins" ? path.endsWith("/agent-plugins/desired")
         : fault === "claim" ? claim : heartbeat;
-      if (state.armed && matches) {
+      if (state.armed && matches && fault !== "retired-body") {
         state.failures++;
         if (fault === "unavailable") return Response.json({ error: "temporarily unavailable" }, { status: 503 });
         if (fault === "heartbeat-body") {
@@ -49,6 +49,22 @@ async function faultTestBed(fault: Fault, requestTimeoutMs = 250) {
         });
       }
       const response = await app.fetch(request);
+      if (state.armed && matches && fault === "retired-body" && !response.ok) {
+        state.failures++;
+        state.authorityStatus = response.status;
+        const body = await response.text();
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(" ".repeat(8192)));
+            const release = () => {
+              clearTimeout(timer);
+              try { controller.enqueue(new TextEncoder().encode(body)); controller.close(); } catch {}
+            };
+            const timer = setTimeout(release, requestTimeoutMs * 3);
+            pending.push(release);
+          },
+        }), { status: response.status, headers: { "Content-Type": "application/json" } });
+      }
       if (response.ok) {
         if (heartbeat) state.heartbeats++;
         if (claim) state.claims++;
@@ -77,7 +93,7 @@ async function faultTestBed(fault: Fault, requestTimeoutMs = 250) {
     sshMeshManager: {
       getHeartbeatStatus: () => ({ status: "disabled" }),
       reconcile: async () => {},
-      cleanupForRetirement: async () => {},
+      cleanupForRetirement: async () => { state.cleanupCalls++; },
     },
   });
   let settled = false;
@@ -109,6 +125,62 @@ async function waitUntil(check: () => boolean, description: string, timeoutMs = 
 }
 
 describe("daemon heartbeat network recovery", () => {
+  it("cleans up a retired daemon when its authority response body exceeds the deadline", async () => {
+    const bed = await faultTestBed("retired-body");
+    try {
+      await waitUntil(() => bed.state.claims > 0, "initial healthy polling");
+      const plan = bed.store.getDaemonRetirementPlan("local", "heartbeat-test");
+      expect(bed.store.retireDaemon("local", "heartbeat-test", plan.snapshot, "local").status).toBe("retired");
+      bed.state.armed = true;
+      await waitUntil(bed.isSettled, "retirement cleanup after an incomplete authority response", 1_500);
+      expect(bed.state.authorityStatus).toBe(401);
+      expect(bed.state.failures).toBe(1);
+      expect(bed.state.cleanupCalls).toBe(1);
+      expect(bed.error()).toBeUndefined();
+    } finally {
+      await bed.close();
+    }
+  }, 10_000);
+
+  it("stops cleanly during the startup plugin query and can start again", async () => {
+    const bed = await faultTestBed("plugins", 30_000);
+    let restarted: Promise<void> | undefined;
+    try {
+      bed.state.armed = true;
+      await waitUntil(() => bed.state.failures > 0, "startup plugin query");
+      expect(bed.state.heartbeats).toBe(0);
+      bed.daemon.stop();
+      await waitUntil(bed.isSettled, "startup cancellation", 1_000);
+      expect(bed.error()).toBeUndefined();
+      expect(bed.state.cleanupCalls).toBe(0);
+
+      bed.state.armed = false;
+      restarted = bed.daemon.start();
+      await waitUntil(() => bed.state.claims >= 3, "polling after a cancelled startup");
+    } finally {
+      bed.daemon.stop();
+      try {
+        if (restarted) await restarted;
+      } finally {
+        await bed.close();
+      }
+    }
+  }, 10_000);
+
+  it("still rejects startup when workspace ownership is lost during a plugin query", async () => {
+    const bed = await faultTestBed("plugins", 30_000);
+    try {
+      bed.state.armed = true;
+      await waitUntil(() => bed.state.failures > 0, "startup plugin query");
+      bed.daemon.stopForWorkspaceOwnershipLoss(new Error("workspace ownership lost"));
+      await waitUntil(bed.isSettled, "startup ownership failure", 1_000);
+      expect(bed.error()).toBeInstanceOf(Error);
+      expect(bed.state.heartbeats).toBe(0);
+    } finally {
+      await bed.close();
+    }
+  }, 10_000);
+
   it("reconnects when the API socket closes and later listens again", async () => {
     const bed = await faultTestBed("heartbeat-headers");
     try {

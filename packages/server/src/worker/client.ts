@@ -196,7 +196,11 @@ export class MultiremiFeishuBotAssignmentError extends Error {
 /** Authentication/retirement failures require operator action, not polling. */
 export function isTerminalDaemonAuthorityError(error: unknown): boolean {
   return error instanceof MultiremiDaemonHttpError
-    && (error.status === 401 || error.status === 403 || error.status === 410);
+    && isTerminalDaemonAuthorityStatus(error.status);
+}
+
+function isTerminalDaemonAuthorityStatus(status: number): boolean {
+  return status === 401 || status === 403 || status === 410;
 }
 
 export class MultiremiDaemonClient {
@@ -1169,12 +1173,24 @@ export class MultiremiDaemonClient {
     const timer = setTimeout(() => {
       abort.abort(new MultiremiDaemonRequestTimeoutError(method, path, this.requestTimeoutMs));
     }, this.requestTimeoutMs);
+    let responseStatus: number | undefined;
     try {
       const resp = await fetch(this.baseUrl + path, { ...init, signal: abort.signal });
+      responseStatus = resp.status;
       // Keep the deadline until the body is consumed, even for error responses.
       // Returning this promise without awaiting it would clear the timer early.
       return await parseResponse<T>(resp, method, path);
     } catch (error) {
+      if (isTerminalDaemonAuthorityError(error)) throw error;
+      // Received authority headers remain definitive if the body is interrupted.
+      if (responseStatus !== undefined && isTerminalDaemonAuthorityStatus(responseStatus)) {
+        const reason = abort.signal.aborted ? abort.signal.reason : error;
+        throw new MultiremiDaemonHttpError(
+          responseStatus, method, path,
+          `Could not read error response body: ${reason instanceof Error ? reason.message : String(reason)}`,
+          null,
+        );
+      }
       if (abort.signal.aborted) throw abort.signal.reason;
       throw error;
     } finally {

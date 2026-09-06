@@ -65,6 +65,50 @@ describe("MultiremiDaemonClient request deadlines", () => {
     expect(error).toMatchObject({ name: "MultiremiDaemonRequestTimeoutError", method: "POST", timeoutMs: 30 });
   });
 
+  it.each([401, 403, 410])("preserves HTTP %s authority failures when the response body times out", async (status) => {
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => ({
+      ok: false,
+      status,
+      text: () => rejectWhenAborted(init?.signal),
+    })) as unknown as typeof globalThis.fetch;
+
+    const error = await new MultiremiDaemonClient("https://remi.example", null, { requestTimeoutMs: 30 })
+      .heartbeatRuntime("runtime-1").catch((value: unknown) => value);
+    expect(error).toBeInstanceOf(MultiremiDaemonHttpError);
+    expect(error).toMatchObject({ status, method: "POST", path: "/api/daemon/heartbeat" });
+    expect(isTerminalDaemonAuthorityError(error)).toBe(true);
+  });
+
+  it("preserves a received authority failure when the caller cancels its response body", async () => {
+    const caller = new AbortController();
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => ({
+      ok: false,
+      status: 403,
+      text: () => {
+        caller.abort(new Error("caller stopped"));
+        return rejectWhenAborted(init?.signal);
+      },
+    })) as unknown as typeof globalThis.fetch;
+
+    const error = await new MultiremiDaemonClient("https://remi.example")
+      .getSshMeshConfig("runtime-1", caller.signal).catch((value: unknown) => value);
+    expect(error).toMatchObject({ status: 403 });
+    expect(isTerminalDaemonAuthorityError(error)).toBe(true);
+  });
+
+  it("preserves a received authority failure when its response body disconnects", async () => {
+    globalThis.fetch = (async () => ({
+      ok: false,
+      status: 401,
+      text: async () => { throw new Error("connection closed during body read"); },
+    })) as unknown as typeof globalThis.fetch;
+
+    const error = await new MultiremiDaemonClient("https://remi.example")
+      .heartbeatRuntime("runtime-1").catch((value: unknown) => value);
+    expect(error).toMatchObject({ status: 401 });
+    expect(isTerminalDaemonAuthorityError(error)).toBe(true);
+  });
+
   it("enforces a deadline even when the caller supplies a signal", async () => {
     globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => rejectWhenAborted(init?.signal)) as unknown as typeof globalThis.fetch;
     const caller = new AbortController();
