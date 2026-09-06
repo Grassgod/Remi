@@ -1389,7 +1389,7 @@ export class TasksRepo {
       );
       if (result.changes === 0) throw new Error(`Task not found or not dispatched: ${taskId}`);
       const started = this.getTask(taskId)!;
-      this.syncIssueStatusFromTaskWithinTransaction(started, "in_progress");
+      this.syncIssueStatusFromTaskWithinTransaction(started, "in_progress", { rederive: true });
       return started;
     })();
     this.ctx.notifyTaskEvent("task:running", task);
@@ -1457,7 +1457,7 @@ export class TasksRepo {
       );
       if (transition.changes > 0) {
         transitionedTask = this.getTask(input.taskId);
-        if (transitionedTask) this.syncIssueStatusFromTaskWithinTransaction(transitionedTask, "in_review");
+        if (transitionedTask) this.syncIssueStatusFromTaskWithinTransaction(transitionedTask, "in_review", { rederive: true });
       }
       return this.getTaskHumanRequest(id)!;
     })();
@@ -1534,7 +1534,7 @@ export class TasksRepo {
     if (result.changes > 0) {
       const task = this.getTask(taskId);
       if (task) {
-        this.syncIssueStatusFromTaskWithinTransaction(task, "in_progress");
+        this.syncIssueStatusFromTaskWithinTransaction(task, "in_progress", { rederive: true });
         return task;
       }
     }
@@ -2844,7 +2844,7 @@ export class TasksRepo {
         && !task.chatSessionId
         && issue
         && lead?.id === task.agentId
-        && !this.hasActiveTaskForIssue(issue.id, true)
+        && !this.hasActiveTaskForIssue(issue.id)
       ) {
         this.ctx.notificationChannels().queueAgentIssueUpdate({
           activityId: `leader-round:${task.id}`,
@@ -3163,7 +3163,9 @@ export class TasksRepo {
   private issueStatusForRemainingTasks(issueId: string): string | null {
     const rows = this.ctx.db.query(
       `SELECT status FROM multiremi_tasks
-       WHERE issue_id = ? AND status NOT IN ('completed', 'failed', 'cancelled')`,
+       WHERE issue_id = ?
+         AND chat_session_id IS NULL
+         AND status NOT IN ('completed', 'failed', 'cancelled')`,
     ).all(issueId) as Array<{ status: string }>;
     const statuses = new Set(rows.map((row) => row.status));
     if (statuses.has("awaiting_human")) return "in_review";
@@ -3181,7 +3183,11 @@ export class TasksRepo {
   }
 
   /** Caller owns the task/Issue/outbox transaction. */
-  private syncIssueStatusFromTaskWithinTransaction(task: MultiremiTask, status: string): void {
+  private syncIssueStatusFromTaskWithinTransaction(
+    task: MultiremiTask,
+    status: string,
+    options: { rederive?: boolean } = {},
+  ): void {
     if (!task.issueId || task.chatSessionId) return;
     // Serialize against direct Issue mutations before checking terminal state.
     // The no-op write acquires a row lock on Postgres and the writer lock on
@@ -3189,6 +3195,10 @@ export class TasksRepo {
     // cancelled Issue from a stale pre-lock read.
     const locked = this.ctx.db.run("UPDATE multiremi_issues SET id = id WHERE id = ?", [task.issueId]);
     if (locked.changes === 0) return;
+    // Once the Issue row is locked, derive lifecycle state from the current
+    // task rows. Explicit terminal/retry decisions pass rederive=false because
+    // they are not recoverable from the remaining-task set alone.
+    if (options.rederive) status = this.issueStatusForRemainingTasks(task.issueId) ?? status;
     const issue = this.ctx.issues().getIssue(task.issueId);
     // Explicit issue terminal states are user decisions. A late worker event
     // (or a cancellation racing with it) must not reopen accepted/cancelled
@@ -3237,17 +3247,19 @@ export class TasksRepo {
     const row = this.ctx.db.query(
       `SELECT 1 AS present FROM multiremi_tasks
        WHERE issue_id = ?
+         AND chat_session_id IS NULL
          AND status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')
        LIMIT 1`,
     ).get(issueId) as { present: number } | null;
     return Boolean(row);
   }
 
-  private hasActiveTaskForIssue(issueId: string, issueLaneOnly = false): boolean {
+  private hasActiveTaskForIssue(issueId: string): boolean {
     const row = this.ctx.db.query(
       `SELECT 1 AS present FROM multiremi_tasks
-       WHERE issue_id = ? AND status NOT IN ('completed', 'failed', 'cancelled')
-         ${issueLaneOnly ? "AND chat_session_id IS NULL" : ""}
+       WHERE issue_id = ?
+         AND chat_session_id IS NULL
+         AND status NOT IN ('completed', 'failed', 'cancelled')
        LIMIT 1`,
     ).get(issueId) as { present: number } | null;
     return Boolean(row);
