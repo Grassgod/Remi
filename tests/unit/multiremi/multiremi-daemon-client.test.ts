@@ -31,6 +31,122 @@ afterEach(() => {
   for (const root of temporaryRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
+describe("MultiremiDaemonClient request deadlines", () => {
+  it.each([
+    ["GET", "/api/daemon/ssh-mesh/config?runtime_id=runtime-1", (client: MultiremiDaemonClient) => client.getSshMeshConfig("runtime-1")],
+    ["POST", "/api/daemon/heartbeat", (client: MultiremiDaemonClient) => client.heartbeatRuntime("runtime-1")],
+    ["PUT", "/api/daemon/runtimes/runtime-1/models", (client: MultiremiDaemonClient) => client.updateRuntimeModels("runtime-1", [])],
+  ] as const)("bounds a stalled %s request without automatically replaying it", async (method, path, request) => {
+    let attempts = 0;
+    globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => {
+      attempts++;
+      return rejectWhenAborted(init?.signal);
+    }) as unknown as typeof globalThis.fetch;
+
+    const error = await request(new MultiremiDaemonClient("https://remi.example", "daemon-token", {
+      requestTimeoutMs: 30,
+    })).catch((value: unknown) => value);
+
+    expect(error).toMatchObject({ name: "MultiremiDaemonRequestTimeoutError", method, path, timeoutMs: 30 });
+    expect((error as Error).message).toContain(`${method} ${path} timed out after 30ms`);
+    expect(isTerminalDaemonAuthorityError(error)).toBe(false);
+    expect(attempts).toBe(1);
+  });
+
+  it.each([200, 503])("keeps the deadline active while reading an HTTP %s response body", async (status) => {
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => ({
+      ok: status === 200,
+      status,
+      text: () => rejectWhenAborted(init?.signal),
+    })) as unknown as typeof globalThis.fetch;
+
+    const error = await new MultiremiDaemonClient("https://remi.example", null, { requestTimeoutMs: 30 })
+      .heartbeatRuntime("runtime-1").catch((value: unknown) => value);
+    expect(error).toMatchObject({ name: "MultiremiDaemonRequestTimeoutError", method: "POST", timeoutMs: 30 });
+  });
+
+  it.each([401, 403, 410])("preserves HTTP %s authority failures when the response body times out", async (status) => {
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => ({
+      ok: false,
+      status,
+      text: () => rejectWhenAborted(init?.signal),
+    })) as unknown as typeof globalThis.fetch;
+
+    const error = await new MultiremiDaemonClient("https://remi.example", null, { requestTimeoutMs: 30 })
+      .heartbeatRuntime("runtime-1").catch((value: unknown) => value);
+    expect(error).toBeInstanceOf(MultiremiDaemonHttpError);
+    expect(error).toMatchObject({ status, method: "POST", path: "/api/daemon/heartbeat" });
+    expect(isTerminalDaemonAuthorityError(error)).toBe(true);
+  });
+
+  it("preserves a received authority failure when the caller cancels its response body", async () => {
+    const caller = new AbortController();
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => ({
+      ok: false,
+      status: 403,
+      text: () => {
+        caller.abort(new Error("caller stopped"));
+        return rejectWhenAborted(init?.signal);
+      },
+    })) as unknown as typeof globalThis.fetch;
+
+    const error = await new MultiremiDaemonClient("https://remi.example")
+      .getSshMeshConfig("runtime-1", caller.signal).catch((value: unknown) => value);
+    expect(error).toMatchObject({ status: 403 });
+    expect(isTerminalDaemonAuthorityError(error)).toBe(true);
+  });
+
+  it("preserves a received authority failure when its response body disconnects", async () => {
+    globalThis.fetch = (async () => ({
+      ok: false,
+      status: 401,
+      text: async () => { throw new Error("connection closed during body read"); },
+    })) as unknown as typeof globalThis.fetch;
+
+    const error = await new MultiremiDaemonClient("https://remi.example")
+      .heartbeatRuntime("runtime-1").catch((value: unknown) => value);
+    expect(error).toMatchObject({ status: 401 });
+    expect(isTerminalDaemonAuthorityError(error)).toBe(true);
+  });
+
+  it("enforces a deadline even when the caller supplies a signal", async () => {
+    globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => rejectWhenAborted(init?.signal)) as unknown as typeof globalThis.fetch;
+    const caller = new AbortController();
+    const error = await new MultiremiDaemonClient("https://remi.example", null, { requestTimeoutMs: 30 })
+      .getSshMeshConfig("runtime-1", caller.signal).catch((value: unknown) => value);
+    expect(error).toMatchObject({ name: "MultiremiDaemonRequestTimeoutError" });
+    expect(caller.signal.aborted).toBe(false);
+  });
+
+  it("does not send a request that was already cancelled", async () => {
+    let attempts = 0;
+    globalThis.fetch = (async () => { attempts++; return Response.json({}); }) as unknown as typeof globalThis.fetch;
+    const caller = new AbortController();
+    const reason = new Error("already stopped");
+    caller.abort(reason);
+    await expect(new MultiremiDaemonClient("https://remi.example")
+      .getSshMeshConfig("runtime-1", caller.signal)).rejects.toBe(reason);
+    expect(attempts).toBe(0);
+  });
+
+  it.each([200, 403])("cleans up the timer after a completed HTTP %s response", async (status) => {
+    let requestSignal: AbortSignal | undefined;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requestSignal = init?.signal ?? undefined;
+      return Response.json({}, { status });
+    }) as unknown as typeof globalThis.fetch;
+    await new MultiremiDaemonClient("https://remi.example", null, { requestTimeoutMs: 30 })
+      .heartbeatRuntime("runtime-1").catch(() => {});
+    await Bun.sleep(60);
+    expect(requestSignal?.aborted).toBe(false);
+  });
+
+  it.each([0, -1, 1.5, NaN, Infinity, 2 ** 31])("rejects an invalid request timeout: %s", (requestTimeoutMs) => {
+    expect(() => new MultiremiDaemonClient("https://remi.example", null, { requestTimeoutMs }))
+      .toThrow("requestTimeoutMs");
+  });
+});
+
 describe("MultiremiDaemonClient HTTP failures", () => {
   it.each([401, 403, 410])("classifies HTTP %s as a terminal daemon authority failure", async (status) => {
     globalThis.fetch = (async () => new Response(
@@ -306,7 +422,8 @@ describe("MultiremiDaemonClient SSH Mesh wire", () => {
 
     await expect(request).rejects.toThrow("test cancellation");
     expect(requestSignal).not.toBeNull();
-    expect(requestSignal as unknown as AbortSignal).toBe(controller.signal);
+    expect((requestSignal as unknown as AbortSignal).aborted).toBe(true);
+    expect((requestSignal as unknown as AbortSignal).reason).toBe(controller.signal.reason);
     expect(requestReleased).toBe(true);
   });
 });

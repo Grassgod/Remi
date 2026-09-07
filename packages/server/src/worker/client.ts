@@ -126,6 +126,8 @@ export interface MultiremiDaemonSessionArchiveInitResponse {
 }
 
 export interface MultiremiDaemonClientOptions {
+  /** Deadline for a control-plane JSON request, including response body reads. */
+  requestTimeoutMs?: number;
   sessionArchiveUploadBaseUrl?: string | null;
   sessionArchiveProxyMaxBytes?: number;
   sessionArchiveDirectProbeTtlMs?: number;
@@ -158,6 +160,19 @@ export class MultiremiDaemonHttpError extends Error {
   }
 }
 
+export const DEFAULT_DAEMON_REQUEST_TIMEOUT_MS = 30_000;
+
+export class MultiremiDaemonRequestTimeoutError extends Error {
+  constructor(
+    readonly method: string,
+    readonly path: string,
+    readonly timeoutMs: number,
+  ) {
+    super(`${method} ${path} timed out after ${timeoutMs}ms`);
+    this.name = "MultiremiDaemonRequestTimeoutError";
+  }
+}
+
 /**
  * The concierge assignment as the daemon uses it: credentials plus the Agent
  * row normalized out of the same response.
@@ -181,12 +196,17 @@ export class MultiremiFeishuBotAssignmentError extends Error {
 /** Authentication/retirement failures require operator action, not polling. */
 export function isTerminalDaemonAuthorityError(error: unknown): boolean {
   return error instanceof MultiremiDaemonHttpError
-    && (error.status === 401 || error.status === 403 || error.status === 410);
+    && isTerminalDaemonAuthorityStatus(error.status);
+}
+
+function isTerminalDaemonAuthorityStatus(status: number): boolean {
+  return status === 401 || status === 403 || status === 410;
 }
 
 export class MultiremiDaemonClient {
   private baseUrl: string;
   private token: string | null;
+  private readonly requestTimeoutMs: number;
   private sessionArchiveUploadBaseUrl: URL | null;
   private sessionArchiveProxyMaxBytes: number;
   private sessionArchiveDirectProbeTtlMs: number;
@@ -199,6 +219,10 @@ export class MultiremiDaemonClient {
   constructor(baseUrl: string, token?: string | null, options: MultiremiDaemonClientOptions = {}) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.token = token ?? null;
+    this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_DAEMON_REQUEST_TIMEOUT_MS;
+    if (!Number.isSafeInteger(this.requestTimeoutMs) || this.requestTimeoutMs < 1 || this.requestTimeoutMs > 2_147_483_647) {
+      throw new Error("requestTimeoutMs must be a positive integer no greater than 2147483647");
+    }
     this.sessionArchiveUploadBaseUrl = normalizeSessionArchiveUploadBaseUrl(
       options.sessionArchiveUploadBaseUrl,
     );
@@ -261,6 +285,7 @@ export class MultiremiDaemonClient {
     drainStatus?: { ackGeneration: number; activeTaskCount: number },
     supportsBotMenu = false,
     supportsFeishuConcierge = false,
+    signal?: AbortSignal,
   ): Promise<MultiremiDaemonHeartbeatConfigAck> {
     let resp: Partial<MultiremiDaemonHeartbeatConfigAck>;
     try {
@@ -283,7 +308,7 @@ export class MultiremiDaemonClient {
         ...(supportsFeishuConcierge
           ? { feishu_concierge_protocol: FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION }
           : {}),
-      });
+      }, undefined, signal);
     } catch (error) {
       if (isRuntimeGoneHeartbeatError(error)) {
         return { runtime_id: runtimeId, status: "runtime_gone", runtime_gone: true };
@@ -507,10 +532,11 @@ export class MultiremiDaemonClient {
 
   async getRuntimeAgentPluginDesired(
     runtimeId: string,
+    signal?: AbortSignal,
   ): Promise<MultiremiDaemonAgentPluginDesiredResponse> {
     const path = `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/agent-plugins/desired`;
     try {
-      return await this.get<MultiremiDaemonAgentPluginDesiredResponse>(path);
+      return await this.get<MultiremiDaemonAgentPluginDesiredResponse>(path, signal);
     } catch (error) {
       // A new daemon may connect to a server from before Agent Plugins existed.
       // Missing routes return an unstructured 404; a structured runtime-not-found
@@ -1111,8 +1137,7 @@ export class MultiremiDaemonClient {
   }
 
   private async get<T>(path: string, signal?: AbortSignal): Promise<T> {
-    const resp = await fetch(this.baseUrl + path, { headers: this.headers(), signal });
-    return parseResponse<T>(resp, "GET", path);
+    return this.request<T>(path, { method: "GET", headers: this.headers(), signal });
   }
 
   private async post<T = unknown>(
@@ -1121,23 +1146,57 @@ export class MultiremiDaemonClient {
     tokenOverride?: string | null,
     signal?: AbortSignal,
   ): Promise<T> {
-    const resp = await fetch(this.baseUrl + path, {
+    return this.request<T>(path, {
       method: "POST",
       headers: this.headers("application/json", tokenOverride),
       body: JSON.stringify(body),
       signal,
     });
-    return parseResponse<T>(resp, "POST", path);
   }
 
   private async put<T = unknown>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
-    const resp = await fetch(this.baseUrl + path, {
+    return this.request<T>(path, {
       method: "PUT",
       headers: this.headers("application/json"),
       body: JSON.stringify(body),
       signal,
     });
-    return parseResponse<T>(resp, "PUT", path);
+  }
+
+  private async request<T>(path: string, init: RequestInit): Promise<T> {
+    const callerSignal = init.signal;
+    callerSignal?.throwIfAborted();
+    const abort = new AbortController();
+    const onCallerAbort = () => abort.abort(callerSignal?.reason);
+    callerSignal?.addEventListener("abort", onCallerAbort, { once: true });
+    const method = init.method ?? "GET";
+    const timer = setTimeout(() => {
+      abort.abort(new MultiremiDaemonRequestTimeoutError(method, path, this.requestTimeoutMs));
+    }, this.requestTimeoutMs);
+    let responseStatus: number | undefined;
+    try {
+      const resp = await fetch(this.baseUrl + path, { ...init, signal: abort.signal });
+      responseStatus = resp.status;
+      // Keep the deadline until the body is consumed, even for error responses.
+      // Returning this promise without awaiting it would clear the timer early.
+      return await parseResponse<T>(resp, method, path);
+    } catch (error) {
+      if (isTerminalDaemonAuthorityError(error)) throw error;
+      // Received authority headers remain definitive if the body is interrupted.
+      if (responseStatus !== undefined && isTerminalDaemonAuthorityStatus(responseStatus)) {
+        const reason = abort.signal.aborted ? abort.signal.reason : error;
+        throw new MultiremiDaemonHttpError(
+          responseStatus, method, path,
+          `Could not read error response body: ${reason instanceof Error ? reason.message : String(reason)}`,
+          null,
+        );
+      }
+      if (abort.signal.aborted) throw abort.signal.reason;
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      callerSignal?.removeEventListener("abort", onCallerAbort);
+    }
   }
 
   private headers(contentType?: string, tokenOverride?: string | null): HeadersInit {
