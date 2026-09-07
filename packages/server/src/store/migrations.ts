@@ -2099,8 +2099,6 @@ export function runMigrations(db: SqlDatabase): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_chat_messages_session ON multiremi_chat_messages(chat_session_id, created_at);
-    CREATE INDEX IF NOT EXISTS idx_multiremi_chat_messages_session_sequence
-      ON multiremi_chat_messages(chat_session_id, sequence, id);
 
     CREATE TABLE IF NOT EXISTS multiremi_agent_issue_update_state (
       chat_session_id TEXT PRIMARY KEY,
@@ -2669,6 +2667,7 @@ export function runMigrations(db: SqlDatabase): void {
   runMigrationOnce(db, CHAT_MESSAGE_SEQUENCE_MIGRATION, () => backfillChatMessageSequences(db));
   db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_chat_messages_agent_delivery
     ON multiremi_chat_messages(chat_session_id, pending_agent_delivery, created_at)`);
+  // Legacy tables must gain the sequence column before this index is created.
   db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_chat_messages_session_sequence
     ON multiremi_chat_messages(chat_session_id, sequence, id)`);
   dropColumnIfExists(db, "multiremi_agent_issue_update_state", "window_started_at");

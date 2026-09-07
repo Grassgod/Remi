@@ -149,6 +149,50 @@ describe("store migrations", () => {
     ]));
   });
 
+  it("adds legacy Chat sequence columns before indexing and preserves message order", () => {
+    const database = freshDb();
+    migrate(database);
+    const timestamp = "2026-09-01T00:00:00.000Z";
+    database.run(
+      "INSERT INTO multiremi_agents (id, name, provider, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+      ["agt_sequence", "Sequence", "claude", timestamp, timestamp],
+    );
+    database.run(
+      "INSERT INTO multiremi_chat_sessions (id, agent_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+      ["chat_sequence", "agt_sequence", "Legacy Chat", timestamp, timestamp],
+    );
+    for (const [id, createdAt] of [["msg_b", timestamp], ["msg_a", timestamp], ["msg_c", "2026-09-02T00:00:00.000Z"]]) {
+      database.run(
+        "INSERT INTO multiremi_chat_messages (id, chat_session_id, role, body, created_at) VALUES (?, ?, ?, ?, ?)",
+        [id, "chat_sequence", "user", id, createdAt],
+      );
+    }
+    database.exec(`
+      DROP INDEX idx_multiremi_chat_messages_session_sequence;
+      ALTER TABLE multiremi_chat_messages DROP COLUMN sequence;
+      ALTER TABLE multiremi_chat_sessions DROP COLUMN message_sequence;
+      DELETE FROM multiremi_schema_migrations WHERE id = '20260905_chat_message_sequence';
+    `);
+
+    migrate(database);
+    const ordered = database.query(
+      "SELECT id, body, sequence FROM multiremi_chat_messages WHERE chat_session_id = ? ORDER BY sequence, id",
+    );
+    expect(ordered.all("chat_sequence")).toEqual([
+      { id: "msg_a", body: "msg_a", sequence: 1 },
+      { id: "msg_b", body: "msg_b", sequence: 2 },
+      { id: "msg_c", body: "msg_c", sequence: 3 },
+    ]);
+    expect(database.query("SELECT message_sequence FROM multiremi_chat_sessions WHERE id = ?").get("chat_sequence"))
+      .toEqual({ message_sequence: 3 });
+    expect(database.query("SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?")
+      .get("idx_multiremi_chat_messages_session_sequence")).not.toBeNull();
+
+    migrate(database);
+    expect(ordered.all("chat_sequence")).toHaveLength(3);
+    expect(database.query("SELECT SUM(sequence) AS total FROM multiremi_chat_messages").get()).toEqual({ total: 6 });
+  });
+
   it("makes Feishu outbound reply targets nullable without losing queued deliveries", () => {
     const database = freshDb();
     migrate(database);

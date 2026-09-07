@@ -305,6 +305,47 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     ]);
   });
 
+  it("migrates legacy Chat sequence columns before creating the index", () => {
+    const workspaceId = freshWorkspace();
+    const agent = store.createAgent({ name: "PG legacy Chat", provider: "claude", workspaceId });
+    const chat = store.createChatSession({ agentId: agent.id, title: "Legacy sequences", workspaceId });
+    const timestamp = "2026-09-01T00:00:00.000Z";
+    for (const [id, createdAt] of [["legacy_seq_b", timestamp], ["legacy_seq_a", timestamp], ["legacy_seq_c", "2026-09-02T00:00:00.000Z"]]) {
+      db.run(
+        "INSERT INTO multiremi_chat_messages (id, chat_session_id, role, body, created_at) VALUES (?, ?, ?, ?, ?)",
+        [id, chat.id, "user", id, createdAt],
+      );
+    }
+    db.exec(`
+      DROP INDEX idx_multiremi_chat_messages_session_sequence;
+      ALTER TABLE multiremi_chat_messages DROP COLUMN sequence;
+      ALTER TABLE multiremi_chat_sessions DROP COLUMN message_sequence;
+      DELETE FROM multiremi_schema_migrations WHERE id = '20260905_chat_message_sequence';
+    `);
+
+    // Upgrades boot a new process; do not reuse pre-DDL prepared statements.
+    db.close();
+    db = new PostgresSyncDatabase(pgDatabaseUrl(TEST_DB));
+    store = new MultiremiStore(db);
+    expect(store.listChatMessages(chat.id).map(message => message.id)).toEqual([
+      "legacy_seq_a", "legacy_seq_b", "legacy_seq_c",
+    ]);
+    expect(db.query("SELECT message_sequence FROM multiremi_chat_sessions WHERE id = ?").get(chat.id))
+      .toEqual({ message_sequence: 3 });
+    expect(db.query("SELECT indexname FROM pg_indexes WHERE tablename = 'multiremi_chat_messages' AND indexname = ?")
+      .get("idx_multiremi_chat_messages_session_sequence")).not.toBeNull();
+
+    store.sendChatMessage(chat.id, { body: "After migration" });
+    runMigrations(db);
+    expect(db.query("SELECT body, sequence FROM multiremi_chat_messages WHERE chat_session_id = ? ORDER BY sequence, id")
+      .all(chat.id)).toEqual([
+        { body: "legacy_seq_a", sequence: 1 },
+        { body: "legacy_seq_b", sequence: 2 },
+        { body: "legacy_seq_c", sequence: 3 },
+        { body: "After migration", sequence: 4 },
+      ]);
+  });
+
   it("migrates knowledge control-plane tables and nullable provenance columns", () => {
     for (const table of [
       "multiremi_knowledge_submissions",
