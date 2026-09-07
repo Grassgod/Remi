@@ -433,7 +433,8 @@ export class AgentPluginsRepo {
       const current = this.requireBinding(bindingId);
       if (current.agentId !== agentId) throw notFound("plugin binding not found", "binding_not_found");
       const agent = this.requireAgent(agentId);
-      this.assertAgentPluginCompatible(agent, current.plugin);
+      const enabled = Object.prototype.hasOwnProperty.call(input, "enabled") ? input.enabled !== false : current.enabled;
+      if (enabled) this.assertAgentPluginCompatible(agent, current.plugin);
       const values = this.normalizeBindingVersion(current.plugin, {
         versionPolicy: input.versionPolicy ?? input.version_policy ?? current.versionPolicy,
         versionId: hasEither(input, "versionId", "version_id")
@@ -446,7 +447,6 @@ export class AgentPluginsRepo {
       const config = Object.prototype.hasOwnProperty.call(input, "config")
         ? normalizeObject(input.config)
         : current.config;
-      const enabled = Object.prototype.hasOwnProperty.call(input, "enabled") ? input.enabled !== false : current.enabled;
       this.ctx.db.run(
         `UPDATE multiremi_agent_plugin_bindings
          SET version_policy = ?, version_id = ?, connection_id = ?, config = ?, enabled = ?, updated_at = ? WHERE id = ?`,
@@ -482,6 +482,7 @@ export class AgentPluginsRepo {
     return this.listAgentPluginBindings(agent.id)
       .filter((binding) => binding.enabled)
       .map((binding) => {
+        this.assertAgentPluginCompatible(agent, binding.plugin);
         const version = binding.resolvedVersion;
         if (!version) {
           throw conflict(`plugin ${binding.plugin.name} has no resolved version`, "plugin_version_unavailable");
@@ -1356,7 +1357,9 @@ export class AgentPluginsRepo {
   private toBinding(row: Row): MultiremiAgentPluginBinding {
     const plugin = this.requirePlugin(String(row.plugin_id), true);
     const agent = this.requireAgent(String(row.agent_id));
-    this.assertAgentPluginCompatible(agent, plugin);
+    if (agent.workspaceId !== plugin.workspaceId) {
+      throw badRequest("agent and plugin must belong to the same workspace", "workspace_mismatch");
+    }
     const versionPolicy = row.version_policy === "pinned" ? "pinned" : "follow_active";
     const versionId = cleanString(row.version_id);
     const resolvedVersionId = versionPolicy === "pinned" ? versionId : plugin.activeVersionId;

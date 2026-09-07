@@ -8,6 +8,27 @@ import { createStore, mockFetch, resetMultiremiTestEnv, signTestJwt } from "./he
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi API — agent plugins", () => {
+  it("lists disabled plugins and allows switching back through the public Agent API", async () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Leader", provider: "claude" });
+    const plugin = store.importAgentPlugin({ provider: "claude", name: "test-disabled",
+      manifest: { name: "test-disabled", version: "1.0.0" },
+      files: [{ path: "skills/test/SKILL.md", content: "# Test" }] });
+    const binding = store.createAgentPluginBinding(agent.id, { pluginId: plugin.id });
+    store.updateAgentPluginBinding(agent.id, binding.id, { enabled: false });
+    const app = createMultiremiApp({ store });
+    for (const provider of ["codex", "claude"]) {
+      const switched = await app.request(`/api/agents/${agent.id}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider, model: "", thinking_level: "" }),
+      });
+      expect(switched.status).toBe(200);
+      const listed = await app.request(`/api/multiremi/agents/${agent.id}/plugins`);
+      expect(listed.status).toBe(200);
+      expect((await listed.json()).bindings[0].enabled).toBe(false);
+    }
+  });
+
   it("inspects and imports a Git Plugin source as an immutable artifact", async () => {
     const store = createStore();
     const resolverCalls: ResolveAgentPluginGitSourceInput[] = [];

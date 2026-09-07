@@ -25,6 +25,27 @@ function claudePluginInput(version = "1.0.0", content = "# Lark\n") {
 }
 
 describe("AgentPluginsRepo", () => {
+  it("preserves disabled plugins across engine switches without poisoning tasks", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Switchable leader", provider: "claude" });
+    const plugin = store.importAgentPlugin(claudePluginInput());
+    const binding = store.createAgentPluginBinding(agent.id, { pluginId: plugin.id });
+    expect(() => store.updateAgent(agent.id, { provider: "codex" })).toThrow("before switching");
+    store.updateAgentPluginBinding(agent.id, binding.id, { enabled: false });
+    store.updateAgent(agent.id, { provider: "codex" });
+    expect(store.listAgentPluginBindings(agent.id)[0]?.enabled).toBe(false);
+    expect(store.resolveAgentPluginSnapshot(agent.id)).toEqual([]);
+    expect(store.createTask({ agentId: agent.id, prompt: "Run without the disabled Claude plugin" }).id).toBeTruthy();
+    expect(() => store.updateAgentPluginBinding(agent.id, binding.id, { enabled: true })).toThrow("cannot be bound");
+    store.updateAgentPluginBinding(agent.id, binding.id, { enabled: false });
+    store.updateAgent(agent.id, { provider: "claude" });
+    store.updateAgentPluginBinding(agent.id, binding.id, { enabled: true });
+    expect(store.resolveAgentPluginSnapshot(agent.id)).toHaveLength(1);
+    store.updateAgentPluginBinding(agent.id, binding.id, { enabled: false });
+    store.updateAgent(agent.id, { provider: "codex" });
+    expect(store.deleteAgentPluginBinding(agent.id, binding.id)).toBe(true);
+  });
+
   it("imports provider-native immutable versions and returns the exact canonical artifact", () => {
     const store = createStore();
     const plugin = store.importAgentPlugin(claudePluginInput());
