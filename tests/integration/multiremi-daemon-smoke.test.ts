@@ -43,6 +43,11 @@ afterEach(() => {
 describe("Bun Multiremi daemon smoke", () => {
   it("refreshes model capabilities periodically and retries failed probes and reports", async () => {
     const { store, workDir } = daemonTestBed("multiremi-periodic-models-");
+    store.upsertRelayConfig("local", "codex", {
+      fragment: 'model_provider = "OpenAI"\n[model_providers.OpenAI]\nbase_url = "https://gateway.example/v1"',
+      tokenOp: "set",
+      authToken: "periodic-probe-test-token",
+    });
     let failedReport = false;
     const updateModels = store.updateRuntimeModels.bind(store);
     store.updateRuntimeModels = (runtimeId, models) => {
