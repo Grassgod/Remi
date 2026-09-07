@@ -50,6 +50,7 @@ interface Harness {
   stops: number;
   reports: FeishuConciergeStatusReport[];
   sent: string[];
+  groups: Array<readonly string[]>;
   advance: (ms: number) => void;
 }
 
@@ -63,10 +64,12 @@ function harness(options: {
     stops: 0,
     reports: [] as FeishuConciergeStatusReport[],
     sent: [] as string[],
+    groups: [] as Array<readonly string[]>,
     nowMs: 1_000_000,
   };
   const supervisor = new FeishuConciergeSupervisor({
     host: {
+      setNoMentionChatIds: chatIds => { state.groups.push(chatIds); },
       start: async (input) => {
         state.starts.push(input);
         return (await options.start?.(input)) ?? { botName: "Concierge" };
@@ -88,11 +91,21 @@ function harness(options: {
     get stops() { return state.stops; },
     get reports() { return state.reports; },
     get sent() { return state.sent; },
+    get groups() { return state.groups; },
     advance: (ms) => { state.nowMs += ms; },
   };
 }
 
 describe("FeishuConciergeSupervisor", () => {
+  it("changes group admission on the same revision and clears it on stop", async () => {
+    const test = harness();
+    await test.supervisor.apply(directive({ no_mention_chat_ids: ["oc_a"] }));
+    await test.supervisor.apply(directive({ no_mention_chat_ids: ["oc_b"] }));
+    await test.supervisor.apply(directive({ no_mention_chat_ids: [], desired_state: "stopped" }));
+    expect(test.groups).toEqual([["oc_a"], ["oc_b"], []]);
+    expect(test.starts).toHaveLength(1);
+  });
+
   it("sends leased outbound work only while the connector is online", async () => {
     const test = harness();
     const delivery = {

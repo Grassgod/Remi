@@ -397,6 +397,32 @@ describe("Feishu workspace membership admission", () => {
 });
 
 describe("Feishu group message routing", () => {
+  it("admits both new messages and thread replies in the configured group without a mention", async () => {
+    setGroupPolicy({ getByChatId: id => id === "oc_topics" ? { monitor: true } : null });
+    for (const rootId of [undefined, "om_topic_root"]) {
+      const event = messageEvent({ messageId: uniqueMessageId("topic-no-mention"), senderOpenId: "ou_member",
+        chatType: "group", chatId: "oc_topics", text: "Any progress?" });
+      if (rootId) event.message.root_id = rootId;
+      const result = await processFeishuMessageEvent(clientWithSender().client, event, "ou_bot", admission(async () => true).options);
+      expect(result).toMatchObject({ chatId: "oc_topics", monitored: true, mentionedBot: false });
+      expect(result?.rootId).toBe(rootId);
+    }
+    const other = messageEvent({ messageId: uniqueMessageId("unbound-chat"), senderOpenId: "ou_member", chatType: "group", chatId: "oc_other" });
+    expect(await processFeishuMessageEvent(clientWithSender().client, other, "ou_bot", admission(async () => true).options)).toBeNull();
+  });
+
+  it("does not respond to bot output or mentions of others in a no-mention group", async () => {
+    setGroupPolicy({ getByChatId: () => ({ monitor: true }) });
+    const bot = messageEvent({ messageId: uniqueMessageId("bot-loop"), senderOpenId: "ou_bot", chatType: "group" });
+    expect(await processFeishuMessageEvent(clientWithSender().client, bot, "ou_bot", admission(async () => true).options)).toBeNull();
+    const other = messageEvent({ messageId: uniqueMessageId("other-bot"), senderOpenId: "ou_otherbot", chatType: "group" });
+    Object.assign(other.sender, { sender_type: "app" });
+    expect(await processFeishuMessageEvent(clientWithSender().client, other, "ou_bot", admission(async () => true).options)).toBeNull();
+    const directed = messageEvent({ messageId: uniqueMessageId("directed"), senderOpenId: "ou_member", chatType: "group",
+      mentions: [{ key: "@_user_1", name: "Other", id: { open_id: "ou_other" } }] });
+    expect(await processFeishuMessageEvent(clientWithSender().client, directed, "ou_bot", admission(async () => true).options)).toBeNull();
+  });
+
   it("admits a bot mention when the production-default group policy returns null", async () => {
     const senderOpenId = "ou_group_mention_member";
     const { client, getSenderCalls } = clientWithSender();

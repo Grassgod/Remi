@@ -152,7 +152,7 @@ export function workspaceCommandSpecs(): CommandSpec[] {
     scopedWrite(
       "workspace.issue-topics.set",
       ["workspace", "issue-topics", "set"],
-      "Configure automatic Feishu Issue topics",
+      "Configure automatic Feishu Issue topics; the enabled group accepts replies without mentioning the bot",
       "/issue-topics",
       "PUT",
       [

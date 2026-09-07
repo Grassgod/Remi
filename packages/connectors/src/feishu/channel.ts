@@ -54,6 +54,8 @@ export interface HandleTaskStreamOpts {
   displayName?: string | null;
   subtitle?: string | null;
   log?: StreamHandlerLog;
+  durable?: { idempotencyKey: string; messageId?: string | null };
+  onStarted?: (messageId: string) => Promise<void>;
 }
 
 // ── FeishuChannel ─────────────────────────────────────────────
@@ -244,7 +246,7 @@ export class FeishuChannel {
     stream: AsyncIterable<TaskStreamEvent>,
     meta: TaskStreamMeta,
     opts: HandleTaskStreamOpts = {},
-  ): Promise<void> {
+  ): Promise<{ messageId: string }> {
     const slog: StreamHandlerLog = opts.log ?? {
       info: (message) => log.info(message),
       warn: (message) => log.warn(message),
@@ -259,7 +261,10 @@ export class FeishuChannel {
         sessionId: meta.sessionId,
         displayName: opts.displayName ?? meta.displayName ?? undefined,
         subtitle: opts.subtitle ?? "Multiremi Task",
+        durable: opts.durable,
       });
+      const messageId = session.getMessageId()!;
+      if (opts.onStarted) await opts.onStarted(messageId);
       const result = await handleTaskStream(session, stream, chatId, meta);
       await session.close({
         finalText: result.contentText || undefined,
@@ -271,13 +276,17 @@ export class FeishuChannel {
         displayName: opts.displayName ?? meta.displayName,
         aborted: result.cancelled,
       });
+      return { messageId };
     } catch (error) {
       slog.error(`handleTaskStream error: ${String(error)}`);
+      if (opts.durable) throw error;
       if (session.isActive()) {
         await session.close({ finalText: `Error: ${String(error)}` }).catch(() => {});
       }
+      return { messageId: session.getMessageId() ?? "" };
     } finally {
-      this._activeSessions.delete(sessionKey);
+      session.detach();
+      if (this._activeSessions.get(sessionKey) === session) this._activeSessions.delete(sessionKey);
     }
   }
 

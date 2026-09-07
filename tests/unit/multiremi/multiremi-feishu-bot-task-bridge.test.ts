@@ -116,6 +116,14 @@ describe("Feishu bot standard Task bridge", () => {
 
     const roundTask = roundTasks[0]!;
     expect(roundTask).toMatchObject({ holdsWorkspace: false, runtimeId: "rt_bot" });
+    store.reportFeishuBotRuntimeStatus("local", "rt_bot", { appliedRevision: config.revision, state: "online" });
+    // A v3 daemon must not send an empty body; v4 starts streaming before completion.
+    expect(store.claimFeishuBotOutbound("local", "rt_bot")).toBeNull();
+    const streamClaim = store.claimFeishuBotOutbound("local", "rt_bot", undefined, true)!;
+    expect(streamClaim).toMatchObject({ taskId: roundTask.id, body: "", resumeMessageId: null });
+    expect(store.reportFeishuBotOutbound("local", "rt_bot", streamClaim.id, {
+      claimToken: streamClaim.claimToken, status: "streaming", externalMessageId: "om_live_card",
+    })).toBe(true);
     expect(store.getTaskWithAgent(roundTask.id)?.repos).toEqual([]);
     expect(store.claimTask("rt_bot")?.id).toBe(roundTask.id);
     const wire = daemonTaskClaimResponse(store, store.getTaskWithAgent(roundTask.id)!);
@@ -129,6 +137,23 @@ describe("Feishu bot standard Task bridge", () => {
       sessionId: "sess_round_push_retry",
     });
     const retryTask = store.listTasks().find((task) => task.parentTaskId === roundTask.id)!;
+    expect(store.reportFeishuBotOutbound("local", "rt_bot", streamClaim.id, {
+      claimToken: streamClaim.claimToken, status: "sent",
+    })).toBe(false);
+    const retryStream = store.claimFeishuBotOutbound("local", "rt_bot", undefined, true)!;
+    expect(retryStream).toMatchObject({ id: streamClaim.id, taskId: retryTask.id, resumeMessageId: "om_live_card" });
+    const leaseTime = new Date();
+    expect(store.reportFeishuBotOutbound("local", "rt_bot", retryStream.id, {
+      claimToken: retryStream.claimToken, status: "streaming",
+    }, new Date(leaseTime.getTime() + 60_000))).toBe(true);
+    expect(store.claimFeishuBotOutbound("local", "rt_bot", new Date(leaseTime.getTime() + 125_000), true)).toBeNull();
+    // Expired leases retain the message ID, so a restarted daemon updates the same card.
+    const recovered = store.claimFeishuBotOutbound("local", "rt_bot", new Date(leaseTime.getTime() + 185_000), true)!;
+    expect(recovered).toMatchObject({ id: streamClaim.id, resumeMessageId: "om_live_card" });
+    expect(recovered.claimToken).not.toBe(retryStream.claimToken);
+    expect(store.reportFeishuBotOutbound("local", "rt_bot", recovered.id, {
+      claimToken: recovered.claimToken, status: "failed", error: "retry test delivery",
+    }, new Date(leaseTime.getTime() - 60_000))).toBe(true);
     expect(retryTask).toMatchObject({ status: "queued", chatSessionId: inbound.chatSessionId });
     expect(store.claimTask("rt_bot")?.id).toBe(retryTask.id);
     const retryWire = daemonTaskClaimResponse(store, store.getTaskWithAgent(retryTask.id)!);
@@ -169,7 +194,7 @@ describe("Feishu bot standard Task bridge", () => {
     const retryClaim = store.claimFeishuBotOutbound(
       "local",
       "rt_bot",
-      new Date(failedAt.getTime() + 6_000),
+      new Date(failedAt.getTime() + 60_000),
     )!;
     expect(retryClaim.id).toBe(firstClaim.id);
     expect(retryClaim.idempotencyKey).toBe(firstClaim.idempotencyKey);

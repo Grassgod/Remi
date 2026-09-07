@@ -43,6 +43,7 @@ import {
 } from "../wire/index.js";
 import {
   FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION,
+  FEISHU_CONCIERGE_TASK_STREAM_PROTOCOL_VERSION,
   FEISHU_CONCIERGE_OUTBOUND_LEGACY_PROTOCOL_VERSION,
   FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER,
   FEISHU_CONCIERGE_PROTOCOL_VERSION,
@@ -426,7 +427,8 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       const directive = store.feishuBotDirectiveForRuntime(workspaceId, runtimeId);
       if (directive) response.feishu_bot = directive;
       const outbound = feishuConciergeProtocol >= FEISHU_CONCIERGE_OUTBOUND_LEGACY_PROTOCOL_VERSION
-        ? store.claimFeishuBotOutbound(workspaceId, runtimeId)
+        ? store.claimFeishuBotOutbound(workspaceId, runtimeId, undefined,
+            feishuConciergeProtocol >= FEISHU_CONCIERGE_TASK_STREAM_PROTOCOL_VERSION)
         : null;
       if (outbound) {
         const body = feishuConciergeProtocol >= FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION
@@ -443,6 +445,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
           body,
           body_origin: outbound.bodyOrigin,
           idempotency_key: outbound.idempotencyKey,
+          ...(outbound.taskId ? { task_id: outbound.taskId, resume_message_id: outbound.resumeMessageId } : {}),
         };
       }
     }
@@ -542,7 +545,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const claimToken = cleanString(typeof body.claim_token === "string" ? body.claim_token : null);
-    const status = body.status === "sent" || body.status === "failed" ? body.status : null;
+    const status = body.status === "sent" || body.status === "failed" || body.status === "streaming" ? body.status : null;
     if (!claimToken || !status) return c.json({ error: "claim_token and a valid status are required" }, 400);
     const accepted = store.reportFeishuBotOutbound(
       runtime.workspaceId ?? "local",

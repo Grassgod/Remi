@@ -1666,6 +1666,39 @@ describe("Bun Multiremi daemon smoke", () => {
     }
   }, 120_000);
 
+  it("runs Issue-bound Chat replies without a Discussion Session and resumes their Chat context", async () => {
+    const { store, workDir } = daemonTestBed("multiremi-bound-chat-");
+    const agent = store.createAgent({ name: "Remi", provider: "claude" });
+    const issue = store.createIssue({ title: "Bound Issue", workspaceId: "local" });
+    const chat = store.createChatSession({ agentId: agent.id, issueId: issue.id, title: "Topic" });
+    const originalIssueSessions = store.listIssueSessions(issue.id).map(session => session.id);
+    const token = await store.createAccessToken({ name: "Chat daemon", type: "daemon", workspaceId: "local" });
+    const server = startMultiremiServer({ store, scheduler: null, authToken: "bound-chat-secret", hostname: "127.0.0.1", port: 0 });
+    const workspacesRoot = join(workDir, "workspaces");
+    const sends: SendOptions[] = [];
+    const providerFactory: MultiremiDaemonProviderFactory = () => ({
+      async *sendStream(_message, options) {
+        sends.push(options ?? {});
+        yield { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "Topic reply" }] } as any;
+      },
+      getLastResponse: () => ({ text: "Topic reply", sessionId: "bound-chat-provider", requestId: "bound-chat-request" }),
+    });
+    try {
+      for (let turn = 0; turn < 2; turn++) {
+        const task = store.createTask({ agentId: agent.id, chatSessionId: chat.id, holdsWorkspace: false, prompt: "Progress?" });
+        expect(task).toMatchObject({ issueId: issue.id, issueSessionId: null, holdsWorkspace: false });
+        await new MultiremiDaemon({ serverUrl: `http://127.0.0.1:${server.port}`, token: token.token,
+          runtimeName: "bound-chat", provider: "claude", workspaceId: "local", once: true, daemonPort: 0,
+          workspacesRoot, repoCacheRoot: join(workDir, ".repo-cache"), providerFactory }).start();
+        expect(store.getTask(task.id)).toMatchObject({ status: "completed", sessionId: "bound-chat-provider",
+          workDir: join(workspacesRoot, "chats", chat.id) });
+      }
+      expect(sends[1]?.sessionId).toBe("bound-chat-provider");
+      expect(store.listIssueSessions(issue.id).map(session => session.id)).toEqual(originalIssueSessions);
+      expect(existsSync(join(workspacesRoot, "issues", issue.key))).toBe(false);
+    } finally { server.stop(true); }
+  });
+
   it("resumes chat tasks with the pinned provider session after daemon restart", async () => {
     const { store, workDir } = daemonTestBed("multiremi-daemon-chat-resume-");
     const workspacesRoot = join(workDir, "workspaces");

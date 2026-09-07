@@ -647,6 +647,7 @@ export class FeishuBotRepo {
           now,
         ],
       );
+      if (deliveryMode === "proactive") this.upsertRoundPushDeliveryWithinTransaction(wakeTask, "");
     }
     return enqueued;
   }
@@ -659,10 +660,18 @@ export class FeishuBotRepo {
        WHERE wake_task_id = ?`,
       [toTaskId, nowIso(), fromTaskId],
     );
+    this.ctx.db.run(
+      `UPDATE multiremi_feishu_bot_outbound_deliveries
+       SET task_id = ?, body = '', status = 'pending', claim_token = NULL, leased_until = NULL,
+           available_at = ?, updated_at = ? WHERE task_id = ?`,
+      [toTaskId, nowIso(), nowIso(), fromTaskId],
+    );
+    const retry = this.ctx.tasks().getTask(toTaskId);
+    if (retry) this.upsertRoundPushDeliveryWithinTransaction(retry, "");
   }
 
-  /** Caller owns the Chat task completion transaction. */
-  completeRoundPushTaskWithinTransaction(task: MultiremiTask, body: string): void {
+  /** Enqueue at task creation; completion fills in the legacy final-body fallback. */
+  upsertRoundPushDeliveryWithinTransaction(task: MultiremiTask, body: string): void {
     const row = this.ctx.db.query(
       `SELECT b.* FROM multiremi_feishu_bot_round_pushes r
        JOIN multiremi_feishu_bot_chat_bindings b ON b.id = r.binding_id
@@ -679,7 +688,7 @@ export class FeishuBotRepo {
          id, workspace_id, binding_id, task_id, chat_id, thread_id,
          reply_to_message_id, body, status, available_at, created_at, updated_at
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
-       ON CONFLICT(task_id) DO NOTHING`,
+       ON CONFLICT(task_id) DO UPDATE SET body = excluded.body, updated_at = excluded.updated_at`,
       [
         createId("fbo"),
         task.workspaceId,
@@ -700,6 +709,7 @@ export class FeishuBotRepo {
     workspaceId: string,
     runtimeId: string,
     nowInput: string | Date = new Date(),
+    supportsTaskStream = false,
   ): MultiremiFeishuBotOutboundDelivery | null {
     const now = nowInput instanceof Date ? nowInput : new Date(nowInput);
     if (!Number.isFinite(now.getTime())) throw new Error("now must be a valid date");
@@ -717,13 +727,14 @@ export class FeishuBotRepo {
         `SELECT o.* FROM multiremi_feishu_bot_outbound_deliveries o
          JOIN multiremi_feishu_bot_chat_bindings b ON b.id = o.binding_id
          WHERE o.workspace_id = ? AND b.app_id = ? AND b.agent_id = ?
+           AND (o.task_id IS NULL OR ? = 1 OR o.body <> '')
            AND ((o.status = 'pending' AND o.available_at <= ?)
              OR (o.status = 'sending' AND o.leased_until IS NOT NULL AND o.leased_until <= ?))
          ORDER BY o.created_at ASC, o.id ASC LIMIT 1`,
-      ).get(workspaceId, config.appId, config.agentId, nowIsoValue, nowIsoValue) as Row | null;
+      ).get(workspaceId, config.appId, config.agentId, supportsTaskStream ? 1 : 0, nowIsoValue, nowIsoValue) as Row | null;
       if (!row) return null;
       const claimToken = createId("foc");
-      const leasedUntil = new Date(now.getTime() + 30_000).toISOString();
+      const leasedUntil = new Date(now.getTime() + (supportsTaskStream ? 120_000 : 30_000)).toISOString();
       const updated = this.ctx.db.run(
         `UPDATE multiremi_feishu_bot_outbound_deliveries
          SET status = 'sending', claim_token = ?, leased_until = ?,
@@ -734,7 +745,13 @@ export class FeishuBotRepo {
         [claimToken, leasedUntil, nowIsoValue, String(row.id), nowIsoValue, nowIsoValue],
       );
       if (updated.changes !== 1) return null;
-      return outboundDelivery(row, claimToken);
+      return {
+        ...outboundDelivery(row, claimToken),
+        ...(supportsTaskStream && row.task_id ? {
+          taskId: String(row.task_id),
+          resumeMessageId: cleanOptionalString(row.external_message_id),
+        } : {}),
+      };
     })();
   }
 
@@ -765,7 +782,7 @@ export class FeishuBotRepo {
     deliveryId: string,
     input: {
       claimToken: string;
-      status: "sent" | "failed";
+      status: "sent" | "failed" | "streaming";
       externalMessageId?: string | null;
       error?: string | null;
     },
@@ -775,6 +792,17 @@ export class FeishuBotRepo {
     if (!config || config.runtimeId !== runtimeId) return false;
     const now = nowInput instanceof Date ? nowInput : new Date(nowInput);
     if (!Number.isFinite(now.getTime())) throw new Error("now must be a valid date");
+    if (input.status === "streaming") {
+      return this.ctx.db.run(
+        `UPDATE multiremi_feishu_bot_outbound_deliveries
+         SET external_message_id = COALESCE(?, external_message_id), leased_until = ?, updated_at = ?
+         WHERE id = ? AND workspace_id = ? AND status = 'sending' AND claim_token = ?
+           AND leased_until > ? AND task_id IS NOT NULL
+           AND binding_id IN (SELECT id FROM multiremi_feishu_bot_chat_bindings WHERE app_id = ? AND agent_id = ?)`,
+        [cleanOptionalString(input.externalMessageId), new Date(now.getTime() + 120_000).toISOString(),
+          now.toISOString(), deliveryId, workspaceId, input.claimToken, now.toISOString(), config.appId, config.agentId],
+      ).changes === 1;
+    }
     if (input.status === "sent") {
       return this.ctx.db.transaction(() => {
         const row = this.ctx.db.query(
@@ -968,7 +996,10 @@ export class FeishuBotRepo {
       // Hold the new host at `stopped` until the previous one lets go.
       return { revision, desired_state: "stopped", config_available: false };
     }
-    return { revision, desired_state: "running", config_available: true };
+    const topics = readWorkspaceIssueTopics(this.ctx.workspaces().getWorkspace(workspaceId)?.settings ?? {});
+    return { revision, desired_state: "running", config_available: true,
+      no_mention_chat_ids: topics.enabled && topics.chatId ? [topics.chatId] : [],
+    };
   }
 
   getRuntimeStatus(workspaceId: string, runtimeId: string): MultiremiFeishuBotRuntimeStatus | null {

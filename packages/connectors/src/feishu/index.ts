@@ -5,7 +5,7 @@
 import type { FeishuConfig } from "@shared/config.js";
 import type { FeishuSenderAuthorizer, GroupPolicy } from "./config.js";
 import type { AgentResponse, ProviderEvent } from "@shared/contracts/provider-types.js";
-import type { Connector, MessageHandler, StreamingHandler, TaskStreamingHandler, IncomingMessage } from "../base.js";
+import type { Connector, MessageHandler, StreamingHandler, TaskStreamingHandler, IncomingMessage, TaskStreamEvent, TaskStreamMeta } from "../base.js";
 import type { MediaAttachment } from "@shared/contracts/acp-protocol.js";
 import { createLogger } from "@shared/logger.js";
 import { mkdirSync, writeFileSync, readdirSync, readFileSync, statSync } from "node:fs";
@@ -25,6 +25,7 @@ import {
 import { createFeishuClient } from "./sdk.js";
 import { createAdapter } from "./sdk.js";
 import { sendMessageFeishu } from "./send.js";
+import type { HandleTaskStreamOpts } from "./channel.js";
 import { uploadImageFeishu } from "./media.js";
 import { createFeishuImageResolver } from "./outbound-images.js";
 import { rewriteMarkdownImages } from "@shared/feishu-markdown-images.js";
@@ -146,6 +147,11 @@ export class FeishuConnector implements Connector {
       idempotencyKey: input.idempotencyKey,
     });
     return { messageId: result.messageId };
+  }
+
+  streamProactiveTask(chatId: string, sessionKey: string, stream: AsyncIterable<TaskStreamEvent>,
+    meta: TaskStreamMeta, options: HandleTaskStreamOpts): Promise<{ messageId: string }> {
+    return this._channel.handleTaskStream(chatId, sessionKey, stream, meta, options);
   }
 
   async uploadImage(image: Buffer): Promise<{ imageKey: string }> {

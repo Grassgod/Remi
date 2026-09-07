@@ -204,6 +204,17 @@ describe("MultiremiDaemonClient HTTP failures", () => {
 });
 
 describe("MultiremiDaemonClient daemon protocol", () => {
+  it("normalizes proactive Task identity and existing message checkpoints", async () => {
+    globalThis.fetch = (async () => Response.json({ pending_feishu_outbound: {
+      id: "fbo_stream", claim_token: "lease", task_id: "tsk_live", resume_message_id: "om_card",
+      chat_id: "oc_group", body: "", body_origin: "agent", idempotency_key: "fbo_stream",
+    } })) as unknown as typeof globalThis.fetch;
+    const client = new MultiremiDaemonClient("https://remi.example", "daemon-token");
+    expect((await client.heartbeatRuntime("runtime-1")).pending_feishu_outbound).toMatchObject({
+      taskId: "tsk_live", resumeMessageId: "om_card", bodyOrigin: "agent",
+    });
+  });
+
   it("normalizes outbound body origin and defaults old-server payloads to Issue", async () => {
     let bodyOrigin: string | undefined = "agent";
     globalThis.fetch = (async () => Response.json({

@@ -139,6 +139,8 @@ export class FeishuStreamingSession {
   private cardkit: CardKitElements;
   private readonly imageResolver: MarkdownImageResolver;
   private currentRawText = "";
+  private durable = false;
+  private durableHeader: unknown;
 
   // Independent throttle per element — thinking and content don't interfere
   private throttler = new ElementThrottler();
@@ -211,7 +213,8 @@ export class FeishuStreamingSession {
   async start(
     receiveId: string,
     receiveIdType: "open_id" | "user_id" | "union_id" | "email" | "chat_id" = "chat_id",
-    options?: { replyToMessageId?: string; sessionId?: string | null; displayName?: string | null; nameSuffix?: string; subtitle?: string | null },
+    options?: { replyToMessageId?: string; sessionId?: string | null; displayName?: string | null; nameSuffix?: string; subtitle?: string | null;
+      durable?: { idempotencyKey: string; messageId?: string | null } },
   ): Promise<void> {
     if (this.state) return;
     this._nameSuffix = options?.nameSuffix;
@@ -219,6 +222,28 @@ export class FeishuStreamingSession {
 
     const apiBase = resolveApiBase(this.creds.domain);
     const cardJson = buildStreamingCardJson(options);
+
+    if (options?.durable) {
+      // Durable jobs use full-card patches so reconnecting does not depend on
+      // an in-memory CardKit sequence or its ten-minute streaming lease.
+      this.durable = true;
+      this._degraded = true;
+      this.durableHeader = cardJson.header;
+      let messageId = options.durable.messageId;
+      if (!messageId) {
+        const content = JSON.stringify({ ...cardJson, config: { width_mode: "fill" } });
+        const data = { msg_type: "interactive" as const, content, uuid: options.durable.idempotencyKey };
+        const sent = options.replyToMessageId
+          ? await this.client.im.message.reply({ path: { message_id: options.replyToMessageId }, data: { ...data, reply_in_thread: true } })
+          : await this.client.im.message.create({ params: { receive_id_type: receiveIdType }, data: { ...data, receive_id: receiveId } });
+        if (sent.code !== 0 || !sent.data?.message_id) throw new Error(`Send card failed: ${sent.msg}`);
+        messageId = sent.data.message_id;
+      }
+      this.state = { cardId: "", messageId, sequence: 1, currentText: "", currentThinking: "", currentStatus: "" };
+      this._resetSafetyTimer();
+      this._startHeartbeat();
+      return;
+    }
 
     const createRes = await fetch(`${apiBase}/cardkit/v1/cards`, {
       method: "POST",
@@ -338,7 +363,7 @@ export class FeishuStreamingSession {
   }
 
   private _buildCurrentCard(): Record<string, unknown> {
-    return buildDegradedCard({
+    const card = buildDegradedCard({
       status: this.state?.currentStatus,
       steps: this._steps,
       text: this.state?.currentText,
@@ -347,6 +372,7 @@ export class FeishuStreamingSession {
       nameSuffix: this._nameSuffix,
       subtitle: this._subtitle,
     });
+    return this.durable ? { ...card, header: this.durableHeader } : card;
   }
 
   private _scheduleDegradedFlush(delayMs = DEGRADED_FLUSH_MS): void {
@@ -359,14 +385,24 @@ export class FeishuStreamingSession {
   }
 
   private async _flushDegradedNow(): Promise<boolean> {
+    if (this.durable) {
+      const flush = this.queue.then(() => this._patchCurrentCard());
+      this.queue = flush.then(() => {});
+      return flush;
+    }
+    return this._patchCurrentCard();
+  }
+
+  private async _patchCurrentCard(): Promise<boolean> {
     if (!this.state || this.closed) return false;
     this._timers.degradedFlush.clear();
     try {
       const card = this._buildCurrentCard();
-      await this.client.im.message.patch({
+      const response = await this.client.im.message.patch({
         path: { message_id: this.state.messageId },
         data: { content: JSON.stringify(card) },
       });
+      if (response.code !== 0) throw new Error(`Card patch failed: ${response.msg}`);
       return true;
     } catch (e: any) {
       const detail = e?.response?.data ? JSON.stringify(e.response.data).slice(0, 500) : "";
@@ -669,6 +705,8 @@ export class FeishuStreamingSession {
   }
 
   private _resetSafetyTimer(): void {
+    // Durable Task cards are owned by the delivery lease and its abort signal.
+    if (this.durable) return;
     this._timers.safety.arm(SAFETY_TIMEOUT_MS, () => {
       if (this.state && !this.closed) {
         this.log(
@@ -756,6 +794,8 @@ export class FeishuStreamingSession {
     // Flush all pending throttled updates first
     if (!this._degraded) {
       await this._flushAll();
+    } else if (this.durable) {
+      await this.queue;
     }
 
     // Normalize arguments
@@ -841,14 +881,16 @@ export class FeishuStreamingSession {
       });
       const cardJson = JSON.stringify(finalCard);
       this.log(`Final card patch: msgId=${this.state.messageId} size=${(cardJson.length / 1024).toFixed(1)}KB steps=${this._steps.length}`);
-      await this.client.im.message.patch({
+      const response = await this.client.im.message.patch({
         path: { message_id: this.state.messageId },
         data: { content: cardJson },
       });
+      if (response.code !== 0) throw new Error(`Final card patch failed: ${response.msg}`);
       this.log(`Final card patch OK`);
     } catch (e: any) {
       const detail = e?.response?.data ? JSON.stringify(e.response.data).slice(0, 500) : "";
       this.log(`Final card patch failed: ${String(e)} ${detail}`);
+      if (this.durable) throw e;
     }
 
     this.log(`Closed streaming: cardId=${this.state.cardId}`);
@@ -856,6 +898,13 @@ export class FeishuStreamingSession {
 
   isActive(): boolean {
     return this.state !== null && !this.closed;
+  }
+
+  /** Stop local writers without marking a durable Task as cancelled. */
+  detach(): void {
+    this.closed = true;
+    for (const timer of Object.values(this._timers)) timer.clear();
+    this._abortController?.abort();
   }
 
   getMessageId(): string | null {
