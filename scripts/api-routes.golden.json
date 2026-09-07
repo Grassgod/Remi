@@ -2253,6 +2253,7 @@
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
         "event_config": null,
+        "schedule_targets": null,
         "issue_creation_restricted": false,
         "issue_creation_restriction_reason": null,
         "issue_creation_restricted_by_task_id": null
@@ -2282,6 +2283,7 @@
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
         "event_config": null,
+        "schedule_targets": null,
         "issue_creation_restricted": false,
         "issue_creation_restriction_reason": null,
         "issue_creation_restricted_by_task_id": null
@@ -2311,6 +2313,7 @@
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
         "event_config": null,
+        "schedule_targets": null,
         "issue_creation_restricted": false,
         "issue_creation_restriction_reason": null,
         "issue_creation_restricted_by_task_id": null
@@ -2340,6 +2343,7 @@
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
         "event_config": null,
+        "schedule_targets": null,
         "issue_creation_restricted": false,
         "issue_creation_restriction_reason": null,
         "issue_creation_restricted_by_task_id": null
@@ -2369,7 +2373,9 @@
           "issueId": "iss_3gq3rlr8o45b",
           "issueSessionId": "ises_piqp1rpc1xal"
         },
-        "created_at": "<timestamp>"
+        "created_at": "<timestamp>",
+        "schedule_target": null,
+        "schedule_batch_id": null
       }
     },
     {
@@ -2437,6 +2443,8 @@
         "deliveryId": "whd_l30ikvaows9d",
         "delivery_id": "whd_l30ikvaows9d",
         "run": {
+          "scheduleTarget": null,
+          "scheduleBatchId": null,
           "id": "run_aw448dcq07dx",
           "autopilotId": "apl_snapshot",
           "source": "webhook",
@@ -2596,6 +2604,8 @@
       "status": 201,
       "body": {
         "run": {
+          "scheduleTarget": null,
+          "scheduleBatchId": null,
           "id": "run_8dim5r24mzl2",
           "autopilotId": "apl_snapshot",
           "source": "manual",
@@ -2627,6 +2637,8 @@
       "status": 201,
       "body": {
         "run": {
+          "scheduleTarget": null,
+          "scheduleBatchId": null,
           "id": "run_q5010won31uy",
           "autopilotId": "apl_snapshot",
           "source": "schedule",
@@ -2658,6 +2670,8 @@
       "status": 201,
       "body": {
         "run": {
+          "scheduleTarget": null,
+          "scheduleBatchId": null,
           "id": "run_c77isk189u85",
           "autopilotId": "apl_snapshot",
           "source": "api",
@@ -2758,6 +2772,8 @@
         "deliveryId": "whd_n03hpqa2j1gs",
         "delivery_id": "whd_n03hpqa2j1gs",
         "run": {
+          "scheduleTarget": null,
+          "scheduleBatchId": null,
           "id": "run_d9havbvj3rg3",
           "autopilotId": "apl_snapshot",
           "source": "webhook",
@@ -7055,6 +7071,7 @@
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "event_config": null,
+            "schedule_targets": null,
             "issue_creation_restricted": false,
             "issue_creation_restriction_reason": null,
             "issue_creation_restricted_by_task_id": null
@@ -7155,6 +7172,8 @@
               "issueSessionId": "ises_gbmah1mhgwob"
             },
             "created_at": "<timestamp>",
+            "schedule_target": null,
+            "schedule_batch_id": null,
             "trigger_summary": {
               "event_type": "github.issues.opened",
               "repository_id": null,
@@ -7187,6 +7206,8 @@
               "issueSessionId": "ises_j3m15clzy3p6"
             },
             "created_at": "<timestamp>",
+            "schedule_target": null,
+            "schedule_batch_id": null,
             "trigger_summary": null
           }
         ],
@@ -7217,7 +7238,9 @@
           "issueId": "iss_i244sp2mewms",
           "issueSessionId": "ises_j3m15clzy3p6"
         },
-        "created_at": "<timestamp>"
+        "created_at": "<timestamp>",
+        "schedule_target": null,
+        "schedule_batch_id": null
       }
     },
     {
@@ -12721,6 +12744,7 @@
           "description": null
         },
         "current": {
+          "schedule_target": null,
           "agent": null,
           "task": null,
           "chat": null,
@@ -16861,6 +16885,7 @@
             "label": "snapshot trigger",
             "eventFilters": null,
             "eventConfig": null,
+            "scheduleTargets": null,
             "issueCreationRestricted": false,
             "issueCreationRestrictionReason": null,
             "issueCreationRestrictedByTaskId": null,
@@ -16869,6 +16894,7 @@
             "lastFiredAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
+            "schedule_targets": null,
             "autopilot_id": "apl_snapshot",
             "cron_expression": null,
             "next_run_at": null,
@@ -16888,6 +16914,8 @@
         ],
         "runs": [
           {
+            "scheduleTarget": null,
+            "scheduleBatchId": null,
             "id": "run_u4c9m3gewz2d",
             "autopilotId": "apl_snapshot",
             "source": "webhook",
@@ -16919,6 +16947,8 @@
             "createdAt": "<timestamp>"
           },
           {
+            "scheduleTarget": null,
+            "scheduleBatchId": null,
             "id": "run_sv8e5p1ut6x0",
             "autopilotId": "apl_snapshot",
             "source": "manual",
@@ -17051,6 +17081,8 @@
       "body": {
         "runs": [
           {
+            "scheduleTarget": null,
+            "scheduleBatchId": null,
             "id": "run_u4c9m3gewz2d",
             "autopilotId": "apl_snapshot",
             "source": "webhook",
@@ -17082,6 +17114,8 @@
             "createdAt": "<timestamp>"
           },
           {
+            "scheduleTarget": null,
+            "scheduleBatchId": null,
             "id": "run_sv8e5p1ut6x0",
             "autopilotId": "apl_snapshot",
             "source": "manual",
