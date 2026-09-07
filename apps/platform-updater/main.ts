@@ -2,9 +2,9 @@ import type { MultiremiPlatformOperation, MultiremiPlatformRelease } from "@mult
 import { PlatformUpdaterClient } from "@remi-platform/updater/client.js";
 import { DockerComposeDriver } from "@remi-platform/updater/compose-driver.js";
 import {
-  DEFAULT_DRAIN_TIMEOUT_MS,
   DrainCancelledError,
   PlatformDrainCoordinator,
+  resolveDrainTimeoutMs,
 } from "@remi-platform/updater/drain.js";
 import { fetchReleaseFeed } from "@remi-platform/updater/release-feed.js";
 import { SystemdReleaseDriver } from "@remi-platform/updater/systemd-release-driver.js";
@@ -15,7 +15,7 @@ const apiToken = requiredEnv("MULTIREMI_TOKEN");
 const updaterToken = requiredEnv("MULTIREMI_PLATFORM_UPDATER_TOKEN");
 const releaseFeedUrl = optionalEnv("MULTIREMI_PLATFORM_RELEASE_FEED_URL");
 const pollMs = positiveNumber(process.env.MULTIREMI_PLATFORM_UPDATER_POLL_MS, 5_000);
-const drainTimeoutMs = positiveNumber(process.env.MULTIREMI_PLATFORM_DRAIN_TIMEOUT_MS, DEFAULT_DRAIN_TIMEOUT_MS);
+const drainTimeoutMs = resolveDrainTimeoutMs(process.env.MULTIREMI_PLATFORM_DRAIN_TIMEOUT_MS);
 const runner = new BunCommandRunner();
 const client = new PlatformUpdaterClient(apiUrl, apiToken, updaterToken);
 const driver = createDriver();

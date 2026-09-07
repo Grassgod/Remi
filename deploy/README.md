@@ -246,14 +246,19 @@ net — whenever a terminal operation status is reported.
 - The drain lease has a TTL (default 120 s, renewed every poll). If the
   updater crashes, the API lazily flips back to `normal` on the next read and
   daemons resume claiming — the platform can never stay stuck draining.
-- If the wait exceeds `MULTIREMI_PLATFORM_DRAIN_TIMEOUT_MS` (default 15 min),
-  the switch is NOT executed, the operation fails with a drain-timeout error,
-  and scheduling resumes. There is no automatic force-update; resolve or
-  cancel the long-running tasks and retry the update manually.
+- The task wait has no deadline by default: `MULTIREMI_PLATFORM_DRAIN_TIMEOUT_MS=0`
+  (or unset) waits until existing tasks finish or the operator cancels. New
+  tasks remain queued throughout the wait. This does not disable the 120 s
+  crash-recovery lease above. Human-blocked or stuck tasks still need operator
+  attention; cancel the update to resume scheduling without interrupting them.
+- Operators can opt into a finite wait with a positive
+  `MULTIREMI_PLATFORM_DRAIN_TIMEOUT_MS`. If it expires, the switch is NOT
+  executed, the operation fails, and scheduling resumes. There is no automatic
+  force-update. An existing positive override is still honored after upgrading.
 - Operators can cancel an update from the 版本与服务 page until the switch
   phase begins (`queued/preparing/pulling/draining`).
-- Old daemons that do not report a drain ack keep the gate closed until the
-  timeout: upgrade or retire them first.
+- Old daemons that do not report a drain ack keep the gate closed: upgrade or
+  retire them first, cancel the operation, or configure a finite wait.
 
 Daemon-side report outbox: every task-scoped report (messages, prompt,
 progress, session pin, usage, workspace, complete/fail) is written to a
