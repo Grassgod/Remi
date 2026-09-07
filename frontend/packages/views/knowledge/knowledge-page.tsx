@@ -259,9 +259,9 @@ function WikiPane({
   if (sources.length === 0) return <EmptyState icon={BookOpen} title={t(($) => $.knowledge.wiki_empty)} />;
   return (
     <div className="grid min-h-[30rem] flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[220px_280px_minmax(0,1fr)]">
-      <aside className="border-b lg:border-b-0 lg:border-r">
-        <div className="border-b px-3 py-2 text-xs font-medium text-muted-foreground">{t(($) => $.knowledge.wiki_sources)}</div>
-        <div className="max-h-48 overflow-y-auto p-2 lg:max-h-none">
+      <aside className="flex flex-col border-b lg:min-h-0 lg:border-b-0 lg:border-r">
+        <div className="shrink-0 border-b px-3 py-2 text-xs font-medium text-muted-foreground">{t(($) => $.knowledge.wiki_sources)}</div>
+        <div className="max-h-48 overflow-y-auto p-2 lg:max-h-none lg:min-h-0 lg:flex-1">
           {([
             {
               kind: "project" as const,
@@ -307,12 +307,12 @@ function WikiPane({
           })}
         </div>
       </aside>
-      <nav className="min-h-52 border-b lg:border-b-0 lg:border-r">
-        <div className="flex items-center justify-between border-b px-3 py-2 text-xs text-muted-foreground">
+      <nav className="flex min-h-52 flex-col border-b lg:min-h-0 lg:border-b-0 lg:border-r">
+        <div className="flex shrink-0 items-center justify-between border-b px-3 py-2 text-xs text-muted-foreground">
           <span className="font-medium">{t(($) => $.knowledge.wiki_directory)}</span>
           {selectedSource?.updatedAt && <span>{formatRelativeDate(selectedSource.updatedAt)}</span>}
         </div>
-        <div className="max-h-72 overflow-y-auto p-2 lg:max-h-none">
+        <div className="max-h-72 overflow-y-auto p-2 lg:max-h-none lg:min-h-0 lg:flex-1">
           {repositoryDocsQuery.isPending && selectedSource?.kind === "repository" ? <LoadingPane />
             : repositoryDocsQuery.error && selectedSource?.kind === "repository" ? (
               <ErrorPane error={repositoryDocsQuery.error} retry={() => { void repositoryDocsQuery.refetch(); }} />
@@ -459,13 +459,13 @@ function MemoryPane({
     <TooltipProvider delay={100}>
       <div className="grid min-h-[30rem] flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[220px_280px_minmax(0,1fr)]">
         <aside
-          className="border-b lg:border-b-0 lg:border-r"
+          className="flex flex-col border-b lg:min-h-0 lg:border-b-0 lg:border-r"
           aria-label={t(($) => $.knowledge.wiki_sources)}
         >
-          <div className="border-b px-3 py-2 text-xs font-medium text-muted-foreground">
+          <div className="shrink-0 border-b px-3 py-2 text-xs font-medium text-muted-foreground">
             {t(($) => $.knowledge.wiki_sources)}
           </div>
-          <div className="max-h-48 overflow-y-auto p-2 lg:max-h-none">
+          <div className="max-h-48 overflow-y-auto p-2 lg:max-h-none lg:min-h-0 lg:flex-1">
             {memoryProjects.map((project) => {
               const active = project.id === selectedProject?.id;
               return (
@@ -496,13 +496,13 @@ function MemoryPane({
         </aside>
 
         <nav
-          className="min-h-52 border-b lg:border-b-0 lg:border-r"
+          className="flex min-h-52 flex-col border-b lg:min-h-0 lg:border-b-0 lg:border-r"
           aria-label={t(($) => $.knowledge.wiki_directory)}
         >
-          <div className="border-b px-3 py-2 text-xs font-medium text-muted-foreground">
+          <div className="shrink-0 border-b px-3 py-2 text-xs font-medium text-muted-foreground">
             {t(($) => $.knowledge.wiki_directory)}
           </div>
-          <div className="max-h-72 overflow-y-auto p-2 lg:max-h-none">
+          <div className="max-h-72 overflow-y-auto p-2 lg:max-h-none lg:min-h-0 lg:flex-1">
             {visibleDocs.length > 0 ? (
               <div role="list">
                 {visibleDocs.map((doc) => {
@@ -1190,9 +1190,9 @@ export function KnowledgePage() {
 
         {panelPending ? <LoadingPane /> : panelError ? <ErrorPane error={panelError} retry={retry} /> : (
           <>
-            <TabsContent value="wiki" className="min-h-0 overflow-y-auto"><WikiPane projects={projects} docs={docs} repositories={repositories} summaries={summaries} search={search} sortOrder={sortOrder} /></TabsContent>
+            <TabsContent value="wiki" className="min-h-0 overflow-y-auto lg:flex lg:flex-col"><WikiPane projects={projects} docs={docs} repositories={repositories} summaries={summaries} search={search} sortOrder={sortOrder} /></TabsContent>
             <TabsContent value="raw" className="min-h-0 overflow-y-auto"><RawPane submissions={submissions} search={search} /></TabsContent>
-            <TabsContent value="memory" className="min-h-0 overflow-y-auto"><MemoryPane projects={projects} docs={memoryDocs} wikiPages={docs} search={search} /></TabsContent>
+            <TabsContent value="memory" className="min-h-0 overflow-y-auto lg:flex lg:flex-col"><MemoryPane projects={projects} docs={memoryDocs} wikiPages={docs} search={search} /></TabsContent>
             <TabsContent value="runs" className="min-h-0 overflow-y-auto"><RunPane runs={runs} search={search} /></TabsContent>
           </>
         )}
