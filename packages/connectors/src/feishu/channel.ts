@@ -179,7 +179,7 @@ export class FeishuChannel {
   }
 
   /**
-   * Consume an ACP stream and render it as a streaming Feishu card.
+   * Consume ACP events and update a Feishu card through full-message patches.
    * Handles the full lifecycle: card creation → live updates → close.
    */
   async handleStream(
@@ -204,7 +204,7 @@ export class FeishuChannel {
     this._activeSessions.set(sessionKey, session);
 
     try {
-      // Start streaming card
+      // Create the patch-only message.
       await session.start(chatId, "chat_id", {
         replyToMessageId: opts.replyToMessageId,
         sessionId: opts.sessionId,
@@ -235,11 +235,12 @@ export class FeishuChannel {
         await session.close({ finalText: `Error: ${String(err)}` }).catch(() => {});
       }
     } finally {
-      this._activeSessions.delete(sessionKey);
+      session.detach();
+      if (this._activeSessions.get(sessionKey) === session) this._activeSessions.delete(sessionKey);
     }
   }
 
-  /** Consume the canonical persisted Task stream and render one Feishu card. */
+  /** Consume the canonical persisted Task stream and patch one Feishu message. */
   async handleTaskStream(
     chatId: string,
     sessionKey: string,

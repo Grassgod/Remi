@@ -24,8 +24,15 @@ is queued/running, renders tool steps and human requests, then finalizes the sam
 card. Card delivery never invokes a Provider directly. It runs independently of
 the daemon heartbeat/claim loop and renews its delivery lease while waiting.
 
-Durable cards use coalesced full-card updates (the renderer's existing fallback
-transport) so reconnects do not depend on a lost CardKit sequence counter.
+Interactive replies and proactive reports both create an ordinary interactive
+message and update it exclusively through `im.message.patch`. Neither uses
+CardKit, per-element updates, or native streaming mode. Text, status, and tool
+events are coalesced on the same three-second interval. Human-request forms and
+the final result are patched immediately. One serialized queue prevents a slow
+progress update from overwriting the final result.
+
+Durable delivery metadata only supplies the message identity for replay and
+lease-owned lifetime; it does not select a different update transport.
 The Feishu message ID is persisted before event consumption; retries replay into
 that card, with the delivery UUID deduplicating initial sends. Delivery failures
 remain retryable. Settled human requests are not reopened during replay.
