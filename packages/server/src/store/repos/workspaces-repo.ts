@@ -230,7 +230,13 @@ export class WorkspacesRepo {
     if (ownerCount <= 1) throw new Error("workspace must have at least one owner");
   }
 
-  getCurrentUser(): MultiremiUser {
+  getCurrentUser(userId?: string | null): MultiremiUser {
+    const requestedId = cleanOptionalString(userId);
+    if (requestedId && requestedId !== "local") {
+      const user = this.getUser(requestedId);
+      if (!user) throw new Error("user not found");
+      return user;
+    }
     const existing = this.getUser("local");
     if (existing) return existing;
     const now = nowIso();
@@ -386,8 +392,8 @@ export class WorkspacesRepo {
     return this.listWorkspaces().filter((ws) => this.getUserRoleInWorkspace(uid, ws.id) !== null);
   }
 
-  updateCurrentUser(input: UpdateMultiremiUserInput): MultiremiUser {
-    const current = this.getCurrentUser();
+  updateCurrentUser(input: UpdateMultiremiUserInput, userId?: string | null): MultiremiUser {
+    const current = this.getCurrentUser(userId);
     const name = input.name === undefined ? current.name : String(input.name).trim();
     if (!name) throw new Error("name is required");
     const email = input.email === undefined ? current.email : normalizeEmail(input.email);
@@ -437,12 +443,12 @@ export class WorkspacesRepo {
     return this.getUser(current.id)!;
   }
 
-  patchCurrentUserOnboarding(questionnaire: Record<string, unknown>): MultiremiUser {
-    return this.updateCurrentUser({ onboardingQuestionnaire: questionnaire });
+  patchCurrentUserOnboarding(questionnaire: Record<string, unknown>, userId?: string | null): MultiremiUser {
+    return this.updateCurrentUser({ onboardingQuestionnaire: questionnaire }, userId);
   }
 
   markCurrentUserOnboarded(userId?: string | null): MultiremiUser {
-    const id = cleanOptionalString(userId) ?? this.getCurrentUser().id;
+    const id = this.getCurrentUser(userId).id;
     const now = nowIso();
     this.ctx.db.run(
       "UPDATE multiremi_users SET onboarded_at = COALESCE(onboarded_at, ?), updated_at = ? WHERE id = ?",

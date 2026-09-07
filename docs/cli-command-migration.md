@@ -80,6 +80,16 @@ remi memory publish
 remi platform operation cancel <operation> --yes
 ```
 
+## Current user identity
+
+`remi member get me`, `remi member update me`, and `remi member onboarding ...`
+read or update the authenticated user's profile and onboarding state. The Web
+console uses the same `/api/me` routes, so reloading a page preserves that
+identity. The Web-to-CLI exchange at `POST /api/cli-token` keeps the same user ID
+and workspace membership permissions. A signed identity whose user no longer
+exists is rejected with `401`; deployment-master requests and unauthenticated
+requests in open local mode retain the existing `local` identity.
+
 ## Deprecated aliases
 
 `remi wiki lint` is deprecated since `0.2.58` with no CLI replacement. Wiki
