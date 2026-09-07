@@ -31,6 +31,7 @@ import {
 } from "./client.js";
 import { createEventMapper, responseToUsage } from "./acp-event-mapper.js";
 import { FeishuConciergeSupervisor, type FeishuConciergeHost } from "./feishu-concierge.js";
+import { deliverFeishuOutbound } from "./feishu-outbound.js";
 import { redactFeishuBotError } from "@multiremi/feishu-bot/diagnostics.js";
 import { rewriteMarkdownImages } from "@shared/feishu-markdown-images.js";
 import {
@@ -603,6 +604,7 @@ export class MultiremiDaemon {
   private activeTaskCount = 0;
   private drainingTaskCount = 0;
   private pendingClaimCount = 0;
+  private readonly feishuOutboundRuns = new Map<string, { claimToken: string; abort: AbortController; done: Promise<void> }>();
   private inflight = new Set<Promise<void>>();
   private activeTaskIds = new Set<string>();
   private activeTaskAborts = new Set<AbortController>();
@@ -852,6 +854,10 @@ export class MultiremiDaemon {
     return this.client.getFeishuBotTaskSnapshot(taskId);
   }
 
+  async isFeishuBotHumanRequestPending(taskId: string, requestId: string): Promise<boolean> {
+    return (await this.client.getTaskHumanRequest(taskId, requestId))?.status === "pending";
+  }
+
   respondFeishuBotHumanRequest(
     taskId: string,
     requestId: string,
@@ -1083,6 +1089,8 @@ export class MultiremiDaemon {
       // Running tasks depend on the repo-checkout server, so let any in-flight
       // tasks drain before waiting for the GC lease they may currently hold.
       await Promise.allSettled([...this.inflight]);
+      for (const run of this.feishuOutboundRuns.values()) run.abort.abort();
+      await Promise.allSettled([...this.feishuOutboundRuns.values()].map(run => run.done));
       await this.drainGcInFlight();
       this.gitWorktreeInspector?.close();
       this.stopRepoCheckoutServer();
@@ -1240,7 +1248,7 @@ export class MultiremiDaemon {
     }
     this.applyFeishuBotDirective(ack);
     if (ack.pending_feishu_outbound) {
-      await this.handleFeishuBotOutbound(runtimeId, ack.pending_feishu_outbound);
+      this.queueFeishuBotOutbound(runtimeId, ack.pending_feishu_outbound);
     }
     if (ack.ssh_mesh) {
       await this.sshMeshManager.reconcile(ack.ssh_mesh);
@@ -1491,9 +1499,25 @@ export class MultiremiDaemon {
       });
   }
 
+  private queueFeishuBotOutbound(runtimeId: string,
+    delivery: NonNullable<MultiremiDaemonHeartbeatConfigAck["pending_feishu_outbound"]>): void {
+    const previous = this.feishuOutboundRuns.get(delivery.id);
+    if (previous?.claimToken === delivery.claimToken) return;
+    previous?.abort.abort();
+    const abort = new AbortController();
+    const done = (async () => {
+      await previous?.done;
+      await this.handleFeishuBotOutbound(runtimeId, delivery, AbortSignal.any([abort.signal, this.pollAbort.signal]));
+    })().catch(error => log.warn(`Feishu outbound failed: ${redactFeishuBotError(error)}`)).finally(() => {
+      if (this.feishuOutboundRuns.get(delivery.id)?.abort === abort) this.feishuOutboundRuns.delete(delivery.id);
+    });
+    this.feishuOutboundRuns.set(delivery.id, { claimToken: delivery.claimToken, abort, done });
+  }
+
   private async handleFeishuBotOutbound(
     runtimeId: string,
     delivery: NonNullable<MultiremiDaemonHeartbeatConfigAck["pending_feishu_outbound"]>,
+    signal: AbortSignal = this.pollAbort.signal,
   ): Promise<void> {
     const supervisor = this.feishuConcierge;
     try {
@@ -1514,11 +1538,10 @@ export class MultiremiDaemon {
       const body = await rewriteMarkdownImages(delivery.body, resolveImage, {
         publicUrl: this.options.serverUrl,
       });
-      const sent = await supervisor.sendOutbound({ ...delivery, body });
-      await this.client.reportFeishuBotOutboundResult(runtimeId, delivery.id, {
-        claimToken: delivery.claimToken,
-        status: "sent",
-        externalMessageId: sent.messageId,
+      await deliverFeishuOutbound(delivery, {
+        signal,
+        send: options => supervisor.sendOutbound({ ...delivery, body }, options),
+        report: input => this.client.reportFeishuBotOutboundResult(runtimeId, delivery.id, input),
       });
     } catch (error) {
       await this.client.reportFeishuBotOutboundResult(runtimeId, delivery.id, {
@@ -2512,7 +2535,7 @@ export class MultiremiDaemon {
 
     try {
       this.assertWorkspaceRootOwner();
-      if (task.issueId) {
+      if (task.issueId && !task.chatSessionId) {
         // Shared Issue roots and private discussion Session roots have separate
         // lifecycle keys, so each is protected from GC without serializing them
         // against one another.

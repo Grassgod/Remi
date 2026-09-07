@@ -116,6 +116,54 @@ function host(input: {
 }
 
 describe("control-plane Feishu concierge host", () => {
+  it("streams an existing proactive Task instead of sending only its final body", async () => {
+    const fake = fakeDaemon();
+    const reads: number[] = [];
+    Object.assign(fake.daemon, {
+      listFeishuBotTaskMessages: async (_id: string, since: number) => {
+        reads.push(since);
+        return since === 0 ? [{ id: "msg_tool", taskId: "tsk_live", seq: 1, type: "tool_use", tool: "Bash" }] : [];
+      },
+      getFeishuBotTaskSnapshot: async () => ({ taskId: "tsk_live", status: "completed", result: "done", usage: [] }),
+    });
+    const test = host({ daemon: fake.daemon });
+    const events: unknown[] = [];
+    test.channel.handle.streamProactiveTask = async (chatId, _sessionKey, stream, meta, options) => {
+      expect(chatId).toBe("oc_topic");
+      expect(meta.taskId).toBe("tsk_live");
+      expect(options.durable).toEqual({ idempotencyKey: "fbo_live", messageId: "om_existing" });
+      await options.onStarted!("om_existing");
+      for await (const event of stream) events.push(event);
+      return { messageId: "om_existing" };
+    };
+    await test.conciergeHost.start(assignment());
+    const checkpoints: string[] = [];
+    await test.conciergeHost.sendOutbound!({ id: "fbo_live", claimToken: "lease", chatId: "oc_topic", threadId: "om_root",
+      replyToMessageId: "om_root", body: "", bodyOrigin: "agent", taskId: "tsk_live", resumeMessageId: "om_existing",
+      idempotencyKey: "fbo_live" }, { signal: new AbortController().signal, onStarted: async id => { checkpoints.push(id); } });
+    expect(test.channel.sent).toHaveLength(0);
+    expect(checkpoints).toEqual(["om_existing"]);
+    expect(reads).toEqual([0, 1]);
+    expect(events).toEqual([
+      expect.objectContaining({ kind: "message", message: expect.objectContaining({ type: "tool_use" }) }),
+      expect.objectContaining({ kind: "snapshot", snapshot: expect.objectContaining({ status: "completed" }) }),
+    ]);
+  });
+
+  it("applies live no-mention settings to exactly the configured group", async () => {
+    const test = host({ daemon: fakeDaemon().daemon });
+    test.conciergeHost.setNoMentionChatIds!(["oc_topics"]);
+    await test.conciergeHost.start(assignment());
+    const policy = test.calls[0]!.options.groupPolicy!;
+    expect(policy.getByChatId("oc_topics")).toEqual({ monitor: true, replyMode: "thread" });
+    expect(policy.getByChatId("oc_other")).toBeNull();
+    test.conciergeHost.setNoMentionChatIds!(["oc_new"]);
+    expect(policy.getByChatId("oc_topics")).toBeNull();
+    expect(policy.getByChatId("oc_new")?.monitor).toBe(true);
+    test.conciergeHost.setNoMentionChatIds!([]);
+    expect(policy.getByChatId("oc_new")).toBeNull();
+  });
+
   it("routes proactive delivery through the running connector handle", async () => {
     const fake = fakeDaemon();
     const test = host({ daemon: fake.daemon });

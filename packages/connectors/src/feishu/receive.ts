@@ -39,6 +39,7 @@ type GroupMessageDropReason =
   | "bot_open_id_unresolved"
   | "directed_at_others"
   | "not_mentioned"
+  | "bot_message"
   | "connector_stopped"
   | "processing_error";
 
@@ -543,6 +544,13 @@ export async function processFeishuMessageEvent(
   admission?: FeishuMessageAdmissionOptions,
 ): Promise<ParsedFeishuMessage | null> {
   const messageId = event.message.message_id;
+
+  if ((event.sender as { sender_type?: string }).sender_type === "app"
+      || (event.sender as { sender_type?: string }).sender_type === "bot"
+      || (botOpenId && event.sender.sender_id?.open_id === botOpenId)) {
+    logDroppedGroupMessage(event, "bot_message");
+    return null;
+  }
 
   // Dedup
   if (!tryRecordMessage(messageId)) {

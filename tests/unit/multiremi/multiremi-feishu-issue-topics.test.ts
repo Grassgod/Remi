@@ -72,6 +72,18 @@ function configureTopics(store: MultiremiStore, projectIds?: string[]): void {
 }
 
 describe("Feishu Issue topics", () => {
+  it("refreshes the exact no-mention group in directives without redeploying the bot", () => {
+    const { store, revision } = scaffold();
+    const directive = () => store.feishuBotDirectiveForRuntime("local", "rt_bot");
+    expect(directive()?.no_mention_chat_ids).toEqual([]);
+    configureTopics(store);
+    expect(directive()).toMatchObject({ revision, no_mention_chat_ids: ["oc_issue_topics"] });
+    store.updateWorkspace("local", { settings: { issueTopics: { enabled: true, chatId: "oc_new" } } });
+    expect(directive()).toMatchObject({ revision, no_mention_chat_ids: ["oc_new"] });
+    store.updateWorkspace("local", { settings: { issueTopics: { enabled: false, chatId: "oc_new" } } });
+    expect(directive()).toMatchObject({ revision, no_mention_chat_ids: [] });
+  });
+
   it("creates one root delivery and reconciles its binding for inbound replies", async () => {
     const { store, revision } = scaffold();
     configureTopics(store);

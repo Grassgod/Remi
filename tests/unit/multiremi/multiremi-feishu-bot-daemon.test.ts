@@ -20,6 +20,7 @@ import {
   FEISHU_CONCIERGE_OUTBOUND_LEGACY_PROTOCOL_VERSION,
   FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION,
   FEISHU_CONCIERGE_PROTOCOL_VERSION,
+  FEISHU_CONCIERGE_TASK_STREAM_PROTOCOL_VERSION,
   type MultiremiFeishuBotRuntimeStatus,
 } from "@multiremi/contracts/types.js";
 import type { MultiremiStore } from "@multiremi/store.js";
@@ -134,7 +135,7 @@ describe("Feishu bot control-plane delivery", () => {
 
     expect(ack.status).toBe(200);
     const body = await ack.json();
-    expect(body.feishu_bot).toEqual({ revision: 1, desired_state: "running", config_available: true });
+    expect(body.feishu_bot).toEqual({ revision: 1, desired_state: "running", config_available: true, no_mention_chat_ids: [] });
     // The whole ack, not just the directive: a credential must not ride along
     // in `workspace_settings` or any other field either.
     expect(JSON.stringify(body)).not.toContain(APP_SECRET);
@@ -250,6 +251,35 @@ describe("Feishu bot control-plane delivery", () => {
       body: JSON.stringify({ revision: 1, external_session_key: "oc_chat_1" }),
     });
     expect(crossRuntime.status).toBe(403);
+  });
+
+  it("offers live Tasks only to v4 and persists a resumable card with a guarded renewal", async () => {
+    const test = await scaffold();
+    const submitted = test.store.submitFeishuBotMessage("local", "rt_a", {
+      revision: 1, externalSessionKey: "oc_stream:thread:om_root", externalMessageId: "om_root",
+      replyToMessageId: "om_root", chatId: "oc_stream", threadId: "om_root", text: "start",
+    });
+    const binding = db!.query("SELECT id FROM multiremi_feishu_bot_chat_bindings WHERE chat_session_id = ?")
+      .get(submitted.chatSessionId) as { id: string };
+    const now = new Date().toISOString();
+    db!.run(`INSERT INTO multiremi_feishu_bot_outbound_deliveries
+      (id, workspace_id, binding_id, task_id, chat_id, thread_id, reply_to_message_id, body, status, available_at, created_at, updated_at)
+      VALUES ('fbo_stream', 'local', ?, ?, 'oc_stream', 'om_root', 'om_root', '', 'pending', ?, ?, ?)`,
+      [binding.id, submitted.taskId, now, now, now]);
+    await report(test, "rt_a", { applied_revision: 1, state: "online" });
+    expect(await (await heartbeat(test, "rt_a")).json()).not.toHaveProperty("pending_feishu_outbound");
+    const current = await (await heartbeat(test, "rt_a", { feishu_concierge_protocol: FEISHU_CONCIERGE_TASK_STREAM_PROTOCOL_VERSION })).json();
+    expect(current.pending_feishu_outbound).toMatchObject({ task_id: submitted.taskId, resume_message_id: null, body: "" });
+    const renew = (token: string, runtimeToken = test.tokens.rt_a!) => test.app.request(
+      "/api/daemon/runtimes/rt_a/feishu-bot/outbound/fbo_stream/result", { method: "POST",
+        headers: daemonHeaders(runtimeToken), body: JSON.stringify({ status: "streaming", claim_token: token, external_message_id: "om_card" }) });
+    expect((await renew("wrong")).status).toBe(409);
+    expect((await renew(current.pending_feishu_outbound.claim_token, test.tokens.rt_b!)).status).toBe(403);
+    expect((await renew(current.pending_feishu_outbound.claim_token)).status).toBe(200);
+    db!.run("UPDATE multiremi_feishu_bot_outbound_deliveries SET leased_until = ? WHERE id = 'fbo_stream'", [new Date(Date.now() - 1).toISOString()]);
+    expect((await renew(current.pending_feishu_outbound.claim_token)).status).toBe(409);
+    const recovered = await (await heartbeat(test, "rt_a", { feishu_concierge_protocol: FEISHU_CONCIERGE_TASK_STREAM_PROTOCOL_VERSION })).json();
+    expect(recovered.pending_feishu_outbound).toMatchObject({ task_id: submitted.taskId, resume_message_id: "om_card" });
   });
 
   it("leases one proactive reply in heartbeat and acknowledges it by claim token", async () => {

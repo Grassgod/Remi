@@ -3799,6 +3799,8 @@ export const FEISHU_CONCIERGE_PROTOCOL_VERSION = 1;
 /** v2 can claim text deliveries; v3 adds guarded image attachment fetching. */
 export const FEISHU_CONCIERGE_OUTBOUND_LEGACY_PROTOCOL_VERSION = 2;
 export const FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION = 3;
+/** v4 consumes proactive Task events and renews delivery leases while streaming. */
+export const FEISHU_CONCIERGE_TASK_STREAM_PROTOCOL_VERSION = 4;
 export const FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER = "X-Multiremi-Feishu-Claim-Token";
 
 export type FeishuBotDomain = "feishu" | "lark" | "bytedance";
@@ -3835,6 +3837,9 @@ export interface MultiremiFeishuBotOutboundDelivery {
   /** Stable across retries so Feishu can deduplicate send-success/ack-failure. */
   idempotencyKey: string;
   idempotency_key?: string;
+  /** Present only for stream-capable daemons; absent on topic seed messages. */
+  taskId?: string;
+  resumeMessageId?: string | null;
 }
 
 /**
@@ -3993,6 +3998,8 @@ export interface MultiremiFeishuBotDirective {
   desired_state: FeishuBotDesiredState;
   /** False while another Runtime still holds the connector (two-phase handover). */
   config_available: boolean;
+  /** Authoritative group admission policy, refreshed even without a bot revision change. */
+  no_mention_chat_ids?: string[];
 }
 
 /** Runtime-scoped payload returned to the daemon. Contains decrypted secrets. */

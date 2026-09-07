@@ -18,6 +18,7 @@ function harness(): Harness {
   const uploaded: Buffer[] = [];
   const reports: Array<Record<string, unknown>> = [];
   Object.assign(daemon, {
+    pollAbort: new AbortController(),
     options: { serverUrl: "https://remi.example.test" },
     client: {
       fetchFeishuBotOutboundAttachment: async () => {

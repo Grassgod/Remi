@@ -1789,15 +1789,16 @@ runMigrations(this.db);
   }
 
   completeFeishuRoundPushTaskWithinTransaction(task: MultiremiTask, body: string): void {
-    this.feishuBot.completeRoundPushTaskWithinTransaction(task, body);
+    this.feishuBot.upsertRoundPushDeliveryWithinTransaction(task, body);
   }
 
   claimFeishuBotOutbound(
     workspaceId: string,
     runtimeId: string,
     now?: string | Date,
+    supportsTaskStream = false,
   ): MultiremiFeishuBotOutboundDelivery | null {
-    return this.feishuBot.claimOutbound(workspaceId, runtimeId, now);
+    return this.feishuBot.claimOutbound(workspaceId, runtimeId, now, supportsTaskStream);
   }
 
   getFeishuBotOutboundAttachment(

@@ -35,7 +35,7 @@ import type {
   SubmitFeishuBotMessageResult,
 } from "@multiremi/contracts/types.js";
 import {
-  FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION,
+  FEISHU_CONCIERGE_TASK_STREAM_PROTOCOL_VERSION,
   FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER,
   MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
   MULTIREMI_SSH_MESH_PROTOCOL_VERSION,
@@ -306,7 +306,7 @@ export class MultiremiDaemonClient {
         // Only claimed when this process can actually host the connector, so
         // the control plane never hands the bot to a Runtime that cannot run it.
         ...(supportsFeishuConcierge
-          ? { feishu_concierge_protocol: FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION }
+          ? { feishu_concierge_protocol: FEISHU_CONCIERGE_TASK_STREAM_PROTOCOL_VERSION }
           : {}),
       }, undefined, signal);
     } catch (error) {
@@ -330,6 +330,10 @@ export class MultiremiDaemonClient {
           body: String(rawOutbound.body ?? ""),
           bodyOrigin: (rawOutbound.body_origin ?? rawOutbound.bodyOrigin) === "agent" ? "agent" : "issue",
           idempotencyKey: String(rawOutbound.idempotency_key ?? rawOutbound.idempotencyKey ?? rawOutbound.id ?? ""),
+          ...(typeof rawOutbound.task_id === "string" ? {
+            taskId: rawOutbound.task_id,
+            resumeMessageId: typeof rawOutbound.resume_message_id === "string" ? rawOutbound.resume_message_id : null,
+          } : {}),
         }
       : undefined;
     return {
@@ -406,7 +410,7 @@ export class MultiremiDaemonClient {
     deliveryId: string,
     input: {
       claimToken: string;
-      status: "sent" | "failed";
+      status: "sent" | "failed" | "streaming";
       externalMessageId?: string | null;
       error?: string | null;
     },

@@ -45,8 +45,14 @@ export interface FeishuConciergeStartResult {
 export interface FeishuConciergeHost {
   start(assignment: MultiremiFeishuBotAssignment): Promise<FeishuConciergeStartResult>;
   stop(): Promise<void>;
-  sendOutbound?(delivery: MultiremiFeishuBotOutboundDelivery): Promise<{ messageId: string }>;
+  setNoMentionChatIds?(chatIds: readonly string[]): void;
+  sendOutbound?(delivery: MultiremiFeishuBotOutboundDelivery, options?: FeishuOutboundOptions): Promise<{ messageId: string }>;
   uploadImage?(image: Buffer): Promise<{ imageKey: string }>;
+}
+
+export interface FeishuOutboundOptions {
+  signal: AbortSignal;
+  onStarted: (messageId: string) => Promise<void>;
 }
 
 /**
@@ -93,6 +99,7 @@ const DEFAULT_REFRESH_INTERVAL_MS = 30_000;
 const DEFAULT_RETRY_BACKOFF_MS: readonly number[] = [15_000, 30_000, 60_000, 120_000, 300_000];
 
 export class FeishuConciergeSupervisor {
+  private readonly deliveries = new Set<AbortController>();
   private state: FeishuBotRuntimeState = "stopped";
   private appliedRevision = 0;
   private botName: string | null = null;
@@ -159,10 +166,16 @@ export class FeishuConciergeSupervisor {
     await this.report(true);
   }
 
-  async sendOutbound(delivery: MultiremiFeishuBotOutboundDelivery): Promise<{ messageId: string }> {
+  async sendOutbound(delivery: MultiremiFeishuBotOutboundDelivery, options?: FeishuOutboundOptions): Promise<{ messageId: string }> {
     if (this.state !== "online") throw new Error("Feishu concierge is not online");
     if (!this.options.host.sendOutbound) throw new Error("Feishu concierge host cannot send outbound messages");
-    return this.options.host.sendOutbound(delivery);
+    const abort = new AbortController();
+    this.deliveries.add(abort);
+    try {
+      return await this.options.host.sendOutbound(delivery, options ? {
+        ...options, signal: AbortSignal.any([options.signal, abort.signal]),
+      } : undefined);
+    } finally { this.deliveries.delete(abort); }
   }
 
   async uploadImage(image: Buffer): Promise<{ imageKey: string }> {
@@ -173,6 +186,7 @@ export class FeishuConciergeSupervisor {
 
   private async reconcile(directive: MultiremiFeishuBotDirective): Promise<void> {
     const wantsRunning = directive.desired_state === "running" && directive.config_available;
+    this.options.host.setNoMentionChatIds?.(wantsRunning ? directive.no_mention_chat_ids ?? [] : []);
     if (!wantsRunning) {
       const wasRunning = this.state !== "stopped";
       if (wasRunning) await this.stopChannel();
@@ -255,6 +269,7 @@ export class FeishuConciergeSupervisor {
   }
 
   private async stopChannel(): Promise<void> {
+    for (const delivery of this.deliveries) delivery.abort();
     try {
       await this.options.host.stop();
     } catch (error) {

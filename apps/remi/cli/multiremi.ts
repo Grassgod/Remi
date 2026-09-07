@@ -531,7 +531,10 @@ export function controlPlaneConciergeHost(deps: {
   boot?: typeof bootFeishuChannel;
 }): FeishuConciergeHost {
   const boot = deps.boot ?? bootFeishuChannel;
+  let noMentionChatIds = new Set<string>();
+  let displayName = "Remi";
   return {
+    setNoMentionChatIds(chatIds) { noMentionChatIds = new Set(chatIds); },
     async start(assignment) {
       const daemon = deps.daemon();
       const workspacesRoot = deps.workspacesRoot();
@@ -546,6 +549,7 @@ export function controlPlaneConciergeHost(deps: {
         );
       }
       const { config, agent } = assignment;
+      displayName = agent.name;
       const handle = await boot(
         async () => true,
         {
@@ -558,6 +562,7 @@ export function controlPlaneConciergeHost(deps: {
             domain: config.domain,
           },
           taskHandler: createFeishuTaskHandler(daemon, config.revision, agent.name),
+          groupPolicy: { getByChatId: chatId => noMentionChatIds.has(chatId) ? { monitor: true, replyMode: "thread" } : null },
           abortTask: async (sessionKey) => {
             await daemon.cancelFeishuBotSessionTask(config.revision, sessionKey);
           },
@@ -583,9 +588,24 @@ export function controlPlaneConciergeHost(deps: {
       deps.daemon()?.setBotMenuPublisher(null);
       if (handle) await handle.stop();
     },
-    async sendOutbound(delivery) {
+    async sendOutbound(delivery, options) {
       const handle = deps.current();
       if (!handle) throw new Error("Feishu concierge channel is not running");
+      if (delivery.taskId) {
+        const daemon = deps.daemon();
+        if (!daemon || !options) throw new Error("Task stream transport is unavailable");
+        const taskId = delivery.taskId;
+        return handle.streamProactiveTask(delivery.chatId, `${delivery.chatId}:thread:${delivery.threadId ?? delivery.replyToMessageId}`,
+          pollFeishuTask(daemon, taskId, options.signal), {
+            taskId, displayName, signal: options.signal,
+            isHumanRequestPending: requestId => daemon.isFeishuBotHumanRequestPending(taskId, requestId),
+            respondHumanRequest: (requestId, response) => daemon.respondFeishuBotHumanRequest(taskId, requestId, response),
+          }, {
+            replyToMessageId: delivery.replyToMessageId ?? undefined,
+            durable: { idempotencyKey: delivery.idempotencyKey, messageId: delivery.resumeMessageId },
+            onStarted: options.onStarted,
+          });
+      }
       return handle.sendProactiveThreadReply({
         chatId: delivery.chatId,
         replyToMessageId: delivery.replyToMessageId ?? undefined,
@@ -700,11 +720,14 @@ function renderFeishuSessionCommand(command: string, snapshot: FeishuBotSessionS
 async function* pollFeishuTask(
   daemon: MultiremiDaemon,
   taskId: string,
+  signal?: AbortSignal,
 ): AsyncGenerator<TaskStreamEvent> {
   let sinceSeq = 0;
   for (;;) {
+    signal?.throwIfAborted();
     const messages = await daemon.listFeishuBotTaskMessages(taskId, sinceSeq);
     for (const message of messages) {
+      signal?.throwIfAborted();
       sinceSeq = Math.max(sinceSeq, message.seq);
       yield { kind: "message", message };
     }

@@ -1,144 +1,43 @@
 /**
- * Test Feishu CardKit element limits and operations.
- *
- * Tests:
- * 1. How many step divs can fit in a card (find the actual limit)
- * 2. Whether delete element API works
- * 3. Whether a div with icon+text counts as 1 or 3 elements
- *
+ * Probe full-card element limits using message patches, without CardKit.
  * Usage: bun run tests/manual/test-card-limits.ts
  */
-
 import { createFeishuClient } from "@connectors/feishu/client.js";
 import { FeishuStreamingSession } from "@connectors/feishu/streaming.js";
 import { buildStepDiv } from "@connectors/feishu/tool-formatters.js";
 import { loadConfig } from "./_load-config.js";
-
-async function getToken(config: ReturnType<typeof loadConfig>): Promise<string> {
-  const res = await fetch(
-    `https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ app_id: config.appId, app_secret: config.appSecret }),
-    },
-  );
-  const data = await res.json() as any;
-  return data.tenant_access_token;
-}
 
 async function main() {
   const config = loadConfig();
   const creds = { appId: config.appId, appSecret: config.appSecret, domain: config.domain as any };
   const client = createFeishuClient(creds);
   const session = new FeishuStreamingSession(client, creds);
+  await session.start(config.chatId, "open_id", { displayName: "Card limit probe" });
+  const messageId = session.getMessageId()!;
+  session.detach();
 
-  // Create streaming card
-  await session.start(config.chatId, "open_id", { sessionId: "test-limits" });
-  console.log("🎬 Card created");
-
-  // Test 1: Add step divs one by one, count how many succeed
-  console.log("\n═══ Test 1: Find element limit ═══");
-  let added = 0;
-  const stepIds: string[] = [];
-
-  for (let i = 0; i < 100; i++) {
-    const stepId = `step_${i}`;
-    stepIds.push(stepId);
-    const element = { ...buildStepDiv("Bash", `Step ${i}: echo test_${i}`), element_id: stepId };
-
-    // Use the queue to serialize
-    try {
-      const token = await getToken(config);
-      const res = await fetch(
-        `https://open.feishu.cn/open-apis/cardkit/v1/cards/${(session as any).state.cardId}/elements`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            type: "append",
-            target_element_id: "process_panel",
-            sequence: (session as any).state.sequence + i + 1,
-            elements: JSON.stringify([element]),
-          }),
-        },
-      );
-      if (res.ok) {
-        added++;
-        if (added % 10 === 0) process.stdout.write(`${added}..`);
-      } else {
-        const body = await res.text();
-        console.log(`\n❌ Failed at step ${i}: ${body.slice(0, 200)}`);
-        break;
-      }
-    } catch (e) {
-      console.log(`\n❌ Error at step ${i}: ${e}`);
+  const elements: Record<string, unknown>[] = [];
+  for (let index = 0; index < 100; index++) {
+    elements.push(buildStepDiv("Bash", `Step ${index}: echo test_${index}`));
+    const result = await client.im.message.patch({
+      path: { message_id: messageId },
+      data: { content: JSON.stringify({ schema: "2.0", body: { elements } }) },
+    });
+    if (result.code !== 0) {
+      elements.pop();
+      console.log(`Rejected at ${index + 1} elements: ${result.msg}`);
       break;
     }
-  }
-  console.log(`\n✅ Successfully added ${added} step divs`);
-
-  // Test 2: Delete element
-  if (added > 0) {
-    console.log("\n═══ Test 2: Delete element ═══");
-    const deleteId = `step_0`;
-    const token = await getToken(config);
-    const seq = (session as any).state.sequence + added + 2;
-    const res = await fetch(
-      `https://open.feishu.cn/open-apis/cardkit/v1/cards/${(session as any).state.cardId}/elements/${deleteId}`,
-      {
-        method: "DELETE",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          sequence: seq,
-          uuid: `del_${deleteId}_${seq}`,
-        }),
-      },
-    );
-    if (res.ok) {
-      console.log(`✅ Delete step_0 succeeded`);
-    } else {
-      const body = await res.text();
-      console.log(`❌ Delete failed: ${body.slice(0, 300)}`);
-    }
-
-    // Try adding one more after delete
-    const addRes = await fetch(
-      `https://open.feishu.cn/open-apis/cardkit/v1/cards/${(session as any).state.cardId}/elements`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          type: "append",
-          target_element_id: "process_panel",
-          sequence: seq + 1,
-          elements: JSON.stringify([{ ...buildStepDiv("Bash", `Step AFTER DELETE`), element_id: "step_after_delete" }]),
-        }),
-      },
-    );
-    if (addRes.ok) {
-      console.log(`✅ Add after delete succeeded (total capacity freed)`);
-    } else {
-      const body = await addRes.text();
-      console.log(`❌ Add after delete failed: ${body.slice(0, 200)}`);
-    }
+    console.log(`Patched ${elements.length} elements`);
+    await Bun.sleep(1000);
   }
 
-  // Test 3: Close with final card to see if the limit applies to final card too
-  console.log("\n═══ Test 3: Close card ═══");
-  await session.close({ finalText: `Element limit test: added ${added} divs` });
-  console.log("✅ Card closed");
-
-  process.exit(0);
+  const resumed = new FeishuStreamingSession(client, creds);
+  await resumed.start(config.chatId, "open_id", {
+    displayName: "Card limit probe",
+    durable: { messageId, idempotencyKey: `card-limit-${Date.now()}` },
+  });
+  await resumed.close({ finalText: `Full-card patches accepted ${elements.length} step elements.` });
 }
 
-main().catch((e) => { console.error("Fatal:", e); process.exit(1); });
+main().catch(error => { console.error("Fatal:", error); process.exit(1); });

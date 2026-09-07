@@ -206,10 +206,10 @@ export function buildFinalCard(opts: {
 }
 
 /**
- * Build the initial streaming card JSON posted by FeishuStreamingSession.start().
- * Element ids here are the contract the CardKit element updates target.
+ * Build the initial patch-only message posted by FeishuStreamingSession.start().
+ * Updates replace this message's full JSON; there is no native streaming mode.
  */
-export function buildStreamingCardJson(options?: {
+export function buildInitialCardJson(options?: {
   sessionId?: string | null;
   displayName?: string | null;
   nameSuffix?: string;
@@ -220,12 +220,7 @@ export function buildStreamingCardJson(options?: {
     header: buildCardHeader(options?.sessionId, options?.displayName, options?.nameSuffix, options?.subtitle),
     config: {
       width_mode: "fill",
-      streaming_mode: true,
       summary: { content: "[Generating...]" },
-      streaming_config: {
-        print_frequency_ms: { default: 50 },
-        print_step: { default: 2 },
-      },
     },
     body: {
       elements: [
@@ -255,10 +250,9 @@ export function buildStreamingCardJson(options?: {
 }
 
 /**
- * Build the full card rebuilt on every im.message.patch while in degraded mode
- * (CardKit element updates unavailable — streaming window expired or failing).
+ * Build the current progress card for the shared im.message.patch path.
  */
-export function buildDegradedCard(args: {
+export function buildProgressCard(args: {
   status?: string;
   steps: StepInfo[];
   text?: string;
@@ -281,7 +275,8 @@ export function buildDegradedCard(args: {
       panelElements.push(buildStepDiv("_default", `+${omitted} earlier steps`));
     }
     for (const step of visible) {
-      panelElements.push(buildStepDiv(step.tool, step.desc));
+      const duration = step.durationMs ? ` (${(step.durationMs / 1000).toFixed(1)}s)` : "";
+      panelElements.push(buildStepDiv(step.tool, `${step.desc}${duration}`));
     }
     elements.push({
       tag: "collapsible_panel",
