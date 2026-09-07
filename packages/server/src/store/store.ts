@@ -3912,8 +3912,8 @@ runMigrations(this.db);
     return this.autopilots.dispatchPendingSystemEvents(now, limit);
   }
 
-  listAutopilotRuns(autopilotId: string): MultiremiAutopilotRunRecord[] {
-    return this.autopilots.listAutopilotRuns(autopilotId);
+  listAutopilotRuns(autopilotId: string, limit = 20, offset = 0): MultiremiAutopilotRunRecord[] {
+    return this.autopilots.listAutopilotRuns(autopilotId, limit, offset);
   }
 
   listLatestRepositoryAutopilotRuns(workspaceId: string): MultiremiAutopilotRunRecord[] {
@@ -3942,6 +3942,10 @@ runMigrations(this.db);
 
   runAutopilot(autopilotId: string, input: RunAutopilotStoreInput = {}): MultiremiAutopilotRunRecord {
     return this.autopilots.runAutopilot(autopilotId, input);
+  }
+
+  advanceScheduledTargetRuns(): void {
+    this.autopilots.advanceScheduledTargetRuns();
   }
 
   getAutopilotRun(id: string): MultiremiAutopilotRunRecord | null {

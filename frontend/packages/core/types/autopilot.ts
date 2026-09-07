@@ -27,6 +27,7 @@ export type AutopilotTriggerKind =
 // handle it explicitly — falling through to a generic case used to show
 // the run as still-pending which masked the no-op.
 export type AutopilotRunStatus =
+  | "queued"
   | "issue_created"
   | "running"
   | "completed"
@@ -95,6 +96,7 @@ export interface WebhookEventFilter {
 }
 
 export interface AutopilotTrigger {
+  schedule_targets?: ScheduleTargets | null;
   id: string;
   autopilot_id: string;
   kind: AutopilotTriggerKind;
@@ -142,6 +144,8 @@ export interface AutopilotRunTriggerSummary {
 }
 
 export interface AutopilotRun {
+  schedule_target?: { kind: "project" | "repository"; id: string; name: string } | null;
+  schedule_batch_id?: string | null;
   id: string;
   autopilot_id: string;
   trigger_id: string | null;
@@ -191,6 +195,7 @@ export interface UpdateAutopilotRequest {
 }
 
 export interface CreateAutopilotTriggerRequest {
+  schedule_targets?: ScheduleTargets | null;
   kind: AutopilotTriggerKind;
   cron_expression?: string;
   timezone?: string;
@@ -201,6 +206,7 @@ export interface CreateAutopilotTriggerRequest {
 }
 
 export interface UpdateAutopilotTriggerRequest {
+  schedule_targets?: ScheduleTargets | null;
   enabled?: boolean;
   cron_expression?: string;
   timezone?: string;
@@ -213,6 +219,12 @@ export interface UpdateAutopilotTriggerRequest {
 export interface ListAutopilotsResponse {
   autopilots: Autopilot[];
   total: number;
+}
+
+export interface ScheduleTargets {
+  projects: { all: boolean; ids: string[] };
+  repositories: { all: boolean; ids: string[] };
+  prompt?: string | null;
 }
 
 export interface GetAutopilotResponse {

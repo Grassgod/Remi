@@ -231,6 +231,7 @@ export function autopilotTriggerCompatibilityResponse(
     created_at: trigger.createdAt,
     updated_at: trigger.updatedAt,
     event_config: trigger.eventConfig,
+    schedule_targets: trigger.scheduleTargets ?? null,
   };
   if (!options.redactPolicy) {
     response.issue_creation_restricted = trigger.issueCreationRestricted;
@@ -282,6 +283,8 @@ export function autopilotRunCompatibilityResponse(
     trigger_payload: options.slim ? null : run.payload,
     result: run.result,
     created_at: run.createdAt,
+    schedule_target: run.scheduleTarget ?? null,
+    schedule_batch_id: run.scheduleBatchId ?? null,
   };
   // List rows never carry the full trigger payload; a structured best-effort
   // summary replaces it so the UI can render the run's origin.
@@ -407,6 +410,7 @@ export function autopilotTriggerCreateCompatibilityInput(input: CreateAutopilotT
     event_filters: eventFilters,
     eventConfig,
     event_config: eventConfig,
+    scheduleTargets: input.schedule_targets ?? input.scheduleTargets,
     issueCreationRestricted: input.issue_creation_restricted,
     issue_creation_restricted: input.issue_creation_restricted,
   };
@@ -414,6 +418,8 @@ export function autopilotTriggerCreateCompatibilityInput(input: CreateAutopilotT
 
 export function autopilotTriggerUpdateCompatibilityInput(input: UpdateAutopilotTriggerInput): UpdateAutopilotTriggerInput {
   const output: UpdateAutopilotTriggerInput = {};
+  const targets = input.schedule_targets !== undefined ? input.schedule_targets : input.scheduleTargets;
+  if (targets !== undefined) output.scheduleTargets = targets;
   if (typeof input.enabled === "boolean") output.enabled = input.enabled;
   const cronExpression = input.cron_expression;
   if (cronExpression != null) {
@@ -450,7 +456,7 @@ export function autopilotCompatibilityErrorResponse(c: Context, error: unknown):
   if (message === "Autopilot title is required") return c.json({ error: "title is required" }, 400);
   if (message === "Autopilot assignee is required") return c.json({ error: "assignee_id is required" }, 400);
   if (message.startsWith("Invalid Autopilot")) return c.json({ error: message }, 400);
-  if (message.includes("event_filters") || message.includes("event_config") || message.includes("cron_expression") || message.includes("timezone") || message.includes("trigger_issue")) {
+  if (message.includes("schedule_targets") || message.includes("event_filters") || message.includes("event_config") || message.includes("cron_expression") || message.includes("timezone") || message.includes("trigger_issue")) {
     return c.json({ error: message }, 400);
   }
   return c.json({ error: message }, 500);
@@ -646,6 +652,7 @@ export function autopilotTriggerResponse(
     updated_at: string;
   } = {
     ...trigger,
+    schedule_targets: trigger.scheduleTargets ?? null,
     webhookToken: redactSecrets ? null : trigger.webhookToken,
     webhookPath: redactSecrets ? null : trigger.webhookPath,
     webhookUrl: redactSecrets ? null : trigger.webhookUrl,

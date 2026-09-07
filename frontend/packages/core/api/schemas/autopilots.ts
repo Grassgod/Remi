@@ -75,6 +75,11 @@ export const AutopilotSchema = z.object({
 }).loose();
 
 export const AutopilotTriggerSchema = z.object({
+  schedule_targets: z.object({
+    projects: z.object({ all: z.boolean(), ids: z.array(z.string()) }),
+    repositories: z.object({ all: z.boolean(), ids: z.array(z.string()) }),
+    prompt: z.string().nullable().optional(),
+  }).nullable().catch(null).default(null),
   id: z.string(),
   autopilot_id: z.string(),
   kind: z.string(),
@@ -115,6 +120,8 @@ export const AutopilotRunTriggerSummarySchema = z.object({
 }).loose();
 
 export const AutopilotRunSchema = z.object({
+  schedule_target: z.object({ kind: z.enum(["project", "repository"]), id: z.string(), name: z.string() }).nullable().catch(null).default(null),
+  schedule_batch_id: z.string().nullable().catch(null).default(null),
   id: z.string(),
   autopilot_id: z.string(),
   trigger_id: z.string().nullable().default(null),

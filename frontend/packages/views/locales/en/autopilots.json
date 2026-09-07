@@ -1,4 +1,23 @@
 {
+  "schedule_targets": {
+    "previous": "Previous runs",
+    "next": "Next runs",
+  "enabled": "Run sequentially per target",
+  "projects": "Projects",
+  "repositories": "Repositories",
+  "all": "All (including future additions)",
+  "search": "Search projects or repositories",
+  "loading": "Loading",
+  "error": "Unable to load targets",
+  "empty": "No matching targets",
+  "unavailable": "Unavailable target",
+  "prompt": "Schedule instructions (blank uses automation description)",
+  "required": "Select at least one project or repository",
+  "edit": "Edit schedule",
+  "project": "Project",
+  "repository": "Repository",
+  "queued": "Queued"
+},
   "page": {
     "title": "Autopilot",
     "new_autopilot": "New autopilot",

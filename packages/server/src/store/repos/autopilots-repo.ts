@@ -1,6 +1,7 @@
 // Autopilots domain (autopilots, schedule/webhook triggers, runs and webhook deliveries),
 // extracted verbatim from MultiremiStore (the facade delegates every public method here).
 import { computeScheduleNextRun } from "@multiremi/store/schedule.js";
+import { availableScheduleTargets, normalizeScheduleTargets } from "@multiremi/store/schedule-targets.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import {
   cleanOptionalString,
@@ -25,6 +26,7 @@ import type {
   MultiremiAutopilotSystemEventConfig,
   MultiremiScmCanonicalEventType,
   MultiremiAutopilotTrigger,
+  MultiremiScheduleTargets,
   MultiremiIssue,
   MultiremiSystemEvent,
   MultiremiTask,
@@ -258,6 +260,9 @@ export class AutopilotsRepo {
     }
     const nextProjectId = input.projectId === undefined ? current.projectId : input.projectId;
     const existingTriggers = this.listAutopilotTriggers(id);
+    if (nextExecutionMode === "create_issue" && existingTriggers.some((trigger) => trigger.scheduleTargets)) {
+      throw new Error("schedule_targets requires run_only or trigger_issue execution");
+    }
     const systemEventTriggers = existingTriggers.filter((trigger) => trigger.kind === "system_event");
     if (systemEventTriggers.length && nextExecutionMode !== "trigger_issue") {
       throw new Error("system_event triggers require execution_mode trigger_issue");
@@ -265,7 +270,7 @@ export class AutopilotsRepo {
     if (
       nextExecutionMode === "trigger_issue"
       && (
-        existingTriggers.some((trigger) => trigger.kind === "schedule" || trigger.kind === "webhook" || trigger.kind === "scm_event")
+        existingTriggers.some((trigger) => (trigger.kind === "schedule" && !trigger.scheduleTargets) || trigger.kind === "webhook" || trigger.kind === "scm_event")
         || (existingTriggers.length === 0 && Boolean(current.cronExpression))
       )
     ) {
@@ -368,6 +373,124 @@ export class AutopilotsRepo {
     return row ? toAutopilotTrigger(row) : null;
   }
 
+  private assertScheduleTargets(
+    autopilot: MultiremiAutopilot,
+    kind: string,
+    targets: MultiremiScheduleTargets | null,
+    validateSelection = true,
+  ): void {
+    if (!targets) return;
+    if (kind !== "schedule") throw new Error("schedule_targets is only valid for schedule triggers");
+    if (autopilot.executionMode === "create_issue") throw new Error("schedule_targets requires run_only or trigger_issue execution");
+    if (!validateSelection) return;
+    const available = availableScheduleTargets(this.ctx, autopilot.workspaceId);
+    for (const [kind, selection] of [["project", targets.projects], ["repository", targets.repositories]] as const) {
+      if (selection.ids.some((id) => !available.some((target) => target.kind === kind && target.id === id))) {
+        throw new Error("schedule_targets must reference active targets in this workspace");
+      }
+    }
+  }
+
+  private enqueueScheduleTargets(trigger: MultiremiAutopilotTrigger, input: RunAutopilotStoreInput): MultiremiAutopilotRunRecord {
+    const firstId = this.ctx.db.transaction(() => {
+      // Serialize expansion and dispatch across scheduler/API processes.
+      this.ctx.db.run("UPDATE multiremi_autopilots SET updated_at = updated_at WHERE id = ?", [trigger.autopilotId]);
+      const autopilot = this.getAutopilot(trigger.autopilotId)!;
+      const current = this.getAutopilotTrigger(trigger.id);
+      if (!current?.enabled || !current.scheduleTargets || autopilot.status !== "active") {
+        throw new Error("schedule_targets trigger is not active");
+      }
+      const active = this.ctx.db.query(
+        "SELECT id FROM multiremi_autopilot_runs WHERE autopilot_id = ? AND trigger_id = ? AND schedule_batch_id IS NOT NULL AND status IN ('queued', 'running') ORDER BY created_at, schedule_position LIMIT 1",
+      ).get(autopilot.id, trigger.id) as { id: string } | null;
+      if (active) return active.id;
+      const sourceTaskId = input.sourceTaskId ?? input.source_task_id ?? null;
+      const sourceTask = sourceTaskId ? this.ctx.tasks().getTask(sourceTaskId) : null;
+      if (sourceTaskId && (!sourceTask || sourceTask.workspaceId !== autopilot.workspaceId)) {
+        throw new Error("schedule_targets source task must belong to this workspace");
+      }
+      const selection = current.scheduleTargets;
+      const available = availableScheduleTargets(this.ctx, autopilot.workspaceId);
+      const targets = available.filter((target) => {
+        const group = target.kind === "project" ? selection.projects : selection.repositories;
+        return group.all || group.ids.includes(target.id);
+      });
+      const batch = createId("batch");
+      const now = nowIso();
+      const prompt = selection.prompt || autopilot.description || autopilot.title;
+      const ids: string[] = [];
+      for (const [position, target] of (targets.length ? targets : [null]).entries()) {
+        const id = createId("run");
+        ids.push(id);
+        this.ctx.db.run(
+          `INSERT INTO multiremi_autopilot_runs
+           (id, autopilot_id, source, status, trigger_id, source_task_id, triggered_at, completed_at, failure_reason,
+            schedule_target, schedule_batch_id, schedule_prompt, schedule_position, payload, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [id, autopilot.id, input.source ?? "schedule", target ? "queued" : "skipped", trigger.id, sourceTaskId,
+            now, target ? null : now, target ? null : "No active schedule targets", target ? toJson(target) : null,
+            batch, prompt, position, toJson({ timezone: current.timezone, cronExpression: current.cronExpression }), now],
+        );
+      }
+      this.ctx.db.run("UPDATE multiremi_autopilots SET last_run_at = ?, updated_at = ? WHERE id = ?", [now, now, autopilot.id]);
+      return ids[0]!;
+    })();
+    this.advanceScheduledTargetRuns();
+    return this.getAutopilotRun(firstId)!;
+  }
+
+  advanceScheduledTargetRuns(): void {
+    const autopilots = this.ctx.db.query(
+      "SELECT DISTINCT autopilot_id FROM multiremi_autopilot_runs WHERE status = 'queued' AND schedule_batch_id IS NOT NULL",
+    ).all() as Array<{ autopilot_id: string }>;
+    for (const { autopilot_id: autopilotId } of autopilots) {
+      const task = this.ctx.db.transaction(() => {
+        this.ctx.db.run("UPDATE multiremi_autopilots SET updated_at = updated_at WHERE id = ?", [autopilotId]);
+        const autopilot = this.getAutopilot(autopilotId);
+        if (!autopilot || autopilot.status === "archived") {
+          this.ctx.db.run("UPDATE multiremi_autopilot_runs SET status = 'skipped', completed_at = ?, failure_reason = 'Automation unavailable' WHERE autopilot_id = ? AND status = 'queued' AND schedule_batch_id IS NOT NULL", [nowIso(), autopilotId]);
+          return null;
+        }
+        if (autopilot.status !== "active") return null;
+        // Also wait for event-driven runs of this rule to release their workspaces.
+        const running = this.ctx.db.query("SELECT id FROM multiremi_autopilot_runs WHERE autopilot_id = ? AND status IN ('running', 'issue_created') LIMIT 1").get(autopilotId);
+        if (running) return null;
+        const rows = this.ctx.db.query("SELECT * FROM multiremi_autopilot_runs WHERE autopilot_id = ? AND status = 'queued' AND schedule_batch_id IS NOT NULL ORDER BY created_at, schedule_batch_id, schedule_position").all(autopilotId) as Row[];
+        const available = availableScheduleTargets(this.ctx, autopilot.workspaceId);
+        for (const row of rows) {
+          const run = toAutopilotRun(row);
+          const trigger = run.triggerId ? this.getAutopilotTrigger(run.triggerId) : null;
+          const target = run.scheduleTarget;
+          const agent = this.ctx.resolveAutopilotAgent(autopilot);
+          const currentSelection = target?.kind === "project" ? trigger?.scheduleTargets?.projects : trigger?.scheduleTargets?.repositories;
+          const valid = target && available.some((item) => item.kind === target.kind && item.id === target.id)
+            && currentSelection && (currentSelection.all || currentSelection.ids.includes(target.id));
+          if (!trigger?.enabled || !valid || !agent || agent.archivedAt) {
+            this.ctx.db.run("UPDATE multiremi_autopilot_runs SET status = 'skipped', completed_at = ?, failure_reason = ? WHERE id = ?", [nowIso(), "Schedule target, trigger or assignee unavailable", run.id]);
+            continue;
+          }
+          const parentId = nullableString(row.source_task_id);
+          const parent = parentId ? this.ctx.tasks().getTask(parentId) : null;
+          if (parentId && (!parent || parent.workspaceId !== autopilot.workspaceId)) {
+            this.ctx.db.run("UPDATE multiremi_autopilot_runs SET status = 'skipped', completed_at = ?, failure_reason = 'Source task unavailable' WHERE id = ?", [nowIso(), run.id]);
+            continue;
+          }
+          const created = this.ctx.tasks().createTaskWithinTransaction({
+            agentId: agent.id, workspaceId: autopilot.workspaceId,
+            prompt: `${String(row.schedule_prompt)}\n\n## Scheduled Target\n${JSON.stringify(target)}\nThis task is bound to this single target. Do not process other projects or repositories.`,
+            parentTaskId: parent?.id ?? null,
+            issueCreationRestricted: Boolean(autopilot.issueCreationRestricted || trigger.issueCreationRestricted || parent?.issueCreationRestricted || agent.issueCreationRequiresProposal),
+            assignmentAuthorType: "system", assignmentAuthorId: autopilot.id,
+          });
+          this.ctx.db.run("UPDATE multiremi_autopilot_runs SET status = 'running', task_id = ? WHERE id = ? AND status = 'queued'", [created.id, run.id]);
+          return created;
+        }
+        return null;
+      })();
+      if (task) this.ctx.notifyTaskEnqueued(task);
+    }
+  }
+
   createAutopilotTrigger(autopilotId: string, input: CreateAutopilotTriggerInput = {}): MultiremiAutopilotTrigger {
     const autopilot = this.getAutopilot(autopilotId);
     if (!autopilot) throw new Error(`Autopilot not found: ${autopilotId}`);
@@ -377,6 +500,8 @@ export class AutopilotsRepo {
     }
     const eventFilters = normalizeWebhookEventFilters(input.eventFilters ?? input.event_filters ?? null);
     const eventConfig = normalizeAutopilotEventConfig(input.eventConfig ?? input.event_config ?? null);
+    const scheduleTargets = normalizeScheduleTargets(input.scheduleTargets ?? input.schedule_targets);
+    this.assertScheduleTargets(autopilot, kind, scheduleTargets);
     if ((kind === "system_event" || kind === "scm_event") && !eventConfig) {
       throw new Error(`event_config is required for ${kind} triggers`);
     }
@@ -413,6 +538,7 @@ export class AutopilotsRepo {
     if (
       autopilot.executionMode === "trigger_issue"
       && (kind === "schedule" || kind === "webhook")
+      && !scheduleTargets
     ) {
       throw new Error("trigger_issue execution does not support schedule or webhook triggers");
     }
@@ -461,6 +587,7 @@ export class AutopilotsRepo {
         now,
         ],
       );
+      this.ctx.db.run("UPDATE multiremi_autopilot_triggers SET schedule_targets = ? WHERE id = ?", [scheduleTargets ? toJson(scheduleTargets) : null, id]);
       this.ctx.db.run(
         `UPDATE multiremi_autopilots SET
            trigger_kind = ?, trigger_label = ?, cron_expression = ?,
@@ -496,6 +623,12 @@ export class AutopilotsRepo {
     const eventFilters = eventFiltersInput === undefined ? current.eventFilters : normalizeWebhookEventFilters(eventFiltersInput);
     const eventConfigInput = input.eventConfig !== undefined ? input.eventConfig : input.event_config;
     const eventConfig = eventConfigInput === undefined ? current.eventConfig : normalizeAutopilotEventConfig(eventConfigInput);
+    const targetsInput = input.scheduleTargets !== undefined ? input.scheduleTargets : input.schedule_targets;
+    const scheduleTargets = targetsInput === undefined ? current.scheduleTargets ?? null : normalizeScheduleTargets(targetsInput);
+    this.assertScheduleTargets(autopilot, current.kind, scheduleTargets, targetsInput !== undefined || input.enabled === true);
+    if (current.kind === "schedule" && autopilot.executionMode === "trigger_issue" && !scheduleTargets) {
+      throw new Error("trigger_issue schedule requires schedule_targets");
+    }
     const enabled = input.enabled === undefined ? current.enabled : input.enabled;
     const restrictionInput = input.issueCreationRestricted ?? input.issue_creation_restricted;
     const nextIssueCreationRestricted = restrictionInput ?? current.issueCreationRestricted;
@@ -564,6 +697,7 @@ export class AutopilotsRepo {
         label = ?,
         event_filters = ?,
         event_config = ?,
+        schedule_targets = ?,
         issue_creation_restricted = ?,
         issue_creation_restriction_reason = ?,
         issue_creation_restricted_by_task_id = ?,
@@ -577,6 +711,7 @@ export class AutopilotsRepo {
         input.label === undefined ? current.label : input.label,
         eventFilters ? toJson(eventFilters) : null,
         eventConfig ? toJson(eventConfig) : null,
+        scheduleTargets ? toJson(scheduleTargets) : null,
         nextIssueCreationRestricted ? 1 : 0,
         nextIssueCreationRestrictionReason,
         nextIssueCreationRestrictedByTaskId,
@@ -806,10 +941,10 @@ export class AutopilotsRepo {
     return runs;
   }
 
-  listAutopilotRuns(autopilotId: string): MultiremiAutopilotRunRecord[] {
+  listAutopilotRuns(autopilotId: string, limit = 20, offset = 0): MultiremiAutopilotRunRecord[] {
     const rows = this.ctx.db.query(
-      "SELECT * FROM multiremi_autopilot_runs WHERE autopilot_id = ? ORDER BY created_at DESC LIMIT 20",
-    ).all(autopilotId) as Row[];
+      "SELECT * FROM multiremi_autopilot_runs WHERE autopilot_id = ? ORDER BY created_at DESC, schedule_position ASC, id DESC LIMIT ? OFFSET ?",
+    ).all(autopilotId, Math.max(1, Math.min(200, limit)), Math.max(0, offset)) as Row[];
     return rows.map(toAutopilotRun);
   }
 
@@ -1060,6 +1195,17 @@ export class AutopilotsRepo {
   }
 
   runAutopilot(autopilotId: string, input: RunAutopilotStoreInput = {}): MultiremiAutopilotRunRecord {
+    if (!input.triggerId && !input.trigger_id && !input.triggerIssueId && !input.trigger_issue_id && (!input.source || ["manual", "schedule", "api"].includes(input.source))) {
+      const schedule = this.listAutopilotTriggers(autopilotId).find((trigger) => trigger.enabled && trigger.scheduleTargets);
+      if (schedule) return this.enqueueScheduleTargets(schedule, input);
+    }
+    const selectedTrigger = input.triggerId ?? input.trigger_id;
+    if (selectedTrigger) {
+      const trigger = this.getAutopilotTrigger(selectedTrigger);
+      if (trigger?.autopilotId === autopilotId && trigger.kind === "schedule" && trigger.scheduleTargets) {
+        return this.enqueueScheduleTargets(trigger, input);
+      }
+    }
     const source = input.source ?? "manual";
     const triggerId = cleanOptionalString(input.triggerId ?? input.trigger_id) ?? null;
     const eventId = cleanOptionalString(input.eventId ?? input.event_id) ?? null;
@@ -2063,6 +2209,7 @@ function toAutopilotTrigger(row: Row): MultiremiAutopilotTrigger {
     label: nullableString(row.label),
     eventFilters: parseWebhookEventFiltersRow(row.event_filters),
     eventConfig: parseAutopilotEventConfigRow(row.event_config),
+    scheduleTargets: row.schedule_targets == null ? null : normalizeScheduleTargets(parseJson(row.schedule_targets, null)),
     issueCreationRestricted,
     issueCreationRestrictionReason: issueCreationRestricted
       ? normalizeIssueCreationRestrictionReason(row.issue_creation_restriction_reason)
@@ -2080,6 +2227,8 @@ function toAutopilotTrigger(row: Row): MultiremiAutopilotTrigger {
 
 function toAutopilotRun(row: Row): MultiremiAutopilotRunRecord {
   return {
+    scheduleTarget: row.schedule_target == null ? null : parseJson(row.schedule_target, null),
+    scheduleBatchId: nullableString(row.schedule_batch_id),
     id: String(row.id),
     autopilotId: String(row.autopilot_id),
     source: String(row.source ?? "manual") as MultiremiAutopilotRun["source"],

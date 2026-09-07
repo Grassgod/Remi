@@ -229,6 +229,7 @@ export type {
   AutopilotWorkspacePolicy,
   AutopilotAssigneeType,
   AutopilotTrigger,
+  ScheduleTargets,
   AutopilotTriggerKind,
   AutopilotRun,
   AutopilotRunStatus,

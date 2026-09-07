@@ -91,6 +91,11 @@ export class MultiremiScheduler {
   }
 
   sync(): void {
+    try {
+      this.store.advanceScheduledTargetRuns?.();
+    } catch (error) {
+      log.warn(`Scheduled target dispatch failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
     this.tickDueTriggers();
     this.tickRuntimeProvisions();
     this.tickSystemEvents();

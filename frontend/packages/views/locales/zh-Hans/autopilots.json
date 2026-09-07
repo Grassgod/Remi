@@ -1,4 +1,23 @@
 {
+  "schedule_targets": {
+    "previous": "上一页执行记录",
+    "next": "下一页执行记录",
+  "enabled": "按目标逐个执行",
+  "projects": "项目",
+  "repositories": "代码仓库",
+  "all": "全部（含后续新增）",
+  "search": "搜索项目或仓库",
+  "loading": "加载中",
+  "error": "无法加载目标",
+  "empty": "没有匹配的目标",
+  "unavailable": "目标不可用",
+  "prompt": "本次时间表执行指令（留空沿用自动化描述）",
+  "required": "请选择至少一个项目或仓库",
+  "edit": "编辑时间表",
+  "project": "项目",
+  "repository": "代码仓库",
+  "queued": "等待中"
+},
   "page": {
     "title": "自动化",
     "new_autopilot": "新建自动化",

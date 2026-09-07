@@ -83,6 +83,8 @@ import {
 } from "../../common/trigger-config";
 import { WebhookEventFilterSection } from "./webhook-event-filter-section";
 import { useT } from "../../i18n";
+import { ScheduleTargetsSection, hasScheduleTargets } from "./schedule-targets";
+import type { ScheduleTargets } from "@multiremi/core/types";
 import { formatSchedulePartialFailureToast } from "./autopilot-dialog-toast";
 import type { WebhookEventFilter } from "@multiremi/core/types";
 import {
@@ -352,10 +354,14 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
   })();
   const [triggerKind, setTriggerKind] =
     useState<ConfigurableAutopilotTriggerKind>(initialKind);
+  const initialTargets = !isCreate ? props.triggers[0]?.schedule_targets ?? null : null;
+  const [scheduleTargets, setScheduleTargets] = useState<ScheduleTargets | null>(initialTargets);
+  const initialTargetsRef = useRef(JSON.stringify(initialTargets));
 
   const allowedExecutionModes = isCreate
     ? OUTPUT_MODE_KEYS
-    : getCompatibleAutopilotExecutionModes(props.triggers.map((trigger) => trigger.kind));
+    : getCompatibleAutopilotExecutionModes(props.triggers.filter((trigger) => !trigger.schedule_targets).map((trigger) => trigger.kind))
+      .filter((mode) => mode !== "create_issue" || !props.triggers.some((trigger) => trigger.schedule_targets));
 
   const handleExecutionModeChange = (nextMode: AutopilotExecutionMode) => {
     setExecutionMode(nextMode);
@@ -399,6 +405,7 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
   );
   const initialScmEventConfigRef = useRef(serializeScmEventConfig(initialScmEventConfig));
   const scheduleDirty =
+    JSON.stringify(scheduleTargets) !== initialTargetsRef.current ||
     toCronExpression(triggerConfig) !== initialCronRef.current ||
     triggerConfig.timezone !== initialTimezoneRef.current;
   const eventFiltersDirty =
@@ -450,6 +457,7 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
     ? isAutopilotTriggerCompatible(executionMode, triggerKind)
     : allowedExecutionModes.includes(executionMode);
   const canSubmit =
+    (triggerKind !== "schedule" || scheduleTargets === null || (executionMode !== "create_issue" && hasScheduleTargets(scheduleTargets))) &&
     title.trim().length > 0 &&
     assigneeId.length > 0 &&
     modeAndTriggerAreCompatible &&
@@ -497,6 +505,7 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
             await createTrigger.mutateAsync({
               autopilotId: autopilot.id,
               kind: "schedule",
+              schedule_targets: scheduleTargets,
               cron_expression: toCronExpression(triggerConfig),
               timezone: triggerConfig.timezone,
             });
@@ -546,6 +555,7 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
               await updateTrigger.mutateAsync({
                 autopilotId: props.autopilotId,
                 triggerId: snapshottedTriggerId,
+                schedule_targets: scheduleTargets,
                 cron_expression: toCronExpression(triggerConfig),
                 timezone: triggerConfig.timezone,
               });
@@ -553,6 +563,7 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
               await createTrigger.mutateAsync({
                 autopilotId: props.autopilotId,
                 kind: "schedule",
+                schedule_targets: scheduleTargets,
                 cron_expression: toCronExpression(triggerConfig),
                 timezone: triggerConfig.timezone,
               });
@@ -799,6 +810,7 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
             )}
 
             {triggerKind === "schedule" ? (
+              <>
               <ScheduleSection
                 config={triggerConfig}
                 onChange={setTriggerConfig}
@@ -809,6 +821,8 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
                     : undefined
                 }
               />
+              {!schedulePillDisabled && <ScheduleTargetsSection value={scheduleTargets} required={executionMode === "trigger_issue"} onChange={(value) => { setScheduleTargets(value); if (value && executionMode === "create_issue") setExecutionMode("run_only"); }} />}
+              </>
             ) : triggerKind === "webhook" ? (
               <WebhookSection
                 isCreate={isCreate}

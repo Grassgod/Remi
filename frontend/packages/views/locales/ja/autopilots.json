@@ -1,4 +1,23 @@
 {
+  "schedule_targets": {
+    "previous": "前の実行記録",
+    "next": "次の実行記録",
+  "enabled": "対象ごとに順次実行",
+  "projects": "プロジェクト",
+  "repositories": "リポジトリ",
+  "all": "すべて（今後の追加も含む）",
+  "search": "プロジェクト・リポジトリを検索",
+  "loading": "読み込み中",
+  "error": "対象を読み込めません",
+  "empty": "一致する対象がありません",
+  "unavailable": "利用できない対象",
+  "prompt": "スケジュールの指示（空欄の場合は自動化の説明を使用）",
+  "required": "対象を1つ以上選択してください",
+  "edit": "スケジュールを編集",
+  "project": "プロジェクト",
+  "repository": "リポジトリ",
+  "queued": "待機中"
+},
   "page": {
     "title": "オートパイロット",
     "new_autopilot": "新規オートパイロット",

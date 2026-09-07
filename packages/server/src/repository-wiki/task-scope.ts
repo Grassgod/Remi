@@ -15,6 +15,10 @@ export function resolveTaskRepositoryWikiRepositories(
   const workspace = store.getWorkspace(task.workspaceId);
   if (!workspace) return [];
   const repositories = workspace.repos.flatMap(normalizeWorkspaceRepository);
+  const scheduled = task.autopilotRunId ? store.getAutopilotRun(task.autopilotRunId)?.scheduleTarget : null;
+  if (scheduled) {
+    return scheduled.kind === "repository" ? repositories.filter((repo) => repo.id === scheduled.id) : [];
+  }
   const selectedIds = new Set<string>();
   const resourceKeys = new Set(task.projectResources.flatMap((resource) => {
     if (resource.resourceType !== "github_repo") return [];

@@ -2751,6 +2751,12 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_autopilots", "workspace_policy TEXT NOT NULL DEFAULT 'reuse_issue'");
   addColumnIfMissing(db, "multiremi_autopilot_triggers", "event_filters TEXT");
   addColumnIfMissing(db, "multiremi_autopilot_triggers", "event_config TEXT");
+  addColumnIfMissing(db, "multiremi_autopilot_triggers", "schedule_targets TEXT");
+  addColumnIfMissing(db, "multiremi_autopilot_runs", "schedule_target TEXT");
+  addColumnIfMissing(db, "multiremi_autopilot_runs", "schedule_batch_id TEXT");
+  addColumnIfMissing(db, "multiremi_autopilot_runs", "schedule_prompt TEXT");
+  addColumnIfMissing(db, "multiremi_autopilot_runs", "schedule_position INTEGER");
+  db.run("CREATE INDEX IF NOT EXISTS idx_autopilot_schedule_queue ON multiremi_autopilot_runs(autopilot_id, status, schedule_batch_id, schedule_position)");
   addColumnIfMissing(db, "multiremi_autopilot_triggers", "provider TEXT");
   addColumnIfMissing(db, "multiremi_autopilot_triggers", "signing_secret_hint TEXT");
   addColumnIfMissing(db, "multiremi_autopilot_runs", "trigger_id TEXT");
