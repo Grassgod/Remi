@@ -690,7 +690,10 @@ export class TasksRepo {
     const task = this.getTask(id);
     if (!task) return null;
     const issue = task.issueId ? this.ctx.issues().getIssue(task.issueId) : null;
-    const project = issue?.projectId ? this.ctx.projects().getProject(issue.projectId) : null;
+    const scheduleTarget = task.autopilotRunId ? this.ctx.autopilots().getAutopilotRun(task.autopilotRunId)?.scheduleTarget : null;
+    const projectId = issue?.projectId ?? (scheduleTarget?.kind === "project" ? scheduleTarget.id : null);
+    const candidateProject = projectId ? this.ctx.projects().getProject(projectId) : null;
+    const project = candidateProject?.workspaceId === task.workspaceId ? candidateProject : null;
     const projectResources = project ? this.ctx.projects().listProjectResources(project.id) : [];
     const projectContexts = issue?.issueKind === "intake"
       ? this.resolveIntakeProjectContexts(task.workspaceId, project)
@@ -706,7 +709,7 @@ export class TasksRepo {
       // Homepage Chat discovers repositories through the database-backed CLI
       // directory and checks out only on explicit request. Never attach the
       // workspace repository catalog to its daemon claim as eager Git work.
-      repos: task.holdsWorkspace === false || (task.chatSessionId && !task.issueId)
+      repos: scheduleTarget || task.holdsWorkspace === false || (task.chatSessionId && !task.issueId)
         ? []
         : projectContexts.length
           ? normalizeRepos(projectContexts.flatMap((context) => context.repos))

@@ -30,9 +30,10 @@ export function formatDate(date: string): string {
   });
 }
 
-type RunStatus = "issue_created" | "running" | "skipped" | "completed" | "failed";
+type RunStatus = "queued" | "issue_created" | "running" | "skipped" | "completed" | "failed";
 
 const RUN_VISUAL: Record<RunStatus, { color: string; icon: typeof CheckCircle2; spin?: boolean }> = {
+  queued: { color: "text-muted-foreground", icon: Clock },
   issue_created: { color: "text-blue-500", icon: Clock },
   running: { color: "text-blue-500", icon: Loader2, spin: true },
   // `skipped` (admission check found the assignee runtime offline,
@@ -138,13 +139,18 @@ export function RunRow({ run, agentId, agentName }: { run: AutopilotRun; agentId
     <>
       <StatusIcon className={cn("h-4 w-4 shrink-0", visual.color, visual.spin && "animate-spin")} />
       <span className={cn("w-24 shrink-0 text-xs font-medium", visual.color)}>
-        {t(($) => $.run_status[status])}
+        {status === "queued" ? t(($) => $.schedule_targets.queued) : t(($) => $.run_status[status])}
       </span>
       <span className="w-28 shrink-0 text-xs text-muted-foreground truncate" title={sourceLabel}>
         {sourceLabel}
       </span>
       <span className="flex-1 min-w-0 text-xs text-muted-foreground truncate">
-        {run.issue_id ? (
+        {run.schedule_target ? (
+          <span title={`${run.schedule_target.name}${run.failure_reason ? `: ${run.failure_reason}` : ""}`}>
+            {run.schedule_target.kind === "project" ? t(($) => $.schedule_targets.project) : t(($) => $.schedule_targets.repository)} · {run.schedule_target.name}
+            {run.failure_reason && <span className="text-destructive"> · {run.failure_reason}</span>}
+          </span>
+        ) : run.issue_id ? (
           run.issue_session_id
             ? t(($) => $.run.session_linked)
             : t(($) => $.run.issue_linked)

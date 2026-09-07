@@ -135,7 +135,8 @@ function buildCliContext(c: Context, deps: RouterDeps, identity: ResolvedCliIden
   const access = currentAccessToken(c);
   const task = identity.type === "task" && access?.taskId ? store.getTask(access.taskId) : null;
   const issue = task?.issueId ? store.getIssue(task.issueId) : null;
-  const project = issue?.projectId ? store.getProject(issue.projectId) : null;
+  const project = task ? store.getTaskWithAgent(task.id)?.project ?? null : null;
+  const scheduleTarget = task?.autopilotRunId ? store.getAutopilotRun(task.autopilotRunId)?.scheduleTarget ?? null : null;
   const agent = task?.agentId
     ? store.getAgent(task.agentId)
     : identity.type === "task" && access?.agentId
@@ -168,6 +169,7 @@ function buildCliContext(c: Context, deps: RouterDeps, identity: ResolvedCliIden
     },
     workspace: safeWorkspace(workspace),
     current: {
+      schedule_target: scheduleTarget,
       agent: agent ? safeAgent(agent) : null,
       task: task ? safeTask(task) : null,
       chat: chat ? safeChat(chat) : null,

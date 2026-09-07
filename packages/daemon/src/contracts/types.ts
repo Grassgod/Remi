@@ -451,6 +451,7 @@ export type { RunAutopilotInput };
 
 /** Store surface the scheduler depends on. */
 export interface AutopilotStore {
+  advanceScheduledTargetRuns?(): void;
   recoverLostScheduleTriggers(now?: Date): number;
   recoverLostRuntimeProvisionSchedules(now?: Date): number;
   listAutopilots(workspaceId?: string | null): Autopilot[];

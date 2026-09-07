@@ -27,6 +27,7 @@ export interface KnowledgeWriteActor {
   issue: MultiremiIssue | null;
   agent: MultiremiAgent | null;
   canPublish: boolean;
+  scheduledProjectId?: string | null;
   sourceRevision: string | null;
 }
 
@@ -59,12 +60,15 @@ export function resolveKnowledgeWriteActor(c: Context, store: MultiremiStore): K
   if (!agent || agent.workspaceId !== token.workspaceId) {
     throw new KnowledgeWritePolicyError("task token agent is unavailable");
   }
+  const target = task.autopilotRunId ? store.getAutopilotRun(task.autopilotRunId)?.scheduleTarget : null;
+  const project = target?.kind === "project" ? store.getProject(target.id) : null;
   return {
     kind: "agent",
     task,
     issue: task.issueId ? store.getIssue(task.issueId) : null,
     agent,
     canPublish: agentHasKnowledgePublishCapability(store, agent),
+    scheduledProjectId: project?.workspaceId === task.workspaceId && !project.archivedAt ? project.id : null,
     sourceRevision: resolveTaskSourceRevision(store, task),
   };
 }
@@ -78,6 +82,7 @@ export function resolveTaskSourceRevision(store: MultiremiStore, task: Multiremi
 
 export function assertProjectKnowledgeTarget(actor: KnowledgeWriteActor, projectId: string): void {
   if (!actor.task) return;
+  if (actor.scheduledProjectId === projectId) return;
   if (!actor.issue || actor.issue.projectId !== projectId) {
     throw new KnowledgeWritePolicyError("task knowledge target does not match its issue project");
   }

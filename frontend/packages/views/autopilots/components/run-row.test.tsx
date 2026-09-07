@@ -75,6 +75,12 @@ function renderRun(run: AutopilotRun, locale?: "zh-Hans") {
 }
 
 describe("RunRow source labels", () => {
+  it("shows queued schedule targets separately from issue links", () => {
+    renderRun(makeRun({ source: "schedule", status: "queued", schedule_target: { kind: "project", id: "project-1", name: "Remi" } }), "zh-Hans");
+    expect(screen.getByText("等待中")).toBeInTheDocument();
+    expect(screen.getByText("项目 · Remi")).toBeInTheDocument();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
   it("labels wiki builds as manual builds", () => {
     renderRun(makeRun({
       trigger_summary: makeSummary({ wiki_build: true, repository_name: "web" }),

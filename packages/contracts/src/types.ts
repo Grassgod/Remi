@@ -3358,7 +3358,19 @@ export type MultiremiAutopilotAssigneeType = "agent" | "squad";
 
 export type MultiremiAutopilotTriggerKind = "schedule" | "webhook" | "api" | "system_event" | "scm_event";
 
-export type MultiremiAutopilotRunStatus = "issue_created" | "running" | "completed" | "failed" | "skipped";
+export type MultiremiAutopilotRunStatus = "queued" | "issue_created" | "running" | "completed" | "failed" | "skipped";
+
+export interface MultiremiScheduleTargets {
+  projects: { all: boolean; ids: string[] };
+  repositories: { all: boolean; ids: string[] };
+  prompt?: string | null;
+}
+
+export interface MultiremiScheduleTarget {
+  kind: "project" | "repository";
+  id: string;
+  name: string;
+}
 
 export type MultiremiAutopilotRunSource = "manual" | "schedule" | "webhook" | "api" | "system_event" | "scm_event";
 
@@ -3467,6 +3479,7 @@ export interface MultiremiAutopilot {
 }
 
 export interface MultiremiAutopilotTrigger {
+  scheduleTargets?: MultiremiScheduleTargets | null;
   id: string;
   autopilotId: string;
   kind: MultiremiAutopilotTriggerKind;
@@ -3493,6 +3506,8 @@ export interface MultiremiAutopilotTrigger {
 }
 
 export interface MultiremiAutopilotRun {
+  scheduleTarget?: MultiremiScheduleTarget | null;
+  scheduleBatchId?: string | null;
   id: string;
   autopilotId: string;
   source: MultiremiAutopilotRunSource;
@@ -3549,6 +3564,8 @@ export interface CreateAutopilotInput {
 }
 
 export interface CreateAutopilotTriggerInput {
+  scheduleTargets?: MultiremiScheduleTargets | null;
+  schedule_targets?: MultiremiScheduleTargets | null;
   kind?: MultiremiAutopilotTriggerKind;
   cronExpression?: string | null;
   cron_expression?: string | null;
@@ -3568,6 +3585,8 @@ export interface CreateAutopilotTriggerInput {
 }
 
 export interface UpdateAutopilotTriggerInput {
+  scheduleTargets?: MultiremiScheduleTargets | null;
+  schedule_targets?: MultiremiScheduleTargets | null;
   enabled?: boolean;
   cronExpression?: string | null;
   cron_expression?: string | null;

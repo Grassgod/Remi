@@ -1,4 +1,23 @@
 {
+  "schedule_targets": {
+    "previous": "이전 실행 기록",
+    "next": "다음 실행 기록",
+  "enabled": "대상별 순차 실행",
+  "projects": "프로젝트",
+  "repositories": "저장소",
+  "all": "전체 (추후 추가 포함)",
+  "search": "프로젝트 또는 저장소 검색",
+  "loading": "불러오는 중",
+  "error": "대상을 불러올 수 없습니다",
+  "empty": "일치하는 대상 없음",
+  "unavailable": "사용할 수 없는 대상",
+  "prompt": "예약 실행 지침 (비워 두면 자동화 설명 사용)",
+  "required": "대상을 하나 이상 선택하세요",
+  "edit": "예약 편집",
+  "project": "프로젝트",
+  "repository": "저장소",
+  "queued": "대기 중"
+},
   "page": {
     "title": "오토파일럿",
     "new_autopilot": "새 오토파일럿",

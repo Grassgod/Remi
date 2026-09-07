@@ -55,10 +55,10 @@ export function autopilotRunsRefetchInterval(
     : false;
 }
 
-export function autopilotRunsOptions(wsId: string, id: string) {
+export function autopilotRunsOptions(wsId: string, id: string, offset = 0) {
   return queryOptions({
-    queryKey: autopilotKeys.runs(wsId, id),
-    queryFn: () => api.listAutopilotRuns(id),
+    queryKey: offset === 0 ? autopilotKeys.runs(wsId, id) : [...autopilotKeys.runs(wsId, id), offset],
+    queryFn: () => api.listAutopilotRuns(id, { limit: 20, offset }),
     select: (data) => data.runs,
     // Note: refetchInterval sees the raw (pre-`select`) cached response.
     refetchInterval: (query) => autopilotRunsRefetchInterval(query.state.data),

@@ -241,6 +241,25 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(store.isRepositoryWikiRunPublished(revisionRun.id)).toBe(true);
   });
 
+  it("resumes target schedules on Postgres without duplicate tasks", () => {
+    const agent = store.createAgent({ name: "PG schedule worker", provider: "claude" });
+    const firstProject = store.createProject({ title: "PG schedule A" });
+    const secondProject = store.createProject({ title: "PG schedule B" });
+    const rule = store.createAutopilot({ title: "PG target schedule", assigneeId: agent.id, executionMode: "run_only" });
+    const trigger = store.createAutopilotTrigger(rule.id, { kind: "schedule", cronExpression: "0 3 * * *", scheduleTargets: { projects: { all: false, ids: [firstProject.id, secondProject.id] }, repositories: { all: false, ids: [] } } });
+    const first = store.runAutopilot(rule.id, { triggerId: trigger.id });
+    expect(first.taskId).toBeTruthy();
+    expect(store.getTaskWithAgent(first.taskId!)?.project?.id).toBe(firstProject.id);
+    store.runAutopilot(rule.id, { triggerId: trigger.id });
+    expect(store.listAutopilotRuns(rule.id)).toHaveLength(2);
+    db.run("UPDATE multiremi_autopilot_runs SET status = 'failed' WHERE id = ?", [first.id]);
+    store.advanceScheduledTargetRuns();
+    const next = store.listAutopilotRuns(rule.id).find((run) => run.status === "running")!;
+    expect(next.scheduleTarget?.id).toBe(secondProject.id);
+    store.advanceScheduledTargetRuns();
+    expect(store.listAutopilotRuns(rule.id).filter((run) => run.taskId)).toHaveLength(2);
+  });
+
   // Each test provisions its own workspace so shared state (issue numbering,
   // list results) stays isolated without per-test databases.
   let wsCounter = 0;

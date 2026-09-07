@@ -444,7 +444,7 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
       listWorkspaceRepositories(store, autopilot.workspaceId)
         .map((repository) => [repository.id, repository.name] as const),
     );
-    const runs = store.listAutopilotRuns(autopilot.id).slice(offset, offset + limit).map((run) => autopilotRunCompatibilityResponse(run, {
+    const runs = store.listAutopilotRuns(autopilot.id, limit, offset).map((run) => autopilotRunCompatibilityResponse(run, {
       slim: true,
       resolveRepositoryName: (repositoryId) => repositoryNames.get(repositoryId) ?? null,
     }));

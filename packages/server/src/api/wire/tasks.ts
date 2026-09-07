@@ -595,7 +595,7 @@ function appendDaemonClaimAutopilotContext(store: MultiremiStore, task: Multirem
 
   if (!autopilot) return;
   response.autopilot_title = autopilot.title;
-  if (autopilot.description) response.autopilot_description = autopilot.description;
+  if (autopilot.description && !run.scheduleTarget) response.autopilot_description = autopilot.description;
 }
 
 function daemonUserMessagesForTask(

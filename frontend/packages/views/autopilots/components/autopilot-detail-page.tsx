@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import {
   Zap, Play, Clock, Plus, Trash2, Loader2, Pencil,
-  Ban, ChevronDown, ChevronRight,
+  Ban, ChevronDown, ChevronRight, ChevronLeft,
   Activity, Webhook, Copy, Check, RotateCw, GitPullRequest,
   ShieldAlert,
 } from "lucide-react";
@@ -15,6 +15,7 @@ import {
   useDeleteAutopilot,
   useTriggerAutopilot,
   useCreateAutopilotTrigger,
+  useUpdateAutopilotTrigger,
   useDeleteAutopilotTrigger,
   useRotateAutopilotTriggerWebhookToken,
 } from "@multiremi/core/autopilots/mutations";
@@ -56,6 +57,7 @@ import {
   TriggerConfigSection,
   getDefaultTriggerConfig,
   toCronExpression,
+  parseCronExpression,
 } from "../../common/trigger-config";
 import type { TriggerConfig } from "../../common/trigger-config";
 import type {
@@ -64,6 +66,7 @@ import type {
   AutopilotScmEventConfig,
   AutopilotSystemEventConfig,
   AutopilotTrigger,
+  ScheduleTargets,
 } from "@multiremi/core/types";
 import { ReadonlyContent } from "../../editor";
 import { AutopilotDialog } from "./autopilot-dialog";
@@ -71,6 +74,7 @@ import { RunRow, formatDate } from "./run-row";
 import { WebhookDeliveriesSection } from "./webhook-deliveries-section";
 import { ProjectIcon } from "../../projects/components/project-icon";
 import { useT } from "../../i18n";
+import { ScheduleTargetsSection, hasScheduleTargets, emptyScheduleTargets } from "./schedule-targets";
 import {
   getDefaultSystemEventConfig,
   SystemEventConfigSection,
@@ -154,10 +158,12 @@ function SkippedRunsGroup({
 function TriggerRow({
   trigger,
   autopilotId,
+  executionMode,
   systemEventProjectName,
 }: {
   trigger: AutopilotTrigger;
   autopilotId: string;
+  executionMode: AutopilotExecutionMode;
   systemEventProjectName?: string;
 }) {
   const { t } = useT("autopilots");
@@ -167,6 +173,7 @@ function TriggerRow({
   const [rotateOpen, setRotateOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [editSchedule, setEditSchedule] = useState(false);
 
   const handleDelete = async () => {
     setDeleting(true);
@@ -282,6 +289,12 @@ function TriggerRow({
             {trigger.timezone && ` (${trigger.timezone})`}
           </div>
         )}
+        {trigger.kind === "schedule" && <Button variant="ghost" size="icon" title={t(($) => $.schedule_targets.edit)} onClick={() => setEditSchedule(true)}><Pencil className="size-4" /></Button>}
+        {trigger.schedule_targets && <div className="text-xs text-muted-foreground">
+          {t(($) => $.schedule_targets.projects)}: {trigger.schedule_targets.projects.all ? t(($) => $.schedule_targets.all) : trigger.schedule_targets.projects.ids.length}
+          {" · "}{t(($) => $.schedule_targets.repositories)}: {trigger.schedule_targets.repositories.all ? t(($) => $.schedule_targets.all) : trigger.schedule_targets.repositories.ids.length}
+        </div>}
+        {editSchedule && <EditScheduleDialog trigger={trigger} autopilotId={autopilotId} executionMode={executionMode} onClose={() => setEditSchedule(false)} />}
         {trigger.next_run_at && (
           <div className="text-xs text-muted-foreground">
             {t(($) => $.trigger_row.next_label, { date: formatDate(trigger.next_run_at) })}
@@ -399,6 +412,8 @@ function AddTriggerDialog({
   const { t } = useT("autopilots");
   const createTrigger = useCreateAutopilotTrigger();
   const compatibleKinds = getCompatibleConfigurableTriggerKinds(executionMode);
+  const selectableKinds = executionMode === "trigger_issue" ? [...compatibleKinds, "schedule" as const] : compatibleKinds;
+  const [scheduleTargets, setScheduleTargets] = useState<ScheduleTargets | null>(executionMode === "trigger_issue" ? emptyScheduleTargets() : null);
   const [kind, setKind] = useState<ConfigurableAutopilotTriggerKind>(
     () => compatibleKinds[0]!,
   );
@@ -413,11 +428,12 @@ function AddTriggerDialog({
   useEffect(() => {
     if (!open) return;
     const nextCompatibleKinds = getCompatibleConfigurableTriggerKinds(executionMode);
-    if (!nextCompatibleKinds.includes(kind)) setKind(nextCompatibleKinds[0]!);
+    if (!nextCompatibleKinds.includes(kind) && !(executionMode === "trigger_issue" && kind === "schedule")) setKind(nextCompatibleKinds[0]!);
   }, [executionMode, kind, open]);
 
   const handleSubmit = async () => {
     if (submitting) return;
+    if (kind === "schedule" && ((executionMode === "trigger_issue" && !hasScheduleTargets(scheduleTargets)) || (scheduleTargets !== null && !hasScheduleTargets(scheduleTargets)))) return;
     setSubmitting(true);
     try {
       if (kind === "schedule") {
@@ -429,6 +445,7 @@ function AddTriggerDialog({
         await createTrigger.mutateAsync({
           autopilotId,
           kind: "schedule",
+          schedule_targets: scheduleTargets,
           cron_expression: cronExpr,
           timezone: config.timezone || undefined,
           label: label.trim() || undefined,
@@ -477,7 +494,7 @@ function AddTriggerDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-sm">
+      <DialogContent className="max-w-lg max-h-[85dvh] overflow-y-auto">
         <DialogTitle>{t(($) => $.add_trigger_dialog.title)}</DialogTitle>
         <div className="space-y-4 pt-2">
           <div>
@@ -490,7 +507,7 @@ function AddTriggerDialog({
                 compatibleKinds.length === 1 ? "grid-cols-1" : "grid-cols-2",
               )}
             >
-              {compatibleKinds.includes("schedule") && (
+              {selectableKinds.includes("schedule") && (
                 <button
                   type="button"
                   onClick={() => setKind("schedule")}
@@ -554,7 +571,10 @@ function AddTriggerDialog({
           </div>
 
           {kind === "schedule" ? (
+            <>
             <TriggerConfigSection config={config} onChange={setConfig} />
+            {executionMode !== "create_issue" && <ScheduleTargetsSection value={scheduleTargets} onChange={setScheduleTargets} required={executionMode === "trigger_issue"} />}
+            </>
           ) : kind === "webhook" ? (
             <p className="rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
               {t(($) => $.add_trigger_dialog.webhook_help)}
@@ -581,7 +601,7 @@ function AddTriggerDialog({
             />
           </div>
           <div className="flex justify-end pt-1">
-            <Button size="sm" onClick={handleSubmit} disabled={submitting}>
+            <Button size="sm" onClick={handleSubmit} disabled={submitting || (kind === "schedule" && (scheduleTargets !== null || executionMode === "trigger_issue") && !hasScheduleTargets(scheduleTargets))}>
               {submitting
                 ? t(($) => $.add_trigger_dialog.submitting)
                 : t(($) => $.add_trigger_dialog.submit)}
@@ -593,6 +613,27 @@ function AddTriggerDialog({
   );
 }
 
+function EditScheduleDialog({ trigger, autopilotId, executionMode, onClose }: { trigger: AutopilotTrigger; autopilotId: string; executionMode: AutopilotExecutionMode; onClose: () => void }) {
+  const { t } = useT("autopilots");
+  const mutation = useUpdateAutopilotTrigger();
+  const [targets, setTargets] = useState<ScheduleTargets | null>(trigger.schedule_targets ?? null);
+  const [config, setConfig] = useState(() => parseCronExpression(trigger.cron_expression ?? "0 3 * * *", trigger.timezone ?? "UTC"));
+  const save = async () => {
+    try {
+      await mutation.mutateAsync({ autopilotId, triggerId: trigger.id, schedule_targets: targets, cron_expression: toCronExpression(config), timezone: config.timezone });
+      onClose();
+    } catch (error) { toast.error(error instanceof Error ? error.message : String(error)); }
+  };
+  return <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+    <DialogContent className="max-w-lg max-h-[85dvh] overflow-y-auto">
+      <DialogTitle>{t(($) => $.schedule_targets.edit)}</DialogTitle>
+      <TriggerConfigSection config={config} onChange={setConfig} />
+      {executionMode !== "create_issue" && <ScheduleTargetsSection value={targets} onChange={setTargets} required={executionMode === "trigger_issue"} />}
+      <Button disabled={mutation.isPending || (targets !== null && !hasScheduleTargets(targets))} onClick={save}>{t(($) => $.add_trigger_dialog.submit)}</Button>
+    </DialogContent>
+  </Dialog>;
+}
+
 export function AutopilotDetailPage({ autopilotId }: { autopilotId: string }) {
   const { t } = useT("autopilots");
   const wsId = useWorkspaceId();
@@ -601,7 +642,8 @@ export function AutopilotDetailPage({ autopilotId }: { autopilotId: string }) {
   const { getActorName } = useActorName();
 
   const { data, isLoading } = useQuery(autopilotDetailOptions(wsId, autopilotId));
-  const { data: runs = [], isLoading: runsLoading } = useQuery(autopilotRunsOptions(wsId, autopilotId));
+  const [runOffset, setRunOffset] = useState(0);
+  const { data: runs = [], isLoading: runsLoading } = useQuery(autopilotRunsOptions(wsId, autopilotId, runOffset));
   const { data: projects = [] } = useQuery(projectListOptions(wsId));
   const updateAutopilot = useUpdateAutopilot();
   const deleteAutopilot = useDeleteAutopilot();
@@ -748,7 +790,7 @@ export function AutopilotDetailPage({ autopilotId }: { autopilotId: string }) {
               <Pencil className="h-3.5 w-3.5 sm:mr-1" />
               <span className="hidden sm:inline">{t(($) => $.detail.edit)}</span>
             </Button>
-            {canRunAutopilotFromDashboard(autopilot.execution_mode) && (
+            {(canRunAutopilotFromDashboard(autopilot.execution_mode) || triggers.some((trigger) => trigger.enabled && trigger.schedule_targets)) && (
               <Button
                 size="sm"
                 onClick={handleRunNow}
@@ -902,6 +944,7 @@ export function AutopilotDetailPage({ autopilotId }: { autopilotId: string }) {
                     key={trig.id}
                     trigger={trig}
                     autopilotId={autopilotId}
+                    executionMode={autopilot.execution_mode}
                     systemEventProjectName={
                       trig.event_config?.resource === "issue" && trig.event_config.project_id
                         ? projects.find(
@@ -950,6 +993,11 @@ export function AutopilotDetailPage({ autopilotId }: { autopilotId: string }) {
               />
             )}
           </section>
+
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" size="icon" disabled={runOffset === 0 || runsLoading} aria-label={t(($) => $.schedule_targets.previous)} onClick={() => setRunOffset((value) => Math.max(0, value - 20))}><ChevronLeft className="size-4" /></Button>
+            <Button variant="ghost" size="icon" disabled={runs.length < 20 || runsLoading} aria-label={t(($) => $.schedule_targets.next)} onClick={() => setRunOffset((value) => value + 20)}><ChevronRight className="size-4" /></Button>
+          </div>
 
           {/* Danger zone */}
           <section className="space-y-3 pt-4 border-t">
