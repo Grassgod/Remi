@@ -289,9 +289,10 @@ export function createFeedbackOrApiError(store: MultiremiStore, input: CreateFee
 export function safeUpdateCurrentUser(
   store: MultiremiStore,
   input: any,
+  userId?: string | null,
 ): ReturnType<MultiremiStore["updateCurrentUser"]> | { error: string; status: 400 } {
   try {
-    return store.updateCurrentUser(input);
+    return store.updateCurrentUser(input, userId);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (
@@ -462,6 +463,7 @@ export function safeDeclineInvitation(
 export function safeJoinCloudWaitlist(
   body: { email?: string; reason?: string },
   store: MultiremiStore,
+  userId?: string | null,
 ): ReturnType<MultiremiStore["updateCurrentUser"]> | { error: string; status: 400 } {
   const email = String(body.email ?? "").trim().toLowerCase();
   if (!email) return { error: "email is required", status: 400 };
@@ -469,14 +471,14 @@ export function safeJoinCloudWaitlist(
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { error: "email is invalid", status: 400 };
   const reason = String(body.reason ?? "").trim();
   if (reason.length > 1000) return { error: "reason is too long", status: 400 };
-  const user = store.getCurrentUser();
+  const user = store.getCurrentUser(userId);
   return store.updateCurrentUser({
     onboardingQuestionnaire: {
       ...user.onboardingQuestionnaire,
       cloud_waitlist_email: email,
       cloud_waitlist_reason: reason,
     },
-  });
+  }, userId);
 }
 
 export function safeRuntimeOnboardingBootstrap(

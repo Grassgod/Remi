@@ -15,14 +15,18 @@ import {
   verifyLocalAuthCode,
 } from "../helpers.js";
 import type { RouterDeps } from "./deps.js";
+import { currentRequestUserId } from "../wire/context.js";
 
 export function registerAuthRoutes(app: Hono, deps: RouterDeps): void {
   const { store } = deps;
 
   app.post("/api/cli-token", async (c) => {
+    const userId = currentRequestUserId(c);
+    if (userId !== "local" && !store.getUser(userId)) return c.json({ error: "unauthorized" }, 401);
     const token = await store.createAccessToken({
       workspaceId: "local",
       name: "CLI token",
+      userId,
       type: "pat",
       purpose: "cli",
     });
