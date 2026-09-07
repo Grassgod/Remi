@@ -600,6 +600,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       revision?: unknown;
       external_session_key?: unknown;
       external_message_id?: unknown;
+      chat_type?: unknown;
       reply_to_message_id?: unknown;
       sender_open_id?: unknown;
       sender_user_id?: unknown;
@@ -616,6 +617,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       revision: Number.isSafeInteger(revision) ? revision : -1,
       externalSessionKey: cleanString(typeof body.external_session_key === "string" ? body.external_session_key : null) ?? "",
       externalMessageId: cleanString(typeof body.external_message_id === "string" ? body.external_message_id : null) ?? "",
+      chatType: body.chat_type === "p2p" || body.chat_type === "group" ? body.chat_type : null,
       replyToMessageId: cleanString(typeof body.reply_to_message_id === "string" ? body.reply_to_message_id : null),
       senderOpenId: cleanString(typeof body.sender_open_id === "string" ? body.sender_open_id : null),
       senderUserId: cleanString(typeof body.sender_user_id === "string" ? body.sender_user_id : null),

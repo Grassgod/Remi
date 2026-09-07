@@ -458,6 +458,7 @@ export class MultiremiDaemonClient {
       revision: input.revision,
       external_session_key: input.externalSessionKey,
       external_message_id: input.externalMessageId,
+      chat_type: input.chatType ?? undefined,
       reply_to_message_id: input.replyToMessageId ?? undefined,
       sender_open_id: input.senderOpenId ?? undefined,
       sender_user_id: input.senderUserId ?? undefined,

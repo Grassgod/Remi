@@ -1773,6 +1773,10 @@ runMigrations(this.db);
     return this.feishuBot.submitMessage(workspaceId, runtimeId, input);
   }
 
+  getFeishuBotChatConversationKind(chatSessionId: string): "p2p" | "group" | null {
+    return this.feishuBot.getChatConversationKind(chatSessionId);
+  }
+
   prepareFeishuIssueTopicWithinTransaction(issue: MultiremiIssue): boolean {
     return this.feishuBot.prepareIssueTopicWithinTransaction(issue);
   }

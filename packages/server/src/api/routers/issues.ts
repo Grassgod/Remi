@@ -560,6 +560,15 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
         const existing = store.findGeneratedIssueByTitle(sourceIssueId, issueInput.title);
         if (existing) {
           const chatBinding = bindCreatedIssueToRequestChat(c, store, existing);
+          if (chatBinding?.chat_issue_binding.status === "independent") {
+            try {
+              store.prepareFeishuIssueTopicWithinTransaction(existing);
+            } catch (error) {
+              log.warn(
+                `Feishu issue topic creation skipped for ${existing.id}: ${error instanceof Error ? error.message : String(error)}`,
+              );
+            }
+          }
           return c.json({
             ...existingIssueDispatchResponse(store, existing),
             ...(chatBinding ?? {}),
@@ -568,7 +577,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       }
       const issue = store.createIssue(issueInput);
       const chatBinding = bindCreatedIssueToRequestChat(c, store, issue);
-      if (!chatBinding) {
+      if (!chatBinding || chatBinding.chat_issue_binding.status === "independent") {
         try {
           store.prepareFeishuIssueTopicWithinTransaction(issue);
         } catch (error) {

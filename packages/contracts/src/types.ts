@@ -4033,6 +4033,7 @@ export interface SubmitFeishuBotMessageInput {
   revision: number;
   externalSessionKey: string;
   externalMessageId: string;
+  chatType?: "p2p" | "group" | null;
   replyToMessageId?: string | null;
   senderOpenId?: string | null;
   senderUserId?: string | null;

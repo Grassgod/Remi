@@ -662,6 +662,7 @@ function createFeishuTaskHandler(
       revision,
       externalSessionKey: sessionKey,
       externalMessageId,
+      chatType: message.metadata?.chatType === "group" ? "group" : "p2p",
       replyToMessageId: externalMessageId,
       senderOpenId: String(message.metadata?.senderOpenId ?? "").trim() || null,
       senderUserId: String(message.metadata?.senderUserId ?? "").trim() || null,

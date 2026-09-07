@@ -23,6 +23,7 @@ import type {
   CreateTaskInput,
   CreateTaskSteerMessageInput,
   ListIssuesInput,
+  UpdateChatSessionInput,
   UpdateIssueInput,
   MultiremiAgent,
   MultiremiAgentPlugin,
@@ -355,6 +356,7 @@ export interface TasksSurface {
 export interface ChatSurface {
   createChatSession(input: CreateChatSessionInput): MultiremiChatSession;
   getChatSession(id: string): MultiremiChatSession | null;
+  updateChatSession(id: string, input: UpdateChatSessionInput): MultiremiChatSession;
   bindChatSessionIssueIfUnbound(chatSessionId: string, issueId: string): {
     session: MultiremiChatSession;
     bound: boolean;
