@@ -36,6 +36,8 @@ import type {
 } from "@shared/contracts/acp-protocol.js";
 
 export interface AcpClientOptions {
+  /** An isolated probe supervisor already owns the process group. */
+  inheritProcessGroup?: boolean;
   /** Path to ACP agent executable (default: searches for claude-agent-acp binary). */
   executable?: string;
   /** Arguments placed after the ACP executable. */
@@ -139,7 +141,7 @@ export class AcpClient {
       env,
       // npm ACP launchers commonly spawn a native child. A dedicated POSIX
       // process group lets stop() terminate the wrapper and child together.
-      detached: process.platform !== "win32",
+      detached: process.platform !== "win32" && !this._options.inheritProcessGroup,
     });
 
     const proc = this._process;

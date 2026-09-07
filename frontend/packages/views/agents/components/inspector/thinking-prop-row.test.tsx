@@ -100,30 +100,46 @@ describe("ThinkingPropRow", () => {
     cleanup();
   });
 
-  it("hides the row when the active model has no thinking levels and nothing is persisted", async () => {
+  it("shows unknown capabilities instead of hiding a supported engine's row", async () => {
     mockListFleetModels.mockResolvedValue(fleet([NO_THINKING_MODEL]));
     renderRow({ model: "gemini-2.5-pro", value: "" });
 
-    // ThinkingPropRow returns null when levels are empty and value is
-    // empty — both initially (data undefined) and after the fleet catalog
-    // resolves (NO_THINKING_MODEL has no `thinking` block).
+    // A missing thinking block is not evidence that the model lacks reasoning.
     await waitFor(() => {
       expect(mockListFleetModels).toHaveBeenCalled();
     });
-    await waitFor(() => {
-      expect(screen.queryByText("Reasoning effort")).toBeNull();
-    });
+    expect(await screen.findByText("Reasoning options not reported")).toBeInTheDocument();
   });
 
-  it("hides the row when the engine has no fleet catalog bucket", async () => {
-    // A provider with no runtime at all yields no bucket → empty levels,
-    // empty value → row stays hidden.
+  it("keeps the row when Codex has no fleet catalog bucket", async () => {
+    // No runtime catalog must remain visible as an unknown state.
     renderRow({ provider: "codex", value: "" });
 
     await waitFor(() => {
       expect(mockListFleetModels).toHaveBeenCalled();
     });
-    expect(screen.queryByText("Reasoning effort")).toBeNull();
+    expect(await screen.findByText("Reasoning options not reported")).toBeInTheDocument();
+  });
+
+  it("distinguishes catalog loading and failures from missing capabilities", async () => {
+    let reject!: (error: Error) => void;
+    mockListFleetModels.mockReturnValue(new Promise((_, fail) => { reject = fail; }));
+    renderRow({ provider: "codex", model: "gpt-6-astra" });
+    expect(await screen.findByText("Loading reasoning options...")).toBeInTheDocument();
+    reject(new Error("catalog unavailable"));
+    expect(await screen.findByText("Could not load reasoning options")).toBeInTheDocument();
+  });
+
+  it("shows newly reported Codex efforts after the catalog refreshes", async () => {
+    mockListFleetModels.mockResolvedValue({ providers: [{ provider: "codex", online_runtime_count: 1,
+      models: [{ id: "gpt-6-astra", label: "Astra" }] }] });
+    const { queryClient } = renderRow({ provider: "codex", model: "gpt-6-astra" });
+    expect(await screen.findByText("Reasoning options not reported")).toBeInTheDocument();
+    mockListFleetModels.mockResolvedValue({ providers: [{ provider: "codex", online_runtime_count: 1,
+      models: [{ ...CLAUDE_MODEL, id: "gpt-6-astra", label: "Astra" }] }] });
+    await queryClient.invalidateQueries();
+    expect(await screen.findByText("Follow runtime default")).toBeInTheDocument();
+    expect(screen.queryByText("Reasoning options not reported")).toBeNull();
   });
 
   it("renders the row with the persisted raw token when levels are empty but value is set (stale orphan)", async () => {

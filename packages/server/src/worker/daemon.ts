@@ -53,6 +53,7 @@ import {
   type MultiremiOutboxDrainResult,
 } from "./outbox.js";
 import { TaskMessageBatcher } from "./task-message-batcher.js";
+import { probeRuntimeModels } from "./runtime-model-probe.js";
 import {
   browseRuntimeDirectory,
   listRuntimeLocalSkills,
@@ -406,10 +407,12 @@ export interface MultiremiDaemonOptions {
   runtimeModelRetryBaseMs?: number;
   /** Maximum retry delay for Runtime model discovery/reporting. */
   runtimeModelRetryMaxMs?: number;
+  /** Periodic capability refresh; probes run outside the daemon process. */
+  runtimeModelRefreshIntervalMs?: number;
   /**
    * Test-only escape hatch for the legacy in-process ACP model probe. Production
-   * callers must leave this disabled until discovery runs in an isolated OS
-   * process: a native ACP/Bun crash would otherwise terminate the daemon.
+   * callers leave this disabled and use the isolated subprocess instead:
+   * a native ACP/Bun crash must never terminate the daemon.
    */
   inProcessRuntimeModelDiscoveryEnabled?: boolean;
   /** Injectable SSH Mesh lifecycle for daemon integration tests. */
@@ -649,11 +652,15 @@ export class MultiremiDaemon {
   private terminalAuthorityCleanupAttempts = 0;
   private agentPluginReconcileAbort: AbortController | null = null;
   private runtimeModels: MultiremiRuntimeModel[] | null = null;
+  private runtimeModelsReported: MultiremiRuntimeModel[] | null = null;
+  private readonly runtimeModelDiscoveryEnabled: boolean;
+  private runtimeModelsDiscoveredAt = 0;
   private runtimeRegistrationGeneration = 0;
   private runtimeModelReportedGeneration = 0;
   private runtimeModelProbe: Promise<MultiremiRuntimeModel[]> | null = null;
   private runtimeModelProbeAbort: AbortController | null = null;
   private runtimeModelRefreshTask: Promise<void> | null = null;
+  private runtimeModelListRequests = new Map<string, Promise<void>>();
   private runtimeModelRefreshAbort: AbortController | null = null;
   private runtimeModelRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private runtimeModelRetryWake: (() => void) | null = null;
@@ -668,6 +675,8 @@ export class MultiremiDaemon {
         "In-process Runtime model discovery may only be enabled with an injected test provider",
       );
     }
+    this.runtimeModelDiscoveryEnabled = options.inProcessRuntimeModelDiscoveryEnabled === true
+      || (!options.providerFactory && ["claude", "codex"].includes(options.provider ?? "claude"));
     const workspacesRoot = configuredMultiremiWorkspacesRoot(options.workspacesRoot);
     const runtimeName = options.runtimeName ?? process.env.MULTIREMI_RUNTIME_NAME ?? `${hostname()}-${Bun.env.USER ?? "local"}-bun-runtime`;
     const deviceName = options.deviceName ?? process.env.MULTIREMI_DEVICE_NAME ?? `${hostname()}-${Bun.env.USER ?? "local"}`;
@@ -732,6 +741,7 @@ export class MultiremiDaemon {
         ?? join(homedir(), ".remi", "plugin-cache", "sha256"),
       runtimeModelRetryBaseMs,
       runtimeModelRetryMaxMs,
+      runtimeModelRefreshIntervalMs: Math.max(100, options.runtimeModelRefreshIntervalMs ?? 15 * 60_000),
       inProcessRuntimeModelDiscoveryEnabled:
         options.inProcessRuntimeModelDiscoveryEnabled === true,
       serverUrl: options.serverUrl,
@@ -967,7 +977,7 @@ export class MultiremiDaemon {
       this.startGcLoop();
       // One-shot mode is primarily used for a single queued task (and tests), so
       // avoid paying for a second ACP process unless a model-list request exists.
-      if (this.options.inProcessRuntimeModelDiscoveryEnabled && !this.options.once) {
+      if (this.runtimeModelDiscoveryEnabled && !this.options.once) {
         this.startRuntimeModelRefresh();
       }
       await this.reconcileRuntimeAgentPlugins(this.options.runtimeId!);
@@ -1086,6 +1096,7 @@ export class MultiremiDaemon {
       this.cancelRuntimeModelRefresh();
       const modelRefresh = this.runtimeModelRefreshTask;
       if (modelRefresh) await Promise.allSettled([modelRefresh]);
+      await Promise.allSettled([...this.runtimeModelListRequests.values()]);
       // Running tasks depend on the repo-checkout server, so let any in-flight
       // tasks drain before waiting for the GC lease they may currently hold.
       await Promise.allSettled([...this.inflight]);
@@ -1232,7 +1243,14 @@ export class MultiremiDaemon {
       await this.handleRuntimeUpdate(runtimeId, ack.pending_update.id, ack.pending_update.target_version, ack.pending_update.scope ?? "cli");
     }
     if (ack.pending_model_list) {
-      await this.handleRuntimeModelList(runtimeId, ack.pending_model_list.id);
+      const requestId = ack.pending_model_list.id;
+      if (!this.runtimeModelListRequests.has(requestId)) {
+        const request = this.handleRuntimeModelList(runtimeId, requestId)
+          .catch(() => log.warn(`Runtime model list report failed for ${requestId}`))
+          .finally(() => this.runtimeModelListRequests.delete(requestId));
+        this.runtimeModelListRequests.set(requestId, request);
+      }
+      if (this.options.once) await this.runtimeModelListRequests.get(requestId);
     }
     if (ack.pending_local_skills) {
       await this.handleRuntimeLocalSkillList(runtimeId, ack.pending_local_skills.id);
@@ -1294,7 +1312,7 @@ export class MultiremiDaemon {
         return false;
       }
       if (
-        this.options.inProcessRuntimeModelDiscoveryEnabled
+        this.runtimeModelDiscoveryEnabled
         && (this.runtimeModels || !this.options.once)
       ) {
         this.startRuntimeModelRefresh();
@@ -1384,7 +1402,7 @@ export class MultiremiDaemon {
   }
 
   private async handleRuntimeModelList(runtimeId: string, requestId: string): Promise<void> {
-    if (!this.options.inProcessRuntimeModelDiscoveryEnabled) {
+    if (!this.runtimeModelDiscoveryEnabled) {
       await this.client.reportRuntimeModelListResult(runtimeId, requestId, {
         status: "failed",
         error: IN_PROCESS_RUNTIME_MODEL_DISCOVERY_DISABLED,
@@ -1566,12 +1584,13 @@ export class MultiremiDaemon {
     if (this.stopped || signal.aborted) throw new Error("Runtime model refresh cancelled");
     if (this.options.runtimeId === runtimeId && this.runtimeRegistrationGeneration === generation) {
       this.runtimeModelReportedGeneration = generation;
+      this.runtimeModelsReported = models;
     }
     return models;
   }
 
   private startRuntimeModelRefresh(): void {
-    if (!this.options.inProcessRuntimeModelDiscoveryEnabled || this.stopped) return;
+    if (!this.runtimeModelDiscoveryEnabled || this.stopped) return;
     if (this.runtimeModelRefreshTask) {
       this.wakeRuntimeModelRetry();
       return;
@@ -1596,7 +1615,14 @@ export class MultiremiDaemon {
   private async runRuntimeModelRefreshLoop(signal: AbortSignal): Promise<void> {
     let failureCount = 0;
     while (!this.stopped && !signal.aborted) {
-      if (this.runtimeModelReportedGeneration >= this.runtimeRegistrationGeneration) return;
+      if (this.runtimeModelReportedGeneration >= this.runtimeRegistrationGeneration
+        && this.runtimeModelsReported === this.runtimeModels
+        && Date.now() - this.runtimeModelsDiscoveredAt < this.options.runtimeModelRefreshIntervalMs) {
+        await this.waitForRuntimeModelRetry(
+          this.options.runtimeModelRefreshIntervalMs - (Date.now() - this.runtimeModelsDiscoveredAt), signal,
+        );
+        continue;
+      }
       const attemptGeneration = this.runtimeRegistrationGeneration;
       try {
         await this.refreshAndReportRuntimeModels(signal);
@@ -1604,7 +1630,7 @@ export class MultiremiDaemon {
         // The Runtime may have re-registered while the PUT was in flight. In that
         // case the generation was deliberately not marked and the cached catalog
         // is uploaded again immediately to the current Runtime.
-        if (this.runtimeModelReportedGeneration >= this.runtimeRegistrationGeneration) return;
+        // Remain alive for periodic refreshes; successful catalogs must not stay frozen forever.
       } catch (error) {
         if (this.stopped || signal.aborted) return;
         // A replacement Runtime should be attempted immediately. This also
@@ -1663,15 +1689,25 @@ export class MultiremiDaemon {
   }
 
   private async discoverRuntimeModels(force: boolean): Promise<MultiremiRuntimeModel[]> {
-    if (!this.options.inProcessRuntimeModelDiscoveryEnabled) {
+    if (!this.runtimeModelDiscoveryEnabled) {
       throw new Error(IN_PROCESS_RUNTIME_MODEL_DISCOVERY_DISABLED);
     }
-    if (!force && this.runtimeModels) return this.runtimeModels;
+    if (!force && this.runtimeModels
+      && Date.now() - this.runtimeModelsDiscoveredAt < this.options.runtimeModelRefreshIntervalMs) return this.runtimeModels;
     if (this.runtimeModelProbe) return this.runtimeModelProbe;
 
     const abort = new AbortController();
     this.runtimeModelProbeAbort = abort;
     const probe = (async () => {
+      if (!this.options.inProcessRuntimeModelDiscoveryEnabled) {
+        const capabilities = await probeRuntimeModels(await this.runtimeModelProbeProviderOptions(), {
+          signal: abort.signal, timeoutMs: RUNTIME_MODEL_PROBE_TIMEOUT_MS,
+        });
+        const models = runtimeModelsFromAcpCapabilities(this.options.provider, capabilities);
+        this.runtimeModels = models;
+        this.runtimeModelsDiscoveredAt = Date.now();
+        return models;
+      }
       const provider = this.providerFactory(await this.runtimeModelProbeProviderOptions());
       try {
         if (!provider.discoverModelCapabilities) {
@@ -1688,6 +1724,7 @@ export class MultiremiDaemon {
         }
         const models = runtimeModelsFromAcpCapabilities(this.options.provider, capabilities);
         this.runtimeModels = models;
+        this.runtimeModelsDiscoveredAt = Date.now();
         return models;
       } finally {
         await provider.close?.();

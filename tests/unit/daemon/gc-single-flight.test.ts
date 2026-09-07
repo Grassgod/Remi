@@ -112,6 +112,7 @@ describe("daemon Session archive GC orchestration", () => {
       reconcileRuntimeAgentPlugins: async () => {},
       handleHeartbeatAck: async () => false,
       runtimeModelRefreshTask: null,
+      runtimeModelListRequests: new Map(),
       terminalAuthorityCleanupRetryWake: null,
       agentPluginReconcileAbort: null,
       runtimeModelRefreshAbort: null,
@@ -282,6 +283,7 @@ describe("daemon Session archive GC orchestration", () => {
       feishuOutboundRuns: new Map(),
       gcInFlight: null,
       runtimeModelRefreshTask: null,
+      runtimeModelListRequests: new Map(),
       workspaceRootFence: null,
       options: { once: true, pollIntervalMs: 1, runtimeId: "rt_barrier", maxConcurrency: 1 },
       client: {

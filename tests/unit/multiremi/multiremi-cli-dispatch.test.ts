@@ -111,6 +111,7 @@ describe("remi CLI dispatcher", () => {
       "doctor",
       "login",
       "update",
+      "runtime-model-probe",
       "git-credential",
       "multiremi",
     ]);

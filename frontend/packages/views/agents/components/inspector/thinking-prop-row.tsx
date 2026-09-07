@@ -7,9 +7,8 @@ import { ThinkingPicker } from "./thinking-picker";
 import { getModelThinkingLevels } from "./thinking-levels";
 
 /**
- * Thinking row for the agent inspector. Hidden when the active model has
- * no `supported_levels` advertised AND nothing is persisted, so providers
- * that don't expose reasoning never surface an empty row. If the agent
+ * Missing capability metadata on Claude/Codex is unknown, not proof that a
+ * model has no reasoning. Keep loading/error/unknown states visible. If the agent
  * already has a `thinking_level` saved (engine swap into a non-thinking
  * provider, or the fleet catalog shrank and dropped the entry),
  * we still render the row so the user can see the orphan token the
@@ -34,10 +33,23 @@ export function ThinkingPropRow({
   onChange: (next: string) => Promise<void> | void;
 }) {
   const { t } = useT("agents");
-  const { models } = useFleetProviderModels(wsId, provider);
+  const { models, isLoading, isError } = useFleetProviderModels(wsId, provider);
 
   const levels = getModelThinkingLevels(models, model);
-  if (levels.length === 0 && !value) return null;
+  if (levels.length === 0 && !value) {
+    if (provider !== "claude" && provider !== "codex") return null;
+    return (
+      <PropRow label={t(($) => $.inspector.prop_thinking)} interactive={false}>
+        <span className="px-1.5 py-0.5 text-xs text-muted-foreground" role="status">
+          {isLoading
+            ? t(($) => $.pickers.thinking_loading)
+            : isError
+              ? t(($) => $.pickers.thinking_load_error)
+              : t(($) => $.pickers.thinking_unknown)}
+        </span>
+      </PropRow>
+    );
+  }
 
   return (
     <PropRow label={t(($) => $.inspector.prop_thinking)} interactive={false}>

@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { AcpProvider } from "@acp/index.js";
+import { probeRuntimeModels } from "@multiremi/worker/runtime-model-probe.js";
 import type { McpServerConfig, SessionConfigOption, SessionModeState, SessionModelState } from "@shared/contracts/acp-protocol.js";
 
 interface AgentProfile {
@@ -374,6 +375,14 @@ describe("AcpProvider session/new payload", () => {
 });
 
 describe("AcpProvider model and effort", () => {
+  it("discovers capabilities through the real isolated CLI entry without sending a prompt", async () => {
+    const agent = fakeAgent(claudeProfile());
+    const models = await probeRuntimeModels({ agentType: "claude", executable: agent.executable, cwd: tempCwd() });
+    expect(models.map(m => m.id)).toContain("claude-sonnet-4-6");
+    expect(models[0]?.effort?.supportedLevels).toEqual([{ value: "high", label: "High" }]);
+    expect(agent.requests().some(r => r.method === "session/prompt")).toBe(false);
+  }, 15_000);
+
   it("discovers each model's effort values after selecting that model", async () => {
     const agent = fakeAgent({
       ...claudeProfile(),

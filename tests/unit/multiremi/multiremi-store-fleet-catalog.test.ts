@@ -176,6 +176,27 @@ describe("Multiremi store — fleet engine and model catalog", () => {
     expect(codex.models).toEqual([]);
   });
 
+  it("publishes refreshed reasoning metadata and invalidates the fleet catalog", async () => {
+    const store = createStore();
+    store.registerRuntime({ id: "rt_refresh", name: "Refresh", provider: "codex", workspaceId: "local" });
+    const events: string[] = [];
+    store.onWorkspaceEvent(event => events.push(event.type));
+    store.updateRuntimeModels("rt_refresh", [{ id: "gpt-6-astra", label: "Astra", provider: "openai", default: true,
+      thinking: { supportedLevels: [{ value: "high", label: "High" }] } }]);
+    const app = createMultiremiApp({ store });
+    const response = await app.request("/api/models?workspace_id=local");
+    expect(response.status).toBe(200);
+    expect((await response.json()).providers[0].models[0].thinking.supported_levels)
+      .toEqual([{ value: "high", label: "High" }]);
+    expect(events).toContain("daemon:models_updated");
+    events.length = 0;
+    const request = store.createRuntimeModelListRequest("rt_refresh");
+    store.reportRuntimeModelListResult("rt_refresh", request.id, {
+      status: "completed", models: [{ id: "gpt-6-astra", label: "Astra", provider: "openai", default: true }],
+    });
+    expect(events).toContain("daemon:models_updated");
+  });
+
   it("preserves exact runtime effort metadata on a matching gateway model", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();

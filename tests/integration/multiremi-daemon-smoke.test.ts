@@ -41,6 +41,55 @@ afterEach(() => {
 });
 
 describe("Bun Multiremi daemon smoke", () => {
+  it("refreshes model capabilities periodically and retries failed probes and reports", async () => {
+    const { store, workDir } = daemonTestBed("multiremi-periodic-models-");
+    let failedReport = false;
+    const updateModels = store.updateRuntimeModels.bind(store);
+    store.updateRuntimeModels = (runtimeId, models) => {
+      if (!failedReport && models.some(m => m.id === "gpt-6-astra")) {
+        failedReport = true;
+        throw new Error("transient periodic model report failure");
+      }
+      return updateModels(runtimeId, models);
+    };
+    const credential = await store.createAccessToken({ name: "Probe test", type: "daemon", workspaceId: "local" });
+    const server = startMultiremiServer({ store, scheduler: null, authToken: "model-refresh-test", hostname: "127.0.0.1", port: 0 });
+    let probes = 0;
+    const daemon = new MultiremiDaemon({
+      serverUrl: `http://127.0.0.1:${server.port}`, token: credential.token,
+      runtimeName: "periodic-probe", provider: "codex", workspaceId: "local", daemonPort: 0,
+      workspacesRoot: join(workDir, "workspaces"), repoCacheRoot: join(workDir, ".repo-cache"),
+      pollIntervalMs: 10, runtimeModelRefreshIntervalMs: 100,
+      runtimeModelRetryBaseMs: 20, runtimeModelRetryMaxMs: 20,
+      inProcessRuntimeModelDiscoveryEnabled: true,
+      providerFactory: () => ({
+        async *sendStream() {}, getLastResponse: () => null,
+        discoverModelCapabilities: async () => {
+          probes++;
+          if (probes === 2) {
+            expect(store.listRuntimeModels(store.listRuntimes()[0]!.id)).toHaveLength(1);
+            throw new Error("isolated probe failed");
+          }
+          return [{ id: probes > 2 ? "gpt-6-astra" : "old-model", label: "Model", default: true,
+            effort: { supportedLevels: [{ value: "high", label: "High" }] } }];
+        },
+      }),
+    });
+    const running = daemon.start();
+    try {
+      await waitForCondition(() => {
+        const runtime = store.listRuntimes()[0];
+        return !!runtime && store.listRuntimeModels(runtime.id).some(m => m.id === "gpt-6-astra");
+      }, 5000);
+      expect(probes).toBeGreaterThanOrEqual(3);
+      expect(failedReport).toBe(true);
+    } finally {
+      daemon.stop();
+      await running;
+      server.stop(true);
+    }
+  });
+
   it("keeps the unsafe in-process model probe restricted to injected test providers", () => {
     workDir = mkdtempSync(join(tmpdir(), "multiremi-daemon-model-probe-guard-"));
     expect(() => new MultiremiDaemon({

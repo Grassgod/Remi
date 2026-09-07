@@ -949,9 +949,20 @@ export class RuntimesRepo {
   }
 
   updateRuntimeModels(runtimeId: string, models: MultiremiRuntimeModel[]): MultiremiRuntimeModel[] {
-    return this.withRuntimeLifecycleLock(runtimeId, (runtime) => {
+    const updated = this.withRuntimeLifecycleLock(runtimeId, (runtime) => {
       this.replaceRuntimeModelsWithinTransaction(runtimeId, models, runtime.provider, nowIso());
       return this.listRuntimeModelsForExistingRuntime(runtimeId);
+    });
+    this.publishRuntimeModelsUpdated(runtimeId);
+    return updated;
+  }
+
+  private publishRuntimeModelsUpdated(runtimeId: string): void {
+    const runtime = this.getRuntime(runtimeId);
+    if (!runtime?.workspaceId) return;
+    this.ctx.emitWorkspaceEvent({
+      type: "daemon:models_updated", workspaceId: runtime.workspaceId,
+      actorType: "system", actorId: null, payload: { runtime_id: runtimeId },
     });
   }
 
@@ -1003,6 +1014,7 @@ export class RuntimesRepo {
         [input.error ?? "runtime model list failed", now, requestId],
       );
     }
+    if (status === "completed") this.publishRuntimeModelsUpdated(runtimeId);
     return this.getRuntimeModelListRequest(runtimeId, requestId)!;
   }
 

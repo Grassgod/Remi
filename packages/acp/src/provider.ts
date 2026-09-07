@@ -37,6 +37,8 @@ import type {
 } from "@shared/contracts/acp-protocol.js";
 
 export interface AcpProviderOptions {
+  /** Internal capability probes keep descendants inside the supervisor's process group. */
+  inheritProcessGroup?: boolean;
   /** Agent type: "claude" | "codex" (default: "claude"). */
   agentType?: string;
   /** ACP executable path (auto-detected from agentType if omitted). */
@@ -747,6 +749,7 @@ export class AcpProvider implements Provider {
     } as Parameters<AgentAdapter["buildSessionMeta"]>[0]);
 
     const client = new AcpClient({
+      inheritProcessGroup: this._options.inheritProcessGroup,
       executable: resolveAcpExecutableForAgent(
         this._adapter.agentType,
         this._options.executable,

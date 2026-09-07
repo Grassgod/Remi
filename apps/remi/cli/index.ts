@@ -101,6 +101,10 @@ register("update", "Download latest version from GitHub", async () => {
 });
 
 // ── Internal / hidden ──
+register("runtime-model-probe", "Isolated Runtime model capability probe", async () => {
+  return await import("./runtime-model-probe.js");
+}, true);
+
 register("git-credential", "Multiremi JIT Git credential helper", async () => {
   return await import("./git-credential.js");
 }, true);
