@@ -114,7 +114,8 @@ report(draining) → drain.begin(operationId)
                      · 每次把 {online, acked, active_tasks, waited_ms} 写进
                        operation.progress.drain 并 report(draining)
                      · cancel_requested → release → 终态 cancelled
-                     · 超时(默认 15min,MULTIREMI_PLATFORM_DRAIN_TIMEOUT_MS)
+                     · 默认无限等待(MULTIREMI_PLATFORM_DRAIN_TIMEOUT_MS=0 或未设置)
+                     · 显式配置正数等待上限后超时
                        → release → 抛 DrainTimeoutError → 终态 failed
                        (error 明确写"等待运行中任务结束超时,未执行切换",不切换容器)
 report(switching) → docker compose up -d --no-deps api web ssh-mesh-control-plane

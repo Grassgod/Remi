@@ -1,9 +1,15 @@
 import type { ReportPlatformOperationInput } from "@multiremi/contracts";
 import { PlatformDrainLostError, type PlatformDrainStatusWire, type PlatformUpdaterClient } from "./client.js";
 
-export const DEFAULT_DRAIN_TIMEOUT_MS = 15 * 60_000;
+// Zero disables the task-wait deadline, not the renewable crash-recovery lease.
+export const DEFAULT_DRAIN_TIMEOUT_MS = 0;
 export const DEFAULT_DRAIN_POLL_MS = 5_000;
 export const DEFAULT_DRAIN_LEASE_TTL_MS = 120_000;
+
+export function resolveDrainTimeoutMs(value: string | number | undefined): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_DRAIN_TIMEOUT_MS;
+}
 
 /** Base for drain outcomes that abort the operation BEFORE any switch ran. */
 export class DrainAbortedError extends Error {}
@@ -42,6 +48,7 @@ export interface PlatformDrainGate {
 }
 
 export interface PlatformDrainCoordinatorOptions {
+  /** Zero (the default) waits until ready or cancelled, with no task-wait deadline. */
   timeoutMs?: number;
   pollMs?: number;
   leaseTtlMs?: number;
@@ -63,7 +70,7 @@ export class PlatformDrainCoordinator implements PlatformDrainGate {
     private readonly operationId: string,
     options: PlatformDrainCoordinatorOptions = {},
   ) {
-    this.timeoutMs = options.timeoutMs ?? DEFAULT_DRAIN_TIMEOUT_MS;
+    this.timeoutMs = resolveDrainTimeoutMs(options.timeoutMs);
     this.pollMs = options.pollMs ?? DEFAULT_DRAIN_POLL_MS;
     this.leaseTtlMs = options.leaseTtlMs ?? DEFAULT_DRAIN_LEASE_TTL_MS;
     this.reason = options.reason ?? null;
@@ -106,7 +113,7 @@ export class PlatformDrainCoordinator implements PlatformDrainGate {
         });
         return;
       }
-      if (waitedMs >= this.timeoutMs) {
+      if (this.timeoutMs > 0 && waitedMs >= this.timeoutMs) {
         await report({
           status: "draining",
           progress: {

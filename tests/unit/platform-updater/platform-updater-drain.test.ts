@@ -12,6 +12,7 @@ import {
   DrainCancelledError,
   DrainTimeoutError,
   PlatformDrainCoordinator,
+  resolveDrainTimeoutMs,
   type PlatformDrainGate,
 } from "@remi-platform/updater/drain.js";
 import { PlatformDrainLostError, type PlatformDrainRenewResponse, type PlatformUpdaterClient } from "@remi-platform/updater/client.js";
@@ -95,6 +96,60 @@ function fakeDrainClient(renewSequence: Array<PlatformDrainRenewResponse | Platf
 }
 
 describe("PlatformDrainCoordinator", () => {
+  it.each([undefined, "", "0", 0, "invalid", "Infinity", "-1", -1, Number.NaN])(
+    "resolves %s to an unlimited task wait",
+    (value) => {
+      expect(resolveDrainTimeoutMs(value)).toBe(0);
+    },
+  );
+
+  it.each([900_000, "900000"])("preserves an explicit finite deadline of %s ms", (value) => {
+    expect(resolveDrainTimeoutMs(value)).toBe(900_000);
+  });
+
+  it.each([undefined, 0])("keeps waiting for hours with timeoutMs=%s while renewing the recovery lease", async (timeoutMs) => {
+    const fake = fakeDrainClient([
+      renewResponse({ active_tasks: 1 }),
+      renewResponse({ active_tasks: 1 }),
+      renewResponse({ active_tasks: 1 }),
+      renewResponse({ ready: true }),
+    ]);
+    const reports: ReportPlatformOperationInput[] = [];
+    let clock = 0;
+    const coordinator = new PlatformDrainCoordinator(fake.client, "pop_test", {
+      timeoutMs,
+      sleep: async () => { clock += 2 * 60 * 60_000; },
+      now: () => clock,
+    });
+    await coordinator.waitUntilDrained(async (input) => { reports.push(input); });
+
+    expect(fake.renews).toBe(4);
+    expect(fake.releases).toBe(0);
+    expect(reports.map((report) => (report.progress as any).drain.state)).toEqual([
+      "waiting", "waiting", "waiting", "ready",
+    ]);
+    expect((reports.at(-1)?.progress as any).drain).toMatchObject({
+      waited_ms: 6 * 60 * 60_000,
+      timeout_ms: 0,
+    });
+  });
+
+  it("still releases an unlimited wait when the operator cancels after hours", async () => {
+    const fake = fakeDrainClient([
+      renewResponse({ active_tasks: 1 }),
+      renewResponse({ active_tasks: 1 }),
+      renewResponse({ active_tasks: 1 }, true),
+    ]);
+    let clock = 0;
+    const coordinator = new PlatformDrainCoordinator(fake.client, "pop_test", {
+      sleep: async () => { clock += 2 * 60 * 60_000; },
+      now: () => clock,
+    });
+    await expect(coordinator.waitUntilDrained(async () => {})).rejects.toThrow(DrainCancelledError);
+    expect(clock).toBe(4 * 60 * 60_000);
+    expect(fake.releases).toBe(1);
+  });
+
   it("waits until ready, reporting progress, and keeps the drain held on success", async () => {
     const fake = fakeDrainClient([
       renewResponse({ acked_daemons: 1, active_tasks: 2 }),
