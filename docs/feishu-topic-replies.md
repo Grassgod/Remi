@@ -7,6 +7,34 @@ Chat Session. Other groups still require a bot mention or a slash command.
 Messages authored by bots and messages directed only at other people are ignored.
 Sender identity and workspace permission checks in the Task API are unchanged.
 
+Replies to human group messages mention that message's sender in the card footer,
+using the bot-scoped `senderOpenId` already supplied by the incoming event. The
+initial card includes the mention, and subsequent patches and the final card keep
+the same single footer. This sends no separate notification message and never
+substitutes the Issue creator or mentions everyone. Private replies and proactive
+reports without an originating sender do not infer a recipient.
+
+The subtitle is a single native Feishu header line: Agent name, engine, and
+compact model name, for example `Remi Claude opus5`. It uses the acknowledged
+ACP session selection (including default and resumed sessions), not the Agent's
+mutable configured default. Full model IDs remain in persisted `execution`
+Task messages; only the card display removes redundant prefixes and separators.
+Unknown models are omitted and long subtitles use Feishu's native ellipsis.
+
+The common footer orders its columns as sender mention, elapsed time, context
+used/limit, and tool count. Existing clock, context, and tool icons are preserved;
+`flow` layout wraps columns on narrow screens. Context is the latest root-session
+`usage` message's `used/size`, never the sum of Task billing entries. Compaction
+can decrease it, model changes clear stale samples, and absent limits display
+`used/—`. No context sample means no context column. Completion, cancellation,
+failure, and durable replay keep the same rendering rules and PATCH transport.
+
+These display events use the existing Task message API and CLI:
+`remi task message list <taskId> --json`. No endpoint, migration, or new Provider
+execution path is required. Upgrade the executing daemon as well as the
+bot-hosting daemon to get model metadata; older Task transcripts omit missing
+metadata rather than guessing. Billing and cost accounting are unchanged.
+
 The selected bot runtime receives the exact group policy on each heartbeat.
 Changing `chat_id` removes the old group from this policy; disabling synchronization
 removes it entirely. No process restart or bot credential change is necessary.

@@ -15,6 +15,7 @@ import type {
 } from "@shared/contracts/provider-types.js";
 import { createAgentResponse } from "@shared/contracts/provider-types.js";
 import { isCompactionChunk } from "@shared/contracts/compaction.js";
+import { readContextUsage, type ContextUsage } from "@shared/agent-execution.js";
 import { AcpClient } from "./client.js";
 import { createAdapter, type AgentAdapter } from "./adapters/index.js";
 import type {
@@ -160,6 +161,7 @@ interface PromptState {
   text: string;
   usage: PromptUsageState;
   completedToolCount: number;
+  contextUsage?: ContextUsage;
 }
 
 export function createPromptUsageState(): PromptUsageState {
@@ -536,6 +538,14 @@ export class AcpProvider implements Provider {
       resolveWaiting?.();
     };
 
+    // Publish the acknowledged session model, including default/resumed sessions.
+    // Construction-time model options alone do not prove what the bridge selected.
+    if (selectConfigOption(entry.configOptions, MODEL_OPTION_CATEGORY)) {
+      pushEvent({ sessionUpdate: "config_option_update", configOptions: entry.configOptions });
+    } else if (entry.models?.currentModelId) {
+      pushEvent({ sessionUpdate: "config_option_update", id: "model", value: entry.models.currentModelId });
+    }
+
     // Belt-and-braces against a mid-turn process death: the prompt request's
     // rejection normally wakes the loop, but if the death races request
     // bookkeeping this guarantees the stream still terminates.
@@ -549,8 +559,19 @@ export class AcpProvider implements Provider {
     entry.client["_options"].onSessionUpdate = (notification: SessionNotification) => {
       if (notification.sessionId !== entry.acpSessionId) return;
       const update = notification.update;
+      if (update.sessionUpdate === "config_option_update" && update.configOptions) {
+        entry.configOptions = update.configOptions;
+      } else if (update.sessionUpdate === "config_option_update" && update.id === "model" && typeof update.value === "string") {
+        const value = update.value;
+        entry.configOptions = entry.configOptions?.map(option => option.type === "select" && (option.category === "model" || option.id === "model")
+          ? { ...option, currentValue: value } : option);
+        if (entry.models) entry.models = { ...entry.models, currentModelId: value };
+      }
       if (update.sessionUpdate === "usage_update") {
         accumulateUsage(entry.promptState.usage, update);
+        const context = (update._meta?.claudeCode as { parentToolUseId?: string } | undefined)?.parentToolUseId
+          ? null : readContextUsage(update);
+        if (context) entry.promptState.contextUsage = context;
       }
       if (update.sessionUpdate === "agent_message_chunk") {
         const text = extractChunkText((update as Record<string, any>).content);
@@ -1213,7 +1234,7 @@ function nonNegativeFinite(value: unknown): number | null {
 }
 
 function buildAgentResponse(entry: PoolEntry, result: PromptResult, settleScope: PromptUsageSettleScope): AgentResponse {
-  const { usage, text, promptStartTime, completedToolCount } = entry.promptState;
+  const { usage, text, promptStartTime, completedToolCount, contextUsage } = entry.promptState;
   const durationMs = Date.now() - promptStartTime;
 
   // Reset per-prompt state for next prompt
@@ -1237,6 +1258,7 @@ function buildAgentResponse(entry: PoolEntry, result: PromptResult, settleScope:
     metadata: {
       stopReason: result.stopReason,
       provider: "acp",
+      ...(contextUsage ? { contextUsage } : {}),
     },
   });
 }

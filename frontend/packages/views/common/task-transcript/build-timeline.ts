@@ -274,7 +274,7 @@ function parseUsageContent(content?: string): Record<string, unknown> | null {
 export function buildTimeline(msgs: TaskMessagePayload[]): TimelineItem[] {
   const items: TimelineItem[] = [];
   for (const msg of msgs) {
-    if (USAGE_TYPES.has(msg.type)) continue;
+    if (USAGE_TYPES.has(msg.type) || msg.type === "execution") continue;
     items.push({
       seq: msg.seq,
       type: msg.type as TimelineItem["type"],

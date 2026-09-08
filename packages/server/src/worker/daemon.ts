@@ -3346,6 +3346,7 @@ export class MultiremiDaemon {
 
     try {
       const session = new AgentSession(provider as any, config);
+      messageBatcher.push([{ type: "execution", meta: { agentName: agent.name, provider: config.agentType } }]);
       const promptArtifact = buildTaskPromptArtifact(task, {
         repoCheckouts: preparedWorkspace.checkouts,
         repoWarnings: preparedWorkspace.warnings,
@@ -3440,6 +3441,9 @@ export class MultiremiDaemon {
           if (graceTimer) clearTimeout(graceTimer);
         }
         const last = provider.getLastResponse?.() as AgentResponse | null | undefined;
+        if (last?.model) {
+          messageBatcher.push([{ type: "execution", meta: { provider: config.agentType, model: last.model, modelName: null } }]);
+        }
         finalSessionId = last?.sessionId ?? finalSessionId;
         usage = mergeTaskUsageEntries(usage, responseToUsage(agent.provider, last, config.model));
         // Resume by provider session id if the follow-up turn needs a fresh

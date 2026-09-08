@@ -410,11 +410,15 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
       // Replayed messages arrive complete and in the original seq order.
       const messages = store.listTaskMessages(task.id);
       expect(messages.map((message) => [message.seq, message.type, message.content ?? ""])).toEqual([
-        [1, "text", "before during "],
-        [2, "tool_use", ""],
-        [3, "tool_result", ""],
-        [4, "text", "after"],
+        [1, "execution", ""],
+        [2, "text", "before during "],
+        [3, "tool_use", ""],
+        [4, "tool_result", ""],
+        [5, "text", "after"],
+        [6, "execution", ""],
       ]);
+      expect(messages[0]?.meta).toEqual({ agentName: "Outage Bot", provider: "claude" });
+      expect(messages[5]?.meta?.model).toBeTruthy();
     } finally {
       daemon.stop();
       proxy.stop(true);

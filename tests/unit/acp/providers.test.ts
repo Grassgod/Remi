@@ -9,6 +9,7 @@ import {
 } from "@acp/index.js";
 import { CodexAdapter } from "@acp/index.js";
 import { resolveConfigOptionChange } from "@acp/provider.js";
+import { readExecutionModel } from "@shared/agent-execution.js";
 import type { AgentAdapter, SessionConfigOption } from "@shared/contracts/acp-protocol.js";
 import { isAbsolute } from "node:path";
 
@@ -23,6 +24,46 @@ function isCodexExecutable(resolved: string, fallback: string): boolean {
 }
 
 describe("AcpProvider", () => {
+  it("publishes the acknowledged model before text, on initial and resumed turns", async () => {
+    const provider = new AcpProvider({ agentType: "claude", model: "requested-but-not-selected" });
+    const configOptions: SessionConfigOption[] = [{
+      id: "model", name: "Model", category: "model", type: "select", currentValue: "claude-opus-5",
+      options: [{ value: "claude-opus-5", name: "Claude Opus 5" }],
+    }];
+    const client = {
+      _options: { onSessionUpdate: (_notification: unknown) => {} },
+      prompt: async () => {
+        client._options.onSessionUpdate({ sessionId: "session-1",
+          update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Answer" } } });
+        client._options.onSessionUpdate({ sessionId: "session-1",
+          update: { sessionUpdate: "usage_update", used: 82000, size: 200000 } });
+        return { stopReason: "end_turn", usage: { inputTokens: 880000, outputTokens: 3000 } };
+      },
+      cancel: async () => {},
+    };
+    const entry = { client, configOptions, acpSessionId: "session-1", lastUsed: Date.now() };
+    (provider as any)._ensureSession = async () => entry;
+    for (let turn = 0; turn < 2; turn++) {
+      const events = [];
+      for await (const event of provider.sendStream("hello", { chatId: "chat1" })) events.push(event);
+      expect(events[0]?.sessionUpdate).toBe("config_option_update");
+      expect(readExecutionModel(events[0] as unknown as Record<string, unknown>))
+        .toEqual({ model: "claude-opus-5", modelName: "Claude Opus 5" });
+      expect(JSON.stringify(events[0])).not.toContain("requested-but-not-selected");
+      expect(provider.getLastResponse()?.metadata?.contextUsage).toEqual({ used: 82000, size: 200000 });
+      expect(provider.getLastResponse()?.inputTokens).toBe(880000);
+    }
+  });
+
+  it("publishes a model-only session catalog when config options are absent", async () => {
+    const provider = new AcpProvider({ agentType: "codex" });
+    const client = { _options: { onSessionUpdate: () => {} }, prompt: async () => ({ stopReason: "end_turn" }) };
+    (provider as any)._ensureSession = async () => ({ client, acpSessionId: "s", models: { currentModelId: "gpt-5.5[xhigh]" } });
+    const events = [];
+    for await (const event of provider.sendStream("hello")) events.push(event);
+    expect(events[0]).toEqual({ sessionUpdate: "config_option_update", id: "model", value: "gpt-5.5[xhigh]" });
+  });
+
   it("defaults Claude ACP sessions to bypassPermissions", () => {
     expect(resolveAcpPermissionMode("claude", null)).toBe("bypassPermissions");
     expect(resolveAcpPermissionMode("claude", undefined)).toBe("bypassPermissions");

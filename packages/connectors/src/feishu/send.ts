@@ -107,7 +107,8 @@ export function buildCardHeader(sessionId?: string | null, displayName?: string 
     icon: { tag: "standard_icon" as const, token: "robot_outlined", color: "grey" },
   };
   if (subtitle) {
-    header.subtitle = { tag: "plain_text", content: subtitle };
+    // Feishu's native subtitle is single-line and ellipsizes overflow.
+    header.subtitle = { tag: "plain_text", content: subtitle.replace(/\s+/g, " ") };
   }
   return header;
 }

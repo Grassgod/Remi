@@ -100,6 +100,18 @@ describe("task transcript timeline", () => {
     expect(items.map((i) => i.type)).toEqual(["text", "tool_use"]);
   });
 
+  it("keeps execution metadata out of prose and usage totals", () => {
+    const messages = [
+      message(1, "text", "hello"),
+      { task_id: "t", issue_id: "i", seq: 2, type: "execution", meta: { agentName: "Remi", provider: "claude", model: "opus5" } },
+      { task_id: "t", issue_id: "i", seq: 3, type: "usage", meta: { used: 82000, size: 200000 } },
+      { task_id: "t", issue_id: "i", seq: 4, type: "execution", meta: { model: "opus5" } },
+      message(5, "text", " world"),
+    ];
+    expect(buildTimeline(messages).map(item => item.content)).toEqual(["hello world"]);
+    expect(extractUsageFromMessages(messages)?.totalTokens).toBe(82000);
+  });
+
   it("carries createdAt / tool_call_id / status / meta through to items", () => {
     const items = buildTimeline([
       { task_id: "t", issue_id: "i", seq: 1, type: "tool_use", tool: "Read", input: { file_path: "/a.ts" }, tool_call_id: "tc_1", status: "completed", created_at: "2026-07-12T00:00:00Z", meta: { kind: "read" } },

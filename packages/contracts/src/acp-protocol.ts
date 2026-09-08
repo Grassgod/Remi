@@ -457,8 +457,10 @@ export interface CurrentModeUpdate {
 
 export interface ConfigOptionUpdate {
   sessionUpdate: "config_option_update";
-  id: string;
-  value: unknown;
+  id?: string;
+  value?: unknown;
+  /** Current bridges send the full updated option set. */
+  configOptions?: SessionConfigOption[];
 }
 
 export interface SessionInfoUpdate {
