@@ -450,6 +450,8 @@ export class MultiremiDaemonClient {
     const response = await this.post<{
       chatSessionId: string;
       taskId: string;
+      agentId: string;
+      agentName: string;
       status: MultiremiTaskStatus;
       duplicate: boolean;
       steered: boolean;
@@ -499,6 +501,8 @@ export class MultiremiDaemonClient {
   ): Promise<FeishuBotSessionSnapshot> {
     const response = await this.post<{
       chat_session_id?: string | null;
+      agent_id?: string | null;
+      agent_name?: string | null;
       task?: {
         task_id: string;
         status: MultiremiTaskStatus;
@@ -514,6 +518,8 @@ export class MultiremiDaemonClient {
     });
     return {
       chatSessionId: response.chat_session_id ?? null,
+      agentId: response.agent_id ?? null,
+      agentName: response.agent_name ?? null,
       task: response.task
         ? {
             taskId: response.task.task_id,

@@ -689,6 +689,8 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     );
     return c.json({
       chat_session_id: snapshot.chatSessionId,
+      agent_id: snapshot.agentId,
+      agent_name: snapshot.agentName,
       task: snapshot.task
         ? {
             task_id: snapshot.task.taskId,

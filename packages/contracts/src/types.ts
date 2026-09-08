@@ -4049,6 +4049,8 @@ export interface SubmitFeishuBotMessageInput {
 export interface SubmitFeishuBotMessageResult {
   chatSessionId: string;
   taskId: string;
+  agentId: string;
+  agentName: string;
   status: MultiremiTaskStatus;
   duplicate: boolean;
   steered: boolean;
@@ -4069,7 +4071,32 @@ export interface FeishuBotTaskSnapshot {
 /** Current canonical Chat/Task lineage bound to one Feishu conversation. */
 export interface FeishuBotSessionSnapshot {
   chatSessionId: string | null;
+  agentId?: string | null;
+  agentName?: string | null;
   task: FeishuBotTaskSnapshot | null;
+}
+
+export type FeishuBotAgentRouteScope = "p2p_default" | "group_default" | "chat";
+
+export interface MultiremiFeishuBotAgentRoute {
+  id: string;
+  workspaceId: string;
+  scope: FeishuBotAgentRouteScope;
+  chatId: string | null;
+  chatName: string | null;
+  agentId: string;
+  agentName: string | null;
+  agentArchived: boolean;
+  createdAt: string;
+  updatedAt: string;
+  updatedBy: string | null;
+}
+
+export interface ReplaceFeishuBotAgentRouteInput {
+  scope: FeishuBotAgentRouteScope;
+  chatId?: string | null;
+  chatName?: string | null;
+  agentId: string;
 }
 
 /** Result of validating credentials against the Feishu open platform. */

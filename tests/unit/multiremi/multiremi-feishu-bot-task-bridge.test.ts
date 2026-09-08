@@ -565,8 +565,69 @@ describe("Feishu bot standard Task bridge", () => {
     expect(second.chatSessionId).not.toBe(first.chatSessionId);
   });
 
-  it("reports the bound Chat and latest canonical Task, then clears it on /new", () => {
+  it("starts a fresh Chat Session when a group route switches Agent", () => {
+    const { store, agent, config } = scaffold();
+    const first = store.submitFeishuBotMessage("local", "rt_bot", {
+      revision: config.revision,
+      externalSessionKey: "oc_routed:thread:omt_routed",
+      externalMessageId: "om_routed_1",
+      chatType: "group",
+      chatId: "oc_routed",
+      threadId: "omt_routed",
+      text: "before route switch",
+    });
+    expect(first).toMatchObject({ agentId: agent.id, agentName: "Remi" });
+    store.cancelTask(first.taskId);
+    const routedAgent = store.createAgent({ name: "Group specialist", provider: "codex", workspaceId: "local" });
+    store.replaceFeishuBotAgentRoutes("local", [
+      { scope: "chat", chatId: "oc_routed", agentId: routedAgent.id },
+    ]);
+
+    const second = store.submitFeishuBotMessage("local", "rt_bot", {
+      revision: config.revision,
+      externalSessionKey: "oc_routed:thread:omt_routed",
+      externalMessageId: "om_routed_2",
+      chatType: "group",
+      chatId: "oc_routed",
+      threadId: "omt_routed",
+      text: "after route switch",
+    });
+    expect(second).toMatchObject({ agentId: routedAgent.id, agentName: "Group specialist" });
+    expect(second.chatSessionId).not.toBe(first.chatSessionId);
+    expect(store.getTask(second.taskId)?.agentId).toBe(routedAgent.id);
+    expect(store.getFeishuBotConfig("local")?.revision).toBe(config.revision);
+  });
+
+  it("assigns an automatically created group Issue to the routed Agent", () => {
     const { store, config } = scaffold();
+    const routedAgent = store.createAgent({ name: "Issue worker", provider: "codex", workspaceId: "local" });
+    store.updateWorkspace("local", {
+      settings: { issueTopics: { enabled: true, chatId: "oc_issues" } },
+    });
+    store.replaceFeishuBotAgentRoutes("local", [
+      { scope: "chat", chatId: "oc_issues", agentId: routedAgent.id },
+    ]);
+
+    const submitted = store.submitFeishuBotMessage("local", "rt_bot", {
+      revision: config.revision,
+      externalSessionKey: "oc_issues:thread:omt_issue",
+      externalMessageId: "om_issue_route",
+      chatType: "group",
+      chatId: "oc_issues",
+      threadId: "omt_issue",
+      senderUnionId: "on_owner",
+      text: "Implement routed Issue work",
+    });
+    const chat = store.getChatSession(submitted.chatSessionId)!;
+    expect(submitted.agentId).toBe(routedAgent.id);
+    expect(store.getIssue(chat.issueId!)).toMatchObject({
+      assigneeType: "agent",
+      assigneeId: routedAgent.id,
+    });
+  });
+
+  it("reports the bound Chat and latest canonical Task, then clears it on /new", () => {
+    const { store, agent, config } = scaffold();
     const submitted = store.submitFeishuBotMessage("local", "rt_bot", {
       revision: config.revision,
       externalSessionKey: "oc_chat_1",
@@ -590,6 +651,8 @@ describe("Feishu bot standard Task bridge", () => {
     expect(store.inspectFeishuBotSession("local", "rt_bot", config.revision, "oc_chat_1"))
       .toEqual({
         chatSessionId: submitted.chatSessionId,
+        agentId: agent.id,
+        agentName: "Remi",
         task: {
           taskId: submitted.taskId,
           status: "completed",
@@ -611,6 +674,6 @@ describe("Feishu bot standard Task bridge", () => {
 
     expect(store.resetFeishuBotSession("local", "rt_bot", config.revision, "oc_chat_1")).toBe(true);
     expect(store.inspectFeishuBotSession("local", "rt_bot", config.revision, "oc_chat_1"))
-      .toEqual({ chatSessionId: null, task: null });
+      .toEqual({ chatSessionId: null, agentId: null, agentName: null, task: null });
   });
 });

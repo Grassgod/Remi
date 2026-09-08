@@ -618,6 +618,8 @@ function messagingSpecs(): CommandSpec[] {
 function feishuSpecs(): CommandSpec[] {
   const workspaceBase = (i: CommandInvocation) =>
     `/api/workspaces/${encodePath(requiredWorkspace(i))}/feishu`;
+  const botBase = (i: CommandInvocation) =>
+    `/api/workspaces/${encodePath(requiredWorkspace(i))}/feishu-bot`;
   const source = (i: CommandInvocation) =>
     `${workspaceBase(i)}/sources/${encodePath(positional(i, 0, "source"))}`;
   const sourceFields: readonly CliOptionSpec[] = [
@@ -661,6 +663,26 @@ function feishuSpecs(): CommandSpec[] {
   });
   return [
     group("feishu", "Ingest and process allowlisted Feishu messages"),
+    op({
+      id: "feishu.route.list",
+      path: ["feishu", "route", "list"],
+      description: "List Feishu concierge Agent routes",
+      method: "GET",
+      apiPath: (i) => `${botBase(i)}/routes`,
+      auth: HUMAN,
+      collections: ["routes"],
+    }),
+    feishuRouteMutationSpec("set"),
+    feishuRouteMutationSpec("unset"),
+    op({
+      id: "feishu.chat.list",
+      path: ["feishu", "chat", "list"],
+      description: "List groups joined by the Feishu concierge bot",
+      method: "GET",
+      apiPath: (i) => `${botBase(i)}/chats`,
+      auth: HUMAN,
+      collections: ["chats"],
+    }),
     op({ id: "feishu.source.list", path: ["feishu", "source", "list"], description: "List Feishu message sources", method: "GET", apiPath: (i) => `${workspaceBase(i)}/sources`, auth: HUMAN, collections: ["sources"] }),
     op({ id: "feishu.source.get", path: ["feishu", "source", "get"], description: "Get a Feishu message source", method: "GET", apiPath: source, auth: HUMAN, positionals: [ref("source")] }),
     op({ id: "feishu.source.status", path: ["feishu", "source", "status"], description: "Show connection health, lag, and unresolved backlog", method: "GET", apiPath: (i) => `${source(i)}/status`, auth: HUMAN_TASK, positionals: [ref("source")] }),
@@ -836,6 +858,78 @@ function feishuSpecs(): CommandSpec[] {
       positionals: [ref("proposal")],
     }),
   ];
+
+  function feishuRouteMutationSpec(action: "set" | "unset"): CommandSpec {
+    const set = action === "set";
+    return {
+      id: `feishu.route.${action}`,
+      path: ["feishu", "route", action],
+      description: set ? "Set one Feishu concierge Agent route" : "Unset one Feishu concierge Agent route",
+      capability: `feishu.route.${action}`,
+      auth: HUMAN,
+      mutation: "write",
+      outputs: ["table", "json", "jsonl"],
+      positionals: [ref("scope")],
+      options: commandOptions([], [
+        ...(set ? [{
+          name: "agent",
+          type: "string" as const,
+          valueName: "id|name",
+          required: true,
+          description: "Agent ID or exact name",
+        }] : []),
+        { name: "chat", type: "string", valueName: "chat-id", description: "Required for scope=chat" },
+        ...(set ? [{ name: "chat-name", type: "string" as const, valueName: "name", description: "Cached group name" }] : []),
+      ]),
+      run: async (invocation) => {
+        const scope = positional(invocation, 0, "scope");
+        if (scope !== "p2p_default" && scope !== "group_default" && scope !== "chat") {
+          throw new CliError("usage", "scope must be p2p_default, group_default, or chat");
+        }
+        const chatId = stringOption(invocation, "chat");
+        if (scope === "chat" && !chatId) throw new CliError("usage", "scope=chat requires --chat <chat-id>");
+        if (scope !== "chat" && chatId) throw new CliError("usage", "--chat is only valid for scope=chat");
+
+        const client = await clientFor(invocation);
+        const path = `${botBase(invocation)}/routes`;
+        const current = await client.request({ method: "GET", path });
+        const routes = extractRecords(current.data, ["routes"]).map(routeWriteView);
+        const target = (route: Record<string, unknown>) => route.scope === scope
+          && (scope !== "chat" || route.chat_id === chatId);
+        const next = routes.filter((route) => !target(route));
+        if (set) {
+          const agentId = await resolveListedId(
+            client,
+            invocation,
+            requiredStringOption(invocation, "agent"),
+            "agent",
+            "/api/agents",
+            ["agents"],
+          );
+          next.push({
+            scope,
+            chat_id: scope === "chat" ? chatId : null,
+            chat_name: scope === "chat" ? stringOption(invocation, "chat-name") : null,
+            agent_id: agentId,
+          });
+        } else if (next.length === routes.length) {
+          renderSafe(invocation, current.data, ["routes"]);
+          return;
+        }
+        const response = await client.request({ method: "PUT", path, body: { routes: next } });
+        renderSafe(invocation, response.data, ["routes"]);
+      },
+    };
+  }
+}
+
+function routeWriteView(route: Record<string, unknown>): Record<string, unknown> {
+  return {
+    scope: route.scope,
+    chat_id: route.chat_id ?? null,
+    chat_name: route.chat_name ?? null,
+    agent_id: route.agent_id,
+  };
 }
 
 function inboxSpecs(): CommandSpec[] {

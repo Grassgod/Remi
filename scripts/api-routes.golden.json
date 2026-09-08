@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 724,
+    "routeCount": 727,
     "routeCountByPrefix": {
       "native": 209,
-      "compat": 502,
+      "compat": 505,
       "root": 13
     },
-    "getRoutes": 310,
-    "getRoutesWithBody": 307,
+    "getRoutes": 312,
+    "getRoutesWithBody": 309,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 414,
+    "mutationRoutes": 415,
     "mutationRoutesCovered": 282,
     "flows": [
       "agents-compat",
@@ -387,7 +387,9 @@
     "GET /api/workspaces/:id/feishu-bot",
     "GET /api/workspaces/:id/feishu-bot/audit",
     "GET /api/workspaces/:id/feishu-bot/candidates",
+    "GET /api/workspaces/:id/feishu-bot/chats",
     "GET /api/workspaces/:id/feishu-bot/registration/:sessionId",
+    "GET /api/workspaces/:id/feishu-bot/routes",
     "GET /api/workspaces/:id/feishu-bot/status",
     "GET /api/workspaces/:id/invitations",
     "GET /api/workspaces/:id/issue-archive",
@@ -779,6 +781,7 @@
     "PUT /api/workspaces/:id/bot-menu",
     "PUT /api/workspaces/:id/env",
     "PUT /api/workspaces/:id/feishu-bot",
+    "PUT /api/workspaces/:id/feishu-bot/routes",
     "PUT /api/workspaces/:id/issue-archive",
     "PUT /api/workspaces/:id/issue-topics",
     "PUT /api/workspaces/:id/organizer",
@@ -1099,7 +1102,9 @@
     "GET /api/workspaces/:id/feishu-bot",
     "GET /api/workspaces/:id/feishu-bot/audit",
     "GET /api/workspaces/:id/feishu-bot/candidates",
+    "GET /api/workspaces/:id/feishu-bot/chats",
     "GET /api/workspaces/:id/feishu-bot/registration/:sessionId",
+    "GET /api/workspaces/:id/feishu-bot/routes",
     "GET /api/workspaces/:id/feishu-bot/status",
     "GET /api/workspaces/:id/invitations",
     "GET /api/workspaces/:id/issue-archive",
@@ -8398,6 +8403,17 @@
             "allowed": true
           },
           {
+            "id": "feishu.chat.list",
+            "command": "remi feishu chat list",
+            "capability": "feishu.chat.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "feishu.chats.list",
             "command": "remi feishu chats list",
             "capability": "feishu.chats.list",
@@ -8522,6 +8538,39 @@
             "id": "feishu.proposals.reject",
             "command": "remi feishu proposals reject",
             "capability": "feishu.proposals.reject",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "feishu.route.list",
+            "command": "remi feishu route list",
+            "capability": "feishu.route.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "feishu.route.set",
+            "command": "remi feishu route set",
+            "capability": "feishu.route.set",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "feishu.route.unset",
+            "command": "remi feishu route unset",
+            "capability": "feishu.route.unset",
             "outputs": [
               "table",
               "json",
@@ -22055,12 +22104,32 @@
       }
     },
     {
+      "key": "get-sweep GET /api/workspaces/:id/feishu-bot/chats",
+      "route": "GET /api/workspaces/:id/feishu-bot/chats",
+      "path": "/api/workspaces/local/feishu-bot/chats",
+      "status": 404,
+      "body": {
+        "error": "feishu bot is not configured",
+        "code": "bot_not_configured"
+      }
+    },
+    {
       "key": "get-sweep GET /api/workspaces/:id/feishu-bot/registration/:sessionId",
       "route": "GET /api/workspaces/:id/feishu-bot/registration/:sessionId",
       "path": "/api/workspaces/local/feishu-bot/registration/fbreg_snapshot",
       "status": 404,
       "body": {
         "error": "registration session not found"
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/feishu-bot/routes",
+      "route": "GET /api/workspaces/:id/feishu-bot/routes",
+      "path": "/api/workspaces/local/feishu-bot/routes",
+      "status": 200,
+      "body": {
+        "workspace_id": "local",
+        "routes": []
       }
     },
     {

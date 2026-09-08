@@ -153,6 +153,8 @@ const TASK_PARITY_DENIED_COMMAND_IDS = new Set([
 const TASK_PARITY_DENIED_COMMAND_PREFIXES = [
   "billing.",
   "context.auth.",
+  "feishu.chat.",
+  "feishu.route.",
   "invite.",
   "member.",
   "platform.settings.",

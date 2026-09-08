@@ -34,6 +34,10 @@ describe("CLI capabilities manifest", () => {
       "feishu.messages.create-issue",
       "feishu.proposals.approve",
       "feishu.proposals.reject",
+      "feishu.route.list",
+      "feishu.route.set",
+      "feishu.route.unset",
+      "feishu.chat.list",
     ];
     const taskOperable = [
       "feishu.source.list",
@@ -96,6 +100,14 @@ describe("CLI capabilities manifest", () => {
     }
   });
 
+  it("registers the Feishu bot routing commands at their documented paths", () => {
+    const inventory = new Map(cliCommandInventory().map((entry) => [entry.id, entry]));
+    expect(inventory.get("feishu.route.list")?.path).toEqual(["feishu", "route", "list"]);
+    expect(inventory.get("feishu.route.set")?.path).toEqual(["feishu", "route", "set"]);
+    expect(inventory.get("feishu.route.unset")?.path).toEqual(["feishu", "route", "unset"]);
+    expect(inventory.get("feishu.chat.list")?.path).toEqual(["feishu", "chat", "list"]);
+  });
+
   it("generates discoverable help for every visible Registry command and its direct children", () => {
     const inventory = cliCommandInventory();
     for (const entry of inventory.filter((candidate) => !candidate.hidden)) {
@@ -139,10 +151,10 @@ describe("CLI capabilities manifest", () => {
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 636,
+      mapped: 639,
       exempt: 88,
       missing: 0,
-      total: 724,
+      total: 727,
     });
     expect(manifest.max_planned_routes).toBe(0);
     expect(cliCoverageReport(manifest).missing).toBeLessThanOrEqual(manifest.max_planned_routes);

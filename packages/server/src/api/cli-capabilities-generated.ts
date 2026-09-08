@@ -5158,6 +5158,54 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "feishu.route.list": {
+      "command": "remi feishu route list",
+      "auth": [
+        "human"
+      ],
+      "capability": "feishu.route.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "feishu.route.set": {
+      "command": "remi feishu route set",
+      "auth": [
+        "human"
+      ],
+      "capability": "feishu.route.set",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "feishu.route.unset": {
+      "command": "remi feishu route unset",
+      "auth": [
+        "human"
+      ],
+      "capability": "feishu.route.unset",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "feishu.chat.list": {
+      "command": "remi feishu chat list",
+      "auth": [
+        "human"
+      ],
+      "capability": "feishu.chat.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "feishu.source.list": {
       "command": "remi feishu source list",
       "auth": [

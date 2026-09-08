@@ -40,7 +40,11 @@ import {
   FeishuBotRegistrationService,
   type FeishuBotRegistrationBrand,
 } from "@multiremi/feishu-bot/registration.js";
-import { verifyFeishuBotCredentials } from "@multiremi/feishu-bot/verify.js";
+import {
+  FeishuBotOpenApiError,
+  listFeishuBotChats,
+  verifyFeishuBotCredentials,
+} from "@multiremi/feishu-bot/verify.js";
 import { isRuntimeEffectivelyOnline } from "@multiremi/store/repos/runtimes-repo.js";
 import {
   FEISHU_CONCIERGE_CONFIG_CAPABILITY,
@@ -51,6 +55,7 @@ import {
   type FeishuBotStatusView,
   type FeishuBotTestResult,
   type MultiremiRuntime,
+  type ReplaceFeishuBotAgentRouteInput,
   type UpsertFeishuBotConfigInput,
 } from "@multiremi/contracts/types.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
@@ -138,7 +143,102 @@ export function registerFeishuBotRoutes(
     });
   });
 
+  app.get("/api/workspaces/:id/feishu-bot/routes", async (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    if (!store.getWorkspace(workspaceId)) return c.json({ error: "workspace not found" }, 404);
+
+    let memberCounts = new Map<string, number | null>();
+    if (store.listFeishuBotAgentRoutes(workspaceId).some((route) => route.scope === "chat")) {
+      const credentials = safeRevealSecrets(store, workspaceId);
+      if (credentials) {
+        try {
+          const chats = await listFeishuBotChats(credentials);
+          memberCounts = new Map(chats.map((chat) => [chat.chatId, chat.memberCount]));
+          for (const chat of chats) store.updateFeishuBotRouteChatName(workspaceId, chat.chatId, chat.name);
+        } catch {
+          // Route settings remain readable with the last known group name when
+          // Feishu is temporarily unavailable. The dedicated chat endpoint
+          // reports the actionable upstream error.
+        }
+      }
+    }
+    c.header("Cache-Control", "no-store");
+    return c.json({
+      workspace_id: workspaceId,
+      routes: store.listFeishuBotAgentRoutes(workspaceId).map((route) => routeView(
+        route,
+        route.chatId ? memberCounts.get(route.chatId) ?? null : null,
+      )),
+    });
+  });
+
+  app.get("/api/workspaces/:id/feishu-bot/chats", async (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    if (!store.getWorkspace(workspaceId)) return c.json({ error: "workspace not found" }, 404);
+    if (!store.getFeishuBotConfig(workspaceId)) {
+      return c.json({ error: "feishu bot is not configured", code: "bot_not_configured" }, 404);
+    }
+    const credentials = safeRevealSecrets(store, workspaceId);
+    if (!credentials) {
+      return c.json({ error: "feishu bot credentials are unavailable", code: "credentials_unavailable" }, 422);
+    }
+    try {
+      const chats = await listFeishuBotChats(credentials);
+      c.header("Cache-Control", "no-store");
+      return c.json({
+        workspace_id: workspaceId,
+        chats: chats.map((chat) => ({
+          name: chat.name,
+          chat_id: chat.chatId,
+          member_count: chat.memberCount,
+          chat_mode: chat.chatMode,
+        })),
+      });
+    } catch (error) {
+      if (error instanceof FeishuBotOpenApiError) {
+        return c.json(
+          { error: error.message, code: error.code },
+          error.status as 400 | 403 | 422 | 502,
+        );
+      }
+      return c.json({ error: redactFeishuBotError(error), code: "chat_list_failed" }, 502);
+    }
+  });
+
   // ── Write ───────────────────────────────────────────────────────────────
+  app.put("/api/workspaces/:id/feishu-bot/routes", async (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    if (!store.getWorkspace(workspaceId)) return c.json({ error: "workspace not found" }, 404);
+    const body = await readJsonStrict<{ routes?: unknown }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const parsed = parseRoutesBody(body.routes);
+    if ("error" in parsed) return c.json({ error: parsed.error, code: parsed.code }, 400);
+    try {
+      const routes = store.replaceFeishuBotAgentRoutes(
+        workspaceId,
+        parsed.routes,
+        currentRequestUserId(c),
+      );
+      store.recordFeishuBotAudit(workspaceId, "updated", {
+        actorId: currentRequestUserId(c),
+        details: { routes: true, route_count: routes.length },
+      });
+      c.header("Cache-Control", "no-store");
+      return c.json({
+        workspace_id: workspaceId,
+        routes: routes.map((route) => routeView(route, null)),
+      });
+    } catch (error) {
+      return configErrorResponse(c, error);
+    }
+  });
+
   app.put("/api/workspaces/:id/feishu-bot", async (c) => {
     const workspaceId = c.req.param("id");
     const denied = requireWorkspaceAdmin(c, store, workspaceId);
@@ -338,6 +438,49 @@ export function registerFeishuBotRoutes(
     registrations.cancel(workspaceId, c.req.param("sessionId"));
     return c.body(null, 204);
   });
+}
+
+function parseRoutesBody(value: unknown):
+  | { routes: ReplaceFeishuBotAgentRouteInput[] }
+  | { error: string; code: string } {
+  if (!Array.isArray(value)) return { error: "routes must be an array", code: "routes_required" };
+  const routes: ReplaceFeishuBotAgentRouteInput[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return { error: "each route must be an object", code: "invalid_route" };
+    }
+    const row = entry as Record<string, unknown>;
+    const scope = optionalString(row.scope);
+    if (scope !== "p2p_default" && scope !== "group_default" && scope !== "chat") {
+      return { error: "invalid route scope", code: "invalid_route_scope" };
+    }
+    routes.push({
+      scope,
+      agentId: optionalString(row.agent_id) ?? "",
+      chatId: optionalString(row.chat_id),
+      chatName: optionalString(row.chat_name),
+    });
+  }
+  return { routes };
+}
+
+function routeView(
+  route: ReturnType<MultiremiStore["listFeishuBotAgentRoutes"]>[number],
+  memberCount: number | null,
+) {
+  return {
+    id: route.id,
+    scope: route.scope,
+    chat_id: route.chatId,
+    chat_name: route.chatName,
+    member_count: memberCount,
+    agent_id: route.agentId,
+    agent_name: route.agentName,
+    agent_archived: route.agentArchived,
+    created_at: route.createdAt,
+    updated_at: route.updatedAt,
+    updated_by: route.updatedBy,
+  };
 }
 
 interface FeishuBotConfigBody {
