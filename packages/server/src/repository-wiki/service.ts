@@ -94,14 +94,8 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
   }
 
   async listWorkspace(workspaceId: string): Promise<MultiremiRepositoryWikiDoc[]> {
-    if (this.mode === "openviking") {
-      const repositoryIds = [...new Set(this.store.listWorkspaceRepositoryWikiStorageJobs(workspaceId)
-        .map((job) => job.repositoryId))];
-      await Promise.all(repositoryIds.map((repositoryId) =>
-        this.repairDeferredCanonical(workspaceId, repositoryId)));
-    }
-    // Workspace summaries only need control-plane metadata. Avoid loading every
-    // repository page body from OpenViking for the Knowledge overview.
+    // Summaries must never join the storage repair/write lock. Return committed
+    // control-plane metadata; target-specific reads/writes still retry repairs.
     return this.store.listWorkspaceRepositoryWikiDocs(workspaceId);
   }
 

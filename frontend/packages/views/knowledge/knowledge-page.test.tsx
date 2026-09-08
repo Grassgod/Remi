@@ -31,6 +31,10 @@ const state = vi.hoisted(() => ({
   runs: [] as unknown[],
   runDetail: null as unknown,
   basePending: false,
+  repositoryPending: false,
+  repositoryError: null as unknown,
+  projectPending: false,
+  projectError: null as unknown,
   submissionsPending: false,
   runsPending: false,
   runDetailPending: false,
@@ -68,9 +72,9 @@ vi.mock("@tanstack/react-query", () => ({
           : docs
             ? state.repositoryDocs[String(key[2])] ?? []
             : { repositories: state.repositories, total: state.repositories.length },
-        isPending: state.basePending,
-        isError: state.baseError !== null,
-        error: state.baseError,
+        isPending: state.basePending || state.repositoryPending,
+        isError: (state.baseError ?? state.repositoryError) !== null,
+        error: state.baseError ?? state.repositoryError,
         refetch: refetchBase,
       };
     }
@@ -96,9 +100,9 @@ vi.mock("@tanstack/react-query", () => ({
     const memoryDocs = key[0] === "workspace-docs" && key[1] === "memory";
     return {
       data: projects ? state.projects : memoryDocs ? state.memoryDocs : state.docs,
-      isPending: state.basePending,
-      isError: state.baseError !== null,
-      error: state.baseError,
+      isPending: state.basePending || state.projectPending,
+      isError: (state.baseError ?? state.projectError) !== null,
+      error: state.baseError ?? state.projectError,
       refetch: refetchBase,
     };
   },
@@ -252,6 +256,7 @@ describe("KnowledgePage", () => {
       projects: [], docs: [], memoryDocs: [], repositories: [], summaries: [], projectDetails: {}, backlinks: {}, repositoryDocs: {},
       submissions: [], runs: [], runDetail: null,
       basePending: false, submissionsPending: false, runsPending: false, runDetailPending: false,
+      repositoryPending: false, repositoryError: null, projectPending: false, projectError: null,
       baseError: null, submissionsError: null, runsError: null,
     });
     refetchBase.mockClear();
@@ -281,6 +286,85 @@ describe("KnowledgePage", () => {
     state.basePending = true;
     renderPage();
     expect(screen.getByTestId("knowledge-loading")).toBeInTheDocument();
+  });
+
+  it("shows Project Wiki while repository summaries are pending and preserves selection when they arrive", () => {
+    state.projects = [project({ id: "proj-1", title: "Apollo" })];
+    state.docs = [doc({ id: "index", slug: "index", title: "Project map", path: "index.md" })];
+    state.projectDetails.index = doc({ id: "index", slug: "index", title: "Project map", body: "Readable project knowledge" });
+    state.repositoryPending = true;
+    const view = renderPage();
+    expect(screen.getByTestId("knowledge-project-proj-1")).toBeInTheDocument();
+    expect(screen.getByTestId("wiki-body")).toHaveTextContent("Readable project knowledge");
+    expect(screen.getByRole("status", { name: "Repositories" })).toBeInTheDocument();
+    state.repositoryPending = false;
+    state.repositories = [repository({ id: "repo-1", name: "web" })];
+    state.summaries = [summary({ repository_id: "repo-1", page_count: 1 })];
+    view.rerender(<I18nProvider locale="en" resources={TEST_RESOURCES}><KnowledgePage /></I18nProvider>);
+    expect(screen.getByTestId("knowledge-repository-repo-1")).toBeInTheDocument();
+    expect(screen.getByTestId("knowledge-project-proj-1")).toHaveAttribute("aria-current", "page");
+  });
+
+  it("keeps Project Wiki readable when repository summaries fail and retries only that group", () => {
+    state.projects = [project({ id: "proj-1", title: "Apollo" })];
+    state.docs = [doc({ id: "index", slug: "index", title: "Project map" })];
+    state.projectDetails.index = doc({ id: "index", slug: "index", body: "Project stays available" });
+    state.repositoryError = new Error("Repository summary unavailable");
+    renderPage();
+    expect(screen.getByTestId("wiki-body")).toHaveTextContent("Project stays available");
+    const alert = screen.getByRole("alert", { name: "Repositories" });
+    fireEvent.click(within(alert).getByRole("button"));
+    expect(refetchBase).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows repository content while project metadata is pending", () => {
+    state.projectPending = true;
+    state.repositories = [repository({ id: "repo-1", name: "web" })];
+    state.summaries = [summary({ repository_id: "repo-1", page_count: 1 })];
+    state.repositoryDocs["repo-1"] = [doc({ id: "repo-index", slug: "index", path: "index.md", title: "Repository map", body: "Repository stays available" })];
+    renderPage();
+    expect(screen.getByTestId("wiki-body")).toHaveTextContent("Repository stays available");
+    expect(screen.getByRole("status", { name: "Projects" })).toBeInTheDocument();
+  });
+
+  it("does not claim the Wiki is empty while one empty source group is still loading", () => {
+    state.repositoryPending = true;
+    renderPage();
+    expect(screen.getByRole("status", { name: "Repositories" })).toBeInTheDocument();
+    expect(screen.queryByText(enProjects.knowledge.wiki_empty)).not.toBeInTheDocument();
+  });
+
+  it("preserves the selected repository when project data finishes loading", () => {
+    state.projectPending = true;
+    state.repositories = [repository({ id: "repo-1", name: "web" })];
+    state.summaries = [summary({ repository_id: "repo-1", page_count: 1 })];
+    state.repositoryDocs["repo-1"] = [doc({ id: "repo-index", slug: "index", path: "index.md", body: "Repository content" })];
+    const view = renderPage();
+    state.projectPending = false;
+    state.projects = [project({ id: "proj-1", title: "Apollo" })];
+    state.docs = [doc({ id: "project-index", slug: "index", path: "index.md" })];
+    view.rerender(<I18nProvider locale="en" resources={TEST_RESOURCES}><KnowledgePage /></I18nProvider>);
+    expect(screen.getByTestId("knowledge-project-proj-1")).toBeInTheDocument();
+    expect(screen.getByTestId("knowledge-repository-repo-1")).toHaveAttribute("aria-current", "page");
+    expect(screen.getByTestId("wiki-body")).toHaveTextContent("Repository content");
+  });
+
+  it("keeps repository content visible when project metadata fails", () => {
+    state.projectError = new Error("Project metadata unavailable");
+    state.repositories = [repository({ id: "repo-1", name: "web" })];
+    state.summaries = [summary({ repository_id: "repo-1", page_count: 1 })];
+    state.repositoryDocs["repo-1"] = [doc({ id: "repo-index", slug: "index", path: "index.md", body: "Repository content" })];
+    renderPage();
+    expect(screen.getByRole("alert", { name: "Projects" })).toBeInTheDocument();
+    expect(screen.getByTestId("wiki-body")).toHaveTextContent("Repository content");
+  });
+
+  it("shows a retryable full error if both source groups fail", () => {
+    state.baseError = new Error("All source queries failed");
+    renderPage();
+    expect(screen.getByText(enProjects.knowledge.load_error_title)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: enProjects.knowledge.load_error_retry }));
+    expect(refetchBase).toHaveBeenCalledTimes(4);
   });
 
   it("browses Project Wiki and Repository Wiki as separate formal sources", () => {
