@@ -29,6 +29,22 @@ afterEach(() => {
 });
 
 describe("native collaboration CLI contracts", () => {
+  it("makes the bound-topic continuation commands available to Task credentials", () => {
+    const registry = registryFor(specs);
+    const inventory = new Map(registry.inventory().map((entry) => [entry.id, entry]));
+    const cases = [
+      ["session.task.list", ["session", "task", "list", "iss_1", "ises_1", "--output", "json"]],
+      ["session.task.create", ["session", "task", "create", "iss_1", "ises_1", "--agent", "agt_owner", "--prompt", "Continue", "--output", "json"]],
+      ["task.get", ["task", "get", "tsk_1", "--output", "json"]],
+      ["task.steer", ["task", "steer", "tsk_1", "--content", "Follow-up", "--output", "json"]],
+      ["task.steer.list", ["task", "steer", "list", "tsk_1", "--output", "json"]],
+    ] as const;
+    for (const [id, argv] of cases) {
+      expect(inventory.get(id)?.auth, id).toContain("task");
+      expect(registry.resolve([...argv])?.spec.id).toBe(id);
+    }
+  });
+
   it("keeps issue share capability management human-only", () => {
     const inventory = new Map(registryFor(specs).inventory().map((entry) => [entry.id, entry]));
     for (const id of ["share.get", "share.create", "share.extend", "share.delete"]) {
@@ -60,6 +76,12 @@ describe("native collaboration CLI contracts", () => {
       "comment list",
       "comment add",
       "session result publish",
+      "session list",
+      "session task list",
+      "session task create",
+      "task get",
+      "task steer",
+      "task steer list",
     ];
     for (const path of canonicalPromptPaths) {
       expect(daemonSource, path).toContain(`remi ${path}`);
