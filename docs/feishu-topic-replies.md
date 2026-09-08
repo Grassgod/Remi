@@ -43,3 +43,35 @@ and the no-mention policy. Already-sent reports are not resent.
 
 Issue-associated Chat tasks keep their Chat directory and provider session.
 Only genuine Issue discussion tasks require an Issue Session lifecycle lock.
+
+## Continuing Issue Work From a Topic
+
+The bound-topic prompt teaches Remi to distinguish a progress question or an
+automatic round report from an explicit user request to continue execution.
+Questions and reports remain read-only. Quoted approvals are not fresh authority.
+
+For an execution request, Remi refreshes the Issue, resolves its responsible
+agent (the leader for a squad), and identifies the existing active Issue Session.
+It lists that Session's tasks, excluding Chat/report tasks, before choosing:
+
+- Amend existing work: `remi task steer <task> --content "<instruction>"`.
+- Continue after completion or queue separate next-round work:
+  `remi session task create <issue> <session> --agent <agent> --prompt "<request>"`.
+
+The handoff includes the user's constraints and artifact references because the
+Issue executor does not share the topic's Chat transcript. It must not silently
+change the assignee, reset/create a Session, or perform the code work in the Chat
+directory. Missing/ambiguous assignees or Sessions require clarification.
+
+Remi reads back the created Task (and the directive ID for a steer) before saying
+work was arranged. Its reply identifies the Issue, executing agent, Task ID, and
+actual queued/running/terminal state. Ordinary Agent comments do not dispatch
+work and cannot serve as a successful handoff. Permission failures are reported;
+unknown write outcomes are reconciled by reading before any retry.
+
+After handoff, Remi finishes its Chat turn. The existing responsible-agent round
+completion path reports back to the same topic; no new polling or notification
+channel is added. These are prompt instructions using existing CLI/API behavior,
+not an automatic intent parser or a transactional exactly-once handoff service.
+They apply to bootstrap and delta prompts after upgrading the bot-hosting daemon;
+no database or historical Session migration is needed.
