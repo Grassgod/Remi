@@ -13,6 +13,7 @@ import { sendMarkdownCardFeishu, sendCardFeishu } from "./send.js";
 import { FeishuStreamingSession, buildFinalCard, type TokenProvider } from "./streaming.js";
 import { handleAgentStream } from "./adapters/stream-handler.js";
 import { handleTaskStream } from "./adapters/task-stream-handler.js";
+import { formatExecutionSubtitle } from "./card-metadata.js";
 import type { TaskStreamEvent, TaskStreamMeta } from "../base.js";
 import { createAdapter } from "./adapters/index.js";
 import type { StreamMeta, StreamHandlerLog } from "@shared/contracts/acp-protocol.js";
@@ -41,6 +42,7 @@ export interface HandleStreamOpts {
   /** ACP adapter: pass "claude" | "codex" or a custom AgentAdapter instance. */
   adapter: string | AgentAdapter;
   replyToMessageId?: string;
+  mentionOpenId?: string;
   sessionId?: string | null;
   displayName?: string | null;
   nameSuffix?: string;
@@ -51,6 +53,7 @@ export interface HandleStreamOpts {
 
 export interface HandleTaskStreamOpts {
   replyToMessageId?: string;
+  mentionOpenId?: string;
   displayName?: string | null;
   subtitle?: string | null;
   log?: StreamHandlerLog;
@@ -207,6 +210,7 @@ export class FeishuChannel {
       // Create the patch-only message.
       await session.start(chatId, "chat_id", {
         replyToMessageId: opts.replyToMessageId,
+        mentionOpenId: opts.mentionOpenId,
         sessionId: opts.sessionId,
         displayName: opts.displayName ?? undefined,
         nameSuffix: opts.nameSuffix,
@@ -216,16 +220,13 @@ export class FeishuChannel {
       // Consume ACP stream
       const result = await handleAgentStream(session, stream, acpAdapter, chatId, slog, meta);
 
-      // Build stats string
-      const stats = this._formatStreamStats(result.elapsedSec, result.usageTokens, result.contextWindow, result.toolCount);
-
       // Close card
       await session.close({
         finalText: result.contentText || undefined,
         thinking: result.thinkingText || null,
         toolEntries: result.toolEntries.length > 0 ? result.toolEntries : undefined,
         toolCount: result.toolCount > 0 ? result.toolCount : undefined,
-        stats,
+        stats: result.stats,
         sessionId: opts.sessionId,
         displayName: opts.displayName,
       });
@@ -259,9 +260,10 @@ export class FeishuChannel {
     try {
       await session.start(chatId, "chat_id", {
         replyToMessageId: opts.replyToMessageId,
+        mentionOpenId: opts.mentionOpenId,
         sessionId: meta.sessionId,
         displayName: opts.displayName ?? meta.displayName ?? undefined,
-        subtitle: opts.subtitle ?? "Multiremi Task",
+        subtitle: opts.subtitle ?? formatExecutionSubtitle({ agentName: opts.displayName ?? meta.displayName }),
         durable: opts.durable,
       });
       const messageId = session.getMessageId()!;
@@ -343,16 +345,6 @@ export class FeishuChannel {
     };
   }
 
-  private _formatStreamStats(elapsedSec: number, usedTokens: number, contextWindow: number | null, toolCount: number): string | null {
-    const parts: string[] = [];
-    if (elapsedSec > 0) parts.push(`${elapsedSec.toFixed(1)}s`);
-    if (usedTokens > 0) {
-      const fmtN = (n: number) => n >= 1_000_000 ? `${Math.round(n / 1_000_000)}M` : n >= 1_000 ? `${Math.round(n / 1_000)}k` : `${n}`;
-      parts.push(contextWindow ? `${fmtN(usedTokens)}/${fmtN(contextWindow)}` : fmtN(usedTokens));
-    }
-    if (toolCount > 0) parts.push(`${toolCount} tools`);
-    return parts.length > 0 ? parts.join(" · ") : null;
-  }
 }
 
 // ── Factory ───────────────────────────────────────────────────

@@ -25,6 +25,32 @@ function harness(patchHook?: (card: Record<string, unknown>) => Promise<void>) {
 }
 
 describe("one patch-only Feishu card transport", () => {
+  it("keeps the same single sender mention at the bottom of every card version", async () => {
+    const h = harness();
+    await h.session.start("oc_group", "chat_id", { replyToMessageId: "om_question", mentionOpenId: "ou_sender" });
+    await h.session.update("Working");
+    await h.session.appendPermissionForm(buildToolApprovalForm("sender-form", "Read", "source", []));
+    await h.session.removePermissionForm("sender-form");
+    await h.session.close({ finalText: "Answer", stats: "2s · 1 tool" });
+
+    for (const { input } of h.calls) {
+      const card = JSON.parse(input.data.content);
+      expect(card.body.elements.at(-1).columns[0].elements[0].content).toBe("<at id=ou_sender></at>");
+      expect(card.body.elements.at(-1).flex_mode).toBe("flow");
+      expect(input.data.content.match(/<at id=ou_sender><\/at>/g)).toHaveLength(1);
+    }
+    expect(h.calls.filter(call => call.operation !== "patch")).toHaveLength(1);
+  });
+
+  it("preserves the sender mention on an error or cancelled reply", async () => {
+    for (const aborted of [false, true]) {
+      const h = harness();
+      await h.session.start("oc_group", "chat_id", { mentionOpenId: "ou_sender" });
+      await h.session.close({ finalText: "Stopped", aborted });
+      expect(h.patches().at(-1).body.elements.at(-1).columns[0].elements[0].content).toBe("<at id=ou_sender></at>");
+    }
+  });
+
   for (const durable of [undefined, { idempotencyKey: "delivery_1" }]) {
     it(`uses the same message JSON and patch path for ${durable ? "proactive" : "interactive"} replies`, async () => {
       const h = harness();

@@ -20,6 +20,8 @@ import type {
 import { elicitationToQuestions, answersToElicitationContent } from "@shared/contracts/acp-elicitation.js";
 export type { StreamMeta, StreamHandlerLog } from "@shared/contracts/acp-protocol.js";
 import type { FeishuStreamingSession } from "../streaming.js";
+import { readContextUsage, readExecutionModel, type ContextUsage } from "@shared/agent-execution.js";
+import { formatCardStats } from "../card-metadata.js";
 import type { ToolEntry } from "../tool-formatters.js";
 import { formatToolInputSummary, shortPath } from "../tool-formatters.js";
 import { createToolEntryReducer } from "./tool-entry-reducer.js";
@@ -177,7 +179,7 @@ export async function handleAgentStream(
   chatId: string,
   log: StreamHandlerLog,
   meta: StreamMeta,
-): Promise<{ elapsedSec: number; usageTokens: number; contextWindow: number | null; toolCount: number; contentText: string; thinkingText: string; toolEntries: ToolEntry[] }> {
+): Promise<{ elapsedSec: number; usageTokens: number; contextWindow: number | null; stats: string | null; toolCount: number; contentText: string; thinkingText: string; toolEntries: ToolEntry[] }> {
   let thinkingText = "";
   let contentText = "";
   const toolReducer = createToolEntryReducer(acpAdapter);
@@ -185,6 +187,9 @@ export async function handleAgentStream(
   let trailingThinkingFlushed = false;
   let usageTokens = 0;
   let usageContextWindow: number | null = null;
+  let contextUsage: ContextUsage | null = null;
+  let currentModel: string | null | undefined;
+  session.updateExecution({ agentName: meta.displayName, provider: acpAdapter.agentType });
 
   const planTasks: PlanTask[] = [];
   const activeAgents: ActiveAgent[] = [];
@@ -465,8 +470,29 @@ export async function handleAgentStream(
           break;
         }
         case "usage_update": {
-          if (e.used != null) usageTokens = e.used;
-          if (e.size != null) usageContextWindow = e.size;
+          if (e._meta?.claudeCode?.parentToolUseId) break;
+          const usage = readContextUsage(e);
+          if (usage) {
+            contextUsage = usage;
+            usageTokens = usage.used;
+            usageContextWindow = usage.size;
+            session.updateContextUsage(usage);
+          }
+          break;
+        }
+        case "config_option_update":
+        case "current_model_update": {
+          const model = readExecutionModel(e);
+          if (model && !e._meta?.claudeCode?.parentToolUseId) {
+            if (currentModel !== undefined && model.model !== currentModel) {
+              contextUsage = null;
+              usageTokens = 0;
+              usageContextWindow = null;
+              session.updateContextUsage(null);
+            }
+            currentModel = model.model;
+            session.updateExecution(model);
+          }
           break;
         }
         case "plan": {
@@ -492,6 +518,7 @@ export async function handleAgentStream(
     elapsedSec: session.getElapsed(),
     usageTokens,
     contextWindow: usageContextWindow,
+    stats: formatCardStats(session.getElapsed(), contextUsage, toolReducer.toolCount),
     toolCount: toolReducer.toolCount,
     contentText,
     thinkingText,

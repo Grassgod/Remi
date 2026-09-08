@@ -38,6 +38,33 @@ function appendPermissionElements(
   elements.push(form.form);
 }
 
+function buildStatsFooter(stats?: string | null, mentionOpenId?: string): Record<string, unknown>[] {
+  const columns: Record<string, unknown>[] = [];
+  if (mentionOpenId && /^ou_[A-Za-z0-9_-]+$/.test(mentionOpenId)) {
+    columns.push({
+      tag: "column", width: "auto",
+      elements: [{ tag: "markdown", content: `<at id=${mentionOpenId}></at>`, text_size: "notation" }],
+    });
+  }
+  for (const part of stats?.split(" · ").filter(Boolean) ?? []) {
+    // Optional stats must not shift the icon assigned to subsequent columns.
+    const token = /\btools?$/.test(part) ? "setting-inter_outlined"
+      : /^\d+(?:\.\d+)?s$/.test(part) ? "time_outlined" : "translate_outlined";
+    columns.push({
+      tag: "column", width: "auto",
+      elements: [{
+        tag: "div",
+        icon: { tag: "standard_icon", token, color: "grey" },
+        text: { tag: "plain_text", content: part.trim(), text_color: "grey", text_size: "notation" },
+      }],
+    });
+  }
+  return columns.length ? [
+    { tag: "hr" },
+    { tag: "column_set", flex_mode: "flow", horizontal_spacing: "small", columns },
+  ] : [];
+}
+
 /**
  * Build plain-text summary for Feishu card detail page.
  * Strips markdown syntax, preserves full content so the detail page isn't blank.
@@ -165,37 +192,7 @@ export function buildFinalCard(opts: {
     );
   }
 
-  // Stats bar with optional @mention (always last)
-  if (opts.mentionOpenId) {
-    elements.push({ tag: "hr" });
-    elements.push({ tag: "markdown", content: `<at id=${opts.mentionOpenId}></at>` });
-  }
-
-  if (opts.stats) {
-    if (!opts.mentionOpenId) elements.push({ tag: "hr" });
-    // Parse stats string "21.3s · 5→569 · 2 tools" into column_set
-    const statsParts = opts.stats.split(" · ");
-    if (statsParts.length >= 1) {
-      const iconMap = ["time_outlined", "translate_outlined", "setting-inter_outlined"];
-      elements.push({
-        tag: "column_set",
-        flex_mode: "flow",
-        horizontal_spacing: "small",
-        columns: statsParts.map((part, i) => ({
-          tag: "column",
-          width: "auto",
-          elements: [{
-            tag: "div",
-            icon: { tag: "standard_icon", token: iconMap[i] ?? "setting-inter_outlined", color: "grey" },
-            text: { tag: "plain_text", content: part.trim(), text_color: "grey", text_size: "notation" },
-          }],
-        })),
-      });
-    } else {
-      // Fallback: single markdown line
-      elements.push({ tag: "markdown", content: opts.stats });
-    }
-  }
+  elements.push(...buildStatsFooter(opts.stats, opts.mentionOpenId));
 
   return {
     schema: "2.0",
@@ -214,6 +211,7 @@ export function buildInitialCardJson(options?: {
   displayName?: string | null;
   nameSuffix?: string;
   subtitle?: string | null;
+  mentionOpenId?: string;
 }): Record<string, unknown> {
   return {
     schema: "2.0",
@@ -242,8 +240,7 @@ export function buildInitialCardJson(options?: {
           elements: [],
         },
         { tag: "markdown", content: "", element_id: "content" },
-        { tag: "hr", element_id: "stats_hr" },
-        { tag: "markdown", content: "", element_id: "stats_text" },
+        ...buildStatsFooter(null, options?.mentionOpenId),
       ],
     },
   };
@@ -260,6 +257,8 @@ export function buildProgressCard(args: {
   pendingPermission: PermissionFormElements | null;
   nameSuffix?: string;
   subtitle: string | null;
+  mentionOpenId?: string;
+  stats?: string | null;
 }): Record<string, unknown> {
   const elements: Record<string, unknown>[] = [];
 
@@ -305,6 +304,8 @@ export function buildProgressCard(args: {
     if (pf.panel) elements.push(pf.panel);
     elements.push(pf.form);
   }
+
+  elements.push(...buildStatsFooter(args.stats, args.mentionOpenId));
 
   return {
     schema: "2.0",

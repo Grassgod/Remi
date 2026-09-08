@@ -772,32 +772,38 @@ describe("Bun Multiremi daemon smoke", () => {
         input: message.input,
         output: message.output,
       }))).toEqual([
-        { seq: 1, type: "thinking", tool: null, content: "Thinking", input: null, output: null },
-        { seq: 2, type: "tool_use", tool: "Read", content: null, input: { path: "README.md" }, output: null },
-        { seq: 3, type: "tool_result", tool: "Read", content: null, input: null, output: "{\"content\":\"file body\"}" },
-        { seq: 4, type: "text", tool: null, content: "Smoke completed", input: null, output: null },
-        { seq: 5, type: "usage", tool: null, content: null, input: null, output: null },
+        { seq: 1, type: "execution", tool: null, content: null, input: null, output: null },
+        { seq: 2, type: "thinking", tool: null, content: "Thinking", input: null, output: null },
+        { seq: 3, type: "tool_use", tool: "Read", content: null, input: { path: "README.md" }, output: null },
+        { seq: 4, type: "tool_result", tool: "Read", content: null, input: null, output: "{\"content\":\"file body\"}" },
+        { seq: 5, type: "text", tool: null, content: "Smoke completed", input: null, output: null },
+        { seq: 6, type: "usage", tool: null, content: null, input: null, output: null },
+        { seq: 7, type: "execution", tool: null, content: null, input: null, output: null },
       ]);
+      expect(messages[0]?.meta).toEqual({ agentName: "Claude Smoke", provider: "claude" });
+      expect(messages[6]?.meta).toEqual({ provider: "claude", model: "claude-smoke", modelName: null });
       // tool_use and tool_result pair on a shared (synthetic) tool_call_id.
-      expect(messages[1]?.toolCallId).toBeTruthy();
-      expect(messages[2]?.toolCallId).toBe(messages[1]?.toolCallId);
+      expect(messages[2]?.toolCallId).toBeTruthy();
+      expect(messages[3]?.toolCallId).toBe(messages[2]?.toolCallId);
       // usage numbers now live in meta, not a content JSON string.
-      expect(messages[4]?.meta).toMatchObject({ model: "claude-smoke", inputTokens: 7, outputTokens: 3 });
+      expect(messages[5]?.meta).toMatchObject({ model: "claude-smoke", inputTokens: 7, outputTokens: 3 });
       const transcriptResponse = await fetch(`http://127.0.0.1:${server.port}/api/daemon/tasks/${task.id}/messages`, {
         headers: { Authorization: `Bearer ${daemonToken.token}` },
       });
       expect(transcriptResponse.status).toBe(200);
       const transcriptBody = await transcriptResponse.json() as any[];
       expect(transcriptBody.map((m) => ({ seq: m.seq, type: m.type, tool: m.tool, content: m.content, output: m.output }))).toEqual([
-        { seq: 1, type: "thinking", tool: undefined, content: "Thinking", output: undefined },
-        { seq: 2, type: "tool_use", tool: "Read", content: undefined, output: undefined },
-        { seq: 3, type: "tool_result", tool: "Read", content: undefined, output: "{\"content\":\"file body\"}" },
-        { seq: 4, type: "text", tool: undefined, content: "Smoke completed", output: undefined },
-        { seq: 5, type: "usage", tool: undefined, content: undefined, output: undefined },
+        { seq: 1, type: "execution", tool: undefined, content: undefined, output: undefined },
+        { seq: 2, type: "thinking", tool: undefined, content: "Thinking", output: undefined },
+        { seq: 3, type: "tool_use", tool: "Read", content: undefined, output: undefined },
+        { seq: 4, type: "tool_result", tool: "Read", content: undefined, output: "{\"content\":\"file body\"}" },
+        { seq: 5, type: "text", tool: undefined, content: "Smoke completed", output: undefined },
+        { seq: 6, type: "usage", tool: undefined, content: undefined, output: undefined },
+        { seq: 7, type: "execution", tool: undefined, content: undefined, output: undefined },
       ]);
       // wire carries created_at + the paired tool_call_id
       expect(transcriptBody[0].created_at).toBeTruthy();
-      expect(transcriptBody[2].tool_call_id).toBe(transcriptBody[1].tool_call_id);
+      expect(transcriptBody[3].tool_call_id).toBe(transcriptBody[2].tool_call_id);
       expect(store.getTask(task.id)?.usage[0]).toMatchObject({
         provider: "claude",
         model: "claude-smoke",
@@ -842,6 +848,7 @@ describe("Bun Multiremi daemon smoke", () => {
       "Implemented the fix and verified it.",
     ]);
     expect(store.listTaskMessages(taskId).map((message) => message.type)).toEqual([
+      "execution",
       "text",
       "compaction",
       "compaction",
@@ -862,6 +869,7 @@ describe("Bun Multiremi daemon smoke", () => {
     });
     expect(store.listIssueComments(issueId)).toEqual([]);
     expect(store.listTaskMessages(taskId).map((message) => message.type)).toEqual([
+      "execution",
       "compaction",
       "compaction",
     ]);
@@ -879,7 +887,8 @@ describe("Bun Multiremi daemon smoke", () => {
       result: "Task completed.",
     });
     expect(store.listIssueComments(issueId)).toEqual([]);
-    expect(store.listTaskMessages(taskId)).toEqual([]);
+    expect(store.listTaskMessages(taskId).map(message => ({ type: message.type, meta: message.meta })))
+      .toEqual([{ type: "execution", meta: { agentName: "Claude ordinary-empty", provider: "claude" } }]);
   });
 
   it("reconciles, materializes and cleans a direct task Agent Plugin runtime", async () => {

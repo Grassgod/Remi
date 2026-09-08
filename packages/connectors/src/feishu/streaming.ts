@@ -20,6 +20,8 @@ import { PermissionFormStore } from "./streaming/permission-form.js";
 import { uploadImageFeishu } from "./media.js";
 import { createFeishuImageResolver } from "./outbound-images.js";
 import { degradeMarkdownImages, rewriteMarkdownImages, type MarkdownImageResolver } from "@shared/feishu-markdown-images.js";
+import type { AgentExecutionDisplay, ContextUsage } from "@shared/agent-execution.js";
+import { formatCardStats, formatExecutionSubtitle } from "./card-metadata.js";
 
 export { buildFinalCard };
 export type { StepInfo };
@@ -70,6 +72,9 @@ export class FeishuStreamingSession {
   private subtitle: string | null = null;
   private sessionId: string | null | undefined;
   private displayName: string | null | undefined;
+  private mentionOpenId: string | undefined;
+  private execution: AgentExecutionDisplay = {};
+  private contextUsage: ContextUsage | null = null;
   private readonly permissions = new PermissionFormStore();
 
   constructor(private readonly client: Client, _credentials: Credentials,
@@ -84,7 +89,7 @@ export class FeishuStreamingSession {
     receiveId: string,
     receiveIdType: "open_id" | "user_id" | "union_id" | "email" | "chat_id" = "chat_id",
     options?: { replyToMessageId?: string; sessionId?: string | null; displayName?: string | null;
-      nameSuffix?: string; subtitle?: string | null;
+      nameSuffix?: string; subtitle?: string | null; mentionOpenId?: string;
       durable?: { idempotencyKey: string; messageId?: string | null } },
   ): Promise<void> {
     if (this.state) return;
@@ -93,6 +98,8 @@ export class FeishuStreamingSession {
     this.subtitle = options?.subtitle ?? null;
     this.sessionId = options?.sessionId;
     this.displayName = options?.displayName;
+    this.execution = { agentName: options?.displayName };
+    this.mentionOpenId = options?.mentionOpenId;
     this.taskOwnsLifetime = Boolean(options?.durable);
     const card = buildInitialCardJson(options);
     this.header = card.header;
@@ -121,6 +128,8 @@ export class FeishuStreamingSession {
       pendingPermission: this.permissions.pending,
       nameSuffix: this.nameSuffix,
       subtitle: this.subtitle,
+      mentionOpenId: this.mentionOpenId,
+      stats: this.getStats(),
     }), header: this.header };
   }
 
@@ -186,6 +195,25 @@ export class FeishuStreamingSession {
   getLastStatus(): string { return this.lastStatusText; }
   setHeartbeatRenderer(renderer: ((elapsed: number) => string) | null): void { this.heartbeatRenderer = renderer; }
   getElapsed(): number { return Math.round((Date.now() - this.startTime) / 1000); }
+
+  private getStats(): string | null {
+    return formatCardStats(this.getElapsed(), this.contextUsage, this.steps.filter(step => step.tool !== "_thinking").length);
+  }
+
+  updateContextUsage(usage: ContextUsage | null): void {
+    if (!this.isActive()) return;
+    this.contextUsage = usage;
+    this.touch();
+  }
+
+  updateExecution(info: AgentExecutionDisplay): void {
+    if (!this.isActive()) return;
+    this.execution = { ...this.execution, ...info };
+    this.subtitle = formatExecutionSubtitle(this.execution);
+    const header = this.header as Record<string, unknown>;
+    this.header = { ...header, subtitle: this.subtitle ? { tag: "plain_text", content: this.subtitle } : undefined };
+    this.touch();
+  }
 
   async update(text: string): Promise<void> {
     if (!text || !this.isActive()) return;
@@ -296,6 +324,8 @@ export class FeishuStreamingSession {
           retainedPermissionPanels: options.retainedPermissionPanels ?? this.permissions.retained(),
           sessionId: options.sessionId ?? this.sessionId,
           displayName: options.displayName ?? this.displayName,
+          mentionOpenId: options.mentionOpenId ?? this.mentionOpenId,
+          stats: options.stats ?? this.getStats(),
           nameSuffix: this.nameSuffix,
           subtitle: this.subtitle,
         });

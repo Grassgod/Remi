@@ -5,6 +5,7 @@
 import type { AgentAdapter } from "@acp/index.js";
 import type { ProviderEvent } from "@shared/contracts/provider-types.js";
 import { isCompactionChunk } from "@shared/contracts/compaction.js";
+import { readExecutionModel } from "@shared/agent-execution.js";
 import type { TaskMessageInput, TaskUsageEntry } from "@multiremi/contracts/types.js";
 
 interface ToolCallState {
@@ -96,6 +97,12 @@ export function createEventMapper(adapter: AgentAdapter): (event: ProviderEvent)
     const raw = event as Record<string, any>;
     const su = raw.sessionUpdate;
 
+    if (su === "config_option_update" || su === "current_model_update") {
+      const model = readExecutionModel(raw);
+      return model && !metaParentToolUseId(raw)
+        ? [{ type: "execution", meta: { provider: adapter.agentType, ...model } }] : [];
+    }
+
     if (su === "agent_message_chunk" || su === "agent_thought_chunk") {
       const content = extractText(raw.content);
       if (!content) return [];
@@ -117,8 +124,10 @@ export function createEventMapper(adapter: AgentAdapter): (event: ProviderEvent)
     if (su === "usage_update") {
       // Snapshot (not a delta) — keep the whole event's usage numbers in meta;
       // the frontend takes the last snapshot, never a sum.
-      const meta = raw.usage && typeof raw.usage === "object" ? { ...raw.usage } : { ...raw };
+      const meta = raw.usage && typeof raw.usage === "object" ? { ...raw, ...raw.usage } : { ...raw };
       delete (meta as Record<string, unknown>).sessionUpdate;
+      const parent = metaParentToolUseId(raw);
+      if (parent) meta.parent_tool_call_id = parent;
       return [{ type: "usage", meta }];
     }
 

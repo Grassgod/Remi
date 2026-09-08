@@ -29,6 +29,8 @@ import type { HandleTaskStreamOpts } from "./channel.js";
 import { uploadImageFeishu } from "./media.js";
 import { createFeishuImageResolver } from "./outbound-images.js";
 import { rewriteMarkdownImages } from "@shared/feishu-markdown-images.js";
+import { readContextUsage } from "@shared/agent-execution.js";
+import { formatCardStats } from "./card-metadata.js";
 
 const log = createLogger("feishu");
 
@@ -273,7 +275,7 @@ export class FeishuConnector implements Connector {
         await this._handleStreaming(incoming, msg.chatId, sessionKey, replyToId, _log);
       } else {
         const response = await this._handler!(incoming);
-        await this._sendStaticReply(msg.chatId, response, replyToId);
+        await this._sendStaticReply(msg.chatId, response, replyToId, this._replyMentionOpenId(incoming));
       }
     } catch (err) {
       _log.error(`failed to process message: ${String(err)}`);
@@ -303,19 +305,12 @@ export class FeishuConnector implements Connector {
         catch { return createAdapter("claude"); }
       })();
 
-      // Determine subtitle
-      const agentLabel = meta.agentType === "codex" ? "Codex" : "Claude";
-      const modeLabel = meta.mode && meta.mode !== "auto"
-        ? ` ${meta.mode === "bypassPermissions" ? "Bypass" : meta.mode.charAt(0).toUpperCase() + meta.mode.slice(1)}`
-        : "";
-      const subtitle = `${agentLabel}${modeLabel}`;
-
       await this._channel.handleStream(chatId, sessionKey, stream as AsyncIterable<import("./sdk.js").SessionUpdate>, meta as StreamMeta, {
         adapter: acpAdapter,
         replyToMessageId,
+        mentionOpenId: this._replyMentionOpenId(incoming),
         sessionId: meta.sessionId,
         displayName: meta.displayName ?? undefined,
-        subtitle,
         log: {
           info: (m) => slog.info(m),
           warn: (m) => slog.warn(m),
@@ -337,8 +332,8 @@ export class FeishuConnector implements Connector {
     await this._taskStreamHandler!(incoming, sessionKey, async (stream, meta) => {
       await this._channel.handleTaskStream(chatId, sessionKey, stream, meta, {
         replyToMessageId,
+        mentionOpenId: this._replyMentionOpenId(incoming),
         displayName: meta.displayName,
-        subtitle: "Multiremi Task",
         log: {
           info: (message) => slog.info(message),
           warn: (message) => slog.warn(message),
@@ -349,7 +344,7 @@ export class FeishuConnector implements Connector {
     });
   }
 
-  private async _sendStaticReply(chatId: string, response: AgentResponse, replyToMessageId?: string): Promise<void> {
+  private async _sendStaticReply(chatId: string, response: AgentResponse, replyToMessageId?: string, mentionOpenId?: string): Promise<void> {
     const client = createFeishuClient({
       appId: this._config.appId,
       appSecret: this._config.appSecret,
@@ -357,12 +352,19 @@ export class FeishuConnector implements Connector {
     });
     const text = await this._rewriteImages(client, response.text);
     const stats = this._formatStats(response);
-    if (response.thinking || stats) {
-      const card = buildFinalCard({ text, thinking: response.thinking, stats });
+    if (response.thinking || stats || mentionOpenId) {
+      const card = buildFinalCard({ text, thinking: response.thinking, stats, mentionOpenId });
       await sendCardFeishu(client, chatId, card, { replyToMessageId });
     } else {
       await sendMarkdownCardFeishu(client, chatId, text, { replyToMessageId });
     }
+  }
+
+  private _replyMentionOpenId(incoming: IncomingMessage): string | undefined {
+    const openId = incoming.metadata?.senderOpenId;
+    return incoming.metadata?.chatType === "group" && typeof openId === "string" && /^ou_[A-Za-z0-9_-]+$/.test(openId)
+      ? openId
+      : undefined;
   }
 
   private _resolveSessionKey(msg: ParsedFeishuMessage): string {
@@ -387,18 +389,10 @@ export class FeishuConnector implements Connector {
   }
 
   private _formatStats(response: AgentResponse): string | null {
-    const parts: string[] = [];
-    if (response.durationMs != null) parts.push(`${(response.durationMs / 1000).toFixed(1)}s`);
-    if (response.inputTokens != null || response.outputTokens != null) {
-      const inTok = response.inputTokens ?? 0;
-      const outTok = response.outputTokens ?? 0;
-      const fmtN = (n: number) => n >= 1_000_000 ? `${Math.round(n / 1_000_000)}M` : n >= 1_000 ? `${Math.round(n / 1_000)}k` : `${n}`;
-      if (outTok > 0) parts.push(`${inTok}→${outTok}`);
-      else if (inTok > 0) {
-        parts.push(response.contextWindow ? `${fmtN(inTok)}/${fmtN(response.contextWindow)}` : fmtN(inTok));
-      }
-    }
-    if (response.toolCalls?.length) parts.push(`${response.toolCalls.length} tools`);
-    return parts.length > 0 ? parts.join(" · ") : null;
+    return formatCardStats(
+      Math.round((response.durationMs ?? 0) / 100) / 10,
+      readContextUsage(response.metadata?.contextUsage),
+      response.toolCalls?.length ?? 0,
+    );
   }
 }

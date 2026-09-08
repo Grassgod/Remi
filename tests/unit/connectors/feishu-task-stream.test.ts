@@ -62,7 +62,7 @@ async function* events(): AsyncGenerator<TaskStreamEvent> {
     },
   }) };
   yield { kind: "message", message: message(7, "text", { content: "Done" }) };
-  yield { kind: "message", message: message(8, "usage", { meta: { total_tokens: 42 } }) };
+  yield { kind: "message", message: message(8, "usage", { meta: { used: 42, size: 200000 } }) };
   yield {
     kind: "snapshot",
     snapshot: {
@@ -85,6 +85,8 @@ describe("Feishu canonical Task stream", () => {
     const session = {
       update: async () => {},
       updateThinking: async () => {},
+      updateContextUsage: () => {},
+      updateExecution: () => {},
       addStep: (name: string, description: string) => { steps.push([name, description]); },
       updateStatus: async (value: string) => { status.push(value); },
       updateStepDesc: () => {},
@@ -136,7 +138,7 @@ describe("Feishu canonical Task stream", () => {
       thinkingText: "Inspecting",
       toolCount: 1,
       sessionId: "ses_1",
-      stats: "2s · 42 tokens · 1 tools",
+      stats: "2s · 42/200k · 1 tools",
     });
     expect(result.toolEntries[0]).toMatchObject({ name: "Read", status: "done", resultPreview: "source" });
     expect(steps.some(([name]) => name === "Read")).toBe(true);
