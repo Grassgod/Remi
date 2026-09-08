@@ -35,6 +35,10 @@ const EMPTY_WORKLOAD: RuntimeWorkload = {
   queuedCount: 0,
 };
 
+const EMPTY_AGENTS: Agent[] = [];
+const EMPTY_MEMBERS: MemberWithUser[] = [];
+const EMPTY_TASKS: AgentTask[] = [];
+
 // Per-runtime workload snapshot — agent IDs serving this runtime (drives
 // the avatar stack; .length doubles as the agent count) plus task counts
 // split by status. Built once per render off the workspace-wide
@@ -91,9 +95,9 @@ export function RuntimeList({
   const navigation = useNavigation();
   const user = useAuthStore((s) => s.user);
 
-  const { data: agents = [] } = useQuery(agentListOptions(wsId));
-  const { data: members = [] } = useQuery(memberListOptions(wsId));
-  const { data: snapshot = [] } = useQuery(agentTaskSnapshotOptions(wsId));
+  const { data: agents = EMPTY_AGENTS } = useQuery(agentListOptions(wsId));
+  const { data: members = EMPTY_MEMBERS } = useQuery(memberListOptions(wsId));
+  const { data: snapshot = EMPTY_TASKS } = useQuery(agentTaskSnapshotOptions(wsId));
   const { data: latestCliVersion = null } = useQuery(latestCliVersionOptions());
 
   const currentMember = user
