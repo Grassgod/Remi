@@ -621,7 +621,7 @@ export function controlPlaneConciergeHost(deps: {
   };
 }
 
-function createFeishuTaskHandler(
+export function createFeishuTaskHandler(
   daemon: MultiremiDaemon,
   revision: number,
   displayName: string,

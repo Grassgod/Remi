@@ -771,17 +771,16 @@ export class FeishuBotRepo {
        WHERE b.workspace_id = ? AND b.app_id = ?
          AND c.issue_id = ? AND c.status = 'active'
          AND b.chat_id IS NOT NULL AND b.reply_to_message_id IS NOT NULL
-       ORDER BY b.created_at ASC, b.id ASC`,
+       ORDER BY b.updated_at DESC, b.created_at DESC, b.id DESC`,
     ).all(input.issue.workspaceId, config.appId, input.issue.id) as Row[];
     const enqueued: MultiremiTask[] = [];
     const seenChats = new Set<string>();
     for (const binding of rows) {
       const bindingChatId = cleanOptionalString(binding.chat_id);
-      const routeAgent = this.resolveRouteAgent(input.issue.workspaceId, "group", bindingChatId);
-      if (!routeAgent || routeAgent.agentId !== String(binding.agent_id)) continue;
       const chatSessionId = String(binding.chat_session_id);
-      if (seenChats.has(chatSessionId)) continue;
-      seenChats.add(chatSessionId);
+      const conversationKey = bindingChatId ? `chat:${bindingChatId}` : `session:${chatSessionId}`;
+      if (seenChats.has(conversationKey)) continue;
+      seenChats.add(conversationKey);
       if (!this.ctx.notificationChannels().getAgentChatNotificationChannel(chatSessionId)?.enabled) continue;
       const bindingId = String(binding.id);
       const alreadyPrepared = this.ctx.db.query(
@@ -1095,36 +1094,40 @@ export class FeishuBotRepo {
     const config = this.getConfig(workspaceId);
     if (!config || config.runtimeId !== runtimeId || config.revision !== revision) return false;
     const key = requiredBoundedString(externalSessionKey, "external_session_key", 1_024);
-    const row = this.ctx.db.query(
-      `SELECT id FROM multiremi_feishu_bot_chat_bindings
-        WHERE workspace_id = ? AND app_id = ? AND external_session_key = ?
-        ORDER BY updated_at DESC, id DESC LIMIT 1`,
-    ).get(workspaceId, config.appId, key) as Row | null;
-    if (!row) return false;
-    this.ctx.db.run(
+    const result = this.ctx.db.run(
       `UPDATE multiremi_feishu_bot_chat_bindings
-          SET external_session_key = ?, updated_at = ?
-        WHERE id = ?`,
-      `${key}:closed:${String(row.id)}`,
+          SET external_session_key = external_session_key || ':closed:' || id,
+              updated_at = ?
+        WHERE workspace_id = ? AND app_id = ? AND external_session_key = ?`,
       nowIso(),
-      String(row.id),
+      workspaceId,
+      config.appId,
+      key,
     );
-    return true;
+    return result.changes > 0;
   }
 
   cancelSessionTask(workspaceId: string, runtimeId: string, revision: number, externalSessionKey: string): string | null {
     const config = this.getConfig(workspaceId);
     if (!config || config.runtimeId !== runtimeId || config.revision !== revision) return null;
-    const binding = this.ctx.db.query(
+    const key = requiredBoundedString(externalSessionKey, "external_session_key", 1_024);
+    const bindings = this.ctx.db.query(
       `SELECT chat_session_id FROM multiremi_feishu_bot_chat_bindings
         WHERE workspace_id = ? AND app_id = ? AND external_session_key = ?
-        ORDER BY updated_at DESC, id DESC LIMIT 1`,
-    ).get(workspaceId, config.appId, externalSessionKey) as Row | null;
-    if (!binding) return null;
-    const task = this.ctx.chat().getPendingChatTask(String(binding.chat_session_id));
-    if (!task) return null;
-    this.ctx.tasks().cancelTask(task.id);
-    return task.id;
+        ORDER BY updated_at DESC, id DESC`,
+    ).all(workspaceId, config.appId, key) as Row[];
+    const seenSessions = new Set<string>();
+    let latestCancelledTaskId: string | null = null;
+    for (const binding of bindings) {
+      const chatSessionId = String(binding.chat_session_id);
+      if (seenSessions.has(chatSessionId)) continue;
+      seenSessions.add(chatSessionId);
+      const task = this.ctx.chat().getPendingChatTask(chatSessionId);
+      if (!task) continue;
+      this.ctx.tasks().cancelTask(task.id);
+      latestCancelledTaskId ??= task.id;
+    }
+    return latestCancelledTaskId;
   }
 
   inspectSession(

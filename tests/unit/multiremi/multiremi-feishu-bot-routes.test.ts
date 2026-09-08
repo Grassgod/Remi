@@ -56,6 +56,22 @@ function routeBody(routes: Array<Record<string, unknown>>): string {
 }
 
 describe("Feishu bot Agent route repository", () => {
+  it("enforces default scope uniqueness in the database", () => {
+    const { p2pAgent, groupAgent } = scaffold();
+    const now = new Date().toISOString();
+    const insert = (id: string, scope: "p2p_default" | "group_default", agentId: string) => db!.run(
+      `INSERT INTO multiremi_feishu_bot_agent_routes (
+         id, workspace_id, scope, chat_id, chat_name, agent_id,
+         created_at, updated_at, updated_by
+       ) VALUES (?, 'local', ?, NULL, NULL, ?, ?, ?, NULL)`,
+      [id, scope, agentId, now, now],
+    );
+
+    insert("fbr_direct_first", "p2p_default", p2pAgent.id);
+    expect(() => insert("fbr_direct_second", "p2p_default", groupAgent.id)).toThrow();
+    expect(() => insert("fbr_group_first", "group_default", groupAgent.id)).not.toThrow();
+  });
+
   it("migrates an empty route table and resolves chat, type, then config priority", () => {
     const { store, config, defaultAgent, p2pAgent, groupAgent, chatAgent } = scaffold();
     expect(db?.query(

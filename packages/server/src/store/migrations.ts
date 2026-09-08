@@ -32,6 +32,8 @@ const FEISHU_ISSUE_TOPIC_OUTBOUND_MIGRATION = "20260904_feishu_issue_topic_outbo
 const FEISHU_TOPIC_REPORT_SCHEDULING_MIGRATION = "20260905_feishu_topic_report_scheduling";
 const CHAT_MESSAGE_SEQUENCE_MIGRATION = "20260905_chat_message_sequence";
 const FEISHU_BOT_AGENT_ROUTES_MIGRATION = "20260908_feishu_bot_agent_routes";
+const FEISHU_BOT_AGENT_ROUTE_DEFAULT_UNIQUENESS_MIGRATION =
+  "20260909_feishu_bot_agent_route_default_uniqueness";
 
 // Stable Feishu open_id of the deployment owner (hehuajie / 贺华杰). The seed
 // `local` user is tagged with this on migration so SSO login re-binds to it
@@ -2701,6 +2703,9 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_feishu_bot_chat_bindings", "reply_to_message_id TEXT");
   backfillFeishuBotReplyDestinations(db);
   runMigrationOnce(db, FEISHU_BOT_AGENT_ROUTES_MIGRATION, () => ensureFeishuBotAgentRoutesSchema(db));
+  runMigrationOnce(db, FEISHU_BOT_AGENT_ROUTE_DEFAULT_UNIQUENESS_MIGRATION, () => {
+    ensureFeishuBotAgentRouteDefaultUniqueness(db);
+  });
   runMigrationOnce(db, FEISHU_ISSUE_TOPIC_OUTBOUND_MIGRATION, () => {
     allowNullableFeishuOutboundReplyToMessageId(db);
   });
@@ -2945,6 +2950,14 @@ function ensureFeishuBotAgentRoutesSchema(db: SqlDatabase): void {
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_agent_routes_agent
       ON multiremi_feishu_bot_agent_routes(agent_id);
+  `);
+}
+
+function ensureFeishuBotAgentRouteDefaultUniqueness(db: SqlDatabase): void {
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_agent_routes_default_scope
+      ON multiremi_feishu_bot_agent_routes(workspace_id, scope)
+      WHERE chat_id IS NULL;
   `);
 }
 
