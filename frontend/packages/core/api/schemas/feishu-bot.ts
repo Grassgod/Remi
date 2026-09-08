@@ -1,7 +1,9 @@
 import { z } from "zod";
 import type {
   FeishuBotAvailability,
+  FeishuBotAgentRoutes,
   FeishuBotCandidates,
+  FeishuBotChats,
   FeishuBotConfig,
   FeishuBotStatusSnapshot,
   IssueTopicConfigResponse,
@@ -101,6 +103,33 @@ export const FeishuBotCandidatesSchema = z.object({
     last_heartbeat_at: z.string().nullable().default(null),
   }).loose()).default([]),
   encryption_available: z.boolean().default(false),
+}).loose();
+
+export const FeishuBotAgentRoutesSchema = z.object({
+  workspace_id: z.string().default(""),
+  routes: z.array(z.object({
+    id: z.string(),
+    scope: z.enum(["p2p_default", "group_default", "chat"]),
+    chat_id: z.string().nullable().default(null),
+    chat_name: z.string().nullable().default(null),
+    member_count: z.number().nullable().default(null),
+    agent_id: z.string(),
+    agent_name: z.string().nullable().default(null),
+    agent_archived: z.boolean().default(false),
+    created_at: z.string().default(""),
+    updated_at: z.string().default(""),
+    updated_by: z.string().nullable().default(null),
+  }).loose()).default([]),
+}).loose();
+
+export const FeishuBotChatsSchema = z.object({
+  workspace_id: z.string().default(""),
+  chats: z.array(z.object({
+    name: z.string().default(""),
+    chat_id: z.string(),
+    member_count: z.number().nullable().default(null),
+    chat_mode: z.string().nullable().default(null),
+  }).loose()).default([]),
 }).loose();
 
 export const FeishuBotTestResultSchema = z.object({
@@ -206,4 +235,14 @@ export const EMPTY_FEISHU_BOT_CANDIDATES: FeishuBotCandidates = {
   agents: [],
   runtimes: [],
   encryption_available: false,
+};
+
+export const EMPTY_FEISHU_BOT_AGENT_ROUTES: FeishuBotAgentRoutes = {
+  workspace_id: "",
+  routes: [],
+};
+
+export const EMPTY_FEISHU_BOT_CHATS: FeishuBotChats = {
+  workspace_id: "",
+  chats: [],
 };

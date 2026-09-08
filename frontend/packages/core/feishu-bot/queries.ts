@@ -12,6 +12,8 @@ export const feishuBotKeys = {
   config: (workspaceId: string) => ["feishu-bot", workspaceId, "config"] as const,
   status: (workspaceId: string) => ["feishu-bot", workspaceId, "status"] as const,
   candidates: (workspaceId: string) => ["feishu-bot", workspaceId, "candidates"] as const,
+  routes: (workspaceId: string) => ["feishu-bot", workspaceId, "routes"] as const,
+  chats: (workspaceId: string) => ["feishu-bot", workspaceId, "chats"] as const,
   audit: (workspaceId: string, limit: number) => ["feishu-bot", workspaceId, "audit", limit] as const,
   registration: (workspaceId: string, sessionId: string) =>
     ["feishu-bot", workspaceId, "registration", sessionId] as const,
@@ -62,6 +64,24 @@ export function feishuBotCandidatesOptions(workspaceId: string, enabled = true) 
     enabled: enabled && workspaceId.length > 0,
     retry: false,
     staleTime: 15_000,
+  });
+}
+
+export function feishuBotRoutesOptions(workspaceId: string, enabled = true) {
+  return queryOptions({
+    queryKey: feishuBotKeys.routes(workspaceId),
+    queryFn: () => api.getFeishuBotRoutes(workspaceId),
+    enabled: enabled && workspaceId.length > 0,
+    retry: false,
+  });
+}
+
+export function feishuBotChatsOptions(workspaceId: string, enabled = true) {
+  return queryOptions({
+    queryKey: feishuBotKeys.chats(workspaceId),
+    queryFn: () => api.getFeishuBotChats(workspaceId),
+    enabled: enabled && workspaceId.length > 0,
+    retry: false,
   });
 }
 

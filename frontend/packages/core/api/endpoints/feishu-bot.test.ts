@@ -51,6 +51,59 @@ describe("FeishuBotEndpoints.getFeishuBot (role-polymorphic GET)", () => {
 });
 
 describe("FeishuBotEndpoints control routes", () => {
+  it("reads and replaces Agent routes without changing transport field names", async () => {
+    const response = {
+      workspace_id: "ws_1",
+      routes: [{
+        id: "route_1",
+        scope: "chat",
+        chat_id: "oc_issue",
+        chat_name: "Issue group",
+        member_count: 42,
+        agent_id: "agt_2",
+        agent_name: "Worker",
+        agent_archived: false,
+        created_at: "2026-09-08T00:00:00Z",
+        updated_at: "2026-09-08T00:00:00Z",
+        updated_by: "user_1",
+      }],
+    };
+    const { api, fetchMock } = endpoints(response);
+
+    await expect(api.getFeishuBotRoutes("ws_1")).resolves.toEqual(response);
+    expect(fetchMock).toHaveBeenCalledWith("/api/workspaces/ws_1/feishu-bot/routes");
+
+    await api.saveFeishuBotRoutes("ws_1", {
+      routes: [{
+        scope: "chat",
+        chat_id: "oc_issue",
+        chat_name: "Issue group",
+        agent_id: "agt_2",
+      }],
+    });
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/workspaces/ws_1/feishu-bot/routes", {
+      method: "PUT",
+      body: JSON.stringify({
+        routes: [{
+          scope: "chat",
+          chat_id: "oc_issue",
+          chat_name: "Issue group",
+          agent_id: "agt_2",
+        }],
+      }),
+    });
+  });
+
+  it("reads the bot's group directory", async () => {
+    const { api, fetchMock } = endpoints({
+      workspace_id: "ws_1",
+      chats: [{ name: "Release", chat_id: "oc_release", member_count: 12, chat_mode: "group" }],
+    });
+    const result = await api.getFeishuBotChats("ws_1");
+    expect(fetchMock).toHaveBeenCalledWith("/api/workspaces/ws_1/feishu-bot/chats");
+    expect(result.chats[0]?.chat_id).toBe("oc_release");
+  });
+
   it("falls back to disabled empty Issue topics when the response drifts", async () => {
     const { api } = endpoints({
       workspace_id: 42,

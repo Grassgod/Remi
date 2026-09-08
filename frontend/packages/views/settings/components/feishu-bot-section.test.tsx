@@ -14,6 +14,15 @@ const membersRef = vi.hoisted(() => ({
 const botRef = vi.hoisted(() => ({ current: undefined as unknown }));
 const statusRef = vi.hoisted(() => ({ current: undefined as unknown }));
 const candidatesRef = vi.hoisted(() => ({ current: undefined as unknown }));
+const routesQueryRef = vi.hoisted(() => ({
+  current: { workspace_id: "workspace-1", routes: [] },
+}));
+const issueTopicsQueryRef = vi.hoisted(() => ({
+  current: {
+    workspace_id: "workspace-1",
+    config: { enabled: false, chat_id: "", project_ids: null },
+  },
+}));
 const pendingRef = vi.hoisted(() => ({ members: false, bot: false }));
 
 const mockSave = vi.hoisted(() => vi.fn());
@@ -21,6 +30,7 @@ const mockDelete = vi.hoisted(() => vi.fn());
 const mockDeploy = vi.hoisted(() => vi.fn());
 const mockStop = vi.hoisted(() => vi.fn());
 const mockTest = vi.hoisted(() => vi.fn());
+const mockSaveRoutes = vi.hoisted(() => vi.fn());
 
 vi.mock("@tanstack/react-query", () => ({
   useQuery: (opts: { queryKey: unknown[]; enabled?: boolean }) => {
@@ -34,6 +44,25 @@ vi.mock("@tanstack/react-query", () => ({
     }
     if (key.includes("feishu-bot-candidates")) {
       return { data: candidatesRef.current, isPending: false, isLoading: false };
+    }
+    if (key.includes("feishu-bot-routes")) {
+      return {
+        data: routesQueryRef.current,
+        isPending: false,
+        isLoading: false,
+        isError: false,
+      };
+    }
+    if (key.includes("feishu-bot-issue-topics")) {
+      return {
+        data: issueTopicsQueryRef.current,
+        isPending: false,
+        isLoading: false,
+        isError: false,
+      };
+    }
+    if (key.includes("feishu-bot-chats")) {
+      return { data: undefined, isPending: false, isLoading: false, isError: false };
     }
     if (key.includes("feishu-bot")) {
       return { data: botRef.current, isPending: pendingRef.bot, isLoading: false };
@@ -64,6 +93,13 @@ vi.mock("@multiremi/core/feishu-bot/queries", () => ({
     queryFn: vi.fn(),
     enabled,
   }),
+  feishuBotRoutesOptions: () => ({ queryKey: ["feishu-bot-routes"], queryFn: vi.fn() }),
+  feishuBotChatsOptions: (_ws: string, enabled?: boolean) => ({
+    queryKey: ["feishu-bot-chats"],
+    queryFn: vi.fn(),
+    enabled,
+  }),
+  issueTopicConfigOptions: () => ({ queryKey: ["feishu-bot-issue-topics"], queryFn: vi.fn() }),
 }));
 
 vi.mock("@multiremi/core/feishu-bot/mutations", () => ({
@@ -72,6 +108,7 @@ vi.mock("@multiremi/core/feishu-bot/mutations", () => ({
   useDeployFeishuBot: () => ({ mutateAsync: mockDeploy, isPending: false }),
   useStopFeishuBot: () => ({ mutateAsync: mockStop, isPending: false }),
   useTestFeishuBot: () => ({ mutateAsync: mockTest, isPending: false }),
+  useSaveFeishuBotRoutes: () => ({ mutateAsync: mockSaveRoutes, isPending: false }),
 }));
 
 vi.mock("@multiremi/core/auth", () => {
@@ -172,6 +209,7 @@ function resetFixtures() {
   mockStop.mockResolvedValue({});
   mockDelete.mockResolvedValue({});
   mockTest.mockResolvedValue({ ok: true, bot_name: "Remi Bot" });
+  mockSaveRoutes.mockResolvedValue({ workspace_id: "workspace-1", routes: [] });
 }
 
 describe("FeishuBotSection (member view)", () => {
@@ -249,6 +287,7 @@ describe("FeishuBotSection (admin form)", () => {
 
   it("shows the Agent name and machine name without exposing provider engines", () => {
     renderSection();
+    expect(screen.getByText("Default Agent")).toBeInTheDocument();
     const selectors = screen.getAllByRole("combobox");
     expect(selectors[0]).toHaveTextContent("Remi");
     expect(selectors[1]).toHaveTextContent("mac-mini");

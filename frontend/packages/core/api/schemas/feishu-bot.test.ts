@@ -3,11 +3,15 @@ import type { FeishuBotRegistrationSession } from "../../types/feishu-bot";
 import { parseWithFallback } from "../schema";
 import {
   EMPTY_FEISHU_BOT_AVAILABILITY,
+  EMPTY_FEISHU_BOT_AGENT_ROUTES,
   EMPTY_FEISHU_BOT_CANDIDATES,
+  EMPTY_FEISHU_BOT_CHATS,
   EMPTY_FEISHU_BOT_CONFIG,
   EMPTY_FEISHU_BOT_STATUS,
   FeishuBotAvailabilitySchema,
+  FeishuBotAgentRoutesSchema,
   FeishuBotCandidatesSchema,
+  FeishuBotChatsSchema,
   FeishuBotConfigSchema,
   FeishuBotRegistrationSessionSchema,
   FeishuBotStatusSchema,
@@ -144,6 +148,66 @@ describe("FeishuBotCandidatesSchema", () => {
     // apply the config.
     expect(result.runtimes[0]?.supports_config).toBe(false);
     expect(result.agents[0]?.name).toBe("");
+  });
+});
+
+describe("FeishuBotAgentRoutesSchema", () => {
+  it("preserves archived route metadata for a visible fallback warning", () => {
+    const result = parseWithFallback({
+      workspace_id: "ws_1",
+      routes: [{
+        id: "route_1",
+        scope: "chat",
+        chat_id: "oc_issue",
+        agent_id: "agt_archived",
+        agent_name: "Old Agent",
+        agent_archived: true,
+      }],
+    }, FeishuBotAgentRoutesSchema, EMPTY_FEISHU_BOT_AGENT_ROUTES, {
+      endpoint: "GET /api/workspaces/:id/feishu-bot/routes",
+    });
+    expect(result.routes[0]).toMatchObject({
+      chat_id: "oc_issue",
+      member_count: null,
+      agent_archived: true,
+    });
+  });
+
+  it("falls back to no routes when the route array is null", () => {
+    const result = parseWithFallback(
+      { workspace_id: "ws_1", routes: null },
+      FeishuBotAgentRoutesSchema,
+      EMPTY_FEISHU_BOT_AGENT_ROUTES,
+      { endpoint: "GET /api/workspaces/:id/feishu-bot/routes" },
+    );
+    expect(result).toEqual(EMPTY_FEISHU_BOT_AGENT_ROUTES);
+  });
+});
+
+describe("FeishuBotChatsSchema", () => {
+  it("defaults optional chat metadata", () => {
+    const result = parseWithFallback(
+      { workspace_id: "ws_1", chats: [{ chat_id: "oc_1", name: "Team" }] },
+      FeishuBotChatsSchema,
+      EMPTY_FEISHU_BOT_CHATS,
+      { endpoint: "GET /api/workspaces/:id/feishu-bot/chats" },
+    );
+    expect(result.chats[0]).toEqual({
+      chat_id: "oc_1",
+      name: "Team",
+      member_count: null,
+      chat_mode: null,
+    });
+  });
+
+  it("falls back to an empty directory when chats has the wrong type", () => {
+    const result = parseWithFallback(
+      { workspace_id: "ws_1", chats: "none" },
+      FeishuBotChatsSchema,
+      EMPTY_FEISHU_BOT_CHATS,
+      { endpoint: "GET /api/workspaces/:id/feishu-bot/chats" },
+    );
+    expect(result).toEqual(EMPTY_FEISHU_BOT_CHATS);
   });
 });
 
