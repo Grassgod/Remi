@@ -365,12 +365,12 @@ export function denyCurrentUserRuntimeWorkspaceAccess(c: Context, store: Multire
   const userId = authenticatedRequestUserId(c);
   // Same rule as denyCurrentUserWorkspaceAccess: a human's login PAT is not
   // workspace-scoped — membership decides which runtimes they can see.
-  const humanPat = token?.type === "pat" && userId && userId !== "local";
+  const humanPat = token?.type === "pat" && userId && (userId !== "local" || token.purpose === "session");
   if (!humanPat && token?.workspaceId && token.workspaceId !== workspaceId) {
     return c.json({ error: "runtime not found" }, 404);
   }
   // A logged-in human who is not a member of the runtime's workspace can't see it.
-  if (userId && userId !== "local" && !store.getUserRoleInWorkspace(userId, workspaceId)) {
+  if (userId && (userId !== "local" || humanPat || !token) && !store.getUserRoleInWorkspace(userId, workspaceId)) {
     return c.json({ error: "runtime not found" }, 404);
   }
   return null;
@@ -488,7 +488,9 @@ export function denyCurrentUserWorkspaceAccess(c: Context, store: MultiremiStore
   // reach others. A human's login PAT is minted under "local" but is a session
   // credential, not a scope — the membership check below is the authority for
   // real users, otherwise they could never open a workspace created after login.
-  const humanPat = token?.type === "pat" && userId && userId !== "local";
+  // The migrated deployment owner keeps userId=local; session purpose separates
+  // that login from legacy ownerless workspace credentials.
+  const humanPat = token?.type === "pat" && userId && (userId !== "local" || token.purpose === "session");
   if (!humanPat && token?.workspaceId && token.workspaceId !== workspaceId) {
     return c.json({ error: "workspace not found" }, 404);
   }
@@ -496,7 +498,7 @@ export function denyCurrentUserWorkspaceAccess(c: Context, store: MultiremiStore
   // non-members get 404 (existence hidden). No user id (or the synthetic "local"
   // admin identity carried by user-less workspace access tokens) => master token /
   // open mode => full admin access.
-  if (userId && userId !== "local" && !store.getUserRoleInWorkspace(userId, workspaceId)) {
+  if (userId && (userId !== "local" || humanPat || !token) && !store.getUserRoleInWorkspace(userId, workspaceId)) {
     return c.json({ error: "workspace not found" }, 404);
   }
   return null;

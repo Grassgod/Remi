@@ -46,10 +46,18 @@ export function registerTokenRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJson<CreateAccessTokenInput>(c);
     if (isTaskTokenCreateInput(body)) return c.json({ error: "task tokens are minted by daemon task claim" }, 400);
     const workspaceId = body.workspaceId ?? body.workspace_id ?? "local";
-    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId)
+      ?? requireWorkspaceAdmin(c, store, workspaceId);
     if (denied) return denied;
+    const userId = authenticatedRequestUserId(c);
+    if (userId && String(body.purpose ?? "").trim().toLowerCase() === "session") {
+      return c.json({ error: "session tokens are minted by login" }, 400);
+    }
+    // Human provisioning cannot impersonate another user or create an ownerless
+    // credential. Master-token and open-mode provisioning retain explicit owners.
+    const input = userId ? { ...body, userId, user_id: userId } : body;
     try {
-      return c.json({ token: await store.createAccessToken(body) }, 201);
+      return c.json({ token: await store.createAccessToken(input) }, 201);
     } catch (error) {
       return accessTokenMutationError(c, error);
     }

@@ -214,6 +214,7 @@ describe("Multiremi API — authentication and token scoping", () => {
   // accepted for safe methods only so cookie auth can never mutate state.
   it("accepts the multimira_auth cookie for GET requests only", async () => {
     const store = createStore();
+    store.ensureLocalWorkspace();
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const login = await store.createAccessToken({
       name: "Login",
