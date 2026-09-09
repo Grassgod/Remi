@@ -71,10 +71,12 @@ describe("FeishuBotEndpoints control routes", () => {
       enabled: true,
       chat_id: "oc_topics",
       project_ids: null,
+      notify_mode: "person",
+      notify_open_id: "ou_reviewer",
     });
     expect(fetchMock).toHaveBeenCalledWith("/api/workspaces/ws_1/issue-topics", {
       method: "PUT",
-      body: JSON.stringify({ enabled: true, chat_id: "oc_topics", project_ids: null }),
+      body: JSON.stringify({ enabled: true, chat_id: "oc_topics", project_ids: null, notify_mode: "person", notify_open_id: "ou_reviewer" }),
     });
   });
 

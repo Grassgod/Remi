@@ -907,6 +907,12 @@
       "scan_retry": "重试"
     },
     "issueTopics": {
+      "notify_mode": "主动通知对象",
+      "notify_owner": "群主",
+      "notify_person": "指定人员",
+      "notify_none": "不 @",
+      "notify_open_id": "通知人 open_id（机器人应用）",
+      "notify_invalid": "请输入以 ou_ 开头的有效 open_id。",
       "title": "Issue 话题同步",
       "description": "为每个新建 Issue 在指定飞书群创建一个话题，后续工作进展和群内回复都保留在该话题中。",
       "enabled": "为新建 Issue 创建话题",

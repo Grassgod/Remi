@@ -51,6 +51,7 @@ import {
 import { degradeMarkdownImages } from "@shared/feishu-markdown-images.js";
 import { FEISHU_IMAGE_MAX_BYTES } from "@connectors/feishu/outbound-images.js";
 import { FeishuBotEncryptionError } from "@multiremi/feishu-bot/credentials.js";
+import { isFeishuOpenId } from "@shared/feishu-mention.js";
 import { normalizeFeishuBotErrorCode, redactFeishuBotError } from "@multiremi/feishu-bot/diagnostics.js";
 import type {
   FeishuBotTaskSnapshot,
@@ -446,6 +447,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
           body_origin: outbound.bodyOrigin,
           idempotency_key: outbound.idempotencyKey,
           ...(outbound.taskId ? { task_id: outbound.taskId, resume_message_id: outbound.resumeMessageId } : {}),
+          ...(outbound.mention ? { mention: outbound.mention } : {}),
         };
       }
     }
@@ -542,9 +544,20 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       status?: unknown;
       external_message_id?: unknown;
       error?: unknown;
+      mention_open_id?: unknown;
     }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const claimToken = cleanString(typeof body.claim_token === "string" ? body.claim_token : null);
+    if (body.status === "prepared") {
+      if (!claimToken || (body.mention_open_id !== null && !isFeishuOpenId(body.mention_open_id))) {
+        return c.json({ error: "claim_token and mention_open_id (open_id or null) are required" }, 400);
+      }
+      const prepared = store.prepareFeishuBotOutboundMention(
+        runtime.workspaceId ?? "local", runtimeId, c.req.param("deliveryId"), claimToken, body.mention_open_id,
+      );
+      if (!prepared) return c.json({ error: "outbound mention lease or policy is stale", code: "stale_lease" }, 409);
+      return c.json({ status: "ok", mention_open_id: prepared.openId });
+    }
     const status = body.status === "sent" || body.status === "failed" || body.status === "streaming" ? body.status : null;
     if (!claimToken || !status) return c.json({ error: "claim_token and a valid status are required" }, 400);
     const accepted = store.reportFeishuBotOutbound(

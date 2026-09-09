@@ -29,6 +29,7 @@ import { normalizeFeishuBotErrorCode } from "@multiremi/feishu-bot/diagnostics.j
 import { isRuntimeEffectivelyOnline } from "@multiremi/store/repos/runtimes-repo.js";
 import { readWorkspaceIssueTopics } from "@multiremi/issue-topics/config.js";
 import { findMarkdownImages } from "@shared/feishu-markdown-images.js";
+import { isFeishuOpenId, parseOutboundMention } from "@shared/feishu-mention.js";
 import type {
   FeishuBotAuditAction,
   FeishuBotDesiredState,
@@ -784,16 +785,29 @@ export class FeishuBotRepo {
          ORDER BY o.created_at ASC, o.id ASC LIMIT 1`,
       ).get(workspaceId, config.appId, config.agentId, supportsTaskStream ? 1 : 0, nowIsoValue, nowIsoValue) as Row | null;
       if (!row) return null;
+      let mention = parseOutboundMention(parseJson(row.mention_snapshot, null));
+      if (supportsTaskStream && row.task_id && !row.mention_snapshot) {
+        const topics = readWorkspaceIssueTopics(this.ctx.workspaces().getWorkspace(workspaceId)?.settings ?? {});
+        if (topics.enabled && topics.chatId === row.chat_id) {
+          mention = {
+            mode: topics.notifyMode ?? "group_owner",
+            ...(topics.notifyMode === "person" ? { openId: topics.notifyOpenId } : {}),
+            // Do not add a surprise mention to a card already sent by an old daemon.
+            ...(row.external_message_id ? { resolvedOpenId: null } : {}),
+          };
+        }
+      }
       const claimToken = createId("foc");
       const leasedUntil = new Date(now.getTime() + (supportsTaskStream ? 120_000 : 30_000)).toISOString();
       const updated = this.ctx.db.run(
         `UPDATE multiremi_feishu_bot_outbound_deliveries
          SET status = 'sending', claim_token = ?, leased_until = ?,
-             attempt_count = attempt_count + 1, updated_at = ?
+             attempt_count = attempt_count + 1, updated_at = ?,
+             mention_snapshot = COALESCE(mention_snapshot, ?)
          WHERE id = ?
            AND ((status = 'pending' AND available_at <= ?)
              OR (status = 'sending' AND leased_until IS NOT NULL AND leased_until <= ?))`,
-        [claimToken, leasedUntil, nowIsoValue, String(row.id), nowIsoValue, nowIsoValue],
+        [claimToken, leasedUntil, nowIsoValue, mention ? toJson(mention) : null, String(row.id), nowIsoValue, nowIsoValue],
       );
       if (updated.changes !== 1) return null;
       return {
@@ -801,8 +815,44 @@ export class FeishuBotRepo {
         ...(supportsTaskStream && row.task_id ? {
           taskId: String(row.task_id),
           resumeMessageId: cleanOptionalString(row.external_message_id),
+          ...(mention ? { mention } : {}),
         } : {}),
       };
+    })();
+  }
+
+  /** Checkpoint before the first send, under the existing delivery lease. */
+  prepareOutboundMention(
+    workspaceId: string, runtimeId: string, deliveryId: string, claimToken: string,
+    openId: string | null, nowInput: string | Date = new Date(),
+  ): { openId: string | null } | null {
+    if (openId !== null && !isFeishuOpenId(openId)) throw new FeishuBotConfigError("invalid mention open_id", 400, "invalid_mention");
+    const config = this.getConfig(workspaceId);
+    if (!config || config.runtimeId !== runtimeId) return null;
+    const now = new Date(nowInput).toISOString();
+    return this.ctx.db.transaction(() => {
+      const row = this.ctx.db.query(
+        `SELECT o.* FROM multiremi_feishu_bot_outbound_deliveries o
+         JOIN multiremi_feishu_bot_chat_bindings b ON b.id = o.binding_id
+         WHERE o.id = ? AND o.workspace_id = ? AND o.status = 'sending'
+           AND o.claim_token = ? AND o.leased_until > ? AND o.task_id IS NOT NULL
+           AND b.app_id = ? AND b.agent_id = ?`,
+      ).get(deliveryId, workspaceId, claimToken, now, config.appId, config.agentId) as Row | null;
+      if (!row) return null;
+      const mention = parseOutboundMention(parseJson(row.mention_snapshot, null));
+      if (!mention) return null;
+      if (mention.resolvedOpenId !== undefined) return { openId: mention.resolvedOpenId };
+      if (mention.mode === "none" && openId !== null) return null;
+      if (mention.mode === "person" && openId !== null && openId !== mention.openId) return null;
+      const resolvedOpenId = row.external_message_id ? null : openId;
+      const updated = this.ctx.db.run(
+        `UPDATE multiremi_feishu_bot_outbound_deliveries SET mention_snapshot = ?, updated_at = ?
+         WHERE id = ? AND workspace_id = ? AND status = 'sending' AND claim_token = ?
+           AND leased_until > ? AND mention_snapshot = ?`,
+        [toJson({ ...mention, resolvedOpenId }), now, deliveryId, workspaceId, claimToken, now, row.mention_snapshot],
+      );
+      if (updated.changes !== 1) return null;
+      return { openId: resolvedOpenId };
     })();
   }
 

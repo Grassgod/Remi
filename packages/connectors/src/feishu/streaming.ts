@@ -128,7 +128,6 @@ export class FeishuStreamingSession {
       pendingPermission: this.permissions.pending,
       nameSuffix: this.nameSuffix,
       subtitle: this.subtitle,
-      mentionOpenId: this.mentionOpenId,
       stats: this.getStats(),
     }), header: this.header };
   }

@@ -1558,6 +1558,7 @@ export class MultiremiDaemon {
       });
       await deliverFeishuOutbound(delivery, {
         signal,
+        prepareMention: openId => this.client.prepareFeishuBotOutboundMention(runtimeId, delivery.id, delivery.claimToken, openId),
         send: options => supervisor.sendOutbound({ ...delivery, body }, options),
         report: input => this.client.reportFeishuBotOutboundResult(runtimeId, delivery.id, input),
       });

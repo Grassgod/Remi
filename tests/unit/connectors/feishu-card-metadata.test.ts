@@ -150,9 +150,10 @@ describe("Feishu card execution identity and context", () => {
       expect(card.header.subtitle.content).toBe("Remi Claude opus5");
       const footer = card.body.elements.at(-1);
       expect(footer.flex_mode).toBe("flow");
+      const final = card === h.cards.at(-1);
       expect(footer.columns.map((column: any) => column.elements[0].content ?? column.elements[0].text.content))
-        .toEqual(["<at id=ou_sender></at>", "54s", "82k/200k", "1 tools"]);
-      expect(footer.columns.slice(1).map((column: any) => column.elements[0].icon.token))
+        .toEqual([...(final ? ["<at id=ou_sender></at>"] : []), "54s", "82k/200k", "1 tools"]);
+      expect(footer.columns.slice(final ? 1 : 0).map((column: any) => column.elements[0].icon.token))
         .toEqual(["time_outlined", "translate_outlined", "setting-inter_outlined"]);
     }
     const noContext = buildFinalCard({ text: "Answer", stats: "54s · 3 tools" }) as any;

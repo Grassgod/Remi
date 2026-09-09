@@ -3806,11 +3806,23 @@ export const FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER = "X-Multiremi-Feishu-Claim-
 export type FeishuBotDomain = "feishu" | "lark" | "bytedance";
 
 /** Workspace policy for creating one Feishu topic per newly created Issue. */
+export type IssueTopicNotifyMode = "group_owner" | "person" | "none";
+
 export interface IssueTopicConfig {
   enabled: boolean;
   chatId: string;
   /** Omitted means every project, including projectless Issues. */
   projectIds?: string[];
+  notifyMode?: IssueTopicNotifyMode;
+  /** Open ID scoped to the bot application; only used in person mode. */
+  notifyOpenId?: string;
+}
+
+export interface FeishuBotOutboundMention {
+  mode: IssueTopicNotifyMode;
+  openId?: string;
+  /** Omitted until prepared; null means a deliberate no-mention outcome. */
+  resolvedOpenId?: string | null;
 }
 
 /** What the control plane wants the selected Runtime to do with the connector. */
@@ -3840,6 +3852,7 @@ export interface MultiremiFeishuBotOutboundDelivery {
   /** Present only for stream-capable daemons; absent on topic seed messages. */
   taskId?: string;
   resumeMessageId?: string | null;
+  mention?: FeishuBotOutboundMention;
 }
 
 /**

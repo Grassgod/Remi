@@ -2702,6 +2702,7 @@ export function runMigrations(db: SqlDatabase): void {
   runMigrationOnce(db, FEISHU_ISSUE_TOPIC_OUTBOUND_MIGRATION, () => {
     allowNullableFeishuOutboundReplyToMessageId(db);
   });
+  addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "mention_snapshot TEXT");
   runMigrationOnce(db, FEISHU_TOPIC_REPORT_SCHEDULING_MIGRATION, () => {
     releaseQueuedFeishuTopicReports(db);
   });

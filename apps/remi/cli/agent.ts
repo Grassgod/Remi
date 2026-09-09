@@ -45,6 +45,8 @@ export interface FeishuChannelCredentials {
 
 /** A running Feishu channel that can be stopped. */
 export interface FeishuChannelHandle {
+  resolveProactiveMention: (chatId: string, mention: import("@multiremi/contracts/types.js").FeishuBotOutboundMention,
+    signal?: AbortSignal) => Promise<string | null>;
   streamProactiveTask: (chatId: string, sessionKey: string, stream: AsyncIterable<TaskStreamEvent>, meta: TaskStreamMeta,
     options: HandleTaskStreamOpts) => Promise<{ messageId: string }>;
   start: Promise<void>;
@@ -110,6 +112,7 @@ export async function bootFeishuChannel(
     publishBotMenu: (menu, dryRun) => menuSyncer.syncAll(menu, { dryRun }),
     sendProactiveThreadReply: (input) => connector.sendProactiveThreadReply(input),
     streamProactiveTask: (...args) => connector.streamProactiveTask(...args),
+    resolveProactiveMention: (...args) => connector.resolveProactiveMention(...args),
     uploadImage: (image) => connector.uploadImage(image),
   };
 }

@@ -12,10 +12,27 @@ import {
   FeishuBotRegistrationSessionSchema,
   FeishuBotStatusSchema,
   FeishuBotTestResultSchema,
+  IssueTopicConfigResponseSchema,
 } from "./feishu-bot";
 
 const CONFIG_ENDPOINT = { endpoint: "GET /api/workspaces/:id/feishu-bot" };
 const STATUS_ENDPOINT = { endpoint: "GET /api/workspaces/:id/feishu-bot/status" };
+
+describe("Issue notification recipient schema", () => {
+  it("defaults omitted policies and fails closed on future or malformed policies", () => {
+    expect(IssueTopicConfigResponseSchema.parse({ config: {} }).config.notify_mode).toBe("group_owner");
+    for (const mode of ["all", null, 42]) {
+      const config = IssueTopicConfigResponseSchema.parse({ config: { notify_mode: mode, notify_open_id: [] } }).config;
+      expect(config.notify_mode).toBe("none");
+      expect(config.notify_open_id).toBeNull();
+    }
+  });
+
+  it("preserves an explicit bot-scoped recipient", () => {
+    expect(IssueTopicConfigResponseSchema.parse({ config: { notify_mode: "person", notify_open_id: "ou_reviewer" } }).config)
+      .toMatchObject({ notify_mode: "person", notify_open_id: "ou_reviewer" });
+  });
+});
 
 describe("FeishuBotConfigSchema", () => {
   it("defaults every field a sparse server omits, without throwing", () => {

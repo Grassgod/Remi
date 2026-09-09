@@ -1,4 +1,5 @@
 import type { IssueTopicConfig } from "@multiremi/contracts/types.js";
+import { isFeishuOpenId } from "@shared/feishu-mention.js";
 
 export class IssueTopicConfigError extends Error {
   readonly code = "issue_topic_config_invalid";
@@ -19,10 +20,20 @@ export function parseIssueTopicConfig(value: unknown): IssueTopicConfig {
     throw new IssueTopicConfigError("issueTopics.chatId is required when enabled");
   }
   const projectIds = parseProjectIds(value.projectIds);
+  const notifyMode = value.notifyMode === undefined ? "group_owner" : value.notifyMode;
+  if (notifyMode !== "group_owner" && notifyMode !== "person" && notifyMode !== "none") {
+    throw new IssueTopicConfigError("issueTopics.notifyMode must be group_owner, person, or none");
+  }
+  const notifyOpenId = cleanString(value.notifyOpenId);
+  if (notifyMode === "person" && !isFeishuOpenId(notifyOpenId)) {
+    throw new IssueTopicConfigError("issueTopics.notifyOpenId must be a bot-scoped open_id when notifyMode is person");
+  }
   return {
     enabled: value.enabled,
     chatId: chatId ?? "",
     ...(projectIds ? { projectIds } : {}),
+    notifyMode,
+    ...(notifyMode === "person" ? { notifyOpenId: notifyOpenId! } : {}),
   };
 }
 

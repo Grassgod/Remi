@@ -25,7 +25,7 @@ function harness(patchHook?: (card: Record<string, unknown>) => Promise<void>) {
 }
 
 describe("one patch-only Feishu card transport", () => {
-  it("keeps the same single sender mention at the bottom of every card version", async () => {
+  it("adds the sender mention only in the final patch, never in initial or progress cards", async () => {
     const h = harness();
     await h.session.start("oc_group", "chat_id", { replyToMessageId: "om_question", mentionOpenId: "ou_sender" });
     await h.session.update("Working");
@@ -33,12 +33,12 @@ describe("one patch-only Feishu card transport", () => {
     await h.session.removePermissionForm("sender-form");
     await h.session.close({ finalText: "Answer", stats: "2s · 1 tool" });
 
-    for (const { input } of h.calls) {
-      const card = JSON.parse(input.data.content);
-      expect(card.body.elements.at(-1).columns[0].elements[0].content).toBe("<at id=ou_sender></at>");
-      expect(card.body.elements.at(-1).flex_mode).toBe("flow");
-      expect(input.data.content.match(/<at id=ou_sender><\/at>/g)).toHaveLength(1);
-    }
+    for (const { input } of h.calls.slice(0, -1)) expect(input.data.content).not.toContain("<at ");
+    const final = JSON.parse(h.calls.at(-1)!.input.data.content);
+    expect(h.calls.at(-1)!.operation).toBe("patch");
+    expect(final.body.elements.at(-1).columns[0].elements[0].content).toBe("<at id=ou_sender></at>");
+    expect(final.body.elements.at(-1).flex_mode).toBe("flow");
+    expect(JSON.stringify(final).match(/<at id=ou_sender><\/at>/g)).toHaveLength(1);
     expect(h.calls.filter(call => call.operation !== "patch")).toHaveLength(1);
   });
 

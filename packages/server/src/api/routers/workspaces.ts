@@ -250,17 +250,23 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
       enabled?: unknown;
       chat_id?: unknown;
       project_ids?: unknown;
+      notify_mode?: unknown;
+      notify_open_id?: unknown;
     }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const fields = Object.keys(body);
-    if (fields.some((key) => key !== "enabled" && key !== "chat_id" && key !== "project_ids")) {
-      return c.json({ error: "only enabled, chat_id, and project_ids are allowed" }, 400);
+    if (fields.some((key) => !["enabled", "chat_id", "project_ids", "notify_mode", "notify_open_id"].includes(key))) {
+      return c.json({ error: "only enabled, chat_id, project_ids, notify_mode, and notify_open_id are allowed" }, 400);
     }
     try {
+      const previous = readWorkspaceIssueTopics(workspace.settings);
       const issueTopics = parseIssueTopicConfig({
         enabled: body.enabled,
         chatId: body.chat_id,
         projectIds: body.project_ids,
+        notifyMode: body.notify_mode === undefined ? previous.notifyMode : body.notify_mode,
+        notifyOpenId: body.notify_open_id === undefined
+          ? previous.notifyOpenId : body.notify_open_id,
       });
       for (const projectId of issueTopics.projectIds ?? []) {
         const project = store.getProject(projectId);
@@ -1483,6 +1489,8 @@ function issueTopicConfigResponse(workspaceId: string, config: IssueTopicConfig)
       enabled: config.enabled,
       chat_id: config.chatId,
       project_ids: config.projectIds ?? null,
+      notify_mode: config.notifyMode ?? "group_owner",
+      notify_open_id: config.notifyOpenId ?? null,
     },
   };
 }

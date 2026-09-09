@@ -254,6 +254,13 @@ describe("native CLI resource contracts", () => {
       project_ids: ["prj_a", "prj_b"],
     });
 
+    await execute(issueTopics, ["ws_1", "--enabled", "--chat-id", "oc_topics", "--notify", "person", "--notify-open-id", "ou_reviewer"]);
+    expect(bodies.get("/api/workspaces/ws_1/issue-topics")).toMatchObject({ notify_mode: "person", notify_open_id: "ou_reviewer" });
+    await execute(issueTopics, ["ws_1", "--enabled", "--chat-id", "oc_topics", "--notify", "none"]);
+    expect(bodies.get("/api/workspaces/ws_1/issue-topics")).toMatchObject({ notify_mode: "none" });
+    await expect(execute(issueTopics, ["ws_1", "--enabled", "--chat-id", "oc_topics", "--notify", "person"]))
+      .rejects.toThrow("--notify-open-id");
+
     const organizer = specById("workspace.organizer.update");
     globalThis.fetch = mockFetch(organizer.id, [], async (request) => {
       const path = new URL(request.url).pathname;

@@ -906,6 +906,12 @@
       "scan_retry": "再試行"
     },
     "issueTopics": {
+      "notify_mode": "自動通知の宛先",
+      "notify_owner": "グループオーナー",
+      "notify_person": "指定したユーザー",
+      "notify_none": "メンションなし",
+      "notify_open_id": "通知先 open_id（Bot アプリ）",
+      "notify_invalid": "ou_ で始まる有効な open_id を入力してください。",
       "title": "Issue トピック同期",
       "description": "新しい Issue ごとに Feishu グループのトピックを作成し、以降の進捗と返信を同じスレッドに保持します。",
       "enabled": "新しい Issue のトピックを作成",

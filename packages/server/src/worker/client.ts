@@ -1,5 +1,6 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
+import { isFeishuOpenId, parseOutboundMention } from "@shared/feishu-mention.js";
 import type {
   MultiremiDaemonHeartbeatAck,
   MultiremiAgent,
@@ -330,6 +331,7 @@ export class MultiremiDaemonClient {
           body: String(rawOutbound.body ?? ""),
           bodyOrigin: (rawOutbound.body_origin ?? rawOutbound.bodyOrigin) === "agent" ? "agent" : "issue",
           idempotencyKey: String(rawOutbound.idempotency_key ?? rawOutbound.idempotencyKey ?? rawOutbound.id ?? ""),
+          mention: parseOutboundMention(rawOutbound.mention),
           ...(typeof rawOutbound.task_id === "string" ? {
             taskId: rawOutbound.task_id,
             resumeMessageId: typeof rawOutbound.resume_message_id === "string" ? rawOutbound.resume_message_id : null,
@@ -424,6 +426,19 @@ export class MultiremiDaemonClient {
         error: input.error ?? undefined,
       },
     );
+  }
+
+  async prepareFeishuBotOutboundMention(
+    runtimeId: string, deliveryId: string, claimToken: string, openId: string | null,
+  ): Promise<string | null> {
+    const result = await this.post<{ status?: string; mention_open_id?: unknown }>(
+      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/feishu-bot/outbound/${encodeURIComponent(deliveryId)}/result`,
+      { claim_token: claimToken, status: "prepared", mention_open_id: openId },
+    );
+    if (result.status !== "ok" || (result.mention_open_id !== null && !isFeishuOpenId(result.mention_open_id))) {
+      throw new Error("Invalid Feishu outbound mention checkpoint response");
+    }
+    return result.mention_open_id;
   }
 
   async fetchFeishuBotOutboundAttachment(

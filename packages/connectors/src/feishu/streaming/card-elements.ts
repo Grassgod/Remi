@@ -211,7 +211,6 @@ export function buildInitialCardJson(options?: {
   displayName?: string | null;
   nameSuffix?: string;
   subtitle?: string | null;
-  mentionOpenId?: string;
 }): Record<string, unknown> {
   return {
     schema: "2.0",
@@ -240,7 +239,6 @@ export function buildInitialCardJson(options?: {
           elements: [],
         },
         { tag: "markdown", content: "", element_id: "content" },
-        ...buildStatsFooter(null, options?.mentionOpenId),
       ],
     },
   };
@@ -257,7 +255,6 @@ export function buildProgressCard(args: {
   pendingPermission: PermissionFormElements | null;
   nameSuffix?: string;
   subtitle: string | null;
-  mentionOpenId?: string;
   stats?: string | null;
 }): Record<string, unknown> {
   const elements: Record<string, unknown>[] = [];
@@ -305,7 +302,7 @@ export function buildProgressCard(args: {
     elements.push(pf.form);
   }
 
-  elements.push(...buildStatsFooter(args.stats, args.mentionOpenId));
+  elements.push(...buildStatsFooter(args.stats));
 
   return {
     schema: "2.0",

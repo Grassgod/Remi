@@ -22140,7 +22140,9 @@
         "config": {
           "enabled": false,
           "chat_id": "",
-          "project_ids": null
+          "project_ids": null,
+          "notify_mode": "group_owner",
+          "notify_open_id": null
         }
       }
     },
