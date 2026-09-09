@@ -110,6 +110,13 @@ An authenticated local-login session represents the real `local` user and checks
 that user's memberships. Legacy workspace-scoped machine credentials retain
 their scope. User-issued native tokens cannot impersonate another user or mint
 login sessions; listing and revoking tokens also enforce the credential's scope.
+CLI exchange preserves the source workspace and the verified local-login identity
+without promoting legacy machine credentials into a human session.
+
+Comment authors, resolution actors, reactions and upload ownership follow the
+authenticated user or task agent. Caller-supplied actor fields remain available
+for deployment-master and auth-disabled requests. Comment resolution accepts an
+empty body even when the client sends `Content-Type: application/json`.
 
 ## Deprecated aliases
 
