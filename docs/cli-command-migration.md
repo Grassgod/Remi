@@ -90,6 +90,16 @@ and workspace membership permissions. A signed identity whose user no longer
 exists is rejected with `401`; deployment-master requests and unauthenticated
 requests in open local mode retain the existing `local` identity.
 
+## Project workspace context
+
+`remi project list|search|create` sends an explicit `workspace_id`. The Web
+project list, search, and create routes (`/api/projects`, `/api/projects/search`)
+also resolve `X-Workspace-Slug` when no explicit `workspace_id` is supplied.
+Create-body `workspace_id` takes precedence over the query parameter, which
+takes precedence over the slug. Without either context the existing `local`
+default remains. Unknown slugs and workspaces the user cannot access return
+`404`; a stale slug never redirects a project write into `local`.
+
 ## Deprecated aliases
 
 `remi wiki lint` is deprecated since `0.2.58` with no CLI replacement. Wiki
