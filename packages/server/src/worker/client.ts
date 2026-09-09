@@ -1,5 +1,6 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
+import { normalizeRepoList } from "@daemon/agent-runtime/repo/checkout.js";
 import { isFeishuOpenId, parseOutboundMention } from "@shared/feishu-mention.js";
 import type {
   MultiremiDaemonHeartbeatAck,
@@ -821,6 +822,7 @@ export class MultiremiDaemonClient {
         worktree_path: repo.worktreePath,
         branch_name: repo.branchName,
         base_ref: repo.baseRef,
+        base_commit: repo.baseCommit,
         status: repo.status,
         dirty: repo.dirty,
         error: repo.error,
@@ -1424,7 +1426,7 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
       ? raw.knowledge_warnings.filter((warning: unknown): warning is string => typeof warning === "string") : [],
     projectContexts: normalizeDaemonClaimProjectContexts(raw.project_contexts ?? raw.projectContexts),
     squadContext: normalizeDaemonClaimSquadContext(raw.squad_context ?? raw.squadContext),
-    repos: Array.isArray(raw.repos) ? raw.repos : [],
+    repos: normalizeRepoList(Array.isArray(raw.repos) ? raw.repos : []),
     usage: Array.isArray(raw.usage) ? raw.usage : [],
   };
   return normalized as MultiremiTaskWithAgent;
@@ -1696,7 +1698,7 @@ function normalizeDaemonClaimProjectContexts(raw: any): MultiremiTaskWithAgent["
       project,
       resources: normalizeDaemonClaimProjectResources(context.resources),
       docs,
-      repos: Array.isArray(context.repos) ? context.repos : [],
+      repos: normalizeRepoList(Array.isArray(context.repos) ? context.repos : []),
     }];
   });
 }

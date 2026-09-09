@@ -362,7 +362,7 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/projects/:id/resources", (c) => {
     const project = loadProjectForDocs(c, store, c.req.param("id"));
     if (project instanceof Response) return project;
-    const resources = store.listProjectResources(c.req.param("id")).map(projectResourceCompatibilityResponse);
+    const resources = store.listProjectResources(c.req.param("id")).map((resource) => projectResourceCompatibilityResponse(resource));
     return c.json({ resources, total: resources.length });
   });
   app.get("/api/projects/:id/devices", (c) => {

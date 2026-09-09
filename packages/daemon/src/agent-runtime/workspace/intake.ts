@@ -81,6 +81,7 @@ export async function prepareIntakeWorkspace(
           snapshot = await repoCache.createSnapshot({
             workspaceId: task.workspaceId,
             repoUrl: repo.url,
+            preferredRef: repo.defaultBranch,
             snapshotsRoot: options.snapshotsRoot,
             skipFetch: options.skipRepoFetch,
             signal: options.signal,

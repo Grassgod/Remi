@@ -1672,6 +1672,7 @@ export interface MultiremiIssueWorkspaceRepo {
   worktreePath: string;
   branchName: string;
   baseRef: string;
+  baseCommit?: string | null;
   status: "ready" | "dirty" | "error";
   dirty: boolean;
   error: string | null;
@@ -2960,6 +2961,7 @@ export interface CreateKnowledgeCompilationRunInput {
 export interface MultiremiRepoData {
   url: string;
   description?: string;
+  defaultBranch?: string;
 }
 
 export interface CreateProjectInput {

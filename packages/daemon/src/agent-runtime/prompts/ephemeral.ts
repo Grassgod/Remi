@@ -12,7 +12,7 @@ export interface TaskRepoCheckout {
 
 export interface TaskRepoWarning {
   repoUrl: string;
-  kind: "stale_cache" | "unavailable";
+  kind: "stale_cache" | "unavailable" | "default_branch_fallback";
   message: string;
 }
 
@@ -205,7 +205,9 @@ function appendRepositoryWarnings(sections: string[], warnings: TaskRepoWarning[
   for (const warning of warnings) {
     const repoUrl = inlineCode(warning.repoUrl.trim());
     const message = repositoryWarningMessage(warning.message);
-    if (warning.kind === "stale_cache") {
+    if (warning.kind === "default_branch_fallback") {
+      sections.push(`- ${repoUrl}: the configured default branch could not be resolved; the checkout uses a fallback base. Diagnostic: ${message}`);
+    } else if (warning.kind === "stale_cache") {
       sections.push(`- ${repoUrl}: remote refresh failed after retries, so the available checkout may use stale cached data. Do not assume it contains the latest remote changes. Diagnostic: ${message}`);
     } else {
       sections.push(`- ${repoUrl}: checkout is unavailable because repository preparation failed. Do not claim that you inspected its source code. Diagnostic: ${message}`);

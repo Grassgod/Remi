@@ -247,6 +247,7 @@ export interface AgentTaskSquadContext {
 export interface AgentTaskRepo {
   url: string;
   description?: string;
+  defaultBranch?: string;
 }
 
 /**
@@ -385,6 +386,7 @@ export interface AgentTask {
 export interface RepoSpec {
   url: string;
   description?: string;
+  defaultBranch?: string;
 }
 
 // --- Skill import (skills/skill-import.ts) ---------------------------------
