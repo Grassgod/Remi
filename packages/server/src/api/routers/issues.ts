@@ -13,6 +13,7 @@ import {
   issueFromParam,
   issueListQuery,
   issueMutationActor,
+  denyAttachmentCreationAccess,
   issueSubscriberCaller,
   issueSubscriberTarget,
   log,
@@ -1438,7 +1439,10 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       actorType: body.uploaderType ?? body.uploader_type,
       actorId: body.uploaderId ?? body.uploader_id,
     });
-    const attachment = store.createAttachment({ ...body, issueId: issue.id, uploaderType, uploaderId });
+    const input = { ...body, workspaceId: issue.workspaceId, issueId: issue.id, uploaderType, uploaderId };
+    const attachmentDenied = denyAttachmentCreationAccess(c, store, issue.workspaceId, input);
+    if (attachmentDenied) return attachmentDenied;
+    const attachment = store.createAttachment(input);
     return c.json({ attachment }, 201);
   });
   app.get("/api/multiremi/issues/:id/labels", (c) => {

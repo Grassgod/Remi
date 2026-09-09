@@ -5,6 +5,7 @@ import {
   createUploadAttachmentId,
   currentWorkspaceRole,
   denyAttachmentAccess,
+  denyAttachmentCreationAccess,
   denyCurrentUserWorkspaceAccess,
   denyCurrentUserCommentAccess,
   detectContentTypeFromFilename,
@@ -36,19 +37,14 @@ export function registerAttachmentRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.post("/api/multiremi/attachments", async (c) => {
     const body = await readJson<CreateAttachmentInput>(c);
-    const commentId = cleanString(body.commentId ?? body.comment_id);
-    if (commentId) {
-      const denied = denyCurrentUserCommentAccess(c, store, commentId);
-      if (denied) return denied;
-    }
     const workspaceId = cleanString(body.workspaceId) ?? cleanString(body.workspace_id) ?? "local";
-    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    const denied = denyAttachmentCreationAccess(c, store, workspaceId, body);
     if (denied) return denied;
     const { actorType: uploaderType, actorId: uploaderId } = issueMutationActor(c, {
       actorType: body.uploaderType ?? body.uploader_type,
       actorId: body.uploaderId ?? body.uploader_id,
     });
-    return c.json({ attachment: store.createAttachment({ ...body, uploaderType, uploaderId }) }, 201);
+    return c.json({ attachment: store.createAttachment({ ...body, workspaceId, uploaderType, uploaderId }) }, 201);
   });
 
   app.post("/api/upload-file", async (c) => {

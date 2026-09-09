@@ -18,6 +18,7 @@ import {
 import type { MultiremiRequestAuth } from "../wire/index.js";
 import type {
   CreateAccessTokenInput,
+  CreateAttachmentInput,
   MultiremiAccessToken,
   MultiremiAgent,
   MultiremiAttachment,
@@ -556,6 +557,37 @@ export function denyAttachmentAccess(c: Context, store: MultiremiStore, attachme
     if (denied) return denied;
   }
   return denyCurrentUserWorkspaceAccess(c, store, attachment.workspaceId);
+}
+
+export function denyAttachmentCreationAccess(
+  c: Context,
+  store: MultiremiStore,
+  workspaceId: string,
+  input: CreateAttachmentInput,
+): Response | null {
+  const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+  if (denied) return denied;
+  const issueId = cleanString(input.issueId ?? input.issue_id);
+  if (issueId && store.getIssue(issueId)?.workspaceId !== workspaceId) {
+    return c.json({ error: "issue not found" }, 404);
+  }
+  const commentId = cleanString(input.commentId ?? input.comment_id);
+  if (commentId) {
+    const comment = store.getIssueComment(commentId);
+    if (!comment || store.getIssue(comment.issueId)?.workspaceId !== workspaceId) {
+      return c.json({ error: "comment not found" }, 404);
+    }
+  }
+  const chatSessionId = cleanString(input.chatSessionId ?? input.chat_session_id);
+  const chatMessageId = cleanString(input.chatMessageId ?? input.chat_message_id);
+  const chatMessage = chatMessageId ? store.getChatMessage(chatMessageId) : null;
+  if (chatMessageId && !chatMessage) return c.json({ error: "chat message not found" }, 404);
+  for (const sessionId of new Set([chatSessionId, chatMessage?.chatSessionId].filter((id): id is string => Boolean(id)))) {
+    if (store.getChatSession(sessionId)?.workspaceId !== workspaceId) return c.json({ error: "chat session not found" }, 404);
+    const loaded = loadChatSessionForCurrentUser(c, store, sessionId);
+    if (loaded instanceof Response) return loaded;
+  }
+  return null;
 }
 
 export function hasJwtWorkspaceAccess(store: MultiremiStore, userId: string, workspaceId: string): boolean {
