@@ -124,6 +124,7 @@ describe("Multiremi API — daemon endpoints", () => {
           worktree_path: `/home/dev/.remi/multiremi/workspaces/${issue.key}/remi`,
           branch_name: `agent/${issue.key}`,
           base_ref: "refs/remotes/origin/main",
+          base_commit: "1234567890abcdef1234567890abcdef12345678",
           status: "ready",
           dirty: false,
         }],
@@ -147,7 +148,10 @@ describe("Multiremi API — daemon endpoints", () => {
         root_path: `/home/dev/.remi/multiremi/workspaces/${issue.key}`,
         branch_name: `agent/${issue.key}`,
         status: "in_use",
-        repos: [{ repo_name: "remi", branch_name: `agent/${issue.key}`, dirty: false }],
+        repos: [{
+          repo_name: "remi", branch_name: `agent/${issue.key}`, dirty: false,
+          base_ref: "refs/remotes/origin/main", base_commit: "1234567890abcdef1234567890abcdef12345678",
+        }],
       },
     });
 

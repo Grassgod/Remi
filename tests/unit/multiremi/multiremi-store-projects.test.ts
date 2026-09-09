@@ -87,7 +87,7 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
     expect(legacyLocal.resourceType).toBe("local_directory");
 
     const taskWithContext = store.getTaskWithAgent(task.id)!;
-    expect(taskWithContext.repos).toEqual([{ url: "https://github.com/example/repo-updated" }]);
+    expect(taskWithContext.repos).toEqual([{ url: "https://github.com/example/repo-updated", defaultBranch: "develop" }]);
     const prompt = buildTaskPrompt(taskWithContext);
     expect(prompt).toContain("## Project Context");
     expect(prompt).toContain("## Available Repositories");

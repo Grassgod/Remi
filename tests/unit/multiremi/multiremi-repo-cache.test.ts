@@ -9,6 +9,7 @@ import {
   multiremiRepoCacheLockPath,
   repoCacheTimeoutOverrides,
   repoSyncBudgetMs,
+  normalizeRepoList,
 } from "@multiremi/repo-cache.js";
 
 const tempDirs: string[] = [];
@@ -26,6 +27,121 @@ afterEach(() => {
 });
 
 describe("Multiremi repo cache", () => {
+  it("normalizes configured default branches from either wire casing", () => {
+    expect(normalizeRepoList([
+      { url: "repo-a", default_branch: " workflow-dev " },
+      { url: "repo-b", defaultBranch: "release", default_branch: "old" },
+      { url: "repo-c", default_branch: " " },
+    ])).toEqual([
+      { url: "repo-a", defaultBranch: "workflow-dev" },
+      { url: "repo-b", defaultBranch: "release" },
+      { url: "repo-c" },
+    ]);
+  });
+
+  it("bases issue branches on the preferred branch rather than an unrelated master", async () => {
+    const source = createRepo("workflow-dev", "workflow code");
+    const workflowCommit = git(source, ["rev-parse", "HEAD"]);
+    git(source, ["checkout", "--orphan", "master"]);
+    writeFileSync(join(source, "README.md"), "unrelated scaffold\n");
+    git(source, ["add", "README.md"]);
+    git(source, ["commit", "-m", "orphan scaffold"]);
+    const masterCommit = git(source, ["rev-parse", "HEAD"]);
+    const cache = new MultiremiRepoCache(tempDir("preferred-cache-"));
+    await cache.sync("local", [{ url: source }]);
+    const params = {
+      workspaceId: "local", repoUrl: source, workDir: tempDir("preferred-work-"),
+      branchName: "agent/MUL-278", preferredRef: "workflow-dev", skipFetch: true,
+    };
+
+    const created = await cache.createWorktree(params);
+    expect(created).toMatchObject({
+      baseRef: "refs/remotes/origin/workflow-dev", base_ref: "refs/remotes/origin/workflow-dev",
+      baseCommit: workflowCommit, base_commit: workflowCommit,
+      preferredRefResolved: true, preferred_ref_resolved: true, created: true,
+    });
+    expect(git(created.path, ["rev-parse", "HEAD"])).toBe(workflowCommit);
+    expect(spawnSync("git", ["merge-base", "HEAD", masterCommit], { cwd: created.path }).status).toBe(1);
+    writeFileSync(join(created.path, "wip.txt"), "keep my work\n");
+    for (const reuseExisting of [true, false]) {
+      const reused = await cache.createWorktree({ ...params, reuseExisting });
+      expect(reused).toMatchObject({ ...created, created: false });
+      expect(readFileSync(join(reused.path, "wip.txt"), "utf8")).toBe("keep my work\n");
+    }
+    const explicit = await cache.createSnapshot({
+      workspaceId: "local", repoUrl: source, snapshotsRoot: tempDir("explicit-snapshots-"),
+      ref: "master", preferredRef: "workflow-dev", skipFetch: true,
+    });
+    expect(explicit.baseRef).toBe("refs/remotes/origin/master");
+    expect(explicit.commit).toBe(masterCommit);
+    expect(explicit.preferredRefResolved).toBeUndefined();
+    const unrelated = await cache.createWorktree({ ...params, preferredRef: "master", reuseExisting: true });
+    expect(unrelated.baseCommit).toBeNull();
+    expect(git(unrelated.path, ["rev-parse", "HEAD"])).toBe(workflowCommit);
+    expect(readFileSync(join(unrelated.path, "wip.txt"), "utf8")).toBe("keep my work\n");
+  });
+
+  it.each(["origin-head", "main", "master"])("preserves the %s fallback without a preferred ref", async (fallback) => {
+    const source = createRepo("master", "master code");
+    git(source, ["branch", "main"]);
+    git(source, ["branch", "release"]);
+    const cache = new MultiremiRepoCache(tempDir("fallback-cache-"));
+    await cache.sync("local", [{ url: source }]);
+    const barePath = cache.lookup("local", source)!;
+    if (fallback === "origin-head") {
+      git(barePath, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/release"]);
+    } else {
+      tryGit(barePath, ["symbolic-ref", "-d", "refs/remotes/origin/HEAD"]);
+      if (fallback === "master") git(barePath, ["update-ref", "-d", "refs/remotes/origin/main"]);
+    }
+    const result = await cache.createWorktree({
+      workspaceId: "local", repoUrl: source, workDir: tempDir("fallback-work-"), skipFetch: true,
+    });
+    expect(result.baseRef).toBe(`refs/remotes/origin/${fallback === "origin-head" ? "release" : fallback}`);
+    expect(result.preferredRefResolved).toBeUndefined();
+  });
+
+  it("falls back for a missing preferred ref on every worktree and snapshot path but keeps explicit refs strict", async () => {
+    const source = createRepo("main", "fallback content");
+    const cache = new MultiremiRepoCache(tempDir("missing-preferred-cache-"));
+    await cache.sync("local", [{ url: source }]);
+    const params = {
+      workspaceId: "local", repoUrl: source, workDir: tempDir("missing-preferred-work-"),
+      snapshotsRoot: tempDir("missing-preferred-snapshots-"), preferredRef: "missing", skipFetch: true,
+    };
+    for (const reuseExisting of [false, true, false]) {
+      expect(await cache.createWorktree({ ...params, reuseExisting })).toMatchObject({
+        baseRef: "refs/remotes/origin/main", preferredRefResolved: false, preferred_ref_resolved: false,
+      });
+    }
+    for (const created of [true, false]) {
+      expect(await cache.createSnapshot(params)).toMatchObject({
+        baseRef: "refs/remotes/origin/main", preferredRefResolved: false, preferred_ref_resolved: false, created,
+      });
+    }
+    await expect(cache.createWorktree({ ...params, ref: "missing", preferredRef: "main" }))
+      .rejects.toThrow("cannot resolve requested ref");
+    await expect(cache.createSnapshot({ ...params, ref: "missing", preferredRef: "main" }))
+      .rejects.toThrow("cannot resolve requested ref");
+    expect(await cache.createSnapshot({ ...params, ref: "main" })).toMatchObject({ baseRef: "refs/remotes/origin/main" });
+    expect((await cache.createSnapshot({ ...params, ref: "main" })).preferredRefResolved).toBeUndefined();
+  });
+
+  it("reports the actual common baseline of an existing issue branch, not the advanced remote tip", async () => {
+    const source = createRepo("main", "baseline");
+    const cache = new MultiremiRepoCache(tempDir("baseline-cache-"));
+    await cache.sync("local", [{ url: source }]);
+    const params = { workspaceId: "local", repoUrl: source, workDir: tempDir("baseline-work-"), preferredRef: "main" };
+    const first = await cache.createWorktree(params);
+    writeFileSync(join(source, "README.md"), "advanced\n");
+    git(source, ["add", "README.md"]);
+    git(source, ["commit", "-m", "advance remote"]);
+    await cache.sync("local", [{ url: source }]);
+    const reused = await cache.createWorktree({ ...params, reuseExisting: true });
+    expect(reused.baseCommit).toBe(first.baseCommit);
+    expect(reused.baseCommit).not.toBe(git(source, ["rev-parse", "HEAD"]));
+  });
+
   it("uses a remote-tracking fetch layout before creating agent worktrees", async () => {
     const source = createRepo("main", "main content");
     const cacheRoot = tempDir("multiremi-repo-cache-");

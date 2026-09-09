@@ -22,6 +22,35 @@ afterEach(() => {
 });
 
 describe("intake workspace", () => {
+  it("materializes the configured default branch and reuses its immutable snapshot", async () => {
+    const source = createRepo();
+    execFileSync("git", ["checkout", "-b", "workflow-dev"], { cwd: source, stdio: "pipe" });
+    writeFileSync(join(source, "README.md"), "workflow snapshot\n");
+    execFileSync("git", ["commit", "-am", "workflow content"], { cwd: source, stdio: "pipe" });
+    const commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: source, encoding: "utf8" }).trim();
+    execFileSync("git", ["checkout", "main"], { cwd: source, stdio: "pipe" });
+    const cache = new MultiremiRepoCache(tempDir("intake-default-cache-"));
+    await cache.sync("local", [{ url: source }]);
+    const workDir = tempDir("intake-default-work-");
+    const snapshotsRoot = tempDir("intake-default-snapshots-");
+    const task = {
+      id: "tsk_default", workspaceId: "local", issueId: "iss_default",
+      projectContexts: [{
+        project: { id: "prj_default", title: "Default" }, resources: [], docs: [],
+        repos: [{ url: source, defaultBranch: "workflow-dev" }],
+      }],
+    } as unknown as AgentTask;
+    for (const created of [true, false]) {
+      const snapshot = await cache.createSnapshot({ workspaceId: "local", repoUrl: source, snapshotsRoot, preferredRef: "workflow-dev" });
+      expect(snapshot).toMatchObject({ commit, baseRef: "refs/remotes/origin/workflow-dev", preferredRefResolved: true, created });
+      const prepared = await prepareIntakeWorkspace(workDir, task, cache, { snapshotsRoot });
+      expect(prepared.repos[0]?.status).toBe("ready");
+      expect(readFileSync(join(prepared.repos[0]!.worktreePath, "README.md"), "utf8")).toBe("workflow snapshot\n");
+      const manifest = JSON.parse(readFileSync(join(workDir, "manifest.json"), "utf8"));
+      expect(manifest.projects[0].repos[0]).toMatchObject({ commit, base_ref: "refs/remotes/origin/workflow-dev" });
+    }
+  });
+
   it("materializes project-scoped knowledge and links immutable repo snapshots", async () => {
     const source = createRepo();
     const sameNameSource = createRepo();

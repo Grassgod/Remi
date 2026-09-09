@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it } from "bun:test";
 import type { MultiremiRepoData } from "@multiremi/contracts/types.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
+import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
+import { projectResourceCompatibilityResponse } from "@multiremi/api/wire/projects.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -35,6 +37,52 @@ function taskReposForProject(store: MultiremiStore, projectId: string): Multirem
 }
 
 describe("Bun Multiremi project_ref resource", () => {
+  it.each([
+    { configured: "workflow-dev", hint: "master", expected: "workflow-dev" },
+    { configured: null, hint: "legacy", expected: "legacy" },
+    { configured: null, hint: undefined, expected: undefined },
+  ])("derives task and intake branches from repository records before legacy hints: %j", ({ configured, hint, expected }) => {
+    const store = createStore();
+    const url = "git@github.com:acme/default-branch.git";
+    importRepositories(store, [url]);
+    const project = store.createProject({
+      title: "Default branch",
+      resources: [{ resourceType: "github_repo", resourceRef: { url, default_branch_hint: hint } }],
+    });
+    store.updateWorkspace("local", { repos: configured ? [{
+      url: "ssh://git@github.com/acme/default-branch", default_branch: configured,
+    }] : [] });
+    expect(taskReposForProject(store, project.id)).toEqual([{ url, ...(expected ? { defaultBranch: expected } : {}) }]);
+
+    const agent = store.createAgent({ name: "Intake worker", provider: "codex" });
+    for (const issueKind of ["code", "intake"] as const) {
+      const issue = store.createIssue({ title: "Branch wire", projectId: project.id, ...(issueKind === "intake" ? { issueKind } : {}) });
+      const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Inspect" });
+      const hydrated = store.getTaskWithAgent(task.id)!;
+      expect(hydrated.repos[0]?.defaultBranch).toBe(expected);
+      const wire = daemonTaskClaimResponse(store, hydrated) as any;
+      expect(wire.repos[0]).toEqual({ url, ...(expected ? { default_branch: expected } : {}) });
+      expect(wire.project_resources[0].resource_ref).toEqual({ url, ...(expected ? { default_branch_hint: expected } : {}) });
+      if (issueKind === "intake") {
+        expect(hydrated.projectContexts[0]?.repos[0]?.defaultBranch).toBe(expected);
+        expect(wire.project_contexts[0].repos).toEqual(wire.repos);
+        expect(wire.project_contexts[0].resources).toEqual(wire.project_resources);
+      }
+    }
+    const stored = store.listProjectResources(project.id)[0]!;
+    expect(stored.resourceRef.default_branch_hint).toBe(hint);
+    expect(projectResourceCompatibilityResponse(stored).resource_ref).toEqual({ url, ...(hint ? { default_branch_hint: hint } : {}) });
+  });
+
+  it("uses repository defaults when falling back to the workspace repository catalog", () => {
+    const store = createStore();
+    const url = "https://github.com/acme/default-branch.git";
+    store.ensureLocalWorkspace();
+    store.updateWorkspace("local", { repos: [{ url, default_branch: "workflow-dev" }] });
+    const project = store.createProject({ title: "No resource" });
+    expect(taskReposForProject(store, project.id)).toEqual([{ url, defaultBranch: "workflow-dev" }]);
+  });
+
   it("normalizes both casings to a deterministic {projectId, project_id} ref", () => {
     const store = createStore();
     const target = store.createProject({ title: "Target" });

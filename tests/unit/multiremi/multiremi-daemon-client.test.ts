@@ -32,6 +32,35 @@ afterEach(() => {
 });
 
 describe("MultiremiDaemonClient request deadlines", () => {
+  it.each(["default_branch", "defaultBranch"])("normalizes %s in task and intake repository claims", async (field) => {
+    const repos = [{ url: "https://example.test/repo.git", [field]: "workflow-dev" }];
+    globalThis.fetch = (async () => Response.json({ task: {
+      id: "tsk_default", workspace_id: "local", agent_id: "agt_default", prompt: "Inspect", repos,
+      project_contexts: [{ project: { id: "prj_default", title: "Default" }, resources: [], docs: [], repos }],
+    } })) as unknown as typeof fetch;
+    const task = await new MultiremiDaemonClient("https://remi.example", "daemon-token").claimTask("runtime-1");
+    expect(task?.repos).toEqual([{ url: "https://example.test/repo.git", defaultBranch: "workflow-dev" }]);
+    expect(task?.projectContexts[0]?.repos).toEqual(task?.repos);
+  });
+
+  it("reports complete baseline refs and commits to the workspace API", async () => {
+    let body: any;
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      body = JSON.parse(String(init?.body));
+      return Response.json({});
+    }) as typeof fetch;
+    const baseCommit = "a".repeat(40);
+    await new MultiremiDaemonClient("https://remi.example", "daemon-token").reportIssueWorkspace("tsk_default", {
+      runtimeId: "runtime-1", rootPath: "/work", branchName: "agent/MUL-278", status: "ready",
+      repos: [{
+        repoUrl: "https://example.test/repo.git", repoName: "repo", worktreePath: "/work/repo",
+        branchName: "agent/MUL-278", baseRef: "refs/remotes/origin/workflow-dev", baseCommit,
+        status: "ready", dirty: false, error: null,
+      }],
+    });
+    expect(body.repos[0]).toMatchObject({ base_ref: "refs/remotes/origin/workflow-dev", base_commit: baseCommit });
+  });
+
   it.each([
     ["GET", "/api/daemon/ssh-mesh/config?runtime_id=runtime-1", (client: MultiremiDaemonClient) => client.getSshMeshConfig("runtime-1")],
     ["POST", "/api/daemon/heartbeat", (client: MultiremiDaemonClient) => client.heartbeatRuntime("runtime-1")],

@@ -3440,7 +3440,7 @@ function normalizeRepos(rawRepos: unknown[], defaultBranchFor?: (url: string) =>
     if (!url || seen.has(url)) continue;
     seen.add(url);
     const description = typeof record.description === "string" ? record.description : "";
-    const defaultBranch = defaultBranchFor?.(url)
+    const defaultBranch = (defaultBranchFor ? defaultBranchFor(url) : String(record.defaultBranch ?? "").trim())
       || String(record.default_branch_hint ?? record.defaultBranchHint ?? "").trim();
     repos.push({ url, ...(description ? { description } : {}), ...(defaultBranch ? { defaultBranch } : {}) });
   }
