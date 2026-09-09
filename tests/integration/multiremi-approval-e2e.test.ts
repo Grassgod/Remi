@@ -12,19 +12,30 @@ import type { MultiremiTaskHumanRequest, MultiremiTaskStatus } from "@multiremi/
 
 let db: Database | null = null;
 let workDir: string | null = null;
+let activeHarness: Harness | null = null;
+let activeServer: ReturnType<typeof startMultiremiServer> | null = null;
 const originalUnattendedHumanRequestTimeoutMs = process.env.MULTIREMI_UNATTENDED_HUMAN_REQUEST_TIMEOUT_MS;
 
-afterEach(() => {
-  db?.close();
-  db = null;
-  if (workDir) {
-    rmSync(workDir, { recursive: true, force: true });
-    workDir = null;
-  }
-  if (originalUnattendedHumanRequestTimeoutMs === undefined) {
-    delete process.env.MULTIREMI_UNATTENDED_HUMAN_REQUEST_TIMEOUT_MS;
-  } else {
-    process.env.MULTIREMI_UNATTENDED_HUMAN_REQUEST_TIMEOUT_MS = originalUnattendedHumanRequestTimeoutMs;
+afterEach(async () => {
+  // Bun timeouts can bypass finally in the test body. Drain the worker while
+  // HTTP and the database are still available, then release shared resources.
+  try {
+    if (activeHarness) await stopHarness(activeHarness);
+  } finally {
+    activeHarness = null;
+    activeServer?.stop(true);
+    activeServer = null;
+    db?.close();
+    db = null;
+    if (workDir) {
+      rmSync(workDir, { recursive: true, force: true });
+      workDir = null;
+    }
+    if (originalUnattendedHumanRequestTimeoutMs === undefined) {
+      delete process.env.MULTIREMI_UNATTENDED_HUMAN_REQUEST_TIMEOUT_MS;
+    } else {
+      process.env.MULTIREMI_UNATTENDED_HUMAN_REQUEST_TIMEOUT_MS = originalUnattendedHumanRequestTimeoutMs;
+    }
   }
 });
 
@@ -68,6 +79,25 @@ interface Harness {
   outcomes: PermissionOutcome[];
   elicitationResults: unknown[];
   run: Promise<void>;
+  cleanup?: Promise<void>;
+}
+
+function stopHarness(h: Harness): Promise<void> {
+  return h.cleanup ??= (async () => {
+    h.daemon.stop();
+    const status = h.store.getTaskStatus(h.taskId);
+    if (status && !["completed", "failed", "cancelled"].includes(status)) {
+      h.store.cancelTask(h.taskId);
+    }
+    for (const request of h.store.listTaskHumanRequests(h.taskId)) {
+      if (request.status === "pending") h.store.expireTaskHumanRequest(request.id, "cancelled");
+    }
+    try {
+      await h.run;
+    } finally {
+      h.server.stop(true);
+    }
+  })();
 }
 
 /**
@@ -100,6 +130,7 @@ async function startHarness(options: {
       })()
     : store.createTask({ agentId: agent.id, prompt: "Do something dangerous" });
   const server = startMultiremiServer({ store, scheduler: null, hostname: "127.0.0.1", port: 0 });
+  activeServer = server;
   const baseUrl = `http://127.0.0.1:${server.port}`;
   const daemonToken = await store.createAccessToken({
     name: "Approval E2E daemon",
@@ -151,6 +182,7 @@ async function startHarness(options: {
     provider: "claude",
     workspaceId: "local",
     once: true,
+    pollIntervalMs: 250,
     daemonPort: 0,
     repoCacheRoot: join(workDir, ".repo-cache"),
     approvalMode: options.approvalMode ?? "ask",
@@ -159,7 +191,8 @@ async function startHarness(options: {
     providerFactory,
   });
 
-  return { store, server, daemon, taskId: task.id, baseUrl, outcomes, elicitationResults, run: daemon.start() };
+  activeHarness = { store, server, daemon, taskId: task.id, baseUrl, outcomes, elicitationResults, run: daemon.start() };
+  return activeHarness;
 }
 
 async function waitFor<T>(probe: () => T | null | undefined, label: string, timeoutMs = 15_000): Promise<T> {
@@ -187,6 +220,19 @@ async function respond(baseUrl: string, taskId: string, requestId: string, body:
 }
 
 describe("Multiremi approval routing e2e", () => {
+  it("drains a pending approval before closing the server", async () => {
+    const h = await startHarness();
+    const pending = await waitFor(
+      () => h.store.listTaskHumanRequests(h.taskId).find((r) => r.status === "pending"),
+      "pending permission request",
+    );
+    await stopHarness(h);
+    expect(h.store.getTaskStatus(h.taskId)).toBe("cancelled");
+    expect(h.store.getTaskHumanRequest(pending.id)?.status).toBe("cancelled");
+    await expect(fetch(`${h.baseUrl}/api/health`)).rejects.toThrow();
+    await stopHarness(h);
+  });
+
   it("routes a permission request to a human and honors the approval", async () => {
     const h = await startHarness();
     try {
@@ -227,7 +273,7 @@ describe("Multiremi approval routing e2e", () => {
       expect(types).toContain("permission_request");
       expect(types).toContain("permission_response");
     } finally {
-      h.server.stop(true);
+      await stopHarness(h);
     }
   });
 
@@ -266,7 +312,7 @@ describe("Multiremi approval routing e2e", () => {
       expect(types).toContain("question_request");
       expect(types).toContain("question_response");
     } finally {
-      h.server.stop(true);
+      await stopHarness(h);
     }
   });
 
@@ -287,7 +333,7 @@ describe("Multiremi approval routing e2e", () => {
       expect(h.outcomes).toEqual([{ outcome: "selected", optionId: "opt-allow-always" }]);
       expect(h.elicitationResults).toEqual([{ action: "accept", content: { question_0: "production" } }]);
     } finally {
-      h.server.stop(true);
+      await stopHarness(h);
     }
   });
 
@@ -305,7 +351,7 @@ describe("Multiremi approval routing e2e", () => {
       // The task itself resumes and completes — a denied tool is not a failure.
       expect(h.store.getTask(h.taskId)!.status).toBe("completed");
     } finally {
-      h.server.stop(true);
+      await stopHarness(h);
     }
   });
 
@@ -325,7 +371,7 @@ describe("Multiremi approval routing e2e", () => {
       expect(h.outcomes).toEqual([{ outcome: "cancelled" }]);
       expect(h.store.getTaskHumanRequest(pending.id)!.status).toBe("timeout");
     } finally {
-      h.server.stop(true);
+      await stopHarness(h);
     }
   });
 
@@ -346,7 +392,7 @@ describe("Multiremi approval routing e2e", () => {
       await h.run;
       expect(h.outcomes).toEqual([{ outcome: "selected", optionId: "opt-allow-once" }]);
     } finally {
-      h.server.stop(true);
+      await stopHarness(h);
     }
   });
 
@@ -369,7 +415,7 @@ describe("Multiremi approval routing e2e", () => {
       expect(h.store.getTaskHumanRequest(pending.id)!.status).toBe("timeout");
       expect(h.store.getTask(h.taskId)!.status).toBe("completed");
     } finally {
-      h.server.stop(true);
+      await stopHarness(h);
     }
   });
 });
