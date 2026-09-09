@@ -132,11 +132,19 @@ export function registerTokenRoutes(app: Hono, deps: RouterDeps): void {
     }
 
     const body = await readJson<Partial<CreateAccessTokenInput>>(c);
+    const workspaceId = body.workspaceId ?? body.workspace_id ?? "local";
+    const userId = authenticatedRequestUserId(c);
+    if (userId) {
+      const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+      if (denied) return denied;
+    }
     try {
       const token = await store.createAccessToken({
-        workspaceId: body.workspaceId ?? body.workspace_id ?? "local",
+        workspaceId,
+        userId: userId ?? undefined,
         name: body.name ?? "Renewed local token",
-        type: body.type ?? "pat",
+        type: userId ? "pat" : body.type ?? "pat",
+        purpose: userId === "local" ? "session" : undefined,
         expiresInDays: body.expiresInDays ?? body.expires_in_days ?? 30,
       });
       return c.json({
