@@ -56,6 +56,22 @@ Use `remi help <path>` or `remi <path> --help` for the registered positional and
 option contract. All capability commands declare their authentication identities,
 mutation class, and `table|json|jsonl` output contract in the Registry.
 
+### Repository checkout defaults
+
+`remi repo checkout <repository-or-url>` without `--ref` prefers the workspace
+repository's configured `default_branch`. Direct URLs use a best-effort lookup
+in the repository directory; lookup failures do not prevent checkout. If the
+configured branch cannot be resolved, checkout falls back to the existing remote
+default selection (`origin/HEAD`, then `main`, then `master`). An explicit `--ref`
+remains strict: an unknown branch or commit fails rather than falling back.
+
+Issue worktrees and intake snapshots use the same preference. Repository records
+are authoritative; stored project resource `default_branch_hint` values remain
+read-time fallbacks, without rewriting resource rows. Existing issue worktrees
+are preserved, not reset to a newly configured branch. Workspace API `base_ref`
+retains its full ref; `base_commit` reports the common baseline with the existing
+worktree HEAD, or null when no common ancestor can be resolved.
+
 The Feishu ingestion domain exposes source administration through
 `remi feishu source list|get|status|add|update` and task-safe processing through
 `remi feishu messages list|resolve|notify|draft-reply|propose-issue`. Issue

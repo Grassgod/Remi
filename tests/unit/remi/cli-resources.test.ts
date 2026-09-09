@@ -372,7 +372,7 @@ describe("native CLI resource contracts", () => {
     });
 
     await execute(spec, ["https://example.test/direct.git", "--daemon-port", "6121", "--output", "json"]);
-    expect(requests.filter((request) => new URL(request.url).pathname.endsWith("/repos"))).toHaveLength(0);
+    expect(requests.filter((request) => new URL(request.url).pathname.endsWith("/repos"))).toHaveLength(1);
     await execute(spec, ["repo_123", "--daemon-port", "6121", "--ref", "feature", "--output", "json"]);
     expect(daemonBodies).toEqual([
       expect.objectContaining({ url: "https://example.test/direct.git", ref: "" }),
@@ -409,6 +409,54 @@ describe("native CLI resource contracts", () => {
       "https://example.test/fail.git",
       "--daemon-port", "6121",
     ])).rejects.toMatchObject({ code: "server", status: 500 });
+  });
+
+  it("uses repository default branches as preferred_ref unless an explicit ref is supplied", async () => {
+    useCliEnv();
+    const spec = specById("repo.checkout");
+    const bodies: any[] = [];
+    let directoryReads = 0;
+    globalThis.fetch = mockFetch(spec.id, [], async (request) => {
+      if (new URL(request.url).hostname === "127.0.0.1") {
+        bodies.push(await request.json());
+        return Response.json({ path: "/tmp/worktree" });
+      }
+      directoryReads++;
+      return Response.json({ repositories: [{
+        id: "repo_123456", name: "Remi", url: "ssh://git@example.test/team/remi.git", default_branch: "workflow-dev",
+      }] });
+    });
+    for (const input of ["repo_123", "Remi", "git@example.test:team/remi.git"]) {
+      await execute(spec, [input, "--daemon-port", "6121"]);
+      expect(bodies.at(-1)).toMatchObject({ preferred_ref: "workflow-dev", ref: "" });
+      await execute(spec, [input, "--daemon-port", "6121", "--ref", "release"]);
+      expect(bodies.at(-1).ref).toBe("release");
+      expect(bodies.at(-1)).not.toHaveProperty("preferred_ref");
+    }
+    const previousReads = directoryReads;
+    await execute(spec, ["git@example.test:team/remi.git", "--daemon-port", "6121", "--ref", "missing"]);
+    expect(directoryReads).toBe(previousReads);
+    expect(bodies.at(-1).ref).toBe("missing");
+    expect(bodies.at(-1)).not.toHaveProperty("preferred_ref");
+  });
+
+  it.each(["missing", "blank", "unavailable"])("keeps direct URL checkout usable when repository defaults are %s", async (state) => {
+    useCliEnv();
+    const spec = specById("repo.checkout");
+    let body: any;
+    globalThis.fetch = mockFetch(spec.id, [], async (request) => {
+      if (new URL(request.url).hostname === "127.0.0.1") {
+        body = await request.json();
+        return Response.json({ path: "/tmp/worktree" });
+      }
+      if (state === "unavailable") return Response.json({ error: "unavailable" }, { status: 403 });
+      return Response.json({ repositories: state === "missing" ? [] : [{
+        id: "repo_blank", url: "https://example.test/remi.git", default_branch: " ",
+      }] });
+    });
+    await execute(spec, ["https://example.test/remi.git", "--daemon-port", "6121"]);
+    expect(body).toMatchObject({ url: "https://example.test/remi.git", ref: "" });
+    expect(body).not.toHaveProperty("preferred_ref");
   });
 
   it("keeps project discovery open to task credentials and renders defaults columns", async () => {

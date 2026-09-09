@@ -2852,6 +2852,7 @@ export class MultiremiDaemon {
         const result = await this.repoCache.createWorktree({
           workspaceId: task.workspaceId,
           repoUrl: repo.url,
+          preferredRef: repo.defaultBranch,
           workDir: resolvedWorkDir.workDir,
           agentName: task.agent?.name ?? "agent",
           taskId: task.issue?.key || task.id,
@@ -2861,6 +2862,16 @@ export class MultiremiDaemon {
           signal,
           coAuthoredByEnabled: this.workspaceCoAuthoredByEnabled(task.workspaceId),
         });
+        if (result.preferredRefResolved === false) {
+          const message = `Configured default branch ${JSON.stringify(repo.defaultBranch)} could not be resolved; fell back to ${result.baseRef}`;
+          const previous = warnings.find((warning) => warning.repoUrl === repo.url);
+          upsertRepoWarning(warnings, {
+            repoUrl: repo.url,
+            kind: previous?.kind ?? "default_branch_fallback",
+            message: previous ? `${previous.message}; ${message}` : message,
+          });
+          log.warn(`Auto checkout of ${repo.url} for task ${task.id}: ${message}`);
+        }
         checkouts.push({ repoUrl: repo.url, path: result.path, branch: result.branchName, baseRef: result.baseRef });
         workspaceRepos.push({
           repoUrl: repo.url,
@@ -2868,6 +2879,7 @@ export class MultiremiDaemon {
           worktreePath: result.path,
           branchName: result.branchName,
           baseRef: result.baseRef,
+          baseCommit: result.baseCommit,
           status: "ready",
           dirty: false,
           error: null,
@@ -3646,6 +3658,7 @@ export class MultiremiDaemon {
         repoUrl,
         workDir,
         ref: stringField(body.ref) ?? undefined,
+        preferredRef: stringField(body.preferred_ref ?? body.preferredRef) ?? undefined,
         agentName: stringField(body.agent_name ?? body.agentName) ?? "agent",
         taskId: stringField(body.task_id ?? body.taskId) ?? "task",
         signal: request.signal,

@@ -20,6 +20,7 @@ export interface MultiremiWorktreeParams {
   repoUrl: string;
   workDir: string;
   ref?: string;
+  preferredRef?: string;
   agentName?: string;
   taskId?: string;
   /** Stable branch for Issue workspaces, for example agent/MUL-28. */
@@ -43,6 +44,10 @@ export interface MultiremiWorktreeResult {
   created: boolean;
   base_ref: string;
   baseRef: string;
+  base_commit: string | null;
+  baseCommit: string | null;
+  preferred_ref_resolved?: boolean;
+  preferredRefResolved?: boolean;
 }
 
 export interface MultiremiSnapshotParams {
@@ -50,6 +55,7 @@ export interface MultiremiSnapshotParams {
   repoUrl: string;
   snapshotsRoot: string;
   ref?: string;
+  preferredRef?: string;
   /** The caller already refreshed this repo in the same preparation flow. */
   skipFetch?: boolean;
   signal?: AbortSignal;
@@ -59,6 +65,9 @@ export interface MultiremiSnapshotResult {
   path: string;
   commit: string;
   baseRef: string;
+  base_ref: string;
+  preferred_ref_resolved?: boolean;
+  preferredRefResolved?: boolean;
   created: boolean;
 }
 
@@ -262,7 +271,8 @@ export class MultiremiRepoCache {
           signal: params.signal,
         });
       }
-      const baseRef = resolveBaseRef(barePath, params.ref);
+      const resolution = resolveBaseRef(barePath, params.ref, params.preferredRef);
+      const { baseRef } = resolution;
       const commit = git(barePath, ["rev-parse", `${baseRef}^{commit}`]);
       const repoRoot = join(
         params.snapshotsRoot,
@@ -271,7 +281,7 @@ export class MultiremiRepoCache {
       );
       const snapshotPath = join(repoRoot, commit);
       if (existsSync(snapshotPath)) {
-        return { path: snapshotPath, commit, baseRef, created: false };
+        return { path: snapshotPath, commit, ...resolution, created: false };
       }
 
       mkdirSync(repoRoot, { recursive: true });
@@ -302,7 +312,7 @@ export class MultiremiRepoCache {
         rmSync(temporaryPath, { recursive: true, force: true });
         throw error;
       }
-      return { path: snapshotPath, commit, baseRef, created: true };
+      return { path: snapshotPath, commit, ...resolution, created: true };
     }, params.signal);
   }
 
@@ -333,10 +343,10 @@ export class MultiremiRepoCache {
       if (requestedBranch && currentBranch !== requestedBranch) {
         throw new Error(`worktree ${worktreePath} is on ${currentBranch}, expected ${requestedBranch}; refusing to switch a persistent workspace`);
       }
-      const baseRef = resolveBaseRef(barePath, params.ref);
+      const resolution = resolveBaseRef(barePath, params.ref, params.preferredRef);
       excludeAgentFiles(worktreePath);
       applyCoAuthoredByHook(worktreePath, params.coAuthoredByEnabled !== false);
-      return { path: worktreePath, branch_name: currentBranch, branchName: currentBranch, created: false, base_ref: baseRef, baseRef };
+      return { path: worktreePath, branch_name: currentBranch, branchName: currentBranch, created: false, ...worktreeBaseResult(worktreePath, resolution) };
     }
 
     if (!params.skipFetch) {
@@ -347,7 +357,8 @@ export class MultiremiRepoCache {
       });
     }
 
-    const baseRef = resolveBaseRef(barePath, params.ref);
+    const resolution = resolveBaseRef(barePath, params.ref, params.preferredRef);
+    const { baseRef } = resolution;
     const branchName = requestedBranch ?? `agent/${sanitizeName(params.agentName ?? "agent")}/${shortId(params.taskId ?? "task")}`;
 
     if (existsSync(worktreePath)) {
@@ -360,7 +371,7 @@ export class MultiremiRepoCache {
       }
       excludeAgentFiles(worktreePath);
       applyCoAuthoredByHook(worktreePath, params.coAuthoredByEnabled !== false);
-      return { path: worktreePath, branch_name: currentBranch, branchName: currentBranch, created: false, base_ref: baseRef, baseRef };
+      return { path: worktreePath, branch_name: currentBranch, branchName: currentBranch, created: false, ...worktreeBaseResult(worktreePath, resolution) };
     }
 
     mkdirSync(params.workDir, { recursive: true });
@@ -377,7 +388,7 @@ export class MultiremiRepoCache {
     }
     excludeAgentFiles(worktreePath);
     applyCoAuthoredByHook(worktreePath, params.coAuthoredByEnabled !== false);
-    return { path: worktreePath, branch_name: branchName, branchName, created: true, base_ref: baseRef, baseRef };
+    return { path: worktreePath, branch_name: branchName, branchName, created: true, ...worktreeBaseResult(worktreePath, resolution) };
   }
 
   private barePath(workspaceId: string, repoUrl: string): string {
@@ -487,7 +498,9 @@ export function normalizeRepoList(rawRepos: unknown[]): MultiremiRepoData[] {
     if (!url || seen.has(url)) continue;
     seen.add(url);
     const description = typeof record.description === "string" ? record.description : "";
-    repos.push(description ? { url, description } : { url });
+    const rawDefaultBranch = record.defaultBranch ?? record.default_branch;
+    const defaultBranch = typeof rawDefaultBranch === "string" ? rawDefaultBranch.trim() : "";
+    repos.push({ url, ...(description ? { description } : {}), ...(defaultBranch ? { defaultBranch } : {}) });
   }
   return repos;
 }
@@ -827,16 +840,34 @@ function isGitWorktree(path: string): boolean {
   }
 }
 
-function resolveBaseRef(barePath: string, requestedRef?: string): string {
+function resolveBaseRef(barePath: string, requestedRef?: string, preferredRef?: string) {
   const ref = requestedRef?.trim();
   if (ref) {
-    const candidates = [`refs/remotes/origin/${ref}`, `refs/tags/${ref}`, ref];
-    for (const candidate of candidates) {
-      if (gitRefExists(barePath, `${candidate}^{commit}`)) return candidate;
-    }
+    const baseRef = resolveConfiguredRef(barePath, ref);
+    if (baseRef) return { base_ref: baseRef, baseRef };
     throw new Error(`cannot resolve requested ref ${JSON.stringify(ref)} in repo cache at ${barePath}`);
   }
+  const preferred = preferredRef?.trim();
+  const resolved = preferred ? resolveConfiguredRef(barePath, preferred) : undefined;
+  const baseRef = resolved ?? resolveDefaultBaseRef(barePath);
+  return {
+    base_ref: baseRef,
+    baseRef,
+    ...(preferred ? { preferred_ref_resolved: Boolean(resolved), preferredRefResolved: Boolean(resolved) } : {}),
+  };
+}
 
+function resolveConfiguredRef(barePath: string, ref: string): string | undefined {
+  return [`refs/remotes/origin/${ref}`, `refs/tags/${ref}`, ref]
+    .find((candidate) => gitRefExists(barePath, `${candidate}^{commit}`));
+}
+
+function worktreeBaseResult(worktreePath: string, resolution: ReturnType<typeof resolveBaseRef>) {
+  const baseCommit = git(worktreePath, ["merge-base", "HEAD", resolution.baseRef], { allowFailure: true }) || null;
+  return { ...resolution, base_commit: baseCommit, baseCommit };
+}
+
+function resolveDefaultBaseRef(barePath: string): string {
   const originHead = git(barePath, ["symbolic-ref", "refs/remotes/origin/HEAD"], { allowFailure: true });
   if (originHead && gitRefExists(barePath, originHead)) return originHead;
   for (const candidate of ["refs/remotes/origin/main", "refs/remotes/origin/master"]) {

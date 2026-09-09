@@ -230,13 +230,16 @@ export function projectSearchErrorResponse(c: Context, err: unknown): Response |
   return null;
 }
 
-export function projectResourceCompatibilityResponse(resource: MultiremiProjectResource): Record<string, unknown> {
+export function projectResourceCompatibilityResponse(
+  resource: MultiremiProjectResource,
+  defaultBranchFor?: (url: string) => string | undefined,
+): Record<string, unknown> {
   return {
     id: resource.id,
     project_id: resource.projectId,
     workspace_id: resource.workspaceId,
     resource_type: resource.resourceType,
-    resource_ref: projectResourceRefCompatibilityResponse(resource),
+    resource_ref: projectResourceRefCompatibilityResponse(resource, defaultBranchFor),
     label: resource.label,
     position: resource.position,
     created_at: resource.createdAt,
@@ -244,10 +247,14 @@ export function projectResourceCompatibilityResponse(resource: MultiremiProjectR
   };
 }
 
-function projectResourceRefCompatibilityResponse(resource: MultiremiProjectResource): Record<string, unknown> {
+function projectResourceRefCompatibilityResponse(
+  resource: MultiremiProjectResource,
+  defaultBranchFor?: (url: string) => string | undefined,
+): Record<string, unknown> {
   if (resource.resourceType === "github_repo") {
     const url = String(resource.resourceRef.url ?? "");
-    const defaultBranchHint = String(resource.resourceRef.default_branch_hint ?? resource.resourceRef.defaultBranchHint ?? "").trim();
+    const defaultBranchHint = defaultBranchFor?.(url)
+      || String(resource.resourceRef.default_branch_hint ?? resource.resourceRef.defaultBranchHint ?? "").trim();
     return defaultBranchHint ? { url, default_branch_hint: defaultBranchHint } : { url };
   }
   if (resource.resourceType === "local_directory") {

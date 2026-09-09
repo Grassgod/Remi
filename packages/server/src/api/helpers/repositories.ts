@@ -489,6 +489,13 @@ export function normalizeWorkspaceRepositories(
   return result;
 }
 
+export function workspaceDefaultBranchResolver(rawRepositories: unknown[]): (url: string) => string | undefined {
+  const branches = new Map(normalizeWorkspaceRepositories(rawRepositories).map((repo) => [
+    canonicalGitRemoteKey(repo.url), repo.default_branch ?? undefined,
+  ]));
+  return (url) => branches.get(canonicalGitRemoteKey(url));
+}
+
 export function canonicalGitRemoteKey(value: string): string {
   const url = value.trim();
   const scp = url.match(/^([^@\s]+)@([^:\s]+):(.+)$/);

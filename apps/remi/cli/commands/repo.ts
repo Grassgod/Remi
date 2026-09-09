@@ -1,4 +1,5 @@
 import { CliError, ResourceResolver, type CliOptionSpec, type CommandInvocation, type CommandSpec } from "../core/index.js";
+import { canonicalGitRemoteKey } from "@multiremi/api/helpers/repositories.js";
 import {
   INPUT_OPTIONS,
   PAGE_OPTIONS,
@@ -65,7 +66,7 @@ export function repoCommandSpecs(): CommandSpec[] {
       renderResource(invocation, response.data);
     }),
     spec("repo.checkout", ["repo", "checkout"], "Check out one repository; URLs are used directly, while IDs, short IDs, and names resolve from the database", "write", ["human", "task"], [refPositional("repository-or-url")], [
-      { name: "ref", type: "string", valueName: "branch-or-sha", description: "Branch or commit to check out" },
+      { name: "ref", type: "string", valueName: "branch-or-sha", description: "Strict branch or commit; defaults to the configured repository branch, then the remote default" },
       { name: "daemon-port", type: "integer", valueName: "port", description: "Local daemon helper port" },
       { name: "agent-name", type: "string", valueName: "name", description: "Requesting agent name" },
       { name: "task-id", type: "string", valueName: "id", description: "Requesting task ID" },
@@ -98,9 +99,20 @@ async function checkoutRepository(invocation: CommandInvocation): Promise<void> 
   const directUrl = looksLikeGitUrl(input);
   const repository = directUrl ? null : await resolveRepository(client, requiredWorkspace(invocation), input);
   const url = directUrl ? input : String(repository?.url ?? "");
+  const ref = stringOption(invocation, "ref");
+  let preferredRef = ref ? undefined : repository?.default_branch;
   const port = invocation.options["daemon-port"];
   const daemonPort = typeof port === "number" ? String(port) : process.env.MULTIREMI_DAEMON_PORT?.trim();
   if (!daemonPort) throw new CliError("usage", "--daemon-port or MULTIREMI_DAEMON_PORT is required for repo checkout");
+  if (directUrl && !ref) {
+    try {
+      const response = await client.request({ method: "GET", path: `/api/workspaces/${encodePath(requiredWorkspace(invocation))}/repos` });
+      preferredRef = extractRecords(response.data, ["repositories"])
+        .find((repo) => typeof repo.url === "string" && canonicalGitRemoteKey(repo.url) === canonicalGitRemoteKey(url))?.default_branch;
+    } catch {
+      preferredRef = undefined;
+    }
+  }
   const timeoutMs = integerOption(invocation, "timeout") ?? 30_000;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -114,7 +126,8 @@ async function checkoutRepository(invocation: CommandInvocation): Promise<void> 
         url,
         workspace_id: requiredWorkspace(invocation),
         workdir: process.cwd(),
-        ref: stringOption(invocation, "ref") ?? "",
+        ref: ref ?? "",
+        ...(typeof preferredRef === "string" && preferredRef.trim() ? { preferred_ref: preferredRef.trim() } : {}),
         agent_name: stringOption(invocation, "agent-name") ?? process.env.MULTIREMI_AGENT_NAME?.trim() ?? "",
         task_id: stringOption(invocation, "task-id") ?? process.env.MULTIREMI_TASK_ID?.trim() ?? "",
       }),

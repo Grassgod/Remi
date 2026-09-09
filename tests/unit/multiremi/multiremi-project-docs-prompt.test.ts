@@ -407,6 +407,19 @@ describe("bootstrap and delta task prompts", () => {
     expect(buildTaskPrompt(task)).not.toContain("Repository Availability Warnings");
   });
 
+  it("reports default branch fallback without claiming checkout or fetch failed", () => {
+    const { task } = createProjectTask(createStore());
+    const prompt = buildTaskPrompt(task, { repoWarnings: [{
+      repoUrl: "https://example.test/repo.git", kind: "default_branch_fallback",
+      message: "workflow-dev could not be resolved; fell back to refs/remotes/origin/main",
+    }] });
+    expect(prompt).toContain("configured default branch could not be resolved");
+    expect(prompt).toContain("workflow-dev");
+    expect(prompt).toContain("refs/remotes/origin/main");
+    expect(prompt).not.toContain("checkout is unavailable");
+    expect(prompt).not.toContain("remote refresh failed after retries");
+  });
+
   it("keeps a checkout command for repositories the daemon did not materialize", () => {
     const store = createStore();
     const { task } = createProjectTask(store);

@@ -212,6 +212,7 @@ function buildSharedIssueBundle(
         worktree_path: repo.worktreePath,
         branch_name: repo.branchName,
         base_ref: repo.baseRef,
+        base_commit: repo.baseCommit ?? null,
         status: repo.status,
         dirty: repo.dirty,
         error: repo.error,

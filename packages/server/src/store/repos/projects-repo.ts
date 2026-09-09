@@ -1297,6 +1297,7 @@ function normalizeProjectResourceRef(resourceType: string, rawRef: Record<string
   const url = String(rawRef.url ?? "").trim();
   if (!url) throw new Error("github_repo url is required");
   if (!isValidGitRepoUrl(url)) throw new Error("github_repo url must be a valid http(s), ssh, git, or scp-like URL");
+  // Repository default_branch is authoritative; this stored hint is only a read-time fallback.
   const defaultBranchHint = String(rawRef.defaultBranchHint ?? rawRef.default_branch_hint ?? "").trim();
   return defaultBranchHint
     ? { url, defaultBranchHint, default_branch_hint: defaultBranchHint }

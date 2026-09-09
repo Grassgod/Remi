@@ -26,7 +26,7 @@ import {
   autopilotTriggerObjectLabel,
   summarizeAutopilotOutcome,
 } from "@multiremi/store/autopilot-run-notification.js";
-import { normalizeWorkspaceRepositories } from "@multiremi/api/helpers/repositories.js";
+import { normalizeWorkspaceRepositories, workspaceDefaultBranchResolver } from "@multiremi/api/helpers/repositories.js";
 import { autopilotRunTriggerSummary } from "@multiremi/api/wire/autopilots.js";
 import { createLogger } from "@shared/logger.js";
 import type {
@@ -721,6 +721,7 @@ export class TasksRepo {
     workspaceId: string,
     selectedProject: MultiremiTaskProjectContext["project"] | null,
   ): MultiremiTaskProjectContext[] {
+    const defaultBranchFor = workspaceDefaultBranchResolver(this.ctx.workspaces().getWorkspace(workspaceId)?.repos ?? []);
     const projects = this.ctx.projects().listProjects(workspaceId);
     const byId = new Map(projects.map((project) => [project.id, project]));
     const roots = selectedProject ? [selectedProject] : projects.filter((project) => !project.archivedAt);
@@ -748,7 +749,7 @@ export class TasksRepo {
         project,
         resources,
         docs: this.ctx.projects().listProjectDocs(project.id),
-        repos: normalizeRepos(refs),
+        repos: normalizeRepos(refs, defaultBranchFor),
       };
     });
   }
@@ -773,6 +774,8 @@ export class TasksRepo {
   }
 
   private resolveTaskRepos(workspaceId: string, projectResources: MultiremiProjectResource[]): MultiremiRepoData[] {
+    const workspaceRepos = this.ctx.workspaces().getWorkspace(workspaceId)?.repos ?? [];
+    const defaultBranchFor = workspaceDefaultBranchResolver(workspaceRepos);
     const ownProjectId = projectResources[0]?.projectId ?? null;
     const refs: Record<string, unknown>[] = [];
     const visited = new Set<string>();
@@ -796,9 +799,9 @@ export class TasksRepo {
       }
     };
     collect(projectResources, 0);
-    const projectRepos = normalizeRepos(refs);
+    const projectRepos = normalizeRepos(refs, defaultBranchFor);
     if (projectRepos.length) return projectRepos;
-    return normalizeRepos(this.ctx.workspaces().getWorkspace(workspaceId)?.repos ?? []);
+    return normalizeRepos(workspaceRepos, defaultBranchFor);
   }
 
   listTasks(status?: MultiremiTaskStatus): MultiremiTask[] {
@@ -3427,7 +3430,7 @@ function outcomeTime(task: MultiremiTask): number {
   return Date.parse(task.completedAt ?? task.failedAt ?? task.updatedAt ?? task.createdAt);
 }
 
-function normalizeRepos(rawRepos: unknown[]): MultiremiRepoData[] {
+function normalizeRepos(rawRepos: unknown[], defaultBranchFor?: (url: string) => string | undefined): MultiremiRepoData[] {
   const repos: MultiremiRepoData[] = [];
   const seen = new Set<string>();
   for (const raw of rawRepos) {
@@ -3437,7 +3440,9 @@ function normalizeRepos(rawRepos: unknown[]): MultiremiRepoData[] {
     if (!url || seen.has(url)) continue;
     seen.add(url);
     const description = typeof record.description === "string" ? record.description : "";
-    repos.push(description ? { url, description } : { url });
+    const defaultBranch = (defaultBranchFor ? defaultBranchFor(url) : String(record.defaultBranch ?? "").trim())
+      || String(record.default_branch_hint ?? record.defaultBranchHint ?? "").trim();
+    repos.push({ url, ...(description ? { description } : {}), ...(defaultBranch ? { defaultBranch } : {}) });
   }
   return repos;
 }

@@ -1017,6 +1017,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
         worktree_path?: string;
         branch_name?: string;
         base_ref?: string;
+        base_commit?: string | null;
         status?: "ready" | "dirty" | "error";
         dirty?: boolean;
         error?: string | null;
@@ -1040,6 +1041,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       worktreePath: repo.worktree_path?.trim() ?? "",
       branchName: repo.branch_name?.trim() ?? body.branch_name!,
       baseRef: repo.base_ref?.trim() ?? "",
+      baseCommit: repo.base_commit?.trim() || null,
       status: repo.status ?? (repo.dirty ? "dirty" : "ready"),
       dirty: repo.dirty ?? false,
       error: repo.error?.trim() || null,

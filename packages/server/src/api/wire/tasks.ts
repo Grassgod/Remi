@@ -36,6 +36,7 @@ export function taskPublicResponse<T extends MultiremiTask>(task: T): Omit<T, In
   return publicTask;
 }
 import type { MultiremiStore } from "@multiremi/store/store.js";
+import { workspaceDefaultBranchResolver } from "../helpers/repositories.js";
 import { autopilotRunSourceRevision } from "@multiremi/store/repos/autopilots-repo.js";
 import { createLogger } from "@shared/logger.js";
 import { readWorkspacePromptSettings } from "../../prompts/workspace-settings.js";
@@ -308,6 +309,7 @@ export function daemonTaskClaimResponse(
   triggerMetadata: MultiremiTaskTriggerMetadata | null = null,
 ): Record<string, unknown> {
   const response = daemonTaskWireResponse(task, triggerMetadata);
+  const defaultBranchFor = workspaceDefaultBranchResolver(store.getWorkspace(task.workspaceId)?.repos ?? []);
   if (task.knowledgeWarnings?.length) response.knowledge_warnings = task.knowledgeWarnings;
   let projectionMode: "bootstrap" | "delta" | null = null;
   response.prompt = task.prompt;
@@ -379,7 +381,7 @@ export function daemonTaskClaimResponse(
     response.project = projectCompatibilityResponse(task.project);
   }
   if (task.projectResources.length) {
-    response.project_resources = task.projectResources.map(projectResourceCompatibilityResponse);
+    response.project_resources = task.projectResources.map((resource) => projectResourceCompatibilityResponse(resource, defaultBranchFor));
   }
   if (task.projectWikiDocs?.length) {
     response.project_wiki_docs = task.projectWikiDocs.map(projectDocCompatibilityResponse);
@@ -416,11 +418,12 @@ export function daemonTaskClaimResponse(
   if (task.projectContexts.length) {
     response.project_contexts = task.projectContexts.map((context) => ({
       project: projectCompatibilityResponse(context.project),
-      resources: context.resources.map(projectResourceCompatibilityResponse),
+      resources: context.resources.map((resource) => projectResourceCompatibilityResponse(resource, defaultBranchFor)),
       docs: context.docs.map(projectDocCompatibilityResponse),
       repos: context.repos.map((repo) => ({
         url: repo.url,
         ...(repo.description ? { description: repo.description } : {}),
+        ...(repo.defaultBranch ? { default_branch: repo.defaultBranch } : {}),
       })),
     }));
   }
@@ -428,6 +431,7 @@ export function daemonTaskClaimResponse(
     response.repos = task.repos.map((repo) => ({
       url: repo.url,
       ...(repo.description ? { description: repo.description } : {}),
+      ...(repo.defaultBranch ? { default_branch: repo.defaultBranch } : {}),
     }));
   }
   appendDaemonClaimSquadContext(store, task, response);
