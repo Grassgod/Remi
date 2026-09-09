@@ -94,6 +94,8 @@ export function issueCommentCreateInput(
       taskId: taskToken.taskId ?? null,
     };
   }
+  const userId = authenticatedRequestUserId(c);
+  if (userId) return { ...input, authorType: "member", authorId: userId };
   if (cleanString(input.authorType) || cleanString(input.authorId)) return input;
   const agentId = cleanString(c.req.header("X-Agent-ID"));
   if (agentId) return { ...input, authorType: "agent", authorId: agentId };

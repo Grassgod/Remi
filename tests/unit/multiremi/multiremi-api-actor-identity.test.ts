@@ -27,6 +27,62 @@ async function fixture() {
 }
 
 describe("authenticated issue mutation actors", () => {
+  it("keeps task comment authors and lineage authoritative without removing trusted explicit authors", async () => {
+    const { app, store, workspace, issue, users } = await fixture();
+    const agent = store.createAgent({ workspaceId: workspace.id, name: "Worker", provider: "claude" });
+    const trustedAgent = store.createAgent({ workspaceId: workspace.id, name: "Trusted author", provider: "claude" });
+    const task = store.createTask({ workspaceId: workspace.id, issueId: issue.id, agentId: agent.id, prompt: "Work" });
+    const taskToken = await store.createTaskAccessToken(task, users[0]!.id);
+    for (const entry of [
+      { app, token: taskToken.token, expectedId: agent.id, taskId: task.id },
+      { app, token: "root-secret", expectedId: trustedAgent.id, taskId: null },
+      { app: createMultiremiApp({ store, authToken: null }), token: null, expectedId: trustedAgent.id, taskId: null },
+    ]) {
+      for (const prefix of ["/api", "/api/multiremi"]) {
+        const headers: Record<string, string> = { "Content-Type": "application/json", "X-Agent-ID": trustedAgent.id };
+        if (entry.token) headers.Authorization = `Bearer ${entry.token}`;
+        const response = await entry.app.request(`${prefix}/issues/${issue.id}/comments`, {
+          method: "POST", headers,
+          body: JSON.stringify({ content: "Agent comment", authorType: "agent", authorId: trustedAgent.id, taskId: null }),
+        });
+        expect(response.status).toBe(201);
+        const body = await response.json();
+        const comment = body.comment ?? body;
+        expect(comment.authorId ?? comment.author_id).toBe(entry.expectedId);
+        expect(comment.authorType ?? comment.author_type).toBe("agent");
+        expect(comment.taskId ?? comment.task_id ?? null).toBe(entry.taskId);
+      }
+    }
+  });
+
+  it("prevents members from forging comment authors through body fields or agent headers", async () => {
+    const { app, store, issue, users, headers } = await fixture();
+    const session = store.createIssueSession(issue.id, { title: "Discussion" });
+    const jwtHeaders = {
+      ...headers[0],
+      Authorization: `Bearer ${signTestJwt({ sub: users[0]!.id, exp: Math.floor(Date.now() / 1000) + 60 })}`,
+    };
+    for (const authHeaders of [headers[0], jwtHeaders]) {
+      for (const endpoint of [
+        `/api/issues/${issue.id}/comments`,
+        `/api/multiremi/issues/${issue.id}/comments`,
+        `/api/issues/${issue.id}/sessions/${session.id}/messages`,
+      ]) {
+        for (const author of [{ authorType: "member", authorId: users[1]!.id }, {}]) {
+          const response = await app.request(endpoint, {
+            method: "POST", headers: { ...authHeaders, "X-Agent-ID": "forged-agent" },
+            body: JSON.stringify({ content: "A real member comment", ...author }),
+          });
+          expect(response.status).toBe(201);
+          const body = await response.json();
+          const comment = body.comment ?? body;
+          expect(comment.authorId ?? comment.author_id).toBe(users[0]!.id);
+          expect(comment.authorType ?? comment.author_type).toBe("member");
+        }
+      }
+    }
+  });
+
   it("retains the local actor fallback for master-token and auth-disabled clients", async () => {
     const { store, issue } = await fixture();
     for (const authToken of ["root-secret", null]) {
