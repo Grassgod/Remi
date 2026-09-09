@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
 import enSettings from "../../locales/en/settings.json";
+import type { IssueTopicConfigResponse } from "@multiremi/core/types";
 
 const membersRef = vi.hoisted(() => ({
   current: [{ user_id: "user-1", role: "owner" }],
@@ -13,7 +14,7 @@ const configRef = vi.hoisted(() => ({
   current: {
     workspace_id: "workspace-1",
     config: { enabled: true, chat_id: "oc_team", project_ids: ["prj_1"] as string[] | null },
-  },
+  } as IssueTopicConfigResponse,
 }));
 const projectsRef = vi.hoisted(() => ({
   current: [
@@ -106,6 +107,29 @@ function resetFixtures() {
 describe("IssueTopicSection", () => {
   beforeEach(resetFixtures);
 
+  it("defaults proactive notifications to the group owner and can disable mentions", async () => {
+    const user = userEvent.setup();
+    renderSection();
+    const selector = await screen.findByRole("combobox", { name: "Proactive notification recipient" });
+    expect(selector).toHaveTextContent("Group owner");
+    await user.click(selector);
+    await user.click(screen.getByRole("option", { name: "No mention" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(mockSave).toHaveBeenCalledWith(expect.objectContaining({ notify_mode: "none", notify_open_id: null }));
+  });
+
+  it("requires a bot-scoped open ID for a specified recipient", async () => {
+    const user = userEvent.setup();
+    renderSection();
+    await user.click(await screen.findByRole("combobox", { name: "Proactive notification recipient" }));
+    await user.click(screen.getByRole("option", { name: "Specific person" }));
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    const input = screen.getByLabelText("Recipient open_id (bot application)");
+    await user.type(input, "ou_reviewer");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(mockSave).toHaveBeenCalledWith(expect.objectContaining({ notify_mode: "person", notify_open_id: "ou_reviewer" }));
+  });
+
   it("seeds the form from the stored config and hides archived projects", async () => {
     renderSection();
 
@@ -135,6 +159,8 @@ describe("IssueTopicSection", () => {
       enabled: true,
       chat_id: "oc_topics",
       project_ids: ["prj_1"],
+      notify_mode: "group_owner",
+      notify_open_id: null,
     }));
     expect(toast.success).toHaveBeenCalledWith("Issue topic settings saved");
   });
@@ -146,5 +172,6 @@ describe("IssueTopicSection", () => {
     await waitFor(() => expect(screen.getByLabelText("Feishu group chat ID")).toBeDisabled());
     expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
     expect(screen.getByText(/Only workspace owners and admins/)).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Proactive notification recipient" })).toBeDisabled();
   });
 });

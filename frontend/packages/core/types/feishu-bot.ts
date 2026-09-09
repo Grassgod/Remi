@@ -43,6 +43,8 @@ export interface IssueTopicConfig {
   chat_id: string;
   /** Null means every project, including projectless Issues. */
   project_ids: string[] | null;
+  notify_mode?: "group_owner" | "person" | "none";
+  notify_open_id?: string | null;
 }
 
 export interface IssueTopicConfigResponse {
@@ -54,6 +56,8 @@ export interface UpdateIssueTopicConfigRequest {
   enabled: boolean;
   chat_id: string;
   project_ids: string[] | null;
+  notify_mode?: "group_owner" | "person" | "none";
+  notify_open_id?: string | null;
 }
 
 export interface FeishuBotConfig {

@@ -595,6 +595,14 @@ export function controlPlaneConciergeHost(deps: {
         const daemon = deps.daemon();
         if (!daemon || !options) throw new Error("Task stream transport is unavailable");
         const taskId = delivery.taskId;
+        let mentionOpenId: string | null | undefined = delivery.mention?.resolvedOpenId;
+        if (delivery.mention && mentionOpenId === undefined) {
+          if (!options.prepareMention) throw new Error("Feishu mention checkpoint is unavailable");
+          const candidate = await handle.resolveProactiveMention(delivery.chatId, delivery.mention, options.signal);
+          options.signal.throwIfAborted();
+          mentionOpenId = await options.prepareMention(candidate);
+        }
+        options.signal.throwIfAborted();
         return handle.streamProactiveTask(delivery.chatId, `${delivery.chatId}:thread:${delivery.threadId ?? delivery.replyToMessageId}`,
           pollFeishuTask(daemon, taskId, options.signal), {
             taskId, displayName, signal: options.signal,
@@ -602,6 +610,7 @@ export function controlPlaneConciergeHost(deps: {
             respondHumanRequest: (requestId, response) => daemon.respondFeishuBotHumanRequest(taskId, requestId, response),
           }, {
             replyToMessageId: delivery.replyToMessageId ?? undefined,
+            mentionOpenId: mentionOpenId ?? undefined,
             durable: { idempotencyKey: delivery.idempotencyKey, messageId: delivery.resumeMessageId },
             onStarted: options.onStarted,
           });

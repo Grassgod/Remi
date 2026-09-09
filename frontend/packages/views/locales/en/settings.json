@@ -907,6 +907,12 @@
       "scan_retry": "Try again"
     },
     "issueTopics": {
+      "notify_mode": "Proactive notification recipient",
+      "notify_owner": "Group owner",
+      "notify_person": "Specific person",
+      "notify_none": "No mention",
+      "notify_open_id": "Recipient open_id (bot application)",
+      "notify_invalid": "Enter a valid open_id beginning with ou_.",
       "title": "Issue topics",
       "description": "Create one Feishu group topic for each new Issue and keep later work updates and replies in that thread.",
       "enabled": "Create topics for new Issues",

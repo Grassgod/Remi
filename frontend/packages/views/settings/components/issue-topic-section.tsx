@@ -17,6 +17,7 @@ import { Checkbox } from "@multiremi/ui/components/ui/checkbox";
 import { Input } from "@multiremi/ui/components/ui/input";
 import { Label } from "@multiremi/ui/components/ui/label";
 import { Switch } from "@multiremi/ui/components/ui/switch";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@multiremi/ui/components/ui/select";
 import { useT } from "../../i18n";
 
 const EMPTY_CONFIG: IssueTopicConfig = {
@@ -49,8 +50,16 @@ export function IssueTopicSection() {
 
   const projects = (projectsQuery.data ?? []).filter((project) => project.archived_at === null);
   const limited = draft.project_ids !== null;
+  const notifyMode = draft.notify_mode ?? "group_owner";
+  const notifyLabels = {
+    group_owner: t(($) => $.feishu.issueTopics.notify_owner),
+    person: t(($) => $.feishu.issueTopics.notify_person),
+    none: t(($) => $.feishu.issueTopics.notify_none),
+  };
+  const validRecipient = notifyMode !== "person" || /^ou_[A-Za-z0-9_-]{1,128}$/.test(draft.notify_open_id?.trim() ?? "");
   const canSave = canManage
     && !save.isPending
+    && validRecipient
     && (!draft.enabled || draft.chat_id.trim().length > 0)
     && (!limited || (draft.project_ids?.length ?? 0) > 0);
 
@@ -75,6 +84,8 @@ export function IssueTopicSection() {
         enabled: draft.enabled,
         chat_id: draft.chat_id.trim(),
         project_ids: draft.project_ids,
+        notify_mode: notifyMode,
+        notify_open_id: notifyMode === "person" ? draft.notify_open_id?.trim() ?? "" : null,
       });
       setDraft(response.config);
       setDirty(false);
@@ -120,6 +131,31 @@ export function IssueTopicSection() {
               disabled={!canManage}
             />
             <p className="text-xs text-muted-foreground">{t(($) => $.feishu.issueTopics.chat_id_hint)}</p>
+          </div>
+
+          <div className="grid min-w-0 gap-4 sm:grid-cols-2">
+            <div className="min-w-0 space-y-1.5">
+              <Label htmlFor="issue-topic-notify-mode">{t(($) => $.feishu.issueTopics.notify_mode)}</Label>
+              <Select value={notifyMode} disabled={!canManage} onValueChange={(mode) => {
+                if (mode === "group_owner" || mode === "person" || mode === "none") edit({ notify_mode: mode });
+              }}>
+                <SelectTrigger id="issue-topic-notify-mode" className="w-full min-w-0">
+                  <SelectValue>{() => notifyLabels[notifyMode]}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {(["group_owner", "person", "none"] as const).map(mode => (
+                    <SelectItem key={mode} value={mode}>{notifyLabels[mode]}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            {notifyMode === "person" && <div className="min-w-0 space-y-1.5">
+              <Label htmlFor="issue-topic-notify-person">{t(($) => $.feishu.issueTopics.notify_open_id)}</Label>
+              <Input id="issue-topic-notify-person" value={draft.notify_open_id ?? ""} disabled={!canManage}
+                aria-invalid={!validRecipient} placeholder="ou_xxxxxxxxxxxxxxxx"
+                onChange={event => edit({ notify_open_id: event.target.value })} />
+              {!validRecipient && <p className="text-xs text-destructive">{t(($) => $.feishu.issueTopics.notify_invalid)}</p>}
+            </div>}
           </div>
 
           <div className="space-y-3">

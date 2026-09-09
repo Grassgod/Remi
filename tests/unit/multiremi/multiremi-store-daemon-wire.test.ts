@@ -10,6 +10,27 @@ import { configureRepositoryWikiAutomation, createStore, db, jsonResponse, mockF
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi store — Go daemon wire shapes", () => {
+  it("normalizes optional outbound mention snapshots and checkpoints the chosen recipient", async () => {
+    const client = new MultiremiDaemonClient("https://remi.example");
+    const mention = { mode: "group_owner" as const, resolvedOpenId: "ou_owner" };
+    let response: object = { runtime_id: "rt_bot", pending_feishu_outbound: {
+      id: "fbo_test", claim_token: "lease", chat_id: "oc_topic", body: "", body_origin: "agent", task_id: "tsk_test", mention,
+    } };
+    const requests: object[] = [];
+    mockFetch((_input, init) => {
+      if (String(_input).endsWith("/result")) requests.push(JSON.parse(String(init?.body)));
+      return jsonResponse(response);
+    });
+    expect((await client.heartbeatRuntime("rt_bot")).pending_feishu_outbound?.mention).toEqual(mention);
+    response = { runtime_id: "rt_bot", pending_feishu_outbound: { id: "fbo_test", mention: { mode: "everyone" } } };
+    expect((await client.heartbeatRuntime("rt_bot")).pending_feishu_outbound?.mention).toBeUndefined();
+    response = { status: "ok", mention_open_id: "ou_owner" };
+    expect(await client.prepareFeishuBotOutboundMention("rt_bot", "fbo_test", "lease", "ou_owner")).toBe("ou_owner");
+    expect(requests).toEqual([{ claim_token: "lease", status: "prepared", mention_open_id: "ou_owner" }]);
+    response = { status: "ok" };
+    await expect(client.prepareFeishuBotOutboundMention("rt_bot", "fbo_test", "lease", null)).rejects.toThrow("checkpoint response");
+  });
+
   it("preserves repository Wiki hydration diagnostics through daemon claim normalization", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();

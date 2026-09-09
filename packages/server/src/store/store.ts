@@ -1821,6 +1821,13 @@ runMigrations(this.db);
     );
   }
 
+  prepareFeishuBotOutboundMention(
+    workspaceId: string, runtimeId: string, deliveryId: string, claimToken: string,
+    openId: string | null, now?: string | Date,
+  ): { openId: string | null } | null {
+    return this.feishuBot.prepareOutboundMention(workspaceId, runtimeId, deliveryId, claimToken, openId, now);
+  }
+
   reportFeishuBotOutbound(
     workspaceId: string,
     runtimeId: string,

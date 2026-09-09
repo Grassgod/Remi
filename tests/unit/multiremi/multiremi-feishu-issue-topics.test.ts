@@ -71,7 +71,121 @@ function configureTopics(store: MultiremiStore, projectIds?: string[]): void {
   });
 }
 
+function prepareReport(store: MultiremiStore) {
+  const agent = store.getFeishuBotConfig("local")!.agentId;
+  const issue = store.createIssue({ title: "Review requested", workspaceId: "local", assigneeType: "agent", assigneeId: agent });
+  store.prepareFeishuIssueTopicWithinTransaction(issue);
+  const root = store.claimFeishuBotOutbound("local", "rt_bot")!;
+  expect(root.bodyOrigin).toBe("issue");
+  expect(root.mention).toBeUndefined();
+  store.reportFeishuBotOutbound("local", "rt_bot", root.id, { claimToken: root.claimToken, status: "sent", externalMessageId: `om_root_${issue.id}` });
+  const leader = store.createTask({ agentId: agent, issueId: issue.id, prompt: "Work on Issue" });
+  const wake = store.prepareFeishuIssueRoundPushesWithinTransaction({ issue, leaderTask: leader });
+  expect(wake).toHaveLength(1);
+  return wake[0]!;
+}
+
 describe("Feishu Issue topics", () => {
+  it("checkpoints the recipient before send and keeps it after retry and owner changes", () => {
+    const { store } = scaffold();
+    configureTopics(store);
+    const wake = prepareReport(store);
+    const first = store.claimFeishuBotOutbound("local", "rt_bot", undefined, true)!;
+    expect(first).toMatchObject({ taskId: wake.id, mention: { mode: "group_owner" } });
+    expect(store.prepareFeishuBotOutboundMention("local", "rt_bot", first.id, "stale", "ou_owner")).toBeNull();
+    expect(store.prepareFeishuBotOutboundMention("local", "rt_other", first.id, first.claimToken, "ou_owner")).toBeNull();
+    expect(store.prepareFeishuBotOutboundMention("local", "rt_bot", first.id, first.claimToken, "ou_owner"))
+      .toEqual({ openId: "ou_owner" });
+    expect(store.prepareFeishuBotOutboundMention("local", "rt_bot", first.id, first.claimToken, "ou_new_owner"))
+      .toEqual({ openId: "ou_owner" });
+    store.reportFeishuBotOutbound("local", "rt_bot", first.id, { claimToken: first.claimToken, status: "failed", error: "network" });
+    const retry = store.claimFeishuBotOutbound("local", "rt_bot", new Date(Date.now() + 10000), true)!;
+    expect(retry.id).toBe(first.id);
+    expect(retry.mention).toEqual({ mode: "group_owner", resolvedOpenId: "ou_owner" });
+    expect(store.prepareFeishuBotOutboundMention("local", "rt_bot", first.id, first.claimToken, "ou_new_owner")).toBeNull();
+    expect(store.prepareFeishuBotOutboundMention("local", "rt_bot", retry.id, retry.claimToken, "ou_new_owner"))
+      .toEqual({ openId: "ou_owner" });
+  });
+
+  it("rejects expired leases and persists a missing-owner outcome", () => {
+    const { store } = scaffold();
+    configureTopics(store);
+    prepareReport(store);
+    const first = store.claimFeishuBotOutbound("local", "rt_bot", undefined, true)!;
+    expect(store.prepareFeishuBotOutboundMention("local", "rt_bot", first.id, first.claimToken, "ou_owner", new Date(Date.now() + 121000))).toBeNull();
+    expect(store.prepareFeishuBotOutboundMention("local", "rt_bot", first.id, first.claimToken, null)).toEqual({ openId: null });
+    store.reportFeishuBotOutbound("local", "rt_bot", first.id, { claimToken: first.claimToken, status: "failed" });
+    expect(store.claimFeishuBotOutbound("local", "rt_bot", new Date(Date.now() + 10000), true)?.mention)
+      .toEqual({ mode: "group_owner", resolvedOpenId: null });
+  });
+
+  for (const mode of ["person", "none"] as const) {
+    it(`snapshots ${mode} policy without silently reverting to group_owner`, () => {
+      const { store } = scaffold();
+      store.updateWorkspace("local", { settings: { issueTopics: { enabled: true, chatId: "oc_issue_topics",
+        notifyMode: mode, ...(mode === "person" ? { notifyOpenId: "ou_reviewer" } : {}) } } });
+      prepareReport(store);
+      const delivery = store.claimFeishuBotOutbound("local", "rt_bot", undefined, true)!;
+      expect(delivery.mention?.mode).toBe(mode);
+      expect(store.prepareFeishuBotOutboundMention("local", "rt_bot", delivery.id, delivery.claimToken, "ou_wrong")).toBeNull();
+      configureTopics(store);
+      expect(store.prepareFeishuBotOutboundMention("local", "rt_bot", delivery.id, delivery.claimToken, mode === "person" ? "ou_reviewer" : null))
+        .toEqual({ openId: mode === "person" ? "ou_reviewer" : null });
+    });
+  }
+
+  it("does not add a mention to an old card or report in a different group", () => {
+    const { store } = scaffold();
+    configureTopics(store);
+    const wake = prepareReport(store);
+    db!.run("UPDATE multiremi_feishu_bot_outbound_deliveries SET external_message_id = 'om_old_card' WHERE task_id = ?", [wake.id]);
+    const delivery = store.claimFeishuBotOutbound("local", "rt_bot", undefined, true)!;
+    expect(delivery.mention).toEqual({ mode: "group_owner", resolvedOpenId: null });
+    store.reportFeishuBotOutbound("local", "rt_bot", delivery.id, { claimToken: delivery.claimToken, status: "sent", externalMessageId: "om_old_card" });
+    prepareReport(store);
+    store.updateWorkspace("local", { settings: { issueTopics: { enabled: true, chatId: "oc_different" } } });
+    expect(store.claimFeishuBotOutbound("local", "rt_bot", undefined, true)?.mention).toBeUndefined();
+  });
+
+  it("uses the existing authenticated result endpoint to prepare a recipient", async () => {
+    const { store } = scaffold();
+    configureTopics(store);
+    prepareReport(store);
+    const delivery = store.claimFeishuBotOutbound("local", "rt_bot", undefined, true)!;
+    const token = await store.createAccessToken({ name: "bot-host", type: "daemon", workspaceId: "local", daemonId: "bot-host" });
+    const app = createMultiremiApp({ store, authToken: "MASTER" });
+    const request = (body: object) => app.request(`/api/daemon/runtimes/rt_bot/feishu-bot/outbound/${delivery.id}/result`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token.token}` },
+      body: JSON.stringify({ status: "prepared", claim_token: delivery.claimToken, ...body }),
+    });
+    expect((await request({ mention_open_id: "all" })).status).toBe(400);
+    expect((await request({ mention_open_id: "ou_owner", claim_token: "stale" })).status).toBe(409);
+    const response = await request({ mention_open_id: "ou_owner" });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: "ok", mention_open_id: "ou_owner" });
+  });
+  it("stores explicit notification targets and preserves them for older clients", async () => {
+    const { store } = scaffold();
+    const app = createMultiremiApp({ store, authToken: "MASTER" });
+    const path = "/api/workspaces/local/issue-topics";
+    const save = (body: unknown) => app.request(path, { method: "PUT", headers: JSON_HEADERS, body: JSON.stringify(body) });
+    expect((await (await app.request(path, { headers: JSON_HEADERS })).json()).config.notify_mode).toBe("group_owner");
+    const response = await save({ enabled: true, chat_id: "oc_issue_topics", notify_mode: "person", notify_open_id: "ou_reviewer" });
+    expect(response.status).toBe(200);
+    expect((await response.json()).config).toMatchObject({ notify_mode: "person", notify_open_id: "ou_reviewer" });
+    const oldClient = await save({ enabled: true, chat_id: "oc_issue_topics" });
+    expect((await oldClient.json()).config).toMatchObject({ notify_mode: "person", notify_open_id: "ou_reviewer" });
+    for (const body of [
+      { notify_mode: "all" },
+      { notify_mode: null },
+      { notify_mode: "person", notify_open_id: "all" },
+      { notify_mode: "person", notify_open_id: "ou_x><at id=all" },
+      { notify_mode: "person", notify_open_id: "" },
+    ]) expect((await save({ enabled: true, chat_id: "oc_issue_topics", ...body })).status).toBe(400);
+    expect((await (await save({ enabled: true, chat_id: "oc_issue_topics", notify_mode: "none" })).json()).config)
+      .toMatchObject({ notify_mode: "none", notify_open_id: null });
+  });
+
   it("refreshes the exact no-mention group in directives without redeploying the bot", () => {
     const { store, revision } = scaffold();
     const directive = () => store.feishuBotDirectiveForRuntime("local", "rt_bot");
@@ -302,7 +416,7 @@ describe("Feishu Issue topics", () => {
     const initial = await app.request("/api/workspaces/local/issue-topics", { headers: JSON_HEADERS });
     expect(await initial.json()).toEqual({
       workspace_id: "local",
-      config: { enabled: false, chat_id: "", project_ids: null },
+      config: { enabled: false, chat_id: "", project_ids: null, notify_mode: "group_owner", notify_open_id: null },
     });
     const updated = await app.request("/api/workspaces/local/issue-topics", {
       method: "PUT",
@@ -312,7 +426,7 @@ describe("Feishu Issue topics", () => {
     expect(updated.status).toBe(200);
     expect(await updated.json()).toEqual({
       workspace_id: "local",
-      config: { enabled: true, chat_id: "oc_filtered", project_ids: [project.id] },
+      config: { enabled: true, chat_id: "oc_filtered", project_ids: [project.id], notify_mode: "group_owner", notify_open_id: null },
     });
 
     const rejected = await app.request("/api/workspaces/local/issue-topics", {

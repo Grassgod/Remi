@@ -31,6 +31,8 @@ import { createFeishuImageResolver } from "./outbound-images.js";
 import { rewriteMarkdownImages } from "@shared/feishu-markdown-images.js";
 import { readContextUsage } from "@shared/agent-execution.js";
 import { formatCardStats } from "./card-metadata.js";
+import { resolveProactiveMention } from "./proactive-mention.js";
+import type { FeishuBotOutboundMention } from "@multiremi/contracts/types.js";
 
 const log = createLogger("feishu");
 
@@ -154,6 +156,10 @@ export class FeishuConnector implements Connector {
   streamProactiveTask(chatId: string, sessionKey: string, stream: AsyncIterable<TaskStreamEvent>,
     meta: TaskStreamMeta, options: HandleTaskStreamOpts): Promise<{ messageId: string }> {
     return this._channel.handleTaskStream(chatId, sessionKey, stream, meta, options);
+  }
+
+  resolveProactiveMention(chatId: string, mention: FeishuBotOutboundMention, signal?: AbortSignal): Promise<string | null> {
+    return resolveProactiveMention(createFeishuClient(this._config), chatId, mention, { signal, warn: message => log.warn(message) });
   }
 
   async uploadImage(image: Buffer): Promise<{ imageKey: string }> {

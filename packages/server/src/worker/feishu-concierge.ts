@@ -53,6 +53,7 @@ export interface FeishuConciergeHost {
 export interface FeishuOutboundOptions {
   signal: AbortSignal;
   onStarted: (messageId: string) => Promise<void>;
+  prepareMention?: (openId: string | null) => Promise<string | null>;
 }
 
 /**

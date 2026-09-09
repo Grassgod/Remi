@@ -64,6 +64,8 @@ export const IssueTopicConfigResponseSchema = z.object({
     enabled: z.boolean().default(false),
     chat_id: z.string().default(""),
     project_ids: z.array(z.string()).nullable().default(null),
+    notify_mode: z.enum(["group_owner", "person", "none"]).default("group_owner").catch("none"),
+    notify_open_id: z.string().nullable().default(null).catch(null),
   }).loose(),
 }).loose();
 

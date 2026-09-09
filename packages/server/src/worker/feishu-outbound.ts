@@ -6,6 +6,7 @@ export async function deliverFeishuOutbound(
   delivery: MultiremiFeishuBotOutboundDelivery,
   options: {
     signal: AbortSignal;
+    prepareMention?: (openId: string | null) => Promise<string | null>;
     send: (options: FeishuOutboundOptions) => Promise<{ messageId: string }>;
     report: (input: { claimToken: string; status: "streaming" | "sent" | "failed";
       externalMessageId?: string; error?: string }) => Promise<void>;
@@ -28,6 +29,7 @@ export async function deliverFeishuOutbound(
     if (delivery.taskId) scheduleRenewal();
     const sent = await options.send({
       signal,
+      prepareMention: options.prepareMention,
       onStarted: async messageId => {
         signal.throwIfAborted();
         await options.report({ claimToken: delivery.claimToken, status: "streaming", externalMessageId: messageId });

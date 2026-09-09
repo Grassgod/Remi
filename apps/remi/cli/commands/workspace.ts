@@ -157,6 +157,8 @@ export function workspaceCommandSpecs(): CommandSpec[] {
       "PUT",
       [
         { name: "chat-id", type: "string", valueName: "chat-id", description: "Feishu group chat ID" },
+        { name: "notify", type: "string", valueName: "group_owner|person|none", description: "Proactive report mention target (default: group_owner)" },
+        { name: "notify-open-id", type: "string", valueName: "open-id", description: "Bot-scoped recipient open ID for --notify person" },
         { name: "project", type: "string", valueName: "project-id", repeatable: true, description: "Limit topics to a project" },
         { name: "enabled", type: "boolean", description: "Create topics for new Issues" },
         { name: "disabled", type: "boolean", description: "Stop creating topics" },
@@ -538,12 +540,20 @@ async function issueTopicsBody(invocation: CommandInvocation): Promise<Record<st
       : booleanOption(invocation, "enabled") ?? undefined,
     chat_id: stringOption(invocation, "chat-id") ?? undefined,
     project_ids: projects.length ? projects : undefined,
+    notify_mode: stringOption(invocation, "notify") ?? undefined,
+    notify_open_id: stringOption(invocation, "notify-open-id") ?? undefined,
   });
   if (typeof body.enabled !== "boolean") {
     throw new CliError("usage", "workspace issue-topics set requires --enabled or --disabled");
   }
   if (body.enabled && (typeof body.chat_id !== "string" || !body.chat_id.trim())) {
     throw new CliError("usage", "workspace issue-topics set requires --chat-id when enabled");
+  }
+  if (body.notify_mode !== undefined && !["group_owner", "person", "none"].includes(String(body.notify_mode))) {
+    throw new CliError("usage", "--notify must be group_owner, person, or none");
+  }
+  if (body.notify_mode === "person" && (typeof body.notify_open_id !== "string" || !/^ou_[A-Za-z0-9_-]{1,128}$/.test(body.notify_open_id.trim()))) {
+    throw new CliError("usage", "--notify person requires --notify-open-id with a bot-scoped open_id");
   }
   return body;
 }
