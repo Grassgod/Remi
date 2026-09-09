@@ -85,3 +85,31 @@ it("keeps legacy workspace credentials scoped when provisioning native tokens", 
   });
   expect(response.status).toBe(404);
 });
+
+it("scopes native token listing and revocation for legacy credentials", async () => {
+  const store = createLocalStore();
+  const workspace = store.createWorkspace({ name: "Scoped", slug: "scoped" }, "local");
+  const caller = await store.createAccessToken({ workspaceId: workspace.id, name: "Caller", type: "pat" });
+  const victim = await store.createAccessToken({ workspaceId: "local", name: "Victim", type: "pat" });
+  const owned = await store.createAccessToken({ workspaceId: workspace.id, name: "Owned", type: "pat" });
+  const app = createMultiremiApp({ store, authToken: "root-secret" });
+  const headers = { Authorization: `Bearer ${caller.token}` };
+  const listed = await app.request("/api/multiremi/tokens?workspaceId=local", { headers });
+  const revoked = await app.request(`/api/multiremi/tokens/${victim.id}`, { method: "DELETE", headers });
+  expect([listed.status, revoked.status]).toEqual([404, 404]);
+  expect(store.getAccessToken(victim.id)?.revokedAt).toBeNull();
+  expect((await app.request(`/api/multiremi/tokens?workspaceId=${workspace.id}`, { headers })).status).toBe(200);
+  expect((await app.request(`/api/multiremi/tokens/${owned.id}`, { method: "DELETE", headers })).status).toBe(200);
+  expect(store.getAccessToken(owned.id)?.revokedAt).not.toBeNull();
+});
+
+it("retains native token listing and revocation for master-token and open mode", async () => {
+  for (const authToken of ["root-secret", ""]) {
+    const store = createLocalStore();
+    const token = await store.createAccessToken({ name: "Managed", type: "pat" });
+    const app = createMultiremiApp({ store, authToken });
+    const headers = { Authorization: `Bearer ${authToken}` };
+    expect((await app.request("/api/multiremi/tokens?workspaceId=local", { headers })).status).toBe(200);
+    expect((await app.request(`/api/multiremi/tokens/${token.id}`, { method: "DELETE", headers })).status).toBe(200);
+  }
+});

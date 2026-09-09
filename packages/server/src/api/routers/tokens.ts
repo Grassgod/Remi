@@ -37,7 +37,8 @@ export function registerTokenRoutes(app: Hono, deps: RouterDeps): void {
 
   app.get("/api/multiremi/tokens", (c) => {
     const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
-    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId)
+      ?? requireWorkspaceAdmin(c, store, workspaceId);
     if (denied) return denied;
     const tokens = store.listAccessTokens(workspaceId);
     return c.json({ tokens, total: tokens.length });
@@ -65,7 +66,8 @@ export function registerTokenRoutes(app: Hono, deps: RouterDeps): void {
   app.delete("/api/multiremi/tokens/:id", (c) => {
     const current = store.getAccessToken(c.req.param("id"));
     if (!current) return c.json({ error: "token not found" }, 404);
-    const denied = requireWorkspaceAdmin(c, store, current.workspaceId);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, current.workspaceId)
+      ?? requireWorkspaceAdmin(c, store, current.workspaceId);
     if (denied) return denied;
     try {
       const token = store.revokeAccessToken(current.id);
