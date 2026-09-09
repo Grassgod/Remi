@@ -98,7 +98,7 @@ and accessing the same workspace. An explicit supported body/query workspace ID
 comes first, followed by `X-Workspace-ID`, `X-Workspace-Slug`, the credential's
 workspace, and finally `local` when no context exists. Resource-bound uploads
 use the resource's workspace first. Unknown slugs and inaccessible workspaces
-return `404`; a stale slug never redirects a write into `local`. Labels accept
+return `404`; a stale slug never redirects a write into `local`. Label creation accepts
 both `workspace_id` and `workspaceId`, with the snake_case field taking priority.
 
 Registry resource commands choose `--workspace` first, then the JSON/file input's

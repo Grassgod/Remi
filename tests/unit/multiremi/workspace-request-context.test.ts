@@ -26,6 +26,46 @@ const reads = [
 ];
 
 describe("web workspace request context", () => {
+  it("keeps task and daemon credentials scoped despite explicit cross-workspace headers", async () => {
+    const { app, store, user, workspace, other } = await fixture();
+    const agent = store.createAgent({ workspaceId: workspace.id, name: "Worker", provider: "claude" });
+    const issue = store.createIssue({ workspaceId: workspace.id, title: "Task issue" });
+    const task = store.createTask({ workspaceId: workspace.id, agentId: agent.id, issueId: issue.id, prompt: "Work" });
+    const taskToken = await store.createTaskAccessToken(task, user.id);
+    const daemonToken = await store.createAccessToken({ workspaceId: workspace.id, type: "daemon", daemonId: "dmn_context", userId: user.id, name: "Daemon" });
+    const selectors = [{ "X-Workspace-Slug": other.slug }, { "X-Workspace-ID": other.id }, { "X-Workspace-Slug": "missing" }];
+    for (const token of [taskToken.token, daemonToken.token]) {
+      for (const endpoint of reads) {
+        for (const selector of selectors) {
+          const response = await app.request(endpoint, { headers: { Authorization: `Bearer ${token}`, ...selector } });
+          expect([403, 404]).toContain(response.status);
+        }
+      }
+    }
+    for (const selector of selectors) {
+      const response = await app.request("/api/labels", { method: "POST", headers: { Authorization: `Bearer ${taskToken.token}`, "Content-Type": "application/json", ...selector }, body: JSON.stringify({ name: "Wrong", color: "#112233" }) });
+      expect(response.status).toBe(404);
+    }
+    expect(store.listLabels(other.id)).toHaveLength(0);
+  });
+
+  it("uses explicit IDs before headers and rejects stale write context without creating local data", async () => {
+    const { app, store, headers, workspace, other } = await fixture();
+    const create = (extraHeaders: Record<string, string>, body: Record<string, unknown>) => app.request("/api/labels", {
+      method: "POST", headers: { ...headers, "Content-Type": "application/json", ...extraHeaders },
+      body: JSON.stringify({ name: "Context", color: "#112233", ...body }),
+    });
+    const selected = await create({ "X-Workspace-ID": other.id, "X-Workspace-Slug": "missing" }, {});
+    expect(selected.status).toBe(201);
+    expect((await selected.json()).workspace_id).toBe(other.id);
+    const explicit = await create({ "X-Workspace-ID": other.id, "X-Workspace-Slug": "missing" }, { workspace_id: workspace.id });
+    expect(explicit.status).toBe(201);
+    expect((await explicit.json()).workspace_id).toBe(workspace.id);
+    expect((await create({ "X-Workspace-Slug": "missing" }, {})).status).toBe(404);
+    expect(store.listLabels("local")).toHaveLength(0);
+    expect((await app.request("/api/tokens", { method: "POST", headers: { ...headers, "X-Workspace-Slug": "missing", "Content-Type": "application/json" }, body: JSON.stringify({ name: "Stale" }) })).status).toBe(404);
+  });
+
   for (const endpoint of reads) {
     it(`${endpoint} uses the selected workspace and rejects stale or inaccessible context`, async () => {
       const { app, headers, workspace } = await fixture();
