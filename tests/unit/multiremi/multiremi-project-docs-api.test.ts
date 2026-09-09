@@ -631,7 +631,7 @@ describe("Bun Multiremi project docs API", () => {
     expect(normalized?.projectDocs).toBeNull();
   });
 
-  it("fails and retries a claimed task when project knowledge cannot be hydrated", async () => {
+  it("starts a claimed task with an explicit warning when project knowledge cannot be hydrated", async () => {
     const store = createStore();
     const runtime = store.registerRuntime({ name: "Knowledge runtime", provider: "claude" });
     const agent = store.createAgent({ name: "Knowledge agent", provider: "claude", runtimeId: runtime.id });
@@ -643,12 +643,10 @@ describe("Bun Multiremi project docs API", () => {
     const app = createMultiremiApp({ store, projectKnowledge });
 
     const claim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
-    expect(claim.status).toBe(503);
-    expect(await claim.json()).toEqual({ error: "project knowledge unavailable", retryable: true });
-    expect(store.getTask(task.id)).toMatchObject({
-      status: "failed",
-      failureReason: "project_knowledge_unavailable",
-    });
-    expect(store.listTasks().some((candidate) => candidate.status === "queued" && candidate.issueId === issue.id)).toBe(true);
+    expect(claim.status).toBe(200);
+    const claimed = (await claim.json()).task;
+    expect(claimed.knowledge_warnings[0]).toContain("Project Wiki loading failed");
+    expect(store.getTask(task.id)?.status).toBe("dispatched");
+    expect(store.listTasks()).toHaveLength(1);
   });
 });

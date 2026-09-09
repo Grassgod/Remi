@@ -2676,6 +2676,8 @@ export function runMigrations(db: SqlDatabase): void {
   dropColumnIfExists(db, "multiremi_agent_issue_update_state", "window_started_at");
   dropColumnIfExists(db, "multiremi_agent_issue_update_state", "deliveries_in_window");
   addColumnIfMissing(db, "multiremi_tasks", "chat_session_id TEXT");
+  addColumnIfMissing(db, "multiremi_repository_wiki_storage_jobs", "lease_token TEXT");
+  addColumnIfMissing(db, "multiremi_repository_wiki_storage_jobs", "lease_until TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "task_kind TEXT NOT NULL DEFAULT 'direct'");
   addColumnIfMissing(db, "multiremi_tasks", "wait_reason TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "failure_reason TEXT");

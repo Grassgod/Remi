@@ -1417,6 +1417,7 @@ export interface MultiremiTaskWithAgent extends MultiremiTask {
   /** Full Wiki bodies used only to materialize the Issue workspace working copy. */
   projectWikiDocs?: MultiremiProjectDoc[];
   repositoryWikiContexts?: MultiremiTaskRepositoryWikiContext[];
+  knowledgeWarnings?: string[];
   projectContexts: MultiremiTaskProjectContext[];
   repos: MultiremiRepoData[];
 }

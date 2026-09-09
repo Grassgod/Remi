@@ -49,7 +49,9 @@ export interface RepositoryWikiServiceContract {
   revisions(workspaceId: string, repositoryId: string, ref: string): Promise<MultiremiRepositoryWikiDocRevision[]>;
   search(workspaceId: string, repositoryId: string, query: string, limit?: number): Promise<MultiremiRepositoryWikiDoc[]>;
   backlinks(workspaceId: string, repositoryId: string, ref: string): Promise<MultiremiRepositoryWikiDoc[]>;
-  hydrateTaskWiki(task: MultiremiTaskWithAgent): Promise<MultiremiTaskWithAgent>;
+  hydrateTaskWiki(task: MultiremiTaskWithAgent, signal?: AbortSignal): Promise<MultiremiTaskWithAgent>;
+  startStorageWorker?(): void;
+  stopStorageWorker?(): void;
 }
 
 export class RepositoryWikiUnavailableError extends Error {}
@@ -58,15 +60,61 @@ const log = createLogger("repository-wiki");
 
 export class RepositoryWikiService implements RepositoryWikiServiceContract {
   private readonly writeQueues = new Map<string, Promise<void>>();
+  private storageTimer: ReturnType<typeof setTimeout> | null = null;
+  private storageAbort: AbortController | null = null;
+  private storageRun: Promise<void> | null = null;
+  private readonly cleanupConcurrency: number;
 
   constructor(
     private readonly store: MultiremiStore,
     private readonly client: OpenVikingClientContract | null,
     readonly mode: ProjectKnowledgeMode,
-  ) {}
+    options: { cleanupConcurrency?: number } = {},
+  ) {
+    const concurrency = options.cleanupConcurrency ?? Number(process.env.MULTIREMI_WIKI_CLEANUP_CONCURRENCY ?? 8);
+    this.cleanupConcurrency = Number.isInteger(concurrency) && concurrency >= 1 && concurrency <= 32 ? concurrency : 8;
+  }
+
+  startStorageWorker(): void {
+    if (this.mode === "sql" || this.storageAbort) return;
+    const abort = new AbortController();
+    this.storageAbort = abort;
+    const tick = async () => {
+      try { await this.runStorageJobs(abort.signal); }
+      catch (error) { if (!abort.signal.aborted) log.warn(`Wiki storage worker failed: ${safeError(error)}`); }
+      if (!abort.signal.aborted) {
+        this.storageTimer = setTimeout(tick, 5_000);
+        this.storageTimer.unref?.();
+      }
+    };
+    void tick();
+  }
+
+  stopStorageWorker(): void {
+    this.storageAbort?.abort();
+    this.storageAbort = null;
+    if (this.storageTimer) clearTimeout(this.storageTimer);
+    this.storageTimer = null;
+  }
+
+  runStorageJobs(signal?: AbortSignal, now = Date.now()): Promise<void> {
+    if (this.storageRun) return this.storageRun;
+    const run = (async () => {
+      if (this.mode === "sql") return;
+      for (const workspace of this.store.listWorkspaces()) {
+        for (const job of this.store.listWorkspaceRepositoryWikiStorageJobs(workspace.id)) {
+          if (signal?.aborted) return;
+          const backoff = job.lastError ? Math.min(300_000, 5_000 * 2 ** Math.min(job.attemptCount, 6)) : 0;
+          if (now - Date.parse(job.updatedAt) < backoff) continue;
+          await this.withWriteLock(job.workspaceId, job.repositoryId, () => this.processStorageJobUnlocked(job, true, signal));
+        }
+      }
+    })();
+    this.storageRun = run.finally(() => { this.storageRun = null; });
+    return this.storageRun;
+  }
 
   async list(workspaceId: string, repositoryId: string): Promise<MultiremiRepositoryWikiDoc[]> {
-    await this.repairDeferredCanonical(workspaceId, repositoryId);
     const docs = this.store.listRepositoryWikiDocs(workspaceId, repositoryId);
     if (this.mode === "sql") return docs;
     return Promise.all(docs.map(async (doc) => {
@@ -88,7 +136,6 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
   }
 
   async listStrict(workspaceId: string, repositoryId: string): Promise<MultiremiRepositoryWikiDoc[]> {
-    await this.repairDeferredCanonical(workspaceId, repositoryId);
     const docs = this.store.listRepositoryWikiDocs(workspaceId, repositoryId);
     return this.hydrateStrict(docs);
   }
@@ -100,7 +147,6 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
   }
 
   async get(workspaceId: string, repositoryId: string, ref: string): Promise<MultiremiRepositoryWikiDoc | null> {
-    await this.repairDeferredCanonical(workspaceId, repositoryId);
     const doc = this.store.getRepositoryWikiDocByRef(workspaceId, repositoryId, ref);
     if (!doc) return null;
     return this.mode === "sql" ? doc : this.hydrate(doc);
@@ -174,7 +220,6 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
         [doc.title, doc.summary ?? "", doc.body, doc.path, ...doc.tags].some((value) => value.toLowerCase().includes(normalized))
       ).slice(0, clampLimit(limit));
     }
-    await this.repairDeferredCanonical(workspaceId, repositoryId);
     const hits = await this.requireClient().find(term, repositoryWikiRootUri(workspaceId, repositoryId), clampLimit(limit) * 3, [
       `workspace_id=${encodeURIComponent(workspaceId)}`,
       `repository_id=${encodeURIComponent(repositoryId)}`,
@@ -195,7 +240,10 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
     return repositoryWikiBacklinks(target, documents);
   }
 
-  async hydrateTaskWiki(task: MultiremiTaskWithAgent): Promise<MultiremiTaskWithAgent> {
+  async hydrateTaskWiki(task: MultiremiTaskWithAgent, signal?: AbortSignal): Promise<MultiremiTaskWithAgent> {
+    if (signal && this.client?.withSignal) {
+      return new RepositoryWikiService(this.store, this.client.withSignal(signal), this.mode).hydrateTaskWiki(task);
+    }
     const selected = resolveTaskRepositoryWikiRepositories(this.store, task);
     if (!selected.length) return task;
     const contexts = await Promise.all(selected.map(async (repository) => ({
@@ -406,22 +454,35 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
     }
   }
 
-  private async repairDeferredCanonical(workspaceId: string, repositoryId: string): Promise<void> {
-    if (this.mode !== "openviking") return;
-    if (!this.store.listRepositoryWikiStorageJobs(workspaceId, repositoryId).length) return;
-    await this.withWriteLock(workspaceId, repositoryId, () =>
-      this.repairDeferredCanonicalUnlocked(workspaceId, repositoryId));
-  }
-
   private async repairDeferredCanonicalUnlocked(workspaceId: string, repositoryId: string): Promise<void> {
-    if (this.mode !== "openviking") return;
+    if (this.mode === "sql") return;
     for (const job of this.store.listRepositoryWikiStorageJobs(workspaceId, repositoryId)) {
-      if (!await this.processStorageJobUnlocked(job)) break;
+      if (!await this.processStorageJobUnlocked(job, true)) break;
     }
   }
 
-  private async processStorageJobUnlocked(job: RepositoryWikiStorageJob): Promise<boolean> {
-    const client = this.requireClient();
+  private async processStorageJobUnlocked(job: RepositoryWikiStorageJob, cleanup = false, signal?: AbortSignal): Promise<boolean> {
+    if (signal?.aborted) return false;
+    const token = createId("rwlease");
+    const until = () => new Date(Date.now() + 120_000).toISOString();
+    if (!this.store.claimRepositoryWikiStorageJob(job.id, token, until(), nowIso())) return false;
+    // Reload after claiming: another worker may have checkpointed or promoted it.
+    const currentJob = this.store.listRepositoryWikiStorageJobs(job.workspaceId, job.repositoryId).find(j => j.id === job.id);
+    if (!currentJob) return false;
+    job = currentJob;
+    const abort = new AbortController();
+    const deadline = setTimeout(() => abort.abort(), 60_000);
+    const scopedSignal = signal ? AbortSignal.any([signal, abort.signal]) : abort.signal;
+    const assertLease = () => {
+      scopedSignal.throwIfAborted();
+      if (!this.store.renewRepositoryWikiStorageJob(job.id, token, until())) {
+        abort.abort();
+        throw new Error("Repository Wiki storage lease lost");
+      }
+    };
+    const renewal = setInterval(() => { try { assertLease(); } catch { abort.abort(); } }, 20_000);
+    const baseClient = this.requireClient();
+    const client = baseClient.withSignal?.(scopedSignal) ?? baseClient;
     const rootUri = repositoryWikiRootUri(job.workspaceId, job.repositoryId);
     const storageRootUri = repositoryWikiStorageRootUri(job.workspaceId, job.repositoryId);
     const previousCanonical = new Map<string, string | null>();
@@ -446,6 +507,7 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
         }));
 
         for (const entry of entries) {
+          assertLease();
           await this.ensureUriDirectories(rootUri, entry.finalUri);
           const exists = await client.exists(entry.finalUri);
           const previous = exists ? await client.read(entry.finalUri) : null;
@@ -462,6 +524,7 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
         const snapshotOid = entries.length
           ? requireSnapshot(await client.commit(`repository_wiki_batch:${job.batchId}:promote`, finalUris))
           : null;
+        assertLease();
         this.store.finalizeRepositoryWikiBatchStorage(entries.map((entry) => ({
           docId: entry.docId,
           version: entry.version,
@@ -473,43 +536,62 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
         })), job.id);
         phase = "cleanup";
       }
-
-      await this.cleanupUrisStrict(
-        client,
-        job.manifest.cleanupUris,
-        `repository_wiki_batch:${job.batchId}:cleanup`,
-      );
+      if (!cleanup) return true;
+      await this.cleanupJob(client, job, token, assertLease);
+      assertLease();
       this.store.completeRepositoryWikiStorageJob(job.id);
       log.info(`OpenViking storage job completed for ${job.workspaceId}/${job.repositoryId} (${job.id})`);
       return true;
     } catch (error) {
-      if (phase === "pending") {
+      if (phase === "pending" && !scopedSignal.aborted) {
         await this.restoreCanonicalUris(client, rootUri, previousCanonical, job.batchId);
       }
       const message = safeError(error);
       this.store.recordRepositoryWikiStorageJobFailure(job.id, message);
       log.warn(`OpenViking storage job deferred for ${job.workspaceId}/${job.repositoryId}: ${message}`);
       return false;
+    } finally {
+      clearTimeout(deadline);
+      clearInterval(renewal);
+      this.store.releaseRepositoryWikiStorageJob(job.id, token);
     }
   }
 
-  private async cleanupUrisStrict(
+  private async cleanupJob(
     client: OpenVikingClientContract,
-    uris: readonly string[],
-    commitMessage: string,
+    job: RepositoryWikiStorageJob,
+    token: string,
+    assertLease: () => void,
   ): Promise<void> {
-    const uniqueUris = [...new Set(uris)];
-    const failures: string[] = [];
-    for (const uri of uniqueUris) {
-      try {
-        if (!await client.exists(uri)) continue;
-        await client.remove(uri);
-      } catch (error) {
-        failures.push(`${uri}: ${safeError(error)}`);
-      }
+    const uniqueUris = [...new Set(job.manifest.cleanupUris)];
+    const completed = new Set(job.manifest.completedCleanupUris ?? []);
+    const remaining = uniqueUris.filter(uri => !completed.has(uri));
+    const roots = [repositoryWikiRootUri(job.workspaceId, job.repositoryId),
+      `${repositoryWikiStorageRootUri(job.workspaceId, job.repositoryId)}/batches/${job.batchId}`];
+    const liveUris = new Set(this.store.listRepositoryWikiDocs(job.workspaceId, job.repositoryId).map(d => d.contentUri));
+    for (const uri of remaining) {
+      if (!roots.some(root => uri.startsWith(`${root}/`)) || !uri.endsWith(".md")
+        || uri.split("/").some(part => part === ".." || part === "." || part.includes("%") || part.includes("\\"))
+        || liveUris.has(uri)) throw new RepositoryWikiUnavailableError(`Unsafe Wiki cleanup target: ${uri}`);
     }
-    if (uniqueUris.length) await client.commit(commitMessage, uniqueUris);
+    const failures: string[] = [];
+    let cursor = 0;
+    await Promise.all(Array.from({ length: Math.min(this.cleanupConcurrency, remaining.length) }, async () => {
+      while (cursor < remaining.length) {
+        const uri = remaining[cursor++]!;
+        try {
+          assertLease();
+          if (await client.exists(uri)) await client.remove(uri, { wait: false });
+          assertLease();
+          this.store.recordRepositoryWikiCleanupProgress(job.id, token, uri);
+        } catch (error) {
+          failures.push(`${uri}: ${safeError(error)}`);
+        }
+      }
+    }));
     if (failures.length) throw new RepositoryWikiUnavailableError(failures.join("; "));
+    assertLease();
+    if (uniqueUris.length) await client.commit(`repository_wiki_batch:${job.batchId}:cleanup`, uniqueUris);
   }
 
   private async cleanupUris(

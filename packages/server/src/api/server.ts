@@ -673,6 +673,8 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   const authToken = options.authToken ?? process.env.MULTIREMI_TOKEN ?? "";
   const sessionArchives = options.sessionArchives ?? new SessionArchiveService(store);
   if (backgroundJobs) sessionArchives.startIssueArchivePurgeRecovery();
+  const repositoryWiki = options.repositoryWiki ?? createRepositoryWikiServiceFromEnv(store);
+  if (backgroundJobs) repositoryWiki.startStorageWorker?.();
   const app = createMultiremiApp({
     ...options,
     store,
@@ -680,6 +682,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     realtimeState,
     sessionArchives,
     messagingProviders,
+    repositoryWiki,
   });
   const port = options.port ?? parseInt(process.env.MULTIREMI_PORT ?? "6120", 10);
   const hostname = options.hostname ?? process.env.MULTIREMI_HOST ?? "0.0.0.0";
@@ -878,6 +881,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   const stopServer = server.stop.bind(server);
   controlPlaneSshMesh?.start();
   server.stop = (closeActiveConnections?: boolean) => {
+    if (backgroundJobs) repositoryWiki.stopStorageWorker?.();
     if (backgroundJobs) sessionArchives.stopIssueArchivePurgeRecovery();
     controlPlaneSshMesh?.stop();
     unsubscribeTaskEnqueued();

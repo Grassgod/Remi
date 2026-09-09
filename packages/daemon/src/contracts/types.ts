@@ -293,6 +293,7 @@ export interface AgentTask {
   projectWikiDocs?: AgentTaskProjectDoc[];
   project_wiki_docs?: AgentTaskProjectDoc[];
   repositoryWikiContexts?: AgentTaskRepositoryWikiContext[];
+  knowledgeWarnings?: string[];
   repository_wiki_contexts?: AgentTaskRepositoryWikiContext[];
   projectContexts?: AgentTaskProjectContext[];
   project_contexts?: AgentTaskProjectContext[];

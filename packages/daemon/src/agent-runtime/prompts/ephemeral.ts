@@ -74,6 +74,9 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
 
   appendRepositoryWarnings(sections, opts.repoWarnings ?? []);
   appendRepositoryWikiAvailabilityWarnings(sections, task);
+  if (task.knowledgeWarnings?.length) {
+    sections.push("", "## Knowledge Availability Warnings", ...task.knowledgeWarnings);
+  }
 
   appendProjectPromptSections(sections, task, mode);
   if (mode === "bootstrap" && task.issue) appendProjectDiscoverySection(sections);

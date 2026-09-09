@@ -82,13 +82,14 @@ export interface OpenVikingSnapshotCommit {
 }
 
 export interface OpenVikingClientContract {
+  withSignal?(signal: AbortSignal): OpenVikingClientContract;
   health(): Promise<void>;
   ensureDirectory(uri: string): Promise<void>;
   read(uri: string): Promise<string>;
   exists(uri: string): Promise<boolean>;
   create(uri: string, rootUri: string, content: string): Promise<void>;
   replace(uri: string, rootUri: string, content: string, baseHash: string): Promise<void>;
-  remove(uri: string): Promise<void>;
+  remove(uri: string, options?: { wait?: boolean }): Promise<void>;
   setTags(uri: string, tags: string[]): Promise<void>;
   find(query: string, targetUri: string | string[], limit: number, tags?: string[]): Promise<OpenVikingFindHit[]>;
   commit(message: string, paths: string[]): Promise<string | null>;

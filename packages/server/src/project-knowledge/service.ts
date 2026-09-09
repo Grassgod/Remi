@@ -62,7 +62,7 @@ export interface ProjectKnowledgeServiceContract {
   migrationStatus(workspaceId: string): Promise<ProjectKnowledgeMigrationStatus>;
   backfill(workspaceId: string, input?: { dryRun?: boolean; resume?: boolean; projectId?: string | null; statuses?: string[] }): Promise<ProjectKnowledgeMigrationResult>;
   verify(workspaceId: string, projectId?: string | null): Promise<ProjectKnowledgeMigrationResult>;
-  hydrateTaskKnowledge(task: MultiremiTaskWithAgent): Promise<MultiremiTaskWithAgent>;
+  hydrateTaskKnowledge(task: MultiremiTaskWithAgent, signal?: AbortSignal): Promise<MultiremiTaskWithAgent>;
 }
 
 export class ProjectKnowledgeUnavailableError extends Error {}
@@ -459,8 +459,11 @@ export class ProjectKnowledgeService implements ProjectKnowledgeServiceContract 
     return result;
   }
 
-  async hydrateTaskKnowledge(task: MultiremiTaskWithAgent): Promise<MultiremiTaskWithAgent> {
+  async hydrateTaskKnowledge(task: MultiremiTaskWithAgent, signal?: AbortSignal): Promise<MultiremiTaskWithAgent> {
     if (this.mode !== "openviking") return task;
+    if (signal && this.client?.withSignal) {
+      return new ProjectKnowledgeService(this.store, this.client.withSignal(signal), this.mode).hydrateTaskKnowledge(task);
+    }
     const next = { ...task };
     if (task.project) {
       const docs = await this.listProjectDocs(task.project.id);

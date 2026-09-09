@@ -308,6 +308,7 @@ export function daemonTaskClaimResponse(
   triggerMetadata: MultiremiTaskTriggerMetadata | null = null,
 ): Record<string, unknown> {
   const response = daemonTaskWireResponse(task, triggerMetadata);
+  if (task.knowledgeWarnings?.length) response.knowledge_warnings = task.knowledgeWarnings;
   let projectionMode: "bootstrap" | "delta" | null = null;
   response.prompt = task.prompt;
   if (task.sessionId) {

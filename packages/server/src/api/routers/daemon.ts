@@ -71,6 +71,8 @@ import { scmGitCredentialPassword } from "@multiremi/scm/access-token.js";
 import { resolveScmRepositoryRemote } from "@multiremi/scm/repository-url.js";
 import type { DaemonRegisterRequestBody } from "../helpers.js";
 import type { RouterDeps } from "./deps.js";
+import { hydrateClaimKnowledge } from "@multiremi/project-knowledge/claim-hydration.js";
+import { resolveTaskRepositoryWikiRepositories, canonicalRepositoryRemote } from "@multiremi/repository-wiki/task-scope.js";
 
 type DaemonInstallRequestBody = {
   serverUrl?: string | null;
@@ -139,6 +141,7 @@ function validateDaemonInstallRequestBody(
 
 export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
   const { store, authToken } = deps;
+  const preparingClaims = new Map<string, Promise<Record<string, unknown> | null>>();
 
   app.post("/api/daemon/scm/git-credentials", async (c) => {
     const body = await readJsonStrict<{
@@ -782,29 +785,37 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
   });
   // Multiremi daemon-compatible endpoints.
   app.post("/api/daemon/runtimes/:runtimeId/tasks/claim", async (c) => {
-    const task = store.claimTask(c.req.param("runtimeId"));
-    if (!task) return c.json({ task: null });
-    let hydratedTask: typeof task;
-    try {
-      hydratedTask = await deps.projectKnowledge.hydrateTaskKnowledge(task);
-      hydratedTask = await deps.repositoryWiki.hydrateTaskWiki(hydratedTask);
-    } catch (error) {
-      store.failTask(task.id, {
-        error: `Project knowledge unavailable before agent startup: ${safeProjectKnowledgeError(error)}`,
-        failureReason: "project_knowledge_unavailable",
-      });
-      return c.json({ error: "project knowledge unavailable", retryable: true }, 503);
+    const runtimeId = c.req.param("runtimeId");
+    let preparing = preparingClaims.get(runtimeId);
+    // A duplicate poll must not deliver the same Task twice while its first claim is preparing.
+    if (preparing) return c.json({ task: null });
+    if (!preparing) {
+      preparing = (async () => {
+        const task = store.claimTask(runtimeId);
+        if (!task) return null;
+        // Checkout scope is server-owned metadata, independent of Wiki body availability.
+        const remotes = new Set(task.repos.map(repo => canonicalRepositoryRemote(repo.url)));
+        for (const repo of resolveTaskRepositoryWikiRepositories(store, task)) {
+          if (!remotes.has(canonicalRepositoryRemote(repo.url))) {
+            task.repos.push({ url: repo.url });
+            remotes.add(canonicalRepositoryRemote(repo.url));
+          }
+        }
+        const hydratedTask = await hydrateClaimKnowledge(task, deps.projectKnowledge, deps.repositoryWiki);
+        const current = store.getTask(task.id);
+        if (current?.status !== "dispatched" || current.runtimeId !== runtimeId) return null;
+        const response = daemonTaskClaimResponse(store, hydratedTask, store.getTaskTriggerMetadata(task));
+        const runtime = store.getRuntime(runtimeId);
+        // Every claim gets a task capability, including ownerless runtimes left by
+        // older releases. The task/agent/workspace bindings enforce authorization.
+        const ownerId = cleanString(runtime?.ownerId) ?? "local";
+        const token = await store.createTaskAccessToken(task, ownerId);
+        response.auth_token = token.token;
+        return response;
+      })().finally(() => preparingClaims.delete(runtimeId));
+      preparingClaims.set(runtimeId, preparing);
     }
-    const response = daemonTaskClaimResponse(store, hydratedTask, store.getTaskTriggerMetadata(task));
-    const runtime = task.runtimeId ? store.getRuntime(task.runtimeId) : null;
-    // Every claim gets a task capability, including ownerless runtimes left by
-    // older releases. `local` matches the legacy owner semantics used by the
-    // runtime claim predicate, while the task/agent/workspace bindings enforce
-    // the actual authorization boundary.
-    const ownerId = cleanString(runtime?.ownerId) ?? "local";
-    const token = await store.createTaskAccessToken(task, ownerId);
-    response.auth_token = token.token;
-    return c.json({ task: response });
+    return c.json({ task: await preparing });
   });
   app.get("/api/daemon/runtimes/:runtimeId/tasks/pending", (c) => {
     const runtime = store.getRuntime(c.req.param("runtimeId"));
@@ -1251,10 +1262,6 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     if (!task) return c.json({ error: "task not found" }, 404);
     return c.json({ status: task.status, completed_at: task.completedAt });
   });
-}
-
-function safeProjectKnowledgeError(error: unknown): string {
-  return (error instanceof Error ? error.message : String(error)).slice(0, 500);
 }
 
 function normalizeDaemonProtocolVersion(value: unknown): number {

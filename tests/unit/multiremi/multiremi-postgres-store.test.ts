@@ -219,6 +219,38 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     await admin.end();
   });
 
+  it("fences Wiki cleanup leases and persists per-path progress across connections", () => {
+    const otherDb = new PostgresSyncDatabase(pgDatabaseUrl(TEST_DB));
+    const other = new MultiremiStore(otherDb);
+    const jobId = "rwjob_pg_cleanup";
+    // Install a legacy cleanup fixture to exercise the newly added lease columns.
+    db.run(`INSERT INTO multiremi_repository_wiki_storage_jobs
+      (id,workspace_id,repository_id,batch_id,state,manifest,attempt_count,created_at,updated_at)
+      VALUES (?, 'local', 'repo_pg_cleanup', 'batch_pg_cleanup', 'cleanup', ?, 0, ?, ?)
+      ON CONFLICT(id) DO NOTHING`, [jobId, JSON.stringify({ promotions: [], cleanupUris: ["first.md", "second.md"] }),
+      new Date().toISOString(), new Date().toISOString()]);
+    const now = new Date().toISOString();
+    const until = new Date(Date.now() + 120_000).toISOString();
+    try {
+      expect(store.claimRepositoryWikiStorageJob(jobId, "first", until, now)).toBe(true);
+      expect(other.claimRepositoryWikiStorageJob(jobId, "second", until, now)).toBe(false);
+      store.recordRepositoryWikiCleanupProgress(jobId, "first", "first.md");
+      expect(other.listRepositoryWikiStorageJobs("local", "repo_pg_cleanup")[0]?.manifest.completedCleanupUris).toEqual(["first.md"]);
+      db.run("UPDATE multiremi_repository_wiki_storage_jobs SET lease_until = ? WHERE id = ?", ["2020-01-01T00:00:00.000Z", jobId]);
+      expect(other.claimRepositoryWikiStorageJob(jobId, "second", until, now)).toBe(true);
+      expect(store.renewRepositoryWikiStorageJob(jobId, "first", until)).toBe(false);
+      expect(() => store.recordRepositoryWikiCleanupProgress(jobId, "first", "second.md")).toThrow("lease lost");
+      other.recordRepositoryWikiCleanupProgress(jobId, "second", "second.md");
+      store.releaseRepositoryWikiStorageJob(jobId, "first");
+      expect(store.claimRepositoryWikiStorageJob(jobId, "third", until, now)).toBe(false);
+      other.releaseRepositoryWikiStorageJob(jobId, "second");
+      expect(store.claimRepositoryWikiStorageJob(jobId, "third", until, now)).toBe(true);
+    } finally {
+      store.completeRepositoryWikiStorageJob(jobId);
+      otherDb.close();
+    }
+  });
+
   it("checks repository Wiki publication without untyped nullable parameters", () => {
     const { autopilot } = configureRepositoryWikiAutomation(store);
 
