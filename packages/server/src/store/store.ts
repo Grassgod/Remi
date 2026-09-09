@@ -3673,6 +3673,22 @@ runMigrations(this.db);
     this.repositoryWiki.completeStorageJob(id);
   }
 
+  claimRepositoryWikiStorageJob(id: string, token: string, until: string, now: string): boolean {
+    return this.repositoryWiki.claimStorageJob(id, token, until, now);
+  }
+
+  renewRepositoryWikiStorageJob(id: string, token: string, until: string): boolean {
+    return this.repositoryWiki.renewStorageJob(id, token, until);
+  }
+
+  releaseRepositoryWikiStorageJob(id: string, token: string): void {
+    this.repositoryWiki.releaseStorageJob(id, token);
+  }
+
+  recordRepositoryWikiCleanupProgress(id: string, token: string, uri: string): void {
+    this.repositoryWiki.recordCleanupProgress(id, token, uri);
+  }
+
   listRepositoryWikiDocRevisions(docId: string): MultiremiRepositoryWikiDocRevision[] {
     return this.repositoryWiki.revisions(docId);
   }

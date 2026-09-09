@@ -1414,6 +1414,8 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
     projectDocs: normalizeDaemonClaimProjectDocs(raw.project_docs ?? raw.projectDocs),
     projectWikiDocs: normalizeDaemonClaimProjectWikiDocs(raw.project_wiki_docs ?? raw.projectWikiDocs),
     repositoryWikiContexts: normalizeDaemonClaimRepositoryWikiContexts(raw.repository_wiki_contexts ?? raw.repositoryWikiContexts),
+    knowledgeWarnings: Array.isArray(raw.knowledge_warnings)
+      ? raw.knowledge_warnings.filter((warning: unknown): warning is string => typeof warning === "string") : [],
     projectContexts: normalizeDaemonClaimProjectContexts(raw.project_contexts ?? raw.projectContexts),
     squadContext: normalizeDaemonClaimSquadContext(raw.squad_context ?? raw.squadContext),
     repos: Array.isArray(raw.repos) ? raw.repos : [],

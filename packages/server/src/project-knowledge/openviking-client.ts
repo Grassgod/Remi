@@ -18,6 +18,7 @@ export interface OpenVikingClientOptions {
   timeoutMs?: number;
   maxRetries?: number;
   fetch?: FetchLike;
+  signal?: AbortSignal;
 }
 
 export class OpenVikingClientError extends Error {
@@ -38,7 +39,7 @@ export class OpenVikingClient implements OpenVikingClientContract {
   private readonly maxRetries: number;
   private readonly fetchImpl: FetchLike;
 
-  constructor(options: OpenVikingClientOptions) {
+  constructor(private readonly options: OpenVikingClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
     this.apiKey = options.apiKey.trim();
     if (!this.baseUrl) throw new Error("OpenViking base URL is required");
@@ -46,6 +47,11 @@ export class OpenVikingClient implements OpenVikingClientContract {
     this.timeoutMs = Math.max(1_000, options.timeoutMs ?? 30_000);
     this.maxRetries = Math.max(0, Math.min(5, options.maxRetries ?? 2));
     this.fetchImpl = options.fetch ?? fetch;
+  }
+
+  withSignal(signal: AbortSignal): OpenVikingClient {
+    return new OpenVikingClient({ ...this.options, signal: this.options.signal
+      ? AbortSignal.any([this.options.signal, signal]) : signal });
   }
 
   async health(): Promise<void> {
@@ -89,8 +95,13 @@ export class OpenVikingClient implements OpenVikingClientContract {
     }]);
   }
 
-  async remove(uri: string): Promise<void> {
-    await this.request(`/api/v1/fs?uri=${encodeURIComponent(uri)}&wait=true`, { method: "DELETE" });
+  async remove(uri: string, options: { wait?: boolean } = {}): Promise<void> {
+    try {
+      await this.request(`/api/v1/fs?uri=${encodeURIComponent(uri)}&wait=${options.wait !== false}`, { method: "DELETE" });
+    } catch (error) {
+      if (error instanceof OpenVikingClientError && error.status === 404) return;
+      throw error;
+    }
   }
 
   async setTags(uri: string, tags: string[]): Promise<void> {
@@ -185,12 +196,13 @@ export class OpenVikingClient implements OpenVikingClientContract {
   ): Promise<T> {
     let lastError: unknown;
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      this.options.signal?.throwIfAborted();
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.timeoutMs);
       try {
         const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
           ...init,
-          signal: controller.signal,
+          signal: this.options.signal ? AbortSignal.any([controller.signal, this.options.signal]) : controller.signal,
           headers: {
             Authorization: `Bearer ${this.apiKey}`,
             ...(init.body ? { "Content-Type": "application/json" } : {}),
@@ -218,6 +230,7 @@ export class OpenVikingClient implements OpenVikingClientContract {
           || errorDetails?.retryable === true;
         throw new OpenVikingClientError(`OpenViking request failed: ${detail}`, response.status, code, retryable);
       } catch (error) {
+        this.options.signal?.throwIfAborted();
         const normalized = error instanceof OpenVikingClientError
           ? error
           : new OpenVikingClientError(
@@ -228,7 +241,7 @@ export class OpenVikingClient implements OpenVikingClientContract {
           );
         lastError = normalized;
         if (!normalized.retryable || attempt === this.maxRetries) throw normalized;
-        await delay(Math.min(2_000, 100 * 2 ** attempt));
+        await delay(Math.min(2_000, 100 * 2 ** attempt), this.options.signal);
       } finally {
         clearTimeout(timer);
       }
@@ -254,6 +267,11 @@ function openVikingContentHash(value: string): string {
   return `sha256:${digest}`;
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const abort = () => { clearTimeout(timer); reject(signal?.reason); };
+    const timer = setTimeout(() => { signal?.removeEventListener("abort", abort); resolve(); }, ms);
+    signal?.addEventListener("abort", abort, { once: true });
+  });
 }

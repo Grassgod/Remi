@@ -39,6 +39,7 @@ export interface RepositoryWikiStoragePromotion {
 export interface RepositoryWikiStorageJobManifest {
   promotions: RepositoryWikiStoragePromotion[];
   cleanupUris: string[];
+  completedCleanupUris?: string[];
 }
 
 export interface RepositoryWikiStorageJobInput {
@@ -352,6 +353,38 @@ export class RepositoryWikiRepo {
     this.ctx.db.run("DELETE FROM multiremi_repository_wiki_storage_jobs WHERE id = ?", [id]);
   }
 
+  claimStorageJob(id: string, token: string, until: string, now: string): boolean {
+    return this.ctx.db.run(
+      `UPDATE multiremi_repository_wiki_storage_jobs SET lease_token = ?, lease_until = ?
+       WHERE id = ? AND (lease_token IS NULL OR lease_until <= ?)`, [token, until, id, now],
+    ).changes === 1;
+  }
+
+  renewStorageJob(id: string, token: string, until: string): boolean {
+    return this.ctx.db.run(
+      `UPDATE multiremi_repository_wiki_storage_jobs SET lease_until = ? WHERE id = ? AND lease_token = ?`,
+      [until, id, token],
+    ).changes === 1;
+  }
+
+  releaseStorageJob(id: string, token: string): void {
+    this.ctx.db.run(`UPDATE multiremi_repository_wiki_storage_jobs SET lease_token = NULL, lease_until = NULL
+      WHERE id = ? AND lease_token = ?`, [id, token]);
+  }
+
+  recordCleanupProgress(id: string, token: string, uri: string): void {
+    this.ctx.db.transaction(() => {
+      const locked = this.ctx.db.run(`UPDATE multiremi_repository_wiki_storage_jobs SET id = id
+        WHERE id = ? AND lease_token = ?`, [id, token]);
+      if (locked.changes !== 1) throw new Error("Repository Wiki storage lease lost");
+      const row = this.ctx.db.query("SELECT * FROM multiremi_repository_wiki_storage_jobs WHERE id = ?").get(id) as Row;
+      const job = toRepositoryWikiStorageJob(row);
+      job.manifest.completedCleanupUris = [...new Set([...(job.manifest.completedCleanupUris ?? []), uri])];
+      this.ctx.db.run("UPDATE multiremi_repository_wiki_storage_jobs SET manifest = ? WHERE id = ? AND lease_token = ?",
+        [toJson(job.manifest), id, token]);
+    })();
+  }
+
   private createStorageJobWithinTransaction(input: RepositoryWikiStorageJobInput): void {
     const now = nowIso();
     this.ctx.db.run(
@@ -495,6 +528,7 @@ function toRepositoryWikiStorageJob(row: Row): RepositoryWikiStorageJob {
     manifest: {
       promotions: Array.isArray(manifest.promotions) ? manifest.promotions : [],
       cleanupUris: Array.isArray(manifest.cleanupUris) ? manifest.cleanupUris.map(String) : [],
+      completedCleanupUris: Array.isArray(manifest.completedCleanupUris) ? manifest.completedCleanupUris.map(String) : [],
     },
     attemptCount: Number(row.attempt_count ?? 0),
     lastError: cleanOptionalString(row.last_error),
