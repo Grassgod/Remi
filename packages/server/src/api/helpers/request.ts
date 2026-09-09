@@ -35,14 +35,15 @@ export function isJsonApiError(value: unknown): value is { apiError: string; sta
 
 export async function readJsonStrictAllowEmpty<T>(c: {
   req: {
-    json: () => Promise<unknown>;
-    header?: (name: string) => string | undefined;
+    text: () => Promise<string>;
   };
 }): Promise<T | { apiError: string; statusCode: 400 }> {
-  const contentLength = c.req.header?.("content-length");
-  const contentType = c.req.header?.("content-type");
-  if ((contentLength == null || contentLength === "0") && !contentType) return {} as T;
-  return readJsonStrict<T>(c);
+  try {
+    const body = await c.req.text();
+    return body.length === 0 ? {} as T : JSON.parse(body) as T;
+  } catch {
+    return { apiError: "invalid request body", statusCode: 400 };
+  }
 }
 
 export function requestRemoteAddress(request: Request): string {

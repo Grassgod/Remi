@@ -9,6 +9,7 @@ import {
   denyCurrentUserCommentAccess,
   detectContentTypeFromFilename,
   loadChatSessionForCurrentUser,
+  issueMutationActor,
   localAttachmentFileResponse,
   readJson,
   safeFilename,
@@ -17,7 +18,7 @@ import {
   uploadRelativePath,
   uploadedAttachmentPath,
 } from "../helpers.js";
-import { attachmentCompatibilityResponse, cleanString, currentRequestUserId } from "../wire/index.js";
+import { attachmentCompatibilityResponse, cleanString } from "../wire/index.js";
 import type { CreateAttachmentInput } from "@multiremi/contracts/types.js";
 import { mkdir, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -43,7 +44,11 @@ export function registerAttachmentRoutes(app: Hono, deps: RouterDeps): void {
     const workspaceId = cleanString(body.workspaceId) ?? cleanString(body.workspace_id) ?? "local";
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    return c.json({ attachment: store.createAttachment(body) }, 201);
+    const { actorType: uploaderType, actorId: uploaderId } = issueMutationActor(c, {
+      actorType: body.uploaderType ?? body.uploader_type,
+      actorId: body.uploaderId ?? body.uploader_id,
+    });
+    return c.json({ attachment: store.createAttachment({ ...body, uploaderType, uploaderId }) }, 201);
   });
 
   app.post("/api/upload-file", async (c) => {
@@ -76,8 +81,10 @@ export function registerAttachmentRoutes(app: Hono, deps: RouterDeps): void {
     // so a token scoped to another workspace cannot create rows/files in this one.
     const uploadDenied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (uploadDenied) return uploadDenied;
-    const uploaderType = stringFormValue(form.get("uploaderType") ?? form.get("uploader_type")) ?? "member";
-    const uploaderId = stringFormValue(form.get("uploaderId") ?? form.get("uploader_id")) ?? "local";
+    const { actorType: uploaderType, actorId: uploaderId } = issueMutationActor(c, {
+      actorType: stringFormValue(form.get("uploaderType") ?? form.get("uploader_type")) ?? undefined,
+      actorId: stringFormValue(form.get("uploaderId") ?? form.get("uploader_id")),
+    });
     const attachmentId = createUploadAttachmentId();
     const safeName = safeFilename(file.name || "upload.bin");
     const relativePath = uploadRelativePath(workspaceId, attachmentId, safeName);
@@ -140,7 +147,8 @@ export function registerAttachmentRoutes(app: Hono, deps: RouterDeps): void {
     // denyAttachmentAccess above (the creator is the uploader).
     if (!existing.chatSessionId) {
       const role = currentWorkspaceRole(c, store, existing.workspaceId);
-      const isUploader = existing.uploaderType === "member" && existing.uploaderId === currentRequestUserId(c);
+      const caller = issueMutationActor(c);
+      const isUploader = existing.uploaderType === caller.actorType && existing.uploaderId === caller.actorId;
       const isAdmin = role === "owner" || role === "admin";
       if (!isUploader && !isAdmin) {
         return c.json({ error: "not authorized to delete this attachment" }, 403);

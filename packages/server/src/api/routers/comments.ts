@@ -3,6 +3,7 @@ import {
   denyCurrentUserWorkspaceAccess,
   denyCurrentUserCommentAccess,
   isJsonApiError,
+  issueMutationActor,
   normalizeReactionInput,
   readJson,
   readJsonStrict,
@@ -45,10 +46,7 @@ export function registerCommentRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     const body = await readJson<{ actorType?: string; actor_type?: string; actorId?: string | null; actor_id?: string | null }>(c);
     return c.json({
-      comment: store.resolveIssueComment(c.req.param("id"), {
-        actorType: body.actorType ?? body.actor_type,
-        actorId: body.actorId ?? body.actor_id,
-      }),
+      comment: store.resolveIssueComment(c.req.param("id"), issueMutationActor(c, body)),
     });
   });
   app.delete("/api/multiremi/comments/:id/resolve", (c) => {
@@ -83,10 +81,7 @@ export function registerCommentRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJsonStrictAllowEmpty<{ actorType?: string; actor_type?: string; actorId?: string | null; actor_id?: string | null }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     try {
-      return c.json(commentCompatibilityResponse(store.resolveIssueComment(c.req.param("id"), {
-        actorType: body.actorType ?? body.actor_type,
-        actorId: body.actorId ?? body.actor_id,
-      })));
+      return c.json(commentCompatibilityResponse(store.resolveIssueComment(c.req.param("id"), issueMutationActor(c, body))));
     } catch (error) {
       return issueCommentMutationErrorResponse(c, error);
     }
@@ -105,7 +100,7 @@ export function registerCommentRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     const body = await readJsonStrict<CreateMultiremiReactionInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const input = normalizeReactionInput(body);
+    const input = normalizeReactionInput(c, body);
     if (!input.emoji) return c.json({ error: "emoji is required" }, 400);
     return c.json(commentReactionCompatibilityResponse(store.addCommentReaction(c.req.param("id"), input)), 201);
   });
@@ -114,7 +109,7 @@ export function registerCommentRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     const body = await readJsonStrict<CreateMultiremiReactionInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const input = normalizeReactionInput(body);
+    const input = normalizeReactionInput(c, body);
     if (!input.emoji) return c.json({ error: "emoji is required" }, 400);
     store.removeCommentReaction(c.req.param("id"), input);
     return c.body(null, 204);
@@ -129,13 +124,13 @@ export function registerCommentRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserCommentAccess(c, store, c.req.param("id"));
     if (denied) return denied;
     const body = await readJson<CreateMultiremiReactionInput>(c);
-    return c.json({ reaction: store.addCommentReaction(c.req.param("id"), normalizeReactionInput(body)) }, 201);
+    return c.json({ reaction: store.addCommentReaction(c.req.param("id"), normalizeReactionInput(c, body)) }, 201);
   });
   app.delete("/api/multiremi/comments/:id/reactions", async (c) => {
     const denied = denyCurrentUserCommentAccess(c, store, c.req.param("id"));
     if (denied) return denied;
     const body = await readJson<CreateMultiremiReactionInput>(c);
-    store.removeCommentReaction(c.req.param("id"), normalizeReactionInput(body));
+    store.removeCommentReaction(c.req.param("id"), normalizeReactionInput(c, body));
     return c.json({ ok: true });
   });
   app.get("/api/multiremi/comments/:id/attachments", (c) => {

@@ -12,6 +12,7 @@ import {
   issueCommentCreateInput,
   issueFromParam,
   issueListQuery,
+  issueMutationActor,
   issueSubscriberCaller,
   issueSubscriberTarget,
   log,
@@ -1379,7 +1380,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<CreateMultiremiReactionInput>(c);
-    return c.json({ reaction: store.addIssueReaction(issue.id, normalizeReactionInput(body)) }, 201);
+    return c.json({ reaction: store.addIssueReaction(issue.id, normalizeReactionInput(c, body)) }, 201);
   });
   app.post("/api/issues/:id/reactions", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
@@ -1388,7 +1389,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     const body = await readJsonStrict<CreateMultiremiReactionInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const input = normalizeReactionInput(body);
+    const input = normalizeReactionInput(c, body);
     if (!input.emoji) return c.json({ error: "emoji is required" }, 400);
     return c.json(issueReactionCompatibilityResponse(store.addIssueReaction(issue.id, input)), 201);
   });
@@ -1398,7 +1399,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<CreateMultiremiReactionInput>(c);
-    store.removeIssueReaction(issue.id, normalizeReactionInput(body));
+    store.removeIssueReaction(issue.id, normalizeReactionInput(c, body));
     return c.json({ ok: true });
   });
   app.delete("/api/issues/:id/reactions", async (c) => {
@@ -1408,7 +1409,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     const body = await readJsonStrict<CreateMultiremiReactionInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const input = normalizeReactionInput(body);
+    const input = normalizeReactionInput(c, body);
     if (!input.emoji) return c.json({ error: "emoji is required" }, 400);
     store.removeIssueReaction(issue.id, input);
     return c.body(null, 204);
@@ -1433,7 +1434,11 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<CreateAttachmentInput>(c);
-    const attachment = store.createAttachment({ ...body, issueId: issue.id });
+    const { actorType: uploaderType, actorId: uploaderId } = issueMutationActor(c, {
+      actorType: body.uploaderType ?? body.uploader_type,
+      actorId: body.uploaderId ?? body.uploader_id,
+    });
+    const attachment = store.createAttachment({ ...body, issueId: issue.id, uploaderType, uploaderId });
     return c.json({ attachment }, 201);
   });
   app.get("/api/multiremi/issues/:id/labels", (c) => {
