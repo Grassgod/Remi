@@ -132,8 +132,11 @@ export function registerTokenRoutes(app: Hono, deps: RouterDeps): void {
     }
 
     const body = await readJson<Partial<CreateAccessTokenInput>>(c);
-    const workspaceId = body.workspaceId ?? body.workspace_id ?? "local";
     const userId = authenticatedRequestUserId(c);
+    const workspaceId = userId
+      ? resolveRequestWorkspaceId(c, store, body.workspaceId ?? body.workspace_id)
+      : body.workspaceId ?? body.workspace_id ?? "local";
+    if (workspaceId instanceof Response) return workspaceId;
     if (userId) {
       const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
       if (denied) return denied;

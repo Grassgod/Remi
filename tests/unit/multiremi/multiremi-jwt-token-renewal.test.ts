@@ -49,6 +49,13 @@ it("binds JWT renewal to the user and workspace without accepting privileged tok
     Authorization: `Bearer ${signTestJwt({ sub: alice.id, exp: Math.floor(Date.now() / 1000) + 60 })}`,
     "Content-Type": "application/json",
   };
+  for (const [slug, expected] of [[mine.slug, 201], [theirs.slug, 404], ["missing", 404]] as const) {
+    const selected = await app.request("/api/tokens/current/renew", {
+      method: "POST", headers: { ...headers, "X-Workspace-Slug": slug },
+    });
+    expect(selected.status).toBe(expected);
+    if (expected === 201) expect(await selected.json()).toMatchObject({ workspaceId: mine.id, userId: alice.id });
+  }
   for (const workspaceKey of ["workspaceId", "workspace_id"]) {
     const denied = await app.request("/api/tokens/current/renew", {
       method: "POST", headers, body: JSON.stringify({ [workspaceKey]: theirs.id }),

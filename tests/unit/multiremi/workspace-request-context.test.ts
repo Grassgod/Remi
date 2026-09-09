@@ -33,7 +33,7 @@ describe("web workspace request context", () => {
     const task = store.createTask({ workspaceId: workspace.id, agentId: agent.id, issueId: issue.id, prompt: "Work" });
     const taskToken = await store.createTaskAccessToken(task, user.id);
     const daemonToken = await store.createAccessToken({ workspaceId: workspace.id, type: "daemon", daemonId: "dmn_context", userId: user.id, name: "Daemon" });
-    const selectors = [{ "X-Workspace-Slug": other.slug }, { "X-Workspace-ID": other.id }, { "X-Workspace-Slug": "missing" }];
+    const selectors: Record<string, string>[] = [{ "X-Workspace-Slug": other.slug }, { "X-Workspace-ID": other.id }, { "X-Workspace-Slug": "missing" }];
     for (const token of [taskToken.token, daemonToken.token]) {
       for (const endpoint of reads) {
         for (const selector of selectors) {
