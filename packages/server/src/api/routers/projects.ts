@@ -1,3 +1,4 @@
+import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
 import type { Hono } from "hono";
 import {
   compatibilityWorkspaceId,
@@ -93,7 +94,8 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     });
   });
   app.get("/api/projects/search", (c) => {
-    const workspaceId = c.req.query("workspace_id") ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     try {
@@ -116,7 +118,8 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
   app.get("/api/projects", (c) => {
-    const workspaceId = c.req.query("workspace_id") ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const projects = store
@@ -135,7 +138,9 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
       "delta_instructions",
     );
     if (invalidDeltaInstructions) return invalidDeltaInstructions;
-    const projectInput = projectCreateCompatibilityInput(c, body);
+    const workspaceId = resolveRequestWorkspaceId(c, store, body.workspace_id ?? c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
+    const projectInput = { ...projectCreateCompatibilityInput(c, body), workspaceId };
     const denied = denyCurrentUserWorkspaceAccess(c, store, projectInput.workspaceId ?? "local");
     if (denied) return denied;
     const repositoryError = validateImportedProjectResources(

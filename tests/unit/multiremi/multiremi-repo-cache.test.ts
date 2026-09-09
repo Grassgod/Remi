@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import * as childProcess from "node:child_process";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -255,6 +256,7 @@ describe("Multiremi repo cache", () => {
       processKillGraceMs: 20,
     });
     let ticks = 0;
+    const spawn = spyOn(childProcess, "spawn");
     const ticker = setInterval(() => ticks += 1, 5);
     const startedAt = Date.now();
     try {
@@ -262,12 +264,18 @@ describe("Multiremi repo cache", () => {
       expect(result).toHaveLength(1);
       expect(result[0]).toMatchObject({ repoUrl: source, status: "cached" });
       expect(result[0]?.error).toContain("timed out after 40ms");
-      expect(readFetchAttempts(wrapperRoot)).toBe(3);
+      // A timed-out shell can die between truncating and writing its counter.
+      // Observe real launches in the parent so timeout enforcement cannot erase them.
+      const fetches = spawn.mock.calls.filter(([command, args, options]) =>
+        command === "git" && Array.isArray(args) && args[0] === "fetch" && options?.cwd === barePath
+      );
+      expect(fetches).toHaveLength(3);
       expect(ticks).toBeGreaterThan(5);
       expect(Date.now() - startedAt).toBeLessThan(1_000);
       expect(existsSync(multiremiRepoCacheLockPath(barePath))).toBe(false);
       await expectRecordedProcessesToExit(wrapperRoot);
     } finally {
+      spawn.mockRestore();
       clearInterval(ticker);
       restorePath();
     }

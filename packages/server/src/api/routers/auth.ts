@@ -15,7 +15,7 @@ import {
   verifyLocalAuthCode,
 } from "../helpers.js";
 import type { RouterDeps } from "./deps.js";
-import { currentRequestUserId } from "../wire/context.js";
+import { authenticatedRequestUserId, currentAccessToken, currentRequestUserId } from "../wire/context.js";
 
 export function registerAuthRoutes(app: Hono, deps: RouterDeps): void {
   const { store } = deps;
@@ -23,12 +23,18 @@ export function registerAuthRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/cli-token", async (c) => {
     const userId = currentRequestUserId(c);
     if (userId !== "local" && !store.getUser(userId)) return c.json({ error: "unauthorized" }, 401);
+    const source = currentAccessToken(c);
+    // Keep the migrated owner a verified human without promoting legacy machine
+    // credentials to a human session or a different workspace.
+    const localSession = userId === "local" && (
+      source?.purpose === "session" || (!source && authenticatedRequestUserId(c) === "local")
+    );
     const token = await store.createAccessToken({
-      workspaceId: "local",
+      workspaceId: source?.workspaceId ?? "local",
       name: "CLI token",
       userId,
       type: "pat",
-      purpose: "cli",
+      purpose: localSession ? "session" : "cli",
     });
     return c.json({ token: token.token });
   });

@@ -1,7 +1,7 @@
+import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
 import type { Hono } from "hono";
 import {
   compatibilityUserId,
-  compatibilityWorkspaceId,
   denyCurrentUserWorkspaceAccess,
   denyPinOwnerAccess,
   isJsonApiError,
@@ -58,7 +58,8 @@ export function registerPinRoutes(app: Hono, deps: RouterDeps): void {
   });
 
   app.get("/api/pins", (c) => {
-    const workspaceId = compatibilityWorkspaceId(c);
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const userId = compatibilityUserId(c);
@@ -69,7 +70,8 @@ export function registerPinRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/pins", async (c) => {
     const body = await readJsonStrict<{ id?: string; workspace_id?: string | null; user_id?: string | null; item_type?: string; item_id?: string }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const workspaceId = cleanString(body.workspace_id) ?? compatibilityWorkspaceId(c);
+    const workspaceId = resolveRequestWorkspaceId(c, store, cleanString(body.workspace_id) ?? c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const userId = cleanString(body.user_id) ?? compatibilityUserId(c);
@@ -91,7 +93,8 @@ export function registerPinRoutes(app: Hono, deps: RouterDeps): void {
   app.put("/api/pins/reorder", async (c) => {
     const body = await readJsonStrict<{ workspace_id?: string; user_id?: string; items?: ReorderPinnedItemInput[] }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const workspaceId = body.workspace_id ?? compatibilityWorkspaceId(c);
+    const workspaceId = resolveRequestWorkspaceId(c, store, body.workspace_id ?? c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const userId = body.user_id ?? compatibilityUserId(c);
@@ -101,7 +104,8 @@ export function registerPinRoutes(app: Hono, deps: RouterDeps): void {
     return c.json(pins.map(pinCompatibilityResponse));
   });
   app.delete("/api/pins/:itemType/:itemId", (c) => {
-    const workspaceId = compatibilityWorkspaceId(c);
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const userId = compatibilityUserId(c);

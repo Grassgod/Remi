@@ -1,3 +1,4 @@
+import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
 import type { Hono } from "hono";
 import {
   createAgentFromTemplate,
@@ -333,7 +334,8 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
     return c.json({ tasks, total: tasks.length });
   });
   app.get("/api/agent-task-snapshot", (c) => {
-    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspaceId") ?? c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     return c.json(store.listWorkspaceAgentTaskSnapshot(workspaceId).map(taskPublicResponse));
@@ -346,7 +348,8 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
     return c.json({ counts, total: counts.length });
   });
   app.get("/api/agent-run-counts", (c) => {
-    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspaceId") ?? c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     return c.json(store.listWorkspaceAgentRunCounts(workspaceId));
@@ -359,7 +362,8 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
     return c.json({ activity, total: activity.length });
   });
   app.get("/api/agent-activity-30d", (c) => {
-    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspaceId") ?? c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     return c.json(store.listWorkspaceAgentActivity30d(workspaceId));

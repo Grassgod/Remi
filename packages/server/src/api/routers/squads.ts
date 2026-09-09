@@ -1,7 +1,7 @@
+import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
 import type { Context, Hono } from "hono";
 import {
   compatibilityUserId,
-  compatibilityWorkspaceId,
   denyCurrentUserWorkspaceAccess,
   isJsonApiError,
   readJson,
@@ -39,7 +39,8 @@ export function registerSquadRoutes(app: Hono, deps: RouterDeps): void {
     return c.json({ squads, total: squads.length });
   });
   app.get("/api/squads", (c) => {
-    const workspaceId = compatibilityWorkspaceId(c);
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     return c.json(store.listSquads(workspaceId).map((squad) => squadCompatibilityResponse(store, squad)));
@@ -57,7 +58,8 @@ export function registerSquadRoutes(app: Hono, deps: RouterDeps): void {
       member_ids?: string[];
     }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const workspaceId = cleanString(body.workspace_id) ?? compatibilityWorkspaceId(c);
+    const workspaceId = resolveRequestWorkspaceId(c, store, cleanString(body.workspace_id) ?? c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
     const squadCreateDenied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (squadCreateDenied) return squadCreateDenied;
     const leaderId = cleanString(body.leader_id);
@@ -132,7 +134,8 @@ export function registerSquadRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/squads/:id", (c) => {
     const squad = store.getSquad(c.req.param("id"));
     if (!squad) return c.json({ error: "squad not found" }, 404);
-    const workspaceId = compatibilityWorkspaceId(c);
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
     if (squad.workspaceId !== workspaceId) return c.json({ error: "squad not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, squad.workspaceId);
     if (denied) return denied;
@@ -140,7 +143,7 @@ export function registerSquadRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.put("/api/squads/:id", async (c) => {
     const existing = store.getSquad(c.req.param("id"));
-    if (!existing || existing.workspaceId !== compatibilityWorkspaceId(c)) return c.json({ error: "squad not found" }, 404);
+    if (!existing || existing.workspaceId !== resolveRequestWorkspaceId(c, store, c.req.query("workspace_id"))) return c.json({ error: "squad not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, existing.workspaceId);
     if (denied) return denied;
     const body = await readJsonStrict<{
@@ -172,7 +175,7 @@ export function registerSquadRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.delete("/api/squads/:id", (c) => {
     const existing = store.getSquad(c.req.param("id"));
-    if (!existing || existing.workspaceId !== compatibilityWorkspaceId(c)) return c.json({ error: "squad not found" }, 404);
+    if (!existing || existing.workspaceId !== resolveRequestWorkspaceId(c, store, c.req.query("workspace_id"))) return c.json({ error: "squad not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, existing.workspaceId);
     if (denied) return denied;
     store.archiveSquad(c.req.param("id"));
@@ -180,21 +183,21 @@ export function registerSquadRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.get("/api/squads/:id/members", (c) => {
     const squad = store.getSquad(c.req.param("id"));
-    if (!squad || squad.workspaceId !== compatibilityWorkspaceId(c)) return c.json({ error: "squad not found" }, 404);
+    if (!squad || squad.workspaceId !== resolveRequestWorkspaceId(c, store, c.req.query("workspace_id"))) return c.json({ error: "squad not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, squad.workspaceId);
     if (denied) return denied;
     return c.json(store.listSquadMembers(c.req.param("id")).map(squadMemberCompatibilityResponse));
   });
   app.get("/api/squads/:id/members/status", (c) => {
     const squad = store.getSquad(c.req.param("id"));
-    if (!squad || squad.workspaceId !== compatibilityWorkspaceId(c)) return c.json({ error: "squad not found" }, 404);
+    if (!squad || squad.workspaceId !== resolveRequestWorkspaceId(c, store, c.req.query("workspace_id"))) return c.json({ error: "squad not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, squad.workspaceId);
     if (denied) return denied;
     return c.json(squadMemberStatusResponse(store, c.req.param("id")));
   });
   app.post("/api/squads/:id/members", async (c) => {
     const squad = store.getSquad(c.req.param("id"));
-    if (!squad || squad.workspaceId !== compatibilityWorkspaceId(c)) return c.json({ error: "squad not found" }, 404);
+    if (!squad || squad.workspaceId !== resolveRequestWorkspaceId(c, store, c.req.query("workspace_id"))) return c.json({ error: "squad not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, squad.workspaceId);
     if (denied) return denied;
     const body = await readJsonStrict<{ member_type?: string; member_id?: string; role?: string }>(c);
@@ -216,7 +219,7 @@ export function registerSquadRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.patch("/api/squads/:id/members/role", async (c) => {
     const squad = store.getSquad(c.req.param("id"));
-    if (!squad || squad.workspaceId !== compatibilityWorkspaceId(c)) return c.json({ error: "squad not found" }, 404);
+    if (!squad || squad.workspaceId !== resolveRequestWorkspaceId(c, store, c.req.query("workspace_id"))) return c.json({ error: "squad not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, squad.workspaceId);
     if (denied) return denied;
     const body = await readJsonStrict<{ member_type?: string; member_id?: string; role?: string }>(c);
@@ -238,7 +241,7 @@ export function registerSquadRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.delete("/api/squads/:id/members", async (c) => {
     const squad = store.getSquad(c.req.param("id"));
-    if (!squad || squad.workspaceId !== compatibilityWorkspaceId(c)) return c.json({ error: "squad not found" }, 404);
+    if (!squad || squad.workspaceId !== resolveRequestWorkspaceId(c, store, c.req.query("workspace_id"))) return c.json({ error: "squad not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, squad.workspaceId);
     if (denied) return denied;
     const body = await readJsonStrict<{ member_type?: string; member_id?: string }>(c);

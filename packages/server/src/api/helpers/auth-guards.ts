@@ -18,6 +18,7 @@ import {
 import type { MultiremiRequestAuth } from "../wire/index.js";
 import type {
   CreateAccessTokenInput,
+  CreateAttachmentInput,
   MultiremiAccessToken,
   MultiremiAgent,
   MultiremiAttachment,
@@ -365,12 +366,12 @@ export function denyCurrentUserRuntimeWorkspaceAccess(c: Context, store: Multire
   const userId = authenticatedRequestUserId(c);
   // Same rule as denyCurrentUserWorkspaceAccess: a human's login PAT is not
   // workspace-scoped — membership decides which runtimes they can see.
-  const humanPat = token?.type === "pat" && userId && userId !== "local";
+  const humanPat = token?.type === "pat" && userId && (userId !== "local" || token.purpose === "session");
   if (!humanPat && token?.workspaceId && token.workspaceId !== workspaceId) {
     return c.json({ error: "runtime not found" }, 404);
   }
   // A logged-in human who is not a member of the runtime's workspace can't see it.
-  if (userId && userId !== "local" && !store.getUserRoleInWorkspace(userId, workspaceId)) {
+  if (userId && (userId !== "local" || humanPat || !token) && !store.getUserRoleInWorkspace(userId, workspaceId)) {
     return c.json({ error: "runtime not found" }, 404);
   }
   return null;
@@ -488,7 +489,9 @@ export function denyCurrentUserWorkspaceAccess(c: Context, store: MultiremiStore
   // reach others. A human's login PAT is minted under "local" but is a session
   // credential, not a scope — the membership check below is the authority for
   // real users, otherwise they could never open a workspace created after login.
-  const humanPat = token?.type === "pat" && userId && userId !== "local";
+  // The migrated deployment owner keeps userId=local; session purpose separates
+  // that login from legacy ownerless workspace credentials.
+  const humanPat = token?.type === "pat" && userId && (userId !== "local" || token.purpose === "session");
   if (!humanPat && token?.workspaceId && token.workspaceId !== workspaceId) {
     return c.json({ error: "workspace not found" }, 404);
   }
@@ -496,7 +499,7 @@ export function denyCurrentUserWorkspaceAccess(c: Context, store: MultiremiStore
   // non-members get 404 (existence hidden). No user id (or the synthetic "local"
   // admin identity carried by user-less workspace access tokens) => master token /
   // open mode => full admin access.
-  if (userId && userId !== "local" && !store.getUserRoleInWorkspace(userId, workspaceId)) {
+  if (userId && (userId !== "local" || humanPat || !token) && !store.getUserRoleInWorkspace(userId, workspaceId)) {
     return c.json({ error: "workspace not found" }, 404);
   }
   return null;
@@ -554,6 +557,37 @@ export function denyAttachmentAccess(c: Context, store: MultiremiStore, attachme
     if (denied) return denied;
   }
   return denyCurrentUserWorkspaceAccess(c, store, attachment.workspaceId);
+}
+
+export function denyAttachmentCreationAccess(
+  c: Context,
+  store: MultiremiStore,
+  workspaceId: string,
+  input: CreateAttachmentInput,
+): Response | null {
+  const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+  if (denied) return denied;
+  const issueId = cleanString(input.issueId ?? input.issue_id);
+  if (issueId && store.getIssue(issueId)?.workspaceId !== workspaceId) {
+    return c.json({ error: "issue not found" }, 404);
+  }
+  const commentId = cleanString(input.commentId ?? input.comment_id);
+  if (commentId) {
+    const comment = store.getIssueComment(commentId);
+    if (!comment || store.getIssue(comment.issueId)?.workspaceId !== workspaceId) {
+      return c.json({ error: "comment not found" }, 404);
+    }
+  }
+  const chatSessionId = cleanString(input.chatSessionId ?? input.chat_session_id);
+  const chatMessageId = cleanString(input.chatMessageId ?? input.chat_message_id);
+  const chatMessage = chatMessageId ? store.getChatMessage(chatMessageId) : null;
+  if (chatMessageId && !chatMessage) return c.json({ error: "chat message not found" }, 404);
+  for (const sessionId of new Set([chatSessionId, chatMessage?.chatSessionId].filter((id): id is string => Boolean(id)))) {
+    if (store.getChatSession(sessionId)?.workspaceId !== workspaceId) return c.json({ error: "chat session not found" }, 404);
+    const loaded = loadChatSessionForCurrentUser(c, store, sessionId);
+    if (loaded instanceof Response) return loaded;
+  }
+  return null;
 }
 
 export function hasJwtWorkspaceAccess(store: MultiremiStore, userId: string, workspaceId: string): boolean {

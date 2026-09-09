@@ -1061,7 +1061,8 @@ describe("Multiremi API — issue endpoints", () => {
     });
     const camelWorkspaceLabelBody = await camelWorkspaceLabel.json();
     expect(camelWorkspaceLabel.status).toBe(201);
-    expect(camelWorkspaceLabelBody.workspace_id).toBe("local");
+    expect(camelWorkspaceLabelBody.workspace_id).toBe("remote");
+    expect(store.getLabel(camelWorkspaceLabelBody.id)?.workspaceId).toBe("remote");
 
     const attached = await app.request(`/api/issues/${issue.id}/labels`, {
       method: "POST",

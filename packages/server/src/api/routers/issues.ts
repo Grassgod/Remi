@@ -1,3 +1,4 @@
+import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
 import type { Context, Hono } from "hono";
 import {
   assigneeFrequencyQuery,
@@ -11,6 +12,8 @@ import {
   issueCommentCreateInput,
   issueFromParam,
   issueListQuery,
+  issueMutationActor,
+  denyAttachmentCreationAccess,
   issueSubscriberCaller,
   issueSubscriberTarget,
   log,
@@ -374,7 +377,9 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     return c.json(listIssuesResponse(query));
   });
   app.get("/api/issues", (c) => {
-    const query = issueListQuery(store, c, "compat");
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
+    const query = issueListQuery(store, c, "compat", workspaceId);
     const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
     if (denied) return denied;
     const issues = store.listIssues(query).map((issue) => issueCompatibilityResponse(issue, { includeLabels: true }));
@@ -387,13 +392,17 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     return c.json(store.listGroupedIssues(query));
   });
   app.get("/api/issues/grouped", (c) => {
-    const query = issueListQuery(store, c, "compat");
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
+    const query = issueListQuery(store, c, "compat", workspaceId);
     const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
     if (denied) return denied;
     return c.json(store.listGroupedIssues(query));
   });
   app.get("/api/assignee-frequency", (c) => {
-    const query = assigneeFrequencyQuery(c);
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspaceId") ?? c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
+    const query = { ...assigneeFrequencyQuery(c), workspaceId };
     const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
     if (denied) return denied;
     return c.json(store.listAssigneeFrequency(query));
@@ -419,7 +428,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     return c.json(result);
   });
   app.get("/api/issues/search", (c) => {
-    const workspaceId = c.req.query("workspace_id") ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     try {
@@ -450,7 +460,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     return c.json({ progress, total: progress.length });
   });
   app.get("/api/issues/child-progress", (c) => {
-    const workspaceId = c.req.query("workspace_id") ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const progress = store.listChildIssueProgress(workspaceId);
@@ -551,8 +562,10 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJsonStrict<CreateIssueWithTaskInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     if (!String(body.title ?? "").trim()) return c.json({ error: "title is required" }, 400);
+    const workspaceId = resolveRequestWorkspaceId(c, store, body.workspace_id ?? c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
     try {
-      const issueInput = withIssueCreateRequestContext(c, body, store);
+      const issueInput = withIssueCreateRequestContext(c, { ...body, workspace_id: workspaceId }, store);
       const denied = denyCurrentUserWorkspaceAccess(c, store, issueInput.workspace_id ?? "local");
       if (denied) return denied;
       const sourceIssueId = issueInput.source_issue_id ?? null;
@@ -658,7 +671,9 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const policyDenied = denyRestrictedTaskIssueCreation(c, store);
     if (policyDenied) return policyDenied;
     const body = await readJson<QuickCreateIssueInput>(c);
-    const input = issueQuickCreateCompatibilityInput(body);
+    const workspaceId = resolveRequestWorkspaceId(c, store, body.workspace_id ?? c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
+    const input = { ...issueQuickCreateCompatibilityInput(body), workspaceId };
     const denied = denyCurrentUserWorkspaceAccess(c, store, input.workspaceId ?? input.workspace_id ?? "local");
     if (denied) return denied;
     const result = safeQuickCreateIssue(store, input);
@@ -1366,7 +1381,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<CreateMultiremiReactionInput>(c);
-    return c.json({ reaction: store.addIssueReaction(issue.id, normalizeReactionInput(body)) }, 201);
+    return c.json({ reaction: store.addIssueReaction(issue.id, normalizeReactionInput(c, body)) }, 201);
   });
   app.post("/api/issues/:id/reactions", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
@@ -1375,7 +1390,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     const body = await readJsonStrict<CreateMultiremiReactionInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const input = normalizeReactionInput(body);
+    const input = normalizeReactionInput(c, body);
     if (!input.emoji) return c.json({ error: "emoji is required" }, 400);
     return c.json(issueReactionCompatibilityResponse(store.addIssueReaction(issue.id, input)), 201);
   });
@@ -1385,7 +1400,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<CreateMultiremiReactionInput>(c);
-    store.removeIssueReaction(issue.id, normalizeReactionInput(body));
+    store.removeIssueReaction(issue.id, normalizeReactionInput(c, body));
     return c.json({ ok: true });
   });
   app.delete("/api/issues/:id/reactions", async (c) => {
@@ -1395,7 +1410,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     const body = await readJsonStrict<CreateMultiremiReactionInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const input = normalizeReactionInput(body);
+    const input = normalizeReactionInput(c, body);
     if (!input.emoji) return c.json({ error: "emoji is required" }, 400);
     store.removeIssueReaction(issue.id, input);
     return c.body(null, 204);
@@ -1420,7 +1435,14 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<CreateAttachmentInput>(c);
-    const attachment = store.createAttachment({ ...body, issueId: issue.id });
+    const { actorType: uploaderType, actorId: uploaderId } = issueMutationActor(c, {
+      actorType: body.uploaderType ?? body.uploader_type,
+      actorId: body.uploaderId ?? body.uploader_id,
+    });
+    const input = { ...body, workspaceId: issue.workspaceId, issueId: issue.id, uploaderType, uploaderId };
+    const attachmentDenied = denyAttachmentCreationAccess(c, store, issue.workspaceId, input);
+    if (attachmentDenied) return attachmentDenied;
+    const attachment = store.createAttachment(input);
     return c.json({ attachment }, 201);
   });
   app.get("/api/multiremi/issues/:id/labels", (c) => {

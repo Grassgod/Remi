@@ -1,10 +1,10 @@
+import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
 import type { Context, Hono } from "hono";
 import {
   denyCurrentUserWorkspaceAccess,
   isTaskTokenCreateInput,
   readJson,
   requireWorkspaceAdmin,
-  workspaceIdFromSlugHeader,
 } from "../helpers.js";
 import {
   authenticatedRequestUserId,
@@ -37,7 +37,8 @@ export function registerTokenRoutes(app: Hono, deps: RouterDeps): void {
 
   app.get("/api/multiremi/tokens", (c) => {
     const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
-    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId)
+      ?? requireWorkspaceAdmin(c, store, workspaceId);
     if (denied) return denied;
     const tokens = store.listAccessTokens(workspaceId);
     return c.json({ tokens, total: tokens.length });
@@ -46,10 +47,18 @@ export function registerTokenRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJson<CreateAccessTokenInput>(c);
     if (isTaskTokenCreateInput(body)) return c.json({ error: "task tokens are minted by daemon task claim" }, 400);
     const workspaceId = body.workspaceId ?? body.workspace_id ?? "local";
-    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId)
+      ?? requireWorkspaceAdmin(c, store, workspaceId);
     if (denied) return denied;
+    const userId = authenticatedRequestUserId(c);
+    if (userId && String(body.purpose ?? "").trim().toLowerCase() === "session") {
+      return c.json({ error: "session tokens are minted by login" }, 400);
+    }
+    // Human provisioning cannot impersonate another user or create an ownerless
+    // credential. Master-token and open-mode provisioning retain explicit owners.
+    const input = userId ? { ...body, userId, user_id: userId } : body;
     try {
-      return c.json({ token: await store.createAccessToken(body) }, 201);
+      return c.json({ token: await store.createAccessToken(input) }, 201);
     } catch (error) {
       return accessTokenMutationError(c, error);
     }
@@ -57,7 +66,8 @@ export function registerTokenRoutes(app: Hono, deps: RouterDeps): void {
   app.delete("/api/multiremi/tokens/:id", (c) => {
     const current = store.getAccessToken(c.req.param("id"));
     if (!current) return c.json({ error: "token not found" }, 404);
-    const denied = requireWorkspaceAdmin(c, store, current.workspaceId);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, current.workspaceId)
+      ?? requireWorkspaceAdmin(c, store, current.workspaceId);
     if (denied) return denied;
     try {
       const token = store.revokeAccessToken(current.id);
@@ -68,7 +78,8 @@ export function registerTokenRoutes(app: Hono, deps: RouterDeps): void {
   });
 
   app.get("/api/tokens", (c) => {
-    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspaceId") ?? c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const userId = authenticatedRequestUserId(c);
@@ -89,7 +100,8 @@ export function registerTokenRoutes(app: Hono, deps: RouterDeps): void {
     // back to the X-Workspace-Slug header the web client sends on every request,
     // so the token is minted (and access-checked) for the workspace the user is
     // actually in — not the "local" default they may not be a member of.
-    const workspaceId = body.workspaceId ?? body.workspace_id ?? workspaceIdFromSlugHeader(c, store) ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, body.workspaceId ?? body.workspace_id);
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     // A human requester always mints for themselves: bind the token to the
@@ -120,11 +132,22 @@ export function registerTokenRoutes(app: Hono, deps: RouterDeps): void {
     }
 
     const body = await readJson<Partial<CreateAccessTokenInput>>(c);
+    const userId = authenticatedRequestUserId(c);
+    const workspaceId = userId
+      ? resolveRequestWorkspaceId(c, store, body.workspaceId ?? body.workspace_id)
+      : body.workspaceId ?? body.workspace_id ?? "local";
+    if (workspaceId instanceof Response) return workspaceId;
+    if (userId) {
+      const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+      if (denied) return denied;
+    }
     try {
       const token = await store.createAccessToken({
-        workspaceId: body.workspaceId ?? body.workspace_id ?? "local",
+        workspaceId,
+        userId: userId ?? undefined,
         name: body.name ?? "Renewed local token",
-        type: body.type ?? "pat",
+        type: userId ? "pat" : body.type ?? "pat",
+        purpose: userId === "local" ? "session" : undefined,
         expiresInDays: body.expiresInDays ?? body.expires_in_days ?? 30,
       });
       return c.json({

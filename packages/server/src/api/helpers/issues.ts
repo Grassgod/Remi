@@ -3,6 +3,7 @@
 import type { Context } from "hono";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import {
+  authenticatedRequestUserId,
   cleanString,
   currentAccessToken,
   currentRequestUserId,
@@ -93,6 +94,8 @@ export function issueCommentCreateInput(
       taskId: taskToken.taskId ?? null,
     };
   }
+  const userId = authenticatedRequestUserId(c);
+  if (userId) return { ...input, authorType: "member", authorId: userId };
   if (cleanString(input.authorType) || cleanString(input.authorId)) return input;
   const agentId = cleanString(c.req.header("X-Agent-ID"));
   if (agentId) return { ...input, authorType: "agent", authorId: agentId };
@@ -289,9 +292,10 @@ export function issueListQuery(
   store: MultiremiStore,
   c: { req: { query: (name: string) => string | undefined } },
   mode: CompatibilityQueryMode = "native",
+  requestedWorkspaceId?: string,
 ): ListIssuesInput {
   const compat = mode === "compat";
-  const workspaceId = (compat ? c.req.query("workspace_id") : c.req.query("workspaceId") ?? c.req.query("workspace_id")) ?? "local";
+  const workspaceId = requestedWorkspaceId ?? (compat ? c.req.query("workspace_id") : c.req.query("workspaceId") ?? c.req.query("workspace_id")) ?? "local";
   const assigneeTypes = splitQueryList(compat ? c.req.query("assignee_types") : c.req.query("assigneeTypes") ?? c.req.query("assignee_types")) as ListIssuesInput["assigneeTypes"];
   const assigneeId = resolveAssigneeFilterId(
     store,
@@ -403,10 +407,22 @@ export function assigneeFrequencyQuery(c: { req: { query: (name: string) => stri
   };
 }
 
-export function normalizeReactionInput(input: CreateMultiremiReactionInput): { actorType?: string; actorId?: string | null; emoji: string } {
+export function issueMutationActor(
+  c: Context,
+  input: Omit<CreateMultiremiReactionInput, "emoji"> = {},
+): { actorType: string; actorId: string } {
+  const taskToken = currentTaskAccessToken(c);
+  if (taskToken?.agentId) return { actorType: "agent", actorId: taskToken.agentId };
+  const userId = authenticatedRequestUserId(c);
+  if (userId) return { actorType: "member", actorId: userId };
+  // Explicit actors are only trusted for the master token or auth-disabled mode.
+  const agentId = cleanString(c.req.header("X-Agent-ID"));
   return {
-    actorType: input.actorType ?? input.actor_type ?? "member",
-    actorId: input.actorId ?? input.actor_id ?? "local",
-    emoji: input.emoji,
+    actorType: input.actorType ?? input.actor_type ?? (agentId ? "agent" : "member"),
+    actorId: input.actorId ?? input.actor_id ?? agentId ?? "local",
   };
+}
+
+export function normalizeReactionInput(c: Context, input: CreateMultiremiReactionInput): { actorType: string; actorId: string; emoji: string } {
+  return { ...issueMutationActor(c, input), emoji: input.emoji };
 }

@@ -76,7 +76,10 @@ export async function clientFor(
 
 export function workspaceOption(invocation: CommandInvocation): string | null {
   const config = loadMultiremiConfig();
+  const input = requestInput(invocation);
   return stringOption(invocation, "workspace")
+    ?? inputWorkspace(input.workspaceId)
+    ?? inputWorkspace(input.workspace_id)
     ?? process.env.MULTIREMI_WORKSPACE_ID?.trim()
     ?? config.workspace_id
     ?? null;
@@ -110,15 +113,36 @@ export async function requestBody(
   invocation: CommandInvocation,
   explicit: Readonly<Record<string, unknown>> = {},
 ): Promise<Record<string, unknown>> {
+  const body = { ...requestInput(invocation), ...definedEntries(explicit) };
+  if ("workspaceId" in body || "workspace_id" in body) {
+    const workspaceId = requiredWorkspace(invocation);
+    if ("workspaceId" in body) body.workspaceId = workspaceId;
+    body.workspace_id = workspaceId;
+  }
+  return body;
+}
+
+// Capability checks and reference lookups may need input before body construction.
+// Cache per invocation so --file - is consumed only once.
+const requestInputs = new WeakMap<CommandInvocation, Record<string, unknown>>();
+
+function requestInput(invocation: CommandInvocation): Record<string, unknown> {
+  const cached = requestInputs.get(invocation);
+  if (cached) return cached;
   const rawData = stringOption(invocation, "data");
   const file = stringOption(invocation, "file");
-  let source: unknown = {};
+  let source: Record<string, unknown> = {};
   if (rawData) source = parseJsonObject(rawData, "--data");
   if (file) {
     const text = readFileSync(file === "-" ? 0 : file, "utf8");
     source = parseJsonObject(text, file === "-" ? "stdin" : file);
   }
-  return { ...(source as Record<string, unknown>), ...definedEntries(explicit) };
+  requestInputs.set(invocation, source);
+  return source;
+}
+
+function inputWorkspace(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 export function requireConfirmation(invocation: CommandInvocation): void {
