@@ -289,9 +289,10 @@ export function issueListQuery(
   store: MultiremiStore,
   c: { req: { query: (name: string) => string | undefined } },
   mode: CompatibilityQueryMode = "native",
+  requestedWorkspaceId?: string,
 ): ListIssuesInput {
   const compat = mode === "compat";
-  const workspaceId = (compat ? c.req.query("workspace_id") : c.req.query("workspaceId") ?? c.req.query("workspace_id")) ?? "local";
+  const workspaceId = requestedWorkspaceId ?? (compat ? c.req.query("workspace_id") : c.req.query("workspaceId") ?? c.req.query("workspace_id")) ?? "local";
   const assigneeTypes = splitQueryList(compat ? c.req.query("assignee_types") : c.req.query("assigneeTypes") ?? c.req.query("assignee_types")) as ListIssuesInput["assigneeTypes"];
   const assigneeId = resolveAssigneeFilterId(
     store,

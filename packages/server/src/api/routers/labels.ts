@@ -1,3 +1,4 @@
+import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
 import type { Hono } from "hono";
 import { denyCurrentUserWorkspaceAccess, isJsonApiError, readJson, readJsonStrict } from "../helpers.js";
 import { labelCompatibilityErrorResponse, labelCompatibilityResponse, labelCreateCompatibilityInput } from "../wire/index.js";
@@ -38,7 +39,8 @@ export function registerLabelRoutes(app: Hono, deps: RouterDeps): void {
   });
 
   app.get("/api/labels", (c) => {
-    const workspaceId = c.req.query("workspace_id") ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const labels = store.listLabels(workspaceId);
@@ -47,10 +49,12 @@ export function registerLabelRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/labels", async (c) => {
     const body = await readJsonStrict<CreateLabelInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspace_id ?? body.workspaceId ?? "local");
+    const workspaceId = resolveRequestWorkspaceId(c, store, body.workspace_id ?? body.workspaceId ?? c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     try {
-      return c.json(labelCompatibilityResponse(store.createLabel(labelCreateCompatibilityInput(body))), 201);
+      return c.json(labelCompatibilityResponse(store.createLabel({ ...labelCreateCompatibilityInput(body), workspaceId })), 201);
     } catch (error) {
       return labelCompatibilityErrorResponse(c, error);
     }

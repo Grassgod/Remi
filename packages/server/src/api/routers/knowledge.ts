@@ -1,3 +1,4 @@
+import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
 import type { Hono } from "hono";
 import type {
   CreateProjectDocInput,
@@ -24,7 +25,6 @@ import {
   resolveKnowledgeWriteActor,
   resolveTaskSourceRevision,
 } from "../helpers/knowledge.js";
-import { currentAccessToken } from "../wire/index.js";
 import { listWorkspaceRepositories } from "../helpers/repositories.js";
 import { normalizeProjectWikiPath, projectDocSlug } from "@multiremi/store/repos/projects-repo.js";
 import { normalizeRepositoryWikiPath } from "@multiremi/store/repos/repository-wiki-repo.js";
@@ -92,7 +92,8 @@ export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJsonStrict<KnowledgeSubmitBody>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     try {
-      const workspaceId = knowledgeWorkspaceId(c, body.workspace_id);
+      const workspaceId = resolveRequestWorkspaceId(c, store, body.workspace_id);
+      if (workspaceId instanceof Response) return workspaceId;
       const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
       if (denied) return denied;
       const actor = resolveKnowledgeWriteActor(c, store);
@@ -134,7 +135,8 @@ export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
   });
 
   app.get("/api/knowledge/submissions", (c) => {
-    const workspaceId = knowledgeWorkspaceId(c, c.req.query("workspace_id"));
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     try {
@@ -165,7 +167,8 @@ export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
   });
 
   app.get("/api/knowledge/runs", (c) => {
-    const workspaceId = knowledgeWorkspaceId(c, c.req.query("workspace_id"));
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     try {
@@ -381,7 +384,8 @@ export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJsonStrict<RepositoryMergedBody>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     try {
-      const workspaceId = knowledgeWorkspaceId(c, body.workspace_id);
+      const workspaceId = resolveRequestWorkspaceId(c, store, body.workspace_id);
+      if (workspaceId instanceof Response) return workspaceId;
       const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
       if (denied) return denied;
       requirePublisherOrMember(c, store);
@@ -415,7 +419,8 @@ export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJsonStrict<LegacyMigrationBody>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     try {
-      const workspaceId = knowledgeWorkspaceId(c, body.workspace_id);
+      const workspaceId = resolveRequestWorkspaceId(c, store, body.workspace_id);
+      if (workspaceId instanceof Response) return workspaceId;
       const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
       if (denied) return denied;
       requirePublisherOrMember(c, store);
@@ -927,10 +932,6 @@ function knowledgeChangeUrl(payload: unknown): string | null {
   const record = data as Record<string, unknown>;
   const value = record.url ?? record.web_url ?? record.html_url ?? record.change_url;
   return typeof value === "string" && /^https?:\/\//.test(value) ? value : null;
-}
-
-function knowledgeWorkspaceId(c: Parameters<typeof currentAccessToken>[0], requested: unknown): string {
-  return currentAccessToken(c)?.workspaceId ?? clean(requested) ?? "local";
 }
 
 function hasRepository(store: RouterDeps["store"], workspaceId: string, repositoryId: string): boolean {

@@ -1,3 +1,4 @@
+import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
 import type { Context, Hono } from "hono";
 import {
   assigneeFrequencyQuery,
@@ -374,7 +375,9 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     return c.json(listIssuesResponse(query));
   });
   app.get("/api/issues", (c) => {
-    const query = issueListQuery(store, c, "compat");
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
+    const query = issueListQuery(store, c, "compat", workspaceId);
     const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
     if (denied) return denied;
     const issues = store.listIssues(query).map((issue) => issueCompatibilityResponse(issue, { includeLabels: true }));
@@ -387,13 +390,17 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     return c.json(store.listGroupedIssues(query));
   });
   app.get("/api/issues/grouped", (c) => {
-    const query = issueListQuery(store, c, "compat");
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
+    const query = issueListQuery(store, c, "compat", workspaceId);
     const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
     if (denied) return denied;
     return c.json(store.listGroupedIssues(query));
   });
   app.get("/api/assignee-frequency", (c) => {
-    const query = assigneeFrequencyQuery(c);
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspaceId") ?? c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
+    const query = { ...assigneeFrequencyQuery(c), workspaceId };
     const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
     if (denied) return denied;
     return c.json(store.listAssigneeFrequency(query));
@@ -419,7 +426,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     return c.json(result);
   });
   app.get("/api/issues/search", (c) => {
-    const workspaceId = c.req.query("workspace_id") ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     try {
@@ -450,7 +458,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     return c.json({ progress, total: progress.length });
   });
   app.get("/api/issues/child-progress", (c) => {
-    const workspaceId = c.req.query("workspace_id") ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const progress = store.listChildIssueProgress(workspaceId);
@@ -551,8 +560,10 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJsonStrict<CreateIssueWithTaskInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     if (!String(body.title ?? "").trim()) return c.json({ error: "title is required" }, 400);
+    const workspaceId = resolveRequestWorkspaceId(c, store, body.workspace_id ?? c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
     try {
-      const issueInput = withIssueCreateRequestContext(c, body, store);
+      const issueInput = withIssueCreateRequestContext(c, { ...body, workspace_id: workspaceId }, store);
       const denied = denyCurrentUserWorkspaceAccess(c, store, issueInput.workspace_id ?? "local");
       if (denied) return denied;
       const sourceIssueId = issueInput.source_issue_id ?? null;
@@ -658,7 +669,9 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const policyDenied = denyRestrictedTaskIssueCreation(c, store);
     if (policyDenied) return policyDenied;
     const body = await readJson<QuickCreateIssueInput>(c);
-    const input = issueQuickCreateCompatibilityInput(body);
+    const workspaceId = resolveRequestWorkspaceId(c, store, body.workspace_id ?? c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
+    const input = { ...issueQuickCreateCompatibilityInput(body), workspaceId };
     const denied = denyCurrentUserWorkspaceAccess(c, store, input.workspaceId ?? input.workspace_id ?? "local");
     if (denied) return denied;
     const result = safeQuickCreateIssue(store, input);

@@ -90,15 +90,26 @@ and workspace membership permissions. A signed identity whose user no longer
 exists is rejected with `401`; deployment-master requests and unauthenticated
 requests in open local mode retain the existing `local` identity.
 
-## Project workspace context
+## Workspace request context
 
-`remi project list|search|create` sends an explicit `workspace_id`. The Web
-project list, search, and create routes (`/api/projects`, `/api/projects/search`)
-also resolve `X-Workspace-Slug` when no explicit `workspace_id` is supplied.
-Create-body `workspace_id` takes precedence over the query parameter, which
-takes precedence over the slug. Without either context the existing `local`
-default remains. Unknown slugs and workspaces the user cannot access return
-`404`; a stale slug never redirects a project write into `local`.
+Web project, issue, label, autopilot, squad, pin, notification preference, token,
+agent activity and knowledge routes resolve workspace context before authorizing
+and accessing the same workspace. An explicit supported body/query workspace ID
+comes first, followed by `X-Workspace-ID`, `X-Workspace-Slug`, the credential's
+workspace, and finally `local` when no context exists. Resource-bound uploads
+use the resource's workspace first. Unknown slugs and inaccessible workspaces
+return `404`; a stale slug never redirects a write into `local`. Labels accept
+both `workspace_id` and `workspaceId`, with the snake_case field taking priority.
+
+Registry resource commands choose `--workspace` first, then the JSON/file input's
+`workspaceId` or `workspace_id`, environment, saved configuration, and `local`.
+The request header and body use that same workspace; a default cannot overwrite
+an explicit workspace from `--data` or `--file`.
+
+An authenticated local-login session represents the real `local` user and checks
+that user's memberships. Legacy workspace-scoped machine credentials retain
+their scope. User-issued native tokens cannot impersonate another user or mint
+login sessions; listing and revoking tokens also enforce the credential's scope.
 
 ## Deprecated aliases
 

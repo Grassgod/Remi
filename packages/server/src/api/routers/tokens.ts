@@ -1,10 +1,10 @@
+import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
 import type { Context, Hono } from "hono";
 import {
   denyCurrentUserWorkspaceAccess,
   isTaskTokenCreateInput,
   readJson,
   requireWorkspaceAdmin,
-  workspaceIdFromSlugHeader,
 } from "../helpers.js";
 import {
   authenticatedRequestUserId,
@@ -76,7 +76,8 @@ export function registerTokenRoutes(app: Hono, deps: RouterDeps): void {
   });
 
   app.get("/api/tokens", (c) => {
-    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspaceId") ?? c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const userId = authenticatedRequestUserId(c);
@@ -97,7 +98,8 @@ export function registerTokenRoutes(app: Hono, deps: RouterDeps): void {
     // back to the X-Workspace-Slug header the web client sends on every request,
     // so the token is minted (and access-checked) for the workspace the user is
     // actually in — not the "local" default they may not be a member of.
-    const workspaceId = body.workspaceId ?? body.workspace_id ?? workspaceIdFromSlugHeader(c, store) ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, body.workspaceId ?? body.workspace_id);
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     // A human requester always mints for themselves: bind the token to the

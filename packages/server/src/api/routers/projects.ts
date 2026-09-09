@@ -1,4 +1,5 @@
-import type { Context, Hono } from "hono";
+import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
+import type { Hono } from "hono";
 import {
   compatibilityWorkspaceId,
   denyCurrentUserWorkspaceAccess,
@@ -20,7 +21,6 @@ import {
   validateProjectInstructions,
   validateProjectInstructionsUpdate,
   validateImportedProjectResources,
-  workspaceIdFromSlugHeader,
 } from "../helpers.js";
 import {
   cleanString,
@@ -70,13 +70,6 @@ import { sha256Text } from "@multiremi/project-knowledge/codec.js";
 export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
   const { store, projectKnowledge } = deps;
 
-  function projectWorkspaceId(c: Context, bodyWorkspaceId?: string | null): string | null {
-    const explicitId = bodyWorkspaceId ?? c.req.query("workspace_id");
-    if (explicitId !== undefined) return explicitId;
-    if (cleanString(c.req.header("X-Workspace-Slug"))) return workspaceIdFromSlugHeader(c, store);
-    return "local";
-  }
-
   app.get("/api/multiremi/projects", (c) => {
     const workspaceId = c.req.query("workspaceId") ?? "local";
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
@@ -101,8 +94,8 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     });
   });
   app.get("/api/projects/search", (c) => {
-    const workspaceId = projectWorkspaceId(c);
-    if (workspaceId === null) return c.json({ error: "workspace not found" }, 404);
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     try {
@@ -125,8 +118,8 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
   app.get("/api/projects", (c) => {
-    const workspaceId = projectWorkspaceId(c);
-    if (workspaceId === null) return c.json({ error: "workspace not found" }, 404);
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const projects = store
@@ -145,8 +138,8 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
       "delta_instructions",
     );
     if (invalidDeltaInstructions) return invalidDeltaInstructions;
-    const workspaceId = projectWorkspaceId(c, body.workspace_id);
-    if (workspaceId === null) return c.json({ error: "workspace not found" }, 404);
+    const workspaceId = resolveRequestWorkspaceId(c, store, body.workspace_id ?? c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
     const projectInput = { ...projectCreateCompatibilityInput(c, body), workspaceId };
     const denied = denyCurrentUserWorkspaceAccess(c, store, projectInput.workspaceId ?? "local");
     if (denied) return denied;

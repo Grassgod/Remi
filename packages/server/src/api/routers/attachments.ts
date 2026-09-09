@@ -1,3 +1,4 @@
+import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
 import type { Hono } from "hono";
 import {
   MAX_UPLOAD_SIZE,
@@ -64,12 +65,12 @@ export function registerAttachmentRoutes(app: Hono, deps: RouterDeps): void {
     const chatSessionId = stringFormValue(form.get("chatSessionId") ?? form.get("chat_session_id"));
     const chatSession = chatSessionId ? loadChatSessionForCurrentUser(c, store, chatSessionId) : null;
     if (chatSession instanceof Response) return chatSession;
-    const workspaceId = issue?.workspaceId
+    const explicitWorkspaceId = issue?.workspaceId
       ?? (comment ? store.getIssue(comment.issueId)?.workspaceId : null)
       ?? (chatSession ? chatSession.session.workspaceId : null)
-      ?? stringFormValue(form.get("workspaceId") ?? form.get("workspace_id"))
-      ?? c.req.header("X-Workspace-ID")
-      ?? "local";
+      ?? stringFormValue(form.get("workspaceId") ?? form.get("workspace_id"));
+    const workspaceId = resolveRequestWorkspaceId(c, store, explicitWorkspaceId);
+    if (workspaceId instanceof Response) return workspaceId;
     // Go file.go UploadFile validates workspace membership before writing. The chat
     // path is already gated by loadChatSessionForCurrentUser; gate every other path
     // so a token scoped to another workspace cannot create rows/files in this one.
