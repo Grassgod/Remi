@@ -54,6 +54,7 @@ import { cn } from "@multiremi/ui/lib/utils";
 import { useT } from "../../i18n";
 import { useTimeAgo } from "../../i18n/use-time-ago";
 import { FeishuBotRegistrationDialog, type ClaimedRegistration } from "./feishu-bot-registration-dialog";
+import { FeishuBotRoutes } from "./feishu-bot-routes";
 
 /**
  * Workspace Feishu concierge (MUL-206).
@@ -486,6 +487,12 @@ function FeishuBotAdminPanel({
               {t(($) => $.feishu.concierge.delete)}
             </Button>
           </div>
+
+          <FeishuBotRoutes
+            workspaceId={workspaceId}
+            candidates={candidates}
+            candidatesPending={candidatesPending}
+          />
         </CardContent>
       </Card>
 

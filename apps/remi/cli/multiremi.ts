@@ -630,7 +630,7 @@ export function controlPlaneConciergeHost(deps: {
   };
 }
 
-function createFeishuTaskHandler(
+export function createFeishuTaskHandler(
   daemon: MultiremiDaemon,
   revision: number,
   displayName: string,
@@ -638,11 +638,12 @@ function createFeishuTaskHandler(
   return async (message, sessionKey, consumer) => {
     const command = message.text.trim().toLowerCase();
     if (command === "/new") {
+      const snapshot = await daemon.inspectFeishuBotSession(revision, sessionKey);
       await daemon.cancelFeishuBotSessionTask(revision, sessionKey);
       const reset = await daemon.resetFeishuBotSession(revision, sessionKey);
       await consumer(singleMessageStream(reset ? "New conversation started." : "Conversation is already new."), {
         taskId: "feishu-command-new",
-        displayName,
+        displayName: snapshot.agentName ?? displayName,
         respondHumanRequest: async () => { throw new Error("command has no human request"); },
       });
       return;
@@ -651,7 +652,7 @@ function createFeishuTaskHandler(
       const snapshot = await daemon.inspectFeishuBotSession(revision, sessionKey);
       await consumer(singleMessageStream(renderFeishuSessionCommand(command, snapshot)), {
         taskId: `feishu-command-${command.slice(1)}`,
-        displayName,
+        displayName: snapshot.agentName ?? displayName,
         respondHumanRequest: async () => { throw new Error("command has no human request"); },
       });
       return;
@@ -689,7 +690,7 @@ function createFeishuTaskHandler(
 
     await consumer(pollFeishuTask(daemon, submitted.taskId), {
       taskId: submitted.taskId,
-      displayName,
+      displayName: submitted.agentName,
       respondHumanRequest: (requestId, response) =>
         daemon.respondFeishuBotHumanRequest(submitted.taskId, requestId, response),
     });

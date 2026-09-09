@@ -1734,6 +1734,30 @@ runMigrations(this.db);
     return this.feishuBot.getConfig(workspaceId);
   }
 
+  listFeishuBotAgentRoutes(workspaceId: string): ReturnType<FeishuBotRepo["listRoutes"]> {
+    return this.feishuBot.listRoutes(workspaceId);
+  }
+
+  replaceFeishuBotAgentRoutes(
+    workspaceId: string,
+    routes: Parameters<FeishuBotRepo["replaceRoutes"]>[1],
+    actor?: string | null,
+  ): ReturnType<FeishuBotRepo["replaceRoutes"]> {
+    return this.feishuBot.replaceRoutes(workspaceId, routes, actor);
+  }
+
+  updateFeishuBotRouteChatName(workspaceId: string, chatId: string, chatName: string | null): void {
+    this.feishuBot.updateRouteChatName(workspaceId, chatId, chatName);
+  }
+
+  resolveFeishuBotRouteAgent(
+    workspaceId: string,
+    chatType: "p2p" | "group",
+    chatId?: string | null,
+  ): ReturnType<FeishuBotRepo["resolveRouteAgent"]> {
+    return this.feishuBot.resolveRouteAgent(workspaceId, chatType, chatId);
+  }
+
   upsertFeishuBotConfig(workspaceId: string, input: UpsertFeishuBotConfigInput): MultiremiFeishuBotConfig {
     return this.feishuBot.upsertConfig(workspaceId, input);
   }

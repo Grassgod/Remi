@@ -91,6 +91,13 @@ describe("translateSqliteToPg", () => {
     );
   });
 
+  it("preserves partial unique indexes used for Feishu default routes", () => {
+    const sql = `CREATE UNIQUE INDEX idx_routes_default
+      ON multiremi_feishu_bot_agent_routes(workspace_id, scope)
+      WHERE chat_id IS NULL`;
+    expect(translateSqliteToPg(sql)).toBe(sql);
+  });
+
   it("strips FOREIGN KEY clauses (unenforced in sqlite; rejected on forward refs in PG)", () => {
     expect(
       translateSqliteToPg(
@@ -541,6 +548,23 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       "PRAGMA table_info(multiremi_daemon_ssh_mesh_states)",
     ).all().map((row: { name: string }) => row.name);
     expect(sshMeshStateColumns).toEqual(expect.arrayContaining(["node_kind", "name"]));
+  });
+
+  it("enforces one Feishu bot default route per scope on Postgres", () => {
+    const first = store.createAgent({ name: "PG Feishu route A", provider: "codex", workspaceId: "local" });
+    const second = store.createAgent({ name: "PG Feishu route B", provider: "codex", workspaceId: "local" });
+    const now = new Date().toISOString();
+    const insert = (id: string, agentId: string) => db.run(
+      `INSERT INTO multiremi_feishu_bot_agent_routes (
+         id, workspace_id, scope, chat_id, chat_name, agent_id,
+         created_at, updated_at, updated_by
+       ) VALUES (?, 'local', 'p2p_default', NULL, NULL, ?, ?, ?, NULL)`,
+      [id, agentId, now, now],
+    );
+
+    insert("fbr_pg_default_first", first.id);
+    expect(() => insert("fbr_pg_default_second", second.id)).toThrow();
+    db.run("DELETE FROM multiremi_feishu_bot_agent_routes WHERE id = ?", ["fbr_pg_default_first"]);
   });
 
   it("does not replay the one-time SCM default backfill on Postgres restart", () => {

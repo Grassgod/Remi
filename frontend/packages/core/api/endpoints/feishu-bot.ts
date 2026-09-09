@@ -1,6 +1,8 @@
 import type {
   FeishuBotAvailability,
+  FeishuBotAgentRoutes,
   FeishuBotCandidates,
+  FeishuBotChats,
   FeishuBotConfig,
   FeishuBotAuditList,
   FeishuBotRegistrationBrand,
@@ -9,6 +11,7 @@ import type {
   FeishuBotTestRequest,
   FeishuBotTestResult,
   IssueTopicConfigResponse,
+  ReplaceFeishuBotAgentRoutesRequest,
   UpdateIssueTopicConfigRequest,
   UpsertFeishuBotRequest,
 } from "../../types";
@@ -16,13 +19,17 @@ import type { HttpClient } from "../http";
 import { parseWithFallback } from "../schema";
 import {
   EMPTY_FEISHU_BOT_AVAILABILITY,
+  EMPTY_FEISHU_BOT_AGENT_ROUTES,
   EMPTY_FEISHU_BOT_CANDIDATES,
+  EMPTY_FEISHU_BOT_CHATS,
   EMPTY_FEISHU_BOT_CONFIG,
   EMPTY_FEISHU_BOT_STATUS,
   EMPTY_ISSUE_TOPIC_CONFIG,
   FeishuBotAuditListSchema,
   FeishuBotAvailabilitySchema,
+  FeishuBotAgentRoutesSchema,
   FeishuBotCandidatesSchema,
+  FeishuBotChatsSchema,
   FeishuBotConfigSchema,
   FeishuBotRegistrationSessionSchema,
   FeishuBotStatusSchema,
@@ -86,6 +93,36 @@ export class FeishuBotEndpoints {
     return parseWithFallback(raw, FeishuBotCandidatesSchema, EMPTY_FEISHU_BOT_CANDIDATES, {
       endpoint: "GET /api/workspaces/:id/feishu-bot/candidates",
     });
+  }
+
+  async getFeishuBotRoutes(workspaceId: string): Promise<FeishuBotAgentRoutes> {
+    const raw = await this.http.fetch<unknown>(`/api/workspaces/${workspaceId}/feishu-bot/routes`);
+    return parseWithFallback(raw, FeishuBotAgentRoutesSchema, {
+      ...EMPTY_FEISHU_BOT_AGENT_ROUTES,
+      workspace_id: workspaceId,
+    }, { endpoint: "GET /api/workspaces/:id/feishu-bot/routes" });
+  }
+
+  async saveFeishuBotRoutes(
+    workspaceId: string,
+    input: ReplaceFeishuBotAgentRoutesRequest,
+  ): Promise<FeishuBotAgentRoutes> {
+    const raw = await this.http.fetch<unknown>(`/api/workspaces/${workspaceId}/feishu-bot/routes`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    });
+    return parseWithFallback(raw, FeishuBotAgentRoutesSchema, {
+      ...EMPTY_FEISHU_BOT_AGENT_ROUTES,
+      workspace_id: workspaceId,
+    }, { endpoint: "PUT /api/workspaces/:id/feishu-bot/routes" });
+  }
+
+  async getFeishuBotChats(workspaceId: string): Promise<FeishuBotChats> {
+    const raw = await this.http.fetch<unknown>(`/api/workspaces/${workspaceId}/feishu-bot/chats`);
+    return parseWithFallback(raw, FeishuBotChatsSchema, {
+      ...EMPTY_FEISHU_BOT_CHATS,
+      workspace_id: workspaceId,
+    }, { endpoint: "GET /api/workspaces/:id/feishu-bot/chats" });
   }
 
   async listFeishuBotAudit(workspaceId: string, limit = 20): Promise<FeishuBotAuditList> {

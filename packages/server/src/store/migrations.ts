@@ -31,6 +31,9 @@ const PROJECT_DEVICE_DAEMON_CANONICALIZATION_MIGRATION = "20260831_project_devic
 const FEISHU_ISSUE_TOPIC_OUTBOUND_MIGRATION = "20260904_feishu_issue_topic_outbound_nullable";
 const FEISHU_TOPIC_REPORT_SCHEDULING_MIGRATION = "20260905_feishu_topic_report_scheduling";
 const CHAT_MESSAGE_SEQUENCE_MIGRATION = "20260905_chat_message_sequence";
+const FEISHU_BOT_AGENT_ROUTES_MIGRATION = "20260908_feishu_bot_agent_routes";
+const FEISHU_BOT_AGENT_ROUTE_DEFAULT_UNIQUENESS_MIGRATION =
+  "20260909_feishu_bot_agent_route_default_uniqueness";
 
 // Stable Feishu open_id of the deployment owner (hehuajie / 贺华杰). The seed
 // `local` user is tagged with this on migration so SSO login re-binds to it
@@ -2699,6 +2702,10 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_feishu_bot_chat_bindings", "thread_id TEXT");
   addColumnIfMissing(db, "multiremi_feishu_bot_chat_bindings", "reply_to_message_id TEXT");
   backfillFeishuBotReplyDestinations(db);
+  runMigrationOnce(db, FEISHU_BOT_AGENT_ROUTES_MIGRATION, () => ensureFeishuBotAgentRoutesSchema(db));
+  runMigrationOnce(db, FEISHU_BOT_AGENT_ROUTE_DEFAULT_UNIQUENESS_MIGRATION, () => {
+    ensureFeishuBotAgentRouteDefaultUniqueness(db);
+  });
   runMigrationOnce(db, FEISHU_ISSUE_TOPIC_OUTBOUND_MIGRATION, () => {
     allowNullableFeishuOutboundReplyToMessageId(db);
   });
@@ -2919,6 +2926,40 @@ export function runMigrations(db: SqlDatabase): void {
   backfillDefaultIssueSessions(db);
   backfillIssueKeys(db);
   migrateLegacyGithubProjection(db, legacyGithubTables);
+}
+
+function ensureFeishuBotAgentRoutesSchema(db: SqlDatabase): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS multiremi_feishu_bot_agent_routes (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      scope TEXT NOT NULL CHECK(scope IN ('p2p_default', 'group_default', 'chat')),
+      chat_id TEXT,
+      chat_name TEXT,
+      agent_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      updated_by TEXT,
+      CHECK(
+        (scope = 'chat' AND chat_id IS NOT NULL AND chat_id <> '')
+        OR (scope IN ('p2p_default', 'group_default') AND chat_id IS NULL)
+      ),
+      UNIQUE(workspace_id, scope, chat_id),
+      FOREIGN KEY(workspace_id) REFERENCES multiremi_workspaces(id) ON DELETE CASCADE,
+      FOREIGN KEY(agent_id) REFERENCES multiremi_agents(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_agent_routes_agent
+      ON multiremi_feishu_bot_agent_routes(agent_id);
+  `);
+}
+
+function ensureFeishuBotAgentRouteDefaultUniqueness(db: SqlDatabase): void {
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_agent_routes_default_scope
+      ON multiremi_feishu_bot_agent_routes(workspace_id, scope)
+      WHERE chat_id IS NULL;
+  `);
 }
 
 function migrateLegacyGithubProjection(db: SqlDatabase, legacyTables: Set<string>): void {
