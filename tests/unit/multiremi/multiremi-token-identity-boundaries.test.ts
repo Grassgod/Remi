@@ -113,3 +113,47 @@ it("retains native token listing and revocation for master-token and open mode",
     expect((await app.request(`/api/multiremi/tokens/${token.id}`, { method: "DELETE", headers })).status).toBe(200);
   }
 });
+
+it("preserves human local identity and legacy workspace scope during CLI exchange", async () => {
+  const store = createLocalStore();
+  const workspace = store.createWorkspace({ name: "CLI", slug: "cli" }, "local");
+  const login = await localAuthResponse(store, { email: store.getCurrentUser("local").email });
+  const legacy = await store.createAccessToken({ workspaceId: workspace.id, name: "Machine", type: "pat" });
+  const app = createMultiremiApp({ store, authToken: "root-secret" });
+  const results: number[] = [];
+  for (const source of [login, legacy]) {
+    const response = await app.request("/api/cli-token", { method: "POST", headers: { Authorization: `Bearer ${source.token}` } });
+    expect(response.status).toBe(200);
+    const { token } = await response.json();
+    const headers = { Authorization: `Bearer ${token}` };
+    results.push((await app.request(`/api/workspaces/${workspace.id}`, { headers })).status);
+    if (source === legacy) results.push((await app.request("/api/workspaces/local", { headers })).status);
+  }
+  expect(results).toEqual([200, 200, 404]);
+});
+
+it("cannot promote or impersonate through native and compatibility purpose/type inputs", async () => {
+  const store = createLocalStore();
+  const alice = store.getOrCreateUser({ email: "mint-alice@example.invalid", name: "Alice" });
+  const workspace = store.createWorkspace({ name: "Mint", slug: "mint" }, alice.id);
+  const login = await store.createAccessToken({ workspaceId: "local", userId: alice.id, name: "Login", type: "pat", purpose: "session" });
+  const app = createMultiremiApp({ store, authToken: "root-secret" });
+  for (const path of ["/api/multiremi/tokens", "/api/tokens"]) {
+    for (const purpose of ["session", " SESSION ", ["session"]]) {
+      const response = await app.request(path, {
+        method: "POST", headers: { Authorization: `Bearer ${login.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ workspace_id: workspace.id, name: "Spoof", userId: null, user_id: "local", purpose, type: ["pat"] }),
+      });
+      if (path === "/api/multiremi/tokens") {
+        expect(response.status).toBe(400);
+      } else {
+        expect(response.status).toBe(201);
+        const credential = await response.json();
+        const stored = store.getAccessToken(credential.id);
+        expect(stored?.userId).toBe(alice.id);
+        expect(stored?.purpose).toBe("personal");
+        expect(stored?.type).toBe("pat");
+      }
+    }
+  }
+});
