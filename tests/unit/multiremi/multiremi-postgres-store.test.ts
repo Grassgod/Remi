@@ -308,7 +308,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     return store.createWorkspace({ name: `PG Test ${wsCounter}`, slug }).id;
   };
 
-  it("lists an agent task snapshot through Postgres array parameters", () => {
+  it("lists an agent task snapshot through the batched autopilot lookup", () => {
     const workspaceId = freshWorkspace();
     const agent = store.createAgent({ name: `PG snapshot agent ${wsCounter}`, provider: "codex", workspaceId });
     const active = store.createTask({ agentId: agent.id, prompt: "active snapshot task" });

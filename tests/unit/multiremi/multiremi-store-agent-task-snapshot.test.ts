@@ -119,4 +119,25 @@ describe("listWorkspaceAgentTaskSnapshot", () => {
     expectSnapshotMatchesLegacy(store, "local");
     expect(store.listWorkspaceAgentTaskSnapshot("local")).toEqual([]);
   });
+
+  it("looks up autopilot runs in batches when the snapshot exceeds 500 tasks", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Large snapshot agent", provider: "codex" });
+    const tasks = Array.from({ length: 501 }, (_, index) => store.createTask({
+      agentId: agent.id,
+      prompt: `task ${index}`,
+    }));
+    const runId = "apr_large_snapshot";
+    db!.run(
+      `INSERT INTO multiremi_autopilot_runs (
+        id, autopilot_id, source, status, task_id, triggered_at, created_at
+      ) VALUES (?, ?, 'api', 'running', ?, ?, ?)`,
+      [runId, "apl_large_snapshot", tasks.at(-1)!.id, "2026-09-10T00:00:00.000Z", "2026-09-10T00:00:00.000Z"],
+    );
+
+    const snapshot = store.listWorkspaceAgentTaskSnapshot("local");
+
+    expect(snapshot).toHaveLength(501);
+    expect(snapshot.find((task) => task.id === tasks.at(-1)!.id)?.autopilotRunId).toBe(runId);
+  });
 });

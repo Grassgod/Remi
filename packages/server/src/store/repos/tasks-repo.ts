@@ -18,7 +18,6 @@ import {
   toJson,
   type RuntimeUsageEntry,
 } from "@multiremi/store/helpers.js";
-import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { type StoreContext } from "@multiremi/store/context.js";
 import { PROJECT_REF_MAX_DEPTH } from "@multiremi/store/repos/projects-repo.js";
 import { runtimeSupportsAgentPlugins } from "@multiremi/store/repos/agent-plugins-repo.js";
@@ -3293,26 +3292,16 @@ export class TasksRepo {
   private withTaskAutopilotRuns(tasks: MultiremiTask[]): MultiremiTask[] {
     if (!tasks.length) return tasks;
     const taskIds = tasks.map((task) => task.id);
-    let rows: Row[];
-    if (this.ctx.db instanceof PostgresSyncDatabase) {
-      rows = this.ctx.db.query(
+    const rows: Row[] = [];
+    for (let offset = 0; offset < taskIds.length; offset += TASK_AUTOPILOT_LOOKUP_BATCH_SIZE) {
+      const batch = taskIds.slice(offset, offset + TASK_AUTOPILOT_LOOKUP_BATCH_SIZE);
+      const placeholders = batch.map(() => "?").join(", ");
+      rows.push(...this.ctx.db.query(
         `SELECT task_id, id
          FROM multiremi_autopilot_runs
-         WHERE task_id = ANY(?::text[])
+         WHERE task_id IN (${placeholders})
          ORDER BY created_at DESC`,
-      ).all([taskIds]) as Row[];
-    } else {
-      rows = [];
-      for (let offset = 0; offset < taskIds.length; offset += TASK_AUTOPILOT_LOOKUP_BATCH_SIZE) {
-        const batch = taskIds.slice(offset, offset + TASK_AUTOPILOT_LOOKUP_BATCH_SIZE);
-        const placeholders = batch.map(() => "?").join(", ");
-        rows.push(...this.ctx.db.query(
-          `SELECT task_id, id
-           FROM multiremi_autopilot_runs
-           WHERE task_id IN (${placeholders})
-           ORDER BY created_at DESC`,
-        ).all(...batch) as Row[]);
-      }
+      ).all(...batch) as Row[]);
     }
     const runByTask = new Map<string, string>();
     for (const row of rows) {
