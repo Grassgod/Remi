@@ -2247,18 +2247,21 @@ export class IssuesRepo {
     return toInboxItem(row, issueId ? this.getIssue(issueId) : null);
   }
 
-  listInboxItems(memberId?: string | null): MultiremiInboxItem[] {
+  listInboxItems(memberId?: string | null, workspaceId?: string): MultiremiInboxItem[] {
     const resolvedMemberId = memberId ?? this.ctx.workspaces().listWorkspaceMembers()[0]?.id ?? null;
     if (!resolvedMemberId) return [];
+    const workspaceFilter = workspaceId === undefined ? "" : " AND workspace_id = ?";
+    const params = workspaceId === undefined ? [resolvedMemberId] : [resolvedMemberId, workspaceId];
     const rows = this.ctx.db.query(
-      "SELECT * FROM multiremi_inbox_items WHERE member_id = ? AND archived = 0 ORDER BY created_at DESC",
-    ).all(resolvedMemberId) as Row[];
+      `SELECT * FROM multiremi_inbox_items WHERE member_id = ?${workspaceFilter} AND archived = 0 ORDER BY created_at DESC`,
+    ).all(...params) as Row[];
     return this.hydrateInboxRows(rows);
   }
 
   listInboxItemsPage(
     memberId?: string | null,
     options: { limit?: number; cursor?: string | null } = {},
+    workspaceId?: string,
   ): MultiremiInboxPage {
     const resolvedMemberId = memberId ?? this.ctx.workspaces().listWorkspaceMembers()[0]?.id ?? null;
     const requestedLimit = Math.floor(options.limit ?? 50);
@@ -2276,20 +2279,22 @@ export class IssuesRepo {
       cursorId = decoded.id;
     }
 
+    const workspaceFilter = workspaceId === undefined ? "" : " AND workspace_id = ?";
+    const params = workspaceId === undefined ? [resolvedMemberId] : [resolvedMemberId, workspaceId];
     const rows = cursorCreatedAt
       ? this.ctx.db.query(
           `SELECT * FROM multiremi_inbox_items
-           WHERE member_id = ? AND archived = 0
+           WHERE member_id = ?${workspaceFilter} AND archived = 0
              AND (created_at < ? OR (created_at = ? AND id < ?))
            ORDER BY created_at DESC, id DESC
            LIMIT ?`,
-        ).all(resolvedMemberId, cursorCreatedAt, cursorCreatedAt, cursorId, limit + 1) as Row[]
+        ).all(...params, cursorCreatedAt, cursorCreatedAt, cursorId, limit + 1) as Row[]
       : this.ctx.db.query(
           `SELECT * FROM multiremi_inbox_items
-           WHERE member_id = ? AND archived = 0
+           WHERE member_id = ?${workspaceFilter} AND archived = 0
            ORDER BY created_at DESC, id DESC
            LIMIT ?`,
-        ).all(resolvedMemberId, limit + 1) as Row[];
+        ).all(...params, limit + 1) as Row[];
     const hasMore = rows.length > limit;
     const pageRows = hasMore ? rows.slice(0, limit) : rows;
     return {
@@ -2303,9 +2308,12 @@ export class IssuesRepo {
   getInboxSummary(
     memberId?: string | null,
     timezoneOffsetMinutes = 0,
+    workspaceId?: string,
   ): MultiremiInboxSummary {
     const resolvedMemberId = memberId ?? this.ctx.workspaces().listWorkspaceMembers()[0]?.id ?? null;
     if (!resolvedMemberId) return { unread: 0, attention: 0 };
+    const workspaceFilter = workspaceId === undefined ? "" : " AND workspace_id = ?";
+    const params = workspaceId === undefined ? [resolvedMemberId] : [resolvedMemberId, workspaceId];
 
     // The summary deliberately avoids Issue hydration and large message bodies. Only successful
     // automation rows need details so their existing UI grouping by autopilot can be preserved.
@@ -2313,9 +2321,9 @@ export class IssuesRepo {
       `SELECT id, issue_id, type, severity, read, created_at,
               CASE WHEN type = 'autopilot_run_completed' THEN details ELSE NULL END AS details
        FROM multiremi_inbox_items
-       WHERE member_id = ? AND archived = 0
+       WHERE member_id = ?${workspaceFilter} AND archived = 0
        ORDER BY created_at DESC, id DESC`,
-    ).all(resolvedMemberId) as Row[];
+    ).all(...params) as Row[];
 
     const visible: Row[] = [];
     const selectionKeys = new Set<string>();
@@ -2376,49 +2384,55 @@ export class IssuesRepo {
     return toInboxItem(row!, issueId ? this.getIssue(issueId) : null);
   }
 
-  countUnreadInboxItems(memberId?: string | null): number {
+  countUnreadInboxItems(memberId?: string | null, workspaceId?: string): number {
     const resolvedMemberId = memberId ?? this.ctx.workspaces().listWorkspaceMembers()[0]?.id ?? null;
     if (!resolvedMemberId) return 0;
+    const workspaceFilter = workspaceId === undefined ? "" : " AND workspace_id = ?";
+    const params = workspaceId === undefined ? [resolvedMemberId] : [resolvedMemberId, workspaceId];
     const row = this.ctx.db.query(
-      "SELECT COUNT(*) AS count FROM multiremi_inbox_items WHERE member_id = ? AND archived = 0 AND read = 0",
-    ).get(resolvedMemberId) as { count: number } | null;
+      `SELECT COUNT(*) AS count FROM multiremi_inbox_items WHERE member_id = ?${workspaceFilter} AND archived = 0 AND read = 0`,
+    ).get(...params) as { count: number } | null;
     return Number(row?.count ?? 0);
   }
 
-  markAllInboxItemsRead(memberId?: string | null): number {
+  markAllInboxItemsRead(memberId?: string | null, workspaceId?: string): number {
     const resolvedMemberId = memberId ?? this.ctx.workspaces().listWorkspaceMembers()[0]?.id ?? null;
     if (!resolvedMemberId) return 0;
+    const workspaceFilter = workspaceId === undefined ? "" : " AND workspace_id = ?";
+    const params = workspaceId === undefined ? [resolvedMemberId] : [resolvedMemberId, workspaceId];
     const result = this.ctx.db.run(
-      "UPDATE multiremi_inbox_items SET read = 1 WHERE member_id = ? AND archived = 0 AND read = 0",
-      [resolvedMemberId],
+      `UPDATE multiremi_inbox_items SET read = 1 WHERE member_id = ?${workspaceFilter} AND archived = 0 AND read = 0`,
+      params,
     );
     return result.changes;
   }
 
-  archiveAllInboxItems(memberId?: string | null, mode: "all" | "read" | "completed" = "all"): number {
+  archiveAllInboxItems(memberId?: string | null, mode: "all" | "read" | "completed" = "all", workspaceId?: string): number {
     const resolvedMemberId = memberId ?? this.ctx.workspaces().listWorkspaceMembers()[0]?.id ?? null;
     if (!resolvedMemberId) return 0;
+    const workspaceFilter = workspaceId === undefined ? "" : " AND workspace_id = ?";
+    const params = workspaceId === undefined ? [resolvedMemberId] : [resolvedMemberId, workspaceId];
     if (mode === "read") {
       return this.ctx.db.run(
-        "UPDATE multiremi_inbox_items SET archived = 1, read = 1 WHERE member_id = ? AND archived = 0 AND read = 1",
-        [resolvedMemberId],
+        `UPDATE multiremi_inbox_items SET archived = 1, read = 1 WHERE member_id = ?${workspaceFilter} AND archived = 0 AND read = 1`,
+        params,
       ).changes;
     }
     if (mode === "completed") {
       return this.ctx.db.run(
         `UPDATE multiremi_inbox_items
          SET archived = 1, read = 1
-         WHERE member_id = ?
+         WHERE member_id = ?${workspaceFilter}
            AND archived = 0
            AND issue_id IN (
              SELECT id FROM multiremi_issues WHERE status IN ('done', 'completed', 'closed', 'cancelled')
            )`,
-        [resolvedMemberId],
+        params,
       ).changes;
     }
     return this.ctx.db.run(
-      "UPDATE multiremi_inbox_items SET archived = 1, read = 1 WHERE member_id = ? AND archived = 0",
-      [resolvedMemberId],
+      `UPDATE multiremi_inbox_items SET archived = 1, read = 1 WHERE member_id = ?${workspaceFilter} AND archived = 0`,
+      params,
     ).changes;
   }
 

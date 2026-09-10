@@ -1,6 +1,6 @@
 import type { Context, Hono } from "hono";
 import {
-  compatibilityInboxMemberId,
+  compatibilityInboxScope,
   denyCurrentUserWorkspaceAccess,
 } from "../helpers.js";
 import {
@@ -16,9 +16,9 @@ export function registerInboxRoutes(app: Hono, deps: RouterDeps): void {
   const { store } = deps;
 
   app.get("/api/multiremi/inbox", (c) => {
-    const memberId = compatibilityInboxMemberId(c, store, c.req.query("memberId"));
-    if (memberId instanceof Response) return memberId;
-    const items = store.listInboxItems(memberId);
+    const scope = compatibilityInboxScope(c, store, c.req.query("memberId"));
+    if (scope instanceof Response) return scope;
+    const items = store.listInboxItems(scope.memberId, scope.workspaceId);
     return c.json({ items, total: items.length, unread: items.filter((item) => !item.read).length });
   });
   app.post("/api/multiremi/inbox/:id/read", (c) => {
@@ -32,17 +32,17 @@ export function registerInboxRoutes(app: Hono, deps: RouterDeps): void {
     return c.json({ item: store.archiveInboxItem(item.id) });
   });
   app.get("/api/inbox", (c) => {
-    const memberId = compatibilityInboxMemberId(c, store);
-    if (memberId instanceof Response) return memberId;
-    return c.json(store.listInboxItems(memberId).map(inboxCompatibilityResponse));
+    const scope = compatibilityInboxScope(c, store);
+    if (scope instanceof Response) return scope;
+    return c.json(store.listInboxItems(scope.memberId, scope.workspaceId).map(inboxCompatibilityResponse));
   });
   app.get("/api/inbox/page", (c) => {
-    const memberId = compatibilityInboxMemberId(c, store);
-    if (memberId instanceof Response) return memberId;
-    const page = store.listInboxItemsPage(memberId, {
+    const scope = compatibilityInboxScope(c, store);
+    if (scope instanceof Response) return scope;
+    const page = store.listInboxItemsPage(scope.memberId, {
       limit: parseOptionalInt(c.req.query("limit")),
       cursor: c.req.query("cursor") ?? null,
-    });
+    }, scope.workspaceId);
     return c.json({
       items: page.items.map(inboxCompatibilityResponse),
       limit: page.limit,
@@ -51,36 +51,36 @@ export function registerInboxRoutes(app: Hono, deps: RouterDeps): void {
     });
   });
   app.get("/api/inbox/summary", (c) => {
-    const memberId = compatibilityInboxMemberId(c, store);
-    if (memberId instanceof Response) return memberId;
+    const scope = compatibilityInboxScope(c, store);
+    if (scope instanceof Response) return scope;
     const rawOffset = parseOptionalInt(c.req.query("timezone_offset"));
     const timezoneOffset = Math.max(-840, Math.min(rawOffset ?? 0, 840));
-    return c.json(store.getInboxSummary(memberId, timezoneOffset));
+    return c.json(store.getInboxSummary(scope.memberId, timezoneOffset, scope.workspaceId));
   });
   app.get("/api/inbox/unread-count", (c) => {
-    const memberId = compatibilityInboxMemberId(c, store);
-    if (memberId instanceof Response) return memberId;
-    return c.json({ count: store.countUnreadInboxItems(memberId) });
+    const scope = compatibilityInboxScope(c, store);
+    if (scope instanceof Response) return scope;
+    return c.json({ count: store.countUnreadInboxItems(scope.memberId, scope.workspaceId) });
   });
   app.post("/api/inbox/mark-all-read", (c) => {
-    const memberId = compatibilityInboxMemberId(c, store);
-    if (memberId instanceof Response) return memberId;
-    return c.json({ count: store.markAllInboxItemsRead(memberId) });
+    const scope = compatibilityInboxScope(c, store);
+    if (scope instanceof Response) return scope;
+    return c.json({ count: store.markAllInboxItemsRead(scope.memberId, scope.workspaceId) });
   });
   app.post("/api/inbox/archive-all", (c) => {
-    const memberId = compatibilityInboxMemberId(c, store);
-    if (memberId instanceof Response) return memberId;
-    return c.json({ count: store.archiveAllInboxItems(memberId, "all") });
+    const scope = compatibilityInboxScope(c, store);
+    if (scope instanceof Response) return scope;
+    return c.json({ count: store.archiveAllInboxItems(scope.memberId, "all", scope.workspaceId) });
   });
   app.post("/api/inbox/archive-all-read", (c) => {
-    const memberId = compatibilityInboxMemberId(c, store);
-    if (memberId instanceof Response) return memberId;
-    return c.json({ count: store.archiveAllInboxItems(memberId, "read") });
+    const scope = compatibilityInboxScope(c, store);
+    if (scope instanceof Response) return scope;
+    return c.json({ count: store.archiveAllInboxItems(scope.memberId, "read", scope.workspaceId) });
   });
   app.post("/api/inbox/archive-completed", (c) => {
-    const memberId = compatibilityInboxMemberId(c, store);
-    if (memberId instanceof Response) return memberId;
-    return c.json({ count: store.archiveAllInboxItems(memberId, "completed") });
+    const scope = compatibilityInboxScope(c, store);
+    if (scope instanceof Response) return scope;
+    return c.json({ count: store.archiveAllInboxItems(scope.memberId, "completed", scope.workspaceId) });
   });
   app.post("/api/inbox/:id/read", (c) => {
     const item = loadInboxItemForCurrentUser(c, store);

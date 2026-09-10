@@ -23,7 +23,27 @@ function seedInbox(store: ReturnType<typeof createStore>, workspaceId: string, u
   const author = store.createWorkspaceMember({ workspaceId, userId: `author-${workspaceId}`, name: "Author" });
   const issue = store.createIssue({ workspaceId, title: "Private notification", createdBy: member.id });
   store.createIssueComment(issue.id, { authorType: "member", authorId: author.id, body: "Private comment" });
-  return { member, item: store.listInboxItems(member.id)[0]! };
+  return { member, item: store.listInboxItems(member.id).find((item) => item.issueId === issue.id)! };
+}
+
+async function setupMovedInboxMember() {
+  const fixture = await setup();
+  const { store, first, workspace, app, headers } = fixture;
+  const user = store.getOrCreateUser({ email: "moved-inbox@example.test", name: "Moved member" });
+  const member = store.createWorkspaceMember({ workspaceId: first.id, userId: user.id, name: user.name, role: "member" });
+  const old = seedInbox(store, first.id, user.id).item;
+  const moved = await app.request(`/api/workspaces/${first.id}/members/${member.id}`, {
+    method: "PATCH", headers, body: JSON.stringify({ workspaceId: workspace.id, role: "member" }),
+  });
+  expect(moved.status).toBe(200);
+  expect(store.getUserRoleInWorkspace(user.id, first.id)).toBeNull();
+  const selected = [seedInbox(store, workspace.id, user.id).item];
+  const issue = store.createIssue({ workspaceId: workspace.id, title: "Second selected notification", createdBy: member.id });
+  const author = store.listWorkspaceMembers(workspace.id).find((candidate) => candidate.userId !== user.id)!;
+  store.createIssueComment(issue.id, { authorType: "member", authorId: author.id, body: "Selected comment" });
+  selected.push(store.listInboxItems(member.id).find((item) => item.issueId === issue.id)!);
+  const { token } = await store.createAccessToken({ workspaceId: "local", userId: user.id, name: "Moved session", type: "pat", purpose: "session" });
+  return { ...fixture, old, selected, headers: { Authorization: `Bearer ${token}`, "X-Workspace-Slug": workspace.slug } };
 }
 
 const pluginInput = { provider: "claude", name: "remaining-plugin", manifest: { name: "remaining-plugin", version: "1.0.0" }, files: [{ path: "skills/test/SKILL.md", content: "# Test\n" }] };
@@ -107,6 +127,60 @@ for (const header of ["X-Workspace-Slug", "X-Workspace-ID"]) {
 }
 
 describe("remaining workspace authorization", () => {
+  it("excludes old workspace rows from inbox lists, pagination and counts after a member moves", async () => {
+    const { app, headers, old, selected } = await setupMovedInboxMember();
+    const expectedIds = selected.map((item) => item.id).sort();
+    for (const path of ["/api/inbox", "/api/multiremi/inbox"]) {
+      const response = await app.request(path, { headers });
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect((body.items ?? body).map((item: { id: string }) => item.id).sort()).toEqual(expectedIds);
+    }
+    const firstPage = await app.request("/api/inbox/page?limit=1", { headers });
+    expect(firstPage.status).toBe(200);
+    const first = await firstPage.json();
+    expect(first.items).toHaveLength(1);
+    expect(first.has_more).toBe(true);
+    const secondPage = await app.request(`/api/inbox/page?limit=1&cursor=${encodeURIComponent(first.next_cursor)}`, { headers });
+    expect(secondPage.status).toBe(200);
+    const second = await secondPage.json();
+    expect(second.items).toHaveLength(1);
+    expect(second.has_more).toBe(false);
+    expect([...first.items, ...second.items].map((item: { id: string }) => item.id).sort()).toEqual(expectedIds);
+    const summary = await app.request("/api/inbox/summary", { headers });
+    expect(summary.status).toBe(200);
+    expect(await summary.json()).toEqual({ unread: 2, attention: 0 });
+    const count = await app.request("/api/inbox/unread-count", { headers });
+    expect(count.status).toBe(200);
+    expect(await count.json()).toEqual({ count: 2 });
+    const denied = await app.request(`/api/inbox/${old.id}/read`, { method: "POST", headers });
+    expect(denied.status).toBe(404);
+  });
+
+  for (const action of ["mark-all-read", "archive-all", "archive-all-read", "archive-completed"]) {
+    it(`keeps old workspace notifications unchanged during ${action} after a member moves`, async () => {
+      const { app, store, headers, old, selected } = await setupMovedInboxMember();
+      const all = [old, ...selected];
+      if (action === "archive-all-read") {
+        for (const item of all) store.markInboxItemRead(item.id);
+      }
+      if (action === "archive-completed") {
+        for (const item of all) store.updateIssue(item.issueId!, { status: "done" });
+      }
+      const previous = store.getInboxItem(old.id);
+      const response = await app.request(`/api/inbox/${action}`, { method: "POST", headers });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ count: 2 });
+      expect(store.getInboxItem(old.id)).toEqual(previous);
+      for (const item of selected) {
+        expect(store.getInboxItem(item.id)).toMatchObject({ read: true, archived: action !== "mark-all-read" });
+      }
+      const count = await app.request("/api/inbox/unread-count", { headers });
+      expect(count.status).toBe(200);
+      expect(await count.json()).toEqual({ count: 0 });
+    });
+  }
+
   it("resolves a legacy local user's membership inside the selected team", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();

@@ -343,11 +343,11 @@ export function compatibilityUserId(c: Context): string {
     "local";
 }
 
-export function compatibilityInboxMemberId(
+export function compatibilityInboxScope(
   c: Context,
   store: MultiremiStore,
   requestedMemberId = c.req.query("member_id"),
-): string | Response {
+): { memberId: string; workspaceId: string } | Response {
   const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspaceId") ?? c.req.query("workspace_id"));
   if (workspaceId instanceof Response) return workspaceId;
   const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
@@ -357,6 +357,7 @@ export function compatibilityInboxMemberId(
   const raw = requested ?? userId ?? "local";
   // Inbox rows use member ids. Resolve only inside the selected workspace,
   // and never let a human/task credential select another member's inbox.
+  // Keep the workspace in the scope: a moved member can retain older inbox rows.
   const exact = store.getWorkspaceMember(raw);
   const member = (exact?.workspaceId === workspaceId ? exact : null)
     ?? store.listWorkspaceMembers(workspaceId).find((candidate) => candidate.userId === raw)
@@ -366,7 +367,7 @@ export function compatibilityInboxMemberId(
     return c.json({ error: "inbox not found" }, 404);
   }
   if (userId && !member) return c.json({ error: "inbox not found" }, 404);
-  return member?.id ?? raw;
+  return { memberId: member?.id ?? raw, workspaceId };
 }
 
 export function denyCurrentUserRuntimeWorkspaceAccess(c: Context, store: MultiremiStore, runtime: MultiremiRuntime): Response | null {
