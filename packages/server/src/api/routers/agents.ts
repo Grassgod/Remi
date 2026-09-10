@@ -330,7 +330,8 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
     return c.json(result, 201);
   });
   app.get("/api/multiremi/agent-task-snapshot", (c) => {
-    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspaceId") ?? c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const tasks = store.listWorkspaceAgentTaskSnapshot(workspaceId).map(taskPublicResponse);
@@ -344,7 +345,8 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
     return c.json(store.listWorkspaceAgentTaskSnapshot(workspaceId).map(taskPublicResponse));
   });
   app.get("/api/multiremi/agent-run-counts", (c) => {
-    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspaceId") ?? c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const counts = store.listWorkspaceAgentRunCounts(workspaceId);
@@ -358,7 +360,8 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
     return c.json(store.listWorkspaceAgentRunCounts(workspaceId));
   });
   app.get("/api/multiremi/agent-activity-30d", (c) => {
-    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspaceId") ?? c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const activity = store.listWorkspaceAgentActivity30d(workspaceId);

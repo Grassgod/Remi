@@ -1,4 +1,5 @@
 import type { Hono } from "hono";
+import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
 import { denyCurrentUserWorkspaceAccess, usageQuery } from "../helpers.js";
 import {
   dashboardAgentRuntimeWire,
@@ -12,14 +13,18 @@ export function registerDashboardRoutes(app: Hono, deps: RouterDeps): void {
   const { store } = deps;
 
   app.get("/api/dashboard/usage/daily", (c) => {
-    const query = usageQuery(c, { store });
-    const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspaceId") ?? c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
+    const query = usageQuery(c, { workspaceId });
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     return c.json(store.listUsageDaily(query).map(dashboardUsageDailyWire));
   });
   app.get("/api/dashboard/usage/by-agent", (c) => {
-    const query = usageQuery(c, { store });
-    const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspaceId") ?? c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
+    const query = usageQuery(c, { workspaceId });
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     return c.json(store.listUsageByAgent(query).map(dashboardUsageByAgentWire));
   });
@@ -27,14 +32,18 @@ export function registerDashboardRoutes(app: Hono, deps: RouterDeps): void {
   // task_count), not the per-date series — the frontend joins these rows with
   // usage/by-agent by agent_id to build the dashboard leaderboard.
   app.get("/api/dashboard/agent-runtime", (c) => {
-    const query = usageQuery(c, { store });
-    const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspaceId") ?? c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
+    const query = usageQuery(c, { workspaceId });
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     return c.json(store.listAgentRuntime(query).map(dashboardAgentRuntimeWire));
   });
   app.get("/api/dashboard/runtime/daily", (c) => {
-    const query = usageQuery(c, { store });
-    const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspaceId") ?? c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
+    const query = usageQuery(c, { workspaceId });
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     return c.json(store.listRuntimeDaily(query).map(dashboardRuntimeDailyWire));
   });

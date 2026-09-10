@@ -30,6 +30,28 @@ const creationPaths = [
 ];
 
 describe("agent workspace request context", () => {
+  for (const endpoint of ["agent-task-snapshot", "agent-run-counts", "agent-activity-30d"]) {
+    for (const header of ["X-Workspace-ID", "X-Workspace-Slug"]) {
+      it(`scopes native ${endpoint} using ${header}`, async () => {
+        const { store, user, workspace, app, headers } = await setup();
+        const agent = store.createAgent({ name: "Active team agent", provider: "claude", workspaceId: workspace.id, ownerId: user.id });
+        store.createTask({ agentId: agent.id, workspaceId: workspace.id, prompt: "Team task" });
+        const path = `/api/multiremi/${endpoint}`;
+        const control = await app.request(`${path}?workspaceId=${workspace.id}`, { headers });
+        expect(control.status).toBe(200);
+        const actual = await app.request(path, { headers: {
+          ...headers, [header]: header === "X-Workspace-ID" ? workspace.id : workspace.slug,
+        } });
+        expect(actual.status).toBe(200);
+        expect(await actual.json()).toEqual(await control.json());
+        const foreign = await app.request(path, { headers: { ...headers, [header]: "local" } });
+        expect(foreign.status).toBe(404);
+        const unknown = await app.request(path, { headers: { ...headers, "X-Workspace-Slug": "missing-team" } });
+        expect(unknown.status).toBe(404);
+      });
+    }
+  }
+
   for (const path of creationPaths) {
     it(`creates in the selected workspace using only the web slug header: ${path}`, async () => {
       const { store, user, workspace, app, headers } = await setup();
