@@ -45,6 +45,24 @@ function writes(context: Awaited<ReturnType<typeof fixture>>) {
 }
 
 describe("native workspace request context", () => {
+  for (const native of [false, true]) {
+    it(`requires administration of the destination when moving a member (${native ? "native" : "compatibility"})`, async () => {
+      const { store, user, workspace, other, foreign, app, headers } = await fixture();
+      const movedUser = store.getOrCreateUser({ email: "moved-membership@example.test", name: "Moved membership" });
+      const member = store.createWorkspaceMember({ workspaceId: workspace.id, userId: movedUser.id, name: movedUser.name, role: "member" });
+      const path = native ? `/api/multiremi/members/${member.id}` : `/api/workspaces/${workspace.id}/members/${member.id}`;
+      const move = () => app.request(path, { method: "PATCH", headers, body: JSON.stringify({ workspaceId: foreign.id, role: "member" }) });
+      expect((await move()).status).toBe(404);
+      expect(store.getWorkspaceMember(member.id)?.workspaceId).toBe(workspace.id);
+      store.createWorkspaceMember({ workspaceId: foreign.id, userId: user.id, name: user.name, role: "member" });
+      expect((await move()).status).toBe(403);
+      expect(store.getWorkspaceMember(member.id)?.workspaceId).toBe(workspace.id);
+      const allowed = await app.request(path, { method: "PATCH", headers, body: JSON.stringify({ workspaceId: other.id, role: "member" }) });
+      expect(allowed.status).toBe(200);
+      expect(store.getWorkspaceMember(member.id)?.workspaceId).toBe(other.id);
+    });
+  }
+
   for (const endpoint of reads) {
     it(`${endpoint} honors selected headers, explicit IDs, and rejects stale or foreign context`, async () => {
       const { app, headers, workspace, foreign } = await fixture();

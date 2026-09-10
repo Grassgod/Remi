@@ -108,14 +108,19 @@ requests in open local mode retain the existing `local` identity.
 
 ## Workspace request context
 
-Web project, issue, label, autopilot, squad, pin, notification preference, token,
-agent list/create/activity and knowledge routes resolve workspace context before authorizing
-and accessing the same workspace. An explicit supported body/query workspace ID
-comes first, followed by `X-Workspace-ID`, `X-Workspace-Slug`, the credential's
-workspace, and finally `local` when no context exists. Resource-bound uploads
-use the resource's workspace first. Unknown slugs and inaccessible workspaces
-return `404`; a stale slug never redirects a write into `local`. Label creation accepts
-both `workspace_id` and `workspaceId`, with the snake_case field taking priority.
+Workspace-scoped collection and creation routes in both API families resolve
+context before authorizing and accessing the same workspace. This includes
+agents, skills, chats, runtimes, model catalogs, dashboards, issues, projects,
+labels, autopilots, squads, pins, members, tokens, notifications, feedback,
+plugins, daemon management, knowledge migration and onboarding bootstrap.
+Supported explicit body/query workspace IDs generally come first, followed by
+`X-Workspace-ID`, `X-Workspace-Slug`, the credential's workspace, and finally
+`local` when no context exists. Existing field priorities remain unchanged:
+compatibility context routes keep the ID header ahead of `workspace_id` query;
+compatibility label creation accepts both body fields with snake_case first.
+Unknown slugs return `404` when slug resolution is needed, without falling back
+to `local`. Selecting a workspace does not grant membership or broaden a
+task, daemon, share or workspace-scoped machine credential.
 
 Agent list, ordinary creation, template creation and default-agent creation share
 this resolution. Their explicit workspace IDs use body before query, with
@@ -124,6 +129,38 @@ priority over a conflicting or unknown slug; when slug resolution is needed, an
 unknown slug returns `404` without falling back. Membership and credential-scope
 checks still apply to the resolved workspace. Regression coverage is in
 [`agent-workspace-context.test.ts`](../tests/unit/multiremi/agent-workspace-context.test.ts).
+
+Resource operations authorize the resource's workspace. Runtime usage queries
+use that same workspace even when a page sends a stale selector; an empty
+runtime list cannot redirect the model catalog to `local`. Skill and label
+details and mutations check resource access, and skill search requires workspace
+access before returning summaries. Skills retain their explicit query mismatch
+check, and attachment creation derives scope from the referenced resource when
+the body omits a workspace. Multipart uploads reject references spanning
+different workspaces before writing either attachment metadata or a file.
+
+Inbox collection and bulk operations resolve the caller's membership only
+inside the selected workspace. Human and task credentials cannot select another
+member's inbox. Store queries and bulk updates also filter the inbox row's
+workspace, so moving a membership does not expose or modify its former
+workspace's notifications. Single-item read/archive operations authorize both the resource
+workspace and recipient before writing; an explicit selector must match, and
+repeated authorized operations remain valid for archived items.
+Moving a workspace member requires administration of both source and destination;
+the source workspace's administrator cannot grant membership in another workspace.
+
+Daemon installation resolves and authorizes the selected workspace before
+generating instructions or credentials. Registration without a body workspace
+uses request context or the daemon credential's scope; daemon identity and
+owner checks still apply. CLI daemon context filters runtimes by both daemon ID
+and credential workspace. A login session does not become a daemon credential:
+the install flow issues a daemon token, while legacy CLI-token promotion keeps
+its existing workspace and purpose constraints.
+
+The `*-workspace-context.test.ts` suites and
+[`workspace-context-remaining.test.ts`](../tests/unit/multiremi/workspace-context-remaining.test.ts)
+cover header-only requests, unknown slugs, explicit-selector priority, resource
+scope and credential boundaries.
 
 Registry resource commands choose `--workspace` first, then the JSON/file input's
 `workspaceId` or `workspace_id`, environment, saved configuration, and `local`.

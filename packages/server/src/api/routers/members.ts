@@ -37,6 +37,12 @@ export function registerMemberRoutes(app: Hono, deps: RouterDeps): void {
     if ((member.role === "owner" || role.role === "owner") && requester.member.role !== "owner") {
       return c.json({ error: "insufficient permissions" }, 403);
     }
+    const targetWorkspaceId = body.workspaceId ?? member.workspaceId;
+    if (targetWorkspaceId !== member.workspaceId) {
+      const denied = denyCurrentUserWorkspaceAccess(c, store, targetWorkspaceId)
+        ?? requireWorkspaceAdmin(c, store, targetWorkspaceId);
+      if (denied) return denied;
+    }
     const updated = safeUpdateWorkspaceMember(store, c.req.param("memberId"), { ...body, role: role.role });
     if ("error" in updated) return c.json({ error: updated.error }, updated.status);
     const response = workspaceMemberToGoResponse(updated, { includeUser: true });
@@ -101,6 +107,12 @@ export function registerMemberRoutes(app: Hono, deps: RouterDeps): void {
       ?? requireWorkspaceAdmin(c, store, current.workspaceId);
     if (denied) return denied;
     const body = await readJson<UpdateWorkspaceMemberInput>(c);
+    const targetWorkspaceId = body.workspaceId ?? current.workspaceId;
+    if (targetWorkspaceId !== current.workspaceId) {
+      const targetDenied = denyCurrentUserWorkspaceAccess(c, store, targetWorkspaceId)
+        ?? requireWorkspaceAdmin(c, store, targetWorkspaceId);
+      if (targetDenied) return targetDenied;
+    }
     const member = safeUpdateWorkspaceMember(store, c.req.param("id"), body);
     if ("error" in member) return c.json({ error: member.error }, member.status);
     return c.json({ member });
