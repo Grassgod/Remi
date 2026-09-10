@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { canonicalJson } from "@multiremi/agent-plugins/import.js";
 import {
+  ACTIVE_TASK_STATUSES,
   cleanOptionalString,
   daemonRuntimeId,
   isActiveTaskStatus,
@@ -67,6 +68,8 @@ import type {
 const log = createLogger("multiremi-store");
 
 type Row = Record<string, unknown>;
+
+const TASK_AUTOPILOT_LOOKUP_BATCH_SIZE = 500;
 
 const AUTO_RETRY_FAILURE_REASONS = new Set([
   "runtime_offline",
@@ -820,20 +823,28 @@ export class TasksRepo {
   }
 
   listWorkspaceAgentTaskSnapshot(workspaceId = "local"): MultiremiTask[] {
-    const tasks = this.listTasks().filter((task) => task.workspaceId === workspaceId);
-    const snapshot = new Map<string, MultiremiTask>();
-    for (const task of tasks) {
-      if (isActiveTaskStatus(task.status)) {
-        snapshot.set(task.id, task);
-      }
-    }
-    const latestOutcomeByAgent = new Map<string, MultiremiTask>();
-    for (const task of tasks.filter((item) => item.status === "completed" || item.status === "failed")) {
-      const current = latestOutcomeByAgent.get(task.agentId);
-      if (!current || outcomeTime(task) > outcomeTime(current)) latestOutcomeByAgent.set(task.agentId, task);
-    }
-    for (const task of latestOutcomeByAgent.values()) snapshot.set(task.id, task);
-    return [...snapshot.values()].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
+    const activePlaceholders = ACTIVE_TASK_STATUSES.map(() => "?").join(", ");
+    const rows = this.ctx.db.query(
+      `WITH ranked_outcomes AS (
+         SELECT id,
+                ROW_NUMBER() OVER (
+                  PARTITION BY agent_id
+                  ORDER BY COALESCE(completed_at, failed_at, updated_at, created_at) DESC
+                ) AS outcome_rank
+         FROM multiremi_tasks
+         WHERE workspace_id = ? AND status IN ('completed', 'failed')
+       )
+       SELECT task.*
+       FROM multiremi_tasks task
+       WHERE task.workspace_id = ? AND task.status IN (${activePlaceholders})
+       UNION
+       SELECT task.*
+       FROM multiremi_tasks task
+       JOIN ranked_outcomes outcome ON outcome.id = task.id
+       WHERE outcome.outcome_rank = 1
+       ORDER BY updated_at DESC`,
+    ).all(workspaceId, workspaceId, ...ACTIVE_TASK_STATUSES) as Row[];
+    return this.withTaskAutopilotRuns(rows.map(toTask));
   }
 
   listWorkspaceAgentRunCounts(workspaceId = "local", days = 30): MultiremiAgentRunCount[] {
@@ -3280,13 +3291,18 @@ export class TasksRepo {
 
   private withTaskAutopilotRuns(tasks: MultiremiTask[]): MultiremiTask[] {
     if (!tasks.length) return tasks;
-    const placeholders = tasks.map(() => "?").join(", ");
-    const rows = this.ctx.db.query(
-      `SELECT task_id, id
-       FROM multiremi_autopilot_runs
-       WHERE task_id IN (${placeholders})
-       ORDER BY created_at DESC`,
-    ).all(...tasks.map((task) => task.id)) as Row[];
+    const taskIds = tasks.map((task) => task.id);
+    const rows: Row[] = [];
+    for (let offset = 0; offset < taskIds.length; offset += TASK_AUTOPILOT_LOOKUP_BATCH_SIZE) {
+      const batch = taskIds.slice(offset, offset + TASK_AUTOPILOT_LOOKUP_BATCH_SIZE);
+      const placeholders = batch.map(() => "?").join(", ");
+      rows.push(...this.ctx.db.query(
+        `SELECT task_id, id
+         FROM multiremi_autopilot_runs
+         WHERE task_id IN (${placeholders})
+         ORDER BY created_at DESC`,
+      ).all(...batch) as Row[]);
+    }
     const runByTask = new Map<string, string>();
     for (const row of rows) {
       const taskId = nullableString(row.task_id);
@@ -3424,10 +3440,6 @@ function executionFingerprintResumable(
   // while the Agent still has no Plugins. Once capabilities are attached we
   // fail closed and start a fresh provider session.
   return stored ? stored === expectedFingerprint : !hasPlugins;
-}
-
-function outcomeTime(task: MultiremiTask): number {
-  return Date.parse(task.completedAt ?? task.failedAt ?? task.updatedAt ?? task.createdAt);
 }
 
 function normalizeRepos(rawRepos: unknown[], defaultBranchFor?: (url: string) => string | undefined): MultiremiRepoData[] {

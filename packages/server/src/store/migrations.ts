@@ -34,6 +34,7 @@ const CHAT_MESSAGE_SEQUENCE_MIGRATION = "20260905_chat_message_sequence";
 const FEISHU_BOT_AGENT_ROUTES_MIGRATION = "20260908_feishu_bot_agent_routes";
 const FEISHU_BOT_AGENT_ROUTE_DEFAULT_UNIQUENESS_MIGRATION =
   "20260909_feishu_bot_agent_route_default_uniqueness";
+const AGENT_PAGE_QUERY_INDEXES_MIGRATION = "20260910_agent_page_query_indexes";
 
 // Stable Feishu open_id of the deployment owner (hehuajie / 贺华杰). The seed
 // `local` user is tagged with this on migration so SSO login re-binds to it
@@ -2900,6 +2901,22 @@ export function runMigrations(db: SqlDatabase): void {
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_trigger_comment ON multiremi_tasks(trigger_comment_id)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_issue_session ON multiremi_tasks(issue_session_id, created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_delegation ON multiremi_tasks(delegation_id, agent_id, status)");
+  runMigrationOnce(db, AGENT_PAGE_QUERY_INDEXES_MIGRATION, () => {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_multiremi_autopilot_runs_task
+        ON multiremi_autopilot_runs(task_id);
+      CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_workspace_status
+        ON multiremi_tasks(workspace_id, status);
+      CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_workspace_created
+        ON multiremi_tasks(workspace_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_workspace_completed
+        ON multiremi_tasks(workspace_id, completed_at);
+      CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_agent
+        ON multiremi_tasks(agent_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_multiremi_runtimes_workspace
+        ON multiremi_runtimes(workspace_id, status);
+    `);
+  });
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_issue_comments_session ON multiremi_issue_comments(issue_session_id, created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_issues_parent ON multiremi_issues(parent_issue_id, position, created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_issues_scheduled ON multiremi_issues(workspace_id, start_date, due_date)");

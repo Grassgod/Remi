@@ -3,7 +3,13 @@
 import type { MultiremiTaskStatus, TaskUsageEntry } from "@multiremi/contracts/types.js";
 
 const TERMINAL_STATUSES: MultiremiTaskStatus[] = ["completed", "failed", "cancelled"];
-const ACTIVE_TASK_STATUSES: MultiremiTaskStatus[] = ["queued", "dispatched", "running", "waiting_local_directory", "awaiting_human"];
+export const ACTIVE_TASK_STATUSES: readonly MultiremiTaskStatus[] = [
+  "queued",
+  "dispatched",
+  "running",
+  "waiting_local_directory",
+  "awaiting_human",
+];
 const IN_FLIGHT_TASK_STATUSES: MultiremiTaskStatus[] = ["dispatched", "running", "waiting_local_directory", "awaiting_human"];
 
 export function isTerminalStatus(status: MultiremiTaskStatus): boolean {
@@ -215,4 +221,3 @@ export function normalizeUsageNumber(value: unknown): number {
   if (!Number.isFinite(number) || number < 0) return 0;
   return Math.floor(number);
 }
-

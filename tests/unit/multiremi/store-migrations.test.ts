@@ -28,6 +28,11 @@ function columnNames(database: Database, table: string): string[] {
   return (database.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((row) => row.name);
 }
 
+function indexNames(database: Database): string[] {
+  return (database.query("SELECT name FROM sqlite_master WHERE type = 'index'").all() as Array<{ name: string }>)
+    .map((row) => row.name);
+}
+
 afterEach(() => {
   db?.close();
   db = null;
@@ -84,6 +89,14 @@ describe("store migrations", () => {
     expect(tables.some((name) => name.startsWith("multica_"))).toBe(false);
     expect(tables).not.toContain("multiremi_github_settings");
     expect(tables).not.toContain("multiremi_github_pull_requests");
+    expect(indexNames(database)).toEqual(expect.arrayContaining([
+      "idx_multiremi_autopilot_runs_task",
+      "idx_multiremi_tasks_workspace_status",
+      "idx_multiremi_tasks_workspace_created",
+      "idx_multiremi_tasks_workspace_completed",
+      "idx_multiremi_tasks_agent",
+      "idx_multiremi_runtimes_workspace",
+    ]));
     expect(columnNames(database, "multiremi_access_tokens")).toContain("purpose");
     expect(columnNames(database, "multiremi_agents")).toContain("issue_creation_requires_proposal");
     expect(columnNames(database, "multiremi_agents")).not.toContain("cwd");
