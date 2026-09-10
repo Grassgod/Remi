@@ -16,7 +16,8 @@ export function registerPinRoutes(app: Hono, deps: RouterDeps): void {
   const { store } = deps;
 
   app.get("/api/multiremi/pins", (c) => {
-    const workspaceId = c.req.query("workspaceId") ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspaceId"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const userId = c.req.query("userId") ?? currentRequestUserId(c);
@@ -27,7 +28,8 @@ export function registerPinRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.post("/api/multiremi/pins", async (c) => {
     const body = await readJson<CreatePinnedItemInput>(c);
-    const workspaceId = body.workspaceId ?? body.workspace_id ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, body.workspaceId ?? body.workspace_id);
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const userId = body.userId ?? body.user_id ?? currentRequestUserId(c);
@@ -37,7 +39,8 @@ export function registerPinRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.put("/api/multiremi/pins/reorder", async (c) => {
     const body = await readJson<{ workspaceId?: string; workspace_id?: string; userId?: string; user_id?: string; items?: ReorderPinnedItemInput[] }>(c);
-    const workspaceId = body.workspaceId ?? body.workspace_id ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, body.workspaceId ?? body.workspace_id);
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const userId = body.userId ?? body.user_id ?? currentRequestUserId(c);
@@ -47,7 +50,8 @@ export function registerPinRoutes(app: Hono, deps: RouterDeps): void {
     return c.json({ pins, total: pins.length });
   });
   app.delete("/api/multiremi/pins/:itemType/:itemId", (c) => {
-    const workspaceId = c.req.query("workspaceId") ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspaceId"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const userId = c.req.query("userId") ?? currentRequestUserId(c);

@@ -71,14 +71,16 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
   const { store, projectKnowledge } = deps;
 
   app.get("/api/multiremi/projects", (c) => {
-    const workspaceId = c.req.query("workspaceId") ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspaceId"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const projects = store.listProjects(workspaceId).map(projectNativeSummaryResponse);
     return c.json({ projects, total: projects.length });
   });
   app.get("/api/multiremi/projects/search", (c) => {
-    const workspaceId = c.req.query("workspaceId") ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspaceId"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const result = store.searchProjects({
@@ -171,16 +173,18 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
       "delta_instructions",
     );
     if (invalidDeltaInstructions) return invalidDeltaInstructions;
-    const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspaceId ?? body.workspace_id ?? "local");
+    const workspaceId = resolveRequestWorkspaceId(c, store, body.workspaceId ?? body.workspace_id);
+    if (workspaceId instanceof Response) return workspaceId;
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const repositoryError = validateImportedProjectResources(
       store,
-      body.workspaceId ?? body.workspace_id ?? "local",
+      workspaceId,
       body.resources,
     );
     if (repositoryError) return c.json({ error: repositoryError }, 400);
     return c.json({
-      project: store.createProject(projectCreateInputWithDefaultLead(c, body), {
+      project: store.createProject(projectCreateInputWithDefaultLead(c, { ...body, workspaceId }), {
         instructionsUpdatedBy: currentRequestUserId(c),
       }),
     }, 201);
@@ -678,7 +682,8 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
   app.get("/api/project-docs", async (c) => {
-    const workspaceId = compatibilityWorkspaceId(c);
+    const workspaceId = compatibilityWorkspaceId(c, store);
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     try {
@@ -699,7 +704,8 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
   });
 
   app.get("/api/project-knowledge/migration", async (c) => {
-    const workspaceId = compatibilityWorkspaceId(c);
+    const workspaceId = compatibilityWorkspaceId(c, store);
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     return c.json(await projectKnowledge.migrationStatus(workspaceId));
@@ -707,7 +713,8 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/project-knowledge/migration/backfill", async (c) => {
     const body = await readJsonStrict<{ workspace_id?: string; project_id?: string | null; dry_run?: boolean; resume?: boolean }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const workspaceId = cleanString(body.workspace_id) ?? compatibilityWorkspaceId(c);
+    const workspaceId = cleanString(body.workspace_id) ?? compatibilityWorkspaceId(c, store);
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     try {
@@ -725,7 +732,8 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/project-knowledge/migration/verify", async (c) => {
     const body = await readJsonStrict<{ workspace_id?: string; project_id?: string | null }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const workspaceId = cleanString(body.workspace_id) ?? compatibilityWorkspaceId(c);
+    const workspaceId = cleanString(body.workspace_id) ?? compatibilityWorkspaceId(c, store);
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     try {
@@ -739,7 +747,8 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/project-knowledge/migration/retry-failed", async (c) => {
     const body = await readJsonStrict<{ workspace_id?: string; project_id?: string | null }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const workspaceId = cleanString(body.workspace_id) ?? compatibilityWorkspaceId(c);
+    const workspaceId = cleanString(body.workspace_id) ?? compatibilityWorkspaceId(c, store);
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     try {

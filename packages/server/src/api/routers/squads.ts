@@ -32,7 +32,8 @@ export function registerSquadRoutes(app: Hono, deps: RouterDeps): void {
   };
 
   app.get("/api/multiremi/squads", (c) => {
-    const workspaceId = c.req.query("workspaceId") ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspaceId"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const squads = store.listSquads(workspaceId);
@@ -87,9 +88,11 @@ export function registerSquadRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.post("/api/multiremi/squads", async (c) => {
     const body = await readJson<CreateSquadInput>(c);
-    const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspaceId ?? "local");
+    const workspaceId = resolveRequestWorkspaceId(c, store, body.workspaceId);
+    if (workspaceId instanceof Response) return workspaceId;
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    return c.json({ squad: store.createSquad(body) }, 201);
+    return c.json({ squad: store.createSquad({ ...body, workspaceId }) }, 201);
   });
   app.get("/api/multiremi/squads/:id", (c) => {
     const squad = loadSquad(c, c.req.param("id"));

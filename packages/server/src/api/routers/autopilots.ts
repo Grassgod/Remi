@@ -149,7 +149,8 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
   const { store, scheduler } = deps;
 
   app.get("/api/multiremi/autopilots", (c) => {
-    const workspaceId = c.req.query("workspaceId") ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspaceId"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const autopilots = store.listAutopilots(workspaceId)
@@ -198,7 +199,9 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJson<CreateAutopilotInput>(c);
     const secretDenied = taskTokenSecretCreationDenied(c, body.triggerKind ?? body.trigger_kind);
     if (secretDenied) return secretDenied;
-    const input = autopilotCreateInput(c, body);
+    const workspaceId = resolveRequestWorkspaceId(c, store, cleanString(body.workspaceId) ?? cleanString(body.workspace_id));
+    if (workspaceId instanceof Response) return workspaceId;
+    const input = autopilotCreateInput(c, { ...body, workspaceId });
     const policy = autopilotIssueCreationPolicyInput(c, store, body);
     if (policy instanceof Response) return policy;
     const issueDenied = denyRestrictedTaskCreateIssueAutopilot(

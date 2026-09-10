@@ -3205,19 +3205,24 @@ runMigrations(this.db);
     return this.issues.detachLabelFromIssue(issueId, labelId, activity);
   }
 
-  listInboxItems(memberId?: string | null): MultiremiInboxItem[] {
-    return this.issues.listInboxItems(memberId);
+  getInboxItem(id: string): MultiremiInboxItem | null {
+    return this.issues.getInboxItem(id);
+  }
+
+  listInboxItems(memberId?: string | null, workspaceId?: string): MultiremiInboxItem[] {
+    return this.issues.listInboxItems(memberId, workspaceId);
   }
 
   listInboxItemsPage(
     memberId?: string | null,
     options: { limit?: number; cursor?: string | null } = {},
+    workspaceId?: string,
   ): MultiremiInboxPage {
-    return this.issues.listInboxItemsPage(memberId, options);
+    return this.issues.listInboxItemsPage(memberId, options, workspaceId);
   }
 
-  getInboxSummary(memberId?: string | null, timezoneOffsetMinutes = 0): MultiremiInboxSummary {
-    return this.issues.getInboxSummary(memberId, timezoneOffsetMinutes);
+  getInboxSummary(memberId?: string | null, timezoneOffsetMinutes = 0, workspaceId?: string): MultiremiInboxSummary {
+    return this.issues.getInboxSummary(memberId, timezoneOffsetMinutes, workspaceId);
   }
 
   markInboxItemRead(id: string): MultiremiInboxItem {
@@ -3228,16 +3233,16 @@ runMigrations(this.db);
     return this.issues.archiveInboxItem(id);
   }
 
-  countUnreadInboxItems(memberId?: string | null): number {
-    return this.issues.countUnreadInboxItems(memberId);
+  countUnreadInboxItems(memberId?: string | null, workspaceId?: string): number {
+    return this.issues.countUnreadInboxItems(memberId, workspaceId);
   }
 
-  markAllInboxItemsRead(memberId?: string | null): number {
-    return this.issues.markAllInboxItemsRead(memberId);
+  markAllInboxItemsRead(memberId?: string | null, workspaceId?: string): number {
+    return this.issues.markAllInboxItemsRead(memberId, workspaceId);
   }
 
-  archiveAllInboxItems(memberId?: string | null, mode: "all" | "read" | "completed" = "all"): number {
-    return this.issues.archiveAllInboxItems(memberId, mode);
+  archiveAllInboxItems(memberId?: string | null, mode: "all" | "read" | "completed" = "all", workspaceId?: string): number {
+    return this.issues.archiveAllInboxItems(memberId, mode, workspaceId);
   }
 
   listIssueReactions(issueId: string): MultiremiIssueReaction[] {

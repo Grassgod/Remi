@@ -46,7 +46,8 @@ export function registerNotificationChannelRoutes(app: Hono, deps: RouterDeps): 
   const { store } = deps;
 
   app.get("/api/multiremi/notification-channels", (c) => {
-    const workspaceId = requestWorkspaceId(c);
+    const workspaceId = requestWorkspaceId(c, store);
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const channels = store.listNotificationChannelsInScope(
@@ -58,7 +59,8 @@ export function registerNotificationChannelRoutes(app: Hono, deps: RouterDeps): 
 
   app.post("/api/multiremi/notification-channels", async (c) => {
     const body = await readJson<ChannelBody>(c);
-    const workspaceId = body.workspaceId ?? body.workspace_id ?? requestWorkspaceId(c);
+    const workspaceId = body.workspaceId ?? body.workspace_id ?? requestWorkspaceId(c, store);
+    if (workspaceId instanceof Response) return workspaceId;
     const rejected = rejectOwnerOverride(c, body);
     if (rejected) return rejected;
     // Only a real string counts: String(["workspace"]) is "workspace", and a scope that
@@ -126,7 +128,8 @@ export function registerNotificationChannelRoutes(app: Hono, deps: RouterDeps): 
   });
 
   app.get("/api/multiremi/notification-deliveries", (c) => {
-    const workspaceId = requestWorkspaceId(c);
+    const workspaceId = requestWorkspaceId(c, store);
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const rawStatus = c.req.query("status")?.trim();
@@ -175,8 +178,8 @@ function leaseIsActive(leasedUntil: string | null): boolean {
   return Number.isFinite(expiresAt) && expiresAt > Date.now();
 }
 
-function requestWorkspaceId(c: Context): string {
-  return c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? compatibilityWorkspaceId(c);
+function requestWorkspaceId(c: Context, store: RouterDeps["store"]): string | Response {
+  return c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? compatibilityWorkspaceId(c, store);
 }
 
 function requireNotificationAdmin(c: Context, store: RouterDeps["store"], workspaceId: string): Response | null {

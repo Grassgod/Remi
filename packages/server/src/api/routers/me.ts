@@ -1,4 +1,5 @@
 import type { Hono, MiddlewareHandler } from "hono";
+import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
 import {
   denyCurrentUserWorkspaceAccess,
   readJson,
@@ -57,18 +58,21 @@ export function registerMeRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.post("/api/me/onboarding/runtime-bootstrap", async (c) => {
     const body = await readJson<{ workspace_id?: string; workspaceId?: string; runtime_id?: string; runtimeId?: string }>(c);
-    const workspaceId = body.workspace_id ?? body.workspaceId ?? "";
+    const workspaceId = resolveRequestWorkspaceId(c, store, body.workspace_id ?? body.workspaceId ?? c.req.query("workspace_id") ?? c.req.query("workspaceId"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    const result = safeRuntimeOnboardingBootstrap(store, body, currentRequestUserId(c));
+    const result = safeRuntimeOnboardingBootstrap(store, { ...body, workspaceId, workspace_id: workspaceId }, currentRequestUserId(c));
     if ("error" in result) return c.json({ error: result.error }, result.status);
     return c.json(result);
   });
   app.post("/api/me/onboarding/no-runtime-bootstrap", async (c) => {
     const body = await readJson<{ workspace_id?: string; workspaceId?: string }>(c);
-    const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspace_id ?? body.workspaceId ?? "");
+    const workspaceId = resolveRequestWorkspaceId(c, store, body.workspace_id ?? body.workspaceId ?? c.req.query("workspace_id") ?? c.req.query("workspaceId"));
+    if (workspaceId instanceof Response) return workspaceId;
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    const result = safeNoRuntimeOnboardingBootstrap(store, body, currentRequestUserId(c));
+    const result = safeNoRuntimeOnboardingBootstrap(store, { ...body, workspaceId, workspace_id: workspaceId }, currentRequestUserId(c));
     if ("error" in result) return c.json({ error: result.error }, result.status);
     return c.json(result);
   });

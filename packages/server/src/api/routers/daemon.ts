@@ -1,4 +1,5 @@
 import type { Hono } from "hono";
+import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
 import {
   MAX_TASK_MESSAGES_PER_REQUEST,
   bindDaemonTokenIdentityOrDeny,
@@ -217,10 +218,14 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
   });
 
   app.get("/api/multiremi/install/daemon", (c) => {
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspaceId") ?? c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
     return c.json(buildDaemonInstallInstructions({
       requestUrl: c.req.url,
       serverUrl: c.req.query("serverUrl") ?? c.req.query("server_url"),
-      workspaceId: c.req.query("workspaceId") ?? c.req.query("workspace_id"),
+      workspaceId,
       token: c.req.query("token"),
       provider: c.req.query("provider"),
       version: c.req.query("version"),
@@ -237,9 +242,10 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       return c.json({ error: validatedBody.error }, 400);
     }
     const body = validatedBody.body;
-    const workspaceId = cleanString(
+    const workspaceId = resolveRequestWorkspaceId(c, store, cleanString(
       body.workspaceId ?? body.workspace_id ?? c.req.query("workspaceId") ?? c.req.query("workspace_id"),
-    ) ?? "local";
+    ));
+    if (workspaceId instanceof Response) return workspaceId;
     const actorToken = currentAccessToken(c);
     if (actorToken?.type === "task") {
       return c.json({ error: "forbidden for task token", code: "task_token_hard_denied" }, 403);
@@ -300,9 +306,10 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/daemon/register", async (c) => {
     const body = await readJsonStrict<DaemonRegisterRequestBody>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const denied = denyDaemonTokenWorkspace(c, body.workspace_id);
+    const registerWorkspace = resolveRequestWorkspaceId(c, store, cleanString(body.workspace_id));
+    if (registerWorkspace instanceof Response) return registerWorkspace;
+    const denied = denyDaemonTokenWorkspace(c, registerWorkspace);
     if (denied) return denied;
-    const registerWorkspace = String(body.workspace_id ?? "").trim() || "local";
     const registerDaemonId = String(body.daemon_id ?? "").trim();
     if (registerDaemonId && store.isDaemonRetired(registerWorkspace, registerDaemonId)) {
       return c.json({ error: "daemon has been retired", code: "daemon_retired" }, 410);
@@ -321,7 +328,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       registerDaemonId,
     );
     if (upgradeDenied) return upgradeDenied;
-    const owner = daemonRegisterOwnerContext(c, store, body.workspace_id);
+    const owner = daemonRegisterOwnerContext(c, store, registerWorkspace);
     if ("error" in owner) return c.json({ error: owner.error }, owner.status);
     const identityDenied = bindDaemonTokenIdentityOrDeny(c, store, body.daemon_id);
     if (identityDenied) return identityDenied;
@@ -332,7 +339,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     // master/open bootstrap path retains legacy migration compatibility.
     const usesMasterToken = Boolean(authToken)
       && c.req.header("Authorization") === `Bearer ${authToken}`;
-    const result = registerDaemonRuntimes(store, body, owner, includeRelay, {
+    const result = registerDaemonRuntimes(store, { ...body, workspace_id: registerWorkspace }, owner, includeRelay, {
       allowLegacyDaemonMigration:
         currentAccessToken(c)?.type !== "daemon" && (!authToken || usesMasterToken),
     });

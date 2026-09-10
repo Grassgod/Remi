@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { resolveRequestWorkspaceId } from "./helpers/workspace-context.js";
 import { cors } from "hono/cors";
 import { getCookie } from "hono/cookie";
 import { AgentTemplateError } from "./agent-templates.js";
@@ -558,13 +559,16 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   registerNotificationChannelRoutes(app, deps);
   app.post("/api/multiremi/feedback", async (c) => {
     const body = await readJson<CreateFeedbackInput>(c);
-    const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspaceId ?? body.workspace_id ?? "local");
+    const workspaceId = resolveRequestWorkspaceId(c, store, body.workspaceId ?? body.workspace_id ?? c.req.query("workspaceId") ?? c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    const feedback = createFeedbackOrApiError(store, withFeedbackRequestMetadata(body, c));
+    const feedback = createFeedbackOrApiError(store, withFeedbackRequestMetadata({ ...body, workspaceId, workspace_id: workspaceId }, c));
     return c.json({ feedback }, 201);
   });
   app.get("/api/multiremi/feedback", (c) => {
-    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspaceId") ?? c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const feedback = store.listFeedback(workspaceId);
@@ -572,9 +576,11 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
   app.post("/api/feedback", async (c) => {
     const body = await readJson<CreateFeedbackInput>(c);
-    const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspaceId ?? body.workspace_id ?? "local");
+    const workspaceId = resolveRequestWorkspaceId(c, store, body.workspaceId ?? body.workspace_id ?? c.req.query("workspaceId") ?? c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    const feedback = createFeedbackOrApiError(store, withFeedbackRequestMetadata(body, c));
+    const feedback = createFeedbackOrApiError(store, withFeedbackRequestMetadata({ ...body, workspaceId, workspace_id: workspaceId }, c));
     return c.json({ id: feedback.id, created_at: feedback.createdAt }, 201);
   });
 

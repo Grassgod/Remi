@@ -1,4 +1,5 @@
 import type { Hono } from "hono";
+import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
 import {
   denyCurrentUserWorkspaceAccess,
   loadCurrentWorkspaceMember,
@@ -36,6 +37,12 @@ export function registerMemberRoutes(app: Hono, deps: RouterDeps): void {
     if ((member.role === "owner" || role.role === "owner") && requester.member.role !== "owner") {
       return c.json({ error: "insufficient permissions" }, 403);
     }
+    const targetWorkspaceId = body.workspaceId ?? member.workspaceId;
+    if (targetWorkspaceId !== member.workspaceId) {
+      const denied = denyCurrentUserWorkspaceAccess(c, store, targetWorkspaceId)
+        ?? requireWorkspaceAdmin(c, store, targetWorkspaceId);
+      if (denied) return denied;
+    }
     const updated = safeUpdateWorkspaceMember(store, c.req.param("memberId"), { ...body, role: role.role });
     if ("error" in updated) return c.json({ error: updated.error }, updated.status);
     const response = workspaceMemberToGoResponse(updated, { includeUser: true });
@@ -70,7 +77,8 @@ export function registerMemberRoutes(app: Hono, deps: RouterDeps): void {
   });
 
   app.get("/api/multiremi/members", (c) => {
-    const workspaceId = c.req.query("workspaceId") ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspaceId"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const members = store.listWorkspaceMembers(workspaceId);
@@ -78,11 +86,12 @@ export function registerMemberRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.post("/api/multiremi/members", async (c) => {
     const body = await readJson<CreateWorkspaceMemberInput>(c);
-    const workspaceId = body.workspaceId ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, body.workspaceId);
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId)
       ?? requireWorkspaceAdmin(c, store, workspaceId);
     if (denied) return denied;
-    return c.json({ member: store.createWorkspaceMember(body) }, 201);
+    return c.json({ member: store.createWorkspaceMember({ ...body, workspaceId }) }, 201);
   });
   app.get("/api/multiremi/members/:id", (c) => {
     const member = store.getWorkspaceMember(c.req.param("id"));
@@ -98,6 +107,12 @@ export function registerMemberRoutes(app: Hono, deps: RouterDeps): void {
       ?? requireWorkspaceAdmin(c, store, current.workspaceId);
     if (denied) return denied;
     const body = await readJson<UpdateWorkspaceMemberInput>(c);
+    const targetWorkspaceId = body.workspaceId ?? current.workspaceId;
+    if (targetWorkspaceId !== current.workspaceId) {
+      const targetDenied = denyCurrentUserWorkspaceAccess(c, store, targetWorkspaceId)
+        ?? requireWorkspaceAdmin(c, store, targetWorkspaceId);
+      if (targetDenied) return targetDenied;
+    }
     const member = safeUpdateWorkspaceMember(store, c.req.param("id"), body);
     if ("error" in member) return c.json({ error: member.error }, member.status);
     return c.json({ member });

@@ -30,6 +30,7 @@ import {
   requireHumanWorkspaceAdmin,
 } from "./auth-guards.js";
 import { canCurrentUserUseRuntime } from "./runtimes.js";
+import { resolveRequestWorkspaceId } from "./workspace-context.js";
 import {
   fleetModelsResponse,
   type FleetModelResponse,
@@ -97,13 +98,16 @@ function providerThinkingConsensus(models: FleetModelResponse[]): FleetModelThin
   };
 }
 
-export function requestedAgentWorkspaceId(c: Context, input?: Pick<CreateAgentInput, "workspaceId" | "workspace_id">): string {
-  return cleanString(input?.workspaceId) ??
+export function requestedAgentWorkspaceId(
+  c: Context,
+  store: MultiremiStore,
+  input?: Pick<CreateAgentInput, "workspaceId" | "workspace_id">,
+): string | Response {
+  const explicitId = cleanString(input?.workspaceId) ??
     cleanString(input?.workspace_id) ??
     cleanString(c.req.query("workspaceId")) ??
-    cleanString(c.req.query("workspace_id")) ??
-    currentAccessToken(c)?.workspaceId ??
-    "local";
+    cleanString(c.req.query("workspace_id"));
+  return resolveRequestWorkspaceId(c, store, explicitId);
 }
 
 /**
@@ -251,7 +255,8 @@ export function withSkillCreateRequestContext(
   store: MultiremiStore,
   input: CreateSkillInput,
 ): CreateSkillInput | Response {
-  const workspaceId = requestedSkillWorkspaceId(c, input);
+  const workspaceId = requestedSkillWorkspaceId(c, store, input);
+  if (workspaceId instanceof Response) return workspaceId;
   const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
   if (denied) return denied;
   const userId = currentRequestUserId(c);
@@ -269,7 +274,8 @@ export function withSkillImportRequestContext(
   store: MultiremiStore,
   input: ImportSkillInput,
 ): ImportSkillInput | Response {
-  const workspaceId = requestedSkillWorkspaceId(c, input);
+  const workspaceId = requestedSkillWorkspaceId(c, store, input);
+  if (workspaceId instanceof Response) return workspaceId;
   const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
   if (denied) return denied;
   const userId = currentRequestUserId(c);
@@ -301,7 +307,10 @@ export function loadSkillForCurrentUser(
   const skill = store.getSkill(skillId);
   if (!skill) return c.json({ error: "skill not found" }, 404);
   const workspaceId = skillWorkspaceId(skill);
-  if (requestedSkillWorkspaceId(c) !== workspaceId) return c.json({ error: "skill not found" }, 404);
+  // A skill ID determines its workspace. Preserve an explicit query constraint,
+  // but do not let a login token or the currently viewed workspace hide it.
+  const explicitWorkspaceId = cleanString(c.req.query("workspaceId")) ?? cleanString(c.req.query("workspace_id"));
+  if (explicitWorkspaceId && explicitWorkspaceId !== workspaceId) return c.json({ error: "skill not found" }, 404);
   const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
   if (denied) return c.json({ error: "skill not found" }, 404);
   return { skill };
@@ -383,7 +392,8 @@ export function parseExpectedActiveAgentIds(c: Context, value: unknown): string[
 export function withAgentRequestContext(c: Context, store: MultiremiStore, input: CreateAgentInput): CreateAgentInput | Response {
   const issuePolicy = agentIssueProposalPolicyInput(c, store, input, true);
   if (issuePolicy instanceof Response) return issuePolicy;
-  const workspaceId = requestedAgentWorkspaceId(c, input);
+  const workspaceId = requestedAgentWorkspaceId(c, store, input);
+  if (workspaceId instanceof Response) return workspaceId;
   const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
   if (denied) return denied;
   const role = agentRoleRequestInput(c, store, workspaceId, input);
@@ -603,7 +613,8 @@ export function withAgentTemplateRequestContext(
 ): CreateAgentFromTemplateInput | Response {
   const issuePolicy = agentIssueProposalPolicyInput(c, store, input, true);
   if (issuePolicy instanceof Response) return issuePolicy;
-  const workspaceId = requestedAgentWorkspaceId(c, input);
+  const workspaceId = requestedAgentWorkspaceId(c, store, input);
+  if (workspaceId instanceof Response) return workspaceId;
   const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
   if (denied) return denied;
   const role = agentRoleRequestInput(c, store, workspaceId, input);

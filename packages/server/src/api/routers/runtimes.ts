@@ -1,4 +1,5 @@
 import type { Context, Hono } from "hono";
+import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
 import { refreshStaleGatewayModels } from "@multiremi/relay/discovery.js";
 import {
   bindDaemonTokenIdentityOrDeny,
@@ -53,6 +54,7 @@ import {
   runtimeUsageByAgentCompatibilityResponse,
   runtimeUsageByHourCompatibilityResponse,
   runtimeUsageDailyCompatibilityResponse,
+  runtimeWorkspaceId,
 } from "../wire/index.js";
 import type {
   CreateRuntimeDirectoryScanInput,
@@ -81,7 +83,8 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.post("/api/multiremi/runtimes", async (c) => {
     const body = await readJson<RegisterRuntimeInput>(c);
-    const workspaceId = body.workspaceId ?? body.workspace_id ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, cleanString(body.workspaceId) ?? cleanString(body.workspace_id));
+    if (workspaceId instanceof Response) return workspaceId;
     const ownerMembershipDenied = denyDaemonOwnerWorkspaceMembership(c, store);
     if (ownerMembershipDenied) return ownerMembershipDenied;
     const denied = denyDaemonTokenWorkspace(c, workspaceId) ??
@@ -140,15 +143,16 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
       const identityDenied = bindDaemonTokenIdentityOrDeny(c, store, requestedDaemonId);
       if (identityDenied) return identityDenied;
     }
+    const scopedBody = { ...body, workspaceId, workspace_id: workspaceId };
     const registration = requestedDaemonId
       ? {
-        ...body,
+        ...scopedBody,
         daemonId: requestedDaemonId,
         ownerId: registrationOwner && "ownerId" in registrationOwner
           ? registrationOwner.ownerId
           : null,
       }
-      : body;
+      : scopedBody;
     return c.json({ runtime: store.registerRuntime(registration) }, 201);
   });
   app.get("/api/multiremi/runtimes/:id", (c) => {
@@ -500,19 +504,19 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
     const loaded = loadRuntimeForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
     const { runtime } = loaded;
-    return c.json({ usage: store.listUsageByAgent(usageQuery(c, { runtimeId: runtime.id })) });
+    return c.json({ usage: store.listUsageByAgent(usageQuery(c, { workspaceId: runtimeWorkspaceId(runtime), runtimeId: runtime.id })) });
   });
   app.get("/api/multiremi/runtimes/:id/usage/by-hour", (c) => {
     const loaded = loadRuntimeForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
     const { runtime } = loaded;
-    return c.json({ usage: store.listUsageByHour(usageQuery(c, { runtimeId: runtime.id })) });
+    return c.json({ usage: store.listUsageByHour(usageQuery(c, { workspaceId: runtimeWorkspaceId(runtime), runtimeId: runtime.id })) });
   });
   app.get("/api/multiremi/runtimes/:id/task-activity", (c) => {
     const loaded = loadRuntimeForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
     const { runtime } = loaded;
-    return c.json({ activity: store.listTaskActivityByHour(usageQuery(c, { runtimeId: runtime.id })) });
+    return c.json({ activity: store.listTaskActivityByHour(usageQuery(c, { workspaceId: runtimeWorkspaceId(runtime), runtimeId: runtime.id })) });
   });
   app.get("/api/runtimes", (c) => {
     const loaded = listRuntimesForCurrentUser(c, store);
@@ -523,9 +527,7 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
     const loaded = listRuntimesForCurrentUser(c, store);
     if (loaded instanceof Response) return loaded;
     const providers = fleetModelsResponse(loaded.runtimes, currentRequestUserId(c));
-    // Prefer the explicitly requested workspace over reverse-deriving from the
-    // first runtime (which is wrong / absent when the workspace has no runtimes).
-    const workspaceId = cleanString(c.req.query("workspace_id")) ?? loaded.runtimes[0]?.workspaceId ?? "local";
+    const workspaceId = loaded.workspaceId;
     refreshStaleGatewayModels(store, workspaceId);
     return c.json({ providers: overlayGatewayModels(store, workspaceId, providers) });
   };
@@ -564,7 +566,7 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
     const loaded = loadRuntimeForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
     const { runtime } = loaded;
-    return c.json(store.listUsageDaily(usageQuery(c, { runtimeId: runtime.id }))
+    return c.json(store.listUsageDaily(usageQuery(c, { workspaceId: runtimeWorkspaceId(runtime), runtimeId: runtime.id }))
       .map(runtimeUsageDailyCompatibilityResponse)
       .sort(compareRuntimeUsageDailyCompatibilityRows));
   });
@@ -572,25 +574,25 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
     const loaded = loadRuntimeForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
     const { runtime } = loaded;
-    return c.json(store.listUsageByAgent(usageQuery(c, { runtimeId: runtime.id })).map(runtimeUsageByAgentCompatibilityResponse));
+    return c.json(store.listUsageByAgent(usageQuery(c, { workspaceId: runtimeWorkspaceId(runtime), runtimeId: runtime.id })).map(runtimeUsageByAgentCompatibilityResponse));
   });
   app.get("/api/runtimes/:id/usage/by-hour", (c) => {
     const loaded = loadRuntimeForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
     const { runtime } = loaded;
-    return c.json(store.listUsageByHour(usageQuery(c, { runtimeId: runtime.id })).map(runtimeUsageByHourCompatibilityResponse));
+    return c.json(store.listUsageByHour(usageQuery(c, { workspaceId: runtimeWorkspaceId(runtime), runtimeId: runtime.id })).map(runtimeUsageByHourCompatibilityResponse));
   });
   app.get("/api/runtimes/:id/task-activity", (c) => {
     const loaded = loadRuntimeForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
     const { runtime } = loaded;
-    return c.json(store.listTaskActivityByHour(usageQuery(c, { runtimeId: runtime.id })).map(runtimeTaskActivityCompatibilityResponse));
+    return c.json(store.listTaskActivityByHour(usageQuery(c, { workspaceId: runtimeWorkspaceId(runtime), runtimeId: runtime.id })).map(runtimeTaskActivityCompatibilityResponse));
   });
   app.get("/api/runtimes/:id/activity", (c) => {
     const loaded = loadRuntimeForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
     const { runtime } = loaded;
-    return c.json(store.listTaskActivityByHour(usageQuery(c, { runtimeId: runtime.id })).map(runtimeTaskActivityCompatibilityResponse));
+    return c.json(store.listTaskActivityByHour(usageQuery(c, { workspaceId: runtimeWorkspaceId(runtime), runtimeId: runtime.id })).map(runtimeTaskActivityCompatibilityResponse));
   });
   app.delete("/api/runtimes/:id", (c) => {
     const loaded = loadRuntimeForCurrentEditor(c, store, c.req.param("id"), "delete");

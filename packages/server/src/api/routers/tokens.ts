@@ -36,7 +36,8 @@ export function registerTokenRoutes(app: Hono, deps: RouterDeps): void {
   const { store } = deps;
 
   app.get("/api/multiremi/tokens", (c) => {
-    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspaceId") ?? c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId)
       ?? requireWorkspaceAdmin(c, store, workspaceId);
     if (denied) return denied;
@@ -46,7 +47,8 @@ export function registerTokenRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/multiremi/tokens", async (c) => {
     const body = await readJson<CreateAccessTokenInput>(c);
     if (isTaskTokenCreateInput(body)) return c.json({ error: "task tokens are minted by daemon task claim" }, 400);
-    const workspaceId = body.workspaceId ?? body.workspace_id ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, body.workspaceId ?? body.workspace_id);
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId)
       ?? requireWorkspaceAdmin(c, store, workspaceId);
     if (denied) return denied;
@@ -58,7 +60,7 @@ export function registerTokenRoutes(app: Hono, deps: RouterDeps): void {
     // credential. Master-token and open-mode provisioning retain explicit owners.
     const input = userId ? { ...body, userId, user_id: userId } : body;
     try {
-      return c.json({ token: await store.createAccessToken(input) }, 201);
+      return c.json({ token: await store.createAccessToken({ ...input, workspaceId }) }, 201);
     } catch (error) {
       return accessTokenMutationError(c, error);
     }
