@@ -573,7 +573,9 @@ export function denyAttachmentCreationAccess(
   c: Context,
   store: MultiremiStore,
   workspaceId: string,
-  input: CreateAttachmentInput,
+  input: Pick<CreateAttachmentInput,
+    "issueId" | "issue_id" | "commentId" | "comment_id"
+    | "chatSessionId" | "chat_session_id" | "chatMessageId" | "chat_message_id">,
 ): Response | null {
   const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
   if (denied) return denied;

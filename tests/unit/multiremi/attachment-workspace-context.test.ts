@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { readdirSync } from "node:fs";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+import { createStore, resetMultiremiTestEnv, useUploadDir } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -22,12 +23,35 @@ async function fixture() {
   const token = await store.createTaskAccessToken(task, user.id);
   const app = createMultiremiApp({ store, authToken: "root-secret" });
   const headers = { Authorization: `Bearer ${token.token}`, "Content-Type": "application/json" };
-  return { store, app, headers, workspace, other, issue, otherIssue, otherComment, otherChat, otherMessage, chat };
+  return { store, app, headers, user, workspace, other, issue, otherIssue, otherComment, otherChat, otherMessage, chat };
 }
 
 const file = { filename: "note.txt", url: "https://example.test/note.txt" };
 
 describe("native attachment workspace context", () => {
+  for (const reference of ["issue_id", "comment_id"]) {
+    it(`rejects an upload joining ${reference} to a chat in another workspace before writing a file`, async () => {
+      const { store, app, user, workspace, other, issue } = await fixture();
+      const uploads = useUploadDir();
+      store.createWorkspaceMember({ workspaceId: other.id, userId: user.id, name: user.name });
+      const agent = store.createAgent({ workspaceId: other.id, ownerId: user.id, name: "Other owned agent", provider: "claude" });
+      const chat = store.createChatSession({ workspaceId: other.id, agentId: agent.id, creatorId: user.id });
+      const comment = store.createIssueComment(issue.id, { body: "Upload here" });
+      const { token } = await store.createAccessToken({ workspaceId: "local", userId: user.id, type: "pat", purpose: "session", name: "Upload login" });
+      const form = new FormData();
+      form.set("file", new File(["Mixed workspace upload"], "note.txt", { type: "text/plain" }));
+      form.set(reference, reference === "issue_id" ? issue.id : comment.id);
+      form.set("chat_session_id", chat.id);
+      const response = await app.request("/api/upload-file", {
+        method: "POST", headers: { Authorization: `Bearer ${token}`, "X-Workspace-Slug": workspace.slug }, body: form,
+      });
+      expect(response.status).toBe(404);
+      expect(readdirSync(uploads)).toEqual([]);
+      expect(store.listAttachmentsForIssue(issue.id)).toEqual([]);
+      expect(store.listAttachmentsForComment(comment.id)).toEqual([]);
+    });
+  }
+
   it("keeps issue attachments in the authorized issue workspace despite conflicting body aliases", async () => {
     const { store, app, headers, workspace, other, issue } = await fixture();
     const response = await app.request(`/api/multiremi/issues/${issue.id}/attachments`, {

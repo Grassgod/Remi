@@ -12,6 +12,7 @@ import {
   authenticatedRequestUserId,
   currentAccessToken,
   currentWorkspaceMember,
+  runtimeWorkspaceId,
 } from "../wire/index.js";
 import { compatibilityWorkspaceId, denyCurrentUserWorkspaceAccess } from "../helpers.js";
 import { restrictedTaskIssueCreationAgent } from "../helpers.js";
@@ -154,7 +155,8 @@ function buildCliContext(c: Context, deps: RouterDeps, identity: ResolvedCliIden
       ? store.getRuntime(agent.runtimeId)
       : null;
   const daemonRuntimes = identity.type === "daemon" && access?.daemonId
-    ? store.listRuntimes().filter((candidate) => candidate.daemonId === access.daemonId)
+    ? store.listRuntimes().filter((candidate) => candidate.daemonId === access.daemonId
+      && runtimeWorkspaceId(candidate) === identity.workspaceId)
     : [];
   const userId = authenticatedRequestUserId(c);
   const user = userId ? store.getUser(userId) : null;

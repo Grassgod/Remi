@@ -6,7 +6,6 @@ import {
   currentWorkspaceRole,
   denyAttachmentAccess,
   denyAttachmentCreationAccess,
-  denyCurrentUserWorkspaceAccess,
   denyCurrentUserCommentAccess,
   detectContentTypeFromFilename,
   loadChatSessionForCurrentUser,
@@ -84,10 +83,13 @@ export function registerAttachmentRoutes(app: Hono, deps: RouterDeps): void {
       ?? stringFormValue(form.get("workspaceId") ?? form.get("workspace_id"));
     const workspaceId = resolveRequestWorkspaceId(c, store, explicitWorkspaceId);
     if (workspaceId instanceof Response) return workspaceId;
-    // Go file.go UploadFile validates workspace membership before writing. The chat
-    // path is already gated by loadChatSessionForCurrentUser; gate every other path
-    // so a token scoped to another workspace cannot create rows/files in this one.
-    const uploadDenied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    // All supplied references must belong to the authorized workspace before
+    // writing a file, even when the caller can access each resource separately.
+    const uploadDenied = denyAttachmentCreationAccess(c, store, workspaceId, {
+      issueId: issue?.id ?? comment?.issueId ?? null,
+      commentId,
+      chatSessionId: chatSession?.session.id ?? null,
+    });
     if (uploadDenied) return uploadDenied;
     const { actorType: uploaderType, actorId: uploaderId } = issueMutationActor(c, {
       actorType: stringFormValue(form.get("uploaderType") ?? form.get("uploader_type")) ?? undefined,

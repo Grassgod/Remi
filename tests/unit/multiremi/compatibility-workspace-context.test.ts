@@ -31,6 +31,28 @@ const requests = [
 ];
 
 describe("compatibility workspace request context", () => {
+  it("scopes daemon runtime context when one machine ID is registered in two workspaces", async () => {
+    const { store, user, workspace, other, app } = await fixture();
+    const registrations = [];
+    for (const [selected, provider] of [[workspace, "claude"], [other, "codex"]] as const) {
+      const { token } = await store.createAccessToken({ workspaceId: selected.id, userId: user.id, type: "daemon", daemonId: "dmn_shared_context", name: "Daemon" });
+      const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "X-Workspace-Slug": selected.slug };
+      const response = await app.request("/api/daemon/register", {
+        method: "POST", headers,
+        body: JSON.stringify({ workspace_id: selected.id, daemon_id: "dmn_shared_context", runtimes: [{ type: provider, name: `${provider} scoped runtime` }] }),
+      });
+      expect(response.status).toBe(200);
+      registrations.push({ headers, selected, provider });
+    }
+    for (const { headers, selected, provider } of registrations) {
+      const response = await app.request("/api/cli/context", { headers });
+      expect(response.status).toBe(200);
+      const context = await response.json();
+      expect(context.workspace.id).toBe(selected.id);
+      expect(context.current.runtimes.map((runtime: { provider: string }) => runtime.provider)).toEqual([provider]);
+    }
+  });
+
   for (const input of requests) {
     it(`${input.method} ${input.path} resolves slug and rejects unknown workspaces`, async () => {
       const { app, headers, workspace } = await fixture();
