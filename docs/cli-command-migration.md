@@ -109,13 +109,21 @@ requests in open local mode retain the existing `local` identity.
 ## Workspace request context
 
 Web project, issue, label, autopilot, squad, pin, notification preference, token,
-agent activity and knowledge routes resolve workspace context before authorizing
+agent list/create/activity and knowledge routes resolve workspace context before authorizing
 and accessing the same workspace. An explicit supported body/query workspace ID
 comes first, followed by `X-Workspace-ID`, `X-Workspace-Slug`, the credential's
 workspace, and finally `local` when no context exists. Resource-bound uploads
 use the resource's workspace first. Unknown slugs and inaccessible workspaces
 return `404`; a stale slug never redirects a write into `local`. Label creation accepts
 both `workspace_id` and `workspaceId`, with the snake_case field taking priority.
+
+Agent list, ordinary creation, template creation and default-agent creation share
+this resolution. Their explicit workspace IDs use body before query, with
+`workspaceId` before `workspace_id` within each source. An explicit ID takes
+priority over a conflicting or unknown slug; when slug resolution is needed, an
+unknown slug returns `404` without falling back. Membership and credential-scope
+checks still apply to the resolved workspace. Regression coverage is in
+[`agent-workspace-context.test.ts`](../tests/unit/multiremi/agent-workspace-context.test.ts).
 
 Registry resource commands choose `--workspace` first, then the JSON/file input's
 `workspaceId` or `workspace_id`, environment, saved configuration, and `local`.

@@ -50,7 +50,8 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
   const { store } = deps;
 
   app.get("/api/multiremi/agents", (c) => {
-    const workspaceId = requestedAgentWorkspaceId(c);
+    const workspaceId = requestedAgentWorkspaceId(c, store);
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const agents = store.listAgents({
@@ -77,7 +78,8 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/multiremi/agents/default", async (c) => {
     const body = await readJsonStrict<{ provider?: string; runtimeId?: string | null; runtime_id?: string | null; workspaceId?: string | null; workspace_id?: string | null }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const workspaceId = requestedAgentWorkspaceId(c, body);
+    const workspaceId = requestedAgentWorkspaceId(c, store, body);
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const provider = resolveAgentRequestProvider(c, store, workspaceId, body);
@@ -198,7 +200,8 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
     return c.json(agentEnvResponse(updated.id, updated.customEnv));
   });
   app.get("/api/agents", (c) => {
-    const workspaceId = requestedAgentWorkspaceId(c);
+    const workspaceId = requestedAgentWorkspaceId(c, store);
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const agents = store.listAgents({
