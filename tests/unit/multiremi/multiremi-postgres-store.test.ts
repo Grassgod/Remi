@@ -308,6 +308,25 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     return store.createWorkspace({ name: `PG Test ${wsCounter}`, slug }).id;
   };
 
+  it("lists an agent task snapshot through Postgres array parameters", () => {
+    const workspaceId = freshWorkspace();
+    const agent = store.createAgent({ name: `PG snapshot agent ${wsCounter}`, provider: "codex", workspaceId });
+    const active = store.createTask({ agentId: agent.id, prompt: "active snapshot task" });
+    const terminal = store.createTask({ agentId: agent.id, prompt: "terminal snapshot task" });
+    db.run(
+      `UPDATE multiremi_tasks
+       SET status = 'completed', completed_at = ?, updated_at = ?
+       WHERE id = ?`,
+      ["2026-09-10T09:00:00.000Z", "2026-09-10T09:00:00.000Z", terminal.id],
+    );
+    db.run("UPDATE multiremi_tasks SET updated_at = ? WHERE id = ?", ["2026-09-10T10:00:00.000Z", active.id]);
+
+    expect(store.listWorkspaceAgentTaskSnapshot(workspaceId).map((task) => task.id)).toEqual([
+      active.id,
+      terminal.id,
+    ]);
+  });
+
   it("builds Chat task projections and pending updates without SQLite rowid", () => {
     const workspaceId = freshWorkspace();
     const runtime = store.registerRuntime({
