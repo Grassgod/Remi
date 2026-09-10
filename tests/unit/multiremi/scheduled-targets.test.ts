@@ -7,7 +7,7 @@ afterEach(resetMultiremiTestEnv);
 
 function setup() {
   const store = createLocalStore();
-  const agent = store.createAgent({ name: "Scheduled worker", provider: "claude" });
+  const agent = store.createAgent({ name: "Scheduled worker", provider: "claude", maxConcurrentTasks: 1 });
   const project = store.createProject({ title: "Example" });
   store.updateWorkspace("local", { repos: [{ id: "repo_example", name: "Example", url: "https://github.com/example/example.git", source: "github" }] });
   const autopilot = store.createAutopilot({ title: "Nightly", assigneeId: agent.id, executionMode: "run_only" });
@@ -19,9 +19,26 @@ function setup() {
 }
 
 describe("scheduled targets", () => {
+  it("fills independent target slots up to the agent capacity and does not duplicate an active batch", () => {
+    const { store, agent, autopilot, trigger } = setup();
+    store.updateAgent(agent.id, { maxConcurrentTasks: 2 });
+    store.createProject({ title: "Third target" });
+    store.runAutopilot(autopilot.id, { triggerId: trigger.id });
+    const runs = store.listAutopilotRuns(autopilot.id);
+    expect(runs.filter((run) => run.status === "running")).toHaveLength(2);
+    expect(runs.filter((run) => run.status === "queued")).toHaveLength(1);
+    store.advanceScheduledTargetRuns();
+    store.runAutopilot(autopilot.id, { triggerId: trigger.id });
+    expect(store.listAutopilotRuns(autopilot.id)).toHaveLength(3);
+    store.cancelTask(runs.find((run) => run.taskId)!.taskId!);
+    store.advanceScheduledTargetRuns();
+    expect(store.listAutopilotRuns(autopilot.id).filter((run) => run.status === "running")).toHaveLength(2);
+  });
+
   it("publishes Raw for issue-free project and repository tasks without broadening their scope", async () => {
     const { store, project, autopilot, trigger } = setup();
     const { agent } = configureRepositoryWikiAutomation(store);
+    store.updateAgent(agent.id, { maxConcurrentTasks: 1 });
     store.updateAutopilot(autopilot.id, { assigneeId: agent.id });
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const first = store.runAutopilot(autopilot.id, { triggerId: trigger.id });

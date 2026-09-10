@@ -466,6 +466,11 @@
     }
   },
   "agent_activity": {
+    "count_running": "{{count}} 个运行中",
+    "count_starting": "{{count}} 个启动中",
+    "count_queued": "{{count}} 个排队中",
+    "count_awaiting_human": "{{count}} 个等待审核",
+    "count_waiting_directory": "{{count}} 个等待目录",
     "hover_header_other": "{{count}} 个智能体正在工作",
     "status_running": "正在工作",
     "status_awaiting_human": "等待审核",

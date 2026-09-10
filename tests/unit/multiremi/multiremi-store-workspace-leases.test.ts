@@ -77,7 +77,7 @@ describe("Issue Session workspace leases", () => {
     expect(store.claimTask(runtime.id)?.id).toBe(discussion.id);
   });
 
-  it("keeps two workspace-holding Sessions serialized", () => {
+  it("allows two workspace-holding Sessions to run concurrently", () => {
     const store = createStore();
     const { runtime, firstAgent, secondAgent, issue } = seed(store);
     const firstSession = store.createIssueSession(issue.id, { title: "Work A" });
@@ -97,19 +97,11 @@ describe("Issue Session workspace leases", () => {
     });
 
     expect(store.claimTask(runtime.id)?.id).toBe(first.id);
-    expect(store.claimTask(runtime.id)).toBeNull();
-    expect(store.getTask(second.id)?.status).toBe("queued");
-    expect(store.getTaskQueueBlocker(second.id)).toMatchObject({
-      taskId: first.id,
-      agentId: firstAgent.id,
-      agentName: "First",
-      issueSessionId: firstSession.id,
-      issueSessionTitle: "Work A",
-      reason: "issue_workspace",
-    });
+    expect(store.getTaskQueueBlocker(second.id)).toBeNull();
+    expect(store.claimTask(runtime.id)?.id).toBe(second.id);
   });
 
-  it("keeps every Task in the same Session serialized", () => {
+  it("keeps the same Agent context in one Session serialized", () => {
     const store = createStore();
     const { runtime, firstAgent, secondAgent, issue } = seed(store);
     const session = store.createIssueSession(issue.id, { title: "One discussion", holdsWorkspace: false });
@@ -121,7 +113,7 @@ describe("Issue Session workspace leases", () => {
       prompt: "First",
     });
     const second = store.createTask({
-      agentId: secondAgent.id,
+      agentId: firstAgent.id,
       issueId: issue.id,
       issueSessionId: session.id,
       prompt: "Second",
@@ -138,7 +130,7 @@ describe("Issue Session workspace leases", () => {
     });
   });
 
-  it("keeps historical Issue Tasks without a Session serialized by Issue", () => {
+  it("keeps historical Issue Tasks serialized within the same Agent", () => {
     const store = createStore();
     const { runtime, firstAgent, secondAgent, issue } = seed(store);
     const first = store.createTask({
@@ -148,7 +140,7 @@ describe("Issue Session workspace leases", () => {
       prompt: "Legacy A",
     });
     const second = store.createTask({
-      agentId: secondAgent.id,
+      agentId: firstAgent.id,
       issueId: issue.id,
       prompt: "Legacy B",
     });

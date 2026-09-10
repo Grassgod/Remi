@@ -1,6 +1,7 @@
 // Issue sessions domain (sessions, participants, session events, agent lanes and published
 // results), extracted verbatim from MultiremiStore (the facade delegates every public method here).
 import { createId, nowIso } from "@multiremi/ids.js";
+import { taskExecutionScope } from "@multiremi/contracts/task-execution.js";
 import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import { type StoreContext } from "@multiremi/store/context.js";
 import { buildSessionProjection } from "@multiremi/store/session-projection.js";
@@ -264,7 +265,7 @@ export class IssueSessionsRepo {
     return rows.map(toSessionEvent);
   }
 
-  getOrCreateSessionAgentLane(sessionId: string, agentId: string): MultiremiSessionAgentLane {
+  getOrCreateSessionAgentLane(sessionId: string, agentId: string, executionScope = ""): MultiremiSessionAgentLane {
     const session = this.getIssueSession(sessionId);
     if (!session) throw new Error(`Issue session not found: ${sessionId}`);
     const agent = this.ctx.agents().getAgent(agentId);
@@ -273,21 +274,21 @@ export class IssueSessionsRepo {
     const now = nowIso();
     this.ctx.db.run(
       `INSERT INTO multiremi_session_agent_lanes (
-         session_id, agent_id, cursor_seq, generation, status, created_at, updated_at
-       ) VALUES (?, ?, 0, 1, 'active', ?, ?)
-       ON CONFLICT(session_id, agent_id) DO NOTHING`,
-      [sessionId, agentId, now, now],
+         session_id, agent_id, execution_scope, cursor_seq, generation, status, created_at, updated_at
+       ) VALUES (?, ?, ?, 0, 1, 'active', ?, ?)
+       ON CONFLICT(session_id, agent_id, execution_scope) DO NOTHING`,
+      [sessionId, agentId, executionScope, now, now],
     );
     const row = this.ctx.db.query(
-      "SELECT * FROM multiremi_session_agent_lanes WHERE session_id = ? AND agent_id = ?",
-    ).get(sessionId, agentId) as Row | null;
+      "SELECT * FROM multiremi_session_agent_lanes WHERE session_id = ? AND agent_id = ? AND execution_scope = ?",
+    ).get(sessionId, agentId, executionScope) as Row | null;
     return toSessionAgentLane(row!);
   }
 
-  getSessionAgentLane(sessionId: string, agentId: string): MultiremiSessionAgentLane | null {
+  getSessionAgentLane(sessionId: string, agentId: string, executionScope = ""): MultiremiSessionAgentLane | null {
     const row = this.ctx.db.query(
-      "SELECT * FROM multiremi_session_agent_lanes WHERE session_id = ? AND agent_id = ?",
-    ).get(sessionId, agentId) as Row | null;
+      "SELECT * FROM multiremi_session_agent_lanes WHERE session_id = ? AND agent_id = ? AND execution_scope = ?",
+    ).get(sessionId, agentId, executionScope) as Row | null;
     return row ? toSessionAgentLane(row) : null;
   }
 
@@ -302,7 +303,7 @@ export class IssueSessionsRepo {
         "UPDATE multiremi_issue_sessions SET updated_at = updated_at WHERE id = ?",
         [task.issueSessionId],
       );
-      const lane = this.getOrCreateSessionAgentLane(task.issueSessionId, task.agentId);
+      const lane = this.getOrCreateSessionAgentLane(task.issueSessionId, task.agentId, taskExecutionScope(task));
       const agent = this.ctx.agents().getAgent(task.agentId);
       const events = this.listSessionEvents(task.issueSessionId);
       const tokenBudget = resolveProjectionTokenBudget({

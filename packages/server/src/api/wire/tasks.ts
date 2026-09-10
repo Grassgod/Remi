@@ -1,6 +1,7 @@
 // Wire serializers for the tasks domain, moved verbatim out of api.ts.
 // Go-compat (`*Compatibility*`) and native shapers sit side by side on purpose:
 // the two route prefixes are intentionally divergent and must stay diffable.
+import { taskExecutionScope } from "@multiremi/contracts/task-execution.js";
 import type {
   MultiremiChatMessage,
   MultiremiDaemonHeartbeatAck,
@@ -282,6 +283,8 @@ export function daemonTaskWireResponse(
   if (task.chatSessionId) response.chat_session_id = task.chatSessionId;
   if (task.issueSessionId) response.issue_session_id = task.issueSessionId;
   if (task.issueSessionGeneration != null) response.issue_session_generation = task.issueSessionGeneration;
+  const executionScope = taskExecutionScope(task);
+  if (executionScope) response.execution_scope = executionScope;
   if (task.autopilotRunId) response.autopilot_run_id = task.autopilotRunId;
   if (task.triggerCommentId) response.trigger_comment_id = task.triggerCommentId;
   if (task.triggerSummary) response.trigger_summary = task.triggerSummary;
@@ -352,7 +355,7 @@ export function daemonTaskClaimResponse(
     if (issueSession) {
       response.issue_session = issueSession;
       if (task.issueSessionGeneration == null) {
-        const lane = store.getSessionAgentLane(task.issueSessionId, task.agentId);
+        const lane = store.getSessionAgentLane(task.issueSessionId, task.agentId, taskExecutionScope(task));
         if (lane) response.issue_session_generation = lane.generation;
       }
     }
@@ -450,6 +453,7 @@ function latestRecordedPromptForLane(
       candidate.id === task.id
       || candidate.agentId !== task.agentId
       || candidate.issueSessionId !== task.issueSessionId
+      || taskExecutionScope(candidate) !== taskExecutionScope(task)
     ) continue;
     const artifact = store.getTaskPrompt(candidate.id);
     if (artifact && (!latest || artifact.assembledAt > latest.assembledAt)) latest = artifact;

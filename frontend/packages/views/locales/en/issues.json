@@ -469,6 +469,11 @@
     }
   },
   "agent_activity": {
+    "count_running": "{{count}} running",
+    "count_starting": "{{count}} starting",
+    "count_queued": "{{count}} queued",
+    "count_awaiting_human": "{{count}} awaiting review",
+    "count_waiting_directory": "{{count}} waiting for directory",
     "hover_header_one": "{{count}} agent working",
     "hover_header_other": "{{count}} agents working",
     "status_running": "Working",

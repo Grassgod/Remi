@@ -469,6 +469,11 @@
     }
   },
   "agent_activity": {
+    "count_running": "실행 중 {{count}}개",
+    "count_starting": "시작 중 {{count}}개",
+    "count_queued": "대기 중 {{count}}개",
+    "count_awaiting_human": "확인 대기 {{count}}개",
+    "count_waiting_directory": "디렉터리 대기 {{count}}개",
     "hover_header_one": "작업 중인 에이전트 {{count}}개",
     "hover_header_other": "작업 중인 에이전트 {{count}}개",
     "status_running": "작업 중",

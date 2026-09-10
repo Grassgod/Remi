@@ -608,22 +608,22 @@ describe("task-level agent delegation return", () => {
     expect(fixture.store.getTask(fixture.childTask.id)?.delegationReturnTaskId).toBe(replacement.id);
   });
 
-  it("defers a terminal delegation return while another task keeps the lane busy", () => {
+  it("queues a terminal delegation return while another teammate is still active", () => {
     const fixture = createFanoutFixture();
     fixture.store.completeTask(fixture.firstTask.id, {
       output: "First fanout report.",
       sessionId: "fanout_first_deferred",
     });
 
-    expect(leaderReturnTasks(fixture)).toHaveLength(0);
-    expect(fixture.store.getTask(fixture.firstTask.id)?.delegationReturnTaskId).toBeNull();
+    expect(leaderReturnTasks(fixture)).toHaveLength(1);
+    expect(fixture.store.getTask(fixture.firstTask.id)?.delegationReturnTaskId).toBe(leaderReturnTasks(fixture)[0]!.id);
     expect(fixture.store.listIssueActivity(fixture.issue.id).some((activity) =>
       activity.type === "delegation_return_skipped"
       && (activity.data as Record<string, unknown>).reason === "deferred_lane_busy"
-    )).toBeTrue();
+    )).toBeFalse();
   });
 
-  it("drains every deferred report into one leader return when the lane becomes quiet", () => {
+  it("coalesces later reports into a still-queued leader return", () => {
     const fixture = createFanoutFixture();
     fixture.store.completeTask(fixture.firstTask.id, {
       output: "First aggregated report.",
@@ -648,8 +648,8 @@ describe("task-level agent delegation return", () => {
     );
     expect(triggered?.data).toMatchObject({
       returnTaskId: returns[0]?.id,
-      coveredSourceTaskIds: [fixture.firstTask.id, fixture.secondTask.id],
-      drained: true,
+      coveredSourceTaskIds: [fixture.firstTask.id],
+      drained: false,
     });
   });
 
@@ -659,7 +659,7 @@ describe("task-level agent delegation return", () => {
       error: "First delegate failed definitively.",
       failureReason: "agent_error",
     });
-    expect(leaderReturnTasks(fixture)).toHaveLength(0);
+    expect(leaderReturnTasks(fixture)).toHaveLength(1);
     expect(fixture.store.cancelTask(fixture.secondTask.id).status).toBe("cancelled");
 
     const returns = leaderReturnTasks(fixture);
@@ -694,7 +694,7 @@ describe("task-level agent delegation return", () => {
       [fixture.secondTask.id],
     );
     fixture.store.completeTask(fixture.firstTask.id, { output: "Deferred Feishu chain report." });
-    expect(leaderReturnTasks(fixture)).toHaveLength(0);
+    expect(leaderReturnTasks(fixture)).toHaveLength(1);
     expect(fixture.store.claimTask(fixture.secondRuntime.id)?.id).toBe(fixture.secondTask.id);
     fixture.store.buildTaskSessionProjection(fixture.secondTask.id);
     fixture.store.startTask(fixture.secondTask.id);
@@ -801,7 +801,7 @@ describe("task-level agent delegation return", () => {
       requiredEventSeq: 1_000_000,
     });
     const firstReturn = wakeup.task!;
-    // Issue serialization normally keeps this queued while the child runs.
+    // Freeze this return before the child finishes so later results need a new turn.
     // Model an already handed-off task defensively: once a daemon can hold the
     // old prompt, a terminal report must be delivered in a second Delta.
     db!.run(

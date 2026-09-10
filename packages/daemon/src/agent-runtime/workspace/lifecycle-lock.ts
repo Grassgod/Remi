@@ -1,26 +1,52 @@
-/** Serializes provider execution with final archive-and-delete for one owned workspace root. */
+type Waiter = { shared: boolean; resolve: (release: () => void) => void };
+type LockState = { readers: number; writer: boolean; queue: Waiter[] };
+
+/** Executions share a root; migration/archive/GC require exclusive ownership. */
 export class IssueWorkspaceLifecycleLocker {
-  private tails = new Map<string, Promise<void>>();
+  private states = new Map<string, LockState>();
 
-  async acquire(workspaceKey: string): Promise<() => void> {
+  acquire(workspaceKey: string): Promise<() => void> {
+    return this.enqueue(workspaceKey, false);
+  }
+
+  acquireShared(workspaceKey: string): Promise<() => void> {
+    return this.enqueue(workspaceKey, true);
+  }
+
+  private enqueue(workspaceKey: string, shared: boolean): Promise<() => void> {
     const key = workspaceKey.trim();
-    if (!key) throw new Error("Workspace lifecycle lock requires an ownership key");
-
-    const previous = this.tails.get(key);
-    let releaseGate!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      releaseGate = resolve;
+    if (!key) return Promise.reject(new Error("Workspace lifecycle lock requires an ownership key"));
+    let state = this.states.get(key);
+    if (!state) {
+      state = { readers: 0, writer: false, queue: [] };
+      this.states.set(key, state);
+    }
+    const current = state;
+    return new Promise((resolve) => {
+      current.queue.push({ shared, resolve });
+      this.drain(key, current);
     });
-    this.tails.set(key, gate);
-    if (previous) await previous;
+  }
 
-    let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-      if (this.tails.get(key) === gate) this.tails.delete(key);
-      releaseGate();
-    };
+  private drain(key: string, state: LockState): void {
+    if (state.writer) return;
+    while (state.queue.length) {
+      const next = state.queue[0]!;
+      if (!next.shared && state.readers) return;
+      state.queue.shift();
+      if (next.shared) state.readers++;
+      else state.writer = true;
+      let released = false;
+      next.resolve(() => {
+        if (released) return;
+        released = true;
+        if (next.shared) state.readers--;
+        else state.writer = false;
+        this.drain(key, state);
+      });
+      if (!next.shared) return;
+    }
+    if (!state.readers) this.states.delete(key);
   }
 
   async runExclusive<T>(workspaceKey: string, action: () => Promise<T>): Promise<T> {

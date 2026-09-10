@@ -18,10 +18,8 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
       maxConcurrency: 10,
     });
     const firstAgent = store.createAgent({ name: "Builder", provider: "claude" });
-    const secondAgent = store.createAgent({ name: "Reviewer", provider: "claude" });
     const issue = store.createIssue({ title: "Queue source", workspaceId: "local" });
     const firstSession = store.createIssueSession(issue.id, { title: "Implementation" });
-    const secondSession = store.createIssueSession(issue.id, { title: "Review" });
     const first = store.createTask({
       agentId: firstAgent.id,
       issueId: issue.id,
@@ -30,9 +28,9 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
       prompt: "Build",
     });
     const second = store.createTask({
-      agentId: secondAgent.id,
+      agentId: firstAgent.id,
       issueId: issue.id,
-      issueSessionId: secondSession.id,
+      issueSessionId: firstSession.id,
       prompt: "Review",
     });
     expect(store.claimTask(runtime.id)?.id).toBe(first.id);
@@ -61,7 +59,7 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
         agent_name: "Builder",
         issue_session_id: firstSession.id,
         issue_session_title: "Implementation",
-        reason: "issue_workspace",
+        reason: "session",
       },
     });
   });
@@ -1313,7 +1311,7 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
       name: "Console Claude",
       provider: "claude",
       workspaceId: "local",
-      metadata: { cli_version: "0.2.26-test" },
+      metadata: { cli_version: "0.2.26-test", parallel_agent_execution: 1 },
     });
     const agent = store.createAgent({
       id: "agt_console_contract",

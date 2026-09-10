@@ -1253,6 +1253,7 @@ export interface MultiremiTask {
   /** Generation of this task's per-agent Issue Session lane, frozen at claim
    * time and persisted so late completions cannot promote into a newer lane. */
   issueSessionGeneration?: number | null;
+  execution_scope?: string;
   issue_session_generation?: number | null;
   /** Immutable snapshot of whether this task owns the shared Issue workspace. */
   holdsWorkspace: boolean;

@@ -461,6 +461,11 @@
     }
   },
   "agent_activity": {
+    "count_running": "実行中 {{count}} 件",
+    "count_starting": "起動中 {{count}} 件",
+    "count_queued": "待機中 {{count}} 件",
+    "count_awaiting_human": "確認待ち {{count}} 件",
+    "count_waiting_directory": "ディレクトリ待ち {{count}} 件",
     "hover_header_other": "作業中のエージェント {{count}} 件",
     "status_running": "作業中",
     "status_awaiting_human": "レビュー待ち",

@@ -178,6 +178,22 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("AgentLiveCard reconcile race", () => {
+  it("counts running and queued tasks separately, including repeated Agent identities", async () => {
+    mockApi.getActiveTasksForIssue.mockResolvedValue({ tasks: [
+      makeTask("leader"),
+      makeTask("worker", { status: "queued", agent_id: "worker" }),
+      makeTask("qa", { status: "queued", agent_id: "qa" }),
+    ] });
+    mockApi.listTaskMessages.mockResolvedValue([]);
+    renderCard();
+    await screen.findByText("1 running · 2 queued");
+    mockApi.getActiveTasksForIssue.mockResolvedValue({ tasks: [
+      makeTask("leader"), makeTask("worker"), makeTask("qa"),
+    ] });
+    act(() => fireEvent("task:dispatch", { task_id: "worker", issue_id: "issue-1" }));
+    await screen.findByText("3 running");
+  });
+
   it("keeps the visible summary and transcript on the complete hydrated message set", async () => {
     const hydration = deferred<TaskMessagePayload[]>();
     mockApi.getActiveTasksForIssue.mockResolvedValue({ tasks: [makeTask("task-1")] });
@@ -408,12 +424,12 @@ describe("AgentLiveCard queued rendering", () => {
     // Two agents → collapsed summary; the per-agent rows aren't in the DOM
     // until the accordion is expanded.
     await waitFor(() => {
-      expect(screen.getByText(/agents working/)).toBeTruthy();
+      expect(screen.getByText("1 running · 1 queued")).toBeTruthy();
     });
     expect(screen.queryByText(/is working/)).toBeNull();
 
     await act(async () => {
-      rtlFireEvent.click(screen.getByText(/agents working/));
+      rtlFireEvent.click(screen.getByText("1 running · 1 queued"));
     });
 
     const working = await screen.findByText(/is working/);
@@ -432,13 +448,13 @@ describe("AgentLiveCard queued rendering", () => {
 
     // Collapsed: one summary, no inline banners.
     await waitFor(() => {
-      expect(screen.getByText(/2 agents working/)).toBeTruthy();
+      expect(screen.getByText("2 running")).toBeTruthy();
     });
     expect(screen.queryByText(/is working/)).toBeNull();
 
     // Expand the accordion → one row per agent, each with its own Stop.
     await act(async () => {
-      rtlFireEvent.click(screen.getByText(/2 agents working/));
+      rtlFireEvent.click(screen.getByText("2 running"));
     });
     const [firstStop, secondStop] = await screen.findAllByText("Stop");
     expect(secondStop).toBeTruthy();

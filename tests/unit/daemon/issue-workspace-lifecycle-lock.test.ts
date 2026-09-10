@@ -2,6 +2,22 @@ import { describe, expect, it } from "bun:test";
 import { IssueWorkspaceLifecycleLocker } from "@daemon/agent-runtime/workspace/lifecycle-lock.js";
 
 describe("IssueWorkspaceLifecycleLocker", () => {
+  it("allows shared execution and makes GC wait for every holder without writer starvation", async () => {
+    const locker = new IssueWorkspaceLifecycleLocker();
+    const first = await locker.acquireShared("iss_1");
+    const second = await locker.acquireShared("iss_1");
+    const events: string[] = [];
+    const gc = locker.runExclusive("iss_1", async () => { events.push("gc"); });
+    const later = locker.acquireShared("iss_1").then((release) => { events.push("later"); release(); });
+    first();
+    first();
+    await Promise.resolve();
+    expect(events).toEqual([]);
+    second();
+    await Promise.all([gc, later]);
+    expect(events).toEqual(["gc", "later"]);
+  });
+
   it("keeps final GC work behind the provider lifecycle for the same Issue", async () => {
     const locker = new IssueWorkspaceLifecycleLocker();
     const releaseProvider = await locker.acquire("iss_1");

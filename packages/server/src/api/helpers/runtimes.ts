@@ -45,6 +45,7 @@ export type DaemonRegisterRequestBody = {
   cli_version?: string;
   launched_by?: string;
   capabilities?: {
+    parallel_agent_execution?: number;
     agent_plugins?: number;
   };
   runtimes?: Array<{
@@ -354,6 +355,7 @@ export function registerDaemonRuntimes(
           cli_version: cliVersion,
           launched_by: launchedBy,
           agent_plugin_protocol: agentPluginProtocol,
+          ...(body.capabilities?.parallel_agent_execution === 1 ? { parallel_agent_execution: 1 } : {}),
           ...(typeof runtime.acpVersion === "string" && runtime.acpVersion ? { acp_version: runtime.acpVersion } : {}),
           ...(typeof runtime.agentVersion === "string" && runtime.agentVersion ? { agent_version: runtime.agentVersion } : {}),
         },

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   cleanupTemporaryTaskProviderHome,
   prepareIssueSessionProviderHome,
+  prepareIssueExecutionDirectory,
   loadIssueSessionProviderEnv,
   resolveIssueRuntimeStateRoot,
   resolveIssueSessionProviderHome,
@@ -32,6 +33,18 @@ function task(provider: "claude" | "codex", generation = 3): AgentTask {
 }
 
 describe("Issue Session provider home", () => {
+  it("isolates delegation working directories and refuses a symlinked directory", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-delegation-home-"));
+    roots.push(root);
+    const first = resolveIssueSessionProviderHome({ ...task("claude"), execution_scope: "dlg_one" }, root, root)!;
+    const second = resolveIssueSessionProviderHome({ ...task("claude"), execution_scope: "dlg_two" }, root, root)!;
+    expect(first.home).not.toBe(second.home);
+    expect(await prepareIssueExecutionDirectory(first)).toBe(join(first.root, "work"));
+    mkdirSync(second.root, { recursive: true });
+    symlinkSync(join(first.root, "work"), join(second.root, "work"));
+    await expect(prepareIssueExecutionDirectory(second)).rejects.toThrow("real directory");
+  });
+
   it("uses the stable session/agent/lane-generation layout", () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-session-home-"));
     roots.push(root);

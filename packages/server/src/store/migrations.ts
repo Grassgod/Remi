@@ -2732,6 +2732,7 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_tasks", "plugin_snapshot TEXT NOT NULL DEFAULT '[]'");
   addColumnIfMissing(db, "multiremi_tasks", "execution_fingerprint TEXT");
   addColumnIfMissing(db, "multiremi_session_agent_lanes", "execution_fingerprint TEXT");
+  migrateExecutionScopedLanes(db);
   addColumnIfMissing(db, "multiremi_inbox_items", "recipient_type TEXT NOT NULL DEFAULT 'member'");
   addColumnIfMissing(db, "multiremi_inbox_items", "recipient_id TEXT");
   addColumnIfMissing(db, "multiremi_inbox_items", "severity TEXT NOT NULL DEFAULT 'info'");
@@ -3681,6 +3682,48 @@ function backfillChatMessageSequences(db: SqlDatabase): void {
       [messages.length, session.id],
     );
   }
+}
+
+function migrateExecutionScopedLanes(db: SqlDatabase): void {
+  const columns = db.query("PRAGMA table_info(multiremi_session_agent_lanes)").all() as Array<{ name: string }>;
+  if (columns.some((column) => column.name === "execution_scope")) return;
+  db.transaction(() => {
+    // Native sessions were rooted in the shared cwd. Rebuild their context
+    // once from canonical events when switching to private execution dirs.
+    db.exec(`CREATE TABLE multiremi_session_agent_lanes_scoped (
+      session_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      execution_scope TEXT NOT NULL DEFAULT '',
+      provider_session_id TEXT,
+      runtime_id TEXT,
+      provider TEXT,
+      work_dir TEXT,
+      cursor_seq INTEGER NOT NULL DEFAULT 0,
+      generation INTEGER NOT NULL DEFAULT 1,
+      status TEXT NOT NULL DEFAULT 'active',
+      last_task_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      execution_fingerprint TEXT,
+      PRIMARY KEY(session_id, agent_id, execution_scope),
+      FOREIGN KEY(session_id) REFERENCES multiremi_issue_sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY(agent_id) REFERENCES multiremi_agents(id) ON DELETE CASCADE
+    );
+    INSERT INTO multiremi_session_agent_lanes_scoped
+      (session_id, agent_id, provider_session_id, runtime_id, provider, work_dir,
+       cursor_seq, generation, status, last_task_id, created_at, updated_at, execution_fingerprint)
+    SELECT session_id, agent_id, NULL, runtime_id, provider, NULL,
+       0, generation + 1, status, last_task_id, created_at, updated_at, execution_fingerprint
+    FROM multiremi_session_agent_lanes;
+    DROP TABLE multiremi_session_agent_lanes;
+    ALTER TABLE multiremi_session_agent_lanes_scoped RENAME TO multiremi_session_agent_lanes;
+    CREATE INDEX idx_multiremi_session_agent_lanes_runtime ON multiremi_session_agent_lanes(runtime_id, status);
+    CREATE INDEX idx_multiremi_session_agent_lanes_agent ON multiremi_session_agent_lanes(agent_id, updated_at);
+    UPDATE multiremi_tasks SET session_id = NULL, work_dir = NULL, issue_session_generation = NULL,
+      projection_from_seq = NULL, projection_to_seq = NULL, projection_mode = NULL,
+      projection_truncated = 0, projection_omitted_events = 0, projection_estimated_tokens = 0
+    WHERE issue_session_id IS NOT NULL AND chat_session_id IS NULL AND status = 'queued';`);
+  })();
 }
 
 function allowNullableFeishuOutboundReplyToMessageId(db: SqlDatabase): void {
