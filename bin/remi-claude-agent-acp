@@ -24,7 +24,7 @@ const PACKAGE_NAMES = [
   "@agentclientprotocol/claude-agent-acp",
 ];
 const SDK_PACKAGE_NAME = "@anthropic-ai/claude-agent-sdk";
-const MIN_CLAUDE_CODE_VERSION = "2.1.120";
+const MIN_CLAUDE_CODE_VERSION = "2.1.259";
 const PATCH_VERSION = "ask-bridge-v2";
 
 main().catch((err) => {
@@ -53,6 +53,7 @@ async function main() {
   if (prepared.runtime.claudeCodeExecutable) {
     env.CLAUDE_CODE_EXECUTABLE = prepared.runtime.claudeCodeExecutable;
   }
+  console.error(`[remi-claude-agent-acp] Claude Code ${prepared.runtime.version} (${prepared.runtime.source})`);
   const child = spawn(process.execPath, [patchedIndex, ...args], {
     cwd: process.cwd(),
     env,
@@ -258,13 +259,24 @@ function readPackageJson(root) {
 }
 
 function resolveClaudeRuntime(upstreamRoot) {
-  const bundledRoot = join(upstreamRoot, "node_modules", "@anthropic-ai", "claude-agent-sdk");
-  const bundled = readClaudeAgentSdkInfo(bundledRoot);
+  const override = process.env.REMI_CLAUDE_CODE_EXECUTABLE || process.env.CLAUDE_CODE_EXECUTABLE;
+  if (override) {
+    const path = normalizeExecutable(override);
+    const version = path && readClaudeCodeVersion(path);
+    if (!version || !isVersionAtLeast(version, MIN_CLAUDE_CODE_VERSION)) {
+      throw new Error(`Configured Claude Code executable is incompatible (${version || "unavailable"}); minimum Claude Code version is ${MIN_CLAUDE_CODE_VERSION}. Upgrade it or update REMI_CLAUDE_CODE_EXECUTABLE/CLAUDE_CODE_EXECUTABLE.`);
+    }
+    return { source: "explicit-cli", cacheKey: `explicit-${version}-${hashString(path).slice(0, 8)}`, claudeCodeExecutable: path, version };
+  }
+
+  // Resolve from the bridge so hoisted SDK installs use the same dependency
+  // as ACP. SDK package versions are not Claude Code executable versions.
+  const bundled = readBundledClaudeRuntime(upstreamRoot);
   if (bundled && isVersionAtLeast(bundled.claudeCodeVersion, MIN_CLAUDE_CODE_VERSION)) {
     return {
       source: "bundled-sdk",
       cacheKey: `bundled-sdk-${bundled.version}-${bundled.claudeCodeVersion}`,
-      claudeCodeExecutable: null,
+      claudeCodeExecutable: bundled.executable,
       version: bundled.claudeCodeVersion,
     };
   }
@@ -288,10 +300,7 @@ function resolveClaudeRuntime(upstreamRoot) {
 }
 
 function findCompatibleClaudeCodeExecutable() {
-  const candidates = [
-    process.env.REMI_CLAUDE_CODE_EXECUTABLE,
-    process.env.CLAUDE_CODE_EXECUTABLE,
-  ];
+  const candidates = [];
 
   const pathBinary = resolveCommand("claude");
   if (pathBinary) candidates.push(pathBinary);
@@ -330,7 +339,8 @@ function normalizeExecutable(candidate) {
 }
 
 function readClaudeCodeVersion(executable) {
-  const result = spawnSync(executable, ["--version"], {
+  const isScript = /\.[cm]?js$/.test(executable);
+  const result = spawnSync(isScript ? process.execPath : executable, isScript ? [executable, "--version"] : ["--version"], {
     encoding: "utf-8",
     stdio: ["ignore", "pipe", "pipe"],
     timeout: 5000,
@@ -341,16 +351,31 @@ function readClaudeCodeVersion(executable) {
   return match?.[1] ?? null;
 }
 
-function readClaudeAgentSdkInfo(root) {
-  const packageJsonPath = join(root, "package.json");
-  if (!existsSync(packageJsonPath)) return null;
+function readBundledClaudeRuntime(upstreamRoot) {
   try {
-    const pkg = JSON.parse(readFileSync(packageJsonPath, "utf-8"));
+    const bridgeRequire = createRequire(join(upstreamRoot, "package.json"));
+    const sdkEntry = bridgeRequire.resolve(SDK_PACKAGE_NAME);
+    const root = dirname(sdkEntry);
+    const pkg = readPackageJson(root);
     if (pkg.name !== SDK_PACKAGE_NAME) return null;
+    const sdkRequire = createRequire(sdkEntry);
+    const ext = process.platform === "win32" ? ".exe" : "";
+    const musl = process.platform === "linux" && !process.report?.getReport()?.header?.glibcVersionRuntime;
+    const binaryPackage = `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}${musl ? "-musl" : ""}`;
+    let executable;
+    try {
+      executable = sdkRequire.resolve(`${binaryPackage}/claude${ext}`);
+    } catch {
+      executable = join(root, "cli.js");
+      if (!existsSync(executable)) return null;
+    }
+    const claudeCodeVersion = readClaudeCodeVersion(executable);
+    if (!claudeCodeVersion) return null;
     return {
       root,
       version: String(pkg.version ?? "0.0.0"),
-      claudeCodeVersion: String(pkg.claudeCodeVersion ?? pkg.version ?? "0.0.0"),
+      claudeCodeVersion,
+      executable,
     };
   } catch {
     return null;
@@ -465,12 +490,8 @@ function verifyPatchedAgent(path) {
 
 function verifyPreparedPackage(root, runtime) {
   verifyPatchedAgent(join(root, "dist", "acp-agent.js"));
-  const sdk = readClaudeAgentSdkInfo(join(root, "node_modules", "@anthropic-ai", "claude-agent-sdk"));
-  if (sdk && isVersionAtLeast(sdk.claudeCodeVersion, MIN_CLAUDE_CODE_VERSION)) return;
   if (runtime?.claudeCodeExecutable && isVersionAtLeast(runtime.version, MIN_CLAUDE_CODE_VERSION)) return;
-
-  const version = sdk ? `${sdk.version} / Claude Code ${sdk.claudeCodeVersion}` : "missing";
   throw new Error(
-    `Prepared claude-agent-acp package has incompatible ${SDK_PACKAGE_NAME}: ${version}, and no compatible Claude Code executable was selected. Minimum Claude Code version is ${MIN_CLAUDE_CODE_VERSION}.`,
+    `Prepared claude-agent-acp package has no compatible Claude Code executable. Minimum Claude Code version is ${MIN_CLAUDE_CODE_VERSION}.`,
   );
 }

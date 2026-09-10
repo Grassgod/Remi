@@ -30,6 +30,10 @@ interface AgentProfile {
   effortAfterModel?: Record<string, string>;
   /** Model-specific effort selector contents returned after a model switch. */
   effortOptionsAfterModel?: Record<string, Array<{ value: string; name: string; description?: string }>>;
+  /** Claude resolves full IDs to picker aliases; missing aliases must fail. */
+  modelAliases?: Record<string, string>;
+  rejectUnknownModels?: boolean;
+  selectedModelOverride?: string;
 }
 
 interface LoggedRequest {
@@ -161,7 +165,16 @@ rl.on("line", (line) => {
     case "session/load": return ok({ sessionId: msg.params.sessionId, modes: PROFILE.modes, configOptions, models: PROFILE.models });
     case "session/set_mode": return ok({});
     case "session/set_config_option": {
-      configOptions = configOptions.map((o) => o.id === msg.params.configId ? { ...o, currentValue: msg.params.value } : o);
+      let selectedValue = msg.params.value;
+      if (msg.params.configId === "model") {
+        const option = configOptions.find((o) => o.id === "model");
+        selectedValue = (PROFILE.modelAliases || {})[msg.params.value] || msg.params.value;
+        if (PROFILE.rejectUnknownModels && !option.options.some((o) => o.value === selectedValue)) {
+          return send({ jsonrpc: "2.0", id: msg.id, error: { code: -32602, message: "Invalid model: " + msg.params.value } });
+        }
+        selectedValue = PROFILE.selectedModelOverride || selectedValue;
+      }
+      configOptions = configOptions.map((o) => o.id === msg.params.configId ? { ...o, currentValue: selectedValue } : o);
       const forcedEffort = msg.params.configId === "model" ? (PROFILE.effortAfterModel || {})[msg.params.value] : undefined;
       const forcedEffortOptions = msg.params.configId === "model" ? (PROFILE.effortOptionsAfterModel || {})[msg.params.value] : undefined;
       if (forcedEffort || forcedEffortOptions) {
@@ -235,7 +248,7 @@ describe("AcpProvider session/new payload", () => {
     expect(newSession.params.cwd).toBe(cwd);
     // permissionMode is gone: the bridge overwrites it at acp-agent.js:4454.
     expect(newSession.params._meta).toEqual({
-      claudeCode: { options: { model: "claude-opus-4-6", allowedTools: ["Bash"] } },
+      claudeCode: { options: { model: "claude-opus-4-6[1m]", allowedTools: ["Bash"] } },
       systemPrompt: { append: "You are Remi." },
     });
     // Official param (acp-agent.js:4549 prefers it), and the relative entry is
@@ -371,6 +384,107 @@ describe("AcpProvider session/new payload", () => {
     } as any))).rejects.toThrow("isolated CODEX_HOME");
     expect(agent.requests()).toHaveLength(0);
     await provider.close();
+  });
+});
+
+describe("Claude 1M session negotiation", () => {
+  function profile(): AgentProfile {
+    return {
+      ...claudeProfile(),
+      configOptions: [{
+        id: "model", name: "Model", category: "model", type: "select", currentValue: "fable",
+        options: [
+          { value: "fable", name: "Fable 5.1" },
+          { value: "fable[1m]", name: "Fable 5.1 (1M)" },
+          { value: "opus[1m]", name: "Opus 5 (1M)" },
+          { value: "sonnet[1m]", name: "Sonnet 5 (1M)" },
+        ],
+      }, CLAUDE_CONFIG_OPTIONS[1]!],
+      modelAliases: {
+        "claude-fable-5-1[1m]": "fable[1m]",
+        "claude-opus-5[1m]": "opus[1m]",
+        "claude-sonnet-5[1m]": "sonnet[1m]",
+      },
+      rejectUnknownModels: true,
+    };
+  }
+
+  it("passes the normalized model on creation and lets the bridge resolve a picker alias", async () => {
+    const agent = fakeAgent(profile());
+    const provider = new AcpProvider({ agentType: "claude", executable: agent.executable, cwd: tempCwd(), model: "claude-fable-5-1" });
+    try {
+      await drain(provider.sendStream("hi", { chatId: "one-million" }));
+      await drain(provider.sendStream("again", { chatId: "one-million" }));
+      expect(only(agent.requests(), "session/new")[0]!.params._meta.claudeCode.options.model).toBe("claude-fable-5-1[1m]");
+      expect(only(agent.requests(), "session/set_config_option").map(r => r.params.value)).toEqual(["claude-fable-5-1[1m]"]);
+      expect(only(agent.requests(), "session/prompt")).toHaveLength(2);
+    } finally { await provider.close(); }
+  });
+
+  it("keeps 1M when resuming and switching models in a pooled process", async () => {
+    const agent = fakeAgent(profile());
+    const provider = new AcpProvider({ agentType: "claude", executable: agent.executable, cwd: tempCwd() });
+    try {
+      await drain(provider.sendStream("resume", { chatId: "c", sessionId: "saved-session", model: "claude-fable-5-1" }));
+      expect(only(agent.requests(), "session/resume")[0]!.params._meta.claudeCode.options.model).toBe("claude-fable-5-1[1m]");
+      await drain(provider.sendStream("switch", { chatId: "c", model: "claude-opus-5" }));
+      await drain(provider.sendStream("switch again", { chatId: "c", model: "claude-sonnet-5" }));
+      await drain(provider.sendStream("load another", { chatId: "c", sessionId: "another-session", model: "claude-fable-5-1" }));
+      expect(only(agent.requests(), "session/set_config_option").map(r => r.params.value)).toEqual([
+        "claude-fable-5-1[1m]", "claude-opus-5[1m]", "claude-sonnet-5[1m]", "claude-fable-5-1[1m]",
+      ]);
+      expect(only(agent.requests(), "session/prompt")).toHaveLength(4);
+      expect(only(agent.requests(), "session/new")).toHaveLength(0);
+    } finally { await provider.close(); }
+  });
+
+  it("preserves an explicit [1m] alias without duplicating the suffix", async () => {
+    const agent = fakeAgent(profile());
+    const provider = new AcpProvider({ agentType: "claude", executable: agent.executable, cwd: tempCwd() });
+    try {
+      await drain(provider.sendStream("hi", { model: "opus[1m]" }));
+      expect(only(agent.requests(), "session/new")[0]!.params._meta.claudeCode.options.model).toBe("opus[1m]");
+      expect(only(agent.requests(), "session/set_config_option")[0]!.params.value).toBe("opus[1m]");
+    } finally { await provider.close(); }
+  });
+
+  it("does not send a prompt when the bridge rejects an explicit 1M model", async () => {
+    const agent = fakeAgent(profile());
+    const provider = new AcpProvider({ agentType: "claude", executable: agent.executable, cwd: tempCwd() });
+    try {
+      await expect(drain(provider.sendStream("hi", { model: "unknown[1m]" }))).rejects.toThrow("Invalid model");
+      expect(only(agent.requests(), "session/prompt")).toHaveLength(0);
+    } finally { await provider.close(); }
+  });
+
+  it("rejects a bridge that acknowledges a 200K lane instead of the requested 1M lane", async () => {
+    const agent = fakeAgent({ ...profile(), selectedModelOverride: "fable" });
+    const provider = new AcpProvider({ agentType: "claude", executable: agent.executable, cwd: tempCwd() });
+    try {
+      await expect(drain(provider.sendStream("hi", { model: "claude-fable-5-1" }))).rejects.toThrow("acp_model_context_unsupported");
+      expect(only(agent.requests(), "session/prompt")).toHaveLength(0);
+    } finally { await provider.close(); }
+  });
+
+  it("respects a per-provider 1M opt-out", async () => {
+    const agent = fakeAgent(claudeProfile());
+    const provider = new AcpProvider({ agentType: "claude", executable: agent.executable, cwd: tempCwd(), env: { CLAUDE_CODE_DISABLE_1M_CONTEXT: "1" } });
+    try {
+      await drain(provider.sendStream("hi", { model: "claude-opus-4-6" }));
+      expect(only(agent.requests(), "session/new")[0]!.params._meta.claudeCode.options.model).toBe("claude-opus-4-6");
+      expect(only(agent.requests(), "session/set_config_option")[0]!.params.value).toBe("claude-opus-4-6");
+    } finally { await provider.close(); }
+  });
+
+  it("does not normalize Claude-shaped model IDs for Codex", async () => {
+    const agent = fakeAgent(codexProfile());
+    const provider = new AcpProvider({ agentType: "codex", executable: agent.executable, cwd: tempCwd() });
+    try {
+      await drain(provider.sendStream("hi", { model: "claude-fable-5-1" }));
+      expect(only(agent.requests(), "session/new")[0]!.params._meta).toBeUndefined();
+      expect(only(agent.requests(), "session/set_config_option")).toHaveLength(0);
+      expect(only(agent.requests(), "session/prompt")).toHaveLength(1);
+    } finally { await provider.close(); }
   });
 });
 
