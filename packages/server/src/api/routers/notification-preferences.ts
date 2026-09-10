@@ -8,7 +8,8 @@ export function registerNotificationPreferenceRoutes(app: Hono, deps: RouterDeps
   const { store } = deps;
 
   app.get("/api/multiremi/notification-preferences", (c) => {
-    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspaceId") ?? c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     return c.json(store.getNotificationPreferences({
@@ -18,7 +19,8 @@ export function registerNotificationPreferenceRoutes(app: Hono, deps: RouterDeps
   });
   app.put("/api/multiremi/notification-preferences", async (c) => {
     const body = await readJson<{ workspaceId?: string | null; workspace_id?: string | null; memberId?: string | null; member_id?: string | null; preferences?: MultiremiNotificationPreferences }>(c);
-    const workspaceId = body.workspaceId ?? body.workspace_id ?? "local";
+    const workspaceId = resolveRequestWorkspaceId(c, store, body.workspaceId ?? body.workspace_id);
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     return c.json(store.updateNotificationPreferences({

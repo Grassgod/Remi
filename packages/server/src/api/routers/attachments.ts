@@ -37,7 +37,19 @@ export function registerAttachmentRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.post("/api/multiremi/attachments", async (c) => {
     const body = await readJson<CreateAttachmentInput>(c);
-    const workspaceId = cleanString(body.workspaceId) ?? cleanString(body.workspace_id) ?? "local";
+    const issueId = cleanString(body.issueId ?? body.issue_id);
+    const commentId = cleanString(body.commentId ?? body.comment_id);
+    const chatSessionId = cleanString(body.chatSessionId ?? body.chat_session_id);
+    const chatMessageId = cleanString(body.chatMessageId ?? body.chat_message_id);
+    const comment = commentId ? store.getIssueComment(commentId) : null;
+    const chatMessage = chatMessageId ? store.getChatMessage(chatMessageId) : null;
+    const explicitWorkspaceId = cleanString(body.workspaceId) ?? cleanString(body.workspace_id)
+      ?? (issueId ? store.getIssue(issueId)?.workspaceId : null)
+      ?? (comment ? store.getIssue(comment.issueId)?.workspaceId : null)
+      ?? (chatSessionId ? store.getChatSession(chatSessionId)?.workspaceId : null)
+      ?? (chatMessage ? store.getChatSession(chatMessage.chatSessionId)?.workspaceId : null);
+    const workspaceId = resolveRequestWorkspaceId(c, store, explicitWorkspaceId);
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyAttachmentCreationAccess(c, store, workspaceId, body);
     if (denied) return denied;
     const { actorType: uploaderType, actorId: uploaderId } = issueMutationActor(c, {

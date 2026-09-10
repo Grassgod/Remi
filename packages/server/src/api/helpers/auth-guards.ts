@@ -3,6 +3,7 @@
 // scoping), and may this user reach this workspace/agent/attachment. `deny*` helpers return a
 // ready-made Response when access is refused and null when it is allowed.
 import type { Context } from "hono";
+import { resolveRequestWorkspaceId } from "./workspace-context.js";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import { daemonRuntimeId } from "@multiremi/store/helpers.js";
 import {
@@ -322,11 +323,10 @@ export function currentJwtUserId(c: Context): string | null {
   return currentAuth(c).jwtUserId;
 }
 
-export function compatibilityWorkspaceId(c: Context): string {
-  return cleanString(c.req.header("X-Workspace-ID")) ??
-    cleanString(c.req.query("workspace_id")) ??
-    currentAccessToken(c)?.workspaceId ??
-    "local";
+export function compatibilityWorkspaceId(c: Context, store: MultiremiStore): string | Response {
+  return resolveRequestWorkspaceId(c, store,
+    cleanString(c.req.header("X-Workspace-ID")) ?? cleanString(c.req.query("workspace_id")),
+  );
 }
 
 // The web client tags every request with the slug of the workspace the user is
