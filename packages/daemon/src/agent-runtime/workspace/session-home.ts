@@ -117,6 +117,7 @@ export function resolveIssueSessionProviderHome(
     ".runtime",
     safePathSegment(sessionId),
     safePathSegment(agentId),
+    ...(task.execution_scope ? ["delegations", safePathSegment(task.execution_scope)] : []),
     String(generation),
   );
   const execution = provider === "codex" ? codexExecutionIdentity(task) : null;
@@ -244,12 +245,14 @@ export function resolveTaskProviderHome(
   };
 }
 
-/**
- * Establish a Provider Home parent using one lstat-verified directory at a
- * time. Recursive mkdir is deliberately limited to the trusted storage root;
- * every daemon-owned descendant rejects symlinks and non-directories before a
- * Plugin installer or provider can write through it.
- */
+/** Keep task configuration beside the provider home, never in shared repositories. */
+export async function prepareIssueExecutionDirectory(resolvedHome: IssueSessionProviderHome): Promise<string> {
+  const workDir = join(resolvedHome.root, "work");
+  await ensureRealDirectoryTree(resolvedHome.storageRoot, workDir, "Execution directory");
+  return workDir;
+}
+
+/** Reject linked parents before a plugin installer or provider can write through them. */
 export async function ensureProviderHomeDirectory(
   resolvedHome: IssueSessionProviderHome,
 ): Promise<void> {

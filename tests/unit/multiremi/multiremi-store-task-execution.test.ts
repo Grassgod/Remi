@@ -159,7 +159,7 @@ describe("Multiremi store — task message ingress, completion, and capacity", (
     store.startTask(task.id);
 
     // Agent posts its own formatted reply via a tool during execution.
-    store.createIssueComment(issue.id, { authorType: "agent", authorId: agent.id, body: "## 架构\n1. Hub-and-Spoke…" });
+    store.createIssueComment(issue.id, { taskId: task.id, authorType: "agent", authorId: agent.id, body: "## 架构\n1. Hub-and-Spoke…" });
     const afterSelfReply = store.listIssueComments(issue.id).length;
 
     // Completion must NOT append a second (narration-heavy) comment.
@@ -371,7 +371,7 @@ describe("Multiremi store — task message ingress, completion, and capacity", (
       max_concurrency: 2,
       runtime_mode: "local",
       device_info: "Laptop · 1.0.0",
-      metadata: { version: "1.0.0", cli_version: "0.2.26", launched_by: "desktop" },
+      metadata: { version: "1.0.0", cli_version: "0.2.26", launched_by: "desktop", parallel_agent_execution: 1 },
       models: [{ id: "gpt-5.5", label: "GPT-5.5", provider: "openai", default: true }],
     });
     const firstIssue = store.createIssue({ title: "First usage task", assigneeType: "agent", assigneeId: agent.id });

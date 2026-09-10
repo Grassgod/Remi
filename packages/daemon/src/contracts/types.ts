@@ -269,6 +269,7 @@ export interface AgentTask {
   issueSessionId?: string | null;
   issue_session_id?: string | null;
   issueSessionGeneration?: number | null;
+  execution_scope?: string;
   issue_session_generation?: number | null;
   /** Whether this task owns the shared Issue workspace. Missing means true for older servers. */
   holdsWorkspace?: boolean;

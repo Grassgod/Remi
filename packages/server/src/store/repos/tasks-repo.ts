@@ -2,6 +2,7 @@
 // terminal-state fan-out into issues/sessions/autopilots), extracted verbatim from MultiremiStore
 // (the facade delegates every public method here).
 import { createHash } from "node:crypto";
+import { taskExecutionScope } from "@multiremi/contracts/task-execution.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { canonicalJson } from "@multiremi/agent-plugins/import.js";
 import {
@@ -172,6 +173,28 @@ export class TaskSteerConflictError extends Error {}
  */
 export class TaskSteerPendingError extends Error {}
 
+function executionScopeSql(alias: string): string {
+  return `(CASE WHEN ${alias}.delegated_by_agent_id IS NOT NULL
+    AND ${alias}.agent_id <> ${alias}.delegated_by_agent_id
+    THEN COALESCE(${alias}.delegation_id, '') ELSE '' END)`;
+}
+
+function sameExecutionLaneSql(queued: string, active: string): string {
+  return `(${active}.agent_id = ${queued}.agent_id AND (
+    (${queued}.issue_session_id IS NOT NULL AND ${active}.issue_session_id = ${queued}.issue_session_id
+      AND ${executionScopeSql(queued)} = ${executionScopeSql(active)})
+    OR (${queued}.chat_session_id IS NOT NULL AND ${active}.chat_session_id = ${queued}.chat_session_id)
+    OR (${queued}.issue_id IS NOT NULL AND ${queued}.issue_session_id IS NULL
+      AND ${active}.issue_id = ${queued}.issue_id AND ${active}.issue_session_id IS NULL)
+  ))`;
+}
+
+function runtimeSupportsParallelExecution(runtime: MultiremiRuntime): boolean {
+  // Versionless runtimes are in-process integrations, as with Issue workspace support.
+  return runtime.metadata.parallel_agent_execution === 1
+    || !(runtime.metadata.cli_version ?? runtime.metadata.cliVersion);
+}
+
 function runtimeSupportsIssueWorkspaces(runtime: MultiremiRuntime): boolean {
   const rawVersion = runtime.metadata.cli_version ?? runtime.metadata.cliVersion;
   if (typeof rawVersion !== "string" || !rawVersion.trim()) return true;
@@ -217,15 +240,7 @@ export class TasksRepo {
        LEFT JOIN multiremi_issue_sessions session ON session.id = active.issue_session_id
        WHERE queued.id = ?
          AND queued.status = 'queued'
-         AND (
-           (queued.issue_session_id IS NOT NULL AND active.issue_session_id = queued.issue_session_id)
-           OR (
-             queued.issue_id IS NOT NULL
-             AND queued.holds_workspace = 1
-             AND active.issue_id = queued.issue_id
-             AND active.holds_workspace = 1
-           )
-         )
+         AND ${sameExecutionLaneSql("queued", "active")}
        ORDER BY active.dispatched_at ASC, active.created_at ASC
        LIMIT 1`,
     ).get(taskId) as Row | null;
@@ -393,10 +408,11 @@ export class TasksRepo {
     // owns the ACP lineage. If a local-directory constraint points elsewhere,
     // or the provider/runtime drifted, abandon the cache atomically and cold
     // bootstrap from the canonical event log.
+    const executionScope = taskExecutionScope(input);
     let issueLane: MultiremiSessionAgentLane | null = null;
     let inheritIssueLane = false;
     if (issueSession) {
-      issueLane = this.ctx.issueSessions().getOrCreateSessionAgentLane(issueSession.id, agent.id);
+      issueLane = this.ctx.issueSessions().getOrCreateSessionAgentLane(issueSession.id, agent.id, executionScope);
       const laneRuntime = issueLane.runtimeId ? this.ctx.runtimes().getRuntime(issueLane.runtimeId) : null;
       const laneResumable =
         !input.resetProviderSession
@@ -414,8 +430,8 @@ export class TasksRepo {
         runtimeId = issueLane.runtimeId;
         inheritIssueLane = true;
       } else if (issueLane.providerSessionId || issueLane.cursorSeq > 0) {
-        this.resetSessionAgentLane(issueSession.id, agent.id);
-        issueLane = this.ctx.issueSessions().getOrCreateSessionAgentLane(issueSession.id, agent.id);
+        this.resetSessionAgentLane(issueSession.id, agent.id, executionScope);
+        issueLane = this.ctx.issueSessions().getOrCreateSessionAgentLane(issueSession.id, agent.id, executionScope);
       }
     }
 
@@ -564,8 +580,8 @@ export class TasksRepo {
     return task;
   }
 
-  resetSessionAgentLane(sessionId: string, agentId: string): MultiremiSessionAgentLane | null {
-    const lane = this.ctx.issueSessions().getSessionAgentLane(sessionId, agentId);
+  resetSessionAgentLane(sessionId: string, agentId: string, executionScope = ""): MultiremiSessionAgentLane | null {
+    const lane = this.ctx.issueSessions().getSessionAgentLane(sessionId, agentId, executionScope);
     // A legacy task can predate lane creation, and an agent may already have
     // been archived as part of runtime teardown. In both cases there is no
     // resumable cache to clear, so terminal handling must remain a no-op.
@@ -581,10 +597,10 @@ export class TasksRepo {
            generation = generation + 1,
            last_task_id = NULL,
            updated_at = ?
-       WHERE session_id = ? AND agent_id = ?`,
-      [nowIso(), sessionId, agentId],
+       WHERE session_id = ? AND agent_id = ? AND execution_scope = ?`,
+      [nowIso(), sessionId, agentId, executionScope],
     );
-    return this.ctx.issueSessions().getSessionAgentLane(sessionId, agentId) ?? lane;
+    return this.ctx.issueSessions().getSessionAgentLane(sessionId, agentId, executionScope) ?? lane;
   }
 
   /**
@@ -970,7 +986,7 @@ export class TasksRepo {
     // immutable snapshot. Never resolve mutable Agent bindings again.
     if (task.executionFingerprint) {
       const legacyGeneration = task.issueSessionId && task.issueSessionGeneration == null
-        ? this.ctx.issueSessions().getOrCreateSessionAgentLane(task.issueSessionId, task.agentId).generation
+        ? this.ctx.issueSessions().getOrCreateSessionAgentLane(task.issueSessionId, task.agentId, taskExecutionScope(task)).generation
         : null;
       if ((provider && !task.provider) || legacyGeneration != null) {
         this.ctx.db.run(
@@ -1007,7 +1023,7 @@ export class TasksRepo {
       );
     } else if (task.issueSessionId) {
       issueSessionId = task.issueSessionId;
-      let lane = this.ctx.issueSessions().getOrCreateSessionAgentLane(task.issueSessionId, task.agentId);
+      let lane = this.ctx.issueSessions().getOrCreateSessionAgentLane(task.issueSessionId, task.agentId, taskExecutionScope(task));
       const laneRuntime = lane.runtimeId ? this.ctx.runtimes().getRuntime(lane.runtimeId) : null;
       const laneResumable =
         !!lane.providerSessionId
@@ -1025,7 +1041,7 @@ export class TasksRepo {
         issueWorkDir = lane.workDir;
       } else {
         if (lane.providerSessionId || lane.cursorSeq > 0) {
-          lane = this.resetSessionAgentLane(task.issueSessionId, task.agentId) ?? lane;
+          lane = this.resetSessionAgentLane(task.issueSessionId, task.agentId, taskExecutionScope(task)) ?? lane;
         }
         issueProviderSessionId = null;
         issueWorkDir = null;
@@ -1153,6 +1169,7 @@ export class TasksRepo {
       && this.ctx.runtimes().runtimeCanRunAgent(runtime, task.agent)
       && this.runtimeHasReadyTaskPlugins(runtime, task)
       && (!task.issueId || !task.holdsWorkspace || runtimeSupportsIssueWorkspaces(runtime))
+      && (!task.issueId || runtimeSupportsParallelExecution(runtime))
       && (!task.issueId || !task.holdsWorkspace || this.runtimePassesProjectDeviceRouting(runtime, task.id));
   }
 
@@ -1243,6 +1260,7 @@ export class TasksRepo {
       runtime.maxConcurrency,
       runtime.workspaceId ?? "local",
       runtimeSupportsIssueWorkspaces(runtime) ? 1 : 0,
+      runtimeSupportsParallelExecution(runtime) ? 1 : 0,
       ...daemonAliases,
       ...daemonAliases,
       ...daemonAliases,
@@ -1284,6 +1302,7 @@ export class TasksRepo {
            ) < ?
            ${workspaceFilter}
            AND (t.issue_id IS NULL OR t.holds_workspace = 0 OR ? = 1)
+           AND (t.issue_id IS NULL OR ? = 1)
            AND (
              t.issue_id IS NULL
              OR t.holds_workspace = 0
@@ -1363,24 +1382,7 @@ export class TasksRepo {
            AND NOT EXISTS (
              SELECT 1 FROM multiremi_tasks active
              WHERE active.status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')
-               AND (
-                 (t.issue_session_id IS NOT NULL AND active.issue_session_id = t.issue_session_id)
-                 OR (
-                   t.issue_id IS NOT NULL
-                   AND t.holds_workspace = 1
-                   AND active.issue_id = t.issue_id
-                   AND active.holds_workspace = 1
-                 )
-                 OR (active.agent_id = t.agent_id AND t.chat_session_id IS NOT NULL AND active.chat_session_id = t.chat_session_id)
-                 OR (
-                   active.agent_id = t.agent_id
-                   AND
-                   t.issue_id IS NULL
-                   AND t.chat_session_id IS NULL
-                   AND active.issue_id IS NULL
-                   AND active.chat_session_id IS NULL
-                 )
-               )
+               AND ${sameExecutionLaneSql("t", "active")}
            )
          ORDER BY t.priority DESC, t.created_at ASC
          LIMIT 1
@@ -2436,19 +2438,6 @@ export class TasksRepo {
     });
     if (!reports.length) return { createdTasks: [], taskBySourceId: new Map() };
 
-    // Take one snapshot before creating any return tasks. awaiting_human is
-    // deliberately absent: it should wake the delegator but must still block
-    // the later round-complete notification. Archived Agents' queued work is
-    // ignored so an abandoned queue cannot hold return debt forever.
-    const activeRows = this.ctx.db.query(
-      `SELECT task.id, task.agent_id
-       FROM multiremi_tasks task
-       LEFT JOIN multiremi_agents agent ON agent.id = task.agent_id
-       WHERE task.issue_session_id = ?
-         AND task.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
-         AND (task.status <> 'queued' OR agent.archived_at IS NULL)
-       ORDER BY task.created_at ASC, task.id ASC`,
-    ).all(issueSessionId) as Row[];
     const groups = new Map<string, DelegationTerminalReport[]>();
     for (const report of reports) {
       const delegatorId = report.source.delegatedByAgentId!;
@@ -2469,22 +2458,6 @@ export class TasksRepo {
             delegationWakeupInputForReport(triggerReport),
             triggerReport.requiredEventSeq,
             "delegator_unavailable",
-          );
-        }
-        continue;
-      }
-
-      const blockingTaskIds = activeRows
-        .filter((row) => String(row.agent_id) !== delegatorId)
-        .map((row) => String(row.id));
-      if (blockingTaskIds.length) {
-        if (triggerReport) {
-          this.recordDelegationReturnSkipped(
-            triggerReport.source,
-            delegationWakeupInputForReport(triggerReport),
-            triggerReport.requiredEventSeq,
-            "deferred_lane_busy",
-            { blockingTaskIds },
           );
         }
         continue;
@@ -2622,6 +2595,7 @@ export class TasksRepo {
       `SELECT * FROM multiremi_tasks
        WHERE agent_id = ? AND issue_session_id = ?
          AND status = 'queued' AND projection_to_seq IS NULL
+         AND ${executionScopeSql("multiremi_tasks")} = ''
        ORDER BY created_at DESC, id DESC
        LIMIT 1`,
     ).get(delegatorId, issueSessionId) as Row | null;
@@ -2821,7 +2795,7 @@ export class TasksRepo {
         // resume-unsafe, which resets the lane then and falls back to a bounded bootstrap.
         if (status === "completed") this.promoteSessionAgentLane(task);
         else if (!retry && status !== "cancelled")
-          this.resetSessionAgentLane(task.issueSessionId, task.agentId);
+          this.resetSessionAgentLane(task.issueSessionId, task.agentId, taskExecutionScope(task));
         if (!replacementPlanned) {
           const wakeup = workspaceLockHeld
             ? this.ensureDelegationWakeupWithinWorkspaceLock(task, {
@@ -3051,7 +3025,7 @@ export class TasksRepo {
     if (!task.issueSessionId || !task.sessionId || !task.runtimeId || !task.provider) return;
     const cursorSeq = Math.max(0, task.projectionToSeq ?? 0);
     const now = nowIso();
-    const lane = this.ctx.issueSessions().getOrCreateSessionAgentLane(task.issueSessionId, task.agentId);
+    const lane = this.ctx.issueSessions().getOrCreateSessionAgentLane(task.issueSessionId, task.agentId, taskExecutionScope(task));
     // The provider lineage and its cursor are one checkpoint. For a warm turn,
     // only the lineage used by the task may advance; for a cold turn the lane
     // must still be empty. This prevents a late completion from overwriting a
@@ -3066,7 +3040,7 @@ export class TasksRepo {
           cursor_seq = ?,
           last_task_id = ?,
           updated_at = ?
-      WHERE session_id = ? AND agent_id = ? AND generation = ?`;
+      WHERE session_id = ? AND agent_id = ? AND generation = ? AND execution_scope = ?`;
     const params = [
       task.sessionId,
       task.runtimeId,
@@ -3079,6 +3053,7 @@ export class TasksRepo {
       task.issueSessionId,
       task.agentId,
       task.issueSessionGeneration ?? lane.generation,
+      taskExecutionScope(task),
     ];
     // Keep the NULL comparison out of a placeholder expression: SQLite accepts
     // `? IS NULL`, while Postgres cannot infer that placeholder's data type.
@@ -3106,7 +3081,7 @@ export class TasksRepo {
       // tool), don't also post the accumulated transcript text: that double-posts
       // and the auto-reply is the lower-quality, narration-heavy version. The
       // auto-reply stays for direct assignments where the agent doesn't comment.
-      if (this.agentCommentedSince(task.issueId, task.agentId, task.dispatchedAt ?? task.startedAt ?? task.createdAt)) {
+      if (this.agentCommentedSince(task.issueId, task.agentId, task.dispatchedAt ?? task.startedAt ?? task.createdAt, task.id)) {
         return;
       }
       const parent = task.triggerCommentId ? this.ctx.issues().getIssueComment(task.triggerCommentId) : null;
@@ -3137,15 +3112,16 @@ export class TasksRepo {
     }
   }
 
-  private agentCommentedSince(issueId: string, agentId: string, since: string | null): boolean {
+  private agentCommentedSince(issueId: string, agentId: string, since: string | null, taskId: string): boolean {
     // Branch on `since` in JS rather than `(? IS NULL OR …)` in SQL: Postgres
     // cannot infer the type of a placeholder that only appears in IS NULL and
     // rejects the whole query ("could not determine data type of parameter").
     const base = `SELECT 1 AS present FROM multiremi_issue_comments
-       WHERE issue_id = ? AND author_type = 'agent' AND author_id = ? AND type = 'comment'`;
+       WHERE issue_id = ? AND author_type = 'agent' AND author_id = ? AND type = 'comment'
+         AND task_id = ?`;
     const row = (since == null
-      ? this.ctx.db.query(`${base} LIMIT 1`).get(issueId, agentId)
-      : this.ctx.db.query(`${base} AND created_at >= ? LIMIT 1`).get(issueId, agentId, since)) as { present: number } | null;
+      ? this.ctx.db.query(`${base} LIMIT 1`).get(issueId, agentId, taskId)
+      : this.ctx.db.query(`${base} AND created_at >= ? LIMIT 1`).get(issueId, agentId, taskId, since)) as { present: number } | null;
     return Boolean(row);
   }
 

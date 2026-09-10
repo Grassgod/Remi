@@ -444,50 +444,60 @@ export class AutopilotsRepo {
       "SELECT DISTINCT autopilot_id FROM multiremi_autopilot_runs WHERE status = 'queued' AND schedule_batch_id IS NOT NULL",
     ).all() as Array<{ autopilot_id: string }>;
     for (const { autopilot_id: autopilotId } of autopilots) {
-      const task = this.ctx.db.transaction(() => {
-        this.ctx.db.run("UPDATE multiremi_autopilots SET updated_at = updated_at WHERE id = ?", [autopilotId]);
-        const autopilot = this.getAutopilot(autopilotId);
-        if (!autopilot || autopilot.status === "archived") {
-          this.ctx.db.run("UPDATE multiremi_autopilot_runs SET status = 'skipped', completed_at = ?, failure_reason = 'Automation unavailable' WHERE autopilot_id = ? AND status = 'queued' AND schedule_batch_id IS NOT NULL", [nowIso(), autopilotId]);
+      for (;;) {
+        const task = this.ctx.db.transaction(() => {
+          this.ctx.db.run("UPDATE multiremi_autopilots SET updated_at = updated_at WHERE id = ?", [autopilotId]);
+          const autopilot = this.getAutopilot(autopilotId);
+          if (!autopilot || autopilot.status === "archived") {
+            this.ctx.db.run("UPDATE multiremi_autopilot_runs SET status = 'skipped', completed_at = ?, failure_reason = 'Automation unavailable' WHERE autopilot_id = ? AND status = 'queued' AND schedule_batch_id IS NOT NULL", [nowIso(), autopilotId]);
+            return null;
+          }
+          if (autopilot.status !== "active") return null;
+          const running = (this.ctx.db.query("SELECT * FROM multiremi_autopilot_runs WHERE autopilot_id = ? AND status IN ('running', 'issue_created')").all(autopilotId) as Row[]).map(toAutopilotRun);
+          const worker = this.ctx.resolveAutopilotAgent(autopilot);
+          if (!worker || running.length >= worker.maxConcurrentTasks) return null;
+          const rows = this.ctx.db.query("SELECT * FROM multiremi_autopilot_runs WHERE autopilot_id = ? AND status = 'queued' AND schedule_batch_id IS NOT NULL ORDER BY created_at, schedule_batch_id, schedule_position").all(autopilotId) as Row[];
+          const available = availableScheduleTargets(this.ctx, autopilot.workspaceId);
+          for (const row of rows) {
+            const run = toAutopilotRun(row);
+            const trigger = run.triggerId ? this.getAutopilotTrigger(run.triggerId) : null;
+            const target = run.scheduleTarget;
+            const agent = this.ctx.resolveAutopilotAgent(autopilot);
+            const currentSelection = target?.kind === "project" ? trigger?.scheduleTargets?.projects : trigger?.scheduleTargets?.repositories;
+            const valid = target && available.some((item) => item.kind === target.kind && item.id === target.id)
+              && currentSelection && (currentSelection.all || currentSelection.ids.includes(target.id));
+            if (!trigger?.enabled || !valid || !agent || agent.archivedAt) {
+              this.ctx.db.run("UPDATE multiremi_autopilot_runs SET status = 'skipped', completed_at = ?, failure_reason = ? WHERE id = ?", [nowIso(), "Schedule target, trigger or assignee unavailable", run.id]);
+              continue;
+            }
+            // Different targets run independently; never overlap a scheduled
+            // build with an event/manual build of the same publication target.
+            if (running.some((active) =>
+              (active.scheduleTarget?.kind === target.kind && active.scheduleTarget.id === target.id)
+              || (target.kind === "repository" && active.repositoryId === target.id)
+              || (target.kind === "project" && active.issueId != null
+                && this.ctx.issues().getIssue(active.issueId)?.projectId === target.id))) continue;
+            const parentId = nullableString(row.source_task_id);
+            const parent = parentId ? this.ctx.tasks().getTask(parentId) : null;
+            if (parentId && (!parent || parent.workspaceId !== autopilot.workspaceId)) {
+              this.ctx.db.run("UPDATE multiremi_autopilot_runs SET status = 'skipped', completed_at = ?, failure_reason = 'Source task unavailable' WHERE id = ?", [nowIso(), run.id]);
+              continue;
+            }
+            const created = this.ctx.tasks().createTaskWithinTransaction({
+              agentId: agent.id, workspaceId: autopilot.workspaceId,
+              prompt: `${String(row.schedule_prompt)}\n\n## Scheduled Target\n${JSON.stringify(target)}\nThis task is bound to this single target. Do not process other projects or repositories.`,
+              parentTaskId: parent?.id ?? null,
+              issueCreationRestricted: Boolean(autopilot.issueCreationRestricted || trigger.issueCreationRestricted || parent?.issueCreationRestricted || agent.issueCreationRequiresProposal),
+              assignmentAuthorType: "system", assignmentAuthorId: autopilot.id,
+            });
+            this.ctx.db.run("UPDATE multiremi_autopilot_runs SET status = 'running', task_id = ? WHERE id = ? AND status = 'queued'", [created.id, run.id]);
+            return created;
+          }
           return null;
-        }
-        if (autopilot.status !== "active") return null;
-        // Also wait for event-driven runs of this rule to release their workspaces.
-        const running = this.ctx.db.query("SELECT id FROM multiremi_autopilot_runs WHERE autopilot_id = ? AND status IN ('running', 'issue_created') LIMIT 1").get(autopilotId);
-        if (running) return null;
-        const rows = this.ctx.db.query("SELECT * FROM multiremi_autopilot_runs WHERE autopilot_id = ? AND status = 'queued' AND schedule_batch_id IS NOT NULL ORDER BY created_at, schedule_batch_id, schedule_position").all(autopilotId) as Row[];
-        const available = availableScheduleTargets(this.ctx, autopilot.workspaceId);
-        for (const row of rows) {
-          const run = toAutopilotRun(row);
-          const trigger = run.triggerId ? this.getAutopilotTrigger(run.triggerId) : null;
-          const target = run.scheduleTarget;
-          const agent = this.ctx.resolveAutopilotAgent(autopilot);
-          const currentSelection = target?.kind === "project" ? trigger?.scheduleTargets?.projects : trigger?.scheduleTargets?.repositories;
-          const valid = target && available.some((item) => item.kind === target.kind && item.id === target.id)
-            && currentSelection && (currentSelection.all || currentSelection.ids.includes(target.id));
-          if (!trigger?.enabled || !valid || !agent || agent.archivedAt) {
-            this.ctx.db.run("UPDATE multiremi_autopilot_runs SET status = 'skipped', completed_at = ?, failure_reason = ? WHERE id = ?", [nowIso(), "Schedule target, trigger or assignee unavailable", run.id]);
-            continue;
-          }
-          const parentId = nullableString(row.source_task_id);
-          const parent = parentId ? this.ctx.tasks().getTask(parentId) : null;
-          if (parentId && (!parent || parent.workspaceId !== autopilot.workspaceId)) {
-            this.ctx.db.run("UPDATE multiremi_autopilot_runs SET status = 'skipped', completed_at = ?, failure_reason = 'Source task unavailable' WHERE id = ?", [nowIso(), run.id]);
-            continue;
-          }
-          const created = this.ctx.tasks().createTaskWithinTransaction({
-            agentId: agent.id, workspaceId: autopilot.workspaceId,
-            prompt: `${String(row.schedule_prompt)}\n\n## Scheduled Target\n${JSON.stringify(target)}\nThis task is bound to this single target. Do not process other projects or repositories.`,
-            parentTaskId: parent?.id ?? null,
-            issueCreationRestricted: Boolean(autopilot.issueCreationRestricted || trigger.issueCreationRestricted || parent?.issueCreationRestricted || agent.issueCreationRequiresProposal),
-            assignmentAuthorType: "system", assignmentAuthorId: autopilot.id,
-          });
-          this.ctx.db.run("UPDATE multiremi_autopilot_runs SET status = 'running', task_id = ? WHERE id = ? AND status = 'queued'", [created.id, run.id]);
-          return created;
-        }
-        return null;
-      })();
-      if (task) this.ctx.notifyTaskEnqueued(task);
+        })();
+        if (!task) break;
+        this.ctx.notifyTaskEnqueued(task);
+      }
     }
   }
 
@@ -1222,6 +1232,7 @@ export class AutopilotsRepo {
     let createdRun = false;
     let startedAutopilot: MultiremiAutopilot | null = null;
     const run = this.ctx.db.transaction(() => {
+      this.ctx.db.run("UPDATE multiremi_autopilots SET updated_at = updated_at WHERE id = ?", [autopilotId]);
       const autopilot = this.getAutopilot(autopilotId);
       if (!autopilot) throw new Error(`Autopilot not found: ${autopilotId}`);
       this.assertRepositoryWikiBuildScope(autopilot, repositoryId, dedupeKey);
@@ -1259,10 +1270,14 @@ export class AutopilotsRepo {
       if (repositoryId) {
         const active = this.ctx.db.query(
           `SELECT * FROM multiremi_autopilot_runs
-           WHERE autopilot_id = ? AND repository_id = ?
+           WHERE autopilot_id = ?
              AND status IN (${ACTIVE_RUN_STATUSES.map(() => "?").join(", ")})
-           ORDER BY created_at DESC, id DESC LIMIT 1`,
-        ).get(autopilotId, repositoryId, ...ACTIVE_RUN_STATUSES) as Row | null;
+           ORDER BY created_at DESC, id DESC`,
+        ).all(autopilotId, ...ACTIVE_RUN_STATUSES).find((row) => {
+          const run = toAutopilotRun(row as Row);
+          return run.repositoryId === repositoryId
+            || (run.scheduleTarget?.kind === "repository" && run.scheduleTarget.id === repositoryId);
+        }) as Row | undefined;
         if (active) return { ...toAutopilotRun(active), deduplicated: true };
       }
       if (dedupeKey && !dedupeKey.endsWith(":head")) {

@@ -1239,7 +1239,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(store.claimTask(runtime.id)).toBeNull();
   });
 
-  it("grants at most one Issue workspace lease across concurrent claim connections", async () => {
+  it.each([false, true])("claims contexts atomically across connections (independent Agents: %s)", async (independent) => {
     const ws = freshWorkspace();
     const firstRuntime = store.registerRuntime({
       name: "rt-workspace-lease-a",
@@ -1259,15 +1259,11 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       workspaceId: ws,
       maxConcurrentTasks: 2,
     });
-    const secondAgent = store.createAgent({
-      name: "Workspace lease B",
-      provider: "claude",
-      workspaceId: ws,
-      maxConcurrentTasks: 2,
-    });
     const issue = store.createIssue({ title: "Concurrent workspace lease", workspaceId: ws });
     const firstSession = store.createIssueSession(issue.id, { title: "Work A" });
-    const secondSession = store.createIssueSession(issue.id, { title: "Work B" });
+    const secondAgent = independent
+      ? store.createAgent({ name: "Independent worker", provider: "claude", workspaceId: ws, maxConcurrentTasks: 2 })
+      : firstAgent;
     const first = store.createTask({
       agentId: firstAgent.id,
       issueId: issue.id,
@@ -1278,7 +1274,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const second = store.createTask({
       agentId: secondAgent.id,
       issueId: issue.id,
-      issueSessionId: secondSession.id,
+      issueSessionId: firstSession.id,
       prompt: "claim B",
     });
 
@@ -1300,10 +1296,10 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       .map((result) => result.taskId)
       .filter((taskId): taskId is string => Boolean(taskId));
 
-    expect(claimedIds).toHaveLength(1);
+    expect(claimedIds).toHaveLength(independent ? 2 : 1);
     expect([first.id, second.id]).toContain(claimedIds[0]);
     expect([store.getTask(first.id)?.status, store.getTask(second.id)?.status].sort())
-      .toEqual(["dispatched", "queued"]);
+      .toEqual(independent ? ["dispatched", "dispatched"] : ["dispatched", "queued"]);
 
     const firstClosed = waitForWorkerPhase(firstWorker, "closed");
     const secondClosed = waitForWorkerPhase(secondWorker, "closed");
@@ -1929,7 +1925,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const second = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "再来一次", workspaceId: ws });
     expect(store.claimTask(runtime.id)?.id).toBe(second.id);
     store.startTask(second.id);
-    store.createIssueComment(issue.id, { authorType: "agent", authorId: agent.id, body: "自己发的回复" });
+    store.createIssueComment(issue.id, { taskId: second.id, authorType: "agent", authorId: agent.id, body: "自己发的回复" });
     const before = store.listIssueComments(issue.id).length;
     store.completeTask(second.id, { output: "narration text" });
     expect(store.listIssueComments(issue.id)).toHaveLength(before);

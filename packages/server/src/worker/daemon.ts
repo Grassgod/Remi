@@ -87,6 +87,7 @@ import {
   assertIssueSessionNativeCodexOAuth,
   cleanupTemporaryTaskProviderHome,
   ensureProviderHomeDirectory,
+  prepareIssueExecutionDirectory,
   loadIssueSessionProviderEnv,
   listIssueSessionRuntimeRoots,
   prepareIssueSessionProviderHome,
@@ -1202,6 +1203,7 @@ export class MultiremiDaemon {
       metadata: {
         version: multiremiVersion,
         cli_version: multiremiVersion,
+        parallel_agent_execution: 1,
         acp_version: this.acpVersion() ?? undefined,
         agent_version: this.agentVersion() ?? undefined,
         launched_by: this.options.launchedBy ?? "manual",
@@ -2580,15 +2582,17 @@ export class MultiremiDaemon {
         const lifecycleKey = task.holdsWorkspace === false
           ? discussionSessionLifecycleKey(task.issueSessionId ?? "")
           : task.issueId;
-        releaseIssueWorkspaceLifecycle = await this.issueWorkspaceLifecycleLocks.acquire(lifecycleKey);
-        this.assertWorkspaceRootOwner();
         if (task.holdsWorkspace !== false && task.issue?.key) {
           const adopted = await this.topicWorkspaces.preparePendingMigrationForIssue(
             task.issueId,
             task.issue.key,
+            true,
           );
           if (adopted) log.info(`Adopted pending Feishu topic workspace for ${task.issue.key}`);
         }
+        releaseIssueWorkspaceLifecycle = await this.issueWorkspaceLifecycleLocks.acquireShared(lifecycleKey);
+        abort.signal.throwIfAborted();
+        this.assertWorkspaceRootOwner();
       }
       resolvedWorkDir = await this.resolveTaskWorkDir(task, abort.signal);
       const issueRuntimeStateRoot = resolveIssueRuntimeStateRoot(
@@ -2922,7 +2926,7 @@ export class MultiremiDaemon {
     if (task.holdsWorkspace === false) return { checkouts: [], repos: [], warnings: [] };
     if (task.issue?.issueKind !== "intake") {
       const prepared = await this.autoCheckoutTaskRepos(task, resolvedWorkDir, syncResults, signal);
-      if (!resolvedWorkDir.localDirectory) {
+      if (!resolvedWorkDir.localDirectory && !task.issueSessionId) {
         await prepareIssueWikiWorkspace(resolvedWorkDir.workDir, task);
       }
       return prepared;
@@ -3262,7 +3266,11 @@ export class MultiremiDaemon {
       throw new Error(`Unsupported Bun Multiremi provider: ${agent.provider}`);
     }
 
-    const workDir = resolvedWorkDir.workDir;
+    const codeWorkDir = resolvedWorkDir.workDir;
+    // Private task metadata/skills, shared repositories referenced by absolute paths.
+    const workDir = task.issueSessionId && providerHome
+      ? await prepareIssueExecutionDirectory(providerHome)
+      : codeWorkDir;
     // Only create dirs the daemon owns. local_directory paths are validated
     // separately and carry ensureDir=false.
     if (resolvedWorkDir.ensureDir) mkdirSync(workDir, { recursive: true });
@@ -3274,7 +3282,11 @@ export class MultiremiDaemon {
     const repoSyncResults = homepageChat || task.holdsWorkspace === false
       ? []
       : await this.registerTaskRepos(task.workspaceId, task.repos ?? [], signal);
-    const preparedWorkspace = await this.prepareTaskWorkspace(task, resolvedWorkDir, repoSyncResults, signal);
+    const preparedWorkspace = await this.issueWorkspaceLifecycleLocks.runExclusive(`prepare:${codeWorkDir}`, () =>
+      this.prepareTaskWorkspace(task, resolvedWorkDir, repoSyncResults, signal));
+    if (task.issueSessionId && task.holdsWorkspace !== false && !resolvedWorkDir.localDirectory) {
+      await prepareIssueWikiWorkspace(workDir, task);
+    }
     this.assertWorkspaceRootOwner();
     try {
       writeTaskContext(workDir, task);
@@ -3363,6 +3375,10 @@ export class MultiremiDaemon {
       const promptArtifact = buildTaskPromptArtifact(task, {
         repoCheckouts: preparedWorkspace.checkouts,
         repoWarnings: preparedWorkspace.warnings,
+        issueWorkspacePath: codeWorkDir,
+        sessionHistoryPaths: task.issueId && this.options.workspacesRoot
+          ? listIssueSessionRuntimeRoots(this.options.workspacesRoot, task.issueId).map((root) => root.root)
+          : undefined,
       });
       this.enqueueTaskReport(task.id, "prompt", {
         mode: promptArtifact.mode,
@@ -3540,7 +3556,7 @@ export class MultiremiDaemon {
     } finally {
       messageBatcher?.close();
       steerFeed.stop();
-      await this.reportIssueWorkspaceAfterRun(task, workDir, preparedWorkspace.repos).catch((err) => {
+      await this.reportIssueWorkspaceAfterRun(task, codeWorkDir, preparedWorkspace.repos).catch((err) => {
         log.warn(`Failed to report final workspace state for ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
       });
       await provider.close?.();

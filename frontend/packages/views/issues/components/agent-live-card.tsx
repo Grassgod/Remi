@@ -304,6 +304,14 @@ export function AgentLiveCard({ issueId, issueSessionId }: AgentLiveCardProps) {
     ),
   ];
   const anyRunning = entries.some((e) => e.task.status === "running");
+  const countStatus = (status: AgentTask["status"]) => entries.filter((e) => e.task.status === status).length;
+  const activitySummary = [
+    countStatus("running") ? t(($) => $.agent_activity.count_running, { count: countStatus("running") }) : null,
+    countStatus("dispatched") ? t(($) => $.agent_activity.count_starting, { count: countStatus("dispatched") }) : null,
+    countStatus("queued") ? t(($) => $.agent_activity.count_queued, { count: countStatus("queued") }) : null,
+    countStatus("awaiting_human") ? t(($) => $.agent_activity.count_awaiting_human, { count: countStatus("awaiting_human") }) : null,
+    countStatus("waiting_local_directory") ? t(($) => $.agent_activity.count_waiting_directory, { count: countStatus("waiting_local_directory") }) : null,
+  ].filter(Boolean).join(" · ");
 
   return (
     // Sticky bar at the top of the main content, above the editable title —
@@ -328,8 +336,8 @@ export function AgentLiveCard({ issueId, issueSessionId }: AgentLiveCardProps) {
                 ) : (
                   <Clock className="h-3 w-3 text-muted-foreground shrink-0" />
                 )}
-                <span className="truncate font-medium text-foreground">
-                  {t(($) => $.agent_activity.hover_header, { count: agentIds.length })}
+                <span className="font-medium text-foreground break-words">
+                  {activitySummary}
                 </span>
               </span>
               <ChevronDown

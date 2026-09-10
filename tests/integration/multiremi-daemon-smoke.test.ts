@@ -1123,6 +1123,57 @@ describe("Bun Multiremi daemon smoke", () => {
     }
   });
 
+  it("runs independent delegations in one Issue concurrently without overwriting task context", async () => {
+    const { store, workDir } = daemonTestBed("multiremi-issue-parallel-");
+    const leader = store.createAgent({ name: "Leader", provider: "claude" });
+    const worker = store.createAgent({ name: "Worker", provider: "claude" });
+    const issue = store.createIssue({ title: "Parallel Issue" });
+    const tasks = ["one", "two"].map((scope) => store.createTask({
+      agentId: worker.id, issueId: issue.id, prompt: scope,
+      delegatedByAgentId: leader.id, delegationId: `dlg_${scope}`,
+    }));
+    const credential = await store.createAccessToken({ name: "Parallel daemon", type: "daemon", workspaceId: "local" });
+    const server = startMultiremiServer({ store, scheduler: null, authToken: "parallel-test", hostname: "127.0.0.1", port: 0 });
+    const release = deferred<void>();
+    const bothStarted = deferred<void>();
+    const contexts = new Map<string, string>();
+    const homes = new Set<string>();
+    const daemon = new MultiremiDaemon({
+      serverUrl: `http://127.0.0.1:${server.port}`, token: credential.token,
+      runtimeName: "parallel", provider: "claude", workspaceId: "local", daemonPort: 0,
+      workspacesRoot: join(workDir, "workspaces"), repoCacheRoot: join(workDir, ".repo-cache"),
+      pollIntervalMs: 25, maxConcurrency: 2,
+      providerFactory: (options) => messageProviderFactory({
+        text: "done", sessionId: options.cwd!, requestId: "parallel",
+        onSend: async () => {
+          const contextPath = join(options.cwd!, ".multiremi", "task.json");
+          const context = readFileSync(contextPath, "utf8");
+          contexts.set(contextPath, context);
+          homes.add(options.env!.CLAUDE_CONFIG_DIR!);
+          if (contexts.size === 2) bothStarted.resolve();
+          await release.promise;
+          expect(readFileSync(contextPath, "utf8")).toBe(context);
+        },
+      })(options),
+    });
+    const running = daemon.start();
+    try {
+      await withTimeout(bothStarted.promise, 5_000, "Issue delegations serialized in daemon");
+      expect(homes.size).toBe(2);
+      expect(tasks.map((task) => store.getTask(task.id)?.status)).toEqual(["running", "running"]);
+      for (const task of tasks) expect([...contexts.values()].some((value) => value.includes(task.id))).toBe(true);
+      expect(store.getIssueWorkspace(issue.id)?.rootPath).toBe(join(workDir, "workspaces", "issues", issue.key));
+      release.resolve();
+      await waitForCondition(() => tasks.every((task) => store.getTask(task.id)?.status === "completed"), 5_000);
+      expect(store.getIssueWorkspace(issue.id)?.rootPath).toBe(join(workDir, "workspaces", "issues", issue.key));
+    } finally {
+      release.resolve();
+      daemon.stop();
+      await running;
+      server.stop(true);
+    }
+  });
+
   it("cancels and drains the background model probe during shutdown", async () => {
     const { store, workDir } = daemonTestBed("multiremi-daemon-model-probe-stop-");
     const daemonToken = await store.createAccessToken({
@@ -1562,7 +1613,7 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(existsSync(join(worktree, "README.md"))).toBe(true);
       const branch = gitOutput(worktree, ["branch", "--show-current"]);
       expect(branch).toBe(`agent/${issue.key}`);
-      expect(prompts[0]).toContain("already checked out into the working directory");
+      expect(prompts[0]).toContain("already checked out on the Issue branch");
       expect(prompts[0]).toContain(`on branch \`${branch}\``);
       expect(prompts[0]).not.toContain("For repositories without a path above");
 
@@ -2033,7 +2084,9 @@ describe("Bun Multiremi daemon smoke", () => {
 
       const completed = store.getTask(task.id)!;
       const issueWorkDir = join(workDir, "workspaces", "issues", issue.key);
-      expect(providerCwd).toBe(issueWorkDir);
+      const executionWorkDir = join(workDir, "workspaces", ".runtime", completed.issueSessionId!, agent.id,
+        String(completed.issueSessionGeneration), "work");
+      expect(providerCwd).toBe(executionWorkDir);
       expect(workspaceAtProviderStart).toMatchObject({
         issueId: issue.id,
         rootPath: issueWorkDir,
@@ -2041,7 +2094,7 @@ describe("Bun Multiremi daemon smoke", () => {
         repos: [],
       });
       expect(completed.status).toBe("completed");
-      expect(completed.workDir).toBe(issueWorkDir);
+      expect(completed.workDir).toBe(executionWorkDir);
       const laneGeneration = completed.issueSessionGeneration ?? completed.issue_session_generation;
       const expectedProviderHome = join(
         workDir,
@@ -2066,7 +2119,7 @@ describe("Bun Multiremi daemon smoke", () => {
         issue_id: issue.id,
         version: 2,
       });
-      expect(JSON.parse(readFileSync(join(issueWorkDir, ".multiremi", "project", "resources.json"), "utf8")).resources).toEqual([]);
+      expect(JSON.parse(readFileSync(join(executionWorkDir, ".multiremi", "project", "resources.json"), "utf8")).resources).toEqual([]);
     } finally {
       server.stop(true);
     }

@@ -3428,12 +3428,12 @@ runMigrations(this.db);
     return this.sessions.listSessionEvents(sessionId, input);
   }
 
-  getOrCreateSessionAgentLane(sessionId: string, agentId: string): MultiremiSessionAgentLane {
-    return this.sessions.getOrCreateSessionAgentLane(sessionId, agentId);
+  getOrCreateSessionAgentLane(sessionId: string, agentId: string, executionScope = ""): MultiremiSessionAgentLane {
+    return this.sessions.getOrCreateSessionAgentLane(sessionId, agentId, executionScope);
   }
 
-  getSessionAgentLane(sessionId: string, agentId: string): MultiremiSessionAgentLane | null {
-    return this.sessions.getSessionAgentLane(sessionId, agentId);
+  getSessionAgentLane(sessionId: string, agentId: string, executionScope = ""): MultiremiSessionAgentLane | null {
+    return this.sessions.getSessionAgentLane(sessionId, agentId, executionScope);
   }
 
   buildTaskSessionProjection(taskId: string): MultiremiSessionProjection | null {
@@ -4152,8 +4152,8 @@ runMigrations(this.db);
     return this.tasks.ensureDelegationWakeup(input);
   }
 
-  resetSessionAgentLane(sessionId: string, agentId: string): MultiremiSessionAgentLane | null {
-    return this.tasks.resetSessionAgentLane(sessionId, agentId);
+  resetSessionAgentLane(sessionId: string, agentId: string, executionScope = ""): MultiremiSessionAgentLane | null {
+    return this.tasks.resetSessionAgentLane(sessionId, agentId, executionScope);
   }
 
   /**

@@ -368,8 +368,8 @@ describe("bootstrap and delta task prompts", () => {
       }],
     });
 
-    expect(prompt).toContain("already checked out into the working directory");
-    expect(prompt).toContain("at `./knowledge` on branch `agent/codex/REMI-1`");
+    expect(prompt).toContain("already checked out on the Issue branch");
+    expect(prompt).toContain("at `/tmp/work/knowledge` on branch `agent/codex/REMI-1`");
   });
 
   it("injects bounded repository failure diagnostics into the agent prompt", () => {

@@ -238,12 +238,14 @@ export class TopicWorkspaceLifecycle {
   }
 
   /** Complete a stamped topic intent while the caller already holds the Issue lock. */
-  async preparePendingMigrationForIssue(issueIdValue: string, issueKeyValue: string): Promise<boolean> {
+  async preparePendingMigrationForIssue(issueIdValue: string, issueKeyValue: string, acquireIssueLock = false): Promise<boolean> {
     const issueId = issueIdValue.trim();
     if (!issueId) throw new Error("issue id is required");
     const issueKey = safeSegment(issueKeyValue, "issue key");
     const candidate = this.findPendingMigration(issueId, issueKey);
     if (!candidate) return false;
+    if (acquireIssueLock) return this.locker.runExclusive(issueId, () =>
+      this.preparePendingMigrationForIssue(issueId, issueKey));
     return this.locker.runExclusive(topicLifecycleKey(candidate.intent.topic_id), async () => {
       this.assertRootOwner();
       const current = readIntent(candidate.cwd);

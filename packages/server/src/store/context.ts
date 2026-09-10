@@ -397,8 +397,8 @@ export interface IssueSessionsSurface {
   createIssueSessionWithinTransaction(issueId: string, input?: CreateIssueSessionInput): MultiremiIssueSession;
   getLatestActiveIssueSession(issueId: string): MultiremiIssueSession | null;
   addSessionParticipant(sessionId: string, input: AddSessionParticipantInput): MultiremiSessionParticipant;
-  getOrCreateSessionAgentLane(sessionId: string, agentId: string): MultiremiSessionAgentLane;
-  getSessionAgentLane(sessionId: string, agentId: string): MultiremiSessionAgentLane | null;
+  getOrCreateSessionAgentLane(sessionId: string, agentId: string, executionScope?: string): MultiremiSessionAgentLane;
+  getSessionAgentLane(sessionId: string, agentId: string, executionScope?: string): MultiremiSessionAgentLane | null;
   appendSessionEvent(sessionId: string, input: {
     authorType: string;
     authorId?: string | null;

@@ -167,7 +167,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     expect(store.claimTask(devbox.id)?.id).toBe(task.id);
   });
 
-  it("serializes one Issue across different agents and runtimes", () => {
+  it("runs one Issue across different agents and runtimes concurrently", () => {
     const store = createStore();
     const codex = store.registerRuntime({ id: "rt_issue_codex", name: "codex", provider: "codex" });
     const claude = store.registerRuntime({ id: "rt_issue_claude", name: "claude", provider: "claude" });
@@ -178,11 +178,11 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     const second = store.createTask({ agentId: claudeAgent.id, issueId: issue.id, prompt: "second" });
 
     expect(store.claimTask(codex.id)?.id).toBe(first.id);
-    expect(store.claimTask(claude.id)).toBeNull();
+    expect(store.claimTask(claude.id)?.id).toBe(second.id);
 
     store.startTask(first.id);
     store.completeTask(first.id, { output: "done" });
-    expect(store.claimTask(claude.id)?.id).toBe(second.id);
+    expect(store.getTask(second.id)?.status).toBe("dispatched");
   });
 
   it("pins follow-up Issue tasks to the runtime that owns its workspace", () => {
@@ -309,7 +309,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
       id: "rt_current_issue_workspace",
       name: "current",
       provider: "codex",
-      metadata: { cli_version: "v0.2.26" },
+      metadata: { cli_version: "v0.2.26", parallel_agent_execution: 1 },
     });
     const agent = store.createAgent({ name: "Workspace Agent", provider: "codex" });
     const issue = store.createIssue({ title: "Use persistent workspace", workspaceId: "local" });
