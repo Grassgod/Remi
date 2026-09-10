@@ -267,6 +267,42 @@ describe("useRealtimeSync — registration / teardown parity", () => {
     expect(pluginInvalidations).toHaveLength(2);
   });
 
+  it("uses a longer debounce for workspace task aggregates", () => {
+    vi.useFakeTimers();
+    const mock = createRecordingWs();
+    renderHook(() => useRealtimeSync(mock.ws, stores), { wrapper: createWrapper(qc) });
+    const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+    const invalidatedKeys = () => invalidateSpy.mock.calls.map((call) => call[0]?.queryKey);
+
+    mock.emit("task:queued", {});
+    vi.advanceTimersByTime(100);
+
+    expect(invalidatedKeys()).toContainEqual(["workspaces", "ws-1", "agent-tasks"]);
+    expect(invalidatedKeys()).toContainEqual(["issues", "tasks"]);
+    expect(invalidatedKeys()).not.toContainEqual(["workspaces", "ws-1", "agent-task-snapshot", "list"]);
+    expect(invalidatedKeys()).not.toContainEqual(["workspaces", "ws-1", "agent-activity", "30d"]);
+    expect(invalidatedKeys()).not.toContainEqual(["workspaces", "ws-1", "agent-run-counts", "30d"]);
+
+    vi.advanceTimersByTime(2_800);
+    mock.emit("task:running", {});
+    vi.advanceTimersByTime(100);
+    expect(invalidatedKeys()).not.toContainEqual(["workspaces", "ws-1", "agent-task-snapshot", "list"]);
+
+    vi.advanceTimersByTime(2_899);
+    expect(invalidatedKeys()).not.toContainEqual(["workspaces", "ws-1", "agent-task-snapshot", "list"]);
+    vi.advanceTimersByTime(1);
+
+    expect(invalidatedKeys().filter((key) => JSON.stringify(key) === JSON.stringify([
+      "workspaces", "ws-1", "agent-task-snapshot", "list",
+    ]))).toHaveLength(1);
+    expect(invalidatedKeys().filter((key) => JSON.stringify(key) === JSON.stringify([
+      "workspaces", "ws-1", "agent-activity", "30d",
+    ]))).toHaveLength(1);
+    expect(invalidatedKeys().filter((key) => JSON.stringify(key) === JSON.stringify([
+      "workspaces", "ws-1", "agent-run-counts", "30d",
+    ]))).toHaveLength(1);
+  });
+
   it("invalidates all daemon-owned state when a daemon is retired", () => {
     vi.useFakeTimers();
     const mock = createRecordingWs();

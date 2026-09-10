@@ -22,6 +22,10 @@ import { onInboxInvalidate } from "../../inbox/ws-updaters";
 import { workspaceKeys } from "../../workspace/queries";
 import type { SyncContext } from "./types";
 
+const PREFIX_REFRESH_DELAY_MS = 100;
+const TASK_WORKSPACE_AGGREGATE_REFRESH_DELAY_MS = 3_000;
+const TASK_WORKSPACE_AGGREGATE_TIMER_KEY = "task:workspace-aggregates";
+
 export function invalidateSquadMemberStatusQueries(qc: QueryClient, wsId: string): void {
   qc.invalidateQueries({
     predicate: (query) => {
@@ -46,6 +50,14 @@ export function createPrefixRefresh({ qc, authStore }: SyncContext): {
   onAny: (msg: WSMessage) => void;
   dispose: () => void;
 } {
+  const refreshTaskWorkspaceAggregates = () => {
+    const wsId = getCurrentWsId();
+    if (!wsId) return;
+    qc.invalidateQueries({ queryKey: agentTaskSnapshotKeys.list(wsId) });
+    qc.invalidateQueries({ queryKey: agentActivityKeys.last30d(wsId) });
+    qc.invalidateQueries({ queryKey: agentRunCountsKeys.last30d(wsId) });
+  };
+
   const refreshMap: Record<string, () => void> = {
     inbox: () => {
       const wsId = getCurrentWsId();
@@ -157,24 +169,9 @@ export function createPrefixRefresh({ qc, authStore }: SyncContext): {
       const wsId = getCurrentWsId();
       if (wsId) qc.invalidateQueries({ queryKey: scmKeys.all(wsId) });
     },
-    // Powers the agent presence cache: any task lifecycle change
-    // (dispatch / completed / failed / cancelled) refreshes the
-    // workspace-wide agent-task-snapshot query so per-agent presence
-    // reflects the change. task:message is NOT in this prefix path — it
-    // stays in specificEvents to avoid an invalidate storm during long runs.
     task: () => {
       const wsId = getCurrentWsId();
       if (!wsId) return;
-      qc.invalidateQueries({ queryKey: agentTaskSnapshotKeys.list(wsId) });
-      // 30d activity series shares the same lifecycle signal — any task
-      // completion / failure shifts the histogram. (Dispatch alone
-      // doesn't change a completed_at-anchored series, but invalidating
-      // here keeps the WS-handler shape uniform; the resulting refetch
-      // is cheap.) Both the list (trailing 7d slice) and the detail
-      // panel read off this single cache.
-      qc.invalidateQueries({ queryKey: agentActivityKeys.last30d(wsId) });
-      // 30-day run count likewise increments per task lifecycle event.
-      qc.invalidateQueries({ queryKey: agentRunCountsKeys.last30d(wsId) });
       // Per-agent task list (Activity tab "Recent work"). Prefix match
       // catches every agent's list — the per-agent detail key sits
       // under agentTasks/<wsId>/<agentId>.
@@ -198,15 +195,15 @@ export function createPrefixRefresh({ qc, authStore }: SyncContext): {
   };
 
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
-  const debouncedRefresh = (prefix: string, fn: () => void) => {
-    const existing = timers.get(prefix);
+  const debouncedRefresh = (key: string, fn: () => void, delayMs = PREFIX_REFRESH_DELAY_MS) => {
+    const existing = timers.get(key);
     if (existing) clearTimeout(existing);
     timers.set(
-      prefix,
+      key,
       setTimeout(() => {
-        timers.delete(prefix);
+        timers.delete(key);
         fn();
-      }, 100),
+      }, delayMs),
     );
   };
 
@@ -215,7 +212,15 @@ export function createPrefixRefresh({ qc, authStore }: SyncContext): {
       if (SPECIFIC_EVENTS.has(msg.type)) return;
       const prefix = msg.type.split(":")[0] ?? "";
       const refresh = refreshMap[prefix];
-      if (refresh) debouncedRefresh(prefix, refresh);
+      if (!refresh) return;
+      debouncedRefresh(prefix, refresh);
+      if (prefix === "task") {
+        debouncedRefresh(
+          TASK_WORKSPACE_AGGREGATE_TIMER_KEY,
+          refreshTaskWorkspaceAggregates,
+          TASK_WORKSPACE_AGGREGATE_REFRESH_DELAY_MS,
+        );
+      }
     },
     dispose: () => {
       timers.forEach(clearTimeout);
