@@ -255,7 +255,8 @@ export function withSkillCreateRequestContext(
   store: MultiremiStore,
   input: CreateSkillInput,
 ): CreateSkillInput | Response {
-  const workspaceId = requestedSkillWorkspaceId(c, input);
+  const workspaceId = requestedSkillWorkspaceId(c, store, input);
+  if (workspaceId instanceof Response) return workspaceId;
   const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
   if (denied) return denied;
   const userId = currentRequestUserId(c);
@@ -273,7 +274,8 @@ export function withSkillImportRequestContext(
   store: MultiremiStore,
   input: ImportSkillInput,
 ): ImportSkillInput | Response {
-  const workspaceId = requestedSkillWorkspaceId(c, input);
+  const workspaceId = requestedSkillWorkspaceId(c, store, input);
+  if (workspaceId instanceof Response) return workspaceId;
   const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
   if (denied) return denied;
   const userId = currentRequestUserId(c);
@@ -305,7 +307,10 @@ export function loadSkillForCurrentUser(
   const skill = store.getSkill(skillId);
   if (!skill) return c.json({ error: "skill not found" }, 404);
   const workspaceId = skillWorkspaceId(skill);
-  if (requestedSkillWorkspaceId(c) !== workspaceId) return c.json({ error: "skill not found" }, 404);
+  // A skill ID determines its workspace. Preserve an explicit query constraint,
+  // but do not let a login token or the currently viewed workspace hide it.
+  const explicitWorkspaceId = cleanString(c.req.query("workspaceId")) ?? cleanString(c.req.query("workspace_id"));
+  if (explicitWorkspaceId && explicitWorkspaceId !== workspaceId) return c.json({ error: "skill not found" }, 404);
   const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
   if (denied) return c.json({ error: "skill not found" }, 404);
   return { skill };

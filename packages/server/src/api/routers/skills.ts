@@ -36,7 +36,8 @@ export function registerSkillRoutes(app: Hono, deps: RouterDeps): void {
   const { store } = deps;
 
   app.get("/api/multiremi/skills", (c) => {
-    const workspaceId = requestedSkillWorkspaceId(c);
+    const workspaceId = requestedSkillWorkspaceId(c, store);
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const includeFiles = c.req.query("includeFiles") === "true";
@@ -73,10 +74,11 @@ export function registerSkillRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
   app.get("/api/multiremi/skills/search", (c) => {
-    const workspaceId = requestedSkillWorkspaceId(c);
+    const workspaceId = requestedSkillWorkspaceId(c, store);
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    const result = searchSkillsResponse(store, c);
+    const result = searchSkillsResponse(store, c, workspaceId);
     return c.json({ ...result, total: result.skills.length });
   });
   app.get("/api/multiremi/skills/:id", (c) => {
@@ -122,14 +124,19 @@ export function registerSkillRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
   app.get("/api/skills", (c) => {
-    const workspaceId = requestedSkillWorkspaceId(c);
+    const workspaceId = requestedSkillWorkspaceId(c, store);
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     return c.json(store.listSkills(workspaceId, { includeFiles: false }).map(skillSummaryCompatibilityResponse));
   });
   app.get("/api/skills/search", (c) => {
     if (!String(c.req.query("q") ?? "").trim()) return c.json({ error: "query is required" }, 400);
-    return c.json(searchSkillsResponse(store, c).skills);
+    const workspaceId = requestedSkillWorkspaceId(c, store);
+    if (workspaceId instanceof Response) return workspaceId;
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    return c.json(searchSkillsResponse(store, c, workspaceId).skills);
   });
   app.post("/api/skills", async (c) => {
     const body = await readJsonStrict<CreateSkillInput>(c);

@@ -29,7 +29,8 @@ export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
   const { store } = deps;
 
   app.get("/api/multiremi/chats", (c) => {
-    const workspaceId = requestedChatWorkspaceId(c);
+    const workspaceId = requestedChatWorkspaceId(c, store);
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const sessions = store.listChatSessions(workspaceId, {
@@ -74,7 +75,8 @@ export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
     return c.json({ ...result, task: taskPublicResponse(result.task) }, 201);
   });
   app.get("/api/chat/sessions", (c) => {
-    const workspaceId = requestedChatWorkspaceId(c);
+    const workspaceId = requestedChatWorkspaceId(c, store);
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     return c.json(store.listChatSessions(workspaceId, {
@@ -210,7 +212,8 @@ export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
   app.get("/api/chat/pending-tasks", (c) => {
-    const workspaceId = requestedChatWorkspaceId(c);
+    const workspaceId = requestedChatWorkspaceId(c, store);
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const tasks = store.listPendingChatTasks(workspaceId, { creatorId: currentRequestUserId(c) })
