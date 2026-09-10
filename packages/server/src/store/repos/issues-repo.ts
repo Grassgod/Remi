@@ -2240,6 +2240,13 @@ export class IssuesRepo {
     return this.listLabelsForIssue(issueId);
   }
 
+  getInboxItem(id: string): MultiremiInboxItem | null {
+    const row = this.ctx.db.query("SELECT * FROM multiremi_inbox_items WHERE id = ?").get(id) as Row | null;
+    if (!row) return null;
+    const issueId = nullableString(row.issue_id);
+    return toInboxItem(row, issueId ? this.getIssue(issueId) : null);
+  }
+
   listInboxItems(memberId?: string | null): MultiremiInboxItem[] {
     const resolvedMemberId = memberId ?? this.ctx.workspaces().listWorkspaceMembers()[0]?.id ?? null;
     if (!resolvedMemberId) return [];

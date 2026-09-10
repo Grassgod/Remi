@@ -1,3 +1,4 @@
+import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
 import type { Context, Hono } from "hono";
 import {
   denyCurrentUserWorkspaceAccess,
@@ -20,7 +21,8 @@ export function registerDaemonRetirementRoutes(app: Hono, deps: RouterDeps): voi
   const { store } = deps;
 
   app.get("/api/daemons/:daemonId", (c) => {
-    const workspaceId = requestedWorkspaceId(c);
+    const workspaceId = requestedWorkspaceId(c, store);
+    if (workspaceId instanceof Response) return workspaceId;
     const daemonId = String(c.req.param("daemonId") ?? "").trim();
     if (!daemonId) return c.json({ error: "daemon_id is required", code: "daemon_id_required" }, 400);
     const access = loadHumanWorkspaceAccess(c, deps, workspaceId);
@@ -58,7 +60,8 @@ export function registerDaemonRetirementRoutes(app: Hono, deps: RouterDeps): voi
       dedicated?: unknown;
     }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const workspaceId = requestedWorkspaceId(c, body);
+    const workspaceId = requestedWorkspaceId(c, store, body);
+    if (workspaceId instanceof Response) return workspaceId;
     const daemonId = String(c.req.param("daemonId") ?? "").trim();
     if (!daemonId) return c.json({ error: "daemon_id is required", code: "daemon_id_required" }, 400);
     const access = authorizeDaemonRetirement(c, deps, workspaceId, daemonId);
@@ -97,7 +100,8 @@ export function registerDaemonRetirementRoutes(app: Hono, deps: RouterDeps): voi
   });
 
   app.get("/api/multiremi/daemons", (c) => {
-    const workspaceId = requestedWorkspaceId(c);
+    const workspaceId = requestedWorkspaceId(c, store);
+    if (workspaceId instanceof Response) return workspaceId;
     const access = loadHumanWorkspaceAccess(c, deps, workspaceId);
     if (access instanceof Response) return access;
     const actorId = currentRequestUserId(c);
@@ -118,7 +122,8 @@ export function registerDaemonRetirementRoutes(app: Hono, deps: RouterDeps): voi
   });
 
   app.get("/api/multiremi/daemons/:daemonId/retirement-plan", (c) => {
-    const workspaceId = requestedWorkspaceId(c);
+    const workspaceId = requestedWorkspaceId(c, store);
+    if (workspaceId instanceof Response) return workspaceId;
     const daemonId = String(c.req.param("daemonId") ?? "").trim();
     if (!daemonId) return c.json({ error: "daemon_id is required", code: "daemon_id_required" }, 400);
     const access = authorizeDaemonRetirement(c, deps, workspaceId, daemonId);
@@ -138,7 +143,8 @@ export function registerDaemonRetirementRoutes(app: Hono, deps: RouterDeps): voi
       abandon_issue_workspaces?: boolean | null;
     }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const workspaceId = requestedWorkspaceId(c, body);
+    const workspaceId = requestedWorkspaceId(c, store, body);
+    if (workspaceId instanceof Response) return workspaceId;
     const daemonId = String(c.req.param("daemonId") ?? "").trim();
     if (!daemonId) return c.json({ error: "daemon_id is required", code: "daemon_id_required" }, 400);
     const access = authorizeDaemonRetirement(c, deps, workspaceId, daemonId);
@@ -278,15 +284,12 @@ function retirementRekeyResponse(
 
 function requestedWorkspaceId(
   c: Context,
+  store: RouterDeps["store"],
   input: { workspaceId?: string | null; workspace_id?: string | null } = {},
-): string {
-  return String(
-    input.workspaceId
-      ?? input.workspace_id
-      ?? c.req.query("workspace_id")
-      ?? c.req.query("workspaceId")
-      ?? "local",
-  ).trim() || "local";
+): string | Response {
+  return resolveRequestWorkspaceId(c, store,
+    input.workspaceId ?? input.workspace_id ?? c.req.query("workspace_id") ?? c.req.query("workspaceId"),
+  );
 }
 
 function loadHumanWorkspaceAccess(

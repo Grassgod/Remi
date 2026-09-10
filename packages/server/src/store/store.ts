@@ -3205,6 +3205,10 @@ runMigrations(this.db);
     return this.issues.detachLabelFromIssue(issueId, labelId, activity);
   }
 
+  getInboxItem(id: string): MultiremiInboxItem | null {
+    return this.issues.getInboxItem(id);
+  }
+
   listInboxItems(memberId?: string | null): MultiremiInboxItem[] {
     return this.issues.listInboxItems(memberId);
   }

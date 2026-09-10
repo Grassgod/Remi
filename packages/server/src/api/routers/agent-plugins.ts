@@ -1,3 +1,4 @@
+import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
 import type { Context, Hono } from "hono";
 import {
   denyCurrentUserWorkspaceAccess,
@@ -12,6 +13,7 @@ import {
 import {
   currentRequestUserId,
   currentAccessToken,
+  cleanString,
   currentWorkspaceRoleStrict,
   daemonAgentPluginDesiredResponse,
   daemonAgentPluginStateResponse,
@@ -39,7 +41,8 @@ export function registerAgentPluginRoutes(app: Hono, deps: RouterDeps): void {
   const { store, authToken } = deps;
 
   app.get("/api/multiremi/agent-plugins", (c) => {
-    const workspaceId = requestedWorkspaceId(c);
+    const workspaceId = requestedWorkspaceId(c, store);
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     try {
@@ -56,7 +59,8 @@ export function registerAgentPluginRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/multiremi/agent-plugins/inspect", async (c) => {
     const body = await readJsonStrict<InspectAgentPluginRepositoryInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const workspaceId = requestedWorkspaceId(c, body);
+    const workspaceId = requestedWorkspaceId(c, store, body);
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = requireWorkspaceManager(c, deps, workspaceId);
     if (denied) return denied;
     try {
@@ -79,7 +83,8 @@ export function registerAgentPluginRoutes(app: Hono, deps: RouterDeps): void {
     if (body.id && !target) {
       return c.json({ error: "plugin not found", code: "plugin_not_found" }, 404);
     }
-    const workspaceId = requestedWorkspaceId(c, body, target?.workspaceId ?? "local");
+    const workspaceId = requestedWorkspaceId(c, store, body, target?.workspaceId);
+    if (workspaceId instanceof Response) return workspaceId;
     const denied = requireWorkspaceManager(c, deps, target?.workspaceId ?? workspaceId);
     if (denied) {
       if (target && denied.status === 404) {
@@ -537,16 +542,17 @@ function requiredString(value: unknown, field: string): string {
 
 function requestedWorkspaceId(
   c: Context,
+  store: RouterDeps["store"],
   input: { workspaceId?: string | null; workspace_id?: string | null } = {},
-  fallback = "local",
-): string {
-  return String(
-    input.workspaceId
-      ?? input.workspace_id
-      ?? c.req.query("workspace_id")
-      ?? c.req.query("workspaceId")
-      ?? fallback,
-  ).trim() || fallback;
+  fallback?: string,
+): string | Response {
+  const explicitId = cleanString(input.workspaceId) ?? cleanString(input.workspace_id)
+    ?? cleanString(c.req.query("workspace_id")) ?? cleanString(c.req.query("workspaceId"));
+  // Re-importing a plugin without a selector keeps its resource workspace.
+  // A supplied selector, including an unknown slug, must still be resolved.
+  if (!explicitId && !cleanString(c.req.header("X-Workspace-ID"))
+    && !cleanString(c.req.header("X-Workspace-Slug")) && fallback) return fallback;
+  return resolveRequestWorkspaceId(c, store, explicitId);
 }
 
 function requireWorkspaceManager(c: Context, deps: RouterDeps, workspaceId: string): Response | null {

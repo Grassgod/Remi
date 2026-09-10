@@ -343,20 +343,30 @@ export function compatibilityUserId(c: Context): string {
     "local";
 }
 
-export function compatibilityInboxMemberId(c: Context, store: MultiremiStore): string {
-  const raw = authenticatedRequestUserId(c) ??
-    cleanString(c.req.query("member_id")) ??
-    "local";
-  // Inbox rows are keyed by member-table ids (mem_<ws>_<user>) — every
-  // createInboxItem writer passes a member id — while auth yields the USER id.
-  // Querying with the raw user id silently returns an empty inbox (MUL-38: 151
-  // unread notifications invisible in the web UI). Accept an exact member id
-  // untouched; otherwise resolve the user's membership, scoped to the request's
-  // workspace when the slug header names one.
-  if (store.getWorkspaceMember(raw)) return raw;
-  const workspaceId = workspaceIdFromSlugHeader(c, store);
-  const membership = store.listWorkspaceMembers(workspaceId).find((member) => member.userId === raw);
-  return membership?.id ?? raw;
+export function compatibilityInboxMemberId(
+  c: Context,
+  store: MultiremiStore,
+  requestedMemberId = c.req.query("member_id"),
+): string | Response {
+  const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspaceId") ?? c.req.query("workspace_id"));
+  if (workspaceId instanceof Response) return workspaceId;
+  const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+  if (denied) return denied;
+  const userId = authenticatedRequestUserId(c);
+  const requested = cleanString(requestedMemberId);
+  const raw = requested ?? userId ?? "local";
+  // Inbox rows use member ids. Resolve only inside the selected workspace,
+  // and never let a human/task credential select another member's inbox.
+  const exact = store.getWorkspaceMember(raw);
+  const member = (exact?.workspaceId === workspaceId ? exact : null)
+    ?? store.listWorkspaceMembers(workspaceId).find((candidate) => candidate.userId === raw)
+    ?? exact;
+  if (member && (member.workspaceId !== workspaceId
+    || (userId && member.userId !== userId && member.id !== userId))) {
+    return c.json({ error: "inbox not found" }, 404);
+  }
+  if (userId && !member) return c.json({ error: "inbox not found" }, 404);
+  return member?.id ?? raw;
 }
 
 export function denyCurrentUserRuntimeWorkspaceAccess(c: Context, store: MultiremiStore, runtime: MultiremiRuntime): Response | null {
