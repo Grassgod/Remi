@@ -471,7 +471,8 @@ export function isChatRealtimeEvent(type: string): boolean {
     || type === "chat:done"
     || type === "chat:session_read"
     || type === "chat:session_deleted"
-    || type === "chat:session_updated";
+    || type === "chat:session_updated"
+    || type === "chat:queue_updated";
 }
 
 export function chatEventSessionId(event: {
@@ -825,6 +826,7 @@ export function parseDaemonWebSocketHeartbeat(event: Record<string, any>): {
   runtimeId: string | null;
   supportsBatchImport: boolean;
   supportsDirectoryScan: boolean;
+  supportsSkillDirectory: boolean;
   agentPluginProtocol: number | undefined;
   sshMeshProtocol: number | undefined;
   sshMeshStatus: MultiremiDaemonSshMeshStatus | undefined;
@@ -846,6 +848,7 @@ export function parseDaemonWebSocketHeartbeat(event: Record<string, any>): {
     runtimeId,
     supportsBatchImport: Boolean(payload.supports_batch_import ?? event.supports_batch_import),
     supportsDirectoryScan: Boolean(payload.supports_directory_scan ?? event.supports_directory_scan),
+    supportsSkillDirectory: (payload.supports_skill_directory ?? event.supports_skill_directory) === true,
     agentPluginProtocol: protocolValue === undefined
       ? undefined
       : normalizeProtocolVersion(protocolValue),

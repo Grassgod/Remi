@@ -1,10 +1,14 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { CommandRegistry, CliError, type CommandSpec } from "../../../apps/remi/cli/core/index.js";
 import { operationsCommandSpecs } from "../../../apps/remi/cli/commands/operations.js";
 
 const realFetch = globalThis.fetch;
 const realLog = console.log;
 const realError = console.error;
+const tempDirectories: string[] = [];
 const savedEnv = {
   server: process.env.MULTIREMI_SERVER_URL,
   workspace: process.env.MULTIREMI_WORKSPACE_ID,
@@ -16,12 +20,77 @@ afterEach(() => {
   globalThis.fetch = realFetch;
   console.log = realLog;
   console.error = realError;
+  for (const directory of tempDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
   restoreEnv("MULTIREMI_SERVER_URL", savedEnv.server);
   restoreEnv("MULTIREMI_WORKSPACE_ID", savedEnv.workspace);
   restoreEnv("MULTIREMI_TOKEN", savedEnv.token);
 });
 
 describe("operations CLI contracts", () => {
+  it("scans the selected runtime directory without expanding it on the CLI machine", async () => {
+    useCliEnv();
+    const spec = specById("runtime.skill.scan");
+    const bodies: unknown[] = [];
+    globalThis.fetch = capabilityFetch(spec.id, async (request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/runtimes") return Response.json([{ id: "rt_local", name: "Laptop" }]);
+      expect(request.method).toBe("POST");
+      expect(path).toBe("/api/runtimes/rt_local/local-skills");
+      expect(request.headers.get("Authorization")).toBe("Bearer test-token");
+      bodies.push(await request.json());
+      return Response.json({ id: "scan_1", status: "pending" });
+    });
+
+    await capture(() => registryFor([spec]).execute([
+      "runtime", "skill", "scan", "Laptop", "--root", "~/.agents/skills", "--json",
+    ]));
+    await capture(() => registryFor([spec]).execute([
+      "runtime", "skill", "scan", "Laptop", "--data", '{"root":"/opt/shared skills"}', "--json",
+    ]));
+    await capture(() => registryFor([spec]).execute(["runtime", "skill", "scan", "Laptop", "--json"]));
+
+    expect(bodies).toEqual([{ root: "~/.agents/skills" }, { root: "/opt/shared skills" }, {}]);
+  });
+
+  it("imports a selected scan skill with explicit fields while retaining JSON file input", async () => {
+    useCliEnv();
+    const spec = specById("runtime.skill.import");
+    const directory = mkdtempSync(join(tmpdir(), "remi-cli-skill-import-"));
+    tempDirectories.push(directory);
+    const inputPath = join(directory, "import.json");
+    writeFileSync(inputPath, JSON.stringify({
+      scan_request_id: "old_scan", skill_key: "old-key", name: "From file", description: "From file description",
+    }));
+    let body: unknown;
+    globalThis.fetch = capabilityFetch(spec.id, async (request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/runtimes") return Response.json([{ id: "rt_local", name: "Laptop" }]);
+      expect(request.method).toBe("POST");
+      expect(path).toBe("/api/runtimes/rt_local/local-skills/import");
+      body = await request.json();
+      return Response.json({ id: "import_1", status: "pending" });
+    });
+
+    await capture(() => registryFor([spec]).execute([
+      "runtime", "skill", "import", "Laptop", "--file", inputPath,
+      "--scan-request", "scan_1", "--key", ".", "--name", "Root skill", "--json",
+    ]));
+    expect(body).toEqual({
+      scan_request_id: "scan_1", skill_key: ".", name: "Root skill", description: "From file description",
+    });
+
+    await capture(() => registryFor([spec]).execute([
+      "runtime", "skill", "import", "Laptop", "--scan-request", "scan_2",
+      "--key", ".system/nested/skill", "--description", "Explicit description", "--json",
+    ]));
+    expect(body).toEqual({ scan_request_id: "scan_2", skill_key: ".system/nested/skill", description: "Explicit description" });
+
+    await capture(() => registryFor([spec]).execute([
+      "runtime", "skill", "import", "Laptop", "--data", '{"skill_key":"legacy-skill","name":"Legacy skill"}', "--json",
+    ]));
+    expect(body).toEqual({ skill_key: "legacy-skill", name: "Legacy skill" });
+  });
+
   it("advertises task parity for platform operations while keeping control-plane administration denied", () => {
     const registry = registryFor(specs);
     const inventory = new Map(registry.inventory().map((entry) => [entry.id, entry]));

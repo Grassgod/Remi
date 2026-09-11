@@ -156,6 +156,11 @@ interface TaskTerminalFollowUps {
   roundPushTasks: MultiremiTask[];
 }
 
+export interface CancelTaskResult {
+  task: MultiremiTask;
+  followUps: TaskTerminalFollowUps;
+}
+
 export interface RedispatchTaskResult {
   cancelled: MultiremiTask;
   replacement: MultiremiTask;
@@ -543,6 +548,13 @@ export class TasksRepo {
         now,
       ],
     );
+    if (chatSession) {
+      const retryParent = attempt > 1 && parentTask?.chatSessionId === chatSession.id ? parentTask.id : null;
+      this.ctx.db.run(`UPDATE multiremi_tasks SET chat_queue_order = COALESCE(
+        (SELECT chat_queue_order FROM multiremi_tasks WHERE id = ?),
+        (SELECT COALESCE(MAX(chat_queue_order), 0) + 1 FROM multiremi_tasks WHERE chat_session_id = ?))
+        WHERE id = ?`, [retryParent, chatSession.id, id]);
+    }
     if (inheritedPluginSnapshot) this.replaceTaskPluginSnapshotIndex(id, inheritedPluginSnapshot, now);
     if (issueSession) {
       this.ctx.issueSessions().addSessionParticipant(issueSession.id, {
@@ -942,6 +954,7 @@ export class TasksRepo {
       const stale = this.reclaimStaleDispatchedTaskForRuntime(runtimeId);
       if (stale) return this.snapshotTaskExecution(stale, lockedRuntime);
 
+      this.refreshQueuedChatAffinity(lockedRuntime.workspaceId ?? "local");
       const claimed = this.claimNextTaskForRuntime(lockedRuntime);
       return claimed ? this.snapshotTaskExecution(claimed, lockedRuntime) : null;
     });
@@ -1242,6 +1255,30 @@ export class TasksRepo {
     return task;
   }
 
+  /** Queued user turns inherit the last completed turn at claim time. Retries
+   * (attempt > 1) keep their explicitly chosen resume/reset behavior. */
+  private refreshQueuedChatAffinity(workspaceId: string): void {
+    const rows = this.ctx.db.query(`SELECT t.id FROM multiremi_tasks t WHERE t.workspace_id = ?
+      AND t.chat_session_id IS NOT NULL AND t.status = 'queued' AND t.execution_fingerprint IS NULL AND t.attempt = 1
+      AND EXISTS (SELECT 1 FROM multiremi_chat_messages m WHERE m.task_id = t.id AND m.role = 'user')`).all(workspaceId) as Row[];
+    for (const row of rows) {
+      const task = this.getTask(String(row.id))!;
+      const chat = this.ctx.chat().getChatSession(task.chatSessionId!);
+      const agent = this.ctx.agents().getAgent(task.agentId);
+      if (!chat || !agent || chat.status === "archived" || agent.archivedAt) continue;
+      const plugins = this.ctx.agentPlugins().resolveAgentPluginSnapshot(agent.id);
+      const fingerprint = this.ctx.agentPlugins().getAgentPluginCapabilityRevision(agent.id);
+      const issue = task.issueId ? this.ctx.issues().getIssue(task.issueId) : null;
+      const affinity = this.resolveTaskAffinity(agent, chat, issue, task.holdsWorkspace, fingerprint, plugins.length > 0);
+      const runtimeId = affinity.runtimeId ?? (task.sessionId ? agent.runtimeId : task.runtimeId);
+      const inherit = affinity.inheritChatSession;
+      if (task.runtimeId === runtimeId && task.sessionId === (inherit ? chat.sessionId : null) && task.workDir === (inherit ? chat.workDir : null)) continue;
+      this.ctx.db.run(`UPDATE multiremi_tasks SET runtime_id = ?, session_id = ?, work_dir = ?
+        WHERE id = ? AND status = 'queued' AND execution_fingerprint IS NULL`,
+        [runtimeId, inherit ? chat.sessionId : null, inherit ? chat.workDir : null, task.id]);
+    }
+  }
+
   private claimNextTaskForRuntime(runtime: MultiremiRuntime): MultiremiTaskWithAgent | null {
     const now = nowIso();
     const deviceRouting = this.runtimeDeviceRoutingContext(runtime);
@@ -1290,9 +1327,20 @@ export class TasksRepo {
          SELECT t.id
          FROM multiremi_tasks t
          JOIN multiremi_agents a ON a.id = t.agent_id
+         LEFT JOIN multiremi_chat_sessions project_chat ON project_chat.id = t.chat_session_id
          LEFT JOIN multiremi_issues project_issue ON project_issue.id = t.issue_id
          WHERE t.status = 'queued'
            AND a.archived_at IS NULL
+           AND (t.chat_session_id IS NULL OR project_chat.status = 'active')
+           AND NOT EXISTS (
+             SELECT 1 FROM multiremi_tasks earlier WHERE earlier.chat_session_id = t.chat_session_id
+               AND earlier.status = 'queued' AND (
+                 earlier.priority > t.priority
+                 OR (earlier.priority = t.priority AND earlier.chat_queue_order < t.chat_queue_order)
+                 OR (earlier.priority = t.priority AND earlier.chat_queue_order = t.chat_queue_order AND earlier.created_at < t.created_at)
+                 OR (earlier.priority = t.priority AND earlier.chat_queue_order = t.chat_queue_order AND earlier.created_at = t.created_at AND earlier.id < t.id)
+               )
+           )
            AND a.workspace_id = t.workspace_id
            AND (
              SELECT COUNT(*)
@@ -1931,17 +1979,20 @@ export class TasksRepo {
   }
 
   cancelTask(taskId: string): MultiremiTask {
-    const initial = this.getTask(taskId);
-    if (!initial) throw new Error(`Task not found or terminal: ${taskId}`);
-    const terminal = this.ctx.db.transaction(() => {
-      this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
-      const current = this.getTask(taskId);
-      if (!current || current.workspaceId !== initial.workspaceId) throw new Error(`Task not found or terminal: ${taskId}`);
-      this.lockTaskIssueSessionsWithinWorkspaceLock([current]);
-      return this.cancelTaskWithinWorkspaceLock(current);
-    })();
+    const terminal = this.ctx.db.transaction(() => this.cancelTaskWithinTransaction(taskId))();
     this.notifyCancelledTask(terminal);
     return terminal.task;
+  }
+
+  /** Caller commits before invoking notifyCancelledTask. */
+  cancelTaskWithinTransaction(taskId: string): CancelTaskResult {
+    const initial = this.getTask(taskId);
+    if (!initial) throw new Error(`Task not found or terminal: ${taskId}`);
+    this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
+    const current = this.getTask(taskId);
+    if (!current || current.workspaceId !== initial.workspaceId) throw new Error(`Task not found or terminal: ${taskId}`);
+    this.lockTaskIssueSessionsWithinWorkspaceLock([current]);
+    return this.cancelTaskWithinWorkspaceLock(current);
   }
 
   /** Caller owns the outer transaction; notifications are deferred until it commits. */
@@ -2983,10 +3034,7 @@ export class TasksRepo {
     };
   }
 
-  private notifyCancelledTask(terminal: {
-    task: MultiremiTask;
-    followUps: TaskTerminalFollowUps;
-  }): void {
+  notifyCancelledTask(terminal: CancelTaskResult): void {
     for (const delegationReturn of terminal.followUps.delegationReturns) {
       this.ctx.notifyTaskEnqueued(delegationReturn);
     }

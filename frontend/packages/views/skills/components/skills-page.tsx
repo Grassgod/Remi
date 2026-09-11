@@ -5,6 +5,7 @@ import {
   AlertCircle,
   AlertTriangle,
   BookOpen,
+  Download,
   Plus,
   Search,
 } from "lucide-react";
@@ -56,9 +57,11 @@ const SCOPE_KEYS: FilterKey[] = ["all", "used", "unused", "mine"];
 function PageHeaderBar({
   totalCount,
   onCreate,
+  onRuntimeImport,
 }: {
   totalCount: number;
   onCreate: () => void;
+  onRuntimeImport: () => void;
 }) {
   const { t } = useT("skills");
   return (
@@ -75,10 +78,16 @@ function PageHeaderBar({
           {t(($) => $.page.tagline)}
         </p>
       </div>
-      <Button type="button" size="sm" onClick={onCreate}>
-        <Plus className="h-3 w-3" />
-        {t(($) => $.page.new_skill)}
-      </Button>
+      <div className="flex shrink-0 items-center gap-2">
+        <Button type="button" variant="outline" size="sm" onClick={onRuntimeImport}>
+          <Download className="h-3 w-3" />
+          {t(($) => $.page.import_from_runtime)}
+        </Button>
+        <Button type="button" size="sm" onClick={onCreate}>
+          <Plus className="h-3 w-3" />
+          {t(($) => $.page.new_skill)}
+        </Button>
+      </div>
     </PageHeader>
   );
 }
@@ -190,6 +199,11 @@ export default function SkillsPage() {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<FilterKey>("all");
   const [createOpen, setCreateOpen] = useState(false);
+  const [initialCreateMethod, setInitialCreateMethod] = useState<"chooser" | "runtime">("chooser");
+  const openCreate = (method: "chooser" | "runtime" = "chooser") => {
+    setInitialCreateMethod(method);
+    setCreateOpen(true);
+  };
 
   const assignments = useMemo(
     () => selectSkillAssignments(agents),
@@ -273,11 +287,16 @@ export default function SkillsPage() {
     enableColumnResizing: true,
   });
 
+  const createDialog = createOpen && (
+    <CreateSkillDialog initialMethod={initialCreateMethod}
+      onClose={() => setCreateOpen(false)} onCreated={handleCreated} />
+  );
+
   // --- Loading ---
   if (isLoading) {
     return (
       <div className="flex flex-1 min-h-0 flex-col">
-        <PageHeaderBar totalCount={0} onCreate={() => setCreateOpen(true)} />
+        <PageHeaderBar totalCount={0} onCreate={() => openCreate()} onRuntimeImport={() => openCreate("runtime")} />
         <div className="flex flex-1 min-h-0 flex-col gap-4 p-3 sm:p-6">
           <div className="space-y-3 pl-4">
             <Skeleton className="h-5 w-full max-w-2xl rounded-md" />
@@ -297,6 +316,7 @@ export default function SkillsPage() {
             </div>
           </div>
         </div>
+        {createDialog}
       </div>
     );
   }
@@ -305,7 +325,7 @@ export default function SkillsPage() {
   if (listError) {
     return (
       <div className="flex flex-1 min-h-0 flex-col">
-        <PageHeaderBar totalCount={0} onCreate={() => setCreateOpen(true)} />
+        <PageHeaderBar totalCount={0} onCreate={() => openCreate()} onRuntimeImport={() => openCreate("runtime")} />
         <EmptyState
           variant="status"
           tone="destructive"
@@ -327,6 +347,7 @@ export default function SkillsPage() {
             </Button>
           }
         />
+        {createDialog}
       </div>
     );
   }
@@ -340,7 +361,8 @@ export default function SkillsPage() {
     <div className="flex flex-1 min-h-0 flex-col">
       <PageHeaderBar
         totalCount={totalCount}
-        onCreate={() => setCreateOpen(true)}
+        onCreate={() => openCreate()}
+        onRuntimeImport={() => openCreate("runtime")}
       />
 
       {supportingQueryDown && (
@@ -367,7 +389,7 @@ export default function SkillsPage() {
         )}
         {showEmpty ? (
           <div className="flex flex-1 items-center justify-center">
-            <SkillsEmptyState onCreate={() => setCreateOpen(true)} />
+            <SkillsEmptyState onCreate={() => openCreate()} />
           </div>
         ) : (
           <div className="flex flex-1 min-h-0 flex-col overflow-hidden rounded-lg border bg-background">
@@ -406,12 +428,7 @@ export default function SkillsPage() {
         )}
       </div>
 
-      {createOpen && (
-        <CreateSkillDialog
-          onClose={() => setCreateOpen(false)}
-          onCreated={handleCreated}
-        />
-      )}
+      {createDialog}
     </div>
   );
 }

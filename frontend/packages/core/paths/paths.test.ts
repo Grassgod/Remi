@@ -33,6 +33,9 @@ describe("paths.workspace(slug)", () => {
     expect(ws.agents()).toBe("/acme/agents");
     expect(ws.memberDetail("u1")).toBe("/acme/members/u1");
     expect(ws.inbox()).toBe("/acme/inbox");
+    expect(ws.chat()).toBe("/acme/chat");
+    expect(ws.chat("session 1")).toBe("/acme/chat?session=session%201");
+    expect(ws.chat(undefined, "agent&2")).toBe("/acme/chat?agent=agent%262");
     expect(ws.myIssues()).toBe("/acme/my-issues");
     expect(ws.runtimes()).toBe("/acme/runtimes");
     expect(ws.runtimeMachine("local:daemon-1")).toBe(

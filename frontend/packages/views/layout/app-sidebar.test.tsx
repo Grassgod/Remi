@@ -102,6 +102,7 @@ vi.mock("@multiremi/core/paths", () => ({
   useCurrentWorkspace: () => ({ id: "ws-1", name: "Acme", slug: "acme" }),
   useWorkspacePaths: () => ({
     inbox: () => "/acme/inbox",
+    chat: () => "/acme/chat",
     myIssues: () => "/acme/my-issues",
     workbench: () => "/acme/workbench",
     issues: () => "/acme/issues",
@@ -214,4 +215,12 @@ describe("plugin navigation", () => {
       "true",
     );
   });
+});
+
+
+it("exposes the independent chat workspace in personal navigation", () => {
+  pathname.current = "/acme/chat";
+  const { container } = render(<AppSidebar />);
+  const chat = container.querySelector('button[data-href="/acme/chat"]');
+  expect(chat).toHaveAttribute("data-active", "true");
 });

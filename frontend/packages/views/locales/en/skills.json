@@ -1,5 +1,6 @@
 {
   "page": {
+    "import_from_runtime": "Import from runtime",
     "title": "Skills",
     "tagline": "Instructions any agent in this workspace can use.",
     "learn_more": "Learn more →",
@@ -160,8 +161,8 @@
         "desc": "Fetch a published skill by URL. Files are pulled server-side."
       },
       "runtime": {
-        "title": "Copy from runtime",
-        "desc": "Scan a local runtime and promote one of its on-disk skills into this workspace."
+        "title": "Import from runtime",
+        "desc": "Scan a directory on your runtime and select skills to add to this workspace."
       }
     },
     "method_card": {
@@ -169,8 +170,8 @@
       "manual_desc": "Start from a blank SKILL.md and write your own instructions.",
       "url_title": "Import from URL",
       "url_desc": "Pull a published skill from ClawHub or Skills.sh.",
-      "runtime_title": "Copy from runtime",
-      "runtime_desc": "Promote a skill already installed on your local runtime."
+      "runtime_title": "Import from runtime",
+      "runtime_desc": "Scan a directory on your runtime and select skills to add to this workspace."
     },
     "manual": {
       "name_label": "Name",
@@ -200,6 +201,14 @@
     }
   },
   "runtime_import": {
+    "default_directory": "Default skill directories",
+    "custom_directory": "Custom directory",
+    "directory_label": "Skill directory on runtime",
+    "directory_placeholder": "e.g. ~/.agents/skills",
+    "directory_hint": "Enter an absolute path or ~/… on this runtime. Hidden folders can be entered directly.",
+    "scan_button": "Scan skills",
+    "scan_hint": "Choose the skill directory, then scan to select skills to import.",
+    "directory_bundle_hint": "Skills with files that cannot be imported are marked unavailable. Review any scan warnings before importing.",
     "runtime_label": "Runtime",
     "runtime_placeholder": "Select a local runtime",
     "no_local_runtimes_title": "No local runtimes available",

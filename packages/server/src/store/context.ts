@@ -349,12 +349,15 @@ export interface TasksSurface {
   listTasks(status?: MultiremiTaskStatus): MultiremiTask[];
   listTasksForIssue(issueId: string): MultiremiTask[];
   cancelTask(taskId: string): MultiremiTask;
+  cancelTaskWithinTransaction(taskId: string): import("./repos/tasks-repo.js").CancelTaskResult;
+  notifyCancelledTask(result: import("./repos/tasks-repo.js").CancelTaskResult): void;
   cancelTasksByTriggerComments(workspaceId: string, commentIds: string[]): number;
   listAgentTasks(agentId: string): MultiremiTask[];
 }
 
 export interface ChatSurface {
   createChatSession(input: CreateChatSessionInput): MultiremiChatSession;
+  createChatSessionWithinTransaction(input: CreateChatSessionInput): MultiremiChatSession;
   getChatSession(id: string): MultiremiChatSession | null;
   updateChatSession(id: string, input: UpdateChatSessionInput): MultiremiChatSession;
   bindChatSessionIssueIfUnbound(chatSessionId: string, issueId: string): {
@@ -432,6 +435,7 @@ export interface RuntimesSurface {
     claimPending?: boolean;
     supportsBatchImport?: boolean;
     supportsDirectoryScan?: boolean;
+    supportsSkillDirectory?: boolean;
     agentPluginProtocol?: number;
   }): MultiremiDaemonHeartbeatAck;
   runtimeCanRunAgent(runtime: MultiremiRuntime, agent: MultiremiAgent): boolean;

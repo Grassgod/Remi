@@ -9,6 +9,8 @@ const AGENT_STORAGE_KEY = "multimira:chat:selectedAgentId";
 const SESSION_STORAGE_KEY = "multimira:chat:activeSessionId";
 /** Drafts are stored as one JSON blob per workspace: { [sessionId]: text }. */
 const DRAFTS_KEY = "multimira:chat:drafts";
+/** Uploaded attachment references must survive switching between chat surfaces. */
+const DRAFT_ATTACHMENTS_KEY = "multimira:chat:draftAttachments";
 /** Placeholder sessionId for a chat that hasn't been created yet. */
 export const DRAFT_NEW_SESSION = "__new__";
 const CHAT_WIDTH_KEY = "multimira:chat:width";
@@ -47,6 +49,29 @@ function writeDrafts(storage: StorageAdapter, key: string, drafts: Record<string
   }
 }
 
+function readDraftAttachments(storage: StorageAdapter, key: string): Record<string, Record<string, string>> {
+  const raw = storage.getItem(key);
+  if (!raw) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const drafts: Record<string, Record<string, string>> = {};
+    for (const [draftKey, entries] of Object.entries(parsed)) {
+      if (!entries || typeof entries !== "object" || Array.isArray(entries)) continue;
+      const attachments = Object.fromEntries(Object.entries(entries).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+      if (Object.keys(attachments).length) drafts[draftKey] = attachments;
+    }
+    return drafts;
+  } catch {
+    return {};
+  }
+}
+
+function writeDraftAttachments(storage: StorageAdapter, key: string, drafts: Record<string, Record<string, string>>): void {
+  if (Object.keys(drafts).length) storage.setItem(key, JSON.stringify(drafts));
+  else storage.removeItem(key);
+}
+
 export const CHAT_MIN_W = 360;
 export const CHAT_MIN_H = 480;
 export const CHAT_DEFAULT_W = 380;
@@ -82,6 +107,7 @@ export interface ChatState {
   selectedAgentId: string | null;
   /** Drafts per session: sessionId (or DRAFT_NEW_SESSION) → markdown text. */
   inputDrafts: Record<string, string>;
+  inputDraftAttachments: Record<string, Record<string, string>>;
   /** Raw user-chosen size — no clamp applied. UI layer clamps at render time. */
   chatWidth: number;
   chatHeight: number;
@@ -93,6 +119,8 @@ export interface ChatState {
   /** sessionId accepts a real session UUID or DRAFT_NEW_SESSION. */
   setInputDraft: (sessionId: string, draft: string) => void;
   clearInputDraft: (sessionId: string) => void;
+  setInputDraftAttachment: (draftKey: string, url: string, attachmentId: string) => void;
+  clearInputDraftAttachments: (draftKey: string) => void;
   /** Persist raw size and auto-exit expanded mode. */
   setChatSize: (width: number, height: number) => void;
   setExpanded: (expanded: boolean) => void;
@@ -121,6 +149,7 @@ export function createChatStore(options: ChatStoreOptions) {
     activeSessionId: storage.getItem(wsKey(SESSION_STORAGE_KEY)),
     selectedAgentId: storage.getItem(wsKey(AGENT_STORAGE_KEY)),
     inputDrafts: readDrafts(storage, wsKey(DRAFTS_KEY)),
+    inputDraftAttachments: readDraftAttachments(storage, wsKey(DRAFT_ATTACHMENTS_KEY)),
     chatWidth: Number(storage.getItem(CHAT_WIDTH_KEY)) || CHAT_DEFAULT_W,
     chatHeight: Number(storage.getItem(CHAT_HEIGHT_KEY)) || CHAT_DEFAULT_H,
     isExpanded: storage.getItem(wsKey(CHAT_EXPANDED_KEY)) === "true",
@@ -158,15 +187,30 @@ export function createChatStore(options: ChatStoreOptions) {
     },
     clearInputDraft: (sessionId) => {
       const current = get().inputDrafts;
-      if (!(sessionId in current)) {
+      if (!(sessionId in current) && !(sessionId in get().inputDraftAttachments)) {
         logger.debug("clearInputDraft skipped (no draft)", { sessionId });
         return;
       }
       logger.info("clearInputDraft", { sessionId });
       const next = { ...current };
       delete next[sessionId];
+      const nextAttachments = { ...get().inputDraftAttachments };
+      delete nextAttachments[sessionId];
       writeDrafts(storage, wsKey(DRAFTS_KEY), next);
-      set({ inputDrafts: next });
+      writeDraftAttachments(storage, wsKey(DRAFT_ATTACHMENTS_KEY), nextAttachments);
+      set({ inputDrafts: next, inputDraftAttachments: nextAttachments });
+    },
+    setInputDraftAttachment: (draftKey, url, attachmentId) => {
+      const current = get().inputDraftAttachments;
+      const next = { ...current, [draftKey]: { ...current[draftKey], [url]: attachmentId } };
+      writeDraftAttachments(storage, wsKey(DRAFT_ATTACHMENTS_KEY), next);
+      set({ inputDraftAttachments: next });
+    },
+    clearInputDraftAttachments: (draftKey) => {
+      const next = { ...get().inputDraftAttachments };
+      delete next[draftKey];
+      writeDraftAttachments(storage, wsKey(DRAFT_ATTACHMENTS_KEY), next);
+      set({ inputDraftAttachments: next });
     },
     setChatSize: (w, h) => {
       logger.debug("setChatSize", { w, h });
@@ -202,6 +246,7 @@ export function createChatStore(options: ChatStoreOptions) {
       activeSessionId: nextSession,
       selectedAgentId: nextAgent,
       inputDrafts: nextDrafts,
+      inputDraftAttachments: readDraftAttachments(storage, wsKey(DRAFT_ATTACHMENTS_KEY)),
     });
   });
 

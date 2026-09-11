@@ -296,6 +296,7 @@ export class MultiremiDaemonClient {
         runtime_id: runtimeId,
         supports_batch_import: true,
         supports_directory_scan: true,
+        supports_skill_directory: true,
         supports_bot_menu: supportsBotMenu,
         agent_plugin_protocol: MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
         ssh_mesh_protocol: MULTIREMI_SSH_MESH_PROTOCOL_VERSION,
@@ -661,6 +662,8 @@ export class MultiremiDaemonClient {
     skills?: MultiremiRuntimeLocalSkillSummary[];
     supported?: boolean;
     error?: string;
+    root?: string;
+    warnings?: string[];
   }): Promise<void> {
     await this.post(`/api/daemon/runtimes/${runtimeId}/local-skills/${requestId}/result`, result);
   }

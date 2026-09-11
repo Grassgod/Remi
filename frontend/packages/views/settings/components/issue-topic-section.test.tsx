@@ -113,7 +113,7 @@ describe("IssueTopicSection", () => {
     const selector = await screen.findByRole("combobox", { name: "Proactive notification recipient" });
     expect(selector).toHaveTextContent("Group owner");
     await user.click(selector);
-    await user.click(screen.getByRole("option", { name: "No mention" }));
+    await user.click(await screen.findByRole("option", { name: "No mention" }));
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(mockSave).toHaveBeenCalledWith(expect.objectContaining({ notify_mode: "none", notify_open_id: null }));
   });
@@ -122,7 +122,7 @@ describe("IssueTopicSection", () => {
     const user = userEvent.setup();
     renderSection();
     await user.click(await screen.findByRole("combobox", { name: "Proactive notification recipient" }));
-    await user.click(screen.getByRole("option", { name: "Specific person" }));
+    await user.click(await screen.findByRole("option", { name: "Specific person" }));
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     const input = screen.getByLabelText("Recipient open_id (bot application)");
     await user.type(input, "ou_reviewer");

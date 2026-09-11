@@ -16,6 +16,7 @@ import {
   pendingChatTaskRefetchInterval,
   pendingChatTasksRefetchInterval,
   chatKeys,
+  chatSessionsOptions,
   taskMessagesOptions,
 } from "./queries";
 
@@ -175,6 +176,11 @@ describe("taskMessagesOptions", () => {
 });
 
 describe("pending chat task polling", () => {
+  it("isolates session status filters and workspaces while preserving the existing all key", () => {
+    expect(chatSessionsOptions("ws-1").queryKey).toEqual(chatKeys.sessions("ws-1"));
+    expect(chatSessionsOptions("ws-1", "active").queryKey).not.toEqual(chatSessionsOptions("ws-1", "archived").queryKey);
+    expect(chatSessionsOptions("ws-1", "archived").queryKey).not.toEqual(chatSessionsOptions("ws-2", "archived").queryKey);
+  });
   it("polls only while a per-session task is pending", () => {
     expect(pendingChatTaskRefetchInterval({
       state: { data: { task_id: "tsk_1", status: "queued" } },

@@ -160,14 +160,14 @@ function buildSharedIssueBundle(
     ...issueSessionCompatibilityResponse(session, store.listSessionParticipants(session.id)),
     events: store.listSessionEvents(session.id).map(sessionEventCompatibilityResponse),
     tasks: store.listTasksForIssue(issue.id)
-      .filter((task) => task.issueSessionId === session.id)
+      .filter((task) => task.issueSessionId === session.id && !task.chatSessionId)
       .map((task) => ({
         ...taskCompatibilityResponse(task),
         messages: store.listTaskMessages(task.id),
       })),
   }));
   const unscopedTasks = store.listTasksForIssue(issue.id)
-    .filter((task) => !task.issueSessionId)
+    .filter((task) => !task.issueSessionId && !task.chatSessionId)
     .map((task) => ({
       ...taskCompatibilityResponse(task),
       messages: store.listTaskMessages(task.id),

@@ -28,6 +28,7 @@ import type { ChatMessage, ChatPendingTask, TaskFailureReason } from "@multiremi
 import type { ChatTimelineItem } from "@multiremi/core/chat";
 import { failureReasonLabel } from "../../agents/components/tabs/task-failure";
 import { toChatTimeline } from "../lib/chat-timeline";
+import { chatMessageMarkdown } from "../lib/message-attachments";
 import { TaskStatusPill } from "./task-status-pill";
 import { formatElapsedMs } from "../../common/format";
 import { splitTimeline, extractCopyText } from "../lib/copy-text";
@@ -190,6 +191,7 @@ export function ChatMessageSkeleton() {
 
 function MessageBubble({ message, isPending }: { message: ChatMessage; isPending: boolean }) {
   if (message.role === "user") {
+    const markdown = chatMessageMarkdown(message);
     return (
       <div className="flex justify-end">
         <div className="rounded-2xl bg-muted px-3.5 py-2 text-sm max-w-[80%] break-words">
@@ -198,11 +200,11 @@ function MessageBubble({ message, isPending }: { message: ChatMessage; isPending
            * Neutralise prose's leading/trailing margin so single-line
            * bubbles stay as compact as the plain-text version used to. */}
           <div className="prose prose-sm dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-            <Markdown attachments={message.attachments}>{message.content}</Markdown>
+            <Markdown attachments={message.attachments}>{markdown}</Markdown>
           </div>
           <AttachmentList
             attachments={message.attachments}
-            content={message.content}
+            content={markdown}
             className="mt-1.5"
           />
         </div>

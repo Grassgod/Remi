@@ -1,4 +1,4 @@
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import {
   canCurrentUserAccessChatSessionAgent,
   denyCurrentUserWorkspaceAccess,
@@ -23,6 +23,7 @@ import type {
   UpdateChatSessionInput,
 } from "@multiremi/contracts/types.js";
 import type { RouterDeps } from "./deps.js";
+import { ChatConflictError, ChatValidationError } from "@multiremi/store/repos/chat-repo.js";
 import { AgentIssueUpdateValidationError } from "@multiremi/store/repos/agent-issue-updates-repo.js";
 
 export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
@@ -35,15 +36,15 @@ export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     const sessions = store.listChatSessions(workspaceId, {
       creatorId: currentRequestUserId(c),
-      includeArchived: c.req.query("status") === "all",
-    }).filter((session) => canCurrentUserAccessChatSessionAgent(c, store, session));
+      includeArchived: c.req.query("status") === "all" || c.req.query("status") === "archived",
+    }).filter((session) => (c.req.query("status") !== "archived" || session.status === "archived") && canCurrentUserAccessChatSessionAgent(c, store, session));
     return c.json({ sessions, total: sessions.length });
   });
   app.post("/api/multiremi/chats", async (c) => {
     const body = await readJson<CreateChatSessionInput>(c);
     const input = withChatSessionRequestContext(c, store, body);
     if (input instanceof Response) return input;
-    return c.json({ session: store.createChatSession(input) }, 201);
+    return chatMutation(c, () => c.json({ session: store.createChatSession(input) }, 201));
   });
   app.get("/api/multiremi/chats/:id", (c) => {
     const loaded = loadChatSessionForCurrentUser(c, store, c.req.param("id"));
@@ -55,7 +56,9 @@ export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
     const loaded = loadChatSessionForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
     const body = await readJson<UpdateChatSessionInput>(c);
-    return c.json({ session: store.updateChatSession(loaded.session.id, body) });
+    const invalid = invalidChatUpdate(c, body);
+    if (invalid) return invalid;
+    return chatMutation(c, () => c.json({ session: store.updateChatSession(loaded.session.id, body) }));
   });
   app.get("/api/multiremi/chats/:id/messages", (c) => {
     const loaded = loadChatSessionForCurrentUser(c, store, c.req.param("id"));
@@ -68,11 +71,13 @@ export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJson<SendChatMessageInput>(c);
     const message = normalizeSendChatMessageInput(c, body);
     if (message instanceof Response) return message;
-    const result = store.sendChatMessage(loaded.session.id, {
-      ...message,
-      parentTaskId: currentTaskAccessToken(c)?.taskId ?? null,
+    return chatMutation(c, () => {
+      const result = store.sendChatMessage(loaded.session.id, {
+        ...message,
+        parentTaskId: currentTaskAccessToken(c)?.taskId ?? null,
+      });
+      return c.json({ ...result, supports_queue: true, task: taskPublicResponse(result.task) }, 201);
     });
-    return c.json({ ...result, task: taskPublicResponse(result.task) }, 201);
   });
   app.get("/api/chat/sessions", (c) => {
     const workspaceId = requestedChatWorkspaceId(c, store);
@@ -81,14 +86,14 @@ export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     return c.json(store.listChatSessions(workspaceId, {
       creatorId: currentRequestUserId(c),
-      includeArchived: c.req.query("status") === "all",
-    }).filter((session) => canCurrentUserAccessChatSessionAgent(c, store, session)).map(chatSessionCompatibilityResponse));
+      includeArchived: c.req.query("status") === "all" || c.req.query("status") === "archived",
+    }).filter((session) => (c.req.query("status") !== "archived" || session.status === "archived") && canCurrentUserAccessChatSessionAgent(c, store, session)).map(chatSessionCompatibilityResponse));
   });
   app.post("/api/chat/sessions", async (c) => {
     const body = await readJson<CreateChatSessionInput>(c);
     const input = withChatSessionRequestContext(c, store, body);
     if (input instanceof Response) return input;
-    return c.json(chatSessionCompatibilityResponse(store.createChatSession(input)), 201);
+    return chatMutation(c, () => c.json(chatSessionCompatibilityResponse(store.createChatSession(input)), 201));
   });
   app.get("/api/chat/sessions/:sessionId", (c) => {
     const loaded = loadChatSessionForCurrentUser(c, store, c.req.param("sessionId"));
@@ -99,7 +104,9 @@ export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
     const loaded = loadChatSessionForCurrentUser(c, store, c.req.param("sessionId"));
     if (loaded instanceof Response) return loaded;
     const body = await readJson<UpdateChatSessionInput>(c);
-    return c.json(chatSessionCompatibilityResponse(store.updateChatSession(loaded.session.id, body)));
+    const invalid = invalidChatUpdate(c, body);
+    if (invalid) return invalid;
+    return chatMutation(c, () => c.json(chatSessionCompatibilityResponse(store.updateChatSession(loaded.session.id, body))));
   });
   app.delete("/api/chat/sessions/:sessionId", (c) => {
     const loaded = loadChatSessionForCurrentUser(c, store, c.req.param("sessionId"), { requireAgentAccess: false });
@@ -138,12 +145,11 @@ export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
     const sessionMessages = store.listChatMessages(loaded.session.id);
     const attachments = store.listAttachmentsForChatMessages(sessionMessages.map((message) => message.id));
     const messages = sessionMessages.map((message) => chatMessageCompatibilityResponse(message, attachments.get(message.id) ?? []));
-    const filtered = beforeCreatedAt
-      ? messages.filter((message) =>
-        message.created_at < beforeCreatedAt ||
-        (message.created_at === beforeCreatedAt && beforeId ? message.id < beforeId : false)
-      )
-      : messages;
+    const cursorIndex = beforeCreatedAt
+      ? messages.findIndex((message) => message.id === beforeId && message.created_at === beforeCreatedAt)
+      : messages.length;
+    if (cursorIndex < 0) return c.json({ error: "invalid cursor" }, 400);
+    const filtered = messages.slice(0, cursorIndex);
     const pageMessages = filtered.slice(Math.max(0, filtered.length - limit));
     const hasMore = filtered.length > pageMessages.length;
     const nextCursor = hasMore && pageMessages[0]
@@ -162,16 +168,48 @@ export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJson<SendChatMessageInput>(c);
     const message = normalizeSendChatMessageInput(c, body);
     if (message instanceof Response) return message;
-    return c.json(sendChatMessageCompatibilityResponse(store.sendChatMessage(loaded.session.id, {
+    return chatMutation(c, () => c.json(sendChatMessageCompatibilityResponse(store.sendChatMessage(loaded.session.id, {
       ...message,
       parentTaskId: currentTaskAccessToken(c)?.taskId ?? null,
-    })), 201);
+    })), 201));
   });
   app.get("/api/chat/sessions/:sessionId/pending-task", (c) => {
     const loaded = loadChatSessionForCurrentUser(c, store, c.req.param("sessionId"));
     if (loaded instanceof Response) return loaded;
     const task = store.getPendingChatTask(loaded.session.id);
-    return c.json(task ? { task_id: task.id, status: task.status, created_at: task.createdAt } : {});
+    return c.json({
+      ...(task ? { task_id: task.id, status: task.status, created_at: task.createdAt } : {}),
+      supports_queue: true,
+      queued_tasks: store.listQueuedChatTasks(loaded.session.id),
+    });
+  });
+  app.patch("/api/chat/sessions/:sessionId/queue/:taskId", async (c) => {
+    const loaded = loadChatSessionForCurrentUser(c, store, c.req.param("sessionId"));
+    if (loaded instanceof Response) return loaded;
+    const body = await readJson<{ content?: unknown }>(c);
+    if (typeof body.content !== "string" || !body.content.trim()) return c.json({ error: "content is required" }, 400);
+    return chatMutation(c, () => c.json(store.updateQueuedChatTask(loaded.session.id, c.req.param("taskId"), body.content as string)));
+  });
+  app.delete("/api/chat/sessions/:sessionId/queue/:taskId", (c) => {
+    const loaded = loadChatSessionForCurrentUser(c, store, c.req.param("sessionId"));
+    if (loaded instanceof Response) return loaded;
+    return chatMutation(c, () => {
+      store.removeQueuedChatTasks(loaded.session.id, c.req.param("taskId"));
+      return c.body(null, 204);
+    });
+  });
+  app.delete("/api/chat/sessions/:sessionId/queue", (c) => {
+    const loaded = loadChatSessionForCurrentUser(c, store, c.req.param("sessionId"));
+    if (loaded instanceof Response) return loaded;
+    return chatMutation(c, () => {
+      store.removeQueuedChatTasks(loaded.session.id);
+      return c.body(null, 204);
+    });
+  });
+  app.post("/api/chat/sessions/:sessionId/queue/:taskId/prioritize", (c) => {
+    const loaded = loadChatSessionForCurrentUser(c, store, c.req.param("sessionId"));
+    if (loaded instanceof Response) return loaded;
+    return chatMutation(c, () => c.json(store.prioritizeQueuedChatTask(loaded.session.id, c.req.param("taskId"))));
   });
   app.post("/api/chat/sessions/:sessionId/read", (c) => {
     const loaded = loadChatSessionForCurrentUser(c, store, c.req.param("sessionId"));
@@ -234,4 +272,21 @@ function agentIssueUpdateSubscriptionResponse(subscription: import("@multiremi/c
     enabled: subscription.enabled,
     debounce_window_seconds: subscription.debounceWindowSeconds,
   };
+}
+
+function chatMutation(c: Context, operation: () => Response): Response {
+  try {
+    return operation();
+  } catch (error) {
+    if (error instanceof ChatConflictError) return c.json({ error: error.message }, 409);
+    if (error instanceof ChatValidationError) return c.json({ error: error.message }, 400);
+    throw error;
+  }
+}
+
+function invalidChatUpdate(c: Context, input: UpdateChatSessionInput): Response | null {
+  if (input.title !== undefined && (typeof input.title !== "string" || !input.title.trim())) return c.json({ error: "title is required" }, 400);
+  if (input.status !== undefined && input.status !== "active" && input.status !== "archived") return c.json({ error: "invalid status" }, 400);
+  if (input.pinned !== undefined && typeof input.pinned !== "boolean") return c.json({ error: "pinned must be a boolean" }, 400);
+  return null;
 }

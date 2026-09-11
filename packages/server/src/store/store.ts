@@ -195,6 +195,7 @@ import type {
   CreateRuntimeCommandInput,
   CreateWorkspaceRuntimeProvisionInput,
   CreateRuntimeLocalSkillImportInput,
+  CreateRuntimeLocalSkillListInput,
   CreateSessionTaskInput,
   CreateSkillInput,
   ImportAgentPluginInput,
@@ -2791,16 +2792,16 @@ runMigrations(this.db);
     return this.runtimeProvisions.enqueueWorkspaceProvision(provisionId);
   }
 
-  createRuntimeLocalSkillListRequest(runtimeId: string): MultiremiRuntimeLocalSkillListRequest {
-    return this.runtimes.createRuntimeLocalSkillListRequest(runtimeId);
+  createRuntimeLocalSkillListRequest(runtimeId: string, input: CreateRuntimeLocalSkillListInput = {}): MultiremiRuntimeLocalSkillListRequest {
+    return this.runtimes.createRuntimeLocalSkillListRequest(runtimeId, input);
   }
 
   getRuntimeLocalSkillListRequest(runtimeId: string, requestId: string): MultiremiRuntimeLocalSkillListRequest | null {
     return this.runtimes.getRuntimeLocalSkillListRequest(runtimeId, requestId);
   }
 
-  claimRuntimeLocalSkillListRequest(runtimeId: string): MultiremiRuntimeLocalSkillListRequest | null {
-    return this.runtimes.claimRuntimeLocalSkillListRequest(runtimeId);
+  claimRuntimeLocalSkillListRequest(runtimeId: string, supportsSkillDirectory = false): MultiremiRuntimeLocalSkillListRequest | null {
+    return this.runtimes.claimRuntimeLocalSkillListRequest(runtimeId, supportsSkillDirectory);
   }
 
   reportRuntimeLocalSkillListResult(runtimeId: string, requestId: string, input: ReportRuntimeLocalSkillListInput): MultiremiRuntimeLocalSkillListRequest {
@@ -2815,8 +2816,8 @@ runMigrations(this.db);
     return this.runtimes.getRuntimeLocalSkillImportRequest(runtimeId, requestId);
   }
 
-  claimRuntimeLocalSkillImportRequests(runtimeId: string, limit = 10): MultiremiRuntimeLocalSkillImportRequest[] {
-    return this.runtimes.claimRuntimeLocalSkillImportRequests(runtimeId, limit);
+  claimRuntimeLocalSkillImportRequests(runtimeId: string, limit = 10, supportsSkillDirectory = false): MultiremiRuntimeLocalSkillImportRequest[] {
+    return this.runtimes.claimRuntimeLocalSkillImportRequests(runtimeId, limit, supportsSkillDirectory);
   }
 
   reportRuntimeLocalSkillImportResult(runtimeId: string, requestId: string, input: ReportRuntimeLocalSkillImportInput): MultiremiRuntimeLocalSkillImportRequest {
@@ -2890,6 +2891,7 @@ runMigrations(this.db);
     claimPending?: boolean;
     supportsBatchImport?: boolean;
     supportsDirectoryScan?: boolean;
+    supportsSkillDirectory?: boolean;
     agentPluginProtocol?: number;
     supportsBotMenu?: boolean;
     supportsFeishuBotConfig?: boolean;
@@ -4065,6 +4067,10 @@ runMigrations(this.db);
     return this.autopilots.handleAutopilotWebhookByToken(token, input);
   }
 
+  createChatSessionWithinTransaction(input: CreateChatSessionInput): MultiremiChatSession {
+    return this.chat.createChatSessionWithinTransaction(input);
+  }
+
   createChatSession(input: CreateChatSessionInput): MultiremiChatSession {
     return this.chat.createChatSession(input);
   }
@@ -4098,6 +4104,22 @@ runMigrations(this.db);
 
   getPendingChatTask(chatSessionId: string): MultiremiTask | null {
     return this.chat.getPendingChatTask(chatSessionId);
+  }
+
+  listQueuedChatTasks(chatSessionId: string) {
+    return this.chat.listQueuedChatTasks(chatSessionId);
+  }
+
+  updateQueuedChatTask(chatSessionId: string, taskId: string, content: string) {
+    return this.chat.updateQueuedChatTask(chatSessionId, taskId, content);
+  }
+
+  removeQueuedChatTasks(chatSessionId: string, taskId?: string): void {
+    this.chat.removeQueuedChatTasks(chatSessionId, taskId);
+  }
+
+  prioritizeQueuedChatTask(chatSessionId: string, taskId: string) {
+    return this.chat.prioritizeQueuedChatTask(chatSessionId, taskId);
   }
 
   listPendingChatTasks(workspaceId?: string | null, options: { creatorId?: string | null } = {}): MultiremiTask[] {
@@ -4444,6 +4466,14 @@ runMigrations(this.db);
     failure_reason?: string | null;
   }): MultiremiTask {
     return this.tasks.failTask(taskId, input);
+  }
+
+  cancelTaskWithinTransaction(taskId: string): import("./repos/tasks-repo.js").CancelTaskResult {
+    return this.tasks.cancelTaskWithinTransaction(taskId);
+  }
+
+  notifyCancelledTask(result: import("./repos/tasks-repo.js").CancelTaskResult): void {
+    this.tasks.notifyCancelledTask(result);
   }
 
   cancelTask(taskId: string): MultiremiTask {

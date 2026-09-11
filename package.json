@@ -41,6 +41,7 @@
     "test:frontend": "bun run --filter '@multiremi/*' test",
     "typecheck:frontend": "bun run --filter '@multiremi/*' typecheck",
     "smoke:multiremi:acp": "bun run tests/integration/smoke-multiremi-acp.ts",
+    "smoke:chat": "bun run tests/integration/smoke-chat-workspace.ts",
     "smoke:multiremi:agent-plugin": "bun run tests/integration/smoke-multiremi-agent-plugin.ts",
     "smoke:local-auth": "bun run tests/integration/smoke-local-auth.ts",
     "e2e:multiremi": "bun run tests/integration/e2e-multiremi.ts",

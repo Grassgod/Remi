@@ -3980,6 +3980,74 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "chat.pin": {
+      "command": "remi chat pin",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "chat.pin",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "chat.unpin": {
+      "command": "remi chat unpin",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "chat.unpin",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "chat.archive": {
+      "command": "remi chat archive",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "chat.archive",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "chat.restore": {
+      "command": "remi chat restore",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "chat.restore",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "chat.issue": {
       "command": "remi chat.issue",
       "aliases": [],
@@ -4142,6 +4210,101 @@
       ],
       "capability": "chat.pending",
       "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "chat.queue": {
+      "command": "remi chat queue",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "chat.queue.list": {
+      "command": "remi chat queue list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "chat.queue.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "chat.queue.update": {
+      "command": "remi chat queue update",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "chat.queue.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "chat.queue.remove": {
+      "command": "remi chat queue remove",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "chat.queue.remove",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "chat.queue.clear": {
+      "command": "remi chat queue clear",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "chat.queue.clear",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "chat.queue.prioritize": {
+      "command": "remi chat queue prioritize",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "chat.queue.prioritize",
+      "mutation": "write",
       "output": [
         "table",
         "json",
@@ -9290,6 +9453,12 @@
     "DELETE /api/chat/sessions/:sessionId": {
       "command": "chat.delete"
     },
+    "DELETE /api/chat/sessions/:sessionId/queue": {
+      "command": "chat.queue.clear"
+    },
+    "DELETE /api/chat/sessions/:sessionId/queue/:taskId": {
+      "command": "chat.queue.remove"
+    },
     "DELETE /api/cloud-runtime/nodes": {
       "command": "runtime.cloud.node.delete"
     },
@@ -10469,6 +10638,9 @@
     "PATCH /api/chat/sessions/:sessionId": {
       "command": "chat.update"
     },
+    "PATCH /api/chat/sessions/:sessionId/queue/:taskId": {
+      "command": "chat.queue.update"
+    },
     "PATCH /api/daemons/:daemonId": {
       "command": "daemon.dedicated.set"
     },
@@ -10609,6 +10781,9 @@
     },
     "POST /api/chat/sessions/:sessionId/messages": {
       "command": "chat.message.create"
+    },
+    "POST /api/chat/sessions/:sessionId/queue/:taskId/prioritize": {
+      "command": "chat.queue.prioritize"
     },
     "POST /api/chat/sessions/:sessionId/read": {
       "command": "chat.read"

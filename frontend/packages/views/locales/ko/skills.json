@@ -1,5 +1,6 @@
 {
   "page": {
+    "import_from_runtime": "런타임에서 가져오기",
     "title": "스킬",
     "tagline": "이 워크스페이스의 모든 에이전트가 사용할 수 있는 지침입니다.",
     "learn_more": "자세히 보기 →",
@@ -160,8 +161,8 @@
         "desc": "공개된 스킬을 URL로 가져옵니다. 파일은 서버에서 가져옵니다."
       },
       "runtime": {
-        "title": "런타임에서 복사",
-        "desc": "로컬 런타임을 스캔해 디스크에 있는 스킬을 이 워크스페이스로 승격합니다."
+        "title": "런타임에서 가져오기",
+        "desc": "런타임의 디렉터리를 검색하고 워크스페이스에 추가할 스킬을 선택하세요."
       }
     },
     "method_card": {
@@ -169,8 +170,8 @@
       "manual_desc": "빈 SKILL.md에서 시작해 직접 지침을 작성합니다.",
       "url_title": "URL에서 가져오기",
       "url_desc": "ClawHub 또는 Skills.sh의 공개 스킬을 가져옵니다.",
-      "runtime_title": "런타임에서 복사",
-      "runtime_desc": "로컬 런타임에 이미 설치된 스킬을 워크스페이스로 가져옵니다."
+      "runtime_title": "런타임에서 가져오기",
+      "runtime_desc": "런타임의 디렉터리를 검색하고 워크스페이스에 추가할 스킬을 선택하세요."
     },
     "manual": {
       "name_label": "이름",
@@ -200,6 +201,14 @@
     }
   },
   "runtime_import": {
+    "default_directory": "기본 스킬 디렉터리",
+    "custom_directory": "디렉터리 지정",
+    "directory_label": "런타임의 스킬 디렉터리",
+    "directory_placeholder": "예: ~/.agents/skills",
+    "directory_hint": "이 런타임의 절대 경로 또는 ~/…를 입력하세요. 숨김 폴더도 경로를 직접 입력할 수 있습니다.",
+    "scan_button": "스킬 검색",
+    "scan_hint": "스킬 디렉터리를 선택하고 검색한 후 가져올 스킬을 선택하세요.",
+    "directory_bundle_hint": "가져올 수 없는 파일이 포함된 스킬은 선택할 수 없습니다. 가져오기 전에 검색 경고를 확인하세요.",
     "runtime_label": "런타임",
     "runtime_placeholder": "로컬 런타임 선택",
     "no_local_runtimes_title": "사용 가능한 로컬 런타임이 없습니다",

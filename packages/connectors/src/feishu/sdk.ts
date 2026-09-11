@@ -25,7 +25,7 @@ export { flushDedupCacheSync } from "./receive.js";
 export type { FeishuDomain, FeishuProbeResult } from "./types.js";
 
 // ── Streaming ─────────────────────────────────────────────────
-export { FeishuStreamingSession, buildFinalCard } from "./streaming.js";
+export { FeishuStreamingSession, buildFinalCard, buildCotCard } from "./streaming.js";
 export type { StreamingCloseOptions, TokenProvider } from "./streaming.js";
 export type { StreamMeta, StreamHandlerLog } from "@shared/contracts/acp-protocol.js";
 

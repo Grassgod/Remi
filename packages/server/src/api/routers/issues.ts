@@ -4,6 +4,7 @@ import {
   assigneeFrequencyQuery,
   bindCreatedIssueToRequestChat,
   canCurrentUserAccessAgent,
+  canCurrentUserAccessChatTask,
   currentTaskParentId,
   denyCurrentUserWorkspaceAccess,
   denyRestrictedTaskIssueCreation,
@@ -710,7 +711,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
-    const tasks = issue.tasks.map(taskPublicResponse);
+    const tasks = issue.tasks.filter((task) => canCurrentUserAccessChatTask(c, store, task)).map(taskPublicResponse);
     const comments = store.listIssueComments(issue.id);
     return c.json({
       issue: { ...issue, tasks },
@@ -809,6 +810,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const tasks = store.listTasksForIssue(issue.id)
+      .filter((task) => canCurrentUserAccessChatTask(c, store, task))
       .filter((task) => isActiveTaskStatus(task.status))
       .map((task) => taskCompatibilityResponse(
         task,
@@ -823,6 +825,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     return c.json(store.listTasksForIssue(issue.id)
+      .filter((task) => canCurrentUserAccessChatTask(c, store, task))
       .map((task) => taskCompatibilityResponse(
         task,
         null,
@@ -857,6 +860,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     const taskDenied = denyCurrentUserWorkspaceAccess(c, store, task.workspaceId);
     if (taskDenied) return taskDenied;
+    if (!canCurrentUserAccessChatTask(c, store, task)) return c.json({ error: "forbidden" }, 403);
     const taskToken = currentTaskAccessToken(c);
     const supervisor = supervisorTaskIdentity(c, store);
     if (supervisor && task.id === supervisor.task.id) {
@@ -1262,7 +1266,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     return c.json(store.listTasksForIssue(issue.id)
-      .filter((task) => task.issueSessionId === session.id)
+      .filter((task) => task.issueSessionId === session.id && canCurrentUserAccessChatTask(c, store, task))
       .map((task) => taskCompatibilityResponse(
         task,
         null,

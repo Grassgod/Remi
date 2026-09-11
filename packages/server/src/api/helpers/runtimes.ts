@@ -256,6 +256,7 @@ export function daemonLocalSkillListReportBody(input: ReportRuntimeLocalSkillLis
       const fileCount = Number(record.file_count ?? 0);
       return {
         key: String(record.key ?? ""),
+        ...(typeof record.error === "string" && record.error ? { error: record.error } : {}),
         name: String(record.name ?? ""),
         description: String(record.description ?? ""),
         sourcePath,
@@ -269,6 +270,8 @@ export function daemonLocalSkillListReportBody(input: ReportRuntimeLocalSkillLis
   return {
     status: input.status,
     skills,
+    root: input.root,
+    warnings: input.warnings,
     supported: input.supported,
     error: input.error,
   };

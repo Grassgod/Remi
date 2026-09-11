@@ -5,7 +5,7 @@
 // (the daemon imports them back and re-exports the scan/browse entry points).
 import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync, type Dirent } from "node:fs";
 import { homedir } from "node:os";
-import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { TextDecoder } from "node:util";
 import { normalizeSkillFilePath } from "@daemon/agent-runtime/skills/ephemeral.js";
 import type {
@@ -19,6 +19,10 @@ const MAX_LOCAL_SKILL_BUNDLE_SIZE = 8 << 20;
 const MAX_LOCAL_SKILL_FILE_COUNT = 128;
 const MAX_LOCAL_SKILL_DIR_DEPTH = 4;
 const LOCAL_SKILL_TEXT_DECODER = new TextDecoder("utf-8", { fatal: true });
+const SKILL_DIRECTORY_SCAN_MAX_ENTRIES = 10_000;
+const SKILL_DIRECTORY_SCAN_MAX_SKILLS = 1_000;
+const SKILL_DIRECTORY_SCAN_TIMEOUT_MS = 20_000;
+const SKILL_DIRECTORY_SKIP = new Set([".git", "node_modules"]);
 
 export function localSkillRootForProvider(provider: string, overrides: Record<string, string>): string | null {
   const normalized = provider.toLowerCase();
@@ -39,6 +43,82 @@ export function listRuntimeLocalSkills(provider: string, root: string): Multirem
   const visited = new Set<string>();
   walkLocalSkillDirs(rootPath, rootPath, 0, summaries, provider, visited);
   return summaries.sort((left, right) => left.key.localeCompare(right.key));
+}
+
+/** Explicit directory discovery keeps incomplete bundles visible instead of silently dropping files. */
+export async function scanRuntimeSkillDirectory(provider: string, input: string): Promise<{
+  root: string;
+  skills: MultiremiRuntimeLocalSkillSummary[];
+  warnings: string[];
+}> {
+  const expanded = expandHomePath(input.trim());
+  if (!isAbsolute(expanded)) throw new Error("skill directory must be an absolute path or start with ~/");
+  if (sep === "/" && expanded.includes("\\")) throw new Error("skill directory path cannot be preserved");
+  const root = realpathSync(expanded);
+  if (!isDirectory(root)) throw new Error(`not a directory: ${root}`);
+  const skills: MultiremiRuntimeLocalSkillSummary[] = [];
+  const warnings: string[] = [];
+  const visited = new Set<string>();
+  const pending = [root];
+  const deadline = Date.now() + SKILL_DIRECTORY_SCAN_TIMEOUT_MS;
+  let entriesSeen = 0;
+  while (pending.length) {
+    if (Date.now() >= deadline || skills.length >= SKILL_DIRECTORY_SCAN_MAX_SKILLS || entriesSeen >= SKILL_DIRECTORY_SCAN_MAX_ENTRIES) {
+      warnings.push("Scan incomplete: directory scan limit reached. Select a more specific directory to discover the remaining skills.");
+      break;
+    }
+    // Discovery runs in the daemon's maintenance loop; yield between directories.
+    await new Promise<void>((done) => setTimeout(done, 0));
+    const dir = pending.pop()!;
+    let realDir: string;
+    let entries: Dirent[];
+    try {
+      realDir = realpathSync(dir);
+      if (visited.has(realDir)) continue;
+      visited.add(realDir);
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch (error) {
+      if (dir === root) throw error;
+      warnings.push(`Cannot scan ${dir}: ${error instanceof Error ? error.message : String(error)}`);
+      continue;
+    }
+    if (entries.some((entry) => entry.name === "SKILL.md")) {
+      const key = relative(root, dir).split(sep).join("/") || ".";
+      const summary: MultiremiRuntimeLocalSkillSummary = {
+        key, name: humanizeSkillKey(key === "." ? basename(root) : key),
+        sourcePath: dir, source_path: dir, provider, fileCount: 1, file_count: 1,
+      };
+      try {
+        if (key !== "." && normalizeLocalSkillKey(key) !== key) throw new Error(`skill path cannot be preserved: ${key}`);
+        const main = readRuntimeLocalSkillMainFile(dir, true);
+        const meta = parseSkillFrontmatter(main);
+        summary.name = meta.name || summary.name;
+        summary.description = meta.description;
+        const files = collectRuntimeLocalSkillFiles(dir, false, true);
+        summary.fileCount = summary.file_count = files.length + 1;
+      } catch (error) {
+        summary.error = error instanceof Error ? error.message : String(error);
+      }
+      skills.push(summary);
+      // A Skill owns its supporting subdirectories, including any example SKILL.md files.
+      continue;
+    }
+    for (const entry of entries.sort((a, b) => b.name.localeCompare(a.name))) {
+      if (++entriesSeen >= SKILL_DIRECTORY_SCAN_MAX_ENTRIES || Date.now() >= deadline) {
+        warnings.push("Scan incomplete: directory scan limit reached. Select a more specific directory to discover the remaining skills.");
+        pending.length = 0;
+        break;
+      }
+      if (SKILL_DIRECTORY_SKIP.has(entry.name)) continue;
+      const child = join(dir, entry.name);
+      if (sep === "/" && entry.name.includes("\\")) {
+        warnings.push(`Cannot scan ${child}: skill path cannot be preserved`);
+        continue;
+      }
+      if (entry.isDirectory() || (entry.isSymbolicLink() && isDirectory(child))) pending.push(child);
+    }
+  }
+  return { root, skills: skills.sort((a, b) => a.key.localeCompare(b.key)), warnings };
 }
 
 function walkLocalSkillDirs(
@@ -90,7 +170,7 @@ function walkLocalSkillDirs(
   }
 }
 
-export function loadRuntimeLocalSkillBundle(provider: string, root: string, rawKey: string): {
+export function loadRuntimeLocalSkillBundle(provider: string, root: string, rawKey: string, strict = false): {
   name: string;
   description: string;
   content: string;
@@ -98,56 +178,78 @@ export function loadRuntimeLocalSkillBundle(provider: string, root: string, rawK
   provider: string;
   files: MultiremiSkillFile[];
 } {
-  const key = normalizeLocalSkillKey(rawKey);
-  if (key.split("/").length > MAX_LOCAL_SKILL_DIR_DEPTH) {
+  const key = strict && rawKey === "." ? "." : normalizeLocalSkillKey(rawKey);
+  if (!strict && key.split("/").length > MAX_LOCAL_SKILL_DIR_DEPTH) {
     throw new Error(`local skill key exceeds ${MAX_LOCAL_SKILL_DIR_DEPTH} directory levels`);
   }
   const rootPath = resolve(root);
   const skillDir = resolve(rootPath, key);
   const rel = slashPath(relative(rootPath, skillDir));
-  if (!rel || rel.startsWith("../") || rel === ".." || isAbsolute(rel)) throw new Error("invalid skill key");
+  if ((!rel && !(strict && key === ".")) || rel.startsWith("../") || rel === ".." || isAbsolute(rel)) throw new Error("invalid skill key");
   if (!isDirectory(skillDir)) throw new Error("local skill not found");
-  const content = readRuntimeLocalSkillMainFile(skillDir);
+  const content = readRuntimeLocalSkillMainFile(skillDir, strict);
   const meta = parseSkillFrontmatter(content);
   return {
-    name: meta.name || humanizeSkillKey(key),
+    name: meta.name || humanizeSkillKey(key === "." ? basename(rootPath) : key),
     description: meta.description ?? "",
     content,
     source_path: skillDir,
     provider,
-    files: collectRuntimeLocalSkillFiles(skillDir, true),
+    files: collectRuntimeLocalSkillFiles(skillDir, true, strict),
   };
 }
 
-function collectRuntimeLocalSkillFiles(skillDir: string, includeContent: boolean): MultiremiSkillFile[] {
+function collectRuntimeLocalSkillFiles(skillDir: string, includeContent: boolean, strict = false): MultiremiSkillFile[] {
   const files: MultiremiSkillFile[] = [];
-  let totalSize = 0;
+  let totalSize = strict ? fileSize(join(skillDir, "SKILL.md")) ?? 0 : 0;
+  let scanned = 0;
+  const deadline = Date.now() + SKILL_DIRECTORY_SCAN_TIMEOUT_MS;
+  const normalizedPaths = new Set<string>();
 
-  const visit = (dir: string): void => {
+  const visit = (dir: string, depth = 0): void => {
+    if (strict && (depth > 64 || Date.now() >= deadline)) throw new Error("local skill directory traversal limit reached");
     const entries = safeReadDir(dir);
-    if (!entries) return;
+    if (!entries) {
+      if (strict) throw new Error(`cannot read skill directory: ${dir}`);
+      return;
+    }
     for (const entry of entries) {
+      if (strict && (++scanned > SKILL_DIRECTORY_SCAN_MAX_ENTRIES || Date.now() >= deadline)) throw new Error("local skill directory traversal limit reached");
       const path = join(dir, entry.name);
+      if (strict && SKILL_DIRECTORY_SKIP.has(entry.name)) continue;
+      if (strict && entry.name.includes("\\")) throw new Error(`skill path cannot be preserved: ${entry.name}`);
       if (entry.isDirectory()) {
-        if (!isIgnoredLocalSkillEntry(entry.name)) visit(path);
+        if (strict || !isIgnoredLocalSkillEntry(entry.name)) visit(path, depth + 1);
         continue;
       }
-      if (!entry.isFile() || isIgnoredLocalSkillEntry(entry.name) || entry.name.toLowerCase() === "skill.md") continue;
+      if (strict) {
+        if (path === join(skillDir, "SKILL.md")) continue;
+        if (!entry.isFile()) throw new Error(`unsupported skill file (not a regular file): ${slashPath(relative(skillDir, path))}`);
+      } else if (!entry.isFile() || isIgnoredLocalSkillEntry(entry.name) || entry.name.toLowerCase() === "skill.md") continue;
       const rel = slashPath(relative(skillDir, path));
       let normalized: string;
       try {
         normalized = normalizeSkillFilePath(rel);
-      } catch {
+        if (strict && (normalized !== rel || normalizedPaths.has(normalized))) throw new Error(`skill path cannot be preserved: ${rel}`);
+      } catch (error) {
+        if (strict) throw error;
         continue;
       }
       const size = fileSize(path);
-      if (size == null || size > MAX_LOCAL_SKILL_FILE_SIZE) continue;
+      if (size == null || size > MAX_LOCAL_SKILL_FILE_SIZE) {
+        if (strict) throw new Error(`skill file unreadable or exceeds ${MAX_LOCAL_SKILL_FILE_SIZE} bytes: ${rel}`);
+        continue;
+      }
       const content = readRuntimeLocalSkillTextFile(path);
-      if (content == null) continue;
+      if (content == null) {
+        if (strict) throw new Error(`skill file is not readable UTF-8 text: ${rel}`);
+        continue;
+      }
       if (files.length >= MAX_LOCAL_SKILL_FILE_COUNT) throw new Error(`local skill exceeds ${MAX_LOCAL_SKILL_FILE_COUNT} files`);
       totalSize += size;
       if (totalSize > MAX_LOCAL_SKILL_BUNDLE_SIZE) throw new Error(`local skill exceeds ${MAX_LOCAL_SKILL_BUNDLE_SIZE} bytes in total`);
       files.push({ path: normalized, content: includeContent ? content : "" });
+      normalizedPaths.add(normalized);
     }
   };
 
@@ -155,8 +257,9 @@ function collectRuntimeLocalSkillFiles(skillDir: string, includeContent: boolean
   return files.sort((left, right) => left.path.localeCompare(right.path));
 }
 
-function readRuntimeLocalSkillMainFile(skillDir: string): string {
+function readRuntimeLocalSkillMainFile(skillDir: string, strict = false): string {
   const mainPath = join(skillDir, "SKILL.md");
+  if (strict && !lstatSync(mainPath).isFile()) throw new Error("SKILL.md must be a regular file");
   const size = fileSize(mainPath);
   if (size == null) throw new Error("local skill not found");
   if (size > MAX_LOCAL_SKILL_FILE_SIZE) throw new Error(`SKILL.md exceeds ${MAX_LOCAL_SKILL_FILE_SIZE} bytes`);
@@ -184,7 +287,7 @@ function normalizeLocalSkillKey(value: string): string {
   const normalized = slashPath(String(value ?? "").trim());
   if (!normalized) throw new Error("skill key is required");
   const parts = normalized.split("/").filter(Boolean);
-  if (normalized.startsWith("/") || parts.length === 0 || parts.some((part) => part === "." || part === "..")) {
+  if (normalized.startsWith("/") || /^[a-z]:/i.test(normalized) || normalized.includes("\0") || parts.length === 0 || parts.some((part) => part === "." || part === "..")) {
     throw new Error("invalid skill key");
   }
   return parts.join("/");

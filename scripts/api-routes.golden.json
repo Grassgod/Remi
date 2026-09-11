@@ -1,10 +1,10 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 729,
+    "routeCount": 733,
     "routeCountByPrefix": {
       "native": 209,
-      "compat": 506,
+      "compat": 510,
       "root": 14
     },
     "getRoutes": 312,
@@ -14,7 +14,7 @@
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 417,
+    "mutationRoutes": 421,
     "mutationRoutesCovered": 282,
     "flows": [
       "agents-compat",
@@ -69,6 +69,8 @@
     "DELETE /api/autopilots/:id",
     "DELETE /api/autopilots/:id/triggers/:triggerId",
     "DELETE /api/chat/sessions/:sessionId",
+    "DELETE /api/chat/sessions/:sessionId/queue",
+    "DELETE /api/chat/sessions/:sessionId/queue/:taskId",
     "DELETE /api/cloud-runtime/nodes",
     "DELETE /api/comments/:id",
     "DELETE /api/comments/:id/reactions",
@@ -446,6 +448,7 @@
     "PATCH /api/autopilots/:id",
     "PATCH /api/autopilots/:id/triggers/:triggerId",
     "PATCH /api/chat/sessions/:sessionId",
+    "PATCH /api/chat/sessions/:sessionId/queue/:taskId",
     "PATCH /api/daemons/:daemonId",
     "PATCH /api/issues/:id",
     "PATCH /api/issues/:id/sessions/:sessionId",
@@ -493,6 +496,7 @@
     "POST /api/autopilots/:id/triggers/:triggerId/rotate-webhook-token",
     "POST /api/chat/sessions",
     "POST /api/chat/sessions/:sessionId/messages",
+    "POST /api/chat/sessions/:sessionId/queue/:taskId/prioritize",
     "POST /api/chat/sessions/:sessionId/read",
     "POST /api/cli-token",
     "POST /api/cloud-billing/checkout-sessions",
@@ -2881,6 +2885,9 @@
         "title": "Compat chat",
         "status": "active",
         "has_unread": false,
+        "pinned": false,
+        "unread_count": 0,
+        "last_message": null,
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>"
       }
@@ -2891,6 +2898,8 @@
       "path": "/api/chat/sessions/chat_wk1mrnyfwl4x/messages",
       "status": 201,
       "body": {
+        "supports_queue": true,
+        "queued": false,
         "message_id": "msg_va5q49t622xv",
         "task_id": "tsk_8dim5r24mzl2",
         "created_at": "<timestamp>"
@@ -2917,6 +2926,13 @@
         "title": "Compat chat renamed",
         "status": "active",
         "has_unread": false,
+        "pinned": false,
+        "unread_count": 0,
+        "last_message": {
+          "content": "compat message",
+          "role": "user",
+          "created_at": "<timestamp>"
+        },
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>"
       }
@@ -2950,6 +2966,9 @@
           "latestTaskId": null,
           "unreadSince": null,
           "hasUnread": false,
+          "pinned": false,
+          "unreadCount": 0,
+          "lastMessage": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         }
@@ -2977,6 +2996,13 @@
           "latestTaskId": "tsk_ibk9if0740q3",
           "unreadSince": null,
           "hasUnread": false,
+          "pinned": false,
+          "unreadCount": 0,
+          "lastMessage": {
+            "content": "native message",
+            "role": "user",
+            "createdAt": "<timestamp>"
+          },
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         },
@@ -3060,7 +3086,9 @@
           "completedAt": null,
           "failedAt": null,
           "cancelledAt": null
-        }
+        },
+        "queued": true,
+        "supports_queue": true
       }
     },
     {
@@ -3085,6 +3113,13 @@
           "latestTaskId": "tsk_ibk9if0740q3",
           "unreadSince": null,
           "hasUnread": false,
+          "pinned": false,
+          "unreadCount": 0,
+          "lastMessage": {
+            "content": "native message",
+            "role": "user",
+            "createdAt": "<timestamp>"
+          },
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         }
@@ -7280,6 +7315,13 @@
           "title": "Snapshot chat",
           "status": "active",
           "has_unread": false,
+          "pinned": false,
+          "unread_count": 0,
+          "last_message": {
+            "content": "Snapshot chat message",
+            "role": "user",
+            "created_at": "<timestamp>"
+          },
           "created_at": "<timestamp>",
           "updated_at": "<timestamp>"
         }
@@ -7299,6 +7341,13 @@
         "title": "Snapshot chat",
         "status": "active",
         "has_unread": false,
+        "pinned": false,
+        "unread_count": 0,
+        "last_message": {
+          "content": "Snapshot chat message",
+          "role": "user",
+          "created_at": "<timestamp>"
+        },
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>"
       }
@@ -7367,7 +7416,9 @@
       "body": {
         "task_id": "tsk_qxjbfrxonmls",
         "status": "queued",
-        "created_at": "<timestamp>"
+        "created_at": "<timestamp>",
+        "supports_queue": true,
+        "queued_tasks": []
       }
     },
     {
@@ -7932,6 +7983,17 @@
             "allowed": true
           },
           {
+            "id": "chat.archive",
+            "command": "remi chat archive",
+            "capability": "chat.archive",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "chat.create",
             "command": "remi chat create",
             "capability": "chat.create",
@@ -8064,9 +8126,97 @@
             "allowed": true
           },
           {
+            "id": "chat.pin",
+            "command": "remi chat pin",
+            "capability": "chat.pin",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "chat.queue.clear",
+            "command": "remi chat queue clear",
+            "capability": "chat.queue.clear",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "chat.queue.list",
+            "command": "remi chat queue list",
+            "capability": "chat.queue.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "chat.queue.prioritize",
+            "command": "remi chat queue prioritize",
+            "capability": "chat.queue.prioritize",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "chat.queue.remove",
+            "command": "remi chat queue remove",
+            "capability": "chat.queue.remove",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "chat.queue.update",
+            "command": "remi chat queue update",
+            "capability": "chat.queue.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "chat.read",
             "command": "remi chat read",
             "capability": "chat.read",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "chat.restore",
+            "command": "remi chat restore",
+            "capability": "chat.restore",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "chat.unpin",
+            "command": "remi chat unpin",
+            "capability": "chat.unpin",
             "outputs": [
               "table",
               "json",
@@ -17237,6 +17387,13 @@
             "latestTaskId": "tsk_qxjbfrxonmls",
             "unreadSince": null,
             "hasUnread": false,
+            "pinned": false,
+            "unreadCount": 0,
+            "lastMessage": {
+              "content": "Snapshot chat message",
+              "role": "user",
+              "createdAt": "<timestamp>"
+            },
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           }
@@ -17266,6 +17423,13 @@
           "latestTaskId": "tsk_qxjbfrxonmls",
           "unreadSince": null,
           "hasUnread": false,
+          "pinned": false,
+          "unreadCount": 0,
+          "lastMessage": {
+            "content": "Snapshot chat message",
+            "role": "user",
+            "createdAt": "<timestamp>"
+          },
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         },

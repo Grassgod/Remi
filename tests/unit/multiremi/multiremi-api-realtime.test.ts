@@ -478,6 +478,9 @@ describe("Multiremi API — realtime websockets", () => {
       peer.addEventListener("message", (event) => peerMessages.push(JSON.parse(String(event.data))));
 
       const sent = store.sendChatMessage(chat.id, { body: "hello private" });
+      const queued = store.sendChatMessage(chat.id, { body: "private pending" });
+      store.updateQueuedChatTask(chat.id, queued.task.id, "private revised input");
+      store.removeQueuedChatTasks(chat.id, queued.task.id);
       expect(store.claimTask(runtime.id)?.id).toBe(sent.task.id);
       store.startTask(sent.task.id);
       store.completeTask(sent.task.id, { output: "all done", sessionId: "sess-chat", workDir: "/tmp/chat" });
@@ -498,6 +501,7 @@ describe("Multiremi API — realtime websockets", () => {
         actor_type: "system",
         payload: { chat_session_id: chat.id, task_id: sent.task.id, content: "all done" },
       });
+      expect(first("chat:queue_updated")).toMatchObject({ type: "chat:queue_updated", payload: { chat_session_id: chat.id } });
       expect(first("chat:session_read")).toMatchObject({ type: "chat:session_read", payload: { chat_session_id: chat.id } });
       expect(first("chat:session_updated")).toMatchObject({
         type: "chat:session_updated",

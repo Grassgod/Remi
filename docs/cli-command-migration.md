@@ -56,6 +56,19 @@ Use `remi help <path>` or `remi <path> --help` for the registered positional and
 option contract. All capability commands declare their authentication identities,
 mutation class, and `table|json|jsonl` output contract in the Registry.
 
+`remi runtime skill scan <runtime> --root '~/.agents/skills'` discovers skills in
+a directory on that Runtime's machine. Poll `runtime skill status <runtime>
+<scan-request>` until it completes, then import a returned key with `runtime skill
+import <runtime> --scan-request <scan-request> --key <skill-key>`. The scan binds
+the import to the selected directory; `--name` and `--description` optionally
+override library metadata. Poll `runtime skill import-status <runtime>
+<import-request>` to obtain the imported skill. These operations require an online
+Runtime owned by the caller. Imports copy content into the Remi skill library;
+assign the imported skill to a cloud agent separately. See the
+[Runtime skill import contract](runtime-skills.md) for file limits and daemon
+compatibility. JSON request input remains available through `--data` or `--file`;
+`--json` selects JSON output.
+
 ### Repository checkout defaults
 
 `remi repo checkout <repository-or-url>` without `--ref` prefers the workspace
@@ -81,6 +94,13 @@ Deployment administrators can provision or reset an account with
 master token and grants the account owner membership in the selected workspace.
 Both commands are unavailable to task identities; password values have no dedicated
 command-line flag and should be supplied without putting them in shell history.
+
+Chat management uses `remi chat pin|unpin|archive|restore <chat>`. Archiving stops
+unfinished runs and makes the conversation read-only until restored. While a
+Chat is running, `remi chat queue list|update|remove|clear|prioritize` manages its
+queued follow-ups. `prioritize <chat> <task>` moves the selected message next and
+stops the current run; `update <chat> <task> --content-file <path>` edits only a
+message that has not started. See the [Chat contract](chat.md).
 
 The Feishu ingestion domain exposes source administration through
 `remi feishu source list|get|status|add|update` and task-safe processing through

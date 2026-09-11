@@ -131,8 +131,11 @@ describe("Multiremi store — chat sessions and private agent access", () => {
       "has_unread",
       "id",
       "issue_id",
+      "last_message",
+      "pinned",
       "status",
       "title",
+      "unread_count",
       "updated_at",
       "workspace_id",
     ]);
@@ -163,7 +166,7 @@ describe("Multiremi store — chat sessions and private agent access", () => {
     });
     expect(sent.status).toBe(201);
     const sentBody = await sent.json();
-    expect(Object.keys(sentBody).sort()).toEqual(["created_at", "message_id", "task_id"]);
+    expect(Object.keys(sentBody).sort()).toEqual(["created_at", "message_id", "queued", "supports_queue", "task_id"]);
     expect(store.getTask(sentBody.task_id)?.chatSessionId).toBe(createdBody.id);
     const messages = await app.request(`/api/chat/sessions/${createdBody.id}/messages`, { headers: aliceAuthHeaders });
     const messagesBody = await messages.json();
@@ -260,6 +263,8 @@ describe("Multiremi store — chat sessions and private agent access", () => {
     const pendingBeforeDeleteBody = await pendingBeforeDelete.json();
     expect(store.getTask(pendingBeforeDeleteBody.task_id)?.chatSessionId).toBe(createdBody.id);
 
+    store.appendTaskMessages(sentBody.task_id, [{ type: "text", content: "private transcript" }]);
+    expect((await app.request(`/api/tasks/${sentBody.task_id}/messages`, { headers: bobAuthHeaders })).status).toBe(403);
     const aliceSession = await app.request(`/api/chat/sessions/${createdBody.id}`, { headers: aliceAuthHeaders });
     expect((await aliceSession.json()).id).toBe(createdBody.id);
     expect((await app.request(`/api/chat/sessions/${createdBody.id}`, {
@@ -268,10 +273,20 @@ describe("Multiremi store — chat sessions and private agent access", () => {
     })).status).toBe(204);
     expect(store.getChatSession(createdBody.id)).toBeNull();
     expect(store.getTask(sentBody.task_id)?.status).toBe("completed");
-    expect(store.getTask(sentBody.task_id)?.chatSessionId).toBeNull();
+    expect(store.getTask(sentBody.task_id)?.chatSessionId).toBe(createdBody.id);
     expect(store.getTask(pendingBeforeDeleteBody.task_id)?.status).toBe("cancelled");
-    expect(store.getTask(pendingBeforeDeleteBody.task_id)?.chatSessionId).toBeNull();
+    expect(store.getTask(pendingBeforeDeleteBody.task_id)?.chatSessionId).toBe(createdBody.id);
     expect(store.getAttachment(attachment.id)).toBeNull();
+    for (const headers of [aliceAuthHeaders, bobAuthHeaders]) {
+      expect((await app.request(`/api/tasks/${sentBody.task_id}/messages`, { headers })).status).toBe(403);
+      expect((await app.request(`/api/multiremi/tasks/${sentBody.task_id}/messages`, { headers })).status).toBe(403);
+    }
+    const recreated = await app.request("/api/chat/sessions", {
+      method: "POST", headers: bobHeaders, body: JSON.stringify({ id: createdBody.id, agent_id: agent.id }),
+    });
+    expect(recreated.status).toBe(409);
+    expect(store.getChatSession(createdBody.id)).toBeNull();
+    expect((await app.request(`/api/tasks/${sentBody.task_id}/messages`, { headers: bobAuthHeaders })).status).toBe(403);
   });
 
   it("rechecks private agent access across chat and agent HTTP surfaces", async () => {

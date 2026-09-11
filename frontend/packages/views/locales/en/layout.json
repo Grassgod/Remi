@@ -14,7 +14,8 @@
     "runtimes": "Runtimes",
     "plugins": "Plugins",
     "skills": "Skills",
-    "settings": "Settings"
+    "settings": "Settings",
+    "chat": "Chat"
   },
   "help": {
     "trigger": "Help",
