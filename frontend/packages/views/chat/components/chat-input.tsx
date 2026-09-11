@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@multiremi/ui/lib/utils";
 import {
   ContentEditor,
@@ -10,10 +10,16 @@ import {
   FileDropOverlay,
 } from "../../editor";
 import { FileUploadButton } from "@multiremi/ui/components/common/file-upload-button";
-import { SubmitButton } from "@multiremi/ui/components/common/submit-button";
+import { ArrowUp, Loader2, Square } from "lucide-react";
+import { Button } from "@multiremi/ui/components/ui/button";
 import { useChatStore, DRAFT_NEW_SESSION } from "@multiremi/core/chat";
 import { createLogger } from "@multiremi/core/logger";
-import { enterKey, formatShortcut, modKey } from "@multiremi/core/platform";
+import {
+  getCurrentWsId,
+  enterKey,
+  formatShortcut,
+  modKey,
+} from "@multiremi/core/platform";
 import type { UploadResult } from "@multiremi/core/hooks/use-file-upload";
 import type { MentionItem } from "../../editor/extensions/mention-suggestion";
 import { useT } from "../../i18n";
@@ -21,7 +27,7 @@ import { useT } from "../../i18n";
 const logger = createLogger("chat.ui");
 
 interface ChatInputProps {
-  onSend: (content: string, attachmentIds?: string[]) => void;
+  onSend: (content: string, attachmentIds?: string[]) => void | Promise<void>;
   /** Receives a File and returns the attachment row (with id + CDN link).
    *  The wrapper owner (ChatWindow) lazy-creates a chat_session if needed
    *  and forwards `chatSessionId` to the upload — chat-input only cares
@@ -31,6 +37,7 @@ interface ChatInputProps {
   onUploadFile?: (file: File) => Promise<UploadResult | null>;
   onStop?: () => void;
   isRunning?: boolean;
+  supportsQueue?: boolean;
   disabled?: boolean;
   /** True when the user has no agent available — disables the editor and
    *  surfaces a distinct placeholder. Kept separate from `disabled` so
@@ -49,6 +56,7 @@ export function ChatInput({
   onUploadFile,
   onStop,
   isRunning,
+  supportsQueue,
   disabled,
   noAgent,
   agentName,
@@ -59,30 +67,12 @@ export function ChatInput({
   const editorRef = useRef<ContentEditorRef>(null);
   const activeSessionId = useChatStore((s) => s.activeSessionId);
   const selectedAgentId = useChatStore((s) => s.selectedAgentId);
-  // Two keys with deliberately different concerns:
-  //
-  // `draftKey` — zustand storage key. Scopes the in-progress draft per
-  // session so different sessions don't bleed text into each other; for
-  // brand-new chats it falls back to a per-agent slot so switching agents
-  // mid-compose gives each agent its own draft. This is a STORAGE key, not
-  // a React identity.
-  //
-  // `editorKey` — React `key` on the ContentEditor. Used ONLY to force a
-  // remount when the user explicitly switches agent (so Tiptap's
-  // Placeholder, which only reads on mount, refreshes to "Tell {agent}…").
-  // Crucially this does NOT include `activeSessionId`: when the user
-  // uploads a file in a brand-new chat, `handleUploadFile` first awaits
-  // `ensureSession` which lazily creates the session and flips
-  // `activeSessionId` from null → uuid mid-upload. If the editor key
-  // depended on session id, that flip would unmount the editor right as
-  // the blob preview was inserted, dropping the in-progress upload's
-  // image node before file-upload.ts could swap it for the CDN URL — the
-  // user would see the image flash on then disappear. Keeping editor
-  // identity stable across the lazy-create event is what makes
-  // first-upload-creates-session work the same as second-upload.
+  // Draft storage follows the session. Editor identity changes when the
+  // user switches chats, while lazy creation during upload/send keeps the
+  // same editor mounted so in-flight attachment previews are retained.
   const draftKey =
     activeSessionId ?? `${DRAFT_NEW_SESSION}:${selectedAgentId ?? ""}`;
-  const editorKey = selectedAgentId ?? "no-agent";
+
   // Select a primitive — empty-string fallback keeps referential stability.
   const inputDraft = useChatStore((s) => s.inputDrafts[draftKey] ?? "");
   const setInputDraft = useChatStore((s) => s.setInputDraft);
@@ -95,26 +85,54 @@ export function ChatInput({
   // bypass the button (Mod+Enter while paste is mid-stream, drag-drop
   // racing the keyboard) — defense in depth.
   const [pendingUploads, setPendingUploads] = useState(0);
+  const [isSending, setIsSending] = useState(false);
+  const sendingRef = useRef(false);
+  const [sendError, setSendError] = useState(false);
+  const editorIdentity = useRef({ sessionId: activeSessionId, version: 0 });
+  if (editorIdentity.current.sessionId !== activeSessionId) {
+    const lazyCreation =
+      !editorIdentity.current.sessionId &&
+      !!activeSessionId &&
+      (pendingUploads > 0 || sendingRef.current);
+    editorIdentity.current = {
+      sessionId: activeSessionId,
+      version: editorIdentity.current.version + (lazyCreation ? 0 : 1),
+    };
+  }
+  const editorKey = `${selectedAgentId ?? "no-agent"}:${editorIdentity.current.version}`;
 
-  // Maps "CDN URL inserted into the editor" → "attachment row id" so that
-  // on send we can ask the server to bind only the attachments still
-  // referenced in the message body. Cleared after every send. Mirrors the
-  // comment-input flow exactly.
-  const uploadMapRef = useRef<Map<string, string>>(new Map());
+  // URL bindings share the draft store so opening the full page, reopening
+  // the floating panel or switching sessions retains uploaded attachments.
+  const setInputDraftAttachment = useChatStore(
+    (s) => s.setInputDraftAttachment,
+  );
+  useEffect(() => {
+    setIsEmpty(!inputDraft.trim());
+    setSendError(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editorKey]);
 
   const handleUpload = useCallback(
     async (file: File): Promise<UploadResult | null> => {
       if (!onUploadFile) return null;
+      const workspaceAtUpload = getCurrentWsId();
       setPendingUploads((n) => n + 1);
       try {
         const result = await onUploadFile(file);
-        if (result) uploadMapRef.current.set(result.link, result.id);
+        if (getCurrentWsId() !== workspaceAtUpload) return null;
+        if (result) {
+          setInputDraftAttachment(
+            result.chat_session_id ?? draftKey,
+            result.link,
+            result.id,
+          );
+        }
         return result;
       } finally {
         setPendingUploads((n) => Math.max(0, n - 1));
       }
     },
-    [onUploadFile],
+    [onUploadFile, draftKey, setInputDraftAttachment],
   );
 
   // Drop zone wraps the rounded card so a drop anywhere on the input
@@ -124,9 +142,18 @@ export function ChatInput({
     onDrop: (files) => files.forEach((f) => editorRef.current?.uploadFile(f)),
   });
 
-  const handleSend = () => {
-    const content = editorRef.current?.getMarkdown()?.replace(/(\n\s*)+$/, "").trim();
-    if (!content || isRunning || disabled || noAgent) {
+  const handleSend = async () => {
+    const content = editorRef.current
+      ?.getMarkdown()
+      ?.replace(/(\n\s*)+$/, "")
+      .trim();
+    if (
+      !content ||
+      (isRunning && !supportsQueue) ||
+      disabled ||
+      noAgent ||
+      sendingRef.current
+    ) {
       logger.debug("input.send skipped", {
         emptyContent: !content,
         isRunning,
@@ -136,7 +163,7 @@ export function ChatInput({
       return;
     }
     // Block the send while any file is still uploading. If we let it
-    // through the attachment id is not yet in uploadMapRef (the upload
+    // through the attachment binding has not been stored yet (the upload
     // resolves later) and the attachment would only end up bound to the
     // session, not the message — the agent then can't `multimira attachment
     // download <id>` the file. The SubmitButton is also disabled in this
@@ -149,31 +176,61 @@ export function ChatInput({
     // Only send attachment IDs for uploads still present in the content.
     // Edits / deletions that remove the markdown URL also drop the binding.
     const activeIds: string[] = [];
-    for (const [url, id] of uploadMapRef.current) {
+    for (const [url, id] of Object.entries(
+      useChatStore.getState().inputDraftAttachments[draftKey] ?? {},
+    )) {
       if (content.includes(url)) activeIds.push(id);
     }
     // Capture draft key BEFORE onSend — creating a new session mutates
     // activeSessionId synchronously, so reading it after onSend would point
     // at the new session and leave the old draft orphaned.
     const keyAtSend = draftKey;
+    const workspaceAtSend = getCurrentWsId();
+    const editorAtSend = editorKey;
     logger.info("input.send", {
       contentLength: content.length,
       draftKey: keyAtSend,
       attachmentCount: activeIds.length,
     });
-    onSend(content, activeIds.length > 0 ? activeIds : undefined);
-    editorRef.current?.clearContent();
-    // Drop focus so the caret doesn't keep blinking under the StatusPill /
-    // streaming reply that's about to take over the user's attention. The
-    // input is also `disabled` once isRunning flips, and a focused-but-
-    // disabled editor reads as a stale cursor. We deliberately don't auto-
-    // refocus on completion — that would interrupt the user if they're
-    // selecting text from the assistant reply; one click to refocus is
-    // a fair price for not stealing focus mid-action.
-    editorRef.current?.blur();
-    clearInputDraft(keyAtSend);
-    uploadMapRef.current.clear();
-    setIsEmpty(true);
+    sendingRef.current = true;
+    setIsSending(true);
+    setSendError(false);
+    try {
+      await onSend(content, activeIds.length > 0 ? activeIds : undefined);
+      if (getCurrentWsId() !== workspaceAtSend) return;
+      // A user may keep typing while the request is in flight. Only clear
+      // the submitted content; retain subsequent edits and their attachments.
+      const current = editorRef.current?.getMarkdown()?.trim();
+      if (
+        `${useChatStore.getState().selectedAgentId ?? "no-agent"}:${editorIdentity.current.version}` ===
+          editorAtSend &&
+        current === content
+      ) {
+        editorRef.current?.clearContent();
+        clearInputDraft(keyAtSend);
+        const currentSession = useChatStore.getState().activeSessionId;
+        if (currentSession && currentSession !== keyAtSend)
+          clearInputDraft(currentSession);
+        setIsEmpty(true);
+      }
+    } catch {
+      if (getCurrentWsId() !== workspaceAtSend) return;
+      if (
+        `${useChatStore.getState().selectedAgentId ?? "no-agent"}:${editorIdentity.current.version}` !==
+        editorAtSend
+      )
+        return;
+      setSendError(true);
+      const currentSession = useChatStore.getState().activeSessionId;
+      if (currentSession)
+        setInputDraft(
+          currentSession,
+          editorRef.current?.getMarkdown() ?? content,
+        );
+    } finally {
+      sendingRef.current = false;
+      setIsSending(false);
+    }
   };
 
   const placeholder = noAgent
@@ -194,7 +251,7 @@ export function ChatInput({
         // pointer-events-none, which suppresses hover (and therefore
         // any cursor of its own) — splitting the two layers lets hover
         // bubble back here so the browser actually reads cursor.
-        noAgent && "cursor-not-allowed",
+        (noAgent || disabled) && "cursor-not-allowed",
       )}
     >
       <div
@@ -207,14 +264,13 @@ export function ChatInput({
           // we drop pointer events at the wrapper level so clicks miss
           // the editor entirely, and dim the surface so it reads as
           // "disabled" rather than "broken".
-          noAgent && "pointer-events-none opacity-60",
+          (noAgent || disabled) && "pointer-events-none opacity-60",
         )}
-        aria-disabled={noAgent || undefined}
+        aria-disabled={noAgent || disabled || undefined}
       >
         <div className="flex-1 min-h-0 overflow-y-auto px-3 py-2">
           <ContentEditor
-            // See the editorKey / draftKey split note above — editorKey
-            // intentionally does not depend on activeSessionId.
+            // The identity above distinguishes session switching from lazy creation.
             key={editorKey}
             ref={editorRef}
             defaultValue={inputDraft}
@@ -251,17 +307,52 @@ export function ChatInput({
               onSelect={(file) => editorRef.current?.uploadFile(file)}
             />
           )}
-          <SubmitButton
-            onClick={handleSend}
-            disabled={isEmpty || !!disabled || !!noAgent || pendingUploads > 0}
-            running={isRunning}
-            onStop={onStop}
-            tooltip={`${t(($) => $.input.send_tooltip)} · ${formatShortcut(modKey, enterKey)}`}
-            stopTooltip={t(($) => $.input.stop_tooltip)}
-          />
+          {isRunning && (
+            <Button
+              size="icon-sm"
+              aria-label={t(($) => $.input.stop_tooltip)}
+              title={t(($) => $.input.stop_tooltip)}
+              onClick={onStop}
+            >
+              <Square className="size-3.5 fill-current" />
+            </Button>
+          )}
+          {(!isRunning || supportsQueue) && (
+            <Button
+              size="icon-sm"
+              onClick={() => void handleSend()}
+              disabled={
+                isEmpty ||
+                !!disabled ||
+                !!noAgent ||
+                pendingUploads > 0 ||
+                isSending
+              }
+              aria-label={
+                isRunning
+                  ? t(($) => $.queue.add)
+                  : t(($) => $.input.send_tooltip)
+              }
+              title={`${isRunning ? t(($) => $.queue.add) : t(($) => $.input.send_tooltip)} · ${formatShortcut(modKey, enterKey)}`}
+            >
+              {isSending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <ArrowUp className="size-4" />
+              )}
+            </Button>
+          )}
         </div>
         {uploadEnabled && isDragOver && <FileDropOverlay />}
       </div>
+      {sendError && (
+        <p
+          role="alert"
+          className="mx-auto mt-2 max-w-4xl text-xs text-destructive"
+        >
+          {t(($) => $.input.send_failed)}
+        </p>
+      )}
     </div>
   );
 }

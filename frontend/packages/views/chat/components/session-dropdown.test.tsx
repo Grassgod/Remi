@@ -8,11 +8,16 @@ import type {
   ChatSession,
   PendingChatTasksResponse,
 } from "@multiremi/core/types";
+import { setCurrentWorkspace } from "@multiremi/core/platform";
 import enChat from "../../locales/en/chat.json";
 import enIssues from "../../locales/en/issues.json";
 
 const state = vi.hoisted(() => ({
   tasks: [] as unknown[],
+  update: vi.fn(),
+  remove: vi.fn(),
+  select: vi.fn(),
+  activeId: null as string | null,
 }));
 
 vi.mock("../../common/actor-avatar", () => ({
@@ -38,21 +43,31 @@ vi.mock("@tanstack/react-query", () => ({
 
 vi.mock("@multiremi/core/chat/mutations", () => ({
   useCreateChatSession: () => ({ mutateAsync: vi.fn() }),
-  useDeleteChatSession: () => ({ mutate: vi.fn(), isPending: false }),
+  useDeleteChatSession: () => ({ mutate: state.remove, isPending: false }),
   useMarkChatSessionRead: () => ({ mutate: vi.fn() }),
-  useUpdateChatSession: () => ({ mutate: vi.fn() }),
+  useUpdateChatSession: () => ({ mutate: state.update, isPending: false }),
 }));
 
 vi.mock("@multiremi/core/chat", () => ({
   useChatStore: Object.assign(
     (selector: (s: Record<string, unknown>) => unknown) =>
-      selector({ setActiveSession: vi.fn() }),
-    { getState: () => ({ setActiveSession: vi.fn() }) },
+      selector({
+        setActiveSession: state.select,
+        activeSessionId: state.activeId,
+      }),
+    {
+      getState: () => ({
+        setActiveSession: state.select,
+        activeSessionId: state.activeId,
+      }),
+    },
   ),
   reconcileSettledPendingChatTask: vi.fn(),
 }));
 
 import { SessionDropdown } from "./session-dropdown";
+
+beforeEach(() => setCurrentWorkspace("demo", "ws-1"));
 
 const TEST_RESOURCES = { en: { chat: enChat, issues: enIssues } };
 
@@ -72,7 +87,9 @@ function makeSession(overrides: Partial<ChatSession> = {}): ChatSession {
   } as ChatSession;
 }
 
-function pendingTask(sessionId: string): PendingChatTasksResponse["tasks"][number] {
+function pendingTask(
+  sessionId: string,
+): PendingChatTasksResponse["tasks"][number] {
   return {
     task_id: "task-1",
     chat_session_id: sessionId,
@@ -113,6 +130,9 @@ function openHistory() {
 describe("SessionDropdown history row", () => {
   beforeEach(() => {
     state.tasks = [];
+    state.update.mockReset();
+    state.remove.mockReset();
+    state.select.mockReset();
   });
 
   it("keeps rename and delete reachable from the keyboard, not just on hover", () => {
@@ -150,4 +170,116 @@ describe("SessionDropdown history row", () => {
     expect(document.querySelector(".text-success")).not.toBeNull();
     expect(document.querySelector(".text-emerald-500")).toBeNull();
   });
+});
+
+describe("SessionDropdown management", () => {
+  beforeEach(() => {
+    state.tasks = [];
+    state.update.mockReset();
+    state.remove.mockReset();
+    state.select.mockReset();
+  });
+  it("keeps archived conversations discoverable and restores them", () => {
+    renderDropdown([makeSession({ status: "archived" })]);
+    openHistory();
+    expect(screen.queryByText("Ship the release")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Archived" }));
+    expect(screen.getByText("Ship the release")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Restore chat" }));
+    expect(state.update).toHaveBeenCalledWith(
+      { sessionId: "session-1", status: "active" },
+      expect.any(Object),
+    );
+  });
+  it("pins and archives a conversation through the session mutation", () => {
+    renderDropdown([makeSession()]);
+    openHistory();
+    fireEvent.click(screen.getByRole("button", { name: "Pin chat" }));
+    expect(state.update).toHaveBeenLastCalledWith(
+      { sessionId: "session-1", pinned: true },
+      expect.any(Object),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Archive chat" }));
+    expect(state.update).toHaveBeenLastCalledWith(
+      { sessionId: "session-1", status: "archived" },
+      expect.any(Object),
+    );
+  });
+  it("does not clear the selected conversation when deletion fails", () => {
+    state.remove.mockImplementation((_id, callbacks) =>
+      callbacks.onError(new Error("offline")),
+    );
+    render(
+      <I18nProvider locale="en" resources={TEST_RESOURCES}>
+        <SessionDropdown
+          presentation="list"
+          sessions={[makeSession()]}
+          agents={[agent]}
+          activeSessionId="session-1"
+          onSelectSession={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Delete chat session" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(state.select).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+  });
+});
+
+it("keeps a newer selection when deletion of another conversation completes", () => {
+  let deleted: (() => void) | undefined;
+  state.remove.mockImplementation((_id, callbacks) => {
+    deleted = callbacks.onSuccess;
+  });
+  state.tasks = [];
+  state.select.mockReset();
+  state.activeId = "session-1";
+  const onSessionDeleted = vi.fn();
+  render(
+    <I18nProvider locale="en" resources={TEST_RESOURCES}>
+      <SessionDropdown
+        presentation="list"
+        sessions={[makeSession()]}
+        agents={[agent]}
+        activeSessionId="session-1"
+        onSelectSession={vi.fn()}
+        onSessionDeleted={onSessionDeleted}
+      />
+    </I18nProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Delete chat session" }));
+  fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+  state.activeId = "session-2";
+  deleted?.();
+  expect(state.select).not.toHaveBeenCalled();
+  expect(onSessionDeleted).not.toHaveBeenCalled();
+});
+
+it("allows archiving and pinning a running conversation and displays unread counts", () => {
+  state.tasks = [pendingTask("session-1")];
+  state.update.mockReset();
+  renderDropdown([
+    makeSession(),
+    makeSession({
+      id: "session-2",
+      title: "Other conversation",
+      has_unread: true,
+      unread_count: 3,
+    }),
+  ]);
+  openHistory();
+  fireEvent.click(screen.getAllByRole("button", { name: "Pin chat" })[0]!);
+  expect(state.update).toHaveBeenLastCalledWith(
+    { sessionId: "session-1", pinned: true },
+    expect.any(Object),
+  );
+  fireEvent.click(screen.getAllByRole("button", { name: "Archive chat" })[0]!);
+  expect(state.update).toHaveBeenLastCalledWith(
+    { sessionId: "session-1", status: "archived" },
+    expect.any(Object),
+  );
+  expect(screen.getByText("3")).toBeInTheDocument();
 });

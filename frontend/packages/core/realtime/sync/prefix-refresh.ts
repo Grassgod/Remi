@@ -242,7 +242,7 @@ const SPECIFIC_EVENTS = new Set([
   "daemon:heartbeat",
   // Chat events are handled explicitly below; do not double-invalidate.
   "chat:message", "chat:done", "chat:session_read", "chat:session_deleted",
-  "chat:session_updated",
+  "chat:session_updated", "chat:queue_updated",
   // task:message stays out of the prefix path because it fires per
   // streamed message during a long run — invalidating the snapshot on
   // every message would flood the network. Specific chat handlers below

@@ -11,7 +11,8 @@
     "placeholder_named": "{{name}}에게 메시지 보내기…",
     "placeholder_default": "메시지 입력…",
     "send_tooltip": "보내기",
-    "stop_tooltip": "중지"
+    "stop_tooltip": "중지",
+    "send_failed": "메시지를 보내지 못했습니다. 초안이 저장되었습니다. 다시 시도하세요."
   },
   "message_list": {
     "show_details": "세부 정보 보기",
@@ -134,5 +135,36 @@
     "load_failed": "요청을 불러오지 못했습니다.",
     "response_failed": "응답 전송에 실패했습니다. 다시 시도하세요.",
     "retry": "다시 시도"
+  },
+  "page": {
+    "title": "채팅",
+    "private": "에이전트와의 비공개 대화",
+    "open": "채팅 페이지 열기",
+    "history": "채팅 기록",
+    "back": "대화로 돌아가기",
+    "loading": "채팅 불러오는 중…",
+    "load_failed": "대화를 불러올 수 없습니다.",
+    "retry": "다시 시도"
+  },
+  "sessions": {
+    "pin": "채팅 고정",
+    "unpin": "고정 해제",
+    "archive": "채팅 보관",
+    "restore": "채팅 복원",
+    "active": "진행 중",
+    "archived": "보관됨",
+    "search": "채팅 검색…",
+    "failed": "작업에 실패했습니다. 다시 시도하세요."
+  },
+  "queue": {
+    "title": "대기 중인 메시지",
+    "add": "대기열에 추가",
+    "clear": "대기열 비우기",
+    "edit": "대기 메시지 편집",
+    "remove": "대기 메시지 삭제",
+    "prioritize": "지금 실행 (현재 실행 중지)",
+    "cancel": "취소",
+    "save": "저장",
+    "failed": "대기열을 업데이트하지 못했습니다. 다시 시도하세요."
   }
 }

@@ -159,7 +159,7 @@ describe("Multiremi API — comments, reactions, and attachments", () => {
       body: JSON.stringify({ body: "Hello original" }),
     });
     const sentBody = await sent.json();
-    expect(Object.keys(sentBody).sort()).toEqual(["created_at", "message_id", "task_id"]);
+    expect(Object.keys(sentBody).sort()).toEqual(["created_at", "message_id", "queued", "supports_queue", "task_id"]);
     expect(store.getTask(sentBody.task_id)?.chatSessionId).toBe(chatBody.id);
     const pending = await app.request(`/api/chat/sessions/${chatBody.id}/pending-task`);
     expect((await pending.json()).task_id).toBe(sentBody.task_id);

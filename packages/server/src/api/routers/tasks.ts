@@ -1,6 +1,7 @@
 import type { Hono } from "hono";
 import {
   canCurrentUserAccessAgent,
+  canCurrentUserAccessChatTask,
   canUserViewTaskMessages,
   currentTaskParentId,
   denyCurrentUserWorkspaceAccess,
@@ -31,7 +32,8 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     const status = c.req.query("status") as any;
     const taskToken = currentTaskAccessToken(c);
     const tasks = store.listTasks(status).filter((task) =>
-      taskToken?.workspaceId == null || task.workspaceId === taskToken.workspaceId
+      (taskToken?.workspaceId == null || task.workspaceId === taskToken.workspaceId)
+      && canCurrentUserAccessChatTask(c, store, task)
     );
     return c.json({ tasks: tasks.map(taskPublicResponse) });
   });
@@ -119,6 +121,7 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     if (!task) return c.json({ error: "task not found" }, 404);
     const taskDenied = denyCurrentUserWorkspaceAccess(c, store, task.workspaceId);
     if (taskDenied) return taskDenied;
+    if (!canCurrentUserAccessChatTask(c, store, task)) return c.json({ error: "forbidden" }, 403);
     return c.json({ task: taskPublicResponse(task) });
   });
   const cancelTaskRoute = async (c: any, compatibility: boolean) => {
@@ -126,6 +129,7 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     if (!task) return c.json({ error: "task not found" }, 404);
     const taskDenied = denyCurrentUserWorkspaceAccess(c, store, task.workspaceId);
     if (taskDenied) return taskDenied;
+    if (!canCurrentUserAccessChatTask(c, store, task)) return c.json({ error: "forbidden" }, 403);
     const taskToken = currentTaskAccessToken(c);
     if (taskToken?.taskId) {
       const supervisor = supervisorTaskIdentity(c, store);
@@ -167,6 +171,7 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     if (!task) return c.json({ error: "task not found" }, 404);
     const taskDenied = denyCurrentUserWorkspaceAccess(c, store, task.workspaceId);
     if (taskDenied) return taskDenied;
+    if (!canCurrentUserAccessChatTask(c, store, task)) return c.json({ error: "forbidden" }, 403);
     const body = await readJson<{ content?: string; kind?: string; force_answer?: boolean; forceAnswer?: boolean; reason?: string }>(c);
     const forceAnswer = body?.kind === "force_answer" || body?.force_answer === true || body?.forceAnswer === true;
     const content = cleanString(body?.content)
@@ -222,6 +227,7 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     if (!task) return c.json({ error: "task not found" }, 404);
     const taskDenied = denyCurrentUserWorkspaceAccess(c, store, task.workspaceId);
     if (taskDenied) return taskDenied;
+    if (!canCurrentUserAccessChatTask(c, store, task)) return c.json({ error: "forbidden" }, 403);
     return c.json({ messages: store.listTaskSteerMessages(task.id) });
   };
   app.post("/api/multiremi/tasks/:id/steer", steerTaskRoute);
@@ -233,6 +239,7 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     if (!task) return c.json({ error: "task not found" }, 404);
     const taskDenied = denyCurrentUserWorkspaceAccess(c, store, task.workspaceId);
     if (taskDenied) return taskDenied;
+    if (!canCurrentUserAccessChatTask(c, store, task)) return c.json({ error: "forbidden" }, 403);
     return c.json({ inspection: organizerTaskInspection(store, task) });
   };
   app.get("/api/multiremi/tasks/:id/inspection", inspectTaskRoute);
@@ -242,6 +249,7 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     if (!task) return c.json({ error: "task not found" }, 404);
     const taskDenied = denyCurrentUserWorkspaceAccess(c, store, task.workspaceId);
     if (taskDenied) return taskDenied;
+    if (!canCurrentUserAccessChatTask(c, store, task)) return c.json({ error: "forbidden" }, 403);
     const supervisor = supervisorTaskIdentity(c, store);
     if (!supervisor) {
       return c.json({ error: "supervisor task credential required", code: "organizer_supervisor_required" }, 403);
@@ -276,7 +284,8 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     if (!task) return c.json({ error: "task not found" }, 404);
     const taskDenied = denyCurrentUserWorkspaceAccess(c, store, task.workspaceId);
     if (taskDenied) return taskDenied;
-    if (!canUserViewTaskMessages(store, authenticatedRequestUserId(c), task)) {
+    if (!canCurrentUserAccessChatTask(c, store, task)) return c.json({ error: "forbidden" }, 403);
+    if (!task.chatSessionId && !canUserViewTaskMessages(store, authenticatedRequestUserId(c), task)) {
       return c.json({ error: "forbidden" }, 403);
     }
     return c.json({ messages: store.listTaskMessages(task.id) });
@@ -286,7 +295,8 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     if (!task) return c.json({ error: "task not found" }, 404);
     const taskDenied = denyCurrentUserWorkspaceAccess(c, store, task.workspaceId);
     if (taskDenied) return taskDenied;
-    if (!canUserViewTaskMessages(store, authenticatedRequestUserId(c), task)) {
+    if (!canCurrentUserAccessChatTask(c, store, task)) return c.json({ error: "forbidden" }, 403);
+    if (!task.chatSessionId && !canUserViewTaskMessages(store, authenticatedRequestUserId(c), task)) {
       return c.json({ error: "forbidden" }, 403);
     }
     return c.json({ requests: store.listTaskHumanRequests(task.id) });
@@ -296,7 +306,8 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     if (!task) return c.json({ error: "task not found" }, 404);
     const taskDenied = denyCurrentUserWorkspaceAccess(c, store, task.workspaceId);
     if (taskDenied) return taskDenied;
-    if (!canUserViewTaskMessages(store, authenticatedRequestUserId(c), task)) {
+    if (!canCurrentUserAccessChatTask(c, store, task)) return c.json({ error: "forbidden" }, 403);
+    if (!task.chatSessionId && !canUserViewTaskMessages(store, authenticatedRequestUserId(c), task)) {
       return c.json({ error: "forbidden" }, 403);
     }
     const requestId = c.req.param("requestId");
@@ -321,7 +332,8 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     if (!task) return c.json({ error: "task not found" }, 404);
     const taskDenied = denyCurrentUserWorkspaceAccess(c, store, task.workspaceId);
     if (taskDenied) return taskDenied;
-    if (!canUserViewTaskMessages(store, authenticatedRequestUserId(c), task)) {
+    if (!canCurrentUserAccessChatTask(c, store, task)) return c.json({ error: "forbidden" }, 403);
+    if (!task.chatSessionId && !canUserViewTaskMessages(store, authenticatedRequestUserId(c), task)) {
       return c.json({ error: "forbidden" }, 403);
     }
     const since = parseOptionalTaskMessageSince(c.req.query("since_seq") ?? c.req.query("sinceSeq") ?? c.req.query("since"));
@@ -333,7 +345,8 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     if (!task) return c.json({ error: "task not found" }, 404);
     const taskDenied = denyCurrentUserWorkspaceAccess(c, store, task.workspaceId);
     if (taskDenied) return taskDenied;
-    if (!canUserViewTaskMessages(store, authenticatedRequestUserId(c), task)) {
+    if (!canCurrentUserAccessChatTask(c, store, task)) return c.json({ error: "forbidden" }, 403);
+    if (!task.chatSessionId && !canUserViewTaskMessages(store, authenticatedRequestUserId(c), task)) {
       return c.json({ error: "forbidden" }, 403);
     }
     const artifact = store.getTaskPrompt(task.id);

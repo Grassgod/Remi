@@ -10,7 +10,8 @@
     "placeholder_named": "给 {{name}} 发消息…",
     "placeholder_default": "输入消息…",
     "send_tooltip": "发送",
-    "stop_tooltip": "停止"
+    "stop_tooltip": "停止",
+    "send_failed": "消息未发送。草稿已保留，请重试。"
   },
   "message_list": {
     "show_details": "查看详情",
@@ -131,5 +132,36 @@
     "load_failed": "无法加载该请求。",
     "response_failed": "提交失败，请重试。",
     "retry": "重试"
+  },
+  "page": {
+    "title": "对话",
+    "private": "与智能体的私人对话",
+    "open": "打开对话页面",
+    "history": "对话历史",
+    "back": "返回对话",
+    "loading": "正在加载对话…",
+    "load_failed": "无法加载对话。",
+    "retry": "重试"
+  },
+  "sessions": {
+    "pin": "置顶对话",
+    "unpin": "取消置顶",
+    "archive": "归档对话",
+    "restore": "恢复对话",
+    "active": "进行中",
+    "archived": "已归档",
+    "search": "搜索对话…",
+    "failed": "操作失败，请重试。"
+  },
+  "queue": {
+    "title": "待发送消息",
+    "add": "加入队列",
+    "clear": "清空队列",
+    "edit": "编辑排队消息",
+    "remove": "移除排队消息",
+    "prioritize": "立即处理（停止当前运行）",
+    "cancel": "取消",
+    "save": "保存",
+    "failed": "更新队列失败，请重试。"
   }
 }

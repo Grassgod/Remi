@@ -10,7 +10,8 @@
     "placeholder_named": "{{name}} にメッセージ…",
     "placeholder_default": "メッセージを入力…",
     "send_tooltip": "送信",
-    "stop_tooltip": "停止"
+    "stop_tooltip": "停止",
+    "send_failed": "送信できませんでした。下書きは保存されています。再試行してください。"
   },
   "message_list": {
     "show_details": "詳細を表示",
@@ -131,5 +132,36 @@
     "load_failed": "リクエストを読み込めませんでした。",
     "response_failed": "送信に失敗しました。もう一度お試しください。",
     "retry": "再試行"
+  },
+  "page": {
+    "title": "チャット",
+    "private": "エージェントとの非公開の会話",
+    "open": "チャットページを開く",
+    "history": "チャット履歴",
+    "back": "会話に戻る",
+    "loading": "チャットを読み込み中…",
+    "load_failed": "会話を読み込めませんでした。",
+    "retry": "再試行"
+  },
+  "sessions": {
+    "pin": "チャットを固定",
+    "unpin": "固定を解除",
+    "archive": "チャットをアーカイブ",
+    "restore": "チャットを復元",
+    "active": "進行中",
+    "archived": "アーカイブ済み",
+    "search": "チャットを検索…",
+    "failed": "操作に失敗しました。再試行してください。"
+  },
+  "queue": {
+    "title": "待機中のメッセージ",
+    "add": "キューに追加",
+    "clear": "キューを空にする",
+    "edit": "待機中のメッセージを編集",
+    "remove": "待機中のメッセージを削除",
+    "prioritize": "今すぐ実行（現在の実行を停止）",
+    "cancel": "キャンセル",
+    "save": "保存",
+    "failed": "キューを更新できませんでした。再試行してください。"
   }
 }

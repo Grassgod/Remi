@@ -19,6 +19,9 @@ export function chatSessionCompatibilityResponse(session: MultiremiChatSession):
   title: string;
   status: string;
   has_unread: boolean;
+  pinned: boolean;
+  unread_count: number;
+  last_message: { content: string; role: string; created_at: string } | null;
   created_at: string;
   updated_at: string;
 } {
@@ -31,6 +34,9 @@ export function chatSessionCompatibilityResponse(session: MultiremiChatSession):
     title: session.title,
     status: session.status,
     has_unread: session.hasUnread,
+    pinned: session.pinned,
+    unread_count: session.unreadCount,
+    last_message: session.lastMessage ? { content: session.lastMessage.content, role: session.lastMessage.role, created_at: session.lastMessage.createdAt } : null,
     created_at: session.createdAt,
     updated_at: session.updatedAt,
   };
@@ -72,11 +78,15 @@ export function chatMessageCompatibilityResponse(message: MultiremiChatMessage, 
 }
 
 export function sendChatMessageCompatibilityResponse(result: SendChatMessageResult): {
+  supports_queue: true;
+  queued: boolean;
   message_id: string;
   task_id: string;
   created_at: string;
 } {
   return {
+    supports_queue: true,
+    queued: result.queued,
     message_id: result.message.id,
     task_id: result.task.id,
     created_at: result.task.createdAt,

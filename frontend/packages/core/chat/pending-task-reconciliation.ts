@@ -20,7 +20,7 @@ export function reconcileSettledPendingChatTask(
     !previous.sessionId
     || !previous.taskId
     || previous.sessionId !== current.sessionId
-    || current.taskId
+    || previous.taskId === current.taskId
   ) {
     return false;
   }
@@ -36,6 +36,9 @@ export function reconcileSettledPendingChatTask(
   });
   void queryClient.invalidateQueries({
     queryKey: chatKeys.pendingTasks(wsId),
+  });
+  void queryClient.invalidateQueries({
+    queryKey: chatKeys.session(wsId, previous.sessionId),
   });
   return true;
 }

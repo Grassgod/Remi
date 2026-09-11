@@ -56,6 +56,7 @@ const EXPECTED_EVENTS: readonly string[] = [
   "invitation:revoked",
   "task:message",
   "chat:message",
+  "chat:queue_updated",
   "chat:done",
   "task:queued",
   "task:dispatch",

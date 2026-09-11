@@ -505,6 +505,17 @@ function chatCommandSpecs(): CommandSpec[] {
       const chat = await resolveChat(invocation, positional(invocation, 0, "chat"));
       await mutateAndRender(invocation, "PATCH", `/api/chat/sessions/${encodePath(String(chat.id))}`, await requestBody(invocation, { title: stringOption(invocation, "title") ?? undefined, status: stringOption(invocation, "status") ?? undefined }));
     }),
+    ...([
+      ["pin", "Pin a chat", { pinned: true }],
+      ["unpin", "Unpin a chat", { pinned: false }],
+      ["archive", "Archive a chat and stop its unfinished runs", { status: "archived" }],
+      ["restore", "Restore an archived chat", { status: "active" }],
+    ] as const).map(([action, description, body]) =>
+      nativeSpec(`chat.${action}`, ["chat", action], description, "write", HUMAN, [refPositional("chat")], [], async (invocation) => {
+        const chat = await resolveChat(invocation, positional(invocation, 0, "chat"));
+        await mutateAndRender(invocation, "PATCH", `/api/chat/sessions/${encodePath(String(chat.id))}`, body);
+      }),
+    ),
     groupSpec("chat.issue", "Manage a Chat's bound Issue"),
     nativeSpec("chat.issue.bind", ["chat", "issue", "bind"], "Bind a Chat to an Issue", "write", HUMAN, [refPositional("chat"), refPositional("issue")], [], async (invocation) => {
       const chat = await resolveChat(invocation, positional(invocation, 0, "chat"));
@@ -542,6 +553,29 @@ function chatCommandSpecs(): CommandSpec[] {
     nativeSpec("chat.pending", ["chat", "pending"], "Show pending chat tasks", "read", HUMAN, [optionalPositional("chat")], [], async (invocation) => {
       const chat = invocation.positionals[0]?.trim();
       await getAndRender(invocation, chat ? `/api/chat/sessions/${encodePath(chat)}/pending-task` : "/api/chat/pending-tasks", ["tasks"]);
+    }),
+    groupSpec("chat.queue", "Manage queued chat messages", ["chat", "queue"]),
+    nativeSpec("chat.queue.list", ["chat", "queue", "list"], "List queued follow-up messages", "read", HUMAN, [refPositional("chat")], [], async (invocation) => {
+      const chat = await resolveChat(invocation, positional(invocation, 0, "chat"));
+      await getAndRender(invocation, `/api/chat/sessions/${encodePath(String(chat.id))}/pending-task`, ["queued_tasks"]);
+    }),
+    nativeSpec("chat.queue.update", ["chat", "queue", "update"], "Edit a queued chat message", "write", HUMAN, [refPositional("chat"), refPositional("task")], COMMENT_BODY_OPTIONS, async (invocation) => {
+      const content = await contentOption(invocation);
+      if (!content?.trim()) throw new CliError("usage", "chat queue update requires non-empty --content or --content-file");
+      const chat = await resolveChat(invocation, positional(invocation, 0, "chat"));
+      await mutateAndRender(invocation, "PATCH", `/api/chat/sessions/${encodePath(String(chat.id))}/queue/${encodePath(positional(invocation, 1, "task"))}`, { content });
+    }),
+    nativeSpec("chat.queue.remove", ["chat", "queue", "remove"], "Cancel a queued chat message", "write", HUMAN, [refPositional("chat"), refPositional("task")], [], async (invocation) => {
+      const chat = await resolveChat(invocation, positional(invocation, 0, "chat"));
+      await mutateAndRender(invocation, "DELETE", `/api/chat/sessions/${encodePath(String(chat.id))}/queue/${encodePath(positional(invocation, 1, "task"))}`);
+    }),
+    nativeSpec("chat.queue.clear", ["chat", "queue", "clear"], "Cancel all queued follow-up messages", "write", HUMAN, [refPositional("chat")], [], async (invocation) => {
+      const chat = await resolveChat(invocation, positional(invocation, 0, "chat"));
+      await mutateAndRender(invocation, "DELETE", `/api/chat/sessions/${encodePath(String(chat.id))}/queue`);
+    }),
+    nativeSpec("chat.queue.prioritize", ["chat", "queue", "prioritize"], "Run a queued message next and stop the current run", "write", HUMAN, [refPositional("chat"), refPositional("task")], [], async (invocation) => {
+      const chat = await resolveChat(invocation, positional(invocation, 0, "chat"));
+      await mutateAndRender(invocation, "POST", `/api/chat/sessions/${encodePath(String(chat.id))}/queue/${encodePath(positional(invocation, 1, "task"))}/prioritize`, {});
     }),
     nativeSpec("chat.read", ["chat", "read"], "Mark a chat as read", "write", HUMAN, [refPositional("chat")], [], async (invocation) => {
       await mutateAndRender(invocation, "POST", `/api/chat/sessions/${encodePath(positional(invocation, 0, "chat"))}/read`, {});
@@ -673,13 +707,13 @@ function nativeSpec(
   };
 }
 
-function groupSpec(id: string, description: string): CommandSpec {
+function groupSpec(id: string, description: string, path: string[] = [id]): CommandSpec {
   return {
     id,
-    path: [id],
+    path,
     description,
     parse: "passthrough",
-    run: async () => { throw new CliError("usage", `usage: remi ${id} <command>`); },
+    run: async () => { throw new CliError("usage", `usage: remi ${path.join(" ")} <command>`); },
   };
 }
 

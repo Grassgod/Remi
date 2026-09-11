@@ -1310,6 +1310,28 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     secondWorker.terminate();
   });
 
+  it("preserves Chat queue order, resumes at claim, and projects sequenced messages", () => {
+    const workspace = store.createWorkspace({ name: "PG chat queue", slug: "pg-chat-queue" });
+    const agent = store.createAgent({ name: "PG chat", provider: "codex", workspaceId: workspace.id, maxConcurrentTasks: 4 });
+    const runtime = store.registerRuntime({ name: "PG chat runtime", provider: "codex", workspaceId: workspace.id, maxConcurrency: 4 });
+    const chat = store.createChatSession({ agentId: agent.id, workspaceId: workspace.id });
+    const first = store.sendChatMessage(chat.id, { content: "first" });
+    const second = store.sendChatMessage(chat.id, { content: "second" });
+    expect(store.getPendingChatTask(chat.id)?.id).toBe(first.task.id);
+    expect(JSON.stringify(store.buildTaskSessionProjection(first.task.id))).not.toContain("second");
+    expect(store.claimTask(runtime.id)?.id).toBe(first.task.id);
+    expect(store.claimTask(runtime.id)).toBeNull();
+    store.startTask(first.task.id);
+    store.completeTask(first.task.id, { output: "answer", sessionId: "pg-chat-session", workDir: "/tmp/pg-chat-queue" });
+    expect(store.listChatMessages(chat.id).map((message) => message.body)).toEqual(["first", "second", "answer"]);
+    expect(store.getChatSession(chat.id)?.lastMessage?.content).toBe("answer");
+    expect(store.claimTask(runtime.id)?.sessionId).toBe("pg-chat-session");
+    expect(store.buildTaskSessionProjection(second.task.id)?.mode).toBe("delta");
+    store.updateChatSession(chat.id, { pinned: true, status: "archived" });
+    expect(store.getChatSession(chat.id)?.pinned).toBe(true);
+    expect(store.getTask(second.task.id)?.status).toBe("cancelled");
+  });
+
   it("pool-claims unbound agents' tasks and stamps affinity (chat session + local directory)", () => {
     const ws = freshWorkspace();
     const codex = store.registerRuntime({ name: "rt-pool-codex", provider: "codex", workspaceId: ws, daemonId: "daemon-pg-pool" });

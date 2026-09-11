@@ -2,6 +2,7 @@ import type { InfiniteData, QueryClient } from "@tanstack/react-query";
 import { createLogger } from "../../logger";
 import { getCurrentWsId } from "../../platform/workspace-storage";
 import { chatKeys } from "../../chat/queries";
+import { removeChatSessionFromCache, updateChatSessionInCache } from "../../chat/session-cache";
 import { useChatStore } from "../../chat";
 import type {
   TaskQueuedPayload,
@@ -16,10 +17,22 @@ import type {
   ChatPendingTask,
   TaskAwaitingHumanPayload,
   ChatMessagesPage,
+  ChatSession,
 } from "../../types";
 import type { SyncContext, SyncModule } from "./types";
 
 const chatWsLogger = createLogger("chat.ws");
+
+function settleChatPendingTask(qc: QueryClient, sessionId: string, taskId: string): void {
+  qc.setQueryData<ChatPendingTask>(chatKeys.pendingTask(sessionId), old => {
+    if (!old) return old;
+    const queued = old.queued_tasks?.filter(task => task.task_id !== taskId);
+    if (old.task_id !== taskId) return queued ? { ...old, queued_tasks: queued } : old;
+    // Another device may have reprioritized the queue. Preserve its known
+    // contents, but let the authoritative refetch choose the next head.
+    return old.supports_queue ? { supports_queue: true, queued_tasks: queued ?? [] } : {};
+  });
+}
 
 export function applyChatDoneToCache(
   qc: QueryClient,
@@ -53,8 +66,8 @@ export function applyChatDoneToCache(
       (old) => patchLatestChatMessagePage(old, assistant),
     );
   }
-  // Replacement is in the messages list now; safe to drop pending.
-  qc.setQueryData(chatKeys.pendingTask(sessionId), {});
+  // The reply is persisted; advance only its matching queue head.
+  settleChatPendingTask(qc, sessionId, taskId);
   // Authoritative refetch reconciles redaction / migrations / clients
   // that took the fallback branch above.
   qc.invalidateQueries({ queryKey: chatKeys.messages(sessionId) });
@@ -84,9 +97,8 @@ function patchLatestChatMessagePage(
 /**
  * Chat / task events (global, survives ChatWindow unmount).
  *
- * Single source of truth: the Query cache. No Zustand writes here — the
- * earlier mirror caused a race where the cache and store disagreed
- * during the invalidate → refetch window and the UI rendered duplicates.
+ * Server state lives in Query cache. Only selection/draft cleanup after a
+ * confirmed session deletion touches the client store.
  *
  * chat:message / chat:done / task:completed / task:failed invalidate
  * messages + pending-task so the DB remains authoritative.
@@ -101,6 +113,18 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
     const id = getCurrentWsId();
     if (id) qc.invalidateQueries({ queryKey: chatKeys.sessions(id) });
   };
+  const invalidateSession = (sessionId: string) => {
+    const id = getCurrentWsId();
+    if (id) qc.invalidateQueries({ queryKey: chatKeys.session(id, sessionId) });
+  };
+  const invalidateQueue = (sessionId: string) => {
+    qc.invalidateQueries({ queryKey: chatKeys.pendingTask(sessionId) });
+    qc.invalidateQueries({ queryKey: chatKeys.messages(sessionId) });
+    qc.invalidateQueries({ queryKey: chatKeys.messagesPage(sessionId) });
+    invalidatePendingAggregate();
+    invalidateSessionLists();
+    invalidateSession(sessionId);
+  };
 
   return {
     handlers: {
@@ -108,8 +132,16 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
         const payload = p as { chat_session_id: string };
         chatWsLogger.info("chat:message (global)", { chat_session_id: payload.chat_session_id });
         qc.invalidateQueries({ queryKey: chatKeys.messages(payload.chat_session_id) });
+        qc.invalidateQueries({ queryKey: chatKeys.messagesPage(payload.chat_session_id) });
         qc.invalidateQueries({ queryKey: chatKeys.pendingTask(payload.chat_session_id) });
         invalidatePendingAggregate();
+        invalidateSessionLists();
+        invalidateSession(payload.chat_session_id);
+      },
+
+      "chat:queue_updated": (p) => {
+        const payload = p as { chat_session_id: string };
+        invalidateQueue(payload.chat_session_id);
       },
 
       "chat:done": (p) => {
@@ -135,6 +167,7 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
         invalidatePendingAggregate();
         // Assistant message just landed → has_unread may have flipped to true.
         invalidateSessionLists();
+        invalidateSession(payload.chat_session_id);
       },
 
       // Chat task lifecycle writethrough: keep `chatKeys.pendingTask(sessionId)`
@@ -145,19 +178,19 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
       //
       // task:queued is emitted by EnqueueChatTask. The optimistic seed in
       // chat-window.tsx may have already populated the cache with a temporary
-      // id; this handler upgrades it to the real task_id (and reaffirms status
-      // when reconnect replays the event for an already-running task).
+      // id; this handler upgrades it without replacing a running queue head.
       "task:queued": (p) => {
         const payload = p as TaskQueuedPayload;
         if (!payload.chat_session_id) return;
         qc.setQueryData<ChatPendingTask>(
           chatKeys.pendingTask(payload.chat_session_id),
-          (old) => ({
-            ...(old ?? {}),
-            task_id: payload.task_id,
-            status: "queued",
-          }),
+          (old) => {
+            // A follow-up or replay must not replace an already running head.
+            if (old?.task_id && !old.task_id.startsWith("optimistic-")) return old;
+            return { ...(old ?? {}), task_id: payload.task_id, status: "queued" };
+          },
         );
+        qc.invalidateQueries({ queryKey: chatKeys.pendingTask(payload.chat_session_id) });
         invalidatePendingAggregate();
       },
 
@@ -232,11 +265,7 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
         );
       },
 
-      // task:cancelled reaches us when:
-      //   1. handleStop already cleared the cache locally (this is a no-op confirm)
-      //   2. another tab / admin / system cancels — this is the only path that
-      //      drops the pending pill in those cases. Without it the pill spins
-      //      forever in the second-tab scenario.
+      // Cancellation can target the head or a follow-up. Retain every other task.
       "task:cancelled": (p) => {
         const payload = p as TaskCancelledPayload;
         if (!payload.chat_session_id) return;
@@ -244,8 +273,8 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
           task_id: payload.task_id,
           chat_session_id: payload.chat_session_id,
         });
-        qc.setQueryData(chatKeys.pendingTask(payload.chat_session_id), {});
-        invalidatePendingAggregate();
+        settleChatPendingTask(qc, payload.chat_session_id, payload.task_id);
+        invalidateQueue(payload.chat_session_id);
       },
 
       "task:completed": (p) => {
@@ -255,13 +284,9 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
           task_id: payload.task_id,
           chat_session_id: payload.chat_session_id,
         });
-        // `chat:done` (broadcast immediately before this event in CompleteTask)
-        // already wrote the assistant message into the messages cache and
-        // cleared `chatKeys.pendingTask`. This event is now only responsible
-        // for refreshing the per-user cross-session aggregate that drives the
-        // FAB indicator — `chat:done` is per-session and doesn't carry that
-        // information.
+        // chat:done writes the reply; reconcile the next head and the FAB aggregate.
         invalidatePendingAggregate();
+        qc.invalidateQueries({ queryKey: chatKeys.pendingTask(payload.chat_session_id) });
       },
 
       "task:failed": (p) => {
@@ -277,64 +302,62 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
         // failure bubble shows up without requiring a page refresh. Pre-#1823
         // this branch only flipped pending — the comment "No new message"
         // was true then, but FailTask now persists a row.
-        qc.setQueryData(chatKeys.pendingTask(payload.chat_session_id), {});
-        qc.invalidateQueries({ queryKey: chatKeys.messages(payload.chat_session_id) });
-        qc.invalidateQueries({ queryKey: chatKeys.pendingTask(payload.chat_session_id) });
-        invalidatePendingAggregate();
+        settleChatPendingTask(qc, payload.chat_session_id, payload.task_id);
+        invalidateQueue(payload.chat_session_id);
       },
 
       "chat:session_read": (p) => {
         const payload = p as { chat_session_id: string };
         chatWsLogger.info("chat:session_read (global)", payload);
         invalidateSessionLists();
+        invalidateSession(payload.chat_session_id);
       },
 
-      // chat:session_updated fires after the creator renames a session in
-      // any tab/device. Patch the cached row inline so the dropdown reflects
-      // the new title without a full sessions-list refetch.
+      // Rename, archive and pin changes update every cached list and detail.
       "chat:session_updated": (p) => {
         const payload = p as {
           chat_session_id: string;
           title?: string;
           updated_at?: string;
+          status?: ChatSession["status"];
+          pinned?: boolean;
         };
-        chatWsLogger.info("chat:session_updated (global)", payload);
+        chatWsLogger.info("chat:session_updated (global)", {
+          chat_session_id: payload.chat_session_id,
+          titleLength: payload.title?.length,
+          status: payload.status,
+          pinned: payload.pinned,
+        });
         const id = getCurrentWsId();
         if (!id) return;
-        const patch = (
-          old?: { id: string; title: string; updated_at: string }[],
-        ) =>
-          old?.map((s) =>
-            s.id === payload.chat_session_id
-              ? {
-                  ...s,
-                  title: payload.title ?? s.title,
-                  updated_at: payload.updated_at ?? s.updated_at,
-                }
-              : s,
-          );
-        qc.setQueryData(chatKeys.sessions(id), patch);
+        const patch = (session: ChatSession): ChatSession => ({
+          ...session,
+          title: payload.title ?? session.title,
+          updated_at: payload.updated_at ?? session.updated_at,
+          status: payload.status ?? session.status,
+          pinned: payload.pinned ?? session.pinned,
+        });
+        const cached = qc.getQueryData<ChatSession>(chatKeys.session(id, payload.chat_session_id))
+          ?? qc.getQueriesData<ChatSession[]>({ queryKey: chatKeys.sessions(id) })
+            .flatMap(([, sessions]) => sessions ?? [])
+            .find(session => session.id === payload.chat_session_id);
+        if (cached) updateChatSessionInCache(qc, id, patch(cached));
+        invalidateSessionLists();
+        invalidateSession(payload.chat_session_id);
       },
 
-      // chat:session_deleted fires after a hard delete. The originating tab has
-      // already optimistically dropped the row via useDeleteChatSession; this
-      // handler keeps OTHER tabs/devices in sync and also clears the active
-      // session pointer so a deleted session doesn't keep the chat window
-      // pointed at vanished messages.
+      // A confirmed hard delete removes cached history and the selected draft.
       "chat:session_deleted": (p) => {
         const payload = p as { chat_session_id: string };
         chatWsLogger.info("chat:session_deleted (global)", payload);
         const id = getCurrentWsId();
         if (id) {
-          const drop = (old?: { id: string }[]) =>
-            old?.filter((s) => s.id !== payload.chat_session_id);
-          qc.setQueryData(chatKeys.sessions(id), drop);
+          removeChatSessionFromCache(qc, id, payload.chat_session_id);
         }
-        qc.removeQueries({ queryKey: chatKeys.messages(payload.chat_session_id) });
-        qc.removeQueries({ queryKey: chatKeys.pendingTask(payload.chat_session_id) });
         invalidatePendingAggregate();
 
         const chatState = useChatStore.getState?.();
+        chatState?.clearInputDraft(payload.chat_session_id);
         if (chatState && chatState.activeSessionId === payload.chat_session_id) {
           chatState.setActiveSession(null);
         }
