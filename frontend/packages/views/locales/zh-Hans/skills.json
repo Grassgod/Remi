@@ -1,5 +1,6 @@
 {
   "page": {
+    "import_from_runtime": "从运行时导入",
     "title": "Skills",
     "tagline": "工作区里任何智能体都能使用的指令。",
     "learn_more": "了解更多 →",
@@ -172,8 +173,8 @@
         "desc": "通过 URL 拉取已发布的 skill，文件由服务端拉取。"
       },
       "runtime": {
-        "title": "从运行时复制",
-        "desc": "扫描本地运行时，把它磁盘上的 skill 提升到工作区。"
+        "title": "从运行时导入",
+        "desc": "扫描运行时上的目录，勾选 Skill 导入当前工作区的库。"
       }
     },
     "method_card": {
@@ -181,8 +182,8 @@
       "manual_desc": "从空白 SKILL.md 开始，自己写指令。",
       "url_title": "从 URL 导入",
       "url_desc": "从 ClawHub 或 Skills.sh 拉取已发布的 skill。",
-      "runtime_title": "从运行时复制",
-      "runtime_desc": "把本地运行时里已经装好的 skill 提升过来。"
+      "runtime_title": "从运行时导入",
+      "runtime_desc": "扫描运行时上的目录，勾选 Skill 导入当前工作区的库。"
     },
     "manual": {
       "name_label": "名称",
@@ -212,6 +213,14 @@
     }
   },
   "runtime_import": {
+    "default_directory": "默认 Skill 目录",
+    "custom_directory": "指定目录",
+    "directory_label": "运行时上的 Skill 目录",
+    "directory_placeholder": "例如 ~/.agents/skills",
+    "directory_hint": "输入该运行时上的绝对路径或 ~/…；隐藏目录可以直接输入路径。",
+    "scan_button": "扫描 Skill",
+    "scan_hint": "选择 Skill 目录后点击扫描，再勾选要导入的 Skill。",
+    "directory_bundle_hint": "包含无法导入文件的 Skill 会标记为不可选；导入前请查看扫描提示。",
     "runtime_label": "运行时",
     "runtime_placeholder": "选择一个本地运行时",
     "no_local_runtimes_title": "暂无可用的本地运行时",

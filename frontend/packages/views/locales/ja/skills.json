@@ -1,5 +1,6 @@
 {
   "page": {
+    "import_from_runtime": "ランタイムからインポート",
     "title": "スキル",
     "tagline": "このワークスペースのどのエージェントでも使用できる指示です。",
     "learn_more": "詳しく見る →",
@@ -158,8 +159,8 @@
         "desc": "公開済みのスキルを URL で取得します。ファイルはサーバー側で取得されます。"
       },
       "runtime": {
-        "title": "ランタイムからコピー",
-        "desc": "ローカルランタイムをスキャンし、ディスク上のスキルの 1 つをこのワークスペースに昇格します。"
+        "title": "ランタイムからインポート",
+        "desc": "ランタイムのディレクトリをスキャンし、ワークスペースに追加するスキルを選択します。"
       }
     },
     "method_card": {
@@ -167,8 +168,8 @@
       "manual_desc": "空の SKILL.md から始めて、独自の指示を記述します。",
       "url_title": "URL からインポート",
       "url_desc": "ClawHub または Skills.sh の公開スキルを取得します。",
-      "runtime_title": "ランタイムからコピー",
-      "runtime_desc": "ローカルランタイムにすでにインストールされているスキルを昇格します。"
+      "runtime_title": "ランタイムからインポート",
+      "runtime_desc": "ランタイムのディレクトリをスキャンし、ワークスペースに追加するスキルを選択します。"
     },
     "manual": {
       "name_label": "名前",
@@ -198,6 +199,14 @@
     }
   },
   "runtime_import": {
+    "default_directory": "既定のスキルディレクトリ",
+    "custom_directory": "ディレクトリを指定",
+    "directory_label": "ランタイム上のスキルディレクトリ",
+    "directory_placeholder": "例：~/.agents/skills",
+    "directory_hint": "このランタイムの絶対パスまたは ~/… を入力します。隠しフォルダも直接入力できます。",
+    "scan_button": "スキルをスキャン",
+    "scan_hint": "スキルのディレクトリを選んでスキャンし、インポートするスキルを選択します。",
+    "directory_bundle_hint": "インポートできないファイルを含むスキルは選択できません。スキャンの警告を確認してください。",
     "runtime_label": "ランタイム",
     "runtime_placeholder": "ローカルランタイムを選択",
     "no_local_runtimes_title": "利用可能なローカルランタイムがありません",

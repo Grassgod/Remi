@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircle,
@@ -19,7 +19,6 @@ import { useAuthStore } from "@multiremi/core/auth";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import {
   runtimeListOptions,
-  runtimeLocalSkillsKeys,
   runtimeLocalSkillsOptions,
   resolveRuntimeLocalSkillImport,
 } from "@multiremi/core/runtimes";
@@ -124,10 +123,13 @@ function SkillItem({
     >
       <div
         role="button"
+        aria-disabled={disabled || undefined}
         tabIndex={disabled ? -1 : 0}
-        onClick={onToggle}
+        onClick={() => {
+          if (!disabled) onToggle();
+        }}
         onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
+          if (!disabled && (e.key === "Enter" || e.key === " ")) {
             e.preventDefault();
             onToggle();
           }
@@ -136,6 +138,7 @@ function SkillItem({
       >
         <Checkbox
           checked={checked}
+          disabled={disabled}
           tabIndex={-1}
           className="pointer-events-none mt-0.5"
         />
@@ -152,6 +155,9 @@ function SkillItem({
           <p className="mt-1 truncate font-mono text-xs text-muted-foreground">
             {skill.source_path}
           </p>
+          {skill.error && (
+            <p className="mt-1 text-xs text-destructive">{skill.error}</p>
+          )}
         </div>
         <Badge variant="outline" className="shrink-0">
           {t(($) => $.runtime_import.skill_files, { count: skill.file_count })}
@@ -286,6 +292,16 @@ export function RuntimeLocalSkillImportPanel({
   );
 
   const [selectedRuntimeId, setSelectedRuntimeId] = useState<string>("");
+  const [directoryMode, setDirectoryMode] = useState<"default" | "custom">("default");
+  const [directory, setDirectory] = useState("");
+  const [scanTarget, setScanTarget] = useState<{
+    runtimeId: string;
+    root?: string;
+    sequence: number;
+  } | null>(null);
+  const scanSequence = useRef(0);
+  const scanSessionId = useId();
+  const directoryInputId = useId();
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [bulkState, setBulkState] = useState<BulkImportState>(INITIAL_BULK_STATE);
   const cancelRef = useRef(false);
@@ -295,11 +311,24 @@ export function RuntimeLocalSkillImportPanel({
 
   const importing = bulkState.phase === "importing";
 
+  const resetSelection = () => {
+    setSelectedKeys(new Set());
+    setBulkState(INITIAL_BULK_STATE);
+    setEditName("");
+    setEditDescription("");
+  };
+
+  const clearScan = () => {
+    setScanTarget(null);
+    resetSelection();
+  };
+
   useEffect(() => {
     setSelectedRuntimeId((prev) => prev || localRuntimes[0]?.id || "");
   }, [localRuntimes]);
 
   useEffect(() => {
+    setScanTarget(null);
     setSelectedKeys(new Set());
     setBulkState(INITIAL_BULK_STATE);
     setEditName("");
@@ -309,14 +338,38 @@ export function RuntimeLocalSkillImportPanel({
   const selectedRuntime = localRuntimes.find((r) => r.id === selectedRuntimeId);
   const canBrowseSkills =
     !!selectedRuntimeId && selectedRuntime?.status === "online";
-  const skillsQuery = useQuery({
-    ...runtimeLocalSkillsOptions(selectedRuntimeId || null),
-    enabled: canBrowseSkills,
-  });
-  const runtimeSkills = useMemo(
-    () => skillsQuery.data?.skills ?? [],
-    [skillsQuery.data],
+  const root = directoryMode === "custom" ? directory.trim() : undefined;
+  const hasCurrentScan =
+    scanTarget?.runtimeId === selectedRuntimeId && scanTarget.root === root;
+  const scanOptions = runtimeLocalSkillsOptions(
+    scanTarget?.runtimeId ?? selectedRuntimeId,
+    scanTarget?.root,
+    `${scanSessionId}:${scanTarget?.sequence ?? 0}`,
   );
+  const skillsQuery = useQuery({
+    ...scanOptions,
+    // Every explicit scan owns its result; late responses cannot replace another directory.
+    enabled: canBrowseSkills && hasCurrentScan,
+    gcTime: 0,
+  });
+  const scanResult =
+    hasCurrentScan && !skillsQuery.isFetching && !skillsQuery.isError
+      ? skillsQuery.data
+      : undefined;
+  const runtimeSkills = useMemo(
+    () => scanResult?.skills ?? [],
+    [scanResult],
+  );
+  const selectableSkills = useMemo(
+    () => runtimeSkills.filter((skill) => !skill.error),
+    [runtimeSkills],
+  );
+
+  const scan = () => {
+    if (!canBrowseSkills || importing || (directoryMode === "custom" && !root)) return;
+    resetSelection();
+    setScanTarget({ runtimeId: selectedRuntimeId, root, sequence: ++scanSequence.current });
+  };
 
   // The single selected skill (for inline editing). Only valid when exactly 1.
   const singleSelectedSkill =
@@ -327,6 +380,7 @@ export function RuntimeLocalSkillImportPanel({
   // -- Selection helpers --
 
   const toggleSkill = (key: string) => {
+    if (!selectableSkills.some(skill => skill.key === key)) return;
     setSelectedKeys((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
@@ -344,23 +398,27 @@ export function RuntimeLocalSkillImportPanel({
   };
 
   const toggleAll = () => {
-    if (selectedKeys.size === runtimeSkills.length) {
+    if (selectedKeys.size === selectableSkills.length) {
       setSelectedKeys(new Set());
     } else {
-      setSelectedKeys(new Set(runtimeSkills.map((s) => s.key)));
+      setSelectedKeys(new Set(selectableSkills.map((s) => s.key)));
+      if (selectableSkills.length === 1) {
+        setEditName(selectableSkills[0]!.name);
+        setEditDescription(selectableSkills[0]!.description ?? "");
+      }
     }
   };
 
   const allSelected =
-    runtimeSkills.length > 0 && selectedKeys.size === runtimeSkills.length;
+    selectableSkills.length > 0 && selectedKeys.size === selectableSkills.length;
   const someSelected = selectedKeys.size > 0 && !allSelected;
 
   // -- Bulk import handler --
 
   const handleBulkImport = async () => {
-    if (!selectedRuntimeId || selectedKeys.size === 0) return;
+    if (!selectedRuntimeId || selectedKeys.size === 0 || !scanResult?.scan_request_id) return;
 
-    const skillsToImport = runtimeSkills.filter((s) => selectedKeys.has(s.key));
+    const skillsToImport = selectableSkills.filter((s) => selectedKeys.has(s.key));
     const total = skillsToImport.length;
 
     cancelRef.current = false;
@@ -378,6 +436,7 @@ export function RuntimeLocalSkillImportPanel({
           : skill.description || undefined;
       try {
         const result = await resolveRuntimeLocalSkillImport(selectedRuntimeId, {
+          scan_request_id: scanResult.scan_request_id,
           skill_key: skill.key,
           name: importName,
           description: importDescription,
@@ -422,9 +481,6 @@ export function RuntimeLocalSkillImportPanel({
 
     // Invalidate queries ONCE at the end
     await Promise.all([
-      qc.invalidateQueries({
-        queryKey: runtimeLocalSkillsKeys.forRuntime(selectedRuntimeId),
-      }),
       qc.invalidateQueries({ queryKey: workspaceKeys.skills(wsId) }),
       qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) }),
     ]);
@@ -448,6 +504,7 @@ export function RuntimeLocalSkillImportPanel({
   const canImport =
     !!selectedRuntime &&
     selectedRuntime.status === "online" &&
+    !!scanResult?.scan_request_id &&
     selectedKeys.size > 0 &&
     // Single-select requires a non-empty name (user may be renaming)
     (selectedKeys.size > 1 || !!editName.trim()) &&
@@ -541,7 +598,14 @@ export function RuntimeLocalSkillImportPanel({
         </div>
       );
     }
-    if (skillsQuery.isLoading) {
+    if (!hasCurrentScan) {
+      return (
+        <p className="py-10 text-center text-sm text-muted-foreground">
+          {t(($) => $.runtime_import.scan_hint)}
+        </p>
+      );
+    }
+    if (skillsQuery.isFetching) {
       return (
         <div className="space-y-2">
           {Array.from({ length: 3 }).map((_, i) => (
@@ -590,6 +654,7 @@ export function RuntimeLocalSkillImportPanel({
           <input
             type="checkbox"
             checked={allSelected}
+            disabled={selectableSkills.length === 0}
             ref={(el) => {
               if (el) el.indeterminate = someSelected;
             }}
@@ -598,7 +663,7 @@ export function RuntimeLocalSkillImportPanel({
           />
           <span className="text-xs text-muted-foreground">
             {t(($) => $.runtime_import.select_all, {
-              count: runtimeSkills.length,
+              count: selectableSkills.length,
             })}
           </span>
         </label>
@@ -609,7 +674,7 @@ export function RuntimeLocalSkillImportPanel({
             skill={s}
             checked={selectedKeys.has(s.key)}
             onToggle={() => toggleSkill(s.key)}
-            disabled={importing}
+            disabled={importing || !!s.error}
             expanded={singleSelectedSkill?.key === s.key}
             editName={singleSelectedSkill?.key === s.key ? editName : undefined}
             editDescription={
@@ -638,7 +703,7 @@ export function RuntimeLocalSkillImportPanel({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {/* Sticky top: runtime picker + status */}
+      {/* Sticky top: runtime and directory selection */}
       <div
         aria-disabled={importing || undefined}
         className={`shrink-0 space-y-2 border-b px-5 py-3 ${
@@ -651,6 +716,7 @@ export function RuntimeLocalSkillImportPanel({
           </label>
           <Select
             value={selectedRuntimeId}
+            disabled={importing}
             onValueChange={(v) => v && setSelectedRuntimeId(v)}
           >
             <SelectTrigger className="w-full">
@@ -667,6 +733,33 @@ export function RuntimeLocalSkillImportPanel({
             </SelectContent>
           </Select>
         </div>
+
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+          <label className="flex items-center gap-1.5">
+            <input type="radio" name={directoryInputId} checked={directoryMode === "default"} disabled={importing}
+              onChange={() => { setDirectoryMode("default"); clearScan(); }} />
+            {t(($) => $.runtime_import.default_directory)}
+          </label>
+          <label className="flex items-center gap-1.5">
+            <input type="radio" name={directoryInputId} checked={directoryMode === "custom"} disabled={importing}
+              onChange={() => { setDirectoryMode("custom"); clearScan(); }} />
+            {t(($) => $.runtime_import.custom_directory)}
+          </label>
+        </div>
+        {directoryMode === "custom" && (
+          <div className="space-y-1.5">
+            <Label htmlFor={directoryInputId} className="text-xs text-muted-foreground">{t(($) => $.runtime_import.directory_label)}</Label>
+            <Input id={directoryInputId} value={directory} disabled={importing} className="min-w-0 font-mono text-xs"
+              placeholder={t(($) => $.runtime_import.directory_placeholder)}
+              onChange={event => { setDirectory(event.target.value); clearScan(); }} />
+            <p className="text-xs text-muted-foreground">{t(($) => $.runtime_import.directory_hint)}</p>
+          </div>
+        )}
+        <Button type="button" variant="outline" size="sm" onClick={scan}
+          disabled={!canBrowseSkills || importing || skillsQuery.isFetching || (directoryMode === "custom" && !root)}>
+          {skillsQuery.isFetching && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+          {t(($) => $.runtime_import.scan_button)}
+        </Button>
 
         {selectedRuntime && (
           <div className="flex items-center gap-2 rounded-md border bg-muted/20 px-3 py-1.5 text-xs text-muted-foreground">
@@ -696,10 +789,16 @@ export function RuntimeLocalSkillImportPanel({
             : ""
         }`}
       >
+        {scanResult?.root && bulkState.phase === "idle" && (
+          <p className="mb-2 break-all font-mono text-xs text-muted-foreground">{scanResult.root}</p>
+        )}
+        {scanResult?.warnings && bulkState.phase === "idle" && scanResult.warnings.map((warning, index) => (
+          <p key={index} role="status" className="mb-2 rounded-md bg-warning/10 px-3 py-2 text-xs text-muted-foreground">{warning}</p>
+        ))}
         {middle}
         {bulkState.phase === "idle" && (
           <p className="mt-3 text-xs text-muted-foreground">
-            {t(($) => $.runtime_import.ignored_files_hint)}
+            {t(($) => directoryMode === "custom" ? $.runtime_import.directory_bundle_hint : $.runtime_import.ignored_files_hint)}
           </p>
         )}
       </div>

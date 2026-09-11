@@ -427,12 +427,14 @@ function UrlForm({
 export function CreateSkillDialog({
   onClose,
   onCreated,
+  initialMethod = "chooser",
 }: {
   onClose: () => void;
   onCreated?: (skill: Skill) => void;
+  initialMethod?: "chooser" | "runtime";
 }) {
   const { t } = useT("skills");
-  const [method, setMethod] = useState<Method>("chooser");
+  const [method, setMethod] = useState<Method>(initialMethod);
 
   const handleCreated = (skill: Skill) => {
     onCreated?.(skill);

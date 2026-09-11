@@ -60,6 +60,7 @@ export type {
   RuntimeLocalSkillStatus,
   RuntimeLocalSkillSummary,
   RuntimeLocalSkillListRequest,
+  CreateRuntimeLocalSkillListRequest,
   CreateRuntimeLocalSkillImportRequest,
   RuntimeLocalSkillImportRequest,
   RuntimeLocalSkillsResult,

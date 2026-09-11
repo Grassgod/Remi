@@ -26,6 +26,7 @@ import {
   promoteLegacyCliPatForDaemonRegistration,
   readJson,
   readJsonStrict,
+  readJsonStrictAllowEmpty,
   requireWorkspaceAdmin,
   safeCreateRuntimeUpdateRequest,
   usageQuery,
@@ -60,6 +61,7 @@ import type {
   CreateRuntimeDirectoryScanInput,
   CreateRuntimeCommandInput,
   CreateRuntimeLocalSkillImportInput,
+  CreateRuntimeLocalSkillListInput,
   CreateRuntimeUpdateInput,
   RegisterRuntimeInput,
   ReportRuntimeDirectoryScanInput,
@@ -357,15 +359,21 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
     store.reportRuntimeCommandResult(runtimeId, requestId, body);
     return c.json({ status: "ok" });
   });
-  app.post("/api/multiremi/runtimes/:id/local-skills", (c) => {
+  app.post("/api/multiremi/runtimes/:id/local-skills", async (c) => {
     const loaded = loadRuntimeForCurrentOwner(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
-    return c.json(store.createRuntimeLocalSkillListRequest(loaded.runtime.id));
+    const body = await readJsonStrictAllowEmpty<CreateRuntimeLocalSkillListInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    if (!body || typeof body !== "object" || Array.isArray(body)) return c.json({ error: "invalid request body" }, 400);
+    return c.json(store.createRuntimeLocalSkillListRequest(loaded.runtime.id, body));
   });
-  app.post("/api/runtimes/:id/local-skills", (c) => {
+  app.post("/api/runtimes/:id/local-skills", async (c) => {
     const loaded = loadRuntimeForCurrentOwner(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
-    return c.json(runtimeLocalSkillListRequestCompatibilityResponse(store.createRuntimeLocalSkillListRequest(loaded.runtime.id)));
+    const body = await readJsonStrictAllowEmpty<CreateRuntimeLocalSkillListInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    if (!body || typeof body !== "object" || Array.isArray(body)) return c.json({ error: "invalid request body" }, 400);
+    return c.json(runtimeLocalSkillListRequestCompatibilityResponse(store.createRuntimeLocalSkillListRequest(loaded.runtime.id, body)));
   });
   app.get("/api/multiremi/runtimes/:id/local-skills/:requestId", (c) => {
     const loaded = loadRuntimeForCurrentOwner(c, store, c.req.param("id"));
@@ -386,6 +394,7 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
     if (loaded instanceof Response) return loaded;
     const body = await readJsonStrict<CreateRuntimeLocalSkillImportInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    if (!body || typeof body !== "object" || Array.isArray(body)) return c.json({ error: "invalid request body" }, 400);
     return c.json(store.createRuntimeLocalSkillImportRequest(loaded.runtime.id, body));
   });
   app.post("/api/runtimes/:id/local-skills/import", async (c) => {
@@ -393,6 +402,7 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
     if (loaded instanceof Response) return loaded;
     const body = await readJsonStrict<CreateRuntimeLocalSkillImportInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    if (!body || typeof body !== "object" || Array.isArray(body)) return c.json({ error: "invalid request body" }, 400);
     return c.json(runtimeLocalSkillImportRequestCompatibilityResponse(store.createRuntimeLocalSkillImportRequest(loaded.runtime.id, body)));
   });
   app.get("/api/multiremi/runtimes/:id/local-skills/import/:requestId", (c) => {
@@ -410,7 +420,7 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
     return c.json(runtimeLocalSkillImportRequestCompatibilityResponse(request));
   });
   app.post("/api/daemon/runtimes/:runtimeId/local-skills/claim", (c) => {
-    return c.json({ request: store.claimRuntimeLocalSkillListRequest(c.req.param("runtimeId")) });
+    return c.json({ request: store.claimRuntimeLocalSkillListRequest(c.req.param("runtimeId"), c.req.query("supports_skill_directory") === "true") });
   });
   app.post("/api/daemon/runtimes/:runtimeId/local-skills/:requestId/result", async (c) => {
     const runtimeId = c.req.param("runtimeId");
@@ -425,7 +435,7 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.post("/api/daemon/runtimes/:runtimeId/local-skills/import/claim", (c) => {
     const limit = parseOptionalInt(c.req.query("limit")) ?? 10;
-    return c.json({ requests: store.claimRuntimeLocalSkillImportRequests(c.req.param("runtimeId"), limit) });
+    return c.json({ requests: store.claimRuntimeLocalSkillImportRequests(c.req.param("runtimeId"), limit, c.req.query("supports_skill_directory") === "true") });
   });
   app.post("/api/daemon/runtimes/:runtimeId/local-skills/import/:requestId/result", async (c) => {
     const runtimeId = c.req.param("runtimeId");
@@ -668,6 +678,7 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
     const ack = store.heartbeatRuntime(runtimeId, {
       supportsBatchImport: c.req.query("supports_batch_import") === "true" || c.req.query("supportsBatchImport") === "true",
       supportsDirectoryScan: c.req.query("supports_directory_scan") === "true" || c.req.query("supportsDirectoryScan") === "true",
+      supportsSkillDirectory: c.req.query("supports_skill_directory") === "true",
     });
     if (ack.status === "runtime_gone") return c.json({ error: "runtime not found" }, 404);
     return c.json(ack);

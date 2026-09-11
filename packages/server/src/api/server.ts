@@ -11,7 +11,7 @@ import {
   DaemonIdentityOwnerConflictError,
   DaemonRetiredError,
 } from "@multiremi/store/repos/daemon-retirement-repo.js";
-import { RuntimeRegistrationIdentityConflictError } from "@multiremi/store/repos/runtimes-repo.js";
+import { RuntimeLocalSkillRequestError, RuntimeRegistrationIdentityConflictError } from "@multiremi/store/repos/runtimes-repo.js";
 import { PlatformOperationConflictError } from "@multiremi/store/repos/platform-operations-repo.js";
 // Domain routers, listed in the order createMultiremiApp registers them.
 import { registerAuthRoutes } from "./routers/auth.js";
@@ -400,6 +400,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   }
 
   app.onError((err, c) => {
+    if (err instanceof RuntimeLocalSkillRequestError) return c.json({ error: err.message }, 400);
     if (err instanceof RuntimeRegistrationIdentityConflictError) {
       return c.json({ error: err.message, code: err.code }, 409);
     }
@@ -844,6 +845,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
           const ack = store.heartbeatRuntime(heartbeat.runtimeId, {
             supportsBatchImport: heartbeat.supportsBatchImport,
             supportsDirectoryScan: heartbeat.supportsDirectoryScan,
+            supportsSkillDirectory: heartbeat.supportsSkillDirectory,
             agentPluginProtocol: heartbeat.agentPluginProtocol,
           });
           if (heartbeat.sshMeshProtocol !== undefined) {

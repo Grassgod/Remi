@@ -194,6 +194,7 @@ import type {
   CreateRuntimeCommandInput,
   CreateWorkspaceRuntimeProvisionInput,
   CreateRuntimeLocalSkillImportInput,
+  CreateRuntimeLocalSkillListInput,
   CreateSessionTaskInput,
   CreateSkillInput,
   ImportAgentPluginInput,
@@ -2780,16 +2781,16 @@ runMigrations(this.db);
     return this.runtimeProvisions.enqueueWorkspaceProvision(provisionId);
   }
 
-  createRuntimeLocalSkillListRequest(runtimeId: string): MultiremiRuntimeLocalSkillListRequest {
-    return this.runtimes.createRuntimeLocalSkillListRequest(runtimeId);
+  createRuntimeLocalSkillListRequest(runtimeId: string, input: CreateRuntimeLocalSkillListInput = {}): MultiremiRuntimeLocalSkillListRequest {
+    return this.runtimes.createRuntimeLocalSkillListRequest(runtimeId, input);
   }
 
   getRuntimeLocalSkillListRequest(runtimeId: string, requestId: string): MultiremiRuntimeLocalSkillListRequest | null {
     return this.runtimes.getRuntimeLocalSkillListRequest(runtimeId, requestId);
   }
 
-  claimRuntimeLocalSkillListRequest(runtimeId: string): MultiremiRuntimeLocalSkillListRequest | null {
-    return this.runtimes.claimRuntimeLocalSkillListRequest(runtimeId);
+  claimRuntimeLocalSkillListRequest(runtimeId: string, supportsSkillDirectory = false): MultiremiRuntimeLocalSkillListRequest | null {
+    return this.runtimes.claimRuntimeLocalSkillListRequest(runtimeId, supportsSkillDirectory);
   }
 
   reportRuntimeLocalSkillListResult(runtimeId: string, requestId: string, input: ReportRuntimeLocalSkillListInput): MultiremiRuntimeLocalSkillListRequest {
@@ -2804,8 +2805,8 @@ runMigrations(this.db);
     return this.runtimes.getRuntimeLocalSkillImportRequest(runtimeId, requestId);
   }
 
-  claimRuntimeLocalSkillImportRequests(runtimeId: string, limit = 10): MultiremiRuntimeLocalSkillImportRequest[] {
-    return this.runtimes.claimRuntimeLocalSkillImportRequests(runtimeId, limit);
+  claimRuntimeLocalSkillImportRequests(runtimeId: string, limit = 10, supportsSkillDirectory = false): MultiremiRuntimeLocalSkillImportRequest[] {
+    return this.runtimes.claimRuntimeLocalSkillImportRequests(runtimeId, limit, supportsSkillDirectory);
   }
 
   reportRuntimeLocalSkillImportResult(runtimeId: string, requestId: string, input: ReportRuntimeLocalSkillImportInput): MultiremiRuntimeLocalSkillImportRequest {
@@ -2879,6 +2880,7 @@ runMigrations(this.db);
     claimPending?: boolean;
     supportsBatchImport?: boolean;
     supportsDirectoryScan?: boolean;
+    supportsSkillDirectory?: boolean;
     agentPluginProtocol?: number;
     supportsBotMenu?: boolean;
     supportsFeishuBotConfig?: boolean;
