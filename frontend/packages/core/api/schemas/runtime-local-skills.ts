@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SkillSchema } from "./skills";
 
 const statusSchema = z.enum(["pending", "running", "completed", "failed", "timeout"]);
 
@@ -29,32 +30,12 @@ export const RuntimeLocalSkillListRequestSchema = z.object({
   skills: z.array(skillSummarySchema).optional(),
 }).loose();
 
-const importedSkillSchema = z.object({
-  id: z.string().min(1),
-  workspace_id: z.string().min(1),
-  name: z.string(),
-  description: z.string(),
-  content: z.string(),
-  config: z.record(z.string(), z.unknown()),
-  created_by: z.string().nullable(),
-  created_at: z.string(),
-  updated_at: z.string(),
-  files: z.array(z.object({
-    id: z.string(),
-    skill_id: z.string(),
-    path: z.string(),
-    content: z.string(),
-    created_at: z.string(),
-    updated_at: z.string(),
-  }).loose()),
-}).loose();
-
 export const RuntimeLocalSkillImportRequestSchema = z.object({
   ...requestFields,
   skill_key: z.string().min(1),
   name: z.string().optional(),
   description: z.string().optional(),
-  skill: importedSkillSchema.optional(),
+  skill: SkillSchema.optional(),
 }).loose().refine(value => value.status !== "completed" || value.skill !== undefined, {
   message: "Completed skill import must include the imported skill",
 });

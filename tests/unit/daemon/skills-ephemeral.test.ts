@@ -72,6 +72,30 @@ test("an agent without skills writes no skill root at all", () => {
   expect(existsSync(join(workDir, ".claude"))).toBe(false);
 });
 
+test.each(["claude", "codex"])("%s materializes binary Skill attachments byte for byte", (provider) => {
+  const task = taskWithSkill(provider);
+  const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe]);
+  task.agent!.skills[0]!.files!.push({ path: "references/preview.png", encoding: "base64", content: bytes.toString("base64") });
+  const workDir = workspace();
+  writeAgentSkillContext(workDir, task);
+  const root = provider === "codex" ? ".agents" : ".claude";
+  expect(readFileSync(join(workDir, root, "skills", "deploy-runbook", "references", "preview.png"))).toEqual(bytes);
+});
+
+test("rejects malformed binary Skill payloads instead of silently corrupting attachments", () => {
+  for (const file of [
+    { path: "invalid.png", encoding: "base64", content: "%%%" },
+    { path: "invalid.png", encoding: "hex", content: "89504e47" },
+    { path: "invalid.png", encoding: null, content: "89504e47" },
+    { path: "invalid.png", encoding: "base64", content: null },
+    { path: "invalid.png", encoding: "base64" },
+  ]) {
+    const task = taskWithSkill("codex");
+    task.agent!.skills[0]!.files = [file as any];
+    expect(() => writeAgentSkillContext(workspace(), task)).toThrow(/skill file/i);
+  }
+});
+
 test("task context refresh preserves a Feishu topic binding dossier", () => {
   const workDir = workspace();
   const metadataDir = join(workDir, ".multiremi");

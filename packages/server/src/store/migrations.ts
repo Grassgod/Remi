@@ -2868,6 +2868,7 @@ export function runMigrations(db: SqlDatabase): void {
       ON multiremi_autopilot_runs(repository_id, created_at)
       WHERE repository_id IS NOT NULL;
   `);
+  addColumnIfMissing(db, "multiremi_skill_files", "encoding TEXT NOT NULL DEFAULT 'utf8'");
   addColumnIfMissing(db, "multiremi_runtime_local_skill_list_requests", "root TEXT");
   addColumnIfMissing(db, "multiremi_runtime_local_skill_list_requests", "warnings TEXT NOT NULL DEFAULT '[]'");
   addColumnIfMissing(db, "multiremi_runtime_local_skill_import_requests", "root TEXT");

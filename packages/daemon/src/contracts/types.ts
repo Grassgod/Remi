@@ -68,6 +68,7 @@ export interface AgentTaskSkill {
 export interface AgentTaskSkillFile {
   path: string;
   content?: string;
+  encoding?: "utf8" | "base64";
 }
 
 export interface AgentTaskAttachment {

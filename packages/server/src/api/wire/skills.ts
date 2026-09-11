@@ -77,6 +77,9 @@ export function skillCompatibilityErrorResponse(
   if (message === "Skill files should not include SKILL.md") {
     return c.json({ error: "SKILL.md is reserved for the primary skill content" }, 400);
   }
+  if (message.startsWith("Invalid skill file encoding:") || message.startsWith("Invalid base64 skill file content:")) {
+    return c.json({ error: message }, 400);
+  }
   if (isUniqueSkillNameError(message)) {
     if (options.duplicateImportInput && options.store) {
       const existing = existingSkillIdentityForInput(options.store, options.duplicateImportInput);
@@ -151,6 +154,7 @@ export function daemonClaimSkillResponse(skill: MultiremiSkill): Record<string, 
     files: (skill.files ?? []).map((file) => ({
       path: file.path,
       content: file.content,
+      ...(file.encoding !== undefined && file.encoding !== "utf8" ? { encoding: file.encoding } : {}),
     })),
   };
 }
@@ -193,6 +197,7 @@ export function skillFileCompatibilityResponse(file: MultiremiSkillFile): Record
     skill_id: file.skillId,
     path: file.path,
     content: file.content,
+    ...(file.encoding !== undefined && file.encoding !== "utf8" ? { encoding: file.encoding } : {}),
     created_at: file.createdAt,
     updated_at: file.updatedAt,
   };

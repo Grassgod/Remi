@@ -12,7 +12,11 @@
 
 自定义目录扫描最多检查 10,000 个目录条目、列出 1,000 个 Skill，并设有 20 秒扫描预算。达到上限或某个子目录不可读时，结果通过 `warnings` 明确说明未扫描完整，可改选更具体的目录重扫。根目录不存在、不是目录或无法读取时，整个扫描失败。发现阶段支持指向目录的符号链接，按真实路径去重以避免循环。
 
-技能库采用文本文件存储。指定目录导入包含 `SKILL.md` 和可保存的 UTF-8 支持文件，附件中的 `.git` 和 `node_modules` 同样排除。每个文件上限 1 MiB，主文件和支持文件合计上限 8 MiB，支持文件最多 128 个；打包还限制目录遍历深度、条目数和耗时。二进制、无效 UTF-8、不可读文件、符号链接主文件或附件、非法文件路径及超限会使该 Skill 不可导入，不通过静默丢弃附件生成残缺副本。旧默认目录流程保留原有兼容行为；需要上述完整性检查时显式指定目录。
+导入包含 UTF-8 格式的 `SKILL.md`，支持文件既可为文本，也可为 PNG 等二进制文件。文本直接保存，二进制及非 UTF-8 附件以 base64 保存，在云友执行时还原原始字节；附件中的 `.git` 和 `node_modules` 同样排除。每个源文件上限 8 MiB，主文件和支持文件合计上限 32 MiB，支持文件最多 1,024 个，容量按编码前的字节计算；打包还限制 64 层目录、10,000 个条目及 20 秒检查点时间预算。
+
+指定目录扫描时，无效 UTF-8 主文件、不可读文件、符号链接主文件或附件、非法文件路径及超限会使该 Skill 不可导入，不通过静默丢弃附件生成残缺副本。默认目录也支持二进制附件，其余发现和忽略规则保留原有兼容行为；需要上述完整性检查时显式指定目录。
+
+详情页保存会传输完整文件包。Web 的 Next.js 代理请求上限与 API 的 128 MiB 上限对齐，避免大 Skill 的 JSON 被截断；部署时外层反向代理也需允许相应的请求大小。这个传输限额不改变上述源文件容量限制。
 
 每次导入在技能库创建新副本，保留当时读取的内容和来源信息，不覆盖原文件、不按名称自动去重，也不建立与原目录的持续同步。扫描确认目录和可选 key，文件内容在导入时重新读取、校验；扫描后源文件若变化，实际导入以本次读取为准。
 
@@ -34,6 +38,8 @@ remi runtime skill import-status <runtime-id> <import-request-id> --json
 
 现有 `--data` 和 `--file` JSON 请求输入保留，显式参数覆盖同名请求字段；`--json` 是输出格式选项。省略 `--root` 的扫描和省略 `--scan-request` 的导入保留旧默认目录接口。自定义目录请求需要支持该能力的新 daemon；旧 daemon 领取时将请求明确标为失败并要求更新，不会改为扫描默认目录。
 
+Skill 文件的 API/CLI JSON 使用可选的 `encoding: "utf8" | "base64"` 字段，省略表示 UTF-8。包含二进制附件的 Skill 需要更新后的 daemon 执行。新 daemon 在任务领取请求中声明 `supports_binary_skill_files: true`；旧 daemon 不会领取含二进制附件的任务，后续符合条件的文本任务仍可领取。仅剩不兼容任务时，领取接口返回 HTTP 409 和 `binary_skill_files_unsupported`，提示更新 daemon，任务保持原状态供更新后领取。
+
 ## 实现与验证入口
 
 入口：[导入面板](../frontend/packages/views/skills/components/runtime-local-skill-import-panel.tsx)、[扫描和打包](../packages/server/src/worker/local-skills.ts)、[daemon 请求执行](../packages/server/src/worker/daemon.ts)、[请求存储](../packages/server/src/store/repos/runtimes-repo.ts)、[CLI 注册](../apps/remi/cli/commands/operations.ts)。
@@ -42,6 +48,7 @@ remi runtime skill import-status <runtime-id> <import-request-id> --json
 bun test tests/unit/remi/cli-operations.test.ts
 bun test tests/unit/daemon/runtime-skill-directory.test.ts tests/unit/multiremi/runtime-skill-directory.test.ts
 bun test tests/unit/multiremi/multiremi-api-runtimes.test.ts tests/unit/multiremi/store-runtime-request-queue.test.ts
+bun test tests/unit/multiremi/binary-skill-claim.test.ts tests/unit/multiremi/skill-file-encoding.test.ts
 bun run --filter @multiremi/views test skills/components/runtime-local-skill-import-panel.test.tsx
 bun run cli:capabilities:check
 ```

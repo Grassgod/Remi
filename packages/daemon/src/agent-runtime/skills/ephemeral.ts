@@ -155,7 +155,16 @@ export function writeAgentSkillContext(workDir: string, task: AgentTask): void {
       const path = normalizeSkillFilePath(file.path);
       const target = join(dir, path);
       mkdirSync(join(target, ".."), { recursive: true });
-      writeFileSync(target, file.content ?? "", { mode: 0o644 });
+      const content = file.content ?? "";
+      if (file.encoding === "base64") {
+        if (typeof file.content !== "string") throw new Error(`Invalid base64 skill file: ${path}`);
+        const bytes = Buffer.from(content, "base64");
+        if (bytes.toString("base64") !== content) throw new Error(`Invalid base64 skill file: ${path}`);
+        writeFileSync(target, bytes, { mode: 0o644 });
+      } else {
+        if (file.encoding !== undefined && file.encoding !== "utf8") throw new Error(`Unsupported skill file encoding: ${path}`);
+        writeFileSync(target, content, { mode: 0o644 });
+      }
     }
   }
 }

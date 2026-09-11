@@ -495,6 +495,7 @@ export interface SkillFile {
   skill_id: string;
   path: string;
   content: string;
+  encoding?: "utf8" | "base64";
   created_at: string;
   updated_at: string;
 }
@@ -504,7 +505,7 @@ export interface CreateSkillRequest {
   description?: string;
   content?: string;
   config?: Record<string, unknown>;
-  files?: { path: string; content: string }[];
+  files?: Pick<SkillFile, "path" | "content" | "encoding">[];
 }
 
 export interface UpdateSkillRequest {
@@ -512,7 +513,7 @@ export interface UpdateSkillRequest {
   description?: string;
   content?: string;
   config?: Record<string, unknown>;
-  files?: { path: string; content: string }[];
+  files?: Pick<SkillFile, "path" | "content" | "encoding">[];
 }
 
 export interface SetAgentSkillsRequest {

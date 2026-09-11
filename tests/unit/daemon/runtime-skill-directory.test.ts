@@ -20,6 +20,35 @@ function skill(root: string, key: string, name = key) {
 }
 
 describe("Runtime selected Skill directory", () => {
+  it("keeps PNG support files importable and preserves their bytes", async () => {
+    const root = fixture();
+    const dir = skill(root, "with-image");
+    const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII=", "base64");
+    mkdirSync(join(dir, "references"));
+    writeFileSync(join(dir, "references", "preview.png"), png);
+    const result = await scanRuntimeSkillDirectory("codex", root);
+    expect(result.skills[0]?.error).toBeUndefined();
+    const bundle = loadRuntimeLocalSkillBundle("codex", result.root, "with-image", true);
+    const attachment = bundle.files.find(file => file.path === "references/preview.png")!;
+    expect(attachment.encoding).toBe("base64");
+    expect(Buffer.from(attachment.content, "base64")).toEqual(png);
+    const defaultBundle = loadRuntimeLocalSkillBundle("codex", root, "with-image");
+    expect(defaultBundle.files).toEqual(bundle.files);
+  });
+
+  it("preserves UTF-8 BOM and invalid UTF-8 support files without changing bytes", async () => {
+    const root = fixture();
+    const dir = skill(root, "byte-preservation");
+    const fixtures = { "bom.txt": Buffer.from("\uFEFF你好\r\n"), "legacy.txt": Buffer.from([0xff, 0xfe, 0x41]) };
+    for (const [path, bytes] of Object.entries(fixtures)) writeFileSync(join(dir, path), bytes);
+    const scan = await scanRuntimeSkillDirectory("codex", root);
+    expect(scan.skills[0]?.error).toBeUndefined();
+    const bundle = loadRuntimeLocalSkillBundle("codex", scan.root, "byte-preservation", true);
+    for (const file of bundle.files) {
+      expect(Buffer.from(file.content, file.encoding ?? "utf8")).toEqual(fixtures[file.path as keyof typeof fixtures]);
+    }
+  });
+
   it("discovers hidden and deeply nested Skills with stable relative keys", async () => {
     const root = fixture();
     skill(root, ".system/helper");
@@ -57,16 +86,16 @@ describe("Runtime selected Skill directory", () => {
 
   it("exposes incomplete bundles as non-importable while keeping valid siblings", async () => {
     const root = fixture();
-    const binary = skill(root, "binary");
-    writeFileSync(join(binary, "asset.png"), Buffer.from([0x89, 0x50, 0x00, 0x01]));
+    const binary = skill(root, "binary-main");
+    writeFileSync(join(binary, "SKILL.md"), Buffer.from([0x89, 0x50, 0x00, 0x01]));
     const oversize = skill(root, "large");
-    writeFileSync(join(oversize, "notes.md"), "x".repeat((1 << 20) + 1));
+    writeFileSync(join(oversize, "notes.md"), "x".repeat((8 << 20) + 1));
     const linked = skill(root, "linked-support");
     symlinkSync(join(binary, "SKILL.md"), join(linked, "reference.md"));
     skill(root, "valid");
     const result = await scanRuntimeSkillDirectory("codex", root);
     expect(result.skills).toHaveLength(4);
-    for (const key of ["binary", "large", "linked-support"]) {
+    for (const key of ["binary-main", "large", "linked-support"]) {
       expect(result.skills.find((item) => item.key === key)?.error).toBeTruthy();
       expect(() => loadRuntimeLocalSkillBundle("codex", result.root, key, true)).toThrow();
     }
@@ -144,5 +173,23 @@ describe("Runtime selected Skill directory", () => {
     for (let index = 0; index < 10_001; index++) writeFileSync(join(root, `file-${index}`), "");
     const result = await scanRuntimeSkillDirectory("codex", root);
     expect(result.warnings.join(" ")).toContain("Scan incomplete");
+  });
+
+  it("imports a large collection of subskills and still rejects file-count and byte limits", async () => {
+    const root = fixture();
+    const dir = skill(root, "collection");
+    for (let index = 0; index < 949; index++) writeFileSync(join(dir, `reference-${index}.md`), "reference\n".repeat(1_200));
+    let result = await scanRuntimeSkillDirectory("codex", root);
+    expect(result.skills[0]).toMatchObject({ fileCount: 950 });
+    expect(result.skills[0]?.error).toBeUndefined();
+    expect(loadRuntimeLocalSkillBundle("codex", result.root, "collection", true).files).toHaveLength(949);
+    for (let index = 949; index < 1_025; index++) writeFileSync(join(dir, `reference-${index}.md`), "");
+    result = await scanRuntimeSkillDirectory("codex", root);
+    expect(result.skills[0]?.error).toContain("1024 files");
+
+    const bytesDir = skill(root, "byte-limit");
+    for (let index = 0; index < 4; index++) writeFileSync(join(bytesDir, `${index}.bin`), Buffer.alloc(8 << 20));
+    result = await scanRuntimeSkillDirectory("codex", bytesDir);
+    expect(result.skills[0]?.error).toContain("33554432 bytes in total");
   });
 });

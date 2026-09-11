@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { Pencil, Eye } from "lucide-react";
-import { Button } from "@multiremi/ui/components/ui/button";
+import { Pencil, Eye, Download } from "lucide-react";
+import type { SkillFile } from "@multiremi/core/types";
+import { Button, buttonVariants } from "@multiremi/ui/components/ui/button";
 import { Textarea } from "@multiremi/ui/components/ui/textarea";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@multiremi/ui/components/ui/tooltip";
 import {
@@ -46,15 +47,18 @@ function FrontmatterCard({ data }: { data: SkillFrontmatter }) {
 export function FileViewer({
   path,
   content,
+  encoding,
   onChange,
 }: {
   path: string;
   content: string;
+  encoding?: SkillFile["encoding"];
   onChange: (content: string) => void;
 }) {
   const { t } = useT("skills");
   const [editing, setEditing] = useState(false);
-  const isMd = isMarkdown(path);
+  const binary = encoding === "base64";
+  const isMd = !binary && isMarkdown(path);
 
   const { frontmatter, body } = useMemo(
     () => (isMd ? parseFrontmatter(content) : { frontmatter: null, body: content }),
@@ -99,7 +103,21 @@ export function FileViewer({
 
       {/* File content */}
       <div className="flex-1 min-h-0 overflow-y-auto">
-        {isMd && !editing ? (
+        {binary ? (
+          <div className="space-y-3 p-4 sm:p-6">
+            <p className="text-sm text-muted-foreground">
+              {t(($) => $.file_viewer.binary_read_only)}
+            </p>
+            <a
+              className={buttonVariants({ variant: "outline", size: "sm" })}
+              href={`data:application/octet-stream;base64,${content}`}
+              download={path.split("/").pop() || path}
+            >
+              <Download className="h-3.5 w-3.5" />
+              {t(($) => $.file_viewer.download_file)}
+            </a>
+          </div>
+        ) : isMd && !editing ? (
           <div className="p-4 sm:p-6">
             {frontmatter && <FrontmatterCard data={frontmatter} />}
             <Markdown mode="full">

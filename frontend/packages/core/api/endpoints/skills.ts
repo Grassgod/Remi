@@ -6,6 +6,8 @@ import type {
   UpdateSkillRequest,
 } from "../../types";
 import type { HttpClient } from "../http";
+import { parseStrictResponse } from "../schema";
+import { SkillSchema } from "../schemas/skills";
 
 export class SkillsEndpoints {
   constructor(readonly http: HttpClient) {}
@@ -16,21 +18,24 @@ export class SkillsEndpoints {
   }
 
   async getSkill(id: string): Promise<Skill> {
-    return this.http.fetch(`/api/skills/${id}`);
+    const raw = await this.http.fetch<unknown>(`/api/skills/${id}`);
+    return parseStrictResponse(raw, SkillSchema, { endpoint: "GET /api/skills/:id" });
   }
 
   async createSkill(data: CreateSkillRequest): Promise<Skill> {
-    return this.http.fetch("/api/skills", {
+    const raw = await this.http.fetch<unknown>("/api/skills", {
       method: "POST",
       body: JSON.stringify(data),
     });
+    return parseStrictResponse(raw, SkillSchema, { endpoint: "POST /api/skills" });
   }
 
   async updateSkill(id: string, data: UpdateSkillRequest): Promise<Skill> {
-    return this.http.fetch(`/api/skills/${id}`, {
+    const raw = await this.http.fetch<unknown>(`/api/skills/${id}`, {
       method: "PUT",
       body: JSON.stringify(data),
     });
+    return parseStrictResponse(raw, SkillSchema, { endpoint: "PUT /api/skills/:id" });
   }
 
   async deleteSkill(id: string): Promise<void> {
@@ -38,10 +43,11 @@ export class SkillsEndpoints {
   }
 
   async importSkill(data: { url: string }): Promise<Skill> {
-    return this.http.fetch("/api/skills/import", {
+    const raw = await this.http.fetch<unknown>("/api/skills/import", {
       method: "POST",
       body: JSON.stringify(data),
     });
+    return parseStrictResponse(raw, SkillSchema, { endpoint: "POST /api/skills/import" });
   }
 
   async listAgentSkills(agentId: string): Promise<SkillSummary[]> {

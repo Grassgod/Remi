@@ -64,7 +64,11 @@ the import to the selected directory; `--name` and `--description` optionally
 override library metadata. Poll `runtime skill import-status <runtime>
 <import-request>` to obtain the imported skill. These operations require an online
 Runtime owned by the caller. Imports copy content into the Remi skill library;
-assign the imported skill to a cloud agent separately. See the
+assign the imported skill to a cloud agent separately. Runtime imports preserve
+text and binary supporting files. File JSON uses optional `encoding: "base64"`
+for binary content; omitted encoding means UTF-8. Agents using binary files
+require an updated daemon; older daemons receive an upgrade error when no
+compatible task can be claimed, leaving those tasks available after the update. See the
 [Runtime skill import contract](runtime-skills.md) for file limits and daemon
 compatibility. JSON request input remains available through `--data` or `--file`;
 `--json` selects JSON output.
