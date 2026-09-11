@@ -10,6 +10,19 @@ function readWorkflow(name: string): Record<string, any> {
 }
 
 describe("release workflows", () => {
+  test("runs the release gate for every build and test input", () => {
+    const gate = readWorkflow("release-build-check.yml");
+    const requiredPaths = [
+      ".dockerignore",
+      ".remi/pipeline/skills/**",
+      "tests/**",
+      "tsconfig.json",
+    ];
+
+    expect(gate.on.pull_request.paths).toEqual(expect.arrayContaining(requiredPaths));
+    expect(gate.on.push.paths).toEqual(expect.arrayContaining(requiredPaths));
+  });
+
   test("publishes the platform automatically after the tag release", () => {
     const release = readWorkflow("release.yml");
     expect(release.on.push.tags).toContain("v*");
