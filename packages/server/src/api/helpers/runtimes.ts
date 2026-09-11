@@ -62,6 +62,7 @@ export type DaemonRegisterRequestBody = {
 export function buildDaemonInstallInstructions(input: {
   requestUrl: string;
   serverUrl?: string | null;
+  daemonServerUrl?: string | null;
   workspaceId?: string | null;
   token?: string | null;
   tokenId?: string | null;
@@ -71,6 +72,7 @@ export function buildDaemonInstallInstructions(input: {
 }) {
   const workspaceId = cleanString(input.workspaceId) ?? "local";
   const serverUrl = cleanString(input.serverUrl)
+    ?? cleanString(input.daemonServerUrl)
     ?? cleanString(process.env.MULTIREMI_PUBLIC_URL)
     ?? requestOrigin(input.requestUrl);
   const provider = cleanString(input.provider);

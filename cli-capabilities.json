@@ -8719,6 +8719,38 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "context.auth.password": {
+      "command": "remi context auth password",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "context.auth.password",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "context.auth.password-account.set": {
+      "command": "remi context auth password-account set",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "context.auth.password-account.set",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "context.auth.lark": {
       "command": "remi context auth lark",
       "aliases": [],
@@ -10554,6 +10586,9 @@
     "POST /api/agents/from-template": {
       "command": "agent.template.create"
     },
+    "POST /api/auth/password-accounts": {
+      "command": "context.auth.password-account.set"
+    },
     "POST /api/autopilots": {
       "command": "autopilot.create"
     },
@@ -11448,6 +11483,9 @@
     },
     "POST /auth/logout": {
       "command": "context.auth.logout"
+    },
+    "POST /auth/password": {
+      "command": "context.auth.password"
     },
     "POST /auth/send-code": {
       "command": "context.auth.send-code"

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -25,17 +25,21 @@ const {
   mockSendCode,
   mockVerifyCode,
   mockIssueCliToken,
+  mockRouter,
   searchParamsState,
   authStateRef,
 } = vi.hoisted(() => ({
   mockSendCode: vi.fn(),
   mockVerifyCode: vi.fn(),
   mockIssueCliToken: vi.fn(),
+  mockRouter: { push: vi.fn(), replace: vi.fn() },
   searchParamsState: { params: new URLSearchParams() },
   authStateRef: {
     state: {
       sendCode: vi.fn(),
       verifyCode: vi.fn(),
+      loginWithPassword: vi.fn(),
+      logout: vi.fn(),
       user: null as null | { id: string; email: string },
       isLoading: false,
     },
@@ -44,7 +48,7 @@ const {
 
 // Mock next/navigation
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
+  useRouter: () => mockRouter,
   usePathname: () => "/login",
   useSearchParams: () => searchParamsState.params,
 }));
@@ -99,7 +103,10 @@ describe("LoginPage", () => {
     searchParamsState.params = new URLSearchParams();
     authStateRef.state.user = null;
     authStateRef.state.isLoading = false;
+    vi.stubEnv("NEXT_PUBLIC_LOCAL_PROFILE", "");
   });
+
+  afterEach(() => vi.unstubAllEnvs());
 
   it("renders Feishu-only login for regular (non-CLI) web users", () => {
     render(<LoginPage />, { wrapper: createWrapper() });
@@ -110,9 +117,55 @@ describe("LoginPage", () => {
     ).toBeInTheDocument();
     // No email OTP form on regular web login — it survives only for the CLI.
     expect(screen.queryByLabelText("Email")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Local session key (24 hours)")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Password")).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Continue" })
     ).not.toBeInTheDocument();
+  });
+
+  it.each(["dev", "stable"])("exposes local token login for the explicit %s profile on localhost", async (profile) => {
+    vi.stubEnv("NEXT_PUBLIC_LOCAL_PROFILE", profile);
+    render(<LoginPage />, { wrapper: createWrapper() });
+    expect(await screen.findByLabelText("Local session key (24 hours)")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Password")).toBeInTheDocument();
+  });
+
+  it("waits for initial auth hydration before accepting new local credentials", async () => {
+    vi.stubEnv("NEXT_PUBLIC_LOCAL_PROFILE", "dev");
+    authStateRef.state.isLoading = true;
+    const view = render(<LoginPage />, { wrapper: createWrapper() });
+    expect(screen.queryByLabelText("Password")).not.toBeInTheDocument();
+    authStateRef.state.isLoading = false;
+    view.rerender(<LoginPage />);
+    expect(await screen.findByLabelText("Password")).toBeInTheDocument();
+  });
+
+  it("keeps token login hidden on a public host even for a local build profile", () => {
+    vi.stubEnv("NEXT_PUBLIC_LOCAL_PROFILE", "dev");
+    const previousLocation = window.location;
+    Object.defineProperty(window, "location", { configurable: true, value: { ...previousLocation, hostname: "remi.example.com" } });
+    try {
+      render(<LoginPage />, { wrapper: createWrapper() });
+      expect(screen.queryByLabelText("Local session key (24 hours)")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("Password")).not.toBeInTheDocument();
+    } finally {
+      Object.defineProperty(window, "location", { configurable: true, value: previousLocation });
+    }
+  });
+
+  it("exposes password login at the configured stable LAN host", async () => {
+    vi.stubEnv("NEXT_PUBLIC_LOCAL_PROFILE", "stable");
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "http://192.168.40.12:13000");
+    const previousLocation = window.location;
+    Object.defineProperty(window, "location", { configurable: true, value: { ...previousLocation, hostname: "192.168.40.12" } });
+    try {
+      render(<LoginPage />, { wrapper: createWrapper() });
+      expect(await screen.findByLabelText("Password")).toBeInTheDocument();
+      expect(screen.queryByLabelText("Local session key (24 hours)")).not.toBeInTheDocument();
+    } finally {
+      Object.defineProperty(window, "location", { configurable: true, value: previousLocation });
+    }
   });
 
   it("does not call sendCode when email is empty", async () => {
@@ -217,6 +270,38 @@ describe("LoginPage", () => {
         configurable: true,
         value: originalLocation,
       });
+    }
+  });
+
+  it("hands a newly authenticated password session to Desktop after workspace hydration", async () => {
+    vi.stubEnv("NEXT_PUBLIC_LOCAL_PROFILE", "dev");
+    searchParamsState.params = new URLSearchParams({ platform: "desktop" });
+    authStateRef.state.loginWithPassword.mockImplementationOnce(async () => {
+      authStateRef.state.user = { id: "password-user", email: "reader@localhost" };
+      return { token: "password-handoff-session", user: authStateRef.state.user };
+    });
+    const hrefSetter = vi.fn();
+    const originalLocation = window.location;
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { ...originalLocation, set href(value: string) { hrefSetter(value); } },
+    });
+    try {
+      const view = render(<LoginPage />, { wrapper: createWrapper() });
+      const user = userEvent.setup();
+      await user.type(await screen.findByLabelText("Account email"), "reader@localhost");
+      await user.type(screen.getByLabelText("Password"), "fixture-password-42");
+      await user.click(screen.getByRole("button", { name: "Sign in with password" }));
+      view.rerender(<LoginPage />);
+      await waitFor(() => expect(hrefSetter).toHaveBeenCalledWith(
+        "multimira://auth/callback?token=password-handoff-session",
+      ));
+      expect(mockRouter.push).not.toHaveBeenCalled();
+      expect(mockRouter.replace).not.toHaveBeenCalled();
+      expect(mockIssueCliToken).not.toHaveBeenCalled();
+      expect(await screen.findByRole("button", { name: "Open Multiremi Desktop" })).toBeInTheDocument();
+    } finally {
+      Object.defineProperty(window, "location", { configurable: true, value: originalLocation });
     }
   });
 });

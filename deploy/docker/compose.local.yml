@@ -1,0 +1,107 @@
+# The local manager always supplies -p remi-stable or -p remi-dev.
+# Keep project naming external so volumes and networks cannot be shared by accident.
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: multiremi
+      POSTGRES_USER: multiremi
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set a unique POSTGRES_PASSWORD for this environment}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    image: ${REMI_API_IMAGE:?set REMI_API_IMAGE}
+    pull_policy: never
+    build:
+      context: ${REMI_SOURCE_DIR:?set REMI_SOURCE_DIR to the absolute source directory}
+      dockerfile: deploy/docker/Dockerfile.api
+      args:
+        MULTIREMI_VERSION: ${REMI_APP_VERSION:?set REMI_APP_VERSION}
+      labels:
+        org.opencontainers.image.revision: ${REMI_BUILD_REF:?set REMI_BUILD_REF}
+    init: true
+    restart: unless-stopped
+    env_file:
+      - ${REMI_API_ENV_FILE:?set REMI_API_ENV_FILE to an absolute external env file}
+    environment:
+      NODE_ENV: production
+      HOME: /srv/multiremi
+      REMI_RUNTIME_UID: "1000"
+      REMI_RUNTIME_GID: "1000"
+      MULTIREMI_HOST: 0.0.0.0
+      MULTIREMI_PORT: "6120"
+      MULTIREMI_DATABASE_URL: postgresql://multiremi:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/multiremi
+      MULTIREMI_PUBLIC_URL: ${REMI_PUBLIC_URL:?set REMI_PUBLIC_URL to this environment's browser origin}
+      MULTIREMI_DAEMON_DIRECT_BASE_URL: ${REMI_DAEMON_SERVER_URL:?set REMI_DAEMON_SERVER_URL to this environment's reachable API origin}
+      MULTIREMI_ALLOW_PASSWORD_LOGIN: "1"
+      MULTIREMI_ALLOW_EMAIL_CODE_LOGIN: "0"
+      MULTIREMI_PROJECT_KNOWLEDGE_MODE: sql
+      MULTIREMI_UPLOAD_DIR: /srv/multiremi/uploads
+      MULTIREMI_SESSION_ARCHIVE_ROOT: /srv/multiremi/session-archives
+      MULTIREMI_BACKGROUND_JOBS: ${REMI_BACKGROUND_JOBS:-1}
+      MULTIREMI_SSH_MESH_CONTROL_PLANE: "0"
+      MULTIREMI_SSH_MESH_CONTROL_PLANE_ROOT: /srv/multiremi/ssh-mesh
+    volumes:
+      - api-home:/srv/multiremi
+    # New named volumes belong to root. Initialize only the owned state roots,
+    # then let the existing entrypoint drop privileges for the API process.
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        mkdir -p /srv/multiremi/uploads /srv/multiremi/session-archives /srv/multiremi/ssh-mesh
+        chown 1000:1000 /srv/multiremi /srv/multiremi/uploads /srv/multiremi/session-archives /srv/multiremi/ssh-mesh
+        exec /app/deploy/docker/api-entrypoint.sh "$$@"
+      - remi-local-api
+    command: ["bun", "run", "apps/server/main.ts", "serve"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r=await fetch('http://127.0.0.1:6120/readyz');process.exit(r.ok?0:1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 30s
+    ports:
+      - ${REMI_BIND_ADDRESS:-127.0.0.1}:${REMI_API_BIND_PORT:-16120}:6120
+
+  web:
+    image: ${REMI_WEB_IMAGE:?set REMI_WEB_IMAGE}
+    pull_policy: never
+    build:
+      context: ${REMI_SOURCE_DIR:?set REMI_SOURCE_DIR to the absolute source directory}
+      dockerfile: deploy/docker/Dockerfile.web
+      target: runtime
+      args:
+        REMOTE_API_URL: http://api:6120
+        REMI_APP_VERSION: ${REMI_APP_VERSION:?set REMI_APP_VERSION}
+        NEXT_PUBLIC_SITE_URL: ${REMI_PUBLIC_URL:?set REMI_PUBLIC_URL to this environment's browser origin}
+        NEXT_PUBLIC_LOCAL_PROFILE: ${REMI_PROFILE:?set REMI_PROFILE to stable or dev}
+        NEXT_PUBLIC_WS_URL: ${REMI_PUBLIC_WS_URL:?set REMI_PUBLIC_WS_URL to this environment's reachable API}
+      labels:
+        org.opencontainers.image.revision: ${REMI_BUILD_REF:?set REMI_BUILD_REF}
+    init: true
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 30s
+    ports:
+      - ${REMI_BIND_ADDRESS:-127.0.0.1}:${REMI_WEB_BIND_PORT:-13000}:3000
+
+volumes:
+  postgres-data:
+  api-home:

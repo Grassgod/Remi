@@ -1,11 +1,11 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 727,
+    "routeCount": 729,
     "routeCountByPrefix": {
       "native": 209,
-      "compat": 505,
-      "root": 13
+      "compat": 506,
+      "root": 14
     },
     "getRoutes": 312,
     "getRoutesWithBody": 309,
@@ -14,7 +14,7 @@
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 415,
+    "mutationRoutes": 417,
     "mutationRoutesCovered": 282,
     "flows": [
       "agents-compat",
@@ -485,6 +485,7 @@
     "POST /api/agents/:id/restore",
     "POST /api/agents/:id/skills/add",
     "POST /api/agents/from-template",
+    "POST /api/auth/password-accounts",
     "POST /api/autopilots",
     "POST /api/autopilots/:id/deliveries/:deliveryId/replay",
     "POST /api/autopilots/:id/trigger",
@@ -742,6 +743,7 @@
     "POST /auth/google",
     "POST /auth/lark/callback",
     "POST /auth/logout",
+    "POST /auth/password",
     "POST /auth/send-code",
     "POST /auth/verify-code",
     "PUT /api/agents/:id",
@@ -8219,6 +8221,28 @@
             "id": "context.auth.logout",
             "command": "remi context auth logout",
             "capability": "context.auth.logout",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "context.auth.password",
+            "command": "remi context auth password",
+            "capability": "context.auth.password",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "context.auth.password-account.set",
+            "command": "remi context auth password-account set",
+            "capability": "context.auth.password-account.set",
             "outputs": [
               "table",
               "json",

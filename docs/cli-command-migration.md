@@ -72,6 +72,16 @@ are preserved, not reset to a newly configured branch. Workspace API `base_ref`
 retains its full ref; `base_commit` reports the common baseline with the existing
 worktree HEAD, or null when no common ancestor can be resolved.
 
+Password authentication uses `remi context auth password --file -` with JSON
+containing `email` and `password` on standard input. It saves the returned session
+in the selected CLI configuration and prints a user summary without credentials.
+Deployment administrators can provision or reset an account with
+`remi context auth password-account set --file -`; the body additionally accepts
+`name` and `workspaceId` (default `local`). That operation requires the deployment
+master token and grants the account owner membership in the selected workspace.
+Both commands are unavailable to task identities; password values have no dedicated
+command-line flag and should be supplied without putting them in shell history.
+
 The Feishu ingestion domain exposes source administration through
 `remi feishu source list|get|status|add|update` and task-safe processing through
 `remi feishu messages list|resolve|notify|draft-reply|propose-issue`. Issue

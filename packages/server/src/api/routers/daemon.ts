@@ -224,6 +224,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     return c.json(buildDaemonInstallInstructions({
       requestUrl: c.req.url,
+      daemonServerUrl: deps.daemonDirectBaseUrl,
       serverUrl: c.req.query("serverUrl") ?? c.req.query("server_url"),
       workspaceId,
       token: c.req.query("token"),
@@ -275,6 +276,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
 
     const installInput = {
       requestUrl: c.req.url,
+      daemonServerUrl: deps.daemonDirectBaseUrl,
       serverUrl: body.serverUrl ?? body.server_url ?? c.req.query("serverUrl") ?? c.req.query("server_url"),
       workspaceId,
       token,

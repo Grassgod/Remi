@@ -1,5 +1,9 @@
 # Platform deployment
 
+For two isolated environments on one development computer, use the
+[local stable/dev guide](../docs/deploy/local-profiles.md). It runs separate
+API/Web/PostgreSQL projects and does not use the host updater described below.
+
 The API records lifecycle operations. A host-owned `remi-platform-updater`
 service executes them through one deployment driver. The API container never
 receives the Docker socket and cannot invoke `systemctl`.
