@@ -2375,6 +2375,63 @@ describe("Bun Multiremi daemon smoke", () => {
     }
   });
 
+  it("imports selected-directory Skills into the library and supplies their files to an agent", async () => {
+    const { store, workDir: root } = daemonTestBed("remi-selected-skill-directory-");
+    const defaultRoot = join(root, "default-skills");
+    const selectedRoot = join(root, "selected-skills");
+    for (const directory of [defaultRoot, selectedRoot]) mkdirSync(join(directory, "helper", "references"), { recursive: true });
+    writeFileSync(join(defaultRoot, "helper", "SKILL.md"), "DEFAULT_DIRECTORY_CONTENT");
+    const main = "---\nname: selected-skill\ndescription: Use to check imported support files.\n---\nSELECTED_DIRECTORY_CONTENT\n";
+    writeFileSync(join(selectedRoot, "helper", "SKILL.md"), main);
+    writeFileSync(join(selectedRoot, "helper", "references", "guide.md"), "IMPORTED_SUPPORT_FILE");
+    const token = await store.createAccessToken({ name: "Selected skill daemon", type: "daemon", workspaceId: "local", daemonId: "skill-machine" });
+    const server = startMultiremiServer({ store, scheduler: null, authToken: "selected-skill-test", hostname: "127.0.0.1", port: 0 });
+    let sends = 0;
+    const daemon = new MultiremiDaemon({
+      serverUrl: `http://127.0.0.1:${server.port}`, token: token.token,
+      daemonId: "skill-machine", runtimeName: "Skill directory test", provider: "claude", workspaceId: "local",
+      daemonPort: 0, pollIntervalMs: 20, gcEnabled: false,
+      workspacesRoot: join(root, "daemon-state"), repoCacheRoot: join(root, "repo-cache"),
+      localSkillRoots: { claude: defaultRoot },
+      providerFactory: messageProviderFactory({ text: "Skill available", sessionId: "skill-session", requestId: "skill-request",
+        onSend: (_prompt, options) => {
+          sends++;
+          const skillRoot = join(options.cwd!, ".claude", "skills", "selected-skill");
+          expect(readFileSync(join(skillRoot, "SKILL.md"), "utf8")).toBe(main);
+          expect(readFileSync(join(skillRoot, "references", "guide.md"), "utf8")).toBe("IMPORTED_SUPPORT_FILE");
+        },
+      }),
+    });
+    let run: Promise<void> | undefined;
+    try {
+      run = daemon.start();
+      await waitForCondition(() => store.listRuntimes().length > 0, 5_000);
+      const runtime = store.listRuntimes()[0]!;
+      const scan = store.createRuntimeLocalSkillListRequest(runtime.id, { root: selectedRoot });
+      await waitForCondition(() => store.getRuntimeLocalSkillListRequest(runtime.id, scan.id)?.status === "completed", 10_000);
+      const discovered = store.getRuntimeLocalSkillListRequest(runtime.id, scan.id)!;
+      expect(discovered.skills.map((candidate) => candidate.key)).toEqual(["helper"]);
+      const request = store.createRuntimeLocalSkillImportRequest(runtime.id, { scan_request_id: scan.id, skill_key: "helper" });
+      await waitForCondition(() => ["completed", "failed"].includes(store.getRuntimeLocalSkillImportRequest(runtime.id, request.id)?.status ?? ""), 10_000);
+      const imported = store.getRuntimeLocalSkillImportRequest(runtime.id, request.id)!;
+      expect(imported.error).toBeNull();
+      expect(imported.skill?.content).toBe(main);
+      expect(imported.skill?.files?.map((file) => file.path)).toEqual(["references/guide.md"]);
+      const agent = store.createAgent({ name: "Use imported Skill", provider: "claude" });
+      store.setAgentSkills(agent.id, { skill_ids: [imported.skillId!] });
+      const task = store.createTask({ agentId: agent.id, prompt: "Read the selected Skill." });
+      await waitForCondition(() => ["completed", "failed"].includes(store.getTask(task.id)?.status ?? ""), 10_000);
+      expect(store.getTask(task.id)?.error).toBeNull();
+      expect(store.getTask(task.id)?.status).toBe("completed");
+      expect(sends).toBe(1);
+      expect(readFileSync(join(selectedRoot, "helper", "SKILL.md"), "utf8")).toBe(main);
+    } finally {
+      daemon.stop();
+      await run?.catch(() => {});
+      server.stop(true);
+    }
+  }, 40_000);
+
   it("handles heartbeat maintenance requests for update, models, and local skills", async () => {
     const { store, workDir } = daemonTestBed("multiremi-daemon-maintenance-");
     const skillsRoot = join(workDir, "skills");

@@ -754,6 +754,11 @@ export interface RuntimeLocalSkillSummary {
   source_path: string;
   provider: string;
   file_count: number;
+  error?: string;
+}
+
+export interface CreateRuntimeLocalSkillListRequest {
+  root?: string;
 }
 
 export interface RuntimeLocalSkillListRequest {
@@ -762,12 +767,15 @@ export interface RuntimeLocalSkillListRequest {
   status: RuntimeLocalSkillStatus;
   skills?: RuntimeLocalSkillSummary[];
   supported: boolean;
-  error?: string;
+  root?: string | null;
+  warnings?: string[];
+  error?: string | null;
   created_at: string;
   updated_at: string;
 }
 
 export interface CreateRuntimeLocalSkillImportRequest {
+  scan_request_id: string;
   skill_key: string;
   name?: string;
   description?: string;
@@ -781,12 +789,15 @@ export interface RuntimeLocalSkillImportRequest {
   description?: string;
   status: RuntimeLocalSkillStatus;
   skill?: Skill;
-  error?: string;
+  error?: string | null;
   created_at: string;
   updated_at: string;
 }
 
 export interface RuntimeLocalSkillsResult {
+  scan_request_id: string;
+  root?: string | null;
+  warnings?: string[];
   skills: RuntimeLocalSkillSummary[];
   supported: boolean;
 }

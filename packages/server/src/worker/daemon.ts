@@ -57,6 +57,7 @@ import { probeRuntimeModels } from "./runtime-model-probe.js";
 import {
   browseRuntimeDirectory,
   listRuntimeLocalSkills,
+  scanRuntimeSkillDirectory,
   loadRuntimeLocalSkillBundle,
   localSkillRootForProvider,
   scanRuntimeDirectories,
@@ -1255,7 +1256,7 @@ export class MultiremiDaemon {
       if (this.options.once) await this.runtimeModelListRequests.get(requestId);
     }
     if (ack.pending_local_skills) {
-      await this.handleRuntimeLocalSkillList(runtimeId, ack.pending_local_skills.id);
+      await this.handleRuntimeLocalSkillList(runtimeId, ack.pending_local_skills.id, ack.pending_local_skills.root);
     }
     if (ack.pending_directory_scan) {
       await this.handleRuntimeDirectoryScan(runtimeId, ack.pending_directory_scan);
@@ -1279,7 +1280,7 @@ export class MultiremiDaemon {
         ? [ack.pending_local_skill_import]
         : [];
     for (const request of imports) {
-      await this.handleRuntimeLocalSkillImport(runtimeId, request.id, request.skill_key);
+      await this.handleRuntimeLocalSkillImport(runtimeId, request.id, request.skill_key, request.root);
     }
     return false;
   }
@@ -1796,8 +1797,8 @@ export class MultiremiDaemon {
     };
   }
 
-  private async handleRuntimeLocalSkillList(runtimeId: string, requestId: string): Promise<void> {
-    const root = localSkillRootForProvider(this.options.provider, this.localSkillRoots);
+  private async handleRuntimeLocalSkillList(runtimeId: string, requestId: string, requestedRoot?: string): Promise<void> {
+    const root = requestedRoot ?? localSkillRootForProvider(this.options.provider, this.localSkillRoots);
     if (!root) {
       await this.client.reportRuntimeLocalSkillListResult(runtimeId, requestId, {
         status: "completed",
@@ -1807,10 +1808,13 @@ export class MultiremiDaemon {
       return;
     }
     try {
+      const result = requestedRoot
+        ? await scanRuntimeSkillDirectory(this.options.provider, root)
+        : { skills: listRuntimeLocalSkills(this.options.provider, root) };
       await this.client.reportRuntimeLocalSkillListResult(runtimeId, requestId, {
         status: "completed",
         supported: true,
-        skills: listRuntimeLocalSkills(this.options.provider, root),
+        ...result,
       });
     } catch (err) {
       await this.client.reportRuntimeLocalSkillListResult(runtimeId, requestId, {
@@ -1849,8 +1853,8 @@ export class MultiremiDaemon {
     }
   }
 
-  private async handleRuntimeLocalSkillImport(runtimeId: string, requestId: string, skillKey: string): Promise<void> {
-    const root = localSkillRootForProvider(this.options.provider, this.localSkillRoots);
+  private async handleRuntimeLocalSkillImport(runtimeId: string, requestId: string, skillKey: string, requestedRoot?: string): Promise<void> {
+    const root = requestedRoot ?? localSkillRootForProvider(this.options.provider, this.localSkillRoots);
     if (!root) {
       await this.client.reportRuntimeLocalSkillImportResult(runtimeId, requestId, {
         status: "failed",
@@ -1861,7 +1865,7 @@ export class MultiremiDaemon {
     try {
       await this.client.reportRuntimeLocalSkillImportResult(runtimeId, requestId, {
         status: "completed",
-        skill: loadRuntimeLocalSkillBundle(this.options.provider, root, skillKey),
+        skill: loadRuntimeLocalSkillBundle(this.options.provider, root, skillKey, Boolean(requestedRoot)),
       });
     } catch (err) {
       await this.client.reportRuntimeLocalSkillImportResult(runtimeId, requestId, {

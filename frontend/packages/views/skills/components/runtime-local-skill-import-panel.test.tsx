@@ -3,7 +3,8 @@
 import type { ReactNode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
 import enSkills from "../../locales/en/skills.json";
@@ -31,8 +32,10 @@ vi.mock("@multiremi/core/auth", () => {
 
 vi.mock("@multiremi/core/runtimes", () => ({
   runtimeListOptions: (...args: unknown[]) => mockRuntimeListOptions(...args),
-  runtimeLocalSkillsOptions: (...args: unknown[]) =>
-    mockRuntimeLocalSkillsOptions(...args),
+  runtimeLocalSkillsOptions: (...args: unknown[]) => {
+    const options = mockRuntimeLocalSkillsOptions(...args);
+    return { ...options, queryKey: [...options.queryKey, args[2]] };
+  },
   runtimeLocalSkillsKeys: {
     forRuntime: (runtimeId: string) => ["runtimes", "local-skills", runtimeId],
   },
@@ -122,13 +125,20 @@ function renderPanel(props: { onImported?: (skill: unknown) => void; onBulkDone?
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  return render(
+  const view = render(
     <I18nWrapper>
       <QueryClientProvider client={queryClient}>
         <RuntimeLocalSkillImportPanel {...props} />
       </QueryClientProvider>
     </I18nWrapper>,
   );
+  return { ...view, queryClient };
+}
+
+async function startScan() {
+  const button = screen.getByRole("button", { name: "Scan skills" });
+  await waitFor(() => expect(button).toBeEnabled());
+  fireEvent.click(button);
 }
 
 describe("RuntimeLocalSkillImportPanel", () => {
@@ -143,6 +153,7 @@ describe("RuntimeLocalSkillImportPanel", () => {
       queryKey: ["runtimes", "local-skills", "runtime-1"],
       queryFn: () =>
         Promise.resolve({
+          scan_request_id: "scan-1",
           supported: true,
           skills: [MOCK_SKILL_A],
         }),
@@ -154,6 +165,7 @@ describe("RuntimeLocalSkillImportPanel", () => {
 
   it("imports a single skill when selected via checkbox", async () => {
     renderPanel();
+    await startScan();
 
     // Wait for skill list to render
     expect(
@@ -180,6 +192,7 @@ describe("RuntimeLocalSkillImportPanel", () => {
         expect(mockResolveRuntimeLocalSkillImport).toHaveBeenCalledWith(
           "runtime-1",
           {
+            scan_request_id: "scan-1",
             skill_key: "review-helper",
             name: "Review Helper",
             description: "Review pull requests",
@@ -195,6 +208,7 @@ describe("RuntimeLocalSkillImportPanel", () => {
       queryKey: ["runtimes", "local-skills", "runtime-1"],
       queryFn: () =>
         Promise.resolve({
+          scan_request_id: "scan-1",
           supported: true,
           skills: [MOCK_SKILL_A, MOCK_SKILL_B],
         }),
@@ -204,6 +218,7 @@ describe("RuntimeLocalSkillImportPanel", () => {
       .mockResolvedValueOnce({ skill: MOCK_IMPORTED_SKILL_B });
 
     renderPanel();
+    await startScan();
 
     // Wait for skills to render
     expect(
@@ -249,6 +264,7 @@ describe("RuntimeLocalSkillImportPanel", () => {
       queryKey: ["runtimes", "local-skills", "runtime-1"],
       queryFn: () =>
         Promise.resolve({
+          scan_request_id: "scan-1",
           supported: true,
           skills: [MOCK_SKILL_A, MOCK_SKILL_B],
         }),
@@ -258,6 +274,7 @@ describe("RuntimeLocalSkillImportPanel", () => {
       .mockRejectedValueOnce(new Error("409 conflict: already exists"));
 
     renderPanel();
+    await startScan();
 
     // Wait for skills
     expect(
@@ -299,6 +316,7 @@ describe("RuntimeLocalSkillImportPanel", () => {
   it("calls onImported when exactly one skill succeeds", async () => {
     const onImported = vi.fn();
     renderPanel({ onImported });
+    await startScan();
 
     expect(
       await screen.findByText("Review Helper", {}, { timeout: 5000 }),
@@ -339,6 +357,7 @@ describe("RuntimeLocalSkillImportPanel", () => {
       queryKey: ["runtimes", "local-skills", "runtime-1"],
       queryFn: () =>
         Promise.resolve({
+          scan_request_id: "scan-1",
           supported: true,
           skills: [MOCK_SKILL_A, MOCK_SKILL_B],
         }),
@@ -350,6 +369,7 @@ describe("RuntimeLocalSkillImportPanel", () => {
     const onImported = vi.fn();
     const onBulkDone = vi.fn();
     renderPanel({ onImported, onBulkDone });
+    await startScan();
 
     expect(
       await screen.findByText("Review Helper", {}, { timeout: 5000 }),
@@ -385,4 +405,121 @@ describe("RuntimeLocalSkillImportPanel", () => {
     expect(onBulkDone).toHaveBeenCalledTimes(1);
     expect(onImported).not.toHaveBeenCalled();
   });
+  it("scans only on request and prevents importing stale selections after a directory edit", async () => {
+    const discover = vi.fn().mockResolvedValue({ scan_request_id: "scan-custom", root: "/home/me/.agents/skills", supported: true, skills: [MOCK_SKILL_A] });
+    mockRuntimeLocalSkillsOptions.mockImplementation((runtimeId, root) => ({
+      queryKey: ["runtimes", "local-skills", runtimeId, root],
+      queryFn: () => discover(runtimeId, root),
+    }));
+    renderPanel();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Scan skills" })).toBeEnabled());
+    expect(discover).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("radio", { name: "Custom directory" }));
+    fireEvent.change(screen.getByLabelText("Skill directory on runtime"), { target: { value: "~/.agents/skills" } });
+    expect(discover).not.toHaveBeenCalled();
+    await startScan();
+    fireEvent.click(await screen.findByRole("button", { name: /Review Helper/ }));
+    expect(discover).toHaveBeenCalledWith("runtime-1", "~/.agents/skills");
+    expect(screen.getByRole("button", { name: "Import to Workspace" })).toBeEnabled();
+    fireEvent.change(screen.getByLabelText("Skill directory on runtime"), { target: { value: "/another" } });
+    expect(screen.queryByRole("button", { name: /Review Helper/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Import to Workspace" })).toBeDisabled();
+    expect(discover).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a late result from another directory and imports using the current scan id", async () => {
+    let finishOld!: (value: unknown) => void;
+    const oldResult = new Promise(resolve => { finishOld = resolve; });
+    mockRuntimeLocalSkillsOptions.mockImplementation((runtimeId, root) => ({
+      queryKey: ["runtimes", "local-skills", runtimeId, root],
+      queryFn: () => root === "/old" ? oldResult : Promise.resolve({ scan_request_id: "scan-new", root: "/new", supported: true, skills: [MOCK_SKILL_B] }),
+    }));
+    renderPanel();
+    fireEvent.click(screen.getByRole("radio", { name: "Custom directory" }));
+    fireEvent.change(screen.getByLabelText("Skill directory on runtime"), { target: { value: "/old" } });
+    await startScan();
+    fireEvent.change(screen.getByLabelText("Skill directory on runtime"), { target: { value: "/new" } });
+    await startScan();
+    expect(await screen.findByText("Code Gen")).toBeInTheDocument();
+    await act(async () => { finishOld({ scan_request_id: "scan-old", root: "/old", supported: true, skills: [MOCK_SKILL_A] }); });
+    expect(screen.queryByText("Review Helper")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Code Gen/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Import to Workspace" }));
+    await waitFor(() => expect(mockResolveRuntimeLocalSkillImport).toHaveBeenCalledWith("runtime-1", expect.objectContaining({ scan_request_id: "scan-new", skill_key: "code-gen" })));
+  });
+
+  it("shows scan warnings and excludes unavailable skills from select all", async () => {
+    mockRuntimeLocalSkillsOptions.mockReturnValue({
+      queryKey: ["runtimes", "local-skills", "runtime-1"],
+      queryFn: () => Promise.resolve({ scan_request_id: "scan-1", supported: true,
+        skills: [MOCK_SKILL_A, { ...MOCK_SKILL_B, error: "Binary file cannot be imported" }], warnings: ["Scan limit reached"] }),
+    });
+    renderPanel();
+    await startScan();
+    expect(await screen.findByText("Binary file cannot be imported")).toBeInTheDocument();
+    expect(screen.getByText("Scan limit reached")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Code Gen/ })).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(screen.getByRole("button", { name: /Code Gen/ }));
+    expect(screen.getByRole("button", { name: "Import to Workspace" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all (1)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Import to Workspace" }));
+    await waitFor(() => expect(mockResolveRuntimeLocalSkillImport).toHaveBeenCalledTimes(1));
+    expect(mockResolveRuntimeLocalSkillImport).toHaveBeenCalledWith("runtime-1", expect.objectContaining({ skill_key: "review-helper" }));
+  });
+
+  it("preserves the scan and selection when the same Runtime inventory refreshes", async () => {
+    const { queryClient } = renderPanel();
+    await startScan();
+    fireEvent.click(await screen.findByRole("button", { name: /Review Helper/ }));
+    await act(async () => { queryClient.setQueryData(["runtimes", "ws-1", "list"], [{ ...MOCK_RUNTIME, name: "Updated name" }]); });
+    expect(screen.getByRole("button", { name: "Import to Workspace" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Import to Workspace" }));
+    await waitFor(() => expect(mockResolveRuntimeLocalSkillImport).toHaveBeenCalledWith("runtime-1", expect.objectContaining({ scan_request_id: "scan-1" })));
+  });
+
+  it("shows discovery failure and keeps import disabled", async () => {
+    mockRuntimeLocalSkillsOptions.mockReturnValue({ queryKey: ["runtimes", "local-skills", "runtime-1"], retry: false,
+      queryFn: () => Promise.reject(new Error("Update the runtime daemon")) });
+    renderPanel();
+    await startScan();
+    expect(await screen.findByText("Update the runtime daemon")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Import to Workspace" })).toBeDisabled();
+  });
+
+  it("clears the selected inventory when the Runtime changes", async () => {
+    const user = userEvent.setup();
+    mockRuntimeListOptions.mockReturnValue({ queryKey: ["runtimes", "ws-1", "list"], queryFn: async () => [MOCK_RUNTIME, { ...MOCK_RUNTIME, id: "runtime-2", name: "Second runtime" }] });
+    mockRuntimeLocalSkillsOptions.mockImplementation((runtimeId, root) => ({
+      queryKey: ["runtimes", "local-skills", runtimeId, root],
+      queryFn: async () => ({ scan_request_id: `scan-${runtimeId}`, supported: true, skills: runtimeId === "runtime-1" ? [MOCK_SKILL_A] : [MOCK_SKILL_B] }),
+    }));
+    renderPanel();
+    await startScan();
+    fireEvent.click(await screen.findByRole("button", { name: /Review Helper/ }));
+    await user.click(screen.getByRole("combobox"));
+    await user.click(await screen.findByRole("option", { name: /Second runtime/ }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: /Review Helper/ })).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Import to Workspace" })).toBeDisabled();
+    await startScan();
+    fireEvent.click(await screen.findByRole("button", { name: /Code Gen/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Import to Workspace" }));
+    await waitFor(() => expect(mockResolveRuntimeLocalSkillImport).toHaveBeenCalledWith("runtime-2", expect.objectContaining({ scan_request_id: "scan-runtime-2", skill_key: "code-gen" })));
+  });
+
+  it("locks the Runtime during import and does not silently rescan when it completes", async () => {
+    const discover = vi.fn().mockResolvedValue({ scan_request_id: "scan-1", supported: true, skills: [MOCK_SKILL_A] });
+    mockRuntimeLocalSkillsOptions.mockReturnValue({ queryKey: ["runtimes", "local-skills", "runtime-1"], queryFn: discover });
+    let finishImport!: (value: unknown) => void;
+    mockResolveRuntimeLocalSkillImport.mockReturnValue(new Promise(resolve => { finishImport = resolve; }));
+    renderPanel();
+    await startScan();
+    fireEvent.click(await screen.findByRole("button", { name: /Review Helper/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Import to Workspace" }));
+    expect(screen.getByRole("combobox")).toBeDisabled();
+    expect(screen.getByRole("radio", { name: "Custom directory" })).toBeDisabled();
+    await act(async () => { finishImport({ skill: MOCK_IMPORTED_SKILL_A }); });
+    expect(await screen.findByRole("button", { name: "Done" })).toBeInTheDocument();
+    expect(discover).toHaveBeenCalledTimes(1);
+  });
+
 });

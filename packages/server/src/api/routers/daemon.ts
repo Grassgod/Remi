@@ -359,6 +359,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       runtime_id?: string;
       supports_batch_import?: boolean;
       supports_directory_scan?: boolean;
+      supports_skill_directory?: boolean;
       agent_plugin_protocol?: number;
       ssh_mesh_protocol?: number;
       ssh_mesh_status?: MultiremiDaemonSshMeshStatus;
@@ -395,6 +396,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     const ack = store.heartbeatRuntime(runtimeId, {
       supportsBatchImport: body.supports_batch_import ?? false,
       supportsDirectoryScan: body.supports_directory_scan ?? false,
+      supportsSkillDirectory: body.supports_skill_directory === true,
       agentPluginProtocol: reportsAgentPluginProtocol ? body.agent_plugin_protocol : undefined,
       supportsBotMenu: body.supports_bot_menu,
       supportsFeishuBotConfig,

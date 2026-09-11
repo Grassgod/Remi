@@ -7,6 +7,7 @@
 // own `create` (distinct INSERT columns) and `report` (distinct completed-branch payload); `get`,
 // `claim` and the timeout sweep are the shared template.
 import { createId, nowIso } from "@multiremi/ids.js";
+import { posix, win32 } from "node:path";
 import {
   isRuntimeHeartbeatFresh,
   RUNTIME_HEARTBEAT_STALE_MS,
@@ -49,6 +50,7 @@ import {
 } from "@multiremi/store/runtime-lifecycle-tables.js";
 import type {
   CreateRuntimeLocalSkillImportInput,
+  CreateRuntimeLocalSkillListInput,
   CreateBotMenuPublishRequestInput,
   CreateRuntimeCommandInput,
   CreateRuntimeUpdateInput,
@@ -91,6 +93,8 @@ import {
 
 type Row = Record<string, unknown>;
 
+export class RuntimeLocalSkillRequestError extends Error {}
+
 export class RuntimeRegistrationIdentityConflictError extends Error {
   readonly code = "runtime_registration_identity_conflict";
 
@@ -119,6 +123,7 @@ const RUNTIME_UPDATE_RUNNING_TIMEOUT_MS = 20 * 60 * 1000;
 const RUNTIME_UPDATE_RECENT_DISPATCH_MS = 90 * 1000;
 const RUNTIME_LOCAL_SKILL_PENDING_TIMEOUT_MS = 3 * 60 * 1000;
 const RUNTIME_LOCAL_SKILL_RUNNING_TIMEOUT_MS = 60 * 1000;
+const SKILL_DIRECTORY_UNSUPPORTED_ERROR = "custom skill directories are not supported; upgrade the runtime daemon";
 const RUNTIME_DIRECTORY_SCAN_PENDING_TIMEOUT_MS = 3 * 60 * 1000;
 const RUNTIME_DIRECTORY_SCAN_RUNNING_TIMEOUT_MS = 60 * 1000;
 
@@ -1221,16 +1226,18 @@ export class RuntimesRepo {
     return queued;
   }
 
-  createRuntimeLocalSkillListRequest(runtimeId: string): MultiremiRuntimeLocalSkillListRequest {
+  createRuntimeLocalSkillListRequest(runtimeId: string, input: CreateRuntimeLocalSkillListInput = {}): MultiremiRuntimeLocalSkillListRequest {
     return this.withRuntimeLifecycleLock(runtimeId, (runtime) => {
       this.assertRuntimeOnline(runtime);
+      if (input.root !== undefined && typeof input.root !== "string") throw new RuntimeLocalSkillRequestError("root must be a string");
+      const root = cleanOptionalLocalSkillString(input.root);
       const id = this.localSkillListQueue.nextId();
       const now = nowIso();
       this.ctx.db.run(
         `INSERT INTO multiremi_runtime_local_skill_list_requests (
-          id, runtime_id, status, skills, supported, created_at, updated_at
-        ) VALUES (?, ?, 'pending', '[]', 1, ?, ?)`,
-        [id, runtimeId, now, now],
+          id, runtime_id, root, status, skills, supported, created_at, updated_at
+        ) VALUES (?, ?, ?, 'pending', '[]', 1, ?, ?)`,
+        [id, runtimeId, root, now, now],
       );
       return this.getRuntimeLocalSkillListRequest(runtimeId, id)!;
     });
@@ -1240,8 +1247,15 @@ export class RuntimesRepo {
     return this.localSkillListQueue.get(runtimeId, requestId);
   }
 
-  claimRuntimeLocalSkillListRequest(runtimeId: string): MultiremiRuntimeLocalSkillListRequest | null {
-    return this.localSkillListQueue.claim(runtimeId);
+  claimRuntimeLocalSkillListRequest(runtimeId: string, supportsSkillDirectory = false): MultiremiRuntimeLocalSkillListRequest | null {
+    if (!supportsSkillDirectory) this.failUnsupportedSkillDirectoryRequests(runtimeId, LOCAL_SKILL_LIST_REQUESTS.table);
+    const request = this.localSkillListQueue.claim(runtimeId);
+    // A new request may have arrived between the capability sweep and the claim.
+    if (request?.root && !supportsSkillDirectory) {
+      this.reportRuntimeLocalSkillListResult(runtimeId, request.id, { status: "failed", error: SKILL_DIRECTORY_UNSUPPORTED_ERROR });
+      return null;
+    }
+    return request;
   }
 
   reportRuntimeLocalSkillListResult(runtimeId: string, requestId: string, input: ReportRuntimeLocalSkillListInput): MultiremiRuntimeLocalSkillListRequest {
@@ -1250,19 +1264,24 @@ export class RuntimesRepo {
     if (isTerminalRuntimeRequestStatus(current.status)) return current;
     const status = normalizeRuntimeLocalSkillStatus(input.status);
     const now = nowIso();
-    if (status === "completed") {
+    // This is a daemon-resolved filesystem path; whitespace may be part of its name.
+    const root = typeof input.root === "string" ? input.root : null;
+    const invalidRoot = current.root && status === "completed"
+      && (!root || (!posix.isAbsolute(root) && !win32.isAbsolute(root)));
+    if (status === "completed" && !invalidRoot) {
       this.ctx.db.run(
         `UPDATE multiremi_runtime_local_skill_list_requests
-         SET status = 'completed', skills = ?, supported = ?, error = NULL, updated_at = ?
+         SET status = 'completed', skills = ?, root = ?, warnings = ?, supported = ?, error = NULL, updated_at = ?
          WHERE id = ?`,
-        [toJson(normalizeRuntimeLocalSkillSummaries(input.skills ?? [])), input.supported === false ? 0 : 1, now, requestId],
+        [toJson(normalizeRuntimeLocalSkillSummaries(input.skills ?? [])), current.root ? root : null,
+          toJson(normalizeLocalSkillWarnings(input.warnings)), input.supported === false ? 0 : 1, now, requestId],
       );
     } else {
       this.ctx.db.run(
         `UPDATE multiremi_runtime_local_skill_list_requests
          SET status = 'failed', error = ?, updated_at = ?
          WHERE id = ?`,
-        [input.error ?? "runtime local skill list failed", now, requestId],
+        [invalidRoot ? "daemon did not return an absolute skill directory; upgrade the runtime daemon" : input.error ?? "runtime local skill list failed", now, requestId],
       );
     }
     return this.getRuntimeLocalSkillListRequest(runtimeId, requestId)!;
@@ -1271,18 +1290,35 @@ export class RuntimesRepo {
   createRuntimeLocalSkillImportRequest(runtimeId: string, input: CreateRuntimeLocalSkillImportInput): MultiremiRuntimeLocalSkillImportRequest {
     return this.withRuntimeLifecycleLock(runtimeId, (runtime) => {
       this.assertRuntimeOnline(runtime);
-      const skillKey = String(input.skillKey ?? input.skill_key ?? "").trim();
-      if (!skillKey) throw new Error("skill_key is required");
+      const rawSkillKey = String(input.skillKey ?? input.skill_key ?? "");
+      if (!rawSkillKey.trim()) throw new RuntimeLocalSkillRequestError("skill_key is required");
+      const scanIdInput = input.scanRequestId !== undefined ? input.scanRequestId : input.scan_request_id;
+      if (scanIdInput !== undefined && (typeof scanIdInput !== "string" || !scanIdInput.trim())) {
+        throw new RuntimeLocalSkillRequestError("scan_request_id must be a non-empty string");
+      }
+      const scanRequestId = scanIdInput?.trim();
+      const skillKey = scanRequestId ? rawSkillKey : rawSkillKey.trim();
+      let root: string | null = null;
+      if (scanRequestId) {
+        const scan = this.getRuntimeLocalSkillListRequest(runtimeId, scanRequestId);
+        if (!scan) throw new RuntimeLocalSkillRequestError("skill scan request not found for this runtime");
+        if (scan.status !== "completed" || !scan.supported) throw new RuntimeLocalSkillRequestError("skill scan must be completed and supported before importing");
+        const summary = scan.skills.find((skill) => skill.key === skillKey);
+        if (!summary) throw new RuntimeLocalSkillRequestError("skill_key was not found in the selected scan");
+        if (summary.error) throw new RuntimeLocalSkillRequestError(`skill cannot be imported: ${summary.error}`);
+        root = scan.root ?? null;
+      }
       const id = this.localSkillImportQueue.nextId();
       const now = nowIso();
       this.ctx.db.run(
         `INSERT INTO multiremi_runtime_local_skill_import_requests (
-          id, runtime_id, skill_key, name, description, status, created_by, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
+          id, runtime_id, skill_key, root, name, description, status, created_by, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
         [
           id,
           runtimeId,
           skillKey,
+          root,
           cleanOptionalLocalSkillString(input.name),
           cleanOptionalLocalSkillString(input.description),
           input.createdBy ?? input.created_by ?? null,
@@ -1300,9 +1336,24 @@ export class RuntimesRepo {
     return request ? this.hydrateRuntimeLocalSkillImportRequest(request) : null;
   }
 
-  claimRuntimeLocalSkillImportRequests(runtimeId: string, limit = 10): MultiremiRuntimeLocalSkillImportRequest[] {
+  claimRuntimeLocalSkillImportRequests(runtimeId: string, limit = 10, supportsSkillDirectory = false): MultiremiRuntimeLocalSkillImportRequest[] {
+    if (!supportsSkillDirectory) this.failUnsupportedSkillDirectoryRequests(runtimeId, LOCAL_SKILL_IMPORT_REQUESTS.table);
     const ids = this.localSkillImportQueue.claimBatchIds(runtimeId, limit);
-    return ids.map((id) => this.getRuntimeLocalSkillImportRequest(runtimeId, id)!).filter(Boolean);
+    return ids.map((id) => this.getRuntimeLocalSkillImportRequest(runtimeId, id)!).filter((request) => {
+      if (request?.root && !supportsSkillDirectory) {
+        this.reportRuntimeLocalSkillImportResult(runtimeId, request.id, { status: "failed", error: SKILL_DIRECTORY_UNSUPPORTED_ERROR });
+        return false;
+      }
+      return Boolean(request);
+    });
+  }
+
+  private failUnsupportedSkillDirectoryRequests(runtimeId: string, table: string): void {
+    this.ctx.db.run(
+      `UPDATE ${table} SET status = 'failed', error = ?, updated_at = ?
+       WHERE runtime_id = ? AND status = 'pending' AND root IS NOT NULL AND root <> ''`,
+      [SKILL_DIRECTORY_UNSUPPORTED_ERROR, nowIso(), runtimeId],
+    );
   }
 
   reportRuntimeLocalSkillImportResult(runtimeId: string, requestId: string, input: ReportRuntimeLocalSkillImportInput): MultiremiRuntimeLocalSkillImportRequest {
@@ -1548,6 +1599,7 @@ export class RuntimesRepo {
     claimPending?: boolean;
     supportsBatchImport?: boolean;
     supportsDirectoryScan?: boolean;
+    supportsSkillDirectory?: boolean;
     agentPluginProtocol?: number;
     supportsBotMenu?: boolean;
     supportsFeishuBotConfig?: boolean;
@@ -1676,9 +1728,9 @@ export class RuntimesRepo {
         };
       }
     }
-    const pendingLocalSkills = this.claimRuntimeLocalSkillListRequest(runtimeId);
+    const pendingLocalSkills = this.claimRuntimeLocalSkillListRequest(runtimeId, options.supportsSkillDirectory);
     if (pendingLocalSkills) {
-      ack.pending_local_skills = { id: pendingLocalSkills.id };
+      ack.pending_local_skills = { id: pendingLocalSkills.id, ...(pendingLocalSkills.root ? { root: pendingLocalSkills.root } : {}) };
     }
     if (options.supportsDirectoryScan) {
       const pendingDirectoryScan = this.claimRuntimeDirectoryScanRequest(runtimeId);
@@ -1692,16 +1744,18 @@ export class RuntimesRepo {
       }
     }
     const importLimit = options.supportsBatchImport ? 10 : 1;
-    const pendingImports = this.claimRuntimeLocalSkillImportRequests(runtimeId, importLimit);
+    const pendingImports = this.claimRuntimeLocalSkillImportRequests(runtimeId, importLimit, options.supportsSkillDirectory);
     if (pendingImports.length > 0) {
       ack.pending_local_skill_import = {
         id: pendingImports[0].id,
         skill_key: pendingImports[0].skillKey,
+        ...(pendingImports[0].root ? { root: pendingImports[0].root } : {}),
       };
       if (options.supportsBatchImport) {
         ack.pending_local_skill_imports = pendingImports.map((request) => ({
           id: request.id,
           skill_key: request.skillKey,
+          ...(request.root ? { root: request.root } : {}),
         }));
       }
     }
@@ -2043,7 +2097,10 @@ function toRuntime(row: Row): MultiremiRuntime {
 }
 
 function toRuntimeLocalSkillListRequest(row: Row): MultiremiRuntimeLocalSkillListRequest {
+  const warnings = normalizeLocalSkillWarnings(parseJson(row.warnings, []));
   return {
+    ...(row.root ? { root: String(row.root) } : {}),
+    ...(warnings.length ? { warnings } : {}),
     id: String(row.id),
     runtimeId: String(row.runtime_id),
     status: normalizeRuntimeLocalSkillStatus(row.status),
@@ -2058,6 +2115,7 @@ function toRuntimeLocalSkillListRequest(row: Row): MultiremiRuntimeLocalSkillLis
 
 function toRuntimeLocalSkillImportRequest(row: Row): MultiremiRuntimeLocalSkillImportRequest {
   return {
+    ...(row.root ? { root: String(row.root) } : {}),
     id: String(row.id),
     runtimeId: String(row.runtime_id),
     skillKey: String(row.skill_key),
@@ -2271,7 +2329,8 @@ function normalizeRuntimeLocalSkillSummaries(value: unknown): MultiremiRuntimeLo
     const sourcePath = String(record.sourcePath ?? record.source_path ?? "");
     const fileCount = Number(record.fileCount ?? record.file_count ?? 0);
     return {
-      key: String(record.key ?? record.name ?? "").trim(),
+      key: String(record.key ?? record.name ?? ""),
+      ...(typeof record.error === "string" && record.error ? { error: record.error } : {}),
       name: String(record.name ?? record.key ?? "").trim(),
       description: String(record.description ?? ""),
       sourcePath,
@@ -2280,12 +2339,16 @@ function normalizeRuntimeLocalSkillSummaries(value: unknown): MultiremiRuntimeLo
       fileCount,
       file_count: fileCount,
     };
-  }).filter((skill) => skill.key && skill.name);
+  }).filter((skill) => skill.key.trim() && skill.name);
 }
 
 function cleanOptionalLocalSkillString(value: string | null | undefined): string | null {
   const trimmed = String(value ?? "").trim();
   return trimmed || null;
+}
+
+function normalizeLocalSkillWarnings(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((warning): warning is string => typeof warning === "string" && Boolean(warning.trim())) : [];
 }
 
 export function isRuntimeEffectivelyOnline(

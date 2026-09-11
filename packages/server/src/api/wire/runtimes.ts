@@ -229,6 +229,7 @@ function runtimeLocalSkillSummaryCompatibilityResponse(skill: MultiremiRuntimeLo
     file_count: skill.fileCount,
   };
   if (skill.description) response.description = skill.description;
+  if (skill.error) response.error = skill.error;
   return response;
 }
 
@@ -242,6 +243,8 @@ export function runtimeLocalSkillListRequestCompatibilityResponse(request: Multi
     updated_at: request.updatedAt,
   };
   if (request.skills.length) response.skills = request.skills.map(runtimeLocalSkillSummaryCompatibilityResponse);
+  if (request.root) response.root = request.root;
+  if (request.warnings?.length) response.warnings = request.warnings;
   if (request.error) response.error = request.error;
   return response;
 }
@@ -293,6 +296,7 @@ export function runtimeLocalSkillImportRequestCompatibilityResponse(request: Mul
     updated_at: request.updatedAt,
   };
   if (request.name) response.name = request.name;
+  if (request.root) response.root = request.root;
   if (request.description) response.description = request.description;
   if (request.skill) response.skill = skillWithFilesCompatibilityResponse(request.skill);
   if (request.error) response.error = request.error;
