@@ -1805,6 +1805,10 @@ runMigrations(this.db);
     return this.feishuBot.prepareIssueTopicWithinTransaction(issue);
   }
 
+  prepareFeishuBotHumanRequestPush(request: MultiremiTaskHumanRequest): MultiremiTask | null {
+    return this.feishuBot.prepareHumanRequestPush(request);
+  }
+
   prepareFeishuIssueRoundPushesWithinTransaction(input: {
     issue: MultiremiIssue;
     leaderTask: MultiremiTask;
@@ -4223,7 +4227,10 @@ runMigrations(this.db);
   }
 
   createTaskHumanRequest(input: CreateTaskHumanRequestInput): MultiremiTaskHumanRequest {
-    return this.tasks.createTaskHumanRequest(input);
+    const request = this.tasks.createTaskHumanRequest(input);
+    const wakeTask = this.feishuBot.prepareHumanRequestPush(request);
+    if (wakeTask) this.ctx.notifyTaskEnqueued(wakeTask);
+    return request;
   }
 
   getTaskHumanRequest(requestId: string): MultiremiTaskHumanRequest | null {

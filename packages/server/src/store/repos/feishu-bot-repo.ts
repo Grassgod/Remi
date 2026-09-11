@@ -50,6 +50,7 @@ import type {
   MultiremiAttachment,
   MultiremiIssue,
   MultiremiTask,
+  MultiremiTaskHumanRequest,
   MultiremiUser,
   MultiremiWorkspaceMember,
   SubmitFeishuBotMessageInput,
@@ -756,6 +757,97 @@ export class FeishuBotRepo {
         ],
       );
       return true;
+    })();
+  }
+
+  /**
+   * Wake the Agent bound to an Issue's Feishu topic when the Issue task asks a
+   * human for input. The wake Task is deliberately workspace-free: it only
+   * lets the topic Agent decide how to present the request. The original Task
+   * and human-request id stay in the prompt so any follow-up can be correlated
+   * without creating a second Issue execution.
+   */
+  prepareHumanRequestPush(request: MultiremiTaskHumanRequest): MultiremiTask | null {
+    const sourceTask = this.ctx.tasks().getTask(request.taskId);
+    if (!sourceTask?.issueId) return null;
+    const issue = this.ctx.issues().getIssue(sourceTask.issueId);
+    if (!issue) return null;
+    const workspace = this.ctx.workspaces().getWorkspace(issue.workspaceId);
+    if (!workspace) return null;
+    const topics = readWorkspaceIssueTopics(workspace.settings);
+    if (!topics.enabled || !topics.chatId) return null;
+    const bot = this.statusSnapshot(issue.workspaceId);
+    if (bot.status !== "online" || !bot.config) return null;
+
+    return this.ctx.db.transaction(() => {
+      const binding = this.ctx.db.query(
+        `SELECT b.* FROM multiremi_feishu_bot_chat_bindings b
+         JOIN multiremi_chat_sessions c ON c.id = b.chat_session_id
+         WHERE b.workspace_id = ? AND c.issue_id = ? AND c.status = 'active'
+           AND b.chat_id = ? AND b.reply_to_message_id IS NOT NULL
+         ORDER BY b.updated_at DESC, b.created_at DESC, b.id DESC
+         LIMIT 1`,
+      ).get(issue.workspaceId, issue.id, topics.chatId) as Row | null;
+      if (!binding) return null;
+      const bindingId = String(binding.id);
+      const existing = this.ctx.db.query(
+        `SELECT wake_task_id FROM multiremi_feishu_bot_human_request_pushes
+         WHERE binding_id = ? AND request_id = ? LIMIT 1`,
+      ).get(bindingId, request.id) as Row | null;
+      if (existing) return this.ctx.tasks().getTask(String(existing.wake_task_id));
+
+      const agentId = String(binding.agent_id ?? "");
+      const runtimeId = bot.config?.runtimeId;
+      if (!agentId || !runtimeId) return null;
+      const payload = request.payload ?? {};
+      const wakeTask = this.ctx.tasks().createTaskWithinTransaction({
+        agentId,
+        runtimeId,
+        chatSessionId: String(binding.chat_session_id),
+        workspaceId: issue.workspaceId,
+        holdsWorkspace: false,
+        prompt: humanRequestPushPrompt(issue, sourceTask, request),
+        requestingUserName: "Multiremi",
+        requestingUserProfileDescription: "System notification for a pending Issue human request.",
+      });
+      const now = nowIso();
+      this.ctx.db.run(
+        `INSERT INTO multiremi_feishu_bot_human_request_pushes (
+           id, workspace_id, binding_id, issue_id, source_task_id,
+           request_id, wake_task_id, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          createId("fhrp"),
+          issue.workspaceId,
+          bindingId,
+          issue.id,
+          sourceTask.id,
+          request.id,
+          wakeTask.id,
+          now,
+          now,
+        ],
+      );
+      this.ctx.db.run(
+        `INSERT INTO multiremi_feishu_bot_outbound_deliveries (
+           id, workspace_id, binding_id, task_id, chat_id, thread_id,
+           reply_to_message_id, body, status, available_at, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
+        [
+          createId("fbo"),
+          issue.workspaceId,
+          bindingId,
+          wakeTask.id,
+          topics.chatId,
+          cleanOptionalString(binding.thread_id),
+          cleanOptionalString(binding.reply_to_message_id),
+          humanRequestPushBody(issue, sourceTask, request, payload),
+          now,
+          now,
+          now,
+        ],
+      );
+      return wakeTask;
     })();
   }
 
@@ -1711,6 +1803,44 @@ function issueTopicBody(issue: Pick<MultiremiIssue, "key" | "title" | "descripti
   const title = `**${issue.key} - ${issue.title}**`;
   const description = cleanOptionalString(issue.description);
   return description ? `${title}\n\n${description}` : title;
+}
+
+function humanRequestPushBody(
+  issue: Pick<MultiremiIssue, "key" | "title">,
+  sourceTask: Pick<MultiremiTask, "id">,
+  request: MultiremiTaskHumanRequest,
+  payload: Record<string, unknown>,
+): string {
+  const message = cleanOptionalString(payload.message) ?? "Agent is waiting for a human answer.";
+  return [
+    `**${issue.key} - ${issue.title}**`,
+    "",
+    `Issue Task ${sourceTask.id} is waiting for a human ${request.kind === "permission" ? "decision" : "answer"}.`,
+    `Request ID: ${request.id}`,
+    "",
+    message,
+  ].join("\n");
+}
+
+function humanRequestPushPrompt(
+  issue: Pick<MultiremiIssue, "key" | "title">,
+  sourceTask: Pick<MultiremiTask, "id">,
+  request: MultiremiTaskHumanRequest,
+): string {
+  const payload = request.payload ?? {};
+  const message = cleanOptionalString(payload.message) ?? "Agent is waiting for a human answer.";
+  const questions = Array.isArray(payload.questions) ? payload.questions : [];
+  return [
+    `An Issue task is waiting for a human ${request.kind === "permission" ? "decision" : "answer"}.`,
+    `Issue: ${issue.key} - ${issue.title}`,
+    `Source task id: ${sourceTask.id}`,
+    `Human request id: ${request.id}`,
+    "",
+    message,
+    ...(questions.length ? ["", `Questions/options: ${JSON.stringify(questions)}`] : []),
+    "",
+    "You are the Agent bound to this Feishu Issue topic. Decide how to notify the people in the topic and how to collect the answer. Keep the source task and request ids in any follow-up so the answer can be correlated. Do not create another Issue for this notification.",
+  ].join("\n");
 }
 
 function outboundDelivery(row: Row, claimToken: string): MultiremiFeishuBotOutboundDelivery {

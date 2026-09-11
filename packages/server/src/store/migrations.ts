@@ -2294,6 +2294,29 @@ export function runMigrations(db: SqlDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_round_pushes_wake
       ON multiremi_feishu_bot_round_pushes(wake_task_id, delivery_mode);
 
+    -- A pending human request can wake the bound Feishu topic Agent immediately.
+    -- request_id is the idempotency boundary: retries of the daemon report must
+    -- never create a second wake Task for the same question.
+    CREATE TABLE IF NOT EXISTS multiremi_feishu_bot_human_request_pushes (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      binding_id TEXT NOT NULL,
+      issue_id TEXT NOT NULL,
+      source_task_id TEXT NOT NULL,
+      request_id TEXT NOT NULL,
+      wake_task_id TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(binding_id, request_id),
+      FOREIGN KEY(binding_id) REFERENCES multiremi_feishu_bot_chat_bindings(id) ON DELETE CASCADE,
+      FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE,
+      FOREIGN KEY(source_task_id) REFERENCES multiremi_tasks(id) ON DELETE CASCADE,
+      FOREIGN KEY(wake_task_id) REFERENCES multiremi_tasks(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_human_request_pushes_wake
+      ON multiremi_feishu_bot_human_request_pushes(wake_task_id);
+
     -- The completed Chat reply is committed here before the daemon sends it.
     -- Leases make daemon crashes recoverable; id is also Feishu's stable uuid.
     CREATE TABLE IF NOT EXISTS multiremi_feishu_bot_outbound_deliveries (

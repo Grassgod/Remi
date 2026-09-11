@@ -256,6 +256,40 @@ describe("Feishu Issue topics", () => {
     expect(store.getChatSession(inbound.chatSessionId)?.issueId).toBe(issue.id);
   });
 
+  it("wakes the bound topic Agent when an Issue task asks a human", () => {
+    const { store } = scaffold();
+    configureTopics(store);
+    const wake = prepareReport(store);
+    const roundDelivery = store.claimFeishuBotOutbound("local", "rt_bot", undefined, true)!;
+    store.reportFeishuBotOutbound("local", "rt_bot", roundDelivery.id, {
+      claimToken: roundDelivery.claimToken,
+      status: "sent",
+      externalMessageId: "om_round_push",
+    });
+    const sourceTask = store.createTask({ agentId: store.getFeishuBotConfig("local")!.agentId, issueId: store.getTask(wake.id)!.issueId,
+      workspaceId: "local", prompt: "Run the Issue" });
+    const request = store.createTaskHumanRequest({
+      taskId: sourceTask.id,
+      kind: "question",
+      payload: {
+        message: "Should I continue?",
+        questions: [{ question: "Continue?", options: [{ label: "Yes" }, { label: "No" }] }],
+      },
+    });
+
+    const topicWake = store.listTasks().find(task => task.id !== wake.id && task.id !== sourceTask.id);
+    expect(topicWake).toMatchObject({ chatSessionId: store.getTask(wake.id)!.chatSessionId, holdsWorkspace: false });
+    expect(topicWake?.prompt).toContain(`Human request id: ${request.id}`);
+    const delivery = store.claimFeishuBotOutbound("local", "rt_bot", undefined, true)!;
+    expect(delivery.taskId).toBe(topicWake?.id);
+    expect(delivery.body).toContain("Should I continue?");
+
+    // Replaying the same request report is idempotent and does not enqueue a
+    // second wake Task or outbound delivery.
+    expect(store.prepareFeishuBotHumanRequestPush(request)?.id).toBe(topicWake?.id);
+    expect(store.listTasks().filter(task => task.prompt.includes(`Human request id: ${request.id}`))).toHaveLength(1);
+  });
+
   it("keeps a private Feishu chat independent when its Agent creates an Issue", async () => {
     const { store, revision } = scaffold();
     configureTopics(store);
