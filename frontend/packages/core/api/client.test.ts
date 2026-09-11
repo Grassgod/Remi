@@ -596,7 +596,7 @@ describe("ApiClient", () => {
 
     it("sendChatMessage serialises attachment_ids onto the JSON body when present", async () => {
       const fetchMock = vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ message_id: "m1", task_id: "t1", created_at: "" }), {
+        new Response(JSON.stringify({ message_id: "m1", task_id: "t1", created_at: "", supports_queue: true, queued: false }), {
           status: 201,
           headers: { "Content-Type": "application/json" },
         }),
@@ -616,7 +616,7 @@ describe("ApiClient", () => {
     it("sendChatMessage omits attachment_ids when the list is empty or undefined", async () => {
       const fetchMock = vi.fn().mockImplementation(() =>
         Promise.resolve(
-          new Response(JSON.stringify({ message_id: "m1", task_id: "t1", created_at: "" }), {
+          new Response(JSON.stringify({ message_id: "m1", task_id: "t1", created_at: "", supports_queue: true, queued: false }), {
             status: 201,
             headers: { "Content-Type": "application/json" },
           }),
