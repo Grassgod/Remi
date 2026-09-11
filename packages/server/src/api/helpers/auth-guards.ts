@@ -424,6 +424,20 @@ export function canUserViewTaskMessages(store: MultiremiStore, userId: string | 
   return canUserAccessAgentByUserId(store, userId, agent);
 }
 
+// Chat task metadata and controls carry the same creator boundary as its
+// transcript. A task capability may access its own live Chat task even when
+// it was minted for a shared Runtime owner rather than the Chat creator.
+export function canCurrentUserAccessChatTask(c: Context, store: MultiremiStore, task: MultiremiTask): boolean {
+  if (!task.chatSessionId) return true;
+  if (denyCurrentUserWorkspaceAccess(c, store, task.workspaceId)) return false;
+  const session = store.getChatSession(task.chatSessionId);
+  if (!session) return false;
+  const token = currentAccessToken(c);
+  if (token?.type === "task") return token.taskId === task.id
+    && token.agentId === task.agentId && token.workspaceId === task.workspaceId;
+  return canUserViewTaskMessages(store, currentRequestUserId(c), task);
+}
+
 export function currentWorkspaceRole(c: Context, store: MultiremiStore, workspaceId: string): string {
   const member = currentWorkspaceMember(c, store, workspaceId);
   if (member) return member.role;

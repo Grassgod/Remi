@@ -471,7 +471,8 @@ export function isChatRealtimeEvent(type: string): boolean {
     || type === "chat:done"
     || type === "chat:session_read"
     || type === "chat:session_deleted"
-    || type === "chat:session_updated";
+    || type === "chat:session_updated"
+    || type === "chat:queue_updated";
 }
 
 export function chatEventSessionId(event: {

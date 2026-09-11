@@ -218,7 +218,8 @@ describe("DockerComposeDriver drain gating", () => {
     envFile: string;
     stateDir: string;
   } {
-    const root = mkdtempSync(join(tmpdir(), "compose-drain-"));
+    // Paths containing command names must not be mistaken for argv tokens.
+    const root = mkdtempSync(join(tmpdir(), "compose-drain-up-pull-"));
     tempDirs.push(root);
     const envFile = join(root, "platform.env");
     writeFileSync(envFile, `REMI_API_IMAGE=${OLD_DIGEST}\nREMI_WEB_IMAGE=${OLD_WEB_DIGEST}\n`);
@@ -267,10 +268,9 @@ describe("DockerComposeDriver drain gating", () => {
       release: async () => {},
     };
     await expect(driver.execute(operation(), async () => {}, gate)).rejects.toThrow(DrainTimeoutError);
-    const joined = commands.map((args) => args.join(" "));
-    expect(joined.some((line) => line.includes("compose") && line.includes("pull"))).toBe(true);
+    expect(commands.some((args) => args.includes("compose") && args.includes("pull"))).toBe(true);
     // The switch (and any rollback recreate) never ran.
-    expect(joined.some((line) => line.includes("up"))).toBe(false);
+    expect(commands.some((args) => args.includes("up"))).toBe(false);
     // The staged image digests were rolled back on disk.
     expect(readFileSync(envFile, "utf8")).toBe(originalEnv);
   });
@@ -285,7 +285,7 @@ describe("DockerComposeDriver drain gating", () => {
       release: async () => {},
     };
     await expect(driver.execute(operation(), async () => {}, gate)).rejects.toThrow(DrainCancelledError);
-    expect(commands.map((args) => args.join(" ")).some((line) => line.includes("up"))).toBe(false);
+    expect(commands.some((args) => args.includes("up"))).toBe(false);
     expect(readFileSync(envFile, "utf8")).toBe(originalEnv);
   });
 
@@ -296,7 +296,7 @@ describe("DockerComposeDriver drain gating", () => {
       waitUntilDrained: async () => {
         order.push("drain");
         // Nothing may have switched before the gate resolves.
-        expect(commands.map((args) => args.join(" ")).some((line) => line.includes("up"))).toBe(false);
+        expect(commands.some((args) => args.includes("up"))).toBe(false);
       },
       release: async () => {},
     };
@@ -309,9 +309,8 @@ describe("DockerComposeDriver drain gating", () => {
       const release = await driver.execute(operation(), async () => {}, gate);
       expect(order).toEqual(["drain"]);
       expect(release?.version).toBe("1.2.3");
-      const joined = commands.map((args) => args.join(" "));
-      const pullIndex = joined.findIndex((line) => line.includes("pull"));
-      const upIndex = joined.findIndex((line) => line.includes("up -d"));
+      const pullIndex = commands.findIndex((args) => args.includes("pull"));
+      const upIndex = commands.findIndex((args) => args.some((arg, index) => arg === "up" && args[index + 1] === "-d"));
       expect(pullIndex).toBeGreaterThanOrEqual(0);
       expect(upIndex).toBeGreaterThan(pullIndex);
     } finally {

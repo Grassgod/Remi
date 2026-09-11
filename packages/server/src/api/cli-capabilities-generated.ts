@@ -2855,6 +2855,58 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "chat.pin": {
+      "command": "remi chat pin",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "chat.pin",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "chat.unpin": {
+      "command": "remi chat unpin",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "chat.unpin",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "chat.archive": {
+      "command": "remi chat archive",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "chat.archive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "chat.restore": {
+      "command": "remi chat restore",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "chat.restore",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "chat.issue.bind": {
       "command": "remi chat issue bind",
       "auth": [
@@ -2963,6 +3015,71 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "task"
       ],
       "capability": "chat.pending",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "chat.queue.list": {
+      "command": "remi chat queue list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "chat.queue.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "chat.queue.update": {
+      "command": "remi chat queue update",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "chat.queue.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "chat.queue.remove": {
+      "command": "remi chat queue remove",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "chat.queue.remove",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "chat.queue.clear": {
+      "command": "remi chat queue clear",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "chat.queue.clear",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "chat.queue.prioritize": {
+      "command": "remi chat queue prioritize",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "chat.queue.prioritize",
       "output": [
         "table",
         "json",

@@ -11,7 +11,8 @@
     "placeholder_named": "Message {{name}}…",
     "placeholder_default": "Start a message…",
     "send_tooltip": "Send",
-    "stop_tooltip": "Stop"
+    "stop_tooltip": "Stop",
+    "send_failed": "Message was not sent. Your draft is saved; try again."
   },
   "message_list": {
     "show_details": "Show details",
@@ -134,5 +135,36 @@
     "load_failed": "Could not load this request.",
     "response_failed": "Response failed. Try again.",
     "retry": "Retry"
+  },
+  "page": {
+    "title": "Chat",
+    "private": "Private conversations with your agents",
+    "open": "Open Chat page",
+    "history": "Chat history",
+    "back": "Back to conversation",
+    "loading": "Loading chats…",
+    "load_failed": "Unable to load this conversation.",
+    "retry": "Retry"
+  },
+  "sessions": {
+    "pin": "Pin chat",
+    "unpin": "Unpin chat",
+    "archive": "Archive chat",
+    "restore": "Restore chat",
+    "active": "Active",
+    "archived": "Archived",
+    "search": "Search chats…",
+    "failed": "Action failed. Please try again."
+  },
+  "queue": {
+    "title": "Queued messages",
+    "add": "Add to queue",
+    "clear": "Clear queue",
+    "edit": "Edit queued message",
+    "remove": "Remove queued message",
+    "prioritize": "Run now (stops the current run)",
+    "cancel": "Cancel",
+    "save": "Save",
+    "failed": "Could not update the queue. Please try again."
   }
 }

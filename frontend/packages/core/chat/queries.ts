@@ -13,6 +13,8 @@ export const chatKeys = {
   all: (wsId: string) => ["chat", wsId] as const,
   /** Full sessions list (active + archived); the dropdown splits locally. */
   sessions: (wsId: string) => [...chatKeys.all(wsId), "sessions"] as const,
+  sessionList: (wsId: string, status: "all" | "active" | "archived" = "all") =>
+    status === "all" ? chatKeys.sessions(wsId) : [...chatKeys.sessions(wsId), status] as const,
   session: (wsId: string, id: string) => [...chatKeys.all(wsId), "session", id] as const,
   messages: (sessionId: string) => ["chat", "messages", sessionId] as const,
   messagesPage: (sessionId: string) => ["chat", "messages-page", sessionId] as const,
@@ -124,10 +126,10 @@ export function pendingChatTasksRefetchInterval(query: {
     : false;
 }
 
-export function chatSessionsOptions(wsId: string) {
+export function chatSessionsOptions(wsId: string, status: "all" | "active" | "archived" = "all") {
   return queryOptions({
-    queryKey: chatKeys.sessions(wsId),
-    queryFn: () => api.listChatSessions({ status: "all" }),
+    queryKey: chatKeys.sessionList(wsId, status),
+    queryFn: () => api.listChatSessions({ status }),
     staleTime: Infinity,
   });
 }

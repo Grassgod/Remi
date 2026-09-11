@@ -4367,6 +4367,9 @@ export interface MultiremiChatSession {
   latestTaskId: string | null;
   unreadSince: string | null;
   hasUnread: boolean;
+  pinned: boolean;
+  unreadCount: number;
+  lastMessage: { content: string; role: MultiremiChatMessageRole; createdAt: string } | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -4396,6 +4399,7 @@ export interface CreateChatSessionInput {
 }
 
 export interface UpdateChatSessionInput {
+  pinned?: boolean;
   title?: string;
   status?: MultiremiChatSessionStatus;
   issueId?: string | null;
@@ -4413,6 +4417,7 @@ export interface SendChatMessageInput {
 }
 
 export interface SendChatMessageResult {
+  queued: boolean;
   session: MultiremiChatSession;
   message: MultiremiChatMessage;
   task: MultiremiTask;

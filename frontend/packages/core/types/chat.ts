@@ -7,8 +7,29 @@ export interface ChatSession {
   status: "active" | "archived";
   /** True when the session has any unread assistant replies. List-only. */
   has_unread: boolean;
+  pinned: boolean;
+  unread_count: number;
+  last_message: { content: string; role: "user" | "assistant"; created_at: string } | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface UpdateChatSessionInput {
+  title?: string;
+  status?: "active" | "archived";
+  pinned?: boolean;
+}
+
+export interface ChatQueuedTask {
+  task_id: string;
+  content: string;
+  attachment_ids: string[];
+  created_at: string;
+}
+
+export interface PrioritizeChatQueuedTaskResponse {
+  task_id: string;
+  active_task_id: string | null;
 }
 
 export interface PendingChatTaskItem {
@@ -70,6 +91,8 @@ export interface ChatMessagesPage {
 export interface SendChatMessageResponse {
   message_id: string;
   task_id: string;
+  supports_queue: true;
+  queued: boolean;
   /**
    * Server-authoritative task creation time. Optimistic StatusPill seed
    * uses this as its anchor so the timer starts from the real `0s` —
@@ -81,7 +104,7 @@ export interface SendChatMessageResponse {
 
 /**
  * Response from GET /api/chat/sessions/{id}/pending-task.
- * All fields are absent when the session has no in-flight task.
+ * Head fields are absent when the session has no in-flight task.
  *
  * `created_at` is the server-authoritative anchor for the chat StatusPill's
  * elapsed-seconds timer — the optimistic seed in chat-window.tsx fills in
@@ -92,4 +115,8 @@ export interface ChatPendingTask {
   task_id?: string;
   status?: string;
   created_at?: string;
+  /** Absent only in the short-lived optimistic cache seed. */
+  supports_queue?: true;
+  /** Follow-up messages only; the current head is represented by task_id. */
+  queued_tasks?: ChatQueuedTask[];
 }

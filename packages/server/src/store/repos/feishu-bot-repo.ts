@@ -546,7 +546,7 @@ export class FeishuBotRepo {
       ).get(workspaceId, config.appId, routeAgent.agentId, externalSessionKey) as Row | null;
       if (!binding) {
         const issue = autoCreateGroupIssue ? createGroupIssue() : null;
-        const chat = this.ctx.chat().createChatSession({
+        const chat = this.ctx.chat().createChatSessionWithinTransaction({
           workspaceId,
           agentId: routeAgent.agentId,
           creatorId: sender.user?.id ?? sender.actorId,
@@ -711,7 +711,7 @@ export class FeishuBotRepo {
       ).get(issue.workspaceId, issue.id) as Row | null;
       if (existing) return false;
 
-      const chat = this.ctx.chat().createChatSession({
+      const chat = this.ctx.chat().createChatSessionWithinTransaction({
         id: `chat_issue_topic_${issue.id}`,
         workspaceId: issue.workspaceId,
         agentId: routeAgent.agentId,

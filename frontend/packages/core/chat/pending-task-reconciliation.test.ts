@@ -47,4 +47,16 @@ describe("reconcileSettledPendingChatTask", () => {
     )).toBe(false);
     expect(invalidate).not.toHaveBeenCalled();
   });
+
+  it("refreshes a completed reply when polling observes the next queued task", () => {
+    const queryClient = new QueryClient();
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    expect(reconcileSettledPendingChatTask(
+      queryClient, "ws-1",
+      { sessionId: "chat-1", taskId: "tsk_1" },
+      { sessionId: "chat-1", taskId: "tsk_2" },
+    )).toBe(true);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: chatKeys.messagesPage("chat-1") });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: chatKeys.session("ws-1", "chat-1") });
+  });
 });

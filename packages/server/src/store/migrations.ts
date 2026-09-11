@@ -2674,6 +2674,7 @@ export function runMigrations(db: SqlDatabase): void {
   ensureIssueSubscriberTypedSchema(db);
   addColumnIfMissing(db, "multiremi_chat_sessions", "creator_id TEXT");
   addColumnIfMissing(db, "multiremi_chat_sessions", "unread_since TEXT");
+  addColumnIfMissing(db, "multiremi_chat_sessions", "pinned INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(
     db,
     "multiremi_chat_sessions",
@@ -2702,6 +2703,7 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_tasks", "chat_session_id TEXT");
   addColumnIfMissing(db, "multiremi_repository_wiki_storage_jobs", "lease_token TEXT");
   addColumnIfMissing(db, "multiremi_repository_wiki_storage_jobs", "lease_until TEXT");
+  addColumnIfMissing(db, "multiremi_tasks", "chat_queue_order INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(db, "multiremi_tasks", "task_kind TEXT NOT NULL DEFAULT 'direct'");
   addColumnIfMissing(db, "multiremi_tasks", "wait_reason TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "failure_reason TEXT");
