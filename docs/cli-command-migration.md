@@ -85,6 +85,16 @@ are preserved, not reset to a newly configured branch. Workspace API `base_ref`
 retains its full ref; `base_commit` reports the common baseline with the existing
 worktree HEAD, or null when no common ancestor can be resolved.
 
+Password authentication uses `remi context auth password --file -` with JSON
+containing `email` and `password` on standard input. It saves the returned session
+in the selected CLI configuration and prints a user summary without credentials.
+Deployment administrators can provision or reset an account with
+`remi context auth password-account set --file -`; the body additionally accepts
+`name` and `workspaceId` (default `local`). That operation requires the deployment
+master token and grants the account owner membership in the selected workspace.
+Both commands are unavailable to task identities; password values have no dedicated
+command-line flag and should be supplied without putting them in shell history.
+
 Chat management uses `remi chat pin|unpin|archive|restore <chat>`. Archiving stops
 unfinished runs and makes the conversation read-only until restored. While a
 Chat is running, `remi chat queue list|update|remove|clear|prioritize` manages its

@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { User, StorageAdapter } from "../types";
 import { identify as identifyAnalytics, resetAnalytics } from "../analytics";
-import { ApiError, type ApiClient } from "../api/client";
+import { ApiError, type ApiClient, type LoginResponse } from "../api/client";
 import { setCurrentWorkspace } from "../platform/workspace-storage";
 
 export interface AuthStoreOptions {
@@ -11,6 +11,8 @@ export interface AuthStoreOptions {
   onLogout?: () => void;
   /** When true, rely on HttpOnly cookies instead of localStorage for auth tokens. */
   cookieAuth?: boolean;
+  /** Also revoke the browser's HttpOnly session on explicit token-mode logout. */
+  revokeCookieOnLogout?: boolean;
 }
 
 export interface AuthState {
@@ -22,15 +24,16 @@ export interface AuthState {
   verifyCode: (email: string, code: string) => Promise<User>;
   loginWithLark: (code: string, redirectUri: string) => Promise<User>;
   loginWithToken: (token: string) => Promise<User>;
+  loginWithPassword: (email: string, password: string) => Promise<LoginResponse>;
   logout: () => void;
   setUser: (user: User) => void;
   refreshMe: () => Promise<void>;
 }
 
 export function createAuthStore(options: AuthStoreOptions) {
-  const { api, storage, onLogin, onLogout, cookieAuth } = options;
+  const { api, storage, onLogin, onLogout, cookieAuth, revokeCookieOnLogout } = options;
 
-  return create<AuthState>((set) => ({
+  return create<AuthState>((set, get) => ({
     user: null,
     isLoading: true,
 
@@ -104,22 +107,51 @@ export function createAuthStore(options: AuthStoreOptions) {
     },
 
     loginWithToken: async (token: string) => {
-      storage.setItem("multimira_token", token);
-      api.setToken(token);
-      const user = await api.getMe();
-      onLogin?.();
-      identifyAnalytics(user.id, { email: user.email, name: user.name });
-      set({ user, isLoading: false });
-      return user;
+      try {
+        api.setToken(token);
+        const user = await api.getMe();
+        // getMe keeps a rendering fallback for other callers. An empty
+        // identity must never validate a credential supplied on the login page.
+        if (!user.id.trim()) throw new Error("Invalid authenticated identity");
+        storage.setItem("multimira_token", token);
+        onLogin?.();
+        identifyAnalytics(user.id, { email: user.email, name: user.name });
+        set({ user, isLoading: false });
+        return user;
+      } catch (error) {
+        get().logout();
+        set({ isLoading: false });
+        throw error;
+      }
+    },
+
+    loginWithPassword: async (email: string, password: string) => {
+      try {
+        const { token, user } = await api.passwordLogin(email, password);
+        if (!cookieAuth) {
+          storage.setItem("multimira_token", token);
+          api.setToken(token);
+        }
+        onLogin?.();
+        identifyAnalytics(user.id, { email: user.email, name: user.name });
+        set({ user, isLoading: false });
+        return { token, user };
+      } catch (error) {
+        // A rejected response or failed token write must not leave an old or
+        // partially created session visible as a successful password login.
+        get().logout();
+        set({ isLoading: false });
+        throw error;
+      }
     },
 
     logout: () => {
-      if (cookieAuth) {
+      storage.removeItem("multimira_token");
+      api.setToken(null);
+      if (cookieAuth || revokeCookieOnLogout) {
         // Clear server-side HttpOnly cookie.
         api.logout().catch(() => {});
       }
-      storage.removeItem("multimira_token");
-      api.setToken(null);
       setCurrentWorkspace(null, null);
       resetAnalytics();
       onLogout?.();

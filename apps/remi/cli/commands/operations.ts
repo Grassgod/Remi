@@ -33,6 +33,7 @@ import {
   stringOption,
   stringOptions,
 } from "./resource-common.js";
+import { PASSWORD_INPUT_OPTIONS, passwordAuthBody, passwordLoginCommandSpec } from "./password-auth.js";
 
 const HUMAN: readonly CliIdentity[] = ["human"];
 const HUMAN_TASK: readonly CliIdentity[] = ["human", "task"];
@@ -1096,6 +1097,18 @@ function larkSpecs(): CommandSpec[] {
 
 function authContextSpecs(): CommandSpec[] {
   return [
+    passwordLoginCommandSpec(),
+    op({
+      id: "context.auth.password-account.set",
+      path: ["context", "auth", "password-account", "set"],
+      description: "Set an email/password account from --file path|- (deployment master token required)",
+      method: "POST",
+      apiPath: "/api/auth/password-accounts",
+      mutation: "write",
+      auth: HUMAN,
+      options: PASSWORD_INPUT_OPTIONS,
+      body: (invocation) => passwordAuthBody(invocation, { workspaceId: stringOption(invocation, "workspace") ?? undefined }),
+    }),
     op({ id: "context.auth.lark", path: ["context", "auth", "lark"], description: "Get the Lark login URL", method: "GET", apiPath: "/auth/lark/url", auth: HUMAN, negotiate: false }),
     op({ id: "context.auth.google", path: ["context", "auth", "google"], description: "Authenticate with Google", method: "POST", apiPath: "/auth/google", mutation: "write", auth: HUMAN, options: INPUT_OPTIONS, negotiate: false }),
     op({ id: "context.auth.send-code", path: ["context", "auth", "send-code"], description: "Send an email login code", method: "POST", apiPath: "/auth/send-code", mutation: "write", auth: HUMAN, options: INPUT_OPTIONS, negotiate: false }),

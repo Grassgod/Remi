@@ -437,6 +437,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.get("/readyz", (c) => c.json({ ok: true }));
   app.get("/healthz", (c) => c.json({ ok: true }));
   app.get("/api/config", (c) => c.json({
+    ...(daemonDirectBaseUrl ? { daemon_server_url: daemonDirectBaseUrl } : {}),
     cdn_domain: "",
     allow_signup: true,
     google_client_id: process.env.GOOGLE_CLIENT_ID ?? "",

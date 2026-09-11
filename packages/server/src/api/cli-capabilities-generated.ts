@@ -6310,6 +6310,30 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "context.auth.password": {
+      "command": "remi context auth password",
+      "auth": [
+        "human"
+      ],
+      "capability": "context.auth.password",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "context.auth.password-account.set": {
+      "command": "remi context auth password-account set",
+      "auth": [
+        "human"
+      ],
+      "capability": "context.auth.password-account.set",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "context.auth.lark": {
       "command": "remi context auth lark",
       "auth": [

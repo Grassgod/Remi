@@ -15,10 +15,63 @@ import {
   verifyLocalAuthCode,
 } from "../helpers.js";
 import type { RouterDeps } from "./deps.js";
-import { authenticatedRequestUserId, currentAccessToken, currentRequestUserId } from "../wire/context.js";
+import { authenticatedRequestUserId, currentAccessToken, currentRequestUserId, isObjectRecord } from "../wire/context.js";
+import { PasswordLoginLimiter } from "../helpers/password-login.js";
+import { readRequestBodyLimited } from "../helpers/webhooks.js";
+import { PasswordAccountError, normalizePasswordLoginEmail } from "@multiremi/store/repos/password-accounts-repo.js";
 
 export function registerAuthRoutes(app: Hono, deps: RouterDeps): void {
-  const { store } = deps;
+  const { store, authToken } = deps;
+  const passwordLimiter = new PasswordLoginLimiter();
+
+  app.post("/api/auth/password-accounts", async (c) => {
+    const header = c.req.header("Authorization") ?? "";
+    const explicitOpenLocal = !authToken && !header
+      && (process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test");
+    if (!(authToken && header === `Bearer ${authToken}`) && !explicitOpenLocal) {
+      return c.json({ error: "deployment master authentication required" }, 403);
+    }
+    const input = await readPasswordBody(c.req.raw);
+    if (!input) return c.json({ error: "invalid account configuration" }, 400);
+    try {
+      if (typeof input.email !== "string" || typeof input.password !== "string"
+        || (input.name !== undefined && typeof input.name !== "string")
+        || (input.workspaceId !== undefined && typeof input.workspaceId !== "string")) {
+        return c.json({ error: "invalid account configuration" }, 400);
+      }
+      const account = await store.configurePasswordAccount({
+        email: input.email, password: input.password,
+        name: input.name, workspaceId: input.workspaceId,
+      });
+      return c.json(account, 201);
+    } catch (error) {
+      if (error instanceof PasswordAccountError) return c.json({ error: error.message }, error.status);
+      return c.json({ error: "could not configure password account" }, 500);
+    }
+  });
+
+  app.post("/auth/password", async (c) => {
+    if (process.env.MULTIREMI_ALLOW_PASSWORD_LOGIN !== "1") return c.json({ error: "password login is disabled" }, 403);
+    const limited = () => { c.header("Retry-After", "60"); return c.json({ error: "too many login attempts" }, 429); };
+    if (!passwordLimiter.enter()) return limited();
+    try {
+      const input = await readPasswordBody(c.req.raw);
+      const email = normalizePasswordLoginEmail(input?.email);
+      const password = input?.password;
+      if (!email || typeof password !== "string" || password.length < 6 || password.length > 1024) {
+        return c.json({ error: "invalid email or password" }, 401);
+      }
+      if (!passwordLimiter.allowAccount(email)) return limited();
+      const session = await store.loginWithPassword(email, password);
+      if (!session) return c.json({ error: "invalid email or password" }, 401);
+      setAuthCookie(c, session.token);
+      return c.json(session);
+    } catch {
+      return c.json({ error: "invalid email or password" }, 401);
+    } finally {
+      passwordLimiter.leave();
+    }
+  });
 
   app.post("/api/cli-token", async (c) => {
     const userId = currentRequestUserId(c);
@@ -102,4 +155,15 @@ export function registerAuthRoutes(app: Hono, deps: RouterDeps): void {
       return c.json({ error: e instanceof Error ? e.message : "Feishu login failed" }, 401);
     }
   });
+}
+
+async function readPasswordBody(request: Request): Promise<Record<string, unknown> | null> {
+  const result = await readRequestBodyLimited(request, 8 * 1024);
+  if ("apiError" in result) return null;
+  try {
+    const body: unknown = JSON.parse(new TextDecoder().decode(result.bytes));
+    return isObjectRecord(body) ? body : null;
+  } catch {
+    return null;
+  }
 }
