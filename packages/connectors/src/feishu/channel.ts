@@ -47,6 +47,8 @@ export interface HandleStreamOpts {
   displayName?: string | null;
   nameSuffix?: string;
   subtitle?: string | null;
+  /** Emit a separate final result card after the live CoT card. */
+  separateResult?: boolean;
   tokenProvider?: TokenProvider;
   log?: StreamHandlerLog;
 }
@@ -56,6 +58,8 @@ export interface HandleTaskStreamOpts {
   mentionOpenId?: string;
   displayName?: string | null;
   subtitle?: string | null;
+  /** Emit a separate final result card after the live CoT card. */
+  separateResult?: boolean;
   log?: StreamHandlerLog;
   durable?: { idempotencyKey: string; messageId?: string | null };
   onStarted?: (messageId: string) => Promise<void>;
@@ -215,6 +219,7 @@ export class FeishuChannel {
         displayName: opts.displayName ?? undefined,
         nameSuffix: opts.nameSuffix,
         subtitle: opts.subtitle,
+        separateResult: opts.separateResult,
       });
 
       // Consume ACP stream
@@ -265,6 +270,7 @@ export class FeishuChannel {
         displayName: opts.displayName ?? meta.displayName ?? undefined,
         subtitle: opts.subtitle ?? formatExecutionSubtitle({ agentName: opts.displayName ?? meta.displayName }),
         durable: opts.durable,
+        separateResult: opts.separateResult,
       });
       const messageId = session.getMessageId()!;
       if (opts.onStarted) await opts.onStarted(messageId);

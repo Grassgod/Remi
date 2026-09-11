@@ -12,6 +12,7 @@ import {
   type StepInfo,
   buildProgressCard,
   buildFinalCard,
+  buildCotCard,
   buildLegacyPlanReviewCard,
   buildInitialCardJson,
 } from "./streaming/card-elements.js";
@@ -23,7 +24,7 @@ import { degradeMarkdownImages, rewriteMarkdownImages, type MarkdownImageResolve
 import type { AgentExecutionDisplay, ContextUsage } from "@shared/agent-execution.js";
 import { formatCardStats, formatExecutionSubtitle } from "./card-metadata.js";
 
-export { buildFinalCard };
+export { buildFinalCard, buildCotCard };
 export type { StepInfo };
 /** Retained for callers; patch-only messages use the SDK client's credentials. */
 export type TokenProvider = () => Promise<string>;
@@ -76,6 +77,11 @@ export class FeishuStreamingSession {
   private execution: AgentExecutionDisplay = {};
   private contextUsage: ContextUsage | null = null;
   private readonly permissions = new PermissionFormStore();
+  private separateResult = false;
+  private receiveId = "";
+  private receiveIdType: "open_id" | "user_id" | "union_id" | "email" | "chat_id" = "chat_id";
+  private replyToMessageId: string | undefined;
+  private resultMessageId: string | null = null;
 
   constructor(private readonly client: Client, _credentials: Credentials,
     options?: { log?: (msg: string) => void; tokenProvider?: TokenProvider }) {
@@ -90,6 +96,7 @@ export class FeishuStreamingSession {
     receiveIdType: "open_id" | "user_id" | "union_id" | "email" | "chat_id" = "chat_id",
     options?: { replyToMessageId?: string; sessionId?: string | null; displayName?: string | null;
       nameSuffix?: string; subtitle?: string | null; mentionOpenId?: string;
+      separateResult?: boolean;
       durable?: { idempotencyKey: string; messageId?: string | null } },
   ): Promise<void> {
     if (this.state) return;
@@ -100,6 +107,12 @@ export class FeishuStreamingSession {
     this.displayName = options?.displayName;
     this.execution = { agentName: options?.displayName };
     this.mentionOpenId = options?.mentionOpenId;
+    // Durable deliveries replay into a pre-existing message; splitting them
+    // would create a duplicate result on every retry.
+    this.separateResult = options?.separateResult === true && !options?.durable;
+    this.receiveId = receiveId;
+    this.receiveIdType = receiveIdType;
+    this.replyToMessageId = options?.replyToMessageId;
     this.taskOwnsLifetime = Boolean(options?.durable);
     const card = buildInitialCardJson(options);
     this.header = card.header;
@@ -128,7 +141,9 @@ export class FeishuStreamingSession {
       pendingPermission: this.permissions.pending,
       nameSuffix: this.nameSuffix,
       subtitle: this.subtitle,
-      stats: this.getStats(),
+      stats: this.separateResult ? null : this.getStats(),
+      includeContent: !this.separateResult,
+      includeStats: !this.separateResult,
     }), header: this.header };
   }
 
@@ -328,7 +343,45 @@ export class FeishuStreamingSession {
           nameSuffix: this.nameSuffix,
           subtitle: this.subtitle,
         });
-        await this.patch(card, true);
+        if (this.separateResult) {
+          const cotCard = buildCotCard({
+            thinking: options.thinking ?? this.fullThinking,
+            toolEntries: options.toolEntries,
+            steps: this.steps.length ? this.steps : undefined,
+            toolCount: options.toolCount,
+            retainedPermissionPanels: options.retainedPermissionPanels ?? this.permissions.retained(),
+            sessionId: options.sessionId ?? this.sessionId,
+            displayName: options.displayName ?? this.displayName,
+            nameSuffix: this.nameSuffix,
+            subtitle: this.subtitle,
+          });
+          await this.patch(cotCard, true);
+
+          const resultCard = buildFinalCard({
+            ...options,
+            text: renderedText,
+            thinking: null,
+            toolEntries: undefined,
+            steps: undefined,
+            retainedPermissionPanels: undefined,
+            sessionId: options.sessionId ?? this.sessionId,
+            displayName: options.displayName ?? this.displayName,
+            mentionOpenId: options.mentionOpenId ?? this.mentionOpenId,
+            stats: options.stats ?? this.getStats(),
+            nameSuffix: this.nameSuffix,
+            subtitle: this.subtitle,
+          });
+          const data = { receive_id: this.receiveId, msg_type: "interactive" as const, content: JSON.stringify(resultCard) };
+          const response = this.replyToMessageId
+            ? await this.client.im.message.reply({ path: { message_id: this.replyToMessageId }, data: { ...data, reply_in_thread: true } })
+            : await this.client.im.message.create({ params: { receive_id_type: this.receiveIdType }, data });
+          if (response.code !== 0 || !response.data?.message_id) {
+            throw new Error(`Result card send failed: ${response.msg}`);
+          }
+          this.resultMessageId = response.data.message_id;
+        } else {
+          await this.patch(card, true);
+        }
       } finally { this.closed = true; }
     });
     return this.closePromise;
@@ -344,4 +397,5 @@ export class FeishuStreamingSession {
   }
 
   getMessageId(): string | null { return this.state?.messageId ?? null; }
+  getResultMessageId(): string | null { return this.resultMessageId; }
 }

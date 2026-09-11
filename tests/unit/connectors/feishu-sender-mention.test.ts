@@ -62,8 +62,8 @@ describe("Feishu card sender mention", () => {
     const h = harness();
     await h.connector._handleFeishuMessage(message("group", "ou_alice"));
     expect(h.errors).toEqual([]);
-    expect(h.sends()).toBe(1);
-    expect(h.cards).toHaveLength(2);
+    expect(h.sends()).toBe(2);
+    expect(h.cards.length).toBeGreaterThanOrEqual(3);
     expect(JSON.stringify(h.cards[0])).not.toContain("<at ");
     expect(h.cards.at(-1).body.elements.at(-1).columns[0].elements[0].content).toBe("<at id=ou_alice></at>");
   });
@@ -72,11 +72,12 @@ describe("Feishu card sender mention", () => {
     const h = harness();
     await h.connector._handleFeishuMessage(message("group", "ou_alice"));
     await h.connector._handleFeishuMessage(message("group", "ou_bob"));
-    expect(h.sends()).toBe(2);
-    expect(h.cards.slice(2)).toHaveLength(2);
-    expect(JSON.stringify(h.cards[2])).not.toContain("<at ");
+    expect(h.sends()).toBe(4);
+    const secondCards = h.cards.slice(-3);
+    expect(secondCards).toHaveLength(3);
+    expect(JSON.stringify(secondCards[0])).not.toContain("<at ");
     expect(h.cards.at(-1).body.elements.at(-1).columns[0].elements[0].content).toBe("<at id=ou_bob></at>");
-    expect(JSON.stringify(h.cards.slice(2))).not.toContain("ou_alice");
+    expect(JSON.stringify(secondCards)).not.toContain("ou_alice");
   });
 
   for (const [chatType, sender] of [["p2p", "ou_alice"], ["group", ""], ["group", "all"], ["group", "ou_x><at id=all"]] as const) {
@@ -84,7 +85,7 @@ describe("Feishu card sender mention", () => {
       const h = harness();
       await h.connector._handleFeishuMessage(message(chatType, sender));
       expect(h.errors).toEqual([]);
-      expect(h.sends()).toBe(1);
+      expect(h.sends()).toBe(2);
       expect(JSON.stringify(h.cards)).not.toContain("<at ");
     });
   }

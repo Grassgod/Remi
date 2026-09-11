@@ -256,6 +256,10 @@ export function buildProgressCard(args: {
   nameSuffix?: string;
   subtitle: string | null;
   stats?: string | null;
+  /** Keep the live card as a CoT/process card without exposing the answer yet. */
+  includeContent?: boolean;
+  /** Live CoT cards do not show completion statistics before the result exists. */
+  includeStats?: boolean;
 }): Record<string, unknown> {
   const elements: Record<string, unknown>[] = [];
 
@@ -286,7 +290,7 @@ export function buildProgressCard(args: {
     });
   }
 
-  if (args.text?.trim()) {
+  if (args.includeContent !== false && args.text?.trim()) {
     elements.push(...buildContentElements(args.text));
   }
 
@@ -302,7 +306,7 @@ export function buildProgressCard(args: {
     elements.push(pf.form);
   }
 
-  elements.push(...buildStatsFooter(args.stats));
+  if (args.includeStats !== false) elements.push(...buildStatsFooter(args.stats));
 
   return {
     schema: "2.0",
@@ -310,6 +314,43 @@ export function buildProgressCard(args: {
     config: { width_mode: "fill" },
     body: { elements },
   };
+}
+
+/**
+ * Build the terminal CoT/process card when the answer is emitted separately.
+ * It deliberately omits answer text, token statistics and sender mentions.
+ */
+export function buildCotCard(opts: {
+  thinking?: string | null;
+  toolEntries?: ToolEntry[];
+  steps?: Array<{ tool: string; desc: string }>;
+  toolCount?: number;
+  retainedPermissionPanels?: RetainedPermissionPanel[];
+  sessionId?: string | null;
+  displayName?: string | null;
+  nameSuffix?: string;
+  subtitle?: string | null;
+}): Record<string, unknown> {
+  const card = buildFinalCard({
+    text: "",
+    thinking: opts.thinking,
+    toolEntries: opts.toolEntries,
+    steps: opts.steps,
+    toolCount: opts.toolCount,
+    retainedPermissionPanels: opts.retainedPermissionPanels,
+    sessionId: opts.sessionId,
+    displayName: opts.displayName,
+    nameSuffix: opts.nameSuffix,
+    subtitle: opts.subtitle,
+  });
+  // The empty content placeholder is unnecessary in a process-only card.
+  const body = card.body as { elements?: Record<string, unknown>[] };
+  body.elements = body.elements?.filter(element =>
+    !(element.tag === "markdown" && element.content === ""),
+  );
+  if (!body.elements?.length) body.elements = [{ tag: "markdown", content: "过程已完成" }];
+  card.config = { width_mode: "fill", summary: { content: "CoT" } };
+  return card;
 }
 
 /** @deprecated — card JSON for FeishuStreamingSession.sendPlanReviewCard(), which is no longer called. */
