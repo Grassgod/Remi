@@ -7,13 +7,15 @@ const credentials = { appId: "cli_test", appSecret: "test-secret" };
 function harness(failPatch = false) {
   const sends: any[] = [];
   const patches: any[] = [];
-  const client = { im: { message: {
+  const native: any[] = [];
+  const client = { request: async (input: any) => { native.push(input); return { code: 0, data: { cot_id: "cot_1", message_id: "om_cot" } }; }, im: { message: {
     reply: async (input: any) => { sends.push(input); return { code: 0, data: { message_id: "om_card" } }; },
     patch: async (input: any) => { patches.push(JSON.parse(input.data.content)); return { code: failPatch ? 1 : 0, msg: "patch failure" }; },
   } } };
   const channel = new FeishuChannel(credentials);
+  (channel as any)._makeClient = () => client;
   channel.createStream = () => new FeishuStreamingSession(client as any, credentials, { log: () => {} });
-  return { channel, sends, patches };
+  return { channel, sends, patches, native };
 }
 function message(seq: number, type: string, patch: Record<string, unknown> = {}): TaskStreamEvent {
   return { kind: "message", message: { id: `msg_${seq}`, taskId: "tsk_1", seq, type, tool: null, content: null,
@@ -74,23 +76,23 @@ describe("durable proactive Task cards", () => {
 
   it("shows live tools before completion and keeps one completed tool entry", async () => {
     const h = harness();
-    const checkpoints: string[] = [];
+    const checkpoints: any[] = [];
     const result = await h.channel.handleTaskStream("oc_group", "topic", events(async () => {
-      for (let i = 0; i < 80 && !h.patches.length; i++) await Bun.sleep(50);
-      expect(h.patches.length).toBeGreaterThan(0);
-      expect(JSON.stringify(h.patches)).toContain("Bash");
-      expect(JSON.stringify(h.patches)).not.toContain("Work complete");
+      expect(h.native.length).toBeGreaterThan(0);
+      expect(JSON.stringify(h.native)).toContain("Bash");
+      expect(h.sends).toHaveLength(0);
     }), meta, { replyToMessageId: "om_root", durable: { idempotencyKey: "delivery_1" },
-      onStarted: async id => { checkpoints.push(id); } });
+      onCheckpoint: async state => { checkpoints.push(state); } });
     expect(result.messageId).toBe("om_card");
-    expect(checkpoints).toEqual(["om_card"]);
+    expect(checkpoints.at(-1)).toMatchObject({ version: "native_cot_v1", resultMessageId: "om_card" });
     expect(h.sends).toHaveLength(1);
-    expect(h.sends[0].data).toMatchObject({ msg_type: "interactive", reply_in_thread: true, uuid: "delivery_1" });
-    const final = JSON.stringify(h.patches.at(-1));
+    expect(h.sends[0].data).toMatchObject({ msg_type: "interactive", reply_in_thread: true });
+    expect(h.sends[0].data.uuid).toBeTruthy();
+    const final = h.sends[0].data.content;
     expect(final).toContain("Work complete");
-    expect(final).toContain("Show 1 steps");
-    expect(final).toContain("git status");
-    expect(JSON.stringify(h.patches)).toContain("clean");
+    expect(final).not.toContain("Show 1 steps");
+    expect(JSON.stringify(h.native)).toContain("git status");
+    expect(JSON.stringify(h.native)).toContain("clean");
   });
 
   it("replays persisted events into the existing card after a restart without another send", async () => {
@@ -107,15 +109,16 @@ describe("durable proactive Task cards", () => {
       { durable: { idempotencyKey: "delivery_1", messageId: "om_card" } })).rejects.toThrow("Final card patch failed");
   });
 
-  it("does not consume the task when persisting the message identity fails", async () => {
+  it("does not send native messages when persisting the creation intent fails", async () => {
     const h = harness();
     let consumed = false;
     async function* stream() { consumed = true; yield* events(); }
     await expect(h.channel.handleTaskStream("oc_group", "topic", stream(), meta,
       { replyToMessageId: "om_root", durable: { idempotencyKey: "delivery_1" },
-        onStarted: async () => { throw new Error("lease lost"); } })).rejects.toThrow("lease lost");
-    expect(consumed).toBe(false);
-    expect(h.sends).toHaveLength(1);
+        onCheckpoint: async () => { throw new Error("lease lost"); } })).rejects.toThrow("lease lost");
+    expect(consumed).toBe(true);
+    expect(h.native).toHaveLength(0);
+    expect(h.sends).toHaveLength(0);
     expect(h.patches).toHaveLength(0);
   });
 });

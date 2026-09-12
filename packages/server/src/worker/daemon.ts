@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isPermanentFeishuDeliveryError } from "@shared/feishu-delivery-error.js";
 import { mkdirSync } from "node:fs";
 import { cpus, homedir, hostname } from "node:os";
 import { basename, join, resolve } from "node:path";
@@ -870,6 +871,10 @@ export class MultiremiDaemon {
     return (await this.client.getTaskHumanRequest(taskId, requestId))?.status === "pending";
   }
 
+  getFeishuBotHumanRequest(taskId: string, requestId: string): Promise<MultiremiTaskHumanRequest | null> {
+    return this.client.getTaskHumanRequest(taskId, requestId);
+  }
+
   respondFeishuBotHumanRequest(
     taskId: string,
     requestId: string,
@@ -1570,6 +1575,7 @@ export class MultiremiDaemon {
         claimToken: delivery.claimToken,
         status: "failed",
         error: redactFeishuBotError(error),
+        retryable: !isPermanentFeishuDeliveryError(error),
       });
     }
   }

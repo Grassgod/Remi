@@ -317,7 +317,6 @@ export class FeishuConnector implements Connector {
         mentionOpenId: this._replyMentionOpenId(incoming),
         sessionId: meta.sessionId,
         displayName: meta.displayName ?? undefined,
-        separateResult: true,
         log: {
           info: (m) => slog.info(m),
           warn: (m) => slog.warn(m),
@@ -340,8 +339,8 @@ export class FeishuConnector implements Connector {
       await this._channel.handleTaskStream(chatId, sessionKey, stream, meta, {
         replyToMessageId,
         mentionOpenId: this._replyMentionOpenId(incoming),
+        interactionOpenId: typeof incoming.metadata?.senderOpenId === "string" ? incoming.metadata.senderOpenId : undefined,
         displayName: meta.displayName,
-        separateResult: true,
         log: {
           info: (message) => slog.info(message),
           warn: (message) => slog.warn(message),

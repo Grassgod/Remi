@@ -133,13 +133,12 @@ describe("one patch-only Feishu card transport", () => {
     expect(JSON.stringify(h.patches()[0])).toContain("reasoning");
   });
 
-  it("keeps CoT in the patched process card and sends an independent result card", async () => {
+  it("finishes a legacy card without creating a second pseudo-CoT message", async () => {
     const h = harness();
     await h.session.start("oc_group", "chat_id", {
       replyToMessageId: "om_question",
       displayName: "Remi",
       subtitle: "Remi Claude opus5",
-      separateResult: true,
       mentionOpenId: "ou_sender",
     });
     await h.session.update("answer must stay hidden until completion");
@@ -147,18 +146,12 @@ describe("one patch-only Feishu card transport", () => {
     await h.session.close({ finalText: "Final answer", stats: "8s · 1 tool" });
 
     const operations = h.calls.map(call => call.operation);
-    expect(operations).toEqual(["reply", "patch", "reply"]);
-    const cot = JSON.parse(h.calls[1]!.input.data.content);
-    expect(JSON.stringify(cot)).toContain("Read source");
-    expect(JSON.stringify(cot)).not.toContain("answer must stay hidden");
-    expect(JSON.stringify(cot)).not.toContain("8s");
-    expect(JSON.stringify(cot)).not.toContain("<at id=ou_sender>");
-
-    const result = JSON.parse(h.calls[2]!.input.data.content);
+    expect(operations).toEqual(["reply", "patch"]);
+    const result = JSON.parse(h.calls[1]!.input.data.content);
     expect(JSON.stringify(result)).toContain("Final answer");
     expect(JSON.stringify(result)).toContain("8s");
     expect(JSON.stringify(result)).toContain("<at id=ou_sender></at>");
-    expect(h.session.getResultMessageId()).toBe("om_card");
+    expect(h.session.getMessageId()).toBe("om_card");
   });
 
   it("retries transient failures on the same message and keeps the queue usable", async () => {

@@ -1,4 +1,4 @@
-import type { MultiremiFeishuBotOutboundDelivery } from "@multiremi/contracts/types.js";
+import type { MultiremiFeishuBotOutboundDelivery, FeishuPresentationCheckpoint } from "@multiremi/contracts/types.js";
 import type { FeishuOutboundOptions } from "./feishu-concierge.js";
 
 /** The lease timer is independent of Task consumption (including human waits). */
@@ -9,7 +9,7 @@ export async function deliverFeishuOutbound(
     prepareMention?: (openId: string | null) => Promise<string | null>;
     send: (options: FeishuOutboundOptions) => Promise<{ messageId: string }>;
     report: (input: { claimToken: string; status: "streaming" | "sent" | "failed";
-      externalMessageId?: string; error?: string }) => Promise<void>;
+      externalMessageId?: string; error?: string; presentation?: FeishuPresentationCheckpoint }) => Promise<void>;
     renewMs?: number;
   },
 ): Promise<void> {
@@ -33,6 +33,10 @@ export async function deliverFeishuOutbound(
       onStarted: async messageId => {
         signal.throwIfAborted();
         await options.report({ claimToken: delivery.claimToken, status: "streaming", externalMessageId: messageId });
+      },
+      onCheckpoint: async presentation => {
+        signal.throwIfAborted();
+        await options.report({ claimToken: delivery.claimToken, status: "streaming", presentation });
       },
     });
     signal.throwIfAborted();

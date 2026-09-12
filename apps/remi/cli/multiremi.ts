@@ -603,16 +603,22 @@ export function controlPlaneConciergeHost(deps: {
           mentionOpenId = await options.prepareMention(candidate);
         }
         options.signal.throwIfAborted();
+        const interactionOpenId = delivery.interactionOpenId ?? delivery.presentation?.interactionOpenId ?? mentionOpenId
+          ?? (delivery.presentation ? await handle.resolveProactiveMention(delivery.chatId, { mode: "group_owner" }, options.signal) : undefined);
         return handle.streamProactiveTask(delivery.chatId, `${delivery.chatId}:thread:${delivery.threadId ?? delivery.replyToMessageId}`,
           pollFeishuTask(daemon, taskId, options.signal), {
             taskId, displayName, signal: options.signal,
             isHumanRequestPending: requestId => daemon.isFeishuBotHumanRequestPending(taskId, requestId),
+            getHumanRequest: requestId => daemon.getFeishuBotHumanRequest(taskId, requestId),
             respondHumanRequest: (requestId, response) => daemon.respondFeishuBotHumanRequest(taskId, requestId, response),
           }, {
             replyToMessageId: delivery.replyToMessageId ?? undefined,
             mentionOpenId: mentionOpenId ?? undefined,
-            durable: { idempotencyKey: delivery.idempotencyKey, messageId: delivery.resumeMessageId },
+            durable: { idempotencyKey: delivery.idempotencyKey, messageId: delivery.resumeMessageId,
+              presentation: delivery.presentation },
+            interactionOpenId: interactionOpenId ?? undefined,
             onStarted: options.onStarted,
+            onCheckpoint: options.onCheckpoint,
           });
       }
       return handle.sendProactiveThreadReply({
@@ -682,15 +688,17 @@ export function createFeishuTaskHandler(
       chatId: message.chatId,
       threadId: String(message.metadata?.rootId ?? "").trim() || null,
       text: message.text,
+      deliveryMode: "native_cot_v1",
     });
     // A live Task already has the card created by its first event. The steer is
     // persisted and injected by the normal Task worker; do not replay it into a
     // second card.
-    if (submitted.steered || submitted.duplicate) return;
+    if (submitted.steered || submitted.duplicate || submitted.deliveryQueued) return;
 
     await consumer(pollFeishuTask(daemon, submitted.taskId), {
       taskId: submitted.taskId,
       displayName: submitted.agentName,
+      getHumanRequest: requestId => daemon.getFeishuBotHumanRequest(submitted.taskId, requestId),
       respondHumanRequest: (requestId, response) =>
         daemon.respondFeishuBotHumanRequest(submitted.taskId, requestId, response),
     });

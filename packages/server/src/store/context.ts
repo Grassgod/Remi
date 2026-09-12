@@ -68,6 +68,7 @@ import type {
   MultiremiTaskMessage,
   MultiremiTaskStatus,
   MultiremiFeishuBotOutboundDelivery,
+  FeishuPresentationCheckpoint,
   MultiremiUser,
   MultiremiWebhookDelivery,
   MultiremiWorkspaceMember,
@@ -460,6 +461,8 @@ export interface FeishuBotSurface {
     workspaceId: string,
     runtimeId: string,
     now?: string | Date,
+    supportsTaskStream?: boolean,
+    supportsNativeCot?: boolean,
   ): MultiremiFeishuBotOutboundDelivery | null;
   getFeishuBotOutboundAttachment(
     workspaceId: string,
@@ -474,9 +477,11 @@ export interface FeishuBotSurface {
     deliveryId: string,
     input: {
       claimToken: string;
-      status: "sent" | "failed";
+      status: "sent" | "failed" | "streaming";
       externalMessageId?: string | null;
       error?: string | null;
+      presentation?: FeishuPresentationCheckpoint;
+      retryable?: boolean;
     },
     now?: string | Date,
   ): boolean;

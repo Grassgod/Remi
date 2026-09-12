@@ -24,6 +24,7 @@
 
 import type {
   FeishuBotErrorCode,
+  FeishuPresentationCheckpoint,
   FeishuBotRuntimeState,
   MultiremiFeishuBotDirective,
   MultiremiFeishuBotOutboundDelivery,
@@ -53,6 +54,7 @@ export interface FeishuConciergeHost {
 export interface FeishuOutboundOptions {
   signal: AbortSignal;
   onStarted: (messageId: string) => Promise<void>;
+  onCheckpoint?: (presentation: FeishuPresentationCheckpoint) => Promise<void>;
   prepareMention?: (openId: string | null) => Promise<string | null>;
 }
 

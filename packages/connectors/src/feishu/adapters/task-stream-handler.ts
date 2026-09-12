@@ -248,7 +248,7 @@ async function handleHumanRequest(
   }
 }
 
-function normalizeQuestions(value: unknown): AskUserQuestionData | null {
+export function normalizeQuestions(value: unknown): AskUserQuestionData | null {
   if (!Array.isArray(value)) return null;
   const questions = value.map((raw) => {
     const row = objectValue(raw) ?? {};
@@ -274,7 +274,7 @@ function normalizeQuestions(value: unknown): AskUserQuestionData | null {
   return questions.length ? { questions } : null;
 }
 
-function normalizePermissionOptions(value: unknown): PermissionOption[] {
+export function normalizePermissionOptions(value: unknown): PermissionOption[] {
   if (!Array.isArray(value)) return [];
   return value.map((raw, index) => {
     const row = objectValue(raw) ?? {};

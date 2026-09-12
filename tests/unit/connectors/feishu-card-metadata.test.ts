@@ -19,10 +19,11 @@ function harness() {
     cards.push(JSON.parse(input.data.content));
     return { code: 0, data: { message_id: "om_card" } };
   };
-  const client = { im: { message: { create: send, reply: send,
+  const client = { request: async () => ({ code: 0, data: { cot_id: "cot_1", message_id: "om_native" } }), im: { message: { create: send, reply: send,
     patch: async (input: any) => { cards.push(JSON.parse(input.data.content)); return { code: 0 }; },
   } } };
   const channel = new FeishuChannel(credentials);
+  (channel as any)._makeClient = () => client;
   channel.createStream = () => {
     const session = new FeishuStreamingSession(client as any, credentials, { log: () => {} });
     sessions.push(session);
@@ -136,7 +137,7 @@ describe("Feishu card execution identity and context", () => {
     expect(JSON.stringify(h.cards)).not.toContain("<at ");
   });
 
-  it("uses one footer layout with the original icons during progress and completion", async () => {
+  it("keeps the original footer icons at completion and hides statistics during legacy progress", async () => {
     const h = harness();
     const session = h.channel.createStream();
     await session.start("oc_chat", "chat_id", { displayName: "Remi", mentionOpenId: "ou_sender" });
@@ -148,6 +149,12 @@ describe("Feishu card execution identity and context", () => {
     await session.close("Answer");
     for (const card of h.cards.slice(1)) {
       expect(card.header.subtitle.content).toBe("Remi Claude opus5");
+      if (card !== h.cards.at(-1)) {
+        expect(JSON.stringify(card)).not.toContain("54s");
+        expect(JSON.stringify(card)).not.toContain("82k/200k");
+        expect(JSON.stringify(card)).not.toContain("<at ");
+        continue;
+      }
       const footer = card.body.elements.at(-1);
       expect(footer.flex_mode).toBe("flow");
       const final = card === h.cards.at(-1);
