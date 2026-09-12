@@ -1,7 +1,7 @@
 /** Native CoT tool labels, following aiden-bot's semantic display rules.
  * Tool outputs are deliberately not used here: the Task transcript owns logs. */
 import { isCollabInput, isSubagentActivityInput, subagentName } from "./tool-formatters.js";
-export interface CotListResult { type: "list"; items: Array<{ text: string; icon: "task" }> }
+export interface CotListResult { type: "list"; items: Array<{ text: string; icon?: "task" }> }
 export interface CotToolDisplay { title: string; icon: string; args?: string; result?: CotListResult; subagent?: boolean }
 const str = (v: unknown) => typeof v === "string" ? v.trim() : "";
 const line = (v: string) => v.replace(/\s+/g, " ").trim();
@@ -31,7 +31,9 @@ export function cotPlan(entries: unknown): { title: string; result: CotListResul
   const statuses: Record<string, string> = { completed: "已完成", in_progress: "进行中", pending: "待开始" };
   const result: CotListResult = { type: "list", items: [] };
   for (const row of rows) {
-    const item = { icon: "task" as const,
+    // Feishu's task icon is a checked box, not a status-aware task glyph.
+    // Only completed entries may use it; other states use their text label.
+    const item = { ...(row.status === "completed" ? { icon: "task" as const } : {}),
       text: cotPreview(`${statuses[String(row.status)] ?? "待开始"} · ${line(String(row.content))}`, 600) };
     // Budget the whole typed result, including both layers of JSON encoding.
     // Reserve room for the overflow notice and the outer native event fields.
@@ -39,7 +41,7 @@ export function cotPlan(entries: unknown): { title: string; result: CotListResul
     result.items.push(item);
   }
   const remaining = rows.length - result.items.length;
-  if (remaining) result.items.push({ icon: "task", text: `另有 ${remaining} 项待办，完整计划见工作台` });
+  if (remaining) result.items.push({ text: `另有 ${remaining} 项待办，完整计划见工作台` });
   return { title: `更新待办 (${done}/${rows.length})`, result };
 }
 
@@ -55,7 +57,7 @@ export function cotToolDisplay(name: string, input: Record<string, unknown>, met
       : /\b(cat|sed|head|tail)\b/.test(command) ? "read" : "bash";
     display = { title, icon, args: command ? `$ ${command}` : undefined };
   } else if (/todo/i.test(name)) {
-    display = { icon: "task", ...(cotPlan(input.todos) ?? { title: "更新待办" }) };
+    display = { icon: "doc", ...(cotPlan(input.todos) ?? { title: "更新待办" }) };
   } else if (isCotSubagent(name, input)) {
     const child = subagentName(input.agentPath);
     const activity = str(input.activityKind);

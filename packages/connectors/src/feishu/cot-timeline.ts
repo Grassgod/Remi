@@ -102,7 +102,7 @@ export class FeishuCotTimeline {
       if (plan && fingerprint !== this.planFingerprint) {
         this.planFingerprint = fingerprint;
         const toolCallId = this.id(`plan:${message.seq}`);
-        this.queue.push(["TOOL_CALL_START", { toolCallId, toolCallName: "Plan", icon: "task", title: plan.title }],
+        this.queue.push(["TOOL_CALL_START", { toolCallId, toolCallName: "Plan", icon: "doc", title: plan.title }],
           ["TOOL_CALL_END", { toolCallId }], this.result(toolCallId, plan.result, message.seq));
       }
     } else if (message.type === "compaction") {

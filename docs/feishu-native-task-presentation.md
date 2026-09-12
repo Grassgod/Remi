@@ -36,8 +36,10 @@ canonical Task events rather than its SDK-specific event feed:
 - `TOOL_CALL_END` closes the invocation display, as in aiden-bot; it does not
   declare the underlying operation complete. Ordinary successful tool logs are
   omitted. The full transcript remains in the workbench. Failures show a short
-  indication; todo/plan results use native `list` items with a task icon and
-  explicit status (pending / in progress / completed), without a `plaintext`
+  indication; todo/plan results use native `list` items with explicit status
+  (pending / in progress / completed). Only completed items use the checked
+  `task` icon; other items omit it and the plan heading uses a neutral `doc`
+  icon. The checklist has no `plaintext`
   code panel or emoji checklist. Long plans show an explicit overflow count
   and refer to the complete plan in the workbench.
   Native result `content` is itself a JSON string containing the typed text/list object.

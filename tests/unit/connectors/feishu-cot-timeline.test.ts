@@ -93,20 +93,24 @@ describe("semantic native CoT timeline", () => {
     const samples = timeline.drain().samples;
     expect(samples.filter(([t]) => t === "TOOL_CALL_START")).toHaveLength(1);
     expect(samples[0]?.[1].title).toBe("更新待办 (1/3)");
+    expect(samples[0]?.[1].icon).toBe("doc");
     expect(JSON.parse(String(samples.at(-1)?.[1].content))).toEqual({ type: "list", items: [
-      { icon: "task", text: "已完成 · 检查" }, { icon: "task", text: "进行中 · 验证" }, { icon: "task", text: "待开始 · 汇报" },
+      { icon: "task", text: "已完成 · 检查" }, { text: "进行中 · 验证" }, { text: "待开始 · 汇报" },
     ] });
     timeline.accept(message(3, "plan", { meta: { entries: entries.map(e => ({ ...e, status: "completed" })) } }));
     const updated = timeline.drain().samples;
     expect(updated[0]?.[1].title).toBe("更新待办 (3/3)");
     expect(JSON.parse(String(updated.at(-1)?.[1].content)).items.every((e: { text: string }) => e.text.startsWith("已完成"))).toBe(true);
+    expect(JSON.parse(String(updated.at(-1)?.[1].content)).items.every((e: { icon: string }) => e.icon === "task")).toBe(true);
   });
 
   it("uses the same native checklist for successful TodoWrite and never shows it as completed before success", () => {
     const timeline = new FeishuCotTimeline("task");
     const todos = [{ content: "检查投递", status: "in_progress" }, { content: "输出结果", status: "pending" }];
     timeline.accept(message(1, "tool_use", { tool: "TodoWrite", toolCallId: "todo", input: { todos } }));
-    expect(timeline.drain().samples.some(([type]) => type === "TOOL_CALL_RESULT")).toBe(false);
+    const invocation = timeline.drain().samples;
+    expect(invocation.some(([type]) => type === "TOOL_CALL_RESULT")).toBe(false);
+    expect(invocation.find(([type]) => type === "TOOL_CALL_START")?.[1].icon).toBe("doc");
     timeline.accept(message(2, "tool_result", { toolCallId: "todo", status: "in_progress" }));
     expect(timeline.drain().samples).toEqual([]);
     timeline.accept(message(3, "tool_result", { toolCallId: "todo", status: "completed" }));
@@ -142,6 +146,7 @@ describe("semantic native CoT timeline", () => {
     const visible = result.result.items.length - 1;
     expect(visible).toBeGreaterThan(0);
     expect(result.result.items.at(-1)?.text).toBe(`另有 ${100 - visible} 项待办，完整计划见工作台`);
+    expect(result.result.items.every(item => !Object.hasOwn(item, "icon"))).toBe(true);
     expect(Buffer.byteLength(JSON.stringify(JSON.stringify(result.result)))).toBeLessThan(3200);
     expect(JSON.stringify(result.result)).not.toContain("�");
     expect(cotPlan([null, {}, { content: "  " }])).toBeUndefined();
