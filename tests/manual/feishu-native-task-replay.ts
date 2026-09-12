@@ -29,7 +29,7 @@ if (fixture.messages.some(m => ["permission_request", "question_request"].includ
 
 const trace: Array<{ method: string; path: string; code: number; events?: string[] }> = [];
 async function api(method: string, path: string, data: unknown, params?: unknown): Promise<any> {
-  const args = ["api", method, path, "--as", "bot", "--data", JSON.stringify(data), ...(params ? ["--params", JSON.stringify(params)] : [])];
+  const args = ["api", method, path, "--as", "bot", ...(data === undefined ? [] : ["--data", JSON.stringify(data)]), ...(params ? ["--params", JSON.stringify(params)] : [])];
   let stdout: string;
   try { ({ stdout } = await cli("lark-cli", args, { env: cliEnv, maxBuffer: 2_000_000, timeout: 30_000 })); }
   catch (error) {

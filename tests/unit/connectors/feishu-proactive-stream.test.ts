@@ -23,9 +23,9 @@ function message(seq: number, type: string, patch: Record<string, unknown> = {})
 }
 async function* events(onLive?: () => Promise<void>): AsyncGenerator<TaskStreamEvent> {
   yield message(1, "tool_use", { tool: "Bash", toolCallId: "call_1" });
-  yield message(2, "tool_use", { tool: "Bash", toolCallId: "call_1", input: { command: "git status" } });
-  yield message(3, "tool_result", { toolCallId: "call_1", output: "clean" });
+  yield message(2, "tool_use", { tool: "Bash", toolCallId: "call_1", input: { command: "git status", description: "检查 Git 状态" } });
   if (onLive) await onLive();
+  yield message(3, "tool_result", { toolCallId: "call_1", output: "clean" });
   yield message(4, "text", { content: "Work complete" });
   yield { kind: "snapshot", snapshot: { taskId: "tsk_1", status: "completed", result: "Work complete",
     sessionId: "provider_1", workDir: "/tmp/chat", error: null, usage: [] } };
@@ -78,8 +78,10 @@ describe("durable proactive Task cards", () => {
     const h = harness();
     const checkpoints: any[] = [];
     const result = await h.channel.handleTaskStream("oc_group", "topic", events(async () => {
-      expect(h.native.length).toBeGreaterThan(0);
-      expect(JSON.stringify(h.native)).toContain("Bash");
+      for (let i = 0; i < 400 && !h.native.some(r => r.method === "PUT"); i++) await Bun.sleep(5);
+      expect(h.native.some(r => r.method === "PUT")).toBe(true);
+      expect(JSON.stringify(h.native)).toContain("检查 Git 状态");
+      expect(JSON.stringify(h.native)).not.toContain("RUN_FINISHED");
       expect(h.sends).toHaveLength(0);
     }), meta, { replyToMessageId: "om_root", durable: { idempotencyKey: "delivery_1" },
       onCheckpoint: async state => { checkpoints.push(state); } });
@@ -92,7 +94,8 @@ describe("durable proactive Task cards", () => {
     expect(final).toContain("Work complete");
     expect(final).not.toContain("Show 1 steps");
     expect(JSON.stringify(h.native)).toContain("git status");
-    expect(JSON.stringify(h.native)).toContain("clean");
+    expect(JSON.stringify(h.native)).not.toContain("clean");
+    expect(h.native.flatMap(r => r.data.events ?? []).filter(e => e.event_type === "TOOL_CALL_START")).toHaveLength(1);
   });
 
   it("replays persisted events into the existing card after a restart without another send", async () => {

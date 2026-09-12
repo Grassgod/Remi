@@ -3862,6 +3862,8 @@ export interface FeishuPresentationCheckpoint {
   interactionOpenId?: string;
   cot?: {
     status: "creating" | "active" | "finished" | "disabled";
+    /** Keep event IDs/layout from different renderers out of the same CoT. */
+    presentation?: "semantic_v1";
     cotId?: string;
     messageId?: string;
     /** Set before a write, cleared after its acknowledgement is checkpointed. */
@@ -3871,7 +3873,7 @@ export interface FeishuPresentationCheckpoint {
     error?: string;
   };
   resultMessageId?: string;
-  interactions: Record<string, { messageId: string; receiptStatus?: string }>;
+  interactions: Record<string, { messageId: string; receiptStatus?: string; waitingStarted?: boolean; waitingFinished?: boolean }>;
 }
 
 export interface MultiremiFeishuBotOutboundDelivery {

@@ -65,6 +65,17 @@ export class FeishuCotTransport {
     await this.request("PUT", { cot_id: handle.cotId, message_id: handle.messageId, events });
   }
 
+  /** RUN_ERROR alone does not close the native process spinner. */
+  async complete(handle: CotHandle, reason: "done" | "error" | "timeout"): Promise<void> {
+    try {
+      const response = await this.client.request<{ code?: number; msg?: string }>({
+        method: "POST", url: `/open-apis/im/v1/message_cot/complete/${encodeURIComponent(handle.cotId)}`,
+        params: { message_id: handle.messageId, reason },
+      });
+      if (response.code !== 0) throw feishuResponseError("CoT complete", response);
+    } catch (error) { throw feishuTransportError("CoT complete", error); }
+  }
+
   private async request(method: "POST" | "PUT", data: Record<string, unknown>): Promise<Record<string, unknown> | undefined> {
     try {
       const response = await this.client.request<{ code?: number; msg?: string; data?: Record<string, unknown> }>({

@@ -156,6 +156,56 @@ describe("standalone Task interactions", () => {
     expect(r.response).toEqual({ answers: { "Which features?": "A、B", "Which environment?": "自定义回答：Canary" } });
     expect(h.calls.filter(c => ["create", "reply"].includes(c.operation))).toHaveLength(1);
     expect(h.checkpoint?.interactions.hr_test?.messageId).toBe("om_request");
+    expect(h.checkpoint?.interactions.hr_test).toMatchObject({ waitingStarted: true, waitingFinished: true, receiptStatus: "responded" });
+    const events = h.events();
+    const start = events.find(e => e.event_type === "STEP_STARTED");
+    const end = events.find(e => e.event_type === "STEP_FINISHED");
+    expect(JSON.parse(start!.content).stepName).toBe("等待用户回答");
+    expect(JSON.parse(end!.content).stepId).toBe(JSON.parse(start!.content).stepId);
+    expect(events.at(-1)?.event_type).toBe("RUN_FINISHED");
+    expect(events.filter(e => e.event_type === "RUN_STARTED")).toHaveLength(1);
+    expect(JSON.stringify(events)).not.toContain("<at ");
+  });
+
+  it("finishes a saved native waiting step after restart without repeating the card or waiting announcement", async () => {
+    const h = nativeHarness();
+    const r = answered(request("permission"), { option_id: "allow" });
+    const presentation = new FeishuTaskPresentation(h.client as any, "oc_group", {
+      taskId: r.taskId, getHumanRequest: async () => r, respondHumanRequest: async () => { throw new Error("already answered"); },
+    }, { appId: "cli_test", idempotencyKey: "delivery", save: h.save, checkpoint: {
+      version: "native_cot_v1", startedAt: Date.now(), throughSeq: 1,
+      cot: { status: "active", presentation: "semantic_v1", cotId: "cot_1", messageId: "om_cot", runStarted: true },
+      interactions: { hr_test: { messageId: "om_request", waitingStarted: true } },
+    } });
+    async function* stream() { yield taskEvent(1, "permission_request", { input: { request_id: r.id } }); yield completed; }
+    await presentation.consume(stream());
+    expect(h.events().filter(e => e.event_type === "STEP_STARTED")).toHaveLength(0);
+    expect(h.events().filter(e => e.event_type === "STEP_FINISHED")).toHaveLength(1);
+    expect(h.calls.filter(c => c.operation === "POST")).toHaveLength(0);
+    expect(h.checkpoint?.interactions.hr_test?.waitingFinished).toBe(true);
+  });
+
+  it("accepts a visible card's response even while the native waiting update is blocked", async () => {
+    const h = nativeHarness(), original = h.client.request;
+    let release!: () => void, blocked = false;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    h.client.request = async input => { blocked = true; await pending; return original(input); };
+    let r = request("permission");
+    const presentation = new FeishuTaskPresentation(h.client as any, "oc_group", {
+      taskId: r.taskId, getHumanRequest: async () => r,
+      respondHumanRequest: async (_id, response) => { r = answered(r, response); return r; },
+    }, { appId: "cli_test", idempotencyKey: "delivery", mentionOpenId: "ou_owner", save: h.save });
+    async function* stream() { yield taskEvent(1, "permission_request", { input: { request_id: r.id } }); yield completed; }
+    const running = presentation.consume(stream());
+    try {
+      while (!blocked) await Bun.sleep(1);
+      const reply = await handleTaskInteractionEvent("cli_test", {
+        ...action(`${interactionMarker(r.taskId, r.id)}_o0`), context: { open_chat_id: "oc_group", open_message_id: "om_1" },
+      });
+      expect((reply as any).toast.type).toBe("success");
+      expect(r.status).toBe("responded");
+    } finally { release(); await running; }
+    expect(h.checkpoint?.interactions.hr_test?.waitingFinished).toBe(true);
   });
 
   it("escapes receipt text so a custom answer cannot inject a mention", () => {

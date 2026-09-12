@@ -11,10 +11,13 @@ export function parseFeishuPresentation(value: unknown): FeishuPresentationCheck
   if (p.resultMessageId !== undefined && !id(p.resultMessageId)) return null;
   if (Object.keys(p.interactions).length > 256 || Object.entries(p.interactions).some(([key, entry]) =>
     !id(key) || ["__proto__", "constructor", "prototype"].includes(key) || !entry || !id(entry.messageId)
-    || (entry.receiptStatus !== undefined && !["responded", "timeout", "cancelled"].includes(entry.receiptStatus)))) return null;
+    || (entry.receiptStatus !== undefined && !["responded", "timeout", "cancelled"].includes(entry.receiptStatus))
+    || (entry.waitingStarted !== undefined && typeof entry.waitingStarted !== "boolean")
+    || (entry.waitingFinished !== undefined && typeof entry.waitingFinished !== "boolean"))) return null;
   if (p.cot) {
     if (typeof p.cot !== "object" || Array.isArray(p.cot)) return null;
     if (!["creating", "active", "finished", "disabled"].includes(p.cot.status)) return null;
+    if (p.cot.presentation !== undefined && p.cot.presentation !== "semantic_v1") return null;
     if (["active", "finished"].includes(p.cot.status) && (!id(p.cot.cotId) || !id(p.cot.messageId))) return null;
     if (p.cot.cotId !== undefined && !id(p.cot.cotId)) return null;
     if (p.cot.messageId !== undefined && !id(p.cot.messageId)) return null;
@@ -37,8 +40,11 @@ export function advancesFeishuPresentation(previous: FeishuPresentationCheckpoin
     if (previous.cot.messageId && next.cot.messageId !== previous.cot.messageId) return false;
     if (["finished", "disabled"].includes(previous.cot.status) && next.cot.status !== previous.cot.status) return false;
     if (previous.cot.runStarted && !next.cot.runStarted) return false;
+    if (previous.cot.presentation && next.cot.presentation !== previous.cot.presentation) return false;
   }
   return Object.entries(previous.interactions).every(([id, saved]) =>
     next.interactions[id]?.messageId === saved.messageId
-    && (!saved.receiptStatus || next.interactions[id]?.receiptStatus === saved.receiptStatus));
+    && (!saved.receiptStatus || next.interactions[id]?.receiptStatus === saved.receiptStatus)
+    && (!saved.waitingStarted || next.interactions[id]?.waitingStarted === true)
+    && (!saved.waitingFinished || next.interactions[id]?.waitingFinished === true));
 }
