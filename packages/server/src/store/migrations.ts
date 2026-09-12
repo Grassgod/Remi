@@ -579,6 +579,13 @@ export function runMigrations(db: SqlDatabase): void {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS multiremi_password_credentials (
+      user_id TEXT PRIMARY KEY REFERENCES multiremi_users(id) ON DELETE CASCADE,
+      login_email TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS multiremi_workspaces (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,

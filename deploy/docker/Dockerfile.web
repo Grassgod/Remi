@@ -1,14 +1,39 @@
-FROM oven/bun:1.3.14 AS builder
+FROM oven/bun:1.3.14 AS bun
+
+FROM node:22-bookworm-slim AS dependencies
+
+# Next.js must run on real Node: the Bun image's node fallback executes Bun.
+COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 
 WORKDIR /app
+
+COPY --chown=node:node . .
+RUN bun install --registry https://registry.npmjs.org --frozen-lockfile --ignore-scripts
+
+ARG REMOTE_API_URL=http://api:6120
+ARG REMI_APP_VERSION=dev
+ARG NEXT_PUBLIC_APP_VERSION=$REMI_APP_VERSION
+ARG NEXT_PUBLIC_SITE_URL=http://localhost:3000
+ARG NEXT_PUBLIC_LOCAL_PROFILE=
+ARG NEXT_PUBLIC_WS_URL=
+ENV REMOTE_API_URL=$REMOTE_API_URL \
+    NEXT_PUBLIC_APP_VERSION=$NEXT_PUBLIC_APP_VERSION \
+    NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL \
+    NEXT_PUBLIC_LOCAL_PROFILE=$NEXT_PUBLIC_LOCAL_PROFILE \
+    NEXT_PUBLIC_WS_URL=$NEXT_PUBLIC_WS_URL
+
+FROM dependencies AS development
+ENV NODE_ENV=development
+RUN chown node:node /app
+USER node
+WORKDIR /app/frontend/apps/web
+EXPOSE 3000
+CMD ["bun", "run", "dev"]
+
+FROM dependencies AS builder
 ENV NODE_ENV=production
 ENV STANDALONE=true
-ARG REMOTE_API_URL=http://api:6120
-ENV REMOTE_API_URL=$REMOTE_API_URL
-
-COPY . .
-RUN bun install --registry https://registry.npmjs.org --frozen-lockfile --ignore-scripts \
-  && bun run --filter @multiremi/web build
+RUN bun run --filter @multiremi/web build
 
 FROM node:22-bookworm-slim AS runtime
 WORKDIR /app

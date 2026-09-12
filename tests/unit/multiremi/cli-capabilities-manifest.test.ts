@@ -151,14 +151,16 @@ describe("CLI capabilities manifest", () => {
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 643,
+      mapped: 645,
       exempt: 88,
       missing: 0,
-      total: 731,
+      total: 733,
     });
     expect(manifest.max_planned_routes).toBe(0);
     expect(cliCoverageReport(manifest).missing).toBeLessThanOrEqual(manifest.max_planned_routes);
     expect(manifest.routes["GET /api/cli/context"]).toEqual({ command: "context.get" });
+    expect(manifest.routes["POST /auth/password"]).toEqual({ command: "context.auth.password" });
+    expect(manifest.routes["POST /api/auth/password-accounts"]).toEqual({ command: "context.auth.password-account.set" });
     expect(manifest.routes["GET /api/cli/capabilities"]).toEqual({ command: "context.get" });
     expect(manifest.routes["GET /api/cli/latest-version"]).toEqual({
       cli_exempt: true,

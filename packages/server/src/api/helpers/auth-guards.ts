@@ -81,6 +81,7 @@ export function taskTokenHardDenyCategory(request: Request): TaskTokenHardDenyCa
   if (path === "/api/tokens" || path.startsWith("/api/tokens/")
     || path === "/api/multiremi/tokens" || path.startsWith("/api/multiremi/tokens/")
     || path === "/api/cli-token"
+    || path === "/api/auth/password-accounts"
     || /^\/api\/issues\/[^/]+\/share(?:\/extend)?$/.test(path)
     || /^\/api\/autopilots\/[^/]+\/triggers\/[^/]+\/(?:rotate-webhook-token|signing-secret)$/.test(path)
     || /^\/api\/workspaces\/[^/]+\/relay-config\/[^/]+\/reveal$/.test(path)

@@ -1,16 +1,25 @@
+import { z } from "zod";
 import type {
   UpdateMeRequest,
   User,
 } from "../../types";
 import type { OnboardingCompletionPath } from "../../onboarding/types";
 import type { HttpClient } from "../http";
-import { parseWithFallback } from "../schema";
+import { parseStrictResponse, parseWithFallback } from "../schema";
 import { EMPTY_USER, UserSchema } from "../schemas/users";
 
 export interface LoginResponse {
   token: string;
   user: User;
 }
+
+const LoginResponseSchema = z.object({
+  token: z.string().trim().min(1),
+  user: UserSchema.extend({
+    id: z.string().trim().min(1),
+    email: z.string().trim().min(1),
+  }).strip(),
+});
 
 export class AuthEndpoints {
   constructor(readonly http: HttpClient) {}
@@ -27,6 +36,16 @@ export class AuthEndpoints {
     return this.http.fetch("/auth/verify-code", {
       method: "POST",
       body: JSON.stringify({ email, code }),
+    });
+  }
+
+  async passwordLogin(email: string, password: string): Promise<LoginResponse> {
+    const raw = await this.http.fetch<unknown>("/auth/password", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    });
+    return parseStrictResponse<LoginResponse>(raw, LoginResponseSchema, {
+      endpoint: "POST /auth/password",
     });
   }
 

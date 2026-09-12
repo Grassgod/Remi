@@ -37,9 +37,8 @@ export function WebProviders({
   locale: SupportedLocale;
   resources: Record<string, LocaleResources>;
 }) {
-  // This deployment runs the token-based Bun multiremi server: login returns a
-  // token in the response body and sets NO auth cookie. cookieAuth mode would
-  // discard that token and 401 every protected request, so force token mode.
+  // Keep bearer-token authentication for token-based login. Password login also
+  // establishes an HttpOnly session, which explicit logout must also revoke.
   const cookieAuth = false;
   // Stable identity reference so downstream effects keyed on it don't see a
   // new object on every parent render.
@@ -53,10 +52,9 @@ export function WebProviders({
       apiBaseUrl={process.env.NEXT_PUBLIC_API_URL}
       wsUrl={deriveWsUrl()}
       cookieAuth={cookieAuth}
+      revokeCookieOnLogout
       onLogin={setLoggedInCookie}
-      onLogout={() => {
-        clearLoggedInCookie();
-      }}
+      onLogout={clearLoggedInCookie}
       identity={identity}
       locale={locale}
       resources={resources}

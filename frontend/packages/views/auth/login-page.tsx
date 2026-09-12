@@ -39,12 +39,19 @@ interface LoginPageProps {
   /** Logo element rendered above the title */
   logo?: ReactNode;
   /** Called after successful login. The workspace list is seeded into React
-   *  Query before this fires, so the caller can compute a destination URL. */
-  onSuccess: () => void;
+   *  Query before this fires, so the caller can compute a destination URL.
+   *  Local credential login supplies its validated token for desktop handoff. */
+  onSuccess: (token?: string) => void;
   /** CLI callback config for authorizing CLI tools. */
   cliCallback?: CliCallbackConfig;
   /** Called after a token is obtained (e.g. to set cookies). */
   onTokenObtained?: () => void;
+  /** Explicit local-host UI opt-in; the server must still validate the supplied token. */
+  allowTokenLogin?: boolean;
+  /** Local password login is opt-in and does not enable self-registration. */
+  allowPasswordLogin?: boolean;
+  /** Keeps redirects from racing workspace hydration during local credential login. */
+  onTokenLoginStart?: () => void;
   /** Slot rendered at the bottom of the sign-in card. */
   extra?: ReactNode;
 }
@@ -69,11 +76,13 @@ export function validateCliCallback(cliCallback: string): boolean {
     if (cbUrl.protocol !== "http:") return false;
     const h = cbUrl.hostname;
     if (h === "localhost" || h === "127.0.0.1") return true;
-    // Allow RFC 1918 private IPs: 10.x.x.x, 172.16-31.x.x, 192.168.x.x
-    if (/^10\./.test(h)) return true;
-    if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return true;
-    if (/^192\.168\./.test(h)) return true;
-    return false;
+    // Match actual IPv4 literals, not public names such as 10.example.com.
+    if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) return false;
+    const octets = h.split(".").map(Number);
+    if (octets.some((octet) => octet > 255)) return false;
+    return octets[0] === 10
+      || (octets[0] === 172 && octets[1]! >= 16 && octets[1]! <= 31)
+      || (octets[0] === 192 && octets[1] === 168);
   } catch {
     return false;
   }
@@ -88,6 +97,9 @@ export function LoginPage({
   onSuccess,
   cliCallback,
   onTokenObtained,
+  allowTokenLogin = false,
+  allowPasswordLogin = false,
+  onTokenLoginStart,
   extra,
 }: LoginPageProps) {
   const { t } = useT("auth");
@@ -99,46 +111,74 @@ export function LoginPage({
   const [loading, setLoading] = useState(false);
   const [cooldown, setCooldown] = useState(0);
   const [larkLoading, setLarkLoading] = useState(false);
+  const [accessToken, setAccessToken] = useState("");
+  const [passwordEmail, setPasswordEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [existingUser, setExistingUser] = useState<User | null>(null);
   // Tracks how the existing session was detected so handleCliAuthorize
   // uses the matching token source (cookie → issueCliToken, localStorage → direct).
   const authSourceRef = useRef<"cookie" | "localStorage">("cookie");
+  const existingTokenRef = useRef<string | null>(null);
+  const sessionProbeRef = useRef<Promise<void> | null>(null);
+  const cancelSessionProbeRef = useRef(() => {});
+  const cliCallbackUrl = cliCallback?.url;
+  const cliCallbackState = cliCallback?.state;
 
   // Check for existing session when CLI callback is present.
   // Prioritises cookie auth (= current browser session) to avoid authorising
   // the CLI with a stale or mismatched localStorage token.
   useEffect(() => {
-    if (!cliCallback) return;
+    if (!cliCallbackUrl) return;
+    let cancelled = false;
+    const cancel = () => { cancelled = true; };
+    cancelSessionProbeRef.current = cancel;
+    const isCurrent = () => !cancelled;
+    existingTokenRef.current = null;
+    // The cookie probe's 401 handler may remove storage; keep the candidate
+    // solely in memory until its own identity check succeeds.
+    const storedToken = localStorage.getItem("multimira_token");
 
     // Ensure no stale bearer token interferes — we want to test the cookie first.
     api.setToken(null);
 
-    api
-      .getMe()
-      .then((user) => {
+    sessionProbeRef.current = (async () => {
+      try {
+        const user = await api.getMe();
+        if (!isCurrent()) return;
         authSourceRef.current = "cookie";
         setExistingUser(user);
         setStep("cli_confirm");
-      })
-      .catch(() => {
+      } catch {
+        if (!isCurrent()) return;
         // Cookie auth failed — fall back to localStorage token
-        const token = localStorage.getItem("multimira_token");
+        const token = storedToken;
         if (!token) return;
 
         api.setToken(token);
-        api
-          .getMe()
-          .then((user) => {
-            authSourceRef.current = "localStorage";
-            setExistingUser(user);
-            setStep("cli_confirm");
-          })
-          .catch(() => {
-            api.setToken(null);
-            localStorage.removeItem("multimira_token");
-          });
-      });
-  }, [cliCallback]);
+        try {
+          const user = await api.getMe();
+          if (!isCurrent()) return;
+          authSourceRef.current = "localStorage";
+          existingTokenRef.current = token;
+          localStorage.setItem("multimira_token", token);
+          setExistingUser(user);
+          setStep("cli_confirm");
+        } catch {
+          if (!isCurrent()) return;
+          api.setToken(null);
+          localStorage.removeItem("multimira_token");
+        }
+      }
+    })();
+    return cancel;
+  }, [cliCallbackUrl, cliCallbackState]);
+
+  const finishSessionProbe = useCallback(async () => {
+    cancelSessionProbeRef.current();
+    // A late 401 clears the shared API bearer. Settle the old request before
+    // installing new credentials, while ignoring its obsolete identity.
+    await sessionProbeRef.current;
+  }, []);
 
   // Cooldown timer for resend
   useEffect(() => {
@@ -157,6 +197,7 @@ export function LoginPage({
       setLoading(true);
       setError("");
       try {
+        await finishSessionProbe();
         await useAuthStore.getState().sendCode(email);
         setStep("code");
         setCode("");
@@ -171,7 +212,7 @@ export function LoginPage({
         setLoading(false);
       }
     },
-    [email, t],
+    [email, t, finishSessionProbe],
   );
 
   // Feishu (Lark) SSO — the primary login. Asks the backend for the authorize
@@ -194,6 +235,67 @@ export function LoginPage({
       setLarkLoading(false);
     }
   }, [t]);
+
+  const handleTokenLogin = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const token = accessToken.trim();
+    if (!allowTokenLogin || !token || loading || larkLoading) return;
+    setLoading(true);
+    setError("");
+    onTokenLoginStart?.();
+    let authenticated = false;
+    try {
+      await finishSessionProbe();
+      await useAuthStore.getState().loginWithToken(token);
+      authenticated = true;
+      qc.clear();
+      const workspaces = await api.listWorkspaces();
+      qc.setQueryData(workspaceKeys.list(), workspaces);
+      onTokenObtained?.();
+      onSuccess(token);
+    } catch {
+      if (authenticated) useAuthStore.getState().logout();
+      qc.clear();
+      setError(t(($) => $.local_token.failed));
+    } finally {
+      setAccessToken("");
+      setLoading(false);
+    }
+  };
+
+  const handlePasswordLogin = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!allowPasswordLogin || !passwordEmail.trim() || password.length < 6 || loading || larkLoading) return;
+    setLoading(true);
+    setError("");
+    onTokenLoginStart?.();
+    let authenticated = false;
+    try {
+      await finishSessionProbe();
+      const { token } = await useAuthStore.getState().loginWithPassword(passwordEmail.trim(), password);
+      authenticated = true;
+      qc.clear();
+      const workspaces = await api.listWorkspaces();
+      qc.setQueryData(workspaceKeys.list(), workspaces);
+      onTokenObtained?.();
+      if (cliCallback) {
+        // Preserve the identity-bound password session, including its workspace
+        // scope, instead of minting a token for a different local account.
+        redirectToCliCallback(cliCallback.url, token, cliCallback.state);
+      } else {
+        onSuccess(token);
+      }
+    } catch {
+      // The store handles rejected credentials. Also undo a successful login
+      // if workspace hydration or handoff failed afterwards.
+      if (authenticated) useAuthStore.getState().logout();
+      qc.clear();
+      setError(t(($) => $.password_login.failed));
+    } finally {
+      setPassword("");
+      setLoading(false);
+    }
+  };
 
   const handleVerify = useCallback(
     async (value: string) => {
@@ -254,8 +356,8 @@ export function LoginPage({
       let token: string;
 
       if (authSourceRef.current === "localStorage") {
-        // Session was detected via localStorage — reuse that token directly.
-        const stored = localStorage.getItem("multimira_token");
+        // Reuse the validated token matching the identity shown to the user.
+        const stored = existingTokenRef.current;
         if (!stored) throw new Error("token missing");
         token = stored;
       } else {
@@ -306,6 +408,8 @@ export function LoginPage({
               variant="ghost"
               className="w-full"
               onClick={() => {
+                cancelSessionProbeRef.current();
+                existingTokenRef.current = null;
                 setExistingUser(null);
                 setStep("email");
               }}
@@ -393,9 +497,47 @@ export function LoginPage({
   // Email step
   // -------------------------------------------------------------------------
 
-  // Non-CLI web login is Feishu-only. The email OTP flow below is retained
-  // solely for the `multimira` CLI's browser handoff (cliCallback), which still
-  // authenticates via verifyCode; regular web users only ever see Feishu SSO.
+  const passwordForm = allowPasswordLogin && (
+    <form onSubmit={handlePasswordLogin} className="space-y-3 border-t pt-3">
+      <div className="space-y-2">
+        <Label htmlFor="password-email">{t(($) => $.password_login.email)}</Label>
+        <Input
+          id="password-email"
+          type="email"
+          autoComplete="username"
+          value={passwordEmail}
+          onChange={(event) => setPasswordEmail(event.target.value)}
+          placeholder={t(($) => $.common.email_placeholder)}
+          required
+          disabled={loading || larkLoading}
+        />
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="account-password">{t(($) => $.password_login.password)}</Label>
+        <Input
+          id="account-password"
+          type="password"
+          autoComplete="current-password"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          minLength={6}
+          required
+          disabled={loading || larkLoading}
+        />
+      </div>
+      <Button
+        type="submit"
+        data-testid="password-login-submit"
+        className="w-full"
+        disabled={!passwordEmail.trim() || password.length < 6 || loading || larkLoading}
+      >
+        {loading ? t(($) => $.password_login.signing_in) : t(($) => $.password_login.sign_in)}
+      </Button>
+    </form>
+  );
+
+  // Web login defaults to Feishu. Local credentials require explicit host
+  // opt-in; email OTP remains confined to the CLI browser handoff below.
   if (!cliCallback) {
     return (
       <div className="flex min-h-svh items-center justify-center">
@@ -410,10 +552,31 @@ export function LoginPage({
               size="lg"
               className="w-full"
               onClick={handleLarkLogin}
-              disabled={larkLoading}
+              disabled={larkLoading || loading}
             >
               {larkLoading ? t(($) => $.signin.sending) : t(($) => $.signin.lark)}
             </Button>
+            {passwordForm}
+            {allowTokenLogin && (
+              <form onSubmit={handleTokenLogin} className="space-y-3 border-t pt-3">
+                <div className="space-y-2">
+                  <Label htmlFor="local-access-token">{t(($) => $.local_token.label)}</Label>
+                  <Input
+                    id="local-access-token"
+                    type="password"
+                    autoComplete="off"
+                    spellCheck={false}
+                    value={accessToken}
+                    onChange={(event) => setAccessToken(event.target.value)}
+                    placeholder={t(($) => $.local_token.placeholder)}
+                    disabled={loading || larkLoading}
+                  />
+                </div>
+                <Button type="submit" className="w-full" disabled={!accessToken.trim() || loading || larkLoading}>
+                  {loading ? t(($) => $.local_token.signing_in) : t(($) => $.local_token.sign_in)}
+                </Button>
+              </form>
+            )}
             {error && (
               <p className="text-center text-sm text-destructive">{error}</p>
             )}
@@ -449,6 +612,7 @@ export function LoginPage({
               ? t(($) => $.signin.sending)
               : t(($) => $.signin.lark)}
           </Button>
+          {passwordForm && <div className="mb-4">{passwordForm}</div>}
           <div className="mb-4 flex items-center gap-3">
             <div className="h-px flex-1 bg-border" />
             <span className="text-xs text-muted-foreground">

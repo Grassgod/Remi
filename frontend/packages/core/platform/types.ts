@@ -27,6 +27,8 @@ export interface CoreProviderProps {
   storage?: StorageAdapter;
   /** Use HttpOnly cookies for auth instead of localStorage tokens. Default: false. */
   cookieAuth?: boolean;
+  /** Revoke browser cookies on explicit logout while retaining bearer-token auth. */
+  revokeCookieOnLogout?: boolean;
   /** Called after successful login (e.g. set cookie for Next.js middleware). */
   onLogin?: () => void;
   /** Called after logout (e.g. clear cookie). */

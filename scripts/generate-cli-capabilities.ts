@@ -568,6 +568,8 @@ function mappedOperationsCommand(route: string): string | null {
     "POST /auth/google": "context.auth.google",
     "POST /auth/send-code": "context.auth.send-code",
     "POST /auth/verify-code": "context.auth.verify-code",
+    "POST /auth/password": "context.auth.password",
+    "POST /api/auth/password-accounts": "context.auth.password-account.set",
     "POST /auth/logout": "context.auth.logout",
   };
   if (exact[route]) return exact[route]!;

@@ -29,6 +29,9 @@ function renderWithI18n(ui: ReactElement) {
 
 const mockSendCode = vi.hoisted(() => vi.fn());
 const mockVerifyCode = vi.hoisted(() => vi.fn());
+const mockLoginWithToken = vi.hoisted(() => vi.fn());
+const mockLoginWithPassword = vi.hoisted(() => vi.fn());
+const mockLogout = vi.hoisted(() => vi.fn());
 const mockApiListWorkspaces = vi.hoisted(() => vi.fn());
 const mockApiVerifyCode = vi.hoisted(() => vi.fn());
 const mockApiSetToken = vi.hoisted(() => vi.fn());
@@ -36,25 +39,29 @@ const mockApiGetMe = vi.hoisted(() => vi.fn());
 const mockApiIssueCliToken = vi.hoisted(() => vi.fn());
 const mockApiGetLarkLoginUrl = vi.hoisted(() => vi.fn());
 const mockSetQueryData = vi.hoisted(() => vi.fn());
+const mockClearQueries = vi.hoisted(() => vi.fn());
 
 vi.mock("@tanstack/react-query", async () => {
   const actual = await vi.importActual<typeof import("@tanstack/react-query")>(
     "@tanstack/react-query",
   );
-  return { ...actual, useQueryClient: () => ({ setQueryData: mockSetQueryData }) };
+  return { ...actual, useQueryClient: () => ({ setQueryData: mockSetQueryData, clear: mockClearQueries }) };
 });
 
 vi.mock("@multiremi/core/auth", () => ({
   useAuthStore: Object.assign(
     // Zustand hook form — component may call useAuthStore(selector)
     (selector?: (s: unknown) => unknown) => {
-      const state = { sendCode: mockSendCode, verifyCode: mockVerifyCode };
+      const state = { sendCode: mockSendCode, verifyCode: mockVerifyCode, loginWithToken: mockLoginWithToken, loginWithPassword: mockLoginWithPassword, logout: mockLogout };
       return selector ? selector(state) : state;
     },
     {
       getState: () => ({
         sendCode: mockSendCode,
         verifyCode: mockVerifyCode,
+        loginWithToken: mockLoginWithToken,
+        loginWithPassword: mockLoginWithPassword,
+        logout: mockLogout,
       }),
     },
   ),
@@ -102,7 +109,7 @@ describe("LoginPage", () => {
 
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     // Default: no existing session (getMe rejects when no auth)
     mockApiGetMe.mockRejectedValue(new Error("unauthorized"));
     localStorage.clear();
@@ -143,9 +150,165 @@ describe("LoginPage", () => {
     // The email OTP input + Continue button are gone for regular web login;
     // the OTP flow survives only behind the CLI handoff (cliCallback).
     expect(screen.queryByLabelText(/email/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Local session key (24 hours)")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Password")).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: /^continue$/i }),
     ).not.toBeInTheDocument();
+  });
+
+  it("signs in with an explicitly enabled local token and seeds workspaces before success", async () => {
+    const workspaces = [{ id: "ws-local", slug: "local" }];
+    mockLoginWithToken.mockResolvedValueOnce({ id: "local-user" });
+    mockApiListWorkspaces.mockResolvedValueOnce(workspaces);
+    const onTokenObtained = vi.fn();
+    const onTokenLoginStart = vi.fn();
+    renderWithI18n(<LoginPage onSuccess={onSuccess} allowTokenLogin onTokenObtained={onTokenObtained} onTokenLoginStart={onTokenLoginStart} />);
+    const user = userEvent.setup();
+    const input = screen.getByLabelText("Local session key (24 hours)");
+    expect(input).toHaveAttribute("type", "password");
+    await user.type(input, " local-test-token ");
+    await user.click(screen.getByRole("button", { name: "Sign in locally" }));
+    await waitFor(() => expect(onSuccess).toHaveBeenCalledOnce());
+    expect(mockLoginWithToken).toHaveBeenCalledWith("local-test-token");
+    expect(mockSetQueryData).toHaveBeenCalledWith(["workspaces", "list"], workspaces);
+    expect(mockClearQueries.mock.invocationCallOrder[0]).toBeLessThan(mockSetQueryData.mock.invocationCallOrder[0]!);
+    expect(mockSetQueryData.mock.invocationCallOrder[0]).toBeLessThan(onSuccess.mock.invocationCallOrder[0]!);
+    expect(onTokenObtained).toHaveBeenCalledOnce();
+    expect(onTokenLoginStart).toHaveBeenCalledOnce();
+    expect(mockSendCode).not.toHaveBeenCalled();
+  });
+
+  it("keeps a rejected local token error on the form without continuing", async () => {
+    mockLoginWithToken.mockRejectedValueOnce(new Error("Invalid access key"));
+    renderWithI18n(<LoginPage onSuccess={onSuccess} allowTokenLogin />);
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Local session key (24 hours)"), "invalid-test-token");
+    await user.click(screen.getByRole("button", { name: "Sign in locally" }));
+    expect(await screen.findByText(enAuth.local_token.failed)).toBeInTheDocument();
+    expect(screen.getByLabelText("Local session key (24 hours)")).toHaveValue("");
+    expect(onSuccess).not.toHaveBeenCalled();
+    expect(mockApiListWorkspaces).not.toHaveBeenCalled();
+  });
+
+  it("signs in with a local-domain email and seeds workspaces before completing password login", async () => {
+    const workspaces = [{ id: "ws-password", slug: "password-workspace" }];
+    mockLoginWithPassword.mockResolvedValueOnce({ token: "password-session", user: { id: "password-user" } });
+    mockApiListWorkspaces.mockResolvedValueOnce(workspaces);
+    const onTokenObtained = vi.fn();
+    const onTokenLoginStart = vi.fn();
+    renderWithI18n(<LoginPage onSuccess={onSuccess} allowPasswordLogin allowTokenLogin onTokenObtained={onTokenObtained} onTokenLoginStart={onTokenLoginStart} />);
+    const user = userEvent.setup();
+    expect(screen.getByLabelText("Password")).toHaveAttribute("type", "password");
+    expect(screen.getByLabelText("Password")).toHaveAttribute("autocomplete", "current-password");
+    expect(screen.getByLabelText("Local session key (24 hours)")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sign in with Feishu" })).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Account email"), "reader@localhost");
+    await user.type(screen.getByLabelText("Password"), "fixture-password-42");
+    await user.click(screen.getByRole("button", { name: "Sign in with password" }));
+    await waitFor(() => expect(onSuccess).toHaveBeenCalledOnce());
+    expect(mockLoginWithPassword).toHaveBeenCalledWith("reader@localhost", "fixture-password-42");
+    expect(mockSetQueryData).toHaveBeenCalledWith(["workspaces", "list"], workspaces);
+    expect(mockSetQueryData.mock.invocationCallOrder[0]).toBeLessThan(onTokenObtained.mock.invocationCallOrder[0]!);
+    expect(onTokenObtained.mock.invocationCallOrder[0]).toBeLessThan(onSuccess.mock.invocationCallOrder[0]!);
+    expect(onTokenLoginStart).toHaveBeenCalledOnce();
+    expect(screen.getByLabelText("Password")).toHaveValue("");
+    expect(localStorage.length).toBe(0);
+    expect(mockApiIssueCliToken).not.toHaveBeenCalled();
+  });
+
+  it("requires six password characters before submission", async () => {
+    renderWithI18n(<LoginPage onSuccess={onSuccess} allowPasswordLogin />);
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Account email"), "reader@localhost");
+    await user.type(screen.getByLabelText("Password"), "short");
+    expect(screen.getByRole("button", { name: "Sign in with password" })).toBeDisabled();
+    await user.type(screen.getByLabelText("Password"), "x");
+    expect(screen.getByRole("button", { name: "Sign in with password" })).toBeEnabled();
+    expect(mockLoginWithPassword).not.toHaveBeenCalled();
+  });
+
+  it("waits for an old CLI probe before password login and ignores its stale identity", async () => {
+    let resolveProbe!: (user: unknown) => void;
+    mockApiGetMe.mockReturnValueOnce(new Promise((resolve) => { resolveProbe = resolve; }));
+    mockLoginWithPassword.mockReturnValueOnce(new Promise(() => {}));
+    const onTokenLoginStart = vi.fn();
+    const view = renderWithI18n(
+      <LoginPage onSuccess={onSuccess} allowPasswordLogin cliCallback={CLI_CB} onTokenLoginStart={onTokenLoginStart} />,
+    );
+    view.rerender(
+      <LoginPage onSuccess={onSuccess} allowPasswordLogin cliCallback={{ ...CLI_CB }} onTokenLoginStart={onTokenLoginStart} />,
+    );
+    expect(mockApiGetMe).toHaveBeenCalledTimes(1);
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Account email"), "reader@localhost");
+    await user.type(screen.getByLabelText("Password"), "fixture-password-42");
+    await user.click(screen.getByRole("button", { name: "Sign in with password" }));
+    expect(mockLoginWithPassword).not.toHaveBeenCalled();
+    await act(async () => resolveProbe({ id: "old-user", email: "old@example.test" }));
+    await waitFor(() => expect(mockLoginWithPassword).toHaveBeenCalledOnce());
+    expect(screen.queryByText(/old@example.test/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Password")).toBeInTheDocument();
+  });
+
+  it("clears a local token session when workspace hydration fails", async () => {
+    mockLoginWithToken.mockResolvedValueOnce({ id: "local-user" });
+    mockApiListWorkspaces.mockRejectedValueOnce(new Error("offline"));
+    renderWithI18n(<LoginPage onSuccess={onSuccess} allowTokenLogin />);
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Local session key (24 hours)"), "fixture-session");
+    await user.click(screen.getByRole("button", { name: "Sign in locally" }));
+    await waitFor(() => expect(mockLogout).toHaveBeenCalledOnce());
+    expect(onSuccess).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Local session key (24 hours)")).toHaveValue("");
+  });
+
+  it("clears password input and stays on the form after rejected credentials", async () => {
+    mockLoginWithPassword.mockRejectedValueOnce(new Error("Credentials rejected"));
+    renderWithI18n(<LoginPage onSuccess={onSuccess} allowPasswordLogin />);
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Account email"), "reader@example.test");
+    await user.type(screen.getByLabelText("Password"), "incorrect-fixture");
+    await user.click(screen.getByRole("button", { name: "Sign in with password" }));
+    expect(await screen.findByText(enAuth.password_login.failed)).toBeInTheDocument();
+    expect(onSuccess).not.toHaveBeenCalled();
+    expect(mockApiListWorkspaces).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Password")).toHaveValue("");
+  });
+
+  it("clears the authenticated state and workspace cache when post-login hydration fails", async () => {
+    mockLoginWithPassword.mockResolvedValueOnce({ token: "password-session", user: { id: "password-user" } });
+    mockApiListWorkspaces.mockRejectedValueOnce(new Error("Workspaces unavailable"));
+    const onTokenObtained = vi.fn();
+    renderWithI18n(<LoginPage onSuccess={onSuccess} allowPasswordLogin onTokenObtained={onTokenObtained} />);
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Account email"), "reader@example.test");
+    await user.type(screen.getByLabelText("Password"), "fixture-password-42");
+    await user.click(screen.getByRole("button", { name: "Sign in with password" }));
+    expect(await screen.findByText(enAuth.password_login.failed)).toBeInTheDocument();
+    expect(mockLogout).toHaveBeenCalledOnce();
+    expect(mockClearQueries).toHaveBeenCalled();
+    expect(onTokenObtained).not.toHaveBeenCalled();
+    expect(onSuccess).not.toHaveBeenCalled();
+  });
+
+  it("returns the original password session token to the CLI without issuing another identity", async () => {
+    mockLoginWithPassword.mockResolvedValueOnce({ token: "original-password-session", user: { id: "password-user" } });
+    mockApiListWorkspaces.mockResolvedValueOnce([]);
+    const onTokenObtained = vi.fn();
+    renderWithI18n(<LoginPage onSuccess={onSuccess} allowPasswordLogin cliCallback={CLI_CB} onTokenObtained={onTokenObtained} />);
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Account email"), "reader@localhost");
+    await user.type(screen.getByLabelText("Password"), "fixture-password-42");
+    await user.click(screen.getByRole("button", { name: "Sign in with password" }));
+    await waitFor(() => expect(onTokenObtained).toHaveBeenCalledOnce());
+    const callback = new URL(window.location.href);
+    expect(callback.origin + callback.pathname).toBe(CLI_CB.url);
+    expect(callback.searchParams.get("token")).toBe("original-password-session");
+    expect(callback.searchParams.get("state")).toBe(CLI_CB.state);
+    expect(callback.href).not.toContain("fixture-password-42");
+    expect(mockApiIssueCliToken).not.toHaveBeenCalled();
+    expect(onSuccess).not.toHaveBeenCalled();
   });
 
   // -------------------------------------------------------------------------
@@ -485,6 +648,33 @@ describe("LoginPage", () => {
     ).toBeInTheDocument();
   });
 
+  it("authorizes the token whose identity was displayed even if stored auth changes", async () => {
+    localStorage.setItem("multimira_token", "displayed-user-session");
+    mockApiGetMe
+      .mockRejectedValueOnce(new Error("no cookie"))
+      .mockResolvedValueOnce({ id: "u-1", email: "displayed@example.test" });
+    renderWithI18n(<LoginPage onSuccess={onSuccess} cliCallback={CLI_CB} />);
+    await screen.findByText(/displayed@example.test/);
+    localStorage.setItem("multimira_token", "different-user-session");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /^authorize$/i }));
+    expect(new URL(window.location.href).searchParams.get("token")).toBe("displayed-user-session");
+  });
+
+  it("validates the saved token even when the cookie probe's 401 clears storage", async () => {
+    localStorage.setItem("multimira_token", "saved-session");
+    mockApiGetMe
+      .mockImplementationOnce(async () => {
+        localStorage.removeItem("multimira_token");
+        throw new Error("no cookie");
+      })
+      .mockResolvedValueOnce({ id: "u-1", email: "saved@example.test" });
+    renderWithI18n(<LoginPage onSuccess={onSuccess} cliCallback={CLI_CB} />);
+    await screen.findByText(/saved@example.test/);
+    expect(mockApiSetToken).toHaveBeenLastCalledWith("saved-session");
+    expect(localStorage.getItem("multimira_token")).toBe("saved-session");
+  });
+
   // -------------------------------------------------------------------------
   // CLI callback — cookie-based session (no localStorage token)
   // -------------------------------------------------------------------------
@@ -716,6 +906,11 @@ describe("validateCliCallback", () => {
     expect(validateCliCallback("http://8.8.8.8:9876/callback")).toBe(false);
     expect(validateCliCallback("http://192.169.1.1:9876/callback")).toBe(false);
   });
+
+  it.each(["10.attacker.example", "172.16.attacker.example", "192.168.attacker.example"])(
+    "rejects a public domain that starts with a private IP prefix: %s",
+    (hostname) => expect(validateCliCallback(`http://${hostname}/callback`)).toBe(false),
+  );
 
   it("rejects invalid URLs", () => {
     expect(validateCliCallback("not-a-url")).toBe(false);

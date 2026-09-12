@@ -22,6 +22,7 @@ import {
 import { Button } from "@multiremi/ui/components/ui/button";
 import { Loader2 } from "lucide-react";
 import { setLoggedInCookie } from "@/features/auth/auth-cookie";
+import { allowsLocalTokenLogin, allowsPasswordLogin } from "@/features/auth/local-profile";
 import { LoginPage, validateCliCallback } from "@multiremi/views/auth";
 import { useT } from "@multiremi/views/i18n";
 
@@ -72,13 +73,28 @@ function LoginPageContent() {
 
   const [desktopToken, setDesktopToken] = useState<string | null>(null);
   const [desktopError, setDesktopError] = useState("");
+  const [allowTokenLogin, setAllowTokenLogin] = useState(false);
+  const [allowPasswordLogin, setAllowPasswordLogin] = useState(false);
+  const [tokenLoginStarted, setTokenLoginStarted] = useState(false);
   const hasOnboarded = useHasOnboarded();
+
+  useEffect(() => {
+    setAllowTokenLogin(allowsLocalTokenLogin(
+      process.env.NEXT_PUBLIC_LOCAL_PROFILE,
+      window.location.hostname,
+    ));
+    setAllowPasswordLogin(allowsPasswordLogin(
+      process.env.NEXT_PUBLIC_LOCAL_PROFILE,
+      window.location.hostname,
+      process.env.NEXT_PUBLIC_SITE_URL,
+    ));
+  }, []);
 
   // Already authenticated — honor ?next= or fall back to first workspace
   // (or /onboarding if the user has none). Skip this entire path when
   // the user arrived to authorize the CLI.
   useEffect(() => {
-    if (isLoading || !user || cliCallbackRaw) return;
+    if (isLoading || !user || cliCallbackRaw || tokenLoginStarted) return;
     if (isDesktopHandoff) {
       // Desktop opened the browser for login but the web session is already
       // authenticated — mint a bearer token from the cookie session and hand
@@ -106,9 +122,14 @@ function LoginPageContent() {
     void resolveLoggedInDestination(qc, hasOnboarded, list).then((dest) =>
       router.replace(dest),
     );
-  }, [isLoading, user, router, nextUrl, cliCallbackRaw, isDesktopHandoff, hasOnboarded, qc]);
+  }, [isLoading, user, router, nextUrl, cliCallbackRaw, isDesktopHandoff, hasOnboarded, qc, tokenLoginStarted]);
 
-  const handleSuccess = async () => {
+  const handleSuccess = async (token?: string) => {
+    if (isDesktopHandoff && token) {
+      setDesktopToken(token);
+      window.location.href = `multimira://auth/callback?token=${encodeURIComponent(token)}`;
+      return;
+    }
     // Read the latest user snapshot directly — the closure's `hasOnboarded`
     // was captured before login completed and would be stale here.
     const currentUser = useAuthStore.getState().user;
@@ -124,7 +145,11 @@ function LoginPageContent() {
   // While the desktop handoff is in progress (or has produced a token/error),
   // render a dedicated screen instead of flashing the login form or redirecting
   // away to a workspace page.
-  if (isDesktopHandoff && user) {
+  // Bootstrap requests can reset shared auth on failure. Let them settle
+  // before mounting credential forms or starting a separate CLI session probe.
+  if (isLoading) return null;
+
+  if (isDesktopHandoff && user && (!tokenLoginStarted || desktopToken || desktopError)) {
     if (desktopError) {
       return (
         <div className="flex min-h-screen items-center justify-center">
@@ -174,6 +199,9 @@ function LoginPageContent() {
   return (
     <LoginPage
       onSuccess={handleSuccess}
+      allowTokenLogin={allowTokenLogin}
+      allowPasswordLogin={allowPasswordLogin}
+      onTokenLoginStart={() => setTokenLoginStarted(true)}
       cliCallback={
         cliCallbackRaw && validateCliCallback(cliCallbackRaw)
           ? { url: cliCallbackRaw, state: cliState }

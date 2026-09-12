@@ -91,3 +91,106 @@ describe("authStore.initialize — token mode", () => {
     expect(storage.snapshot().multimira_token).toBe("t");
   });
 });
+
+describe("authStore.loginWithToken", () => {
+  it("does not persist an unvalidated token", async () => {
+    const storage = makeStorage();
+    let resolveUser!: (user: User) => void;
+    const api = makeApi(() => new Promise((resolve) => { resolveUser = resolve; }));
+    const store = createAuthStore({ api, storage });
+    const login = store.getState().loginWithToken("candidate-session");
+    expect(storage.snapshot()).toEqual({});
+    resolveUser(fakeUser);
+    await login;
+    expect(storage.snapshot()).toEqual({ multimira_token: "candidate-session" });
+  });
+
+  it("clears rejected token state without marking the user authenticated", async () => {
+    const storage = makeStorage({ multimira_token: "old-session" });
+    const api = makeApi(() => Promise.reject(new Error("rejected")));
+    const onLogin = vi.fn();
+    const store = createAuthStore({ api, storage, onLogin });
+    store.setState({ user: fakeUser });
+    await expect(store.getState().loginWithToken("invalid-session")).rejects.toThrow("rejected");
+    expect(storage.snapshot()).toEqual({});
+    expect(api.setToken).toHaveBeenLastCalledWith(null);
+    expect(store.getState().user).toBeNull();
+    expect(onLogin).not.toHaveBeenCalled();
+  });
+
+  it("rejects the empty user fallback returned by a malformed identity response", async () => {
+    const storage = makeStorage();
+    const api = makeApi(() => Promise.resolve({ ...fakeUser, id: "" }));
+    const store = createAuthStore({ api, storage });
+    await expect(store.getState().loginWithToken("candidate-session")).rejects.toThrow();
+    expect(storage.snapshot()).toEqual({});
+    expect(store.getState().user).toBeNull();
+  });
+});
+
+describe("authStore.loginWithPassword", () => {
+  function passwordApi() {
+    return {
+      ...makeApi(() => Promise.resolve(fakeUser)),
+      passwordLogin: vi.fn().mockResolvedValue({ token: "password-session", user: fakeUser }),
+      logout: vi.fn().mockResolvedValue(undefined),
+    } as unknown as ApiClient;
+  }
+
+  it("stores only the session token and authenticated user, and returns the same token for CLI handoff", async () => {
+    const storage = makeStorage();
+    const api = passwordApi();
+    const onLogin = vi.fn();
+    const store = createAuthStore({ api, storage, onLogin });
+
+    await expect(store.getState().loginWithPassword("reader@localhost", "fixture-password-42"))
+      .resolves.toEqual({ token: "password-session", user: fakeUser });
+
+    expect(api.passwordLogin).toHaveBeenCalledWith("reader@localhost", "fixture-password-42");
+    expect(storage.snapshot()).toEqual({ multimira_token: "password-session" });
+    expect(api.setToken).toHaveBeenCalledWith("password-session");
+    expect(store.getState().user).toEqual(fakeUser);
+    expect(store.getState().isLoading).toBe(false);
+    expect(onLogin).toHaveBeenCalledOnce();
+    expect(store.getState()).not.toHaveProperty("password");
+  });
+
+  it("keeps password sessions out of adapter storage when cookie auth is configured", async () => {
+    const storage = makeStorage();
+    const api = passwordApi();
+    const store = createAuthStore({ api, storage, cookieAuth: true });
+    await store.getState().loginWithPassword("reader@example.test", "fixture-password-42");
+    expect(storage.snapshot()).toEqual({});
+    expect(api.setToken).not.toHaveBeenCalled();
+    expect(store.getState().user).toEqual(fakeUser);
+  });
+
+  it("clears a stale authenticated state when credentials or response validation fail", async () => {
+    const storage = makeStorage({ multimira_token: "stale-session" });
+    const api = passwordApi();
+    vi.mocked(api.passwordLogin).mockRejectedValue(new Error("Login rejected"));
+    const onLogin = vi.fn();
+    const store = createAuthStore({ api, storage, onLogin });
+    store.setState({ user: fakeUser });
+
+    await expect(store.getState().loginWithPassword("reader@example.test", "incorrect-fixture"))
+      .rejects.toThrow("Login rejected");
+
+    expect(store.getState().user).toBeNull();
+    expect(store.getState().isLoading).toBe(false);
+    expect(storage.snapshot()).toEqual({});
+    expect(api.setToken).toHaveBeenLastCalledWith(null);
+    expect(onLogin).not.toHaveBeenCalled();
+  });
+
+  it("cleans up a partial session when persistence fails after the server authenticates", async () => {
+    const storage = makeStorage();
+    storage.setItem = () => { throw new Error("Storage unavailable"); };
+    const api = passwordApi();
+    const store = createAuthStore({ api, storage });
+    await expect(store.getState().loginWithPassword("reader@example.test", "fixture-password-42"))
+      .rejects.toThrow("Storage unavailable");
+    expect(store.getState().user).toBeNull();
+    expect(api.setToken).toHaveBeenLastCalledWith(null);
+  });
+});
