@@ -78,6 +78,52 @@ describe("native CoT Task presentation", () => {
     expect(JSON.stringify(h.cards())).not.toContain("过程已完成");
   });
 
+  for (const status of ["failed", "cancelled"] as const) it(`ends a ${status} run through the appropriate native lifecycle`, async () => {
+    const h = nativeHarness();
+    async function* stream() {
+      yield taskEvent(1, "thinking", { content: "正在检查。" });
+      yield { kind: "snapshot", snapshot: { ...(completed as any).snapshot, status, error: "example failure" } } as typeof completed;
+    }
+    await renderer(h).consume(stream());
+    const completes = h.calls.filter(c => c.input.url?.includes("/complete/"));
+    if (status === "failed") {
+      expect(h.events().at(-1)?.event_type).toBe("RUN_ERROR");
+      expect(completes).toHaveLength(1);
+      expect(completes[0]?.input).toMatchObject({ method: "POST", url: "/open-apis/im/v1/message_cot/complete/cot_1", params: { message_id: "om_cot", reason: "error" } });
+    } else {
+      expect(JSON.parse(h.events().at(-1)!.content).status).toBe("interrupted");
+      expect(completes).toHaveLength(0);
+    }
+    expect(h.checkpoint?.cot?.status).toBe("finished");
+    expect(h.cards()).toHaveLength(1);
+  });
+
+  it("finishes the result even when explicit native completion is permanently rejected", async () => {
+    const h = nativeHarness(), original = h.client.request;
+    h.client.request = async input => {
+      if (input.url.includes("/complete/")) { h.calls.push({ operation: input.method, input }); return { code: 230001, data: {} }; }
+      return original(input);
+    };
+    async function* stream() {
+      yield taskEvent(1, "thinking", { content: "检查。" });
+      yield { kind: "snapshot", snapshot: { ...(completed as any).snapshot, status: "failed", error: "failure" } } as typeof completed;
+    }
+    await renderer(h).consume(stream());
+    expect(h.calls.filter(c => c.input.url?.includes("/complete/"))).toHaveLength(1);
+    expect(h.checkpoint?.cot?.status).toBe("disabled");
+    expect(h.cards()).toHaveLength(1);
+  });
+
+  it("closes an older renderer's active display on upgrade without mixing event IDs or losing the answer", async () => {
+    const h = nativeHarness();
+    await renderer(h, { checkpoint: { version: "native_cot_v1", startedAt: Date.now(), throughSeq: 4, interactions: {},
+      cot: { status: "active", cotId: "old", messageId: "old_message", runStarted: true } } }).consume(transcript());
+    expect(h.calls.filter(c => c.input.url?.includes("/complete/"))).toHaveLength(1);
+    expect(h.events()).toHaveLength(0);
+    expect(h.cards()).toHaveLength(1);
+    expect(h.checkpoint?.cot?.error).toBe("legacy_cot_closed_on_upgrade");
+  });
+
   it("preserves explicit text phases and excludes subagent text from the final answer", async () => {
     const h = nativeHarness();
     async function* phases() {
@@ -88,7 +134,7 @@ describe("native CoT Task presentation", () => {
     }
     await renderer(h).consume(phases());
     expect(JSON.stringify(h.events())).toContain("progress");
-    expect(JSON.stringify(h.events())).toContain("child");
+    expect(JSON.stringify(h.events())).not.toContain("child");
     expect(JSON.stringify(h.cards())).not.toContain("progress");
     expect(JSON.stringify(h.cards())).not.toContain("child");
     expect(JSON.stringify(h.cards())).toContain("final");
@@ -96,18 +142,22 @@ describe("native CoT Task presentation", () => {
 
   it("does not replay acknowledged native events after a daemon restart", async () => {
     const h = nativeHarness();
-    async function* interrupted() { yield taskEvent(1, "tool_use", { tool: "Read", toolCallId: "tc" }); throw new Error("disconnect"); }
+    async function* interrupted() {
+      yield taskEvent(1, "tool_use", { tool: "Read", toolCallId: "tc", input: { file_path: "/source.ts" } });
+      while (!h.checkpoint?.throughSeq) await Bun.sleep(5);
+      throw new Error("disconnect");
+    }
     await expect(renderer(h).consume(interrupted())).rejects.toThrow("disconnect");
     expect(h.checkpoint?.throughSeq).toBe(1);
     async function* resumed() {
-      yield taskEvent(1, "tool_use", { tool: "Read", toolCallId: "tc" });
+      yield taskEvent(1, "tool_use", { tool: "Read", toolCallId: "tc", input: { file_path: "/source.ts" } });
       yield taskEvent(2, "tool_result", { toolCallId: "tc", output: "result" });
       yield taskEvent(3, "text", { content: "Done" }); yield completed;
     }
     await renderer(h).consume(resumed());
     expect(h.calls.filter(c => c.operation === "POST")).toHaveLength(1);
     expect(h.events().filter(e => e.event_type === "TOOL_CALL_START")).toHaveLength(1);
-    expect(h.events().filter(e => e.event_type === "TOOL_CALL_RESULT")).toHaveLength(1);
+    expect(h.events().filter(e => e.event_type === "TOOL_CALL_RESULT")).toHaveLength(0);
   });
 
   for (const cot of [{ status: "creating" }, { status: "active", cotId: "cot_1", messageId: "om_cot", writePending: true }]) {

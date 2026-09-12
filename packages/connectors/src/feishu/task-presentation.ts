@@ -7,7 +7,8 @@ import { FeishuDeliveryError } from "@shared/feishu-delivery-error.js";
 import { buildFinalCard } from "./streaming/card-elements.js";
 import { formatCardStats, formatExecutionSubtitle } from "./card-metadata.js";
 import { sendCardFeishu, updateCardFeishu } from "./send.js";
-import { cotTextEvents, FeishuCotTransport, feishuTransportError, type CotSample } from "./native-cot.js";
+import { FeishuCotTransport, feishuTransportError, type CotSample } from "./native-cot.js";
+import { FeishuCotTimeline } from "./cot-timeline.js";
 import { buildTaskInteractionCard, registerTaskInteraction } from "./task-interaction.js";
 import { createFeishuImageResolver } from "./outbound-images.js";
 import { uploadImageFeishu } from "./media.js";
@@ -41,21 +42,17 @@ export class FeishuTaskPresentation {
   private readonly abortController = new AbortController();
   private active = true;
   private readonly signal: AbortSignal;
-  private candidate = "";
-  private explicitFinal = "";
+  private readonly timeline: FeishuCotTimeline;
   private execution: AgentExecutionDisplay;
   private context: ContextUsage | null = null;
-  private readonly tools = new Map<string, { name: string; input: Record<string, unknown>; ended: boolean }>();
-  private seq = 0;
-  private pendingSamples: CotSample[] = [];
-  private pendingSeq = 0;
-  private lastFlush = 0;
-  private openText?: { id: string; key: string; reasoning: boolean };
+  private lastFlush = Date.now();
+  private lastBatch = 0;
 
   constructor(private readonly client: Lark.Client, private readonly chatId: string,
     private readonly meta: TaskStreamMeta, private readonly options: TaskPresentationOptions) {
     this.cot = new FeishuCotTransport(client);
     this.state = structuredClone(options.checkpoint ?? { version: "native_cot_v1", startedAt: Date.now(), throughSeq: 0, interactions: {} });
+    this.timeline = new FeishuCotTimeline(meta.taskId, this.state.throughSeq);
     this.state.interactionOpenId ??= options.interactionOpenId ?? options.mentionOpenId;
     this.signal = meta.signal ? AbortSignal.any([meta.signal, this.abortController.signal]) : this.abortController.signal;
     this.execution = { agentName: options.displayName ?? meta.displayName };
@@ -70,6 +67,15 @@ export class FeishuTaskPresentation {
       // The native API exposes no verified idempotency key. An unacknowledged
       // create/write is not replayed: preserve the known handle and final lane.
       this.state.cot = { ...this.state.cot, status: "disabled", writePending: false, error: "unconfirmed_native_write" };
+      await this.save();
+    } else if (this.state.cot?.status === "active" && !this.state.cot.presentation) {
+      // An upgrade can resume an older renderer's delivery. Its open text IDs
+      // cannot be reconstructed with the new grouping rules. Close that display
+      // once; preserve the original Task, request cards and final result lane.
+      const { cotId, messageId } = this.state.cot;
+      try { await this.retry(() => this.cot.complete({ cotId: cotId!, messageId: messageId! }, "timeout"), true); }
+      catch (error) { this.signal.throwIfAborted(); this.options.log?.(feishuTransportError("Close legacy CoT", error).message); }
+      this.state.cot = { ...this.state.cot, status: "disabled", error: "legacy_cot_closed_on_upgrade" };
       await this.save();
     }
     let finalStatus = "running", error: string | null = null, snapshotText = "";
@@ -87,7 +93,6 @@ export class FeishuTaskPresentation {
         if (item.done) break;
         const event = item.value;
         if (event.kind === "message") {
-          this.seq = Math.max(this.seq, event.message.seq);
           await this.message(event.message);
         } else {
           finalStatus = event.snapshot.status;
@@ -105,9 +110,9 @@ export class FeishuTaskPresentation {
     }
     this.signal.throwIfAborted();
     if (!["completed", "failed", "cancelled"].includes(finalStatus)) throw new Error("Task stream ended before a terminal snapshot");
-    await this.flush();
-    await this.finishCot(finalStatus, error);
-    const answer = this.explicitFinal.trim() || this.candidate.trim() || snapshotText.trim();
+    await this.flush(true);
+    await this.finishCot(finalStatus);
+    const answer = this.timeline.answer(snapshotText);
     const text = finalStatus === "failed" ? `${answer}${answer ? "\n\n" : ""}**执行失败：** ${error || "请查看工作台任务详情"}`
       : finalStatus === "cancelled" ? `${answer}${answer ? "\n\n" : ""}任务已取消。` : answer || "任务已完成，未返回文字结果。";
     if (!this.state.resultMessageId) {
@@ -116,7 +121,7 @@ export class FeishuTaskPresentation {
       }));
       const card = buildFinalCard({ text: renderedText, displayName: this.execution.agentName,
         subtitle: formatExecutionSubtitle(this.execution), mentionOpenId: this.options.mentionOpenId,
-        stats: formatCardStats(elapsed ?? Math.max(0, Math.round((Date.now() - this.state.startedAt) / 1000)), this.context, this.tools.size) });
+        stats: formatCardStats(elapsed ?? Math.max(0, Math.round((Date.now() - this.state.startedAt) / 1000)), this.context, this.timeline.toolCount) });
       const sent = await this.retry(() => sendCardFeishu(this.client, this.chatId, card, {
         replyToMessageId: this.options.replyToMessageId,
         idempotencyKey: stableId(`${this.options.idempotencyKey}:${this.meta.taskId}:result`),
@@ -130,9 +135,7 @@ export class FeishuTaskPresentation {
   }
 
   private async message(message: MultiremiTaskMessage): Promise<void> {
-    const seq = message.seq;
-    const id = (suffix: string) => stableId(`${this.meta.taskId}:${seq}:${suffix}`);
-    const samples: CotSample[] = [];
+    this.timeline.accept(message);
     // Nested agent prose must never become the main agent's final answer.
     const nested = Boolean(message.meta?.parent_tool_call_id);
     if (message.type === "execution" && !nested) {
@@ -149,91 +152,30 @@ export class FeishuTaskPresentation {
       if (!nested) this.context = readContextUsage(message.meta) ?? this.context;
       return;
     }
-    const isProcessText = message.type === "thinking" || (message.type === "text" && (nested || message.meta?.phase === "commentary"));
-    if (!isProcessText) samples.push(...this.closeProcessText());
-    if (message.type === "text") {
-      const text = message.content ?? "";
-      if (nested || message.meta?.phase === "commentary") samples.push(...this.processText(id("text"), text, false, String(message.meta?.parent_tool_call_id ?? "main")));
-      else if (message.meta?.phase === "final") this.explicitFinal += text;
-      else this.candidate += text; // ACP without phases: hold until a tool/thought proves it is commentary.
-    } else if (["thinking", "tool_use", "permission_request", "question_request", "plan", "compaction"].includes(message.type)) {
-      if (!nested && this.candidate) {
-        samples.push(...cotTextEvents(id("commentary"), this.candidate));
-        this.candidate = "";
-      }
-      if (message.type === "thinking") samples.push(...this.processText(id("reasoning"), message.content ?? "", true, String(message.meta?.parent_tool_call_id ?? "main")));
-      if (message.type === "compaction") samples.push(...cotTextEvents(id("compaction"), message.content || "上下文已整理"));
-      if (message.type === "plan" && message.content) samples.push(...cotTextEvents(id("plan"), message.content));
-      if (message.type === "tool_use") {
-        const key = message.toolCallId || id("tool");
-        const existing = this.tools.get(key);
-        if (existing) existing.input = { ...existing.input, ...message.input };
-        else {
-          const name = message.tool || String(message.meta?.title ?? "Tool");
-          this.tools.set(key, { name, input: message.input ?? {}, ended: false });
-          samples.push(["TOOL_CALL_START", { toolCallId: stableId(key), icon: "default", title: name.slice(0, 120), toolCallName: name.slice(0, 120) }]);
-        }
-      }
-    } else if (message.type === "tool_result") {
-      const key = message.toolCallId ?? [...this.tools.keys()].findLast(k => !this.tools.get(k)!.ended);
-      const tool = key ? this.tools.get(key) : undefined;
-      if (key && tool && !tool.ended) {
-        tool.ended = true;
-        const toolCallId = stableId(key);
-        const args = JSON.stringify(tool.input);
-        samples.push(["TOOL_CALL_ARGS", { toolCallId, delta: args.length <= 800 ? args : JSON.stringify({ preview: args.slice(0, 600), truncated: true }) }],
-          ["TOOL_CALL_END", { toolCallId }],
-          ["TOOL_CALL_RESULT", { messageId: id("result"), toolCallId, role: "tool",
-            content: { type: "code", code: (message.output ?? message.content ?? message.status ?? "").slice(0, 800) } }]);
-      }
-    }
-    await this.emit(seq, samples);
+    if (Date.now() - this.lastFlush >= 500) await this.flush();
     if (message.type === "permission_request" || message.type === "question_request") {
-      await this.flush();
+      await this.flush(true);
       await this.interaction(message);
     }
   }
 
-  private processText(id: string, text: string, reasoning: boolean, key: string): CotSample[] {
-    if (!text) return [];
-    const samples: CotSample[] = [];
-    if (this.openText && (this.openText.reasoning !== reasoning || this.openText.key !== key)) samples.push(...this.closeProcessText());
-    const opening = !this.openText;
-    this.openText ??= { id, key, reasoning };
-    // Consecutive chunks append to one native message rather than opening a
-    // new paragraph for every token. Full replay reconstructs the same ID.
-    const events = cotTextEvents(this.openText.id, text, reasoning);
-    samples.push(...events.slice(opening ? 0 : 1, -1));
-    return samples;
-  }
-
-  private closeProcessText(): CotSample[] {
-    if (!this.openText) return [];
-    const { id, reasoning } = this.openText;
-    this.openText = undefined;
-    return [[`${reasoning ? "REASONING_MESSAGE" : "TEXT_MESSAGE"}_END`, { messageId: id }]];
-  }
-
-  private async emit(seq: number, samples: CotSample[]): Promise<void> {
-    if (!samples.length || seq <= this.state.throughSeq || ["disabled", "finished"].includes(this.state.cot?.status ?? "")) return;
-    this.pendingSamples.push(...samples);
-    this.pendingSeq = seq;
-    if (this.pendingSamples.length >= 40 || Date.now() - this.lastFlush >= 500) await this.flush();
-  }
-
-  private async flush(): Promise<void> {
-    if (!this.pendingSamples.length) return;
-    let samples = this.pendingSamples;
-    this.pendingSamples = [];
+  private async flush(force = false): Promise<void> {
+    const { samples, throughSeq } = this.timeline.drain(force);
+    if (!samples.length) return;
     this.lastFlush = Date.now();
+    await this.writeProcess(samples, throughSeq);
+  }
+
+  private async writeProcess(samples: CotSample[], throughSeq: number): Promise<void> {
+    if (!samples.length) return;
     if (["disabled", "finished"].includes(this.state.cot?.status ?? "")) return;
     if (!this.state.cot) {
-      this.state.cot = { status: "creating" };
+      this.state.cot = { status: "creating", presentation: "semantic_v1" };
       await this.save(); // write-ahead creation intent, even before we know either ID
       let handle;
       try { handle = await this.retry(() => this.cot.create(this.chatId, this.options.replyToMessageId), false); }
       catch (error) { await this.disableCot(error); return; }
-      this.state.cot = { ...handle, status: "active" };
+      this.state.cot = { ...handle, status: "active", presentation: "semantic_v1" };
       await this.save(); // Never let a failed checkpoint get swallowed as an API error.
     }
     if (!this.state.cot.runStarted) samples = [["RUN_STARTED", { threadId: this.chatId, runId: this.meta.taskId }], ...samples];
@@ -242,7 +184,7 @@ export class FeishuTaskPresentation {
       this.state.cot.runStarted = true;
       this.state.cot.writePending = false;
     }
-    this.state.throughSeq = this.pendingSeq;
+    this.state.throughSeq = Math.max(this.state.throughSeq, throughSeq);
     await this.save();
   }
 
@@ -250,6 +192,9 @@ export class FeishuTaskPresentation {
     const cot = this.state.cot;
     if (!cot?.cotId || !cot.messageId || cot.status !== "active") return;
     for (let i = 0; i < samples.length; i += 50) {
+      const wait = 65 - (Date.now() - this.lastBatch);
+      if (wait > 0) await delay(wait, this.signal);
+      this.lastBatch = Date.now();
       let timestamp = Math.max(Date.now(), (cot.lastTimestamp ?? 0) + 1);
       const events = samples.slice(i, i + 50).map(([event_type, content]) => ({ event_type, content: JSON.stringify(content), timestamp: String(timestamp++) }));
       cot.writePending = true;
@@ -262,12 +207,17 @@ export class FeishuTaskPresentation {
     }
   }
 
-  private async finishCot(status: string, error: string | null): Promise<void> {
+  private async finishCot(status: string): Promise<void> {
     if (this.state.cot?.status !== "active") return;
-    const ending: CotSample[] = status === "failed" || status === "cancelled"
-      ? [["RUN_ERROR", { code: status === "cancelled" ? "TASK_CANCELLED" : "TASK_FAILED", message: error?.slice(0, 500) || (status === "cancelled" ? "任务已取消" : "Task failed") }]]
-      : [["RUN_FINISHED", { threadId: this.chatId, runId: this.meta.taskId, status: "done" }]];
-    await this.writeSamples([...this.closeProcessText(), ...ending]);
+    const ending: CotSample[] = status === "failed"
+      ? [["RUN_ERROR", { code: "TASK_FAILED", message: "执行失败，详情见结果卡" }]]
+      : [["RUN_FINISHED", { threadId: this.chatId, runId: this.meta.taskId, status: status === "cancelled" ? "interrupted" : "done" }]];
+    await this.writeSamples([...this.timeline.finish(status), ...ending]);
+    if (status === "failed" && this.state.cot?.status === "active") {
+      const { cotId, messageId } = this.state.cot;
+      try { await this.retry(() => this.cot.complete({ cotId: cotId!, messageId: messageId! }, "error"), true); }
+      catch (failure) { await this.disableCot(failure); }
+    }
     if (this.state.cot?.status === "active") {
       this.state.cot.status = "finished";
       this.state.cot.writePending = false;
@@ -302,7 +252,13 @@ export class FeishuTaskPresentation {
       entry = this.state.interactions[requestId] = { messageId: sent.messageId };
       await this.save();
     }
-    if (entry.receiptStatus === request.status) return;
+    const finishWaiting = async () => {
+      if (entry!.waitingStarted && !entry!.waitingFinished) {
+        entry!.waitingFinished = true;
+        await this.writeProcess(this.timeline.resume(requestId, request!.status), message.seq);
+      }
+    };
+    if (entry.receiptStatus === request.status) { await finishWaiting(); await this.save(); return; }
     const registered = registerTaskInteraction({ appId: this.options.appId, chatId: this.chatId, messageId: entry.messageId,
       recipientOpenId, request, displayName: this.execution.agentName,
       submit: async response => {
@@ -315,6 +271,13 @@ export class FeishuTaskPresentation {
         }
       } });
     try {
+      // Register the existing card callback before awaiting native transport;
+      // a slow CoT update must not leave newly visible buttons unresponsive.
+      if (request.status === "pending" && !entry.waitingStarted) {
+        entry.waitingStarted = true;
+        await this.writeProcess(this.timeline.waitForUser(requestId, request.kind, message.seq), message.seq);
+        await this.save();
+      }
       while (request.status === "pending") {
         await delay(750, this.signal);
         request = registered.current() ?? await this.meta.getHumanRequest?.(requestId) ?? request;
@@ -322,6 +285,7 @@ export class FeishuTaskPresentation {
       await this.retry(() => updateCardFeishu(this.client, entry!.messageId,
         buildTaskInteractionCard(request!, { displayName: this.execution.agentName, receipt: true })), true);
       entry.receiptStatus = request.status;
+      await finishWaiting();
       await this.save();
     } finally { registered.dispose(); }
   }
