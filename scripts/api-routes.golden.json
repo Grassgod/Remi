@@ -13412,7 +13412,9 @@
             "cacheWriteTokens": 0,
             "totalTokens": 0
           }
-        ]
+        ],
+        "started_at": "<timestamp>",
+        "completed_at": "<timestamp>"
       }
     },
     {
