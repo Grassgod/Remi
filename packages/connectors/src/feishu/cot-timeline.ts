@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { MultiremiTaskMessage } from "@multiremi/contracts/types.js";
 import { cotTextEvents, type CotSample } from "./native-cot.js";
-import { cotPlan, cotPreview, cotToolDisplay, isCotShell, isCotSubagent } from "./cot-tool-display.js";
+import { cotPlan, cotToolDisplay, isCotShell, isCotSubagent, type CotListResult } from "./cot-tool-display.js";
 
 interface Tool {
   id: string; name: string; input: Record<string, unknown>; title?: string;
@@ -78,10 +78,10 @@ export class FeishuCotTimeline {
       const failed = message.status === "failed" || message.status === "cancelled";
       this.queue.push(() => {
         const events: CotSample[] = [];
-        if (failed) events.push(this.result(tool.id, message.status === "cancelled" ? "已取消" : "执行失败", false, message.seq));
+        if (failed) events.push(this.result(tool.id, { type: "text", text: message.status === "cancelled" ? "已取消" : "执行失败" }, message.seq));
         else {
           const display = cotToolDisplay(tool.name, tool.input, tool.title);
-          if (display.result) events.push(this.result(tool.id, display.result, true, message.seq));
+          if (display.result) events.push(this.result(tool.id, display.result, message.seq));
         }
         // async_launched only acknowledges the launch, not the child outcome.
         events.push(...this.childStates(tool.input));
@@ -103,7 +103,7 @@ export class FeishuCotTimeline {
         this.planFingerprint = fingerprint;
         const toolCallId = this.id(`plan:${message.seq}`);
         this.queue.push(["TOOL_CALL_START", { toolCallId, toolCallName: "Plan", icon: "task", title: plan.title }],
-          ["TOOL_CALL_END", { toolCallId }], this.result(toolCallId, plan.result, true, message.seq));
+          ["TOOL_CALL_END", { toolCallId }], this.result(toolCallId, plan.result, message.seq));
       }
     } else if (message.type === "compaction") {
       this.closeText();
@@ -179,9 +179,9 @@ export class FeishuCotTimeline {
     if (this.openText) this.queue.push(["REASONING_MESSAGE_END", { messageId: this.openText }]);
     this.openText = undefined;
   }
-  private result(toolCallId: string, text: string, code: boolean, seq: number): CotSample {
+  private result(toolCallId: string, content: CotListResult | { type: "text"; text: string }, seq: number): CotSample {
     return ["TOOL_CALL_RESULT", { toolCallId, messageId: this.id(`result:${seq}`), role: "tool",
-      content: JSON.stringify(code ? { type: "code", code: cotPreview(text) } : { type: "text", text: cotPreview(text) }) }];
+      content: JSON.stringify(content) }];
   }
 
   waitForUser(requestId: string, kind: "question" | "permission", seq: number): CotSample[] {

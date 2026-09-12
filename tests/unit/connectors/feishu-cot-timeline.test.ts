@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { FeishuCotTimeline } from "@connectors/feishu/cot-timeline.js";
-import { cotToolDisplay, isCotSubagent } from "@connectors/feishu/cot-tool-display.js";
+import { cotPlan, cotToolDisplay, isCotSubagent } from "@connectors/feishu/cot-tool-display.js";
 import type { MultiremiTaskMessage } from "@multiremi/contracts/types.js";
 import { taskEvent } from "./feishu-native-harness.js";
 
@@ -85,15 +85,66 @@ describe("semantic native CoT timeline", () => {
     expect(JSON.stringify(samples)).not.toContain("heartbeat");
   });
 
-  it("renders actual changing plan entries, with a string-encoded native result and no duplicate update", () => {
+  it("renders plan entries as native list rows without a code panel or duplicate update", () => {
     const timeline = new FeishuCotTimeline("task");
-    const entries = [{ content: "检查", status: "completed" }, { content: "验证", status: "in_progress" }];
+    const entries = [{ content: "检查", status: "completed" }, { content: "验证", status: "in_progress" }, { content: "汇报", status: "pending" }];
     timeline.accept(message(1, "plan", { meta: { entries } }));
     timeline.accept(message(2, "plan", { meta: { entries } }));
     const samples = timeline.drain().samples;
     expect(samples.filter(([t]) => t === "TOOL_CALL_START")).toHaveLength(1);
-    expect(samples[0]?.[1].title).toBe("更新待办 (1/2)");
-    expect(JSON.parse(String(samples.at(-1)?.[1].content))).toEqual({ type: "code", code: "✅ 检查\n🔄 验证" });
+    expect(samples[0]?.[1].title).toBe("更新待办 (1/3)");
+    expect(JSON.parse(String(samples.at(-1)?.[1].content))).toEqual({ type: "list", items: [
+      { icon: "task", text: "已完成 · 检查" }, { icon: "task", text: "进行中 · 验证" }, { icon: "task", text: "待开始 · 汇报" },
+    ] });
+    timeline.accept(message(3, "plan", { meta: { entries: entries.map(e => ({ ...e, status: "completed" })) } }));
+    const updated = timeline.drain().samples;
+    expect(updated[0]?.[1].title).toBe("更新待办 (3/3)");
+    expect(JSON.parse(String(updated.at(-1)?.[1].content)).items.every((e: { text: string }) => e.text.startsWith("已完成"))).toBe(true);
+  });
+
+  it("uses the same native checklist for successful TodoWrite and never shows it as completed before success", () => {
+    const timeline = new FeishuCotTimeline("task");
+    const todos = [{ content: "检查投递", status: "in_progress" }, { content: "输出结果", status: "pending" }];
+    timeline.accept(message(1, "tool_use", { tool: "TodoWrite", toolCallId: "todo", input: { todos } }));
+    expect(timeline.drain().samples.some(([type]) => type === "TOOL_CALL_RESULT")).toBe(false);
+    timeline.accept(message(2, "tool_result", { toolCallId: "todo", status: "in_progress" }));
+    expect(timeline.drain().samples).toEqual([]);
+    timeline.accept(message(3, "tool_result", { toolCallId: "todo", status: "completed" }));
+    const samples = timeline.drain().samples;
+    expect(samples).toHaveLength(1);
+    expect(JSON.parse(String(samples[0]?.[1].content))).toEqual(cotPlan(todos)?.result);
+    expect(samples[0]?.[1].toolCallId).toBeDefined();
+  });
+
+  it("shows a short failure instead of a successful checklist when TodoWrite fails", () => {
+    const timeline = new FeishuCotTimeline("task");
+    timeline.accept(message(1, "tool_use", { tool: "TodoWrite", toolCallId: "todo", input: { todos: [{ content: "检查", status: "completed" }] } }));
+    timeline.drain();
+    timeline.accept(message(2, "tool_result", { toolCallId: "todo", status: "failed" }));
+    expect(JSON.parse(String(timeline.drain().samples[0]?.[1].content))).toEqual({ type: "text", text: "执行失败" });
+  });
+
+  it("does not resend an acknowledged plan after restart but sends the next status change", () => {
+    const prefix = message(1, "plan", { meta: { entries: [{ content: "检查", status: "in_progress" }] } });
+    const timeline = new FeishuCotTimeline("task", 1);
+    timeline.accept(prefix);
+    timeline.accept({ ...prefix, seq: 2 });
+    expect(timeline.drain().samples).toEqual([]);
+    timeline.accept(message(3, "plan", { meta: { entries: [{ content: "检查", status: "completed" }] } }));
+    expect(timeline.drain().samples[0]?.[1].title).toBe("更新待办 (1/1)");
+  });
+
+  it("bounds a large native list as a whole and explicitly reports omitted entries", () => {
+    const entries = Array.from({ length: 100 }, (_, i) => ({ content: `任务 ${i} ` + '中文🙂"\\'.repeat(1000), status: "pending" }));
+    const result = cotPlan(entries)!;
+    expect(result.title).toBe("更新待办 (0/100)");
+    expect(result.result.type).toBe("list");
+    const visible = result.result.items.length - 1;
+    expect(visible).toBeGreaterThan(0);
+    expect(result.result.items.at(-1)?.text).toBe(`另有 ${100 - visible} 项待办，完整计划见工作台`);
+    expect(Buffer.byteLength(JSON.stringify(JSON.stringify(result.result)))).toBeLessThan(3200);
+    expect(JSON.stringify(result.result)).not.toContain("�");
+    expect(cotPlan([null, {}, { content: "  " }])).toBeUndefined();
   });
 
   it("closes the preceding paragraph before opening a separate waiting message", () => {
@@ -137,7 +188,7 @@ describe("semantic native CoT timeline", () => {
     expect(samples.find(([t]) => t === "STEP_FINISHED")?.[1].stepName).toBe("核对文档 · 本轮已结束，子任务结果见工作台");
   });
 
-  it("bounds escaped Unicode labels, args and todo results to native event limits", () => {
+  it("bounds escaped Unicode labels, args and native plan lists to event limits", () => {
     const timeline = new FeishuCotTimeline("task");
     const long = '中文🙂"\\\n'.repeat(2000);
     timeline.accept(message(1, "tool_use", { tool: "Bash", toolCallId: "tc", input: { command: long, description: long } }));

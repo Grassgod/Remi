@@ -1,7 +1,8 @@
 /** Native CoT tool labels, following aiden-bot's semantic display rules.
  * Tool outputs are deliberately not used here: the Task transcript owns logs. */
 import { isCollabInput, isSubagentActivityInput, subagentName } from "./tool-formatters.js";
-export interface CotToolDisplay { title: string; icon: string; args?: string; result?: string; subagent?: boolean }
+export interface CotListResult { type: "list"; items: Array<{ text: string; icon: "task" }> }
+export interface CotToolDisplay { title: string; icon: string; args?: string; result?: CotListResult; subagent?: boolean }
 const str = (v: unknown) => typeof v === "string" ? v.trim() : "";
 const line = (v: string) => v.replace(/\s+/g, " ").trim();
 
@@ -21,15 +22,25 @@ export function isCotSubagent(name: string, input: Record<string, unknown>): boo
     || isSubagentActivityInput(input) || isCollabInput(input);
 }
 
-export function cotPlan(entries: unknown): { title: string; result: string } | undefined {
+export function cotPlan(entries: unknown): { title: string; result: CotListResult } | undefined {
   if (!Array.isArray(entries) || !entries.length) return undefined;
   const rows = entries.filter((e): e is Record<string, unknown> => !!e && typeof e === "object"
-    && typeof (e as Record<string, unknown>).content === "string");
+    && typeof (e as Record<string, unknown>).content === "string" && !!str((e as Record<string, unknown>).content));
   if (!rows.length) return undefined;
   const done = rows.filter(e => e.status === "completed").length;
-  const markers: Record<string, string> = { completed: "✅", in_progress: "🔄", pending: "⬜" };
-  return { title: `更新待办 (${done}/${rows.length})`,
-    result: cotPreview(rows.map(e => `${markers[String(e.status)] ?? "⬜"} ${line(String(e.content))}`).join("\n")) };
+  const statuses: Record<string, string> = { completed: "已完成", in_progress: "进行中", pending: "待开始" };
+  const result: CotListResult = { type: "list", items: [] };
+  for (const row of rows) {
+    const item = { icon: "task" as const,
+      text: cotPreview(`${statuses[String(row.status)] ?? "待开始"} · ${line(String(row.content))}`, 600) };
+    // Budget the whole typed result, including both layers of JSON encoding.
+    // Reserve room for the overflow notice and the outer native event fields.
+    if (Buffer.byteLength(JSON.stringify(JSON.stringify({ ...result, items: [...result.items, item] }))) > 2800) break;
+    result.items.push(item);
+  }
+  const remaining = rows.length - result.items.length;
+  if (remaining) result.items.push({ icon: "task", text: `另有 ${remaining} 项待办，完整计划见工作台` });
+  return { title: `更新待办 (${done}/${rows.length})`, result };
 }
 
 export function cotToolDisplay(name: string, input: Record<string, unknown>, metaTitle?: string): CotToolDisplay {

@@ -36,8 +36,11 @@ canonical Task events rather than its SDK-specific event feed:
 - `TOOL_CALL_END` closes the invocation display, as in aiden-bot; it does not
   declare the underlying operation complete. Ordinary successful tool logs are
   omitted. The full transcript remains in the workbench. Failures show a short
-  indication; todo/plan results show the actual checklist. Native result `content`
-  is itself a JSON string containing the typed text/code object.
+  indication; todo/plan results use native `list` items with a task icon and
+  explicit status (pending / in progress / completed), without a `plaintext`
+  code panel or emoji checklist. Long plans show an explicit overflow count
+  and refer to the complete plan in the workbench.
+  Native result `content` is itself a JSON string containing the typed text/list object.
 - Subagent invocations and available Codex activity/collaboration updates become
   named steps. Launch acknowledgments do not imply completion. Nested child prose
   stays in the workbench. Remi cannot show SDK-specific lifecycle events that the
