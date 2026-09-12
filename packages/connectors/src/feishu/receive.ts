@@ -57,6 +57,7 @@ import { downloadImageFeishu, downloadMessageResourceFeishu } from "./media.js";
 import { extractMentionTargets, extractMessageBody } from "./mention.js";
 import { getMessageFeishu, sendMarkdownCardFeishu } from "./send.js";
 import { handleFormSubmission, handleButtonClick, hasPendingAction } from "./card-actions.js";
+import { handleTaskInteractionEvent } from "./task-interaction.js";
 
 // ── Dedup (persisted across restarts) ────────────────────────
 const DEDUP_TTL_MS = 30 * 60 * 1000;
@@ -833,6 +834,8 @@ export function startWebSocketListener(
     "card.action.trigger": async (data: any) => {
       if (stopped) return { toast: { type: "info", content: "Remi is stopped" } };
       try {
+        const taskResponse = await handleTaskInteractionEvent(creds.appId, data);
+        if (taskResponse) return taskResponse;
         const event = data as unknown as {
           operator?: { open_id?: string };
           action?: {

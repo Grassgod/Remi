@@ -14,6 +14,8 @@ import { FeishuStreamingSession, buildFinalCard, type TokenProvider } from "./st
 import { handleAgentStream } from "./adapters/stream-handler.js";
 import { handleTaskStream } from "./adapters/task-stream-handler.js";
 import { formatExecutionSubtitle } from "./card-metadata.js";
+import { FeishuTaskPresentation } from "./task-presentation.js";
+import type { FeishuPresentationCheckpoint } from "@multiremi/contracts/types.js";
 import type { TaskStreamEvent, TaskStreamMeta } from "../base.js";
 import { createAdapter } from "./adapters/index.js";
 import type { StreamMeta, StreamHandlerLog } from "@shared/contracts/acp-protocol.js";
@@ -47,8 +49,6 @@ export interface HandleStreamOpts {
   displayName?: string | null;
   nameSuffix?: string;
   subtitle?: string | null;
-  /** Emit a separate final result card after the live CoT card. */
-  separateResult?: boolean;
   tokenProvider?: TokenProvider;
   log?: StreamHandlerLog;
 }
@@ -58,11 +58,11 @@ export interface HandleTaskStreamOpts {
   mentionOpenId?: string;
   displayName?: string | null;
   subtitle?: string | null;
-  /** Emit a separate final result card after the live CoT card. */
-  separateResult?: boolean;
   log?: StreamHandlerLog;
-  durable?: { idempotencyKey: string; messageId?: string | null };
+  durable?: { idempotencyKey: string; messageId?: string | null; presentation?: FeishuPresentationCheckpoint };
   onStarted?: (messageId: string) => Promise<void>;
+  interactionOpenId?: string;
+  onCheckpoint?: (state: FeishuPresentationCheckpoint) => Promise<void>;
 }
 
 // ── FeishuChannel ─────────────────────────────────────────────
@@ -71,7 +71,7 @@ export class FeishuChannel {
   private readonly _config: FeishuChannelConfig;
   private _wsHandle: FeishuWSHandle | null = null;
   private _messageHandlers: MessageHandler[] = [];
-  private _activeSessions = new Map<string, FeishuStreamingSession>();
+  private _activeSessions = new Map<string, FeishuStreamingSession | FeishuTaskPresentation>();
   private _abortHandler: ((sessionKey: string) => Promise<void>) | null = null;
   private _tokenProvider: TokenProvider | null = null;
   private _senderAuthorizer: FeishuSenderAuthorizer | null = null;
@@ -219,7 +219,6 @@ export class FeishuChannel {
         displayName: opts.displayName ?? undefined,
         nameSuffix: opts.nameSuffix,
         subtitle: opts.subtitle,
-        separateResult: opts.separateResult,
       });
 
       // Consume ACP stream
@@ -246,7 +245,7 @@ export class FeishuChannel {
     }
   }
 
-  /** Consume the canonical persisted Task stream and patch one Feishu message. */
+  /** Present persisted Task events through native CoT and independent cards. */
   async handleTaskStream(
     chatId: string,
     sessionKey: string,
@@ -254,6 +253,24 @@ export class FeishuChannel {
     meta: TaskStreamMeta,
     opts: HandleTaskStreamOpts = {},
   ): Promise<{ messageId: string }> {
+    // Only already-sent v4 deliveries keep their original card. Every new
+    // Task, regardless of inbound/proactive origin, uses the native renderer.
+    if (!opts.durable?.messageId || opts.durable.presentation) {
+      const presentation = new FeishuTaskPresentation(this._makeClient(), chatId, meta, {
+        appId: this._config.appId, replyToMessageId: opts.replyToMessageId,
+        mentionOpenId: opts.mentionOpenId, interactionOpenId: opts.interactionOpenId,
+        displayName: opts.displayName ?? meta.displayName,
+        idempotencyKey: opts.durable?.idempotencyKey ?? meta.taskId,
+        checkpoint: opts.durable?.presentation, save: opts.onCheckpoint,
+        log: message => log.warn(message),
+      });
+      this._activeSessions.set(sessionKey, presentation);
+      try { return await presentation.consume(stream); }
+      finally {
+        presentation.detach();
+        if (this._activeSessions.get(sessionKey) === presentation) this._activeSessions.delete(sessionKey);
+      }
+    }
     const slog: StreamHandlerLog = opts.log ?? {
       info: (message) => log.info(message),
       warn: (message) => log.warn(message),
@@ -270,7 +287,6 @@ export class FeishuChannel {
         displayName: opts.displayName ?? meta.displayName ?? undefined,
         subtitle: opts.subtitle ?? formatExecutionSubtitle({ agentName: opts.displayName ?? meta.displayName }),
         durable: opts.durable,
-        separateResult: opts.separateResult,
       });
       const messageId = session.getMessageId()!;
       if (opts.onStarted) await opts.onStarted(messageId);

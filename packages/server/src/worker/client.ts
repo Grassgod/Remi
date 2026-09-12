@@ -1,4 +1,5 @@
 import { createReadStream } from "node:fs";
+import { parseFeishuPresentation } from "@multiremi/contracts/feishu-presentation.js";
 import { stat } from "node:fs/promises";
 import { normalizeRepoList } from "@daemon/agent-runtime/repo/checkout.js";
 import { isFeishuOpenId, parseOutboundMention } from "@shared/feishu-mention.js";
@@ -37,7 +38,8 @@ import type {
   SubmitFeishuBotMessageResult,
 } from "@multiremi/contracts/types.js";
 import {
-  FEISHU_CONCIERGE_TASK_STREAM_PROTOCOL_VERSION,
+  FEISHU_CONCIERGE_NATIVE_COT_PROTOCOL_VERSION,
+  type FeishuPresentationCheckpoint,
   FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER,
   MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
   MULTIREMI_SSH_MESH_PROTOCOL_VERSION,
@@ -310,7 +312,7 @@ export class MultiremiDaemonClient {
         // Only claimed when this process can actually host the connector, so
         // the control plane never hands the bot to a Runtime that cannot run it.
         ...(supportsFeishuConcierge
-          ? { feishu_concierge_protocol: FEISHU_CONCIERGE_TASK_STREAM_PROTOCOL_VERSION }
+          ? { feishu_concierge_protocol: FEISHU_CONCIERGE_NATIVE_COT_PROTOCOL_VERSION }
           : {}),
       }, undefined, signal);
     } catch (error) {
@@ -335,6 +337,8 @@ export class MultiremiDaemonClient {
           bodyOrigin: (rawOutbound.body_origin ?? rawOutbound.bodyOrigin) === "agent" ? "agent" : "issue",
           idempotencyKey: String(rawOutbound.idempotency_key ?? rawOutbound.idempotencyKey ?? rawOutbound.id ?? ""),
           mention: parseOutboundMention(rawOutbound.mention),
+          ...(parseFeishuPresentation(rawOutbound.presentation) ? { presentation: parseFeishuPresentation(rawOutbound.presentation)! } : {}),
+          ...(isFeishuOpenId(rawOutbound.interaction_open_id) ? { interactionOpenId: rawOutbound.interaction_open_id } : {}),
           ...(typeof rawOutbound.task_id === "string" ? {
             taskId: rawOutbound.task_id,
             resumeMessageId: typeof rawOutbound.resume_message_id === "string" ? rawOutbound.resume_message_id : null,
@@ -418,6 +422,8 @@ export class MultiremiDaemonClient {
       status: "sent" | "failed" | "streaming";
       externalMessageId?: string | null;
       error?: string | null;
+      presentation?: FeishuPresentationCheckpoint;
+      retryable?: boolean;
     },
   ): Promise<void> {
     await this.post(
@@ -427,6 +433,8 @@ export class MultiremiDaemonClient {
         status: input.status,
         external_message_id: input.externalMessageId ?? undefined,
         error: input.error ?? undefined,
+        presentation: input.presentation,
+        retryable: input.retryable,
       },
     );
   }
@@ -473,6 +481,7 @@ export class MultiremiDaemonClient {
       status: MultiremiTaskStatus;
       duplicate: boolean;
       steered: boolean;
+      deliveryQueued?: boolean;
       senderMembership: SubmitFeishuBotMessageResult["senderMembership"];
     }>(`/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/feishu-bot/messages`, {
       revision: input.revision,
@@ -488,6 +497,7 @@ export class MultiremiDaemonClient {
       chat_id: input.chatId ?? undefined,
       thread_id: input.threadId ?? undefined,
       text: input.text,
+      delivery_mode: input.deliveryMode,
     });
     return response;
   }
@@ -773,6 +783,8 @@ export class MultiremiDaemonClient {
       session_id?: string | null;
       work_dir?: string | null;
       usage?: TaskUsageEntry[];
+      started_at?: string | null;
+      completed_at?: string | null;
     }>(`/api/daemon/tasks/${encodeURIComponent(taskId)}/status`);
     return {
       taskId: response.task_id ?? taskId,
@@ -782,6 +794,8 @@ export class MultiremiDaemonClient {
       sessionId: response.session_id ?? null,
       workDir: response.work_dir ?? null,
       usage: Array.isArray(response.usage) ? response.usage : [],
+      startedAt: response.started_at ?? null,
+      completedAt: response.completed_at ?? null,
     };
   }
 

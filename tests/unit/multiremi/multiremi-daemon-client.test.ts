@@ -233,6 +233,18 @@ describe("MultiremiDaemonClient HTTP failures", () => {
 });
 
 describe("MultiremiDaemonClient daemon protocol", () => {
+  it("preserves the native CoT checkpoint and private-chat interaction recipient over heartbeat", async () => {
+    const presentation = { version: "native_cot_v1", startedAt: Date.now(), throughSeq: 7, interactions: {},
+      cot: { status: "active", cotId: "cot_recovered", messageId: "om_process" } };
+    globalThis.fetch = (async () => Response.json({ pending_feishu_outbound: {
+      id: "fbo_native", claim_token: "lease", task_id: "tsk_live", chat_id: "oc_private", body: "",
+      presentation, interaction_open_id: "ou_requester", mention: { mode: "none", resolvedOpenId: null },
+    } })) as unknown as typeof globalThis.fetch;
+    const client = new MultiremiDaemonClient("https://remi.example", "daemon-token");
+    expect((await client.heartbeatRuntime("runtime-1")).pending_feishu_outbound).toMatchObject({
+      taskId: "tsk_live", presentation, interactionOpenId: "ou_requester",
+    });
+  });
   it("normalizes proactive Task identity and existing message checkpoints", async () => {
     globalThis.fetch = (async () => Response.json({ pending_feishu_outbound: {
       id: "fbo_stream", claim_token: "lease", task_id: "tsk_live", resume_message_id: "om_card",

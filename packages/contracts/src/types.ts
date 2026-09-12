@@ -3820,6 +3820,8 @@ export const FEISHU_CONCIERGE_OUTBOUND_LEGACY_PROTOCOL_VERSION = 2;
 export const FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION = 3;
 /** v4 consumes proactive Task events and renews delivery leases while streaming. */
 export const FEISHU_CONCIERGE_TASK_STREAM_PROTOCOL_VERSION = 4;
+/** Native CoT, independent interaction/result messages, durable inbound delivery. */
+export const FEISHU_CONCIERGE_NATIVE_COT_PROTOCOL_VERSION = 5;
 export const FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER = "X-Multiremi-Feishu-Claim-Token";
 
 export type FeishuBotDomain = "feishu" | "lark" | "bytedance";
@@ -3852,6 +3854,26 @@ export type FeishuBotRuntimeState = "stopped" | "starting" | "online" | "failed"
 
 export type FeishuBotOutboundBodyOrigin = "issue" | "agent";
 
+/** Delivery state only. Task messages and human responses remain authoritative. */
+export interface FeishuPresentationCheckpoint {
+  version: "native_cot_v1";
+  startedAt: number;
+  throughSeq: number;
+  interactionOpenId?: string;
+  cot?: {
+    status: "creating" | "active" | "finished" | "disabled";
+    cotId?: string;
+    messageId?: string;
+    /** Set before a write, cleared after its acknowledgement is checkpointed. */
+    writePending?: boolean;
+    runStarted?: boolean;
+    lastTimestamp?: number;
+    error?: string;
+  };
+  resultMessageId?: string;
+  interactions: Record<string, { messageId: string; receiptStatus?: string }>;
+}
+
 export interface MultiremiFeishuBotOutboundDelivery {
   id: string;
   claimToken: string;
@@ -3872,6 +3894,9 @@ export interface MultiremiFeishuBotOutboundDelivery {
   taskId?: string;
   resumeMessageId?: string | null;
   mention?: FeishuBotOutboundMention;
+  presentation?: FeishuPresentationCheckpoint;
+  /** The requester, including in private chats where the final card needs no @. */
+  interactionOpenId?: string;
 }
 
 /**
@@ -4075,6 +4100,7 @@ export interface SubmitFeishuBotMessageInput {
   chatId?: string | null;
   threadId?: string | null;
   text: string;
+  deliveryMode?: "native_cot_v1";
 }
 
 /** The canonical Chat/Task lineage selected for an inbound Feishu event. */
@@ -4086,6 +4112,7 @@ export interface SubmitFeishuBotMessageResult {
   status: MultiremiTaskStatus;
   duplicate: boolean;
   steered: boolean;
+  deliveryQueued?: boolean;
   senderMembership: "member" | "non_member" | "unbound";
 }
 
@@ -4098,6 +4125,8 @@ export interface FeishuBotTaskSnapshot {
   sessionId: string | null;
   workDir: string | null;
   usage: TaskUsageEntry[];
+  startedAt?: string | null;
+  completedAt?: string | null;
 }
 
 /** Current canonical Chat/Task lineage bound to one Feishu conversation. */

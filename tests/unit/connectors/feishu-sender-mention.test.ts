@@ -34,6 +34,7 @@ function harness() {
   } } };
   const credentials = { appId: "cli_test", appSecret: "test-secret" };
   const channel = new FeishuChannel(credentials);
+  (channel as any)._makeClient = () => client;
   channel.addReaction = async () => undefined;
   channel.sendText = async (_chatId, text) => { errors.push(text); };
   channel.createStream = () => {
@@ -62,9 +63,8 @@ describe("Feishu card sender mention", () => {
     const h = harness();
     await h.connector._handleFeishuMessage(message("group", "ou_alice"));
     expect(h.errors).toEqual([]);
-    expect(h.sends()).toBe(2);
-    expect(h.cards.length).toBeGreaterThanOrEqual(3);
-    expect(JSON.stringify(h.cards[0])).not.toContain("<at ");
+    expect(h.sends()).toBe(1);
+    expect(h.cards).toHaveLength(1);
     expect(h.cards.at(-1).body.elements.at(-1).columns[0].elements[0].content).toBe("<at id=ou_alice></at>");
   });
 
@@ -72,10 +72,9 @@ describe("Feishu card sender mention", () => {
     const h = harness();
     await h.connector._handleFeishuMessage(message("group", "ou_alice"));
     await h.connector._handleFeishuMessage(message("group", "ou_bob"));
-    expect(h.sends()).toBe(4);
-    const secondCards = h.cards.slice(-3);
-    expect(secondCards).toHaveLength(3);
-    expect(JSON.stringify(secondCards[0])).not.toContain("<at ");
+    expect(h.sends()).toBe(2);
+    const secondCards = h.cards.slice(-1);
+    expect(secondCards).toHaveLength(1);
     expect(h.cards.at(-1).body.elements.at(-1).columns[0].elements[0].content).toBe("<at id=ou_bob></at>");
     expect(JSON.stringify(secondCards)).not.toContain("ou_alice");
   });
@@ -85,7 +84,7 @@ describe("Feishu card sender mention", () => {
       const h = harness();
       await h.connector._handleFeishuMessage(message(chatType, sender));
       expect(h.errors).toEqual([]);
-      expect(h.sends()).toBe(2);
+      expect(h.sends()).toBe(1);
       expect(JSON.stringify(h.cards)).not.toContain("<at ");
     });
   }

@@ -1,4 +1,5 @@
 import type { Hono } from "hono";
+import { parseFeishuPresentation } from "@multiremi/contracts/feishu-presentation.js";
 import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
 import {
   MAX_TASK_MESSAGES_PER_REQUEST,
@@ -45,6 +46,7 @@ import {
 import {
   FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION,
   FEISHU_CONCIERGE_TASK_STREAM_PROTOCOL_VERSION,
+  FEISHU_CONCIERGE_NATIVE_COT_PROTOCOL_VERSION,
   FEISHU_CONCIERGE_OUTBOUND_LEGACY_PROTOCOL_VERSION,
   FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER,
   FEISHU_CONCIERGE_PROTOCOL_VERSION,
@@ -441,7 +443,8 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       if (directive) response.feishu_bot = directive;
       const outbound = feishuConciergeProtocol >= FEISHU_CONCIERGE_OUTBOUND_LEGACY_PROTOCOL_VERSION
         ? store.claimFeishuBotOutbound(workspaceId, runtimeId, undefined,
-            feishuConciergeProtocol >= FEISHU_CONCIERGE_TASK_STREAM_PROTOCOL_VERSION)
+            feishuConciergeProtocol >= FEISHU_CONCIERGE_TASK_STREAM_PROTOCOL_VERSION,
+            feishuConciergeProtocol >= FEISHU_CONCIERGE_NATIVE_COT_PROTOCOL_VERSION)
         : null;
       if (outbound) {
         const body = feishuConciergeProtocol >= FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION
@@ -460,6 +463,8 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
           idempotency_key: outbound.idempotencyKey,
           ...(outbound.taskId ? { task_id: outbound.taskId, resume_message_id: outbound.resumeMessageId } : {}),
           ...(outbound.mention ? { mention: outbound.mention } : {}),
+          ...(outbound.presentation ? { presentation: outbound.presentation } : {}),
+          ...(outbound.interactionOpenId ? { interaction_open_id: outbound.interactionOpenId } : {}),
         };
       }
     }
@@ -557,6 +562,8 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       external_message_id?: unknown;
       error?: unknown;
       mention_open_id?: unknown;
+      presentation?: unknown;
+      retryable?: unknown;
     }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const claimToken = cleanString(typeof body.claim_token === "string" ? body.claim_token : null);
@@ -572,6 +579,8 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     }
     const status = body.status === "sent" || body.status === "failed" || body.status === "streaming" ? body.status : null;
     if (!claimToken || !status) return c.json({ error: "claim_token and a valid status are required" }, 400);
+    const presentation = body.presentation === undefined ? undefined : parseFeishuPresentation(body.presentation);
+    if (presentation === null) return c.json({ error: "invalid presentation checkpoint" }, 400);
     const accepted = store.reportFeishuBotOutbound(
       runtime.workspaceId ?? "local",
       runtimeId,
@@ -581,6 +590,8 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
         status,
         externalMessageId: cleanString(typeof body.external_message_id === "string" ? body.external_message_id : null),
         error: body.error ? redactFeishuBotError(String(body.error)) : null,
+        presentation,
+        retryable: typeof body.retryable === "boolean" ? body.retryable : undefined,
       },
     );
     if (!accepted) return c.json({ error: "outbound delivery lease is stale", code: "stale_lease" }, 409);
@@ -634,6 +645,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       sender_name?: unknown;
       chat_id?: unknown;
       thread_id?: unknown;
+      delivery_mode?: unknown;
       text?: unknown;
     }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
@@ -652,6 +664,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       chatId: cleanString(typeof body.chat_id === "string" ? body.chat_id : null),
       threadId: cleanString(typeof body.thread_id === "string" ? body.thread_id : null),
       text: typeof body.text === "string" ? body.text : "",
+      deliveryMode: body.delivery_mode === "native_cot_v1" ? "native_cot_v1" : undefined,
     };
     try {
       return c.json(store.submitFeishuBotMessage(runtime.workspaceId ?? "local", runtimeId, input), 202);
@@ -1143,6 +1156,8 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       sessionId: task.sessionId,
       workDir: task.workDir,
       usage: task.usage,
+      startedAt: task.startedAt,
+      completedAt: task.completedAt,
     };
     return c.json({
       task_id: snapshot.taskId,
@@ -1152,6 +1167,8 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       session_id: snapshot.sessionId,
       work_dir: snapshot.workDir,
       usage: snapshot.usage,
+      started_at: snapshot.startedAt,
+      completed_at: snapshot.completedAt,
     });
   });
   app.get("/api/daemon/tasks/:taskId/steer", (c) => {

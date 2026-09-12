@@ -1830,8 +1830,9 @@ runMigrations(this.db);
     runtimeId: string,
     now?: string | Date,
     supportsTaskStream = false,
+    supportsNativeCot = false,
   ): MultiremiFeishuBotOutboundDelivery | null {
-    return this.feishuBot.claimOutbound(workspaceId, runtimeId, now, supportsTaskStream);
+    return this.feishuBot.claimOutbound(workspaceId, runtimeId, now, supportsTaskStream, supportsNativeCot);
   }
 
   getFeishuBotOutboundAttachment(

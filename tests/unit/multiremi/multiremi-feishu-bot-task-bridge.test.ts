@@ -51,8 +51,9 @@ function scaffold() {
 }
 
 describe("Feishu bot standard Task bridge", () => {
-  it("forwards the resolved Agent name for direct, group, and Issue topic cards", async () => {
+  it("queues direct, group, and Issue topic replies with the resolved Agent and original conversation", async () => {
     const { store, config } = scaffold();
+    store.reportFeishuBotRuntimeStatus("local", "rt_bot", { appliedRevision: config.revision, state: "online" });
     const direct = store.createAgent({ name: "Direct", provider: "codex", workspaceId: "local" });
     const broad = store.createAgent({ name: "Broad", provider: "codex", workspaceId: "local" });
     const issueWorker = store.createAgent({ name: "Issue worker", provider: "codex", workspaceId: "local" });
@@ -71,7 +72,7 @@ describe("Feishu bot standard Task bridge", () => {
     } as unknown as MultiremiDaemon;
     const handler = createFeishuTaskHandler(daemon, config.revision, "Startup default");
     const cases = [
-      { chatType: "p2p", chatId: "ou_direct", sessionKey: "ou_direct", messageId: "om_direct", expected: "Direct" },
+      { chatType: "p2p", chatId: "oc_direct", sessionKey: "ou_direct", messageId: "om_direct", expected: "Direct" },
       {
         chatType: "group",
         chatId: "oc_general",
@@ -98,13 +99,19 @@ describe("Feishu bot standard Task bridge", () => {
           chatType: scenario.chatType,
           rootId: scenario.chatType === "group" ? scenario.sessionKey.split(":thread:")[1] : null,
           senderUnionId: "on_owner",
+          senderOpenId: "ou_requester",
         },
       };
       await handler(message, scenario.sessionKey, async (_stream, streamMeta) => {
         metas.push(streamMeta);
       });
-      expect(metas).toHaveLength(1);
-      expect(metas[0]?.displayName).toBe(scenario.expected);
+      expect(metas).toHaveLength(0);
+      expect(store.claimFeishuBotOutbound("local", "rt_bot", undefined, true)).toBeNull();
+      const delivery = store.claimFeishuBotOutbound("local", "rt_bot", undefined, true, true)!;
+      expect(delivery).toMatchObject({ chatId: scenario.chatId, replyToMessageId: scenario.messageId,
+        interactionOpenId: "ou_requester", presentation: { version: "native_cot_v1" } });
+      expect(store.getTaskWithAgent(delivery.taskId!)?.agent?.name).toBe(scenario.expected);
+      expect(delivery.mention?.resolvedOpenId).toBe(scenario.chatType === "group" ? "ou_requester" : null);
     }
   });
 

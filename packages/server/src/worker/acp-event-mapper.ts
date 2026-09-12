@@ -110,6 +110,9 @@ export function createEventMapper(adapter: AgentAdapter): (event: ProviderEvent)
       // `subagent-transcript` client capability) says which Agent call it came
       // from; the frontend nests it under that step.
       const parent = metaParentToolUseId(raw);
+      const rawPhase = raw.phase ?? raw._meta?.phase ?? raw._meta?.codex?.phase;
+      const phase = rawPhase === "final_answer" || rawPhase === "final" ? "final"
+        : rawPhase === "commentary" ? "commentary" : undefined;
       return [{
         type: su === "agent_thought_chunk"
           ? "thinking"
@@ -117,7 +120,7 @@ export function createEventMapper(adapter: AgentAdapter): (event: ProviderEvent)
             ? "compaction"
             : "text",
         content,
-        meta: parent ? { parent_tool_call_id: parent } : undefined,
+        meta: parent || phase ? { ...(parent ? { parent_tool_call_id: parent } : {}), ...(phase ? { phase } : {}) } : undefined,
       }];
     }
 

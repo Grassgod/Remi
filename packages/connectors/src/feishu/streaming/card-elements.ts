@@ -316,43 +316,6 @@ export function buildProgressCard(args: {
   };
 }
 
-/**
- * Build the terminal CoT/process card when the answer is emitted separately.
- * It deliberately omits answer text, token statistics and sender mentions.
- */
-export function buildCotCard(opts: {
-  thinking?: string | null;
-  toolEntries?: ToolEntry[];
-  steps?: Array<{ tool: string; desc: string }>;
-  toolCount?: number;
-  retainedPermissionPanels?: RetainedPermissionPanel[];
-  sessionId?: string | null;
-  displayName?: string | null;
-  nameSuffix?: string;
-  subtitle?: string | null;
-}): Record<string, unknown> {
-  const card = buildFinalCard({
-    text: "",
-    thinking: opts.thinking,
-    toolEntries: opts.toolEntries,
-    steps: opts.steps,
-    toolCount: opts.toolCount,
-    retainedPermissionPanels: opts.retainedPermissionPanels,
-    sessionId: opts.sessionId,
-    displayName: opts.displayName,
-    nameSuffix: opts.nameSuffix,
-    subtitle: opts.subtitle,
-  });
-  // The empty content placeholder is unnecessary in a process-only card.
-  const body = card.body as { elements?: Record<string, unknown>[] };
-  body.elements = body.elements?.filter(element =>
-    !(element.tag === "markdown" && element.content === ""),
-  );
-  if (!body.elements?.length) body.elements = [{ tag: "markdown", content: "过程已完成" }];
-  card.config = { width_mode: "fill", summary: { content: "CoT" } };
-  return card;
-}
-
 /** @deprecated — card JSON for FeishuStreamingSession.sendPlanReviewCard(), which is no longer called. */
 export function buildLegacyPlanReviewCard(actionId: string): Record<string, unknown> {
   return {
