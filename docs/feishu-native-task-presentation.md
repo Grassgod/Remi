@@ -131,3 +131,14 @@ When another event connection already owns the production bot, explicit
 and replays synthetic callback payloads through the same handler after ten
 seconds. These are simulated decisions, not live user callbacks or real
 authorizations; successful sending does not prove production callback delivery.
+
+The semantic-timeline live replay on 2026-09-12 delivered three native processes,
+three results and two interaction cards to the existing Remi private chat. All
+21 native writes, both receipt patches and the error `complete` call returned
+code 0; all eight messages were read back with Remi as sender. The normal/error
+native summaries read back as `Completed`/`Task failed`; the cancelled native
+message's generic readback summary is also `Completed`, although it was sent
+`status=interrupted` and its result card says cancelled. Client visual acceptance
+of that interrupted state remains separate from transport acceptance. Question
+and approval callbacks used the explicitly labeled synthetic mode because the
+production app already had an event connection; no competing listener was started.

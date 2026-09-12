@@ -180,7 +180,12 @@ try {
     yield event(taskId, "usage", { meta: { used: 82000, size: 1000000 } });
     const requestStatus = (id: string) => {
       const r = requests.get(id)!;
-      return r.status === "responded" ? `${replayResponses ? "模拟回执（非用户决定）：" : ""}${escapeCardText(JSON.stringify(r.response))}` : "等待超时，未作答／未授权";
+      if (r.status !== "responded") return "等待超时，未作答／未授权";
+      const answers = r.response?.answers;
+      const text = r.kind === "question" && answers && typeof answers === "object"
+        ? Object.values(answers).map(value => String(value)).join("；")
+        : r.response?.option_id === "allow" ? "允许一次" : "拒绝";
+      return `${replayResponses ? "模拟回执（非用户决定）：" : ""}${escapeCardText(text)}`;
     };
     yield event(taskId, "text", { content: `**完整展示回放已结束。**\n\n原生过程消息负责按时间顺序展示文字、工具、待办和等待状态；最终答案独立放在这张结果卡里。\n\n| 检查项 | 本次效果 |\n| --- | --- |\n| 工具 | 描述、分类图标；成功日志不展开 |\n| 过程 | 多段文字与工具组按执行顺序排列 |\n| 交互 | 沿用原有问答／审批卡，提交后保留回执 |\n| 底部 | 完成后才显示 @、耗时、上下文、工具数 |\n\n问答：${requestStatus(qId)}\n\n审批：${requestStatus(pId)}\n\n接下来还有两条简短的失败／取消展示，分别检查错误收尾和中断状态。\n\n*本条为渲染验收演示；未调用模型、未执行真实工具、未变更线上任务。模型与上下文为示例，耗时为本次回放实际耗时。*`, meta: { phase: "final" } });
     yield snapshot(taskId, "completed", started);
