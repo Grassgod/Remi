@@ -2384,6 +2384,8 @@ describe("Bun Multiremi daemon smoke", () => {
     const main = "---\nname: selected-skill\ndescription: Use to check imported support files.\n---\nSELECTED_DIRECTORY_CONTENT\n";
     writeFileSync(join(selectedRoot, "helper", "SKILL.md"), main);
     writeFileSync(join(selectedRoot, "helper", "references", "guide.md"), "IMPORTED_SUPPORT_FILE");
+    const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII=", "base64");
+    writeFileSync(join(selectedRoot, "helper", "references", "preview.png"), png);
     const token = await store.createAccessToken({ name: "Selected skill daemon", type: "daemon", workspaceId: "local", daemonId: "skill-machine" });
     const server = startMultiremiServer({ store, scheduler: null, authToken: "selected-skill-test", hostname: "127.0.0.1", port: 0 });
     let sends = 0;
@@ -2399,6 +2401,7 @@ describe("Bun Multiremi daemon smoke", () => {
           const skillRoot = join(options.cwd!, ".claude", "skills", "selected-skill");
           expect(readFileSync(join(skillRoot, "SKILL.md"), "utf8")).toBe(main);
           expect(readFileSync(join(skillRoot, "references", "guide.md"), "utf8")).toBe("IMPORTED_SUPPORT_FILE");
+          expect(readFileSync(join(skillRoot, "references", "preview.png"))).toEqual(png);
         },
       }),
     });
@@ -2416,7 +2419,8 @@ describe("Bun Multiremi daemon smoke", () => {
       const imported = store.getRuntimeLocalSkillImportRequest(runtime.id, request.id)!;
       expect(imported.error).toBeNull();
       expect(imported.skill?.content).toBe(main);
-      expect(imported.skill?.files?.map((file) => file.path)).toEqual(["references/guide.md"]);
+      expect(imported.skill?.files?.map((file) => file.path)).toEqual(["references/guide.md", "references/preview.png"]);
+      expect(imported.skill?.files?.find((file) => file.path.endsWith(".png"))).toMatchObject({ encoding: "base64", content: png.toString("base64") });
       const agent = store.createAgent({ name: "Use imported Skill", provider: "claude" });
       store.setAgentSkills(agent.id, { skill_ids: [imported.skillId!] });
       const task = store.createTask({ agentId: agent.id, prompt: "Read the selected Skill." });
@@ -2425,6 +2429,7 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(store.getTask(task.id)?.status).toBe("completed");
       expect(sends).toBe(1);
       expect(readFileSync(join(selectedRoot, "helper", "SKILL.md"), "utf8")).toBe(main);
+      expect(readFileSync(join(selectedRoot, "helper", "references", "preview.png"))).toEqual(png);
     } finally {
       daemon.stop();
       await run?.catch(() => {});
@@ -2565,7 +2570,7 @@ describe("Bun Multiremi daemon smoke", () => {
         name: "Review Helper",
         description: "Review local changes",
         provider: "claude",
-        fileCount: 2,
+        fileCount: 3,
       });
       expect(skillsByKey.get("linked-helper")).toMatchObject({
         key: "linked-helper",
@@ -2591,7 +2596,8 @@ describe("Bun Multiremi daemon smoke", () => {
         provider: "claude",
         source_path: skillDir,
       });
-      expect(imported.skill?.files?.map((file) => file.path)).toEqual(["notes/check.md"]);
+      expect(imported.skill?.files?.map((file) => file.path)).toEqual(["image.png", "notes/check.md"]);
+      expect(imported.skill?.files?.find((file) => file.path === "image.png")?.encoding).toBe("base64");
       const nestedImported = store.getRuntimeLocalSkillImportRequest(runtimeId, nestedImportRequest.id)!;
       expect(nestedImported.status).toBe("completed");
       expect(nestedImported.skill?.name).toBe("Nested Helper");

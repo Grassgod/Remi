@@ -26,6 +26,11 @@ const allowedDevOrigins = process.env.CORS_ALLOWED_ORIGINS
 const nextConfig: NextConfig = {
   ...(process.env.STANDALONE === "true" ? { output: "standalone" as const } : {}),
   transpilePackages: ["@multiremi/core", "@multiremi/ui", "@multiremi/views", "@multiremi/contracts"],
+  experimental: {
+    // Skill edits send the full bundle. Match the API's 128 MiB request limit
+    // so Next does not truncate JSON containing large or binary attachments.
+    proxyClientMaxBodySize: "128mb",
+  },
   ...(allowedDevOrigins && allowedDevOrigins.length > 0
     ? { allowedDevOrigins }
     : {}),

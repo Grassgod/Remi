@@ -68,7 +68,11 @@ import { useT } from "../../i18n";
 
 const SKILL_MD = "SKILL.md";
 
-type DraftFile = { id?: string; path: string; content: string };
+type DraftFile = Pick<SkillFile, "path" | "content" | "encoding"> & { id?: string };
+
+function filePayload(file: DraftFile) {
+  return { path: file.path, content: file.content, encoding: file.encoding ?? "utf8" };
+}
 
 // ---------------------------------------------------------------------------
 // File path validation + inline add
@@ -301,10 +305,10 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
     if (sameSkill) {
       const d = draftRef.current;
       const serverFilesJson = JSON.stringify(
-        (skill.files ?? []).map((f) => ({ path: f.path, content: f.content })),
+        (skill.files ?? []).map(filePayload),
       );
       const draftFilesJson = JSON.stringify(
-        d.files.map((f) => ({ path: f.path, content: f.content })),
+        d.files.map(filePayload),
       );
       const hasEdits =
         d.name.trim() !== skill.name ||
@@ -327,6 +331,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
         id: f.id,
         path: f.path,
         content: f.content,
+        encoding: f.encoding,
       })),
     );
     if (!sameSkill) setSelectedPath(SKILL_MD);
@@ -356,13 +361,13 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
   );
 
   const fileMap = useMemo(() => {
-    const map = new Map<string, string>();
-    map.set(SKILL_MD, content);
-    for (const f of files) if (f.path.trim()) map.set(f.path, f.content);
+    const map = new Map<string, DraftFile>();
+    map.set(SKILL_MD, { path: SKILL_MD, content });
+    for (const f of files) if (f.path.trim()) map.set(f.path, f);
     return map;
   }, [content, files]);
   const filePaths = useMemo(() => Array.from(fileMap.keys()), [fileMap]);
-  const selectedContent = fileMap.get(selectedPath) ?? "";
+  const selectedFile = fileMap.get(selectedPath);
 
   useEffect(() => {
     if (selectedPath !== SKILL_MD && !fileMap.has(selectedPath)) {
@@ -372,11 +377,8 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
 
   const isDirty = useMemo(() => {
     if (!skill) return false;
-    const serverFiles = (skill.files ?? []).map((f: SkillFile) => ({
-      path: f.path,
-      content: f.content,
-    }));
-    const draftFiles = files.map((f) => ({ path: f.path, content: f.content }));
+    const serverFiles = (skill.files ?? []).map(filePayload);
+    const draftFiles = files.map(filePayload);
     return (
       name.trim() !== skill.name ||
       description.trim() !== skill.description ||
@@ -394,6 +396,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
         id: f.id,
         path: f.path,
         content: f.content,
+        encoding: f.encoding,
       })),
     );
   };
@@ -408,7 +411,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
         name: trimmedName,
         description: trimmedDesc,
         content,
-        files: files.filter((f) => f.path.trim()),
+        files: files.filter((f) => f.path.trim()).map(filePayload),
       };
       const updated = await api.updateSkill(skill.id, payload);
       qc.setQueryData(
@@ -472,7 +475,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
   };
 
   const handleFileContentChange = (newContent: string) => {
-    if (!canEdit) return;
+    if (!canEdit || selectedFile?.encoding === "base64") return;
     if (selectedPath === SKILL_MD) {
       setContent(newContent);
     } else {
@@ -758,7 +761,8 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
             <FileViewer
               key={selectedPath}
               path={selectedPath}
-              content={selectedContent}
+              content={selectedFile?.content ?? ""}
+              encoding={selectedFile?.encoding}
               onChange={handleFileContentChange}
             />
           </div>

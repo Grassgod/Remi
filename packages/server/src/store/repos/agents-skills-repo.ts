@@ -540,10 +540,10 @@ export class AgentsSkillsRepo {
     const createdAt = existing ? String(existing.created_at) : nowIso();
     const updatedAt = nowIso();
     this.ctx.db.run(
-      `INSERT INTO multiremi_skill_files (id, skill_id, path, content, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT(skill_id, path) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`,
-      [id, skillId, normalized.path, normalized.content, createdAt, updatedAt],
+      `INSERT INTO multiremi_skill_files (id, skill_id, path, content, encoding, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(skill_id, path) DO UPDATE SET content = excluded.content, encoding = excluded.encoding, updated_at = excluded.updated_at`,
+      [id, skillId, normalized.path, normalized.content, normalized.encoding ?? "utf8", createdAt, updatedAt],
     );
     const row = this.ctx.db.query("SELECT * FROM multiremi_skill_files WHERE skill_id = ? AND path = ?")
       .get(skillId, normalized.path) as Row | null;
@@ -714,18 +714,27 @@ export class AgentsSkillsRepo {
     for (const file of files) {
       this.ctx.db.run(
         `INSERT INTO multiremi_skill_files (
-          id, skill_id, path, content, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(skill_id, path) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`,
-        [file.id ?? createId("skf"), skillId, file.path, file.content, now, now],
+          id, skill_id, path, content, encoding, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(skill_id, path) DO UPDATE SET content = excluded.content, encoding = excluded.encoding, updated_at = excluded.updated_at`,
+        [file.id ?? createId("skf"), skillId, file.path, file.content, file.encoding ?? "utf8", now, now],
       );
     }
   }
 }
 
 function normalizeSkillFiles(files: MultiremiSkillFile[]): MultiremiSkillFile[] {
-  return files.map((file) => {
+  return files.map((file): MultiremiSkillFile => {
     const path = normalizeSkillFilePath(file.path);
+    if (file.encoding !== undefined && file.encoding !== "utf8" && file.encoding !== "base64") {
+      throw new Error(`Invalid skill file encoding: ${String(file.encoding)}`);
+    }
+    if (file.encoding === "base64") {
+      if (typeof file.content !== "string" || Buffer.from(file.content, "base64").toString("base64") !== file.content) {
+        throw new Error(`Invalid base64 skill file content: ${path}`);
+      }
+      return { path, content: file.content, encoding: "base64" };
+    }
     return { path, content: String(file.content ?? "") };
   });
 }
@@ -845,6 +854,7 @@ function toSkillFile(row: Row): MultiremiSkillFile {
     skillId: String(row.skill_id),
     path: String(row.path ?? ""),
     content: String(row.content ?? ""),
+    ...(row.encoding === "base64" ? { encoding: "base64" as const } : {}),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };

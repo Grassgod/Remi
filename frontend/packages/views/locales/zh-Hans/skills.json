@@ -260,6 +260,8 @@
     "no_files": "无文件"
   },
   "file_viewer": {
+    "binary_read_only": "此二进制附件为只读，可下载查看原始文件。",
+    "download_file": "下载文件",
     "edit_tooltip": "编辑",
     "preview_tooltip": "预览",
     "no_content": "*暂无内容*",

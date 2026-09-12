@@ -15,6 +15,8 @@ export interface MultiremiSkillFile {
   skillId?: string;
   path: string;
   content: string;
+  /** Omitted for UTF-8 text; binary content uses canonical base64. */
+  encoding?: "utf8" | "base64";
   createdAt?: string;
   updatedAt?: string;
 }

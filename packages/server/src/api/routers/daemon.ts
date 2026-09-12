@@ -66,7 +66,7 @@ import type {
   MultiremiTask,
   SubmitFeishuBotMessageInput,
 } from "@multiremi/contracts/types.js";
-import { TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
+import { BinarySkillFilesUnsupportedError, TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
 import { FeishuBotConfigError } from "@multiremi/store/repos/feishu-bot-repo.js";
 import { SshMeshKeyError } from "@multiremi/ssh-mesh/keys.js";
 import { SessionArchiveError } from "@multiremi/session-archive/service.js";
@@ -808,12 +808,18 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
   // Multiremi daemon-compatible endpoints.
   app.post("/api/daemon/runtimes/:runtimeId/tasks/claim", async (c) => {
     const runtimeId = c.req.param("runtimeId");
+    const body = await readJsonStrictAllowEmpty<{ supports_binary_skill_files?: unknown }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    if (!body || typeof body !== "object" || Array.isArray(body)
+      || (body.supports_binary_skill_files !== undefined && typeof body.supports_binary_skill_files !== "boolean")) {
+      return c.json({ error: "supports_binary_skill_files must be a boolean" }, 400);
+    }
     let preparing = preparingClaims.get(runtimeId);
     // A duplicate poll must not deliver the same Task twice while its first claim is preparing.
     if (preparing) return c.json({ task: null });
     if (!preparing) {
       preparing = (async () => {
-        const task = store.claimTask(runtimeId);
+        const task = store.claimTask(runtimeId, { supportsBinarySkillFiles: body.supports_binary_skill_files === true });
         if (!task) return null;
         // Checkout scope is server-owned metadata, independent of Wiki body availability.
         const remotes = new Set(task.repos.map(repo => canonicalRepositoryRemote(repo.url)));
@@ -837,7 +843,14 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       })().finally(() => preparingClaims.delete(runtimeId));
       preparingClaims.set(runtimeId, preparing);
     }
-    return c.json({ task: await preparing });
+    try {
+      return c.json({ task: await preparing });
+    } catch (error) {
+      if (error instanceof BinarySkillFilesUnsupportedError) {
+        return c.json({ error: error.message, code: "binary_skill_files_unsupported" }, 409);
+      }
+      throw error;
+    }
   });
   app.get("/api/daemon/runtimes/:runtimeId/tasks/pending", (c) => {
     const runtime = store.getRuntime(c.req.param("runtimeId"));

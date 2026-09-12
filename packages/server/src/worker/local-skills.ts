@@ -14,11 +14,12 @@ import type {
   MultiremiSkillFile,
 } from "@multiremi/contracts/types.js";
 
-const MAX_LOCAL_SKILL_FILE_SIZE = 1 << 20;
-const MAX_LOCAL_SKILL_BUNDLE_SIZE = 8 << 20;
-const MAX_LOCAL_SKILL_FILE_COUNT = 128;
+const MAX_LOCAL_SKILL_FILE_SIZE = 8 << 20;
+const MAX_LOCAL_SKILL_BUNDLE_SIZE = 32 << 20;
+const MAX_LOCAL_SKILL_FILE_COUNT = 1_024;
 const MAX_LOCAL_SKILL_DIR_DEPTH = 4;
 const LOCAL_SKILL_TEXT_DECODER = new TextDecoder("utf-8", { fatal: true });
+const LOCAL_SKILL_SUPPORT_DECODER = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 const SKILL_DIRECTORY_SCAN_MAX_ENTRIES = 10_000;
 const SKILL_DIRECTORY_SCAN_MAX_SKILLS = 1_000;
 const SKILL_DIRECTORY_SCAN_TIMEOUT_MS = 20_000;
@@ -240,15 +241,27 @@ function collectRuntimeLocalSkillFiles(skillDir: string, includeContent: boolean
         if (strict) throw new Error(`skill file unreadable or exceeds ${MAX_LOCAL_SKILL_FILE_SIZE} bytes: ${rel}`);
         continue;
       }
-      const content = readRuntimeLocalSkillTextFile(path);
-      if (content == null) {
-        if (strict) throw new Error(`skill file is not readable UTF-8 text: ${rel}`);
+      let bytes: Buffer;
+      try {
+        bytes = readFileSync(path);
+      } catch {
+        if (strict) throw new Error(`skill file is not readable: ${rel}`);
+        continue;
+      }
+      if (bytes.length > MAX_LOCAL_SKILL_FILE_SIZE) {
+        if (strict) throw new Error(`skill file exceeds ${MAX_LOCAL_SKILL_FILE_SIZE} bytes: ${rel}`);
         continue;
       }
       if (files.length >= MAX_LOCAL_SKILL_FILE_COUNT) throw new Error(`local skill exceeds ${MAX_LOCAL_SKILL_FILE_COUNT} files`);
-      totalSize += size;
+      totalSize += bytes.length;
       if (totalSize > MAX_LOCAL_SKILL_BUNDLE_SIZE) throw new Error(`local skill exceeds ${MAX_LOCAL_SKILL_BUNDLE_SIZE} bytes in total`);
-      files.push({ path: normalized, content: includeContent ? content : "" });
+      let content: string | undefined;
+      if (!isLikelyBinaryLocalSkillFile(bytes)) {
+        try { content = LOCAL_SKILL_SUPPORT_DECODER.decode(bytes); } catch { /* Preserve non-UTF-8 attachments as bytes. */ }
+      }
+      files.push(content === undefined
+        ? { path: normalized, content: includeContent ? bytes.toString("base64") : "", encoding: "base64" }
+        : { path: normalized, content: includeContent ? content : "" });
       normalizedPaths.add(normalized);
     }
   };

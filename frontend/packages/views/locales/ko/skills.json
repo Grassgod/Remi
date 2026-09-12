@@ -248,6 +248,8 @@
     "no_files": "파일 없음"
   },
   "file_viewer": {
+    "binary_read_only": "이 바이너리 첨부 파일은 읽기 전용입니다. 다운로드하여 원본 파일을 확인하세요.",
+    "download_file": "파일 다운로드",
     "edit_tooltip": "수정",
     "preview_tooltip": "미리보기",
     "no_content": "*아직 내용이 없습니다*",

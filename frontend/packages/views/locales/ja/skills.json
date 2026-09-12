@@ -245,6 +245,8 @@
     "no_files": "ファイルなし"
   },
   "file_viewer": {
+    "binary_read_only": "このバイナリ添付ファイルは読み取り専用です。ダウンロードして元のファイルを確認できます。",
+    "download_file": "ファイルをダウンロード",
     "edit_tooltip": "編集",
     "preview_tooltip": "プレビュー",
     "no_content": "*まだ内容がありません*",

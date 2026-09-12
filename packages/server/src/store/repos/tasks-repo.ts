@@ -168,6 +168,17 @@ export interface RedispatchTaskResult {
 
 class AgentPluginReadinessChangedError extends Error {}
 
+export interface ClaimTaskOptions {
+  supportsBinarySkillFiles?: boolean;
+}
+
+export class BinarySkillFilesUnsupportedError extends Error {
+  constructor(readonly agentId: string) {
+    super("Task skills contain binary files. Update the Remi daemon to support binary skill files before claiming this task.");
+    this.name = "BinarySkillFilesUnsupportedError";
+  }
+}
+
 /** Steer submitted for a task that already reached a terminal state — API contract: 409. */
 export class TaskSteerConflictError extends Error {}
 
@@ -924,7 +935,8 @@ export class TasksRepo {
     });
   }
 
-  claimTask(runtimeId: string): MultiremiTaskWithAgent | null {
+  claimTask(runtimeId: string, options: ClaimTaskOptions = {}): MultiremiTaskWithAgent | null {
+    const excludedAgentIds = new Set<string>();
     const tx = this.ctx.db.transaction(() => {
       const runtime = this.ctx.runtimes().getRuntime(runtimeId);
       if (!runtime) throw new Error(`Runtime not found: ${runtimeId}`);
@@ -951,21 +963,42 @@ export class TasksRepo {
       // last in-flight Task finishing and the daemon claiming its update.
       if (this.ctx.runtimes().hasCliUpdateDrainForRuntime(runtimeId)) return null;
 
-      const stale = this.reclaimStaleDispatchedTaskForRuntime(runtimeId);
-      if (stale) return this.snapshotTaskExecution(stale, lockedRuntime);
-
-      this.refreshQueuedChatAffinity(lockedRuntime.workspaceId ?? "local");
-      const claimed = this.claimNextTaskForRuntime(lockedRuntime);
-      return claimed ? this.snapshotTaskExecution(claimed, lockedRuntime) : null;
+      const stale = this.reclaimStaleDispatchedTaskForRuntime(runtimeId, [...excludedAgentIds]);
+      if (!stale) this.refreshQueuedChatAffinity(lockedRuntime.workspaceId ?? "local");
+      const candidate = stale ?? this.claimNextTaskForRuntime(lockedRuntime, [...excludedAgentIds]);
+      if (!candidate) return null;
+      const task = this.snapshotTaskExecution(candidate, lockedRuntime);
+      // Check the actual hydrated payload, including both linked and legacy
+      // inline skills. Older daemons ignore encoding and would write base64
+      // as text. Unknown encodings also require the newer daemon's validator.
+      if (!options.supportsBinarySkillFiles && task.agent?.skills.some((skill) =>
+        skill.files?.some((file) => file.encoding !== undefined && file.encoding !== "utf8")
+      )) {
+        throw new BinarySkillFilesUnsupportedError(task.agentId);
+      }
+      return { task, dispatched: !stale };
     });
-    try {
-      return tx();
-    } catch (error) {
-      // A Plugin binding/version may change between the claim candidate SQL
-      // and the exact snapshot read under PostgreSQL READ COMMITTED. Rolling
-      // the transaction back leaves the task queued for the next reconcile.
-      if (error instanceof AgentPluginReadinessChangedError) return null;
-      throw error;
+    let unsupported: BinarySkillFilesUnsupportedError | null = null;
+    for (;;) {
+      let result: ReturnType<typeof tx>;
+      try {
+        result = tx();
+      } catch (error) {
+        // Roll back the candidate's dispatch and snapshot, then try another
+        // Agent so a binary Skill does not block later text-only tasks.
+        if (error instanceof BinarySkillFilesUnsupportedError && !excludedAgentIds.has(error.agentId)) {
+          excludedAgentIds.add(error.agentId);
+          unsupported = error;
+          continue;
+        }
+        // Plugin readiness drift leaves the task queued for the next reconcile.
+        if (error instanceof AgentPluginReadinessChangedError) return null;
+        throw error;
+      }
+      if (!result && unsupported) throw unsupported;
+      // Only publish a dispatch once the compatible claim has committed.
+      if (result?.dispatched) this.ctx.notifyTaskEvent("task:dispatch", result.task);
+      return result?.task ?? null;
     }
   }
 
@@ -1186,7 +1219,7 @@ export class TasksRepo {
       && (!task.issueId || !task.holdsWorkspace || this.runtimePassesProjectDeviceRouting(runtime, task.id));
   }
 
-  private reclaimStaleDispatchedTaskForRuntime(runtimeId: string): MultiremiTaskWithAgent | null {
+  private reclaimStaleDispatchedTaskForRuntime(runtimeId: string, excludedAgentIds: string[] = []): MultiremiTaskWithAgent | null {
     const cutoff = new Date(Date.now() - CLAIM_RESPONSE_RECOVERY_MS).toISOString();
     const now = nowIso();
     const row = this.ctx.db.query(
@@ -1200,13 +1233,14 @@ export class TasksRepo {
            AND started_at IS NULL
            AND dispatched_at IS NOT NULL
            AND dispatched_at < ?
+           ${excludedAgentIds.length ? `AND agent_id NOT IN (${excludedAgentIds.map(() => "?").join(", ")})` : ""}
          ORDER BY priority DESC, dispatched_at ASC
          LIMIT 1
        )
        AND status = 'dispatched'
        AND started_at IS NULL
        RETURNING *`,
-    ).get(now, now, runtimeId, cutoff) as Row | null;
+    ).get(now, now, runtimeId, cutoff, ...excludedAgentIds) as Row | null;
     if (!row) return null;
     const task = this.getTaskWithAgent(String(row.id));
     // The re-claim above matches only on runtime_id, so a task whose agent or
@@ -1279,7 +1313,7 @@ export class TasksRepo {
     }
   }
 
-  private claimNextTaskForRuntime(runtime: MultiremiRuntime): MultiremiTaskWithAgent | null {
+  private claimNextTaskForRuntime(runtime: MultiremiRuntime, excludedAgentIds: string[] = []): MultiremiTaskWithAgent | null {
     const now = nowIso();
     const deviceRouting = this.runtimeDeviceRoutingContext(runtime);
     // Always constrain by workspace, COALESCE(...,'local') so a runtime with
@@ -1310,6 +1344,7 @@ export class TasksRepo {
       runtime.ownerId,
       runtime.id,
       runtime.id,
+      ...excludedAgentIds,
     ];
     // Ownership guard: a private runtime only executes its owner's agents — a
     // claim hands the runtime the agent's custom_env / mcp_config. Owner match
@@ -1432,6 +1467,7 @@ export class TasksRepo {
              WHERE active.status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')
                AND ${sameExecutionLaneSql("t", "active")}
            )
+           ${excludedAgentIds.length ? `AND t.agent_id NOT IN (${excludedAgentIds.map(() => "?").join(", ")})` : ""}
          ORDER BY t.priority DESC, t.created_at ASC
          LIMIT 1
        )
@@ -1440,9 +1476,7 @@ export class TasksRepo {
     ).get(...params) as Row | null;
     if (!row) return null;
 
-    const task = this.getTaskWithAgent(String(row.id));
-    if (task) this.ctx.notifyTaskEvent("task:dispatch", task);
-    return task;
+    return this.getTaskWithAgent(String(row.id));
   }
 
   startTask(taskId: string): MultiremiTask {

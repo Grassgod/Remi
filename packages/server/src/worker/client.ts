@@ -280,7 +280,9 @@ export class MultiremiDaemonClient {
   }
 
   async claimTask(runtimeId: string): Promise<any | null> {
-    const resp = await this.post<{ task: any | null }>(`/api/daemon/runtimes/${runtimeId}/tasks/claim`, {});
+    const resp = await this.post<{ task: any | null }>(`/api/daemon/runtimes/${runtimeId}/tasks/claim`, {
+      supports_binary_skill_files: true,
+    });
     return normalizeDaemonClaimTask(resp.task);
   }
 

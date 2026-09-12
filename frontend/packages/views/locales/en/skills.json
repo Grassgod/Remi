@@ -248,6 +248,8 @@
     "no_files": "No files"
   },
   "file_viewer": {
+    "binary_read_only": "This binary attachment is read-only. Download it to view the original file.",
+    "download_file": "Download file",
     "edit_tooltip": "Edit",
     "preview_tooltip": "Preview",
     "no_content": "*No content yet*",

@@ -113,7 +113,7 @@ import {
   type SshMeshBrowserOverview,
 } from "@multiremi/store/repos/ssh-mesh-repo.js";
 import type { SshMeshKeyMaterial } from "@multiremi/ssh-mesh/keys.js";
-import { TasksRepo } from "@multiremi/store/repos/tasks-repo.js";
+import { TasksRepo, type ClaimTaskOptions } from "@multiremi/store/repos/tasks-repo.js";
 import { OrganizerActionError, readOrganizerMode } from "../organizer/settings.js";
 import {
   AutopilotsRepo,
@@ -4233,8 +4233,8 @@ runMigrations(this.db);
     return this.tasks.listWorkspaceAgentActivity30d(workspaceId);
   }
 
-  claimTask(runtimeId: string): MultiremiTaskWithAgent | null {
-    return this.tasks.claimTask(runtimeId);
+  claimTask(runtimeId: string, options?: ClaimTaskOptions): MultiremiTaskWithAgent | null {
+    return this.tasks.claimTask(runtimeId, options);
   }
 
   startTask(taskId: string): MultiremiTask {
