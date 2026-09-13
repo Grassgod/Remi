@@ -82,6 +82,7 @@ cd frontend && bunx playwright test
 | `bun test` | 后端全部 `*.test.ts` | 无 |
 | `bun run test:frontend` | 前端 Vitest 单元/组件 | 根目录 `bun install`(frontend 在 root workspaces 里) |
 | `bun run smoke:multiremi:acp` | multiremi ACP 冒烟 | 真实 ACP agent |
+| `bun run verify:codex-bridge --package-dir=<isolated-prefix>/node_modules/@agentclientprotocol/codex-acp` | 固定 npm 发布包、配套 Codex、usage 补丁和真实 ACP 协商；加 `--prompt` 校验回复及流式 usage | Node、隔离安装的固定 bridge、有效 Codex 登录；安装和隔离方式见 [Codex 接入](docs/design/acp-codex-via-codex-acp.md) |
 | `bun run smoke:chat` | 独立 Chat 页面、队列、会话管理和附件；隔离 Next ↔ Bun API ↔ 临时 SQLite，模拟 Agent 输出 | 前端依赖与 Chromium；不调用真实 provider |
 | `bun run e2e:multiremi` | 内置 dashboard 全栈 e2e(真 server+daemon+**真 LLM 任务**) | provider CLI + Chromium |
 | `bun run e2e:frontend` | Next 前端 ↔ 本仓库 Bun 后端(Postgres) | 前端:3000 + 后端:6130 + Postgres |
