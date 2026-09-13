@@ -1,238 +1,38 @@
-# Remi ACP Codex via codex-acp
+# Codex ACP 接入与桥接器升级
 
-> **历史文档**：本文记录旧 ACP Codex 接入。当前启动命令是
-> `bun run apps/remi/main.ts start`；旧顶层 `serve` 命令已删除。provider/model/cwd/MCP 等
-> 执行配置来自 `MULTIREMI_BOT_AGENT_ID` 指定的 `multiremi_agents` 行，而不是本地
-> `remi_config`。下文命令和 `/switch` 描述仅作历史参考，不可直接执行。
+Remi 通过 [AcpProvider](../../packages/acp/src/provider.ts) 与 `codex-acp` 进行 ACP stdio 通信，由 bridge 启动其 npm 依赖中的 Codex app-server。模型、工作目录和 MCP 配置来自任务的 Agent 配置及 daemon 运行时装配；[CodexAdapter](../../packages/acp/src/adapters/codex/index.ts)负责事件显示和权限模式映射。
 
-## Goal
+## 固定版本与启动
 
-Reuse an existing ACP-compatible Codex agent such as `codex-acp` instead of
-building a Remi-side Codex app-server adapter.
+[daemon 启动入口](../../apps/remi/cli/multiremi.ts)调用 [ensureAcpBridges](../../packages/acp/src/provision.ts)，将认可的 bridge 安装到 `~/.remi/acp`。`BRIDGE_PIN.codex` 精确固定 bridge 版本；发现旧版或缺少 usage 补丁时重新安装。旧 bridge 即使已带补丁，也必须升级到新的 pin。ACP 更新请求同样安装当前 Remi 源码固定的版本，不会自动追踪 npm latest。
 
-Target runtime path:
+当前 pin 为 `@agentclientprotocol/codex-acp@1.11.0`，上游声明 `@openai/codex@^0.153.4`，本次兼容性检查基线为 Codex `0.153.4`。这个范围不包含 `0.154.0`；系统或 Homebrew 安装的 Codex 升级不会改变 bridge 默认启动的内置 CLI。桥接器提供的 `CODEX_PATH` 覆盖属于自定义执行链，不在这套固定组合验证之内。
 
-```text
-Feishu
-  -> Remi FeishuConnector
-  -> Remi AcpProvider(agentType="codex")
-  -> codex-acp over ACP stdio
-  -> Codex
-```
+版本升级随新的 Remi daemon 分发；仅更新平台服务或在旧 daemon 上请求 ACP 更新，不会改变该 daemon 的 pin。
 
-This keeps Remi's current ACP provider, session pool, streaming card renderer,
-permission UI, `/switch codex` entry, and tracing path. Remi only needs thin
-agent-selection and Codex event interpretation fixes.
+## usage 补丁与协议
 
-## Current Code Evidence
+`codex-usage-v1` 在 bridge 的 `usage_update._meta` 中携带每次模型请求的 token 拆分，包括输入、缓存输入、输出、推理输出和总量。[provision](../../packages/acp/src/provision.ts)按发布包的代码锚点应用补丁；升级时必须重新验证锚点与字段语义。Codex prompt 结算只包含最后一次模型请求，不能替代 Remi 对整个 turn 的逐请求累加。
 
-The repository is already close to this shape:
+[AcpClient](../../packages/acp/src/client.ts)与 [AcpProvider](../../packages/acp/src/provider.ts)使用 bridge 返回的能力和配置选项协商模型、reasoning effort 与权限模式；不能用 bridge 不读取的 session `_meta` 代替协商。模型目录可见不等于真实模型请求或完整任务执行链已验证成功。
 
-| Area | Evidence | Current state |
-| --- | --- | --- |
-| Provider construction | `src/core.ts` `_buildProvider()` accepts `acp:codex` | Remi can instantiate `AcpProvider({ agentType: "codex" })` |
-| Runtime switch | `src/switch-mode.ts` maps `codex` to `acp:codex` | P2P `/switch codex` route exists |
-| ACP provider | `src/providers/acp/provider.ts` delegates behavior to `createAdapter(agentType)` | Generic enough for another ACP server |
-| Codex adapter | `src/providers/acp/adapters/codex.ts` | Stub only; default executable is `codex-acp` |
-| Feishu renderer | `src/connectors/feishu/index.ts` uses `createAdapter("claude")` | Blocks Codex-specific tool/input parsing |
-| Health check | `src/providers/acp/provider.ts` runs `claude --version` | Incorrect for `acp:codex` |
+## 升级验证
 
-## Non-goals
-
-- Do not implement a direct `codex app-server` client in Remi.
-- Do not add a Remi-owned `remi-codex-agent-acp` bridge unless `codex-acp`
-  is proven incompatible.
-- Do not change Claude ACP behavior beyond making shared code agent-aware.
-- Do not remove `claude_cli`; it remains the rollback path.
-
-## Proposed Changes
-
-### 1. Agent-aware executable and health check
-
-Keep `CodexAdapter.defaultExecutable()` returning `codex-acp` unless local
-verification shows a different command name.
-
-Update `AcpProvider.healthCheck()` to resolve and execute the configured ACP
-agent executable by `agentType`:
-
-- `acp:claude`: current Claude wrapper or `claude-agent-acp`.
-- `acp:codex`: `provider.executable` or `codex-acp`.
-
-The check should avoid sending a prompt; a lightweight `--version` or spawn
-existence check is enough for scheduled heartbeat.
-
-### 2. Pass agent type into streaming consumers
-
-Extend `StreamMeta` with one of:
-
-```ts
-providerName?: string | null;
-agentType?: string | null;
-```
-
-In `Remi.handleMessageStream()`, after selecting the provider, populate this
-metadata. For `AcpProvider`, prefer `provider.adapter.agentType`.
-
-Then replace the Feishu hardcode:
-
-```ts
-createAdapter("claude")
-```
-
-with the selected ACP agent type, defaulting to `claude` for compatibility.
-
-### 3. Complete the Codex adapter for display-level semantics
-
-Keep the Codex adapter shallow. It does not need to understand app-server.
-It only needs to interpret ACP `SessionUpdate` objects emitted by `codex-acp`.
-
-Minimum behavior:
-
-- Resolve tool names from known Codex ACP metadata if present.
-- Fall back to `kind` + `title` mappings:
-  - `execute` -> `Bash`
-  - `read` -> `Read`
-  - `edit` -> `Edit`
-  - `search` -> `Grep` or `Search`
-  - `fetch` -> `WebFetch`
-  - `think` -> `Think`
-- Extract structured input from `rawInput`, including JSON strings.
-- Reconstruct file path from `locations`.
-- Reconstruct command from `title` for execute events.
-- Extract text, diff path, terminal output, and raw output as result previews.
-
-Do not add Remi-side tool execution. `codex-acp` owns execution.
-
-### 4. Permission flow compatibility
-
-Use Remi's existing `session/request_permission` handler unchanged where
-possible. Required verification:
-
-- Codex tool approval options are presented in Feishu.
-- Selecting allow/reject returns an ACP `selected` or `cancelled` outcome that
-  `codex-acp` accepts.
-- If `codex-acp` uses option names that differ from Claude, update only
-  option-selection helpers, not provider architecture.
-
-`AskUserQuestion` and `ExitPlanMode` are Claude-specific until a Codex ACP
-fixture proves equivalent behavior.
-
-### 5. Configuration
-
-Recommended local config:
-
-```toml
-[provider]
-name = "acp:codex"
-# executable = "/absolute/path/to/codex-acp"
-# model = "gpt-5.4"
-```
-
-P2P switch:
-
-```text
-/switch codex
-```
-
-Rollback:
-
-```toml
-[provider]
-name = "acp:claude"
-```
-
-or:
-
-```toml
-[provider]
-name = "claude_cli"
-```
-
-Current local prerequisite status:
-
-- `command -v codex-acp` returned no path in this workspace shell.
-- `npm view @agentclientprotocol/codex-acp` resolves package version `0.0.43`
-  with bin `codex-acp` in the current registry.
-- Before implementation smoke tests, install `codex-acp` or set
-  `REMI_CODEX_AGENT_ACP_EXECUTABLE` / `[provider].executable` to an absolute
-  path for the ACP-compatible Codex server.
-
-## Implementation Plan
-
-1. Verify the external ACP agent command:
-   - `npm install -g @agentclientprotocol/codex-acp`
-   - `command -v codex-acp`
-   - `codex-acp --version`
-   - optional smoke: start it and send ACP `initialize`.
-2. Patch health check:
-   - make `AcpProvider.healthCheck()` agent-aware.
-   - add unit coverage for Claude and Codex executable resolution.
-3. Patch stream metadata:
-   - add `agentType` or `providerName` to `StreamMeta`.
-   - pass selected provider metadata from `Remi.handleMessageStream()`.
-   - update Feishu connector to create the matching adapter.
-4. Complete `CodexAdapter` display parsing:
-   - raw input JSON parsing.
-   - title/kind fallback tool name mapping.
-   - result preview extraction.
-5. Add fixtures and tests:
-   - unit tests for Codex adapter.
-   - a fake ACP Codex server fixture for `AcpProvider` if `codex-acp` is not
-     available in CI.
-6. Run e2e smoke locally with real `codex-acp`.
-7. Update `remi.toml.example` with an ACP Codex example.
-
-## Acceptance Criteria
-
-The goal is done when all of these pass:
-
-- `name = "acp:codex"` starts Remi without attempting `claude --version`.
-- `/switch codex` selects `acp:codex` and clears the old provider session.
-- A simple prompt returns streamed `agent_message_chunk` content in Feishu.
-- A read-file prompt shows a readable `Read` step with file path.
-- A shell prompt shows a readable `Bash` step with command.
-- A file-edit prompt shows an `Edit` or `Write` step with path and diff preview.
-- A permission request renders in Feishu and allow/reject reaches `codex-acp`.
-- `/esc` cancels the active Codex turn and clears the Remi session process.
-- Session resume works for at least one follow-up turn.
-- Existing Claude ACP tests still pass.
-
-## Verification Commands
+使用仓库固定的 Bun 1.3.14 和公共 npm registry。在隔离目录安装待验证 bridge，不直接修改运行中的 `~/.remi/acp`。以下使用仓库已忽略的 `.remi/bridge-check`：
 
 ```bash
-bun test tests/providers.test.ts
-bun test tests/switch-mode.test.ts
-bun test tests/feishu-card.test.ts
+npm install --prefix .remi/bridge-check --registry https://registry.npmjs.org --no-audit --no-fund @agentclientprotocol/codex-acp@1.11.0
+bun run verify:codex-bridge --package-dir=.remi/bridge-check/node_modules/@agentclientprotocol/codex-acp
 ```
 
-Manual smoke:
+[检查器](../../tests/integration/verify-codex-bridge.ts)核对发布包版本、依赖声明和实际 CLI 版本，验证补丁幂等性并执行发布包中的 token 转换，然后验证 ACP 初始化、会话创建、model/effort/权限协商和关闭。它从当前 `CODEX_HOME`（默认 `~/.codex`）复制 `auth.json` 到临时 Home，不复制本机配置；真实会话需要有效登录。
+
+加 `--prompt` 会调用模型，要求收到指定回复和带 Remi 补丁的实际 usage 事件。不加该参数不会发送 prompt，不能将该结果记为真实模型调用通过。修改 pin 时同步核对检查器中的配套 Codex 基线；新版本若改变使用字段或协议，先适配再升级。
+
+相关离线回归：
 
 ```bash
-# Historical invocation removed. Configure the Multiremi agent row, then run `remi start`.
+bun test tests/unit/acp tests/arch/lockfile-registry.test.ts
 ```
 
-Then test from Feishu:
-
-```text
-/switch codex
-你好
-读取当前项目的 package.json
-运行 pwd
-修改一个临时文件
-/esc
-```
-
-## Risk Register
-
-| Risk | Mitigation |
-| --- | --- |
-| `codex-acp` emits non-Claude tool metadata | Keep Codex parsing in `CodexAdapter`; add fixtures from real runs |
-| `codex-acp` permission outcomes differ | Normalize in permission option helpers after observing fixture |
-| `codex-acp` session resume IDs differ from Claude | Treat session IDs as provider-specific; existing `/switch` already clears provider sessions |
-| Heartbeat starts a heavy Codex process | Prefer executable existence or `--version` check |
-| Feishu cards depend on Claude tool names | Map Codex events into Remi's display tool vocabulary |
-
-## Decision
-
-Proceed with `codex-acp` as the ACP server boundary. Remi should not implement
-Codex app-server directly for this integration.
+协议测试夹具使用 Node shebang，Windows 可在 WSL 中运行；发布包检查器通过 Node 启动 bridge，可在原生 Windows 运行。完整任务路径另用 `bun run smoke:multiremi:acp --provider=codex` 验证，需要实际模型认证前提，参见 [测试说明](../../TESTING.md)。本页列出复现方法，不声明本次检查结果。

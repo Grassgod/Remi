@@ -66,7 +66,10 @@ test("the deprecated @zed-industries claude bridge is no longer recognized", () 
 
 test("bridgeSatisfied requires exactly the pinned version", () => {
   const home = freshHome();
-  writeBridgePackage(home, "@agentclientprotocol/codex-acp", "1.0.2");
+  // Even a fully patched previous pin must be upgraded on the next start.
+  const previous = writeBridgePackage(home, "@agentclientprotocol/codex-acp", "1.1.14");
+  writeCodexDist(previous);
+  expect(patchCodexUsageBridge(() => {}, previous)).toBe(true);
   expect(bridgeSatisfied("codex")).toBe(false);
 
   rmSync(join(home, "acp"), { recursive: true, force: true });
@@ -82,6 +85,7 @@ test("codex usage patch is idempotent and carries the complete last-request spli
   const pkgDir = writeBridgePackage(home, "@agentclientprotocol/codex-acp", BRIDGE_PIN.codex);
   const dist = writeCodexDist(pkgDir);
   chmodSync(dist, 0o755);
+  const originalMode = statSync(dist).mode;
   const logs: string[] = [];
 
   expect(patchCodexUsageBridge((message) => logs.push(message), pkgDir)).toBe(true);
@@ -92,7 +96,7 @@ test("codex usage patch is idempotent and carries the complete last-request spli
   expect(patchCodexUsageBridge((message) => logs.push(message), pkgDir)).toBe(true);
   expect(readFileSync(dist, "utf8")).toBe(once);
   expect(once.match(/remiTokenUsage/g)).toHaveLength(1);
-  expect(statSync(dist).mode & 0o777).toBe(0o755);
+  expect(statSync(dist).mode).toBe(originalMode);
 });
 
 test("codex usage patch logs and degrades when its anchor is missing", () => {
