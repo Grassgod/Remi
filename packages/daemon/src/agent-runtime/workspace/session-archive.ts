@@ -298,6 +298,10 @@ async function scanArchiveEntries(
       const archivePath = archiveDirectory ? `${archiveDirectory}/${child.name}` : child.name;
       const sourcePath = sourceDirectory ? `${sourceDirectory}/${child.name}` : child.name;
       assertArchiveRelativePath(archivePath);
+      // Session homes intentionally link provider credentials from the user's
+      // base Home. Exclude known secret/config names without opening or
+      // following them; unexpected symlinks still fail closed below.
+      if (EXCLUDED_FILE_NAMES.has(child.name)) continue;
       let handle: FileHandle | null = null;
       try {
         handle = await openFileHandleChild(directory, child.name);
@@ -308,7 +312,6 @@ async function scanArchiveEntries(
           }
           continue;
         }
-        if (EXCLUDED_FILE_NAMES.has(child.name)) continue;
         if (!info.isFile()) throw new Error(`Refusing to archive non-regular file: ${archivePath}`);
         log.debug(`Issue Session archive scanning file: ${archivePath} bytes=${info.size}`);
         const inspected = await inspectOpenRegularFile(handle, archivePath, info);
