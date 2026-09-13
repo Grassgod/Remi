@@ -5,7 +5,7 @@
  * The fake agent records every request it receives to a log file, so each test
  * asserts against the real JSON-RPC frames rather than internal state. Ground
  * truth for every expectation is the pinned bridge source
- * (@agentclientprotocol/claude-agent-acp 0.66.0, codex-acp 1.1.14).
+ * (@agentclientprotocol/claude-agent-acp 0.66.0, codex-acp 1.11.0).
  */
 import { describe, it, expect } from "bun:test";
 import { mkdtempSync, writeFileSync, readFileSync, chmodSync, existsSync } from "node:fs";
