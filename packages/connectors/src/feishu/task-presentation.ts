@@ -13,8 +13,10 @@ import { buildTaskInteractionCard, registerTaskInteraction } from "./task-intera
 import { createFeishuImageResolver } from "./outbound-images.js";
 import { uploadImageFeishu } from "./media.js";
 import { rewriteMarkdownImages } from "@shared/feishu-markdown-images.js";
+import { setFeishuMessageReceipt, type FeishuMessageReceipt } from "./message-receipt.js";
 
 export interface TaskPresentationOptions {
+  receiptMessageIds?: string[];
   appId: string;
   replyToMessageId?: string;
   mentionOpenId?: string;
@@ -47,6 +49,7 @@ export class FeishuTaskPresentation {
   private context: ContextUsage | null = null;
   private lastFlush = Date.now();
   private lastBatch = 0;
+  private readonly receiptMessageIds = new Set<string>();
 
   constructor(private readonly client: Lark.Client, private readonly chatId: string,
     private readonly meta: TaskStreamMeta, private readonly options: TaskPresentationOptions) {
@@ -56,6 +59,7 @@ export class FeishuTaskPresentation {
     this.state.interactionOpenId ??= options.interactionOpenId ?? options.mentionOpenId;
     this.signal = meta.signal ? AbortSignal.any([meta.signal, this.abortController.signal]) : this.abortController.signal;
     this.execution = { agentName: options.displayName ?? meta.displayName };
+    for (const id of options.receiptMessageIds ?? []) this.receiptMessageIds.add(id);
   }
 
   isActive(): boolean { return this.active; }
@@ -63,6 +67,27 @@ export class FeishuTaskPresentation {
   detach(): void { this.active = false; }
 
   async consume(stream: AsyncIterable<TaskStreamEvent>): Promise<{ messageId: string }> {
+    await this.receipt("received");
+    try { return await this.consumeTask(stream); }
+    catch (error) {
+      // Handover/shutdown is not a task failure; the next leased consumer will resume.
+      if (!this.signal.aborted && !this.state.resultMessageId) await this.receipt("failed");
+      throw error;
+    }
+  }
+
+  private async receipt(state: FeishuMessageReceipt): Promise<void> {
+    for (const id of this.receiptMessageIds) {
+      try { await setFeishuMessageReceipt(this.client, this.options.appId, id, state, this.signal); }
+      catch (error) {
+        this.signal.throwIfAborted();
+        if (state !== "received") throw error; // Durable outbox retries without resending its checkpointed result.
+        this.options.log?.(`Message receipt update failed: ${String(error)}`);
+      }
+    }
+  }
+
+  private async consumeTask(stream: AsyncIterable<TaskStreamEvent>): Promise<{ messageId: string }> {
     if (this.state.cot?.status === "creating" || this.state.cot?.writePending) {
       // The native API exposes no verified idempotency key. An unacknowledged
       // create/write is not replayed: preserve the known handle and final lane.
@@ -95,6 +120,7 @@ export class FeishuTaskPresentation {
         if (event.kind === "message") {
           await this.message(event.message);
         } else {
+          for (const id of event.snapshot.receiptMessageIds ?? []) this.receiptMessageIds.add(id);
           finalStatus = event.snapshot.status;
           error = event.snapshot.error;
           snapshotText = event.snapshot.result ?? "";
@@ -130,6 +156,7 @@ export class FeishuTaskPresentation {
       this.state.resultMessageId = sent.messageId;
       await this.save();
     }
+    await this.receipt(finalStatus === "completed" ? "completed" : "failed");
     this.active = false;
     return { messageId: this.state.resultMessageId };
   }

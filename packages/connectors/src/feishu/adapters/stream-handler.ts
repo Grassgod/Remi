@@ -179,9 +179,10 @@ export async function handleAgentStream(
   chatId: string,
   log: StreamHandlerLog,
   meta: StreamMeta,
-): Promise<{ elapsedSec: number; usageTokens: number; contextWindow: number | null; stats: string | null; toolCount: number; contentText: string; thinkingText: string; toolEntries: ToolEntry[] }> {
+): Promise<{ failed: boolean; elapsedSec: number; usageTokens: number; contextWindow: number | null; stats: string | null; toolCount: number; contentText: string; thinkingText: string; toolEntries: ToolEntry[] }> {
   let thinkingText = "";
   let contentText = "";
+  let failed = false;
   const toolReducer = createToolEntryReducer(acpAdapter);
   let currentThinkingSegment = "";
   let trailingThinkingFlushed = false;
@@ -509,6 +510,7 @@ export async function handleAgentStream(
       }
     }
   } catch (streamErr) {
+    failed = true;
     const message = streamErr instanceof Error ? streamErr.message : String(streamErr);
     log.error(`Stream error: ${message}`);
     contentText += `\n\n**Error:** ${message}\n`;
@@ -516,6 +518,7 @@ export async function handleAgentStream(
 
   return {
     elapsedSec: session.getElapsed(),
+    failed,
     usageTokens,
     contextWindow: usageContextWindow,
     stats: formatCardStats(session.getElapsed(), contextUsage, toolReducer.toolCount),

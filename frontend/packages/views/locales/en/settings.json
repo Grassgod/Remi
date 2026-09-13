@@ -952,6 +952,25 @@
         }
       }
     },
+    "senderAllowlist": {
+      "unnamed": "Feishu account · {{id}}",
+      "account_identifiers": "More account identifiers",
+      "title": "Feishu account allowlist",
+      "description": "Accounts that message this bot appear here automatically, with duplicates merged. Allowlisted accounts can ask the bot to create Issues in this private space.",
+      "refresh": "Refresh",
+      "loading": "Loading accounts…",
+      "configure_first": "Configure the Feishu bot above to discover incoming accounts.",
+      "empty": "No accounts discovered yet. Send a message to the bot to appear here.",
+      "load_failed": "Could not load Feishu accounts. Refresh to try again.",
+      "pending": "Pending authorization",
+      "allowed": "Allowed",
+      "last_seen": "Last request: {{when}}",
+      "add": "Add to allowlist",
+      "remove": "Remove from allowlist",
+      "toast_added": "Account added to the allowlist",
+      "toast_removed": "Account removed from the allowlist",
+      "toast_update_failed": "Could not update account authorization"
+    },
     "issueTopics": {
       "notify_mode": "Proactive notification recipient",
       "notify_owner": "Group owner",

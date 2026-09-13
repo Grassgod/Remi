@@ -2253,6 +2253,22 @@ export function runMigrations(db: SqlDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_chat_bindings_chat
       ON multiremi_feishu_bot_chat_bindings(chat_session_id);
 
+    -- Accounts are discovered from verified bot deliveries, never from an
+    -- administrator typing an identity or from workspace membership.
+    CREATE TABLE IF NOT EXISTS multiremi_feishu_bot_senders (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      app_id TEXT NOT NULL,
+      open_id TEXT NOT NULL,
+      union_id TEXT,
+      display_name TEXT NOT NULL,
+      allowed INTEGER NOT NULL DEFAULT 0,
+      first_seen_at TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL,
+      UNIQUE(workspace_id, app_id, open_id),
+      FOREIGN KEY(workspace_id) REFERENCES multiremi_workspaces(id) ON DELETE CASCADE
+    );
+
     -- Feishu can redeliver one event. Persist the event id before returning so
     -- retries resolve to the original Task instead of starting duplicate work.
     CREATE TABLE IF NOT EXISTS multiremi_feishu_bot_deliveries (
@@ -2729,6 +2745,15 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_feishu_bot_chat_bindings", "chat_id TEXT");
   addColumnIfMissing(db, "multiremi_feishu_bot_chat_bindings", "thread_id TEXT");
   addColumnIfMissing(db, "multiremi_feishu_bot_chat_bindings", "reply_to_message_id TEXT");
+  addColumnIfMissing(db, "multiremi_feishu_bot_deliveries", "sender_id TEXT");
+  addColumnIfMissing(db, "multiremi_feishu_bot_senders", "name_en TEXT");
+  addColumnIfMissing(db, "multiremi_feishu_bot_senders", "profile_checked_at TEXT");
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_delivery_sender
+    ON multiremi_feishu_bot_deliveries(sender_id, created_at DESC, external_message_id DESC)`);
+  // Old deliveries cannot reliably be attributed to a group sender. Their
+  // existing task policy is retained; only newly observed requests participate
+  // in the dynamic allowlist. A tracked delivery without an identity is denied.
+  addColumnIfMissing(db, "multiremi_feishu_bot_deliveries", "sender_recorded INTEGER NOT NULL DEFAULT 0");
   backfillFeishuBotReplyDestinations(db);
   runMigrationOnce(db, FEISHU_BOT_AGENT_ROUTES_MIGRATION, () => ensureFeishuBotAgentRoutesSchema(db));
   runMigrationOnce(db, FEISHU_BOT_AGENT_ROUTE_DEFAULT_UNIQUENESS_MIGRATION, () => {

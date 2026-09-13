@@ -55,7 +55,7 @@ databases and directories without contacting a production Runtime.
 | --- | --- | --- |
 | `MULTIREMI_SERVER_URL` | Multiremi control-plane base URL used for daemon registration and heartbeats. | The daemon cannot reach the intended control plane. |
 | `MULTIREMI_TOKEN` | Daemon credential for the control plane. | Registration fails authentication. |
-| `MULTIREMI_WORKSPACE_ID` | Workspace whose membership gates Feishu senders. | Feishu startup fails because an explicit workspace is required. |
+| `MULTIREMI_WORKSPACE_ID` | Workspace that owns the bot configuration and sender allowlist. | Feishu startup fails because an explicit workspace is required. |
 | `MULTIREMI_BOT_AGENT_ID` | Agent row that supplies the bot provider, model, instructions, skills, tools, and MCP configuration. | A configured Feishu channel fails before starting. |
 | `FEISHU_APP_ID` | Feishu application ID. | Bot startup reports `FEISHU_APP_ID` as missing. |
 | `FEISHU_APP_SECRET` | Feishu application secret. | Bot startup reports `FEISHU_APP_SECRET` as missing. |
@@ -111,3 +111,19 @@ workspaces back under `_topics`. Keep `MULTIREMI_GC_ENABLED=true` on 66-8 and
 keep `MULTIREMI_GC_INTERVAL_MS` below one hour. The default 15-minute sweep has
 roughly 288 times the safety margin of the 72-hour workspace TTL; disabling GC
 or stretching the interval to hours removes that guarantee.
+
+## Bot sender authorization
+
+Workspace owners/admins manage discovered bot accounts with:
+
+```bash
+remi workspace feishu-bot sender list <workspace>
+remi workspace feishu-bot sender allow <workspace> <sender>
+remi workspace feishu-bot sender revoke <workspace> <sender>
+```
+
+Authorization controls
+Issue creation from the conversation and its task descendants; it does not
+require Remi membership or disable ordinary bot conversation. See the
+[bot sender allowlist](../feishu-message-ingestion.md#机器人发送者白名单)
+for exact commands, identity display, legacy restrictions, and message receipts.

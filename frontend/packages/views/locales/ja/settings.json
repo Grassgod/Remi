@@ -951,6 +951,25 @@
         }
       }
     },
+    "senderAllowlist": {
+      "unnamed": "Feishu アカウント · {{id}}",
+      "account_identifiers": "その他のアカウント識別子",
+      "title": "Feishu アカウント許可リスト",
+      "description": "このボットにメッセージを送ったアカウントが自動で収集され、重複は統合されます。許可したアカウントは、ボットを通じてこのプライベートスペースに Issue を作成できます。",
+      "refresh": "更新",
+      "loading": "アカウントを読み込み中…",
+      "configure_first": "アカウントのリクエストを受信するには、上で Feishu ボットを設定してください。",
+      "empty": "アカウントはまだありません。ボットにメッセージを送ると、ここに自動で表示されます。",
+      "load_failed": "Feishu アカウントを読み込めませんでした。更新して再試行してください。",
+      "pending": "承認待ち",
+      "allowed": "許可済み",
+      "last_seen": "最終リクエスト：{{when}}",
+      "add": "許可リストに追加",
+      "remove": "許可リストから削除",
+      "toast_added": "アカウントを許可リストに追加しました",
+      "toast_removed": "アカウントを許可リストから削除しました",
+      "toast_update_failed": "アカウントの承認を更新できませんでした"
+    },
     "issueTopics": {
       "notify_mode": "自動通知の宛先",
       "notify_owner": "グループオーナー",
