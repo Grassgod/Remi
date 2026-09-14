@@ -237,6 +237,34 @@ describe("co-resident CLI update coordination", () => {
     expect(daemons.every((daemon) => daemon.restartRequested())).toBe(true);
   });
 
+  it("cannot restart between a claim response arriving and handleTask taking ownership", async () => {
+    const root = mkdtempSync(join(tmpdir(), "runtime-auto-claim-handoff-"));
+    roots.push(root);
+    let activations = 0;
+    const next = { acp: "9.0.0", sdk: "9.0.0", executable: "9.0.0" };
+    const updater = new RuntimeDependencyUpdater(["claude"], {
+      startupDelayMs: 0, settings: () => ({ enabled: true, intervalHours: 24 }), status: () => null,
+      save: () => {}, log: () => {}, current: releaseRuntimeVersions, requiresActivation: () => false,
+      prepare: async () => ({ claude: next }), activate: () => { activations++; },
+    });
+    const [daemon] = instantiateCoResidentWorkerDaemons([{
+      serverUrl: "http://127.0.0.1:1", provider: "claude", workspacesRoot: root, runtimeDependencyUpdater: updater,
+    }]);
+    const d = state(daemon);
+    d.ready = true; d.onReadyChange(true);
+    updater.tick(); await updater.settled();
+    d.client.claimTask = async () => ({ id: "task-being-handed-to-runner" });
+    const response = d.claimTask("runtime-claude");
+    await Promise.resolve(); // The HTTP response has settled, but its caller has not adopted the task yet.
+    expect(d.pendingClaimCount).toBe(0);
+    expect(d.activeTaskCount).toBe(0);
+    updater.tick();
+    await response;
+    expect(activations).toBe(0);
+    expect(daemon!.restartRequested()).toBe(false);
+    updater.stop();
+  });
+
   function createDaemons(count = 2): MultiremiDaemon[] {
     const root = mkdtempSync(join(tmpdir(), "multiremi-cli-update-coordinator-"));
     roots.push(root);

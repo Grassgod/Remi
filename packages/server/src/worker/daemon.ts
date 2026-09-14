@@ -613,6 +613,8 @@ export class MultiremiDaemon {
   private activeTaskCount = 0;
   private drainingTaskCount = 0;
   private pendingClaimCount = 0;
+  /** A returned claim remains busy until handleTask synchronously adopts it. */
+  private readonly claimedTaskReservations = new Set<string>();
   private readonly feishuOutboundRuns = new Map<string, { claimToken: string; abort: AbortController; done: Promise<void> }>();
   private inflight = new Set<Promise<void>>();
   private activeTaskIds = new Set<string>();
@@ -767,7 +769,8 @@ export class MultiremiDaemon {
     this.onRestartRequested = options.onRestartRequested ?? null;
     this.options.runtimeDependencyUpdater?.register({
       ready: () => this.ready && !this.stopped && this.supervisorReady(),
-      busy: () => this.activeTaskCount > 0 || this.pendingClaimCount > 0 || this.inflight.size > 0 || this.drainingTaskCount > 0,
+      busy: () => this.activeTaskCount > 0 || this.pendingClaimCount > 0 || this.claimedTaskReservations.size > 0
+        || this.inflight.size > 0 || this.drainingTaskCount > 0,
       maintenance: () => this.claimsPaused || this.serverDrainActive,
       pause: () => { this.claimsPaused = true; },
       release: () => this.releaseLocalUpdateClaimPause(),
@@ -776,7 +779,7 @@ export class MultiremiDaemon {
     this.cliUpdateCoordinator?.register({
       provider: this.options.provider,
       activeTaskCount: () => this.activeTaskCount,
-      pendingClaimCount: () => this.pendingClaimCount,
+      pendingClaimCount: () => this.pendingClaimCount + this.claimedTaskReservations.size,
       claimsPaused: () => this.claimsPaused,
       pauseClaims: () => { this.claimsPaused = true; },
       releaseClaims: () => this.releaseLocalUpdateClaimPause(),
@@ -2530,7 +2533,9 @@ export class MultiremiDaemon {
   private async claimTask(runtimeId: string): Promise<MultiremiTaskWithAgent | null> {
     this.pendingClaimCount++;
     try {
-      return await this.client.claimTask(runtimeId) as MultiremiTaskWithAgent | null;
+      const task = await this.client.claimTask(runtimeId) as MultiremiTaskWithAgent | null;
+      if (task) this.claimedTaskReservations.add(task.id);
+      return task;
     } finally {
       this.pendingClaimCount--;
     }
@@ -2555,6 +2560,7 @@ export class MultiremiDaemon {
   }
 
   private async handleTask(task: MultiremiTaskWithAgent): Promise<void> {
+    this.claimedTaskReservations.delete(task.id);
     if (this.activeTaskIds.has(task.id)) {
       log.warn(`Ignored duplicate claim for active task ${task.id}`);
       return;
