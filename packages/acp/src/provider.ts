@@ -660,6 +660,7 @@ export class AcpProvider implements Provider {
       let stderr = "";
       const child = spawn(check.command, probeArgs, {
         stdio: ["ignore", "ignore", "pipe"],
+        env: { ...process.env, ...this._options.env },
       });
       child.stderr?.on("data", (chunk) => {
         if (stderr.length < 2000) stderr += String(chunk);

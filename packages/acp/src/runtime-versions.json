@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "preparedFor": null,
+  "checkedAt": null,
+  "claude": { "acp": "0.76.0", "sdk": "0.3.270", "executable": "2.1.270" },
+  "codex": { "acp": "1.11.0", "sdk": "0.154.0", "executable": "0.154.0" }
+}

@@ -65,6 +65,11 @@ jobs:
       - name: Verify native Issue session archive traversal
         run: bun test tests/unit/daemon/session-archive.test.ts
 
+      - name: Verify pinned ACP bridges and bundled agent runtimes
+        env:
+          REMI_CLAUDE_AGENT_ACP_EXECUTABLE: ${{ github.workspace }}/bin/remi-claude-agent-acp
+        run: REMI_HOME="$(mktemp -d)" bun run apps/remi/main.ts runtime prepare --provider claude --provider codex
+
   build:
     runs-on: ubuntu-latest
 
@@ -85,10 +90,17 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
+
+      - name: Require refreshed dependencies for a new release version
+        env:
+          RELEASE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: bun run release:check --base-ref "$RELEASE_BASE_SHA"
 
       - name: Install dependencies from the public registry
         run: bun install --registry https://registry.npmjs.org --frozen-lockfile --ignore-scripts

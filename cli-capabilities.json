@@ -59,6 +59,16 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "runtime.prepare": {
+      "command": "remi runtime prepare",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "write",
+      "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "workspace": {
       "command": "remi workspace",
       "aliases": [],

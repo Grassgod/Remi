@@ -79,6 +79,16 @@ install_binary() {
     chmod +x "$tmp/remi-claude-agent-acp"
   fi
 
+  # Use the downloaded CLI's pins and adjacent wrapper. Failure stops before
+  # replacing the running daemon. Older release archives remain installable.
+  if [ -f "$tmp/runtime-bundle.json" ]; then
+    info "Preparing and verifying ACP and bundled agent runtimes"
+    if ! "$tmp/remi" runtime prepare; then
+      rm -rf "$tmp"
+      fail "Runtime preparation failed; the existing remi binary was not replaced."
+    fi
+  fi
+
   install_file "$tmp/remi" "remi"
   if [ -f "$tmp/remi-claude-agent-acp" ]; then
     install_file "$tmp/remi-claude-agent-acp" "remi-claude-agent-acp"

@@ -18,9 +18,11 @@ import { projectCommandSpecs } from "./commands/project.js";
 import { repoCommandSpecs } from "./commands/repo.js";
 import { tokenCommandSpecs } from "./commands/token.js";
 import { workspaceCommandSpecs } from "./commands/workspace.js";
+import { runtimePrepareCommandSpec } from "./commands/runtime-prepare.js";
 
 const commandRegistry = new CommandRegistry();
 commandRegistry.register(contextCommandSpec());
+commandRegistry.register(runtimePrepareCommandSpec());
 for (const spec of [
   ...workspaceCommandSpecs(),
   ...memberCommandSpecs(),
