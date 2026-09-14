@@ -27179,7 +27179,7 @@
       "path": "/api/workspaces/ws_wk1mrnyfwl4x/members",
       "status": 201,
       "body": {
-        "id": "inv_va5q49t622xv",
+        "id": "inv_8dim5r24mzl2",
         "workspaceId": "ws_wk1mrnyfwl4x",
         "workspace_id": "ws_wk1mrnyfwl4x",
         "inviterId": "local",
@@ -27230,7 +27230,7 @@
     {
       "key": "workspaces#006 DELETE /api/workspaces/:id/invitations/:invitationId",
       "route": "DELETE /api/workspaces/:id/invitations/:invitationId",
-      "path": "/api/workspaces/ws_wk1mrnyfwl4x/invitations/inv_va5q49t622xv",
+      "path": "/api/workspaces/ws_wk1mrnyfwl4x/invitations/inv_8dim5r24mzl2",
       "status": 204,
       "body": ""
     },

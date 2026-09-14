@@ -116,8 +116,11 @@ export class WorkspacesRepo {
     if (!value) return null;
     const exact = this.getWorkspaceMember(value);
     if (exact && !exact.archivedAt && (!workspaceId || exact.workspaceId === workspaceId)) return exact;
+    const members = this.listWorkspaceMembers(workspaceId);
+    const userIdMatches = members.filter((member) => member.userId === value);
+    if (userIdMatches.length) return userIdMatches.length === 1 ? userIdMatches[0]! : null;
     return uniqueRefMatch(
-      this.listWorkspaceMembers(workspaceId),
+      members,
       value,
       (member) => member.id,
       (member) => [member.name, member.email],

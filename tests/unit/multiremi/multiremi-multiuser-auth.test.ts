@@ -177,6 +177,12 @@ describe("Multiremi multi-user auth", () => {
     // B accepts the invitation as themselves.
     const accept = await app.request(`/api/invitations/${invitation.id}/accept`, { method: "POST", ...bearer(b.token) });
     expect(accept.status).toBe(200);
+    expect(await accept.json()).toMatchObject({
+      workspace_id: "local",
+      user_id: b.userId,
+      name: "B",
+      email: "b@corp.com",
+    });
 
     // B now sees the workspace.
     const ws = await app.request("/api/workspaces", bearer(b.token));
@@ -245,12 +251,42 @@ describe("Multiremi multi-user auth", () => {
     // The creator — not the legacy "local" owner — owns the new workspace.
     expect(store.getUserRoleInWorkspace(b.userId, workspace.id)).toBe("owner");
     expect(store.getUserRoleInWorkspace("local", workspace.id)).toBeNull();
+    const workspaceAgents = store.listAgents().filter((agent) => agent.workspaceId === workspace.id);
+    expect(workspaceAgents.length).toBeGreaterThanOrEqual(1);
+    expect(workspaceAgents[0]).toMatchObject({ ownerId: b.userId, provider: "claude" });
 
     // The workspace shows up in their list and opens with the login token
     // (which was minted under the "local" workspace before this one existed).
     const list = await app.request("/api/workspaces", bearer(b.token));
     expect((await list.json()).map((w: { id: string }) => w.id)).toEqual([workspace.id]);
     expect((await app.request(`/api/workspaces/${workspace.id}`, bearer(b.token))).status).toBe(200);
+
+    // The stale login token still says "local", but headerless requests recover
+    // from the caller's real membership and stay in B's workspace.
+    const agents = await app.request("/api/agents", bearer(b.token));
+    expect(agents.status).toBe(200);
+    expect((await agents.json()).map((agent: { id: string }) => agent.id)).toEqual(
+      workspaceAgents.map((agent) => agent.id),
+    );
+
+    const issue = store.createIssue({ title: "B member assignment", workspaceId: workspace.id });
+    const assigned = await app.request(`/api/multiremi/issues/${issue.id}/assign`, {
+      method: "POST",
+      headers: jsonAuth(b.token),
+      body: JSON.stringify({ assigneeType: "member", assigneeId: b.userId }),
+    });
+    expect(assigned.status).toBe(200);
+    expect((await assigned.json()).issue).toMatchObject({
+      assigneeType: "member",
+      assigneeId: `mem_${workspace.id}_${b.userId}`,
+    });
+    const missingMember = await app.request(`/api/multiremi/issues/${issue.id}/assign`, {
+      method: "POST",
+      headers: jsonAuth(b.token),
+      body: JSON.stringify({ assigneeType: "member", assigneeId: "usr_missing" }),
+    });
+    expect(missingMember.status).toBe(404);
+    expect(await missingMember.json()).toEqual({ error: "Member not found: usr_missing" });
 
     // Membership stays the authority: the legacy local workspace is still hidden.
     expect((await app.request("/api/workspaces/local", bearer(b.token))).status).toBe(404);
@@ -292,14 +328,30 @@ describe("Multiremi multi-user auth", () => {
     const spoofedBody = await spoofed.json();
     expect((await store.verifyAccessToken(spoofedBody.token))?.userId).toBe(b.userId);
 
-    // Without any workspace context the default is still the local workspace,
-    // which stays members-only.
+    // Without any workspace context the stale local token resolves through B's
+    // sole active membership instead of falling into the local workspace.
     const noContext = await app.request("/api/tokens", {
       method: "POST",
       headers: jsonAuth(b.token),
       body: JSON.stringify({ name: "no context" }),
     });
-    expect(noContext.status).toBe(404);
+    expect(noContext.status).toBe(201);
+    expect((await store.verifyAccessToken((await noContext.json()).token))?.workspaceId).toBe(workspace.id);
+  });
+
+  it("keeps the headerless single-user local path unchanged", async () => {
+    const store = seedDeployment();
+    const localAgent = store.createAgent({ name: "Local agent", provider: "claude", workspaceId: "local" });
+    const local = await login(store, {
+      externalId: OWNER_OPEN_ID,
+      email: "local-owner@example.test",
+      name: "Local owner",
+    });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+
+    const response = await app.request("/api/agents", bearer(local.token));
+    expect(response.status).toBe(200);
+    expect((await response.json()).map((agent: { id: string }) => agent.id)).toContain(localAgent.id);
   });
 
   it("personal token settings only expose and revoke the current user's active personal tokens", async () => {
