@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { ChevronDown, Cpu, Loader2, Plus, Check } from "lucide-react";
-import { useFleetProviderModels } from "@multiremi/core/runtimes";
+import { useExecutionTargetModels } from "@multiremi/core/runtimes";
 import {
   Popover,
   PopoverTrigger,
@@ -12,18 +12,16 @@ import { Input } from "@multiremi/ui/components/ui/input";
 import { Label } from "@multiremi/ui/components/ui/label";
 import { useT } from "../../i18n";
 
-// ModelDropdown renders a searchable, creatable model picker for an agent.
-// Pool model: there is no machine to pick — the catalog is the fleet-level
-// union of what the workspace's online runtimes reported for the chosen
-// engine (provider). Free-text entry stays available so a model the fleet
-// hasn't discovered yet can still be pinned.
+// The catalog is scoped to the selected machine and Runtime type.
 export function ModelDropdown({
   wsId,
+  runtimeId,
   provider,
   value,
   onChange,
 }: {
   wsId: string;
+  runtimeId?: string | null;
   provider: string;
   value: string;
   onChange: (value: string) => void;
@@ -32,7 +30,7 @@ export function ModelDropdown({
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
 
-  const { models, isLoading, isError } = useFleetProviderModels(wsId, provider);
+  const { models, isLoading, isError } = useExecutionTargetModels(wsId, provider, runtimeId);
 
   const filtered = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -68,6 +66,7 @@ export function ModelDropdown({
       </div>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger
+          disabled={!runtimeId}
           className="flex w-full min-w-0 items-center gap-3 rounded-lg border border-border bg-background px-3 py-2.5 mt-1.5 text-left text-sm transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
         >
           <Cpu className="h-4 w-4 shrink-0 text-muted-foreground" />

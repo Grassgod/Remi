@@ -33,6 +33,8 @@ import {
   agentEnvResponse,
   currentTaskAccessToken,
   currentRequestUserId,
+  cleanString,
+  hasRequestField,
   skillCompatibilityErrorResponse,
   skillSummaryCompatibilityResponse,
   taskPublicResponse,
@@ -87,12 +89,23 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
     if (provider instanceof Response) return provider;
     const actingUserId = currentRequestUserId(c);
     const before = store.getDefaultAgent(workspaceId, provider, actingUserId);
+    const targetProvided = hasRequestField(body, "runtimeId", "runtime_id");
+    const targetRuntimeId = cleanString(body.runtimeId ?? body.runtime_id) ?? null;
+    const targetChanged = targetProvided && targetRuntimeId !== (before?.runtimeId ?? null);
+    const targetUpdate = targetChanged && before
+      ? withAgentUpdateRequestContext(c, store, before, { runtimeId: targetRuntimeId, provider })
+      : { runtimeId: targetRuntimeId };
+    if (targetUpdate instanceof Response) return targetUpdate;
     const isFirstAgent = isFirstAgentInWorkspace(store, workspaceId);
-    const agent = store.ensureDefaultAgent(provider, {
+    let agent = store.ensureDefaultAgent(provider, {
       workspaceId,
       ownerId: actingUserId,
       issueCreationRequiresProposal: currentTaskIssueCreationRestricted(c, store),
     });
+    if (targetChanged) {
+      agent = store.updateAgent(agent.id, targetUpdate);
+      if (before) publishAgentLifecycleEvent(c, store, "agent:status", agent);
+    }
     if (!before) {
       recordAgentCreatedAnalytics(c, store, agent, runtimeForAgentInput(store, body), {
         template: "default",

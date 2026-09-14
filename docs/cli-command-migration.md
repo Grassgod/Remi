@@ -4,6 +4,16 @@ This document is the user-facing migration contract for the Registry-based Remi 
 The machine-readable source of truth remains `cli-capabilities.json`; CI checks this
 table against that manifest.
 
+`remi agent create`, `remi agent template create <template>`, `remi agent update
+<agent>` and `remi agent default` accept `--runtime <runtime-id>` to select the
+execution target: a machine and Runtime type. The provider is inferred from the
+selected Runtime unless explicitly supplied; an explicit provider must match.
+Use `remi runtime list` to find the target and `remi runtime model catalog
+--runtime <runtime-id>` to inspect its available models before selecting
+`--model` and `--thinking-level`. A bound agent waits when its target is offline;
+it does not move to another machine sharing the same provider. Omitting
+`--runtime` on update preserves the existing target.
+
 ## Canonical command tree
 
 Codex Runtime connections use `remi runtime codex-profile get <runtime>` and

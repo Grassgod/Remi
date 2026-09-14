@@ -2987,17 +2987,6 @@ export function runMigrations(db: SqlDatabase): void {
       "UPDATE multiremi_issues SET completed_at = updated_at WHERE completed_at IS NULL AND status IN ('done', 'cancelled')",
     );
   }
-  // Pool scheduling: agents are logical workers and never bind to a machine.
-  // Runs every startup so legacy pins converge back into the pool.
-  db.run("UPDATE multiremi_agents SET runtime_id = NULL WHERE runtime_id IS NOT NULL");
-  // NOTE: we deliberately do NOT unpin existing queued TASKS here. This
-  // migration runs on every startup, and a task's runtime_id can legitimately
-  // be an explicit pin, a resume-safe retry pin, or a session/local_directory
-  // affinity — none distinguishable from a pre-pool agent-inherited pin at the
-  // SQL level, so a blanket unpin would keep clobbering valid pins on every
-  // boot. Pre-pool tasks keep their pin (claimable by their original machine);
-  // new tasks are already unbound by createTask. Only the agent binding above
-  // is cleared, which is the invariant the pool model needs.
   backfillDefaultIssueSessions(db);
   backfillIssueKeys(db);
   migrateLegacyGithubProjection(db, legacyGithubTables);

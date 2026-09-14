@@ -65,7 +65,7 @@
     "no_description": "暂无描述",
     "actions_aria": "行操作",
     "fallback_engine": "未知",
-    "engine_tooltip": "在任意在线的 {{engine}} 机器上运行"
+    "engine_tooltip": "Runtime 类型：{{engine}}"
   },
   "activity_tooltip": {
     "created_today": "今天创建",
@@ -150,7 +150,7 @@
     "description_placeholder": "这个智能体做什么？",
     "save": "保存",
     "cancel": "取消",
-    "prop_engine": "引擎"
+    "prop_engine": "执行目标"
   },
   "skill_attach": {
     "trigger_aria": "附加工作区 skill",
@@ -176,8 +176,6 @@
     "thinking_tooltip": "推理强度 · {{value}}",
     "thinking_clear": "跟随运行时默认",
     "thinking_clear_title": "清除覆盖并使用运行时默认的推理强度",
-    "engine_tooltip": "引擎：{{value}}",
-    "engine_hint": "任务将在该引擎的任意在线机器上运行。",
     "visibility_tooltip": "可见性 · {{value}}"
   },
   "model_dropdown": {
@@ -203,7 +201,7 @@
   },
   "edit_dialog": {
     "title": "编辑智能体",
-    "description": "修改智能体的基本信息、引擎、模型、可见范围、并发数和指令。",
+    "description": "修改智能体的基本信息、执行目标、模型、可见范围、并发数和指令。",
     "instructions_placeholder": "点击查看或编辑指令",
     "role_label": "权限角色",
     "role_normal": "普通",
@@ -254,9 +252,7 @@
       "remove_aria": "移除头像",
       "select_image_toast": "请选择图片文件。",
       "upload_failed_toast": "头像上传失败"
-    },
-    "engine_label": "引擎",
-    "engine_no_capacity": "该引擎当前没有在线机器——新任务将排队，直到有机器上线。"
+    }
   },
   "tab_body": {
     "common": {
@@ -463,5 +459,16 @@
     "all": "全部引擎",
     "agent_count_one": "{{count}} 个智能体",
     "agent_count_other": "{{count}} 个智能体"
+  },
+  "execution_target": {
+    "label": "执行目标",
+    "placeholder": "选择机器和 Runtime 类型",
+    "unavailable": "执行目标不可用，请重新选择",
+    "loading": "正在加载执行目标…",
+    "error": "无法加载执行目标",
+    "empty": "暂无可用执行目标",
+    "hint": "任务将在「{{target}}」上运行。",
+    "offline": "该执行目标已离线，任务将等待其恢复连接。",
+    "offline_badge": "离线"
   }
 }

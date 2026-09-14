@@ -65,7 +65,7 @@
     "no_description": "説明なし",
     "actions_aria": "行の操作",
     "fallback_engine": "不明",
-    "engine_tooltip": "オンラインの {{engine}} マシンで実行されます"
+    "engine_tooltip": "Runtime タイプ：{{engine}}"
   },
   "activity_tooltip": {
     "created_today": "今日作成",
@@ -150,7 +150,7 @@
     "description_placeholder": "このエージェントは何をしますか？",
     "save": "保存",
     "cancel": "キャンセル",
-    "prop_engine": "エンジン"
+    "prop_engine": "実行先"
   },
   "skill_attach": {
     "trigger_aria": "ワークスペースのスキルを追加",
@@ -176,8 +176,6 @@
     "thinking_tooltip": "推論強度 · {{value}}",
     "thinking_clear": "ランタイムのデフォルトに従う",
     "thinking_clear_title": "上書きを解除し、ランタイムのデフォルトの推論強度を使用します",
-    "engine_tooltip": "エンジン: {{value}}",
-    "engine_hint": "タスクはこのエンジンの任意のオンラインマシンで実行されます。",
     "visibility_tooltip": "公開範囲 · {{value}}"
   },
   "model_dropdown": {
@@ -203,7 +201,7 @@
   },
   "edit_dialog": {
     "title": "エージェントを編集",
-    "description": "エージェントの基本情報、エンジン、モデル、公開範囲、同時実行数、指示を更新します。",
+    "description": "エージェントの基本情報、実行先、モデル、公開範囲、同時実行数、指示を更新します。",
     "instructions_placeholder": "クリックして指示を表示・編集",
     "role_label": "権限ロール",
     "role_normal": "ノーマル",
@@ -254,9 +252,7 @@
       "remove_aria": "アバターを削除",
       "select_image_toast": "画像ファイルを選択してください。",
       "upload_failed_toast": "アバターのアップロードに失敗しました"
-    },
-    "engine_label": "エンジン",
-    "engine_no_capacity": "このエンジンにはオンラインのマシンがありません——マシンが接続されるまで新しいタスクはキューに入ります。"
+    }
   },
   "tab_body": {
     "common": {
@@ -463,5 +459,16 @@
     "all": "すべてのエンジン",
     "agent_count_one": "{{count}} 件のエージェント",
     "agent_count_other": "{{count}} 件のエージェント"
+  },
+  "execution_target": {
+    "label": "実行先",
+    "placeholder": "マシンと Runtime タイプを選択",
+    "unavailable": "実行先が利用できません。再選択してください",
+    "loading": "実行先を読み込み中…",
+    "error": "実行先を読み込めませんでした",
+    "empty": "利用可能な実行先がありません",
+    "hint": "タスクは {{target}} で実行されます。",
+    "offline": "実行先はオフラインです。タスクは再接続を待ちます。",
+    "offline_badge": "オフライン"
   }
 }

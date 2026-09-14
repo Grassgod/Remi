@@ -521,6 +521,7 @@ export class RuntimesRepo {
     options: { repoolQueuedTasks?: boolean } = {},
   ): boolean {
     if (!this.getRuntime(id)) return false;
+    if (this.ctx.db.query("SELECT id FROM multiremi_agents WHERE runtime_id = ? LIMIT 1").get(id)) return false;
     // Task claim takes the same workspace lifecycle lock as Runtime deletion,
     // so this check cannot race a queued task becoming dispatched. Queued work
     // is safely re-pooled below; work already owned by a daemon must be handled
@@ -536,10 +537,6 @@ export class RuntimesRepo {
     // PostgreSQL intentionally has no FK cascades, and SQLite tests may have
     // FK enforcement disabled. Keep every runtime reference explicit here so
     // all delete paths have identical behavior.
-    this.ctx.db.run(
-      "UPDATE multiremi_agents SET runtime_id = NULL, updated_at = ? WHERE runtime_id = ?",
-      [now, id],
-    );
     this.ctx.db.run(
       `UPDATE multiremi_issue_workspaces
        SET runtime_id = NULL,
@@ -1844,6 +1841,7 @@ export class RuntimesRepo {
    * so single-machine NULL owners still pair). The provider must also match.
    */
   runtimeCanRunAgent(runtime: MultiremiRuntime, agent: MultiremiAgent): boolean {
+    if (agent.runtimeId && agent.runtimeId !== runtime.id) return false;
     if (runtime.provider !== "any" && runtime.provider !== agent.provider) return false;
     // A task runs in its agent's workspace and the claim SQL requires the
     // runtime's workspace to match, so a runtime in a different workspace can

@@ -192,13 +192,37 @@ export function overlayGatewayModels(
   return [...byEngine.values()].sort((a, b) => a.provider.localeCompare(b.provider));
 }
 
+/** The selected machine/type is one execution target; its catalog never includes peers. */
+export function runtimeTargetModelCatalog(
+  store: MultiremiStore,
+  workspaceId: string,
+  runtime: MultiremiRuntime,
+): FleetProviderModelsResponse[] {
+  // Keep the last reported catalog while offline so saved configurations remain editable.
+  const providers = fleetModelsResponse([{ ...runtime, status: "online", visibility: "public" }], runtime.ownerId ?? "local");
+  return providers.map((entry) => {
+    const profile = store.getRuntimeExecutionProfile(runtime.id, entry.provider);
+    const models = profile
+      ? [{ id: profile.model, label: profile.model, provider: entry.provider, default: true }]
+      : overlayGatewayModels(store, workspaceId, [entry]).find((candidate) => candidate.provider === entry.provider)?.models ?? [];
+    return { ...entry, online_runtime_count: runtime.status === "online" ? 1 : 0, models };
+  });
+}
+
 /** Build the same workspace/provider catalog used by GET /api/models. */
 export function workspaceProviderModelCatalog(
   store: MultiremiStore,
   workspaceId: string,
   provider: string,
   callerOwnerId: string,
+  runtimeId?: string | null,
 ): FleetModelResponse[] {
+  if (runtimeId) {
+    const runtime = store.getRuntime(runtimeId);
+    return runtime && (runtime.workspaceId ?? "local") === workspaceId
+      ? runtimeTargetModelCatalog(store, workspaceId, runtime).find((entry) => entry.provider === provider)?.models ?? []
+      : [];
+  }
   const runtimes = store.listRuntimes().filter((runtime) => (runtime.workspaceId ?? "local") === workspaceId);
   const providers = overlayGatewayModels(store, workspaceId, fleetModelsResponse(runtimes, callerOwnerId));
   return providers.find((entry) => entry.provider === provider)?.models ?? [];
@@ -212,8 +236,13 @@ function validateAgentModelSelection(
     provider: string;
     model: string;
     thinkingLevel: string;
+    runtimeId?: string | null;
   },
 ): Response | null {
+  const profile = input.runtimeId ? store.getRuntimeExecutionProfile(input.runtimeId, input.provider) : null;
+  if (profile && input.model && input.model !== profile.model) {
+    return c.json({ error: `model "${input.model}" is not supported by the selected Runtime connection; expected "${profile.model}"` }, 400);
+  }
   // Model IDs remain an escape hatch for gateways that have not refreshed yet.
   // Capability validation is needed only when an explicit effort override is
   // requested, because that override must be proven against a concrete model.
@@ -223,6 +252,7 @@ function validateAgentModelSelection(
     input.workspaceId,
     input.provider,
     currentRequestUserId(c),
+    input.runtimeId,
   );
   const selectedModel = input.model
     ? models.find((model) => model.id === input.model)
@@ -421,6 +451,7 @@ export function withAgentRequestContext(c: Context, store: MultiremiStore, input
     provider,
     model,
     thinkingLevel,
+    runtimeId: cleanString(input.runtimeId ?? input.runtime_id),
   });
   if (invalidSelection) return invalidSelection;
   const ownerId = currentRequestUserId(c);
@@ -433,8 +464,8 @@ export function withAgentRequestContext(c: Context, store: MultiremiStore, input
     workspace_id: workspaceId,
     ownerId,
     owner_id: ownerId,
-    runtimeId: null,
-    runtime_id: null,
+    runtimeId: cleanString(input.runtimeId ?? input.runtime_id) ?? null,
+    runtime_id: cleanString(input.runtimeId ?? input.runtime_id) ?? null,
     model: model || null,
     thinkingLevel: thinkingLevel || null,
     thinking_level: thinkingLevel || null,
@@ -507,25 +538,26 @@ export function withAgentUpdateRequestContext(
     }
     applyProvider(provider);
   }
-  // Agents are pool workers now — machine binding is gone. A legacy "move to
-  // runtime" request keeps its one observable effect, switching the agent's
-  // engine, with full legacy validation (existence, workspace, the
-  // private-runtime gate). The binding itself is dropped.
-  if (hasRequestField(input, "runtimeId", "runtime_id")) {
-    const legacyRuntimeId = cleanString(input.runtimeId ?? input.runtime_id);
-    delete next.runtimeId;
-    delete next.runtime_id;
-    if (legacyRuntimeId) {
-      const provider = resolveAgentRequestProvider(c, store, targetWorkspaceId, {
-        runtime_id: legacyRuntimeId,
-        // On an "any" runtime the request's provider falls through; default it
-        // to the agent's CURRENT provider (not "claude") so a legacy move to an
-        // any-runtime doesn't silently flip a Codex agent to Claude.
-        provider: input.provider ?? current.provider,
-      });
-      if (provider instanceof Response) return provider;
-      applyProvider(provider);
-    }
+  const runtimeProvided = hasRequestField(input, "runtimeId", "runtime_id");
+  const targetRuntimeId = runtimeProvided
+    ? cleanString(input.runtimeId ?? input.runtime_id) ?? null
+    : current.runtimeId ?? null;
+  const runtimeChanged = targetRuntimeId !== (current.runtimeId ?? null);
+  const targetOwnerId = hasRequestField(input, "ownerId", "owner_id")
+    ? cleanString(input.ownerId ?? input.owner_id) ?? "local"
+    : current.ownerId ?? "local";
+  if (targetRuntimeId && (runtimeProvided || providerChanged || targetOwnerId !== (current.ownerId ?? "local") || targetWorkspaceId !== current.workspaceId)) {
+    const provider = resolveAgentRequestProvider(c, store, targetWorkspaceId, {
+      runtime_id: targetRuntimeId,
+      provider: hasRequestField(input, "provider") ? input.provider
+        : store.getRuntime(targetRuntimeId)?.provider === "any" ? current.provider : undefined,
+    }, targetOwnerId);
+    if (provider instanceof Response) return provider;
+    applyProvider(provider);
+  }
+  if (runtimeProvided) {
+    next.runtimeId = targetRuntimeId;
+    next.runtime_id = targetRuntimeId;
   }
   if (providerChanged) {
     const incompatible = store.listAgentPluginBindings(current.id).find((binding) =>
@@ -538,38 +570,40 @@ export function withAgentUpdateRequestContext(
       }, 409);
     }
   }
-  // A model id is engine-specific — carrying e.g. a claude model onto codex
-  // would hand the codex CLI an unknown model. Unless the request also picks
-  // a model, an engine switch resets it to the engine default.
+  // Changing execution targets must not carry a model or effort from another machine.
+  const targetChanged = providerChanged || runtimeChanged || targetWorkspaceId !== current.workspaceId;
   const modelProvided = hasRequestField(input, "model");
   const thinkingLevelProvided = hasRequestField(input, "thinkingLevel", "thinking_level");
   const targetModel = modelProvided
     ? agentRequestModel(input)
-    : providerChanged ? "" : cleanString(current.model) ?? "";
+    : targetChanged ? "" : cleanString(current.model) ?? "";
   const targetThinkingLevel = thinkingLevelProvided
     ? agentRequestThinkingLevel(input)
-    : cleanString(current.thinkingLevel) ?? "";
+    : targetChanged ? "" : cleanString(current.thinkingLevel) ?? "";
   if (modelProvided) {
     next.model = targetModel;
-  } else if (providerChanged) {
+  } else if (targetChanged) {
     next.model = "";
   }
-  if (thinkingLevelProvided) {
+  if (thinkingLevelProvided || targetChanged) {
     next.thinkingLevel = targetThinkingLevel;
     next.thinking_level = targetThinkingLevel;
   }
   const currentModel = cleanString(current.model) ?? "";
   const currentThinkingLevel = cleanString(current.thinkingLevel) ?? "";
-  const selectionChanged = targetWorkspaceId !== current.workspaceId ||
+  const selectionChanged = runtimeChanged || targetWorkspaceId !== current.workspaceId ||
     targetProvider !== current.provider ||
     targetModel !== currentModel ||
     targetThinkingLevel !== currentThinkingLevel;
-  if (selectionChanged) {
+  if (selectionChanged || modelProvided) {
     const invalidSelection = validateAgentModelSelection(c, store, {
       workspaceId: targetWorkspaceId,
       provider: targetProvider,
       model: targetModel,
-      thinkingLevel: targetThinkingLevel,
+      // Metadata edits may resend an unchanged selection while discovery is unavailable.
+      // Still enforce a fixed connection model, but revalidate effort only when it changes.
+      thinkingLevel: selectionChanged ? targetThinkingLevel : "",
+      runtimeId: targetRuntimeId,
     });
     if (invalidSelection) return invalidSelection;
   }
@@ -636,6 +670,11 @@ export function withAgentTemplateRequestContext(
   const provider = resolveAgentRequestProvider(c, store, workspaceId, input);
   if (provider instanceof Response) return provider;
   const model = agentRequestModel(input);
+  const invalidSelection = validateAgentModelSelection(c, store, {
+    workspaceId, provider, model, thinkingLevel: agentRequestThinkingLevel(input),
+    runtimeId: cleanString(input.runtimeId ?? input.runtime_id),
+  });
+  if (invalidSelection) return invalidSelection;
   const maxConcurrentTasks = normalizeAgentRequestMaxConcurrentTasks(c, input.maxConcurrentTasks ?? input.max_concurrent_tasks);
   if (maxConcurrentTasks instanceof Response) return maxConcurrentTasks;
   const description = normalizeAgentRequestDescription(c, input.description ?? template.description);
@@ -650,8 +689,8 @@ export function withAgentTemplateRequestContext(
     workspace_id: workspaceId,
     ownerId,
     owner_id: ownerId,
-    runtimeId: null,
-    runtime_id: null,
+    runtimeId: cleanString(input.runtimeId ?? input.runtime_id) ?? null,
+    runtime_id: cleanString(input.runtimeId ?? input.runtime_id) ?? null,
     model: model || null,
     maxConcurrentTasks,
     max_concurrent_tasks: maxConcurrentTasks,
@@ -675,17 +714,13 @@ function agentRoleRequestInput(
   return { role: input.role };
 }
 
-/**
- * Resolve the provider for an agent create request. Agents are pool workers —
- * they never bind to a runtime — but legacy clients still send runtime_id, so
- * a supplied one keeps its full validation (existence, workspace, visibility)
- * and contributes only its provider.
- */
+/** Validate the selected execution target and resolve its engine. */
 export function resolveAgentRequestProvider(
   c: Context,
   store: MultiremiStore,
   workspaceId: string,
   input: { runtimeId?: string | null; runtime_id?: string | null; provider?: unknown },
+  agentOwnerId = currentRequestUserId(c),
 ): string | Response {
   const runtimeId = cleanString(input.runtimeId ?? input.runtime_id);
   if (runtimeId) {
@@ -695,6 +730,13 @@ export function resolveAgentRequestProvider(
     }
     if (!canCurrentUserUseRuntime(c, store, runtime)) {
       return c.json({ error: "this runtime is private; only its owner or a workspace admin can create agents on it" }, 403);
+    }
+    if (runtime.visibility !== "public" && (runtime.ownerId ?? "local") !== agentOwnerId) {
+      return c.json({ error: "a private runtime can only execute agents owned by its owner" }, 403);
+    }
+    const requestedProvider = cleanString(typeof input.provider === "string" ? input.provider : null);
+    if (runtime.provider !== "any" && requestedProvider && requestedProvider !== runtime.provider) {
+      return c.json({ error: "provider does not match the selected runtime" }, 400);
     }
     // An "any" runtime contributes no provider of its own — the requested one
     // falls through and must still pass the whitelist.
@@ -730,7 +772,7 @@ export function agentRequestModel(
   return cleanString(input.model) ?? "";
 }
 
-export function agentRequestThinkingLevel(input: CreateAgentInput | UpdateAgentInput): string {
+export function agentRequestThinkingLevel(input: Pick<CreateAgentInput, "thinkingLevel" | "thinking_level">): string {
   return cleanString(input.thinkingLevel ?? input.thinking_level) ?? "";
 }
 

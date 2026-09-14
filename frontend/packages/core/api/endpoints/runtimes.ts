@@ -116,12 +116,11 @@ export class RuntimesEndpoints {
     });
   }
 
-  // Fleet-level model catalog: the union of the online runtimes' models,
-  // grouped by provider, with online-capacity counts. Powers the
-  // machine-less agent creation flow (engine toggle + model dropdown).
-  async listFleetModels(params?: { workspace_id?: string }): Promise<FleetModelsResponse> {
+  // An optional execution target scopes both models and online capacity.
+  async listFleetModels(params?: { workspace_id?: string; runtime_id?: string }): Promise<FleetModelsResponse> {
     const search = new URLSearchParams();
     if (params?.workspace_id) search.set("workspace_id", params.workspace_id);
+    if (params?.runtime_id) search.set("runtime_id", params.runtime_id);
     const query = search.toString();
     const raw = await this.http.fetch<unknown>(`/api/models${query ? `?${query}` : ""}`);
     return parseWithFallback(raw, FleetModelsResponseSchema, EMPTY_FLEET_MODELS, {

@@ -21,6 +21,8 @@ import {
   loadRuntimeForCurrentOwner,
   loadRuntimeForCurrentUser,
   overlayGatewayModels,
+  runtimeTargetModelCatalog,
+  canCurrentUserUseRuntime,
   parseExpectedActiveAgentIds,
   promoteLegacyCliPatForDaemonHeartbeat,
   promoteLegacyCliPatForDaemonRegistration,
@@ -600,8 +602,16 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
   const fleetModelsHandler = (c: Context) => {
     const loaded = listRuntimesForCurrentUser(c, store);
     if (loaded instanceof Response) return loaded;
-    const providers = fleetModelsResponse(loaded.runtimes, currentRequestUserId(c));
     const workspaceId = loaded.workspaceId;
+    const runtimeId = cleanString(c.req.query("runtime_id") ?? c.req.query("runtimeId"));
+    if (runtimeId) {
+      const runtime = loaded.runtimes.find((candidate) => candidate.id === runtimeId);
+      if (!runtime) return c.json({ error: "invalid runtime_id" }, 400);
+      if (!canCurrentUserUseRuntime(c, store, runtime)) return c.json({ error: "runtime is private" }, 403);
+      refreshStaleGatewayModels(store, workspaceId);
+      return c.json({ providers: runtimeTargetModelCatalog(store, workspaceId, runtime) });
+    }
+    const providers = fleetModelsResponse(loaded.runtimes, currentRequestUserId(c));
     refreshStaleGatewayModels(store, workspaceId);
     return c.json({ providers: overlayGatewayModels(store, workspaceId, providers) });
   };

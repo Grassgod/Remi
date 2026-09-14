@@ -9,7 +9,7 @@ import { SkillMultiSelect } from "./skill-multi-select";
 import { AvatarPicker } from "./avatar-picker";
 import { api } from "@multiremi/core/api";
 import { useWorkspaceId } from "@multiremi/core/hooks";
-import { useFleetProviderModels } from "@multiremi/core/runtimes";
+import { useExecutionTargetModels } from "@multiremi/core/runtimes";
 import { workspaceKeys } from "@multiremi/core/workspace/queries";
 import type {
   Agent,
@@ -30,7 +30,7 @@ import { Label } from "@multiremi/ui/components/ui/label";
 import { toast } from "sonner";
 import { AGENT_DESCRIPTION_MAX_LENGTH } from "@multiremi/core/agents";
 import { CharCounter } from "./char-counter";
-import { ENGINES, EngineSelect } from "./engine-select";
+import { ExecutionTargetSelect, type ExecutionTarget } from "./execution-target-select";
 import { useT } from "../../i18n";
 import { ThinkingField } from "./thinking-field";
 import {
@@ -89,25 +89,18 @@ export function CreateAgentDialog({
   );
   const [creating, setCreating] = useState(false);
 
-  // Engine (provider). There is no machine to pick — the pool schedules
-  // work onto any online runtime of this provider. Duplicate mode inherits
-  // the source agent's engine; old backends may omit it, so fall back to
-  // the default engine.
-  const [provider, setProvider] = useState<string>(
-    template?.provider && (ENGINES as readonly string[]).includes(template.provider)
-      ? template.provider
-      : "claude",
-  );
-  const fleet = useFleetProviderModels(wsId ?? "", provider);
+  const [provider, setProvider] = useState(template?.provider ?? "");
+  const [runtimeId, setRuntimeId] = useState(template?.runtime_id ?? "");
+  const targetModels = useExecutionTargetModels(wsId ?? "", provider, runtimeId);
   const thinkingLevels = useMemo(
-    () => getModelThinkingLevels(fleet.models, model),
-    [fleet.models, model],
+    () => getModelThinkingLevels(targetModels.models, model),
+    [targetModels.models, model],
   );
 
-  const switchEngine = (next: string) => {
-    setProvider(next);
-    // The model catalog is per-engine; a claude model id makes no sense on
-    // codex. Reset to "engine default" on switch.
+  const switchTarget = (next: ExecutionTarget) => {
+    setProvider(next.provider);
+    setRuntimeId(next.runtimeId);
+    // Models and reasoning options belong to the selected execution target.
     setModel("");
     setThinkingLevel("");
   };
@@ -115,7 +108,7 @@ export function CreateAgentDialog({
   const switchModel = (next: string) => {
     if (
       next !== model &&
-      !supportsThinkingLevel(fleet.models, next, thinkingLevel)
+      !supportsThinkingLevel(targetModels.models, next, thinkingLevel)
     ) {
       setThinkingLevel("");
     }
@@ -153,7 +146,7 @@ export function CreateAgentDialog({
   };
 
   const handleSubmit = async () => {
-    if (!name.trim()) return;
+    if (!name.trim() || !runtimeId || !provider) return;
     setCreating(true);
 
     try {
@@ -162,6 +155,7 @@ export function CreateAgentDialog({
         name: name.trim(),
         description: description.trim(),
         provider,
+        runtime_id: runtimeId,
         visibility,
         model: model.trim() || undefined,
         instructions: trimmedInstructions || undefined,
@@ -334,16 +328,14 @@ export function CreateAgentDialog({
               </div>
             </div>
 
-            {/* Engine: the only "where does it run"-adjacent choice left.
-                Machines are gone from this flow — the pool schedules work
-                onto any online runtime of the chosen engine. */}
-            <EngineSelect
+            <ExecutionTargetSelect
               wsId={wsId ?? ""}
-              value={provider}
-              onChange={switchEngine}
+              value={{ runtimeId, provider }}
+              onChange={switchTarget}
             />
 
             <ModelDropdown
+              runtimeId={runtimeId}
               wsId={wsId ?? ""}
               provider={provider}
               value={model}
@@ -386,7 +378,7 @@ export function CreateAgentDialog({
           <Button variant="ghost" onClick={onClose}>
             {t(($) => $.create_dialog.cancel)}
           </Button>
-          <Button onClick={handleSubmit} disabled={creating || !name.trim()}>
+          <Button onClick={handleSubmit} disabled={creating || !name.trim() || !runtimeId || !provider}>
             {creating ? t(($) => $.create_dialog.creating) : t(($) => $.create_dialog.create)}
           </Button>
         </div>

@@ -27,6 +27,22 @@ afterEach(() => {
 });
 
 describe("operations CLI contracts", () => {
+  it("filters the model catalog by the selected runtime", async () => {
+    useCliEnv();
+    const spec = specById("runtime.model.catalog");
+    const targets: Array<string | null> = [];
+    globalThis.fetch = capabilityFetch(spec.id, (request) => {
+      const url = new URL(request.url);
+      expect(request.method).toBe("GET");
+      expect(url.pathname).toBe("/api/models");
+      targets.push(url.searchParams.get("runtime_id"));
+      return Response.json({ providers: [] });
+    });
+    await capture(() => registryFor([spec]).execute(["runtime", "model", "catalog", "--runtime", "rt_codex", "--json"]));
+    await capture(() => registryFor([spec]).execute(["runtime", "model", "catalog", "--json"]));
+    expect(targets).toEqual(["rt_codex", null]);
+  });
+
   it("sets a Runtime Codex connection from a JSON file and clears it with JSON input", async () => {
     useCliEnv();
     const spec = specById("runtime.codex-profile.set");

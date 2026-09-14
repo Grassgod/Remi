@@ -42,7 +42,7 @@ export class AgentsSkillsRepo {
     if (!isAgentRole(role)) throw new Error("Invalid agent role");
     return this.ctx.db.transaction(() => {
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
-      if (runtimeId) this.assertRuntimeBinding(runtimeId, workspaceId);
+      if (runtimeId) this.assertRuntimeBinding(runtimeId, workspaceId, input.provider, ownerId);
       this.ctx.db.run(
         `INSERT INTO multiremi_agents (
           id, workspace_id, name, description, avatar_url, provider, owner_id, visibility, runtime_id, instructions, skills, executable, model,
@@ -141,7 +141,11 @@ export class AgentsSkillsRepo {
     const runtimeId = hasAnyField(input, "runtimeId", "runtime_id")
       ? cleanOptionalString(input.runtimeId ?? input.runtime_id)
       : current.runtimeId;
-    if (runtimeId) this.assertRuntimeBinding(runtimeId, workspaceId);
+    const bindingChanged = runtimeId !== current.runtimeId
+      || workspaceId !== current.workspaceId
+      || ownerId !== (current.ownerId ?? "local")
+      || (input.provider ?? current.provider) !== current.provider;
+    if (runtimeId && bindingChanged) this.assertRuntimeBinding(runtimeId, workspaceId, input.provider ?? current.provider, ownerId);
     if (input.provider !== undefined && input.provider !== current.provider) {
       this.ctx.agentPlugins().assertAgentPluginProviderCompatible(id, input.provider);
     }
@@ -215,7 +219,7 @@ export class AgentsSkillsRepo {
       ],
     );
     const updated = this.getAgent(id)!;
-    // Changing a scheduling-relevant field (engine, owner, or workspace)
+    // Changing a scheduling-relevant field (target, engine, owner, or workspace)
     // strands the agent's already-queued tasks: a task pinned to a runtime
     // that no longer matches the agent (provider/owner) can't be claimed, and
     // a workspace change leaves the task's workspace stale versus the claim
@@ -223,15 +227,16 @@ export class AgentsSkillsRepo {
     const providerChanged = input.provider !== undefined && input.provider !== current.provider;
     const ownerChanged = (updated.ownerId ?? "local") !== (current.ownerId ?? "local");
     const workspaceChanged = updated.workspaceId !== current.workspaceId;
-    if (providerChanged || ownerChanged || workspaceChanged) {
-      this.rescheduleAgentQueuedTasks(updated, { workspaceChanged, providerChanged });
+    const runtimeChanged = updated.runtimeId !== current.runtimeId;
+    if (providerChanged || ownerChanged || workspaceChanged || runtimeChanged) {
+      this.rescheduleAgentQueuedTasks(updated, { workspaceChanged, executionTargetChanged: providerChanged || runtimeChanged });
     }
     return updated;
   }
 
   private rescheduleAgentQueuedTasks(
     agent: MultiremiAgent,
-    opts: { workspaceChanged: boolean; providerChanged: boolean },
+    opts: { workspaceChanged: boolean; executionTargetChanged: boolean },
   ): void {
     const now = nowIso();
     // A workspace move makes the agent's in-flight/queued tasks orphans: they
@@ -250,10 +255,10 @@ export class AgentsSkillsRepo {
       for (const row of active) this.ctx.tasks().cancelTask(String(row.id));
       return;
     }
-    if (opts.providerChanged) {
+    if (opts.executionTargetChanged) {
       // A frozen retry belongs to the provider and Plugin snapshot captured by
       // its parent execution. It cannot be safely re-homed to a different
-      // provider using the Agent's now-mutated executable/config. Cancel work
+      // target using the Agent's now-mutated executable/config. Cancel work
       // that has not started; an explicit rerun will resolve current settings.
       const frozen = this.ctx.db.query(
         `SELECT id FROM multiremi_tasks
@@ -329,10 +334,16 @@ export class AgentsSkillsRepo {
     return this.getAgent(id)!;
   }
 
-  private assertRuntimeBinding(runtimeId: string, workspaceId: string): void {
+  private assertRuntimeBinding(runtimeId: string, workspaceId: string, provider: string, ownerId: string): void {
     const runtime = this.ctx.runtimes().getRuntime(runtimeId);
     if (!runtime || (runtime.workspaceId ?? "local") !== workspaceId) {
       throw new Error(`Runtime not found: ${runtimeId}`);
+    }
+    if (runtime.provider !== "any" && runtime.provider !== provider) {
+      throw new Error("Runtime provider does not match Agent provider");
+    }
+    if (runtime.visibility !== "public" && (runtime.ownerId ?? "local") !== ownerId) {
+      throw new Error("Private Runtime must belong to the Agent owner");
     }
   }
 

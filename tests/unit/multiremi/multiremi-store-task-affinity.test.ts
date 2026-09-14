@@ -466,13 +466,13 @@ describe("Multiremi store — local_directory affinity, retries, and agent re-ho
     expect(store.getAgent(agent.id)?.runtimeId).toBeNull();
   });
 
-  it("unpins legacy agent runtime bindings at startup", () => {
+  it("preserves selected agent execution targets at startup", () => {
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_legacy_pin", name: "legacy pin", provider: "codex" });
     const agent = store.createAgent({ name: "Legacy pinned", provider: "codex", runtimeId: runtime.id });
     expect(store.getAgent(agent.id)?.runtimeId).toBe(runtime.id);
     const reopened = new MultiremiStore(db!);
-    expect(reopened.getAgent(agent.id)?.runtimeId).toBeNull();
+    expect(reopened.getAgent(agent.id)?.runtimeId).toBe(runtime.id);
   });
 
   it("keeps follow-up chat messages on the machine that holds the provider session", () => {

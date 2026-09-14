@@ -30,7 +30,7 @@ vi.mock("./tabs/env-tab", () => ({
   EnvTab: () => <div>env-tab</div>,
 }));
 vi.mock("./tabs/custom-args-tab", () => ({
-  CustomArgsTab: () => <div>custom-args-tab</div>,
+  CustomArgsTab: ({ runtimeDevice }: { runtimeDevice?: AgentRuntime }) => <div>custom-args-tab: {runtimeDevice?.launch_header ?? "no target"}</div>,
 }));
 vi.mock("./tabs/mcp-config-tab", () => ({
   McpConfigTab: () => <div>mcp-config-tab</div>,
@@ -172,6 +172,14 @@ describe("AgentOverviewPane tab semantics", () => {
     const panel = screen.getByRole("tabpanel");
     expect(panel).toHaveTextContent("activity-tab");
     expect(activity.getAttribute("aria-controls")).toBe(panel.id);
+  });
+
+  it("uses launch metadata from the bound machine instead of the first same-type runtime", async () => {
+    const user = userEvent.setup();
+    renderPane([{ ...makeRuntime("claude"), id: "other", launch_header: "WRONG MACHINE" }, { ...makeRuntime("claude"), launch_header: "BOUND MACHINE" }]);
+    await user.click(screen.getByRole("tab", { name: "Custom Args" }));
+    expect(screen.getByRole("tabpanel")).toHaveTextContent("BOUND MACHINE");
+    expect(screen.getByRole("tabpanel")).not.toHaveTextContent("WRONG MACHINE");
   });
 
   it("switches the rendered panel when another tab is activated", async () => {

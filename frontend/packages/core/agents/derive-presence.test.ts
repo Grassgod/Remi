@@ -6,6 +6,7 @@ import {
   deriveAgentPresenceDetail,
   deriveWorkload,
   deriveWorkloadDetail,
+  resolveAgentRuntimes,
 } from "./derive-presence";
 
 function makeAgent(overrides: Partial<Agent> = {}): Agent {
@@ -59,6 +60,25 @@ function makeRuntime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
 // runtime fixture's last_seen_at (10s before NOW) so an "online" runtime
 // looks fresh by default.
 const NOW = new Date("2026-04-27T12:00:00Z").getTime();
+
+describe("execution target availability", () => {
+  it("does not borrow another machine's online status", () => {
+    const agent = makeAgent({ provider: "claude" });
+    const runtimes = [
+      makeRuntime({ status: "offline", last_seen_at: "2026-04-27T11:00:00Z" }),
+      makeRuntime({ id: "rt-2", daemon_id: "daemon-2" }),
+    ];
+    expect(deriveAgentAvailability(resolveAgentRuntimes(agent, runtimes), NOW)).toBe("offline");
+    expect(resolveAgentRuntimes(agent, [runtimes[1]!])).toEqual([]);
+  });
+
+  it("retains provider and ownership checks for a selected target", () => {
+    const agent = makeAgent({ provider: "codex", owner_id: "alice" });
+    expect(resolveAgentRuntimes(agent, [makeRuntime({ owner_id: "alice" })])).toEqual([]);
+    expect(resolveAgentRuntimes(agent, [makeRuntime({ provider: "codex", owner_id: "bob" })])).toEqual([]);
+    expect(resolveAgentRuntimes(agent, [makeRuntime({ provider: "any", visibility: "public" })])).toHaveLength(1);
+  });
+});
 
 function makeTask(overrides: Partial<AgentTask> = {}): AgentTask {
   return {
@@ -431,10 +451,8 @@ describe("buildPresenceMap", () => {
   });
 
   it("resolves pool agents by provider: any matching online runtime lights the dot", () => {
-    // Pool model: agents carry a provider and no binding. The stale
-    // runtime_id ("", or pointing at a dead machine) must not matter as
-    // long as some runtime of the same provider — or an "any" runtime —
-    // is online.
+    // Existing unbound agents retain provider-pool availability until a
+    // target is selected; a populated runtime_id is always authoritative.
     const pooled = makeAgent({ id: "pooled", runtime_id: "", provider: "claude" });
     const mismatched = makeAgent({ id: "mismatched", runtime_id: "", provider: "codex" });
     const viaAny = makeAgent({ id: "via-any", runtime_id: "", provider: "hermes" });

@@ -10,7 +10,7 @@ import type {
 } from "@multiremi/core/types";
 import { AGENT_DESCRIPTION_MAX_LENGTH } from "@multiremi/core/agents";
 import { useWorkspaceId } from "@multiremi/core/hooks";
-import { useFleetProviderModels } from "@multiremi/core/runtimes";
+import { useExecutionTargetModels } from "@multiremi/core/runtimes";
 import { isImeComposing } from "@multiremi/core/utils";
 import { Button } from "@multiremi/ui/components/ui/button";
 import {
@@ -33,7 +33,7 @@ import {
 import { useT } from "../../i18n";
 import { AvatarPicker } from "./avatar-picker";
 import { CharCounter } from "./char-counter";
-import { EngineSelect } from "./engine-select";
+import { ExecutionTargetSelect, type ExecutionTarget } from "./execution-target-select";
 import { InstructionsEditor } from "./instructions-editor";
 import { ModelDropdown } from "./model-dropdown";
 import { ThinkingField } from "./thinking-field";
@@ -69,7 +69,8 @@ export function EditAgentDialog({
   const [avatarUrl, setAvatarUrl] = useState<string | null>(
     agent.avatar_url ?? null,
   );
-  const [provider, setProvider] = useState(agent.provider || "claude");
+  const [runtimeId, setRuntimeId] = useState(agent.runtime_id ?? "");
+  const [provider, setProvider] = useState(agent.provider ?? "");
   const [model, setModel] = useState(agent.model ?? "");
   const [thinkingLevel, setThinkingLevel] = useState(
     agent.thinking_level ?? "",
@@ -84,10 +85,10 @@ export function EditAgentDialog({
   const [role, setRole] = useState<AgentRole>(agent.role ?? "normal");
   const [saving, setSaving] = useState(false);
 
-  const fleet = useFleetProviderModels(wsId ?? "", provider);
+  const targetModels = useExecutionTargetModels(wsId ?? "", provider, runtimeId);
   const thinkingLevels = useMemo(
-    () => getModelThinkingLevels(fleet.models, model),
-    [fleet.models, model],
+    () => getModelThinkingLevels(targetModels.models, model),
+    [targetModels.models, model],
   );
 
   const concurrency = Number(maxConcurrency);
@@ -100,8 +101,9 @@ export function EditAgentDialog({
     [...description].length <= AGENT_DESCRIPTION_MAX_LENGTH &&
     validConcurrency;
 
-  const switchEngine = (next: string) => {
-    setProvider(next);
+  const switchTarget = (next: ExecutionTarget) => {
+    setProvider(next.provider);
+    setRuntimeId(next.runtimeId);
     setModel("");
     setThinkingLevel("");
   };
@@ -109,7 +111,7 @@ export function EditAgentDialog({
   const switchModel = (next: string) => {
     if (
       next !== model &&
-      !supportsThinkingLevel(fleet.models, next, thinkingLevel)
+      !supportsThinkingLevel(targetModels.models, next, thinkingLevel)
     ) {
       setThinkingLevel("");
     }
@@ -124,7 +126,8 @@ export function EditAgentDialog({
         name: name.trim(),
         description: description.trim(),
         avatar_url: avatarUrl ?? "",
-        provider,
+        ...(provider ? { provider } : {}),
+        ...(runtimeId !== (agent.runtime_id ?? "") ? { runtime_id: runtimeId } : {}),
         model: model.trim(),
         thinking_level: thinkingLevel,
         visibility,
@@ -248,13 +251,15 @@ export function EditAgentDialog({
               </div>
             )}
 
-            <EngineSelect
+            <ExecutionTargetSelect
+              ownerId={agent.owner_id}
               wsId={wsId ?? ""}
-              value={provider}
-              onChange={switchEngine}
+              value={{ runtimeId, provider }}
+              onChange={switchTarget}
             />
 
             <ModelDropdown
+              runtimeId={runtimeId}
               wsId={wsId ?? ""}
               provider={provider}
               value={model}

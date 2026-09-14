@@ -390,10 +390,9 @@ export class TasksRepo {
       : true;
     let runtimeId = resolveOptionalStringField(input, "runtimeId", "runtime_id", agent.runtimeId);
     if (runtimeId && !this.ctx.runtimes().getRuntime(runtimeId)) throw new Error(`Runtime not found: ${runtimeId}`);
-    // Pool scheduling: tasks stay unbound so any provider-matching runtime can
-    // claim them. Two machine-local realities still force a stamp: a promoted
-    // provider session lives on the machine that ran it, and a local_directory
-    // project resource only exists on its daemon.
+    // Inherit the selected execution target. Existing unbound agents retain
+    // provider-pool scheduling; sessions and local directories may further
+    // constrain placement but cannot bypass the Agent's target at claim time.
     //
     // resetProviderSession (a resume-unsafe chat retry) means the caller has
     // deliberately given up the provider session — passing null runtime/
@@ -1026,7 +1025,7 @@ export class TasksRepo {
       [task.agentId],
     );
     const currentAgent = this.ctx.agents().getAgent(task.agentId);
-    if (!currentAgent || currentAgent.archivedAt) {
+    if (!currentAgent || currentAgent.archivedAt || !this.ctx.runtimes().runtimeCanRunAgent(runtime, currentAgent)) {
       throw new AgentPluginReadinessChangedError("claimed Agent is no longer executable");
     }
     const provider = runtime.provider !== "any" ? runtime.provider : currentAgent.provider;

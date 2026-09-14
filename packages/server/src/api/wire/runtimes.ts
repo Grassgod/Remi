@@ -55,7 +55,7 @@ export function runtimeCompatibilityResponse(runtime: MultiremiRuntime): Record<
 
 /**
  * Union of the online runtimes' model catalogs, grouped by provider — the
- * fleet-level catalog behind machine-less agent creation. A bucket exists for
+ * workspace catalog for unbound agents and CLI discovery. A bucket exists for
  * every provider that has a runtime at all (even offline, count 0) so the UI
  * can still offer the engine with a capacity hint.
  *

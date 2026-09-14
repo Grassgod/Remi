@@ -210,10 +210,8 @@ export const EMPTY_RUNTIME_PROVISION_RESPONSE: RuntimeProvisionResponse = {
   provision: EMPTY_RUNTIME_PROVISION,
 };
 
-// Fleet model catalog (`GET /api/models`) — feeds the machine-less create
-// flow's engine toggle + model dropdown. Lenient by design: an unknown
-// provider or a malformed model row must degrade to "engine with no
-// catalog", never crash the create dialog.
+// Workspace or execution-target model catalog (`GET /api/models`).
+// Invalid capability metadata must not become selectable effort values.
 const FleetProviderModelsSchema = z.object({
   provider: z.string(),
   online_runtime_count: z.number().default(0),
@@ -223,6 +221,14 @@ const FleetProviderModelsSchema = z.object({
       label: z.string().default(""),
       provider: z.string().optional(),
       default: z.boolean().optional(),
+      thinking: z.object({
+        supported_levels: z.array(z.object({
+          value: z.string(),
+          label: z.string(),
+          description: z.string().optional(),
+        })),
+        default_level: z.string().optional(),
+      }).optional(),
     }).loose(),
   ).default([]),
 }).loose();

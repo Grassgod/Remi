@@ -12,7 +12,7 @@ import { useAuthStore } from "@multiremi/core/auth";
 import { larkInstallationsOptions } from "@multiremi/core/lark";
 import { memberListOptions } from "@multiremi/core/workspace/queries";
 import { useWorkspaceId } from "@multiremi/core/hooks";
-import { useFleetProviderModels } from "@multiremi/core/runtimes";
+import { useExecutionTargetModels } from "@multiremi/core/runtimes";
 import { isImeComposing } from "@multiremi/core/utils";
 import { useTimeAgo } from "../../i18n";
 import { Button } from "@multiremi/ui/components/ui/button";
@@ -38,7 +38,7 @@ import { availabilityConfig } from "../presence";
 import { CharCounter } from "./char-counter";
 import { useT } from "../../i18n";
 import { ConcurrencyPicker } from "./inspector/concurrency-picker";
-import { EnginePicker } from "./inspector/engine-picker";
+import { ExecutionTargetSelect, type ExecutionTarget } from "./execution-target-select";
 import { ModelPicker } from "./inspector/model-picker";
 import { SkillAttach } from "./inspector/skill-attach";
 import { ThinkingPropRow } from "./inspector/thinking-prop-row";
@@ -89,11 +89,11 @@ export function AgentDetailInspector({
   const timeAgo = useTimeAgo();
   const wsId = useWorkspaceId();
   const update = (data: Record<string, unknown>) => onUpdate(agent.id, data);
-  const provider = agent.provider || "claude";
-  const { models } = useFleetProviderModels(wsId ?? "", provider);
+  const provider = agent.provider ?? "";
+  const { models } = useExecutionTargetModels(wsId ?? "", provider, agent.runtime_id);
   const showIntegrations = useHasIntegrations(agent.id);
-  const switchEngine = (next: string) =>
-    update({ provider: next, model: "", thinking_level: "" });
+  const switchTarget = (next: ExecutionTarget) =>
+    update({ runtime_id: next.runtimeId, provider: next.provider, model: "", thinking_level: "" });
   const switchModel = (next: string) => {
     const data: Record<string, unknown> = { model: next };
     if (
@@ -123,14 +123,18 @@ export function AgentDetailInspector({
           the value is visible but not interactive. */}
       <Section label={t(($) => $.inspector.section_properties)}>
         <PropRow label={t(($) => $.inspector.prop_engine)} interactive={false}>
-          <EnginePicker
-            value={provider}
+          <ExecutionTargetSelect
+            ownerId={agent.owner_id}
+            compact
+            wsId={wsId ?? ""}
+            value={{ runtimeId: agent.runtime_id ?? "", provider }}
             canEdit={canEdit}
-            onChange={switchEngine}
+            onChange={switchTarget}
           />
         </PropRow>
         <PropRow label={t(($) => $.inspector.prop_model)} interactive={false}>
           <ModelPicker
+            runtimeId={agent.runtime_id}
             wsId={wsId ?? ""}
             provider={provider}
             value={agent.model ?? ""}
@@ -139,6 +143,7 @@ export function AgentDetailInspector({
           />
         </PropRow>
         <ThinkingPropRow
+          runtimeId={agent.runtime_id}
           wsId={wsId ?? ""}
           provider={provider}
           model={agent.model ?? ""}
