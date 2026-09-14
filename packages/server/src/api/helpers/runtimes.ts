@@ -9,6 +9,7 @@ import {
 import { RuntimeRegistrationIdentityConflictError } from "@multiremi/store/repos/runtimes-repo.js";
 import {
   MULTIREMI_DAEMON_PROVIDERS,
+  authenticatedRequestUserId,
   cleanString,
   currentAccessToken,
   currentRequestUserId,
@@ -19,6 +20,7 @@ import {
 } from "../wire/index.js";
 import type { WorkspaceRepoData } from "../wire/index.js";
 import type {
+  MultiremiCloudRuntimeNode,
   MultiremiRuntime,
   ReportRuntimeLocalSkillImportInput,
   ReportRuntimeLocalSkillListInput,
@@ -549,9 +551,35 @@ export function mergeLegacyDaemonRuntimes(
   }
 }
 
-export function cloudRuntimeStatusResponse(c: Context, store: MultiremiStore, body: any, status: string) {
+export function cloudRuntimeNodeOwnerFilter(context: Context, store: MultiremiStore): string | undefined {
+  const token = currentAccessToken(context);
+  const userId = authenticatedRequestUserId(context);
+  const humanPat = token?.type === "pat" && userId && (userId !== "local" || token.purpose === "session");
+  if (userId && (userId !== "local" || humanPat || !token)) {
+    const role = currentWorkspaceRole(context, store, "local");
+    if (role !== "owner" && role !== "admin") return userId;
+  }
+  return undefined;
+}
+
+export function loadCloudRuntimeNode(
+  context: Context,
+  store: MultiremiStore,
+  id: string,
+): MultiremiCloudRuntimeNode | Response {
+  const node = id ? store.getCloudRuntimeNode(id) : null;
+  const ownerId = cloudRuntimeNodeOwnerFilter(context, store);
+  if (!node || (ownerId && node.ownerId !== ownerId)) {
+    return context.json({ error: "cloud runtime node not found" }, 404);
+  }
+  return node;
+}
+
+export function cloudRuntimeStatusResponse(context: Context, store: MultiremiStore, body: any, status: string) {
   const id = body.id ?? body.node_id ?? body.nodeId ?? "";
-  const node = id ? store.setCloudRuntimeNodeStatus(id, status) : null;
-  if (!node) return c.json({ error: "cloud runtime node not found" }, 404);
-  return c.json(node);
+  const loaded = loadCloudRuntimeNode(context, store, id);
+  if (loaded instanceof Response) return loaded;
+  const node = store.setCloudRuntimeNodeStatus(loaded.id, status);
+  if (!node) return context.json({ error: "cloud runtime node not found" }, 404);
+  return context.json(node);
 }
