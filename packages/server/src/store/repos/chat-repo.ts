@@ -655,15 +655,17 @@ export class ChatRepo {
   }
 
   private ensureDefaultAgentIssueUpdatesChannel(session: MultiremiChatSession): void {
-    // API creators are request user ids; Feishu bot creators are external actor
-    // ids and have no member link. Neither source supplies a member row id.
-    const member = this.ctx.workspaces().findWorkspaceMemberForUser(session.creatorId, session.workspaceId);
+    // API creators are user ids, while Issue topics inherit createdBy and may
+    // carry a member row id. External Feishu actors have no member link.
+    const member = session.creatorId
+      ? this.ctx.workspaces().getWorkspaceMember(session.creatorId) ?? this.ctx.workspaces().findWorkspaceMemberForUser(session.creatorId, session.workspaceId)
+      : null;
     this.ctx.notificationChannels().upsertAgentChatNotificationChannel({
       workspaceId: session.workspaceId,
       chatSessionId: session.id,
       name: `${session.title} Issue updates`,
       enabled: true,
-      memberId: member?.id ?? null,
+      memberId: member && member.workspaceId === session.workspaceId && !member.archivedAt ? member.id : null,
       createdBy: session.creatorId,
     });
   }
