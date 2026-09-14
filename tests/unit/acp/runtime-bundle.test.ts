@@ -46,6 +46,28 @@ test("a download failure leaves the existing bundle untouched and removes stagin
   expect(readdirSync(join(root, "acp", "bundles"))).toEqual([f.destination.split("/").at(-1)!]);
 });
 
+test("an installation in another live process is not replaced", () => {
+  const f = fixture();
+  const lock = join(root, "acp", "bundles", ".install-codex.lock");
+  mkdirSync(lock);
+  writeFileSync(join(lock, "pid"), String(process.pid));
+  expect(() => installRuntimeBundle("codex", f.tools, () => {})).toThrow("already in progress");
+  expect(existsSync(join(f.destination, "previous-install"))).toBe(true);
+  expect(existsSync(lock)).toBe(true);
+});
+
+test("a lock left by a terminated installer does not block the next update", async () => {
+  const f = fixture();
+  const child = Bun.spawn([node, "-e", ""], { stdout: "ignore", stderr: "ignore" });
+  await child.exited;
+  const lock = join(root, "acp", "bundles", ".install-codex.lock");
+  mkdirSync(lock);
+  writeFileSync(join(lock, "pid"), String(child.pid));
+  installRuntimeBundle("codex", f.tools, () => {});
+  expect(existsSync(lock)).toBe(false);
+  expect(verifyRuntimeExecutable("codex", runtimeBundleBridge("codex"), node)).toBe(RUNTIME_PIN.codex.executableVersion);
+});
+
 test("an SDK with the right package version but a wrong executable never activates", () => {
   const f = fixture({ executableVersion: "0.147.0" });
   expect(() => installRuntimeBundle("codex", f.tools, () => {})).toThrow("executable version mismatch");

@@ -34,6 +34,7 @@ import {
 import { bootFeishuChannel, type FeishuChannelHandle } from "./agent.js";
 import { FeishuConciergeError, type FeishuConciergeHost } from "@multiremi/worker/feishu-concierge.js";
 import { ensureAcpBridges, type ProvisionProvider } from "@acp/provision.js";
+import { RuntimeDependencyUpdater, hasCustomRuntimeOverride } from "@multiremi/worker/runtime-dependency-updater.js";
 import { IssueWorkspaceLifecycleLocker } from "@daemon/agent-runtime/workspace/lifecycle-lock.js";
 import {
   acquireWorkspaceSupervisorLease,
@@ -381,6 +382,10 @@ export function instantiateCoResidentWorkerDaemons(
     ? new MultiremiCliUpdateCoordinator()
     : null;
   const readyProviders = new Set<number>();
+  const automaticProviders = [...new Set(options
+    .filter((o) => !o.providerFactory && !o.once && (o.provider === "claude" || o.provider === "codex") && !hasCustomRuntimeOverride(o.provider))
+    .map((o) => o.provider as ProvisionProvider))];
+  const runtimeDependencyUpdater = automaticProviders.length ? new RuntimeDependencyUpdater(automaticProviders) : null;
   const gcLeaderIndex = options.findIndex((daemonOptions) => daemonOptions.gcEnabled !== false);
   return options.map((daemonOptions, index) => {
     const extraReadyCheck = daemonOptions.supervisorReady;
@@ -389,6 +394,7 @@ export function instantiateCoResidentWorkerDaemons(
       ...daemonOptions,
       issueWorkspaceLifecycleLocker,
       ...(cliUpdateCoordinator ? { cliUpdateCoordinator } : {}),
+      runtimeDependencyUpdater: daemonOptions.runtimeDependencyUpdater ?? runtimeDependencyUpdater,
       // Provider lanes share one Issue workspace tree. A single lane owns its
       // periodic GC so Claude and Codex cannot duplicate the same archive and
       // repository maintenance pass inside one Bun process.

@@ -4,7 +4,7 @@
  * Users should only need the agents they actually use — `claude` and `codex`.
  * The ACP bridges (`claude-agent-acp`, `codex-acp`) that the daemon spawns are
  * an implementation detail, so `remi` provisions them itself: for each provider
- * whose CLI/bridge is present, prepare its release-pinned ACP + SDK bundle in
+ * whose CLI/bridge is present, prepare its selected ACP + SDK bundle in
  * `~/.remi/acp/bundles`. If `node` is missing, download an official build into
  * `~/.remi/node` first. Startup degrades gracefully per provider. Installer
  * preflight is strict: a failure stops the upgrade before replacing the CLI.
@@ -14,8 +14,8 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { BRIDGE_PIN, RUNTIME_PIN } from "./runtime-versions.js";
 import { installRuntimeBundle, runtimeBundlePrefix, runtimePackageSatisfied, verifyRuntimeExecutable } from "./runtime-bundle.js";
+import { selectedRuntimeVersions } from "./runtime-update-state.js";
 export { BRIDGE_PIN, RUNTIME_PIN } from "./runtime-versions.js";
 
 export type ProvisionProvider = "claude" | "codex";
@@ -34,9 +34,8 @@ const PROVIDER_PACKAGES: Record<ProvisionProvider, string[]> = {
   claude: ["@agentclientprotocol/claude-agent-acp"],
   codex: ["@agentclientprotocol/codex-acp"],
 };
-// Pinned bridge versions — the whole fleet must run exactly these so machines
-// stay interchangeable. Bump deliberately alongside a remi release; daemons
-// converge on their next start (or via a scope="acp" update request).
+// Release pins provide a tested baseline. Automatic updates retain a newer,
+// validated stable selection across restarts.
 export const CODEX_USAGE_PATCH = "codex-usage-v1";
 const PROVIDER_BIN: Record<ProvisionProvider, string> = { claude: "claude-agent-acp", codex: "codex-acp" };
 
@@ -112,7 +111,7 @@ export function bridgeSatisfied(provider: ProvisionProvider): boolean {
   if (!dir) return false;
   try {
     const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { version?: string };
-    return pkg.version === BRIDGE_PIN[provider]
+    return pkg.version === selectedRuntimeVersions(provider).acp
       && runtimePackageSatisfied(provider, dir)
       && (provider !== "codex" || codexUsagePatchSatisfied(dir));
   } catch {
@@ -211,7 +210,7 @@ export function agentCliVersion(provider: ProvisionProvider): string | null {
 }
 
 /** Resolve `node` + `npm`, downloading an official build into ~/.remi/node if absent. */
-function ensureNode(log: Logger): { node: string; npm: string } | null {
+export function ensureNode(log: Logger): { node: string; npm: string } | null {
   const sysNode = which("node");
   const sysNpm = which("npm");
   if (sysNode && sysNpm) return { node: sysNode, npm: sysNpm };
@@ -315,7 +314,8 @@ export function ensureAcpBridges(
 export function reinstallBridge(provider: ProvisionProvider, log: Logger = (m) => console.error(`[provision] ${m}`), options: { activate?: boolean } = {}): string {
   const node = ensureNode(log);
   if (!node) throw new Error("cannot reinstall ACP bridge: node unavailable");
-  log(`preparing ${provider}: ACP ${BRIDGE_PIN[provider]}, SDK ${RUNTIME_PIN[provider].version}, executable ${RUNTIME_PIN[provider].executableVersion}`);
+  const versions = selectedRuntimeVersions(provider);
+  log(`preparing ${provider}: ACP ${versions.acp}, SDK ${versions.sdk}, executable ${versions.executable}`);
   installRuntimeBundle(provider, node, (bridge) => {
     if (provider === "codex" && !patchCodexUsageBridge(log, bridge)) {
       throw new Error("Codex usage patch verification failed");

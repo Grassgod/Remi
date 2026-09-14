@@ -55,6 +55,7 @@ import {
 } from "./outbox.js";
 import { TaskMessageBatcher } from "./task-message-batcher.js";
 import { probeRuntimeModels } from "./runtime-model-probe.js";
+import type { RuntimeDependencyUpdater } from "./runtime-dependency-updater.js";
 import {
   browseRuntimeDirectory,
   listRuntimeLocalSkills,
@@ -436,6 +437,8 @@ export interface MultiremiDaemonOptions {
   onReadyChange?: (ready: boolean) => void;
   /** Shared machine-level gate for the CLI binary used by co-resident providers. */
   cliUpdateCoordinator?: MultiremiCliUpdateCoordinator;
+  /** Shared background dependency updater; injected once by the host supervisor. */
+  runtimeDependencyUpdater?: RuntimeDependencyUpdater | null;
   /** Full path of the durable report-outbox database (tests use ":memory:"). */
   outboxPath?: string;
   /** Injectable retry schedule for outbox delivery tests. */
@@ -747,6 +750,7 @@ export class MultiremiDaemon {
       runtimeModelRefreshIntervalMs: Math.max(100, options.runtimeModelRefreshIntervalMs ?? 15 * 60_000),
       inProcessRuntimeModelDiscoveryEnabled:
         options.inProcessRuntimeModelDiscoveryEnabled === true,
+      runtimeDependencyUpdater: options.runtimeDependencyUpdater ?? null,
       serverUrl: options.serverUrl,
     };
     this.topicWorkspaces = new TopicWorkspaceLifecycle({
@@ -761,6 +765,14 @@ export class MultiremiDaemon {
     this.providerFactory = options.providerFactory ?? ((providerOptions) => new AcpProvider(providerOptions));
     this.updateRunner = options.updateRunner ?? runDefaultMultiremiUpdate;
     this.onRestartRequested = options.onRestartRequested ?? null;
+    this.options.runtimeDependencyUpdater?.register({
+      ready: () => this.ready && !this.stopped && this.supervisorReady(),
+      busy: () => this.activeTaskCount > 0 || this.pendingClaimCount > 0 || this.inflight.size > 0 || this.drainingTaskCount > 0,
+      maintenance: () => this.claimsPaused || this.serverDrainActive,
+      pause: () => { this.claimsPaused = true; },
+      release: () => this.releaseLocalUpdateClaimPause(),
+      restart: () => this.requestRestartAfterUpdate(),
+    });
     this.cliUpdateCoordinator?.register({
       provider: this.options.provider,
       activeTaskCount: () => this.activeTaskCount,
@@ -1019,11 +1031,12 @@ export class MultiremiDaemon {
             this.pollAbort.signal,
           );
           const skipClaim = await this.handleHeartbeatAck(this.options.runtimeId!, ack);
+          this.options.runtimeDependencyUpdater?.tick();
           if (!skipClaim && !this.stopped) {
             await this.reconcileRuntimeAgentPlugins(this.options.runtimeId!);
           }
           if (this.stopped || this.claimsPaused) break;
-          if (skipClaim || this.serverDrainActive) {
+          if (skipClaim || this.serverDrainActive || this.options.runtimeDependencyUpdater?.draining) {
             if (this.options.once) return;
             await sleep(this.options.pollIntervalMs);
             continue;
@@ -1048,6 +1061,7 @@ export class MultiremiDaemon {
             && !this.stopped
             && !this.claimsPaused
             && !this.serverDrainActive
+            && !this.options.runtimeDependencyUpdater?.draining
             && this.supervisorReady()
           ) {
             const task = await this.claimTask(this.options.runtimeId!);
@@ -1097,6 +1111,8 @@ export class MultiremiDaemon {
     } finally {
       this.ready = false;
       this.onReadyChange(false);
+      this.options.runtimeDependencyUpdater?.stop();
+      await this.options.runtimeDependencyUpdater?.settled();
       // Stop scheduling new sweeps before draining tasks. An existing sweep
       // may be waiting on a task's Issue lifecycle lease and is drained below.
       this.stopGcLoop();

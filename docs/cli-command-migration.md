@@ -56,6 +56,14 @@ Use `remi help <path>` or `remi <path> --help` for the registered positional and
 option contract. All capability commands declare their authentication identities,
 mutation class, and `table|json|jsonl` output contract in the Registry.
 
+`remi runtime prepare [--latest] [--provider claude|codex]` prepares local ACP and
+Agent dependencies and verifies their executables and ACP initialization without
+switching a running daemon. `runtime updates status`, `runtime updates check`, and
+`runtime updates configure --enabled true|false --interval-hours 24` expose the
+machine's automatic dependency update policy and status. These local commands do
+not require server authentication. See [daemon runtime upgrades](daemon-runtime-upgrades.md)
+for the idle activation gate and failure behavior.
+
 `remi runtime skill scan <runtime> --root '~/.agents/skills'` discovers skills in
 a directory on that Runtime's machine. Poll `runtime skill status <runtime>
 <scan-request>` until it completes, then import a returned key with `runtime skill

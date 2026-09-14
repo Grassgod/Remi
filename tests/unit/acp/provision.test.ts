@@ -13,6 +13,7 @@ import {
   ensureAcpBridges,
 } from "@acp/provision.js";
 import { runtimeBundlePrefix, runtimeBundleManifest, runtimePackageSatisfied } from "@acp/runtime-bundle.js";
+import { activateRuntimeSelection } from "@acp/runtime-update-state.js";
 
 let dir: string | null = null;
 const savedHome = process.env.REMI_HOME;
@@ -118,6 +119,23 @@ test("release bundle takes precedence over legacy/global bridges", () => {
   expect(locateBridgePackage("claude")).toBe(bridge);
   expect(runtimeBundleManifest("claude").overrides).toEqual({ "@anthropic-ai/claude-agent-sdk": RUNTIME_PIN.claude.version });
   expect(runtimeBundleManifest("codex").overrides).toEqual({ "@openai/codex": RUNTIME_PIN.codex.version });
+});
+
+test("startup accepts a verified automatic upgrade instead of reinstalling the older release pin", () => {
+  const home = freshHome();
+  const versions = { acp: "9.0.0", sdk: "9.0.0", executable: "9.0.0" };
+  activateRuntimeSelection({ codex: versions });
+  const modules = join(runtimeBundlePrefix("codex"), "node_modules");
+  const bridge = join(modules, "@agentclientprotocol/codex-acp");
+  mkdirSync(bridge, { recursive: true });
+  writeFileSync(join(bridge, "package.json"), JSON.stringify({ version: versions.acp }));
+  writeCodexDist(bridge);
+  writeSdk(home, "codex", versions.sdk, modules);
+  patchCodexUsageBridge(() => {}, bridge);
+  expect(bridgeSatisfied("codex")).toBe(true);
+  ensureAcpBridges(["codex"], () => {});
+  expect(bridgeVersion("codex")).toBe("9.0.0");
+  expect(readlinkSync(join(home, "bin", "codex-acp"))).toBe(join(bridge, "dist", "index.js"));
 });
 
 test("preflight preserves the old Codex launcher until normal daemon startup activates the bundle", () => {

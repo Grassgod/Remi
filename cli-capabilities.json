@@ -69,6 +69,36 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "runtime.updates.status": {
+      "command": "remi runtime updates status",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "runtime.updates.configure": {
+      "command": "remi runtime updates configure",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "write",
+      "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "runtime.updates.check": {
+      "command": "remi runtime updates check",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "workspace": {
       "command": "remi workspace",
       "aliases": [],

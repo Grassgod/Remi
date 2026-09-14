@@ -5,6 +5,8 @@ import { join } from "node:path";
 import type { MultiremiRuntimeUpdateScope } from "@multiremi/contracts/types.js";
 import { MultiremiDaemon } from "@multiremi/daemon.js";
 import { MultiremiCliUpdateCoordinator } from "@multiremi/worker/cli-update-coordinator.js";
+import { RuntimeDependencyUpdater } from "@multiremi/worker/runtime-dependency-updater.js";
+import { releaseRuntimeVersions } from "@acp/runtime-versions.js";
 import { instantiateCoResidentWorkerDaemons } from "../../../apps/remi/cli/multiremi.js";
 
 interface UpdateReport {
@@ -18,6 +20,8 @@ interface TestDaemonState {
   drainingTaskCount: number;
   pendingClaimCount: number;
   claimsPaused: boolean;
+  ready: boolean;
+  onReadyChange(ready: boolean): void;
   cliUpdateCoordinator: MultiremiCliUpdateCoordinator | null;
   client: {
     claimTask?(runtimeId: string): Promise<unknown>;
@@ -199,6 +203,38 @@ describe("co-resident CLI update coordination", () => {
       error: "daemon is busy; retry update when idle",
     }]);
     expect(daemonState.claimsPaused).toBe(false);
+  });
+
+  it("automatic runtime updates wait for sibling tasks and in-flight claims, then restart all provider lanes", async () => {
+    const root = mkdtempSync(join(tmpdir(), "runtime-auto-coordinator-"));
+    roots.push(root);
+    let activations = 0;
+    const next = { acp: "9.0.0", sdk: "9.0.0", executable: "9.0.0" };
+    const updater = new RuntimeDependencyUpdater(["claude", "codex"], {
+      startupDelayMs: 0, settings: () => ({ enabled: true, intervalHours: 24 }), status: () => null,
+      save: () => {}, log: () => {}, current: releaseRuntimeVersions, requiresActivation: () => false,
+      prepare: async () => ({ claude: next, codex: next }),
+      activate: () => {
+        expect(daemons.every((daemon) => state(daemon).claimsPaused)).toBe(true);
+        activations++;
+      },
+    });
+    const daemons = instantiateCoResidentWorkerDaemons(["claude", "codex"].map((provider) => ({
+      serverUrl: "http://127.0.0.1:1", provider, workspacesRoot: root, runtimeDependencyUpdater: updater,
+    })));
+    for (const daemon of daemons) { state(daemon).ready = true; state(daemon).onReadyChange(true); }
+    const sibling = state(daemons[1]);
+    sibling.activeTaskCount = 1;
+    updater.tick(); await updater.settled(); updater.tick();
+    expect(updater.draining).toBe(true);
+    expect(activations).toBe(0);
+    expect(daemons.every((daemon) => !daemon.restartRequested())).toBe(true);
+    sibling.activeTaskCount = 0; sibling.pendingClaimCount = 1;
+    updater.tick(); expect(activations).toBe(0);
+    sibling.pendingClaimCount = 0;
+    updater.tick();
+    expect(activations).toBe(1);
+    expect(daemons.every((daemon) => daemon.restartRequested())).toBe(true);
   });
 
   function createDaemons(count = 2): MultiremiDaemon[] {
