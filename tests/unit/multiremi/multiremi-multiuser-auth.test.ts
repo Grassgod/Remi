@@ -381,8 +381,8 @@ describe("Multiremi multi-user auth", () => {
 
   it("FR8: a daemon token owns the runtimes it registers, and re-registration never hijacks the owner", async () => {
     const store = seedDeployment();
-    store.createWorkspaceMember({ id: "usr_setup_user", name: "Setup user", role: "member" });
-    store.createWorkspaceMember({ id: "usr_other", name: "Other user", role: "member" });
+    store.createWorkspaceMember({ id: "usr_setup_user", userId: "usr_setup_user", name: "Setup user", role: "member" });
+    store.createWorkspaceMember({ id: "usr_other", userId: "usr_other", name: "Other user", role: "member" });
     const app = createMultiremiApp({ store, authToken: "root-secret" });
 
     // A daemon token minted for a specific user (as `remi setup` would).

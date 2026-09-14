@@ -655,6 +655,8 @@ export class ChatRepo {
   }
 
   private ensureDefaultAgentIssueUpdatesChannel(session: MultiremiChatSession): void {
+    // API creators are request user ids; Feishu bot creators are external actor
+    // ids and have no member link. Neither source supplies a member row id.
     const member = this.ctx.workspaces().findWorkspaceMemberForUser(session.creatorId, session.workspaceId);
     this.ctx.notificationChannels().upsertAgentChatNotificationChannel({
       workspaceId: session.workspaceId,
