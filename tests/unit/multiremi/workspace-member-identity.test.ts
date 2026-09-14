@@ -23,6 +23,20 @@ async function login(store: MultiremiStore, name: string) {
   return { user, headers: { Authorization: `Bearer ${token}` } };
 }
 
+function seedInbox(store: MultiremiStore, workspaceId: string, memberId: string, body: string) {
+  const author = store.createWorkspaceMember({ workspaceId, name: "Notification author" });
+  const issue = store.createIssue({ workspaceId, title: "Inbox identity", createdBy: memberId });
+  store.createIssueComment(issue.id, { authorType: "member", authorId: author.id, body });
+  const item = store.listInboxItems(memberId, workspaceId).find((candidate) => candidate.issueId === issue.id);
+  expect(item).toBeDefined();
+  return item!;
+}
+
+const inboxRoutes = [
+  { path: "/api/inbox", memberParameter: "member_id" },
+  { path: "/api/multiremi/inbox", memberParameter: "memberId" },
+];
+
 describe("MUL-288: explicit workspace user identity", () => {
   it.each([
     { idShape: "user-id", linkedToOtherUser: false },
@@ -114,6 +128,91 @@ describe("MUL-288: explicit workspace user identity", () => {
     expect(store.getUserRoleInWorkspace("local", workspace.id)).toBe("owner");
     expect(currentWorkspaceMember(requestContext("local"), store, workspace.id)?.id).toBe(member.id);
     expect(store.findWorkspaceMemberForUser(member.id, workspace.id)).toBeNull();
+  });
+
+  it.each([false, true])("rejects another inbox whose member row id equals the caller user id (linked=%j)", async (linked) => {
+    const store = createLocalStore();
+    const workspace = store.createWorkspace({ name: "Inbox ownership" });
+    const account = await login(store, "inbox-caller");
+    const ownMember = store.createWorkspaceMember({ workspaceId: workspace.id, userId: account.user.id, name: "Caller" });
+    const otherUser = store.getOrCreateUser({ email: "inbox-other@example.test", name: "Other user" });
+    const forged = store.createWorkspaceMember({
+      id: account.user.id, workspaceId: workspace.id, userId: linked ? otherUser.id : null, name: "Other recipient",
+    });
+    const privateItem = seedInbox(store, workspace.id, forged.id, "Other recipient's private notification");
+    const ownItem = seedInbox(store, workspace.id, ownMember.id, "Caller's own notification");
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const headers = { ...account.headers, "X-Workspace-ID": workspace.id };
+
+    expect(store.getUserRoleInWorkspace(account.user.id, workspace.id)).toBe("member");
+    for (const route of inboxRoutes) {
+      const denied = await app.request(`${route.path}?${route.memberParameter}=${forged.id}`, { headers });
+      expect(denied.status).toBe(404);
+      expect(await denied.json()).toEqual({ error: "inbox not found" });
+
+      const own = await app.request(`${route.path}?${route.memberParameter}=${ownMember.id}`, { headers });
+      expect(own.status).toBe(200);
+      const body = await own.json();
+      expect((body.items ?? body).map((item: { id: string }) => item.id)).toEqual([ownItem.id]);
+    }
+    expect(store.getInboxItem(privateItem.id)).toMatchObject({ read: false, archived: false });
+  });
+
+  it("resolves the caller's inbox through an explicit user link without a member selector", async () => {
+    const store = createLocalStore();
+    const workspace = store.createWorkspace({ name: "Self inbox" });
+    const account = await login(store, "inbox-self");
+    const member = store.createWorkspaceMember({ workspaceId: workspace.id, userId: account.user.id, name: "Self" });
+    const item = seedInbox(store, workspace.id, member.id, "Own inbox notification");
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const headers = { ...account.headers, "X-Workspace-ID": workspace.id };
+
+    for (const route of inboxRoutes) {
+      for (const selector of ["", `?${route.memberParameter}=${account.user.id}`, `?${route.memberParameter}=${member.id}`]) {
+        const response = await app.request(`${route.path}${selector}`, { headers });
+        expect(response.status).toBe(200);
+        const body = await response.json();
+        expect((body.items ?? body).map((entry: { id: string }) => entry.id)).toEqual([item.id]);
+      }
+    }
+  });
+
+  it.each(["master", "open"])("preserves unbound member inbox access in %s mode", async (mode) => {
+    const store = createLocalStore();
+    const member = store.createWorkspaceMember({ name: "Unbound inbox recipient" });
+    const item = seedInbox(store, "local", member.id, "Unbound member notification");
+    const app = createMultiremiApp({ store, authToken: mode === "master" ? "root-secret" : "" });
+    const headers: Record<string, string> = mode === "master" ? { Authorization: "Bearer root-secret" } : {};
+
+    for (const route of inboxRoutes) {
+      const response = await app.request(`${route.path}?${route.memberParameter}=${member.id}`, { headers });
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect((body.items ?? body).map((entry: { id: string }) => entry.id)).toEqual([item.id]);
+    }
+  });
+
+  it("resolves the authenticated local user's cleanup member inbox", async () => {
+    const store = createLocalStore();
+    const workspace = store.createWorkspace({ name: "Local cleanup inbox" });
+    const member = store.createWorkspaceMember({
+      id: `mem_${workspace.id}_local_cleanup`, workspaceId: workspace.id, userId: "local", name: "Cleanup owner", role: "owner",
+    });
+    const item = seedInbox(store, workspace.id, member.id, "Local cleanup notification");
+    const { token } = await store.createAccessToken({
+      workspaceId: "local", userId: "local", name: "Local inbox session", type: "pat", purpose: "session",
+    });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const headers = { Authorization: `Bearer ${token}`, "X-Workspace-ID": workspace.id };
+
+    for (const route of inboxRoutes) {
+      for (const selector of ["", `?${route.memberParameter}=${member.id}`]) {
+        const response = await app.request(`${route.path}${selector}`, { headers });
+        expect(response.status).toBe(200);
+        const body = await response.json();
+        expect((body.items ?? body).map((entry: { id: string }) => entry.id)).toEqual([item.id]);
+      }
+    }
   });
 
   it.each([false, true])("keeps member-row subscriptions, participants and inbox delivery (linked=%j)", (linked) => {
