@@ -16,12 +16,16 @@ import { useT } from "../../i18n";
 export function ModelDropdown({
   wsId,
   runtimeId,
+  executionGroupId,
+  agentId,
   provider,
   value,
   onChange,
 }: {
   wsId: string;
   runtimeId?: string | null;
+  executionGroupId?: string | null;
+  agentId?: string;
   provider: string;
   value: string;
   onChange: (value: string) => void;
@@ -30,7 +34,7 @@ export function ModelDropdown({
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
 
-  const { models, isLoading, isError } = useExecutionTargetModels(wsId, provider, runtimeId);
+  const { models, isLoading, isError } = useExecutionTargetModels(wsId, provider, runtimeId, executionGroupId, agentId);
 
   const filtered = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -66,7 +70,7 @@ export function ModelDropdown({
       </div>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger
-          disabled={!runtimeId}
+          disabled={!runtimeId && !executionGroupId}
           className="flex w-full min-w-0 items-center gap-3 rounded-lg border border-border bg-background px-3 py-2.5 mt-1.5 text-left text-sm transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
         >
           <Cpu className="h-4 w-4 shrink-0 text-muted-foreground" />

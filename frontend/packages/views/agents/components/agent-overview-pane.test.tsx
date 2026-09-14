@@ -104,7 +104,7 @@ function makeRuntime(provider: string): AgentRuntime {
   };
 }
 
-function renderPane(runtimes: AgentRuntime[]) {
+function renderPane(runtimes: AgentRuntime[], agent = baseAgent) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -112,7 +112,7 @@ function renderPane(runtimes: AgentRuntime[]) {
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
       <QueryClientProvider client={queryClient}>
         <AgentOverviewPane
-          agent={baseAgent}
+          agent={agent}
           runtimes={runtimes}
           onUpdate={vi.fn().mockResolvedValue(undefined)}
         />
@@ -172,6 +172,14 @@ describe("AgentOverviewPane tab semantics", () => {
     const panel = screen.getByRole("tabpanel");
     expect(panel).toHaveTextContent("activity-tab");
     expect(activity.getAttribute("aria-controls")).toBe(panel.id);
+  });
+
+  it("does not pick an arbitrary machine launch command from a shared group", async () => {
+    const user = userEvent.setup();
+    const members = ["a", "b"].map((id) => ({ ...makeRuntime("codex"), id, execution_group_ids: ["shared"], launch_header: `machine-${id}` }));
+    renderPane(members, { ...baseAgent, runtime_id: "", execution_group_id: "shared", provider: "codex" });
+    await user.click(screen.getByRole("tab", { name: "Custom Args" }));
+    expect(screen.getByRole("tabpanel")).toHaveTextContent("no target");
   });
 
   it("uses launch metadata from the bound machine instead of the first same-type runtime", async () => {

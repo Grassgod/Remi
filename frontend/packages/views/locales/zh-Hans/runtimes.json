@@ -613,5 +613,13 @@
     "saving": "正在保存…",
     "saved": "Claude Code 连接已保存",
     "auth_header": "请求鉴权"
+  },
+  "execution_group": {
+    "label": "执行能力组标识",
+    "default": "默认：机器 + Runtime 类型",
+    "hint": "相同组标识、相同类型的 Runtime 共同承接任务。留空保存可恢复默认机器组。",
+    "save": "保存",
+    "saved": "执行能力组已更新",
+    "failed": "执行能力组更新失败"
   }
 }

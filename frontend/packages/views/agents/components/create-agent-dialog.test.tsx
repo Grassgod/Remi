@@ -25,8 +25,8 @@ const navigationStub: NavigationAdapter = {
 };
 
 vi.mock("./execution-target-select", () => ({
-  ExecutionTargetSelect: ({ onChange }: { onChange: (target: { runtimeId: string; provider: string }) => void }) => (
-    <>{["claude", "codex"].map((provider) => <button key={provider} onClick={() => onChange({ runtimeId: `rt-${provider}`, provider })}>{provider}</button>)}</>
+  ExecutionTargetSelect: ({ onChange }: { onChange: (target: { executionGroupId: string; provider: string }) => void }) => (
+    <>{["claude", "codex"].map((provider) => <button key={provider} onClick={() => onChange({ executionGroupId: `group-${provider}`, provider })}>{provider}</button>)}</>
   ),
 }));
 
@@ -140,7 +140,8 @@ function makeTemplate(overrides: Partial<Agent> = {}): Agent {
   return {
     id: "agent-template",
     workspace_id: "ws-1",
-    runtime_id: "rt-codex",
+    runtime_id: "",
+    execution_group_id: "group-codex",
     provider: "codex",
     name: "Template Agent",
     description: "",
@@ -221,8 +222,9 @@ describe("CreateAgentDialog (execution targets)", () => {
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
     const payload = onCreate.mock.calls[0]?.[0];
     expect(payload.provider).toBe("claude");
-    expect(payload.runtime_id).toBe("rt-claude");
-    expect(mockListFleetModels).toHaveBeenCalledWith({ workspace_id: "ws-1", runtime_id: "rt-claude" });
+    expect(payload.execution_group_id).toBe("group-claude");
+    expect(payload).not.toHaveProperty("runtime_id");
+    expect(mockListFleetModels).toHaveBeenCalledWith(expect.objectContaining({ workspace_id: "ws-1", execution_group_id: "group-claude" }));
   });
 
   it("switching the engine toggles the submitted provider", async () => {
@@ -240,11 +242,11 @@ describe("CreateAgentDialog (execution targets)", () => {
   });
 
   it("resets model and reasoning when choosing another machine of the same type", async () => {
-    const { onCreate } = renderDialog(makeTemplate({ runtime_id: "other-codex", model: "machine-only-model", thinking_level: "high" }));
+    const { onCreate } = renderDialog(makeTemplate({ execution_group_id: "other-codex", model: "machine-only-model", thinking_level: "high" }));
     fireEvent.click(screen.getByRole("button", { name: "codex" }));
     fireEvent.click(createButton());
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
-    expect(onCreate.mock.calls[0]?.[0]).toMatchObject({ runtime_id: "rt-codex", provider: "codex", model: undefined });
+    expect(onCreate.mock.calls[0]?.[0]).toMatchObject({ execution_group_id: "group-codex", provider: "codex", model: undefined });
     expect(onCreate.mock.calls[0]?.[0]).not.toHaveProperty("thinking_level");
   });
 

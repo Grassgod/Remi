@@ -971,6 +971,17 @@ export class TasksRepo {
         && this.ctx.runtimes().getRuntimeExecutionProfile(runtimeId, lockedRuntime.provider)) return null;
 
       const stale = this.reclaimStaleDispatchedTaskForRuntime(runtimeId, [...excludedAgentIds]);
+      // Group membership and reported model capabilities can change while work
+      // is queued. Skip incompatible Agents before selecting, so they cannot
+      // block another runnable task at the head of the queue.
+      const groupAgentRows = this.ctx.db.query(`SELECT DISTINCT a.id FROM multiremi_agents a
+        JOIN multiremi_tasks t ON t.agent_id = a.id
+        WHERE a.workspace_id = ? AND a.execution_group_id IS NOT NULL
+          AND t.status IN ('queued', 'dispatched')`).all(lockedRuntime.workspaceId ?? "local") as { id: string }[];
+      for (const row of groupAgentRows) {
+        const agent = this.ctx.agents().getAgent(row.id);
+        if (agent && !this.ctx.runtimes().runtimeCanRunAgent(lockedRuntime, agent)) excludedAgentIds.add(agent.id);
+      }
       if (!stale) this.refreshQueuedChatAffinity(lockedRuntime.workspaceId ?? "local");
       const candidate = stale ?? this.claimNextTaskForRuntime(lockedRuntime, [...excludedAgentIds]);
       if (!candidate) return null;
@@ -1351,6 +1362,7 @@ export class TasksRepo {
       ...deviceRouting.params,
       runtime.id,
       runtime.id,
+      runtime.id,
       runtime.provider,
       runtime.provider,
       runtime.visibility,
@@ -1423,6 +1435,11 @@ export class TasksRepo {
            AND (t.holds_workspace = 0 OR ${PROJECT_DEVICE_ROUTING_ELIGIBILITY_SQL})
            AND (t.runtime_id IS NULL OR t.runtime_id = ?)
            AND (a.runtime_id IS NULL OR a.runtime_id = ?)
+           AND (a.execution_group_id IS NULL OR EXISTS (
+             SELECT 1 FROM multiremi_execution_group_members gm
+             WHERE gm.runtime_id = ? AND gm.provider = a.provider
+               AND gm.workspace_id = a.workspace_id AND gm.group_id = a.execution_group_id
+           ))
            AND (? = 'any' OR a.provider = ?)
            AND (? = 'public' OR COALESCE(CAST(? AS TEXT), 'local') = COALESCE(a.owner_id, 'local'))
            AND NOT EXISTS (

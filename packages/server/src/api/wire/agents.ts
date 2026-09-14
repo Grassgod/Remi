@@ -18,6 +18,7 @@ export function agentCompatibilityResponse(store: MultiremiStore, agent: Multire
     id: agent.id,
     workspace_id: agent.workspaceId,
     runtime_id: agent.runtimeId ?? "",
+    execution_group_id: agent.executionGroupId ?? null,
     provider: agent.provider,
     name: agent.name,
     description: agent.description,

@@ -90,8 +90,9 @@ export function CreateAgentDialog({
   const [creating, setCreating] = useState(false);
 
   const [provider, setProvider] = useState(template?.provider ?? "");
-  const [runtimeId, setRuntimeId] = useState(template?.runtime_id ?? "");
-  const targetModels = useExecutionTargetModels(wsId ?? "", provider, runtimeId);
+  const [executionGroupId, setExecutionGroupId] = useState(template?.execution_group_id ?? "");
+  const [legacyRuntimeId, setLegacyRuntimeId] = useState(template?.runtime_id ?? "");
+  const targetModels = useExecutionTargetModels(wsId ?? "", provider, executionGroupId ? undefined : legacyRuntimeId, executionGroupId);
   const thinkingLevels = useMemo(
     () => getModelThinkingLevels(targetModels.models, model),
     [targetModels.models, model],
@@ -99,7 +100,8 @@ export function CreateAgentDialog({
 
   const switchTarget = (next: ExecutionTarget) => {
     setProvider(next.provider);
-    setRuntimeId(next.runtimeId);
+    setExecutionGroupId(next.executionGroupId);
+    setLegacyRuntimeId("");
     // Models and reasoning options belong to the selected execution target.
     setModel("");
     setThinkingLevel("");
@@ -146,7 +148,7 @@ export function CreateAgentDialog({
   };
 
   const handleSubmit = async () => {
-    if (!name.trim() || !runtimeId || !provider) return;
+    if (!name.trim() || !executionGroupId || !provider) return;
     setCreating(true);
 
     try {
@@ -155,7 +157,7 @@ export function CreateAgentDialog({
         name: name.trim(),
         description: description.trim(),
         provider,
-        runtime_id: runtimeId,
+        execution_group_id: executionGroupId,
         visibility,
         model: model.trim() || undefined,
         instructions: trimmedInstructions || undefined,
@@ -330,12 +332,14 @@ export function CreateAgentDialog({
 
             <ExecutionTargetSelect
               wsId={wsId ?? ""}
-              value={{ runtimeId, provider }}
+              value={{ executionGroupId, provider }}
+              legacyRuntimeId={legacyRuntimeId}
               onChange={switchTarget}
             />
 
             <ModelDropdown
-              runtimeId={runtimeId}
+              runtimeId={executionGroupId ? undefined : legacyRuntimeId}
+              executionGroupId={executionGroupId}
               wsId={wsId ?? ""}
               provider={provider}
               value={model}
@@ -378,7 +382,7 @@ export function CreateAgentDialog({
           <Button variant="ghost" onClick={onClose}>
             {t(($) => $.create_dialog.cancel)}
           </Button>
-          <Button onClick={handleSubmit} disabled={creating || !name.trim() || !runtimeId || !provider}>
+          <Button onClick={handleSubmit} disabled={creating || !name.trim() || !executionGroupId || !provider}>
             {creating ? t(($) => $.create_dialog.creating) : t(($) => $.create_dialog.create)}
           </Button>
         </div>

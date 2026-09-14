@@ -150,7 +150,7 @@
     "description_placeholder": "这个智能体做什么？",
     "save": "保存",
     "cancel": "取消",
-    "prop_engine": "执行目标"
+    "prop_engine": "执行能力组"
   },
   "skill_attach": {
     "trigger_aria": "附加工作区 skill",
@@ -461,14 +461,16 @@
     "agent_count_other": "{{count}} 个智能体"
   },
   "execution_target": {
-    "label": "执行目标",
-    "placeholder": "选择机器和 Runtime 类型",
-    "unavailable": "执行目标不可用，请重新选择",
-    "loading": "正在加载执行目标…",
-    "error": "无法加载执行目标",
-    "empty": "暂无可用执行目标",
-    "hint": "任务将在「{{target}}」上运行。",
-    "offline": "该执行目标已离线，任务将等待其恢复连接。",
-    "offline_badge": "离线"
+    "label": "执行能力组",
+    "placeholder": "选择执行能力组",
+    "unavailable": "执行能力组不可用，请重新选择",
+    "loading": "正在加载执行能力组…",
+    "error": "无法加载执行能力组",
+    "empty": "暂无可用执行能力组",
+    "hint": "任务将在「{{target}}」组内可用的 Runtime 上运行。",
+    "offline": "该组暂无在线 Runtime，任务将等待组内成员恢复连接。",
+    "offline_badge": "离线",
+    "members": "{{online}} 在线 · {{count}} 个 Runtime",
+    "pinned": "当前仍固定到 Runtime {{runtime}}。重新选择能力组后，可在组内调度。"
   }
 }

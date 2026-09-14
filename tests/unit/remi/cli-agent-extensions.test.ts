@@ -99,6 +99,12 @@ describe("agent extension CLI contracts", () => {
     await capture(() => registryFor([spec]).execute([...argv, "--runtime", "rt_codex", "--json"]));
     expect(body).toMatchObject({ runtime_id: "rt_codex" });
     expect(body).not.toHaveProperty("provider");
+    await capture(() => registryFor([spec]).execute([...argv, "--execution-group", "team-code", "--json"]));
+    expect(body).toMatchObject({ execution_group_id: "team-code" });
+    expect(body).not.toHaveProperty("runtime_id");
+    expect(body).not.toHaveProperty("provider");
+    await expect(registryFor([spec]).execute([...argv, "--runtime", "rt_codex", "--execution-group", "team-code"]))
+      .rejects.toThrow("conflict");
   });
 
   it("keeps JSON execution targets free of an injected provider", async () => {

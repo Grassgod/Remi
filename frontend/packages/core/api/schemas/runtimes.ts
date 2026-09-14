@@ -22,6 +22,8 @@ import type { CloudRuntimeNode } from "../../runtimes/cloud-runtime";
 
 export const AgentRuntimeSchema = z.object({
   id: z.string(),
+  execution_group_id: z.string().nullable().optional(),
+  execution_group_ids: z.array(z.string()).optional(),
   workspace_id: z.string(),
   daemon_id: z.string().nullable(),
   daemon_display_name: z.string().nullable().optional().default(null),
@@ -41,6 +43,18 @@ export const AgentRuntimeSchema = z.object({
 
 export const AgentRuntimeListSchema = z.array(AgentRuntimeSchema);
 export const EMPTY_AGENT_RUNTIME_LIST: AgentRuntime[] = [];
+
+export const ExecutionGroupListSchema = z.object({
+  groups: z.array(z.object({
+    id: z.string().min(1),
+    workspace_id: z.string(),
+    name: z.string(),
+    provider: z.string(),
+    runtime_ids: z.array(z.string()),
+    online_runtime_count: z.number().int().nonnegative(),
+  })),
+});
+export type ExecutionGroupList = z.infer<typeof ExecutionGroupListSchema>;
 
 export const DaemonProfileResponseSchema = z.object({
   workspace_id: z.string(),

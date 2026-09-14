@@ -137,7 +137,12 @@ export function AgentOverviewPane({
   const [pendingTab, setPendingTab] = useState<DetailTab | null>(null);
 
   // Machine-specific launch data must come from the saved execution target.
-  const targetRuntime = runtimes.find((runtime) => runtime.id === agent.runtime_id);
+  const groupRuntimes = agent.execution_group_id
+    ? runtimes.filter((runtime) => runtime.execution_group_ids?.includes(agent.execution_group_id!))
+    : [];
+  const targetRuntime = agent.execution_group_id
+    ? groupRuntimes.length === 1 ? groupRuntimes[0] : undefined
+    : runtimes.find((runtime) => runtime.id === agent.runtime_id);
   const engine = agent.provider || targetRuntime?.provider || "";
   const engineRuntime = targetRuntime &&
     (targetRuntime.provider === engine || targetRuntime.provider === "any")

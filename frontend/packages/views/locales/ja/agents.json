@@ -150,7 +150,7 @@
     "description_placeholder": "このエージェントは何をしますか？",
     "save": "保存",
     "cancel": "キャンセル",
-    "prop_engine": "実行先"
+    "prop_engine": "実行グループ"
   },
   "skill_attach": {
     "trigger_aria": "ワークスペースのスキルを追加",
@@ -461,14 +461,16 @@
     "agent_count_other": "{{count}} 件のエージェント"
   },
   "execution_target": {
-    "label": "実行先",
-    "placeholder": "マシンと Runtime タイプを選択",
-    "unavailable": "実行先が利用できません。再選択してください",
-    "loading": "実行先を読み込み中…",
-    "error": "実行先を読み込めませんでした",
-    "empty": "利用可能な実行先がありません",
-    "hint": "タスクは {{target}} で実行されます。",
-    "offline": "実行先はオフラインです。タスクは再接続を待ちます。",
-    "offline_badge": "オフライン"
+    "label": "実行グループ",
+    "placeholder": "実行グループを選択",
+    "unavailable": "実行グループが利用できません。再選択してください",
+    "loading": "実行グループを読み込み中…",
+    "error": "実行グループを読み込めませんでした",
+    "empty": "利用可能な実行グループがありません",
+    "hint": "タスクは {{target}} 内の利用可能な Runtime で実行されます。",
+    "offline": "このグループにはオンラインの Runtime がありません。再接続を待ちます。",
+    "offline_badge": "オフライン",
+    "members": "{{online}} オンライン · {{count}} Runtime",
+    "pinned": "現在は Runtime {{runtime}} に固定されています。実行グループを再選択するとグループ内で割り当てられます。"
   }
 }

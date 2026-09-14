@@ -1,3 +1,4 @@
+import { getExecutionGroup, runtimeExecutionGroupId } from "@multiremi/store/execution-groups.js";
 // Agents + skills domain, extracted verbatim from MultiremiStore (facade delegates here).
 // `listActiveAgentsByRuntime` lives here (rather than in RuntimesRepo) because it hydrates agent
 // rows through this repo's private skill loader; RuntimesRepo reaches it via `ctx.agents()`.
@@ -37,12 +38,15 @@ export class AgentsSkillsRepo {
     const workspaceId = cleanOptionalString(input.workspaceId ?? input.workspace_id) ?? "local";
     const ownerId = cleanOptionalString(input.ownerId ?? input.owner_id) ?? "local";
     const visibility = normalizeAgentVisibility(input.visibility);
-    const runtimeId = cleanOptionalString(input.runtimeId ?? input.runtime_id);
+    const requestedGroupId = cleanOptionalString(input.executionGroupId ?? input.execution_group_id);
+    const runtimeId = requestedGroupId ? null : cleanOptionalString(input.runtimeId ?? input.runtime_id);
     const role = input.role ?? "normal";
     if (!isAgentRole(role)) throw new Error("Invalid agent role");
     return this.ctx.db.transaction(() => {
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
       if (runtimeId) this.assertRuntimeBinding(runtimeId, workspaceId, input.provider, ownerId);
+      const executionGroupId = requestedGroupId ?? (runtimeId ? runtimeExecutionGroupId(this.ctx.db, runtimeId, input.provider) : null);
+      if (requestedGroupId) this.assertExecutionGroupBinding(requestedGroupId, workspaceId, input.provider, ownerId);
       this.ctx.db.run(
         `INSERT INTO multiremi_agents (
           id, workspace_id, name, description, avatar_url, provider, owner_id, visibility, runtime_id, instructions, skills, executable, model,
@@ -76,6 +80,7 @@ export class AgentsSkillsRepo {
           now,
         ],
       );
+      this.ctx.db.run("UPDATE multiremi_agents SET execution_group_id = ? WHERE id = ?", [executionGroupId, id]);
       return this.getAgent(id)!;
     })();
   }
@@ -138,9 +143,17 @@ export class AgentsSkillsRepo {
     const visibility = hasAnyField(input, "visibility")
       ? normalizeAgentVisibility(input.visibility)
       : current.visibility;
-    const runtimeId = hasAnyField(input, "runtimeId", "runtime_id")
-      ? cleanOptionalString(input.runtimeId ?? input.runtime_id)
-      : current.runtimeId;
+    const groupProvided = hasAnyField(input, "executionGroupId", "execution_group_id");
+    const runtimeProvided = hasAnyField(input, "runtimeId", "runtime_id");
+    const runtimeId = groupProvided ? null : runtimeProvided
+      ? cleanOptionalString(input.runtimeId ?? input.runtime_id) : current.runtimeId;
+    const executionGroupId = groupProvided ? cleanOptionalString(input.executionGroupId ?? input.execution_group_id)
+      : runtimeProvided ? (runtimeId ? runtimeExecutionGroupId(this.ctx.db, runtimeId, input.provider ?? current.provider) : null)
+      : current.executionGroupId ?? null;
+    if (executionGroupId && (executionGroupId !== current.executionGroupId || workspaceId !== current.workspaceId
+      || ownerId !== current.ownerId || (input.provider ?? current.provider) !== current.provider)) {
+      this.assertExecutionGroupBinding(executionGroupId, workspaceId, input.provider ?? current.provider, ownerId);
+    }
     const bindingChanged = runtimeId !== current.runtimeId
       || workspaceId !== current.workspaceId
       || ownerId !== (current.ownerId ?? "local")
@@ -218,6 +231,7 @@ export class AgentsSkillsRepo {
         id,
       ],
     );
+    this.ctx.db.run("UPDATE multiremi_agents SET execution_group_id = ? WHERE id = ?", [executionGroupId, id]);
     const updated = this.getAgent(id)!;
     // Changing a scheduling-relevant field (target, engine, owner, or workspace)
     // strands the agent's already-queued tasks: a task pinned to a runtime
@@ -227,7 +241,7 @@ export class AgentsSkillsRepo {
     const providerChanged = input.provider !== undefined && input.provider !== current.provider;
     const ownerChanged = (updated.ownerId ?? "local") !== (current.ownerId ?? "local");
     const workspaceChanged = updated.workspaceId !== current.workspaceId;
-    const runtimeChanged = updated.runtimeId !== current.runtimeId;
+    const runtimeChanged = updated.runtimeId !== current.runtimeId || updated.executionGroupId !== current.executionGroupId;
     if (providerChanged || ownerChanged || workspaceChanged || runtimeChanged) {
       this.rescheduleAgentQueuedTasks(updated, { workspaceChanged, executionTargetChanged: providerChanged || runtimeChanged });
     }
@@ -332,6 +346,16 @@ export class AgentsSkillsRepo {
     tx();
     this.publishClearedProjectDefaults(affectedProjects, now);
     return this.getAgent(id)!;
+  }
+
+  private assertExecutionGroupBinding(id: string, workspaceId: string, provider: string, ownerId: string): void {
+    const group = getExecutionGroup(this.ctx.db, id, workspaceId);
+    if (!group) throw new Error(`Execution group not found: ${id}`);
+    if (group.provider !== provider) throw new Error("Execution group provider does not match Agent provider");
+    if (!group.runtimeIds.some(runtimeId => {
+      const runtime = this.ctx.runtimes().getRuntime(runtimeId);
+      return runtime && (runtime.visibility === "public" || (runtime.ownerId ?? "local") === ownerId);
+    })) throw new Error("Execution group has no Runtime available to the Agent owner");
   }
 
   private assertRuntimeBinding(runtimeId: string, workspaceId: string, provider: string, ownerId: string): void {
@@ -821,6 +845,8 @@ export function toAgent(row: Row): MultiremiAgent {
     visibility: normalizeAgentVisibility(row.visibility),
     runtimeId: nullableString(row.runtime_id),
     runtime_id: nullableString(row.runtime_id),
+    executionGroupId: nullableString(row.execution_group_id),
+    execution_group_id: nullableString(row.execution_group_id),
     instructions: String(row.instructions ?? ""),
     skills: parseJson(row.skills, []),
     maxConcurrentTasks: Number(row.max_concurrent_tasks ?? 6),

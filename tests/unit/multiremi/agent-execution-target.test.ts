@@ -57,7 +57,7 @@ describe("Agent execution target", () => {
     const { store, first, second, agent } = fixture();
     const task = store.createTask({ agentId: agent.id, prompt: "Lost response" });
     store.claimTask(first.id);
-    db!.run("UPDATE multiremi_agents SET runtime_id = ? WHERE id = ?", [second.id, agent.id]);
+    db!.run("UPDATE multiremi_agents SET runtime_id = ?, execution_group_id = ? WHERE id = ?", [second.id, second.executionGroupIds![0], agent.id]);
     db!.run("UPDATE multiremi_tasks SET dispatched_at = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", task.id]);
     expect(store.claimTask(first.id)).toBeNull();
     expect(store.getTask(task.id)?.status).toBe("queued");

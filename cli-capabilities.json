@@ -5579,6 +5579,23 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "runtime.group.list": {
+      "command": "remi runtime group list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "runtime.group.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "runtime.codex-profile.get": {
       "command": "remi runtime codex-profile get",
       "aliases": [],
@@ -9926,6 +9943,9 @@
     "GET /api/dashboard/usage/daily": {
       "command": "dashboard.usage.daily"
     },
+    "GET /api/execution-groups": {
+      "command": "runtime.group.list"
+    },
     "GET /api/inbox": {
       "command": "inbox.list"
     },
@@ -10138,6 +10158,9 @@
     },
     "GET /api/multiremi/daemons/:daemonId/retirement-plan": {
       "command": "daemon.retirement-plan"
+    },
+    "GET /api/multiremi/execution-groups": {
+      "command": "runtime.group.list"
     },
     "GET /api/multiremi/feedback": {
       "command": "platform.feedback.list"

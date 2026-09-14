@@ -58,10 +58,12 @@ export function useUpdateRuntime(wsId: string) {
       patch,
     }: {
       runtimeId: string;
-      patch: { visibility?: "private" | "public"; name?: string };
+      patch: { visibility?: "private" | "public"; name?: string; execution_group_id?: string | null };
     }) => api.updateRuntime(runtimeId, patch),
     onSettled: () => {
       qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
+      qc.invalidateQueries({ queryKey: runtimeModelsKeys.fleet(wsId) });
+      qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
     },
   });
 }

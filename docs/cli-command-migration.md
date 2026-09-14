@@ -5,14 +5,21 @@ The machine-readable source of truth remains `cli-capabilities.json`; CI checks 
 table against that manifest.
 
 `remi agent create`, `remi agent template create <template>`, `remi agent update
-<agent>` and `remi agent default` accept `--runtime <runtime-id>` to select the
-execution target: a machine and Runtime type. The provider is inferred from the
-selected Runtime unless explicitly supplied; an explicit provider must match.
-Use `remi runtime list` to find the target and `remi runtime model catalog
---runtime <runtime-id>` to inspect its available models before selecting
-`--model` and `--thinking-level`. A bound agent waits when its target is offline;
-it does not move to another machine sharing the same provider. Omitting
-`--runtime` on update preserves the existing target.
+<agent>` and `remi agent default` accept `--execution-group <group-id>`.
+Use `remi runtime group list` to find groups and their online Runtime counts,
+then `remi runtime model catalog --execution-group <group-id>` to inspect models.
+Groups default to one machine and Runtime type. Assign the same custom group ID
+with `remi runtime update <runtime> --execution-group <group-id>` to pool Runtimes
+in the same workspace and provider. Workspace boundaries remain isolated;
+a group cannot mix Runtime types. Restore a Runtime's default group with
+`remi runtime update <runtime> --data '{"execution_group_id":null}'`.
+
+The legacy `--runtime <runtime-id>` agent and model-catalog option remains
+supported, and is mutually exclusive with `--execution-group`. Omitting both
+on agent update preserves the existing target. The provider is inferred from
+the selected target unless explicitly supplied; an explicit provider must match.
+Tasks use eligible members of the selected group and wait when none is available;
+they do not fall back to unrelated Runtimes sharing a provider.
 
 ## Canonical command tree
 

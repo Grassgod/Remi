@@ -23,7 +23,7 @@ import type {
 // cannot borrow another machine's online status. Existing unbound agents retain
 // their provider pool until the user selects a target.
 export function resolveAgentRuntimes(
-  agent: Pick<Agent, "provider" | "runtime_id" | "owner_id">,
+  agent: Pick<Agent, "provider" | "runtime_id" | "owner_id" | "execution_group_id">,
   runtimes: readonly AgentRuntime[],
 ): AgentRuntime[] {
   if (agent.provider) {
@@ -31,6 +31,7 @@ export function resolveAgentRuntimes(
     return runtimes.filter(
       (r) =>
         (!agent.runtime_id || r.id === agent.runtime_id) &&
+        (!agent.execution_group_id || r.execution_group_ids?.includes(agent.execution_group_id) === true) &&
         (r.provider === agent.provider || r.provider === "any") &&
         (r.visibility === "public" || (r.owner_id ?? "local") === agentOwner),
     );

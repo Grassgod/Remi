@@ -90,10 +90,10 @@ export function AgentDetailInspector({
   const wsId = useWorkspaceId();
   const update = (data: Record<string, unknown>) => onUpdate(agent.id, data);
   const provider = agent.provider ?? "";
-  const { models } = useExecutionTargetModels(wsId ?? "", provider, agent.runtime_id);
+  const { models } = useExecutionTargetModels(wsId ?? "", provider, agent.runtime_id, agent.execution_group_id, agent.id);
   const showIntegrations = useHasIntegrations(agent.id);
   const switchTarget = (next: ExecutionTarget) =>
-    update({ runtime_id: next.runtimeId, provider: next.provider, model: "", thinking_level: "" });
+    update({ execution_group_id: next.executionGroupId, provider: next.provider, model: "", thinking_level: "" });
   const switchModel = (next: string) => {
     const data: Record<string, unknown> = { model: next };
     if (
@@ -127,7 +127,9 @@ export function AgentDetailInspector({
             ownerId={agent.owner_id}
             compact
             wsId={wsId ?? ""}
-            value={{ runtimeId: agent.runtime_id ?? "", provider }}
+            value={{ executionGroupId: agent.execution_group_id ?? "", provider }}
+            legacyRuntimeId={agent.runtime_id}
+            agentId={agent.id}
             canEdit={canEdit}
             onChange={switchTarget}
           />
@@ -135,6 +137,8 @@ export function AgentDetailInspector({
         <PropRow label={t(($) => $.inspector.prop_model)} interactive={false}>
           <ModelPicker
             runtimeId={agent.runtime_id}
+            executionGroupId={agent.execution_group_id}
+            agentId={agent.id}
             wsId={wsId ?? ""}
             provider={provider}
             value={agent.model ?? ""}
@@ -144,6 +148,8 @@ export function AgentDetailInspector({
         </PropRow>
         <ThinkingPropRow
           runtimeId={agent.runtime_id}
+          executionGroupId={agent.execution_group_id}
+          agentId={agent.id}
           wsId={wsId ?? ""}
           provider={provider}
           model={agent.model ?? ""}

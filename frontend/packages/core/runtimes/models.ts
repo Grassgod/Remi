@@ -8,6 +8,8 @@ export const runtimeModelsKeys = {
   forRuntime: (runtimeId: string) =>
     [...runtimeModelsKeys.all(), runtimeId] as const,
   fleet: (wsId: string) => [...runtimeModelsKeys.all(), "fleet", wsId] as const,
+  group: (wsId: string, groupId: string, agentId?: string) =>
+    [...runtimeModelsKeys.fleet(wsId), "group", groupId, agentId ?? ""] as const,
   target: (wsId: string, runtimeId: string) =>
     [...runtimeModelsKeys.fleet(wsId), "target", runtimeId] as const,
 };
@@ -23,21 +25,27 @@ export function fleetModelsOptions(wsId: string) {
 
 const NO_MODELS: RuntimeModel[] = [];
 
-export function executionTargetModelsOptions(wsId: string, runtimeId?: string | null) {
+export function executionTargetModelsOptions(wsId: string, runtimeId?: string | null, executionGroupId?: string | null, agentId?: string) {
   return queryOptions({
-    queryKey: runtimeModelsKeys.target(wsId, runtimeId ?? ""),
-    queryFn: () => api.listFleetModels({ workspace_id: wsId, runtime_id: runtimeId! }),
-    enabled: Boolean(wsId && runtimeId),
+    queryKey: executionGroupId
+      ? runtimeModelsKeys.group(wsId, executionGroupId, agentId)
+      : [...runtimeModelsKeys.target(wsId, runtimeId ?? ""), agentId ?? ""],
+    queryFn: () => api.listFleetModels({
+      workspace_id: wsId,
+      ...(executionGroupId ? { execution_group_id: executionGroupId } : { runtime_id: runtimeId! }),
+      agent_id: agentId,
+    }),
+    enabled: Boolean(wsId && (executionGroupId || runtimeId)),
     staleTime: 60_000,
   });
 }
 
 /** Models of the selected machine/type, including its effective gateway connection. */
-export function useExecutionTargetModels(wsId: string, provider: string, runtimeId?: string | null) {
-  const query = useQuery(executionTargetModelsOptions(wsId, runtimeId));
+export function useExecutionTargetModels(wsId: string, provider: string, runtimeId?: string | null, executionGroupId?: string | null, agentId?: string) {
+  const query = useQuery(executionTargetModelsOptions(wsId, runtimeId, executionGroupId, agentId));
   const bucket = query.data?.providers.find((entry) => entry.provider === provider);
   return {
-    models: runtimeId ? bucket?.models ?? NO_MODELS : NO_MODELS,
+    models: executionGroupId || runtimeId ? bucket?.models ?? NO_MODELS : NO_MODELS,
     onlineRuntimeCount: bucket?.online_runtime_count ?? 0,
     isLoading: query.isLoading,
     isError: query.isError,

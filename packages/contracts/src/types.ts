@@ -67,6 +67,8 @@ export interface MultiremiAgentTemplate extends MultiremiAgentTemplateSummary {
 export type MultiremiAgentRole = "normal" | "maintainer" | "supervisor";
 
 export interface MultiremiAgent {
+  executionGroupId?: string | null;
+  execution_group_id?: string | null;
   id: string;
   name: string;
   description: string;
@@ -101,6 +103,8 @@ export interface MultiremiAgent {
 }
 
 export interface CreateAgentInput {
+  executionGroupId?: string | null;
+  execution_group_id?: string | null;
   id?: string;
   name: string;
   provider: MultiremiAgentProvider;
@@ -137,6 +141,8 @@ export interface CreateAgentInput {
 }
 
 export interface UpdateAgentInput {
+  executionGroupId?: string | null;
+  execution_group_id?: string | null;
   name?: string;
   description?: string | null;
   avatarUrl?: string | null;
@@ -171,6 +177,8 @@ export interface UpdateAgentInput {
 }
 
 export interface CreateAgentFromTemplateInput {
+  executionGroupId?: string | null;
+  execution_group_id?: string | null;
   templateSlug?: string;
   template_slug?: string;
   name: string;
@@ -597,6 +605,9 @@ export type MultiremiRuntimeProvisionTriggerKind = "cron" | "on_register" | "on_
 export type MultiremiRuntimeProvisionStatus = "pending" | "converged" | "drifted" | "failed";
 
 export interface MultiremiRuntime {
+  executionGroupIds?: string[];
+  executionGroupId?: string | null;
+  execution_group_id?: string | null;
   id: string;
   name: string;
   provider: MultiremiAgentProvider | "any";
@@ -1011,6 +1022,8 @@ export interface MultiremiRuntimeModel {
 }
 
 export interface RegisterRuntimeInput {
+  executionGroupId?: string | null;
+  execution_group_id?: string | null;
   id?: string;
   name: string;
   provider: MultiremiAgentProvider | "any";
@@ -1035,6 +1048,8 @@ export interface RegisterRuntimeInput {
 }
 
 export interface UpdateRuntimeInput {
+  executionGroupId?: string | null;
+  execution_group_id?: string | null;
   name?: string;
   ownerId?: string | null;
   owner_id?: string | null;
@@ -5196,4 +5211,13 @@ export interface MultiremiMetricCounter {
   name: string;
   labels: Record<string, string>;
   value: number;
+}
+
+export interface MultiremiExecutionGroup {
+  id: string;
+  workspaceId: string;
+  provider: string;
+  machineId: string | null;
+  runtimeIds: string[];
+  createdAt: string;
 }

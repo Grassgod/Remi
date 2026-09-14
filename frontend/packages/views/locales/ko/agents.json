@@ -154,7 +154,7 @@
     "description_placeholder": "이 에이전트는 무엇을 하나요?",
     "save": "저장",
     "cancel": "취소",
-    "prop_engine": "실행 대상"
+    "prop_engine": "실행 그룹"
   },
   "skill_attach": {
     "trigger_aria": "워크스페이스 스킬 연결",
@@ -473,14 +473,16 @@
     "agent_count_other": "에이전트 {{count}}개"
   },
   "execution_target": {
-    "label": "실행 대상",
-    "placeholder": "머신과 Runtime 유형 선택",
-    "unavailable": "실행 대상을 사용할 수 없습니다. 다시 선택하세요",
-    "loading": "실행 대상 불러오는 중…",
-    "error": "실행 대상을 불러오지 못했습니다",
-    "empty": "사용 가능한 실행 대상이 없습니다",
-    "hint": "작업은 {{target}}에서 실행됩니다.",
-    "offline": "실행 대상이 오프라인입니다. 작업은 다시 연결될 때까지 대기합니다.",
-    "offline_badge": "오프라인"
+    "label": "실행 그룹",
+    "placeholder": "실행 그룹 선택",
+    "unavailable": "실행 그룹을 사용할 수 없습니다. 다시 선택하세요",
+    "loading": "실행 그룹 불러오는 중…",
+    "error": "실행 그룹을 불러오지 못했습니다",
+    "empty": "사용 가능한 실행 그룹이 없습니다",
+    "hint": "작업은 {{target}} 그룹의 사용 가능한 Runtime에서 실행됩니다.",
+    "offline": "그룹에 온라인 Runtime이 없습니다. 구성원이 다시 연결될 때까지 대기합니다.",
+    "offline_badge": "오프라인",
+    "members": "{{online}} 온라인 · {{count}} Runtime",
+    "pinned": "현재 Runtime {{runtime}}에 고정되어 있습니다. 실행 그룹을 다시 선택하면 그룹 내에서 작업을 배정할 수 있습니다."
   }
 }

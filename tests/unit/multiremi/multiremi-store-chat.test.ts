@@ -316,7 +316,7 @@ describe("Multiremi store — chat sessions and private agent access", () => {
       headers: aliceHeaders,
       body: JSON.stringify({
         name: "Private Codex",
-        provider: "claude",
+        provider: "codex",
         runtime_id: aliceRuntime.id,
         owner_id: "bob",
         visibility: "private",
@@ -325,11 +325,11 @@ describe("Multiremi store — chat sessions and private agent access", () => {
     expect(createdAgent.status).toBe(201);
     const agent = await createdAgent.json();
     expect(agent.owner_id).toBe("alice");
-    // Pool model: the legacy runtime_id only picks the provider; no binding.
-    expect(agent.runtime_id).toBe("");
+    // A runtime selection preserves the private execution target.
+    expect(agent.runtime_id).toBe(aliceRuntime.id);
     expect(agent.provider).toBe("codex");
     expect(store.getAgent(agent.id)?.provider).toBe("codex");
-    expect(store.getAgent(agent.id)?.runtimeId).toBeNull();
+    expect(store.getAgent(agent.id)?.runtimeId).toBe(aliceRuntime.id);
     expect(agent.visibility).toBe("private");
 
     expect((await app.request(`/api/agents/${agent.id}`, { headers: aliceAuthHeaders })).status).toBe(200);
@@ -369,7 +369,8 @@ describe("Multiremi store — chat sessions and private agent access", () => {
     });
     expect(sent.status).toBe(201);
 
-    store.updateAgent(agent.id, { ownerId: "carol" });
+    // A new owner cannot inherit Alice's private Runtime target.
+    store.updateAgent(agent.id, { ownerId: "carol", runtimeId: null });
     const aliceHiddenList = await app.request("/api/chat/sessions", { headers: aliceAuthHeaders });
     expect(await aliceHiddenList.json()).toEqual([]);
     const aliceHiddenPending = await app.request("/api/chat/pending-tasks", { headers: aliceAuthHeaders });

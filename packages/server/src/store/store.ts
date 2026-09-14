@@ -1,3 +1,4 @@
+import { getExecutionGroup, listExecutionGroups } from "@multiremi/store/execution-groups.js";
 import { type SqlDatabase, openMultiremiDatabase } from "@multiremi/store/db/postgres.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
 import { daemonRuntimeId, isTerminalStatus } from "@multiremi/store/helpers.js";
@@ -791,6 +792,9 @@ runMigrations(this.db);
   retrySessionArchive(id: string): MultiremiSessionArchive | null {
     return this.sessionArchives.retry(id);
   }
+
+  listExecutionGroups(workspaceId: string) { return listExecutionGroups(this.db, workspaceId); }
+  getExecutionGroup(id: string, workspaceId = "local") { return getExecutionGroup(this.db, id, workspaceId); }
 
   createAgent(input: CreateAgentInput): MultiremiAgent {
     return this.agents.createAgent(input);

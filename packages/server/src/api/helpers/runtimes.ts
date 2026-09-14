@@ -10,6 +10,7 @@ import { RuntimeRegistrationIdentityConflictError } from "@multiremi/store/repos
 import {
   MULTIREMI_DAEMON_PROVIDERS,
   cleanString,
+  hasRequestField,
   currentAccessToken,
   currentRequestUserId,
   daemonRuntimeResponse,
@@ -558,4 +559,24 @@ export function cloudRuntimeStatusResponse(c: Context, store: MultiremiStore, bo
   const node = id ? store.setCloudRuntimeNodeStatus(id, status) : null;
   if (!node) return c.json({ error: "cloud runtime node not found" }, 404);
   return c.json(node);
+}
+
+/** Validate user-configured group names before entering the Runtime write transaction. */
+export function validateRuntimeExecutionGroupInput(
+  c: Context,
+  store: MultiremiStore,
+  workspaceId: string,
+  provider: string,
+  input: { executionGroupId?: string | null; execution_group_id?: string | null },
+): Response | null {
+  if (!hasRequestField(input, "executionGroupId", "execution_group_id")) return null;
+  const raw = input.executionGroupId ?? input.execution_group_id;
+  if (raw == null) return null;
+  if (typeof raw !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/.test(raw.trim()) || raw.trim().startsWith("eg_")) {
+    return c.json({ error: "execution_group_id must be a custom identifier of 1–128 letters, digits, dots, colons, underscores or hyphens and must not start with eg_" }, 400);
+  }
+  if (provider === "any") return c.json({ error: "an any-provider Runtime cannot join a custom execution group" }, 400);
+  const existing = store.getExecutionGroup(raw.trim(), workspaceId);
+  if (existing && existing.provider !== provider) return c.json({ error: "execution group members must use the same provider" }, 400);
+  return null;
 }

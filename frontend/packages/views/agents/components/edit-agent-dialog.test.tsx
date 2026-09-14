@@ -21,8 +21,8 @@ import zhCommon from "../../locales/zh-Hans/common.json";
 import zhAgents from "../../locales/zh-Hans/agents.json";
 
 vi.mock("./execution-target-select", () => ({
-  ExecutionTargetSelect: ({ onChange }: { onChange: (target: { runtimeId: string; provider: string }) => void }) => (
-    <div role="group" aria-label="Execution target">{["claude", "codex"].map((provider) => <button key={provider} onClick={() => onChange({ runtimeId: `rt-${provider}`, provider })}>{provider}</button>)}</div>
+  ExecutionTargetSelect: ({ onChange }: { onChange: (target: { executionGroupId: string; provider: string }) => void }) => (
+    <div role="group" aria-label="Execution target">{["claude", "codex"].map((provider) => <button key={provider} onClick={() => onChange({ executionGroupId: `group-${provider}`, provider })}>{provider}</button>)}</div>
   ),
 }));
 
@@ -254,6 +254,15 @@ describe("EditAgentDialog", () => {
     expect(onSave.mock.calls[0]?.[0]).toMatchObject({ role: "maintainer" });
   });
 
+  it("sends the current group again when explicitly releasing a migrated machine pin", async () => {
+    const { onSave } = renderDialog(makeAgent({ runtime_id: "old-machine", execution_group_id: "group-claude" }));
+    fireEvent.click(screen.getByRole("button", { name: "claude" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0]?.[0]).toMatchObject({ execution_group_id: "group-claude", provider: "claude" });
+    expect(onSave.mock.calls[0]?.[0]).not.toHaveProperty("runtime_id");
+  });
+
   it("clears target-specific model and thinking settings when changing targets", async () => {
     const { onSave } = renderDialog();
 
@@ -263,7 +272,7 @@ describe("EditAgentDialog", () => {
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
     expect(onSave.mock.calls[0]?.[0]).toMatchObject({
       provider: "codex",
-      runtime_id: "rt-codex",
+      execution_group_id: "group-codex",
       model: "",
       thinking_level: "",
     });

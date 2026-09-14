@@ -15,6 +15,8 @@ import { useT } from "../../../i18n";
 export function ModelPicker({
   wsId,
   runtimeId,
+  executionGroupId,
+  agentId,
   provider,
   value,
   canEdit = true,
@@ -22,6 +24,8 @@ export function ModelPicker({
 }: {
   wsId: string;
   runtimeId?: string | null;
+  executionGroupId?: string | null;
+  agentId?: string;
   provider: string;
   value: string;
   /** When false, render a static read-only display and skip the popover. */
@@ -32,7 +36,7 @@ export function ModelPicker({
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
 
-  const { models, isLoading } = useExecutionTargetModels(wsId, provider, runtimeId);
+  const { models, isLoading } = useExecutionTargetModels(wsId, provider, runtimeId, executionGroupId, agentId);
 
   const filtered = useMemo(() => {
     const s = search.trim().toLowerCase();
@@ -58,7 +62,7 @@ export function ModelPicker({
     if (id !== value) await onChange(id);
   };
 
-  if (!canEdit || !runtimeId) {
+  if (!canEdit || (!runtimeId && !executionGroupId)) {
     return (
       <span
         className="min-w-0 truncate px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"

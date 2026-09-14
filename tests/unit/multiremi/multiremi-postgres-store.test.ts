@@ -1626,6 +1626,26 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(store.deleteWorkspace(ws)).toBeTrue();
   });
 
+  it("persists custom execution groups and enforces membership claims on Postgres", () => {
+    const ws = freshWorkspace();
+    const first = store.registerRuntime({ name: "Group A", provider: "codex", workspaceId: ws, executionGroupId: "shared", models: [
+      { id: "group-model", label: "Model", provider: "openai", default: true },
+    ] });
+    const second = store.registerRuntime({ name: "Group B", provider: "codex", workspaceId: ws, executionGroupId: "shared", models: [
+      { id: "group-model", label: "Model", provider: "openai", default: true },
+    ] });
+    const agent = store.createAgent({ name: "Grouped worker", provider: "codex", workspaceId: ws, executionGroupId: "shared", model: "group-model" });
+    const task = store.createTask({ agentId: agent.id, prompt: "Only group members" });
+    store.updateRuntime(first.id, { executionGroupId: "departed" });
+    expect(store.claimTask(first.id)).toBeNull();
+    expect(store.claimTask(second.id)?.id).toBe(task.id);
+    store.cancelTask(task.id);
+    expect(store.deleteRuntime(second.id)).toBeTrue();
+    expect(store.getExecutionGroup("shared", ws)?.runtimeIds).toEqual([]);
+    expect(store.getAgent(agent.id)?.executionGroupId).toBe("shared");
+    expect(Number((db.query("SELECT COUNT(*) AS count FROM multiremi_execution_group_members WHERE runtime_id = ?").get(second.id) as { count: number }).count)).toBe(0);
+  });
+
   it("migrates and cleans complete Runtime auxiliary state on Postgres", () => {
     const ws = freshWorkspace();
     const oldRuntime = store.registerRuntime({
@@ -1709,6 +1729,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       workspaceId: ws,
       daemonId: newRuntime.daemonId,
     });
+    expect(store.deleteRuntime(newRuntime.id)).toBeFalse();
+    store.updateAgent(agent.id, { runtimeId: null });
     expect(store.deleteRuntime(newRuntime.id)).toBeTrue();
     expect(store.getAgent(agent.id)?.runtimeId).toBeNull();
     expect(store.getIssueWorkspace(issue.id)).toMatchObject({ runtimeId: null, status: "runtime_offline" });

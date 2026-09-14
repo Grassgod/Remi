@@ -1,3 +1,4 @@
+import { syncRuntimeExecutionGroups } from "@multiremi/store/execution-groups.js";
 import { createHash } from "node:crypto";
 import { attachmentIdsFromText } from "@multiremi/contracts/attachments.js";
 import { type SqlDatabase } from "@multiremi/store/db/postgres.js";
@@ -2987,6 +2988,24 @@ export function runMigrations(db: SqlDatabase): void {
       "UPDATE multiremi_issues SET completed_at = updated_at WHERE completed_at IS NULL AND status IN ('done', 'cancelled')",
     );
   }
+  addColumnIfMissing(db, "multiremi_agents", "execution_group_id TEXT");
+  addColumnIfMissing(db, "multiremi_runtimes", "execution_group_id TEXT");
+  db.exec(`CREATE TABLE IF NOT EXISTS multiremi_execution_groups (
+    id TEXT NOT NULL, workspace_id TEXT NOT NULL, provider TEXT NOT NULL,
+    machine_id TEXT, created_at TEXT NOT NULL, PRIMARY KEY(workspace_id, id)
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_execution_groups_default ON multiremi_execution_groups(workspace_id, machine_id, provider);
+  CREATE TABLE IF NOT EXISTS multiremi_execution_group_members (
+    runtime_id TEXT NOT NULL, provider TEXT NOT NULL, workspace_id TEXT NOT NULL,
+    group_id TEXT NOT NULL, PRIMARY KEY(runtime_id, provider)
+  );
+  CREATE INDEX IF NOT EXISTS idx_execution_group_members_group ON multiremi_execution_group_members(workspace_id, group_id);`);
+  runMigrationOnce(db, "execution_groups_v1", () => {
+    for (const row of db.query("SELECT id FROM multiremi_runtimes").all() as { id: string }[]) syncRuntimeExecutionGroups(db, row.id);
+    db.run(`UPDATE multiremi_agents SET execution_group_id = (
+      SELECT group_id FROM multiremi_execution_group_members m WHERE m.runtime_id = multiremi_agents.runtime_id AND m.provider = multiremi_agents.provider
+    ) WHERE execution_group_id IS NULL AND runtime_id IS NOT NULL`);
+  });
   backfillDefaultIssueSessions(db);
   backfillIssueKeys(db);
   migrateLegacyGithubProjection(db, legacyGithubTables);

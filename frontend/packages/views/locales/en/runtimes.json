@@ -637,5 +637,13 @@
     "saving": "Saving…",
     "saved": "Claude Code connection saved",
     "auth_header": "Request authentication"
+  },
+  "execution_group": {
+    "label": "Execution group ID",
+    "default": "Default: machine + Runtime type",
+    "hint": "Runtimes with the same group ID and type share execution capacity. Leave blank to restore the default machine group.",
+    "save": "Save",
+    "saved": "Execution group updated",
+    "failed": "Could not update execution group"
   }
 }

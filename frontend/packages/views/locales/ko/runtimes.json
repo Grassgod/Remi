@@ -637,5 +637,13 @@
     "saving": "저장 중…",
     "saved": "Claude Code 연결을 저장했습니다",
     "auth_header": "요청 인증"
+  },
+  "execution_group": {
+    "label": "실행 그룹 ID",
+    "default": "기본값: 머신 + Runtime 유형",
+    "hint": "그룹 ID와 유형이 같은 Runtime이 작업을 함께 처리합니다. 비워서 저장하면 기본 머신 그룹으로 돌아갑니다.",
+    "save": "저장",
+    "saved": "실행 그룹이 업데이트되었습니다",
+    "failed": "실행 그룹을 업데이트하지 못했습니다"
   }
 }

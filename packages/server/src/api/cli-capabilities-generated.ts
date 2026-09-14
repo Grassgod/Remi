@@ -3993,6 +3993,19 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "runtime.group.list": {
+      "command": "remi runtime group list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "runtime.group.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "runtime.codex-profile.get": {
       "command": "remi runtime codex-profile get",
       "auth": [

@@ -69,7 +69,8 @@ export function EditAgentDialog({
   const [avatarUrl, setAvatarUrl] = useState<string | null>(
     agent.avatar_url ?? null,
   );
-  const [runtimeId, setRuntimeId] = useState(agent.runtime_id ?? "");
+  const [executionGroupId, setExecutionGroupId] = useState(agent.execution_group_id ?? "");
+  const [legacyRuntimeId, setLegacyRuntimeId] = useState(agent.runtime_id ?? "");
   const [provider, setProvider] = useState(agent.provider ?? "");
   const [model, setModel] = useState(agent.model ?? "");
   const [thinkingLevel, setThinkingLevel] = useState(
@@ -85,7 +86,7 @@ export function EditAgentDialog({
   const [role, setRole] = useState<AgentRole>(agent.role ?? "normal");
   const [saving, setSaving] = useState(false);
 
-  const targetModels = useExecutionTargetModels(wsId ?? "", provider, runtimeId);
+  const targetModels = useExecutionTargetModels(wsId ?? "", provider, executionGroupId ? undefined : legacyRuntimeId, executionGroupId, agent.id);
   const thinkingLevels = useMemo(
     () => getModelThinkingLevels(targetModels.models, model),
     [targetModels.models, model],
@@ -103,7 +104,8 @@ export function EditAgentDialog({
 
   const switchTarget = (next: ExecutionTarget) => {
     setProvider(next.provider);
-    setRuntimeId(next.runtimeId);
+    setExecutionGroupId(next.executionGroupId);
+    setLegacyRuntimeId("");
     setModel("");
     setThinkingLevel("");
   };
@@ -118,6 +120,9 @@ export function EditAgentDialog({
     setModel(next);
   };
 
+  const targetChanged = executionGroupId !== (agent.execution_group_id ?? "") ||
+    (!!agent.runtime_id && !legacyRuntimeId);
+
   const submit = async () => {
     if (!canSave || saving) return;
     setSaving(true);
@@ -127,7 +132,7 @@ export function EditAgentDialog({
         description: description.trim(),
         avatar_url: avatarUrl ?? "",
         ...(provider ? { provider } : {}),
-        ...(runtimeId !== (agent.runtime_id ?? "") ? { runtime_id: runtimeId } : {}),
+        ...(targetChanged ? { execution_group_id: executionGroupId } : {}),
         model: model.trim(),
         thinking_level: thinkingLevel,
         visibility,
@@ -252,14 +257,18 @@ export function EditAgentDialog({
             )}
 
             <ExecutionTargetSelect
+              agentId={agent.id}
               ownerId={agent.owner_id}
               wsId={wsId ?? ""}
-              value={{ runtimeId, provider }}
+              value={{ executionGroupId, provider }}
+              legacyRuntimeId={legacyRuntimeId}
               onChange={switchTarget}
             />
 
             <ModelDropdown
-              runtimeId={runtimeId}
+              agentId={agent.id}
+              runtimeId={executionGroupId ? undefined : legacyRuntimeId}
+              executionGroupId={executionGroupId}
               wsId={wsId ?? ""}
               provider={provider}
               value={model}

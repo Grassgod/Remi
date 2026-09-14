@@ -16,6 +16,9 @@ export type RuntimeVisibility = "private" | "public";
 
 export interface RuntimeDevice {
   id: string;
+  /** Explicit custom group; null uses the machine/type default. */
+  execution_group_id?: string | null;
+  execution_group_ids?: string[];
   workspace_id: string;
   daemon_id: string | null;
   /** Optional for compatibility with servers predating daemon profiles. */
@@ -194,6 +197,7 @@ export interface TaskPromptArtifact {
 
 export interface Agent {
   id: string;
+  execution_group_id?: string | null;
   workspace_id: string;
   /** Selected machine/type Runtime. Empty for existing unbound agents. */
   runtime_id: string;
@@ -286,6 +290,7 @@ export interface AgentSkillSummary {
 
 export interface CreateAgentRequest {
   name: string;
+  execution_group_id?: string;
   description?: string;
   instructions?: string;
   avatar_url?: string;
@@ -343,6 +348,7 @@ export interface AgentTemplateSkillRef {
 
 export interface CreateAgentFromTemplateRequest {
   template_slug: string;
+  execution_group_id?: string;
   name: string;
   /** Engine for the new agent; see CreateAgentRequest.provider. */
   provider?: string;
@@ -381,6 +387,7 @@ export interface CreateAgentFromTemplateFailure {
 
 export interface UpdateAgentRequest {
   name?: string;
+  execution_group_id?: string | null;
   description?: string;
   instructions?: string;
   avatar_url?: string;

@@ -154,7 +154,7 @@
     "description_placeholder": "What does this agent do?",
     "save": "Save",
     "cancel": "Cancel",
-    "prop_engine": "Execution target"
+    "prop_engine": "Execution group"
   },
   "skill_attach": {
     "trigger_aria": "Attach a workspace skill",
@@ -473,14 +473,16 @@
     "agent_count_other": "{{count}} agents"
   },
   "execution_target": {
-    "label": "Execution target",
-    "placeholder": "Choose a machine and Runtime type",
-    "unavailable": "Execution target unavailable; choose another target",
-    "loading": "Loading execution targets…",
-    "error": "Could not load execution targets",
-    "empty": "No execution targets available",
-    "hint": "Tasks will run on {{target}}.",
-    "offline": "This target is offline. Tasks will wait for it to reconnect.",
-    "offline_badge": "Offline"
+    "label": "Execution group",
+    "placeholder": "Choose an execution group",
+    "unavailable": "Execution group unavailable; choose another group",
+    "loading": "Loading execution groups…",
+    "error": "Could not load execution groups",
+    "empty": "No execution groups available",
+    "hint": "Tasks will run on an available Runtime in {{target}}.",
+    "offline": "This group has no online Runtime. Tasks will wait for a member to reconnect.",
+    "offline_badge": "Offline",
+    "members": "{{online}} online · {{count}} Runtime",
+    "pinned": "Currently pinned to Runtime {{runtime}}. Select an execution group again to allow scheduling within the group."
   }
 }

@@ -46,6 +46,9 @@ import {
   type CliLatestVersionResponse,
   CliLatestVersionResponseSchema,
   AgentRuntimeListSchema,
+  AgentRuntimeSchema,
+  ExecutionGroupListSchema,
+  type ExecutionGroupList,
   CloudRuntimeNodeListSchema,
   CloudRuntimeNodeSchema,
   DaemonInventoryResponseSchema,
@@ -117,15 +120,24 @@ export class RuntimesEndpoints {
   }
 
   // An optional execution target scopes both models and online capacity.
-  async listFleetModels(params?: { workspace_id?: string; runtime_id?: string }): Promise<FleetModelsResponse> {
+  async listFleetModels(params?: { workspace_id?: string; runtime_id?: string; execution_group_id?: string; agent_id?: string }): Promise<FleetModelsResponse> {
     const search = new URLSearchParams();
     if (params?.workspace_id) search.set("workspace_id", params.workspace_id);
     if (params?.runtime_id) search.set("runtime_id", params.runtime_id);
+    if (params?.execution_group_id) search.set("execution_group_id", params.execution_group_id);
+    if (params?.agent_id) search.set("agent_id", params.agent_id);
     const query = search.toString();
     const raw = await this.http.fetch<unknown>(`/api/models${query ? `?${query}` : ""}`);
     return parseWithFallback(raw, FleetModelsResponseSchema, EMPTY_FLEET_MODELS, {
       endpoint: "GET /api/models",
     });
+  }
+
+  async listExecutionGroups(params: { workspace_id: string; agent_id?: string }): Promise<ExecutionGroupList> {
+    const search = new URLSearchParams({ workspace_id: params.workspace_id });
+    if (params.agent_id) search.set("agent_id", params.agent_id);
+    const raw = await this.http.fetch<unknown>(`/api/execution-groups?${search}`);
+    return parseStrictResponse(raw, ExecutionGroupListSchema, { endpoint: "GET /api/execution-groups" });
   }
 
   // Model gateway: fleet-wide relay config (owner/admin only). Tokens are masked
@@ -485,12 +497,13 @@ export class RuntimesEndpoints {
 
   async updateRuntime(
     runtimeId: string,
-    patch: { visibility?: "private" | "public"; name?: string },
+    patch: { visibility?: "private" | "public"; name?: string; execution_group_id?: string | null },
   ): Promise<AgentRuntime> {
-    return this.http.fetch(`/api/runtimes/${runtimeId}`, {
+    const raw = await this.http.fetch<unknown>(`/api/runtimes/${runtimeId}`, {
       method: "PATCH",
       body: JSON.stringify(patch),
     });
+    return parseStrictResponse(raw, AgentRuntimeSchema, { endpoint: "PATCH /api/runtimes/:id" });
   }
 
   async updateDaemonDisplayName(

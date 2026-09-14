@@ -71,8 +71,8 @@ vi.mock("./inspector/concurrency-picker", () => ({
   ConcurrencyPicker: () => <span>concurrency-picker</span>,
 }));
 vi.mock("./execution-target-select", () => ({
-  ExecutionTargetSelect: ({ onChange }: { onChange: (target: { runtimeId: string; provider: string }) => void }) => (
-    <>{["claude", "codex"].map((provider) => <button key={provider} onClick={() => onChange({ runtimeId: `rt-${provider}`, provider })}>{provider}</button>)}</>
+  ExecutionTargetSelect: ({ onChange }: { onChange: (target: { executionGroupId: string; provider: string }) => void }) => (
+    <>{["claude", "codex"].map((provider) => <button key={provider} onClick={() => onChange({ executionGroupId: `group-${provider}`, provider })}>{provider}</button>)}</>
   ),
 }));
 
@@ -184,7 +184,7 @@ describe("AgentDetailInspector skills section", () => {
   it("updates the machine and Runtime type atomically and clears old model options", () => {
     const { onUpdate } = renderInspector(makeAgent({ runtime_id: "other-codex", provider: "codex", model: "old-model", thinking_level: "high" }));
     fireEvent.click(screen.getByRole("button", { name: "codex" }));
-    expect(onUpdate).toHaveBeenCalledWith("agent-1", { runtime_id: "rt-codex", provider: "codex", model: "", thinking_level: "" });
+    expect(onUpdate).toHaveBeenCalledWith("agent-1", { execution_group_id: "group-codex", provider: "codex", model: "", thinking_level: "" });
   });
 
   it("explains the empty state instead of leaving a bare header", () => {

@@ -62,6 +62,15 @@ function makeRuntime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
 const NOW = new Date("2026-04-27T12:00:00Z").getTime();
 
 describe("execution target availability", () => {
+  it("uses only execution-group members and respects a retained legacy pin", () => {
+    const agent = makeAgent({ runtime_id: "", provider: "claude", execution_group_id: "team-claude" });
+    const member = makeRuntime({ id: "member", execution_group_ids: ["team-claude"] });
+    const other = makeRuntime({ id: "other", execution_group_ids: ["other-team"] });
+    expect(resolveAgentRuntimes(agent, [member, other])).toEqual([member]);
+    expect(resolveAgentRuntimes(agent, [other])).toEqual([]);
+    expect(resolveAgentRuntimes({ ...agent, runtime_id: "missing" }, [member])).toEqual([]);
+  });
+
   it("does not borrow another machine's online status", () => {
     const agent = makeAgent({ provider: "claude" });
     const runtimes = [

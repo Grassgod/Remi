@@ -10,6 +10,8 @@ import { getModelThinkingLevels } from "./thinking-levels";
 export function ThinkingPropRow({
   wsId,
   runtimeId,
+  executionGroupId,
+  agentId,
   provider,
   model,
   value,
@@ -18,6 +20,8 @@ export function ThinkingPropRow({
 }: {
   wsId: string;
   runtimeId?: string | null;
+  executionGroupId?: string | null;
+  agentId?: string;
   provider: string;
   model: string;
   value: string;
@@ -25,7 +29,7 @@ export function ThinkingPropRow({
   onChange: (next: string) => Promise<void> | void;
 }) {
   const { t } = useT("agents");
-  const { models, isLoading, isError } = useExecutionTargetModels(wsId, provider, runtimeId);
+  const { models, isLoading, isError } = useExecutionTargetModels(wsId, provider, runtimeId, executionGroupId, agentId);
 
   const levels = getModelThinkingLevels(models, model);
   if (levels.length === 0 && !value) {

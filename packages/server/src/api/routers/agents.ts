@@ -79,7 +79,7 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
     return c.json({ agent }, 201);
   });
   app.post("/api/multiremi/agents/default", async (c) => {
-    const body = await readJsonStrict<{ provider?: string; runtimeId?: string | null; runtime_id?: string | null; workspaceId?: string | null; workspace_id?: string | null }>(c);
+    const body = await readJsonStrict<{ provider?: string; runtimeId?: string | null; runtime_id?: string | null; executionGroupId?: string | null; execution_group_id?: string | null; workspaceId?: string | null; workspace_id?: string | null }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const workspaceId = requestedAgentWorkspaceId(c, store, body);
     if (workspaceId instanceof Response) return workspaceId;
@@ -89,12 +89,14 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
     if (provider instanceof Response) return provider;
     const actingUserId = currentRequestUserId(c);
     const before = store.getDefaultAgent(workspaceId, provider, actingUserId);
-    const targetProvided = hasRequestField(body, "runtimeId", "runtime_id");
+    const targetProvided = hasRequestField(body, "runtimeId", "runtime_id", "executionGroupId", "execution_group_id");
     const targetRuntimeId = cleanString(body.runtimeId ?? body.runtime_id) ?? null;
-    const targetChanged = targetProvided && targetRuntimeId !== (before?.runtimeId ?? null);
+    const targetGroupId = cleanString(body.executionGroupId ?? body.execution_group_id) ?? null;
+    const targetChanged = targetProvided && (targetRuntimeId !== (before?.runtimeId ?? null) || (!targetRuntimeId && targetGroupId !== (before?.executionGroupId ?? null)));
+    const targetFields = targetRuntimeId ? { runtimeId: targetRuntimeId } : { executionGroupId: targetGroupId };
     const targetUpdate = targetChanged && before
-      ? withAgentUpdateRequestContext(c, store, before, { runtimeId: targetRuntimeId, provider })
-      : { runtimeId: targetRuntimeId };
+      ? withAgentUpdateRequestContext(c, store, before, { ...targetFields, provider })
+      : targetFields;
     if (targetUpdate instanceof Response) return targetUpdate;
     const isFirstAgent = isFirstAgentInWorkspace(store, workspaceId);
     let agent = store.ensureDefaultAgent(provider, {
