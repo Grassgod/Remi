@@ -15,7 +15,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, sta
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { installRuntimeBundle, runtimeBundlePrefix, runtimePackageSatisfied, verifyRuntimeExecutable } from "./runtime-bundle.js";
-import { selectedRuntimeVersions } from "./runtime-update-state.js";
+import { releaseRuntimeVersions } from "./runtime-versions.js";
 export { BRIDGE_PIN, RUNTIME_PIN } from "./runtime-versions.js";
 
 export type ProvisionProvider = "claude" | "codex";
@@ -111,7 +111,7 @@ export function bridgeSatisfied(provider: ProvisionProvider): boolean {
   if (!dir) return false;
   try {
     const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { version?: string };
-    return pkg.version === selectedRuntimeVersions(provider).acp
+    return pkg.version === releaseRuntimeVersions(provider).acp
       && runtimePackageSatisfied(provider, dir)
       && (provider !== "codex" || codexUsagePatchSatisfied(dir));
   } catch {
@@ -314,7 +314,7 @@ export function ensureAcpBridges(
 export function reinstallBridge(provider: ProvisionProvider, log: Logger = (m) => console.error(`[provision] ${m}`), options: { activate?: boolean } = {}): string {
   const node = ensureNode(log);
   if (!node) throw new Error("cannot reinstall ACP bridge: node unavailable");
-  const versions = selectedRuntimeVersions(provider);
+  const versions = releaseRuntimeVersions(provider);
   log(`preparing ${provider}: ACP ${versions.acp}, SDK ${versions.sdk}, executable ${versions.executable}`);
   installRuntimeBundle(provider, node, (bridge) => {
     if (provider === "codex" && !patchCodexUsageBridge(log, bridge)) {

@@ -34,6 +34,8 @@
   "scripts": {
     "platform-updater": "bun run apps/platform-updater/main.ts",
     "build:multiremi": "bun run scripts/build-multiremi.ts",
+    "release:prepare": "bun run scripts/release-runtime.ts prepare",
+    "release:check": "bun run scripts/release-runtime.ts check",
     "lock:clean": "bun run scripts/clean-lockfile.ts",
     "test": "bun test",
     "cli:capabilities:generate": "bun run scripts/generate-cli-capabilities.ts",

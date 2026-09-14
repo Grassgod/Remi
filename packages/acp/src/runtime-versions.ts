@@ -1,8 +1,10 @@
-/** Tested release floor; verified automatic updates may select newer stable versions. */
-export const BRIDGE_PIN = { claude: "0.76.0", codex: "1.11.0" } as const;
+import snapshot from "./runtime-versions.json";
+
+/** Immutable for each release; refreshed and verified by release:prepare before tagging. */
+export const BRIDGE_PIN = { claude: snapshot.claude.acp, codex: snapshot.codex.acp } as const;
 export const RUNTIME_PIN = {
-  claude: { package: "@anthropic-ai/claude-agent-sdk", version: "0.3.270", executableVersion: "2.1.270" },
-  codex: { package: "@openai/codex", version: "0.154.0", executableVersion: "0.154.0" },
+  claude: { package: "@anthropic-ai/claude-agent-sdk", version: snapshot.claude.sdk, executableVersion: snapshot.claude.executable },
+  codex: { package: "@openai/codex", version: snapshot.codex.sdk, executableVersion: snapshot.codex.executable },
 } as const;
 export const BRIDGE_PACKAGE = {
   claude: "@agentclientprotocol/claude-agent-acp",
@@ -10,7 +12,6 @@ export const BRIDGE_PACKAGE = {
 } as const;
 export type RuntimeProvider = keyof typeof BRIDGE_PIN;
 export interface RuntimeVersions { acp: string; sdk: string; executable: string }
-export type RuntimeSelection = Partial<Record<RuntimeProvider, RuntimeVersions>>;
 
 export function releaseRuntimeVersions(provider: RuntimeProvider): RuntimeVersions {
   return { acp: BRIDGE_PIN[provider], sdk: RUNTIME_PIN[provider].version, executable: RUNTIME_PIN[provider].executableVersion };

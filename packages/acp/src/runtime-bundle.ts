@@ -3,9 +3,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, s
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { BRIDGE_PACKAGE, RUNTIME_PIN, type RuntimeProvider, type RuntimeVersions } from "./runtime-versions.js";
-import { selectedRuntimeVersions } from "./runtime-update-state.js";
+import { releaseRuntimeVersions } from "./runtime-versions.js";
 
-export function runtimeBundlePrefix(provider: RuntimeProvider, versions = selectedRuntimeVersions(provider)): string {
+export function runtimeBundlePrefix(provider: RuntimeProvider, versions = releaseRuntimeVersions(provider)): string {
   return join(process.env.REMI_HOME ?? join(homedir(), ".remi"), "acp", "bundles",
     `${provider}-${versions.acp}-${versions.sdk}-${versions.executable}`);
 }
@@ -46,12 +46,12 @@ export function runtimePackage(provider: RuntimeProvider, bridge: string): { roo
   return { root, version: String(pkg.version), executable };
 }
 
-export function runtimePackageSatisfied(provider: RuntimeProvider, bridge: string, versions = selectedRuntimeVersions(provider)): boolean {
+export function runtimePackageSatisfied(provider: RuntimeProvider, bridge: string, versions = releaseRuntimeVersions(provider)): boolean {
   try { return runtimePackage(provider, bridge).version === versions.sdk; }
   catch { return false; }
 }
 
-export function verifyRuntimeExecutable(provider: RuntimeProvider, bridge: string, node: string, versions = selectedRuntimeVersions(provider)): string {
+export function verifyRuntimeExecutable(provider: RuntimeProvider, bridge: string, node: string, versions = releaseRuntimeVersions(provider)): string {
   const runtime = runtimePackage(provider, bridge);
   if (runtime.version !== versions.sdk) {
     throw new Error(`${provider} SDK version mismatch: expected ${versions.sdk}, got ${runtime.version}`);
@@ -67,7 +67,7 @@ export function verifyRuntimeExecutable(provider: RuntimeProvider, bridge: strin
   return version;
 }
 
-export function runtimeBundleManifest(provider: RuntimeProvider, versions = selectedRuntimeVersions(provider)) {
+export function runtimeBundleManifest(provider: RuntimeProvider, versions = releaseRuntimeVersions(provider)) {
   const runtime = RUNTIME_PIN[provider];
   return {
     private: true,
@@ -102,12 +102,12 @@ export function installRuntimeBundle(
   provider: RuntimeProvider,
   tools: { node: string; npm: string },
   prepareBridge: (bridge: string) => void,
-  versions: RuntimeVersions = selectedRuntimeVersions(provider),
+  versions: RuntimeVersions = releaseRuntimeVersions(provider),
 ): void {
   const destination = runtimeBundlePrefix(provider, versions);
   mkdirSync(dirname(destination), { recursive: true });
   const lock = join(dirname(destination), `.install-${provider}.lock`);
-  // A manual prepare and the background checker must never replace one bundle concurrently.
+  // Concurrent preparation commands must never replace one bundle concurrently.
   try { acquireInstallLock(lock); }
   catch { throw new Error(`${provider} runtime installation already in progress (${lock})`); }
   let stage: string | undefined;
