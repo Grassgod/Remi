@@ -333,6 +333,28 @@ export function runMigrations(db: SqlDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_multiremi_cloud_runtime_nodes_owner
       ON multiremi_cloud_runtime_nodes(owner_id, created_at);
 
+    CREATE TABLE IF NOT EXISTS multiremi_runtime_provider_credentials (
+      id TEXT PRIMARY KEY,
+      runtime_id TEXT NOT NULL,
+      ciphertext TEXT NOT NULL,
+      FOREIGN KEY(runtime_id) REFERENCES multiremi_runtimes(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS multiremi_runtime_codex_profiles (
+      runtime_id TEXT PRIMARY KEY,
+      profile TEXT NOT NULL,
+      FOREIGN KEY(runtime_id) REFERENCES multiremi_runtimes(id) ON DELETE CASCADE
+    );
+
+
+    CREATE TABLE IF NOT EXISTS multiremi_runtime_claude_profiles (
+      runtime_id TEXT PRIMARY KEY,
+      profile TEXT NOT NULL,
+      FOREIGN KEY(runtime_id) REFERENCES multiremi_runtimes(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_runtime_provider_credentials_runtime ON multiremi_runtime_provider_credentials(runtime_id);
+
     CREATE TABLE IF NOT EXISTS multiremi_runtime_models (
       runtime_id TEXT NOT NULL,
       model_id TEXT NOT NULL,
@@ -2758,6 +2780,8 @@ export function runMigrations(db: SqlDatabase): void {
   // come from this snapshot, not the agent's current provider.
   addColumnIfMissing(db, "multiremi_tasks", "provider TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "plugin_snapshot TEXT NOT NULL DEFAULT '[]'");
+  addColumnIfMissing(db, "multiremi_tasks", "codex_profile TEXT");
+  addColumnIfMissing(db, "multiremi_tasks", "claude_profile TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "execution_fingerprint TEXT");
   addColumnIfMissing(db, "multiremi_session_agent_lanes", "execution_fingerprint TEXT");
   migrateExecutionScopedLanes(db);

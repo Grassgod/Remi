@@ -58,6 +58,8 @@ import { UsageSection } from "./usage-section";
 import { DeleteRuntimeDialog } from "./delete-runtime-dialog";
 import { RetireDaemonDialog } from "./retire-daemon-dialog";
 import { RuntimePluginsTab } from "./runtime-plugins-tab";
+import { RuntimeCodexProfileTab } from "./runtime-codex-profile-tab";
+import { RuntimeProviderProfileTab } from "./runtime-provider-profile-tab";
 import { RuntimeNameEditor } from "./name-editor";
 import { useT } from "../../i18n";
 
@@ -198,7 +200,7 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
       >
         <TabsList
           variant="line"
-          className="h-auto w-full shrink-0 justify-start gap-0 rounded-none border-b px-4 pb-[5px] sm:px-6"
+          className="h-auto w-full shrink-0 justify-start gap-0 overflow-x-auto whitespace-nowrap rounded-none border-b px-4 pb-[5px] sm:px-6"
         >
           <TabsTrigger
             value="overview"
@@ -214,6 +216,12 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
             <Puzzle />
             {tPlugins(($) => $.runtime.plugins_tab)}
           </TabsTrigger>
+          {runtime.provider === "codex" && <TabsTrigger value="codex-profile" className="h-auto flex-none rounded-none px-3 py-2.5 text-xs">
+            {t($ => $.codex_profile.title)}
+          </TabsTrigger>}
+          {runtime.provider === "claude" && <TabsTrigger value="claude-profile" className="h-auto flex-none rounded-none px-3 py-2.5 text-xs">
+            {t($ => $.claude_profile.title)}
+          </TabsTrigger>}
         </TabsList>
 
         {/* The Overview panel keeps the original single scroll container so
@@ -260,6 +268,12 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
         <TabsContent value="plugins" className="min-h-0 flex-1 overflow-y-auto">
           <RuntimePluginsTab runtime={runtime} canManage={!!canDelete} />
         </TabsContent>
+        {runtime.provider === "codex" && <TabsContent value="codex-profile" className="min-h-0 flex-1 overflow-y-auto">
+          <RuntimeCodexProfileTab runtime={runtime} canManage={!!canDelete} />
+        </TabsContent>}
+        {runtime.provider === "claude" && <TabsContent value="claude-profile" className="min-h-0 flex-1 overflow-y-auto">
+          <RuntimeProviderProfileTab runtime={runtime} canManage={!!canDelete} provider="claude" />
+        </TabsContent>}
       </Tabs>
 
       {/* Delete confirmation — unified light/cascade dialog. Shared across

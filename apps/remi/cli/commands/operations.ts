@@ -85,6 +85,10 @@ function runtimeSpecs(): CommandSpec[] {
   };
   return [
     group("runtime", "Manage execution runtimes and cloud nodes"),
+    op({ id: "runtime.codex-profile.get", path: ["runtime", "codex-profile", "get"], description: "Get a Runtime's custom Codex connection", method: "GET", apiPath: runtime("/codex-profile"), auth: HUMAN_DAEMON, positionals: [ref("runtime")] }),
+    op({ id: "runtime.codex-profile.set", path: ["runtime", "codex-profile", "set"], description: "Set a Codex connection with --file; profile: null restores the workspace gateway", method: "PUT", apiPath: runtime("/codex-profile"), mutation: "write", auth: HUMAN, positionals: [ref("runtime")], options: INPUT_OPTIONS }),
+    op({ id: "runtime.claude-profile.get", path: ["runtime", "claude-profile", "get"], description: "Get a Runtime's custom Claude Code connection", method: "GET", apiPath: runtime("/claude-profile"), auth: HUMAN_DAEMON, positionals: [ref("runtime")] }),
+    op({ id: "runtime.claude-profile.set", path: ["runtime", "claude-profile", "set"], description: "Set a Claude Code connection with --file; profile: null restores the workspace gateway", method: "PUT", apiPath: runtime("/claude-profile"), mutation: "write", auth: HUMAN, positionals: [ref("runtime")], options: INPUT_OPTIONS }),
     op({ id: "runtime.list", path: ["runtime", "list"], description: "List runtimes", method: "GET", apiPath: "/api/runtimes", auth: HUMAN_DAEMON, collections: ["runtimes"] }),
     op({ id: "runtime.get", path: ["runtime", "get"], description: "Get a runtime", method: "GET", apiPath: runtime(""), auth: HUMAN_DAEMON, positionals: [ref("runtime")] }),
     op({ id: "runtime.create", path: ["runtime", "create"], description: "Register a runtime", method: "POST", apiPath: "/api/multiremi/runtimes", auth: HUMAN_DAEMON, options: INPUT_OPTIONS, body: withWorkspace }),

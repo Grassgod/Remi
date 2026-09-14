@@ -2553,6 +2553,42 @@ runMigrations(this.db);
     return this.runtimes.getRuntime(id);
   }
 
+  getRuntimeCodexProfile(id: string) {
+    return this.runtimes.getRuntimeCodexProfile(id);
+  }
+
+  getRuntimeExecutionProfile(id: string, provider: string) {
+    return this.runtimes.getRuntimeExecutionProfile(id, provider);
+  }
+
+  listWorkspaceCodexProfileModels(workspaceId: string) {
+    return this.runtimes.listWorkspaceCodexProfileModels(workspaceId);
+  }
+
+  setRuntimeCodexProfile(id: string, input: unknown, apiKey?: unknown) {
+    return this.runtimes.setRuntimeCodexProfile(id, input, apiKey);
+  }
+
+  getRuntimeCodexProfileKey(runtimeId: string, credentialId: string) {
+    return this.runtimes.getRuntimeCodexProfileKey(runtimeId, credentialId);
+  }
+
+  getRuntimeClaudeProfile(id: string) {
+    return this.runtimes.getRuntimeClaudeProfile(id);
+  }
+
+  listWorkspaceClaudeProfileModels(workspaceId: string) {
+    return this.runtimes.listWorkspaceClaudeProfileModels(workspaceId);
+  }
+
+  setRuntimeClaudeProfile(id: string, input: unknown, apiKey?: unknown) {
+    return this.runtimes.setRuntimeClaudeProfile(id, input, apiKey);
+  }
+
+  getRuntimeClaudeProfileKey(runtimeId: string, credentialId: string) {
+    return this.runtimes.getRuntimeClaudeProfileKey(runtimeId, credentialId);
+  }
+
   listRuntimes(): MultiremiRuntime[] {
     return this.runtimes.listRuntimes();
   }

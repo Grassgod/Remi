@@ -3993,6 +3993,56 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "runtime.codex-profile.get": {
+      "command": "remi runtime codex-profile get",
+      "auth": [
+        "human",
+        "daemon"
+      ],
+      "capability": "runtime.codex-profile.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.codex-profile.set": {
+      "command": "remi runtime codex-profile set",
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.codex-profile.set",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.claude-profile.get": {
+      "command": "remi runtime claude-profile get",
+      "auth": [
+        "human",
+        "daemon"
+      ],
+      "capability": "runtime.claude-profile.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.claude-profile.set": {
+      "command": "remi runtime claude-profile set",
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.claude-profile.set",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "runtime.list": {
       "command": "remi runtime list",
       "auth": [

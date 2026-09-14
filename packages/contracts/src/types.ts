@@ -4,6 +4,9 @@
 
 // ─── Agents, skills & templates ──────────────────────────────────────────────────────────────────
 
+import type { RuntimeCodexProfile } from "./codex-profile.js";
+import type { RuntimeClaudeProfile } from "./claude-profile.js";
+
 export type MultiremiAgentProvider = "claude" | "codex" | string;
 
 export type MultiremiAgentVisibility = "private" | "workspace";
@@ -1258,9 +1261,12 @@ export interface MultiremiTask {
    * Infrastructure retries carry this snapshot forward; a user-created rerun
    * starts empty and resolves the Agent's current bindings on its own claim. */
   pluginSnapshot: MultiremiTaskPluginSnapshotEntry[];
+  /** Runtime connection frozen at claim time, without credentials. */
+  codexProfile?: RuntimeCodexProfile | null;
+  claudeProfile?: RuntimeClaudeProfile | null;
   plugin_snapshot?: MultiremiTaskPluginSnapshotEntry[];
-  /** Stable hash of the exact Plugin versions, binding config and connection
-   * references used by this execution. Provider sessions only resume when it
+  /** Stable hash of the exact Plugin versions, binding config and Runtime
+   * Codex connection/credential version used by this execution. Provider sessions only resume when it
    * still matches. Null until a normal queued task is claimed. */
   executionFingerprint: string | null;
   execution_fingerprint?: string | null;
@@ -1525,6 +1531,8 @@ export interface CreateTaskInput {
   /** Server-internal execution snapshot fields used by automatic retries. */
   provider?: string | null;
   pluginSnapshot?: MultiremiTaskPluginSnapshotEntry[];
+  codexProfile?: RuntimeCodexProfile | null;
+  claudeProfile?: RuntimeClaudeProfile | null;
   plugin_snapshot?: MultiremiTaskPluginSnapshotEntry[];
   executionFingerprint?: string | null;
   execution_fingerprint?: string | null;

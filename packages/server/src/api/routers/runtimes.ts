@@ -78,6 +78,70 @@ import type { RouterDeps } from "./deps.js";
 export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
   const { store, authToken } = deps;
 
+  app.get("/api/runtimes/:id/codex-profile", (c) => {
+    const loaded = loadRuntimeForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
+    return c.json({ profile: store.getRuntimeCodexProfile(loaded.runtime.id) });
+  });
+  app.put("/api/runtimes/:id/codex-profile", async (c) => {
+    const loaded = loadRuntimeForCurrentEditor(c, store, c.req.param("id"), "edit");
+    if (loaded instanceof Response) return loaded;
+    const body = await readJsonStrict<{ profile?: unknown; api_key?: unknown }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
+      return c.json({ profile: store.setRuntimeCodexProfile(loaded.runtime.id, body.profile, body.api_key) });
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : "Invalid Codex profile" }, 400);
+    }
+  });
+
+  app.get("/api/daemon/runtimes/:id/codex-profile-key", (c) => {
+    if (currentAccessToken(c)?.type !== "daemon") return c.json({ error: "daemon token required" }, 403);
+    const loaded = loadRuntimeForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
+    const credentialId = c.req.query("credential_id") ?? "";
+    try {
+      const key = store.getRuntimeCodexProfileKey(loaded.runtime.id, credentialId);
+      if (key === null) return c.json({ error: "Runtime credential not found" }, 404);
+      c.header("Cache-Control", "no-store");
+      return c.json({ api_key: key });
+    } catch {
+      return c.json({ error: "Runtime provider key is unavailable; check the server encryption key" }, 503);
+    }
+  });
+
+  app.get("/api/runtimes/:id/claude-profile", (c) => {
+    const loaded = loadRuntimeForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
+    return c.json({ profile: store.getRuntimeClaudeProfile(loaded.runtime.id) });
+  });
+  app.put("/api/runtimes/:id/claude-profile", async (c) => {
+    const loaded = loadRuntimeForCurrentEditor(c, store, c.req.param("id"), "edit");
+    if (loaded instanceof Response) return loaded;
+    const body = await readJsonStrict<{ profile?: unknown; api_key?: unknown }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
+      return c.json({ profile: store.setRuntimeClaudeProfile(loaded.runtime.id, body.profile, body.api_key) });
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : "Invalid Claude profile" }, 400);
+    }
+  });
+
+  app.get("/api/daemon/runtimes/:id/claude-profile-key", (c) => {
+    if (currentAccessToken(c)?.type !== "daemon") return c.json({ error: "daemon token required" }, 403);
+    const loaded = loadRuntimeForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
+    const credentialId = c.req.query("credential_id") ?? "";
+    try {
+      const key = store.getRuntimeClaudeProfileKey(loaded.runtime.id, credentialId);
+      if (key === null) return c.json({ error: "Runtime credential not found" }, 404);
+      c.header("Cache-Control", "no-store");
+      return c.json({ api_key: key });
+    } catch {
+      return c.json({ error: "Runtime provider key is unavailable; check the server encryption key" }, 503);
+    }
+  });
+
   app.get("/api/multiremi/runtimes", (c) => {
     const loaded = listRuntimesForCurrentUser(c, store);
     if (loaded instanceof Response) return loaded;

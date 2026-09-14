@@ -11,7 +11,7 @@ import { CodexAdapter } from "@acp/index.js";
 import { resolveConfigOptionChange } from "@acp/provider.js";
 import { readExecutionModel } from "@shared/agent-execution.js";
 import type { AgentAdapter, SessionConfigOption } from "@shared/contracts/acp-protocol.js";
-import { isAbsolute } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 /**
  * codex resolution is machine-dependent: when no explicit/env executable is
@@ -146,7 +146,7 @@ describe("AcpProvider", () => {
     delete process.env.REMI_CLAUDE_AGENT_ACP_EXECUTABLE;
     try {
       const resolved = resolveAcpExecutableForAgent("claude", null, "claude-agent-acp");
-      expect(resolved.endsWith("/bin/remi-claude-agent-acp")).toBe(true);
+      expect(resolved.endsWith(join("bin", "remi-claude-agent-acp"))).toBe(true);
     } finally {
       if (previous === undefined) delete process.env.REMI_CLAUDE_AGENT_ACP_EXECUTABLE;
       else process.env.REMI_CLAUDE_AGENT_ACP_EXECUTABLE = previous;
@@ -183,7 +183,7 @@ describe("AcpProvider", () => {
       command: "/tmp/codex-acp",
     });
     const claudeHealth = resolveAcpHealthCheckCommand("claude", null, "claude-agent-acp");
-    expect(claudeHealth.command.endsWith("/bin/remi-claude-agent-acp")).toBe(true);
+    expect(claudeHealth.command.endsWith(join("bin", "remi-claude-agent-acp"))).toBe(true);
     expect(claudeHealth.args).toEqual(["--verify-patch"]);
   });
 

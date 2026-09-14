@@ -309,6 +309,7 @@ export interface AgentTask {
   plugin_snapshot?: AgentPluginSnapshot[];
   /** Capability fingerprint frozen by the server; snake_case accepted on wire. */
   executionFingerprint?: string | null;
+  claudeProfile?: import("@multiremi/contracts/claude-profile").RuntimeClaudeProfile | null;
   execution_fingerprint?: string | null;
 
   // Workspace + spawn-context fields (workspace/persistent.ts, env/injector.ts).

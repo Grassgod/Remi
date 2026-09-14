@@ -140,6 +140,8 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     expect(Object.keys(pendingBody[0]).sort()).toEqual([
       "agent_id",
       "attempt",
+      "claude_profile",
+      "codex_profile",
       "completed_at",
       "created_at",
       "dispatched_at",
@@ -162,6 +164,8 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     ]);
     expect(pendingBody[0]).toMatchObject({
       id: high.id,
+      codex_profile: null,
+      claude_profile: null,
       agent_id: boundAgent.id,
       runtime_id: runtime.id,
       issue_id: issue.id,

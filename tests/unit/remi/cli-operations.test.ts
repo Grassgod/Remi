@@ -27,6 +27,49 @@ afterEach(() => {
 });
 
 describe("operations CLI contracts", () => {
+  it("sets a Runtime Codex connection from a JSON file and clears it with JSON input", async () => {
+    useCliEnv();
+    const spec = specById("runtime.codex-profile.set");
+    const directory = mkdtempSync(join(tmpdir(), "remi-cli-codex-profile-"));
+    tempDirectories.push(directory);
+    const inputPath = join(directory, "profile.json");
+    const config = { profile: { name: "custom", model: "custom-model", base_url: "http://localhost:8000/v1", env_key: "", auth_mode: "api_key" }, api_key: "test-provider-key" };
+    writeFileSync(inputPath, JSON.stringify(config));
+    const bodies: unknown[] = [];
+    globalThis.fetch = capabilityFetch(spec.id, async (request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/runtimes") return Response.json([{ id: "rt_local", name: "Laptop" }]);
+      expect(request.method).toBe("PUT");
+      expect(path).toBe("/api/runtimes/rt_local/codex-profile");
+      bodies.push(await request.json());
+      return Response.json({ profile: null });
+    });
+    await capture(() => registryFor([spec]).execute(["runtime", "codex-profile", "set", "Laptop", "--file", inputPath, "--json"]));
+    await capture(() => registryFor([spec]).execute(["runtime", "codex-profile", "set", "Laptop", "--data", '{"profile":null}', "--json"]));
+    expect(bodies).toEqual([config, { profile: null }]);
+  });
+  it("sets a Runtime Claude connection from a JSON file and clears it with JSON input", async () => {
+    useCliEnv();
+    const spec = specById("runtime.claude-profile.set");
+    const directory = mkdtempSync(join(tmpdir(), "remi-cli-claude-profile-"));
+    tempDirectories.push(directory);
+    const inputPath = join(directory, "profile.json");
+    const config = { profile: { name: "custom", model: "custom-model", base_url: "http://localhost:8000/v1", env_key: "", auth_mode: "api_key" }, api_key: "test-provider-key" };
+    writeFileSync(inputPath, JSON.stringify(config));
+    const bodies: unknown[] = [];
+    globalThis.fetch = capabilityFetch(spec.id, async (request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/runtimes") return Response.json([{ id: "rt_local", name: "Laptop" }]);
+      expect(request.method).toBe("PUT");
+      expect(path).toBe("/api/runtimes/rt_local/claude-profile");
+      bodies.push(await request.json());
+      return Response.json({ profile: null });
+    });
+    await capture(() => registryFor([spec]).execute(["runtime", "claude-profile", "set", "Laptop", "--file", inputPath, "--json"]));
+    await capture(() => registryFor([spec]).execute(["runtime", "claude-profile", "set", "Laptop", "--data", '{"profile":null}', "--json"]));
+    expect(bodies).toEqual([config, { profile: null }]);
+  });
+
   it("scans the selected runtime directory without expanding it on the CLI machine", async () => {
     useCliEnv();
     const spec = specById("runtime.skill.scan");

@@ -425,6 +425,8 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       );
     }
     const response = daemonHeartbeatHttpResponse(ack);
+    response.codex_profile = store.getRuntimeCodexProfile(runtimeId);
+    response.claude_profile = store.getRuntimeClaudeProfile(runtimeId);
     const runtime = store.getRuntime(runtimeId);
     const workspaceId = runtime?.workspaceId ?? "local";
     const workspaceConfig = workspaceReposResponse(
