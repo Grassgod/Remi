@@ -259,6 +259,56 @@ describe("ordinary task workspace boundaries", () => {
     expect((await response.json()).tasks.map((task: { id: string }) => task.id)).toEqual([own.task.id]);
   });
 
+  it("lists bound-workspace tasks when the task-token owner has no member row", async () => {
+    const { store, app, workspaceA, workspaceB, foreign, own } = await setup();
+    const tokenOwner = store.getOrCreateUser({ email: "boundary-token-owner@example.test", name: "Token owner" });
+    expect(store.listWorkspaceMembers().filter((member) => member.userId === tokenOwner.id)).toEqual([]);
+    expect(store.getUserRoleInWorkspace(tokenOwner.id, workspaceA.id)).toBeNull();
+    expect(store.getUserRoleInWorkspace(tokenOwner.id, workspaceB.id)).toBeNull();
+    const { token } = await store.createTaskAccessToken(own.task, tokenOwner.id);
+    const response = await app.request("/api/multiremi/tasks", { headers: authHeaders(token) });
+    expect(response.status).toBe(200);
+    const taskIds = (await response.json()).tasks.map((task: { id: string }) => task.id);
+    expect(taskIds).not.toContain(foreign.task.id);
+    expect(taskIds).toEqual([own.task.id]);
+  });
+
+  it("keeps bound-workspace tasks visible after the task-token owner's member row is archived", async () => {
+    const { store, app, user, workspaceB, foreign, own } = await setup();
+    const member = store.listWorkspaceMembers(workspaceB.id).find((candidate) => candidate.userId === user.id);
+    expect(member).toBeDefined();
+    const { token } = await store.createTaskAccessToken(own.task, user.id);
+    const headers = authHeaders(token);
+    const before = await app.request("/api/multiremi/tasks", { headers });
+    expect(before.status).toBe(200);
+    expect((await before.json()).tasks.map((task: { id: string }) => task.id)).toEqual([own.task.id]);
+
+    expect(store.archiveWorkspaceMember(member!.id).archivedAt).toBeTruthy();
+    expect(store.getUserRoleInWorkspace(user.id, workspaceB.id)).toBeNull();
+    const after = await app.request("/api/multiremi/tasks", { headers });
+    expect(after.status).toBe(200);
+    const taskIds = (await after.json()).tasks.map((task: { id: string }) => task.id);
+    expect(taskIds).not.toContain(foreign.task.id);
+    expect(taskIds).toEqual([own.task.id]);
+  });
+
+  for (const workspaceId of [null, undefined]) {
+    it(`preserves unbound task-token visibility with a verified workspaceId of ${workspaceId}`, async () => {
+      const { store, app, foreign, own } = await setup();
+      const tokenOwner = store.getOrCreateUser({ email: "boundary-unbound-owner@example.test", name: "Unbound owner" });
+      expect(store.listWorkspaceMembers().filter((member) => member.userId === tokenOwner.id)).toEqual([]);
+      const { token } = await store.createTaskAccessToken(own.task, tokenOwner.id);
+      const accessToken = await store.verifyAccessToken(token);
+      expect(accessToken).not.toBeNull();
+      Object.defineProperty(accessToken!, "workspaceId", { value: workspaceId });
+      spyOn(store, "verifyAccessToken").mockResolvedValue(accessToken);
+      const response = await app.request("/api/multiremi/tasks", { headers: authHeaders(token) });
+      expect(response.status).toBe(200);
+      expect((await response.json()).tasks.map((task: { id: string }) => task.id).sort())
+        .toEqual([foreign.task.id, own.task.id].sort());
+    });
+  }
+
   for (const mode of ["authenticated", "open"]) {
     it(`rejects daemon tokens before listing tasks in ${mode} mode`, async () => {
       const { store, app: authenticatedApp, owner, workspaceB } = await setup();

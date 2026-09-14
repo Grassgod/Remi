@@ -30,9 +30,12 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
 
   app.get("/api/multiremi/tasks", (c) => {
     const status = c.req.query("status") as any;
+    const taskToken = currentTaskAccessToken(c);
     const workspaceAccess = new Map<string, boolean>();
     const tasks = store.listTasks(status).filter((task) => {
-      let allowed = workspaceAccess.get(task.workspaceId);
+      let allowed = taskToken
+        ? taskToken.workspaceId == null || task.workspaceId === taskToken.workspaceId
+        : workspaceAccess.get(task.workspaceId);
       if (allowed === undefined) {
         allowed = denyCurrentUserWorkspaceAccess(c, store, task.workspaceId) == null;
         workspaceAccess.set(task.workspaceId, allowed);
