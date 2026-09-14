@@ -100,6 +100,7 @@ describe("Multiremi multi-user auth", () => {
     const app = createMultiremiApp({ store, authToken: "root-secret" });
 
     const b = await login(store, { externalId: "ou_b", email: "b@feishu.local", name: "B" });
+    expect((await store.verifyAccessToken(b.token))?.workspaceId).toBe("local");
 
     const ws = await app.request("/api/workspaces", bearer(b.token));
     expect(ws.status).toBe(200);
@@ -268,6 +269,19 @@ describe("Multiremi multi-user auth", () => {
     expect((await agents.json()).map((agent: { id: string }) => agent.id)).toEqual(
       workspaceAgents.map((agent) => agent.id),
     );
+
+    const createdAgent = await app.request("/api/agents", {
+      method: "POST",
+      headers: jsonAuth(b.token),
+      body: JSON.stringify({ name: "B headerless agent", provider: "claude" }),
+    });
+    expect(createdAgent.status).toBe(201);
+    const createdAgentBody = await createdAgent.json();
+    expect(store.getAgent(createdAgentBody.id)).toMatchObject({
+      workspaceId: workspace.id,
+      ownerId: b.userId,
+    });
+    expect(store.listAgents().filter((agent) => agent.workspaceId === "local")).toEqual([]);
 
     const issue = store.createIssue({ title: "B member assignment", workspaceId: workspace.id });
     const assigned = await app.request(`/api/multiremi/issues/${issue.id}/assign`, {
