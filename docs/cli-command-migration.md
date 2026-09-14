@@ -60,6 +60,7 @@ remi runtime
 remi daemon
 remi autopilot
 remi scm
+remi messaging
 remi feishu
 
 remi inbox
@@ -318,9 +319,10 @@ The server-injected agent prompt now uses only canonical commands in
 - `remi session result publish`
 - `remi memory search|get|create|update`
 
-The matching durable command examples were updated in
+The matching durable command examples use canonical commands in
 `docs/project-wiki-memory-spec.md`, `docs/issue-key-results.md`, and the frontend
-Session-result convention comment. There are no tracked `SKILL.md` files in this
-repository, so there were no in-repository skill command strings to migrate.
+Session-result convention comment. The repository-maintained
+[Remi skill](../.agents/skills/remi/SKILL.md) provides CLI workflows with
+task-specific references; keep its examples aligned with this command contract.
 Legacy handler usage strings remain unchanged because they document commands
 that are deliberately supported during the compatibility period.
