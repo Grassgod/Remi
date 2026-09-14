@@ -37,6 +37,26 @@ const inboxRoutes = [
   { path: "/api/multiremi/inbox", memberParameter: "memberId" },
 ];
 
+async function expectInboxMutationsAllowed(
+  app: ReturnType<typeof createMultiremiApp>,
+  store: MultiremiStore,
+  workspaceId: string,
+  memberId: string,
+  headers: Record<string, string>,
+) {
+  for (const route of inboxRoutes) {
+    for (const action of ["read", "archive"]) {
+      const item = seedInbox(store, workspaceId, memberId, "Own mutable notification");
+      expect(store.getInboxItem(item.id)).toMatchObject({ read: false, archived: false });
+      const response = await app.request(`${route.path}/${item.id}/${action}`, { method: "POST", headers });
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect((body.item ?? body).id).toBe(item.id);
+      expect(store.getInboxItem(item.id)).toMatchObject({ memberId, read: true, archived: action === "archive" });
+    }
+  }
+}
+
 describe("MUL-288: explicit workspace user identity", () => {
   it.each([
     { idShape: "user-id", linkedToOtherUser: false },
@@ -158,6 +178,40 @@ describe("MUL-288: explicit workspace user identity", () => {
     expect(store.getInboxItem(privateItem.id)).toMatchObject({ read: false, archived: false });
   });
 
+  it.each(inboxRoutes.flatMap((route) => ["read", "archive"].map((action) => ({ path: route.path, action }))))(
+    "rejects inbox item mutation through a colliding member row id %j",
+    async ({ path, action }) => {
+      const store = createLocalStore();
+      const workspace = store.createWorkspace({ name: "Inbox item ownership" });
+      const account = await login(store, "inbox-item-caller");
+      const ownMember = store.createWorkspaceMember({ workspaceId: workspace.id, userId: account.user.id, name: "Caller" });
+      const otherUser = store.getOrCreateUser({ email: "inbox-item-other@example.test", name: "Other user" });
+      const otherMember = store.createWorkspaceMember({
+        id: account.user.id, workspaceId: workspace.id, userId: otherUser.id, name: "Other recipient",
+      });
+      const privateItem = seedInbox(store, workspace.id, otherMember.id, "Other recipient's immutable notification");
+      const ownItem = seedInbox(store, workspace.id, ownMember.id, "Caller's mutable notification");
+      const app = createMultiremiApp({ store, authToken: "root-secret" });
+      const headers = { ...account.headers, "X-Workspace-ID": workspace.id };
+
+      expect(store.getUserRoleInWorkspace(account.user.id, workspace.id)).toBe("member");
+      expect(store.getWorkspaceMember(otherMember.id)?.userId).toBe(otherUser.id);
+      expect(store.getInboxItem(privateItem.id)).toMatchObject({ read: false, archived: false });
+      const denied = await app.request(`${path}/${privateItem.id}/${action}`, { method: "POST", headers });
+      const unchanged = store.getInboxItem(privateItem.id);
+      expect(denied.status).toBe(404);
+      expect(await denied.json()).toEqual({ error: "inbox item not found" });
+      expect(unchanged).toEqual(privateItem);
+      expect(unchanged).toMatchObject({ read: false, archived: false });
+
+      const own = await app.request(`${path}/${ownItem.id}/${action}`, { method: "POST", headers });
+      expect(own.status).toBe(200);
+      const body = await own.json();
+      expect((body.item ?? body).id).toBe(ownItem.id);
+      expect(store.getInboxItem(ownItem.id)).toMatchObject({ read: true, archived: action === "archive" });
+    },
+  );
+
   it("resolves the caller's inbox through an explicit user link without a member selector", async () => {
     const store = createLocalStore();
     const workspace = store.createWorkspace({ name: "Self inbox" });
@@ -175,6 +229,7 @@ describe("MUL-288: explicit workspace user identity", () => {
         expect((body.items ?? body).map((entry: { id: string }) => entry.id)).toEqual([item.id]);
       }
     }
+    await expectInboxMutationsAllowed(app, store, workspace.id, member.id, headers);
   });
 
   it.each(["master", "open"])("preserves unbound member inbox access in %s mode", async (mode) => {
@@ -190,6 +245,7 @@ describe("MUL-288: explicit workspace user identity", () => {
       const body = await response.json();
       expect((body.items ?? body).map((entry: { id: string }) => entry.id)).toEqual([item.id]);
     }
+    await expectInboxMutationsAllowed(app, store, "local", member.id, headers);
   });
 
   it("resolves the authenticated local user's cleanup member inbox", async () => {
@@ -211,6 +267,39 @@ describe("MUL-288: explicit workspace user identity", () => {
         expect(response.status).toBe(200);
         const body = await response.json();
         expect((body.items ?? body).map((entry: { id: string }) => entry.id)).toEqual([item.id]);
+      }
+    }
+    await expectInboxMutationsAllowed(app, store, workspace.id, member.id, headers);
+  });
+
+  it("rejects read and archive of old inbox items after their member moves workspaces", async () => {
+    const store = createLocalStore();
+    const oldWorkspace = store.createWorkspace({ name: "Old inbox workspace" });
+    const selectedWorkspace = store.createWorkspace({ name: "Selected inbox workspace" });
+    const account = await login(store, "moved-inbox-item");
+    const member = store.createWorkspaceMember({ workspaceId: oldWorkspace.id, userId: account.user.id, name: "Moved recipient" });
+    const oldItem = seedInbox(store, oldWorkspace.id, member.id, "Old workspace notification");
+    store.updateWorkspaceMember(member.id, { workspaceId: selectedWorkspace.id });
+    store.createWorkspaceMember({ workspaceId: oldWorkspace.id, userId: account.user.id, name: "Retained old membership" });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const headerVariants: Record<string, string>[] = [
+      account.headers,
+      { ...account.headers, "X-Workspace-ID": oldWorkspace.id },
+      { ...account.headers, "X-Workspace-ID": selectedWorkspace.id },
+    ];
+
+    expect(store.getUserRoleInWorkspace(account.user.id, oldWorkspace.id)).toBe("member");
+    expect(store.getUserRoleInWorkspace(account.user.id, selectedWorkspace.id)).toBe("member");
+    expect(store.getWorkspaceMember(member.id)?.workspaceId).toBe(selectedWorkspace.id);
+    for (const route of inboxRoutes) {
+      for (const action of ["read", "archive"]) {
+        for (const headers of headerVariants) {
+          const denied = await app.request(`${route.path}/${oldItem.id}/${action}`, { method: "POST", headers });
+          expect(denied.status).toBe(404);
+          expect(await denied.json()).toEqual({ error: "inbox item not found" });
+          expect(store.getInboxItem(oldItem.id)).toEqual(oldItem);
+          expect(store.getInboxItem(oldItem.id)).toMatchObject({ read: false, archived: false });
+        }
       }
     }
   });
