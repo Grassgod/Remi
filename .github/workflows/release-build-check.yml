@@ -65,6 +65,11 @@ jobs:
       - name: Verify native Issue session archive traversal
         run: bun test tests/unit/daemon/session-archive.test.ts
 
+      - name: Verify pinned ACP bridges and bundled agent runtimes
+        env:
+          REMI_CLAUDE_AGENT_ACP_EXECUTABLE: ${{ github.workspace }}/bin/remi-claude-agent-acp
+        run: REMI_HOME="$(mktemp -d)" bun run apps/remi/main.ts runtime prepare --provider claude --provider codex
+
   build:
     runs-on: ubuntu-latest
 
