@@ -45,6 +45,32 @@ describe("default workspace resolution", () => {
     expect(resolveDefaultWorkspaceIdForUser(store, user.id)).toBe("local");
   });
 
+  it("does not infer identity from legacy member row ids without a user_id link", () => {
+    const store = createStore();
+    const user = store.getOrCreateUser({ email: "unlinked@example.test", name: "Unlinked" });
+    const attacker = store.getOrCreateUser({ email: "attacker@example.test", name: "Attacker" });
+    const directIdWorkspace = store.createWorkspace(
+      { name: "Direct id workspace", slug: "direct-id-workspace" },
+      attacker.id,
+    );
+    const encodedIdWorkspace = store.createWorkspace(
+      { name: "Encoded id workspace", slug: "encoded-id-workspace" },
+      attacker.id,
+    );
+    store.createWorkspaceMember({
+      id: user.id,
+      workspaceId: directIdWorkspace.id,
+      name: "Unlinked direct id",
+    });
+    store.createWorkspaceMember({
+      id: `mem_${encodedIdWorkspace.id}_${user.id}`,
+      workspaceId: encodedIdWorkspace.id,
+      name: "Unlinked encoded id",
+    });
+
+    expect(resolveDefaultWorkspaceIdForUser(store, user.id)).toBe("local");
+  });
+
   it("mints login tokens for the resolved member workspace", async () => {
     const store = createStore();
     const user = store.getOrCreateUser({ email: "returning@example.test", name: "Returning" });

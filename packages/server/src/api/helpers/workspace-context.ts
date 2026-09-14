@@ -3,11 +3,7 @@ import type { MultiremiStore } from "@multiremi/store/store.js";
 import { authenticatedRequestUserId, cleanString, currentAccessToken } from "../wire/context.js";
 
 export function resolveDefaultWorkspaceIdForUser(store: MultiremiStore, userId: string): string {
-  const memberships = store.listWorkspaceMembers().filter((member) =>
-    member.userId === userId
-    || member.id === userId
-    || member.id === `mem_${member.workspaceId}_${userId}`
-  );
+  const memberships = store.listWorkspaceMembers().filter((member) => member.userId === userId);
   memberships.sort((left, right) =>
     Number(right.role === "owner") - Number(left.role === "owner")
     || left.createdAt.localeCompare(right.createdAt)

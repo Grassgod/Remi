@@ -368,6 +368,70 @@ describe("Multiremi multi-user auth", () => {
     expect((await response.json()).map((agent: { id: string }) => agent.id)).toContain(localAgent.id);
   });
 
+  it("does not let forged member identities redirect another user's headerless requests", async () => {
+    const store = seedDeployment();
+    const attacker = await login(store, {
+      externalId: "ou_attacker",
+      email: "attacker@corp.com",
+      name: "Attacker",
+    });
+    const victim = await login(store, {
+      externalId: "ou_victim",
+      email: "victim@corp.com",
+      name: "Victim",
+    });
+    const attackerWorkspace = store.createWorkspace(
+      { name: "Attacker workspace", slug: "attacker-workspace" },
+      attacker.userId,
+    );
+    const attackerAgent = store.createAgent({
+      name: "Attacker agent",
+      provider: "claude",
+      workspaceId: attackerWorkspace.id,
+      ownerId: attacker.userId,
+    });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+
+    for (const forgedIdentity of [
+      { id: victim.userId },
+      { userId: victim.userId },
+      { user_id: victim.userId },
+    ]) {
+      const forged = await app.request("/api/multiremi/members", {
+        method: "POST",
+        headers: jsonAuth(attacker.token),
+        body: JSON.stringify({
+          workspaceId: attackerWorkspace.id,
+          name: "Forged victim",
+          ...forgedIdentity,
+        }),
+      });
+      expect(forged.status).toBe(400);
+      expect(await forged.json()).toEqual({
+        error: "member identity is server-managed; use an invitation to bind a user",
+      });
+    }
+
+    // Existing databases may already contain an unlinked legacy row with a
+    // user-shaped id. It must not influence headerless workspace routing.
+    store.createWorkspaceMember({
+      id: victim.userId,
+      workspaceId: attackerWorkspace.id,
+      name: "Legacy forged victim",
+      role: "member",
+    });
+    const before = store.listAgents().filter((agent) => agent.workspaceId === attackerWorkspace.id);
+    expect(before.map((agent) => agent.id)).toEqual([attackerAgent.id]);
+
+    const create = await app.request("/api/agents", {
+      method: "POST",
+      headers: jsonAuth(victim.token),
+      body: JSON.stringify({ name: "Misrouted victim agent", provider: "claude" }),
+    });
+    expect(create.status).toBe(404);
+    expect(store.listAgents().filter((agent) => agent.workspaceId === attackerWorkspace.id)).toEqual(before);
+  });
+
   it("personal token settings only expose and revoke the current user's active personal tokens", async () => {
     const store = seedDeployment();
     const app = createMultiremiApp({ store, authToken: "root-secret" });
