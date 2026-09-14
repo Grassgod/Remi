@@ -952,6 +952,25 @@
         }
       }
     },
+    "senderAllowlist": {
+      "unnamed": "飞书账号 · {{id}}",
+      "account_identifiers": "更多账号标识",
+      "title": "飞书账号白名单",
+      "description": "向当前机器人发消息的账号会自动收集并去重。加入白名单后，该账号可通过机器人在此私人空间创建 Issue。",
+      "refresh": "刷新",
+      "loading": "正在加载账号…",
+      "configure_first": "请先在上方配置飞书机器人，再接收账号请求。",
+      "empty": "暂未发现账号。向机器人发送消息后，账号会自动出现在这里。",
+      "load_failed": "飞书账号加载失败，请刷新重试。",
+      "pending": "待授权",
+      "allowed": "已允许",
+      "last_seen": "最近请求：{{when}}",
+      "add": "加入白名单",
+      "remove": "移出白名单",
+      "toast_added": "账号已加入白名单",
+      "toast_removed": "账号已移出白名单",
+      "toast_update_failed": "账号授权更新失败"
+    },
     "issueTopics": {
       "notify_mode": "主动通知对象",
       "notify_owner": "群主",

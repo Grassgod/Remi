@@ -239,10 +239,12 @@ describe("MultiremiDaemonClient daemon protocol", () => {
     globalThis.fetch = (async () => Response.json({ pending_feishu_outbound: {
       id: "fbo_native", claim_token: "lease", task_id: "tsk_live", chat_id: "oc_private", body: "",
       presentation, interaction_open_id: "ou_requester", mention: { mode: "none", resolvedOpenId: null },
+      receipt_message_ids: ["om_initial", "om_steer"],
     } })) as unknown as typeof globalThis.fetch;
     const client = new MultiremiDaemonClient("https://remi.example", "daemon-token");
     expect((await client.heartbeatRuntime("runtime-1")).pending_feishu_outbound).toMatchObject({
       taskId: "tsk_live", presentation, interactionOpenId: "ou_requester",
+      receiptMessageIds: ["om_initial", "om_steer"],
     });
   });
   it("normalizes proactive Task identity and existing message checkpoints", async () => {

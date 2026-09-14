@@ -3879,6 +3879,8 @@ export interface FeishuPresentationCheckpoint {
 }
 
 export interface MultiremiFeishuBotOutboundDelivery {
+  /** Original inbound messages only; never the root of an unrelated proactive reply. */
+  receiptMessageIds?: string[];
   id: string;
   claimToken: string;
   claim_token?: string;
@@ -4117,11 +4119,26 @@ export interface SubmitFeishuBotMessageResult {
   duplicate: boolean;
   steered: boolean;
   deliveryQueued?: boolean;
-  senderMembership: "member" | "non_member" | "unbound";
+  senderAllowed: boolean;
+}
+
+/** An account observed by this workspace's current Feishu bot. */
+export interface FeishuBotSender {
+  id: string;
+  app_id: string;
+  display_name: string;
+  name_en?: string | null;
+  open_id: string;
+  union_id: string | null;
+  allowed: boolean;
+  first_seen_at: string;
+  last_seen_at: string;
 }
 
 /** Runtime-facing Task snapshot used by connector delivery polling. */
 export interface FeishuBotTaskSnapshot {
+  /** Includes later steer messages so each sender's receipt reaches the terminal state. */
+  receiptMessageIds?: string[];
   taskId: string;
   status: MultiremiTaskStatus;
   result: string | null;
@@ -4185,7 +4202,9 @@ export type FeishuBotAuditAction =
   | "redeployed"
   | "tested"
   | "registration_started"
-  | "registration_used";
+  | "registration_used"
+  | "sender_allowed"
+  | "sender_revoked";
 
 /**
  * One audited change to the concierge. `details` records which fields moved and

@@ -613,6 +613,7 @@ export function controlPlaneConciergeHost(deps: {
             respondHumanRequest: (requestId, response) => daemon.respondFeishuBotHumanRequest(taskId, requestId, response),
           }, {
             replyToMessageId: delivery.replyToMessageId ?? undefined,
+            receiptMessageIds: delivery.receiptMessageIds,
             mentionOpenId: mentionOpenId ?? undefined,
             durable: { idempotencyKey: delivery.idempotencyKey, messageId: delivery.resumeMessageId,
               presentation: delivery.presentation },

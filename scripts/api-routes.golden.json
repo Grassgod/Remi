@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 731,
+    "routeCount": 733,
     "routeCountByPrefix": {
       "native": 209,
-      "compat": 509,
+      "compat": 511,
       "root": 13
     },
-    "getRoutes": 312,
-    "getRoutesWithBody": 309,
+    "getRoutes": 313,
+    "getRoutesWithBody": 310,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 419,
+    "mutationRoutes": 420,
     "mutationRoutesCovered": 282,
     "flows": [
       "agents-compat",
@@ -392,6 +392,7 @@
     "GET /api/workspaces/:id/feishu-bot/chats",
     "GET /api/workspaces/:id/feishu-bot/registration/:sessionId",
     "GET /api/workspaces/:id/feishu-bot/routes",
+    "GET /api/workspaces/:id/feishu-bot/senders",
     "GET /api/workspaces/:id/feishu-bot/status",
     "GET /api/workspaces/:id/invitations",
     "GET /api/workspaces/:id/issue-archive",
@@ -786,6 +787,7 @@
     "PUT /api/workspaces/:id/env",
     "PUT /api/workspaces/:id/feishu-bot",
     "PUT /api/workspaces/:id/feishu-bot/routes",
+    "PUT /api/workspaces/:id/feishu-bot/senders/:senderId",
     "PUT /api/workspaces/:id/issue-archive",
     "PUT /api/workspaces/:id/issue-topics",
     "PUT /api/workspaces/:id/organizer",
@@ -1109,6 +1111,7 @@
     "GET /api/workspaces/:id/feishu-bot/chats",
     "GET /api/workspaces/:id/feishu-bot/registration/:sessionId",
     "GET /api/workspaces/:id/feishu-bot/routes",
+    "GET /api/workspaces/:id/feishu-bot/senders",
     "GET /api/workspaces/:id/feishu-bot/status",
     "GET /api/workspaces/:id/invitations",
     "GET /api/workspaces/:id/issue-archive",
@@ -12579,6 +12582,39 @@
             "allowed": true
           },
           {
+            "id": "workspace.feishu-bot.sender.allow",
+            "command": "remi workspace feishu-bot sender allow",
+            "capability": "workspace.feishu-bot.sender.allow",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.feishu-bot.sender.list",
+            "command": "remi workspace feishu-bot sender list",
+            "capability": "workspace.feishu-bot.sender.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.feishu-bot.sender.revoke",
+            "command": "remi workspace feishu-bot sender revoke",
+            "capability": "workspace.feishu-bot.sender.revoke",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "workspace.feishu-bot.set",
             "command": "remi workspace feishu-bot set",
             "capability": "workspace.feishu-bot.set",
@@ -13414,7 +13450,8 @@
           }
         ],
         "started_at": "<timestamp>",
-        "completed_at": "<timestamp>"
+        "completed_at": "<timestamp>",
+        "receipt_message_ids": []
       }
     },
     {
@@ -22296,6 +22333,15 @@
       "body": {
         "workspace_id": "local",
         "routes": []
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/feishu-bot/senders",
+      "route": "GET /api/workspaces/:id/feishu-bot/senders",
+      "path": "/api/workspaces/local/feishu-bot/senders",
+      "status": 200,
+      "body": {
+        "senders": []
       }
     },
     {

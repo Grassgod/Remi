@@ -465,6 +465,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
           ...(outbound.mention ? { mention: outbound.mention } : {}),
           ...(outbound.presentation ? { presentation: outbound.presentation } : {}),
           ...(outbound.interactionOpenId ? { interaction_open_id: outbound.interactionOpenId } : {}),
+          ...(outbound.receiptMessageIds ? { receipt_message_ids: outbound.receiptMessageIds } : {}),
         };
       }
     }
@@ -1182,6 +1183,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       usage: snapshot.usage,
       started_at: snapshot.startedAt,
       completed_at: snapshot.completedAt,
+      receipt_message_ids: store.listFeishuBotTaskReceiptMessageIds(task.workspaceId, task.id),
     });
   });
   app.get("/api/daemon/tasks/:taskId/steer", (c) => {

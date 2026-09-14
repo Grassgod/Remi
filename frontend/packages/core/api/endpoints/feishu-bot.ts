@@ -7,6 +7,8 @@ import type {
   FeishuBotAuditList,
   FeishuBotRegistrationBrand,
   FeishuBotRegistrationSession,
+  FeishuBotSender,
+  FeishuBotSenderList,
   FeishuBotStatusSnapshot,
   FeishuBotTestRequest,
   FeishuBotTestResult,
@@ -16,7 +18,7 @@ import type {
   UpsertFeishuBotRequest,
 } from "../../types";
 import type { HttpClient } from "../http";
-import { parseWithFallback } from "../schema";
+import { parseStrictResponse, parseWithFallback } from "../schema";
 import {
   EMPTY_FEISHU_BOT_AVAILABILITY,
   EMPTY_FEISHU_BOT_AGENT_ROUTES,
@@ -32,6 +34,8 @@ import {
   FeishuBotChatsSchema,
   FeishuBotConfigSchema,
   FeishuBotRegistrationSessionSchema,
+  FeishuBotSenderSchema,
+  FeishuBotSenderListSchema,
   FeishuBotStatusSchema,
   IssueTopicConfigResponseSchema,
   FeishuBotTestResultSchema,
@@ -135,6 +139,27 @@ export class FeishuBotEndpoints {
       { workspace_id: workspaceId, entries: [] },
       { endpoint: "GET /api/workspaces/:id/feishu-bot/audit" },
     );
+  }
+
+  async listFeishuBotSenders(workspaceId: string): Promise<FeishuBotSenderList> {
+    const raw = await this.http.fetch<unknown>(`/api/workspaces/${workspaceId}/feishu-bot/senders`);
+    return parseStrictResponse(raw, FeishuBotSenderListSchema, {
+      endpoint: "GET /api/workspaces/:id/feishu-bot/senders",
+    });
+  }
+
+  async updateFeishuBotSender(
+    workspaceId: string,
+    senderId: string,
+    input: { allowed: boolean },
+  ): Promise<FeishuBotSender> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/workspaces/${workspaceId}/feishu-bot/senders/${senderId}`,
+      { method: "PUT", body: JSON.stringify(input) },
+    );
+    return parseStrictResponse(raw, FeishuBotSenderSchema, {
+      endpoint: "PUT /api/workspaces/:id/feishu-bot/senders/:senderId",
+    });
   }
 
   async getIssueTopicConfig(workspaceId: string): Promise<IssueTopicConfigResponse> {

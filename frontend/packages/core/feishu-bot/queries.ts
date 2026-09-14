@@ -14,6 +14,7 @@ export const feishuBotKeys = {
   candidates: (workspaceId: string) => ["feishu-bot", workspaceId, "candidates"] as const,
   routes: (workspaceId: string) => ["feishu-bot", workspaceId, "routes"] as const,
   chats: (workspaceId: string) => ["feishu-bot", workspaceId, "chats"] as const,
+  senders: (workspaceId: string) => ["feishu-bot", workspaceId, "senders"] as const,
   audit: (workspaceId: string, limit: number) => ["feishu-bot", workspaceId, "audit", limit] as const,
   registration: (workspaceId: string, sessionId: string) =>
     ["feishu-bot", workspaceId, "registration", sessionId] as const,
@@ -41,10 +42,9 @@ export function issueTopicConfigOptions(workspaceId: string, enabled = true) {
 }
 
 /**
- * Status is the only thing that moves on its own: the daemon picks up a
- * directive on its next heartbeat, so `deploying` becomes `online` seconds
+ * The daemon picks up a directive on its next heartbeat, so `deploying` becomes `online` seconds
  * later with no user action. Polling is what makes the badge tell the truth;
- * the rest of the page stays event-driven.
+ * configuration changes remain event-driven.
  */
 export function feishuBotStatusOptions(workspaceId: string, enabled = true) {
   return queryOptions({
@@ -91,5 +91,17 @@ export function feishuBotAuditOptions(workspaceId: string, limit = 20, enabled =
     queryFn: () => api.listFeishuBotAudit(workspaceId, limit),
     enabled: enabled && workspaceId.length > 0,
     retry: false,
+  });
+}
+
+export function feishuBotSendersOptions(workspaceId: string, enabled = true) {
+  const queryEnabled = enabled && workspaceId.length > 0;
+  return queryOptions({
+    queryKey: feishuBotKeys.senders(workspaceId),
+    queryFn: () => api.listFeishuBotSenders(workspaceId),
+    enabled: queryEnabled,
+    retry: false,
+    refetchInterval: queryEnabled ? 10_000 : false,
+    staleTime: 5_000,
   });
 }

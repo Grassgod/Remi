@@ -9,6 +9,22 @@ export type FeishuBotDomain = "feishu" | "lark" | "bytedance";
 
 export type FeishuBotDesiredState = "running" | "stopped";
 
+export interface FeishuBotSender {
+  id: string;
+  app_id: string;
+  display_name: string;
+  name_en?: string | null;
+  open_id: string | null;
+  union_id: string | null;
+  allowed: boolean;
+  first_seen_at: string;
+  last_seen_at: string;
+}
+
+export interface FeishuBotSenderList {
+  senders: FeishuBotSender[];
+}
+
 /**
  * Aggregate status. Server-derived from the config row, the host Runtime's
  * liveness and what Runtimes report, so the UI never computes it — it only
