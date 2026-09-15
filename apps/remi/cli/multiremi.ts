@@ -605,7 +605,9 @@ export function controlPlaneConciergeHost(deps: {
         options.signal.throwIfAborted();
         const interactionOpenId = delivery.interactionOpenId ?? delivery.presentation?.interactionOpenId ?? mentionOpenId
           ?? (delivery.presentation ? await handle.resolveProactiveMention(delivery.chatId, { mode: "group_owner" }, options.signal) : undefined);
-        return handle.streamProactiveTask(delivery.chatId, `${delivery.chatId}:thread:${delivery.threadId ?? delivery.replyToMessageId}`,
+        const threadId = delivery.threadId ?? delivery.replyToMessageId;
+        const sessionKey = threadId ? `${delivery.chatId}:thread:${threadId}` : delivery.chatId;
+        return handle.streamProactiveTask(delivery.chatId, sessionKey,
           pollFeishuTask(daemon, taskId, options.signal), {
             taskId, displayName, signal: options.signal,
             isHumanRequestPending: requestId => daemon.isFeishuBotHumanRequestPending(taskId, requestId),
@@ -675,19 +677,21 @@ export function createFeishuTaskHandler(
 
     const externalMessageId = String(message.metadata?.messageId ?? "").trim();
     if (!externalMessageId) throw new Error("Feishu message id is missing");
+    const chatType = message.metadata?.chatType === "group" ? "group" : "p2p";
+    const threadId = String(message.metadata?.rootId ?? "").trim() || null;
     const submitted = await daemon.submitFeishuBotMessage({
       revision,
       externalSessionKey: sessionKey,
       externalMessageId,
-      chatType: message.metadata?.chatType === "group" ? "group" : "p2p",
-      replyToMessageId: externalMessageId,
+      chatType,
+      replyToMessageId: chatType === "group" || threadId ? externalMessageId : null,
       senderOpenId: String(message.metadata?.senderOpenId ?? "").trim() || null,
       senderUserId: String(message.metadata?.senderUserId ?? "").trim() || null,
       senderUnionId: String(message.metadata?.senderUnionId ?? "").trim() || null,
       senderTenantKey: String(message.metadata?.senderTenantKey ?? "").trim() || null,
       senderName: String(message.metadata?.senderName ?? "").trim() || null,
       chatId: message.chatId,
-      threadId: String(message.metadata?.rootId ?? "").trim() || null,
+      threadId,
       text: message.text,
       deliveryMode: "native_cot_v1",
     });

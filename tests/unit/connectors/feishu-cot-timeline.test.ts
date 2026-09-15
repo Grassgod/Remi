@@ -8,6 +8,48 @@ const message = (seq: number, type: string, patch: Record<string, unknown> = {})
   (taskEvent(seq, type, patch) as { message: MultiremiTaskMessage }).message;
 
 describe("semantic native CoT timeline", () => {
+  it.each([
+    ["rg foo src", "search"],
+    ["/usr/bin/grep -n foo source.ts | head -20", "search"],
+    ["find src -name '*.ts'", "search"],
+    ["cat daemon.log | grep -v INFO", "read"],
+    ["sed -n '1,20p' source.ts", "read"],
+    ["tail -100 daemon.log", "read"],
+    ["remi task get tsk_example | grep -v '^INFO'", "bash"],
+    ["ssh runtime 'cat daemon.log | grep -v INFO'", "bash"],
+    ["python3 -c 'print(\"find\")'", "bash"],
+    ["echo 'grep cat find'", "bash"],
+    ["bun test tests/find.test.ts", "bash"],
+    ["rg foo src && bun test", "bash"],
+    ["cat <<'EOF'\ngrep foo\nEOF", "bash"],
+    ["cat daemon.log; bun test", "bash"],
+  ])("classifies the leading shell operation: %s", (command, icon) => {
+    expect(cotToolDisplay("Bash", { command, description: "检查任务" })).toMatchObject({ title: "检查任务", icon });
+  });
+
+  it("retains aiden's native categories for structured tools", () => {
+    const displays = [
+      cotToolDisplay("Read", { file_path: "/source.ts" }),
+      cotToolDisplay("Edit", { file_path: "/source.ts" }),
+      cotToolDisplay("Grep", { pattern: "example" }),
+      cotToolDisplay("Skill", { skill: "diagnose" }),
+      cotToolDisplay("Agent", { description: "验证修复" }),
+      cotToolDisplay("unknown_tool", {}),
+    ];
+    expect(displays.map(d => d.icon)).toEqual(["read", "write", "search", "doc", "robot_outlined", "default"]);
+  });
+
+  it("keeps a delayed shell invocation with a log filter generic in native events", () => {
+    const timeline = new FeishuCotTimeline("task");
+    timeline.accept(message(1, "tool_use", { toolCallId: "tc", tool: "Bash" }));
+    timeline.accept(message(2, "tool_use", { toolCallId: "tc", input: {
+      command: "remi task get tsk_example | grep -v '^INFO'", description: "查看任务记录",
+    } }));
+    const starts = timeline.drain().samples.filter(([type]) => type === "TOOL_CALL_START");
+    expect(starts).toHaveLength(1);
+    expect(starts[0]?.[1]).toMatchObject({ title: "查看任务记录", icon: "bash" });
+  });
+
   it("distinguishes spawning an agent from reading agent or task metadata", () => {
     expect(isCotSubagent("mcp__aiden_bot__spawn_agent", {})).toBe(true);
     expect(isCotSubagent("get_agent", {})).toBe(false);
