@@ -27,6 +27,7 @@ import {
   readJson,
   readJsonStrict,
   requireWorkspaceAdmin,
+  safeAssignIssue,
   safeQuickCreateIssue,
   safeRerunIssue,
   setIssueCommentCursorHeaders,
@@ -151,6 +152,34 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   const issueDeleteAccess = (c: Context, workspaceId: string): Response | null =>
     denyCurrentUserWorkspaceAccess(c, store, workspaceId)
       ?? requireWorkspaceAdmin(c, store, workspaceId);
+
+  const listAccessibleChildIssues = (c: Context, parentIds: string[]): MultiremiIssue[] => {
+    const workspaceAccess = new Map<string, boolean>();
+    const canAccessWorkspace = (workspaceId: string): boolean => {
+      let allowed = workspaceAccess.get(workspaceId);
+      if (allowed === undefined) {
+        allowed = denyCurrentUserWorkspaceAccess(c, store, workspaceId) == null;
+        workspaceAccess.set(workspaceId, allowed);
+      }
+      return allowed;
+    };
+    return parentIds.flatMap((parentId) => {
+      const parent = store.getIssue(parentId);
+      if (!parent || !canAccessWorkspace(parent.workspaceId)) return [];
+      return store.listChildIssues(parentId).filter((child) => canAccessWorkspace(child.workspaceId));
+    });
+  };
+
+  const issueBatchUpdateAccess = (c: Context, input: BatchUpdateIssuesInput): Response | null => {
+    const issueIds = new Set(input.issueIds ?? input.issue_ids ?? []);
+    for (const issueId of issueIds) {
+      const issue = store.getIssue(issueId);
+      if (!issue) continue;
+      const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+      if (denied) return denied;
+    }
+    return null;
+  };
 
   const beginIssueDeletion = (issueId: string): boolean => {
     const begun = store.beginIssueDeletion(issueId);
@@ -476,18 +505,19 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.get("/api/issues/children", (c) => {
     const parentIds = splitQueryList(c.req.query("parent_ids"));
-    const issues = parentIds
-      .flatMap((parentId) => store.listChildIssues(parentId))
+    const issues = listAccessibleChildIssues(c, parentIds)
       .map((child) => issueCompatibilityResponse(child));
     return c.json({ issues, total: issues.length });
   });
   app.get("/api/multiremi/issues/children", (c) => {
     const parentIds = splitQueryList(c.req.query("parent_ids") ?? c.req.query("parentIds"));
-    const issues = parentIds.flatMap((parentId) => store.listChildIssues(parentId));
+    const issues = listAccessibleChildIssues(c, parentIds);
     return c.json({ issues, total: issues.length });
   });
   app.post("/api/multiremi/issues/batch-update", async (c) => {
     const body = await readJson<BatchUpdateIssuesInput>(c);
+    const denied = issueBatchUpdateAccess(c, body);
+    if (denied) return denied;
     return c.json(store.batchUpdateIssues({
       ...body,
       updates: body.updates ? { ...body.updates, parentTaskId: currentTaskParentId(c) } : body.updates,
@@ -497,6 +527,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJson<BatchUpdateIssuesInput>(c);
     try {
       const input = issueBatchUpdateCompatibilityInput(body);
+      const denied = issueBatchUpdateAccess(c, input);
+      if (denied) return denied;
       const result = store.batchUpdateIssues({
         ...input,
         updates: input.updates ? { ...input.updates, parentTaskId: currentTaskParentId(c) } : input.updates,
@@ -1106,12 +1138,13 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     const body = await readJson<AssignIssueInput>(c);
     const { actorType, actorId } = issueMutationActivity(c);
-    const result = store.assignIssue(issue.id, {
+    const result = safeAssignIssue(store, issue.id, {
       ...body,
       actorType,
       actorId,
       parentTaskId: currentTaskParentId(c),
     });
+    if ("error" in result) return c.json({ error: result.error }, result.status);
     return c.json({
       issue: result.issue,
       cancelled_tasks: result.cancelledTasks,

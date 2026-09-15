@@ -737,6 +737,7 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
     );
     store.createWorkspaceMember({
       id: "external-admin",
+      userId: "external-admin",
       workspaceId: "ws_external_invite",
       name: "External Admin",
       email: "external-admin@example.com",
@@ -819,6 +820,7 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
     const owner = store.getWorkspaceMember(`mem_${workspace.id}_local`)!;
     store.createWorkspaceMember({
       id: "guard-admin",
+      userId: "guard-admin",
       workspaceId: workspace.id,
       name: "Guard Admin",
       email: "guard-admin@example.com",
@@ -826,6 +828,7 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
     });
     const plain = store.createWorkspaceMember({
       id: "guard-member",
+      userId: "guard-member",
       workspaceId: workspace.id,
       name: "Guard Member",
       email: "guard-member@example.com",

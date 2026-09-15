@@ -91,6 +91,9 @@ export function registerMemberRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId)
       ?? requireWorkspaceAdmin(c, store, workspaceId);
     if (denied) return denied;
+    if (["id", "userId", "user_id"].some((field) => Object.prototype.hasOwnProperty.call(body, field))) {
+      return c.json({ error: "member identity is server-managed; use an invitation to bind a user" }, 400);
+    }
     return c.json({ member: store.createWorkspaceMember({ ...body, workspaceId }) }, 201);
   });
   app.get("/api/multiremi/members/:id", (c) => {

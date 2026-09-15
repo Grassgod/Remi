@@ -77,6 +77,22 @@ describe("WorkspacesRepo", () => {
     expect(repo.listWorkspaceMembers(workspace.id).map((entry) => entry.id)).not.toContain(member.id);
   });
 
+  it("resolves an exact user id only within the requested workspace", () => {
+    const { repo, store } = createFixture();
+    const user = store.getOrCreateUser({ email: "member-ref@example.test", name: "Member Ref" });
+    const expectedWorkspace = repo.createWorkspace({ name: "Expected Members" });
+    const otherWorkspace = repo.createWorkspace({ name: "Other Members" });
+    const member = repo.createWorkspaceMember({
+      workspaceId: expectedWorkspace.id,
+      userId: user.id,
+      name: user.name,
+      email: user.email,
+    });
+
+    expect(repo.getWorkspaceMemberByRef(user.id, expectedWorkspace.id)?.id).toBe(member.id);
+    expect(repo.getWorkspaceMemberByRef(user.id, otherWorkspace.id)).toBeNull();
+  });
+
   it("mutes a notification group and reads it back", () => {
     const repo = createRepo();
     const updated = repo.updateNotificationPreferences({ workspaceId: "local", preferences: { comments: "muted" } });

@@ -31,10 +31,17 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/multiremi/tasks", (c) => {
     const status = c.req.query("status") as any;
     const taskToken = currentTaskAccessToken(c);
-    const tasks = store.listTasks(status).filter((task) =>
-      (taskToken?.workspaceId == null || task.workspaceId === taskToken.workspaceId)
-      && canCurrentUserAccessChatTask(c, store, task)
-    );
+    const workspaceAccess = new Map<string, boolean>();
+    const tasks = store.listTasks(status).filter((task) => {
+      let allowed = taskToken
+        ? taskToken.workspaceId == null || task.workspaceId === taskToken.workspaceId
+        : workspaceAccess.get(task.workspaceId);
+      if (allowed === undefined) {
+        allowed = denyCurrentUserWorkspaceAccess(c, store, task.workspaceId) == null;
+        workspaceAccess.set(task.workspaceId, allowed);
+      }
+      return allowed && canCurrentUserAccessChatTask(c, store, task);
+    });
     return c.json({ tasks: tasks.map(taskPublicResponse) });
   });
   app.post("/api/multiremi/tasks", async (c) => {

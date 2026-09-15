@@ -332,7 +332,7 @@ describe("Multiremi API — daemon endpoints", () => {
 
   it("does not let a workspace member choose a daemon identity", async () => {
     const store = createStore();
-    store.createWorkspaceMember({ id: "daemon-member", name: "Daemon Member", role: "member" });
+    store.createWorkspaceMember({ id: "daemon-member", userId: "daemon-member", name: "Daemon Member", role: "member" });
     const memberToken = await store.createAccessToken({
       name: "Member session",
       type: "pat",
@@ -366,8 +366,8 @@ describe("Multiremi API — daemon endpoints", () => {
 
   it("lets a workspace member provision an owner-bound daemon that can register and read desired plugins", async () => {
     const store = createStore();
-    store.createWorkspaceMember({ id: "daemon-admin", name: "Daemon Admin", role: "admin" });
-    store.createWorkspaceMember({ id: "daemon-member", name: "Daemon Member", role: "member" });
+    store.createWorkspaceMember({ id: "daemon-admin", userId: "daemon-admin", name: "Daemon Admin", role: "admin" });
+    store.createWorkspaceMember({ id: "daemon-member", userId: "daemon-member", name: "Daemon Member", role: "member" });
     const memberToken = await store.createAccessToken({
       name: "Member session",
       type: "pat",
@@ -456,8 +456,8 @@ describe("Multiremi API — daemon endpoints", () => {
 
   it("promotes workspace member CLI PATs during register or rolling heartbeat", async () => {
     const store = createStore();
-    store.createWorkspaceMember({ id: "legacy-admin", name: "Legacy Admin", role: "admin" });
-    store.createWorkspaceMember({ id: "legacy-member", name: "Legacy Member", role: "member" });
+    store.createWorkspaceMember({ id: "legacy-admin", userId: "legacy-admin", name: "Legacy Admin", role: "admin" });
+    store.createWorkspaceMember({ id: "legacy-member", userId: "legacy-member", name: "Legacy Member", role: "member" });
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const legacyRegisterToken = await store.createAccessToken({
       name: "Old add-computer credential",
@@ -742,8 +742,8 @@ describe("Multiremi API — daemon endpoints", () => {
 
   it("lets the original owner migrate a daemonless Runtime without allowing another member to squat it", async () => {
     const store = createStore();
-    store.createWorkspaceMember({ id: "legacy-owner", name: "Legacy owner", role: "member" });
-    store.createWorkspaceMember({ id: "legacy-attacker", name: "Legacy attacker", role: "member" });
+    store.createWorkspaceMember({ id: "legacy-owner", userId: "legacy-owner", name: "Legacy owner", role: "member" });
+    store.createWorkspaceMember({ id: "legacy-attacker", userId: "legacy-attacker", name: "Legacy attacker", role: "member" });
     const daemonId = "daemon-legacy-runtime";
     const runtimeId = daemonRuntimeId(daemonId, "claude");
     store.registerRuntime({
@@ -799,8 +799,8 @@ describe("Multiremi API — daemon endpoints", () => {
 
   it("requires admin recovery for ownerless daemons and rejects human Runtime spoofing", async () => {
     const store = createStore();
-    store.createWorkspaceMember({ id: "runtime-attacker", name: "Runtime attacker", role: "member" });
-    store.createWorkspaceMember({ id: "runtime-victim", name: "Runtime victim", role: "member" });
+    store.createWorkspaceMember({ id: "runtime-attacker", userId: "runtime-attacker", name: "Runtime attacker", role: "member" });
+    store.createWorkspaceMember({ id: "runtime-victim", userId: "runtime-victim", name: "Runtime victim", role: "member" });
     const attackerToken = await store.createAccessToken({
       name: "Attacker PAT",
       type: "pat",
@@ -868,7 +868,7 @@ describe("Multiremi API — daemon endpoints", () => {
 
   it("requires daemon retirement before its owner leaves the workspace", async () => {
     const store = createStore();
-    const member = store.createWorkspaceMember({ id: "removed-daemon-owner", name: "Removed owner", role: "member" });
+    const member = store.createWorkspaceMember({ id: "removed-daemon-owner", userId: "removed-daemon-owner", name: "Removed owner", role: "member" });
     const memberToken = await store.createAccessToken({
       name: "Removed owner session",
       type: "pat",
@@ -1006,8 +1006,8 @@ describe("Multiremi API — daemon endpoints", () => {
 
   it("keeps one daemon id bound to one owner while allowing same-owner providers and tokens", async () => {
     const store = createStore();
-    store.createWorkspaceMember({ id: "claim-owner-a", name: "Claim owner A", role: "member" });
-    store.createWorkspaceMember({ id: "claim-owner-b", name: "Claim owner B", role: "member" });
+    store.createWorkspaceMember({ id: "claim-owner-a", userId: "claim-owner-a", name: "Claim owner A", role: "member" });
+    store.createWorkspaceMember({ id: "claim-owner-b", userId: "claim-owner-b", name: "Claim owner B", role: "member" });
     const ownerA = await store.createAccessToken({
       name: "Claim owner A PAT",
       type: "pat",
