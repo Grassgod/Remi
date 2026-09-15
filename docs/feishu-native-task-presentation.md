@@ -28,8 +28,11 @@ establishes a new topic root.
 
 The incoming message's `THINKING` receipt remains through queue handoff, execution
 and result delivery, including plain answers without process events. The existing
-persistent receipt mechanism replaces it with `DONE` (or `CROSSMARK` on failure or
-cancellation) after the final card is acknowledged. Native CoT contains actual
+persistent receipt mechanism removes it on success, without adding `DONE`, after
+the final card is acknowledged. Failure or cancellation still replaces it with
+`CROSSMARK`. A delivery resumed from an acknowledged result checkpoint does not
+add `THINKING` again; receipt cleanup can retry without resending the result.
+Native CoT contains actual
 provider process events; a silent wait is represented by the receipt.
 
 ## Semantic process timeline

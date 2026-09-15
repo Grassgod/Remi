@@ -67,7 +67,9 @@ export class FeishuTaskPresentation {
   detach(): void { this.active = false; }
 
   async consume(stream: AsyncIterable<TaskStreamEvent>): Promise<{ messageId: string }> {
-    await this.receipt("received");
+    // A retry after acknowledged result delivery only reconciles the terminal
+    // receipt. Do not flash THINKING again, including after a daemon restart.
+    if (!this.state.resultMessageId) await this.receipt("received");
     try { return await this.consumeTask(stream); }
     catch (error) {
       // Handover/shutdown is not a task failure; the next leased consumer will resume.
