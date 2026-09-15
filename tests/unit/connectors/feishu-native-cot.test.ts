@@ -69,6 +69,19 @@ describe("native CoT Task presentation", () => {
     expect(h.checkpoint?.resultMessageId).toBe("om_1");
   });
 
+  it("sends private process and result messages to the main chat without creating a topic", async () => {
+    const h = nativeHarness();
+    await renderer(h, { replyToMessageId: undefined, mentionOpenId: undefined }).consume(transcript());
+    const creation = h.calls.find(c => c.operation === "POST")!;
+    expect(creation.input.data.receive_id).toBe("oc_group");
+    expect(creation.input.data.origin_message_id).toBeUndefined();
+    expect(h.calls.filter(c => c.operation === "reply")).toHaveLength(0);
+    expect(h.calls.filter(c => c.operation === "create")).toHaveLength(1);
+    expect(h.calls.find(c => c.operation === "create")!.input.data.receive_id).toBe("oc_group");
+    expect(h.checkpoint?.cot?.status).toBe("finished");
+    expect(JSON.stringify(h.cards())).toContain("Final answer");
+  });
+
   it("a direct answer creates no process message or placeholder", async () => {
     const h = nativeHarness();
     async function* simple() { yield taskEvent(1, "text", { content: "Hello" }); yield completed; }

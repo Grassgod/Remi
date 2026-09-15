@@ -576,6 +576,11 @@ export class FeishuBotRepo {
     const text = requiredBoundedString(input.text, "text", 200_000);
     const chatId = cleanOptionalString(input.chatId);
     const chatType = resolveFeishuBotChatType(input, externalSessionKey);
+    const threadId = cleanOptionalString(input.threadId);
+    // Ordinary private messages stay in the main chat, even when an older
+    // daemon unconditionally supplies the incoming message as a reply target.
+    const replyToMessageId = chatType === "p2p" && !threadId
+      ? null : cleanOptionalString(input.replyToMessageId) ?? externalMessageId;
     const routeAgent = this.resolveRouteAgent(workspaceId, chatType, chatId)!;
     const workspace = this.ctx.workspaces().getWorkspace(workspaceId);
     const topicConfig = workspace ? readWorkspaceIssueTopics(workspace.settings) : null;
@@ -656,8 +661,8 @@ export class FeishuBotRepo {
           externalSessionKey,
           chat.id,
           chatId,
-          cleanOptionalString(input.threadId),
-          cleanOptionalString(input.replyToMessageId) ?? externalMessageId,
+          threadId,
+          replyToMessageId,
           now,
           now,
         );
@@ -684,8 +689,8 @@ export class FeishuBotRepo {
          WHERE id = ?`,
         [
           chatId,
-          cleanOptionalString(input.threadId),
-          cleanOptionalString(input.replyToMessageId) ?? externalMessageId,
+          threadId,
+          replyToMessageId,
           nowIso(),
           String(binding.id),
         ],
@@ -744,7 +749,7 @@ export class FeishuBotRepo {
         externalMessageId,
         String(binding.id),
         task.id,
-        cleanOptionalString(input.replyToMessageId),
+        replyToMessageId,
         now,
         now,
         sender.id,
@@ -761,7 +766,7 @@ export class FeishuBotRepo {
            ) VALUES (?, ?, ?, ?, ?, ?, ?, '', 'pending', ?, ?, ?, ?, ?, ?)
            ON CONFLICT(task_id) DO NOTHING`,
           [createId("fbo"), workspaceId, String(binding.id), task.id, chatId,
-            cleanOptionalString(input.threadId), cleanOptionalString(input.replyToMessageId) ?? externalMessageId,
+            threadId, replyToMessageId,
             now, now, now, toJson(chatType === "group" && openId
               ? { mode: "person", openId, resolvedOpenId: openId } : { mode: "none", resolvedOpenId: null }),
             openId, toJson({ version: "native_cot_v1", startedAt: Date.now(), throughSeq: 0, interactions: {} })],
@@ -1272,13 +1277,15 @@ export class FeishuBotRepo {
     if (input.status === "sent") {
       return this.ctx.db.transaction(() => {
         const row = this.ctx.db.query(
-          `SELECT binding_id, chat_id, reply_to_message_id
+          `SELECT binding_id, chat_id, reply_to_message_id, task_id
            FROM multiremi_feishu_bot_outbound_deliveries
            WHERE id = ? AND workspace_id = ? AND status = 'sending' AND claim_token = ?`,
         ).get(deliveryId, workspaceId, input.claimToken) as Row | null;
         if (!row) return false;
         const externalMessageId = cleanOptionalString(input.externalMessageId);
-        const seedsTopic = !cleanOptionalString(row.reply_to_message_id);
+        // Only a standalone Issue topic seed establishes a new conversation
+        // root. A Task result sent to a private chat must preserve its binding.
+        const seedsTopic = !row.task_id && !cleanOptionalString(row.reply_to_message_id);
         if (seedsTopic && !externalMessageId) return false;
         const sentAt = now.toISOString();
         const updated = this.ctx.db.run(

@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { FeishuConnector } from "@connectors/feishu/index.js";
 import { setFeishuMessageReceipt } from "@connectors/feishu/message-receipt.js";
 import { FeishuTaskPresentation } from "@connectors/feishu/task-presentation.js";
-import { completed, nativeHarness } from "./feishu-native-harness.js";
+import { completed, nativeHarness, taskEvent } from "./feishu-native-harness.js";
 import type { TaskStreamEvent } from "@connectors/base.js";
 
 function transport() {
@@ -78,6 +78,40 @@ describe("persistent Feishu message receipts", () => {
       expect(reactions.emojis("om_steer")).toEqual(reactions.emojis());
     });
   }
+
+  it("keeps thinking through queue handoff and a plain-answer wait without fabricating CoT", async () => {
+    const h = nativeHarness(), reactions = transport();
+    const request = h.client.request;
+    h.client.request = input => input.url.includes("/reactions") ? reactions.client.request(input) : request(input);
+    const connector = Object.create(FeishuConnector.prototype) as any;
+    Object.assign(connector, { _taskStreamHandler: async () => {}, _groupPolicy: { getByChatId: () => null },
+      _channel: { setMessageReceipt: (id: string, state: "received") =>
+        setFeishuMessageReceipt(h.client as any, "cli_test", id, state) } });
+    await connector._handleFeishuMessage({ messageId: "om_original", chatId: "oc_private", chatType: "p2p",
+      senderOpenId: "ou_user", text: "Hello", rawContent: "Hello", media: [] });
+    expect(reactions.emojis()).toEqual(["THINKING"]);
+
+    let started!: () => void, finish!: () => void;
+    const waiting = new Promise<void>(resolve => { started = resolve; });
+    const answer = new Promise<void>(resolve => { finish = resolve; });
+    async function* stream(): AsyncGenerator<TaskStreamEvent> {
+      yield taskEvent(1, "execution", { meta: { agentName: "Remi" } });
+      started();
+      await answer;
+      yield taskEvent(2, "text", { content: "Hello" });
+      yield completed;
+    }
+    const done = new FeishuTaskPresentation(h.client as any, "oc_private", meta, {
+      appId: "cli_test", idempotencyKey: "delivery", receiptMessageIds: ["om_original"], save: h.save,
+    }).consume(stream());
+    await waiting;
+    expect(reactions.emojis()).toEqual(["THINKING"]);
+    expect(h.calls).toHaveLength(0);
+    finish();
+    await done;
+    expect(h.calls.map(c => c.operation)).toEqual(["create"]);
+    expect(reactions.emojis()).toEqual(["DONE"]);
+  });
 
   it("waits for the result card acknowledgement before showing success", async () => {
     const h = nativeHarness(), reactions = transport();
