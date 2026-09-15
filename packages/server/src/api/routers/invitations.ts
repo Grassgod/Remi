@@ -54,7 +54,7 @@ export function registerInvitationRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/invitations/:id/accept", (c) => {
     const result = safeAcceptInvitation(store, c.req.param("id"), currentRequestUserId(c));
     if ("error" in result) return c.json({ error: result.error }, result.status);
-    const member = acceptedInvitationMemberToGoResponse(store, result);
+    const member = acceptedInvitationMemberToGoResponse(store, result, currentRequestUserId(c));
     if (isMemberResponseError(member)) return c.json({ error: member.error }, member.status);
     publishWorkspaceEvent(c, store, "member:added", result.workspaceId, {
       member,

@@ -54,7 +54,11 @@ describe("skill workspace request context", () => {
       const { store, other, headers, app } = await fixture();
       store.createSkill({ workspaceId: "local", name: "Local secret", description: "Private summary" });
       store.createSkill({ workspaceId: other.id, name: "Other secret", description: "Foreign summary" });
-      const contexts: Record<string, string>[] = [{}, { "X-Workspace-Slug": other.slug }, { "X-Workspace-ID": other.id }];
+      const inferred = await app.request(`${route}/search?q=secret`, { headers });
+      expect(inferred.status).toBe(200);
+      const inferredResult = await inferred.json();
+      expect(inferredResult.skills ?? inferredResult).toEqual([]);
+      const contexts: Record<string, string>[] = [{ "X-Workspace-Slug": other.slug }, { "X-Workspace-ID": other.id }];
       for (const context of contexts) {
         const response = await app.request(`${route}/search?q=secret`, { headers: { ...headers, ...context } });
         expect(response.status).toBe(404);

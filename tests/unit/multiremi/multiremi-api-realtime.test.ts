@@ -533,6 +533,7 @@ describe("Multiremi API — realtime websockets", () => {
     const remoteWorkspace = store.createWorkspace({ id: "ws_browser_events_remote", name: "Browser Events Remote", slug: "browser-events-remote" });
     store.createWorkspaceMember({
       id: `mem_${remoteWorkspace.id}_admin-user`,
+      userId: "admin-user",
       workspaceId: remoteWorkspace.id,
       name: "Remote Admin",
       email: "remote-admin@example.com",

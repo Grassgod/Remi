@@ -88,10 +88,7 @@ export function currentWorkspaceMember(
   store: MultiremiStore,
   workspaceId: string,
 ): MultiremiWorkspaceMember | null {
-  const userId = currentRequestUserId(c);
-  return store.listWorkspaceMembers(workspaceId).find((item) =>
-    item.userId === userId || item.id === userId || item.id === `mem_${workspaceId}_${userId}`
-  ) ?? null;
+  return store.findWorkspaceMemberForUser(currentRequestUserId(c), workspaceId);
 }
 
 export function parseOptionalInt(value: string | undefined): number | undefined {

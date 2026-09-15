@@ -35,10 +35,11 @@ function workspaceMemberUserId(member: MultiremiWorkspaceMember): string {
 export function acceptedInvitationMemberToGoResponse(
   store: MultiremiStore,
   invitation: { workspaceId: string },
+  acceptedUserId: string,
 ): Record<string, unknown> | { error: string; status: 500 } {
-  const user = store.getCurrentUser();
-  const member = store.getWorkspaceMember(`mem_${invitation.workspaceId}_${user.id}`);
-  if (!member) return { error: "failed to accept invitation", status: 500 };
+  const user = store.getUser(acceptedUserId);
+  const member = user ? store.findWorkspaceMemberForUser(user.id, invitation.workspaceId) : null;
+  if (!user || !member) return { error: "failed to accept invitation", status: 500 };
   return workspaceMemberToGoResponse(member, { includeUser: true });
 }
 

@@ -291,7 +291,7 @@ describe("Multiremi store — chat sessions and private agent access", () => {
 
   it("rechecks private agent access across chat and agent HTTP surfaces", async () => {
     const store = createStore();
-    store.createWorkspaceMember({ id: "admin", name: "Admin", role: "admin" });
+    store.createWorkspaceMember({ id: "admin", userId: "admin", name: "Admin", role: "admin" });
     store.createWorkspaceMember({ workspaceId: "local", userId: "alice", name: "Alice", role: "member" });
     store.createWorkspaceMember({ workspaceId: "local", userId: "bob", name: "Bob", role: "member" });
     const aliceToken = await store.createAccessToken({ name: "Alice", type: "pat", workspaceId: "local", userId: "alice" });

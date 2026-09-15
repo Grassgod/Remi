@@ -17,6 +17,7 @@ import {
   skillSummaryCompatibilityResponse,
 } from "../wire/index.js";
 import type {
+  AssignIssueInput,
   CreateFeedbackInput,
   CreateRuntimeUpdateInput,
   MultiremiAgent,
@@ -580,6 +581,31 @@ export function safeRerunIssue(
     parentTaskId: body.parentTaskId ?? null,
   });
   return { task };
+}
+
+export function safeAssignIssue(
+  store: MultiremiStore,
+  issueId: string,
+  input: AssignIssueInput,
+): ReturnType<MultiremiStore["assignIssue"]> | { error: string; status: 400 | 404 } {
+  try {
+    return store.assignIssue(issueId, input);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.startsWith("Issue not found:")) return { error: "issue not found", status: 404 };
+    if (/^(Agent|Member|Squad|Assignee) not found:/.test(message)) {
+      return { error: message, status: 404 };
+    }
+    if (
+      message.startsWith("Ambiguous assignee reference:")
+      || message.includes("assignee type")
+      || message.includes("Assignee id")
+      || message.startsWith("No runnable agent")
+    ) {
+      return { error: message, status: 400 };
+    }
+    throw error;
+  }
 }
 
 export function safeCreateRuntimeUpdateRequest(

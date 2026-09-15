@@ -251,8 +251,10 @@ export class IssuesRepo {
       });
     }
     if (createdBy) {
-      const creator = this.ctx.workspaces().findWorkspaceMemberForUser(createdBy, workspaceId);
-      if (creator) this.addIssueSubscriber(id, creator.id, "created");
+      const creator = this.ctx.workspaces().getWorkspaceMember(createdBy) ?? this.ctx.workspaces().findWorkspaceMemberForUser(createdBy, workspaceId);
+      if (creator && creator.workspaceId === workspaceId && !creator.archivedAt) {
+        this.addIssueSubscriber(id, creator.id, "created");
+      }
     }
     this.ctx.issueSessions().getOrCreateDefaultIssueSession(id, createdBy);
     return this.getIssue(id)!;
@@ -1522,11 +1524,12 @@ export class IssuesRepo {
       createdAt: now,
     });
     if (authorType === "member" && input.authorId) {
-      // authorId is a request user id, not a member row id — translate before
-      // subscribing, and skip (rather than fail the comment) when the author
-      // has no member row in this workspace.
-      const authorMember = this.ctx.workspaces().findWorkspaceMemberForUser(input.authorId, issue.workspaceId);
-      if (authorMember) this.addIssueSubscriber(issueId, authorMember.id, "commented");
+      // Member authors may use a member row id or a request user id. Resolve
+      // explicitly for subscriptions without broadening authorization lookup.
+      const authorMember = this.ctx.workspaces().getWorkspaceMember(input.authorId) ?? this.ctx.workspaces().findWorkspaceMemberForUser(input.authorId, issue.workspaceId);
+      if (authorMember && authorMember.workspaceId === issue.workspaceId && !authorMember.archivedAt) {
+        this.addIssueSubscriber(issueId, authorMember.id, "commented");
+      }
     }
     this.ctx.appendIssueActivity(issueId, {
       actorType: authorType,
