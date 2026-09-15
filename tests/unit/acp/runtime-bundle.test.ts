@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { installRuntimeBundle, runtimeBundleBridge, runtimeBundlePrefix, verifyRuntimeExecutable } from "@acp/runtime-bundle.js";
@@ -14,9 +14,14 @@ afterEach(() => {
   if (root) rmSync(root, { recursive: true, force: true });
 });
 
-function fixture(options: { fail?: boolean; executableVersion?: string } = {}) {
+function fixture(options: { fail?: boolean; executableVersion?: string; symlinkHome?: boolean } = {}) {
   root = mkdtempSync(join(tmpdir(), "runtime-bundle-test-"));
   process.env.REMI_HOME = root;
+  if (options.symlinkHome) {
+    mkdirSync(join(root, "real-home", ".remi"), { recursive: true });
+    symlinkSync(join(root, "real-home"), join(root, "linked-home"), "dir");
+    process.env.REMI_HOME = join(root, "linked-home", ".remi");
+  }
   const destination = runtimeBundlePrefix("codex");
   mkdirSync(destination, { recursive: true });
   writeFileSync(join(destination, "previous-install"), "keep this working install");
@@ -27,12 +32,15 @@ function fixture(options: { fail?: boolean; executableVersion?: string } = {}) {
     const prefix = process.argv[process.argv.indexOf("--prefix") + 1];
     const manifest = JSON.parse(fs.readFileSync(path.join(prefix, "package.json"), "utf8"));
     if (manifest.overrides["@openai/codex"] !== ${JSON.stringify(RUNTIME_PIN.codex.version)}) throw Error("missing SDK override");
+    // npm 10 loses root overrides when --prefix traverses a directory symlink.
+    const sdkVersion = ${Boolean(options.symlinkHome)} && prefix !== fs.realpathSync(prefix)
+      ? "0.153.4" : manifest.overrides["@openai/codex"];
     const bridge = path.join(prefix, "node_modules", ${JSON.stringify(BRIDGE_PACKAGE.codex)});
     const sdk = path.join(prefix, "node_modules", "@openai/codex");
     fs.mkdirSync(bridge, {recursive:true});
     fs.mkdirSync(path.join(sdk, "bin"), {recursive:true});
     fs.writeFileSync(path.join(bridge, "package.json"), JSON.stringify({version:${JSON.stringify(BRIDGE_PIN.codex)}}));
-    fs.writeFileSync(path.join(sdk, "package.json"), JSON.stringify({name:"@openai/codex",version:${JSON.stringify(RUNTIME_PIN.codex.version)}}));
+    fs.writeFileSync(path.join(sdk, "package.json"), JSON.stringify({name:"@openai/codex",version:sdkVersion}));
     fs.writeFileSync(path.join(sdk, "bin", "codex.js"), ${JSON.stringify(`console.log("codex-cli ${options.executableVersion ?? RUNTIME_PIN.codex.executableVersion}");`)});
   `));
   chmodSync(npm, 0o755);
@@ -90,4 +98,16 @@ test("verified runtimes activate together and preserve the previous installation
   const backup = readdirSync(join(root, "acp", "bundles")).find((name) => name.includes(".previous-"));
   expect(backup).toBeDefined();
   expect(readFileSync(join(root, "acp", "bundles", backup!, "previous-install"), "utf8")).toBe("keep this working install");
+});
+
+test("a symlinked home installs the pinned SDK and preserves the old bundle", () => {
+  const f = fixture({ symlinkHome: true });
+  installRuntimeBundle("codex", f.tools, () => {});
+  expect(verifyRuntimeExecutable("codex", runtimeBundleBridge("codex"), node)).toBe(RUNTIME_PIN.codex.executableVersion);
+  const bundles = join(root, "real-home", ".remi", "acp", "bundles");
+  const names = readdirSync(bundles);
+  const backup = names.find((name) => name.includes(".previous-"));
+  expect(backup).toBeDefined();
+  expect(readFileSync(join(bundles, backup!, "previous-install"), "utf8")).toBe("keep this working install");
+  expect(names.some((name) => name.startsWith("."))).toBe(false);
 });
