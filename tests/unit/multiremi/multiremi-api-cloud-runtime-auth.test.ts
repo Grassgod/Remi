@@ -192,17 +192,19 @@ for (const credential of ["pat", "jwt"] as const) {
 }
 
 describe("cloud runtime administrative compatibility", () => {
-  for (const mode of ["master", "open", "synthetic local PAT"]) {
+  for (const mode of ["master", "open", "legacy PAT with local owner"]) {
     it(`preserves full access in ${mode} mode`, async () => {
       const fixture = await createFixture();
       const { store, ownerHeaders, other } = fixture;
       store.createWorkspaceMember({ workspaceId: "local", userId: other.id, name: other.name, role: "owner" });
-      store.updateWorkspaceMember("mem_local_local", { role: "member" });
+      if (mode !== "legacy PAT with local owner") {
+        store.updateWorkspaceMember("mem_local_local", { role: "member" });
+      }
       const node = await createNode(fixture.app, ownerHeaders);
       const app = mode === "open" ? createMultiremiApp({ store, authToken: "" }) : fixture.app;
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (mode === "master") headers.Authorization = `Bearer ${masterToken}`;
-      if (mode === "synthetic local PAT") {
+      if (mode === "legacy PAT with local owner") {
         const token = await store.createAccessToken({ name: "Legacy ownerless PAT", type: "pat", workspaceId: "local" });
         headers.Authorization = `Bearer ${token.token}`;
       }
@@ -223,4 +225,41 @@ describe("cloud runtime administrative compatibility", () => {
       }
     });
   }
+
+  it("scopes the same legacy PAT to local-owned nodes after its deployment owner is demoted", async () => {
+    const { store, app, other, ownerHeaders } = await createFixture();
+    store.createWorkspaceMember({ workspaceId: "local", userId: other.id, name: other.name, role: "owner" });
+    const foreignNode = await createNode(app, ownerHeaders);
+    const localNode = store.createCloudRuntimeNode({ instance_type: "legacy" });
+    const token = await store.createAccessToken({ name: "Legacy ownerless PAT", type: "pat", workspaceId: "local" });
+    expect(store.getAccessToken(token.id)?.userId).toBe("local");
+    const headers = { Authorization: `Bearer ${token.token}`, "Content-Type": "application/json" };
+    const beforeDemotion = await app.request(root, { headers });
+    expect(beforeDemotion.status).toBe(200);
+    expect(await beforeDemotion.json()).toEqual(expect.arrayContaining([foreignNode, localNode]));
+
+    store.updateWorkspaceMember("mem_local_local", { role: "member" });
+    const afterDemotion = await app.request(root, { headers });
+    expect(afterDemotion.status).toBe(200);
+    // Historical owner_id="local" rows still belong to this user; demotion
+    // removes administrative access, not ownership. Reassignment needs migration.
+    expect(await afterDemotion.json()).toEqual([localNode]);
+    const deleteNode = spyOn(store, "deleteCloudRuntimeNode");
+    const setStatus = spyOn(store, "setCloudRuntimeNodeStatus");
+    const execNode = spyOn(store, "execCloudRuntimeNode");
+    for (const operation of operations) {
+      const denied = await app.request(`${root}${operation.path}`, {
+        method: operation.method,
+        headers,
+        body: JSON.stringify({ id: foreignNode.id, status: "maintenance", command: "echo forbidden" }),
+      });
+      expect(denied.status, operation.name).toBe(404);
+      expect(await denied.json()).toEqual({ error: "cloud runtime node not found" });
+      expect(store.getCloudRuntimeNode(foreignNode.id)).toEqual(foreignNode);
+    }
+    expect(deleteNode).not.toHaveBeenCalled();
+    expect(setStatus).not.toHaveBeenCalled();
+    expect(execNode).not.toHaveBeenCalled();
+    await expectNodeManagement(app, store, headers, localNode);
+  });
 });

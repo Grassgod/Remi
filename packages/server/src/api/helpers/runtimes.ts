@@ -552,14 +552,14 @@ export function mergeLegacyDaemonRuntimes(
 }
 
 export function cloudRuntimeNodeOwnerFilter(context: Context, store: MultiremiStore): string | undefined {
-  const token = currentAccessToken(context);
   const userId = authenticatedRequestUserId(context);
-  const humanPat = token?.type === "pat" && userId && (userId !== "local" || token.purpose === "session");
-  if (userId && (userId !== "local" || humanPat || !token)) {
-    const role = currentWorkspaceRole(context, store, "local");
-    if (role !== "owner" && role !== "admin") return userId;
-  }
-  return undefined;
+  if (!userId) return undefined; // Master token / open mode.
+  // Intentionally stricter than auth-guards' legacy PAT identity checks: those
+  // also reject a mismatched token.workspaceId, but nodes have no workspace
+  // boundary. access-tokens-repo stores an omitted userId as "local", just like
+  // a real local user's PAT, so access depends on the current role, not token shape.
+  const role = currentWorkspaceRole(context, store, "local");
+  return role === "owner" || role === "admin" ? undefined : userId;
 }
 
 export function loadCloudRuntimeNode(
