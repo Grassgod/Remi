@@ -453,9 +453,9 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
 
   it("scopes runtime console APIs by workspace and owner permissions", async () => {
     const store = createStore();
-    store.createWorkspaceMember({ id: "alice", name: "Alice", role: "member" });
-    store.createWorkspaceMember({ id: "bob", name: "Bob", role: "member" });
-    store.createWorkspaceMember({ id: "admin", name: "Admin", role: "admin" });
+    store.createWorkspaceMember({ id: "alice", userId: "alice", name: "Alice", role: "member" });
+    store.createWorkspaceMember({ id: "bob", userId: "bob", name: "Bob", role: "member" });
+    store.createWorkspaceMember({ id: "admin", userId: "admin", name: "Admin", role: "admin" });
     const aliceToken = await store.createAccessToken({ name: "Alice", type: "pat", workspaceId: "local", userId: "alice" });
     const bobToken = await store.createAccessToken({ name: "Bob", type: "pat", workspaceId: "local", userId: "bob" });
     const adminToken = await store.createAccessToken({ name: "Admin", type: "pat", workspaceId: "local", userId: "admin" });

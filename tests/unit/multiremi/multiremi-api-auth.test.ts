@@ -351,6 +351,7 @@ describe("Multiremi API — authentication and token scoping", () => {
     const store = createStore();
     store.createWorkspaceMember({
       id: "usr_runtime_owner",
+      userId: "usr_runtime_owner",
       name: "Runtime owner",
       role: "member",
     });

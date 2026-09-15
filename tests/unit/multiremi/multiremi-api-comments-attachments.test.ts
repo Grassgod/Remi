@@ -547,9 +547,9 @@ describe("Multiremi API — comments, reactions, and attachments", () => {
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const auth = (token: string) => ({ headers: { Authorization: `Bearer ${token}` } });
 
-    store.createWorkspaceMember({ id: "mem_local_alice", workspaceId: "local", name: "Alice", email: "alice@x.com", role: "member" });
-    store.createWorkspaceMember({ id: "mem_local_bob", workspaceId: "local", name: "Bob", email: "bob@x.com", role: "member" });
-    store.createWorkspaceMember({ id: "mem_local_carol", workspaceId: "local", name: "Carol", email: "carol@x.com", role: "admin" });
+    store.createWorkspaceMember({ id: "mem_local_alice", userId: "alice", workspaceId: "local", name: "Alice", email: "alice@x.com", role: "member" });
+    store.createWorkspaceMember({ id: "mem_local_bob", userId: "bob", workspaceId: "local", name: "Bob", email: "bob@x.com", role: "member" });
+    store.createWorkspaceMember({ id: "mem_local_carol", userId: "carol", workspaceId: "local", name: "Carol", email: "carol@x.com", role: "admin" });
     const aliceToken = await store.createAccessToken({ name: "alice", type: "pat", workspaceId: "local", userId: "alice" });
     const bobToken = await store.createAccessToken({ name: "bob", type: "pat", workspaceId: "local", userId: "bob" });
     const carolToken = await store.createAccessToken({ name: "carol", type: "pat", workspaceId: "local", userId: "carol" });
