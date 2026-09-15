@@ -20,6 +20,18 @@ tool/thought is process commentary; the tail is held for the final result.
 Subagent text never replaces the main Agent's answer. A direct answer without
 process events sends only the result, without an empty process placeholder.
 
+Ordinary private-chat turns send both native process messages and result cards
+to the main chat, without a reply target. Group/Issue topic replies and explicit
+private-thread replies retain their original topic. A private result must not
+rebind its Chat Session to the result message; only a standalone Issue topic seed
+establishes a new topic root.
+
+The incoming message's `THINKING` receipt remains through queue handoff, execution
+and result delivery, including plain answers without process events. The existing
+persistent receipt mechanism replaces it with `DONE` (or `CROSSMARK` on failure or
+cancellation) after the final card is acknowledged. Native CoT contains actual
+provider process events; a silent wait is represented by the receipt.
+
 ## Semantic process timeline
 
 The display follows aiden-bot's native CoT protocol and timeline conventions
@@ -33,6 +45,10 @@ canonical Task events rather than its SDK-specific event feed:
   skill/task/agent icons. ACP placeholders and subsequent argument updates share
   one invocation. Incomplete titles buffer for at most one second; a Task sequence
   is never acknowledged while its buffered invocation is still unsent.
+  Shell icons use the leading executable of a simple pipeline: `rg`/`grep`/`find`
+  use search, `cat`/`sed`/`head`/`tail` use read, and other commands or compound
+  scripts use bash. A trailing log filter such as `grep -v INFO`, a filename or a
+  quoted argument cannot turn an unrelated operation into search.
 - `TOOL_CALL_END` closes the invocation display, as in aiden-bot; it does not
   declare the underlying operation complete. Ordinary successful tool logs are
   omitted. The full transcript remains in the workbench. Failures show a short

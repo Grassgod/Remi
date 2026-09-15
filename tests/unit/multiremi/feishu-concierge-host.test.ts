@@ -116,6 +116,28 @@ function host(input: {
 }
 
 describe("control-plane Feishu concierge host", () => {
+  it("routes a private Task to the main chat without inventing a thread session key", async () => {
+    const test = host({ daemon: fakeDaemon().daemon });
+    await test.conciergeHost.start(assignment());
+    let sends = 0;
+    test.channel.handle.streamProactiveTask = async (chatId, sessionKey, _stream, _meta, options) => {
+      sends++;
+      expect(chatId).toBe("oc_private");
+      expect(sessionKey).toBe("oc_private");
+      expect(options.replyToMessageId).toBeUndefined();
+      expect(options.receiptMessageIds).toEqual(["om_original"]);
+      expect(options.interactionOpenId).toBe("ou_requester");
+      return { messageId: "om_result" };
+    };
+    await test.conciergeHost.sendOutbound!({ id: "fbo_private", claimToken: "lease", chatId: "oc_private",
+      threadId: null, replyToMessageId: null, body: "", bodyOrigin: "agent", taskId: "tsk_private",
+      idempotencyKey: "fbo_private", receiptMessageIds: ["om_original"], interactionOpenId: "ou_requester",
+      mention: { mode: "none", resolvedOpenId: null } }, {
+      signal: new AbortController().signal, onStarted: async () => {},
+    });
+    expect(sends).toBe(1);
+  });
+
   it("checkpoints a group owner before sending through the existing Task card", async () => {
     const test = host({ daemon: fakeDaemon().daemon });
     await test.conciergeHost.start(assignment());
