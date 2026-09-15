@@ -229,6 +229,23 @@ describe("Issue Session provider home", () => {
     expect(changedHome.root).toEndWith(join("executions", "b".repeat(64)));
   });
 
+  it.each(["chat", "issue"])("isolates custom Claude %s homes while reusing an unchanged connection", (kind) => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-claude-fingerprint-"));
+    roots.push(root);
+    const workspaces = join(root, "workspaces");
+    const first = {
+      ...task("claude"),
+      ...(kind === "chat" ? { chatSessionId: "chat_claude" } : {}),
+      claudeProfile: { name: "private", base_url: "https://example.test", model: "custom", env_key: "REMI_CLAUDE_API_KEY" },
+    } as AgentTask;
+    const resolve = (input: AgentTask) => resolveTaskProviderHome(input, join(root, "cwd"), workspaces)!;
+    const home = resolve(first);
+    expect(resolve({ ...first, id: "tsk_same" }).home).toBe(home.home);
+    expect(resolve({ ...first, executionFingerprint: "b".repeat(64) }).home).not.toBe(home.home);
+    expect(resolve({ ...first, claudeProfile: null }).home).not.toBe(home.home);
+    expect(home.runtimeStateRoot).toBe(join(workspaces, ".runtime", kind === "chat" ? "chat_claude" : "ises_1"));
+  });
+
   it("keeps Issue archive lineage while isolating failed cold starts and generations", () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-issue-fingerprint-"));
     roots.push(root);

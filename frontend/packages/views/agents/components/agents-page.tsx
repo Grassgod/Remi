@@ -64,9 +64,7 @@ import { EngineFilterDropdown } from "./engine-filter-dropdown";
 //                    accessed through a ghost link in the toolbar.
 //   Scope          = ownership lens (All vs Mine). Layer-1 segment.
 //   Engine         = "Which provider does the agent run on?" — dropdown
-//                    filter over claude/codex. Machines are gone from the
-//                    agent model (pool scheduling); the engine is the only
-//                    placement dimension an agent carries.
+//                    filter independent of the selected machine.
 //   Availability   = "Can the agent take work right now?" — 3-state chip
 //                    group (online / unstable / offline) sourced from
 //                    AgentAvailability. The only chip filter we keep —
@@ -199,7 +197,7 @@ export function AgentsPage() {
     return visibleInView.filter((a) => a.owner_id === currentUser.id);
   }, [visibleInView, scope, currentUser, view]);
 
-  // An agent's engine: authoritative from `provider` on pool backends;
+  // An agent's engine: authoritative from `provider`;
   // legacy rows without it fall back to the bound runtime's provider.
   const agentEngine = useCallback(
     (a: Agent): string =>

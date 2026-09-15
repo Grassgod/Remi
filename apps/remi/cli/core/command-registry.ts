@@ -159,6 +159,8 @@ const TASK_PARITY_DENIED_COMMAND_PREFIXES = [
   "member.",
   "platform.settings.",
   "runtime.cloud.",
+  "runtime.codex-profile.",
+  "runtime.claude-profile.",
   "token.",
   // MUL-206: the Feishu concierge holds workspace-wide bot credentials and can
   // point the bot at any Agent, so it stays an owner/admin operation even for

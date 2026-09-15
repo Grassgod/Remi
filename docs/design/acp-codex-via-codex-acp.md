@@ -1,238 +1,75 @@
-# Remi ACP Codex via codex-acp
+---
+title: Codex ACP 接入
+status: active
+summary: 说明任务到 Codex ACP 的当前执行链、配置来源、会话隔离与验证入口。
+---
 
-> **历史文档**：本文记录旧 ACP Codex 接入。当前启动命令是
-> `bun run apps/remi/main.ts start`；旧顶层 `serve` 命令已删除。provider/model/cwd/MCP 等
-> 执行配置来自 `MULTIREMI_BOT_AGENT_ID` 指定的 `multiremi_agents` 行，而不是本地
-> `remi_config`。下文命令和 `/switch` 描述仅作历史参考，不可直接执行。
+# Codex ACP 接入
 
-## Goal
+当前执行链是服务端分配的 task/agent → [daemon worker](../../packages/server/src/worker/daemon.ts) → [AgentRuntime](../../packages/daemon/src/agent-runtime/runtime.ts) → [AcpProvider](../../packages/acp/src/provider.ts) → `codex-acp`，经 ACP stdio 通信。模型、执行参数和 MCP 来自任务携带的 Agent 配置及运行时装配；工作目录来自任务工作区解析。
 
-Reuse an existing ACP-compatible Codex agent such as `codex-acp` instead of
-building a Remi-side Codex app-server adapter.
+## 配置与运行
 
-Target runtime path:
+- 在工作区 Agent 上设置 `provider: codex`，由符合路由条件的 Codex runtime 领取任务。[CLI Registry](../../apps/remi/cli/commands/agent-extensions.ts)提供 `remi agent create`、`remi agent update` 的 `--provider`、`--model` 和 `--thinking-level` 参数；先用对应命令的 `--help` 核对当前参数与身份要求。
+- [daemon 启动入口](../../apps/remi/cli/multiremi.ts)调用 [ensureAcpBridges](../../packages/acp/src/provision.ts)，使用源码固定的 `@agentclientprotocol/codex-acp` 版本及 Remi usage 补丁。版本以 `BRIDGE_PIN` 为准，不从一次外部包查询结果推导。
+- ACP 执行文件按显式 `executable`、`REMI_CODEX_AGENT_ACP_EXECUTABLE`、Remi 管理目录与 PATH 解析，具体顺序见 `resolveAcpExecutableForAgent`。Windows 的扩展名解析也在该函数所在文件中。
+- 当前 Codex 健康检查只确认执行文件可解析，不启动模型进程。检查通过不等于登录、网络、模型或真实任务已可用。
 
-```text
-Feishu
-  -> Remi FeishuConnector
-  -> Remi AcpProvider(agentType="codex")
-  -> codex-acp over ACP stdio
-  -> Codex
-```
+## 协议与隔离
 
-This keeps Remi's current ACP provider, session pool, streaming card renderer,
-permission UI, `/switch codex` entry, and tracing path. Remi only needs thin
-agent-selection and Codex event interpretation fixes.
+[CodexAdapter](../../packages/acp/src/adapters/codex/index.ts)已经实现工具名、输入、结果预览及权限模式映射。[AcpProvider](../../packages/acp/src/provider.ts)根据 ACP 返回的能力协商 model/effort/mode；不能用未被桥接器读取的会话 `_meta` 代替协商。适配器对不支持的 `allowedTools` 和会话 `systemPrompt` 发出警告，不保证这些字段生效。
 
-## Current Code Evidence
+[Session Home](../../packages/daemon/src/agent-runtime/workspace/session-home.ts)负责会话目录与凭据路由，[Codex Home](../../packages/daemon/src/agent-runtime/agent-plugins/codex-home.ts)负责配置/插件物化及认证文件连接。[能力装配](../../packages/daemon/src/agent-runtime/capabilities/agent-plugins.ts)将隔离目录传为 `CODEX_HOME`；插件集合及执行指纹参与会话复用判定，不能让不同执行身份共用插件配置。
 
-The repository is already close to this shape:
+这类隔离针对配置、插件与原生会话记录，不意味着每个 Home 都拥有独立付费账号。原生 OAuth 可以连接基础 Home 的认证文件，Relay 凭据使用另一条注入路径；更改认证或切换 Relay 时需要同时检查目录与凭据状态。
 
-| Area | Evidence | Current state |
-| --- | --- | --- |
-| Provider construction | `src/core.ts` `_buildProvider()` accepts `acp:codex` | Remi can instantiate `AcpProvider({ agentType: "codex" })` |
-| Runtime switch | `src/switch-mode.ts` maps `codex` to `acp:codex` | P2P `/switch codex` route exists |
-| ACP provider | `src/providers/acp/provider.ts` delegates behavior to `createAdapter(agentType)` | Generic enough for another ACP server |
-| Codex adapter | `src/providers/acp/adapters/codex.ts` | Stub only; default executable is `codex-acp` |
-| Feishu renderer | `src/connectors/feishu/index.ts` uses `createAdapter("claude")` | Blocks Codex-specific tool/input parsing |
-| Health check | `src/providers/acp/provider.ts` runs `claude --version` | Incorrect for `acp:codex` |
+## Runtime 自定义连接
 
-## Non-goals
+Runtime 详情的「Codex 连接」页支持一个自定义 Responses provider：Profile 名称、API 基础地址、模型 ID，以及直接填写 API Key 或引用 Runtime 本机 `REMI_CODEX_*` 环境变量。需先更新并重启 daemon，使注册元数据包含 `codex_profiles: 1`。未启用时沿用工作区 Relay / 原生登录路径；启用后优先于工作区 Relay。接口地址由 Runtime 连接，允许 HTTP(S) 的 loopback / LAN 地址；服务端不会对它做模型发现请求，也不放宽工作区 Relay 的 URL 校验。
 
-- Do not implement a direct `codex app-server` client in Remi.
-- Do not add a Remi-owned `remi-codex-agent-acp` bridge unless `codex-acp`
-  is proven incompatible.
-- Do not change Claude ACP behavior beyond making shared code agent-aware.
-- Do not remove `claude_cli`; it remains the rollback path.
+- [配置契约](../../packages/contracts/src/codex-profile.ts)只接受结构化路由字段，不接受任意 TOML、命令、URL 内联凭据或查询参数。当前每个 Runtime 配置一个模型；云友需选择此模型或不指定模型，显式选择其他模型时任务会报错。
+- [注入器](../../packages/daemon/src/agent-runtime/codex-profile.ts)将配置展开为隔离 `CODEX_HOME/config.toml` 的 `model`、`model_provider` 和 `model_providers.remi_custom`；密钥只进入进程环境 `OPENAI_API_KEY`，不写入 config/auth 文件。本机基础 Home 不变。ACP 的 `MODEL_PROVIDER`、`CODEX_CONFIG`、`DEFAULT_AUTH_REQUEST` 环境覆盖也会被明确设置，避免旧机器配置改变路由。
+- 这里的 Profile 是 Remi 的命名连接，不是直接复制本机 `--profile` 配置。Remi 展开有效配置，不依赖本机 profile 文件的布局。
+- [任务快照](../../packages/server/src/store/repos/tasks-repo.ts)在 claim 时冻结连接和凭据版本，并把连接纳入执行指纹。修改配置只影响新任务；运行中任务使用原快照，自动重试在原 Runtime 仍兼容当前 Agent 时保留快照。连接变化后从产品会话记录重新启动原生会话，不把旧 provider 会话 ID 传给新接口。若 Agent 切换 provider 或原 Runtime 不再兼容，重试清除旧快照，由兼容 Runtime 重新领取。
+- 模型目录显示配置的模型，属于配置声明，不代表连通性验证，也不虚构 thinking 能力。未在 Codex 内置目录中的模型可由启动配置使用；Codex 可能提示缺少模型元数据，兼容性取决于实际 Responses 服务。
+- 可选的 LLM 进度摘要使用 Chat Completions 协议，因此不自动复用自定义 Responses 连接的密钥；需单独配置 `MULTIREMI_PROGRESS_SUMMARY_OPENAI_BASE_URL` 与 `MULTIREMI_PROGRESS_SUMMARY_OPENAI_API_KEY` 才启用该摘要。任务状态与执行消息照常上报。
 
-## Proposed Changes
+直接填写的 API Key 使用 [AES-256-GCM 存储](../../packages/server/src/runtime-provider-credentials.ts)，认证数据绑定工作区、Runtime 和不可变凭据版本。服务端需配置 `MULTIREMI_PROVIDER_ENCRYPTION_KEY`（base64 编码的 32 字节密钥），也可使用部署的 `MULTIREMI_TOKEN` 派生密钥；没有加密密钥时保存失败，不回退明文。轮换时用逗号分隔的 `MULTIREMI_PROVIDER_ENCRYPTION_PREVIOUS_KEYS` 保留旧密钥；更换 master token 前需保留旧派生密钥或迁移数据。历史凭据随 Runtime 保留以支持冻结任务重试，删除 Runtime 时清理；合并 Runtime 身份时重绑定加密认证数据。
 
-### 1. Agent-aware executable and health check
+浏览器 GET/PUT `/api/runtimes/:id/codex-profile` 只返回配置与不透明凭据引用，PUT 仅 Runtime owner / 工作区 admin 可用。`api_key` 省略表示保留现有密钥，`profile: null` 恢复继承。密钥只经 daemon 专用 `/api/daemon/runtimes/:id/codex-profile-key` 下发，必须使用绑定该 Runtime 机器身份的 daemon token；human/task token 和其他机器均不能读取。daemon 只在内存缓存不可变凭据版本。环境变量模式不经过服务端存储密钥，配置变量后需重启 Runtime。
 
-Keep `CodexAdapter.defaultExecutable()` returning `codex-acp` unless local
-verification shows a different command name.
-
-Update `AcpProvider.healthCheck()` to resolve and execute the configured ACP
-agent executable by `agentType`:
-
-- `acp:claude`: current Claude wrapper or `claude-agent-acp`.
-- `acp:codex`: `provider.executable` or `codex-acp`.
-
-The check should avoid sending a prompt; a lightweight `--version` or spawn
-existence check is enough for scheduled heartbeat.
-
-### 2. Pass agent type into streaming consumers
-
-Extend `StreamMeta` with one of:
-
-```ts
-providerName?: string | null;
-agentType?: string | null;
-```
-
-In `Remi.handleMessageStream()`, after selecting the provider, populate this
-metadata. For `AcpProvider`, prefer `provider.adapter.agentType`.
-
-Then replace the Feishu hardcode:
-
-```ts
-createAdapter("claude")
-```
-
-with the selected ACP agent type, defaulting to `claude` for compatibility.
-
-### 3. Complete the Codex adapter for display-level semantics
-
-Keep the Codex adapter shallow. It does not need to understand app-server.
-It only needs to interpret ACP `SessionUpdate` objects emitted by `codex-acp`.
-
-Minimum behavior:
-
-- Resolve tool names from known Codex ACP metadata if present.
-- Fall back to `kind` + `title` mappings:
-  - `execute` -> `Bash`
-  - `read` -> `Read`
-  - `edit` -> `Edit`
-  - `search` -> `Grep` or `Search`
-  - `fetch` -> `WebFetch`
-  - `think` -> `Think`
-- Extract structured input from `rawInput`, including JSON strings.
-- Reconstruct file path from `locations`.
-- Reconstruct command from `title` for execute events.
-- Extract text, diff path, terminal output, and raw output as result previews.
-
-Do not add Remi-side tool execution. `codex-acp` owns execution.
-
-### 4. Permission flow compatibility
-
-Use Remi's existing `session/request_permission` handler unchanged where
-possible. Required verification:
-
-- Codex tool approval options are presented in Feishu.
-- Selecting allow/reject returns an ACP `selected` or `cancelled` outcome that
-  `codex-acp` accepts.
-- If `codex-acp` uses option names that differ from Claude, update only
-  option-selection helpers, not provider architecture.
-
-`AskUserQuestion` and `ExitPlanMode` are Claude-specific until a Codex ACP
-fixture proves equivalent behavior.
-
-### 5. Configuration
-
-Recommended local config:
-
-```toml
-[provider]
-name = "acp:codex"
-# executable = "/absolute/path/to/codex-acp"
-# model = "gpt-5.4"
-```
-
-P2P switch:
-
-```text
-/switch codex
-```
-
-Rollback:
-
-```toml
-[provider]
-name = "acp:claude"
-```
-
-or:
-
-```toml
-[provider]
-name = "claude_cli"
-```
-
-Current local prerequisite status:
-
-- `command -v codex-acp` returned no path in this workspace shell.
-- `npm view @agentclientprotocol/codex-acp` resolves package version `0.0.43`
-  with bin `codex-acp` in the current registry.
-- Before implementation smoke tests, install `codex-acp` or set
-  `REMI_CODEX_AGENT_ACP_EXECUTABLE` / `[provider].executable` to an absolute
-  path for the ACP-compatible Codex server.
-
-## Implementation Plan
-
-1. Verify the external ACP agent command:
-   - `npm install -g @agentclientprotocol/codex-acp`
-   - `command -v codex-acp`
-   - `codex-acp --version`
-   - optional smoke: start it and send ACP `initialize`.
-2. Patch health check:
-   - make `AcpProvider.healthCheck()` agent-aware.
-   - add unit coverage for Claude and Codex executable resolution.
-3. Patch stream metadata:
-   - add `agentType` or `providerName` to `StreamMeta`.
-   - pass selected provider metadata from `Remi.handleMessageStream()`.
-   - update Feishu connector to create the matching adapter.
-4. Complete `CodexAdapter` display parsing:
-   - raw input JSON parsing.
-   - title/kind fallback tool name mapping.
-   - result preview extraction.
-5. Add fixtures and tests:
-   - unit tests for Codex adapter.
-   - a fake ACP Codex server fixture for `AcpProvider` if `codex-acp` is not
-     available in CI.
-6. Run e2e smoke locally with real `codex-acp`.
-7. Update `remi.toml.example` with an ACP Codex example.
-
-## Acceptance Criteria
-
-The goal is done when all of these pass:
-
-- `name = "acp:codex"` starts Remi without attempting `claude --version`.
-- `/switch codex` selects `acp:codex` and clears the old provider session.
-- A simple prompt returns streamed `agent_message_chunk` content in Feishu.
-- A read-file prompt shows a readable `Read` step with file path.
-- A shell prompt shows a readable `Bash` step with command.
-- A file-edit prompt shows an `Edit` or `Write` step with path and diff preview.
-- A permission request renders in Feishu and allow/reject reaches `codex-acp`.
-- `/esc` cancels the active Codex turn and clears the Remi session process.
-- Session resume works for at least one follow-up turn.
-- Existing Claude ACP tests still pass.
-
-## Verification Commands
+CLI 对应命令：
 
 ```bash
-bun test tests/providers.test.ts
-bun test tests/switch-mode.test.ts
-bun test tests/feishu-card.test.ts
+remi runtime codex-profile get <runtime>
+remi runtime codex-profile set <runtime> --file profile.json
 ```
 
-Manual smoke:
+`profile.json` 示例（文件内不要提交真实密钥到 Git；可省略 `api_key` 保留已保存的密钥）：
+
+```json
+{"profile":{"name":"private","base_url":"https://example.com/v1","model":"custom-model","auth_mode":"api_key","env_key":""},"api_key":"REPLACE_WITH_API_KEY"}
+```
+
+环境变量模式使用 `"auth_mode":"env","env_key":"REMI_CODEX_API_KEY"`，不传 `api_key`。恢复继承使用 `{"profile":null}`。
+
+## 验证入口
+
+| 范围 | 入口 |
+|---|---|
+| 执行文件、健康检查与显示适配 | [providers.test.ts](../../tests/unit/acp/providers.test.ts) |
+| 桥接器版本与 provision | [provision.test.ts](../../tests/unit/acp/provision.test.ts) |
+| 模型/effort/权限协商与隔离 Home | [acp-session-negotiation.test.ts](../../tests/unit/acp/acp-session-negotiation.test.ts)、[session-home.test.ts](../../tests/unit/daemon/session-home.test.ts) |
+| 真实 API → daemon → ACP 任务 | [smoke-multiremi-acp.ts](../../tests/integration/smoke-multiremi-acp.ts) |
+| 自定义连接、密钥权限/加密与会话快照 | [runtime-codex-profile.test.ts](../../tests/unit/multiremi/runtime-codex-profile.test.ts)、[codex-profile.test.ts](../../tests/unit/daemon/codex-profile.test.ts) |
+| API → daemon 的配置与密钥注入（provider fixture） | [runtime-codex-profile.test.ts](../../tests/integration/runtime-codex-profile.test.ts) |
+| Runtime 表单与凭据保留 | [runtime-codex-profile-tab.test.tsx](../../frontend/packages/views/runtimes/components/runtime-codex-profile-tab.test.tsx) |
+
+在根目录执行：
 
 ```bash
-# Historical invocation removed. Configure the Multiremi agent row, then run `remi start`.
+bun test tests/unit/acp/providers.test.ts tests/unit/acp/provision.test.ts tests/unit/acp/acp-session-negotiation.test.ts
+bun run tests/integration/smoke-multiremi-acp.ts --provider=codex --check-only
 ```
 
-Then test from Feishu:
-
-```text
-/switch codex
-你好
-读取当前项目的 package.json
-运行 pwd
-修改一个临时文件
-/esc
-```
-
-## Risk Register
-
-| Risk | Mitigation |
-| --- | --- |
-| `codex-acp` emits non-Claude tool metadata | Keep Codex parsing in `CodexAdapter`; add fixtures from real runs |
-| `codex-acp` permission outcomes differ | Normalize in permission option helpers after observing fixture |
-| `codex-acp` session resume IDs differ from Claude | Treat session IDs as provider-specific; existing `/switch` already clears provider sessions |
-| Heartbeat starts a heavy Codex process | Prefer executable existence or `--version` check |
-| Feishu cards depend on Claude tool names | Map Codex events into Remi's display tool vocabulary |
-
-## Decision
-
-Proceed with `codex-acp` as the ACP server boundary. Remi should not implement
-Codex app-server directly for this integration.
+移除 `--check-only` 会运行真实任务并调用模型，需要当前机器上有效的认证与模型访问。保留实际输出中的 `available`、`unavailable`、`passed`、`failed` 差别；这里列的是验证入口，不是本次执行结果。

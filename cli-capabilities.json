@@ -5637,6 +5637,89 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "runtime.group.list": {
+      "command": "remi runtime group list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "runtime.group.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "runtime.codex-profile.get": {
+      "command": "remi runtime codex-profile get",
+      "aliases": [],
+      "auth": [
+        "human",
+        "daemon"
+      ],
+      "capability": "runtime.codex-profile.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "runtime.codex-profile.set": {
+      "command": "remi runtime codex-profile set",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.codex-profile.set",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "runtime.claude-profile.get": {
+      "command": "remi runtime claude-profile get",
+      "aliases": [],
+      "auth": [
+        "human",
+        "daemon"
+      ],
+      "capability": "runtime.claude-profile.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "runtime.claude-profile.set": {
+      "command": "remi runtime claude-profile set",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.claude-profile.set",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "runtime.list": {
       "command": "remi runtime list",
       "aliases": [],
@@ -9823,6 +9906,16 @@
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
+    "GET /api/daemon/runtimes/:id/claude-profile-key": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "GET /api/daemon/runtimes/:id/codex-profile-key": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
     "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
@@ -9907,6 +10000,9 @@
     },
     "GET /api/dashboard/usage/daily": {
       "command": "dashboard.usage.daily"
+    },
+    "GET /api/execution-groups": {
+      "command": "runtime.group.list"
     },
     "GET /api/inbox": {
       "command": "inbox.list"
@@ -10120,6 +10216,9 @@
     },
     "GET /api/multiremi/daemons/:daemonId/retirement-plan": {
       "command": "daemon.retirement-plan"
+    },
+    "GET /api/multiremi/execution-groups": {
+      "command": "runtime.group.list"
     },
     "GET /api/multiremi/feedback": {
       "command": "platform.feedback.list"
@@ -10374,6 +10473,12 @@
     },
     "GET /api/runtimes/:id/activity": {
       "command": "runtime.activity"
+    },
+    "GET /api/runtimes/:id/claude-profile": {
+      "command": "runtime.claude-profile.get"
+    },
+    "GET /api/runtimes/:id/codex-profile": {
+      "command": "runtime.codex-profile.get"
     },
     "GET /api/runtimes/:id/commands/:requestId": {
       "command": "runtime.command.run"
@@ -11781,6 +11886,12 @@
     },
     "PUT /api/projects/:id/resources/:resourceId": {
       "command": "project.resource.update"
+    },
+    "PUT /api/runtimes/:id/claude-profile": {
+      "command": "runtime.claude-profile.set"
+    },
+    "PUT /api/runtimes/:id/codex-profile": {
+      "command": "runtime.codex-profile.set"
     },
     "PUT /api/runtimes/:id/models": {
       "command": "runtime.model.set"

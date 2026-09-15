@@ -1,24 +1,17 @@
 "use client";
 
-import { useFleetProviderModels } from "@multiremi/core/runtimes";
+import { useExecutionTargetModels } from "@multiremi/core/runtimes";
 import { PropRow } from "../../../common/prop-row";
 import { useT } from "../../../i18n";
 import { ThinkingPicker } from "./thinking-picker";
 import { getModelThinkingLevels } from "./thinking-levels";
 
-/**
- * Missing capability metadata on Claude/Codex is unknown, not proof that a
- * model has no reasoning. Keep loading/error/unknown states visible. If the agent
- * already has a `thinking_level` saved (engine swap into a non-thinking
- * provider, or the fleet catalog shrank and dropped the entry),
- * we still render the row so the user can see the orphan token the
- * backend is still sending and explicit-clear it via the picker footer.
- *
- * Reuses the shared fleet-models query so it hits the same 60s cache as
- * the model picker; no extra round-trip on the inspector's hot path.
- */
+// The catalog is scoped to the selected machine and Runtime type.
 export function ThinkingPropRow({
   wsId,
+  runtimeId,
+  executionGroupId,
+  agentId,
   provider,
   model,
   value,
@@ -26,6 +19,9 @@ export function ThinkingPropRow({
   onChange,
 }: {
   wsId: string;
+  runtimeId?: string | null;
+  executionGroupId?: string | null;
+  agentId?: string;
   provider: string;
   model: string;
   value: string;
@@ -33,7 +29,7 @@ export function ThinkingPropRow({
   onChange: (next: string) => Promise<void> | void;
 }) {
   const { t } = useT("agents");
-  const { models, isLoading, isError } = useFleetProviderModels(wsId, provider);
+  const { models, isLoading, isError } = useExecutionTargetModels(wsId, provider, runtimeId, executionGroupId, agentId);
 
   const levels = getModelThinkingLevels(models, model);
   if (levels.length === 0 && !value) {

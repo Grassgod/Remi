@@ -457,8 +457,8 @@ describe("Multiremi API — skills and agent templates", () => {
     expect(createdBody.agent.name).toBe("Bug Fixer Agent");
     expect(createdBody.agent.provider).toBe("codex");
     expect(store.getAgent(createdBody.agent.id)?.provider).toBe("codex");
-    expect(createdBody.agent.runtime_id).toBe("");
-    expect(store.getAgent(createdBody.agent.id)?.runtimeId).toBeNull();
+    expect(createdBody.agent.runtime_id).toBe(codexRuntime.id);
+    expect(store.getAgent(createdBody.agent.id)?.runtimeId).toBe(codexRuntime.id);
     expect(createdBody.agent.avatar_url).toBe("https://example.com/template-bug-fixer.png");
     expect(store.getAgent(createdBody.agent.id)?.avatarUrl).toBe("https://example.com/template-bug-fixer.png");
     expect(createdBody.agent.max_concurrent_tasks).toBe(6);

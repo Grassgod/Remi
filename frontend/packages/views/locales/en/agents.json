@@ -65,7 +65,7 @@
     "no_description": "No description",
     "actions_aria": "Row actions",
     "fallback_engine": "Unknown",
-    "engine_tooltip": "Runs on any online {{engine}} machine"
+    "engine_tooltip": "Runtime type: {{engine}}"
   },
   "activity_tooltip": {
     "created_today": "Created today",
@@ -154,7 +154,7 @@
     "description_placeholder": "What does this agent do?",
     "save": "Save",
     "cancel": "Cancel",
-    "prop_engine": "Engine"
+    "prop_engine": "Execution group"
   },
   "skill_attach": {
     "trigger_aria": "Attach a workspace skill",
@@ -180,8 +180,6 @@
     "thinking_tooltip": "Reasoning effort · {{value}}",
     "thinking_clear": "Follow runtime default",
     "thinking_clear_title": "Clear the override and use the runtime's default reasoning effort",
-    "engine_tooltip": "Engine: {{value}}",
-    "engine_hint": "Tasks run on any online machine of this engine.",
     "visibility_tooltip": "Visibility · {{value}}"
   },
   "model_dropdown": {
@@ -207,7 +205,7 @@
   },
   "edit_dialog": {
     "title": "Edit Agent",
-    "description": "Update the agent's identity, engine, model, visibility, capacity, and instructions.",
+    "description": "Update the agent's identity, execution target, model, visibility, capacity, and instructions.",
     "instructions_placeholder": "Click to view or edit instructions",
     "role_label": "Permission role",
     "role_normal": "Normal",
@@ -259,9 +257,7 @@
       "remove_aria": "Remove avatar",
       "select_image_toast": "Please select an image file.",
       "upload_failed_toast": "Avatar upload failed"
-    },
-    "engine_label": "Engine",
-    "engine_no_capacity": "No online machine for this engine right now — new tasks will queue until one connects."
+    }
   },
   "tab_body": {
     "common": {
@@ -475,5 +471,18 @@
     "all": "All engines",
     "agent_count_one": "{{count}} agent",
     "agent_count_other": "{{count}} agents"
+  },
+  "execution_target": {
+    "label": "Execution group",
+    "placeholder": "Choose an execution group",
+    "unavailable": "Execution group unavailable; choose another group",
+    "loading": "Loading execution groups…",
+    "error": "Could not load execution groups",
+    "empty": "No execution groups available",
+    "hint": "Tasks will run on an available Runtime in {{target}}.",
+    "offline": "This group has no online Runtime. Tasks will wait for a member to reconnect.",
+    "offline_badge": "Offline",
+    "members": "{{online}} online · {{count}} Runtime",
+    "pinned": "Currently pinned to Runtime {{runtime}}. Select an execution group again to allow scheduling within the group."
   }
 }

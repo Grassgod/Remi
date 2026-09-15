@@ -16,6 +16,9 @@ export type RuntimeVisibility = "private" | "public";
 
 export interface RuntimeDevice {
   id: string;
+  /** Explicit custom group; null uses the machine/type default. */
+  execution_group_id?: string | null;
+  execution_group_ids?: string[];
   workspace_id: string;
   daemon_id: string | null;
   /** Optional for compatibility with servers predating daemon profiles. */
@@ -194,19 +197,11 @@ export interface TaskPromptArtifact {
 
 export interface Agent {
   id: string;
+  execution_group_id?: string | null;
   workspace_id: string;
-  /**
-   * Legacy machine binding. Pool-model backends always return "" — agents
-   * are logical workers and any provider-matching runtime can run them.
-   * Kept because older backends still populate it; presence derivation
-   * falls back to it when `provider` is absent.
-   */
+  /** Selected machine/type Runtime. Empty for existing unbound agents. */
   runtime_id: string;
-  /**
-   * The agent's engine (claude / codex). Authoritative on pool-model
-   * backends; older backends omit it, in which case the provider must be
-   * read off the bound runtime via `runtime_id`.
-   */
+  /** Runtime engine; also distinguishes engines on legacy `any` runtimes. */
   provider?: string;
   name: string;
   description: string;
@@ -295,19 +290,13 @@ export interface AgentSkillSummary {
 
 export interface CreateAgentRequest {
   name: string;
+  execution_group_id?: string;
   description?: string;
   instructions?: string;
   avatar_url?: string;
-  /**
-   * Engine for the new agent ("claude" / "codex"). Pool-model backends
-   * schedule work onto any online runtime of this provider. Defaults to
-   * "claude" server-side when omitted.
-   */
+  /** Engine; inferred from runtime_id when a concrete target is selected. */
   provider?: string;
-  /**
-   * Legacy field: pool-model backends never bind the agent; when present it
-   * only forces the provider (and is validated). Omit in new code.
-   */
+  /** Execute only on this machine/type Runtime. */
   runtime_id?: string;
   runtime_config?: Record<string, unknown>;
   custom_env?: Record<string, string>;
@@ -359,10 +348,11 @@ export interface AgentTemplateSkillRef {
 
 export interface CreateAgentFromTemplateRequest {
   template_slug: string;
+  execution_group_id?: string;
   name: string;
   /** Engine for the new agent; see CreateAgentRequest.provider. */
   provider?: string;
-  /** Legacy field; see CreateAgentRequest.runtime_id. */
+  /** Execution target; see CreateAgentRequest.runtime_id. */
   runtime_id?: string;
   model?: string;
   visibility?: AgentVisibility;
@@ -397,15 +387,14 @@ export interface CreateAgentFromTemplateFailure {
 
 export interface UpdateAgentRequest {
   name?: string;
+  execution_group_id?: string | null;
   description?: string;
   instructions?: string;
   avatar_url?: string;
-  /**
-   * Switch the agent's engine. The server re-validates thinking_level
-   * against the new provider (400 if the current override is unknown
-   * there). Machine binding is gone — there is no runtime_id here.
-   */
+  /** Engine for the execution target. */
   provider?: string;
+  /** Switch the execution target; model/effort reset unless explicitly supplied. */
+  runtime_id?: string | null;
   runtime_config?: Record<string, unknown>;
   /**
    * NOTE: `custom_env` is intentionally NOT updatable through this

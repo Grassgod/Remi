@@ -4,7 +4,36 @@ This document is the user-facing migration contract for the Registry-based Remi 
 The machine-readable source of truth remains `cli-capabilities.json`; CI checks this
 table against that manifest.
 
+`remi agent create`, `remi agent template create <template>`, `remi agent update
+<agent>` and `remi agent default` accept `--execution-group <group-id>`.
+Use `remi runtime group list` to find groups and their online Runtime counts,
+then `remi runtime model catalog --execution-group <group-id>` to inspect models.
+Groups default to one machine and Runtime type. Assign the same custom group ID
+with `remi runtime update <runtime> --execution-group <group-id>` to pool Runtimes
+in the same workspace and provider. Workspace boundaries remain isolated;
+a group cannot mix Runtime types. Restore a Runtime's default group with
+`remi runtime update <runtime> --data '{"execution_group_id":null}'`.
+
+The legacy `--runtime <runtime-id>` agent and model-catalog option remains
+supported, and is mutually exclusive with `--execution-group`. Omitting both
+on agent update preserves the existing target. The provider is inferred from
+the selected target unless explicitly supplied; an explicit provider must match.
+Tasks use eligible members of the selected group and wait when none is available;
+they do not fall back to unrelated Runtimes sharing a provider.
+
 ## Canonical command tree
+
+Codex Runtime connections use `remi runtime codex-profile get <runtime>` and
+`remi runtime codex-profile set <runtime> --file profile.json`. The JSON body
+contains `profile` and an optional write-only `api_key`; `profile: null` restores
+the workspace gateway. These are human configuration commands; task credentials
+cannot read or change them. See [Codex Runtime connections](design/acp-codex-via-codex-acp.md#runtime-自定义连接)
+for authentication, environment variables and session behavior.
+
+Claude Code uses `remi runtime claude-profile get <runtime>` and
+`remi runtime claude-profile set <runtime> --file profile.json`, with the same
+credential and clear semantics plus `auth_header: bearer | x-api-key`. See
+[Claude Code Runtime connections](design/acp-claude-via-claude-agent-acp.md).
 
 The canonical tree includes a focused top-level Attachment download command;
 Issue and Comment keep their scoped attachment listing and management commands.

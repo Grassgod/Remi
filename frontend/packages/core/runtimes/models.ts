@@ -8,13 +8,13 @@ export const runtimeModelsKeys = {
   forRuntime: (runtimeId: string) =>
     [...runtimeModelsKeys.all(), runtimeId] as const,
   fleet: (wsId: string) => [...runtimeModelsKeys.all(), "fleet", wsId] as const,
+  group: (wsId: string, groupId: string, agentId?: string) =>
+    [...runtimeModelsKeys.fleet(wsId), "group", groupId, agentId ?? ""] as const,
+  target: (wsId: string, runtimeId: string) =>
+    [...runtimeModelsKeys.fleet(wsId), "target", runtimeId] as const,
 };
 
-// Fleet-level catalog: the stored model lists of the workspace's online
-// runtimes, unioned per provider server-side. Unlike resolveRuntimeModels
-// this never fans out to a daemon — it reads what the daemons last
-// reported, so it works before any machine is picked (there is none to
-// pick anymore).
+// Stored workspace catalog; target selections use the scoped query below.
 export function fleetModelsOptions(wsId: string) {
   return queryOptions({
     queryKey: runtimeModelsKeys.fleet(wsId),
@@ -24,6 +24,33 @@ export function fleetModelsOptions(wsId: string) {
 }
 
 const NO_MODELS: RuntimeModel[] = [];
+
+export function executionTargetModelsOptions(wsId: string, runtimeId?: string | null, executionGroupId?: string | null, agentId?: string) {
+  return queryOptions({
+    queryKey: executionGroupId
+      ? runtimeModelsKeys.group(wsId, executionGroupId, agentId)
+      : [...runtimeModelsKeys.target(wsId, runtimeId ?? ""), agentId ?? ""],
+    queryFn: () => api.listFleetModels({
+      workspace_id: wsId,
+      ...(executionGroupId ? { execution_group_id: executionGroupId } : { runtime_id: runtimeId! }),
+      agent_id: agentId,
+    }),
+    enabled: Boolean(wsId && (executionGroupId || runtimeId)),
+    staleTime: 60_000,
+  });
+}
+
+/** Models of the selected machine/type, including its effective gateway connection. */
+export function useExecutionTargetModels(wsId: string, provider: string, runtimeId?: string | null, executionGroupId?: string | null, agentId?: string) {
+  const query = useQuery(executionTargetModelsOptions(wsId, runtimeId, executionGroupId, agentId));
+  const bucket = query.data?.providers.find((entry) => entry.provider === provider);
+  return {
+    models: executionGroupId || runtimeId ? bucket?.models ?? NO_MODELS : NO_MODELS,
+    onlineRuntimeCount: bucket?.online_runtime_count ?? 0,
+    isLoading: query.isLoading,
+    isError: query.isError,
+  };
+}
 
 // One provider's slice of the fleet catalog, for the components that let the
 // user pick an engine + model without ever seeing a machine. Memoised so the

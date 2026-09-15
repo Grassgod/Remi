@@ -133,22 +133,22 @@ describe("Multiremi store — Go-compatible agent authorization", () => {
       body: JSON.stringify({
         name: "Bob public agent",
         runtime_id: bobPublic.id,
-        provider: "codex",
+        provider: "claude",
         description: "Bob public description",
         avatar_url: "https://example.com/bob-agent.png",
       }),
     });
     expect(bobPublicRuntime.status).toBe(201);
     const bobAgent = await bobPublicRuntime.json();
-    // Legacy runtime_id still forces the provider but no longer binds.
+    // The execution target persists with its matching provider.
     expect(bobAgent.provider).toBe("claude");
     expect(store.getAgent(bobAgent.id)?.provider).toBe("claude");
-    expect(store.getAgent(bobAgent.id)?.runtimeId).toBeNull();
+    expect(store.getAgent(bobAgent.id)?.runtimeId).toBe(bobPublic.id);
     expect(store.getAgent(bobAgent.id)?.description).toBe("Bob public description");
     expect(store.getAgent(bobAgent.id)?.avatarUrl).toBe("https://example.com/bob-agent.png");
     expect(bobAgent.description).toBe("Bob public description");
     expect(bobAgent.avatar_url).toBe("https://example.com/bob-agent.png");
-    expect(bobAgent.runtime_id).toBe("");
+    expect(bobAgent.runtime_id).toBe(bobPublic.id);
     expect(bobAgent.owner_id).toBe("bob");
     expect(bobAgent.max_concurrent_tasks).toBe(6);
     const bobAgentCreated = store.listAnalyticsEvents({ name: "agent_created" })[0]!;
@@ -175,11 +175,11 @@ describe("Multiremi store — Go-compatible agent authorization", () => {
     expect(invalidDefaultJson.status).toBe(400);
     expect(await invalidDefaultJson.json()).toEqual({ error: "invalid request body" });
 
-    // Pool model: the default agent seeds without a runtime and stays unbound.
+    // An explicit target also binds the per-owner default agent.
     const defaultSeed = await app.request("/api/multiremi/agents/default", {
       method: "POST",
       headers: jsonHeaders(bobToken.token),
-      body: JSON.stringify({ runtime_id: bobPublic.id, provider: "codex" }),
+      body: JSON.stringify({ runtime_id: bobPublic.id, provider: "claude" }),
     });
     expect(defaultSeed.status).toBe(201);
     const defaultSeedBody = await defaultSeed.json();
@@ -187,7 +187,7 @@ describe("Multiremi store — Go-compatible agent authorization", () => {
       id: "agt_default_local_claude_bob",
       name: "Claude",
       provider: "claude",
-      runtimeId: null,
+      runtimeId: bobPublic.id,
       workspaceId: "local",
       ownerId: "bob",
       visibility: "private",
@@ -266,9 +266,7 @@ describe("Multiremi store — Go-compatible agent authorization", () => {
     expect(duplicateName.status).toBe(409);
     expect(await duplicateName.json()).toEqual({ error: "an agent named \"Bob public agent\" already exists in this workspace" });
 
-    // Machine binding is gone, but a legacy "move" keeps its engine-switch
-    // effect and the private-runtime gate: bob still can't reference alice's
-    // private runtime.
+    // Bob cannot select Alice's private execution target.
     const forbiddenMove = await app.request(`/api/agents/${bobAgent.id}`, {
       method: "PUT",
       headers: jsonHeaders(bobToken.token),
@@ -276,8 +274,7 @@ describe("Multiremi store — Go-compatible agent authorization", () => {
     });
     expect(forbiddenMove.status).toBe(403);
 
-    // A legal legacy move switches the engine (and resets the model) without
-    // binding the agent to the machine.
+    // Changing targets binds the new machine and resets the model.
     store.updateAgent(bobAgent.id, { model: "claude-opus-4-8" });
     const codexPublic = store.registerRuntime({
       id: "rt_gate_codex_public",
@@ -293,12 +290,12 @@ describe("Multiremi store — Go-compatible agent authorization", () => {
       body: JSON.stringify({ runtime_id: codexPublic.id }),
     });
     expect(legacyMove.status).toBe(200);
-    expect((await legacyMove.json()).runtime_id).toBe("");
-    expect(store.getAgent(bobAgent.id)?.runtimeId).toBeNull();
+    expect((await legacyMove.json()).runtime_id).toBe(codexPublic.id);
+    expect(store.getAgent(bobAgent.id)?.runtimeId).toBe(codexPublic.id);
     expect(store.getAgent(bobAgent.id)?.provider).toBe("codex");
     expect(store.getAgent(bobAgent.id)?.model).toBe("");
 
-    // Provider is editable on unbound agents (and round-trips cleanly).
+    // Keeping the same provider preserves a bound target.
     const providerOnlyUpdate = await app.request(`/api/agents/${bobAgent.id}`, {
       method: "PUT",
       headers: jsonHeaders(bobToken.token),
@@ -320,12 +317,12 @@ describe("Multiremi store — Go-compatible agent authorization", () => {
     const providerRestore = await app.request(`/api/agents/${bobAgent.id}`, {
       method: "PUT",
       headers: jsonHeaders(bobToken.token),
-      body: JSON.stringify({ provider: "claude" }),
+      body: JSON.stringify({ provider: "claude", runtime_id: null }),
     });
     expect(providerRestore.status).toBe(200);
     expect(store.getAgent(bobAgent.id)?.provider).toBe("claude");
 
-    // A legacy move to an any-provider runtime must keep the agent's current
+    // A move to an any-provider runtime must keep the agent's current
     // provider (not silently default to claude).
     store.updateAgent(bobAgent.id, { provider: "codex", model: "gpt-5.2" });
     const anyRuntime = store.registerRuntime({
@@ -343,9 +340,10 @@ describe("Multiremi store — Go-compatible agent authorization", () => {
     });
     expect(anyMove.status).toBe(200);
     expect(store.getAgent(bobAgent.id)?.provider).toBe("codex");
-    // Provider unchanged → model is preserved (no engine switch reset).
-    expect(store.getAgent(bobAgent.id)?.model).toBe("gpt-5.2");
-    store.updateAgent(bobAgent.id, { provider: "claude", model: "" });
+    // A new machine still resets model selection even when the engine is unchanged.
+    expect(store.getAgent(bobAgent.id)?.model).toBe("");
+    expect(store.getAgent(bobAgent.id)?.runtimeId).toBe(anyRuntime.id);
+    store.updateAgent(bobAgent.id, { provider: "claude", runtimeId: bobPublic.id, model: "" });
 
     const descriptionUpdate = await app.request(`/api/agents/${bobAgent.id}`, {
       method: "PUT",
@@ -369,10 +367,8 @@ describe("Multiremi store — Go-compatible agent authorization", () => {
       headers: jsonHeaders(adminToken.token),
       body: JSON.stringify({ name: "Admin private agent", runtime_id: alicePrivate.id }),
     });
-    expect(adminPrivateRuntime.status).toBe(201);
-    const adminAgent = await adminPrivateRuntime.json();
-    expect(adminAgent.runtime_id).toBe("");
-    expect(adminAgent.provider).toBe("codex");
+    expect(adminPrivateRuntime.status).toBe(403);
+    expect(await adminPrivateRuntime.json()).toEqual({ error: "a private runtime can only execute agents owned by its owner" });
   });
 
   it("redacts agent mcp_config like the Go server", async () => {

@@ -120,7 +120,7 @@ export function resolveIssueSessionProviderHome(
     ...(task.execution_scope ? ["delegations", safePathSegment(task.execution_scope)] : []),
     String(generation),
   );
-  const execution = provider === "codex" ? codexExecutionIdentity(task) : null;
+  const execution = provider === "codex" || (provider === "claude" && task.claudeProfile) ? providerExecutionIdentity(task) : null;
   const root = execution
     ? join(generationRoot, "executions", execution.segment)
     : generationRoot;
@@ -197,7 +197,7 @@ export function resolveTaskProviderHome(
   const taskId = cleanString(task.id);
   if (!taskId) throw new Error("Task provider home requires a task id");
   const storageRoot = resolve(workspacesRoot);
-  const execution = provider === "codex" ? codexExecutionIdentity(task) : null;
+  const execution = provider === "codex" || (provider === "claude" && task.claudeProfile) ? providerExecutionIdentity(task) : null;
   const chatSessionId = cleanString(task.chatSessionId);
   if (chatSessionId) {
     const runtimeStateRoot = join(storageRoot, ".runtime", safePathSegment(chatSessionId));
@@ -418,7 +418,7 @@ function assertContainedOrEqual(storageRoot: string, target: string, label: stri
   }
 }
 
-function codexExecutionIdentity(task: AgentTask): { fingerprint: string; segment: string } | null {
+function providerExecutionIdentity(task: AgentTask): { fingerprint: string; segment: string } | null {
   const fingerprint = cleanString(task.executionFingerprint ?? task.execution_fingerprint);
   if (!fingerprint) return null;
   const digest = fingerprint.toLowerCase().replace(/^sha256:/, "");

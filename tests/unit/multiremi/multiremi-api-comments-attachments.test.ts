@@ -50,7 +50,7 @@ describe("Multiremi API — comments, reactions, and attachments", () => {
     expect(Object.keys(agent).filter((key) => /[A-Z]/.test(key))).toEqual([]);
     expect(agent).toMatchObject({
       workspace_id: "local",
-      runtime_id: "",
+      runtime_id: runtime.id,
       max_concurrent_tasks: 6,
       has_custom_env: true,
       custom_env_key_count: 1,

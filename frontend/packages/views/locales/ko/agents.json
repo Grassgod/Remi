@@ -65,7 +65,7 @@
     "no_description": "설명 없음",
     "actions_aria": "행 작업",
     "fallback_engine": "알 수 없음",
-    "engine_tooltip": "온라인 상태의 {{engine}} 머신에서 실행됩니다"
+    "engine_tooltip": "Runtime 유형: {{engine}}"
   },
   "activity_tooltip": {
     "created_today": "오늘 생성됨",
@@ -154,7 +154,7 @@
     "description_placeholder": "이 에이전트는 무엇을 하나요?",
     "save": "저장",
     "cancel": "취소",
-    "prop_engine": "엔진"
+    "prop_engine": "실행 그룹"
   },
   "skill_attach": {
     "trigger_aria": "워크스페이스 스킬 연결",
@@ -180,8 +180,6 @@
     "thinking_tooltip": "추론 강도 · {{value}}",
     "thinking_clear": "런타임 기본값 사용",
     "thinking_clear_title": "재정의를 지우고 런타임의 기본 추론 강도를 사용합니다",
-    "engine_tooltip": "엔진: {{value}}",
-    "engine_hint": "작업은 이 엔진의 온라인 머신에서 실행됩니다.",
     "visibility_tooltip": "공개 범위 · {{value}}"
   },
   "model_dropdown": {
@@ -207,7 +205,7 @@
   },
   "edit_dialog": {
     "title": "에이전트 편집",
-    "description": "에이전트의 기본 정보, 엔진, 모델, 공개 범위, 동시 실행 수 및 지침을 업데이트합니다.",
+    "description": "에이전트의 기본 정보, 실행 대상, 모델, 공개 범위, 동시 실행 수 및 지침을 업데이트합니다.",
     "instructions_placeholder": "클릭하여 지침 보기 또는 편집",
     "role_label": "권한 역할",
     "role_normal": "일반",
@@ -259,9 +257,7 @@
       "remove_aria": "아바타 제거",
       "select_image_toast": "이미지 파일을 선택하세요.",
       "upload_failed_toast": "아바타 업로드 실패"
-    },
-    "engine_label": "엔진",
-    "engine_no_capacity": "이 엔진에 온라인 머신이 없습니다. 머신이 연결될 때까지 새 작업은 대기열에 들어갑니다."
+    }
   },
   "tab_body": {
     "common": {
@@ -475,5 +471,18 @@
     "all": "모든 엔진",
     "agent_count_one": "에이전트 {{count}}개",
     "agent_count_other": "에이전트 {{count}}개"
+  },
+  "execution_target": {
+    "label": "실행 그룹",
+    "placeholder": "실행 그룹 선택",
+    "unavailable": "실행 그룹을 사용할 수 없습니다. 다시 선택하세요",
+    "loading": "실행 그룹 불러오는 중…",
+    "error": "실행 그룹을 불러오지 못했습니다",
+    "empty": "사용 가능한 실행 그룹이 없습니다",
+    "hint": "작업은 {{target}} 그룹의 사용 가능한 Runtime에서 실행됩니다.",
+    "offline": "그룹에 온라인 Runtime이 없습니다. 구성원이 다시 연결될 때까지 대기합니다.",
+    "offline_badge": "오프라인",
+    "members": "{{online}} 온라인 · {{count}} Runtime",
+    "pinned": "현재 Runtime {{runtime}}에 고정되어 있습니다. 실행 그룹을 다시 선택하면 그룹 내에서 작업을 배정할 수 있습니다."
   }
 }
