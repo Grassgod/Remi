@@ -1802,6 +1802,31 @@ runMigrations(this.db);
     return this.feishuBot.getChatConversationKind(chatSessionId);
   }
 
+  listFeishuBotSenders(workspaceId: string) {
+    return this.feishuBot.listSenders(workspaceId);
+  }
+
+  listFeishuBotTaskReceiptMessageIds(workspaceId: string, taskId: string) {
+    return this.feishuBot.listTaskReceiptMessageIds(workspaceId, taskId);
+  }
+
+  listFeishuBotSenderProfileSources(workspaceId: string, before: string) {
+    return this.feishuBot.listSenderProfileSources(workspaceId, before);
+  }
+
+  updateFeishuBotSenderProfile(workspaceId: string, appId: string, senderId: string,
+    profile: { name: string; nameEn: string | null } | null, checkedAt: string): void {
+    this.feishuBot.updateSenderProfile(workspaceId, appId, senderId, profile, checkedAt);
+  }
+
+  setFeishuBotSenderAllowed(workspaceId: string, senderId: string, allowed: boolean, actorId?: string | null) {
+    return this.feishuBot.setSenderAllowed(workspaceId, senderId, allowed, actorId);
+  }
+
+  isFeishuBotTaskIssueCreationRestricted(taskId: string): boolean {
+    return this.feishuBot.isTaskIssueCreationRestricted(taskId);
+  }
+
   prepareFeishuIssueTopicWithinTransaction(issue: MultiremiIssue): boolean {
     return this.feishuBot.prepareIssueTopicWithinTransaction(issue);
   }

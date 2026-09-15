@@ -255,11 +255,7 @@ export class FeishuConnector implements Connector {
 
     _log.info(`received message from ${msg.senderName ?? msg.senderOpenId}: ${text.slice(0, 80)}`);
 
-    // Typing indicator
-    let thinkingReactionId: string | undefined;
-    try {
-      thinkingReactionId = await this._channel.addReaction(msg.messageId, "THINKING");
-    } catch { /* non-critical */ }
+    await this._channel.setMessageReceipt(msg.messageId, "received");
 
     try {
       // Legacy Remi streams treated a new message as replacing a pending form.
@@ -282,16 +278,14 @@ export class FeishuConnector implements Connector {
       } else {
         const response = await this._handler!(incoming);
         await this._sendStaticReply(msg.chatId, response, replyToId, this._replyMentionOpenId(incoming));
+        await this._channel.setMessageReceipt(msg.messageId, "completed");
       }
     } catch (err) {
       _log.error(`failed to process message: ${String(err)}`);
+      await this._channel.setMessageReceipt(msg.messageId, "failed");
       try {
         await this._channel.sendText(msg.chatId, `**Error:** ${String(err)}`);
       } catch { /* give up */ }
-    } finally {
-      if (thinkingReactionId) {
-        await this._channel.removeReaction(msg.messageId, thinkingReactionId);
-      }
     }
   }
 
@@ -312,6 +306,11 @@ export class FeishuConnector implements Connector {
       })();
 
       await this._channel.handleStream(chatId, sessionKey, stream as AsyncIterable<import("./sdk.js").SessionUpdate>, meta as StreamMeta, {
+        onResult: async failed => {
+          if (typeof incoming.metadata?.messageId === "string") {
+            await this._channel.setMessageReceipt(incoming.metadata.messageId, failed ? "failed" : "completed");
+          }
+        },
         adapter: acpAdapter,
         replyToMessageId,
         mentionOpenId: this._replyMentionOpenId(incoming),
@@ -337,6 +336,7 @@ export class FeishuConnector implements Connector {
     const slog = _log ?? log;
     await this._taskStreamHandler!(incoming, sessionKey, async (stream, meta) => {
       await this._channel.handleTaskStream(chatId, sessionKey, stream, meta, {
+        receiptMessageIds: typeof incoming.metadata?.messageId === "string" ? [incoming.metadata.messageId] : [],
         replyToMessageId,
         mentionOpenId: this._replyMentionOpenId(incoming),
         interactionOpenId: typeof incoming.metadata?.senderOpenId === "string" ? incoming.metadata.senderOpenId : undefined,

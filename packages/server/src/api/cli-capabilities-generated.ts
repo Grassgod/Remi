@@ -444,6 +444,42 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "workspace.feishu-bot.sender.list": {
+      "command": "remi workspace feishu-bot sender list",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.sender.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.feishu-bot.sender.allow": {
+      "command": "remi workspace feishu-bot sender allow",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.sender.allow",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.feishu-bot.sender.revoke": {
+      "command": "remi workspace feishu-bot sender revoke",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.sender.revoke",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "workspace.feishu-bot.set": {
       "command": "remi workspace feishu-bot set",
       "auth": [

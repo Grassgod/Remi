@@ -29,23 +29,28 @@ import { parseBooleanQuery, parseIntegerQuery } from "./request.js";
 export const SUBSCRIPTION_REASONS: MultiremiSubscriptionReason[] = ["created", "assigned", "commented", "mentioned", "manual"];
 
 export const ISSUE_CREATION_REQUIRES_PROPOSAL_CODE = "issue_creation_requires_proposal";
+export const FEISHU_SENDER_APPROVAL_REQUIRED_CODE = "feishu_sender_approval_required";
 
 export function restrictedTaskIssueCreationAgent(c: Context, store: MultiremiStore): MultiremiAgent | null {
   const token = currentTaskAccessToken(c);
-  if (!token?.agentId) return null;
-  const agent = store.getAgent(token.agentId);
-  const task = token.taskId ? store.getTask(token.taskId) : null;
-  if (!task?.issueCreationRestricted && !agent?.issueCreationRequiresProposal) return null;
-  return agent;
+  if (!token?.agentId || !currentTaskIssueCreationRestricted(c, store)) return null;
+  return store.getAgent(token.agentId);
 }
 
 export function currentTaskIssueCreationRestricted(c: Context, store: MultiremiStore): boolean {
+  return currentTaskIssueCreationRestrictionCode(c, store) !== null;
+}
+
+function currentTaskIssueCreationRestrictionCode(c: Context, store: MultiremiStore): string | null {
   const token = currentTaskAccessToken(c);
-  if (!token?.agentId) return false;
-  return Boolean(
+  if (!token?.agentId) return null;
+  if (
     (token.taskId ? store.getTask(token.taskId)?.issueCreationRestricted : false)
-    || store.getAgent(token.agentId)?.issueCreationRequiresProposal,
-  );
+    || store.getAgent(token.agentId)?.issueCreationRequiresProposal
+  ) return ISSUE_CREATION_REQUIRES_PROPOSAL_CODE;
+  return token.taskId && store.isFeishuBotTaskIssueCreationRestricted(token.taskId)
+    ? FEISHU_SENDER_APPROVAL_REQUIRED_CODE
+    : null;
 }
 
 /** Trusted parent lineage for server-created descendants. Request bodies must
@@ -55,10 +60,13 @@ export function currentTaskParentId(c: Context): string | null {
 }
 
 export function denyRestrictedTaskIssueCreation(c: Context, store: MultiremiStore): Response | null {
-  if (!restrictedTaskIssueCreationAgent(c, store)) return null;
+  const code = currentTaskIssueCreationRestrictionCode(c, store);
+  if (!code) return null;
   return c.json({
-    error: "This agent must use `remi feishu messages propose-issue`; a human must approve before an Issue is created.",
-    code: ISSUE_CREATION_REQUIRES_PROPOSAL_CODE,
+    error: code === FEISHU_SENDER_APPROVAL_REQUIRED_CODE
+      ? "A Feishu account in this conversation needs approval. Ask the space owner to allow it in Settings > Integrations > Feishu account allowlist, then retry creating the Issue in this Chat."
+      : "This agent must use `remi feishu messages propose-issue`; a human must approve before an Issue is created.",
+    code,
   }, 403);
 }
 

@@ -10,7 +10,7 @@ import type {
 import { feishuBotKeys } from "./queries";
 
 /**
- * Every write here changes the config row *and* the derived status, and the
+ * Bot configuration writes change the config row *and* the derived status, and the
  * two are separate queries. Invalidating the whole `feishu-bot` subtree keeps
  * them from disagreeing — a saved Runtime change with a stale status badge is
  * exactly the kind of drift that makes an admin redeploy a healthy bot.
@@ -97,5 +97,16 @@ export function useBeginFeishuBotRegistration(workspaceId: string) {
 export function useCancelFeishuBotRegistration(workspaceId: string) {
   return useMutation({
     mutationFn: (sessionId: string) => api.cancelFeishuBotRegistration(workspaceId, sessionId),
+  });
+}
+
+export function useUpdateFeishuBotSender(workspaceId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    // Keep an in-flight decision attached to its workspace after navigation.
+    mutationKey: [...feishuBotKeys.senders(workspaceId), "update"],
+    mutationFn: ({ senderId, allowed }: { senderId: string; allowed: boolean }) =>
+      api.updateFeishuBotSender(workspaceId, senderId, { allowed }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: feishuBotKeys.senders(workspaceId) }),
   });
 }

@@ -951,6 +951,25 @@
         }
       }
     },
+    "senderAllowlist": {
+      "unnamed": "Feishu 계정 · {{id}}",
+      "account_identifiers": "추가 계정 식별자",
+      "title": "Feishu 계정 허용 목록",
+      "description": "이 봇에 메시지를 보낸 계정을 자동으로 수집하고 중복을 제거합니다. 허용된 계정은 봇을 통해 이 개인 공간에 Issue를 만들 수 있습니다.",
+      "refresh": "새로고침",
+      "loading": "계정 불러오는 중…",
+      "configure_first": "계정 요청을 받으려면 위에서 Feishu 봇을 설정하세요.",
+      "empty": "아직 발견된 계정이 없습니다. 봇에 메시지를 보내면 계정이 여기에 자동으로 표시됩니다.",
+      "load_failed": "Feishu 계정을 불러오지 못했습니다. 새로고침하여 다시 시도하세요.",
+      "pending": "승인 대기",
+      "allowed": "허용됨",
+      "last_seen": "최근 요청: {{when}}",
+      "add": "허용 목록에 추가",
+      "remove": "허용 목록에서 제거",
+      "toast_added": "계정을 허용 목록에 추가했습니다",
+      "toast_removed": "계정을 허용 목록에서 제거했습니다",
+      "toast_update_failed": "계정 승인을 업데이트하지 못했습니다"
+    },
     "issueTopics": {
       "notify_mode": "자동 알림 수신자",
       "notify_owner": "그룹 소유자",

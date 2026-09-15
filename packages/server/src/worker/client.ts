@@ -356,6 +356,9 @@ export class MultiremiDaemonClient {
           bodyOrigin: (rawOutbound.body_origin ?? rawOutbound.bodyOrigin) === "agent" ? "agent" : "issue",
           idempotencyKey: String(rawOutbound.idempotency_key ?? rawOutbound.idempotencyKey ?? rawOutbound.id ?? ""),
           mention: parseOutboundMention(rawOutbound.mention),
+          ...(Array.isArray(rawOutbound.receipt_message_ids) ? {
+            receiptMessageIds: rawOutbound.receipt_message_ids.filter((id): id is string => typeof id === "string"),
+          } : {}),
           ...(parseFeishuPresentation(rawOutbound.presentation) ? { presentation: parseFeishuPresentation(rawOutbound.presentation)! } : {}),
           ...(isFeishuOpenId(rawOutbound.interaction_open_id) ? { interactionOpenId: rawOutbound.interaction_open_id } : {}),
           ...(typeof rawOutbound.task_id === "string" ? {
@@ -501,7 +504,7 @@ export class MultiremiDaemonClient {
       duplicate: boolean;
       steered: boolean;
       deliveryQueued?: boolean;
-      senderMembership: SubmitFeishuBotMessageResult["senderMembership"];
+      senderAllowed: SubmitFeishuBotMessageResult["senderAllowed"];
     }>(`/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/feishu-bot/messages`, {
       revision: input.revision,
       external_session_key: input.externalSessionKey,
@@ -795,6 +798,7 @@ export class MultiremiDaemonClient {
 
   async getFeishuBotTaskSnapshot(taskId: string): Promise<FeishuBotTaskSnapshot> {
     const response = await this.get<{
+      receipt_message_ids?: string[];
       task_id: string;
       status: MultiremiTaskStatus;
       result?: string | null;
@@ -807,6 +811,7 @@ export class MultiremiDaemonClient {
     }>(`/api/daemon/tasks/${encodeURIComponent(taskId)}/status`);
     return {
       taskId: response.task_id ?? taskId,
+      receiptMessageIds: response.receipt_message_ids ?? [],
       status: response.status,
       result: response.result ?? null,
       error: response.error ?? null,
