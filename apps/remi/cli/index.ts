@@ -200,6 +200,10 @@ export async function dispatch(args: string[]): Promise<void> {
   }
 
   const helpIndex = args.findIndex((arg) => arg === "--help" || arg === "-h");
+  if (commandRegistry.isImplicitGroup(args)) {
+    console.log(commandRegistry.renderHelp(args));
+    return;
+  }
   if (helpIndex >= 0 && commandRegistry.supportsGeneratedHelp(args.slice(0, helpIndex))) {
     console.log(commandRegistry.renderHelpForArgv(args.slice(0, helpIndex)));
     return;

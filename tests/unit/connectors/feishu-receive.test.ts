@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -121,6 +121,47 @@ function admission(
 }
 
 describe("Feishu workspace membership admission", () => {
+  it("imports receive without logging or reading a persisted dedup cache", async () => {
+    const isolatedHome = join(dedupTestDir, "import-home");
+    mkdirSync(join(isolatedHome, ".remi"), { recursive: true });
+    writeFileSync(join(isolatedHome, ".remi", "dedup-cache.json"), JSON.stringify([["persisted", Date.now()]]));
+    const child = Bun.spawn([process.execPath, "-e", 'await import("./packages/connectors/src/feishu/receive.ts")'], {
+      cwd: join(import.meta.dir, "../../.."),
+      env: { ...process.env, HOME: isolatedHome, REMI_LOG_LEVEL: "INFO" },
+      stdout: "pipe", stderr: "pipe",
+    });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+    ]);
+    expect(code).toBe(0);
+    expect(stdout).toBe("");
+    expect(stderr).toBe("");
+  });
+
+  it("loads persisted dedup lazily, rejects duplicates, and keeps expiry and persistence working", async () => {
+    const cachePath = join(dedupTestDir, "lazy-cache.json");
+    const persistedId = uniqueMessageId("persisted");
+    const expiredId = uniqueMessageId("expired");
+    writeFileSync(cachePath, JSON.stringify([[persistedId, Date.now()], [expiredId, Date.now() - 31 * 60_000]]));
+    setDedupCachePathForTesting(cachePath);
+    const { client } = clientWithSender();
+    const gate = admission(async () => true);
+    const receive = (messageId: string) => processFeishuMessageEvent(client,
+      messageEvent({ messageId, senderOpenId: "ou_dedup_member" }), undefined, gate.options);
+    try {
+      expect(await receive(persistedId)).toBeNull();
+      expect(await receive(expiredId)).not.toBeNull();
+      expect(await receive(expiredId)).toBeNull();
+      flushDedupCacheSync();
+      expect(JSON.parse(readFileSync(cachePath, "utf8")).map(([id]: [string, number]) => id))
+        .toEqual([persistedId, expiredId]);
+      setDedupCachePathForTesting(cachePath);
+      expect(await receive(expiredId)).toBeNull();
+    } finally {
+      setDedupCachePathForTesting(join(dedupTestDir, "dedup-cache.json"));
+    }
+  });
+
   it("refuses to connect when no membership authorizer was injected", () => {
     const channel = new FeishuChannel({ appId: "app", appSecret: "secret" });
     expect(() => channel.connect()).toThrow("workspace membership authorizer is required");

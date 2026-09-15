@@ -314,7 +314,15 @@ export class CommandRegistry {
     ].join("\n");
   }
 
+  isImplicitGroup(path: readonly string[]): boolean {
+    return path.length > 0 && !this.hasPath(path) && this.inventory().some((entry) =>
+      !entry.hidden && entry.path.length > path.length
+      && path.every((segment, index) => entry.path[index] === segment)
+    );
+  }
+
   renderHelpForArgv(argv: readonly string[], programName = "remi"): string {
+    if (this.isImplicitGroup(argv)) return this.renderHelp(argv, programName);
     const matched = [...this.paths.values()]
       .filter((entry) => pathMatches(entry.path, argv))
       .sort((a, b) => b.path.length - a.path.length || Number(Boolean(a.alias)) - Number(Boolean(b.alias)))[0];
@@ -323,6 +331,7 @@ export class CommandRegistry {
   }
 
   supportsGeneratedHelp(argv: readonly string[]): boolean {
+    if (this.isImplicitGroup(argv)) return true;
     const matched = [...this.paths.values()]
       .filter((entry) => pathMatches(entry.path, argv))
       .sort((a, b) => b.path.length - a.path.length || Number(Boolean(a.alias)) - Number(Boolean(b.alias)))[0];

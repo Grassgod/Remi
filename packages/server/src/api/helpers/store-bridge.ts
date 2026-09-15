@@ -54,22 +54,25 @@ export function maybeDispatchOnIssueUpdate(
   previous: MultiremiIssue,
   issue: MultiremiIssue,
   input: UpdateIssueInput,
-): MultiremiIssue {
-  if (!issue.assigneeType || !issue.assigneeId) return issue;
-  if (issue.status === "backlog" || issue.status === "done" || issue.status === "cancelled") return issue;
+): { issue: MultiremiIssue; task: MultiremiTask | null; cancelledTasks: number } {
+  const unchanged = { issue, task: null, cancelledTasks: 0 };
+  if (!issue.assigneeType || !issue.assigneeId) return unchanged;
+  if (issue.status === "backlog" || issue.status === "done" || issue.status === "cancelled") return unchanged;
   const assigneeChanged = hasRequestField(input, "assigneeType", "assignee_type", "assigneeId", "assignee_id") &&
     (previous.assigneeType !== issue.assigneeType || previous.assigneeId !== issue.assigneeId);
   const leftBacklog = hasRequestField(input, "status") && previous.status === "backlog";
-  if (!assigneeChanged && !leftBacklog) return issue;
+  if (!assigneeChanged && !leftBacklog) return unchanged;
   try {
     return store.assignIssue(issue.id, {
       assigneeType: issue.assigneeType,
       assigneeId: issue.assigneeId,
+      actorType: input.actorType,
+      actorId: input.actorId,
       parentTaskId: input.parentTaskId ?? input.parent_task_id ?? null,
-    }).issue;
+    });
   } catch (err) {
     log.warn(`assign-on-update dispatch skipped for ${issue.id}: ${err instanceof Error ? err.message : String(err)}`);
-    return issue;
+    return unchanged;
   }
 }
 
