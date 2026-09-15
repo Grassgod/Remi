@@ -300,9 +300,11 @@ describe("Feishu Issue topics", () => {
       externalMessageId: "om_private_message",
       replyToMessageId: "om_private_message",
       chatId: "oc_private",
+      senderOpenId: "ou_issue_topic_owner",
       senderUnionId: "on_issue_topic_owner",
       text: "Create an Issue, but keep this private chat independent.",
     });
+    store.setFeishuBotSenderAllowed("local", store.listFeishuBotSenders("local")[0]!.id, true, "local");
     const task = store.getTask(inbound.taskId)!;
     const credential = await store.createTaskAccessToken(task, "local");
     const app = createMultiremiApp({ store, authToken: "MASTER" });
@@ -335,6 +337,9 @@ describe("Feishu Issue topics", () => {
   it("turns a new configured group topic into one Issue and reuses it for replies", () => {
     const { store, revision } = scaffold();
     configureTopics(store);
+    store.submitFeishuBotMessage("local", "rt_bot", { revision, externalSessionKey: "oc_discovery",
+      externalMessageId: "om_discovery", senderOpenId: "ou_issue_topic_owner", text: "Hello" });
+    store.setFeishuBotSenderAllowed("local", store.listFeishuBotSenders("local")[0]!.id, true, "local");
     const first = store.submitFeishuBotMessage("local", "rt_bot", {
       revision,
       chatType: "group",
@@ -342,6 +347,7 @@ describe("Feishu Issue topics", () => {
       externalMessageId: "om_group_root",
       replyToMessageId: "om_group_root",
       chatId: "oc_issue_topics",
+      senderOpenId: "ou_issue_topic_owner",
       senderUnionId: "on_issue_topic_owner",
       text: "Implement natural Issue creation from this group topic.",
     });
@@ -364,6 +370,7 @@ describe("Feishu Issue topics", () => {
       externalMessageId: "om_group_root",
       replyToMessageId: "om_group_root",
       chatId: "oc_issue_topics",
+      senderOpenId: "ou_issue_topic_owner",
       senderUnionId: "on_issue_topic_owner",
       text: "Implement natural Issue creation from this group topic.",
     });
@@ -377,12 +384,40 @@ describe("Feishu Issue topics", () => {
       replyToMessageId: "om_group_reply",
       chatId: "oc_issue_topics",
       threadId: "om_group_root",
+      senderOpenId: "ou_issue_topic_owner",
       senderUnionId: "on_issue_topic_owner",
       text: "Add this detail to the same Issue.",
     });
     expect(reply).toMatchObject({ steered: true, taskId: first.taskId, chatSessionId: first.chatSessionId });
     expect(store.listIssues({ workspaceId: "local" })).toHaveLength(1);
     expect(store.listTasks().filter((task) => task.chatSessionId === first.chatSessionId)).toHaveLength(1);
+  });
+
+  it("requires all group senders and the routed Agent policy before automatically creating an Issue", () => {
+    const { store, revision } = scaffold();
+    configureTopics(store);
+    const send = (openId: string, messageId: string) => store.submitFeishuBotMessage("local", "rt_bot", {
+      revision, chatType: "group", chatId: "oc_issue_topics",
+      externalSessionKey: "oc_issue_topics:thread:approval", externalMessageId: messageId,
+      senderOpenId: openId, text: "Create the requested Issue",
+    });
+    const first = send("ou_first", "om_first");
+    const second = send("ou_second", "om_second");
+    expect(second.chatSessionId).toBe(first.chatSessionId);
+    expect(store.getChatSession(first.chatSessionId)?.issueId).toBeNull();
+    const senders = store.listFeishuBotSenders("local");
+    store.setFeishuBotSenderAllowed("local", senders.find(s => s.open_id === "ou_second")!.id, true, "local");
+    send("ou_second", "om_partial_approval");
+    expect(store.listIssues({ workspaceId: "local" })).toHaveLength(0);
+    store.setFeishuBotSenderAllowed("local", senders.find(s => s.open_id === "ou_first")!.id, true, "local");
+    const agentId = store.getFeishuBotConfig("local")!.agentId;
+    store.updateAgent(agentId, { issueCreationRequiresProposal: true });
+    send("ou_second", "om_agent_restricted");
+    expect(store.listIssues({ workspaceId: "local" })).toHaveLength(0);
+    store.updateAgent(agentId, { issueCreationRequiresProposal: false });
+    send("ou_second", "om_approved");
+    expect(store.getChatSession(first.chatSessionId)?.issueId).toBeTruthy();
+    expect(store.listIssues({ workspaceId: "local" })).toHaveLength(1);
   });
 
   it("skips a second topic when the Issue was created from a Feishu Chat task", async () => {
@@ -396,9 +431,12 @@ describe("Feishu Issue topics", () => {
       replyToMessageId: "om_source_message",
       chatId: "oc_source",
       threadId: "om_source_root",
+      senderOpenId: "ou_issue_topic_owner",
       senderUnionId: "on_issue_topic_owner",
       text: "Create an Issue from this topic.",
     });
+    const sender = store.listFeishuBotSenders("local")[0]!;
+    store.setFeishuBotSenderAllowed("local", sender.id, true, "local");
     const task = store.getTask(inbound.taskId)!;
     const credential = await store.createTaskAccessToken(task, "local");
     const app = createMultiremiApp({ store, authToken: "MASTER" });

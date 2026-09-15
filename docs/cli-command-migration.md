@@ -85,6 +85,14 @@ Use `remi help <path>` or `remi <path> --help` for the registered positional and
 option contract. All capability commands declare their authentication identities,
 mutation class, and `table|json|jsonl` output contract in the Registry.
 
+`remi runtime prepare [--provider claude|codex]` installs this release's fixed ACP
+and Agent dependencies, verifying executables and ACP initialization without
+switching a running daemon. This local command does not require server authentication.
+Maintainers refresh dependencies before every release with
+`bun run release:prepare --version <next>`; daemons do not poll the registry.
+See [daemon runtime upgrades](daemon-runtime-upgrades.md) for the release and
+installation checks.
+
 `remi runtime skill scan <runtime> --root '~/.agents/skills'` discovers skills in
 a directory on that Runtime's machine. Poll `runtime skill status <runtime>
 <scan-request>` until it completes, then import a returned key with `runtime skill
@@ -134,6 +142,19 @@ proposals are non-blocking Inbox items; only humans can run
 Inbox/Issue object and audited outcome, and generic `resolve` cannot forge those
 outcomes. An empty source allowlist means zero ingestion; `source update
 --clear-allowlist` restores that state.
+
+The Feishu bot sender allowlist uses `remi workspace feishu-bot sender
+list <workspace>`, `allow <workspace> <sender>`, and `revoke <workspace> <sender>`.
+The sender ID comes from `list`; accounts are discovered from incoming bot
+requests and deduplicated within the current bot app. These human-only commands
+manage permission to create Issues through bot Chats without linking senders to
+Remi users or workspace members. This account allowlist is separate from the
+Messaging Source conversation allowlist. See the [sender policy](feishu-message-ingestion.md#机器人发送者白名单)
+for active Chat checks and legacy restricted sessions.
+
+`sender list` also refreshes names from previously received bot messages; JSON
+includes optional `name_en`, and table output includes `ENGLISH_NAME`. Profile
+refresh preserves sender IDs and allowlist decisions.
 
 The current main integration also exposes archived Issue recovery, Workspace
 prompt/archive settings, and Repository Wiki administration through:

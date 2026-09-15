@@ -28,7 +28,7 @@ function harness() {
     cards.push(JSON.parse(input.data.content));
     return { code: 0, data: { message_id: "om_reply" } };
   };
-  const client = { im: { message: {
+  const client = { request: async () => ({ code: 0, data: { items: [], reaction_id: "reaction" } }), im: { message: {
     create: capture, reply: capture,
     patch: async (input: any) => { cards.push(JSON.parse(input.data.content)); return { code: 0 }; },
   } } };
@@ -36,6 +36,7 @@ function harness() {
   const channel = new FeishuChannel(credentials);
   (channel as any)._makeClient = () => client;
   channel.addReaction = async () => undefined;
+  channel.setMessageReceipt = async () => {};
   channel.sendText = async (_chatId, text) => { errors.push(text); };
   channel.createStream = () => {
     const session = new FeishuStreamingSession(client as any, credentials, { log: () => {} });

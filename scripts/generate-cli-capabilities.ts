@@ -263,6 +263,8 @@ function mappedResourceCommand(route: string): string | null {
     [/^GET \/api\/workspaces\/:id\/feishu-bot\/routes$/, "feishu.route.list"],
     [/^PUT \/api\/workspaces\/:id\/feishu-bot\/routes$/, "feishu.route.set"],
     [/^GET \/api\/workspaces\/:id\/feishu-bot\/chats$/, "feishu.chat.list"],
+    [/^GET \/api\/workspaces\/:id\/feishu-bot\/senders$/, "workspace.feishu-bot.sender.list"],
+    [/^PUT \/api\/workspaces\/:id\/feishu-bot\/senders\/:senderId$/, "workspace.feishu-bot.sender.allow"],
     [/^POST \/api\/workspaces\/:id\/feishu-bot\/test$/, "workspace.feishu-bot.test"],
     [/^POST \/api\/workspaces\/:id\/feishu-bot\/deploy$/, "workspace.feishu-bot.deploy"],
     [/^POST \/api\/workspaces\/:id\/feishu-bot\/stop$/, "workspace.feishu-bot.stop"],

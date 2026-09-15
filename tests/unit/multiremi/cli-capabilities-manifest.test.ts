@@ -108,6 +108,23 @@ describe("CLI capabilities manifest", () => {
     expect(inventory.get("feishu.chat.list")?.path).toEqual(["feishu", "chat", "list"]);
   });
 
+  it("maps Feishu sender management and keeps granting or revoking access human-only", () => {
+    expect(manifest.routes["GET /api/workspaces/:id/feishu-bot/senders"])
+      .toEqual({ command: "workspace.feishu-bot.sender.list" });
+    expect(manifest.routes["PUT /api/workspaces/:id/feishu-bot/senders/:senderId"])
+      .toEqual({ command: "workspace.feishu-bot.sender.allow" });
+    for (const action of ["list", "allow", "revoke"]) {
+      const id = `workspace.feishu-bot.sender.${action}`;
+      expect(manifest.commands[id], id).toMatchObject({
+        command: `remi workspace feishu-bot sender ${action}`,
+        auth: ["human"],
+        capability: id,
+        mutation: action === "list" ? "read" : "write",
+        migration_status: "native",
+      });
+    }
+  });
+
   it("generates discoverable help for every visible Registry command and its direct children", () => {
     const inventory = cliCommandInventory();
     for (const entry of inventory.filter((candidate) => !candidate.hidden)) {
@@ -151,10 +168,10 @@ describe("CLI capabilities manifest", () => {
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 649,
+      mapped: 651,
       exempt: 90,
       missing: 0,
-      total: 739,
+      total: 741,
     });
     expect(manifest.max_planned_routes).toBe(0);
     expect(cliCoverageReport(manifest).missing).toBeLessThanOrEqual(manifest.max_planned_routes);

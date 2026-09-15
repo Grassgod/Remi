@@ -450,6 +450,7 @@ export interface RuntimesSurface {
  * than leave a workspace pointing at something that no longer exists.
  */
 export interface FeishuBotSurface {
+  isFeishuBotTaskIssueCreationRestricted(taskId: string): boolean;
   disableFeishuBotConfigsReferencingAgent(agentId: string, actor?: string | null): string[];
   disableFeishuBotConfigsReferencingRuntime(runtimeId: string, actor?: string | null): string[];
   prepareFeishuIssueTopicWithinTransaction(issue: MultiremiIssue): boolean;

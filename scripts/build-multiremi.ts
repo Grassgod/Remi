@@ -8,8 +8,10 @@ import {
   mkdirSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
+import { BRIDGE_PIN, RUNTIME_PIN } from "../packages/acp/src/runtime-versions.js";
 
 const ROOT = resolve(import.meta.dir, "..");
 const DIST = join(ROOT, "dist");
@@ -28,7 +30,7 @@ export const MULTIREMI_RELEASE_TARGETS: MultiremiReleaseTarget[] = [
   { os: "darwin", arch: "arm64", bunTarget: "bun-darwin-arm64" },
 ];
 
-export const MULTIREMI_ARCHIVE_ENTRIES = ["remi", "remi-claude-agent-acp"] as const;
+export const MULTIREMI_ARCHIVE_ENTRIES = ["remi", "remi-claude-agent-acp", "runtime-bundle.json"] as const;
 
 export function normalizeMultiremiTagVersion(rawVersion: string): string {
   return rawVersion.startsWith("v") ? rawVersion : `v${rawVersion}`;
@@ -93,6 +95,7 @@ export function buildMultiremiReleaseArchives(): void {
     const claudeWrapper = join(targetDir, "remi-claude-agent-acp");
     cpSync(join(ROOT, "bin", "remi-claude-agent-acp"), claudeWrapper);
     chmodSync(claudeWrapper, 0o755);
+    writeFileSync(join(targetDir, "runtime-bundle.json"), JSON.stringify({ schema: 1, acp: BRIDGE_PIN, runtime: RUNTIME_PIN }, null, 2) + "\n");
 
     const archive = join(DIST, multiremiArchiveName(tagVersion, target));
     createMultiremiArchive(targetDir, archive);

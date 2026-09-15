@@ -29,3 +29,7 @@
   必须一致且不得复用 tag，平台部署与 daemon CLI 发版分开处理。
 - 发版必须使用公共依赖源和固定 Bun 版本，并先通过
   `.github/workflows/release-build-check.yml` 的完整检查；失败时不得发版。
+- 每次发版（包括夜间发版）先运行 `bun run release:prepare --version <下一版本>`，
+  查询并验证最新稳定 ACP / Claude SDK / CC / Codex，更新 `package.json` 与
+  `packages/acp/src/runtime-versions.json`，同批提交后再跑 CI、打 tag。
+  不得只改版本号跳过依赖准备，也不得在 tag 构建或 daemon 运行时重新解析 latest。

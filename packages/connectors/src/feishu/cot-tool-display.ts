@@ -17,6 +17,18 @@ export function cotPreview(text: string, budget = 2400): string {
 }
 
 export function isCotShell(name: string): boolean { return /bash|shell|exec|command/i.test(name); }
+
+function shellIcon(command: string): string {
+  // Classify a simple pipeline by its leading executable, not words in its
+  // arguments or output filters (e.g. `remi task get ... | grep -v INFO`).
+  // Keep scripts and compound commands generic instead of guessing at intent.
+  if (/[\n\r;]|&&|\|\||<<|\$\(|`/.test(command)) return "bash";
+  const executable = command.match(/^\/?(?:[\w.-]+\/)*([\w.-]+)(?=\s|\||$)/)?.[1];
+  if (executable && /^(rg|grep|find)$/.test(executable)) return "search";
+  if (executable && /^(cat|sed|head|tail)$/.test(executable)) return "read";
+  return "bash";
+}
+
 export function isCotSubagent(name: string, input: Record<string, unknown>): boolean {
   return /^(agent|task|spawn_agent|spawnagent)$/i.test(name) || /[/:._](spawn_agent|spawnagent)$/i.test(name)
     || isSubagentActivityInput(input) || isCollabInput(input);
@@ -53,9 +65,7 @@ export function cotToolDisplay(name: string, input: Record<string, unknown>, met
   if (isCotShell(name)) {
     const command = str(input.command) || str(input.cmd);
     const title = description || (command ? `执行：${line(command)}` : name);
-    const icon = /\b(rg|grep|find)\b/.test(command) ? "search"
-      : /\b(cat|sed|head|tail)\b/.test(command) ? "read" : "bash";
-    display = { title, icon, args: command ? `$ ${command}` : undefined };
+    display = { title, icon: shellIcon(command), args: command ? `$ ${command}` : undefined };
   } else if (/todo/i.test(name)) {
     display = { icon: "doc", ...(cotPlan(input.todos) ?? { title: "更新待办" }) };
   } else if (isCotSubagent(name, input)) {
