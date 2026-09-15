@@ -45,7 +45,7 @@ const CLAUDE_MODEL: RuntimeModel = {
 };
 
 // Model without thinking metadata — what the row sees when the agent's
-// model swap landed on a non-thinking provider, or when the fleet catalog
+// model swap landed on a non-thinking provider, or when the group catalog
 // shrank and stopped emitting `thinking` for this id.
 const NO_THINKING_MODEL: RuntimeModel = {
   id: "gemini-2.5-pro",
@@ -76,6 +76,8 @@ function renderRow(
         <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
           <ThinkingPropRow
             wsId="ws-1"
+            executionGroupId="group-1"
+            agentId="agent-1"
             provider="claude"
             model="claude-sonnet-4-6"
             value=""
@@ -106,12 +108,16 @@ describe("ThinkingPropRow", () => {
 
     // A missing thinking block is not evidence that the model lacks reasoning.
     await waitFor(() => {
-      expect(mockListFleetModels).toHaveBeenCalled();
+      expect(mockListFleetModels).toHaveBeenCalledWith({
+        workspace_id: "ws-1",
+        execution_group_id: "group-1",
+        agent_id: "agent-1",
+      });
     });
     expect(await screen.findByText("Reasoning options not reported")).toBeInTheDocument();
   });
 
-  it("keeps the row when Codex has no fleet catalog bucket", async () => {
+  it("keeps the row when Codex has no group catalog bucket", async () => {
     // No runtime catalog must remain visible as an unknown state.
     renderRow({ provider: "codex", value: "" });
 
@@ -119,6 +125,25 @@ describe("ThinkingPropRow", () => {
       expect(mockListFleetModels).toHaveBeenCalled();
     });
     expect(await screen.findByText("Reasoning options not reported")).toBeInTheDocument();
+  });
+
+  it("does not use the fleet catalog when no execution target is selected", async () => {
+    renderRow({ executionGroupId: null });
+
+    expect(await screen.findByText("Reasoning options not reported")).toBeInTheDocument();
+    expect(mockListFleetModels).not.toHaveBeenCalled();
+    expect(screen.queryByText("Follow runtime default")).toBeNull();
+  });
+
+  it("uses the bound runtime catalog for a legacy agent without an execution group", async () => {
+    renderRow({ executionGroupId: null, runtimeId: "runtime-1" });
+
+    expect(await screen.findByText("Follow runtime default")).toBeInTheDocument();
+    expect(mockListFleetModels).toHaveBeenCalledWith({
+      workspace_id: "ws-1",
+      runtime_id: "runtime-1",
+      agent_id: "agent-1",
+    });
   });
 
   it("distinguishes catalog loading and failures from missing capabilities", async () => {
