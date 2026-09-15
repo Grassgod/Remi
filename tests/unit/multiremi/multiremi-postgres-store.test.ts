@@ -415,6 +415,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       store.heartbeatRuntime(runtimeId, { supportsFeishuBotConfig: true });
       const config = store.upsertFeishuBotConfig(workspaceId, {
         agentId: agent.id, runtimeId, appId: "cli_pg_allowlist", domain: "feishu", enabled: true,
+        senderAccessPolicy: "allowlist",
         appSecretOp: "set", appSecret: "fixture-secret-not-a-real-credential",
       });
       const input = { revision: config.revision, externalSessionKey: "oc_pg_allowlist", externalMessageId: "om_pg_1", senderOpenId: "ou_pg_sender", senderName: "PG Sender", text: "Create an Issue" };
@@ -440,6 +441,9 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       expect(store.listFeishuBotSenderProfileSources(workspaceId, beforeRefresh)).toEqual([]);
       store.setFeishuBotSenderAllowed(workspaceId, senders[0]!.id, false, "local");
       expect(store.isFeishuBotTaskIssueCreationRestricted(inbound.taskId)).toBe(true);
+      store.upsertFeishuBotConfig(workspaceId, { ...config, appSecretOp: "keep", senderAccessPolicy: "agent" });
+      expect(store.isFeishuBotTaskIssueCreationRestricted(inbound.taskId)).toBe(false);
+      expect(store.isFeishuBotTaskIssueCreationRestricted(child.id)).toBe(false);
     } finally {
       if (previousKey === undefined) delete process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
       else process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = previousKey;

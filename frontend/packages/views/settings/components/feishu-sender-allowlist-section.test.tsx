@@ -11,6 +11,7 @@ const mockApi = vi.hoisted(() => ({
   getFeishuBot: vi.fn(),
   listFeishuBotSenders: vi.fn(),
   updateFeishuBotSender: vi.fn(),
+  saveFeishuBot: vi.fn(),
 }));
 const workspace = vi.hoisted(() => ({ id: "workspace-1" }));
 
@@ -28,6 +29,25 @@ const PENDING = {
 };
 const ALLOWED = { ...PENDING, id: "sender-2", display_name: "Bob", open_id: "ou_bob", union_id: null, allowed: true };
 const clients: QueryClient[] = [];
+
+it("uses Agent capabilities without presenting pending sender approvals", async () => {
+  mockApi.getFeishuBot.mockResolvedValue({ role: "admin", config: {
+    configured: true, app_id: "cli_bot", agent_id: "agent-1", runtime_id: "runtime-1",
+    domain: "feishu", enabled: true, sender_access_policy: "agent",
+  } });
+  renderSection();
+  expect(await screen.findByText("Bot capability access")).toBeInTheDocument();
+  expect(screen.getByText(/Anyone who can message this bot/)).toBeInTheDocument();
+  expect(screen.queryByText("Pending authorization")).not.toBeInTheDocument();
+  expect(mockApi.listFeishuBotSenders).not.toHaveBeenCalled();
+  const toggle = screen.getByRole("switch", { name: "Require a sender allowlist to create Issues" });
+  expect(toggle).not.toBeChecked();
+  await userEvent.click(toggle);
+  await waitFor(() => expect(mockApi.saveFeishuBot).toHaveBeenCalledWith("workspace-1", {
+    agent_id: "agent-1", runtime_id: "runtime-1", app_id: "cli_bot", domain: "feishu", enabled: true,
+    app_secret_op: "keep", sender_access_policy: "allowlist",
+  }));
+});
 
 function renderSection() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });

@@ -39,6 +39,7 @@ export const FeishuBotSenderListSchema = z.object({
 // ---------------------------------------------------------------------------
 
 export const FeishuBotConfigSchema = z.object({
+  sender_access_policy: z.enum(["agent", "allowlist"]).optional().catch(undefined),
   configured: z.boolean().default(false),
   workspace_id: z.string().default(""),
   agent_id: z.string().nullable().default(null),

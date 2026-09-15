@@ -4,12 +4,13 @@ import { useQuery } from "@tanstack/react-query";
 import { LoaderCircle, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { feishuBotOptions, feishuBotSendersOptions } from "@multiremi/core/feishu-bot/queries";
-import { useUpdateFeishuBotSender } from "@multiremi/core/feishu-bot/mutations";
+import { useSaveFeishuBot, useUpdateFeishuBotSender } from "@multiremi/core/feishu-bot/mutations";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import type { FeishuBotSender } from "@multiremi/core/types";
 import { Badge } from "@multiremi/ui/components/ui/badge";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { Card, CardContent } from "@multiremi/ui/components/ui/card";
+import { Switch } from "@multiremi/ui/components/ui/switch";
 import { useT } from "../../i18n";
 import { absoluteTime } from "./feishu/shared";
 
@@ -19,10 +20,25 @@ export function FeishuSenderAllowlistSection() {
   const botQuery = useQuery(feishuBotOptions(workspaceId));
   const bot = botQuery.data?.role === "admin" ? botQuery.data.config : undefined;
   const enabled = bot?.configured === true && bot.app_id.length > 0 && !botQuery.isError;
-  const sendersQuery = useQuery(feishuBotSendersOptions(workspaceId, enabled));
+  const agentAccess = bot?.sender_access_policy === "agent";
+  const sendersQuery = useQuery(feishuBotSendersOptions(workspaceId, enabled && !agentAccess));
   const update = useUpdateFeishuBotSender(workspaceId);
+  const saveBot = useSaveFeishuBot(workspaceId);
 
   if (botQuery.data?.role === "member" && !botQuery.isError) return null;
+
+  async function setRequireAllowlist(required: boolean) {
+    if (!bot?.agent_id || !bot.runtime_id) return;
+    try {
+      await saveBot.mutateAsync({
+        agent_id: bot.agent_id, runtime_id: bot.runtime_id, app_id: bot.app_id,
+        domain: bot.domain, enabled: bot.enabled, app_secret_op: "keep",
+        sender_access_policy: required ? "allowlist" : "agent",
+      });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t(($) => $.feishu.senderAllowlist.toast_update_failed));
+    }
+  }
 
   async function setAllowed(sender: FeishuBotSender) {
     try {
@@ -37,8 +53,8 @@ export function FeishuSenderAllowlistSection() {
     }
   }
 
-  const failed = botQuery.isError || (enabled && sendersQuery.isError);
-  const loading = botQuery.isPending || (enabled && sendersQuery.isPending);
+  const failed = botQuery.isError || (enabled && !agentAccess && sendersQuery.isError);
+  const loading = botQuery.isPending || (enabled && !agentAccess && sendersQuery.isPending);
   const refreshing = botQuery.isFetching || sendersQuery.isFetching;
   const senders = (sendersQuery.data?.senders ?? [])
     .filter((sender) => sender.app_id === bot?.app_id)
@@ -48,12 +64,12 @@ export function FeishuSenderAllowlistSection() {
     <section className="space-y-5">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 space-y-1">
-          <h2 className="text-sm font-semibold">{t(($) => $.feishu.senderAllowlist.title)}</h2>
+          <h2 className="text-sm font-semibold">{agentAccess ? t(($) => $.feishu.senderAllowlist.access_title) : t(($) => $.feishu.senderAllowlist.title)}</h2>
           <p className="max-w-2xl text-sm text-muted-foreground">
-            {t(($) => $.feishu.senderAllowlist.description)}
+            {agentAccess ? t(($) => $.feishu.senderAllowlist.agent_access) : t(($) => $.feishu.senderAllowlist.description)}
           </p>
         </div>
-        {(enabled || botQuery.isError) && (
+        {((enabled && !agentAccess) || botQuery.isError) && (
           <Button
             variant="outline"
             size="sm"
@@ -66,7 +82,15 @@ export function FeishuSenderAllowlistSection() {
         )}
       </div>
 
-      <Card>
+      {enabled && bot.sender_access_policy !== undefined && (
+        <label className="flex items-center justify-between gap-4 text-sm">
+          {t(($) => $.feishu.senderAllowlist.require_allowlist)}
+          <Switch checked={!agentAccess} disabled={saveBot.isPending}
+            onCheckedChange={(checked) => { void setRequireAllowlist(checked); }} />
+        </label>
+      )}
+
+      {!agentAccess && <Card>
         <CardContent>
           {failed ? (
             <p role="alert" className="text-sm text-destructive">
@@ -132,7 +156,7 @@ export function FeishuSenderAllowlistSection() {
             </ul>
           )}
         </CardContent>
-      </Card>
+      </Card>}
     </section>
   );
 }

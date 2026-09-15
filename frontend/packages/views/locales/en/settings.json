@@ -953,6 +953,9 @@
       }
     },
     "senderAllowlist": {
+      "access_title": "Bot capability access",
+      "agent_access": "Anyone who can message this bot can use the responding Agent's enabled capabilities. The Agent's own permission and approval rules still apply.",
+      "require_allowlist": "Require a sender allowlist to create Issues",
       "unnamed": "Feishu account · {{id}}",
       "account_identifiers": "More account identifiers",
       "title": "Feishu account allowlist",

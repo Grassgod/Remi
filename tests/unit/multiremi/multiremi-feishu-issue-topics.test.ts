@@ -43,6 +43,7 @@ function scaffold(options: { online?: boolean } = {}): {
     agentId: agent.id,
     runtimeId: "rt_bot",
     appId: "cli_issue_topics",
+    senderAccessPolicy: "allowlist",
     appSecretOp: "set",
     appSecret: APP_SECRET,
     domain: "feishu",
