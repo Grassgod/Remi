@@ -107,7 +107,7 @@ function loadInboxItemForCurrentUser(c: Context, store: RouterDeps["store"]) {
   const userId = authenticatedRequestUserId(c);
   const member = item.memberId ? store.getWorkspaceMember(item.memberId) : null;
   if (!member || member.workspaceId !== workspaceId
-    || (userId && member.userId !== userId && member.id !== userId)) {
+    || (userId && member.userId !== userId)) {
     return c.json({ error: "inbox item not found" }, 404);
   }
   return item;

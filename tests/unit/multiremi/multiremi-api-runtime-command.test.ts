@@ -8,8 +8,8 @@ describe("Multiremi API - runtime commands", () => {
   it("restricts execution to workspace managers and keeps its audit response redacted", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
-    store.createWorkspaceMember({ id: "command-admin", name: "Command Admin", role: "admin" });
-    store.createWorkspaceMember({ id: "command-member", name: "Command Member", role: "member" });
+    store.createWorkspaceMember({ id: "command-admin", userId: "command-admin", name: "Command Admin", role: "admin" });
+    store.createWorkspaceMember({ id: "command-member", userId: "command-member", name: "Command Member", role: "member" });
     const ownerToken = await store.createAccessToken({ name: "Owner", type: "pat", workspaceId: "local", userId: "local" });
     const adminToken = await store.createAccessToken({ name: "Admin", type: "pat", workspaceId: "local", userId: "command-admin" });
     const memberToken = await store.createAccessToken({ name: "Member", type: "pat", workspaceId: "local", userId: "command-member" });
@@ -120,8 +120,8 @@ describe("Multiremi API - runtime commands", () => {
   it("restricts workspace Runtime provision CRUD to managers and denies task tokens", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
-    store.createWorkspaceMember({ id: "provision-admin", name: "Provision Admin", role: "admin" });
-    store.createWorkspaceMember({ id: "provision-member", name: "Provision Member", role: "member" });
+    store.createWorkspaceMember({ id: "provision-admin", userId: "provision-admin", name: "Provision Admin", role: "admin" });
+    store.createWorkspaceMember({ id: "provision-member", userId: "provision-member", name: "Provision Member", role: "member" });
     const adminToken = await store.createAccessToken({ name: "Admin", type: "pat", workspaceId: "local", userId: "provision-admin" });
     const memberToken = await store.createAccessToken({ name: "Member", type: "pat", workspaceId: "local", userId: "provision-member" });
     const agent = store.createAgent({ name: "Provision task actor", provider: "codex", workspaceId: "local" });
