@@ -67,10 +67,13 @@ let dedupCachePath = join(homedir(), ".remi", "dedup-cache.json");
 const processedMessageIds = new Map<string, number>();
 let lastCleanupTime = Date.now();
 let dedupDirty = false;
+let dedupLoaded = false;
 let dedupFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** Load persisted dedup cache from disk (best-effort). */
 function loadDedupCache(): void {
+  if (dedupLoaded) return;
+  dedupLoaded = true;
   try {
     if (!existsSync(dedupCachePath)) return;
     const raw = readFileSync(dedupCachePath, "utf-8");
@@ -121,12 +124,11 @@ export function setDedupCachePathForTesting(path: string): void {
   processedMessageIds.clear();
   lastCleanupTime = Date.now();
   dedupDirty = false;
+  dedupLoaded = false;
 }
 
-// Load on module init
-loadDedupCache();
-
 function tryRecordMessage(messageId: string): boolean {
+  loadDedupCache();
   const now = Date.now();
   if (now - lastCleanupTime > DEDUP_CLEANUP_INTERVAL_MS) {
     for (const [id, ts] of processedMessageIds) {

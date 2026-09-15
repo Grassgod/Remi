@@ -24160,7 +24160,9 @@
         "archived_at": null,
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
-        "metadata": {}
+        "metadata": {},
+        "task_id": null,
+        "cancelled_tasks": 0
       }
     },
     {
@@ -24192,7 +24194,9 @@
         "archived_at": null,
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
-        "metadata": {}
+        "metadata": {},
+        "task_id": "tsk_3gq3rlr8o45b",
+        "cancelled_tasks": 0
       }
     },
     {
@@ -24362,7 +24366,8 @@
           "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
-        }
+        },
+        "cancelled_tasks": 0
       }
     },
     {
@@ -24410,6 +24415,7 @@
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         },
+        "cancelled_tasks": 1,
         "task": {
           "id": "tsk_ic8dc9g1qpho",
           "taskKind": "direct",

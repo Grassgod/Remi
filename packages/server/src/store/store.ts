@@ -3066,7 +3066,11 @@ runMigrations(this.db);
   }
 
   updateIssue(id: string, input: UpdateIssueInput): MultiremiIssue {
-    return this.issues.updateIssue(id, input);
+    return this.updateIssueWithOutcome(id, input).issue;
+  }
+
+  updateIssueWithOutcome(id: string, input: UpdateIssueInput): { issue: MultiremiIssue; cancelledTasks: number } {
+    return this.issues.updateIssueWithOutcome(id, input);
   }
 
   restoreIssue(id: string): MultiremiIssue {
