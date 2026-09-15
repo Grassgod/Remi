@@ -197,8 +197,9 @@ export class FeishuBotRepo {
        )
        SELECT 1 AS restricted FROM multiremi_feishu_bot_deliveries d
        JOIN multiremi_feishu_bot_chat_bindings b ON b.id = d.binding_id
+       JOIN multiremi_feishu_bot_configs c ON c.workspace_id = d.workspace_id
        LEFT JOIN multiremi_feishu_bot_senders s ON s.id = d.sender_id
-       WHERE d.sender_recorded = 1
+       WHERE c.sender_access_policy = 'allowlist' AND d.sender_recorded = 1
          AND (d.task_id IN (SELECT id FROM lineage)
            OR b.chat_session_id IN (SELECT chat_session_id FROM lineage))
          AND (s.id IS NULL OR s.allowed = 0)
@@ -367,6 +368,10 @@ export class FeishuBotRepo {
     }
 
     const existing = this.rawConfigRow(workspaceId);
+    const senderAccessPolicy = input.senderAccessPolicy ?? existing?.sender_access_policy ?? "agent";
+    if (senderAccessPolicy !== "agent" && senderAccessPolicy !== "allowlist") {
+      throw new FeishuBotConfigError("sender_access_policy must be agent or allowlist", 400, "invalid_sender_access_policy");
+    }
     const appSecret = resolveSecretColumn(
       workspaceId,
       "app_secret",
@@ -393,10 +398,10 @@ export class FeishuBotRepo {
       `INSERT INTO multiremi_feishu_bot_configs (
          workspace_id, agent_id, runtime_id, app_id,
          app_secret_encrypted, app_secret_hint,
-         domain, enabled, revision,
+         domain, enabled, sender_access_policy, revision,
          bot_name, bot_open_id, last_tested_at, last_test_error, last_test_error_code,
          created_at, updated_at, updated_by
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(workspace_id) DO UPDATE SET
          agent_id = excluded.agent_id,
          runtime_id = excluded.runtime_id,
@@ -405,6 +410,7 @@ export class FeishuBotRepo {
          app_secret_hint = excluded.app_secret_hint,
          domain = excluded.domain,
          enabled = excluded.enabled,
+         sender_access_policy = excluded.sender_access_policy,
          revision = excluded.revision,
          bot_name = excluded.bot_name,
          bot_open_id = excluded.bot_open_id,
@@ -421,6 +427,7 @@ export class FeishuBotRepo {
       hint,
       domain,
       input.enabled ? 1 : 0,
+      senderAccessPolicy,
       revision,
       identityChanged ? null : nullableString(existing?.bot_name),
       identityChanged ? null : nullableString(existing?.bot_open_id),
@@ -588,7 +595,7 @@ export class FeishuBotRepo {
 
     const result = this.ctx.db.transaction((): SubmitFeishuBotMessageResult => {
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
-      const sender = this.resolveSender(workspaceId, config.appId, input);
+      const sender = this.resolveSender(workspaceId, config.appId, input, config.senderAccessPolicy);
 
       const autoCreateGroupIssue = sender.allowed
         && !this.ctx.agents().getAgent(routeAgent.agentId)?.issueCreationRequiresProposal
@@ -1342,6 +1349,7 @@ export class FeishuBotRepo {
     workspaceId: string,
     appId: string,
     input: SubmitFeishuBotMessageInput,
+    accessPolicy: MultiremiFeishuBotConfig["senderAccessPolicy"],
   ): ResolvedFeishuSender {
     const unionId = optionalBoundedString(input.senderUnionId, "sender_union_id", 512);
     const openId = optionalBoundedString(input.senderOpenId, "sender_open_id", 512);
@@ -1351,7 +1359,7 @@ export class FeishuBotRepo {
     let account: FeishuBotSender | null = null;
     // open_id is always supplied by the real connector. Its app scope makes
     // the same account stable even when a later event adds or omits union_id.
-    // Missing identities remain unapproved and cannot be granted by chat id.
+    // Sender records are for attribution; only opt-in allowlists gate access.
     if (openId) {
       const now = nowIso();
       this.ctx.db.run(
@@ -1373,12 +1381,16 @@ export class FeishuBotRepo {
       ?? (unionId ? `feishu:union:${unionId}` : null)
       ?? (userId ? `feishu:user:${tenantKey ?? "unknown"}:${userId}` : null)
       ?? `feishu:session:${input.externalSessionKey}`;
-    const profileDescription = [
+    const profileDescription = accessPolicy === "agent" ? [
+      "Source: Feishu personal bot",
+      "Anyone who can message this bot may use the responding Agent's enabled capabilities. No separate sender approval or workspace membership is required.",
+      "The Agent's own permissions and approval requirements still apply. The API checks the bot's current access policy; do not infer a pending approval from earlier conversation history.",
+    ].join("\n") : [
       "Source: Feishu personal bot",
       "The space owner manages account access in Settings > Integrations > Feishu account allowlist.",
       "Approval can change during this Chat. Retry the requested action after the owner updates the allowlist; the API checks current access.",
     ].join("\n");
-    return { id: account?.id ?? null, allowed: account?.allowed ?? false, displayName, actorId, profileDescription };
+    return { id: account?.id ?? null, allowed: accessPolicy === "agent" || (account?.allowed ?? false), displayName, actorId, profileDescription };
   }
 
   resetSession(workspaceId: string, runtimeId: string, revision: number, externalSessionKey: string): boolean {
@@ -1899,6 +1911,7 @@ function mapConfig(row: Row): MultiremiFeishuBotConfig {
     appId: String(row.app_id ?? ""),
     domain: normalizeDomain(row.domain),
     enabled: Boolean(Number(row.enabled ?? 0)),
+    senderAccessPolicy: row.sender_access_policy === "allowlist" ? "allowlist" : "agent",
     revision: Number(row.revision ?? 0),
     hasAppSecret: Boolean(nullableString(row.app_secret_encrypted)),
     appSecretHint: nullableString(row.app_secret_hint),

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { createLocalStore, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { MultiremiStore } from "@multiremi/store.js";
 
 let previousEncryptionKey: string | undefined;
 
@@ -16,6 +17,102 @@ afterEach(() => {
 });
 
 describe("Feishu sender allowlist Issue authorization", () => {
+  it("migrates existing bot configurations and pending Chat deliveries to Agent access", async () => {
+    const fixture = await allowlistFixture();
+    expect(fixture.store.isFeishuBotTaskIssueCreationRestricted(fixture.inbound.taskId)).toBe(true);
+    // Reopen this in-memory fixture with the pre-policy schema, as on upgrade.
+    db!.exec("ALTER TABLE multiremi_feishu_bot_configs DROP COLUMN sender_access_policy");
+    const upgraded = new MultiremiStore(db!);
+    expect(upgraded.getFeishuBotConfig("local")?.senderAccessPolicy).toBe("agent");
+    expect(upgraded.listFeishuBotSenders("local")[0]?.allowed).toBe(false);
+    expect(upgraded.isFeishuBotTaskIssueCreationRestricted(fixture.inbound.taskId)).toBe(false);
+    expect((await createIssue(fixture, fixture.headers)).status).toBe(201);
+  });
+
+  it("defaults to Agent capabilities for every bot sender, including unbound and owner accounts", async () => {
+    const fixture = await allowlistFixture(false, false);
+    expect(fixture.config.senderAccessPolicy).toBe("agent");
+    expect(fixture.store.listFeishuBotSenders("local")[0]?.allowed).toBe(false);
+    expect(fixture.inbound.senderAllowed).toBe(true);
+    expect(fixture.store.getTask(fixture.inbound.taskId)?.requestingUserProfileDescription)
+      .toContain("No separate sender approval or workspace membership is required");
+    await expectIssueCapabilities(fixture, fixture.headers, true);
+    expect((await createIssue(fixture, fixture.headers)).status).toBe(201);
+
+    fixture.store.getOrCreateUser({ externalId: "ou_sso_owner", feishuUnionId: "on_owner",
+      email: fixture.store.getCurrentUser().email, name: "Owner" });
+    for (const [name, identity] of [
+      ["owner", { senderOpenId: "ou_owner", senderUnionId: "on_owner" }],
+      ["external", { senderOpenId: "ou_external", senderUnionId: "on_external" }],
+      ["missing", {}],
+    ] as const) {
+      const inbound = fixture.store.submitFeishuBotMessage("local", "rt_allowlist", {
+        revision: fixture.config.revision, externalSessionKey: `oc_${name}`, externalMessageId: `om_${name}`,
+        ...identity, text: "Create an Issue", chatType: "p2p",
+      });
+      expect(inbound.senderAllowed).toBe(true);
+      const headers = await taskHeaders(fixture.store, inbound.taskId);
+      await expectIssueCapabilities(fixture, headers, true);
+      expect((await createIssue(fixture, headers)).status).toBe(201);
+    }
+  });
+
+  it("restores existing Chats, delegated tasks and Autopilots when sender restrictions are disabled", async () => {
+    const fixture = await allowlistFixture();
+    const child = fixture.store.createTask({ agentId: fixture.worker.id, prompt: "Delegated request", parentTaskId: fixture.inbound.taskId });
+    const childHeaders = await taskHeaders(fixture.store, child.id);
+    await expectApprovalRequired(await createIssue(fixture, childHeaders));
+    const request = { agent_id: fixture.agent.id, runtime_id: "rt_allowlist", app_id: "cli_allowlist",
+      domain: "feishu", enabled: true, app_secret_op: "keep", sender_access_policy: "agent" };
+    const url = "/api/workspaces/local/feishu-bot";
+    const adminHeaders = { Authorization: "Bearer root-secret", "Content-Type": "application/json" };
+    expect((await fixture.app.request(url, { method: "PUT", headers: fixture.headers, body: JSON.stringify(request) })).status).toBe(403);
+    expect((await fixture.app.request(url, { method: "PUT", headers: adminHeaders,
+      body: JSON.stringify({ ...request, sender_access_policy: "invalid" }) })).status).toBe(400);
+    const saved = await fixture.app.request(url, { method: "PUT", headers: adminHeaders, body: JSON.stringify(request) });
+    expect(saved.status).toBe(200);
+    expect(await saved.json()).toMatchObject({ sender_access_policy: "agent" });
+    expect(fixture.store.listFeishuBotSenders("local")[0]?.allowed).toBe(false);
+    for (const headers of [fixture.headers, childHeaders]) {
+      await expectIssueCapabilities(fixture, headers, true);
+      expect((await createIssue(fixture, headers)).status).toBe(201);
+    }
+    const autopilot = fixture.store.createAutopilot({ title: "Follow-up Issue", assigneeId: fixture.worker.id, executionMode: "create_issue" });
+    expect(fixture.store.runAutopilot(autopilot.id, { sourceTaskId: fixture.inbound.taskId }).issueId).toBeTruthy();
+
+    // Ordinary config saves must not silently change the chosen policy.
+    const { sender_access_policy: _policy, ...ordinarySave } = request;
+    await fixture.app.request(url, { method: "PUT", headers: adminHeaders, body: JSON.stringify(ordinarySave) });
+    expect(fixture.store.getFeishuBotConfig("local")?.senderAccessPolicy).toBe("agent");
+    await fixture.app.request(url, { method: "PUT", headers: adminHeaders, body: JSON.stringify({ ...request, sender_access_policy: "allowlist" }) });
+    await expectApprovalRequired(await createIssue(fixture, childHeaders));
+  });
+
+  it("keeps Agent and inherited task approval requirements in Agent access mode", async () => {
+    const fixture = await allowlistFixture(true, false);
+    const response = await createIssue(fixture, fixture.headers);
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: "issue_creation_requires_proposal" });
+    await expectIssueCapabilities(fixture, fixture.headers, false);
+    const child = fixture.store.createTask({ agentId: fixture.worker.id, prompt: "Delegate", parentTaskId: fixture.inbound.taskId,
+      issueCreationRestricted: true });
+    const childResponse = await createIssue(fixture, await taskHeaders(fixture.store, child.id));
+    expect(childResponse.status).toBe(403);
+    expect(await childResponse.json()).toMatchObject({ code: "issue_creation_requires_proposal" });
+  });
+
+  it("automatically creates a group Issue without requiring membership or sender approval", async () => {
+    const fixture = await allowlistFixture(false, false);
+    fixture.store.updateWorkspace("local", { settings: { issueTopics: { enabled: true, chatId: "oc_open_group" } } });
+    const inbound = fixture.store.submitFeishuBotMessage("local", "rt_allowlist", {
+      revision: fixture.config.revision, externalSessionKey: "oc_open_group:thread:om_open_group",
+      externalMessageId: "om_open_group", chatId: "oc_open_group", chatType: "group", threadId: "om_open_group",
+      senderOpenId: "ou_group_outsider", text: "Group request",
+    });
+    expect(inbound.senderAllowed).toBe(true);
+    expect(fixture.store.getChatSession(inbound.chatSessionId)?.issueId).toBeTruthy();
+  });
+
   it("restores the same task after approval and revokes its Issue APIs and CLI capabilities immediately", async () => {
     const fixture = await allowlistFixture();
     const requests = [
@@ -196,7 +293,7 @@ describe("Feishu sender allowlist Issue authorization", () => {
   });
 });
 
-async function allowlistFixture(issueCreationRequiresProposal = false) {
+async function allowlistFixture(issueCreationRequiresProposal = false, requireAllowlist = true) {
   const store = createLocalStore();
   const agent = store.createAgent({ name: "Feishu bot", provider: "codex", issueCreationRequiresProposal });
   const worker = store.createAgent({ name: "Issue worker", provider: "codex" });
@@ -206,6 +303,7 @@ async function allowlistFixture(issueCreationRequiresProposal = false) {
   store.heartbeatRuntime("rt_allowlist", { supportsFeishuBotConfig: true });
   const config = store.upsertFeishuBotConfig("local", {
     agentId: agent.id, runtimeId: "rt_allowlist", appId: "cli_allowlist",
+    ...(requireAllowlist ? { senderAccessPolicy: "allowlist" as const } : {}),
     appSecretOp: "set", appSecret: "wJ4tQ7xR2nB8vC5mZ1kL0pS6dF3gH9jA", domain: "feishu", enabled: true,
   });
   const inbound = store.submitFeishuBotMessage("local", "rt_allowlist", {

@@ -39,6 +39,13 @@ describe("Issue notification recipient schema", () => {
 });
 
 describe("FeishuBotConfigSchema", () => {
+  it("parses sender access policy and tolerates older or unknown server values", () => {
+    expect(FeishuBotConfigSchema.parse({ sender_access_policy: "agent" }).sender_access_policy).toBe("agent");
+    expect(FeishuBotConfigSchema.parse({ sender_access_policy: "allowlist" }).sender_access_policy).toBe("allowlist");
+    for (const value of [undefined, null, "future-policy", 1]) {
+      expect(FeishuBotConfigSchema.parse({ sender_access_policy: value }).sender_access_policy).toBeUndefined();
+    }
+  });
   it("defaults every field a sparse server omits, without throwing", () => {
     const result = parseWithFallback(
       { configured: true, workspace_id: "ws_1", app_id: "cli_abc" },

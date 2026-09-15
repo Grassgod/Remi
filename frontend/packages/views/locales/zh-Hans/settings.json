@@ -953,6 +953,9 @@
       }
     },
     "senderAllowlist": {
+      "access_title": "机器人能力访问",
+      "agent_access": "能与机器人聊天的人，都可以使用回复智能体已开放的能力。智能体自身的权限和审批规则仍然有效。",
+      "require_allowlist": "仅允许白名单账号通过机器人创建任务",
       "unnamed": "飞书账号 · {{id}}",
       "account_identifiers": "更多账号标识",
       "title": "飞书账号白名单",

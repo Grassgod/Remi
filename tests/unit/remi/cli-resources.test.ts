@@ -46,6 +46,27 @@ afterEach(() => {
 });
 
 describe("native CLI resource contracts", () => {
+  it("exposes nested bot help and sends the configured sender access policy", async () => {
+    const registry = registryFor(SPECS);
+    expect(registry.renderHelpForArgv(["workspace", "feishu-bot", "--help"]))
+      .toContain("workspace feishu-bot sender");
+    expect(registry.renderHelpForArgv(["workspace", "feishu-bot", "sender", "--help"]))
+      .toContain("workspace feishu-bot sender list");
+    useCliEnv();
+    const spec = specById("workspace.feishu-bot.set");
+    let saved: unknown;
+    globalThis.fetch = mockFetch(spec.id, [], async (request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/workspaces/ws_1") return Response.json({ id: "ws_1", name: "Workspace" });
+      if (path === "/api/workspaces/ws_1/feishu-bot" && request.method === "PUT") {
+        saved = await request.json();
+        return Response.json(saved);
+      }
+      throw new Error(`unexpected request ${request.method} ${path}`);
+    });
+    await execute(spec, ["ws_1", "--agent", "agt_bot", "--runtime", "rt_bot", "--app-id", "cli_bot", "--domain", "feishu", "--enabled", "--sender-access-policy", "agent"]);
+    expect(saved).toMatchObject({ sender_access_policy: "agent", enabled: true });
+  });
   it("advertises task parity except for identity and workspace lifecycle commands", () => {
     const registry = registryFor(SPECS);
     const inventory = new Map(registry.inventory().map((entry) => [entry.id, entry]));
