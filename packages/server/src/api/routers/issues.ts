@@ -27,6 +27,7 @@ import {
   readJson,
   readJsonStrict,
   requireWorkspaceAdmin,
+  safeAssignIssue,
   safeQuickCreateIssue,
   safeRerunIssue,
   setIssueCommentCursorHeaders,
@@ -1123,10 +1124,11 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<AssignIssueInput>(c);
-    const result = store.assignIssue(issue.id, {
+    const result = safeAssignIssue(store, issue.id, {
       ...body,
       parentTaskId: currentTaskParentId(c),
     });
+    if ("error" in result) return c.json({ error: result.error }, result.status);
     return c.json({
       ...result,
       task: result.task ? taskPublicResponse(result.task) : null,

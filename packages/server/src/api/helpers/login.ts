@@ -4,6 +4,7 @@ import type { Context } from "hono";
 import { setCookie } from "hono/cookie";
 import { createHmac } from "node:crypto";
 import { MultiremiStore } from "@multiremi/store/store.js";
+import { resolveDefaultWorkspaceIdForUser } from "./workspace-context.js";
 
 export const LOCAL_AUTH_CODE_TTL_MS = 10 * 60 * 1000;
 
@@ -102,7 +103,7 @@ export async function localAuthResponse(
     name: identity.name ?? null,
   });
   const token = await store.createAccessToken({
-    workspaceId: "local",
+    workspaceId: resolveDefaultWorkspaceIdForUser(store, user.id),
     userId: user.id,
     name: `Login for ${user.email}`,
     type: "pat",
