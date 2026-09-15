@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { BRIDGE_PACKAGE, RUNTIME_PIN, type RuntimeProvider, type RuntimeVersions } from "./runtime-versions.js";
@@ -114,7 +114,12 @@ export function installRuntimeBundle(
   try {
     stage = mkdtempSync(join(dirname(destination), `.prepare-${provider}-`));
     writeFileSync(join(stage, "package.json"), JSON.stringify(runtimeBundleManifest(provider, versions), null, 2) + "\n");
-    execFileSync(tools.npm, ["install", "--prefix", stage, "--registry=https://registry.npmjs.org", "--no-audit", "--no-fund", "--loglevel=error"], {
+    // npm 10 treats a symlinked prefix (including an ancestor such as /home)
+    // as a Link root and loses its overrides on the target dependency tree.
+    // Resolve the existing stage before installing so the release pins apply.
+    const installRoot = realpathSync(stage);
+    execFileSync(tools.npm, ["install", "--prefix", installRoot, "--registry=https://registry.npmjs.org", "--no-audit", "--no-fund", "--loglevel=error"], {
+      cwd: installRoot,
       timeout: 180_000, stdio: ["ignore", "ignore", "pipe"],
       env: { ...process.env, PATH: `${dirname(tools.node)}:${process.env.PATH ?? ""}` },
     });

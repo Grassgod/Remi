@@ -70,6 +70,15 @@ jobs:
           REMI_CLAUDE_AGENT_ACP_EXECUTABLE: ${{ github.workspace }}/bin/remi-claude-agent-acp
         run: REMI_HOME="$(mktemp -d)" bun run apps/remi/main.ts runtime prepare --provider claude --provider codex
 
+      - name: Verify runtime installation through a symlinked home
+        env:
+          REMI_CLAUDE_AGENT_ACP_EXECUTABLE: ${{ github.workspace }}/bin/remi-claude-agent-acp
+        run: |
+          runtime_fixture="$(mktemp -d)"
+          mkdir -p "$runtime_fixture/real-home/.remi"
+          ln -s "$runtime_fixture/real-home" "$runtime_fixture/linked-home"
+          REMI_HOME="$runtime_fixture/linked-home/.remi" bun run apps/remi/main.ts runtime prepare --provider claude --provider codex
+
   build:
     runs-on: ubuntu-latest
 
