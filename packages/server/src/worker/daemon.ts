@@ -616,9 +616,8 @@ export class MultiremiDaemon {
   private activeTaskAborts = new Set<AbortController>();
   private claimsPaused = false;
   /**
-   * Server-driven platform drain. Unlike claimsPaused (local CLI self-update,
-   * which exits the poll loop), a drain keeps the loop alive: heartbeats and
-   * running tasks continue, only new claims stop until the server acks normal.
+   * Server-driven platform drain. Like a local update claim pause, a drain
+   * keeps the poll loop alive; new claims stop until the server acks normal.
    */
   private serverDrainActive = false;
   private appliedDrainGeneration = 0;
@@ -1022,8 +1021,11 @@ export class MultiremiDaemon {
           if (!skipClaim && !this.stopped) {
             await this.reconcileRuntimeAgentPlugins(this.options.runtimeId!);
           }
-          if (this.stopped || this.claimsPaused) break;
-          if (skipClaim || this.serverDrainActive) {
+          if (this.stopped) break;
+          // A sibling can pause claims while it installs the shared CLI. Keep
+          // this lane ready and heartbeating so a failed install can release
+          // the pause. Only a successful update explicitly stops the supervisor.
+          if (this.claimsPaused || skipClaim || this.serverDrainActive) {
             if (this.options.once) return;
             await sleep(this.options.pollIntervalMs);
             continue;
