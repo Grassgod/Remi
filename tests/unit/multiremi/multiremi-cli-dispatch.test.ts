@@ -60,6 +60,21 @@ async function runDispatch(args: string[]): Promise<DispatchResult> {
 }
 
 describe("remi CLI dispatcher", () => {
+  it("prints the specific subcommands for bare workspace groups and their help forms", async () => {
+    for (const group of ["organizer", "env", "ssh-mesh", "relay", "issue-topics", "issue-archive"]) {
+      const outputs: string[] = [];
+      console.log = (value?: unknown) => { outputs.push(String(value)); };
+      await dispatch(["workspace", group]);
+      await dispatch(["help", "workspace", group]);
+      await dispatch(["workspace", group, "--help"]);
+      expect(outputs).toHaveLength(3);
+      expect(outputs[0]).toContain(`Usage: remi workspace ${group} <command>`);
+      expect(outputs[0]).toContain(`${group} get`);
+      expect(outputs[1]).toBe(outputs[0]);
+      expect(outputs[2]).toBe(outputs[0]);
+    }
+  });
+
   it("registers native resource groups and every legacy top-level entry", () => {
     const inventory = cliCommandInventory();
     expect(inventory.filter((entry) => entry.path.length === 1).map((entry) => entry.path.join(" "))).toEqual([

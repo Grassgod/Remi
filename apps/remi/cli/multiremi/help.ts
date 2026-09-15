@@ -33,7 +33,7 @@ Commands:
   issue create           Create an issue (--title required; see issue options below)
   issue bind-topic       Resume a failed local Feishu topic workspace migration
   issue update <id>      Update an issue (same fields as create; see issue options)
-  issue assign <id>      Assign or unassign an issue
+  issue assign <id>      Assign an issue; --unassign clears the assignee and cancels active tasks on this issue
   issue status <id> <s>  Change issue status
   issue delete <id>      Delete an issue
   issue search <query>   Search issues

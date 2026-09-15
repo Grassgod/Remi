@@ -1992,6 +1992,9 @@ export interface CreateIssueWithTaskInput extends CreateIssueInput {
 }
 
 export interface UpdateIssueInput {
+  /** Server-internal attribution, overwritten from the authenticated request. */
+  actorType?: string;
+  actorId?: string | null;
   title?: string;
   description?: string | null;
   status?: string;
@@ -2077,6 +2080,7 @@ export interface AssignIssueInput {
 export interface AssignIssueResult {
   issue: MultiremiIssue;
   task: MultiremiTask | null;
+  cancelledTasks: number;
 }
 
 export interface QuickCreateIssueInput {

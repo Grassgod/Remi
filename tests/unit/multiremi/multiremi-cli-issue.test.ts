@@ -6,6 +6,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runMultiremi } from "../../../apps/remi/cli/multiremi.js";
+import { cliCommandHelp } from "../../../apps/remi/cli/index.js";
 import { tableHeaders } from "./helpers.js";
 
 let tmp: string | null = null;
@@ -16,6 +17,45 @@ afterEach(() => {
 });
 
 describe("Multiremi CLI — issues, attachments, and sessions", () => {
+  test("issue assign returns the same flat issue fields as get plus task and cancellation outcomes", async () => {
+    const issue = { id: "iss_1", identifier: "MUL-1", title: "Assignment", assignee_id: null, assignee_type: null };
+    let outcome: Record<string, unknown> = { task_id: null, cancelled_tasks: 2 };
+    const requests: unknown[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1", port: 0,
+      async fetch(request) {
+        if (request.method === "GET") return Response.json(issue);
+        requests.push({ method: request.method, path: new URL(request.url).pathname, body: await request.json() });
+        return Response.json({ ...issue, ...outcome });
+      },
+    });
+    const logs: string[] = [];
+    const originalLog = console.log;
+    try {
+      console.log = (value?: unknown) => { logs.push(String(value)); };
+      const options = ["--server", server.url.toString(), "--token", "fixture", "--output", "json"];
+      await runMultiremi(["issue", "get", "MUL-1", ...options]);
+      await runMultiremi(["issue", "assign", "MUL-1", "--unassign", ...options]);
+      const fetched = JSON.parse(logs[0]);
+      expect(JSON.parse(logs[1])).toEqual({ ...fetched, task_id: null, cancelled_tasks: 2 });
+      expect(requests[0]).toEqual({ method: "PUT", path: "/api/issues/MUL-1", body: { assignee_type: null, assignee_id: null } });
+      outcome = { task_id: "tsk_new", cancelled_tasks: 1 };
+      await runMultiremi(["issue", "assign", "MUL-1", "--to", "Worker", ...options]);
+      expect(JSON.parse(logs[2])).toEqual({ ...fetched, ...outcome });
+      outcome = {};
+      await runMultiremi(["issue", "assign", "MUL-1", "--unassign", ...options]);
+      expect(JSON.parse(logs[3])).toEqual({ ...fetched, task_id: null, cancelled_tasks: 0 });
+    } finally {
+      console.log = originalLog;
+      server.stop(true);
+    }
+  });
+
+  test("unassign help and usage explain cancellation of active issue tasks", async () => {
+    expect(cliCommandHelp(["issue", "assign"])).toContain("Clear the assignee and cancel active tasks on this issue");
+    await expect(runMultiremi(["issue", "assign"])).rejects.toThrow("--unassign clears the assignee and cancels active tasks on this issue");
+  });
+
   test("issue assignee options can pass fuzzy refs without a type", async () => {
     const requests: Array<{ method: string; path: string; body?: any }> = [];
     const server = Bun.serve({
