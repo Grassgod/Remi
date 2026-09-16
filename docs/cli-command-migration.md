@@ -42,7 +42,11 @@ Chat Tasks can deliver files to their current conversation with
 `remi chat attachment send --attachment report.html --attachment chart.png`.
 `--content`, `--content-file`, and `--content-stdin` optionally add a caption.
 The server resolves the destination from the Task credential; no Feishu chat ID
-is needed. Each file must be at most 20MB and pass the server's file type allowlist.
+is needed. Each file must be non-empty, at most 20MB, and pass the server's file type allowlist.
+Within one command, the caption precedes the files, which are delivered in input
+order. A retry keeps later files waiting; a permanent failure marks the remaining
+files failed with the reason. Raster images larger than 10MB use file cards;
+smaller images use inline image messages. SVG files always use file cards.
 The response includes attachment IDs and queued delivery IDs; queueing does not
 mean Feishu has acknowledged delivery. This command requires a Chat Task credential.
 

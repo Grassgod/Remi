@@ -4,7 +4,7 @@ import { createMultiremiApp } from "@multiremi/api.js";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import { uploadedAttachmentPath, uploadRoot } from "@multiremi/api/helpers/uploads.js";
 import { FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER } from "@multiremi/contracts/types.js";
-import { CHAT_ATTACHMENT_MAX_BYTES, sanitizeChatAttachmentFilename } from "@multiremi/contracts/attachments.js";
+import { CHAT_ATTACHMENT_MAX_BYTES, chatAttachmentValidationError, sanitizeChatAttachmentFilename } from "@multiremi/contracts/attachments.js";
 import { createLocalStore, db, resetMultiremiTestEnv, useUploadDir } from "./helpers.js";
 
 let previousKey: string | undefined;
@@ -161,6 +161,29 @@ describe("Chat attachment transport", () => {
     const nonChat = f.store.createTask({ agentId: f.agent.id, prompt: "issue task" });
     const nonChatToken = await f.store.createTaskAccessToken(nonChat, "local");
     expect((await send([new File(["x"], "x.html")], nonChatToken.token)).status).toBe(403);
+  });
+
+  it("rejects an empty file anywhere in an outbound batch before persisting bytes, messages, or deliveries", async () => {
+    const f = await fixture();
+    const submitted = f.submit();
+    const credential = await f.store.createTaskAccessToken(f.store.getTask(submitted.taskId)!, "local");
+    for (const filename of ["empty.png", "空 报告.html"]) {
+      expect(chatAttachmentValidationError(filename, 0)).toBe(`Attachment ${filename} is empty (0 bytes)`);
+      const empty = new File([], filename);
+      for (const files of [[empty], [new File(["report"], "valid.html"), empty]]) {
+        const response = await f.app.request("/api/chat/attachments/send", {
+          method: "POST", headers: { Authorization: `Bearer ${credential.token}` }, body: sendForm(files),
+        });
+        expect(response.status).toBe(400);
+        // Bun 1.3.14's multipart parser drops empty File.name. The API must
+        // identify its field number; the CLI still reports the local filename.
+        expect((await response.json()).error).toBe(`Attachment file #${files.length} is empty (0 bytes)`);
+        expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_attachments").get()).toEqual({ n: 0 });
+        expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries").get()).toEqual({ n: 0 });
+        expect(f.store.listChatMessages(submitted.chatSessionId).filter(message => message.role === "assistant")).toHaveLength(0);
+        expect(existsSync(uploadRoot()) ? readdirSync(uploadRoot(), { recursive: true }) : []).toHaveLength(0);
+      }
+    }
   });
 
   it("includes Web Chat attachments even when the selected message has no text and isolates duplicate filenames", async () => {

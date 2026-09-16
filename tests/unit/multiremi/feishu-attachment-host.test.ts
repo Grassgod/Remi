@@ -82,6 +82,57 @@ describe("Feishu attachment concierge delivery", () => {
     });
   }
 
+  it("awaits the caption before sending the first file and keeps retry UUIDs and the original thread", async () => {
+    const events: string[] = [];
+    const captions: any[] = [];
+    const sent: any[] = [];
+    const claims: string[] = [];
+    let releaseCaption!: () => void;
+    const captionGate = new Promise<void>(resolve => { releaseCaption = resolve; });
+    const daemon = { downloadFeishuBotOutboundAttachment: async (_id: string, claimToken: string) => {
+      events.push("download");
+      claims.push(claimToken);
+      return Buffer.from("html");
+    } } as unknown as MultiremiDaemon;
+    const handle = {
+      sendProactiveThreadReply: async (input: any) => {
+        captions.push(input);
+        events.push("caption:start");
+        if (captions.length === 1) await captionGate;
+        events.push("caption:sent");
+        return { messageId: "om_caption" };
+      },
+      sendProactiveAttachment: async (input: any) => {
+        sent.push(input);
+        events.push("attachment");
+        if (sent.length === 1) throw new Error("attachment acknowledgement lost");
+        return { messageId: "om_file" };
+      },
+    } as unknown as FeishuChannelHandle;
+    const host = controlPlaneConciergeHost({ daemon: () => daemon, current: () => handle, attach: () => {}, workspacesRoot: () => "/tmp/test" });
+    // The server creates one delivery per file; only the first has a caption.
+    const delivery = { ...base, body: "Report attached", threadId: "om_root", replyToMessageId: "om_reply",
+      attachments: base.attachments!.slice(0, 1) };
+    const first = host.sendOutbound!(delivery);
+    expect(events).toEqual(["caption:start"]);
+    expect(sent).toHaveLength(0);
+    releaseCaption();
+    await expect(first).rejects.toThrow("attachment acknowledgement lost");
+    expect(events).toEqual(["caption:start", "caption:sent", "download", "attachment"]);
+
+    await expect(host.sendOutbound!({ ...delivery, claimToken: "retry_lease" })).resolves.toEqual({ messageId: "om_file" });
+    expect(events).toEqual(["caption:start", "caption:sent", "download", "attachment",
+      "caption:start", "caption:sent", "download", "attachment"]);
+    expect(claims).toEqual([base.claimToken, "retry_lease"]);
+    expect(captions[0]).toMatchObject({ chatId: "oc_original", replyToMessageId: "om_reply", body: "Report attached" });
+    expect(captions[1]).toEqual(captions[0]);
+    for (const attachment of sent) {
+      expect(attachment).toMatchObject({ chatId: "oc_original", replyToMessageId: "om_reply", filename: "report.html" });
+      expect(attachment.idempotencyKey).not.toBe(captions[0].idempotencyKey);
+    }
+    expect(sent[1].idempotencyKey).toBe(sent[0].idempotencyKey);
+  });
+
   it("stops before sending when the attachment download loses its lease", async () => {
     let sent = false;
     const controller = new AbortController();

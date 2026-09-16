@@ -86,6 +86,27 @@ describe("native collaboration CLI contracts", () => {
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 
+  it("rejects empty HTML and image files, including a later batch item, without a network request", async () => {
+    useCliEnv();
+    const dir = await mkdtemp(resolve(tmpdir(), "chat-cli-empty-"));
+    const spec = specById("chat.attachment.send");
+    let requests = 0;
+    globalThis.fetch = (async () => { requests++; throw new Error("unexpected network"); }) as unknown as typeof fetch;
+    try {
+      const valid = resolve(dir, "report.html");
+      await writeFile(valid, "<h1>Report</h1>");
+      for (const filename of ["空 报告.html", "empty.png"]) {
+        const empty = resolve(dir, filename);
+        await writeFile(empty, "");
+        for (const args of [["--attachment", empty], ["--attachment", valid, "--attachment", empty]]) {
+          await expect(capture(() => registryFor([spec]).execute([...spec.path, ...args])))
+            .rejects.toThrow(`Attachment ${filename} is empty (0 bytes)`);
+        }
+      }
+      expect(requests).toBe(0);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
   it("surfaces rejected Chat file types without claiming successful delivery", async () => {
     useCliEnv();
     const dir = await mkdtemp(resolve(tmpdir(), "chat-cli-"));

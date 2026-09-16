@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { basename } from "node:path";
+import { CHAT_ATTACHMENT_MAX_BYTES } from "@multiremi/contracts/attachments.js";
 import {
   CliError,
   ResourceResolver,
@@ -567,7 +568,8 @@ function chatCommandSpecs(): CommandSpec[] {
         try {
           const stat = await handle.stat();
           if (!stat.isFile()) throw new CliError("usage", `Attachment ${basename(path)} must be a regular file`);
-          const limit = 20 * 1024 * 1024;
+          if (stat.size === 0) throw new CliError("usage", `Attachment ${basename(path)} is empty (0 bytes)`);
+          const limit = CHAT_ATTACHMENT_MAX_BYTES;
           if (stat.size > limit) throw new CliError("usage", `Attachment ${basename(path)} exceeds the 20MB limit`);
           // Bound the read as well as stat: a file can grow while being read.
           const chunks: Buffer[] = [];
@@ -578,6 +580,7 @@ function chatCommandSpecs(): CommandSpec[] {
             chunks.push(chunk);
           }
           const name = basename(path);
+          if (size === 0) throw new CliError("usage", `Attachment ${name} is empty (0 bytes)`);
           form.append("file", new File([Buffer.concat(chunks)], name, { type: detectCliContentTypeFromFilename(name) }));
         } finally {
           await handle.close();

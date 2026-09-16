@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { FEISHU_ATTACHMENT_MAX_BYTES, prepareIncomingFeishuMedia, sanitizeFeishuAttachmentName } from "@connectors/feishu/incoming-media.js";
-import { downloadMessageResourceFeishu, FeishuAttachmentTooLargeError, sendAttachmentFeishu, sendFileFeishu, sendImageFeishu } from "@connectors/feishu/media.js";
+import { downloadMessageResourceFeishu, FEISHU_IMAGE_UPLOAD_MAX_BYTES, FeishuAttachmentTooLargeError, sendAttachmentFeishu, sendFileFeishu, sendImageFeishu } from "@connectors/feishu/media.js";
 import { resolveFeishuMedia } from "@connectors/feishu/receive.js";
 
 describe("Feishu incoming attachments", () => {
@@ -83,12 +83,56 @@ describe("Feishu incoming attachments", () => {
       expect(input.params.type).toBe("file");
       return { data: Buffer.from("video bytes"), headers: { "content-type": "video/mp4" } };
     } } } } as any;
-    const media = await resolveFeishuMedia(client, "om_video", "video", JSON.stringify({ file_key: "file_video", image_key: "img_poster", file_name: "clip.mp4" }));
-    expect(media[0]).toMatchObject({ fileName: "clip.mp4", contentType: "video/mp4" });
+    const media = await resolveFeishuMedia(client, "om_video", "media", JSON.stringify({ file_key: "file_video", image_key: "img_poster", file_name: "clip.mp4" }));
+    expect(media).toHaveLength(1);
+    expect(media[0]).toMatchObject({ fileName: "clip.mp4", contentType: "video/mp4", placeholder: "<media:video>" });
   });
 });
 
 describe("Feishu outbound media routing", () => {
+  it.each([
+    [FEISHU_IMAGE_UPLOAD_MAX_BYTES - 1, "image"],
+    [FEISHU_IMAGE_UPLOAD_MAX_BYTES, "image"],
+    [FEISHU_IMAGE_UPLOAD_MAX_BYTES + 1, "file"],
+    [15 * 1024 * 1024, "file"],
+    [FEISHU_ATTACHMENT_MAX_BYTES, "file"],
+  ] as const)("sends a %d-byte PNG via %s without altering the attachment", async (sizeBytes, expectedType) => {
+    const buffer = Buffer.alloc(sizeBytes, 1);
+    const uploads: { type: string; bytes: Buffer; fileName?: string; fileType?: string }[] = [];
+    const replies: any[] = [];
+    const readUpload = async (stream: AsyncIterable<Buffer>) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of stream) chunks.push(chunk);
+      return Buffer.concat(chunks);
+    };
+    const client = { im: {
+      image: { create: async ({ data }: any) => {
+        uploads.push({ type: "image", bytes: await readUpload(data.image) });
+        return { code: 0, data: { image_key: "img_uploaded" } };
+      } },
+      file: { create: async ({ data }: any) => {
+        uploads.push({ type: "file", bytes: await readUpload(data.file), fileName: data.file_name, fileType: data.file_type });
+        return { code: 0, data: { file_key: "file_uploaded" } };
+      } },
+      message: { reply: async (input: any) => {
+        replies.push(input);
+        return { code: 0, data: { message_id: "om_sent" } };
+      } },
+    } } as any;
+    await sendAttachmentFeishu(client, { chatId: "oc_original", replyToMessageId: "om_original_thread",
+      buffer, filename: "大图.png", contentType: "image/png", idempotencyKey: "stable_delivery" });
+    expect(uploads).toHaveLength(1);
+    expect(uploads[0]!.type).toBe(expectedType);
+    expect(uploads[0]!.bytes.equals(buffer)).toBe(true);
+    if (expectedType === "file") {
+      expect(uploads[0]).toMatchObject({ fileName: "大图.png", fileType: "stream" });
+    }
+    expect(replies).toEqual([{ path: { message_id: "om_original_thread" }, data: {
+      content: JSON.stringify(expectedType === "image" ? { image_key: "img_uploaded" } : { file_key: "file_uploaded" }),
+      msg_type: expectedType, reply_in_thread: true, uuid: "stable_delivery",
+    } }]);
+  });
+
   it("uploads PNG as an image and HTML/SVG as files", async () => {
     const uploads: any[] = [];
     const sent: any[] = [];

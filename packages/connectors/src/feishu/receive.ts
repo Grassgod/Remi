@@ -289,7 +289,7 @@ function parseMediaKeys(
         return { fileKey: parsed.file_key, fileName: parsed.file_name };
       case "audio":
         return { fileKey: parsed.file_key, fileName: parsed.file_name };
-      case "video":
+      case "media":
         return { fileKey: parsed.file_key, imageKey: parsed.image_key, fileName: parsed.file_name };
       case "sticker":
         return { fileKey: parsed.file_key };
@@ -385,7 +385,7 @@ function inferPlaceholder(messageType: string): string {
     case "image": return "<media:image>";
     case "file": return "<media:document>";
     case "audio": return "<media:audio>";
-    case "video": return "<media:video>";
+    case "media": return "<media:video>";
     case "sticker": return "<media:sticker>";
     default: return "<media:document>";
   }
@@ -442,7 +442,7 @@ export async function resolveFeishuMedia(
   messageType: string,
   content: string,
 ): Promise<FeishuMediaInfo[]> {
-  const mediaTypes = ["image", "file", "audio", "video", "sticker", "post"];
+  const mediaTypes = ["image", "file", "audio", "media", "sticker", "post"];
   if (!mediaTypes.includes(messageType)) return [];
 
   if (messageType === "sticker") return [{ buffer: Buffer.alloc(0), placeholder: "<media:sticker>" }];

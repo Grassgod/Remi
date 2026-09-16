@@ -620,17 +620,19 @@ export class FeishuBotRepo {
         const batchId = createId("fbo");
         const now = nowIso();
         for (const [index, attachment] of attachments.entries()) {
-          // Equal timestamps sort by id; a shared prefix preserves file order.
+          // Keep a readable batch order; claim eligibility is enforced by the
+          // predecessor, not by sorting (other deliveries may run concurrently).
           const id = `${batchId}_${String(index).padStart(2, "0")}`;
           const descriptor = { id: attachment.id, filename: attachment.filename,
             contentType: attachment.contentType, sizeBytes: attachment.sizeBytes };
           // One file per delivery gives retries an independent stable Feishu UUID.
           this.ctx.db.run(`INSERT INTO multiremi_feishu_bot_outbound_deliveries
             (id, workspace_id, binding_id, chat_id, thread_id, reply_to_message_id,
-             body, attachments, status, available_at, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
+             body, attachments, previous_delivery_id, status, available_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
             [id, task.workspaceId, binding.id, binding.chat_id, binding.thread_id,
-              binding.reply_to_message_id, deliveryIds.length === 0 ? body : "", toJson([descriptor]), now, now, now]);
+              binding.reply_to_message_id, deliveryIds.length === 0 ? body : "", toJson([descriptor]),
+              deliveryIds.at(-1) ?? null, now, now, now]);
           deliveryIds.push(id);
         }
       }
@@ -1239,6 +1241,10 @@ export class FeishuBotRepo {
            AND (o.task_id IS NULL OR ? = 1 OR o.body <> '')
            AND (? = 1 OR o.presentation_checkpoint IS NULL)
            AND (? = 1 OR o.attachments IS NULL)
+           AND (o.previous_delivery_id IS NULL OR EXISTS (
+             SELECT 1 FROM multiremi_feishu_bot_outbound_deliveries previous
+             WHERE previous.id = o.previous_delivery_id AND previous.workspace_id = o.workspace_id
+               AND previous.status = 'sent'))
            AND ((o.status = 'pending' AND o.available_at <= ?)
              OR (o.status = 'sending' AND o.leased_until IS NOT NULL AND o.leased_until <= ?))
          ORDER BY o.created_at ASC, o.id ASC LIMIT 1`,
@@ -1267,6 +1273,11 @@ export class FeishuBotRepo {
              attempt_count = attempt_count + 1, updated_at = ?,
              mention_snapshot = COALESCE(mention_snapshot, ?), presentation_checkpoint = COALESCE(presentation_checkpoint, ?)
          WHERE id = ?
+           AND (previous_delivery_id IS NULL OR EXISTS (
+             SELECT 1 FROM multiremi_feishu_bot_outbound_deliveries previous
+             WHERE previous.id = multiremi_feishu_bot_outbound_deliveries.previous_delivery_id
+               AND previous.workspace_id = multiremi_feishu_bot_outbound_deliveries.workspace_id
+               AND previous.status = 'sent'))
            AND ((status = 'pending' AND available_at <= ?)
              OR (status = 'sending' AND leased_until IS NOT NULL AND leased_until <= ?))`,
         [claimToken, leasedUntil, nowIsoValue, mention ? toJson(mention) : null, presentation ? toJson(presentation) : null,
@@ -1427,28 +1438,52 @@ export class FeishuBotRepo {
         return true;
       })();
     }
-    const row = this.ctx.db.query(
-      `SELECT attempt_count FROM multiremi_feishu_bot_outbound_deliveries
-       WHERE id = ? AND workspace_id = ? AND status = 'sending' AND claim_token = ?`,
-    ).get(deliveryId, workspaceId, input.claimToken) as Row | null;
-    if (!row) return false;
-    const delayMs = Math.min(5 * 60_000, 5_000 * 2 ** Math.min(6, Math.max(0, Number(row.attempt_count) - 1)));
-    const terminal = input.retryable === false || Number(row.attempt_count) >= 6;
-    return this.ctx.db.run(
-      `UPDATE multiremi_feishu_bot_outbound_deliveries
-       SET status = ?, claim_token = NULL, leased_until = NULL,
-           available_at = ?, last_error = ?, updated_at = ?
-       WHERE id = ? AND workspace_id = ? AND status = 'sending' AND claim_token = ?`,
-      [
-        terminal ? "failed" : "pending",
-        new Date(now.getTime() + delayMs).toISOString(),
-        cleanOptionalString(input.error)?.slice(0, 2_000) ?? "Feishu send failed",
-        now.toISOString(),
-        deliveryId,
-        workspaceId,
-        input.claimToken,
-      ],
-    ).changes === 1;
+    return this.ctx.db.transaction(() => {
+      const row = this.ctx.db.query(
+        `SELECT attempt_count FROM multiremi_feishu_bot_outbound_deliveries
+         WHERE id = ? AND workspace_id = ? AND status = 'sending' AND claim_token = ?`,
+      ).get(deliveryId, workspaceId, input.claimToken) as Row | null;
+      if (!row) return false;
+      const delayMs = Math.min(5 * 60_000, 5_000 * 2 ** Math.min(6, Math.max(0, Number(row.attempt_count) - 1)));
+      const terminal = input.retryable === false || Number(row.attempt_count) >= 6;
+      const error = cleanOptionalString(input.error)?.slice(0, 2_000) ?? "Feishu send failed";
+      const updated = this.ctx.db.run(
+        `UPDATE multiremi_feishu_bot_outbound_deliveries
+         SET status = ?, claim_token = NULL, leased_until = NULL,
+             available_at = ?, last_error = ?, updated_at = ?
+         WHERE id = ? AND workspace_id = ? AND status = 'sending' AND claim_token = ?`,
+        [
+          terminal ? "failed" : "pending",
+          new Date(now.getTime() + delayMs).toISOString(),
+          error,
+          now.toISOString(),
+          deliveryId,
+          workspaceId,
+          input.claimToken,
+        ],
+      );
+      if (updated.changes !== 1) return false;
+      if (terminal) {
+        // A failed caption/attachment must not let the rest of that batch
+        // overtake it, nor leave descendants pending forever without a reason.
+        this.ctx.db.run(
+          `WITH RECURSIVE successors AS (
+             SELECT id FROM multiremi_feishu_bot_outbound_deliveries
+             WHERE previous_delivery_id = ? AND workspace_id = ?
+             UNION
+             SELECT o.id FROM multiremi_feishu_bot_outbound_deliveries o
+             JOIN successors previous ON o.previous_delivery_id = previous.id
+             WHERE o.workspace_id = ?
+           )
+           UPDATE multiremi_feishu_bot_outbound_deliveries
+           SET status = 'failed', last_error = ?, updated_at = ?
+           WHERE id IN (SELECT id FROM successors) AND status = 'pending'`,
+          [deliveryId, workspaceId, workspaceId,
+            `Not sent because earlier batch delivery ${deliveryId} failed: ${error}`.slice(0, 2_000), now.toISOString()],
+        );
+      }
+      return true;
+    })();
   }
 
   private resolveSender(

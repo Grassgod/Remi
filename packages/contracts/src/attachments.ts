@@ -32,6 +32,7 @@ const CHAT_ATTACHMENT_EXTENSIONS = new Set([
 
 /** Artifact types only; source, executable, archive, raw log and config extensions are excluded. */
 export function chatAttachmentValidationError(filename: string, sizeBytes: number): string | null {
+  if (sizeBytes === 0) return `Attachment ${filename} is empty (0 bytes)`;
   if (!Number.isSafeInteger(sizeBytes) || sizeBytes < 0 || sizeBytes > CHAT_ATTACHMENT_MAX_BYTES) {
     return `Attachment ${filename} exceeds the 20MB limit`;
   }

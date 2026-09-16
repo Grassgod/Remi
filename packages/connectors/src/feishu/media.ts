@@ -13,6 +13,9 @@ import { FEISHU_ATTACHMENT_MAX_BYTES } from "./incoming-media.js";
 
 const log = createLogger("feishu-media");
 
+// Larger images remain valid attachments, but must use Feishu's file upload API.
+export const FEISHU_IMAGE_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+
 // ── Image compression ─────────────────────────────────────────
 
 /**
@@ -316,7 +319,8 @@ export interface FeishuAttachmentSendInput {
 /** Upload first, then recheck the delivery lease before creating the message. */
 export async function sendAttachmentFeishu(client: Lark.Client, input: FeishuAttachmentSendInput): Promise<SendMediaResult> {
   input.signal?.throwIfAborted();
-  if (input.contentType.startsWith("image/") && input.contentType !== "image/svg+xml") {
+  if (input.contentType.startsWith("image/") && input.contentType !== "image/svg+xml"
+      && input.buffer.length <= FEISHU_IMAGE_UPLOAD_MAX_BYTES) {
     const { imageKey } = await uploadImageFeishu(client, input.buffer);
     input.signal?.throwIfAborted();
     return sendImageFeishu(client, input.chatId, imageKey, input.replyToMessageId, input.idempotencyKey);
