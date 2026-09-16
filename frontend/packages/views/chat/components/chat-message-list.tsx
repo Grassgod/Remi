@@ -28,7 +28,7 @@ import type { ChatMessage, ChatPendingTask, TaskFailureReason } from "@multiremi
 import type { ChatTimelineItem } from "@multiremi/core/chat";
 import { failureReasonLabel } from "../../agents/components/tabs/task-failure";
 import { toChatTimeline } from "../lib/chat-timeline";
-import { chatMessageMarkdown } from "../lib/message-attachments";
+import { chatMessageMarkdown, isAgentAttachmentMessage } from "../lib/message-attachments";
 import { TaskStatusPill } from "./task-status-pill";
 import { formatElapsedMs } from "../../common/format";
 import { splitTimeline, extractCopyText } from "../lib/copy-text";
@@ -76,8 +76,13 @@ export function ChatMessageList({
   // messages list, AssistantMessage owns its rendering — suppress the live
   // timeline (and pill) to avoid rendering the same content in two places
   // during the invalidate → refetch window.
+  //
+  // Attachments the agent pushes mid-run also land as assistant rows carrying
+  // the running task's id; they are not the reply, so they must not retire the
+  // live timeline or the pill while the task is still working.
   const pendingAlreadyPersisted = !!pendingTaskId && messages.some(
-    (m) => m.role === "assistant" && m.task_id === pendingTaskId,
+    (m) => m.role === "assistant" && m.task_id === pendingTaskId
+      && !isAgentAttachmentMessage(m),
   );
 
   // Live timeline for the in-flight task. useRealtimeSync keeps this cache
@@ -223,7 +228,12 @@ function AssistantMessage({
   isPending: boolean;
 }) {
   const taskId = message.task_id;
-  const canFetchTaskMessages = isTaskMessageTaskId(taskId);
+  // A mid-run attachment push shares its task id with the terminal reply that
+  // follows. The timeline belongs to that reply: drawing it here would both
+  // displace this row's own caption and, once the reply lands, repeat the
+  // whole timeline a second time.
+  const isAttachmentPush = isAgentAttachmentMessage(message);
+  const canFetchTaskMessages = isTaskMessageTaskId(taskId) && !isAttachmentPush;
 
   // Use the shared taskMessagesOptions so this cache entry is the same one
   // seeded by useRealtimeSync during task execution — zero refetch when the
@@ -233,7 +243,9 @@ function AssistantMessage({
     enabled: canFetchTaskMessages,
   });
 
-  const timeline: ChatTimelineItem[] = toChatTimeline(taskMessages ?? []);
+  const timeline: ChatTimelineItem[] = isAttachmentPush
+    ? []
+    : toChatTimeline(taskMessages ?? []);
 
   // Failure bubble path: when the server's FailTask wrote a failure
   // chat_message (failure_reason set), render a destructive bubble with the
