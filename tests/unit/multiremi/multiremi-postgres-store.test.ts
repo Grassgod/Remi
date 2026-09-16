@@ -27,7 +27,7 @@ import { ProjectInstructionsRevisionConflictError } from "@multiremi/store/repos
 import { TaskSteerConflictError, TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
 import { configureRepositoryWikiAutomation, readyArchiveBinding } from "./helpers.js";
 
-import { CHAT_ISSUE_CLASSIFICATION_CASES, classificationChatId, seedLegacyChatIssueClassificationFixture, seedLegacyChatWakeFixture, assertLegacyChatWakeSettlement, assertCancelledLegacyWakesCannotRun, assertLegacyChatWakeRollback, mintLegacyWakeTokens, assertLegacyWakeTokens, seedWakeInvariantMatrix, assertWakeInvariantMatrix } from "./chat-issue-migration-fixture.js";
+import { CHAT_ISSUE_CLASSIFICATION_CASES, classificationChatId, seedLegacyChatIssueClassificationFixture, seedLegacyChatWakeFixture, assertLegacyChatWakeSettlement, assertCancelledLegacyWakesCannotRun, assertLegacyChatWakeRollback, mintLegacyWakeTokens, assertLegacyWakeTokens, seedWakeInvariantMatrix, assertWakeInvariantMatrix, seedLegacyProactiveRetryMatrix, assertLegacyProactiveRetryMatrix } from "./chat-issue-migration-fixture.js";
 
 // ────────────────────────────── translateSqliteToPg ──────────────────────────────
 
@@ -227,6 +227,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     seedLegacyChatIssueClassificationFixture(db);
     seedLegacyChatWakeFixture(db);
     seedWakeInvariantMatrix(db);
+    seedLegacyProactiveRetryMatrix(db);
     const tokens = await mintLegacyWakeTokens(db);
     assertLegacyChatWakeRollback(db);
     await assertLegacyWakeTokens(db, tokens, true);
@@ -300,6 +301,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
         .toEqual(entry.preserve ? { enabled: 0 } : null);
     }
     await assertLegacyWakeTokens(db, tokens);
+    assertLegacyProactiveRetryMatrix(db);
     assertWakeInvariantMatrix(db);
     assertCancelledLegacyWakesCannotRun(db, store);
     // The table is bootstrap schema, even after the one-time migration ledger exists.

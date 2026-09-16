@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
+import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
 import { CHAT_ISSUE_DECOUPLED_FINGERPRINT } from "@multiremi/store/helpers.js";
 import { seedLegacyChatIssueFixture } from "./chat-issue-migration-fixture.js";
@@ -27,7 +28,13 @@ describe("migration invalidates already-running detached private provider lineag
           db!.run("DELETE FROM multiremi_tasks WHERE id <> 'tsk_chat_migration_running'");
           expect(db!.query("SELECT id FROM multiremi_feishu_bot_round_pushes").all()).toEqual([]);
           expect(db!.query("SELECT id FROM multiremi_feishu_bot_human_request_pushes").all()).toEqual([]);
+          const cachedClaim = store.getTaskWithAgent("tsk_chat_migration_running")!;
+          expect(cachedClaim.sessionId).toBeTruthy();
           runMigrations(db!);
+          const wire = daemonTaskClaimResponse(store, cachedClaim);
+          expect(wire.session_id).toBeUndefined();
+          expect(wire.prior_session_id).toBeUndefined();
+          expect(wire.issue).toBeUndefined();
           expect(store.getTask("tsk_chat_migration_running")?.executionFingerprint).toBe(CHAT_ISSUE_DECOUPLED_FINGERPRINT);
           expect(store.getTask("tsk_chat_migration_running")?.workDir).toBe("/work/keep");
           if (terminal === "complete") {

@@ -1207,6 +1207,11 @@ export class FeishuBotRepo {
       [toTaskId, nowIso(), fromTaskId],
     );
     this.ctx.db.run(
+      `UPDATE multiremi_feishu_bot_human_request_pushes
+       SET wake_task_id = ?, updated_at = ? WHERE wake_task_id = ?`,
+      [toTaskId, nowIso(), fromTaskId],
+    );
+    this.ctx.db.run(
       `UPDATE multiremi_feishu_bot_outbound_deliveries
        SET task_id = ?, body = '', status = 'pending', claim_token = NULL, leased_until = NULL,
            external_message_id = CASE WHEN presentation_checkpoint IS NULL THEN external_message_id ELSE NULL END,

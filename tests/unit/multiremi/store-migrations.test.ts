@@ -10,7 +10,7 @@ import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 
 import {
   CHAT_ISSUE_CLASSIFICATION_CASES, classificationChatId, CHAT_ISSUE_MIGRATION,
-  seedLegacyChatIssueClassificationFixture, seedLegacyChatWakeFixture, assertLegacyChatWakeSettlement, assertCancelledLegacyWakesCannotRun, assertLegacyChatWakeRollback, mintLegacyWakeTokens, assertLegacyWakeTokens, seedWakeInvariantMatrix, assertWakeInvariantMatrix, seedLegacyChatIssueFixture,
+  seedLegacyChatIssueClassificationFixture, seedLegacyChatWakeFixture, assertLegacyChatWakeSettlement, assertCancelledLegacyWakesCannotRun, assertLegacyChatWakeRollback, mintLegacyWakeTokens, assertLegacyWakeTokens, seedWakeInvariantMatrix, assertWakeInvariantMatrix, seedLegacyProactiveRetryMatrix, assertLegacyProactiveRetryMatrix, seedLegacyChatIssueFixture,
 } from "./chat-issue-migration-fixture.js";
 
 let db: Database | null = null;
@@ -1482,6 +1482,7 @@ describe("store migrations", () => {
       seedLegacyChatIssueClassificationFixture(database, tableForeignKey);
       seedLegacyChatWakeFixture(database);
     seedWakeInvariantMatrix(database);
+    seedLegacyProactiveRetryMatrix(database);
     const tokens = await mintLegacyWakeTokens(database);
       assertLegacyChatWakeRollback(database);
     await assertLegacyWakeTokens(database, tokens, true);
@@ -1540,6 +1541,7 @@ describe("store migrations", () => {
           .toEqual(entry.preserve ? { enabled: 0 } : null);
       }
       await assertLegacyWakeTokens(database, tokens);
+    assertLegacyProactiveRetryMatrix(database);
     assertWakeInvariantMatrix(database);
     assertCancelledLegacyWakesCannotRun(database);
     });

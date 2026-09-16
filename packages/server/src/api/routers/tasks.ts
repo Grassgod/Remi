@@ -131,12 +131,23 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
   app.get("/api/multiremi/tasks/:id", (c) => {
-    const task = store.getTaskWithAgent(c.req.param("id"));
+    const task = store.getTask(c.req.param("id"));
     if (!task) return c.json({ error: "task not found" }, 404);
     const taskDenied = denyCurrentUserWorkspaceAccess(c, store, task.workspaceId);
     if (taskDenied) return taskDenied;
     if (!canCurrentUserAccessChatTask(c, store, task)) return c.json({ error: "forbidden" }, 403);
-    return c.json({ task: taskPublicResponse(task) });
+    try {
+      return c.json({ task: taskPublicResponse(store.getTaskWithAgent(task.id)!) });
+    } catch (error) {
+      if (!(error instanceof ChatIssueTaskConflictError)) throw error;
+      // Owners can still inspect their cancelled/stale task history. Execution
+      // eligibility must not turn that read into a 500 or load another Issue.
+      return c.json({ task: taskPublicResponse({ ...task,
+        issueId: null, issueSessionId: null, issueSessionGeneration: null, sessionId: null,
+        agent: store.getAgent(task.agentId), issue: null, project: null,
+        projectResources: [], projectDocs: null, projectContexts: [], repos: [],
+      }) });
+    }
   });
   const cancelTaskRoute = async (c: any, compatibility: boolean) => {
     const task = taskFromParam(store, c, "id");

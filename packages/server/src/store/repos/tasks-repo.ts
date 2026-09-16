@@ -8,6 +8,7 @@ import { canonicalJson } from "@multiremi/agent-plugins/import.js";
 import {
   ACTIVE_TASK_STATUSES,
   CHAT_ISSUE_DECOUPLED_FINGERPRINT,
+  chatTaskRetryParentSql,
   cleanOptionalString,
   daemonRuntimeId,
   isActiveTaskStatus,
@@ -765,7 +766,9 @@ export class TasksRepo {
   getTaskChatExecutionKind(task: MultiremiTask): "ordinary" | "topic" {
     if (!task.chatSessionId) return "ordinary";
     const invalid = () => { throw new InvalidChatTaskDestinationError(task.id); };
-    if (this.getTask(task.id)?.status === "cancelled") return invalid();
+    const liveTask = this.getTask(task.id);
+    if (!liveTask || liveTask.status === "cancelled" || liveTask.workspaceId !== task.workspaceId
+      || liveTask.agentId !== task.agentId || liveTask.chatSessionId !== task.chatSessionId) return invalid();
     const chat = this.ctx.chat().getChatSession(task.chatSessionId);
     if (!chat || chat.workspaceId !== task.workspaceId || chat.agentId !== task.agentId) return invalid();
     const bindings = this.ctx.db.query(
@@ -774,12 +777,23 @@ export class TasksRepo {
     const matches = (binding: Row | undefined): boolean => !!binding && !!task.issueId
       && binding.workspace_id === task.workspaceId && binding.agent_id === task.agentId
       && binding.chat_session_id === task.chatSessionId && binding.issue_id === task.issueId;
+    // Historical human-request retries did not move their push row. Follow
+    // structural retry ancestry so absence of a direct marker cannot turn an
+    // inherited Issue prompt into an ordinary private Chat task.
     const pushes = this.ctx.db.query(`
-      SELECT binding_id, workspace_id, issue_id FROM multiremi_feishu_bot_round_pushes
-        WHERE wake_task_id = ? AND delivery_mode = 'proactive'
+      WITH RECURSIVE retry_lineage AS (
+        SELECT id, parent_task_id, workspace_id, agent_id, chat_session_id, task_kind, attempt
+        FROM multiremi_tasks WHERE id = ?
+        UNION ALL
+        SELECT parent.id, parent.parent_task_id, parent.workspace_id, parent.agent_id,
+          parent.chat_session_id, parent.task_kind, parent.attempt
+        FROM multiremi_tasks parent JOIN retry_lineage child ON ${chatTaskRetryParentSql("child", "parent")}
+      )
+      SELECT push.binding_id, push.workspace_id, push.issue_id FROM multiremi_feishu_bot_round_pushes push
+        JOIN retry_lineage lineage ON lineage.id = push.wake_task_id WHERE push.delivery_mode = 'proactive'
       UNION ALL
-      SELECT binding_id, workspace_id, issue_id FROM multiremi_feishu_bot_human_request_pushes
-        WHERE wake_task_id = ?`).all(task.id, task.id) as Row[];
+      SELECT push.binding_id, push.workspace_id, push.issue_id FROM multiremi_feishu_bot_human_request_pushes push
+        JOIN retry_lineage lineage ON lineage.id = push.wake_task_id`).all(task.id) as Row[];
     if (pushes.length) {
       if (task.status === "cancelled" || !task.issueId || pushes.some((push) =>
         push.issue_id !== task.issueId || push.workspace_id !== task.workspaceId

@@ -115,4 +115,62 @@ describe("Chat task destination invariant", () => {
     expect(wire.prompt).toBe("User question");
     expect(f.store.claimTask(f.runtime.id)?.issueId).toBeNull();
   });
+  it("retargets human-request provenance on every automatic retry before any later unbind", () => {
+    const f = setup("human");
+    let currentId = f.task.id;
+    for (let attempt = 2; attempt <= 3; attempt++) {
+      expect(f.store.claimTask(f.runtime.id)?.id).toBe(currentId);
+      f.store.failTask(currentId, { error: "temporary timeout", failureReason: "timeout" });
+      const retry = f.store.listTasks().find((task) => task.parentTaskId === currentId)!;
+      expect(retry.attempt).toBe(attempt);
+      expect(db!.query("SELECT wake_task_id FROM multiremi_feishu_bot_human_request_pushes WHERE id = 'push_destination'").get())
+        .toEqual({ wake_task_id: retry.id });
+      currentId = retry.id;
+    }
+    drifts["NULL binding Issue"](f);
+    expect(() => f.store.getTaskWithAgent(currentId)).toThrow("destination no longer matches");
+    expect(f.store.claimTask(f.runtime.id)).toBeNull();
+    expect(f.store.getTask(currentId)?.status).toBe("cancelled");
+  });
+
+  it("follows historical human retry ancestry across two generations even after queued prompt edits", () => {
+    const f = setup("human");
+    expect(f.store.claimTask(f.runtime.id)?.id).toBe(f.task.id);
+    f.store.failTask(f.task.id, { error: "temporary timeout", failureReason: "timeout" });
+    const firstRetry = f.store.listTasks().find((task) => task.parentTaskId === f.task.id)!;
+    // Reproduce the old version's missing retarget: only the ancestor has a
+    // human-request marker, while both retries inherit its generated prompt.
+    db!.run("UPDATE multiremi_feishu_bot_human_request_pushes SET wake_task_id = ? WHERE id = 'push_destination'", [f.task.id]);
+    expect(f.store.claimTask(f.runtime.id)?.id).toBe(firstRetry.id);
+    f.store.failTask(firstRetry.id, { error: "second timeout", failureReason: "timeout" });
+    const secondRetry = f.store.listTasks().find((task) => task.parentTaskId === firstRetry.id)!;
+    expect(db!.query("SELECT id FROM multiremi_feishu_bot_human_request_pushes WHERE wake_task_id = ?").get(secondRetry.id)).toBeNull();
+    db!.run("UPDATE multiremi_tasks SET prompt = 'Edited generated notification' WHERE id = ?", [secondRetry.id]);
+    const cached = f.store.getTaskWithAgent(secondRetry.id)!;
+    drifts["NULL binding Issue"](f);
+    expect(() => daemonTaskClaimResponse(f.store, cached)).toThrow("destination no longer matches");
+    expect(f.store.claimTask(f.runtime.id)).toBeNull();
+    expect(f.store.getTask(secondRetry.id)?.status).toBe("cancelled");
+    expect(f.store.listChatMessages(f.chat.id)).toHaveLength(0);
+  });
+
+  it("does not treat an explicit user continuation of a notification as its automatic retry", () => {
+    const f = setup("human");
+    f.store.cancelTask(f.task.id);
+    drifts["NULL binding Issue"](f);
+    const user = f.store.sendChatMessage(f.chat.id, { content: "Independent private question", parentTaskId: f.task.id }).task;
+    expect(user.attempt).toBe(1);
+    expect(f.store.claimTask(f.runtime.id)?.id).toBe(user.id);
+    const wire = daemonTaskClaimResponse(f.store, f.store.getTaskWithAgent(user.id)!);
+    expect(wire.issue).toBeUndefined();
+    expect(wire.prompt).toBe("Independent private question");
+  });
+
+  it("rejects a cached task snapshot after the live task was deleted", () => {
+    const f = setup("human");
+    const cached = f.store.getTaskWithAgent(f.task.id)!;
+    db!.run("DELETE FROM multiremi_tasks WHERE id = ?", [f.task.id]);
+    expect(() => daemonTaskClaimResponse(f.store, cached)).toThrow("destination no longer matches");
+  });
+
 });

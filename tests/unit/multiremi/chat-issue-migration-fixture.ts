@@ -448,6 +448,72 @@ export function seedWakeInvariantMatrix(db: SqlDatabase): void {
   }
 }
 
+const LEGACY_RETRY_DESTINATIONS = [
+  { name: "retained", binding: "fcb_chat_matrix_A_A_A", chat: "chat_matrix_A_A_A", matches: true },
+  { name: "rebound", binding: "fcb_chat_matrix_B_A_A", chat: "chat_matrix_B_A_A", matches: false },
+  { name: "unbound", binding: "fcb_chat_matrix_null_A_A", chat: "chat_matrix_null_A_A", matches: false },
+  { name: "missing", binding: "fcb_chat_matrix_missing_A_A", chat: "chat_matrix_missing_A_A", matches: false },
+];
+
+/** Pre-upgrade human retries kept their parent but lost direct push ownership. */
+export function seedLegacyProactiveRetryMatrix(db: SqlDatabase): void {
+  const now = "2026-09-03T00:00:00.000Z";
+  for (const destination of LEGACY_RETRY_DESTINATIONS) {
+    for (const status of ["queued", "dispatched"]) {
+      const stem = `wake_retry_${destination.name}_${status}`;
+      for (const attempt of [1, 2, 3]) {
+        const id = `${stem}_${attempt}`;
+        db.run(`INSERT INTO multiremi_tasks
+          (id, workspace_id, agent_id, issue_id, chat_session_id, prompt, status, attempt,
+           parent_task_id, session_id, created_at, updated_at)
+          VALUES (?, 'local', 'agt_chat_migration', 'iss_matrix_A', ?, ?, ?, ?, ?, 'old-retry-provider', ?, ?)`,
+        [id, destination.chat, attempt === 3 ? "Edited queued proactive prompt" : "PRIVATE_RETRY_SENTINEL",
+          attempt < 3 ? "failed" : status, attempt, attempt > 1 ? `${stem}_${attempt - 1}` : null, now, now]);
+      }
+      db.run(`INSERT INTO multiremi_feishu_bot_human_request_pushes
+        (id, workspace_id, binding_id, issue_id, source_task_id, request_id, wake_task_id, created_at, updated_at)
+        VALUES (?, 'local', ?, 'iss_matrix_A', ?, ?, ?, ?, ?)`,
+      [stem, destination.binding, `${stem}_1`, stem, `${stem}_1`, now, now]);
+      db.run(`INSERT INTO multiremi_feishu_bot_outbound_deliveries
+        (id, workspace_id, binding_id, task_id, chat_id, body, status, available_at, created_at, updated_at)
+        VALUES (?, 'local', ?, ?, ?, 'PRIVATE_RETRY_SENTINEL', 'pending', ?, ?, ?)`,
+      [`out_${stem}`, destination.binding, `${stem}_3`, destination.chat, now, now, now]);
+      db.run(`INSERT INTO multiremi_feishu_bot_outbound_deliveries
+        (id, workspace_id, binding_id, chat_id, body, previous_delivery_id, status, available_at, created_at, updated_at)
+        VALUES (?, 'local', ?, ?, 'ordinary attachment', ?, 'pending', ?, ?, ?)`,
+      [`attachment_${stem}`, destination.binding, destination.chat, `out_${stem}`, now, now, now]);
+      for (const kind of ["fresh_attempt", "own_user_message"]) {
+        const id = `${stem}_${kind}`;
+        db.run(`INSERT INTO multiremi_tasks
+          (id, workspace_id, agent_id, issue_id, chat_session_id, prompt, status, attempt, parent_task_id, created_at, updated_at)
+          VALUES (?, 'local', 'agt_chat_migration', NULL, ?, 'An explicit user continuation', ?, ?, ?, ?, ?)`,
+        [id, destination.chat, status, kind === "fresh_attempt" ? 1 : 4, `${stem}_3`, now, now]);
+        if (kind === "own_user_message") db.run(`INSERT INTO multiremi_chat_messages
+          (id, chat_session_id, task_id, role, body, created_at) VALUES (?, ?, ?, 'user', 'An explicit user continuation', ?)`,
+        [`msg_${id}`, destination.chat, id, now]);
+      }
+    }
+  }
+}
+
+export function assertLegacyProactiveRetryMatrix(db: SqlDatabase): void {
+  for (const destination of LEGACY_RETRY_DESTINATIONS) {
+    for (const status of ["queued", "dispatched"]) {
+      const stem = `wake_retry_${destination.name}_${status}`;
+      expect(db.query("SELECT status FROM multiremi_tasks WHERE id = ?").get(`${stem}_3`).status)
+        .toBe(destination.matches ? status : "cancelled");
+      expect(db.query("SELECT status FROM multiremi_tasks WHERE id = ?").get(`${stem}_2`).status).toBe("failed");
+      expect(Boolean(db.query("SELECT id FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(`out_${stem}`)))
+        .toBe(destination.matches);
+      expect(db.query("SELECT previous_delivery_id FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(`attachment_${stem}`))
+        .toEqual({ previous_delivery_id: destination.matches ? `out_${stem}` : null });
+      for (const kind of ["fresh_attempt", "own_user_message"]) {
+        expect(db.query("SELECT status FROM multiremi_tasks WHERE id = ?").get(`${stem}_${kind}`).status).toBe(status);
+      }
+    }
+  }
+}
+
 export function assertWakeInvariantMatrix(db: SqlDatabase): void {
   for (const entry of WAKE_INVARIANT_CASES) {
     const matched = Boolean(entry.binding && entry.binding === entry.push && entry.binding === entry.task && !entry.identity);

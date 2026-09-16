@@ -1,4 +1,4 @@
-import { CHAT_ISSUE_DECOUPLED_FINGERPRINT } from "@multiremi/store/helpers.js";
+import { CHAT_ISSUE_DECOUPLED_FINGERPRINT, chatTaskRetryParentSql } from "@multiremi/store/helpers.js";
 import { syncRuntimeExecutionGroups } from "@multiremi/store/execution-groups.js";
 import { createHash } from "node:crypto";
 import { attachmentIdsFromText } from "@multiremi/contracts/attachments.js";
@@ -4542,13 +4542,21 @@ function migrateChatIssueOwnership(db: SqlDatabase, chatSchema?: string | null):
     // A destination is valid only when its live binding, push, task and Chat
     // agree on a non-null Issue and on workspace/agent/Chat identity. Missing
     // rows and every NULL/mismatch fail closed; no conversation-shape guesses.
-    const invalidPushes = db.query(`SELECT push.*, task.chat_session_id FROM (
+    const invalidPushes = db.query(`WITH RECURSIVE push_sources AS (
       SELECT workspace_id, binding_id, issue_id, wake_task_id, delivery_mode, 'round' AS source
       FROM multiremi_feishu_bot_round_pushes
       UNION ALL
       SELECT workspace_id, binding_id, issue_id, wake_task_id, 'proactive' AS delivery_mode, 'human' AS source
       FROM multiremi_feishu_bot_human_request_pushes
-    ) push
+    ), push_lineage AS (
+      SELECT * FROM push_sources
+      UNION
+      SELECT push.workspace_id, push.binding_id, push.issue_id, retry.id, push.delivery_mode, push.source
+      FROM push_lineage push
+      JOIN multiremi_tasks parent ON parent.id = push.wake_task_id
+      JOIN multiremi_tasks retry ON ${chatTaskRetryParentSql("retry", "parent")}
+    )
+    SELECT push.*, task.chat_session_id FROM push_lineage push
     LEFT JOIN multiremi_tasks task ON task.id = push.wake_task_id
     WHERE NOT EXISTS (
       SELECT 1 FROM multiremi_feishu_bot_chat_bindings binding
@@ -4564,6 +4572,9 @@ function migrateChatIssueOwnership(db: SqlDatabase, chatSchema?: string | null):
       workspace_id: string; binding_id: string; wake_task_id: string;
       chat_session_id: string | null; delivery_mode: string; source: string;
     }>;
+    // Old human-request retries were not retargeted in their push table. The
+    // immutable retry identity carries source ownership through every attempt;
+    // ordinary user continuations have their own message or a fresh attempt.
     // Capture the set before any mutation clears task.issue_id. Otherwise a
     // valid task could become invalid just because a prior UPDATE changed it.
     const invalidWakeIds = [...new Set(invalidPushes

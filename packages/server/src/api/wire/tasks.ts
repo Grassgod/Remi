@@ -318,6 +318,16 @@ export function daemonTaskClaimResponse(
   task: MultiremiTaskWithAgent,
   triggerMetadata: MultiremiTaskTriggerMetadata | null = null,
 ): Record<string, unknown> {
+  // Migration can invalidate a provider after this claim was hydrated. Resume
+  // identity must come from the current row, never the caller's cached snapshot.
+  if (task.chatSessionId) {
+    const current = store.getTask(task.id);
+    if (current) task = {
+      ...task,
+      sessionId: task.sessionId === current.sessionId ? task.sessionId : null,
+      executionFingerprint: current.executionFingerprint,
+    };
+  }
   if (task.executionFingerprint === CHAT_ISSUE_DECOUPLED_FINGERPRINT) task = { ...task, sessionId: null };
   // Re-check the live destination even when the caller retained an earlier
   // hydrated claim. A changed binding must never receive that old Issue prompt.
