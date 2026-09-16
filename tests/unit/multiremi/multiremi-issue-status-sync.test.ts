@@ -12,6 +12,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
 import { MultiremiStore } from "@multiremi/store.js";
+import { prepareFeishuIssueTopic } from "../../fixtures/multiremi-feishu-topic.js";
 
 let db: Database | null = null;
 
@@ -236,12 +237,10 @@ describe("Issue status derived from task terminal transitions", () => {
 // Issue still displaying 审核中.
 describe("chat-lane tasks are invisible to Issue status", () => {
   function chatTask(store: MultiremiStore, agentId: string, issueId: string) {
-    const chat = store.createChatSession({
+    const chat = prepareFeishuIssueTopic(store, {
       agentId,
       issueId,
-      workspaceId: "local",
-      creatorId: "local",
-      title: "Issue topic",
+      runtimeId: store.getAgent(agentId)!.runtimeId!,
     });
     return store.createTask({
       agentId,

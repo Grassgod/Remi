@@ -2943,68 +2943,6 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
-    "chat.issue.bind": {
-      "command": "remi chat issue bind",
-      "auth": [
-        "human",
-        "task"
-      ],
-      "capability": "chat.issue.bind",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ]
-    },
-    "chat.issue.unbind": {
-      "command": "remi chat issue unbind",
-      "auth": [
-        "human",
-        "task"
-      ],
-      "capability": "chat.issue.unbind",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ]
-    },
-    "chat.issue.updates.get": {
-      "command": "remi chat issue updates get",
-      "auth": [
-        "human"
-      ],
-      "capability": "chat.issue.updates.get",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ]
-    },
-    "chat.issue.updates.enable": {
-      "command": "remi chat issue updates enable",
-      "auth": [
-        "human"
-      ],
-      "capability": "chat.issue.updates.enable",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ]
-    },
-    "chat.issue.updates.disable": {
-      "command": "remi chat issue updates disable",
-      "auth": [
-        "human"
-      ],
-      "capability": "chat.issue.updates.disable",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ]
-    },
     "chat.delete": {
       "command": "remi chat delete",
       "auth": [

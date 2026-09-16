@@ -177,18 +177,13 @@ function createFanoutFixture(feishu = false): FanoutFixture {
       domain: "feishu",
       enabled: true,
     });
-    const inbound = store.submitFeishuBotMessage("local", leaderRuntime.id, {
-      revision: config.revision,
-      externalSessionKey: "oc_fanout:thread:omt_fanout",
-      externalMessageId: "om_fanout_1",
-      replyToMessageId: "om_fanout_1",
-      chatId: "oc_fanout",
-      threadId: "omt_fanout",
-      senderUnionId: "on_fanout_owner",
-      text: "Track the delegated work.",
+    store.reportFeishuBotRuntimeStatus("local", leaderRuntime.id, {
+      appliedRevision: config.revision,
+      state: "online",
     });
-    store.cancelTask(inbound.taskId);
-    chatSessionId = inbound.chatSessionId;
+    store.updateWorkspace("local", {
+      settings: { issueTopics: { enabled: true, chatId: "oc_fanout" } },
+    });
   }
 
   const issue = store.createIssue({
@@ -196,7 +191,17 @@ function createFanoutFixture(feishu = false): FanoutFixture {
     assigneeType: "squad",
     assigneeId: squad.id,
   });
-  if (chatSessionId) store.updateChatSession(chatSessionId, { issueId: issue.id });
+  if (feishu) {
+    expect(store.prepareFeishuIssueTopicWithinTransaction(issue)).toBe(true);
+    const topic = store.claimFeishuBotOutbound("local", leaderRuntime.id)!;
+    store.reportFeishuBotOutbound("local", leaderRuntime.id, topic.id, {
+      claimToken: topic.claimToken,
+      status: "sent",
+      externalMessageId: "om_fanout_topic",
+    });
+    chatSessionId = `chat_issue_topic_${issue.id}`;
+    expect(store.getFeishuIssueIdForChatSession(chatSessionId)).toBe(issue.id);
+  }
   const leaderTask = store.createTask({
     agentId: leader.id,
     issueId: issue.id,

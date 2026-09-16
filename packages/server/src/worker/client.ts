@@ -1474,7 +1474,6 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
       0,
     ),
     boundIssue: normalizeDaemonClaimBoundIssue(raw.bound_issue ?? raw.boundIssue),
-    chatBootstrapTranscript: stringOrNull(raw.chat_bootstrap_transcript ?? raw.chatBootstrapTranscript),
     chatMessageAttachments: Array.isArray(raw.chat_message_attachments)
       ? raw.chat_message_attachments
       : Array.isArray(raw.chatMessageAttachments)

@@ -19,6 +19,7 @@ import {
   type MultiremiDaemonProviderFactory,
 } from "@multiremi/daemon.js";
 import { MultiremiStore } from "@multiremi/store.js";
+import { prepareFeishuIssueTopic } from "../fixtures/multiremi-feishu-topic.js";
 import { MultiremiRepoCache } from "@multiremi/repo-cache.js";
 
 let db: Database | null = null;
@@ -1780,11 +1781,12 @@ describe("Bun Multiremi daemon smoke", () => {
     }
   }, 120_000);
 
-  it("runs Issue-bound Chat replies without a Discussion Session and resumes their Chat context", async () => {
+  it("runs Feishu Issue-topic replies without a Discussion Session and resumes their Chat context", async () => {
     const { store, workDir } = daemonTestBed("multiremi-bound-chat-");
     const agent = store.createAgent({ name: "Remi", provider: "claude" });
     const issue = store.createIssue({ title: "Bound Issue", workspaceId: "local" });
-    const chat = store.createChatSession({ agentId: agent.id, issueId: issue.id, title: "Topic" });
+    const topicRuntime = store.registerRuntime({ id: "rt_topic_setup", name: "Topic setup", provider: "claude", workspaceId: "local" });
+    const chat = prepareFeishuIssueTopic(store, { agentId: agent.id, issueId: issue.id, runtimeId: topicRuntime.id });
     const originalIssueSessions = store.listIssueSessions(issue.id).map(session => session.id);
     const token = await store.createAccessToken({ name: "Chat daemon", type: "daemon", workspaceId: "local" });
     const server = startMultiremiServer({ store, scheduler: null, authToken: "bound-chat-secret", hostname: "127.0.0.1", port: 0 });
@@ -1799,7 +1801,7 @@ describe("Bun Multiremi daemon smoke", () => {
     });
     try {
       for (let turn = 0; turn < 2; turn++) {
-        const task = store.createTask({ agentId: agent.id, chatSessionId: chat.id, holdsWorkspace: false, prompt: "Progress?" });
+        const task = store.sendChatMessage(chat.id, { body: "Progress?" }).task;
         expect(task).toMatchObject({ issueId: issue.id, issueSessionId: null, holdsWorkspace: false });
         await new MultiremiDaemon({ serverUrl: `http://127.0.0.1:${server.port}`, token: token.token,
           runtimeName: "bound-chat", provider: "claude", workspaceId: "local", once: true, daemonPort: 0,

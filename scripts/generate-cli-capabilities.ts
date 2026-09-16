@@ -199,8 +199,6 @@ function mappedResourceCommand(route: string): string | null {
     "GET /api/chat/sessions": "chat.list",
     "POST /api/chat/sessions": "chat.create",
     "POST /api/chat/attachments/send": "chat.attachment.send",
-    "GET /api/chat/sessions/:sessionId/issue-updates": "chat.issue.updates.get",
-    "PUT /api/chat/sessions/:sessionId/issue-updates": "chat.issue.updates.enable",
     "GET /api/chat/pending-tasks": "chat.pending",
     "GET /api/multiremi/chats": "chat.list",
     "POST /api/multiremi/chats": "chat.create",

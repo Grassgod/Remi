@@ -50,6 +50,12 @@ describe("platform prompt template preview", () => {
     expect(preview.delta).not.toContain("## Available Repositories");
     expect(preview.delta).not.toContain("## Output");
 
+    for (const prompt of [preview.bootstrap, preview.delta]) {
+      expect(prompt).toContain("## Bound Issue\nThis Feishu topic is bound to {{issue_key}} — {{issue_title}} (status: {{issue_status}}).");
+      expect(prompt).toContain("remi issue get {{issue_id}} --output json");
+      expect(prompt).not.toContain("## Remi Context");
+    }
+
     expect(preview.bootstrap).not.toContain("Create a PR.");
     expect(preview.delta).not.toContain("Check new comments.");
     expect(preview.sha256.bootstrap).toMatch(/^[a-f0-9]{64}$/);

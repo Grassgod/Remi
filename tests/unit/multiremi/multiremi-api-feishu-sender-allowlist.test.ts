@@ -110,7 +110,7 @@ describe("Feishu sender allowlist Issue authorization", () => {
       senderOpenId: "ou_group_outsider", text: "Group request",
     });
     expect(inbound.senderAllowed).toBe(true);
-    expect(fixture.store.getChatSession(inbound.chatSessionId)?.issueId).toBeTruthy();
+    expect(fixture.store.getFeishuIssueIdForChatSession(inbound.chatSessionId)).toBeTruthy();
   });
 
   it("restores the same task after approval and revokes its Issue APIs and CLI capabilities immediately", async () => {
@@ -139,9 +139,8 @@ describe("Feishu sender allowlist Issue authorization", () => {
     await expectIssueCapabilities(fixture, fixture.headers, true);
     const created = await createIssue(fixture, fixture.headers);
     expect(created.status).toBe(201);
-    expect(await created.json()).toMatchObject({
-      chat_issue_binding: { status: "bound", chat_session_id: fixture.inbound.chatSessionId },
-    });
+    expect(await created.json()).not.toHaveProperty("chat_issue_binding");
+    expect(fixture.store.getFeishuIssueIdForChatSession(fixture.inbound.chatSessionId)).toBeNull();
 
     fixture.allow(false);
     await expectIssueCapabilities(fixture, fixture.headers, false);

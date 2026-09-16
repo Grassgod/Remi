@@ -338,11 +338,9 @@ export interface AgentTask {
   bound_issue_updates?: string[];
   boundIssueUpdatesOmittedCount?: number;
   bound_issue_updates_omitted_count?: number;
-  /** Safe identity of the Issue attached to this Chat, not task ownership. */
+  /** Safe Issue identity from a Feishu topic binding; absent for private Chat. */
   boundIssue?: MultiremiBoundIssue | null;
   bound_issue?: MultiremiBoundIssue | null;
-  chatBootstrapTranscript?: string | null;
-  chat_bootstrap_transcript?: string | null;
   chatMessageAttachments?: unknown[];
   chat_message_attachments?: unknown[];
   autopilotTitle?: string | null;

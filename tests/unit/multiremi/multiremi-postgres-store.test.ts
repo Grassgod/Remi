@@ -20,12 +20,15 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
+import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import { PostgresSyncDatabase, translateSqliteToPg } from "@multiremi/store/db/postgres.js";
 import { daemonRuntimeId, MultiremiStore } from "@multiremi/store.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
 import { ProjectInstructionsRevisionConflictError } from "@multiremi/store/repos/projects-repo.js";
 import { TaskSteerConflictError, TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
 import { configureRepositoryWikiAutomation, readyArchiveBinding } from "./helpers.js";
+
+import { CHAT_ISSUE_CLASSIFICATION_CASES, classificationChatId, seedLegacyChatIssueClassificationFixture, seedLegacyChatWakeFixture, assertLegacyChatWakeSettlement, assertCancelledLegacyWakesCannotRun, assertLegacyChatWakeRollback, mintLegacyWakeTokens, assertLegacyWakeTokens, seedWakeInvariantMatrix, assertWakeInvariantMatrix, seedLegacyProactiveRetryMatrix, assertLegacyProactiveRetryMatrix } from "./chat-issue-migration-fixture.js";
 
 // ────────────────────────────── translateSqliteToPg ──────────────────────────────
 
@@ -218,6 +221,121 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     await admin.unsafe(`DROP DATABASE IF EXISTS ${TEST_DB} WITH (FORCE)`);
     await admin.end();
   });
+
+  // Real PostgreSQL performs repeated full startup migrations plus classification
+  // fixtures and their cleanup; allow for database round trips.
+  it("moves legacy Chat ownership into Feishu topics and is idempotent", async () => {
+    seedLegacyChatIssueClassificationFixture(db);
+    seedLegacyChatWakeFixture(db);
+    seedWakeInvariantMatrix(db);
+    seedLegacyProactiveRetryMatrix(db);
+    const tokens = await mintLegacyWakeTokens(db);
+    assertLegacyChatWakeRollback(db);
+    await assertLegacyWakeTokens(db, tokens, true);
+    runMigrations(db);
+    assertLegacyChatWakeSettlement(db);
+    runMigrations(db);
+    assertLegacyChatWakeSettlement(db);
+    expect((db.query("PRAGMA table_info(multiremi_chat_sessions)").all() as Array<{ name: string }>).map(column => column.name)).not.toContain("issue_id");
+    expect(db.query(`SELECT chat_session_id, issue_id FROM multiremi_feishu_bot_chat_bindings
+      WHERE app_id = 'cli_migration' AND chat_session_id NOT LIKE '%classification_%' ORDER BY chat_session_id`).all()).toEqual([
+      { chat_session_id: "chat_group_migration", issue_id: "iss_chat_migration" },
+      { chat_session_id: "chat_issue_topic_iss_chat_migration", issue_id: "iss_chat_migration" },
+      { chat_session_id: "chat_private_migration", issue_id: null },
+    ]);
+    expect(Number(db.query("SELECT COUNT(*) AS count FROM multiremi_chat_messages WHERE chat_session_id LIKE '%migration%' AND role IN ('user', 'assistant')").get().count)).toBe(8);
+    expect(db.query("SELECT session_id, session_runtime_id, work_dir FROM multiremi_chat_sessions WHERE id = 'chat_web_migration'").get()).toEqual({ session_id: null, session_runtime_id: "rt_legacy", work_dir: "/work/keep" });
+    for (const status of ["queued", "dispatched"]) {
+      expect(db.query("SELECT issue_id, session_id, work_dir, issue_session_id, issue_session_generation FROM multiremi_tasks WHERE id = ?").get(`tsk_chat_migration_${status}`))
+        .toEqual({ issue_id: null, session_id: null, work_dir: "/work/keep", issue_session_id: null, issue_session_generation: null });
+    }
+    expect(db.query("SELECT issue_id, issue_session_id, issue_session_generation FROM multiremi_tasks WHERE id = 'tsk_topic_migration_queued'").get())
+      .toEqual({ issue_id: "iss_chat_migration", issue_session_id: null, issue_session_generation: null });
+    for (const entry of CHAT_ISSUE_CLASSIFICATION_CASES) {
+      const chatId = classificationChatId(entry);
+      const issueId = `iss_classification_${entry.name}`;
+      const recovery = db.query(`SELECT * FROM multiremi_feishu_bot_issue_link_audit
+        WHERE binding_id = ?`).get(`fcb_${chatId}`) as Record<string, string> | null;
+      const synced = entry.synced?.filter((value) => (value.workspace ?? "local") === "local"
+        && (value.sourceWorkspace ?? "local") === "local") ?? [];
+      const p2p = synced.some((value) => value.chatType === "p2p");
+      expect(recovery).toMatchObject({ binding_id: `fcb_${chatId}`, workspace_id: "local", issue_id: issueId,
+        disposition: entry.preserve ? "preserved" : "discarded",
+        classification_version: 2, hit_canonical: Number(entry.canonical ?? false),
+        hit_marker: Number(entry.provenance === "exact"),
+        hit_synced_group: Number(synced.some((value) => value.chatType === "group")),
+        hit_synced_p2p: Number(p2p),
+      });
+      expect(Number.isFinite(Date.parse(recovery!.audited_at))).toBe(true);
+      expect(recovery!.reason).toBe(p2p ? "p2p_evidence"
+        : entry.canonical ? "canonical_topic" : entry.provenance === "exact" ? "creation_provenance"
+          : entry.preserve ? "synced_group" : "unproven_ownership");
+      expect(JSON.parse(recovery!.binding_snapshot)).toMatchObject({
+        id: `fcb_${chatId}`, workspace_id: "local", app_id: "cli_migration",
+        agent_id: "agt_chat_migration", chat_session_id: chatId, issue_id: issueId,
+        chat_id: `oc_${entry.name}`, thread_id: entry.thread || entry.key ? `om_${entry.name}` : null,
+      });
+      expect(recovery!.channel_snapshot ? JSON.parse(recovery!.channel_snapshot) : null).toEqual(entry.noChannel ? null : {
+        id: `nch_agent_chat_${chatId}`, workspace_id: "local", member_id: null, kind: "agent_chat",
+        name: "Legacy updates", enabled: entry.channelEnabled ?? 0, target: JSON.stringify({ chatId }),
+        event_types: '["comment_created"]', min_severity: "warning", created_by: "legacy-owner",
+        created_at: "2026-09-03T00:00:00.000Z", updated_at: "2026-09-03T00:00:00.000Z",
+      });
+      expect(db.query("SELECT issue_id FROM multiremi_feishu_bot_chat_bindings WHERE id = ?").get(`fcb_${chatId}`))
+        .toEqual({ issue_id: entry.preserve ? issueId : null });
+      expect(db.query(`SELECT session_id, session_provider, session_execution_fingerprint, work_dir, session_runtime_id
+        FROM multiremi_chat_sessions WHERE id = ?`).get(chatId)).toEqual({
+        session_id: entry.preserve && !entry.sharedPrivateBinding && entry.name !== "group_without_thread" ? "provider-legacy" : null,
+        session_provider: entry.preserve && !entry.sharedPrivateBinding && entry.name !== "group_without_thread" ? "codex" : null,
+        session_execution_fingerprint: entry.preserve && !entry.sharedPrivateBinding && entry.name !== "group_without_thread" ? "legacy-fingerprint" : null,
+        work_dir: "/work/keep", session_runtime_id: "rt_legacy",
+      });
+      expect(db.query("SELECT issue_id, session_id FROM multiremi_tasks WHERE id = ?").get(`tsk_${chatId}`))
+        .toEqual({ issue_id: entry.preserve ? issueId : null, session_id: entry.preserve && !entry.sharedPrivateBinding && entry.name !== "group_without_thread" ? "provider-task-legacy" : null });
+      expect(db.query("SELECT role, pending_agent_delivery FROM multiremi_chat_messages WHERE chat_session_id = ? ORDER BY role").all(chatId))
+        .toEqual(entry.preserve
+          ? [{ role: "assistant", pending_agent_delivery: 0 }, { role: "system", pending_agent_delivery: 1 }, { role: "user", pending_agent_delivery: 0 }]
+          : [{ role: "assistant", pending_agent_delivery: 0 }, { role: "user", pending_agent_delivery: 0 }]);
+      expect(db.query("SELECT pending_count FROM multiremi_agent_issue_update_state WHERE chat_session_id = ?").get(chatId))
+        .toEqual(entry.preserve ? { pending_count: 1 } : null);
+      expect(db.query("SELECT enabled FROM multiremi_notification_channels WHERE id = ?").get(`nch_agent_chat_${chatId}`))
+        .toEqual(entry.preserve ? { enabled: 0 } : null);
+    }
+    await assertLegacyWakeTokens(db, tokens);
+    assertLegacyProactiveRetryMatrix(db);
+    assertWakeInvariantMatrix(db);
+    assertCancelledLegacyWakesCannotRun(db, store);
+    // The private destination must not reuse the retained group's machine/files.
+    store.registerRuntime({ id: "rt_legacy", name: "Original machine", provider: "codex", workspaceId: "local" });
+    const mixedChatId = "chat_classification_mixed_bindings";
+    const privateTask = store.createTask({ agentId: "agt_chat_migration", chatSessionId: mixedChatId,
+      runtimeId: "rt_legacy", prompt: "Private continuation" });
+    expect(privateTask).toMatchObject({ issueId: null, sessionId: null, runtimeId: null, workDir: null });
+    const privateWire = daemonTaskClaimResponse(store, store.getTaskWithAgent(privateTask.id)!);
+    expect(privateWire.issue).toBeUndefined();
+    expect(privateWire.session_id).toBeUndefined();
+    expect(privateWire.prior_session_id).toBeUndefined();
+    expect(privateWire.runtime_id).toBe("");
+    expect(privateWire.work_dir).toBeUndefined();
+    expect(privateWire.prior_work_dir).toBeUndefined();
+    const groupTask = store.createTask({ agentId: "agt_chat_migration", chatSessionId: mixedChatId,
+      issueId: "iss_classification_mixed_bindings", prompt: "Group continuation" });
+    expect(groupTask).toMatchObject({ runtimeId: "rt_legacy", workDir: "/work/keep" });
+    store.cancelTask(privateTask.id);
+    store.cancelTask(groupTask.id);
+    // The table is bootstrap schema, even after the one-time migration ledger exists.
+    db.exec("DROP TABLE multiremi_feishu_bot_issue_link_audit");
+    runMigrations(db);
+    expect(Number(db.query("SELECT COUNT(*) AS count FROM multiremi_feishu_bot_issue_link_audit").get().count)).toBe(0);
+    db.run("DELETE FROM multiremi_feishu_messages WHERE message_id LIKE 'sync_%'");
+    db.run("DELETE FROM multiremi_feishu_sources WHERE id LIKE 'fsrc_%'");
+    // Keep the shared integration store empty for the remaining test cases.
+    for (const chat of store.listChatSessions("local")) store.deleteChatSession(chat.id);
+    store.deleteRuntime("rt_legacy");
+    store.deleteIssue("iss_chat_migration");
+    for (const entry of CHAT_ISSUE_CLASSIFICATION_CASES) store.deleteIssue(`iss_classification_${entry.name}`);
+    db.run("DELETE FROM multiremi_agents WHERE id = ?", ["agt_chat_migration"]);
+  }, 30_000);
 
   it("fences Wiki cleanup leases and persists per-path progress across connections", () => {
     const otherDb = new PostgresSyncDatabase(pgDatabaseUrl(TEST_DB));

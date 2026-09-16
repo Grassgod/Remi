@@ -1802,6 +1802,10 @@ runMigrations(this.db);
     return this.feishuBot.submitMessage(workspaceId, runtimeId, input);
   }
 
+  getFeishuIssueIdForChatSession(chatSessionId: string): string | null {
+    return this.feishuBot.getIssueIdForChatSession(chatSessionId);
+  }
+
   assertFeishuBotInboundAttachmentScope(...args: Parameters<FeishuBotRepo["assertInboundAttachmentScope"]>) {
     return this.feishuBot.assertInboundAttachmentScope(...args);
   }
@@ -3527,6 +3531,9 @@ runMigrations(this.db);
 
   buildTaskSessionProjection(taskId: string): MultiremiSessionProjection | null {
     const task = this.tasks.getTask(taskId);
+    if (task?.chatSessionId && !this.feishuBot.getIssueIdForChatSession(task.chatSessionId)) {
+      return this.chat.buildTaskSessionProjection(taskId);
+    }
     if (task?.issueSessionId) return this.sessions.buildTaskSessionProjection(taskId);
     if (task?.chatSessionId) return this.chat.buildTaskSessionProjection(taskId);
     return null;
@@ -4155,13 +4162,6 @@ runMigrations(this.db);
     return this.chat.getChatSession(id);
   }
 
-  bindChatSessionIssueIfUnbound(chatSessionId: string, issueId: string): {
-    session: MultiremiChatSession;
-    bound: boolean;
-  } {
-    return this.chat.bindChatSessionIssueIfUnbound(chatSessionId, issueId);
-  }
-
   updateChatSession(id: string, input: UpdateChatSessionInput): MultiremiChatSession {
     return this.chat.updateChatSession(id, input);
   }
@@ -4285,6 +4285,10 @@ runMigrations(this.db);
 
   getTaskByRef(ref: string, input: { issueId?: string | null } = {}): MultiremiTask | null {
     return this.tasks.getTaskByRef(ref, input);
+  }
+
+  getTaskChatExecutionKind(task: MultiremiTask): "ordinary" | "topic" {
+    return this.tasks.getTaskChatExecutionKind(task);
   }
 
   getTaskWithAgent(id: string): MultiremiTaskWithAgent | null {

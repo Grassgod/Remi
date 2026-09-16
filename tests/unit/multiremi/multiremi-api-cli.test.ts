@@ -77,7 +77,6 @@ describe("Multiremi API - CLI context and capabilities", () => {
     expect(taskContext.current).toMatchObject({
       task: { id: fixture.taskId, status: "queued" },
       issue: { id: fixture.issueId, title: "CLI context issue" },
-      bound_issue: null,
       project: { id: fixture.projectId, name: "CLI context project" },
       agent: { id: fixture.agentId, name: "CLI Agent" },
     });
@@ -105,15 +104,14 @@ describe("Multiremi API - CLI context and capabilities", () => {
     expect(shareContext.catalog).toEqual({ projects: [], repositories: [], next_cursor: null });
   });
 
-  it("exposes a chat session's bound Issue without changing the task-owned Issue", async () => {
+  it("exposes independent Chat context without an Issue binding", async () => {
     const fixture = await cliFixture();
     const chat = fixture.store.createChatSession({
       agentId: fixture.agentId,
       workspaceId: "local",
-      title: "Bound Issue topic",
+      title: "Independent conversation",
     });
     const chatTask = fixture.store.sendChatMessage(chat.id, { body: "How is this going?" }).task;
-    fixture.store.updateChatSession(chat.id, { issueId: fixture.issueId });
     const taskCredential = await fixture.store.createTaskAccessToken(chatTask, "local");
 
     const response = await fixture.app.request("/api/cli/context", {
@@ -130,15 +128,50 @@ describe("Multiremi API - CLI context and capabilities", () => {
       },
       chat: {
         id: chat.id,
-        issue_id: fixture.issueId,
       },
       issue: null,
-      bound_issue: {
-        id: fixture.issueId,
-        key: fixture.store.getIssue(fixture.issueId)!.key,
-        title: "CLI context issue",
-      },
+      project: null,
     });
+    expect(body.current).not.toHaveProperty("bound_issue");
+    expect(body.current.chat).not.toHaveProperty("issue_id");
+  });
+
+  it("rejects removed Chat binding fields and no longer exposes subscription endpoints", async () => {
+    const fixture = await cliFixture();
+    const headers = { ...bearer(fixture.human), "Content-Type": "application/json" };
+    const chat = fixture.store.createChatSession({ agentId: fixture.agentId, creatorId: "local" });
+
+    for (const prefix of ["/api/chat/sessions", "/api/multiremi/chats"]) {
+      for (const field of ["issue_id", "issueId"]) {
+        const create = await fixture.app.request(prefix, {
+          method: "POST", headers,
+          body: JSON.stringify({ agent_id: fixture.agentId, [field]: fixture.issueId }),
+        });
+        expect(create.status).toBe(400);
+        expect((await create.json()).error).toContain("do not support Issue binding");
+        const update = await fixture.app.request(`${prefix}/${chat.id}`, {
+          method: "PATCH", headers,
+          body: JSON.stringify({ [field]: fixture.issueId }),
+        });
+        expect(update.status).toBe(400);
+      }
+      const response = await fixture.app.request(`${prefix}/${chat.id}`, { headers });
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      const session = body.session ?? body;
+      expect(session).not.toHaveProperty("issue_id");
+      expect(session).not.toHaveProperty("issueId");
+    }
+    for (const method of ["GET", "PUT"]) {
+      const response = await fixture.app.request(`/api/chat/sessions/${chat.id}/issue-updates`, {
+        method, headers,
+        ...(method === "PUT" ? { body: JSON.stringify({ enabled: true }) } : {}),
+      });
+      expect(response.status).toBe(404);
+    }
+    const capabilities = await fixture.app.request("/api/cli/capabilities", { headers });
+    expect(capabilities.status).toBe(200);
+    expect(JSON.stringify(await capabilities.json())).not.toContain("chat.issue");
   });
 
   it("gives task tokens owner parity inside their workspace while hard-denying identity and lifecycle operations", async () => {

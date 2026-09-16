@@ -232,7 +232,7 @@ describe("Feishu Issue topics", () => {
 
     expect(store.prepareFeishuIssueTopicWithinTransaction(issue)).toBe(false);
     expect(store.prepareFeishuIssueTopicWithinTransaction(issue)).toBe(false);
-    expect(store.listChatSessions("local").filter((chat) => chat.issueId === issue.id)).toHaveLength(1);
+    expect(store.listChatSessions("local").filter((chat) => store.getFeishuIssueIdForChatSession(chat.id) === issue.id)).toHaveLength(1);
     expect(db!.query(
       "SELECT COUNT(*) AS count FROM multiremi_feishu_bot_outbound_deliveries WHERE workspace_id = 'local'",
     ).get()).toEqual({ count: 1 });
@@ -252,10 +252,11 @@ describe("Feishu Issue topics", () => {
     })).toBe(true);
 
     const binding = db!.query(
-      `SELECT external_session_key, thread_id, reply_to_message_id, chat_session_id
+      `SELECT issue_id, external_session_key, thread_id, reply_to_message_id, chat_session_id
        FROM multiremi_feishu_bot_chat_bindings WHERE workspace_id = 'local'`,
     ).get() as Record<string, unknown>;
     expect(binding).toMatchObject({
+      issue_id: issue.id,
       external_session_key: "oc_issue_topics:thread:om_issue_root",
       thread_id: "om_issue_root",
       reply_to_message_id: "om_issue_root",
@@ -271,7 +272,11 @@ describe("Feishu Issue topics", () => {
       text: "Continue this Issue.",
     });
     expect(inbound.chatSessionId).toBe(String(binding.chat_session_id));
-    expect(store.getChatSession(inbound.chatSessionId)?.issueId).toBe(issue.id);
+    expect(store.getFeishuIssueIdForChatSession(inbound.chatSessionId)).toBe(issue.id);
+    expect(store.getChatSession(inbound.chatSessionId)).not.toHaveProperty("issueId");
+    store.createIssueComment(issue.id, { authorType: "member", authorId: "local", body: "Verify topic update delivery" });
+    expect(store.flushDueAgentIssueUpdates(new Date(Date.now() + 60_000))).toEqual({ delivered: 1, dropped: 0 });
+    expect(store.listChatMessages(inbound.chatSessionId).at(-1)?.body).toContain("Verify topic update delivery");
   });
 
   it("wakes the bound topic Agent when an Issue task asks a human", () => {
@@ -334,13 +339,8 @@ describe("Feishu Issue topics", () => {
     });
     expect(response.status).toBe(201);
     const body = await response.json();
-    expect(body.chat_issue_binding).toEqual({
-      status: "independent",
-      chat_session_id: inbound.chatSessionId,
-      issue_id: body.id,
-      existing_issue_id: null,
-    });
-    expect(store.getChatSession(inbound.chatSessionId)?.issueId).toBeNull();
+    expect(body).not.toHaveProperty("chat_issue_binding");
+    expect(store.getFeishuIssueIdForChatSession(inbound.chatSessionId)).toBeNull();
 
     const delivery = store.claimFeishuBotOutbound("local", "rt_bot");
     expect(delivery).toMatchObject({
@@ -349,7 +349,7 @@ describe("Feishu Issue topics", () => {
       body: expect.stringContaining("Created from a private chat"),
       bodyOrigin: "issue",
     });
-    expect(store.listChatSessions("local").filter((chat) => chat.issueId === body.id)).toHaveLength(1);
+    expect(store.listChatSessions("local").filter((chat) => store.getFeishuIssueIdForChatSession(chat.id) === body.id)).toHaveLength(1);
   });
 
   it("turns a new configured group topic into one Issue and reuses it for replies", () => {
@@ -371,7 +371,7 @@ describe("Feishu Issue topics", () => {
     });
 
     const chat = store.getChatSession(first.chatSessionId)!;
-    const issue = store.getIssue(chat.issueId!)!;
+    const issue = store.getIssue(store.getFeishuIssueIdForChatSession(chat.id)!)!;
     expect(issue).toMatchObject({
       title: "Implement natural Issue creation from this group topic.",
       status: "in_progress",
@@ -422,7 +422,7 @@ describe("Feishu Issue topics", () => {
     const first = send("ou_first", "om_first");
     const second = send("ou_second", "om_second");
     expect(second.chatSessionId).toBe(first.chatSessionId);
-    expect(store.getChatSession(first.chatSessionId)?.issueId).toBeNull();
+    expect(store.getFeishuIssueIdForChatSession(first.chatSessionId)).toBeNull();
     const senders = store.listFeishuBotSenders("local");
     store.setFeishuBotSenderAllowed("local", senders.find(s => s.open_id === "ou_second")!.id, true, "local");
     send("ou_second", "om_partial_approval");
@@ -434,11 +434,11 @@ describe("Feishu Issue topics", () => {
     expect(store.listIssues({ workspaceId: "local" })).toHaveLength(0);
     store.updateAgent(agentId, { issueCreationRequiresProposal: false });
     send("ou_second", "om_approved");
-    expect(store.getChatSession(first.chatSessionId)?.issueId).toBeTruthy();
+    expect(store.getFeishuIssueIdForChatSession(first.chatSessionId)).toBeTruthy();
     expect(store.listIssues({ workspaceId: "local" })).toHaveLength(1);
   });
 
-  it("skips a second topic when the Issue was created from a Feishu Chat task", async () => {
+  it("creates a dedicated Issue topic without binding the source Feishu conversation", async () => {
     const { store, revision } = scaffold();
     configureTopics(store);
     const inbound = store.submitFeishuBotMessage("local", "rt_bot", {
@@ -466,10 +466,10 @@ describe("Feishu Issue topics", () => {
     });
     expect(response.status).toBe(201);
     const body = await response.json();
-    expect(body.chat_issue_binding.status).toBe("bound");
-    expect(store.getChatSession(inbound.chatSessionId)?.issueId).toBe(body.id);
-    expect(store.claimFeishuBotOutbound("local", "rt_bot")).toBeNull();
-    expect(store.listChatSessions("local").filter((chat) => chat.issueId === body.id)).toHaveLength(1);
+    expect(body).not.toHaveProperty("chat_issue_binding");
+    expect(store.getFeishuIssueIdForChatSession(inbound.chatSessionId)).toBeNull();
+    expect(store.claimFeishuBotOutbound("local", "rt_bot")).toMatchObject({ chatId: "oc_issue_topics", bodyOrigin: "issue" });
+    expect(store.listChatSessions("local").filter((chat) => store.getFeishuIssueIdForChatSession(chat.id) === body.id)).toHaveLength(1);
   });
 
   it("does not affect Issue creation when topics are unconfigured or the bot is offline", async () => {

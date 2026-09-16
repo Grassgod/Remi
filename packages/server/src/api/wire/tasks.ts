@@ -1,6 +1,7 @@
 // Wire serializers for the tasks domain, moved verbatim out of api.ts.
 // Go-compat (`*Compatibility*`) and native shapers sit side by side on purpose:
 // the two route prefixes are intentionally divergent and must stay diffable.
+import { CHAT_ISSUE_DECOUPLED_FINGERPRINT } from "@multiremi/store/helpers.js";
 import { taskExecutionScope } from "@multiremi/contracts/task-execution.js";
 import type {
   MultiremiChatMessage,
@@ -317,6 +318,26 @@ export function daemonTaskClaimResponse(
   task: MultiremiTaskWithAgent,
   triggerMetadata: MultiremiTaskTriggerMetadata | null = null,
 ): Record<string, unknown> {
+  // Migration can invalidate a provider after this claim was hydrated. Resume
+  // identity must come from the current row, never the caller's cached snapshot.
+  if (task.chatSessionId) {
+    const current = store.getTask(task.id);
+    if (current) task = {
+      ...task,
+      sessionId: task.sessionId === current.sessionId ? task.sessionId : null,
+      executionFingerprint: current.executionFingerprint,
+    };
+  }
+  if (task.executionFingerprint === CHAT_ISSUE_DECOUPLED_FINGERPRINT) task = { ...task, sessionId: null };
+  // Re-check the live destination even when the caller retained an earlier
+  // hydrated claim. A changed binding must never receive that old Issue prompt.
+  if (task.chatSessionId && store.getTaskChatExecutionKind(task) === "ordinary") {
+    task = {
+      ...task, issueId: null, issueSessionId: null, issueSessionGeneration: null,
+      sessionId: task.issueId || task.issueSessionId || task.executionFingerprint === CHAT_ISSUE_DECOUPLED_FINGERPRINT ? null : task.sessionId,
+      issue: null, project: null, projectResources: [], projectDocs: null, projectContexts: [], repos: [],
+    };
+  }
   const response = daemonTaskWireResponse(task, triggerMetadata);
   const defaultBranchFor = workspaceDefaultBranchResolver(store.getWorkspace(task.workspaceId)?.repos ?? []);
   if (task.knowledgeWarnings?.length) response.knowledge_warnings = task.knowledgeWarnings;
@@ -517,10 +538,10 @@ function appendDaemonClaimBoundIssue(
   task: MultiremiTaskWithAgent,
   response: Record<string, unknown>,
 ): void {
-  if (!task.chatSessionId) return;
+  if (!task.chatSessionId || !task.issueId) return;
   try {
-    const chat = store.getChatSession(task.chatSessionId);
-    const issueId = task.issueId ?? chat?.issueId ?? null;
+    const issueId = store.getFeishuIssueIdForChatSession(task.chatSessionId);
+    if (issueId !== task.issueId) return;
     const issue = issueId ? store.getIssue(issueId) : null;
     if (!issue) return;
     response.bound_issue = {
@@ -580,7 +601,7 @@ function appendDaemonClaimBoundIssueUpdates(
   task: MultiremiTaskWithAgent,
   response: Record<string, unknown>,
 ): void {
-  if (!task.chatSessionId) return;
+  if (!task.chatSessionId || !response.bound_issue) return;
   try {
     const pending = store.preparePendingAgentIssueUpdatesForTask(task.chatSessionId, task.id);
     if (pending.messages.length) {

@@ -89,7 +89,7 @@ describe("Multiremi API — issue endpoints", () => {
     expect(store.getTask(task.id)?.status).toBe(task.status);
   });
 
-  it("auto-binds an Issue created by a Chat task without replacing an existing binding", async () => {
+  it("keeps Chat independent when its task creates Issues", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Chat issue creator", provider: "codex" });
@@ -114,27 +114,21 @@ describe("Multiremi API — issue endpoints", () => {
     const first = await createFromChat("Created from Chat");
     expect(first.status).toBe(201);
     const firstBody = await first.json();
-    expect(firstBody.chat_issue_binding).toEqual({
-      status: "bound",
-      chat_session_id: chat.id,
-      issue_id: firstBody.id,
-      existing_issue_id: null,
-    });
+    expect(firstBody.chat_issue_binding).toBeUndefined();
     expect(firstBody.chat_issue_binding_hint).toBeUndefined();
-    expect(store.getChatSession(chat.id)?.issueId).toBe(firstBody.id);
-    expect(store.getAgentIssueUpdateSubscription(chat.id).enabled).toBe(true);
+    expect(store.getChatSession(chat.id)).not.toHaveProperty("issueId");
+    expect(store.getAgentIssueUpdateSubscription(chat.id).enabled).toBe(false);
 
     const second = await createFromChat("Second Issue from the same Chat task");
     expect(second.status).toBe(201);
     const secondBody = await second.json();
-    expect(secondBody.chat_issue_binding).toEqual({
-      status: "preserved",
-      chat_session_id: chat.id,
-      issue_id: secondBody.id,
-      existing_issue_id: firstBody.id,
-    });
-    expect(secondBody.chat_issue_binding_hint).toContain(`${firstBody.identifier}; ${secondBody.identifier} was not auto-bound`);
-    expect(store.getChatSession(chat.id)?.issueId).toBe(firstBody.id);
+    expect(secondBody.id).not.toBe(firstBody.id);
+    expect(secondBody.chat_issue_binding).toBeUndefined();
+    expect(secondBody.chat_issue_binding_hint).toBeUndefined();
+    store.updateIssue(firstBody.id, { title: "Changed independently" });
+    const followup = store.sendChatMessage(chat.id, { body: "Continue our conversation" });
+    expect(followup.task.issueId).toBeNull();
+    expect(store.listChatMessages(chat.id).map((message) => message.role)).toEqual(["user", "user"]);
 
     const issueSession = store.getOrCreateDefaultIssueSession(firstBody.id);
     const issueTask = store.createSessionTask(issueSession.id, {
@@ -152,7 +146,7 @@ describe("Multiremi API — issue endpoints", () => {
     });
     expect(issueLaneCreate.status).toBe(201);
     expect((await issueLaneCreate.json()).chat_issue_binding).toBeUndefined();
-    expect(store.getChatSession(chat.id)?.issueId).toBe(firstBody.id);
+    expect(store.getChatSession(chat.id)).not.toHaveProperty("issueId");
   });
 
   it("configures issue archiving and exposes archived list and restore APIs", async () => {
