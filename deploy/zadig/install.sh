@@ -129,9 +129,12 @@ create_ppe_slots() {
       multiremi.io/purpose=ppe \
       "multiremi.io/slot=${index}" \
       --overwrite
+    # limits.memory must cover both build Jobs at once (6Gi API + 12Gi Web)
+    # alongside the deployed stack; at 16Gi the Web build could not be given
+    # the headroom it needs and was OOM-killed instead. See MUL-303.
     kubectl create resourcequota multiremi-ppe-budget \
       --namespace "${namespace}" \
-      --hard=requests.cpu=6,requests.memory=8Gi,limits.cpu=12,limits.memory=16Gi,pods=30,persistentvolumeclaims=10,requests.storage=40Gi \
+      --hard=requests.cpu=6,requests.memory=12Gi,limits.cpu=12,limits.memory=32Gi,pods=30,persistentvolumeclaims=10,requests.storage=40Gi \
       --dry-run=client -o yaml | kubectl apply -f -
     kubectl apply --namespace "${namespace}" -f - <<'YAML'
 apiVersion: v1

@@ -15,6 +15,8 @@ const skill = readFileSync(resolve(deployRoot, "skill/multiremi-ppe-qa/SKILL.md"
 const webQaSkill = readFileSync(resolve(deployRoot, "skill/multiremi-web-qa/SKILL.md"), "utf8");
 const workflow = readFileSync(resolve(deployRoot, "ppe/workflow.sh"), "utf8");
 const collector = readFileSync(resolve(deployRoot, "ppe/gc.sh"), "utf8");
+const dockerfileWeb = readFileSync(resolve(repoRoot, "deploy/docker/Dockerfile.web"), "utf8");
+const nextConfig = readFileSync(resolve(repoRoot, "frontend/apps/web/next.config.ts"), "utf8");
 
 describe("Zadig PPE deployment", () => {
   test("pins external dependencies and keeps data on /data00", () => {
@@ -127,6 +129,45 @@ describe("Zadig PPE deployment", () => {
     expect(collector).toContain('delete configmap "${lease_name}"');
     expect(verifier).toContain("PPE GC schedule");
     expect(remover).toContain("delete cronjob multiremi-ppe-gc");
+  });
+
+  test("sizes the Web image build so it cannot be OOM-killed (MUL-303)", () => {
+    // Next sizes its worker pool from the host CPU count, so the build must be
+    // told how many workers the container can actually afford.
+    expect(dockerfileWeb).toContain("ARG NEXT_BUILD_CPUS");
+    expect(dockerfileWeb).toContain("ENV NEXT_BUILD_CPUS=$NEXT_BUILD_CPUS");
+    expect(nextConfig).toContain("NEXT_BUILD_CPUS");
+    expect(nextConfig).toContain("{ cpus }");
+    expect(workflow).toContain("NEXT_BUILD_CPUS=${PPE_WEB_BUILD_CPUS}");
+    expect(workflow).toContain("PPE_WEB_BUILD_MEMORY");
+    expect(workflow).toContain("memory: ${memory_limit}");
+    expect(workflow).not.toContain("memory: 6Gi");
+    // Both build Jobs plus the deployed stack have to fit the namespace quota.
+    expect(installer).toContain("limits.memory=32Gi");
+  });
+
+  test("surfaces a failed build instead of waiting out the timeout (MUL-303)", () => {
+    // kubectl wait --for=condition=complete never returns for a Failed Job.
+    expect(workflow).not.toContain("wait --for=condition=complete");
+    expect(workflow).toContain("build_job_condition");
+    expect(workflow).toContain("Failed; then");
+    expect(workflow).toContain("build_job_progress");
+    expect(workflow).toContain("PPE_BUILD_TIMEOUT_SECONDS");
+  });
+
+  test("releases the slot lock on cancellation rather than after a fixed TTL (MUL-303)", () => {
+    expect(versions).toContain('PPE_WORKFLOW_LOCK_TTL_MINUTES="10"');
+    expect(workflow).toContain("start_lock_heartbeat");
+    expect(workflow).toContain("stop_lock_heartbeat");
+    expect(workflow).toContain("PPE_WORKFLOW_LOCK_HEARTBEAT_SECONDS");
+    expect(workflow).toContain("workflow_lock_is_own_task");
+    expect(workflow).toContain("abandon_failed_deploy");
+    expect(workflow).toContain("trap 'exit 143' INT TERM");
+    // The collector must reap stale locks even while the lease is still valid.
+    expect(collector).toMatch(/Reap stale workflow locks before anything else/u);
+    expect(collector.indexOf('lock_is_active "${namespace}" || true')).toBeLessThan(
+      collector.indexOf("expires_epoch > now_epoch"),
+    );
   });
 
   test("keeps PPE browser auth isolated from production", () => {

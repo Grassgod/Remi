@@ -67,6 +67,16 @@ delete_managed_resources() {
     -l "${managed_label}" --ignore-not-found --wait=true
 }
 
+# Reap stale workflow locks before anything else. This used to live behind the
+# lease-expiry check below, so a lock left by a cancelled deploy was never
+# collected: the same deploy had just pushed expires_at 24h out, and a slot
+# whose lease was already gone was skipped outright. The only way back was for
+# the next workflow to declare the lock stale itself. See MUL-303.
+for slot in $(seq 1 "${PPE_MAX_ENVIRONMENTS}"); do
+  namespace="${PPE_NAMESPACE_PREFIX}${slot}"
+  lock_is_active "${namespace}" || true
+done
+
 now_epoch="$(date -u +%s)"
 for slot in $(seq 1 "${PPE_MAX_ENVIRONMENTS}"); do
   namespace="${PPE_NAMESPACE_PREFIX}${slot}"

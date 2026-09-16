@@ -27,6 +27,17 @@ esac
 [[ "${PPE_WORKFLOW_LOCK_TTL_MINUTES}" =~ ^[0-9]+$ ]] || { printf 'invalid workflow lock TTL\n' >&2; exit 64; }
 [[ "${PPE_GC_LOCK_TTL_MINUTES}" =~ ^[0-9]+$ ]] || { printf 'invalid GC lock TTL\n' >&2; exit 64; }
 
+PPE_WORKFLOW_LOCK_HEARTBEAT_SECONDS="${PPE_WORKFLOW_LOCK_HEARTBEAT_SECONDS:-30}"
+PPE_BUILD_TIMEOUT_SECONDS="${PPE_BUILD_TIMEOUT_SECONDS:-1500}"
+PPE_BUILD_PROGRESS_SECONDS="${PPE_BUILD_PROGRESS_SECONDS:-20}"
+# The API image builds comfortably inside 6Gi. The Web image runs a Next
+# production build, whose worker pool and prerender phase need substantially
+# more headroom; NEXT_BUILD_CPUS below keeps that pool from scaling with the
+# builder's 64 visible cores. Both fit the namespace ResourceQuota. See MUL-303.
+PPE_API_BUILD_MEMORY="${PPE_API_BUILD_MEMORY:-6Gi}"
+PPE_WEB_BUILD_MEMORY="${PPE_WEB_BUILD_MEMORY:-12Gi}"
+PPE_WEB_BUILD_CPUS="${PPE_WEB_BUILD_CPUS:-4}"
+
 managed_label="multiremi.io/managed=true"
 lease_name="ppe-lease"
 workflow_lock_name="ppe-workflow-lock"
@@ -41,6 +52,8 @@ expires_at=""
 lease_created=0
 workflow_lock_acquired=0
 allocation_lock_acquired=0
+heartbeat_pid=""
+deploy_succeeded=0
 kubectl_bin="${PWD}/.ppe-bin/kubectl"
 mkdir -p "${PWD}/.ppe-bin"
 
@@ -48,10 +61,49 @@ curl -fsSL "https://dl.k8s.io/release/${PPE_KUBECTL_VERSION}/bin/linux/amd64/kub
 printf '%s  %s\n' "${PPE_KUBECTL_SHA256}" "${kubectl_bin}" | sha256sum -c -
 chmod 0755 "${kubectl_bin}"
 
+stop_lock_heartbeat() {
+  if [[ -n "${heartbeat_pid}" ]]; then
+    kill "${heartbeat_pid}" >/dev/null 2>&1 || true
+    wait "${heartbeat_pid}" 2>/dev/null || true
+    heartbeat_pid=""
+  fi
+}
+
+# Refresh the lock's started_at so staleness measures "the workflow stopped
+# reporting", not "the workflow started long ago". A cancelled or crashed task
+# stops the heartbeat, and the lock becomes reclaimable within the TTL instead
+# of pinning the slot for the full TTL of a healthy run. See MUL-303.
+start_lock_heartbeat() {
+  [[ "${workflow_lock_acquired}" == "1" && -n "${namespace}" ]] || return 0
+  (
+    trap - EXIT INT TERM
+    while sleep "${PPE_WORKFLOW_LOCK_HEARTBEAT_SECONDS}"; do
+      "${kubectl_bin}" -n "${namespace}" patch configmap "${workflow_lock_name}" --type merge \
+        -p "{\"data\":{\"started_at\":\"$(date -u +%FT%TZ)\"}}" >/dev/null 2>&1 || exit 0
+    done
+  ) &
+  heartbeat_pid=$!
+}
+
 cleanup_lock() {
+  stop_lock_heartbeat
   if [[ "${workflow_lock_acquired}" == "1" && -n "${namespace}" ]]; then
     "${kubectl_bin}" -n "${namespace}" delete configmap "${workflow_lock_name}" --ignore-not-found >/dev/null 2>&1 || true
   fi
+}
+
+# A deploy stamps state=provisioning and expires_at=+24h before it builds
+# anything. Without this, a failed or cancelled deploy holds a slot that has no
+# usable environment in it until that 24h elapses. Expire the lease instead so
+# the 5-minute collector reclaims the slot. See MUL-303.
+abandon_failed_deploy() {
+  [[ "${PPE_ACTION}" == "deploy" && "${deploy_succeeded}" == "0" && -n "${namespace}" ]] || return 0
+  [[ -n "${lease_id}" && "$(lease_field "${PPE_SLOT}" lease_id)" == "${lease_id}" ]] || return 0
+  "${kubectl_bin}" -n "${namespace}" delete job -l "multiremi.io/component=build" \
+    --ignore-not-found --wait=false >/dev/null 2>&1 || true
+  "${kubectl_bin}" -n "${namespace}" patch configmap "${lease_name}" --type merge \
+    -p "{\"data\":{\"state\":\"failed\",\"expires_at\":\"$(date -u +%FT%TZ)\"}}" >/dev/null 2>&1 || true
+  printf 'Deploy did not complete; PPE slot %s is marked failed and left to the TTL collector\n' "${PPE_SLOT}" >&2
 }
 
 cleanup_allocation_lock() {
@@ -68,10 +120,15 @@ cleanup_allocation_lock() {
 }
 
 cleanup() {
+  abandon_failed_deploy
   cleanup_lock
   cleanup_allocation_lock
 }
+# Zadig cancels a task by tearing the executor pod down. Handle the signals it
+# can deliver so the lock is released promptly; the heartbeat above is what
+# covers the case where the process is killed outright.
 trap cleanup EXIT
+trap 'exit 143' INT TERM
 
 slot_namespace() { printf 'multiremi-ppe-%s' "$1"; }
 slot_url() { printf 'http://%s:%s' "${PPE_ACCESS_HOST}" "$((32100 + $1))"; }
@@ -106,6 +163,18 @@ workflow_lock_is_stale() {
   started_epoch="$(date -u -d "${started_at}" +%s 2>/dev/null || true)"
   now_epoch="$(date -u +%s)"
   [[ -z "${started_epoch}" ]] || (( now_epoch - started_epoch > PPE_WORKFLOW_LOCK_TTL_MINUTES * 60 ))
+}
+
+# Retrying a cancelled Zadig task re-enters this script under the same TASK_ID.
+# Zadig never runs two attempts of one task at once, so a lock stamped with our
+# own task id belongs to an attempt that is already dead: take it over instead
+# of deadlocking the retry against itself. See MUL-303.
+workflow_lock_is_own_task() {
+  local slot="$1" holder
+  [[ -n "${TASK_ID:-}" ]] || return 1
+  holder="$("${kubectl_bin}" -n "$(slot_namespace "${slot}")" get configmap "${workflow_lock_name}" \
+    -o jsonpath='{.data.task}' 2>/dev/null || true)"
+  [[ "${holder}" == "${TASK_ID}" ]]
 }
 
 slot_has_active_workflow() {
@@ -245,7 +314,7 @@ acquire_workflow_lock() {
     fi
     return
   fi
-  if workflow_lock_is_stale "${PPE_SLOT}"; then
+  if workflow_lock_is_stale "${PPE_SLOT}" || workflow_lock_is_own_task "${PPE_SLOT}"; then
     "${kubectl_bin}" -n "${namespace}" delete configmap "${workflow_lock_name}" --ignore-not-found >/dev/null
     if "${kubectl_bin}" -n "${namespace}" create configmap "${workflow_lock_name}" \
       --from-literal="task=${TASK_ID:-unknown}" \
@@ -263,7 +332,10 @@ acquire_workflow_lock() {
     fi
   fi
   rollback_new_lease
-  printf 'PPE slot %s is already being changed by another workflow\n' "${PPE_SLOT}" >&2
+  printf 'PPE slot %s is already being changed by another workflow (lock held by task %s since %s)\n' \
+    "${PPE_SLOT}" \
+    "$("${kubectl_bin}" -n "${namespace}" get configmap "${workflow_lock_name}" -o jsonpath='{.data.task}' 2>/dev/null || printf 'unknown')" \
+    "$("${kubectl_bin}" -n "${namespace}" get configmap "${workflow_lock_name}" -o jsonpath='{.data.started_at}' 2>/dev/null || printf 'unknown')" >&2
   exit 75
 }
 
@@ -313,6 +385,7 @@ namespace="$(slot_namespace "${PPE_SLOT}")"
 node_port="$((32100 + PPE_SLOT))"
 expires_at="$(lease_field "${PPE_SLOT}" expires_at)"
 acquire_workflow_lock
+start_lock_heartbeat
 
 [[ "$(lease_field "${PPE_SLOT}" issue_key)" == "${ISSUE_KEY}" ]] || { printf 'PPE lease owner changed\n' >&2; exit 73; }
 [[ "$(lease_field "${PPE_SLOT}" lease_id)" == "${lease_id}" ]] || { printf 'PPE lease identity changed\n' >&2; exit 73; }
@@ -363,11 +436,12 @@ registry_manifest_exists() {
 }
 
 run_build() {
-  local name="$1" dockerfile="$2" destination="$3" build_arg="${4:-}"
-  local build_arg_yaml=""
-  if [[ -n "${build_arg}" ]]; then
-    build_arg_yaml="        - --build-arg=${build_arg}"
-  fi
+  local name="$1" dockerfile="$2" destination="$3" memory_limit="$4" build_args="${5:-}"
+  local build_arg_yaml="" build_arg
+  for build_arg in ${build_args}; do
+    build_arg_yaml+="        - --build-arg=${build_arg}"$'\n'
+  done
+  build_arg_yaml="${build_arg_yaml%$'\n'}"
   cat <<YAML | "${kubectl_bin}" -n "${namespace}" apply -f -
 apiVersion: batch/v1
 kind: Job
@@ -404,31 +478,82 @@ ${build_arg_yaml}
             memory: 2Gi
           limits:
             cpu: "3"
-            memory: 6Gi
+            memory: ${memory_limit}
 YAML
+}
+
+build_job_condition() {
+  local job="$1" condition="$2"
+  [[ "$("${kubectl_bin}" -n "${namespace}" get "job/${job}" \
+    -o "jsonpath={.status.conditions[?(@.type=='${condition}')].status}" 2>/dev/null || true)" == "True" ]]
+}
+
+build_job_progress() {
+  local job="$1" pod reason
+  pod="$("${kubectl_bin}" -n "${namespace}" get pod -l "job-name=${job}" \
+    --sort-by=.metadata.creationTimestamp -o name 2>/dev/null | tail -n 1)"
+  [[ -n "${pod}" ]] || { printf 'no pod yet'; return; }
+  reason="$("${kubectl_bin}" -n "${namespace}" get "${pod}" \
+    -o jsonpath='{.status.phase}{" "}{.status.containerStatuses[0].state.terminated.reason}' 2>/dev/null || true)"
+  printf '%s %s | %s' "${pod#pod/}" "${reason}" \
+    "$("${kubectl_bin}" -n "${namespace}" logs "${pod}" --tail=1 2>/dev/null | tr -d '\r' | tail -c 160)"
+}
+
+# kubectl wait only settles on the condition it was given, so waiting on a
+# Job's Complete condition never returns for a Job that ends up Failed: an
+# OOM-killed build used to leave the workflow silent until the 45m timeout.
+# Poll both terminal conditions and print progress in between, so a stuck build
+# is visible in the log rather than inferred from silence.
+wait_for_build() {
+  local job="$1" started="${SECONDS}" elapsed
+  while true; do
+    if build_job_condition "${job}" Complete; then
+      printf '%s completed after %ss\n' "${job}" "$((SECONDS - started))"
+      return 0
+    fi
+    if build_job_condition "${job}" Failed; then
+      printf '%s failed after %ss\n' "${job}" "$((SECONDS - started))" >&2
+      return 1
+    fi
+    elapsed="$((SECONDS - started))"
+    if (( elapsed > PPE_BUILD_TIMEOUT_SECONDS )); then
+      printf '%s did not finish within %ss\n' "${job}" "${PPE_BUILD_TIMEOUT_SECONDS}" >&2
+      return 1
+    fi
+    printf '[%ss] %s: %s\n' "${elapsed}" "${job}" "$(build_job_progress "${job}")"
+    sleep "${PPE_BUILD_PROGRESS_SECONDS}"
+  done
 }
 
 build_jobs=()
 if registry_manifest_exists api; then
   printf 'Reusing API image for commit %s\n' "${GIT_COMMIT}"
 else
-  run_build ppe-build-api deploy/docker/Dockerfile.api "${api_image}"
+  run_build ppe-build-api deploy/docker/Dockerfile.api "${api_image}" "${PPE_API_BUILD_MEMORY}"
   build_jobs+=(ppe-build-api)
 fi
 if registry_manifest_exists web; then
   printf 'Reusing Web image for commit %s\n' "${GIT_COMMIT}"
 else
-  run_build ppe-build-web deploy/docker/Dockerfile.web "${web_image}" "REMOTE_API_URL=http://api:6120"
+  run_build ppe-build-web deploy/docker/Dockerfile.web "${web_image}" "${PPE_WEB_BUILD_MEMORY}" \
+    "REMOTE_API_URL=http://api:6120 NEXT_BUILD_CPUS=${PPE_WEB_BUILD_CPUS}"
   build_jobs+=(ppe-build-web)
 fi
 
+build_failed=0
 for build_job in "${build_jobs[@]}"; do
-  if ! "${kubectl_bin}" -n "${namespace}" wait --for=condition=complete "job/${build_job}" --timeout=45m; then
+  if ! wait_for_build "${build_job}"; then
     "${kubectl_bin}" -n "${namespace}" logs "job/${build_job}" --all-containers --tail=300 || true
-    exit 1
+    "${kubectl_bin}" -n "${namespace}" get pod -l "job-name=${build_job}" \
+      -o custom-columns=POD:.metadata.name,PHASE:.status.phase,REASON:.status.containerStatuses[0].state.terminated.reason || true
+    build_failed=1
+    break
   fi
   "${kubectl_bin}" -n "${namespace}" logs "job/${build_job}" --all-containers --tail=80
 done
+if [[ "${build_failed}" == "1" ]]; then
+  exit 1
+fi
 
 postgres_password="$(openssl rand -hex 24)"
 jwt_secret="$(openssl rand -hex 32)"
@@ -681,6 +806,7 @@ web_digest="$(${kubectl_bin} -n "${namespace}" get pod -l app=web -o jsonpath='{
 expires_at="$(date -u -d "+${PPE_TTL_HOURS} hours" +%FT%TZ)"
 "${kubectl_bin}" -n "${namespace}" patch configmap "${lease_name}" --type merge \
   -p "{\"data\":{\"state\":\"active\",\"expires_at\":\"${expires_at}\"}}" >/dev/null
+deploy_succeeded=1
 printf 'PPE slot: %s\nCommit: %s\nMode: %s\nURL: %s\nExpires: %s\nAPI image: %s\nWeb image: %s\n' \
   "${PPE_SLOT}" "${GIT_COMMIT}" "${PPE_MODE}" "$(slot_url "${PPE_SLOT}")" "${expires_at}" "${api_digest}" "${web_digest}"
 emit_result active
