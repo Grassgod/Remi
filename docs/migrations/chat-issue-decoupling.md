@@ -63,6 +63,43 @@ their messages and working directories.
   tasks. Drop `multiremi_chat_sessions.issue_id` and index binding ownership.
   No UI session management columns are removed.
 
+### Binding decisions and Chat multiplicity
+
+For each evaluated binding the precedence chain has exactly five reachable
+reason/disposition pairs. Independent evidence flags may overlap:
+
+| First matching evidence | Reason | Disposition | `binding_count=1` | `binding_count>=2` |
+| --- | --- | --- | --- | --- |
+| Any synchronized p2p | `p2p_evidence` | discarded | reachable | reachable |
+| Canonical Chat ID, no p2p | `canonical_topic` | preserved | reachable | reachable |
+| Exact creation delivery, neither above | `creation_provenance` | preserved | reachable | reachable |
+| Synchronized group, none above | `synced_group` | preserved | reachable | reachable |
+| No preservation evidence | `unproven_ownership` | discarded | reachable | reachable |
+
+The opposite disposition for each reason is structurally impossible. This
+exhausts single-binding decisions, not the shared Chat's aggregate outcome.
+Classify each binding independently and review its Chat's entire binding set:
+
+| Chat binding set | Ownership and provider outcome |
+| --- | --- |
+| No valid binding, including an ordinary Chat | Cold-start once. |
+| One preserved binding | Retain its Issue; keep provider unless another invalid historical association/work item requires reset. |
+| One discarded binding | Clear ownership and cold-start. |
+| Multiple bindings, all preserved to the same Issue | Multiplicity alone does not force reset; inspect all destinations. |
+| Multiple bindings, preserved + discarded | Cold-start the shared Chat. **Preserved bindings cannot cancel a discarded binding's reset.** |
+| Multiple bindings, all discarded | Cold-start the shared Chat once. |
+| Multiple live bindings retained to different Issues | **No cold-start fallback for the ambiguity itself.** If the old Chat/task Issue matches one valid binding and there is no invalid wake work, provider lineage survives. Resolve ownership separately before resuming traffic. |
+
+Different-Issue retention is schema-reachable through prepopulated non-null
+`binding.issue_id` values (manual repair/import/partial-draft data). This migration
+only classifies NULL binding ownership, and copies the single `chat.issue_id` to
+each newly preserved binding. Thus a clean migration cannot itself generate two
+new preserved audit rows with different Issues on one Chat. Existing non-null
+bindings bypass that classification and audit, but still participate in the
+cold-start checks. Test this live-data case separately from synthetic audit-row
+conflicts. No UNIQUE constraint or change to these migration semantics is made
+by MUL-304.
+
 ## Historical group association exception
 
 Starting with `421413f4` (2026-09-04 11:30, UTC+08:00), an Agent creating an Issue
@@ -94,7 +131,8 @@ return those facts for a new decision before deployment.
 
 1. Take and verify a consistent database backup. Restore it to an isolated copy
    with no daemon, bot credentials, traffic or outbound network delivery. Run the
-   candidate migration there. This uses the actual migration's provenance checks
+   pre-migration multiplicity queries below before running the candidate migration
+   there. This uses the actual migration's provenance checks
    rather than a second SQL implementation that could disagree with them.
 2. On that migrated copy, run the queries below. Keep an export of audit records
    and type-verification evidence with the upgrade record. Inspect all dates.
@@ -106,8 +144,73 @@ return those facts for a new decision before deployment.
    backup, run the migration, and compare its audit set with the reviewed set.
    Investigate any new or changed row before resuming traffic.
 
-These queries work on SQLite and PostgreSQL. The audit table exists only after
-the migration; before deployment, run them on the isolated migrated copy.
+These queries work on SQLite and PostgreSQL. Run the following two queries on
+the isolated copy **before migration**; they need only the legacy binding table.
+They group globally by Chat ID, including anomalous cross-workspace bindings.
+The detail query returns every participating binding; `conflict_bindings` counts
+all bindings in shared Chats, while `excess_bindings` counts only those beyond one
+per Chat. An empty data set yields an empty detail list and zero summary counts.
+
+```sql
+-- mul301-audit-multiplicity-detail
+WITH shared AS (
+  SELECT chat_session_id, COUNT(*) AS binding_count
+  FROM multiremi_feishu_bot_chat_bindings
+  GROUP BY chat_session_id HAVING COUNT(*) > 1
+)
+SELECT b.chat_session_id, s.binding_count, b.id AS binding_id, b.workspace_id,
+       b.app_id, b.agent_id, b.external_session_key
+FROM multiremi_feishu_bot_chat_bindings b
+JOIN shared s ON s.chat_session_id = b.chat_session_id
+ORDER BY b.chat_session_id, b.workspace_id, b.id;
+```
+
+```sql
+-- mul301-audit-multiplicity-summary
+WITH shared AS (
+  SELECT chat_session_id, COUNT(*) AS binding_count
+  FROM multiremi_feishu_bot_chat_bindings
+  GROUP BY chat_session_id HAVING COUNT(*) > 1
+)
+SELECT COUNT(*) AS affected_chats,
+       COALESCE(SUM(binding_count), 0) AS conflict_bindings,
+       COALESCE(SUM(binding_count - 1), 0) AS excess_bindings
+FROM shared;
+```
+
+Retain the conflict inventory for review. MUL-304 adds runtime guards to both
+binding creation paths, but deliberately adds no UNIQUE constraint and does not
+repair existing conflicts. Direct SQL/imports still require operator review.
+The migration continues to cold-start a shared Chat if any binding is discarded.
+
+Once `bindings.issue_id` exists, also run this live-ownership check, both before
+migration on partial-draft/repaired schemas and after migration on every copy.
+Do not run it on a legacy schema lacking that column: use the column-independent
+inventory above first. Each returned row is one Chat requiring review; an empty
+result means no multi-Issue conflict among currently valid live bindings. The
+workspace/Agent/Issue joins match the migration's valid-binding definition.
+
+```sql
+-- mul301-audit-live-multi-issue
+SELECT b.chat_session_id, COUNT(*) AS live_binding_count,
+       COUNT(DISTINCT b.issue_id) AS live_issue_count
+FROM multiremi_feishu_bot_chat_bindings b
+JOIN multiremi_chat_sessions c ON c.id = b.chat_session_id
+  AND c.workspace_id = b.workspace_id AND c.agent_id = b.agent_id
+JOIN multiremi_issues i ON i.id = b.issue_id AND i.workspace_id = b.workspace_id
+GROUP BY b.chat_session_id
+HAVING COUNT(DISTINCT b.issue_id) > 1
+ORDER BY b.chat_session_id;
+```
+
+Join these Chat IDs to the saved multiplicity inventory to review every binding
+and destination. All-retained multi-Issue conflicts have **no automatic cold-start
+fallback** when old Chat/task ownership matches a valid binding. They need a
+separate operator ownership decision; a mixed disposition conflict is already
+reset conservatively. Neither reset nor this report repairs shared ownership.
+
+The remaining queries use the audit table, which exists only after migration;
+before deployment, run them on the isolated migrated copy.
 
 `last_inbound_at` and `active_last7d` are immutable observations as of each
 row's `audited_at`. Activity uses the first receipt (`created_at`) of deliveries
@@ -121,7 +224,7 @@ a fresh backup if the report is stale. Do not use `chat_sessions.updated_at`.
 
 ```sql
 -- mul301-audit-detail
-SELECT workspace_id, binding_id, issue_id, disposition, reason,
+SELECT workspace_id, binding_id, chat_session_id, issue_id, disposition, reason,
        classification_version, hit_canonical, hit_marker,
        hit_synced_group, hit_synced_p2p, audited_at,
        last_inbound_at, active_last7d, binding_snapshot
@@ -170,6 +273,7 @@ WITH classified AS (
     ON r.workspace_id = a.workspace_id AND r.binding_id = a.binding_id
 ), counts AS (
   SELECT COUNT(*) AS evaluated_links,
+    COALESCE(SUM(CASE WHEN chat_session_id IS NULL THEN 1 ELSE 0 END), 0) AS missing_chat_identity_rows,
     COALESCE(SUM(CASE WHEN classification_version != 2 THEN 1 ELSE 0 END), 0) AS incomplete_audit_rows,
     COALESCE(SUM(hit_canonical), 0) AS canonical_hits,
     COALESCE(SUM(hit_marker), 0) AS marker_hits,
@@ -192,14 +296,37 @@ WITH classified AS (
     COALESCE(SUM(CASE WHEN disposition = 'discarded' AND confirmed_type = 'group' AND last_inbound_at IS NULL THEN 1 ELSE 0 END), 0) AS affected_group_inbound_unobserved,
     COALESCE(SUM(evidence_conflict), 0) AS evidence_conflicts
   FROM classified
+), shared_chats AS (
+  SELECT chat_session_id, COUNT(*) AS binding_count,
+    SUM(CASE WHEN disposition = 'preserved' THEN 1 ELSE 0 END) AS preserved_count,
+    COUNT(DISTINCT CASE WHEN disposition = 'preserved' THEN issue_id END) AS preserved_issue_count,
+    SUM(CASE WHEN disposition = 'discarded' THEN 1 ELSE 0 END) AS discarded_count,
+    SUM(CASE WHEN disposition = 'discarded' AND confirmed_type = 'p2p' THEN 1 ELSE 0 END) AS discarded_p2p_count
+  FROM classified
+  WHERE chat_session_id IS NOT NULL
+  GROUP BY chat_session_id HAVING COUNT(*) > 1
+), shared_counts AS (
+  SELECT COUNT(*) AS shared_chat_count,
+    COALESCE(SUM(binding_count), 0) AS shared_chat_binding_count,
+    COALESCE(SUM(CASE WHEN preserved_count > 0 AND discarded_count > 0 THEN 1 ELSE 0 END), 0) AS mixed_disposition_chat_count,
+    COALESCE(SUM(CASE WHEN preserved_count > 0 AND discarded_count > 0 THEN binding_count ELSE 0 END), 0) AS mixed_disposition_binding_count,
+    COALESCE(SUM(CASE WHEN preserved_count > 0 AND discarded_p2p_count > 0 THEN 1 ELSE 0 END), 0) AS preserved_group_discarded_p2p_chat_count,
+    COALESCE(SUM(CASE WHEN preserved_issue_count > 1 THEN 1 ELSE 0 END), 0) AS preserved_multi_issue_chat_count
+  FROM shared_chats
 )
 SELECT counts.*,
+  CASE WHEN missing_chat_identity_rows = 0 THEN shared_chat_count END AS shared_chat_count,
+  CASE WHEN missing_chat_identity_rows = 0 THEN shared_chat_binding_count END AS shared_chat_binding_count,
+  CASE WHEN missing_chat_identity_rows = 0 THEN mixed_disposition_chat_count END AS mixed_disposition_chat_count,
+  CASE WHEN missing_chat_identity_rows = 0 THEN mixed_disposition_binding_count END AS mixed_disposition_binding_count,
+  CASE WHEN missing_chat_identity_rows = 0 THEN preserved_group_discarded_p2p_chat_count END AS preserved_group_discarded_p2p_chat_count,
+  CASE WHEN missing_chat_identity_rows = 0 THEN preserved_multi_issue_chat_count END AS preserved_multi_issue_chat_count,
   CASE WHEN incomplete_audit_rows = 0 THEN 100.0 * canonical_preserved / NULLIF(evaluated_links, 0) END AS canonical_coverage_pct,
   CASE WHEN incomplete_audit_rows = 0 THEN 100.0 * marker_preserved / NULLIF(evaluated_links, 0) END AS marker_coverage_pct,
   CASE WHEN incomplete_audit_rows = 0 THEN 100.0 * synced_group_preserved / NULLIF(evaluated_links, 0) END AS synced_group_coverage_pct,
   CASE WHEN incomplete_audit_rows = 0 THEN 100.0 * preserved_links / NULLIF(evaluated_links, 0) END AS preservation_coverage_pct,
   CASE WHEN incomplete_audit_rows = 0 THEN 100.0 * active_preserved_group_topics_last7d / NULLIF(active_group_topics_last7d, 0) END AS active_group_preservation_coverage_pct
-FROM counts;
+FROM counts CROSS JOIN shared_counts;
 ```
 
 `evaluated_links` counts the migration's legacy Feishu Issue associations, not all
@@ -211,6 +338,30 @@ Overall coverage counts each binding once. A zero denominator yields NULL, not
 activity must be checked externally where interruption could be unacceptable.
 Record confirmed affected groups, unresolved links, active affected groups, and
 both total/active preservation coverage with the deployment request.
+
+`shared_chat_count` counts Chat IDs with multiple evaluated bindings, and
+`shared_chat_binding_count` counts **all** evaluated bindings on those Chats.
+`mixed_disposition_chat_count` and `mixed_disposition_binding_count` restrict
+those counts to Chats containing both preserved and discarded decisions.
+`preserved_group_discarded_p2p_chat_count` identifies the specific preserved-group
+plus confirmed-discarded-p2p shape; review evidence conflicts before interpreting
+the group label. `preserved_multi_issue_chat_count` counts Chats with at least two
+distinct Issues among preserved audit rows, including sets that also contain
+discarded rows. These are overlapping counts, not additive categories.
+They use the immutable `chat_session_id` audit column, independent of live
+bindings or JSON functions. They cover evaluated legacy Issue links only;
+the pre-migration inventory also catches bindings without a legacy Issue.
+Older audit rows lack Chat identity: `missing_chat_identity_rows` exposes them
+and makes all six shared-Chat metrics NULL, rather than claiming zero conflicts.
+Rehearse from the pre-decoupling backup to fill that gap; do not backfill from
+mutable live bindings. An empty audit gives zero conflict counts and NULL coverage.
+
+The multi-Issue audit metric detects anomalous historical/imported audit sets;
+it cannot cover non-null live bindings skipped by this migration. A zero value
+does **not** establish unambiguous live ownership. Always pair it with
+`mul301-audit-live-multi-issue` and the pre-migration inventory. Retained A/B
+bindings have no ambiguity-triggered cold-start fallback; report them separately
+from mixed disposition counts and keep traffic paused for an ownership decision.
 
 Fresh migration records have `classification_version = 2`. Earlier unpublished
 drafts lack retained decisions and authoritative activity; rows from them remain
@@ -224,15 +375,20 @@ table; it is not application state. These metrics have no date filter.
 Restore each reviewed binding individually, in a transaction, **before the daemon
 accepts messages again**. Otherwise a new group message can trigger automatic
 creation of a replacement Issue; investigate and reconcile that duplicate before
-restoring. Never restore a private or unverified conversation. No backup is
-needed to restore a link: the audit record contains the original identity and
-subscription. Keep the audit row after restoration as an immutable record.
+restoring. Never restore a private or unverified conversation. A link can be
+restored from its audit snapshots without restoring the full database, but keep
+the verified pre-upgrade backup until the rollback decision is closed. Keep the
+audit row after restoration as an immutable record.
 
 Read `binding_snapshot` and `channel_snapshot` for the one audited row. Verify
 its Issue and Chat still exist in the same workspace, the bot/app/Agent/session
 and every destination field are unchanged, and authoritative group evidence is
 current. Do not recreate a missing/deleted Chat or transplant the link to another
-thread. Substitute the exact snapshot values below, SQL-escaping strings; use SQL
+thread. Review the complete binding set for that Chat, including bindings in
+other workspaces. The SQL below refuses shared Chats: reconcile any conflict
+through a separately reviewed repair plan first, and rerun the inventory; do not
+delete a binding or choose an Issue merely to make this UPDATE succeed.
+Substitute the exact snapshot values below, SQL-escaping strings; use SQL
 `NULL` for null thread/reply values. Run one binding at a time. This is an offline
 maintenance procedure, not a new public bind API.
 
@@ -251,6 +407,10 @@ WHERE id = '<binding-id>' AND workspace_id = '<workspace-id>'
   AND app_id = '<audited-app-id>' AND agent_id = '<audited-agent-id>'
   AND external_session_key = '<audited-external-session-key>'
   AND chat_session_id = '<audited-chat-session-id>'
+  AND NOT EXISTS (
+    SELECT 1 FROM multiremi_feishu_bot_chat_bindings other
+    WHERE other.chat_session_id = '<audited-chat-session-id>' AND other.id <> '<binding-id>'
+  )
   AND chat_id = '<authoritatively-verified-group-chat-id>'
   AND thread_id IS NOT DISTINCT FROM '<audited-thread-id-or-SQL-NULL>'
   AND reply_to_message_id IS NOT DISTINCT FROM '<audited-reply-id-or-SQL-NULL>'
@@ -295,7 +455,12 @@ update without inventing a subscription. Null placeholders mean unquoted SQL
 has the audited Issue, verify all identity and channel fields before treating it
 as already restored; never overwrite a different live Issue.
 
-Read back binding and subscription fields before resuming traffic. Do not restore
+Before COMMIT, require exactly one returned binding and, when applicable, one
+channel; any error, identity mismatch, or zero-row result means ROLLBACK of the
+entire repair. After COMMIT, read back binding and subscription fields, rerun
+both live conflict queries, and retain the repair record with operator, time,
+binding/Issue IDs and evidence references. Resume traffic only after all changed
+or unresolved destinations have been reviewed. Do not restore
 old provider/session pointers, pending updates, cancelled wake tasks or deleted
 outbox rows. Future events use the normal topic path; missed notifications are
 not replayed. The retained Issue/task/human-request records remain queryable.
@@ -341,6 +506,89 @@ mismatched creation provenance. These cases verify provider reset, pending task
 isolation, message preservation, and update channel/state cleanup as well as
 ownership and repeated startup.
 
+## Reproducible cold-start benchmark (MUL-304)
+
+Use Bun 1.3.14 from the repository root:
+
+```bash
+bun scripts/bench-chat-issue-migration.ts
+bun scripts/bench-chat-issue-migration.ts --backend sqlite --sizes 5000,20000,50000 --repeats 1
+# Configure MUL304_BENCH_POSTGRES_URL privately for a disposable local PG server.
+bun scripts/bench-chat-issue-migration.ts --backend postgres --sizes 5000,20000,50000 --repeats 1
+```
+
+The default runs both backends at all three sizes. The PG URL must use a loopback
+host with no URL query parameters, and its role needs CREATE DATABASE permission.
+The script never uses `MULTIREMI_DATABASE_URL`, accepts no existing SQLite file,
+and creates a new randomly named `mul304_bench_*` PG database for every sample.
+It drops only the database it just created, and removes its own temporary SQLite
+directory. No production server, 209, bot or daemon is contacted. A missing local
+PG server emits `status: unavailable` for each requested size and exit code 2;
+it must not be reported as a successful PG measurement.
+
+Each sample has N ordinary Chats, N active tasks (equally split across queued,
+dispatched, running, awaiting-human and waiting-local-directory states), and 2N
+retained user/assistant messages. All Chats start with legacy Issue/provider
+pointers; half have a work directory and machine affinity. There are no Feishu
+bindings, subscriptions, pushes, attachments or long histories in this fixture.
+This isolates the full ordinary-Chat cold-start cost; it does **not** estimate
+binding-audit or outbound-queue cost, provider response time, or total production
+upgrade duration. Use the isolated real-data rehearsal to include those costs.
+
+SQLite uses a temporary disk database, WAL, synchronous FULL and the shipped
+table-level Issue foreign key, exercising the rebuild path. PG uses the actual
+synchronous store adapter and native DROP COLUMN. NDJSON output records machine
+metadata and `setupMs`, `migrationMs`, `restartMs` separately. `migrationMs` times
+the complete `runMigrations` call, including commit and other idempotent startup
+work; fixture generation and verification are excluded. Successful samples
+verify row counts, provider invalidation, preserved messages/work directories,
+task states, the migration ledger and that restarting does not cold-start again.
+
+MUL-304 creates `idx_multiremi_tasks_chat_session` immediately after adding the
+task Chat column, before the ownership migration transaction and its per-Chat
+updates. The index is also installed on stores whose decoupling ledger already
+exists; it does not rerun cold-start. The benchmark removes the bootstrap-created
+index after seeding, so measured migration time includes building it on all N
+tasks. The migration algorithm and classification/reset semantics are unchanged.
+
+SQLite measurements on 2026-09-16, Bun 1.3.14, Linux x64, Intel Xeon Platinum
+8457C, 32 exposed CPUs / 62.64 GiB RAM, temporary disk WAL/FULL:
+
+| Chats / active tasks | Before index, seconds | With index, seconds (3 runs) | New median | Migration-only planning allowance |
+| --- | --- | --- | --- | --- |
+| 5k / 5k | 8.308 / 8.556 / 8.457 | 0.26248 / 0.26252 / 0.27460 | 0.26252 s | >=1 s |
+| 20k / 20k | 226.043 (1 run) | 1.12394 / 1.02512 / 0.95720 | 1.02512 s | >=3 s |
+| 50k / 50k | 1,827.137 (1 run) | 2.88817 / 3.15248 / 3.42588 | 3.15248 s | >=7 s |
+
+All nine indexed samples passed data and idempotency checks; restart took
+9.95–38.37 ms. The allowances round twice the slowest indexed sample up to whole
+seconds. They replace the pre-index migration allowances in the first benchmark
+report. They are **not complete production pause windows**. PostgreSQL at all
+three sizes remained unavailable locally (exit 2); no PG timings were obtained.
+
+For a paused-write window, measure the final isolated rehearsal on comparable
+hardware and data. Budget traffic drain + backup + at least twice the slowest
+measured migration + startup/readback time, plus the separately measured restore
+time when planning the rollback cutoff. The factor of two is planning headroom,
+not a performance guarantee. Do not extrapolate linearly from the 5k sample or
+reuse a SQLite result as a PG estimate. This benchmark does not measure provider
+state that never reached storage or the user impact of history-budget truncation.
+Provider-internal unsaved context cannot be recovered by preserving UI messages;
+history-budget limits may omit early events on the next turn. Review critical
+long-running conversations during the isolated rehearsal and communicate the
+one-time fresh provider session. This benchmark supplies no quantitative user
+impact estimate for those cases.
+
+Before starting the window, record drain, verified-backup, measured-migration,
+startup/readback and tested-restore budgets separately. Stop new inbound work and
+task dispatch, settle or fence already claimed/in-flight work, and verify no
+writers remain before the final backup. Set the rollback decision deadline to
+the end of the approved pause window minus tested restore time and old-version
+startup/readback time. If migration or review cannot finish by that deadline,
+keep traffic paused and take the agreed rollback path; do not extend the window
+using the synthetic numbers as a promise. Restoring after traffic resumes can
+lose new writes and needs a new reconciliation/data-loss decision.
+
 ## Rollback procedure
 
 Take and verify a full database backup before upgrading, and pause writes for
@@ -350,7 +598,9 @@ state) or a PostgreSQL database backup, not a copy of a live SQLite main file.
 - **Migration failure:** its transaction rolls back the binding ownership copy,
   table rebuild/drop, cleanup, and migration ledger entry. Fix the cause and
   retry startup; tests exercise this path. Other earlier startup migrations may
-  already have committed independently.
+  already have committed independently, including this task index. Its presence
+  after a failed decoupling transaction does not imply ownership was migrated;
+  inspect the ledger and schema. Do not remove the index just to retry.
 - **Rollback after successful migration:** stop the upgraded service, restore the
   verified pre-upgrade database backup, and run the prior application version.
   Do not merely start old code against the new schema. The intentionally
@@ -358,6 +608,14 @@ state) or a PostgreSQL database backup, not a copy of a live SQLite main file.
   cannot be reconstructed from the new binding table. Restoring the backup also
   discards writes made since the backup, which is why the paused-write upgrade
   window matters.
+
+Single-binding restoration above is a forward repair, not rollback: it does not
+undo schema changes, revive provider state or replay missed notifications. Keep
+audit exports and operator decisions outside the database backup being restored.
+Before restarting the prior version, verify backup integrity, expected schema
+and application version; read back data and health with writers still paused.
+Never combine an old application with a successfully decoupled database or
+attempt to synthesize the dropped Chat Issue column from ambiguous bindings.
 
 This change supplies migration code and local verification only; it does not run
 an upgrade or alter a production database.

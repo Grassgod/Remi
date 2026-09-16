@@ -1477,6 +1477,35 @@ describe("store migrations", () => {
   });
 
   for (const tableForeignKey of [false, true]) {
+    it(`indexes task Chat lookups before cold-start updates (table FK=${tableForeignKey})`, () => {
+      const database = freshDb();
+      seedLegacyChatIssueFixture(database, tableForeignKey);
+      database.exec("DROP INDEX idx_multiremi_tasks_chat_session");
+      database.exec(`CREATE TRIGGER require_task_chat_index BEFORE UPDATE OF session_id ON multiremi_tasks
+        WHEN OLD.session_id IS NOT NULL AND NEW.session_id IS NULL
+        BEGIN
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_multiremi_tasks_chat_session'
+          ) THEN RAISE(ABORT, 'cold-start task update requires Chat index') END;
+        END`);
+      migrate(database);
+      expect(database.query("SELECT session_id FROM multiremi_tasks WHERE id = 'tsk_chat_migration_queued'").get())
+        .toEqual({ session_id: null });
+      const explain = database.prepare(`EXPLAIN QUERY PLAN UPDATE multiremi_tasks SET session_id = NULL
+        WHERE status IN ('queued', 'dispatched') AND chat_session_id = ?`);
+      const plan = explain.all("chat_web_migration");
+      explain.finalize();
+      expect(plan.some((row: any) => row.detail.includes("idx_multiremi_tasks_chat_session"))).toBe(true);
+      // Already-decoupled stores also gain the index without replaying cleanup.
+      database.exec("DROP INDEX idx_multiremi_tasks_chat_session");
+      database.run("UPDATE multiremi_chat_sessions SET session_id = 'fresh' WHERE id = 'chat_web_migration'");
+      migrate(database);
+      expect(database.query("PRAGMA index_info(idx_multiremi_tasks_chat_session)").all())
+        .toMatchObject([{ name: "chat_session_id" }]);
+      expect(database.query("SELECT session_id FROM multiremi_chat_sessions WHERE id = 'chat_web_migration'").get())
+        .toEqual({ session_id: "fresh" });
+    });
+
     it(`classifies legacy Feishu links using authoritative evidence and audits every decision (table FK=${tableForeignKey})`, async () => {
       const database = freshDb();
       seedLegacyChatIssueClassificationFixture(database, tableForeignKey);
@@ -1499,6 +1528,7 @@ describe("store migrations", () => {
           && (value.sourceWorkspace ?? "local") === "local") ?? [];
         const p2p = synced.some((value) => value.chatType === "p2p");
         expect(recovery).toMatchObject({ binding_id: `fcb_${chatId}`, workspace_id: "local", issue_id: issueId,
+          chat_session_id: chatId,
           disposition: entry.preserve ? "preserved" : "discarded",
           classification_version: 2, hit_canonical: Number(entry.canonical ?? false),
           hit_marker: Number(entry.provenance === "exact"),

@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import { readFileSync } from "node:fs";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
+import { CHAT_ISSUE_DECOUPLED_FINGERPRINT } from "@multiremi/store/helpers.js";
 
 const runbook = readFileSync(new URL("../../../docs/migrations/chat-issue-decoupling.md", import.meta.url), "utf8");
 function documentedSql(name: string): string {
@@ -12,6 +13,24 @@ function documentedSql(name: string): string {
   return sql;
 }
 const quote = (value: unknown): string => value === null ? "NULL" : `'${String(value).replaceAll("'", "''")}'`;
+
+function assertMultiplicitySql(db: SqlDatabase) {
+  runMigrations(db);
+  const summary = () => Object.fromEntries(Object.entries(db.query(documentedSql("multiplicity-summary")).get()!)
+    .map(([key, value]) => [key, Number(value)]));
+  expect(db.query(documentedSql("multiplicity-detail")).all()).toEqual([]);
+  expect(db.query(documentedSql("live-multi-issue")).all()).toEqual([]);
+  expect(summary()).toEqual({ affected_chats: 0, conflict_bindings: 0, excess_bindings: 0 });
+  for (const [id, chat, workspace] of [["a", "shared", "local"], ["b", "shared", "local"],
+    ["c", "shared", "other"], ["d", "single", "local"]]) {
+    db.run(`INSERT INTO multiremi_feishu_bot_chat_bindings
+      (id, workspace_id, app_id, agent_id, external_session_key, chat_session_id, created_at, updated_at)
+      VALUES (?, ?, 'audit_app', 'audit_agent', ?, ?, 'fixture', 'fixture')`, [id, workspace, id, chat]);
+  }
+  expect(summary()).toEqual({ affected_chats: 1, conflict_bindings: 3, excess_bindings: 2 });
+  expect(db.query(documentedSql("multiplicity-detail")).all().map((row: any) => row.binding_id)).toEqual(["a", "b", "c"]);
+  db.run("DELETE FROM multiremi_feishu_bot_chat_bindings");
+}
 
 function seedAuditMatrix(db: SqlDatabase) {
   runMigrations(db);
@@ -100,6 +119,7 @@ function seedAuditMatrix(db: SqlDatabase) {
 }
 
 function assertAuditMetricsAndRecovery(db: SqlDatabase) {
+  assertMultiplicitySql(db);
   const { recent, old } = seedAuditMatrix(db);
   const rows = db.query(documentedSql("detail")).all() as Array<Record<string, any>>;
   expect(rows).toHaveLength(8);
@@ -162,6 +182,14 @@ function assertAuditMetricsAndRecovery(db: SqlDatabase) {
   // Preserved audit rows are ineligible even if someone clears the live link.
   db.run("UPDATE multiremi_feishu_bot_chat_bindings SET issue_id = NULL WHERE id = 'binding_marker'");
   expect(db.query(restoreSql("binding_marker")).all()).toEqual([]);
+  // Restoring a group must not introduce ownership into a still-shared Chat,
+  // even when the other binding is in an anomalous different workspace.
+  db.run(`INSERT INTO multiremi_feishu_bot_chat_bindings
+    (id, workspace_id, app_id, agent_id, external_session_key, chat_session_id, created_at, updated_at)
+    VALUES ('restore_conflict', 'other', 'app_metrics', 'agt_metrics', 'restore_conflict',
+      'chat_metrics_metadata', ?, ?)`, [old, recent]);
+  expect(db.query(restoreSql("binding_metadata")).all()).toEqual([]);
+  db.run("DELETE FROM multiremi_feishu_bot_chat_bindings WHERE id = 'restore_conflict'");
   db.exec("BEGIN");
   expect(db.query(restoreSql("binding_metadata")).all()).toEqual([{ id: "binding_metadata", issue_id: "iss_metrics_metadata" }]);
   const channel = JSON.parse(audit.channel_snapshot);
@@ -184,7 +212,164 @@ function assertAuditMetricsAndRecovery(db: SqlDatabase) {
     marker_coverage_pct: null, synced_group_coverage_pct: null, active_group_preservation_coverage_pct: null });
   db.run("DELETE FROM multiremi_feishu_bot_issue_link_audit");
   expect(readMetrics()).toMatchObject({ evaluated_links: 0, preserved_links: 0,
-    preservation_coverage_pct: null });
+    preservation_coverage_pct: null, missing_chat_identity_rows: 0,
+    shared_chat_count: 0, shared_chat_binding_count: 0, mixed_disposition_chat_count: 0,
+    mixed_disposition_binding_count: 0, preserved_group_discarded_p2p_chat_count: 0,
+    preserved_multi_issue_chat_count: 0 });
+  assertSharedChatMetrics(db);
+  assertPrelinkedIssueConflicts(db);
+}
+
+function assertSharedChatMetrics(db: SqlDatabase) {
+  db.exec("ALTER TABLE multiremi_chat_sessions ADD COLUMN issue_id TEXT");
+  const now = new Date().toISOString();
+  db.run(`INSERT INTO multiremi_feishu_sources (id, workspace_id, endpoint_name, created_at, updated_at)
+    VALUES ('shared_metrics_source', 'local', 'shared_metrics', ?, ?)`, [now, now]);
+  const cases = [
+    ["group", "p2p"], ["group", "unknown", "unknown"],
+    ["group", "group"], ["p2p", "p2p"], ["group"],
+  ];
+  for (const [index, types] of cases.entries()) {
+    const chat = `shared_metrics_${index}`;
+    db.run(`INSERT INTO multiremi_issues (id, title, status, created_at, updated_at)
+      VALUES (?, 'Shared metrics', 'todo', ?, ?)`, [chat, now, now]);
+    db.run(`INSERT INTO multiremi_chat_sessions
+      (id, agent_id, issue_id, title, session_id, session_provider, session_execution_fingerprint,
+       work_dir, session_runtime_id, created_at, updated_at)
+      VALUES (?, 'agt_metrics', ?, 'Shared metrics', 'old-provider', 'codex', 'old-fingerprint',
+        '/fixture/keep', 'fixture-runtime', ?, ?)`, [chat, chat, now, now]);
+    for (const status of ["queued", "running"]) db.run(`INSERT INTO multiremi_tasks
+      (id, agent_id, chat_session_id, issue_id, prompt, status, session_id, created_at, updated_at)
+      VALUES (?, 'agt_metrics', ?, ?, 'Fixture', ?, 'old-task-provider', ?, ?)`,
+    [`${chat}_${status}`, chat, chat, status, now, now]);
+    for (const [ordinal, type] of types.entries()) {
+      const binding = `${chat}_${ordinal}`;
+      db.run(`INSERT INTO multiremi_feishu_bot_chat_bindings
+        (id, workspace_id, app_id, agent_id, external_session_key, chat_session_id, chat_id, created_at, updated_at)
+        VALUES (?, 'local', 'app_metrics', 'agt_metrics', ?, ?, ?, ?, ?)`, [binding, binding, chat, binding, now, now]);
+      if (type !== "unknown") db.run(`INSERT INTO multiremi_feishu_messages
+        (message_id, workspace_id, source_id, chat_id, chat_type, content_fingerprint, created_at, ingested_at)
+        VALUES (?, 'local', 'shared_metrics_source', ?, ?, 'fixture', ?, ?)`, [binding, binding, type, now, now]);
+    }
+  }
+  db.run("DELETE FROM multiremi_schema_migrations WHERE id = '20260916_chat_issue_decoupling'");
+  runMigrations(db);
+  for (const [index, types] of cases.entries()) {
+    const chat = `shared_metrics_${index}`;
+    const coldStart = types.some((type) => type !== "group");
+    const hasRetained = types.includes("group");
+    expect(db.query(`SELECT session_id, session_provider, session_execution_fingerprint,
+      work_dir, session_runtime_id FROM multiremi_chat_sessions WHERE id = ?`).get(chat)).toEqual({
+      session_id: coldStart ? null : "old-provider", session_provider: coldStart ? null : "codex",
+      session_execution_fingerprint: coldStart ? null : "old-fingerprint",
+      work_dir: "/fixture/keep", session_runtime_id: "fixture-runtime",
+    });
+    expect(db.query(`SELECT status, session_id, issue_id FROM multiremi_tasks WHERE id = ?`).get(`${chat}_queued`))
+      .toEqual({ status: "queued", session_id: coldStart ? null : "old-task-provider", issue_id: hasRetained ? chat : null });
+    expect(db.query(`SELECT status, session_id, execution_fingerprint FROM multiremi_tasks WHERE id = ?`).get(`${chat}_running`))
+      .toEqual({ status: "running", session_id: coldStart ? null : "old-task-provider",
+        execution_fingerprint: coldStart ? CHAT_ISSUE_DECOUPLED_FINGERPRINT : null });
+    expect(db.query(`SELECT disposition FROM multiremi_feishu_bot_issue_link_audit
+      WHERE chat_session_id = ? ORDER BY binding_id`).all(chat))
+      .toEqual(types.map((type) => ({ disposition: type === "group" ? "preserved" : "discarded" })));
+  }
+  const read = () => Object.fromEntries(Object.entries(db.query(documentedSql("metrics")).get()!)
+    .map(([key, value]) => [key, value === null ? null : Number(value)]));
+  const metrics = read();
+  expect(metrics).toMatchObject({ evaluated_links: 10, missing_chat_identity_rows: 0,
+    shared_chat_count: 4, shared_chat_binding_count: 9, mixed_disposition_chat_count: 2,
+    mixed_disposition_binding_count: 5, preserved_group_discarded_p2p_chat_count: 1,
+    preserved_multi_issue_chat_count: 0 });
+  const rows = db.query(documentedSql("detail")).all();
+  expect(rows).toHaveLength(10);
+  for (const row of rows) expect(row.chat_session_id).toBe(JSON.parse(row.binding_snapshot).chat_session_id);
+  runMigrations(db);
+  expect(read()).toEqual(metrics);
+  // Live repairs/deletions must not erase the migration's conflict evidence.
+  db.run("DELETE FROM multiremi_feishu_bot_chat_bindings WHERE app_id = 'app_metrics'");
+  expect(read()).toEqual(metrics);
+  // Synthetic historical/imported audit rows, deliberately NOT a migration
+  // output: newly classified bindings all inherit their Chat's one legacy Issue.
+  for (const [id, chat, issue, disposition] of [
+    ["synthetic_a", "synthetic_shared", "issue_a", "preserved"],
+    ["synthetic_a_duplicate", "synthetic_shared", "issue_a", "preserved"],
+    ["synthetic_b", "synthetic_shared", "issue_b", "preserved"],
+    ["synthetic_single", "synthetic_single", "issue_b", "preserved"],
+  ]) db.run(`INSERT INTO multiremi_feishu_bot_issue_link_audit
+    (binding_id, workspace_id, chat_session_id, issue_id, disposition, reason, audited_at, classification_version, binding_snapshot)
+    VALUES (?, 'local', ?, ?, ?, ?, ?, 2, '{}')`,
+  [id, chat, issue, disposition, disposition === "preserved" ? "synced_group" : "unproven_ownership", now]);
+  expect(read()).toMatchObject({ preserved_multi_issue_chat_count: 1, shared_chat_count: 5,
+    mixed_disposition_chat_count: 2 });
+  db.run(`INSERT INTO multiremi_feishu_bot_issue_link_audit
+    (binding_id, workspace_id, chat_session_id, issue_id, disposition, reason, audited_at, classification_version, binding_snapshot)
+    VALUES ('synthetic_c', 'local', 'synthetic_shared', 'issue_c', 'discarded', 'unproven_ownership', ?, 2, '{}')`, [now]);
+  expect(read()).toMatchObject({ preserved_multi_issue_chat_count: 1, mixed_disposition_chat_count: 3 });
+  db.run("UPDATE multiremi_feishu_bot_issue_link_audit SET issue_id = 'issue_a' WHERE binding_id = 'synthetic_b'");
+  expect(read()).toMatchObject({ preserved_multi_issue_chat_count: 0 });
+  db.run("UPDATE multiremi_feishu_bot_issue_link_audit SET issue_id = 'issue_b' WHERE binding_id = 'synthetic_b'");
+  // An already-migrated early schema gets the nullable column idempotently,
+  // without inventing Chat IDs or replaying the ownership migration.
+  db.exec("ALTER TABLE multiremi_feishu_bot_issue_link_audit DROP COLUMN chat_session_id");
+  runMigrations(db);
+  runMigrations(db);
+  expect(read()).toMatchObject({ evaluated_links: 15, missing_chat_identity_rows: 15,
+    shared_chat_count: null, shared_chat_binding_count: null, mixed_disposition_chat_count: null,
+    mixed_disposition_binding_count: null, preserved_group_discarded_p2p_chat_count: null,
+    preserved_multi_issue_chat_count: null });
+}
+
+function assertPrelinkedIssueConflicts(db: SqlDatabase) {
+  db.run("DELETE FROM multiremi_feishu_bot_issue_link_audit");
+  db.exec("ALTER TABLE multiremi_chat_sessions ADD COLUMN issue_id TEXT");
+  const now = new Date().toISOString();
+  for (const issue of ["prelinked_a", "prelinked_b"]) db.run(`INSERT INTO multiremi_issues
+    (id, title, status, created_at, updated_at) VALUES (?, 'Prelinked', 'todo', ?, ?)`, [issue, now, now]);
+  // Both prelinked A/B, and newly preserved A + prelinked B, are schema-valid.
+  // They bypass the ambiguity fallback when old Chat/task ownership matches A.
+  for (const kind of ["both", "partial"]) {
+    const chat = `prelinked_${kind}`;
+    db.run(`INSERT INTO multiremi_chat_sessions
+      (id, agent_id, issue_id, title, session_id, session_provider, session_execution_fingerprint, created_at, updated_at)
+      VALUES (?, 'agt_metrics', 'prelinked_a', 'Prelinked', 'ambiguous-provider', 'codex', 'ambiguous-fingerprint', ?, ?)`, [chat, now, now]);
+    for (const status of ["queued", "running"]) db.run(`INSERT INTO multiremi_tasks
+      (id, agent_id, chat_session_id, issue_id, status, prompt, session_id, created_at, updated_at)
+      VALUES (?, 'agt_metrics', ?, 'prelinked_a', ?, 'Fixture', 'ambiguous-task-provider', ?, ?)`,
+    [`${chat}_${status}`, chat, status, now, now]);
+    for (const issue of ["prelinked_a", "prelinked_b"]) {
+      const binding = `${chat}_${issue}`;
+      db.run(`INSERT INTO multiremi_feishu_bot_chat_bindings
+        (id, workspace_id, app_id, agent_id, external_session_key, chat_session_id, chat_id, issue_id, created_at, updated_at)
+        VALUES (?, 'local', 'app_metrics', 'agt_metrics', ?, ?, ?, ?, ?, ?)`,
+      [binding, binding, chat, binding, kind === "partial" && issue === "prelinked_a" ? null : issue, now, now]);
+      db.run(`INSERT INTO multiremi_feishu_messages
+        (message_id, workspace_id, source_id, chat_id, chat_type, content_fingerprint, created_at, ingested_at)
+        VALUES (?, 'local', 'shared_metrics_source', ?, 'group', 'fixture', ?, ?)`, [binding, binding, now, now]);
+    }
+  }
+  expect(db.query(documentedSql("live-multi-issue")).all().map((row) => row.chat_session_id)).toEqual(["prelinked_both"]);
+  db.run("DELETE FROM multiremi_schema_migrations WHERE id = '20260916_chat_issue_decoupling'");
+  for (let startup = 0; startup < 2; startup++) {
+    runMigrations(db);
+    const conflicts = db.query(documentedSql("live-multi-issue")).all();
+    expect(conflicts.map((row) => ({ chat: row.chat_session_id, bindings: Number(row.live_binding_count), issues: Number(row.live_issue_count) })))
+      .toEqual([{ chat: "prelinked_both", bindings: 2, issues: 2 }, { chat: "prelinked_partial", bindings: 2, issues: 2 }]);
+    for (const kind of ["both", "partial"]) {
+      const chat = `prelinked_${kind}`;
+      // Characterize current behavior, not an endorsement of ambiguous resume.
+      expect(db.query(`SELECT session_id, session_provider, session_execution_fingerprint
+        FROM multiremi_chat_sessions WHERE id = ?`).get(chat)).toEqual({ session_id: "ambiguous-provider",
+        session_provider: "codex", session_execution_fingerprint: "ambiguous-fingerprint" });
+      expect(db.query(`SELECT issue_id FROM multiremi_feishu_bot_chat_bindings
+        WHERE chat_session_id = ? ORDER BY issue_id`).all(chat)).toEqual([{ issue_id: "prelinked_a" }, { issue_id: "prelinked_b" }]);
+      for (const status of ["queued", "running"]) expect(db.query(`SELECT status, issue_id, session_id, execution_fingerprint
+        FROM multiremi_tasks WHERE id = ?`).get(`${chat}_${status}`)).toEqual({ status, issue_id: "prelinked_a",
+        session_id: "ambiguous-task-provider", execution_fingerprint: null });
+      expect(Number(db.query(`SELECT COUNT(*) AS n FROM multiremi_feishu_bot_issue_link_audit
+        WHERE chat_session_id = ?`).get(chat).n)).toBe(kind === "both" ? 0 : 1);
+    }
+    expect(Number(db.query(documentedSql("metrics")).get()!.preserved_multi_issue_chat_count)).toBe(0);
+  }
 }
 
 describe("MUL-301 executable audit metrics and recovery runbook", () => {

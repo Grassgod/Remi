@@ -753,6 +753,7 @@ export class FeishuBotRepo {
         });
         const bindingId = createId("fcb");
         const now = nowIso();
+        this.assertChatHasNoBinding(chat.id, bindingId);
         this.ctx.db.run(
           `INSERT INTO multiremi_feishu_bot_chat_bindings (
              id, workspace_id, app_id, agent_id, external_session_key,
@@ -903,6 +904,21 @@ export class FeishuBotRepo {
     return result;
   }
 
+  // Both callers create a fresh Chat in the same transaction and hold the
+  // workspace lifecycle lock. Check globally: a corrupt cross-workspace row
+  // must not make an already occupied Chat look available.
+  private assertChatHasNoBinding(chatSessionId: string, bindingId: string): void {
+    const existing = this.ctx.db.query(`SELECT id FROM multiremi_feishu_bot_chat_bindings
+      WHERE chat_session_id = ? ORDER BY id LIMIT 1`).get(chatSessionId) as Row | null;
+    if (existing) {
+      throw new FeishuBotConfigError(
+        `Cannot create binding ${bindingId}: Chat ${chatSessionId} already has binding ${String(existing.id)}`,
+        409,
+        "chat_binding_conflict",
+      );
+    }
+  }
+
   getIssueIdForChatSession(chatSessionId: string): string | null {
     const row = this.ctx.db.query(
       `SELECT issue_id FROM multiremi_feishu_bot_chat_bindings
@@ -973,6 +989,7 @@ export class FeishuBotRepo {
       const bindingId = `fcb_issue_topic_${issue.id}`;
       const deliveryId = `fbo_issue_topic_${issue.id}`;
       const now = nowIso();
+      this.assertChatHasNoBinding(chat.id, bindingId);
       this.ctx.db.run(
         `INSERT INTO multiremi_feishu_bot_chat_bindings (
            id, workspace_id, app_id, agent_id, external_session_key,

@@ -2282,6 +2282,7 @@ export function runMigrations(db: SqlDatabase): void {
     CREATE TABLE IF NOT EXISTS multiremi_feishu_bot_issue_link_audit (
       binding_id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL,
+      chat_session_id TEXT,
       issue_id TEXT NOT NULL,
       audited_at TEXT NOT NULL,
       reason TEXT NOT NULL,
@@ -2567,6 +2568,7 @@ export function runMigrations(db: SqlDatabase): void {
   // Earlier unpublished MUL-301 drafts recorded only discarded links. Keep
   // those rows visibly incomplete; never fabricate missing preservation proof.
   for (const column of [
+    "chat_session_id TEXT",
     "disposition TEXT NOT NULL DEFAULT 'discarded'",
     "classification_version INTEGER NOT NULL DEFAULT 1",
     "hit_canonical INTEGER NOT NULL DEFAULT 0", "hit_marker INTEGER NOT NULL DEFAULT 0",
@@ -2765,6 +2767,9 @@ export function runMigrations(db: SqlDatabase): void {
   dropColumnIfExists(db, "multiremi_agent_issue_update_state", "window_started_at");
   dropColumnIfExists(db, "multiremi_agent_issue_update_state", "deliveries_in_window");
   addColumnIfMissing(db, "multiremi_tasks", "chat_session_id TEXT");
+  // MUL-304: install before the decoupling transaction's per-Chat task updates.
+  // Keep this outside its one-time ledger so already-migrated stores gain it too.
+  db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_chat_session ON multiremi_tasks(chat_session_id)");
   addColumnIfMissing(db, "multiremi_repository_wiki_storage_jobs", "lease_token TEXT");
   addColumnIfMissing(db, "multiremi_repository_wiki_storage_jobs", "lease_until TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "chat_queue_order INTEGER NOT NULL DEFAULT 0");
@@ -4528,11 +4533,11 @@ function migrateChatIssueOwnership(db: SqlDatabase, chatSchema?: string | null):
         : autoCreatedGroupIssue ? "creation_provenance" : syncedGroup ? "synced_group" : "unproven_ownership";
       const { context_refs: _refs, legacy_issue_id, ...snapshot } = binding;
       db.run(`INSERT INTO multiremi_feishu_bot_issue_link_audit
-        (binding_id, workspace_id, issue_id, audited_at, reason, disposition,
+        (binding_id, workspace_id, chat_session_id, issue_id, audited_at, reason, disposition,
          classification_version, hit_canonical, hit_marker, hit_synced_group, hit_synced_p2p,
          last_inbound_at, active_last7d, binding_snapshot, channel_snapshot)
-        VALUES (?, ?, ?, ?, ?, ?, 2, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(binding_id) DO NOTHING`,
-      [binding.id, binding.workspace_id, legacy_issue_id, auditedAt, reason,
+        VALUES (?, ?, ?, ?, ?, ?, ?, 2, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(binding_id) DO NOTHING`,
+      [binding.id, binding.workspace_id, binding.chat_session_id, legacy_issue_id, auditedAt, reason,
         preserve ? "preserved" : "discarded", Number(canonicalTopic), Number(autoCreatedGroupIssue),
         Number(syncedGroup), Number(syncedP2p), lastInboundAt,
         Number(lastInboundAt !== null && Date.parse(lastInboundAt) >= Date.parse(auditedAt) - 7 * 24 * 60 * 60 * 1000),
