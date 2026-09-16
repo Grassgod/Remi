@@ -56,6 +56,9 @@ function seed(db: SqlDatabase, size: number, backend: string) {
     }
     db.run("DELETE FROM multiremi_schema_migrations WHERE id = ?", [migration]);
   })();
+  // Model an upgrade from the unindexed schema. Include index construction in
+  // migrationMs, not setupMs (the initial runMigrations creates today's schema).
+  db.exec("DROP INDEX IF EXISTS idx_multiremi_tasks_chat_session");
   if (backend === "sqlite") db.exec("PRAGMA foreign_keys = ON");
 }
 

@@ -2767,6 +2767,9 @@ export function runMigrations(db: SqlDatabase): void {
   dropColumnIfExists(db, "multiremi_agent_issue_update_state", "window_started_at");
   dropColumnIfExists(db, "multiremi_agent_issue_update_state", "deliveries_in_window");
   addColumnIfMissing(db, "multiremi_tasks", "chat_session_id TEXT");
+  // MUL-304: install before the decoupling transaction's per-Chat task updates.
+  // Keep this outside its one-time ledger so already-migrated stores gain it too.
+  db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_chat_session ON multiremi_tasks(chat_session_id)");
   addColumnIfMissing(db, "multiremi_repository_wiki_storage_jobs", "lease_token TEXT");
   addColumnIfMissing(db, "multiremi_repository_wiki_storage_jobs", "lease_until TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "chat_queue_order INTEGER NOT NULL DEFAULT 0");
