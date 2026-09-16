@@ -2275,6 +2275,17 @@ export function runMigrations(db: SqlDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_chat_bindings_chat
       ON multiremi_feishu_bot_chat_bindings(chat_session_id);
 
+    -- Unclassified legacy bot links are inert until an authoritative inbound
+    -- chat_type confirms group ownership. Keep them separate from live bindings.
+    CREATE TABLE IF NOT EXISTS multiremi_feishu_bot_legacy_issue_links (
+      binding_id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      issue_id TEXT NOT NULL,
+      quarantined_at TEXT NOT NULL,
+      replay_since TEXT NOT NULL,
+      channel_snapshot TEXT
+    );
+
     -- Accounts are discovered from verified bot deliveries, never from an
     -- administrator typing an identity or from workspace membership.
     CREATE TABLE IF NOT EXISTS multiremi_feishu_bot_senders (
@@ -4403,7 +4414,7 @@ function migrateChatIssueOwnership(db: SqlDatabase, chatSchema?: string | null):
   const columns = db.query("PRAGMA table_info(multiremi_chat_sessions)").all() as Array<{ name: string }>;
   if (columns.some((column) => column.name === "issue_id")) {
     const bindings = db.query(`SELECT binding.id, binding.workspace_id, binding.chat_id,
-        binding.chat_session_id, chat.issue_id, issue.context_refs
+        binding.chat_session_id, chat.issue_id, issue.context_refs, issue.created_at AS issue_created_at
       FROM multiremi_feishu_bot_chat_bindings binding
       JOIN multiremi_chat_sessions chat ON chat.id = binding.chat_session_id
         AND chat.workspace_id = binding.workspace_id
@@ -4411,9 +4422,22 @@ function migrateChatIssueOwnership(db: SqlDatabase, chatSchema?: string | null):
         AND issue.workspace_id = binding.workspace_id
       WHERE binding.issue_id IS NULL`).all() as Array<{
         id: string; workspace_id: string; chat_id: string | null;
-        chat_session_id: string; issue_id: string; context_refs: string;
+        chat_session_id: string; issue_id: string; context_refs: string; issue_created_at: string;
       }>;
+    const quarantinedAt = new Date().toISOString();
     for (const binding of bindings) {
+      // Synced message metadata is authoritative only within the same workspace
+      // and a source owned by that workspace. Any p2p evidence takes precedence,
+      // including contradictory group history or a canonical/provenance marker.
+      const chatTypes = binding.chat_id ? db.query(`SELECT DISTINCT message.chat_type
+        FROM multiremi_feishu_messages message
+        JOIN multiremi_feishu_sources source ON source.id = message.source_id
+          AND source.workspace_id = message.workspace_id
+        WHERE message.workspace_id = ? AND message.chat_id = ?
+          AND message.chat_type IN ('group', 'p2p')`)
+        .all(binding.workspace_id, binding.chat_id) as Array<{ chat_type: string }> : [];
+      if (chatTypes.some((message) => message.chat_type === "p2p")) continue;
+      const syncedGroup = chatTypes.some((message) => message.chat_type === "group");
       const canonicalTopic = binding.chat_session_id === `chat_issue_topic_${binding.issue_id}`;
       let autoCreatedGroupIssue = false;
       if (!canonicalTopic && binding.chat_id) {
@@ -4432,9 +4456,41 @@ function migrateChatIssueOwnership(db: SqlDatabase, chatSchema?: string | null):
             .get(binding.id, binding.workspace_id, source.message_id));
         });
       }
-      if (canonicalTopic || autoCreatedGroupIssue) {
+      if (syncedGroup || canonicalTopic || autoCreatedGroupIssue) {
         db.run("UPDATE multiremi_feishu_bot_chat_bindings SET issue_id = ? WHERE id = ?",
           [binding.issue_id, binding.id]);
+      } else {
+        // Neither thread IDs nor transport keys distinguish group from p2p.
+        // Save the association without granting it any active Issue behavior.
+        const pending = db.query(`SELECT channel_id, pending_since
+          FROM multiremi_agent_issue_update_state
+          WHERE workspace_id = ? AND chat_session_id = ? AND issue_id = ?`)
+          .get(binding.workspace_id, binding.chat_session_id, binding.issue_id) as {
+            channel_id: string; pending_since: string | null;
+          } | null;
+        const channels = db.query(`SELECT * FROM multiremi_notification_channels
+          WHERE workspace_id = ? AND kind = 'agent_chat' ORDER BY id`)
+          .all(binding.workspace_id) as Array<Record<string, unknown>>;
+        const matches = channels.filter((channel) => {
+          try { return JSON.parse(String(channel.target)).chatId === binding.chat_session_id; }
+          catch { return false; }
+        });
+        const channel = matches.find((candidate) => candidate.id === pending?.channel_id) ?? matches[0];
+        const pendingTime = pending?.pending_since ? Date.parse(pending.pending_since) : Number.NaN;
+        // Flush clears pending_since before the provider consumes its system
+        // message. Do not lose that unconsumed update when cleanup deletes the
+        // aggregate: replay from the Issue's creation instead of parsing prose.
+        const unconsumedUpdate = db.query(`SELECT 1 AS present FROM multiremi_chat_messages
+          WHERE chat_session_id = ? AND role = 'system' AND body LIKE 'Bound Issue update:%'
+            AND pending_agent_delivery = 1 LIMIT 1`).get(binding.chat_session_id);
+        const issueCreatedTime = unconsumedUpdate ? Date.parse(binding.issue_created_at) : Number.NaN;
+        const replaySince = new Date(Math.min(Date.parse(quarantinedAt),
+          ...[pendingTime, issueCreatedTime].filter(Number.isFinite))).toISOString();
+        db.run(`INSERT INTO multiremi_feishu_bot_legacy_issue_links
+          (binding_id, workspace_id, issue_id, quarantined_at, replay_since, channel_snapshot)
+          VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(binding_id) DO NOTHING`,
+        [binding.id, binding.workspace_id, binding.issue_id, quarantinedAt, replaySince,
+          channel ? JSON.stringify(channel) : null]);
       }
     }
     // A resumed provider session would otherwise retain the inherited Issue

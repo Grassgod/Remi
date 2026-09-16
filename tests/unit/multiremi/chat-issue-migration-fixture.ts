@@ -61,24 +61,61 @@ export function seedLegacyChatIssueFixture(db: SqlDatabase, tableForeignKey = fa
   db.run("DELETE FROM multiremi_schema_migrations WHERE id = ?", [CHAT_ISSUE_MIGRATION]);
 }
 
-export const CHAT_ISSUE_CLASSIFICATION_CASES = [
-  { name: "p2p_thread_and_key", thread: true, key: true, provenance: "none", preserve: false },
-  { name: "p2p_thread_only", thread: true, key: false, provenance: "none", preserve: false },
-  { name: "p2p_key_only", thread: false, key: true, provenance: "none", preserve: false },
-  { name: "group_without_thread", thread: false, key: false, provenance: "exact", preserve: true },
-  { name: "wrong_binding", thread: true, key: true, provenance: "wrong_binding", preserve: false },
-  { name: "wrong_workspace", thread: true, key: true, provenance: "wrong_workspace", preserve: false },
-  { name: "wrong_source_chat", thread: true, key: true, provenance: "wrong_source_chat", preserve: false },
-  { name: "missing_delivery", thread: true, key: true, provenance: "missing_delivery", preserve: false },
-  { name: "malformed_source", thread: true, key: true, provenance: "malformed_source", preserve: false },
-] as const;
+interface ClassificationCase {
+  name: string;
+  thread: boolean;
+  key: boolean;
+  provenance: "none" | "exact" | "wrong_binding" | "wrong_workspace" | "wrong_source_chat" | "missing_delivery" | "malformed_source";
+  preserve: boolean;
+  quarantine: boolean;
+  canonical?: boolean;
+  synced?: Array<{ chatType: string; workspace?: string; sourceWorkspace?: string }>;
+  pendingSince?: string | null;
+  pendingCount?: number;
+  channelEnabled?: number;
+  noChannel?: boolean;
+  unconsumedUpdate?: boolean;
+}
+
+export const CHAT_ISSUE_CLASSIFICATION_CASES: ClassificationCase[] = [
+  { name: "p2p_thread_and_key", thread: true, key: true, provenance: "none", synced: [{ chatType: "p2p" }], preserve: false, quarantine: false },
+  { name: "p2p_thread_only", thread: true, key: false, provenance: "none", synced: [{ chatType: "p2p" }], preserve: false, quarantine: false },
+  { name: "p2p_key_only", thread: false, key: true, provenance: "none", synced: [{ chatType: "p2p" }], preserve: false, quarantine: false },
+  { name: "group_without_thread", thread: false, key: false, provenance: "exact", preserve: true, quarantine: false },
+  { name: "wrong_binding", thread: true, key: true, provenance: "wrong_binding", preserve: false, quarantine: true },
+  { name: "wrong_workspace", thread: true, key: true, provenance: "wrong_workspace", preserve: false, quarantine: true },
+  { name: "wrong_source_chat", thread: true, key: true, provenance: "wrong_source_chat", preserve: false, quarantine: true },
+  { name: "missing_delivery", thread: true, key: true, provenance: "missing_delivery", preserve: false, quarantine: true },
+  { name: "malformed_source", thread: true, key: true, provenance: "malformed_source", preserve: false, quarantine: true },
+  { name: "historical_synced_group", thread: true, key: true, provenance: "none", synced: [{ chatType: "group" }], preserve: true, quarantine: false },
+  { name: "unknown_legacy_group", thread: true, key: true, provenance: "none", preserve: false, quarantine: true,
+    pendingSince: "2026-09-02T12:00:00.000Z", channelEnabled: 1 },
+  { name: "unknown_legacy_disabled", thread: true, key: true, provenance: "none", preserve: false, quarantine: true,
+    pendingSince: "2026-09-02T12:00:00.000Z" },
+  { name: "unknown_no_channel", thread: true, key: true, provenance: "none", preserve: false, quarantine: true, noChannel: true, unconsumedUpdate: false },
+  { name: "unknown_future_pending", thread: true, key: true, provenance: "none", preserve: false, quarantine: true,
+    pendingSince: "2999-01-01T00:00:00.000Z", unconsumedUpdate: false },
+  { name: "unknown_invalid_pending", thread: true, key: true, provenance: "none", preserve: false, quarantine: true,
+    pendingSince: "not-a-time", unconsumedUpdate: false },
+  { name: "flushed_unconsumed_update", thread: true, key: true, provenance: "none", preserve: false, quarantine: true, pendingSince: null, pendingCount: 0 },
+  { name: "sync_wrong_workspace", thread: true, key: true, provenance: "none", synced: [{ chatType: "group", workspace: "other-workspace", sourceWorkspace: "other-workspace" }], preserve: false, quarantine: true },
+  { name: "sync_wrong_source_workspace", thread: true, key: true, provenance: "none", synced: [{ chatType: "group", sourceWorkspace: "other-workspace" }], preserve: false, quarantine: true },
+  { name: "conflicting_chat_type", thread: true, key: true, provenance: "none", synced: [{ chatType: "group" }, { chatType: "p2p" }], preserve: false, quarantine: false },
+  { name: "canonical_p2p", canonical: true, thread: true, key: true, provenance: "none", synced: [{ chatType: "p2p" }], preserve: false, quarantine: false },
+  { name: "provenance_p2p", thread: true, key: true, provenance: "exact", synced: [{ chatType: "p2p" }], preserve: false, quarantine: false },
+  { name: "invalid_sync_type", thread: true, key: true, provenance: "none", synced: [{ chatType: "unknown" }], preserve: false, quarantine: true },
+];
+
+export function classificationChatId(entry: ClassificationCase): string {
+  return entry.canonical ? `chat_issue_topic_iss_classification_${entry.name}` : `chat_classification_${entry.name}`;
+}
 
 /** Legacy bindings did not persist chat_type, even for explicit p2p threads. */
 export function seedLegacyChatIssueClassificationFixture(db: SqlDatabase, tableForeignKey = false): void {
   seedLegacyChatIssueFixture(db, tableForeignKey);
   const now = "2026-09-03T00:00:00.000Z";
   for (const entry of CHAT_ISSUE_CLASSIFICATION_CASES) {
-    const chatId = `chat_classification_${entry.name}`;
+    const chatId = classificationChatId(entry);
     const issueId = `iss_classification_${entry.name}`;
     const bindingId = `fcb_${chatId}`;
     const messageId = `om_${entry.name}`;
@@ -114,14 +151,25 @@ export function seedLegacyChatIssueClassificationFixture(db: SqlDatabase, tableF
     for (const role of ["user", "assistant", "system"]) {
       db.run(`INSERT INTO multiremi_chat_messages (id, chat_session_id, role, body, pending_agent_delivery, created_at)
         VALUES (?, ?, ?, ?, ?, ?)`, [`${chatId}_${role}`, chatId, role,
-        role === "system" ? "Bound Issue update: Legacy" : `${role} text`, role === "system" ? 1 : 0, now]);
+        role === "system" ? "Bound Issue update: Legacy" : `${role} text`, role === "system" && entry.unconsumedUpdate !== false ? 1 : 0, now]);
     }
-    db.run(`INSERT INTO multiremi_notification_channels
-      (id, workspace_id, kind, name, enabled, target, event_types, min_severity, created_at, updated_at)
-      VALUES (?, 'local', 'agent_chat', 'Legacy updates', 0, ?, '["*"]', 'info', ?, ?)`,
-    [`nch_agent_chat_${chatId}`, JSON.stringify({ chatId }), now, now]);
-    db.run(`INSERT INTO multiremi_agent_issue_update_state
-      (chat_session_id, workspace_id, issue_id, channel_id, pending_count, created_at, updated_at)
-      VALUES (?, 'local', ?, ?, 1, ?, ?)`, [chatId, issueId, `nch_agent_chat_${chatId}`, now, now]);
+    if (!entry.noChannel) {
+      db.run(`INSERT INTO multiremi_notification_channels
+        (id, workspace_id, kind, name, enabled, target, event_types, min_severity, created_by, created_at, updated_at)
+        VALUES (?, 'local', 'agent_chat', 'Legacy updates', ?, ?, '["comment_created"]', 'warning', 'legacy-owner', ?, ?)`,
+      [`nch_agent_chat_${chatId}`, entry.channelEnabled ?? 0, JSON.stringify({ chatId }), now, now]);
+      db.run(`INSERT INTO multiremi_agent_issue_update_state
+        (chat_session_id, workspace_id, issue_id, channel_id, pending_count, pending_since, created_at, updated_at)
+        VALUES (?, 'local', ?, ?, ?, ?, ?, ?)`, [chatId, issueId, `nch_agent_chat_${chatId}`, entry.pendingCount ?? 1, entry.pendingSince ?? null, now, now]);
+    }
+    for (const [index, evidence] of (entry.synced ?? []).entries()) {
+      const sourceId = `fsrc_${entry.name}_${index}`;
+      db.run(`INSERT INTO multiremi_feishu_sources (id, workspace_id, endpoint_name, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)`, [sourceId, evidence.sourceWorkspace ?? "local", sourceId, now, now]);
+      db.run(`INSERT INTO multiremi_feishu_messages (message_id, workspace_id, source_id, chat_id, chat_type,
+        content_fingerprint, created_at, ingested_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [`sync_${entry.name}_${index}`, evidence.workspace ?? "local", sourceId, externalChatId,
+        evidence.chatType, `fingerprint_${entry.name}_${index}`, now, now]);
+    }
   }
 }

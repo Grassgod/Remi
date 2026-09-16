@@ -27,7 +27,7 @@ import { ProjectInstructionsRevisionConflictError } from "@multiremi/store/repos
 import { TaskSteerConflictError, TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
 import { configureRepositoryWikiAutomation, readyArchiveBinding } from "./helpers.js";
 
-import { CHAT_ISSUE_CLASSIFICATION_CASES, seedLegacyChatIssueClassificationFixture } from "./chat-issue-migration-fixture.js";
+import { CHAT_ISSUE_CLASSIFICATION_CASES, classificationChatId, seedLegacyChatIssueClassificationFixture } from "./chat-issue-migration-fixture.js";
 
 // ────────────────────────────── translateSqliteToPg ──────────────────────────────
 
@@ -221,15 +221,15 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     await admin.end();
   });
 
-  // Real PostgreSQL performs repeated full startup migrations plus nine
-  // classification fixtures and their cleanup; allow for database round trips.
+  // Real PostgreSQL performs repeated full startup migrations plus classification
+  // fixtures and their cleanup; allow for database round trips.
   it("moves legacy Chat ownership into Feishu topics and is idempotent", () => {
     seedLegacyChatIssueClassificationFixture(db);
     runMigrations(db);
     runMigrations(db);
     expect((db.query("PRAGMA table_info(multiremi_chat_sessions)").all() as Array<{ name: string }>).map(column => column.name)).not.toContain("issue_id");
     expect(db.query(`SELECT chat_session_id, issue_id FROM multiremi_feishu_bot_chat_bindings
-      WHERE app_id = 'cli_migration' AND chat_session_id NOT LIKE 'chat_classification_%' ORDER BY chat_session_id`).all()).toEqual([
+      WHERE app_id = 'cli_migration' AND chat_session_id NOT LIKE '%classification_%' ORDER BY chat_session_id`).all()).toEqual([
       { chat_session_id: "chat_group_migration", issue_id: "iss_chat_migration" },
       { chat_session_id: "chat_issue_topic_iss_chat_migration", issue_id: "iss_chat_migration" },
       { chat_session_id: "chat_private_migration", issue_id: null },
@@ -243,8 +243,26 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(db.query("SELECT issue_id, issue_session_id, issue_session_generation FROM multiremi_tasks WHERE id = 'tsk_topic_migration_queued'").get())
       .toEqual({ issue_id: "iss_chat_migration", issue_session_id: null, issue_session_generation: null });
     for (const entry of CHAT_ISSUE_CLASSIFICATION_CASES) {
-      const chatId = `chat_classification_${entry.name}`;
+      const chatId = classificationChatId(entry);
       const issueId = `iss_classification_${entry.name}`;
+      const recovery = db.query(`SELECT * FROM multiremi_feishu_bot_legacy_issue_links
+        WHERE binding_id = ?`).get(`fcb_${chatId}`) as Record<string, string> | null;
+      if (!entry.quarantine) {
+        expect(recovery).toBeNull();
+      } else {
+        expect(recovery).toMatchObject({ binding_id: `fcb_${chatId}`, workspace_id: "local", issue_id: issueId });
+        expect(Number.isFinite(Date.parse(recovery!.quarantined_at))).toBe(true);
+        const pendingTime = Date.parse(entry.pendingSince ?? "");
+        const replayTimes = [Date.parse(recovery!.quarantined_at), pendingTime,
+          entry.unconsumedUpdate !== false ? Date.parse("2026-09-03T00:00:00.000Z") : Number.NaN];
+        expect(recovery!.replay_since).toBe(new Date(Math.min(...replayTimes.filter(Number.isFinite))).toISOString());
+        expect(recovery!.channel_snapshot ? JSON.parse(recovery!.channel_snapshot) : null).toEqual(entry.noChannel ? null : {
+          id: `nch_agent_chat_${chatId}`, workspace_id: "local", member_id: null, kind: "agent_chat",
+          name: "Legacy updates", enabled: entry.channelEnabled ?? 0, target: JSON.stringify({ chatId }),
+          event_types: '["comment_created"]', min_severity: "warning", created_by: "legacy-owner",
+          created_at: "2026-09-03T00:00:00.000Z", updated_at: "2026-09-03T00:00:00.000Z",
+        });
+      }
       expect(db.query("SELECT issue_id FROM multiremi_feishu_bot_chat_bindings WHERE chat_session_id = ?").get(chatId))
         .toEqual({ issue_id: entry.preserve ? issueId : null });
       expect(db.query(`SELECT session_id, session_provider, session_execution_fingerprint, work_dir, session_runtime_id
@@ -265,6 +283,12 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       expect(db.query("SELECT enabled FROM multiremi_notification_channels WHERE id = ?").get(`nch_agent_chat_${chatId}`))
         .toEqual(entry.preserve ? { enabled: 0 } : null);
     }
+    // The table is bootstrap schema, even after the one-time migration ledger exists.
+    db.exec("DROP TABLE multiremi_feishu_bot_legacy_issue_links");
+    runMigrations(db);
+    expect(Number(db.query("SELECT COUNT(*) AS count FROM multiremi_feishu_bot_legacy_issue_links").get().count)).toBe(0);
+    db.run("DELETE FROM multiremi_feishu_messages WHERE message_id LIKE 'sync_%'");
+    db.run("DELETE FROM multiremi_feishu_sources WHERE id LIKE 'fsrc_%'");
     // Keep the shared integration store empty for the remaining test cases.
     for (const chat of store.listChatSessions("local")) store.deleteChatSession(chat.id);
     store.deleteIssue("iss_chat_migration");
@@ -456,6 +480,103 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
         { body: "After migration", sequence: 4 },
       ]);
   });
+
+  it("recovers a quarantined group and emits one bounded catch-up on PostgreSQL", () => {
+    const previousKey = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
+    process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
+    try {
+      const workspaceId = freshWorkspace();
+      const agent = store.createAgent({ name: "PG recovery", provider: "codex", workspaceId });
+      const runtimeId = `rt_feishu_recovery_${wsCounter}`;
+      store.registerRuntime({ id: runtimeId, name: "PG recovery", provider: "codex", workspaceId, daemonId: `pg_recovery_${wsCounter}` });
+      store.heartbeatRuntime(runtimeId, { supportsFeishuBotConfig: true });
+      const config = store.upsertFeishuBotConfig(workspaceId, {
+        agentId: agent.id, runtimeId, appId: "cli_pg_recovery", domain: "feishu", enabled: true,
+        senderAccessPolicy: "allowlist", appSecretOp: "set", appSecret: "fixture-secret-not-a-real-credential",
+      });
+      store.reportFeishuBotRuntimeStatus(workspaceId, runtimeId, { appliedRevision: config.revision, state: "online" });
+      const input = { revision: config.revision, externalSessionKey: "oc_pg_legacy:thread:om_root",
+        externalMessageId: "om_pg_legacy_old", chatId: "oc_pg_legacy", threadId: "om_root", chatType: "group" as const,
+        senderOpenId: "ou_pg_recovery", senderName: "PG recovery sender", text: "Original group conversation" };
+      const first = store.submitFeishuBotMessage(workspaceId, runtimeId, input);
+      store.cancelTask(first.taskId);
+      const sender = store.listFeishuBotSenders(workspaceId)[0]!;
+      store.setFeishuBotSenderAllowed(workspaceId, sender.id, true, "local");
+      const issue = store.createIssue({ title: "Legacy PG group Issue", workspaceId, assigneeType: "agent", assigneeId: agent.id });
+      const binding = db.query("SELECT * FROM multiremi_feishu_bot_chat_bindings WHERE chat_session_id = ?").get(first.chatSessionId)!;
+      const channel = store.upsertAgentChatNotificationChannel({
+        workspaceId, chatSessionId: first.chatSessionId, enabled: true, name: "Original PG subscription",
+      });
+      db.run("UPDATE multiremi_notification_channels SET min_severity = 'warning' WHERE id = ?", [channel.id]);
+      const channelSnapshot = db.query("SELECT * FROM multiremi_notification_channels WHERE id = ?").get(channel.id)!;
+      store.deleteAgentChatNotificationChannel(first.chatSessionId);
+      const replaySince = new Date(Date.now() - 60_000).toISOString();
+      db.run(`INSERT INTO multiremi_feishu_bot_legacy_issue_links
+        (binding_id, workspace_id, issue_id, quarantined_at, replay_since, channel_snapshot)
+        VALUES (?, ?, ?, ?, ?, ?)`, [binding.id, workspaceId, issue.id, replaySince, replaySince, JSON.stringify(channelSnapshot)]);
+      for (let i = 0; i < 13; i++) store.createIssueComment(issue.id, {
+        authorType: "member", authorId: "local", body: `PG window update ${i} ${"a".repeat(500)}`,
+      });
+      const work = store.createTask({ agentId: agent.id, workspaceId, issueId: issue.id, prompt: "Window work", holdsWorkspace: false });
+      const request = store.createTaskHumanRequest({ taskId: work.id, kind: "permission", payload: {
+        message: "PG review needed", toolInput: { sensitive: "MUST_NOT_APPEAR" },
+      } });
+      db.run("UPDATE multiremi_tasks SET status = 'completed', completed_at = ?, result = 'PG work completed during quarantine' WHERE id = ?",
+        [new Date().toISOString(), work.id]);
+      const session = store.getOrCreateDefaultIssueSession(issue.id);
+      const published = store.publishSessionResult(session.id, { title: "PG reusable result", body: "PG result evidence" });
+      const heldDeliveryId = `legacy_pg_pending_${binding.id}`;
+      const heldAt = "2026-09-03T00:00:00.000Z";
+      db.run(`INSERT INTO multiremi_feishu_bot_human_request_pushes
+        (id, workspace_id, binding_id, issue_id, source_task_id, request_id, wake_task_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [heldDeliveryId, workspaceId, binding.id, issue.id,
+        work.id, request.id, first.taskId, heldAt, heldAt]);
+      db.run(`INSERT INTO multiremi_feishu_bot_outbound_deliveries
+        (id, workspace_id, binding_id, task_id, chat_id, thread_id, reply_to_message_id, body,
+          status, available_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, 'om_root', 'om_root', 'Held PG human request', 'pending', ?, ?, ?)`,
+      [heldDeliveryId, workspaceId, binding.id, first.taskId, input.chatId, heldAt, heldAt, heldAt]);
+      expect(store.claimFeishuBotOutbound(workspaceId, runtimeId)).toBeNull();
+      const fileDeliveryId = `legacy_pg_attachment_${binding.id}`;
+      db.run(`INSERT INTO multiremi_feishu_bot_outbound_deliveries
+        (id, workspace_id, binding_id, chat_id, body, attachments, status, available_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, '', ?, 'pending', ?, ?, ?)`, [fileDeliveryId, workspaceId, binding.id, input.chatId,
+        JSON.stringify([{ id: "pg_legacy_file", filename: "result.txt", contentType: "text/plain", sizeBytes: 1 }]), heldAt, heldAt, heldAt]);
+      const fileDelivery = store.claimFeishuBotOutbound(workspaceId, runtimeId, undefined, true, true, true)!;
+      expect(fileDelivery.id).toBe(fileDeliveryId);
+      expect(store.reportFeishuBotOutbound(workspaceId, runtimeId, fileDelivery.id, {
+        claimToken: fileDelivery.claimToken, status: "sent", externalMessageId: "om_pg_legacy_attachment",
+      })).toBe(true);
+      store.updateWorkspace(workspaceId, { settings: { issueTopics: { enabled: true, chatId: input.chatId } } });
+      const next = { ...input, externalMessageId: "om_pg_legacy_new", text: "Continue the legacy Issue" };
+      const recovered = store.submitFeishuBotMessage(workspaceId, runtimeId, next);
+      expect(recovered.chatSessionId).toBe(first.chatSessionId);
+      expect(store.getTask(recovered.taskId)?.issueId).toBe(issue.id);
+      expect(store.claimFeishuBotOutbound(workspaceId, runtimeId)?.id).toBe(heldDeliveryId);
+      expect(store.listIssues({ workspaceId }).map((value) => value.id)).toEqual([issue.id]);
+      expect(db.query("SELECT * FROM multiremi_feishu_bot_legacy_issue_links WHERE binding_id = ?").get(binding.id)).toBeNull();
+      expect(db.query("SELECT * FROM multiremi_notification_channels WHERE id = ?").get(channel.id)).toEqual(channelSnapshot);
+      const outboxId = `fbo_legacy_recovery_${binding.id}`;
+      const delivery = db.query("SELECT * FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(outboxId)!;
+      expect(delivery).toMatchObject({ binding_id: binding.id, chat_id: input.chatId, thread_id: "om_root", reply_to_message_id: next.externalMessageId });
+      expect(delivery.body).toContain("PG window update");
+      expect(delivery.body).toContain("entries omitted");
+      expect(delivery.body).toContain("[truncated]");
+      expect(delivery.body).toContain("PG work completed during quarantine");
+      expect(delivery.body).toContain(published.id);
+      expect(delivery.body).toContain("PG result evidence");
+      expect(delivery.body).toContain(request.id);
+      expect(delivery.body).toContain("PG review needed");
+      expect(delivery.body).not.toContain("MUST_NOT_APPEAR");
+      expect(String(delivery.body).length).toBeLessThan(20_000);
+      expect(store.submitFeishuBotMessage(workspaceId, runtimeId, next).duplicate).toBe(true);
+      expect(Number(db.query("SELECT COUNT(*) AS count FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(outboxId).count)).toBe(1);
+      expect(store.listChatMessages(first.chatSessionId).filter((message) => message.body.startsWith("Feishu Issue topic restored:"))).toHaveLength(1);
+    } finally {
+      if (previousKey === undefined) delete process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
+      else process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = previousKey;
+    }
+  }, 15_000);
 
   it("discovers Feishu senders and checks their live allowlist across Chat and task ancestry", () => {
     const previousKey = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;

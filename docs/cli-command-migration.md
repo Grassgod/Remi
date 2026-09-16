@@ -303,6 +303,8 @@ API changes:
 - Issue creation no longer returns `chat_issue_binding` or `chat_issue_binding_hint`.
 - `GET` and `PUT /api/chat/sessions/:sessionId/issue-updates` are removed.
 - CLI context no longer includes `current.chat.issue_id` or `current.bound_issue`.
+- Internal daemon task wire removes `chat_bootstrap_transcript`; cold conversation
+  history continues through the existing session projection.
 
 ## Deprecated aliases
 

@@ -168,10 +168,10 @@ describe("CLI capabilities manifest", () => {
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 652,
+      mapped: 650,
       exempt: 91,
       missing: 0,
-      total: 743,
+      total: 741,
     });
     expect(manifest.max_planned_routes).toBe(0);
     expect(manifest.routes["POST /api/chat/attachments/send"]).toEqual({ command: "chat.attachment.send" });
