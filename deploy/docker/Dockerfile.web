@@ -6,6 +6,12 @@ ENV STANDALONE=true
 ARG REMOTE_API_URL=http://api:6120
 ENV REMOTE_API_URL=$REMOTE_API_URL
 
+# Cap Next's build worker pool when the builder's memory budget is smaller than
+# its visible CPU count suggests. Empty by default, so the official release
+# build keeps Next's own sizing. See next.config.ts and MUL-303.
+ARG NEXT_BUILD_CPUS=""
+ENV NEXT_BUILD_CPUS=$NEXT_BUILD_CPUS
+
 COPY . .
 RUN bun install --registry https://registry.npmjs.org --frozen-lockfile --ignore-scripts \
   && bun run --filter @multiremi/web build
