@@ -1806,6 +1806,18 @@ runMigrations(this.db);
     return this.feishuBot.getIssueIdForChatSession(chatSessionId);
   }
 
+  assertFeishuBotInboundAttachmentScope(...args: Parameters<FeishuBotRepo["assertInboundAttachmentScope"]>) {
+    return this.feishuBot.assertInboundAttachmentScope(...args);
+  }
+
+  createFeishuBotInboundAttachment(...args: Parameters<FeishuBotRepo["createInboundAttachment"]>) {
+    return this.feishuBot.createInboundAttachment(...args);
+  }
+
+  sendChatAttachments(...args: Parameters<FeishuBotRepo["sendChatAttachments"]>) {
+    return this.feishuBot.sendChatAttachments(...args);
+  }
+
   getFeishuBotChatConversationKind(chatSessionId: string): "p2p" | "group" | null {
     return this.feishuBot.getChatConversationKind(chatSessionId);
   }
@@ -1864,8 +1876,9 @@ runMigrations(this.db);
     now?: string | Date,
     supportsTaskStream = false,
     supportsNativeCot = false,
+    supportsAttachments = false,
   ): MultiremiFeishuBotOutboundDelivery | null {
-    return this.feishuBot.claimOutbound(workspaceId, runtimeId, now, supportsTaskStream, supportsNativeCot);
+    return this.feishuBot.claimOutbound(workspaceId, runtimeId, now, supportsTaskStream, supportsNativeCot, supportsAttachments);
   }
 
   getFeishuBotOutboundAttachment(

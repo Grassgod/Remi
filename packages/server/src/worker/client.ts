@@ -4,6 +4,7 @@ import { parseRuntimeClaudeProfile, type RuntimeClaudeProfile } from "@multiremi
 import { parseFeishuPresentation } from "@multiremi/contracts/feishu-presentation.js";
 import { stat } from "node:fs/promises";
 import { normalizeRepoList } from "@daemon/agent-runtime/repo/checkout.js";
+import { CHAT_ATTACHMENT_MAX_BYTES, readChatAttachmentBytes } from "@daemon/agent-runtime/workspace/chat-attachments.js";
 import { isFeishuOpenId, parseOutboundMention } from "@shared/feishu-mention.js";
 import type {
   MultiremiDaemonHeartbeatAck,
@@ -40,7 +41,7 @@ import type {
   SubmitFeishuBotMessageResult,
 } from "@multiremi/contracts/types.js";
 import {
-  FEISHU_CONCIERGE_NATIVE_COT_PROTOCOL_VERSION,
+  FEISHU_CONCIERGE_ATTACHMENT_PROTOCOL_VERSION,
   type FeishuPresentationCheckpoint,
   FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER,
   MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
@@ -53,6 +54,15 @@ export interface MultiremiWorkspaceReposResponse {
   repos_version: string;
   settings?: Record<string, unknown>;
   relay?: MultiremiRelayWire;
+}
+
+export interface UploadFeishuBotAttachmentInput {
+  revision: number;
+  externalSessionKey: string;
+  externalMessageId: string;
+  fileName: string;
+  contentType: string;
+  buffer: Uint8Array;
 }
 
 export interface MultiremiDaemonRegisterRuntimeInput {
@@ -331,7 +341,7 @@ export class MultiremiDaemonClient {
         // Only claimed when this process can actually host the connector, so
         // the control plane never hands the bot to a Runtime that cannot run it.
         ...(supportsFeishuConcierge
-          ? { feishu_concierge_protocol: FEISHU_CONCIERGE_NATIVE_COT_PROTOCOL_VERSION }
+          ? { feishu_concierge_protocol: FEISHU_CONCIERGE_ATTACHMENT_PROTOCOL_VERSION }
           : {}),
       }, undefined, signal);
     } catch (error) {
@@ -356,6 +366,9 @@ export class MultiremiDaemonClient {
           bodyOrigin: (rawOutbound.body_origin ?? rawOutbound.bodyOrigin) === "agent" ? "agent" : "issue",
           idempotencyKey: String(rawOutbound.idempotency_key ?? rawOutbound.idempotencyKey ?? rawOutbound.id ?? ""),
           mention: parseOutboundMention(rawOutbound.mention),
+          ...(Array.isArray(rawOutbound.attachments) ? {
+            attachments: rawOutbound.attachments.map(normalizeDaemonClaimAttachment),
+          } : {}),
           ...(Array.isArray(rawOutbound.receipt_message_ids) ? {
             receiptMessageIds: rawOutbound.receipt_message_ids.filter((id): id is string => typeof id === "string"),
           } : {}),
@@ -519,9 +532,52 @@ export class MultiremiDaemonClient {
       chat_id: input.chatId ?? undefined,
       thread_id: input.threadId ?? undefined,
       text: input.text,
+      attachment_ids: input.attachmentIds,
       delivery_mode: input.deliveryMode,
     });
     return response;
+  }
+
+  async uploadFeishuBotAttachment(runtimeId: string, input: UploadFeishuBotAttachmentInput): Promise<{ id: string }> {
+    if (input.buffer.byteLength > CHAT_ATTACHMENT_MAX_BYTES) throw new Error("Attachment exceeds the 20MB limit");
+    const form = new FormData();
+    form.set("revision", String(input.revision));
+    form.set("external_session_key", input.externalSessionKey);
+    form.set("external_message_id", input.externalMessageId);
+    form.set("file", new Blob([new Uint8Array(input.buffer)], { type: input.contentType }), input.fileName);
+    const result = await this.request<{ attachment: { id: string } }>(
+      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/feishu-bot/attachments`,
+      { method: "POST", headers: this.headers(), body: form },
+    );
+    return result.attachment;
+  }
+
+  async downloadTaskAttachment(attachmentId: string, taskToken: string, signal?: AbortSignal): Promise<Buffer> {
+    if (!taskToken) throw new Error("Task attachment download requires the task credential");
+    const path = `/api/attachments/${encodeURIComponent(attachmentId)}/download`;
+    return this.requestAttachmentBytes(path, this.headers(undefined, taskToken), signal);
+  }
+
+  async downloadFeishuBotOutboundAttachment(
+    runtimeId: string, deliveryId: string, claimToken: string, attachmentId: string,
+  ): Promise<Buffer> {
+    const path = `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/feishu-bot/outbound/${encodeURIComponent(deliveryId)}/attachments/${encodeURIComponent(attachmentId)}`;
+    const headers = new Headers(this.headers());
+    headers.set(FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER, claimToken);
+    return this.requestAttachmentBytes(path, headers);
+  }
+
+  private async requestAttachmentBytes(path: string, headers: HeadersInit, signal?: AbortSignal): Promise<Buffer> {
+    signal?.throwIfAborted();
+    const timeout = AbortSignal.timeout(this.requestTimeoutMs);
+    const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+    // Never forward a task/daemon credential to an attachment's external URL.
+    const response = await fetch(this.baseUrl + path, { headers, redirect: "manual", signal: requestSignal });
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new MultiremiDaemonHttpError(response.status, "GET", path, "Attachment download failed", null);
+    }
+    return readChatAttachmentBytes(response);
   }
 
   async resetFeishuBotSession(runtimeId: string, revision: number, externalSessionKey: string): Promise<boolean> {

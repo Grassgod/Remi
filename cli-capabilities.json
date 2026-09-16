@@ -4157,6 +4157,32 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "chat.attachment": {
+      "command": "remi chat attachment",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "chat.attachment.send": {
+      "command": "remi chat attachment send",
+      "aliases": [],
+      "auth": [
+        "task"
+      ],
+      "capability": "chat.attachment.send",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "chat.pending": {
       "command": "remi chat pending",
       "aliases": [],
@@ -10802,6 +10828,9 @@
     "POST /api/autopilots/:id/triggers/:triggerId/rotate-webhook-token": {
       "command": "autopilot.trigger.rotate-token"
     },
+    "POST /api/chat/attachments/send": {
+      "command": "chat.attachment.send"
+    },
     "POST /api/chat/sessions": {
       "command": "chat.create"
     },
@@ -10898,6 +10927,11 @@
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
     "POST /api/daemon/runtimes/:runtimeId/directory-scans/claim": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/runtimes/:runtimeId/feishu-bot/attachments": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."

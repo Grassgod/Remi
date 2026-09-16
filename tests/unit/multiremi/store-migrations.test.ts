@@ -257,6 +257,10 @@ describe("store migrations", () => {
     expect(database.query(
       "SELECT id, reply_to_message_id, body FROM multiremi_feishu_bot_outbound_deliveries WHERE id = 'fbo_legacy'",
     ).get()).toEqual({ id: "fbo_legacy", reply_to_message_id: "om_root", body: "Legacy delivery" });
+    expect(database.query(
+      "SELECT status, previous_delivery_id FROM multiremi_feishu_bot_outbound_deliveries WHERE id = 'fbo_legacy'",
+    ).get()).toEqual({ status: "pending", previous_delivery_id: null });
+    expect(indexNames(database)).toContain("idx_multiremi_feishu_bot_outbound_previous");
     expect(() => database.run(
       `INSERT INTO multiremi_feishu_bot_outbound_deliveries (
          id, workspace_id, binding_id, task_id, chat_id, thread_id,
@@ -273,6 +277,15 @@ describe("store migrations", () => {
         "2026-09-04T00:00:00.000Z",
       ],
     )).not.toThrow();
+    database.run("UPDATE multiremi_feishu_bot_outbound_deliveries SET previous_delivery_id = ? WHERE id = ?",
+      ["fbo_legacy", "fbo_seed"]);
+    migrate(database);
+    expect(database.query(
+      "SELECT id, status, previous_delivery_id FROM multiremi_feishu_bot_outbound_deliveries ORDER BY id",
+    ).all()).toEqual([
+      { id: "fbo_legacy", status: "pending", previous_delivery_id: null },
+      { id: "fbo_seed", status: "pending", previous_delivery_id: "fbo_legacy" },
+    ]);
   });
 
   it("drops removed Agent cwd and Feishu webhook credential columns", () => {

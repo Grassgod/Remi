@@ -1230,6 +1230,8 @@ export type MultiremiTaskSteerKind = "steer" | "force_answer";
  *  provider session without cancelling the run. `force_answer` asks the agent
  *  to stop exploring and deliver its best conclusion now. */
 export interface MultiremiTaskSteerMessage {
+  sourceChatMessageId?: string;
+  attachments?: MultiremiAttachment[];
   id: string;
   taskId: string;
   task_id?: string;
@@ -1246,6 +1248,7 @@ export interface MultiremiTaskSteerMessage {
 }
 
 export interface CreateTaskSteerMessageInput {
+  sourceChatMessageId?: string;
   id?: string;
   taskId: string;
   kind: MultiremiTaskSteerKind;
@@ -3851,6 +3854,8 @@ export const FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION = 3;
 export const FEISHU_CONCIERGE_TASK_STREAM_PROTOCOL_VERSION = 4;
 /** Native CoT, independent interaction/result messages, durable inbound delivery. */
 export const FEISHU_CONCIERGE_NATIVE_COT_PROTOCOL_VERSION = 5;
+/** v6 supports explicit binary Chat attachment deliveries. */
+export const FEISHU_CONCIERGE_ATTACHMENT_PROTOCOL_VERSION = 6;
 export const FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER = "X-Multiremi-Feishu-Claim-Token";
 
 export type FeishuBotDomain = "feishu" | "lark" | "bytedance";
@@ -3906,6 +3911,7 @@ export interface FeishuPresentationCheckpoint {
 }
 
 export interface MultiremiFeishuBotOutboundDelivery {
+  attachments?: Array<Pick<MultiremiAttachment, "id" | "filename" | "contentType" | "sizeBytes">>;
   /** Original inbound messages only; never the root of an unrelated proactive reply. */
   receiptMessageIds?: string[];
   id: string;
@@ -4123,6 +4129,8 @@ export interface MultiremiFeishuBotDaemonPayload extends MultiremiFeishuBotDaemo
 
 /** One inbound Feishu event submitted by the Runtime hosting the connector. */
 export interface SubmitFeishuBotMessageInput {
+  /** Uploaded before submission, scoped to this runtime/revision/external message. */
+  attachmentIds?: string[];
   revision: number;
   externalSessionKey: string;
   externalMessageId: string;

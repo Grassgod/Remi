@@ -7,11 +7,14 @@ import type * as Lark from "@larksuiteoapi/node-sdk";
 import { Readable } from "node:stream";
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
 import { resolveReceiveIdType } from "./client.js";
 import { createLogger } from "@shared/logger.js";
+import { FEISHU_ATTACHMENT_MAX_BYTES } from "./incoming-media.js";
 
 const log = createLogger("feishu-media");
+
+// Larger images remain valid attachments, but must use Feishu's file upload API.
+export const FEISHU_IMAGE_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 
 // ── Image compression ─────────────────────────────────────────
 
@@ -58,12 +61,15 @@ export async function compressImageForModel(
 
   const meta = await sharp(buffer).metadata();
   const { width = 0, height = 0, format } = meta;
+  const originalContentType = ({ jpeg: "image/jpeg", png: "image/png", gif: "image/gif", webp: "image/webp",
+    tiff: "image/tiff", avif: "image/avif", svg: "image/svg+xml" } as Record<string, string>)[format ?? ""]
+    ?? contentType ?? "image/jpeg";
   const longEdge = Math.max(width, height);
   const needsResize = longEdge > MAX_LONG_EDGE;
   const needsSizeReduce = buffer.length > MAX_FILE_BYTES;
 
   if (!needsResize && !needsSizeReduce) {
-    return { buffer, contentType: contentType ?? "image/jpeg", compressed: false, originalSize: buffer.length, finalSize: buffer.length };
+    return { buffer, contentType: originalContentType, compressed: false, originalSize: buffer.length, finalSize: buffer.length };
   }
 
   const isPng = format === "png" || contentType?.includes("png");
@@ -110,47 +116,34 @@ export type SendMediaResult = { messageId: string; chatId: string };
  * Convert various Feishu SDK response formats to a Buffer.
  * The SDK returns different types depending on version/runtime.
  */
+export class FeishuAttachmentTooLargeError extends Error {
+  constructor() { super("Feishu attachment exceeds 20MB"); this.name = "FeishuAttachmentTooLargeError"; }
+}
+
 async function responseToBuffer(response: unknown): Promise<Buffer> {
   const r = response as any;
-
-  if (Buffer.isBuffer(response)) return response;
-  if (response instanceof ArrayBuffer) return Buffer.from(response);
-  if (r.data && Buffer.isBuffer(r.data)) return r.data;
-  if (r.data instanceof ArrayBuffer) return Buffer.from(r.data);
-
-  if (typeof r.getReadableStream === "function") {
-    const stream = r.getReadableStream();
+  const checked = (buffer: Buffer): Buffer => {
+    if (buffer.length > FEISHU_ATTACHMENT_MAX_BYTES) throw new FeishuAttachmentTooLargeError();
+    return buffer;
+  };
+  if (Buffer.isBuffer(response)) return checked(response);
+  if (response instanceof ArrayBuffer) return checked(Buffer.from(response));
+  if (r?.data && Buffer.isBuffer(r.data)) return checked(r.data);
+  if (r?.data instanceof ArrayBuffer) return checked(Buffer.from(r.data));
+  const stream = typeof r?.getReadableStream === "function" ? r.getReadableStream() : r;
+  if (stream && typeof stream[Symbol.asyncIterator] === "function") {
     const chunks: Buffer[] = [];
+    let length = 0;
     for await (const chunk of stream) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      length += buffer.length;
+      if (length > FEISHU_ATTACHMENT_MAX_BYTES) throw new FeishuAttachmentTooLargeError();
+      chunks.push(buffer);
     }
-    return Buffer.concat(chunks);
+    return Buffer.concat(chunks, length);
   }
-
-  if (typeof r.writeFile === "function") {
-    const tmpPath = path.join(os.tmpdir(), `feishu_dl_${Date.now()}`);
-    await r.writeFile(tmpPath);
-    const buf = await fs.promises.readFile(tmpPath);
-    await fs.promises.unlink(tmpPath).catch(() => {});
-    return buf;
-  }
-
-  if (typeof r[Symbol.asyncIterator] === "function") {
-    const chunks: Buffer[] = [];
-    for await (const chunk of r) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    }
-    return Buffer.concat(chunks);
-  }
-
-  if (typeof r.read === "function") {
-    const chunks: Buffer[] = [];
-    for await (const chunk of r as Readable) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    }
-    return Buffer.concat(chunks);
-  }
-
+  // SDK getReadableStream is supported; a writeFile-only response cannot be
+  // bounded during download and must not write unchecked bytes to local disk.
   throw new Error("Feishu download: unexpected response format");
 }
 
@@ -165,7 +158,7 @@ export async function downloadImageFeishu(
     throw new Error(`Feishu image download failed: ${r.msg || `code ${r.code}`}`);
   }
   const raw = await responseToBuffer(response);
-  const { buffer, contentType } = await compressImageForModel(raw);
+  const { buffer, contentType } = await compressImageForModel(raw, responseContentType(r));
   return { buffer, contentType };
 }
 
@@ -186,10 +179,15 @@ export async function downloadMessageResourceFeishu(
   }
   const raw = await responseToBuffer(response);
   if (type === "image") {
-    const { buffer, contentType } = await compressImageForModel(raw);
+    const { buffer, contentType } = await compressImageForModel(raw, responseContentType(r));
     return { buffer, contentType };
   }
-  return { buffer: raw };
+  return { buffer: raw, contentType: responseContentType(r) };
+}
+
+function responseContentType(response: { headers?: Record<string, unknown> }): string | undefined {
+  const header = response.headers?.["content-type"];
+  return typeof header === "string" ? header.split(";")[0]?.trim() : undefined;
 }
 
 /** Upload an image to Feishu and get an image_key. */
@@ -245,6 +243,7 @@ export async function sendImageFeishu(
   to: string,
   imageKey: string,
   replyToMessageId?: string,
+  idempotencyKey?: string,
 ): Promise<SendMediaResult> {
   const receiveId = to.trim();
   if (!receiveId) throw new Error(`Invalid Feishu target: ${to}`);
@@ -254,7 +253,7 @@ export async function sendImageFeishu(
   if (replyToMessageId) {
     const response = await client.im.message.reply({
       path: { message_id: replyToMessageId },
-      data: { content, msg_type: "image", reply_in_thread: true },
+      data: { content, msg_type: "image", reply_in_thread: true, ...(idempotencyKey ? { uuid: idempotencyKey } : {}) },
     });
     if (response.code !== 0) {
       throw new Error(`Feishu image reply failed: ${response.msg || `code ${response.code}`}`);
@@ -264,7 +263,7 @@ export async function sendImageFeishu(
 
   const response = await client.im.message.create({
     params: { receive_id_type: receiveIdType },
-    data: { receive_id: receiveId, content, msg_type: "image" },
+    data: { receive_id: receiveId, content, msg_type: "image", ...(idempotencyKey ? { uuid: idempotencyKey } : {}) },
   });
   if (response.code !== 0) {
     throw new Error(`Feishu image send failed: ${response.msg || `code ${response.code}`}`);
@@ -279,6 +278,7 @@ export async function sendFileFeishu(
   fileKey: string,
   msgType: "file" | "media" = "file",
   replyToMessageId?: string,
+  idempotencyKey?: string,
 ): Promise<SendMediaResult> {
   const receiveId = to.trim();
   if (!receiveId) throw new Error(`Invalid Feishu target: ${to}`);
@@ -288,7 +288,7 @@ export async function sendFileFeishu(
   if (replyToMessageId) {
     const response = await client.im.message.reply({
       path: { message_id: replyToMessageId },
-      data: { content, msg_type: msgType, reply_in_thread: true },
+      data: { content, msg_type: msgType, reply_in_thread: true, ...(idempotencyKey ? { uuid: idempotencyKey } : {}) },
     });
     if (response.code !== 0) {
       throw new Error(`Feishu file reply failed: ${response.msg || `code ${response.code}`}`);
@@ -298,12 +298,36 @@ export async function sendFileFeishu(
 
   const response = await client.im.message.create({
     params: { receive_id_type: receiveIdType },
-    data: { receive_id: receiveId, content, msg_type: msgType },
+    data: { receive_id: receiveId, content, msg_type: msgType, ...(idempotencyKey ? { uuid: idempotencyKey } : {}) },
   });
   if (response.code !== 0) {
     throw new Error(`Feishu file send failed: ${response.msg || `code ${response.code}`}`);
   }
   return { messageId: response.data?.message_id ?? "unknown", chatId: receiveId };
+}
+
+export interface FeishuAttachmentSendInput {
+  chatId: string;
+  replyToMessageId?: string;
+  buffer: Buffer;
+  filename: string;
+  contentType: string;
+  idempotencyKey: string;
+  signal?: AbortSignal;
+}
+
+/** Upload first, then recheck the delivery lease before creating the message. */
+export async function sendAttachmentFeishu(client: Lark.Client, input: FeishuAttachmentSendInput): Promise<SendMediaResult> {
+  input.signal?.throwIfAborted();
+  if (input.contentType.startsWith("image/") && input.contentType !== "image/svg+xml"
+      && input.buffer.length <= FEISHU_IMAGE_UPLOAD_MAX_BYTES) {
+    const { imageKey } = await uploadImageFeishu(client, input.buffer);
+    input.signal?.throwIfAborted();
+    return sendImageFeishu(client, input.chatId, imageKey, input.replyToMessageId, input.idempotencyKey);
+  }
+  const { fileKey } = await uploadFileFeishu(client, input.buffer, input.filename, detectFileType(input.filename));
+  input.signal?.throwIfAborted();
+  return sendFileFeishu(client, input.chatId, fileKey, "file", input.replyToMessageId, input.idempotencyKey);
 }
 
 /** Detect Feishu file_type from file extension. */

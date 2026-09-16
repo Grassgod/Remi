@@ -198,6 +198,7 @@ function mappedResourceCommand(route: string): string | null {
     "POST /api/multiremi/labels": "label.create",
     "GET /api/chat/sessions": "chat.list",
     "POST /api/chat/sessions": "chat.create",
+    "POST /api/chat/attachments/send": "chat.attachment.send",
     "GET /api/chat/pending-tasks": "chat.pending",
     "GET /api/multiremi/chats": "chat.list",
     "POST /api/multiremi/chats": "chat.create",

@@ -14,6 +14,8 @@ import {
   type FeishuBotIdentityState,
 } from "@connectors/feishu/receive.js";
 import { FeishuChannel } from "@connectors/feishu/channel.js";
+import { FeishuConnector } from "@connectors/feishu/index.js";
+import type { IncomingMessage } from "@connectors/base.js";
 import type { FeishuMessageEvent } from "@connectors/feishu/types.js";
 
 let messageSequence = 0;
@@ -98,6 +100,65 @@ function clientWithSender(name = "Alice"): { client: any; getSenderCalls: () => 
     getSenderCalls: () => calls,
   };
 }
+
+describe("Feishu media Task handoff", () => {
+  it("receives native media events and hands the video bytes to the Task", async () => {
+    const messageId = uniqueMessageId("native-video-task");
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou_video" } },
+      message: {
+        message_id: messageId, chat_id: "oc_private_chat", chat_type: "p2p", message_type: "media",
+        content: JSON.stringify({ file_key: "file_video", image_key: "img_poster", file_name: "原生视频.mp4", duration: 1000 }),
+      },
+    };
+    const video = Buffer.from("video bytes");
+    const downloads: unknown[] = [];
+    const client = clientWithSender().client;
+    client.im = { messageResource: { get: async (input: unknown) => {
+      downloads.push(input);
+      return { data: video, headers: { "content-type": "video/mp4" } };
+    } } };
+    const parsed = await processFeishuMessageEvent(client, event, undefined, admission(async () => true).options);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.media).toHaveLength(1);
+    expect(parsed!.text).toContain("<media:video>");
+    expect(downloads).toEqual([{ path: { message_id: messageId, file_key: "file_video" }, params: { type: "file" } }]);
+    const received: IncomingMessage[] = [];
+    const connector = Object.create(FeishuConnector.prototype) as any;
+    Object.assign(connector, {
+      _taskStreamHandler: async (message: IncomingMessage) => { received.push(message); },
+      _groupPolicy: { getByChatId: () => null },
+      _channel: { setMessageReceipt: async () => {} },
+    });
+    await connector._handleFeishuMessage(parsed);
+    expect(received).toHaveLength(1);
+    expect(received[0]!.text).toContain("[附件: 原生视频.mp4]");
+    expect(received[0]!.media).toEqual([{ buffer: video, contentType: "video/mp4", fileName: "原生视频.mp4", mediaType: "video" }]);
+  });
+
+  it("passes an admitted sticker through the complete receive and connector pipeline", async () => {
+    const event = messageEvent({ messageId: uniqueMessageId("sticker-task"), senderOpenId: "ou_sticker" });
+    event.message.message_type = "sticker";
+    event.message.content = JSON.stringify({ file_key: "sticker_key" });
+    const parsed = await processFeishuMessageEvent(clientWithSender().client, event, undefined, {
+      authorizeSender: async () => true, onDenied: async () => { throw new Error("unexpected denial"); },
+    });
+    expect(parsed).not.toBeNull();
+    const received: IncomingMessage[] = [];
+    const receipts: string[] = [];
+    const connector = Object.create(FeishuConnector.prototype) as any;
+    Object.assign(connector, {
+      _taskStreamHandler: async (message: IncomingMessage) => { received.push(message); },
+      _groupPolicy: { getByChatId: () => null },
+      _channel: { setMessageReceipt: async (_id: string, state: string) => { receipts.push(state); } },
+    });
+    await connector._handleFeishuMessage(parsed);
+    expect(received).toHaveLength(1);
+    expect(received[0]!.text).toContain("[表情]");
+    expect(received[0]!.media).toBeUndefined();
+    expect(receipts).toEqual(["received"]);
+  });
+});
 
 function admission(
   authorizeSender: (senderOpenId: string) => Promise<boolean>,

@@ -2796,6 +2796,21 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "mention_snapshot TEXT");
   addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "presentation_checkpoint TEXT");
   addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "interaction_open_id TEXT");
+  addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "attachments TEXT");
+  addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "previous_delivery_id TEXT");
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_outbound_previous
+    ON multiremi_feishu_bot_outbound_deliveries(previous_delivery_id)`);
+  addColumnIfMissing(db, "multiremi_task_steer_messages", "source_chat_message_id TEXT");
+  db.exec(`CREATE TABLE IF NOT EXISTS multiremi_feishu_bot_inbound_attachments (
+    attachment_id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    runtime_id TEXT NOT NULL,
+    app_id TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    external_session_key TEXT NOT NULL,
+    external_message_id TEXT NOT NULL,
+    FOREIGN KEY(attachment_id) REFERENCES multiremi_attachments(id) ON DELETE CASCADE
+  )`);
   runMigrationOnce(db, FEISHU_TOPIC_REPORT_SCHEDULING_MIGRATION, () => {
     releaseQueuedFeishuTopicReports(db);
   });

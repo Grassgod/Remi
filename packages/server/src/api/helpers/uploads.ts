@@ -46,7 +46,7 @@ export async function localAttachmentFileResponse(attachment: MultiremiAttachmen
     headers: {
       "Content-Type": attachment.contentType || detectContentTypeFromFilename(attachment.filename),
       "Content-Length": String(info.size),
-      "Content-Disposition": `attachment; filename="${attachment.filename.replace(/"/g, "")}"`,
+      "Content-Disposition": `attachment; filename="${attachment.filename.replace(/[^\x20-\x7e]|["\\]/g, "_")}"; filename*=UTF-8''${encodeURIComponent(attachment.filename).replace(/[!'()*]/g, value => `%${value.charCodeAt(0).toString(16).toUpperCase()}`)}`,
       "Cache-Control": "no-store",
       "X-Content-Type-Options": "nosniff",
     },
@@ -59,6 +59,23 @@ export function safePathSegment(value: string): string {
 
 export function detectContentTypeFromFilename(filename: string): string {
   const ext = extname(filename).toLowerCase();
+  if (ext === ".html" || ext === ".htm") return "text/html";
+  if (ext === ".csv") return "text/csv";
+  if (ext === ".tsv") return "text/tab-separated-values";
+  if (ext === ".bmp") return "image/bmp";
+  if (ext === ".doc") return "application/msword";
+  if (ext === ".docx") return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  if (ext === ".xls") return "application/vnd.ms-excel";
+  if (ext === ".xlsx") return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  if (ext === ".ppt") return "application/vnd.ms-powerpoint";
+  if (ext === ".pptx") return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+  if (ext === ".mp3") return "audio/mpeg";
+  if (ext === ".wav") return "audio/wav";
+  if (ext === ".ogg" || ext === ".opus") return "audio/ogg";
+  if (ext === ".m4a") return "audio/mp4";
+  if (ext === ".mp4") return "video/mp4";
+  if (ext === ".mov") return "video/quicktime";
+  if (ext === ".webm") return "video/webm";
   if (ext === ".svg") return "image/svg+xml";
   if (ext === ".png") return "image/png";
   if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";

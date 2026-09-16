@@ -175,14 +175,16 @@ export class CliApiClient {
     if (this.shareToken) headers.set("X-Remi-Share", this.shareToken);
     if (this.workspaceId) headers.set("X-Workspace-ID", this.workspaceId);
     if (request.idempotencyKey) headers.set("Idempotency-Key", request.idempotencyKey);
-    if (request.body !== undefined) headers.set("Content-Type", "application/json");
+    const multipart = request.body instanceof FormData;
+    if (multipart) headers.delete("Content-Type");
+    else if (request.body !== undefined) headers.set("Content-Type", "application/json");
     const timeout = request.timeoutMs ?? this.timeoutMs;
     const scope = requestAbortScope(positiveInteger(timeout, "timeoutMs"), request.signal);
     try {
       const response = await this.fetchFn(url, {
         method: request.method,
         headers,
-        body: request.body === undefined ? undefined : JSON.stringify(request.body),
+        body: multipart ? request.body as FormData : request.body === undefined ? undefined : JSON.stringify(request.body),
         signal: scope.signal,
       });
       if (!response.ok) return response;
