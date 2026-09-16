@@ -20,6 +20,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
+import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import { PostgresSyncDatabase, translateSqliteToPg } from "@multiremi/store/db/postgres.js";
 import { daemonRuntimeId, MultiremiStore } from "@multiremi/store.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
@@ -304,6 +305,24 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     assertLegacyProactiveRetryMatrix(db);
     assertWakeInvariantMatrix(db);
     assertCancelledLegacyWakesCannotRun(db, store);
+    // The private destination must not reuse the retained group's machine/files.
+    store.registerRuntime({ id: "rt_legacy", name: "Original machine", provider: "codex", workspaceId: "local" });
+    const mixedChatId = "chat_classification_mixed_bindings";
+    const privateTask = store.createTask({ agentId: "agt_chat_migration", chatSessionId: mixedChatId,
+      runtimeId: "rt_legacy", prompt: "Private continuation" });
+    expect(privateTask).toMatchObject({ issueId: null, sessionId: null, runtimeId: null, workDir: null });
+    const privateWire = daemonTaskClaimResponse(store, store.getTaskWithAgent(privateTask.id)!);
+    expect(privateWire.issue).toBeUndefined();
+    expect(privateWire.session_id).toBeUndefined();
+    expect(privateWire.prior_session_id).toBeUndefined();
+    expect(privateWire.runtime_id).toBe("");
+    expect(privateWire.work_dir).toBeUndefined();
+    expect(privateWire.prior_work_dir).toBeUndefined();
+    const groupTask = store.createTask({ agentId: "agt_chat_migration", chatSessionId: mixedChatId,
+      issueId: "iss_classification_mixed_bindings", prompt: "Group continuation" });
+    expect(groupTask).toMatchObject({ runtimeId: "rt_legacy", workDir: "/work/keep" });
+    store.cancelTask(privateTask.id);
+    store.cancelTask(groupTask.id);
     // The table is bootstrap schema, even after the one-time migration ledger exists.
     db.exec("DROP TABLE multiremi_feishu_bot_issue_link_audit");
     runMigrations(db);
@@ -312,6 +331,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     db.run("DELETE FROM multiremi_feishu_sources WHERE id LIKE 'fsrc_%'");
     // Keep the shared integration store empty for the remaining test cases.
     for (const chat of store.listChatSessions("local")) store.deleteChatSession(chat.id);
+    store.deleteRuntime("rt_legacy");
     store.deleteIssue("iss_chat_migration");
     for (const entry of CHAT_ISSUE_CLASSIFICATION_CASES) store.deleteIssue(`iss_classification_${entry.name}`);
     db.run("DELETE FROM multiremi_agents WHERE id = ?", ["agt_chat_migration"]);

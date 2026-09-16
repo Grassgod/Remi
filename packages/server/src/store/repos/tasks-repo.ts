@@ -404,6 +404,10 @@ export class TasksRepo {
       ? (requestedHoldsWorkspace ?? issueSession?.holdsWorkspace ?? true)
       : true;
     let runtimeId = resolveOptionalStringField(input, "runtimeId", "runtime_id", agent.runtimeId);
+    if (chatSession && !issue && this.ctx.feishuBot().getFeishuIssueIdForChatSession(chatSession.id)) {
+      // A private turn sharing a topic Chat must not inherit its execution host.
+      runtimeId = agent.runtimeId;
+    }
     if (runtimeId && !this.ctx.runtimes().getRuntime(runtimeId)) throw new Error(`Runtime not found: ${runtimeId}`);
     // Inherit the selected execution target. Existing unbound agents retain
     // provider-pool scheduling; sessions and local directories may further
@@ -661,6 +665,10 @@ export class TasksRepo {
     executionFingerprint: string,
     hasPlugins: boolean,
   ): { runtimeId: string | null; inheritChatSession: boolean } {
+    if (!issue && chatSession && this.ctx.feishuBot().getFeishuIssueIdForChatSession(chatSession.id)) {
+      // Preserve the topic's files in storage, but never lend them to private turns.
+      return { runtimeId: agent.runtimeId, inheritChatSession: false };
+    }
     // local_directory affinity is checked FIRST and outranks session affinity:
     // the directory only exists on that daemon (a hard data constraint), while
     // a provider session is a soft constraint that can be restarted elsewhere.

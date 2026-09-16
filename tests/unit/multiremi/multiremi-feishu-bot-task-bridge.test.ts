@@ -63,7 +63,8 @@ describe("Feishu bot standard Task bridge", () => {
       seedLegacyChatIssueClassificationFixture(db!, tableForeignKey);
       const chatId = "chat_classification_mixed_bindings";
       const fingerprint = createHash("sha256").update("[]").digest("hex");
-      db!.run(`UPDATE multiremi_chat_sessions SET session_execution_fingerprint = ? WHERE id = ?`, [fingerprint, chatId]);
+      db!.run(`UPDATE multiremi_chat_sessions SET session_execution_fingerprint = ?,
+        session_id = 'provider_issue_A', work_dir = '/work/issue-A' WHERE id = ?`, [fingerprint, chatId]);
       // No outstanding task is needed to trigger the provider reset.
       db!.run("UPDATE multiremi_tasks SET status = 'completed'");
       store.registerRuntime({ id: "rt_legacy", name: "Original machine", provider: "codex", workspaceId: "local" });
@@ -86,15 +87,32 @@ describe("Feishu bot standard Task bridge", () => {
       const task = store.getTaskWithAgent(inbound.taskId)!;
       expect(task.issueId).toBeNull();
       expect(task.sessionId).toBeNull();
+      expect(task.runtimeId).toBeNull();
+      expect(task.workDir).toBeNull();
       const wire = daemonTaskClaimResponse(store, task);
       expect(wire.issue).toBeUndefined();
       expect(wire.session_id).toBeUndefined();
       expect(wire.prior_session_id).toBeUndefined();
-      // Files keep their established machine affinity; provider history does not.
+      expect(wire.runtime_id).toBe(""); // Existing wire representation for an unassigned runtime.
+      expect(wire.work_dir).toBeUndefined();
+      expect(wire.prior_work_dir).toBeUndefined();
+      // The private task cannot consume the retained topic's directory affinity.
       expect(store.getChatSession(chatId)).toMatchObject({
         sessionId: null, sessionProvider: null, sessionExecutionFingerprint: null,
-        workDir: "/work/keep", sessionRuntimeId: "rt_legacy",
+        workDir: "/work/issue-A", sessionRuntimeId: "rt_legacy",
       });
+      const topic = store.createTask({ agentId: "agt_chat_migration", chatSessionId: chatId,
+        issueId: "iss_classification_mixed_bindings", prompt: "Group continuation" });
+      expect(topic).toMatchObject({ runtimeId: "rt_legacy", workDir: "/work/issue-A" });
+      store.cancelTask(topic.id);
+      // Claim refresh must not restore the shared topic's affinity either.
+      const claimed = store.claimTask("rt_bot")!;
+      expect(claimed.id).toBe(task.id);
+      expect(claimed.workDir).toBeNull();
+      const claimedWire = daemonTaskClaimResponse(store, claimed);
+      expect(claimedWire.runtime_id).toBe("rt_bot");
+      expect(claimedWire.work_dir).toBeUndefined();
+      expect(claimedWire.prior_work_dir).toBeUndefined();
     });
   }
 
