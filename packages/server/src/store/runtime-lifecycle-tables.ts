@@ -9,9 +9,13 @@ export const RUNTIME_REQUEST_TABLES = [
 ] as const;
 
 export const RUNTIME_AUXILIARY_TABLES = [
+  "multiremi_execution_group_members",
   "multiremi_agent_plugin_runtime_states",
   "multiremi_runtime_provision_states",
   "multiremi_runtime_models",
+  "multiremi_runtime_codex_profiles",
+  "multiremi_runtime_claude_profiles",
+  "multiremi_runtime_provider_credentials",
   // A retired Runtime's reported Feishu connector state must go with it;
   // leaving the row behind would make the workspace look permanently
   // `degraded` because a machine that no longer exists still claims the bot.

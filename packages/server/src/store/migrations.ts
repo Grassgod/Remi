@@ -1,3 +1,4 @@
+import { syncRuntimeExecutionGroups } from "@multiremi/store/execution-groups.js";
 import { createHash } from "node:crypto";
 import { attachmentIdsFromText } from "@multiremi/contracts/attachments.js";
 import { type SqlDatabase } from "@multiremi/store/db/postgres.js";
@@ -332,6 +333,28 @@ export function runMigrations(db: SqlDatabase): void {
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_cloud_runtime_nodes_owner
       ON multiremi_cloud_runtime_nodes(owner_id, created_at);
+
+    CREATE TABLE IF NOT EXISTS multiremi_runtime_provider_credentials (
+      id TEXT PRIMARY KEY,
+      runtime_id TEXT NOT NULL,
+      ciphertext TEXT NOT NULL,
+      FOREIGN KEY(runtime_id) REFERENCES multiremi_runtimes(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS multiremi_runtime_codex_profiles (
+      runtime_id TEXT PRIMARY KEY,
+      profile TEXT NOT NULL,
+      FOREIGN KEY(runtime_id) REFERENCES multiremi_runtimes(id) ON DELETE CASCADE
+    );
+
+
+    CREATE TABLE IF NOT EXISTS multiremi_runtime_claude_profiles (
+      runtime_id TEXT PRIMARY KEY,
+      profile TEXT NOT NULL,
+      FOREIGN KEY(runtime_id) REFERENCES multiremi_runtimes(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_runtime_provider_credentials_runtime ON multiremi_runtime_provider_credentials(runtime_id);
 
     CREATE TABLE IF NOT EXISTS multiremi_runtime_models (
       runtime_id TEXT NOT NULL,
@@ -2784,6 +2807,8 @@ export function runMigrations(db: SqlDatabase): void {
   // come from this snapshot, not the agent's current provider.
   addColumnIfMissing(db, "multiremi_tasks", "provider TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "plugin_snapshot TEXT NOT NULL DEFAULT '[]'");
+  addColumnIfMissing(db, "multiremi_tasks", "codex_profile TEXT");
+  addColumnIfMissing(db, "multiremi_tasks", "claude_profile TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "execution_fingerprint TEXT");
   addColumnIfMissing(db, "multiremi_session_agent_lanes", "execution_fingerprint TEXT");
   migrateExecutionScopedLanes(db);
@@ -2989,17 +3014,24 @@ export function runMigrations(db: SqlDatabase): void {
       "UPDATE multiremi_issues SET completed_at = updated_at WHERE completed_at IS NULL AND status IN ('done', 'cancelled')",
     );
   }
-  // Pool scheduling: agents are logical workers and never bind to a machine.
-  // Runs every startup so legacy pins converge back into the pool.
-  db.run("UPDATE multiremi_agents SET runtime_id = NULL WHERE runtime_id IS NOT NULL");
-  // NOTE: we deliberately do NOT unpin existing queued TASKS here. This
-  // migration runs on every startup, and a task's runtime_id can legitimately
-  // be an explicit pin, a resume-safe retry pin, or a session/local_directory
-  // affinity — none distinguishable from a pre-pool agent-inherited pin at the
-  // SQL level, so a blanket unpin would keep clobbering valid pins on every
-  // boot. Pre-pool tasks keep their pin (claimable by their original machine);
-  // new tasks are already unbound by createTask. Only the agent binding above
-  // is cleared, which is the invariant the pool model needs.
+  addColumnIfMissing(db, "multiremi_agents", "execution_group_id TEXT");
+  addColumnIfMissing(db, "multiremi_runtimes", "execution_group_id TEXT");
+  db.exec(`CREATE TABLE IF NOT EXISTS multiremi_execution_groups (
+    id TEXT NOT NULL, workspace_id TEXT NOT NULL, provider TEXT NOT NULL,
+    machine_id TEXT, created_at TEXT NOT NULL, PRIMARY KEY(workspace_id, id)
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_execution_groups_default ON multiremi_execution_groups(workspace_id, machine_id, provider);
+  CREATE TABLE IF NOT EXISTS multiremi_execution_group_members (
+    runtime_id TEXT NOT NULL, provider TEXT NOT NULL, workspace_id TEXT NOT NULL,
+    group_id TEXT NOT NULL, PRIMARY KEY(runtime_id, provider)
+  );
+  CREATE INDEX IF NOT EXISTS idx_execution_group_members_group ON multiremi_execution_group_members(workspace_id, group_id);`);
+  runMigrationOnce(db, "execution_groups_v1", () => {
+    for (const row of db.query("SELECT id FROM multiremi_runtimes").all() as { id: string }[]) syncRuntimeExecutionGroups(db, row.id);
+    db.run(`UPDATE multiremi_agents SET execution_group_id = (
+      SELECT group_id FROM multiremi_execution_group_members m WHERE m.runtime_id = multiremi_agents.runtime_id AND m.provider = multiremi_agents.provider
+    ) WHERE execution_group_id IS NULL AND runtime_id IS NOT NULL`);
+  });
   backfillDefaultIssueSessions(db);
   backfillIssueKeys(db);
   migrateLegacyGithubProjection(db, legacyGithubTables);

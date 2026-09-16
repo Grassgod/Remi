@@ -71,6 +71,8 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     // forged empty/ready snapshot would bypass the Agent's real Plugin gate.
     const {
       provider: _provider,
+      codexProfile: _codexProfile,
+      claudeProfile: _claudeProfile,
       pluginSnapshot: _pluginSnapshot,
       plugin_snapshot: _pluginSnapshotSnake,
       executionFingerprint: _executionFingerprint,

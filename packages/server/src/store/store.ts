@@ -1,3 +1,4 @@
+import { getExecutionGroup, listExecutionGroups } from "@multiremi/store/execution-groups.js";
 import { type SqlDatabase, openMultiremiDatabase } from "@multiremi/store/db/postgres.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
 import { daemonRuntimeId, isTerminalStatus } from "@multiremi/store/helpers.js";
@@ -791,6 +792,9 @@ runMigrations(this.db);
   retrySessionArchive(id: string): MultiremiSessionArchive | null {
     return this.sessionArchives.retry(id);
   }
+
+  listExecutionGroups(workspaceId: string) { return listExecutionGroups(this.db, workspaceId); }
+  getExecutionGroup(id: string, workspaceId = "local") { return getExecutionGroup(this.db, id, workspaceId); }
 
   createAgent(input: CreateAgentInput): MultiremiAgent {
     return this.agents.createAgent(input);
@@ -2576,6 +2580,42 @@ runMigrations(this.db);
 
   getRuntime(id: string): MultiremiRuntime | null {
     return this.runtimes.getRuntime(id);
+  }
+
+  getRuntimeCodexProfile(id: string) {
+    return this.runtimes.getRuntimeCodexProfile(id);
+  }
+
+  getRuntimeExecutionProfile(id: string, provider: string) {
+    return this.runtimes.getRuntimeExecutionProfile(id, provider);
+  }
+
+  listWorkspaceCodexProfileModels(workspaceId: string) {
+    return this.runtimes.listWorkspaceCodexProfileModels(workspaceId);
+  }
+
+  setRuntimeCodexProfile(id: string, input: unknown, apiKey?: unknown) {
+    return this.runtimes.setRuntimeCodexProfile(id, input, apiKey);
+  }
+
+  getRuntimeCodexProfileKey(runtimeId: string, credentialId: string) {
+    return this.runtimes.getRuntimeCodexProfileKey(runtimeId, credentialId);
+  }
+
+  getRuntimeClaudeProfile(id: string) {
+    return this.runtimes.getRuntimeClaudeProfile(id);
+  }
+
+  listWorkspaceClaudeProfileModels(workspaceId: string) {
+    return this.runtimes.listWorkspaceClaudeProfileModels(workspaceId);
+  }
+
+  setRuntimeClaudeProfile(id: string, input: unknown, apiKey?: unknown) {
+    return this.runtimes.setRuntimeClaudeProfile(id, input, apiKey);
+  }
+
+  getRuntimeClaudeProfileKey(runtimeId: string, credentialId: string) {
+    return this.runtimes.getRuntimeClaudeProfileKey(runtimeId, credentialId);
   }
 
   listRuntimes(): MultiremiRuntime[] {

@@ -32,6 +32,10 @@ import type {
   ListCloudRuntimeNodesParams,
 } from "../../runtimes/cloud-runtime";
 import type { HttpClient } from "../http";
+import type { RuntimeCodexProfileConfig, RuntimeCodexProfileInput } from "@multiremi/contracts/codex-profile";
+import { RuntimeCodexProfileConfigSchema } from "../schemas/codex-profile";
+import type { RuntimeClaudeProfileConfig, RuntimeClaudeProfileInput } from "@multiremi/contracts/claude-profile";
+import { RuntimeClaudeProfileConfigSchema } from "../schemas/claude-profile";
 import { RuntimeLocalSkillListRequestSchema, RuntimeLocalSkillImportRequestSchema } from "../schemas/runtime-local-skills";
 import {
   ApiContractError,
@@ -42,6 +46,9 @@ import {
   type CliLatestVersionResponse,
   CliLatestVersionResponseSchema,
   AgentRuntimeListSchema,
+  AgentRuntimeSchema,
+  ExecutionGroupListSchema,
+  type ExecutionGroupList,
   CloudRuntimeNodeListSchema,
   CloudRuntimeNodeSchema,
   DaemonInventoryResponseSchema,
@@ -82,6 +89,26 @@ import {
 export class RuntimesEndpoints {
   constructor(readonly http: HttpClient) {}
 
+  async getRuntimeCodexProfile(runtimeId: string): Promise<RuntimeCodexProfileConfig> {
+    const raw = await this.http.fetch<unknown>(`/api/runtimes/${encodeURIComponent(runtimeId)}/codex-profile`);
+    return parseStrictResponse(raw, RuntimeCodexProfileConfigSchema, { endpoint: "GET /api/runtimes/:id/codex-profile" });
+  }
+
+  async setRuntimeCodexProfile(runtimeId: string, input: RuntimeCodexProfileInput): Promise<RuntimeCodexProfileConfig> {
+    const raw = await this.http.fetch<unknown>(`/api/runtimes/${encodeURIComponent(runtimeId)}/codex-profile`, { method: "PUT", body: JSON.stringify(input) });
+    return parseStrictResponse(raw, RuntimeCodexProfileConfigSchema, { endpoint: "PUT /api/runtimes/:id/codex-profile" });
+  }
+
+  async getRuntimeClaudeProfile(runtimeId: string): Promise<RuntimeClaudeProfileConfig> {
+    const raw = await this.http.fetch<unknown>(`/api/runtimes/${encodeURIComponent(runtimeId)}/claude-profile`);
+    return parseStrictResponse(raw, RuntimeClaudeProfileConfigSchema, { endpoint: "GET /api/runtimes/:id/claude-profile" });
+  }
+
+  async setRuntimeClaudeProfile(runtimeId: string, input: RuntimeClaudeProfileInput): Promise<RuntimeClaudeProfileConfig> {
+    const raw = await this.http.fetch<unknown>(`/api/runtimes/${encodeURIComponent(runtimeId)}/claude-profile`, { method: "PUT", body: JSON.stringify(input) });
+    return parseStrictResponse(raw, RuntimeClaudeProfileConfigSchema, { endpoint: "PUT /api/runtimes/:id/claude-profile" });
+  }
+
   async listRuntimes(params?: { workspace_id?: string; owner?: "me" }): Promise<AgentRuntime[]> {
     const search = new URLSearchParams();
     if (params?.workspace_id) search.set("workspace_id", params.workspace_id);
@@ -92,17 +119,25 @@ export class RuntimesEndpoints {
     });
   }
 
-  // Fleet-level model catalog: the union of the online runtimes' models,
-  // grouped by provider, with online-capacity counts. Powers the
-  // machine-less agent creation flow (engine toggle + model dropdown).
-  async listFleetModels(params?: { workspace_id?: string }): Promise<FleetModelsResponse> {
+  // An optional execution target scopes both models and online capacity.
+  async listFleetModels(params?: { workspace_id?: string; runtime_id?: string; execution_group_id?: string; agent_id?: string }): Promise<FleetModelsResponse> {
     const search = new URLSearchParams();
     if (params?.workspace_id) search.set("workspace_id", params.workspace_id);
+    if (params?.runtime_id) search.set("runtime_id", params.runtime_id);
+    if (params?.execution_group_id) search.set("execution_group_id", params.execution_group_id);
+    if (params?.agent_id) search.set("agent_id", params.agent_id);
     const query = search.toString();
     const raw = await this.http.fetch<unknown>(`/api/models${query ? `?${query}` : ""}`);
     return parseWithFallback(raw, FleetModelsResponseSchema, EMPTY_FLEET_MODELS, {
       endpoint: "GET /api/models",
     });
+  }
+
+  async listExecutionGroups(params: { workspace_id: string; agent_id?: string }): Promise<ExecutionGroupList> {
+    const search = new URLSearchParams({ workspace_id: params.workspace_id });
+    if (params.agent_id) search.set("agent_id", params.agent_id);
+    const raw = await this.http.fetch<unknown>(`/api/execution-groups?${search}`);
+    return parseStrictResponse(raw, ExecutionGroupListSchema, { endpoint: "GET /api/execution-groups" });
   }
 
   // Model gateway: fleet-wide relay config (owner/admin only). Tokens are masked
@@ -462,12 +497,13 @@ export class RuntimesEndpoints {
 
   async updateRuntime(
     runtimeId: string,
-    patch: { visibility?: "private" | "public"; name?: string },
+    patch: { visibility?: "private" | "public"; name?: string; execution_group_id?: string | null },
   ): Promise<AgentRuntime> {
-    return this.http.fetch(`/api/runtimes/${runtimeId}`, {
+    const raw = await this.http.fetch<unknown>(`/api/runtimes/${runtimeId}`, {
       method: "PATCH",
       body: JSON.stringify(patch),
     });
+    return parseStrictResponse(raw, AgentRuntimeSchema, { endpoint: "PATCH /api/runtimes/:id" });
   }
 
   async updateDaemonDisplayName(

@@ -21,6 +21,11 @@ import {
   loadRuntimeForCurrentOwner,
   loadRuntimeForCurrentUser,
   overlayGatewayModels,
+  runtimeTargetModelCatalog,
+  executionGroupRuntimes,
+  executionGroupModelCatalog,
+  executionGroupRequestOwner,
+  canCurrentUserUseRuntime,
   parseExpectedActiveAgentIds,
   promoteLegacyCliPatForDaemonHeartbeat,
   promoteLegacyCliPatForDaemonRegistration,
@@ -31,6 +36,7 @@ import {
   safeCreateRuntimeUpdateRequest,
   usageQuery,
   validateMultiremiRuntimeProvider,
+  validateRuntimeExecutionGroupInput,
 } from "../helpers.js";
 import {
   authenticatedRequestUserId,
@@ -77,6 +83,70 @@ import type { RouterDeps } from "./deps.js";
 
 export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
   const { store, authToken } = deps;
+
+  app.get("/api/runtimes/:id/codex-profile", (c) => {
+    const loaded = loadRuntimeForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
+    return c.json({ profile: store.getRuntimeCodexProfile(loaded.runtime.id) });
+  });
+  app.put("/api/runtimes/:id/codex-profile", async (c) => {
+    const loaded = loadRuntimeForCurrentEditor(c, store, c.req.param("id"), "edit");
+    if (loaded instanceof Response) return loaded;
+    const body = await readJsonStrict<{ profile?: unknown; api_key?: unknown }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
+      return c.json({ profile: store.setRuntimeCodexProfile(loaded.runtime.id, body.profile, body.api_key) });
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : "Invalid Codex profile" }, 400);
+    }
+  });
+
+  app.get("/api/daemon/runtimes/:id/codex-profile-key", (c) => {
+    if (currentAccessToken(c)?.type !== "daemon") return c.json({ error: "daemon token required" }, 403);
+    const loaded = loadRuntimeForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
+    const credentialId = c.req.query("credential_id") ?? "";
+    try {
+      const key = store.getRuntimeCodexProfileKey(loaded.runtime.id, credentialId);
+      if (key === null) return c.json({ error: "Runtime credential not found" }, 404);
+      c.header("Cache-Control", "no-store");
+      return c.json({ api_key: key });
+    } catch {
+      return c.json({ error: "Runtime provider key is unavailable; check the server encryption key" }, 503);
+    }
+  });
+
+  app.get("/api/runtimes/:id/claude-profile", (c) => {
+    const loaded = loadRuntimeForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
+    return c.json({ profile: store.getRuntimeClaudeProfile(loaded.runtime.id) });
+  });
+  app.put("/api/runtimes/:id/claude-profile", async (c) => {
+    const loaded = loadRuntimeForCurrentEditor(c, store, c.req.param("id"), "edit");
+    if (loaded instanceof Response) return loaded;
+    const body = await readJsonStrict<{ profile?: unknown; api_key?: unknown }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
+      return c.json({ profile: store.setRuntimeClaudeProfile(loaded.runtime.id, body.profile, body.api_key) });
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : "Invalid Claude profile" }, 400);
+    }
+  });
+
+  app.get("/api/daemon/runtimes/:id/claude-profile-key", (c) => {
+    if (currentAccessToken(c)?.type !== "daemon") return c.json({ error: "daemon token required" }, 403);
+    const loaded = loadRuntimeForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
+    const credentialId = c.req.query("credential_id") ?? "";
+    try {
+      const key = store.getRuntimeClaudeProfileKey(loaded.runtime.id, credentialId);
+      if (key === null) return c.json({ error: "Runtime credential not found" }, 404);
+      c.header("Cache-Control", "no-store");
+      return c.json({ api_key: key });
+    } catch {
+      return c.json({ error: "Runtime provider key is unavailable; check the server encryption key" }, 503);
+    }
+  });
 
   app.get("/api/multiremi/runtimes", (c) => {
     const loaded = listRuntimesForCurrentUser(c, store);
@@ -155,6 +225,8 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
           : null,
       }
       : scopedBody;
+    const invalidGroup = validateRuntimeExecutionGroupInput(c, store, workspaceId, registration.provider, registration);
+    if (invalidGroup) return invalidGroup;
     return c.json({ runtime: store.registerRuntime(registration) }, 201);
   });
   app.get("/api/multiremi/runtimes/:id", (c) => {
@@ -168,6 +240,8 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
     if (loaded instanceof Response) return loaded;
     const body = await readJsonStrict<UpdateRuntimeInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const invalidGroup = validateRuntimeExecutionGroupInput(c, store, loaded.runtime.workspaceId ?? "local", loaded.runtime.provider, body);
+    if (invalidGroup) return invalidGroup;
     return c.json({ runtime: store.updateRuntime(loaded.runtime.id, body) });
   });
   app.get("/api/multiremi/runtimes/:id/models", (c) => {
@@ -533,11 +607,53 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
     if (loaded instanceof Response) return loaded;
     return c.json(loaded.runtimes.map(runtimeCompatibilityResponse));
   });
+  const executionGroupsHandler = (c: Context) => {
+    const loaded = listRuntimesForCurrentUser(c, store);
+    if (loaded instanceof Response) return loaded;
+    const ownerId = executionGroupRequestOwner(c, store, loaded.workspaceId);
+    if (ownerId instanceof Response) return ownerId;
+    const visibleIds = new Set(loaded.runtimes.map((runtime) => runtime.id));
+    const groups = store.listExecutionGroups(loaded.workspaceId).flatMap((group) => {
+      const runtimes = executionGroupRuntimes(store, loaded.workspaceId, group.id, ownerId).filter((runtime) => visibleIds.has(runtime.id)).sort((a, b) => a.id.localeCompare(b.id));
+      if (!runtimes.length) return [];
+      const machine = runtimes[0];
+      return [{
+        id: group.id, workspace_id: loaded.workspaceId, provider: group.provider,
+        name: group.machineId ? `${machine?.daemonDisplayName ?? machine?.name ?? group.machineId} / ${group.provider}` : group.id,
+        runtime_ids: runtimes.map((runtime) => runtime.id),
+        online_runtime_count: runtimes.filter((runtime) => runtime.status === "online").length,
+        is_default: group.machineId !== null,
+      }];
+    });
+    return c.json({ groups });
+  };
+  app.get("/api/execution-groups", executionGroupsHandler);
+  app.get("/api/multiremi/execution-groups", executionGroupsHandler);
   const fleetModelsHandler = (c: Context) => {
     const loaded = listRuntimesForCurrentUser(c, store);
     if (loaded instanceof Response) return loaded;
-    const providers = fleetModelsResponse(loaded.runtimes, currentRequestUserId(c));
     const workspaceId = loaded.workspaceId;
+    const runtimeId = cleanString(c.req.query("runtime_id") ?? c.req.query("runtimeId"));
+    const groupId = cleanString(c.req.query("execution_group_id") ?? c.req.query("executionGroupId"));
+    const ownerId = executionGroupRequestOwner(c, store, workspaceId);
+    if (ownerId instanceof Response) return ownerId;
+    if (runtimeId && groupId) return c.json({ error: "select either runtime_id or execution_group_id" }, 400);
+    if (groupId) {
+      if (!store.getExecutionGroup(groupId, workspaceId)) return c.json({ error: "invalid execution_group_id" }, 400);
+      const runtimes = executionGroupRuntimes(store, workspaceId, groupId, ownerId);
+      const visibleIds = new Set(loaded.runtimes.map((runtime) => runtime.id));
+      if (!runtimes.length || runtimes.some((runtime) => !visibleIds.has(runtime.id))) return c.json({ error: "no accessible execution group members" }, 403);
+      refreshStaleGatewayModels(store, workspaceId);
+      return c.json({ providers: executionGroupModelCatalog(store, workspaceId, groupId, ownerId) });
+    }
+    if (runtimeId) {
+      const runtime = loaded.runtimes.find((candidate) => candidate.id === runtimeId);
+      if (!runtime) return c.json({ error: "invalid runtime_id" }, 400);
+      if (!canCurrentUserUseRuntime(c, store, runtime)) return c.json({ error: "runtime is private" }, 403);
+      refreshStaleGatewayModels(store, workspaceId);
+      return c.json({ providers: runtimeTargetModelCatalog(store, workspaceId, runtime) });
+    }
+    const providers = fleetModelsResponse(loaded.runtimes, ownerId);
     refreshStaleGatewayModels(store, workspaceId);
     return c.json({ providers: overlayGatewayModels(store, workspaceId, providers) });
   };
@@ -557,20 +673,24 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
     if (loaded instanceof Response) return loaded;
     const body = await readJsonStrict<UpdateRuntimeInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const invalidGroup = validateRuntimeExecutionGroupInput(c, store, loaded.runtime.workspaceId ?? "local", loaded.runtime.provider, body);
+    if (invalidGroup) return invalidGroup;
+    const patch: UpdateRuntimeInput = {};
     if (hasRequestField(body, "name")) {
       const name = cleanString(typeof body.name === "string" ? body.name : null);
       if (!name) return c.json({ error: "name must be a non-empty string" }, 400);
       if (name.length > 100) return c.json({ error: "name must be at most 100 characters" }, 400);
-      return c.json(runtimeCompatibilityResponse(store.updateRuntime(loaded.runtime.id, { name })));
+      patch.name = name;
     }
     if (hasRequestField(body, "visibility")) {
       const visibility = cleanString(typeof body.visibility === "string" ? body.visibility : null);
-      if (visibility !== "private" && visibility !== "public") {
-        return c.json({ error: "visibility must be 'private' or 'public'" }, 400);
-      }
-      return c.json(runtimeCompatibilityResponse(store.updateRuntime(loaded.runtime.id, { visibility })));
+      if (visibility !== "private" && visibility !== "public") return c.json({ error: "visibility must be 'private' or 'public'" }, 400);
+      patch.visibility = visibility;
     }
-    return c.json(runtimeCompatibilityResponse(loaded.runtime));
+    if (hasRequestField(body, "executionGroupId", "execution_group_id")) {
+      patch.executionGroupId = body.executionGroupId ?? body.execution_group_id ?? null;
+    }
+    return c.json(runtimeCompatibilityResponse(Object.keys(patch).length ? store.updateRuntime(loaded.runtime.id, patch) : loaded.runtime));
   });
   app.get("/api/runtimes/:id/usage", (c) => {
     const loaded = loadRuntimeForCurrentUser(c, store, c.req.param("id"));

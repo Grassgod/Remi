@@ -198,6 +198,8 @@ describe("RuntimesRepo", () => {
     ).get(runtime.id) as any).count)).toBe(1);
 
     store!.cancelTask(runningTask.id);
+    expect(repo.deleteRuntime(runtime.id)).toBeFalse();
+    store!.updateAgent(agent.id, { runtimeId: null });
     expect(repo.deleteRuntime(runtime.id)).toBeTrue();
     expect(store!.getAgent(agent.id)?.runtimeId).toBeNull();
     expect(store!.getIssueWorkspace(issue.id)).toMatchObject({

@@ -136,17 +136,17 @@ export function AgentOverviewPane({
   // "open".
   const [pendingTab, setPendingTab] = useState<DetailTab | null>(null);
 
-  // Pool model: the agent carries an engine; any runtime of that engine
-  // stands in where machine-flavored display data is needed (launch
-  // header). Legacy rows without a provider fall back to the old binding.
-  const engine =
-    agent.provider ||
-    (agent.runtime_id
-      ? runtimes.find((r) => r.id === agent.runtime_id)?.provider ?? ""
-      : "");
-  const engineRuntime = engine
-    ? runtimes.find((r) => r.provider === engine) ?? null
-    : null;
+  // Machine-specific launch data must come from the saved execution target.
+  const groupRuntimes = agent.execution_group_id
+    ? runtimes.filter((runtime) => runtime.execution_group_ids?.includes(agent.execution_group_id!))
+    : [];
+  const targetRuntime = agent.execution_group_id
+    ? groupRuntimes.length === 1 ? groupRuntimes[0] : undefined
+    : runtimes.find((runtime) => runtime.id === agent.runtime_id);
+  const engine = agent.provider || targetRuntime?.provider || "";
+  const engineRuntime = targetRuntime &&
+    (targetRuntime.provider === engine || targetRuntime.provider === "any")
+    ? targetRuntime : null;
   const pluginProvider =
     engine === "claude" || engine === "codex" ? engine : null;
 

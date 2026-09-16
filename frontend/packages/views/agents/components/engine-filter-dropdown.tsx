@@ -11,9 +11,7 @@ import { ENGINES } from "./engine-select";
 import { useT } from "../../i18n";
 
 // ---------------------------------------------------------------------------
-// Engine filter — dropdown next to the search input. Replaces the old
-// per-machine filter: agents are pool workers now, so the only placement
-// dimension they carry is the engine (provider) they run on.
+// Provider filter — narrows the list independently of each execution target.
 // ---------------------------------------------------------------------------
 
 export function EngineFilterDropdown({

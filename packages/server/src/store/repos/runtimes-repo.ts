@@ -1,3 +1,7 @@
+import { runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
+import { runtimeConnectionModels } from "@multiremi/contracts/runtime-connection";
+import { syncRuntimeExecutionGroups, runtimeExecutionGroupId } from "@multiremi/store/execution-groups.js";
+import { WorkspacesRepo } from "@multiremi/store/repos/workspaces-repo.js";
 // Runtimes domain (runtime registration/lifecycle, models, and the five daemon async-request
 // families: model list, directory scan, update, local-skill list, local-skill import), extracted
 // verbatim from MultiremiStore (the facade delegates every public method here).
@@ -7,6 +11,9 @@
 // own `create` (distinct INSERT columns) and `report` (distinct completed-branch payload); `get`,
 // `claim` and the timeout sweep are the shared template.
 import { createId, nowIso } from "@multiremi/ids.js";
+import { parseRuntimeCodexProfile, type RuntimeCodexProfile } from "@multiremi/contracts/codex-profile";
+import { parseRuntimeClaudeProfile, type RuntimeClaudeProfile } from "@multiremi/contracts/claude-profile";
+import { encryptRuntimeProviderKey, decryptRuntimeProviderKey } from "@multiremi/runtime-provider-credentials.js";
 import { posix, win32 } from "node:path";
 import {
   isRuntimeHeartbeatFresh,
@@ -226,6 +233,65 @@ export class RuntimesRepo {
     this.botMenuPublishQueue = new RuntimeRequestQueue(ctx.db, BOT_MENU_PUBLISH_REQUESTS);
   }
 
+  getRuntimeCodexProfile(id: string): RuntimeCodexProfile | null { return this.getRuntimeProviderProfile(id, "codex"); }
+  getRuntimeClaudeProfile(id: string): RuntimeClaudeProfile | null { return this.getRuntimeProviderProfile(id, "claude"); }
+  getRuntimeExecutionProfile(id: string, provider: string) {
+    return provider === "codex" || provider === "claude" ? this.getRuntimeProviderProfile(id, provider) : null;
+  }
+  listWorkspaceCodexProfileModels(workspaceId: string) { return this.listWorkspaceProviderProfileModels(workspaceId, "codex"); }
+  listWorkspaceClaudeProfileModels(workspaceId: string) { return this.listWorkspaceProviderProfileModels(workspaceId, "claude"); }
+  getRuntimeCodexProfileKey(runtimeId: string, credentialId: string) { return this.getRuntimeProviderKey(runtimeId, credentialId); }
+  getRuntimeClaudeProfileKey(runtimeId: string, credentialId: string) { return this.getRuntimeProviderKey(runtimeId, credentialId); }
+  setRuntimeCodexProfile(id: string, input: unknown, apiKey?: unknown) { return this.setRuntimeProviderProfile(id, "codex", input, apiKey); }
+  setRuntimeClaudeProfile(id: string, input: unknown, apiKey?: unknown) { return this.setRuntimeProviderProfile(id, "claude", input, apiKey); }
+
+  getRuntimeProviderProfile(id: string, provider: "codex" | "claude"): RuntimeCodexProfile | null {
+    const row = this.ctx.db.query(`SELECT profile FROM multiremi_runtime_${provider}_profiles WHERE runtime_id = ?`).get(id) as { profile: string } | null;
+    return row ? (provider === "codex" ? parseRuntimeCodexProfile : parseRuntimeClaudeProfile)(JSON.parse(row.profile)) : null;
+  }
+
+  listWorkspaceProviderProfileModels(workspaceId: string, provider: "codex" | "claude"): string[] {
+    const rows = this.ctx.db.query(`SELECT p.profile FROM multiremi_runtime_${provider}_profiles p
+      JOIN multiremi_runtimes r ON r.id = p.runtime_id WHERE COALESCE(r.workspace_id, 'local') = ?`).all(workspaceId) as { profile: string }[];
+    return rows.map(row => (provider === "codex" ? parseRuntimeCodexProfile : parseRuntimeClaudeProfile)(JSON.parse(row.profile))!.model);
+  }
+
+  getRuntimeProviderKey(runtimeId: string, credentialId: string): string | null {
+    const runtime = this.getRuntime(runtimeId);
+    if (!runtime) return null;
+    const row = this.ctx.db.query("SELECT ciphertext FROM multiremi_runtime_provider_credentials WHERE id = ? AND runtime_id = ?").get(credentialId, runtimeId) as { ciphertext: string } | null;
+    return row ? decryptRuntimeProviderKey(row.ciphertext, { workspaceId: runtime.workspaceId ?? "local", runtimeId, credentialId }) : null;
+  }
+
+  setRuntimeProviderProfile(id: string, provider: "codex" | "claude", input: unknown, apiKey?: unknown): RuntimeCodexProfile | null {
+    const profile = (provider === "codex" ? parseRuntimeCodexProfile : parseRuntimeClaudeProfile)(input);
+    if (apiKey !== undefined && (typeof apiKey !== "string" || !apiKey.trim() || apiKey.length > 8192 || /[\x00-\x1f\x7f]/.test(apiKey))) throw new Error("Invalid API key");
+    if (apiKey !== undefined && profile?.auth_mode !== "api_key") throw new Error("API keys require api_key authentication");
+    return this.withRuntimeLifecycleLock(id, runtime => {
+      if (runtime.provider !== provider) throw new Error(`Custom profiles require a ${provider === "codex" ? "Codex" : "Claude Code"} Runtime`);
+      if (profile && runtime.metadata[`${provider}_profiles`] !== 1) throw new Error("Update and restart this Runtime before configuring a custom connection");
+      if (profile?.auth_mode === "api_key") {
+        // Never trust a credential reference supplied by a caller.
+        const previous = this.getRuntimeProviderProfile(id, provider);
+        const credentialId = apiKey !== undefined ? createId("rck") : previous?.credential_id;
+        if (!credentialId) throw new Error("An API key is required for this connection");
+        profile.credential_id = credentialId;
+        if (typeof apiKey === "string") {
+          const ciphertext = encryptRuntimeProviderKey(apiKey.trim(), { workspaceId: runtime.workspaceId ?? "local", runtimeId: id, credentialId });
+          this.ctx.db.run("INSERT INTO multiremi_runtime_provider_credentials (id, runtime_id, ciphertext) VALUES (?, ?, ?)", [credentialId, id, ciphertext]);
+        }
+      }
+      if (profile) {
+        this.ctx.db.run(`INSERT INTO multiremi_runtime_${provider}_profiles (runtime_id, profile) VALUES (?, ?)
+          ON CONFLICT(runtime_id) DO UPDATE SET profile = excluded.profile`, [id, toJson(profile)]);
+      } else {
+        this.ctx.db.run(`DELETE FROM multiremi_runtime_${provider}_profiles WHERE runtime_id = ?`, [id]);
+      }
+      this.replaceRuntimeModelsWithinTransaction(id, profile ? [{ id: profile.model, label: profile.model, provider, default: true }] : [], provider, nowIso());
+      return profile;
+    });
+  }
+
   registerRuntime(input: RegisterRuntimeInput): MultiremiRuntime {
     return this.ctx.db.transaction(() => this.registerRuntimeWithinTransaction(input))();
   }
@@ -234,6 +300,8 @@ export class RuntimesRepo {
   registerRuntimeWithinTransaction(input: RegisterRuntimeInput): MultiremiRuntime {
     const id = input.id ?? createId("rt");
     const now = nowIso();
+    const existingWorkspace = this.ctx.db.query("SELECT workspace_id FROM multiremi_runtimes WHERE id = ?").get(id) as { workspace_id: string | null } | null;
+    this.ctx.lockWorkspaceRuntimeLifecycle(input.workspaceId ?? input.workspace_id ?? existingWorkspace?.workspace_id ?? "local");
     const currentRow = this.ctx.db.query("SELECT * FROM multiremi_runtimes WHERE id = ?").get(id) as Row | null;
     const current = currentRow ? toRuntime(currentRow) : null;
     const inputOwnerId = hasAnyField(input, "ownerId", "owner_id")
@@ -323,6 +391,10 @@ export class RuntimesRepo {
     // remain valid after a daemon identity is established and cause pinned work
     // to be re-pooled below. A rejected conflict reports zero changed rows.
     if (result.changes === 0) throw new RuntimeRegistrationIdentityConflictError(id);
+    if (hasAnyField(input, "executionGroupId", "execution_group_id")) {
+      this.ctx.db.run("UPDATE multiremi_runtimes SET execution_group_id = ? WHERE id = ?", [cleanOptionalString(input.executionGroupId ?? input.execution_group_id), id]);
+    }
+    syncRuntimeExecutionGroups(this.ctx.db, id);
     if (input.models !== undefined) {
       this.replaceRuntimeModelsWithinTransaction(id, input.models, input.provider, now);
     }
@@ -336,6 +408,7 @@ export class RuntimesRepo {
       // tasks pinned here that this runtime may no longer claim. Re-pool the
       // ineligible ones. (setRuntimeOffline is intentionally NOT treated this
       // way — offline is a recoverable transient state; the task waits.)
+      current.executionGroupId !== runtime.executionGroupId ||
       current.provider !== runtime.provider ||
       (current.workspaceId ?? "local") !== (runtime.workspaceId ?? "local") ||
       current.visibility !== runtime.visibility ||
@@ -414,12 +487,16 @@ export class RuntimesRepo {
           id,
         ],
       );
+      if (hasAnyField(input, "executionGroupId", "execution_group_id")) {
+        this.ctx.db.run("UPDATE multiremi_runtimes SET execution_group_id = ? WHERE id = ?", [cleanOptionalString(input.executionGroupId ?? input.execution_group_id), id]);
+        syncRuntimeExecutionGroups(this.ctx.db, id);
+      }
       if (input.models !== undefined) this.replaceRuntimeModelsWithinTransaction(id, input.models, current.provider, now);
       const updated = this.getRuntime(id)!;
       // Ownership/visibility just changed → re-pool any queued task pinned here
       // that the runtime may no longer run, so it isn't stranded on a machine the
       // claim predicate now rejects.
-      if (current.visibility !== updated.visibility || (current.ownerId ?? "local") !== (updated.ownerId ?? "local")) {
+      if (current.visibility !== updated.visibility || (current.ownerId ?? "local") !== (updated.ownerId ?? "local") || current.executionGroupId !== updated.executionGroupId) {
         this.repoolQueuedTasksForRuntime(id, (agent) => this.runtimeCanRunAgent(updated, agent));
       }
       return updated;
@@ -459,6 +536,7 @@ export class RuntimesRepo {
     options: { repoolQueuedTasks?: boolean } = {},
   ): boolean {
     if (!this.getRuntime(id)) return false;
+    if (this.ctx.db.query("SELECT id FROM multiremi_agents WHERE runtime_id = ? LIMIT 1").get(id)) return false;
     // Task claim takes the same workspace lifecycle lock as Runtime deletion,
     // so this check cannot race a queued task becoming dispatched. Queued work
     // is safely re-pooled below; work already owned by a daemon must be handled
@@ -474,10 +552,6 @@ export class RuntimesRepo {
     // PostgreSQL intentionally has no FK cascades, and SQLite tests may have
     // FK enforcement disabled. Keep every runtime reference explicit here so
     // all delete paths have identical behavior.
-    this.ctx.db.run(
-      "UPDATE multiremi_agents SET runtime_id = NULL, updated_at = ? WHERE runtime_id = ?",
-      [now, id],
-    );
     this.ctx.db.run(
       `UPDATE multiremi_issue_workspaces
        SET runtime_id = NULL,
@@ -828,8 +902,10 @@ export class RuntimesRepo {
         }
       }
       const agents = this.ctx.db.run(
-        "UPDATE multiremi_agents SET runtime_id = ?, updated_at = ? WHERE runtime_id = ?",
-        [newRuntimeId, now, oldRuntimeId],
+        `UPDATE multiremi_agents SET runtime_id = ?, execution_group_id = (
+          SELECT group_id FROM multiremi_execution_group_members m WHERE m.runtime_id = ? AND m.provider = multiremi_agents.provider
+        ), updated_at = ? WHERE runtime_id = ?`,
+        [newRuntimeId, newRuntimeId, now, oldRuntimeId],
       ).changes;
       const tasks = this.ctx.db.run(
         "UPDATE multiremi_tasks SET runtime_id = ?, updated_at = ? WHERE runtime_id = ?",
@@ -881,6 +957,19 @@ export class RuntimesRepo {
         );
       }
 
+      for (const provider of ["codex", "claude"] as const) {
+        const oldProfile = this.getRuntimeProviderProfile(oldRuntimeId, provider);
+        if (oldProfile && !this.getRuntimeProviderProfile(newRuntimeId, provider)) {
+          this.ctx.db.run(`INSERT INTO multiremi_runtime_${provider}_profiles (runtime_id, profile) VALUES (?, ?)`, [newRuntimeId, toJson(oldProfile)]);
+        }
+      }
+      const credentials = this.ctx.db.query("SELECT id, ciphertext FROM multiremi_runtime_provider_credentials WHERE runtime_id = ?").all(oldRuntimeId) as { id: string; ciphertext: string }[];
+      for (const credential of credentials) {
+        const scope = { workspaceId: oldRuntime.workspaceId ?? "local", runtimeId: oldRuntimeId, credentialId: credential.id };
+        const value = decryptRuntimeProviderKey(credential.ciphertext, scope);
+        const ciphertext = encryptRuntimeProviderKey(value, { ...scope, runtimeId: newRuntimeId });
+        this.ctx.db.run("UPDATE multiremi_runtime_provider_credentials SET runtime_id = ?, ciphertext = ? WHERE id = ?", [newRuntimeId, ciphertext, credential.id]);
+      }
       const deleted = this.deleteRuntimeWithinTransaction(oldRuntimeId, { repoolQueuedTasks: false });
       return { agentsReassigned: agents, tasksReassigned: tasks, deleted };
     });
@@ -1769,6 +1858,9 @@ export class RuntimesRepo {
    * so single-machine NULL owners still pair). The provider must also match.
    */
   runtimeCanRunAgent(runtime: MultiremiRuntime, agent: MultiremiAgent): boolean {
+    if (agent.runtimeId && agent.runtimeId !== runtime.id) return false;
+    if (agent.executionGroupId && runtimeExecutionGroupId(this.ctx.db, runtime.id, agent.provider) !== agent.executionGroupId) return false;
+    if (agent.executionGroupId && !agent.runtimeId && !this.runtimeSupportsAgentModel(runtime, agent)) return false;
     if (runtime.provider !== "any" && runtime.provider !== agent.provider) return false;
     // A task runs in its agent's workspace and the claim SQL requires the
     // runtime's workspace to match, so a runtime in a different workspace can
@@ -1776,6 +1868,21 @@ export class RuntimesRepo {
     if ((runtime.workspaceId ?? "local") !== (agent.workspaceId ?? "local")) return false;
     if (runtime.visibility === "public") return true;
     return (runtime.ownerId ?? "local") === (agent.ownerId ?? "local");
+  }
+
+  private runtimeSupportsAgentModel(runtime: MultiremiRuntime, agent: MultiremiAgent): boolean {
+    if (!agent.model && !agent.thinkingLevel) return true;
+    const workspaces = new WorkspacesRepo(this.ctx);
+    const catalog = runtimeTargetModelCatalog({
+      getRelayModelDiscovery: (id) => workspaces.getRelayModelDiscovery(id),
+      getRelayConfigForDaemon: (id) => workspaces.getRelayConfigForDaemon(id),
+      getGatewayModels: (id, provider) => workspaces.getGatewayModels(id, provider),
+      listWorkspaceCodexProfileModels: (id) => this.listWorkspaceCodexProfileModels(id),
+      listWorkspaceClaudeProfileModels: (id) => this.listWorkspaceClaudeProfileModels(id),
+      getRuntimeExecutionProfile: (id, provider) => this.getRuntimeExecutionProfile(id, provider),
+    }, agent.workspaceId, runtime).find(entry => entry.provider === agent.provider)?.models ?? [];
+    const model = agent.model ? catalog.find(model => model.id === agent.model) : catalog.find(model => model.default);
+    return Boolean(model && (!agent.thinkingLevel || model.thinking?.supported_levels.some(level => level.value === agent.thinkingLevel)));
   }
 
   getRuntimeByDaemonAndProvider(daemonId: string, provider: string): MultiremiRuntime | null {
@@ -1799,6 +1906,7 @@ export class RuntimesRepo {
     return {
       ...runtime,
       ...stats,
+      executionGroupIds: (this.ctx.db.query("SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider").all(runtime.id) as { group_id: string }[]).map(row => row.group_id),
       models: this.listRuntimeModelsForExistingRuntime(runtime.id),
     };
   }
@@ -1874,7 +1982,8 @@ export class RuntimesRepo {
     provider: string,
     now = nowIso(),
   ): void {
-    const normalized = normalizeRuntimeModels(models, provider);
+    const profile = this.getRuntimeExecutionProfile(runtimeId, provider);
+    const normalized = normalizeRuntimeModels(profile ? runtimeConnectionModels(profile, provider, models) : models, provider);
     this.ctx.db.run("DELETE FROM multiremi_runtime_models WHERE runtime_id = ?", [runtimeId]);
     for (const model of normalized) {
       this.ctx.db.run(
@@ -2073,6 +2182,8 @@ function toRuntime(row: Row): MultiremiRuntime {
     daemonId: nullableString(row.daemon_id),
     legacyDaemonId: nullableString(row.legacy_daemon_id),
     daemonDisplayName: nullableString(row.daemon_display_name),
+    executionGroupId: nullableString(row.execution_group_id),
+    execution_group_id: nullableString(row.execution_group_id),
     runtimeMode: String(row.runtime_mode ?? "local"),
     deviceInfo: String(row.device_info ?? ""),
     metadata: parseJson<Record<string, unknown>>(row.metadata, {}),

@@ -24,6 +24,12 @@ const navigationStub: NavigationAdapter = {
   getShareableUrl: (path: string) => path,
 };
 
+vi.mock("./execution-target-select", () => ({
+  ExecutionTargetSelect: ({ onChange }: { onChange: (target: { executionGroupId: string; provider: string }) => void }) => (
+    <>{["claude", "codex"].map((provider) => <button key={provider} onClick={() => onChange({ executionGroupId: `group-${provider}`, provider })}>{provider}</button>)}</>
+  ),
+}));
+
 const TEST_RESOURCES = { en: { common: enCommon, agents: enAgents } };
 
 vi.mock("@multiremi/core/hooks", () => ({
@@ -135,6 +141,7 @@ function makeTemplate(overrides: Partial<Agent> = {}): Agent {
     id: "agent-template",
     workspace_id: "ws-1",
     runtime_id: "",
+    execution_group_id: "group-codex",
     provider: "codex",
     name: "Template Agent",
     description: "",
@@ -189,7 +196,7 @@ function createButton(): HTMLButtonElement {
   return btn as HTMLButtonElement;
 }
 
-describe("CreateAgentDialog (pool model)", () => {
+describe("CreateAgentDialog (execution targets)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockListFleetModels.mockResolvedValue(fleetWithCapacity({ claude: 2, codex: 1 }));
@@ -203,8 +210,9 @@ describe("CreateAgentDialog (pool model)", () => {
     document.body.innerHTML = "";
   });
 
-  it("creates without any machine choice — engine defaults to claude", async () => {
+  it("creates with the explicitly selected machine and Runtime type", async () => {
     const { onCreate } = renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "claude" }));
 
     fireEvent.change(screen.getByPlaceholderText(/e\.g\./i), {
       target: { value: "Pool Agent" },
@@ -214,11 +222,14 @@ describe("CreateAgentDialog (pool model)", () => {
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
     const payload = onCreate.mock.calls[0]?.[0];
     expect(payload.provider).toBe("claude");
-    expect(payload.runtime_id).toBeUndefined();
+    expect(payload.execution_group_id).toBe("group-claude");
+    expect(payload).not.toHaveProperty("runtime_id");
+    expect(mockListFleetModels).toHaveBeenCalledWith(expect.objectContaining({ workspace_id: "ws-1", execution_group_id: "group-claude" }));
   });
 
   it("switching the engine toggles the submitted provider", async () => {
     const { onCreate } = renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "claude" }));
 
     fireEvent.change(screen.getByPlaceholderText(/e\.g\./i), {
       target: { value: "Codex Agent" },
@@ -230,6 +241,15 @@ describe("CreateAgentDialog (pool model)", () => {
     expect(onCreate.mock.calls[0]?.[0].provider).toBe("codex");
   });
 
+  it("resets model and reasoning when choosing another machine of the same type", async () => {
+    const { onCreate } = renderDialog(makeTemplate({ execution_group_id: "other-codex", model: "machine-only-model", thinking_level: "high" }));
+    fireEvent.click(screen.getByRole("button", { name: "codex" }));
+    fireEvent.click(createButton());
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0]?.[0]).toMatchObject({ execution_group_id: "group-codex", provider: "codex", model: undefined });
+    expect(onCreate.mock.calls[0]?.[0]).not.toHaveProperty("thinking_level");
+  });
+
   it("duplicate mode inherits the template's engine", async () => {
     const { onCreate } = renderDialog(makeTemplate({ provider: "codex" }));
 
@@ -239,29 +259,27 @@ describe("CreateAgentDialog (pool model)", () => {
     expect(onCreate.mock.calls[0]?.[0].provider).toBe("codex");
   });
 
-  it("shows the no-capacity hint when the selected engine has no online machine", async () => {
-    mockListFleetModels.mockResolvedValue(fleetWithCapacity({ claude: 0, codex: 1 }));
-    renderDialog();
-
-    expect(
-      await screen.findByText(/No online machine for this engine/i),
-    ).toBeInTheDocument();
-
-    // Creation stays allowed — the task queues server-side.
-    fireEvent.change(screen.getByPlaceholderText(/e\.g\./i), {
-      target: { value: "Queued Agent" },
-    });
-    expect(createButton().disabled).toBe(false);
-  });
-
-  it("gates Create on the name only", () => {
-    renderDialog();
+  it("creates an automatically scheduled agent without requiring a machine or group", async () => {
+    const { onCreate } = renderDialog();
     expect(createButton().disabled).toBe(true);
 
     fireEvent.change(screen.getByPlaceholderText(/e\.g\./i), {
       target: { value: "Named" },
     });
     expect(createButton().disabled).toBe(false);
+    fireEvent.click(createButton());
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0]?.[0]).toMatchObject({ name: "Named", provider: "claude" });
+    expect(onCreate.mock.calls[0]?.[0]).not.toHaveProperty("execution_group_id");
+    expect(onCreate.mock.calls[0]?.[0]).not.toHaveProperty("runtime_id");
+  });
+
+  it("keeps an explicitly pinned runtime when duplicating an existing agent", async () => {
+    const { onCreate } = renderDialog(makeTemplate({ runtime_id: "legacy-runtime", execution_group_id: "migrated-group" }));
+    fireEvent.click(createButton());
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0]?.[0]).toMatchObject({ runtime_id: "legacy-runtime" });
+    expect(onCreate.mock.calls[0]?.[0]).not.toHaveProperty("execution_group_id");
   });
 
   it("creates with a model-supported reasoning effort", async () => {
@@ -269,6 +287,7 @@ describe("CreateAgentDialog (pool model)", () => {
       fleetWithCapacity({ claude: 2, codex: 1 }, { claude: CLAUDE_MODELS }),
     );
     const { onCreate } = renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "claude" }));
 
     const effort = await screen.findByRole("combobox", {
       name: "Reasoning effort",
@@ -299,6 +318,7 @@ describe("CreateAgentDialog (pool model)", () => {
       ),
     );
     renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "claude" }));
 
     await waitFor(() => expect(mockListFleetModels).toHaveBeenCalled());
     expect(
@@ -318,6 +338,7 @@ describe("CreateAgentDialog (pool model)", () => {
       fleetWithCapacity({ claude: 2, codex: 1 }, { claude: CLAUDE_MODELS }),
     );
     const { onCreate } = renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "claude" }));
 
     const effort = await screen.findByRole("combobox", {
       name: "Reasoning effort",

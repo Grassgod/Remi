@@ -6,6 +6,8 @@
 const _log = { info: (...a: unknown[]) => console.log("[acp-client]", ...a), warn: (...a: unknown[]) => console.warn("[acp-client]", ...a), error: (...a: unknown[]) => console.error("[acp-client]", ...a), debug: () => {} };
 function createLogger(_: string) { return _log; }
 
+import { resolveAcpProcessLaunch } from "./launch.js";
+
 import type {
   JsonRpcRequest,
   JsonRpcResponse,
@@ -133,7 +135,8 @@ export class AcpClient {
 
     this._log("spawning", executable, "cwd:", cwd);
 
-    this._process = Bun.spawn([executable, ...(this._options.args ?? [])], {
+    const launch = resolveAcpProcessLaunch(executable, this._options.args ?? []);
+    this._process = Bun.spawn([launch.executable, ...launch.args], {
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",

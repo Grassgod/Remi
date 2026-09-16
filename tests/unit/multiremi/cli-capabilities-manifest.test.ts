@@ -168,14 +168,20 @@ describe("CLI capabilities manifest", () => {
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 645,
-      exempt: 88,
+      mapped: 651,
+      exempt: 90,
       missing: 0,
-      total: 733,
+      total: 741,
     });
     expect(manifest.max_planned_routes).toBe(0);
     expect(cliCoverageReport(manifest).missing).toBeLessThanOrEqual(manifest.max_planned_routes);
     expect(manifest.routes["GET /api/cli/context"]).toEqual({ command: "context.get" });
+    expect(manifest.routes["GET /api/runtimes/:id/codex-profile"]).toEqual({ command: "runtime.codex-profile.get" });
+    expect(manifest.routes["PUT /api/runtimes/:id/codex-profile"]).toEqual({ command: "runtime.codex-profile.set" });
+    expect(manifest.routes["GET /api/daemon/runtimes/:id/codex-profile-key"]).toMatchObject({ cli_exempt: true, category: "daemon_internal_protocol" });
+    expect(manifest.routes["GET /api/runtimes/:id/claude-profile"]).toEqual({ command: "runtime.claude-profile.get" });
+    expect(manifest.routes["PUT /api/runtimes/:id/claude-profile"]).toEqual({ command: "runtime.claude-profile.set" });
+    expect(manifest.routes["GET /api/daemon/runtimes/:id/claude-profile-key"]).toMatchObject({ cli_exempt: true, category: "daemon_internal_protocol" });
     expect(manifest.routes["GET /api/cli/capabilities"]).toEqual({ command: "context.get" });
     expect(manifest.routes["GET /api/cli/latest-version"]).toEqual({
       cli_exempt: true,

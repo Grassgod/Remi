@@ -15,6 +15,28 @@ afterEach(() => {
 });
 
 describe("RuntimesEndpoints runtime response schema", () => {
+  it("sends profile credentials only on write and rejects malformed profile responses", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ profile: null }));
+    vi.stubGlobal("fetch", fetchMock);
+    const endpoints = new RuntimesEndpoints(new HttpClient("https://api.example.test"));
+    const input = { profile: { name: "custom", base_url: "https://custom.example/v1", model: "custom", env_key: "", auth_mode: "api_key" as const }, api_key: "test-key" };
+    await endpoints.setRuntimeCodexProfile("rt/1", input);
+    expect(fetchMock.mock.calls[0]![0]).toBe("https://api.example.test/api/runtimes/rt%2F1/codex-profile");
+    expect(JSON.parse(fetchMock.mock.calls[0]![1].body)).toEqual(input);
+    fetchMock.mockResolvedValue(jsonResponse({ profile: { ...input.profile, api_key: "must-not-be-returned" } }));
+    await expect(endpoints.getRuntimeCodexProfile("rt/1")).rejects.toBeInstanceOf(ApiContractError);
+  });
+  it("sends Claude profile credentials only on write and rejects malformed profile responses", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ profile: null }));
+    vi.stubGlobal("fetch", fetchMock);
+    const endpoints = new RuntimesEndpoints(new HttpClient("https://api.example.test"));
+    const input = { profile: { name: "custom", base_url: "https://custom.example/v1", model: "custom", env_key: "", auth_mode: "api_key" as const, auth_header: "x-api-key" as const }, api_key: "test-key" };
+    await endpoints.setRuntimeClaudeProfile("rt/1", input);
+    expect(fetchMock.mock.calls[0]![0]).toBe("https://api.example.test/api/runtimes/rt%2F1/claude-profile");
+    expect(JSON.parse(fetchMock.mock.calls[0]![1].body)).toEqual(input);
+    fetchMock.mockResolvedValue(jsonResponse({ profile: { ...input.profile, api_key: "must-not-be-returned" } }));
+    await expect(endpoints.getRuntimeClaudeProfile("rt/1")).rejects.toBeInstanceOf(ApiContractError);
+  });
   const runtime = {
     id: "runtime-1",
     workspace_id: "ws-1",

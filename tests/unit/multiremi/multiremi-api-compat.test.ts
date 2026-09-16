@@ -1294,13 +1294,15 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
     })).status).toBe(201);
 
     store.updateAgent(agent.id, { runtimeId: runtime.id });
+    // Selecting a target cancels the waiting task's already-frozen execution before the cascade.
+    expect(store.getTask(task.id)?.status).toBe("cancelled");
     const cascade = await app.request(`/api/runtimes/${runtime.id}/archive-agents-and-delete`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ expected_active_agent_ids: [agent.id] }),
     });
     const cascadeBody = await cascade.json();
-    expect(cascadeBody).toEqual({ status: "ok", agents_archived: 1, tasks_cancelled: 3 });
+    expect(cascadeBody).toEqual({ status: "ok", agents_archived: 1, tasks_cancelled: 2 });
     expect(store.getRuntime(runtime.id)).toBeNull();
     expect(store.getAgent(agent.id)).toMatchObject({ runtimeId: null });
     expect(store.getAgent(agent.id)?.archivedAt).not.toBeNull();

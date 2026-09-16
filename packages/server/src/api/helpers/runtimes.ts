@@ -11,6 +11,7 @@ import {
   MULTIREMI_DAEMON_PROVIDERS,
   authenticatedRequestUserId,
   cleanString,
+  hasRequestField,
   currentAccessToken,
   currentRequestUserId,
   daemonRuntimeResponse,
@@ -48,6 +49,8 @@ export type DaemonRegisterRequestBody = {
   launched_by?: string;
   capabilities?: {
     parallel_agent_execution?: number;
+    codex_profiles?: number;
+    claude_profiles?: number;
     agent_plugins?: number;
   };
   runtimes?: Array<{
@@ -360,6 +363,8 @@ export function registerDaemonRuntimes(
           cli_version: cliVersion,
           launched_by: launchedBy,
           agent_plugin_protocol: agentPluginProtocol,
+          codex_profiles: body.capabilities?.codex_profiles === 1 ? 1 : 0,
+          claude_profiles: body.capabilities?.claude_profiles === 1 ? 1 : 0,
           ...(body.capabilities?.parallel_agent_execution === 1 ? { parallel_agent_execution: 1 } : {}),
           ...(typeof runtime.acpVersion === "string" && runtime.acpVersion ? { acp_version: runtime.acpVersion } : {}),
           ...(typeof runtime.agentVersion === "string" && runtime.agentVersion ? { agent_version: runtime.agentVersion } : {}),
@@ -451,7 +456,7 @@ export function registerDaemonRuntimes(
     });
   }
   return {
-    runtimes: registered,
+    runtimes: registered.map(runtime => ({ ...runtime, codex_profile: store.getRuntimeCodexProfile(runtime.id), claude_profile: store.getRuntimeClaudeProfile(runtime.id) })),
     repos: repos.repos,
     repos_version: repos.repos_version,
     settings: repos.settings,
@@ -582,4 +587,24 @@ export function cloudRuntimeStatusResponse(context: Context, store: MultiremiSto
   const node = store.setCloudRuntimeNodeStatus(loaded.id, status);
   if (!node) return context.json({ error: "cloud runtime node not found" }, 404);
   return context.json(node);
+}
+
+/** Validate user-configured group names before entering the Runtime write transaction. */
+export function validateRuntimeExecutionGroupInput(
+  c: Context,
+  store: MultiremiStore,
+  workspaceId: string,
+  provider: string,
+  input: { executionGroupId?: string | null; execution_group_id?: string | null },
+): Response | null {
+  if (!hasRequestField(input, "executionGroupId", "execution_group_id")) return null;
+  const raw = input.executionGroupId ?? input.execution_group_id;
+  if (raw == null) return null;
+  if (typeof raw !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/.test(raw.trim()) || raw.trim().startsWith("eg_")) {
+    return c.json({ error: "execution_group_id must be a custom identifier of 1–128 letters, digits, dots, colons, underscores or hyphens and must not start with eg_" }, 400);
+  }
+  if (provider === "any") return c.json({ error: "an any-provider Runtime cannot join a custom execution group" }, 400);
+  const existing = store.getExecutionGroup(raw.trim(), workspaceId);
+  if (existing && existing.provider !== provider) return c.json({ error: "execution group members must use the same provider" }, 400);
+  return null;
 }
