@@ -364,7 +364,7 @@ export function compatibilityInboxScope(
     ?? store.listWorkspaceMembers(workspaceId).find((candidate) => candidate.userId === raw)
     ?? exact;
   if (member && (member.workspaceId !== workspaceId
-    || (userId && member.userId !== userId && member.id !== userId))) {
+    || (userId && member.userId !== userId))) {
     return c.json({ error: "inbox not found" }, 404);
   }
   if (userId && !member) return c.json({ error: "inbox not found" }, 404);

@@ -9,6 +9,7 @@ import {
 import { RuntimeRegistrationIdentityConflictError } from "@multiremi/store/repos/runtimes-repo.js";
 import {
   MULTIREMI_DAEMON_PROVIDERS,
+  authenticatedRequestUserId,
   cleanString,
   hasRequestField,
   currentAccessToken,
@@ -20,6 +21,7 @@ import {
 } from "../wire/index.js";
 import type { WorkspaceRepoData } from "../wire/index.js";
 import type {
+  MultiremiCloudRuntimeNode,
   MultiremiRuntime,
   ReportRuntimeLocalSkillImportInput,
   ReportRuntimeLocalSkillListInput,
@@ -554,11 +556,37 @@ export function mergeLegacyDaemonRuntimes(
   }
 }
 
-export function cloudRuntimeStatusResponse(c: Context, store: MultiremiStore, body: any, status: string) {
+export function cloudRuntimeNodeOwnerFilter(context: Context, store: MultiremiStore): string | undefined {
+  const userId = authenticatedRequestUserId(context);
+  if (!userId) return undefined; // Master token / open mode.
+  // Intentionally stricter than auth-guards' legacy PAT identity checks: those
+  // also reject a mismatched token.workspaceId, but nodes have no workspace
+  // boundary. access-tokens-repo stores an omitted userId as "local", just like
+  // a real local user's PAT, so access depends on the current role, not token shape.
+  const role = currentWorkspaceRole(context, store, "local");
+  return role === "owner" || role === "admin" ? undefined : userId;
+}
+
+export function loadCloudRuntimeNode(
+  context: Context,
+  store: MultiremiStore,
+  id: string,
+): MultiremiCloudRuntimeNode | Response {
+  const node = id ? store.getCloudRuntimeNode(id) : null;
+  const ownerId = cloudRuntimeNodeOwnerFilter(context, store);
+  if (!node || (ownerId && node.ownerId !== ownerId)) {
+    return context.json({ error: "cloud runtime node not found" }, 404);
+  }
+  return node;
+}
+
+export function cloudRuntimeStatusResponse(context: Context, store: MultiremiStore, body: any, status: string) {
   const id = body.id ?? body.node_id ?? body.nodeId ?? "";
-  const node = id ? store.setCloudRuntimeNodeStatus(id, status) : null;
-  if (!node) return c.json({ error: "cloud runtime node not found" }, 404);
-  return c.json(node);
+  const loaded = loadCloudRuntimeNode(context, store, id);
+  if (loaded instanceof Response) return loaded;
+  const node = store.setCloudRuntimeNodeStatus(loaded.id, status);
+  if (!node) return context.json({ error: "cloud runtime node not found" }, 404);
+  return context.json(node);
 }
 
 /** Validate user-configured group names before entering the Runtime write transaction. */

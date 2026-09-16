@@ -952,6 +952,9 @@
       }
     },
     "senderAllowlist": {
+      "access_title": "봇 기능 접근",
+      "agent_access": "이 봇에 메시지를 보낼 수 있는 사람은 응답하는 에이전트의 활성화된 기능을 사용할 수 있습니다. 에이전트 자체의 권한 및 승인 규칙은 계속 적용됩니다.",
+      "require_allowlist": "허용 목록의 발신자만 이슈를 만들 수 있도록 제한",
       "unnamed": "Feishu 계정 · {{id}}",
       "account_identifiers": "추가 계정 식별자",
       "title": "Feishu 계정 허용 목록",

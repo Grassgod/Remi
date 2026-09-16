@@ -2015,6 +2015,9 @@ export interface CreateIssueWithTaskInput extends CreateIssueInput {
 }
 
 export interface UpdateIssueInput {
+  /** Server-internal attribution, overwritten from the authenticated request. */
+  actorType?: string;
+  actorId?: string | null;
   title?: string;
   description?: string | null;
   status?: string;
@@ -2100,6 +2103,7 @@ export interface AssignIssueInput {
 export interface AssignIssueResult {
   issue: MultiremiIssue;
   task: MultiremiTask | null;
+  cancelledTasks: number;
 }
 
 export interface QuickCreateIssueInput {
@@ -3961,6 +3965,7 @@ export interface MultiremiFeishuBotConfig {
   appId: string;
   domain: FeishuBotDomain;
   enabled: boolean;
+  senderAccessPolicy: "agent" | "allowlist";
   /** Bumped on every mutation; daemons refetch when their applied revision lags. */
   revision: number;
   hasAppSecret: boolean;
@@ -3993,6 +3998,7 @@ export interface FeishuBotConfigView {
   app_id: string;
   domain: FeishuBotDomain;
   enabled: boolean;
+  sender_access_policy: "agent" | "allowlist";
   revision: number;
   app_secret_configured: boolean;
   app_secret_hint: string | null;
@@ -4047,6 +4053,7 @@ export interface UpsertFeishuBotConfigInput {
   appId: string;
   domain: FeishuBotDomain;
   enabled: boolean;
+  senderAccessPolicy?: "agent" | "allowlist";
   appSecretOp: FeishuBotSecretOp;
   appSecret?: string;
   actor?: string | null;

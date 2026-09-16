@@ -89,6 +89,7 @@ export interface FeishuBotConfig {
   app_id: string;
   domain: FeishuBotDomain;
   enabled: boolean;
+  sender_access_policy?: "agent" | "allowlist";
   revision: number;
   app_secret_configured: boolean;
   /** Display-only prefix such as `cli_••••••`. Never enough to authenticate. */
@@ -267,6 +268,7 @@ export interface UpsertFeishuBotRequest {
   app_id: string;
   domain: FeishuBotDomain;
   enabled: boolean;
+  sender_access_policy?: "agent" | "allowlist";
   app_secret?: string;
   app_secret_op?: FeishuBotSecretOp;
   registration_session_id?: string;

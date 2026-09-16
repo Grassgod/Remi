@@ -2769,6 +2769,7 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_feishu_bot_chat_bindings", "thread_id TEXT");
   addColumnIfMissing(db, "multiremi_feishu_bot_chat_bindings", "reply_to_message_id TEXT");
   addColumnIfMissing(db, "multiremi_feishu_bot_deliveries", "sender_id TEXT");
+  addColumnIfMissing(db, "multiremi_feishu_bot_configs", "sender_access_policy TEXT NOT NULL DEFAULT 'agent'");
   addColumnIfMissing(db, "multiremi_feishu_bot_senders", "name_en TEXT");
   addColumnIfMissing(db, "multiremi_feishu_bot_senders", "profile_checked_at TEXT");
   db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_delivery_sender

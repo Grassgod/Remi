@@ -43,6 +43,7 @@ function scaffold(options: { online?: boolean } = {}): {
     agentId: agent.id,
     runtimeId: "rt_bot",
     appId: "cli_issue_topics",
+    senderAccessPolicy: "allowlist",
     appSecretOp: "set",
     appSecret: APP_SECRET,
     domain: "feishu",
@@ -86,6 +87,23 @@ function prepareReport(store: MultiremiStore) {
 }
 
 describe("Feishu Issue topics", () => {
+  it.each(["linked-member-id", "unbound-member-id", "user-id"])("keeps the topic creator's notification member for %s", (creatorKind) => {
+    const { store } = scaffold();
+    configureTopics(store);
+    const user = store.getOrCreateUser({ email: "topic-creator@example.test", name: "Topic creator" });
+    const member = store.createWorkspaceMember({
+      name: "Topic creator",
+      userId: creatorKind === "unbound-member-id" ? null : user.id,
+    });
+    const createdBy = creatorKind === "user-id" ? user.id : member.id;
+    const issue = store.createIssue({ title: "Member-created topic", createdBy });
+
+    expect(store.prepareFeishuIssueTopicWithinTransaction(issue)).toBe(true);
+    const chat = store.getChatSession(`chat_issue_topic_${issue.id}`)!;
+    expect(chat.creatorId).toBe(createdBy);
+    expect(store.getAgentChatNotificationChannel(chat.id)?.memberId).toBe(member.id);
+  });
+
   it("checkpoints the recipient before send and keeps it after retry and owner changes", () => {
     const { store } = scaffold();
     configureTopics(store);

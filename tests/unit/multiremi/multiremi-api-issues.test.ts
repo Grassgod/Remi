@@ -2,11 +2,93 @@
 // quick-create, hierarchy/planning, dependency, assignment, metadata and label routes.
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi API — issue endpoints", () => {
+  for (const [method, prefix, suffix] of [
+    ["PUT", "/api/issues", ""],
+    ["PATCH", "/api/issues", ""],
+    ["PATCH", "/api/multiremi/issues", ""],
+    ["POST", "/api/multiremi/issues", "/assign"],
+  ]) {
+    it.each(["member", "agent"])(`${method} ${prefix} unassign cancels active tasks and attributes the %s caller`, async (actorType) => {
+      const store = createStore();
+      store.ensureLocalWorkspace();
+      const agent = store.createAgent({ name: "Unassign worker", provider: "codex" });
+      const issue = store.createIssue({ title: "Unassign target", assigneeType: "agent", assigneeId: agent.id });
+      const tasks = ["running", "awaiting_human", "queued", "completed"].map((status) => {
+        const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: status });
+        db!.run("UPDATE multiremi_tasks SET status = ? WHERE id = ?", [status, task.id]);
+        return task;
+      });
+      const authTask = store.createTask({ agentId: agent.id, prompt: "Caller outside target issue" });
+      const credential = actorType === "agent"
+        ? await store.createTaskAccessToken(authTask, "local")
+        : await store.createAccessToken({ name: "Unassign PAT", type: "pat", workspaceId: "local", userId: "local" });
+      const app = createMultiremiApp({ store, authToken: "root-secret" });
+      const response = await app.request(`${prefix}/${issue.id}${suffix}`, {
+        method,
+        headers: { Authorization: `Bearer ${credential.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ assignee_type: null, assignee_id: null, actorType: "system", actorId: "spoofed" }),
+      });
+      expect(response.status).toBe(200);
+      expect((await response.json()).cancelled_tasks).toBe(3);
+      expect(store.getIssue(issue.id)).toMatchObject({ assigneeType: null, assigneeId: null });
+      for (const task of tasks.slice(0, 3)) expect(store.getTask(task.id)?.status).toBe("cancelled");
+      expect(store.getTask(tasks[3].id)?.status).toBe("completed");
+      expect(store.getTask(authTask.id)?.status).toBe(authTask.status);
+      const activity = store.listIssueActivity(issue.id).filter((entry) => entry.type === "issue_unassigned");
+      expect(activity).toHaveLength(1);
+      expect(activity[0]).toMatchObject({ actorType, actorId: actorType === "agent" ? agent.id : "local", data: { cancelled: 3 } });
+      if (actorType === "agent") expect(activity[0].data).toMatchObject({ sourceTaskId: authTask.id });
+    });
+  }
+
+  it.each(["/api/issues", "/api/multiremi/issues"])("%s updates without assignee fields preserve active tasks and reassignment cancels old tasks", async (prefix) => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const agent = store.createAgent({ name: "Original assignee", provider: "codex" });
+    const replacement = store.createAgent({ name: "Replacement assignee", provider: "codex" });
+    const issue = store.createIssue({ title: "Keep running", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "active work" });
+    const app = createMultiremiApp({ store });
+    const update = (body: unknown) => app.request(`${prefix}/${issue.id}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    for (const body of [{ title: "New title" }, { status: "in_review" }, { assignee_id: agent.id, assignee_type: "agent" }]) {
+      const response = await update(body);
+      expect(response.status).toBe(200);
+      expect((await response.json()).cancelled_tasks).toBe(0);
+      expect(store.getTask(task.id)?.status).toBe(task.status);
+    }
+    const response = await update({ assignee_type: "agent", assignee_id: replacement.id });
+    expect(response.status).toBe(200);
+    expect((await response.json()).cancelled_tasks).toBe(1);
+    expect(store.getTask(task.id)?.status).toBe("cancelled");
+    expect(store.listIssueActivity(issue.id).find((entry) => entry.type === "task_cancelled")).toMatchObject({ body: "issue_reassigned" });
+    expect(store.listTasksForIssue(issue.id).some((entry) => entry.agentId === replacement.id && entry.status === "queued")).toBe(true);
+    expect(store.listIssueActivity(issue.id).some((entry) => entry.type === "issue_unassigned")).toBe(false);
+  });
+
+  it("only explicit assignee clearing triggers update unassign, including camelCase and assignee-id-only inputs", () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const agent = store.createAgent({ name: "Unassign store worker", provider: "codex" });
+    for (const input of [{ assigneeType: null, assigneeId: null }, { assigneeId: null }, { assignee_id: null }]) {
+      const issue = store.createIssue({ title: "Clear assignment", assigneeType: "agent", assigneeId: agent.id });
+      store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "active" });
+      expect(store.updateIssueWithOutcome(issue.id, input).cancelledTasks).toBe(1);
+      expect(store.updateIssueWithOutcome(issue.id, input).cancelledTasks).toBe(0);
+      expect(store.listIssueActivity(issue.id).filter((entry) => entry.type === "issue_unassigned")).toHaveLength(1);
+    }
+    const issue = store.createIssue({ title: "Already unassigned" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "direct task" });
+    expect(store.updateIssueWithOutcome(issue.id, { assigneeId: null }).cancelledTasks).toBe(0);
+    expect(store.getTask(task.id)?.status).toBe(task.status);
+  });
+
   it("auto-binds an Issue created by a Chat task without replacing an existing binding", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();

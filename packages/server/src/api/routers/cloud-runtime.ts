@@ -1,9 +1,12 @@
 import type { Hono } from "hono";
 import {
+  cloudRuntimeNodeOwnerFilter,
   cloudRuntimeStatusResponse,
+  loadCloudRuntimeNode,
   readJson,
 } from "../helpers.js";
 import {
+  authenticatedRequestUserId,
   parseOptionalInt,
 } from "../wire/index.js";
 import type {
@@ -20,15 +23,18 @@ export function registerCloudRuntimeRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/cloud-runtime/nodes", (c) => c.json(store.listCloudRuntimeNodes({
     limit: parseOptionalInt(c.req.query("limit")),
     offset: parseOptionalInt(c.req.query("offset")),
+    ownerId: cloudRuntimeNodeOwnerFilter(c, store),
   })));
   app.post("/api/cloud-runtime/nodes", async (c) => {
     const body = await readJson<CreateCloudRuntimeNodeInput>(c);
-    return c.json(store.createCloudRuntimeNode(body), 201);
+    return c.json(store.createCloudRuntimeNode(body, authenticatedRequestUserId(c) ?? "local"), 201);
   });
   app.delete("/api/cloud-runtime/nodes", async (c) => {
     const body = await readJson<{ id?: string; node_id?: string; nodeId?: string }>(c);
     const id = body.id ?? body.node_id ?? body.nodeId ?? "";
-    const deleted = id ? store.deleteCloudRuntimeNode(id) : false;
+    const loaded = loadCloudRuntimeNode(c, store, id);
+    if (loaded instanceof Response) return loaded;
+    const deleted = store.deleteCloudRuntimeNode(loaded.id);
     if (!deleted) return c.json({ error: "cloud runtime node not found" }, 404);
     return c.body(null, 204);
   });
@@ -42,7 +48,9 @@ export function registerCloudRuntimeRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/cloud-runtime/nodes/exec", async (c) => {
     const body = await readJson<{ id?: string; node_id?: string; nodeId?: string; command?: string; cmd?: string }>(c);
     const id = body.id ?? body.node_id ?? body.nodeId ?? "";
-    const result = store.execCloudRuntimeNode(id, body.command ?? body.cmd ?? "");
+    const loaded = loadCloudRuntimeNode(c, store, id);
+    if (loaded instanceof Response) return loaded;
+    const result = store.execCloudRuntimeNode(loaded.id, body.command ?? body.cmd ?? "");
     if (!result) return c.json({ error: "cloud runtime node not found" }, 404);
     return c.json(result);
   });

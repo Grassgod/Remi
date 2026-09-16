@@ -804,6 +804,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     if (!externalId) return c.json({ error: "external_id is required" }, 400);
 
     const user = store.getUserByExternalId(externalId);
+    // This user-table id must have an explicit membership link, not a member-row alias.
     const allowed = Boolean(user && store.findWorkspaceMemberForUser(user.id, workspaceId));
     c.header("Cache-Control", "no-store");
     return c.json({ allowed });

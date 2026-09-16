@@ -9,9 +9,9 @@ afterEach(resetMultiremiTestEnv);
 describe("Multiremi store — Go-compatible agent authorization", () => {
   it("gates agent creation and runtime moves like the Go server", async () => {
     const store = createStore();
-    store.createWorkspaceMember({ id: "alice", name: "Alice", role: "member" });
-    store.createWorkspaceMember({ id: "bob", name: "Bob", role: "member" });
-    store.createWorkspaceMember({ id: "admin", name: "Admin", role: "admin" });
+    store.createWorkspaceMember({ id: "alice", userId: "alice", name: "Alice", role: "member" });
+    store.createWorkspaceMember({ id: "bob", userId: "bob", name: "Bob", role: "member" });
+    store.createWorkspaceMember({ id: "admin", userId: "admin", name: "Admin", role: "admin" });
     const aliceToken = await store.createAccessToken({ name: "Alice", type: "pat", workspaceId: "local", userId: "alice" });
     const bobToken = await store.createAccessToken({ name: "Bob", type: "pat", workspaceId: "local", userId: "bob" });
     const adminToken = await store.createAccessToken({ name: "Admin", type: "pat", workspaceId: "local", userId: "admin" });
@@ -374,9 +374,9 @@ describe("Multiremi store — Go-compatible agent authorization", () => {
   it("redacts agent mcp_config like the Go server", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
-    store.createWorkspaceMember({ id: "owner", name: "Owner", role: "member" });
-    store.createWorkspaceMember({ id: "admin", name: "Admin", role: "admin" });
-    store.createWorkspaceMember({ id: "member", name: "Member", role: "member" });
+    store.createWorkspaceMember({ id: "owner", userId: "owner", name: "Owner", role: "member" });
+    store.createWorkspaceMember({ id: "admin", userId: "admin", name: "Admin", role: "admin" });
+    store.createWorkspaceMember({ id: "member", userId: "member", name: "Member", role: "member" });
     const ownerToken = await store.createAccessToken({ name: "Owner", type: "pat", workspaceId: "local", userId: "owner" });
     const adminToken = await store.createAccessToken({ name: "Admin", type: "pat", workspaceId: "local", userId: "admin" });
     const memberToken = await store.createAccessToken({ name: "Member", type: "pat", workspaceId: "local", userId: "member" });
@@ -446,9 +446,9 @@ describe("Multiremi store — Go-compatible agent authorization", () => {
   it("gates agent mutations and emits Go-style redacted agent events", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
-    store.createWorkspaceMember({ id: "owner", name: "Owner", role: "member" });
-    store.createWorkspaceMember({ id: "admin", name: "Admin", role: "admin" });
-    store.createWorkspaceMember({ id: "member", name: "Member", role: "member" });
+    store.createWorkspaceMember({ id: "owner", userId: "owner", name: "Owner", role: "member" });
+    store.createWorkspaceMember({ id: "admin", userId: "admin", name: "Admin", role: "admin" });
+    store.createWorkspaceMember({ id: "member", userId: "member", name: "Member", role: "member" });
     const ownerToken = await store.createAccessToken({ name: "Owner", type: "pat", workspaceId: "local", userId: "owner" });
     const adminToken = await store.createAccessToken({ name: "Admin", type: "pat", workspaceId: "local", userId: "admin" });
     const memberToken = await store.createAccessToken({ name: "Member", type: "pat", workspaceId: "local", userId: "member" });
@@ -595,9 +595,9 @@ describe("Multiremi store — Go-compatible agent authorization", () => {
 
   it("gates agent env management like the Go server", async () => {
     const store = createStore();
-    store.createWorkspaceMember({ id: "owner", name: "Owner", role: "owner" });
-    store.createWorkspaceMember({ id: "admin", name: "Admin", role: "admin" });
-    store.createWorkspaceMember({ id: "member", name: "Member", role: "member" });
+    store.createWorkspaceMember({ id: "owner", userId: "owner", name: "Owner", role: "owner" });
+    store.createWorkspaceMember({ id: "admin", userId: "admin", name: "Admin", role: "admin" });
+    store.createWorkspaceMember({ id: "member", userId: "member", name: "Member", role: "member" });
     const ownerToken = await store.createAccessToken({ name: "Owner", type: "pat", workspaceId: "local", userId: "owner" });
     const adminToken = await store.createAccessToken({ name: "Admin", type: "pat", workspaceId: "local", userId: "admin" });
     const memberToken = await store.createAccessToken({ name: "Member", type: "pat", workspaceId: "local", userId: "member" });

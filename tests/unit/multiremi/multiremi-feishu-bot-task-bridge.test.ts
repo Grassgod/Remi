@@ -42,6 +42,7 @@ function scaffold() {
     agentId: agent.id,
     runtimeId: "rt_bot",
     appId: "cli_test",
+    senderAccessPolicy: "allowlist",
     appSecretOp: "set",
     appSecret: APP_SECRET,
     domain: "feishu",

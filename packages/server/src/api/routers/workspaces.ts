@@ -6,14 +6,17 @@ import {
   denyCurrentUserWorkspaceAccess,
   importWorkspaceRepository,
   inspectWorkspaceRepository,
+  isFirstAgentInWorkspace,
   isJsonApiError,
   loadCurrentWorkspaceMember,
   mergeAgentEnv,
   publishWorkspaceEvent,
+  publishAgentLifecycleEvent,
   readJson,
   readJsonStrict,
   readJsonStrictAllowEmpty,
   readOrganizerMode,
+  recordAgentCreatedAnalytics,
   removeWorkspaceRepository,
   organizerSettings,
   parseOrganizerMode,
@@ -129,8 +132,23 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.post("/api/workspaces", async (c) => {
     const body = sanitizeWorkspaceSettingsInput(await readJson<any>(c));
-    const result = safeCreateWorkspace(store, body, authenticatedRequestUserId(c));
+    const actingUserId = authenticatedRequestUserId(c) ?? "local";
+    const result = safeCreateWorkspace(store, body, actingUserId);
     if ("error" in result) return c.json({ error: result.error }, result.status);
+    const provider = "claude";
+    const before = store.getDefaultAgent(result.id, provider, actingUserId);
+    const isFirstAgent = isFirstAgentInWorkspace(store, result.id);
+    const agent = store.ensureDefaultAgent(provider, {
+      workspaceId: result.id,
+      ownerId: actingUserId,
+    });
+    if (!before) {
+      recordAgentCreatedAnalytics(c, store, agent, null, {
+        template: "workspace_bootstrap",
+        isFirstAgentInWorkspace: isFirstAgent,
+      });
+      publishAgentLifecycleEvent(c, store, "agent:created", agent);
+    }
     return c.json(result, 201);
   });
   app.get("/api/workspaces/:id", (c) => {

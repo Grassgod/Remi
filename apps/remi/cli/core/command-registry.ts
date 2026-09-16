@@ -316,7 +316,21 @@ export class CommandRegistry {
     ].join("\n");
   }
 
+  isImplicitGroup(path: readonly string[]): boolean {
+    return path.length > 0 && !this.hasPath(path) && this.inventory().some((entry) =>
+      !entry.hidden && entry.path.length > path.length
+      && path.every((segment, index) => entry.path[index] === segment)
+    );
+  }
+
   renderHelpForArgv(argv: readonly string[], programName = "remi"): string {
+    // Intermediate groups need not have an executable spec. Preserve their
+    // requested path instead of falling back to a registered ancestor.
+    const optionIndex = argv.findIndex((arg) => arg.startsWith("-"));
+    const requestedPath = optionIndex < 0 ? argv : argv.slice(0, optionIndex);
+    if (this.isImplicitGroup(requestedPath)) {
+      return this.renderHelp(requestedPath, programName);
+    }
     const matched = [...this.paths.values()]
       .filter((entry) => pathMatches(entry.path, argv))
       .sort((a, b) => b.path.length - a.path.length || Number(Boolean(a.alias)) - Number(Boolean(b.alias)))[0];
@@ -325,6 +339,7 @@ export class CommandRegistry {
   }
 
   supportsGeneratedHelp(argv: readonly string[]): boolean {
+    if (this.isImplicitGroup(argv)) return true;
     const matched = [...this.paths.values()]
       .filter((entry) => pathMatches(entry.path, argv))
       .sort((a, b) => b.path.length - a.path.length || Number(Boolean(a.alias)) - Number(Boolean(b.alias)))[0];

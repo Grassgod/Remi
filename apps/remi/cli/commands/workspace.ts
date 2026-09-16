@@ -57,6 +57,7 @@ const RUNTIME_PROVISION_FIELDS: readonly CliOptionSpec[] = [
  * which is the only safe default for a partial update.
  */
 const FEISHU_BOT_FIELDS: readonly CliOptionSpec[] = [
+  { name: "sender-access-policy", type: "string", valueName: "agent|allowlist", description: "Use Agent permissions (default) or require a sender allowlist" },
   { name: "agent", type: "string", valueName: "agent-id", description: "Agent that answers concierge messages" },
   { name: "runtime", type: "string", valueName: "runtime-id", description: "Runtime that hosts the connector" },
   { name: "app-id", type: "string", valueName: "cli_xxx", description: "Feishu App ID" },
@@ -548,6 +549,7 @@ function feishuBotRegistrationPath(workspaceId: string, sessionId: string): stri
 
 async function feishuBotBody(invocation: CommandInvocation): Promise<Record<string, unknown>> {
   const body = await requestBody(invocation, {
+    sender_access_policy: stringOption(invocation, "sender-access-policy") ?? undefined,
     agent_id: stringOption(invocation, "agent") ?? undefined,
     runtime_id: stringOption(invocation, "runtime") ?? undefined,
     app_id: stringOption(invocation, "app-id") ?? undefined,

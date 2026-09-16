@@ -31,10 +31,17 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/multiremi/tasks", (c) => {
     const status = c.req.query("status") as any;
     const taskToken = currentTaskAccessToken(c);
-    const tasks = store.listTasks(status).filter((task) =>
-      (taskToken?.workspaceId == null || task.workspaceId === taskToken.workspaceId)
-      && canCurrentUserAccessChatTask(c, store, task)
-    );
+    const workspaceAccess = new Map<string, boolean>();
+    const tasks = store.listTasks(status).filter((task) => {
+      let allowed = taskToken
+        ? taskToken.workspaceId == null || task.workspaceId === taskToken.workspaceId
+        : workspaceAccess.get(task.workspaceId);
+      if (allowed === undefined) {
+        allowed = denyCurrentUserWorkspaceAccess(c, store, task.workspaceId) == null;
+        workspaceAccess.set(task.workspaceId, allowed);
+      }
+      return allowed && canCurrentUserAccessChatTask(c, store, task);
+    });
     return c.json({ tasks: tasks.map(taskPublicResponse) });
   });
   app.post("/api/multiremi/tasks", async (c) => {
@@ -132,31 +139,6 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     const taskDenied = denyCurrentUserWorkspaceAccess(c, store, task.workspaceId);
     if (taskDenied) return taskDenied;
     if (!canCurrentUserAccessChatTask(c, store, task)) return c.json({ error: "forbidden" }, 403);
-    const taskToken = currentTaskAccessToken(c);
-    if (taskToken?.taskId) {
-      const supervisor = supervisorTaskIdentity(c, store);
-      if (supervisor && task.id === supervisor.task.id) {
-        return c.json({ error: "a supervisor cannot act on its own task", code: "organizer_self_action_forbidden" }, 403);
-      }
-      if (supervisor && task.id !== taskToken.taskId) {
-        const body = await readJson<{ reason?: string }>(c);
-        try {
-          const result = store.performOrganizerAction({
-            supervisorTaskId: supervisor.task.id,
-            supervisorAgentId: supervisor.agentId,
-            targetTaskId: task.id,
-            action: "cancel",
-            reason: cleanString(body.reason) ?? "",
-          });
-          return compatibility
-            ? c.json({ ...taskCompatibilityResponse(result.task), organizer_action: result.audit, comment_id: result.comment.id })
-            : c.json({ task: taskPublicResponse(result.task), organizer_action: result.audit, comment_id: result.comment.id });
-        } catch (error) {
-          if (error instanceof OrganizerActionError) return c.json({ error: error.message, code: error.code }, error.status);
-          throw error;
-        }
-      }
-    }
     const cancelled = store.cancelTask(task.id);
     return compatibility
       ? c.json(taskCompatibilityResponse(cancelled))
@@ -179,30 +161,6 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     const content = cleanString(body?.content)
       ?? (forceAnswer ? "Please stop exploring and deliver your best conclusion based on the work so far." : null);
     if (!content) return c.json({ error: "content is required" }, 400);
-    const taskToken = currentTaskAccessToken(c);
-    if (taskToken?.taskId) {
-      const supervisor = supervisorTaskIdentity(c, store);
-      if (supervisor && task.id === supervisor.task.id) {
-        return c.json({ error: "a supervisor cannot act on its own task", code: "organizer_self_action_forbidden" }, 403);
-      }
-      if (supervisor && task.id !== taskToken.taskId) {
-        try {
-          const result = store.performOrganizerAction({
-            supervisorTaskId: supervisor.task.id,
-            supervisorAgentId: supervisor.agentId,
-            targetTaskId: task.id,
-            action: forceAnswer ? "force_answer" : "steer",
-            reason: cleanString(body.reason) ?? "",
-            content,
-          });
-          return c.json({ message: result.message, organizer_action: result.audit, comment_id: result.comment.id }, 201);
-        } catch (error) {
-          if (error instanceof OrganizerActionError) return c.json({ error: error.message, code: error.code }, error.status);
-          if (error instanceof TaskSteerConflictError) return c.json({ error: error.message }, 409);
-          throw error;
-        }
-      }
-    }
     // Re-read after body parsing: the task may have finished while the body
     // streamed in, and the pre-parse snapshot would let a doomed insert reach
     // the store. The store's own terminal check backstops the remaining race.

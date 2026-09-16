@@ -116,8 +116,11 @@ export class WorkspacesRepo {
     if (!value) return null;
     const exact = this.getWorkspaceMember(value);
     if (exact && !exact.archivedAt && (!workspaceId || exact.workspaceId === workspaceId)) return exact;
+    const members = this.listWorkspaceMembers(workspaceId);
+    const userIdMatches = members.filter((member) => member.userId === value);
+    if (userIdMatches.length) return userIdMatches.length === 1 ? userIdMatches[0]! : null;
     return uniqueRefMatch(
-      this.listWorkspaceMembers(workspaceId),
+      members,
       value,
       (member) => member.id,
       (member) => [member.name, member.email],
@@ -367,23 +370,19 @@ export class WorkspacesRepo {
     return this.getUser(user.id)!;
   }
 
-  // Real role of a user in a workspace, or null when they are not a member.
-  // Matches on the explicit user_id link, falling back to the legacy
-  // `mem_<ws>_<userId>` id convention for members created before user_id existed.
+  // Authorization role from the explicit user_id link, or null for non-members.
+  // Callers holding a member row id must resolve it with getWorkspaceMember first.
   getUserRoleInWorkspace(userId: string | null | undefined, workspaceId: string): string | null {
     return this.findWorkspaceMemberForUser(userId, workspaceId)?.role ?? null;
   }
 
-  // Active member row for a user in a workspace, or null when they are not a
-  // member. Accepts a user id, a member row id, or the legacy `mem_<ws>_<userId>`
-  // convention — request identities carry user ids while subscriber/inbox APIs
-  // key on member row ids, so callers must translate through here.
+  // Authorization identity lookup: only the explicit user_id link grants membership.
+  // Callers holding a member row id must resolve it with getWorkspaceMember first.
+  // Historical mem_<ws>_<uid> rows have user_id backfilled by migrations.ts's backfillMemberUserIds.
   findWorkspaceMemberForUser(userId: string | null | undefined, workspaceId: string): MultiremiWorkspaceMember | null {
     const uid = cleanOptionalString(userId);
     if (!uid) return null;
-    return this.listWorkspaceMembers(workspaceId).find((m) =>
-      m.userId === uid || m.id === uid || m.id === `mem_${workspaceId}_${uid}`
-    ) ?? null;
+    return this.listWorkspaceMembers(workspaceId).find((member) => member.userId === uid) ?? null;
   }
 
   listWorkspacesForUser(userId: string | null | undefined): MultiremiWorkspace[] {

@@ -206,8 +206,8 @@ describe("Runtime skill directories", () => {
 
   it("keeps private skill directories restricted to the runtime owner within a workspace", async () => {
     const store = createStore();
-    store.createWorkspaceMember({ id: "alice", name: "Alice", role: "member" });
-    store.createWorkspaceMember({ id: "bob", name: "Bob", role: "admin" });
+    store.createWorkspaceMember({ id: "alice", userId: "alice", name: "Alice", role: "member" });
+    store.createWorkspaceMember({ id: "bob", userId: "bob", name: "Bob", role: "admin" });
     const alice = await store.createAccessToken({ name: "Alice", type: "pat", userId: "alice", workspaceId: "local" });
     const bob = await store.createAccessToken({ name: "Bob", type: "pat", userId: "bob", workspaceId: "local" });
     const runtime = store.registerRuntime({ name: "Alice public runtime", provider: "codex", ownerId: "alice", workspaceId: "local", visibility: "public", daemonId: "alice-daemon" });

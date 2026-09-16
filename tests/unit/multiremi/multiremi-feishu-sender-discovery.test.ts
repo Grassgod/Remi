@@ -24,6 +24,7 @@ function fixture() {
   store.heartbeatRuntime("rt_bot", { supportsFeishuBotConfig: true });
   const config = store.upsertFeishuBotConfig("local", {
     agentId: agent.id, runtimeId: "rt_bot", appId: "cli_personal", domain: "feishu", enabled: true,
+    senderAccessPolicy: "allowlist",
     appSecretOp: "set", appSecret: "fixture-app-secret-not-a-real-credential",
   });
   const app = createMultiremiApp({ store, authToken: "MASTER" });

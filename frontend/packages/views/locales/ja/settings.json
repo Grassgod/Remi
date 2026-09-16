@@ -952,6 +952,9 @@
       }
     },
     "senderAllowlist": {
+      "access_title": "ボットの機能へのアクセス",
+      "agent_access": "このボットにメッセージを送れる人は、応答するエージェントの有効な機能を利用できます。エージェント自体の権限と承認ルールは引き続き適用されます。",
+      "require_allowlist": "課題の作成を許可リストの送信者に限定する",
       "unnamed": "Feishu アカウント · {{id}}",
       "account_identifiers": "その他のアカウント識別子",
       "title": "Feishu アカウント許可リスト",

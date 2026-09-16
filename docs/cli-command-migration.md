@@ -143,7 +143,13 @@ Inbox/Issue object and audited outcome, and generic `resolve` cannot forge those
 outcomes. An empty source allowlist means zero ingestion; `source update
 --clear-allowlist` restores that state.
 
-The Feishu bot sender allowlist uses `remi workspace feishu-bot sender
+Feishu bots default to Agent capabilities: anyone who can message the bot may
+use its enabled capabilities without sender approval. `remi workspace feishu-bot
+set <workspace> ... --sender-access-policy agent|allowlist` selects this policy;
+omitting the option preserves the saved choice. Existing bot configurations
+upgrade to `agent`. Agent and inherited task proposal policies still apply.
+
+The optional Feishu bot sender allowlist uses `remi workspace feishu-bot sender
 list <workspace>`, `allow <workspace> <sender>`, and `revoke <workspace> <sender>`.
 The sender ID comes from `list`; accounts are discovered from incoming bot
 requests and deduplicated within the current bot app. These human-only commands

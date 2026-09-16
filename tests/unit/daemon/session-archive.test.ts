@@ -85,6 +85,9 @@ describe("Issue session archive", () => {
     mkdirSync(join(sessionRoot, ".multiremi"), { recursive: true });
     writeFileSync(join(home, "projects", "history.jsonl"), "{\"message\":\"runtime\"}\n");
     writeFileSync(join(home, "settings.json"), "DO_NOT_ARCHIVE");
+    const claudeCredentials = join(root, "claude-credentials.json");
+    writeFileSync(claudeCredentials, "CLAUDE_CREDENTIALS_MUST_NOT_BE_ARCHIVED");
+    symlinkSync(claudeCredentials, join(home, ".credentials.json"));
     writeFileSync(join(sessionRoot, ".multiremi", "gc.json"), "DO_NOT_ARCHIVE");
 
     const archive = await prepareIssueSessionArchive(issueRoot, {
@@ -95,7 +98,10 @@ describe("Issue session archive", () => {
 
     expect(files.get("sessions/ises_2/agt_2/4/home/projects/history.jsonl")?.toString())
       .toContain("runtime");
-    expect([...files.keys()].some((path) => /settings\.json|gc\.json/.test(path))).toBe(false);
+    expect([...files.keys()].some((path) => /\.credentials\.json|settings\.json|gc\.json/.test(path))).toBe(false);
+    expect(gunzipSync(readFileSync(archive.archivePath)).toString()).not.toContain(
+      "CLAUDE_CREDENTIALS_MUST_NOT_BE_ARCHIVED",
+    );
   });
 
   supportedPlatformIt("refuses unexpected symlinks", async () => {

@@ -5478,6 +5478,7 @@
         "app_id": "cli_snapshot_bot",
         "domain": "feishu",
         "enabled": false,
+        "sender_access_policy": "agent",
         "revision": 1,
         "app_secret_configured": true,
         "app_secret_hint": "snap••••••",
@@ -5509,6 +5510,7 @@
         "app_id": "cli_snapshot_bot",
         "domain": "lark",
         "enabled": true,
+        "sender_access_policy": "agent",
         "revision": 2,
         "app_secret_configured": true,
         "app_secret_hint": "snap••••••",
@@ -5616,6 +5618,7 @@
         "app_id": "",
         "domain": "feishu",
         "enabled": false,
+        "sender_access_policy": "agent",
         "revision": 0,
         "app_secret_configured": false,
         "app_secret_hint": null,
@@ -22438,6 +22441,7 @@
         "app_id": "",
         "domain": "feishu",
         "enabled": false,
+        "sender_access_policy": "agent",
         "revision": 0,
         "app_secret_configured": false,
         "app_secret_hint": null,
@@ -24339,7 +24343,9 @@
         "archived_at": null,
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
-        "metadata": {}
+        "metadata": {},
+        "task_id": null,
+        "cancelled_tasks": 0
       }
     },
     {
@@ -24371,7 +24377,9 @@
         "archived_at": null,
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
-        "metadata": {}
+        "metadata": {},
+        "task_id": "tsk_3gq3rlr8o45b",
+        "cancelled_tasks": 0
       }
     },
     {
@@ -24541,7 +24549,8 @@
           "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
-        }
+        },
+        "cancelled_tasks": 0
       }
     },
     {
@@ -24589,6 +24598,7 @@
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         },
+        "cancelled_tasks": 1,
         "task": {
           "id": "tsk_ic8dc9g1qpho",
           "taskKind": "direct",
@@ -27426,7 +27436,7 @@
       "path": "/api/workspaces/ws_wk1mrnyfwl4x/members",
       "status": 201,
       "body": {
-        "id": "inv_va5q49t622xv",
+        "id": "inv_8dim5r24mzl2",
         "workspaceId": "ws_wk1mrnyfwl4x",
         "workspace_id": "ws_wk1mrnyfwl4x",
         "inviterId": "local",
@@ -27477,7 +27487,7 @@
     {
       "key": "workspaces#006 DELETE /api/workspaces/:id/invitations/:invitationId",
       "route": "DELETE /api/workspaces/:id/invitations/:invitationId",
-      "path": "/api/workspaces/ws_wk1mrnyfwl4x/invitations/inv_va5q49t622xv",
+      "path": "/api/workspaces/ws_wk1mrnyfwl4x/invitations/inv_8dim5r24mzl2",
       "status": 204,
       "body": ""
     },

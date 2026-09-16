@@ -27,11 +27,11 @@ import {
   readJson,
   readJsonStrict,
   requireWorkspaceAdmin,
+  safeAssignIssue,
   safeQuickCreateIssue,
   safeRerunIssue,
   setIssueCommentCursorHeaders,
   splitQueryList,
-  supervisorTaskIdentity,
   withIssueCreateRequestContext,
 } from "../helpers.js";
 import {
@@ -97,7 +97,6 @@ import {
   MULTIREMI_ISSUE_ARCHIVE_MIN_TTL_MS,
 } from "@multiremi/contracts/types.js";
 import { resolveIssueArchiveSettings } from "@multiremi/store/issue-archive.js";
-import { OrganizerActionError } from "../../organizer/settings.js";
 import type { RouterDeps } from "./deps.js";
 
 // The idempotent generated-issue replay (source_issue_id + same title, 200)
@@ -153,6 +152,34 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   const issueDeleteAccess = (c: Context, workspaceId: string): Response | null =>
     denyCurrentUserWorkspaceAccess(c, store, workspaceId)
       ?? requireWorkspaceAdmin(c, store, workspaceId);
+
+  const listAccessibleChildIssues = (c: Context, parentIds: string[]): MultiremiIssue[] => {
+    const workspaceAccess = new Map<string, boolean>();
+    const canAccessWorkspace = (workspaceId: string): boolean => {
+      let allowed = workspaceAccess.get(workspaceId);
+      if (allowed === undefined) {
+        allowed = denyCurrentUserWorkspaceAccess(c, store, workspaceId) == null;
+        workspaceAccess.set(workspaceId, allowed);
+      }
+      return allowed;
+    };
+    return parentIds.flatMap((parentId) => {
+      const parent = store.getIssue(parentId);
+      if (!parent || !canAccessWorkspace(parent.workspaceId)) return [];
+      return store.listChildIssues(parentId).filter((child) => canAccessWorkspace(child.workspaceId));
+    });
+  };
+
+  const issueBatchUpdateAccess = (c: Context, input: BatchUpdateIssuesInput): Response | null => {
+    const issueIds = new Set(input.issueIds ?? input.issue_ids ?? []);
+    for (const issueId of issueIds) {
+      const issue = store.getIssue(issueId);
+      if (!issue) continue;
+      const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+      if (denied) return denied;
+    }
+    return null;
+  };
 
   const beginIssueDeletion = (issueId: string): boolean => {
     const begun = store.beginIssueDeletion(issueId);
@@ -478,18 +505,19 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.get("/api/issues/children", (c) => {
     const parentIds = splitQueryList(c.req.query("parent_ids"));
-    const issues = parentIds
-      .flatMap((parentId) => store.listChildIssues(parentId))
+    const issues = listAccessibleChildIssues(c, parentIds)
       .map((child) => issueCompatibilityResponse(child));
     return c.json({ issues, total: issues.length });
   });
   app.get("/api/multiremi/issues/children", (c) => {
     const parentIds = splitQueryList(c.req.query("parent_ids") ?? c.req.query("parentIds"));
-    const issues = parentIds.flatMap((parentId) => store.listChildIssues(parentId));
+    const issues = listAccessibleChildIssues(c, parentIds);
     return c.json({ issues, total: issues.length });
   });
   app.post("/api/multiremi/issues/batch-update", async (c) => {
     const body = await readJson<BatchUpdateIssuesInput>(c);
+    const denied = issueBatchUpdateAccess(c, body);
+    if (denied) return denied;
     return c.json(store.batchUpdateIssues({
       ...body,
       updates: body.updates ? { ...body.updates, parentTaskId: currentTaskParentId(c) } : body.updates,
@@ -499,6 +527,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJson<BatchUpdateIssuesInput>(c);
     try {
       const input = issueBatchUpdateCompatibilityInput(body);
+      const denied = issueBatchUpdateAccess(c, input);
+      if (denied) return denied;
       const result = store.batchUpdateIssues({
         ...input,
         updates: input.updates ? { ...input.updates, parentTaskId: currentTaskParentId(c) } : input.updates,
@@ -861,31 +891,6 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const taskDenied = denyCurrentUserWorkspaceAccess(c, store, task.workspaceId);
     if (taskDenied) return taskDenied;
     if (!canCurrentUserAccessChatTask(c, store, task)) return c.json({ error: "forbidden" }, 403);
-    const taskToken = currentTaskAccessToken(c);
-    const supervisor = supervisorTaskIdentity(c, store);
-    if (supervisor && task.id === supervisor.task.id) {
-      return c.json({ error: "a supervisor cannot act on its own task", code: "organizer_self_action_forbidden" }, 403);
-    }
-    if (supervisor && taskToken?.taskId && task.id !== taskToken.taskId) {
-      const body = await readJson<{ reason?: string }>(c);
-      try {
-        const result = store.performOrganizerAction({
-          supervisorTaskId: supervisor.task.id,
-          supervisorAgentId: supervisor.agentId,
-          targetTaskId: task.id,
-          action: "cancel",
-          reason: cleanString(body.reason) ?? "",
-        });
-        return c.json({
-          ...taskCompatibilityResponse(result.task),
-          organizer_action: result.audit,
-          comment_id: result.comment.id,
-        });
-      } catch (error) {
-        if (error instanceof OrganizerActionError) return c.json({ error: error.message, code: error.code }, error.status);
-        throw error;
-      }
-    }
     return c.json(taskCompatibilityResponse(store.cancelTask(task.id)));
   });
   app.post("/api/issues/:id/squad-evaluated", async (c) => {
@@ -1014,10 +1019,12 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<UpdateIssueInput>(c);
-    const input = { ...body, parentTaskId: currentTaskParentId(c) };
-    const updated = store.updateIssue(issue.id, input);
+    const { actorType, actorId } = issueMutationActivity(c);
+    const input = { ...body, actorType, actorId, parentTaskId: currentTaskParentId(c) };
+    const { issue: updated, cancelledTasks } = store.updateIssueWithOutcome(issue.id, input);
     lockAutoTitleAfterHumanEdit(c, updated, input);
-    return c.json({ issue: maybeDispatchOnIssueUpdate(store, issue, updated, input) });
+    const dispatched = maybeDispatchOnIssueUpdate(store, issue, updated, input);
+    return c.json({ issue: dispatched.issue, cancelled_tasks: cancelledTasks + dispatched.cancelledTasks });
   });
   const updateIssueCompatibilityRoute = async (c: Context) => {
     const issue = issueFromParam(store, c, "id", "compat");
@@ -1026,16 +1033,23 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     const body = await readJsonStrict<UpdateIssueInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const { actorType, actorId } = issueMutationActivity(c);
     const input = {
       ...issueUpdateCompatibilityInput(body),
+      actorType,
+      actorId,
       parentTaskId: currentTaskParentId(c),
     };
     try {
-      const updated = store.updateIssue(issue.id, input);
+      const { issue: updated, cancelledTasks } = store.updateIssueWithOutcome(issue.id, input);
       lockAutoTitleAfterHumanEdit(c, updated, input);
       const dispatched = maybeDispatchOnIssueUpdate(store, issue, updated, input);
-      const response = issueCompatibilityResponse(dispatched);
-      publishIssueUpdated(c, store, issue, dispatched, input, response);
+      const response = {
+        ...issueCompatibilityResponse(dispatched.issue),
+        task_id: dispatched.task?.id ?? null,
+        cancelled_tasks: cancelledTasks + dispatched.cancelledTasks,
+      };
+      publishIssueUpdated(c, store, issue, dispatched.issue, input, response);
       return c.json(response);
     } catch (err) {
       const response = issueErrorResponse(c, err);
@@ -1123,12 +1137,17 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<AssignIssueInput>(c);
-    const result = store.assignIssue(issue.id, {
+    const { actorType, actorId } = issueMutationActivity(c);
+    const result = safeAssignIssue(store, issue.id, {
       ...body,
+      actorType,
+      actorId,
       parentTaskId: currentTaskParentId(c),
     });
+    if ("error" in result) return c.json({ error: result.error }, result.status);
     return c.json({
-      ...result,
+      issue: result.issue,
+      cancelled_tasks: result.cancelledTasks,
       task: result.task ? taskPublicResponse(result.task) : null,
     });
   });
