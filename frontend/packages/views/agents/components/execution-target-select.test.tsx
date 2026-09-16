@@ -62,8 +62,21 @@ describe("ExecutionTargetSelect", () => {
     state.runtimes = [runtime("a")];
     const onChange = vi.fn();
     show(<ExecutionTargetSelect wsId="ws" value={{ executionGroupId: "", provider: "codex" }} onChange={onChange} />);
-    expect(await screen.findByText(enAgents.execution_target.placeholder)).toBeInTheDocument();
+    expect(await screen.findByText(enAgents.execution_target.automatic_hint)).toBeInTheDocument();
     expect(onChange).not.toHaveBeenCalled();
+  });
+  it("can switch from a group to automatic scheduling across machines", async () => {
+    state.runtimes = [runtime("a"), runtime("b")];
+    const onChange = vi.fn();
+    show(<ExecutionTargetSelect wsId="ws" value={{ executionGroupId: "a", provider: "codex" }} onChange={onChange} />);
+    fireEvent.click(await screen.findByRole("button", { name: /Automatic · Codex/ }));
+    expect(onChange).toHaveBeenCalledWith({ executionGroupId: "", provider: "codex" });
+  });
+  it("allows choosing automatic scheduling before connecting a runtime", async () => {
+    const onChange = vi.fn();
+    show(<ExecutionTargetSelect wsId="ws" value={{ executionGroupId: "", provider: "claude" }} onChange={onChange} />);
+    fireEvent.click(await screen.findByRole("button", { name: /Automatic · Codex/ }));
+    expect(onChange).toHaveBeenCalledWith({ executionGroupId: "", provider: "codex" });
   });
   it("shows a missing saved target explicitly", async () => {
     state.runtimes = [runtime("b")];
@@ -90,7 +103,7 @@ describe("ExecutionTargetSelect", () => {
     const onChange = vi.fn();
     show(<ExecutionTargetSelect wsId="ws" value={{ executionGroupId: "", provider: "" }} onChange={onChange} />);
     fireEvent.click(await screen.findByRole("button", { name: /Shared Codex/ }));
-    expect(screen.getAllByRole("button")).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: /Shared Codex/ })).toHaveLength(1);
     expect(onChange).toHaveBeenCalledWith({ executionGroupId: "shared", provider: "codex" });
   });
   it("keeps a saved empty group visible and marks it unavailable", async () => {

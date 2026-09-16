@@ -29,23 +29,24 @@ export function executionTargetModelsOptions(wsId: string, runtimeId?: string | 
   return queryOptions({
     queryKey: executionGroupId
       ? runtimeModelsKeys.group(wsId, executionGroupId, agentId)
-      : [...runtimeModelsKeys.target(wsId, runtimeId ?? ""), agentId ?? ""],
+      : runtimeId ? [...runtimeModelsKeys.target(wsId, runtimeId), agentId ?? ""]
+        : [...runtimeModelsKeys.fleet(wsId), "automatic", agentId ?? ""],
     queryFn: () => api.listFleetModels({
       workspace_id: wsId,
-      ...(executionGroupId ? { execution_group_id: executionGroupId } : { runtime_id: runtimeId! }),
+      ...(executionGroupId ? { execution_group_id: executionGroupId } : runtimeId ? { runtime_id: runtimeId } : {}),
       agent_id: agentId,
     }),
-    enabled: Boolean(wsId && (executionGroupId || runtimeId)),
+    enabled: Boolean(wsId),
     staleTime: 60_000,
   });
 }
 
-/** Models of the selected machine/type, including its effective gateway connection. */
+/** Models of the selected group/Runtime, or the workspace pool for automatic scheduling. */
 export function useExecutionTargetModels(wsId: string, provider: string, runtimeId?: string | null, executionGroupId?: string | null, agentId?: string) {
   const query = useQuery(executionTargetModelsOptions(wsId, runtimeId, executionGroupId, agentId));
   const bucket = query.data?.providers.find((entry) => entry.provider === provider);
   return {
-    models: executionGroupId || runtimeId ? bucket?.models ?? NO_MODELS : NO_MODELS,
+    models: bucket?.models ?? NO_MODELS,
     onlineRuntimeCount: bucket?.online_runtime_count ?? 0,
     isLoading: query.isLoading,
     isError: query.isError,

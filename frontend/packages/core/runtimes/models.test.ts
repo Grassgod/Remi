@@ -21,12 +21,13 @@ describe("execution target model catalog", () => {
     await expect(endpoints.listExecutionGroups({ workspace_id: "ws", agent_id: "a" })).rejects.toThrow();
   });
 
-  it("isolates target caches by workspace and runtime and waits for a selection", () => {
+  it("isolates target caches and loads the workspace catalog for automatic scheduling", () => {
     const first = executionTargetModelsOptions("ws-a", "rt-a");
     expect(first.queryKey).not.toEqual(executionTargetModelsOptions("ws-b", "rt-a").queryKey);
     expect(first.queryKey).not.toEqual(executionTargetModelsOptions("ws-a", "rt-b").queryKey);
     expect(first.queryKey.slice(0, 4)).toEqual(runtimeModelsKeys.fleet("ws-a"));
-    expect(executionTargetModelsOptions("ws-a", null).enabled).toBe(false);
+    expect(executionTargetModelsOptions("ws-a", null).enabled).toBe(true);
+    expect(executionTargetModelsOptions("ws-a", null).queryKey).not.toEqual(first.queryKey);
     expect(executionTargetModelsOptions("", "rt-a").enabled).toBe(false);
   });
 

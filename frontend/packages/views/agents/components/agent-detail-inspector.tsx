@@ -93,7 +93,7 @@ export function AgentDetailInspector({
   const { models } = useExecutionTargetModels(wsId ?? "", provider, agent.runtime_id, agent.execution_group_id, agent.id);
   const showIntegrations = useHasIntegrations(agent.id);
   const switchTarget = (next: ExecutionTarget) =>
-    update({ execution_group_id: next.executionGroupId, provider: next.provider, model: "", thinking_level: "" });
+    update({ execution_group_id: next.executionGroupId || null, provider: next.provider, model: "", thinking_level: "" });
   const switchModel = (next: string) => {
     const data: Record<string, unknown> = { model: next };
     if (

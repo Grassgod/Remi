@@ -1,4 +1,5 @@
 import { runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
+import { runtimeConnectionModels } from "@multiremi/contracts/runtime-connection";
 import { syncRuntimeExecutionGroups, runtimeExecutionGroupId } from "@multiremi/store/execution-groups.js";
 import { WorkspacesRepo } from "@multiremi/store/repos/workspaces-repo.js";
 // Runtimes domain (runtime registration/lifecycle, models, and the five daemon async-request
@@ -1982,7 +1983,7 @@ export class RuntimesRepo {
     now = nowIso(),
   ): void {
     const profile = this.getRuntimeExecutionProfile(runtimeId, provider);
-    const normalized = normalizeRuntimeModels(profile ? [{ id: profile.model, label: profile.model, provider, default: true }] : models, provider);
+    const normalized = normalizeRuntimeModels(profile ? runtimeConnectionModels(profile, provider, models) : models, provider);
     this.ctx.db.run("DELETE FROM multiremi_runtime_models WHERE runtime_id = ?", [runtimeId]);
     for (const model of normalized) {
       this.ctx.db.run(

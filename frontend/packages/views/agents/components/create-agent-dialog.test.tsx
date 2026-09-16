@@ -259,16 +259,27 @@ describe("CreateAgentDialog (execution targets)", () => {
     expect(onCreate.mock.calls[0]?.[0].provider).toBe("codex");
   });
 
-  it("requires a name and explicit execution target", () => {
-    renderDialog();
+  it("creates an automatically scheduled agent without requiring a machine or group", async () => {
+    const { onCreate } = renderDialog();
     expect(createButton().disabled).toBe(true);
 
     fireEvent.change(screen.getByPlaceholderText(/e\.g\./i), {
       target: { value: "Named" },
     });
-    expect(createButton().disabled).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "claude" }));
     expect(createButton().disabled).toBe(false);
+    fireEvent.click(createButton());
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0]?.[0]).toMatchObject({ name: "Named", provider: "claude" });
+    expect(onCreate.mock.calls[0]?.[0]).not.toHaveProperty("execution_group_id");
+    expect(onCreate.mock.calls[0]?.[0]).not.toHaveProperty("runtime_id");
+  });
+
+  it("keeps an explicitly pinned runtime when duplicating an existing agent", async () => {
+    const { onCreate } = renderDialog(makeTemplate({ runtime_id: "legacy-runtime", execution_group_id: "migrated-group" }));
+    fireEvent.click(createButton());
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0]?.[0]).toMatchObject({ runtime_id: "legacy-runtime" });
+    expect(onCreate.mock.calls[0]?.[0]).not.toHaveProperty("execution_group_id");
   });
 
   it("creates with a model-supported reasoning effort", async () => {

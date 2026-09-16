@@ -1,4 +1,6 @@
 import { stringify } from "smol-toml";
+import { runtimeConnectionModels } from "@multiremi/contracts/runtime-connection";
+import type { MultiremiRuntimeModel } from "@multiremi/contracts/types.js";
 import { parseRuntimeCodexProfile, type RuntimeCodexProfile } from "@multiremi/contracts/codex-profile";
 
 /** Flatten the profile into isolated CODEX_HOME, independent of Codex's profile-file version. */
@@ -19,6 +21,6 @@ export function resolveRuntimeCodexProfile(input: RuntimeCodexProfile, env: Node
   };
 }
 
-export function runtimeCodexProfileModels(profile: RuntimeCodexProfile) {
-  return [{ id: profile.model, label: profile.model, provider: "codex", default: true }];
+export function runtimeCodexProfileModels(profile: RuntimeCodexProfile, models: MultiremiRuntimeModel[] = []) {
+  return runtimeConnectionModels(profile, "codex", models);
 }

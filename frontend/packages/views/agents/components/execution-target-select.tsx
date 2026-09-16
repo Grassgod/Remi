@@ -15,7 +15,7 @@ export interface ExecutionTarget {
   provider: string;
 }
 
-/** Agents select a stable group; its Runtime membership can change independently. */
+/** Agents can use the workspace pool or a stable group with editable Runtime membership. */
 export function ExecutionTargetSelect({ wsId, value, onChange, compact = false, canEdit = true, ownerId, agentId, legacyRuntimeId }: {
   wsId: string;
   value: ExecutionTarget;
@@ -33,21 +33,32 @@ export function ExecutionTargetSelect({ wsId, value, onChange, compact = false, 
   const [open, setOpen] = useState(false);
   const query = useQuery({ ...executionGroupListOptions(wsId, agentId), enabled: !!wsId });
   const runtimesQuery = useQuery({ ...runtimeListOptions(wsId), enabled: !!wsId });
-  const eligibleRuntimeIds = new Set((runtimesQuery.data ?? []).filter((runtime) =>
+  const eligibleRuntimes = (runtimesQuery.data ?? []).filter((runtime) =>
     runtime.visibility === "public" || (runtime.owner_id ?? "local") === agentOwnerId,
-  ).map((runtime) => runtime.id));
-  const targets = (query.data?.groups ?? []).map((group) => ({
+  );
+  const eligibleRuntimeIds = new Set(eligibleRuntimes.map((runtime) => runtime.id));
+  const automaticTargets = ["claude", "codex"].map((provider) => {
+    const members = eligibleRuntimes.filter((runtime) => runtime.provider === provider || runtime.provider === "any");
+    return {
+      executionGroupId: "", provider,
+      label: t(($) => $.execution_target.automatic, { provider: provider === "claude" ? "Claude Code" : "Codex" }),
+      members: members.map((runtime) => runtime.id),
+      online: members.filter((runtime) => runtime.status === "online").length,
+      legacySelected: false,
+    };
+  });
+  const targets = [...automaticTargets, ...(query.data?.groups ?? []).map((group) => ({
     executionGroupId: group.id,
     provider: group.provider,
     label: group.name,
     members: group.runtime_ids.filter((id) => eligibleRuntimeIds.has(id)),
     online: group.online_runtime_count,
     legacySelected: !value.executionGroupId && !!legacyRuntimeId && group.runtime_ids.includes(legacyRuntimeId) && group.provider === value.provider,
-  }));
+  }))];
   const selected = targets.find((target) =>
-    (target.executionGroupId === value.executionGroupId && target.provider === value.provider) || target.legacySelected,
+    (target.executionGroupId === value.executionGroupId && target.provider === value.provider && (!!value.executionGroupId || !legacyRuntimeId)) || target.legacySelected,
   );
-  const visibleTargets = targets.filter((target) => target.members.length > 0 || target === selected);
+  const visibleTargets = targets.filter((target) => !target.executionGroupId || target.members.length > 0 || target === selected);
   const label = selected?.label ?? (value.executionGroupId || legacyRuntimeId
     ? t(($) => $.execution_target.unavailable)
     : t(($) => $.execution_target.placeholder));
@@ -55,26 +66,27 @@ export function ExecutionTargetSelect({ wsId, value, onChange, compact = false, 
   const isError = query.isError || runtimesQuery.isError;
   const status = isLoading ? t(($) => $.execution_target.loading)
     : isError ? t(($) => $.execution_target.error)
+    : selected && !selected.executionGroupId ? t(($) => $.execution_target.automatic_hint)
     : selected && selected.members.length === 0 ? t(($) => $.execution_target.unavailable)
     : selected && legacyRuntimeId ? t(($) => $.execution_target.pinned, { runtime: legacyRuntimeId })
     : selected ? selected.online > 0 ? t(($) => $.execution_target.hint, { target: selected.label })
       : t(($) => $.execution_target.offline)
     : value.executionGroupId || legacyRuntimeId ? label
-    : visibleTargets.length === 0 ? t(($) => $.execution_target.empty) : label;
+    : eligibleRuntimeIds.size === 0 ? t(($) => $.execution_target.empty) : label;
   const choose = (target: ExecutionTarget) => {
     setOpen(false);
     if (legacyRuntimeId || target.executionGroupId !== value.executionGroupId || target.provider !== value.provider) {
       void onChange({ executionGroupId: target.executionGroupId, provider: target.provider });
     }
   };
-  const selectedTooltip = selected && selected.label !== selected.executionGroupId
+  const selectedTooltip = selected?.executionGroupId && selected.label !== selected.executionGroupId
     ? `${status}\n${selected.executionGroupId}` : status;
   const options = visibleTargets.map((target) => (
-    <PickerItem key={`${target.executionGroupId}:${target.provider}`} selected={target === selected} disabled={target.members.length === 0} onClick={() => choose(target)}>
+    <PickerItem key={`${target.executionGroupId}:${target.provider}`} selected={target === selected} disabled={!!target.executionGroupId && target.members.length === 0} onClick={() => choose(target)}>
       <ProviderLogo provider={target.provider} className="h-4 w-4 shrink-0" />
       <span className="min-w-0 flex-1 text-left">
         <span className="block truncate">{target.label}</span>
-        {target.label !== target.executionGroupId && (
+        {target.executionGroupId && target.label !== target.executionGroupId && (
           <span className="block truncate font-mono text-[10px] text-muted-foreground" title={target.executionGroupId}>
             {target.executionGroupId}
           </span>

@@ -473,6 +473,8 @@
     "agent_count_other": "{{count}} agents"
   },
   "execution_target": {
+    "automatic": "Automatic · {{provider}}",
+    "automatic_hint": "Tasks can run on any Runtime of this engine available to this agent across the workspace.",
     "label": "Execution group",
     "placeholder": "Choose an execution group",
     "unavailable": "Execution group unavailable; choose another group",

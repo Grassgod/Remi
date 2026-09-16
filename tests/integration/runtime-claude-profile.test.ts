@@ -21,8 +21,12 @@ it("delivers encrypted Runtime profile keys to task execution while preserving t
   const observations: { url: unknown; model: unknown; key: string | undefined; home: string; cwd: string }[] = [];
   const daemon = new MultiremiDaemon({
     serverUrl: `http://127.0.0.1:${server.port}`, token: daemonToken.token, daemonId: "profile-daemon", runtimeName: "Profile daemon", provider: "claude", workspaceId: "local",
-    daemonPort: 0, pollIntervalMs: 20, gcEnabled: false, workspacesRoot: join(root, "workspaces"), repoCacheRoot: join(root, "cache"),
+    daemonPort: 0, pollIntervalMs: 20, gcEnabled: false, workspacesRoot: join(root, "workspaces"), repoCacheRoot: join(root, "cache"), inProcessRuntimeModelDiscoveryEnabled: true,
     providerFactory: options => ({
+      discoverModelCapabilities: async () => {
+        const config = JSON.parse(readFileSync(join(options.env!.CLAUDE_CONFIG_DIR!, "settings.json"), "utf8"));
+        return [{ id: config.model ?? "base-model", label: "Discovered", default: true, effort: { supportedLevels: [{ value: "high", label: "High" }] } }];
+      },
       async *sendStream() {
         const home = options.env!.CLAUDE_CONFIG_DIR!;
         const text = readFileSync(join(home, "settings.json"), "utf8");
@@ -56,6 +60,7 @@ it("delivers encrypted Runtime profile keys to task execution while preserving t
       const saved = await fetch(`http://127.0.0.1:${server.port}/api/runtimes/${runtime.id}/claude-profile`, { method: "PUT", headers: { Authorization: "Bearer profile-test-master", "Content-Type": "application/json" }, body: JSON.stringify(config) });
       expect(saved.status).toBe(200);
       expect(await saved.text()).not.toContain(config.api_key);
+      await waitFor(() => store.listRuntimeModels(runtime.id).some(model => model.id === config.profile.model && model.thinking?.supportedLevels.some(level => level.value === "high")));
       const task = store.sendChatMessage(chat.id, { body: `Run ${version}` }).task;
       await waitFor(() => ["completed", "failed"].includes(store.getTask(task.id)?.status ?? ""));
       expect(store.getTask(task.id)?.error).toBeNull();

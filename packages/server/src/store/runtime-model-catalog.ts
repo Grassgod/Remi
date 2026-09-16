@@ -1,4 +1,5 @@
 import type { MultiremiRuntime, MultiremiRuntimeModel } from "@multiremi/contracts/types.js";
+import { runtimeConnectionModels } from "@multiremi/contracts/runtime-connection";
 import type { MultiremiStore } from "./store.js";
 
 /** Minimal data source shared by API catalogs and dispatch capability checks. */
@@ -267,7 +268,7 @@ export function runtimeTargetModelCatalog(
   return providers.map((entry) => {
     const profile = store.getRuntimeExecutionProfile(runtime.id, entry.provider);
     const models = profile
-      ? [{ id: profile.model, label: profile.model, provider: entry.provider, default: true }]
+      ? runtimeConnectionModels(profile, entry.provider, entry.models)
       : overlayGatewayModels(store, workspaceId, [entry]).find((candidate) => candidate.provider === entry.provider)?.models ?? [];
     return { ...entry, online_runtime_count: runtime.status === "online" ? 1 : 0, models };
   });

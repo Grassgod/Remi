@@ -89,7 +89,7 @@ export function CreateAgentDialog({
   );
   const [creating, setCreating] = useState(false);
 
-  const [provider, setProvider] = useState(template?.provider ?? "");
+  const [provider, setProvider] = useState(template?.provider ?? "claude");
   const [executionGroupId, setExecutionGroupId] = useState(template?.execution_group_id ?? "");
   const [legacyRuntimeId, setLegacyRuntimeId] = useState(template?.runtime_id ?? "");
   const targetModels = useExecutionTargetModels(wsId ?? "", provider, executionGroupId ? undefined : legacyRuntimeId, executionGroupId);
@@ -148,7 +148,7 @@ export function CreateAgentDialog({
   };
 
   const handleSubmit = async () => {
-    if (!name.trim() || !executionGroupId || !provider) return;
+    if (!name.trim() || !provider) return;
     setCreating(true);
 
     try {
@@ -157,7 +157,7 @@ export function CreateAgentDialog({
         name: name.trim(),
         description: description.trim(),
         provider,
-        execution_group_id: executionGroupId,
+        ...(legacyRuntimeId ? { runtime_id: legacyRuntimeId } : executionGroupId ? { execution_group_id: executionGroupId } : {}),
         visibility,
         model: model.trim() || undefined,
         instructions: trimmedInstructions || undefined,
@@ -382,7 +382,7 @@ export function CreateAgentDialog({
           <Button variant="ghost" onClick={onClose}>
             {t(($) => $.create_dialog.cancel)}
           </Button>
-          <Button onClick={handleSubmit} disabled={creating || !name.trim() || !executionGroupId || !provider}>
+          <Button onClick={handleSubmit} disabled={creating || !name.trim() || !provider}>
             {creating ? t(($) => $.create_dialog.creating) : t(($) => $.create_dialog.create)}
           </Button>
         </div>

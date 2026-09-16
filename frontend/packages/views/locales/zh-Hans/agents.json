@@ -461,6 +461,8 @@
     "agent_count_other": "{{count}} 个智能体"
   },
   "execution_target": {
+    "automatic": "自动调度 · {{provider}}",
+    "automatic_hint": "任务可在工作区内此云友有权使用的同类型 Runtime 之间自动调度。",
     "label": "执行能力组",
     "placeholder": "选择执行能力组",
     "unavailable": "执行能力组不可用，请重新选择",

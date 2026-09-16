@@ -1767,12 +1767,13 @@ export class MultiremiDaemon {
   }
 
   private async discoverRuntimeModels(force: boolean): Promise<MultiremiRuntimeModel[]> {
-    if (this.options.provider === "claude" && this.runtimeClaudeProfile) return runtimeClaudeProfileModels(this.runtimeClaudeProfile);
-    if (this.options.provider === "codex" && this.runtimeCodexProfile) {
-      // This is the explicitly configured catalog, not a connectivity claim.
-      return runtimeCodexProfileModels(this.runtimeCodexProfile);
-    }
+    const claudeProfile = this.options.provider === "claude" ? this.runtimeClaudeProfile : null;
+    const codexProfile = this.options.provider === "codex" ? this.runtimeCodexProfile : null;
+    const scopeModels = (models: MultiremiRuntimeModel[]) => claudeProfile
+      ? runtimeClaudeProfileModels(claudeProfile, models)
+      : codexProfile ? runtimeCodexProfileModels(codexProfile, models) : models;
     if (!this.runtimeModelDiscoveryEnabled) {
+      if (claudeProfile || codexProfile) return scopeModels([]);
       throw new Error(IN_PROCESS_RUNTIME_MODEL_DISCOVERY_DISABLED);
     }
     if (!force && this.runtimeModels
@@ -1786,7 +1787,8 @@ export class MultiremiDaemon {
         const capabilities = await probeRuntimeModels(await this.runtimeModelProbeProviderOptions(), {
           signal: abort.signal, timeoutMs: RUNTIME_MODEL_PROBE_TIMEOUT_MS,
         });
-        const models = runtimeModelsFromAcpCapabilities(this.options.provider, capabilities);
+        if (abort.signal.aborted) throw new Error("Runtime model discovery cancelled");
+        const models = scopeModels(runtimeModelsFromAcpCapabilities(this.options.provider, capabilities));
         this.runtimeModels = models;
         this.runtimeModelsDiscoveredAt = Date.now();
         return models;
@@ -1802,10 +1804,11 @@ export class MultiremiDaemon {
           `ACP model discovery timed out after ${RUNTIME_MODEL_PROBE_TIMEOUT_MS}ms`,
           abort.signal,
         );
+        if (abort.signal.aborted) throw new Error("Runtime model discovery cancelled");
         if (!capabilities.length) {
           throw new Error(`ACP did not advertise any models for provider: ${this.options.provider}`);
         }
-        const models = runtimeModelsFromAcpCapabilities(this.options.provider, capabilities);
+        const models = scopeModels(runtimeModelsFromAcpCapabilities(this.options.provider, capabilities));
         this.runtimeModels = models;
         this.runtimeModelsDiscoveredAt = Date.now();
         return models;

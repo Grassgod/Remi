@@ -653,7 +653,7 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
       refreshStaleGatewayModels(store, workspaceId);
       return c.json({ providers: runtimeTargetModelCatalog(store, workspaceId, runtime) });
     }
-    const providers = fleetModelsResponse(loaded.runtimes, currentRequestUserId(c));
+    const providers = fleetModelsResponse(loaded.runtimes, ownerId);
     refreshStaleGatewayModels(store, workspaceId);
     return c.json({ providers: overlayGatewayModels(store, workspaceId, providers) });
   };

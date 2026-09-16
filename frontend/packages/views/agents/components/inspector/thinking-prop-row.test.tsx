@@ -127,12 +127,11 @@ describe("ThinkingPropRow", () => {
     expect(await screen.findByText("Reasoning options not reported")).toBeInTheDocument();
   });
 
-  it("does not use the fleet catalog when no execution target is selected", async () => {
+  it("preserves reasoning choices for existing agents using automatic scheduling", async () => {
     renderRow({ executionGroupId: null });
 
-    expect(await screen.findByText("Reasoning options not reported")).toBeInTheDocument();
-    expect(mockListFleetModels).not.toHaveBeenCalled();
-    expect(screen.queryByText("Follow runtime default")).toBeNull();
+    expect(await screen.findByText("Follow runtime default")).toBeInTheDocument();
+    expect(mockListFleetModels).toHaveBeenCalledWith({ workspace_id: "ws-1", agent_id: "agent-1" });
   });
 
   it("uses the bound runtime catalog for a legacy agent without an execution group", async () => {

@@ -132,7 +132,7 @@ export function EditAgentDialog({
         description: description.trim(),
         avatar_url: avatarUrl ?? "",
         ...(provider ? { provider } : {}),
-        ...(targetChanged ? { execution_group_id: executionGroupId } : {}),
+        ...(targetChanged ? { execution_group_id: executionGroupId || null } : {}),
         model: model.trim(),
         thinking_level: thinkingLevel,
         visibility,

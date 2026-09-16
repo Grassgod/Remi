@@ -29,6 +29,49 @@ function setup() {
 }
 
 describe("execution group API", () => {
+  for (const provider of ["codex", "claude"] as const) {
+    it(`preserves reported ${provider} reasoning through custom connections, group validation and dispatch`, async () => {
+      const { store, app, request } = setup();
+      const runtime = store.registerRuntime({ name: "Custom reasoning", provider, executionGroupId: "custom-group", metadata: { [`${provider}_profiles`]: 1 } });
+      const profile = { name: "custom", base_url: "https://example.com/v1", model: "custom-model", env_key: provider === "codex" ? "REMI_CODEX_KEY" : "REMI_CLAUDE_KEY" };
+      const configure = () => provider === "codex" ? store.setRuntimeCodexProfile(runtime.id, profile) : store.setRuntimeClaudeProfile(runtime.id, profile);
+      configure();
+      store.updateRuntimeModels(runtime.id, [
+        { id: "custom-model", label: "Custom model", provider, default: true, thinking: { supportedLevels: [{ value: "high", label: "High" }], defaultLevel: "high" } },
+        { id: "unrelated-model", label: "Unrelated", provider, default: false },
+      ]);
+      for (const query of [`runtime_id=${runtime.id}`, "execution_group_id=custom-group"]) {
+        const response = await app.request(`/api/models?workspace_id=local&${query}`);
+        expect(response.status).toBe(200);
+        const { providers } = await response.json();
+        expect(providers[0].models).toEqual([{
+          id: "custom-model", label: "Custom model", provider, default: true,
+          thinking: { supported_levels: [{ value: "high", label: "High" }], default_level: "high" },
+        }]);
+      }
+      const response = await request("/api/agents", { name: "Reasoning", execution_group_id: "custom-group", model: "custom-model", thinking_level: "high" });
+      expect(response.status).toBe(201);
+      const agent = await response.json();
+      const task = store.createTask({ agentId: agent.id, prompt: "Use the configured connection" });
+      expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+      // Changing a connection must invalidate capabilities from its previous endpoint.
+      configure();
+      expect(store.listRuntimeModels(runtime.id)[0]?.thinking).toBeUndefined();
+      store.updateRuntimeModels(runtime.id, [{ id: "different-model", label: "Different", provider, default: true, thinking: { supportedLevels: [{ value: "high", label: "High" }] } }]);
+      expect(store.listRuntimeModels(runtime.id)[0]?.thinking).toBeUndefined();
+    });
+  }
+
+  it("restores cross-machine scheduling when an agent leaves its execution group", async () => {
+    const { store, runtime, peer, request } = setup();
+    const group = store.listExecutionGroups("local").find((entry) => entry.runtimeIds.includes(runtime.id))!;
+    const agent = store.createAgent({ name: "Pooled", provider: "codex", executionGroupId: group.id });
+    expect((await request(`/api/agents/${agent.id}`, { execution_group_id: null }, "PUT")).status).toBe(200);
+    expect(store.getAgent(agent.id)).toMatchObject({ runtimeId: null, executionGroupId: null });
+    const task = store.createTask({ agentId: agent.id, prompt: "Run on another machine" });
+    expect(store.claimTask(peer.id)?.id).toBe(task.id);
+  });
+
   it("lists separate default machine/type groups and exposes membership in Runtime responses", async () => {
     const { runtime, peer, app } = setup();
     const response = await app.request("/api/execution-groups?workspace_id=local");
@@ -123,6 +166,10 @@ describe("execution group API", () => {
     const managed = await (await app.request(`/api/execution-groups?agent_id=${agent.id}`)).json();
     expect(managed.groups.some((group: { id: string }) => group.id === "others")).toBe(true);
     expect((await app.request(`/api/models?execution_group_id=others&agent_id=${agent.id}`)).status).toBe(200);
+    const pooled = store.createAgent({ name: "Managed pool", provider: "codex", ownerId: "other" });
+    store.updateRuntime(runtime.id, { models: [{ id: "owner-only", label: "Owner only", provider: "codex", default: true }] });
+    const poolCatalog = await (await app.request(`/api/models?agent_id=${pooled.id}`)).json();
+    expect(poolCatalog.providers[0].models.map((model: { id: string }) => model.id)).toEqual(["owner-only"]);
     expect((await app.request("/api/execution-groups?agent_id=missing")).status).toBe(404);
     expect((await request(`/api/agents/${agent.id}`, { execution_group_id: "others" }, "PUT")).status).toBe(200);
   });
@@ -135,8 +182,9 @@ describe("execution group API", () => {
     const { token } = await store.createAccessToken({ name: "Outsider", type: "pat", workspaceId: "local", userId: "group-outsider" });
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const headers = { Authorization: `Bearer ${token}` };
-    expect((await app.request(`/api/execution-groups?agent_id=${agent.id}`, { headers })).status).toBe(403);
-    expect((await app.request(`/api/models?execution_group_id=private-group&agent_id=${agent.id}`, { headers })).status).toBe(403);
+    // Private agents are hidden by the current main visibility policy.
+    expect((await app.request(`/api/execution-groups?agent_id=${agent.id}`, { headers })).status).toBe(404);
+    expect((await app.request(`/api/models?execution_group_id=private-group&agent_id=${agent.id}`, { headers })).status).toBe(404);
   });
 
   it("revalidates a group model when changing the agent owner changes eligible members", async () => {
