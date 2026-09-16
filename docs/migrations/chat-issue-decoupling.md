@@ -17,143 +17,218 @@ their messages and working directories.
   `chat_issue_topic_<issueId>` bindings (including undelivered roots), or an
   automatic group Issue whose `feishu_bot_message` creation source matches the
   exact binding's destination and inbound delivery in the same workspace.
-- Preserve other Feishu associations in the internal
-  `multiremi_feishu_bot_legacy_issue_links` quarantine table, containing the
-  original Issue, subscription snapshot, and replay timestamp. The active
-  binding remains unbound. This record is not Chat ownership and is never used
-  by task context, Chat listing filters, or Issue notification routing. Web
-  associations and proven p2p associations are discarded without a recovery
-  marker. No live Feishu lookup is required during migration.
-- Clear active ownership for discarded and quarantined associations. In those Chats, reset
-  the provider resume pointer and its provider/fingerprint metadata so
-  the next turn starts with a clean prompt. Keep `work_dir` and its origin
-  `session_runtime_id` together so the retained directory is used on its owning
-  machine. Keep user/assistant
-  messages. Clear queued/dispatched tasks' inherited `issue_id` and frozen
-  `session_id`; running task identities
-  remain intact for auditing. Task payloads, CLI context, Issue creation and
-  request provenance resolve the effective Chat scope and reject old private
-  ownership, so upgrading does not depend on draining those tasks.
-- Remove private Chat notification channels and pending Issue update state.
-  Clear pending delivery flags and remove only system messages starting with
-  `Bound Issue update:` from non-topic Chats, preventing their replay in the new
-  bootstrap. Feishu topic messages and existing channel enabled/disabled choices
-  are preserved.
-- Remove erroneous Issue Session pointers and generations from queued/dispatched
-  Chat tasks, including Feishu topic tasks. Startup only backfills Issue Sessions
-  for tasks without a Chat owner, so restarting cannot restore dual ownership.
-- Drop `multiremi_chat_sessions.issue_id` and create a binding ownership index.
+- Discard other Feishu associations and write a permanent, operator-only record
+  to `multiremi_feishu_bot_issue_link_audit`. It contains the original Issue,
+  complete binding identity/destination snapshot, subscription snapshot and
+  decision reason (`p2p_evidence` or `unproven_ownership`). The active binding has
+  no Issue. The audit table has **no runtime readers**: incoming messages never
+  restore ownership, create summaries or replay old notifications from it.
+  Private Web associations are discarded. No live Feishu lookup is required.
+- For discarded associations, cancel queued/dispatched proactive Issue wake
+  tasks and delete unsent proactive work-round/human-request outbox entries in
+  the migration transaction. Remove unconsumed system-generated work-round
+  steering tied to those dropped links; retain user steering and ordinary input
+  tasks. Clear surviving outbox rows' references to deleted predecessors so
+  ordinary replies/files/attachments can proceed. Sent delivery history and
+  retained Issue bindings' tasks and queues are unchanged.
+- Reset affected Chats' provider resume pointers and provider/fingerprint
+  metadata. Keep `work_dir` and its origin `session_runtime_id` together. Keep
+  user/assistant history. Clear inherited Issue/session pointers from other
+  queued/dispatched Chat tasks; running task rows retain their audit identity.
+  Payloads, CLI context, Issue creation and request provenance resolve effective
+  Chat scope, preventing old private ownership from becoming new context.
+- Remove non-topic notification channels and pending Issue update state, clear
+  pending delivery flags, and remove only system messages starting with
+  `Bound Issue update:` from non-topic Chats. Preserved topics retain their
+  enabled/disabled subscription choices.
+- Clear erroneous Issue Session pointers/generations from queued/dispatched Chat
+  tasks, including topics. Startup backfills Issue Sessions only for non-Chat
+  tasks. Drop `multiremi_chat_sessions.issue_id` and index binding ownership.
   No UI session management columns are removed.
 
-## Historical group conversations and deferred recovery
+## Historical group association exception
 
-There are two shipped historical creation paths. Starting with `421413f4`
-(2026-09-04), an Agent creating an Issue inside Chat automatically linked that
-conversation. This included real Feishu group topics; `747f2d1` explicitly tested
-reusing their original group topic instead of creating a canonical root. Those
-records need not have a `feishu_bot_message` source. The separate group-only
-`autoCreateGroupIssue` path and its source marker both arrived in `bd9f8083`
-(2026-09-05). The generic path remained possible afterward, so September 4–5 is
-not an upper bound on affected records.
+Starting with `421413f4` (2026-09-04 11:30, UTC+08:00), an Agent creating an Issue
+inside Chat automatically linked that conversation. This included genuine
+Feishu group topics; `747f2d1` tested reusing their original group topic. Those
+records need not have a canonical ID or a `feishu_bot_message` source. The
+separate group-only `autoCreateGroupIssue` path and its marker arrived together
+in `bd9f8083` (2026-09-05 21:46, UTC+08:00), approximately 34 hours later.
+**This is the origin window, not a safe date filter:** the generic path remained
+possible afterward. Audit all old links, including more recent ones.
 
-Already queued proactive work-round and human-request deliveries are held while
-the binding is unbound; a confirmed group resumes those queues, while p2p cannot
-claim them. Ordinary inbound replies and attachments remain deliverable. A late
-old-task completion cannot recreate a proactive Issue delivery for an unbound
-conversation. This claim-time guard cannot recall a message already sent.
+If a real group association has none of the three deterministic proofs above,
+it is removed from active ownership. The group stops receiving Issue updates,
+work-round reports and human-request notifications until an operator restores
+that binding. Issue, Chat, ordinary message/task history, published results and
+human requests remain; cancelled wake tasks and deleted notification deliveries
+are not revived. There is no delayed recovery state or catch-up summary.
 
-An unclassified old group conversation temporarily stops receiving Issue updates,
-work-round reports, and human-request notifications. The Issue, tasks, published
-results, and human requests themselves remain intact. Its next authenticated
-bot message restores the original association only when the message explicitly
-says `chatType: group`, its sender is allowed, and its workspace, app, agent,
-external session key and chat destination match the binding. Recovery runs
-before duplicate-message handling and automatic new-Issue creation, so a retry
-can recover the old topic without creating a replacement Issue. An explicit
-`p2p` message consumes the marker without restoring ownership; missing type
-keeps it quarantined. A missing or mismatched Issue cannot be restored.
+The affected production count is **not yet measured**. Unknown conversation type
+must not be counted as a confirmed group, or inferred from a thread/key. Before
+requesting deployment authorization, enumerate every dropped binding, confirm
+unknown types through authoritative Feishu chat metadata, and report the actual
+confirmed-group count, remaining unknown count, and recent activity. If there
+are more than 10 affected group topics, an active topic in the past 7 days whose
+interruption is unacceptable, or no deterministic coverage of active topics,
+return those facts for a new decision before deployment.
 
-Recovery preserves subscription choices and consumes the marker in the same
-transaction as restoring the binding. For an enabled subscription, it queues one
-catch-up summary for the Agent and the original Feishu destination: current Issue
-state, relevant activities since the replay timestamp, completed work and results,
-and still-pending human requests. Category filters are respected. This is an
-aggregate recovery notification, not a replay of each historical notification.
-Bounded summaries identify omitted record counts and explain how to query the retained
-Issue/task history. Disabled subscriptions remain disabled and receive no catch-up
-broadcast. Other bindings receive no replay. Recovery does not copy old provider
-pointers back into Chat. An already-running, now-confirmed group task can finish
-and promote its session through the normal completion path. Existing queued or
-running turns keep their frozen task identity; the catch-up and Bound Issue
-lookup guide let them retrieve the restored Issue, and the next new turn carries
-the restored Issue scope. Proven p2p tasks remain isolated.
+## Audit before deployment authorization
 
-Until a matching explicit-type message arrives, the association stays quarantined
-indefinitely. An old daemon that omits `chatType` must be upgraded before recovery;
-thread markers do not substitute for this field. A changed route/app or deleted
-Issue requires operator investigation of the backup and binding identity; do not
-copy quarantine IDs into active ownership without authoritative group evidence.
+1. Take and verify a consistent database backup. Restore it to an isolated copy
+   with no daemon, bot credentials, traffic or outbound network delivery. Run the
+   candidate migration there. This uses the actual migration's provenance checks
+   rather than a second SQL implementation that could disagree with them.
+2. On that migrated copy, run the queries below. Keep an export of audit records
+   and type-verification evidence with the upgrade record. Inspect all dates.
+   Do not print message bodies, task results or credentials in the report.
+3. Record authoritative group/p2p decisions in the temporary review table. An
+   unknown type remains unresolved until verified; SQL cannot infer it safely.
+   Report counts to 贺华杰 before obtaining production deployment authorization.
+4. After authorization, pause writes and inbound/daemon traffic, take the final
+   backup, run the migration, and compare its audit set with the reviewed set.
+   Investigate any new or changed row before resuming traffic.
 
-Before upgrading, audit a read-only backup for noncanonical Issue-linked Feishu
-bindings without exact creation provenance. Join synced messages and sources by
-workspace and chat ID to distinguish known group/p2p from unknown; count the latter
-as potentially affected historical group topics. Save binding ID, workspace, app,
-agent, external session key, chat ID and original Issue ID in the upgrade record.
-After upgrading, compare these with active bindings and quarantine rows. To recover
-an unknown real group, have an authorized participant send a message to its existing
-conversation through a daemon that supplies explicit `chatType`; verify the same
-Issue is restored and the quarantine record disappears. For p2p, verify the marker
-disappears while active ownership stays null. Do not use removed Chat bind commands.
-
-A read-only candidate query on the **pre-upgrade backup** is below. It lists
-noncanonical links; the exact source/delivery check described above may still
-prove some of these safe automatically. It intentionally returns identifiers,
-not message bodies or credentials.
+These queries work on SQLite and PostgreSQL. The audit table exists only after
+the migration; before deployment, run them on the isolated migrated copy.
 
 ```sql
-SELECT b.workspace_id, b.id AS binding_id, b.app_id, b.agent_id,
-       b.external_session_key, b.chat_id, c.issue_id,
-       CASE
-         WHEN EXISTS (
-           SELECT 1 FROM multiremi_feishu_messages m
-           JOIN multiremi_feishu_sources s ON s.id = m.source_id
-             AND s.workspace_id = m.workspace_id
-           WHERE m.workspace_id = b.workspace_id AND m.chat_id = b.chat_id
-             AND m.chat_type = 'p2p'
-         ) THEN 'p2p: discard'
-         WHEN EXISTS (
-           SELECT 1 FROM multiremi_feishu_messages m
-           JOIN multiremi_feishu_sources s ON s.id = m.source_id
-             AND s.workspace_id = m.workspace_id
-           WHERE m.workspace_id = b.workspace_id AND m.chat_id = b.chat_id
-             AND m.chat_type = 'group'
-         ) THEN 'group: preserve'
-         ELSE 'check creation provenance; otherwise quarantine'
-       END AS migration_action
-FROM multiremi_feishu_bot_chat_bindings b
+SELECT a.workspace_id, a.binding_id, a.issue_id, a.reason, a.audited_at,
+       b.app_id, b.agent_id, b.external_session_key, b.chat_session_id,
+       b.chat_id, b.thread_id, b.reply_to_message_id,
+       c.updated_at AS chat_last_activity, a.binding_snapshot
+FROM multiremi_feishu_bot_issue_link_audit a
+LEFT JOIN multiremi_feishu_bot_chat_bindings b ON b.id = a.binding_id
+  AND b.workspace_id = a.workspace_id
+LEFT JOIN multiremi_chat_sessions c ON c.id = b.chat_session_id
+  AND c.workspace_id = a.workspace_id
+ORDER BY a.workspace_id, a.binding_id;
+
+CREATE TEMP TABLE mul301_type_review (
+  binding_id TEXT PRIMARY KEY,
+  confirmed_type TEXT NOT NULL CHECK (confirmed_type IN ('group', 'p2p')),
+  evidence_ref TEXT NOT NULL
+);
+-- Insert one row only after checking authoritative metadata for the exact chat.
+-- Do not fill this from thread_id, external_session_key, or guessed dates.
+INSERT INTO mul301_type_review VALUES
+  ('<verified-binding-id>', 'group', '<retained-evidence-reference>');
+
+SELECT COUNT(*) AS dropped_feishu_links,
+       COALESCE(SUM(CASE WHEN a.reason = 'unproven_ownership'
+         AND r.confirmed_type = 'group' THEN 1 ELSE 0 END), 0)
+         AS confirmed_affected_group_topics,
+       COALESCE(SUM(CASE WHEN a.reason = 'p2p_evidence'
+         OR r.confirmed_type = 'p2p' THEN 1 ELSE 0 END), 0)
+         AS confirmed_private_links,
+       COALESCE(SUM(CASE WHEN a.reason = 'unproven_ownership'
+         AND r.binding_id IS NULL THEN 1 ELSE 0 END), 0)
+         AS unresolved_links
+FROM multiremi_feishu_bot_issue_link_audit a
+LEFT JOIN mul301_type_review r ON r.binding_id = a.binding_id;
+
+SELECT a.binding_id, a.issue_id, c.updated_at AS chat_last_activity,
+       r.confirmed_type, r.evidence_ref
+FROM multiremi_feishu_bot_issue_link_audit a
+JOIN mul301_type_review r ON r.binding_id = a.binding_id
+JOIN multiremi_feishu_bot_chat_bindings b ON b.id = a.binding_id
+  AND b.workspace_id = a.workspace_id
 JOIN multiremi_chat_sessions c ON c.id = b.chat_session_id
-  AND c.workspace_id = b.workspace_id
-JOIN multiremi_issues i ON i.id = c.issue_id AND i.workspace_id = b.workspace_id
-WHERE c.issue_id IS NOT NULL
-  AND c.id <> 'chat_issue_topic_' || c.issue_id
-ORDER BY b.workspace_id, b.id;
+  AND c.workspace_id = a.workspace_id
+WHERE a.reason = 'unproven_ownership' AND r.confirmed_type = 'group'
+ORDER BY c.updated_at DESC, a.binding_id;
 ```
 
-After upgrading, this read-only query lists unresolved candidates:
+`confirmed_affected_group_topics` counts binding/topic records, not distinct
+Feishu groups. Review the activity timestamps against the seven-day boundary
+and verify recent activity in the authoritative conversation as needed. A review
+claiming `group` for an audit row marked `p2p_evidence` is a contradiction to
+investigate, never permission to restore it. Save the review output externally;
+the temporary table is not application state.
+
+## Restore a confirmed group before resuming traffic
+
+Restore each reviewed binding individually, in a transaction, **before the daemon
+accepts messages again**. Otherwise a new group message can trigger automatic
+creation of a replacement Issue; investigate and reconcile that duplicate before
+restoring. Never restore a private or unverified conversation. No backup is
+needed to restore a link: the audit record contains the original identity and
+subscription. Keep the audit row after restoration as an immutable record.
+
+Read `binding_snapshot` and `channel_snapshot` for the one audited row. Verify
+its Issue and Chat still exist in the same workspace, the bot/app/Agent/session
+and every destination field are unchanged, and authoritative group evidence is
+current. Do not recreate a missing/deleted Chat or transplant the link to another
+thread. Substitute the exact snapshot values below, SQL-escaping strings; use SQL
+`NULL` for null thread/reply values. Run one binding at a time. This is an offline
+maintenance procedure, not a new public bind API.
 
 ```sql
-SELECT q.workspace_id, q.binding_id, q.issue_id, q.quarantined_at,
-       b.app_id, b.agent_id, b.external_session_key, b.chat_id
-FROM multiremi_feishu_bot_legacy_issue_links q
-JOIN multiremi_feishu_bot_chat_bindings b ON b.id = q.binding_id
-  AND b.workspace_id = q.workspace_id
-ORDER BY q.quarantined_at, q.binding_id;
+BEGIN;
+UPDATE multiremi_feishu_bot_chat_bindings
+SET issue_id = (
+  SELECT issue_id FROM multiremi_feishu_bot_issue_link_audit
+  WHERE binding_id = '<binding-id>' AND workspace_id = '<workspace-id>'
+    AND reason = 'unproven_ownership'
+)
+WHERE id = '<binding-id>' AND workspace_id = '<workspace-id>'
+  AND issue_id IS NULL
+  AND app_id = '<audited-app-id>' AND agent_id = '<audited-agent-id>'
+  AND external_session_key = '<audited-external-session-key>'
+  AND chat_session_id = '<audited-chat-session-id>'
+  AND chat_id = '<authoritatively-verified-group-chat-id>'
+  AND thread_id IS NOT DISTINCT FROM '<audited-thread-id-or-SQL-NULL>'
+  AND reply_to_message_id IS NOT DISTINCT FROM '<audited-reply-id-or-SQL-NULL>'
+  AND EXISTS (
+    SELECT 1 FROM multiremi_chat_sessions c
+    WHERE c.id = '<audited-chat-session-id>' AND c.workspace_id = '<workspace-id>'
+  )
+  AND EXISTS (
+    SELECT 1 FROM multiremi_feishu_bot_issue_link_audit a
+    JOIN multiremi_issues i ON i.id = a.issue_id AND i.workspace_id = a.workspace_id
+    WHERE a.binding_id = '<binding-id>' AND a.workspace_id = '<workspace-id>'
+      AND a.reason = 'unproven_ownership'
+  )
+RETURNING id, issue_id;
+-- Require exactly one returned row; otherwise ROLLBACK and investigate.
 ```
 
-This recovery requires upgrading from a pre-decoupling database. A database already
-migrated by an earlier draft of PR #192 has lost ambiguous associations and cannot
-reconstruct them merely by restarting this revision; restore a verified pre-upgrade
-backup before testing the corrected migration.
+If `channel_snapshot` is non-null, restore that exact row in the same transaction,
+including `enabled`, `event_types`, `min_severity`, owner and target. Verify its
+kind is `agent_chat`, its workspace matches, and `target.chatId` is the audited
+Chat. Do not replace an existing channel or silently enable a disabled one. The
+following parameters are copied from that snapshot, not new defaults:
+
+```sql
+INSERT INTO multiremi_notification_channels
+  (id, workspace_id, member_id, kind, name, enabled, target, event_types,
+   min_severity, created_by, created_at, updated_at)
+VALUES
+  ('<channel-id>', '<workspace-id>', '<member-id-or-SQL-NULL>', 'agent_chat',
+   '<name>', <enabled-0-or-1>, '<target-json>', '<event-types-json>',
+   '<min-severity>', '<creator-or-SQL-NULL>', '<created-at>', '<updated-at>')
+RETURNING id, enabled, event_types;
+-- A conflicting ID is an error: ROLLBACK and inspect, never overwrite it.
+COMMIT;
+```
+
+When the snapshot is null, skip the INSERT and commit the verified binding
+update without inventing a subscription. Null placeholders mean unquoted SQL
+`NULL`, not the string `'NULL'`. For a repeat attempt where the binding already
+has the audited Issue, verify all identity and channel fields before treating it
+as already restored; never overwrite a different live Issue.
+
+Read back binding and subscription fields before resuming traffic. Do not restore
+old provider/session pointers, pending updates, cancelled wake tasks or deleted
+outbox rows. Future events use the normal topic path; missed notifications are
+not replayed. The retained Issue/task/human-request records remain queryable.
+A claim-time binding check is an additional invariant, not a paused queue.
+Messages already claimed by a daemon, currently sending or sent before upgrade
+cannot be withdrawn by this migration.
+
+Earlier PR #192 drafts that already discarded ambiguous links cannot reconstruct
+them by restarting this revision. Rehearse from a verified pre-decoupling backup;
+do not use a previously migrated draft database as evidence of this migration.
 
 ## SQLite and PostgreSQL
 

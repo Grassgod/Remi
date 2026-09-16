@@ -684,21 +684,11 @@ export class FeishuBotRepo {
     const result = this.ctx.db.transaction((): SubmitFeishuBotMessageResult => {
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
       const sender = this.resolveSender(workspaceId, config.appId, input, config.senderAccessPolicy);
-      // A legacy link is inert until this exact conversation supplies an
-      // authoritative type. In particular, never use the thread/key fallback
-      // in resolveFeishuBotChatType to recover an Issue association.
       let binding = this.ctx.db.query(
         `SELECT * FROM multiremi_feishu_bot_chat_bindings
           WHERE workspace_id = ? AND app_id = ? AND agent_id = ? AND external_session_key = ?`,
       ).get(workspaceId, config.appId, routeAgent.agentId, externalSessionKey) as Row | null;
-      const hadLegacyLink = binding ? this.recoverLegacyIssueLinkWithinTransaction(binding, {
-        workspaceId, agentId: routeAgent.agentId, chatId, threadId,
-        chatType: input.chatType, senderAllowed: sender.allowed,
-        replyToMessageId: replyToMessageId ?? externalMessageId,
-      }) : false;
-
       const autoCreateGroupIssue = sender.allowed
-        && !hadLegacyLink
         && !this.ctx.agents().getAgent(routeAgent.agentId)?.issueCreationRequiresProposal
         && chatType === "group"
         && Boolean(chatId)
@@ -911,161 +901,6 @@ export class FeishuBotRepo {
     })();
     if (enqueuedTask) this.ctx.notifyTaskEnqueued(enqueuedTask);
     return result;
-  }
-
-  private recoverLegacyIssueLinkWithinTransaction(binding: Row, input: {
-    workspaceId: string;
-    agentId: string;
-    chatId: string | null;
-    threadId: string | null;
-    chatType?: string | null;
-    senderAllowed: boolean;
-    replyToMessageId: string;
-  }): boolean {
-    const legacy = this.ctx.db.query(`SELECT * FROM multiremi_feishu_bot_legacy_issue_links
-      WHERE binding_id = ?`).get(String(binding.id)) as Row | null;
-    if (!legacy) return false;
-    if ((input.chatId && binding.chat_id !== input.chatId)
-      || (input.threadId && binding.thread_id !== input.threadId)) {
-      // Do not allow a rejected recovery event to rewrite the destination and
-      // make the next event appear to match the original quarantined binding.
-      throw new FeishuBotConfigError("legacy conversation destination does not match", 409, "invalid_conversation");
-    }
-    const chat = this.ctx.chat().getChatSession(String(binding.chat_session_id));
-    if (legacy.workspace_id !== input.workspaceId || binding.workspace_id !== input.workspaceId
-      || !chat || chat.workspaceId !== input.workspaceId || chat.agentId !== input.agentId
-      || !input.chatId || binding.chat_id !== input.chatId) return true;
-    if (input.chatType === "p2p") {
-      this.ctx.db.run("DELETE FROM multiremi_feishu_bot_legacy_issue_links WHERE binding_id = ?", [String(binding.id)]);
-      return true;
-    }
-    if (input.chatType !== "group" || !input.senderAllowed || chat.status !== "active") return true;
-    if (!Number.isFinite(Date.parse(String(legacy.replay_since)))) return true;
-    const issue = this.ctx.issues().getIssue(String(legacy.issue_id));
-    if (!issue || issue.workspaceId !== input.workspaceId) return true;
-    if (binding.issue_id != null) {
-      // A newer, explicit transport association wins over the quarantine.
-      this.ctx.db.run("DELETE FROM multiremi_feishu_bot_legacy_issue_links WHERE binding_id = ?", [String(binding.id)]);
-      return true;
-    }
-    if (!this.restoreLegacyIssueChannelWithinTransaction(chat, legacy.channel_snapshot)) return true;
-    const now = nowIso();
-    this.ctx.db.run(`UPDATE multiremi_feishu_bot_chat_bindings
-      SET issue_id = ?, updated_at = ? WHERE id = ? AND workspace_id = ? AND issue_id IS NULL`,
-    [issue.id, now, String(binding.id), input.workspaceId]);
-    binding.issue_id = issue.id;
-    const channel = this.ctx.notificationChannels().getAgentChatNotificationChannel(chat.id);
-    if (channel?.enabled) {
-      const body = this.legacyIssueRecoverySummary(issue, String(legacy.replay_since), channel.eventTypes);
-      this.ctx.chat().createPendingAgentIssueUpdateWithinTransaction(chat.id, body);
-      const activeTask = this.ctx.chat().getPendingChatTask(chat.id);
-      if (activeTask && activeTask.status !== "queued") {
-        const pending = this.ctx.chat().preparePendingAgentIssueUpdatesForTaskWithinTransaction(chat.id, activeTask.id);
-        this.ctx.tasks().createTaskSteerMessage({
-          taskId: activeTask.id, kind: "steer", content: pending.messages.map((message) => message.body).join("\n\n"),
-          authorType: "system", authorId: null,
-        });
-      }
-      // The direct, durable catch-up also covers a duplicate inbound event for
-      // which there is no new Agent turn. Do not replay to other Issue topics.
-      this.ctx.db.run(`INSERT INTO multiremi_feishu_bot_outbound_deliveries (
-        id, workspace_id, binding_id, task_id, chat_id, thread_id,
-        reply_to_message_id, body, status, available_at, created_at, updated_at
-      ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 'pending', ?, ?, ?)
-      ON CONFLICT(id) DO NOTHING`, [
-        `fbo_legacy_recovery_${String(binding.id)}`, input.workspaceId, String(binding.id), input.chatId,
-        nullableString(binding.thread_id), input.replyToMessageId, body, now, now, now,
-      ]);
-    }
-    this.ctx.db.run("DELETE FROM multiremi_feishu_bot_legacy_issue_links WHERE binding_id = ?", [String(binding.id)]);
-    return true;
-  }
-
-  private restoreLegacyIssueChannelWithinTransaction(chat: MultiremiChatSession, snapshot: unknown): boolean {
-    const current = this.ctx.notificationChannels().getAgentChatNotificationChannel(chat.id);
-    if (current) return current.workspaceId === chat.workspaceId;
-    if (snapshot == null) {
-      this.ensureDefaultAgentIssueUpdatesChannel(chat);
-      return true;
-    }
-    const row = parseJson<Row | null>(snapshot, null);
-    const target = row ? parseJson<Row | null>(row.target, null) : null;
-    const events = row ? parseJson<unknown>(row.event_types, null) : null;
-    if (!row || row.workspace_id !== chat.workspaceId || row.kind !== "agent_chat"
-      || target?.chatId !== chat.id || typeof row.id !== "string" || !row.id
-      || !Array.isArray(events) || events.some((value) => typeof value !== "string")
-      || (row.enabled !== 0 && row.enabled !== 1)) return false;
-    // Preserve the original channel, including disabled subscriptions and
-    // filters. A conflicting id is quarantined instead of overwriting it.
-    if (this.ctx.db.query("SELECT 1 FROM multiremi_notification_channels WHERE id = ?").get(row.id)) return false;
-    this.ctx.db.run(`INSERT INTO multiremi_notification_channels (
-      id, workspace_id, member_id, kind, name, enabled, target, event_types,
-      min_severity, created_by, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-      row.id, row.workspace_id, row.member_id ?? null, row.kind, row.name,
-      row.enabled, row.target, row.event_types, row.min_severity,
-      row.created_by ?? null, row.created_at, row.updated_at,
-    ]);
-    return true;
-  }
-
-  private legacyIssueRecoverySummary(issue: MultiremiIssue, replaySince: string, eventTypes: string[]): string {
-    const lines = [
-      `Feishu Issue topic restored: ${issue.key} - ${issue.title}`,
-      `Current status: ${issue.status}. Catch-up since ${replaySince}.`,
-      "This summary covers the interruption; original Issue history remains available.",
-    ];
-    const includes = (type: string) => eventTypes.includes("*") || eventTypes.includes(type);
-    const section = (title: string, rows: Row[], render: (row: Row) => string) => {
-      if (!rows.length) return;
-      lines.push("", title, ...rows.slice(0, 10).map(render));
-      const omitted = Math.max(0, Number(rows[0]?.total ?? rows.length) - 10);
-      if (omitted) lines.push(`${omitted} entries omitted; query the Issue history for the full record.`);
-    };
-    const snippet = (value: unknown) => {
-      const text = String(value ?? "");
-      return text.length > 300 ? `${text.slice(0, 300)}… [truncated]` : text;
-    };
-    const types = eventTypes.includes("*") ? [] : eventTypes;
-    if (eventTypes.includes("*") || types.length) {
-      const filter = types.length ? ` AND type IN (${types.map(() => "?").join(", ")})` : "";
-      const rows = this.ctx.db.query(`SELECT id, type, body, created_at, COUNT(*) OVER() AS total FROM multiremi_issue_activity
-        WHERE issue_id = ? AND created_at >= ?${filter}
-        ORDER BY created_at DESC, id DESC LIMIT 10`).all(issue.id, replaySince, ...types) as Row[];
-      section("Issue updates:", rows, (row) => `- ${row.id} [${row.type}]: ${snippet(row.body)}`);
-    }
-    if (includes("leader_round_completed")) {
-      const rows = this.ctx.db.query(`SELECT id, result, COUNT(*) OVER() AS total FROM multiremi_tasks
-        WHERE issue_id = ? AND workspace_id = ? AND chat_session_id IS NULL
-          AND status = 'completed' AND completed_at >= ?
-        ORDER BY completed_at DESC, id DESC LIMIT 10`).all(issue.id, issue.workspaceId, replaySince) as Row[];
-      section("Completed work during the interruption:", rows,
-        (row) => `- task:${row.id}: ${snippet(row.result)}`);
-    }
-    if (includes("result_published")) {
-      const rows = this.ctx.db.query(`SELECT id, title, body, COUNT(*) OVER() AS total FROM multiremi_session_results
-        WHERE issue_id = ? AND created_at >= ? ORDER BY created_at DESC, id DESC LIMIT 10`)
-        .all(issue.id, replaySince) as Row[];
-      section("Published results:", rows,
-        (row) => `- result:${row.id} ${snippet(row.title)}: ${snippet(row.body)}`);
-    }
-    if (includes("human_request_created")) {
-      const rows = this.ctx.db.query(`SELECT r.id, r.task_id, r.kind, r.payload, COUNT(*) OVER() AS total
-        FROM multiremi_task_human_requests r JOIN multiremi_tasks t ON t.id = r.task_id
-        WHERE t.issue_id = ? AND t.workspace_id = ? AND t.chat_session_id IS NULL AND r.status = 'pending'
-        ORDER BY r.created_at DESC, r.id DESC LIMIT 10`).all(issue.id, issue.workspaceId) as Row[];
-      section("Still awaiting human input:", rows,
-        (row) => {
-          const payload = parseJson<Row>(row.payload, {});
-          // Same public projection as humanRequestPushBody: never copy tool
-          // arguments, provider metadata, or arbitrary permission payloads.
-          const message = cleanOptionalString(payload.message) ?? "Agent is waiting for a human answer.";
-          return `- request:${row.id} task:${row.task_id} [${row.kind}]: ${snippet(message)}`;
-        });
-    }
-    lines.push("", `Full context: remi issue get ${issue.key}; remi issue timeline ${issue.key}.`,
-      "For a pending request, use remi task request list <task-id>.");
-    return lines.join("\n");
   }
 
   getIssueIdForChatSession(chatSessionId: string): string | null {

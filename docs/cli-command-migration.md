@@ -276,7 +276,9 @@ empty body even when the client sends `Content-Type: application/json`.
 Chat Sessions are independent conversations. Creating an Issue from Chat no longer
 binds the Chat or subscribes it to Issue activity. Feishu Issue topics retain their
 Issue association in the Feishu binding table and continue receiving updates and
-work-round replies.
+work-round replies. Legacy group associations without deterministic ownership
+evidence require audited operator restoration before daemon traffic resumes;
+see the [migration runbook](migrations/chat-issue-decoupling.md).
 
 This is an intentional breaking capability removal, with no replacement command.
 Unlike renamed command paths, it has no executable compatibility alias: retaining

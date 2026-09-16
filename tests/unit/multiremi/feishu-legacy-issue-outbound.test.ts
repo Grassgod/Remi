@@ -59,19 +59,19 @@ function scaffold(scenario: "unknown_legacy_group" | "p2p_thread_and_key" | "gro
 describe("legacy Issue outbound isolation", () => {
   for (const scenario of ["unknown_legacy_group", "p2p_thread_and_key"] as const) {
     for (const kind of ["round", "human"] as const) {
-      it(`holds an old ${kind} notification after migrating ${scenario}`, () => {
+      it(`cancels an old ${kind} wake task and deletes its notification after migrating ${scenario}`, () => {
         const f = scaffold(scenario, kind);
         expect(db!.query("SELECT issue_id FROM multiremi_feishu_bot_chat_bindings WHERE id = ?").get(f.bindingId))
           .toEqual({ issue_id: null });
         expect(f.claim()).toBeNull();
-        expect(db!.query("SELECT status, attempt_count FROM multiremi_feishu_bot_outbound_deliveries WHERE id = 'legacy_outbox'").get())
-          .toEqual({ status: "pending", attempt_count: 0 });
+        expect(f.store.getTask(f.wakeTaskId)?.status).toBe("cancelled");
+        expect(db!.query("SELECT id FROM multiremi_feishu_bot_outbound_deliveries WHERE id = 'legacy_outbox'").get()).toBeNull();
       });
     }
   }
 
   for (const kind of ["round", "human"] as const) {
-    it(`resumes a held ${kind} notification only after the original group Issue is confirmed`, () => {
+    it(`never recreates a deleted ${kind} notification when another group message arrives`, () => {
       const f = scaffold("unknown_legacy_group", kind);
       expect(f.claim()).toBeNull();
       f.store.submitFeishuBotMessage("local", "rt_legacy_outbound", {
@@ -79,15 +79,18 @@ describe("legacy Issue outbound isolation", () => {
         externalMessageId: "confirmed_group", chatId: f.externalChatId, threadId: `om_${f.scenario}`,
         chatType: "group", senderOpenId: "ou_group_owner", text: "Continue the original group",
       });
-      expect(f.claim()?.id).toBe("legacy_outbox");
+      expect(f.claim()).toBeNull();
+      expect(f.store.getTask(f.wakeTaskId)?.status).toBe("cancelled");
+      expect(db!.query("SELECT id FROM multiremi_feishu_bot_outbound_deliveries WHERE id = 'legacy_outbox'").get()).toBeNull();
     });
     it(`keeps a pending ${kind} notification blocked when the binding points to another Issue`, () => {
-      const f = scaffold("unknown_legacy_group", kind);
+      const f = scaffold("group_without_thread", kind);
       db!.run("UPDATE multiremi_feishu_bot_chat_bindings SET issue_id = 'iss_chat_migration' WHERE id = ?", [f.bindingId]);
       expect(f.claim()).toBeNull();
     });
     it(`continues delivering ${kind} notifications for retained group bindings`, () => {
       const f = scaffold("group_without_thread", kind);
+      expect(f.store.getTask(f.wakeTaskId)?.status).toBe("queued");
       expect(f.claim()?.id).toBe("legacy_outbox");
     });
   }

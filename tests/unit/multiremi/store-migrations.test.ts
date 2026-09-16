@@ -10,7 +10,7 @@ import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 
 import {
   CHAT_ISSUE_CLASSIFICATION_CASES, classificationChatId, CHAT_ISSUE_MIGRATION,
-  seedLegacyChatIssueClassificationFixture, seedLegacyChatIssueFixture,
+  seedLegacyChatIssueClassificationFixture, seedLegacyChatWakeFixture, assertLegacyChatWakeSettlement, assertCancelledLegacyWakesCannotRun, assertLegacyChatWakeRollback, seedLegacyChatIssueFixture,
 } from "./chat-issue-migration-fixture.js";
 
 let db: Database | null = null;
@@ -58,7 +58,7 @@ describe("store migrations", () => {
       "multiremi_notification_channels",
       "multiremi_notification_deliveries",
       "multiremi_agent_issue_update_state",
-      "multiremi_feishu_bot_legacy_issue_links",
+      "multiremi_feishu_bot_issue_link_audit",
       "multiremi_tasks",
       "multiremi_task_messages",
       "multiremi_workspaces",
@@ -1477,25 +1477,32 @@ describe("store migrations", () => {
   });
 
   for (const tableForeignKey of [false, true]) {
-    it(`classifies legacy Feishu links using authoritative evidence and quarantines unknown links (table FK=${tableForeignKey})`, () => {
+    it(`classifies legacy Feishu links using authoritative evidence and audits discarded links (table FK=${tableForeignKey})`, () => {
       const database = freshDb();
       seedLegacyChatIssueClassificationFixture(database, tableForeignKey);
+      seedLegacyChatWakeFixture(database);
+      assertLegacyChatWakeRollback(database);
       migrate(database);
+      assertLegacyChatWakeSettlement(database);
       migrate(database);
+      assertLegacyChatWakeSettlement(database);
       for (const entry of CHAT_ISSUE_CLASSIFICATION_CASES) {
         const chatId = classificationChatId(entry);
         const issueId = `iss_classification_${entry.name}`;
-        const recovery = database.query(`SELECT * FROM multiremi_feishu_bot_legacy_issue_links
+        const recovery = database.query(`SELECT * FROM multiremi_feishu_bot_issue_link_audit
           WHERE binding_id = ?`).get(`fcb_${chatId}`) as Record<string, string> | null;
-        if (!entry.quarantine) {
+        if (entry.preserve) {
           expect(recovery).toBeNull();
         } else {
           expect(recovery).toMatchObject({ binding_id: `fcb_${chatId}`, workspace_id: "local", issue_id: issueId });
-          expect(Number.isFinite(Date.parse(recovery!.quarantined_at))).toBe(true);
-          const pendingTime = Date.parse(entry.pendingSince ?? "");
-          const replayTimes = [Date.parse(recovery!.quarantined_at), pendingTime,
-            entry.unconsumedUpdate !== false ? Date.parse("2026-09-03T00:00:00.000Z") : Number.NaN];
-          expect(recovery!.replay_since).toBe(new Date(Math.min(...replayTimes.filter(Number.isFinite))).toISOString());
+          expect(Number.isFinite(Date.parse(recovery!.audited_at))).toBe(true);
+          expect(recovery!.reason).toBe(entry.synced?.some((value) => value.chatType === "p2p")
+            ? "p2p_evidence" : "unproven_ownership");
+          expect(JSON.parse(recovery!.binding_snapshot)).toMatchObject({
+            id: `fcb_${chatId}`, workspace_id: "local", app_id: "cli_migration",
+            agent_id: "agt_chat_migration", chat_session_id: chatId, issue_id: issueId,
+            chat_id: `oc_${entry.name}`, thread_id: entry.thread || entry.key ? `om_${entry.name}` : null,
+          });
           expect(recovery!.channel_snapshot ? JSON.parse(recovery!.channel_snapshot) : null).toEqual(entry.noChannel ? null : {
             id: `nch_agent_chat_${chatId}`, workspace_id: "local", member_id: null, kind: "agent_chat",
             name: "Legacy updates", enabled: entry.channelEnabled ?? 0, target: JSON.stringify({ chatId }),
@@ -1523,6 +1530,7 @@ describe("store migrations", () => {
         expect(database.query("SELECT enabled FROM multiremi_notification_channels WHERE id = ?").get(`nch_agent_chat_${chatId}`))
           .toEqual(entry.preserve ? { enabled: 0 } : null);
       }
+      assertCancelledLegacyWakesCannotRun(database);
     });
 
     for (const enforceForeignKeys of [false, true]) {
@@ -1548,8 +1556,8 @@ describe("store migrations", () => {
         expect(database.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: enforceForeignKeys ? 1 : 0 });
         expect(database.query("SELECT COUNT(*) AS count FROM multiremi_chat_sessions").get()).toEqual({ count: 4 });
         expect(database.query("SELECT COUNT(*) AS count FROM multiremi_feishu_bot_chat_bindings").get()).toEqual({ count: 3 });
-        // Web associations never enter the transport recovery table.
-        expect(database.query("SELECT binding_id FROM multiremi_feishu_bot_legacy_issue_links").all())
+        // Web associations never enter the transport audit table.
+        expect(database.query("SELECT binding_id FROM multiremi_feishu_bot_issue_link_audit").all())
           .toEqual([{ binding_id: "fcb_chat_private_migration" }]);
         expect(database.query("SELECT chat_session_id, issue_id FROM multiremi_feishu_bot_chat_bindings ORDER BY chat_session_id").all()).toEqual([
           { chat_session_id: "chat_group_migration", issue_id: "iss_chat_migration" },
@@ -1573,16 +1581,16 @@ describe("store migrations", () => {
     }
   }
 
-  it("creates the recovery table even when the original decoupling ledger is already applied", () => {
+  it("creates the audit table even when the original decoupling ledger is already applied", () => {
     const database = freshDb();
     migrate(database);
-    database.exec("DROP TABLE multiremi_feishu_bot_legacy_issue_links");
+    database.exec("DROP TABLE multiremi_feishu_bot_issue_link_audit");
     migrate(database);
-    expect(tableNames(database)).toContain("multiremi_feishu_bot_legacy_issue_links");
+    expect(tableNames(database)).toContain("multiremi_feishu_bot_issue_link_audit");
     expect(database.query("SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = ?").get(CHAT_ISSUE_MIGRATION))
       .toEqual({ count: 1 });
     migrate(database);
-    expect(database.query("SELECT COUNT(*) AS count FROM multiremi_feishu_bot_legacy_issue_links").get()).toEqual({ count: 0 });
+    expect(database.query("SELECT COUNT(*) AS count FROM multiremi_feishu_bot_issue_link_audit").get()).toEqual({ count: 0 });
   });
 
   it("never backfills an Issue Session onto a new Feishu topic task on restart", () => {
@@ -1639,7 +1647,7 @@ describe("store migrations", () => {
     expect(() => runMigrations(wrapped)).toThrow("changed Chat or dependent row counts");
     expect(columnNames(database, "multiremi_chat_sessions")).toContain("issue_id");
     expect(database.query("SELECT COUNT(*) AS count FROM multiremi_chat_messages").get()).toEqual({ count: 12 });
-    expect(database.query("SELECT COUNT(*) AS count FROM multiremi_feishu_bot_legacy_issue_links").get()).toEqual({ count: 0 });
+    expect(database.query("SELECT COUNT(*) AS count FROM multiremi_feishu_bot_issue_link_audit").get()).toEqual({ count: 0 });
     expect(database.query("SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = ?").get(CHAT_ISSUE_MIGRATION)).toEqual({ count: 0 });
     expect(database.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
   });
