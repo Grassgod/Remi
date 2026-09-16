@@ -53,7 +53,7 @@ function logDroppedGroupMessage(
     `dropped group message message_id=${event.message.message_id} chat_hash=${hashIdentifier(event.message.chat_id)} reason=${reason}`,
   );
 }
-import { downloadImageFeishu, downloadMessageResourceFeishu } from "./media.js";
+import { downloadMessageResourceFeishu, FeishuAttachmentTooLargeError } from "./media.js";
 import { extractMentionTargets, extractMessageBody } from "./mention.js";
 import { getMessageFeishu, sendMarkdownCardFeishu } from "./send.js";
 import { handleFormSubmission, handleButtonClick, hasPendingAction } from "./card-actions.js";
@@ -288,9 +288,9 @@ function parseMediaKeys(
       case "file":
         return { fileKey: parsed.file_key, fileName: parsed.file_name };
       case "audio":
-        return { fileKey: parsed.file_key };
+        return { fileKey: parsed.file_key, fileName: parsed.file_name };
       case "video":
-        return { fileKey: parsed.file_key, imageKey: parsed.image_key };
+        return { fileKey: parsed.file_key, imageKey: parsed.image_key, fileName: parsed.file_name };
       case "sticker":
         return { fileKey: parsed.file_key };
       default:
@@ -445,6 +445,8 @@ export async function resolveFeishuMedia(
   const mediaTypes = ["image", "file", "audio", "video", "sticker", "post"];
   if (!mediaTypes.includes(messageType)) return [];
 
+  if (messageType === "sticker") return [{ buffer: Buffer.alloc(0), placeholder: "<media:sticker>" }];
+
   const out: FeishuMediaInfo[] = [];
 
   // Handle embedded images in rich text posts
@@ -459,8 +461,9 @@ export async function resolveFeishuMedia(
           placeholder: "<media:image>",
           imageKey,
         });
-      } catch {
-        // Skip failed downloads
+      } catch (error) {
+        out.push({ buffer: Buffer.alloc(0), placeholder: "<media:image>", imageKey,
+          rejectedReason: error instanceof FeishuAttachmentTooLargeError ? "too_large" : "download_failed" });
       }
     }
     return out;
@@ -468,8 +471,9 @@ export async function resolveFeishuMedia(
 
   // Handle other media types
   const mediaKeys = parseMediaKeys(content, messageType);
-  const fileKey = mediaKeys.imageKey || mediaKeys.fileKey;
-  if (!fileKey) return [];
+  const fileKey = messageType === "image" ? mediaKeys.imageKey : mediaKeys.fileKey;
+  if (!fileKey) return [{ buffer: Buffer.alloc(0), placeholder: inferPlaceholder(messageType),
+    fileName: mediaKeys.fileName, rejectedReason: "download_failed" }];
 
   try {
     const resourceType = messageType === "image" ? "image" : "file";
@@ -481,8 +485,10 @@ export async function resolveFeishuMedia(
       placeholder: inferPlaceholder(messageType),
       imageKey: mediaKeys.imageKey,
     });
-  } catch {
-    // Skip failed downloads
+  } catch (error) {
+    out.push({ buffer: Buffer.alloc(0), placeholder: inferPlaceholder(messageType),
+      fileName: mediaKeys.fileName, imageKey: mediaKeys.imageKey,
+      rejectedReason: error instanceof FeishuAttachmentTooLargeError ? "too_large" : "download_failed" });
   }
 
   return out;

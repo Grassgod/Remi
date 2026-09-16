@@ -7,7 +7,7 @@
  */
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, networkInterfaces } from "node:os";
 import { dirname } from "node:path";
@@ -591,6 +591,28 @@ export function controlPlaneConciergeHost(deps: {
     async sendOutbound(delivery, options) {
       const handle = deps.current();
       if (!handle) throw new Error("Feishu concierge channel is not running");
+      if (delivery.attachments?.length) {
+        const daemon = deps.daemon();
+        if (!daemon) throw new Error("Attachment transport is unavailable");
+        let result: { messageId: string } | undefined;
+        const replyToMessageId = delivery.replyToMessageId ?? delivery.threadId ?? undefined;
+        if (delivery.body.trim()) {
+          options?.signal.throwIfAborted();
+          result = await handle.sendProactiveThreadReply({ chatId: delivery.chatId, replyToMessageId,
+            body: delivery.body, idempotencyKey: delivery.idempotencyKey });
+        }
+        for (const attachment of delivery.attachments) {
+          options?.signal.throwIfAborted();
+          const buffer = await daemon.downloadFeishuBotOutboundAttachment(delivery.id, delivery.claimToken, attachment.id);
+          options?.signal.throwIfAborted();
+          result = await handle.sendProactiveAttachment({ chatId: delivery.chatId, replyToMessageId,
+            buffer, filename: attachment.filename, contentType: attachment.contentType, signal: options?.signal,
+            // Feishu UUIDs allow at most 50 characters. Hash stable delivery and
+            // attachment IDs so retries reuse the same UUID even after a crash.
+            idempotencyKey: createHash("sha256").update(`${delivery.idempotencyKey}:${attachment.id}`).digest("hex").slice(0, 40) });
+        }
+        return result!;
+      }
       if (delivery.taskId) {
         const daemon = deps.daemon();
         if (!daemon || !options) throw new Error("Task stream transport is unavailable");
@@ -679,6 +701,13 @@ export function createFeishuTaskHandler(
     if (!externalMessageId) throw new Error("Feishu message id is missing");
     const chatType = message.metadata?.chatType === "group" ? "group" : "p2p";
     const threadId = String(message.metadata?.rootId ?? "").trim() || null;
+    const attachmentIds: string[] = [];
+    for (const media of message.media ?? []) {
+      if (media.mediaType === "sticker") continue;
+      const attachment = await daemon.uploadFeishuBotAttachment({ revision, externalSessionKey: sessionKey,
+        externalMessageId, fileName: media.fileName ?? "attachment.bin", contentType: media.contentType, buffer: media.buffer });
+      attachmentIds.push(attachment.id);
+    }
     const submitted = await daemon.submitFeishuBotMessage({
       revision,
       externalSessionKey: sessionKey,
@@ -693,6 +722,7 @@ export function createFeishuTaskHandler(
       chatId: message.chatId,
       threadId,
       text: message.text,
+      attachmentIds,
       deliveryMode: "native_cot_v1",
     });
     // A live Task already has the card created by its first event. The steer is

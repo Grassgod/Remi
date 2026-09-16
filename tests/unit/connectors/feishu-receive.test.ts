@@ -14,6 +14,8 @@ import {
   type FeishuBotIdentityState,
 } from "@connectors/feishu/receive.js";
 import { FeishuChannel } from "@connectors/feishu/channel.js";
+import { FeishuConnector } from "@connectors/feishu/index.js";
+import type { IncomingMessage } from "@connectors/base.js";
 import type { FeishuMessageEvent } from "@connectors/feishu/types.js";
 
 let messageSequence = 0;
@@ -98,6 +100,31 @@ function clientWithSender(name = "Alice"): { client: any; getSenderCalls: () => 
     getSenderCalls: () => calls,
   };
 }
+
+describe("Feishu sticker Task handoff", () => {
+  it("passes an admitted sticker through the complete receive and connector pipeline", async () => {
+    const event = messageEvent({ messageId: uniqueMessageId("sticker-task"), senderOpenId: "ou_sticker" });
+    event.message.message_type = "sticker";
+    event.message.content = JSON.stringify({ file_key: "sticker_key" });
+    const parsed = await processFeishuMessageEvent(clientWithSender().client, event, undefined, {
+      authorizeSender: async () => true, onDenied: async () => { throw new Error("unexpected denial"); },
+    });
+    expect(parsed).not.toBeNull();
+    const received: IncomingMessage[] = [];
+    const receipts: string[] = [];
+    const connector = Object.create(FeishuConnector.prototype) as any;
+    Object.assign(connector, {
+      _taskStreamHandler: async (message: IncomingMessage) => { received.push(message); },
+      _groupPolicy: { getByChatId: () => null },
+      _channel: { setMessageReceipt: async (_id: string, state: string) => { receipts.push(state); } },
+    });
+    await connector._handleFeishuMessage(parsed);
+    expect(received).toHaveLength(1);
+    expect(received[0]!.text).toContain("[表情]");
+    expect(received[0]!.media).toBeUndefined();
+    expect(receipts).toEqual(["received"]);
+  });
+});
 
 function admission(
   authorizeSender: (senderOpenId: string) => Promise<boolean>,

@@ -17,6 +17,8 @@
  *    offline). That is the two-phase handover acceptance criterion 8 asks for.
  */
 
+import { FEISHU_IMAGE_MAX_BYTES } from "@connectors/feishu/outbound-images.js";
+import { chatAttachmentValidationError } from "@multiremi/contracts/attachments.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { advancesFeishuPresentation, parseFeishuPresentation } from "@multiremi/contracts/feishu-presentation.js";
 import type { StoreContext } from "@multiremi/store/context.js";
@@ -51,6 +53,7 @@ import type {
   MultiremiFeishuBotRuntimeStatus,
   MultiremiFeishuBotAgentRoute,
   MultiremiAttachment,
+  CreateAttachmentInput,
   MultiremiIssue,
   MultiremiTask,
   MultiremiTaskHumanRequest,
@@ -558,6 +561,88 @@ export class FeishuBotRepo {
     };
   }
 
+  assertInboundAttachmentScope(workspaceId: string, runtimeId: string,
+    input: Pick<SubmitFeishuBotMessageInput, "revision" | "externalSessionKey" | "externalMessageId">): MultiremiFeishuBotConfig {
+    const config = this.getConfig(workspaceId);
+    if (!config?.enabled) throw new FeishuBotConfigError("feishu bot is not running", 409, "bot_not_running");
+    if (config.runtimeId !== runtimeId) throw new FeishuBotConfigError("runtime does not host this feishu bot", 403, "runtime_not_selected");
+    if (config.revision !== input.revision) throw new FeishuBotConfigError("feishu bot assignment is stale", 409, "stale_revision");
+    requiredBoundedString(input.externalSessionKey, "external_session_key", 1_024);
+    requiredBoundedString(input.externalMessageId, "external_message_id", 512);
+    return config;
+  }
+
+  createInboundAttachment(workspaceId: string, runtimeId: string,
+    scope: Pick<SubmitFeishuBotMessageInput, "revision" | "externalSessionKey" | "externalMessageId">,
+    input: CreateAttachmentInput): MultiremiAttachment {
+    return this.ctx.db.transaction(() => {
+      const config = this.assertInboundAttachmentScope(workspaceId, runtimeId, scope);
+      const attachment = this.ctx.issues().createAttachment({ ...input, workspaceId,
+        issueId: null, commentId: null, chatSessionId: null, chatMessageId: null,
+        uploaderType: "daemon", uploaderId: runtimeId });
+      this.ctx.db.run(`INSERT INTO multiremi_feishu_bot_inbound_attachments
+        (attachment_id, workspace_id, runtime_id, app_id, revision, external_session_key, external_message_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`, [attachment.id, workspaceId, runtimeId, config.appId,
+          scope.revision, scope.externalSessionKey.trim(), scope.externalMessageId.trim()]);
+      return attachment;
+    })();
+  }
+
+  /** Atomic Chat message + outbox registration. File bytes are already persisted. */
+  sendChatAttachments(taskId: string, inputs: CreateAttachmentInput[], body = "") {
+    const result = this.ctx.db.transaction(() => {
+      const task = this.ctx.tasks().getTask(taskId);
+      if (!task?.chatSessionId) throw new Error("current task is not a Chat task");
+      const session = this.ctx.chat().getChatSession(task.chatSessionId);
+      if (!session || session.workspaceId !== task.workspaceId) throw new Error("chat session not found");
+      if (!inputs.length || inputs.length > 10) throw new Error("between 1 and 10 attachments are required");
+      for (const input of inputs) {
+        const error = chatAttachmentValidationError(input.filename, Number(input.sizeBytes));
+        if (error) throw new Error(error);
+      }
+      const config = this.getConfig(task.workspaceId);
+      const binding = this.ctx.db.query(`SELECT * FROM multiremi_feishu_bot_chat_bindings
+        WHERE chat_session_id = ? AND workspace_id = ? ORDER BY created_at DESC LIMIT 1`)
+        .get(session.id, session.workspaceId) as Row | null;
+      if (binding && (!config?.enabled || binding.app_id !== config.appId)) {
+        throw new Error("Feishu bot is unavailable for this Chat");
+      }
+      // Policy extension point: evaluate future workspace Chat delivery policy
+      // before creating either the assistant message or outbound rows.
+      const message = this.ctx.chat().appendChatMessageWithinTransaction({ chatSessionId: session.id,
+        taskId, role: "assistant", body });
+      const attachments = inputs.map(input => this.ctx.issues().createAttachment({ ...input,
+        workspaceId: session.workspaceId, chatSessionId: session.id, chatMessageId: message.id,
+        uploaderType: "agent", uploaderId: task.agentId }));
+      const deliveryIds: string[] = [];
+      if (binding) {
+        if (!binding.chat_id) throw new Error("Feishu Chat has no destination");
+        const batchId = createId("fbo");
+        const now = nowIso();
+        for (const [index, attachment] of attachments.entries()) {
+          // Equal timestamps sort by id; a shared prefix preserves file order.
+          const id = `${batchId}_${String(index).padStart(2, "0")}`;
+          const descriptor = { id: attachment.id, filename: attachment.filename,
+            contentType: attachment.contentType, sizeBytes: attachment.sizeBytes };
+          // One file per delivery gives retries an independent stable Feishu UUID.
+          this.ctx.db.run(`INSERT INTO multiremi_feishu_bot_outbound_deliveries
+            (id, workspace_id, binding_id, chat_id, thread_id, reply_to_message_id,
+             body, attachments, status, available_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
+            [id, task.workspaceId, binding.id, binding.chat_id, binding.thread_id,
+              binding.reply_to_message_id, deliveryIds.length === 0 ? body : "", toJson([descriptor]), now, now, now]);
+          deliveryIds.push(id);
+        }
+      }
+      return { message, attachments, delivery_ids: deliveryIds };
+    })();
+    const session = this.ctx.chat().getChatSession(result.message.chatSessionId)!;
+    this.ctx.emitChatEvent(session, "chat:message", { message_id: result.message.id,
+      role: "assistant", content: result.message.body, task_id: taskId, created_at: result.message.createdAt },
+      { actorType: "agent", actorId: this.ctx.tasks().getTask(taskId)!.agentId });
+    return result;
+  }
+
   /**
    * Join one Feishu event to the canonical browser Chat/Task execution path.
    * The event id is the idempotency key; an active Task receives a steer,
@@ -640,6 +725,18 @@ export class FeishuBotRepo {
         };
       }
 
+      const attachmentIds = [...new Set(input.attachmentIds ?? [])];
+      if (attachmentIds.length > 10) throw new Error("at most 10 attachments are allowed per message");
+      for (const attachmentId of attachmentIds) {
+        const upload = this.ctx.db.query(`SELECT a.id FROM multiremi_feishu_bot_inbound_attachments u
+          JOIN multiremi_attachments a ON a.id = u.attachment_id
+          WHERE u.attachment_id = ? AND u.workspace_id = ? AND u.runtime_id = ? AND u.app_id = ?
+            AND u.revision = ? AND u.external_session_key = ? AND u.external_message_id = ?
+            AND a.chat_message_id IS NULL AND a.chat_session_id IS NULL`)
+          .get(attachmentId, workspaceId, runtimeId, config.appId, input.revision, externalSessionKey, externalMessageId);
+        if (!upload) throw new FeishuBotConfigError("attachment does not belong to this inbound message", 403, "invalid_attachment");
+      }
+
       let binding = this.ctx.db.query(
         `SELECT * FROM multiremi_feishu_bot_chat_bindings
           WHERE workspace_id = ? AND app_id = ? AND agent_id = ? AND external_session_key = ?`,
@@ -708,13 +805,6 @@ export class FeishuBotRepo {
       let task;
       let steered = false;
       if (activeTask) {
-        this.ctx.tasks().createTaskSteerMessage({
-          taskId: activeTask.id,
-          kind: "steer",
-          content: text,
-          authorType: "external",
-          authorId: sender.actorId,
-        });
         task = activeTask;
         steered = true;
       } else {
@@ -741,6 +831,15 @@ export class FeishuBotRepo {
         body: text,
         createdAt: now,
       });
+      for (const attachmentId of attachmentIds) {
+        this.ctx.db.run(`UPDATE multiremi_attachments SET chat_session_id = ?, chat_message_id = ?
+          WHERE id = ? AND workspace_id = ? AND chat_session_id IS NULL AND chat_message_id IS NULL`,
+          [chatSessionId, messageId, attachmentId, workspaceId]);
+      }
+      if (steered) {
+        this.ctx.tasks().createTaskSteerMessage({ taskId: task.id, kind: "steer", content: text,
+          authorType: "external", authorId: sender.actorId, sourceChatMessageId: messageId });
+      }
       this.ctx.db.run(
         "UPDATE multiremi_chat_sessions SET latest_task_id = ?, updated_at = ? WHERE id = ?",
         task.id,
@@ -1119,6 +1218,7 @@ export class FeishuBotRepo {
     nowInput: string | Date = new Date(),
     supportsTaskStream = false,
     supportsNativeCot = false,
+    supportsAttachments = false,
   ): MultiremiFeishuBotOutboundDelivery | null {
     const now = nowInput instanceof Date ? nowInput : new Date(nowInput);
     if (!Number.isFinite(now.getTime())) throw new Error("now must be a valid date");
@@ -1138,10 +1238,11 @@ export class FeishuBotRepo {
          WHERE o.workspace_id = ? AND b.app_id = ?
            AND (o.task_id IS NULL OR ? = 1 OR o.body <> '')
            AND (? = 1 OR o.presentation_checkpoint IS NULL)
+           AND (? = 1 OR o.attachments IS NULL)
            AND ((o.status = 'pending' AND o.available_at <= ?)
              OR (o.status = 'sending' AND o.leased_until IS NOT NULL AND o.leased_until <= ?))
          ORDER BY o.created_at ASC, o.id ASC LIMIT 1`,
-      ).get(workspaceId, config.appId, supportsTaskStream ? 1 : 0, supportsNativeCot ? 1 : 0, nowIsoValue, nowIsoValue) as Row | null;
+      ).get(workspaceId, config.appId, supportsTaskStream ? 1 : 0, supportsNativeCot ? 1 : 0, supportsAttachments ? 1 : 0, nowIsoValue, nowIsoValue) as Row | null;
       if (!row) return null;
       let mention = parseOutboundMention(parseJson(row.mention_snapshot, null));
       if (supportsTaskStream && row.task_id && !row.mention_snapshot) {
@@ -1229,17 +1330,22 @@ export class FeishuBotRepo {
     attachmentId: string,
   ): MultiremiAttachment | null {
     const config = this.getConfig(workspaceId);
-    if (!config || config.runtimeId !== runtimeId) return null;
+    if (!config?.enabled || config.runtimeId !== runtimeId) return null;
     const delivery = this.ctx.db.query(
-      `SELECT body FROM multiremi_feishu_bot_outbound_deliveries
-       WHERE id = ? AND workspace_id = ? AND status = 'sending' AND claim_token = ?`,
-    ).get(deliveryId, workspaceId, claimToken) as Row | null;
+      `SELECT o.body, o.attachments FROM multiremi_feishu_bot_outbound_deliveries o
+       JOIN multiremi_feishu_bot_chat_bindings b ON b.id = o.binding_id
+       WHERE o.id = ? AND o.workspace_id = ? AND o.status = 'sending' AND o.claim_token = ?
+         AND o.leased_until > ? AND b.app_id = ?`,
+    ).get(deliveryId, workspaceId, claimToken, nowIso(), config.appId) as Row | null;
     if (!delivery) return null;
     const attachment = this.ctx.issues().getAttachment(attachmentId);
     if (!attachment || attachment.workspaceId !== workspaceId) return null;
+    const explicit = parseJson<MultiremiFeishuBotOutboundDelivery["attachments"]>(delivery.attachments, []) ?? [];
+    if (explicit.some(entry => entry.id === attachmentId)) return attachment;
     const referenced = findMarkdownImages(String(delivery.body ?? ""))
       .some((match) => match.source.kind === "attachment" && match.source.attachmentId === attachmentId);
-    return referenced ? attachment : null;
+    return referenced && attachment.contentType.toLowerCase().startsWith("image/")
+      && attachment.sizeBytes <= FEISHU_IMAGE_MAX_BYTES ? attachment : null;
   }
 
   reportOutbound(
@@ -1274,7 +1380,7 @@ export class FeishuBotRepo {
          SET external_message_id = COALESCE(?, external_message_id), leased_until = ?, updated_at = ?,
              presentation_checkpoint = COALESCE(?, presentation_checkpoint)
          WHERE id = ? AND workspace_id = ? AND status = 'sending' AND claim_token = ?
-           AND leased_until > ? AND task_id IS NOT NULL
+           AND leased_until > ? AND (task_id IS NOT NULL OR attachments IS NOT NULL)
            AND binding_id IN (SELECT id FROM multiremi_feishu_bot_chat_bindings WHERE app_id = ?)`,
         [cleanOptionalString(input.externalMessageId), new Date(now.getTime() + 120_000).toISOString(),
           now.toISOString(), input.presentation ? toJson(input.presentation) : null,
@@ -1284,7 +1390,7 @@ export class FeishuBotRepo {
     if (input.status === "sent") {
       return this.ctx.db.transaction(() => {
         const row = this.ctx.db.query(
-          `SELECT binding_id, chat_id, reply_to_message_id, task_id
+          `SELECT binding_id, chat_id, reply_to_message_id, task_id, attachments
            FROM multiremi_feishu_bot_outbound_deliveries
            WHERE id = ? AND workspace_id = ? AND status = 'sending' AND claim_token = ?`,
         ).get(deliveryId, workspaceId, input.claimToken) as Row | null;
@@ -1292,7 +1398,7 @@ export class FeishuBotRepo {
         const externalMessageId = cleanOptionalString(input.externalMessageId);
         // Only a standalone Issue topic seed establishes a new conversation
         // root. A Task result sent to a private chat must preserve its binding.
-        const seedsTopic = !row.task_id && !cleanOptionalString(row.reply_to_message_id);
+        const seedsTopic = !row.task_id && !row.attachments && !cleanOptionalString(row.reply_to_message_id);
         if (seedsTopic && !externalMessageId) return false;
         const sentAt = now.toISOString();
         const updated = this.ctx.db.run(
@@ -2021,7 +2127,7 @@ function humanRequestPushPrompt(
 
 function outboundDelivery(row: Row, claimToken: string): MultiremiFeishuBotOutboundDelivery {
   const id = String(row.id);
-  const bodyOrigin = row.task_id == null ? "issue" : "agent";
+  const bodyOrigin = row.task_id == null && !row.attachments ? "issue" : "agent";
   return {
     id,
     claimToken,
@@ -2037,6 +2143,7 @@ function outboundDelivery(row: Row, claimToken: string): MultiremiFeishuBotOutbo
     body_origin: bodyOrigin,
     idempotencyKey: id,
     idempotency_key: id,
+    ...(row.attachments ? { attachments: parseJson(row.attachments, []) } : {}),
   };
 }
 

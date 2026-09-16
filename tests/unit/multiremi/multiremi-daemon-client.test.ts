@@ -12,6 +12,84 @@ import {
 const originalFetch = globalThis.fetch;
 const temporaryRoots: string[] = [];
 
+describe("Chat attachment transport", () => {
+  it.each(["headers", "body"])("bounds a stalled attachment download while waiting for %s", async (phase) => {
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      if (phase === "headers") return rejectWhenAborted(init?.signal);
+      return new Response(new ReadableStream({ start(controller) {
+        init?.signal?.addEventListener("abort", () => controller.error(init.signal?.reason), { once: true });
+      } }));
+    }) as typeof fetch;
+    await expect(new MultiremiDaemonClient("https://remi.example", "daemon-test-token", { requestTimeoutMs: 25 })
+      .downloadTaskAttachment("att_1", "task-test-token")).rejects.toThrow();
+  });
+
+  it("advertises the binary delivery protocol and preserves attachment descriptors over heartbeat", async () => {
+    let payload: Record<string, any> = {};
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      payload = JSON.parse(String(init?.body));
+      return Response.json({ pending_feishu_outbound: {
+        id: "fbo_binary", claim_token: "lease", chat_id: "oc_1", body: "",
+        attachments: [{ id: "att_report", filename: "report.html", content_type: "text/html", size_bytes: 18 }],
+      } });
+    }) as typeof fetch;
+    const response = await new MultiremiDaemonClient("https://remi.example", "daemon-test-token")
+      .heartbeatRuntime("rt_1", undefined, undefined, false, true);
+    expect(payload.feishu_concierge_protocol).toBe(6);
+    expect(response.pending_feishu_outbound?.attachments).toMatchObject([
+      { id: "att_report", filename: "report.html", contentType: "text/html", sizeBytes: 18 },
+    ]);
+  });
+
+  it("uploads multipart bytes with runtime authority before submitting attachment IDs", async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      requests.push({ url: String(input), init });
+      return Response.json(requests.length === 1 ? { attachment: { id: "att_uploaded" } } : { taskId: "tsk_1" });
+    }) as typeof fetch;
+    const client = new MultiremiDaemonClient("https://remi.example", "daemon-test-token");
+    const attachment = await client.uploadFeishuBotAttachment("rt_1", {
+      revision: 3, externalSessionKey: "chat:oc_1", externalMessageId: "om_1",
+      fileName: "brief.pdf", contentType: "application/pdf", buffer: Buffer.from("pdf"),
+    });
+    await client.submitFeishuBotMessage("rt_1", {
+      revision: 3, externalSessionKey: "chat:oc_1", externalMessageId: "om_1",
+      text: "Read this", attachmentIds: [attachment.id],
+    });
+    expect(requests[0]!.url).toEndWith("/api/daemon/runtimes/rt_1/feishu-bot/attachments");
+    const form = requests[0]!.init!.body as FormData;
+    expect(form.get("external_session_key")).toBe("chat:oc_1");
+    expect(form.get("revision")).toBe("3");
+    expect(await (form.get("file") as File).text()).toBe("pdf");
+    expect(new Headers(requests[0]!.init!.headers).get("authorization")).toBe("Bearer daemon-test-token");
+    expect(new Headers(requests[0]!.init!.headers).has("content-type")).toBe(false);
+    expect(JSON.parse(String(requests[1]!.init!.body)).attachment_ids).toEqual(["att_uploaded"]);
+  });
+
+  it("downloads through scoped credentials and never follows external redirects", async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      requests.push({ url: String(input), init });
+      return requests.length === 3
+        ? new Response(null, { status: 302, headers: { location: "https://other.example/file" } })
+        : new Response("attachment bytes");
+    }) as typeof fetch;
+    const client = new MultiremiDaemonClient("https://remi.example", "daemon-test-token");
+    expect(await client.downloadTaskAttachment("att_1", "task-test-token")).toEqual(Buffer.from("attachment bytes"));
+    await client.downloadFeishuBotOutboundAttachment("rt_1", "fbo_1", "claim-test-token", "att_1");
+    await expect(client.downloadTaskAttachment("att_external", "task-test-token")).rejects.toThrow("302");
+    expect(requests[0]!.url).toBe("https://remi.example/api/attachments/att_1/download");
+    expect(new Headers(requests[0]!.init!.headers).get("authorization")).toBe("Bearer task-test-token");
+    const outboundHeaders = new Headers(requests[1]!.init!.headers);
+    expect(outboundHeaders.get("authorization")).toBe("Bearer daemon-test-token");
+    expect(outboundHeaders.get("X-Multiremi-Feishu-Claim-Token")).toBe("claim-test-token");
+    expect(requests.every(request => request.init?.redirect === "manual")).toBe(true);
+    expect(requests).toHaveLength(3);
+    await expect(client.downloadTaskAttachment("att_1", "")).rejects.toThrow("task credential");
+    expect(requests).toHaveLength(3);
+  });
+});
+
 async function readStreamingBody(body: unknown): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of body as AsyncIterable<Uint8Array>) chunks.push(Buffer.from(chunk));

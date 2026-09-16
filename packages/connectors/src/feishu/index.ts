@@ -6,11 +6,11 @@ import type { FeishuConfig } from "@shared/config.js";
 import type { FeishuSenderAuthorizer, GroupPolicy } from "./config.js";
 import type { AgentResponse, ProviderEvent } from "@shared/contracts/provider-types.js";
 import type { Connector, MessageHandler, StreamingHandler, TaskStreamingHandler, IncomingMessage, TaskStreamEvent, TaskStreamMeta } from "../base.js";
-import type { MediaAttachment } from "@shared/contracts/acp-protocol.js";
 import { createLogger } from "@shared/logger.js";
-import { mkdirSync, writeFileSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir, homedir } from "node:os";
+import { homedir } from "node:os";
+import { prepareIncomingFeishuMedia } from "./incoming-media.js";
 
 import {
   createLarkChannel,
@@ -26,7 +26,7 @@ import { createFeishuClient } from "./sdk.js";
 import { createAdapter } from "./sdk.js";
 import { sendMessageFeishu } from "./send.js";
 import type { HandleTaskStreamOpts } from "./channel.js";
-import { uploadImageFeishu } from "./media.js";
+import { sendAttachmentFeishu, uploadImageFeishu, type FeishuAttachmentSendInput } from "./media.js";
 import { createFeishuImageResolver } from "./outbound-images.js";
 import { rewriteMarkdownImages } from "@shared/feishu-markdown-images.js";
 import { readContextUsage } from "@shared/agent-execution.js";
@@ -153,6 +153,10 @@ export class FeishuConnector implements Connector {
     return { messageId: result.messageId };
   }
 
+  async sendProactiveAttachment(input: FeishuAttachmentSendInput): Promise<{ messageId: string }> {
+    return sendAttachmentFeishu(createFeishuClient(this._config), input);
+  }
+
   streamProactiveTask(chatId: string, sessionKey: string, stream: AsyncIterable<TaskStreamEvent>,
     meta: TaskStreamMeta, options: HandleTaskStreamOpts): Promise<{ messageId: string }> {
     return this._channel.handleTaskStream(chatId, sessionKey, stream, meta, options);
@@ -206,29 +210,7 @@ export class FeishuConnector implements Connector {
 
     const _log = log.child({ traceId: msg.messageId });
 
-    // Build IncomingMessage
-    const media: MediaAttachment[] = msg.media.map((m) => ({
-      buffer: m.buffer,
-      contentType: m.contentType ?? "application/octet-stream",
-      fileName: m.fileName,
-      mediaType: this._inferMediaType(m.placeholder),
-    }));
-
-    let text = msg.text;
-    for (const m of media) {
-      if (m.mediaType === "image") {
-        const feishuMedia = msg.media.find((fm) => fm.buffer === m.buffer);
-        const imageKey = feishuMedia?.imageKey;
-        if (imageKey) text += `\n{"image_key":"${imageKey}","message_id":"${msg.messageId}"}`;
-      } else if (m.mediaType !== "sticker") {
-        const dir = join(tmpdir(), "remi-media", msg.chatId.slice(0, 16));
-        mkdirSync(dir, { recursive: true });
-        const name = m.fileName ?? `${Date.now()}.bin`;
-        const filePath = join(dir, name);
-        writeFileSync(filePath, m.buffer);
-        text = text.replace(m.mediaType === "file" ? "<media:document>" : `<media:${m.mediaType}>`, `[文件已保存: ${filePath}]`);
-      }
-    }
+    const { text, media } = prepareIncomingFeishuMedia(msg);
 
     const incoming: IncomingMessage = {
       text,
@@ -385,14 +367,6 @@ export class FeishuConnector implements Connector {
       uploadImage: async (image) => (await uploadImageFeishu(client, image.buffer)).imageKey,
     });
     return rewriteMarkdownImages(text, resolveImage);
-  }
-
-  private _inferMediaType(placeholder: string): MediaAttachment["mediaType"] {
-    if (placeholder.includes("image")) return "image";
-    if (placeholder.includes("audio")) return "audio";
-    if (placeholder.includes("video")) return "video";
-    if (placeholder.includes("sticker")) return "sticker";
-    return "file";
   }
 
   private _formatStats(response: AgentResponse): string | null {

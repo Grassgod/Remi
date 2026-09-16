@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { attachmentIdsFromText } from "@multiremi/contracts/attachments.js";
+import { CHAT_ARTIFACT_DELIVERY_CONTRACT } from "@multiremi/contracts/artifact-delivery.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
 
 /** A repo the daemon pre-checked-out into the task workDir before the run. */
@@ -46,6 +47,9 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
 
   appendClaimContextSections(sections, task, mode);
   appendWorkspacePromptSection(sections, task, mode);
+  if (task.chatSessionId) {
+    sections.push("", "## Current Chat Attachment Delivery", CHAT_ARTIFACT_DELIVERY_CONTRACT);
+  }
   if (mode === "bootstrap") appendHomepageChatCliSection(sections, task);
   appendSessionContextSections(sections, task, mode, opts.sessionHistoryPaths);
 
@@ -568,6 +572,8 @@ interface PromptAttachment {
   filename: string;
   contentType: string;
   size: string;
+  localPath?: string;
+  localDownloadError?: string;
 }
 
 function issuePromptAttachments(issue: NonNullable<AgentTask["issue"]>): unknown[] {
@@ -587,12 +593,17 @@ function appendPromptAttachments(sections: string[], values: unknown[], includeH
   for (const value of values) sections.push(formatPromptAttachment(value));
 }
 
-function formatPromptAttachment(value: unknown): string {
+export function formatPromptAttachment(value: unknown): string {
   const attachment = normalizePromptAttachment(value);
   if (!attachment.id) return `- ${String(value)}`;
   return [
     `- id: ${attachment.id}; filename: ${attachment.filename}; content-type: ${attachment.contentType}; size: ${attachment.size}`,
-    `  Download: \`remi attachment download ${attachment.id} --output-dir <dir>\`, then use Read to inspect the local file.`,
+    ...(attachment.localPath
+      ? [`  Local path: ${JSON.stringify(attachment.localPath)}. Read this file directly.`]
+      : [
+          ...(attachment.localDownloadError ? [`  ${attachment.localDownloadError}.`] : []),
+          `  Download: \`remi attachment download ${attachment.id} --output-dir <dir>\`, then use Read to inspect the local file.`,
+        ]),
   ].join("\n");
 }
 
@@ -619,6 +630,8 @@ function normalizePromptAttachment(value: unknown): PromptAttachment {
     filename: filename || "unavailable",
     contentType: contentType || "unavailable",
     size,
+    localPath: typeof attachment.localPath === "string" ? attachment.localPath : undefined,
+    localDownloadError: typeof attachment.localDownloadError === "string" ? attachment.localDownloadError : undefined,
   };
 }
 

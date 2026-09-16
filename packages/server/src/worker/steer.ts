@@ -2,9 +2,33 @@
 // server for unconsumed steer messages, the injection prompt the run loop
 // sends into the live provider session, and multi-turn usage accumulation.
 import type { MultiremiTaskSteerMessage, TaskUsageEntry } from "@multiremi/contracts/types.js";
+import { materializeChatAttachments } from "@daemon/agent-runtime/workspace/chat-attachments.js";
+import { formatPromptAttachment } from "@daemon/agent-runtime/prompts/ephemeral.js";
 
 export const DEFAULT_STEER_POLL_MS = 2500;
 export const DEFAULT_FORCE_ANSWER_GRACE_MS = 3 * 60 * 1000;
+
+interface PreparedTaskSteerMessage extends MultiremiTaskSteerMessage {
+  localAttachments?: unknown[];
+}
+
+/** Only hydrate the server-scoped descriptors; arbitrary steer text cannot select a file. */
+export async function materializeTaskSteerAttachments(
+  messages: MultiremiTaskSteerMessage[],
+  workDir: string,
+  taskId: string,
+  download: (attachmentId: string) => Promise<Buffer>,
+  signal?: AbortSignal,
+): Promise<PreparedTaskSteerMessage[]> {
+  const prepared: PreparedTaskSteerMessage[] = [];
+  for (const message of messages) {
+    prepared.push(message.attachments?.length ? {
+      ...message,
+      localAttachments: await materializeChatAttachments(workDir, taskId, message.attachments, download, signal),
+    } : message);
+  }
+  return prepared;
+}
 
 export interface TaskSteerSource {
   listPendingTaskSteerMessages(taskId: string): Promise<MultiremiTaskSteerMessage[]>;
@@ -109,14 +133,19 @@ export class TaskSteerFeed {
  * reframe: apply the user's mid-run directive and keep going — or, for
  * force-answer, stop and deliver.
  */
-export function buildSteerInjectionPrompt(messages: MultiremiTaskSteerMessage[]): string {
+export function buildSteerInjectionPrompt(messages: PreparedTaskSteerMessage[]): string {
   const steers = messages.filter((m) => m.kind !== "force_answer");
   const force = messages.filter((m) => m.kind === "force_answer");
   const parts: string[] = [];
   if (steers.length) {
     parts.push(
       "[Mid-run user steering] The user sent new instructions while this task was running:",
-      ...steers.map((m) => `- ${m.content}`),
+      ...steers.map((m) => [
+        `- ${m.content}`,
+        ...((m.localAttachments ?? m.attachments)?.length
+          ? ["Attachments:", ...(m.localAttachments ?? m.attachments)!.map(formatPromptAttachment)]
+          : []),
+      ].join("\n")),
     );
   }
   if (force.length) {

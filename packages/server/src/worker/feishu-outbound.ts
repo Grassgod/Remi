@@ -26,7 +26,7 @@ export async function deliverFeishuOutbound(
   };
   try {
     signal.throwIfAborted();
-    if (delivery.taskId) scheduleRenewal();
+    if (delivery.taskId || delivery.attachments?.length) scheduleRenewal();
     const sent = await options.send({
       signal,
       prepareMention: options.prepareMention,

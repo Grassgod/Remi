@@ -50,6 +50,8 @@ describe("native collaboration CLI contracts", () => {
         expect(form.has("chat_id")).toBe(false);
         const files = form.getAll("file") as File[];
         expect(files.map((file) => file.name)).toEqual(["report.html", "chart.png"]);
+        // Multipart parsers may add a charset parameter to text media types.
+        expect(files.map((file) => file.type.split(";")[0])).toEqual(["text/html", "image/png"]);
         expect(await files[0]!.text()).toBe("<html>Report</html>");
         return Response.json({ attachments: [{ id: "att_report" }, { id: "att_chart" }], delivery_ids: ["delivery_1", "delivery_2"] });
       });
@@ -67,7 +69,7 @@ describe("native collaboration CLI contracts", () => {
     const dir = await mkdtemp(resolve(tmpdir(), "chat-cli-"));
     const spec = specById("chat.attachment.send");
     let requests = 0;
-    globalThis.fetch = (async () => { requests++; throw new Error("unexpected network"); }) as typeof fetch;
+    globalThis.fetch = (async () => { requests++; throw new Error("unexpected network"); }) as unknown as typeof fetch;
     try {
       const large = resolve(dir, "large.pdf");
       await writeFile(large, "");

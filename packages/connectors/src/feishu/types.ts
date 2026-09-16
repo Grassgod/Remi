@@ -27,6 +27,8 @@ export type FeishuMediaInfo = {
   placeholder: string;
   /** Original Feishu image_key (for images). */
   imageKey?: string;
+  /** Failed downloads stay visible in the incoming message instead of disappearing. */
+  rejectedReason?: "too_large" | "download_failed";
 };
 
 /** Raw Feishu message event from WebSocket / EventDispatcher. */

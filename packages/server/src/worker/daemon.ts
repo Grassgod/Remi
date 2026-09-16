@@ -33,6 +33,7 @@ import {
   type MultiremiDaemonSessionArchiveWire,
   type MultiremiRelayEngineWire,
   type MultiremiRelayWire,
+  type UploadFeishuBotAttachmentInput,
 } from "./client.js";
 import { createEventMapper, responseToUsage } from "./acp-event-mapper.js";
 import { FeishuConciergeSupervisor, type FeishuConciergeHost } from "./feishu-concierge.js";
@@ -45,6 +46,7 @@ import {
 } from "@connectors/feishu/outbound-images.js";
 import {
   buildSteerInjectionPrompt,
+  materializeTaskSteerAttachments,
   DEFAULT_FORCE_ANSWER_GRACE_MS,
   DEFAULT_STEER_POLL_MS,
   mergeTaskUsageEntries,
@@ -102,6 +104,7 @@ import {
   type IssueSessionProviderHome,
 } from "@daemon/agent-runtime/workspace/session-home.js";
 import { prepareIssueWikiWorkspace } from "@daemon/agent-runtime/workspace/wiki.js";
+import { materializeChatAttachments } from "@daemon/agent-runtime/workspace/chat-attachments.js";
 import { cleanProcessEnv } from "@daemon/agent-runtime/env/injector.js";
 import { mergeCodexSessionConfig } from "@daemon/agent-runtime/relay-sync.js";
 import { AgentRuntime } from "@daemon/agent-runtime/runtime.js";
@@ -916,6 +919,14 @@ export class MultiremiDaemon {
 
   submitFeishuBotMessage(input: SubmitFeishuBotMessageInput): Promise<SubmitFeishuBotMessageResult> {
     return this.client.submitFeishuBotMessage(this.options.runtimeId!, input);
+  }
+
+  uploadFeishuBotAttachment(input: UploadFeishuBotAttachmentInput): Promise<{ id: string }> {
+    return this.client.uploadFeishuBotAttachment(this.options.runtimeId!, input);
+  }
+
+  downloadFeishuBotOutboundAttachment(deliveryId: string, claimToken: string, attachmentId: string): Promise<Buffer> {
+    return this.client.downloadFeishuBotOutboundAttachment(this.options.runtimeId!, deliveryId, claimToken, attachmentId);
   }
 
   listFeishuBotTaskMessages(taskId: string, sinceSeq: number): Promise<MultiremiTaskMessage[]> {
@@ -3394,6 +3405,15 @@ export class MultiremiDaemon {
       await prepareIssueWikiWorkspace(workDir, task);
     }
     this.assertWorkspaceRootOwner();
+    if (task.chatMessageAttachments?.length) {
+      task.chatMessageAttachments = await materializeChatAttachments(
+        workDir,
+        task.id,
+        task.chatMessageAttachments,
+        (id) => this.client.downloadTaskAttachment(id, task.authToken ?? "", signal),
+        signal,
+      );
+    }
     try {
       writeTaskContext(workDir, task);
       writeTaskGcContext(workDir, task, { localDirectory: resolvedWorkDir.localDirectory });
@@ -3523,7 +3543,11 @@ export class MultiremiDaemon {
         if (messages.some((m) => m.kind === "force_answer") && forceAnswerDeadline == null) {
           forceAnswerDeadline = Date.now() + Math.max(0, this.options.forceAnswerGraceMs);
         }
-        prompt = buildSteerInjectionPrompt(messages);
+        const preparedMessages = await materializeTaskSteerAttachments(
+          messages, workDir, task.id,
+          (id) => this.client.downloadTaskAttachment(id, task.authToken ?? "", signal), signal,
+        );
+        prompt = buildSteerInjectionPrompt(preparedMessages);
         await recordSteerBatch(messages, true);
         log.info(`Injected ${messages.length} steer message(s) into task ${task.id}`);
       };

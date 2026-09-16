@@ -102,7 +102,7 @@ export function renderResource(invocation: CommandInvocation, value: unknown, co
     rows: (input) => resourceRows(input, collectionKeys),
     columns: [
       { header: "ID", value: (row) => scalar(row.id) ?? "-", maxWidth: 28 },
-      { header: "NAME", value: (row) => scalar(row.name) ?? scalar(row.title) ?? scalar(row.slug) ?? "-", maxWidth: 48 },
+      { header: "NAME", value: (row) => scalar(row.name) ?? scalar(row.title) ?? scalar(row.slug) ?? scalar(row.filename) ?? "-", maxWidth: 48 },
       { header: "STATUS", value: (row) => scalar(row.status) ?? scalar(row.role) ?? scalar(row.kind) ?? "-", maxWidth: 24 },
       { header: "DETAIL", value: (row) => scalar(row.email) ?? scalar(row.url) ?? scalar(row.description) ?? "-", maxWidth: 72 },
     ],
