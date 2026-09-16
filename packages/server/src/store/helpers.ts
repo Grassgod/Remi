@@ -2,6 +2,10 @@
 // Extracted verbatim from store.ts so store.ts and repos/*.ts import one copy.
 import type { MultiremiTaskStatus, TaskUsageEntry } from "@multiremi/contracts/types.js";
 
+// One-time invalidation of pre-MUL-301 in-flight private Chat executions.
+// This is deliberately not a valid capability hash and must never be inherited.
+export const CHAT_ISSUE_DECOUPLED_FINGERPRINT = "chat-issue-decoupled";
+
 const TERMINAL_STATUSES: MultiremiTaskStatus[] = ["completed", "failed", "cancelled"];
 export const ACTIVE_TASK_STATUSES: readonly MultiremiTaskStatus[] = [
   "queued",

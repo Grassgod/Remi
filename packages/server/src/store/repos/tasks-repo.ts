@@ -7,6 +7,7 @@ import { createId, nowIso } from "@multiremi/ids.js";
 import { canonicalJson } from "@multiremi/agent-plugins/import.js";
 import {
   ACTIVE_TASK_STATUSES,
+  CHAT_ISSUE_DECOUPLED_FINGERPRINT,
   cleanOptionalString,
   daemonRuntimeId,
   isActiveTaskStatus,
@@ -184,6 +185,12 @@ export class TaskSteerConflictError extends Error {}
 
 /** Ordinary Chat cannot opt into Issue execution; a caller input error, not a server failure. */
 export class ChatIssueTaskConflictError extends Error {}
+
+class InvalidChatTaskDestinationError extends ChatIssueTaskConflictError {
+  constructor(readonly taskId: string) {
+    super(`Chat task destination no longer matches its Issue: ${taskId}`);
+  }
+}
 
 /**
  * completeTask refused because unconsumed steer messages exist. The daemon
@@ -752,17 +759,52 @@ export class TasksRepo {
     return this.withTaskAutopilotRun(toTask(rows[0]!));
   }
 
+  /** Live transport provenance, independent of migration/audit records. A
+   * historical user turn may be detached and run cold; a proactive Issue wake
+   * has no meaning once its exact destination has changed. */
+  getTaskChatExecutionKind(task: MultiremiTask): "ordinary" | "topic" {
+    if (!task.chatSessionId) return "ordinary";
+    const invalid = () => { throw new InvalidChatTaskDestinationError(task.id); };
+    if (this.getTask(task.id)?.status === "cancelled") return invalid();
+    const chat = this.ctx.chat().getChatSession(task.chatSessionId);
+    if (!chat || chat.workspaceId !== task.workspaceId || chat.agentId !== task.agentId) return invalid();
+    const bindings = this.ctx.db.query(
+      "SELECT id, workspace_id, agent_id, chat_session_id, issue_id FROM multiremi_feishu_bot_chat_bindings WHERE chat_session_id = ?",
+    ).all(task.chatSessionId) as Row[];
+    const matches = (binding: Row | undefined): boolean => !!binding && !!task.issueId
+      && binding.workspace_id === task.workspaceId && binding.agent_id === task.agentId
+      && binding.chat_session_id === task.chatSessionId && binding.issue_id === task.issueId;
+    const pushes = this.ctx.db.query(`
+      SELECT binding_id, workspace_id, issue_id FROM multiremi_feishu_bot_round_pushes
+        WHERE wake_task_id = ? AND delivery_mode = 'proactive'
+      UNION ALL
+      SELECT binding_id, workspace_id, issue_id FROM multiremi_feishu_bot_human_request_pushes
+        WHERE wake_task_id = ?`).all(task.id, task.id) as Row[];
+    if (pushes.length) {
+      if (task.status === "cancelled" || !task.issueId || pushes.some((push) =>
+        push.issue_id !== task.issueId || push.workspace_id !== task.workspaceId
+        || !matches(bindings.find((binding) => binding.id === push.binding_id)))) return invalid();
+    } else if (!task.issueId || !bindings.some((binding) => binding.issue_id != null)) {
+      return "ordinary";
+    }
+    if (!bindings.length || !bindings.every(matches)) return invalid();
+    const issue = this.ctx.issues().getIssue(task.issueId!);
+    if (!issue || issue.workspaceId !== task.workspaceId) return invalid();
+    return "topic";
+  }
+
   getTaskWithAgent(id: string): MultiremiTaskWithAgent | null {
     let task = this.getTask(id);
     if (!task) return null;
+    if (task.executionFingerprint === CHAT_ISSUE_DECOUPLED_FINGERPRINT) task = { ...task, sessionId: null };
     // Retained task audits may still carry a pre-MUL-301 private Chat binding.
     // Never let that old association re-enter a daemon claim or eager checkout.
-    if (task.chatSessionId && !this.ctx.feishuBot().getFeishuIssueIdForChatSession(task.chatSessionId)) {
+    if (task.chatSessionId && this.getTaskChatExecutionKind(task) === "ordinary") {
       task = {
         ...task,
         // A stale dispatch can bypass queued affinity refresh. Its provider
         // session still contains the detached Issue prompt and must start cold.
-        sessionId: task.issueId || task.issueSessionId ? null : task.sessionId,
+        sessionId: task.issueId || task.issueSessionId || task.executionFingerprint === CHAT_ISSUE_DECOUPLED_FINGERPRINT ? null : task.sessionId,
         issueId: null,
         issueSessionId: null,
         issueSessionGeneration: null,
@@ -1040,6 +1082,17 @@ export class TasksRepo {
           excludedAgentIds.add(error.agentId);
           unsupported = error;
           continue;
+        }
+        // A binding can change after migration. Reject stale Issue work before
+        // dispatch, then retire it through the normal token-revoking terminal
+        // path so it cannot block later user turns in the same queue.
+        if (error instanceof InvalidChatTaskDestinationError) {
+          const rejected = this.getTask(error.taskId);
+          if (rejected && ["queued", "dispatched"].includes(rejected.status)) {
+            this.cancelTask(rejected.id);
+            continue;
+          }
+          return null;
         }
         // Plugin readiness drift leaves the task queued for the next reconcile.
         if (error instanceof AgentPluginReadinessChangedError) return null;
@@ -1545,6 +1598,8 @@ export class TasksRepo {
 
   startTask(taskId: string): MultiremiTask {
     const task = this.ctx.db.transaction(() => {
+      const current = this.getTask(taskId);
+      if (current) this.getTaskChatExecutionKind(current);
       const now = nowIso();
       const result = this.ctx.db.run(
         `UPDATE multiremi_tasks
@@ -1986,12 +2041,13 @@ export class TasksRepo {
     workDir?: string | null;
   }): MultiremiTask {
     const initial = this.getTask(taskId);
-    if (!initial) throw new Error(`Task not found or terminal: ${taskId}`);
+    if (!initial || !isActiveTaskStatus(initial.status)) throw new Error(`Task not found or terminal: ${taskId}`);
     const terminal = this.ctx.db.transaction(() => {
       this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
       const current = this.getTask(taskId);
-      if (!current || current.workspaceId !== initial.workspaceId) throw new Error(`Task not found or terminal: ${taskId}`);
+      if (!current || !isActiveTaskStatus(current.status) || current.workspaceId !== initial.workspaceId) throw new Error(`Task not found or terminal: ${taskId}`);
       this.assertTaskRuntimeAvailableWithinWorkspaceLock(current);
+      this.getTaskChatExecutionKind(current);
       this.lockTaskIssueSessionsWithinWorkspaceLock([current]);
       // Steer barrier: an accepted-but-unconsumed steer wins over completion.
       // Same transaction as the status flip, so either the steer insert saw a
@@ -2042,12 +2098,13 @@ export class TasksRepo {
     failure_reason?: string | null;
   }): MultiremiTask {
     const initial = this.getTask(taskId);
-    if (!initial) throw new Error(`Task not found or terminal: ${taskId}`);
+    if (!initial || !isActiveTaskStatus(initial.status)) throw new Error(`Task not found or terminal: ${taskId}`);
     const terminal = this.ctx.db.transaction(() => {
       this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
       const current = this.getTask(taskId);
-      if (!current || current.workspaceId !== initial.workspaceId) throw new Error(`Task not found or terminal: ${taskId}`);
+      if (!current || !isActiveTaskStatus(current.status) || current.workspaceId !== initial.workspaceId) throw new Error(`Task not found or terminal: ${taskId}`);
       this.assertTaskRuntimeAvailableWithinWorkspaceLock(current);
+      this.getTaskChatExecutionKind(current);
       this.lockTaskIssueSessionsWithinWorkspaceLock([current]);
       const now = nowIso();
       const failureReason = cleanOptionalString(input.failureReason ?? input.failure_reason) ?? "agent_error";
@@ -2291,7 +2348,9 @@ export class TasksRepo {
       && this.ctx.runtimes().runtimeCanRunAgent(parentRuntime, agent);
     const detachedChatIssue = !!parent.chatSessionId && !!parent.issueId
       && this.ctx.feishuBot().getFeishuIssueIdForChatSession(parent.chatSessionId) !== parent.issueId;
-    const resumeSafe = !detachedChatIssue && !RESUME_UNSAFE_FAILURE_REASONS.has(parent.failureReason) && parentRuntimeUsable;
+    const invalidatedChatLineage = parent.executionFingerprint === CHAT_ISSUE_DECOUPLED_FINGERPRINT;
+    const resumeSafe = !detachedChatIssue && !invalidatedChatLineage
+      && !RESUME_UNSAFE_FAILURE_REASONS.has(parent.failureReason) && parentRuntimeUsable;
     // If the Agent changed provider before this failure was reported, the old
     // provider/plugin snapshot can no longer be executed with the Agent's
     // current native config. Treat this as a fresh retry. When the retry was
@@ -2301,7 +2360,7 @@ export class TasksRepo {
     // Runtime credentials cannot follow a retry to another machine. If the
     // original Runtime no longer accepts this Agent, resolve a fresh snapshot
     // when an eligible Runtime claims the retry.
-    const inheritExecutionSnapshot = agent != null && parent.provider === agent.provider
+    const inheritExecutionSnapshot = !invalidatedChatLineage && agent != null && parent.provider === agent.provider
       && (!hasRuntimeProfile || parentRuntimeUsable);
     if (resumeSafe && parent.issueSessionId) this.promoteSessionAgentLane(parent);
     const retryInput: CreateTaskInput = {
@@ -2825,6 +2884,17 @@ export class TasksRepo {
     replacementPlanned = false,
   ): TaskTerminalFollowUps {
     const now = nowIso();
+    // Runtime recovery also invokes this hook directly. Reject stale transport
+    // results before retry, Chat append, or provider promotion can occur.
+    if (status !== "cancelled") {
+      try {
+        this.getTaskChatExecutionKind(task);
+      } catch (error) {
+        if (!(error instanceof InvalidChatTaskDestinationError)) throw error;
+        this.ctx.accessTokens().revokeTaskAccessTokens(task.id);
+        return { retry: null, delegationReturns: [], roundPushTasks: [] };
+      }
+    }
     if (
       status === "failed"
       && task.chatSessionId
@@ -2886,7 +2956,8 @@ export class TasksRepo {
       // the old Issue prompt, so do not promote that session back into Chat.
       const detachedChatIssue = task.issueId
         && this.ctx.feishuBot().getFeishuIssueIdForChatSession(task.chatSessionId) !== task.issueId;
-      const promoteSession = !detachedChatIssue &&
+      const promoteSession = !detachedChatIssue
+        && task.executionFingerprint !== CHAT_ISSUE_DECOUPLED_FINGERPRINT &&
         (status !== "failed" || !RESUME_UNSAFE_FAILURE_REASONS.has(task.failureReason ?? "")) &&
         !!cleanOptionalString(task.sessionId);
       const runtimeProvider = task.runtimeId ? this.ctx.runtimes().getRuntime(task.runtimeId)?.provider : null;

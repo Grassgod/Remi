@@ -1,4 +1,5 @@
 import { expect } from "bun:test";
+import { AccessTokensRepo } from "@multiremi/store/repos/access-tokens-repo.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
@@ -238,27 +239,29 @@ export function seedLegacyChatWakeFixture(db: SqlDatabase): void {
 export function assertLegacyChatWakeSettlement(db: SqlDatabase): void {
   for (const name of WAKE_FIXTURE_NAMES) {
     const preserved = name === "group_without_thread";
+    // This retained topic has an old A→B dispatched wake, so its provider is dirty.
     expect(db.query("SELECT session_id FROM multiremi_chat_sessions WHERE id = ?").get(`chat_classification_${name}`))
-      .toEqual({ session_id: preserved ? "provider-legacy" : null });
+      .toEqual({ session_id: null });
     for (const source of ["round", "human", "inbound"]) {
       for (const status of ["queued", "dispatched", "running", "completed"]) {
         const id = `wake_${name}_${source}_${status}`;
-        const cancelled = !preserved && source !== "inbound" && ["queued", "dispatched"].includes(status);
+        const destinationMatches = preserved && status !== "dispatched";
+        const cancelled = !destinationMatches && source !== "inbound" && ["queued", "dispatched"].includes(status);
         const task = db.query("SELECT status, cancelled_at, completed_at, prompt FROM multiremi_tasks WHERE id = ?").get(id);
         expect(task.status).toBe(cancelled ? "cancelled" : status);
         expect(task.prompt).toBe(source === "inbound" ? "Real user question" : "PRIVATE_ISSUE_WAKE_SENTINEL");
-        if (!preserved && ["queued", "dispatched"].includes(status)) {
+        if (["queued", "dispatched"].includes(status)) {
           expect(db.query("SELECT issue_id, session_id FROM multiremi_tasks WHERE id = ?").get(id))
-            .toEqual({ issue_id: null, session_id: null });
+            .toEqual({ issue_id: cancelled || !preserved ? null : status === "dispatched" ? "iss_chat_migration" : `iss_classification_${name}`, session_id: null });
         }
         if (cancelled) {
           expect(Number.isFinite(Date.parse(task.cancelled_at))).toBe(true);
           expect(task.completed_at).toBe(task.cancelled_at);
         }
         const outbound = db.query("SELECT id FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(`out_${id}`);
-        expect(Boolean(outbound)).toBe(preserved || source === "inbound" || status === "completed");
+        expect(Boolean(outbound)).toBe(destinationMatches || source === "inbound" || status === "completed");
         expect(Boolean(db.query("SELECT id FROM multiremi_task_steer_messages WHERE id = ?").get(`steer_${id}_system`)))
-          .toBe(preserved || source === "human");
+          .toBe(destinationMatches || source === "human");
         expect(db.query("SELECT content FROM multiremi_task_steer_messages WHERE id = ?").get(`steer_${id}_user`))
           .toEqual({ content: "User clarification" });
       }
@@ -274,9 +277,11 @@ export function assertLegacyChatWakeSettlement(db: SqlDatabase): void {
 export function assertCancelledLegacyWakesCannotRun(db: SqlDatabase, store = new MultiremiStore(db)): void {
   const chatId = "chat_classification_p2p_thread_and_key";
   const before = store.listChatMessages(chatId);
+  for (const name of ["p2p_thread_and_key", "group_without_thread"]) {
   for (const source of ["round", "human"]) {
     for (const status of ["queued", "dispatched"]) {
-      const id = `wake_p2p_thread_and_key_${source}_${status}`;
+      if (name === "group_without_thread" && status !== "dispatched") continue;
+      const id = `wake_${name}_${source}_${status}`;
       // Simulate a daemon that already consumed steering: cancellation itself
       // must reject completion, independently of the pending-steer guard.
       db.run("UPDATE multiremi_task_steer_messages SET consumed_at = ? WHERE task_id = ?", [new Date().toISOString(), id]);
@@ -286,6 +291,7 @@ export function assertCancelledLegacyWakesCannotRun(db: SqlDatabase, store = new
         .toThrow("Task not found or terminal");
       expect(store.getTask(id)?.status).toBe("cancelled");
     }
+  }
   }
   expect(store.listChatMessages(chatId)).toEqual(before);
   expect(store.getChatSession(chatId)?.sessionId).toBeNull();
@@ -322,4 +328,158 @@ export function assertLegacyChatWakeRollback(db: SqlDatabase): void {
   expect((db.query("PRAGMA table_info(multiremi_chat_sessions)").all() as Array<{ name: string }>).map((column) => column.name))
     .toContain("issue_id");
   expect(Number(db.query("SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = ?").get(CHAT_ISSUE_MIGRATION).count)).toBe(0);
+}
+
+interface MigrationTokenFixture { token: string; taskId: string; id: string }
+
+export async function mintLegacyWakeTokens(db: SqlDatabase): Promise<MigrationTokenFixture[]> {
+  const tokens = new AccessTokensRepo(db);
+  const result: MigrationTokenFixture[] = [];
+  const tasks = db.query(`SELECT id, agent_id, workspace_id FROM multiremi_tasks
+    WHERE id LIKE 'wake_%' AND status IN ('queued', 'dispatched')`).all() as Array<{
+      id: string; agent_id: string; workspace_id: string;
+    }>;
+  for (const task of tasks) {
+    const token = await tokens.createTaskAccessToken({ id: task.id, agentId: task.agent_id, workspaceId: task.workspace_id }, "local");
+    expect(await tokens.verifyAccessToken(token.token)).not.toBeNull();
+    result.push({ token: token.token, taskId: task.id, id: token.id });
+  }
+  return result;
+}
+
+export async function assertLegacyWakeTokens(db: SqlDatabase, tokens: MigrationTokenFixture[], rolledBack = false): Promise<void> {
+  const repo = new AccessTokensRepo(db);
+  for (const token of tokens) {
+    const cancelled = db.query("SELECT status FROM multiremi_tasks WHERE id = ?").get(token.taskId).status === "cancelled";
+    if (cancelled && !rolledBack) {
+      expect(await repo.verifyAccessToken(token.token)).toBeNull();
+      expect(Number.isFinite(Date.parse(repo.getAccessToken(token.id)!.revokedAt!))).toBe(true);
+    } else {
+      expect(await repo.verifyAccessToken(token.token)).not.toBeNull();
+      expect(repo.getAccessToken(token.id)!.revokedAt).toBeNull();
+    }
+  }
+}
+
+interface WakeInvariantCase { name: string; binding: string | null | undefined; push: string | null; task: string | null; identity?: string }
+
+// Every equality class of binding × push × task ownership. NULL push means no
+// push row: push.issue_id is NOT NULL in both production schemas.
+export const WAKE_INVARIANT_CASES: WakeInvariantCase[] = [
+  ...[undefined, null, "A", "B"].flatMap((binding) => [null, "A", "B"].flatMap((push) => [null, "A", "B"].map((task) => ({
+    name: `${binding === undefined ? "missing" : binding ?? "null"}_${push ?? "no_push"}_${task ?? "null"}`, binding, push, task,
+  })))),
+  ...["workspace", "agent", "chat", "issue_workspace"].map((identity) => ({
+    name: `identity_${identity}`, binding: "A", push: "A", task: "A", identity,
+  })),
+];
+
+export function seedWakeInvariantMatrix(db: SqlDatabase): void {
+  const now = "2026-09-03T00:00:00.000Z";
+  for (const issue of ["A", "B"]) db.run(`INSERT INTO multiremi_issues
+    (id, issue_key, title, status, created_at, updated_at) VALUES (?, ?, 'Invariant fixture', 'todo', ?, ?)`, [`iss_matrix_${issue}`, `MATRIX-${issue}`, now, now]);
+  const issue = (value: string | null | undefined) => value ? `iss_matrix_${value}` : null;
+  for (const entry of WAKE_INVARIANT_CASES) {
+    const chat = `chat_matrix_${entry.name}`;
+    const binding = `fcb_${chat}`;
+    db.run(`INSERT INTO multiremi_chat_sessions
+      (id, agent_id, issue_id, title, session_id, session_provider, session_execution_fingerprint,
+       session_runtime_id, created_at, updated_at)
+      VALUES (?, 'agt_chat_migration', ?, 'Matrix', 'old-provider', 'codex', 'old-fingerprint', 'old-runtime', ?, ?)`,
+    [chat, issue(entry.binding), now, now]);
+    if (entry.binding !== undefined) {
+      db.run(`INSERT INTO multiremi_feishu_bot_chat_bindings
+        (id, workspace_id, app_id, agent_id, external_session_key, chat_session_id, chat_id, issue_id, created_at, updated_at)
+        VALUES (?, ?, 'cli_matrix', ?, ?, ?, ?, ?, ?, ?)`,
+      [binding, entry.identity === "workspace" ? "wrong_workspace" : "local",
+        entry.identity === "agent" ? "wrong_agent" : "agt_chat_migration", chat,
+        entry.identity === "chat" ? "chat_matrix_missing_destination" : chat, `oc_${chat}`, issue(entry.binding), now, now]);
+      if (entry.identity === "issue_workspace") {
+        db.run(`INSERT INTO multiremi_issues (id, workspace_id, title, status, created_at, updated_at)
+          VALUES ('iss_matrix_cross_workspace', 'wrong_workspace', 'Wrong workspace', 'todo', ?, ?)`, [now, now]);
+        db.run("UPDATE multiremi_feishu_bot_chat_bindings SET issue_id = 'iss_matrix_cross_workspace' WHERE id = ?", [binding]);
+      }
+    }
+    for (const status of ["queued", "dispatched"]) {
+      const task = `wake_matrix_${entry.name}_${status}`;
+      db.run(`INSERT INTO multiremi_tasks
+        (id, workspace_id, agent_id, issue_id, chat_session_id, prompt, status, session_id, created_at, updated_at)
+        VALUES (?, 'local', 'agt_chat_migration', ?, ?, ?, ?, 'old-task-provider', ?, ?)`,
+      [task, issue(entry.task), chat, entry.push ? "PRIVATE_MATRIX_WAKE" : "Ordinary user question", status, now, now]);
+      if (entry.push) {
+        db.run(`INSERT INTO multiremi_feishu_bot_round_pushes
+          (id, workspace_id, binding_id, issue_id, leader_task_id, wake_task_id, delivery_mode, created_at, updated_at)
+          VALUES (?, 'local', ?, ?, ?, ?, 'proactive', ?, ?)`, [task, binding, issue(entry.push), task, task, now, now]);
+        db.run(`INSERT INTO multiremi_feishu_bot_outbound_deliveries
+          (id, workspace_id, binding_id, task_id, chat_id, body, status, available_at, created_at, updated_at)
+          VALUES (?, 'local', ?, ?, ?, 'PRIVATE_MATRIX_WAKE', 'pending', ?, ?, ?)`, [`out_${task}`, binding, task, chat, now, now, now]);
+        db.run(`INSERT INTO multiremi_task_steer_messages (id, task_id, author_type, kind, content, created_at)
+          VALUES (?, ?, 'system', 'steer', 'The responsible agent completed a work round for PRIVATE_MATRIX_WAKE.', ?)`, [`steer_${task}`, task, now]);
+      }
+    }
+  }
+  // An inbound user task can carry a current A notification and stale B
+  // notification simultaneously. Only B is settled; user work and A survive.
+  for (const status of ["queued", "dispatched"]) {
+    const task = `wake_matrix_A_no_push_A_${status}`;
+    for (const issue of ["A", "B"]) {
+      const push = `mixed_round_${issue}_${status}`;
+      db.run(`INSERT INTO multiremi_feishu_bot_round_pushes
+        (id, workspace_id, binding_id, issue_id, leader_task_id, wake_task_id, delivery_mode, created_at, updated_at)
+        VALUES (?, 'local', 'fcb_chat_matrix_A_no_push_A', ?, ?, ?, 'inbound', ?, ?)`,
+      [push, `iss_matrix_${issue}`, push, task, now, now]);
+      db.run(`INSERT INTO multiremi_task_steer_messages (id, task_id, author_type, kind, content, created_at)
+        VALUES (?, ?, 'system', 'steer', ?, ?)`, [push, task,
+        `The responsible agent completed a work round for MATRIX-${issue} - notification.`, now]);
+    }
+  }
+  // Partial/no-pointer ordinary Chats must cold-start too; directory ownership
+  // survives independently of whether a session was previously resumable.
+  for (const pointers of ["none", "session", "provider", "fingerprint", "runtime", "all"]) {
+    const chat = `chat_matrix_pointers_${pointers}`;
+    db.run(`INSERT INTO multiremi_chat_sessions
+      (id, agent_id, title, session_id, session_provider, session_execution_fingerprint, session_runtime_id, work_dir, created_at, updated_at)
+      VALUES (?, 'agt_chat_migration', 'Pointers', ?, ?, ?, ?, ?, ?, ?)`, [chat,
+      ["session", "all"].includes(pointers) ? "old-provider" : null,
+      ["provider", "all"].includes(pointers) ? "codex" : null,
+      ["fingerprint", "all"].includes(pointers) ? "old-fingerprint" : null,
+      ["runtime", "all"].includes(pointers) ? "old-runtime" : null,
+      pointers === "all" ? "/work/keep" : null, now, now]);
+  }
+}
+
+export function assertWakeInvariantMatrix(db: SqlDatabase): void {
+  for (const entry of WAKE_INVARIANT_CASES) {
+    const matched = Boolean(entry.binding && entry.binding === entry.push && entry.binding === entry.task && !entry.identity);
+    const ordinary = !entry.binding || Boolean(entry.identity);
+    const dirty = ordinary || entry.name === "A_no_push_A" || Boolean(entry.push && !matched) || Boolean(entry.task && entry.task !== entry.binding);
+    for (const status of ["queued", "dispatched"]) {
+      const id = `wake_matrix_${entry.name}_${status}`;
+      expect(db.query("SELECT status FROM multiremi_tasks WHERE id = ?").get(id).status)
+        .toBe(entry.push && !matched ? "cancelled" : status);
+      if (entry.push) {
+        expect(Boolean(db.query("SELECT id FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(`out_${id}`))).toBe(matched);
+        expect(Boolean(db.query("SELECT id FROM multiremi_task_steer_messages WHERE id = ?").get(`steer_${id}`))).toBe(matched);
+      }
+    }
+    expect(db.query("SELECT session_id FROM multiremi_chat_sessions WHERE id = ?").get(`chat_matrix_${entry.name}`).session_id)
+      .toBe(dirty ? null : "old-provider");
+  }
+  for (const pointers of ["none", "session", "provider", "fingerprint", "runtime", "all"]) {
+    expect(db.query(`SELECT session_id, session_provider, session_execution_fingerprint, session_runtime_id, work_dir
+      FROM multiremi_chat_sessions WHERE id = ?`).get(`chat_matrix_pointers_${pointers}`)).toEqual({
+      session_id: null, session_provider: null, session_execution_fingerprint: null,
+      session_runtime_id: pointers === "all" ? "old-runtime" : null, work_dir: pointers === "all" ? "/work/keep" : null,
+    });
+  }
+  for (const status of ["queued", "dispatched"]) {
+    expect(db.query("SELECT content FROM multiremi_task_steer_messages WHERE id = ?").get(`mixed_round_A_${status}`))
+      .toEqual({ content: "The responsible agent completed a work round for MATRIX-A - notification." });
+    expect(db.query("SELECT id FROM multiremi_task_steer_messages WHERE id = ?").get(`mixed_round_B_${status}`)).toBeNull();
+  }
+  const store = new MultiremiStore(db);
+  const next = store.createTask({ agentId: "agt_chat_migration", workspaceId: "local",
+    chatSessionId: "chat_matrix_null_no_push_null", prompt: "Cold start after explicit unbind without pushes" });
+  expect(next.sessionId).toBeNull();
+  expect(next.runtimeId).not.toBe("old-runtime");
 }

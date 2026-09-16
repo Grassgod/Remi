@@ -27,7 +27,7 @@ import { ProjectInstructionsRevisionConflictError } from "@multiremi/store/repos
 import { TaskSteerConflictError, TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
 import { configureRepositoryWikiAutomation, readyArchiveBinding } from "./helpers.js";
 
-import { CHAT_ISSUE_CLASSIFICATION_CASES, classificationChatId, seedLegacyChatIssueClassificationFixture, seedLegacyChatWakeFixture, assertLegacyChatWakeSettlement, assertCancelledLegacyWakesCannotRun, assertLegacyChatWakeRollback } from "./chat-issue-migration-fixture.js";
+import { CHAT_ISSUE_CLASSIFICATION_CASES, classificationChatId, seedLegacyChatIssueClassificationFixture, seedLegacyChatWakeFixture, assertLegacyChatWakeSettlement, assertCancelledLegacyWakesCannotRun, assertLegacyChatWakeRollback, mintLegacyWakeTokens, assertLegacyWakeTokens, seedWakeInvariantMatrix, assertWakeInvariantMatrix } from "./chat-issue-migration-fixture.js";
 
 // ────────────────────────────── translateSqliteToPg ──────────────────────────────
 
@@ -223,10 +223,13 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
 
   // Real PostgreSQL performs repeated full startup migrations plus classification
   // fixtures and their cleanup; allow for database round trips.
-  it("moves legacy Chat ownership into Feishu topics and is idempotent", () => {
+  it("moves legacy Chat ownership into Feishu topics and is idempotent", async () => {
     seedLegacyChatIssueClassificationFixture(db);
     seedLegacyChatWakeFixture(db);
+    seedWakeInvariantMatrix(db);
+    const tokens = await mintLegacyWakeTokens(db);
     assertLegacyChatWakeRollback(db);
+    await assertLegacyWakeTokens(db, tokens, true);
     runMigrations(db);
     assertLegacyChatWakeSettlement(db);
     runMigrations(db);
@@ -251,36 +254,42 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       const issueId = `iss_classification_${entry.name}`;
       const recovery = db.query(`SELECT * FROM multiremi_feishu_bot_issue_link_audit
         WHERE binding_id = ?`).get(`fcb_${chatId}`) as Record<string, string> | null;
-      if (entry.preserve) {
-        expect(recovery).toBeNull();
-      } else {
-        expect(recovery).toMatchObject({ binding_id: `fcb_${chatId}`, workspace_id: "local", issue_id: issueId });
-        expect(Number.isFinite(Date.parse(recovery!.audited_at))).toBe(true);
-        expect(recovery!.reason).toBe(entry.synced?.some((value) => value.chatType === "p2p")
-          ? "p2p_evidence" : "unproven_ownership");
-        expect(JSON.parse(recovery!.binding_snapshot)).toMatchObject({
-          id: `fcb_${chatId}`, workspace_id: "local", app_id: "cli_migration",
-          agent_id: "agt_chat_migration", chat_session_id: chatId, issue_id: issueId,
-          chat_id: `oc_${entry.name}`, thread_id: entry.thread || entry.key ? `om_${entry.name}` : null,
-        });
-        expect(recovery!.channel_snapshot ? JSON.parse(recovery!.channel_snapshot) : null).toEqual(entry.noChannel ? null : {
-          id: `nch_agent_chat_${chatId}`, workspace_id: "local", member_id: null, kind: "agent_chat",
-          name: "Legacy updates", enabled: entry.channelEnabled ?? 0, target: JSON.stringify({ chatId }),
-          event_types: '["comment_created"]', min_severity: "warning", created_by: "legacy-owner",
-          created_at: "2026-09-03T00:00:00.000Z", updated_at: "2026-09-03T00:00:00.000Z",
-        });
-      }
+      const synced = entry.synced?.filter((value) => (value.workspace ?? "local") === "local"
+        && (value.sourceWorkspace ?? "local") === "local") ?? [];
+      const p2p = synced.some((value) => value.chatType === "p2p");
+      expect(recovery).toMatchObject({ binding_id: `fcb_${chatId}`, workspace_id: "local", issue_id: issueId,
+        disposition: entry.preserve ? "preserved" : "discarded",
+        classification_version: 2, hit_canonical: Number(entry.canonical ?? false),
+        hit_marker: Number(entry.provenance === "exact"),
+        hit_synced_group: Number(synced.some((value) => value.chatType === "group")),
+        hit_synced_p2p: Number(p2p),
+      });
+      expect(Number.isFinite(Date.parse(recovery!.audited_at))).toBe(true);
+      expect(recovery!.reason).toBe(p2p ? "p2p_evidence"
+        : entry.canonical ? "canonical_topic" : entry.provenance === "exact" ? "creation_provenance"
+          : entry.preserve ? "synced_group" : "unproven_ownership");
+      expect(JSON.parse(recovery!.binding_snapshot)).toMatchObject({
+        id: `fcb_${chatId}`, workspace_id: "local", app_id: "cli_migration",
+        agent_id: "agt_chat_migration", chat_session_id: chatId, issue_id: issueId,
+        chat_id: `oc_${entry.name}`, thread_id: entry.thread || entry.key ? `om_${entry.name}` : null,
+      });
+      expect(recovery!.channel_snapshot ? JSON.parse(recovery!.channel_snapshot) : null).toEqual(entry.noChannel ? null : {
+        id: `nch_agent_chat_${chatId}`, workspace_id: "local", member_id: null, kind: "agent_chat",
+        name: "Legacy updates", enabled: entry.channelEnabled ?? 0, target: JSON.stringify({ chatId }),
+        event_types: '["comment_created"]', min_severity: "warning", created_by: "legacy-owner",
+        created_at: "2026-09-03T00:00:00.000Z", updated_at: "2026-09-03T00:00:00.000Z",
+      });
       expect(db.query("SELECT issue_id FROM multiremi_feishu_bot_chat_bindings WHERE chat_session_id = ?").get(chatId))
         .toEqual({ issue_id: entry.preserve ? issueId : null });
       expect(db.query(`SELECT session_id, session_provider, session_execution_fingerprint, work_dir, session_runtime_id
         FROM multiremi_chat_sessions WHERE id = ?`).get(chatId)).toEqual({
-        session_id: entry.preserve ? "provider-legacy" : null,
-        session_provider: entry.preserve ? "codex" : null,
-        session_execution_fingerprint: entry.preserve ? "legacy-fingerprint" : null,
+        session_id: entry.preserve && entry.name !== "group_without_thread" ? "provider-legacy" : null,
+        session_provider: entry.preserve && entry.name !== "group_without_thread" ? "codex" : null,
+        session_execution_fingerprint: entry.preserve && entry.name !== "group_without_thread" ? "legacy-fingerprint" : null,
         work_dir: "/work/keep", session_runtime_id: "rt_legacy",
       });
       expect(db.query("SELECT issue_id, session_id FROM multiremi_tasks WHERE id = ?").get(`tsk_${chatId}`))
-        .toEqual({ issue_id: entry.preserve ? issueId : null, session_id: entry.preserve ? "provider-task-legacy" : null });
+        .toEqual({ issue_id: entry.preserve ? issueId : null, session_id: entry.preserve && entry.name !== "group_without_thread" ? "provider-task-legacy" : null });
       expect(db.query("SELECT role, pending_agent_delivery FROM multiremi_chat_messages WHERE chat_session_id = ? ORDER BY role").all(chatId))
         .toEqual(entry.preserve
           ? [{ role: "assistant", pending_agent_delivery: 0 }, { role: "system", pending_agent_delivery: 1 }, { role: "user", pending_agent_delivery: 0 }]
@@ -290,6 +299,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       expect(db.query("SELECT enabled FROM multiremi_notification_channels WHERE id = ?").get(`nch_agent_chat_${chatId}`))
         .toEqual(entry.preserve ? { enabled: 0 } : null);
     }
+    await assertLegacyWakeTokens(db, tokens);
+    assertWakeInvariantMatrix(db);
     assertCancelledLegacyWakesCannotRun(db, store);
     // The table is bootstrap schema, even after the one-time migration ledger exists.
     db.exec("DROP TABLE multiremi_feishu_bot_issue_link_audit");
@@ -302,7 +313,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     store.deleteIssue("iss_chat_migration");
     for (const entry of CHAT_ISSUE_CLASSIFICATION_CASES) store.deleteIssue(`iss_classification_${entry.name}`);
     db.run("DELETE FROM multiremi_agents WHERE id = ?", ["agt_chat_migration"]);
-  }, 15_000);
+  }, 30_000);
 
   it("fences Wiki cleanup leases and persists per-path progress across connections", () => {
     const otherDb = new PostgresSyncDatabase(pgDatabaseUrl(TEST_DB));

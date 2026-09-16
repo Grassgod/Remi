@@ -1137,6 +1137,11 @@ export class FeishuBotRepo {
       if (alreadyPrepared) continue;
 
       let wakeTask = this.ctx.chat().getPendingChatTask(chatSessionId);
+      // Binding changes cannot turn an existing private/different-Issue user
+      // turn into an Issue notification. Only coalesce into the same transport.
+      if (wakeTask && (wakeTask.issueId !== input.issue.id
+        || wakeTask.workspaceId !== input.issue.workspaceId
+        || wakeTask.agentId !== binding.agent_id)) wakeTask = null;
       let deliveryMode: "inbound" | "proactive";
       if (wakeTask) {
         const proactive = this.ctx.db.query(

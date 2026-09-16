@@ -332,17 +332,27 @@ describe("Feishu bot standard Task bridge", () => {
 
   it("steers an existing inbound Chat task instead of creating a second round task", () => {
     const { store, agent, config } = scaffold();
-    const inbound = store.submitFeishuBotMessage("local", "rt_bot", {
+    const initial = store.submitFeishuBotMessage("local", "rt_bot", {
       revision: config.revision,
       externalSessionKey: "oc_busy:thread:omt_busy",
-      externalMessageId: "om_busy_1",
+      externalMessageId: "om_busy_seed",
       replyToMessageId: "om_busy_1",
       chatId: "oc_busy",
       threadId: "omt_busy",
       text: "I am already waiting for a response.",
     });
     const issue = store.createIssue({ title: "Busy Feishu topic", workspaceId: "local" });
-    bindFeishuTopicFixture(store, db!, inbound.chatSessionId, issue.id);
+    store.cancelTask(initial.taskId);
+    bindFeishuTopicFixture(store, db!, initial.chatSessionId, issue.id);
+    const inbound = store.submitFeishuBotMessage("local", "rt_bot", {
+      revision: config.revision,
+      externalSessionKey: "oc_busy:thread:omt_busy",
+      externalMessageId: "om_busy_1",
+      replyToMessageId: "om_busy_1",
+      chatId: "oc_busy", threadId: "omt_busy", chatType: "group",
+      text: "I am already waiting for a response.",
+    });
+    expect(store.getTask(inbound.taskId)?.issueId).toBe(issue.id);
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const leaderTask = store.createSessionTask(session.id, {
       agentId: agent.id,
@@ -380,6 +390,30 @@ describe("Feishu bot standard Task bridge", () => {
       chatId: "oc_busy",
       replyToMessageId: "om_busy_1",
     });
+  });
+
+  it("keeps an already-running private user turn separate when an Issue binding appears", () => {
+    const { store, agent, config } = scaffold();
+    const inbound = store.submitFeishuBotMessage("local", "rt_bot", {
+      revision: config.revision, externalSessionKey: "oc_new:thread:omt_new",
+      externalMessageId: "om_new", replyToMessageId: "om_new", chatId: "oc_new", threadId: "omt_new",
+      text: "Ordinary user question",
+    });
+    expect(store.claimTask("rt_bot")?.id).toBe(inbound.taskId);
+    store.startTask(inbound.taskId);
+    const issue = store.createIssue({ title: "New Issue binding", workspaceId: "local" });
+    bindFeishuTopicFixture(store, db!, inbound.chatSessionId, issue.id);
+    const leader = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Issue work" });
+    const wakes = store.prepareFeishuIssueRoundPushesWithinTransaction({ issue, leaderTask: leader });
+    expect(wakes).toHaveLength(1);
+    expect(wakes[0]).toMatchObject({ issueId: issue.id, chatSessionId: inbound.chatSessionId });
+    expect(store.listPendingTaskSteerMessages(inbound.taskId)).toEqual([]);
+    const original = store.getTaskWithAgent(inbound.taskId)!;
+    expect(original.issueId).toBeNull();
+    expect(original.prompt).toBe("Ordinary user question");
+    expect(daemonTaskClaimResponse(store, original).bound_issue).toBeUndefined();
+    store.completeTask(inbound.taskId, { output: "Ordinary user reply" });
+    expect(store.listChatMessages(inbound.chatSessionId).at(-1)?.body).toBe("Ordinary user reply");
   });
 
   it("waits for delegated work and the leader return before waking the bound Chat", () => {

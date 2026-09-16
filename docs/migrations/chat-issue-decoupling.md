@@ -17,30 +17,43 @@ their messages and working directories.
   `chat_issue_topic_<issueId>` bindings (including undelivered roots), or an
   automatic group Issue whose `feishu_bot_message` creation source matches the
   exact binding's destination and inbound delivery in the same workspace.
-- Discard other Feishu associations and write a permanent, operator-only record
-  to `multiremi_feishu_bot_issue_link_audit`. It contains the original Issue,
-  complete binding identity/destination snapshot, subscription snapshot and
-  decision reason (`p2p_evidence` or `unproven_ownership`). The active binding has
-  no Issue. The audit table has **no runtime readers**: incoming messages never
+- Write every evaluated Feishu association, both preserved and discarded, to
+  `multiremi_feishu_bot_issue_link_audit`. This permanent operator-only record
+  contains the original Issue, complete identity/destination and subscription
+  snapshots, disposition, independent canonical/marker/synchronized-type evidence
+  flags, and the precedence-ordered decision reason. Evidence flags can overlap;
+  `p2p_evidence` always overrides preservation. Other associations use reasons
+  `canonical_topic`, `creation_provenance`, `synced_group` or `unproven_ownership`.
+  Discarded associations have no active Issue binding. The audit table has **no runtime readers**: incoming messages never
   restore ownership, create summaries or replay old notifications from it.
   Private Web associations are discarded. No live Feishu lookup is required.
-- For discarded associations, cancel queued/dispatched proactive Issue wake
-  tasks and delete unsent proactive work-round/human-request outbox entries in
-  the migration transaction. Remove unconsumed system-generated work-round
-  steering tied to those dropped links; retain user steering and ordinary input
-  tasks. Clear surviving outbox rows' references to deleted predecessors so
-  ordinary replies/files/attachments can proceed. Sent delivery history and
-  retained Issue bindings' tasks and queues are unchanged.
-- Cleanup also covers older Issue pushes left behind by manual rebinding or
-  unbinding. With no live topic binding, their recorded proactive wake tasks
-  provide evidence to reset affected Chat and pending-task provider pointers,
-  even when the old Chat Issue field was already null.
-- Reset affected Chats' provider resume pointers and provider/fingerprint
-  metadata. Keep `work_dir` and its origin `session_runtime_id` together. Keep
-  user/assistant history. Clear inherited Issue/session pointers from other
-  queued/dispatched Chat tasks; running task rows retain their audit identity.
-  Payloads, CLI context, Issue creation and request provenance resolve effective
-  Chat scope, preventing old private ownership from becoming new context.
+- A proactive destination is valid only when binding, push and task have the
+  same non-null Issue and agree on workspace, Chat and Agent identity. Missing
+  bindings and all mismatches fail closed. In the migration transaction, cancel
+  invalid queued/dispatched wake tasks, revoke their task access tokens, delete
+  unsent proactive work-round/human-request outbox entries, and remove unconsumed
+  work-round system steering for those invalid destinations. This also settles
+  Issue A's old notifications after the topic was rebound to Issue B; keeping B's
+  valid binding does not authorize A's pending work. Valid tasks/queues survive.
+- Keep ordinary user tasks, steering, replies and attachments. Clear surviving
+  outbox dependencies on deleted notifications so ordinary attachments can
+  proceed. Sent history remains unchanged. Runtime claim, payload and completion
+  use the same destination consistency guard, and new notices cannot coalesce
+  into an incompatible existing task.
+- Cold-start ordinary Chat provider lineage once during migration, independently
+  of old Issue fields or push records. This covers an explicitly unbound Chat
+  that never produced a push. Clear provider/fingerprint/session pointers and
+  clear runtime ownership when no working directory remains; retain `work_dir`
+  with its origin runtime when one exists. Keep ordinary user/assistant history.
+  Also clear provider pointers on retained topics carrying invalid historical
+  work. Retained topics with consistent work keep their resumable provider.
+- Clear inherited Issue/session pointers from other queued/dispatched ordinary
+  Chat tasks. Running, awaiting-human and waiting-for-local-directory tasks keep
+  an upgrade invalidation marker, so late completion or retries cannot promote
+  their old provider lineage. The marker is task execution metadata; the audit
+  table has no runtime readers. Payloads, CLI context, Issue creation and request
+  provenance resolve effective Chat scope, preventing old private ownership
+  from becoming new context.
 - Remove non-topic notification channels and pending Issue update state, clear
   pending delivery flags, and remove only system messages starting with
   `Bound Issue update:` from non-topic Chats. Preserved topics retain their
@@ -96,59 +109,115 @@ return those facts for a new decision before deployment.
 These queries work on SQLite and PostgreSQL. The audit table exists only after
 the migration; before deployment, run them on the isolated migrated copy.
 
+`last_inbound_at` and `active_last7d` are immutable observations as of each
+row's `audited_at`. Activity uses the first receipt (`created_at`) of deliveries
+for the exact workspace/binding, or the original creation time of synchronized
+human messages for the same workspace, owned source, chat and exact thread/root.
+Unknown senders, bots, another thread, metadata updates, retries, ingestion time,
+and future/invalid timestamps cannot count as activity. An absent timestamp
+means **no recorded inbound evidence**, not proof that the real group is inactive.
+The seven-day window is inclusive, ending at `audited_at`; rerun the rehearsal on
+a fresh backup if the report is stale. Do not use `chat_sessions.updated_at`.
+
 ```sql
-SELECT a.workspace_id, a.binding_id, a.issue_id, a.reason, a.audited_at,
-       b.app_id, b.agent_id, b.external_session_key, b.chat_session_id,
-       b.chat_id, b.thread_id, b.reply_to_message_id,
-       c.updated_at AS chat_last_activity, a.binding_snapshot
-FROM multiremi_feishu_bot_issue_link_audit a
-LEFT JOIN multiremi_feishu_bot_chat_bindings b ON b.id = a.binding_id
-  AND b.workspace_id = a.workspace_id
-LEFT JOIN multiremi_chat_sessions c ON c.id = b.chat_session_id
-  AND c.workspace_id = a.workspace_id
-ORDER BY a.workspace_id, a.binding_id;
-
-CREATE TEMP TABLE mul301_type_review (
-  binding_id TEXT PRIMARY KEY,
-  confirmed_type TEXT NOT NULL CHECK (confirmed_type IN ('group', 'p2p')),
-  evidence_ref TEXT NOT NULL
-);
--- Insert one row only after checking authoritative metadata for the exact chat.
--- Do not fill this from thread_id, external_session_key, or guessed dates.
-INSERT INTO mul301_type_review VALUES
-  ('<verified-binding-id>', 'group', '<retained-evidence-reference>');
-
-SELECT COUNT(*) AS dropped_feishu_links,
-       COALESCE(SUM(CASE WHEN a.reason = 'unproven_ownership'
-         AND r.confirmed_type = 'group' THEN 1 ELSE 0 END), 0)
-         AS confirmed_affected_group_topics,
-       COALESCE(SUM(CASE WHEN a.reason = 'p2p_evidence'
-         OR r.confirmed_type = 'p2p' THEN 1 ELSE 0 END), 0)
-         AS confirmed_private_links,
-       COALESCE(SUM(CASE WHEN a.reason = 'unproven_ownership'
-         AND r.binding_id IS NULL THEN 1 ELSE 0 END), 0)
-         AS unresolved_links
-FROM multiremi_feishu_bot_issue_link_audit a
-LEFT JOIN mul301_type_review r ON r.binding_id = a.binding_id;
-
-SELECT a.binding_id, a.issue_id, c.updated_at AS chat_last_activity,
-       r.confirmed_type, r.evidence_ref
-FROM multiremi_feishu_bot_issue_link_audit a
-JOIN mul301_type_review r ON r.binding_id = a.binding_id
-JOIN multiremi_feishu_bot_chat_bindings b ON b.id = a.binding_id
-  AND b.workspace_id = a.workspace_id
-JOIN multiremi_chat_sessions c ON c.id = b.chat_session_id
-  AND c.workspace_id = a.workspace_id
-WHERE a.reason = 'unproven_ownership' AND r.confirmed_type = 'group'
-ORDER BY c.updated_at DESC, a.binding_id;
+-- mul301-audit-detail
+SELECT workspace_id, binding_id, issue_id, disposition, reason,
+       classification_version, hit_canonical, hit_marker,
+       hit_synced_group, hit_synced_p2p, audited_at,
+       last_inbound_at, active_last7d, binding_snapshot
+FROM multiremi_feishu_bot_issue_link_audit
+ORDER BY workspace_id, binding_id;
 ```
 
-`confirmed_affected_group_topics` counts binding/topic records, not distinct
-Feishu groups. Review the activity timestamps against the seven-day boundary
-and verify recent activity in the authoritative conversation as needed. A review
-claiming `group` for an audit row marked `p2p_evidence` is a contradiction to
-investigate, never permission to restore it. Save the review output externally;
-the temporary table is not application state.
+Create this temporary review table and add verified decisions. Use the audited
+workspace/binding, and retain the authority/source of the exact chat-type check.
+Do not infer group type from thread/key, activity or dates. A blank table is
+valid and leaves unproven links unresolved.
+
+```sql
+-- mul301-audit-review
+CREATE TEMP TABLE mul301_type_review (
+  workspace_id TEXT NOT NULL,
+  binding_id TEXT NOT NULL,
+  confirmed_type TEXT NOT NULL CHECK (confirmed_type IN ('group', 'p2p')),
+  evidence_ref TEXT NOT NULL CHECK (length(trim(evidence_ref)) > 0),
+  PRIMARY KEY(workspace_id, binding_id)
+);
+```
+
+```sql
+INSERT INTO mul301_type_review VALUES
+  ('<workspace-id>', '<verified-binding-id>', 'group', '<retained-evidence-reference>');
+```
+
+The following **single query** gives the decision inputs, including overlap-safe
+coverage and authoritative recent activity. Run it after populating the review
+rows (or with the empty review table to expose remaining unknowns).
+
+```sql
+-- mul301-audit-metrics
+WITH classified AS (
+  SELECT a.*,
+    CASE WHEN a.hit_synced_p2p = 1 OR a.reason = 'p2p_evidence' OR r.confirmed_type = 'p2p' THEN 'p2p'
+         WHEN a.disposition = 'preserved' OR r.confirmed_type = 'group' THEN 'group'
+         ELSE 'unknown' END AS confirmed_type,
+    CASE WHEN (a.hit_synced_p2p = 1 AND a.hit_synced_group = 1)
+           OR ((a.hit_synced_p2p = 1 OR a.reason = 'p2p_evidence') AND r.confirmed_type = 'group')
+           OR (a.disposition = 'preserved' AND r.confirmed_type = 'p2p')
+         THEN 1 ELSE 0 END AS evidence_conflict
+  FROM multiremi_feishu_bot_issue_link_audit a
+  LEFT JOIN mul301_type_review r
+    ON r.workspace_id = a.workspace_id AND r.binding_id = a.binding_id
+), counts AS (
+  SELECT COUNT(*) AS evaluated_links,
+    COALESCE(SUM(CASE WHEN classification_version != 2 THEN 1 ELSE 0 END), 0) AS incomplete_audit_rows,
+    COALESCE(SUM(hit_canonical), 0) AS canonical_hits,
+    COALESCE(SUM(hit_marker), 0) AS marker_hits,
+    COALESCE(SUM(hit_synced_group), 0) AS synced_group_hits,
+    COALESCE(SUM(CASE WHEN hit_synced_p2p = 1 OR reason = 'p2p_evidence' THEN 1 ELSE 0 END), 0) AS p2p_overrides,
+    COALESCE(SUM(CASE WHEN disposition = 'preserved' AND hit_canonical = 1 THEN 1 ELSE 0 END), 0) AS canonical_preserved,
+    COALESCE(SUM(CASE WHEN disposition = 'preserved' AND hit_marker = 1 THEN 1 ELSE 0 END), 0) AS marker_preserved,
+    COALESCE(SUM(CASE WHEN disposition = 'preserved' AND hit_synced_group = 1 THEN 1 ELSE 0 END), 0) AS synced_group_preserved,
+    COALESCE(SUM(CASE WHEN disposition = 'preserved' THEN 1 ELSE 0 END), 0) AS preserved_links,
+    COALESCE(SUM(CASE WHEN disposition = 'discarded' THEN 1 ELSE 0 END), 0) AS dropped_feishu_links,
+    COALESCE(SUM(CASE WHEN confirmed_type = 'group' THEN 1 ELSE 0 END), 0) AS confirmed_group_topics,
+    COALESCE(SUM(CASE WHEN disposition = 'discarded' AND confirmed_type = 'group' THEN 1 ELSE 0 END), 0) AS confirmed_affected_group_topics,
+    COALESCE(SUM(CASE WHEN confirmed_type = 'p2p' THEN 1 ELSE 0 END), 0) AS confirmed_private_links,
+    COALESCE(SUM(CASE WHEN confirmed_type = 'unknown' THEN 1 ELSE 0 END), 0) AS unresolved_links,
+    COALESCE(SUM(CASE WHEN confirmed_type = 'group' AND active_last7d = 1 THEN 1 ELSE 0 END), 0) AS active_group_topics_last7d,
+    COALESCE(SUM(CASE WHEN disposition = 'discarded' AND confirmed_type = 'group' AND active_last7d = 1 THEN 1 ELSE 0 END), 0) AS active_affected_group_topics_last7d,
+    COALESCE(SUM(CASE WHEN disposition = 'preserved' AND confirmed_type = 'group' AND active_last7d = 1 THEN 1 ELSE 0 END), 0) AS active_preserved_group_topics_last7d,
+    COALESCE(SUM(CASE WHEN confirmed_type = 'unknown' AND active_last7d = 1 THEN 1 ELSE 0 END), 0) AS active_unresolved_links_last7d,
+    COALESCE(SUM(CASE WHEN last_inbound_at IS NULL THEN 1 ELSE 0 END), 0) AS inbound_unobserved_links,
+    COALESCE(SUM(CASE WHEN disposition = 'discarded' AND confirmed_type = 'group' AND last_inbound_at IS NULL THEN 1 ELSE 0 END), 0) AS affected_group_inbound_unobserved,
+    COALESCE(SUM(evidence_conflict), 0) AS evidence_conflicts
+  FROM classified
+)
+SELECT counts.*,
+  CASE WHEN incomplete_audit_rows = 0 THEN 100.0 * canonical_preserved / NULLIF(evaluated_links, 0) END AS canonical_coverage_pct,
+  CASE WHEN incomplete_audit_rows = 0 THEN 100.0 * marker_preserved / NULLIF(evaluated_links, 0) END AS marker_coverage_pct,
+  CASE WHEN incomplete_audit_rows = 0 THEN 100.0 * synced_group_preserved / NULLIF(evaluated_links, 0) END AS synced_group_coverage_pct,
+  CASE WHEN incomplete_audit_rows = 0 THEN 100.0 * preserved_links / NULLIF(evaluated_links, 0) END AS preservation_coverage_pct,
+  CASE WHEN incomplete_audit_rows = 0 THEN 100.0 * active_preserved_group_topics_last7d / NULLIF(active_group_topics_last7d, 0) END AS active_group_preservation_coverage_pct
+FROM counts;
+```
+
+`evaluated_links` counts the migration's legacy Feishu Issue associations, not all
+Chats. Per-rule raw hits include overlaps and p2p overrides; effective per-rule
+coverage counts only preserved links. Their percentages must **not be added**.
+Overall coverage counts each binding once. A zero denominator yields NULL, not
+100% coverage. Review conflicts before relying on any type count. A claimed
+`group` conflicting with `p2p_evidence` never authorizes restoration. Missing
+activity must be checked externally where interruption could be unacceptable.
+Record confirmed affected groups, unresolved links, active affected groups, and
+both total/active preservation coverage with the deployment request.
+
+Fresh migration records have `classification_version = 2`. Earlier unpublished
+drafts lack retained decisions and authoritative activity; rows from them remain
+version 1, and coverage is NULL whenever any is present. Rehearse from a verified
+pre-decoupling backup to obtain a complete denominator; restarting a migrated
+draft cannot reconstruct absent rows. Save review evidence outside the temporary
+table; it is not application state. These metrics have no date filter.
 
 ## Restore a confirmed group before resuming traffic
 
@@ -168,12 +237,14 @@ thread. Substitute the exact snapshot values below, SQL-escaping strings; use SQ
 maintenance procedure, not a new public bind API.
 
 ```sql
+-- mul301-audit-restore
 BEGIN;
 UPDATE multiremi_feishu_bot_chat_bindings
 SET issue_id = (
   SELECT issue_id FROM multiremi_feishu_bot_issue_link_audit
   WHERE binding_id = '<binding-id>' AND workspace_id = '<workspace-id>'
-    AND reason = 'unproven_ownership'
+    AND disposition = 'discarded' AND reason = 'unproven_ownership'
+    AND classification_version = 2 AND hit_synced_p2p = 0
 )
 WHERE id = '<binding-id>' AND workspace_id = '<workspace-id>'
   AND issue_id IS NULL
@@ -191,7 +262,8 @@ WHERE id = '<binding-id>' AND workspace_id = '<workspace-id>'
     SELECT 1 FROM multiremi_feishu_bot_issue_link_audit a
     JOIN multiremi_issues i ON i.id = a.issue_id AND i.workspace_id = a.workspace_id
     WHERE a.binding_id = '<binding-id>' AND a.workspace_id = '<workspace-id>'
-      AND a.reason = 'unproven_ownership'
+      AND a.disposition = 'discarded' AND a.reason = 'unproven_ownership'
+      AND a.classification_version = 2 AND a.hit_synced_p2p = 0
   )
 RETURNING id, issue_id;
 -- Require exactly one returned row; otherwise ROLLBACK and investigate.
@@ -204,6 +276,7 @@ Chat. Do not replace an existing channel or silently enable a disabled one. The
 following parameters are copied from that snapshot, not new defaults:
 
 ```sql
+-- mul301-audit-restore-channel
 INSERT INTO multiremi_notification_channels
   (id, workspace_id, member_id, kind, name, enabled, target, event_types,
    min_severity, created_by, created_at, updated_at)

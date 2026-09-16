@@ -4287,6 +4287,10 @@ runMigrations(this.db);
     return this.tasks.getTaskByRef(ref, input);
   }
 
+  getTaskChatExecutionKind(task: MultiremiTask): "ordinary" | "topic" {
+    return this.tasks.getTaskChatExecutionKind(task);
+  }
+
   getTaskWithAgent(id: string): MultiremiTaskWithAgent | null {
     return this.tasks.getTaskWithAgent(id);
   }

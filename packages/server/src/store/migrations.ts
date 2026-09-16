@@ -1,3 +1,4 @@
+import { CHAT_ISSUE_DECOUPLED_FINGERPRINT } from "@multiremi/store/helpers.js";
 import { syncRuntimeExecutionGroups } from "@multiremi/store/execution-groups.js";
 import { createHash } from "node:crypto";
 import { attachmentIdsFromText } from "@multiremi/contracts/attachments.js";
@@ -2284,6 +2285,14 @@ export function runMigrations(db: SqlDatabase): void {
       issue_id TEXT NOT NULL,
       audited_at TEXT NOT NULL,
       reason TEXT NOT NULL,
+      disposition TEXT NOT NULL DEFAULT 'discarded',
+      classification_version INTEGER NOT NULL DEFAULT 1,
+      hit_canonical INTEGER NOT NULL DEFAULT 0,
+      hit_marker INTEGER NOT NULL DEFAULT 0,
+      hit_synced_group INTEGER NOT NULL DEFAULT 0,
+      hit_synced_p2p INTEGER NOT NULL DEFAULT 0,
+      last_inbound_at TEXT,
+      active_last7d INTEGER NOT NULL DEFAULT 0,
       binding_snapshot TEXT NOT NULL,
       channel_snapshot TEXT
     );
@@ -2555,6 +2564,15 @@ export function runMigrations(db: SqlDatabase): void {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_messages_task_seq_unique
       ON multiremi_task_messages(task_id, seq);
   `);
+  // Earlier unpublished MUL-301 drafts recorded only discarded links. Keep
+  // those rows visibly incomplete; never fabricate missing preservation proof.
+  for (const column of [
+    "disposition TEXT NOT NULL DEFAULT 'discarded'",
+    "classification_version INTEGER NOT NULL DEFAULT 1",
+    "hit_canonical INTEGER NOT NULL DEFAULT 0", "hit_marker INTEGER NOT NULL DEFAULT 0",
+    "hit_synced_group INTEGER NOT NULL DEFAULT 0", "hit_synced_p2p INTEGER NOT NULL DEFAULT 0",
+    "last_inbound_at TEXT", "active_last7d INTEGER NOT NULL DEFAULT 0",
+  ]) addColumnIfMissing(db, "multiremi_feishu_bot_issue_link_audit", column);
   addColumnIfMissing(db, "multiremi_workspaces", "env TEXT NOT NULL DEFAULT '{}'");
   addColumnIfMissing(db, "multiremi_agents", "workspace_id TEXT NOT NULL DEFAULT 'local'");
   addColumnIfMissing(db, "multiremi_agents", "description TEXT NOT NULL DEFAULT ''");
@@ -4423,7 +4441,7 @@ function migrateChatIssueOwnership(db: SqlDatabase, chatSchema?: string | null):
         AND issue.workspace_id = binding.workspace_id
       WHERE binding.issue_id IS NULL`).all() as Array<{
         id: string; workspace_id: string; chat_id: string | null;
-        chat_session_id: string; legacy_issue_id: string; context_refs: string;
+        chat_session_id: string; thread_id: string | null; legacy_issue_id: string; context_refs: string;
       }>;
     const auditedAt = new Date().toISOString();
     for (const binding of bindings) {
@@ -4441,7 +4459,7 @@ function migrateChatIssueOwnership(db: SqlDatabase, chatSchema?: string | null):
       const syncedGroup = chatTypes.some((message) => message.chat_type === "group");
       const canonicalTopic = binding.chat_session_id === `chat_issue_topic_${binding.legacy_issue_id}`;
       let autoCreatedGroupIssue = false;
-      if (!canonicalTopic && binding.chat_id) {
+      if (binding.chat_id) {
         let refs: unknown;
         try { refs = JSON.parse(binding.context_refs); } catch { refs = null; }
         // Since its introduction, only autoCreateGroupIssue's group branch
@@ -4457,107 +4475,194 @@ function migrateChatIssueOwnership(db: SqlDatabase, chatSchema?: string | null):
             .get(binding.id, binding.workspace_id, source.message_id));
         });
       }
-      if (!syncedP2p && (syncedGroup || canonicalTopic || autoCreatedGroupIssue)) {
+      const preserve = !syncedP2p && (syncedGroup || canonicalTopic || autoCreatedGroupIssue);
+      if (preserve) {
         db.run("UPDATE multiremi_feishu_bot_chat_bindings SET issue_id = ? WHERE id = ?",
           [binding.legacy_issue_id, binding.id]);
-      } else {
-        // Retain an operator-visible audit trail, never a deferred binding.
-        // Unknown group/p2p ownership must be confirmed outside runtime paths.
-        const pending = db.query(`SELECT channel_id, pending_since
-          FROM multiremi_agent_issue_update_state
-          WHERE workspace_id = ? AND chat_session_id = ? AND issue_id = ?`)
-          .get(binding.workspace_id, binding.chat_session_id, binding.legacy_issue_id) as {
-            channel_id: string; pending_since: string | null;
-          } | null;
-        const channels = db.query(`SELECT * FROM multiremi_notification_channels
-          WHERE workspace_id = ? AND kind = 'agent_chat' ORDER BY id`)
-          .all(binding.workspace_id) as Array<Record<string, unknown>>;
-        const matches = channels.filter((channel) => {
-          try { return JSON.parse(String(channel.target)).chatId === binding.chat_session_id; }
-          catch { return false; }
-        });
-        const channel = matches.find((candidate) => candidate.id === pending?.channel_id) ?? matches[0];
-        const { context_refs: _refs, legacy_issue_id, ...snapshot } = binding;
-        db.run(`INSERT INTO multiremi_feishu_bot_issue_link_audit
-          (binding_id, workspace_id, issue_id, audited_at, reason, binding_snapshot, channel_snapshot)
-          VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(binding_id) DO NOTHING`,
-        [binding.id, binding.workspace_id, legacy_issue_id, auditedAt,
-          syncedP2p ? "p2p_evidence" : "unproven_ownership",
-          JSON.stringify({ ...snapshot, issue_id: legacy_issue_id }),
-          channel ? JSON.stringify(channel) : null]);
       }
+      // Audit every decision, including retained associations and overlapping
+      // proofs. Separate evidence flags from the precedence-ordered decision so
+      // operators can measure coverage without double-counting any binding.
+      const pending = db.query(`SELECT channel_id, pending_since
+        FROM multiremi_agent_issue_update_state
+        WHERE workspace_id = ? AND chat_session_id = ? AND issue_id = ?`)
+        .get(binding.workspace_id, binding.chat_session_id, binding.legacy_issue_id) as {
+          channel_id: string; pending_since: string | null;
+        } | null;
+      const channels = db.query(`SELECT * FROM multiremi_notification_channels
+        WHERE workspace_id = ? AND kind = 'agent_chat' ORDER BY id`)
+        .all(binding.workspace_id) as Array<Record<string, unknown>>;
+      const matches = channels.filter((channel) => {
+        try { return JSON.parse(String(channel.target)).chatId === binding.chat_session_id; }
+        catch { return false; }
+      });
+      const channel = matches.find((candidate) => candidate.id === pending?.channel_id) ?? matches[0];
+      // created_at is the first authoritative inbound receipt; updated_at also
+      // changes for delivery retries. Synced messages must belong to this exact
+      // conversation/thread and have an explicit human sender. Never use Chat
+      // metadata, ingestion time, outbound messages or another thread's traffic.
+      const inbound = db.query(`SELECT created_at FROM multiremi_feishu_bot_deliveries
+        WHERE workspace_id = ? AND binding_id = ?`)
+        .all(binding.workspace_id, binding.id) as Array<{ created_at: string }>;
+      if (binding.chat_id) {
+        const messages = db.query(`SELECT message.created_at, message.sender
+          FROM multiremi_feishu_messages message
+          JOIN multiremi_feishu_sources source ON source.id = message.source_id
+            AND source.workspace_id = message.workspace_id
+          WHERE message.workspace_id = ? AND message.chat_id = ?
+            AND ((CAST(? AS TEXT) IS NULL AND message.thread_id IS NULL AND message.root_id IS NULL)
+              OR (CAST(? AS TEXT) IS NOT NULL AND (message.thread_id = ? OR message.root_id = ?
+                OR message.message_id = ?)))`)
+          .all(binding.workspace_id, binding.chat_id, binding.thread_id,
+            binding.thread_id, binding.thread_id, binding.thread_id, binding.thread_id) as
+          Array<{ created_at: string; sender: string }>;
+        for (const message of messages) {
+          if (migrateLegacySender(message.sender).kind === "user") inbound.push(message);
+        }
+      }
+      const timestamps = inbound.map((row) => Date.parse(row.created_at))
+        .filter((timestamp) => Number.isFinite(timestamp) && timestamp <= Date.parse(auditedAt));
+      const lastInboundAt = timestamps.length
+        ? new Date(timestamps.reduce((latest, value) => Math.max(latest, value))).toISOString() : null;
+      const reason = syncedP2p ? "p2p_evidence" : canonicalTopic ? "canonical_topic"
+        : autoCreatedGroupIssue ? "creation_provenance" : syncedGroup ? "synced_group" : "unproven_ownership";
+      const { context_refs: _refs, legacy_issue_id, ...snapshot } = binding;
+      db.run(`INSERT INTO multiremi_feishu_bot_issue_link_audit
+        (binding_id, workspace_id, issue_id, audited_at, reason, disposition,
+         classification_version, hit_canonical, hit_marker, hit_synced_group, hit_synced_p2p,
+         last_inbound_at, active_last7d, binding_snapshot, channel_snapshot)
+        VALUES (?, ?, ?, ?, ?, ?, 2, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(binding_id) DO NOTHING`,
+      [binding.id, binding.workspace_id, legacy_issue_id, auditedAt, reason,
+        preserve ? "preserved" : "discarded", Number(canonicalTopic), Number(autoCreatedGroupIssue),
+        Number(syncedGroup), Number(syncedP2p), lastInboundAt,
+        Number(lastInboundAt !== null && Date.parse(lastInboundAt) >= Date.parse(auditedAt) - 7 * 24 * 60 * 60 * 1000),
+        JSON.stringify({ ...snapshot, issue_id: legacy_issue_id }),
+        channel ? JSON.stringify(channel) : null]);
     }
-    // Settle discarded associations in this migration transaction. A cleared
-    // issue_id alone does not make an old proactive prompt safe to execute.
-    // Rebinding could leave pushes for an earlier Issue, so settle the whole
-    // discarded destination rather than only pushes for its latest Issue.
-    // Explicitly unbound Chats can also retain such old pushes.
-    const discardedWakeTasks = `SELECT push.wake_task_id FROM (
-      SELECT workspace_id, binding_id, issue_id, wake_task_id
-      FROM multiremi_feishu_bot_round_pushes WHERE delivery_mode = 'proactive'
+    // A destination is valid only when its live binding, push, task and Chat
+    // agree on a non-null Issue and on workspace/agent/Chat identity. Missing
+    // rows and every NULL/mismatch fail closed; no conversation-shape guesses.
+    const invalidPushes = db.query(`SELECT push.*, task.chat_session_id FROM (
+      SELECT workspace_id, binding_id, issue_id, wake_task_id, delivery_mode, 'round' AS source
+      FROM multiremi_feishu_bot_round_pushes
       UNION ALL
-      SELECT workspace_id, binding_id, issue_id, wake_task_id
+      SELECT workspace_id, binding_id, issue_id, wake_task_id, 'proactive' AS delivery_mode, 'human' AS source
       FROM multiremi_feishu_bot_human_request_pushes
     ) push
-    JOIN multiremi_feishu_bot_chat_bindings binding ON binding.id = push.binding_id
-      AND binding.workspace_id = push.workspace_id
-    JOIN multiremi_chat_sessions chat ON chat.id = binding.chat_session_id
-      AND chat.workspace_id = binding.workspace_id
-    WHERE binding.issue_id IS NULL`;
-    db.run(`UPDATE multiremi_tasks
-      SET status = 'cancelled', wait_reason = NULL, failure_reason = NULL,
-          completed_at = ?, cancelled_at = ?, updated_at = ?, issue_id = NULL,
-          session_id = NULL, issue_session_id = NULL, issue_session_generation = NULL
-      WHERE status IN ('queued', 'dispatched') AND id IN (${discardedWakeTasks})`,
-    [auditedAt, auditedAt, auditedAt]);
-    // Sent rows remain historical evidence. Pending/in-flight proactive rows
-    // cannot be replayed after an operator restores the association.
+    LEFT JOIN multiremi_tasks task ON task.id = push.wake_task_id
+    WHERE NOT EXISTS (
+      SELECT 1 FROM multiremi_feishu_bot_chat_bindings binding
+      JOIN multiremi_chat_sessions chat ON chat.id = binding.chat_session_id
+        AND chat.workspace_id = binding.workspace_id AND chat.agent_id = binding.agent_id
+      JOIN multiremi_issues issue ON issue.id = binding.issue_id
+        AND issue.workspace_id = binding.workspace_id
+      WHERE binding.id = push.binding_id AND binding.workspace_id = push.workspace_id
+        AND binding.issue_id = push.issue_id AND binding.issue_id = task.issue_id
+        AND task.workspace_id = binding.workspace_id AND task.agent_id = binding.agent_id
+        AND task.chat_session_id = binding.chat_session_id
+    )`).all() as Array<{
+      workspace_id: string; binding_id: string; wake_task_id: string;
+      chat_session_id: string | null; delivery_mode: string; source: string;
+    }>;
+    // Capture the set before any mutation clears task.issue_id. Otherwise a
+    // valid task could become invalid just because a prior UPDATE changed it.
+    const invalidWakeIds = [...new Set(invalidPushes
+      .filter((push) => push.delivery_mode === "proactive").map((push) => push.wake_task_id))];
+    const validChatBinding = `SELECT 1 FROM multiremi_feishu_bot_chat_bindings binding
+      JOIN multiremi_issues issue ON issue.id = binding.issue_id AND issue.workspace_id = binding.workspace_id
+      WHERE binding.chat_session_id = chat.id AND binding.workspace_id = chat.workspace_id
+        AND binding.agent_id = chat.agent_id`;
+    const ordinaryChatIds = new Set((db.query(`SELECT chat.id FROM multiremi_chat_sessions chat
+      WHERE NOT EXISTS (${validChatBinding})`).all() as Array<{ id: string }>).map((chat) => chat.id));
+    // Explicit unbind erased its own provenance in old versions. With no safe
+    // proof of private lineage, cold-start every ordinary Chat once, regardless
+    // of push history. Keep work_dir and its session_runtime_id machine affinity.
+    const resetChatIds = new Set([...ordinaryChatIds,
+      ...invalidPushes.map((push) => push.chat_session_id).filter((id): id is string => Boolean(id)),
+      ...(db.query(`SELECT chat.id FROM multiremi_chat_sessions chat
+        WHERE (chat.issue_id IS NOT NULL AND NOT EXISTS (${validChatBinding}
+          AND binding.issue_id = chat.issue_id)) OR EXISTS (
+          SELECT 1 FROM multiremi_tasks task WHERE task.chat_session_id = chat.id
+            AND task.issue_id IS NOT NULL AND NOT EXISTS (${validChatBinding}
+              AND binding.issue_id = task.issue_id AND binding.workspace_id = task.workspace_id
+              AND binding.agent_id = task.agent_id)
+        )`).all() as Array<{ id: string }>).map((chat) => chat.id),
+    ]);
+    for (const taskId of invalidWakeIds) {
+      // Match terminal task credential revocation, atomically with cancellation.
+      db.run(`UPDATE multiremi_access_tokens SET revoked_at = COALESCE(revoked_at, ?)
+        WHERE type = 'task' AND task_id = ? AND revoked_at IS NULL
+          AND EXISTS (SELECT 1 FROM multiremi_tasks task
+            WHERE task.id = ? AND task.status IN ('queued', 'dispatched'))`, [auditedAt, taskId, taskId]);
+      db.run(`UPDATE multiremi_tasks
+        SET status = 'cancelled', wait_reason = NULL, failure_reason = NULL,
+            completed_at = ?, cancelled_at = ?, updated_at = ?, issue_id = NULL,
+            session_id = NULL, issue_session_id = NULL, issue_session_generation = NULL
+        WHERE status IN ('queued', 'dispatched') AND id = ?`, [auditedAt, auditedAt, auditedAt, taskId]);
+    }
     const outboundColumns = db.query("PRAGMA table_info(multiremi_feishu_bot_outbound_deliveries)")
       .all() as Array<{ name: string }>;
-    if (outboundColumns.some((column) => column.name === "previous_delivery_id")) {
-      db.run(`UPDATE multiremi_feishu_bot_outbound_deliveries SET previous_delivery_id = NULL
-        WHERE previous_delivery_id IN (
-          SELECT id FROM multiremi_feishu_bot_outbound_deliveries
-          WHERE status <> 'sent' AND task_id IN (${discardedWakeTasks})
-        )`);
-    }
-    db.run(`DELETE FROM multiremi_feishu_bot_outbound_deliveries
-      WHERE status <> 'sent' AND task_id IN (${discardedWakeTasks})`);
-    // A work-round notification can also have been appended as system steering
-    // to a real user task. Remove that queued notification, not the user task.
-    db.run(`DELETE FROM multiremi_task_steer_messages
-      WHERE author_type = 'system' AND consumed_at IS NULL
-        AND content LIKE 'The responsible agent completed a work round for %'
-        AND task_id IN (
-          SELECT push.wake_task_id FROM multiremi_feishu_bot_round_pushes push
-          JOIN multiremi_feishu_bot_chat_bindings binding ON binding.id = push.binding_id
-            AND binding.workspace_id = push.workspace_id
+    for (const push of invalidPushes) {
+      if (push.delivery_mode === "proactive") {
+        if (outboundColumns.some((column) => column.name === "previous_delivery_id")) {
+          db.run(`UPDATE multiremi_feishu_bot_outbound_deliveries SET previous_delivery_id = NULL
+            WHERE previous_delivery_id IN (
+              SELECT id FROM multiremi_feishu_bot_outbound_deliveries
+              WHERE status <> 'sent' AND task_id = ? AND binding_id = ?
+            )`, [push.wake_task_id, push.binding_id]);
+        }
+        // Preserve sent history, ordinary replies and attachments. Invalid
+        // pending/in-flight notifications cannot replay after manual recovery.
+        db.run(`DELETE FROM multiremi_feishu_bot_outbound_deliveries
+          WHERE status <> 'sent' AND task_id = ? AND binding_id = ?`, [push.wake_task_id, push.binding_id]);
+      }
+      if (push.source === "round") {
+        // One user task may contain multiple round steers. Keep notifications
+        // for its current Issue while removing stale ones from earlier Issues.
+        const validIssues = db.query(`SELECT issue.* FROM multiremi_feishu_bot_round_pushes round_push
+          JOIN multiremi_tasks task ON task.id = round_push.wake_task_id
+          JOIN multiremi_feishu_bot_chat_bindings binding ON binding.id = round_push.binding_id
+            AND binding.workspace_id = round_push.workspace_id AND binding.issue_id = round_push.issue_id
+            AND binding.issue_id = task.issue_id AND binding.workspace_id = task.workspace_id
+            AND binding.agent_id = task.agent_id AND binding.chat_session_id = task.chat_session_id
           JOIN multiremi_chat_sessions chat ON chat.id = binding.chat_session_id
-            AND chat.workspace_id = binding.workspace_id
-          WHERE binding.issue_id IS NULL
-        )`);
-    // A resumed provider session would otherwise retain the inherited Issue
-    // prompt after the database association disappears. Keep the work directory.
-    db.run(`UPDATE multiremi_chat_sessions
-      SET session_id = NULL, session_provider = NULL,
-          session_execution_fingerprint = NULL
-      WHERE (issue_id IS NOT NULL OR id IN (
-        SELECT chat_session_id FROM multiremi_tasks WHERE id IN (${discardedWakeTasks})
-      )) AND NOT EXISTS (
-        SELECT 1 FROM multiremi_feishu_bot_chat_bindings binding
-        WHERE binding.chat_session_id = multiremi_chat_sessions.id AND binding.issue_id IS NOT NULL
-      )`);
-    db.run(`UPDATE multiremi_tasks
-      SET issue_id = NULL, session_id = NULL, issue_session_id = NULL, issue_session_generation = NULL
-      WHERE status IN ('queued', 'dispatched') AND chat_session_id IN (
-        SELECT chat.id FROM multiremi_chat_sessions chat
-        WHERE (chat.issue_id IS NOT NULL OR chat.id IN (
-          SELECT chat_session_id FROM multiremi_tasks WHERE id IN (${discardedWakeTasks})
-        )) AND NOT EXISTS (
-          SELECT 1 FROM multiremi_feishu_bot_chat_bindings binding
-          WHERE binding.chat_session_id = chat.id AND binding.issue_id IS NOT NULL
-        )
-      )`);
+            AND chat.workspace_id = binding.workspace_id AND chat.agent_id = binding.agent_id
+          JOIN multiremi_issues issue ON issue.id = binding.issue_id AND issue.workspace_id = binding.workspace_id
+          WHERE round_push.wake_task_id = ?`).all(push.wake_task_id) as Array<{
+            id: string; issue_key: string | null; issue_number: number | null;
+          }>;
+        const validPrefixes = validIssues.map((issue) => `The responsible agent completed a work round for ${
+          issue.issue_key || (Number(issue.issue_number) > 0 ? formatIssueKey(Number(issue.issue_number)) : issue.id)} - `);
+        const steers = db.query(`SELECT id, content FROM multiremi_task_steer_messages
+          WHERE author_type = 'system' AND consumed_at IS NULL
+            AND content LIKE 'The responsible agent completed a work round for %'
+            AND task_id = ?`).all(push.wake_task_id) as Array<{ id: string; content: string }>;
+        for (const steer of steers) {
+          if (!validPrefixes.some((prefix) => steer.content.startsWith(prefix))) {
+            db.run("DELETE FROM multiremi_task_steer_messages WHERE id = ?", [steer.id]);
+          }
+        }
+      }
+    }
+    for (const chatId of resetChatIds) {
+      db.run(`UPDATE multiremi_chat_sessions SET session_id = NULL, session_provider = NULL,
+        session_execution_fingerprint = NULL,
+        session_runtime_id = CASE WHEN work_dir IS NOT NULL AND work_dir <> '' THEN session_runtime_id ELSE NULL END
+        WHERE id = ?`, [chatId]);
+      db.run(`UPDATE multiremi_tasks SET session_id = NULL,
+        issue_session_id = NULL, issue_session_generation = NULL
+        WHERE status IN ('queued', 'dispatched') AND chat_session_id = ?`, [chatId]);
+      // An already-running provider can still report its old session later.
+      // Fence every dirty generation, including a retained B topic whose
+      // current task inherited a provider that had previously served Issue A.
+      db.run(`UPDATE multiremi_tasks SET session_id = NULL, execution_fingerprint = ?
+        WHERE status IN ('running', 'awaiting_human', 'waiting_local_directory') AND chat_session_id = ?`,
+      [CHAT_ISSUE_DECOUPLED_FINGERPRINT, chatId]);
+      if (ordinaryChatIds.has(chatId)) {
+        db.run(`UPDATE multiremi_tasks SET issue_id = NULL
+          WHERE status IN ('queued', 'dispatched') AND chat_session_id = ?`, [chatId]);
+      }
+    }
     if (chatSchema && /FOREIGN KEY\s*\(issue_id\)/i.test(chatSchema)) {
       const dependentTables = ["multiremi_chat_messages", "multiremi_feishu_bot_chat_bindings"];
       const dependentCounts = dependentTables.map((table) => Number(db.query(`SELECT COUNT(*) AS count FROM ${table}`).get().count));

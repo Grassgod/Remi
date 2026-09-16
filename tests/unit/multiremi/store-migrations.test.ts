@@ -10,7 +10,7 @@ import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 
 import {
   CHAT_ISSUE_CLASSIFICATION_CASES, classificationChatId, CHAT_ISSUE_MIGRATION,
-  seedLegacyChatIssueClassificationFixture, seedLegacyChatWakeFixture, assertLegacyChatWakeSettlement, assertCancelledLegacyWakesCannotRun, assertLegacyChatWakeRollback, seedLegacyChatIssueFixture,
+  seedLegacyChatIssueClassificationFixture, seedLegacyChatWakeFixture, assertLegacyChatWakeSettlement, assertCancelledLegacyWakesCannotRun, assertLegacyChatWakeRollback, mintLegacyWakeTokens, assertLegacyWakeTokens, seedWakeInvariantMatrix, assertWakeInvariantMatrix, seedLegacyChatIssueFixture,
 } from "./chat-issue-migration-fixture.js";
 
 let db: Database | null = null;
@@ -1477,11 +1477,14 @@ describe("store migrations", () => {
   });
 
   for (const tableForeignKey of [false, true]) {
-    it(`classifies legacy Feishu links using authoritative evidence and audits discarded links (table FK=${tableForeignKey})`, () => {
+    it(`classifies legacy Feishu links using authoritative evidence and audits every decision (table FK=${tableForeignKey})`, async () => {
       const database = freshDb();
       seedLegacyChatIssueClassificationFixture(database, tableForeignKey);
       seedLegacyChatWakeFixture(database);
+    seedWakeInvariantMatrix(database);
+    const tokens = await mintLegacyWakeTokens(database);
       assertLegacyChatWakeRollback(database);
+    await assertLegacyWakeTokens(database, tokens, true);
       migrate(database);
       assertLegacyChatWakeSettlement(database);
       migrate(database);
@@ -1491,36 +1494,42 @@ describe("store migrations", () => {
         const issueId = `iss_classification_${entry.name}`;
         const recovery = database.query(`SELECT * FROM multiremi_feishu_bot_issue_link_audit
           WHERE binding_id = ?`).get(`fcb_${chatId}`) as Record<string, string> | null;
-        if (entry.preserve) {
-          expect(recovery).toBeNull();
-        } else {
-          expect(recovery).toMatchObject({ binding_id: `fcb_${chatId}`, workspace_id: "local", issue_id: issueId });
-          expect(Number.isFinite(Date.parse(recovery!.audited_at))).toBe(true);
-          expect(recovery!.reason).toBe(entry.synced?.some((value) => value.chatType === "p2p")
-            ? "p2p_evidence" : "unproven_ownership");
-          expect(JSON.parse(recovery!.binding_snapshot)).toMatchObject({
-            id: `fcb_${chatId}`, workspace_id: "local", app_id: "cli_migration",
-            agent_id: "agt_chat_migration", chat_session_id: chatId, issue_id: issueId,
-            chat_id: `oc_${entry.name}`, thread_id: entry.thread || entry.key ? `om_${entry.name}` : null,
-          });
-          expect(recovery!.channel_snapshot ? JSON.parse(recovery!.channel_snapshot) : null).toEqual(entry.noChannel ? null : {
-            id: `nch_agent_chat_${chatId}`, workspace_id: "local", member_id: null, kind: "agent_chat",
-            name: "Legacy updates", enabled: entry.channelEnabled ?? 0, target: JSON.stringify({ chatId }),
-            event_types: '["comment_created"]', min_severity: "warning", created_by: "legacy-owner",
-            created_at: "2026-09-03T00:00:00.000Z", updated_at: "2026-09-03T00:00:00.000Z",
-          });
-        }
+        const synced = entry.synced?.filter((value) => (value.workspace ?? "local") === "local"
+          && (value.sourceWorkspace ?? "local") === "local") ?? [];
+        const p2p = synced.some((value) => value.chatType === "p2p");
+        expect(recovery).toMatchObject({ binding_id: `fcb_${chatId}`, workspace_id: "local", issue_id: issueId,
+          disposition: entry.preserve ? "preserved" : "discarded",
+          classification_version: 2, hit_canonical: Number(entry.canonical ?? false),
+          hit_marker: Number(entry.provenance === "exact"),
+          hit_synced_group: Number(synced.some((value) => value.chatType === "group")),
+          hit_synced_p2p: Number(p2p),
+        });
+        expect(Number.isFinite(Date.parse(recovery!.audited_at))).toBe(true);
+        expect(recovery!.reason).toBe(p2p ? "p2p_evidence"
+          : entry.canonical ? "canonical_topic" : entry.provenance === "exact" ? "creation_provenance"
+            : entry.preserve ? "synced_group" : "unproven_ownership");
+        expect(JSON.parse(recovery!.binding_snapshot)).toMatchObject({
+          id: `fcb_${chatId}`, workspace_id: "local", app_id: "cli_migration",
+          agent_id: "agt_chat_migration", chat_session_id: chatId, issue_id: issueId,
+          chat_id: `oc_${entry.name}`, thread_id: entry.thread || entry.key ? `om_${entry.name}` : null,
+        });
+        expect(recovery!.channel_snapshot ? JSON.parse(recovery!.channel_snapshot) : null).toEqual(entry.noChannel ? null : {
+          id: `nch_agent_chat_${chatId}`, workspace_id: "local", member_id: null, kind: "agent_chat",
+          name: "Legacy updates", enabled: entry.channelEnabled ?? 0, target: JSON.stringify({ chatId }),
+          event_types: '["comment_created"]', min_severity: "warning", created_by: "legacy-owner",
+          created_at: "2026-09-03T00:00:00.000Z", updated_at: "2026-09-03T00:00:00.000Z",
+        });
         expect(database.query("SELECT issue_id FROM multiremi_feishu_bot_chat_bindings WHERE chat_session_id = ?").get(chatId))
           .toEqual({ issue_id: entry.preserve ? issueId : null });
         expect(database.query(`SELECT session_id, session_provider, session_execution_fingerprint, work_dir, session_runtime_id
           FROM multiremi_chat_sessions WHERE id = ?`).get(chatId)).toEqual({
-          session_id: entry.preserve ? "provider-legacy" : null,
-          session_provider: entry.preserve ? "codex" : null,
-          session_execution_fingerprint: entry.preserve ? "legacy-fingerprint" : null,
+          session_id: entry.preserve && entry.name !== "group_without_thread" ? "provider-legacy" : null,
+          session_provider: entry.preserve && entry.name !== "group_without_thread" ? "codex" : null,
+          session_execution_fingerprint: entry.preserve && entry.name !== "group_without_thread" ? "legacy-fingerprint" : null,
           work_dir: "/work/keep", session_runtime_id: "rt_legacy",
         });
         expect(database.query("SELECT issue_id, session_id FROM multiremi_tasks WHERE id = ?").get(`tsk_${chatId}`))
-          .toEqual({ issue_id: entry.preserve ? issueId : null, session_id: entry.preserve ? "provider-task-legacy" : null });
+          .toEqual({ issue_id: entry.preserve ? issueId : null, session_id: entry.preserve && entry.name !== "group_without_thread" ? "provider-task-legacy" : null });
         expect(database.query("SELECT role, pending_agent_delivery FROM multiremi_chat_messages WHERE chat_session_id = ? ORDER BY role").all(chatId))
           .toEqual(entry.preserve
             ? [{ role: "assistant", pending_agent_delivery: 0 }, { role: "system", pending_agent_delivery: 1 }, { role: "user", pending_agent_delivery: 0 }]
@@ -1530,7 +1539,9 @@ describe("store migrations", () => {
         expect(database.query("SELECT enabled FROM multiremi_notification_channels WHERE id = ?").get(`nch_agent_chat_${chatId}`))
           .toEqual(entry.preserve ? { enabled: 0 } : null);
       }
-      assertCancelledLegacyWakesCannotRun(database);
+      await assertLegacyWakeTokens(database, tokens);
+    assertWakeInvariantMatrix(database);
+    assertCancelledLegacyWakesCannotRun(database);
     });
 
     for (const enforceForeignKeys of [false, true]) {
@@ -1557,8 +1568,12 @@ describe("store migrations", () => {
         expect(database.query("SELECT COUNT(*) AS count FROM multiremi_chat_sessions").get()).toEqual({ count: 4 });
         expect(database.query("SELECT COUNT(*) AS count FROM multiremi_feishu_bot_chat_bindings").get()).toEqual({ count: 3 });
         // Web associations never enter the transport audit table.
-        expect(database.query("SELECT binding_id FROM multiremi_feishu_bot_issue_link_audit").all())
-          .toEqual([{ binding_id: "fcb_chat_private_migration" }]);
+        expect(database.query("SELECT binding_id, disposition FROM multiremi_feishu_bot_issue_link_audit ORDER BY binding_id").all())
+          .toEqual([
+            { binding_id: "fcb_chat_group_migration", disposition: "preserved" },
+            { binding_id: "fcb_chat_issue_topic_iss_chat_migration", disposition: "preserved" },
+            { binding_id: "fcb_chat_private_migration", disposition: "discarded" },
+          ]);
         expect(database.query("SELECT chat_session_id, issue_id FROM multiremi_feishu_bot_chat_bindings ORDER BY chat_session_id").all()).toEqual([
           { chat_session_id: "chat_group_migration", issue_id: "iss_chat_migration" },
           { chat_session_id: "chat_issue_topic_iss_chat_migration", issue_id: "iss_chat_migration" },
