@@ -4402,19 +4402,41 @@ function migrateChatIssueOwnership(db: SqlDatabase, chatSchema?: string | null):
     "issue_id TEXT REFERENCES multiremi_issues(id) ON DELETE SET NULL");
   const columns = db.query("PRAGMA table_info(multiremi_chat_sessions)").all() as Array<{ name: string }>;
   if (columns.some((column) => column.name === "issue_id")) {
-    db.run(`UPDATE multiremi_feishu_bot_chat_bindings
-      SET issue_id = (
-        SELECT chat.issue_id FROM multiremi_chat_sessions chat
-        WHERE chat.id = multiremi_feishu_bot_chat_bindings.chat_session_id
-      )
-      WHERE issue_id IS NULL AND (
-        chat_session_id = 'chat_issue_topic_' || (
-          SELECT chat.issue_id FROM multiremi_chat_sessions chat
-          WHERE chat.id = multiremi_feishu_bot_chat_bindings.chat_session_id
-        )
-        OR thread_id IS NOT NULL
-        OR external_session_key LIKE '%:thread:%'
-      )`);
+    const bindings = db.query(`SELECT binding.id, binding.workspace_id, binding.chat_id,
+        binding.chat_session_id, chat.issue_id, issue.context_refs
+      FROM multiremi_feishu_bot_chat_bindings binding
+      JOIN multiremi_chat_sessions chat ON chat.id = binding.chat_session_id
+        AND chat.workspace_id = binding.workspace_id
+      JOIN multiremi_issues issue ON issue.id = chat.issue_id
+        AND issue.workspace_id = binding.workspace_id
+      WHERE binding.issue_id IS NULL`).all() as Array<{
+        id: string; workspace_id: string; chat_id: string | null;
+        chat_session_id: string; issue_id: string; context_refs: string;
+      }>;
+    for (const binding of bindings) {
+      const canonicalTopic = binding.chat_session_id === `chat_issue_topic_${binding.issue_id}`;
+      let autoCreatedGroupIssue = false;
+      if (!canonicalTopic && binding.chat_id) {
+        let refs: unknown;
+        try { refs = JSON.parse(binding.context_refs); } catch { refs = null; }
+        // Since its introduction, only autoCreateGroupIssue's group branch
+        // writes this source marker. Require the exact creation delivery too:
+        // thread_id and :thread: keys also occur in ordinary p2p conversations.
+        autoCreatedGroupIssue = Array.isArray(refs) && refs.some((ref: unknown) => {
+          if (!ref || typeof ref !== "object") return false;
+          const source = ref as Record<string, unknown>;
+          if (source.type !== "feishu_bot_message" || source.chat_id !== binding.chat_id
+            || typeof source.message_id !== "string" || !source.message_id) return false;
+          return Boolean(db.query(`SELECT 1 AS present FROM multiremi_feishu_bot_deliveries
+            WHERE binding_id = ? AND workspace_id = ? AND external_message_id = ?`)
+            .get(binding.id, binding.workspace_id, source.message_id));
+        });
+      }
+      if (canonicalTopic || autoCreatedGroupIssue) {
+        db.run("UPDATE multiremi_feishu_bot_chat_bindings SET issue_id = ? WHERE id = ?",
+          [binding.issue_id, binding.id]);
+      }
+    }
     // A resumed provider session would otherwise retain the inherited Issue
     // prompt after the database association disappears. Keep the work directory.
     db.run(`UPDATE multiremi_chat_sessions

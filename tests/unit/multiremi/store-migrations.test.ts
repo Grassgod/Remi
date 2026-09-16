@@ -8,7 +8,10 @@ import { Database } from "bun:sqlite";
 import { runMigrations } from "@multiremi/store/migrations.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 
-import { CHAT_ISSUE_MIGRATION, seedLegacyChatIssueFixture } from "./chat-issue-migration-fixture.js";
+import {
+  CHAT_ISSUE_CLASSIFICATION_CASES, CHAT_ISSUE_MIGRATION,
+  seedLegacyChatIssueClassificationFixture, seedLegacyChatIssueFixture,
+} from "./chat-issue-migration-fixture.js";
 
 let db: Database | null = null;
 
@@ -1473,6 +1476,36 @@ describe("store migrations", () => {
   });
 
   for (const tableForeignKey of [false, true]) {
+    it(`isolates threaded p2p Chats using exact Issue creation provenance (table FK=${tableForeignKey})`, () => {
+      const database = freshDb();
+      seedLegacyChatIssueClassificationFixture(database, tableForeignKey);
+      migrate(database);
+      migrate(database);
+      for (const entry of CHAT_ISSUE_CLASSIFICATION_CASES) {
+        const chatId = `chat_classification_${entry.name}`;
+        const issueId = `iss_classification_${entry.name}`;
+        expect(database.query("SELECT issue_id FROM multiremi_feishu_bot_chat_bindings WHERE chat_session_id = ?").get(chatId))
+          .toEqual({ issue_id: entry.preserve ? issueId : null });
+        expect(database.query(`SELECT session_id, session_provider, session_execution_fingerprint, work_dir, session_runtime_id
+          FROM multiremi_chat_sessions WHERE id = ?`).get(chatId)).toEqual({
+          session_id: entry.preserve ? "provider-legacy" : null,
+          session_provider: entry.preserve ? "codex" : null,
+          session_execution_fingerprint: entry.preserve ? "legacy-fingerprint" : null,
+          work_dir: "/work/keep", session_runtime_id: "rt_legacy",
+        });
+        expect(database.query("SELECT issue_id, session_id FROM multiremi_tasks WHERE id = ?").get(`tsk_${chatId}`))
+          .toEqual({ issue_id: entry.preserve ? issueId : null, session_id: entry.preserve ? "provider-task-legacy" : null });
+        expect(database.query("SELECT role, pending_agent_delivery FROM multiremi_chat_messages WHERE chat_session_id = ? ORDER BY role").all(chatId))
+          .toEqual(entry.preserve
+            ? [{ role: "assistant", pending_agent_delivery: 0 }, { role: "system", pending_agent_delivery: 1 }, { role: "user", pending_agent_delivery: 0 }]
+            : [{ role: "assistant", pending_agent_delivery: 0 }, { role: "user", pending_agent_delivery: 0 }]);
+        expect(database.query("SELECT pending_count FROM multiremi_agent_issue_update_state WHERE chat_session_id = ?").get(chatId))
+          .toEqual(entry.preserve ? { pending_count: 1 } : null);
+        expect(database.query("SELECT enabled FROM multiremi_notification_channels WHERE id = ?").get(`nch_agent_chat_${chatId}`))
+          .toEqual(entry.preserve ? { enabled: 0 } : null);
+      }
+    });
+
     for (const enforceForeignKeys of [false, true]) {
       it(`moves Issue ownership without losing Chat data (table FK=${tableForeignKey}, enforcement=${enforceForeignKeys})`, () => {
         const database = freshDb();

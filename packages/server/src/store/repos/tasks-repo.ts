@@ -182,6 +182,9 @@ export class BinarySkillFilesUnsupportedError extends Error {
 /** Steer submitted for a task that already reached a terminal state — API contract: 409. */
 export class TaskSteerConflictError extends Error {}
 
+/** Ordinary Chat cannot opt into Issue execution; a caller input error, not a server failure. */
+export class ChatIssueTaskConflictError extends Error {}
+
 /**
  * completeTask refused because unconsumed steer messages exist. The daemon
  * must fetch and inject them instead of completing — otherwise a steer that
@@ -373,7 +376,7 @@ export class TasksRepo {
     if (chatSession && chatSession.workspaceId !== agent.workspaceId) throw new Error("Chat session workspace does not match agent workspace");
     if (chatSession && issueId
       && this.ctx.feishuBot().getFeishuIssueIdForChatSession(chatSession.id) !== issueId) {
-      throw new Error("Only Feishu Issue topics can create Chat transport tasks with an Issue");
+      throw new ChatIssueTaskConflictError("Only Feishu Issue topics can create Chat transport tasks with an Issue");
     }
     const requestedIssueSessionId = cleanOptionalString(input.issueSessionId ?? input.issue_session_id)
       ?? triggerComment?.issueSessionId

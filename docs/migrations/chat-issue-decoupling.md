@@ -9,10 +9,17 @@ their messages and working directories.
 ## Data transformation
 
 - Preserve the Issue on canonical `chat_issue_topic_<issueId>` bindings,
-  including roots whose outbound delivery is still pending, and on existing
-  Feishu group topic bindings identified by their thread destination or
-  `:thread:` session key. These are the stored topic markers used by the previous
-  transport implementation; no live Feishu discovery is needed.
+  including roots whose outbound delivery is still pending. Preserve
+  automatically created group Issues only when their `feishu_bot_message`
+  creation source matches the binding's `chat_id` and the source `message_id`
+  has a delivery for that exact binding in the same workspace. The Chat and
+  Issue must also belong to that workspace. This marker has been written by
+  the group-only automatic Issue creation path since that path was introduced.
+  Legacy bindings did not persist `chat_type`; `thread_id` and `:thread:` keys
+  occur in both group and p2p conversations, so neither is a classification
+  signal. Unproven associations are discarded, including manually linked
+  conversations or source records whose creation delivery is missing. This
+  works without current topic configuration or live Feishu discovery.
 - Discard the other historical Chat/Issue associations. In those Chats, reset
   the provider resume pointer and its provider/fingerprint metadata so
   the next turn starts with a clean prompt. Keep `work_dir` and its origin
@@ -20,7 +27,9 @@ their messages and working directories.
   machine. Keep user/assistant
   messages. Clear queued/dispatched tasks' inherited `issue_id` and frozen
   `session_id`; running task identities
-  remain intact, with the task payload code rejecting old private ownership.
+  remain intact for auditing. Task payloads, CLI context, Issue creation and
+  request provenance resolve the effective Chat scope and reject old private
+  ownership, so upgrading does not depend on draining those tasks.
 - Remove private Chat notification channels and pending Issue update state.
   Clear pending delivery flags and remove only system messages starting with
   `Bound Issue update:` from non-topic Chats, preventing their replay in the new
@@ -59,8 +68,12 @@ Repeated startup does not repeat the migration or recreate Chat ownership.
 Regression tests cover both SQLite schema shapes with enforcement on/off,
 unknown extra columns/indexes/triggers, provider resume reset, queued/dispatched task
 cleanup, rollback after injected dependent-row loss, and restoration of a
-verified pre-upgrade SQLite backup. A PostgreSQL integration
-case exercises upgrade and repeated startup on the real backend.
+verified pre-upgrade SQLite backup. Both SQLite schema shapes and the real
+PostgreSQL backend cover p2p conversations with thread/key combinations,
+automatic group creation without thread markers, and missing, malformed or
+mismatched creation provenance. These cases verify provider reset, pending task
+isolation, message preservation, and update channel/state cleanup as well as
+ownership and repeated startup.
 
 ## Rollback procedure
 

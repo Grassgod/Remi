@@ -21,7 +21,7 @@ import {
 } from "../wire/index.js";
 import type { CreateTaskInput } from "@multiremi/contracts/types.js";
 import { createId } from "@multiremi/ids.js";
-import { TaskSteerConflictError } from "@multiremi/store/repos/tasks-repo.js";
+import { ChatIssueTaskConflictError, TaskSteerConflictError } from "@multiremi/store/repos/tasks-repo.js";
 import { OrganizerActionError } from "../../organizer/settings.js";
 import type { RouterDeps } from "./deps.js";
 
@@ -94,7 +94,7 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
       ...publicInput
     } = body;
     const taskToken = currentTaskAccessToken(c);
-    const sourceTask = taskToken?.taskId ? store.getTask(taskToken.taskId) : null;
+    const sourceTask = taskToken?.taskId ? store.getTaskWithAgent(taskToken.taskId) : null;
     const issueId = cleanString(publicInput.issueId);
     const issue = issueId ? store.getIssue(issueId) : null;
     const requestedIssueSessionId = cleanString(publicInput.issueSessionId ?? publicInput.issue_session_id);
@@ -122,8 +122,13 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
         }
         : {}),
     };
-    const task = store.createTask(createInput);
-    return c.json({ task: taskPublicResponse(task) }, 201);
+    try {
+      const task = store.createTask(createInput);
+      return c.json({ task: taskPublicResponse(task) }, 201);
+    } catch (error) {
+      if (error instanceof ChatIssueTaskConflictError) return c.json({ error: error.message }, 400);
+      throw error;
+    }
   });
   app.get("/api/multiremi/tasks/:id", (c) => {
     const task = store.getTaskWithAgent(c.req.param("id"));

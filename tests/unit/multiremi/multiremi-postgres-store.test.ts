@@ -27,7 +27,7 @@ import { ProjectInstructionsRevisionConflictError } from "@multiremi/store/repos
 import { TaskSteerConflictError, TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
 import { configureRepositoryWikiAutomation, readyArchiveBinding } from "./helpers.js";
 
-import { seedLegacyChatIssueFixture } from "./chat-issue-migration-fixture.js";
+import { CHAT_ISSUE_CLASSIFICATION_CASES, seedLegacyChatIssueClassificationFixture } from "./chat-issue-migration-fixture.js";
 
 // ────────────────────────────── translateSqliteToPg ──────────────────────────────
 
@@ -221,12 +221,15 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     await admin.end();
   });
 
+  // Real PostgreSQL performs repeated full startup migrations plus nine
+  // classification fixtures and their cleanup; allow for database round trips.
   it("moves legacy Chat ownership into Feishu topics and is idempotent", () => {
-    seedLegacyChatIssueFixture(db);
+    seedLegacyChatIssueClassificationFixture(db);
     runMigrations(db);
     runMigrations(db);
     expect((db.query("PRAGMA table_info(multiremi_chat_sessions)").all() as Array<{ name: string }>).map(column => column.name)).not.toContain("issue_id");
-    expect(db.query("SELECT chat_session_id, issue_id FROM multiremi_feishu_bot_chat_bindings WHERE app_id = 'cli_migration' ORDER BY chat_session_id").all()).toEqual([
+    expect(db.query(`SELECT chat_session_id, issue_id FROM multiremi_feishu_bot_chat_bindings
+      WHERE app_id = 'cli_migration' AND chat_session_id NOT LIKE 'chat_classification_%' ORDER BY chat_session_id`).all()).toEqual([
       { chat_session_id: "chat_group_migration", issue_id: "iss_chat_migration" },
       { chat_session_id: "chat_issue_topic_iss_chat_migration", issue_id: "iss_chat_migration" },
       { chat_session_id: "chat_private_migration", issue_id: null },
@@ -239,11 +242,35 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     }
     expect(db.query("SELECT issue_id, issue_session_id, issue_session_generation FROM multiremi_tasks WHERE id = 'tsk_topic_migration_queued'").get())
       .toEqual({ issue_id: "iss_chat_migration", issue_session_id: null, issue_session_generation: null });
+    for (const entry of CHAT_ISSUE_CLASSIFICATION_CASES) {
+      const chatId = `chat_classification_${entry.name}`;
+      const issueId = `iss_classification_${entry.name}`;
+      expect(db.query("SELECT issue_id FROM multiremi_feishu_bot_chat_bindings WHERE chat_session_id = ?").get(chatId))
+        .toEqual({ issue_id: entry.preserve ? issueId : null });
+      expect(db.query(`SELECT session_id, session_provider, session_execution_fingerprint, work_dir, session_runtime_id
+        FROM multiremi_chat_sessions WHERE id = ?`).get(chatId)).toEqual({
+        session_id: entry.preserve ? "provider-legacy" : null,
+        session_provider: entry.preserve ? "codex" : null,
+        session_execution_fingerprint: entry.preserve ? "legacy-fingerprint" : null,
+        work_dir: "/work/keep", session_runtime_id: "rt_legacy",
+      });
+      expect(db.query("SELECT issue_id, session_id FROM multiremi_tasks WHERE id = ?").get(`tsk_${chatId}`))
+        .toEqual({ issue_id: entry.preserve ? issueId : null, session_id: entry.preserve ? "provider-task-legacy" : null });
+      expect(db.query("SELECT role, pending_agent_delivery FROM multiremi_chat_messages WHERE chat_session_id = ? ORDER BY role").all(chatId))
+        .toEqual(entry.preserve
+          ? [{ role: "assistant", pending_agent_delivery: 0 }, { role: "system", pending_agent_delivery: 1 }, { role: "user", pending_agent_delivery: 0 }]
+          : [{ role: "assistant", pending_agent_delivery: 0 }, { role: "user", pending_agent_delivery: 0 }]);
+      expect(db.query("SELECT pending_count FROM multiremi_agent_issue_update_state WHERE chat_session_id = ?").get(chatId))
+        .toEqual(entry.preserve ? { pending_count: 1 } : null);
+      expect(db.query("SELECT enabled FROM multiremi_notification_channels WHERE id = ?").get(`nch_agent_chat_${chatId}`))
+        .toEqual(entry.preserve ? { enabled: 0 } : null);
+    }
     // Keep the shared integration store empty for the remaining test cases.
     for (const chat of store.listChatSessions("local")) store.deleteChatSession(chat.id);
     store.deleteIssue("iss_chat_migration");
+    for (const entry of CHAT_ISSUE_CLASSIFICATION_CASES) store.deleteIssue(`iss_classification_${entry.name}`);
     db.run("DELETE FROM multiremi_agents WHERE id = ?", ["agt_chat_migration"]);
-  });
+  }, 15_000);
 
   it("fences Wiki cleanup leases and persists per-path progress across connections", () => {
     const otherDb = new PostgresSyncDatabase(pgDatabaseUrl(TEST_DB));

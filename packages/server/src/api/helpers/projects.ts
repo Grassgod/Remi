@@ -92,7 +92,7 @@ export function loadProjectForMutation(
 export function projectDocCreateInput(c: Context, store: MultiremiStore, input: CreateProjectDocInput): CreateProjectDocInput {
   const caller = issueSubscriberCaller(c);
   const sourceTaskId = currentTaskAccessToken(c)?.taskId ?? null;
-  const task = sourceTaskId ? store.getTask(sourceTaskId) : null;
+  const task = sourceTaskId ? store.getTaskWithAgent(sourceTaskId) : null;
   const sourceIssueId = task?.issueId ?? null;
   return {
     ...input,

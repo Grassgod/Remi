@@ -137,9 +137,11 @@ function buildCliContext(c: Context, deps: RouterDeps, identity: ResolvedCliIden
   }
 
   const access = currentAccessToken(c);
-  const task = identity.type === "task" && access?.taskId ? store.getTask(access.taskId) : null;
-  const issue = task?.issueId ? store.getIssue(task.issueId) : null;
-  const project = task ? store.getTaskWithAgent(task.id)?.project ?? null : null;
+  // Resolve the same effective scope as daemon claims. An in-flight pre-upgrade
+  // private Chat task can retain Issue ids in its audit row after detachment.
+  const task = identity.type === "task" && access?.taskId ? store.getTaskWithAgent(access.taskId) : null;
+  const issue = task?.issue ?? null;
+  const project = task?.project ?? null;
   const scheduleTarget = task?.autopilotRunId ? store.getAutopilotRun(task.autopilotRunId)?.scheduleTarget ?? null : null;
   const agent = task?.agentId
     ? store.getAgent(task.agentId)

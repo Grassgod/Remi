@@ -86,7 +86,7 @@ export function issueCommentCreateInput(
 ): CreateIssueCommentInput {
   const taskToken = currentTaskAccessToken(c);
   if (taskToken?.agentId) {
-    const task = taskToken.taskId && store ? store.getTask(taskToken.taskId) : null;
+    const task = taskToken.taskId && store ? store.getTaskWithAgent(taskToken.taskId) : null;
     return {
       ...input,
       authorType: "agent",
@@ -156,8 +156,10 @@ export function withIssueCreateRequestContext(
   if (hasRequestField(input, "context_refs")) out.context_refs = input.context_refs ?? [];
 
   const taskToken = currentTaskAccessToken(c);
-  const task = taskToken?.taskId && store ? store.getTask(taskToken.taskId) : null;
-  const sourceIssue = task?.issueId && store ? store.getIssue(task.issueId) : null;
+  // Historical task rows remain an audit trail, not an implicit Issue binding
+  // for a private Chat that was already detached by the upgrade.
+  const task = taskToken?.taskId && store ? store.getTaskWithAgent(taskToken.taskId) : null;
+  const sourceIssue = task?.issue ?? null;
   const isIntake = sourceIssue?.issueKind === "intake";
   if (sourceIssue) {
     // Any task-run creation (intake or follow-up) stays in the source issue's
