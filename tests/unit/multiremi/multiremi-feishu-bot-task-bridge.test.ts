@@ -6,6 +6,8 @@ import type { IncomingMessage, TaskStreamMeta } from "@connectors/base.js";
 import { createFeishuTaskHandler } from "../../../apps/remi/cli/multiremi.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
+import { bindFeishuTopicFixture } from "./feishu-topic-fixture.js";
+
 const APP_SECRET = "wJ4tQ7xR2nB8vC5mZ1kL0pS6dF3gH9jA";
 let previousEncryptionKey: string | undefined;
 
@@ -190,7 +192,7 @@ describe("Feishu bot standard Task bridge", () => {
       status: "ready",
       repos: [],
     });
-    store.updateChatSession(inbound.chatSessionId, { issueId: issue.id });
+    bindFeishuTopicFixture(store, db!, inbound.chatSessionId, issue.id);
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const leaderTask = store.createSessionTask(session.id, {
       agentId: agent.id,
@@ -340,7 +342,7 @@ describe("Feishu bot standard Task bridge", () => {
       text: "I am already waiting for a response.",
     });
     const issue = store.createIssue({ title: "Busy Feishu topic", workspaceId: "local" });
-    store.updateChatSession(inbound.chatSessionId, { issueId: issue.id });
+    bindFeishuTopicFixture(store, db!, inbound.chatSessionId, issue.id);
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const leaderTask = store.createSessionTask(session.id, {
       agentId: agent.id,
@@ -406,7 +408,7 @@ describe("Feishu bot standard Task bridge", () => {
       assigneeType: "squad",
       assigneeId: squad.id,
     });
-    store.updateChatSession(inbound.chatSessionId, { issueId: issue.id });
+    bindFeishuTopicFixture(store, db!, inbound.chatSessionId, issue.id);
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const leaderTask = store.createSessionTask(session.id, {
       agentId: agent.id,
@@ -456,7 +458,7 @@ describe("Feishu bot standard Task bridge", () => {
 
     const firstSubmission = store.submitFeishuBotMessage("local", "rt_bot", {
       revision: config.revision,
-      externalSessionKey: "oc_chat_delta",
+      externalSessionKey: "oc_chat_delta:thread:omt_delta",
       externalMessageId: "om_delta_1",
       senderOpenId: "ou_member",
       senderUnionId: "on_owner",
@@ -475,7 +477,7 @@ describe("Feishu bot standard Task bridge", () => {
     store.startTask(firstTask.id);
     store.completeTask(firstTask.id, { output: "first answer", sessionId: "sess_feishu_delta" });
     const issue = store.createIssue({ title: "Feishu bound Chat", workspaceId: "local" });
-    store.updateChatSession(firstSubmission.chatSessionId, { issueId: issue.id });
+    bindFeishuTopicFixture(store, db!, firstSubmission.chatSessionId, issue.id);
     const taskCountBeforeIssueUpdate = store.listTasks().length;
     store.createIssueComment(issue.id, {
       authorType: "member",
@@ -490,7 +492,7 @@ describe("Feishu bot standard Task bridge", () => {
 
     const secondSubmission = store.submitFeishuBotMessage("local", "rt_bot", {
       revision: config.revision,
-      externalSessionKey: "oc_chat_delta",
+      externalSessionKey: "oc_chat_delta:thread:omt_delta",
       externalMessageId: "om_delta_2",
       senderOpenId: "ou_member",
       senderUnionId: "on_owner",
@@ -506,6 +508,7 @@ describe("Feishu bot standard Task bridge", () => {
       ...secondTask,
       sessionProjection: secondWire.session_projection,
       chatMessage: secondWire.chat_message,
+      boundIssue: secondWire.bound_issue,
       boundIssueUpdates: secondWire.bound_issue_updates,
       boundIssueUpdatesOmittedCount: secondWire.bound_issue_updates_omitted_count,
     } as any);
@@ -730,7 +733,7 @@ describe("Feishu bot standard Task bridge", () => {
       assigneeType: "agent",
       assigneeId: agent.id,
     });
-    store.updateChatSession(first.chatSessionId, { issueId: issue.id });
+    bindFeishuTopicFixture(store, db!, first.chatSessionId, issue.id);
 
     const routedAgent = store.createAgent({ name: "Current group Agent", provider: "codex", workspaceId: "local" });
     store.replaceFeishuBotAgentRoutes("local", [
@@ -747,7 +750,7 @@ describe("Feishu bot standard Task bridge", () => {
       text: "after route switch",
     });
     store.cancelTask(second.taskId);
-    store.updateChatSession(second.chatSessionId, { issueId: issue.id });
+    bindFeishuTopicFixture(store, db!, second.chatSessionId, issue.id);
     db!.run(
       "UPDATE multiremi_feishu_bot_chat_bindings SET updated_at = ? WHERE chat_session_id = ?",
       ["2026-09-09T00:00:00.000Z", first.chatSessionId],
@@ -821,7 +824,7 @@ describe("Feishu bot standard Task bridge", () => {
     });
     const chat = store.getChatSession(submitted.chatSessionId)!;
     expect(submitted.agentId).toBe(routedAgent.id);
-    expect(store.getIssue(chat.issueId!)).toMatchObject({
+    expect(store.getIssue(store.getFeishuIssueIdForChatSession(chat.id)!)).toMatchObject({
       assigneeType: "agent",
       assigneeId: routedAgent.id,
     });

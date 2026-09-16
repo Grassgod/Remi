@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore, daemonRuntimeId } from "@multiremi/store.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { prepareFeishuIssueTopic } from "../../fixtures/multiremi-feishu-topic.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -36,6 +37,47 @@ describe("Multiremi store — local_directory affinity, retries, and agent re-ho
 
     expect(followUp.sessionId).toBeNull();
     expect(store.buildTaskSessionProjection(followUp.id)?.mode).toBe("bootstrap");
+  });
+
+  it("keeps a cold Chat bootstrap on the runtime that owns its retained work directory", () => {
+    const { store, runtime, chat } = warmChat();
+    const other = store.registerRuntime({ id: "rt_other_cold", name: "other cold", provider: "claude" });
+    db!.run(`UPDATE multiremi_chat_sessions
+      SET session_id = NULL, session_provider = NULL, session_execution_fingerprint = NULL,
+          work_dir = '/tmp/chat-files-on-original-runtime' WHERE id = ?`, [chat.id]);
+    const followUp = store.sendChatMessage(chat.id, { body: "Continue with my files" }).task;
+
+    expect(followUp).toMatchObject({
+      runtimeId: runtime.id,
+      sessionId: null,
+      workDir: "/tmp/chat-files-on-original-runtime",
+    });
+    expect(store.claimTask(other.id)).toBeNull();
+    const claimed = store.claimTask(runtime.id)!;
+    expect(claimed.id).toBe(followUp.id);
+    expect(claimed.sessionId).toBeNull();
+    expect(claimed.workDir).toBe("/tmp/chat-files-on-original-runtime");
+    const projection = store.buildTaskSessionProjection(claimed.id)!;
+    expect(projection.mode).toBe("bootstrap");
+    expect(projection.jsonl).toContain("first");
+    expect(projection.jsonl).toContain("answer");
+  });
+
+  it.each(["missing", "unusable"])("does not send a cold Chat directory to a pooled runtime when its origin is %s", (origin) => {
+    const { store, runtime, chat } = warmChat();
+    const other = store.registerRuntime({ id: "rt_other_cold", name: "other cold", provider: "claude" });
+    db!.run(`UPDATE multiremi_chat_sessions
+      SET session_id = NULL, session_provider = NULL, session_execution_fingerprint = NULL,
+          work_dir = '/tmp/chat-files-on-original-runtime', session_runtime_id = ? WHERE id = ?`,
+    [origin === "missing" ? "rt_missing_cold" : runtime.id, chat.id]);
+    if (origin === "unusable") db!.run("UPDATE multiremi_runtimes SET provider = 'codex' WHERE id = ?", [runtime.id]);
+    const followUp = store.sendChatMessage(chat.id, { body: "Continue independently" }).task;
+
+    expect(followUp).toMatchObject({ runtimeId: null, sessionId: null, workDir: null });
+    const claimed = store.claimTask(other.id)!;
+    expect(claimed.id).toBe(followUp.id);
+    expect(claimed.workDir).toBeNull();
+    expect(store.buildTaskSessionProjection(claimed.id)?.mode).toBe("bootstrap");
   });
 
   it("bootstraps a Chat projection when the promoted runtime disappeared", () => {
@@ -88,9 +130,10 @@ describe("Multiremi store — local_directory affinity, retries, and agent re-ho
     const dirRuntime = store.registerRuntime({ id: "rt_pref_dir", name: "dir", provider: "codex", daemonId: "daemon-pref-dir" });
     const sessRuntime = store.registerRuntime({ id: "rt_pref_sess", name: "sess", provider: "codex", daemonId: "daemon-pref-sess" });
     const agent = store.createAgent({ name: "Pref", provider: "codex" });
-    // Establish a chat session whose provider session lives on sessRuntime.
-    const session = store.createChatSession({ agentId: agent.id, title: "s" });
-    const warmup = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "hi" });
+    // Establish a topic session whose provider session lives on sessRuntime.
+    const issue = store.createIssue({ title: "dir", workspaceId: "local" });
+    const session = prepareFeishuIssueTopic(store, { runtimeId: sessRuntime.id, agentId: agent.id, issueId: issue.id });
+    const warmup = store.createTask({ agentId: agent.id, chatSessionId: session.id, issueId: issue.id, prompt: "hi" });
     expect(store.claimTask(sessRuntime.id)?.id).toBe(warmup.id);
     store.startTask(warmup.id);
     store.completeTask(warmup.id, { output: "ok", sessionId: "sess_pref", workDir: "/tmp/pref" });
@@ -103,7 +146,7 @@ describe("Multiremi store — local_directory affinity, retries, and agent re-ho
       workspaceId: "local",
       resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/p", daemon_id: "daemon-pref-dir" } }],
     });
-    const issue = store.createIssue({ title: "dir", workspaceId: "local", projectId: project.id });
+    store.updateIssue(issue.id, { projectId: project.id });
     const task = store.createTask({ agentId: agent.id, chatSessionId: session.id, issueId: issue.id, prompt: "work" });
     expect(task.runtimeId).toBe(dirRuntime.id);
     expect(task.sessionId).toBeNull();

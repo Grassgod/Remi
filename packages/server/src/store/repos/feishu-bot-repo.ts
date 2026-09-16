@@ -52,6 +52,7 @@ import type {
   MultiremiFeishuBotAgentRoute,
   MultiremiAttachment,
   MultiremiIssue,
+  MultiremiChatSession,
   MultiremiTask,
   MultiremiTaskHumanRequest,
   SubmitFeishuBotMessageInput,
@@ -650,7 +651,6 @@ export class FeishuBotRepo {
           workspaceId,
           agentId: routeAgent.agentId,
           creatorId: sender.actorId,
-          issueId: issue?.id ?? null,
           title: issue ? `${issue.key}: ${issue.title}` : "Feishu conversation",
         });
         const bindingId = createId("fcb");
@@ -658,30 +658,37 @@ export class FeishuBotRepo {
         this.ctx.db.run(
           `INSERT INTO multiremi_feishu_bot_chat_bindings (
              id, workspace_id, app_id, agent_id, external_session_key,
-             chat_session_id, chat_id, thread_id, reply_to_message_id,
+             chat_session_id, issue_id, chat_id, thread_id, reply_to_message_id,
              created_at, updated_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           bindingId,
           workspaceId,
           config.appId,
           routeAgent.agentId,
           externalSessionKey,
           chat.id,
+          issue?.id ?? null,
           chatId,
           threadId,
           replyToMessageId,
           now,
           now,
         );
-        binding = { id: bindingId, chat_session_id: chat.id };
+        binding = { id: bindingId, chat_session_id: chat.id, issue_id: issue?.id ?? null };
+        if (issue) this.ensureDefaultAgentIssueUpdatesChannel(chat);
       } else if (autoCreateGroupIssue) {
         const chatSessionId = String(binding.chat_session_id);
         const chat = this.ctx.chat().getChatSession(chatSessionId);
-        if (chat && !chat.issueId
+        if (chat && !binding.issue_id
           && (!chat.latestTaskId || !this.isTaskIssueCreationRestricted(chat.latestTaskId))) {
           const issue = createGroupIssue();
+          this.ctx.db.run(
+            "UPDATE multiremi_feishu_bot_chat_bindings SET issue_id = ?, updated_at = ? WHERE id = ?",
+            [issue.id, nowIso(), String(binding.id)],
+          );
+          binding.issue_id = issue.id;
+          this.ensureDefaultAgentIssueUpdatesChannel(chat);
           this.ctx.chat().updateChatSession(chat.id, {
-            issueId: issue.id,
             title: `${issue.key}: ${issue.title}`,
           });
         }
@@ -722,6 +729,7 @@ export class FeishuBotRepo {
           agentId: routeAgent.agentId,
           runtimeId,
           chatSessionId,
+          issueId: nullableString(binding.issue_id),
           workspaceId,
           holdsWorkspace: false,
           prompt: text,
@@ -795,6 +803,30 @@ export class FeishuBotRepo {
     return result;
   }
 
+  getIssueIdForChatSession(chatSessionId: string): string | null {
+    const row = this.ctx.db.query(
+      `SELECT issue_id FROM multiremi_feishu_bot_chat_bindings
+       WHERE chat_session_id = ? AND issue_id IS NOT NULL
+       ORDER BY created_at ASC, id ASC LIMIT 1`,
+    ).get(chatSessionId) as Row | null;
+    return nullableString(row?.issue_id);
+  }
+
+  private ensureDefaultAgentIssueUpdatesChannel(session: MultiremiChatSession): void {
+    const member = session.creatorId
+      ? this.ctx.workspaces().getWorkspaceMember(session.creatorId)
+        ?? this.ctx.workspaces().findWorkspaceMemberForUser(session.creatorId, session.workspaceId)
+      : null;
+    this.ctx.notificationChannels().upsertAgentChatNotificationChannel({
+      workspaceId: session.workspaceId,
+      chatSessionId: session.id,
+      name: `${session.title} Issue updates`,
+      enabled: true,
+      memberId: member && member.workspaceId === session.workspaceId && !member.archivedAt ? member.id : null,
+      createdBy: session.creatorId,
+    });
+  }
+
   getChatConversationKind(chatSessionId: string): "p2p" | "group" | null {
     const row = this.ctx.db.query(
       `SELECT external_session_key, thread_id
@@ -826,7 +858,7 @@ export class FeishuBotRepo {
         `SELECT 1 AS present
          FROM multiremi_feishu_bot_chat_bindings b
          JOIN multiremi_chat_sessions c ON c.id = b.chat_session_id
-         WHERE b.workspace_id = ? AND c.issue_id = ?
+         WHERE b.workspace_id = ? AND b.issue_id = ?
          LIMIT 1`,
       ).get(issue.workspaceId, issue.id) as Row | null;
       if (existing) return false;
@@ -836,7 +868,6 @@ export class FeishuBotRepo {
         workspaceId: issue.workspaceId,
         agentId: routeAgent.agentId,
         creatorId: issue.createdBy ?? "local",
-        issueId: issue.id,
         title: `${issue.key}: ${issue.title}`,
       });
       const bindingId = `fcb_issue_topic_${issue.id}`;
@@ -845,9 +876,9 @@ export class FeishuBotRepo {
       this.ctx.db.run(
         `INSERT INTO multiremi_feishu_bot_chat_bindings (
            id, workspace_id, app_id, agent_id, external_session_key,
-           chat_session_id, chat_id, thread_id, reply_to_message_id,
+           chat_session_id, issue_id, chat_id, thread_id, reply_to_message_id,
            created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`,
         [
           bindingId,
           issue.workspaceId,
@@ -855,11 +886,13 @@ export class FeishuBotRepo {
           routeAgent.agentId,
           `pending:${issue.id}`,
           chat.id,
+          issue.id,
           topicConfig.chatId,
           now,
           now,
         ],
       );
+      this.ensureDefaultAgentIssueUpdatesChannel(chat);
       this.ctx.db.run(
         `INSERT INTO multiremi_feishu_bot_outbound_deliveries (
            id, workspace_id, binding_id, task_id, chat_id, thread_id,
@@ -903,7 +936,7 @@ export class FeishuBotRepo {
       const binding = this.ctx.db.query(
         `SELECT b.* FROM multiremi_feishu_bot_chat_bindings b
          JOIN multiremi_chat_sessions c ON c.id = b.chat_session_id
-         WHERE b.workspace_id = ? AND c.issue_id = ? AND c.status = 'active'
+         WHERE b.workspace_id = ? AND b.issue_id = ? AND c.status = 'active'
            AND b.chat_id = ? AND b.reply_to_message_id IS NOT NULL
          ORDER BY b.updated_at DESC, b.created_at DESC, b.id DESC
          LIMIT 1`,
@@ -924,6 +957,7 @@ export class FeishuBotRepo {
         agentId,
         runtimeId,
         chatSessionId: String(binding.chat_session_id),
+        issueId: issue.id,
         workspaceId: issue.workspaceId,
         holdsWorkspace: false,
         prompt: humanRequestPushPrompt(issue, sourceTask, request),
@@ -982,7 +1016,7 @@ export class FeishuBotRepo {
       `SELECT b.* FROM multiremi_feishu_bot_chat_bindings b
        JOIN multiremi_chat_sessions c ON c.id = b.chat_session_id
        WHERE b.workspace_id = ? AND b.app_id = ?
-         AND c.issue_id = ? AND c.status = 'active'
+         AND b.issue_id = ? AND c.status = 'active'
          AND b.chat_id IS NOT NULL AND b.reply_to_message_id IS NOT NULL
        ORDER BY b.updated_at DESC, b.created_at DESC, b.id DESC`,
     ).all(input.issue.workspaceId, config.appId, input.issue.id) as Row[];
@@ -1026,6 +1060,7 @@ export class FeishuBotRepo {
           agentId: String(binding.agent_id),
           runtimeId: config.runtimeId,
           chatSessionId,
+          issueId: input.issue.id,
           workspaceId: input.issue.workspaceId,
           holdsWorkspace: false,
           prompt: roundPushPrompt(input.issue),

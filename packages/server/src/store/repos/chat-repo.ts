@@ -333,7 +333,9 @@ export class ChatRepo {
   buildTaskSessionProjection(taskId: string): MultiremiSessionProjection | null {
     return this.ctx.db.transaction(() => {
       const task = this.ctx.tasks().getTask(taskId);
-      if (!task?.chatSessionId || task.issueSessionId) return null;
+      if (!task?.chatSessionId) return null;
+      const topicIssueId = this.ctx.feishuBot().getFeishuIssueIdForChatSession(task.chatSessionId);
+      if (task.issueSessionId && topicIssueId) return null;
       const session = this.getChatSession(task.chatSessionId);
       if (!session) return null;
       const agent = this.ctx.agents().getAgent(task.agentId);
@@ -344,7 +346,9 @@ export class ChatRepo {
         return source?.status !== "queued";
       });
       const events = chatMessagesAsSessionEvents(messages, session, task.id, currentLineageTaskIds);
-      const warmProviderSessionId = task.sessionId;
+      const detachedChatIssue = (task.issueId && topicIssueId !== task.issueId)
+        || (task.issueSessionId && !topicIssueId);
+      const warmProviderSessionId = detachedChatIssue ? null : task.sessionId;
       const tokenBudget = resolveProjectionTokenBudget({
         provider: agent?.provider,
         model: agent?.model,

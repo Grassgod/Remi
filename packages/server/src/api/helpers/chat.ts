@@ -29,6 +29,7 @@ export function requestedChatWorkspaceId(
 }
 
 export function withChatSessionRequestContext(c: Context, store: MultiremiStore, input: CreateChatSessionInput): CreateChatSessionInput | Response {
+  if ("issueId" in input || "issue_id" in input) return c.json({ error: "Chat sessions do not support Issue binding" }, 400);
   const workspaceId = requestedChatWorkspaceId(c, store, input);
   if (workspaceId instanceof Response) return workspaceId;
   const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);

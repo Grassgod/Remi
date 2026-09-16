@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -14,15 +14,18 @@ async function setup() {
   const bob = await store.createAccessToken({ name: "Bob", type: "pat", userId: "bob", workspaceId: "local" });
   const agent = store.createAgent({ name: "Shared agent", provider: "codex", workspaceId: "local" });
   const issue = store.createIssue({ title: "Team issue", workspaceId: "local", createdBy: "alice" });
-  const chat = store.createChatSession({ agentId: agent.id, creatorId: "alice", issueId: issue.id });
+  const chat = store.createChatSession({ agentId: agent.id, creatorId: "alice" });
   const privateTask = store.sendChatMessage(chat.id, { content: "PRIVATE_CHAT_PROMPT" }).task;
+  // Historical tasks can still reference an Issue after their Chat binding is
+  // removed. Keep their privacy checks meaningful against retained data.
+  db!.run("UPDATE multiremi_tasks SET issue_id = ? WHERE id = ?", [issue.id, privateTask.id]);
   store.appendTaskMessages(privateTask.id, [{ type: "text", content: "PRIVATE_CHAT_TRANSCRIPT" }]);
   const publicTask = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Public issue work" });
   const app = createMultiremiApp({ store, authToken: "test-root", shareSecret: "test-share-secret" });
   return { store, app, issue, chat, privateTask, publicTask, alice: { Authorization: `Bearer ${alice.token}` }, bob: { Authorization: `Bearer ${bob.token}` } };
 }
 
-describe("Chat privacy through linked Issues", () => {
+describe("Chat privacy for historical Issue-linked tasks", () => {
   it("filters private tasks from another member's Issue reads and refuses the nested cancel route", async () => {
     const { store, app, issue, privateTask, publicTask, alice, bob } = await setup();
     for (const path of [

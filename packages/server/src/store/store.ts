@@ -3518,6 +3518,9 @@ runMigrations(this.db);
 
   buildTaskSessionProjection(taskId: string): MultiremiSessionProjection | null {
     const task = this.tasks.getTask(taskId);
+    if (task?.chatSessionId && !this.feishuBot.getIssueIdForChatSession(task.chatSessionId)) {
+      return this.chat.buildTaskSessionProjection(taskId);
+    }
     if (task?.issueSessionId) return this.sessions.buildTaskSessionProjection(taskId);
     if (task?.chatSessionId) return this.chat.buildTaskSessionProjection(taskId);
     return null;

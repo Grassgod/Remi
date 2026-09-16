@@ -148,7 +148,6 @@ function buildCliContext(c: Context, deps: RouterDeps, identity: ResolvedCliIden
       : null;
   const session = task?.issueSessionId ? store.getIssueSession(task.issueSessionId) : null;
   const chat = task?.chatSessionId ? store.getChatSession(task.chatSessionId) : null;
-  const boundIssue = !issue && chat?.issueId ? store.getIssue(chat.issueId) : null;
   const runtime = task?.runtimeId
     ? store.getRuntime(task.runtimeId)
     : agent?.runtimeId
@@ -179,7 +178,6 @@ function buildCliContext(c: Context, deps: RouterDeps, identity: ResolvedCliIden
       task: task ? safeTask(task) : null,
       chat: chat ? safeChat(chat) : null,
       issue: issue ? safeIssue(issue) : null,
-      bound_issue: boundIssue ? safeIssue(boundIssue) : null,
       session: session ? safeSession(session) : null,
       project: project ? safeProject(project, repositoryIdsForProject(store, project.id, identity.workspaceId)) : null,
       runtime: runtime ? safeRuntime(runtime) : null,
@@ -268,13 +266,12 @@ function safeSession(session: { id: string; title: string; status: string; issue
   return { id: session.id, title: session.title, status: session.status, issue_id: session.issueId };
 }
 
-function safeChat(chat: { id: string; title: string; status: string; agentId: string; issueId: string | null }) {
+function safeChat(chat: { id: string; title: string; status: string; agentId: string }) {
   return {
     id: chat.id,
     title: chat.title,
     status: chat.status,
     agent_id: chat.agentId,
-    issue_id: chat.issueId,
   };
 }
 

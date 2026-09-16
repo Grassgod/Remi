@@ -259,6 +259,39 @@ authenticated user or task agent. Caller-supplied actor fields remain available
 for deployment-master and auth-disabled requests. Comment resolution accepts an
 empty body even when the client sends `Content-Type: application/json`.
 
+## Removed Chat Issue binding (MUL-301)
+
+Chat Sessions are independent conversations. Creating an Issue from Chat no longer
+binds the Chat or subscribes it to Issue activity. Feishu Issue topics retain their
+Issue association in the Feishu binding table and continue receiving updates and
+work-round replies.
+
+This is an intentional breaking capability removal, with no replacement command.
+Unlike renamed command paths, it has no executable compatibility alias: retaining
+one would restore the binding capability being removed. The five executable
+commands removed are:
+
+- `remi chat issue bind`
+- `remi chat issue unbind`
+- `remi chat issue updates get`
+- `remi chat issue updates enable`
+- `remi chat issue updates disable`
+
+The `chat.issue` and `chat.issue.updates` grouping nodes are also removed.
+Chat creation, messages, queues, pinning, archiving and restoration remain supported.
+Chat session lists and the global pending-task list exclude Feishu Issue-topic
+transport sessions, including topics created by the current user.
+
+API changes:
+
+- Chat session create/update no longer accept `issueId` or `issue_id`; sending
+  either field returns HTTP 400.
+- Chat session responses no longer include `issueId` (native API) or `issue_id`
+  (compatibility API).
+- Issue creation no longer returns `chat_issue_binding` or `chat_issue_binding_hint`.
+- `GET` and `PUT /api/chat/sessions/:sessionId/issue-updates` are removed.
+- CLI context no longer includes `current.chat.issue_id` or `current.bound_issue`.
+
 ## Deprecated aliases
 
 `remi wiki lint` is deprecated since `0.2.58` with no CLI replacement. Wiki

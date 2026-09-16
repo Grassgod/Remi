@@ -36,6 +36,10 @@ export function buildTaskPrompt(task: AgentTask, opts: BuildTaskPromptOptions = 
 }
 
 export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOptions = {}): TaskPromptArtifact {
+  // Only a Feishu topic binding can attach Issue context to a Chat turn.
+  // Ignore unrelated Issue payload fields when the topic identity is absent.
+  const privateChat = Boolean(task.chatSessionId && !(task.boundIssue ?? task.bound_issue));
+  if (privateChat) task = withoutIssueContext(task);
   const mode = taskPromptMode(task);
   const sections: string[] = [];
 
@@ -74,7 +78,7 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
 
   appendTriggerCommentSection(sections, task);
 
-  appendRepositoryWarnings(sections, opts.repoWarnings ?? []);
+  if (!privateChat) appendRepositoryWarnings(sections, opts.repoWarnings ?? []);
   appendRepositoryWikiAvailabilityWarnings(sections, task);
   if (task.knowledgeWarnings?.length) {
     sections.push("", "## Knowledge Availability Warnings", ...task.knowledgeWarnings);
@@ -148,6 +152,31 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
 
 function taskHoldsWorkspace(task: AgentTask): boolean {
   return task.holdsWorkspace !== false && task.holds_workspace !== false;
+}
+
+function withoutIssueContext(task: AgentTask): AgentTask {
+  return {
+    ...task,
+    issueId: null,
+    issue_id: null,
+    issue: null,
+    issueSessionId: null,
+    issue_session_id: null,
+    issueSession: null,
+    issue_session: null,
+    issueSessionResults: [],
+    issue_session_results: [],
+    project: null,
+    projectResources: [],
+    repositoryWikiContexts: [],
+    repository_wiki_contexts: [],
+    knowledgeWarnings: [],
+    repos: [],
+    squadContext: null,
+    squad_context: null,
+    triggerCommentId: null,
+    trigger_comment_id: null,
+  };
 }
 
 function appendWorkspacePromptSection(sections: string[], task: AgentTask, mode: TaskPromptMode): void {
@@ -260,9 +289,6 @@ function taskPromptMode(task: AgentTask): TaskPromptMode {
 }
 
 function currentTaskRequest(task: AgentTask): string {
-  if (stringField(task, "chatBootstrapTranscript", "chat_bootstrap_transcript")) {
-    return "Continue this Chat from the canonical product history below.";
-  }
   let prompt = task.prompt.trim();
   const triggerCommentId = stringField(task, "triggerCommentId", "trigger_comment_id");
   if (triggerCommentId) {
@@ -291,16 +317,9 @@ function appendClaimContextSections(sections: string[], task: AgentTask, mode: T
     if (requestingUserProfile) sections.push(requestingUserProfile);
   }
 
-  const chatBootstrapTranscript = stringField(task, "chatBootstrapTranscript", "chat_bootstrap_transcript");
   const chatMessage = stringField(task, "chatMessage", "chat_message");
   const chatAttachments = arrayField(task, "chatMessageAttachments", "chat_message_attachments");
-  if (chatBootstrapTranscript) {
-    sections.push("");
-    sections.push("## Product Chat History");
-    sections.push("The native provider session was unavailable. Continue from this canonical, product-stored history; do not assume any provider-local history survived.");
-    sections.push("");
-    sections.push(chatBootstrapTranscript);
-  } else if (chatMessage && chatMessage.trim() !== currentTaskRequest(task).trim()) {
+  if (chatMessage && chatMessage.trim() !== currentTaskRequest(task).trim()) {
     sections.push("");
     sections.push("## Chat Message");
     sections.push(chatMessage);
@@ -318,7 +337,8 @@ function appendClaimContextSections(sections: string[], task: AgentTask, mode: T
     "boundIssueUpdatesOmittedCount",
     "bound_issue_updates_omitted_count",
   ) ?? 0;
-  if (boundIssueUpdates.length || omittedBoundIssueUpdates > 0) {
+  const boundIssue = task.chatSessionId ? task.boundIssue ?? task.bound_issue ?? null : null;
+  if (boundIssue && (boundIssueUpdates.length || omittedBoundIssueUpdates > 0)) {
     sections.push("");
     sections.push("## Bound Issue Updates");
     if (omittedBoundIssueUpdates > 0) {
@@ -331,8 +351,7 @@ function appendClaimContextSections(sections: string[], task: AgentTask, mode: T
     });
   }
 
-  const boundIssue = task.boundIssue ?? task.bound_issue ?? null;
-  if (boundIssue && task.chatSessionId) {
+  if (boundIssue) {
     sections.push("");
     sections.push("## Bound Issue");
     sections.push(`This Feishu topic is bound to ${boundIssue.key} — ${boundIssue.title} (status: ${boundIssue.status}).`);
@@ -377,7 +396,7 @@ function appendClaimContextSections(sections: string[], task: AgentTask, mode: T
 }
 
 function appendHomepageChatCliSection(sections: string[], task: AgentTask): void {
-  if (!task.chatSessionId || task.issueId) return;
+  if (!task.chatSessionId || task.boundIssue || task.bound_issue) return;
   sections.push("");
   sections.push("## Remi Context");
   sections.push("Use `remi context` for the current identity and allowed operations. Use `remi project list|get|search` and `remi repo list|get|search` to inspect the database-backed safe directory.");

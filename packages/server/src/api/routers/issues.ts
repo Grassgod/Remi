@@ -2,7 +2,6 @@ import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
 import type { Context, Hono } from "hono";
 import {
   assigneeFrequencyQuery,
-  bindCreatedIssueToRequestChat,
   canCurrentUserAccessAgent,
   canCurrentUserAccessChatTask,
   currentTaskParentId,
@@ -614,32 +613,23 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       if (sourceIssueId) {
         const existing = store.findGeneratedIssueByTitle(sourceIssueId, issueInput.title);
         if (existing) {
-          const chatBinding = bindCreatedIssueToRequestChat(c, store, existing);
-          if (chatBinding?.chat_issue_binding.status === "independent") {
-            try {
-              store.prepareFeishuIssueTopicWithinTransaction(existing);
-            } catch (error) {
-              log.warn(
-                `Feishu issue topic creation skipped for ${existing.id}: ${error instanceof Error ? error.message : String(error)}`,
-              );
-            }
+          try {
+            store.prepareFeishuIssueTopicWithinTransaction(existing);
+          } catch (error) {
+            log.warn(
+              `Feishu issue topic creation skipped for ${existing.id}: ${error instanceof Error ? error.message : String(error)}`,
+            );
           }
-          return c.json({
-            ...existingIssueDispatchResponse(store, existing),
-            ...(chatBinding ?? {}),
-          }, 200);
+          return c.json(existingIssueDispatchResponse(store, existing), 200);
         }
       }
       const issue = store.createIssue(issueInput);
-      const chatBinding = bindCreatedIssueToRequestChat(c, store, issue);
-      if (!chatBinding || chatBinding.chat_issue_binding.status === "independent") {
-        try {
-          store.prepareFeishuIssueTopicWithinTransaction(issue);
-        } catch (error) {
-          log.warn(
-            `Feishu issue topic creation skipped for ${issue.id}: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
+      try {
+        store.prepareFeishuIssueTopicWithinTransaction(issue);
+      } catch (error) {
+        log.warn(
+          `Feishu issue topic creation skipped for ${issue.id}: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
       publishIssueCreated(c, store, issue, issueCompatibilityResponse(issue));
       // go-compat (maybeEnqueueOnAssign): creating an issue assigned to an agent/squad
@@ -681,7 +671,6 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       }
       const response: Record<string, unknown> = {
         ...issueCompatibilityResponse(finalIssue),
-        ...(chatBinding ?? {}),
         task_id: task?.id ?? null,
         dispatch_status: task ? "dispatched" : "skipped",
         dispatch_skipped_reason: task ? null : dispatchSkippedReason,

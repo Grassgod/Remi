@@ -35,6 +35,7 @@ const CHAT_MESSAGE_SEQUENCE_MIGRATION = "20260905_chat_message_sequence";
 const FEISHU_BOT_AGENT_ROUTES_MIGRATION = "20260908_feishu_bot_agent_routes";
 const FEISHU_BOT_AGENT_ROUTE_DEFAULT_UNIQUENESS_MIGRATION =
   "20260909_feishu_bot_agent_route_default_uniqueness";
+const CHAT_ISSUE_DECOUPLING_MIGRATION = "20260916_chat_issue_decoupling";
 const AGENT_PAGE_QUERY_INDEXES_MIGRATION = "20260910_agent_page_query_indexes";
 
 // Stable Feishu open_id of the deployment owner (hehuajie / 贺华杰). The seed
@@ -2092,7 +2093,6 @@ export function runMigrations(db: SqlDatabase): void {
       workspace_id TEXT NOT NULL DEFAULT 'local',
       creator_id TEXT,
       agent_id TEXT NOT NULL,
-      issue_id TEXT,
       title TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'active',
       session_id TEXT,
@@ -2102,8 +2102,7 @@ export function runMigrations(db: SqlDatabase): void {
       message_sequence INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
-      FOREIGN KEY(agent_id) REFERENCES multiremi_agents(id),
-      FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE SET NULL
+      FOREIGN KEY(agent_id) REFERENCES multiremi_agents(id)
     );
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_chat_sessions_workspace ON multiremi_chat_sessions(workspace_id, updated_at);
@@ -2714,11 +2713,6 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_chat_sessions", "creator_id TEXT");
   addColumnIfMissing(db, "multiremi_chat_sessions", "unread_since TEXT");
   addColumnIfMissing(db, "multiremi_chat_sessions", "pinned INTEGER NOT NULL DEFAULT 0");
-  addColumnIfMissing(
-    db,
-    "multiremi_chat_sessions",
-    "issue_id TEXT REFERENCES multiremi_issues(id) ON DELETE SET NULL",
-  );
   // Pool scheduling records the machine + engine that produced the promoted
   // provider session as atomic metadata on the session itself, so follow-ups
   // don't have to (mis)infer them from "the latest task with a runtime_id".
@@ -2779,6 +2773,19 @@ export function runMigrations(db: SqlDatabase): void {
   // in the dynamic allowlist. A tracked delivery without an identity is denied.
   addColumnIfMissing(db, "multiremi_feishu_bot_deliveries", "sender_recorded INTEGER NOT NULL DEFAULT 0");
   backfillFeishuBotReplyDestinations(db);
+  // SQLite cannot change foreign_keys inside a transaction. Disable it only
+  // around this atomic table rebuild, then restore the caller's setting.
+  const chatSchema = db.query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'multiremi_chat_sessions'")
+    .get() as { sql?: string | null } | null;
+  const rebuildChat = Boolean(chatSchema?.sql && /FOREIGN KEY\s*\(issue_id\)/i.test(chatSchema.sql));
+  const foreignKeysEnabled = rebuildChat
+    && Number((db.query("PRAGMA foreign_keys").get() as { foreign_keys?: number } | null)?.foreign_keys) === 1;
+  if (foreignKeysEnabled) db.exec("PRAGMA foreign_keys = OFF");
+  try {
+    runMigrationOnce(db, CHAT_ISSUE_DECOUPLING_MIGRATION, () => migrateChatIssueOwnership(db, chatSchema?.sql));
+  } finally {
+    if (foreignKeysEnabled) db.exec("PRAGMA foreign_keys = ON");
+  }
   runMigrationOnce(db, FEISHU_BOT_AGENT_ROUTES_MIGRATION, () => ensureFeishuBotAgentRoutesSchema(db));
   runMigrationOnce(db, FEISHU_BOT_AGENT_ROUTE_DEFAULT_UNIQUENESS_MIGRATION, () => {
     ensureFeishuBotAgentRouteDefaultUniqueness(db);
@@ -3229,7 +3236,7 @@ function backfillDefaultIssueSessions(db: SqlDatabase): void {
        WHERE s.issue_id = multiremi_tasks.issue_id AND s.is_default = 1
        LIMIT 1
      )
-     WHERE issue_id IS NOT NULL AND issue_session_id IS NULL`,
+     WHERE issue_id IS NOT NULL AND issue_session_id IS NULL AND chat_session_id IS NULL`,
   );
   db.run(
     `INSERT INTO multiremi_session_events (
@@ -4372,6 +4379,114 @@ function backfillMemberUserIds(db: SqlDatabase): void {
   }
 }
 
+// MUL-301: Issue ownership belongs to the Feishu topic transport. Native
+// DROP COLUMN handles PostgreSQL and SQLite inline foreign keys. Old SQLite
+// tables with a table-level issue FK require an atomic rebuild instead.
+function migrateChatIssueOwnership(db: SqlDatabase, chatSchema?: string | null): void {
+  addColumnIfMissing(db, "multiremi_feishu_bot_chat_bindings",
+    "issue_id TEXT REFERENCES multiremi_issues(id) ON DELETE SET NULL");
+  const columns = db.query("PRAGMA table_info(multiremi_chat_sessions)").all() as Array<{ name: string }>;
+  if (columns.some((column) => column.name === "issue_id")) {
+    db.run(`UPDATE multiremi_feishu_bot_chat_bindings
+      SET issue_id = (
+        SELECT chat.issue_id FROM multiremi_chat_sessions chat
+        WHERE chat.id = multiremi_feishu_bot_chat_bindings.chat_session_id
+      )
+      WHERE issue_id IS NULL AND (
+        chat_session_id = 'chat_issue_topic_' || (
+          SELECT chat.issue_id FROM multiremi_chat_sessions chat
+          WHERE chat.id = multiremi_feishu_bot_chat_bindings.chat_session_id
+        )
+        OR thread_id IS NOT NULL
+        OR external_session_key LIKE '%:thread:%'
+      )`);
+    // A resumed provider session would otherwise retain the inherited Issue
+    // prompt after the database association disappears. Keep the work directory.
+    db.run(`UPDATE multiremi_chat_sessions
+      SET session_id = NULL, session_provider = NULL,
+          session_execution_fingerprint = NULL
+      WHERE issue_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM multiremi_feishu_bot_chat_bindings binding
+        WHERE binding.chat_session_id = multiremi_chat_sessions.id AND binding.issue_id IS NOT NULL
+      )`);
+    db.run(`UPDATE multiremi_tasks
+      SET issue_id = NULL, session_id = NULL, issue_session_id = NULL, issue_session_generation = NULL
+      WHERE status IN ('queued', 'dispatched') AND chat_session_id IN (
+        SELECT chat.id FROM multiremi_chat_sessions chat
+        WHERE chat.issue_id IS NOT NULL AND NOT EXISTS (
+          SELECT 1 FROM multiremi_feishu_bot_chat_bindings binding
+          WHERE binding.chat_session_id = chat.id AND binding.issue_id IS NOT NULL
+        )
+      )`);
+    if (chatSchema && /FOREIGN KEY\s*\(issue_id\)/i.test(chatSchema)) {
+      const dependentTables = ["multiremi_chat_messages", "multiremi_feishu_bot_chat_bindings"];
+      const dependentCounts = dependentTables.map((table) => Number(db.query(`SELECT COUNT(*) AS count FROM ${table}`).get().count));
+      const chatCount = Number(db.query("SELECT COUNT(*) AS count FROM multiremi_chat_sessions").get().count);
+      const objects = db.query(`SELECT sql FROM sqlite_master
+        WHERE tbl_name = 'multiremi_chat_sessions' AND type IN ('index', 'trigger') AND sql IS NOT NULL`)
+        .all() as Array<{ sql: string }>;
+      const remainingColumns = columns.filter((column) => column.name !== "issue_id")
+        .map((column) => `"${column.name.replaceAll('"', '""')}"`).join(", ");
+      const replacementSchema = chatSchema
+        .replace(/CREATE TABLE\s+(?:IF NOT EXISTS\s+)?["`]?multiremi_chat_sessions["`]?/i,
+          "CREATE TABLE multiremi_chat_sessions_without_issue")
+        .replace(/\bissue_id\s+TEXT\s*,/i, "")
+        .replace(/,\s*FOREIGN KEY\s*\(issue_id\)\s*REFERENCES multiremi_issues\s*\(id\)\s*ON DELETE SET NULL/i, "");
+      db.exec(replacementSchema);
+      db.run(`INSERT INTO multiremi_chat_sessions_without_issue (${remainingColumns})
+        SELECT ${remainingColumns} FROM multiremi_chat_sessions`);
+      db.exec("DROP TABLE multiremi_chat_sessions");
+      db.exec("ALTER TABLE multiremi_chat_sessions_without_issue RENAME TO multiremi_chat_sessions");
+      for (const object of objects) db.exec(object.sql);
+      if (Number(db.query("SELECT COUNT(*) AS count FROM multiremi_chat_sessions").get().count) !== chatCount
+        || dependentTables.some((table, index) => Number(db.query(`SELECT COUNT(*) AS count FROM ${table}`).get().count) !== dependentCounts[index])) {
+        throw new Error("Chat Issue migration changed Chat or dependent row counts during table rebuild");
+      }
+    } else {
+      dropColumnIfExists(db, "multiremi_chat_sessions", "issue_id");
+    }
+  }
+  // Historical startup backfills accidentally gave conversational tasks an
+  // Issue Session as well. Pending private and topic tasks must keep one owner;
+  // completed/running audit rows remain unchanged and hydrate through Chat.
+  db.run(`UPDATE multiremi_tasks
+    SET issue_session_id = NULL, issue_session_generation = NULL
+    WHERE chat_session_id IS NOT NULL AND status IN ('queued', 'dispatched')
+      AND (issue_session_id IS NOT NULL OR issue_session_generation IS NOT NULL)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_chat_bindings_issue
+    ON multiremi_feishu_bot_chat_bindings(workspace_id, issue_id)`);
+  // Private Chats retain their conversation history, but cannot receive or
+  // replay old pending Issue updates after the ownership migration.
+  db.run(`DELETE FROM multiremi_agent_issue_update_state
+    WHERE NOT EXISTS (
+      SELECT 1 FROM multiremi_feishu_bot_chat_bindings binding
+      WHERE binding.chat_session_id = multiremi_agent_issue_update_state.chat_session_id
+        AND binding.issue_id IS NOT NULL
+    )`);
+  db.run(`UPDATE multiremi_chat_messages
+    SET pending_agent_delivery = 0, agent_delivery_task_id = NULL
+    WHERE pending_agent_delivery = 1 AND NOT EXISTS (
+      SELECT 1 FROM multiremi_feishu_bot_chat_bindings binding
+      WHERE binding.chat_session_id = multiremi_chat_messages.chat_session_id
+        AND binding.issue_id IS NOT NULL
+    )`);
+  db.run(`DELETE FROM multiremi_chat_messages
+    WHERE role = 'system' AND body LIKE 'Bound Issue update:%' AND NOT EXISTS (
+      SELECT 1 FROM multiremi_feishu_bot_chat_bindings binding
+      WHERE binding.chat_session_id = multiremi_chat_messages.chat_session_id
+        AND binding.issue_id IS NOT NULL
+    )`);
+  const channels = db.query(
+    "SELECT id, target FROM multiremi_notification_channels WHERE kind = 'agent_chat'",
+  ).all() as Array<{ id: string; target: string }>;
+  for (const channel of channels) {
+    const chatId = (JSON.parse(channel.target) as { chatId?: string }).chatId;
+    const topic = chatId && db.query(`SELECT 1 AS present FROM multiremi_feishu_bot_chat_bindings
+      WHERE chat_session_id = ? AND issue_id IS NOT NULL LIMIT 1`).get(chatId);
+    if (!topic) db.run("DELETE FROM multiremi_notification_channels WHERE id = ?", [channel.id]);
+  }
+}
+
 function backfillBoundChatAgentChannels(db: SqlDatabase): void {
   db.run(
     `INSERT INTO multiremi_notification_channels (
@@ -4398,7 +4513,10 @@ function backfillBoundChatAgentChannels(db: SqlDatabase): void {
        chat.created_at,
        chat.updated_at
      FROM multiremi_chat_sessions chat
-     WHERE chat.issue_id IS NOT NULL
+     WHERE EXISTS (
+       SELECT 1 FROM multiremi_feishu_bot_chat_bindings binding
+       WHERE binding.chat_session_id = chat.id AND binding.issue_id IS NOT NULL
+     )
      ON CONFLICT(id) DO NOTHING`,
   );
 }

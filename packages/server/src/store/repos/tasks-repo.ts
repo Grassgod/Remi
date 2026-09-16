@@ -693,6 +693,18 @@ export class TasksRepo {
       }
       return { runtimeId: null, inheritChatSession: false };
     }
+    // A provider reset can retain Chat files without retaining its prompt.
+    // The directory still belongs to the runtime that produced it; never send
+    // that absolute path to a different pooled runtime on a cold bootstrap.
+    if (chatSession?.workDir) {
+      const directoryRuntime = chatSession.sessionRuntimeId
+        ? this.ctx.runtimes().getRuntime(chatSession.sessionRuntimeId)
+        : null;
+      if (directoryRuntime && this.ctx.runtimes().runtimeCanRunAgent(directoryRuntime, agent)) {
+        return { runtimeId: directoryRuntime.id, inheritChatSession: true };
+      }
+      return { runtimeId: null, inheritChatSession: false };
+    }
     return { runtimeId: null, inheritChatSession: true };
   }
 
@@ -738,8 +750,21 @@ export class TasksRepo {
   }
 
   getTaskWithAgent(id: string): MultiremiTaskWithAgent | null {
-    const task = this.getTask(id);
+    let task = this.getTask(id);
     if (!task) return null;
+    // Retained task audits may still carry a pre-MUL-301 private Chat binding.
+    // Never let that old association re-enter a daemon claim or eager checkout.
+    if (task.chatSessionId && !this.ctx.feishuBot().getFeishuIssueIdForChatSession(task.chatSessionId)) {
+      task = {
+        ...task,
+        // A stale dispatch can bypass queued affinity refresh. Its provider
+        // session still contains the detached Issue prompt and must start cold.
+        sessionId: task.issueId || task.issueSessionId ? null : task.sessionId,
+        issueId: null,
+        issueSessionId: null,
+        issueSessionGeneration: null,
+      };
+    }
     const issue = task.issueId ? this.ctx.issues().getIssue(task.issueId) : null;
     const scheduleTarget = task.autopilotRunId ? this.ctx.autopilots().getAutopilotRun(task.autopilotRunId)?.scheduleTarget : null;
     const projectId = issue?.projectId ?? (scheduleTarget?.kind === "project" ? scheduleTarget.id : null);
@@ -2077,15 +2102,17 @@ export class TasksRepo {
     this.lockTaskIssueSessionsWithinWorkspaceLock([current]);
     const terminal = this.cancelTaskWithinWorkspaceLock(current, true);
     const nextAttempt = current.attempt + 1;
+    const detachedChatIssue = !!current.chatSessionId && !!current.issueId
+      && this.ctx.feishuBot().getFeishuIssueIdForChatSession(current.chatSessionId) !== current.issueId;
     const replacement = this.createTaskWithinWorkspaceLock({
       agentId: current.agentId,
       taskKind: current.taskKind,
       runtimeId: null,
-      issueId: current.issueId,
-      issueSessionId: current.issueSessionId,
+      issueId: detachedChatIssue ? null : current.issueId,
+      issueSessionId: detachedChatIssue ? null : current.issueSessionId,
       chatSessionId: current.chatSessionId,
       holdsWorkspace: current.holdsWorkspace,
-      triggerCommentId: current.triggerCommentId,
+      triggerCommentId: detachedChatIssue ? null : current.triggerCommentId,
       triggerSummary: current.triggerSummary,
       workspaceId: current.workspaceId,
       priority: current.priority,
@@ -2249,7 +2276,9 @@ export class TasksRepo {
       && parent.provider != null
       && parent.provider === agent.provider
       && this.ctx.runtimes().runtimeCanRunAgent(parentRuntime, agent);
-    const resumeSafe = !RESUME_UNSAFE_FAILURE_REASONS.has(parent.failureReason) && parentRuntimeUsable;
+    const detachedChatIssue = !!parent.chatSessionId && !!parent.issueId
+      && this.ctx.feishuBot().getFeishuIssueIdForChatSession(parent.chatSessionId) !== parent.issueId;
+    const resumeSafe = !detachedChatIssue && !RESUME_UNSAFE_FAILURE_REASONS.has(parent.failureReason) && parentRuntimeUsable;
     // If the Agent changed provider before this failure was reported, the old
     // provider/plugin snapshot can no longer be executed with the Agent's
     // current native config. Treat this as a fresh retry. When the retry was
@@ -2274,11 +2303,11 @@ export class TasksRepo {
       // A retained session or Runtime credential snapshot must return to its
       // original machine; otherwise let an eligible pool Runtime claim it.
       runtimeId: resumeSafe || (inheritExecutionSnapshot && hasRuntimeProfile) ? parent.runtimeId : null,
-      issueId: parent.issueId,
-      issueSessionId: parent.issueSessionId,
+      issueId: detachedChatIssue ? null : parent.issueId,
+      issueSessionId: detachedChatIssue ? null : parent.issueSessionId,
       chatSessionId: parent.chatSessionId,
       holdsWorkspace: parent.holdsWorkspace,
-      triggerCommentId: parent.triggerCommentId,
+      triggerCommentId: detachedChatIssue ? null : parent.triggerCommentId,
       triggerSummary: parent.triggerSummary,
       workspaceId: parent.workspaceId,
       priority: parent.priority,
@@ -2839,7 +2868,12 @@ export class TasksRepo {
       // from the task's execution snapshot (task.provider), not the agent's
       // now-mutable provider. Snapshot missing → derive from a concrete runtime,
       // else leave null (fail-closed: an unknown-engine session isn't resumed).
-      const promoteSession =
+      // An in-flight private Chat turn can finish after MUL-301 removed its
+      // Issue binding and reset the Chat lineage. Its provider still contains
+      // the old Issue prompt, so do not promote that session back into Chat.
+      const detachedChatIssue = task.issueId
+        && this.ctx.feishuBot().getFeishuIssueIdForChatSession(task.chatSessionId) !== task.issueId;
+      const promoteSession = !detachedChatIssue &&
         (status !== "failed" || !RESUME_UNSAFE_FAILURE_REASONS.has(task.failureReason ?? "")) &&
         !!cleanOptionalString(task.sessionId);
       const runtimeProvider = task.runtimeId ? this.ctx.runtimes().getRuntime(task.runtimeId)?.provider : null;

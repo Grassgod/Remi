@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import { buildTaskPrompt } from "@multiremi/prompt.js";
-import { createLocalStore, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
+
+import { bindFeishuTopicFixture } from "./feishu-topic-fixture.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -13,7 +15,8 @@ function scaffold() {
   const runtime = store.registerRuntime({ id: "rt_followup", name: "Issue machine", provider: "claude", workspaceId: "local" });
   const issue = store.createIssue({ title: "Continue existing work", workspaceId: "local", assigneeType: "agent", assigneeId: owner.id });
   const session = store.getOrCreateDefaultIssueSession(issue.id);
-  const chat = store.createChatSession({ agentId: remi.id, issueId: issue.id, workspaceId: "local" });
+  const chat = store.createChatSession({ agentId: remi.id, workspaceId: "local" });
+  bindFeishuTopicFixture(store, db!, chat.id, issue.id);
   const task = store.sendChatMessage(chat.id, { body: "Continue the implementation and verify it." }).task;
   return { store, remi, owner, runtime, issue, session, chat, task };
 }

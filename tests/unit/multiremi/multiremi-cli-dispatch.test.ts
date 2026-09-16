@@ -93,8 +93,6 @@ describe("remi CLI dispatcher", () => {
       "share",
       "label",
       "chat",
-      "chat.issue",
-      "chat.issue.updates",
       "task",
       "agent",
       "squad",
@@ -141,6 +139,14 @@ describe("remi CLI dispatcher", () => {
         replacement: "remi attachment download",
       })],
     });
+  });
+
+  it("removes Chat Issue commands while retaining conversation and queue commands", () => {
+    const inventory = cliCommandInventory();
+    expect(inventory.filter((entry) => entry.id.startsWith("chat.issue"))).toEqual([]);
+    for (const id of ["chat.create", "chat.message.create", "chat.queue.list", "chat.pin", "chat.archive", "chat.restore"]) {
+      expect(inventory.some((entry) => entry.id === id), id).toBe(true);
+    }
   });
 
   it("routes `remi project` into the native resource group", async () => {
