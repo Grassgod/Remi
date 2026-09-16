@@ -71,6 +71,7 @@ interface ClassificationCase {
   provenance: "none" | "exact" | "wrong_binding" | "wrong_workspace" | "wrong_source_chat" | "missing_delivery" | "malformed_source";
   preserve: boolean;
   canonical?: boolean;
+  sharedPrivateBinding?: boolean;
   synced?: Array<{ chatType: string; workspace?: string; sourceWorkspace?: string }>;
   pendingSince?: string | null;
   pendingCount?: number;
@@ -80,6 +81,7 @@ interface ClassificationCase {
 }
 
 export const CHAT_ISSUE_CLASSIFICATION_CASES: ClassificationCase[] = [
+  { name: "mixed_bindings", thread: true, key: true, provenance: "exact", preserve: true, sharedPrivateBinding: true },
   { name: "p2p_thread_and_key", thread: true, key: true, provenance: "none", synced: [{ chatType: "p2p" }], preserve: false },
   { name: "p2p_thread_only", thread: true, key: false, provenance: "none", synced: [{ chatType: "p2p" }], preserve: false },
   { name: "p2p_key_only", thread: false, key: true, provenance: "none", synced: [{ chatType: "p2p" }], preserve: false },
@@ -158,6 +160,20 @@ export function seedLegacyChatIssueClassificationFixture(db: SqlDatabase, tableF
       db.run(`INSERT INTO multiremi_agent_issue_update_state
         (chat_session_id, workspace_id, issue_id, channel_id, pending_count, pending_since, created_at, updated_at)
         VALUES (?, 'local', ?, ?, ?, ?, ?, ?)`, [chatId, issueId, `nch_agent_chat_${chatId}`, entry.pendingCount ?? 1, entry.pendingSince ?? null, now, now]);
+    }
+    if (entry.sharedPrivateBinding) {
+      // Both rows are schema-valid and share one provider lineage. The group
+      // has exact provenance; only the private destination must lose its link.
+      db.run(`INSERT INTO multiremi_feishu_bot_chat_bindings
+        (id, workspace_id, app_id, agent_id, external_session_key, chat_session_id, chat_id, created_at, updated_at)
+        VALUES ('fcb_mixed_private', 'local', 'cli_migration', 'agt_chat_migration',
+          'oc_mixed_private', ?, 'oc_mixed_private', ?, ?)`, [chatId, now, now]);
+      db.run(`INSERT INTO multiremi_feishu_sources (id, workspace_id, endpoint_name, created_at, updated_at)
+        VALUES ('fsrc_mixed_private', 'local', 'mixed_private', ?, ?)`, [now, now]);
+      db.run(`INSERT INTO multiremi_feishu_messages
+        (message_id, workspace_id, source_id, chat_id, chat_type, content_fingerprint, created_at, ingested_at)
+        VALUES ('sync_mixed_private', 'local', 'fsrc_mixed_private', 'oc_mixed_private',
+          'p2p', 'mixed_private', ?, ?)`, [now, now]);
     }
     for (const [index, evidence] of (entry.synced ?? []).entries()) {
       const sourceId = `fsrc_${entry.name}_${index}`;

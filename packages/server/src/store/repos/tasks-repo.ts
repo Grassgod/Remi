@@ -801,7 +801,9 @@ export class TasksRepo {
     } else if (!task.issueId || !bindings.some((binding) => binding.issue_id != null)) {
       return "ordinary";
     }
-    if (!bindings.length || !bindings.every(matches)) return invalid();
+    // An ordinary legacy turn may already be detached by hydration. A topic
+    // claim must still match the live row before its cached Issue is shipped.
+    if (liveTask.issueId !== task.issueId || !bindings.length || !bindings.every(matches)) return invalid();
     const issue = this.ctx.issues().getIssue(task.issueId!);
     if (!issue || issue.workspaceId !== task.workspaceId) return invalid();
     return "topic";

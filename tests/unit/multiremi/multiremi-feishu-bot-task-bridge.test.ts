@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { createHash } from "node:crypto";
+import { runMigrations } from "@multiremi/store/migrations.js";
+import { seedLegacyChatIssueClassificationFixture } from "./chat-issue-migration-fixture.js";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import { buildTaskPrompt } from "@multiremi/prompt.js";
 import type { MultiremiDaemon } from "@multiremi/daemon.js";
@@ -54,6 +57,47 @@ function scaffold() {
 }
 
 describe("Feishu bot standard Task bridge", () => {
+  for (const tableForeignKey of [false, true]) {
+    it(`cold-starts p2p sharing a retained group binding after migration (table FK=${tableForeignKey})`, () => {
+      const { store } = scaffold();
+      seedLegacyChatIssueClassificationFixture(db!, tableForeignKey);
+      const chatId = "chat_classification_mixed_bindings";
+      const fingerprint = createHash("sha256").update("[]").digest("hex");
+      db!.run(`UPDATE multiremi_chat_sessions SET session_execution_fingerprint = ? WHERE id = ?`, [fingerprint, chatId]);
+      // No outstanding task is needed to trigger the provider reset.
+      db!.run("UPDATE multiremi_tasks SET status = 'completed'");
+      store.registerRuntime({ id: "rt_legacy", name: "Original machine", provider: "codex", workspaceId: "local" });
+      const config = store.upsertFeishuBotConfig("local", {
+        agentId: "agt_chat_migration", runtimeId: "rt_legacy", appId: "cli_migration",
+        senderAccessPolicy: "allowlist", appSecretOp: "set", appSecret: APP_SECRET,
+        domain: "feishu", enabled: true,
+      });
+      runMigrations(db!);
+      expect(db!.query("SELECT issue_id FROM multiremi_feishu_bot_chat_bindings WHERE id = ?")
+        .get(`fcb_${chatId}`)).toEqual({ issue_id: "iss_classification_mixed_bindings" });
+      expect(db!.query("SELECT issue_id FROM multiremi_feishu_bot_chat_bindings WHERE id = 'fcb_mixed_private'")
+        .get()).toEqual({ issue_id: null });
+      const inbound = store.submitFeishuBotMessage("local", "rt_legacy", {
+        revision: config.revision, externalSessionKey: "oc_mixed_private", chatType: "p2p",
+        chatId: "oc_mixed_private", externalMessageId: "om_after_mixed_migration",
+        senderOpenId: "ou_requester", senderUnionId: "on_owner", text: "Private question",
+      });
+      expect(inbound.chatSessionId).toBe(chatId);
+      const task = store.getTaskWithAgent(inbound.taskId)!;
+      expect(task.issueId).toBeNull();
+      expect(task.sessionId).toBeNull();
+      const wire = daemonTaskClaimResponse(store, task);
+      expect(wire.issue).toBeUndefined();
+      expect(wire.session_id).toBeUndefined();
+      expect(wire.prior_session_id).toBeUndefined();
+      // Files keep their established machine affinity; provider history does not.
+      expect(store.getChatSession(chatId)).toMatchObject({
+        sessionId: null, sessionProvider: null, sessionExecutionFingerprint: null,
+        workDir: "/work/keep", sessionRuntimeId: "rt_legacy",
+      });
+    });
+  }
+
   it("queues direct, group, and Issue topic replies with the resolved Agent and original conversation", async () => {
     const { store, config } = scaffold();
     store.reportFeishuBotRuntimeStatus("local", "rt_bot", { appliedRevision: config.revision, state: "online" });

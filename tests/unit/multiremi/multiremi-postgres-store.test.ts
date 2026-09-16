@@ -280,17 +280,17 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
         event_types: '["comment_created"]', min_severity: "warning", created_by: "legacy-owner",
         created_at: "2026-09-03T00:00:00.000Z", updated_at: "2026-09-03T00:00:00.000Z",
       });
-      expect(db.query("SELECT issue_id FROM multiremi_feishu_bot_chat_bindings WHERE chat_session_id = ?").get(chatId))
+      expect(db.query("SELECT issue_id FROM multiremi_feishu_bot_chat_bindings WHERE id = ?").get(`fcb_${chatId}`))
         .toEqual({ issue_id: entry.preserve ? issueId : null });
       expect(db.query(`SELECT session_id, session_provider, session_execution_fingerprint, work_dir, session_runtime_id
         FROM multiremi_chat_sessions WHERE id = ?`).get(chatId)).toEqual({
-        session_id: entry.preserve && entry.name !== "group_without_thread" ? "provider-legacy" : null,
-        session_provider: entry.preserve && entry.name !== "group_without_thread" ? "codex" : null,
-        session_execution_fingerprint: entry.preserve && entry.name !== "group_without_thread" ? "legacy-fingerprint" : null,
+        session_id: entry.preserve && !entry.sharedPrivateBinding && entry.name !== "group_without_thread" ? "provider-legacy" : null,
+        session_provider: entry.preserve && !entry.sharedPrivateBinding && entry.name !== "group_without_thread" ? "codex" : null,
+        session_execution_fingerprint: entry.preserve && !entry.sharedPrivateBinding && entry.name !== "group_without_thread" ? "legacy-fingerprint" : null,
         work_dir: "/work/keep", session_runtime_id: "rt_legacy",
       });
       expect(db.query("SELECT issue_id, session_id FROM multiremi_tasks WHERE id = ?").get(`tsk_${chatId}`))
-        .toEqual({ issue_id: entry.preserve ? issueId : null, session_id: entry.preserve && entry.name !== "group_without_thread" ? "provider-task-legacy" : null });
+        .toEqual({ issue_id: entry.preserve ? issueId : null, session_id: entry.preserve && !entry.sharedPrivateBinding && entry.name !== "group_without_thread" ? "provider-task-legacy" : null });
       expect(db.query("SELECT role, pending_agent_delivery FROM multiremi_chat_messages WHERE chat_session_id = ? ORDER BY role").all(chatId))
         .toEqual(entry.preserve
           ? [{ role: "assistant", pending_agent_delivery: 0 }, { role: "system", pending_agent_delivery: 1 }, { role: "user", pending_agent_delivery: 0 }]

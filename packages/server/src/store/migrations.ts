@@ -4589,6 +4589,10 @@ function migrateChatIssueOwnership(db: SqlDatabase, chatSchema?: string | null):
     // proof of private lineage, cold-start every ordinary Chat once, regardless
     // of push history. Keep work_dir and its session_runtime_id machine affinity.
     const resetChatIds = new Set([...ordinaryChatIds,
+      // A retained group binding cannot vouch for a shared private binding.
+      // Cold-start the shared provider if any destination lost Issue ownership.
+      ...(db.query(`SELECT chat_session_id FROM multiremi_feishu_bot_chat_bindings
+        WHERE issue_id IS NULL`).all() as Array<{ chat_session_id: string }>).map((binding) => binding.chat_session_id),
       ...invalidPushes.map((push) => push.chat_session_id).filter((id): id is string => Boolean(id)),
       ...(db.query(`SELECT chat.id FROM multiremi_chat_sessions chat
         WHERE (chat.issue_id IS NOT NULL AND NOT EXISTS (${validChatBinding}

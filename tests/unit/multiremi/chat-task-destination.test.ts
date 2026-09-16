@@ -103,6 +103,17 @@ describe("Chat task destination invariant", () => {
     expect(f.store.claimTask(f.runtime.id)).toBeNull();
   });
 
+  it.each(["round", "human", "user"] as const)("rejects a cached %s claim after the live task Issue changes", (kind) => {
+    const f = setup(kind);
+    const cached = f.store.claimTask(f.runtime.id)!;
+    expect(cached.issueId).toBe(f.first.id);
+    db!.run("UPDATE multiremi_tasks SET issue_id = ? WHERE id = ?", [f.second.id, f.task.id]);
+    expect(f.store.getTask(f.task.id)?.issueId).toBe(f.second.id);
+    expect(() => f.store.getTaskChatExecutionKind(cached)).toThrow("destination no longer matches");
+    expect(() => daemonTaskClaimResponse(f.store, cached)).toThrow("destination no longer matches");
+    expect(f.store.listChatMessages(f.chat.id)).toHaveLength(0);
+  });
+
   it("runs a historical detached ordinary user turn cold without Issue context", () => {
     const f = setup("user");
     const old = f.store.getTaskWithAgent(f.task.id)!;
@@ -113,6 +124,10 @@ describe("Chat task destination invariant", () => {
     expect(wire.bound_issue).toBeUndefined();
     expect(wire.session_id).toBeUndefined();
     expect(wire.prompt).toBe("User question");
+    const detached = f.store.getTaskWithAgent(f.task.id)!;
+    expect(detached.issueId).toBeNull();
+    expect(f.store.getTask(f.task.id)?.issueId).toBe(f.first.id);
+    expect(daemonTaskClaimResponse(f.store, detached).issue).toBeUndefined();
     expect(f.store.claimTask(f.runtime.id)?.issueId).toBeNull();
   });
   it("retargets human-request provenance on every automatic retry before any later unbind", () => {
