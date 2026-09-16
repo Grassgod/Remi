@@ -57,6 +57,36 @@ function scaffold() {
 }
 
 describe("Feishu bot standard Task bridge", () => {
+  for (const path of ["p2p", "group", "canonical-topic"] as const) {
+    it(`rejects shared Chat binding creation and rolls back ${path}`, () => {
+      const { store, config } = scaffold();
+      const issue = store.createIssue({ title: "Binding guard", workspaceId: "local" });
+      store.reportFeishuBotRuntimeStatus("local", "rt_bot", { appliedRevision: config.revision, state: "online" });
+      store.updateWorkspace("local", { settings: { issueTopics: { enabled: true, chatId: "oc_guard" } } });
+      // Simulate an abnormal writer occupying the newly created Chat. The
+      // production transaction must reject the second binding and roll back.
+      db!.exec(`CREATE TRIGGER occupy_new_chat AFTER INSERT ON multiremi_chat_sessions BEGIN
+        INSERT INTO multiremi_feishu_bot_chat_bindings
+          (id, workspace_id, app_id, agent_id, external_session_key, chat_session_id, created_at, updated_at)
+        VALUES ('conflicting_binding', 'other_workspace', 'other_app', NEW.agent_id,
+          'occupied', NEW.id, NEW.created_at, NEW.updated_at);
+      END`);
+      const invoke = () => path === "canonical-topic"
+        ? store.prepareFeishuIssueTopicWithinTransaction(issue)
+        : store.submitFeishuBotMessage("local", "rt_bot", {
+          revision: config.revision, externalSessionKey: `guard_${path}`, chatType: path,
+          chatId: "oc_guard", externalMessageId: "om_guard", senderUnionId: "on_owner",
+          senderOpenId: "ou_requester", text: "Should roll back",
+        });
+      expect(invoke).toThrow(/Cannot create binding .*: Chat .* already has binding conflicting_binding/);
+      for (const table of ["multiremi_chat_sessions", "multiremi_feishu_bot_chat_bindings",
+        "multiremi_feishu_bot_deliveries", "multiremi_feishu_bot_outbound_deliveries", "multiremi_tasks"]) {
+        expect(db!.query(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({ count: 0 });
+      }
+      expect(db!.query("SELECT COUNT(*) AS count FROM multiremi_issues").get()).toEqual({ count: 1 });
+    });
+  }
+
   for (const tableForeignKey of [false, true]) {
     it(`cold-starts p2p sharing a retained group binding after migration (table FK=${tableForeignKey})`, () => {
       const { store } = scaffold();

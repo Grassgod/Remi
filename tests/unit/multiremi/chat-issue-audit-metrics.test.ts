@@ -13,6 +13,23 @@ function documentedSql(name: string): string {
 }
 const quote = (value: unknown): string => value === null ? "NULL" : `'${String(value).replaceAll("'", "''")}'`;
 
+function assertMultiplicitySql(db: SqlDatabase) {
+  runMigrations(db);
+  const summary = () => Object.fromEntries(Object.entries(db.query(documentedSql("multiplicity-summary")).get()!)
+    .map(([key, value]) => [key, Number(value)]));
+  expect(db.query(documentedSql("multiplicity-detail")).all()).toEqual([]);
+  expect(summary()).toEqual({ affected_chats: 0, conflict_bindings: 0, excess_bindings: 0 });
+  for (const [id, chat, workspace] of [["a", "shared", "local"], ["b", "shared", "local"],
+    ["c", "shared", "other"], ["d", "single", "local"]]) {
+    db.run(`INSERT INTO multiremi_feishu_bot_chat_bindings
+      (id, workspace_id, app_id, agent_id, external_session_key, chat_session_id, created_at, updated_at)
+      VALUES (?, ?, 'audit_app', 'audit_agent', ?, ?, 'fixture', 'fixture')`, [id, workspace, id, chat]);
+  }
+  expect(summary()).toEqual({ affected_chats: 1, conflict_bindings: 3, excess_bindings: 2 });
+  expect(db.query(documentedSql("multiplicity-detail")).all().map((row: any) => row.binding_id)).toEqual(["a", "b", "c"]);
+  db.run("DELETE FROM multiremi_feishu_bot_chat_bindings");
+}
+
 function seedAuditMatrix(db: SqlDatabase) {
   runMigrations(db);
   db.exec("ALTER TABLE multiremi_chat_sessions ADD COLUMN issue_id TEXT");
@@ -100,6 +117,7 @@ function seedAuditMatrix(db: SqlDatabase) {
 }
 
 function assertAuditMetricsAndRecovery(db: SqlDatabase) {
+  assertMultiplicitySql(db);
   const { recent, old } = seedAuditMatrix(db);
   const rows = db.query(documentedSql("detail")).all() as Array<Record<string, any>>;
   expect(rows).toHaveLength(8);

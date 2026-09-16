@@ -94,7 +94,8 @@ return those facts for a new decision before deployment.
 
 1. Take and verify a consistent database backup. Restore it to an isolated copy
    with no daemon, bot credentials, traffic or outbound network delivery. Run the
-   candidate migration there. This uses the actual migration's provenance checks
+   pre-migration multiplicity queries below before running the candidate migration
+   there. This uses the actual migration's provenance checks
    rather than a second SQL implementation that could disagree with them.
 2. On that migrated copy, run the queries below. Keep an export of audit records
    and type-verification evidence with the upgrade record. Inspect all dates.
@@ -106,8 +107,47 @@ return those facts for a new decision before deployment.
    backup, run the migration, and compare its audit set with the reviewed set.
    Investigate any new or changed row before resuming traffic.
 
-These queries work on SQLite and PostgreSQL. The audit table exists only after
-the migration; before deployment, run them on the isolated migrated copy.
+These queries work on SQLite and PostgreSQL. Run the following two queries on
+the isolated copy **before migration**; they need only the legacy binding table.
+They group globally by Chat ID, including anomalous cross-workspace bindings.
+The detail query returns every participating binding; `conflict_bindings` counts
+all bindings in shared Chats, while `excess_bindings` counts only those beyond one
+per Chat. An empty data set yields an empty detail list and zero summary counts.
+
+```sql
+-- mul301-audit-multiplicity-detail
+WITH shared AS (
+  SELECT chat_session_id, COUNT(*) AS binding_count
+  FROM multiremi_feishu_bot_chat_bindings
+  GROUP BY chat_session_id HAVING COUNT(*) > 1
+)
+SELECT b.chat_session_id, s.binding_count, b.id AS binding_id, b.workspace_id,
+       b.app_id, b.agent_id, b.external_session_key
+FROM multiremi_feishu_bot_chat_bindings b
+JOIN shared s ON s.chat_session_id = b.chat_session_id
+ORDER BY b.chat_session_id, b.workspace_id, b.id;
+```
+
+```sql
+-- mul301-audit-multiplicity-summary
+WITH shared AS (
+  SELECT chat_session_id, COUNT(*) AS binding_count
+  FROM multiremi_feishu_bot_chat_bindings
+  GROUP BY chat_session_id HAVING COUNT(*) > 1
+)
+SELECT COUNT(*) AS affected_chats,
+       COALESCE(SUM(binding_count), 0) AS conflict_bindings,
+       COALESCE(SUM(binding_count - 1), 0) AS excess_bindings
+FROM shared;
+```
+
+Retain the conflict inventory for review. MUL-304 adds runtime guards to both
+binding creation paths, but deliberately adds no UNIQUE constraint and does not
+repair existing conflicts. Direct SQL/imports still require operator review.
+The migration continues to cold-start a shared Chat if any binding is discarded.
+
+The remaining queries use the audit table, which exists only after migration;
+before deployment, run them on the isolated migrated copy.
 
 `last_inbound_at` and `active_last7d` are immutable observations as of each
 row's `audited_at`. Activity uses the first receipt (`created_at`) of deliveries
