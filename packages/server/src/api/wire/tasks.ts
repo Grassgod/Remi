@@ -519,8 +519,7 @@ function appendDaemonClaimBoundIssue(
 ): void {
   if (!task.chatSessionId) return;
   try {
-    const chat = store.getChatSession(task.chatSessionId);
-    const issueId = task.issueId ?? chat?.issueId ?? null;
+    const issueId = store.getFeishuIssueIdForChatSession(task.chatSessionId);
     const issue = issueId ? store.getIssue(issueId) : null;
     if (!issue) return;
     response.bound_issue = {
@@ -577,7 +576,7 @@ function appendDaemonClaimBoundIssueUpdates(
   task: MultiremiTaskWithAgent,
   response: Record<string, unknown>,
 ): void {
-  if (!task.chatSessionId) return;
+  if (!task.chatSessionId || !response.bound_issue) return;
   try {
     const pending = store.preparePendingAgentIssueUpdatesForTask(task.chatSessionId, task.id);
     if (pending.messages.length) {

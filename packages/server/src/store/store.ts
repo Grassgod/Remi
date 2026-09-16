@@ -1802,6 +1802,10 @@ runMigrations(this.db);
     return this.feishuBot.submitMessage(workspaceId, runtimeId, input);
   }
 
+  getFeishuIssueIdForChatSession(chatSessionId: string): string | null {
+    return this.feishuBot.getIssueIdForChatSession(chatSessionId);
+  }
+
   getFeishuBotChatConversationKind(chatSessionId: string): "p2p" | "group" | null {
     return this.feishuBot.getChatConversationKind(chatSessionId);
   }
@@ -4140,13 +4144,6 @@ runMigrations(this.db);
 
   getChatSession(id: string): MultiremiChatSession | null {
     return this.chat.getChatSession(id);
-  }
-
-  bindChatSessionIssueIfUnbound(chatSessionId: string, issueId: string): {
-    session: MultiremiChatSession;
-    bound: boolean;
-  } {
-    return this.chat.bindChatSessionIssueIfUnbound(chatSessionId, issueId);
   }
 
   updateChatSession(id: string, input: UpdateChatSessionInput): MultiremiChatSession {

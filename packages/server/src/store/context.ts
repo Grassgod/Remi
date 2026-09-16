@@ -361,10 +361,6 @@ export interface ChatSurface {
   createChatSessionWithinTransaction(input: CreateChatSessionInput): MultiremiChatSession;
   getChatSession(id: string): MultiremiChatSession | null;
   updateChatSession(id: string, input: UpdateChatSessionInput): MultiremiChatSession;
-  bindChatSessionIssueIfUnbound(chatSessionId: string, issueId: string): {
-    session: MultiremiChatSession;
-    bound: boolean;
-  };
   getChatMessage(id: string): MultiremiChatMessage | null;
   getPendingChatTask(chatSessionId: string): MultiremiTask | null;
   createPendingAgentIssueUpdateWithinTransaction(chatSessionId: string, body: string): {
@@ -450,6 +446,7 @@ export interface RuntimesSurface {
  * than leave a workspace pointing at something that no longer exists.
  */
 export interface FeishuBotSurface {
+  getFeishuIssueIdForChatSession(chatSessionId: string): string | null;
   isFeishuBotTaskIssueCreationRestricted(taskId: string): boolean;
   disableFeishuBotConfigsReferencingAgent(agentId: string, actor?: string | null): string[];
   disableFeishuBotConfigsReferencingRuntime(runtimeId: string, actor?: string | null): string[];

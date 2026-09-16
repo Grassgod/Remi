@@ -361,7 +361,7 @@ export class TasksRepo {
     const chatSession = input.chatSessionId ? this.ctx.chat().getChatSession(input.chatSessionId) : null;
     if (input.chatSessionId && !chatSession) throw new Error(`Chat session not found: ${input.chatSessionId}`);
     if (chatSession && chatSession.agentId !== input.agentId) throw new Error("Chat session agent does not match task agent");
-    const issueId = input.issueId ?? triggerComment?.issueId ?? chatSession?.issueId ?? null;
+    const issueId = input.issueId ?? triggerComment?.issueId ?? null;
     const issue = issueId ? this.ctx.issues().getIssue(issueId) : null;
     if (issueId && !issue) throw new Error(`Issue not found: ${issueId}`);
     if (triggerComment && issue && triggerComment.issueId !== issue.id) throw new Error("Trigger comment does not belong to task issue");
@@ -371,6 +371,10 @@ export class TasksRepo {
     // reference that would drive B's agent + machine + credentials from A).
     if (issue && issue.workspaceId !== agent.workspaceId) throw new Error("Issue workspace does not match agent workspace");
     if (chatSession && chatSession.workspaceId !== agent.workspaceId) throw new Error("Chat session workspace does not match agent workspace");
+    if (chatSession && issueId
+      && this.ctx.feishuBot().getFeishuIssueIdForChatSession(chatSession.id) !== issueId) {
+      throw new Error("Only Feishu Issue topics can create Chat transport tasks with an Issue");
+    }
     const requestedIssueSessionId = cleanOptionalString(input.issueSessionId ?? input.issue_session_id)
       ?? triggerComment?.issueSessionId
       ?? (issue && !chatSession ? this.ctx.issueSessions().getOrCreateDefaultIssueSession(issue.id).id : null);
