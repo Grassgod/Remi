@@ -6,6 +6,21 @@ const delivery = { id: "fbo_1", taskId: "tsk_1", claimToken: "claim_1", chatId: 
   replyToMessageId: "om_root", body: "", bodyOrigin: "agent" as const, idempotencyKey: "fbo_1" };
 
 describe("proactive delivery execution", () => {
+  it("renews a binary delivery lease while upload is pending without a task ID", async () => {
+    const reports: any[] = [];
+    let unblock!: () => void;
+    await deliverFeishuOutbound({ ...delivery, taskId: undefined, attachments: [{ id: "att_1", filename: "report.html", contentType: "text/html", sizeBytes: 8 }] }, {
+      signal: new AbortController().signal, renewMs: 2,
+      send: async () => {
+        await new Promise<void>(resolve => { unblock = resolve; });
+        return { messageId: "om_file" };
+      },
+      report: async input => { reports.push(input); if (input.status === "streaming") unblock(); },
+    });
+    expect(reports[0]).toMatchObject({ status: "streaming" });
+    expect(reports.at(-1)).toMatchObject({ status: "sent", externalMessageId: "om_file" });
+  });
+
   it("renews while task consumption is blocked and persists the card before success", async () => {
     const reports: any[] = [];
     let unblock!: () => void;

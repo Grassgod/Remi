@@ -567,6 +567,9 @@ function appendDaemonClaimChatContext(store: MultiremiStore, task: MultiremiTask
     const messages = daemonUserMessagesForTask(store, task, allMessages);
     const chatMessage = messages.map((message) => message.body.trim()).filter(Boolean).join("\n\n");
     if (chatMessage) response.chat_message = chatMessage;
+    const attachments = store.listAttachmentsForChatMessages(messages.map(message => message.id));
+    response.chat_message_attachments = messages.flatMap(message => attachments.get(message.id) ?? [])
+      .map(attachmentCompatibilityResponse);
   } catch (error) {
     log.debug(`Failed to load chat context for claimed task ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
   }

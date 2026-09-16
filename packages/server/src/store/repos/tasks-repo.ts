@@ -1702,9 +1702,9 @@ export class TasksRepo {
       this.lockTaskIssueSessionsWithinWorkspaceLock([task]);
       const now = nowIso();
       this.ctx.db.run(
-        `INSERT INTO multiremi_task_steer_messages (id, task_id, author_type, author_id, kind, content, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [id, input.taskId, input.authorType ?? "user", input.authorId ?? null, kind, content, now],
+        `INSERT INTO multiremi_task_steer_messages (id, task_id, author_type, author_id, kind, content, created_at, source_chat_message_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [id, input.taskId, input.authorType ?? "user", input.authorId ?? null, kind, content, now, input.sourceChatMessageId ?? null],
       );
       // The steer must be visible on the session timeline even before the
       // daemon consumes it — auditability is part of the contract.
@@ -1722,23 +1722,33 @@ export class TasksRepo {
     })();
   }
 
+  private withSteerAttachments(row: Row): MultiremiTaskSteerMessage {
+    const message = toTaskSteerMessage(row);
+    if (!row.source_chat_message_id) return message;
+    const source = this.ctx.chat().getChatMessage(String(row.source_chat_message_id));
+    const task = this.getTask(message.taskId);
+    if (!source || source.taskId !== task?.id || source.chatSessionId !== task?.chatSessionId) return message;
+    return { ...message, sourceChatMessageId: source.id,
+      attachments: this.ctx.issues().listAttachmentsForChatMessage(source.id) };
+  }
+
   getTaskSteerMessage(steerId: string): MultiremiTaskSteerMessage | null {
     const row = this.ctx.db.query("SELECT * FROM multiremi_task_steer_messages WHERE id = ?").get(steerId) as Row | null;
-    return row ? toTaskSteerMessage(row) : null;
+    return row ? this.withSteerAttachments(row) : null;
   }
 
   listTaskSteerMessages(taskId: string): MultiremiTaskSteerMessage[] {
     const rows = this.ctx.db.query(
       "SELECT * FROM multiremi_task_steer_messages WHERE task_id = ? ORDER BY created_at ASC, id ASC",
     ).all(taskId) as Row[];
-    return rows.map(toTaskSteerMessage);
+    return rows.map(row => this.withSteerAttachments(row));
   }
 
   listPendingTaskSteerMessages(taskId: string): MultiremiTaskSteerMessage[] {
     const rows = this.ctx.db.query(
       "SELECT * FROM multiremi_task_steer_messages WHERE task_id = ? AND consumed_at IS NULL ORDER BY created_at ASC, id ASC",
     ).all(taskId) as Row[];
-    return rows.map(toTaskSteerMessage);
+    return rows.map(row => this.withSteerAttachments(row));
   }
 
   /** Idempotent: already-consumed ids are skipped. Returns the rows actually consumed now. */

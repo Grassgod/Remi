@@ -3044,6 +3044,18 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "chat.attachment.send": {
+      "command": "remi chat attachment send",
+      "auth": [
+        "task"
+      ],
+      "capability": "chat.attachment.send",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "chat.pending": {
       "command": "remi chat pending",
       "auth": [
