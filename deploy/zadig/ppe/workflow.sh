@@ -30,12 +30,14 @@ esac
 PPE_WORKFLOW_LOCK_HEARTBEAT_SECONDS="${PPE_WORKFLOW_LOCK_HEARTBEAT_SECONDS:-30}"
 PPE_BUILD_TIMEOUT_SECONDS="${PPE_BUILD_TIMEOUT_SECONDS:-1500}"
 PPE_BUILD_PROGRESS_SECONDS="${PPE_BUILD_PROGRESS_SECONDS:-20}"
-# The API image builds comfortably inside 6Gi. The Web image runs a Next
-# production build, whose worker pool and prerender phase need substantially
-# more headroom; NEXT_BUILD_CPUS below keeps that pool from scaling with the
+# The API image builds comfortably inside 6Gi. The Web image is the expensive
+# one: a measured end-to-end run peaked at 10.19 GiB, and the largest spike is
+# kaniko snapshotting the finished filesystem rather than the Next build
+# itself, so it grows with the image. 16Gi keeps a real margin over that, and
+# NEXT_BUILD_CPUS below keeps Next's worker pool from scaling with the
 # builder's 64 visible cores. Both fit the namespace ResourceQuota. See MUL-303.
 PPE_API_BUILD_MEMORY="${PPE_API_BUILD_MEMORY:-6Gi}"
-PPE_WEB_BUILD_MEMORY="${PPE_WEB_BUILD_MEMORY:-12Gi}"
+PPE_WEB_BUILD_MEMORY="${PPE_WEB_BUILD_MEMORY:-16Gi}"
 PPE_WEB_BUILD_CPUS="${PPE_WEB_BUILD_CPUS:-4}"
 
 managed_label="multiremi.io/managed=true"
