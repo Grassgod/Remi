@@ -417,6 +417,52 @@ mismatched creation provenance. These cases verify provider reset, pending task
 isolation, message preservation, and update channel/state cleanup as well as
 ownership and repeated startup.
 
+## Reproducible cold-start benchmark (MUL-304)
+
+Use Bun 1.3.14 from the repository root:
+
+```bash
+bun scripts/bench-chat-issue-migration.ts
+bun scripts/bench-chat-issue-migration.ts --backend sqlite --sizes 5000,20000,50000 --repeats 1
+# Configure MUL304_BENCH_POSTGRES_URL privately for a disposable local PG server.
+bun scripts/bench-chat-issue-migration.ts --backend postgres --sizes 5000,20000,50000 --repeats 1
+```
+
+The default runs both backends at all three sizes. The PG URL must use a loopback
+host with no URL query parameters, and its role needs CREATE DATABASE permission.
+The script never uses `MULTIREMI_DATABASE_URL`, accepts no existing SQLite file,
+and creates a new randomly named `mul304_bench_*` PG database for every sample.
+It drops only the database it just created, and removes its own temporary SQLite
+directory. No production server, 209, bot or daemon is contacted. A missing local
+PG server emits `status: unavailable` for each requested size and exit code 2;
+it must not be reported as a successful PG measurement.
+
+Each sample has N ordinary Chats, N active tasks (equally split across queued,
+dispatched, running, awaiting-human and waiting-local-directory states), and 2N
+retained user/assistant messages. All Chats start with legacy Issue/provider
+pointers; half have a work directory and machine affinity. There are no Feishu
+bindings, subscriptions, pushes, attachments or long histories in this fixture.
+This isolates the full ordinary-Chat cold-start cost; it does **not** estimate
+binding-audit or outbound-queue cost, provider response time, or total production
+upgrade duration. Use the isolated real-data rehearsal to include those costs.
+
+SQLite uses a temporary disk database, WAL, synchronous FULL and the shipped
+table-level Issue foreign key, exercising the rebuild path. PG uses the actual
+synchronous store adapter and native DROP COLUMN. NDJSON output records machine
+metadata and `setupMs`, `migrationMs`, `restartMs` separately. `migrationMs` times
+the complete `runMigrations` call, including commit and other idempotent startup
+work; fixture generation and verification are excluded. Successful samples
+verify row counts, provider invalidation, preserved messages/work directories,
+task states, the migration ledger and that restarting does not cold-start again.
+
+For a paused-write window, measure the final isolated rehearsal on comparable
+hardware and data. Budget traffic drain + backup + at least twice the slowest
+measured migration + startup/readback time, plus the separately measured restore
+time when planning the rollback cutoff. The factor of two is planning headroom,
+not a performance guarantee. Do not extrapolate linearly from the 5k sample or
+reuse a SQLite result as a PG estimate. This benchmark does not measure provider
+state that never reached storage or the user impact of history-budget truncation.
+
 ## Rollback procedure
 
 Take and verify a full database backup before upgrading, and pause writes for
