@@ -31,6 +31,10 @@ their messages and working directories.
   tasks. Clear surviving outbox rows' references to deleted predecessors so
   ordinary replies/files/attachments can proceed. Sent delivery history and
   retained Issue bindings' tasks and queues are unchanged.
+- Cleanup also covers older Issue pushes left behind by manual rebinding or
+  unbinding. With no live topic binding, their recorded proactive wake tasks
+  provide evidence to reset affected Chat and pending-task provider pointers,
+  even when the old Chat Issue field was already null.
 - Reset affected Chats' provider resume pointers and provider/fingerprint
   metadata. Keep `work_dir` and its origin `session_runtime_id` together. Keep
   user/assistant history. Clear inherited Issue/session pointers from other

@@ -4489,6 +4489,9 @@ function migrateChatIssueOwnership(db: SqlDatabase, chatSchema?: string | null):
     }
     // Settle discarded associations in this migration transaction. A cleared
     // issue_id alone does not make an old proactive prompt safe to execute.
+    // Rebinding could leave pushes for an earlier Issue, so settle the whole
+    // discarded destination rather than only pushes for its latest Issue.
+    // Explicitly unbound Chats can also retain such old pushes.
     const discardedWakeTasks = `SELECT push.wake_task_id FROM (
       SELECT workspace_id, binding_id, issue_id, wake_task_id
       FROM multiremi_feishu_bot_round_pushes WHERE delivery_mode = 'proactive'
@@ -4499,7 +4502,7 @@ function migrateChatIssueOwnership(db: SqlDatabase, chatSchema?: string | null):
     JOIN multiremi_feishu_bot_chat_bindings binding ON binding.id = push.binding_id
       AND binding.workspace_id = push.workspace_id
     JOIN multiremi_chat_sessions chat ON chat.id = binding.chat_session_id
-      AND chat.workspace_id = binding.workspace_id AND chat.issue_id = push.issue_id
+      AND chat.workspace_id = binding.workspace_id
     WHERE binding.issue_id IS NULL`;
     db.run(`UPDATE multiremi_tasks
       SET status = 'cancelled', wait_reason = NULL, failure_reason = NULL,
@@ -4530,7 +4533,7 @@ function migrateChatIssueOwnership(db: SqlDatabase, chatSchema?: string | null):
           JOIN multiremi_feishu_bot_chat_bindings binding ON binding.id = push.binding_id
             AND binding.workspace_id = push.workspace_id
           JOIN multiremi_chat_sessions chat ON chat.id = binding.chat_session_id
-            AND chat.workspace_id = binding.workspace_id AND chat.issue_id = push.issue_id
+            AND chat.workspace_id = binding.workspace_id
           WHERE binding.issue_id IS NULL
         )`);
     // A resumed provider session would otherwise retain the inherited Issue
@@ -4538,7 +4541,9 @@ function migrateChatIssueOwnership(db: SqlDatabase, chatSchema?: string | null):
     db.run(`UPDATE multiremi_chat_sessions
       SET session_id = NULL, session_provider = NULL,
           session_execution_fingerprint = NULL
-      WHERE issue_id IS NOT NULL AND NOT EXISTS (
+      WHERE (issue_id IS NOT NULL OR id IN (
+        SELECT chat_session_id FROM multiremi_tasks WHERE id IN (${discardedWakeTasks})
+      )) AND NOT EXISTS (
         SELECT 1 FROM multiremi_feishu_bot_chat_bindings binding
         WHERE binding.chat_session_id = multiremi_chat_sessions.id AND binding.issue_id IS NOT NULL
       )`);
@@ -4546,7 +4551,9 @@ function migrateChatIssueOwnership(db: SqlDatabase, chatSchema?: string | null):
       SET issue_id = NULL, session_id = NULL, issue_session_id = NULL, issue_session_generation = NULL
       WHERE status IN ('queued', 'dispatched') AND chat_session_id IN (
         SELECT chat.id FROM multiremi_chat_sessions chat
-        WHERE chat.issue_id IS NOT NULL AND NOT EXISTS (
+        WHERE (chat.issue_id IS NOT NULL OR chat.id IN (
+          SELECT chat_session_id FROM multiremi_tasks WHERE id IN (${discardedWakeTasks})
+        )) AND NOT EXISTS (
           SELECT 1 FROM multiremi_feishu_bot_chat_bindings binding
           WHERE binding.chat_session_id = chat.id AND binding.issue_id IS NOT NULL
         )

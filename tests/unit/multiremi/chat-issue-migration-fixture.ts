@@ -170,29 +170,46 @@ export function seedLegacyChatIssueClassificationFixture(db: SqlDatabase, tableF
   }
 }
 
+const WAKE_FIXTURE_NAMES = ["group_without_thread", "unknown_legacy_group", "p2p_thread_and_key", "explicitly_unbound"];
+
 /** Old proactive work must terminate at migration, while real user work survives. */
 export function seedLegacyChatWakeFixture(db: SqlDatabase): void {
   const now = "2026-09-03T00:00:00.000Z";
-  for (const name of ["group_without_thread", "unknown_legacy_group", "p2p_thread_and_key"]) {
+  db.run(`INSERT INTO multiremi_chat_sessions (id, agent_id, issue_id, title, session_id, created_at, updated_at)
+    VALUES ('chat_classification_explicitly_unbound', 'agt_chat_migration', NULL,
+      'Explicitly unbound before upgrade', 'old-unbound-provider', ?, ?)`, [now, now]);
+  db.run(`INSERT INTO multiremi_feishu_bot_chat_bindings
+    (id, workspace_id, app_id, agent_id, external_session_key, chat_session_id, chat_id, created_at, updated_at)
+    VALUES ('fcb_chat_classification_explicitly_unbound', 'local', 'cli_migration', 'agt_chat_migration',
+      'oc_explicitly_unbound', 'chat_classification_explicitly_unbound', 'oc_explicitly_unbound', ?, ?)`, [now, now]);
+  for (const name of WAKE_FIXTURE_NAMES) {
     const chatId = `chat_classification_${name}`;
     const bindingId = `fcb_${chatId}`;
-    const issueId = `iss_classification_${name}`;
+    const issueId = name === "explicitly_unbound" ? "iss_chat_migration" : `iss_classification_${name}`;
     for (const source of ["round", "human", "inbound"]) {
       for (const status of ["queued", "dispatched", "running", "completed"]) {
         const id = `wake_${name}_${source}_${status}`;
+        // Legacy explicit rebind changed Chat ownership without cancelling old
+        // work. Dispatched pushes still target A while the Chat now owns B.
+        const sourceIssueId = status === "dispatched" ? "iss_chat_migration" : issueId;
         db.run(`INSERT INTO multiremi_tasks (id, workspace_id, agent_id, issue_id, chat_session_id,
           prompt, status, session_id, created_at, updated_at)
           VALUES (?, 'local', 'agt_chat_migration', ?, ?, ?, ?, 'old-wake-provider', ?, ?)`,
-        [id, issueId, chatId, source === "inbound" ? "Real user question" : "PRIVATE_ISSUE_WAKE_SENTINEL", status, now, now]);
+        [id, sourceIssueId, chatId, source === "inbound" ? "Real user question" : "PRIVATE_ISSUE_WAKE_SENTINEL", status, now, now]);
+        if (name === "explicitly_unbound" && source === "inbound" && ["queued", "dispatched"].includes(status)) {
+          // A user turn queued after explicit unbind already has null ownership
+          // but still inherited the provider pointer from the contaminated Chat.
+          db.run("UPDATE multiremi_tasks SET issue_id = NULL WHERE id = ?", [id]);
+        }
         if (source === "human") {
           db.run(`INSERT INTO multiremi_feishu_bot_human_request_pushes
             (id, workspace_id, binding_id, issue_id, source_task_id, request_id, wake_task_id, created_at, updated_at)
-            VALUES (?, 'local', ?, ?, ?, ?, ?, ?, ?)`, [id, bindingId, issueId, `tsk_${chatId}`, id, id, now, now]);
+            VALUES (?, 'local', ?, ?, ?, ?, ?, ?, ?)`, [id, bindingId, sourceIssueId, `tsk_${chatId}`, id, id, now, now]);
         } else {
           db.run(`INSERT INTO multiremi_feishu_bot_round_pushes
             (id, workspace_id, binding_id, issue_id, leader_task_id, wake_task_id, delivery_mode, created_at, updated_at)
             VALUES (?, 'local', ?, ?, ?, ?, ?, ?, ?)`,
-          [id, bindingId, issueId, id, id, source === "round" ? "proactive" : "inbound", now, now]);
+          [id, bindingId, sourceIssueId, id, id, source === "round" ? "proactive" : "inbound", now, now]);
         }
         const outboxStatus = status === "completed" ? "sent" : status === "dispatched" ? "sending" : "pending";
         db.run(`INSERT INTO multiremi_feishu_bot_outbound_deliveries
@@ -219,8 +236,10 @@ export function seedLegacyChatWakeFixture(db: SqlDatabase): void {
 }
 
 export function assertLegacyChatWakeSettlement(db: SqlDatabase): void {
-  for (const name of ["group_without_thread", "unknown_legacy_group", "p2p_thread_and_key"]) {
+  for (const name of WAKE_FIXTURE_NAMES) {
     const preserved = name === "group_without_thread";
+    expect(db.query("SELECT session_id FROM multiremi_chat_sessions WHERE id = ?").get(`chat_classification_${name}`))
+      .toEqual({ session_id: preserved ? "provider-legacy" : null });
     for (const source of ["round", "human", "inbound"]) {
       for (const status of ["queued", "dispatched", "running", "completed"]) {
         const id = `wake_${name}_${source}_${status}`;
@@ -228,11 +247,13 @@ export function assertLegacyChatWakeSettlement(db: SqlDatabase): void {
         const task = db.query("SELECT status, cancelled_at, completed_at, prompt FROM multiremi_tasks WHERE id = ?").get(id);
         expect(task.status).toBe(cancelled ? "cancelled" : status);
         expect(task.prompt).toBe(source === "inbound" ? "Real user question" : "PRIVATE_ISSUE_WAKE_SENTINEL");
+        if (!preserved && ["queued", "dispatched"].includes(status)) {
+          expect(db.query("SELECT issue_id, session_id FROM multiremi_tasks WHERE id = ?").get(id))
+            .toEqual({ issue_id: null, session_id: null });
+        }
         if (cancelled) {
           expect(Number.isFinite(Date.parse(task.cancelled_at))).toBe(true);
           expect(task.completed_at).toBe(task.cancelled_at);
-          expect(db.query("SELECT issue_id, session_id FROM multiremi_tasks WHERE id = ?").get(id))
-            .toEqual({ issue_id: null, session_id: null });
         }
         const outbound = db.query("SELECT id FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(`out_${id}`);
         expect(Boolean(outbound)).toBe(preserved || source === "inbound" || status === "completed");
