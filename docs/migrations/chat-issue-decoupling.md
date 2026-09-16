@@ -161,7 +161,7 @@ a fresh backup if the report is stale. Do not use `chat_sessions.updated_at`.
 
 ```sql
 -- mul301-audit-detail
-SELECT workspace_id, binding_id, issue_id, disposition, reason,
+SELECT workspace_id, binding_id, chat_session_id, issue_id, disposition, reason,
        classification_version, hit_canonical, hit_marker,
        hit_synced_group, hit_synced_p2p, audited_at,
        last_inbound_at, active_last7d, binding_snapshot
@@ -210,6 +210,7 @@ WITH classified AS (
     ON r.workspace_id = a.workspace_id AND r.binding_id = a.binding_id
 ), counts AS (
   SELECT COUNT(*) AS evaluated_links,
+    COALESCE(SUM(CASE WHEN chat_session_id IS NULL THEN 1 ELSE 0 END), 0) AS missing_chat_identity_rows,
     COALESCE(SUM(CASE WHEN classification_version != 2 THEN 1 ELSE 0 END), 0) AS incomplete_audit_rows,
     COALESCE(SUM(hit_canonical), 0) AS canonical_hits,
     COALESCE(SUM(hit_marker), 0) AS marker_hits,
@@ -232,14 +233,34 @@ WITH classified AS (
     COALESCE(SUM(CASE WHEN disposition = 'discarded' AND confirmed_type = 'group' AND last_inbound_at IS NULL THEN 1 ELSE 0 END), 0) AS affected_group_inbound_unobserved,
     COALESCE(SUM(evidence_conflict), 0) AS evidence_conflicts
   FROM classified
+), shared_chats AS (
+  SELECT chat_session_id, COUNT(*) AS binding_count,
+    SUM(CASE WHEN disposition = 'preserved' THEN 1 ELSE 0 END) AS preserved_count,
+    SUM(CASE WHEN disposition = 'discarded' THEN 1 ELSE 0 END) AS discarded_count,
+    SUM(CASE WHEN disposition = 'discarded' AND confirmed_type = 'p2p' THEN 1 ELSE 0 END) AS discarded_p2p_count
+  FROM classified
+  WHERE chat_session_id IS NOT NULL
+  GROUP BY chat_session_id HAVING COUNT(*) > 1
+), shared_counts AS (
+  SELECT COUNT(*) AS shared_chat_count,
+    COALESCE(SUM(binding_count), 0) AS shared_chat_binding_count,
+    COALESCE(SUM(CASE WHEN preserved_count > 0 AND discarded_count > 0 THEN 1 ELSE 0 END), 0) AS mixed_disposition_chat_count,
+    COALESCE(SUM(CASE WHEN preserved_count > 0 AND discarded_count > 0 THEN binding_count ELSE 0 END), 0) AS mixed_disposition_binding_count,
+    COALESCE(SUM(CASE WHEN preserved_count > 0 AND discarded_p2p_count > 0 THEN 1 ELSE 0 END), 0) AS preserved_group_discarded_p2p_chat_count
+  FROM shared_chats
 )
 SELECT counts.*,
+  CASE WHEN missing_chat_identity_rows = 0 THEN shared_chat_count END AS shared_chat_count,
+  CASE WHEN missing_chat_identity_rows = 0 THEN shared_chat_binding_count END AS shared_chat_binding_count,
+  CASE WHEN missing_chat_identity_rows = 0 THEN mixed_disposition_chat_count END AS mixed_disposition_chat_count,
+  CASE WHEN missing_chat_identity_rows = 0 THEN mixed_disposition_binding_count END AS mixed_disposition_binding_count,
+  CASE WHEN missing_chat_identity_rows = 0 THEN preserved_group_discarded_p2p_chat_count END AS preserved_group_discarded_p2p_chat_count,
   CASE WHEN incomplete_audit_rows = 0 THEN 100.0 * canonical_preserved / NULLIF(evaluated_links, 0) END AS canonical_coverage_pct,
   CASE WHEN incomplete_audit_rows = 0 THEN 100.0 * marker_preserved / NULLIF(evaluated_links, 0) END AS marker_coverage_pct,
   CASE WHEN incomplete_audit_rows = 0 THEN 100.0 * synced_group_preserved / NULLIF(evaluated_links, 0) END AS synced_group_coverage_pct,
   CASE WHEN incomplete_audit_rows = 0 THEN 100.0 * preserved_links / NULLIF(evaluated_links, 0) END AS preservation_coverage_pct,
   CASE WHEN incomplete_audit_rows = 0 THEN 100.0 * active_preserved_group_topics_last7d / NULLIF(active_group_topics_last7d, 0) END AS active_group_preservation_coverage_pct
-FROM counts;
+FROM counts CROSS JOIN shared_counts;
 ```
 
 `evaluated_links` counts the migration's legacy Feishu Issue associations, not all
@@ -251,6 +272,21 @@ Overall coverage counts each binding once. A zero denominator yields NULL, not
 activity must be checked externally where interruption could be unacceptable.
 Record confirmed affected groups, unresolved links, active affected groups, and
 both total/active preservation coverage with the deployment request.
+
+`shared_chat_count` counts Chat IDs with multiple evaluated bindings, and
+`shared_chat_binding_count` counts **all** evaluated bindings on those Chats.
+`mixed_disposition_chat_count` and `mixed_disposition_binding_count` restrict
+those counts to Chats containing both preserved and discarded decisions.
+`preserved_group_discarded_p2p_chat_count` identifies the specific preserved-group
+plus confirmed-discarded-p2p shape; review evidence conflicts before interpreting
+the group label. These are overlapping counts, not additive categories.
+They use the immutable `chat_session_id` audit column, independent of live
+bindings or JSON functions. They cover evaluated legacy Issue links only;
+the pre-migration inventory also catches bindings without a legacy Issue.
+Older audit rows lack Chat identity: `missing_chat_identity_rows` exposes them
+and makes all five shared-Chat metrics NULL, rather than claiming zero conflicts.
+Rehearse from the pre-decoupling backup to fill that gap; do not backfill from
+mutable live bindings. An empty audit gives zero conflict counts and NULL coverage.
 
 Fresh migration records have `classification_version = 2`. Earlier unpublished
 drafts lack retained decisions and authoritative activity; rows from them remain

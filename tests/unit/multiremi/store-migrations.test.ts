@@ -1499,6 +1499,7 @@ describe("store migrations", () => {
           && (value.sourceWorkspace ?? "local") === "local") ?? [];
         const p2p = synced.some((value) => value.chatType === "p2p");
         expect(recovery).toMatchObject({ binding_id: `fcb_${chatId}`, workspace_id: "local", issue_id: issueId,
+          chat_session_id: chatId,
           disposition: entry.preserve ? "preserved" : "discarded",
           classification_version: 2, hit_canonical: Number(entry.canonical ?? false),
           hit_marker: Number(entry.provenance === "exact"),

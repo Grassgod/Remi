@@ -202,7 +202,61 @@ function assertAuditMetricsAndRecovery(db: SqlDatabase) {
     marker_coverage_pct: null, synced_group_coverage_pct: null, active_group_preservation_coverage_pct: null });
   db.run("DELETE FROM multiremi_feishu_bot_issue_link_audit");
   expect(readMetrics()).toMatchObject({ evaluated_links: 0, preserved_links: 0,
-    preservation_coverage_pct: null });
+    preservation_coverage_pct: null, missing_chat_identity_rows: 0,
+    shared_chat_count: 0, shared_chat_binding_count: 0, mixed_disposition_chat_count: 0,
+    mixed_disposition_binding_count: 0, preserved_group_discarded_p2p_chat_count: 0 });
+  assertSharedChatMetrics(db);
+}
+
+function assertSharedChatMetrics(db: SqlDatabase) {
+  db.exec("ALTER TABLE multiremi_chat_sessions ADD COLUMN issue_id TEXT");
+  const now = new Date().toISOString();
+  db.run(`INSERT INTO multiremi_feishu_sources (id, workspace_id, endpoint_name, created_at, updated_at)
+    VALUES ('shared_metrics_source', 'local', 'shared_metrics', ?, ?)`, [now, now]);
+  const cases = [
+    ["group", "p2p"], ["group", "unknown", "unknown"],
+    ["group", "group"], ["p2p", "p2p"], ["group"],
+  ];
+  for (const [index, types] of cases.entries()) {
+    const chat = `shared_metrics_${index}`;
+    db.run(`INSERT INTO multiremi_issues (id, title, status, created_at, updated_at)
+      VALUES (?, 'Shared metrics', 'todo', ?, ?)`, [chat, now, now]);
+    db.run(`INSERT INTO multiremi_chat_sessions (id, agent_id, issue_id, title, created_at, updated_at)
+      VALUES (?, 'agt_metrics', ?, 'Shared metrics', ?, ?)`, [chat, chat, now, now]);
+    for (const [ordinal, type] of types.entries()) {
+      const binding = `${chat}_${ordinal}`;
+      db.run(`INSERT INTO multiremi_feishu_bot_chat_bindings
+        (id, workspace_id, app_id, agent_id, external_session_key, chat_session_id, chat_id, created_at, updated_at)
+        VALUES (?, 'local', 'app_metrics', 'agt_metrics', ?, ?, ?, ?, ?)`, [binding, binding, chat, binding, now, now]);
+      if (type !== "unknown") db.run(`INSERT INTO multiremi_feishu_messages
+        (message_id, workspace_id, source_id, chat_id, chat_type, content_fingerprint, created_at, ingested_at)
+        VALUES (?, 'local', 'shared_metrics_source', ?, ?, 'fixture', ?, ?)`, [binding, binding, type, now, now]);
+    }
+  }
+  db.run("DELETE FROM multiremi_schema_migrations WHERE id = '20260916_chat_issue_decoupling'");
+  runMigrations(db);
+  const read = () => Object.fromEntries(Object.entries(db.query(documentedSql("metrics")).get()!)
+    .map(([key, value]) => [key, value === null ? null : Number(value)]));
+  const metrics = read();
+  expect(metrics).toMatchObject({ evaluated_links: 10, missing_chat_identity_rows: 0,
+    shared_chat_count: 4, shared_chat_binding_count: 9, mixed_disposition_chat_count: 2,
+    mixed_disposition_binding_count: 5, preserved_group_discarded_p2p_chat_count: 1 });
+  const rows = db.query(documentedSql("detail")).all();
+  expect(rows).toHaveLength(10);
+  for (const row of rows) expect(row.chat_session_id).toBe(JSON.parse(row.binding_snapshot).chat_session_id);
+  runMigrations(db);
+  expect(read()).toEqual(metrics);
+  // Live repairs/deletions must not erase the migration's conflict evidence.
+  db.run("DELETE FROM multiremi_feishu_bot_chat_bindings WHERE app_id = 'app_metrics'");
+  expect(read()).toEqual(metrics);
+  // An already-migrated early schema gets the nullable column idempotently,
+  // without inventing Chat IDs or replaying the ownership migration.
+  db.exec("ALTER TABLE multiremi_feishu_bot_issue_link_audit DROP COLUMN chat_session_id");
+  runMigrations(db);
+  runMigrations(db);
+  expect(read()).toMatchObject({ evaluated_links: 10, missing_chat_identity_rows: 10,
+    shared_chat_count: null, shared_chat_binding_count: null, mixed_disposition_chat_count: null,
+    mixed_disposition_binding_count: null, preserved_group_discarded_p2p_chat_count: null });
 }
 
 describe("MUL-301 executable audit metrics and recovery runbook", () => {
