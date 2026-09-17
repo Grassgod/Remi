@@ -1,4 +1,4 @@
-/** The resources must retain listProjectResources' (position, created_at) order.
+/** The resources must retain listProjectResources' (position, created_at, id) order.
  * Claim serialization preserves that order even when it omits the sort fields.
  * Routing, Chat lineage, and daemon resolution must use this same winner; a
  * daemon must not substitute a later resource belonging to its own machine. */

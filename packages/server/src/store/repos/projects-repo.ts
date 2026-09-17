@@ -390,7 +390,7 @@ export class ProjectsRepo {
   listProjectResources(projectId: string): MultiremiProjectResource[] {
     if (!this.getProject(projectId)) throw new Error(`Project not found: ${projectId}`);
     const rows = this.ctx.db.query(
-      "SELECT * FROM multiremi_project_resources WHERE project_id = ? ORDER BY position ASC, created_at ASC",
+      "SELECT * FROM multiremi_project_resources WHERE project_id = ? ORDER BY position ASC, created_at ASC, id ASC",
     ).all(projectId) as Row[];
     return rows.map(toProjectResource);
   }

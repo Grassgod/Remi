@@ -91,6 +91,46 @@ const selectedDirectoryChanges: Array<{ name: string; change: (f: DirectoryFixtu
 ];
 
 describe("Chat selects one ordered local directory", () => {
+  it("keeps fully tied directories and Chat lineage stable across query plans", () => {
+    const store = createStore();
+    const runtimeA = store.registerRuntime({ name: "A", provider: "codex", daemonId: "directory-a" });
+    const runtimeB = store.registerRuntime({ name: "B", provider: "codex", daemonId: "directory-b" });
+    const agent = store.createAgent({ name: "Chat", provider: "codex" });
+    const project = store.createProject({ title: "Tied directories", resources: [
+      { resourceType: "local_directory", position: 0, resourceRef: { daemon_id: "directory-b", local_path: "/abs/directory-b" } },
+      { resourceType: "local_directory", position: 1, resourceRef: { daemon_id: "directory-a", local_path: "/abs/directory-a" } },
+    ] });
+    // Insert B first, but give A the smaller ID and exactly equal sort fields.
+    for (const resource of store.listProjectResources(project.id)) {
+      const id = resource.resourceRef.daemon_id === "directory-a" ? "pres_tie_a" : "pres_tie_b";
+      db!.run("UPDATE multiremi_project_resources SET id = ?, position = 0, created_at = ? WHERE id = ?",
+        [id, "2026-01-01T00:00:00.000Z", resource.id]);
+    }
+    const chat = store.createChatSession({ agentId: agent.id, projectId: project.id });
+    let fingerprint: string | null = null;
+    let completed = false;
+    for (const direction of ["DESC", "ASC", "DESC"] as const) {
+      // Only the access path changes; no resource data changes between queries.
+      db!.run("DROP INDEX IF EXISTS tied_resource_order");
+      db!.run(`CREATE INDEX tied_resource_order ON multiremi_project_resources
+        (project_id, position, created_at, id ${direction}, workspace_id, resource_type, resource_ref, label)`);
+      for (let repeat = 0; repeat < 3; repeat += 1) {
+        expect(store.listProjectResources(project.id).map((resource) => resource.id)).toEqual(["pres_tie_a", "pres_tie_b"]);
+        const next = store.sendChatMessage(chat.id, { body: "Continue" }).task;
+        expect(next.runtimeId).toBe(runtimeA.id);
+        expect(store.claimTask(runtimeB.id)).toBeNull();
+        const claimed = store.claimTask(runtimeA.id)!;
+        expect(claimed).toMatchObject({ id: next.id, sessionId: completed ? "provider-a" : null,
+          workDir: completed ? "/abs/directory-a" : null });
+        if (completed) expect(claimed.executionFingerprint).toBe(fingerprint);
+        store.startTask(next.id);
+        store.completeTask(next.id, { output: "A", sessionId: "provider-a", workDir: "/abs/directory-a" });
+        fingerprint = store.getChatSession(chat.id)!.sessionExecutionFingerprint;
+        completed = true;
+      }
+    }
+  });
+
   for (const { name, change } of selectedDirectoryChanges) {
     for (const timing of ["before_enqueue", "queued"] as const) {
       it(`retires the previous assignment once when resources ${name} (${timing})`, () => {
