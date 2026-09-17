@@ -21,8 +21,11 @@ Subagent text never replaces the main Agent's answer. A direct answer without
 process events sends only the result, without an empty process placeholder.
 
 Ordinary private-chat turns send both native process messages and result cards
-to the main chat, without a reply target. Group/Issue topic replies and explicit
-private-thread replies retain their original topic. A private result must not
+to the main chat, without a reply target. Group/Issue topic result and interaction
+cards, and explicit private-thread cards, retain their original topic. Native CoT
+placement has a known gap (MUL-311): creation currently sends `origin_message_id`
+but no `reply_in_thread`, so topic containment is not guaranteed for the process.
+A private result must not
 rebind its Chat Session to the result message; only a standalone Issue topic seed
 establishes a new topic root.
 
@@ -122,6 +125,34 @@ appending incompatible text IDs to the old message. New deliveries use the
 semantic timeline; existing finished messages are not rewritten.
 
 ## Verification
+
+`tests/manual/feishu-cot-thread-probe.ts` checks MUL-311 in an explicitly selected
+ordinary test group. Inject `FEISHU_APP_ID` and `FEISHU_APP_SECRET` securely into
+the process environment; optionally set `FEISHU_DOMAIN` to `feishu`, `lark` or
+`bytedance`. Run:
+
+```bash
+bun tests/manual/feishu-cot-thread-probe.ts --send --chat-id oc_TEST_GROUP
+```
+
+`FEISHU_TEST_CHAT_ID` can replace `--chat-id`. The probe requires `chat_mode=group`
+and `group_message_type=chat` (topic mode or missing metadata blocks sending),
+sends a labeled ordinary message A, then creates two native CoTs with A as
+`origin_message_id`: one omits `reply_in_thread`, the other sets it to `true`.
+It prints each request's API code/message and reads back `thread_id`, `root_id`
+and `parent_id` for both CoTs and A. It completes its own CoTs and retains their
+messages for client inspection. Writes are never retried; an ambiguous response
+requires inspection before another run. No production configuration is changed.
+A zero API code alone does not establish that the parameter was honored; a
+rejection alone does not establish lack of support (check auth/scopes first).
+
+On 2026-09-17 the MUL-311 task environment had no `FEISHU_APP_ID`,
+`FEISHU_APP_SECRET` or test-group ID, including through `@shared/config.js`.
+The probe stopped before making any network requests. Live evidence is pending;
+neither thread support nor a need to suppress thread CoT has been established.
+The connector fix must follow that evidence: enable verified native threading,
+or suppress native CoT for reply targets while retaining receipts and result
+cards. Ordinary private-chat behavior must remain unchanged.
 
 Unit tests cover native POST/PUT payloads and topic origin, direct answers,
 text/final isolation, context and timing, restart checkpoints, result UUIDs,
