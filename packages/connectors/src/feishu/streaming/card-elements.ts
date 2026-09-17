@@ -9,7 +9,7 @@
 // unchanged.
 import { type ToolEntry, buildToolDiv, buildStepDiv, buildThinkingDiv } from "../tool-formatters.js";
 import { buildAskQuestionForm, buildPlanReviewForm, type PermissionFormElements } from "../permission-ui.js";
-import { buildCardHeader, buildContentElements } from "../send.js";
+import { buildCardHeader, buildContentElements, type CardHeaderOptions } from "../send.js";
 
 export type RetainedPermissionPanel = {
   hr: Record<string, unknown>;
@@ -98,6 +98,8 @@ export function buildFinalCard(opts: {
   sessionId?: string | null;
   /** Display name from DB registry — takes precedence over sessionId-derived name. */
   displayName?: string | null;
+  /** The bot's own name, substituted into the sessionId-derived name. */
+  agentName?: string | null;
   /** AskUserQuestion questions from permission_denials — rendered as form in final card. */
   askQuestions?: { actionId: string; questions: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect?: boolean }> };
   /** ExitPlanMode from permission_denials — rendered as approve/reject buttons. */
@@ -196,7 +198,7 @@ export function buildFinalCard(opts: {
 
   return {
     schema: "2.0",
-    header: buildCardHeader(opts.sessionId, opts.displayName, opts.nameSuffix, opts.subtitle),
+    header: buildCardHeader(opts),
     config: { width_mode: "fill", summary: { content: buildSummary(opts.text) } },
     body: { elements },
   };
@@ -206,15 +208,10 @@ export function buildFinalCard(opts: {
  * Build the initial patch-only message posted by FeishuStreamingSession.start().
  * Updates replace this message's full JSON; there is no native streaming mode.
  */
-export function buildInitialCardJson(options?: {
-  sessionId?: string | null;
-  displayName?: string | null;
-  nameSuffix?: string;
-  subtitle?: string | null;
-}): Record<string, unknown> {
+export function buildInitialCardJson(options?: CardHeaderOptions): Record<string, unknown> {
   return {
     schema: "2.0",
-    header: buildCardHeader(options?.sessionId, options?.displayName, options?.nameSuffix, options?.subtitle),
+    header: buildCardHeader(options),
     config: {
       width_mode: "fill",
       summary: { content: "[Generating...]" },
@@ -255,6 +252,10 @@ export function buildProgressCard(args: {
   pendingPermission: PermissionFormElements | null;
   nameSuffix?: string;
   subtitle: string | null;
+  /** Provider session behind the live reply — same rules as the final card. */
+  sessionId?: string | null;
+  displayName?: string | null;
+  agentName?: string | null;
   stats?: string | null;
   /** Keep the live card as a CoT/process card without exposing the answer yet. */
   includeContent?: boolean;
@@ -310,7 +311,7 @@ export function buildProgressCard(args: {
 
   return {
     schema: "2.0",
-    header: buildCardHeader(undefined, undefined, args.nameSuffix, args.subtitle),
+    header: buildCardHeader(args),
     config: { width_mode: "fill" },
     body: { elements },
   };

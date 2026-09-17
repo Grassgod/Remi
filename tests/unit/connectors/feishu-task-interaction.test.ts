@@ -25,7 +25,7 @@ const answered = (r: MultiremiTaskHumanRequest, response: Record<string, unknown
 
 describe("standalone Task interactions", () => {
   it("does not expose unusable buttons when the group recipient could not be resolved", () => {
-    const card = JSON.stringify(buildTaskInteractionCard(request(), { displayName: "Remi" }));
+    const card = JSON.stringify(buildTaskInteractionCard(request(), { agentName: "Remi" }));
     expect(card).not.toContain('"tag":"button"');
     expect(card).not.toContain("<at ");
     expect(card).toContain("工作台处理");
@@ -50,7 +50,7 @@ describe("standalone Task interactions", () => {
     } finally { registration.dispose(); }
   });
   it("renders one neutral checkbox row per option, per-question custom text and one submit", () => {
-    const card = buildTaskInteractionCard(request(), { displayName: "Remi", recipientOpenId: "ou_owner" }) as any;
+    const card = buildTaskInteractionCard(request(), { agentName: "Remi", recipientOpenId: "ou_owner" }) as any;
     expect(card.header.subtitle).toBeUndefined();
     const form = card.body.elements.find((e: any) => e.tag === "form");
     expect(form.elements.filter((e: any) => e.tag === "column_set")).toHaveLength(4);
@@ -206,6 +206,33 @@ describe("standalone Task interactions", () => {
       expect(r.status).toBe("responded");
     } finally { release(); await running; }
     expect(h.checkpoint?.interactions.hr_test?.waitingFinished).toBe(true);
+  });
+
+  it("gives the request card, its receipt and the result card one shared session title", async () => {
+    const h = nativeHarness();
+    let r = request("permission");
+    const presentation = new FeishuTaskPresentation(h.client as any, "oc_group", {
+      taskId: r.taskId, displayName: "小助手", sessionId: null, getHumanRequest: async () => r,
+      respondHumanRequest: async (_id, response) => { r = answered(r, response); return r; },
+    }, { appId: "cli_test", idempotencyKey: "delivery", mentionOpenId: "ou_owner", save: h.save });
+    async function* stream() {
+      yield taskEvent(1, "execution", { meta: { agentName: "小助手", provider: "claude" } });
+      // The provider session is pinned mid-run, before the request card is sent.
+      yield { kind: "snapshot", snapshot: { ...(completed as any).snapshot, status: "running", result: null } } as typeof completed;
+      yield taskEvent(2, "permission_request", { input: { request_id: r.id } });
+      yield completed;
+    }
+    const running = presentation.consume(stream());
+    while (r.status === "pending") {
+      await Bun.sleep(1);
+      await handleTaskInteractionEvent("cli_test", {
+        ...action(`${interactionMarker(r.taskId, r.id)}_o0`), context: { open_chat_id: "oc_group", open_message_id: "om_1" },
+      });
+    }
+    await running;
+    const titles = h.cards().map((card: any) => card.header.title.content);
+    expect(titles).toHaveLength(3); // request card, its receipt patch, result card
+    for (const title of titles) expect(title).toStartWith("自由的 小助手·Sciurus  ");
   });
 
   it("escapes receipt text so a custom answer cannot inject a mention", () => {

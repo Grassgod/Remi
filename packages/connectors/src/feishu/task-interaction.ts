@@ -32,7 +32,7 @@ export function buildQuestionElements(marker: string, data: AskUserQuestionData)
 }
 
 export function buildTaskInteractionCard(request: MultiremiTaskHumanRequest, options: {
-  displayName?: string | null; recipientOpenId?: string; receipt?: boolean;
+  agentName?: string | null; sessionId?: string | null; recipientOpenId?: string; receipt?: boolean;
 }): Card {
   const marker = interactionMarker(request.taskId, request.id);
   const elements: Card[] = [];
@@ -79,7 +79,7 @@ export function buildTaskInteractionCard(request: MultiremiTaskHumanRequest, opt
       elements.push({ tag: "markdown", content: `<at id=${options.recipientOpenId}></at>` });
     }
   }
-  return { schema: "2.0", header: buildCardHeader(undefined, options.displayName),
+  return { schema: "2.0", header: buildCardHeader({ sessionId: options.sessionId, agentName: options.agentName }),
     config: { update_multi: true, enable_forward: false, width_mode: "default",
       summary: { content: request.kind === "question" ? "Remi · 等待回答" : "Remi · 操作审批" } },
     body: { padding: "12px 16px", elements } };
@@ -116,7 +116,7 @@ export function parseQuestionAnswers(questions: AskUserQuestion[], form: Record<
 
 interface PendingInteraction {
   appId: string; chatId: string; messageId: string; recipientOpenId?: string;
-  request: MultiremiTaskHumanRequest; displayName?: string | null;
+  request: MultiremiTaskHumanRequest; agentName?: string | null; sessionId?: string | null;
   submit: (response: Record<string, unknown>) => Promise<MultiremiTaskHumanRequest>;
   settled?: MultiremiTaskHumanRequest;
   submitting?: Promise<MultiremiTaskHumanRequest>;
@@ -166,7 +166,7 @@ export async function handleTaskInteractionEvent(appId: string, raw: unknown): P
     // receipt once the same in-flight server request is actually acknowledged.
     if (!settled) return toast("正在提交，请稍候", "info");
     return { ...toast(settled.status === "responded" ? "已提交" : "请求已结束", settled.status === "responded" ? "success" : "info"),
-      card: { type: "raw", data: buildTaskInteractionCard(settled, { displayName: entry.displayName, receipt: true }) } };
+      card: { type: "raw", data: buildTaskInteractionCard(settled, { agentName: entry.agentName, sessionId: entry.sessionId, receipt: true }) } };
   } catch (error) {
     return toast(error instanceof Error && !/HTTP|fetch|token/i.test(error.message) ? error.message.slice(0, 100) : "提交未确认，请稍后重试");
   }

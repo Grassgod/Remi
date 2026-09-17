@@ -85,19 +85,32 @@ export async function sendMessageFeishu(
   return { messageId: response.data?.message_id ?? "unknown", chatId: receiveId };
 }
 
+export interface CardHeaderOptions {
+  /** Provider session the reply belongs to; drives the conversation label. */
+  sessionId?: string | null;
+  /** Pre-resolved title from the legacy session registry — used verbatim. */
+  displayName?: string | null;
+  /** The bot's own name, substituted into the generated session label. */
+  agentName?: string | null;
+  nameSuffix?: string;
+  subtitle?: string | null;
+}
+
 /**
  * Build a Remi branded card header.
  * - displayName string → use as-is (from DB registry)
  * - sessionId string + no displayName → deterministic name ("好奇的 Remi·Vulpes")
  * - sessionId null → newborn name ("刚醒来的 Remi")
- * - sessionId undefined → plain "Remi" (non-streaming cards)
+ * - sessionId undefined → plain agent name (non-streaming and command cards)
  */
-export function buildCardHeader(sessionId?: string | null, displayName?: string | null, nameSuffix?: string, subtitle?: string | null) {
+export function buildCardHeader(options: CardHeaderOptions = {}) {
+  const { sessionId, displayName, agentName, nameSuffix, subtitle } = options;
+  const agent = agentName?.trim() || "Remi";
   const baseName =
     displayName ? displayName :
-    sessionId ? getSessionName(sessionId) :
-    sessionId === null ? getNewbornName() :
-    "Remi";
+    sessionId ? getSessionName(sessionId, agent) :
+    sessionId === null ? getNewbornName(agent) :
+    agent;
   const title = nameSuffix ? `${baseName}${nameSuffix}` : baseName;
   const now = new Date();
   const hh = String(((now.getUTCHours() + 8) % 24)).padStart(2, "0");

@@ -42,6 +42,7 @@ export interface StreamingCloseOptions {
   mentionOpenId?: string;
   sessionId?: string | null;
   displayName?: string | null;
+  agentName?: string | null;
   permissionDenials?: Array<Record<string, unknown>>;
   askQuestions?: { actionId: string; questions: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect?: boolean }> };
   planReview?: { actionId: string; planContent?: string };
@@ -72,6 +73,7 @@ export class FeishuStreamingSession {
   private subtitle: string | null = null;
   private sessionId: string | null | undefined;
   private displayName: string | null | undefined;
+  private agentName: string | null | undefined;
   private mentionOpenId: string | undefined;
   private execution: AgentExecutionDisplay = {};
   private contextUsage: ContextUsage | null = null;
@@ -89,7 +91,7 @@ export class FeishuStreamingSession {
     receiveId: string,
     receiveIdType: "open_id" | "user_id" | "union_id" | "email" | "chat_id" = "chat_id",
     options?: { replyToMessageId?: string; sessionId?: string | null; displayName?: string | null;
-      nameSuffix?: string; subtitle?: string | null; mentionOpenId?: string;
+      agentName?: string | null; nameSuffix?: string; subtitle?: string | null; mentionOpenId?: string;
       durable?: { idempotencyKey: string; messageId?: string | null } },
   ): Promise<void> {
     if (this.state) return;
@@ -98,7 +100,8 @@ export class FeishuStreamingSession {
     this.subtitle = options?.subtitle ?? null;
     this.sessionId = options?.sessionId;
     this.displayName = options?.displayName;
-    this.execution = { agentName: options?.displayName };
+    this.agentName = options?.agentName;
+    this.execution = { agentName: options?.displayName ?? options?.agentName };
     this.mentionOpenId = options?.mentionOpenId;
     this.taskOwnsLifetime = Boolean(options?.durable);
     const card = buildInitialCardJson(options);
@@ -128,6 +131,9 @@ export class FeishuStreamingSession {
       pendingPermission: this.permissions.pending,
       nameSuffix: this.nameSuffix,
       subtitle: this.subtitle,
+      sessionId: this.sessionId,
+      displayName: this.displayName,
+      agentName: this.agentName,
       stats: null,
       includeStats: false,
     }), header: this.header };
@@ -324,6 +330,7 @@ export class FeishuStreamingSession {
           retainedPermissionPanels: options.retainedPermissionPanels ?? this.permissions.retained(),
           sessionId: options.sessionId ?? this.sessionId,
           displayName: options.displayName ?? this.displayName,
+          agentName: options.agentName ?? this.agentName,
           mentionOpenId: options.mentionOpenId ?? this.mentionOpenId,
           stats: options.stats ?? this.getStats(),
           nameSuffix: this.nameSuffix,
