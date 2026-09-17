@@ -336,6 +336,52 @@ describe("native collaboration CLI contracts", () => {
     ]);
   });
 
+  it("creates side Sessions from a parent with or without --discussion", async () => {
+    useCliEnv();
+    const bodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = capabilityFetch("session.create", async (request) => {
+      expect(request.method).toBe("POST");
+      expect(new URL(request.url).pathname).toBe("/api/issues/MUL-312/sessions");
+      bodies.push(await request.json() as Record<string, unknown>);
+      return Response.json({ id: "ises_side" }, { status: 201 });
+    });
+    const spec = specById("session.create");
+    for (const extra of [[], ["--discussion"]]) {
+      await capture(() => registryFor([spec]).execute([
+        "session", "create", "MUL-312", "--title", "Side", "--from", "ises_main", ...extra,
+      ]));
+    }
+    expect(bodies).toEqual([
+      { title: "Side", holds_workspace: false, parent_session_id: "ises_main" },
+      { title: "Side", holds_workspace: false, parent_session_id: "ises_main" },
+    ]);
+    expect(registryFor([spec]).renderHelpForArgv(["session", "create", "--help"]))
+      .toContain("--from <session-id>");
+  });
+
+  it("shows frozen inheritance fields by Session ID in table, JSON, and JSONL", async () => {
+    useCliEnv();
+    const spec = specById("session.show");
+    const session = {
+      id: "ises_side", title: "Side", status: "active", parent_session_id: "ises_main",
+      inherit_mode: "snapshot", inherit_cutoff_seq: 42, inherited_event_count: 37,
+    };
+    globalThis.fetch = capabilityFetch(spec.id, (request) => {
+      expect(request.method).toBe("GET");
+      expect(new URL(request.url).pathname).toBe("/api/sessions/ises_side");
+      return Response.json(session);
+    });
+    for (const mode of ["json", "jsonl"]) {
+      const result = await capture(() => registryFor([spec]).execute(["session", "show", "ises_side", "--output", mode]));
+      expect(JSON.parse(result.stdout)).toEqual(session);
+    }
+    const table = await capture(() => registryFor([spec]).execute(["session", "show", "ises_side"]));
+    for (const value of ["PARENT", "CUTOFF", "INHERITED EVENTS", "ises_main", "snapshot", "42", "37"]) {
+      expect(table.stdout).toContain(value);
+    }
+    expect(registryFor(specs).resolve(["session", "get", "MUL-312", "ises_side"])?.spec.id).toBe("session.get");
+  });
+
   it("executes task inspection and supervisor-only redispatch commands", async () => {
     useCliEnv();
     const inspect = specById("task.inspect");

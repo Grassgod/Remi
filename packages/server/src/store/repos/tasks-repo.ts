@@ -363,6 +363,14 @@ export class TasksRepo {
     if (parentTask && parentTask.workspaceId !== agent.workspaceId) {
       throw new Error("Parent task belongs to another workspace");
     }
+    // A side task cannot dispatch a different agent through another Session.
+    // Same-agent retries/redispatch still use parentTaskId and remain valid.
+    const parentIssueSession = parentTask?.issueSessionId
+      ? this.ctx.issueSessions().getIssueSession(parentTask.issueSessionId) : null;
+    if (parentTask && parentTask.agentId !== agent.id
+      && parentIssueSession && parentIssueSession.inheritMode !== "none") {
+      throw new Error("Agent delegation is not allowed from side sessions");
+    }
     const issueCreationRestricted = Boolean(
       input.issueCreationRestricted
       || input.issue_creation_restricted
@@ -483,6 +491,9 @@ export class TasksRepo {
       throw new Error("delegation_id and delegated_by_agent_id must be set together");
     }
     if (delegatedByAgentId) {
+      if (issueSession && issueSession.inheritMode !== "none") {
+        throw new Error("Agent delegation is not allowed in side sessions");
+      }
       const delegator = this.ctx.agents().getAgent(delegatedByAgentId);
       if (!delegator || delegator.workspaceId !== agent.workspaceId) {
         throw new Error("Delegating agent must belong to the task workspace");

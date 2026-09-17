@@ -4,6 +4,7 @@ import { basename } from "node:path";
 import { CHAT_ATTACHMENT_MAX_BYTES } from "@multiremi/contracts/attachments.js";
 import {
   CliError,
+  CliRenderer,
   ResourceResolver,
   type CliIdentity,
   type CliMutation,
@@ -28,6 +29,7 @@ import {
   encodePath,
   extractRecords,
   integerOption,
+  outputMode,
   positional,
   queryOptions,
   renderResource,
@@ -217,10 +219,31 @@ function sessionCommandSpecs(): CommandSpec[] {
       const issue = positional(invocation, 0, "issue");
       await getAndRender(invocation, `/api/issues/${encodePath(issue)}/sessions/${encodePath(positional(invocation, 1, "session"))}`);
     }),
-    nativeSpec("session.create", ["session", "create"], "Create an issue Session", "write", HUMAN, [refPositional("issue")], [...INPUT_OPTIONS, ...titleStatusOptions(), discussionOption()], async (invocation) => {
+    nativeSpec("session.show", ["session", "show"], "Show a Session and its inherited snapshot", "read", HUMAN_TASK, [refPositional("session")], [], async (invocation) => {
+      const client = await clientFor(invocation);
+      const response = await client.request({ method: "GET", path: `/api/sessions/${encodePath(positional(invocation, 0, "session"))}` });
+      new CliRenderer().render<Record<string, unknown>>(response.data, {
+        mode: outputMode(invocation),
+        columns: [
+          { header: "ID", value: (row) => row.id },
+          { header: "TITLE", value: (row) => row.title },
+          { header: "STATUS", value: (row) => row.status },
+          { header: "PARENT", value: (row) => row.parent_session_id ?? "-" },
+          { header: "INHERIT", value: (row) => row.inherit_mode ?? "none" },
+          { header: "CUTOFF", value: (row) => row.inherit_cutoff_seq ?? "-" },
+          { header: "INHERITED EVENTS", value: (row) => row.inherited_event_count ?? 0 },
+        ],
+      });
+    }),
+    nativeSpec("session.create", ["session", "create"], "Create an issue Session", "write", HUMAN, [refPositional("issue")], [
+      ...INPUT_OPTIONS, ...titleStatusOptions(), discussionOption(),
+      { name: "from", type: "string", valueName: "session-id", description: "Inherit a parent Session snapshot (implies --discussion)" },
+    ], async (invocation) => {
+      const parentSessionId = stringOption(invocation, "from");
       const body = await requestBody(invocation, {
         title: stringOption(invocation, "title") ?? undefined,
-        holds_workspace: invocation.options.discussion === true ? false : undefined,
+        holds_workspace: invocation.options.discussion === true || parentSessionId ? false : undefined,
+        parent_session_id: parentSessionId ?? undefined,
       });
       await mutateAndRender(invocation, "POST", `/api/issues/${encodePath(positional(invocation, 0, "issue"))}/sessions`, body);
     }),

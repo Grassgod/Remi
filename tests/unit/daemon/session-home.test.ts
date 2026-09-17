@@ -697,3 +697,25 @@ describe("Issue Session provider home", () => {
     expect(resolveIssueRuntimeStateRoot(task("claude"), source, workspaces, false)).toBe(source);
   });
 });
+
+it("installs side developer instructions in the private Codex config exactly once across restarts", async () => {
+  const root = mkdtempSync(join(tmpdir(), "multiremi-side-home-"));
+  roots.push(root);
+  const baseHome = join(root, "base");
+  mkdirSync(baseHome);
+  writeFileSync(join(baseHome, "config.toml"), 'model = "gpt-test"\ndeveloper_instructions = "Existing developer rules"\n');
+  const resolved = resolveIssueSessionProviderHome(task("codex"), root, join(root, "workspaces"))!;
+  // Plugin/native lane configuration is preserved; host-wide arbitrary
+  // instructions are intentionally excluded by the seed allowlist.
+  mkdirSync(resolved.home, { recursive: true });
+  writeFileSync(join(resolved.home, "config.toml"), readFileSync(join(baseHome, "config.toml")));
+  const options = { baseCodexHome: baseHome, linkCodexAuth: false, sideConversation: true, codexPluginInstalled: true };
+  await prepareIssueSessionProviderHome(resolved, options);
+  const first = readFileSync(join(resolved.home, "config.toml"), "utf8");
+  expect(first).toContain("developer_instructions");
+  expect(first).toContain("Existing developer rules");
+  expect(first).toContain("Sub-agents are off-limits");
+  await prepareIssueSessionProviderHome(resolved, options);
+  expect(readFileSync(join(resolved.home, "config.toml"), "utf8")).toBe(first);
+  expect(readFileSync(join(baseHome, "config.toml"), "utf8")).not.toContain("Sub-agents are off-limits");
+});

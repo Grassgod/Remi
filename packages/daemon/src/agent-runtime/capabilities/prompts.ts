@@ -1,7 +1,15 @@
-import type { CapabilityBlock, PersistentContext } from "../types.js";
+import type { CapabilityBlock, PersistentContext, EphemeralContext } from "../types.js";
+
+import { isSideConversation, SIDE_CONVERSATION_INSTRUCTIONS } from "../prompts/side-conversation.js";
 
 export const promptsBlock: CapabilityBlock = {
   name: "prompts",
+
+  ephemeral(ctx: EphemeralContext) {
+    return isSideConversation(ctx.task) && ctx.task.agent?.provider !== "codex"
+      ? { systemPrompt: SIDE_CONVERSATION_INSTRUCTIONS }
+      : {};
+  },
 
   persistent(ctx: PersistentContext) {
     const instructions = ctx.agent.instructions.trim();

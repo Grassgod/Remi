@@ -267,3 +267,16 @@ test("persistent cwd priority is session, then topic", () => {
     topicCwd: "/topics/thread",
   })).cwd).toBe("/topics/thread");
 });
+
+test("side conversation policy reaches Claude system instructions without changing ordinary tasks", async () => {
+  const runtime = new AgentRuntime();
+  const task = { issueSession: { id: "side", title: "Side", inheritMode: "snapshot" as const } };
+  const side = await runOnce(runtime.assemble(ephemeralContext({}, task)));
+  expect(side.systemPrompt).toContain("Sub-agents are off-limits");
+  expect(side.systemPrompt).toContain("Do not modify files, Git state, or configuration");
+  const ordinary = await runOnce(runtime.assemble(ephemeralContext({})));
+  expect(ordinary.systemPrompt).toBeUndefined();
+  // Codex installs developer_instructions in its private provider home instead.
+  const codex = await runOnce(runtime.assemble(ephemeralContext({ provider: "codex" }, task)));
+  expect(codex.systemPrompt).toBeUndefined();
+});
