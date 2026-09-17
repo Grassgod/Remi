@@ -20,7 +20,9 @@ export interface BuildSessionProjectionInput {
   tokenBudget: number;
   /** Inherited records are reference context, even when authored by the target agent. */
   perspectiveMode?: "own" | "inherited";
-  /** Inclusive immutable parent snapshot boundary. */
+  /** Exclusive parent cursor boundary; ignored for own projections. */
+  fromSeq?: number;
+  /** Inclusive parent snapshot or follow window boundary. */
   toSeq?: number;
   /** The current request is rendered in its own prompt section, not replayed as history. */
   currentTaskId?: string | null;
@@ -43,14 +45,17 @@ export function buildSessionProjection(input: BuildSessionProjectionInput): Mult
     .sort((left, right) => left.seq - right.seq);
   const toSeq = sorted.at(-1)?.seq ?? 0;
   const warm = input.perspectiveMode !== "inherited" && Boolean(input.providerSessionId) && input.cursorSeq > 0;
-  const mode: MultiremiSessionProjectionMode = warm ? "delta" : "bootstrap";
-  const fromSeq = warm ? input.cursorSeq : 0;
+  const fromSeq = input.perspectiveMode === "inherited" ? (input.fromSeq ?? 0) : warm ? input.cursorSeq : 0;
+  const mode: MultiremiSessionProjectionMode = input.perspectiveMode === "inherited" && fromSeq > 0
+    ? "inherited_delta"
+    : warm ? "delta" : "bootstrap";
   const projected = sorted.filter((event) => {
     if (event.seq <= fromSeq) return false;
     if (input.currentTaskId && event.kind === "task_assigned" && event.taskId === input.currentTaskId) {
       return false;
     }
-    if (mode === "delta" && event.authorType === "agent" && event.authorId === input.targetAgentId) {
+    if (input.perspectiveMode !== "inherited" && mode === "delta"
+      && event.authorType === "agent" && event.authorId === input.targetAgentId) {
       return false;
     }
     return true;

@@ -2197,11 +2197,11 @@ export interface MultiremiProjectSearchResult extends MultiremiProject {
 
 export type MultiremiIssueSessionStatus = "active" | "archived";
 
-export type MultiremiIssueSessionInheritMode = "none" | "snapshot";
+export type MultiremiIssueSessionInheritMode = "none" | "snapshot" | "follow";
 
 export type MultiremiSessionParticipantType = "agent" | "member";
 
-export type MultiremiSessionProjectionMode = "bootstrap" | "delta";
+export type MultiremiSessionProjectionMode = "bootstrap" | "delta" | "inherited_delta";
 
 export interface MultiremiIssueSession {
   id: string;
@@ -2221,7 +2221,7 @@ export interface MultiremiIssueSession {
   inherit_mode?: MultiremiIssueSessionInheritMode;
   inheritCutoffSeq: number | null;
   inherit_cutoff_seq?: number | null;
-  /** Parent events through the frozen cutoff, before projection truncation. */
+  /** Parent events in the available inheritance window, before projection truncation. */
   inheritedEventCount: number;
   inherited_event_count?: number;
   summary: string | null;
@@ -2242,6 +2242,13 @@ export interface MultiremiSessionInheritedContext {
   parent_session_title: string | null;
   inherit_mode: MultiremiIssueSessionInheritMode;
   inherit_cutoff_seq: number | null;
+  /** Follow-only progress and cost diagnostics; omitted for snapshot and ordinary Sessions. */
+  parent_max_seq?: number | null;
+  lanes?: { agent_id: string; execution_scope: string; parent_cursor_seq: number }[];
+  inherited_tokens_total?: number;
+  follow_token_limit?: number;
+  follow_frozen?: boolean;
+  follow_frozen_seq?: number | null;
   /** Raw parent event count before truncation, not the number supplied to the model. */
   inherited_event_count: number | null;
   diagnostics: {
@@ -2309,6 +2316,8 @@ export interface MultiremiSessionAgentLane {
   work_dir?: string | null;
   cursorSeq: number;
   cursor_seq?: number;
+  parentCursorSeq: number;
+  parent_cursor_seq?: number;
   generation: number;
   status: string;
   lastTaskId: string | null;
@@ -2356,9 +2365,9 @@ export interface MultiremiSessionProjection {
   /** Present on a parent projection so prompt renderers can identify its source. */
   sessionTitle?: string;
   session_title?: string;
-  /** Side-session snapshot; absent for ordinary Sessions. */
-  inheritedSessionProjection?: MultiremiSessionProjection;
-  inherited_session_projection?: MultiremiSessionProjection;
+  /** Side-session inherited context; absent for ordinary Sessions. */
+  inheritedSessionProjection?: MultiremiSessionProjection | null;
+  inherited_session_projection?: MultiremiSessionProjection | null;
 }
 
 export interface CreateIssueSessionInput {
@@ -2374,9 +2383,11 @@ export interface CreateIssueSessionInput {
   participant_agent_ids?: string[];
   holdsWorkspace?: boolean;
   holds_workspace?: boolean;
-  /** A parent creates a discussion Session with a frozen snapshot of its events. */
+  /** A parent creates a discussion Session, with snapshot inheritance by default. */
   parentSessionId?: string | null;
   parent_session_id?: string | null;
+  inheritMode?: MultiremiIssueSessionInheritMode;
+  inherit_mode?: MultiremiIssueSessionInheritMode;
 }
 
 export interface UpdateIssueSessionInput {

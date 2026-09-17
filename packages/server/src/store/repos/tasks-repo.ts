@@ -680,6 +680,7 @@ export class TasksRepo {
            execution_fingerprint = NULL,
            work_dir = NULL,
            cursor_seq = 0,
+           parent_cursor_seq = 0,
            generation = generation + 1,
            last_task_id = NULL,
            updated_at = ?
@@ -3484,6 +3485,14 @@ export class TasksRepo {
     // must still be empty. This prevents a late completion from overwriting a
     // manually reset or replaced lane.
     const expectedProviderSessionId = task.projectionMode === "delta" ? task.sessionId : null;
+    // Resume-safe failures also call this method to retain the own transcript.
+    // Parent progress is acknowledged only after successful completion.
+    const followWindow = task.status === "completed" ? this.ctx.db.query(
+      "SELECT inherited_projection_from_seq FROM multiremi_tasks WHERE id = ?",
+    ).get(task.id) as Row | null : null;
+    const parentCursorSeq = followWindow?.inherited_projection_from_seq != null && task.inheritedProjectionToSeq !== null
+      ? Math.max(lane.parentCursorSeq, task.inheritedProjectionToSeq)
+      : lane.parentCursorSeq;
     const update = `UPDATE multiremi_session_agent_lanes
       SET provider_session_id = ?,
           runtime_id = ?,
@@ -3491,6 +3500,7 @@ export class TasksRepo {
           execution_fingerprint = ?,
           work_dir = ?,
           cursor_seq = ?,
+          parent_cursor_seq = ?,
           last_task_id = ?,
           updated_at = ?
       WHERE session_id = ? AND agent_id = ? AND generation = ? AND execution_scope = ?`;
@@ -3501,6 +3511,7 @@ export class TasksRepo {
       task.executionFingerprint,
       task.workDir,
       cursorSeq,
+      parentCursorSeq,
       task.id,
       now,
       task.issueSessionId,
