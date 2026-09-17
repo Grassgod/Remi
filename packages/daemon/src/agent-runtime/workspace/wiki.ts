@@ -4,6 +4,7 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   renameSync,
   rmdirSync,
@@ -49,17 +50,51 @@ export interface IssueWikiManifest {
  */
 export async function prepareIssueWikiWorkspace(workDir: string, task: AgentTask): Promise<IssueWikiManifest | null> {
   const projectId = task.project?.id?.trim();
-  if (!projectId || task.issue?.issueKind === "intake") {
-    const contexts = task.repositoryWikiContexts ?? task.repository_wiki_contexts ?? [];
-    if (contexts.length) {
-      return withIssueWikiLock(workDir, () => {
-        prepareRepositoryWikiWorkspaces(workDir, task);
-        return null;
-      });
-    }
-    return null;
+  const chatProjectId = task.chatProjectId ?? task.chat_project_id ?? null;
+  const canArchiveChatProject = Boolean(task.chatSessionId && !task.issueId && !task.issue
+    && (Object.hasOwn(task, "chatProjectId") || Object.hasOwn(task, "chat_project_id"))
+    && chatProjectId === (projectId ?? null));
+  const contexts = task.repositoryWikiContexts ?? task.repository_wiki_contexts ?? [];
+  if (!projectId && !contexts.length) {
+    if (!canArchiveChatProject || (
+      !existsSync(join(workDir, ISSUE_WIKI_BASE_DIRECTORY, "manifest.json"))
+      && !existsSync(join(workDir, ".multiremi", "project", "resources.json"))
+    )) return null;
   }
-  return withIssueWikiLock(workDir, () => prepareIssueWikiWorkspaceUnlocked(workDir, task, projectId));
+  return withIssueWikiLock(workDir, () => {
+    if (canArchiveChatProject) archivePreviousChatProject(workDir, projectId ?? null);
+    if (!projectId || task.issue?.issueKind === "intake") {
+      if (contexts.length) prepareRepositoryWikiWorkspaces(workDir, task);
+      return null;
+    }
+    return prepareIssueWikiWorkspaceUnlocked(workDir, task, projectId);
+  });
+}
+
+function archivePreviousChatProject(workDir: string, projectId: string | null): void {
+  const wikiRoot = join(workDir, ISSUE_WIKI_DIRECTORY);
+  const baseRoot = join(workDir, ISSUE_WIKI_BASE_DIRECTORY);
+  const previous = readManifest(workDir, join(baseRoot, "manifest.json"));
+  const resourceRoot = join(workDir, ".multiremi", "project");
+  const resourceText = readRegularText(workDir, join(resourceRoot, "resources.json"), "Project resources");
+  const resourceProjectId = resourceText === null ? null : JSON.parse(resourceText).project_id;
+  const archiveWiki = Boolean(previous && previous.projectId !== projectId);
+  const archiveResources = typeof resourceProjectId === "string" && resourceProjectId !== projectId;
+  if (!archiveWiki && !archiveResources) return;
+
+  // The complete old working copy (including unpublished files and repository
+  // Wiki) stays beside its baseline. Unbinding also removes the active Project
+  // resource metadata, so a subsequent pure Chat cannot inherit that scope.
+  const targets = [
+    ...(archiveWiki ? [{ source: wikiRoot, name: "wiki" }, { source: baseRoot, name: "wiki-base" }] : []),
+    ...(archiveResources ? [{ source: resourceRoot, name: "project" }] : []),
+  ];
+  for (const target of targets) ensureSafeDirectory(workDir, target.source);
+  const archiveRoot = join(workDir, ".multiremi", "wiki-archive");
+  ensureSafeDirectory(workDir, archiveRoot);
+  const oldProjectId = archiveWiki ? previous!.projectId : resourceProjectId;
+  const archive = mkdtempSync(join(archiveRoot, `${safeSlug(oldProjectId)}-${Date.now()}-`));
+  for (const target of targets) renameSync(target.source, join(archive, target.name));
 }
 
 function prepareIssueWikiWorkspaceUnlocked(workDir: string, task: AgentTask, projectId: string): IssueWikiManifest {

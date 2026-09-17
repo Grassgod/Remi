@@ -2,6 +2,7 @@ export interface ChatSession {
   id: string;
   workspace_id: string;
   agent_id: string;
+  project_id?: string | null;
   creator_id: string;
   title: string;
   status: "active" | "archived";
@@ -14,7 +15,14 @@ export interface ChatSession {
   updated_at: string;
 }
 
+export interface CreateChatSessionInput {
+  agent_id: string;
+  title?: string;
+  project_id?: string | null;
+}
+
 export interface UpdateChatSessionInput {
+  project_id?: string | null;
   title?: string;
   status?: "active" | "archived";
   pinned?: boolean;

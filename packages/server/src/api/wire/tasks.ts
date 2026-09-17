@@ -332,13 +332,27 @@ export function daemonTaskClaimResponse(
   // Re-check the live destination even when the caller retained an earlier
   // hydrated claim. A changed binding must never receive that old Issue prompt.
   if (task.chatSessionId && store.getTaskChatExecutionKind(task) === "ordinary") {
+    const chat = store.getChatSession(task.chatSessionId);
+    const keepProject = Boolean(chat?.projectId && chat.workspaceId === task.workspaceId
+      && chat.projectId === task.chatProjectId && chat.projectId === task.project?.id
+      && task.project.workspaceId === task.workspaceId);
     task = {
       ...task, issueId: null, issueSessionId: null, issueSessionGeneration: null,
       sessionId: task.issueId || task.issueSessionId || task.executionFingerprint === CHAT_ISSUE_DECOUPLED_FINGERPRINT ? null : task.sessionId,
-      issue: null, project: null, projectResources: [], projectDocs: null, projectContexts: [], repos: [],
+      issue: null, triggerCommentId: null,
+      chatProjectId: keepProject ? chat!.projectId : null,
+      project: keepProject ? task.project : null,
+      projectResources: keepProject ? task.projectResources : [],
+      projectDocs: keepProject ? task.projectDocs : null,
+      projectWikiDocs: keepProject ? task.projectWikiDocs : [],
+      repositoryWikiContexts: keepProject ? task.repositoryWikiContexts : [],
+      projectContexts: [], repos: keepProject ? task.repos : [],
+      knowledgeWarnings: keepProject ? task.knowledgeWarnings : [],
     };
+    triggerMetadata = null;
   }
   const response = daemonTaskWireResponse(task, triggerMetadata);
+  if (task.chatProjectId && task.chatProjectId === task.project?.id) response.chat_project_id = task.chatProjectId;
   const defaultBranchFor = workspaceDefaultBranchResolver(store.getWorkspace(task.workspaceId)?.repos ?? []);
   if (task.knowledgeWarnings?.length) response.knowledge_warnings = task.knowledgeWarnings;
   let projectionMode: "bootstrap" | "delta" | null = null;

@@ -888,10 +888,11 @@ export class StoreContext {
   // Cross-domain: read by the agents (updateAgent rescheduling), runtimes and tasks bands.
   localDirectoryDaemonForTask(taskRow: Row): string | null {
     const issueId = cleanOptionalString(taskRow.issue_id);
-    if (!issueId) return null;
-    const issue = this.issues().getIssue(issueId);
-    if (!issue?.projectId) return null;
-    for (const resource of this.projects().listProjectResources(issue.projectId)) {
+    const issue = issueId ? this.issues().getIssue(issueId) : null;
+    const chatId = cleanOptionalString(taskRow.chat_session_id);
+    const projectId = issue?.projectId ?? (chatId ? this.chat().getChatSession(chatId)?.projectId : null);
+    if (!projectId) return null;
+    for (const resource of this.projects().listProjectResources(projectId)) {
       if (resource.resourceType !== "local_directory") continue;
       const daemonId = String(resource.resourceRef.daemonId ?? resource.resourceRef.daemon_id ?? "").trim();
       if (daemonId) return daemonId;

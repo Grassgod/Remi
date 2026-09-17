@@ -100,24 +100,24 @@ const ISSUE_WORKSPACE_MIN_CLI_VERSION = [0, 2, 26] as const;
 
 const PROJECT_DEVICE_ROUTING_ELIGIBILITY_SQL = `(
   (
-    project_issue.project_id IS NULL
+    COALESCE(project_issue.project_id, project_chat.project_id) IS NULL
     OR NOT EXISTS (
       SELECT 1 FROM multiremi_project_devices project_device
-      WHERE project_device.project_id = project_issue.project_id
+      WHERE project_device.project_id = COALESCE(project_issue.project_id, project_chat.project_id)
     )
     OR EXISTS (
       SELECT 1 FROM multiremi_project_devices project_device
-      WHERE project_device.project_id = project_issue.project_id
+      WHERE project_device.project_id = COALESCE(project_issue.project_id, project_chat.project_id)
         AND project_device.daemon_id = ?
     )
   )
   AND (
     ? = 0
     OR (
-      project_issue.project_id IS NOT NULL
+      COALESCE(project_issue.project_id, project_chat.project_id) IS NOT NULL
       AND EXISTS (
         SELECT 1 FROM multiremi_project_devices project_device
-        WHERE project_device.project_id = project_issue.project_id
+        WHERE project_device.project_id = COALESCE(project_issue.project_id, project_chat.project_id)
           AND project_device.daemon_id = ?
       )
     )
@@ -435,6 +435,7 @@ export class TasksRepo {
       holdsWorkspace,
       inheritedExecutionFingerprint ?? withRuntimeProfileFingerprint(expectedExecutionFingerprint, chatProfile),
       currentPluginSnapshot.length > 0 || Boolean(chatProfile),
+      chatSession?.projectId,
     );
     if (affinity.runtimeId) runtimeId = affinity.runtimeId;
     if (!input.resetProviderSession) inheritChatSession = affinity.inheritChatSession;
@@ -664,6 +665,7 @@ export class TasksRepo {
     holdsWorkspace: boolean,
     executionFingerprint: string,
     hasPlugins: boolean,
+    chatProjectId?: string | null,
   ): { runtimeId: string | null; inheritChatSession: boolean } {
     if (!issue && chatSession && this.ctx.feishuBot().getFeishuIssueIdForChatSession(chatSession.id)) {
       // Preserve the topic's files in storage, but never lend them to private turns.
@@ -675,8 +677,9 @@ export class TasksRepo {
     // A task carrying both a chat session and a directory issue must go to the
     // directory's machine; the session is only inherited if that machine is
     // also where the session lives.
-    if (holdsWorkspace && issue?.projectId && issue.issueKind !== "intake") {
-      for (const resource of this.ctx.projects().listProjectResources(issue.projectId)) {
+    const directoryProjectId = issue?.projectId ?? chatProjectId ?? chatSession?.projectId;
+    if (holdsWorkspace && directoryProjectId && issue?.issueKind !== "intake") {
+      for (const resource of this.ctx.projects().listProjectResources(directoryProjectId)) {
         if (resource.resourceType !== "local_directory") continue;
         const daemonId = String(resource.resourceRef.daemonId ?? resource.resourceRef.daemon_id ?? "").trim();
         if (!daemonId) continue;
@@ -836,7 +839,8 @@ export class TasksRepo {
     }
     const issue = task.issueId ? this.ctx.issues().getIssue(task.issueId) : null;
     const scheduleTarget = task.autopilotRunId ? this.ctx.autopilots().getAutopilotRun(task.autopilotRunId)?.scheduleTarget : null;
-    const projectId = issue?.projectId ?? (scheduleTarget?.kind === "project" ? scheduleTarget.id : null);
+    const chatProjectId = task.chatSessionId ? this.ctx.chat().getChatSession(task.chatSessionId)?.projectId ?? null : null;
+    const projectId = issue?.projectId ?? (scheduleTarget?.kind === "project" ? scheduleTarget.id : null) ?? chatProjectId;
     const candidateProject = projectId ? this.ctx.projects().getProject(projectId) : null;
     const project = candidateProject?.workspaceId === task.workspaceId ? candidateProject : null;
     const projectResources = project ? this.ctx.projects().listProjectResources(project.id) : [];
@@ -848,13 +852,14 @@ export class TasksRepo {
       agent: this.ctx.agents().getAgent(task.agentId),
       issue,
       project,
+      chatProjectId,
       projectResources,
       projectDocs: project ? this.ctx.projects().getProjectDocsIndex(project.id) : null,
       projectContexts,
-      // Homepage Chat discovers repositories through the database-backed CLI
-      // directory and checks out only on explicit request. Never attach the
-      // workspace repository catalog to its daemon claim as eager Git work.
-      repos: scheduleTarget || task.holdsWorkspace === false || (task.chatSessionId && !task.issueId)
+      // Unbound Chat discovers repositories through the CLI. A Project-bound
+      // Chat gets its catalog for on-demand checkout; eager checkout requires
+      // an Issue in the worker, so attaching this catalog does not run Git.
+      repos: scheduleTarget || task.holdsWorkspace === false || (task.chatSessionId && !task.issueId && !project)
         ? []
         : projectContexts.length
           ? normalizeRepos(projectContexts.flatMap((context) => context.repos))
@@ -1333,6 +1338,7 @@ export class TasksRepo {
       `SELECT CASE WHEN ${PROJECT_DEVICE_ROUTING_ELIGIBILITY_SQL} THEN 1 ELSE 0 END AS eligible
        FROM multiremi_tasks t
        LEFT JOIN multiremi_issues project_issue ON project_issue.id = t.issue_id
+       LEFT JOIN multiremi_chat_sessions project_chat ON project_chat.id = t.chat_session_id
        WHERE t.id = ?`,
     ).get(...routing.params, taskId) as { eligible?: unknown } | null;
     return Number(row?.eligible ?? 0) === 1;
@@ -1348,7 +1354,7 @@ export class TasksRepo {
       && this.runtimeHasReadyTaskPlugins(runtime, task)
       && (!task.issueId || !task.holdsWorkspace || runtimeSupportsIssueWorkspaces(runtime))
       && (!task.issueId || runtimeSupportsParallelExecution(runtime))
-      && (!task.issueId || !task.holdsWorkspace || this.runtimePassesProjectDeviceRouting(runtime, task.id));
+      && (!task.holdsWorkspace || this.runtimePassesProjectDeviceRouting(runtime, task.id));
   }
 
   private reclaimStaleDispatchedTaskForRuntime(runtimeId: string, excludedAgentIds: string[] = []): MultiremiTaskWithAgent | null {

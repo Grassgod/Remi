@@ -142,13 +142,27 @@ export class ChatRepo {
       this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
       const current = this.getChatSession(id);
       if (!current) throw new Error(`Chat session not found: ${id}`);
+      const hasProject = Object.hasOwn(input, "projectId") || Object.hasOwn(input, "project_id");
+      const projectId = hasProject
+        ? this.validateProjectBinding(current.workspaceId, Object.hasOwn(input, "projectId") ? input.projectId : input.project_id)
+        : current.projectId;
+      const projectChanged = projectId !== current.projectId;
+      if (projectChanged && this.pendingTasks(id).length) {
+        throw new ChatConflictError("Cannot change Project while this Chat has unfinished tasks");
+      }
       const now = nowIso();
       this.ctx.db.run(
         `UPDATE multiremi_chat_sessions
-         SET title = ?, status = ?, pinned = ?, updated_at = ?
+         SET title = ?, status = ?, pinned = ?, project_id = ?, updated_at = ?
          WHERE id = ?`,
-        [input.title?.trim() || current.title, input.status ?? current.status, (input.pinned ?? current.pinned) ? 1 : 0, now, id],
+        [input.title?.trim() || current.title, input.status ?? current.status, (input.pinned ?? current.pinned) ? 1 : 0, projectId, now, id],
       );
+      if (projectChanged) {
+        this.ctx.db.run(`UPDATE multiremi_chat_sessions
+          SET session_id = NULL, work_dir = NULL, session_runtime_id = NULL,
+              session_provider = NULL, session_execution_fingerprint = NULL
+          WHERE id = ?`, [id]);
+      }
       if (input.status === "archived") {
         for (const task of this.pendingTasks(id)) {
           cancelled.push(this.ctx.tasks().cancelTaskWithinTransaction(task.id));
@@ -163,6 +177,7 @@ export class ChatRepo {
       title: updated.title,
       status: updated.status,
       pinned: updated.pinned,
+      project_id: updated.projectId,
       updated_at: updated.updatedAt,
     });
     return updated;

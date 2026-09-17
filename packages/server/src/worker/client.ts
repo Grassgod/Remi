@@ -1464,6 +1464,7 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
     priorWorkDir: stringOrNull(raw.prior_work_dir ?? raw.priorWorkDir ?? raw.work_dir ?? raw.workDir),
     authToken: stringOrNull(raw.auth_token ?? raw.authToken),
     chatMessage: stringOrNull(raw.chat_message ?? raw.chatMessage),
+    chatProjectId: stringOrNull(raw.chat_project_id ?? raw.chatProjectId),
     boundIssueUpdates: Array.isArray(raw.bound_issue_updates)
       ? raw.bound_issue_updates.filter((value: unknown): value is string => typeof value === "string")
       : Array.isArray(raw.boundIssueUpdates)

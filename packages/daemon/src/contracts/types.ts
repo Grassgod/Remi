@@ -276,6 +276,9 @@ export interface AgentTask {
   holdsWorkspace?: boolean;
   holds_workspace?: boolean;
   chatSessionId: string | null;
+  /** Explicit Chat Project binding, independent of any historical Issue context. */
+  chatProjectId?: string | null;
+  chat_project_id?: string | null;
   autopilotRunId: string | null;
   completedAt: string | null;
   createdAt: string;

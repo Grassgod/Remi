@@ -6,6 +6,7 @@ import { createLogger } from "../logger";
 const logger = createLogger("chat.store");
 
 const AGENT_STORAGE_KEY = "multimira:chat:selectedAgentId";
+const DRAFT_PROJECT_KEY = "multimira:chat:draftProjectId";
 const SESSION_STORAGE_KEY = "multimira:chat:activeSessionId";
 /** Drafts are stored as one JSON blob per workspace: { [sessionId]: text }. */
 const DRAFTS_KEY = "multimira:chat:drafts";
@@ -105,6 +106,8 @@ export interface ChatState {
   isOpen: boolean;
   activeSessionId: string | null;
   selectedAgentId: string | null;
+  /** Project selected for a new conversation; existing bindings live in Query. */
+  draftProjectId: string | null;
   /** Drafts per session: sessionId (or DRAFT_NEW_SESSION) → markdown text. */
   inputDrafts: Record<string, string>;
   inputDraftAttachments: Record<string, Record<string, string>>;
@@ -116,6 +119,7 @@ export interface ChatState {
   toggle: () => void;
   setActiveSession: (id: string | null) => void;
   setSelectedAgentId: (id: string) => void;
+  setDraftProjectId: (id: string | null) => void;
   /** sessionId accepts a real session UUID or DRAFT_NEW_SESSION. */
   setInputDraft: (sessionId: string, draft: string) => void;
   clearInputDraft: (sessionId: string) => void;
@@ -148,6 +152,7 @@ export function createChatStore(options: ChatStoreOptions) {
     isOpen: initialIsOpen,
     activeSessionId: storage.getItem(wsKey(SESSION_STORAGE_KEY)),
     selectedAgentId: storage.getItem(wsKey(AGENT_STORAGE_KEY)),
+    draftProjectId: storage.getItem(wsKey(DRAFT_PROJECT_KEY)),
     inputDrafts: readDrafts(storage, wsKey(DRAFTS_KEY)),
     inputDraftAttachments: readDraftAttachments(storage, wsKey(DRAFT_ATTACHMENTS_KEY)),
     chatWidth: Number(storage.getItem(CHAT_WIDTH_KEY)) || CHAT_DEFAULT_W,
@@ -177,6 +182,11 @@ export function createChatStore(options: ChatStoreOptions) {
       logger.info("setSelectedAgentId", { from: get().selectedAgentId, to: id });
       storage.setItem(wsKey(AGENT_STORAGE_KEY), id);
       set({ selectedAgentId: id });
+    },
+    setDraftProjectId: (id) => {
+      if (id) storage.setItem(wsKey(DRAFT_PROJECT_KEY), id);
+      else storage.removeItem(wsKey(DRAFT_PROJECT_KEY));
+      set({ draftProjectId: id });
     },
     setInputDraft: (sessionId, draft) => {
       // Debug level — onUpdate fires on every keystroke.
@@ -245,6 +255,7 @@ export function createChatStore(options: ChatStoreOptions) {
     store.setState({
       activeSessionId: nextSession,
       selectedAgentId: nextAgent,
+      draftProjectId: storage.getItem(wsKey(DRAFT_PROJECT_KEY)),
       inputDrafts: nextDrafts,
       inputDraftAttachments: readDraftAttachments(storage, wsKey(DRAFT_ATTACHMENTS_KEY)),
     });

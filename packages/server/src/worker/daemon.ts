@@ -475,6 +475,7 @@ interface RunSummary {
 }
 
 interface PreparedIssueWorkspace {
+  wikiMaterialized?: boolean;
   checkouts: TaskRepoCheckout[];
   repos: MultiremiIssueWorkspaceRepo[];
   warnings: TaskRepoWarning[];
@@ -3035,10 +3036,11 @@ export class MultiremiDaemon {
     if (task.holdsWorkspace === false) return { checkouts: [], repos: [], warnings: [] };
     if (task.issue?.issueKind !== "intake") {
       const prepared = await this.autoCheckoutTaskRepos(task, resolvedWorkDir, syncResults, signal);
+      let wikiMaterialized = false;
       if (!resolvedWorkDir.localDirectory && !task.issueSessionId) {
-        await prepareIssueWikiWorkspace(resolvedWorkDir.workDir, task);
+        wikiMaterialized = Boolean(await prepareIssueWikiWorkspace(resolvedWorkDir.workDir, task));
       }
-      return prepared;
+      return { ...prepared, wikiMaterialized };
     }
     if (!task.issueId || !resolvedWorkDir.ensureDir || resolvedWorkDir.localDirectory) {
       throw new Error("Intake tasks require a daemon-owned issue workspace");
@@ -3401,8 +3403,9 @@ export class MultiremiDaemon {
       : await this.registerTaskRepos(task.workspaceId, task.repos ?? [], signal);
     const preparedWorkspace = await this.issueWorkspaceLifecycleLocks.runExclusive(`prepare:${codeWorkDir}`, () =>
       this.prepareTaskWorkspace(task, resolvedWorkDir, repoSyncResults, signal));
+    let wikiMaterialized = preparedWorkspace.wikiMaterialized ?? false;
     if (task.issueSessionId && task.holdsWorkspace !== false && !resolvedWorkDir.localDirectory) {
-      await prepareIssueWikiWorkspace(workDir, task);
+      wikiMaterialized = Boolean(await prepareIssueWikiWorkspace(workDir, task));
     }
     this.assertWorkspaceRootOwner();
     if (task.chatMessageAttachments?.length) {
@@ -3500,6 +3503,7 @@ export class MultiremiDaemon {
       const session = new AgentSession(provider as any, config);
       messageBatcher.push([{ type: "execution", meta: { agentName: agent.name, provider: config.agentType } }]);
       const promptArtifact = buildTaskPromptArtifact(task, {
+        wikiMaterialized,
         repoCheckouts: preparedWorkspace.checkouts,
         repoWarnings: preparedWorkspace.warnings,
         issueWorkspacePath: codeWorkDir,

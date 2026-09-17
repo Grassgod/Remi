@@ -1451,6 +1451,8 @@ export interface MultiremiTaskTriggerMetadata {
 }
 
 export interface MultiremiTaskWithAgent extends MultiremiTask {
+  /** Explicit Chat binding; consumers must match this to project.id. */
+  chatProjectId?: string | null;
   agent: MultiremiAgent | null;
   issue: MultiremiIssue | null;
   project: MultiremiProject | null;
