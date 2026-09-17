@@ -94,6 +94,7 @@ import {
   writeAgentSkillContext,
 } from "@daemon/agent-runtime/skills/ephemeral.js";
 import { prepareIntakeWorkspace } from "@daemon/agent-runtime/workspace/intake.js";
+import { runSnapshotGcOnce } from "@daemon/agent-runtime/repo/snapshot-gc.js";
 import {
   assertIssueSessionNativeCodexOAuth,
   cleanupTemporaryTaskProviderHome,
@@ -395,6 +396,8 @@ export interface MultiremiDaemonOptions {
   gcEnabled?: boolean;
   gcIntervalMs?: number;
   gcTtlMs?: number;
+  /** Last-access TTL for immutable archive snapshots; independent of workspace policy. */
+  snapshotTtlMs?: number;
   gcOrphanTtlMs?: number;
   /** Session archives are a mandatory Issue GC precondition by default. */
   gcRequireArchive?: boolean;
@@ -806,6 +809,7 @@ export class MultiremiDaemon {
       gcEnabled: options.gcEnabled ?? booleanEnv(process.env.MULTIREMI_GC_ENABLED, true),
       gcIntervalMs: options.gcIntervalMs ?? numberEnv(process.env.MULTIREMI_GC_INTERVAL_MS, 15 * 60 * 1000),
       gcTtlMs: options.gcTtlMs ?? numberEnv(process.env.MULTIREMI_GC_TTL_MS, 72 * 60 * 60 * 1000),
+      snapshotTtlMs: options.snapshotTtlMs ?? numberEnv(process.env.MULTIREMI_SNAPSHOT_TTL_MS, 72 * 60 * 60 * 1000),
       gcOrphanTtlMs: options.gcOrphanTtlMs ?? numberEnv(process.env.MULTIREMI_GC_ORPHAN_TTL_MS, 72 * 60 * 60 * 1000),
       gcRequireArchive: options.gcRequireArchive ?? true,
       sessionArchiveMaxSourceBytes: options.sessionArchiveMaxSourceBytes
@@ -2209,10 +2213,27 @@ export class MultiremiDaemon {
       },
     });
     this.assertWorkspaceRootOwner();
+    const snapshots = await runSnapshotGcOnce({
+      workspacesRoot: this.options.workspacesRoot,
+      snapshotsRoot: this.snapshotsRoot,
+      repoCacheRoot: this.options.repoCacheRoot,
+      ttlMs: this.options.snapshotTtlMs,
+      withRepoLock: (barePath, action) => this.repoCache.runExclusiveForBarePath(barePath, action),
+      assertRootOwner: () => this.assertWorkspaceRootOwner(),
+      onError: (path, error) => {
+        log.warn(`Snapshot GC skipped ${path}: ${error instanceof Error ? error.message : String(error)}`);
+      },
+    });
+    log.info("Snapshot GC finished", snapshots);
+    this.assertWorkspaceRootOwner();
     // Repo worktree metadata is pruned lazily for the repository that is about
     // to create a worktree. Sweeping every cached repository here creates a
     // large burst of synchronous child processes in the long-lived Bun daemon.
     return summary;
+  }
+
+  private get snapshotsRoot(): string {
+    return join(this.options.workspacesRoot, ".snapshots");
   }
 
   private async ensureIssueSessionArchive(
@@ -3216,7 +3237,7 @@ export class MultiremiDaemon {
     let prepared: PreparedIssueWorkspace;
     try {
       prepared = await prepareIntakeWorkspace(resolvedWorkDir.workDir, task, this.repoCache, {
-        snapshotsRoot: join(this.options.workspacesRoot, ".snapshots"),
+        snapshotsRoot: this.snapshotsRoot,
         skipRepoFetch: true,
         signal,
       });

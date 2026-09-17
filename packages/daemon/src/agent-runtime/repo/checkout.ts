@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, statSync, lstatSync, realpathSync, appendFileSync, chmodSync, copyFileSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, type Dirent } from "node:fs";
+import { existsSync, mkdirSync, statSync, lstatSync, realpathSync, appendFileSync, chmodSync, copyFileSync, readFileSync, readdirSync, renameSync, rmSync, utimesSync, writeFileSync, type Dirent } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import type { RepoSpec } from "@daemon/contracts/types.js";
@@ -327,6 +327,10 @@ export class MultiremiRepoCache {
       );
       const snapshotPath = join(repoRoot, commit);
       if (existsSync(snapshotPath)) {
+        // GC shares this lock and uses the root mtime as last access. A failed
+        // touch must reject preparation rather than hand out an expired tree.
+        const now = new Date();
+        utimesSync(snapshotPath, now, now);
         return { path: snapshotPath, commit, ...resolution, created: false };
       }
 
@@ -358,6 +362,8 @@ export class MultiremiRepoCache {
         rmSync(temporaryPath, { recursive: true, force: true });
         throw error;
       }
+      const now = new Date();
+      utimesSync(snapshotPath, now, now);
       return { path: snapshotPath, commit, ...resolution, created: true };
     }, params.signal);
   }
