@@ -649,6 +649,7 @@ export class DaemonRetirementRepo {
                execution_fingerprint = NULL,
                work_dir = NULL,
                cursor_seq = 0,
+               parent_cursor_seq = 0,
                generation = generation + 1,
                last_task_id = NULL,
                updated_at = ?
