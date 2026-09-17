@@ -364,6 +364,125 @@ describe("Project-bound Chat daemon startup", () => {
 
 
 describe("Project-bound Chat local-directory assignment changes", () => {
+  it("retires an existing Chat's selected directory when only resource position changes, while new Chats adopt the new first directory", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-chat-directory-order-"));
+    roots.push(root);
+    const db = new Database(":memory:");
+    databases.push(db);
+    const store = new MultiremiStore(db);
+    store.ensureLocalWorkspace();
+    store.updateWorkspace("local", { settings: { github_enabled: false }, repos: [] });
+    const workspacesRoot = join(root, "workspaces");
+    const directoryA = join(root, "user-directory-a");
+    const directoryB = join(root, "user-directory-b");
+    for (const directory of [directoryA, directoryB]) {
+      mkdirSync(directory);
+      writeFileSync(join(directory, "unpublished.bin"), Buffer.from([0, 255, 1, 128, 10]));
+      symlinkSync("unpublished.bin", join(directory, "unpublished-link"));
+    }
+    const hosts = [
+      { daemonId: "daemon-chat-order-a", runtimeId: "rt_chat_order_a" },
+      { daemonId: "daemon-chat-order-b", runtimeId: "rt_chat_order_b" },
+    ];
+    const credentials = new Map<string, string>();
+    for (const host of hosts) {
+      store.registerRuntime({ id: host.runtimeId, name: host.runtimeId, provider: "claude", workspaceId: "local", daemonId: host.daemonId });
+      const credential = await store.createAccessToken({ name: host.daemonId, type: "daemon", workspaceId: "local", daemonId: host.daemonId });
+      credentials.set(host.runtimeId, credential.token);
+    }
+    const project = store.createProject({
+      title: "Project with ordered host directories",
+      resources: [
+        { resourceType: "local_directory", position: 1, resourceRef: { localPath: directoryA, daemonId: hosts[0]!.daemonId } },
+        { resourceType: "local_directory", position: 2, resourceRef: { localPath: directoryB, daemonId: hosts[1]!.daemonId } },
+      ],
+    });
+    store.createProjectDoc(project.id, { kind: "wiki", title: "Guide", path: "guide.md", body: "Do not materialize this Wiki in either user directory." });
+    const resourceB = store.listProjectResources(project.id)[1]!;
+    const agent = store.createAgent({ name: "Ordered directory worker", provider: "claude" });
+    const chat = store.createChatSession({ agentId: agent.id, projectId: project.id });
+    const chatPath = join(workspacesRoot, "chats", chat.id);
+    const server = startMultiremiServer({ store, scheduler: null, authToken: "directory-order-test", hostname: "127.0.0.1", port: 0 });
+    const runTurn = async (chatId: string, turn: number) => {
+      const sent = store.sendChatMessage(chatId, { body: `Run ordered directory turn ${turn}.` });
+      // Follow the actual server route. The broken implementation routes to B
+      // and genuinely writes there, rather than merely failing an affinity mock.
+      const runtimeId = store.getTask(sent.task.id)?.runtimeId ?? hosts[0]!.runtimeId;
+      const host = hosts.find((entry) => entry.runtimeId === runtimeId)!;
+      expect(host).toBeDefined();
+      let observed: { cwd: string; sessionId: string | null; prompt: string } | undefined;
+      const daemon = new MultiremiDaemon({
+        serverUrl: `http://127.0.0.1:${server.port}`, token: credentials.get(runtimeId)!,
+        ...host, runtimeName: host.runtimeId, provider: "claude", workspaceId: "local",
+        once: true, daemonPort: 0, workspacesRoot, repoCacheRoot: join(root, ".repo-cache"),
+        providerFactory: (options) => ({
+          async *sendStream(message, sendOptions) {
+            observed = { cwd: options.cwd!, sessionId: sendOptions?.sessionId ?? null, prompt: message };
+            yield { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "Ordered directory turn finished." }] } as any;
+          },
+          getLastResponse: () => ({ text: "Ordered directory turn finished.", sessionId: turn === 0 ? "ordered-local-provider" : "ordered-managed-provider", requestId: `directory-order-request-${turn}` }),
+        }),
+      });
+      const acquire = spyOn((daemon as any).localPathLocks, "acquire");
+      const cache = (daemon as any).repoCache;
+      const sync = spyOn(cache, "sync").mockImplementation(async () => { throw new Error("No repository sync is allowed for this Project without repositories"); });
+      const checkout = spyOn(cache, "createWorktree").mockImplementation(async () => { throw new Error("No repository checkout is allowed for this Project without repositories"); });
+      try {
+        await daemon.start();
+        expect(store.getTask(sent.task.id)?.status).toBe("completed");
+        expect(observed).toBeDefined();
+        expect(sync).not.toHaveBeenCalled();
+        expect(checkout).not.toHaveBeenCalled();
+        return { ...observed!, runtimeId, lockPaths: acquire.mock.calls.map((args) => args[0]) };
+      } finally {
+        acquire.mockRestore();
+        sync.mockRestore();
+        checkout.mockRestore();
+      }
+    };
+    try {
+      const first = await runTurn(chat.id, 0);
+      expect(first).toMatchObject({ cwd: directoryA, sessionId: null, runtimeId: hosts[0]!.runtimeId });
+      expect(first.lockPaths).toEqual([directoryA]);
+      expect(store.getChatSession(chat.id)).toMatchObject({ sessionId: "ordered-local-provider", workDir: directoryA });
+      expect(JSON.parse(readFileSync(join(directoryA, ".multiremi", "gc.json"), "utf8")).local_directory).toBe(true);
+      const beforeA = directoryContents(directoryA);
+      const beforeB = directoryContents(directoryB);
+      store.updateProjectResource(project.id, resourceB.id, { position: 0 });
+      expect(store.listProjectResources(project.id)[0]!.id).toBe(resourceB.id);
+
+      for (const turn of [1, 2]) {
+        const result = await runTurn(chat.id, turn);
+        expect(result.cwd).toBe(chatPath);
+        expect(result.cwd).not.toBe(directoryB);
+        expect(result.sessionId).toBe(turn === 1 ? null : "ordered-managed-provider");
+        expect(result.prompt).toStartWith(turn === 1 ? "# Bootstrap Prompt" : "# Delta Prompt");
+        expect(result.lockPaths).toEqual([]);
+        expect(directoryContents(directoryA)).toEqual(beforeA);
+        expect(directoryContents(directoryB)).toEqual(beforeB);
+        for (const directory of [directoryA, directoryB]) {
+          expect(existsSync(join(directory, "wiki"))).toBe(false);
+          expect(existsSync(join(directory, ".multiremi", "wiki-base"))).toBe(false);
+        }
+        expect(JSON.parse(readFileSync(join(directoryA, ".multiremi", "gc.json"), "utf8")).local_directory).toBe(true);
+        expect(store.getChatSession(chat.id)).toMatchObject({ workDir: chatPath, sessionId: "ordered-managed-provider" });
+      }
+
+      // The restriction belongs to the existing session's assignment history;
+      // creation must still route a new Chat to the newly selected host and path.
+      const newChat = store.createChatSession({ agentId: agent.id, projectId: project.id });
+      const newFirst = await runTurn(newChat.id, 0);
+      expect(newFirst).toMatchObject({ cwd: directoryB, sessionId: null, runtimeId: hosts[1]!.runtimeId });
+      expect(newFirst.lockPaths).toEqual([directoryB]);
+      expect(JSON.parse(readFileSync(join(directoryB, ".multiremi", "gc.json"), "utf8")).local_directory).toBe(true);
+      expect(existsSync(join(directoryB, "wiki"))).toBe(false);
+      expect(existsSync(join(directoryB, ".multiremi", "wiki-base"))).toBe(false);
+      expect(directoryContents(directoryA)).toEqual(beforeA);
+    } finally {
+      server.stop(true);
+    }
+  });
+
   for (const insideWorkspacesRoot of [false, true]) {
     for (const mutation of ["delete", "path", "daemon"] as const) {
       it(`cold-starts once in its managed directory after local-directory ${mutation}, preserving the user directory ${insideWorkspacesRoot ? "inside" : "outside"} the workspaces root`, async () => {

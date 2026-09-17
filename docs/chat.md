@@ -32,6 +32,30 @@ Web Chat 和飞书一对一私聊不接收 Issue 活动播报；飞书群里的 
 Project 配置了 `local_directory` 时，Chat 在该真实目录执行，启动不会自动 clone、fetch 或修改 Git 工作树；
 Wiki 使用 CLI 访问，既有 `.multiremi` 任务元数据仍会更新。
 
+同一 Project 可在不同 daemon 上配置多个目录。唯一选择规则是资源列表按 `position, created_at`
+排序后的首个 `local_directory`；路由、执行指纹、旧目录匹配和 daemon 都消费
+[`selectChatLocalDirectory`](../packages/contracts/src/chat-local-directory.ts) 的同一个选择。
+daemon 只校验本机是否持有所选目录，不能跳过首项改用列表里的本机目录。
+已使用的选择发生变化时，已有 Chat 在 `chats/<id>` 冷启动一次，后续正常续聊；
+旧用户目录保持不动，不进入替换目录。只有新建 Chat 才采用当前选择。
+
+目录选择变化的检查清单（指纹比较所选 daemon 与规范化 path，不比较整个集合）：
+
+| 操作 | 选择及已有会话行为 |
+| --- | --- |
+| 新增第一个目录，或新增排在当前项之前的目录 | 选中项变化，已有会话留在/转入托管目录 |
+| 删除当前项，包括删除最后一个目录 | 选择下一项或空值，已有会话转入托管目录 |
+| 调整任一项 position，使首项变化 | 新首项改变指纹，已有会话不进入新目录 |
+| 同 position 下 created_at 次序变化（例如删除后重建） | 遵循资源列表的次序，与路由及 daemon 一致 |
+| 修改选中项 local_path 或 daemon | 选中赋值变化，已有会话转入托管目录 |
+| Project 归档、删除或不可用 | 可用选择变空，同时清除旧项目上下文 |
+| Project 恢复、重新添加目录 | 托管模式保持；已有会话不重新取得用户目录权限 |
+| 修改 label、非目录资源，或修改/增删/重排未影响首项的目录 | 选中赋值不变，不因此重置会话 |
+| 路径仅作等价规范化、position 数值变化但首项不变 | 选中赋值不变，不因此重置会话 |
+
+资源类型不能原地修改，类型替换通过删除再新增处理。`project_ref` 不继承本地目录。
+两个排序字段完全相同则保持资源列表返回次序，不在调用方增加另一套排序规则。
+
 其他绑定 Chat 在 daemon 的 `workspaces/chats/<chat_session_id>` 目录运行。
 首次使用时自动拉取 Project 显式声明的 `github_repo`（包括 `project_ref` 引用），
 不会因 Project 未声明仓库而自动拉取整个 workspace 的目录清单。

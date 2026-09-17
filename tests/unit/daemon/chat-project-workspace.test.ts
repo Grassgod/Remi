@@ -52,6 +52,65 @@ function fixture(localPath?: string) {
 }
 
 describe("Project-bound Chat workspaces", () => {
+  it("never substitutes a later directory belonging to the executing daemon", async () => {
+    const { root, task, options } = fixture();
+    const userRoot = mkdtempSync(join(tmpdir(), "remi-chat-unselected-"));
+    roots.push(userRoot);
+    writeTaskGcContext(userRoot, task, { localDirectory: true });
+    const before = readFileSync(join(userRoot, ".multiremi", "gc.json"), "utf8");
+    task.workDir = userRoot;
+    task.sessionId = "old-provider";
+    task.projectResources = [
+      { id: "selected", resourceType: "local_directory", label: null,
+        resourceRef: { local_path: "/not-on-this-machine", daemon_id: "selected-daemon" } },
+      { id: "unselected", resourceType: "local_directory", label: null,
+        resourceRef: { local_path: userRoot, daemon_id: "daemon_owner" } },
+    ];
+    expect(await resolveTaskWorkDir(task, options)).toEqual({
+      workDir: join(root, "chats", task.chatSessionId!), localDirectory: false,
+      ensureDir: true, resetSession: true,
+    });
+    expect(readFileSync(join(userRoot, ".multiremi", "gc.json"), "utf8")).toBe(before);
+    expect(existsSync(join(userRoot, "wiki"))).toBe(false);
+    expect(existsSync(join(userRoot, ".multiremi", "wiki-base"))).toBe(false);
+  });
+
+  it("still rejects duplicate physical-daemon aliases before selecting a directory", async () => {
+    const { task, options } = fixture();
+    options.daemonIds.push("legacy-owner");
+    task.projectResources = [
+      { id: "selected", resourceType: "local_directory", label: null,
+        resourceRef: { local_path: "/first", daemon_id: "daemon_owner" } },
+      { id: "duplicate", resourceType: "local_directory", label: null,
+        resourceRef: { local_path: "/second", daemon_id: "legacy-owner" } },
+    ];
+    await expect(resolveTaskWorkDir(task, options)).rejects.toThrow("multiple local_directory resources");
+  });
+
+  it("preserves daemon-local eligibility for non-Chat run-only tasks", async () => {
+    const { root, task, options } = fixture();
+    const localPath = join(root, "run-only-directory");
+    mkdirSync(localPath);
+    task.chatSessionId = null;
+    task.projectResources = [
+      { id: "other", resourceType: "local_directory", label: null,
+        resourceRef: { local_path: "/not-on-this-machine", daemon_id: "other-daemon" } },
+      { id: "local", resourceType: "local_directory", label: null,
+        resourceRef: { local_path: localPath, daemon_id: "daemon_owner" } },
+    ];
+    const resolved = await resolveTaskWorkDir(task, options);
+    expect(resolved).toMatchObject({ workDir: localPath, localDirectory: true, ensureDir: false });
+    expect(resolved.release).toBeFunction();
+    resolved.release?.();
+  });
+
+  it("still rejects missing daemon IDs before selecting a directory", async () => {
+    const { task, options } = fixture();
+    task.projectResources = [{ id: "invalid", resourceType: "local_directory", label: null,
+      resourceRef: { local_path: "/first" } }];
+    await expect(resolveTaskWorkDir(task, options)).rejects.toThrow("missing daemon_id");
+  });
+
   for (const change of ["deleted", "path", "daemon"] as const) {
     it(`cold-starts in the Chat directory when an inherited user assignment is ${change}`, async () => {
       const { root, task, options } = fixture();

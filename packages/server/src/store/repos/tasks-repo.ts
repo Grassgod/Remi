@@ -21,6 +21,7 @@ import {
   toJson,
   type RuntimeUsageEntry,
 } from "@multiremi/store/helpers.js";
+import { selectChatLocalDirectory } from "@multiremi/contracts/chat-local-directory.js";
 import { chatWorkspaceLineageCurrent, parseChatWorkspaceFingerprint, resolveChatWorkspace } from "@multiremi/store/chat-workspace.js";
 import { type StoreContext } from "@multiremi/store/context.js";
 import { PROJECT_REF_MAX_DEPTH } from "@multiremi/store/repos/projects-repo.js";
@@ -767,29 +768,29 @@ export class TasksRepo {
       ? boundChatProject.id : null;
     const chatWorkspace = resolveChatWorkspace(this.ctx, chatSession);
     const directoryProjectId = issue?.projectId ?? (chatWorkspace?.mode === "managed" ? null : availableChatProjectId);
-    if (holdsWorkspace && directoryProjectId && issue?.issueKind !== "intake") {
-      for (const resource of this.ctx.projects().listProjectResources(directoryProjectId)) {
-        if (resource.resourceType !== "local_directory") continue;
-        const daemonId = String(resource.resourceRef.daemonId ?? resource.resourceRef.daemon_id ?? "").trim();
-        if (!daemonId) continue;
-        const runtime = this.ctx.runtimes().getRuntimeByDaemonAndProvider(daemonId, agent.provider);
-        // Always pin to the machine that holds the directory, even if it can't
-        // currently run this agent (turned private / wrong owner). Leaving it
-        // unpinned would let a provider-matching machine WITHOUT the directory
-        // claim it and silently run in a scratch checkout of the wrong repo.
-        // No runtime row yet → the deterministic id its runtime WILL get on
-        // registration, so the task waits for that machine.
-        const dirRuntimeId = runtime ? runtime.id : daemonRuntimeId(daemonId, agent.provider);
-        // Inherit the session only if it was produced on THIS directory machine
-        // AND by the agent's current engine (see sessionResumable).
-        const inheritChatSession = this.sessionResumable(
-          chatSession,
-          agent,
-          executionFingerprint,
-          hasPlugins,
-        ) && chatSession?.sessionRuntimeId === dirRuntimeId;
-        return { runtimeId: dirRuntimeId, inheritChatSession };
-      }
+    const assignment = holdsWorkspace && directoryProjectId && issue?.issueKind !== "intake"
+      ? (chatWorkspace && !issue ? chatWorkspace.assignment
+        : selectChatLocalDirectory(this.ctx.projects().listProjectResources(directoryProjectId)))
+      : null;
+    if (assignment) {
+      const daemonId = assignment.daemon;
+      const runtime = this.ctx.runtimes().getRuntimeByDaemonAndProvider(daemonId, agent.provider);
+      // Always pin to the machine that holds the directory, even if it can't
+      // currently run this agent (turned private / wrong owner). Leaving it
+      // unpinned would let a provider-matching machine WITHOUT the directory
+      // claim it and silently run in a scratch checkout of the wrong repo.
+      // No runtime row yet → the deterministic id its runtime WILL get on
+      // registration, so the task waits for that machine.
+      const dirRuntimeId = runtime ? runtime.id : daemonRuntimeId(daemonId, agent.provider);
+      // Inherit the session only if it was produced on THIS directory machine
+      // AND by the agent's current engine (see sessionResumable).
+      const inheritChatSession = this.sessionResumable(
+        chatSession,
+        agent,
+        executionFingerprint,
+        hasPlugins,
+      ) && chatSession?.sessionRuntimeId === dirRuntimeId;
+      return { runtimeId: dirRuntimeId, inheritChatSession };
     }
     if (chatSession?.sessionId) {
       // Resume the session on the machine that produced it — but only when that

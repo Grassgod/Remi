@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { posix } from "node:path";
 import type { MultiremiChatSession } from "@multiremi/contracts/types.js";
+import { selectChatLocalDirectory } from "@multiremi/contracts/chat-local-directory.js";
 import type { StoreContext } from "@multiremi/store/context.js";
 
 const PREFIX = "chat-workspace:";
@@ -26,11 +27,9 @@ export function resolveChatWorkspace(ctx: StoreContext, chat: MultiremiChatSessi
   const project = ctx.projects().getProject(chat.projectId);
   const available = Boolean(project && !project.archivedAt && project.workspaceId === chat.workspaceId);
   const resources = available ? ctx.projects().listProjectResources(chat.projectId) : [];
-  const assignments = resources.filter((resource) => resource.resourceType === "local_directory").map((resource) => ({
-    daemon: String(resource.resourceRef.daemonId ?? resource.resourceRef.daemon_id ?? "").trim(),
-    path: posix.normalize(String(resource.resourceRef.localPath ?? resource.resourceRef.local_path ?? "").trim()),
-  })).sort((a, b) => a.daemon.localeCompare(b.daemon) || a.path.localeCompare(b.path));
-  const revision = createHash("sha256").update(JSON.stringify({ project: chat.projectId, available, assignments })).digest("hex");
+  const selected = selectChatLocalDirectory(resources);
+  const assignment = selected ? { ...selected, path: posix.normalize(selected.path) } : null;
+  const revision = createHash("sha256").update(JSON.stringify({ project: chat.projectId, available, assignment })).digest("hex");
   let lineage: ChatWorkspaceLineage = source ?? { executionFingerprint: chat.sessionExecutionFingerprint,
     workDir: chat.workDir, runtimeId: chat.sessionRuntimeId };
   if (!lineage.executionFingerprint && !lineage.workDir) {
@@ -42,17 +41,17 @@ export function resolveChatWorkspace(ctx: StoreContext, chat: MultiremiChatSessi
   }
   const snapshot = parseChatWorkspaceFingerprint(lineage.executionFingerprint);
   const runtime = lineage.runtimeId ? ctx.runtimes().getRuntime(lineage.runtimeId) : null;
-  const matchesAssignment = Boolean(lineage.workDir && assignments.some((assignment) =>
+  const matchesAssignment = Boolean(lineage.workDir && assignment &&
     assignment.path === posix.normalize(lineage.workDir!)
-      && (assignment.daemon === runtime?.daemonId || assignment.daemon === runtime?.legacyDaemonId)));
+      && (assignment.daemon === runtime?.daemonId || assignment.daemon === runtime?.legacyDaemonId));
   // Legacy rows do not record the assignment. This is only a migration hint;
   // the daemon separately proves containment in its own root before any use.
   const legacyManaged = Boolean(lineage.workDir?.replaceAll("\\", "/").endsWith(`/chats/${chat.id}`));
   const hasLegacyLineage = Boolean(lineage.executionFingerprint || lineage.workDir);
   const changed = snapshot ? snapshot.revision !== revision || Boolean(snapshot.mode === "local" && lineage.workDir && !matchesAssignment)
     : hasLegacyLineage && (!available || Boolean(lineage.workDir && !matchesAssignment && !legacyManaged));
-  const mode = !available || changed || snapshot?.mode === "managed" || legacyManaged || !assignments.length ? "managed" : "local";
-  return { revision, mode, changed, available, assignments,
+  const mode = !available || changed || snapshot?.mode === "managed" || legacyManaged || !assignment ? "managed" : "local";
+  return { revision, mode, changed, available, assignment,
     fingerprint: (base: string) => `${PREFIX}${revision}:${mode}:${parseChatWorkspaceFingerprint(base)?.base ?? base}` };
 }
 

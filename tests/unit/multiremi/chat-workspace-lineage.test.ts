@@ -28,6 +28,153 @@ function mutate(f: ReturnType<typeof fixture>, change: "delete" | "path" | "daem
   } });
 }
 
+function multipleDirectoryFixture(includeThird = false) {
+  const store = createStore();
+  const previous = store.registerRuntime({ name: "A", provider: "codex", daemonId: "directory-a" });
+  const replacement = store.registerRuntime({ name: "B", provider: "codex", daemonId: "directory-b" });
+  const third = store.registerRuntime({ name: "C", provider: "codex", daemonId: "directory-c" });
+  const agent = store.createAgent({ name: "Chat", provider: "codex" });
+  const project = store.createProject({ title: "Several directories", resources: [
+    { resourceType: "local_directory", position: 0, resourceRef: { daemon_id: "directory-a", local_path: "/abs/directory-a" } },
+    { resourceType: "local_directory", position: 10, resourceRef: { daemon_id: "directory-b", local_path: "/abs/directory-b" } },
+    ...(includeThird ? [{ resourceType: "local_directory", position: 20,
+      resourceRef: { daemon_id: "directory-c", local_path: "/abs/directory-c" } }] : []),
+  ] });
+  const [selected, alternative, last] = store.listProjectResources(project.id);
+  const chat = store.createChatSession({ agentId: agent.id, projectId: project.id });
+  const first = store.sendChatMessage(chat.id, { body: "First" }).task;
+  expect(first.runtimeId).toBe(previous.id);
+  expect(store.claimTask(replacement.id)).toBeNull();
+  expect(store.claimTask(previous.id)?.id).toBe(first.id);
+  store.startTask(first.id);
+  store.completeTask(first.id, { output: "A", sessionId: "provider-a", workDir: "/abs/directory-a" });
+  return { store, previous, replacement, third, agent, project, chat, selected: selected!, alternative: alternative!, last };
+}
+
+type DirectoryFixture = ReturnType<typeof multipleDirectoryFixture>;
+const selectedDirectoryChanges: Array<{ name: string; change: (f: DirectoryFixture) => string }> = [
+  { name: "promote another directory by position", change: (f) => {
+    f.store.updateProjectResource(f.project.id, f.alternative.id, { position: -1 });
+    return f.replacement.id;
+  } },
+  { name: "demote the selected directory by position", change: (f) => {
+    f.store.updateProjectResource(f.project.id, f.selected.id, { position: 11 });
+    return f.replacement.id;
+  } },
+  { name: "promote an older alternative into an equal position", change: (f) => {
+    // Establish the creation-time tie breaker without changing the initial winner.
+    db!.run("UPDATE multiremi_project_resources SET created_at = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", f.alternative.id]);
+    f.store.updateProjectResource(f.project.id, f.alternative.id, { position: 0 });
+    return f.replacement.id;
+  } },
+  { name: "insert a new directory before the winner", change: (f) => {
+    f.store.createProjectResource(f.project.id, { resourceType: "local_directory", position: -1,
+      resourceRef: { daemon_id: "directory-c", local_path: "/abs/directory-c" } });
+    return f.third.id;
+  } },
+  { name: "delete the selected directory", change: (f) => {
+    f.store.deleteProjectResource(f.project.id, f.selected.id);
+    return f.replacement.id;
+  } },
+  { name: "change the selected path", change: (f) => {
+    f.store.updateProjectResource(f.project.id, f.selected.id, {
+      resourceRef: { daemon_id: "directory-a", local_path: "/abs/replacement-a" },
+    });
+    return f.previous.id;
+  } },
+  { name: "change the selected daemon", change: (f) => {
+    f.store.updateProjectResource(f.project.id, f.selected.id, {
+      resourceRef: { daemon_id: "directory-c", local_path: "/abs/directory-a" },
+    });
+    return f.third.id;
+  } },
+];
+
+describe("Chat selects one ordered local directory", () => {
+  for (const { name, change } of selectedDirectoryChanges) {
+    for (const timing of ["before_enqueue", "queued"] as const) {
+      it(`retires the previous assignment once when resources ${name} (${timing})`, () => {
+        const f = multipleDirectoryFixture();
+        const queued = timing === "queued" ? f.store.sendChatMessage(f.chat.id, { body: "Queued" }).task : null;
+        const selectedRuntimeId = change(f);
+        const next = queued ?? f.store.sendChatMessage(f.chat.id, { body: "Continue" }).task;
+        const claimed = f.store.claimTask(f.previous.id)!;
+        expect(claimed).toMatchObject({ id: next.id, sessionId: null, workDir: null, chatProjectId: f.project.id });
+        expect(claimed.project?.id).toBe(f.project.id);
+        expect(claimed.projectResources.some((resource) => resource.resourceType === "local_directory")).toBe(false);
+        expect(f.store.getChatSession(f.chat.id)).toMatchObject({ sessionId: null, workDir: null,
+          sessionRuntimeId: null, sessionProvider: null, sessionExecutionFingerprint: null });
+        f.store.startTask(next.id);
+        const managedWorkDir = `/platform/workspaces/chats/${f.chat.id}`;
+        f.store.completeTask(next.id, { output: "Managed", sessionId: "managed-provider", workDir: managedWorkDir });
+        const third = f.store.sendChatMessage(f.chat.id, { body: "Resume" }).task;
+        expect(third).toMatchObject({ sessionId: "managed-provider", workDir: managedWorkDir, runtimeId: f.previous.id });
+        const resumed = f.store.claimTask(f.previous.id)!;
+        expect(resumed).toMatchObject({ id: third.id, sessionId: "managed-provider", workDir: managedWorkDir });
+        expect(resumed.projectResources.some((resource) => resource.resourceType === "local_directory")).toBe(false);
+        f.store.startTask(third.id);
+        f.store.completeTask(third.id, { output: "Resumed", sessionId: "managed-provider", workDir: managedWorkDir });
+
+        // The replacement is still valid for a new Chat; only the old lineage retires.
+        const fresh = f.store.createChatSession({ agentId: f.agent.id, projectId: f.project.id });
+        const freshTask = f.store.sendChatMessage(fresh.id, { body: "Use the current assignment" }).task;
+        expect(freshTask.runtimeId).toBe(selectedRuntimeId);
+        expect(f.store.claimTask(selectedRuntimeId)?.id).toBe(freshTask.id);
+      });
+    }
+  }
+
+  const unchangedSelections: Array<{ name: string; third?: boolean; change: (f: DirectoryFixture) => void }> = [
+    { name: "change an unselected path", change: (f) => { f.store.updateProjectResource(f.project.id, f.alternative.id,
+      { resourceRef: { daemon_id: "directory-b", local_path: "/abs/other-b" } }); } },
+    { name: "change an unselected daemon", change: (f) => { f.store.updateProjectResource(f.project.id, f.alternative.id,
+      { resourceRef: { daemon_id: "directory-c", local_path: "/abs/directory-b" } }); } },
+    { name: "delete an unselected directory", change: (f) => { f.store.deleteProjectResource(f.project.id, f.alternative.id); } },
+    { name: "append an unselected directory", change: (f) => { f.store.createProjectResource(f.project.id,
+      { resourceType: "local_directory", position: 20, resourceRef: { daemon_id: "directory-c", local_path: "/abs/directory-c" } }); } },
+    { name: "rename the selected label", change: (f) => { f.store.updateProjectResource(f.project.id, f.selected.id, { label: "Renamed A" }); } },
+    { name: "rename an unselected label", change: (f) => { f.store.updateProjectResource(f.project.id, f.alternative.id, { label: "Renamed B" }); } },
+    { name: "move the selected position while keeping it first", change: (f) => { f.store.updateProjectResource(f.project.id, f.selected.id, { position: -1 }); } },
+    { name: "tie a later-created alternative at the selected position", change: (f) => {
+      db!.run("UPDATE multiremi_project_resources SET created_at = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", f.selected.id]);
+      f.store.updateProjectResource(f.project.id, f.alternative.id, { position: 0 });
+    } },
+    { name: "reorder only unselected directories", third: true, change: (f) => {
+      f.store.updateProjectResource(f.project.id, f.last!.id, { position: 5 });
+    } },
+  ];
+  for (const { name, third, change } of unchangedSelections) {
+    it(`preserves session lineage when resources ${name}`, () => {
+      const f = multipleDirectoryFixture(third);
+      const fingerprint = f.store.getChatSession(f.chat.id)!.sessionExecutionFingerprint;
+      change(f);
+      const next = f.store.sendChatMessage(f.chat.id, { body: "Keep working in A" }).task;
+      expect(next).toMatchObject({ sessionId: "provider-a", workDir: "/abs/directory-a", runtimeId: f.previous.id });
+      const claimed = f.store.claimTask(f.previous.id)!;
+      expect(claimed).toMatchObject({ id: next.id, sessionId: "provider-a", workDir: "/abs/directory-a", executionFingerprint: fingerprint });
+      expect(f.store.getChatSession(f.chat.id)?.sessionExecutionFingerprint).toBe(fingerprint);
+    });
+  }
+
+  for (const lineage of ["legacy", "current"] as const) {
+    it(`rejects a ${lineage} task on an unselected directory even though that daemon and path are Project members`, () => {
+      const f = multipleDirectoryFixture();
+      const next = f.store.sendChatMessage(f.chat.id, { body: "Continue" }).task;
+      f.store.claimTask(f.previous.id);
+      db!.run("UPDATE multiremi_tasks SET work_dir = ?, runtime_id = ? WHERE id = ?", [
+        "/abs/directory-b", f.replacement.id, next.id,
+      ]);
+      if (lineage === "legacy") {
+        db!.run("UPDATE multiremi_tasks SET execution_fingerprint = ? WHERE id = ?", ["legacy-plugin-hash", next.id]);
+      }
+      const hydrated = f.store.getTaskWithAgent(next.id)!;
+      expect(hydrated).toMatchObject({ sessionId: null, workDir: null });
+      expect(hydrated.projectResources.some((resource) => resource.resourceType === "local_directory")).toBe(false);
+      expect(hydrated.project?.id).toBe(f.project.id);
+    });
+  }
+});
+
 describe("Chat workspace assignment lineage", () => {
   for (const provider of ["codex", "claude"] as const) {
     for (const priorProfile of [true, false]) {

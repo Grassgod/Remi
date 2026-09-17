@@ -13,6 +13,7 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { readdirSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { lstat, readFile, realpath } from "node:fs/promises";
+import { selectChatLocalDirectory } from "@multiremi/contracts/chat-local-directory.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
 import { isPathWithinWorkspacesRoot, resolveWorkDir } from "./persistent.js";
 
@@ -247,20 +248,25 @@ async function assertDaemonOwnedChatPath(path: string, root: string): Promise<vo
 function findLocalDirectoryAssignment(task: AgentTask, daemonIds: string[]): LocalDirectoryAssignment | null {
   const ids = new Set(daemonIds.map((id) => id.trim()).filter(Boolean));
   if (!ids.size) return null;
-  let assignment: LocalDirectoryAssignment | null = null;
+  let localResourceCount = 0;
   for (const resource of task.projectResources) {
     if (resource.resourceType !== "local_directory") continue;
     const ref = resource.resourceRef ?? {};
     const daemonId = stringField(ref.daemonId ?? ref.daemon_id);
     if (!daemonId) throw new LocalDirectoryError("local_directory: resource_ref missing daemon_id");
     if (!ids.has(daemonId)) continue;
-    if (assignment) {
+    if (++localResourceCount > 1) {
       throw new LocalDirectoryError("local_directory: project has multiple local_directory resources for this daemon");
     }
-    const absPath = normalizeLocalDirectoryPath(ref.localPath ?? ref.local_path);
-    assignment = { absPath, realPath: resolveLocalRealPath(absPath) };
   }
-  return assignment;
+  // Chat routing selects globally. Non-Chat tasks (e.g. run-only schedules)
+  // retain their existing daemon-local eligibility without another selector.
+  const resources = task.chatSessionId ? task.projectResources : task.projectResources.filter((resource) =>
+    ids.has(stringField(resource.resourceRef?.daemonId ?? resource.resourceRef?.daemon_id) ?? ""));
+  const selected = selectChatLocalDirectory(resources);
+  if (!selected || !ids.has(selected.daemon)) return null;
+  const absPath = normalizeLocalDirectoryPath(selected.path);
+  return { absPath, realPath: resolveLocalRealPath(absPath) };
 }
 
 function normalizeLocalDirectoryPath(value: unknown): string {
