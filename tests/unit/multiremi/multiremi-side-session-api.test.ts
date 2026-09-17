@@ -52,9 +52,10 @@ describe("side Session API", () => {
     const parent = store.getOrCreateDefaultIssueSession(issue.id);
     const app = createMultiremiApp({ store, authToken: "MASTER" });
     for (const body of [
-      { parent_session_id: parent.id, inherit_mode: "follow" },
+      { parent_session_id: parent.id, inherit_mode: "future" },
       { parentSessionId: parent.id, inheritMode: "none" },
       { inherit_mode: "snapshot" },
+      { inherit_mode: "follow" },
       { inheritMode: "future" },
       { parent_session_id: parent.id, inherit_mode: "snapshot", inheritMode: "follow" },
     ]) {
@@ -65,6 +66,44 @@ describe("side Session API", () => {
       expect((await response.json()).error).toContain("inherit_mode");
     }
     expect(store.listIssueSessions(issue.id)).toHaveLength(1);
+  });
+
+  it("accepts follow through both mode spellings and keeps its fork point immutable", async () => {
+    const store = createLocalStore();
+    const issue = store.createIssue({ title: "Follow API", workspaceId: "local" });
+    const parent = store.getOrCreateDefaultIssueSession(issue.id);
+    const fork = store.appendSessionEvent(parent.id, { authorType: "member", body: "At fork" });
+    const app = createMultiremiApp({ store, authToken: "MASTER" });
+    for (const modeField of ["inheritMode", "inherit_mode"]) {
+      const created = await app.request(`/api/issues/${issue.id}/sessions`, {
+        method: "POST", headers,
+        body: JSON.stringify({ title: "Following", parent_session_id: parent.id, [modeField]: "follow", holds_workspace: true }),
+      });
+      expect(created.status).toBe(201);
+      const side = await created.json();
+      expect(side).toMatchObject({ inherit_mode: "follow", holds_workspace: false });
+      const added = store.appendSessionEvent(parent.id, { authorType: "member", body: "After fork" });
+      for (const path of [`/api/sessions/${side.id}`, `/api/issues/${issue.id}/sessions/${side.id}`]) {
+        const response = await app.request(path, { headers });
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({
+          inherit_mode: "follow", inherit_cutoff_seq: side.inherit_cutoff_seq,
+          inherited_event_count: store.listSessionEvents(parent.id).length,
+        });
+      }
+      const context = await app.request(`/api/sessions/${side.id}/inherited-context`, { headers });
+      expect(context.status).toBe(200);
+      expect(await context.json()).toMatchObject({
+        inherit_mode: "follow", parent_max_seq: added.seq, lanes: [],
+        inherited_tokens_total: 0, follow_token_limit: 200_000, follow_frozen: false, follow_frozen_seq: null,
+      });
+      expect(side.inherit_cutoff_seq).toBeGreaterThanOrEqual(fork.seq);
+      const chained = await app.request(`/api/issues/${issue.id}/sessions`, {
+        method: "POST", headers,
+        body: JSON.stringify({ parent_session_id: side.id, inherit_mode: "follow" }),
+      });
+      expect(chained.status).toBe(400);
+    }
   });
 
   it("keeps inheritance fields immutable through update and rejects invalid parents", async () => {

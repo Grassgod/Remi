@@ -582,7 +582,7 @@ describe("IssueSessionListSchema", () => {
     });
   });
 
-  it("preserves side-session inheritance metadata without confusing the cutoff and count", () => {
+  it.each(["snapshot", "follow"])("preserves %s inheritance metadata without confusing the cutoff and count", (inheritMode) => {
     const parsed = parseWithFallback([
       {
         id: "sess_side",
@@ -592,7 +592,7 @@ describe("IssueSessionListSchema", () => {
         status: "active",
         holds_workspace: false,
         parent_session_id: "sess_main",
-        inherit_mode: "snapshot",
+        inherit_mode: inheritMode,
         inherit_cutoff_seq: 42,
         inherited_event_count: 38,
         created_at: "2026-09-18T00:00:00Z",
@@ -604,7 +604,7 @@ describe("IssueSessionListSchema", () => {
       id: "sess_side",
       holds_workspace: false,
       parent_session_id: "sess_main",
-      inherit_mode: "snapshot",
+      inherit_mode: inheritMode,
       inherit_cutoff_seq: 42,
       inherited_event_count: 38,
     });

@@ -481,6 +481,22 @@ describe("native collaboration CLI contracts", () => {
     expect(registryFor(specs).resolve(["session", "get", "MUL-312", "ises_side"])?.spec.id).toBe("session.get");
   });
 
+  it("creates follow Sessions with an explicit inheritance mode", async () => {
+    useCliEnv();
+    const spec = specById("session.create");
+    let body: unknown;
+    globalThis.fetch = capabilityFetch(spec.id, async (request) => {
+      body = await request.json();
+      return Response.json({ id: "ises_follow" }, { status: 201 });
+    });
+    await capture(() => registryFor([spec]).execute([
+      "session", "create", "MUL-324", "--title", "Follow", "--from", "ises_main", "--inherit-mode", "follow",
+    ]));
+    expect(body).toEqual({ title: "Follow", holds_workspace: false, parent_session_id: "ises_main", inherit_mode: "follow" });
+    expect(registryFor([spec]).renderHelpForArgv(["session", "create", "--help"]))
+      .toContain("--inherit-mode <snapshot|follow>");
+  });
+
   it("keeps missing Session diagnostics distinct from a recorded untruncated projection", async () => {
     useCliEnv();
     const spec = specById("session.show");
@@ -525,9 +541,11 @@ describe("native collaboration CLI contracts", () => {
     expect(table.stdout.split("\n")[0]?.trim().split(/\s{2,}/)).toEqual([
       "SESSION", "PARENT", "CUTOFF", "INHERITED EVENTS (PRE-TRUNCATION)",
       "TRUNCATED", "OMITTED", "EST TOKENS", "TOKEN BUDGET",
+      "INHERIT", "PARENT MAX", "PARENT CURSORS", "TOTAL INHERITED TOKENS", "FOLLOW TOKEN LIMIT", "FOLLOW FROZEN", "FROZEN AT",
     ]);
     expect(table.stdout.split("\n")[1]?.trim().split(/\s{2,}/)).toEqual([
       "ises_side", "ises_main", "42", "37", "true", "25", "12800", "32000",
+      "snapshot", "-", "-", "-", "-", "-", "-",
     ]);
   });
 
@@ -557,8 +575,38 @@ describe("native collaboration CLI contracts", () => {
       expect(table.stdout.split("\n")[1]?.trim().split(/\s{2,}/)).toEqual([
         "ises_side", inherits ? "ises_main" : "-", inherits ? "0" : "-", inherits ? "0" : "-",
         ...(state === "untruncated" ? ["false", "0", "0", "32000"] : ["-", "-", "-", "-"]),
+        inherits ? "snapshot" : "none", "-", "-", "-", "-", "-", "-",
       ]);
     }
+  });
+
+  it("shows each follow lane's progress and cumulative token freeze state", async () => {
+    useCliEnv();
+    const context = {
+      session_id: "ises_follow", parent_session_id: "ises_main", parent_session_title: "Main",
+      inherit_mode: "follow", inherit_cutoff_seq: 42, inherited_event_count: 80, parent_max_seq: 91,
+      lanes: [
+        { agent_id: "agt_first", execution_scope: "prod", parent_cursor_seq: 73 },
+        { agent_id: "agt_second", execution_scope: "prod", parent_cursor_seq: 54 },
+      ],
+      inherited_tokens_total: 45000, follow_token_limit: 200000, follow_frozen: false, follow_frozen_seq: null as number | null, diagnostics: null,
+    };
+    const spec = specById("session.inherited-context");
+    globalThis.fetch = capabilityFetch(spec.id, () => Response.json(context));
+    const registry = registryFor([spec]);
+    const table = await capture(() => registry.execute([...spec.path, "ises_follow"]));
+    for (const expected of ["follow", "91", "agt_first/prod:73", "agt_second/prod:54", "45000", "200000", "false"]) {
+      expect(table.stdout).toContain(expected);
+    }
+    for (const mode of ["json", "jsonl"]) {
+      const result = await capture(() => registry.execute([...spec.path, "ises_follow", "--output", mode]));
+      expect(JSON.parse(result.stdout)).toEqual(context);
+    }
+    context.follow_frozen = true;
+    context.follow_frozen_seq = 73;
+    const frozen = await capture(() => registry.execute([...spec.path, "ises_follow"]));
+    expect(frozen.stdout).toContain("follow");
+    expect(frozen.stdout.trim().split(/\s{2,}/).slice(-2)).toEqual(["true", "73"]);
   });
 
   it("executes task inspection and supervisor-only redispatch commands", async () => {
