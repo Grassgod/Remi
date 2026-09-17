@@ -46,10 +46,11 @@ export function feishuTransportError(operation: string, error: unknown): FeishuD
 export class FeishuCotTransport {
   constructor(private readonly client: Lark.Client) {}
 
-  async create(chatId: string, originMessageId?: string): Promise<CotHandle> {
+  async create(chatId: string, originMessageId?: string, replyInThread?: boolean): Promise<CotHandle> {
     const data = await this.request("POST", {
       receive_id: chatId,
       ...(originMessageId ? { origin_message_id: originMessageId } : {}),
+      ...(originMessageId && replyInThread ? { reply_in_thread: true } : {}),
     });
     if (typeof data?.cot_id !== "string" || !data.cot_id || typeof data.message_id !== "string" || !data.message_id) {
       throw new FeishuDeliveryError("CoT create: incomplete acknowledgement", false, true);

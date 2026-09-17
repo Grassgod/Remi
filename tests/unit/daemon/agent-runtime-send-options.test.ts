@@ -122,6 +122,16 @@ test("ephemeral identity turns the agent's thinking_level into an effort overrid
   expect(config.effort).toBe("xhigh");
 });
 
+test("custom connection retries send the frozen model even after the Agent changes", async () => {
+  for (const provider of ["codex", "claude"] as const) {
+    const profile = { name: "custom", base_url: "http://127.0.0.1:8000/v1", model: "frozen-sol", env_key: `REMI_${provider.toUpperCase()}_KEY` };
+    const config = new AgentRuntime().assemble(ephemeralContext({ provider, model: "new-astra" }, {
+      ...(provider === "codex" ? { codexProfile: profile } : { claudeProfile: profile }),
+    }));
+    expect((await runOnce(config)).model).toBe("frozen-sol");
+  }
+});
+
 test('ephemeral identity treats an empty/absent thinking_level as "no override"', () => {
   expect(new AgentRuntime().assemble(ephemeralContext({ thinkingLevel: "" })).effort).toBeNull();
   expect(new AgentRuntime().assemble(ephemeralContext({})).effort).toBeNull();
@@ -256,4 +266,17 @@ test("persistent cwd priority is session, then topic", () => {
   expect(new AgentRuntime().assemble(persistentContext({
     topicCwd: "/topics/thread",
   })).cwd).toBe("/topics/thread");
+});
+
+test("side conversation policy reaches Claude system instructions without changing ordinary tasks", async () => {
+  const runtime = new AgentRuntime();
+  const task = { issueSession: { id: "side", title: "Side", inheritMode: "snapshot" as const } };
+  const side = await runOnce(runtime.assemble(ephemeralContext({}, task)));
+  expect(side.systemPrompt).toContain("Sub-agents are off-limits");
+  expect(side.systemPrompt).toContain("Do not modify files, Git state, or configuration");
+  const ordinary = await runOnce(runtime.assemble(ephemeralContext({})));
+  expect(ordinary.systemPrompt).toBeUndefined();
+  // Codex installs developer_instructions in its private provider home instead.
+  const codex = await runOnce(runtime.assemble(ephemeralContext({ provider: "codex" }, task)));
+  expect(codex.systemPrompt).toBeUndefined();
 });

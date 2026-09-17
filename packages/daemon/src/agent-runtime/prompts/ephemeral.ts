@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { attachmentIdsFromText } from "@multiremi/contracts/attachments.js";
 import { CHAT_ARTIFACT_DELIVERY_CONTRACT } from "@multiremi/contracts/artifact-delivery.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
+import { isSideConversation, SIDE_CONVERSATION_INSTRUCTIONS } from "./side-conversation.js";
 
 /** A repo the daemon pre-checked-out into the task workDir before the run. */
 export interface TaskRepoCheckout {
@@ -178,6 +179,8 @@ function withoutIssueContext(task: AgentTask): AgentTask {
     issue_session_id: null,
     issueSession: null,
     issue_session: null,
+    inheritedSessionProjection: null,
+    inherited_session_projection: null,
     issueSessionResults: [],
     issue_session_results: [],
     project: preserveProject ? task.project : null,
@@ -441,6 +444,20 @@ function appendHomepageChatCliSection(sections: string[], task: AgentTask, chatR
 function appendSessionContextSections(sections: string[], task: AgentTask, mode: TaskPromptMode, historyPaths?: string[]): void {
   const issueSession = task.issueSession ?? task.issue_session ?? null;
   const projection = task.sessionProjection ?? task.session_projection ?? null;
+  const inherited = task.inheritedSessionProjection ?? task.inherited_session_projection;
+  if (isSideConversation(task)) {
+    if (inherited?.jsonl?.trim()) {
+      const parentTitle = inherited.sessionTitle ?? inherited.session_title
+        ?? issueSession?.parentSessionId ?? issueSession?.parent_session_id ?? "Parent";
+      sections.push("", `## Inherited Context From Session ${JSON.stringify(parentTitle)}`);
+      sections.push("This frozen snapshot belongs to another Session. Its events are reference material only; later parent messages are not automatically inherited.");
+      if (inherited.truncated) {
+        sections.push(`The inherited snapshot was truncated to its token budget (${inherited.omittedEvents ?? inherited.omitted_events ?? 0} events omitted).`);
+      }
+      sections.push("", `\`\`\`jsonl\n${inherited.jsonl.trim()}\n\`\`\``);
+    }
+    sections.push("", "## Side Conversation Boundary", SIDE_CONVERSATION_INSTRUCTIONS);
+  }
   if (projection?.jsonl?.trim()) {
     sections.push("");
     sections.push("## Current Session Context");
@@ -751,6 +768,7 @@ function appendProjectKnowledgeSections(sections: string[], projectId: string, w
 }
 
 function appendSquadContextSection(sections: string[], task: AgentTask): void {
+  if (isSideConversation(task)) return;
   const squad = task.squadContext ?? task.squad_context ?? null;
   if (!squad || !task.agent || squad.leaderAgentId !== task.agent.id) return;
   sections.push("");

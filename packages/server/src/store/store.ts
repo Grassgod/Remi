@@ -1,4 +1,5 @@
 import { getExecutionGroup, listExecutionGroups } from "@multiremi/store/execution-groups.js";
+import type { RuntimeConnectionProfile } from "@multiremi/contracts/runtime-connection";
 import { type SqlDatabase, openMultiremiDatabase } from "@multiremi/store/db/postgres.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
 import { daemonRuntimeId, isTerminalStatus } from "@multiremi/store/helpers.js";
@@ -1806,6 +1807,10 @@ runMigrations(this.db);
     return this.feishuBot.getIssueIdForChatSession(chatSessionId);
   }
 
+  isFeishuTransportChatSession(chatSessionId: string): boolean {
+    return this.feishuBot.isTransportChatSession(chatSessionId);
+  }
+
   assertFeishuBotInboundAttachmentScope(...args: Parameters<FeishuBotRepo["assertInboundAttachmentScope"]>) {
     return this.feishuBot.assertInboundAttachmentScope(...args);
   }
@@ -2732,8 +2737,8 @@ runMigrations(this.db);
     return this.runtimes.listRuntimeModels(runtimeId);
   }
 
-  updateRuntimeModels(runtimeId: string, models: MultiremiRuntimeModel[]): MultiremiRuntimeModel[] {
-    return this.runtimes.updateRuntimeModels(runtimeId, models);
+  updateRuntimeModels(runtimeId: string, models: MultiremiRuntimeModel[], modelProfile?: RuntimeConnectionProfile | null): MultiremiRuntimeModel[] {
+    return this.runtimes.updateRuntimeModels(runtimeId, models, modelProfile);
   }
 
   createRuntimeModelListRequest(runtimeId: string): MultiremiRuntimeModelListRequest {

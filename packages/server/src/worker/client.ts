@@ -726,6 +726,7 @@ export class MultiremiDaemonClient {
   async reportRuntimeModelListResult(runtimeId: string, requestId: string, result: {
     status: string;
     models?: MultiremiRuntimeModel[];
+    model_profile?: RuntimeCodexProfile | RuntimeClaudeProfile | null;
     supported?: boolean;
     error?: string;
   }): Promise<void> {
@@ -736,10 +737,11 @@ export class MultiremiDaemonClient {
     runtimeId: string,
     models: MultiremiRuntimeModel[],
     signal?: AbortSignal,
+    modelProfile?: RuntimeCodexProfile | RuntimeClaudeProfile | null,
   ): Promise<MultiremiRuntimeModel[]> {
     const response = await this.put<{ models: MultiremiRuntimeModel[] }>(
       `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/models`,
-      { models, supported: true },
+      { models, supported: true, model_profile: modelProfile },
       signal,
     );
     return response.models;
@@ -1513,6 +1515,7 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
     issue: normalizeDaemonClaimIssue(raw.issue),
     issueSession: raw.issue_session ?? raw.issueSession ?? null,
     sessionProjection: raw.session_projection ?? raw.sessionProjection ?? null,
+    inheritedSessionProjection: raw.inherited_session_projection ?? raw.inheritedSessionProjection ?? null,
     issueSessionResults: Array.isArray(raw.issue_session_results)
       ? raw.issue_session_results
       : Array.isArray(raw.issueSessionResults)

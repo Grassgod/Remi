@@ -304,12 +304,12 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
     const runtimeId = c.req.param("runtimeId");
     const denied = denyDaemonRuntimeObservedStateAccess(c, store, runtimeId, authToken);
     if (denied) return denied;
-    const body = await readJsonStrict<{ models?: MultiremiRuntimeModel[]; supported?: boolean }>(c);
+    const body = await readJsonStrict<Pick<ReportRuntimeModelListInput, "models" | "supported" | "model_profile">>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     return c.json({
       runtime_id: runtimeId,
       supported: body.supported !== false,
-      models: store.updateRuntimeModels(runtimeId, body.models ?? []),
+      models: store.updateRuntimeModels(runtimeId, body.models ?? [], body.model_profile),
     });
   });
   app.post("/api/daemon/runtimes/:runtimeId/models/claim", (c) => {

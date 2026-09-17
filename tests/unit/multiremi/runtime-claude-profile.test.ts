@@ -28,16 +28,99 @@ describe("Runtime Claude profiles", () => {
     ]) expect(() => parseRuntimeClaudeProfile({ ...profile, ...patch })).toThrow();
   });
 
-  it("preserves connection configuration across registration and stale model reports", () => {
+  it("preserves discovered models and the configured default across registration", () => {
     const { store, runtime } = setup();
     store.setRuntimeClaudeProfile(runtime.id, profile);
     store.registerRuntime({ id: runtime.id, name: runtime.name, provider: "claude", daemonId: runtime.daemonId, workspaceId: "local", ownerId: "local", metadata: { claude_profiles: 1 } });
-    store.updateRuntimeModels(runtime.id, [{ id: "old-default", label: "Old", provider: "claude", default: true }]);
+    store.updateRuntimeModels(runtime.id, [{ id: "old-default", label: "Old", provider: "claude", default: true }], profile);
     expect(store.getRuntimeClaudeProfile(runtime.id)).toEqual(profile);
-    expect(store.listRuntimeModels(runtime.id).map(model => model.id)).toEqual([profile.model]);
+    expect(store.listRuntimeModels(runtime.id).map(model => [model.id, model.default])).toEqual([[profile.model, true], ["old-default", false]]);
+    expect(store.listWorkspaceClaudeProfileModels("local").sort()).toEqual([profile.model, "old-default"].sort());
     store.setRuntimeClaudeProfile(runtime.id, null);
     expect(store.getRuntimeClaudeProfile(runtime.id)).toBeNull();
     expect(store.listRuntimeModels(runtime.id)).toEqual([]);
+  });
+
+  it("ignores stale and legacy model reports across connection changes and clearing", () => {
+    const { store, runtime } = setup();
+    store.setRuntimeClaudeProfile(runtime.id, profile);
+    const discovered = [{ id: "custom-alternative", label: "Alternative", provider: "claude", default: false }];
+    store.updateRuntimeModels(runtime.id, discovered, profile);
+    const catalog = store.listRuntimeModels(runtime.id);
+    store.updateRuntimeModels(runtime.id, [{ id: "legacy", label: "Legacy", provider: "claude", default: false }]);
+    store.updateRuntimeModels(runtime.id, [{ id: "native", label: "Native", provider: "claude", default: false }], null);
+    expect(store.listRuntimeModels(runtime.id)).toEqual(catalog);
+    const changed = { ...profile, base_url: "https://changed.example/v1" };
+    store.setRuntimeClaudeProfile(runtime.id, changed);
+    store.updateRuntimeModels(runtime.id, discovered, profile);
+    expect(store.listRuntimeModels(runtime.id).map(model => model.id)).toEqual([profile.model]);
+    const refresh = store.createRuntimeModelListRequest(runtime.id);
+    const rejected = store.reportRuntimeModelListResult(runtime.id, refresh.id, { status: "completed", models: discovered, model_profile: profile });
+    expect(rejected.status).toBe("failed");
+    expect(rejected.error).toContain("connection changed");
+    store.updateRuntimeModels(runtime.id, discovered, changed);
+    expect(store.listRuntimeModels(runtime.id).map(model => model.id)).toEqual([profile.model, "custom-alternative"]);
+    store.setRuntimeClaudeProfile(runtime.id, null);
+    store.updateRuntimeModels(runtime.id, discovered, changed);
+    expect(store.listRuntimeModels(runtime.id)).toEqual([]);
+    store.updateRuntimeModels(runtime.id, [{ id: "native", label: "Native", provider: "claude", default: false }], null);
+    expect(store.listRuntimeModels(runtime.id).map(model => model.id)).toEqual(["native"]);
+  });
+
+  it("reports the full refreshed catalog to task credentials and accepts a discovered model", async () => {
+    const { store, runtime } = setup();
+    store.setRuntimeClaudeProfile(runtime.id, profile);
+    const refresh = store.createRuntimeModelListRequest(runtime.id);
+    store.reportRuntimeModelListResult(runtime.id, refresh.id, {
+      status: "completed", supported: true, model_profile: profile,
+      models: [{ id: "custom-alternative", label: "Alternative", provider: "claude", default: true }],
+    });
+    expect(store.getRuntimeModelListRequest(runtime.id, refresh.id)?.models).toEqual(store.listRuntimeModels(runtime.id));
+    const assistant = store.createAgent({ name: "Assistant", provider: "claude" });
+    const task = store.createTask({ agentId: assistant.id, prompt: "list models" });
+    const token = await store.createTaskAccessToken(task, "local");
+    const app = createMultiremiApp({ store, authToken: "profile-master" });
+    const headers = { Authorization: `Bearer ${token.token}`, "Content-Type": "application/json" };
+    const listed = await app.request(`/api/runtimes/${runtime.id}/models`, { headers });
+    expect(listed.status).toBe(200);
+    expect((await listed.json()).models.map((model: { id: string }) => model.id)).toEqual([profile.model, "custom-alternative"]);
+    store.setRelayModelDiscovery("local", true);
+    const revision = store.upsertRelayConfig("local", "claude", {
+      fragment: JSON.stringify({ env: { ANTHROPIC_BASE_URL: "https://gateway.example" } }),
+      tokenOp: "set", authToken: "test-token",
+    });
+    store.saveGatewayModels("local", "claude", { sourceRevision: revision, models: [{ id: "gateway-model", label: "Gateway" }] });
+    const fleet = await (await app.request("/api/models", { headers })).json();
+    expect(fleet.providers.find((entry: { provider: string }) => entry.provider === "claude").models.map((model: { id: string }) => model.id).sort())
+      .toEqual([profile.model, "custom-alternative", "gateway-model"].sort());
+    const created = await app.request("/api/agents", {
+      method: "POST", headers,
+      body: JSON.stringify({ name: "Selected alternative", provider: "claude", model: "custom-alternative" }),
+    });
+    expect(created.status).toBe(201);
+  });
+
+  it("freezes the selected model and restarts the session when the selection changes", () => {
+    const { store, runtime } = setup();
+    store.setRuntimeClaudeProfile(runtime.id, profile);
+    store.updateRuntimeModels(runtime.id, [{ id: "custom-alternative", label: "Alternative", provider: "claude", default: false }], profile);
+    const agent = store.createAgent({ name: "Custom", provider: "claude", model: "custom-alternative" });
+    const chat = store.createChatSession({ agentId: agent.id });
+    const first = store.sendChatMessage(chat.id, { body: "first" }).task;
+    const claimed = store.claimTask(runtime.id)!;
+    expect(claimed.claudeProfile).toEqual({ ...profile, model: "custom-alternative" });
+    expect(store.getRuntimeClaudeProfile(runtime.id)).toEqual(profile);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "first", sessionId: "alternative-session" });
+    const second = store.sendChatMessage(chat.id, { body: "second" }).task;
+    expect(second.sessionId).toBe("alternative-session");
+    store.updateAgent(agent.id, { model: null });
+    const changed = store.claimTask(runtime.id)!;
+    expect(changed.id).toBe(second.id);
+    expect(changed.sessionId).toBeNull();
+    expect(changed.claudeProfile).toEqual(profile);
+    expect(changed.executionFingerprint).not.toBe(claimed.executionFingerprint);
+    expect(store.getTask(first.id)?.claudeProfile).toEqual({ ...profile, model: "custom-alternative" });
   });
 
   it("gates old daemons and other engines", () => {
@@ -82,19 +165,21 @@ describe("Runtime Claude profiles", () => {
     const { store, runtime } = setup();
     process.env.MULTIREMI_PROVIDER_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
     const saved = store.setRuntimeClaudeProfile(runtime.id, apiProfile, "first-private-key")!;
-    const agent = store.createAgent({ name: "Custom", provider: "claude" });
+    const agent = store.createAgent({ name: "Custom", provider: "claude", model: "custom-alternative" });
+    const frozen = { ...saved, model: "custom-alternative" };
     const task = store.createTask({ agentId: agent.id, issueId: store.createIssue({ title: "Retry profile" }).id, prompt: "work" });
     const claimed = store.claimTask(runtime.id)!;
     store.startTask(task.id);
+    store.updateAgent(agent.id, { model: "another-model" });
     store.setRuntimeClaudeProfile(runtime.id, { ...apiProfile, base_url: "https://new.example/v1" }, "replacement-key");
-    expect(store.getTask(task.id)?.claudeProfile).toEqual(saved);
+    expect(store.getTask(task.id)?.claudeProfile).toEqual(frozen);
     store.failTask(task.id, { error: "stalled", failureReason: "agent_error.stale_session" });
     const retry = store.listTasks().find(candidate => candidate.parentTaskId === task.id)!;
-    expect(retry.claudeProfile).toEqual(saved);
+    expect(retry.claudeProfile).toEqual(frozen);
     expect(retry.runtimeId).toBe(runtime.id);
     expect(retry.executionFingerprint).toBe(claimed.executionFingerprint);
     expect(store.getRuntimeClaudeProfileKey(runtime.id, retry.claudeProfile!.credential_id!)).toBe("first-private-key");
-    expect(store.claimTask(runtime.id)?.claudeProfile).toEqual(saved);
+    expect(store.claimTask(runtime.id)?.claudeProfile).toEqual(frozen);
   });
 
   it("encrypts keys and restricts delivery to the bound daemon, never browser or task credentials", async () => {

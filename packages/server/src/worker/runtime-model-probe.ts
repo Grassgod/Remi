@@ -83,6 +83,7 @@ function validCapability(value: unknown): value is AcpModelCapability {
   const m = value as AcpModelCapability;
   return typeof m.id === "string" && m.id.length > 0 && typeof m.label === "string"
     && typeof m.default === "boolean"
+    && (m.providerDefault === undefined || typeof m.providerDefault === "boolean")
     && (m.effort === undefined || (Array.isArray(m.effort?.supportedLevels)
       && m.effort.supportedLevels.every(l => typeof l?.value === "string" && typeof l.label === "string")));
 }

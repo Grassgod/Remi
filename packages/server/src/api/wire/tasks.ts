@@ -404,6 +404,21 @@ export function daemonTaskClaimResponse(
         omitted_events: projection.omittedEvents,
         estimated_tokens: projection.estimatedTokens,
       };
+      const inherited = projection.inheritedSessionProjection;
+      if (inherited) {
+        response.inherited_session_projection = {
+          session_id: inherited.sessionId,
+          session_title: inherited.sessionTitle,
+          target_agent_id: inherited.targetAgentId,
+          mode: inherited.mode,
+          from_seq: inherited.fromSeq,
+          to_seq: inherited.toSeq,
+          jsonl: inherited.jsonl,
+          truncated: inherited.truncated,
+          omitted_events: inherited.omittedEvents,
+          estimated_tokens: inherited.estimatedTokens,
+        };
+      }
     }
   }
   if (task.issueSessionId) {

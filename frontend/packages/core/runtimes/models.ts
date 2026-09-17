@@ -47,6 +47,7 @@ export function useExecutionTargetModels(wsId: string, provider: string, runtime
   const bucket = query.data?.providers.find((entry) => entry.provider === provider);
   return {
     models: bucket?.models ?? NO_MODELS,
+    defaultThinking: bucket?.default_thinking,
     onlineRuntimeCount: bucket?.online_runtime_count ?? 0,
     isLoading: query.isLoading,
     isError: query.isError,

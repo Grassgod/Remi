@@ -375,6 +375,7 @@ function mappedResourceCommand(route: string): string | null {
     [/^DELETE \/api\/(?:multiremi\/)?comments\/:id\/reactions$/, "comment.reaction.remove"],
     [/^GET \/api\/multiremi\/comments\/:id\/attachments$/, "comment.attachment.list"],
     [/^GET \/api\/issues\/:id\/sessions$/, "session.list"],
+    [/^GET \/api\/sessions\/:sessionId$/, "session.show"],
     [/^POST \/api\/issues\/:id\/sessions$/, "session.create"],
     [/^GET \/api\/issues\/:id\/sessions\/:sessionId$/, "session.get"],
     [/^PATCH \/api\/issues\/:id\/sessions\/:sessionId$/, "session.update"],

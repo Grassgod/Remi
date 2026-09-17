@@ -290,7 +290,7 @@ export class FeishuChannel {
         replyToMessageId: opts.replyToMessageId,
         mentionOpenId: opts.mentionOpenId,
         sessionId: meta.sessionId,
-        displayName: opts.displayName ?? meta.displayName ?? undefined,
+        agentName: opts.displayName ?? meta.displayName ?? undefined,
         subtitle: opts.subtitle ?? formatExecutionSubtitle({ agentName: opts.displayName ?? meta.displayName }),
         durable: opts.durable,
       });
@@ -304,7 +304,7 @@ export class FeishuChannel {
         toolCount: result.toolCount || undefined,
         stats: result.stats,
         sessionId: result.sessionId,
-        displayName: opts.displayName ?? meta.displayName,
+        agentName: opts.displayName ?? meta.displayName,
         aborted: result.cancelled,
       });
       return { messageId };

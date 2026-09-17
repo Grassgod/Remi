@@ -109,6 +109,10 @@ describe("Bun Multiremi daemon smoke", () => {
   });
 
   it("maps ACP model-specific effort capabilities to runtime model metadata", () => {
+    expect(runtimeModelsFromAcpCapabilities("claude", [{ id: "default", label: "Default", default: true,
+      providerDefault: true, effort: { supportedLevels: [] } }])).toEqual([
+      { id: "default", label: "Default", default: true, providerDefault: true, provider: "anthropic", thinking: { supportedLevels: [] } },
+    ]);
     expect(runtimeModelsFromAcpCapabilities("codex", [
       {
         id: "gpt-probe",
@@ -1161,7 +1165,9 @@ describe("Bun Multiremi daemon smoke", () => {
     try {
       await withTimeout(bothStarted.promise, 5_000, "Issue delegations serialized in daemon");
       expect(homes.size).toBe(2);
-      expect(tasks.map((task) => store.getTask(task.id)?.status)).toEqual(["running", "running"]);
+      // `dispatched -> running` is written back asynchronously by the daemon, so poll instead of
+      // reading the status right after both providers started.
+      await waitForCondition(() => tasks.every((task) => store.getTask(task.id)?.status === "running"), 5_000);
       for (const task of tasks) expect([...contexts.values()].some((value) => value.includes(task.id))).toBe(true);
       expect(store.getIssueWorkspace(issue.id)?.rootPath).toBe(join(workDir, "workspaces", "issues", issue.key));
       release.resolve();

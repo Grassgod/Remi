@@ -389,6 +389,14 @@ export class TasksRepo {
     if (parentTask && parentTask.workspaceId !== agent.workspaceId) {
       throw new Error("Parent task belongs to another workspace");
     }
+    // A side task cannot dispatch a different agent through another Session.
+    // Same-agent retries/redispatch still use parentTaskId and remain valid.
+    const parentIssueSession = parentTask?.issueSessionId
+      ? this.ctx.issueSessions().getIssueSession(parentTask.issueSessionId) : null;
+    if (parentTask && parentTask.agentId !== agent.id
+      && parentIssueSession && parentIssueSession.inheritMode !== "none") {
+      throw new Error("Agent delegation is not allowed from side sessions");
+    }
     const issueCreationRestricted = Boolean(
       input.issueCreationRestricted
       || input.issue_creation_restricted
@@ -453,7 +461,7 @@ export class TasksRepo {
     // carry another machine's provider session. An explicit runtimeId is only
     // honoured when there is no strong affinity to respect.
     const chatProfile = chatSession?.sessionRuntimeId
-      ? this.ctx.runtimes().getRuntimeExecutionProfile(chatSession.sessionRuntimeId, agent.provider) : null;
+      ? this.runtimeProfileForAgent(chatSession.sessionRuntimeId, agent) : null;
     const affinity = this.resolveTaskAffinity(
       agent,
       input.resetProviderSession && chatSession ? { ...chatSession, sessionId: null, workDir: null, sessionRuntimeId: null } : chatSession,
@@ -478,7 +486,7 @@ export class TasksRepo {
       issueLane = this.ctx.issueSessions().getOrCreateSessionAgentLane(issueSession.id, agent.id, executionScope);
       const laneRuntime = issueLane.runtimeId ? this.ctx.runtimes().getRuntime(issueLane.runtimeId) : null;
       const laneProfile = laneRuntime
-        ? this.ctx.runtimes().getRuntimeExecutionProfile(laneRuntime.id, agent.provider) : null;
+        ? this.runtimeProfileForAgent(laneRuntime.id, agent) : null;
       const laneResumable =
         !input.resetProviderSession
         && !!issueLane.providerSessionId
@@ -510,6 +518,9 @@ export class TasksRepo {
       throw new Error("delegation_id and delegated_by_agent_id must be set together");
     }
     if (delegatedByAgentId) {
+      if (issueSession && issueSession.inheritMode !== "none") {
+        throw new Error("Agent delegation is not allowed in side sessions");
+      }
       const delegator = this.ctx.agents().getAgent(delegatedByAgentId);
       if (!delegator || delegator.workspaceId !== agent.workspaceId) {
         throw new Error("Delegating agent must belong to the task workspace");
@@ -1288,9 +1299,14 @@ export class TasksRepo {
     if (transition && task.chatSessionId && !task.issueId) {
       // Freeze Plugins and provider across the context transition. Runtime
       // credentials stay on their original host; a new host supplies its own.
-      const runtimeProfile = transition.runtimeId === runtime.id
-        ? task.codexProfile ?? task.claudeProfile ?? null
-        : this.ctx.runtimes().getRuntimeExecutionProfile(runtime.id, provider);
+      const frozenProfile = task.codexProfile ?? task.claudeProfile ?? null;
+      const destinationProfile = transition.runtimeId === runtime.id
+        ? frozenProfile : this.runtimeProfileForAgent(runtime.id, currentAgent);
+      // The selected model is part of the frozen execution, while connection
+      // credentials remain host-local. Moving a retry cannot reset its model
+      // to the destination Runtime's default or a later Agent selection.
+      const runtimeProfile = destinationProfile && frozenProfile
+        ? { ...destinationProfile, model: frozenProfile.model } : destinationProfile;
       const fingerprint = this.chatExecutionFingerprint(withRuntimeProfileFingerprint(
         createHash("sha256").update(canonicalJson(task.pluginSnapshot)).digest("hex"), runtimeProfile,
       ), this.ctx.chat().getChatSession(task.chatSessionId));
@@ -1323,7 +1339,7 @@ export class TasksRepo {
     }
 
     const pluginSnapshot = this.ctx.agentPlugins().resolveAgentPluginSnapshot(currentAgent.id);
-    const runtimeProfile = this.ctx.runtimes().getRuntimeExecutionProfile(runtime.id, provider);
+    const runtimeProfile = this.runtimeProfileForAgent(runtime.id, currentAgent);
     const chat = task.chatSessionId && !task.issueId ? this.ctx.chat().getChatSession(task.chatSessionId) : null;
     const executionFingerprint = this.chatExecutionFingerprint(withRuntimeProfileFingerprint(
       createHash("sha256").update(canonicalJson(pluginSnapshot)).digest("hex"), runtimeProfile,
@@ -1487,6 +1503,13 @@ export class TasksRepo {
     return Number(row?.eligible ?? 0) === 1;
   }
 
+  private runtimeProfileForAgent(runtimeId: string, agent: MultiremiAgent) {
+    const profile = this.ctx.runtimes().getRuntimeExecutionProfile(runtimeId, agent.provider);
+    // Freeze the selected model with its connection; retries keep the stored
+    // profile, while changing models invalidates the provider session fingerprint.
+    return profile ? { ...profile, model: cleanOptionalString(agent.model) ?? profile.model } : null;
+  }
+
   private runtimeMeetsTaskClaimEligibility(
     runtime: MultiremiRuntime,
     task: MultiremiTaskWithAgent,
@@ -1584,7 +1607,7 @@ export class TasksRepo {
       const plugins = this.ctx.agentPlugins().resolveAgentPluginSnapshot(agent.id);
       const fingerprint = this.ctx.agentPlugins().getAgentPluginCapabilityRevision(agent.id);
       const issue = task.issueId ? this.ctx.issues().getIssue(task.issueId) : null;
-      const profile = chat.sessionRuntimeId ? this.ctx.runtimes().getRuntimeExecutionProfile(chat.sessionRuntimeId, agent.provider) : null;
+      const profile = chat.sessionRuntimeId ? this.runtimeProfileForAgent(chat.sessionRuntimeId, agent) : null;
       const affinity = this.resolveTaskAffinity(agent, chat, issue, task.holdsWorkspace, withRuntimeProfileFingerprint(fingerprint, profile), plugins.length > 0 || Boolean(profile));
       // A managed fallback must release the previous assignment's directory
       // pin. A resumable session still supplies normal machine affinity above.

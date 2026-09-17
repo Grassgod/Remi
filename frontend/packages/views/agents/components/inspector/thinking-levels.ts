@@ -1,25 +1,26 @@
 import type {
   RuntimeModel,
   RuntimeModelThinkingLevel,
+  RuntimeModelThinking,
 } from "@multiremi/core/types";
+import { modelThinkingLevels } from "@multiremi/core/runtimes";
 
 export function getModelThinkingLevels(
   models: RuntimeModel[],
   model: string,
+  defaultThinking?: RuntimeModelThinking,
 ): RuntimeModelThinkingLevel[] {
-  const selected = model
-    ? models.find((entry) => entry.id === model)
-    : models.find((entry) => entry.default);
-  return selected?.thinking?.supported_levels ?? [];
+  return modelThinkingLevels(models, model, defaultThinking);
 }
 
 export function supportsThinkingLevel(
   models: RuntimeModel[],
   model: string,
   thinkingLevel: string,
+  defaultThinking?: RuntimeModelThinking,
 ): boolean {
   if (!thinkingLevel) return true;
-  return getModelThinkingLevels(models, model).some(
+  return getModelThinkingLevels(models, model, defaultThinking).some(
     (level) => level.value === thinkingLevel,
   );
 }

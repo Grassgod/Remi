@@ -35,25 +35,30 @@ describe("execution group API", () => {
       const runtime = store.registerRuntime({ name: "Custom reasoning", provider, executionGroupId: "custom-group", metadata: { [`${provider}_profiles`]: 1 } });
       const profile = { name: "custom", base_url: "https://example.com/v1", model: "custom-model", env_key: provider === "codex" ? "REMI_CODEX_KEY" : "REMI_CLAUDE_KEY" };
       const configure = () => provider === "codex" ? store.setRuntimeCodexProfile(runtime.id, profile) : store.setRuntimeClaudeProfile(runtime.id, profile);
-      configure();
+      const savedProfile = configure()!;
       store.updateRuntimeModels(runtime.id, [
         { id: "custom-model", label: "Custom model", provider, default: true, thinking: { supportedLevels: [{ value: "high", label: "High" }], defaultLevel: "high" } },
-        { id: "unrelated-model", label: "Unrelated", provider, default: false },
-      ]);
+        { id: "alternative-model", label: "Alternative", provider, default: false, thinking: { supportedLevels: [{ value: "high", label: "High" }] } },
+      ], savedProfile);
       for (const query of [`runtime_id=${runtime.id}`, "execution_group_id=custom-group"]) {
         const response = await app.request(`/api/models?workspace_id=local&${query}`);
         expect(response.status).toBe(200);
         const { providers } = await response.json();
-        expect(providers[0].models).toEqual([{
+        expect(providers[0].models.map((model: { default?: boolean }) => ({ ...model, default: model.default === true }))).toEqual([{
           id: "custom-model", label: "Custom model", provider, default: true,
           thinking: { supported_levels: [{ value: "high", label: "High" }], default_level: "high" },
+        }, {
+          id: "alternative-model", label: "Alternative", provider, default: false,
+          thinking: { supported_levels: [{ value: "high", label: "High" }] },
         }]);
       }
-      const response = await request("/api/agents", { name: "Reasoning", execution_group_id: "custom-group", model: "custom-model", thinking_level: "high" });
+      const response = await request("/api/agents", { name: "Reasoning", execution_group_id: "custom-group", model: "alternative-model", thinking_level: "high" });
       expect(response.status).toBe(201);
       const agent = await response.json();
       const task = store.createTask({ agentId: agent.id, prompt: "Use the configured connection" });
-      expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+      const claimed = store.claimTask(runtime.id)!;
+      expect(claimed.id).toBe(task.id);
+      expect((provider === "codex" ? claimed.codexProfile : claimed.claudeProfile)?.model).toBe("alternative-model");
       // Changing a connection must invalidate capabilities from its previous endpoint.
       configure();
       expect(store.listRuntimeModels(runtime.id)[0]?.thinking).toBeUndefined();

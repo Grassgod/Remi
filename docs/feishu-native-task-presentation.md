@@ -21,8 +21,14 @@ Subagent text never replaces the main Agent's answer. A direct answer without
 process events sends only the result, without an empty process placeholder.
 
 Ordinary private-chat turns send both native process messages and result cards
-to the main chat, without a reply target. Group/Issue topic replies and explicit
-private-thread replies retain their original topic. A private result must not
+to the main chat, without a reply target. When `replyToMessageId` is present
+(group/Issue topics or explicit private threads), native CoT creation includes
+both `origin_message_id` and `reply_in_thread: true`, keeping the process in the
+same reply thread as result and interaction cards. `origin_message_id` alone
+associates the source message but does not place CoT in its thread (MUL-311).
+Without a reply target, both fields are omitted, preserving ordinary private-chat
+behavior.
+A private result must not
 rebind its Chat Session to the result message; only a standalone Issue topic seed
 establishes a new topic root.
 
@@ -122,6 +128,68 @@ appending incompatible text IDs to the old message. New deliveries use the
 semantic timeline; existing finished messages are not rewritten.
 
 ## Verification
+
+`tests/manual/feishu-cot-thread-probe.ts` checks MUL-311 in an explicitly selected
+ordinary test group. Inject `FEISHU_APP_ID` and `FEISHU_APP_SECRET` securely into
+the process environment; optionally set `FEISHU_DOMAIN` to `feishu`, `lark` or
+`bytedance`. Run:
+
+```bash
+bun tests/manual/feishu-cot-thread-probe.ts --send --chat-id oc_TEST_GROUP
+```
+
+`FEISHU_TEST_CHAT_ID` can replace `--chat-id`. The probe requires `chat_mode=group`
+and `group_message_type=chat` (topic mode or missing metadata blocks sending),
+sends a labeled ordinary message A, then creates two native CoTs with A as
+`origin_message_id`: one omits `reply_in_thread`, the other sets it to `true`.
+It prints each request's API code/message and reads back `thread_id`, `root_id`
+and `parent_id` for both CoTs and A. It completes its own CoTs and retains their
+messages for client inspection. Writes are never retried; an ambiguous response
+requires inspection before another run. No production configuration is changed.
+A zero API code alone does not establish that the parameter was honored; a
+rejection alone does not establish lack of support (check auth/scopes first).
+
+On 2026-09-17, the probe ran in an authorized ordinary test group
+(`chat_mode=group`, `group_message_type=chat`). With the same origin message A,
+both creates returned code 0:
+
+- Without `reply_in_thread`, the CoT readback had no `thread_id`, even though
+  `root_id` and `parent_id` pointed to A.
+- With `reply_in_thread: true`, the CoT and A both read back the same new
+  `thread_id`. The field changed thread placement; it was neither rejected nor
+  silently ignored.
+
+Concrete chat, message and thread IDs are deliberately omitted here: this
+repository is public, and those identifiers point at a private group. The raw
+probe output lives in the MUL-311 issue thread.
+
+This selects native threading (branch A) for MUL-311. Evidence was reported in
+issue comments `cmt_lyh5qp2j3p27` and `cmt_i7qx9edic2ey`; client visual acceptance
+is separate from API readback. The earlier missing-credentials report was a
+configuration-loading gap: `@shared/config.js` reads environment variables,
+not the legacy local `~/.remi/remi.toml` `[feishu]` credentials. If using that
+local file for a manual run, parse it and pass credentials only through the
+child process environment; never print secrets or commit credential files.
+
+Thread routing is applied only at native creation. Resuming a checkpoint with
+acknowledged native IDs reuses that process, without recreating or relocating
+it; ambiguous-write and legacy-renderer recovery policies remain unchanged.
+
+The updated `FeishuTaskPresentation` was then exercised in the same group on
+2026-09-17 against `https://open.feishu.cn`. A synthetic commentary/final Task
+stream plus terminal snapshot went through the real presenter, native transport,
+SDK and result sender, with checkpoint saving and the origin's receipt enabled.
+This was a code-path regression, not another direct `message_cot` parameter probe.
+
+The origin message, the native CoT and the result card all read back one and the
+same `thread_id`; both replies also had the origin as `root_id` and `parent_id`. The presenter
+sent one native create with `origin_message_id` and `reply_in_thread: true`,
+three native writes ending in `RUN_FINISHED`, and one result reply. All calls
+returned code 0; its checkpoint reached `cot.status=finished`. `THINKING` was
+added and removed after the result. Replaying the same stream with that terminal
+checkpoint reused the result ID and issued zero writes. The test retained the
+three messages for inspection. It did not exercise inbound @ handling, an actual
+Agent execution, or client UI rendering; those remain for end-to-end/QA acceptance.
 
 Unit tests cover native POST/PUT payloads and topic origin, direct answers,
 text/final isolation, context and timing, restart checkpoints, result UUIDs,

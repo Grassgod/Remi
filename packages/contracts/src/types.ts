@@ -1016,6 +1016,8 @@ export interface MultiremiRuntimeModel {
   label: string;
   provider: string;
   default: boolean;
+  /** Capability of the provider's default selector; excluded from concrete model pickers. */
+  providerDefault?: boolean;
   thinking?: MultiremiRuntimeModelThinking;
   createdAt?: string;
   updatedAt?: string;
@@ -1134,6 +1136,8 @@ export interface ReportRuntimeLocalSkillImportInput {
 export interface ReportRuntimeModelListInput {
   status?: string;
   models?: MultiremiRuntimeModel[];
+  /** Connection used by this probe; null denotes the native/relay catalog. */
+  model_profile?: RuntimeCodexProfile | RuntimeClaudeProfile | null;
   supported?: boolean;
   error?: string;
 }
@@ -1455,6 +1459,8 @@ export interface MultiremiTaskWithAgent extends MultiremiTask {
   chatProjectId?: string | null;
   /** Explicit Project repositories eligible for Chat checkout; never includes the workspace fallback catalog. */
   chatAutoCheckoutRepos?: MultiremiRepoData[];
+  inheritedSessionProjection?: MultiremiSessionProjection | null;
+  inherited_session_projection?: MultiremiSessionProjection | null;
   agent: MultiremiAgent | null;
   issue: MultiremiIssue | null;
   project: MultiremiProject | null;
@@ -2178,6 +2184,8 @@ export interface MultiremiProjectSearchResult extends MultiremiProject {
 
 export type MultiremiIssueSessionStatus = "active" | "archived";
 
+export type MultiremiIssueSessionInheritMode = "none" | "snapshot";
+
 export type MultiremiSessionParticipantType = "agent" | "member";
 
 export type MultiremiSessionProjectionMode = "bootstrap" | "delta";
@@ -2194,6 +2202,15 @@ export interface MultiremiIssueSession {
   is_default?: boolean;
   holdsWorkspace: boolean;
   holds_workspace?: boolean;
+  parentSessionId: string | null;
+  parent_session_id?: string | null;
+  inheritMode: MultiremiIssueSessionInheritMode;
+  inherit_mode?: MultiremiIssueSessionInheritMode;
+  inheritCutoffSeq: number | null;
+  inherit_cutoff_seq?: number | null;
+  /** Parent events through the frozen cutoff, before projection truncation. */
+  inheritedEventCount: number;
+  inherited_event_count?: number;
   summary: string | null;
   createdByType: string;
   created_by_type?: string;
@@ -2301,6 +2318,12 @@ export interface MultiremiSessionProjection {
   omitted_events?: number;
   estimatedTokens: number;
   estimated_tokens?: number;
+  /** Present on a parent projection so prompt renderers can identify its source. */
+  sessionTitle?: string;
+  session_title?: string;
+  /** Side-session snapshot; absent for ordinary Sessions. */
+  inheritedSessionProjection?: MultiremiSessionProjection;
+  inherited_session_projection?: MultiremiSessionProjection;
 }
 
 export interface CreateIssueSessionInput {
@@ -2316,6 +2339,9 @@ export interface CreateIssueSessionInput {
   participant_agent_ids?: string[];
   holdsWorkspace?: boolean;
   holds_workspace?: boolean;
+  /** A parent creates a discussion Session with a frozen snapshot of its events. */
+  parentSessionId?: string | null;
+  parent_session_id?: string | null;
 }
 
 export interface UpdateIssueSessionInput {

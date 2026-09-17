@@ -35,6 +35,13 @@ Claude Code uses `remi runtime claude-profile get <runtime>` and
 credential and clear semantics plus `auth_header: bearer | x-api-key`. See
 [Claude Code Runtime connections](design/acp-claude-via-claude-agent-acp.md).
 
+For either custom connection, `remi runtime model refresh <runtime>` asks its
+daemon to discover the provider catalog. Poll `runtime model status <runtime>
+<request-id>` for completion, then use `runtime model list <runtime>`. These
+model commands are available to task credentials without exposing connection
+secrets. Set a cloud agent's selection with `remi agent update <agent> --model <model-id>`;
+the connection's configured model remains the default when no model is selected.
+
 The canonical tree includes a focused top-level Attachment download command;
 Issue and Comment keep their scoped attachment listing and management commands.
 

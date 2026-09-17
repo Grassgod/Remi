@@ -29,6 +29,45 @@ function mutate(f: ReturnType<typeof fixture>, change: "delete" | "path" | "daem
 }
 
 describe("Chat workspace assignment lineage", () => {
+  for (const provider of ["codex", "claude"] as const) {
+    for (const priorProfile of [true, false]) {
+      it(`keeps selected ${provider} models while a workspace transition replaces host credentials (prior profile: ${priorProfile})`, () => {
+        const store = createStore();
+        const metadata = { codex_profiles: 1, claude_profiles: 1, agent_plugin_protocol: 1 };
+        const previous = store.registerRuntime({ name: "Previous", provider, daemonId: "previous", metadata });
+        const destination = store.registerRuntime({ name: "Destination", provider, daemonId: "destination", metadata });
+        const profile = { name: "previous", base_url: "http://127.0.0.1:8001/v1", model: "previous-default",
+          env_key: provider === "codex" ? "REMI_CODEX_MODEL_TEST" : "REMI_CLAUDE_MODEL_TEST", auth_mode: "env" as const,
+          ...(provider === "claude" ? { auth_header: "bearer" as const } : {}) };
+        const nextProfile = { ...profile, name: "destination", base_url: "http://127.0.0.1:8002/v1", model: "destination-default" };
+        if (provider === "codex") {
+          if (priorProfile) store.setRuntimeCodexProfile(previous.id, profile);
+          store.setRuntimeCodexProfile(destination.id, nextProfile);
+        } else {
+          if (priorProfile) store.setRuntimeClaudeProfile(previous.id, profile);
+          store.setRuntimeClaudeProfile(destination.id, nextProfile);
+        }
+        const agent = store.createAgent({ name: "Chat", provider, model: "selected-model" });
+        const project = store.createProject({ title: "Project" });
+        store.createProjectDevice(project.id, { daemonId: "previous" });
+        store.updateDaemonDedicated("local", "previous", true, "local");
+        const chat = store.createChatSession({ agentId: agent.id, projectId: project.id });
+        const first = store.sendChatMessage(chat.id, { body: "First" }).task;
+        const initial = store.claimTask(previous.id)!;
+        expect((initial.codexProfile ?? initial.claudeProfile)?.model ?? null).toBe(priorProfile ? "selected-model" : null);
+        store.startTask(first.id);
+        store.failTask(first.id, { error: "Runtime unavailable", failureReason: "runtime_offline",
+          sessionId: "old-provider", workDir: "/abs/old" });
+        const retry = store.listTasks().find((task) => task.parentTaskId === first.id)!;
+        if (priorProfile) store.updateAgent(agent.id, { model: "later-selection" });
+        store.archiveProject(project.id);
+        const claimed = store.claimTask(destination.id)!;
+        expect(claimed).toMatchObject({ id: retry.id, sessionId: null, workDir: null });
+        expect(claimed.codexProfile ?? claimed.claudeProfile).toEqual({ ...nextProfile, model: "selected-model" });
+      });
+    }
+  }
+
   for (const lineage of ["legacy", "current"] as const) {
     it(`retains the rejection decision while stripping a ${lineage} claim's inherited path`, () => {
       const f = fixture();

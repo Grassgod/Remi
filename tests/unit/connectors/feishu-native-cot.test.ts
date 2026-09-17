@@ -44,11 +44,12 @@ describe("native CoT Task presentation", () => {
     expect(content.map(c => c.delta).join("")).toBe("First thought");
     expect(JSON.stringify(h.cards())).toContain("46s");
   });
-  it("uses the native endpoint and origin message, then sends only the final answer as a card", async () => {
+  it("creates native CoT in the origin message's thread and sends only the final answer as a card", async () => {
     const h = nativeHarness();
     await renderer(h).consume(transcript());
     expect(h.calls[0]).toMatchObject({ operation: "POST", input: { url: "/open-apis/im/v1/message_cot",
-      params: { receive_id_type: "chat_id" }, data: { receive_id: "oc_group", origin_message_id: "om_root" } } });
+      params: { receive_id_type: "chat_id" }, data: { receive_id: "oc_group", origin_message_id: "om_root", reply_in_thread: true } } });
+    expect(h.calls[0]!.input.data).toEqual({ receive_id: "oc_group", origin_message_id: "om_root", reply_in_thread: true });
     const events = h.events();
     expect(events[0].event_type).toBe("RUN_STARTED");
     expect(events.at(-1).event_type).toBe("RUN_FINISHED");
@@ -58,6 +59,9 @@ describe("native CoT Task presentation", () => {
     expect(JSON.stringify(events)).not.toContain("Final answer");
     expect(JSON.stringify(events)).not.toContain("<at ");
     expect(h.cards()).toHaveLength(1);
+    expect(h.calls.find(c => c.operation === "reply")!.input).toMatchObject({
+      path: { message_id: "om_root" }, data: { reply_in_thread: true },
+    });
     const final = JSON.stringify(h.cards()[0]);
     expect(final).toContain("Final answer");
     expect(final).not.toContain("I will inspect");
@@ -75,11 +79,71 @@ describe("native CoT Task presentation", () => {
     const creation = h.calls.find(c => c.operation === "POST")!;
     expect(creation.input.data.receive_id).toBe("oc_group");
     expect(creation.input.data.origin_message_id).toBeUndefined();
+    expect(creation.input.data).toEqual({ receive_id: "oc_group" });
     expect(h.calls.filter(c => c.operation === "reply")).toHaveLength(0);
     expect(h.calls.filter(c => c.operation === "create")).toHaveLength(1);
     expect(h.calls.find(c => c.operation === "create")!.input.data.receive_id).toBe("oc_group");
     expect(h.checkpoint?.cot?.status).toBe("finished");
     expect(JSON.stringify(h.cards())).toContain("Final answer");
+  });
+
+  it("titles the result card with the Task's provider session, substituting the agent's own name", async () => {
+    for (const [agentName, expected] of [["Remi", "自由的 Remi·Sciurus"], ["小助手", "自由的 小助手·Sciurus"]] as const) {
+      const h = nativeHarness();
+      async function* run() {
+        yield taskEvent(1, "execution", { meta: { agentName, provider: "claude", model: "claude-fable-5-1" } });
+        yield taskEvent(2, "text", { content: "Final answer" });
+        yield completed;
+      }
+      await new FeishuTaskPresentation(h.client as any, "oc_group", { ...meta, displayName: agentName, sessionId: null },
+        { appId: "cli_test", idempotencyKey: "delivery", save: h.save }).consume(run());
+      const header = (h.cards()[0] as any).header;
+      expect(header.title.content).toStartWith(`${expected}  `);
+      // The execution identity stays in the subtitle; the title is session-only.
+      expect(header.subtitle.content).toBe(`${agentName} Claude fable51`);
+    }
+  });
+
+  it("opens as a newborn before the session is known and adopts the session once a snapshot reports it", async () => {
+    const h = nativeHarness();
+    const presentation = new FeishuTaskPresentation(h.client as any, "oc_group",
+      { ...meta, sessionId: null }, { appId: "cli_test", idempotencyKey: "delivery", save: h.save });
+    expect((presentation as any).sessionId).toBeNull();
+    async function* run() {
+      yield taskEvent(1, "text", { content: "Working" });
+      yield { kind: "snapshot", snapshot: { ...(completed as any).snapshot, status: "running", result: null, sessionId: "sess_live" } } as typeof completed;
+      yield taskEvent(2, "text", { content: "Final answer" });
+      yield completed;
+    }
+    await presentation.consume(run());
+    expect((presentation as any).sessionId).toBe("session_original");
+    expect((h.cards()[0] as any).header.title.content).toStartWith("自由的 Remi·Sciurus  ");
+  });
+
+  it("keeps command replies on the plain agent name because they carry no session", async () => {
+    const h = nativeHarness();
+    async function* command() {
+      yield taskEvent(1, "text", { content: "New conversation started." });
+      yield { kind: "snapshot", snapshot: { taskId: "feishu-command", status: "completed",
+        result: "New conversation started.", error: null, sessionId: null, workDir: null, usage: [] } } as typeof completed;
+    }
+    await new FeishuTaskPresentation(h.client as any, "oc_group", { ...meta, sessionId: undefined },
+      { appId: "cli_test", idempotencyKey: "delivery", save: h.save }).consume(command());
+    expect((h.cards()[0] as any).header.title.content).toStartWith("Remi  ");
+  });
+
+  it("omits thread routing without an origin even when the transport caller requests it", async () => {
+    const h = nativeHarness();
+    const handle = await new FeishuCotTransport(h.client as any).create("oc_private", undefined, true);
+    expect(h.calls).toHaveLength(1);
+    expect(h.calls[0]!.input.data).toEqual({ receive_id: "oc_private" });
+    expect(handle).toEqual({ cotId: "cot_1", messageId: "om_cot" });
+  });
+
+  for (const replyInThread of [undefined, false]) it(`preserves unthreaded transport creation with replyInThread=${replyInThread}`, async () => {
+    const h = nativeHarness();
+    await new FeishuCotTransport(h.client as any).create("oc_group", "om_origin", replyInThread);
+    expect(h.calls[0]!.input.data).toEqual({ receive_id: "oc_group", origin_message_id: "om_origin" });
   });
 
   it("a direct answer creates no process message or placeholder", async () => {
@@ -171,6 +235,50 @@ describe("native CoT Task presentation", () => {
     expect(h.calls.filter(c => c.operation === "POST")).toHaveLength(1);
     expect(h.events().filter(e => e.event_type === "TOOL_CALL_START")).toHaveLength(1);
     expect(h.events().filter(e => e.event_type === "TOOL_CALL_RESULT")).toHaveLength(0);
+  });
+
+  for (const status of ["completed", "failed"] as const) it(`resumes an active thread CoT handle without recreating it when ${status}`, async () => {
+    const h = nativeHarness();
+    const checkpoint: FeishuPresentationCheckpoint = {
+      version: "native_cot_v1", startedAt: Date.now(), throughSeq: 1, interactions: {},
+      cot: { status: "active", presentation: "semantic_v1", cotId: "cot_saved", messageId: "om_saved", runStarted: true },
+    };
+    async function* resumed() {
+      yield taskEvent(1, "thinking", { content: "Acknowledged process." });
+      yield taskEvent(2, "thinking", { content: "Continued process." });
+      yield taskEvent(3, "text", { content: "Resumed answer", meta: { phase: "final" } });
+      yield { ...completed, snapshot: { ...(completed as any).snapshot, status, error: status === "failed" ? "failure" : null } } as typeof completed;
+    }
+    await renderer(h, { checkpoint }).consume(resumed());
+    expect(h.calls.filter(c => c.operation === "POST" && c.input.url === "/open-apis/im/v1/message_cot")).toHaveLength(0);
+    const writes = h.calls.filter(c => c.operation === "PUT");
+    expect(writes.length).toBeGreaterThan(0);
+    for (const write of writes) expect(write.input.data).toMatchObject({ cot_id: "cot_saved", message_id: "om_saved" });
+    expect(h.events().some(e => e.event_type === "RUN_STARTED")).toBe(false);
+    expect(JSON.stringify(h.events())).not.toContain("Acknowledged process.");
+    expect(JSON.stringify(h.events())).toContain("Continued process.");
+    const completes = h.calls.filter(c => c.input.url?.includes("/complete/"));
+    expect(completes).toHaveLength(status === "failed" ? 1 : 0);
+    if (status === "failed") expect(completes[0]!.input).toMatchObject({
+      method: "POST", url: "/open-apis/im/v1/message_cot/complete/cot_saved",
+      params: { message_id: "om_saved", reason: "error" },
+    });
+    expect(h.cards()).toHaveLength(1);
+    expect(h.calls.find(c => c.operation === "reply")!.input).toMatchObject({
+      path: { message_id: "om_root" }, data: { reply_in_thread: true },
+    });
+    expect(JSON.stringify(h.cards())).toContain("Resumed answer");
+    expect(h.checkpoint?.cot).toMatchObject({ status: "finished", cotId: "cot_saved", messageId: "om_saved" });
+  });
+
+  it("does not recreate a finished thread CoT or resend its checkpointed result", async () => {
+    const h = nativeHarness();
+    const checkpoint: FeishuPresentationCheckpoint = {
+      version: "native_cot_v1", startedAt: Date.now(), throughSeq: 7, interactions: {}, resultMessageId: "om_result",
+      cot: { status: "finished", presentation: "semantic_v1", cotId: "cot_saved", messageId: "om_saved", runStarted: true },
+    };
+    expect(await renderer(h, { checkpoint }).consume(transcript())).toEqual({ messageId: "om_result" });
+    expect(h.calls).toHaveLength(0);
   });
 
   for (const cot of [{ status: "creating" }, { status: "active", cotId: "cot_1", messageId: "om_cot", writePending: true }]) {
