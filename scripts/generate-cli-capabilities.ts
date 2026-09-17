@@ -325,6 +325,8 @@ function mappedResourceCommand(route: string): string | null {
     [/^GET \/api\/workspaces\/:id\/repos\/:repositoryId\/wiki$/, "wiki.repository.list"],
     [/^POST \/api\/workspaces\/:id\/repos\/:repositoryId\/wiki$/, "wiki.repository.create"],
     [/^POST \/api\/workspaces\/:id\/repos\/:repositoryId\/wiki\/batch$/, "wiki.push"],
+    [/^POST \/api\/workspaces\/:id\/repos\/:repositoryId\/wiki\/move$/, "wiki.repository.mv"],
+    [/^POST \/api\/workspaces\/:id\/repos\/:repositoryId\/wiki\/merge$/, "wiki.repository.merge"],
     [/^POST \/api\/workspaces\/:id\/repos\/:repositoryId\/wiki\/build$/, "wiki.repository.build"],
     [/^GET \/api\/workspaces\/:id\/repos\/:repositoryId\/wiki\/:ref\/revisions$/, "wiki.repository.revisions"],
     [/^GET \/api\/workspaces\/:id\/repos\/:repositoryId\/wiki\/:ref\/backlinks$/, "wiki.repository.backlinks"],

@@ -1,5 +1,6 @@
 import { createId, nowIso } from "@multiremi/ids.js";
 import { createLogger } from "@shared/logger.js";
+import { abortable, deadlineClient } from "./deadline.js";
 import type {
   CreateRepositoryWikiDocInput,
   MultiremiRepositoryWikiDoc,
@@ -34,7 +35,14 @@ import {
 import {
   assertNoIntroducedRepositoryWikiLinks,
   repositoryWikiBacklinks,
+  rewriteRepositoryWikiLinks,
 } from "./links.js";
+
+export interface RepositoryWikiMigrationOptions {
+  expectedVersion?: number;
+  updatedByType?: MultiremiRepositoryWikiDoc["updatedByType"];
+  updatedById?: string | null;
+}
 
 export interface RepositoryWikiServiceContract {
   readonly mode: ProjectKnowledgeMode;
@@ -46,6 +54,8 @@ export interface RepositoryWikiServiceContract {
   update(workspaceId: string, repositoryId: string, ref: string, input: UpdateRepositoryWikiDocInput): Promise<MultiremiRepositoryWikiDoc>;
   delete(workspaceId: string, repositoryId: string, ref: string, expectedVersion?: number | null): Promise<MultiremiRepositoryWikiDoc>;
   applyBatch(workspaceId: string, repositoryId: string, operations: readonly RepositoryWikiBatchOperation[]): Promise<RepositoryWikiBatchResult[]>;
+  move(workspaceId: string, repositoryId: string, ref: string, path: string, options?: RepositoryWikiMigrationOptions): Promise<RepositoryWikiBatchResult[]>;
+  merge(workspaceId: string, repositoryId: string, targetRef: string, sourceRefs: readonly string[], options?: RepositoryWikiMigrationOptions): Promise<RepositoryWikiBatchResult[]>;
   revisions(workspaceId: string, repositoryId: string, ref: string): Promise<MultiremiRepositoryWikiDocRevision[]>;
   search(workspaceId: string, repositoryId: string, query: string, limit?: number): Promise<MultiremiRepositoryWikiDoc[]>;
   backlinks(workspaceId: string, repositoryId: string, ref: string): Promise<MultiremiRepositoryWikiDoc[]>;
@@ -55,6 +65,7 @@ export interface RepositoryWikiServiceContract {
 }
 
 export class RepositoryWikiUnavailableError extends Error {}
+export const REPOSITORY_WIKI_BATCH_LIMIT = 256;
 
 const log = createLogger("repository-wiki");
 
@@ -64,15 +75,19 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
   private storageAbort: AbortController | null = null;
   private storageRun: Promise<void> | null = null;
   private readonly cleanupConcurrency: number;
+  private readonly writeTimeoutMs: number;
+  private readonly operationSignal?: AbortSignal;
 
   constructor(
     private readonly store: MultiremiStore,
     private readonly client: OpenVikingClientContract | null,
     readonly mode: ProjectKnowledgeMode,
-    options: { cleanupConcurrency?: number } = {},
+    options: { cleanupConcurrency?: number; writeTimeoutMs?: number; signal?: AbortSignal } = {},
   ) {
     const concurrency = options.cleanupConcurrency ?? Number(process.env.MULTIREMI_WIKI_CLEANUP_CONCURRENCY ?? 8);
     this.cleanupConcurrency = Number.isInteger(concurrency) && concurrency >= 1 && concurrency <= 32 ? concurrency : 8;
+    this.writeTimeoutMs = Math.max(1, options.writeTimeoutMs ?? positiveInt(process.env.MULTIREMI_WIKI_WRITE_TIMEOUT_MS, 120_000));
+    this.operationSignal = options.signal;
   }
 
   startStorageWorker(): void {
@@ -106,7 +121,7 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
           if (signal?.aborted) return;
           const backoff = job.lastError ? Math.min(300_000, 5_000 * 2 ** Math.min(job.attemptCount, 6)) : 0;
           if (now - Date.parse(job.updatedAt) < backoff) continue;
-          await this.withWriteLock(job.workspaceId, job.repositoryId, () => this.processStorageJobUnlocked(job, true, signal));
+          await this.withWriteLock(job.workspaceId, job.repositoryId, service => service.processStorageJobUnlocked(job, true, signal));
         }
       }
     })();
@@ -121,21 +136,22 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
   }
 
   private async hydrateTolerant(doc: MultiremiRepositoryWikiDoc): Promise<MultiremiRepositoryWikiDoc & { bodyUnavailable?: boolean }> {
-      try {
-        return await this.hydrate(doc);
-      } catch (error) {
-        const message = repositoryWikiHydrationError(doc, error);
-        log.warn(message);
-        return {
-          ...doc,
-          body: "",
-          bodyUnavailable: true,
-          status: "failed",
-          statusMessage: message,
-          syncStatus: "failed",
-          syncError: message,
-        };
-      }
+    try {
+      return await this.hydrate(doc);
+    } catch (error) {
+      this.operationSignal?.throwIfAborted();
+      const message = repositoryWikiHydrationError(doc, error);
+      log.warn(message);
+      return {
+        ...doc,
+        body: "",
+        bodyUnavailable: true,
+        status: "failed",
+        statusMessage: message,
+        syncStatus: "failed",
+        syncError: message,
+      };
+    }
   }
 
   async listStrict(workspaceId: string, repositoryId: string): Promise<MultiremiRepositoryWikiDoc[]> {
@@ -156,8 +172,8 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
   }
 
   async create(workspaceId: string, repositoryId: string, input: CreateRepositoryWikiDocInput): Promise<MultiremiRepositoryWikiDoc> {
-    return this.withWriteLock(workspaceId, repositoryId, async () => {
-      const result = await this.applyBatchUnlocked(workspaceId, repositoryId, [{ kind: "create", input }]);
+    return this.withWriteLock(workspaceId, repositoryId, async service => {
+      const result = await service.applyBatchUnlocked(workspaceId, repositoryId, [{ kind: "create", input }]);
       return result[0]!.doc;
     });
   }
@@ -168,10 +184,10 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
     ref: string,
     input: UpdateRepositoryWikiDocInput,
   ): Promise<MultiremiRepositoryWikiDoc> {
-    return this.withWriteLock(workspaceId, repositoryId, async () => {
-      const current = await this.requireDocUnlocked(workspaceId, repositoryId, ref);
+    return this.withWriteLock(workspaceId, repositoryId, async service => {
+      const current = await service.requireDocUnlocked(workspaceId, repositoryId, ref);
       const expectedVersion = input.expectedVersion ?? input.expected_version ?? current.version;
-      const result = await this.applyBatchUnlocked(workspaceId, repositoryId, [{
+      const result = await service.applyBatchUnlocked(workspaceId, repositoryId, [{
         kind: "update",
         ref: current.id,
         input: { ...input, expectedVersion, expected_version: expectedVersion },
@@ -181,10 +197,10 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
   }
 
   async delete(workspaceId: string, repositoryId: string, ref: string, expectedVersion?: number | null): Promise<MultiremiRepositoryWikiDoc> {
-    return this.withWriteLock(workspaceId, repositoryId, async () => {
-      const current = await this.requireDocUnlocked(workspaceId, repositoryId, ref);
+    return this.withWriteLock(workspaceId, repositoryId, async service => {
+      const current = await service.requireDocUnlocked(workspaceId, repositoryId, ref);
       const version = expectedVersion ?? current.version;
-      const result = await this.applyBatchUnlocked(workspaceId, repositoryId, [{
+      const result = await service.applyBatchUnlocked(workspaceId, repositoryId, [{
         kind: "delete",
         ref: current.id,
         expectedVersion: version,
@@ -199,8 +215,8 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
     repositoryId: string,
     operations: readonly RepositoryWikiBatchOperation[],
   ): Promise<RepositoryWikiBatchResult[]> {
-    return this.withWriteLock(workspaceId, repositoryId, () =>
-      this.applyBatchUnlocked(workspaceId, repositoryId, operations));
+    return this.withWriteLock(workspaceId, repositoryId, service =>
+      service.applyBatchUnlocked(workspaceId, repositoryId, operations));
   }
 
   async revisions(workspaceId: string, repositoryId: string, ref: string): Promise<MultiremiRepositoryWikiDocRevision[]> {
@@ -212,6 +228,72 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
       const content = await this.requireClient().show(revision.snapshotOid, revision.contentUri);
       return { ...revision, body: decodeRepositoryWikiBody(content, { ...current, path: revision.path }) };
     }));
+  }
+
+  async move(workspaceId: string, repositoryId: string, ref: string, path: string, options: RepositoryWikiMigrationOptions = {}): Promise<RepositoryWikiBatchResult[]> {
+    return this.withWriteLock(workspaceId, repositoryId, async service => {
+      // Migration promises complete reference rewriting, so unknown outgoing
+      // links are a blocker here (unlike ordinary edits on readable documents).
+      const before = await service.listStrict(workspaceId, repositoryId);
+      const target = resolveBatchDocument(ref, before);
+      if (!target) throw new Error(`repository wiki doc not found: ${ref}`);
+      assertMigrationVersion(target, options.expectedVersion);
+      const nextPath = normalizeRepositoryWikiPath(path);
+      const after = before.map(doc => doc.id === target.id ? { ...doc, path: nextPath } : doc);
+      assertUniqueRepositoryWikiPaths(after);
+      const operations: RepositoryWikiBatchOperation[] = [];
+      for (const doc of before) {
+        const next = after.find(candidate => candidate.id === doc.id)!;
+        const body = rewriteRepositoryWikiLinks(doc.body, doc.path, next.path, before, after);
+        if (next.path === doc.path && body === doc.body) continue;
+        operations.push({ kind: "update", ref: doc.id, input: {
+          path: next.path, body, expectedVersion: doc.version,
+          updatedByType: options.updatedByType, updatedById: options.updatedById,
+        } });
+      }
+      return operations.length ? service.applyBatchUnlocked(workspaceId, repositoryId, operations) : [];
+    });
+  }
+
+  async merge(workspaceId: string, repositoryId: string, targetRef: string, sourceRefs: readonly string[], options: RepositoryWikiMigrationOptions = {}): Promise<RepositoryWikiBatchResult[]> {
+    return this.withWriteLock(workspaceId, repositoryId, async service => {
+      if (!sourceRefs.length) throw new Error("repository wiki merge sources are required");
+      const before = await service.listStrict(workspaceId, repositoryId);
+      const target = resolveBatchDocument(targetRef, before);
+      if (!target) throw new Error(`repository wiki doc not found: ${targetRef}`);
+      assertMigrationVersion(target, options.expectedVersion);
+      const sources = sourceRefs.map(ref => {
+        const source = resolveBatchDocument(ref, before);
+        if (!source) throw new Error(`repository wiki doc not found: ${ref}`);
+        return source;
+      });
+      const sourceIds = new Set(sources.map(source => source.id));
+      if (sourceIds.has(target.id) || sourceIds.size !== sources.length) throw new Error("repository wiki merge requires distinct source and target documents");
+      const mergedIds = new Map(sources.map(source => [source.id, target.id]));
+      const after = before.filter(doc => !sourceIds.has(doc.id));
+      const operations: RepositoryWikiBatchOperation[] = sources.map(source => ({
+        kind: "delete", ref: source.id, expectedVersion: source.version,
+      }));
+      for (const doc of after) {
+        let body = rewriteRepositoryWikiLinks(doc.body, doc.path, doc.path, before, after, mergedIds);
+        if (doc.id === target.id) {
+          for (const source of sources) {
+            const content = rewriteRepositoryWikiLinks(source.body, source.path, target.path, before, after, mergedIds);
+            body += `\n\n## ${source.title}\n\n${content}`;
+          }
+        }
+        if (body === doc.body && doc.id !== target.id) continue;
+        operations.push({ kind: "update", ref: doc.id, input: {
+          body, expectedVersion: doc.version,
+          ...(doc.id === target.id ? {
+            tags: [...new Set([doc, ...sources].flatMap(entry => entry.tags))],
+            refs: [...new Map([doc, ...sources].flatMap(entry => entry.refs).map(ref => [JSON.stringify(ref), ref])).values()],
+          } : {}),
+          updatedByType: options.updatedByType, updatedById: options.updatedById,
+        } });
+      }
+      return service.applyBatchUnlocked(workspaceId, repositoryId, operations);
+    });
   }
 
   async search(workspaceId: string, repositoryId: string, query: string, limit = 20): Promise<MultiremiRepositoryWikiDoc[]> {
@@ -268,7 +350,7 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
     operations: readonly RepositoryWikiBatchOperation[],
   ): Promise<RepositoryWikiBatchResult[]> {
     if (!operations.length) throw new Error("repository wiki batch operations are required");
-    if (operations.length > 256) throw new Error("repository wiki batch supports at most 256 operations");
+    if (operations.length > REPOSITORY_WIKI_BATCH_LIMIT) throw new Error(`repository wiki batch supports at most ${REPOSITORY_WIKI_BATCH_LIMIT} operations`);
 
     await this.repairDeferredCanonicalUnlocked(workspaceId, repositoryId);
     if (this.store.listRepositoryWikiStorageJobs(workspaceId, repositoryId).length) {
@@ -338,6 +420,7 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
     const after = [...afterById.values()];
     assertUniqueRepositoryWikiPaths(after);
     assertNoIntroducedRepositoryWikiLinks(before, after);
+    this.operationSignal?.throwIfAborted();
     if (this.mode === "sql") return this.store.applyRepositoryWikiBatch(storeOperations);
     return this.applyOpenVikingBatch(workspaceId, repositoryId, storeOperations, afterById);
   }
@@ -410,6 +493,7 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
           ? { ...operation, control }
           : { ...operation, control };
       });
+      this.operationSignal?.throwIfAborted();
       stored = this.store.applyRepositoryWikiBatch(controlled, storageJob).map((result) => ({
         ...result,
         doc: result.kind === "delete"
@@ -487,7 +571,7 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
     job = currentJob;
     const abort = new AbortController();
     const deadline = setTimeout(() => abort.abort(), 60_000);
-    const scopedSignal = signal ? AbortSignal.any([signal, abort.signal]) : abort.signal;
+    const scopedSignal = AbortSignal.any([abort.signal, ...[signal, this.operationSignal].filter((value): value is AbortSignal => Boolean(value))]);
     const assertLease = () => {
       scopedSignal.throwIfAborted();
       if (!this.store.renewRepositoryWikiStorageJob(job.id, token, until())) {
@@ -634,7 +718,7 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
   private async withWriteLock<T>(
     workspaceId: string,
     repositoryId: string,
-    operation: () => Promise<T>,
+    operation: (service: RepositoryWikiService) => Promise<T>,
   ): Promise<T> {
     const key = `${workspaceId}\u0000${repositoryId}`;
     const previous = this.writeQueues.get(key) ?? Promise.resolve();
@@ -642,12 +726,21 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
     const gate = new Promise<void>((resolve) => { release = resolve; });
     const tail = previous.then(() => gate);
     this.writeQueues.set(key, tail);
-    await previous;
+    // A queued caller can time out before the preceding writer exits. Keep
+    // that predecessor in the lane until the entire tail has actually settled.
+    void tail.then(() => { if (this.writeQueues.get(key) === tail) this.writeQueues.delete(key); });
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(new RepositoryWikiUnavailableError("Repository wiki write deadline exceeded")), this.writeTimeoutMs);
+    const scoped = new RepositoryWikiService(this.store, this.client ? deadlineClient(this.client, abort.signal) : null, this.mode, {
+      cleanupConcurrency: this.cleanupConcurrency, writeTimeoutMs: this.writeTimeoutMs, signal: abort.signal,
+    });
     try {
-      return await operation();
+      await abortable(previous, abort.signal);
+      abort.signal.throwIfAborted();
+      return await operation(scoped);
     } finally {
+      clearTimeout(timer);
       release();
-      if (this.writeQueues.get(key) === tail) this.writeQueues.delete(key);
     }
   }
 
@@ -702,6 +795,12 @@ function resolveBatchDocument(
   if (byId) return byId;
   const path = normalizeRepositoryWikiPath(value);
   return documents.find((document) => document.path === path) ?? null;
+}
+
+function assertMigrationVersion(doc: MultiremiRepositoryWikiDoc, expected?: number): void {
+  if (expected !== undefined && (!Number.isInteger(expected) || expected !== doc.version)) {
+    throw new Error("repository wiki version conflict");
+  }
 }
 
 function assertUniqueRepositoryWikiPaths(documents: readonly MultiremiRepositoryWikiDoc[]): void {

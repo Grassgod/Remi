@@ -6,6 +6,20 @@ import {
 } from "@multiremi/repository-wiki/links.js";
 
 describe("Repository Wiki link graph", () => {
+  it("keeps unavailable identities resolvable without trusting their unknown outgoing links", () => {
+    const before = [
+      { id: "bad", path: "bad.md", body: "stale [[unknown]]", bodyUnavailable: true },
+      { id: "known", path: "known.md", body: "[[bad]]" },
+      { id: "target", path: "target.md", body: "Target" },
+    ];
+    expect(introducedRepositoryWikiLinkProblems([], before)).toEqual([]);
+    const after = repositoryWikiGraphWithUpserts(before, [{ id: "known", path: "known.md", body: "[[bad]] [[new-broken]]" }]);
+    expect(introducedRepositoryWikiLinkProblems(before, after)).toMatchObject([{ sourceId: "known", reason: "unresolved", token: { ref: "new-broken" } }]);
+    expect(repositoryWikiBacklinks(before[0]!, before).map(doc => doc.id)).toEqual(["known"]);
+    const deleted = before.filter(doc => doc.id !== "bad");
+    expect(introducedRepositoryWikiLinkProblems(before, deleted)).toMatchObject([{ sourceId: "known", reason: "unresolved" }]);
+  });
+
   it("rejects a move that leaves a formerly valid ref unresolved", () => {
     const before = [
       { id: "source", path: "guide.md", body: "Read [[architecture/details]]." },

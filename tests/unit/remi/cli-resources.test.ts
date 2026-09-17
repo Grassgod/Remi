@@ -690,6 +690,27 @@ describe("native CLI resource contracts", () => {
     ]);
   });
 
+  it("executes repository mv and merge against server migration endpoints", async () => {
+    useCliEnv();
+    for (const [id, endpoint, args, expected] of [
+      ["wiki.repository.mv", "move", ["Remi", "guide.md", "concepts/guide.md", "--expected-version", "3"], { ref: "guide.md", path: "concepts/guide.md", expected_version: 3 }],
+      ["wiki.repository.merge", "merge", ["Remi", "guide.md", "source-a.md", "source-b.md", "--yes"], { target: "guide.md", sources: ["source-a.md", "source-b.md"] }],
+    ] as const) {
+      let body: unknown;
+      globalThis.fetch = mockFetch(id, [], async request => {
+        const path = new URL(request.url).pathname;
+        if (path === "/api/workspaces/ws_1/repos") return Response.json({ repositories: [{ id: "repo_123456", name: "Remi" }] });
+        if (path === `/api/workspaces/ws_1/repos/repo_123456/wiki/${endpoint}` && request.method === "POST") {
+          body = await request.json();
+          return Response.json({ results: [] });
+        }
+        throw new Error(`unexpected request ${request.method} ${path}`);
+      });
+      await execute(specById(id), [...args, "--output", "json"]);
+      expect(body).toMatchObject(expected);
+    }
+  });
+
   it("keeps native Repository Wiki status and push usable without a project", async () => {
     useCliEnv();
     delete process.env.MULTIREMI_PROJECT_ID;

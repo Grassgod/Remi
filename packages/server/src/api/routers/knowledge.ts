@@ -7,6 +7,7 @@ import type {
   MultiremiKnowledgeScope,
   MultiremiKnowledgeSubmission,
   RepositoryWikiBatchOperation,
+  RepositoryWikiBatchResult,
   UpdateProjectDocInput,
   UpdateRepositoryWikiDocInput,
 } from "@multiremi/contracts/types.js";
@@ -19,6 +20,7 @@ import {
 import {
   assertProjectKnowledgeTarget,
   assertRepositoryKnowledgeTarget,
+  createFormalWriteRun,
   KnowledgeWritePolicyError,
   linkSeededProjectSchema,
   knowledgePolicyErrorResponse,
@@ -32,6 +34,8 @@ import { sha256Text } from "@multiremi/project-knowledge/codec.js";
 import { resolveTaskRepositoryWikiRepositories } from "@multiremi/repository-wiki/task-scope.js";
 import { autopilotRunTriggerSummary } from "../wire/autopilots.js";
 import { createId } from "@multiremi/ids.js";
+import { REPOSITORY_WIKI_BATCH_LIMIT, RepositoryWikiUnavailableError } from "@multiremi/repository-wiki/service.js";
+import { authenticatedRequestUserId } from "../wire/index.js";
 import { resolveProjectWikiRef, tokenizeWikiLinks } from "@multiremi/contracts/wiki-links";
 import {
   assertNoIntroducedRepositoryWikiLinks,
@@ -87,6 +91,51 @@ interface RepositoryMergedBody {
 
 export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
   const { store, projectKnowledge, repositoryWiki } = deps;
+
+  const migrateRepository = async (c: Parameters<typeof resolveKnowledgeWriteActor>[0], kind: "move" | "merge") => {
+    const workspaceId = c.req.param("id")!;
+    const repositoryId = c.req.param("repositoryId")!;
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    if (!hasRepository(store, workspaceId, repositoryId)) return c.json({ error: "repository not found" }, 404);
+    const body = await readJsonStrict<{ ref?: string; path?: string; target?: string; sources?: string[]; expected_version?: number }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    let runId: string | null = null;
+    try {
+      const actor = resolveKnowledgeWriteActor(c, store);
+      assertRepositoryKnowledgeTarget(actor, store, repositoryId);
+      requirePublisherOrMember(c, store);
+      const options = {
+        expectedVersion: body.expected_version,
+        updatedByType: actor.kind,
+        updatedById: actor.agent?.id ?? authenticatedRequestUserId(c),
+      };
+      const ref = required(kind === "move" ? body.ref : body.target, kind === "move" ? "ref" : "target");
+      if (kind === "merge" && (!Array.isArray(body.sources) || !body.sources.length || body.sources.some(ref => typeof ref !== "string" || !ref.trim()))) {
+        throw new KnowledgeWritePolicyError("sources must contain document references", 400);
+      }
+      const path = kind === "move" ? normalizeRepositoryWikiPath(required(body.path, "path")) : "";
+      runId = createFormalWriteRun({ store, actor, workspaceId, repositoryId, scope: "repository_wiki" }).id;
+      const results: RepositoryWikiBatchResult[] = kind === "move"
+        ? await repositoryWiki.move(workspaceId, repositoryId, ref, path, options)
+        : await repositoryWiki.merge(workspaceId, repositoryId, ref, body.sources!, options);
+      for (const result of results) {
+        const output = { runId, artifactScope: "repository_wiki" as const, docId: result.doc.id,
+          version: result.doc.version, contentSha256: result.doc.contentSha256 ?? sha256Text(result.doc.body) };
+        if (result.kind === "delete") store.recordKnowledgeCompilationOutput({ ...output, action: "reject" });
+        else store.linkKnowledgeFormalVersion({ ...output, action: kind === "merge" ? "merge" : "update" });
+      }
+      const run = store.completeKnowledgeCompilationRun(runId, "published", `${kind}: ${results.length} document(s)`);
+      return c.json({ run: runResponse(store, run), results: results.map(({ kind, doc }) => ({ kind, doc: {
+        id: doc.id, path: doc.path, title: doc.title, body: doc.body, version: doc.version, compilation_run_id: runId,
+      } })) });
+    } catch (error) {
+      if (runId) store.completeKnowledgeCompilationRun(runId, "failed", error instanceof Error ? error.message : "migration failed");
+      return knowledgeError(c, error);
+    }
+  };
+  app.post("/api/workspaces/:id/repos/:repositoryId/wiki/move", c => migrateRepository(c, "move"));
+  app.post("/api/workspaces/:id/repos/:repositoryId/wiki/merge", c => migrateRepository(c, "merge"));
 
   app.post("/api/knowledge/submissions", async (c) => {
     const body = await readJsonStrict<KnowledgeSubmitBody>(c);
@@ -306,7 +355,7 @@ export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
     try {
       const actor = requireAtlasActor(c, store);
       assertRepositoryKnowledgeTarget(actor, store, repositoryId);
-      const outputs = publishOutputs(body);
+      const outputs = publishOutputs(body, REPOSITORY_WIKI_BATCH_LIMIT);
       const submissions = requirePublishSubmissions(store, body.submission_ids, {
         workspaceId,
         repositoryId,
@@ -590,10 +639,10 @@ function compiledSourceRevision(actorRevision: string | null, submissions: Multi
   return revisions.length === 1 ? revisions[0]! : null;
 }
 
-function publishOutputs(body: PublishBody): PublishOutputBody[] {
+function publishOutputs(body: PublishBody, limit = 50): PublishOutputBody[] {
   const outputs = Array.isArray(body.outputs) ? body.outputs : body.output ? [body.output] : [];
   if (outputs.length === 0) throw new KnowledgeWritePolicyError("outputs is required", 400);
-  if (outputs.length > 256) throw new KnowledgeWritePolicyError("outputs must contain 256 entries or fewer", 400);
+  if (outputs.length > limit) throw new KnowledgeWritePolicyError(`outputs must contain ${limit} entries or fewer`, 400);
   return outputs;
 }
 
@@ -966,6 +1015,8 @@ function knowledgeError(c: Parameters<typeof knowledgePolicyErrorResponse>[0], e
   const policy = knowledgePolicyErrorResponse(c, error);
   if (policy) return policy;
   const message = error instanceof Error ? error.message : "knowledge request failed";
+  if (error instanceof RepositoryWikiUnavailableError) return c.json({ error: message }, 503);
+  if (error instanceof RepositoryWikiLinkValidationError) return c.json({ error: message }, 409);
   if (/not found/i.test(message)) return c.json({ error: message }, 404);
   if (/conflict|duplicate|already/i.test(message)) return c.json({ error: message }, 409);
   return c.json({ error: message }, 400);

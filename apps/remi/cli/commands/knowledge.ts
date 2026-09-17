@@ -284,6 +284,23 @@ function repositoryWikiSpecs(): CommandSpec[] {
       const response = await target.client.request({ method: "DELETE", path: target.path, query: { expected_version: integerOption(invocation, "expected-version") } });
       renderResource(invocation, response.data);
     }),
+    spec("wiki.repository.mv", ["wiki", "repository", "mv"], "Move a repository Wiki page and rewrite its references atomically", "write", [refPositional("repository"), refPositional("document"), refPositional("new-path")], [{ name: "expected-version", type: "integer", valueName: "n", description: "Expected source document version" }], async (invocation) => {
+      const target = await requestPath(invocation, repositoryRef(invocation, 0), "/move");
+      const response = await target.client.request({ method: "POST", path: target.path, body: {
+        ref: positional(invocation, 1, "document"), path: positional(invocation, 2, "new-path"),
+        expected_version: integerOption(invocation, "expected-version"),
+      } });
+      renderResource(invocation, response.data);
+    }),
+    spec("wiki.repository.merge", ["wiki", "repository", "merge"], "Merge repository Wiki pages into a stable target and rewrite references atomically", "destructive", [refPositional("repository"), refPositional("target"), { name: "source", required: true, variadic: true }], [YES_OPTION, { name: "expected-version", type: "integer", valueName: "n", description: "Expected target document version" }], async (invocation) => {
+      requireConfirmation(invocation);
+      const target = await requestPath(invocation, repositoryRef(invocation, 0), "/merge");
+      const response = await target.client.request({ method: "POST", path: target.path, body: {
+        target: positional(invocation, 1, "target"), sources: invocation.positionals.slice(2),
+        expected_version: integerOption(invocation, "expected-version"),
+      } });
+      renderResource(invocation, response.data);
+    }),
     spec("wiki.repository.revisions", ["wiki", "repository", "revisions"], "List repository Wiki document revisions", "read", [refPositional("repository"), refPositional("document")], [], async (invocation) => {
       const target = await requestPath(invocation, repositoryRef(invocation, 0), `/${encodePath(positional(invocation, 1, "document"))}/revisions`);
       const response = await target.client.request({ method: "GET", path: target.path });

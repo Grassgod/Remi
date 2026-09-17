@@ -168,12 +168,14 @@ describe("CLI capabilities manifest", () => {
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 651,
+      mapped: 653,
       exempt: 91,
       missing: 0,
-      total: 742,
+      total: 744,
     });
     expect(manifest.max_planned_routes).toBe(0);
+    expect(manifest.routes["POST /api/workspaces/:id/repos/:repositoryId/wiki/move"]).toEqual({ command: "wiki.repository.mv" });
+    expect(manifest.routes["POST /api/workspaces/:id/repos/:repositoryId/wiki/merge"]).toEqual({ command: "wiki.repository.merge" });
     expect(manifest.routes["POST /api/chat/attachments/send"]).toEqual({ command: "chat.attachment.send" });
     expect(manifest.commands["chat.attachment.send"]?.auth).toEqual(["task"]);
     expect(manifest.routes["POST /api/daemon/runtimes/:runtimeId/feishu-bot/attachments"])

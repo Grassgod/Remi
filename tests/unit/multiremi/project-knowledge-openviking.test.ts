@@ -117,7 +117,92 @@ class FakeOpenViking implements OpenVikingClientContract {
   }
 }
 
-describe("project knowledge URIs", () => {
+describe("Repository Wiki availability and migration safeguards", () => {
+  it("publishes beside a missing object and marks a timed-out publication failed instead of validating", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    store.updateWorkspaceRepositories("local", [{ id: "repo_publish_degraded", name: "publish-degraded", url: "https://github.com/acme/publish-degraded.git", source: "github", default_branch: "main" }]);
+    const client = new FakeOpenViking();
+    const service = new RepositoryWikiService(store, client, "openviking", { writeTimeoutMs: 50 });
+    const missing = await service.create("local", "repo_publish_degraded", { path: "missing.md", title: "Missing", body: "Original" });
+    const target = await service.create("local", "repo_publish_degraded", { path: "target.md", title: "Target", body: "Original" });
+    await service.runStorageJobs();
+    client.files.delete(missing.contentUri!);
+    const { agent, autopilot } = configureRepositoryWikiAutomation(store);
+    const automation = store.runAutopilot(autopilot.id, { source: "scm_event", repositoryId: "repo_publish_degraded", dedupeKey: "repo_publish_degraded:incremental_update:test", payload: { repository_wiki_repository_id: "repo_publish_degraded" } });
+    const task = store.getTask(automation.taskId!)!;
+    const credential = await store.createTaskAccessToken(task, "local");
+    const app = createMultiremiApp({ store, repositoryWiki: service, authToken: "root-secret" });
+    const publish = (key: string, version: number) => {
+      const source = store.createKnowledgeSubmission({ workspaceId: "local", repositoryId: "repo_publish_degraded", scope: "repository_wiki", sourceType: "agent", body: `New facts for ${key}`, sourceTaskId: task.id, authorAgentId: agent.id }).submission;
+      return app.request("/api/workspaces/local/repos/repo_publish_degraded/wiki/publish", {
+        method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${credential.token}` },
+        body: JSON.stringify({ submission_ids: [source.id], dedupe_key: key, output: { action: "update", ref: target.id, expected_version: version, body: "New facts [[missing]]" } }),
+      });
+    };
+    expect((await publish("degraded-publish", 1)).status).toBe(200);
+    const create = client.create.bind(client);
+    client.create = async () => new Promise(() => {});
+    const response = await publish("timeout-publish", 2);
+    expect(response.status).toBe(503);
+    expect((await response.json() as any).error).toContain("deadline exceeded");
+    const runs = store.listKnowledgeCompilationRunsPage({ workspaceId: "local", repositoryId: "repo_publish_degraded" }).items;
+    expect(runs.find(run => run.dedupeKey === "timeout-publish")?.status).toBe("failed");
+    expect(store.getRepositoryWikiDocByRef("local", "repo_publish_degraded", target.id)?.version).toBe(2);
+    client.create = create;
+    expect((await publish("after-timeout", 2)).status).toBe(200);
+  });
+
+  it("bounds a hung write, releases the repository lane and fences late metadata commits", async () => {
+    const store = createStore();
+    const client = new FakeOpenViking();
+    const service = new RepositoryWikiService(store, client, "openviking", { writeTimeoutMs: 50 });
+    const target = await service.create("local", "repo_deadline", { path: "target.md", title: "Target", body: "Original" });
+    await service.runStorageJobs();
+    const create = client.create.bind(client);
+    let finishLate!: () => void;
+    client.create = async (uri, root, content) => {
+      await new Promise<void>(resolve => { finishLate = resolve; });
+      await create(uri, root, content);
+    };
+    await expect(service.update("local", "repo_deadline", target.id, { body: "Timed out" })).rejects.toThrow("write deadline exceeded");
+    expect(store.getRepositoryWikiDocByRef("local", "repo_deadline", target.id)?.version).toBe(1);
+    client.create = create;
+    const recovered = await service.update("local", "repo_deadline", target.id, { body: "Recovered" });
+    expect(recovered).toMatchObject({ version: 2, body: "Recovered" });
+    finishLate();
+    await Bun.sleep(5);
+    expect(await service.get("local", "repo_deadline", target.id)).toMatchObject({ version: 2, body: "Recovered" });
+  });
+
+  it("refuses migration when outgoing links are unknown and rolls back failed move/merge staging", async () => {
+    const store = createStore();
+    const client = new FakeOpenViking();
+    const service = new RepositoryWikiService(store, client, "openviking");
+    const target = await service.create("local", "repo_migrate", { path: "target.md", title: "Target", body: "Target" });
+    const source = await service.create("local", "repo_migrate", { path: "source.md", title: "Source", body: "Source" });
+    const incoming = await service.create("local", "repo_migrate", { path: "index.md", title: "Index", body: "[[./target]] [[source]]" });
+    await service.runStorageJobs();
+    client.failReadUris.add(incoming.contentUri!);
+    await expect(service.move("local", "repo_migrate", target.id, "guides/target.md")).rejects.toThrow("unreadable");
+    await expect(service.merge("local", "repo_migrate", target.id, [source.id])).rejects.toThrow("unreadable");
+    client.failReadUris.clear();
+    const before = new Map(client.files);
+    client.failWriteAt = client.writeAttempts + 2;
+    await expect(service.move("local", "repo_migrate", target.id, "guides/target.md")).rejects.toThrow("planned OpenViking write failure");
+    expect(client.files).toEqual(before);
+    expect(store.getRepositoryWikiDocByRef("local", "repo_migrate", target.id)?.path).toBe("target.md");
+    client.failWriteAt = client.writeAttempts + 2;
+    await expect(service.merge("local", "repo_migrate", target.id, [source.id])).rejects.toThrow("planned OpenViking write failure");
+    expect(client.files).toEqual(before);
+    expect(store.getRepositoryWikiDocByRef("local", "repo_migrate", source.id)?.version).toBe(1);
+    client.failWriteAt = null;
+    await service.move("local", "repo_migrate", target.id, "guides/target.md");
+    await service.merge("local", "repo_migrate", target.id, [source.id]);
+    expect(await service.get("local", "repo_migrate", target.id)).toMatchObject({ id: target.id, path: "guides/target.md", version: 3 });
+    expect((await service.backlinks("local", "repo_migrate", target.id)).map(doc => doc.id)).toEqual([incoming.id]);
+  });
+
   it("keeps unrelated repository writes and backlinks available when a stored object is missing", async () => {
     const store = createStore();
     const client = new FakeOpenViking();
@@ -139,6 +224,9 @@ describe("project knowledge URIs", () => {
     expect((await service.list("local", "repo_degraded"))[0]).toMatchObject({ id: missing.id, status: "failed", bodyUnavailable: true });
   });
 
+});
+
+describe("project knowledge URIs", () => {
   it("rejects path traversal and cross-project URI decoding", () => {
     expect(() => projectKnowledgeDocUri({ workspaceId: "../foreign", projectId: "p1", kind: "wiki", slug: "page" }))
       .toThrow("invalid workspaceId");
@@ -691,7 +779,7 @@ describe("RepositoryWikiService OpenViking mode", () => {
       .toEqual([source.id]);
   });
 
-  it("fails closed when a Repository Wiki body cannot be read for graph operations", async () => {
+  it("isolates unreadable graph sources while failing closed for touched bodies and new broken links", async () => {
     const store = createStore();
     const client = new FakeOpenViking();
     const service = new RepositoryWikiService(store, client, "openviking");
@@ -703,14 +791,26 @@ describe("RepositoryWikiService OpenViking mode", () => {
     });
     client.failReadUris.add(source.contentUri!);
 
-    await expect(service.backlinks("local", "repo_alpha", target.id))
-      .rejects.toThrow("planned unreadable content");
-    await expect(service.applyBatch("local", "repo_alpha", [{
+    // MUL-316 changes the ordinary-write contract; listStrict and all writes
+    // to the unreadable source must still fail closed.
+    expect(await service.backlinks("local", "repo_alpha", target.id)).toEqual([]);
+    await expect(service.listStrict("local", "repo_alpha")).rejects.toThrow("planned unreadable content");
+    const result = await service.applyBatch("local", "repo_alpha", [{
       kind: "update",
       ref: target.id,
-      input: { body: "Must not publish", expected_version: target.version },
+      input: { body: "Independent update", expected_version: target.version },
+    }]);
+    expect(result[0]?.doc).toMatchObject({ id: target.id, version: 2, body: "Independent update" });
+    await expect(service.applyBatch("local", "repo_alpha", [{
+      kind: "update", ref: source.id,
+      input: { body: "Must not overwrite an unreadable source", expected_version: source.version },
     }])).rejects.toThrow("planned unreadable content");
-    expect(store.getRepositoryWikiDocByRef("local", "repo_alpha", target.id)).toMatchObject({ version: 1 });
+    await expect(service.applyBatch("local", "repo_alpha", [{
+      kind: "update", ref: target.id,
+      input: { body: "[[new-broken]]", expected_version: 2 },
+    }])).rejects.toThrow("unresolved repository wiki link");
+    expect(store.getRepositoryWikiDocByRef("local", "repo_alpha", target.id)).toMatchObject({ version: 2 });
+    expect(store.getRepositoryWikiDocByRef("local", "repo_alpha", source.id)).toMatchObject({ version: 1 });
   });
 
   it("compensates staged OpenViking writes when a repository batch fails before metadata commit", async () => {

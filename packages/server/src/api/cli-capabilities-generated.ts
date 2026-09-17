@@ -1594,6 +1594,32 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "wiki.repository.mv": {
+      "command": "remi wiki repository mv",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.repository.mv",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "wiki.repository.merge": {
+      "command": "remi wiki repository merge",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.repository.merge",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "wiki.repository.revisions": {
       "command": "remi wiki repository revisions",
       "auth": [

@@ -2261,6 +2261,40 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "wiki.repository.mv": {
+      "command": "remi wiki repository mv",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.repository.mv",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "wiki.repository.merge": {
+      "command": "remi wiki repository merge",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.repository.merge",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "wiki.repository.revisions": {
       "command": "remi wiki repository revisions",
       "aliases": [],
@@ -11646,6 +11680,12 @@
     },
     "POST /api/workspaces/:id/repos/:repositoryId/wiki/build": {
       "command": "wiki.repository.build"
+    },
+    "POST /api/workspaces/:id/repos/:repositoryId/wiki/merge": {
+      "command": "wiki.repository.merge"
+    },
+    "POST /api/workspaces/:id/repos/:repositoryId/wiki/move": {
+      "command": "wiki.repository.mv"
     },
     "POST /api/workspaces/:id/repos/:repositoryId/wiki/publish": {
       "command": "wiki.publish"
