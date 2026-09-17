@@ -985,6 +985,69 @@ git interpret-trailers --in-place --trailer "User-Hook: preserved" "$1"
     }
   });
 
+  it("warns once for each executable excluded host hook with its path and reason", async () => {
+    const source = createRepo("main", "excluded host hooks");
+    const hostHooksPath = tempDir("multiremi-excluded-hooks-");
+    for (const name of ["push-to-checkout", "reference-transaction"]) {
+      writeFileSync(join(hostHooksPath, name), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    }
+    await withHostHooksPath(hostHooksPath, async () => {
+      const cache = new MultiremiRepoCache(tempDir("multiremi-excluded-cache-"));
+      await cache.sync("local", [{ url: source }]);
+      const warn = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const result = await cache.createWorktree({
+          workspaceId: "local", repoUrl: source, workDir: tempDir("multiremi-excluded-work-"),
+          taskId: "tsk_excluded_hooks",
+        });
+        expect(warn).toHaveBeenCalledTimes(2);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("Skipping excluded host Git hook"), {
+          hookName: "push-to-checkout", hostHooksPath,
+          hostHookPath: join(hostHooksPath, "push-to-checkout"),
+          reason: expect.stringContaining("replaces the default index/worktree update for receive.denyCurrentBranch=updateInstead"),
+        });
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("Skipping excluded host Git hook"), {
+          hookName: "reference-transaction", hostHooksPath,
+          hostHookPath: join(hostHooksPath, "reference-transaction"),
+          reason: expect.stringContaining("1000-ref fetch benchmark measured a 31.34x slowdown"),
+        });
+        for (const name of ["push-to-checkout", "reference-transaction"]) {
+          expect(existsSync(join(dirname(prepareCommitMsgHookPath(result.path)), name))).toBe(false);
+        }
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  });
+
+  it.each(["absent", "non-executable", "directory"] as const)("does not warn for %s excluded host hooks", async (kind) => {
+    const source = createRepo("main", "inactive excluded host hooks");
+    const hostHooksPath = tempDir("multiremi-inactive-excluded-hooks-");
+    await withHostHooksPath(hostHooksPath, async () => {
+      const cache = new MultiremiRepoCache(tempDir("multiremi-inactive-excluded-cache-"));
+      await cache.sync("local", [{ url: source }]);
+      const params = {
+        workspaceId: "local", repoUrl: source, workDir: tempDir("multiremi-inactive-excluded-work-"),
+        taskId: "tsk_inactive_excluded_hooks", reuseExisting: true,
+      };
+      await cache.createWorktree(params);
+      // Add invalid hooks after the pin exists: Git itself tries to execute a
+      // reference-transaction directory during clone before we can install it.
+      for (const name of ["push-to-checkout", "reference-transaction"]) {
+        const hookPath = join(hostHooksPath, name);
+        if (kind === "non-executable") writeFileSync(hookPath, "#!/bin/sh\nexit 0\n", { mode: 0o644 });
+        if (kind === "directory") mkdirSync(hookPath);
+      }
+      const warn = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        await cache.createWorktree(params);
+        expect(warn).not.toHaveBeenCalled();
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  });
+
   it("forwards a host pre-commit rejection without changing HEAD or its hook exit code", async () => {
     const source = createRepo("main", "pre-commit rejection");
     const hostHooksPath = tempDir("multiremi-reject-hooks-");

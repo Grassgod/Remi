@@ -140,6 +140,10 @@ const HOST_FORWARDED_GIT_HOOKS = [
   "sendemail-validate", "fsmonitor-watchman", "p4-changelist",
   "p4-prepare-changelist", "p4-post-changelist", "p4-pre-submit", "post-index-change",
 ] as const;
+const EXCLUDED_HOST_GIT_HOOKS = {
+  "push-to-checkout": "Its presence replaces the default index/worktree update for receive.denyCurrentBranch=updateInstead",
+  "reference-transaction": "A 1000-ref fetch benchmark measured a 31.34x slowdown (57.55ms -> 1803.59ms) with an empty forwarding shim",
+} as const;
 const LEGACY_DAEMON_HOOK_SIGNATURES = [
   "# multimira:prepare-commit-msg:co-authored-by",
   "# Installed by the Multimira daemon.",
@@ -1136,21 +1140,34 @@ function resolveHostHooksPath(worktreePath: string, hooksPath: string): string |
 function hostPrepareCommitMsgHookPath(hostHooksPath: string | null, hookPath: string): string | null {
   if (!hostHooksPath) return null;
   const hostHookPath = join(hostHooksPath, "prepare-commit-msg");
-  if (!existsSync(hostHookPath) || !statSync(hostHookPath).isFile()) return null;
+  if (!isExecutableHook(hostHookPath)) return null;
   // A host setting can point back at this cache, including through a symlink.
   if (existsSync(hookPath) && realpathSync(hostHookPath) === realpathSync(hookPath)) return null;
-  try {
-    accessSync(hostHookPath, constants.X_OK);
-  } catch {
-    return null;
-  }
   return hostHookPath;
+}
+
+function isExecutableHook(hookPath: string): boolean {
+  if (!existsSync(hookPath) || !statSync(hookPath).isFile()) return false;
+  try {
+    accessSync(hookPath, constants.X_OK);
+  } catch {
+    return false;
+  }
+  return true;
 }
 
 function installHostHookShims(hooksPath: string, hostHooksPath: string | null): void {
   if (!hostHooksPath) {
     removeHostHookShims(hooksPath);
     return;
+  }
+  for (const [hookName, reason] of Object.entries(EXCLUDED_HOST_GIT_HOOKS)) {
+    const hostHookPath = join(hostHooksPath, hookName);
+    if (isExecutableHook(hostHookPath)) {
+      log.warn("Skipping excluded host Git hook; host forwarding not installed", {
+        hookName, hostHooksPath, hostHookPath, reason,
+      });
+    }
   }
   for (const name of HOST_FORWARDED_GIT_HOOKS) {
     const hookPath = join(hooksPath, name);
