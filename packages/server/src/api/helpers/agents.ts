@@ -193,7 +193,9 @@ function validateAgentModelSelection(
   }
   if (!supportedLevels.some((level) => level.value === input.thinkingLevel)) {
     return c.json({
-      error: `thinking_level "${input.thinkingLevel}" is not supported by model "${input.model || "default"}" for provider "${input.provider}"`,
+      // Name the concrete model whenever one is identifiable; "default" is
+      // reserved for the provider-default capability, which has no model id.
+      error: `thinking_level "${input.thinkingLevel}" is not supported by model "${input.model || selectedModel?.id || "default"}" for provider "${input.provider}"`,
     }, 400);
   }
   return null;
