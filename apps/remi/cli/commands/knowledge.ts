@@ -14,6 +14,7 @@ import {
   encodePath,
   integerOption,
   positional,
+  outputMode,
   queryOptions,
   renderResource,
   requestBody,
@@ -114,7 +115,7 @@ function knowledgeControlPlaneSpecs(): CommandSpec[] {
     }),
     spec("knowledge.submissions", ["knowledge", "submissions"], "List raw knowledge submissions", "read", [], [...scopeOptions, ...PAGE_OPTIONS], async (invocation) => {
       const client = await clientFor(invocation);
-      const project = await resolvedProjectOption(invocation, client);
+      const project = await resolvedProjectOption(invocation, client, false, true);
       const repository = await resolvedRepositoryOption(invocation, client);
       const response = await client.request({
         method: "GET",
@@ -127,6 +128,9 @@ function knowledgeControlPlaneSpecs(): CommandSpec[] {
           status: stringOption(invocation, "status"),
         }),
       });
+      if (outputMode(invocation) !== "json") {
+        console.error(`Filters (intersection): workspace=${requiredWorkspace(invocation)}, project=${project?.id ?? "*"}, repository=${repository?.id ?? "*"}, scope=${stringOption(invocation, "scope") ?? "*"}, status=${stringOption(invocation, "status") ?? "*"}`);
+      }
       renderResource(invocation, response.data, ["submissions"]);
     }),
     spec("knowledge.inspect", ["knowledge", "inspect"], "Inspect one raw knowledge submission", "read", [refPositional("submission")], [], async (invocation) => {
@@ -138,7 +142,7 @@ function knowledgeControlPlaneSpecs(): CommandSpec[] {
     }),
     spec("knowledge.runs", ["knowledge", "runs"], "List knowledge compilation runs", "read", [], [PROJECT_OPTION, REPOSITORY_OPTION, { name: "status", type: "string", valueName: "status", description: "Compilation run status" }, ...PAGE_OPTIONS], async (invocation) => {
       const client = await clientFor(invocation);
-      const project = await resolvedProjectOption(invocation, client);
+      const project = await resolvedProjectOption(invocation, client, false, true);
       const repository = await resolvedRepositoryOption(invocation, client);
       const response = await client.request({
         method: "GET",
@@ -299,6 +303,18 @@ function repositoryWikiSpecs(): CommandSpec[] {
         target: positional(invocation, 1, "target"), sources: invocation.positionals.slice(2),
         expected_version: integerOption(invocation, "expected-version"),
       } });
+      renderResource(invocation, response.data);
+    }),
+    spec("wiki.repository.restore", ["wiki", "repository", "restore"], "Restore pinned missing Wiki objects from snapshots (defaults to dry-run)", "write", [refPositional("repository")], [
+      ...INPUT_OPTIONS, { ...YES_OPTION, description: "Apply the recovery; otherwise only preflight", conflictsWith: ["dry-run"] },
+      { name: "dry-run", type: "boolean", description: "Verify all targets without changing storage objects", conflictsWith: ["yes"] },
+    ], async invocation => {
+      const body = await requestBody(invocation, { dry_run: !booleanOption(invocation, "yes") });
+      if (!Array.isArray(body.targets) || !body.targets.length) {
+        throw new CliError("usage", "restore requires --file or --data with targets [{ref, expected_version, snapshot_oid, content_sha256}]");
+      }
+      const target = await requestPath(invocation, repositoryRef(invocation, 0), "/restore");
+      const response = await target.client.request({ method: "POST", path: target.path, body });
       renderResource(invocation, response.data);
     }),
     spec("wiki.repository.revisions", ["wiki", "repository", "revisions"], "List repository Wiki document revisions", "read", [refPositional("repository"), refPositional("document")], [], async (invocation) => {
@@ -561,8 +577,12 @@ async function resolvedProjectOption(
   invocation: CommandInvocation,
   client: Awaited<ReturnType<typeof clientFor>>,
   required = false,
+  repositoryQuery = false,
 ) {
-  const ref = projectOption(invocation);
+  // An explicit repository must not inherit the current Issue's project:
+  // repository Raw commonly has project_id=null and the API intersects filters.
+  const ref = repositoryQuery && stringOption(invocation, "repo") && !stringOption(invocation, "project")
+    ? null : projectOption(invocation);
   if (!ref) {
     if (required) throw new CliError("usage", `--project is required for ${invocation.spec.path.join(" ")}`);
     return null;

@@ -690,6 +690,55 @@ describe("native CLI resource contracts", () => {
     ]);
   });
 
+  it("restores pinned repository objects through the API and defaults to dry-run even with input dry_run=false", async () => {
+    useCliEnv();
+    const spec = specById("wiki.repository.restore");
+    const targets = [{ ref: "rwdoc_1", expected_version: 1, snapshot_oid: "snapshot_1", content_sha256: "a".repeat(64) }];
+    const sent: any[] = [];
+    globalThis.fetch = mockFetch(spec.id, [], async request => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/workspaces/ws_1/repos") return Response.json({ repositories: [{ id: "repo_123456", name: "Remi" }] });
+      if (path === "/api/workspaces/ws_1/repos/repo_123456/wiki/restore" && request.method === "POST") {
+        sent.push(await request.json());
+        return Response.json({ results: [] });
+      }
+      throw new Error(`unexpected request ${request.method} ${path}`);
+    });
+    const data = JSON.stringify({ targets, dry_run: false });
+    await execute(spec, ["Remi", "--data", data, "--output", "json"]);
+    await execute(spec, ["Remi", "--data", data, "--yes", "--output", "json"]);
+    expect(sent).toEqual([{ targets, dry_run: true }, { targets, dry_run: false }]);
+    await expect(execute(spec, ["Remi", "--data", data, "--yes", "--dry-run"])).rejects.toThrow();
+    expect(sent).toHaveLength(2);
+  });
+
+  it("does not silently intersect repository knowledge queries with the inherited Issue project", async () => {
+    useCliEnv();
+    process.env.MULTIREMI_PROJECT_ID = "prj_ambient";
+    for (const id of ["knowledge.submissions", "knowledge.runs"]) {
+      const queries: URLSearchParams[] = [];
+      globalThis.fetch = mockFetch(id, [], async request => {
+        const url = new URL(request.url);
+        if (url.pathname === "/api/workspaces/ws_1/repos") return Response.json({ repositories: [{ id: "repo_123456", name: "Remi" }] });
+        if (url.pathname === "/api/projects") return Response.json({ projects: [{ id: "prj_ambient", title: "Ambient" }] });
+        if (url.pathname.startsWith("/api/projects/prj_ambient")) return Response.json({ id: "prj_ambient", title: "Ambient" });
+        if (url.pathname === `/api/knowledge/${id === "knowledge.submissions" ? "submissions" : "runs"}`) {
+          queries.push(url.searchParams);
+          return Response.json({ submissions: [], runs: [], next_cursor: null });
+        }
+        throw new Error(`unexpected request ${request.method} ${url.pathname}`);
+      });
+      await execute(specById(id), ["--repo", "Remi", "--output", "json"]);
+      expect(queries[0]!.get("repository_id")).toBe("repo_123456");
+      expect(queries[0]!.has("project_id")).toBe(false);
+      await execute(specById(id), ["--repo", "Remi", "--project", "prj_ambient", "--output", "json"]);
+      expect(queries[1]!.get("project_id")).toBe("prj_ambient");
+      expect(queries[1]!.get("repository_id")).toBe("repo_123456");
+      await execute(specById(id), ["--output", "json"]);
+      expect(queries[2]!.get("project_id")).toBe("prj_ambient");
+    }
+  });
+
   it("executes repository mv and merge against server migration endpoints", async () => {
     useCliEnv();
     for (const [id, endpoint, args, expected] of [

@@ -16,6 +16,7 @@ import {
   denyCurrentUserWorkspaceAccess,
   isJsonApiError,
   readJsonStrict,
+  requireWorkspaceAdmin,
 } from "../helpers.js";
 import {
   assertProjectKnowledgeTarget,
@@ -34,7 +35,7 @@ import { sha256Text } from "@multiremi/project-knowledge/codec.js";
 import { resolveTaskRepositoryWikiRepositories } from "@multiremi/repository-wiki/task-scope.js";
 import { autopilotRunTriggerSummary } from "../wire/autopilots.js";
 import { createId } from "@multiremi/ids.js";
-import { assertRepositoryWikiPathChangesReadable, REPOSITORY_WIKI_BATCH_LIMIT, RepositoryWikiUnavailableError } from "@multiremi/repository-wiki/service.js";
+import { assertRepositoryWikiPathChangesReadable, REPOSITORY_WIKI_BATCH_LIMIT, RepositoryWikiUnavailableError, RepositoryWikiRestoreConflictError, RepositoryWikiRestoreInputError, type RepositoryWikiRestoreTarget, type RepositoryWikiRestoreResult } from "@multiremi/repository-wiki/service.js";
 import { authenticatedRequestUserId } from "../wire/index.js";
 import { resolveProjectWikiRef, tokenizeWikiLinks } from "@multiremi/contracts/wiki-links";
 import {
@@ -137,6 +138,52 @@ export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/workspaces/:id/repos/:repositoryId/wiki/move", c => migrateRepository(c, "move"));
   app.post("/api/workspaces/:id/repos/:repositoryId/wiki/merge", c => migrateRepository(c, "merge"));
 
+  app.post("/api/workspaces/:id/repos/:repositoryId/wiki/restore", async c => {
+    const workspaceId = c.req.param("id");
+    const repositoryId = c.req.param("repositoryId");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    let runId: string | null = null;
+    let audit: Record<string, unknown> = {};
+    try {
+      const actor = resolveKnowledgeWriteActor(c, store);
+      assertRepositoryKnowledgeTarget(actor, store, repositoryId);
+      if (actor.task) requirePublisherOrMember(c, store);
+      else {
+        const adminDenied = requireWorkspaceAdmin(c, store, workspaceId);
+        if (adminDenied) return adminDenied;
+      }
+      if (!hasRepository(store, workspaceId, repositoryId)) return c.json({ error: "repository not found" }, 404);
+      const body = await readJsonStrict<{ targets: RepositoryWikiRestoreTarget[]; dry_run?: boolean }>(c);
+      if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+      if (body.dry_run !== undefined && typeof body.dry_run !== "boolean") {
+        throw new KnowledgeWritePolicyError("dry_run must be a boolean", 400);
+      }
+      const dryRun = body.dry_run !== false;
+      audit = { operation: "repository_wiki_restore", dry_run: dryRun, targets: body.targets,
+        actor: { kind: actor.kind, user_id: authenticatedRequestUserId(c),
+          task_id: actor.task?.id ?? null, agent_id: actor.agent?.id ?? null } };
+      runId = createFormalWriteRun({ store, actor, workspaceId, repositoryId, scope: "repository_wiki" }).id;
+      store.completeKnowledgeCompilationRun(runId, "validating", JSON.stringify(audit));
+      const report = await repositoryWiki.restore(workspaceId, repositoryId, body.targets, {
+        dryRun, auditId: runId,
+        onProgress: (results: RepositoryWikiRestoreResult[]) => {
+          audit = { ...audit, results };
+          store.completeKnowledgeCompilationRun(runId!, "validating", JSON.stringify(audit));
+        },
+      });
+      // Storage recovery is not a new publication. Do not relink the formal
+      // version or count this maintenance operation as published content.
+      const run = store.completeKnowledgeCompilationRun(runId, "noop", JSON.stringify({ ...audit, ...report }));
+      return c.json({ ...report, run: runResponse(store, run) });
+    } catch (error) {
+      if (runId) store.completeKnowledgeCompilationRun(runId, "failed", JSON.stringify({
+        ...audit, error: error instanceof Error ? error.message : "restore failed",
+      }));
+      return knowledgeError(c, error);
+    }
+  });
+
   app.post("/api/knowledge/submissions", async (c) => {
     const body = await readJsonStrict<KnowledgeSubmitBody>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
@@ -201,6 +248,11 @@ export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
       return c.json({
         submissions: page.items.map((submission) => submissionResponse(store, submission)),
         next_cursor: page.nextCursor,
+        applied_filters: {
+          workspace_id: workspaceId, project_id: clean(c.req.query("project_id")),
+          repository_id: clean(c.req.query("repository_id")), scope: clean(c.req.query("scope")),
+          status: clean(c.req.query("status")), combination: "intersection",
+        },
       });
     } catch (error) {
       return knowledgeError(c, error);
@@ -1017,6 +1069,8 @@ function knowledgeError(c: Parameters<typeof knowledgePolicyErrorResponse>[0], e
   if (policy) return policy;
   const message = error instanceof Error ? error.message : "knowledge request failed";
   if (error instanceof RepositoryWikiUnavailableError) return c.json({ error: message }, 503);
+  if (error instanceof RepositoryWikiRestoreConflictError) return c.json({ error: message }, 409);
+  if (error instanceof RepositoryWikiRestoreInputError) return c.json({ error: message }, 400);
   if (error instanceof RepositoryWikiLinkValidationError) return c.json({ error: message }, 409);
   if (/not found/i.test(message)) return c.json({ error: message }, 404);
   if (/conflict|duplicate|already/i.test(message)) return c.json({ error: message }, 409);

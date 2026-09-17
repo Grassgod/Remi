@@ -118,6 +118,213 @@ class FakeOpenViking implements OpenVikingClientContract {
   }
 }
 
+describe("Repository Wiki snapshot restoration", () => {
+  async function fixture() {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    store.updateWorkspaceRepositories("local", [
+      { id: "repo_restore", name: "restore", url: "https://github.com/acme/restore.git", source: "github", default_branch: "main" },
+      { id: "repo_other", name: "other", url: "https://github.com/acme/other.git", source: "github", default_branch: "main" },
+    ]);
+    const client = new FakeOpenViking();
+    const service = new RepositoryWikiService(store, client, "openviking");
+    const docs = (await service.applyBatch("local", "repo_restore", [
+      { kind: "create", input: { path: "target.md", title: "Target", body: "恢复的正文" } },
+      { kind: "create", input: { path: "source.md", title: "Source", body: "[[target]]" } },
+    ])).map(result => result.doc);
+    await service.runStorageJobs();
+    const targets = docs.map(doc => {
+      const current = store.getRepositoryWikiDocByRef("local", "repo_restore", doc.id)!;
+      return { ref: current.id, expected_version: current.version, snapshot_oid: current.snapshotOid!, content_sha256: current.contentSha256! };
+    });
+    const before = store.listRepositoryWikiDocs("local", "repo_restore");
+    const revisions = before.map(doc => store.listRepositoryWikiDocRevisions(doc.id));
+    for (const doc of before) client.files.delete(doc.contentUri!);
+    const app = createMultiremiApp({ store, repositoryWiki: service, authToken: "root-secret" });
+    const request = (body: unknown, token = "root-secret") => app.request("/api/workspaces/local/repos/repo_restore/wiki/restore", {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify(body),
+    });
+    return { store, client, service, docs, targets, before, revisions, app, request };
+  }
+
+  it("preflights without storage writes, restores exact bytes with audit, and unlocks strict reads and the next write", async () => {
+    const f = await fixture();
+    await expect(f.service.listStrict("local", "repo_restore")).rejects.toThrow("not found");
+    const writes = f.client.writeAttempts;
+    const tags = [...f.client.tags];
+    const commits = f.client.commits.length;
+    const dry = await f.request({ targets: f.targets });
+    expect(dry.status).toBe(200);
+    const plan = await dry.json() as any;
+    expect(plan.dry_run).toBe(true);
+    expect(plan.results.map((r: any) => r.state)).toEqual(["missing", "missing"]);
+    expect(plan.repository_readable).toBe(false);
+    expect(f.client.writeAttempts).toBe(writes);
+    expect([...f.client.tags]).toEqual(tags);
+    expect(f.client.commits.length).toBe(commits);
+    const response = await f.request({ targets: f.targets, dry_run: false });
+    expect(response.status).toBe(200);
+    const report = await response.json() as any;
+    expect(report.results.map((r: any) => r.state)).toEqual(["restored", "restored"]);
+    expect(report.repository_readable).toBe(true);
+    expect(report.unreadable).toEqual([]);
+    expect(report.run.status).toBe("noop");
+    const audit = JSON.parse(f.store.getKnowledgeCompilationRun(report.run.id)!.resultSummary!);
+    expect(audit).toMatchObject({ operation: "repository_wiki_restore", dry_run: false, actor: { kind: "member" }, results: report.results });
+    const inspected = await f.app.request(`/api/knowledge/runs/${report.run.id}`, { headers: { Authorization: "Bearer root-secret" } });
+    expect(inspected.status).toBe(200);
+    expect((await inspected.json() as any).run.result_summary).toContain("repository_wiki_restore");
+    for (const doc of f.before) {
+      expect(f.client.files.get(doc.contentUri!)).toBe(await f.client.show(doc.snapshotOid!, doc.contentUri!));
+      expect(sha256Text(f.client.files.get(doc.contentUri!)!)).toBe(doc.contentSha256!);
+    }
+    expect(f.store.listRepositoryWikiDocs("local", "repo_restore")).toEqual(f.before);
+    expect(f.before.map(doc => f.store.listRepositoryWikiDocRevisions(doc.id))).toEqual(f.revisions);
+    expect((await f.service.listStrict("local", "repo_restore")).map(doc => doc.body).sort()).toEqual(["[[target]]", "恢复的正文"].sort());
+    // Exercise the ordinary authenticated REST write, not only the restore API.
+    const updated = await f.app.request(`/api/workspaces/local/repos/repo_restore/wiki/${f.docs[0]!.id}`, {
+      method: "PUT", headers: { "Content-Type": "application/json", Authorization: "Bearer root-secret" },
+      body: JSON.stringify({ expected_version: 1, body: "恢复后正常写入" }),
+    });
+    expect(updated.status).toBe(200);
+    expect((await f.service.get("local", "repo_restore", f.docs[0]!.id))?.version).toBe(2);
+  });
+
+  it("rejects any corrupt snapshot before creating even the first valid object, with a failed audit", async () => {
+    const f = await fixture();
+    const last = f.before.find(doc => doc.id === f.targets[1]!.ref)!;
+    f.client.commits.find(commit => commit.oid === last.snapshotOid)!.files.set(last.contentUri!, "corrupt");
+    const writes = f.client.writeAttempts;
+    const directories = [...f.client.directories];
+    const response = await f.request({ targets: f.targets, dry_run: false });
+    expect(response.status).toBe(409);
+    expect((await response.json() as any).error).toContain("Snapshot checksum mismatch");
+    expect(f.client.writeAttempts).toBe(writes);
+    expect([...f.client.directories]).toEqual(directories);
+    for (const doc of f.before) expect(f.client.files.has(doc.contentUri!)).toBe(false);
+    const audit = f.store.listKnowledgeCompilationRuns({ workspaceId: "local", repositoryId: "repo_restore" })[0]!;
+    expect(audit.status).toBe("failed");
+    expect(JSON.parse(audit.resultSummary!)).toMatchObject({ operation: "repository_wiki_restore", targets: f.targets });
+    expect(f.store.listRepositoryWikiDocs("local", "repo_restore")).toEqual(f.before);
+  });
+
+  it("is idempotent and never overwrites an existing conflicting object", async () => {
+    const f = await fixture();
+    const first = f.before.find(doc => doc.id === f.targets[0]!.ref)!;
+    f.client.files.set(first.contentUri!, "someone else's content");
+    const writes = f.client.writeAttempts;
+    expect((await f.request({ targets: f.targets, dry_run: false })).status).toBe(409);
+    expect(f.client.writeAttempts).toBe(writes);
+    expect(f.client.files.get(first.contentUri!)).toBe("someone else's content");
+    f.client.files.delete(first.contentUri!);
+    expect((await f.request({ targets: f.targets, dry_run: false })).status).toBe(200);
+    const afterWrites = f.client.writeAttempts;
+    const afterFiles = [...f.client.files];
+    const retry = await f.request({ targets: f.targets, dry_run: false });
+    expect(retry.status).toBe(200);
+    expect((await retry.json() as any).results.map((r: any) => r.state)).toEqual(["present", "present"]);
+    expect(f.client.writeAttempts).toBe(afterWrites);
+    expect([...f.client.files]).toEqual(afterFiles);
+    expect(f.store.listRepositoryWikiDocs("local", "repo_restore")).toEqual(f.before);
+  });
+
+  it("preserves partial progress on transport failure and safely finishes on retry", async () => {
+    const f = await fixture();
+    f.client.failWriteAt = f.client.writeAttempts + 2;
+    const failed = await f.request({ targets: f.targets, dry_run: false });
+    expect(failed.status).toBe(400);
+    const first = f.before.find(doc => doc.id === f.targets[0]!.ref)!;
+    expect(f.client.files.has(first.contentUri!)).toBe(true);
+    const audit = f.store.listKnowledgeCompilationRuns({ workspaceId: "local", repositoryId: "repo_restore" })[0]!;
+    expect(audit.status).toBe("failed");
+    expect(JSON.parse(audit.resultSummary!).results[0].state).toBe("restored");
+    f.client.failWriteAt = null;
+    const retry = await f.request({ targets: f.targets, dry_run: false });
+    expect(retry.status).toBe(200);
+    expect((await retry.json() as any).results.map((r: any) => r.state)).toEqual(["present", "restored"]);
+    expect(f.store.listRepositoryWikiDocs("local", "repo_restore")).toEqual(f.before);
+  });
+
+  it("rejects stale pins and malformed targets without storage writes", async () => {
+    const f = await fixture();
+    const writes = f.client.writeAttempts;
+    for (const patch of [{ expected_version: 2 }, { snapshot_oid: "old-snapshot" }, { content_sha256: "0".repeat(64) }]) {
+      expect((await f.request({ targets: [{ ...f.targets[0], ...patch }], dry_run: false })).status).toBe(409);
+    }
+    for (const targets of [[], [f.targets[0], f.targets[0]], [{ ...f.targets[0], content_sha256: "invalid" }], [null]]) {
+      expect((await f.request({ targets, dry_run: false })).status).toBe(400);
+    }
+    expect(f.client.writeAttempts).toBe(writes);
+  });
+
+  it("does not overwrite an object created by another writer after preflight", async () => {
+    const f = await fixture();
+    const create = f.client.create.bind(f.client);
+    let raced = false;
+    f.client.create = async (uri, root, content) => {
+      if (!raced) { raced = true; f.client.files.set(uri, "concurrent content"); }
+      return create(uri, root, content);
+    };
+    const response = await f.request({ targets: f.targets, dry_run: false });
+    expect(response.status).toBe(409);
+    expect((await response.json() as any).error).toContain("Concurrent object checksum mismatch");
+    const first = f.before.find(doc => doc.id === f.targets[0]!.ref)!;
+    expect(f.client.files.get(first.contentUri!)).toBe("concurrent content");
+    expect(f.store.listRepositoryWikiDocs("local", "repo_restore")).toEqual(f.before);
+  });
+
+  it("refuses recovery while canonical promotion/cleanup is pending", async () => {
+    const f = await fixture();
+    await f.request({ targets: f.targets, dry_run: false });
+    await f.service.update("local", "repo_restore", f.docs[0]!.id, { body: "new content" });
+    expect(f.store.listRepositoryWikiStorageJobs("local", "repo_restore").length).toBeGreaterThan(0);
+    const writes = f.client.writeAttempts;
+    const response = await f.request({ targets: f.targets, dry_run: false });
+    expect(response.status).toBe(503);
+    expect((await response.json() as any).error).toBe("Repository wiki storage repair is still pending");
+    expect(f.client.writeAttempts).toBe(writes);
+  });
+
+  it("enforces admin human membership and scoped publishing tasks before accessing snapshots", async () => {
+    const f = await fixture();
+    const writes = f.client.writeAttempts;
+    const user = f.store.getOrCreateUser({ email: "restore-member@example.test", name: "Reader" });
+    f.store.createWorkspaceMember({ workspaceId: "local", userId: user.id, name: "Reader", role: "member" });
+    const pat = await f.store.createAccessToken({ workspaceId: "local", userId: user.id, name: "Reader", type: "pat", purpose: "session" });
+    expect((await f.request({ targets: f.targets, dry_run: false }, pat.token)).status).toBe(403);
+    const outsider = f.store.getOrCreateUser({ email: "restore-outsider@example.test", name: "Outsider" });
+    const outsidePat = await f.store.createAccessToken({ workspaceId: "local", userId: outsider.id, name: "Outsider", type: "pat", purpose: "session" });
+    // Existing workspace middleware hides non-member workspace existence.
+    expect((await f.request({ targets: f.targets, dry_run: false }, outsidePat.token)).status).toBe(404);
+    expect((await f.request({ targets: f.targets, dry_run: false }, "invalid-token")).status).toBe(401);
+    const { autopilot } = configureRepositoryWikiAutomation(f.store);
+    const run = f.store.runAutopilot(autopilot.id, { source: "scm_event", repositoryId: "repo_other", dedupeKey: "repo_other:incremental_update:restore", payload: { repository_wiki_repository_id: "repo_other" } });
+    const outOfScope = await f.store.createTaskAccessToken(f.store.getTask(run.taskId!)!, "local");
+    const denied = await f.request({ targets: f.targets, dry_run: false }, outOfScope.token);
+    expect(denied.status).toBe(403);
+    expect((await denied.json() as any).error).toBe("task knowledge target does not match its repository scope");
+    const project = f.store.createProject({ title: "Restore project" });
+    f.store.createProjectResource(project.id, { resourceType: "github_repo", resourceRef: { url: "https://github.com/acme/restore.git" } });
+    const issue = f.store.createIssue({ title: "Restore", projectId: project.id });
+    const agent = f.store.createAgent({ name: "Non-publisher", provider: "claude" });
+    const task = f.store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "restore" });
+    const ordinary = await f.store.createTaskAccessToken(task, "local");
+    const noPublish = await f.request({ targets: f.targets, dry_run: false }, ordinary.token);
+    expect(noPublish.status).toBe(403);
+    expect((await noPublish.json() as any).error).toBe("knowledge publish capability is required");
+    expect(f.client.writeAttempts).toBe(writes);
+    expect(f.store.listKnowledgeCompilationRuns({ workspaceId: "local", repositoryId: "repo_restore" })).toEqual([]);
+    const scopedRun = f.store.runAutopilot(autopilot.id, { source: "scm_event", repositoryId: "repo_restore", dedupeKey: "repo_restore:incremental_update:restore", payload: { repository_wiki_repository_id: "repo_restore" } });
+    const scoped = await f.store.createTaskAccessToken(f.store.getTask(scopedRun.taskId!)!, "local");
+    expect((await f.request({ targets: f.targets, dry_run: false }, scoped.token)).status).toBe(200);
+    expect(await f.service.listStrict("local", "repo_restore")).toHaveLength(2);
+    const admin = f.store.getOrCreateUser({ email: "restore-admin@example.test", name: "Admin" });
+    f.store.createWorkspaceMember({ workspaceId: "local", userId: admin.id, name: "Admin", role: "admin" });
+    const adminPat = await f.store.createAccessToken({ workspaceId: "local", userId: admin.id, name: "Admin", type: "pat", purpose: "session" });
+    expect((await f.request({ targets: f.targets, dry_run: false }, adminPat.token)).status).toBe(200);
+  });
+});
+
 describe("Repository Wiki availability and migration safeguards", () => {
   it("publishes an 84-page connected component through OpenViking, drains storage jobs and accepts the next batch", async () => {
     const store = createStore();

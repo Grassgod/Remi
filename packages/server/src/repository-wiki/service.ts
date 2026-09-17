@@ -45,6 +45,35 @@ export interface RepositoryWikiMigrationOptions {
   updatedById?: string | null;
 }
 
+export interface RepositoryWikiRestoreTarget {
+  ref: string;
+  expected_version: number;
+  snapshot_oid: string;
+  content_sha256: string;
+}
+
+export interface RepositoryWikiRestoreResult {
+  id: string;
+  path: string;
+  version: number;
+  content_uri: string;
+  snapshot_oid: string;
+  content_sha256: string;
+  body_bytes: number;
+  state: "missing" | "present" | "restored";
+}
+
+export interface RepositoryWikiRestoreReport {
+  dry_run: boolean;
+  results: RepositoryWikiRestoreResult[];
+  recovery_snapshot_oid: string | null;
+  repository_readable: boolean;
+  unreadable: Array<{ id: string; path: string }>;
+}
+
+export class RepositoryWikiRestoreConflictError extends Error {}
+export class RepositoryWikiRestoreInputError extends Error {}
+
 export interface RepositoryWikiServiceContract {
   readonly mode: ProjectKnowledgeMode;
   list(workspaceId: string, repositoryId: string): Promise<MultiremiRepositoryWikiDoc[]>;
@@ -57,6 +86,9 @@ export interface RepositoryWikiServiceContract {
   applyBatch(workspaceId: string, repositoryId: string, operations: readonly RepositoryWikiBatchOperation[]): Promise<RepositoryWikiBatchResult[]>;
   move(workspaceId: string, repositoryId: string, ref: string, path: string, options?: RepositoryWikiMigrationOptions): Promise<RepositoryWikiBatchResult[]>;
   merge(workspaceId: string, repositoryId: string, targetRef: string, sourceRefs: readonly string[], options?: RepositoryWikiMigrationOptions): Promise<RepositoryWikiBatchResult[]>;
+  restore(workspaceId: string, repositoryId: string, targets: readonly RepositoryWikiRestoreTarget[], options: {
+    dryRun: boolean; auditId: string; onProgress?: (results: RepositoryWikiRestoreResult[]) => void;
+  }): Promise<RepositoryWikiRestoreReport>;
   revisions(workspaceId: string, repositoryId: string, ref: string): Promise<MultiremiRepositoryWikiDocRevision[]>;
   search(workspaceId: string, repositoryId: string, query: string, limit?: number): Promise<MultiremiRepositoryWikiDoc[]>;
   backlinks(workspaceId: string, repositoryId: string, ref: string): Promise<MultiremiRepositoryWikiDoc[]>;
@@ -237,6 +269,111 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
   ): Promise<RepositoryWikiBatchResult[]> {
     return this.withWriteLock(workspaceId, repositoryId, service =>
       service.applyBatchUnlocked(workspaceId, repositoryId, operations));
+  }
+
+  async restore(workspaceId: string, repositoryId: string, targets: readonly RepositoryWikiRestoreTarget[], options: {
+    dryRun: boolean; auditId: string; onProgress?: (results: RepositoryWikiRestoreResult[]) => void;
+  }): Promise<RepositoryWikiRestoreReport> {
+    return this.withWriteLock(workspaceId, repositoryId, async service => {
+      if (service.mode === "sql") throw new Error("Repository wiki restore requires OpenViking storage");
+      if (!Array.isArray(targets) || !targets.length || targets.length > 32) {
+        throw new RepositoryWikiRestoreInputError("Repository wiki restore requires 1 to 32 targets");
+      }
+      // Do not race a pending promotion/cleanup or implicitly repair anything
+      // outside the operator's explicit target list.
+      if (service.store.listRepositoryWikiStorageJobs(workspaceId, repositoryId).length) {
+        throw new RepositoryWikiUnavailableError("Repository wiki storage repair is still pending");
+      }
+      const client = service.requireClient();
+      const root = repositoryWikiRootUri(workspaceId, repositoryId);
+      const ids = new Set<string>();
+      const plan: Array<{ doc: MultiremiRepositoryWikiDoc; raw: string; result: RepositoryWikiRestoreResult }> = [];
+      // Preflight the ENTIRE batch, including existing objects, before any write.
+      for (const target of targets) {
+        if (!target || typeof target.ref !== "string" || !target.ref.trim()
+          || !Number.isSafeInteger(target.expected_version) || target.expected_version < 1
+          || typeof target.snapshot_oid !== "string" || !target.snapshot_oid.trim()
+          || typeof target.content_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(target.content_sha256)) {
+          throw new RepositoryWikiRestoreInputError("Restore targets require ref, positive expected_version, snapshot_oid and SHA-256 content_sha256");
+        }
+        const doc = service.store.getRepositoryWikiDocByRef(workspaceId, repositoryId, target.ref);
+        if (!doc) throw new Error(`repository wiki doc not found: ${target.ref}`);
+        if (ids.has(doc.id)) throw new RepositoryWikiRestoreInputError(`Duplicate restore target: ${doc.id}`);
+        ids.add(doc.id);
+        if (doc.version !== target.expected_version || doc.snapshotOid !== target.snapshot_oid
+          || doc.contentSha256 !== target.content_sha256) {
+          throw new RepositoryWikiRestoreConflictError(`Restore metadata conflict for ${doc.path} (${doc.id})`);
+        }
+        const uri = repositoryWikiDocUri(workspaceId, repositoryId, doc.path);
+        if (doc.storageBackend !== "openviking" || doc.syncStatus !== "ready" || doc.contentUri !== uri) {
+          throw new RepositoryWikiRestoreConflictError(`Restore requires a ready canonical OpenViking record: ${doc.id}`);
+        }
+        const raw = await client.show(target.snapshot_oid, uri);
+        if (sha256Text(raw) !== target.content_sha256) {
+          throw new RepositoryWikiRestoreConflictError(`Snapshot checksum mismatch for ${doc.path} (${doc.id})`);
+        }
+        const body = decodeRepositoryWikiBody(raw, doc);
+        const present = await client.exists(uri);
+        if (present && sha256Text(await client.read(uri)) !== target.content_sha256) {
+          throw new RepositoryWikiRestoreConflictError(`Existing object checksum mismatch; refusing to overwrite ${doc.path} (${doc.id})`);
+        }
+        plan.push({ doc, raw, result: {
+          id: doc.id, path: doc.path, version: doc.version, content_uri: uri,
+          snapshot_oid: target.snapshot_oid, content_sha256: target.content_sha256,
+          body_bytes: Buffer.byteLength(body, "utf8"), state: present ? "present" : "missing",
+        } });
+      }
+      let recoverySnapshot: string | null = null;
+      if (!options.dryRun) {
+        for (const entry of plan) {
+          service.operationSignal?.throwIfAborted();
+          // Recheck metadata after remote reads, before writing the pinned URI.
+          const current = service.store.getRepositoryWikiDocByRef(workspaceId, repositoryId, entry.doc.id);
+          if (!current || current.version !== entry.doc.version || current.contentUri !== entry.doc.contentUri
+            || current.contentSha256 !== entry.doc.contentSha256 || current.snapshotOid !== entry.doc.snapshotOid) {
+            throw new RepositoryWikiRestoreConflictError(`Restore metadata changed for ${entry.doc.id}`);
+          }
+          if (entry.result.state === "missing") {
+            await service.ensureUriDirectories(root, entry.result.content_uri);
+            try {
+              await client.create(entry.result.content_uri, root, entry.raw);
+              entry.result.state = "restored";
+            } catch (error) {
+              service.operationSignal?.throwIfAborted();
+              // A concurrent create or an ambiguous response can be successful.
+              // Read back; never fall back to replace or remove.
+              if (!await client.exists(entry.result.content_uri)) throw error;
+              if (sha256Text(await client.read(entry.result.content_uri)) !== entry.result.content_sha256) {
+                throw new RepositoryWikiRestoreConflictError(`Concurrent object checksum mismatch for ${entry.doc.id}`);
+              }
+              entry.result.state = "present";
+            }
+          }
+          if (sha256Text(await client.read(entry.result.content_uri)) !== entry.result.content_sha256) {
+            throw new RepositoryWikiRestoreConflictError(`Restored object checksum mismatch for ${entry.doc.id}`);
+          }
+          // Retrying after tag/commit failure completes these ancillary steps.
+          await client.setTags(entry.result.content_uri, repositoryWikiRetrievalTags(entry.doc));
+          options.onProgress?.(plan.map(item => ({ ...item.result })));
+        }
+        recoverySnapshot = await client.commit(`repository wiki restore ${options.auditId}`, plan.map(entry => entry.result.content_uri));
+        if (!recoverySnapshot) throw new RepositoryWikiUnavailableError("Restore snapshot commit returned no oid");
+      }
+      // Preserve all document/revision metadata, including original provenance.
+      let unreadable: Array<{ id: string; path: string }> = [];
+      try {
+        await service.listStrict(workspaceId, repositoryId);
+      } catch {
+        service.operationSignal?.throwIfAborted();
+        const docs = await service.list(workspaceId, repositoryId);
+        unreadable = docs.filter(doc => doc.syncStatus === "failed").map(({ id, path }) => ({ id, path }));
+        // A transient failure in the strict pass must not be advertised as a
+        // successful strict verification even if a subsequent read recovers.
+        if (!unreadable.length) throw new RepositoryWikiUnavailableError("Repository strict verification failed; retry verification");
+      }
+      return { dry_run: options.dryRun, results: plan.map(entry => entry.result),
+        recovery_snapshot_oid: recoverySnapshot, repository_readable: unreadable.length === 0, unreadable };
+    });
   }
 
   async revisions(workspaceId: string, repositoryId: string, ref: string): Promise<MultiremiRepositoryWikiDocRevision[]> {
