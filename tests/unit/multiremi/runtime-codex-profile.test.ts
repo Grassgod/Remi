@@ -97,6 +97,39 @@ describe("Runtime Codex profiles", () => {
     expect(store.claimTask(runtime.id)?.codexProfile).toEqual(saved);
   });
 
+  for (const provider of ["codex", "claude"] as const) {
+    for (const change of ["provider", "runtime-owner"] as const) {
+      it(`re-pools ${provider} profile retries after ${change} changes make the original Runtime incompatible`, () => {
+        const store = createLocalStore();
+        process.env.MULTIREMI_PROVIDER_ENCRYPTION_KEY = Buffer.alloc(32, 13).toString("base64");
+        const runtime = store.registerRuntime({ name: "Original", provider, ownerId: "local", metadata: { [`${provider}_profiles`]: 1 } });
+        const nextProvider = change === "provider" ? (provider === "codex" ? "claude" : "codex") : provider;
+        const replacement = store.registerRuntime({ name: "Replacement", provider: nextProvider, ownerId: "local", metadata: { [`${nextProvider}_profiles`]: 1 } });
+        if (provider === "codex") store.setRuntimeCodexProfile(runtime.id, apiProfile, "original-runtime-key");
+        else store.setRuntimeClaudeProfile(runtime.id, apiProfile, "original-runtime-key");
+        const agent = store.createAgent({ name: "Custom", provider });
+        const chat = store.createChatSession({ agentId: agent.id });
+        const task = store.sendChatMessage(chat.id, { body: "work" }).task;
+        expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+        store.startTask(task.id);
+        if (change === "provider") store.updateAgent(agent.id, { provider: nextProvider });
+        else store.updateRuntime(runtime.id, { ownerId: "other-owner" });
+        store.failTask(task.id, { error: "stale session", failureReason: "agent_error.stale_session" });
+        const retry = store.listTasks().find(candidate => candidate.parentTaskId === task.id)!;
+        expect(retry.runtimeId).toBeNull();
+        expect(retry.codexProfile).toBeNull();
+        expect(retry.claudeProfile).toBeNull();
+        expect(retry.executionFingerprint).toBeNull();
+        expect(store.claimTask(runtime.id)).toBeNull();
+        const claimed = store.claimTask(replacement.id)!;
+        expect(claimed.id).toBe(retry.id);
+        expect(claimed.provider).toBe(nextProvider);
+        expect(claimed.codexProfile).toBeNull();
+        expect(claimed.claudeProfile).toBeNull();
+      });
+    }
+  }
+
   it("encrypts keys and restricts delivery to the bound daemon, never browser or task credentials", async () => {
     const { store, runtime } = setup();
     process.env.MULTIREMI_PROVIDER_ENCRYPTION_KEY = Buffer.alloc(32, 11).toString("base64");

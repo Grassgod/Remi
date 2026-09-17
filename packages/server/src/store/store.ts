@@ -1,3 +1,4 @@
+import { getExecutionGroup, listExecutionGroups } from "@multiremi/store/execution-groups.js";
 import { type SqlDatabase, openMultiremiDatabase } from "@multiremi/store/db/postgres.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
 import { daemonRuntimeId, isTerminalStatus } from "@multiremi/store/helpers.js";
@@ -797,6 +798,9 @@ runMigrations(this.db);
   retrySessionArchive(id: string): MultiremiSessionArchive | null {
     return this.sessionArchives.retry(id);
   }
+
+  listExecutionGroups(workspaceId: string) { return listExecutionGroups(this.db, workspaceId); }
+  getExecutionGroup(id: string, workspaceId = "local") { return getExecutionGroup(this.db, id, workspaceId); }
 
   createAgent(input: CreateAgentInput): MultiremiAgent {
     return this.agents.createAgent(input);
@@ -1812,8 +1816,53 @@ runMigrations(this.db);
     return this.feishuBot.submitMessage(workspaceId, runtimeId, input);
   }
 
+  getFeishuIssueIdForChatSession(chatSessionId: string): string | null {
+    return this.feishuBot.getIssueIdForChatSession(chatSessionId);
+  }
+
+  isFeishuTransportChatSession(chatSessionId: string): boolean {
+    return this.feishuBot.isTransportChatSession(chatSessionId);
+  }
+
+  assertFeishuBotInboundAttachmentScope(...args: Parameters<FeishuBotRepo["assertInboundAttachmentScope"]>) {
+    return this.feishuBot.assertInboundAttachmentScope(...args);
+  }
+
+  createFeishuBotInboundAttachment(...args: Parameters<FeishuBotRepo["createInboundAttachment"]>) {
+    return this.feishuBot.createInboundAttachment(...args);
+  }
+
+  sendChatAttachments(...args: Parameters<FeishuBotRepo["sendChatAttachments"]>) {
+    return this.feishuBot.sendChatAttachments(...args);
+  }
+
   getFeishuBotChatConversationKind(chatSessionId: string): "p2p" | "group" | null {
     return this.feishuBot.getChatConversationKind(chatSessionId);
+  }
+
+  listFeishuBotSenders(workspaceId: string) {
+    return this.feishuBot.listSenders(workspaceId);
+  }
+
+  listFeishuBotTaskReceiptMessageIds(workspaceId: string, taskId: string) {
+    return this.feishuBot.listTaskReceiptMessageIds(workspaceId, taskId);
+  }
+
+  listFeishuBotSenderProfileSources(workspaceId: string, before: string) {
+    return this.feishuBot.listSenderProfileSources(workspaceId, before);
+  }
+
+  updateFeishuBotSenderProfile(workspaceId: string, appId: string, senderId: string,
+    profile: { name: string; nameEn: string | null } | null, checkedAt: string): void {
+    this.feishuBot.updateSenderProfile(workspaceId, appId, senderId, profile, checkedAt);
+  }
+
+  setFeishuBotSenderAllowed(workspaceId: string, senderId: string, allowed: boolean, actorId?: string | null) {
+    return this.feishuBot.setSenderAllowed(workspaceId, senderId, allowed, actorId);
+  }
+
+  isFeishuBotTaskIssueCreationRestricted(taskId: string): boolean {
+    return this.feishuBot.isTaskIssueCreationRestricted(taskId);
   }
 
   prepareFeishuIssueTopicWithinTransaction(issue: MultiremiIssue): boolean {
@@ -1845,8 +1894,9 @@ runMigrations(this.db);
     now?: string | Date,
     supportsTaskStream = false,
     supportsNativeCot = false,
+    supportsAttachments = false,
   ): MultiremiFeishuBotOutboundDelivery | null {
-    return this.feishuBot.claimOutbound(workspaceId, runtimeId, now, supportsTaskStream, supportsNativeCot);
+    return this.feishuBot.claimOutbound(workspaceId, runtimeId, now, supportsTaskStream, supportsNativeCot, supportsAttachments);
   }
 
   getFeishuBotOutboundAttachment(
@@ -3091,7 +3141,11 @@ runMigrations(this.db);
   }
 
   updateIssue(id: string, input: UpdateIssueInput): MultiremiIssue {
-    return this.issues.updateIssue(id, input);
+    return this.updateIssueWithOutcome(id, input).issue;
+  }
+
+  updateIssueWithOutcome(id: string, input: UpdateIssueInput): { issue: MultiremiIssue; cancelledTasks: number } {
+    return this.issues.updateIssueWithOutcome(id, input);
   }
 
   restoreIssue(id: string): MultiremiIssue {
@@ -3495,6 +3549,9 @@ runMigrations(this.db);
 
   buildTaskSessionProjection(taskId: string): MultiremiSessionProjection | null {
     const task = this.tasks.getTask(taskId);
+    if (task?.chatSessionId && !this.feishuBot.getIssueIdForChatSession(task.chatSessionId)) {
+      return this.chat.buildTaskSessionProjection(taskId);
+    }
     if (task?.issueSessionId) return this.sessions.buildTaskSessionProjection(taskId);
     if (task?.chatSessionId) return this.chat.buildTaskSessionProjection(taskId);
     return null;
@@ -4123,13 +4180,6 @@ runMigrations(this.db);
     return this.chat.getChatSession(id);
   }
 
-  bindChatSessionIssueIfUnbound(chatSessionId: string, issueId: string): {
-    session: MultiremiChatSession;
-    bound: boolean;
-  } {
-    return this.chat.bindChatSessionIssueIfUnbound(chatSessionId, issueId);
-  }
-
   updateChatSession(id: string, input: UpdateChatSessionInput): MultiremiChatSession {
     return this.chat.updateChatSession(id, input);
   }
@@ -4253,6 +4303,10 @@ runMigrations(this.db);
 
   getTaskByRef(ref: string, input: { issueId?: string | null } = {}): MultiremiTask | null {
     return this.tasks.getTaskByRef(ref, input);
+  }
+
+  getTaskChatExecutionKind(task: MultiremiTask): "ordinary" | "topic" {
+    return this.tasks.getTaskChatExecutionKind(task);
   }
 
   getTaskWithAgent(id: string): MultiremiTaskWithAgent | null {

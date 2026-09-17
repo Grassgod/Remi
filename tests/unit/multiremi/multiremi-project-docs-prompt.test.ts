@@ -38,7 +38,7 @@ function createProjectTask(store: MultiremiStore) {
 }
 
 describe("bootstrap and delta task prompts", () => {
-  it("bootstraps homepage Chat from product history and CLI directory instructions only", () => {
+  it("bootstraps homepage Chat from canonical session events and CLI directory instructions only", () => {
     const store = createStore();
     store.ensureLocalWorkspace();
     store.updateWorkspace("local", {
@@ -57,11 +57,19 @@ describe("bootstrap and delta task prompts", () => {
 
     const prompt = buildTaskPrompt({
       ...task,
-      chatBootstrapTranscript: "[user]\nolder question\n\n[assistant]\nolder answer\n\n[user]\nlatest question",
+      sessionProjection: {
+        mode: "bootstrap",
+        jsonl: [
+          JSON.stringify({ type: "session_event", perspective: "user", body: "older question" }),
+          JSON.stringify({ type: "session_event", perspective: "assistant_history", body: "older answer" }),
+          JSON.stringify({ type: "session_event", perspective: "user", body: "latest question" }),
+        ].join("\n"),
+      },
     } as any);
-    expect(prompt).toContain("## Current Request\nContinue this Chat from the canonical product history below.");
-    expect(prompt).toContain("## Product Chat History");
-    expect(prompt).toContain("[assistant]\nolder answer");
+    expect(prompt).toContain("## Current Request\nlatest question");
+    expect(prompt).toContain("## Current Session Context");
+    expect(prompt).toContain('"perspective":"assistant_history","body":"older answer"');
+    expect(prompt).not.toContain("## Product Chat History");
     expect(prompt).toContain("## Remi Context");
     expect(prompt).toContain("`remi context`");
     expect(prompt).toContain("`remi project list|get|search`");
@@ -70,6 +78,58 @@ describe("bootstrap and delta task prompts", () => {
     expect(prompt).not.toContain("## Available Repositories");
     expect(prompt).not.toContain("https://github.com/example/chat-prompt");
   });
+
+  for (const mode of ["bootstrap", "delta"] as const) {
+    it(`keeps a private Chat ${mode} free of stale Issue context and broadcasts`, () => {
+      const store = createStore();
+      const { task } = createProjectTask(store);
+      const prompt = buildTaskPrompt({
+        ...task,
+        chatSessionId: "chat_private",
+        prompt: "Keep this conversation independent.",
+        boundIssueUpdates: ["ISSUE_BROADCAST_MUST_NOT_SHIP"],
+        boundIssueUpdatesOmittedCount: 3,
+        issueSessionResults: [{ id: "result", title: "Unrelated result", body: "ISSUE_RESULT_MUST_NOT_SHIP" }],
+        project: { ...task.project!, deltaInstructions: "PROJECT_DELTA_MUST_NOT_SHIP" },
+        sessionProjection: { mode, jsonl: '{"type":"session_event","body":"Our earlier conversation"}' },
+      } as any);
+
+      expect(prompt).toContain("## Current Request\nKeep this conversation independent.");
+      expect(prompt).toContain("Our earlier conversation");
+      expect(prompt).not.toContain("## Issue");
+      expect(prompt).not.toContain("## Bound Issue");
+      expect(prompt).not.toContain("## Project");
+      expect(prompt).not.toContain("## Available Repositories");
+      expect(prompt).not.toContain("## Shared Workspace Coordination");
+      expect(prompt).not.toContain("## Sharing Results Across Sessions");
+      expect(prompt).not.toContain("ISSUE_BROADCAST_MUST_NOT_SHIP");
+      expect(prompt).not.toContain("ISSUE_RESULT_MUST_NOT_SHIP");
+      expect(prompt).not.toContain("PROJECT_DELTA_MUST_NOT_SHIP");
+      if (mode === "bootstrap") expect(prompt).toContain("## Remi Context");
+    });
+
+    it(`preserves Feishu Issue topic context and update guidance in ${mode}`, () => {
+      const store = createStore();
+      const { issue, task } = createProjectTask(store);
+      const prompt = buildTaskPrompt({
+        ...task,
+        chatSessionId: "chat_issue_topic",
+        holdsWorkspace: false,
+        boundIssue: { id: issue.id, key: issue.key, title: issue.title, status: issue.status },
+        boundIssueUpdates: ["Latest topic activity"],
+        sessionProjection: { mode, jsonl: '{"type":"session_event","body":"Topic conversation"}' },
+      } as any);
+
+      expect(prompt).toContain(`Key: ${issue.key}`);
+      expect(prompt).toContain("## Bound Issue Updates");
+      expect(prompt).toContain("Latest topic activity");
+      expect(prompt).toContain("## Bound Issue Follow-up");
+      expect(prompt).toContain("Topic conversation");
+      expect(prompt).not.toContain("## Remi Context");
+      expect(prompt).not.toContain("## Available Repositories");
+      if (mode === "bootstrap") expect(prompt).toContain("## Project Context");
+    });
+  }
 
   it("builds a bootstrap prompt with stable execution context", () => {
     const store = createStore();

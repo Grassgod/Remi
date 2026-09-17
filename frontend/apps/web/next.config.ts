@@ -23,6 +23,15 @@ const allowedDevOrigins = process.env.CORS_ALLOWED_ORIGINS
       .filter(Boolean)
   : undefined;
 
+// Next sizes its page-data and static-generation worker pool from the *host*
+// CPU count, which ignores the cgroup CPU limit of a build container. On the
+// 64-core PPE builder that meant 44 workers in a 6 GiB pod and a reproducible
+// OOM kill during "Generating static pages" (MUL-303). NEXT_BUILD_CPUS lets a
+// constrained builder cap the pool; unset means Next keeps its own default, so
+// the official release build is unaffected.
+const buildCpus = Number.parseInt(process.env.NEXT_BUILD_CPUS ?? "", 10);
+const cpus = Number.isInteger(buildCpus) && buildCpus > 0 ? buildCpus : undefined;
+
 const nextConfig: NextConfig = {
   ...(process.env.STANDALONE === "true" ? { output: "standalone" as const } : {}),
   transpilePackages: ["@multiremi/core", "@multiremi/ui", "@multiremi/views", "@multiremi/contracts"],
@@ -30,6 +39,7 @@ const nextConfig: NextConfig = {
     // Skill edits send the full bundle. Match the API's 128 MiB request limit
     // so Next does not truncate JSON containing large or binary attachments.
     proxyClientMaxBodySize: "128mb",
+    ...(cpus === undefined ? {} : { cpus }),
   },
   ...(allowedDevOrigins && allowedDevOrigins.length > 0
     ? { allowedDevOrigins }

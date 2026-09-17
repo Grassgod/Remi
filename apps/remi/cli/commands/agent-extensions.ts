@@ -39,6 +39,8 @@ const AGENT_FIELDS: readonly CliOptionSpec[] = [
   { name: "instructions", type: "string", valueName: "text", description: "Agent instructions" },
   { name: "avatar-url", type: "string", valueName: "url", description: "Agent avatar URL" },
   { name: "provider", type: "string", valueName: "claude|codex|antigravity", description: "Agent provider" },
+  { name: "runtime", type: "string", valueName: "runtime-id", description: "Legacy Runtime execution target", conflictsWith: ["execution-group"] },
+  { name: "execution-group", type: "string", valueName: "group-id", description: "Execution group", conflictsWith: ["runtime"] },
   { name: "model", type: "string", valueName: "model", description: "Agent model" },
   { name: "thinking-level", type: "string", valueName: "level", description: "Reasoning effort" },
   { name: "visibility", type: "string", valueName: "private|workspace", description: "Agent visibility" },
@@ -145,7 +147,8 @@ function agentSpecs(): CommandSpec[] {
     }),
     spec("agent.default", ["agent", "default"], "Create or get the current user's default agent", "write", HUMAN, [], [
       { name: "provider", type: "string", valueName: "claude|codex|antigravity", description: "Agent provider" },
-      { name: "runtime", type: "string", valueName: "runtime-id", description: "Legacy runtime provider source" },
+      { name: "runtime", type: "string", valueName: "runtime-id", description: "Legacy Runtime execution target", conflictsWith: ["execution-group"] },
+      { name: "execution-group", type: "string", valueName: "group-id", description: "Execution group", conflictsWith: ["runtime"] },
     ], async (invocation) => {
       if (invocation.alias?.path[0] === "seed") {
         const { runMultiremi } = await import("../multiremi.js");
@@ -154,8 +157,9 @@ function agentSpecs(): CommandSpec[] {
       }
       const client = await clientFor(invocation);
       const response = await client.request({ method: "POST", path: "/api/multiremi/agents/default", body: {
-        provider: stringOption(invocation, "provider") ?? "claude",
+        provider: stringOption(invocation, "provider") ?? undefined,
         runtime_id: stringOption(invocation, "runtime") ?? undefined,
+        execution_group_id: stringOption(invocation, "execution-group") ?? undefined,
         workspace_id: requiredWorkspace(invocation),
       } });
       renderResource(invocation, response.data);
@@ -499,7 +503,9 @@ function agentBody(invocation: CommandInvocation, creating: boolean): Record<str
     description: stringOption(invocation, "description") ?? undefined,
     instructions: stringOption(invocation, "instructions") ?? undefined,
     avatar_url: stringOption(invocation, "avatar-url") ?? undefined,
-    provider: stringOption(invocation, "provider") ?? (creating ? "claude" : undefined),
+    provider: stringOption(invocation, "provider") ?? undefined,
+    runtime_id: stringOption(invocation, "runtime") ?? undefined,
+    execution_group_id: stringOption(invocation, "execution-group") ?? undefined,
     model: stringOption(invocation, "model") ?? undefined,
     thinking_level: stringOption(invocation, "thinking-level") ?? undefined,
     visibility: stringOption(invocation, "visibility") ?? undefined,

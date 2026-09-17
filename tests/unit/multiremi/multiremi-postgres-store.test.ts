@@ -20,12 +20,15 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
+import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import { PostgresSyncDatabase, translateSqliteToPg } from "@multiremi/store/db/postgres.js";
 import { daemonRuntimeId, MultiremiStore } from "@multiremi/store.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
 import { ProjectInstructionsRevisionConflictError } from "@multiremi/store/repos/projects-repo.js";
 import { TaskSteerConflictError, TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
 import { configureRepositoryWikiAutomation, readyArchiveBinding } from "./helpers.js";
+
+import { CHAT_ISSUE_CLASSIFICATION_CASES, classificationChatId, seedLegacyChatIssueClassificationFixture, seedLegacyChatWakeFixture, assertLegacyChatWakeSettlement, assertCancelledLegacyWakesCannotRun, assertLegacyChatWakeRollback, mintLegacyWakeTokens, assertLegacyWakeTokens, seedWakeInvariantMatrix, assertWakeInvariantMatrix, seedLegacyProactiveRetryMatrix, assertLegacyProactiveRetryMatrix } from "./chat-issue-migration-fixture.js";
 
 // ────────────────────────────── translateSqliteToPg ──────────────────────────────
 
@@ -219,6 +222,121 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     await admin.end();
   });
 
+  // Real PostgreSQL performs repeated full startup migrations plus classification
+  // fixtures and their cleanup; allow for database round trips.
+  it("moves legacy Chat ownership into Feishu topics and is idempotent", async () => {
+    seedLegacyChatIssueClassificationFixture(db);
+    seedLegacyChatWakeFixture(db);
+    seedWakeInvariantMatrix(db);
+    seedLegacyProactiveRetryMatrix(db);
+    const tokens = await mintLegacyWakeTokens(db);
+    assertLegacyChatWakeRollback(db);
+    await assertLegacyWakeTokens(db, tokens, true);
+    runMigrations(db);
+    assertLegacyChatWakeSettlement(db);
+    runMigrations(db);
+    assertLegacyChatWakeSettlement(db);
+    expect((db.query("PRAGMA table_info(multiremi_chat_sessions)").all() as Array<{ name: string }>).map(column => column.name)).not.toContain("issue_id");
+    expect(db.query(`SELECT chat_session_id, issue_id FROM multiremi_feishu_bot_chat_bindings
+      WHERE app_id = 'cli_migration' AND chat_session_id NOT LIKE '%classification_%' ORDER BY chat_session_id`).all()).toEqual([
+      { chat_session_id: "chat_group_migration", issue_id: "iss_chat_migration" },
+      { chat_session_id: "chat_issue_topic_iss_chat_migration", issue_id: "iss_chat_migration" },
+      { chat_session_id: "chat_private_migration", issue_id: null },
+    ]);
+    expect(Number(db.query("SELECT COUNT(*) AS count FROM multiremi_chat_messages WHERE chat_session_id LIKE '%migration%' AND role IN ('user', 'assistant')").get().count)).toBe(8);
+    expect(db.query("SELECT session_id, session_runtime_id, work_dir FROM multiremi_chat_sessions WHERE id = 'chat_web_migration'").get()).toEqual({ session_id: null, session_runtime_id: "rt_legacy", work_dir: "/work/keep" });
+    for (const status of ["queued", "dispatched"]) {
+      expect(db.query("SELECT issue_id, session_id, work_dir, issue_session_id, issue_session_generation FROM multiremi_tasks WHERE id = ?").get(`tsk_chat_migration_${status}`))
+        .toEqual({ issue_id: null, session_id: null, work_dir: "/work/keep", issue_session_id: null, issue_session_generation: null });
+    }
+    expect(db.query("SELECT issue_id, issue_session_id, issue_session_generation FROM multiremi_tasks WHERE id = 'tsk_topic_migration_queued'").get())
+      .toEqual({ issue_id: "iss_chat_migration", issue_session_id: null, issue_session_generation: null });
+    for (const entry of CHAT_ISSUE_CLASSIFICATION_CASES) {
+      const chatId = classificationChatId(entry);
+      const issueId = `iss_classification_${entry.name}`;
+      const recovery = db.query(`SELECT * FROM multiremi_feishu_bot_issue_link_audit
+        WHERE binding_id = ?`).get(`fcb_${chatId}`) as Record<string, string> | null;
+      const synced = entry.synced?.filter((value) => (value.workspace ?? "local") === "local"
+        && (value.sourceWorkspace ?? "local") === "local") ?? [];
+      const p2p = synced.some((value) => value.chatType === "p2p");
+      expect(recovery).toMatchObject({ binding_id: `fcb_${chatId}`, workspace_id: "local", issue_id: issueId,
+        disposition: entry.preserve ? "preserved" : "discarded",
+        classification_version: 2, hit_canonical: Number(entry.canonical ?? false),
+        hit_marker: Number(entry.provenance === "exact"),
+        hit_synced_group: Number(synced.some((value) => value.chatType === "group")),
+        hit_synced_p2p: Number(p2p),
+      });
+      expect(Number.isFinite(Date.parse(recovery!.audited_at))).toBe(true);
+      expect(recovery!.reason).toBe(p2p ? "p2p_evidence"
+        : entry.canonical ? "canonical_topic" : entry.provenance === "exact" ? "creation_provenance"
+          : entry.preserve ? "synced_group" : "unproven_ownership");
+      expect(JSON.parse(recovery!.binding_snapshot)).toMatchObject({
+        id: `fcb_${chatId}`, workspace_id: "local", app_id: "cli_migration",
+        agent_id: "agt_chat_migration", chat_session_id: chatId, issue_id: issueId,
+        chat_id: `oc_${entry.name}`, thread_id: entry.thread || entry.key ? `om_${entry.name}` : null,
+      });
+      expect(recovery!.channel_snapshot ? JSON.parse(recovery!.channel_snapshot) : null).toEqual(entry.noChannel ? null : {
+        id: `nch_agent_chat_${chatId}`, workspace_id: "local", member_id: null, kind: "agent_chat",
+        name: "Legacy updates", enabled: entry.channelEnabled ?? 0, target: JSON.stringify({ chatId }),
+        event_types: '["comment_created"]', min_severity: "warning", created_by: "legacy-owner",
+        created_at: "2026-09-03T00:00:00.000Z", updated_at: "2026-09-03T00:00:00.000Z",
+      });
+      expect(db.query("SELECT issue_id FROM multiremi_feishu_bot_chat_bindings WHERE id = ?").get(`fcb_${chatId}`))
+        .toEqual({ issue_id: entry.preserve ? issueId : null });
+      expect(db.query(`SELECT session_id, session_provider, session_execution_fingerprint, work_dir, session_runtime_id
+        FROM multiremi_chat_sessions WHERE id = ?`).get(chatId)).toEqual({
+        session_id: entry.preserve && !entry.sharedPrivateBinding && entry.name !== "group_without_thread" ? "provider-legacy" : null,
+        session_provider: entry.preserve && !entry.sharedPrivateBinding && entry.name !== "group_without_thread" ? "codex" : null,
+        session_execution_fingerprint: entry.preserve && !entry.sharedPrivateBinding && entry.name !== "group_without_thread" ? "legacy-fingerprint" : null,
+        work_dir: "/work/keep", session_runtime_id: "rt_legacy",
+      });
+      expect(db.query("SELECT issue_id, session_id FROM multiremi_tasks WHERE id = ?").get(`tsk_${chatId}`))
+        .toEqual({ issue_id: entry.preserve ? issueId : null, session_id: entry.preserve && !entry.sharedPrivateBinding && entry.name !== "group_without_thread" ? "provider-task-legacy" : null });
+      expect(db.query("SELECT role, pending_agent_delivery FROM multiremi_chat_messages WHERE chat_session_id = ? ORDER BY role").all(chatId))
+        .toEqual(entry.preserve
+          ? [{ role: "assistant", pending_agent_delivery: 0 }, { role: "system", pending_agent_delivery: 1 }, { role: "user", pending_agent_delivery: 0 }]
+          : [{ role: "assistant", pending_agent_delivery: 0 }, { role: "user", pending_agent_delivery: 0 }]);
+      expect(db.query("SELECT pending_count FROM multiremi_agent_issue_update_state WHERE chat_session_id = ?").get(chatId))
+        .toEqual(entry.preserve ? { pending_count: 1 } : null);
+      expect(db.query("SELECT enabled FROM multiremi_notification_channels WHERE id = ?").get(`nch_agent_chat_${chatId}`))
+        .toEqual(entry.preserve ? { enabled: 0 } : null);
+    }
+    await assertLegacyWakeTokens(db, tokens);
+    assertLegacyProactiveRetryMatrix(db);
+    assertWakeInvariantMatrix(db);
+    assertCancelledLegacyWakesCannotRun(db, store);
+    // The private destination must not reuse the retained group's machine/files.
+    store.registerRuntime({ id: "rt_legacy", name: "Original machine", provider: "codex", workspaceId: "local" });
+    const mixedChatId = "chat_classification_mixed_bindings";
+    const privateTask = store.createTask({ agentId: "agt_chat_migration", chatSessionId: mixedChatId,
+      runtimeId: "rt_legacy", prompt: "Private continuation" });
+    expect(privateTask).toMatchObject({ issueId: null, sessionId: null, runtimeId: null, workDir: null });
+    const privateWire = daemonTaskClaimResponse(store, store.getTaskWithAgent(privateTask.id)!);
+    expect(privateWire.issue).toBeUndefined();
+    expect(privateWire.session_id).toBeUndefined();
+    expect(privateWire.prior_session_id).toBeUndefined();
+    expect(privateWire.runtime_id).toBe("");
+    expect(privateWire.work_dir).toBeUndefined();
+    expect(privateWire.prior_work_dir).toBeUndefined();
+    const groupTask = store.createTask({ agentId: "agt_chat_migration", chatSessionId: mixedChatId,
+      issueId: "iss_classification_mixed_bindings", prompt: "Group continuation" });
+    expect(groupTask).toMatchObject({ runtimeId: "rt_legacy", workDir: "/work/keep" });
+    store.cancelTask(privateTask.id);
+    store.cancelTask(groupTask.id);
+    // The table is bootstrap schema, even after the one-time migration ledger exists.
+    db.exec("DROP TABLE multiremi_feishu_bot_issue_link_audit");
+    runMigrations(db);
+    expect(Number(db.query("SELECT COUNT(*) AS count FROM multiremi_feishu_bot_issue_link_audit").get().count)).toBe(0);
+    db.run("DELETE FROM multiremi_feishu_messages WHERE message_id LIKE 'sync_%'");
+    db.run("DELETE FROM multiremi_feishu_sources WHERE id LIKE 'fsrc_%'");
+    // Keep the shared integration store empty for the remaining test cases.
+    for (const chat of store.listChatSessions("local")) store.deleteChatSession(chat.id);
+    store.deleteRuntime("rt_legacy");
+    store.deleteIssue("iss_chat_migration");
+    for (const entry of CHAT_ISSUE_CLASSIFICATION_CASES) store.deleteIssue(`iss_classification_${entry.name}`);
+    db.run("DELETE FROM multiremi_agents WHERE id = ?", ["agt_chat_migration"]);
+  }, 30_000);
+
   it("fences Wiki cleanup leases and persists per-path progress across connections", () => {
     const otherDb = new PostgresSyncDatabase(pgDatabaseUrl(TEST_DB));
     const other = new MultiremiStore(otherDb);
@@ -402,6 +520,52 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
         { body: "legacy_seq_c", sequence: 3 },
         { body: "After migration", sequence: 4 },
       ]);
+  });
+
+  it("discovers Feishu senders and checks their live allowlist across Chat and task ancestry", () => {
+    const previousKey = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
+    process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
+    try {
+      const workspaceId = freshWorkspace();
+      const agent = store.createAgent({ name: "PG Feishu bot", provider: "codex", workspaceId });
+      const runtimeId = `rt_feishu_allowlist_${wsCounter}`;
+      store.registerRuntime({ id: runtimeId, name: "PG bot", provider: "codex", workspaceId, daemonId: `pg_bot_${wsCounter}` });
+      store.heartbeatRuntime(runtimeId, { supportsFeishuBotConfig: true });
+      const config = store.upsertFeishuBotConfig(workspaceId, {
+        agentId: agent.id, runtimeId, appId: "cli_pg_allowlist", domain: "feishu", enabled: true,
+        senderAccessPolicy: "allowlist",
+        appSecretOp: "set", appSecret: "fixture-secret-not-a-real-credential",
+      });
+      const input = { revision: config.revision, externalSessionKey: "oc_pg_allowlist", externalMessageId: "om_pg_1", senderOpenId: "ou_pg_sender", senderName: "PG Sender", text: "Create an Issue" };
+      const inbound = store.submitFeishuBotMessage(workspaceId, runtimeId, input);
+      store.submitFeishuBotMessage(workspaceId, runtimeId, { ...input, externalMessageId: "om_pg_2", senderUnionId: "on_pg_sender" });
+      const senders = store.listFeishuBotSenders(workspaceId);
+      expect(senders).toHaveLength(1);
+      expect(senders[0]).toMatchObject({ open_id: "ou_pg_sender", union_id: "on_pg_sender", allowed: false });
+      expect(store.listFeishuBotTaskReceiptMessageIds(workspaceId, inbound.taskId)).toEqual(["om_pg_1", "om_pg_2"]);
+      expect(store.listFeishuBotTaskReceiptMessageIds("local", inbound.taskId)).toEqual([]);
+      const child = store.createTask({ agentId: agent.id, workspaceId, prompt: "Delegated request", parentTaskId: inbound.taskId });
+      expect(store.isFeishuBotTaskIssueCreationRestricted(child.id)).toBe(true);
+      store.setFeishuBotSenderAllowed(workspaceId, senders[0]!.id, true, "local");
+      expect(store.isFeishuBotTaskIssueCreationRestricted(child.id)).toBe(false);
+      const beforeRefresh = new Date().toISOString();
+      expect(store.listFeishuBotSenderProfileSources(workspaceId, beforeRefresh)).toEqual([{
+        id: senders[0]!.id, appId: config.appId, openId: "ou_pg_sender", messageId: "om_pg_2",
+      }]);
+      store.updateFeishuBotSenderProfile(workspaceId, config.appId, senders[0]!.id,
+        { name: "陈测试", nameEn: "Test Chen" }, beforeRefresh);
+      expect(store.listFeishuBotSenders(workspaceId)[0]).toMatchObject({ ...senders[0],
+        allowed: true, display_name: "陈测试", name_en: "Test Chen" });
+      expect(store.listFeishuBotSenderProfileSources(workspaceId, beforeRefresh)).toEqual([]);
+      store.setFeishuBotSenderAllowed(workspaceId, senders[0]!.id, false, "local");
+      expect(store.isFeishuBotTaskIssueCreationRestricted(inbound.taskId)).toBe(true);
+      store.upsertFeishuBotConfig(workspaceId, { ...config, appSecretOp: "keep", senderAccessPolicy: "agent" });
+      expect(store.isFeishuBotTaskIssueCreationRestricted(inbound.taskId)).toBe(false);
+      expect(store.isFeishuBotTaskIssueCreationRestricted(child.id)).toBe(false);
+    } finally {
+      if (previousKey === undefined) delete process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
+      else process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = previousKey;
+    }
   });
 
   it("migrates knowledge control-plane tables and nullable provenance columns", () => {
@@ -1626,6 +1790,26 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(store.deleteWorkspace(ws)).toBeTrue();
   });
 
+  it("persists custom execution groups and enforces membership claims on Postgres", () => {
+    const ws = freshWorkspace();
+    const first = store.registerRuntime({ name: "Group A", provider: "codex", workspaceId: ws, executionGroupId: "shared", models: [
+      { id: "group-model", label: "Model", provider: "openai", default: true },
+    ] });
+    const second = store.registerRuntime({ name: "Group B", provider: "codex", workspaceId: ws, executionGroupId: "shared", models: [
+      { id: "group-model", label: "Model", provider: "openai", default: true },
+    ] });
+    const agent = store.createAgent({ name: "Grouped worker", provider: "codex", workspaceId: ws, executionGroupId: "shared", model: "group-model" });
+    const task = store.createTask({ agentId: agent.id, prompt: "Only group members" });
+    store.updateRuntime(first.id, { executionGroupId: "departed" });
+    expect(store.claimTask(first.id)).toBeNull();
+    expect(store.claimTask(second.id)?.id).toBe(task.id);
+    store.cancelTask(task.id);
+    expect(store.deleteRuntime(second.id)).toBeTrue();
+    expect(store.getExecutionGroup("shared", ws)?.runtimeIds).toEqual([]);
+    expect(store.getAgent(agent.id)?.executionGroupId).toBe("shared");
+    expect(Number((db.query("SELECT COUNT(*) AS count FROM multiremi_execution_group_members WHERE runtime_id = ?").get(second.id) as { count: number }).count)).toBe(0);
+  });
+
   it("migrates and cleans complete Runtime auxiliary state on Postgres", () => {
     const ws = freshWorkspace();
     const oldRuntime = store.registerRuntime({
@@ -1709,6 +1893,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       workspaceId: ws,
       daemonId: newRuntime.daemonId,
     });
+    expect(store.deleteRuntime(newRuntime.id)).toBeFalse();
+    store.updateAgent(agent.id, { runtimeId: null });
     expect(store.deleteRuntime(newRuntime.id)).toBeTrue();
     expect(store.getAgent(agent.id)?.runtimeId).toBeNull();
     expect(store.getIssueWorkspace(issue.id)).toMatchObject({ runtimeId: null, status: "runtime_offline" });

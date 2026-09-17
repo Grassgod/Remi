@@ -1,4 +1,6 @@
 import { parseRuntimeClaudeProfile, type RuntimeClaudeProfile } from "@multiremi/contracts/claude-profile";
+import { runtimeConnectionModels } from "@multiremi/contracts/runtime-connection";
+import type { MultiremiRuntimeModel } from "@multiremi/contracts/types.js";
 import { readFile, realpath } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
@@ -69,6 +71,6 @@ export function resolveRuntimeClaudeProfile(input: RuntimeClaudeProfile, env: No
   };
 }
 
-export function runtimeClaudeProfileModels(profile: RuntimeClaudeProfile) {
-  return [{ id: profile.model, label: profile.model, provider: "claude", default: true }];
+export function runtimeClaudeProfileModels(profile: RuntimeClaudeProfile, models: MultiremiRuntimeModel[] = []) {
+  return runtimeConnectionModels(profile, "claude", models);
 }

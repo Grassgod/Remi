@@ -2,6 +2,23 @@
 // Extracted verbatim from store.ts so store.ts and repos/*.ts import one copy.
 import type { MultiremiTaskStatus, TaskUsageEntry } from "@multiremi/contracts/types.js";
 
+// One-time invalidation of pre-MUL-301 in-flight private Chat executions.
+// This is deliberately not a valid capability hash and must never be inherited.
+export const CHAT_ISSUE_DECOUPLED_FINGERPRINT = "chat-issue-decoupled";
+
+/** Retry lineage is structural. Editable prompt text must never erase the
+ * provenance of a generated notification; an explicit user turn is a new input. */
+export function chatTaskRetryParentSql(child: string, parent: string): string {
+  return `${child}.parent_task_id = ${parent}.id
+    AND ${child}.workspace_id = ${parent}.workspace_id
+    AND ${child}.agent_id = ${parent}.agent_id
+    AND ${child}.chat_session_id = ${parent}.chat_session_id
+    AND ${child}.task_kind = ${parent}.task_kind
+    AND ${child}.attempt > 1 AND ${child}.attempt = ${parent}.attempt + 1
+    AND NOT EXISTS (SELECT 1 FROM multiremi_chat_messages retry_input
+      WHERE retry_input.task_id = ${child}.id AND retry_input.role = 'user')`;
+}
+
 const TERMINAL_STATUSES: MultiremiTaskStatus[] = ["completed", "failed", "cancelled"];
 export const ACTIVE_TASK_STATUSES: readonly MultiremiTaskStatus[] = [
   "queued",

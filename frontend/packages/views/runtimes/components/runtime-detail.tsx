@@ -61,6 +61,7 @@ import { RuntimePluginsTab } from "./runtime-plugins-tab";
 import { RuntimeWorkspacesTab } from "./runtime-workspaces-tab";
 import { RuntimeCodexProfileTab } from "./runtime-codex-profile-tab";
 import { RuntimeProviderProfileTab } from "./runtime-provider-profile-tab";
+import { RuntimeExecutionGroupEditor } from "./runtime-execution-group-editor";
 import { RuntimeNameEditor } from "./name-editor";
 import { useT } from "../../i18n";
 
@@ -161,7 +162,9 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
   const canDelete = isAdmin || isRuntimeOwner;
 
   const servingAgents = agents.filter(
-    (a) => a.runtime_id === runtime.id && !a.archived_at,
+    (a) => !a.archived_at && (a.execution_group_id
+      ? runtime.execution_group_ids?.includes(a.execution_group_id)
+      : a.runtime_id === runtime.id),
   );
 
   // Successful delete (light or cascade) closes the dialog and navigates
@@ -686,6 +689,11 @@ function DiagnosticsCard({
             <VisibilityReadout runtime={runtime} />
           )}
         </div>
+        <RuntimeExecutionGroupEditor
+          key={`${runtime.id}:${runtime.execution_group_id ?? ""}`}
+          runtime={runtime}
+          canEdit={canDelete}
+        />
         {isLocal && (
           <div className="border-t pt-3">
             <div className="mb-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">

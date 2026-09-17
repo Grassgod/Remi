@@ -444,6 +444,42 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "workspace.feishu-bot.sender.list": {
+      "command": "remi workspace feishu-bot sender list",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.sender.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.feishu-bot.sender.allow": {
+      "command": "remi workspace feishu-bot sender allow",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.sender.allow",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.feishu-bot.sender.revoke": {
+      "command": "remi workspace feishu-bot sender revoke",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.sender.revoke",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "workspace.feishu-bot.set": {
       "command": "remi workspace feishu-bot set",
       "auth": [
@@ -2907,68 +2943,6 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
-    "chat.issue.bind": {
-      "command": "remi chat issue bind",
-      "auth": [
-        "human",
-        "task"
-      ],
-      "capability": "chat.issue.bind",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ]
-    },
-    "chat.issue.unbind": {
-      "command": "remi chat issue unbind",
-      "auth": [
-        "human",
-        "task"
-      ],
-      "capability": "chat.issue.unbind",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ]
-    },
-    "chat.issue.updates.get": {
-      "command": "remi chat issue updates get",
-      "auth": [
-        "human"
-      ],
-      "capability": "chat.issue.updates.get",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ]
-    },
-    "chat.issue.updates.enable": {
-      "command": "remi chat issue updates enable",
-      "auth": [
-        "human"
-      ],
-      "capability": "chat.issue.updates.enable",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ]
-    },
-    "chat.issue.updates.disable": {
-      "command": "remi chat issue updates disable",
-      "auth": [
-        "human"
-      ],
-      "capability": "chat.issue.updates.disable",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ]
-    },
     "chat.delete": {
       "command": "remi chat delete",
       "auth": [
@@ -3002,6 +2976,18 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "task"
       ],
       "capability": "chat.message.create",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "chat.attachment.send": {
+      "command": "remi chat attachment send",
+      "auth": [
+        "task"
+      ],
+      "capability": "chat.attachment.send",
       "output": [
         "table",
         "json",
@@ -3987,6 +3973,19 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "task"
       ],
       "capability": "plugin.runtime.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.group.list": {
+      "command": "remi runtime group list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "runtime.group.list",
       "output": [
         "table",
         "json",

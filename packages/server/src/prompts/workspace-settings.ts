@@ -3,6 +3,7 @@ import type {
   MultiremiWorkspace,
   UpdateMultiremiPromptSettingsInput,
 } from "@multiremi/contracts/types.js";
+import { ARTIFACT_DELIVERY_CONTRACT } from "@multiremi/contracts/artifact-delivery.js";
 
 export const MAX_WORKSPACE_PROMPT_LENGTH = 8_000;
 
@@ -14,7 +15,9 @@ When a task changes code:
 - Reuse an existing open PR/MR for the same source branch. Create at most one PR/MR per changed repository.
 - Creating a PR/MR does not require approval. Merging it or pushing directly to the default branch requires explicit user authorization.
 - Return every PR/MR URL in the final result. If creation fails, report the exact failure and preserve the pushed branch for recovery.
-- Do not create empty PRs/MRs. A squad leader must ensure delegated code changes have a PR/MR before completing the parent task.`;
+- Do not create empty PRs/MRs. A squad leader must ensure delegated code changes have a PR/MR before completing the parent task.
+
+${ARTIFACT_DELIVERY_CONTRACT}`;
 
 const KEYS = {
   bootstrap: "prompt_bootstrap_appendix",

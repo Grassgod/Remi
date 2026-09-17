@@ -15,7 +15,6 @@ export function chatSessionCompatibilityResponse(session: MultiremiChatSession):
   workspace_id: string;
   creator_id: string;
   agent_id: string;
-  issue_id: string | null;
   runtime_workspace_id: string | null;
   project_id: string | null;
   title: string;
@@ -31,7 +30,6 @@ export function chatSessionCompatibilityResponse(session: MultiremiChatSession):
     id: session.id,
     workspace_id: session.workspaceId,
     agent_id: session.agentId,
-    issue_id: session.issueId,
     runtime_workspace_id: session.runtimeWorkspaceId ?? null,
     project_id: session.projectId ?? null,
     creator_id: session.creatorId ?? "local",

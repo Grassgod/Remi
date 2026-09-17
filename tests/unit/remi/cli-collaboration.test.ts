@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
+import { mkdtemp, writeFile, rm, truncate } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { CommandRegistry, type CommandSpec } from "../../../apps/remi/cli/core/index.js";
 import {
@@ -47,6 +49,94 @@ describe("native collaboration CLI contracts", () => {
       expect(body?.[field]).toBe("location-1");
       if (command === "issue.quick-create") expect(body?.prompt).toBe("Inspect files");
     }
+  });
+
+  it("sends repeated local Chat attachments and a caption using the Task destination", async () => {
+    useCliEnv();
+    const dir = await mkdtemp(resolve(tmpdir(), "chat-cli-"));
+    const spec = specById("chat.attachment.send");
+    expect(spec.auth).toEqual(["task"]);
+    try {
+      await writeFile(resolve(dir, "report.html"), "<html>Report</html>");
+      await writeFile(resolve(dir, "chart.png"), "test-image");
+      let sends = 0;
+      globalThis.fetch = capabilityFetch(spec.id, async (request) => {
+        sends++;
+        expect(new URL(request.url).pathname).toBe("/api/chat/attachments/send");
+        expect(request.headers.get("authorization")).toBe("Bearer test-token");
+        expect(request.headers.get("content-type")).toContain("multipart/form-data; boundary=");
+        const form = await request.formData();
+        expect(form.get("content")).toBe("Report ready");
+        expect(form.has("chat_id")).toBe(false);
+        const files = form.getAll("file") as File[];
+        expect(files.map((file) => file.name)).toEqual(["report.html", "chart.png"]);
+        // Multipart parsers may add a charset parameter to text media types.
+        expect(files.map((file) => file.type.split(";")[0])).toEqual(["text/html", "image/png"]);
+        expect(await files[0]!.text()).toBe("<html>Report</html>");
+        return Response.json({ attachments: [{ id: "att_report" }, { id: "att_chart" }], delivery_ids: ["delivery_1", "delivery_2"] });
+      });
+      const result = await capture(() => registryFor([spec]).execute([
+        ...spec.path, "--attachment", resolve(dir, "report.html"), "--attachment", resolve(dir, "chart.png"),
+        "--content", "Report ready", "--output", "json",
+      ]));
+      expect(sends).toBe(1);
+      expect(JSON.parse(result.stdout).delivery_ids).toEqual(["delivery_1", "delivery_2"]);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
+  it("rejects missing, remote, and oversized Chat files before uploading anything", async () => {
+    useCliEnv();
+    const dir = await mkdtemp(resolve(tmpdir(), "chat-cli-"));
+    const spec = specById("chat.attachment.send");
+    let requests = 0;
+    globalThis.fetch = (async () => { requests++; throw new Error("unexpected network"); }) as unknown as typeof fetch;
+    try {
+      const large = resolve(dir, "large.pdf");
+      await writeFile(large, "");
+      await truncate(large, 20 * 1024 * 1024 + 1);
+      const cases = [
+        { args: [], error: "requires --attachment" },
+        { args: ["--attachment", "https://example.test/report.html"], error: "local file path" },
+        { args: ["--attachment", large], error: "20MB" },
+      ];
+      for (const value of cases) {
+        await expect(capture(() => registryFor([spec]).execute([...spec.path, ...value.args]))).rejects.toThrow(value.error);
+      }
+      expect(requests).toBe(0);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
+  it("rejects empty HTML and image files, including a later batch item, without a network request", async () => {
+    useCliEnv();
+    const dir = await mkdtemp(resolve(tmpdir(), "chat-cli-empty-"));
+    const spec = specById("chat.attachment.send");
+    let requests = 0;
+    globalThis.fetch = (async () => { requests++; throw new Error("unexpected network"); }) as unknown as typeof fetch;
+    try {
+      const valid = resolve(dir, "report.html");
+      await writeFile(valid, "<h1>Report</h1>");
+      for (const filename of ["空 报告.html", "empty.png"]) {
+        const empty = resolve(dir, filename);
+        await writeFile(empty, "");
+        for (const args of [["--attachment", empty], ["--attachment", valid, "--attachment", empty]]) {
+          await expect(capture(() => registryFor([spec]).execute([...spec.path, ...args])))
+            .rejects.toThrow(`Attachment ${filename} is empty (0 bytes)`);
+        }
+      }
+      expect(requests).toBe(0);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
+  it("surfaces rejected Chat file types without claiming successful delivery", async () => {
+    useCliEnv();
+    const dir = await mkdtemp(resolve(tmpdir(), "chat-cli-"));
+    const spec = specById("chat.attachment.send");
+    try {
+      const path = resolve(dir, "program.exe");
+      await writeFile(path, "unsupported");
+      globalThis.fetch = capabilityFetch(spec.id, () => Response.json({ error: "File type .exe is not allowed" }, { status: 415 }));
+      await expect(capture(() => registryFor([spec]).execute([...spec.path, "--attachment", path]))).rejects.toThrow("not allowed");
+    } finally { await rm(dir, { recursive: true, force: true }); }
   });
 
   it("manages private chats and queued messages through the registered commands", async () => {
@@ -224,42 +314,20 @@ describe("native collaboration CLI contracts", () => {
     expect(JSON.parse(jsonl.stdout)).toMatchObject({ id: "lbl_1", name: "Urgent" });
   });
 
-  it("binds and unbinds a Chat Issue through registered commands", async () => {
+  it("rejects removed Chat Issue commands without making API requests", async () => {
     useCliEnv();
-    const requests: Array<{ method: string; path: string; body: unknown }> = [];
-    globalThis.fetch = (async (input, init) => {
-      const request = input instanceof Request ? input : new Request(input, init);
-      const path = new URL(request.url).pathname;
-      if (path === "/api/cli/capabilities") {
-        return Response.json({ commands: [
-          { id: "chat.issue.bind", allowed: true },
-          { id: "chat.issue.unbind", allowed: true },
-        ] });
-      }
-      if (path === "/api/chat/sessions" && request.method === "GET") {
-        return Response.json([{ id: "chat_1", title: "Work" }]);
-      }
-      if (path === "/api/issues/MUL-226" && request.method === "GET") {
-        return Response.json({ id: "iss_226", key: "MUL-226", title: "Bound" });
-      }
-      if (path === "/api/chat/sessions/chat_1" && request.method === "PATCH") {
-        requests.push({ method: request.method, path, body: await request.json() });
-        return Response.json({ id: "chat_1", issue_id: (requests.at(-1)?.body as any).issue_id });
-      }
-      throw new Error(`unexpected request ${request.method} ${path}`);
-    }) as typeof fetch;
-
-    await capture(() => registryFor([specById("chat.issue.bind")]).execute([
-      "chat", "issue", "bind", "Work", "MUL-226", "--output", "json",
-    ]));
-    await capture(() => registryFor([specById("chat.issue.unbind")]).execute([
-      "chat", "issue", "unbind", "Work", "--output", "json",
-    ]));
-
-    expect(requests).toEqual([
-      { method: "PATCH", path: "/api/chat/sessions/chat_1", body: { issue_id: "iss_226" } },
-      { method: "PATCH", path: "/api/chat/sessions/chat_1", body: { issue_id: null } },
-    ]);
+    let requests = 0;
+    globalThis.fetch = (async () => {
+      requests += 1;
+      throw new Error("Removed Chat Issue commands must not call the API");
+    }) as unknown as typeof fetch;
+    const registry = registryFor(specs);
+    for (const suffix of [["bind", "Work", "MUL-226"], ["unbind", "Work"],
+      ["updates", "get", "Work"], ["updates", "enable", "Work"], ["updates", "disable", "Work"]]) {
+      await expect(capture(() => registry.execute(["chat", "issue", ...suffix])))
+        .rejects.toThrow("usage: remi chat <command>");
+    }
+    expect(requests).toBe(0);
   });
 
   it("creates workspace Sessions by default and supports discussion Sessions", async () => {

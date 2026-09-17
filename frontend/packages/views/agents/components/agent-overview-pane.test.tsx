@@ -30,7 +30,7 @@ vi.mock("./tabs/env-tab", () => ({
   EnvTab: () => <div>env-tab</div>,
 }));
 vi.mock("./tabs/custom-args-tab", () => ({
-  CustomArgsTab: () => <div>custom-args-tab</div>,
+  CustomArgsTab: ({ runtimeDevice }: { runtimeDevice?: AgentRuntime }) => <div>custom-args-tab: {runtimeDevice?.launch_header ?? "no target"}</div>,
 }));
 vi.mock("./tabs/mcp-config-tab", () => ({
   McpConfigTab: () => <div>mcp-config-tab</div>,
@@ -104,7 +104,7 @@ function makeRuntime(provider: string): AgentRuntime {
   };
 }
 
-function renderPane(runtimes: AgentRuntime[]) {
+function renderPane(runtimes: AgentRuntime[], agent = baseAgent) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -112,7 +112,7 @@ function renderPane(runtimes: AgentRuntime[]) {
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
       <QueryClientProvider client={queryClient}>
         <AgentOverviewPane
-          agent={baseAgent}
+          agent={agent}
           runtimes={runtimes}
           onUpdate={vi.fn().mockResolvedValue(undefined)}
         />
@@ -172,6 +172,22 @@ describe("AgentOverviewPane tab semantics", () => {
     const panel = screen.getByRole("tabpanel");
     expect(panel).toHaveTextContent("activity-tab");
     expect(activity.getAttribute("aria-controls")).toBe(panel.id);
+  });
+
+  it("does not pick an arbitrary machine launch command from a shared group", async () => {
+    const user = userEvent.setup();
+    const members = ["a", "b"].map((id) => ({ ...makeRuntime("codex"), id, execution_group_ids: ["shared"], launch_header: `machine-${id}` }));
+    renderPane(members, { ...baseAgent, runtime_id: "", execution_group_id: "shared", provider: "codex" });
+    await user.click(screen.getByRole("tab", { name: "Custom Args" }));
+    expect(screen.getByRole("tabpanel")).toHaveTextContent("no target");
+  });
+
+  it("uses launch metadata from the bound machine instead of the first same-type runtime", async () => {
+    const user = userEvent.setup();
+    renderPane([{ ...makeRuntime("claude"), id: "other", launch_header: "WRONG MACHINE" }, { ...makeRuntime("claude"), launch_header: "BOUND MACHINE" }]);
+    await user.click(screen.getByRole("tab", { name: "Custom Args" }));
+    expect(screen.getByRole("tabpanel")).toHaveTextContent("BOUND MACHINE");
+    expect(screen.getByRole("tabpanel")).not.toHaveTextContent("WRONG MACHINE");
   });
 
   it("switches the rendered panel when another tab is activated", async () => {

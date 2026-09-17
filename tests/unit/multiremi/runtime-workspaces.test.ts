@@ -207,7 +207,7 @@ it("quick-creates a local intake and instructs its agent to preserve the directo
 });
 
 
-it("binds a project's context and device routing to Chat independently of a linked Issue", async () => {
+it("binds a project's context and device routing to Chat while rejecting Issue binding", async () => {
   const { store, runtime, workspace, agent } = fixture();
   const project = store.createProject({ title: "Chosen project" });
   store.createProjectDevice(project.id, { daemonId: "laptop", createdBy: "local" });
@@ -216,8 +216,10 @@ it("binds a project's context and device routing to Chat independently of a link
   const issue = store.createIssue({ title: "Reference only", projectId: otherProject.id });
   const app = createMultiremiApp({ store });
   const response = await app.request("/api/chat/sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agent_id: agent.id, project_id: project.id, issue_id: issue.id }) });
-  expect(response.status).toBe(201);
-  const chat = await response.json() as { id: string; project_id: string };
+  expect(response.status).toBe(400);
+  const created = await app.request("/api/chat/sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agent_id: agent.id, project_id: project.id }) });
+  expect(created.status).toBe(201);
+  const chat = await created.json() as { id: string; project_id: string };
   expect(chat.project_id).toBe(project.id);
   const task = store.sendChatMessage(chat.id, { body: "Inspect the selected project" }).task;
   expect(store.getTaskWithAgent(task.id)?.project?.id).toBe(project.id);
@@ -225,7 +227,8 @@ it("binds a project's context and device routing to Chat independently of a link
   expect(store.claimTask(runtime.id)?.id).toBe(task.id);
   store.cancelTask(task.id);
   expect(() => store.createChatSession({ agentId: agent.id, project_id: project.id, runtime_workspace_id: workspace.id })).toThrow("either a project");
-  const local = store.createChatSession({ agentId: agent.id, runtime_workspace_id: workspace.id, issueId: issue.id });
+  expect(() => store.createChatSession({ agentId: agent.id, runtime_workspace_id: workspace.id, issueId: issue.id } as any)).toThrow("cannot be bound to an Issue");
+  const local = store.createChatSession({ agentId: agent.id, runtime_workspace_id: workspace.id });
   const localTask = store.sendChatMessage(local.id, { body: "Inspect local files" }).task;
   expect(store.getTaskWithAgent(localTask.id)?.project).toBeNull();
   expect(store.getTaskWithAgent(localTask.id)?.projectContexts).toEqual([]);

@@ -22,7 +22,7 @@ import {
 } from "../wire/index.js";
 import type { CreateTaskInput } from "@multiremi/contracts/types.js";
 import { createId } from "@multiremi/ids.js";
-import { TaskSteerConflictError } from "@multiremi/store/repos/tasks-repo.js";
+import { ChatIssueTaskConflictError, TaskSteerConflictError } from "@multiremi/store/repos/tasks-repo.js";
 import { OrganizerActionError } from "../../organizer/settings.js";
 import type { RouterDeps } from "./deps.js";
 
@@ -32,10 +32,17 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/multiremi/tasks", (c) => {
     const status = c.req.query("status") as any;
     const taskToken = currentTaskAccessToken(c);
-    const tasks = store.listTasks(status).filter((task) =>
-      (taskToken?.workspaceId == null || task.workspaceId === taskToken.workspaceId)
-      && canCurrentUserAccessChatTask(c, store, task)
-    );
+    const workspaceAccess = new Map<string, boolean>();
+    const tasks = store.listTasks(status).filter((task) => {
+      let allowed = taskToken
+        ? taskToken.workspaceId == null || task.workspaceId === taskToken.workspaceId
+        : workspaceAccess.get(task.workspaceId);
+      if (allowed === undefined) {
+        allowed = denyCurrentUserWorkspaceAccess(c, store, task.workspaceId) == null;
+        workspaceAccess.set(task.workspaceId, allowed);
+      }
+      return allowed && canCurrentUserAccessChatTask(c, store, task);
+    });
     return c.json({ tasks: tasks.map(taskPublicResponse) });
   });
   app.post("/api/multiremi/tasks", async (c) => {
@@ -88,7 +95,7 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
       ...publicInput
     } = body;
     const taskToken = currentTaskAccessToken(c);
-    const sourceTask = taskToken?.taskId ? store.getTask(taskToken.taskId) : null;
+    const sourceTask = taskToken?.taskId ? store.getTaskWithAgent(taskToken.taskId) : null;
     const issueId = cleanString(publicInput.issueId);
     const issue = issueId ? store.getIssue(issueId) : null;
     const requestedIssueSessionId = cleanString(publicInput.issueSessionId ?? publicInput.issue_session_id);
@@ -117,16 +124,32 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
         : {}),
     };
     assertRuntimeWorkspaceAccess(c, store, createInput.runtimeWorkspaceId ?? createInput.runtime_workspace_id, agent.workspaceId);
-    const task = store.createTask(createInput);
-    return c.json({ task: taskPublicResponse(task) }, 201);
+    try {
+      const task = store.createTask(createInput);
+      return c.json({ task: taskPublicResponse(task) }, 201);
+    } catch (error) {
+      if (error instanceof ChatIssueTaskConflictError) return c.json({ error: error.message }, 400);
+      throw error;
+    }
   });
   app.get("/api/multiremi/tasks/:id", (c) => {
-    const task = store.getTaskWithAgent(c.req.param("id"));
+    const task = store.getTask(c.req.param("id"));
     if (!task) return c.json({ error: "task not found" }, 404);
     const taskDenied = denyCurrentUserWorkspaceAccess(c, store, task.workspaceId);
     if (taskDenied) return taskDenied;
     if (!canCurrentUserAccessChatTask(c, store, task)) return c.json({ error: "forbidden" }, 403);
-    return c.json({ task: taskPublicResponse(task) });
+    try {
+      return c.json({ task: taskPublicResponse(store.getTaskWithAgent(task.id)!) });
+    } catch (error) {
+      if (!(error instanceof ChatIssueTaskConflictError)) throw error;
+      // Owners can still inspect their cancelled/stale task history. Execution
+      // eligibility must not turn that read into a 500 or load another Issue.
+      return c.json({ task: taskPublicResponse({ ...task,
+        issueId: null, issueSessionId: null, issueSessionGeneration: null, sessionId: null,
+        agent: store.getAgent(task.agentId), issue: null, project: null,
+        projectResources: [], projectDocs: null, projectContexts: [], repos: [],
+      }) });
+    }
   });
   const cancelTaskRoute = async (c: any, compatibility: boolean) => {
     const task = taskFromParam(store, c, "id");
@@ -134,31 +157,6 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     const taskDenied = denyCurrentUserWorkspaceAccess(c, store, task.workspaceId);
     if (taskDenied) return taskDenied;
     if (!canCurrentUserAccessChatTask(c, store, task)) return c.json({ error: "forbidden" }, 403);
-    const taskToken = currentTaskAccessToken(c);
-    if (taskToken?.taskId) {
-      const supervisor = supervisorTaskIdentity(c, store);
-      if (supervisor && task.id === supervisor.task.id) {
-        return c.json({ error: "a supervisor cannot act on its own task", code: "organizer_self_action_forbidden" }, 403);
-      }
-      if (supervisor && task.id !== taskToken.taskId) {
-        const body = await readJson<{ reason?: string }>(c);
-        try {
-          const result = store.performOrganizerAction({
-            supervisorTaskId: supervisor.task.id,
-            supervisorAgentId: supervisor.agentId,
-            targetTaskId: task.id,
-            action: "cancel",
-            reason: cleanString(body.reason) ?? "",
-          });
-          return compatibility
-            ? c.json({ ...taskCompatibilityResponse(result.task), organizer_action: result.audit, comment_id: result.comment.id })
-            : c.json({ task: taskPublicResponse(result.task), organizer_action: result.audit, comment_id: result.comment.id });
-        } catch (error) {
-          if (error instanceof OrganizerActionError) return c.json({ error: error.message, code: error.code }, error.status);
-          throw error;
-        }
-      }
-    }
     const cancelled = store.cancelTask(task.id);
     return compatibility
       ? c.json(taskCompatibilityResponse(cancelled))
@@ -181,30 +179,6 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     const content = cleanString(body?.content)
       ?? (forceAnswer ? "Please stop exploring and deliver your best conclusion based on the work so far." : null);
     if (!content) return c.json({ error: "content is required" }, 400);
-    const taskToken = currentTaskAccessToken(c);
-    if (taskToken?.taskId) {
-      const supervisor = supervisorTaskIdentity(c, store);
-      if (supervisor && task.id === supervisor.task.id) {
-        return c.json({ error: "a supervisor cannot act on its own task", code: "organizer_self_action_forbidden" }, 403);
-      }
-      if (supervisor && task.id !== taskToken.taskId) {
-        try {
-          const result = store.performOrganizerAction({
-            supervisorTaskId: supervisor.task.id,
-            supervisorAgentId: supervisor.agentId,
-            targetTaskId: task.id,
-            action: forceAnswer ? "force_answer" : "steer",
-            reason: cleanString(body.reason) ?? "",
-            content,
-          });
-          return c.json({ message: result.message, organizer_action: result.audit, comment_id: result.comment.id }, 201);
-        } catch (error) {
-          if (error instanceof OrganizerActionError) return c.json({ error: error.message, code: error.code }, error.status);
-          if (error instanceof TaskSteerConflictError) return c.json({ error: error.message }, 409);
-          throw error;
-        }
-      }
-    }
     // Re-read after body parsing: the task may have finished while the body
     // streamed in, and the pre-parse snapshot would let a doomed insert reach
     // the store. The store's own terminal check backstops the remaining race.

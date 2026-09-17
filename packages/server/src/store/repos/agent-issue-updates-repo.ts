@@ -75,11 +75,12 @@ export class AgentIssueUpdatesRepo {
     const chat = this.ctx.chat().getChatSession(chatSessionId);
     if (!chat) throw new AgentIssueUpdateValidationError(`Chat session not found: ${chatSessionId}`);
     const channel = this.ctx.notificationChannels().getAgentChatNotificationChannel(chat.id);
+    const issueId = this.ctx.feishuBot().getFeishuIssueIdForChatSession(chat.id);
     return {
       chatSessionId: chat.id,
-      issueId: chat.issueId,
+      issueId,
       channelId: channel?.id ?? null,
-      enabled: Boolean(chat.issueId && channel?.enabled),
+      enabled: Boolean(issueId && channel?.enabled),
       debounceWindowSeconds: this.debounceMs / 1_000,
     };
   }
@@ -92,8 +93,8 @@ export class AgentIssueUpdatesRepo {
   }): MultiremiAgentIssueUpdateSubscription {
     const chat = this.ctx.chat().getChatSession(input.chatSessionId);
     if (!chat) throw new AgentIssueUpdateValidationError(`Chat session not found: ${input.chatSessionId}`);
-    if (input.enabled && !chat.issueId) {
-      throw new AgentIssueUpdateValidationError("Bind the Chat to an Issue before enabling Issue updates");
+    if (input.enabled && !this.ctx.feishuBot().getFeishuIssueIdForChatSession(chat.id)) {
+      throw new AgentIssueUpdateValidationError("Issue updates are only available for Feishu Issue topics");
     }
     this.ctx.notificationChannels().upsertAgentChatNotificationChannel({
       workspaceId: chat.workspaceId,
@@ -115,12 +116,16 @@ export class AgentIssueUpdatesRepo {
     const issue = this.ctx.issues().getIssue(input.issueId);
     if (!issue) return;
     const chats = this.ctx.db.query(
-      `SELECT * FROM multiremi_chat_sessions
-       WHERE issue_id = ? AND status = 'active'
-       ORDER BY created_at ASC, id ASC`,
+      `SELECT c.*, b.issue_id FROM multiremi_chat_sessions c
+       JOIN multiremi_feishu_bot_chat_bindings b ON b.chat_session_id = c.id
+       WHERE b.issue_id = ? AND c.status = 'active'
+       ORDER BY c.created_at ASC, c.id ASC`,
     ).all(issue.id) as Row[];
+    const seenChats = new Set<string>();
     for (const row of chats) {
       const chat = toBoundChat(row);
+      if (seenChats.has(chat.id)) continue;
+      seenChats.add(chat.id);
       const channel = this.ctx.notificationChannels().getAgentChatNotificationChannel(chat.id);
       if (!channel?.enabled) continue;
       if (!channel.eventTypes.includes("*") && !channel.eventTypes.includes(input.type)) continue;
@@ -208,7 +213,7 @@ export class AgentIssueUpdatesRepo {
     if (
       !chat
       || chat.status !== "active"
-      || chat.issueId !== state.issueId
+      || this.ctx.feishuBot().getFeishuIssueIdForChatSession(chatSessionId) !== state.issueId
       || !channel?.enabled
       || channel.id !== state.channelId
     ) {
@@ -251,7 +256,7 @@ export class AgentIssueUpdatesRepo {
   }
 
   private upsertPending(
-    chat: Pick<MultiremiChatSession, "id" | "workspaceId" | "issueId">,
+    chat: Pick<MultiremiChatSession, "id" | "workspaceId"> & { issueId: string | null },
     channelId: string,
     input: QueueAgentIssueUpdateInput,
   ): void {
@@ -406,7 +411,7 @@ function recordValue(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function toBoundChat(row: Row): Pick<MultiremiChatSession, "id" | "workspaceId" | "issueId" | "agentId"> {
+function toBoundChat(row: Row): Pick<MultiremiChatSession, "id" | "workspaceId" | "agentId"> & { issueId: string | null } {
   return {
     id: String(row.id),
     workspaceId: String(row.workspace_id ?? "local"),

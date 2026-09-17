@@ -22,6 +22,8 @@ import type { CloudRuntimeNode } from "../../runtimes/cloud-runtime";
 
 export const AgentRuntimeSchema = z.object({
   id: z.string(),
+  execution_group_id: z.string().nullable().optional(),
+  execution_group_ids: z.array(z.string()).optional(),
   workspace_id: z.string(),
   daemon_id: z.string().nullable(),
   daemon_display_name: z.string().nullable().optional().default(null),
@@ -41,6 +43,18 @@ export const AgentRuntimeSchema = z.object({
 
 export const AgentRuntimeListSchema = z.array(AgentRuntimeSchema);
 export const EMPTY_AGENT_RUNTIME_LIST: AgentRuntime[] = [];
+
+export const ExecutionGroupListSchema = z.object({
+  groups: z.array(z.object({
+    id: z.string().min(1),
+    workspace_id: z.string(),
+    name: z.string(),
+    provider: z.string(),
+    runtime_ids: z.array(z.string()),
+    online_runtime_count: z.number().int().nonnegative(),
+  })),
+});
+export type ExecutionGroupList = z.infer<typeof ExecutionGroupListSchema>;
 
 export const DaemonProfileResponseSchema = z.object({
   workspace_id: z.string(),
@@ -210,10 +224,8 @@ export const EMPTY_RUNTIME_PROVISION_RESPONSE: RuntimeProvisionResponse = {
   provision: EMPTY_RUNTIME_PROVISION,
 };
 
-// Fleet model catalog (`GET /api/models`) — feeds the machine-less create
-// flow's engine toggle + model dropdown. Lenient by design: an unknown
-// provider or a malformed model row must degrade to "engine with no
-// catalog", never crash the create dialog.
+// Workspace or execution-target model catalog (`GET /api/models`).
+// Invalid capability metadata must not become selectable effort values.
 const FleetProviderModelsSchema = z.object({
   provider: z.string(),
   online_runtime_count: z.number().default(0),
@@ -223,6 +235,14 @@ const FleetProviderModelsSchema = z.object({
       label: z.string().default(""),
       provider: z.string().optional(),
       default: z.boolean().optional(),
+      thinking: z.object({
+        supported_levels: z.array(z.object({
+          value: z.string(),
+          label: z.string(),
+          description: z.string().optional(),
+        })),
+        default_level: z.string().optional(),
+      }).optional(),
     }).loose(),
   ).default([]),
 }).loose();

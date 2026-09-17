@@ -19,7 +19,23 @@ describe("workspace prompt settings", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({
+    const preview = await response.json();
+    for (const section of [
+      "## Issue\nKey: {{issue_key}}",
+      "## Project Context",
+      "## Published Results From Other Sessions",
+      "## Available Repositories",
+    ]) {
+      expect(preview.bootstrap).toContain(section);
+    }
+    expect(preview.delta).toContain("## Issue\nKey: {{issue_key}}");
+    expect(preview.delta).toContain("## Project Delta Instructions\n{{project_delta_instructions}}");
+    expect(preview.delta).toContain("## New Published Results From Other Sessions");
+    for (const prompt of [preview.bootstrap, preview.delta]) {
+      expect(prompt).toContain("## Bound Issue\nThis Feishu topic is bound to {{issue_key}}");
+      expect(prompt).not.toContain("## Remi Context");
+    }
+    expect(preview).toMatchObject({
       bootstrap: expect.stringContaining("{{workspace_bootstrap_prompt}}"),
       delta: expect.stringContaining("{{workspace_delta_prompt}}"),
       sha256: {

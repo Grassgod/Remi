@@ -10,6 +10,20 @@ receives the Docker socket and cannot invoke `systemctl`.
 
 ## Release pipeline
 
+Prepare every release, including nightly releases, with Bun 1.3.14:
+
+```bash
+git fetch origin --tags
+bun run release:prepare --version <next-unused-version>
+```
+
+This resolves the latest stable ACP bridges, Claude SDK/CC and Codex from the
+public npm registry, installs them in a disposable home, verifies executable
+versions and ACP initialization, then updates `package.json` and the tracked
+runtime snapshot. `--dry-run` performs the same checks without editing files.
+Review and commit both files as the release change. Preparation failure leaves
+both files unchanged. The command does not create commits, tags or releases.
+
 Push a formal SemVer tag only after the tag commit's `Release build check` run
 on `main` succeeds. The tag-triggered `Release` workflow publishes the daemon
 CLI GitHub Release first, then calls the reusable `Platform release` workflow
@@ -19,6 +33,11 @@ archive to the same release.
 Select a new, unused SemVer version only for an explicitly requested release;
 the package version, tag, and GitHub Release must agree. See [repository release
 rules](../AGENTS.md).
+
+CI rejects version bumps without a matching prepared runtime snapshot. The tag
+workflow checks that snapshot and successful full CI on the exact main commit
+before publishing the CLI; it does not resolve dependencies again after tagging.
+See [daemon runtime upgrades](../docs/daemon-runtime-upgrades.md) for installation.
 
 `Platform release` keeps a manual dispatch entry for recovery. Images carry
 both the version tag and a `sha-<commit>` tag. A retry reuses an existing image

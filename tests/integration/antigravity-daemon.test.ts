@@ -1,14 +1,15 @@
-import { expect, it } from "bun:test";
+import { expect, it, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import * as os from "node:os";
 import { join, resolve } from "node:path";
 import { startMultiremiServer } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { MultiremiDaemon } from "@multiremi/daemon.js";
 
 it("runs native Antigravity through API, daemon, Chat resume and an Issue in a retained directory", async () => {
-  const root = mkdtempSync(join(tmpdir(), "remi-agy-daemon-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "remi-agy-daemon-")));
   const database = new Database(":memory:");
   const store = new MultiremiStore(database);
   store.ensureLocalWorkspace();
@@ -28,6 +29,8 @@ it("runs native Antigravity through API, daemon, Chat resume and an Issue in a r
     provider: "antigravity", workspaceId: "local", daemonPort: 0, pollIntervalMs: 20, gcEnabled: false,
     workspacesRoot: join(root, "state"), repoCacheRoot: join(root, "repo-cache"),
   });
+  // Do not load the developer's global instructions or installed skills.
+  const homeSpy = spyOn(os, "homedir").mockReturnValue(join(root, "user-home"));
   const run = daemon.start();
   try {
     await poll(() => store.listRuntimes().length > 0);
@@ -60,6 +63,7 @@ it("runs native Antigravity through API, daemon, Chat resume and an Issue in a r
   } finally {
     daemon.stop();
     await run.catch(() => {});
+    homeSpy.mockRestore();
     server.stop(true);
     database.close();
     rmSync(root, { recursive: true, force: true, maxRetries: 5 });

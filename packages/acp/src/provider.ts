@@ -665,6 +665,7 @@ export class AcpProvider implements Provider {
       const child = spawn(launch.executable, launch.args, {
         stdio: ["ignore", "ignore", "pipe"],
         windowsHide: true,
+        env: { ...process.env, ...this._options.env },
       });
       child.stderr?.on("data", (chunk) => {
         if (stderr.length < 2000) stderr += String(chunk);

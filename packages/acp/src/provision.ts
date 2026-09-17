@@ -4,16 +4,19 @@
  * Users should only need the agents they actually use — `claude` and `codex`.
  * The ACP bridges (`claude-agent-acp`, `codex-acp`) that the daemon spawns are
  * an implementation detail, so `remi` provisions them itself: for each provider
- * whose CLI is present but whose bridge is missing, npm-install the bridge into
- * `~/.remi/acp`. If `node` is missing, download an official build into
- * `~/.remi/node` first. Everything degrades gracefully — a provider whose bridge
- * can't be provisioned simply won't register; nothing crashes.
+ * whose CLI/bridge is present, prepare its selected ACP + SDK bundle in
+ * `~/.remi/acp/bundles`. If `node` is missing, download an official build into
+ * `~/.remi/node` first. Startup degrades gracefully per provider. Installer
+ * preflight is strict: a failure stops the upgrade before replacing the CLI.
  */
 
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { installRuntimeBundle, runtimeBundlePrefix, runtimePackageSatisfied, verifyRuntimeExecutable } from "./runtime-bundle.js";
+import { releaseRuntimeVersions } from "./runtime-versions.js";
+export { BRIDGE_PIN, RUNTIME_PIN } from "./runtime-versions.js";
 
 export type ProvisionProvider = "claude" | "codex";
 type Logger = (message: string) => void;
@@ -31,13 +34,8 @@ const PROVIDER_PACKAGES: Record<ProvisionProvider, string[]> = {
   claude: ["@agentclientprotocol/claude-agent-acp"],
   codex: ["@agentclientprotocol/codex-acp"],
 };
-// Pinned bridge versions — the whole fleet must run exactly these so machines
-// stay interchangeable. Bump deliberately alongside a remi release; daemons
-// converge on their next start (or via a scope="acp" update request).
-// codex-acp 1.11.0 depends on @openai/codex ^0.153.4; the bridge launches that
-// bundled CLI, not a separately installed system Codex. Validate the published
-// package with tests/integration/verify-codex-bridge.ts when changing this pin.
-export const BRIDGE_PIN: Record<ProvisionProvider, string> = { claude: "0.66.0", codex: "1.11.0" };
+// Release pins provide a tested baseline. Automatic updates retain a newer,
+// validated stable selection across restarts.
 export const CODEX_USAGE_PATCH = "codex-usage-v1";
 const PROVIDER_BIN: Record<ProvisionProvider, string> = { claude: "claude-agent-acp", codex: "codex-acp" };
 
@@ -88,6 +86,7 @@ function which(cmd: string): string | null {
 /** Directory of an installed bridge package (with package.json), or null. */
 export function locateBridgePackage(provider: ProvisionProvider): string | null {
   const roots = [
+    join(runtimeBundlePrefix(provider), "node_modules"),
     join(acpPrefix(), "node_modules"),
     join(homedir(), ".npm-global", "lib", "node_modules"),
     "/usr/local/lib/node_modules",
@@ -112,7 +111,8 @@ export function bridgeSatisfied(provider: ProvisionProvider): boolean {
   if (!dir) return false;
   try {
     const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { version?: string };
-    return pkg.version === BRIDGE_PIN[provider]
+    return pkg.version === releaseRuntimeVersions(provider).acp
+      && runtimePackageSatisfied(provider, dir)
       && (provider !== "codex" || codexUsagePatchSatisfied(dir));
   } catch {
     return false;
@@ -188,7 +188,18 @@ export function bridgeVersion(provider: ProvisionProvider): string | null {
 
 /** Version of the underlying agent CLI itself (`claude` / `codex`), or null. */
 export function agentCliVersion(provider: ProvisionProvider): string | null {
-  const cli = which(PROVIDER_CLI[provider]);
+  const override = provider === "claude"
+    ? process.env.REMI_CLAUDE_CODE_EXECUTABLE || process.env.CLAUDE_CODE_EXECUTABLE
+    : process.env.CODEX_PATH;
+  if (!override) {
+    const bridge = locateBridgePackage(provider);
+    if (bridge && runtimePackageSatisfied(provider, bridge)) {
+      const node = which("node") ?? join(nodeDir(), "bin", "node");
+      try { return verifyRuntimeExecutable(provider, bridge, node); }
+      catch { return null; }
+    }
+  }
+  const cli = override || which(PROVIDER_CLI[provider]);
   if (!cli) return null;
   try {
     const out = execFileSync(cli, ["--version"], { encoding: "utf8", timeout: 8000, stdio: ["ignore", "pipe", "ignore"] });
@@ -199,7 +210,7 @@ export function agentCliVersion(provider: ProvisionProvider): string | null {
 }
 
 /** Resolve `node` + `npm`, downloading an official build into ~/.remi/node if absent. */
-function ensureNode(log: Logger): { node: string; npm: string } | null {
+export function ensureNode(log: Logger): { node: string; npm: string } | null {
   const sysNode = which("node");
   const sysNpm = which("npm");
   if (sysNode && sysNpm) return { node: sysNode, npm: sysNpm };
@@ -238,28 +249,11 @@ function ensureNode(log: Logger): { node: string; npm: string } | null {
   return null;
 }
 
-function npmInstall(npm: string, node: string, pkg: string, log: Logger): boolean {
-  const prefix = acpPrefix();
-  mkdirSync(prefix, { recursive: true });
-  try {
-    execFileSync(npm, ["install", "--prefix", prefix, "--no-audit", "--no-fund", "--loglevel=error", pkg], {
-      timeout: 180000,
-      stdio: ["ignore", "ignore", "pipe"],
-      // Make sure npm's own node lookup uses our node when it's the bundled one.
-      env: { ...process.env, PATH: `${join(nodeDir(), "bin")}:${process.env.PATH ?? ""}` },
-    });
-    return true;
-  } catch (err) {
-    log(`npm install ${pkg} failed: ${err instanceof Error ? err.message : String(err)}`);
-    return false;
-  }
-}
-
 /** Symlink the codex-acp bin into ~/.remi/bin (a path the resolver already checks). */
 function linkCodexBin(log: Logger): void {
   const dir = locateBridgePackage("codex");
   if (!dir) return;
-  const src = join(acpPrefix(), "node_modules", ".bin", "codex-acp");
+  const src = join(dir, "dist", "index.js");
   if (!existsSync(src)) return;
   const dst = join(remiBin(), "codex-acp");
   try {
@@ -278,36 +272,37 @@ function linkCodexBin(log: Logger): void {
  * (if bundled) + ~/.remi/bin onto this process's PATH so spawned bridges
  * (node scripts) resolve. Best-effort.
  */
-export function ensureAcpBridges(providers: ProvisionProvider[], log: Logger = (m) => console.error(`[provision] ${m}`)): void {
+export function ensureAcpBridges(
+  providers: ProvisionProvider[],
+  log: Logger = (m) => console.error(`[provision] ${m}`),
+  options: { strict?: boolean; activate?: boolean } = {},
+): void {
   // Always put our managed dirs on PATH so already-provisioned bridges + node
   // are visible to child processes (the daemon spawns the bridges), and point
   // the claude wrapper directly at the located package via env — this is
   // resolution-proof: it works even when a stale remi-claude-agent-acp on PATH
   // would otherwise be picked and fail to find the package.
   prependManagedPath();
-  pointClaudeBridgeDir();
-
-  const stale = providers.filter((p) => which(PROVIDER_CLI[p]) && !bridgeSatisfied(p));
-  if (stale.length === 0) return;
-
-  const node = ensureNode(log);
-  if (!node) {
-    log(`cannot provision bridges (${stale.join(", ")}): node unavailable`);
-    return;
-  }
-  for (const provider of stale) {
-    const pkg = `${PROVIDER_PACKAGES[provider][0]}@${BRIDGE_PIN[provider]}`;
-    log(`installing ${provider} ACP bridge (${pkg}) into ${acpPrefix()}`);
-    if (npmInstall(node.npm, node.node, pkg, log)) {
-      if (provider === "codex") {
-        patchCodexUsageBridge(log);
-        linkCodexBin(log);
+  const candidates = providers.filter((p) => options.strict || which(PROVIDER_CLI[p]) || locateBridgePackage(p));
+  const failures: string[] = [];
+  for (const provider of candidates) {
+    try {
+      if (!bridgeSatisfied(provider)) reinstallBridge(provider, log, { activate: options.activate });
+      if (options.strict) {
+        const node = ensureNode(log);
+        if (!node) throw new Error("node unavailable");
+        verifyRuntimeExecutable(provider, locateBridgePackage(provider)!, node.node);
       }
-      log(`${provider} ACP bridge ready`);
+    } catch (error) {
+      const message = `${provider} runtime preparation failed: ${error instanceof Error ? error.message : error}`;
+      failures.push(message);
+      log(message);
     }
   }
   prependManagedPath();
   pointClaudeBridgeDir();
+  if (options.activate !== false && candidates.includes("codex")) linkCodexBin(log);
+  if (options.strict && failures.length) throw new Error(failures.join("\n"));
 }
 
 /**
@@ -316,16 +311,17 @@ export function ensureAcpBridges(providers: ProvisionProvider[], log: Logger = (
  * new bridge version. Throws on failure. Services a remote "update ACP bridge"
  * request from the dashboard.
  */
-export function reinstallBridge(provider: ProvisionProvider, log: Logger = (m) => console.error(`[provision] ${m}`)): string {
+export function reinstallBridge(provider: ProvisionProvider, log: Logger = (m) => console.error(`[provision] ${m}`), options: { activate?: boolean } = {}): string {
   const node = ensureNode(log);
   if (!node) throw new Error("cannot reinstall ACP bridge: node unavailable");
-  const pkg = `${PROVIDER_PACKAGES[provider][0]}@${BRIDGE_PIN[provider]}`;
-  log(`reinstalling ${provider} ACP bridge (${pkg}) into ${acpPrefix()}`);
-  if (!npmInstall(node.npm, node.node, pkg, log)) {
-    throw new Error(`npm install ${pkg} failed`);
-  }
-  if (provider === "codex") {
-    patchCodexUsageBridge(log);
+  const versions = releaseRuntimeVersions(provider);
+  log(`preparing ${provider}: ACP ${versions.acp}, SDK ${versions.sdk}, executable ${versions.executable}`);
+  installRuntimeBundle(provider, node, (bridge) => {
+    if (provider === "codex" && !patchCodexUsageBridge(log, bridge)) {
+      throw new Error("Codex usage patch verification failed");
+    }
+  });
+  if (provider === "codex" && options.activate !== false) {
     linkCodexBin(log);
   }
   prependManagedPath();
@@ -342,7 +338,9 @@ export function reinstallBridge(provider: ProvisionProvider, log: Logger = (m) =
 
 /** Point the claude wrapper at the located package via REMI_CLAUDE_AGENT_ACP_DIR. */
 function pointClaudeBridgeDir(): void {
-  if (process.env.REMI_CLAUDE_AGENT_ACP_DIR) return;
+  // Preserve an explicit external bridge override; refresh our own old paths.
+  const current = process.env.REMI_CLAUDE_AGENT_ACP_DIR;
+  if (current && !current.startsWith(acpPrefix() + "/")) return;
   const dir = locateBridgePackage("claude");
   if (dir) process.env.REMI_CLAUDE_AGENT_ACP_DIR = dir;
 }

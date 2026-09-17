@@ -18,6 +18,16 @@ export interface RuntimeConnectionProfileInput extends RuntimeConnectionProfileC
   api_key?: string;
 }
 
+/** Keep only the configured model, retaining capabilities reported for that exact ID. */
+export function runtimeConnectionModels<T extends { id: string; label: string }>(
+  profile: RuntimeConnectionProfile,
+  provider: string,
+  models: readonly T[],
+) {
+  const reported = models.find((model) => model.id === profile.model);
+  return [{ ...reported, id: profile.model, label: reported?.label ?? profile.model, provider, default: true }];
+}
+
 /** Shared by the control plane and daemon; never accept executable TOML or inline secrets. */
 export function parseRuntimeConnectionProfile(value: unknown, envPrefix: "REMI_CODEX_" | "REMI_CLAUDE_"): RuntimeConnectionProfile | null {
   if (value === null) return null;

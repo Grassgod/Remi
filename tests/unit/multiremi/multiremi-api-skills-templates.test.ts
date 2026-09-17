@@ -124,6 +124,7 @@ describe("Multiremi API — skills and agent templates", () => {
     const workspace = store.createWorkspace({ id: "ws_skill_guard", name: "Skill Guard", slug: "skill-guard" });
     store.createWorkspaceMember({
       id: "skill-admin",
+      userId: "skill-admin",
       workspaceId: workspace.id,
       name: "Skill Admin",
       email: "skill-admin@example.com",
@@ -131,6 +132,7 @@ describe("Multiremi API — skills and agent templates", () => {
     });
     const creator = store.createWorkspaceMember({
       id: "skill-creator",
+      userId: "skill-creator",
       workspaceId: workspace.id,
       name: "Skill Creator",
       email: "skill-creator@example.com",
@@ -138,6 +140,7 @@ describe("Multiremi API — skills and agent templates", () => {
     });
     const plain = store.createWorkspaceMember({
       id: "skill-member",
+      userId: "skill-member",
       workspaceId: workspace.id,
       name: "Skill Member",
       email: "skill-member@example.com",
@@ -285,6 +288,7 @@ describe("Multiremi API — skills and agent templates", () => {
     const workspace = store.createWorkspace({ id: "ws_native_skill_guard", name: "Native Skill Guard", slug: "native-skill-guard" });
     store.createWorkspaceMember({
       id: "native-skill-admin",
+      userId: "native-skill-admin",
       workspaceId: workspace.id,
       name: "Native Skill Admin",
       email: "native-skill-admin@example.com",
@@ -292,6 +296,7 @@ describe("Multiremi API — skills and agent templates", () => {
     });
     const creator = store.createWorkspaceMember({
       id: "native-skill-creator",
+      userId: "native-skill-creator",
       workspaceId: workspace.id,
       name: "Native Skill Creator",
       email: "native-skill-creator@example.com",
@@ -299,6 +304,7 @@ describe("Multiremi API — skills and agent templates", () => {
     });
     const plain = store.createWorkspaceMember({
       id: "native-skill-member",
+      userId: "native-skill-member",
       workspaceId: workspace.id,
       name: "Native Skill Member",
       email: "native-skill-member@example.com",
@@ -457,8 +463,8 @@ describe("Multiremi API — skills and agent templates", () => {
     expect(createdBody.agent.name).toBe("Bug Fixer Agent");
     expect(createdBody.agent.provider).toBe("codex");
     expect(store.getAgent(createdBody.agent.id)?.provider).toBe("codex");
-    expect(createdBody.agent.runtime_id).toBe("");
-    expect(store.getAgent(createdBody.agent.id)?.runtimeId).toBeNull();
+    expect(createdBody.agent.runtime_id).toBe(codexRuntime.id);
+    expect(store.getAgent(createdBody.agent.id)?.runtimeId).toBe(codexRuntime.id);
     expect(createdBody.agent.avatar_url).toBe("https://example.com/template-bug-fixer.png");
     expect(store.getAgent(createdBody.agent.id)?.avatarUrl).toBe("https://example.com/template-bug-fixer.png");
     expect(createdBody.agent.max_concurrent_tasks).toBe(6);

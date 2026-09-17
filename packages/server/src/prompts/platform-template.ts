@@ -38,6 +38,14 @@ function buildPreviewArtifact(mode: TaskPromptMode) {
     issueId: placeholder("issue_id"),
     issueSessionId: placeholder("issue_session_id"),
     chatSessionId: placeholder("chat_session_id"),
+    // The all-fields preview uses a Feishu Issue topic: ordinary Chat turns
+    // intentionally discard Issue, Project, repository, and result context.
+    boundIssue: {
+      id: placeholder("issue_id"),
+      key: placeholder("issue_key"),
+      title: placeholder("issue_title"),
+      status: placeholder("issue_status"),
+    },
     autopilotRunId: placeholder("autopilot_run_id"),
     completedAt: null,
     createdAt: placeholder("created_at"),

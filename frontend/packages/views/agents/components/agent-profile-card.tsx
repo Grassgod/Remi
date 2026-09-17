@@ -152,9 +152,7 @@ function AgentAvailabilityLine({
   );
 }
 
-// Compact engine row — provider logo + engine name. The availability dot
-// above already reflects pool capacity for this engine; this row says
-// WHICH engine that capacity is measured against.
+// Compact provider display; availability is derived from the execution target.
 function EngineRow({ engine }: { engine: string }) {
   const { t } = useT("agents");
   const label = engine || t(($) => $.row.fallback_engine);

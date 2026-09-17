@@ -1,4 +1,7 @@
 import { readFileSync } from "node:fs";
+import { open } from "node:fs/promises";
+import { basename } from "node:path";
+import { CHAT_ATTACHMENT_MAX_BYTES } from "@multiremi/contracts/attachments.js";
 import {
   CliError,
   ResourceResolver,
@@ -12,6 +15,7 @@ import {
 import { parseArgs, type CliOptions } from "../multiremi/options.js";
 import {
   multiremiApiUploadFile,
+  detectCliContentTypeFromFilename,
   normalizedAttachmentRecord,
   readAttachmentFiles,
 } from "../multiremi/http.js";
@@ -139,7 +143,7 @@ function issueCompatibilitySpecs(): CommandSpec[] {
     legacySpec("issue.assign", ["issue", "assign"], "Assign or unassign an issue", "write", HUMAN_TASK, [refPositional("issue")], [
       { name: "to", type: "string", valueName: "ref", description: "Assignee reference" },
       { name: "to-type", type: "string", valueName: "type", description: "Assignee type" },
-      { name: "unassign", type: "boolean", description: "Clear the assignee" },
+      { name: "unassign", type: "boolean", description: "Clear the assignee and cancel active tasks on this issue" },
     ], ["issue", "assign"]),
     legacySpec("issue.status", ["issue", "status"], "Change issue status", "write", HUMAN_TASK, [refPositional("issue"), refPositional("status")], [], ["issue", "status"]),
     legacySpec("issue.delete", ["issue", "delete"], "Delete an issue", "destructive", HUMAN_TASK, [refPositional("issue")], [], ["issue", "delete"]),
@@ -527,29 +531,6 @@ function chatCommandSpecs(): CommandSpec[] {
         await mutateAndRender(invocation, "PATCH", `/api/chat/sessions/${encodePath(String(chat.id))}`, body);
       }),
     ),
-    groupSpec("chat.issue", "Manage a Chat's bound Issue"),
-    nativeSpec("chat.issue.bind", ["chat", "issue", "bind"], "Bind a Chat to an Issue", "write", HUMAN, [refPositional("chat"), refPositional("issue")], [], async (invocation) => {
-      const chat = await resolveChat(invocation, positional(invocation, 0, "chat"));
-      const issue = await resolveIssue(invocation, positional(invocation, 1, "issue"));
-      await mutateAndRender(invocation, "PATCH", `/api/chat/sessions/${encodePath(String(chat.id))}`, { issue_id: issue.id });
-    }),
-    nativeSpec("chat.issue.unbind", ["chat", "issue", "unbind"], "Unbind a Chat from its Issue", "write", HUMAN, [refPositional("chat")], [], async (invocation) => {
-      const chat = await resolveChat(invocation, positional(invocation, 0, "chat"));
-      await mutateAndRender(invocation, "PATCH", `/api/chat/sessions/${encodePath(String(chat.id))}`, { issue_id: null });
-    }),
-    groupSpec("chat.issue.updates", "Manage Issue updates sent to a Chat agent"),
-    nativeSpec("chat.issue.updates.get", ["chat", "issue", "updates", "get"], "Show Issue update delivery settings", "read", HUMAN, [refPositional("chat")], [], async (invocation) => {
-      const chat = await resolveChat(invocation, positional(invocation, 0, "chat"));
-      await getAndRender(invocation, `/api/chat/sessions/${encodePath(String(chat.id))}/issue-updates`);
-    }),
-    nativeSpec("chat.issue.updates.enable", ["chat", "issue", "updates", "enable"], "Send bound Issue updates to the Chat agent", "write", HUMAN, [refPositional("chat")], [], async (invocation) => {
-      const chat = await resolveChat(invocation, positional(invocation, 0, "chat"));
-      await mutateAndRender(invocation, "PUT", `/api/chat/sessions/${encodePath(String(chat.id))}/issue-updates`, { enabled: true });
-    }),
-    nativeSpec("chat.issue.updates.disable", ["chat", "issue", "updates", "disable"], "Stop sending bound Issue updates to the Chat agent", "write", HUMAN, [refPositional("chat")], [], async (invocation) => {
-      const chat = await resolveChat(invocation, positional(invocation, 0, "chat"));
-      await mutateAndRender(invocation, "PUT", `/api/chat/sessions/${encodePath(String(chat.id))}/issue-updates`, { enabled: false });
-    }),
     nativeSpec("chat.delete", ["chat", "delete"], "Delete a chat", "destructive", HUMAN, [refPositional("chat")], [YES_OPTION], async (invocation) => {
       requireConfirmation(invocation);
       const chat = await resolveChat(invocation, positional(invocation, 0, "chat"));
@@ -560,6 +541,44 @@ function chatCommandSpecs(): CommandSpec[] {
     }),
     nativeSpec("chat.message.create", ["chat", "message", "create"], "Send a chat message", "write", HUMAN, [refPositional("chat")], [...INPUT_OPTIONS, ...COMMENT_BODY_OPTIONS], async (invocation) => {
       await mutateAndRender(invocation, "POST", `/api/chat/sessions/${encodePath(positional(invocation, 0, "chat"))}/messages`, await requestBody(invocation, { content: await contentOption(invocation) }));
+    }),
+    groupSpec("chat.attachment", "Send files to the current Task's Chat", ["chat", "attachment"]),
+    nativeSpec("chat.attachment.send", ["chat", "attachment", "send"], "Send local files to the current Task's Chat", "write", TASK, [], [
+      { name: "attachment", type: "string", valueName: "path", repeatable: true, description: "Local attachment file (20MB maximum per file)" },
+      ...COMMENT_BODY_OPTIONS,
+    ], async (invocation) => {
+      const paths = stringOptions(invocation, "attachment");
+      if (!paths.length) throw new CliError("usage", "chat attachment send requires --attachment <local-path> (repeatable)");
+      const form = new FormData();
+      for (const path of paths) {
+        if (!path.trim() || /^https?:\/\//i.test(path)) throw new CliError("usage", "--attachment requires a local file path");
+        const handle = await open(path, "r");
+        try {
+          const stat = await handle.stat();
+          if (!stat.isFile()) throw new CliError("usage", `Attachment ${basename(path)} must be a regular file`);
+          if (stat.size === 0) throw new CliError("usage", `Attachment ${basename(path)} is empty (0 bytes)`);
+          const limit = CHAT_ATTACHMENT_MAX_BYTES;
+          if (stat.size > limit) throw new CliError("usage", `Attachment ${basename(path)} exceeds the 20MB limit`);
+          // Bound the read as well as stat: a file can grow while being read.
+          const chunks: Buffer[] = [];
+          let size = 0;
+          for await (const chunk of handle.createReadStream({ autoClose: false })) {
+            size += chunk.length;
+            if (size > limit) throw new CliError("usage", `Attachment ${basename(path)} exceeds the 20MB limit`);
+            chunks.push(chunk);
+          }
+          const name = basename(path);
+          if (size === 0) throw new CliError("usage", `Attachment ${name} is empty (0 bytes)`);
+          form.append("file", new File([Buffer.concat(chunks)], name, { type: detectCliContentTypeFromFilename(name) }));
+        } finally {
+          await handle.close();
+        }
+      }
+      const content = await contentOption(invocation);
+      if (content) form.set("content", content);
+      const client = await clientFor(invocation);
+      const response = await client.request({ method: "POST", path: "/api/chat/attachments/send", body: form });
+      renderResource(invocation, response.data, ["attachments"]);
     }),
     nativeSpec("chat.pending", ["chat", "pending"], "Show pending chat tasks", "read", HUMAN, [optionalPositional("chat")], [], async (invocation) => {
       const chat = invocation.positionals[0]?.trim();

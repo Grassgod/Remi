@@ -18,9 +18,11 @@ import { projectCommandSpecs } from "./commands/project.js";
 import { repoCommandSpecs } from "./commands/repo.js";
 import { tokenCommandSpecs } from "./commands/token.js";
 import { workspaceCommandSpecs } from "./commands/workspace.js";
+import { runtimePrepareCommandSpec } from "./commands/runtime-prepare.js";
 
 const commandRegistry = new CommandRegistry();
 commandRegistry.register(contextCommandSpec());
+commandRegistry.register(runtimePrepareCommandSpec());
 for (const spec of [
   ...workspaceCommandSpecs(),
   ...memberCommandSpecs(),
@@ -198,6 +200,10 @@ export async function dispatch(args: string[]): Promise<void> {
   }
 
   const helpIndex = args.findIndex((arg) => arg === "--help" || arg === "-h");
+  if (commandRegistry.isImplicitGroup(args)) {
+    console.log(commandRegistry.renderHelp(args));
+    return;
+  }
   if (helpIndex >= 0 && commandRegistry.supportsGeneratedHelp(args.slice(0, helpIndex))) {
     console.log(commandRegistry.renderHelpForArgv(args.slice(0, helpIndex)));
     return;

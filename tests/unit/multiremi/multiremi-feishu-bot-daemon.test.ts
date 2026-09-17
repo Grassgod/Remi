@@ -143,7 +143,13 @@ describe("Feishu bot control-plane delivery", () => {
     const next = async () => (await (await heartbeat(test, "rt_a", { feishu_concierge_protocol: FEISHU_CONCIERGE_NATIVE_COT_PROTOCOL_VERSION })).json()).pending_feishu_outbound;
     const delivery = await next();
     expect(delivery).toMatchObject({ task_id: submitted.taskId, chat_id: "oc_native", thread_id: "om_root",
-      reply_to_message_id: "om_question", interaction_open_id: "ou_requester", presentation: { version: "native_cot_v1", throughSeq: 0 } });
+      reply_to_message_id: "om_question", receipt_message_ids: ["om_question"], interaction_open_id: "ou_requester", presentation: { version: "native_cot_v1", throughSeq: 0 } });
+    test.store.submitFeishuBotMessage("local", "rt_a", { ...input, externalMessageId: "om_followup", text: "also this" });
+    const snapshot = await test.app.request(`/api/daemon/tasks/${submitted.taskId}/status`, {
+      headers: daemonHeaders(test.tokens.rt_a!),
+    });
+    expect(snapshot.status).toBe(200);
+    expect(await snapshot.json()).toMatchObject({ receipt_message_ids: ["om_question", "om_followup"] });
     const update = (claim: string, patch: object, runtimeToken = test.tokens.rt_a!) => test.app.request(
       `/api/daemon/runtimes/rt_a/feishu-bot/outbound/${delivery.id}/result`, { method: "POST",
         headers: daemonHeaders(runtimeToken), body: JSON.stringify({ status: "streaming", claim_token: claim, ...patch }) });
@@ -160,6 +166,7 @@ describe("Feishu bot control-plane delivery", () => {
     expect((await update(delivery.claim_token, { presentation })).status).toBe(409);
     const recovered = await next();
     expect(recovered.presentation).toEqual(presentation);
+    expect(recovered.receipt_message_ids).toEqual(["om_question", "om_followup"]);
     expect(recovered.claim_token).not.toBe(delivery.claim_token);
     expect((await update(delivery.claim_token, { presentation })).status).toBe(409);
     const final = { ...presentation, resultMessageId: "om_final", cot: { ...presentation.cot, status: "finished" } };

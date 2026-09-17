@@ -53,7 +53,7 @@ function logDroppedGroupMessage(
     `dropped group message message_id=${event.message.message_id} chat_hash=${hashIdentifier(event.message.chat_id)} reason=${reason}`,
   );
 }
-import { downloadImageFeishu, downloadMessageResourceFeishu } from "./media.js";
+import { downloadMessageResourceFeishu, FeishuAttachmentTooLargeError } from "./media.js";
 import { extractMentionTargets, extractMessageBody } from "./mention.js";
 import { getMessageFeishu, sendMarkdownCardFeishu } from "./send.js";
 import { handleFormSubmission, handleButtonClick, hasPendingAction } from "./card-actions.js";
@@ -67,10 +67,13 @@ let dedupCachePath = join(homedir(), ".remi", "dedup-cache.json");
 const processedMessageIds = new Map<string, number>();
 let lastCleanupTime = Date.now();
 let dedupDirty = false;
+let dedupLoaded = false;
 let dedupFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** Load persisted dedup cache from disk (best-effort). */
 function loadDedupCache(): void {
+  if (dedupLoaded) return;
+  dedupLoaded = true;
   try {
     if (!existsSync(dedupCachePath)) return;
     const raw = readFileSync(dedupCachePath, "utf-8");
@@ -121,12 +124,11 @@ export function setDedupCachePathForTesting(path: string): void {
   processedMessageIds.clear();
   lastCleanupTime = Date.now();
   dedupDirty = false;
+  dedupLoaded = false;
 }
 
-// Load on module init
-loadDedupCache();
-
 function tryRecordMessage(messageId: string): boolean {
+  loadDedupCache();
   const now = Date.now();
   if (now - lastCleanupTime > DEDUP_CLEANUP_INTERVAL_MS) {
     for (const [id, ts] of processedMessageIds) {
@@ -286,9 +288,9 @@ function parseMediaKeys(
       case "file":
         return { fileKey: parsed.file_key, fileName: parsed.file_name };
       case "audio":
-        return { fileKey: parsed.file_key };
-      case "video":
-        return { fileKey: parsed.file_key, imageKey: parsed.image_key };
+        return { fileKey: parsed.file_key, fileName: parsed.file_name };
+      case "media":
+        return { fileKey: parsed.file_key, imageKey: parsed.image_key, fileName: parsed.file_name };
       case "sticker":
         return { fileKey: parsed.file_key };
       default:
@@ -383,7 +385,7 @@ function inferPlaceholder(messageType: string): string {
     case "image": return "<media:image>";
     case "file": return "<media:document>";
     case "audio": return "<media:audio>";
-    case "video": return "<media:video>";
+    case "media": return "<media:video>";
     case "sticker": return "<media:sticker>";
     default: return "<media:document>";
   }
@@ -440,8 +442,10 @@ export async function resolveFeishuMedia(
   messageType: string,
   content: string,
 ): Promise<FeishuMediaInfo[]> {
-  const mediaTypes = ["image", "file", "audio", "video", "sticker", "post"];
+  const mediaTypes = ["image", "file", "audio", "media", "sticker", "post"];
   if (!mediaTypes.includes(messageType)) return [];
+
+  if (messageType === "sticker") return [{ buffer: Buffer.alloc(0), placeholder: "<media:sticker>" }];
 
   const out: FeishuMediaInfo[] = [];
 
@@ -457,8 +461,9 @@ export async function resolveFeishuMedia(
           placeholder: "<media:image>",
           imageKey,
         });
-      } catch {
-        // Skip failed downloads
+      } catch (error) {
+        out.push({ buffer: Buffer.alloc(0), placeholder: "<media:image>", imageKey,
+          rejectedReason: error instanceof FeishuAttachmentTooLargeError ? "too_large" : "download_failed" });
       }
     }
     return out;
@@ -466,8 +471,9 @@ export async function resolveFeishuMedia(
 
   // Handle other media types
   const mediaKeys = parseMediaKeys(content, messageType);
-  const fileKey = mediaKeys.imageKey || mediaKeys.fileKey;
-  if (!fileKey) return [];
+  const fileKey = messageType === "image" ? mediaKeys.imageKey : mediaKeys.fileKey;
+  if (!fileKey) return [{ buffer: Buffer.alloc(0), placeholder: inferPlaceholder(messageType),
+    fileName: mediaKeys.fileName, rejectedReason: "download_failed" }];
 
   try {
     const resourceType = messageType === "image" ? "image" : "file";
@@ -479,8 +485,10 @@ export async function resolveFeishuMedia(
       placeholder: inferPlaceholder(messageType),
       imageKey: mediaKeys.imageKey,
     });
-  } catch {
-    // Skip failed downloads
+  } catch (error) {
+    out.push({ buffer: Buffer.alloc(0), placeholder: inferPlaceholder(messageType),
+      fileName: mediaKeys.fileName, imageKey: mediaKeys.imageKey,
+      rejectedReason: error instanceof FeishuAttachmentTooLargeError ? "too_large" : "download_failed" });
   }
 
   return out;

@@ -13,6 +13,7 @@
     "./runtime-health": "./src/runtime-health.ts",
     "./codex-profile": "./src/codex-profile.ts",
     "./claude-profile": "./src/claude-profile.ts",
+    "./runtime-connection": "./src/runtime-connection.ts",
     "./wiki-path": "./src/wiki-path.ts",
     "./wiki-links": "./src/wiki-links.ts"
   },

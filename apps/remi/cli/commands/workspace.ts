@@ -1,5 +1,6 @@
 import {
   CliError,
+  CliRenderer,
   ResourceResolver,
   type CliOptionSpec,
   type CommandInvocation,
@@ -15,6 +16,7 @@ import {
   encodePath,
   extractRecords,
   integerOption,
+  outputMode,
   positional,
   renderResource,
   requestBody,
@@ -55,6 +57,7 @@ const RUNTIME_PROVISION_FIELDS: readonly CliOptionSpec[] = [
  * which is the only safe default for a partial update.
  */
 const FEISHU_BOT_FIELDS: readonly CliOptionSpec[] = [
+  { name: "sender-access-policy", type: "string", valueName: "agent|allowlist", description: "Use Agent permissions (default) or require a sender allowlist" },
   { name: "agent", type: "string", valueName: "agent-id", description: "Agent that answers concierge messages" },
   { name: "runtime", type: "string", valueName: "runtime-id", description: "Runtime that hosts the connector" },
   { name: "app-id", type: "string", valueName: "cli_xxx", description: "Feishu App ID" },
@@ -210,6 +213,23 @@ export function workspaceCommandSpecs(): CommandSpec[] {
     scopedRead("workspace.feishu-bot.status", ["workspace", "feishu-bot", "status"], "Read Feishu concierge runtime status", "/feishu-bot/status"),
     scopedRead("workspace.feishu-bot.candidates", ["workspace", "feishu-bot", "candidates"], "List Agents and Runtimes the concierge can use", "/feishu-bot/candidates"),
     scopedRead("workspace.feishu-bot.audit", ["workspace", "feishu-bot", "audit"], "Read the Feishu concierge audit trail", "/feishu-bot/audit"),
+    readSpec(
+      "workspace.feishu-bot.sender.list",
+      ["workspace", "feishu-bot", "sender", "list"],
+      "List discovered Feishu senders and their allowlist status",
+      [refPositional("workspace")],
+      async (invocation) => {
+        const client = await clientFor(invocation);
+        const workspace = await resolveWorkspace(client, positional(invocation, 0, "workspace"));
+        const response = await client.request({
+          method: "GET",
+          path: `/api/workspaces/${encodePath(String(workspace.id))}/feishu-bot/senders`,
+        });
+        renderFeishuBotSenders(invocation, response.data);
+      },
+    ),
+    feishuBotSenderAccessSpec("allow", true),
+    feishuBotSenderAccessSpec("revoke", false),
     scopedWrite(
       "workspace.feishu-bot.set",
       ["workspace", "feishu-bot", "set"],
@@ -390,6 +410,47 @@ function scopedRead(id: string, path: string[], description: string, suffix: str
   });
 }
 
+function feishuBotSenderAccessSpec(action: "allow" | "revoke", allowed: boolean): CommandSpec {
+  const id = `workspace.feishu-bot.sender.${action}`;
+  return {
+    id,
+    path: ["workspace", "feishu-bot", "sender", action],
+    description: allowed ? "Allow a discovered Feishu sender to create Issues" : "Revoke a Feishu sender's permission to create Issues",
+    capability: id,
+    auth: ["human"],
+    mutation: "write",
+    outputs: ["table", "json", "jsonl"],
+    positionals: [refPositional("workspace"), { name: "sender", required: true, description: "Sender ID from sender list" }],
+    options: commandOptions(),
+    run: async (invocation) => {
+      const client = await clientFor(invocation);
+      const workspace = await resolveWorkspace(client, positional(invocation, 0, "workspace"));
+      const senderId = positional(invocation, 1, "sender");
+      const response = await client.request({
+        method: "PUT",
+        path: `/api/workspaces/${encodePath(String(workspace.id))}/feishu-bot/senders/${encodePath(senderId)}`,
+        body: { allowed },
+      });
+      renderFeishuBotSenders(invocation, response.data);
+    },
+  };
+}
+
+function renderFeishuBotSenders(invocation: CommandInvocation, value: unknown): void {
+  new CliRenderer().render<Record<string, unknown>>(value, {
+    mode: outputMode(invocation),
+    rows: (input) => extractRecords(input, ["senders"]),
+    columns: [
+      { header: "ID", value: (row) => row.id },
+      { header: "NAME", value: (row) => row.display_name, maxWidth: 48 },
+      { header: "ENGLISH_NAME", value: (row) => row.name_en ?? "", maxWidth: 48 },
+      { header: "STATUS", value: (row) => row.allowed === true ? "allowed" : "pending" },
+      { header: "OPEN_ID", value: (row) => row.open_id },
+      { header: "LAST_SEEN", value: (row) => row.last_seen_at },
+    ],
+  });
+}
+
 function scopedWrite(
   id: string,
   path: string[],
@@ -488,6 +549,7 @@ function feishuBotRegistrationPath(workspaceId: string, sessionId: string): stri
 
 async function feishuBotBody(invocation: CommandInvocation): Promise<Record<string, unknown>> {
   const body = await requestBody(invocation, {
+    sender_access_policy: stringOption(invocation, "sender-access-policy") ?? undefined,
     agent_id: stringOption(invocation, "agent") ?? undefined,
     runtime_id: stringOption(invocation, "runtime") ?? undefined,
     app_id: stringOption(invocation, "app-id") ?? undefined,

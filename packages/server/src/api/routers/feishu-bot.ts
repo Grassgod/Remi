@@ -59,6 +59,7 @@ import {
   type UpsertFeishuBotConfigInput,
 } from "@multiremi/contracts/types.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
+import { FeishuBotSenderProfiles } from "@multiremi/feishu-bot/sender-profiles.js";
 
 const DOMAINS: readonly FeishuBotDomain[] = ["feishu", "lark", "bytedance"];
 
@@ -77,6 +78,7 @@ export function registerFeishuBotRoutes(
   registrations = new FeishuBotRegistrationService(),
 ): void {
   const { store } = deps;
+  const senderProfiles = new FeishuBotSenderProfiles();
 
   // ── Read ────────────────────────────────────────────────────────────────
   app.get("/api/workspaces/:id/feishu-bot", (c) => {
@@ -239,6 +241,29 @@ export function registerFeishuBotRoutes(
     }
   });
 
+  app.get("/api/workspaces/:id/feishu-bot/senders", async (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    if (!store.getWorkspace(workspaceId)) return c.json({ error: "workspace not found" }, 404);
+    c.header("Cache-Control", "no-store");
+    await senderProfiles.refresh(store, workspaceId);
+    return c.json({ senders: store.listFeishuBotSenders(workspaceId) });
+  });
+
+  app.put("/api/workspaces/:id/feishu-bot/senders/:senderId", async (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    const body = await readJsonStrict<{ allowed?: unknown }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    if (typeof body.allowed !== "boolean") return c.json({ error: "allowed must be a boolean" }, 400);
+    const sender = store.setFeishuBotSenderAllowed(workspaceId, c.req.param("senderId"), body.allowed, currentRequestUserId(c));
+    if (!sender) return c.json({ error: "Feishu sender not found" }, 404);
+    c.header("Cache-Control", "no-store");
+    return c.json(sender);
+  });
+
   app.put("/api/workspaces/:id/feishu-bot", async (c) => {
     const workspaceId = c.req.param("id");
     const denied = requireWorkspaceAdmin(c, store, workspaceId);
@@ -268,6 +293,7 @@ export function registerFeishuBotRoutes(
           app_id: saved.appId,
           domain: saved.domain,
           enabled: saved.enabled,
+          sender_access_policy: saved.senderAccessPolicy,
           revision: saved.revision,
           // Which secrets moved, never what they became.
           app_secret_op: parsed.input.appSecretOp,
@@ -489,6 +515,7 @@ interface FeishuBotConfigBody {
   app_id?: unknown;
   domain?: unknown;
   enabled?: unknown;
+  sender_access_policy?: unknown;
   app_secret?: unknown;
   app_secret_op?: unknown;
   registration_session_id?: unknown;
@@ -502,6 +529,9 @@ function parseConfigBody(
   const domain = parseDomain(body.domain);
   if (!domain) return { error: "domain must be feishu, lark, or bytedance" };
   if (typeof body.enabled !== "boolean") return { error: "enabled must be explicitly true or false" };
+  if (body.sender_access_policy !== undefined && body.sender_access_policy !== "agent" && body.sender_access_policy !== "allowlist") {
+    return { error: "sender_access_policy must be agent or allowlist" };
+  }
 
   let appId = optionalString(body.app_id) ?? "";
   let appSecretOp = parseSecretOp(body.app_secret_op, body.app_secret);
@@ -529,6 +559,7 @@ function parseConfigBody(
       appId,
       domain,
       enabled: body.enabled,
+      senderAccessPolicy: body.sender_access_policy,
       appSecretOp,
       appSecret,
     },
@@ -604,6 +635,7 @@ export function configView(store: MultiremiStore, workspaceId: string): FeishuBo
       app_id: "",
       domain: "feishu",
       enabled: false,
+      sender_access_policy: "agent",
       revision: 0,
       app_secret_configured: false,
       app_secret_hint: null,
@@ -632,6 +664,7 @@ export function configView(store: MultiremiStore, workspaceId: string): FeishuBo
     app_id: config.appId,
     domain: config.domain,
     enabled: config.enabled,
+    sender_access_policy: config.senderAccessPolicy,
     revision: config.revision,
     app_secret_configured: config.hasAppSecret,
     app_secret_hint: config.appSecretHint,

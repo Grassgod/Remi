@@ -1,0 +1,4 @@
+interface:
+  display_name: "Multiremi PPE QA"
+  short_description: "通过 Zadig 部署隔离 PPE 并完成页面验收"
+  default_prompt: "使用 $multiremi-ppe-qa 为当前 Issue 部署或复用隔离 PPE，并完成验收。"

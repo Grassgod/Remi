@@ -20,6 +20,12 @@ import enAgents from "../../locales/en/agents.json";
 import zhCommon from "../../locales/zh-Hans/common.json";
 import zhAgents from "../../locales/zh-Hans/agents.json";
 
+vi.mock("./execution-target-select", () => ({
+  ExecutionTargetSelect: ({ onChange }: { onChange: (target: { executionGroupId: string; provider: string }) => void }) => (
+    <div role="group" aria-label="Execution target">{["claude", "codex"].map((provider) => <button key={provider} onClick={() => onChange({ executionGroupId: `group-${provider}`, provider })}>{provider}</button>)}</div>
+  ),
+}));
+
 const TEST_RESOURCES = {
   en: { common: enCommon, agents: enAgents },
   "zh-Hans": { common: zhCommon, agents: zhAgents },
@@ -30,7 +36,7 @@ vi.mock("@multiremi/core/hooks", () => ({
 }));
 
 vi.mock("@multiremi/core/runtimes", () => ({
-  useFleetProviderModels: (_wsId: string, provider: string) => ({
+  useExecutionTargetModels: (_wsId: string, provider: string) => ({
     models:
       provider === "claude"
         ? [
@@ -248,7 +254,16 @@ describe("EditAgentDialog", () => {
     expect(onSave.mock.calls[0]?.[0]).toMatchObject({ role: "maintainer" });
   });
 
-  it("clears engine-specific model and thinking settings on engine switch", async () => {
+  it("sends the current group again when explicitly releasing a migrated machine pin", async () => {
+    const { onSave } = renderDialog(makeAgent({ runtime_id: "old-machine", execution_group_id: "group-claude" }));
+    fireEvent.click(screen.getByRole("button", { name: "claude" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0]?.[0]).toMatchObject({ execution_group_id: "group-claude", provider: "claude" });
+    expect(onSave.mock.calls[0]?.[0]).not.toHaveProperty("runtime_id");
+  });
+
+  it("clears target-specific model and thinking settings when changing targets", async () => {
     const { onSave } = renderDialog();
 
     fireEvent.click(screen.getByRole("button", { name: "codex" }));
@@ -257,6 +272,7 @@ describe("EditAgentDialog", () => {
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
     expect(onSave.mock.calls[0]?.[0]).toMatchObject({
       provider: "codex",
+      execution_group_id: "group-codex",
       model: "",
       thinking_level: "",
     });
@@ -352,7 +368,7 @@ describe("EditAgentDialog", () => {
       (screen.getByLabelText("Concurrency") as HTMLInputElement).value,
     ).toBe("3");
     expect(screen.getByRole("group", { name: "Visibility" })).not.toBeNull();
-    expect(screen.getByRole("group", { name: "Engine" })).not.toBeNull();
+    expect(screen.getByRole("group", { name: "Execution target" })).not.toBeNull();
     expect(
       screen.getByRole("group", { name: "Reasoning effort" }),
     ).not.toBeNull();

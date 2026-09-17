@@ -6,6 +6,8 @@ import { buildTaskPrompt } from "@multiremi/prompt.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { resetMultiremiTestEnv } from "./helpers.js";
 
+import { bindFeishuTopicFixture } from "./feishu-topic-fixture.js";
+
 let db: Database | null = null;
 
 afterEach(() => {
@@ -32,16 +34,16 @@ function scaffold(store: MultiremiStore) {
   const issue = store.createIssue({ title: "Bound progress", workspaceId: "local" });
   const chat = store.createChatSession({
     agentId: agent.id,
-    issueId: issue.id,
     workspaceId: "local",
     creatorId: "local",
     title: "Bound progress chat",
   });
+  bindFeishuTopicFixture(store, db!, chat.id, issue.id);
   return { agent, issue, chat };
 }
 
 describe("agent-facing Issue update delivery", () => {
-  it("enables Issue updates when a Chat is bound without creating a task", () => {
+  it("enables Issue updates for a Feishu topic without creating a task", () => {
     const store = createStore();
     const { issue, chat } = scaffold(store);
 
@@ -78,6 +80,7 @@ describe("agent-facing Issue update delivery", () => {
       ...claimed,
       sessionProjection: wire.session_projection,
       chatMessage: wire.chat_message,
+      boundIssue: wire.bound_issue,
       boundIssueUpdates: wire.bound_issue_updates,
       boundIssueUpdatesOmittedCount: wire.bound_issue_updates_omitted_count,
     } as any);
@@ -156,6 +159,7 @@ describe("agent-facing Issue update delivery", () => {
       ...store.getTaskWithAgent(userTurn.task.id)!,
       sessionProjection: wire.session_projection,
       chatMessage: wire.chat_message,
+      boundIssue: wire.bound_issue,
       boundIssueUpdates: wire.bound_issue_updates,
       boundIssueUpdatesOmittedCount: wire.bound_issue_updates_omitted_count,
     } as any);
@@ -163,111 +167,35 @@ describe("agent-facing Issue update delivery", () => {
     expect(prompt).toContain("Published result: Implementation complete");
   });
 
-  it("exposes an explicit human-only subscription toggle", async () => {
+  it("rejects the removed Chat subscription API and keeps ordinary Chats independent", async () => {
     const store = createStore();
-    const agent = store.createAgent({ name: "API agent", provider: "codex", workspaceId: "local" });
-    const chat = store.createChatSession({ agentId: agent.id, workspaceId: "local", creatorId: "local" });
-    const owner = store.getCurrentUser();
-    const token = await store.createAccessToken({
-      name: "Issue update API test",
-      type: "pat",
-      workspaceId: "local",
-      userId: owner.id,
-    });
-    const app = createMultiremiApp({ store, authToken: "root-secret" });
-    const authHeaders = { Authorization: `Bearer ${token.token}` };
-    const jsonHeaders = { ...authHeaders, "Content-Type": "application/json" };
+    const { issue, agent, chat: topic } = scaffold(store);
+    const privateChat = store.createChatSession({ agentId: agent.id, workspaceId: "local", creatorId: "local" });
+    const token = await store.createAccessToken({ name: "subscription API test", type: "pat", workspaceId: "local", userId: "local" });
+    const app = createMultiremiApp({ store });
+    for (const method of ["GET", "PUT"]) {
+      expect((await app.request(`/api/chat/sessions/${privateChat.id}/issue-updates`, {
+        method,
+        headers: { Authorization: `Bearer ${token.token}`, "Content-Type": "application/json" },
+        ...(method === "PUT" ? { body: JSON.stringify({ enabled: true }) } : {}),
+      })).status).toBe(404);
+    }
+    expect(() => store.setAgentIssueUpdateSubscription({ chatSessionId: privateChat.id, enabled: true }))
+      .toThrow("only available for Feishu Issue topics");
+    store.createIssueComment(issue.id, { authorType: "member", authorId: "local", body: "Topic-only update" });
+    expect(store.flushDueAgentIssueUpdates(new Date(Date.now() + 60_000))).toEqual({ delivered: 1, dropped: 0 });
+    expect(store.listChatMessages(topic.id)).toHaveLength(1);
+    expect(store.listChatMessages(privateChat.id)).toHaveLength(0);
+    expect(store.getAgentChatNotificationChannel(privateChat.id)).toBeNull();
+  });
 
-    const initial = await app.request(`/api/chat/sessions/${chat.id}/issue-updates`, { headers: authHeaders });
-    expect(initial.status).toBe(200);
-    expect(await initial.json()).toMatchObject({ subscription: { enabled: false, issue_id: null } });
-
-    const unboundEnable = await app.request(`/api/chat/sessions/${chat.id}/issue-updates`, {
-      method: "PUT",
-      headers: jsonHeaders,
-      body: JSON.stringify({ enabled: true }),
-    });
-    expect(unboundEnable.status).toBe(400);
-
-    const issue = store.createIssue({ title: "API binding", workspaceId: "local" });
-    store.updateChatSession(chat.id, { issueId: issue.id });
-    const defaultEnabled = await app.request(`/api/chat/sessions/${chat.id}/issue-updates`, {
-      headers: authHeaders,
-    });
-    expect(defaultEnabled.status).toBe(200);
-    expect(await defaultEnabled.json()).toMatchObject({
-      subscription: {
-        enabled: true,
-        issue_id: issue.id,
-        debounce_window_seconds: 30,
-      },
-    });
-
-    const disabled = await app.request(`/api/chat/sessions/${chat.id}/issue-updates`, {
-      method: "PUT",
-      headers: jsonHeaders,
-      body: JSON.stringify({ enabled: false }),
-    });
-    expect(disabled.status).toBe(200);
-    expect(await disabled.json()).toMatchObject({
-      subscription: {
-        enabled: false,
-        issue_id: issue.id,
-        debounce_window_seconds: 30,
-      },
-    });
-    const enabled = await app.request(`/api/chat/sessions/${chat.id}/issue-updates`, {
-      method: "PUT",
-      headers: jsonHeaders,
-      body: JSON.stringify({ enabled: true }),
-    });
-    expect(enabled.status).toBe(200);
-    expect(store.getAgentChatNotificationChannel(chat.id)).toMatchObject({
-      kind: "agent_chat",
-      enabled: true,
-      target: { chatId: chat.id },
-    });
-
-    const sourceTask = store.createTask({
-      agentId: agent.id,
-      chatSessionId: chat.id,
-      prompt: "Update the bound Issue",
-    });
-    const taskToken = await store.createTaskAccessToken(sourceTask, owner.id);
-    const taskHeaders = { Authorization: `Bearer ${taskToken.token}` };
-    expect((await app.request(
-      `/api/chat/sessions/${chat.id}/issue-updates`,
-      { headers: taskHeaders },
-    )).status).toBe(403);
-    expect((await app.request(`/api/chat/sessions/${chat.id}/issue-updates`, {
-      method: "PUT",
-      headers: { ...taskHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({ enabled: false }),
-    })).status).toBe(403);
-
-    const label = store.createLabel({ name: "Agent-applied", color: "#336699", workspaceId: "local" });
-    const labelResponse = await app.request(`/api/issues/${issue.id}/labels`, {
-      method: "POST",
-      headers: { ...taskHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({ label_id: label.id }),
-    });
-    expect(labelResponse.status).toBe(200);
-    expect(store.flushDueAgentIssueUpdates(new Date(Date.now() + 60_000))).toEqual({
-      delivered: 0,
-      dropped: 0,
-    });
+  it("drops queued updates when the Feishu topic binding is removed", () => {
+    const store = createStore();
+    const { issue, chat } = scaffold(store);
+    store.createIssueComment(issue.id, { authorType: "member", authorId: "local", body: "Stale binding" });
+    db!.run("UPDATE multiremi_feishu_bot_chat_bindings SET issue_id = NULL WHERE chat_session_id = ?", [chat.id]);
+    expect(store.flushDueAgentIssueUpdates(new Date(Date.now() + 60_000))).toEqual({ delivered: 0, dropped: 1 });
     expect(store.listChatMessages(chat.id)).toHaveLength(0);
-
-    const channel = store.getAgentChatNotificationChannel(chat.id)!;
-    const genericPatch = await app.request(`/api/multiremi/notification-channels/${channel.id}`, {
-      method: "PATCH",
-      headers: jsonHeaders,
-      body: JSON.stringify({ enabled: false }),
-    });
-    expect(genericPatch.status).toBe(400);
-
-    expect(store.deleteChatSession(chat.id)).toBe(true);
-    expect(store.getAgentChatNotificationChannel(chat.id)).toBeNull();
   });
 
   it("debounces dense Issue activity into one Chat message", () => {
@@ -364,6 +292,7 @@ describe("agent-facing Issue update delivery", () => {
       ...claimedUserTurn,
       sessionProjection: wire.session_projection,
       chatMessage: wire.chat_message,
+      boundIssue: wire.bound_issue,
       boundIssueUpdates: wire.bound_issue_updates,
       boundIssueUpdatesOmittedCount: wire.bound_issue_updates_omitted_count,
     } as any);
@@ -448,6 +377,7 @@ describe("agent-facing Issue update delivery", () => {
       ...claimedUserTurn,
       sessionProjection: wire.session_projection,
       chatMessage: wire.chat_message,
+      boundIssue: wire.bound_issue,
       boundIssueUpdates: wire.bound_issue_updates,
       boundIssueUpdatesOmittedCount: wire.bound_issue_updates_omitted_count,
     } as any);

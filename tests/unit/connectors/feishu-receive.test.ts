@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -14,6 +14,8 @@ import {
   type FeishuBotIdentityState,
 } from "@connectors/feishu/receive.js";
 import { FeishuChannel } from "@connectors/feishu/channel.js";
+import { FeishuConnector } from "@connectors/feishu/index.js";
+import type { IncomingMessage } from "@connectors/base.js";
 import type { FeishuMessageEvent } from "@connectors/feishu/types.js";
 
 let messageSequence = 0;
@@ -99,6 +101,65 @@ function clientWithSender(name = "Alice"): { client: any; getSenderCalls: () => 
   };
 }
 
+describe("Feishu media Task handoff", () => {
+  it("receives native media events and hands the video bytes to the Task", async () => {
+    const messageId = uniqueMessageId("native-video-task");
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou_video" } },
+      message: {
+        message_id: messageId, chat_id: "oc_private_chat", chat_type: "p2p", message_type: "media",
+        content: JSON.stringify({ file_key: "file_video", image_key: "img_poster", file_name: "原生视频.mp4", duration: 1000 }),
+      },
+    };
+    const video = Buffer.from("video bytes");
+    const downloads: unknown[] = [];
+    const client = clientWithSender().client;
+    client.im = { messageResource: { get: async (input: unknown) => {
+      downloads.push(input);
+      return { data: video, headers: { "content-type": "video/mp4" } };
+    } } };
+    const parsed = await processFeishuMessageEvent(client, event, undefined, admission(async () => true).options);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.media).toHaveLength(1);
+    expect(parsed!.text).toContain("<media:video>");
+    expect(downloads).toEqual([{ path: { message_id: messageId, file_key: "file_video" }, params: { type: "file" } }]);
+    const received: IncomingMessage[] = [];
+    const connector = Object.create(FeishuConnector.prototype) as any;
+    Object.assign(connector, {
+      _taskStreamHandler: async (message: IncomingMessage) => { received.push(message); },
+      _groupPolicy: { getByChatId: () => null },
+      _channel: { setMessageReceipt: async () => {} },
+    });
+    await connector._handleFeishuMessage(parsed);
+    expect(received).toHaveLength(1);
+    expect(received[0]!.text).toContain("[附件: 原生视频.mp4]");
+    expect(received[0]!.media).toEqual([{ buffer: video, contentType: "video/mp4", fileName: "原生视频.mp4", mediaType: "video" }]);
+  });
+
+  it("passes an admitted sticker through the complete receive and connector pipeline", async () => {
+    const event = messageEvent({ messageId: uniqueMessageId("sticker-task"), senderOpenId: "ou_sticker" });
+    event.message.message_type = "sticker";
+    event.message.content = JSON.stringify({ file_key: "sticker_key" });
+    const parsed = await processFeishuMessageEvent(clientWithSender().client, event, undefined, {
+      authorizeSender: async () => true, onDenied: async () => { throw new Error("unexpected denial"); },
+    });
+    expect(parsed).not.toBeNull();
+    const received: IncomingMessage[] = [];
+    const receipts: string[] = [];
+    const connector = Object.create(FeishuConnector.prototype) as any;
+    Object.assign(connector, {
+      _taskStreamHandler: async (message: IncomingMessage) => { received.push(message); },
+      _groupPolicy: { getByChatId: () => null },
+      _channel: { setMessageReceipt: async (_id: string, state: string) => { receipts.push(state); } },
+    });
+    await connector._handleFeishuMessage(parsed);
+    expect(received).toHaveLength(1);
+    expect(received[0]!.text).toContain("[表情]");
+    expect(received[0]!.media).toBeUndefined();
+    expect(receipts).toEqual(["received"]);
+  });
+});
+
 function admission(
   authorizeSender: (senderOpenId: string) => Promise<boolean>,
 ): {
@@ -121,6 +182,47 @@ function admission(
 }
 
 describe("Feishu workspace membership admission", () => {
+  it("imports receive without logging or reading a persisted dedup cache", async () => {
+    const isolatedHome = join(dedupTestDir, "import-home");
+    mkdirSync(join(isolatedHome, ".remi"), { recursive: true });
+    writeFileSync(join(isolatedHome, ".remi", "dedup-cache.json"), JSON.stringify([["persisted", Date.now()]]));
+    const child = Bun.spawn([process.execPath, "-e", 'await import("./packages/connectors/src/feishu/receive.ts")'], {
+      cwd: join(import.meta.dir, "../../.."),
+      env: { ...process.env, HOME: isolatedHome, REMI_LOG_LEVEL: "INFO" },
+      stdout: "pipe", stderr: "pipe",
+    });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+    ]);
+    expect(code).toBe(0);
+    expect(stdout).toBe("");
+    expect(stderr).toBe("");
+  });
+
+  it("loads persisted dedup lazily, rejects duplicates, and keeps expiry and persistence working", async () => {
+    const cachePath = join(dedupTestDir, "lazy-cache.json");
+    const persistedId = uniqueMessageId("persisted");
+    const expiredId = uniqueMessageId("expired");
+    writeFileSync(cachePath, JSON.stringify([[persistedId, Date.now()], [expiredId, Date.now() - 31 * 60_000]]));
+    setDedupCachePathForTesting(cachePath);
+    const { client } = clientWithSender();
+    const gate = admission(async () => true);
+    const receive = (messageId: string) => processFeishuMessageEvent(client,
+      messageEvent({ messageId, senderOpenId: "ou_dedup_member" }), undefined, gate.options);
+    try {
+      expect(await receive(persistedId)).toBeNull();
+      expect(await receive(expiredId)).not.toBeNull();
+      expect(await receive(expiredId)).toBeNull();
+      flushDedupCacheSync();
+      expect(JSON.parse(readFileSync(cachePath, "utf8")).map(([id]: [string, number]) => id))
+        .toEqual([persistedId, expiredId]);
+      setDedupCachePathForTesting(cachePath);
+      expect(await receive(expiredId)).toBeNull();
+    } finally {
+      setDedupCachePathForTesting(join(dedupTestDir, "dedup-cache.json"));
+    }
+  });
+
   it("refuses to connect when no membership authorizer was injected", () => {
     const channel = new FeishuChannel({ appId: "app", appSecret: "secret" });
     expect(() => channel.connect()).toThrow("workspace membership authorizer is required");

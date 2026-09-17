@@ -108,6 +108,23 @@ describe("CLI capabilities manifest", () => {
     expect(inventory.get("feishu.chat.list")?.path).toEqual(["feishu", "chat", "list"]);
   });
 
+  it("maps Feishu sender management and keeps granting or revoking access human-only", () => {
+    expect(manifest.routes["GET /api/workspaces/:id/feishu-bot/senders"])
+      .toEqual({ command: "workspace.feishu-bot.sender.list" });
+    expect(manifest.routes["PUT /api/workspaces/:id/feishu-bot/senders/:senderId"])
+      .toEqual({ command: "workspace.feishu-bot.sender.allow" });
+    for (const action of ["list", "allow", "revoke"]) {
+      const id = `workspace.feishu-bot.sender.${action}`;
+      expect(manifest.commands[id], id).toMatchObject({
+        command: `remi workspace feishu-bot sender ${action}`,
+        auth: ["human"],
+        capability: id,
+        mutation: action === "list" ? "read" : "write",
+        migration_status: "native",
+      });
+    }
+  });
+
   it("generates discoverable help for every visible Registry command and its direct children", () => {
     const inventory = cliCommandInventory();
     for (const entry of inventory.filter((candidate) => !candidate.hidden)) {
@@ -151,12 +168,16 @@ describe("CLI capabilities manifest", () => {
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 655,
-      exempt: 90,
+      mapped: 658,
+      exempt: 91,
       missing: 0,
-      total: 745,
+      total: 749,
     });
     expect(manifest.max_planned_routes).toBe(0);
+    expect(manifest.routes["POST /api/chat/attachments/send"]).toEqual({ command: "chat.attachment.send" });
+    expect(manifest.commands["chat.attachment.send"]?.auth).toEqual(["task"]);
+    expect(manifest.routes["POST /api/daemon/runtimes/:runtimeId/feishu-bot/attachments"])
+      .toMatchObject({ cli_exempt: true, category: "daemon_internal_protocol" });
     expect(cliCoverageReport(manifest).missing).toBeLessThanOrEqual(manifest.max_planned_routes);
     expect(manifest.routes["GET /api/cli/context"]).toEqual({ command: "context.get" });
     expect(manifest.routes["GET /api/runtimes/:id/codex-profile"]).toEqual({ command: "runtime.codex-profile.get" });

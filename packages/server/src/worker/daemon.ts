@@ -35,6 +35,7 @@ import {
   type MultiremiDaemonSessionArchiveWire,
   type MultiremiRelayEngineWire,
   type MultiremiRelayWire,
+  type UploadFeishuBotAttachmentInput,
 } from "./client.js";
 import { createEventMapper, responseToUsage } from "./acp-event-mapper.js";
 import { FeishuConciergeSupervisor, type FeishuConciergeHost } from "./feishu-concierge.js";
@@ -47,6 +48,7 @@ import {
 } from "@connectors/feishu/outbound-images.js";
 import {
   buildSteerInjectionPrompt,
+  materializeTaskSteerAttachments,
   DEFAULT_FORCE_ANSWER_GRACE_MS,
   DEFAULT_STEER_POLL_MS,
   mergeTaskUsageEntries,
@@ -104,6 +106,7 @@ import {
   type IssueSessionProviderHome,
 } from "@daemon/agent-runtime/workspace/session-home.js";
 import { prepareIssueWikiWorkspace } from "@daemon/agent-runtime/workspace/wiki.js";
+import { materializeChatAttachments } from "@daemon/agent-runtime/workspace/chat-attachments.js";
 import { cleanProcessEnv } from "@daemon/agent-runtime/env/injector.js";
 import { mergeCodexSessionConfig } from "@daemon/agent-runtime/relay-sync.js";
 import { AgentRuntime } from "@daemon/agent-runtime/runtime.js";
@@ -377,7 +380,7 @@ export interface MultiremiDaemonOptions {
   taskTimeoutMs?: number;
   /** "ask" routes permission/question prompts to a human via the server; "auto" (default) self-approves. */
   approvalMode?: "auto" | "ask";
-  /** How long an "ask"-mode prompt waits for a human before expiring (default 30 min). */
+  /** How long an "ask"-mode prompt waits for a human before expiring (default 60 min). */
   humanRequestTimeoutMs?: number;
   /** How long an unattended task waits for human input before expiring (default 5 min). */
   unattendedHumanRequestTimeoutMs?: number;
@@ -679,9 +682,8 @@ export class MultiremiDaemon {
   private activeTaskAborts = new Set<AbortController>();
   private claimsPaused = false;
   /**
-   * Server-driven platform drain. Unlike claimsPaused (local CLI self-update,
-   * which exits the poll loop), a drain keeps the loop alive: heartbeats and
-   * running tasks continue, only new claims stop until the server acks normal.
+   * Server-driven platform drain. Like a local update claim pause, a drain
+   * keeps the poll loop alive; new claims stop until the server acks normal.
    */
   private serverDrainActive = false;
   private appliedDrainGeneration = 0;
@@ -787,7 +789,11 @@ export class MultiremiDaemon {
         options.outboxStartupFlushTimeoutMs ?? DEFAULT_OUTBOX_STARTUP_FLUSH_TIMEOUT_MS,
       ),
       approvalMode: options.approvalMode ?? (process.env.MULTIREMI_APPROVAL_MODE === "ask" ? "ask" : "auto"),
-      humanRequestTimeoutMs: options.humanRequestTimeoutMs ?? numberEnv(process.env.MULTIREMI_HUMAN_REQUEST_TIMEOUT_MS, 30 * 60 * 1000),
+      // An attended prompt is answered whenever the human next looks at the
+      // thread, which routinely exceeds half an hour; expiring at 30 min made
+      // the agent resume on a cancelled question and pick its own way forward.
+      // Unattended (autopilot) runs keep their own, much shorter budget below.
+      humanRequestTimeoutMs: options.humanRequestTimeoutMs ?? numberEnv(process.env.MULTIREMI_HUMAN_REQUEST_TIMEOUT_MS, 60 * 60 * 1000),
       unattendedHumanRequestTimeoutMs: options.unattendedHumanRequestTimeoutMs
         ?? numberEnv(process.env.MULTIREMI_UNATTENDED_HUMAN_REQUEST_TIMEOUT_MS, 5 * 60 * 1000),
       steerPollIntervalMs: options.steerPollIntervalMs ?? numberEnv(process.env.MULTIREMI_STEER_POLL_INTERVAL_MS, DEFAULT_STEER_POLL_MS),
@@ -920,6 +926,14 @@ export class MultiremiDaemon {
 
   submitFeishuBotMessage(input: SubmitFeishuBotMessageInput): Promise<SubmitFeishuBotMessageResult> {
     return this.client.submitFeishuBotMessage(this.options.runtimeId!, input);
+  }
+
+  uploadFeishuBotAttachment(input: UploadFeishuBotAttachmentInput): Promise<{ id: string }> {
+    return this.client.uploadFeishuBotAttachment(this.options.runtimeId!, input);
+  }
+
+  downloadFeishuBotOutboundAttachment(deliveryId: string, claimToken: string, attachmentId: string): Promise<Buffer> {
+    return this.client.downloadFeishuBotOutboundAttachment(this.options.runtimeId!, deliveryId, claimToken, attachmentId);
   }
 
   listFeishuBotTaskMessages(taskId: string, sinceSeq: number): Promise<MultiremiTaskMessage[]> {
@@ -1085,8 +1099,11 @@ export class MultiremiDaemon {
           if (!skipClaim && !this.stopped) {
             await this.reconcileRuntimeAgentPlugins(this.options.runtimeId!);
           }
-          if (this.stopped || this.claimsPaused) break;
-          if (skipClaim || this.serverDrainActive) {
+          if (this.stopped) break;
+          // A sibling can pause claims while it installs the shared CLI. Keep
+          // this lane ready and heartbeating so a failed install can release
+          // the pause. Only a successful update explicitly stops the supervisor.
+          if (this.claimsPaused || skipClaim || this.serverDrainActive) {
             if (this.options.once) return;
             await sleep(this.options.pollIntervalMs);
             continue;
@@ -1771,12 +1788,13 @@ export class MultiremiDaemon {
   }
 
   private async discoverRuntimeModels(force: boolean): Promise<MultiremiRuntimeModel[]> {
-    if (this.options.provider === "claude" && this.runtimeClaudeProfile) return runtimeClaudeProfileModels(this.runtimeClaudeProfile);
-    if (this.options.provider === "codex" && this.runtimeCodexProfile) {
-      // This is the explicitly configured catalog, not a connectivity claim.
-      return runtimeCodexProfileModels(this.runtimeCodexProfile);
-    }
+    const claudeProfile = this.options.provider === "claude" ? this.runtimeClaudeProfile : null;
+    const codexProfile = this.options.provider === "codex" ? this.runtimeCodexProfile : null;
+    const scopeModels = (models: MultiremiRuntimeModel[]) => claudeProfile
+      ? runtimeClaudeProfileModels(claudeProfile, models)
+      : codexProfile ? runtimeCodexProfileModels(codexProfile, models) : models;
     if (!this.runtimeModelDiscoveryEnabled) {
+      if (claudeProfile || codexProfile) return scopeModels([]);
       throw new Error(IN_PROCESS_RUNTIME_MODEL_DISCOVERY_DISABLED);
     }
     if (!force && this.runtimeModels
@@ -1790,7 +1808,8 @@ export class MultiremiDaemon {
         const capabilities = await probeRuntimeModels(await this.runtimeModelProbeProviderOptions(), {
           signal: abort.signal, timeoutMs: RUNTIME_MODEL_PROBE_TIMEOUT_MS,
         });
-        const models = runtimeModelsFromAcpCapabilities(this.options.provider, capabilities);
+        if (abort.signal.aborted) throw new Error("Runtime model discovery cancelled");
+        const models = scopeModels(runtimeModelsFromAcpCapabilities(this.options.provider, capabilities));
         this.runtimeModels = models;
         this.runtimeModelsDiscoveredAt = Date.now();
         return models;
@@ -1806,10 +1825,11 @@ export class MultiremiDaemon {
           `ACP model discovery timed out after ${RUNTIME_MODEL_PROBE_TIMEOUT_MS}ms`,
           abort.signal,
         );
+        if (abort.signal.aborted) throw new Error("Runtime model discovery cancelled");
         if (!capabilities.length) {
           throw new Error(`ACP did not advertise any models for provider: ${this.options.provider}`);
         }
-        const models = runtimeModelsFromAcpCapabilities(this.options.provider, capabilities);
+        const models = scopeModels(runtimeModelsFromAcpCapabilities(this.options.provider, capabilities));
         this.runtimeModels = models;
         this.runtimeModelsDiscoveredAt = Date.now();
         return models;
@@ -3411,6 +3431,15 @@ export class MultiremiDaemon {
       await prepareIssueWikiWorkspace(workDir, task);
     }
     this.assertWorkspaceRootOwner();
+    if (task.chatMessageAttachments?.length) {
+      task.chatMessageAttachments = await materializeChatAttachments(
+        workDir,
+        task.id,
+        task.chatMessageAttachments,
+        (id) => this.client.downloadTaskAttachment(id, task.authToken ?? "", signal),
+        signal,
+      );
+    }
     try {
       const contextDir = task.runtimeWorkspaceId ? providerHome?.root : workDir;
       if (!contextDir) throw new Error("Runtime workspace requires an isolated provider home");
@@ -3547,7 +3576,11 @@ export class MultiremiDaemon {
         if (messages.some((m) => m.kind === "force_answer") && forceAnswerDeadline == null) {
           forceAnswerDeadline = Date.now() + Math.max(0, this.options.forceAnswerGraceMs);
         }
-        prompt = buildSteerInjectionPrompt(messages);
+        const preparedMessages = await materializeTaskSteerAttachments(
+          messages, workDir, task.id,
+          (id) => this.client.downloadTaskAttachment(id, task.authToken ?? "", signal), signal,
+        );
+        prompt = buildSteerInjectionPrompt(preparedMessages);
         await recordSteerBatch(messages, true);
         log.info(`Injected ${messages.length} steer message(s) into task ${task.id}`);
       };

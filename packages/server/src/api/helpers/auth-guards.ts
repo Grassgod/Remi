@@ -365,7 +365,7 @@ export function compatibilityInboxScope(
     ?? store.listWorkspaceMembers(workspaceId).find((candidate) => candidate.userId === raw)
     ?? exact;
   if (member && (member.workspaceId !== workspaceId
-    || (userId && member.userId !== userId && member.id !== userId))) {
+    || (userId && member.userId !== userId))) {
     return c.json({ error: "inbox not found" }, 404);
   }
   if (userId && !member) return c.json({ error: "inbox not found" }, 404);
@@ -575,7 +575,22 @@ export function canCurrentUserAccessChatSessionAgent(
 // comment, and free-standing attachments are scoped to the attachment workspace.
 // Returns a denial Response when access is forbidden, or null when allowed.
 export function denyAttachmentAccess(c: Context, store: MultiremiStore, attachment: MultiremiAttachment): Response | null {
+  // Inbound files are private staging objects until submit atomically links them
+  // to their Chat. Workspace membership must not expose an unlinked private file.
+  if (attachment.uploaderType === "daemon" && !attachment.chatSessionId
+    && !attachment.issueId && !attachment.commentId) return c.json({ error: "attachment not available" }, 404);
   if (attachment.chatSessionId) {
+    const token = currentAccessToken(c);
+    if (token?.type === "task") {
+      const task = token.taskId ? store.getTask(token.taskId) : null;
+      // Grant file reads only to the Task's exact Chat. Owner identity alone
+      // would either deny Feishu chats or expose unrelated private sessions.
+      if ((c.req.method === "GET" || c.req.method === "HEAD")
+        && task?.chatSessionId === attachment.chatSessionId
+        && task.workspaceId === attachment.workspaceId
+        && token.workspaceId === attachment.workspaceId) return null;
+      return c.json({ error: "attachment not available" }, 404);
+    }
     const loaded = loadChatSessionForCurrentUser(c, store, attachment.chatSessionId, { requireAgentAccess: false });
     return loaded instanceof Response ? loaded : null;
   }

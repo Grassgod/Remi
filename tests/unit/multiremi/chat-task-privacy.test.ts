@@ -116,4 +116,16 @@ describe("Chat task privacy across task APIs", () => {
       expect((await app.request(`/api/tasks/${task.id}/cancel`, { method: "POST", headers: identity })).status).toBe(403);
     }
   });
+
+  it("keeps cancelled Chat history readable by its owner without execution context", async () => {
+    const { store, task, app, alice, bob } = await setup();
+    store.cancelTask(task.id);
+    const response = await app.request(`/api/multiremi/tasks/${task.id}`, { headers: alice });
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.task.status).toBe("cancelled");
+    expect(body.task.issue).toBeNull();
+    expect(body.task.sessionId).toBeNull();
+    expect((await app.request(`/api/multiremi/tasks/${task.id}`, { headers: bob })).status).toBe(403);
+  });
 });

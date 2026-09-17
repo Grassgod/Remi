@@ -11,6 +11,23 @@ machine first. See [Antigravity Runtime](antigravity.md) for model discovery,
 configuration and execution limits. Agent Plugin provider filters remain scoped
 to Claude/Codex.
 
+`remi agent create`, `remi agent template create <template>`, `remi agent update
+<agent>` and `remi agent default` accept `--execution-group <group-id>`.
+Use `remi runtime group list` to find groups and their online Runtime counts,
+then `remi runtime model catalog --execution-group <group-id>` to inspect models.
+Groups default to one machine and Runtime type. Assign the same custom group ID
+with `remi runtime update <runtime> --execution-group <group-id>` to pool Runtimes
+in the same workspace and provider. Workspace boundaries remain isolated;
+a group cannot mix Runtime types. Restore a Runtime's default group with
+`remi runtime update <runtime> --data '{"execution_group_id":null}'`.
+
+The legacy `--runtime <runtime-id>` agent and model-catalog option remains
+supported, and is mutually exclusive with `--execution-group`. Omitting both
+on agent update preserves the existing target. The provider is inferred from
+the selected target unless explicitly supplied; an explicit provider must match.
+Tasks use eligible members of the selected group and wait when none is available;
+they do not fall back to unrelated Runtimes sharing a provider.
+
 ## Canonical command tree
 
 Codex Runtime connections use `remi runtime codex-profile get <runtime>` and
@@ -27,6 +44,18 @@ credential and clear semantics plus `auth_header: bearer | x-api-key`. See
 
 The canonical tree includes a focused top-level Attachment download command;
 Issue and Comment keep their scoped attachment listing and management commands.
+
+Chat Tasks can deliver files to their current conversation with
+`remi chat attachment send --attachment report.html --attachment chart.png`.
+`--content`, `--content-file`, and `--content-stdin` optionally add a caption.
+The server resolves the destination from the Task credential; no Feishu chat ID
+is needed. Each file must be non-empty, at most 20MB, and pass the server's file type allowlist.
+Within one command, the caption precedes the files, which are delivered in input
+order. A retry keeps later files waiting; a permanent failure marks the remaining
+files failed with the reason. Raster images larger than 10MB use file cards;
+smaller images use inline image messages. SVG files always use file cards.
+The response includes attachment IDs and queued delivery IDs; queueing does not
+mean Feishu has acknowledged delivery. This command requires a Chat Task credential.
 
 ```text
 remi context
@@ -95,6 +124,15 @@ directories owned by a Runtime's daemon. This is distinct from the team tenant
 managed by `remi workspace`. Use `--runtime-workspace <id>` on `chat create` or
 `issue create|update` to select it. See the [runtime workspace contract](dev/runtime-workspaces.md)
 for local context, directory lifetime, and the immutable execution binding.
+
+`remi runtime prepare [--provider claude|codex]` installs this release's fixed ACP
+and Agent dependencies, verifying executables and ACP initialization without
+switching a running daemon. This local command does not require server authentication.
+Maintainers refresh dependencies before every release with
+`bun run release:prepare --version <next>`; daemons do not poll the registry.
+See [daemon runtime upgrades](daemon-runtime-upgrades.md) for the release and
+installation checks.
+
 `remi runtime skill scan <runtime> --root '~/.agents/skills'` discovers skills in
 a directory on that Runtime's machine. Poll `runtime skill status <runtime>
 <scan-request>` until it completes, then import a returned key with `runtime skill
@@ -144,6 +182,25 @@ proposals are non-blocking Inbox items; only humans can run
 Inbox/Issue object and audited outcome, and generic `resolve` cannot forge those
 outcomes. An empty source allowlist means zero ingestion; `source update
 --clear-allowlist` restores that state.
+
+Feishu bots default to Agent capabilities: anyone who can message the bot may
+use its enabled capabilities without sender approval. `remi workspace feishu-bot
+set <workspace> ... --sender-access-policy agent|allowlist` selects this policy;
+omitting the option preserves the saved choice. Existing bot configurations
+upgrade to `agent`. Agent and inherited task proposal policies still apply.
+
+The optional Feishu bot sender allowlist uses `remi workspace feishu-bot sender
+list <workspace>`, `allow <workspace> <sender>`, and `revoke <workspace> <sender>`.
+The sender ID comes from `list`; accounts are discovered from incoming bot
+requests and deduplicated within the current bot app. These human-only commands
+manage permission to create Issues through bot Chats without linking senders to
+Remi users or workspace members. This account allowlist is separate from the
+Messaging Source conversation allowlist. See the [sender policy](feishu-message-ingestion.md#机器人发送者白名单)
+for active Chat checks and legacy restricted sessions.
+
+`sender list` also refreshes names from previously received bot messages; JSON
+includes optional `name_en`, and table output includes `ENGLISH_NAME`. Profile
+refresh preserves sender IDs and allowlist decisions.
 
 The current main integration also exposes archived Issue recovery, Workspace
 prompt/archive settings, and Repository Wiki administration through:
@@ -241,6 +298,43 @@ Comment authors, resolution actors, reactions and upload ownership follow the
 authenticated user or task agent. Caller-supplied actor fields remain available
 for deployment-master and auth-disabled requests. Comment resolution accepts an
 empty body even when the client sends `Content-Type: application/json`.
+
+## Removed Chat Issue binding (MUL-301)
+
+Chat Sessions are independent conversations. Creating an Issue from Chat no longer
+binds the Chat or subscribes it to Issue activity. Feishu Issue topics retain their
+Issue association in the Feishu binding table and continue receiving updates and
+work-round replies. Legacy group associations without deterministic ownership
+evidence require audited operator restoration before daemon traffic resumes;
+see the [migration runbook](migrations/chat-issue-decoupling.md).
+
+This is an intentional breaking capability removal, with no replacement command.
+Unlike renamed command paths, it has no executable compatibility alias: retaining
+one would restore the binding capability being removed. The five executable
+commands removed are:
+
+- `remi chat issue bind`
+- `remi chat issue unbind`
+- `remi chat issue updates get`
+- `remi chat issue updates enable`
+- `remi chat issue updates disable`
+
+The `chat.issue` and `chat.issue.updates` grouping nodes are also removed.
+Chat creation, messages, queues, pinning, archiving and restoration remain supported.
+Chat session lists and the global pending-task list exclude Feishu Issue-topic
+transport sessions, including topics created by the current user.
+
+API changes:
+
+- Chat session create/update no longer accept `issueId` or `issue_id`; sending
+  either field returns HTTP 400.
+- Chat session responses no longer include `issueId` (native API) or `issue_id`
+  (compatibility API).
+- Issue creation no longer returns `chat_issue_binding` or `chat_issue_binding_hint`.
+- `GET` and `PUT /api/chat/sessions/:sessionId/issue-updates` are removed.
+- CLI context no longer includes `current.chat.issue_id` or `current.bound_issue`.
+- Internal daemon task wire removes `chat_bootstrap_transcript`; cold conversation
+  history continues through the existing session projection.
 
 ## Deprecated aliases
 

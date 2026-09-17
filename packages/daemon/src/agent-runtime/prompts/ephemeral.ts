@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { attachmentIdsFromText } from "@multiremi/contracts/attachments.js";
+import { CHAT_ARTIFACT_DELIVERY_CONTRACT } from "@multiremi/contracts/artifact-delivery.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
 
 /** A repo the daemon pre-checked-out into the task workDir before the run. */
@@ -37,6 +38,10 @@ export function buildTaskPrompt(task: AgentTask, opts: BuildTaskPromptOptions = 
 }
 
 export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOptions = {}): TaskPromptArtifact {
+  // Only a Feishu topic binding can attach Issue context to a Chat turn.
+  // Ignore unrelated Issue payload fields when the topic identity is absent.
+  const privateChat = Boolean(task.chatSessionId && !(task.boundIssue ?? task.bound_issue));
+  if (privateChat) task = withoutIssueContext(task);
   const mode = taskPromptMode(task);
   const sections: string[] = [];
 
@@ -53,6 +58,9 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
       `Root: ${JSON.stringify(task.runtimeWorkspace.rootPath)}; working directory relative to root: ${JSON.stringify(task.runtimeWorkspace.cwd)}.`,
       "Work in the existing directory. It may contain multiple repositories, private local context, dependencies, or no Git repository. Inspect existing files before deciding whether Git is relevant. Preserve local configuration and directory relationships.",
       "Workspace instruction files and the local skill catalog are supplied through the provider's local instruction file. Their source contents are loaded on this machine.");
+  }
+  if (task.chatSessionId) {
+    sections.push("", "## Current Chat Attachment Delivery", CHAT_ARTIFACT_DELIVERY_CONTRACT);
   }
   if (mode === "bootstrap") appendHomepageChatCliSection(sections, task);
   appendSessionContextSections(sections, task, mode, opts.platform ?? process.platform, opts.sessionHistoryPaths);
@@ -82,7 +90,7 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
 
   appendTriggerCommentSection(sections, task, opts.platform ?? process.platform);
 
-  appendRepositoryWarnings(sections, opts.repoWarnings ?? []);
+  if (!privateChat) appendRepositoryWarnings(sections, opts.repoWarnings ?? []);
   appendRepositoryWikiAvailabilityWarnings(sections, task);
   if (task.knowledgeWarnings?.length) {
     sections.push("", "## Knowledge Availability Warnings", ...task.knowledgeWarnings);
@@ -158,6 +166,35 @@ function taskHoldsWorkspace(task: AgentTask): boolean {
   return task.holdsWorkspace !== false && task.holds_workspace !== false;
 }
 
+function withoutIssueContext(task: AgentTask): AgentTask {
+  const explicitProject = !task.runtimeWorkspaceId && task.chatProjectId && task.project?.id === task.chatProjectId;
+  return {
+    ...task,
+    issueId: null,
+    issue_id: null,
+    issue: null,
+    issueSessionId: null,
+    issue_session_id: null,
+    issueSession: null,
+    issue_session: null,
+    issueSessionResults: [],
+    issue_session_results: [],
+    project: explicitProject ? task.project : null,
+    projectResources: explicitProject ? task.projectResources : [],
+    projectDocs: explicitProject ? task.projectDocs : null,
+    projectContexts: [],
+    project_contexts: [],
+    repositoryWikiContexts: [],
+    repository_wiki_contexts: [],
+    knowledgeWarnings: [],
+    repos: [],
+    squadContext: null,
+    squad_context: null,
+    triggerCommentId: null,
+    trigger_comment_id: null,
+  };
+}
+
 function appendWorkspacePromptSection(sections: string[], task: AgentTask, mode: TaskPromptMode): void {
   const prompt = mode === "bootstrap"
     ? stringField(task, "workspaceBootstrapPrompt", "workspace_bootstrap_prompt")
@@ -185,7 +222,7 @@ function appendProjectPromptSections(sections: string[], task: AgentTask, mode: 
   const projectInstructions = task.project.instructions?.trim();
   sections.push("");
   sections.push("## Project Context");
-  sections.push(`This issue belongs to project: ${task.project.title}`);
+  sections.push(`${task.chatSessionId && !task.issue ? "This chat" : "This issue"} belongs to project: ${task.project.title}`);
   if (task.project.description) sections.push(task.project.description);
   if (gitResources.length) {
     sections.push("");
@@ -268,9 +305,6 @@ function taskPromptMode(task: AgentTask): TaskPromptMode {
 }
 
 function currentTaskRequest(task: AgentTask): string {
-  if (stringField(task, "chatBootstrapTranscript", "chat_bootstrap_transcript")) {
-    return "Continue this Chat from the canonical product history below.";
-  }
   let prompt = task.prompt.trim();
   const triggerCommentId = stringField(task, "triggerCommentId", "trigger_comment_id");
   if (triggerCommentId) {
@@ -299,16 +333,9 @@ function appendClaimContextSections(sections: string[], task: AgentTask, mode: T
     if (requestingUserProfile) sections.push(requestingUserProfile);
   }
 
-  const chatBootstrapTranscript = stringField(task, "chatBootstrapTranscript", "chat_bootstrap_transcript");
   const chatMessage = stringField(task, "chatMessage", "chat_message");
   const chatAttachments = arrayField(task, "chatMessageAttachments", "chat_message_attachments");
-  if (chatBootstrapTranscript) {
-    sections.push("");
-    sections.push("## Product Chat History");
-    sections.push("The native provider session was unavailable. Continue from this canonical, product-stored history; do not assume any provider-local history survived.");
-    sections.push("");
-    sections.push(chatBootstrapTranscript);
-  } else if (chatMessage && chatMessage.trim() !== currentTaskRequest(task).trim()) {
+  if (chatMessage && chatMessage.trim() !== currentTaskRequest(task).trim()) {
     sections.push("");
     sections.push("## Chat Message");
     sections.push(chatMessage);
@@ -326,7 +353,8 @@ function appendClaimContextSections(sections: string[], task: AgentTask, mode: T
     "boundIssueUpdatesOmittedCount",
     "bound_issue_updates_omitted_count",
   ) ?? 0;
-  if (boundIssueUpdates.length || omittedBoundIssueUpdates > 0) {
+  const boundIssue = task.chatSessionId ? task.boundIssue ?? task.bound_issue ?? null : null;
+  if (boundIssue && (boundIssueUpdates.length || omittedBoundIssueUpdates > 0)) {
     sections.push("");
     sections.push("## Bound Issue Updates");
     if (omittedBoundIssueUpdates > 0) {
@@ -339,8 +367,7 @@ function appendClaimContextSections(sections: string[], task: AgentTask, mode: T
     });
   }
 
-  const boundIssue = task.boundIssue ?? task.bound_issue ?? null;
-  if (boundIssue && task.chatSessionId) {
+  if (boundIssue) {
     sections.push("");
     sections.push("## Bound Issue");
     sections.push(`This Feishu topic is bound to ${boundIssue.key} — ${boundIssue.title} (status: ${boundIssue.status}).`);
@@ -385,7 +412,7 @@ function appendClaimContextSections(sections: string[], task: AgentTask, mode: T
 }
 
 function appendHomepageChatCliSection(sections: string[], task: AgentTask): void {
-  if (!task.chatSessionId || task.issueId) return;
+  if (!task.chatSessionId || task.boundIssue || task.bound_issue) return;
   sections.push("");
   sections.push("## Remi Context");
   sections.push("Use `remi context` for the current identity and allowed operations. Use `remi project list|get|search` and `remi repo list|get|search` to inspect the database-backed safe directory.");
@@ -577,6 +604,8 @@ interface PromptAttachment {
   filename: string;
   contentType: string;
   size: string;
+  localPath?: string;
+  localDownloadError?: string;
 }
 
 function issuePromptAttachments(issue: NonNullable<AgentTask["issue"]>): unknown[] {
@@ -596,12 +625,17 @@ function appendPromptAttachments(sections: string[], values: unknown[], includeH
   for (const value of values) sections.push(formatPromptAttachment(value));
 }
 
-function formatPromptAttachment(value: unknown): string {
+export function formatPromptAttachment(value: unknown): string {
   const attachment = normalizePromptAttachment(value);
   if (!attachment.id) return `- ${String(value)}`;
   return [
     `- id: ${attachment.id}; filename: ${attachment.filename}; content-type: ${attachment.contentType}; size: ${attachment.size}`,
-    `  Download: \`remi attachment download ${attachment.id} --output-dir <dir>\`, then use Read to inspect the local file.`,
+    ...(attachment.localPath
+      ? [`  Local path: ${JSON.stringify(attachment.localPath)}. Read this file directly.`]
+      : [
+          ...(attachment.localDownloadError ? [`  ${attachment.localDownloadError}.`] : []),
+          `  Download: \`remi attachment download ${attachment.id} --output-dir <dir>\`, then use Read to inspect the local file.`,
+        ]),
   ].join("\n");
 }
 
@@ -628,6 +662,8 @@ function normalizePromptAttachment(value: unknown): PromptAttachment {
     filename: filename || "unavailable",
     contentType: contentType || "unavailable",
     size,
+    localPath: typeof attachment.localPath === "string" ? attachment.localPath : undefined,
+    localDownloadError: typeof attachment.localDownloadError === "string" ? attachment.localDownloadError : undefined,
   };
 }
 

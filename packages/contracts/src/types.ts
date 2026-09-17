@@ -67,6 +67,8 @@ export interface MultiremiAgentTemplate extends MultiremiAgentTemplateSummary {
 export type MultiremiAgentRole = "normal" | "maintainer" | "supervisor";
 
 export interface MultiremiAgent {
+  executionGroupId?: string | null;
+  execution_group_id?: string | null;
   id: string;
   name: string;
   description: string;
@@ -101,6 +103,8 @@ export interface MultiremiAgent {
 }
 
 export interface CreateAgentInput {
+  executionGroupId?: string | null;
+  execution_group_id?: string | null;
   id?: string;
   name: string;
   provider: MultiremiAgentProvider;
@@ -137,6 +141,8 @@ export interface CreateAgentInput {
 }
 
 export interface UpdateAgentInput {
+  executionGroupId?: string | null;
+  execution_group_id?: string | null;
   name?: string;
   description?: string | null;
   avatarUrl?: string | null;
@@ -171,6 +177,8 @@ export interface UpdateAgentInput {
 }
 
 export interface CreateAgentFromTemplateInput {
+  executionGroupId?: string | null;
+  execution_group_id?: string | null;
   templateSlug?: string;
   template_slug?: string;
   name: string;
@@ -625,6 +633,9 @@ export interface CreateRuntimeWorkspaceInput {
 }
 
 export interface MultiremiRuntime {
+  executionGroupIds?: string[];
+  executionGroupId?: string | null;
+  execution_group_id?: string | null;
   id: string;
   name: string;
   provider: MultiremiAgentProvider | "any";
@@ -1039,6 +1050,8 @@ export interface MultiremiRuntimeModel {
 }
 
 export interface RegisterRuntimeInput {
+  executionGroupId?: string | null;
+  execution_group_id?: string | null;
   id?: string;
   name: string;
   provider: MultiremiAgentProvider | "any";
@@ -1063,6 +1076,8 @@ export interface RegisterRuntimeInput {
 }
 
 export interface UpdateRuntimeInput {
+  executionGroupId?: string | null;
+  execution_group_id?: string | null;
   name?: string;
   ownerId?: string | null;
   owner_id?: string | null;
@@ -1243,6 +1258,8 @@ export type MultiremiTaskSteerKind = "steer" | "force_answer";
  *  provider session without cancelling the run. `force_answer` asks the agent
  *  to stop exploring and deliver its best conclusion now. */
 export interface MultiremiTaskSteerMessage {
+  sourceChatMessageId?: string;
+  attachments?: MultiremiAttachment[];
   id: string;
   taskId: string;
   task_id?: string;
@@ -1259,6 +1276,7 @@ export interface MultiremiTaskSteerMessage {
 }
 
 export interface CreateTaskSteerMessageInput {
+  sourceChatMessageId?: string;
   id?: string;
   taskId: string;
   kind: MultiremiTaskSteerKind;
@@ -1462,6 +1480,8 @@ export interface MultiremiTaskTriggerMetadata {
 }
 
 export interface MultiremiTaskWithAgent extends MultiremiTask {
+  /** Explicit Chat project binding, never inherited from an Issue. */
+  chatProjectId?: string | null;
   runtimeWorkspace?: MultiremiRuntimeWorkspace | null;
   agent: MultiremiAgent | null;
   issue: MultiremiIssue | null;
@@ -2037,6 +2057,9 @@ export interface CreateIssueWithTaskInput extends CreateIssueInput {
 export interface UpdateIssueInput {
   runtimeWorkspaceId?: string | null;
   runtime_workspace_id?: string | null;
+  /** Server-internal attribution, overwritten from the authenticated request. */
+  actorType?: string;
+  actorId?: string | null;
   title?: string;
   description?: string | null;
   status?: string;
@@ -2122,6 +2145,7 @@ export interface AssignIssueInput {
 export interface AssignIssueResult {
   issue: MultiremiIssue;
   task: MultiremiTask | null;
+  cancelledTasks: number;
 }
 
 export interface QuickCreateIssueInput {
@@ -3871,6 +3895,8 @@ export const FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION = 3;
 export const FEISHU_CONCIERGE_TASK_STREAM_PROTOCOL_VERSION = 4;
 /** Native CoT, independent interaction/result messages, durable inbound delivery. */
 export const FEISHU_CONCIERGE_NATIVE_COT_PROTOCOL_VERSION = 5;
+/** v6 supports explicit binary Chat attachment deliveries. */
+export const FEISHU_CONCIERGE_ATTACHMENT_PROTOCOL_VERSION = 6;
 export const FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER = "X-Multiremi-Feishu-Claim-Token";
 
 export type FeishuBotDomain = "feishu" | "lark" | "bytedance";
@@ -3926,6 +3952,9 @@ export interface FeishuPresentationCheckpoint {
 }
 
 export interface MultiremiFeishuBotOutboundDelivery {
+  attachments?: Array<Pick<MultiremiAttachment, "id" | "filename" | "contentType" | "sizeBytes">>;
+  /** Original inbound messages only; never the root of an unrelated proactive reply. */
+  receiptMessageIds?: string[];
   id: string;
   claimToken: string;
   claim_token?: string;
@@ -3983,6 +4012,7 @@ export interface MultiremiFeishuBotConfig {
   appId: string;
   domain: FeishuBotDomain;
   enabled: boolean;
+  senderAccessPolicy: "agent" | "allowlist";
   /** Bumped on every mutation; daemons refetch when their applied revision lags. */
   revision: number;
   hasAppSecret: boolean;
@@ -4015,6 +4045,7 @@ export interface FeishuBotConfigView {
   app_id: string;
   domain: FeishuBotDomain;
   enabled: boolean;
+  sender_access_policy: "agent" | "allowlist";
   revision: number;
   app_secret_configured: boolean;
   app_secret_hint: string | null;
@@ -4069,6 +4100,7 @@ export interface UpsertFeishuBotConfigInput {
   appId: string;
   domain: FeishuBotDomain;
   enabled: boolean;
+  senderAccessPolicy?: "agent" | "allowlist";
   appSecretOp: FeishuBotSecretOp;
   appSecret?: string;
   actor?: string | null;
@@ -4138,6 +4170,8 @@ export interface MultiremiFeishuBotDaemonPayload extends MultiremiFeishuBotDaemo
 
 /** One inbound Feishu event submitted by the Runtime hosting the connector. */
 export interface SubmitFeishuBotMessageInput {
+  /** Uploaded before submission, scoped to this runtime/revision/external message. */
+  attachmentIds?: string[];
   revision: number;
   externalSessionKey: string;
   externalMessageId: string;
@@ -4164,11 +4198,26 @@ export interface SubmitFeishuBotMessageResult {
   duplicate: boolean;
   steered: boolean;
   deliveryQueued?: boolean;
-  senderMembership: "member" | "non_member" | "unbound";
+  senderAllowed: boolean;
+}
+
+/** An account observed by this workspace's current Feishu bot. */
+export interface FeishuBotSender {
+  id: string;
+  app_id: string;
+  display_name: string;
+  name_en?: string | null;
+  open_id: string;
+  union_id: string | null;
+  allowed: boolean;
+  first_seen_at: string;
+  last_seen_at: string;
 }
 
 /** Runtime-facing Task snapshot used by connector delivery polling. */
 export interface FeishuBotTaskSnapshot {
+  /** Includes later steer messages so each sender's receipt reaches the terminal state. */
+  receiptMessageIds?: string[];
   taskId: string;
   status: MultiremiTaskStatus;
   result: string | null;
@@ -4232,7 +4281,9 @@ export type FeishuBotAuditAction =
   | "redeployed"
   | "tested"
   | "registration_started"
-  | "registration_used";
+  | "registration_used"
+  | "sender_allowed"
+  | "sender_revoked";
 
 /**
  * One audited change to the concierge. `details` records which fields moved and
@@ -4448,8 +4499,6 @@ export interface MultiremiChatSession {
   workspaceId: string;
   creatorId: string | null;
   agentId: string;
-  /** Optional Issue whose context is attached to tasks created from this Chat. */
-  issueId: string | null;
   title: string;
   status: MultiremiChatSessionStatus;
   sessionId: string | null;
@@ -4495,8 +4544,6 @@ export interface CreateChatSessionInput {
   workspace_id?: string | null;
   creatorId?: string | null;
   creator_id?: string | null;
-  issueId?: string | null;
-  issue_id?: string | null;
   title?: string | null;
 }
 
@@ -4504,8 +4551,6 @@ export interface UpdateChatSessionInput {
   pinned?: boolean;
   title?: string;
   status?: MultiremiChatSessionStatus;
-  issueId?: string | null;
-  issue_id?: string | null;
 }
 
 export interface SendChatMessageInput {
@@ -5242,4 +5287,13 @@ export interface MultiremiMetricCounter {
   name: string;
   labels: Record<string, string>;
   value: number;
+}
+
+export interface MultiremiExecutionGroup {
+  id: string;
+  workspaceId: string;
+  provider: string;
+  machineId: string | null;
+  runtimeIds: string[];
+  createdAt: string;
 }

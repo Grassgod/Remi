@@ -7,7 +7,7 @@ import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { AcpClient } from "@acp/client.js";
-import { BRIDGE_PIN, CODEX_USAGE_PATCH, patchCodexUsageBridge } from "@acp/provision.js";
+import { BRIDGE_PIN, RUNTIME_PIN, CODEX_USAGE_PATCH, patchCodexUsageBridge } from "@acp/provision.js";
 
 const args = process.argv.slice(2);
 const packageArg = args.find((arg) => arg.startsWith("--package-dir="))?.slice("--package-dir=".length);
@@ -17,16 +17,15 @@ const entry = join(packageDir, "dist", "index.js");
 const bridge = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
 assert.equal(bridge.name, "@agentclientprotocol/codex-acp");
 assert.equal(bridge.version, BRIDGE_PIN.codex);
-// This check intentionally fails at the next dependency change: inspect and
-// validate the new pair before updating the release's compatibility baseline.
-assert.equal(bridge.dependencies["@openai/codex"], "^0.153.4");
+// Validate the published dependency against the release compatibility baseline.
+assert.equal(bridge.dependencies["@openai/codex"], `^${RUNTIME_PIN.codex.version}`);
 const codexEntry = createRequire(entry).resolve("@openai/codex/bin/codex.js");
 const codex = JSON.parse(readFileSync(join(dirname(dirname(codexEntry)), "package.json"), "utf8"));
-assert.equal(codex.version, "0.153.4");
+assert.equal(codex.version, RUNTIME_PIN.codex.version);
 const node = Bun.which("node");
 assert(node, "Node is required to launch the published bridge and its bundled CLI");
 const cliVersion = execFileSync(node, [codexEntry, "--version"], { encoding: "utf8", timeout: 15_000 }).trim();
-assert.equal(cliVersion, `codex-cli ${codex.version}`);
+assert.equal(cliVersion, `codex-cli ${RUNTIME_PIN.codex.executableVersion}`);
 assert(patchCodexUsageBridge(undefined, packageDir), "Published usage patch anchor must match");
 const patched = readFileSync(entry, "utf8");
 assert(patchCodexUsageBridge(undefined, packageDir));

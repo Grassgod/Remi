@@ -10,6 +10,24 @@ function readWorkflow(name: string): Record<string, any> {
 }
 
 describe("release workflows", () => {
+  test("release publication uses a prepared snapshot and exact-commit full CI before building", () => {
+    const release = readWorkflow("release.yml");
+    const steps = release.jobs.release.steps;
+    const gate = steps.findIndex((step: any) => step.run?.includes("release:check --tag"));
+    const build = steps.findIndex((step: any) => step.run?.includes("bun run build:multiremi"));
+    expect(gate).toBeGreaterThan(-1);
+    expect(gate).toBeLessThan(build);
+    expect(steps[gate].run).toContain("release-build-check.yml/runs?head_sha=$SHA");
+    expect(steps[gate].run).toContain("event=push&branch=main&status=success");
+    expect(release.jobs.release.permissions.actions).toBe("read");
+    expect(JSON.stringify(release)).not.toContain("release:prepare");
+    const ci = readWorkflow("release-build-check.yml");
+    expect(JSON.stringify(ci.jobs.build.steps)).toContain("release:check --base-ref");
+    expect(ci.jobs.build.steps[0].with["fetch-depth"]).toBe(0);
+    expect(ci.jobs["session-archive-platform"].strategy.matrix.os).toEqual(["ubuntu-latest", "macos-latest"]);
+    expect(JSON.stringify(ci)).toContain("runtime prepare --provider claude --provider codex");
+  });
+
   test("publishes the platform automatically after the tag release", () => {
     const release = readWorkflow("release.yml");
     expect(release.on.push.tags).toContain("v*");

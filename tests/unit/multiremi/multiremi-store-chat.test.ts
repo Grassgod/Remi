@@ -1,42 +1,11 @@
 // Chat session persistence/resume plus the creator-scoped HTTP surfaces.
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import {
-  buildChatBootstrapTranscript,
-  CHAT_BOOTSTRAP_MAX_BYTES,
-  CHAT_BOOTSTRAP_MAX_MESSAGES,
-  CHAT_BOOTSTRAP_OMITTED_NOTICE,
-} from "@multiremi/store/repos/chat-repo.js";
-import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi store — chat sessions and private agent access", () => {
-  it("bounds cold bootstrap history by newest 64 messages and 64 KiB", () => {
-    const messages = Array.from({ length: 80 }, (_, index) => ({
-      id: `msg_${index}`,
-      chatSessionId: "chat_1",
-      taskId: `tsk_${index}`,
-      role: index % 2 ? "assistant" : "user",
-      body: `message-${index} ${"x".repeat(1400)}`,
-      failureReason: null,
-      elapsedMs: null,
-      createdAt: new Date(index * 1000).toISOString(),
-    })) as any;
-
-    const result = buildChatBootstrapTranscript(messages);
-    expect(result.omitted).toBe(true);
-    expect(result.includedMessages).toBeLessThanOrEqual(CHAT_BOOTSTRAP_MAX_MESSAGES);
-    expect(new TextEncoder().encode(result.transcript).byteLength).toBeLessThanOrEqual(CHAT_BOOTSTRAP_MAX_BYTES);
-    expect(result.transcript).toStartWith(CHAT_BOOTSTRAP_OMITTED_NOTICE);
-    expect(result.transcript).toContain("message-79");
-    expect(result.transcript).not.toContain("message-0 ");
-
-    const oversized = buildChatBootstrapTranscript([{ ...messages[0], body: "中文".repeat(50_000) }]);
-    expect(new TextEncoder().encode(oversized.transcript).byteLength).toBeLessThanOrEqual(CHAT_BOOTSTRAP_MAX_BYTES);
-    expect(oversized.transcript).toContain("[Message truncated.]");
-  });
-
   it("persists chat sessions and resumes provider context across turns", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Codex", provider: "codex" });
@@ -89,18 +58,47 @@ describe("Multiremi store — chat sessions and private agent access", () => {
     expect(store.getChatSession(session.id)?.hasUnread).toBe(false);
   });
 
-  it("stamps a bound Issue onto Chat tasks without creating an Issue Session", () => {
+  it("keeps Chat tasks independent from Issue ownership", () => {
     const store = createStore();
-    const agent = store.createAgent({ name: "Bound chat", provider: "codex" });
-    const issue = store.createIssue({ title: "Bound Issue", workspaceId: "local" });
-    const session = store.createChatSession({ agentId: agent.id, issueId: issue.id });
+    const agent = store.createAgent({ name: "Private chat", provider: "codex" });
+    const issue = store.createIssue({ title: "Separate work", workspaceId: "local" });
+    const session = store.createChatSession({ agentId: agent.id });
+    const sent = store.sendChatMessage(session.id, { body: "Continue chatting" });
 
-    const sent = store.sendChatMessage(session.id, { body: "Continue the Issue" });
-
-    expect(sent.task.issueId).toBe(issue.id);
+    expect(sent.task.issueId).toBeNull();
     expect(sent.task.issueSessionId).toBeNull();
-    expect(sent.task.holdsWorkspace).toBe(false);
-    expect(store.getTaskWithAgent(sent.task.id)?.issue?.key).toBe(issue.key);
+    expect(store.getTaskWithAgent(sent.task.id)).toMatchObject({
+      issue: null, project: null, projectResources: [], projectContexts: [], repos: [],
+    });
+    expect(store.getChatSession(session.id)).not.toHaveProperty("issueId");
+    expect(() => store.createTask({ agentId: agent.id, chatSessionId: session.id,
+      issueId: issue.id, prompt: "Attach Issue" })).toThrow("Only Feishu Issue topics");
+    expect(store.getAgentChatNotificationChannel(session.id)).toBeNull();
+  });
+
+  it("retries a legacy private Chat failure without its old Issue or provider context", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Chat", provider: "codex" });
+    const runtime = store.registerRuntime({ name: "Local", provider: "codex" });
+    const issue = store.createIssue({ title: "Former accidental binding" });
+    const chat = store.createChatSession({ agentId: agent.id });
+    const sent = store.sendChatMessage(chat.id, { body: "Continue" });
+    store.claimTask(runtime.id);
+    store.startTask(sent.task.id);
+    // An in-flight pre-upgrade task keeps its audit association after migration.
+    db!.run("UPDATE multiremi_tasks SET issue_id = ? WHERE id = ?", [issue.id, sent.task.id]);
+    store.failTask(sent.task.id, {
+      error: "Timed out during upgrade", failureReason: "timeout",
+      sessionId: "legacy-issue-provider", workDir: "/tmp/private-chat",
+    });
+    const retry = store.listTasks().find((task) => task.parentTaskId === sent.task.id)!;
+    expect(retry).toMatchObject({ chatSessionId: chat.id, issueId: null, issueSessionId: null, sessionId: null });
+    const claimed = store.claimTask(runtime.id)!;
+    expect(claimed.id).toBe(retry.id);
+    expect(claimed.sessionId).toBeNull();
+    expect(claimed.issue).toBeNull();
+    expect(store.buildTaskSessionProjection(claimed.id)?.mode).toBe("bootstrap");
+    expect(store.getTask(sent.task.id)?.issueId).toBe(issue.id);
   });
 
   it("scopes chat session HTTP routes to the current creator", async () => {
@@ -130,7 +128,6 @@ describe("Multiremi store — chat sessions and private agent access", () => {
       "creator_id",
       "has_unread",
       "id",
-      "issue_id",
       "last_message",
       "pinned",
       "project_id",
@@ -143,7 +140,7 @@ describe("Multiremi store — chat sessions and private agent access", () => {
     ]);
     expect(createdBody.creator_id).toBe("alice");
     expect(createdBody.agent_id).toBe(agent.id);
-    expect(createdBody.issue_id).toBeNull();
+    expect(createdBody).not.toHaveProperty("issue_id");
     expect(createdBody.runtime_workspace_id).toBeNull();
     expect(createdBody.has_unread).toBe(false);
 
@@ -294,7 +291,7 @@ describe("Multiremi store — chat sessions and private agent access", () => {
 
   it("rechecks private agent access across chat and agent HTTP surfaces", async () => {
     const store = createStore();
-    store.createWorkspaceMember({ id: "admin", name: "Admin", role: "admin" });
+    store.createWorkspaceMember({ id: "admin", userId: "admin", name: "Admin", role: "admin" });
     store.createWorkspaceMember({ workspaceId: "local", userId: "alice", name: "Alice", role: "member" });
     store.createWorkspaceMember({ workspaceId: "local", userId: "bob", name: "Bob", role: "member" });
     const aliceToken = await store.createAccessToken({ name: "Alice", type: "pat", workspaceId: "local", userId: "alice" });
@@ -319,7 +316,7 @@ describe("Multiremi store — chat sessions and private agent access", () => {
       headers: aliceHeaders,
       body: JSON.stringify({
         name: "Private Codex",
-        provider: "claude",
+        provider: "codex",
         runtime_id: aliceRuntime.id,
         owner_id: "bob",
         visibility: "private",
@@ -328,11 +325,11 @@ describe("Multiremi store — chat sessions and private agent access", () => {
     expect(createdAgent.status).toBe(201);
     const agent = await createdAgent.json();
     expect(agent.owner_id).toBe("alice");
-    // Pool model: the legacy runtime_id only picks the provider; no binding.
-    expect(agent.runtime_id).toBe("");
+    // A runtime selection preserves the private execution target.
+    expect(agent.runtime_id).toBe(aliceRuntime.id);
     expect(agent.provider).toBe("codex");
     expect(store.getAgent(agent.id)?.provider).toBe("codex");
-    expect(store.getAgent(agent.id)?.runtimeId).toBeNull();
+    expect(store.getAgent(agent.id)?.runtimeId).toBe(aliceRuntime.id);
     expect(agent.visibility).toBe("private");
 
     expect((await app.request(`/api/agents/${agent.id}`, { headers: aliceAuthHeaders })).status).toBe(200);
@@ -372,7 +369,8 @@ describe("Multiremi store — chat sessions and private agent access", () => {
     });
     expect(sent.status).toBe(201);
 
-    store.updateAgent(agent.id, { ownerId: "carol" });
+    // A new owner cannot inherit Alice's private Runtime target.
+    store.updateAgent(agent.id, { ownerId: "carol", runtimeId: null });
     const aliceHiddenList = await app.request("/api/chat/sessions", { headers: aliceAuthHeaders });
     expect(await aliceHiddenList.json()).toEqual([]);
     const aliceHiddenPending = await app.request("/api/chat/pending-tasks", { headers: aliceAuthHeaders });

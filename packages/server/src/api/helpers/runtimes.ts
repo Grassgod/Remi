@@ -9,7 +9,9 @@ import {
 import { RuntimeRegistrationIdentityConflictError } from "@multiremi/store/repos/runtimes-repo.js";
 import {
   MULTIREMI_DAEMON_PROVIDERS,
+  authenticatedRequestUserId,
   cleanString,
+  hasRequestField,
   currentAccessToken,
   currentRequestUserId,
   daemonRuntimeResponse,
@@ -19,6 +21,7 @@ import {
 } from "../wire/index.js";
 import type { WorkspaceRepoData } from "../wire/index.js";
 import type {
+  MultiremiCloudRuntimeNode,
   MultiremiRuntime,
   ReportRuntimeLocalSkillImportInput,
   ReportRuntimeLocalSkillListInput,
@@ -557,9 +560,55 @@ export function mergeLegacyDaemonRuntimes(
   }
 }
 
-export function cloudRuntimeStatusResponse(c: Context, store: MultiremiStore, body: any, status: string) {
+export function cloudRuntimeNodeOwnerFilter(context: Context, store: MultiremiStore): string | undefined {
+  const userId = authenticatedRequestUserId(context);
+  if (!userId) return undefined; // Master token / open mode.
+  // Intentionally stricter than auth-guards' legacy PAT identity checks: those
+  // also reject a mismatched token.workspaceId, but nodes have no workspace
+  // boundary. access-tokens-repo stores an omitted userId as "local", just like
+  // a real local user's PAT, so access depends on the current role, not token shape.
+  const role = currentWorkspaceRole(context, store, "local");
+  return role === "owner" || role === "admin" ? undefined : userId;
+}
+
+export function loadCloudRuntimeNode(
+  context: Context,
+  store: MultiremiStore,
+  id: string,
+): MultiremiCloudRuntimeNode | Response {
+  const node = id ? store.getCloudRuntimeNode(id) : null;
+  const ownerId = cloudRuntimeNodeOwnerFilter(context, store);
+  if (!node || (ownerId && node.ownerId !== ownerId)) {
+    return context.json({ error: "cloud runtime node not found" }, 404);
+  }
+  return node;
+}
+
+export function cloudRuntimeStatusResponse(context: Context, store: MultiremiStore, body: any, status: string) {
   const id = body.id ?? body.node_id ?? body.nodeId ?? "";
-  const node = id ? store.setCloudRuntimeNodeStatus(id, status) : null;
-  if (!node) return c.json({ error: "cloud runtime node not found" }, 404);
-  return c.json(node);
+  const loaded = loadCloudRuntimeNode(context, store, id);
+  if (loaded instanceof Response) return loaded;
+  const node = store.setCloudRuntimeNodeStatus(loaded.id, status);
+  if (!node) return context.json({ error: "cloud runtime node not found" }, 404);
+  return context.json(node);
+}
+
+/** Validate user-configured group names before entering the Runtime write transaction. */
+export function validateRuntimeExecutionGroupInput(
+  c: Context,
+  store: MultiremiStore,
+  workspaceId: string,
+  provider: string,
+  input: { executionGroupId?: string | null; execution_group_id?: string | null },
+): Response | null {
+  if (!hasRequestField(input, "executionGroupId", "execution_group_id")) return null;
+  const raw = input.executionGroupId ?? input.execution_group_id;
+  if (raw == null) return null;
+  if (typeof raw !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/.test(raw.trim()) || raw.trim().startsWith("eg_")) {
+    return c.json({ error: "execution_group_id must be a custom identifier of 1–128 letters, digits, dots, colons, underscores or hyphens and must not start with eg_" }, 400);
+  }
+  if (provider === "any") return c.json({ error: "an any-provider Runtime cannot join a custom execution group" }, 400);
+  const existing = store.getExecutionGroup(raw.trim(), workspaceId);
+  if (existing && existing.provider !== provider) return c.json({ error: "execution group members must use the same provider" }, 400);
+  return null;
 }

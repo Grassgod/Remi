@@ -11,8 +11,7 @@ summary: 说明任务到 Codex ACP 的当前执行链、配置来源、会话隔
 ## 配置与运行
 
 - 在工作区 Agent 上设置 `provider: codex`，由符合路由条件的 Codex runtime 领取任务。[CLI Registry](../../apps/remi/cli/commands/agent-extensions.ts)提供 `remi agent create`、`remi agent update` 的 `--provider`、`--model` 和 `--thinking-level` 参数；先用对应命令的 `--help` 核对当前参数与身份要求。
-- [daemon 启动入口](../../apps/remi/cli/multiremi.ts)调用 [ensureAcpBridges](../../packages/acp/src/provision.ts)，使用源码固定的 `@agentclientprotocol/codex-acp` 版本及 Remi usage 补丁。版本以 `BRIDGE_PIN` 为准，不从一次外部包查询结果推导。
-- 当前固定组合为 `codex-acp@1.11.0` 与其声明的 `@openai/codex@^0.153.4`（验证基线为 `0.153.4`）。bridge 默认启动自身 npm 依赖中的 Codex；系统或 Homebrew 的 Codex 升级不会改变这条执行链。`^0.153.4` 不包含 `0.154.0`。旧 bridge 即使已带 usage 补丁，也会在更新后的 daemon 启动或 ACP 更新请求中被替换；ACP 更新始终安装当前 Remi 的固定版本。
+- [daemon 启动入口](../../apps/remi/cli/multiremi.ts)调用 [ensureAcpBridges](../../packages/acp/src/provision.ts)，使用源码固定的 `@agentclientprotocol/codex-acp` 版本及 Remi usage 补丁。版本以 [runtime-versions.json](../../packages/acp/src/runtime-versions.json) 为准；它同时固定 bridge、配套 Codex SDK 和实际执行文件版本。发版准备与安装校验见[配套升级说明](../daemon-runtime-upgrades.md)。系统或 Homebrew 的 Codex 升级不会替换 Remi 托管依赖。
 - ACP 执行文件按显式 `executable`、`REMI_CODEX_AGENT_ACP_EXECUTABLE`、Remi 管理目录与 PATH 解析，具体顺序见 `resolveAcpExecutableForAgent`。Windows 的扩展名解析也在该函数所在文件中。
 - 当前 Codex 健康检查只确认执行文件可解析，不启动模型进程。检查通过不等于登录、网络、模型或真实任务已可用。
 
@@ -30,8 +29,8 @@ Runtime 详情的「Codex 连接」页支持一个自定义 Responses provider�
 
 - [配置契约](../../packages/contracts/src/codex-profile.ts)只接受结构化路由字段，不接受任意 TOML、命令、URL 内联凭据或查询参数。当前每个 Runtime 配置一个模型；云友需选择此模型或不指定模型，显式选择其他模型时任务会报错。
 - [注入器](../../packages/daemon/src/agent-runtime/codex-profile.ts)将配置展开为隔离 `CODEX_HOME/config.toml` 的 `model`、`model_provider` 和 `model_providers.remi_custom`；密钥只进入进程环境 `OPENAI_API_KEY`，不写入 config/auth 文件。本机基础 Home 不变。ACP 的 `MODEL_PROVIDER`、`CODEX_CONFIG`、`DEFAULT_AUTH_REQUEST` 环境覆盖也会被明确设置，避免旧机器配置改变路由。
-- 这里的 Profile 是 Remi 的命名连接，不是直接复制本机 `--profile` 配置。Codex 0.134.0 起使用独立 `<name>.config.toml`，旧版使用 `[profiles.name]`；Remi 展开有效配置以避免依赖这项格式差异，参见 [Codex 官方配置说明](https://learn.chatgpt.com/docs/config-file/config-advanced)。
-- [任务快照](../../packages/server/src/store/repos/tasks-repo.ts)在 claim 时冻结连接和凭据版本，并把连接纳入执行指纹。修改配置只影响新任务；运行中任务和自动重试使用原快照。连接变化后从产品会话记录重新启动原生会话，不把旧 provider 会话 ID 传给新接口。重试保留原 Runtime 归属。
+- 这里的 Profile 是 Remi 的命名连接，不是直接复制本机 `--profile` 配置。Remi 展开有效配置，不依赖本机 profile 文件的布局。
+- [任务快照](../../packages/server/src/store/repos/tasks-repo.ts)在 claim 时冻结连接和凭据版本，并把连接纳入执行指纹。修改配置只影响新任务；运行中任务使用原快照，自动重试在原 Runtime 仍兼容当前 Agent 时保留快照。连接变化后从产品会话记录重新启动原生会话，不把旧 provider 会话 ID 传给新接口。若 Agent 切换 provider 或原 Runtime 不再兼容，重试清除旧快照，由兼容 Runtime 重新领取。
 - 模型目录显示配置的模型，属于配置声明，不代表连通性验证，也不虚构 thinking 能力。未在 Codex 内置目录中的模型可由启动配置使用；Codex 可能提示缺少模型元数据，兼容性取决于实际 Responses 服务。
 - 可选的 LLM 进度摘要使用 Chat Completions 协议，因此不自动复用自定义 Responses 连接的密钥；需单独配置 `MULTIREMI_PROGRESS_SUMMARY_OPENAI_BASE_URL` 与 `MULTIREMI_PROGRESS_SUMMARY_OPENAI_API_KEY` 才启用该摘要。任务状态与执行消息照常上报。
 
@@ -76,13 +75,12 @@ bun run tests/integration/smoke-multiremi-acp.ts --provider=codex --check-only
 
 移除 `--check-only` 会运行真实任务并调用模型，需要当前机器上有效的认证与模型访问。保留实际输出中的 `available`、`unavailable`、`passed`、`failed` 差别；这里列的是验证入口，不是本次执行结果。
 
-升级 `BRIDGE_PIN.codex` 时，在隔离目录安装真实 npm 包并运行兼容性检查，不要直接替换用户 `~/.remi/acp` 中的 Codex。以下示例使用仓库已忽略的 `.remi/bridge-check`：
+发版准备会在隔离目录安装并验证快照组合。需要进一步验证真实会话时，可将该固定 bundle 中的 bridge 目录传给检查器：
 
 ```bash
-npm install --prefix .remi/bridge-check --registry https://registry.npmjs.org --no-audit --no-fund @agentclientprotocol/codex-acp@1.11.0
-bun run tests/integration/verify-codex-bridge.ts --package-dir=.remi/bridge-check/node_modules/@agentclientprotocol/codex-acp
+bun run tests/integration/verify-codex-bridge.ts --package-dir=<bundle>/node_modules/@agentclientprotocol/codex-acp
 ```
 
 检查器核对发布包的依赖声明和实际 CLI 版本，应用 usage 补丁并执行发布包中的 token 转换，随后验证 ACP 初始化、会话创建、model/effort/权限协商和关闭。它从当前 `CODEX_HOME`（默认 `~/.codex`）复制 `auth.json` 到临时 Home，真实会话需要有效登录；不复制本机配置。加 `--prompt` 会调用模型并校验回复及实际 usage 事件。不加该参数时不会发送 prompt，也不能视为真实模型调用通过。
 
-修改版本时同步核对检查器中的配套 Codex 基线；usage 补丁仍用于逐请求累加，不能用只包含最后一次模型请求的 prompt 结算替代。协议回归夹具使用 Node shebang，Windows 可在 WSL 中运行 `acp-session-negotiation.test.ts`；发布包检查器直接通过 Node 启动 bridge，可在原生 Windows 运行。
+检查器应核对发行快照中的配套 Codex 基线；usage 补丁仍用于逐请求累加，不能用只包含最后一次模型请求的 prompt 结算替代。协议回归夹具使用 Node shebang，Windows 可在 WSL 中运行 `acp-session-negotiation.test.ts`；发布包检查器直接通过 Node 启动 bridge，可在原生 Windows 运行。

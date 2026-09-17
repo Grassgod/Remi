@@ -697,5 +697,13 @@
     "saving": "保存中…",
     "saved": "Claude Code 接続を保存しました",
     "auth_header": "リクエスト認証"
+  },
+  "execution_group": {
+    "label": "実行グループ ID",
+    "default": "既定：マシン + Runtime タイプ",
+    "hint": "同じグループ ID とタイプの Runtime がタスクを共有します。空欄で保存すると既定のマシングループに戻ります。",
+    "save": "保存",
+    "saved": "実行グループを更新しました",
+    "failed": "実行グループを更新できませんでした"
   }
 }

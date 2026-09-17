@@ -16,6 +16,7 @@ import { INBOX_ROUTING, inboxRouteFor } from "@multiremi/store/inbox-routing.js"
 import type {
   AddSessionParticipantInput,
   CreateChatSessionInput,
+  CreateAttachmentInput,
   CreateIssueCommentInput,
   CreateIssueInput,
   CreateIssueSessionInput,
@@ -187,6 +188,8 @@ export interface IssuesSurface {
   getIssueByRef(ref: string, workspaceId?: string | null): MultiremiIssue | null;
   getIssueComment(id: string): MultiremiIssueComment | null;
   getAttachment(id: string): MultiremiAttachment | null;
+  createAttachment(input: CreateAttachmentInput): MultiremiAttachment;
+  listAttachmentsForChatMessage(id: string): MultiremiAttachment[];
   linkAttachmentsToChatMessage(chatSessionId: string, chatMessageId: string, attachmentIds: string[]): void;
   listIssues(input?: ListIssuesInput): MultiremiIssue[];
   listGeneratedIssues(sourceIssueId: string): MultiremiIssue[];
@@ -361,10 +364,6 @@ export interface ChatSurface {
   createChatSessionWithinTransaction(input: CreateChatSessionInput): MultiremiChatSession;
   getChatSession(id: string): MultiremiChatSession | null;
   updateChatSession(id: string, input: UpdateChatSessionInput): MultiremiChatSession;
-  bindChatSessionIssueIfUnbound(chatSessionId: string, issueId: string): {
-    session: MultiremiChatSession;
-    bound: boolean;
-  };
   getChatMessage(id: string): MultiremiChatMessage | null;
   getPendingChatTask(chatSessionId: string): MultiremiTask | null;
   createPendingAgentIssueUpdateWithinTransaction(chatSessionId: string, body: string): {
@@ -450,6 +449,8 @@ export interface RuntimesSurface {
  * than leave a workspace pointing at something that no longer exists.
  */
 export interface FeishuBotSurface {
+  getFeishuIssueIdForChatSession(chatSessionId: string): string | null;
+  isFeishuBotTaskIssueCreationRestricted(taskId: string): boolean;
   disableFeishuBotConfigsReferencingAgent(agentId: string, actor?: string | null): string[];
   disableFeishuBotConfigsReferencingRuntime(runtimeId: string, actor?: string | null): string[];
   prepareFeishuIssueTopicWithinTransaction(issue: MultiremiIssue): boolean;
@@ -465,6 +466,7 @@ export interface FeishuBotSurface {
     now?: string | Date,
     supportsTaskStream?: boolean,
     supportsNativeCot?: boolean,
+    supportsAttachments?: boolean,
   ): MultiremiFeishuBotOutboundDelivery | null;
   getFeishuBotOutboundAttachment(
     workspaceId: string,

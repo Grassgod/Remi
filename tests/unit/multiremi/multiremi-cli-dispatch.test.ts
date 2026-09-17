@@ -60,6 +60,21 @@ async function runDispatch(args: string[]): Promise<DispatchResult> {
 }
 
 describe("remi CLI dispatcher", () => {
+  it("prints the specific subcommands for bare workspace groups and their help forms", async () => {
+    for (const group of ["organizer", "env", "ssh-mesh", "relay", "issue-topics", "issue-archive"]) {
+      const outputs: string[] = [];
+      console.log = (value?: unknown) => { outputs.push(String(value)); };
+      await dispatch(["workspace", group]);
+      await dispatch(["help", "workspace", group]);
+      await dispatch(["workspace", group, "--help"]);
+      expect(outputs).toHaveLength(3);
+      expect(outputs[0]).toContain(`Usage: remi workspace ${group} <command>`);
+      expect(outputs[0]).toContain(`${group} get`);
+      expect(outputs[1]).toBe(outputs[0]);
+      expect(outputs[2]).toBe(outputs[0]);
+    }
+  });
+
   it("registers native resource groups and every legacy top-level entry", () => {
     const inventory = cliCommandInventory();
     expect(inventory.filter((entry) => entry.path.length === 1).map((entry) => entry.path.join(" "))).toEqual([
@@ -78,8 +93,6 @@ describe("remi CLI dispatcher", () => {
       "share",
       "label",
       "chat",
-      "chat.issue",
-      "chat.issue.updates",
       "task",
       "agent",
       "squad",
@@ -126,6 +139,14 @@ describe("remi CLI dispatcher", () => {
         replacement: "remi attachment download",
       })],
     });
+  });
+
+  it("removes Chat Issue commands while retaining conversation and queue commands", () => {
+    const inventory = cliCommandInventory();
+    expect(inventory.filter((entry) => entry.id.startsWith("chat.issue"))).toEqual([]);
+    for (const id of ["chat.create", "chat.message.create", "chat.queue.list", "chat.pin", "chat.archive", "chat.restore"]) {
+      expect(inventory.some((entry) => entry.id === id), id).toBe(true);
+    }
   });
 
   it("routes `remi project` into the native resource group", async () => {

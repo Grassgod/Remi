@@ -22,7 +22,6 @@ import {
   requestedAgentWorkspaceId,
   resolveAgentRequestProvider,
   runtimeForAgentInput,
-  supervisorTaskIdentity,
   withAgentRequestContext,
   withAgentTemplateRequestContext,
   withAgentUpdateRequestContext,
@@ -33,6 +32,8 @@ import {
   agentEnvResponse,
   currentTaskAccessToken,
   currentRequestUserId,
+  cleanString,
+  hasRequestField,
   skillCompatibilityErrorResponse,
   skillSummaryCompatibilityResponse,
   taskPublicResponse,
@@ -77,7 +78,7 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
     return c.json({ agent }, 201);
   });
   app.post("/api/multiremi/agents/default", async (c) => {
-    const body = await readJsonStrict<{ provider?: string; runtimeId?: string | null; runtime_id?: string | null; workspaceId?: string | null; workspace_id?: string | null }>(c);
+    const body = await readJsonStrict<{ provider?: string; runtimeId?: string | null; runtime_id?: string | null; executionGroupId?: string | null; execution_group_id?: string | null; workspaceId?: string | null; workspace_id?: string | null }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const workspaceId = requestedAgentWorkspaceId(c, store, body);
     if (workspaceId instanceof Response) return workspaceId;
@@ -87,12 +88,25 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
     if (provider instanceof Response) return provider;
     const actingUserId = currentRequestUserId(c);
     const before = store.getDefaultAgent(workspaceId, provider, actingUserId);
+    const targetProvided = hasRequestField(body, "runtimeId", "runtime_id", "executionGroupId", "execution_group_id");
+    const targetRuntimeId = cleanString(body.runtimeId ?? body.runtime_id) ?? null;
+    const targetGroupId = cleanString(body.executionGroupId ?? body.execution_group_id) ?? null;
+    const targetChanged = targetProvided && (targetRuntimeId !== (before?.runtimeId ?? null) || (!targetRuntimeId && targetGroupId !== (before?.executionGroupId ?? null)));
+    const targetFields = targetRuntimeId ? { runtimeId: targetRuntimeId } : { executionGroupId: targetGroupId };
+    const targetUpdate = targetChanged && before
+      ? withAgentUpdateRequestContext(c, store, before, { ...targetFields, provider })
+      : targetFields;
+    if (targetUpdate instanceof Response) return targetUpdate;
     const isFirstAgent = isFirstAgentInWorkspace(store, workspaceId);
-    const agent = store.ensureDefaultAgent(provider, {
+    let agent = store.ensureDefaultAgent(provider, {
       workspaceId,
       ownerId: actingUserId,
       issueCreationRequiresProposal: currentTaskIssueCreationRestricted(c, store),
     });
+    if (targetChanged) {
+      agent = store.updateAgent(agent.id, targetUpdate);
+      if (before) publishAgentLifecycleEvent(c, store, "agent:status", agent);
+    }
     if (!before) {
       recordAgentCreatedAnalytics(c, store, agent, runtimeForAgentInput(store, body), {
         template: "default",
@@ -305,17 +319,6 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/agents/:id/cancel-tasks", (c) => {
     const loaded = loadAgentForCurrentManager(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
-    const taskToken = currentTaskAccessToken(c);
-    const supervisor = supervisorTaskIdentity(c, store);
-    if (taskToken?.taskId && supervisor) {
-      const selfTarget = loaded.agent.id === supervisor.agentId;
-      return c.json({
-        error: selfTarget
-          ? "a supervisor cannot act on its own tasks"
-          : "supervisor bulk cancellation is forbidden; act on each task with an audit reason",
-        code: selfTarget ? "organizer_self_action_forbidden" : "organizer_bulk_action_forbidden",
-      }, 403);
-    }
     return c.json({ cancelled: store.cancelAgentTasks(loaded.agent.id) });
   });
   app.post("/api/multiremi/agents/from-template", async (c) => {

@@ -59,6 +59,16 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "runtime.prepare": {
+      "command": "remi runtime prepare",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "write",
+      "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "workspace": {
       "command": "remi workspace",
       "aliases": [],
@@ -624,6 +634,54 @@
       ],
       "capability": "workspace.feishu-bot.audit",
       "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.feishu-bot.sender.list": {
+      "command": "remi workspace feishu-bot sender list",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.sender.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.feishu-bot.sender.allow": {
+      "command": "remi workspace feishu-bot sender allow",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.sender.allow",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.feishu-bot.sender.revoke": {
+      "command": "remi workspace feishu-bot sender revoke",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.sender.revoke",
+      "mutation": "write",
       "output": [
         "table",
         "json",
@@ -4048,108 +4106,6 @@
       "hidden": false,
       "migration_status": "native"
     },
-    "chat.issue": {
-      "command": "remi chat.issue",
-      "aliases": [],
-      "auth": [],
-      "capability": null,
-      "mutation": "read",
-      "output": [],
-      "hidden": false,
-      "migration_status": "native"
-    },
-    "chat.issue.bind": {
-      "command": "remi chat issue bind",
-      "aliases": [],
-      "auth": [
-        "human",
-        "task"
-      ],
-      "capability": "chat.issue.bind",
-      "mutation": "write",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ],
-      "hidden": false,
-      "migration_status": "native"
-    },
-    "chat.issue.unbind": {
-      "command": "remi chat issue unbind",
-      "aliases": [],
-      "auth": [
-        "human",
-        "task"
-      ],
-      "capability": "chat.issue.unbind",
-      "mutation": "write",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ],
-      "hidden": false,
-      "migration_status": "native"
-    },
-    "chat.issue.updates": {
-      "command": "remi chat.issue.updates",
-      "aliases": [],
-      "auth": [],
-      "capability": null,
-      "mutation": "read",
-      "output": [],
-      "hidden": false,
-      "migration_status": "native"
-    },
-    "chat.issue.updates.get": {
-      "command": "remi chat issue updates get",
-      "aliases": [],
-      "auth": [
-        "human"
-      ],
-      "capability": "chat.issue.updates.get",
-      "mutation": "read",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ],
-      "hidden": false,
-      "migration_status": "native"
-    },
-    "chat.issue.updates.enable": {
-      "command": "remi chat issue updates enable",
-      "aliases": [],
-      "auth": [
-        "human"
-      ],
-      "capability": "chat.issue.updates.enable",
-      "mutation": "write",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ],
-      "hidden": false,
-      "migration_status": "native"
-    },
-    "chat.issue.updates.disable": {
-      "command": "remi chat issue updates disable",
-      "aliases": [],
-      "auth": [
-        "human"
-      ],
-      "capability": "chat.issue.updates.disable",
-      "mutation": "write",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ],
-      "hidden": false,
-      "migration_status": "native"
-    },
     "chat.delete": {
       "command": "remi chat delete",
       "aliases": [],
@@ -4192,6 +4148,32 @@
         "task"
       ],
       "capability": "chat.message.create",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "chat.attachment": {
+      "command": "remi chat attachment",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "chat.attachment.send": {
+      "command": "remi chat attachment send",
+      "aliases": [],
+      "auth": [
+        "task"
+      ],
+      "capability": "chat.attachment.send",
       "mutation": "write",
       "output": [
         "table",
@@ -5576,6 +5558,23 @@
       "capability": null,
       "mutation": "read",
       "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "runtime.group.list": {
+      "command": "remi runtime group list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "runtime.group.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
       "hidden": false,
       "migration_status": "native"
     },
@@ -9870,9 +9869,6 @@
     "GET /api/chat/sessions/:sessionId": {
       "command": "chat.get"
     },
-    "GET /api/chat/sessions/:sessionId/issue-updates": {
-      "command": "chat.issue.updates.get"
-    },
     "GET /api/chat/sessions/:sessionId/messages": {
       "command": "chat.message.list"
     },
@@ -10042,6 +10038,9 @@
     },
     "GET /api/dashboard/usage/daily": {
       "command": "dashboard.usage.daily"
+    },
+    "GET /api/execution-groups": {
+      "command": "runtime.group.list"
     },
     "GET /api/inbox": {
       "command": "inbox.list"
@@ -10255,6 +10254,9 @@
     },
     "GET /api/multiremi/daemons/:daemonId/retirement-plan": {
       "command": "daemon.retirement-plan"
+    },
+    "GET /api/multiremi/execution-groups": {
+      "command": "runtime.group.list"
     },
     "GET /api/multiremi/feedback": {
       "command": "platform.feedback.list"
@@ -10642,6 +10644,9 @@
     "GET /api/workspaces/:id/feishu-bot/routes": {
       "command": "feishu.route.list"
     },
+    "GET /api/workspaces/:id/feishu-bot/senders": {
+      "command": "workspace.feishu-bot.sender.list"
+    },
     "GET /api/workspaces/:id/feishu-bot/status": {
       "command": "workspace.feishu-bot.status"
     },
@@ -10955,6 +10960,9 @@
     "POST /api/autopilots/:id/triggers/:triggerId/rotate-webhook-token": {
       "command": "autopilot.trigger.rotate-token"
     },
+    "POST /api/chat/attachments/send": {
+      "command": "chat.attachment.send"
+    },
     "POST /api/chat/sessions": {
       "command": "chat.create"
     },
@@ -11051,6 +11059,11 @@
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
     "POST /api/daemon/runtimes/:runtimeId/directory-scans/claim": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/runtimes/:runtimeId/feishu-bot/attachments": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
@@ -11868,9 +11881,6 @@
     "PUT /api/autopilots/:id/triggers/:triggerId/signing-secret": {
       "command": "autopilot.trigger.set-secret"
     },
-    "PUT /api/chat/sessions/:sessionId/issue-updates": {
-      "command": "chat.issue.updates.enable"
-    },
     "PUT /api/comments/:id": {
       "command": "comment.update"
     },
@@ -11973,6 +11983,9 @@
     },
     "PUT /api/workspaces/:id/feishu-bot/routes": {
       "command": "feishu.route.set"
+    },
+    "PUT /api/workspaces/:id/feishu-bot/senders/:senderId": {
+      "command": "workspace.feishu-bot.sender.allow"
     },
     "PUT /api/workspaces/:id/issue-archive": {
       "command": "workspace.issue-archive.update"

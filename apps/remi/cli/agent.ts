@@ -59,6 +59,7 @@ export interface FeishuChannelHandle {
     idempotencyKey: string;
   }) => Promise<{ messageId: string }>;
   uploadImage: (image: Buffer) => Promise<{ imageKey: string }>;
+  sendProactiveAttachment: FeishuConnector["sendProactiveAttachment"];
 }
 
 export async function waitForFeishuConnectorStart(
@@ -114,5 +115,6 @@ export async function bootFeishuChannel(
     streamProactiveTask: (...args) => connector.streamProactiveTask(...args),
     resolveProactiveMention: (...args) => connector.resolveProactiveMention(...args),
     uploadImage: (image) => connector.uploadImage(image),
+    sendProactiveAttachment: input => connector.sendProactiveAttachment(input),
   };
 }

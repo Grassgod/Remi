@@ -40,7 +40,7 @@ summary: 从 CLI、Web 和飞书入口追踪到 API、存储与 Agent 执行，�
 
 Runtime 可持有独立的[持久化工作区](dev/runtime-workspaces.md)：绑定 daemon 的已有目录。任务和聊天通过统一的「工作位置」选择项目或本机目录，二者互斥；Agent 可在不同任务中选择不同位置。目录绑定只能在所属机器执行；未指定位置时沿用自动任务目录。
 
-Chat 可绑定同工作区的一个 Issue；新 Chat task 可继承该 `issueId`，Chat 创建时保存独立的项目或本机目录选择，显式选择优先于关联 Issue 的项目；本机目录不附加项目仓库，项目聊天沿用按需检出。未选目录时使用自动 Chat 目录，其完成不会自动改变 Issue 状态或发布 Issue 回复评论。绑定、改绑和待投递更新由 [ChatRepo](../packages/server/src/store/repos/chat-repo.ts)维护。[claim wire](../packages/server/src/api/wire/tasks.ts)为 Chat/Issue 会话生成有预算的 bootstrap/delta projection，并单独携带绑定 Issue 与增量摘要；[CLI context](../packages/server/src/api/routers/cli.ts)提供 caller 的 Chat/Issue 信息，不能从摘要推断完整历史。
+Chat 与 Issue 独立，Chat 创建时保存项目或本机目录选择；本机目录不附加项目仓库，项目聊天沿用按需检出，未选目录时使用自动 Chat 目录。在 Chat 中创建 Issue 不绑定会话，也不继承新 Issue 的上下文；普通私聊不接收 Issue 播报。飞书群 Issue 话题的归属由 [FeishuBotRepo](../packages/server/src/store/repos/feishu-bot-repo.ts)维护，投递和任务领取检查绑定、Issue、工作区、Chat 与 Agent 一致性；归属不明的旧关联按[迁移手册](migrations/chat-issue-decoupling.md)审计恢复。[claim wire](../packages/server/src/api/wire/tasks.ts)保留有预算的会话 projection，仅向已确认的 Issue 话题附加 Issue 与增量摘要。详见 [Chat 契约](chat.md)。
 
 **飞书聊天**：[controlPlaneConciergeHost / createFeishuTaskHandler](../apps/remi/cli/multiremi.ts)启动 connector；普通消息经 daemon client 提交平台 Chat/Task，再走上面的任务执行链。connector 从 task 事件流回复；去重、运行中 steering、取消与人工请求也使用平台 task。当前 foreground 不实例化 `packages/remi` 的 `Remi` core，不能以该库的 `_process()` 作为当前 bot 入口。
 工作区的 [Feishu bot 配置](../packages/server/src/store/repos/feishu-bot-repo.ts)指定 Agent 和 Runtime；
@@ -73,7 +73,15 @@ PostgreSQL 的 `PgBridge.request` 用 `Atomics.wait` 等待 [pg-worker](../packa
 | 包依赖与共享类型 | [package-boundaries.test.ts](../tests/arch/package-boundaries.test.ts)、[tsconfig.json](../tsconfig.json) |
 | HTTP 能力与 CLI | [仓库规则](../AGENTS.md)、[路由快照脚本](../scripts/snapshot-api-routes.ts)、[CLI 能力检查](../scripts/check-cli-capabilities.ts) |
 | 任务路由、重试与会话 | [tasks-repo.ts](../packages/server/src/store/repos/tasks-repo.ts) 与 [worker/daemon.ts](../packages/server/src/worker/daemon.ts) 的相关测试；发现方式见[测试指南](../TESTING.md) |
-| Chat/Issue 绑定、上下文与飞书推送 | [claim wire 测试](../tests/unit/multiremi/multiremi-store-daemon-wire.test.ts)、[Issue 更新测试](../tests/unit/multiremi/multiremi-agent-issue-updates.test.ts)、[话题测试](../tests/unit/multiremi/multiremi-feishu-issue-topics.test.ts) |
+| Chat/Issue 隔离、话题归属与飞书推送 | [claim wire 测试](../tests/unit/multiremi/multiremi-store-daemon-wire.test.ts)、[Issue 更新测试](../tests/unit/multiremi/multiremi-agent-issue-updates.test.ts)、[话题测试](../tests/unit/multiremi/multiremi-feishu-issue-topics.test.ts) |
 | 前端缓存与渲染 | [前端规则](../frontend/AGENTS.md)、[前端地图](dev/frontend.md) |
 
 链接和静态检查只提供定位依据。本页不宣称已经启动生产服务、通过全部测试或完成性能测量。
+
+## 云友执行能力组
+
+[执行组存储](../packages/server/src/store/execution-groups.ts)与[调度](../packages/server/src/store/repos/tasks-repo.ts)共同管理执行能力组。云友通过 `execution_group_id` 选择执行能力组，`provider` 表示 Runtime 类型。系统默认按工作区、机器（优先使用 daemon ID）与 Runtime 类型生成稳定的 `eg_` 组标识；Runtime 也可配置自定义组标识，将同工作区、同类型的多个 Runtime 合并调度。自定义标识使用 1–128 位字母、数字、下划线、点、冒号或连字符，首位必须为字母或数字，`eg_` 前缀保留给默认组。旧机器身份补齐时保留默认组，已有同机器默认组时归并并迁移云友引用。将 Runtime 的 `execution_group_id` 设为 `null` 可恢复默认组；`execution_group_ids` 返回实际成员关系。通用 `any` Runtime 自动加入 Claude/Codex 默认组，自定义组要求具体类型。
+
+创建和编辑云友共用能力组选择器，显示组标识、成员和在线数量；也可选择「自动调度」，保留按引擎和归属在工作区内跨机器调度的原有行为。自动调度的模型与思考选项使用云友所有者可用的工作区目录。选择具体组时，模型及思考选项取各可执行成员（含离线成员）的有效连接目录交集：自定义连接优先，并保留 daemon 为配置模型实际探测到的思考能力，否则应用工作区网关；成员一致时才标记默认模型。组内任务领取及重领通过 `runtimeCanRunAgent` 复验成员关系、模型能力、类型、工作区和归属，并与项目设备和本机目录约束取交集。组离线或无可用成员时排队，不转到组外机器。
+
+切换云友执行组默认清空模型和思考覆盖，未冻结的排队任务清除旧会话信息，已冻结但未启动的任务取消，运行中任务继续原执行。组和成员关系持久化；Runtime 离组或删除后保留组，已有云友不会静默转组。旧 `runtime_id` 绑定迁移到对应组并保留机器约束与手填模型兼容行为，显式选择组（包括重选当前组）后解除旧机器绑定并启用组模型校验；原先未绑定的云友保留原调度行为。当前分组由默认规则和显式组标识决定，后续可在组成员解析层扩展能力匹配。

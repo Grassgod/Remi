@@ -12,7 +12,9 @@ remi chat message create <chat-id> --content-file <request.md> --json
 
 继续已有话题先读取对应 Chat；用户要求新的会话时才 create。项目与 `--runtime-workspace` 是互斥工作位置，选择见 [Runtime](runtimes.md)。create 保存会话，message create 发送工作内容并可能启动执行，记录返回的 Task ID。
 
-`chat issue bind <chat> <issue>` / `unbind` 管理绑定；`chat issue updates get/enable/disable` 管理是否把 Issue 更新送入 Chat，绑定本身不代表自动更新已启用。`pin/unpin` 只改变置顶，`archive` 会停止未完成运行并使 Chat 只读，`restore` 恢复可用状态；不要用 archive 实现“稍后再看”。
+Chat 与 Issue 独立：在聊天中创建 Issue 只创建工作项，Chat 保持自己的上下文，不接收 Issue 活动播报。需要查看 Issue 进展时使用 [Issue 查询](issues-and-sessions.md)；飞书群 Issue 话题保留自己的归属与更新入口。
+
+`pin/unpin` 只改变置顶，`archive` 会停止未完成运行并使 Chat 只读，`restore` 恢复可用状态；不要用 archive 实现“稍后再看”。
 
 ## 排队消息和正在运行的任务
 

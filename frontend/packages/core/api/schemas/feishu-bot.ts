@@ -9,6 +9,22 @@ import type {
   IssueTopicConfigResponse,
 } from "../../types";
 
+export const FeishuBotSenderSchema = z.object({
+  id: z.string(),
+  app_id: z.string(),
+  display_name: z.string(),
+  name_en: z.string().nullable().optional(),
+  open_id: z.string().nullable(),
+  union_id: z.string().nullable(),
+  allowed: z.boolean(),
+  first_seen_at: z.string(),
+  last_seen_at: z.string(),
+}).loose();
+
+export const FeishuBotSenderListSchema = z.object({
+  senders: z.array(FeishuBotSenderSchema),
+}).loose();
+
 // ---------------------------------------------------------------------------
 // Workspace Feishu concierge bot (MUL-206).
 //
@@ -23,6 +39,7 @@ import type {
 // ---------------------------------------------------------------------------
 
 export const FeishuBotConfigSchema = z.object({
+  sender_access_policy: z.enum(["agent", "allowlist"]).optional().catch(undefined),
   configured: z.boolean().default(false),
   workspace_id: z.string().default(""),
   agent_id: z.string().nullable().default(null),

@@ -806,8 +806,8 @@ async function seedStore(store: MultiremiStore, db: Database): Promise<SeedRefs>
   store.createFeedback({ id: "fbk_snapshot", message: "Snapshot feedback", workspaceId, userId: user.id, memberId: member.id });
   // Assigning to the local user is what fills the inbox the API reads for an
   // unauthenticated request (compatibilityInboxMemberId -> "local").
-  store.assignIssue(blockedIssue.id, { assigneeType: "member", assigneeId: "local" } as any);
   const inboxMemberId = store.listWorkspaceMembers(workspaceId).find((entry) => entry.userId === "local")?.id ?? member.id;
+  store.assignIssue(blockedIssue.id, { assigneeType: "member", assigneeId: inboxMemberId } as any);
   const inboxItem = store.listInboxItems(inboxMemberId)[0];
 
   return {

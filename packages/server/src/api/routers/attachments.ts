@@ -18,14 +18,58 @@ import {
   uploadRelativePath,
   uploadedAttachmentPath,
 } from "../helpers.js";
-import { attachmentCompatibilityResponse, cleanString } from "../wire/index.js";
+import { attachmentCompatibilityResponse, cleanString, currentTaskAccessToken } from "../wire/index.js";
 import type { CreateAttachmentInput } from "@multiremi/contracts/types.js";
 import { mkdir, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { CHAT_ATTACHMENT_MAX_BYTES, chatAttachmentValidationError, sanitizeChatAttachmentFilename } from "@multiremi/contracts/attachments.js";
 import type { RouterDeps } from "./deps.js";
 
 export function registerAttachmentRoutes(app: Hono, deps: RouterDeps): void {
   const { store } = deps;
+
+  app.post("/api/chat/attachments/send", async (c) => {
+    const token = currentTaskAccessToken(c);
+    if (!token?.taskId) return c.json({ error: "a current Chat task credential is required" }, 403);
+    const task = store.getTask(token.taskId);
+    if (!task?.chatSessionId || task.workspaceId !== token.workspaceId) {
+      return c.json({ error: "current task is not a Chat task" }, 403);
+    }
+    const form = await c.req.formData();
+    const files = form.getAll("file");
+    if (!files.length || files.length > 10 || files.some(file => !(file instanceof File))) {
+      return c.json({ error: "between 1 and 10 file fields are required" }, 400);
+    }
+    const content = stringFormValue(form.get("content")) ?? "";
+    if (content.length > 200_000) return c.json({ error: "content is too long" }, 400);
+    // Validate every file before writing any bytes or enqueueing a delivery.
+    const uploads = (files as File[]).map((file, index) => ({ file,
+      // Bun 1.3.14 can lose an empty multipart File's name. Still identify the
+      // offending field and reject it cleanly instead of failing sanitization.
+      filename: sanitizeChatAttachmentFilename(file.name || `file #${index + 1}`),
+    }));
+    for (const { file, filename } of uploads) {
+      const error = chatAttachmentValidationError(filename, file.size);
+      if (error) return c.json({ error }, file.size > CHAT_ATTACHMENT_MAX_BYTES ? 413 : 400);
+    }
+    const paths: string[] = [];
+    try {
+      const inputs: CreateAttachmentInput[] = [];
+      for (const { file, filename } of uploads) {
+        const id = createUploadAttachmentId();
+        const path = uploadAbsolutePath(uploadRelativePath(task.workspaceId, id, filename));
+        await mkdir(dirname(path), { recursive: true });
+        paths.push(path);
+        await writeFile(path, new Uint8Array(await file.arrayBuffer()), { flag: "wx" });
+        inputs.push({ id, filename, url: `/api/attachments/${id}/content`,
+          contentType: detectContentTypeFromFilename(filename), sizeBytes: file.size });
+      }
+      return c.json(store.sendChatAttachments(task.id, inputs, content), 202);
+    } catch (error) {
+      await Promise.all(paths.map(path => unlink(path).catch(() => undefined)));
+      return c.json({ error: error instanceof Error ? error.message : "attachment delivery failed" }, 400);
+    }
+  });
 
   app.get("/api/multiremi/attachments/:id", (c) => {
     const attachment = store.getAttachment(c.req.param("id"));

@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   assertMultiremiBinaryVersion,
   createMultiremiArchive,
@@ -64,5 +64,35 @@ describe("Multiremi release artifacts", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test.each([0, 1])("installer preflights the downloaded runtime before replacement (exit %s)", (prepareExit) => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-installer-"));
+    try {
+      const release = join(root, "release");
+      const bin = join(root, "bin");
+      const mocks = join(root, "mocks");
+      for (const directory of [release, bin, mocks]) mkdirSync(directory);
+      const oldBinary = "#!/bin/sh\necho old-remi\n";
+      writeFileSync(join(bin, "remi"), oldBinary);
+      const newBinary = `#!/bin/sh\n[ "$1 $2" = "runtime prepare" ] || exit 91\n[ "$(cat "$MULTIREMI_BIN_DIR/remi")" = "$(cat "$FIXTURE_OLD_BINARY")" ] || exit 92\nprintf prepared > "$FIXTURE_EVENTS"\nexit ${prepareExit}\n`;
+      writeFileSync(join(root, "old-remi"), oldBinary);
+      writeFileSync(join(release, "remi"), newBinary);
+      writeFileSync(join(release, "remi-claude-agent-acp"), "#!/bin/sh\nexit 0\n");
+      writeFileSync(join(release, "runtime-bundle.json"), '{"schema":1}\n');
+      const archive = join(root, "release.tar.gz");
+      createMultiremiArchive(release, archive, "pipe");
+      writeFileSync(join(mocks, "curl"), '#!/bin/sh\nwhile [ "$#" -gt 0 ]; do\n if [ "$1" = "-o" ]; then cp "$FIXTURE_ARCHIVE" "$2"; exit 0; fi\n shift\ndone\nexit 93\n');
+      chmodSync(join(mocks, "curl"), 0o755);
+      const result = spawnSync("bash", [resolve(import.meta.dir, "../../scripts/install-remi.sh")], {
+        encoding: "utf8", timeout: 15_000,
+        env: { ...process.env, PATH: `${mocks}:${process.env.PATH}`, MULTIREMI_VERSION: "0.0.0-test", MULTIREMI_BIN_DIR: bin,
+          FIXTURE_ARCHIVE: archive, FIXTURE_EVENTS: join(root, "events"), FIXTURE_OLD_BINARY: join(root, "old-remi") },
+      });
+      expect(result.status).toBe(prepareExit);
+      expect(readFileSync(join(root, "events"), "utf8")).toBe("prepared");
+      expect(readFileSync(join(bin, "remi"), "utf8")).toBe(prepareExit === 0 ? newBinary : oldBinary);
+      if (prepareExit) expect(result.stderr).toContain("existing remi binary was not replaced");
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });

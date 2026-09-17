@@ -36,25 +36,24 @@ describe("ChatRepo", () => {
     expect(() => repo.createChatSession({ agentId: "agt_nope", workspaceId: "local" })).toThrow("Agent not found: agt_nope");
   });
 
-  it("binds and unbinds an Issue in the same workspace", () => {
+  it("rejects removed Issue binding fields and retains ordinary session controls", () => {
     const repo = createRepo();
     const agent = store!.createAgent({ name: "Chatty", provider: "codex", workspaceId: "local" });
-    const issue = store!.createIssue({ title: "Bound work", workspaceId: "local" });
+    const issue = store!.createIssue({ title: "Separate work", workspaceId: "local" });
     const session = repo.createChatSession({ agentId: agent.id, workspaceId: "local" });
 
-    expect(session.issueId).toBeNull();
-    expect(repo.updateChatSession(session.id, { issueId: issue.id }).issueId).toBe(issue.id);
-    expect(repo.updateChatSession(session.id, { title: "Still bound" }).issueId).toBe(issue.id);
-    expect(repo.updateChatSession(session.id, { issue_id: null }).issueId).toBeNull();
-  });
-
-  it("rejects an Issue binding from another workspace", () => {
-    const repo = createRepo();
-    const agent = store!.createAgent({ name: "Chatty", provider: "codex", workspaceId: "local" });
-    const issue = store!.createIssue({ title: "Foreign", workspaceId: "other" });
-    const session = repo.createChatSession({ agentId: agent.id, workspaceId: "local" });
-
-    expect(() => repo.updateChatSession(session.id, { issueId: issue.id })).toThrow("Issue belongs to another workspace");
+    expect(session).not.toHaveProperty("issueId");
+    for (const field of ["issueId", "issue_id"]) {
+      expect(() => repo.createChatSession({ agentId: agent.id, [field]: issue.id } as any))
+        .toThrow("Chat sessions cannot be bound to an Issue");
+      expect(() => repo.updateChatSession(session.id, { [field]: issue.id } as any))
+        .toThrow("Chat sessions cannot be bound to an Issue");
+    }
+    expect(repo.updateChatSession(session.id, { title: "Renamed", pinned: true }))
+      .toMatchObject({ title: "Renamed", pinned: true });
+    expect(store!.getAgentChatNotificationChannel(session.id)).toBeNull();
+    expect(db!.query("PRAGMA table_info(multiremi_chat_sessions)").all()
+      .some((row: any) => row.name === "issue_id")).toBe(false);
   });
 
   it("sends a message, spawning the task through ctx.tasks()", () => {

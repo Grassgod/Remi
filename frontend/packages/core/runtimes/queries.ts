@@ -34,6 +34,8 @@ export const runtimeKeys = {
   all: (wsId: string) => ["runtimes", wsId] as const,
   list: (wsId: string) => [...runtimeKeys.all(wsId), "list"] as const,
   listMine: (wsId: string) => [...runtimeKeys.all(wsId), "list", "mine"] as const,
+  executionGroups: (wsId: string, agentId?: string) =>
+    [...runtimeKeys.all(wsId), "execution-groups", agentId ?? ""] as const,
   usage: (rid: string, days: number, tz: string) =>
     ["runtimes", "usage", rid, days, tz] as const,
   usageByAgent: (rid: string, days: number, tz: string) =>
@@ -126,6 +128,17 @@ export function runtimeListOptions(wsId: string, owner?: "me") {
   return queryOptions({
     queryKey: owner === "me" ? runtimeKeys.listMine(wsId) : runtimeKeys.list(wsId),
     queryFn: () => api.listRuntimes({ workspace_id: wsId, owner }),
+    staleTime: 10_000,
+    refetchInterval: RUNTIME_LIST_REFRESH_MS,
+    refetchIntervalInBackground: false,
+  });
+}
+
+export function executionGroupListOptions(wsId: string, agentId?: string) {
+  return queryOptions({
+    queryKey: runtimeKeys.executionGroups(wsId, agentId),
+    queryFn: () => api.listExecutionGroups({ workspace_id: wsId, agent_id: agentId }),
+    enabled: Boolean(wsId),
     staleTime: 10_000,
     refetchInterval: RUNTIME_LIST_REFRESH_MS,
     refetchIntervalInBackground: false,

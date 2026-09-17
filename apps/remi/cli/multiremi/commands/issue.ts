@@ -96,7 +96,7 @@ export async function issue(positional: string[], options: CliOptions): Promise<
   }
   if (action === "assign") {
     const issueId = positional[1]?.trim();
-    if (!issueId) throw new Error("usage: multiremi issue assign <issue-id> (--to <id|name|email> [--to-type agent|member|squad] | --unassign)");
+    if (!issueId) throw new Error("usage: multiremi issue assign <issue-id> (--to <id|name|email> [--to-type agent|member|squad] | --unassign); --unassign clears the assignee and cancels active tasks on this issue");
     await issueAssign(issueId, options);
     return;
   }
@@ -581,9 +581,6 @@ export async function issueCreate(options: CliOptions): Promise<void> {
     }
   }
   printJson(topicMigration && isRecord(response) ? { ...response, topic_migration: topicMigration } : response);
-  if (isRecord(response) && typeof response.chat_issue_binding_hint === "string") {
-    console.error(response.chat_issue_binding_hint);
-  }
   warnUndispatchedIssue(response, projectId ?? null, !hasExplicitAssignee && !noProjectDefaults);
 }
 
@@ -801,7 +798,8 @@ export async function issueAssign(issueId: string, options: CliOptions): Promise
     if (!hasTarget) throw new Error("provide --to <id|name|email> [--to-type agent|member|squad] or --unassign");
     addAssigneeBodyFields(body, options, "to-id", "to-type", "to");
   }
-  printJson(await multiremiApiRequest("PUT", `/api/issues/${encodeURIComponent(issueId)}`, body, options));
+  const response = await multiremiApiRequest<Record<string, unknown>>("PUT", `/api/issues/${encodeURIComponent(issueId)}`, body, options);
+  printJson({ ...response, task_id: response.task_id ?? null, cancelled_tasks: response.cancelled_tasks ?? 0 });
 }
 
 export async function issueSubscriber(positional: string[], options: CliOptions): Promise<void> {

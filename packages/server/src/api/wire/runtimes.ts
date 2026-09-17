@@ -1,3 +1,6 @@
+import { runtimeModelCompatibilityResponse } from "@multiremi/store/runtime-model-catalog.js";
+export { MULTIREMI_DAEMON_PROVIDERS, fleetModelsResponse, runtimeModelCompatibilityResponse } from "@multiremi/store/runtime-model-catalog.js";
+export type { FleetModelThinkingLevelResponse, FleetModelThinkingResponse, FleetModelResponse, FleetProviderModelsResponse } from "@multiremi/store/runtime-model-catalog.js";
 // Wire serializers for the runtimes domain, moved verbatim out of api.ts.
 // Go-compat (`*Compatibility*`) and native shapers sit side by side on purpose:
 // the two route prefixes are intentionally divergent and must stay diffable.
@@ -18,7 +21,7 @@ import type { MultiremiStore } from "@multiremi/store/store.js";
 import type { Context } from "hono";
 import { skillWithFilesCompatibilityResponse } from "./skills.js";
 
-export const MULTIREMI_DAEMON_PROVIDERS = new Set(["claude", "codex", "antigravity"]);
+
 
 export function runtimeWorkspaceId(runtime: MultiremiRuntime): string {
   return runtime.workspaceId ?? "local";
@@ -41,6 +44,8 @@ export function runtimeCompatibilityResponse(runtime: MultiremiRuntime): Record<
     name: runtime.name,
     runtime_mode: runtime.runtimeMode,
     provider: runtime.provider,
+    execution_group_id: runtime.executionGroupId ?? null,
+    execution_group_ids: runtime.executionGroupIds ?? [],
     launch_header: runtimeLaunchHeader(runtime.provider),
     status: runtime.status,
     device_info: runtime.deviceInfo,
@@ -51,116 +56,6 @@ export function runtimeCompatibilityResponse(runtime: MultiremiRuntime): Record<
     created_at: runtime.createdAt,
     updated_at: runtime.updatedAt,
   };
-}
-
-/**
- * Union of the online runtimes' model catalogs, grouped by provider — the
- * fleet-level catalog behind machine-less agent creation. A bucket exists for
- * every provider that has a runtime at all (even offline, count 0) so the UI
- * can still offer the engine with a capacity hint.
- *
- * Only runtimes the caller's agents could actually be claimed by are counted:
- * a private runtime an agent's task can never reach (different owner) must not
- * inflate the engine's online capacity. `callerOwnerId` is the acting user —
- * the owner their newly created agents will carry.
- */
-// Maps a model's vendor (as the daemon reports it) to the engine that runs it,
-// for the rare "any" runtime that carries a model catalog but no fixed engine.
-const MODEL_VENDOR_TO_ENGINE: Record<string, string> = { openai: "codex", anthropic: "claude" };
-
-export interface FleetModelThinkingLevelResponse {
-  value: string;
-  label: string;
-  description?: string;
-}
-
-export interface FleetModelThinkingResponse {
-  supported_levels: FleetModelThinkingLevelResponse[];
-  default_level?: string;
-}
-
-export interface FleetModelResponse {
-  id: string;
-  label: string;
-  provider?: string;
-  default?: boolean;
-  thinking?: FleetModelThinkingResponse;
-}
-
-export interface FleetProviderModelsResponse {
-  provider: string;
-  online_runtime_count: number;
-  models: FleetModelResponse[];
-}
-
-export function fleetModelsResponse(runtimes: MultiremiRuntime[], callerOwnerId: string): FleetProviderModelsResponse[] {
-  const usable = runtimes.filter(
-    (r) => r.visibility === "public" || (r.ownerId ?? "local") === (callerOwnerId ?? "local"),
-  );
-  const buckets = new Map<string, { online: number; models: Map<string, MultiremiRuntimeModel> }>();
-  const bucket = (provider: string) => {
-    let entry = buckets.get(provider);
-    if (!entry) {
-      entry = { online: 0, models: new Map() };
-      buckets.set(provider, entry);
-    }
-    return entry;
-  };
-  for (const runtime of usable) {
-    if (runtime.provider && runtime.provider !== "any") bucket(runtime.provider);
-    // An "any" runtime can execute every known engine — surface those engines
-    // (with its capacity counted below) even when no dedicated runtime exists.
-    if (runtime.provider === "any") for (const provider of MULTIREMI_DAEMON_PROVIDERS) bucket(provider);
-    if (runtime.status !== "online") continue;
-    for (const model of runtime.models ?? []) {
-      // Bucket by the runtime's ENGINE, not model.provider. The daemon reports
-      // model.provider as the model vendor ("openai" / "anthropic"), but the
-      // UI (and scheduling) key on the engine that runs it ("codex" / "claude").
-      // An "any" runtime has no single engine, so map the vendor to its engine;
-      // a vendor we don't recognise is skipped rather than minting a phantom
-      // bucket the UI never queries.
-      const engine = runtime.provider !== "any" ? runtime.provider : MODEL_VENDOR_TO_ENGINE[model.provider ?? ""];
-      if (!engine) continue;
-      const entry = bucket(engine);
-      const existing = entry.models.get(model.id);
-      if (!existing || (model.default && !existing.default)) entry.models.set(model.id, model);
-    }
-  }
-  for (const runtime of usable) {
-    if (runtime.status !== "online") continue;
-    for (const [provider, entry] of buckets) {
-      if (runtime.provider === provider || runtime.provider === "any") entry.online += 1;
-    }
-  }
-  return [...buckets.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([provider, entry]) => ({
-      provider,
-      online_runtime_count: entry.online,
-      models: [...entry.models.values()].map(runtimeModelCompatibilityResponse),
-    }));
-}
-
-export function runtimeModelCompatibilityResponse(model: MultiremiRuntimeModel): FleetModelResponse {
-  const response: FleetModelResponse = {
-    id: model.id,
-    label: model.label,
-  };
-  if (model.provider) response.provider = model.provider;
-  if (model.default) response.default = true;
-  if (model.thinking) {
-    response.thinking = {
-      supported_levels: (model.thinking.supportedLevels ?? model.thinking.supported_levels ?? []).map((level) => ({
-        value: level.value,
-        label: level.label,
-        ...(level.description ? { description: level.description } : {}),
-      })),
-      ...(model.thinking.defaultLevel ?? model.thinking.default_level
-        ? { default_level: model.thinking.defaultLevel ?? model.thinking.default_level }
-        : {}),
-    };
-  }
-  return response;
 }
 
 export function runtimeModelListRequestCompatibilityResponse(request: MultiremiRuntimeModelListRequest): Record<string, unknown> {

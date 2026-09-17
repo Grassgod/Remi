@@ -200,6 +200,8 @@ export type {
 export type {
   FeishuBotDomain,
   FeishuBotDesiredState,
+  FeishuBotSender,
+  FeishuBotSenderList,
   FeishuBotStatus,
   FeishuBotErrorCode,
   FeishuBotSecretOp,

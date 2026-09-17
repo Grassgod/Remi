@@ -123,8 +123,8 @@ describe("Multiremi API — daemon retirement", () => {
 
   it("lists every daemon for managers and only owner-claimed daemons for members", async () => {
     const store = createStore();
-    store.createWorkspaceMember({ id: "inventory-admin", name: "Inventory Admin", role: "admin" });
-    store.createWorkspaceMember({ id: "inventory-member", name: "Inventory Member", role: "member" });
+    store.createWorkspaceMember({ id: "inventory-admin", userId: "inventory-admin", name: "Inventory Admin", role: "admin" });
+    store.createWorkspaceMember({ id: "inventory-member", userId: "inventory-member", name: "Inventory Member", role: "member" });
     const adminToken = await store.createAccessToken({
       name: "Inventory admin",
       type: "pat",
@@ -228,7 +228,7 @@ describe("Multiremi API — daemon retirement", () => {
 
   it("renames an owned daemon and exposes the display name on runtime responses", async () => {
     const store = createStore();
-    store.createWorkspaceMember({ id: "rename-owner", name: "Rename owner", role: "member" });
+    store.createWorkspaceMember({ id: "rename-owner", userId: "rename-owner", name: "Rename owner", role: "member" });
     const ownerToken = await store.createAccessToken({
       name: "Rename owner session",
       type: "pat",
@@ -280,7 +280,7 @@ describe("Multiremi API — daemon retirement", () => {
 
   async function daemonRenameValidationFixture() {
     const store = createStore();
-    store.createWorkspaceMember({ id: "rename-validator", name: "Rename validator", role: "member" });
+    store.createWorkspaceMember({ id: "rename-validator", userId: "rename-validator", name: "Rename validator", role: "member" });
     const token = await store.createAccessToken({
       name: "Rename validator session",
       type: "pat",
@@ -325,8 +325,8 @@ describe("Multiremi API — daemon retirement", () => {
 
   it("rejects daemon rename attempts from another member", async () => {
     const store = createStore();
-    store.createWorkspaceMember({ id: "rename-owner-2", name: "Rename owner", role: "member" });
-    store.createWorkspaceMember({ id: "rename-other", name: "Rename other", role: "member" });
+    store.createWorkspaceMember({ id: "rename-owner-2", userId: "rename-owner-2", name: "Rename owner", role: "member" });
+    store.createWorkspaceMember({ id: "rename-other", userId: "rename-other", name: "Rename other", role: "member" });
     const otherToken = await store.createAccessToken({
       name: "Other member session",
       type: "pat",
@@ -361,8 +361,8 @@ describe("Multiremi API — daemon retirement", () => {
 
   it("lets a member retire their own last-runtime daemon but rejects another member", async () => {
     const store = createStore();
-    store.createWorkspaceMember({ id: "machine-owner", name: "Machine owner", role: "member" });
-    store.createWorkspaceMember({ id: "other-member", name: "Other member", role: "member" });
+    store.createWorkspaceMember({ id: "machine-owner", userId: "machine-owner", name: "Machine owner", role: "member" });
+    store.createWorkspaceMember({ id: "other-member", userId: "other-member", name: "Other member", role: "member" });
     const ownerToken = await store.createAccessToken({
       name: "Machine owner session",
       type: "pat",
@@ -435,8 +435,8 @@ describe("Multiremi API — daemon retirement", () => {
 
   it("preflights the whole machine and blocks destructive retirement while dependencies are active", async () => {
     const store = createStore();
-    store.createWorkspaceMember({ id: "admin", name: "Admin", role: "admin" });
-    store.createWorkspaceMember({ id: "member", name: "Member", role: "member" });
+    store.createWorkspaceMember({ id: "admin", userId: "admin", name: "Admin", role: "admin" });
+    store.createWorkspaceMember({ id: "member", userId: "member", name: "Member", role: "member" });
     const adminToken = await store.createAccessToken({ name: "Admin", type: "pat", workspaceId: "local", userId: "admin" });
     const memberToken = await store.createAccessToken({ name: "Member", type: "pat", workspaceId: "local", userId: "member" });
     const daemonToken = await store.createAccessToken({

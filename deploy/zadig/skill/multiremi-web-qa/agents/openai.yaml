@@ -1,0 +1,4 @@
+interface:
+  display_name: "Multiremi 网页 QA"
+  short_description: "在 212 桌面安全验收生产或隔离 PPE"
+  default_prompt: "使用 $multiremi-web-qa 在 212 桌面验收当前 Multiremi 页面；先识别生产或 PPE，再使用正确的认证方式。"

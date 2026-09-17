@@ -258,8 +258,10 @@ export class IssuesRepo {
       });
     }
     if (createdBy) {
-      const creator = this.ctx.workspaces().findWorkspaceMemberForUser(createdBy, workspaceId);
-      if (creator) this.addIssueSubscriber(id, creator.id, "created");
+      const creator = this.ctx.workspaces().getWorkspaceMember(createdBy) ?? this.ctx.workspaces().findWorkspaceMemberForUser(createdBy, workspaceId);
+      if (creator && creator.workspaceId === workspaceId && !creator.archivedAt) {
+        this.addIssueSubscriber(id, creator.id, "created");
+      }
     }
     this.ctx.issueSessions().getOrCreateDefaultIssueSession(id, createdBy);
     return this.getIssue(id)!;
@@ -882,8 +884,13 @@ export class IssuesRepo {
   }
 
   updateIssue(id: string, input: UpdateIssueInput): MultiremiIssue {
+    return this.updateIssueWithOutcome(id, input).issue;
+  }
+
+  updateIssueWithOutcome(id: string, input: UpdateIssueInput): { issue: MultiremiIssue; cancelledTasks: number } {
     let previous: MultiremiIssue | null = null;
     let updatedAt = "";
+    let cancelledTasks = 0;
     const updated = this.ctx.db.transaction(() => {
       if (hasAnyField(input, "runtimeWorkspaceId", "runtime_workspace_id", "projectId", "project_id")) {
         const initial = this.getIssue(id);
@@ -1011,6 +1018,14 @@ export class IssuesRepo {
         id,
         ],
       );
+      if (hasAnyField(input, "assigneeType", "assignee_type", "assigneeId", "assignee_id")
+        && !nextAssigneeType && !nextAssigneeId && current.assigneeId) {
+        cancelledTasks = this.unassignIssueWithinTransaction(id, {
+          actorType: input.actorType ?? "system",
+          actorId: input.actorId ?? null,
+          parentTaskId: input.parentTaskId ?? input.parent_task_id,
+        });
+      }
       const next = this.getIssue(id)!;
       this.linkReferencedAttachmentsToIssue(id, next.description);
       this.ctx.autopilots().enqueueIssueStatusChangedEvent({
@@ -1039,7 +1054,7 @@ export class IssuesRepo {
       updated,
       cleanOptionalString(input.parentTaskId ?? input.parent_task_id),
     );
-    return updated;
+    return { issue: updated, cancelledTasks };
   }
 
   restoreIssue(id: string): MultiremiIssue {
@@ -1329,6 +1344,26 @@ export class IssuesRepo {
     });
   }
 
+  private unassignIssueWithinTransaction(id: string, input: {
+    actorType: string;
+    actorId: string | null;
+    parentTaskId?: string | null;
+  }): number {
+    const cancelled = this.cancelActiveIssueTasks(id, "issue_unassigned");
+    this.ctx.db.run(
+      "UPDATE multiremi_issues SET assignee_type = NULL, assignee_id = NULL, updated_at = ? WHERE id = ?",
+      [nowIso(), id],
+    );
+    this.ctx.appendIssueActivity(id, {
+      actorType: input.actorType,
+      actorId: input.actorId,
+      type: "issue_unassigned",
+      body: null,
+      data: { cancelled, ...sourceTaskActivityData(input.parentTaskId) },
+    });
+    return cancelled;
+  }
+
   assignIssue(id: string, input: AssignIssueInput): AssignIssueResult {
     const current = this.getIssue(id);
     if (!current) throw new Error(`Issue not found: ${id}`);
@@ -1342,22 +1377,12 @@ export class IssuesRepo {
       throw new Error("Assignee id is required when assignee type is provided");
     }
     if (!requestedAssigneeType && !requestedAssigneeId) {
-      const cancelled = this.cancelActiveIssueTasks(id, "issue_unassigned");
-      this.ctx.db.run(
-        "UPDATE multiremi_issues SET assignee_type = NULL, assignee_id = NULL, updated_at = ? WHERE id = ?",
-        [now, id],
-      );
-      this.ctx.appendIssueActivity(id, {
+      const cancelledTasks = this.ctx.db.transaction(() => this.unassignIssueWithinTransaction(id, {
         actorType,
         actorId,
-        type: "issue_unassigned",
-        body: null,
-        data: {
-          cancelled,
-          ...sourceTaskActivityData(input.parentTaskId ?? input.parent_task_id),
-        },
-      });
-      return { issue: this.getIssue(id)!, task: null };
+        parentTaskId: input.parentTaskId ?? input.parent_task_id,
+      }))();
+      return { issue: this.getIssue(id)!, task: null, cancelledTasks };
     }
 
     // requestedAssigneeId is non-null here (the early-return above handled the
@@ -1429,7 +1454,7 @@ export class IssuesRepo {
       },
     });
     if (current.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, current.projectId]);
-    return { issue: this.getIssue(id)!, task };
+    return { issue: this.getIssue(id)!, task, cancelledTasks: cancelled };
   }
 
   quickCreateIssue(input: QuickCreateIssueInput): QuickCreateIssueResult {
@@ -1554,11 +1579,12 @@ export class IssuesRepo {
       createdAt: now,
     });
     if (authorType === "member" && input.authorId) {
-      // authorId is a request user id, not a member row id — translate before
-      // subscribing, and skip (rather than fail the comment) when the author
-      // has no member row in this workspace.
-      const authorMember = this.ctx.workspaces().findWorkspaceMemberForUser(input.authorId, issue.workspaceId);
-      if (authorMember) this.addIssueSubscriber(issueId, authorMember.id, "commented");
+      // Member authors may use a member row id or a request user id. Resolve
+      // explicitly for subscriptions without broadening authorization lookup.
+      const authorMember = this.ctx.workspaces().getWorkspaceMember(input.authorId) ?? this.ctx.workspaces().findWorkspaceMemberForUser(input.authorId, issue.workspaceId);
+      if (authorMember && authorMember.workspaceId === issue.workspaceId && !authorMember.archivedAt) {
+        this.addIssueSubscriber(issueId, authorMember.id, "commented");
+      }
     }
     this.ctx.appendIssueActivity(issueId, {
       actorType: authorType,

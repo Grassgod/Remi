@@ -1,5 +1,5 @@
 import { test, expect, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync, statSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readlinkSync, rmSync, chmodSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -9,11 +9,15 @@ import {
   patchCodexUsageBridge,
   BRIDGE_PIN,
   CODEX_USAGE_PATCH,
+  RUNTIME_PIN,
+  ensureAcpBridges,
 } from "@acp/provision.js";
+import { runtimeBundlePrefix, runtimeBundleManifest, runtimePackageSatisfied } from "@acp/runtime-bundle.js";
 
 let dir: string | null = null;
 const savedHome = process.env.REMI_HOME;
 const savedPath = process.env.PATH;
+const savedBridgeDir = process.env.REMI_CLAUDE_AGENT_ACP_DIR;
 
 afterEach(() => {
   if (dir) rmSync(dir, { recursive: true, force: true });
@@ -21,6 +25,8 @@ afterEach(() => {
   if (savedHome === undefined) delete process.env.REMI_HOME;
   else process.env.REMI_HOME = savedHome;
   process.env.PATH = savedPath;
+  if (savedBridgeDir === undefined) delete process.env.REMI_CLAUDE_AGENT_ACP_DIR;
+  else process.env.REMI_CLAUDE_AGENT_ACP_DIR = savedBridgeDir;
 });
 
 function freshHome(): string {
@@ -50,6 +56,16 @@ function writeCodexDist(pkgDir: string, source = `  createUsageUpdate() {
   return dist;
 }
 
+function writeSdk(home: string, provider: "claude" | "codex", version: string = RUNTIME_PIN[provider].version, modules = join(home, "acp", "node_modules")): string {
+  const root = join(modules, RUNTIME_PIN[provider].package);
+  mkdirSync(join(root, "bin"), { recursive: true });
+  writeFileSync(join(root, "package.json"), JSON.stringify({ name: RUNTIME_PIN[provider].package, version, main: "sdk.mjs" }));
+  writeFileSync(join(root, "sdk.mjs"), "export {};\n");
+  writeFileSync(join(root, "cli.js"), "// Claude executable fixture\n");
+  writeFileSync(join(root, "bin", "codex.js"), "// Codex executable fixture\n");
+  return root;
+}
+
 test("locateBridgePackage + bridgeVersion read the provisioned bridge's package.json", () => {
   const home = freshHome();
   const pkgDir = writeBridgePackage(home, "@agentclientprotocol/claude-agent-acp", "0.53.0");
@@ -77,7 +93,49 @@ test("bridgeSatisfied requires exactly the pinned version", () => {
   writeCodexDist(pkgDir);
   expect(bridgeSatisfied("codex")).toBe(false);
   expect(patchCodexUsageBridge(() => {}, pkgDir)).toBe(true);
+  // A bridge at the pin is insufficient when its actual SDK is missing/old.
+  expect(bridgeSatisfied("codex")).toBe(false);
+  writeSdk(home, "codex");
   expect(bridgeSatisfied("codex")).toBe(true);
+});
+
+test("a current Claude ACP with the old bundled SDK still needs preparation", () => {
+  const home = freshHome();
+  const bridge = writeBridgePackage(home, "@agentclientprotocol/claude-agent-acp", BRIDGE_PIN.claude);
+  writeSdk(home, "claude", "0.3.220");
+  expect(bridgeSatisfied("claude")).toBe(false);
+  writeSdk(home, "claude");
+  expect(bridgeSatisfied("claude")).toBe(true);
+  // A nested old SDK can shadow a correct top-level one.
+  writeSdk(home, "claude", "0.3.220", join(bridge, "node_modules"));
+  expect(runtimePackageSatisfied("claude", bridge)).toBe(false);
+});
+
+test("release bundle takes precedence over legacy/global bridges", () => {
+  const home = freshHome();
+  writeBridgePackage(home, "@agentclientprotocol/claude-agent-acp", "0.53.0");
+  const prefix = runtimeBundlePrefix("claude");
+  const bridge = join(prefix, "node_modules", "@agentclientprotocol", "claude-agent-acp");
+  mkdirSync(bridge, { recursive: true });
+  writeFileSync(join(bridge, "package.json"), JSON.stringify({ version: BRIDGE_PIN.claude }));
+  expect(locateBridgePackage("claude")).toBe(bridge);
+  expect(runtimeBundleManifest("claude").overrides).toEqual({ "@anthropic-ai/claude-agent-sdk": RUNTIME_PIN.claude.version });
+  expect(runtimeBundleManifest("codex").overrides).toEqual({ "@openai/codex": RUNTIME_PIN.codex.version });
+});
+
+test("preflight preserves the old Codex launcher until normal daemon startup activates the bundle", () => {
+  const home = freshHome();
+  const bridge = writeBridgePackage(home, "@agentclientprotocol/codex-acp", BRIDGE_PIN.codex);
+  const dist = writeCodexDist(bridge);
+  writeSdk(home, "codex");
+  patchCodexUsageBridge(() => {}, bridge);
+  const launcher = join(home, "bin", "codex-acp");
+  mkdirSync(join(home, "bin"));
+  writeFileSync(launcher, "old runtime launcher");
+  ensureAcpBridges(["codex"], () => {}, { activate: false });
+  expect(readFileSync(launcher, "utf8")).toBe("old runtime launcher");
+  ensureAcpBridges(["codex"], () => {});
+  expect(readlinkSync(launcher)).toBe(dist);
 });
 
 test("codex usage patch is idempotent and carries the complete last-request split", () => {

@@ -46,6 +46,27 @@ afterEach(() => {
 });
 
 describe("native CLI resource contracts", () => {
+  it("exposes nested bot help and sends the configured sender access policy", async () => {
+    const registry = registryFor(SPECS);
+    expect(registry.renderHelpForArgv(["workspace", "feishu-bot", "--help"]))
+      .toContain("workspace feishu-bot sender");
+    expect(registry.renderHelpForArgv(["workspace", "feishu-bot", "sender", "--help"]))
+      .toContain("workspace feishu-bot sender list");
+    useCliEnv();
+    const spec = specById("workspace.feishu-bot.set");
+    let saved: unknown;
+    globalThis.fetch = mockFetch(spec.id, [], async (request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/workspaces/ws_1") return Response.json({ id: "ws_1", name: "Workspace" });
+      if (path === "/api/workspaces/ws_1/feishu-bot" && request.method === "PUT") {
+        saved = await request.json();
+        return Response.json(saved);
+      }
+      throw new Error(`unexpected request ${request.method} ${path}`);
+    });
+    await execute(spec, ["ws_1", "--agent", "agt_bot", "--runtime", "rt_bot", "--app-id", "cli_bot", "--domain", "feishu", "--enabled", "--sender-access-policy", "agent"]);
+    expect(saved).toMatchObject({ sender_access_policy: "agent", enabled: true });
+  });
   it("advertises task parity except for identity and workspace lifecycle commands", () => {
     const registry = registryFor(SPECS);
     const inventory = new Map(registry.inventory().map((entry) => [entry.id, entry]));
@@ -63,6 +84,9 @@ describe("native CLI resource contracts", () => {
       "invite.list",
       "token.list",
       "workspace.organizer.update",
+      "workspace.feishu-bot.sender.list",
+      "workspace.feishu-bot.sender.allow",
+      "workspace.feishu-bot.sender.revoke",
     ]) {
       expect(inventory.get(id)?.auth, id).toEqual(["human"]);
     }
@@ -167,6 +191,82 @@ describe("native CLI resource contracts", () => {
 
     await execute(spec, ["--file", inputPath, "--name", "Explicit", "--output", "json"]);
     expect(body).toEqual({ name: "Explicit", description: "file description" });
+  });
+
+  it("lists discovered Feishu accounts and changes only the selected sender's allowlist status", async () => {
+    useCliEnv();
+    const sender = {
+      id: "sender/one",
+      app_id: "cli_bot",
+      display_name: "Feishu sender",
+      name_en: "English Sender",
+      open_id: "ou_sender",
+      union_id: null,
+      allowed: false,
+      first_seen_at: "2026-09-13T00:00:00.000Z",
+      last_seen_at: "2026-09-13T01:00:00.000Z",
+    };
+    const updates: Array<{ path: string; body: unknown }> = [];
+    const handler = async (request: Request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/workspaces/ws_1" && request.method === "GET") {
+        return Response.json({ id: "ws_1", name: "Private space" });
+      }
+      if (path === "/api/workspaces/ws_1/feishu-bot/senders" && request.method === "GET") {
+        return Response.json({ senders: [sender] });
+      }
+      if (path === "/api/workspaces/ws_1/feishu-bot/senders/sender%2Fone" && request.method === "PUT") {
+        const body = await request.json() as { allowed: boolean };
+        updates.push({ path, body });
+        return Response.json({ ...sender, allowed: body.allowed });
+      }
+      throw new Error(`unexpected request ${request.method} ${path}`);
+    };
+    const list = specById("workspace.feishu-bot.sender.list");
+    globalThis.fetch = mockFetch(list.id, [], handler);
+    const table = await execute(list, ["ws_1"]);
+    expect(table).toContain("Feishu sender");
+    expect(table).toContain("ENGLISH_NAME");
+    expect(table).toContain("English Sender");
+    expect(table).toContain("pending");
+    expect(table).toContain("ou_sender");
+    expect(JSON.parse(await execute(list, ["ws_1", "--output", "json"]))).toEqual({ senders: [sender] });
+    expect(JSON.parse(await execute(list, ["ws_1", "--output", "jsonl"]))).toEqual(sender);
+
+    for (const [action, allowed] of [["allow", true], ["revoke", false]] as const) {
+      const spec = specById(`workspace.feishu-bot.sender.${action}`);
+      globalThis.fetch = mockFetch(spec.id, [], handler);
+      const output = await execute(spec, ["ws_1", sender.id, "--output", "json"]);
+      expect(JSON.parse(output)).toEqual({ ...sender, allowed });
+      expect(registryFor([spec]).renderHelp(spec.path)).toContain(`<workspace> <sender>`);
+      await expect(execute(spec, ["ws_1"])).rejects.toThrow("sender");
+    }
+    expect(updates).toEqual([
+      { path: "/api/workspaces/ws_1/feishu-bot/senders/sender%2Fone", body: { allowed: true } },
+      { path: "/api/workspaces/ws_1/feishu-bot/senders/sender%2Fone", body: { allowed: false } },
+    ]);
+  });
+
+  it("stops unauthorized Feishu sender management before reading accounts or changing access", async () => {
+    useCliEnv();
+    process.env.MULTIREMI_TOKEN = "task-credential";
+    for (const action of ["list", "allow", "revoke"] as const) {
+      const spec = specById(`workspace.feishu-bot.sender.${action}`);
+      const paths: string[] = [];
+      globalThis.fetch = (async (input, init) => {
+        const path = new URL(new Request(input, init).url).pathname;
+        paths.push(path);
+        if (path !== "/api/cli/capabilities") throw new Error("unauthorized account access");
+        return Response.json({
+          protocol_version: 1,
+          identity: "task",
+          commands: [{ id: spec.id, allowed: false }],
+        });
+      }) as typeof fetch;
+      await expect(execute(spec, action === "list" ? ["ws_1"] : ["ws_1", "sender_1"]))
+        .rejects.toMatchObject({ code: "forbidden" });
+      expect(paths).toEqual(["/api/cli/capabilities"]);
+    }
   });
 
   it("passes the explicit Runtime provision version-check opt-out", async () => {

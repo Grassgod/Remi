@@ -52,7 +52,7 @@ export function resolveKnowledgeWriteActor(c: Context, store: MultiremiStore): K
   if (!token.taskId || !token.agentId) {
     throw new KnowledgeWritePolicyError("task token is missing its bound task or agent");
   }
-  const task = store.getTask(token.taskId);
+  const task = store.getTaskWithAgent(token.taskId);
   const agent = store.getAgent(token.agentId);
   if (!task || task.agentId !== token.agentId || task.workspaceId !== token.workspaceId) {
     throw new KnowledgeWritePolicyError("task token binding is invalid");

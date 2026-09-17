@@ -1,4 +1,9 @@
 import type { Hono } from "hono";
+import { mkdir, writeFile, unlink } from "node:fs/promises";
+import { dirname } from "node:path";
+import { CHAT_ATTACHMENT_MAX_BYTES, sanitizeChatAttachmentFilename } from "@multiremi/contracts/attachments.js";
+import { createUploadAttachmentId, detectContentTypeFromFilename, uploadAbsolutePath, uploadRelativePath,
+  stringFormValue } from "../helpers/uploads.js";
 import { parseFeishuPresentation } from "@multiremi/contracts/feishu-presentation.js";
 import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
 import {
@@ -47,12 +52,12 @@ import {
   FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION,
   FEISHU_CONCIERGE_TASK_STREAM_PROTOCOL_VERSION,
   FEISHU_CONCIERGE_NATIVE_COT_PROTOCOL_VERSION,
+  FEISHU_CONCIERGE_ATTACHMENT_PROTOCOL_VERSION,
   FEISHU_CONCIERGE_OUTBOUND_LEGACY_PROTOCOL_VERSION,
   FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER,
   FEISHU_CONCIERGE_PROTOCOL_VERSION,
 } from "@multiremi/contracts/types.js";
 import { degradeMarkdownImages } from "@shared/feishu-markdown-images.js";
-import { FEISHU_IMAGE_MAX_BYTES } from "@connectors/feishu/outbound-images.js";
 import { FeishuBotEncryptionError } from "@multiremi/feishu-bot/credentials.js";
 import { isFeishuOpenId } from "@shared/feishu-mention.js";
 import { normalizeFeishuBotErrorCode, redactFeishuBotError } from "@multiremi/feishu-bot/diagnostics.js";
@@ -448,7 +453,8 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       const outbound = feishuConciergeProtocol >= FEISHU_CONCIERGE_OUTBOUND_LEGACY_PROTOCOL_VERSION
         ? store.claimFeishuBotOutbound(workspaceId, runtimeId, undefined,
             feishuConciergeProtocol >= FEISHU_CONCIERGE_TASK_STREAM_PROTOCOL_VERSION,
-            feishuConciergeProtocol >= FEISHU_CONCIERGE_NATIVE_COT_PROTOCOL_VERSION)
+            feishuConciergeProtocol >= FEISHU_CONCIERGE_NATIVE_COT_PROTOCOL_VERSION,
+            feishuConciergeProtocol >= FEISHU_CONCIERGE_ATTACHMENT_PROTOCOL_VERSION)
         : null;
       if (outbound) {
         const body = feishuConciergeProtocol >= FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION
@@ -464,11 +470,13 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
           reply_to_message_id: outbound.replyToMessageId,
           body,
           body_origin: outbound.bodyOrigin,
+          ...(outbound.attachments ? { attachments: outbound.attachments } : {}),
           idempotency_key: outbound.idempotencyKey,
           ...(outbound.taskId ? { task_id: outbound.taskId, resume_message_id: outbound.resumeMessageId } : {}),
           ...(outbound.mention ? { mention: outbound.mention } : {}),
           ...(outbound.presentation ? { presentation: outbound.presentation } : {}),
           ...(outbound.interactionOpenId ? { interaction_open_id: outbound.interactionOpenId } : {}),
+          ...(outbound.receiptMessageIds ? { receipt_message_ids: outbound.receiptMessageIds } : {}),
         };
       }
     }
@@ -622,14 +630,46 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       if (!attachment) return c.json({ error: "attachment not available" }, 404);
       if (
         !attachment.url.startsWith("/api/attachments/")
-        || !attachment.contentType.trim().toLowerCase().startsWith("image/")
-        || attachment.sizeBytes > FEISHU_IMAGE_MAX_BYTES
+        || attachment.sizeBytes > CHAT_ATTACHMENT_MAX_BYTES
       ) {
         return c.json({ error: "attachment not available" }, 404);
       }
       return localAttachmentFileResponse(attachment);
     },
   );
+  app.post("/api/daemon/runtimes/:runtimeId/feishu-bot/attachments", async (c) => {
+    if (currentAccessToken(c)?.type !== "daemon") return c.json({ error: "daemon token required" }, 403);
+    const runtimeId = c.req.param("runtimeId");
+    const denied = denyDaemonTokenRuntimeIdentity(c, store, runtimeId);
+    if (denied) return denied;
+    const runtime = store.getRuntime(runtimeId);
+    if (!runtime) return c.json({ error: "runtime not found" }, 404);
+    const form = await c.req.formData();
+    const file = form.get("file");
+    if (!(file instanceof File)) return c.json({ error: "missing file field" }, 400);
+    if (file.size > CHAT_ATTACHMENT_MAX_BYTES) return c.json({ error: "attachment exceeds the 20MB limit" }, 413);
+    const scope = { revision: Number(form.get("revision")),
+      externalSessionKey: stringFormValue(form.get("external_session_key")) ?? "",
+      externalMessageId: stringFormValue(form.get("external_message_id")) ?? "" };
+    const workspaceId = runtime.workspaceId ?? "local";
+    let path: string | undefined;
+    try {
+      store.assertFeishuBotInboundAttachmentScope(workspaceId, runtimeId, scope);
+      const id = createUploadAttachmentId();
+      const filename = sanitizeChatAttachmentFilename(file.name);
+      path = uploadAbsolutePath(uploadRelativePath(workspaceId, id, filename));
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, new Uint8Array(await file.arrayBuffer()), { flag: "wx" });
+      const attachment = store.createFeishuBotInboundAttachment(workspaceId, runtimeId, scope, {
+        id, filename, url: `/api/attachments/${id}/content`,
+        contentType: detectContentTypeFromFilename(filename), sizeBytes: file.size });
+      return c.json({ attachment }, 201);
+    } catch (error) {
+      if (path) await unlink(path).catch(() => undefined);
+      if (error instanceof FeishuBotConfigError) return c.json({ error: error.message, code: error.code }, error.status as 400 | 403 | 409);
+      return c.json({ error: error instanceof Error ? error.message : "attachment upload failed" }, 400);
+    }
+  });
   app.post("/api/daemon/runtimes/:runtimeId/feishu-bot/messages", async (c) => {
     const runtimeId = c.req.param("runtimeId");
     const denied = denyDaemonTokenRuntimeIdentity(c, store, runtimeId);
@@ -650,11 +690,17 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       chat_id?: unknown;
       thread_id?: unknown;
       delivery_mode?: unknown;
+      attachment_ids?: unknown;
       text?: unknown;
     }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    if (body.attachment_ids !== undefined && (!Array.isArray(body.attachment_ids)
+      || body.attachment_ids.length > 10 || body.attachment_ids.some(id => typeof id !== "string" || !id.trim()))) {
+      return c.json({ error: "attachment_ids must contain at most 10 attachment IDs" }, 400);
+    }
     const revision = Number(body.revision);
     const input: SubmitFeishuBotMessageInput = {
+      attachmentIds: body.attachment_ids as string[] | undefined,
       revision: Number.isSafeInteger(revision) ? revision : -1,
       externalSessionKey: cleanString(typeof body.external_session_key === "string" ? body.external_session_key : null) ?? "",
       externalMessageId: cleanString(typeof body.external_message_id === "string" ? body.external_message_id : null) ?? "",
@@ -805,6 +851,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     if (!externalId) return c.json({ error: "external_id is required" }, 400);
 
     const user = store.getUserByExternalId(externalId);
+    // This user-table id must have an explicit membership link, not a member-row alias.
     const allowed = Boolean(user && store.findWorkspaceMemberForUser(user.id, workspaceId));
     c.header("Cache-Control", "no-store");
     return c.json({ allowed });
@@ -1186,6 +1233,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       usage: snapshot.usage,
       started_at: snapshot.startedAt,
       completed_at: snapshot.completedAt,
+      receipt_message_ids: store.listFeishuBotTaskReceiptMessageIds(task.workspaceId, task.id),
     });
   });
   app.get("/api/daemon/tasks/:taskId/steer", (c) => {

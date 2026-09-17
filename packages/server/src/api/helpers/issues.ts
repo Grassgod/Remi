@@ -29,23 +29,28 @@ import { parseBooleanQuery, parseIntegerQuery } from "./request.js";
 export const SUBSCRIPTION_REASONS: MultiremiSubscriptionReason[] = ["created", "assigned", "commented", "mentioned", "manual"];
 
 export const ISSUE_CREATION_REQUIRES_PROPOSAL_CODE = "issue_creation_requires_proposal";
+export const FEISHU_SENDER_APPROVAL_REQUIRED_CODE = "feishu_sender_approval_required";
 
 export function restrictedTaskIssueCreationAgent(c: Context, store: MultiremiStore): MultiremiAgent | null {
   const token = currentTaskAccessToken(c);
-  if (!token?.agentId) return null;
-  const agent = store.getAgent(token.agentId);
-  const task = token.taskId ? store.getTask(token.taskId) : null;
-  if (!task?.issueCreationRestricted && !agent?.issueCreationRequiresProposal) return null;
-  return agent;
+  if (!token?.agentId || !currentTaskIssueCreationRestricted(c, store)) return null;
+  return store.getAgent(token.agentId);
 }
 
 export function currentTaskIssueCreationRestricted(c: Context, store: MultiremiStore): boolean {
+  return currentTaskIssueCreationRestrictionCode(c, store) !== null;
+}
+
+function currentTaskIssueCreationRestrictionCode(c: Context, store: MultiremiStore): string | null {
   const token = currentTaskAccessToken(c);
-  if (!token?.agentId) return false;
-  return Boolean(
+  if (!token?.agentId) return null;
+  if (
     (token.taskId ? store.getTask(token.taskId)?.issueCreationRestricted : false)
-    || store.getAgent(token.agentId)?.issueCreationRequiresProposal,
-  );
+    || store.getAgent(token.agentId)?.issueCreationRequiresProposal
+  ) return ISSUE_CREATION_REQUIRES_PROPOSAL_CODE;
+  return token.taskId && store.isFeishuBotTaskIssueCreationRestricted(token.taskId)
+    ? FEISHU_SENDER_APPROVAL_REQUIRED_CODE
+    : null;
 }
 
 /** Trusted parent lineage for server-created descendants. Request bodies must
@@ -55,10 +60,13 @@ export function currentTaskParentId(c: Context): string | null {
 }
 
 export function denyRestrictedTaskIssueCreation(c: Context, store: MultiremiStore): Response | null {
-  if (!restrictedTaskIssueCreationAgent(c, store)) return null;
+  const code = currentTaskIssueCreationRestrictionCode(c, store);
+  if (!code) return null;
   return c.json({
-    error: "This agent must use `remi feishu messages propose-issue`; a human must approve before an Issue is created.",
-    code: ISSUE_CREATION_REQUIRES_PROPOSAL_CODE,
+    error: code === FEISHU_SENDER_APPROVAL_REQUIRED_CODE
+      ? "A Feishu account in this conversation needs approval. Ask the space owner to allow it in Settings > Integrations > Feishu account allowlist, then retry creating the Issue in this Chat."
+      : "This agent must use `remi feishu messages propose-issue`; a human must approve before an Issue is created.",
+    code,
   }, 403);
 }
 
@@ -78,7 +86,7 @@ export function issueCommentCreateInput(
 ): CreateIssueCommentInput {
   const taskToken = currentTaskAccessToken(c);
   if (taskToken?.agentId) {
-    const task = taskToken.taskId && store ? store.getTask(taskToken.taskId) : null;
+    const task = taskToken.taskId && store ? store.getTaskWithAgent(taskToken.taskId) : null;
     return {
       ...input,
       authorType: "agent",
@@ -149,8 +157,10 @@ export function withIssueCreateRequestContext(
   if (hasRequestField(input, "context_refs")) out.context_refs = input.context_refs ?? [];
 
   const taskToken = currentTaskAccessToken(c);
-  const task = taskToken?.taskId && store ? store.getTask(taskToken.taskId) : null;
-  const sourceIssue = task?.issueId && store ? store.getIssue(task.issueId) : null;
+  // Historical task rows remain an audit trail, not an implicit Issue binding
+  // for a private Chat that was already detached by the upgrade.
+  const task = taskToken?.taskId && store ? store.getTaskWithAgent(taskToken.taskId) : null;
+  const sourceIssue = task?.issue ?? null;
   const isIntake = sourceIssue?.issueKind === "intake";
   if (sourceIssue) {
     // Any task-run creation (intake or follow-up) stays in the source issue's
@@ -184,70 +194,6 @@ export function withIssueCreateRequestContext(
   }
   applyProjectDefaultAssignee(input, out, store);
   return out;
-}
-
-export interface IssueCreateChatBindingResponse {
-  chat_issue_binding: {
-    status: "bound" | "preserved" | "independent";
-    chat_session_id: string;
-    issue_id: string;
-    existing_issue_id: string | null;
-  };
-  chat_issue_binding_hint?: string;
-}
-
-export function bindCreatedIssueToRequestChat(
-  c: Context,
-  store: MultiremiStore,
-  issue: MultiremiIssue,
-): IssueCreateChatBindingResponse | null {
-  const taskId = currentTaskAccessToken(c)?.taskId;
-  const sourceTask = taskId ? store.getTask(taskId) : null;
-  if (!sourceTask?.chatSessionId) return null;
-  if (store.getFeishuBotChatConversationKind(sourceTask.chatSessionId) === "p2p") {
-    const current = store.getChatSession(sourceTask.chatSessionId);
-    if (current?.issueId) {
-      const previousIssue = store.getIssue(current.issueId);
-      store.updateChatSession(current.id, { issueId: null });
-      if (previousIssue) {
-        try {
-          store.prepareFeishuIssueTopicWithinTransaction(previousIssue);
-        } catch {
-          // Lazy repair is best-effort; the newly created Issue must still succeed.
-        }
-      }
-    }
-    return {
-      chat_issue_binding: {
-        status: "independent",
-        chat_session_id: sourceTask.chatSessionId,
-        issue_id: issue.id,
-        existing_issue_id: null,
-      },
-    };
-  }
-  const outcome = store.bindChatSessionIssueIfUnbound(sourceTask.chatSessionId, issue.id);
-  if (outcome.bound || outcome.session.issueId === issue.id) {
-    return {
-      chat_issue_binding: {
-        status: "bound",
-        chat_session_id: outcome.session.id,
-        issue_id: issue.id,
-        existing_issue_id: null,
-      },
-    };
-  }
-  const existingIssue = outcome.session.issueId ? store.getIssue(outcome.session.issueId) : null;
-  const existingRef = existingIssue?.key ?? outcome.session.issueId ?? "another Issue";
-  return {
-    chat_issue_binding: {
-      status: "preserved",
-      chat_session_id: outcome.session.id,
-      issue_id: issue.id,
-      existing_issue_id: outcome.session.issueId,
-    },
-    chat_issue_binding_hint: `Chat ${outcome.session.id} remains bound to ${existingRef}; ${issue.key} was not auto-bound. Use remi chat issue bind ${outcome.session.id} ${issue.key} to switch.`,
-  };
 }
 
 // A request that carries no assignee fields at all inherits the project's

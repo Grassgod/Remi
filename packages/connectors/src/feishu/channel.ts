@@ -23,6 +23,7 @@ import type { AgentAdapter } from "@shared/contracts/acp-protocol.js";
 import type { SessionUpdate } from "@shared/contracts/acp-protocol.js";
 import { rejectPendingActionsForChat } from "./card-actions.js";
 import { addReactionFeishu, removeReactionFeishu } from "./reactions.js";
+import { setFeishuMessageReceipt, type FeishuMessageReceipt } from "./message-receipt.js";
 
 export type { ParsedFeishuMessage } from "./receive.js";
 export type { FeishuStreamingSession, TokenProvider } from "./streaming.js";
@@ -41,6 +42,7 @@ export type ReactionHandler = (event: { messageId: string; emoji: string; userId
 // ── handleStream options ──────────────────────────────────────
 
 export interface HandleStreamOpts {
+  onResult?: (failed: boolean) => Promise<void>;
   /** ACP adapter: pass "claude" | "codex" or a custom AgentAdapter instance. */
   adapter: string | AgentAdapter;
   replyToMessageId?: string;
@@ -54,6 +56,7 @@ export interface HandleStreamOpts {
 }
 
 export interface HandleTaskStreamOpts {
+  receiptMessageIds?: string[];
   replyToMessageId?: string;
   mentionOpenId?: string;
   displayName?: string | null;
@@ -234,8 +237,10 @@ export class FeishuChannel {
         sessionId: opts.sessionId,
         displayName: opts.displayName,
       });
+      await opts.onResult?.(result.failed);
     } catch (err) {
       slog.error(`handleStream error: ${String(err)}`);
+      await opts.onResult?.(true);
       if (session.isActive()) {
         await session.close({ finalText: `Error: ${String(err)}` }).catch(() => {});
       }
@@ -259,6 +264,7 @@ export class FeishuChannel {
       const presentation = new FeishuTaskPresentation(this._makeClient(), chatId, meta, {
         appId: this._config.appId, replyToMessageId: opts.replyToMessageId,
         mentionOpenId: opts.mentionOpenId, interactionOpenId: opts.interactionOpenId,
+        receiptMessageIds: opts.receiptMessageIds,
         displayName: opts.displayName ?? meta.displayName,
         idempotencyKey: opts.durable?.idempotencyKey ?? meta.taskId,
         checkpoint: opts.durable?.presentation, save: opts.onCheckpoint,
@@ -330,6 +336,12 @@ export class FeishuChannel {
   /** Cancel pending interactions for a chat (when a new message supersedes). */
   cancelPendingInteractions(chatId: string): number {
     return rejectPendingActionsForChat(chatId, "New message received, cancelling pending interaction");
+  }
+
+  /** Reconcile the original message's persistent receipt without blocking intake on failure. */
+  async setMessageReceipt(messageId: string, state: FeishuMessageReceipt): Promise<void> {
+    try { await setFeishuMessageReceipt(this._makeClient(), this._config.appId, messageId, state); }
+    catch (error) { log.warn(`Message receipt update failed: ${String(error)}`); }
   }
 
   /** Add a reaction (e.g. typing indicator). */
