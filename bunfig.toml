@@ -1,5 +1,10 @@
 [test]
 root = "tests"
+# Strips this repo's env namespace (MULTIREMI_*/REMI_* and friends) before any
+# test module loads, so a token or config exported by the surrounding shell —
+# e.g. the MULTIREMI_TOKEN every Agent process inherits — cannot change what the
+# suite asserts. See tests/setup/hermetic-env.ts (MUL-318).
+preload = ["./tests/setup/hermetic-env.ts"]
 
 [install]
 # Advisory only: a user-level ~/.npmrc registry (e.g. the bnpm mirror) OVERRIDES

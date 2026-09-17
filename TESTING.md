@@ -23,7 +23,9 @@ tests/
 ├── unit/          纯逻辑 + 接口级单测,无外部依赖,bun test 自动跑
 │   ├── acp/  connectors/  daemon/  memory/  multiremi/  remi/  shared/
 ├── integration/   跨组件 / 全栈 / e2e 冒烟,部分需真实依赖(provider/浏览器/DB)
+├── arch/          结构护栏(包边界、lockfile、发版工作流、测试环境隔离),CI 里先跑
 ├── manual/        手动调试脚本(取参数、对真实服务),不是回归测试
+├── setup/         `bun test` 的 preload,不是测试
 └── fixtures/      测试用的录制数据(如 acp/*.json)
 ```
 
@@ -41,6 +43,21 @@ tests/
 bun test                                  # 跑所有 tests/ 下的 *.test.ts
 bun test tests/unit/memory/memory.test.ts # 单个文件
 ```
+
+### 环境隔离:测试进程看不到宿主 env
+
+`bunfig.toml` 的 `[test] preload` 指向 `tests/setup/hermetic-env.ts`,它在任何测试模块求值之前
+**删掉本仓库的整个环境变量命名空间**(`MULTIREMI_*`、`REMI_*`,外加 `JWT_SECRET` /
+`CLAUDE_CONFIG_DIR` / `CODEX_HOME` / `OPENVIKING_API_KEY` / `POSTHOG_*` / `ANALYTICS_DISABLED`)。
+
+起因(MUL-318):daemon 给每个 Agent 进程注入 `MULTIREMI_TOKEN`,而 `createMultiremiApp()` 在
+没传 `authToken` 时回落到 `process.env.MULTIREMI_TOKEN`。于是在 Agent 里跑 `bun test`,整个接口
+单测悄悄打开了 dashboard 鉴权,242 个 `app.request(...)` 收到 401——而 CI 没有这个变量,一直是绿的。
+
+规则:**测试要用的环境变量,由测试自己设置并还原**,不要依赖 shell 里已有的值。
+`tests/arch/hermetic-test-env.test.ts` 会断言 preload 仍然挂着、且没有任何被清理的变量泄漏进来。
+被 `bun run` 直接跑的独立 harness(无 `.test` 后缀)不加载 preload,照常读真实环境。
+`SQLITE_LIB_PATH` 故意不清理:它指向宿主提供的 sqlite 构建,属于能力而非行为开关。
 
 ---
 
