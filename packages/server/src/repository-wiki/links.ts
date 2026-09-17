@@ -6,7 +6,10 @@ import {
   type WikiLinkToken,
 } from "@multiremi/contracts/wiki-links";
 
-export type RepositoryWikiGraphDoc = Pick<MultiremiRepositoryWikiDoc, "id" | "path" | "body">;
+export type RepositoryWikiGraphDoc = Pick<MultiremiRepositoryWikiDoc, "id" | "path" | "body"> & {
+  /** Outgoing links are unknown; identity still participates in resolution. */
+  bodyUnavailable?: boolean;
+};
 
 export interface RepositoryWikiLinkProblem {
   sourceId: string;
@@ -118,6 +121,7 @@ interface RepositoryWikiLinkState {
 function linkStatesByKey(documents: readonly RepositoryWikiGraphDoc[]): Map<string, RepositoryWikiLinkState[]> {
   const states = new Map<string, RepositoryWikiLinkState[]>();
   for (const document of documents) {
+    if (document.bodyUnavailable) continue;
     for (const token of tokenizeWikiLinks(document.body)) {
       const resolution = resolveRepositoryWikiRef(token.ref, document.path, documents);
       const key = `${document.id}\u0000${token.ref ?? "#self"}\u0000${token.anchor ?? ""}`;

@@ -593,7 +593,7 @@ function compiledSourceRevision(actorRevision: string | null, submissions: Multi
 function publishOutputs(body: PublishBody): PublishOutputBody[] {
   const outputs = Array.isArray(body.outputs) ? body.outputs : body.output ? [body.output] : [];
   if (outputs.length === 0) throw new KnowledgeWritePolicyError("outputs is required", 400);
-  if (outputs.length > 50) throw new KnowledgeWritePolicyError("outputs must contain 50 entries or fewer", 400);
+  if (outputs.length > 256) throw new KnowledgeWritePolicyError("outputs must contain 256 entries or fewer", 400);
   return outputs;
 }
 
@@ -626,7 +626,7 @@ async function preflightRepositoryOutputs(
   repositoryId: string,
   outputs: PublishOutputBody[],
 ): Promise<PlannedRepositoryOutput[]> {
-  const before = await service.listStrict(workspaceId, repositoryId);
+  const before = await service.list(workspaceId, repositoryId);
   const planned: PlannedRepositoryOutput[] = [];
   const mutatedIds = new Set<string>();
   for (const output of outputs) {
@@ -652,6 +652,8 @@ async function preflightRepositoryOutputs(
     }
     const current = await service.get(workspaceId, repositoryId, requireRef(output));
     if (!current) throw new KnowledgeWritePolicyError(`repository wiki doc not found: ${requireRef(output)}`, 404);
+    const beforeIndex = before.findIndex((document) => document.id === current.id);
+    if (beforeIndex >= 0) before[beforeIndex] = current;
     const expected = output.expectedVersion ?? output.expected_version;
     if (expected == null || Number(expected) !== current.version) {
       throw new KnowledgeWritePolicyError(`repository wiki version conflict: ${requireRef(output)}`, 409);

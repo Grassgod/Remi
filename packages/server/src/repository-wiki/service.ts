@@ -117,7 +117,10 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
   async list(workspaceId: string, repositoryId: string): Promise<MultiremiRepositoryWikiDoc[]> {
     const docs = this.store.listRepositoryWikiDocs(workspaceId, repositoryId);
     if (this.mode === "sql") return docs;
-    return Promise.all(docs.map(async (doc) => {
+    return Promise.all(docs.map((doc) => this.hydrateTolerant(doc)));
+  }
+
+  private async hydrateTolerant(doc: MultiremiRepositoryWikiDoc): Promise<MultiremiRepositoryWikiDoc & { bodyUnavailable?: boolean }> {
       try {
         return await this.hydrate(doc);
       } catch (error) {
@@ -126,13 +129,13 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
         return {
           ...doc,
           body: "",
+          bodyUnavailable: true,
           status: "failed",
           statusMessage: message,
           syncStatus: "failed",
           syncError: message,
         };
       }
-    }));
   }
 
   async listStrict(workspaceId: string, repositoryId: string): Promise<MultiremiRepositoryWikiDoc[]> {
@@ -235,8 +238,9 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
   }
 
   async backlinks(workspaceId: string, repositoryId: string, ref: string): Promise<MultiremiRepositoryWikiDoc[]> {
-    const target = await this.requireDoc(workspaceId, repositoryId, ref);
-    const documents = await this.listStrict(workspaceId, repositoryId);
+    const target = this.store.getRepositoryWikiDocByRef(workspaceId, repositoryId, ref);
+    if (!target) throw new Error("repository wiki doc not found");
+    const documents = await this.list(workspaceId, repositoryId);
     return repositoryWikiBacklinks(target, documents);
   }
 
@@ -270,7 +274,18 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
     if (this.store.listRepositoryWikiStorageJobs(workspaceId, repositoryId).length) {
       throw new RepositoryWikiUnavailableError("Repository wiki storage repair is still pending");
     }
-    const before = await this.hydrateStrict(this.store.listRepositoryWikiDocs(workspaceId, repositoryId));
+    const metadata = this.store.listRepositoryWikiDocs(workspaceId, repositoryId);
+    const requiredIds = new Set(operations.flatMap((operation) => {
+      if (operation.kind === "create") return [];
+      const current = resolveBatchDocument(operation.ref, metadata);
+      if (!current) throw new Error(`repository wiki doc not found: ${operation.ref}`);
+      return [current.id];
+    }));
+    // Missing unrelated objects must not block this repository's write lane.
+    // Keep their identities in the graph, but never treat an unreadable body as
+    // a successfully read empty page. Every mutated document remains strict.
+    const before = this.mode === "sql" ? metadata : await Promise.all(metadata.map((doc) =>
+      requiredIds.has(doc.id) ? this.hydrate(doc) : this.hydrateTolerant(doc)));
     const afterById = new Map(before.map((doc) => [doc.id, doc]));
     const touched = new Set<string>();
     const storeOperations: RepositoryWikiStoreBatchOperation[] = [];

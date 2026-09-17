@@ -118,6 +118,27 @@ class FakeOpenViking implements OpenVikingClientContract {
 }
 
 describe("project knowledge URIs", () => {
+  it("keeps unrelated repository writes and backlinks available when a stored object is missing", async () => {
+    const store = createStore();
+    const client = new FakeOpenViking();
+    const service = new RepositoryWikiService(store, client, "openviking");
+    const missing = await service.create("local", "repo_degraded", { path: "missing.md", title: "Missing", body: "Old content" });
+    const target = await service.create("local", "repo_degraded", { path: "target.md", title: "Target", body: "Target" });
+    const source = await service.create("local", "repo_degraded", { path: "source.md", title: "Source", body: "[[target]] [[missing]]" });
+    client.files.delete(missing.contentUri!);
+    const updated = await service.update("local", "repo_degraded", source.id, { body: "Updated [[target]] [[missing]]" });
+    expect(updated.version).toBe(2);
+    expect((await service.backlinks("local", "repo_degraded", target.id)).map(doc => doc.id)).toEqual([source.id]);
+    expect((await service.backlinks("local", "repo_degraded", missing.id)).map(doc => doc.id)).toEqual([source.id]);
+    await expect(service.delete("local", "repo_degraded", target.id)).rejects.toThrow("unresolved repository wiki link");
+    await expect(service.update("local", "repo_degraded", source.id, { body: "[[unknown]]" })).rejects.toThrow("unresolved repository wiki link");
+    await expect(service.update("local", "repo_degraded", missing.id, { body: "must not overwrite missing data" })).rejects.toThrow("not found");
+    await service.delete("local", "repo_degraded", source.id);
+    await service.delete("local", "repo_degraded", target.id);
+    expect(store.getRepositoryWikiDocByRef("local", "repo_degraded", missing.id)?.version).toBe(1);
+    expect((await service.list("local", "repo_degraded"))[0]).toMatchObject({ id: missing.id, status: "failed", bodyUnavailable: true });
+  });
+
   it("rejects path traversal and cross-project URI decoding", () => {
     expect(() => projectKnowledgeDocUri({ workspaceId: "../foreign", projectId: "p1", kind: "wiki", slug: "page" }))
       .toThrow("invalid workspaceId");
