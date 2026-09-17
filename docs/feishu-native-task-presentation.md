@@ -149,16 +149,19 @@ requires inspection before another run. No production configuration is changed.
 A zero API code alone does not establish that the parameter was honored; a
 rejection alone does not establish lack of support (check auth/scopes first).
 
-On 2026-09-17, the probe ran in the authorized ordinary test group
-`oc_702fc216924cca2064fee804095ac305` (`chat_mode=group`,
-`group_message_type=chat`). With the same origin message
-`om_x100b658902ef64a4df3df55f9b9d837`, both creates returned code 0:
+On 2026-09-17, the probe ran in an authorized ordinary test group
+(`chat_mode=group`, `group_message_type=chat`). With the same origin message A,
+both creates returned code 0:
 
 - Without `reply_in_thread`, the CoT readback had no `thread_id`, even though
-  `root_id` and `parent_id` pointed to the origin message.
-- With `reply_in_thread: true`, the CoT and the origin message both read back
-  `thread_id=omt_19ce5c0b088f5a5f`. The field changed thread placement; it was
-  neither rejected nor silently ignored.
+  `root_id` and `parent_id` pointed to A.
+- With `reply_in_thread: true`, the CoT and A both read back the same new
+  `thread_id`. The field changed thread placement; it was neither rejected nor
+  silently ignored.
+
+Concrete chat, message and thread IDs are deliberately omitted here: this
+repository is public, and those identifiers point at a private group. The raw
+probe output lives in the MUL-311 issue thread.
 
 This selects native threading (branch A) for MUL-311. Evidence was reported in
 issue comments `cmt_lyh5qp2j3p27` and `cmt_i7qx9edic2ey`; client visual acceptance
@@ -178,13 +181,8 @@ stream plus terminal snapshot went through the real presenter, native transport,
 SDK and result sender, with checkpoint saving and the origin's receipt enabled.
 This was a code-path regression, not another direct `message_cot` parameter probe.
 
-| Message | ID | Read-back `thread_id` |
-| --- | --- | --- |
-| Origin | `om_x100b6589261904a4deb5b978587da47` | `omt_19ce5e446e8f5a47` |
-| Native CoT | `om_x100b6589262af8a0c0725d08b5d2f48` | `omt_19ce5e446e8f5a47` |
-| Result card | `om_x100b65892630f4a0c12c2d9c2b4374a` | `omt_19ce5e446e8f5a47` |
-
-Both replies also had the origin as `root_id` and `parent_id`. The presenter
+The origin message, the native CoT and the result card all read back one and the
+same `thread_id`; both replies also had the origin as `root_id` and `parent_id`. The presenter
 sent one native create with `origin_message_id` and `reply_in_thread: true`,
 three native writes ending in `RUN_FINISHED`, and one result reply. All calls
 returned code 0; its checkpoint reached `cot.status=finished`. `THINKING` was
