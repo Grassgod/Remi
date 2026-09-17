@@ -87,6 +87,51 @@ describe("native CoT Task presentation", () => {
     expect(JSON.stringify(h.cards())).toContain("Final answer");
   });
 
+  it("titles the result card with the Task's provider session, substituting the agent's own name", async () => {
+    for (const [agentName, expected] of [["Remi", "自由的 Remi·Sciurus"], ["小助手", "自由的 小助手·Sciurus"]] as const) {
+      const h = nativeHarness();
+      async function* run() {
+        yield taskEvent(1, "execution", { meta: { agentName, provider: "claude", model: "claude-fable-5-1" } });
+        yield taskEvent(2, "text", { content: "Final answer" });
+        yield completed;
+      }
+      await new FeishuTaskPresentation(h.client as any, "oc_group", { ...meta, displayName: agentName, sessionId: null },
+        { appId: "cli_test", idempotencyKey: "delivery", save: h.save }).consume(run());
+      const header = (h.cards()[0] as any).header;
+      expect(header.title.content).toStartWith(`${expected}  `);
+      // The execution identity stays in the subtitle; the title is session-only.
+      expect(header.subtitle.content).toBe(`${agentName} Claude fable51`);
+    }
+  });
+
+  it("opens as a newborn before the session is known and adopts the session once a snapshot reports it", async () => {
+    const h = nativeHarness();
+    const presentation = new FeishuTaskPresentation(h.client as any, "oc_group",
+      { ...meta, sessionId: null }, { appId: "cli_test", idempotencyKey: "delivery", save: h.save });
+    expect((presentation as any).sessionId).toBeNull();
+    async function* run() {
+      yield taskEvent(1, "text", { content: "Working" });
+      yield { kind: "snapshot", snapshot: { ...(completed as any).snapshot, status: "running", result: null, sessionId: "sess_live" } } as typeof completed;
+      yield taskEvent(2, "text", { content: "Final answer" });
+      yield completed;
+    }
+    await presentation.consume(run());
+    expect((presentation as any).sessionId).toBe("session_original");
+    expect((h.cards()[0] as any).header.title.content).toStartWith("自由的 Remi·Sciurus  ");
+  });
+
+  it("keeps command replies on the plain agent name because they carry no session", async () => {
+    const h = nativeHarness();
+    async function* command() {
+      yield taskEvent(1, "text", { content: "New conversation started." });
+      yield { kind: "snapshot", snapshot: { taskId: "feishu-command", status: "completed",
+        result: "New conversation started.", error: null, sessionId: null, workDir: null, usage: [] } } as typeof completed;
+    }
+    await new FeishuTaskPresentation(h.client as any, "oc_group", { ...meta, sessionId: undefined },
+      { appId: "cli_test", idempotencyKey: "delivery", save: h.save }).consume(command());
+    expect((h.cards()[0] as any).header.title.content).toStartWith("Remi  ");
+  });
+
   it("omits thread routing without an origin even when the transport caller requests it", async () => {
     const h = nativeHarness();
     const handle = await new FeishuCotTransport(h.client as any).create("oc_private", undefined, true);

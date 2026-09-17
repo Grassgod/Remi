@@ -63,6 +63,8 @@ async function* stream(): AsyncGenerator<TaskStreamEvent> {
 }
 const result = await new FeishuTaskPresentation(client, chatId, {
   taskId: fixture.snapshot.taskId,
+  // Mirrors the daemon: no session yet, adopted from the fixture's snapshot.
+  sessionId: null,
   respondHumanRequest: async () => { throw new Error("Replay never submits a human response"); },
 }, {
   appId, replyToMessageId: arg("--reply-to"), mentionOpenId: arg("--mention"),

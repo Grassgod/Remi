@@ -138,6 +138,42 @@ describe("control-plane Feishu concierge host", () => {
     expect(sends).toBe(1);
   });
 
+  it("opens a Task stream without a session and surfaces the provider session as soon as it is pinned", async () => {
+    const { daemon } = fakeDaemon();
+    const statuses = [
+      { status: "running" as const, sessionId: null },
+      { status: "running" as const, sessionId: "sess_pinned" },
+      // A repeat poll must not replay the same session as another snapshot.
+      { status: "running" as const, sessionId: "sess_pinned" },
+      { status: "completed" as const, sessionId: "sess_pinned" },
+    ];
+    let poll = 0;
+    Object.assign(daemon, {
+      listFeishuBotTaskMessages: async () => [],
+      getFeishuBotTaskSnapshot: async () => {
+        const next = statuses[Math.min(poll++, statuses.length - 1)]!;
+        return { taskId: "tsk_private", status: next.status, result: "done", error: null,
+          sessionId: next.sessionId, workDir: null, usage: [] };
+      },
+    });
+    const test = host({ daemon });
+    await test.conciergeHost.start(assignment());
+    const observed: Array<string | null> = [];
+    let metaSessionId: string | null | undefined = "not observed";
+    test.channel.handle.streamProactiveTask = async (_chat, _session, stream, meta) => {
+      metaSessionId = meta.sessionId;
+      for await (const event of stream) if (event.kind === "snapshot") observed.push(event.snapshot.sessionId);
+      return { messageId: "om_result" };
+    };
+    await test.conciergeHost.sendOutbound!({ id: "fbo_private", claimToken: "lease", chatId: "oc_private",
+      threadId: null, replyToMessageId: null, body: "", bodyOrigin: "agent", taskId: "tsk_private",
+      idempotencyKey: "fbo_private", mention: { mode: "none", resolvedOpenId: null } },
+      { signal: new AbortController().signal, onStarted: async () => {} });
+    // `null`, not `undefined`: the card starts as a newborn, not a bare agent name.
+    expect(metaSessionId).toBeNull();
+    expect(observed).toEqual(["sess_pinned", "sess_pinned"]);
+  });
+
   it("checkpoints a group owner before sending through the existing Task card", async () => {
     const test = host({ daemon: fakeDaemon().daemon });
     await test.conciergeHost.start(assignment());

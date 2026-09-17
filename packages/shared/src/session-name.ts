@@ -237,42 +237,50 @@ const NEWBORN = [
 
 // ── Public API ──────────────────────────────────────────────
 
+/** The bot's own name carries the session label; a blank one falls back to "Remi". */
+const DEFAULT_AGENT_NAME = "Remi";
+const agentLabel = (agentName?: string | null) => agentName?.trim() || DEFAULT_AGENT_NAME;
+
+/** Pick the adjective/genus pair a hash addresses. */
+function combine(hash: number, agent: string): string {
+  const adjIdx = hash % ADJ_POOL.length;
+  const genusIdx = Math.floor(hash / ADJ_POOL.length) % GENUS_POOL.length;
+  return `${ADJ_POOL[adjIdx]}的 ${agent}·${GENUS_POOL[genusIdx]}`;
+}
+
 /**
  * Get a deterministic session name like "好奇的 Remi·Vulpes" from a sessionId.
  * Uses different bit ranges of the hash for adjective and genus.
+ * `agentName` substitutes the bot's own name, so a renamed agent keeps its
+ * identity in the card title ("好奇的 小助手·Vulpes").
  */
-export function getSessionName(sessionId: string): string {
-  const h = hashString(sessionId);
-  const adjIdx = h % ADJ_POOL.length;
-  const genusIdx = Math.floor(h / ADJ_POOL.length) % GENUS_POOL.length;
-  return `${ADJ_POOL[adjIdx]}的 Remi·${GENUS_POOL[genusIdx]}`;
+export function getSessionName(sessionId: string, agentName?: string | null): string {
+  return combine(hashString(sessionId), agentLabel(agentName));
 }
 
 /**
  * Generate a unique session name. If the default name collides with `existing`,
  * rehash with increasing salt until unique.
  */
-export function generateUniqueName(sessionId: string, existing: Set<string>): string {
-  let name = getSessionName(sessionId);
+export function generateUniqueName(sessionId: string, existing: Set<string>, agentName?: string | null): string {
+  const agent = agentLabel(agentName);
+  let name = getSessionName(sessionId, agent);
   if (!existing.has(name)) return name;
 
   // Collision — rehash with salt
   for (let salt = 1; salt <= 100; salt++) {
-    const h = hashString(`${sessionId}:${salt}`);
-    const adjIdx = h % ADJ_POOL.length;
-    const genusIdx = Math.floor(h / ADJ_POOL.length) % GENUS_POOL.length;
-    name = `${ADJ_POOL[adjIdx]}的 Remi·${GENUS_POOL[genusIdx]}`;
+    name = combine(hashString(`${sessionId}:${salt}`), agent);
     if (!existing.has(name)) return name;
   }
 
   // Extremely unlikely fallback — append numeric suffix
-  return `${getSessionName(sessionId)}#${Date.now() % 10000}`;
+  return `${getSessionName(sessionId, agent)}#${Date.now() % 10000}`;
 }
 
 /** Get a random newborn name for brand-new sessions (no sessionId yet). */
-export function getNewbornName(): string {
+export function getNewbornName(agentName?: string | null): string {
   const idx = Math.floor(Math.random() * NEWBORN.length);
-  return `${NEWBORN[idx]}的 Remi`;
+  return `${NEWBORN[idx]}的 ${agentLabel(agentName)}`;
 }
 
 /** Pool sizes for debugging. */
