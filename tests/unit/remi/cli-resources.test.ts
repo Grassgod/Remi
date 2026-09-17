@@ -690,6 +690,26 @@ describe("native CLI resource contracts", () => {
     ]);
   });
 
+  it("reports a task-bound Wiki outcome through the canonical API and requires an outcome and reason", async () => {
+    useCliEnv();
+    const spec = specById("wiki.repository.outcome");
+    expect(spec.auth).toEqual(["task"]);
+    const sent: any[] = [];
+    globalThis.fetch = mockFetch(spec.id, [], async request => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/workspaces/ws_1/repos") return Response.json({ repositories: [{ id: "repo_123456", name: "Remi" }] });
+      if (path === "/api/workspaces/ws_1/repos/repo_123456/wiki/outcome" && request.method === "POST") {
+        sent.push(await request.json());
+        return Response.json({ run: { id: "krun_report", status: "blocked" }, deduplicated: false });
+      }
+      throw new Error(`unexpected request ${request.method} ${path}`);
+    });
+    await execute(spec, ["Remi", "--outcome", "blocked", "--reason", "Missing object", "--output", "json"]);
+    expect(sent).toEqual([{ outcome: "blocked", reason: "Missing object" }]);
+    await expect(execute(spec, ["Remi", "--outcome", "blocked"])).rejects.toThrow();
+    expect(sent).toHaveLength(1);
+  });
+
   it("restores pinned repository objects through the API and defaults to dry-run even with input dry_run=false", async () => {
     useCliEnv();
     const spec = specById("wiki.repository.restore");

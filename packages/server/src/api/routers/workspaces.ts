@@ -506,6 +506,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
         store.listLatestRepositoryAutopilotRuns(workspaceId)
           .map((run) => [run.repositoryId!, run] as const),
       );
+      const observability = store.repositoryWikiObservability(workspaceId);
       return c.json({ repositories: repositories.map((repository) => {
         const repositoryDocs = docsByRepository.get(repository.id) ?? [];
         const latest = repositoryDocs.reduce<MultiremiRepositoryWikiDoc | null>(
@@ -513,23 +514,30 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
           null,
         );
         const build = repositoryWikiBuildState(store, buildRuns.get(repository.id) ?? null);
-        // An active build overrides the doc-derived status ("building"), and a
-        // failed last build surfaces as "failed" — the docs themselves are
-        // untouched and keep being listed either way.
+        const metrics = observability[repository.id];
+        // Execution completion is not publication success. Only explicit
+        // blocked reports make an otherwise healthy Wiki stale; noop is normal.
         const status = build.status === "queued" || build.status === "building"
           ? "building"
-          : build.status === "failed"
-            ? "failed"
-            : latest?.status ?? "unbuilt";
+          : metrics?.latest_completed_outcome?.status === "blocked"
+            ? "stale"
+            : build.status === "failed"
+              ? "failed"
+              : latest?.status ?? "unbuilt";
         return {
           repository_id: repository.id,
           repository_name: repository.name,
           status,
-          status_message: latest?.statusMessage ?? null,
+          status_message: status === "stale" && metrics?.latest_completed_outcome?.status === "blocked"
+            ? metrics.latest_completed_outcome.reason : latest?.statusMessage ?? null,
           source_revision: latest?.sourceRevision ?? null,
           page_count: repositoryDocs.length,
           updated_at: latest?.updatedAt ?? null,
           build,
+          last_published_at: metrics?.last_published_at ?? null,
+          builds_since_publish: metrics?.builds_since_publish ?? 0,
+          consecutive_blocked: metrics?.consecutive_blocked ?? 0,
+          alert: metrics?.alert ?? null,
         };
       }) });
     } catch (error) {
@@ -1366,6 +1374,7 @@ interface RepositoryWikiBuildState {
   updated_at: string | null;
   source_revision: string | null;
   published: boolean | null;
+  outcome: import("@multiremi/store/repository-wiki-outcome.js").RepositoryWikiOutcome | null;
 }
 
 /**
@@ -1388,6 +1397,7 @@ function repositoryWikiBuildState(
       updated_at: null,
       source_revision: null,
       published: null,
+      outcome: null,
     };
   }
   const task = run.taskId ? store.getTask(run.taskId) : null;
@@ -1405,6 +1415,7 @@ function repositoryWikiBuildState(
     updated_at: run.completedAt ?? task?.updatedAt ?? run.triggeredAt,
     source_revision: autopilotRunSourceRevision(run),
     published: run.status === "completed" ? store.isRepositoryWikiRunPublished(run.id) : null,
+    outcome: task && run.repositoryId ? store.repositoryWikiTaskOutcome(task.workspaceId, run.repositoryId, task.id) : null,
   };
 }
 

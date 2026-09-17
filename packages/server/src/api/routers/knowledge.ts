@@ -37,6 +37,8 @@ import { autopilotRunTriggerSummary } from "../wire/autopilots.js";
 import { createId } from "@multiremi/ids.js";
 import { assertRepositoryWikiPathChangesReadable, REPOSITORY_WIKI_BATCH_LIMIT, RepositoryWikiUnavailableError, RepositoryWikiRestoreConflictError, RepositoryWikiRestoreInputError, type RepositoryWikiRestoreTarget, type RepositoryWikiRestoreResult } from "@multiremi/repository-wiki/service.js";
 import { authenticatedRequestUserId } from "../wire/index.js";
+import { RepositoryWikiOutcomeConflictError } from "@multiremi/store/repos/knowledge-repo.js";
+import type { RepositoryWikiOutcomeStatus } from "@multiremi/store/repository-wiki-outcome.js";
 import { resolveProjectWikiRef, tokenizeWikiLinks } from "@multiremi/contracts/wiki-links";
 import {
   assertNoIntroducedRepositoryWikiLinks,
@@ -92,6 +94,38 @@ interface RepositoryMergedBody {
 
 export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
   const { store, projectKnowledge, repositoryWiki } = deps;
+
+  app.post("/api/workspaces/:id/repos/:repositoryId/wiki/outcome", async (c) => {
+    const workspaceId = c.req.param("id");
+    const repositoryId = c.req.param("repositoryId");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    if (!hasRepository(store, workspaceId, repositoryId)) return c.json({ error: "repository not found" }, 404);
+    const body = await readJsonStrict<{ outcome?: unknown; reason?: unknown }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
+      const actor = requireAtlasActor(c, store);
+      assertRepositoryKnowledgeTarget(actor, store, repositoryId);
+      if (Object.keys(body).some(key => key !== "outcome" && key !== "reason")) {
+        return c.json({ error: "outcome accepts only outcome and reason; task/run identity comes from the credential" }, 400);
+      }
+      if (typeof body.outcome !== "string" || !["published", "published_with_warnings", "noop", "blocked"].includes(body.outcome)) {
+        return c.json({ error: "outcome must be published, published_with_warnings, noop, or blocked" }, 400);
+      }
+      if (typeof body.reason !== "string" || !body.reason.trim() || body.reason.length > 4000) {
+        return c.json({ error: "reason must be non-empty and at most 4000 characters" }, 400);
+      }
+      const result = store.reportRepositoryWikiOutcome({
+        workspaceId, repositoryId, taskId: actor.task!.id, agentId: actor.agent!.id,
+        autopilotRunId: actor.task!.autopilotRunId, status: body.outcome as RepositoryWikiOutcomeStatus,
+        reason: body.reason.trim(),
+      });
+      return c.json({ run: runResponse(store, result.run), deduplicated: result.deduplicated });
+    } catch (error) {
+      if (error instanceof RepositoryWikiOutcomeConflictError) return c.json({ error: error.message }, 409);
+      return knowledgeError(c, error);
+    }
+  });
 
   const migrateRepository = async (c: Parameters<typeof resolveKnowledgeWriteActor>[0], kind: "move" | "merge") => {
     const workspaceId = c.req.param("id")!;

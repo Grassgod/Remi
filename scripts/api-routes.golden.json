@@ -1,10 +1,10 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 745,
+    "routeCount": 746,
     "routeCountByPrefix": {
       "native": 210,
-      "compat": 522,
+      "compat": 523,
       "root": 13
     },
     "getRoutes": 319,
@@ -14,7 +14,7 @@
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 426,
+    "mutationRoutes": 427,
     "mutationRoutesCovered": 282,
     "flows": [
       "agents-compat",
@@ -727,6 +727,7 @@
     "POST /api/workspaces/:id/repos/:repositoryId/wiki/build",
     "POST /api/workspaces/:id/repos/:repositoryId/wiki/merge",
     "POST /api/workspaces/:id/repos/:repositoryId/wiki/move",
+    "POST /api/workspaces/:id/repos/:repositoryId/wiki/outcome",
     "POST /api/workspaces/:id/repos/:repositoryId/wiki/publish",
     "POST /api/workspaces/:id/repos/:repositoryId/wiki/restore",
     "POST /api/workspaces/:id/repos/inspect",
@@ -12419,6 +12420,17 @@
             "allowed": true
           },
           {
+            "id": "wiki.repository.outcome",
+            "command": "remi wiki repository outcome",
+            "capability": "wiki.repository.outcome",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": false
+          },
+          {
             "id": "wiki.repository.restore",
             "command": "remi wiki repository restore",
             "capability": "wiki.repository.restore",
@@ -22899,8 +22911,13 @@
               "started_at": null,
               "updated_at": null,
               "source_revision": null,
-              "published": null
-            }
+              "published": null,
+              "outcome": null
+            },
+            "last_published_at": null,
+            "builds_since_publish": 0,
+            "consecutive_blocked": 0,
+            "alert": null
           },
           {
             "repository_id": "repo_snapshot_compat",
@@ -22918,8 +22935,13 @@
               "started_at": null,
               "updated_at": null,
               "source_revision": null,
-              "published": null
-            }
+              "published": null,
+              "outcome": null
+            },
+            "last_published_at": null,
+            "builds_since_publish": 0,
+            "consecutive_blocked": 0,
+            "alert": null
           },
           {
             "repository_id": "repo_snapshot_native",
@@ -22937,8 +22959,13 @@
               "started_at": null,
               "updated_at": null,
               "source_revision": null,
-              "published": null
-            }
+              "published": null,
+              "outcome": null
+            },
+            "last_published_at": null,
+            "builds_since_publish": 0,
+            "consecutive_blocked": 0,
+            "alert": null
           }
         ]
       }

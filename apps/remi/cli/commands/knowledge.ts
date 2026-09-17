@@ -305,6 +305,16 @@ function repositoryWikiSpecs(): CommandSpec[] {
       } });
       renderResource(invocation, response.data);
     }),
+    spec("wiki.repository.outcome", ["wiki", "repository", "outcome"], "Report this task's final Wiki outcome with a reason", "write", [refPositional("repository")], [
+      { name: "outcome", type: "string", required: true, description: "published | published_with_warnings | noop | blocked (partial = published_with_warnings)" },
+      { name: "reason", type: "string", required: true, description: "Why this run published, had no changes, or was blocked" },
+    ], async invocation => {
+      const target = await requestPath(invocation, repositoryRef(invocation, 0), "/outcome");
+      const response = await target.client.request({ method: "POST", path: target.path, body: {
+        outcome: stringOption(invocation, "outcome"), reason: stringOption(invocation, "reason"),
+      } });
+      renderResource(invocation, response.data);
+    }, [], ["task"]),
     spec("wiki.repository.restore", ["wiki", "repository", "restore"], "Restore pinned missing Wiki objects from snapshots (defaults to dry-run)", "write", [refPositional("repository")], [
       ...INPUT_OPTIONS, { ...YES_OPTION, description: "Apply the recovery; otherwise only preflight", conflictsWith: ["dry-run"] },
       { name: "dry-run", type: "boolean", description: "Verify all targets without changing storage objects", conflictsWith: ["yes"] },

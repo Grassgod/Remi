@@ -25,6 +25,7 @@ import { type StoreContext } from "@multiremi/store/context.js";
 import { PROJECT_REF_MAX_DEPTH } from "@multiremi/store/repos/projects-repo.js";
 import { runtimeSupportsAgentPlugins } from "@multiremi/store/repos/agent-plugins-repo.js";
 import { runtimeDaemonAliases } from "@multiremi/store/runtime-affinity.js";
+import { repositoryWikiTaskOutcome, repositoryWikiObservability } from "@multiremi/store/repository-wiki-outcome.js";
 import {
   autopilotOutcomeBody,
   autopilotTriggerObjectLabel,
@@ -3147,8 +3148,14 @@ export class TasksRepo {
       "SELECT id FROM multiremi_autopilot_runs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
     ).get(task.id) as { id: string } | null;
     if (runRow) {
-      const runStatus = status === "completed" ? "completed" : "failed";
-      const failureReason = autopilotTaskFailureReason(status, task);
+      const previousRun = this.ctx.autopilots().getAutopilotRun(runRow.id);
+      const scopedRepository = (previousRun as { repositoryId?: string | null } | null)?.repositoryId
+        ?? (previousRun?.scheduleTarget?.kind === "repository" ? previousRun.scheduleTarget.id : null);
+      const wikiOutcome = scopedRepository
+        ? repositoryWikiTaskOutcome(this.ctx, task.workspaceId, scopedRepository, task.id) : null;
+      const runStatus = status === "completed" && wikiOutcome?.status !== "blocked" ? "completed" : "failed";
+      const failureReason = status === "completed" && wikiOutcome?.status === "blocked"
+        ? `Wiki blocked: ${wikiOutcome.reason}` : autopilotTaskFailureReason(status, task);
       this.ctx.db.run(
         `UPDATE multiremi_autopilot_runs
          SET status = ?, completed_at = ?, failure_reason = ?, result = ?
@@ -3157,13 +3164,16 @@ export class TasksRepo {
           runStatus,
           now,
           runStatus === "failed" ? failureReason : null,
-          toJson({ taskId: task.id, status, output: task.result, error: task.error }),
+          toJson({ taskId: task.id, status, output: task.result, error: task.error,
+            ...(wikiOutcome ? { knowledge_outcome: wikiOutcome } : {}) }),
           runRow.id,
         ],
       );
       const run = this.ctx.autopilots().getAutopilotRun(runRow.id);
       const autopilot = run ? this.ctx.autopilots().getAutopilot(run.autopilotId) : null;
       if (run && autopilot) {
+        const wikiAlert = scopedRepository
+          ? repositoryWikiObservability(this.ctx, task.workspaceId)[scopedRepository]?.alert ?? null : null;
         if (runStatus === "completed") this.ctx.analytics().recordAutopilotRunCompletedAnalytics(autopilot, run);
         else this.ctx.analytics().recordAutopilotRunFailedAnalytics(autopilot, run, failureReason);
         const durationSeconds = autopilotRunDurationSeconds(run.triggeredAt, run.completedAt);
@@ -3177,19 +3187,32 @@ export class TasksRepo {
           (repositoryId) => repositoryNames.get(repositoryId) ?? null,
         );
         const triggerObjectLabel = autopilotTriggerObjectLabel(triggerObject, trigger, run.triggeredAt);
-        const title = triggerObjectLabel
+        const baseTitle = triggerObjectLabel
           ? `${autopilot.title} · ${triggerObjectLabel}`
           : autopilot.title;
+        const title = wikiAlert ? `Wiki blocked ${wikiAlert.count} consecutive runs · ${baseTitle}` : baseTitle;
         const recipients = this.ctx.resolveAutopilotNotificationRecipients(autopilot);
+        // Seeded/orphaned automations may have no resolvable creator. A Wiki
+        // health alert must still reach the workspace's human administrators.
+        if (wikiAlert && recipients.length === 0) {
+          recipients.push(...this.ctx.workspaces().listWorkspaceMembers(autopilot.workspaceId)
+            .filter(member => !member.archivedAt && (member.role === "owner" || member.role === "admin"))
+            .map(member => member.id));
+        }
         for (const recipientId of recipients) {
           if (runStatus === "completed") {
-            const outcome = summarizeAutopilotOutcome(task.result);
+            const outcome = wikiOutcome ? {
+              kind: wikiOutcome.status === "noop" ? "no_change" as const : "changes" as const,
+              headline: `Wiki ${wikiOutcome.status}`, text: wikiOutcome.reason, links: [], counts: null,
+              risks: wikiOutcome.status === "published_with_warnings" ? [wikiOutcome.reason] : [],
+              action: { kind: wikiOutcome.status === "published_with_warnings" ? "investigate" as const : "none" as const, text: null },
+            } : summarizeAutopilotOutcome(task.result);
             this.ctx.createInboxItem({
               workspaceId: autopilot.workspaceId,
               issueId: run.issueId,
               memberId: recipientId,
               type: "autopilot_run_completed",
-              severity: "info",
+              severity: wikiOutcome?.status === "published_with_warnings" ? "attention" : "info",
               title,
               body: autopilotOutcomeBody(outcome, durationSeconds),
               actorType: "system",
@@ -3206,6 +3229,7 @@ export class TasksRepo {
                 issue_session_id: run.issueSessionId,
                 trigger_object: triggerObject,
                 outcome,
+                ...(wikiOutcome ? { knowledge_outcome: wikiOutcome } : {}),
               },
               emitEvent: true,
             });
@@ -3218,7 +3242,9 @@ export class TasksRepo {
               type: "autopilot_run_failed",
               severity: "attention",
               title,
-              body: autopilotOutcomeBody(outcome, durationSeconds),
+              body: wikiAlert
+                ? `Repository Wiki has been blocked for ${wikiAlert.count} consecutive runs (threshold ${wikiAlert.threshold}). ${wikiAlert.reason}`
+                : autopilotOutcomeBody(outcome, durationSeconds),
               actorType: "system",
               actorId: null,
               details: {
@@ -3233,6 +3259,8 @@ export class TasksRepo {
                 issue_session_id: run.issueSessionId,
                 trigger_object: triggerObject,
                 outcome,
+                ...(wikiOutcome ? { knowledge_outcome: wikiOutcome } : {}),
+                ...(wikiAlert ? { wiki_alert: wikiAlert, repository_id: scopedRepository } : {}),
               },
               emitEvent: true,
             });

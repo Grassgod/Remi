@@ -1620,6 +1620,18 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "wiki.repository.outcome": {
+      "command": "remi wiki repository outcome",
+      "auth": [
+        "task"
+      ],
+      "capability": "wiki.repository.outcome",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "wiki.repository.restore": {
       "command": "remi wiki repository restore",
       "auth": [
