@@ -928,6 +928,18 @@ export class FeishuBotRepo {
     return nullableString(row?.issue_id);
   }
 
+  /**
+   * A binding row exists only for Chats the connector created as Feishu
+   * transport, whether or not they ever grew an Issue. Both kinds live in
+   * Feishu, not in the user's private conversation list.
+   */
+  isTransportChatSession(chatSessionId: string): boolean {
+    return this.ctx.db.query(
+      `SELECT 1 AS present FROM multiremi_feishu_bot_chat_bindings
+       WHERE chat_session_id = ? LIMIT 1`,
+    ).get(chatSessionId) != null;
+  }
+
   private ensureDefaultAgentIssueUpdatesChannel(session: MultiremiChatSession): void {
     const member = session.creatorId
       ? this.ctx.workspaces().getWorkspaceMember(session.creatorId)

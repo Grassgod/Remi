@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { prepareFeishuIssueTopic } from "../../fixtures/multiremi-feishu-topic.js";
-import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+import {
+  prepareFeishuIssueTopic,
+  prepareFeishuPrivateConversation,
+} from "../../fixtures/multiremi-feishu-topic.js";
+import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -44,5 +47,48 @@ describe("Chat list isolation from Feishu Issue topics", () => {
     // Internal topic auditing and direct topic transport access still work.
     expect(store.listChatSessions("local", { creatorId: "local" }).map((session) => session.id)).toContain(topic.id);
     expect((await app.request(`/api/chat/sessions/${topic.id}`, { headers })).status).toBe(200);
+  });
+
+  it("keeps Issue-less private Feishu conversations out of Web and CLI lists", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const owner = store.getCurrentUser();
+    const runtime = store.registerRuntime({ name: "Private list runtime", provider: "codex", workspaceId: "local" });
+    const agent = store.createAgent({ name: "Concierge", provider: "codex", runtimeId: runtime.id });
+    const feishu = prepareFeishuPrivateConversation(store, {
+      runtimeId: runtime.id,
+      agentId: agent.id,
+      senderOpenId: "ou_private_owner",
+    });
+    // Conversations the connector opened before Feishu senders became their own
+    // actors are still owned by the workspace user, so creator scoping alone
+    // leaves them in the list. Reproduce that row shape, not just today's.
+    db!.run("UPDATE multiremi_chat_sessions SET creator_id = ? WHERE id = ?", [owner.id, feishu.chat.id]);
+    expect(store.getChatSession(feishu.chat.id)?.creatorId).toBe(owner.id);
+    expect(store.isFeishuTransportChatSession(feishu.chat.id)).toBe(true);
+    const webChat = store.createChatSession({ agentId: agent.id, creatorId: owner.id, title: "Web conversation" });
+    const webTask = store.sendChatMessage(webChat.id, { body: "Web message" }).task;
+
+    const credential = await store.createAccessToken({ name: "Chat lists", type: "pat", workspaceId: "local", userId: owner.id });
+    const headers = { Authorization: `Bearer ${credential.token}` };
+    const app = createMultiremiApp({ store, authToken: "chat-list-test" });
+    for (const prefix of ["/api/chat/sessions", "/api/multiremi/chats"]) {
+      for (const query of ["", "?status=all"]) {
+        const response = await app.request(`${prefix}${query}`, { headers });
+        expect(response.status).toBe(200);
+        const body = await response.json();
+        const sessions = Array.isArray(body) ? body : body.sessions;
+        expect(sessions.map((session: { id: string }) => session.id)).toEqual([webChat.id]);
+      }
+    }
+    const pending = await app.request("/api/chat/pending-tasks", { headers });
+    expect(pending.status).toBe(200);
+    expect((await pending.json()).tasks).toEqual([
+      { task_id: webTask.id, status: "queued", chat_session_id: webChat.id },
+    ]);
+    // Feishu transport itself keeps working: the binding still resolves and the
+    // connector's own task was queued against the hidden Chat.
+    expect(store.getTask(feishu.taskId)?.chatSessionId).toBe(feishu.chat.id);
+    expect((await app.request(`/api/chat/sessions/${feishu.chat.id}`, { headers })).status).toBe(200);
   });
 });
