@@ -1419,6 +1419,8 @@ export interface MultiremiTask {
   inherited_projection_to_seq?: number | null;
   inheritedProjectionTokenBudget: number | null;
   inherited_projection_token_budget?: number | null;
+  inheritedProjectionRecordedAt: string | null;
+  inherited_projection_recorded_at?: string | null;
   result: string | null;
   error: string | null;
   failureReason: string | null;
@@ -2246,7 +2248,7 @@ export interface MultiremiSessionInheritedContext {
     omitted_events: number;
     estimated_tokens: number;
     token_budget: number;
-    /** Source task updated_at; later lifecycle updates can advance this timestamp. */
+    /** Time the inherited projection was recorded at claim, independent of later task updates. */
     recorded_at: string;
   } | null;
 }

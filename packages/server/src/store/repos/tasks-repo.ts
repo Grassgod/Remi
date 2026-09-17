@@ -3797,6 +3797,8 @@ function toTask(row: Row): MultiremiTask {
     inherited_projection_to_seq: row.inherited_projection_to_seq == null ? null : Number(row.inherited_projection_to_seq),
     inheritedProjectionTokenBudget: row.inherited_projection_token_budget == null ? null : Number(row.inherited_projection_token_budget),
     inherited_projection_token_budget: row.inherited_projection_token_budget == null ? null : Number(row.inherited_projection_token_budget),
+    inheritedProjectionRecordedAt: nullableString(row.inherited_projection_recorded_at),
+    inherited_projection_recorded_at: nullableString(row.inherited_projection_recorded_at),
     result: taskResult.output,
     error: nullableString(row.error),
     failureReason: nullableString(row.failure_reason),

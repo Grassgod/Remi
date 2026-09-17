@@ -157,10 +157,10 @@ export class IssueSessionsRepo {
     const row = inherits ? this.ctx.db.query(
       `SELECT id, agent_id, inherited_projection_truncated, inherited_projection_omitted_events,
               inherited_projection_estimated_tokens, inherited_projection_to_seq,
-              inherited_projection_token_budget, updated_at
+              inherited_projection_token_budget, inherited_projection_recorded_at
        FROM multiremi_tasks
        WHERE issue_session_id = ? AND inherited_projection_truncated IS NOT NULL
-       ORDER BY updated_at DESC, id DESC LIMIT 1`,
+       ORDER BY inherited_projection_recorded_at DESC, id DESC LIMIT 1`,
     ).get(sessionId) as Row | null : null;
     return {
       session_id: session.id,
@@ -178,7 +178,7 @@ export class IssueSessionsRepo {
         omitted_events: Number(row.inherited_projection_omitted_events),
         estimated_tokens: Number(row.inherited_projection_estimated_tokens),
         token_budget: Number(row.inherited_projection_token_budget),
-        recorded_at: String(row.updated_at),
+        recorded_at: String(row.inherited_projection_recorded_at),
       } : null,
     };
   }
@@ -412,13 +412,14 @@ export class IssueSessionsRepo {
         projection.inherited_session_projection = inheritedProjection;
       }
       const inheritedProjection = projection.inheritedSessionProjection;
+      const now = nowIso();
       this.ctx.db.run(
         `UPDATE multiremi_tasks
          SET projection_from_seq = ?, projection_to_seq = ?, projection_mode = ?,
              projection_truncated = ?, projection_omitted_events = ?, projection_estimated_tokens = ?,
              inherited_projection_truncated = ?, inherited_projection_omitted_events = ?,
              inherited_projection_estimated_tokens = ?, inherited_projection_to_seq = ?,
-             inherited_projection_token_budget = ?, updated_at = ?
+             inherited_projection_token_budget = ?, inherited_projection_recorded_at = ?, updated_at = ?
          WHERE id = ?`,
         [
           projection.fromSeq,
@@ -433,7 +434,8 @@ export class IssueSessionsRepo {
           inheritedProjection?.estimatedTokens ?? null,
           inheritedProjection?.toSeq ?? null,
           inherits ? inheritedTokenBudget : null,
-          nowIso(),
+          inherits ? now : null,
+          now,
           taskId,
         ],
       );

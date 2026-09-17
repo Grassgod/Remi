@@ -2871,6 +2871,7 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_tasks", "inherited_projection_estimated_tokens INTEGER");
   addColumnIfMissing(db, "multiremi_tasks", "inherited_projection_to_seq INTEGER");
   addColumnIfMissing(db, "multiremi_tasks", "inherited_projection_token_budget INTEGER");
+  addColumnIfMissing(db, "multiremi_tasks", "inherited_projection_recorded_at TEXT");
   addColumnIfMissing(db, "multiremi_task_messages", "tool_call_id TEXT");
   addColumnIfMissing(db, "multiremi_task_messages", "status TEXT");
   addColumnIfMissing(db, "multiremi_task_messages", "meta TEXT");
