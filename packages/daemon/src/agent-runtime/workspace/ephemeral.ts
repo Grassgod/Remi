@@ -10,10 +10,11 @@
  */
 
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { readdirSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { lstat, readFile, realpath } from "node:fs/promises";
 import type { AgentTask } from "@daemon/contracts/types.js";
-import { resolveWorkDir } from "./persistent.js";
+import { isPathWithinWorkspacesRoot, resolveWorkDir } from "./persistent.js";
 
 export interface ResolvedTaskWorkDir {
   workDir: string;
@@ -22,6 +23,8 @@ export interface ResolvedTaskWorkDir {
   // that must already exist; daemon-owned Task/session paths are created.
   ensureDir: boolean;
   release?: () => void;
+  /** The inherited provider must not resume after its directory was rejected. */
+  resetSession?: true;
 }
 
 export class LocalDirectoryError extends Error {
@@ -150,6 +153,25 @@ export async function resolveTaskWorkDir(
   // checkout; they are retained here only for non-Issue compatibility while
   // archived local_directory projects are removed.
   const assignment = task.issueId ? null : findLocalDirectoryAssignment(task, opts.daemonIds);
+  if (task.chatSessionId) {
+    // A changed assignment never redirects an existing Chat into another user
+    // directory. It either retains its current, locked assignment, or stays in
+    // a verified daemon-owned directory. Reject stale paths before any writes.
+    const matchesAssignment = Boolean(task.workDir && assignment
+      && resolve(task.workDir) === assignment.absPath
+      && resolveLocalRealPath(task.workDir) === assignment.realPath);
+    if (task.workDir && !matchesAssignment) {
+      const owned = await isDaemonOwnedChatPath(task.workDir, opts.workspacesRoot);
+      const resolved = resolveWorkDir(owned ? task : { ...task, workDir: null }, opts.workspacesRoot);
+      await assertDaemonOwnedChatPath(resolved.workDir, opts.workspacesRoot);
+      return { ...resolved, localDirectory: false, ...(!owned ? { resetSession: true as const } : {}) };
+    }
+    if (!assignment) {
+      const resolved = resolveWorkDir(task, opts.workspacesRoot);
+      await assertDaemonOwnedChatPath(resolved.workDir, opts.workspacesRoot);
+      return { ...resolved, localDirectory: false };
+    }
+  }
   if (!assignment) {
     const resolved = resolveWorkDir(task, opts.workspacesRoot);
     return {
@@ -171,6 +193,55 @@ export async function resolveTaskWorkDir(
     ensureDir: false,
     release,
   };
+}
+
+/** Resolve existing ancestors too, so a not-yet-created child cannot escape via a symlink. */
+async function prospectiveRealPath(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    // A dangling symlink must not be interpreted as a missing owned directory.
+    try { if ((await lstat(path)).isSymbolicLink()) throw new Error("dangling workspace symlink"); }
+    catch (statError) { if ((statError as NodeJS.ErrnoException).code !== "ENOENT") throw statError; }
+    const parent = dirname(path);
+    if (parent === path) throw error;
+    return join(await prospectiveRealPath(parent), basename(path));
+  }
+}
+
+async function isDaemonOwnedChatPath(path: string, root: string): Promise<boolean> {
+  if (!isPathWithinWorkspacesRoot(path, root)) return false;
+  try {
+    const [realRoot, realPath] = await Promise.all([
+      prospectiveRealPath(resolve(root)), prospectiveRealPath(resolve(path)),
+    ]);
+    if (!isPathWithinWorkspacesRoot(realPath, realRoot)) return false;
+    // User local_directory roots may themselves live below workspacesRoot.
+    // Their durable marker takes precedence over lexical containment, including
+    // when a previously managed path is a symlink into such a user directory.
+    for (let current = realPath; ; current = dirname(current)) {
+      try {
+        const metadataDir = join(current, ".multiremi");
+        const marker = join(metadataDir, "gc.json");
+        if ((await lstat(metadataDir)).isSymbolicLink() || (await lstat(marker)).isSymbolicLink()) return false;
+        const meta = JSON.parse(await readFile(marker, "utf8"));
+        if (meta.local_directory) return false;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
+      }
+      if (current === realRoot) break;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function assertDaemonOwnedChatPath(path: string, root: string): Promise<void> {
+  if (!await isDaemonOwnedChatPath(path, root)) {
+    throw new LocalDirectoryError("Chat workspace is not daemon-owned; refusing to write to a user directory");
+  }
 }
 
 function findLocalDirectoryAssignment(task: AgentTask, daemonIds: string[]): LocalDirectoryAssignment | null {

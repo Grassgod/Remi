@@ -52,6 +52,109 @@ function fixture(localPath?: string) {
 }
 
 describe("Project-bound Chat workspaces", () => {
+  for (const change of ["deleted", "path", "daemon"] as const) {
+    it(`cold-starts in the Chat directory when an inherited user assignment is ${change}`, async () => {
+      const { root, task, options } = fixture();
+      const userRoot = mkdtempSync(join(tmpdir(), "remi-chat-user-"));
+      roots.push(userRoot);
+      const newPath = join(userRoot, "new-directory");
+      mkdirSync(newPath);
+      writeFileSync(join(userRoot, "code.txt"), "keep");
+      task.workDir = userRoot;
+      task.sessionId = "old-provider";
+      task.projectResources = change === "deleted" ? [] : [{
+        id: "resource_local", resourceType: "local_directory", label: null,
+        resourceRef: { local_path: change === "path" ? newPath : userRoot,
+          daemon_id: change === "daemon" ? "another-daemon" : "daemon_owner" },
+      }];
+      expect(await resolveTaskWorkDir(task, options)).toEqual({
+        workDir: join(root, "chats", task.chatSessionId!), localDirectory: false,
+        ensureDir: true, resetSession: true,
+      });
+      expect(readFileSync(join(userRoot, "code.txt"), "utf8")).toBe("keep");
+      expect(existsSync(join(userRoot, ".multiremi"))).toBe(false);
+      expect(existsSync(join(newPath, ".multiremi"))).toBe(false);
+    });
+  }
+
+  it("retains a matching inherited user assignment under the FIFO lock", async () => {
+    const { root, task, options } = fixture();
+    const userPath = join(root, "user-directory");
+    mkdirSync(userPath);
+    task.workDir = userPath;
+    task.sessionId = "existing-provider";
+    task.projectResources = [{ id: "directory", resourceType: "local_directory", label: null,
+      resourceRef: { local_path: userPath, daemon_id: "daemon_owner" } }];
+    const resolved = await resolveTaskWorkDir(task, options);
+    expect(resolved).toMatchObject({ workDir: userPath, localDirectory: true, ensureDir: false });
+    expect(resolved.resetSession).toBeUndefined();
+    expect(resolved.release).toBeFunction();
+    resolved.release?.();
+  });
+
+  it("does not adopt a marked user directory just because it lies below the daemon root", async () => {
+    const { root, task, options } = fixture();
+    const userPath = join(root, "user-directory");
+    mkdirSync(userPath);
+    writeTaskGcContext(userPath, task, { localDirectory: true });
+    const before = readFileSync(join(userPath, ".multiremi", "gc.json"), "utf8");
+    task.workDir = userPath;
+    expect(await resolveTaskWorkDir(task, options)).toMatchObject({
+      workDir: join(root, "chats", task.chatSessionId!), localDirectory: false,
+      ensureDir: true, resetSession: true,
+    });
+    expect(readFileSync(join(userPath, ".multiremi", "gc.json"), "utf8")).toBe(before);
+  });
+
+  it("rejects inherited symlinks escaping the daemon root before creating any files", async () => {
+    const { root, task, options } = fixture();
+    const userRoot = mkdtempSync(join(tmpdir(), "remi-chat-user-"));
+    roots.push(userRoot);
+    symlinkSync(userRoot, join(root, "alias"));
+    task.workDir = join(root, "alias", "missing-child");
+    expect(await resolveTaskWorkDir(task, options)).toMatchObject({
+      workDir: join(root, "chats", task.chatSessionId!), localDirectory: false,
+      resetSession: true,
+    });
+    expect(existsSync(join(userRoot, "missing-child"))).toBe(false);
+  });
+
+  it("fails closed when the fallback Chat directory is itself a user directory", async () => {
+    const { root, task, options } = fixture();
+    const fallback = join(root, "chats", task.chatSessionId!);
+    mkdirSync(fallback, { recursive: true });
+    writeTaskGcContext(fallback, task, { localDirectory: true });
+    const before = readFileSync(join(fallback, ".multiremi", "gc.json"), "utf8");
+    task.workDir = "/old-user-directory";
+    await expect(resolveTaskWorkDir(task, options)).rejects.toThrow("not daemon-owned");
+    expect(readFileSync(join(fallback, ".multiremi", "gc.json"), "utf8")).toBe(before);
+  });
+
+  it("does not create a fallback below a root marked as a user directory", async () => {
+    const { root, task, options } = fixture();
+    writeTaskGcContext(root, task, { localDirectory: true });
+    const before = readFileSync(join(root, ".multiremi", "gc.json"), "utf8");
+    task.workDir = root;
+    await expect(resolveTaskWorkDir(task, options)).rejects.toThrow("not daemon-owned");
+    expect(existsSync(join(root, "chats"))).toBe(false);
+    expect(readFileSync(join(root, ".multiremi", "gc.json"), "utf8")).toBe(before);
+  });
+
+  it("rejects linked metadata before it can overwrite a user directory's GC marker", async () => {
+    const { root, task, options } = fixture();
+    const userRoot = mkdtempSync(join(tmpdir(), "remi-chat-user-"));
+    roots.push(userRoot);
+    const inherited = join(root, "inherited");
+    mkdirSync(inherited);
+    writeFileSync(join(userRoot, "gc.json"), '{"local_directory":false}');
+    symlinkSync(userRoot, join(inherited, ".multiremi"));
+    task.workDir = inherited;
+    expect(await resolveTaskWorkDir(task, options)).toMatchObject({
+      workDir: join(root, "chats", task.chatSessionId!), resetSession: true,
+    });
+    expect(readFileSync(join(userRoot, "gc.json"), "utf8")).toBe('{"local_directory":false}');
+  });
+
   it("keeps the stable Chat directory when the Project has no local directory", async () => {
     const { root, task, options } = fixture();
     expect(await resolveTaskWorkDir(task, options)).toEqual({

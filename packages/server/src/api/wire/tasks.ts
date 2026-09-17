@@ -1,7 +1,7 @@
 // Wire serializers for the tasks domain, moved verbatim out of api.ts.
 // Go-compat (`*Compatibility*`) and native shapers sit side by side on purpose:
 // the two route prefixes are intentionally divergent and must stay diffable.
-import { CHAT_ISSUE_DECOUPLED_FINGERPRINT, isUnavailableChatProjectFingerprint } from "@multiremi/store/helpers.js";
+import { CHAT_ISSUE_DECOUPLED_FINGERPRINT } from "@multiremi/store/helpers.js";
 import { taskExecutionScope } from "@multiremi/contracts/task-execution.js";
 import type {
   MultiremiChatMessage,
@@ -335,16 +335,16 @@ export function daemonTaskClaimResponse(
   if (ordinaryChat) {
     const chat = store.getChatSession(task.chatSessionId!);
     const currentProject = chat?.projectId ? store.getProject(chat.projectId) : null;
-    const unavailableProject = Boolean(chat?.projectId && (!currentProject || currentProject.archivedAt
-      || currentProject.workspaceId !== task.workspaceId));
-    if (unavailableProject) {
-      const current = store.getTask(task.id);
-      if (!isUnavailableChatProjectFingerprint(task.executionFingerprint) || task.workDir !== current?.workDir) {
-        task = { ...task, sessionId: null, workDir: null };
+    // A claim payload may have been retained across a resource mutation. Read
+    // the current hydrated task so stale assignments cannot restore a directory
+    // that the live workspace lineage has already rejected.
+    if (chat?.projectId) {
+      const current = store.getTaskWithAgent(task.id);
+      if (current) {
+        task = { ...task, sessionId: current.sessionId, workDir: current.workDir,
+          projectResources: current.projectResources };
+        if (task.runtimeId !== current.runtimeId) task = { ...task, sessionId: null, workDir: null, codexProfile: null, claudeProfile: null };
       }
-      // A retained claim cannot carry credentials from a prior host after
-      // unavailable-Project recovery re-routes the task.
-      if (task.runtimeId !== current?.runtimeId) task = { ...task, codexProfile: null, claudeProfile: null };
     }
     const keepProject = Boolean(currentProject && !currentProject.archivedAt
       && currentProject.workspaceId === task.workspaceId && chat?.projectId && chat.workspaceId === task.workspaceId

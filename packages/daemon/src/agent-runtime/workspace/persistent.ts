@@ -2,12 +2,12 @@
  * Persistent workspace path resolution.
  *
  * Computes the stable daemon-owned working directory for every Task surface.
- * A promoted task.workDir remains authoritative because it owns the provider
- * session lineage; brand-new work is partitioned by product session type.
+ * Chat paths inherited from a provider must remain inside the daemon root.
+ * Current local_directory assignments are resolved and locked separately.
  */
 
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { AgentTask } from "@daemon/contracts/types.js";
 
 /**
@@ -24,7 +24,7 @@ export function resolveWorkDir(
 ): ResolvedWorkDir {
   if (task.chatSessionId) {
     return {
-      workDir: task.workDir ?? join(
+      workDir: task.workDir && isPathWithinWorkspacesRoot(task.workDir, workspacesRoot) ? task.workDir : join(
         workspacesRoot,
         "chats",
         safePathSegment(task.chatSessionId, "chat session id"),
@@ -51,6 +51,13 @@ export function resolveWorkDir(
   }
   if (task.workDir) return { workDir: task.workDir, ensureDir: true };
   return { workDir: join(workspacesRoot, "tasks", safePathSegment(task.id, "task id")), ensureDir: true };
+}
+
+/** Lexical guard; the execution resolver also checks real paths and ownership. */
+export function isPathWithinWorkspacesRoot(path: string, workspacesRoot: string): boolean {
+  if (!isAbsolute(path)) return false;
+  const child = relative(resolve(workspacesRoot), resolve(path));
+  return Boolean(child) && child !== ".." && !child.startsWith(`..${sep}`) && !isAbsolute(child);
 }
 
 function safePathSegment(value: string, label: string): string {

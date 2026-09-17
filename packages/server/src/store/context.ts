@@ -8,6 +8,7 @@
 // the MultiremiStore facade, which delegates on to the owning repo. Repo methods the facade does not
 // expose publicly (today: the analytics recorders) are instead registered on this object by the
 // facade's constructor and resolved at call time.
+import { resolveChatWorkspace } from "@multiremi/store/chat-workspace.js";
 import { type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
@@ -350,6 +351,7 @@ export interface TasksSurface {
     terminalBody?: string | null;
   }): { task: MultiremiTask | null; created: boolean; covered: boolean };
   getTask(id: string): MultiremiTask | null;
+  getTaskWithAgent(id: string): import("@multiremi/contracts/types.js").MultiremiTaskWithAgent | null;
   listTasks(status?: MultiremiTaskStatus): MultiremiTask[];
   listTasksForIssue(issueId: string): MultiremiTask[];
   cancelTask(taskId: string): MultiremiTask;
@@ -892,6 +894,11 @@ export class StoreContext {
     const chatId = cleanOptionalString(taskRow.chat_session_id);
     const chat = chatId ? this.chat().getChatSession(chatId) : null;
     const projectId = issue?.projectId ?? chat?.projectId;
+    if (!issue && resolveChatWorkspace(this, chat, {
+      executionFingerprint: nullableString(taskRow.execution_fingerprint),
+      workDir: nullableString(taskRow.work_dir),
+      runtimeId: nullableString(taskRow.runtime_id),
+    })?.mode === "managed") return null;
     if (!projectId) return null;
     if (!issue?.projectId && chat) {
       const project = this.projects().getProject(projectId);

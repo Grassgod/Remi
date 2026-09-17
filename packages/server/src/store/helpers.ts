@@ -6,13 +6,6 @@ import type { MultiremiTaskStatus, TaskUsageEntry } from "@multiremi/contracts/t
 // This is deliberately not a valid capability hash and must never be inherited.
 export const CHAT_ISSUE_DECOUPLED_FINGERPRINT = "chat-issue-decoupled";
 
-// Opaque execution namespace for a fixed Chat binding whose Project is gone.
-// Keep normal Chat/Issue capability hashes unchanged.
-export const CHAT_PROJECT_UNAVAILABLE_FINGERPRINT_PREFIX = "chat-project-unavailable-";
-export function isUnavailableChatProjectFingerprint(value: string | null | undefined): boolean {
-  return Boolean(value?.startsWith(CHAT_PROJECT_UNAVAILABLE_FINGERPRINT_PREFIX));
-}
-
 /** Retry lineage is structural. Editable prompt text must never erase the
  * provenance of a generated notification; an explicit user turn is a new input. */
 export function chatTaskRetryParentSql(child: string, parent: string): string {

@@ -366,7 +366,10 @@ export class ChatRepo {
       const events = chatMessagesAsSessionEvents(messages, session, task.id, currentLineageTaskIds);
       const detachedChatIssue = (task.issueId && topicIssueId !== task.issueId)
         || (task.issueSessionId && !topicIssueId);
-      const warmProviderSessionId = detachedChatIssue ? null : task.sessionId;
+      // Workspace validation may reject an active lease's old directory without
+      // mutating its immutable execution snapshot. Projection must use that
+      // same live decision, otherwise a cold provider receives only a delta.
+      const warmProviderSessionId = detachedChatIssue ? null : this.ctx.tasks().getTaskWithAgent(task.id)?.sessionId ?? null;
       const tokenBudget = resolveProjectionTokenBudget({
         provider: agent?.provider,
         model: agent?.model,

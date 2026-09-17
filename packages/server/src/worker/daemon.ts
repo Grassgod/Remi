@@ -21,6 +21,7 @@ import {
 import type { ElicitationCreateParams, ElicitationResult, PermissionOutcome, RequestPermissionParams } from "@shared/contracts/acp-protocol.js";
 import { answersToElicitationContent, elicitationToQuestions } from "@shared/contracts/acp-elicitation.js";
 import type { AgentResponse, Provider } from "@shared/contracts/provider-types.js";
+import type { AgentTask } from "@daemon/contracts/types.js";
 import {
   DEFAULT_DAEMON_REQUEST_TIMEOUT_MS,
   isTerminalDaemonAuthorityError,
@@ -2695,6 +2696,18 @@ export class MultiremiDaemon {
         this.assertWorkspaceRootOwner();
       }
       resolvedWorkDir = await this.resolveTaskWorkDir(task, abort.signal);
+      if (resolvedWorkDir.resetSession) {
+        const projection = (task as AgentTask).sessionProjection ?? (task as AgentTask).session_projection;
+        if (projection?.mode === "delta") {
+          // Only this host can detect symlink/ownership changes. A delta lacks
+          // the earlier conversation, so use the existing resume-unsafe retry
+          // to obtain a complete bootstrap projection before starting a provider.
+          const error = new LocalDirectoryError("Chat workspace changed; a full bootstrap is required before resuming");
+          error.failureReason = "agent_error.stale_session";
+          throw error;
+        }
+        task = { ...task, sessionId: null, workDir: resolvedWorkDir.workDir };
+      }
       const issueRuntimeStateRoot = resolveIssueRuntimeStateRoot(
         task,
         resolvedWorkDir.workDir,
