@@ -826,7 +826,8 @@ export class TasksRepo {
     if (task.executionFingerprint === CHAT_ISSUE_DECOUPLED_FINGERPRINT) task = { ...task, sessionId: null };
     // Retained task audits may still carry a pre-MUL-301 private Chat binding.
     // Never let that old association re-enter a daemon claim or eager checkout.
-    if (task.chatSessionId && this.getTaskChatExecutionKind(task) === "ordinary") {
+    const ordinaryChat = Boolean(task.chatSessionId && this.getTaskChatExecutionKind(task) === "ordinary");
+    if (ordinaryChat) {
       task = {
         ...task,
         // A stale dispatch can bypass queued affinity refresh. Its provider
@@ -839,7 +840,8 @@ export class TasksRepo {
     }
     const issue = task.issueId ? this.ctx.issues().getIssue(task.issueId) : null;
     const scheduleTarget = task.autopilotRunId ? this.ctx.autopilots().getAutopilotRun(task.autopilotRunId)?.scheduleTarget : null;
-    const chatProjectId = task.chatSessionId ? this.ctx.chat().getChatSession(task.chatSessionId)?.projectId ?? null : null;
+    const chat = task.chatSessionId ? this.ctx.chat().getChatSession(task.chatSessionId) : null;
+    const chatProjectId = chat?.projectId ?? null;
     const projectId = issue?.projectId ?? (scheduleTarget?.kind === "project" ? scheduleTarget.id : null) ?? chatProjectId;
     const candidateProject = projectId ? this.ctx.projects().getProject(projectId) : null;
     const project = candidateProject?.workspaceId === task.workspaceId ? candidateProject : null;
@@ -847,24 +849,57 @@ export class TasksRepo {
     const projectContexts = issue?.issueKind === "intake"
       ? this.resolveIntakeProjectContexts(task.workspaceId, project)
       : [];
+    const boundChatProject = ordinaryChat && chat?.workspaceId === task.workspaceId
+      && chatProjectId && chatProjectId === project?.id;
     return {
       ...task,
       agent: this.ctx.agents().getAgent(task.agentId),
       issue,
       project,
       chatProjectId,
+      ...(boundChatProject ? {
+        chatAutoCheckoutRepos: this.resolveChatAutoCheckoutRepos(task.workspaceId, project!.id, projectResources),
+      } : {}),
       projectResources,
       projectDocs: project ? this.ctx.projects().getProjectDocsIndex(project.id) : null,
       projectContexts,
-      // Unbound Chat discovers repositories through the CLI. A Project-bound
-      // Chat gets its catalog for on-demand checkout; eager checkout requires
-      // an Issue in the worker, so attaching this catalog does not run Git.
+      // Unbound Chat discovers repositories through the CLI. Bound Chat keeps
+      // the existing Project catalog for display and on-demand checkout; its
+      // separate explicit-only list controls automatic checkout in the worker.
       repos: scheduleTarget || task.holdsWorkspace === false || (task.chatSessionId && !task.issueId && !project)
         ? []
         : projectContexts.length
           ? normalizeRepos(projectContexts.flatMap((context) => context.repos))
           : this.resolveTaskRepos(task.workspaceId, projectResources),
     };
+  }
+
+  private resolveChatAutoCheckoutRepos(
+    workspaceId: string,
+    projectId: string,
+    projectResources: MultiremiProjectResource[],
+  ): MultiremiRepoData[] {
+    const workspaceRepos = this.ctx.workspaces().getWorkspace(workspaceId)?.repos ?? [];
+    const refs: Record<string, unknown>[] = [];
+    const visited = new Set([projectId]);
+    const collect = (resources: MultiremiProjectResource[], depth: number): void => {
+      for (const resource of resources) {
+        if (resource.workspaceId !== workspaceId) continue;
+        if (resource.resourceType === "github_repo") {
+          refs.push(resource.resourceRef);
+        } else if (resource.resourceType === "project_ref" && depth < PROJECT_REF_MAX_DEPTH) {
+          const targetId = String(resource.resourceRef.projectId ?? resource.resourceRef.project_id ?? "").trim();
+          if (!targetId || visited.has(targetId)) continue;
+          visited.add(targetId);
+          const target = this.ctx.projects().getProject(targetId);
+          if (target?.workspaceId !== workspaceId) continue;
+          collect(this.ctx.projects().listProjectResources(targetId), depth + 1);
+        }
+      }
+    };
+    collect(projectResources, 0);
+    // Workspace metadata may supply a default branch, but never additional repositories.
+    return normalizeRepos(refs, workspaceDefaultBranchResolver(workspaceRepos));
   }
 
   private resolveIntakeProjectContexts(
@@ -1941,7 +1976,11 @@ export class TasksRepo {
       [summary, step ?? null, total ?? null, nowIso(), taskId],
     );
     if (result.changes === 0) throw new Error(`Task not found or terminal: ${taskId}`);
-    return this.getTask(taskId)!;
+    const task = this.getTask(taskId)!;
+    if (task.chatSessionId && !task.issueId && this.ctx.chat().getChatSession(task.chatSessionId)?.projectId) {
+      this.ctx.notifyTaskEvent("task:progress", task);
+    }
+    return task;
   }
 
   pinTaskSession(taskId: string, sessionId?: string | null, workDir?: string | null): MultiremiTask {

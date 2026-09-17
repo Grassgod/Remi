@@ -13,7 +13,7 @@ Chat 是用户与一个云友的持续私聊。可以直接提问、讨论或要
 ## 会话与上下文
 
 新聊天选择云友，首条消息或首次附件上传时创建会话。每个会话绑定一个云友，切换云友会开始新聊天。
-用户主动选择的项目和 Issue 引用沿用既有上下文机制，执行位置由现有任务调度与云友配置决定。
+标题栏下的项目选择器可绑定 Project，或清空为纯对话。绑定后使用 Project 的指令、资源、Memory 和 Wiki。
 Chat 页面不提供独立 Runtime 或机器工作目录选择器，历史列表不提供按云友或 Runtime 的筛选。
 Chat 与 Issue 独立：在聊天里创建 Issue 只创建工作项，不绑定会话，不继承该 Issue 的项目、仓库、附件或 Wiki 上下文。
 Web Chat 和飞书一对一私聊不接收 Issue 活动播报；飞书群里的 Issue 话题由飞书绑定表记录归属，继续接收 Issue 更新与工作轮次回帖。
@@ -22,6 +22,29 @@ Web Chat 和飞书一对一私聊不接收 Issue 活动播报；飞书群里的 
 
 会话支持重命名、置顶、归档、恢复和删除。归档会停止未完成的运行并禁止继续发送，恢复后可继续聊天。
 删除会移除会话及消息，并取消未完成运行。列表提供最新消息、未读数及运行状态；置顶会话优先。
+
+## 项目仓库与工作目录
+
+未绑定 Project 的 Chat 保持纯对话，仓库按需通过 `remi repo checkout` 获取。
+Project 配置了 `local_directory` 时，Chat 在该真实目录执行，启动不会自动 clone、fetch 或修改 Git 工作树；
+Wiki 使用 CLI 访问，既有 `.multiremi` 任务元数据仍会更新。
+
+其他绑定 Chat 在 daemon 的 `workspaces/chats/<chat_session_id>` 目录运行。
+首次使用时自动拉取 Project 显式声明的 `github_repo`（包括 `project_ref` 引用），
+不会因 Project 未声明仓库而自动拉取整个 workspace 的目录清单。
+工作分支为 `chat/<chat_session_id>`；已有 worktree 后续轮次直接复用，保留本地改动，不重复 fetch。
+需要刷新或重试失败仓库时使用 `remi repo checkout <repo-id>`。
+
+自动同步按仓库串行执行，共享 120 秒网络预算；daemon 环境变量
+`MULTIREMI_REPO_CHAT_STARTUP_TIMEOUT_MS` 可指定正整数毫秒覆盖该预算。
+已有 bare cache 的刷新最多占用 30 秒，也受总预算约束。Issue 的同步预算不受此配置影响。
+启动过程中 Chat 显示仓库准备进度；鉴权、网络或超时失败会保留之前成功的仓库，继续启动对话，
+并在智能体提示词中记录失败原因与手动获取指引。该网络预算不包含本地 worktree 文件落盘耗时。
+
+改绑或解绑会清除 provider 会话状态，下一轮重新生成上下文；有未结束任务时返回 409。
+在平台 Chat 目录下一次启动绑定 Project 的任务时，旧项目的干净 worktree 会通过 Git 正常移除，
+分支引用仍保留在 cache。存在未提交改动、未推送提交或忽略文件的副本会原地保留并提示，
+不会为新项目覆盖同名目录。切回纯 Chat 不触发自动仓库清理。
 
 ## 消息与执行队列
 
@@ -53,6 +76,8 @@ Web Chat 和飞书一对一私聊不接收 Issue 活动播报；飞书群里的 
 
 ```bash
 remi chat create --agent <id>
+remi chat create --agent <id> --project <project-id>
+remi chat update <chat> --project <project-id|none>
 remi chat message create <chat> --content-file <path>
 remi chat pin <chat>
 remi chat unpin <chat>

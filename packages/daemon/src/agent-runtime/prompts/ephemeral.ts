@@ -24,6 +24,8 @@ export interface BuildTaskPromptOptions {
   issueWorkspacePath?: string;
   /** Actual workspace preparation result; false means Wiki is available through CLI only. */
   wikiMaterialized?: boolean;
+  /** Actual workspace preparation mode; true only for eligible daemon-owned Project Chat workspaces. */
+  chatRepoAutoCheckout?: boolean;
 }
 
 export type TaskPromptMode = "bootstrap" | "delta";
@@ -56,7 +58,7 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
   if (task.chatSessionId) {
     sections.push("", "## Current Chat Attachment Delivery", CHAT_ARTIFACT_DELIVERY_CONTRACT);
   }
-  if (mode === "bootstrap") appendHomepageChatCliSection(sections, task);
+  if (mode === "bootstrap") appendHomepageChatCliSection(sections, task, opts.chatRepoAutoCheckout);
   appendSessionContextSections(sections, task, mode, opts.sessionHistoryPaths);
 
   if (task.issue) {
@@ -84,7 +86,7 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
 
   appendTriggerCommentSection(sections, task);
 
-  if (!privateChat) appendRepositoryWarnings(sections, opts.repoWarnings ?? []);
+  if (!privateChat || task.project) appendRepositoryWarnings(sections, opts.repoWarnings ?? [], privateChat);
   appendRepositoryWikiAvailabilityWarnings(sections, task);
   if (task.knowledgeWarnings?.length) {
     sections.push("", "## Knowledge Availability Warnings", ...task.knowledgeWarnings);
@@ -99,7 +101,9 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
     sections.push("");
     sections.push("## Available Repositories");
     if (checkouts.length) {
-      sections.push("Repositories below marked with an absolute path are already checked out on the Issue branch; work at those paths directly, do not clone or re-checkout:");
+      sections.push(privateChat
+        ? "Repositories below marked with an absolute path are already checked out on the Chat session branch; work at those paths directly, do not clone or re-checkout:"
+        : "Repositories below marked with an absolute path are already checked out on the Issue branch; work at those paths directly, do not clone or re-checkout:");
     } else {
       sections.push("Use `remi repo checkout <url> [--ref <branch-or-sha>]` to check out repositories into the working directory.");
     }
@@ -162,7 +166,9 @@ function taskHoldsWorkspace(task: AgentTask): boolean {
 
 function withoutIssueContext(task: AgentTask): AgentTask {
   const chatProjectId = stringField(task, "chatProjectId", "chat_project_id");
-  const preserveProject = Boolean(chatProjectId && task.project?.id === chatProjectId);
+  const projectWorkspaceId = task.project?.workspaceId ?? task.project?.workspace_id;
+  const preserveProject = Boolean(chatProjectId && task.project?.id === chatProjectId
+    && (projectWorkspaceId === undefined || projectWorkspaceId === task.workspaceId));
   return {
     ...task,
     issueId: null,
@@ -249,7 +255,7 @@ function appendProjectDiscoverySection(sections: string[]): void {
   );
 }
 
-function appendRepositoryWarnings(sections: string[], warnings: TaskRepoWarning[]): void {
+function appendRepositoryWarnings(sections: string[], warnings: TaskRepoWarning[], projectChat = false): void {
   if (!warnings.length) return;
   sections.push("");
   sections.push("## Repository Availability Warnings");
@@ -264,6 +270,9 @@ function appendRepositoryWarnings(sections: string[], warnings: TaskRepoWarning[
     } else {
       sections.push(`- ${repoUrl}: checkout is unavailable because repository preparation failed. Do not claim that you inspected its source code. Diagnostic: ${message}`);
     }
+  }
+  if (projectChat) {
+    sections.push("Chat can continue without these repositories. If repository files are needed after a preparation failure, run `remi repo checkout <repo-id>` explicitly and use the diagnostic above to resolve the failure. Preserve any existing worktree with uncommitted changes.");
   }
 }
 
@@ -411,13 +420,22 @@ function appendClaimContextSections(sections: string[], task: AgentTask, mode: T
   }
 }
 
-function appendHomepageChatCliSection(sections: string[], task: AgentTask): void {
+function appendHomepageChatCliSection(sections: string[], task: AgentTask, chatRepoAutoCheckout?: boolean): void {
   if (!task.chatSessionId || task.boundIssue || task.bound_issue) return;
   sections.push("");
   sections.push("## Remi Context");
   if (task.project) sections.push(`Current Chat project: ${task.project.title} (${task.project.id}).`);
   sections.push("Use `remi context` for the current identity and allowed operations. Use `remi project list|get|search` and `remi repo list|get|search` to inspect the database-backed safe directory.");
-  sections.push("Repositories are not fetched for Chat startup, and `remi repo list` never contacts Git. Run `remi repo checkout <repo-id>` only when repository files are needed; checkout fetches that one repository and returns timeout or fetch failures as a tool error.");
+  if (task.project) {
+    if (chatRepoAutoCheckout) {
+      sections.push(`The daemon attempts automatic checkout only for repositories explicitly declared by this Project, including referenced Projects. New worktrees use the Chat session branch \`chat/${task.chatSessionId}\`. Existing checkouts are reused without fetching on later turns; consult the paths and preparation warnings below before using repository files.`);
+      sections.push("Use `remi repo checkout <repo-id>` explicitly when fresh repository files are needed or to retry a failed checkout; `remi repo list` never contacts Git.");
+    } else {
+      sections.push("Automatic repository checkout is disabled for this working directory; Chat startup does not clone, fetch, or replace repository files. Inspect existing files directly. Run `remi repo checkout <repo-id>` explicitly only when repository files are needed; `remi repo list` never contacts Git.");
+    }
+  } else {
+    sections.push("Repositories are not fetched for Chat startup, and `remi repo list` never contacts Git. Run `remi repo checkout <repo-id>` only when repository files are needed; checkout fetches that one repository and returns timeout or fetch failures as a tool error.");
+  }
 }
 
 function appendSessionContextSections(sections: string[], task: AgentTask, mode: TaskPromptMode, historyPaths?: string[]): void {

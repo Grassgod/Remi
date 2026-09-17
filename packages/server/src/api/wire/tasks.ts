@@ -331,8 +331,9 @@ export function daemonTaskClaimResponse(
   if (task.executionFingerprint === CHAT_ISSUE_DECOUPLED_FINGERPRINT) task = { ...task, sessionId: null };
   // Re-check the live destination even when the caller retained an earlier
   // hydrated claim. A changed binding must never receive that old Issue prompt.
-  if (task.chatSessionId && store.getTaskChatExecutionKind(task) === "ordinary") {
-    const chat = store.getChatSession(task.chatSessionId);
+  const ordinaryChat = Boolean(task.chatSessionId && store.getTaskChatExecutionKind(task) === "ordinary");
+  if (ordinaryChat) {
+    const chat = store.getChatSession(task.chatSessionId!);
     const keepProject = Boolean(chat?.projectId && chat.workspaceId === task.workspaceId
       && chat.projectId === task.chatProjectId && chat.projectId === task.project?.id
       && task.project.workspaceId === task.workspaceId);
@@ -341,6 +342,7 @@ export function daemonTaskClaimResponse(
       sessionId: task.issueId || task.issueSessionId || task.executionFingerprint === CHAT_ISSUE_DECOUPLED_FINGERPRINT ? null : task.sessionId,
       issue: null, triggerCommentId: null,
       chatProjectId: keepProject ? chat!.projectId : null,
+      chatAutoCheckoutRepos: keepProject ? task.chatAutoCheckoutRepos : [],
       project: keepProject ? task.project : null,
       projectResources: keepProject ? task.projectResources : [],
       projectDocs: keepProject ? task.projectDocs : null,
@@ -473,6 +475,13 @@ export function daemonTaskClaimResponse(
   }
   if (task.repos.length) {
     response.repos = task.repos.map((repo) => ({
+      url: repo.url,
+      ...(repo.description ? { description: repo.description } : {}),
+      ...(repo.defaultBranch ? { default_branch: repo.defaultBranch } : {}),
+    }));
+  }
+  if (ordinaryChat && task.chatProjectId && task.chatAutoCheckoutRepos) {
+    response.chat_auto_checkout_repos = task.chatAutoCheckoutRepos.map((repo) => ({
       url: repo.url,
       ...(repo.description ? { description: repo.description } : {}),
       ...(repo.defaultBranch ? { default_branch: repo.defaultBranch } : {}),

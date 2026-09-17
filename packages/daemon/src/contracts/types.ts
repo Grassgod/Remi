@@ -131,6 +131,8 @@ export interface AgentTaskIssueSessionResult {
 
 /** Project attached to a task. */
 export interface AgentTaskProject {
+  workspaceId?: string;
+  workspace_id?: string;
   id: string;
   title: string;
   description: string | null;
@@ -279,6 +281,9 @@ export interface AgentTask {
   /** Explicit Chat Project binding, independent of any historical Issue context. */
   chatProjectId?: string | null;
   chat_project_id?: string | null;
+  /** Explicit Project repositories only; kept separate from the display catalog. */
+  chatAutoCheckoutRepos?: AgentTaskRepo[];
+  chat_auto_checkout_repos?: AgentTaskRepo[];
   autopilotRunId: string | null;
   completedAt: string | null;
   createdAt: string;

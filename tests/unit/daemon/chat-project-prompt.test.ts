@@ -74,6 +74,111 @@ describe("Chat Project prompts", () => {
     });
   }
 
+  it("does not expose checkout paths or warnings for an unbound Chat", () => {
+    const task = chatTask();
+    const prompt = buildTaskPrompt(task, {
+      chatRepoAutoCheckout: true,
+      repoCheckouts: [{ repoUrl: "https://example.test/unrelated", path: "/tmp/unrelated", branch: "chat/other" }],
+      repoWarnings: [{ repoUrl: "https://example.test/unrelated", kind: "unavailable", message: "Unrelated failure" }],
+    });
+    expect(prompt).toBe(buildTaskPrompt(task));
+  });
+
+  for (const workspaceField of ["workspaceId", "workspace_id"] as const) {
+    it(`strips cross-workspace Project and checkout diagnostics through ${workspaceField}`, () => {
+      const prompt = buildTaskPrompt(chatTask({
+        ...projectContext,
+        chatProjectId: project.id,
+        project: { ...project, [workspaceField]: "other_workspace" },
+      }), {
+        chatRepoAutoCheckout: true,
+        repoCheckouts: [{ repoUrl: projectContext.repos[0]!.url, path: "/tmp/other-workspace", branch: "chat/other" }],
+        repoWarnings: [{ repoUrl: projectContext.repos[0]!.url, kind: "unavailable", message: "Other workspace failure" }],
+      });
+      expect(prompt).toBe(buildTaskPrompt(chatTask()));
+    });
+  }
+
+  it("describes prepared repositories on the stable Chat session branch", () => {
+    const prompt = buildTaskPrompt(chatTask({ ...projectContext, chatProjectId: project.id }), {
+      chatRepoAutoCheckout: true,
+      repoCheckouts: [{
+        repoUrl: projectContext.repos[0]!.url,
+        path: "/tmp/chats/chat_project/bound-project",
+        branch: "chat/chat_project",
+      }],
+    });
+    expect(prompt).toContain("automatic checkout only for repositories explicitly declared by this Project, including referenced Projects");
+    expect(prompt).toContain("New worktrees use the Chat session branch `chat/chat_project`");
+    expect(prompt).toContain("Existing checkouts are reused without fetching on later turns");
+    expect(prompt).toContain("already checked out on the Chat session branch");
+    expect(prompt).toContain("at `/tmp/chats/chat_project/bound-project` on branch `chat/chat_project`");
+    expect(prompt).not.toContain("Repositories are not fetched for Chat startup");
+    expect(prompt).not.toContain("already checked out on the Issue branch");
+    expect(prompt).not.toContain("chat/task_chat");
+  });
+
+  it("does not claim that catalog repositories without a checkout were fetched", () => {
+    const prompt = buildTaskPrompt(chatTask({
+      ...projectContext, chatProjectId: project.id,
+      repos: [...projectContext.repos, { url: "https://example.test/catalog-only" }],
+    }), {
+      chatRepoAutoCheckout: true,
+      repoCheckouts: [{ repoUrl: projectContext.repos[0]!.url, path: "/tmp/project-repo", branch: "chat/chat_project" }],
+    });
+    expect(prompt).toContain("- https://example.test/catalog-only\n");
+    expect(prompt).not.toContain("https://example.test/catalog-only — at");
+    expect(prompt).toContain("For repositories without a path above, use `remi repo checkout");
+  });
+
+  for (const mode of ["bootstrap", "delta"] as const) {
+    it(`reports preparation failures and explicit checkout fallback in Project Chat ${mode}`, () => {
+      const prompt = buildTaskPrompt(chatTask({
+        ...projectContext, chatProjectId: project.id,
+        sessionProjection: { mode, jsonl: '{"type":"session_event"}' },
+      }), {
+        chatRepoAutoCheckout: true,
+        repoWarnings: [
+          { repoUrl: "https://example.test/timeout", kind: "unavailable", message: "git clone timed out after 30000ms" },
+          { repoUrl: "https://example.test/auth", kind: "unavailable", message: "Authentication failed\nfor remote" },
+          { repoUrl: "https://example.test/network", kind: "stale_cache", message: "Could not resolve host" },
+        ],
+      });
+      expect(prompt).toContain("## Repository Availability Warnings");
+      expect(prompt).toContain("git clone timed out after 30000ms");
+      expect(prompt).toContain("Authentication failed for remote");
+      expect(prompt).toContain("Could not resolve host");
+      expect(prompt).toContain("Chat can continue without these repositories");
+      expect(prompt).toContain("run `remi repo checkout <repo-id>` explicitly");
+      expect(prompt).toContain("Do not claim that you inspected its source code");
+    });
+  }
+
+  it("reports old dirty worktree preservation after changing Projects", () => {
+    const prompt = buildTaskPrompt(chatTask({ ...projectContext, chatProjectId: project.id }), {
+      chatRepoAutoCheckout: true,
+      repoWarnings: [{
+        repoUrl: "https://example.test/old-project", kind: "unavailable",
+        message: "Previous Project worktree /tmp/chats/chat_project/old-project was preserved because it has uncommitted changes.",
+      }],
+    });
+    expect(prompt).toContain("/tmp/chats/chat_project/old-project was preserved because it has uncommitted changes");
+    expect(prompt).toContain("Preserve any existing worktree with uncommitted changes");
+  });
+
+  it("uses actual preparation mode to avoid promising automatic writes in a user directory", () => {
+    const prompt = buildTaskPrompt(chatTask({ ...projectContext, chatProjectId: project.id }), {
+      chatRepoAutoCheckout: false,
+      wikiMaterialized: false,
+    });
+    expect(prompt).toContain("Automatic repository checkout is disabled for this working directory");
+    expect(prompt).toContain("Chat startup does not clone, fetch, or replace repository files");
+    expect(prompt).toContain("Inspect existing files directly");
+    expect(prompt).not.toContain("New worktrees use the Chat session branch");
+    expect(prompt).not.toContain("already checked out");
+    expect(prompt).not.toContain("Wiki is materialized in `./wiki`");
+  });
+
   it("keeps bound Project delta instructions without repeating bootstrap context", () => {
     const prompt = buildTaskPrompt(chatTask({
       ...projectContext, chatProjectId: project.id,

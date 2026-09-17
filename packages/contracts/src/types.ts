@@ -1453,6 +1453,8 @@ export interface MultiremiTaskTriggerMetadata {
 export interface MultiremiTaskWithAgent extends MultiremiTask {
   /** Explicit Chat binding; consumers must match this to project.id. */
   chatProjectId?: string | null;
+  /** Explicit Project repositories eligible for Chat checkout; never includes the workspace fallback catalog. */
+  chatAutoCheckoutRepos?: MultiremiRepoData[];
   agent: MultiremiAgent | null;
   issue: MultiremiIssue | null;
   project: MultiremiProject | null;

@@ -183,6 +183,8 @@ export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
     const task = store.getPendingChatTask(loaded.session.id);
     return c.json({
       ...(task ? { task_id: task.id, status: task.status, created_at: task.createdAt } : {}),
+      ...(task && !task.issueId && loaded.session.projectId && task.progressSummary
+        ? { progress_summary: task.progressSummary } : {}),
       supports_queue: true,
       queued_tasks: store.listQueuedChatTasks(loaded.session.id),
     });

@@ -98,6 +98,17 @@ describe("ChatEndpoints contracts", () => {
     await expect(endpointsWithResponse({ ...pending, created_at: undefined }).getPendingChatTask("chat-1")).rejects.toBeInstanceOf(ApiContractError);
   });
 
+  it("recovers optional preparation progress while ignoring malformed summary fields", async () => {
+    const pending = { task_id: "task-1", status: "running", created_at: session.created_at, supports_queue: true, queued_tasks: [] };
+    await expect(endpointsWithResponse({ ...pending, progress_summary: "正在准备项目仓库…" }).getPendingChatTask("chat-1"))
+      .resolves.toMatchObject({ progress_summary: "正在准备项目仓库…" });
+    for (const progress_summary of [null, undefined, 17, { label: "bad shape" }]) {
+      const result = await endpointsWithResponse({ ...pending, progress_summary }).getPendingChatTask("chat-1");
+      expect(result.task_id).toBe("task-1");
+      expect(result.progress_summary).toBe(progress_summary === null ? null : undefined);
+    }
+  });
+
   it("edits a queue item and validates its response", async () => {
     await expect(endpointsWithResponse(queuedTask).editQueuedChatMessage("chat-1", "task-2", "follow up")).resolves.toEqual(queuedTask);
     expect(fetch).toHaveBeenCalledWith("https://api.example.test/api/chat/sessions/chat-1/queue/task-2", expect.objectContaining({ method: "PATCH" }));

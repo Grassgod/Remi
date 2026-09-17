@@ -1530,6 +1530,17 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
     repos: normalizeRepoList(Array.isArray(raw.repos) ? raw.repos : []),
     usage: Array.isArray(raw.usage) ? raw.usage : [],
   };
+  if (Object.hasOwn(raw, "chat_auto_checkout_repos") || Object.hasOwn(raw, "chatAutoCheckoutRepos")) {
+    const keepChatRepos = normalized.chatSessionId && !normalized.issueId && !normalized.issue
+      && normalized.chatProjectId && normalized.chatProjectId === normalized.project?.id
+      && normalized.project.workspaceId === normalized.workspaceId;
+    const chatRepos = raw.chat_auto_checkout_repos ?? raw.chatAutoCheckoutRepos;
+    normalized.chatAutoCheckoutRepos = keepChatRepos && Array.isArray(chatRepos)
+      ? normalizeRepoList(chatRepos)
+      : [];
+    // Do not leave a rejected snake_case alias available to daemon field helpers.
+    delete normalized.chat_auto_checkout_repos;
+  }
   return normalized as MultiremiTaskWithAgent;
 }
 
