@@ -663,6 +663,173 @@ describe("Multiremi repo cache", () => {
     expect(registrations.split(recreated.path).length - 1).toBe(1);
   });
 
+  it("adds Remi attribution when global hooksPath points to an empty directory", async () => {
+    const source = createRepo("main", "global hooks repo");
+    const hostHooksPath = tempDir("multiremi-host-hooks-");
+    await withHostHooksPath(hostHooksPath, async (hostGit) => {
+      const cache = new MultiremiRepoCache(tempDir("multiremi-global-hook-cache-"));
+      await cache.sync("local", [{ url: source }]);
+      const result = await cache.createWorktree({
+        workspaceId: "local", repoUrl: source, workDir: tempDir("multiremi-global-hook-work-"),
+        taskId: "tsk_global_hook",
+      });
+      hostGit(result.path, ["config", "user.email", "agent@example.test"]);
+      hostGit(result.path, ["config", "user.name", "Agent"]);
+      hostGit(result.path, ["commit", "--allow-empty", "-m", "global hooks attribution"]);
+
+      expect(hostGit(result.path, ["log", "-1", "--format=%B"])).toContain("Co-authored-by: Remi <remi@openremi.fun>");
+      expect(hostGit(result.path, ["config", "--local", "--get", "core.hooksPath"])).toBe(dirname(prepareCommitMsgHookPath(result.path)));
+    });
+  });
+
+  it.each(["global", "system"] as const)("chains live %s host hooks before preserved user hooks and Remi attribution", async (scope) => {
+    const source = createRepo("main", "host and user hooks repo");
+    const hostHooksPath = join(tempDir("multiremi-host-hooks-"), "host's $hooks `$&`");
+    mkdirSync(hostHooksPath);
+    const hostHookPath = join(hostHooksPath, "prepare-commit-msg");
+    const hostHook = (value: string) => `#!/bin/sh\ngit interpret-trailers --in-place --trailer "Host-Hook: ${value}" "$1"\n`;
+    writeFileSync(hostHookPath, hostHook("original"), { mode: 0o755 });
+    await withHostHooksPath(hostHooksPath, async (hostGit) => {
+      const cache = new MultiremiRepoCache(tempDir("multiremi-host-chain-cache-"));
+      await cache.sync("local", [{ url: source }]);
+      const params = {
+        workspaceId: "local", repoUrl: source, workDir: tempDir("multiremi-host-chain-work-"),
+        taskId: "tsk_host_chain", reuseExisting: true,
+      };
+      const result = await cache.createWorktree({ ...params, coAuthoredByEnabled: false });
+      const hookPath = prepareCommitMsgHookPath(result.path);
+      mkdirSync(dirname(hookPath), { recursive: true });
+      const userHook = '#!/bin/sh\ngit interpret-trailers --in-place --trailer "User-Hook: preserved" "$1"\n';
+      writeFileSync(hookPath, userHook, { mode: 0o755 });
+      await cache.createWorktree(params);
+      hostGit(result.path, ["config", "user.email", "agent@example.test"]);
+      hostGit(result.path, ["config", "user.name", "Agent"]);
+      const expectMessage = (value: string) => {
+        hostGit(result.path, ["commit", "--allow-empty", "-m", "chained host hooks"]);
+        expect(hostGit(result.path, ["log", "-1", "--format=%B"])).toBe(
+          `chained host hooks\n\nHost-Hook: ${value}\nUser-Hook: preserved\nCo-authored-by: Remi <remi@openremi.fun>`,
+        );
+      };
+      expectMessage("original");
+      writeFileSync(hostHookPath, hostHook("updated"));
+      expectMessage("updated");
+      await cache.createWorktree(params);
+      expectMessage("updated");
+      expect(readFileSync(hookPath, "utf8")).toContain("# multiremi:host-hook-path=");
+      expect(readFileSync(hookPath, "utf8")).toContain("# multiremi:chained-hook-suffix=");
+
+      const beforeFailure = hostGit(result.path, ["rev-parse", "HEAD"]);
+      writeFileSync(hostHookPath, "#!/bin/sh\nexit 42\n");
+      expect(() => hostGit(result.path, ["commit", "--allow-empty", "-m", "rejected by host"])).toThrow();
+      expect(hostGit(result.path, ["rev-parse", "HEAD"])).toBe(beforeFailure);
+      const failedMessage = readFileSync(hostGit(result.path, ["rev-parse", "--git-path", "COMMIT_EDITMSG"]), "utf8");
+      expect(failedMessage).not.toContain("User-Hook:");
+      expect(failedMessage).not.toContain("Co-authored-by:");
+      expect(spawnSync(hookPath, [hostGit(result.path, ["rev-parse", "--git-path", "COMMIT_EDITMSG"]), "message"], {
+        cwd: result.path, env: gitEnv(), encoding: "utf8",
+      }).status).toBe(42);
+
+      await cache.createWorktree({ ...params, coAuthoredByEnabled: false });
+      expect(readFileSync(hookPath, "utf8")).toBe(userHook);
+      expect(hostGit(result.path, ["config", "--local", "--list"])).not.toContain("core.hookspath=");
+    }, scope);
+  });
+
+  it("removes only its local hooksPath pin and leaves global config unchanged when disabled", async () => {
+    const source = createRepo("main", "disable global hooks repo");
+    const hostHooksPath = tempDir("multiremi-disable-host-hooks-");
+    writeFileSync(join(hostHooksPath, "prepare-commit-msg"), '#!/bin/sh\ngit interpret-trailers --in-place --trailer "Host-Hook: restored" "$1"\n', { mode: 0o755 });
+    await withHostHooksPath(hostHooksPath, async (hostGit, configPath) => {
+      const originalConfig = readFileSync(configPath, "utf8");
+      const cache = new MultiremiRepoCache(tempDir("multiremi-disable-hook-cache-"));
+      await cache.sync("local", [{ url: source }]);
+      const params = {
+        workspaceId: "local", repoUrl: source, workDir: tempDir("multiremi-disable-hook-work-"),
+        taskId: "tsk_disable_hook", reuseExisting: true,
+      };
+      const result = await cache.createWorktree(params);
+      expect(hostGit(result.path, ["config", "--local", "--get", "core.hooksPath"])).toBe(dirname(prepareCommitMsgHookPath(result.path)));
+      await cache.createWorktree({ ...params, coAuthoredByEnabled: false });
+      const local = spawnSync("git", ["config", "--local", "--get", "core.hooksPath"], {
+        cwd: result.path, env: gitEnv(), encoding: "utf8",
+      });
+      expect(local.status).toBe(1);
+      expect(local.stdout).toBe("");
+      expect(readFileSync(configPath, "utf8")).toBe(originalConfig);
+      expect(hostGit(result.path, ["config", "--get", "core.hooksPath"])).toBe(hostHooksPath);
+      hostGit(result.path, ["config", "user.email", "agent@example.test"]);
+      hostGit(result.path, ["config", "user.name", "Agent"]);
+      hostGit(result.path, ["commit", "--allow-empty", "-m", "disabled attribution"]);
+      expect(hostGit(result.path, ["log", "-1", "--format=%B"])).toBe("disabled attribution\n\nHost-Hook: restored");
+    });
+  });
+
+  it("preserves a replacement local hooksPath and cleans its pin even if the hook is missing", async () => {
+    const source = createRepo("main", "local hooks ownership repo");
+    const cache = new MultiremiRepoCache(tempDir("multiremi-local-hook-cache-"));
+    await cache.sync("local", [{ url: source }]);
+    const params = {
+      workspaceId: "local", repoUrl: source, workDir: tempDir("multiremi-local-hook-work-"),
+      taskId: "tsk_local_hook", reuseExisting: true,
+    };
+    const result = await cache.createWorktree(params);
+    const customPath = tempDir("multiremi-custom-local-hooks-");
+    git(result.path, ["config", "--local", "core.hooksPath", customPath]);
+    await cache.createWorktree({ ...params, coAuthoredByEnabled: false });
+    expect(git(result.path, ["config", "--local", "--get", "core.hooksPath"])).toBe(customPath);
+    await cache.createWorktree(params);
+    rmSync(prepareCommitMsgHookPath(result.path));
+    await cache.createWorktree({ ...params, coAuthoredByEnabled: false });
+    expect(git(result.path, ["config", "--local", "--list"])).not.toContain("core.hookspath=");
+  });
+
+  it("warns about relative host hooksPath while still installing Remi attribution", async () => {
+    const source = createRepo("main", "relative host hooks repo");
+    await withHostHooksPath("relative-hooks", async (hostGit) => {
+      const cache = new MultiremiRepoCache(tempDir("multiremi-relative-hook-cache-"));
+      await cache.sync("local", [{ url: source }]);
+      const warn = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const result = await cache.createWorktree({
+          workspaceId: "local", repoUrl: source, workDir: tempDir("multiremi-relative-hook-work-"),
+          taskId: "tsk_relative_hook",
+        });
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("core.hooksPath is relative"), {
+          worktreePath: result.path, hostHooksPath: "relative-hooks",
+        });
+        hostGit(result.path, ["config", "user.email", "agent@example.test"]);
+        hostGit(result.path, ["config", "user.name", "Agent"]);
+        hostGit(result.path, ["commit", "--allow-empty", "-m", "relative host hooks"]);
+        expect(hostGit(result.path, ["log", "-1", "--format=%B"])).toContain("Co-authored-by: Remi <remi@openremi.fun>");
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  });
+
+  it("warns without failing checkout when hook installation fails", async () => {
+    const source = createRepo("main", "hook failure repo");
+    const cache = new MultiremiRepoCache(tempDir("multiremi-failed-hook-cache-"));
+    await cache.sync("local", [{ url: source }]);
+    const params = {
+      workspaceId: "local", repoUrl: source, workDir: tempDir("multiremi-failed-hook-work-"),
+      taskId: "tsk_failed_hook", reuseExisting: true,
+    };
+    const result = await cache.createWorktree(params);
+    const hookPath = prepareCommitMsgHookPath(result.path);
+    rmSync(hookPath);
+    mkdirSync(hookPath);
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect((await cache.createWorktree(params)).created).toBe(false);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("Failed to apply co-authored-by hook"), {
+        worktreePath: result.path, enabled: true, error: expect.stringContaining("EISDIR"),
+      });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("installs and removes the daemon co-authored-by hook from agent worktrees", async () => {
     const source = createRepo("main", "hook repo");
     const cacheRoot = tempDir("multiremi-repo-hook-");
@@ -890,13 +1057,40 @@ function tempDir(prefix: string): string {
   return dir;
 }
 
-function git(cwd: string, args: string[]): string {
+function git(cwd: string, args: string[], env: NodeJS.ProcessEnv = {}): string {
   return execFileSync("git", args, {
     cwd,
-    env: gitEnv(),
+    env: { ...gitEnv(), ...env },
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
+}
+
+async function withHostHooksPath(
+  hooksPath: string,
+  run: (hostGit: (cwd: string, args: string[]) => string, configPath: string) => Promise<void>,
+  scope: "global" | "system" = "global",
+): Promise<void> {
+  const configRoot = tempDir("multiremi-host-gitconfig-");
+  const configPath = join(configRoot, "gitconfig");
+  git(configRoot, ["config", "--file", configPath, "core.hooksPath", hooksPath]);
+  const previousGlobal = process.env.GIT_CONFIG_GLOBAL;
+  const previousSystem = process.env.GIT_CONFIG_SYSTEM;
+  const env = {
+    GIT_CONFIG_GLOBAL: scope === "global" ? configPath : "/dev/null",
+    GIT_CONFIG_SYSTEM: scope === "system" ? configPath : "/dev/null",
+  };
+  Object.assign(process.env, env);
+  try {
+    // Explicitly opt these commits into the controlled host config, including
+    // when ordinary fixture commands isolate global config (MUL-319).
+    await run((cwd, args) => git(cwd, args, env), configPath);
+  } finally {
+    if (previousGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+    else process.env.GIT_CONFIG_GLOBAL = previousGlobal;
+    if (previousSystem === undefined) delete process.env.GIT_CONFIG_SYSTEM;
+    else process.env.GIT_CONFIG_SYSTEM = previousSystem;
+  }
 }
 
 function tryGit(cwd: string, args: string[]): void {
