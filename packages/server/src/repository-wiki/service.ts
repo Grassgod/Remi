@@ -36,6 +36,7 @@ import {
   assertNoIntroducedRepositoryWikiLinks,
   repositoryWikiBacklinks,
   rewriteRepositoryWikiLinks,
+  type RepositoryWikiGraphDoc,
 } from "./links.js";
 
 export interface RepositoryWikiMigrationOptions {
@@ -66,6 +67,21 @@ export interface RepositoryWikiServiceContract {
 
 export class RepositoryWikiUnavailableError extends Error {}
 export const REPOSITORY_WIKI_BATCH_LIMIT = 256;
+
+/** Unknown outgoing links cannot be checked when an existing target moves or disappears. */
+export function assertRepositoryWikiPathChangesReadable(
+  before: readonly RepositoryWikiGraphDoc[],
+  after: readonly RepositoryWikiGraphDoc[],
+): void {
+  const nextPaths = new Map(after.map(doc => [doc.id, doc.path]));
+  if (!before.some(doc => nextPaths.get(doc.id) !== doc.path)) return;
+  const unavailable = before.filter(doc => doc.bodyUnavailable);
+  if (unavailable.length) {
+    throw new RepositoryWikiUnavailableError(
+      `Repository wiki path changes and deletes require all bodies to be readable; unavailable: ${unavailable.map(doc => `${doc.path} (${doc.id})`).join(", ")}`,
+    );
+  }
+}
 
 const log = createLogger("repository-wiki");
 
@@ -363,7 +379,7 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
       if (!current) throw new Error(`repository wiki doc not found: ${operation.ref}`);
       return [current.id];
     }));
-    // Missing unrelated objects must not block this repository's write lane.
+    // Missing unrelated objects must not block content edits or creates.
     // Keep their identities in the graph, but never treat an unreadable body as
     // a successfully read empty page. Every mutated document remains strict.
     const before = this.mode === "sql" ? metadata : await Promise.all(metadata.map((doc) =>
@@ -418,6 +434,9 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
     }
 
     const after = [...afterById.values()];
+    // Check the normalized graph, not the presence of a path/slug input:
+    // explicitly keeping the same path remains a tolerant content update.
+    assertRepositoryWikiPathChangesReadable(before, after);
     assertUniqueRepositoryWikiPaths(after);
     assertNoIntroducedRepositoryWikiLinks(before, after);
     this.operationSignal?.throwIfAborted();
@@ -752,7 +771,14 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
   }
 
   private async hydrateStrict(docs: readonly MultiremiRepositoryWikiDoc[]): Promise<MultiremiRepositoryWikiDoc[]> {
-    return this.mode === "sql" ? [...docs] : Promise.all(docs.map((doc) => this.hydrate(doc)));
+    return this.mode === "sql" ? [...docs] : Promise.all(docs.map(async (doc) => {
+      try {
+        return await this.hydrate(doc);
+      } catch (error) {
+        this.operationSignal?.throwIfAborted();
+        throw new RepositoryWikiUnavailableError(repositoryWikiHydrationError(doc, error));
+      }
+    }));
   }
 
   private async requireDoc(workspaceId: string, repositoryId: string, ref: string): Promise<MultiremiRepositoryWikiDoc> {
@@ -886,5 +912,5 @@ function parseMode(value: string | undefined): ProjectKnowledgeMode { const mode
 function requireSnapshot(value: string | null): string { if (!value) throw new RepositoryWikiUnavailableError("OpenViking snapshot commit returned no OID"); return value; }
 function repositoryWikiHydrationError(doc: MultiremiRepositoryWikiDoc, error: unknown): string {
   const detail = error instanceof Error ? error.message : String(error);
-  return `Repository wiki body unavailable for ${doc.id}: ${detail}`.slice(0, 1_000);
+  return `Repository wiki body unavailable for ${doc.id} (${doc.path}): ${detail}`.slice(0, 1_000);
 }

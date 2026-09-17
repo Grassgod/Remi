@@ -133,14 +133,22 @@ describe("Repository Wiki availability and migration safeguards", () => {
     const task = store.getTask(automation.taskId!)!;
     const credential = await store.createTaskAccessToken(task, "local");
     const app = createMultiremiApp({ store, repositoryWiki: service, authToken: "root-secret" });
-    const publish = (key: string, version: number) => {
+    const publish = (key: string, version: number, pathInput: { path?: string; slug?: string } = {}) => {
       const source = store.createKnowledgeSubmission({ workspaceId: "local", repositoryId: "repo_publish_degraded", scope: "repository_wiki", sourceType: "agent", body: `New facts for ${key}`, sourceTaskId: task.id, authorAgentId: agent.id }).submission;
       return app.request("/api/workspaces/local/repos/repo_publish_degraded/wiki/publish", {
         method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${credential.token}` },
-        body: JSON.stringify({ submission_ids: [source.id], dedupe_key: key, output: { action: "update", ref: target.id, expected_version: version, body: "New facts [[missing]]" } }),
+        body: JSON.stringify({ submission_ids: [source.id], dedupe_key: key, output: { action: "update", ref: target.id, expected_version: version, body: "New facts [[missing]]", ...pathInput } }),
       });
     };
     expect((await publish("degraded-publish", 1)).status).toBe(200);
+    for (const pathInput of [{ path: "guides/target.md" }, { slug: "guides/target" }]) {
+      const rejected = await publish(`degraded-move-${Object.keys(pathInput)[0]}`, 2, pathInput);
+      expect(rejected.status).toBe(503);
+      const error = (await rejected.json() as any).error;
+      expect(error).toContain(missing.id);
+      expect(error).toContain(missing.path);
+      expect(store.getRepositoryWikiDocByRef("local", "repo_publish_degraded", target.id)).toMatchObject({ path: "target.md", version: 2 });
+    }
     const create = client.create.bind(client);
     client.create = async () => new Promise(() => {});
     const response = await publish("timeout-publish", 2);
@@ -203,25 +211,94 @@ describe("Repository Wiki availability and migration safeguards", () => {
     expect((await service.backlinks("local", "repo_migrate", target.id)).map(doc => doc.id)).toEqual([incoming.id]);
   });
 
-  it("keeps unrelated repository writes and backlinks available when a stored object is missing", async () => {
+  it("keeps content updates and backlinks available but requires readable bodies before deleting", async () => {
     const store = createStore();
     const client = new FakeOpenViking();
     const service = new RepositoryWikiService(store, client, "openviking");
     const missing = await service.create("local", "repo_degraded", { path: "missing.md", title: "Missing", body: "Old content" });
     const target = await service.create("local", "repo_degraded", { path: "target.md", title: "Target", body: "Target" });
     const source = await service.create("local", "repo_degraded", { path: "source.md", title: "Source", body: "[[target]] [[missing]]" });
+    const original = client.files.get(missing.contentUri!)!;
     client.files.delete(missing.contentUri!);
     const updated = await service.update("local", "repo_degraded", source.id, { body: "Updated [[target]] [[missing]]" });
     expect(updated.version).toBe(2);
     expect((await service.backlinks("local", "repo_degraded", target.id)).map(doc => doc.id)).toEqual([source.id]);
     expect((await service.backlinks("local", "repo_degraded", missing.id)).map(doc => doc.id)).toEqual([source.id]);
-    await expect(service.delete("local", "repo_degraded", target.id)).rejects.toThrow("unresolved repository wiki link");
+    await expect(service.delete("local", "repo_degraded", target.id)).rejects.toThrow(missing.id);
     await expect(service.update("local", "repo_degraded", source.id, { body: "[[unknown]]" })).rejects.toThrow("unresolved repository wiki link");
     await expect(service.update("local", "repo_degraded", missing.id, { body: "must not overwrite missing data" })).rejects.toThrow("not found");
+    await expect(service.delete("local", "repo_degraded", source.id)).rejects.toThrow(missing.id);
+    expect(store.getRepositoryWikiDocByRef("local", "repo_degraded", source.id)?.version).toBe(2);
+    expect((await service.list("local", "repo_degraded")).find(doc => doc.id === missing.id))
+      .toMatchObject({ status: "failed", bodyUnavailable: true });
+    client.files.set(missing.contentUri!, original);
+    await expect(service.delete("local", "repo_degraded", target.id)).rejects.toThrow("unresolved repository wiki link");
     await service.delete("local", "repo_degraded", source.id);
     await service.delete("local", "repo_degraded", target.id);
     expect(store.getRepositoryWikiDocByRef("local", "repo_degraded", missing.id)?.version).toBe(1);
-    expect((await service.list("local", "repo_degraded"))[0]).toMatchObject({ id: missing.id, status: "failed", bodyUnavailable: true });
+    expect((await service.list("local", "repo_degraded"))[0]).toMatchObject({ id: missing.id, status: "healthy" });
+  });
+
+  it.each(["missing", "corrupt"])("rejects path changes and deletes atomically when an untouched referrer is %s", async (failure) => {
+    const store = createLocalStore();
+    store.updateWorkspaceRepositories("local", [{ id: "repo_graph", name: "graph", url: "https://github.com/acme/graph.git", source: "github", default_branch: "main" }]);
+    const client = new FakeOpenViking();
+    const service = new RepositoryWikiService(store, client, "openviking");
+    const target = await service.create("local", "repo_graph", { path: "target.md", title: "Target", body: "Original" });
+    const hidden = await service.create("local", "repo_graph", { path: "hidden.md", title: "Hidden referrer", body: "[[./target]]" });
+    await service.runStorageJobs();
+    const raw = client.files.get(hidden.contentUri!)!;
+    if (failure === "missing") client.files.delete(hidden.contentUri!);
+    else client.files.set(hidden.contentUri!, `${raw}\ncorrupt`);
+
+    // An explicit but unchanged normalized path is still a content edit.
+    await service.update("local", "repo_graph", target.id, { path: "target", body: "Edited", expectedVersion: 1 });
+    const added = await service.create("local", "repo_graph", { path: "added.md", title: "Added", body: "New facts" });
+    expect(await service.backlinks("local", "repo_graph", target.id)).toEqual([]);
+    await service.runStorageJobs();
+    const metadata = store.listRepositoryWikiDocs("local", "repo_graph");
+    const files = new Map(client.files);
+    const writeAttempts = client.writeAttempts;
+    const commits = client.commits.length;
+    const app = createMultiremiApp({ store, repositoryWiki: service, authToken: "root-secret" });
+    const requests = [
+      { method: "PUT", path: `/${target.id}`, body: { path: "guides/target.md", expected_version: 2 } },
+      { method: "POST", path: "/batch", body: { operations: [
+        { kind: "create", input: { path: "must-not-exist.md", title: "Pending", body: "Pending" } },
+        { kind: "update", ref: target.id, input: { slug: "guides/target", expected_version: 2 } },
+      ] } },
+      { method: "DELETE", path: `/${target.id}`, body: undefined },
+      { method: "POST", path: "/batch", body: { operations: [
+        { kind: "update", ref: added.id, input: { body: "Must roll back", expected_version: 1 } },
+        { kind: "delete", ref: target.id, expected_version: 2 },
+      ] } },
+      { method: "POST", path: "/move", body: { ref: target.id, path: "guides/target.md", expected_version: 2 } },
+      { method: "POST", path: "/merge", body: { target: target.id, sources: [added.id], expected_version: 2 } },
+    ];
+    for (const request of requests) {
+      const response = await app.request(`/api/workspaces/local/repos/repo_graph/wiki${request.path}`, {
+        method: request.method,
+        headers: { "Content-Type": "application/json", Authorization: "Bearer root-secret" },
+        body: request.body === undefined ? undefined : JSON.stringify(request.body),
+      });
+      expect(response.status).toBe(503);
+      const error = (await response.json() as any).error;
+      expect(error).toContain(hidden.id);
+      expect(error).toContain(hidden.path);
+      expect(store.listRepositoryWikiDocs("local", "repo_graph")).toEqual(metadata);
+      expect(client.files).toEqual(files);
+      expect(client.writeAttempts).toBe(writeAttempts);
+      expect(client.commits).toHaveLength(commits);
+      expect(store.listRepositoryWikiStorageJobs("local", "repo_graph")).toEqual([]);
+    }
+
+    // Recovery restores both the full graph and migration, without losing IDs.
+    client.files.set(hidden.contentUri!, raw);
+    await expect(service.delete("local", "repo_graph", target.id)).rejects.toThrow("unresolved repository wiki link");
+    await service.move("local", "repo_graph", target.id, "guides/target.md");
+    expect(await service.get("local", "repo_graph", target.id)).toMatchObject({ id: target.id, path: "guides/target.md", version: 3 });
+    expect((await service.backlinks("local", "repo_graph", target.id)).map(doc => doc.id)).toEqual([hidden.id]);
+    expect((await service.get("local", "repo_graph", hidden.id))?.body).toBe("[[guides/target.md]]");
   });
 
 });

@@ -34,7 +34,7 @@ import { sha256Text } from "@multiremi/project-knowledge/codec.js";
 import { resolveTaskRepositoryWikiRepositories } from "@multiremi/repository-wiki/task-scope.js";
 import { autopilotRunTriggerSummary } from "../wire/autopilots.js";
 import { createId } from "@multiremi/ids.js";
-import { REPOSITORY_WIKI_BATCH_LIMIT, RepositoryWikiUnavailableError } from "@multiremi/repository-wiki/service.js";
+import { assertRepositoryWikiPathChangesReadable, REPOSITORY_WIKI_BATCH_LIMIT, RepositoryWikiUnavailableError } from "@multiremi/repository-wiki/service.js";
 import { authenticatedRequestUserId } from "../wire/index.js";
 import { resolveProjectWikiRef, tokenizeWikiLinks } from "@multiremi/contracts/wiki-links";
 import {
@@ -733,6 +733,7 @@ async function preflightRepositoryOutputs(
     before,
     planned.flatMap((entry) => entry.document ? [entry.document] : []),
   );
+  assertRepositoryWikiPathChangesReadable(before, after);
   assertUniqueRepositoryWikiPaths(after);
   try {
     assertNoIntroducedRepositoryWikiLinks(before, after);
