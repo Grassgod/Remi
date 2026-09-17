@@ -78,7 +78,11 @@ async function main() {
       }
       response = failed.data;
     }
-    log({ label, method, code: response.code ?? null, msg: redact(response.msg ?? "") });
+    if (typeof response?.code !== "number") {
+      log({ label, method, code: null, msg: "Missing API code; write outcome may be ambiguous. Not retried." });
+      throw new ProbeError(`${label}: incomplete API acknowledgement; stop and inspect existing messages before rerunning`);
+    }
+    log({ label, method, code: response.code, msg: redact(response.msg ?? "") });
     return response;
   }
   async function readMessage(label: string, id: string) {
