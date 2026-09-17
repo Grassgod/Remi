@@ -202,7 +202,11 @@ export class FeishuTaskPresentation {
       this.state.cot = { status: "creating", presentation: "semantic_v1" };
       await this.save(); // write-ahead creation intent, even before we know either ID
       let handle;
-      try { handle = await this.retry(() => this.cot.create(this.chatId, this.options.replyToMessageId), false); }
+      try {
+        handle = await this.retry(() => this.cot.create(
+          this.chatId, this.options.replyToMessageId, Boolean(this.options.replyToMessageId),
+        ), false);
+      }
       catch (error) { await this.disableCot(error); return; }
       this.state.cot = { ...handle, status: "active", presentation: "semantic_v1" };
       await this.save(); // Never let a failed checkpoint get swallowed as an API error.
