@@ -828,6 +828,9 @@ export function runMigrations(db: SqlDatabase): void {
       status TEXT NOT NULL DEFAULT 'active',
       is_default INTEGER NOT NULL DEFAULT 0,
       holds_workspace INTEGER NOT NULL DEFAULT 1,
+      parent_session_id TEXT,
+      inherit_mode TEXT NOT NULL DEFAULT 'none',
+      inherit_cutoff_seq INTEGER,
       summary TEXT,
       created_by_type TEXT NOT NULL DEFAULT 'member',
       created_by_id TEXT,
@@ -2737,6 +2740,9 @@ export function runMigrations(db: SqlDatabase): void {
   // Existing Sessions and Tasks keep the historical Issue-wide workspace
   // lease. New discussion Sessions must opt out explicitly.
   addColumnIfMissing(db, "multiremi_issue_sessions", "holds_workspace INTEGER NOT NULL DEFAULT 1");
+  addColumnIfMissing(db, "multiremi_issue_sessions", "parent_session_id TEXT");
+  addColumnIfMissing(db, "multiremi_issue_sessions", "inherit_mode TEXT NOT NULL DEFAULT 'none'");
+  addColumnIfMissing(db, "multiremi_issue_sessions", "inherit_cutoff_seq INTEGER");
   // Agent auto-reply comments point back at the run that produced them, so the
   // chat stream can open that task's transcript. Forward-only: no backfill.
   addColumnIfMissing(db, "multiremi_issue_comments", "task_id TEXT");

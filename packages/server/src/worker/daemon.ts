@@ -69,6 +69,7 @@ import {
   localSkillRootForProvider,
   scanRuntimeDirectories,
 } from "./local-skills.js";
+import { isSideConversation } from "@daemon/agent-runtime/prompts/side-conversation.js";
 import { buildTaskPromptArtifact, type TaskRepoCheckout, type TaskRepoWarning } from "@multiremi/prompt.js";
 import {
   MultiremiRepoCache,
@@ -2791,6 +2792,7 @@ export class MultiremiDaemon {
       if (providerHome) {
         this.assertWorkspaceRootOwner();
         await prepareIssueSessionProviderHome(providerHome, {
+          sideConversation: isSideConversation(task),
           codexPluginInstalled: task.agent?.provider === "codex" && Boolean(pluginRuntime?.codexHome),
           linkCodexAuth: !providerInstallEnv?.OPENAI_API_KEY,
           linkClaudeCredentials: !providerInstallEnv?.ANTHROPIC_AUTH_TOKEN && !providerInstallEnv?.ANTHROPIC_API_KEY,

@@ -1512,6 +1512,7 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
     issue: normalizeDaemonClaimIssue(raw.issue),
     issueSession: raw.issue_session ?? raw.issueSession ?? null,
     sessionProjection: raw.session_projection ?? raw.sessionProjection ?? null,
+    inheritedSessionProjection: raw.inherited_session_projection ?? raw.inheritedSessionProjection ?? null,
     issueSessionResults: Array.isArray(raw.issue_session_results)
       ? raw.issue_session_results
       : Array.isArray(raw.issueSessionResults)
