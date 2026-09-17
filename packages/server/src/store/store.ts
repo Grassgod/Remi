@@ -1806,6 +1806,10 @@ runMigrations(this.db);
     return this.feishuBot.getIssueIdForChatSession(chatSessionId);
   }
 
+  isFeishuTransportChatSession(chatSessionId: string): boolean {
+    return this.feishuBot.isTransportChatSession(chatSessionId);
+  }
+
   assertFeishuBotInboundAttachmentScope(...args: Parameters<FeishuBotRepo["assertInboundAttachmentScope"]>) {
     return this.feishuBot.assertInboundAttachmentScope(...args);
   }

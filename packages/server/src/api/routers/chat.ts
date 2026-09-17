@@ -27,10 +27,11 @@ import { ChatConflictError, ChatValidationError } from "@multiremi/store/repos/c
 
 export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
   const { store } = deps;
-  // Feishu Issue topics share transport storage with Chat, but belong to the
-  // Issue discussion surface rather than the user's private conversation list.
+  // Feishu conversations share transport storage with Chat, but belong to
+  // Feishu — an Issue topic to the Issue discussion surface, a private Feishu
+  // thread to Feishu itself — never to the user's Web conversation list.
   const isListedSession = (c: Context, session: MultiremiChatSession): boolean =>
-    !store.getFeishuIssueIdForChatSession(session.id)
+    !store.isFeishuTransportChatSession(session.id)
       && canCurrentUserAccessChatSessionAgent(c, store, session);
 
   app.get("/api/multiremi/chats", (c) => {
