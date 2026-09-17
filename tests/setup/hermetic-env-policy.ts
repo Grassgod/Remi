@@ -21,14 +21,17 @@ export const SCRUBBED_ENV_PREFIXES = [
 /**
  * Test-owned inputs that survive the scrub.
  *
- * `MULTIREMI_TEST_*` is the namespace a developer or CI uses to *drive* the suite
- * rather than to configure the product — `MULTIREMI_TEST_POSTGRES_URL` selects the
- * integration database, and `tests/unit/multiremi/chat-issue-audit-metrics.test.ts`
- * requires an explicit target's failure to throw instead of skip. Scrubbing it turned
- * "this integration target is unreachable" into a silent skip against a localhost
- * fallback, which is exactly the class of false green this preload exists to kill.
+ * A `<PREFIX>_TEST_*` name under a scrubbed prefix is something a developer or CI
+ * exports to *drive* the suite, not to configure the product, so the scrub must not
+ * eat it. `MULTIREMI_TEST_POSTGRES_URL` selects the integration database and
+ * `tests/unit/multiremi/chat-issue-audit-metrics.test.ts` requires an explicit
+ * target's failure to throw instead of skip — scrubbing it turned "this integration
+ * target is unreachable" into a silent skip against a localhost fallback, exactly the
+ * class of false green this preload exists to kill. `FEISHU_TEST_CHAT_ID` is only read
+ * by the `bun run` harnesses under `tests/manual/` today, which never load this
+ * preload; it is listed so that stays true if one of them ever becomes a `*.test.ts`.
  */
-export const SCRUBBED_ENV_EXEMPT_PREFIXES = ["MULTIREMI_TEST_"] as const;
+export const SCRUBBED_ENV_EXEMPT_PREFIXES = ["MULTIREMI_TEST_", "FEISHU_TEST_"] as const;
 
 /**
  * Unprefixed variables that also change server behavior.

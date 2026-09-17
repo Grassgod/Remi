@@ -76,11 +76,14 @@ describe("hermetic test environment", () => {
   });
 
   test("test-owned inputs survive the scrub", () => {
-    // MULTIREMI_TEST_* drives the suite rather than configuring the product.
+    // A <PREFIX>_TEST_* name drives the suite rather than configuring the product.
     // Scrubbing MULTIREMI_TEST_POSTGRES_URL turned "explicit integration target is
     // unreachable" into a silent skip against a localhost fallback.
     expect(isScrubbedEnvKey("MULTIREMI_TEST_POSTGRES_URL")).toBe(false);
+    expect(isScrubbedEnvKey("FEISHU_TEST_CHAT_ID")).toBe(false);
+    // The product-config neighbours under the same prefixes still go.
     expect(isScrubbedEnvKey("MULTIREMI_TOKEN")).toBe(true);
+    expect(isScrubbedEnvKey("FEISHU_APP_SECRET")).toBe(true);
   });
 
   test("an app built without authToken serves unauthenticated requests", async () => {
