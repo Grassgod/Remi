@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { basename } from "node:path";
 import { CHAT_ATTACHMENT_MAX_BYTES } from "@multiremi/contracts/attachments.js";
+import type { MultiremiSessionInheritedContext } from "@multiremi/contracts/types.js";
 import {
   CliError,
   CliRenderer,
@@ -221,9 +222,14 @@ function sessionCommandSpecs(): CommandSpec[] {
     }),
     nativeSpec("session.show", ["session", "show"], "Show a Session and its inherited snapshot", "read", HUMAN_TASK, [refPositional("session")], [], async (invocation) => {
       const client = await clientFor(invocation);
-      const response = await client.request({ method: "GET", path: `/api/sessions/${encodePath(positional(invocation, 0, "session"))}` });
+      const path = `/api/sessions/${encodePath(positional(invocation, 0, "session"))}`;
+      const response = await client.request({ method: "GET", path });
+      const mode = outputMode(invocation);
+      const inheritedContext = mode === "table"
+        ? (await client.request<MultiremiSessionInheritedContext>({ method: "GET", path: `${path}/inherited-context` })).data
+        : null;
       new CliRenderer().render<Record<string, unknown>>(response.data, {
-        mode: outputMode(invocation),
+        mode,
         columns: [
           { header: "ID", value: (row) => row.id },
           { header: "TITLE", value: (row) => row.title },
@@ -231,7 +237,27 @@ function sessionCommandSpecs(): CommandSpec[] {
           { header: "PARENT", value: (row) => row.parent_session_id ?? "-" },
           { header: "INHERIT", value: (row) => row.inherit_mode ?? "none" },
           { header: "CUTOFF", value: (row) => row.inherit_cutoff_seq ?? "-" },
-          { header: "INHERITED EVENTS", value: (row) => row.inherited_event_count ?? 0 },
+          { header: "INHERITED EVENTS (PRE-TRUNCATION)", value: (row) => row.inherited_event_count ?? 0 },
+          { header: "TRUNCATED", value: () => inheritedContext?.diagnostics?.truncated ?? "-" },
+        ],
+      });
+    }),
+    nativeSpec("session.inherited-context", ["session", "inherited-context"], "Show recorded inherited context diagnostics (event count is before truncation)", "read", HUMAN_TASK, [refPositional("session")], [], async (invocation) => {
+      const client = await clientFor(invocation);
+      const response = await client.request<MultiremiSessionInheritedContext>({
+        method: "GET", path: `/api/sessions/${encodePath(positional(invocation, 0, "session"))}/inherited-context`,
+      });
+      new CliRenderer().render<MultiremiSessionInheritedContext>(response.data, {
+        mode: outputMode(invocation),
+        columns: [
+          { header: "SESSION", value: (row) => row.session_id },
+          { header: "PARENT", value: (row) => row.parent_session_id },
+          { header: "CUTOFF", value: (row) => row.inherit_cutoff_seq },
+          { header: "INHERITED EVENTS (PRE-TRUNCATION)", value: (row) => row.inherited_event_count },
+          { header: "TRUNCATED", value: (row) => row.diagnostics?.truncated },
+          { header: "OMITTED", value: (row) => row.diagnostics?.omitted_events },
+          { header: "EST TOKENS", value: (row) => row.diagnostics?.estimated_tokens },
+          { header: "TOKEN BUDGET", value: (row) => row.diagnostics?.token_budget },
         ],
       });
     }),

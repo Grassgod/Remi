@@ -1228,6 +1228,13 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       store.listSessionParticipants(session.id),
     ));
   });
+  app.get("/api/sessions/:sessionId/inherited-context", (c) => {
+    const session = store.getIssueSession(c.req.param("sessionId"));
+    if (!session) return c.json({ error: "session not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, session.workspaceId);
+    if (denied) return denied;
+    return c.json(store.getSessionInheritedContext(session.id));
+  });
   app.get("/api/issues/:id/sessions", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);

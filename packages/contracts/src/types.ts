@@ -1408,6 +1408,19 @@ export interface MultiremiTask {
   projection_omitted_events?: number;
   projectionEstimatedTokens: number;
   projection_estimated_tokens?: number;
+  /** Actual inherited projection recorded at claim; null before claim or without inheritance. */
+  inheritedProjectionTruncated: boolean | null;
+  inherited_projection_truncated?: boolean | null;
+  inheritedProjectionOmittedEvents: number | null;
+  inherited_projection_omitted_events?: number | null;
+  inheritedProjectionEstimatedTokens: number | null;
+  inherited_projection_estimated_tokens?: number | null;
+  inheritedProjectionToSeq: number | null;
+  inherited_projection_to_seq?: number | null;
+  inheritedProjectionTokenBudget: number | null;
+  inherited_projection_token_budget?: number | null;
+  inheritedProjectionRecordedAt: string | null;
+  inherited_projection_recorded_at?: string | null;
   result: string | null;
   error: string | null;
   failureReason: string | null;
@@ -2220,6 +2233,28 @@ export interface MultiremiIssueSession {
   created_at?: string;
   updatedAt: string;
   updated_at?: string;
+}
+
+/** On-demand diagnostics for the latest task with a recorded inherited projection. */
+export interface MultiremiSessionInheritedContext {
+  session_id: string;
+  parent_session_id: string | null;
+  parent_session_title: string | null;
+  inherit_mode: MultiremiIssueSessionInheritMode;
+  inherit_cutoff_seq: number | null;
+  /** Raw parent event count before truncation, not the number supplied to the model. */
+  inherited_event_count: number | null;
+  diagnostics: {
+    task_id: string;
+    agent_id: string;
+    to_seq: number;
+    truncated: boolean;
+    omitted_events: number;
+    estimated_tokens: number;
+    token_budget: number;
+    /** Time the inherited projection was recorded at claim, independent of later task updates. */
+    recorded_at: string;
+  } | null;
 }
 
 export interface MultiremiSessionParticipant {
