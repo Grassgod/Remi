@@ -34,6 +34,18 @@ describe("snapshot TTL GC", () => {
     expect(existsSync(fresh)).toBe(true);
   });
 
+  it("reclaims expired orphan snapshots when the repo cache workspace directory is missing", async () => {
+    const f = fixture();
+    const orphan = f.tree("orphan", f.now - ttlMs - 1);
+    rmSync(dirname(f.barePath), { recursive: true });
+    expect(existsSync(dirname(f.barePath))).toBe(false);
+
+    expect(await runSnapshotGcOnce(f.options)).toEqual({ removed: 1, retained: 0, skipped: 0 });
+    expect(existsSync(orphan)).toBe(false);
+    expect(existsSync(dirname(f.barePath))).toBe(true);
+    expect(existsSync(`${f.barePath}.multiremi.lock`)).toBe(false);
+  });
+
   it("reclaims 0555 directories and 0444 files, including abandoned temporary trees", async () => {
     const f = fixture();
     for (const name of ["commit", ".commit.tmp-123-456"]) {

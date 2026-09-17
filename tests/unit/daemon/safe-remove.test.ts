@@ -1,11 +1,14 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import * as fs from "node:fs";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -62,6 +65,68 @@ describe("descriptor-safe owned directory removal", () => {
     expect(() => removeOwnedDirectorySync(root, join(root, ".task-runtime", "task-1")))
       .toThrow("must be a real directory");
     expect(readFileSync(join(victim, "keep.txt"), "utf8")).toBe("keep\n");
+  });
+
+  it("restores 0555 mode and retains the target when quarantine rename fails", () => {
+    const root = tempRoot(roots);
+    const target = join(root, "snapshot");
+    const quarantine = join(root, OWNED_DIRECTORY_QUARANTINE);
+    mkdirSync(target);
+    writeFileSync(join(target, "keep.txt"), "keep\n");
+    chmodSync(target, 0o555);
+    mkdirSync(quarantine, { mode: 0o500 });
+    const originalRename = fs.renameSync;
+    let renameError: unknown;
+    const rename = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      try {
+        originalRename(from, to);
+      } catch (error) {
+        renameError = error;
+        throw error;
+      }
+    });
+    try {
+      let thrown: unknown;
+      try { removeOwnedDirectorySync(root, target); } catch (error) { thrown = error; }
+      expect(rename).toHaveBeenCalledTimes(1);
+      expect((renameError as NodeJS.ErrnoException)?.code).toBe("EACCES");
+      expect(thrown).toBe(renameError);
+      expect(existsSync(target)).toBe(true);
+      expect(statSync(target).mode & 0o777).toBe(0o555);
+      expect(readFileSync(join(target, "keep.txt"), "utf8")).toBe("keep\n");
+    } finally {
+      rename.mockRestore();
+      chmodSync(quarantine, 0o700);
+      chmodSync(target, 0o755);
+    }
+  });
+
+  it("preserves both errors when restoring the target mode also fails", () => {
+    const root = tempRoot(roots);
+    const target = join(root, "snapshot");
+    mkdirSync(target);
+    chmodSync(target, 0o555);
+    const originalMode = statSync(target).mode;
+    const renameError = new Error("quarantine rename failed");
+    const restoreError = new Error("mode restore failed");
+    const originalFchmod = fs.fchmodSync;
+    const rename = spyOn(fs, "renameSync").mockImplementation(() => { throw renameError; });
+    const chmod = spyOn(fs, "fchmodSync")
+      .mockImplementationOnce(originalFchmod)
+      .mockImplementationOnce(() => { throw restoreError; });
+    try {
+      let thrown: unknown;
+      try { removeOwnedDirectorySync(root, target); } catch (error) { thrown = error; }
+      expect(thrown).toBeInstanceOf(AggregateError);
+      expect((thrown as AggregateError).errors).toEqual([renameError, restoreError]);
+      expect(chmod).toHaveBeenCalledTimes(2);
+      expect(chmod.mock.calls[1]).toEqual([chmod.mock.calls[0]![0], originalMode]);
+      expect(existsSync(target)).toBe(true);
+    } finally {
+      rename.mockRestore();
+      chmod.mockRestore();
+      chmodSync(target, 0o755);
+    }
   });
 
   it("treats a missing owned parent as already removed", () => {

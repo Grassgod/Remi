@@ -1,5 +1,5 @@
-import { lstatSync, readdirSync, type Stats } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { lstatSync, mkdirSync, readdirSync, type Stats } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   OWNED_DIRECTORY_QUARANTINE,
   removeOwnedDirectorySync,
@@ -96,6 +96,7 @@ export async function runSnapshotGcOnce(options: RunSnapshotGcOnceOptions): Prom
       const entries = directories(repoDir);
       const barePath = join(options.repoCacheRoot, relative(snapshotsRoot, repoDir));
       try {
+        mkdirSync(dirname(barePath), { recursive: true });
         await options.withRepoLock(barePath, () => {
           if (!realDirectory(repoDir)) {
             summary.skipped++;
