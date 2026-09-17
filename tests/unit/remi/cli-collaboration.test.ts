@@ -31,6 +31,77 @@ afterEach(() => {
 });
 
 describe("native collaboration CLI contracts", () => {
+  it("creates chats with optional Project binding and keeps pure-chat requests unchanged", async () => {
+    useCliEnv();
+    const spec = specById("chat.create");
+    const bodies: unknown[] = [];
+    globalThis.fetch = capabilityFetch(spec.id, async (request) => {
+      expect(request.method).toBe("POST");
+      expect(new URL(request.url).pathname).toBe("/api/chat/sessions");
+      bodies.push(await request.json());
+      return Response.json({ id: "chat_1" }, { status: 201 });
+    });
+    for (const projectArgs of [[], ["--project", "prj_1"], ["--project", "none"]]) {
+      await capture(() => registryFor([spec]).execute([
+        ...spec.path, "--agent", "agt_1", "--title", "Work", ...projectArgs, "--output", "json",
+      ]));
+    }
+    expect(bodies).toEqual([
+      { workspace_id: "ws_1", title: "Work", agent_id: "agt_1" },
+      { workspace_id: "ws_1", title: "Work", agent_id: "agt_1", projectId: "prj_1" },
+      { workspace_id: "ws_1", title: "Work", agent_id: "agt_1", projectId: null },
+    ]);
+  });
+
+  it("binds, changes, and unbinds a Chat Project without changing unrelated updates", async () => {
+    useCliEnv();
+    const spec = specById("chat.update");
+    const bodies: unknown[] = [];
+    globalThis.fetch = capabilityFetch(spec.id, async (request) => {
+      const path = new URL(request.url).pathname;
+      if (request.method === "GET" && path === "/api/chat/sessions") {
+        return Response.json([{ id: "chat_1", title: "Work" }]);
+      }
+      expect(request.method).toBe("PATCH");
+      expect(path).toBe("/api/chat/sessions/chat_1");
+      bodies.push(await request.json());
+      return Response.json({ id: "chat_1" });
+    });
+    for (const args of [
+      ["--project", "prj_1"],
+      ["--project", "prj_2"],
+      ["--project", "none"],
+      ["--title", "Renamed"],
+      ["--data", '{"projectId":null}'],
+      ["--data", '{"projectId":"prj_input"}', "--project", "none"],
+    ]) {
+      await capture(() => registryFor([spec]).execute([...spec.path, "Work", ...args, "--output", "json"]));
+    }
+    expect(bodies).toEqual([
+      { projectId: "prj_1" },
+      { projectId: "prj_2" },
+      { projectId: null },
+      { title: "Renamed" },
+      { projectId: null },
+      { projectId: null },
+    ]);
+  });
+
+  it("advertises the Project flag and rejects empty Project values before requesting the API", async () => {
+    useCliEnv();
+    let requests = 0;
+    globalThis.fetch = (async () => { requests++; throw new Error("unexpected network"); }) as unknown as typeof fetch;
+    for (const [id, args] of [["chat.create", ["--agent", "agt_1"]], ["chat.update", ["chat_1"]]] as const) {
+      const spec = specById(id);
+      const registry = registryFor([spec]);
+      const help = registry.renderHelp(spec.path);
+      expect(help).toContain("--project <project-id|none>");
+      await expect(capture(() => registry.execute([...spec.path, ...args, "--project", "   "])))
+        .rejects.toThrow("--project");
+      expect(requests).toBe(0);
+    }
+  });
+
   it("sends repeated local Chat attachments and a caption using the Task destination", async () => {
     useCliEnv();
     const dir = await mkdtemp(resolve(tmpdir(), "chat-cli-"));

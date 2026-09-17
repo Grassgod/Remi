@@ -76,6 +76,8 @@ export class ChatRepo {
     if (!agent) throw new Error(`Agent not found: ${agentId}`);
     if (agent.archivedAt) throw new Error(`Agent is archived: ${agentId}`);
     if (agent.workspaceId !== workspaceId) throw new Error("Agent belongs to another workspace");
+    const projectId = this.validateProjectBinding(workspaceId,
+      Object.hasOwn(input, "projectId") ? input.projectId : input.project_id);
     const id = input.id ?? createId("chat");
     if (this.getChatSession(id) || this.ctx.db.query("SELECT id FROM multiremi_tasks WHERE chat_session_id = ? LIMIT 1").get(id)) {
       throw new ChatConflictError("Chat session id has already been used");
@@ -84,13 +86,25 @@ export class ChatRepo {
     const title = input.title?.trim() || `Chat with ${agent.name}`;
     this.ctx.db.run(
       `INSERT INTO multiremi_chat_sessions (
-        id, workspace_id, creator_id, agent_id, title, status, session_id, work_dir, latest_task_id,
+        id, workspace_id, creator_id, agent_id, project_id, title, status, session_id, work_dir, latest_task_id,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, 'active', NULL, NULL, NULL, ?, ?)`,
-      [id, workspaceId, input.creatorId ?? input.creator_id ?? "local", agentId, title, now, now],
+      ) VALUES (?, ?, ?, ?, ?, ?, 'active', NULL, NULL, NULL, ?, ?)`,
+      [id, workspaceId, input.creatorId ?? input.creator_id ?? "local", agentId, projectId, title, now, now],
     );
     const session = this.getChatSession(id)!;
     return session;
+  }
+
+  private validateProjectBinding(workspaceId: string, value: unknown): string | null {
+    if (value == null) return null;
+    if (typeof value !== "string" || !value.trim()) {
+      throw new ChatValidationError("project_id must be a Project ID or null");
+    }
+    const project = this.ctx.projects().getProject(value.trim());
+    if (!project || project.workspaceId !== workspaceId || project.archivedAt) {
+      throw new ChatValidationError("Project must exist, belong to this workspace, and not be archived");
+    }
+    return project.id;
   }
 
   listChatSessions(workspaceId?: string | null, options: { creatorId?: string | null; includeArchived?: boolean } = {}): MultiremiChatSession[] {
@@ -599,6 +613,7 @@ function toChatSession(row: Row): MultiremiChatSession {
     workspaceId: String(row.workspace_id ?? "local"),
     creatorId: nullableString(row.creator_id) ?? "local",
     agentId: String(row.agent_id),
+    projectId: nullableString(row.project_id),
     title: String(row.title ?? ""),
     status: String(row.status ?? "active") as MultiremiChatSession["status"],
     sessionId: nullableString(row.session_id),

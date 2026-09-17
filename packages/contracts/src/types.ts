@@ -4455,6 +4455,7 @@ export interface MultiremiChatSession {
   workspaceId: string;
   creatorId: string | null;
   agentId: string;
+  projectId: string | null;
   title: string;
   status: MultiremiChatSessionStatus;
   sessionId: string | null;
@@ -4497,9 +4498,14 @@ export interface CreateChatSessionInput {
   creatorId?: string | null;
   creator_id?: string | null;
   title?: string | null;
+  projectId?: string | null;
+  project_id?: string | null;
 }
 
 export interface UpdateChatSessionInput {
+  /** Omit to keep the binding; explicit null detaches the Project. */
+  projectId?: string | null;
+  project_id?: string | null;
   pinned?: boolean;
   title?: string;
   status?: MultiremiChatSessionStatus;
