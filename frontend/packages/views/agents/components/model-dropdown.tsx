@@ -70,7 +70,10 @@ export function ModelDropdown({
       </div>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger
-          disabled={!runtimeId && !executionGroupId}
+          // Automatic scheduling has no Runtime or group binding; the fleet
+          // catalog still answers for the provider, so only a missing
+          // provider disables the dropdown.
+          disabled={!provider}
           className="flex w-full min-w-0 items-center gap-3 rounded-lg border border-border bg-background px-3 py-2.5 mt-1.5 text-left text-sm transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
         >
           <Cpu className="h-4 w-4 shrink-0 text-muted-foreground" />
