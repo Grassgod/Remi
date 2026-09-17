@@ -377,7 +377,7 @@ export interface MultiremiDaemonOptions {
   taskTimeoutMs?: number;
   /** "ask" routes permission/question prompts to a human via the server; "auto" (default) self-approves. */
   approvalMode?: "auto" | "ask";
-  /** How long an "ask"-mode prompt waits for a human before expiring (default 30 min). */
+  /** How long an "ask"-mode prompt waits for a human before expiring (default 60 min). */
   humanRequestTimeoutMs?: number;
   /** How long an unattended task waits for human input before expiring (default 5 min). */
   unattendedHumanRequestTimeoutMs?: number;
@@ -786,7 +786,11 @@ export class MultiremiDaemon {
         options.outboxStartupFlushTimeoutMs ?? DEFAULT_OUTBOX_STARTUP_FLUSH_TIMEOUT_MS,
       ),
       approvalMode: options.approvalMode ?? (process.env.MULTIREMI_APPROVAL_MODE === "ask" ? "ask" : "auto"),
-      humanRequestTimeoutMs: options.humanRequestTimeoutMs ?? numberEnv(process.env.MULTIREMI_HUMAN_REQUEST_TIMEOUT_MS, 30 * 60 * 1000),
+      // An attended prompt is answered whenever the human next looks at the
+      // thread, which routinely exceeds half an hour; expiring at 30 min made
+      // the agent resume on a cancelled question and pick its own way forward.
+      // Unattended (autopilot) runs keep their own, much shorter budget below.
+      humanRequestTimeoutMs: options.humanRequestTimeoutMs ?? numberEnv(process.env.MULTIREMI_HUMAN_REQUEST_TIMEOUT_MS, 60 * 60 * 1000),
       unattendedHumanRequestTimeoutMs: options.unattendedHumanRequestTimeoutMs
         ?? numberEnv(process.env.MULTIREMI_UNATTENDED_HUMAN_REQUEST_TIMEOUT_MS, 5 * 60 * 1000),
       steerPollIntervalMs: options.steerPollIntervalMs ?? numberEnv(process.env.MULTIREMI_STEER_POLL_INTERVAL_MS, DEFAULT_STEER_POLL_MS),
