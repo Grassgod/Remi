@@ -10,7 +10,7 @@ import {
   SCRUBBED_ENV_KEYS,
   SCRUBBED_ENV_PREFIXES,
   isScrubbedEnvKey,
-} from "../setup/hermetic-env.js";
+} from "../setup/hermetic-env-policy.js";
 
 /**
  * The backend suite must not read this repo's configuration out of the host shell.
@@ -21,6 +21,11 @@ import {
  * and reported 242 false 401 failures, while CI (no such variable) stayed green.
  * `tests/setup/hermetic-env.ts` strips the namespace in a `bun test` preload; these
  * tests are the ratchet that keeps it wired up.
+ *
+ * This file imports the *policy* module, never the preload: the preload scrubs and
+ * writes the sentinel as an import side effect, so importing it here would make the
+ * "did the preload run" assertion certify itself and pass even with `bunfig.toml`
+ * bypassed entirely.
  */
 
 const ROOT = join(import.meta.dir, "../..");
@@ -58,12 +63,24 @@ describe("hermetic test environment", () => {
   test("the scrub list covers the auth-relevant variables", () => {
     // Named explicitly so dropping a prefix or key is a test failure, not a silent
     // widening of what the host can influence.
-    for (const name of ["MULTIREMI_TOKEN", "MULTIREMI_SHARE_SECRET", "JWT_SECRET"]) {
+    for (const name of ["MULTIREMI_TOKEN", "MULTIREMI_SHARE_SECRET", "JWT_SECRET", "GITHUB_TOKEN"]) {
       expect(isScrubbedEnvKey(name), `${name} must stay in the scrub list`).toBe(true);
     }
     expect([...SCRUBBED_ENV_PREFIXES]).toContain("MULTIREMI_");
-    // A host-provided sqlite build is a capability, not a behavior toggle.
+    // A host-provided sqlite build is a capability, not a behavior toggle, and
+    // NODE_ENV is how the code knows it is under test — neither may be scrubbed.
     expect([...SCRUBBED_ENV_KEYS]).not.toContain("SQLITE_LIB_PATH");
+    for (const name of ["NODE_ENV", "PATH", "HOME"]) {
+      expect(isScrubbedEnvKey(name), `${name} must not be scrubbed`).toBe(false);
+    }
+  });
+
+  test("test-owned inputs survive the scrub", () => {
+    // MULTIREMI_TEST_* drives the suite rather than configuring the product.
+    // Scrubbing MULTIREMI_TEST_POSTGRES_URL turned "explicit integration target is
+    // unreachable" into a silent skip against a localhost fallback.
+    expect(isScrubbedEnvKey("MULTIREMI_TEST_POSTGRES_URL")).toBe(false);
+    expect(isScrubbedEnvKey("MULTIREMI_TOKEN")).toBe(true);
   });
 
   test("an app built without authToken serves unauthenticated requests", async () => {
