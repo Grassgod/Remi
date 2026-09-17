@@ -65,21 +65,49 @@ export class LocalPathLocker {
       return this.releaser(realPath, entry, taskId);
     }
 
-    await onWait(entry.holderId);
     return new Promise<() => void>((resolve, reject) => {
+      const holderId = entry.holderId;
+      let notified = false;
+      let settled = false;
+      let grantedRelease: (() => void) | null = null;
+      const fail = (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        const index = entry.queue.indexOf(waiter);
+        if (index >= 0) entry.queue.splice(index, 1);
+        signal.removeEventListener("abort", waiter.abort);
+        // The prior holder may have released while the notification was in
+        // flight. Release a promoted waiter too, otherwise the path leaks.
+        grantedRelease?.();
+        reject(error);
+      };
+      const finish = () => {
+        if (settled || !notified || !grantedRelease) return;
+        settled = true;
+        signal.removeEventListener("abort", waiter.abort);
+        resolve(grantedRelease);
+      };
       const waiter: LocalPathLockWaiter = {
         taskId,
-        resolve,
-        reject,
-        signal,
-        abort: () => {
-          const index = entry.queue.indexOf(waiter);
-          if (index >= 0) entry.queue.splice(index, 1);
-          reject(new LocalDirectoryError("local_directory: wait cancelled"));
+        resolve: (release) => {
+          if (settled) return release();
+          grantedRelease = release;
+          finish();
         },
+        reject: fail,
+        signal,
+        abort: () => fail(new LocalDirectoryError("local_directory: wait cancelled")),
       };
       signal.addEventListener("abort", waiter.abort, { once: true });
+      // Enqueue before any asynchronous wait notification: the holder can
+      // release during that notification, and later arrivals must stay FIFO.
       entry.queue.push(waiter);
+      Promise.resolve().then(() => {
+        if (!settled) return onWait(holderId);
+      }).then(() => {
+        notified = true;
+        finish();
+      }, fail);
     });
   }
 
@@ -91,7 +119,6 @@ export class LocalPathLocker {
       if (entry.holderId !== taskId) return;
       while (entry.queue.length) {
         const next = entry.queue.shift()!;
-        next.signal.removeEventListener("abort", next.abort);
         if (next.signal.aborted) continue;
         entry.holderId = next.taskId;
         next.resolve(this.releaser(realPath, entry, next.taskId));
