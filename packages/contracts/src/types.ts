@@ -1016,6 +1016,8 @@ export interface MultiremiRuntimeModel {
   label: string;
   provider: string;
   default: boolean;
+  /** Capability of the provider's default selector; excluded from concrete model pickers. */
+  providerDefault?: boolean;
   thinking?: MultiremiRuntimeModelThinking;
   createdAt?: string;
   updatedAt?: string;

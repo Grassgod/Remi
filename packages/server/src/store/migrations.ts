@@ -365,6 +365,7 @@ export function runMigrations(db: SqlDatabase): void {
       provider TEXT NOT NULL,
       is_default INTEGER NOT NULL DEFAULT 0,
       thinking TEXT,
+      is_provider_default INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       PRIMARY KEY(runtime_id, model_id),
@@ -2646,6 +2647,7 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_runtimes", "owner_id TEXT");
   addColumnIfMissing(db, "multiremi_runtimes", "visibility TEXT NOT NULL DEFAULT 'private'");
   addColumnIfMissing(db, "multiremi_runtimes", "name_customized INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "multiremi_runtime_models", "is_provider_default INTEGER NOT NULL DEFAULT 0");
   runMigrationOnce(db, DAEMON_PROFILES_MIGRATION, () => {
     createDaemonProfilesAndBackfill(db);
   });

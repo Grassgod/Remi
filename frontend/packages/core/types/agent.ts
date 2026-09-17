@@ -724,6 +724,7 @@ export interface FleetProviderModels {
   provider: string;
   online_runtime_count: number;
   models: RuntimeModel[];
+  default_thinking?: RuntimeModelThinking;
 }
 
 export interface FleetModelsResponse {

@@ -35,7 +35,8 @@ vi.mock("@multiremi/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
 }));
 
-vi.mock("@multiremi/core/runtimes", () => ({
+vi.mock("@multiremi/core/runtimes", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@multiremi/core/runtimes")>(),
   useExecutionTargetModels: (_wsId: string, provider: string) => ({
     models:
       provider === "claude"

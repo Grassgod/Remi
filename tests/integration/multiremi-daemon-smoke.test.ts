@@ -109,6 +109,10 @@ describe("Bun Multiremi daemon smoke", () => {
   });
 
   it("maps ACP model-specific effort capabilities to runtime model metadata", () => {
+    expect(runtimeModelsFromAcpCapabilities("claude", [{ id: "default", label: "Default", default: true,
+      providerDefault: true, effort: { supportedLevels: [] } }])).toEqual([
+      { id: "default", label: "Default", default: true, providerDefault: true, provider: "anthropic", thinking: { supportedLevels: [] } },
+    ]);
     expect(runtimeModelsFromAcpCapabilities("codex", [
       {
         id: "gpt-probe",

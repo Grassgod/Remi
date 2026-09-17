@@ -62,7 +62,10 @@ export function ModelPicker({
     if (id !== value) await onChange(id);
   };
 
-  if (!canEdit || (!runtimeId && !executionGroupId)) {
+  // Automatic scheduling binds neither a Runtime nor a group, yet the fleet
+  // catalog still answers for the selected provider — only a missing provider
+  // means there is no execution target to pick a model for.
+  if (!canEdit || !provider) {
     return (
       <span
         className="min-w-0 truncate px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"

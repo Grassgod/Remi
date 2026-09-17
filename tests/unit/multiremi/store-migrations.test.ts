@@ -44,6 +44,15 @@ afterEach(() => {
 });
 
 describe("store migrations", () => {
+  it("adds provider-default metadata to existing runtime model tables idempotently", () => {
+    const database = freshDb();
+    migrate(database);
+    database.exec("ALTER TABLE multiremi_runtime_models DROP COLUMN is_provider_default");
+    migrate(database);
+    migrate(database);
+    expect(columnNames(database, "multiremi_runtime_models")).toContain("is_provider_default");
+  });
+
   it("creates the schema on a fresh database", () => {
     const database = freshDb();
     migrate(database);
