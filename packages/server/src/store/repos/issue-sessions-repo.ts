@@ -16,6 +16,7 @@ import type {
   MultiremiSessionEvent,
   MultiremiSessionParticipant,
   MultiremiSessionProjection,
+  MultiremiSessionInheritedContext,
   MultiremiSessionResult,
   MultiremiTask,
   PublishSessionResultInput,
@@ -147,6 +148,39 @@ export class IssueSessionsRepo {
   getIssueSession(id: string): MultiremiIssueSession | null {
     const row = this.ctx.db.query(`${SESSION_SELECT} WHERE id = ?`).get(id) as Row | null;
     return row ? toIssueSession(row) : null;
+  }
+
+  getSessionInheritedContext(sessionId: string): MultiremiSessionInheritedContext | null {
+    const session = this.getIssueSession(sessionId);
+    if (!session) return null;
+    const inherits = session.inheritMode === "snapshot" && session.parentSessionId !== null;
+    const row = inherits ? this.ctx.db.query(
+      `SELECT id, agent_id, inherited_projection_truncated, inherited_projection_omitted_events,
+              inherited_projection_estimated_tokens, inherited_projection_to_seq,
+              inherited_projection_token_budget, updated_at
+       FROM multiremi_tasks
+       WHERE issue_session_id = ? AND inherited_projection_truncated IS NOT NULL
+       ORDER BY updated_at DESC, id DESC LIMIT 1`,
+    ).get(sessionId) as Row | null : null;
+    return {
+      session_id: session.id,
+      parent_session_id: inherits ? session.parentSessionId : null,
+      parent_session_title: inherits ? this.getIssueSession(session.parentSessionId!)?.title ?? null : null,
+      inherit_mode: session.inheritMode,
+      inherit_cutoff_seq: inherits ? session.inheritCutoffSeq : null,
+      // The Session count is the raw snapshot size BEFORE projection truncation.
+      inherited_event_count: inherits ? session.inheritedEventCount : null,
+      diagnostics: row ? {
+        task_id: String(row.id),
+        agent_id: String(row.agent_id),
+        to_seq: Number(row.inherited_projection_to_seq),
+        truncated: Boolean(Number(row.inherited_projection_truncated)),
+        omitted_events: Number(row.inherited_projection_omitted_events),
+        estimated_tokens: Number(row.inherited_projection_estimated_tokens),
+        token_budget: Number(row.inherited_projection_token_budget),
+        recorded_at: String(row.updated_at),
+      } : null,
+    };
   }
 
   listIssueSessions(issueId: string, includeArchived = false): MultiremiIssueSession[] {
@@ -377,11 +411,14 @@ export class IssueSessionsRepo {
         projection.inheritedSessionProjection = inheritedProjection;
         projection.inherited_session_projection = inheritedProjection;
       }
+      const inheritedProjection = projection.inheritedSessionProjection;
       this.ctx.db.run(
         `UPDATE multiremi_tasks
          SET projection_from_seq = ?, projection_to_seq = ?, projection_mode = ?,
              projection_truncated = ?, projection_omitted_events = ?, projection_estimated_tokens = ?,
-             updated_at = ?
+             inherited_projection_truncated = ?, inherited_projection_omitted_events = ?,
+             inherited_projection_estimated_tokens = ?, inherited_projection_to_seq = ?,
+             inherited_projection_token_budget = ?, updated_at = ?
          WHERE id = ?`,
         [
           projection.fromSeq,
@@ -390,6 +427,12 @@ export class IssueSessionsRepo {
           projection.truncated ? 1 : 0,
           projection.omittedEvents,
           projection.estimatedTokens,
+          // Explicit NULLs also clear any diagnostics left by an earlier claim.
+          inheritedProjection ? (inheritedProjection.truncated ? 1 : 0) : null,
+          inheritedProjection?.omittedEvents ?? null,
+          inheritedProjection?.estimatedTokens ?? null,
+          inheritedProjection?.toSeq ?? null,
+          inherits ? inheritedTokenBudget : null,
           nowIso(),
           taskId,
         ],

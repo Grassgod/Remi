@@ -376,6 +376,7 @@ function mappedResourceCommand(route: string): string | null {
     [/^GET \/api\/multiremi\/comments\/:id\/attachments$/, "comment.attachment.list"],
     [/^GET \/api\/issues\/:id\/sessions$/, "session.list"],
     [/^GET \/api\/sessions\/:sessionId$/, "session.show"],
+    [/^GET \/api\/sessions\/:sessionId\/inherited-context$/, "session.inherited-context"],
     [/^POST \/api\/issues\/:id\/sessions$/, "session.create"],
     [/^GET \/api\/issues\/:id\/sessions\/:sessionId$/, "session.get"],
     [/^PATCH \/api\/issues\/:id\/sessions\/:sessionId$/, "session.update"],

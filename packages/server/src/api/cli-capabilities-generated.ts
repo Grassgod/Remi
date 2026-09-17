@@ -2088,6 +2088,19 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "session.inherited-context": {
+      "command": "remi session inherited-context",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "session.inherited-context",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "session.create": {
       "command": "remi session create",
       "auth": [
