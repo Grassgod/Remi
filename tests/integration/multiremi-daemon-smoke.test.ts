@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
@@ -24,6 +24,31 @@ import { MultiremiRepoCache } from "@multiremi/repo-cache.js";
 
 let db: Database | null = null;
 let workDir: string | null = null;
+
+/**
+ * Pin the provider base homes at an empty temp dir for this file.
+ *
+ * The runtime model probe resolves its base home from `CLAUDE_CONFIG_DIR` /
+ * `CODEX_HOME` and falls back to `~/.claude` / `~/.codex`. `bun test` now runs with
+ * the repo's env namespace stripped (tests/setup/hermetic-env.ts, MUL-318), so
+ * without this the probe would read the developer's real Claude credentials and
+ * report a credential-link error instead of the expected probe failure — green in
+ * CI (no `~/.claude`), red on any machine that has actually logged in.
+ */
+let providerHomeBase: string | null = null;
+
+beforeAll(() => {
+  providerHomeBase = mkdtempSync(join(tmpdir(), "multiremi-daemon-provider-home-"));
+  process.env.CLAUDE_CONFIG_DIR = join(providerHomeBase, "claude");
+  process.env.CODEX_HOME = join(providerHomeBase, "codex");
+});
+
+afterAll(() => {
+  delete process.env.CLAUDE_CONFIG_DIR;
+  delete process.env.CODEX_HOME;
+  if (providerHomeBase) rmSync(providerHomeBase, { recursive: true, force: true });
+  providerHomeBase = null;
+});
 
 afterEach(() => {
   db?.close();
