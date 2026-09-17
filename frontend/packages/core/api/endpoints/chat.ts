@@ -1,4 +1,5 @@
 import type {
+  CreateChatSessionInput,
   ChatMessage,
   ChatMessagesPage,
   ChatPendingTask,
@@ -33,12 +34,16 @@ export class ChatEndpoints {
     return parseStrictResponse(raw, ChatSessionSchema, { endpoint: "GET /api/chat/sessions/:id" });
   }
 
-  async createChatSession(data: { agent_id: string; title?: string }): Promise<ChatSession> {
+  async createChatSession(data: CreateChatSessionInput): Promise<ChatSession> {
     const raw = await this.http.fetch<unknown>("/api/chat/sessions", {
       method: "POST",
       body: JSON.stringify(data),
     });
-    return parseStrictResponse(raw, ChatSessionSchema, { endpoint: "POST /api/chat/sessions" });
+    const session = parseStrictResponse<ChatSession>(raw, ChatSessionSchema, { endpoint: "POST /api/chat/sessions" });
+    if (data.project_id && session.project_id !== data.project_id) {
+      throw new ApiContractError("POST /api/chat/sessions", "Server did not retain the requested project");
+    }
+    return session;
   }
 
   async deleteChatSession(id: string): Promise<void> {

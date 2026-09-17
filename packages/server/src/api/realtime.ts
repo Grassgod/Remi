@@ -239,9 +239,11 @@ export function notifyBrowserTaskEvent(
   type: string,
   task: MultiremiTask,
 ): void {
+  const payload = taskRealtimePayload(task);
+  if (type === "task:progress") payload.progress_summary = task.progressSummary;
   const frame = JSON.stringify({
     type,
-    payload: taskRealtimePayload(task),
+    payload,
     actor_id: task.agentId,
     actor_type: "agent",
   });

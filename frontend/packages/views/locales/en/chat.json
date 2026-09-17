@@ -166,5 +166,14 @@
     "cancel": "Cancel",
     "save": "Save",
     "failed": "Could not update the queue. Please try again."
+  },
+  "project": {
+    "label": "Project",
+    "none": "No project · Just chat",
+    "search": "Search projects…",
+    "description": "Use a project’s context, repositories and working directory.",
+    "fixed_hint": "The project is fixed when the chat is created. Start a new chat to use a different project.",
+    "load_failed": "Could not load projects. Try again.",
+    "unavailable": "Linked project unavailable"
   }
 }

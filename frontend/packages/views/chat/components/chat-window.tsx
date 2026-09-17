@@ -31,6 +31,7 @@ import {
 } from "@multiremi/core/workspace/queries";
 import { canAssignAgent } from "@multiremi/views/issues/components";
 import { api } from "@multiremi/core/api";
+import { projectListOptions } from "@multiremi/core/projects/queries";
 import {
   useAgentPresenceDetail,
   useWorkspaceAgentAvailability,
@@ -59,6 +60,7 @@ import { useChatScopeSubscription } from "@multiremi/core/realtime";
 import { ChatMessageList, ChatMessageSkeleton } from "./chat-message-list";
 import { ChatInput } from "./chat-input";
 import { AgentDropdown } from "./agent-dropdown";
+import { ProjectDisplay, ProjectDropdown } from "./project-dropdown";
 import { SessionDropdown } from "./session-dropdown";
 import { EmptyState } from "./chat-empty-state";
 import { ChatResizeHandles } from "./chat-resize-handles";
@@ -121,6 +123,8 @@ export function ChatWindow({
   const isOpen = useChatStore((s) => s.isOpen);
   const activeSessionId = useChatStore((s) => s.activeSessionId);
   const selectedAgentId = useChatStore((s) => s.selectedAgentId);
+  const draftProjectId = useChatStore((s) => s.draftProjectId);
+  const setDraftProjectId = useChatStore((s) => s.setDraftProjectId);
   const setOpen = useChatStore((s) => s.setOpen);
   const storeSetActiveSession = useChatStore((s) => s.setActiveSession);
   const setActiveSession = useCallback(
@@ -135,6 +139,7 @@ export function ChatWindow({
   const user = useAuthStore((s) => s.user);
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
+  const { data: projects = [], isError: projectsError } = useQuery(projectListOptions(wsId));
   // Single sessions cache — eliminates the separate active/all queries
   // that used to drift during the WS-invalidate window.
   const {
@@ -326,6 +331,7 @@ export function ChatWindow({
           const session = await createSession.mutateAsync({
             agent_id: activeAgent.id,
             title: titleSeed.slice(0, 50),
+            ...(draftProjectId ? { project_id: draftProjectId } : {}),
           });
           return session.id;
         } finally {
@@ -335,7 +341,7 @@ export function ChatWindow({
       sessionPromiseRef.current = promise;
       return promise;
     },
-    [activeSessionId, activeAgent, createSession],
+    [activeSessionId, activeAgent, createSession, draftProjectId],
   );
 
   const handleUploadFile = useCallback(
@@ -505,6 +511,7 @@ export function ChatWindow({
         previousSessionId: activeSessionId,
       });
       setSelectedAgentId(agent.id);
+      if (activeSessionId) setDraftProjectId(null);
       // Reset session when switching agent
       setActiveSession(null, agent.id);
     },
@@ -513,6 +520,7 @@ export function ChatWindow({
       selectedAgentId,
       activeSessionId,
       setSelectedAgentId,
+      setDraftProjectId,
       setActiveSession,
     ],
   );
@@ -522,8 +530,9 @@ export function ChatWindow({
       previousSessionId: activeSessionId,
       previousPendingTask: pendingTaskId,
     });
+    setDraftProjectId(null);
     setActiveSession(null);
-  }, [activeSessionId, pendingTaskId, setActiveSession]);
+  }, [activeSessionId, pendingTaskId, setActiveSession, setDraftProjectId]);
 
   const handleSelectSession = useCallback(
     (session: ChatSession) => {
@@ -673,6 +682,23 @@ export function ChatWindow({
               </TooltipContent>
             </Tooltip>
           </div>
+        )}
+      </div>
+
+      <div className="flex min-w-0 items-center border-b px-4 py-1.5">
+        {activeSessionId ? (
+          <ProjectDisplay
+            projects={projects}
+            projectId={currentSession?.project_id ?? null}
+          />
+        ) : (
+          <ProjectDropdown
+            projects={projects}
+            projectId={draftProjectId}
+            disabled={createSession.isPending}
+            loadError={projectsError}
+            onSelect={setDraftProjectId}
+          />
         )}
       </div>
 

@@ -512,6 +512,7 @@ function chatCommandSpecs(): CommandSpec[] {
   const chatFields: readonly CliOptionSpec[] = [
     { name: "title", type: "string", valueName: "title", description: "Chat title" },
     { name: "agent", type: "string", valueName: "agent-id", description: "Chat agent" },
+    { name: "project", type: "string", valueName: "project-id|none", description: "Choose a Project when creating the Chat, or use none for pure chat" },
     { name: "status", type: "string", valueName: "status", description: "Chat status" },
   ];
   return [
@@ -526,11 +527,23 @@ function chatCommandSpecs(): CommandSpec[] {
       await getAndRender(invocation, `/api/chat/sessions/${encodePath(String(chat.id))}`);
     }),
     nativeSpec("chat.create", ["chat", "create"], "Create a chat", "write", HUMAN, [], [...INPUT_OPTIONS, ...chatFields], async (invocation) => {
-      await mutateAndRender(invocation, "POST", "/api/chat/sessions", await requestBody(invocation, { workspace_id: requiredWorkspace(invocation), title: stringOption(invocation, "title") ?? undefined, agent_id: requiredOption(invocation, "agent") }));
+      await mutateAndRender(invocation, "POST", "/api/chat/sessions", await requestBody(invocation, {
+        workspace_id: requiredWorkspace(invocation),
+        title: stringOption(invocation, "title") ?? undefined,
+        agent_id: requiredOption(invocation, "agent"),
+        projectId: chatProjectOption(invocation),
+      }));
     }),
-    nativeSpec("chat.update", ["chat", "update"], "Update a chat", "write", HUMAN, [refPositional("chat")], [...INPUT_OPTIONS, ...chatFields], async (invocation) => {
+    nativeSpec("chat.update", ["chat", "update"], "Update a chat", "write", HUMAN, [refPositional("chat")], [...INPUT_OPTIONS, ...chatFields.filter((field) => field.name !== "project")], async (invocation) => {
+      const body = await requestBody(invocation, {
+        title: stringOption(invocation, "title") ?? undefined,
+        status: stringOption(invocation, "status") ?? undefined,
+      });
+      if (Object.hasOwn(body, "projectId") || Object.hasOwn(body, "project_id")) {
+        throw new CliError("usage", "A Chat Project can only be selected when creating the session");
+      }
       const chat = await resolveChat(invocation, positional(invocation, 0, "chat"));
-      await mutateAndRender(invocation, "PATCH", `/api/chat/sessions/${encodePath(String(chat.id))}`, await requestBody(invocation, { title: stringOption(invocation, "title") ?? undefined, status: stringOption(invocation, "status") ?? undefined }));
+      await mutateAndRender(invocation, "PATCH", `/api/chat/sessions/${encodePath(String(chat.id))}`, body);
     }),
     ...([
       ["pin", "Pin a chat", { pinned: true }],
@@ -812,6 +825,12 @@ async function resolveLabel(invocation: CommandInvocation, ref: string): Promise
     id: (label) => String(label.id ?? ""),
     name: (label) => typeof label.name === "string" ? label.name : null,
   }).resolve(ref);
+}
+
+function chatProjectOption(invocation: CommandInvocation): string | null | undefined {
+  if (!Object.hasOwn(invocation.options, "project")) return undefined;
+  const project = requiredOption(invocation, "project");
+  return project === "none" ? null : project;
 }
 
 async function resolveChat(invocation: CommandInvocation, ref: string): Promise<Record<string, unknown>> {

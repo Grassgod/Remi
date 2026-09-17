@@ -1455,6 +1455,10 @@ export interface MultiremiTaskTriggerMetadata {
 }
 
 export interface MultiremiTaskWithAgent extends MultiremiTask {
+  /** Explicit Chat binding; consumers must match this to project.id. */
+  chatProjectId?: string | null;
+  /** Explicit Project repositories eligible for Chat checkout; never includes the workspace fallback catalog. */
+  chatAutoCheckoutRepos?: MultiremiRepoData[];
   inheritedSessionProjection?: MultiremiSessionProjection | null;
   inherited_session_projection?: MultiremiSessionProjection | null;
   agent: MultiremiAgent | null;
@@ -4481,6 +4485,7 @@ export interface MultiremiChatSession {
   workspaceId: string;
   creatorId: string | null;
   agentId: string;
+  projectId: string | null;
   title: string;
   status: MultiremiChatSessionStatus;
   sessionId: string | null;
@@ -4523,6 +4528,8 @@ export interface CreateChatSessionInput {
   creatorId?: string | null;
   creator_id?: string | null;
   title?: string | null;
+  projectId?: string | null;
+  project_id?: string | null;
 }
 
 export interface UpdateChatSessionInput {

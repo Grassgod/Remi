@@ -330,15 +330,44 @@ export function daemonTaskClaimResponse(
   }
   if (task.executionFingerprint === CHAT_ISSUE_DECOUPLED_FINGERPRINT) task = { ...task, sessionId: null };
   // Re-check the live destination even when the caller retained an earlier
-  // hydrated claim. A changed binding must never receive that old Issue prompt.
-  if (task.chatSessionId && store.getTaskChatExecutionKind(task) === "ordinary") {
+  // hydrated claim. Stale or unavailable bindings must not retain Project or Issue context.
+  const ordinaryChat = Boolean(task.chatSessionId && store.getTaskChatExecutionKind(task) === "ordinary");
+  if (ordinaryChat) {
+    const chat = store.getChatSession(task.chatSessionId!);
+    const currentProject = chat?.projectId ? store.getProject(chat.projectId) : null;
+    // A claim payload may have been retained across a resource mutation. Read
+    // the current hydrated task so stale assignments cannot restore a directory
+    // that the live workspace lineage has already rejected.
+    if (chat?.projectId) {
+      const current = store.getTaskWithAgent(task.id);
+      if (current) {
+        task = { ...task, sessionId: current.sessionId, workDir: current.workDir,
+          projectResources: current.projectResources };
+        if (task.runtimeId !== current.runtimeId) task = { ...task, sessionId: null, workDir: null, codexProfile: null, claudeProfile: null };
+      }
+    }
+    const keepProject = Boolean(currentProject && !currentProject.archivedAt
+      && currentProject.workspaceId === task.workspaceId && chat?.projectId && chat.workspaceId === task.workspaceId
+      && chat.projectId === task.chatProjectId && chat.projectId === task.project?.id
+      && task.project.workspaceId === task.workspaceId);
     task = {
       ...task, issueId: null, issueSessionId: null, issueSessionGeneration: null,
       sessionId: task.issueId || task.issueSessionId || task.executionFingerprint === CHAT_ISSUE_DECOUPLED_FINGERPRINT ? null : task.sessionId,
-      issue: null, project: null, projectResources: [], projectDocs: null, projectContexts: [], repos: [],
+      issue: null, triggerCommentId: null,
+      chatProjectId: keepProject ? chat!.projectId : null,
+      chatAutoCheckoutRepos: keepProject ? task.chatAutoCheckoutRepos : [],
+      project: keepProject ? task.project : null,
+      projectResources: keepProject ? task.projectResources : [],
+      projectDocs: keepProject ? task.projectDocs : null,
+      projectWikiDocs: keepProject ? task.projectWikiDocs : [],
+      repositoryWikiContexts: keepProject ? task.repositoryWikiContexts : [],
+      projectContexts: [], repos: keepProject ? task.repos : [],
+      knowledgeWarnings: keepProject ? task.knowledgeWarnings : [],
     };
+    triggerMetadata = null;
   }
   const response = daemonTaskWireResponse(task, triggerMetadata);
+  if (task.chatProjectId && task.chatProjectId === task.project?.id) response.chat_project_id = task.chatProjectId;
   const defaultBranchFor = workspaceDefaultBranchResolver(store.getWorkspace(task.workspaceId)?.repos ?? []);
   if (task.knowledgeWarnings?.length) response.knowledge_warnings = task.knowledgeWarnings;
   let projectionMode: "bootstrap" | "delta" | null = null;
@@ -474,6 +503,13 @@ export function daemonTaskClaimResponse(
   }
   if (task.repos.length) {
     response.repos = task.repos.map((repo) => ({
+      url: repo.url,
+      ...(repo.description ? { description: repo.description } : {}),
+      ...(repo.defaultBranch ? { default_branch: repo.defaultBranch } : {}),
+    }));
+  }
+  if (ordinaryChat && task.chatProjectId && task.chatAutoCheckoutRepos) {
+    response.chat_auto_checkout_repos = task.chatAutoCheckoutRepos.map((repo) => ({
       url: repo.url,
       ...(repo.description ? { description: repo.description } : {}),
       ...(repo.defaultBranch ? { default_branch: repo.defaultBranch } : {}),

@@ -2752,6 +2752,7 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_attachments", "chat_message_id TEXT");
   ensureIssueSubscriberTypedSchema(db);
   addColumnIfMissing(db, "multiremi_chat_sessions", "creator_id TEXT");
+  addColumnIfMissing(db, "multiremi_chat_sessions", "project_id TEXT");
   addColumnIfMissing(db, "multiremi_chat_sessions", "unread_since TEXT");
   addColumnIfMissing(db, "multiremi_chat_sessions", "pinned INTEGER NOT NULL DEFAULT 0");
   // Pool scheduling records the machine + engine that produced the promoted

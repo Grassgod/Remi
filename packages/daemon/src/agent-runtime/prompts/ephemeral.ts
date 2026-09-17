@@ -23,6 +23,10 @@ export interface BuildTaskPromptOptions {
   repoWarnings?: TaskRepoWarning[];
   sessionHistoryPaths?: string[];
   issueWorkspacePath?: string;
+  /** Actual workspace preparation result; false means Wiki is available through CLI only. */
+  wikiMaterialized?: boolean;
+  /** Actual workspace preparation mode; true only for eligible daemon-owned Project Chat workspaces. */
+  chatRepoAutoCheckout?: boolean;
 }
 
 export type TaskPromptMode = "bootstrap" | "delta";
@@ -55,7 +59,7 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
   if (task.chatSessionId) {
     sections.push("", "## Current Chat Attachment Delivery", CHAT_ARTIFACT_DELIVERY_CONTRACT);
   }
-  if (mode === "bootstrap") appendHomepageChatCliSection(sections, task);
+  if (mode === "bootstrap") appendHomepageChatCliSection(sections, task, opts.chatRepoAutoCheckout);
   appendSessionContextSections(sections, task, mode, opts.sessionHistoryPaths);
 
   if (task.issue) {
@@ -83,13 +87,13 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
 
   appendTriggerCommentSection(sections, task);
 
-  if (!privateChat) appendRepositoryWarnings(sections, opts.repoWarnings ?? []);
+  if (!privateChat || task.project) appendRepositoryWarnings(sections, opts.repoWarnings ?? [], privateChat);
   appendRepositoryWikiAvailabilityWarnings(sections, task);
   if (task.knowledgeWarnings?.length) {
     sections.push("", "## Knowledge Availability Warnings", ...task.knowledgeWarnings);
   }
 
-  appendProjectPromptSections(sections, task, mode);
+  appendProjectPromptSections(sections, task, mode, opts.wikiMaterialized);
   if (mode === "bootstrap" && task.issue) appendProjectDiscoverySection(sections);
 
   if (mode === "bootstrap" && task.repos.length && taskHoldsWorkspace(task)) {
@@ -98,7 +102,9 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
     sections.push("");
     sections.push("## Available Repositories");
     if (checkouts.length) {
-      sections.push("Repositories below marked with an absolute path are already checked out on the Issue branch; work at those paths directly, do not clone or re-checkout:");
+      sections.push(privateChat
+        ? "Repositories below marked with an absolute path are already checked out on the Chat session branch; work at those paths directly, do not clone or re-checkout:"
+        : "Repositories below marked with an absolute path are already checked out on the Issue branch; work at those paths directly, do not clone or re-checkout:");
     } else {
       sections.push("Use `remi repo checkout <url> [--ref <branch-or-sha>]` to check out repositories into the working directory.");
     }
@@ -160,6 +166,10 @@ function taskHoldsWorkspace(task: AgentTask): boolean {
 }
 
 function withoutIssueContext(task: AgentTask): AgentTask {
+  const chatProjectId = stringField(task, "chatProjectId", "chat_project_id");
+  const projectWorkspaceId = task.project?.workspaceId ?? task.project?.workspace_id;
+  const preserveProject = Boolean(chatProjectId && task.project?.id === chatProjectId
+    && (projectWorkspaceId === undefined || projectWorkspaceId === task.workspaceId));
   return {
     ...task,
     issueId: null,
@@ -173,12 +183,18 @@ function withoutIssueContext(task: AgentTask): AgentTask {
     inherited_session_projection: null,
     issueSessionResults: [],
     issue_session_results: [],
-    project: null,
-    projectResources: [],
-    repositoryWikiContexts: [],
-    repository_wiki_contexts: [],
-    knowledgeWarnings: [],
-    repos: [],
+    project: preserveProject ? task.project : null,
+    projectResources: preserveProject ? task.projectResources : [],
+    projectDocs: preserveProject ? task.projectDocs : null,
+    project_docs: preserveProject ? task.project_docs : null,
+    projectWikiDocs: preserveProject ? task.projectWikiDocs : [],
+    project_wiki_docs: preserveProject ? task.project_wiki_docs : [],
+    repositoryWikiContexts: preserveProject ? task.repositoryWikiContexts : [],
+    repository_wiki_contexts: preserveProject ? task.repository_wiki_contexts : [],
+    knowledgeWarnings: preserveProject ? task.knowledgeWarnings : [],
+    projectContexts: [],
+    project_contexts: [],
+    repos: preserveProject ? task.repos : [],
     squadContext: null,
     squad_context: null,
     triggerCommentId: null,
@@ -196,7 +212,7 @@ function appendWorkspacePromptSection(sections: string[], task: AgentTask, mode:
   sections.push(prompt);
 }
 
-function appendProjectPromptSections(sections: string[], task: AgentTask, mode: TaskPromptMode): void {
+function appendProjectPromptSections(sections: string[], task: AgentTask, mode: TaskPromptMode, wikiMaterialized?: boolean): void {
   if (!task.project) return;
   if (mode === "delta") {
     const deltaInstructions = task.project.deltaInstructions?.trim()
@@ -213,7 +229,9 @@ function appendProjectPromptSections(sections: string[], task: AgentTask, mode: 
   const projectInstructions = task.project.instructions?.trim();
   sections.push("");
   sections.push("## Project Context");
-  sections.push(`This issue belongs to project: ${task.project.title}`);
+  sections.push(task.chatSessionId && !task.issue
+    ? `This Chat is bound to project: ${task.project.title}`
+    : `This issue belongs to project: ${task.project.title}`);
   if (task.project.description) sections.push(task.project.description);
   if (gitResources.length) {
     sections.push("");
@@ -225,7 +243,7 @@ function appendProjectPromptSections(sections: string[], task: AgentTask, mode: 
     sections.push("## Project Instructions");
     sections.push(projectInstructions);
   }
-  appendProjectKnowledgeSections(sections, task.project.id);
+  appendProjectKnowledgeSections(sections, task.project.id, wikiMaterialized);
 }
 
 function appendProjectDiscoverySection(sections: string[]): void {
@@ -240,7 +258,7 @@ function appendProjectDiscoverySection(sections: string[]): void {
   );
 }
 
-function appendRepositoryWarnings(sections: string[], warnings: TaskRepoWarning[]): void {
+function appendRepositoryWarnings(sections: string[], warnings: TaskRepoWarning[], projectChat = false): void {
   if (!warnings.length) return;
   sections.push("");
   sections.push("## Repository Availability Warnings");
@@ -255,6 +273,9 @@ function appendRepositoryWarnings(sections: string[], warnings: TaskRepoWarning[
     } else {
       sections.push(`- ${repoUrl}: checkout is unavailable because repository preparation failed. Do not claim that you inspected its source code. Diagnostic: ${message}`);
     }
+  }
+  if (projectChat) {
+    sections.push("Chat can continue without these repositories. If repository files are needed after a preparation failure, run `remi repo checkout <repo-id>` explicitly and use the diagnostic above to resolve the failure. Preserve any existing worktree with uncommitted changes.");
   }
 }
 
@@ -402,12 +423,22 @@ function appendClaimContextSections(sections: string[], task: AgentTask, mode: T
   }
 }
 
-function appendHomepageChatCliSection(sections: string[], task: AgentTask): void {
+function appendHomepageChatCliSection(sections: string[], task: AgentTask, chatRepoAutoCheckout?: boolean): void {
   if (!task.chatSessionId || task.boundIssue || task.bound_issue) return;
   sections.push("");
   sections.push("## Remi Context");
+  if (task.project) sections.push(`Current Chat project: ${task.project.title} (${task.project.id}).`);
   sections.push("Use `remi context` for the current identity and allowed operations. Use `remi project list|get|search` and `remi repo list|get|search` to inspect the database-backed safe directory.");
-  sections.push("Repositories are not fetched for Chat startup, and `remi repo list` never contacts Git. Run `remi repo checkout <repo-id>` only when repository files are needed; checkout fetches that one repository and returns timeout or fetch failures as a tool error.");
+  if (task.project) {
+    if (chatRepoAutoCheckout) {
+      sections.push(`The daemon attempts automatic checkout only for repositories explicitly declared by this Project, including referenced Projects. New worktrees use the Chat session branch \`chat/${task.chatSessionId}\`. Existing checkouts are reused without fetching on later turns; consult the paths and preparation warnings below before using repository files.`);
+      sections.push("Use `remi repo checkout <repo-id>` explicitly when fresh repository files are needed or to retry a failed checkout; `remi repo list` never contacts Git.");
+    } else {
+      sections.push("Automatic repository checkout is disabled for this working directory; Chat startup does not clone, fetch, or replace repository files. Inspect existing files directly. Run `remi repo checkout <repo-id>` explicitly only when repository files are needed; `remi repo list` never contacts Git.");
+    }
+  } else {
+    sections.push("Repositories are not fetched for Chat startup, and `remi repo list` never contacts Git. Run `remi repo checkout <repo-id>` only when repository files are needed; checkout fetches that one repository and returns timeout or fetch failures as a tool error.");
+  }
 }
 
 function appendSessionContextSections(sections: string[], task: AgentTask, mode: TaskPromptMode, historyPaths?: string[]): void {
@@ -718,17 +749,21 @@ function appendBoundIssueFollowupSection(sections: string[], issueId: string): v
   sections.push("After a verified handoff, finish this Chat turn. Do not wait or poll until the work finishes; the existing Issue work-round reporting path brings the responsible agent's completed round back to this topic. Do not promise a completion notification for a failed/cancelled task or issue an unsolicited follow-up task while summarizing a report.");
 }
 
-function appendProjectKnowledgeSections(sections: string[], projectId: string): void {
+function appendProjectKnowledgeSections(sections: string[], projectId: string, wikiMaterialized?: boolean): void {
   sections.push("");
   sections.push("## Project Knowledge");
   sections.push("Project Memory is not embedded in this prompt. Use the `remi memory` CLI only: first run `remi memory search \"<query>\"`, then `remi memory get <slug-or-id>` for relevant hits before relying on them.");
   sections.push("Do not use an MCP server for Project Memory. The task environment already scopes these commands to the current project.");
   sections.push("");
-  sections.push("Project Wiki is materialized in `./wiki`. Repository code facts are materialized in `./wiki/repositories/<repository>/`. Edit files only below `./wiki`; `.multiremi/wiki-base` is a read-only merge baseline and must not be edited.");
+  if (wikiMaterialized === false) {
+    sections.push("Project Wiki has not been materialized in this working directory. Use `remi wiki search` and `remi wiki get` to read the current project's Wiki through the CLI. Use `remi wiki --help` to discover supported write commands.");
+  } else {
+    sections.push("Project Wiki is materialized in `./wiki`. Repository code facts are materialized in `./wiki/repositories/<repository>/`. Edit files only below `./wiki`; `.multiremi/wiki-base` is a read-only merge baseline and must not be edited.");
+  }
   sections.push("Repository Wiki is shared by every Project that references the same repository. Keep code-level facts there; keep cross-repository decisions and synthesis in the Project Wiki.");
   sections.push("For every non-empty Wiki, maintain a non-empty root `index.md` as its curated reading map and append every publication to a non-empty root `log.md` without rewriting earlier entries. Beyond those two root files, let project and repository semantics determine whether `overview.md`, directories, or nesting are useful; do not impose fixed directory names, per-directory overview pages, or arbitrary depth limits, and do not mechanically mirror source paths.");
   sections.push("Search before creating a page. When facts overlap across pages, merge them into the authoritative page with all source references preserved instead of adding another near-duplicate page.");
-  sections.push("Before finishing, run `remi wiki status` and `remi wiki push`. Push performs a three-way merge; resolve any reported conflicts in `./wiki`, then retry the push.");
+  if (wikiMaterialized !== false) sections.push("Before finishing, run `remi wiki status` and `remi wiki push`. Push performs a three-way merge; resolve any reported conflicts in `./wiki`, then retry the push.");
   sections.push(`When durable Memory changes, search before writing and update an existing entry instead of creating a duplicate. Use \`remi memory create|update\` (project ${projectId}), cite \`issue:\`/\`task:\`/\`url:\` provenance, and skip one-off details.`);
 }
 

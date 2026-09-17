@@ -30,6 +30,23 @@ beforeEach(() => {
 afterEach(() => qc.clear());
 
 describe("chat queue realtime", () => {
+  it("writes preparation progress only to the matching pending head", () => {
+    handlers["task:progress"]?.({ chat_session_id: "chat-1", task_id: "task-1", progress_summary: "正在准备项目仓库…" });
+    expect(qc.getQueryData(chatKeys.pendingTask("chat-1"))).toMatchObject({
+      task_id: "task-1", status: "running", progress_summary: "正在准备项目仓库…", queued_tasks: [queued],
+    });
+    for (const payload of [
+      null,
+      { chat_session_id: "chat-1", task_id: "task-2", progress_summary: "Follow-up" },
+      { chat_session_id: "chat-1", task_id: "task-1", progress_summary: {} },
+      { chat_session_id: "chat-1", task_id: "task-1" },
+      { task_id: "task-1", progress_summary: "Issue task" },
+    ]) handlers["task:progress"]?.(payload);
+    expect(qc.getQueryData<ChatPendingTask>(chatKeys.pendingTask("chat-1"))?.progress_summary).toBe("正在准备项目仓库…");
+    handlers["task:progress"]?.({ chat_session_id: "chat-1", task_id: "task-1", progress_summary: null });
+    expect(qc.getQueryData<ChatPendingTask>(chatKeys.pendingTask("chat-1"))?.progress_summary).toBeNull();
+  });
+
   it("does not replace a running head or reset its status when a follow-up is queued", () => {
     handlers["task:queued"]?.({ chat_session_id: "chat-1", task_id: "task-2" });
     handlers["task:queued"]?.({ chat_session_id: "chat-1", task_id: "task-1" });

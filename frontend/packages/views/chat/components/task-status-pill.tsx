@@ -167,6 +167,10 @@ export function TaskStatusPill({
   const status = taskMessages.length > 0 ? "running" : pendingTask.status;
   const elapsedSecs = Math.max(0, Math.floor((now - anchor) / 1000));
   const stage = resolveStage(status, taskMessages, availability);
+  const preparationSummary = taskMessages.length === 0 && !stage.static
+    && (status === "running" || status === "dispatched")
+    && typeof pendingTask.progress_summary === "string"
+    ? pendingTask.progress_summary.trim() : "";
 
   return (
     <div
@@ -178,7 +182,7 @@ export function TaskStatusPill({
       )}
       <span className="truncate">
         <span className={cn(!stage.static && "animate-chat-text-shimmer")}>
-          {stage.label}
+          {preparationSummary || stage.label}
         </span>
         <span className="opacity-70"> · {formatElapsedSecs(elapsedSecs)}</span>
       </span>
