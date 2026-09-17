@@ -1468,6 +1468,8 @@ export interface MultiremiTaskTriggerMetadata {
 }
 
 export interface MultiremiTaskWithAgent extends MultiremiTask {
+  issueSession?: MultiremiIssueSession | null;
+  issue_session?: MultiremiIssueSession | null;
   /** Explicit Chat binding; consumers must match this to project.id. */
   chatProjectId?: string | null;
   /** Explicit Project repositories eligible for Chat checkout; never includes the workspace fallback catalog. */
@@ -2204,6 +2206,12 @@ export type MultiremiSessionParticipantType = "agent" | "member";
 export type MultiremiSessionProjectionMode = "bootstrap" | "delta" | "inherited_delta";
 
 export interface MultiremiIssueSession {
+  /** Opt-in detached, read-only code from the parent workspace. */
+  withCode?: boolean;
+  with_code?: boolean;
+  /** Parent Runtime captured at creation; its daemon owns the repository cache. */
+  codeRuntimeId?: string | null;
+  code_runtime_id?: string | null;
   id: string;
   issueId: string;
   issue_id?: string;
@@ -2371,6 +2379,8 @@ export interface MultiremiSessionProjection {
 }
 
 export interface CreateIssueSessionInput {
+  withCode?: boolean;
+  with_code?: boolean;
   id?: string;
   issueId?: string;
   issue_id?: string;

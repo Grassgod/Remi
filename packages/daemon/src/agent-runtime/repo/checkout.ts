@@ -33,6 +33,8 @@ export interface MultiremiWorktreeParams {
   reuseExisting?: boolean;
   /** The caller already refreshed this repo in the same preparation flow. */
   skipFetch?: boolean;
+  /** Create a read-only detached worktree from an explicit full ref or commit OID. */
+  detach?: boolean;
   signal?: AbortSignal;
 }
 
@@ -373,6 +375,7 @@ export class MultiremiRepoCache {
     barePath: string,
     params: MultiremiWorktreeParams,
   ): Promise<MultiremiWorktreeResult> {
+    if (params.detach) return this.createDetachedWorktreeLocked(barePath, params);
     const worktreePath = join(params.workDir, worktreeDirectoryName(params.repoUrl));
     const legacyWorktreePath = join(params.workDir, repoNameFromUrl(params.repoUrl));
     if (
@@ -435,6 +438,54 @@ export class MultiremiRepoCache {
     excludeAgentFiles(worktreePath);
     applyCoAuthoredByHook(worktreePath, params.coAuthoredByEnabled !== false);
     return { path: worktreePath, branch_name: branchName, branchName, created: true, ...worktreeBaseResult(worktreePath, resolution) };
+  }
+
+  private async createDetachedWorktreeLocked(
+    barePath: string,
+    params: MultiremiWorktreeParams,
+  ): Promise<MultiremiWorktreeResult> {
+    const baseRef = params.ref?.trim();
+    if (!baseRef || (!baseRef.startsWith("refs/") && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(baseRef))) {
+      throw new Error("detached worktree requires an explicit full ref or commit OID");
+    }
+    if (baseRef.startsWith("refs/")) git(barePath, ["check-ref-format", baseRef]);
+    if (params.branchName) throw new Error("detached worktree cannot request a branch name");
+    const worktreePath = this.expectedWorktreePath(params.workDir, params.repoUrl);
+    const result = (created: boolean): MultiremiWorktreeResult => {
+      const commit = git(worktreePath, ["rev-parse", "--verify", "HEAD^{commit}"]);
+      return {
+        path: worktreePath, branch_name: "HEAD", branchName: "HEAD", created,
+        base_ref: baseRef, baseRef, base_commit: commit, baseCommit: commit,
+      };
+    };
+    if (this.hasWorktree(params)) {
+      const branch = git(worktreePath, ["symbolic-ref", "--quiet", "HEAD"], { allowFailure: true });
+      if (branch) throw new Error(`worktree ${worktreePath} is on ${branch}; refusing to detach an existing branch`);
+      // A side conversation keeps its original snapshot even if the parent's
+      // branch advances or disappears. Never reset or re-resolve that branch.
+      const existing = result(false);
+      makeTreeReadOnly(worktreePath);
+      return existing;
+    }
+    if (!params.skipFetch) {
+      await this.fetch(barePath, {
+        env: this.gitAuth(params.workspaceId, params.repoUrl),
+        signal: params.signal,
+      });
+    }
+    // Resolve exactly the caller's local ref under the repository lock, without
+    // origin/default-branch fallback. This includes unpushed Issue commits.
+    const commit = git(barePath, ["rev-parse", "--verify", `${baseRef}^{commit}`]);
+    mkdirSync(params.workDir, { recursive: true });
+    if (lstatSync(params.workDir).isSymbolicLink()) {
+      throw new Error(`unsafe managed worktree parent: ${params.workDir}`);
+    }
+    // GC removes the private directory; the next add collects its stale
+    // registration through the same lazy pruning as regular worktrees.
+    git(barePath, ["worktree", "prune"], { allowFailure: true });
+    git(barePath, ["worktree", "add", "--detach", worktreePath, commit]);
+    makeTreeReadOnly(worktreePath);
+    return result(true);
   }
 
   private barePath(workspaceId: string, repoUrl: string): string {

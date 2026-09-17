@@ -3,6 +3,7 @@ import {
   chmodSync,
   closeSync,
   constants,
+  fchmodSync,
   fstatSync,
   lstatSync,
   mkdirSync,
@@ -186,6 +187,9 @@ function removeWithDirectoryDescriptors(
 
     options.assertRootOwner?.();
     assertSameFile(rootInfo, fstatSync(rootFd), "owned root changed before quarantine");
+    // A cross-parent directory rename updates '..' and requires owner write
+    // access. Change only the verified root fd until it is quarantined.
+    fchmodSync(targetFd, targetInfo.mode | 0o700);
     renameSync(sourcePath, quarantinedPath);
     assertSameFile(targetInfo, lstatSync(quarantinedPath), "quarantined directory identity changed");
     assertSameFile(targetInfo, fstatSync(targetFd), "opened deletion target identity changed");

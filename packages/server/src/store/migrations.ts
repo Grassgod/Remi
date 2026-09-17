@@ -834,6 +834,8 @@ export function runMigrations(db: SqlDatabase): void {
       inherit_cutoff_seq INTEGER,
       inherited_tokens_total INTEGER NOT NULL DEFAULT 0,
       follow_frozen_seq INTEGER,
+      with_code INTEGER NOT NULL DEFAULT 0,
+      code_runtime_id TEXT,
       summary TEXT,
       created_by_type TEXT NOT NULL DEFAULT 'member',
       created_by_id TEXT,
@@ -2750,6 +2752,8 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_issue_sessions", "inherit_cutoff_seq INTEGER");
   addColumnIfMissing(db, "multiremi_issue_sessions", "inherited_tokens_total INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(db, "multiremi_issue_sessions", "follow_frozen_seq INTEGER");
+  addColumnIfMissing(db, "multiremi_issue_sessions", "with_code INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "multiremi_issue_sessions", "code_runtime_id TEXT");
   // Agent auto-reply comments point back at the run that produced them, so the
   // chat stream can open that task's transcript. Forward-only: no backfill.
   addColumnIfMissing(db, "multiremi_issue_comments", "task_id TEXT");

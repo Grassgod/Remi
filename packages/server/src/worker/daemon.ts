@@ -71,7 +71,8 @@ import {
   localSkillRootForProvider,
   scanRuntimeDirectories,
 } from "./local-skills.js";
-import { isSideConversation } from "@daemon/agent-runtime/prompts/side-conversation.js";
+import { hasReadOnlyCodeSnapshot, isSideConversation } from "@daemon/agent-runtime/prompts/side-conversation.js";
+import type { TaskRepoSnapshot } from "@daemon/agent-runtime/prompts/ephemeral.js";
 import { buildTaskPromptArtifact, type TaskRepoCheckout, type TaskRepoWarning } from "@multiremi/prompt.js";
 import {
   MultiremiRepoCache,
@@ -94,6 +95,7 @@ import {
   writeAgentSkillContext,
 } from "@daemon/agent-runtime/skills/ephemeral.js";
 import { prepareIntakeWorkspace } from "@daemon/agent-runtime/workspace/intake.js";
+import { prepareReadOnlyCodeWorkspace } from "@daemon/agent-runtime/workspace/readonly-code.js";
 import {
   assertIssueSessionNativeCodexOAuth,
   cleanupTemporaryTaskProviderHome,
@@ -480,6 +482,7 @@ interface RunSummary {
 
 interface PreparedIssueWorkspace {
   wikiMaterialized?: boolean;
+  snapshots?: TaskRepoSnapshot[];
   checkouts: TaskRepoCheckout[];
   repos: MultiremiIssueWorkspaceRepo[];
   warnings: TaskRepoWarning[];
@@ -3184,6 +3187,13 @@ export class MultiremiDaemon {
     syncResults: MultiremiRepoSyncResult[],
     signal: AbortSignal,
   ): Promise<PreparedIssueWorkspace> {
+    if (hasReadOnlyCodeSnapshot(task)) {
+      if (!resolvedWorkDir.ensureDir || resolvedWorkDir.localDirectory) {
+        throw new Error("Read-only code snapshots require a daemon-owned discussion workspace");
+      }
+      this.assertWorkspaceRootOwner();
+      return prepareReadOnlyCodeWorkspace(resolvedWorkDir.workDir, task, this.repoCache, signal);
+    }
     if (task.holdsWorkspace === false) return { checkouts: [], repos: [], warnings: [] };
     if (task.issue?.issueKind !== "intake") {
       const prepared = await this.autoCheckoutTaskRepos(task, resolvedWorkDir, syncResults, signal);
@@ -3657,6 +3667,7 @@ export class MultiremiDaemon {
       const promptArtifact = buildTaskPromptArtifact(task, {
         wikiMaterialized,
         repoCheckouts: preparedWorkspace.checkouts,
+        repoSnapshots: preparedWorkspace.snapshots,
         repoWarnings: preparedWorkspace.warnings,
         chatRepoAutoCheckout,
         issueWorkspacePath: codeWorkDir,

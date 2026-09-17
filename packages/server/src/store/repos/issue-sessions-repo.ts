@@ -90,6 +90,14 @@ export class IssueSessionsRepo {
       throw new Error("parent_session_id must be a non-empty string");
     }
     const parentSessionId = parentInput?.trim() ?? null;
+    const withCode = input.withCode ?? input.with_code ?? false;
+    for (const requested of [input.withCode, input.with_code]) {
+      if (requested !== undefined && (typeof requested !== "boolean" || requested !== withCode)) {
+        throw new Error("with_code must be a boolean; withCode and with_code must agree");
+      }
+    }
+    if (withCode && !parentSessionId) throw new Error("with_code requires parent_session_id");
+    let codeRuntimeId: string | null = null;
     const requestedInheritMode = input.inheritMode ?? input.inherit_mode;
     const inheritMode = requestedInheritMode ?? (parentSessionId ? "snapshot" : "none");
     if (parentSessionId ? inheritMode !== "snapshot" && inheritMode !== "follow" : inheritMode !== "none") {
@@ -110,16 +118,26 @@ export class IssueSessionsRepo {
         "SELECT COALESCE(MAX(seq), 0) AS seq FROM multiremi_session_events WHERE session_id = ?",
       ).get(parentSessionId) as { seq: number } | null;
       inheritCutoffSeq = Number(max?.seq ?? 0);
+      if (withCode) {
+        const lane = this.ctx.db.query(
+          `SELECT lane.runtime_id FROM multiremi_session_agent_lanes lane
+           JOIN multiremi_runtimes runtime ON runtime.id = lane.runtime_id
+           WHERE lane.session_id = ? AND COALESCE(runtime.workspace_id, 'local') = ?
+           ORDER BY lane.updated_at DESC, lane.agent_id, lane.execution_scope LIMIT 1`,
+        ).get(parentSessionId, issue.workspaceId) as Row | null;
+        codeRuntimeId = nullableString(lane?.runtime_id);
+        if (!codeRuntimeId) throw new Error("with_code requires a parent session lane with a runtime");
+      }
     }
     const holdsWorkspace = parentSessionId ? false : requestedHoldsWorkspace;
     this.ctx.db.run(
       `INSERT INTO multiremi_issue_sessions (
          id, issue_id, workspace_id, title, status, is_default, holds_workspace,
-         parent_session_id, inherit_mode, inherit_cutoff_seq,
+         parent_session_id, inherit_mode, inherit_cutoff_seq, with_code, code_runtime_id,
          created_by_type, created_by_id, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, 'active', 0, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, 'active', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [id, issueId, issue.workspaceId, title, holdsWorkspace ? 1 : 0,
-        parentSessionId, inheritMode, inheritCutoffSeq, createdByType, createdById, now, now],
+        parentSessionId, inheritMode, inheritCutoffSeq, withCode ? 1 : 0, codeRuntimeId, createdByType, createdById, now, now],
     );
     if (createdById && (createdByType === "member" || createdByType === "agent")) {
       this.addSessionParticipant(id, {
@@ -665,6 +683,10 @@ function toIssueSession(row: Row): MultiremiIssueSession {
     is_default: isDefault,
     holdsWorkspace,
     holds_workspace: holdsWorkspace,
+    withCode: Boolean(Number(row.with_code ?? 0)),
+    with_code: Boolean(Number(row.with_code ?? 0)),
+    codeRuntimeId: nullableString(row.code_runtime_id),
+    code_runtime_id: nullableString(row.code_runtime_id),
     parentSessionId,
     parent_session_id: parentSessionId,
     inheritMode,

@@ -49,6 +49,8 @@ export const IssueSessionSchema = z.object({
   status: z.string(),
   is_default: z.boolean().default(false),
   holds_workspace: z.boolean().default(true),
+  with_code: z.boolean().optional(),
+  code_runtime_id: z.string().nullable().optional(),
   parent_session_id: z.string().nullable().default(null),
   inherit_mode: z.enum(["none", "snapshot", "follow"]).catch("none"),
   inherit_cutoff_seq: z.number().nullable().default(null),

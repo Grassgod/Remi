@@ -18,3 +18,13 @@ export function isSideConversation(task: AgentTask): boolean {
   return Boolean((mode && mode !== "none")
     || task.inheritedSessionProjection || task.inherited_session_projection);
 }
+
+/** Only an explicit inherited Issue Session may mount its parent's code. */
+export function hasReadOnlyCodeSnapshot(task: AgentTask): boolean {
+  const session = task.issueSession ?? task.issue_session;
+  const mode = session?.inheritMode ?? session?.inherit_mode;
+  return isSideConversation(task)
+    && Boolean(session?.parentSessionId ?? session?.parent_session_id)
+    && (mode === "snapshot" || mode === "follow")
+    && (session?.withCode ?? session?.with_code) === true;
+}

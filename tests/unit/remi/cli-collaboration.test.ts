@@ -497,6 +497,32 @@ describe("native collaboration CLI contracts", () => {
       .toContain("--inherit-mode <snapshot|follow>");
   });
 
+  it("opts into code snapshots independently of inheritance mode and defaults to no code", async () => {
+    useCliEnv();
+    const spec = specById("session.create");
+    const bodies: unknown[] = [];
+    globalThis.fetch = capabilityFetch(spec.id, async (request) => {
+      expect(new URL(request.url).pathname).toBe("/api/issues/MUL-324/sessions");
+      bodies.push(await request.json());
+      return Response.json({ id: "ises_code" }, { status: 201 });
+    });
+    for (const inheritMode of ["snapshot", "follow"]) {
+      for (const extra of [[], ["--with-code"]]) {
+        await capture(() => registryFor([spec]).execute([
+          "session", "create", "MUL-324", "--from", "ises_main", "--inherit-mode", inheritMode, ...extra,
+        ]));
+      }
+    }
+    expect(bodies).toEqual([
+      { holds_workspace: false, parent_session_id: "ises_main", inherit_mode: "snapshot" },
+      { holds_workspace: false, parent_session_id: "ises_main", inherit_mode: "snapshot", with_code: true },
+      { holds_workspace: false, parent_session_id: "ises_main", inherit_mode: "follow" },
+      { holds_workspace: false, parent_session_id: "ises_main", inherit_mode: "follow", with_code: true },
+    ]);
+    expect(registryFor([spec]).renderHelpForArgv(["session", "create", "--help"]))
+      .toContain("--with-code");
+  });
+
   it("keeps missing Session diagnostics distinct from a recorded untruncated projection", async () => {
     useCliEnv();
     const spec = specById("session.show");

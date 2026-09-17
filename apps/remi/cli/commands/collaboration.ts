@@ -235,6 +235,8 @@ function sessionCommandSpecs(): CommandSpec[] {
           { header: "TITLE", value: (row) => row.title },
           { header: "STATUS", value: (row) => row.status },
           { header: "PARENT", value: (row) => row.parent_session_id ?? "-" },
+          { header: "WITH CODE", value: (row) => row.with_code ?? false },
+          { header: "CODE RUNTIME", value: (row) => row.code_runtime_id ?? "-" },
           { header: "INHERIT", value: (row) => row.inherit_mode ?? "none" },
           { header: "CUTOFF", value: (row) => row.inherit_cutoff_seq ?? "-" },
           { header: "INHERITED EVENTS (PRE-TRUNCATION)", value: (row) => row.inherited_event_count ?? 0 },
@@ -278,6 +280,7 @@ function sessionCommandSpecs(): CommandSpec[] {
       ...INPUT_OPTIONS, ...titleStatusOptions(), discussionOption(),
       { name: "from", type: "string", valueName: "session-id", description: "Inherit parent Session context (implies --discussion; snapshot by default)" },
       { name: "inherit-mode", type: "string", valueName: "snapshot|follow", description: "Use a frozen snapshot or follow new parent events (requires --from)" },
+      { name: "with-code", type: "boolean", description: "Attach a read-only parent code snapshot (requires --from and a parent Runtime)" },
     ], async (invocation) => {
       const parentSessionId = stringOption(invocation, "from");
       const body = await requestBody(invocation, {
@@ -285,6 +288,7 @@ function sessionCommandSpecs(): CommandSpec[] {
         holds_workspace: invocation.options.discussion === true || parentSessionId ? false : undefined,
         parent_session_id: parentSessionId ?? undefined,
         inherit_mode: stringOption(invocation, "inherit-mode") ?? undefined,
+        with_code: invocation.options["with-code"] === true ? true : undefined,
       });
       await mutateAndRender(invocation, "POST", `/api/issues/${encodePath(positional(invocation, 0, "issue"))}/sessions`, body);
     }),

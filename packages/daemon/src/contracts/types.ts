@@ -93,6 +93,10 @@ export interface AgentTaskIssue {
 }
 
 export interface AgentTaskIssueSession {
+  withCode?: boolean;
+  with_code?: boolean;
+  codeRuntimeId?: string | null;
+  code_runtime_id?: string | null;
   id: string;
   parentSessionId?: string | null;
   parent_session_id?: string | null;

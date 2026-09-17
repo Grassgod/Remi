@@ -11,7 +11,7 @@
 import type { AgentTask } from "@daemon/contracts/types.js";
 import type { IssueSessionProviderHome } from "../workspace/session-home.js";
 import { appendGitCredentialBrokerEnv } from "../repo/credential-broker.js";
-import { isSideConversation, SIDE_CONVERSATION_INSTRUCTIONS } from "../prompts/side-conversation.js";
+import { hasReadOnlyCodeSnapshot, isSideConversation, SIDE_CONVERSATION_INSTRUCTIONS } from "../prompts/side-conversation.js";
 
 export interface BuildTaskEnvOptions {
   /** Port of the daemon's local repo-checkout server. */
@@ -65,7 +65,7 @@ export function buildTaskEnv(task: AgentTask, opts: BuildTaskEnvOptions): Record
         : {}),
     ...(taskAuthToken ? { MULTIREMI_TOKEN: taskAuthToken } : {}),
   };
-  const brokerEnv = appendGitCredentialBrokerEnv(env, {
+  const brokerEnv = hasReadOnlyCodeSnapshot(task) ? readOnlyGitEnv(env) : appendGitCredentialBrokerEnv(env, {
     serverUrl: opts.serverUrl,
     token: taskAuthToken,
     workspaceId: task.workspaceId,
@@ -79,6 +79,32 @@ export function buildTaskEnv(task: AgentTask, opts: BuildTaskEnvOptions): Record
     preserveSideCodexInstructions(brokerEnv);
   }
   return cleanProcessEnv(brokerEnv);
+}
+
+/** Keep Git's local read commands usable without injecting remote credentials. */
+function readOnlyGitEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base };
+  // ACP overlays this on process.env. Empty values are deliberate tombstones:
+  // deleting a key here would reveal the machine's value again at spawn time.
+  for (const key of new Set([...Object.keys(process.env), ...Object.keys(base)])) {
+    if (/^GIT_CONFIG_(?:KEY_|VALUE_|PARAMETERS$|COUNT$)/.test(key)
+      || key.startsWith("MULTIREMI_GIT_")
+      || /^(?:GH|GITHUB|GLAB|GITLAB|CODEBASE|GIT)_(?:.*_)?(?:TOKEN|PASSWORD|ACCESS_TOKEN)$/.test(key)) {
+      env[key] = "";
+    }
+  }
+  return Object.assign(env, {
+    GH_TOKEN: "", GITHUB_TOKEN: "", GH_ENTERPRISE_TOKEN: "", GITHUB_ENTERPRISE_TOKEN: "",
+    GITLAB_TOKEN: "", GLAB_TOKEN: "", CODEBASE_TOKEN: "",
+    GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "Never",
+    GIT_ASKPASS: "/bin/false", SSH_ASKPASS: "/bin/false", SSH_AUTH_SOCK: "",
+    GIT_SSH: "/bin/false", GIT_SSH_COMMAND: "/bin/false",
+    GIT_CONFIG_PARAMETERS: "", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_COUNT: "3",
+    GIT_CONFIG_KEY_0: "credential.helper", GIT_CONFIG_VALUE_0: "",
+    GIT_CONFIG_KEY_1: "credential.interactive", GIT_CONFIG_VALUE_1: "false",
+    GIT_CONFIG_KEY_2: "http.extraHeader", GIT_CONFIG_VALUE_2: "",
+  });
 }
 
 /** ACP sends CODEX_CONFIG as per-thread overrides, ahead of private config.toml. */
