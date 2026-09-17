@@ -10,6 +10,7 @@ import { WorkspacesRepo } from "@multiremi/store/repos/workspaces-repo.js";
 // (./runtime-request-queue.ts) and configured by the specs below. Each family keeps its
 // own `create` (distinct INSERT columns) and `report` (distinct completed-branch payload); `get`,
 // `claim` and the timeout sweep are the shared template.
+import { canonicalJson } from "@multiremi/agent-plugins/import.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { parseRuntimeCodexProfile, type RuntimeCodexProfile } from "@multiremi/contracts/codex-profile";
 import { parseRuntimeClaudeProfile, type RuntimeClaudeProfile } from "@multiremi/contracts/claude-profile";
@@ -251,9 +252,14 @@ export class RuntimesRepo {
   }
 
   listWorkspaceProviderProfileModels(workspaceId: string, provider: "codex" | "claude"): string[] {
-    const rows = this.ctx.db.query(`SELECT p.profile FROM multiremi_runtime_${provider}_profiles p
-      JOIN multiremi_runtimes r ON r.id = p.runtime_id WHERE COALESCE(r.workspace_id, 'local') = ?`).all(workspaceId) as { profile: string }[];
-    return rows.map(row => (provider === "codex" ? parseRuntimeCodexProfile : parseRuntimeClaudeProfile)(JSON.parse(row.profile))!.model);
+    const rows = this.ctx.db.query(`SELECT p.profile, m.model_id FROM multiremi_runtime_${provider}_profiles p
+      JOIN multiremi_runtimes r ON r.id = p.runtime_id
+      LEFT JOIN multiremi_runtime_models m ON m.runtime_id = r.id
+      WHERE COALESCE(r.workspace_id, 'local') = ?`).all(workspaceId) as { profile: string; model_id: string | null }[];
+    return [...new Set(rows.flatMap(row => [
+      (provider === "codex" ? parseRuntimeCodexProfile : parseRuntimeClaudeProfile)(JSON.parse(row.profile))!.model,
+      ...(row.model_id ? [row.model_id] : []),
+    ]))];
   }
 
   getRuntimeProviderKey(runtimeId: string, credentialId: string): string | null {
@@ -287,7 +293,7 @@ export class RuntimesRepo {
       } else {
         this.ctx.db.run(`DELETE FROM multiremi_runtime_${provider}_profiles WHERE runtime_id = ?`, [id]);
       }
-      this.replaceRuntimeModelsWithinTransaction(id, profile ? [{ id: profile.model, label: profile.model, provider, default: true }] : [], provider, nowIso());
+      this.replaceRuntimeModelsWithinTransaction(id, profile ? [{ id: profile.model, label: profile.model, provider, default: true }] : [], provider, nowIso(), profile);
       return profile;
     });
   }
@@ -1042,12 +1048,13 @@ export class RuntimesRepo {
     return this.listRuntimeModelsForExistingRuntime(runtimeId);
   }
 
-  updateRuntimeModels(runtimeId: string, models: MultiremiRuntimeModel[]): MultiremiRuntimeModel[] {
+  updateRuntimeModels(runtimeId: string, models: MultiremiRuntimeModel[], modelProfile?: RuntimeCodexProfile | null): MultiremiRuntimeModel[] {
+    let accepted = false;
     const updated = this.withRuntimeLifecycleLock(runtimeId, (runtime) => {
-      this.replaceRuntimeModelsWithinTransaction(runtimeId, models, runtime.provider, nowIso());
+      accepted = this.replaceRuntimeModelsWithinTransaction(runtimeId, models, runtime.provider, nowIso(), modelProfile);
       return this.listRuntimeModelsForExistingRuntime(runtimeId);
     });
-    this.publishRuntimeModelsUpdated(runtimeId);
+    if (accepted) this.publishRuntimeModelsUpdated(runtimeId);
     return updated;
   }
 
@@ -1092,12 +1099,18 @@ export class RuntimesRepo {
     if (status === "completed") {
       this.withRuntimeLifecycleLock(runtimeId, (runtime) => {
         const models = normalizeRuntimeModels(input.models ?? [], runtime.provider);
-        this.replaceRuntimeModelsWithinTransaction(runtimeId, models, runtime.provider, now);
+        if (!this.replaceRuntimeModelsWithinTransaction(runtimeId, models, runtime.provider, now, input.model_profile)) {
+          this.ctx.db.run(
+            `UPDATE multiremi_runtime_model_list_requests SET status = 'failed', error = ?, updated_at = ? WHERE id = ?`,
+            ["Runtime connection changed during model discovery; refresh with an updated daemon", now, requestId],
+          );
+          return;
+        }
         this.ctx.db.run(
           `UPDATE multiremi_runtime_model_list_requests
            SET status = 'completed', models = ?, supported = ?, error = NULL, updated_at = ?
            WHERE id = ?`,
-          [toJson(models), input.supported === false ? 0 : 1, now, requestId],
+          [toJson(this.listRuntimeModelsForExistingRuntime(runtimeId)), input.supported === false ? 0 : 1, now, requestId],
         );
       });
     } else {
@@ -1108,8 +1121,9 @@ export class RuntimesRepo {
         [input.error ?? "runtime model list failed", now, requestId],
       );
     }
-    if (status === "completed") this.publishRuntimeModelsUpdated(runtimeId);
-    return this.getRuntimeModelListRequest(runtimeId, requestId)!;
+    const result = this.getRuntimeModelListRequest(runtimeId, requestId)!;
+    if (result.status === "completed") this.publishRuntimeModelsUpdated(runtimeId);
+    return result;
   }
 
   createRuntimeDirectoryScanRequest(runtimeId: string, params: { root?: string; maxDepth?: number; mode?: "scan" | "browse" } = {}): MultiremiRuntimeDirectoryScanRequest {
@@ -1981,8 +1995,12 @@ export class RuntimesRepo {
     models: MultiremiRuntimeModel[],
     provider: string,
     now = nowIso(),
-  ): void {
+    modelProfile?: RuntimeCodexProfile | null,
+  ): boolean {
     const profile = this.getRuntimeExecutionProfile(runtimeId, provider);
+    // A report belongs to the connection it probed. Legacy custom reports have
+    // no identity and must not replace a directory discovered for a newer one.
+    if (modelProfile === undefined ? profile !== null : canonicalJson(modelProfile) !== canonicalJson(profile)) return false;
     const normalized = normalizeRuntimeModels(profile ? runtimeConnectionModels(profile, provider, models) : models, provider);
     this.ctx.db.run("DELETE FROM multiremi_runtime_models WHERE runtime_id = ?", [runtimeId]);
     for (const model of normalized) {
@@ -2002,6 +2020,7 @@ export class RuntimesRepo {
         ],
       );
     }
+    return true;
   }
 
   private runtimeUsageSummary(runtimeId: string): Pick<MultiremiRuntime,

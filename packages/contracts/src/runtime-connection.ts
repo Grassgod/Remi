@@ -18,14 +18,17 @@ export interface RuntimeConnectionProfileInput extends RuntimeConnectionProfileC
   api_key?: string;
 }
 
-/** Keep only the configured model, retaining capabilities reported for that exact ID. */
+/** Preserve the discovered catalog and exact-model capabilities, keeping the configured default. */
 export function runtimeConnectionModels<T extends { id: string; label: string }>(
   profile: RuntimeConnectionProfile,
   provider: string,
   models: readonly T[],
 ) {
   const reported = models.find((model) => model.id === profile.model);
-  return [{ ...reported, id: profile.model, label: reported?.label ?? profile.model, provider, default: true }];
+  return [
+    { ...reported, id: profile.model, label: reported?.label ?? profile.model, provider, default: true },
+    ...models.filter(model => model.id !== profile.model).map(model => ({ ...model, provider, default: false })),
+  ];
 }
 
 /** Shared by the control plane and daemon; never accept executable TOML or inline secrets. */
