@@ -22,7 +22,6 @@ export interface CreateChatSessionInput {
 }
 
 export interface UpdateChatSessionInput {
-  project_id?: string | null;
   title?: string;
   status?: "active" | "archived";
   pinned?: boolean;

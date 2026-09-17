@@ -489,7 +489,7 @@ function chatCommandSpecs(): CommandSpec[] {
   const chatFields: readonly CliOptionSpec[] = [
     { name: "title", type: "string", valueName: "title", description: "Chat title" },
     { name: "agent", type: "string", valueName: "agent-id", description: "Chat agent" },
-    { name: "project", type: "string", valueName: "project-id|none", description: "Bind a Project, or use none for pure chat" },
+    { name: "project", type: "string", valueName: "project-id|none", description: "Choose a Project when creating the Chat, or use none for pure chat" },
     { name: "status", type: "string", valueName: "status", description: "Chat status" },
   ];
   return [
@@ -511,14 +511,16 @@ function chatCommandSpecs(): CommandSpec[] {
         projectId: chatProjectOption(invocation),
       }));
     }),
-    nativeSpec("chat.update", ["chat", "update"], "Update a chat", "write", HUMAN, [refPositional("chat")], [...INPUT_OPTIONS, ...chatFields], async (invocation) => {
-      const projectId = chatProjectOption(invocation);
-      const chat = await resolveChat(invocation, positional(invocation, 0, "chat"));
-      await mutateAndRender(invocation, "PATCH", `/api/chat/sessions/${encodePath(String(chat.id))}`, await requestBody(invocation, {
+    nativeSpec("chat.update", ["chat", "update"], "Update a chat", "write", HUMAN, [refPositional("chat")], [...INPUT_OPTIONS, ...chatFields.filter((field) => field.name !== "project")], async (invocation) => {
+      const body = await requestBody(invocation, {
         title: stringOption(invocation, "title") ?? undefined,
         status: stringOption(invocation, "status") ?? undefined,
-        projectId,
-      }));
+      });
+      if (Object.hasOwn(body, "projectId") || Object.hasOwn(body, "project_id")) {
+        throw new CliError("usage", "A Chat Project can only be selected when creating the session");
+      }
+      const chat = await resolveChat(invocation, positional(invocation, 0, "chat"));
+      await mutateAndRender(invocation, "PATCH", `/api/chat/sessions/${encodePath(String(chat.id))}`, body);
     }),
     ...([
       ["pin", "Pin a chat", { pinned: true }],

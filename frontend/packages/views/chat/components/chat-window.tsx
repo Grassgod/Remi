@@ -60,7 +60,7 @@ import { useChatScopeSubscription } from "@multiremi/core/realtime";
 import { ChatMessageList, ChatMessageSkeleton } from "./chat-message-list";
 import { ChatInput } from "./chat-input";
 import { AgentDropdown } from "./agent-dropdown";
-import { ProjectDropdown } from "./project-dropdown";
+import { ProjectDisplay, ProjectDropdown } from "./project-dropdown";
 import { SessionDropdown } from "./session-dropdown";
 import { EmptyState } from "./chat-empty-state";
 import { ChatResizeHandles } from "./chat-resize-handles";
@@ -346,7 +346,6 @@ export function ChatWindow({
 
   const handleUploadFile = useCallback(
     async (file: File) => {
-      if (updateSession.isPending) return null;
       const sessionAtStart = useChatStore.getState().activeSessionId;
       const sessionId = await ensureSession("");
       if (!sessionId || getCurrentWsId() !== wsId) return null;
@@ -363,13 +362,12 @@ export function ChatWindow({
         setActiveSession(sessionId);
       return uploadWithToast(file, { chatSessionId: sessionId });
     },
-    [ensureSession, uploadWithToast, qc, setActiveSession, wsId, updateSession.isPending],
+    [ensureSession, uploadWithToast, qc, setActiveSession, wsId],
   );
 
   const handleSend = useCallback(
     async (content: string, attachmentIds?: string[]) => {
       if (!activeAgent) throw new Error("No agent available");
-      if (updateSession.isPending) throw new Error("Chat settings are being updated");
       const sessionAtStart = useChatStore.getState().activeSessionId;
       const sessionId = await ensureSession(content);
       if (!sessionId || getCurrentWsId() !== wsId)
@@ -469,7 +467,7 @@ export function ChatWindow({
         void qc.invalidateQueries({ queryKey: chatKeys.sessions(wsId) });
       }
     },
-    [activeAgent, ensureSession, qc, setActiveSession, wsId, updateSession.isPending],
+    [activeAgent, ensureSession, qc, setActiveSession, wsId],
   );
 
   const [stopping, setStopping] = useState(false);
@@ -688,24 +686,20 @@ export function ChatWindow({
       </div>
 
       <div className="flex min-w-0 items-center border-b px-4 py-1.5">
-        <ProjectDropdown
-          projects={projects}
-          projectId={activeSessionId ? currentSession?.project_id ?? null : draftProjectId}
-          disabled={!!pendingTaskId || updateSession.isPending || createSession.isPending || (!!activeSessionId && !currentSession)}
-          busy={!!pendingTaskId}
-          loadError={projectsError}
-          onSelect={(projectId) => {
-            setActionError(false);
-            if (!activeSessionId) {
-              setDraftProjectId(projectId);
-              return;
-            }
-            updateSession.mutate(
-              { sessionId: activeSessionId, project_id: projectId },
-              { onError: () => setActionError(true) },
-            );
-          }}
-        />
+        {activeSessionId ? (
+          <ProjectDisplay
+            projects={projects}
+            projectId={currentSession?.project_id ?? null}
+          />
+        ) : (
+          <ProjectDropdown
+            projects={projects}
+            projectId={draftProjectId}
+            disabled={createSession.isPending}
+            loadError={projectsError}
+            onSelect={setDraftProjectId}
+          />
+        )}
       </div>
 
       {/* Messages / skeleton / empty state */}
@@ -804,7 +798,7 @@ export function ChatWindow({
         onStop={handleStop}
         isRunning={!!pendingTaskId}
         supportsQueue={pendingTask?.supports_queue}
-        disabled={isSessionArchived || updateSession.isPending}
+        disabled={isSessionArchived}
         noAgent={noAgent}
         agentName={activeAgent?.name}
         leftAdornment={

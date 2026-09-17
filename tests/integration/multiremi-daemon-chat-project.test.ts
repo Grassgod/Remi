@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { startMultiremiServer } from "@multiremi/api.js";
@@ -237,6 +237,129 @@ describe("Project-bound Chat daemon startup", () => {
       server.stop(true);
     }
   });
+
+  for (const localDirectory of [true, false]) {
+    for (const unavailable of ["archived", "deleted"] as const) {
+      it(`cold-starts once after a completed ${localDirectory ? "local-directory" : "managed"} Chat's Project is ${unavailable}, preserving its files`, async () => {
+        const root = mkdtempSync(join(tmpdir(), "multiremi-chat-unavailable-project-"));
+        roots.push(root);
+        const db = new Database(":memory:");
+        databases.push(db);
+        const store = new MultiremiStore(db);
+        store.ensureLocalWorkspace();
+        const repoUrl = "https://example.test/preserved-chat-repo.git";
+        store.updateWorkspace("local", {
+          settings: { github_enabled: false, co_authored_by_enabled: false },
+          repos: [{ id: "repo_preserved", name: "preserved-chat-repo", url: repoUrl, source: "github", default_branch: "main" }],
+        });
+        const sourcePath = join(root, "user-repo");
+        mkdirSync(sourcePath);
+        git(sourcePath, ["init", "-b", "main"]);
+        git(sourcePath, ["config", "user.email", "chat-preserve@example.test"]);
+        git(sourcePath, ["config", "user.name", "Chat Preserve"]);
+        writeFileSync(join(sourcePath, "README.md"), "Original source.\n");
+        git(sourcePath, ["add", "README.md"]);
+        git(sourcePath, ["commit", "-m", "initial"]);
+        const daemonId = "daemon-chat-preserved";
+        const runtimeId = "rt_chat_preserved";
+        store.registerRuntime({ id: runtimeId, name: "Preserved Chat runtime", provider: "claude", workspaceId: "local", daemonId });
+        const project = store.createProject({
+          title: "Project before unavailability",
+          instructions: "Use this private Project context.",
+          resources: [
+            { resourceType: "github_repo", resourceRef: { url: repoUrl } },
+            ...(localDirectory ? [{ resourceType: "local_directory" as const, resourceRef: { localPath: sourcePath, daemonId } }] : []),
+          ],
+        });
+        store.createProjectDoc(project.id, { kind: "wiki", title: "Guide", path: "guide.md", body: "Keep the old Wiki." });
+        const agent = store.createAgent({ name: "Preserved Chat worker", provider: "claude" });
+        const chat = store.createChatSession({ agentId: agent.id, projectId: project.id });
+        const credential = await store.createAccessToken({ name: "Preserved Chat daemon", type: "daemon", workspaceId: "local", daemonId });
+        const server = startMultiremiServer({ store, scheduler: null, authToken: "preserved-chat-test", hostname: "127.0.0.1", port: 0 });
+        const chatPath = join(root, "workspaces", "chats", chat.id);
+        const originalPath = localDirectory ? sourcePath : join(chatPath, "preserved-chat-repo");
+        const seen: Array<{ cwd: string; sessionId: string | null; projectId: string | undefined; prompt: string }> = [];
+        const runTurn = async (turn: number) => {
+          const sent = store.sendChatMessage(chat.id, { body: `Run turn ${turn}.` });
+          const daemon = new MultiremiDaemon({
+            serverUrl: `http://127.0.0.1:${server.port}`, token: credential.token,
+            daemonId, runtimeId, runtimeName: "Preserved Chat runtime", provider: "claude", workspaceId: "local",
+            once: true, daemonPort: 0, workspacesRoot: join(root, "workspaces"), repoCacheRoot: join(root, ".repo-cache"),
+            providerFactory: (options) => ({
+              async *sendStream(message, sendOptions) {
+                seen.push({ cwd: options.cwd!, sessionId: sendOptions?.sessionId ?? null, projectId: options.env?.MULTIREMI_PROJECT_ID, prompt: message });
+                yield { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "Turn finished." }] } as any;
+              },
+              getLastResponse: () => ({ text: "Turn finished.", sessionId: turn === 0 ? "bound-project-provider" : "fallback-provider", requestId: `preserved-request-${turn}` }),
+            }),
+          });
+          const cache = (daemon as any).repoCache;
+          const sync = spyOn(cache, "sync").mockImplementation(async (workspaceId: string, repos: Array<{ url: string }>) => {
+            if (localDirectory || turn !== 0) throw new Error("No Git sync is allowed for this Chat turn");
+            expect(repos.map((repo) => repo.url)).toEqual([repoUrl]);
+            const barePath = cache.barePath(workspaceId, repoUrl);
+            mkdirSync(dirname(barePath), { recursive: true });
+            git(root, ["clone", "--bare", sourcePath, barePath]);
+            git(barePath, ["remote", "set-url", "origin", repoUrl]);
+            return [{ repoUrl, status: "fresh", error: null }];
+          });
+          const checkout = spyOn(cache, "createWorktree");
+          try {
+            await daemon.start();
+            expect(store.getTask(sent.task.id)?.status).toBe("completed");
+            expect(seen).toHaveLength(turn + 1);
+            expect(sync).toHaveBeenCalledTimes(!localDirectory && turn === 0 ? 1 : 0);
+            expect(checkout).toHaveBeenCalledTimes(!localDirectory && turn === 0 ? 1 : 0);
+          } finally {
+            sync.mockRestore();
+            checkout.mockRestore();
+          }
+        };
+        try {
+          await runTurn(0);
+          expect(seen[0]).toMatchObject({ cwd: localDirectory ? sourcePath : chatPath, sessionId: null, projectId: project.id });
+          expect(store.getChatSession(chat.id)).toMatchObject({ sessionId: "bound-project-provider", workDir: localDirectory ? sourcePath : chatPath });
+          writeFileSync(join(originalPath, "uncommitted.txt"), "Preserve this unpublished work.\n");
+          const before = directoryContents(originalPath);
+          const repoMetadata = localDirectory ? null : readFileSync(join(chatPath, ".multiremi", "chat-repos.json"), "utf8");
+          const wikiBefore = localDirectory ? null : directoryContents(join(chatPath, "wiki"));
+          if (localDirectory) {
+            expect(JSON.parse(readFileSync(join(sourcePath, ".multiremi", "gc.json"), "utf8")).local_directory).toBe(true);
+            expect(existsSync(join(sourcePath, "wiki"))).toBe(false);
+          }
+          if (unavailable === "archived") store.archiveProject(project.id);
+          else db.run("DELETE FROM multiremi_projects WHERE id = ?", [project.id]);
+
+          for (const turn of [1, 2]) {
+            await runTurn(turn);
+            expect(seen[turn]).toMatchObject({ cwd: chatPath, sessionId: turn === 1 ? null : "fallback-provider" });
+            expect(seen[turn]!.projectId).toBeUndefined();
+            expect(seen[turn]!.prompt).toStartWith(turn === 1 ? "# Bootstrap Prompt" : "# Delta Prompt");
+            if (turn === 1) expect(seen[turn]!.prompt).toContain("Repositories are not fetched for Chat startup");
+            expect(seen[turn]!.prompt).not.toContain("Use this private Project context.");
+            expect(seen[turn]!.prompt).not.toContain("This Chat is bound to project:");
+            expect(directoryContents(originalPath)).toEqual(before);
+            expect(readFileSync(join(originalPath, "uncommitted.txt"), "utf8")).toBe("Preserve this unpublished work.\n");
+            if (localDirectory) {
+              // Compare the entire user directory, including Git files and
+              // platform metadata. The old local-directory GC marker stays true.
+              expect(JSON.parse(readFileSync(join(sourcePath, ".multiremi", "gc.json"), "utf8")).local_directory).toBe(true);
+              expect(existsSync(join(chatPath, "wiki"))).toBe(false);
+            } else {
+              expect(readFileSync(join(chatPath, ".multiremi", "chat-repos.json"), "utf8")).toBe(repoMetadata!);
+              expect(directoryContents(join(chatPath, "wiki"))).toEqual(wikiBefore!);
+              expect(git(originalPath, ["branch", "--show-current"])).toBe(`chat/${chat.id}`);
+            }
+            expect(store.getChatSession(chat.id)).toMatchObject({
+              projectId: project.id, sessionId: "fallback-provider", workDir: chatPath,
+            });
+          }
+        } finally {
+          server.stop(true);
+        }
+      });
+    }
+  }
 });
 
 function git(cwd: string, args: string[]): string {
@@ -244,4 +367,22 @@ function git(cwd: string, args: string[]): string {
     cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
   }).trim();
+}
+
+/** Preserve structure and exact file bytes; never follow symlinks while comparing. */
+function directoryContents(root: string): Array<{ path: string; kind: string; value?: string }> {
+  const entries: Array<{ path: string; kind: string; value?: string }> = [];
+  const visit = (directory: string, prefix: string) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const path = join(directory, entry.name);
+      const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isSymbolicLink()) entries.push({ path: relativePath, kind: "symlink", value: readlinkSync(path) });
+      else if (entry.isDirectory()) {
+        entries.push({ path: relativePath, kind: "directory" });
+        visit(path, relativePath);
+      } else entries.push({ path: relativePath, kind: "file", value: readFileSync(path).toString("base64") });
+    }
+  };
+  visit(root, "");
+  return entries;
 }

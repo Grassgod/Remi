@@ -102,12 +102,7 @@ export interface ManagedWorktreeParams {
   workspaceId: string;
   repoUrl: string;
   workDir: string;
-  signal?: AbortSignal;
 }
-
-export type RemoveCleanWorktreeResult =
-  | { status: "removed" | "missing"; path: string }
-  | { status: "preserved"; path: string; reason: string };
 
 const AGENT_GIT_EXCLUDE_PATTERNS = [".agent_context", ".multiremi", "CLAUDE.md", "AGENTS.md", ".claude", ".opencode"];
 const MODERN_FETCH_REFSPEC = "+refs/heads/*:refs/remotes/origin/*";
@@ -285,7 +280,7 @@ export class MultiremiRepoCache {
     }
     // Validate the standard worktree backlink directly. Older supported Git
     // versions lack `worktree list -z`; line parsing would mishandle paths
-    // containing newlines, so do not derive deletion authority from that list.
+    // containing newlines, so verify the exact registered path instead.
     const gitDir = resolve(path, git(path, ["rev-parse", "--git-dir"]));
     const registeredFile = join(gitDir, "gitdir");
     const registeredInfo = lstatSync(registeredFile, { throwIfNoEntry: false });
@@ -296,32 +291,6 @@ export class MultiremiRepoCache {
       throw new Error(`worktree registration does not match its path: ${path}`);
     }
     return true;
-  }
-
-  /** Remove only a verified, clean tracked worktree, under the same lock as checkout. */
-  async removeCleanWorktree(params: ManagedWorktreeParams): Promise<RemoveCleanWorktreeResult> {
-    const path = this.expectedWorktreePath(params.workDir, params.repoUrl);
-    if (!lstatSync(path, { throwIfNoEntry: false })) return { status: "missing", path };
-    const barePath = this.barePath(params.workspaceId, params.repoUrl);
-    return await this.withRepoLock(barePath, () => {
-      if (!this.hasWorktree(params)) return { status: "missing", path };
-      const state = this.inspectWorktree(path);
-      // Git normally deletes ignored files as well. Preserve those too: they
-      // may contain local credentials or build inputs absent from Git history.
-      const hasIgnoredFiles = Boolean(git(path, ["ls-files", "--others", "--ignored", "--exclude-standard"]));
-      if (state.dirty || hasIgnoredFiles) {
-        const reason = [
-          state.hasChanges ? "uncommitted changes" : null,
-          state.hasUnpushedCommits ? "unpushed commits" : null,
-          hasIgnoredFiles ? "ignored local files" : null,
-        ].filter(Boolean).join(", ");
-        return { status: "preserved", path, reason };
-      }
-      params.signal?.throwIfAborted();
-      // No --force: Git performs a final dirty/locked-worktree check itself.
-      git(barePath, ["worktree", "remove", path]);
-      return { status: "removed", path };
-    }, params.signal);
   }
 
   async createWorktree(params: MultiremiWorktreeParams): Promise<MultiremiWorktreeResult> {

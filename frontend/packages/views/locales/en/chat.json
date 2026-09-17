@@ -172,8 +172,7 @@
     "none": "No project · Just chat",
     "search": "Search projects…",
     "description": "Use a project’s context, repositories and working directory.",
-    "change_hint": "Changing project starts fresh agent context on your next message.",
-    "busy": "Stop the current task before changing project.",
+    "fixed_hint": "The project is fixed when the chat is created. Start a new chat to use a different project.",
     "load_failed": "Could not load projects. Try again.",
     "unavailable": "Linked project unavailable"
   }

@@ -13,7 +13,10 @@ Chat 是用户与一个云友的持续私聊。可以直接提问、讨论或要
 ## 会话与上下文
 
 新聊天选择云友，首条消息或首次附件上传时创建会话。每个会话绑定一个云友，切换云友会开始新聊天。
-标题栏下的项目选择器可绑定 Project，或清空为纯对话。绑定后使用 Project 的指令、资源、Memory 和 Wiki。
+新建聊天时，标题栏下的项目选择器可选择 Project，也可保持纯对话；首次发送或上传附件创建会话后，项目选择即固定。
+已有会话只显示当前项目，不支持改绑或解绑；需要换项目时新建聊天。绑定后使用 Project 的指令、资源、Memory 和 Wiki。
+绑定的 Project 被归档或删除后，下一轮清除旧执行上下文，在平台 Chat 目录冷启动为纯对话；之后正常续聊。
+界面显示「已绑定的项目不可用」。旧真实目录和已有仓库文件保持不动。
 Chat 页面不提供独立 Runtime 或机器工作目录选择器，历史列表不提供按云友或 Runtime 的筛选。
 Chat 与 Issue 独立：在聊天里创建 Issue 只创建工作项，不绑定会话，不继承该 Issue 的项目、仓库、附件或 Wiki 上下文。
 Web Chat 和飞书一对一私聊不接收 Issue 活动播报；飞书群里的 Issue 话题由飞书绑定表记录归属，继续接收 Issue 更新与工作轮次回帖。
@@ -41,10 +44,8 @@ Wiki 使用 CLI 访问，既有 `.multiremi` 任务元数据仍会更新。
 启动过程中 Chat 显示仓库准备进度；鉴权、网络或超时失败会保留之前成功的仓库，继续启动对话，
 并在智能体提示词中记录失败原因与手动获取指引。该网络预算不包含本地 worktree 文件落盘耗时。
 
-改绑或解绑会清除 provider 会话状态，下一轮重新生成上下文；有未结束任务时返回 409。
-在平台 Chat 目录下一次启动绑定 Project 的任务时，旧项目的干净 worktree 会通过 Git 正常移除，
-分支引用仍保留在 cache。存在未提交改动、未推送提交或忽略文件的副本会原地保留并提示，
-不会为新项目覆盖同名目录。切回纯 Chat 不触发自动仓库清理。
+项目绑定在创建时固定。自动准备不会删除已有仓库，也不会覆盖同名的其他目录；
+Project 资源列表变化或项目不可用时，已有工作副本保留。
 
 ## 消息与执行队列
 
@@ -77,7 +78,7 @@ Wiki 使用 CLI 访问，既有 `.multiremi` 任务元数据仍会更新。
 ```bash
 remi chat create --agent <id>
 remi chat create --agent <id> --project <project-id>
-remi chat update <chat> --project <project-id|none>
+remi chat update <chat> --title <title>
 remi chat message create <chat> --content-file <path>
 remi chat pin <chat>
 remi chat unpin <chat>

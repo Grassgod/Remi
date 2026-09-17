@@ -249,6 +249,7 @@ function chatMutation(c: Context, operation: () => Response): Response {
 }
 
 function invalidChatUpdate(c: Context, input: UpdateChatSessionInput): Response | null {
+  if ("projectId" in input || "project_id" in input) return c.json({ error: "A Chat Project can only be selected when creating the session" }, 400);
   if ("issueId" in input || "issue_id" in input) return c.json({ error: "Chat sessions do not support Issue binding" }, 400);
   if (input.title !== undefined && (typeof input.title !== "string" || !input.title.trim())) return c.json({ error: "title is required" }, 400);
   if (input.status !== undefined && input.status !== "active" && input.status !== "archived") return c.json({ error: "invalid status" }, 400);

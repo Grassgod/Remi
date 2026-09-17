@@ -154,15 +154,16 @@ describe("Chat Project prompts", () => {
     });
   }
 
-  it("reports old dirty worktree preservation after changing Projects", () => {
+  it("reports checkout path collisions and preserves existing user edits", () => {
     const prompt = buildTaskPrompt(chatTask({ ...projectContext, chatProjectId: project.id }), {
       chatRepoAutoCheckout: true,
       repoWarnings: [{
-        repoUrl: "https://example.test/old-project", kind: "unavailable",
-        message: "Previous Project worktree /tmp/chats/chat_project/old-project was preserved because it has uncommitted changes.",
+        repoUrl: "https://example.test/bound-project", kind: "unavailable",
+        message: "Automatic checkout skipped: /tmp/chats/chat_project/repo is reserved for another repository. Resolve the directory collision without overwriting existing files.",
       }],
     });
-    expect(prompt).toContain("/tmp/chats/chat_project/old-project was preserved because it has uncommitted changes");
+    expect(prompt).toContain("/tmp/chats/chat_project/repo is reserved for another repository");
+    expect(prompt).toContain("run `remi repo checkout <repo-id>` explicitly");
     expect(prompt).toContain("Preserve any existing worktree with uncommitted changes");
   });
 

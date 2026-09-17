@@ -63,89 +63,52 @@ describe("bound Chat managed repositories", () => {
     expect(reused.path).toBe(created.path);
   });
 
-  it("removes clean old Project worktrees through Git registration and retains unrelated directories", async () => {
+  it.each(["clean", "uncommitted", "unpushed"])("retains %s worktrees when the Project removes a repository resource", async (state) => {
     const options = fixture();
-    const oldRepo = repository(options.root, "old/repo-a");
-    const newRepo = repository(options.root, "new/repo-b");
-    const old = await checkout(options, oldRepo);
-    const unrelated = join(options.workDir, "user-files");
-    mkdirSync(unrelated);
-    writeFileSync(join(unrelated, "keep"), "user work");
-    const next = await prepareChatRepositories({ ...options, projectId: "project-b", repos: [newRepo] });
-    expect(existsSync(old.path)).toBe(false);
-    expect(git(options.cache.lookup(options.workspaceId, oldRepo.url)!, "worktree", "list", "--porcelain")).not.toContain(old.path);
-    expect(git(options.cache.lookup(options.workspaceId, oldRepo.url)!, "rev-parse", "refs/heads/chat/chat-session"))
-      .toBe(git(oldRepo.url, "rev-parse", "HEAD"));
-    expect(readFileSync(join(unrelated, "keep"), "utf8")).toBe("user work");
-    expect(next.reposToSync).toEqual([newRepo]);
-    expect(next.warnings).toEqual([]);
-  });
-
-  it("retains dirty work across A -> B -> C bindings and cleans it only after edits are resolved", async () => {
-    const options = fixture();
-    const repo = repository(options.root, "old/repo");
+    const repo = repository(options.root, "source/repo");
     const old = await checkout(options, repo);
-    writeFileSync(join(old.path, "unfinished.txt"), "not committed");
-    for (const projectId of ["project-b", "project-c"]) {
-      const next = await prepareChatRepositories({ ...options, projectId, repos: [] });
-      expect(next.warnings[0]?.message).toContain("project-a");
-      expect(next.warnings[0]?.message).toContain("uncommitted changes");
-      expect(next.warnings[0]?.message).toContain(old.path);
-      expect(readFileSync(join(old.path, "unfinished.txt"), "utf8")).toBe("not committed");
+    if (state !== "clean") writeFileSync(join(old.path, "README.md"), "local work\n");
+    if (state === "unpushed") {
+      git(old.path, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-am", "unpublished");
     }
-    rmSync(join(old.path, "unfinished.txt"));
-    const final = await prepareChatRepositories({ ...options, projectId: "project-c", repos: [] });
-    expect(final.warnings).toEqual([]);
-    expect(existsSync(old.path)).toBe(false);
-  });
-
-  it("preserves clean-looking worktrees containing unpushed commits", async () => {
-    const options = fixture();
-    const repo = repository(options.root, "source/repo");
-    const old = await checkout(options, repo);
-    writeFileSync(join(old.path, "README.md"), "unpublished commit\n");
-    git(old.path, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-am", "unpublished");
-    expect(git(old.path, "status", "--porcelain")).toBe("");
-    const next = await prepareChatRepositories({ ...options, projectId: "project-b", repos: [] });
-    expect(next.warnings[0]?.message).toContain("unpushed commits");
-    expect(readFileSync(join(old.path, "README.md"), "utf8")).toBe("unpublished commit\n");
-  });
-
-  it("preserves Git-locked worktrees and reports the failed non-force removal", async () => {
-    const options = fixture();
-    const repo = repository(options.root, "source/repo");
-    const old = await checkout(options, repo);
-    git(options.cache.lookup(options.workspaceId, repo.url)!, "worktree", "lock", old.path);
-    const next = await prepareChatRepositories({ ...options, projectId: "project-b", repos: [] });
-    expect(next.warnings[0]?.message).toContain("locked");
+    const originalHead = git(old.path, "rev-parse", "HEAD");
+    const manifestPath = join(options.workDir, ".multiremi", "chat-repos.json");
+    const originalManifest = readFileSync(manifestPath, "utf8");
+    const next = await prepareChatRepositories({ ...options, repos: [] });
+    await next.recordCheckouts([]);
+    expect(next.repos).toEqual([]);
+    expect(next.reposToSync).toEqual([]);
+    expect(next.warnings).toEqual([]);
     expect(existsSync(old.path)).toBe(true);
+    expect(git(old.path, "rev-parse", "HEAD")).toBe(originalHead);
+    expect(git(old.path, "branch", "--show-current")).toBe("chat/chat-session");
+    expect(readFileSync(join(old.path, "README.md"), "utf8")).toBe(state === "clean" ? "source/repo\n" : "local work\n");
+    expect(readFileSync(manifestPath, "utf8")).toBe(originalManifest);
   });
 
-  it("also preserves ignored files that Git worktree remove would otherwise discard", async () => {
+  it("rejects a changed Project identity without removing files or rewriting provenance", async () => {
     const options = fixture();
     const repo = repository(options.root, "source/repo");
     const old = await checkout(options, repo);
-    const barePath = options.cache.lookup(options.workspaceId, repo.url)!;
-    mkdirSync(join(barePath, "info"), { recursive: true });
-    writeFileSync(join(barePath, "info", "exclude"), "CLAUDE.md\n");
-    writeFileSync(join(old.path, "CLAUDE.md"), "local instructions");
-    expect(git(old.path, "status", "--porcelain")).toBe("");
-    const next = await prepareChatRepositories({ ...options, projectId: "project-b", repos: [] });
-    expect(next.warnings[0]?.message).toContain("ignored local files");
-    expect(readFileSync(join(old.path, "CLAUDE.md"), "utf8")).toBe("local instructions");
+    const manifestPath = join(options.workDir, ".multiremi", "chat-repos.json");
+    const originalManifest = readFileSync(manifestPath, "utf8");
+    await expect(prepareChatRepositories({ ...options, projectId: "different-project", repos: [] }))
+      .rejects.toThrow("does not match this workspace/session/project");
+    expect(readFileSync(manifestPath, "utf8")).toBe(originalManifest);
+    expect(readFileSync(join(old.path, "README.md"), "utf8")).toBe("source/repo\n");
   });
 
-  it("skips same-name repositories when an old dirty worktree occupies their destination", async () => {
+  it("skips new same-name repository resources when a worktree already occupies their destination", async () => {
     const options = fixture();
     const oldRepo = repository(options.root, "old/repo");
     const nextRepo = repository(options.root, "next/repo");
     const old = await checkout(options, oldRepo);
     writeFileSync(join(old.path, "unfinished.txt"), "keep");
-    const next = await prepareChatRepositories({ ...options, projectId: "project-b", repos: [nextRepo] });
+    const next = await prepareChatRepositories({ ...options, repos: [nextRepo] });
     expect(next.repos).toEqual([]);
     expect(next.reposToSync).toEqual([]);
-    expect(next.warnings).toHaveLength(2);
-    expect(next.warnings[1]?.message).toContain("directory collision");
+    expect(next.warnings).toHaveLength(1);
+    expect(next.warnings[0]?.message).toContain("directory collision");
     expect(readFileSync(join(old.path, "README.md"), "utf8")).toBe("old/repo\n");
   });
 
@@ -191,13 +154,13 @@ describe("bound Chat managed repositories", () => {
     }
   });
 
-  it("never removes a tracked worktree replaced with a symlink to external files", async () => {
+  it("refuses to reuse a tracked worktree replaced with a symlink to external files", async () => {
     const options = fixture();
     const repo = repository(options.root, "source/repo");
     const old = await checkout(options, repo);
     rmSync(old.path, { recursive: true });
     symlinkSync(repo.url, old.path);
-    const next = await prepareChatRepositories({ ...options, projectId: "project-b", repos: [] });
+    const next = await prepareChatRepositories({ ...options, repos: [repo] });
     expect(next.warnings[0]?.message).toContain("unsafe");
     expect(readFileSync(join(repo.url, "README.md"), "utf8")).toBe("source/repo\n");
   });
@@ -211,10 +174,12 @@ describe("bound Chat managed repositories", () => {
     for (const edit of [
       { ...original, workspaceId: "other-workspace" },
       { ...original, chatSessionId: "other-session" },
+      { ...original, projectId: "other-project" },
+      { ...original, entries: [{ ...original.entries[0], projectId: "other-project" }] },
       { ...original, entries: [{ ...original.entries[0], path: repo.url }] },
     ]) {
       writeFileSync(path, JSON.stringify(edit));
-      await expect(prepareChatRepositories({ ...options, projectId: "project-b", repos: [] })).rejects.toThrow();
+      await expect(prepareChatRepositories({ ...options, repos: [] })).rejects.toThrow();
       expect(readFileSync(join(repo.url, "README.md"), "utf8")).toBe("source/repo\n");
     }
   });

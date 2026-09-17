@@ -42,32 +42,14 @@ export async function prepareChatRepositories(options: PrepareChatRepositoriesOp
   await validateMetadataPath(workDir);
   const previous = await readManifest(manifestPath, options);
   const warnings: TaskRepoWarning[] = [];
-  const entries: ChatRepositoryEntry[] = [];
-  const requestedUrls = new Set(options.repos.map((repo) => repo.url));
+  // The Project binding is fixed at creation. Keep registered worktrees even
+  // if the Project's repository resources change; startup never deletes them.
+  const entries: ChatRepositoryEntry[] = previous?.entries ?? [];
   const warn = (repoUrl: string, message: string) => warnings.push({
     repoUrl,
     kind: "unavailable" as const,
     message: redactGitCredentialError(message),
   });
-
-  for (const entry of previous?.entries ?? []) {
-    signal?.throwIfAborted();
-    if (entry.projectId === projectId && requestedUrls.has(entry.repoUrl)) {
-      entries.push(entry);
-      continue;
-    }
-    try {
-      const result = await cache.removeCleanWorktree({ workspaceId, repoUrl: entry.repoUrl, workDir, signal });
-      if (result.status === "preserved") {
-        entries.push(entry);
-        warn(entry.repoUrl, `Preserved previous Project ${entry.projectId} repository at ${entry.path}: ${result.reason}. Review or commit this work before removing it; do not overwrite it.`);
-      }
-    } catch (error) {
-      signal?.throwIfAborted();
-      entries.push(entry);
-      warn(entry.repoUrl, `Preserved previous Project ${entry.projectId} repository at ${entry.path}: ${errorText(error)}. No files were removed.`);
-    }
-  }
 
   const repos: RepoSpec[] = [];
   const reposToSync: RepoSpec[] = [];
@@ -96,9 +78,6 @@ export async function prepareChatRepositories(options: PrepareChatRepositoriesOp
     if (!previous && !manifest.entries.length) return;
     await writeManifest(workDir, manifestPath, manifest);
   };
-  // Save removals even when every new checkout fails, retaining old dirty
-  // entries with their original Project through subsequent A -> B -> C binds.
-  await persist();
   return {
     repos,
     reposToSync,
@@ -131,13 +110,13 @@ async function readManifest(path: string, options: PrepareChatRepositoriesOption
   }
   const manifest = JSON.parse(raw) as ChatRepositoryManifest;
   if (manifest.version !== 1 || manifest.workspaceId !== options.workspaceId
-    || manifest.chatSessionId !== options.chatSessionId || typeof manifest.projectId !== "string"
+    || manifest.chatSessionId !== options.chatSessionId || manifest.projectId !== options.projectId
     || !Array.isArray(manifest.entries)) {
-    throw new Error("Chat repository manifest does not match this workspace/session");
+    throw new Error("Chat repository manifest does not match this workspace/session/project");
   }
   const seen = new Set<string>();
   for (const entry of manifest.entries) {
-    if (!entry || typeof entry.projectId !== "string" || typeof entry.repoUrl !== "string"
+    if (!entry || entry.projectId !== options.projectId || typeof entry.repoUrl !== "string"
       || typeof entry.path !== "string" || !entry.repoUrl
       || entry.path !== options.cache.expectedWorktreePath(options.workDir, entry.repoUrl)
       || seen.has(entry.path)) {

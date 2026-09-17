@@ -124,19 +124,27 @@ describe("bound Chat repository startup", () => {
     expect(results[2].error).toContain("10ms network budget");
   });
 
-  it("removes old clean worktrees on rebind and keeps dirty work with a diagnostic", async () => {
+  it("preserves existing repositories without Git activity when the bound Project becomes unavailable", async () => {
     const f = fixture();
-    const clean = f.source("clean"), dirty = f.source("dirty"), current = f.source("current");
-    const first = await f.daemon.prepareChatTaskWorkspace(f.task("project_a", [clean, dirty]), f.resolved, signal());
-    const cleanPath = first.checkouts.find((c: any) => c.repoUrl === clean.url).path;
-    const dirtyPath = first.checkouts.find((c: any) => c.repoUrl === dirty.url).path;
-    writeFileSync(join(dirtyPath, "README.md"), "unsaved project A change");
-    const second = await f.daemon.prepareChatTaskWorkspace(f.task("project_b", [current]), f.resolved, signal());
-    expect(existsSync(cleanPath)).toBe(false);
-    expect(readFileSync(join(dirtyPath, "README.md"), "utf8")).toBe("unsaved project A change");
-    expect(second.checkouts).toHaveLength(1);
-    expect(second.warnings.some((warning: any) => warning.message.includes(dirtyPath))).toBe(true);
-    expect(git(dirtyPath, "branch", "--show-current")).toBe("chat/chat_test");
+    const repo = f.source("existing");
+    const first = await f.daemon.prepareChatTaskWorkspace(f.task("project_a", [repo]), f.resolved, signal());
+    const repoPath = first.checkouts[0].path;
+    writeFileSync(join(repoPath, "README.md"), "unsaved project change");
+    const manifestPath = join(f.workDir, ".multiremi", "chat-repos.json");
+    const previousManifest = readFileSync(manifestPath, "utf8");
+    const sync = spyOn(f.repoCache, "sync");
+    const checkout = spyOn(f.repoCache, "createWorktree");
+    const unavailable = { ...f.task("project_a"), project: null };
+    expect(f.daemon.canAutoCheckoutChatRepos(unavailable, f.resolved)).toBe(false);
+    const next = await f.daemon.prepareTaskWorkspace(unavailable, f.resolved, [], signal());
+    expect(next.checkouts).toEqual([]);
+    expect(next.wikiMaterialized).toBe(false);
+    expect(sync).not.toHaveBeenCalled();
+    expect(checkout).not.toHaveBeenCalled();
+    expect(readFileSync(join(repoPath, "README.md"), "utf8")).toBe("unsaved project change");
+    expect(git(repoPath, "branch", "--show-current")).toBe("chat/chat_test");
+    expect(readFileSync(manifestPath, "utf8")).toBe(previousManifest);
+    expect(existsSync(join(f.workDir, ".multiremi", "wiki-archive"))).toBe(false);
   });
 
   it("requires bound Project identity, workspace ownership and daemon-owned directories", async () => {

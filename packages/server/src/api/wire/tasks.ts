@@ -1,7 +1,7 @@
 // Wire serializers for the tasks domain, moved verbatim out of api.ts.
 // Go-compat (`*Compatibility*`) and native shapers sit side by side on purpose:
 // the two route prefixes are intentionally divergent and must stay diffable.
-import { CHAT_ISSUE_DECOUPLED_FINGERPRINT } from "@multiremi/store/helpers.js";
+import { CHAT_ISSUE_DECOUPLED_FINGERPRINT, isUnavailableChatProjectFingerprint } from "@multiremi/store/helpers.js";
 import { taskExecutionScope } from "@multiremi/contracts/task-execution.js";
 import type {
   MultiremiChatMessage,
@@ -330,11 +330,24 @@ export function daemonTaskClaimResponse(
   }
   if (task.executionFingerprint === CHAT_ISSUE_DECOUPLED_FINGERPRINT) task = { ...task, sessionId: null };
   // Re-check the live destination even when the caller retained an earlier
-  // hydrated claim. A changed binding must never receive that old Issue prompt.
+  // hydrated claim. Stale or unavailable bindings must not retain Project or Issue context.
   const ordinaryChat = Boolean(task.chatSessionId && store.getTaskChatExecutionKind(task) === "ordinary");
   if (ordinaryChat) {
     const chat = store.getChatSession(task.chatSessionId!);
-    const keepProject = Boolean(chat?.projectId && chat.workspaceId === task.workspaceId
+    const currentProject = chat?.projectId ? store.getProject(chat.projectId) : null;
+    const unavailableProject = Boolean(chat?.projectId && (!currentProject || currentProject.archivedAt
+      || currentProject.workspaceId !== task.workspaceId));
+    if (unavailableProject) {
+      const current = store.getTask(task.id);
+      if (!isUnavailableChatProjectFingerprint(task.executionFingerprint) || task.workDir !== current?.workDir) {
+        task = { ...task, sessionId: null, workDir: null };
+      }
+      // A retained claim cannot carry credentials from a prior host after
+      // unavailable-Project recovery re-routes the task.
+      if (task.runtimeId !== current?.runtimeId) task = { ...task, codexProfile: null, claudeProfile: null };
+    }
+    const keepProject = Boolean(currentProject && !currentProject.archivedAt
+      && currentProject.workspaceId === task.workspaceId && chat?.projectId && chat.workspaceId === task.workspaceId
       && chat.projectId === task.chatProjectId && chat.projectId === task.project?.id
       && task.project.workspaceId === task.workspaceId);
     task = {

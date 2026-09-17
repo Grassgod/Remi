@@ -103,6 +103,8 @@ describe("ChatWindow project settings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
     await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ agent_id: "agent-a", title: "Hello", project_id: "project-a" }));
     await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined));
+    expect(await screen.findByRole("group", { name: "Project: Remi" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Project:/ })).not.toBeInTheDocument();
   });
 
   it("keeps a new unbound chat's create request unchanged", async () => {
@@ -112,34 +114,68 @@ describe("ChatWindow project settings", () => {
     await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ agent_id: "agent-a", title: "Hello" }));
   });
 
-  it("updates an existing binding and sends null to return to pure chat", async () => {
-    backend.sessions = [session];
-    mount(true);
-    fireEvent.click(await screen.findByRole("button", { name: "Project: Remi" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Docs" }));
-    await waitFor(() => expect(backend.update).toHaveBeenCalledWith("chat-a", { project_id: "project-b" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Project: Docs" }));
+  it("can clear a project draft before creating a pure chat", async () => {
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: "Project: No project · Just chat" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Remi" }));
+    fireEvent.click(screen.getByRole("button", { name: "Project: Remi" }));
     fireEvent.click(await screen.findByRole("button", { name: "No project · Just chat" }));
-    await waitFor(() => expect(backend.update).toHaveBeenLastCalledWith("chat-a", { project_id: null }));
-    expect(await screen.findByRole("button", { name: "Project: No project · Just chat" })).toBeInTheDocument();
-    expect(backend.create).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
+    await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ agent_id: "agent-a", title: "Hello" }));
+    expect(await screen.findByRole("group", { name: "Project: No project · Just chat" })).toBeInTheDocument();
+    expect(backend.update).not.toHaveBeenCalled();
   });
 
-  it("retains the current binding and reports a failed update", async () => {
+  it("shows an existing binding without any project-changing control", async () => {
     backend.sessions = [session];
-    backend.update.mockRejectedValueOnce(new Error("project cannot be changed"));
     mount(true);
-    fireEvent.click(await screen.findByRole("button", { name: "Project: Remi" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Docs" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Action failed");
-    expect(screen.getByRole("button", { name: "Project: Remi" })).toBeInTheDocument();
+    const project = await screen.findByRole("group", { name: "Project: Remi" });
+    expect(project).toHaveTextContent("Remi");
+    fireEvent.click(project);
+    expect(screen.queryByRole("button", { name: /^Project:/ })).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Search projects…")).not.toBeInTheDocument();
+    expect(backend.update).not.toHaveBeenCalled();
+    expect(backend.create).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
+    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined));
   });
 
-  it("disables changes while a task runs and clears the project for a new chat", async () => {
+  it.each([
+    [null, "No project · Just chat"],
+    ["missing", "Linked project unavailable"],
+  ])("does not allow an existing session with project %s to change its binding", async (project_id, label) => {
+    backend.sessions = [{ ...session, project_id }];
+    mount(true);
+    const project = await screen.findByRole("group", { name: `Project: ${label}` });
+    fireEvent.click(project);
+    expect(screen.queryByRole("button", { name: /^Project:/ })).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Search projects…")).not.toBeInTheDocument();
+    expect(backend.update).not.toHaveBeenCalled();
+  });
+
+  it("keeps archived sessions disabled until restoration succeeds", async () => {
+    backend.sessions = [{ ...session, status: "archived" }];
+    let resolveRestore!: (value: ChatSession) => void;
+    backend.update.mockImplementationOnce(() => new Promise<ChatSession>(resolve => { resolveRestore = resolve; }));
+    mount(true);
+    const restore = await screen.findByRole("button", { name: "Restore chat" });
+    expect(screen.getByRole("button", { name: "Send test message" })).toBeDisabled();
+    fireEvent.click(restore);
+    await waitFor(() => expect(restore).toBeDisabled());
+    expect(backend.update).toHaveBeenCalledWith("chat-a", { status: "active" });
+    expect(screen.getByRole("button", { name: "Send test message" })).toBeDisabled();
+    backend.sessions = [session];
+    await act(async () => resolveRestore(session));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send test message" })).toBeEnabled());
+    expect(screen.getByRole("group", { name: "Project: Remi" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Project:/ })).not.toBeInTheDocument();
+  });
+
+  it("keeps running sessions read-only and clears the project for a new chat", async () => {
     backend.sessions = [session];
     backend.pending = { task_id: "task-a", status: "running" };
     const { store } = mount(true);
-    expect(await screen.findByRole("button", { name: "Project: Remi" })).toBeDisabled();
+    expect(await screen.findByRole("group", { name: "Project: Remi" })).toBeInTheDocument();
     act(() => store.getState().setDraftProjectId("project-b"));
     fireEvent.click(screen.getByRole("button", { name: "New chat" }));
     expect(store.getState().draftProjectId).toBeNull();

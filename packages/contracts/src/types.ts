@@ -4507,9 +4507,6 @@ export interface CreateChatSessionInput {
 }
 
 export interface UpdateChatSessionInput {
-  /** Omit to keep the binding; explicit null detaches the Project. */
-  projectId?: string | null;
-  project_id?: string | null;
   pinned?: boolean;
   title?: string;
   status?: MultiremiChatSessionStatus;

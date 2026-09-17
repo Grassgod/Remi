@@ -890,8 +890,14 @@ export class StoreContext {
     const issueId = cleanOptionalString(taskRow.issue_id);
     const issue = issueId ? this.issues().getIssue(issueId) : null;
     const chatId = cleanOptionalString(taskRow.chat_session_id);
-    const projectId = issue?.projectId ?? (chatId ? this.chat().getChatSession(chatId)?.projectId : null);
+    const chat = chatId ? this.chat().getChatSession(chatId) : null;
+    const projectId = issue?.projectId ?? chat?.projectId;
     if (!projectId) return null;
+    if (!issue?.projectId && chat) {
+      const project = this.projects().getProject(projectId);
+      if (!project || project.archivedAt || project.workspaceId !== chat.workspaceId
+        || project.workspaceId !== taskRow.workspace_id) return null;
+    }
     for (const resource of this.projects().listProjectResources(projectId)) {
       if (resource.resourceType !== "local_directory") continue;
       const daemonId = String(resource.resourceRef.daemonId ?? resource.resourceRef.daemon_id ?? "").trim();

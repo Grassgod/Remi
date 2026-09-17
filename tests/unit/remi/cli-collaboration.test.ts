@@ -53,9 +53,10 @@ describe("native collaboration CLI contracts", () => {
     ]);
   });
 
-  it("binds, changes, and unbinds a Chat Project without changing unrelated updates", async () => {
+  it("updates Chat metadata without exposing Project changes", async () => {
     useCliEnv();
     const spec = specById("chat.update");
+    expect(registryFor([spec]).renderHelp(spec.path)).not.toContain("--project");
     const bodies: unknown[] = [];
     globalThis.fetch = capabilityFetch(spec.id, async (request) => {
       const path = new URL(request.url).pathname;
@@ -68,38 +69,54 @@ describe("native collaboration CLI contracts", () => {
       return Response.json({ id: "chat_1" });
     });
     for (const args of [
-      ["--project", "prj_1"],
-      ["--project", "prj_2"],
-      ["--project", "none"],
       ["--title", "Renamed"],
-      ["--data", '{"projectId":null}'],
-      ["--data", '{"projectId":"prj_input"}', "--project", "none"],
+      ["--status", "archived"],
+      ["--data", '{"pinned":true}'],
     ]) {
       await capture(() => registryFor([spec]).execute([...spec.path, "Work", ...args, "--output", "json"]));
     }
-    expect(bodies).toEqual([
-      { projectId: "prj_1" },
-      { projectId: "prj_2" },
-      { projectId: null },
-      { title: "Renamed" },
-      { projectId: null },
-      { projectId: null },
-    ]);
+    expect(bodies).toEqual([{ title: "Renamed" }, { status: "archived" }, { pinned: true }]);
   });
 
-  it("advertises the Project flag and rejects empty Project values before requesting the API", async () => {
+  it("rejects Project update flags and generic input before any Chat lookup or mutation", async () => {
+    useCliEnv();
+    const spec = specById("chat.update");
+    const registry = registryFor([spec]);
+    let requests = 0;
+    globalThis.fetch = capabilityFetch(spec.id, async () => { requests++; throw new Error("unexpected Chat request"); });
+    for (const value of ["prj_1", "none"]) {
+      await expect(capture(() => registry.execute([...spec.path, "chat_1", "--project", value])))
+        .rejects.toThrow("--project");
+    }
+    const dir = await mkdtemp(resolve(tmpdir(), "chat-fixed-project-"));
+    try {
+      for (const field of ["projectId", "project_id"]) {
+        for (const value of ["prj_1", null]) {
+          const body = JSON.stringify({ [field]: value });
+          const path = resolve(dir, "update.json");
+          await writeFile(path, body);
+          for (const args of [["--data", body], ["--file", path]]) {
+            await expect(capture(() => registry.execute([...spec.path, "chat_1", ...args])))
+              .rejects.toThrow("A Chat Project can only be selected when creating the session");
+          }
+        }
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+    expect(requests).toBe(0);
+  });
+
+  it("advertises the Project flag only for creation and rejects empty Project values", async () => {
     useCliEnv();
     let requests = 0;
     globalThis.fetch = (async () => { requests++; throw new Error("unexpected network"); }) as unknown as typeof fetch;
-    for (const [id, args] of [["chat.create", ["--agent", "agt_1"]], ["chat.update", ["chat_1"]]] as const) {
-      const spec = specById(id);
-      const registry = registryFor([spec]);
-      const help = registry.renderHelp(spec.path);
-      expect(help).toContain("--project <project-id|none>");
-      await expect(capture(() => registry.execute([...spec.path, ...args, "--project", "   "])))
-        .rejects.toThrow("--project");
-      expect(requests).toBe(0);
-    }
+    const spec = specById("chat.create");
+    const registry = registryFor([spec]);
+    expect(registry.renderHelp(spec.path)).toContain("--project <project-id|none>");
+    await expect(capture(() => registry.execute([...spec.path, "--agent", "agt_1", "--project", "   "])))
+      .rejects.toThrow("--project");
+    expect(requests).toBe(0);
   });
 
   it("sends repeated local Chat attachments and a caption using the Task destination", async () => {

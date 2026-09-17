@@ -34,22 +34,17 @@ describe("ChatEndpoints contracts", () => {
     await expect(endpointsWithResponse({ created: true }).createChatSession({ agent_id: "agent-1" })).rejects.toBeInstanceOf(ApiContractError);
   });
 
-  it("sends an optional project on create and explicitly clears it on update", async () => {
+  it("sends an optional project only when creating the session", async () => {
     const linked = { ...session, project_id: "project-a" };
     await expect(endpointsWithResponse(linked).createChatSession({ agent_id: "agent-1", project_id: "project-a" })).resolves.toEqual(linked);
     expect(fetch).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
       body: JSON.stringify({ agent_id: "agent-1", project_id: "project-a" }),
     }));
-    await expect(endpointsWithResponse({ ...session, project_id: null }).updateChatSession("chat-1", { project_id: null })).resolves.toMatchObject({ project_id: null });
-    expect(fetch).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ body: JSON.stringify({ project_id: null }) }));
   });
 
-  it("rejects malformed projects and unacknowledged bindings or unbindings", async () => {
+  it("rejects malformed project data and unacknowledged project selection on create", async () => {
     await expect(endpointsWithResponse(session).createChatSession({ agent_id: "agent-1", project_id: "project-a" })).rejects.toBeInstanceOf(ApiContractError);
     await expect(endpointsWithResponse({ ...session, project_id: 123 }).getChatSession("chat-1")).rejects.toBeInstanceOf(ApiContractError);
-    await expect(endpointsWithResponse(session).updateChatSession("chat-1", { project_id: "project-a" })).rejects.toBeInstanceOf(ApiContractError);
-    await expect(endpointsWithResponse(session).updateChatSession("chat-1", { project_id: null })).rejects.toBeInstanceOf(ApiContractError);
-    await expect(endpointsWithResponse({ ...session, project_id: "project-a" }).updateChatSession("chat-1", { project_id: "project-b" })).rejects.toBeInstanceOf(ApiContractError);
   });
 
   it("reads summaries while preserving unknown display enums", async () => {
