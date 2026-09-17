@@ -807,6 +807,18 @@ describe("RuntimeDirectoryScanRequestSchema", () => {
 describe("FleetModelsResponseSchema", () => {
   const opts = { endpoint: "GET /api/models (test)" };
 
+  it("validates optional provider default thinking, including an explicit empty set", () => {
+    for (const supported_levels of [[], [{ value: "high", label: "High" }]]) {
+      const parsed = parseWithFallback({ providers: [{ provider: "claude", default_thinking: { supported_levels } }] },
+        FleetModelsResponseSchema, EMPTY_FLEET_MODELS, opts);
+      expect(parsed.providers[0]?.default_thinking?.supported_levels).toEqual(supported_levels);
+    }
+    for (const default_thinking of [null, {}, { supported_levels: null }, { supported_levels: [{ value: 42 }] }]) {
+      expect(parseWithFallback({ providers: [{ provider: "claude", default_thinking }] },
+        FleetModelsResponseSchema, EMPTY_FLEET_MODELS, opts)).toBe(EMPTY_FLEET_MODELS);
+    }
+  });
+
   it("parses a well-formed catalog and defaults missing counts / models", () => {
     const parsed = parseWithFallback(
       {

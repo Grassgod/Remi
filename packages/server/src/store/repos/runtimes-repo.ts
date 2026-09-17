@@ -1,5 +1,6 @@
 import { runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
 import { runtimeConnectionModels } from "@multiremi/contracts/runtime-connection";
+import { modelThinkingLevels } from "@multiremi/contracts/model-thinking.js";
 import { syncRuntimeExecutionGroups, runtimeExecutionGroupId } from "@multiremi/store/execution-groups.js";
 import { WorkspacesRepo } from "@multiremi/store/repos/workspaces-repo.js";
 // Runtimes domain (runtime registration/lifecycle, models, and the five daemon async-request
@@ -1880,9 +1881,11 @@ export class RuntimesRepo {
       listWorkspaceCodexProfileModels: (id) => this.listWorkspaceCodexProfileModels(id),
       listWorkspaceClaudeProfileModels: (id) => this.listWorkspaceClaudeProfileModels(id),
       getRuntimeExecutionProfile: (id, provider) => this.getRuntimeExecutionProfile(id, provider),
-    }, agent.workspaceId, runtime).find(entry => entry.provider === agent.provider)?.models ?? [];
-    const model = agent.model ? catalog.find(model => model.id === agent.model) : catalog.find(model => model.default);
-    return Boolean(model && (!agent.thinkingLevel || model.thinking?.supported_levels.some(level => level.value === agent.thinkingLevel)));
+    }, agent.workspaceId, runtime).find(entry => entry.provider === agent.provider);
+    const models = catalog?.models ?? [];
+    if (agent.model && !models.some(model => model.id === agent.model)) return false;
+    return !agent.thinkingLevel || modelThinkingLevels(models, agent.model ?? "", catalog?.default_thinking)
+      .some(level => level.value === agent.thinkingLevel);
   }
 
   getRuntimeByDaemonAndProvider(daemonId: string, provider: string): MultiremiRuntime | null {
@@ -1988,8 +1991,8 @@ export class RuntimesRepo {
     for (const model of normalized) {
       this.ctx.db.run(
         `INSERT INTO multiremi_runtime_models (
-          runtime_id, model_id, label, provider, is_default, thinking, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          runtime_id, model_id, label, provider, is_default, thinking, created_at, updated_at, is_provider_default
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           runtimeId,
           model.id,
@@ -1999,6 +2002,7 @@ export class RuntimesRepo {
           model.thinking ? toJson(model.thinking) : null,
           now,
           now,
+          model.providerDefault ? 1 : 0,
         ],
       );
     }
@@ -2155,6 +2159,7 @@ function normalizeRuntimeModels(models: MultiremiRuntimeModel[], provider: strin
       label: String(model.label ?? id).trim() || id,
       provider: String(model.provider ?? provider ?? "").trim() || provider,
       default: Boolean(model.default),
+      ...(model.providerDefault === true ? { providerDefault: true } : {}),
       thinking: normalizeRuntimeModelThinking(model.thinking),
     };
   });
@@ -2482,6 +2487,7 @@ function toRuntimeModel(row: Row): MultiremiRuntimeModel {
     label: String(row.label ?? row.model_id),
     provider: String(row.provider ?? ""),
     default: Boolean(Number(row.is_default ?? 0)),
+    ...(Number(row.is_provider_default) === 1 ? { providerDefault: true } : {}),
     thinking: row.thinking == null ? undefined : parseJson(row.thinking, undefined),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),

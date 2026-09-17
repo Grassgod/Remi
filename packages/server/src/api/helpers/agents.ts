@@ -40,6 +40,7 @@ import {
 } from "../wire/runtimes.js";
 import { isAgentRole } from "@multiremi/store/agent-role.js";
 import { currentTaskIssueCreationRestricted } from "./issues.js";
+import { commonThinkingLevels, modelThinkingLevels } from "@multiremi/contracts/model-thinking.js";
 
 export const MAX_AGENT_DESCRIPTION_LENGTH = 255;
 
@@ -70,8 +71,9 @@ export function executionGroupModelCatalog(store: MultiremiStore, workspaceId: s
   const group = store.getExecutionGroup(groupId, workspaceId);
   if (!group) return [];
   const runtimes = executionGroupRuntimes(store, workspaceId, groupId, ownerId).sort((a, b) => a.id.localeCompare(b.id));
-  const catalogs = runtimes.map((runtime) => runtimeTargetModelCatalog(store, workspaceId, runtime)
-    .find((entry) => entry.provider === group.provider)?.models ?? []);
+  const providers = runtimes.map((runtime) => runtimeTargetModelCatalog(store, workspaceId, runtime)
+    .find((entry) => entry.provider === group.provider));
+  const catalogs = providers.map((entry) => entry?.models ?? []);
   const models = (catalogs[0] ?? []).flatMap((model): FleetModelResponse[] => {
     const matches = catalogs.map((catalog) => catalog.find((candidate) => candidate.id === model.id));
     if (matches.some((candidate) => !candidate)) return [];
@@ -86,7 +88,11 @@ export function executionGroupModelCatalog(store: MultiremiStore, workspaceId: s
       ...(supported.length ? { thinking: { supported_levels: supported, ...(thinkingDefault ? { default_level: thinkingDefault } : {}) } } : {}),
     }];
   });
-  return [{ provider: group.provider, models, online_runtime_count: runtimes.filter((runtime) => runtime.status === "online").length }];
+  return [{ provider: group.provider, models, online_runtime_count: runtimes.filter((runtime) => runtime.status === "online").length,
+    ...(providers.some((entry) => entry?.default_thinking) ? { default_thinking: {
+      supported_levels: commonThinkingLevels(providers.map((entry) => modelThinkingLevels(entry?.models ?? [], "", entry?.default_thinking))),
+    } } : {}),
+  }];
 }
 
 export function executionGroupRequestOwner(c: Context, store: MultiremiStore, workspaceId: string): string | Response {
@@ -106,15 +112,25 @@ export function workspaceProviderModelCatalog(
   callerOwnerId: string,
   runtimeId?: string | null,
 ): FleetModelResponse[] {
+  return workspaceProviderCatalog(store, workspaceId, provider, callerOwnerId, runtimeId)?.models ?? [];
+}
+
+function workspaceProviderCatalog(
+  store: MultiremiStore,
+  workspaceId: string,
+  provider: string,
+  callerOwnerId: string,
+  runtimeId?: string | null,
+): FleetProviderModelsResponse | undefined {
   if (runtimeId) {
     const runtime = store.getRuntime(runtimeId);
     return runtime && (runtime.workspaceId ?? "local") === workspaceId
-      ? runtimeTargetModelCatalog(store, workspaceId, runtime).find((entry) => entry.provider === provider)?.models ?? []
-      : [];
+      ? runtimeTargetModelCatalog(store, workspaceId, runtime).find((entry) => entry.provider === provider)
+      : undefined;
   }
   const runtimes = store.listRuntimes().filter((runtime) => (runtime.workspaceId ?? "local") === workspaceId);
   const providers = overlayGatewayModels(store, workspaceId, fleetModelsResponse(runtimes, callerOwnerId));
-  return providers.find((entry) => entry.provider === provider)?.models ?? [];
+  return providers.find((entry) => entry.provider === provider);
 }
 
 function validateAgentModelSelection(
@@ -134,28 +150,33 @@ function validateAgentModelSelection(
   if (profile && input.model && input.model !== profile.model) {
     return c.json({ error: `model "${input.model}" is not supported by the selected Runtime connection; expected "${profile.model}"` }, 400);
   }
+  const groupCatalog = !input.runtimeId && input.executionGroupId
+    ? executionGroupModelCatalog(store, input.workspaceId, input.executionGroupId, input.ownerId ?? currentRequestUserId(c))[0]
+    : undefined;
   const groupModels = !input.runtimeId && input.executionGroupId
-    ? executionGroupModelCatalog(store, input.workspaceId, input.executionGroupId, input.ownerId ?? currentRequestUserId(c))[0]?.models ?? []
+    ? groupCatalog?.models ?? []
     : null;
   if (groupModels && input.model && !groupModels.some((model) => model.id === input.model)) {
     return c.json({ error: `model "${input.model}" is not supported by every available member of the selected execution group` }, 400);
   }
   // Model IDs remain an escape hatch for gateways that have not refreshed yet.
   // Capability validation is needed only when an explicit effort override is
-  // requested, because that override must be proven against a concrete model.
+  // requested, using either the concrete model or provider default capability.
   if (!input.thinkingLevel) return null;
-  const models = groupModels ?? workspaceProviderModelCatalog(
+  const catalog = input.executionGroupId && !input.runtimeId ? groupCatalog : workspaceProviderCatalog(
     store,
     input.workspaceId,
     input.provider,
     currentRequestUserId(c),
     input.runtimeId,
   );
+  const models = catalog?.models ?? [];
+  const supportedLevels = modelThinkingLevels(models, input.model, catalog?.default_thinking);
   const selectedModel = input.model
     ? models.find((model) => model.id === input.model)
     : models.find((model) => model.default);
 
-  if (!selectedModel) {
+  if (!selectedModel && (input.model || (supportedLevels.length === 0 && !catalog?.default_thinking))) {
     if (input.model && models.length > 0) {
       return c.json({
         error: `thinking_level "${input.thinkingLevel}" cannot be set because model "${input.model}" is not available for provider "${input.provider}" in workspace "${input.workspaceId}"`,
@@ -170,10 +191,9 @@ function validateAgentModelSelection(
       error: `thinking_level "${input.thinkingLevel}" cannot be set because no model catalog is available for provider "${input.provider}" in workspace "${input.workspaceId}"`,
     }, 400);
   }
-  const supportedLevels = selectedModel.thinking?.supported_levels ?? [];
   if (!supportedLevels.some((level) => level.value === input.thinkingLevel)) {
     return c.json({
-      error: `thinking_level "${input.thinkingLevel}" is not supported by model "${selectedModel.id}" for provider "${input.provider}"`,
+      error: `thinking_level "${input.thinkingLevel}" is not supported by model "${input.model || "default"}" for provider "${input.provider}"`,
     }, 400);
   }
   return null;

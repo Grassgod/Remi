@@ -29,9 +29,9 @@ export function ThinkingPropRow({
   onChange: (next: string) => Promise<void> | void;
 }) {
   const { t } = useT("agents");
-  const { models, isLoading, isError } = useExecutionTargetModels(wsId, provider, runtimeId, executionGroupId, agentId);
+  const { models, defaultThinking, isLoading, isError } = useExecutionTargetModels(wsId, provider, runtimeId, executionGroupId, agentId);
 
-  const levels = getModelThinkingLevels(models, model);
+  const levels = getModelThinkingLevels(models, model, defaultThinking);
   if (levels.length === 0 && !value) {
     if (provider !== "claude" && provider !== "codex") return null;
     return (

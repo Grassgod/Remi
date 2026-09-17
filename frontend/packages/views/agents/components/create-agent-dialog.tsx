@@ -94,8 +94,8 @@ export function CreateAgentDialog({
   const [legacyRuntimeId, setLegacyRuntimeId] = useState(template?.runtime_id ?? "");
   const targetModels = useExecutionTargetModels(wsId ?? "", provider, executionGroupId ? undefined : legacyRuntimeId, executionGroupId);
   const thinkingLevels = useMemo(
-    () => getModelThinkingLevels(targetModels.models, model),
-    [targetModels.models, model],
+    () => getModelThinkingLevels(targetModels.models, model, targetModels.defaultThinking),
+    [targetModels.models, model, targetModels.defaultThinking],
   );
 
   const switchTarget = (next: ExecutionTarget) => {
@@ -110,7 +110,7 @@ export function CreateAgentDialog({
   const switchModel = (next: string) => {
     if (
       next !== model &&
-      !supportsThinkingLevel(targetModels.models, next, thinkingLevel)
+      !supportsThinkingLevel(targetModels.models, next, thinkingLevel, targetModels.defaultThinking)
     ) {
       setThinkingLevel("");
     }

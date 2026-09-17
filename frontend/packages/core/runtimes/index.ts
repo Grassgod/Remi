@@ -12,3 +12,4 @@ export * from "./custom-pricing-store";
 export * from "./usage-diagnostics-store";
 export * from "./cloud-runtime";
 export * from "./provisions";
+export { modelThinkingLevels } from "@multiremi/contracts";

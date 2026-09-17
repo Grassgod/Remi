@@ -489,6 +489,28 @@ describe("Claude 1M session negotiation", () => {
 });
 
 describe("AcpProvider model and effort", () => {
+  it("retains the default sentinel's own effort before probing concrete models", async () => {
+    const agent = fakeAgent({
+      ...claudeProfile(),
+      configOptions: [
+        { id: "model", name: "Model", category: "model", type: "select", currentValue: "default", options: [
+          { value: "default", name: "Default" },
+          { value: "claude-sonnet-4-6", name: "Sonnet" },
+        ] },
+        CLAUDE_CONFIG_OPTIONS[1]!,
+      ],
+      effortOptionsAfterModel: { "claude-sonnet-4-6": [{ value: "low", name: "Low" }] },
+    });
+    const models = await probeRuntimeModels({ agentType: "claude", executable: agent.executable, cwd: tempCwd() });
+    expect(models).toEqual([
+      { id: "default", label: "Default", default: true, providerDefault: true,
+        effort: { supportedLevels: [{ value: "high", label: "High" }] } },
+      { id: "claude-sonnet-4-6", label: "Sonnet", default: false,
+        effort: { supportedLevels: [{ value: "low", label: "Low" }] } },
+    ]);
+    expect(only(agent.requests(), "session/prompt")).toHaveLength(0);
+  }, 15_000);
+
   it("discovers capabilities through the real isolated CLI entry without sending a prompt", async () => {
     const agent = fakeAgent(claudeProfile());
     const models = await probeRuntimeModels({ agentType: "claude", executable: agent.executable, cwd: tempCwd() });

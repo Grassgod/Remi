@@ -4222,10 +4222,11 @@ export function runtimeModelsFromAcpCapabilities(
     label: model.label,
     provider: vendor,
     default: model.default,
-    ...(model.effort?.supportedLevels.length
+    ...(model.providerDefault ? { providerDefault: true } : {}),
+    ...(model.effort?.supportedLevels.length || model.providerDefault
       ? {
           thinking: {
-            supportedLevels: model.effort.supportedLevels.map((level) => ({ ...level })),
+            supportedLevels: (model.effort?.supportedLevels ?? []).map((level) => ({ ...level })),
           },
         }
       : {}),

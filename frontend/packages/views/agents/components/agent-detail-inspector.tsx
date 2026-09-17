@@ -90,7 +90,7 @@ export function AgentDetailInspector({
   const wsId = useWorkspaceId();
   const update = (data: Record<string, unknown>) => onUpdate(agent.id, data);
   const provider = agent.provider ?? "";
-  const { models } = useExecutionTargetModels(wsId ?? "", provider, agent.runtime_id, agent.execution_group_id, agent.id);
+  const { models, defaultThinking } = useExecutionTargetModels(wsId ?? "", provider, agent.runtime_id, agent.execution_group_id, agent.id);
   const showIntegrations = useHasIntegrations(agent.id);
   const switchTarget = (next: ExecutionTarget) =>
     update({ execution_group_id: next.executionGroupId || null, provider: next.provider, model: "", thinking_level: "" });
@@ -98,7 +98,7 @@ export function AgentDetailInspector({
     const data: Record<string, unknown> = { model: next };
     if (
       next !== (agent.model ?? "") &&
-      !supportsThinkingLevel(models, next, agent.thinking_level ?? "")
+      !supportsThinkingLevel(models, next, agent.thinking_level ?? "", defaultThinking)
     ) {
       data.thinking_level = "";
     }
