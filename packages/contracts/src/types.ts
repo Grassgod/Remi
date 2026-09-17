@@ -1134,6 +1134,8 @@ export interface ReportRuntimeLocalSkillImportInput {
 export interface ReportRuntimeModelListInput {
   status?: string;
   models?: MultiremiRuntimeModel[];
+  /** Connection used by this probe; null denotes the native/relay catalog. */
+  model_profile?: RuntimeCodexProfile | RuntimeClaudeProfile | null;
   supported?: boolean;
   error?: string;
 }

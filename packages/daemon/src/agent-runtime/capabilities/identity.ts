@@ -26,7 +26,7 @@ export const identityBlock: CapabilityBlock = {
       agentType: agent?.provider ?? "claude",
       executable: agent?.executable ?? undefined,
       customArgs: agent?.customArgs ?? [],
-      model: agent?.model ?? null,
+      model: task.codexProfile?.model ?? task.claudeProfile?.model ?? agent?.model ?? null,
       // "" is the stored "follow the CLI default" value — never send it.
       effort: agent?.thinkingLevel || null,
       chatId: task.id,

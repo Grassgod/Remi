@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import { parseRuntimeCodexProfile, type RuntimeCodexProfile } from "@multiremi/contracts/codex-profile";
 import { parseRuntimeClaudeProfile, type RuntimeClaudeProfile } from "@multiremi/contracts/claude-profile";
-import { assertRuntimeClaudeProjectCredentials, resolveRuntimeClaudeProfile, runtimeClaudeProfileEnv, runtimeClaudeProfileModels, runtimeClaudeProfileRouting } from "@daemon/agent-runtime/claude-profile.js";
-import { resolveRuntimeCodexProfile, runtimeCodexProfileModels } from "@daemon/agent-runtime/codex-profile.js";
+import { assertRuntimeClaudeProjectCredentials, resolveRuntimeClaudeProfile, runtimeClaudeProfileEnv, runtimeClaudeProfileRouting } from "@daemon/agent-runtime/claude-profile.js";
+import { resolveRuntimeCodexProfile } from "@daemon/agent-runtime/codex-profile.js";
+import { discoverRuntimeProfileModels } from "./runtime-profile-models.js";
 import { isPermanentFeishuDeliveryError } from "@shared/feishu-delivery-error.js";
 import { mkdirSync } from "node:fs";
 import { cpus, homedir, hostname } from "node:os";
@@ -1497,11 +1498,13 @@ export class MultiremiDaemon {
       return;
     }
     try {
+      const modelProfile = this.runtimeModelProfile();
       const models = await this.discoverRuntimeModels(true);
       await this.client.reportRuntimeModelListResult(runtimeId, requestId, {
         status: "completed",
         supported: true,
         models,
+        model_profile: modelProfile,
       });
     } catch (error) {
       await this.client.reportRuntimeModelListResult(runtimeId, requestId, {
@@ -1660,6 +1663,7 @@ export class MultiremiDaemon {
   }
 
   private async refreshAndReportRuntimeModels(signal: AbortSignal): Promise<MultiremiRuntimeModel[]> {
+    const modelProfile = this.runtimeModelProfile();
     const models = await this.discoverRuntimeModels(false);
     if (this.stopped || signal.aborted) throw new Error("Runtime model refresh cancelled");
 
@@ -1669,7 +1673,7 @@ export class MultiremiDaemon {
     const runtimeId = this.options.runtimeId;
     if (!runtimeId) throw new Error("Runtime model refresh has no registered Runtime");
     const generation = this.runtimeRegistrationGeneration;
-    await this.client.updateRuntimeModels(runtimeId, models, signal);
+    await this.client.updateRuntimeModels(runtimeId, models, signal, modelProfile);
     if (this.stopped || signal.aborted) throw new Error("Runtime model refresh cancelled");
     if (this.options.runtimeId === runtimeId && this.runtimeRegistrationGeneration === generation) {
       this.runtimeModelReportedGeneration = generation;
@@ -1769,6 +1773,9 @@ export class MultiremiDaemon {
 
   private cancelRuntimeModelProbe(): void {
     this.runtimeModelProbeAbort?.abort();
+    // A resolved probe can still be awaiting its outer finally. A new connection
+    // must not reuse that promise and label the old catalog with its own profile.
+    this.runtimeModelProbe = null;
   }
 
   private cancelRuntimeModelRefresh(): void {
@@ -1777,14 +1784,14 @@ export class MultiremiDaemon {
     this.wakeRuntimeModelRetry();
   }
 
+  private runtimeModelProfile(): RuntimeCodexProfile | RuntimeClaudeProfile | null {
+    return this.options.provider === "codex" ? this.runtimeCodexProfile : this.options.provider === "claude" ? this.runtimeClaudeProfile : null;
+  }
+
   private async discoverRuntimeModels(force: boolean): Promise<MultiremiRuntimeModel[]> {
-    const claudeProfile = this.options.provider === "claude" ? this.runtimeClaudeProfile : null;
-    const codexProfile = this.options.provider === "codex" ? this.runtimeCodexProfile : null;
-    const scopeModels = (models: MultiremiRuntimeModel[]) => claudeProfile
-      ? runtimeClaudeProfileModels(claudeProfile, models)
-      : codexProfile ? runtimeCodexProfileModels(codexProfile, models) : models;
     if (!this.runtimeModelDiscoveryEnabled) {
-      if (claudeProfile || codexProfile) return scopeModels([]);
+      const profile = this.runtimeModelProfile();
+      if (profile) return [{ id: profile.model, label: profile.model, provider: this.options.provider, default: true }];
       throw new Error(IN_PROCESS_RUNTIME_MODEL_DISCOVERY_DISABLED);
     }
     if (!force && this.runtimeModels
@@ -1794,38 +1801,44 @@ export class MultiremiDaemon {
     const abort = new AbortController();
     this.runtimeModelProbeAbort = abort;
     const probe = (async () => {
-      if (!this.options.inProcessRuntimeModelDiscoveryEnabled) {
-        const capabilities = await probeRuntimeModels(await this.runtimeModelProbeProviderOptions(), {
-          signal: abort.signal, timeoutMs: RUNTIME_MODEL_PROBE_TIMEOUT_MS,
-        });
-        if (abort.signal.aborted) throw new Error("Runtime model discovery cancelled");
-        const models = scopeModels(runtimeModelsFromAcpCapabilities(this.options.provider, capabilities));
-        this.runtimeModels = models;
-        this.runtimeModelsDiscoveredAt = Date.now();
-        return models;
-      }
-      const provider = this.providerFactory(await this.runtimeModelProbeProviderOptions());
-      try {
-        if (!provider.discoverModelCapabilities) {
-          throw new Error(`ACP model discovery is not supported by provider: ${this.options.provider}`);
+      const provider = this.options.provider;
+      const profile = this.runtimeModelProfile();
+      let models: MultiremiRuntimeModel[];
+      if ((provider === "codex" || provider === "claude") && profile) {
+        const key = await this.runtimeProfileKey(profile, provider);
+        const { auth_token } = provider === "codex"
+          ? resolveRuntimeCodexProfile(profile, process.env, key)
+          : resolveRuntimeClaudeProfile(profile, process.env, key);
+        const [catalog, capabilities] = await Promise.allSettled([
+          discoverRuntimeProfileModels(provider, profile, auth_token, abort.signal),
+          this.discoverAcpRuntimeModels(abort.signal),
+        ]);
+        abort.signal.throwIfAborted();
+        if (catalog.status === "rejected" && capabilities.status === "rejected") throw catalog.reason;
+        // ACP supplies reasoning metadata, not the custom supplier's model inventory.
+        // Services without a models endpoint retain the configured model and its ACP capabilities.
+        models = catalog.status === "fulfilled" ? catalog.value : this.runtimeModels
+          ?? [{ id: profile.model, label: profile.model, provider, default: true }];
+        if (capabilities.status === "fulfilled") {
+          const byId = new Map(capabilities.value.map(model => [model.id, model]));
+          models = models.map(model => {
+            const capability = byId.get(model.id);
+            return capability ? { ...model, thinking: capability.thinking } : model;
+          });
         }
-        const capabilities = await withTimeout(
-          provider.discoverModelCapabilities(),
-          RUNTIME_MODEL_PROBE_TIMEOUT_MS,
-          `ACP model discovery timed out after ${RUNTIME_MODEL_PROBE_TIMEOUT_MS}ms`,
-          abort.signal,
-        );
-        if (abort.signal.aborted) throw new Error("Runtime model discovery cancelled");
-        if (!capabilities.length) {
-          throw new Error(`ACP did not advertise any models for provider: ${this.options.provider}`);
+        if (catalog.status === "rejected") {
+          log.warn("Runtime provider catalog unavailable; retaining known models", {
+            event: "runtime_profile_catalog_unavailable", provider, profile: profile.name,
+            error: catalog.reason instanceof Error ? catalog.reason.message : String(catalog.reason),
+          });
         }
-        const models = scopeModels(runtimeModelsFromAcpCapabilities(this.options.provider, capabilities));
-        this.runtimeModels = models;
-        this.runtimeModelsDiscoveredAt = Date.now();
-        return models;
-      } finally {
-        await provider.close?.();
+      } else {
+        models = await this.discoverAcpRuntimeModels(abort.signal);
       }
+      abort.signal.throwIfAborted();
+      this.runtimeModels = models;
+      this.runtimeModelsDiscoveredAt = Date.now();
+      return models;
     })();
 
     this.runtimeModelProbe = probe;
@@ -1834,6 +1847,31 @@ export class MultiremiDaemon {
     } finally {
       if (this.runtimeModelProbe === probe) this.runtimeModelProbe = null;
       if (this.runtimeModelProbeAbort === abort) this.runtimeModelProbeAbort = null;
+    }
+  }
+
+  private async discoverAcpRuntimeModels(signal: AbortSignal): Promise<MultiremiRuntimeModel[]> {
+    if (!this.options.inProcessRuntimeModelDiscoveryEnabled) {
+      const capabilities = await probeRuntimeModels(await this.runtimeModelProbeProviderOptions(), {
+        signal, timeoutMs: RUNTIME_MODEL_PROBE_TIMEOUT_MS,
+      });
+      signal.throwIfAborted();
+      return runtimeModelsFromAcpCapabilities(this.options.provider, capabilities);
+    }
+    const provider = this.providerFactory(await this.runtimeModelProbeProviderOptions());
+    try {
+      if (!provider.discoverModelCapabilities) {
+        throw new Error(`ACP model discovery is not supported by provider: ${this.options.provider}`);
+      }
+      const capabilities = await withTimeout(
+        provider.discoverModelCapabilities(), RUNTIME_MODEL_PROBE_TIMEOUT_MS,
+        `ACP model discovery timed out after ${RUNTIME_MODEL_PROBE_TIMEOUT_MS}ms`, signal,
+      );
+      signal.throwIfAborted();
+      if (!capabilities.length) throw new Error(`ACP did not advertise any models for provider: ${this.options.provider}`);
+      return runtimeModelsFromAcpCapabilities(this.options.provider, capabilities);
+    } finally {
+      await provider.close?.();
     }
   }
 
@@ -2732,11 +2770,7 @@ export class MultiremiDaemon {
       }
       const codexProfile = task.agent?.provider === "codex" ? task.codexProfile ?? null : null;
       const claudeProfile = task.agent?.provider === "claude" ? task.claudeProfile ?? null : null;
-      const runtimeProfile = codexProfile ?? claudeProfile;
       if (claudeProfile) await assertRuntimeClaudeProjectCredentials(resolvedWorkDir.workDir);
-      if (runtimeProfile && task.agent?.model && task.agent.model !== runtimeProfile.model) {
-        throw new Error(`This Runtime's custom connection uses ${runtimeProfile.model}; select that model or the Runtime default for this Agent`);
-      }
       const workspaceRelay = await this.effectiveWorkspaceRelay(task.workspaceId, codexProfile, claudeProfile);
       const relayAuthoritative = workspaceRelay !== undefined;
       const relay = task.agent?.provider === "claude"

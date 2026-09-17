@@ -27,11 +27,13 @@ summary: 说明任务到 Codex ACP 的当前执行链、配置来源、会话隔
 
 Runtime 详情的「Codex 连接」页支持一个自定义 Responses provider：Profile 名称、API 基础地址、模型 ID，以及直接填写 API Key 或引用 Runtime 本机 `REMI_CODEX_*` 环境变量。需先更新并重启 daemon，使注册元数据包含 `codex_profiles: 1`。未启用时沿用工作区 Relay / 原生登录路径；启用后优先于工作区 Relay。接口地址由 Runtime 连接，允许 HTTP(S) 的 loopback / LAN 地址；服务端不会对它做模型发现请求，也不放宽工作区 Relay 的 URL 校验。
 
-- [配置契约](../../packages/contracts/src/codex-profile.ts)只接受结构化路由字段，不接受任意 TOML、命令、URL 内联凭据或查询参数。当前每个 Runtime 配置一个模型；云友需选择此模型或不指定模型，显式选择其他模型时任务会报错。
+- [配置契约](../../packages/contracts/src/codex-profile.ts)只接受结构化路由字段，不接受任意 TOML、命令、URL 内联凭据或查询参数。每个 Runtime 配置一个默认模型；云友可选择此连接的其他模型，不指定时使用默认模型。
 - [注入器](../../packages/daemon/src/agent-runtime/codex-profile.ts)将配置展开为隔离 `CODEX_HOME/config.toml` 的 `model`、`model_provider` 和 `model_providers.remi_custom`；密钥只进入进程环境 `OPENAI_API_KEY`，不写入 config/auth 文件。本机基础 Home 不变。ACP 的 `MODEL_PROVIDER`、`CODEX_CONFIG`、`DEFAULT_AUTH_REQUEST` 环境覆盖也会被明确设置，避免旧机器配置改变路由。
 - 这里的 Profile 是 Remi 的命名连接，不是直接复制本机 `--profile` 配置。Remi 展开有效配置，不依赖本机 profile 文件的布局。
-- [任务快照](../../packages/server/src/store/repos/tasks-repo.ts)在 claim 时冻结连接和凭据版本，并把连接纳入执行指纹。修改配置只影响新任务；运行中任务使用原快照，自动重试在原 Runtime 仍兼容当前 Agent 时保留快照。连接变化后从产品会话记录重新启动原生会话，不把旧 provider 会话 ID 传给新接口。若 Agent 切换 provider 或原 Runtime 不再兼容，重试清除旧快照，由兼容 Runtime 重新领取。
-- 模型目录显示配置的模型，属于配置声明，不代表连通性验证，也不虚构 thinking 能力。未在 Codex 内置目录中的模型可由启动配置使用；Codex 可能提示缺少模型元数据，兼容性取决于实际 Responses 服务。
+- [任务快照](../../packages/server/src/store/repos/tasks-repo.ts)在 claim 时冻结连接、所选模型和凭据版本，并把连接纳入执行指纹。修改配置只影响新任务；运行中任务使用原快照，自动重试在原 Runtime 仍兼容当前 Agent 时保留快照。连接或所选模型变化后从产品会话记录重新启动原生会话，不把旧 provider 会话 ID 传给新接口。若 Agent 切换 provider 或原 Runtime 不再兼容，重试清除旧快照，由兼容 Runtime 重新领取。
+- [模型发现](../../packages/server/src/worker/runtime-profile-models.ts)由所属 daemon 使用连接凭据请求基础地址下的 `/models`（遵循 [Models API](https://platform.openai.com/docs/api-reference/models/list)），例如 `/v2` 对应 `/v2/models`。成功后保存完整目录，并保留配置默认模型；失败保留上次目录，首次失败仍可使用配置模型。目录不证明模型推理成功；thinking 能力仅按准确模型 ID 合并 ACP 实测结果。未在 Codex 内置目录中的模型可由启动配置使用；兼容性取决于实际 Responses 服务。
+- 供应商目录不可用但 ACP 探测成功时，保留已有目录（首次使用配置默认模型）并更新已知模型的能力，日志明确记录目录探测失败；不会把 ACP 的官方模型列表当作 custom 供应商目录。
+- 模型上报携带本次探测的 `model_profile`，服务端只接受与当前连接匹配的目录；旧 daemon 的无标识上报不能覆盖 custom 目录。部署此能力需同时更新平台和 daemon。
 - 可选的 LLM 进度摘要使用 Chat Completions 协议，因此不自动复用自定义 Responses 连接的密钥；需单独配置 `MULTIREMI_PROGRESS_SUMMARY_OPENAI_BASE_URL` 与 `MULTIREMI_PROGRESS_SUMMARY_OPENAI_API_KEY` 才启用该摘要。任务状态与执行消息照常上报。
 
 直接填写的 API Key 使用 [AES-256-GCM 存储](../../packages/server/src/runtime-provider-credentials.ts)，认证数据绑定工作区、Runtime 和不可变凭据版本。服务端需配置 `MULTIREMI_PROVIDER_ENCRYPTION_KEY`（base64 编码的 32 字节密钥），也可使用部署的 `MULTIREMI_TOKEN` 派生密钥；没有加密密钥时保存失败，不回退明文。轮换时用逗号分隔的 `MULTIREMI_PROVIDER_ENCRYPTION_PREVIOUS_KEYS` 保留旧密钥；更换 master token 前需保留旧派生密钥或迁移数据。历史凭据随 Runtime 保留以支持冻结任务重试，删除 Runtime 时清理；合并 Runtime 身份时重绑定加密认证数据。
@@ -43,6 +45,9 @@ CLI 对应命令：
 ```bash
 remi runtime codex-profile get <runtime>
 remi runtime codex-profile set <runtime> --file profile.json
+remi runtime model refresh <runtime> --json
+remi runtime model status <runtime> <request-id> --json
+remi runtime model list <runtime> --json
 ```
 
 `profile.json` 示例（文件内不要提交真实密钥到 Git；可省略 `api_key` 保留已保存的密钥）：
@@ -63,6 +68,7 @@ remi runtime codex-profile set <runtime> --file profile.json
 | 真实 API → daemon → ACP 任务 | [smoke-multiremi-acp.ts](../../tests/integration/smoke-multiremi-acp.ts) |
 | 自定义连接、密钥权限/加密与会话快照 | [runtime-codex-profile.test.ts](../../tests/unit/multiremi/runtime-codex-profile.test.ts)、[codex-profile.test.ts](../../tests/unit/daemon/codex-profile.test.ts) |
 | API → daemon 的配置与密钥注入（provider fixture） | [runtime-codex-profile.test.ts](../../tests/integration/runtime-codex-profile.test.ts) |
+| 自定义目录发现、缓存及所选模型执行（provider fixture） | [runtime-profile-model-discovery.test.ts](../../tests/integration/runtime-profile-model-discovery.test.ts) |
 | Runtime 表单与凭据保留 | [runtime-codex-profile-tab.test.tsx](../../frontend/packages/views/runtimes/components/runtime-codex-profile-tab.test.tsx) |
 
 在根目录执行：

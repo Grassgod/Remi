@@ -427,7 +427,7 @@ export class TasksRepo {
     // carry another machine's provider session. An explicit runtimeId is only
     // honoured when there is no strong affinity to respect.
     const chatProfile = chatSession?.sessionRuntimeId
-      ? this.ctx.runtimes().getRuntimeExecutionProfile(chatSession.sessionRuntimeId, agent.provider) : null;
+      ? this.runtimeProfileForAgent(chatSession.sessionRuntimeId, agent) : null;
     const affinity = this.resolveTaskAffinity(
       agent,
       input.resetProviderSession ? null : chatSession,
@@ -451,7 +451,7 @@ export class TasksRepo {
       issueLane = this.ctx.issueSessions().getOrCreateSessionAgentLane(issueSession.id, agent.id, executionScope);
       const laneRuntime = issueLane.runtimeId ? this.ctx.runtimes().getRuntime(issueLane.runtimeId) : null;
       const laneProfile = laneRuntime
-        ? this.ctx.runtimes().getRuntimeExecutionProfile(laneRuntime.id, agent.provider) : null;
+        ? this.runtimeProfileForAgent(laneRuntime.id, agent) : null;
       const laneResumable =
         !input.resetProviderSession
         && !!issueLane.providerSessionId
@@ -1176,7 +1176,7 @@ export class TasksRepo {
     }
 
     const pluginSnapshot = this.ctx.agentPlugins().resolveAgentPluginSnapshot(currentAgent.id);
-    const runtimeProfile = this.ctx.runtimes().getRuntimeExecutionProfile(runtime.id, provider);
+    const runtimeProfile = this.runtimeProfileForAgent(runtime.id, currentAgent);
     const executionFingerprint = withRuntimeProfileFingerprint(
       createHash("sha256").update(canonicalJson(pluginSnapshot)).digest("hex"), runtimeProfile,
     );
@@ -1338,6 +1338,13 @@ export class TasksRepo {
     return Number(row?.eligible ?? 0) === 1;
   }
 
+  private runtimeProfileForAgent(runtimeId: string, agent: MultiremiAgent) {
+    const profile = this.ctx.runtimes().getRuntimeExecutionProfile(runtimeId, agent.provider);
+    // Freeze the selected model with its connection; retries keep the stored
+    // profile, while changing models invalidates the provider session fingerprint.
+    return profile ? { ...profile, model: cleanOptionalString(agent.model) ?? profile.model } : null;
+  }
+
   private runtimeMeetsTaskClaimEligibility(
     runtime: MultiremiRuntime,
     task: MultiremiTaskWithAgent,
@@ -1435,7 +1442,7 @@ export class TasksRepo {
       const plugins = this.ctx.agentPlugins().resolveAgentPluginSnapshot(agent.id);
       const fingerprint = this.ctx.agentPlugins().getAgentPluginCapabilityRevision(agent.id);
       const issue = task.issueId ? this.ctx.issues().getIssue(task.issueId) : null;
-      const profile = chat.sessionRuntimeId ? this.ctx.runtimes().getRuntimeExecutionProfile(chat.sessionRuntimeId, agent.provider) : null;
+      const profile = chat.sessionRuntimeId ? this.runtimeProfileForAgent(chat.sessionRuntimeId, agent) : null;
       const affinity = this.resolveTaskAffinity(agent, chat, issue, task.holdsWorkspace, withRuntimeProfileFingerprint(fingerprint, profile), plugins.length > 0 || Boolean(profile));
       const runtimeId = affinity.runtimeId ?? (task.sessionId ? agent.runtimeId : task.runtimeId);
       const inherit = affinity.inheritChatSession;

@@ -122,6 +122,16 @@ test("ephemeral identity turns the agent's thinking_level into an effort overrid
   expect(config.effort).toBe("xhigh");
 });
 
+test("custom connection retries send the frozen model even after the Agent changes", async () => {
+  for (const provider of ["codex", "claude"] as const) {
+    const profile = { name: "custom", base_url: "http://127.0.0.1:8000/v1", model: "frozen-sol", env_key: `REMI_${provider.toUpperCase()}_KEY` };
+    const config = new AgentRuntime().assemble(ephemeralContext({ provider, model: "new-astra" }, {
+      ...(provider === "codex" ? { codexProfile: profile } : { claudeProfile: profile }),
+    }));
+    expect((await runOnce(config)).model).toBe("frozen-sol");
+  }
+});
+
 test('ephemeral identity treats an empty/absent thinking_level as "no override"', () => {
   expect(new AgentRuntime().assemble(ephemeralContext({ thinkingLevel: "" })).effort).toBeNull();
   expect(new AgentRuntime().assemble(ephemeralContext({})).effort).toBeNull();
