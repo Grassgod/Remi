@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, statSync, lstatSync, realpathSync, appendFileSync, chmodSync, copyFileSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, type Dirent } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import type { RepoSpec } from "@daemon/contracts/types.js";
 import { createLogger } from "@shared/logger.js";
@@ -329,12 +329,15 @@ export class MultiremiRepoCache {
       );
       const snapshotPath = join(repoRoot, commit);
       if (existsSync(snapshotPath)) {
+        // Revalidate snapshots created before the symlink containment guard.
+        makeTreeReadOnly(snapshotPath);
         return { path: snapshotPath, commit, ...resolution, created: false };
       }
 
       mkdirSync(repoRoot, { recursive: true });
       const temporaryPath = join(repoRoot, `.${commit}.tmp-${process.pid}-${Date.now()}`);
       mkdirSync(temporaryPath, { recursive: true });
+      let published = false;
       try {
         const archive = spawnSync("git", ["--git-dir", barePath, "archive", "--format=tar", commit], {
           encoding: null,
@@ -356,8 +359,12 @@ export class MultiremiRepoCache {
         }
         makeTreeReadOnly(temporaryPath);
         renameSync(temporaryPath, snapshotPath);
+        published = true;
+        // Relative links survive the rename; absolute links must also remain
+        // contained at the published location, not point back into staging.
+        assertSnapshotSymlinksContained(snapshotPath);
       } catch (error) {
-        rmSync(temporaryPath, { recursive: true, force: true });
+        removeFailedSnapshotTree(published ? snapshotPath : temporaryPath);
         throw error;
       }
       return { path: snapshotPath, commit, ...resolution, created: true };
@@ -483,9 +490,17 @@ export class MultiremiRepoCache {
     // GC removes the private directory; the next add collects its stale
     // registration through the same lazy pruning as regular worktrees.
     git(barePath, ["worktree", "prune"], { allowFailure: true });
-    git(barePath, ["worktree", "add", "--detach", worktreePath, commit]);
-    makeTreeReadOnly(worktreePath);
-    return result(true);
+    try {
+      git(barePath, ["worktree", "add", "--detach", worktreePath, commit]);
+      makeTreeReadOnly(worktreePath);
+      return result(true);
+    } catch (error) {
+      // Never leave a rejected or partially protected tree available for reuse.
+      // We still hold the repo lock, so its stale registration can be removed now.
+      removeFailedSnapshotTree(worktreePath);
+      git(barePath, ["worktree", "prune"]);
+      throw error;
+    }
   }
 
   private barePath(workspaceId: string, repoUrl: string): string {
@@ -611,17 +626,66 @@ function safeReadDir(path: string): Dirent[] {
 }
 
 function makeTreeReadOnly(root: string): void {
-  for (const entry of safeReadDir(root)) {
+  // Validate the entire tree before changing permissions. chmod must never
+  // follow a symlink: its target could be the writable parent Issue checkout.
+  assertSnapshotSymlinksContained(root);
+  setSnapshotTreeReadOnly(root);
+}
+
+function assertSnapshotSymlinksContained(root: string): void {
+  const info = lstatSync(root);
+  if (!info.isDirectory() || info.isSymbolicLink()) {
+    throw new Error(`unsafe read-only snapshot root: ${root}`);
+  }
+  const canonicalRoot = realpathSync(root);
+  const visit = (directory: string): void => {
+    // Fail closed on unreadable directories as well as unresolved links.
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isSymbolicLink()) {
+        let target: string;
+        try {
+          target = realpathSync(path);
+        } catch (error) {
+          throw new Error(`cannot resolve read-only snapshot symlink: ${path}`, { cause: error });
+        }
+        const rel = relative(canonicalRoot, target);
+        if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+          throw new Error(`read-only snapshot symlink escapes snapshot root: ${path}`);
+        }
+      } else if (entry.isDirectory()) {
+        visit(path);
+      }
+    }
+  };
+  visit(root);
+}
+
+function setSnapshotTreeReadOnly(root: string): void {
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
     const path = join(root, entry.name);
     if (entry.isSymbolicLink()) continue;
     if (entry.isDirectory()) {
-      makeTreeReadOnly(path);
-      chmodSync(path, 0o555);
+      setSnapshotTreeReadOnly(path);
     } else {
       chmodSync(path, 0o444);
     }
   }
   chmodSync(root, 0o555);
+}
+
+/** Roll back only a newly created tree, without touching any symlink target. */
+function removeFailedSnapshotTree(root: string): void {
+  const makeDirectoriesWritable = (path: string): void => {
+    const info = lstatSync(path, { throwIfNoEntry: false });
+    if (!info?.isDirectory() || info.isSymbolicLink()) return;
+    chmodSync(path, info.mode | 0o700);
+    for (const entry of readdirSync(path, { withFileTypes: true })) {
+      if (entry.isDirectory() && !entry.isSymbolicLink()) makeDirectoriesWritable(join(path, entry.name));
+    }
+  };
+  makeDirectoriesWritable(root);
+  rmSync(root, { recursive: true, force: true });
 }
 
 function git(
