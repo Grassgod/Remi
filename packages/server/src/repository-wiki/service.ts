@@ -67,6 +67,8 @@ export interface RepositoryWikiServiceContract {
 
 export class RepositoryWikiUnavailableError extends Error {}
 export const REPOSITORY_WIKI_BATCH_LIMIT = 256;
+const STORAGE_WRITE_CONCURRENCY = 4;
+const PROMOTION_CHECKPOINT_SIZE = 8;
 
 /** Unknown outgoing links cannot be checked when an existing target moves or disappears. */
 export function assertRepositoryWikiPathChangesReadable(
@@ -92,17 +94,19 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
   private storageRun: Promise<void> | null = null;
   private readonly cleanupConcurrency: number;
   private readonly writeTimeoutMs: number;
+  private readonly storageJobTimeoutMs: number;
   private readonly operationSignal?: AbortSignal;
 
   constructor(
     private readonly store: MultiremiStore,
     private readonly client: OpenVikingClientContract | null,
     readonly mode: ProjectKnowledgeMode,
-    options: { cleanupConcurrency?: number; writeTimeoutMs?: number; signal?: AbortSignal } = {},
+    options: { cleanupConcurrency?: number; writeTimeoutMs?: number; storageJobTimeoutMs?: number; signal?: AbortSignal } = {},
   ) {
     const concurrency = options.cleanupConcurrency ?? Number(process.env.MULTIREMI_WIKI_CLEANUP_CONCURRENCY ?? 8);
     this.cleanupConcurrency = Number.isInteger(concurrency) && concurrency >= 1 && concurrency <= 32 ? concurrency : 8;
     this.writeTimeoutMs = Math.max(1, options.writeTimeoutMs ?? positiveInt(process.env.MULTIREMI_WIKI_WRITE_TIMEOUT_MS, 120_000));
+    this.storageJobTimeoutMs = Math.max(1, options.storageJobTimeoutMs ?? 60_000);
     this.operationSignal = options.signal;
   }
 
@@ -489,11 +493,11 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
     let snapshotOid: string | null = null;
     let stored: RepositoryWikiBatchResult[];
     try {
-      for (const entry of staged) {
+      await forEachStorageEntry(staged, async (entry) => {
         await this.ensureUriDirectories(storageRootUri, entry.uri);
         await client.create(entry.uri, storageRootUri, entry.content);
         await client.setTags(entry.uri, repositoryWikiRetrievalTags(entry.doc));
-      }
+      });
       if (staged.length) {
         snapshotOid = requireSnapshot(await client.commit(`repository_wiki_batch:${batchId}`, stagedUris));
       }
@@ -589,7 +593,7 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
     if (!currentJob) return false;
     job = currentJob;
     const abort = new AbortController();
-    const deadline = setTimeout(() => abort.abort(), 60_000);
+    const deadline = setTimeout(() => abort.abort(new RepositoryWikiUnavailableError("Repository wiki storage job deadline exceeded")), this.storageJobTimeoutMs);
     const scopedSignal = AbortSignal.any([abort.signal, ...[signal, this.operationSignal].filter((value): value is AbortSignal => Boolean(value))]);
     const assertLease = () => {
       scopedSignal.throwIfAborted();
@@ -600,14 +604,16 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
     };
     const renewal = setInterval(() => { try { assertLease(); } catch { abort.abort(); } }, 20_000);
     const baseClient = this.requireClient();
-    const client = baseClient.withSignal?.(scopedSignal) ?? baseClient;
+    const client = deadlineClient(baseClient, scopedSignal);
     const rootUri = repositoryWikiRootUri(job.workspaceId, job.repositoryId);
     const storageRootUri = repositoryWikiStorageRootUri(job.workspaceId, job.repositoryId);
     const previousCanonical = new Map<string, string | null>();
     let phase = job.state;
     try {
       if (phase === "pending") {
-        const entries = await Promise.all(job.manifest.promotions.map(async (promotion) => {
+        // The manifest contains only unfinished promotions. Each checkpoint
+        // atomically advances doc/revision pointers and removes its entries.
+        const entries = job.manifest.promotions.map((promotion) => {
           if (!isRepositoryWikiStagingUri(storageRootUri, promotion.stagedUri)) {
             throw new RepositoryWikiUnavailableError(`Invalid Repository Wiki staging URI for ${promotion.docId}`);
           }
@@ -617,41 +623,45 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
           if (promotion.finalUri !== expectedFinalUri) {
             throw new RepositoryWikiUnavailableError(`Invalid Repository Wiki final URI for ${promotion.docId}`);
           }
-          const content = await client.read(promotion.stagedUri);
-          if (sha256Text(content) !== promotion.contentSha256) {
-            throw new RepositoryWikiUnavailableError(`Repository wiki checksum mismatch for ${promotion.docId}`);
-          }
-          return { doc, content, ...promotion };
-        }));
+          return { doc, ...promotion };
+        });
 
-        for (const entry of entries) {
+        for (let offset = 0; offset < entries.length; offset += PROMOTION_CHECKPOINT_SIZE) {
+          const chunk = entries.slice(offset, offset + PROMOTION_CHECKPOINT_SIZE);
+          await forEachStorageEntry(chunk, async (entry) => {
+            assertLease();
+            const content = await client.read(entry.stagedUri);
+            if (sha256Text(content) !== entry.contentSha256) {
+              throw new RepositoryWikiUnavailableError(`Repository wiki checksum mismatch for ${entry.docId}`);
+            }
+            await this.ensureUriDirectories(rootUri, entry.finalUri, client);
+            const exists = await client.exists(entry.finalUri);
+            const previous = exists ? await client.read(entry.finalUri) : null;
+            previousCanonical.set(entry.finalUri, previous);
+            if (previous === null) {
+              await client.create(entry.finalUri, rootUri, content);
+            } else if (previous !== content) {
+              await client.replace(entry.finalUri, rootUri, content, sha256Text(previous));
+            }
+            await client.setTags(entry.finalUri, repositoryWikiRetrievalTags(entry.doc));
+          });
+
+          const snapshotOid = requireSnapshot(await client.commit(
+            `repository_wiki_batch:${job.batchId}:promote`, chunk.map(entry => entry.finalUri),
+          ));
           assertLease();
-          await this.ensureUriDirectories(rootUri, entry.finalUri);
-          const exists = await client.exists(entry.finalUri);
-          const previous = exists ? await client.read(entry.finalUri) : null;
-          previousCanonical.set(entry.finalUri, previous);
-          if (previous === null) {
-            await client.create(entry.finalUri, rootUri, entry.content);
-          } else {
-            await client.replace(entry.finalUri, rootUri, entry.content, sha256Text(previous));
-          }
-          await client.setTags(entry.finalUri, repositoryWikiRetrievalTags(entry.doc));
+          this.store.finalizeRepositoryWikiBatchStorage(chunk.map((entry) => ({
+            docId: entry.docId,
+            version: entry.version,
+            control: { contentUri: entry.finalUri, contentSha256: entry.contentSha256, snapshotOid },
+          })), job.id);
+          // Never roll back a durable checkpoint when a later chunk fails.
+          previousCanonical.clear();
         }
-
-        const finalUris = entries.map((entry) => entry.finalUri);
-        const snapshotOid = entries.length
-          ? requireSnapshot(await client.commit(`repository_wiki_batch:${job.batchId}:promote`, finalUris))
-          : null;
-        assertLease();
-        this.store.finalizeRepositoryWikiBatchStorage(entries.map((entry) => ({
-          docId: entry.docId,
-          version: entry.version,
-          control: {
-            contentUri: entry.finalUri,
-            contentSha256: entry.contentSha256,
-            snapshotOid,
-          },
-        })), job.id);
+        if (!entries.length) {
+          assertLease();
+          this.store.finalizeRepositoryWikiBatchStorage([], job.id);
+        }
         phase = "cleanup";
       }
       if (!cleanup) return true;
@@ -752,6 +762,7 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
     const timer = setTimeout(() => abort.abort(new RepositoryWikiUnavailableError("Repository wiki write deadline exceeded")), this.writeTimeoutMs);
     const scoped = new RepositoryWikiService(this.store, this.client ? deadlineClient(this.client, abort.signal) : null, this.mode, {
       cleanupConcurrency: this.cleanupConcurrency, writeTimeoutMs: this.writeTimeoutMs, signal: abort.signal,
+      storageJobTimeoutMs: this.storageJobTimeoutMs,
     });
     try {
       await abortable(previous, abort.signal);
@@ -798,8 +809,7 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
     return this.client;
   }
 
-  private async ensureUriDirectories(root: string, uri: string): Promise<void> {
-    const client = this.requireClient();
+  private async ensureUriDirectories(root: string, uri: string, client = this.requireClient()): Promise<void> {
     await client.ensureDirectory(root);
     const relative = uri.startsWith(`${root}/`) ? uri.slice(root.length + 1) : "";
     const parts = relative.split("/").slice(0, -1).filter(Boolean);
@@ -809,6 +819,20 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
       await client.ensureDirectory(current);
     }
   }
+}
+
+/** Drain in-flight writers before rollback/checkpoint; stop scheduling after failure. */
+async function forEachStorageEntry<T>(entries: readonly T[], operation: (entry: T) => Promise<void>): Promise<void> {
+  let cursor = 0;
+  let failed = false;
+  const results = await Promise.allSettled(Array.from({ length: Math.min(STORAGE_WRITE_CONCURRENCY, entries.length) }, async () => {
+    while (!failed && cursor < entries.length) {
+      const entry = entries[cursor++]!;
+      try { await operation(entry); }
+      catch (error) { failed = true; throw error; }
+    }
+  }));
+  for (const result of results) if (result.status === "rejected") throw result.reason;
 }
 
 function resolveBatchDocument(

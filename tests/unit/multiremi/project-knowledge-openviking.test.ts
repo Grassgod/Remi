@@ -8,6 +8,7 @@ import {
 import { ProjectKnowledgeService } from "@multiremi/project-knowledge/service.js";
 import { repositoryWikiDocUri, repositoryWikiStorageRootUri } from "@multiremi/repository-wiki/codec.js";
 import { RepositoryWikiService } from "@multiremi/repository-wiki/service.js";
+import { resolveRepositoryWikiRef, tokenizeWikiLinks } from "@multiremi/contracts/wiki-links";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type {
   OpenVikingClientContract,
@@ -118,6 +119,176 @@ class FakeOpenViking implements OpenVikingClientContract {
 }
 
 describe("Repository Wiki availability and migration safeguards", () => {
+  it("publishes an 84-page connected component through OpenViking, drains storage jobs and accepts the next batch", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    store.updateWorkspaceRepositories("local", [{ id: "repo_large", name: "large", url: "https://github.com/acme/large.git", source: "github", default_branch: "main" }]);
+    const client = new FakeOpenViking();
+    let activeWrites = 0;
+    let maxActiveWrites = 0;
+    const create = client.create.bind(client);
+    client.create = async (...args) => {
+      activeWrites++;
+      maxActiveWrites = Math.max(maxActiveWrites, activeWrites);
+      try { await Bun.sleep(1); await create(...args); }
+      finally { activeWrites--; }
+    };
+    const service = new RepositoryWikiService(store, client, "openviking");
+    const docs = (await service.applyBatch("local", "repo_large", Array.from({ length: 84 }, (_, i) => ({
+      kind: "create" as const, input: { path: `old/page-${i}.md`, title: `Page ${i}`, body: `[[old/page-${(i + 1) % 84}]]` },
+    })))).map(result => result.doc);
+    await service.runStorageJobs();
+    const { agent, autopilot } = configureRepositoryWikiAutomation(store);
+    const run = store.runAutopilot(autopilot.id, { source: "scm_event", repositoryId: "repo_large", dedupeKey: "repo_large:incremental_update:test", payload: { repository_wiki_repository_id: "repo_large" } });
+    const task = store.getTask(run.taskId!)!;
+    const credential = await store.createTaskAccessToken(task, "local");
+    const submission = store.createKnowledgeSubmission({ workspaceId: "local", repositoryId: "repo_large", scope: "repository_wiki", sourceType: "agent", body: "Regroup the connected section", sourceTaskId: task.id, authorAgentId: agent.id }).submission;
+    const app = createMultiremiApp({ store, repositoryWiki: service, authToken: "root-secret" });
+    const path = (i: number) => `concepts/domain-${Math.floor(i / 20)}/page-${i}.md`;
+    const response = await app.request("/api/workspaces/local/repos/repo_large/wiki/publish", {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${credential.token}` },
+      body: JSON.stringify({ submission_ids: [submission.id], dedupe_key: "whole-openviking-migration", outputs: docs.map((doc, i) => ({
+        action: "update", ref: doc.id, expected_version: 1, path: path(i), body: `[[${path((i + 1) % 84)}]]`,
+      })) }),
+    });
+    expect(response.status).toBe(200);
+    expect((await response.json() as any).run.status).toBe("published");
+    const after = await service.listStrict("local", "repo_large");
+    expect(after.map(doc => doc.id).sort()).toEqual(docs.map(doc => doc.id).sort());
+    for (const doc of after) {
+      expect(doc.version).toBe(2);
+      expect(doc.contentUri).toBe(repositoryWikiDocUri("local", "repo_large", doc.path));
+      expect(sha256Text(client.files.get(doc.contentUri!)!)).toBe(doc.contentSha256!);
+      expect(sha256Text(await client.show(doc.snapshotOid!, doc.contentUri!))).toBe(doc.contentSha256!);
+      expect(resolveRepositoryWikiRef(tokenizeWikiLinks(doc.body)[0]!.ref, doc.path, after).status).toBe("resolved");
+    }
+    expect(maxActiveWrites).toBeGreaterThan(1);
+    expect(maxActiveWrites).toBeLessThanOrEqual(4);
+    expect(store.listRepositoryWikiStorageJobs("local", "repo_large").every(job => job.state === "cleanup")).toBe(true);
+    await service.runStorageJobs();
+    expect(store.listRepositoryWikiStorageJobs("local", "repo_large")).toEqual([]);
+    for (const doc of docs) expect(client.files.has(repositoryWikiDocUri("local", "repo_large", doc.path))).toBe(false);
+    const next = await service.update("local", "repo_large", after[0]!.id, { body: `${after[0]!.body}\nNext batch`, expectedVersion: 2 });
+    expect(next.version).toBe(3);
+    expect(next.contentUri).toBe(repositoryWikiDocUri("local", "repo_large", next.path));
+    await service.runStorageJobs();
+    expect(store.listRepositoryWikiStorageJobs("local", "repo_large")).toEqual([]);
+    expect((await service.get("local", "repo_large", next.id))?.body).toContain("Next batch");
+  });
+
+  it("checkpoints promotion across repeated timeouts and restarts without replaying completed pages", async () => {
+    const store = createStore();
+    const client = new FakeOpenViking();
+    const service = new RepositoryWikiService(store, client, "openviking");
+    const docs = (await service.applyBatch("local", "repo_resume", Array.from({ length: 24 }, (_, i) => ({
+      kind: "create" as const, input: { path: `old/page-${i}.md`, title: `Page ${i}`, body: `[[old/page-${(i + 1) % 24}]]` },
+    })))).map(result => result.doc);
+    await service.runStorageJobs();
+    // Each attempt has enough time for one checkpoint, but its second
+    // snapshot never responds (also exercises a client ignoring abort).
+    const commit = client.commit.bind(client);
+    let promotionCommits = 0;
+    let releaseLateSnapshot!: () => void;
+    client.commit = async (message) => {
+      if (message.endsWith(":promote") && ++promotionCommits === 2) {
+        await new Promise<void>(resolve => { releaseLateSnapshot = resolve; });
+      }
+      return commit(message);
+    };
+    const restartedService = () => new RepositoryWikiService(store, client, "openviking", { storageJobTimeoutMs: 100, writeTimeoutMs: 2_000 });
+    const moved = await restartedService().applyBatch("local", "repo_resume", docs.map((doc, i) => ({
+      kind: "update" as const, ref: doc.id, input: { path: `new/page-${i}.md`, body: `[[new/page-${(i + 1) % 24}]]`, expectedVersion: 1 },
+    })));
+    expect(moved.every(result => result.doc.version === 2)).toBe(true);
+    for (const remaining of [16, 8]) {
+      const job = store.listRepositoryWikiStorageJobs("local", "repo_resume")[0]!;
+      expect(job.state).toBe("pending");
+      expect(job.manifest.promotions).toHaveLength(remaining);
+      expect(job.lastError).toContain("storage job deadline exceeded");
+      const outstanding = new Set(job.manifest.promotions.map(entry => entry.docId));
+      const readable = await service.listStrict("local", "repo_resume");
+      const completed = readable.filter(doc => !outstanding.has(doc.id));
+      expect(completed).toHaveLength(24 - remaining);
+      for (const doc of readable) {
+        expect(doc.version).toBe(2);
+        expect(resolveRepositoryWikiRef(tokenizeWikiLinks(doc.body)[0]!.ref, doc.path, readable).status).toBe("resolved");
+      }
+      // A late snapshot must not publish another checkpoint after lease release.
+      releaseLateSnapshot();
+      await Bun.sleep(0);
+      expect(store.listRepositoryWikiStorageJobs("local", "repo_resume")[0]!.manifest.promotions).toHaveLength(remaining);
+      const completedUris = new Set(completed.map(doc => doc.contentUri!));
+      client.readCalls.length = 0;
+      promotionCommits = 0;
+      await restartedService().runStorageJobs(undefined, Date.now() + 600_000);
+      expect(client.readCalls.some(uri => completedUris.has(uri))).toBe(false);
+    }
+    expect(store.listRepositoryWikiStorageJobs("local", "repo_resume")).toEqual([]);
+    const after = await service.listStrict("local", "repo_resume");
+    expect(after.every(doc => doc.contentUri === repositoryWikiDocUri("local", "repo_resume", doc.path))).toBe(true);
+    client.commit = commit;
+    const next = await service.update("local", "repo_resume", after[0]!.id, { body: `${after[0]!.body}\nWritable`, expectedVersion: 2 });
+    expect(next.version).toBe(3);
+    await service.runStorageJobs();
+    expect(store.listRepositoryWikiStorageJobs("local", "repo_resume")).toEqual([]);
+  });
+
+  it("rolls back only the unfinished promotion chunk and retains durable checkpoints", async () => {
+    const store = createStore();
+    const client = new FakeOpenViking();
+    const commit = client.commit.bind(client);
+    let promotions = 0;
+    client.commit = async (message) => {
+      if (message.endsWith(":promote") && ++promotions === 2) throw new Error("second promotion snapshot failed");
+      return commit(message);
+    };
+    const service = new RepositoryWikiService(store, client, "openviking");
+    const results = await service.applyBatch("local", "repo_checkpoint", Array.from({ length: 16 }, (_, i) => ({
+      kind: "create" as const, input: { path: `page-${i}.md`, title: `Page ${i}`, body: `Facts ${i}` },
+    })));
+    const job = store.listRepositoryWikiStorageJobs("local", "repo_checkpoint")[0]!;
+    expect(job.manifest.promotions).toHaveLength(8);
+    for (const [i, result] of results.entries()) {
+      const canonical = repositoryWikiDocUri("local", "repo_checkpoint", result.doc.path);
+      expect(client.files.has(canonical)).toBe(i < 8);
+      expect((await service.get("local", "repo_checkpoint", result.doc.id))?.body).toBe(`Facts ${i}`);
+    }
+    await service.runStorageJobs(undefined, Date.now() + 600_000);
+    expect(store.listRepositoryWikiStorageJobs("local", "repo_checkpoint")).toEqual([]);
+    expect((await service.listStrict("local", "repo_checkpoint")).every(doc => doc.contentUri === repositoryWikiDocUri("local", "repo_checkpoint", doc.path))).toBe(true);
+  });
+
+  it("fences promotion checkpoints after lease loss without releasing the successor lease", async () => {
+    const store = createStore();
+    const client = new FakeOpenViking();
+    const commit = client.commit.bind(client);
+    let promotions = 0;
+    client.commit = async (message) => {
+      const oid = await commit(message);
+      if (message.endsWith(":promote") && ++promotions === 2) {
+        db!.run("UPDATE multiremi_repository_wiki_storage_jobs SET lease_token = 'successor' WHERE repository_id = 'repo_lease'");
+      }
+      return oid;
+    };
+    const service = new RepositoryWikiService(store, client, "openviking");
+    const results = await service.applyBatch("local", "repo_lease", Array.from({ length: 16 }, (_, i) => ({
+      kind: "create" as const, input: { path: `page-${i}.md`, title: `Page ${i}`, body: `Facts ${i}` },
+    })));
+    const job = store.listRepositoryWikiStorageJobs("local", "repo_lease")[0]!;
+    expect(job.state).toBe("pending");
+    expect(job.manifest.promotions).toHaveLength(8);
+    expect(job.lastError).toContain("lease lost");
+    expect(store.claimRepositoryWikiStorageJob(job.id, "outsider", new Date(Date.now() + 120_000).toISOString(), new Date().toISOString())).toBe(false);
+    for (const [i, result] of results.entries()) {
+      const doc = store.getRepositoryWikiDocByRef("local", "repo_lease", result.doc.id)!;
+      expect(doc.contentUri === repositoryWikiDocUri("local", "repo_lease", doc.path)).toBe(i < 8);
+      expect(store.listRepositoryWikiDocRevisions(doc.id)[0]!.contentUri).toBe(doc.contentUri);
+    }
+    store.releaseRepositoryWikiStorageJob(job.id, "successor");
+    await new RepositoryWikiService(store, client, "openviking").runStorageJobs(undefined, Date.now() + 600_000);
+    expect(store.listRepositoryWikiStorageJobs("local", "repo_lease")).toEqual([]);
+  });
+
   it("publishes beside a missing object and marks a timed-out publication failed instead of validating", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();

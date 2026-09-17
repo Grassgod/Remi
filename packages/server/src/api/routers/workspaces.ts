@@ -70,7 +70,7 @@ import type {
   UpdateWorkspaceRuntimeProvisionInput,
 } from "@multiremi/contracts/types.js";
 import { createId, nowIso } from "@multiremi/ids.js";
-import { RepositoryWikiUnavailableError } from "@multiremi/repository-wiki/service.js";
+import { REPOSITORY_WIKI_BATCH_LIMIT, RepositoryWikiUnavailableError } from "@multiremi/repository-wiki/service.js";
 import { normalizeRepositoryWikiPath } from "@multiremi/store/repos/repository-wiki-repo.js";
 import {
   defaultRepositoryWikiPath,
@@ -1293,7 +1293,7 @@ function normalizeRepositoryWikiBatchOperations(input: {
   if (!Array.isArray(input.operations) || input.operations.length === 0) {
     throw new Error("repository wiki batch operations are required");
   }
-  if (input.operations.length > 256) throw new Error("repository wiki batch supports at most 256 operations");
+  if (input.operations.length > REPOSITORY_WIKI_BATCH_LIMIT) throw new Error(`repository wiki batch supports at most ${REPOSITORY_WIKI_BATCH_LIMIT} operations`);
   const operations: RepositoryWikiBatchOperation[] = [];
   for (const value of input.operations) {
     if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid repository wiki batch operation");
