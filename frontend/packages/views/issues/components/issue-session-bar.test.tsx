@@ -1,7 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { I18nProvider } from "@multiremi/core/i18n/react";
-import type { IssueSession } from "@multiremi/core/types";
+import type { CreateIssueSessionRequest, IssueSession } from "@multiremi/core/types";
 import enCommon from "../../locales/en/common.json";
 import enIssues from "../../locales/en/issues.json";
 
@@ -12,10 +13,20 @@ const mockMutations = vi.hoisted(() => ({
 }));
 
 vi.mock("@multiremi/core/issues", () => ({
-  useCreateIssueSession: () => ({
-    mutateAsync: mockMutations.createSession,
-    isPending: false,
-  }),
+  useCreateIssueSession: () => {
+    const [isPending, setPending] = useState(false);
+    return {
+      isPending,
+      mutateAsync: async (input: CreateIssueSessionRequest) => {
+        setPending(true);
+        try {
+          return await mockMutations.createSession(input);
+        } finally {
+          setPending(false);
+        }
+      },
+    };
+  },
 }));
 
 const mockToast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
@@ -190,5 +201,50 @@ describe("NewSessionButton", () => {
     expect(screen.getByRole("button", { name: "Work" })).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(screen.getByRole("button", { name: "Discussion" }));
     expect(screen.getByRole("combobox")).toHaveValue("main");
+  });
+
+  it("defaults to Main when sessions finish loading without overriding an explicit no-inheritance choice", async () => {
+    const view = renderWithI18n(<NewSessionButton issueId="issue-1" sessions={[]} />);
+    fireEvent.click(screen.getByRole("button", { name: "New session" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Discussion" }));
+    expect(screen.getByRole("combobox")).toHaveValue("");
+
+    const updateSessions = (nextSessions: IssueSession[]) => view.rerender(
+      <I18nProvider locale="en" resources={TEST_RESOURCES}>
+        <NewSessionButton issueId="issue-1" sessions={nextSessions} />
+      </I18nProvider>,
+    );
+    updateSessions(sessions);
+    expect(screen.getByRole("combobox")).toHaveValue("main");
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "" } });
+    updateSessions([...sessions]);
+    expect(screen.getByRole("combobox")).toHaveValue("");
+  });
+
+  it("keeps the pending form open and prevents duplicate creation until the request completes", async () => {
+    let resolveCreation!: (session: { id: string }) => void;
+    mockMutations.createSession.mockReturnValueOnce(new Promise((resolve) => { resolveCreation = resolve; }));
+    const onCreated = vi.fn();
+    renderWithI18n(<NewSessionButton issueId="issue-1" sessions={sessions} onCreated={onCreated} />);
+    fireEvent.click(screen.getByRole("button", { name: "New session" }));
+    fireEvent.change(await screen.findByLabelText("Session name"), { target: { value: "Pending" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Create" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(screen.getByLabelText("Session name")).toHaveValue("Pending");
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.keyDown(screen.getByLabelText("Session name"), { key: "Enter" });
+    expect(mockMutations.createSession).toHaveBeenCalledTimes(1);
+
+    await act(async () => resolveCreation({ id: "created" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(onCreated).toHaveBeenCalledWith("created");
+    fireEvent.click(screen.getByRole("button", { name: "New session" }));
+    expect(await screen.findByLabelText("Session name")).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
   });
 });

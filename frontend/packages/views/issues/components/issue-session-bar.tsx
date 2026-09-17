@@ -65,31 +65,39 @@ interface NewSessionDialogProps {
 }
 
 export function NewSessionDialog({ open, ...props }: NewSessionDialogProps) {
+  const createSession = useCreateIssueSession(props.issueId);
   return (
-    <Dialog open={open} onOpenChange={props.onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!createSession.isPending) props.onOpenChange(nextOpen);
+      }}
+    >
       {/* Each opening starts a fresh form using the current session list. */}
-      {open && <NewSessionForm key={props.parentSessionId ?? "new"} {...props} />}
+      {open && <NewSessionForm key={props.parentSessionId ?? "new"} {...props} createSession={createSession} />}
     </Dialog>
   );
 }
 
 function NewSessionForm({
-  issueId,
   sessions,
   onOpenChange,
   onCreated,
   parentSessionId,
-}: Omit<NewSessionDialogProps, "open">) {
+  createSession,
+}: Omit<NewSessionDialogProps, "open"> & {
+  createSession: ReturnType<typeof useCreateIssueSession>;
+}) {
   const { t } = useT("issues");
-  const createSession = useCreateIssueSession(issueId);
   const parentSessions = sessions.filter((session) => session.parent_session_id == null);
   const discussionOnly = parentSessionId !== undefined;
   const [sessionTitle, setSessionTitle] = useState("");
   const [holdsWorkspace, setHoldsWorkspace] = useState(!discussionOnly);
-  const [inheritFrom, setInheritFrom] = useState(
-    () => parentSessionId ?? parentSessions.find((session) => session.is_default === true)?.id ?? "",
-  );
-  const selectedParentId = parentSessions.some((session) => session.id === inheritFrom) ? inheritFrom : "";
+  // Undefined follows the default as sessions load; an empty string is the
+  // user's explicit choice not to inherit and must survive query refreshes.
+  const [inheritFrom, setInheritFrom] = useState(parentSessionId);
+  const requestedParentId = inheritFrom ?? parentSessions.find((session) => session.is_default === true)?.id ?? "";
+  const selectedParentId = parentSessions.some((session) => session.id === requestedParentId) ? requestedParentId : "";
   const titleFieldId = useId();
   const parentFieldId = useId();
   const workDescriptionId = useId();
@@ -206,7 +214,7 @@ function NewSessionForm({
         )}
       </div>
       <DialogFooter>
-        <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+        <Button type="button" variant="outline" disabled={createSession.isPending} onClick={() => onOpenChange(false)}>
           {t(($) => $.detail.dialog_cancel)}
         </Button>
         <Button onClick={() => void submitCreate()} disabled={!sessionTitle.trim() || createSession.isPending}>
