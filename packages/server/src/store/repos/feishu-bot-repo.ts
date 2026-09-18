@@ -33,6 +33,7 @@ import { isRuntimeEffectivelyOnline } from "@multiremi/store/repos/runtimes-repo
 import { readWorkspaceIssueTopics } from "@multiremi/issue-topics/config.js";
 import { findMarkdownImages } from "@shared/feishu-markdown-images.js";
 import { isFeishuOpenId, parseOutboundMention } from "@shared/feishu-mention.js";
+import { FEISHU_CONCIERGE_CONFIG_CAPABILITY } from "@multiremi/contracts/types.js";
 import type {
   FeishuBotAuditAction,
   FeishuPresentationCheckpoint,
@@ -338,6 +339,28 @@ export class FeishuBotRepo {
     return { agentId: config.agentId, agentName: agent?.name ?? config.agentId };
   }
 
+  /** Reject run intent before changing the saved host, secrets, or revision. */
+  private requireDeployableRuntime(workspaceId: string, runtimeId: string): void {
+    const runtime = this.ctx.runtimes().getRuntime(runtimeId);
+    if (!runtime || runtime.workspaceId !== workspaceId) {
+      throw new FeishuBotConfigError("runtime does not belong to this workspace", 400, "runtime_not_in_workspace");
+    }
+    if (!isRuntimeEffectivelyOnline(runtime)) {
+      throw new FeishuBotConfigError(
+        "runtime is offline or its heartbeat has expired; bring it online before enabling or deploying, or save with enabled=false",
+        409,
+        "runtime_offline",
+      );
+    }
+    if (runtime.metadata[FEISHU_CONCIERGE_CONFIG_CAPABILITY] !== true) {
+      throw new FeishuBotConfigError(
+        "runtime does not advertise Feishu concierge configuration support; select a capable runtime or save with enabled=false",
+        409,
+        "runtime_config_unsupported",
+      );
+    }
+  }
+
   /**
    * Create or replace the workspace's config. Secret columns follow the
    * caller's per-field op so a PUT that only changes the domain cannot wipe an
@@ -370,6 +393,7 @@ export class FeishuBotRepo {
         "runtime_agent_incompatible",
       );
     }
+    if (input.enabled) this.requireDeployableRuntime(workspaceId, runtimeId);
 
     const existing = this.rawConfigRow(workspaceId);
     const senderAccessPolicy = input.senderAccessPolicy ?? existing?.sender_access_policy ?? "agent";
@@ -462,6 +486,7 @@ export class FeishuBotRepo {
   setEnabled(workspaceId: string, enabled: boolean, actor?: string | null): MultiremiFeishuBotConfig | null {
     const existing = this.rawConfigRow(workspaceId);
     if (!existing) return null;
+    if (enabled) this.requireDeployableRuntime(workspaceId, String(existing.runtime_id));
     this.ctx.db.run(
       `UPDATE multiremi_feishu_bot_configs
           SET enabled = ?, revision = revision + 1, updated_at = ?, updated_by = ?

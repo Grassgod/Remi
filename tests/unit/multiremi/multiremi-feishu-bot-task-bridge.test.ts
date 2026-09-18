@@ -57,6 +57,58 @@ function scaffold(provider: "claude" | "codex" = "codex") {
 }
 
 describe("Feishu bot standard Task bridge", () => {
+  it("hands an in-flight card to the new connector after the old Runtime lease expires", () => {
+    const { store, agent, config } = scaffold();
+    store.registerRuntime({ id: "rt_next", name: "New host", provider: "codex", workspaceId: "local",
+      daemonId: "another-machine" });
+    store.heartbeatRuntime("rt_next", { supportsFeishuBotConfig: true });
+    store.reportFeishuBotRuntimeStatus("local", "rt_bot", { appliedRevision: config.revision, state: "online" });
+    const inbound = store.submitFeishuBotMessage("local", "rt_bot", {
+      revision: config.revision, externalSessionKey: "oc_handover", chatType: "p2p", chatId: "oc_handover",
+      externalMessageId: "om_handover", senderUnionId: "on_owner", deliveryMode: "native_cot_v1",
+      text: "Keep answering while the connector moves",
+    });
+    expect(store.claimTask("rt_bot")?.id).toBe(inbound.taskId);
+    store.startTask(inbound.taskId);
+    const started = new Date();
+    const at = (seconds: number) => new Date(started.getTime() + seconds * 1_000);
+    const original = store.claimFeishuBotOutbound("local", "rt_bot", started, true, true)!;
+    expect(original.taskId).toBe(inbound.taskId);
+    expect(store.reportFeishuBotOutbound("local", "rt_bot", original.id, {
+      claimToken: original.claimToken, status: "streaming", externalMessageId: "om_handover_card",
+    }, started)).toBe(true);
+
+    const moved = store.upsertFeishuBotConfig("local", {
+      agentId: agent.id, runtimeId: "rt_next", appId: config.appId,
+      appSecretOp: "keep", domain: "feishu", enabled: true,
+    });
+    expect(store.feishuBotDirectiveForRuntime("local", "rt_next")).toMatchObject({
+      desired_state: "stopped", config_available: false,
+    });
+    expect(store.reportFeishuBotOutbound("local", "rt_bot", original.id, {
+      claimToken: original.claimToken, status: "sent", externalMessageId: "om_handover_card",
+    }, at(1))).toBe(false);
+    store.reportFeishuBotRuntimeStatus("local", "rt_bot", { appliedRevision: config.revision, state: "stopped" });
+    expect(store.feishuBotDirectiveForRuntime("local", "rt_next")).toMatchObject({
+      desired_state: "running", config_available: true,
+    });
+    store.reportFeishuBotRuntimeStatus("local", "rt_next", { appliedRevision: moved.revision, state: "online" });
+    // Moving the connector does not interrupt execution on the original machine.
+    expect(store.getTask(inbound.taskId)).toMatchObject({ status: "running", runtimeId: "rt_bot" });
+    store.completeTask(inbound.taskId, { output: "Answer survives the handover", sessionId: "sess_handover" });
+    expect(store.claimFeishuBotOutbound("local", "rt_next", at(119), true, true)).toBeNull();
+    const resumed = store.claimFeishuBotOutbound("local", "rt_next", at(121), true, true)!;
+    expect(resumed).toMatchObject({ id: original.id, taskId: inbound.taskId, resumeMessageId: "om_handover_card" });
+    expect(resumed.claimToken).not.toBe(original.claimToken);
+    expect(store.reportFeishuBotOutbound("local", "rt_next", resumed.id, {
+      claimToken: original.claimToken, status: "sent",
+    }, at(122))).toBe(false);
+    expect(store.reportFeishuBotOutbound("local", "rt_next", resumed.id, {
+      claimToken: resumed.claimToken, status: "sent", externalMessageId: resumed.resumeMessageId,
+    }, at(122))).toBe(true);
+    expect(store.claimFeishuBotOutbound("local", "rt_next", at(250), true, true)).toBeNull();
+  });
+
   for (const [from, to, explicitModel] of [
     ["claude", "codex", "gpt-5.6-sol"],
     ["codex", "claude", "claude-opus-5"],
@@ -159,6 +211,7 @@ describe("Feishu bot standard Task bridge", () => {
       // No outstanding task is needed to trigger the provider reset.
       db!.run("UPDATE multiremi_tasks SET status = 'completed'");
       store.registerRuntime({ id: "rt_legacy", name: "Original machine", provider: "codex", workspaceId: "local" });
+      store.heartbeatRuntime("rt_legacy", { supportsFeishuBotConfig: true });
       const config = store.upsertFeishuBotConfig("local", {
         agentId: "agt_chat_migration", runtimeId: "rt_legacy", appId: "cli_migration",
         senderAccessPolicy: "allowlist", appSecretOp: "set", appSecret: APP_SECRET,
