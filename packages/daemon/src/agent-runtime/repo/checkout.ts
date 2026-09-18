@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, statSync, lstatSync, realpathSync, appendFileSync, chmodSync, copyFileSync, readFileSync, readdirSync, renameSync, rmSync, utimesSync, writeFileSync, type Dirent } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, statSync, lstatSync, realpathSync, appendFileSync, chmodSync, copyFileSync, readFileSync, readdirSync, renameSync, rmSync, utimesSync, writeFileSync, type Dirent } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import type { RepoSpec } from "@daemon/contracts/types.js";
@@ -129,6 +129,29 @@ const DEFAULT_GIT_SSH_COMMAND = [
 const RESERVED_ISSUE_WORKSPACE_DIRECTORIES = new Set(["wiki", ".multiremi"]);
 const MULTIREMI_HOOK_MARKER = "# multiremi:prepare-commit-msg:co-authored-by";
 const MULTIREMI_CHAINED_HOOK_MARKER = "# multiremi:chained-hook-suffix=";
+const MULTIREMI_HOST_HOOK_MARKER = "# multiremi:host-hook-path=";
+const MULTIREMI_HOST_SHIM_HEADER = "#!/bin/sh\n# multiremi:host-hook-forwarder\n";
+// Fixed names from Git 2.39.5 githooks(5), cross-checked against its hook templates.
+// Do not scan the host directory: hooks added after checkout must work immediately.
+// prepare-commit-msg is handled separately, preserving host -> user -> attribution.
+// Exclude push-to-checkout: its mere presence replaces receive.denyCurrentBranch
+// updateInstead's default index/worktree update, even when the shim only exits 0.
+// Exclude reference-transaction: a 1,000-ref local fetch on Git 2.39.5 took
+// median 57.55ms without it vs 1,803.59ms with an empty forwarding shim (5 rounds).
+// Git invokes it for every prepared/committed ref transaction, making no-op
+// forwarding a substantial fetch regression. These two host hooks are not forwarded.
+const HOST_FORWARDED_GIT_HOOKS = [
+  "applypatch-msg", "pre-applypatch", "post-applypatch", "pre-commit",
+  "pre-merge-commit", "commit-msg", "post-commit", "pre-rebase",
+  "post-checkout", "post-merge", "pre-push", "pre-receive", "update",
+  "proc-receive", "post-receive", "post-update", "pre-auto-gc", "post-rewrite",
+  "sendemail-validate", "fsmonitor-watchman", "p4-changelist",
+  "p4-prepare-changelist", "p4-post-changelist", "p4-pre-submit", "post-index-change",
+] as const;
+const EXCLUDED_HOST_GIT_HOOKS = {
+  "push-to-checkout": "Its presence replaces the default index/worktree update for receive.denyCurrentBranch=updateInstead",
+  "reference-transaction": "A 1000-ref fetch benchmark measured a 31.34x slowdown (57.55ms -> 1803.59ms) with an empty forwarding shim",
+} as const;
 const LEGACY_DAEMON_HOOK_SIGNATURES = [
   "# multimira:prepare-commit-msg:co-authored-by",
   "# Installed by the Multimira daemon.",
@@ -1228,8 +1251,12 @@ function applyCoAuthoredByHook(worktreePath: string, enabled: boolean): void {
   try {
     if (enabled) installCoAuthoredByHook(worktreePath);
     else removeCoAuthoredByHook(worktreePath);
-  } catch {
-    // Go treats hook install/remove failures as non-fatal to checkout.
+  } catch (error) {
+    log.warn("Failed to apply co-authored-by hook; continuing checkout", {
+      worktreePath,
+      enabled,
+      error: redactGitCredentialError(errorMessage(error)),
+    });
   }
 }
 
@@ -1245,11 +1272,22 @@ function installCoAuthoredByHook(worktreePath: string): void {
       chainedHookSuffix = preserveUserHook(hookPath, existing);
     }
   }
-  writeManagedHookAtomically(hookPath, prepareCommitMsgHook(chainedHookSuffix));
+  const hostHooksPath = resolveHostHooksPath(worktreePath, dirname(hookPath));
+  const hostHookPath = hostPrepareCommitMsgHookPath(hostHooksPath, hookPath);
+  writeManagedHookAtomically(hookPath, prepareCommitMsgHook(chainedHookSuffix, hostHookPath));
+  installHostHookShims(dirname(hookPath), hostHooksPath);
+  // The common config belongs to the daemon cache and is shared by its worktrees.
+  // Pin it even without a host override so subsequent commits use this hook.
+  git(worktreePath, ["config", "--local", "core.hooksPath", dirname(hookPath)]);
 }
 
 function removeCoAuthoredByHook(worktreePath: string): void {
   const hookPath = prepareCommitMsgHookPath(worktreePath);
+  const localHooksPath = git(worktreePath, ["config", "--local", "--get", "core.hooksPath"], { allowFailure: true });
+  if (localHooksPath === dirname(hookPath)) {
+    git(worktreePath, ["config", "--local", "--unset", "core.hooksPath"], { allowFailure: true });
+  }
+  removeHostHookShims(dirname(hookPath));
   if (!existsSync(hookPath)) return;
   const content = readFileSync(hookPath, "utf8");
   if (content.includes(MULTIREMI_HOOK_MARKER)) {
@@ -1269,15 +1307,109 @@ function removeCoAuthoredByHook(worktreePath: string): void {
 
 function prepareCommitMsgHookPath(worktreePath: string): string {
   const commonDir = git(worktreePath, ["rev-parse", "--git-common-dir"]);
-  const resolvedCommonDir = isAbsolute(commonDir) ? commonDir : join(worktreePath, commonDir);
+  const resolvedCommonDir = resolve(worktreePath, commonDir);
   return join(resolvedCommonDir, "hooks", "prepare-commit-msg");
 }
 
-function prepareCommitMsgHook(chainedHookSuffix: string | null): string {
-  if (!chainedHookSuffix) return PREPARE_COMMIT_MSG_HOOK_BODY;
+function resolveHostHooksPath(worktreePath: string, hooksPath: string): string | null {
+  // Read only host scopes: the effective value may already be our local pin.
+  const hostHooksPath = git(worktreePath, ["config", "--global", "--get", "--type=path", "core.hooksPath"], { allowFailure: true })
+    || git(worktreePath, ["config", "--system", "--get", "--type=path", "core.hooksPath"], { allowFailure: true });
+  if (!hostHooksPath) return null;
+  if (!isAbsolute(hostHooksPath)) {
+    log.warn("Skipping host Git hooks: core.hooksPath is relative", { worktreePath, hostHooksPath });
+    return null;
+  }
+  // Reject the whole directory before generating even absent-hook shims.
+  if (existsSync(hostHooksPath) && realpathSync(hostHooksPath) === realpathSync(hooksPath)) return null;
+  return hostHooksPath;
+}
+
+function hostPrepareCommitMsgHookPath(hostHooksPath: string | null, hookPath: string): string | null {
+  if (!hostHooksPath) return null;
+  const hostHookPath = join(hostHooksPath, "prepare-commit-msg");
+  if (!isExecutableHook(hostHookPath)) return null;
+  // A host setting can point back at this cache, including through a symlink.
+  if (existsSync(hookPath) && realpathSync(hostHookPath) === realpathSync(hookPath)) return null;
+  return hostHookPath;
+}
+
+function isExecutableHook(hookPath: string): boolean {
+  if (!existsSync(hookPath) || !statSync(hookPath).isFile()) return false;
+  try {
+    accessSync(hookPath, constants.X_OK);
+  } catch {
+    return false;
+  }
+  return true;
+}
+
+function installHostHookShims(hooksPath: string, hostHooksPath: string | null): void {
+  if (!hostHooksPath) {
+    removeHostHookShims(hooksPath);
+    return;
+  }
+  for (const [hookName, reason] of Object.entries(EXCLUDED_HOST_GIT_HOOKS)) {
+    const hostHookPath = join(hostHooksPath, hookName);
+    if (isExecutableHook(hostHookPath)) {
+      log.warn("Skipping excluded host Git hook; host forwarding not installed", {
+        hookName, hostHooksPath, hostHookPath, reason,
+      });
+    }
+  }
+  for (const name of HOST_FORWARDED_GIT_HOOKS) {
+    const hookPath = join(hooksPath, name);
+    // Never replace another owner's hook (including a dangling symlink).
+    const existing = lstatSync(hookPath, { throwIfNoEntry: false });
+    if (existing && (!existing.isFile() || !readFileSync(hookPath, "utf8").startsWith(MULTIREMI_HOST_SHIM_HEADER))) {
+      log.warn("Preserving non-managed Git hook; host forwarding not installed", { hookPath, hostHooksPath });
+      continue;
+    }
+    const hostHookPath = join(hostHooksPath, name);
+    writeManagedHookAtomically(hookPath, `${MULTIREMI_HOST_SHIM_HEADER}${MULTIREMI_HOST_HOOK_MARKER}${JSON.stringify(hostHookPath)}
+# Installed by the Multiremi daemon. Do not edit - it will be overwritten.
+HOST_HOOK='${hostHookPath.replaceAll("'", "'\\''")}'
+# Check at invocation time, including aliases introduced after installation.
+if [ -f "$HOST_HOOK" ] && [ -x "$HOST_HOOK" ] && ! [ "$HOST_HOOK" -ef "$0" ]; then
+  exec "$HOST_HOOK" "$@"
+fi
+exit 0
+`);
+  }
+}
+
+function removeHostHookShims(hooksPath: string): void {
+  if (!existsSync(hooksPath)) return;
+  for (const entry of readdirSync(hooksPath, { withFileTypes: true })) {
+    // Do not follow symlinks, even when their targets carry our ownership marker.
+    if (!entry.isFile()) continue;
+    const hookPath = join(hooksPath, entry.name);
+    if (readFileSync(hookPath, "utf8").startsWith(MULTIREMI_HOST_SHIM_HEADER)) {
+      rmSync(hookPath);
+    }
+  }
+}
+
+function prepareCommitMsgHook(chainedHookSuffix: string | null, hostHookPath: string | null): string {
+  const hooks: string[] = [];
+  if (hostHookPath) {
+    hooks.push(`${MULTIREMI_HOST_HOOK_MARKER}${JSON.stringify(hostHookPath)}
+HOST_HOOK='${hostHookPath.replaceAll("'", "'\\''")}'
+if [ -x "$HOST_HOOK" ]; then
+  "$HOST_HOOK" "$@" || exit $?
+fi`);
+  }
+  if (chainedHookSuffix) {
+    hooks.push(`${MULTIREMI_CHAINED_HOOK_MARKER}${chainedHookSuffix}
+CHAINED_HOOK="\${0}${chainedHookSuffix}"
+if [ -x "$CHAINED_HOOK" ]; then
+  "$CHAINED_HOOK" "$@" || exit $?
+fi`);
+  }
+  if (!hooks.length) return PREPARE_COMMIT_MSG_HOOK_BODY;
   return PREPARE_COMMIT_MSG_HOOK_BODY.replace(
     "\nCOMMIT_MSG_FILE=",
-    `\n${MULTIREMI_CHAINED_HOOK_MARKER}${chainedHookSuffix}\nCHAINED_HOOK="\${0}${chainedHookSuffix}"\nif [ -x "$CHAINED_HOOK" ]; then\n  "$CHAINED_HOOK" "$@" || exit $?\nfi\n\nCOMMIT_MSG_FILE=`,
+    () => `\n${hooks.join("\n\n")}\n\nCOMMIT_MSG_FILE=`,
   );
 }
 
