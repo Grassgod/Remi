@@ -140,6 +140,7 @@ const KNOWN_FAILURE_REASONS = new Set([
   "agent_error.provider_auth_or_access",
   "agent_error.provider_capacity_or_rate_limit",
   "agent_error.provider_network",
+  "agent_error.provider_no_available_account",
   "agent_error.provider_quota_limit",
   "agent_error.provider_server_error",
   "agent_error.runtime_missing_executable",

@@ -46,7 +46,22 @@ describe("Multiremi task failure classification", () => {
     expect(classifyTaskFailure("claude timed out after 2h0m0s")).toBe(TaskFailureReason.AgentTimeout);
   });
 
-  it("keeps 5xx detection bounded like the Go regex", () => {
+  it("recognizes an exhausted gateway account pool without guessing at bare 5xx", () => {
+    // MUL-336 switches models on this marker, so it must survive the generic
+    // 5xx rule that would otherwise swallow "503 … no available accounts".
+    expect(classifyTaskFailure("503 from gateway: no available accounts for model gpt-5"))
+      .toBe(TaskFailureReason.AgentProviderNoAvailableAccount);
+    expect(classifyTaskFailure("{\"error\":{\"message\":\"No available channel for model deepseek-v3\"}}"))
+      .toBe(TaskFailureReason.AgentProviderNoAvailableAccount);
+    expect(classifyTaskFailure("无可用账号，请稍后重试"))
+      .toBe(TaskFailureReason.AgentProviderNoAvailableAccount);
+    // An ambiguous 503 carries no account-pool signal and must stay ambiguous
+    // rather than be mistaken for a resource exhaustion we can switch away from.
+    expect(classifyTaskFailure("got HTTP 503 from provider")).toBe(TaskFailureReason.AgentProviderServerError);
+    expect(classifyTaskFailure("503 Service Unavailable")).toBe(TaskFailureReason.AgentProviderServerError);
+  });
+
+  it("keeps the 5xx detection bounded like the Go regex", () => {
     expect(classifyTaskFailure("upstream returned 504")).toBe(TaskFailureReason.AgentProviderServerError);
     expect(classifyTaskFailure("1500ms latency observed")).not.toBe(TaskFailureReason.AgentProviderServerError);
     expect(classifyTaskFailure("version 1.5.0 unsupported")).not.toBe(TaskFailureReason.AgentProviderServerError);

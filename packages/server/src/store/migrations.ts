@@ -38,6 +38,7 @@ const FEISHU_BOT_AGENT_ROUTE_DEFAULT_UNIQUENESS_MIGRATION =
   "20260909_feishu_bot_agent_route_default_uniqueness";
 const CHAT_ISSUE_DECOUPLING_MIGRATION = "20260916_chat_issue_decoupling";
 const AGENT_PAGE_QUERY_INDEXES_MIGRATION = "20260910_agent_page_query_indexes";
+const TASK_FALLBACK_MODEL_MIGRATION = "20260919_task_fallback_model";
 
 // Stable Feishu open_id of the deployment owner (hehuajie / 贺华杰). The seed
 // `local` user is tagged with this on migration so SSO login re-binds to it
@@ -3156,6 +3157,22 @@ export function runMigrations(db: SqlDatabase): void {
     db.run(`UPDATE multiremi_agents SET execution_group_id = (
       SELECT group_id FROM multiremi_execution_group_members m WHERE m.runtime_id = multiremi_agents.runtime_id AND m.provider = multiremi_agents.provider
     ) WHERE execution_group_id IS NULL AND runtime_id IS NOT NULL`);
+  });
+  // MUL-336: a task (and its recovery chain) can run on a model other than its
+  // Agent's primary one after a gateway resource failure. The override lives on
+  // the task so the Agent's own model stays untouched and concurrent tasks of
+  // the same Agent keep their own selection. `fallback_switched` bounds the
+  // chain to a single model switch; `next_retry_at` defers a transient-throttle
+  // retry instead of hammering the exhausted pool (Retry-After aware).
+  runMigrationOnce(db, TASK_FALLBACK_MODEL_MIGRATION, () => {
+    addColumnIfMissing(db, "multiremi_tasks", "execution_model TEXT");
+    addColumnIfMissing(db, "multiremi_tasks", "execution_thinking_level TEXT");
+    addColumnIfMissing(db, "multiremi_tasks", "fallback_switched INTEGER NOT NULL DEFAULT 0");
+    addColumnIfMissing(db, "multiremi_tasks", "switch_reason TEXT");
+    addColumnIfMissing(db, "multiremi_tasks", "next_retry_at TEXT");
+    db.run(
+      "CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_next_retry_at ON multiremi_tasks(next_retry_at)",
+    );
   });
   runMigrationOnce(db, "20260919_agent_fallback_model", () => {
     addColumnIfMissing(db, "multiremi_agents", "fallback_model TEXT");
