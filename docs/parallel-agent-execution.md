@@ -15,6 +15,20 @@
 - Scheduled Wiki targets fill available Agent slots. Builds for the same
   publication target still deduplicate; different targets can progress together.
 
+## Model routing and fixed execution groups
+
+Agents without `runtime_id` or `execution_group_id` use model routing. Each
+candidate Runtime must match the selected model and thinking level within the
+agent's permitted workspace and engine. A fixed `execution_group_id` keeps
+matching inside that group; legacy explicit Runtime pins remain compatible.
+
+The workspace model catalog supplies model-routing choices; a fixed target
+uses its scoped catalog. Without an explicit model, the Runtime default and
+its reported thinking capabilities apply. An unadvertised model remains queued
+until a compatible Runtime reports it. Claims recheck current capabilities and
+skip incompatible queued work so another runnable task can proceed. Existing
+ownership, capacity and session-affinity constraints still apply.
+
 ## Shared code, private execution state
 
 Repository checkouts remain under the existing `issues/<issue-key>` root and

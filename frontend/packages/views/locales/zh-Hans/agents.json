@@ -461,10 +461,8 @@
     "agent_count_other": "{{count}} 个智能体"
   },
   "execution_target": {
-    "automatic": "自动调度 · {{provider}}",
-    "automatic_hint": "任务可在工作区内此云友有权使用的同类型 Runtime 之间自动调度。",
-    "label": "执行能力组",
-    "placeholder": "选择执行能力组",
+    "label": "执行模式",
+    "placeholder": "选择模型路由或固定能力组",
     "unavailable": "执行能力组不可用，请重新选择",
     "loading": "正在加载执行能力组…",
     "error": "无法加载执行能力组",
@@ -473,6 +471,9 @@
     "offline": "该组暂无在线 Runtime，任务将等待组内成员恢复连接。",
     "offline_badge": "离线",
     "members": "{{online}} 在线 · {{count}} 个 Runtime",
-    "pinned": "当前仍固定到 Runtime {{runtime}}。重新选择能力组后，可在组内调度。"
+    "pinned": "当前仍固定到 Runtime {{runtime}}。重新选择能力组后，可在组内调度。",
+    "model_routing": "模型路由 · {{provider}}",
+    "model_routing_hint": "按所选模型和思考等级，跨可用能力组与 Runtime 动态匹配；未选模型时使用兼容 Runtime 的默认模型。",
+    "fixed_group": "固定能力组 · {{group}}"
   }
 }

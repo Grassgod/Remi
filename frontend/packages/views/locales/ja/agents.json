@@ -461,10 +461,8 @@
     "agent_count_other": "{{count}} 件のエージェント"
   },
   "execution_target": {
-    "automatic": "自動割り当て · {{provider}}",
-    "automatic_hint": "タスクはワークスペース内でこのエージェントが利用できる同じエンジンの Runtime に自動的に割り当てられます。",
-    "label": "実行グループ",
-    "placeholder": "実行グループを選択",
+    "label": "実行モード",
+    "placeholder": "モデルルーティングまたは固定実行グループを選択",
     "unavailable": "実行グループが利用できません。再選択してください",
     "loading": "実行グループを読み込み中…",
     "error": "実行グループを読み込めませんでした",
@@ -473,6 +471,9 @@
     "offline": "このグループにはオンラインの Runtime がありません。再接続を待ちます。",
     "offline_badge": "オフライン",
     "members": "{{online}} オンライン · {{count}} Runtime",
-    "pinned": "現在は Runtime {{runtime}} に固定されています。実行グループを再選択するとグループ内で割り当てられます。"
+    "pinned": "現在は Runtime {{runtime}} に固定されています。実行グループを再選択するとグループ内で割り当てられます。",
+    "model_routing": "モデルルーティング · {{provider}}",
+    "model_routing_hint": "選択したモデルと思考レベルに合う実行グループと Runtime を選びます。モデル未指定時は互換 Runtime の既定モデルを使います。",
+    "fixed_group": "固定実行グループ · {{group}}"
   }
 }

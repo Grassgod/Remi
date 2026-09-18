@@ -473,10 +473,8 @@
     "agent_count_other": "{{count}} agents"
   },
   "execution_target": {
-    "automatic": "Automatic · {{provider}}",
-    "automatic_hint": "Tasks can run on any Runtime of this engine available to this agent across the workspace.",
-    "label": "Execution group",
-    "placeholder": "Choose an execution group",
+    "label": "Execution mode",
+    "placeholder": "Choose model routing or a fixed execution group",
     "unavailable": "Execution group unavailable; choose another group",
     "loading": "Loading execution groups…",
     "error": "Could not load execution groups",
@@ -485,6 +483,9 @@
     "offline": "This group has no online Runtime. Tasks will wait for a member to reconnect.",
     "offline_badge": "Offline",
     "members": "{{online}} online · {{count}} Runtime",
-    "pinned": "Currently pinned to Runtime {{runtime}}. Select an execution group again to allow scheduling within the group."
+    "pinned": "Currently pinned to Runtime {{runtime}}. Select an execution group again to allow scheduling within the group.",
+    "model_routing": "Model routing · {{provider}}",
+    "model_routing_hint": "Match the selected model and thinking level across available execution groups and Runtimes. With no model selected, use a compatible Runtime default.",
+    "fixed_group": "Fixed execution group · {{group}}"
   }
 }

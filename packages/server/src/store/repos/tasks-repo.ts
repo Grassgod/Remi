@@ -1229,7 +1229,7 @@ export class TasksRepo {
       // block another runnable task at the head of the queue.
       const groupAgentRows = this.ctx.db.query(`SELECT DISTINCT a.id FROM multiremi_agents a
         JOIN multiremi_tasks t ON t.agent_id = a.id
-        WHERE a.workspace_id = ? AND a.execution_group_id IS NOT NULL
+        WHERE a.workspace_id = ? AND (a.execution_group_id IS NOT NULL OR COALESCE(a.model, '') <> '' OR COALESCE(a.thinking_level, '') <> '')
           AND t.status IN ('queued', 'dispatched')`).all(lockedRuntime.workspaceId ?? "local") as { id: string }[];
       for (const row of groupAgentRows) {
         const agent = this.ctx.agents().getAgent(row.id);
