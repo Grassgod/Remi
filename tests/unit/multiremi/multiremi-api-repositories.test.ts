@@ -57,7 +57,10 @@ describe("Multiremi API - workspace repositories", () => {
       autopilotRunId: expect.any(String),
       prompt: expect.stringContaining("Create a non-empty root index.md reading map and a non-empty append-only root log.md"),
     });
-    expect(store.getTask(buildBody.task_id)?.prompt).toContain("let repository semantics determine whether overview.md, directories, or nesting are useful");
+    expect(store.getTask(buildBody.task_id)?.prompt).toContain("repository semantics choose the directory names");
+    // The bootstrap prompt must carry the machine-checkable size baseline, not just
+    // naming freedom — a single directory holding every page reads as a flat Wiki.
+    expect(store.getTask(buildBody.task_id)?.prompt).toContain("at most 20 body pages directly inside any directory");
     expect(store.getTask(buildBody.task_id)?.prompt).not.toContain("functional-domain pages and directory overviews");
     expect(store.getAutopilotRun(buildBody.run_id)?.payload).toEqual({
       repository_wiki_repository_id: "repo_wiki",
@@ -148,6 +151,14 @@ describe("Multiremi API - workspace repositories", () => {
     const firstBody = await first.json() as any;
     expect(firstBody).toMatchObject({ status: "running" });
     expect(store.getTask(firstBody.task_id)?.prompt).toContain("Atlas lint mode");
+    // Lint is the mode that re-splits a Wiki once it has grown, so it must be told
+    // the size baseline and to report the per-directory counts it checked against.
+    expect(store.getTask(firstBody.task_id)?.prompt).toContain("at most 20 body pages directly");
+    expect(store.getTask(firstBody.task_id)?.prompt).toContain("report the per-directory page counts");
+    // A run that reports nothing looks exactly like a successful one, which is how
+    // 176 blocked builds stayed green. The agent template cannot carry this (it is
+    // capped at 4000 chars), so the build prompt has to.
+    expect(store.getTask(firstBody.task_id)?.prompt).toContain("remi wiki repository outcome");
     expect(store.getTask(firstBody.task_id)?.prompt).toContain("maintain a non-empty root index.md");
     expect(store.getTask(firstBody.task_id)?.prompt).toContain("append this run to the non-empty root log.md without rewriting its history");
     expect(store.getTask(firstBody.task_id)?.prompt).not.toContain("maintain root index.md and overview.md");

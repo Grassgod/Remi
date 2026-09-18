@@ -663,6 +663,25 @@ describe("Multiremi repo cache", () => {
     expect(registrations.split(recreated.path).length - 1).toBe(1);
   });
 
+  it("runs fixture git commands without host global git config", () => {
+    const hostHome = tempDir("multiremi-repo-host-gitconfig-");
+    const hostConfig = join(hostHome, "gitconfig");
+    writeFileSync(hostConfig, "[core]\n\thooksPath = /nonexistent/host-hooks\n");
+    const repo = createRepo("main", "host config repo");
+
+    const previous = process.env.GIT_CONFIG_GLOBAL;
+    process.env.GIT_CONFIG_GLOBAL = hostConfig;
+    try {
+      expect(git(repo, ["config", "--list"])).not.toContain("/nonexistent/host-hooks");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.GIT_CONFIG_GLOBAL;
+      } else {
+        process.env.GIT_CONFIG_GLOBAL = previous;
+      }
+    }
+  });
+
   it("installs and removes the daemon co-authored-by hook from agent worktrees", async () => {
     const source = createRepo("main", "hook repo");
     const cacheRoot = tempDir("multiremi-repo-hook-");
@@ -1588,6 +1607,11 @@ function gitEnv(): NodeJS.ProcessEnv {
   return {
     ...process.env,
     GIT_TERMINAL_PROMPT: "0",
+    // Host git config must not leak into these fixtures. A developer-level
+    // `core.hooksPath` overrides the repository's own `.git/hooks`, which would
+    // silently skip the prepare-commit-msg hooks this suite installs and assert on.
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_SYSTEM: "/dev/null",
     GIT_CONFIG_COUNT: "1",
     GIT_CONFIG_KEY_0: "safe.directory",
     GIT_CONFIG_VALUE_0: "*",

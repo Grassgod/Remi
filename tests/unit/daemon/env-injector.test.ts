@@ -2,6 +2,7 @@
 // MULTIREMI coordinates > agent customEnv > workspace env (> machine env,
 // applied at spawn where this overlay is merged over process.env).
 import { describe, expect, it } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { buildTaskEnv } from "@daemon/agent-runtime/env/injector.js";
 import { SIDE_CONVERSATION_INSTRUCTIONS } from "@daemon/agent-runtime/prompts/side-conversation.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
@@ -170,6 +171,66 @@ describe("buildTaskEnv", () => {
       "MULTIREMI_WORKSPACE_ID",
       "ONLY_AGENT",
     ]);
+  });
+});
+
+describe("read-only code snapshot environment", () => {
+  it("removes injected SCM credentials and resets helpers while keeping task and provider auth", () => {
+    const machine = {
+      GH_TOKEN: "machine-github", GH_ENTERPRISE_TOKEN: "machine-enterprise",
+      GIT_CONFIG_COUNT: "10", GIT_CONFIG_KEY_9: "credential.helper", GIT_CONFIG_VALUE_9: "machine-helper",
+      GIT_CONFIG_PARAMETERS: "'http.extraHeader=Authorization: machine-secret'",
+      MULTIREMI_GIT_REPOSITORIES_JSON: '["https://example.test/repo.git"]',
+      SSH_AUTH_SOCK: "/machine/ssh-agent", GIT_SSH_COMMAND: "machine-ssh",
+    };
+    const previous = new Map(Object.keys(machine).map((key) => [key, process.env[key]]));
+    Object.assign(process.env, machine);
+    try {
+      const task = taskWith({
+        authToken: "side-task-auth", issueId: "issue", issueSessionId: "side", holdsWorkspace: false,
+        issueSession: { id: "side", title: "Side", parentSessionId: "parent", inheritMode: "follow", withCode: true },
+        workspaceEnv: { GITHUB_TOKEN: "workspace-github", CODEBASE_ACCESS_TOKEN: "workspace-codebase" },
+        agent: {
+          id: "agent", name: "Reader", provider: "codex", model: null, instructions: "",
+          skills: [], executable: null, allowedTools: [],
+          customEnv: { GLAB_TOKEN: "agent-gitlab", GIT_ASKPASS: "agent-askpass" },
+        },
+        repos: [{ url: "https://example.test/repo.git" }],
+      });
+      const env = buildTaskEnv(task, { ...OPTS, providerEnv: { OPENAI_API_KEY: "provider-key" } });
+      for (const key of ["GH_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_TOKEN", "CODEBASE_ACCESS_TOKEN", "GLAB_TOKEN",
+        "GIT_CONFIG_PARAMETERS", "MULTIREMI_GIT_REPOSITORIES_JSON", "SSH_AUTH_SOCK", "GIT_CONFIG_VALUE_9"]) {
+        expect(env[key]).toBe("");
+      }
+      expect(env.MULTIREMI_TOKEN).toBe("side-task-auth");
+      expect(env.OPENAI_API_KEY).toBe("provider-key");
+      expect(env.GIT_SSH_COMMAND).toBe("/bin/false");
+      expect(env.GIT_ASKPASS).toBe("/bin/false");
+      expect(Object.values(env).some((value) => value.includes("git-credential"))).toBe(false);
+      // Exercise Git's effective config after the same overlay used by ACP.
+      const childEnv = { ...process.env, ...env };
+      expect(execFileSync("git", ["config", "--get-all", "credential.helper"], {
+        cwd: "/tmp", env: childEnv, encoding: "utf8",
+      }).trim()).toBe("");
+      expect(execFileSync("git", ["config", "--get", "credential.interactive"], {
+        cwd: "/tmp", env: childEnv, encoding: "utf8",
+      }).trim()).toBe("false");
+    } finally {
+      for (const [key, value] of previous) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  it("recognizes snake-case opt-in without changing ordinary task credential injection", () => {
+    const task = taskWith({
+      issue_session: { id: "side", title: "Side", parent_session_id: "parent", inherit_mode: "snapshot", with_code: true },
+    });
+    expect(buildTaskEnv(task, OPTS).GIT_CONFIG_VALUE_1).toBe("false");
+    const ordinary = buildTaskEnv(taskWith({ workspaceEnv: { GH_TOKEN: "ordinary-token" } }), OPTS);
+    expect(ordinary.GH_TOKEN).toBe("ordinary-token");
+    expect(Object.values(ordinary).some((value) => value.includes("git-credential"))).toBe(true);
   });
 });
 

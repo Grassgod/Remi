@@ -25,7 +25,7 @@ import { toast } from "sonner";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { useT, useTimeAgo } from "../../i18n";
 import { getSessionDisplayName } from "../utils/session-display";
-import { NewSessionButton } from "./issue-session-bar";
+import { NewSessionButton, NewSessionDialog } from "./issue-session-bar";
 
 interface IssueSessionListProps {
   issueId: string;
@@ -55,6 +55,29 @@ export function IssueSessionList({
   className,
 }: IssueSessionListProps) {
   const { t } = useT("issues");
+  const [sideChatParentId, setSideChatParentId] = useState<string | null>(null);
+  const sessionRows = useMemo<Array<{ session: IssueSession; parentSession?: IssueSession }>>(() => {
+    // Only regular sessions can be parents. Preserve the original order of
+    // parents and siblings, and leave children with missing parents flat.
+    const parentIds = new Set(
+      sessions.filter((session) => session.parent_session_id == null).map((session) => session.id),
+    );
+    const childrenByParent = new Map<string, IssueSession[]>();
+    for (const session of sessions) {
+      if (session.parent_session_id != null && parentIds.has(session.parent_session_id)) {
+        const children = childrenByParent.get(session.parent_session_id) ?? [];
+        children.push(session);
+        childrenByParent.set(session.parent_session_id, children);
+      }
+    }
+    return sessions.flatMap((session) => {
+      if (session.parent_session_id != null && parentIds.has(session.parent_session_id)) return [];
+      return [
+        { session },
+        ...(childrenByParent.get(session.id) ?? []).map((child) => ({ session: child, parentSession: session })),
+      ];
+    });
+  }, [sessions]);
 
   return (
     <div
@@ -73,21 +96,33 @@ export function IssueSessionList({
         >
           {t(($) => $.detail.sessions_label)}
         </span>
-        <NewSessionButton issueId={issueId} onCreated={onSelectSession} />
+        <NewSessionButton issueId={issueId} sessions={sessions} onCreated={onSelectSession} />
       </div>
 
       <div className="mt-1 space-y-0.5">
-        {sessions.map((session) => (
+        {sessionRows.map(({ session, parentSession }) => (
           <SessionRow
             key={session.id}
             issueId={issueId}
             session={session}
+            parentSession={parentSession}
             agents={agents}
             isSelected={session.id === selectedSessionId}
             onSelect={onSelectSession}
+            onSideChat={setSideChatParentId}
           />
         ))}
       </div>
+      <NewSessionDialog
+        issueId={issueId}
+        sessions={sessions}
+        open={sideChatParentId !== null}
+        onOpenChange={(open) => {
+          if (!open) setSideChatParentId(null);
+        }}
+        parentSessionId={sideChatParentId ?? undefined}
+        onCreated={onSelectSession}
+      />
     </div>
   );
 }
@@ -105,25 +140,36 @@ function sessionStatusTone(status: IssueSession["status"]): string {
 function SessionRow({
   issueId,
   session,
+  parentSession,
   agents,
   isSelected,
   onSelect,
+  onSideChat,
 }: {
   issueId: string;
   session: IssueSession;
+  parentSession?: IssueSession;
   agents: Agent[];
   isSelected: boolean;
   onSelect: (sessionId: string) => void;
+  onSideChat: (sessionId: string) => void;
 }) {
   const { t } = useT("issues");
   const timeAgo = useTimeAgo();
   const [participantsOpen, setParticipantsOpen] = useState(false);
+  const inheritedRange = parentSession && session.inherited_event_count > 0
+    ? t(($) => $.detail.session_inherited_range, {
+      session: getSessionDisplayName(t, parentSession),
+      count: session.inherited_event_count,
+    })
+    : undefined;
 
   return (
     <div
       className={cn(
         "flex items-center gap-1 rounded-md pr-1 transition-colors",
         isSelected ? "bg-accent" : "hover:bg-accent/60",
+        parentSession && "ml-3",
       )}
     >
       <button
@@ -144,8 +190,8 @@ function SessionRow({
           >
             {getSessionDisplayName(t, session)}
           </span>
-          <span className="block truncate text-[11px] text-muted-foreground">
-            {timeAgo(session.updated_at)}
+          <span className="block truncate text-[11px] text-muted-foreground" title={inheritedRange}>
+            {inheritedRange ?? timeAgo(session.updated_at)}
           </span>
         </span>
       </button>
@@ -168,6 +214,11 @@ function SessionRow({
           <DropdownMenuItem onClick={() => setParticipantsOpen(true)}>
             {t(($) => $.detail.session_participants)}
           </DropdownMenuItem>
+          {session.parent_session_id == null && (
+            <DropdownMenuItem onClick={() => onSideChat(session.id)}>
+              {t(($) => $.detail.session_side_chat)}
+            </DropdownMenuItem>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
 

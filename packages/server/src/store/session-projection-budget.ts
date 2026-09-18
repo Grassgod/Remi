@@ -103,3 +103,13 @@ function boundedNumber(value: unknown, fallback: number, minimum: number, maximu
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(maximum, Math.max(minimum, parsed));
 }
+
+/** Follow deltas use less of the model window than the initial snapshot. */
+export function resolveFollowDeltaRatio(): number {
+  const value = process.env.MULTIREMI_SESSION_PROJECTION_FOLLOW_DELTA_RATIO;
+  return value?.trim() ? boundedNumber(value, 0.15, 0.01, 0.4) : 0.15;
+}
+
+export function resolveFollowTokenLimit(): number {
+  return positiveInteger(process.env.MULTIREMI_SESSION_PROJECTION_FOLLOW_TOKEN_LIMIT) ?? 200_000;
+}

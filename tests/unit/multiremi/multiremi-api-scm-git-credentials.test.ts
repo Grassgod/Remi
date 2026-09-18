@@ -11,6 +11,47 @@ afterEach(() => {
 });
 
 describe("Multiremi API — JIT Git credentials", () => {
+  it("denies Git credentials to a running read-only code snapshot even for its own repository", async () => {
+    process.env.MULTIREMI_SCM_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const repositoryUrl = "git@github.com:example/readonly-code.git";
+    store.updateWorkspace("local", { repos: [
+      { id: "repo_readonly_code", name: "readonly-code", url: repositoryUrl, defaultBranch: "main" },
+    ] });
+    store.createScmConnection({
+      workspaceId: "local", name: "Code source", provider: "github", mode: "poll",
+      accessToken: "test-readonly-credential", repositoryIds: ["repo_readonly_code"],
+    });
+    const project = store.createProject({ title: "Read-only source", workspaceId: "local" });
+    store.createProjectResource(project.id, { resourceType: "github_repo", resourceRef: { url: repositoryUrl } });
+    const issue = store.createIssue({ title: "Review code", workspaceId: "local", projectId: project.id });
+    const agent = store.createAgent({ name: "Reader", provider: "codex", workspaceId: "local" });
+    const runtime = store.registerRuntime({
+      id: "rt_readonly", name: "Source", provider: "codex", workspaceId: "local", daemonId: "daemon_readonly",
+    });
+    const parent = store.getOrCreateDefaultIssueSession(issue.id);
+    store.getOrCreateSessionAgentLane(parent.id, agent.id);
+    db!.run("UPDATE multiremi_session_agent_lanes SET runtime_id = ? WHERE session_id = ? AND agent_id = ?",
+      [runtime.id, parent.id, agent.id]);
+    const side = store.createIssueSession(issue.id, { parentSessionId: parent.id, withCode: true });
+    const task = store.createSessionTask(side.id, { agentId: agent.id, prompt: "Read the repository" });
+    expect(store.getTaskWithAgent(task.id)?.repos).toEqual(expect.arrayContaining([
+      expect.objectContaining({ url: repositoryUrl }),
+    ]));
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    const credential = await store.createTaskAccessToken(store.getTask(task.id)!, "local");
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const response = await app.request("/api/daemon/scm/git-credentials", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${credential.token}` },
+      body: JSON.stringify({ workspaceId: "local", repositoryUrl }),
+    });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: "readonly_code_snapshot" });
+  });
+
   it("authorizes daemon and active task credentials without exposing other repositories", async () => {
     process.env.MULTIREMI_SCM_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
     const store = createStore();

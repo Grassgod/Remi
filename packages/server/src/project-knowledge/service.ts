@@ -460,7 +460,19 @@ export class ProjectKnowledgeService implements ProjectKnowledgeServiceContract 
   }
 
   async hydrateTaskKnowledge(task: MultiremiTaskWithAgent, signal?: AbortSignal): Promise<MultiremiTaskWithAgent> {
-    if (this.mode !== "openviking") return task;
+    if (this.mode !== "openviking") {
+      // Project-bound Chat materializes its Wiki even when SQL is the source
+      // of truth. Keep Memory on demand and preserve legacy task hydration.
+      if (task.chatSessionId && !task.issueId && task.chatProjectId
+        && task.chatProjectId === task.project?.id
+        && task.project.workspaceId === task.workspaceId) {
+        return {
+          ...task,
+          projectWikiDocs: await this.listProjectDocs(task.project.id, { kind: "wiki" }),
+        };
+      }
+      return task;
+    }
     if (signal && this.client?.withSignal) {
       return new ProjectKnowledgeService(this.store, this.client.withSignal(signal), this.mode).hydrateTaskKnowledge(task);
     }

@@ -22,10 +22,9 @@ vi.mock("../paths", () => ({
 }));
 
 /**
- * The exact event set the pre-split single-useEffect implementation
- * subscribed to (40 `ws.on` calls, verbatim order). Pinning it here is what
- * makes "the refactor kept identical subscribe semantics" a checked claim
- * rather than a review assertion.
+ * The exact supported event catalog, including Project Chat preparation
+ * progress. Pinning its order and cardinality checks subscription changes
+ * and keeps every added event covered by the teardown assertions below.
  */
 const EXPECTED_EVENTS: readonly string[] = [
   "issue:updated",
@@ -61,6 +60,7 @@ const EXPECTED_EVENTS: readonly string[] = [
   "task:queued",
   "task:dispatch",
   "task:running",
+  "task:progress",
   "task:waiting_local_directory",
   "task:awaiting_human",
   "task:cancelled",
@@ -156,7 +156,7 @@ describe("useRealtimeSync — registration / teardown parity", () => {
     vi.restoreAllMocks();
   });
 
-  it("subscribes to exactly the pre-split event set, in the same order", () => {
+  it("subscribes to exactly the supported event catalog, in the declared order", () => {
     const mock = createRecordingWs();
     renderHook(() => useRealtimeSync(mock.ws, stores), { wrapper: createWrapper(qc) });
 

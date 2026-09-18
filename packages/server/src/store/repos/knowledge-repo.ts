@@ -2,6 +2,13 @@ import { createHash } from "node:crypto";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { cleanOptionalString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import type { StoreContext } from "@multiremi/store/context.js";
+import {
+  repositoryWikiOutcomeKey,
+  repositoryWikiTaskHasPublication,
+  repositoryWikiTaskOutcome,
+  repositoryWikiObservability,
+  type RepositoryWikiOutcomeStatus,
+} from "../repository-wiki-outcome.js";
 import type {
   CreateKnowledgeCompilationRunInput,
   CreateKnowledgeSubmissionInput,
@@ -20,6 +27,17 @@ import type {
 } from "@multiremi/contracts/types.js";
 
 type Row = Record<string, unknown>;
+
+export class RepositoryWikiOutcomeConflictError extends Error {}
+export interface ReportRepositoryWikiOutcomeInput {
+  workspaceId: string;
+  repositoryId: string;
+  taskId: string;
+  agentId: string;
+  autopilotRunId: string | null;
+  status: RepositoryWikiOutcomeStatus;
+  reason: string;
+}
 
 export type KnowledgeListInput = MultiremiKnowledgeSubmissionListInput;
 export type KnowledgeRunListInput = MultiremiKnowledgeCompilationRunListInput;
@@ -46,6 +64,44 @@ export interface RepositoryMergeKnowledgeEventInput {
 
 export class KnowledgeRepo {
   constructor(private readonly ctx: StoreContext) {}
+
+  repositoryTaskOutcome(workspaceId: string, repositoryId: string, taskId: string) {
+    return repositoryWikiTaskOutcome(this.ctx, workspaceId, repositoryId, taskId);
+  }
+
+  repositoryObservability(workspaceId: string) {
+    return repositoryWikiObservability(this.ctx, workspaceId);
+  }
+
+  reportRepositoryOutcome(input: ReportRepositoryWikiOutcomeInput) {
+    return this.ctx.db.transaction(() => {
+      // Serialize with task completion so an outcome cannot arrive after its
+      // terminal notifications and silently rewrite another execution's result.
+      this.ctx.db.run("UPDATE multiremi_tasks SET updated_at = updated_at WHERE id = ?", [input.taskId]);
+      const task = this.ctx.tasks().getTask(input.taskId);
+      if (!task || task.workspaceId !== input.workspaceId || task.agentId !== input.agentId
+        || !["queued", "dispatched", "running"].includes(task.status)) {
+        throw new RepositoryWikiOutcomeConflictError("only the current active task can report its outcome");
+      }
+      const published = repositoryWikiTaskHasPublication(this.ctx, input.workspaceId, input.repositoryId, input.taskId);
+      if (published !== (input.status === "published" || input.status === "published_with_warnings")) {
+        throw new RepositoryWikiOutcomeConflictError(published
+          ? "this task already published; report published or published_with_warnings"
+          : "published outcomes require an actual repository Wiki write by this task");
+      }
+      const result = this.createRun({
+        ...input, mode: "repository_update", status: "preparing",
+        dedupeKey: repositoryWikiOutcomeKey(input.taskId, input.repositoryId),
+      });
+      if (result.deduplicated) {
+        if (result.run.status !== input.status || result.run.resultSummary !== input.reason) {
+          throw new RepositoryWikiOutcomeConflictError("this task already reported a different final outcome");
+        }
+        return result;
+      }
+      return { run: this.completeRun(result.run.id, input.status, input.reason), deduplicated: false };
+    })();
+  }
 
   createSubmission(input: CreateKnowledgeSubmissionInput): {
     submission: MultiremiKnowledgeSubmission;
@@ -531,7 +587,7 @@ function normalizeCompilationMode(value: unknown): MultiremiKnowledgeCompilation
 function normalizeCompilationStatus(value: unknown): MultiremiKnowledgeCompilationStatus {
   const status = String(value ?? "");
   if (status === "preparing" || status === "validating" || status === "published"
-    || status === "published_with_warnings" || status === "failed" || status === "noop") return status;
+    || status === "published_with_warnings" || status === "blocked" || status === "failed" || status === "noop") return status;
   throw new Error(`unknown knowledge compilation status: ${status}`);
 }
 

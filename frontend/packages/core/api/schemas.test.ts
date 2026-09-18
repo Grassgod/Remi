@@ -557,7 +557,7 @@ describe("TimelinePageSchema", () => {
 describe("IssueSessionListSchema", () => {
   const opts = { endpoint: "GET /api/issues/:id/sessions" };
 
-  it("defaults optional participant and summary fields for older responses", () => {
+  it("defaults participant, summary, and inheritance fields for older responses", () => {
     const parsed = parseWithFallback([
       {
         id: "sess_1",
@@ -573,8 +573,76 @@ describe("IssueSessionListSchema", () => {
       id: "sess_1",
       is_default: false,
       holds_workspace: true,
+      parent_session_id: null,
+      inherit_mode: "none",
+      inherit_cutoff_seq: null,
+      inherited_event_count: 0,
       summary: null,
       participants: [],
+    });
+  });
+
+  it("preserves the code snapshot opt-in and its Runtime without making it a held workspace", () => {
+    const parsed = parseWithFallback([{
+      id: "sess_code", issue_id: "issue_1", workspace_id: "ws_1", title: "Read code", status: "active",
+      holds_workspace: false, with_code: true, code_runtime_id: "rt_parent",
+      parent_session_id: "sess_main", inherit_mode: "follow", inherit_cutoff_seq: 42,
+      created_at: "2026-09-18T00:00:00Z", updated_at: "2026-09-18T00:00:00Z",
+    }], IssueSessionListSchema, EMPTY_ISSUE_SESSIONS, opts);
+    expect(parsed[0]).toMatchObject({
+      with_code: true, code_runtime_id: "rt_parent", holds_workspace: false, inherit_mode: "follow",
+    });
+  });
+
+  it.each(["snapshot", "follow"])("preserves %s inheritance metadata without confusing the cutoff and count", (inheritMode) => {
+    const parsed = parseWithFallback([
+      {
+        id: "sess_side",
+        issue_id: "issue_1",
+        workspace_id: "ws_1",
+        title: "Review",
+        status: "active",
+        holds_workspace: false,
+        parent_session_id: "sess_main",
+        inherit_mode: inheritMode,
+        inherit_cutoff_seq: 42,
+        inherited_event_count: 38,
+        created_at: "2026-09-18T00:00:00Z",
+        updated_at: "2026-09-18T00:00:00Z",
+      },
+    ], IssueSessionListSchema, EMPTY_ISSUE_SESSIONS, opts);
+
+    expect(parsed[0]).toMatchObject({
+      id: "sess_side",
+      holds_workspace: false,
+      parent_session_id: "sess_main",
+      inherit_mode: inheritMode,
+      inherit_cutoff_seq: 42,
+      inherited_event_count: 38,
+    });
+  });
+
+  it("keeps sessions visible when a newer server returns an unknown inheritance mode", () => {
+    const parsed = parseWithFallback([
+      {
+        id: "sess_side",
+        issue_id: "issue_1",
+        workspace_id: "ws_1",
+        title: "Review",
+        status: "active",
+        parent_session_id: "sess_main",
+        inherit_mode: "future-mode",
+        inherited_event_count: 12,
+        created_at: "2026-09-18T00:00:00Z",
+        updated_at: "2026-09-18T00:00:00Z",
+      },
+    ], IssueSessionListSchema, EMPTY_ISSUE_SESSIONS, opts);
+
+    expect(parsed[0]).toMatchObject({
+      id: "sess_side",
+      parent_session_id: "sess_main",
+      inherit_mode: "none",
+      inherited_event_count: 12,
     });
   });
 

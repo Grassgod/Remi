@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { basename } from "node:path";
 import { CHAT_ATTACHMENT_MAX_BYTES } from "@multiremi/contracts/attachments.js";
+import type { MultiremiSessionInheritedContext } from "@multiremi/contracts/types.js";
 import {
   CliError,
   CliRenderer,
@@ -219,31 +220,75 @@ function sessionCommandSpecs(): CommandSpec[] {
       const issue = positional(invocation, 0, "issue");
       await getAndRender(invocation, `/api/issues/${encodePath(issue)}/sessions/${encodePath(positional(invocation, 1, "session"))}`);
     }),
-    nativeSpec("session.show", ["session", "show"], "Show a Session and its inherited snapshot", "read", HUMAN_TASK, [refPositional("session")], [], async (invocation) => {
+    nativeSpec("session.show", ["session", "show"], "Show a Session and its inherited context", "read", HUMAN_TASK, [refPositional("session")], [], async (invocation) => {
       const client = await clientFor(invocation);
-      const response = await client.request({ method: "GET", path: `/api/sessions/${encodePath(positional(invocation, 0, "session"))}` });
+      const path = `/api/sessions/${encodePath(positional(invocation, 0, "session"))}`;
+      const response = await client.request({ method: "GET", path });
+      const mode = outputMode(invocation);
+      const inheritedContext = mode === "table"
+        ? (await client.request<MultiremiSessionInheritedContext>({ method: "GET", path: `${path}/inherited-context` })).data
+        : null;
       new CliRenderer().render<Record<string, unknown>>(response.data, {
-        mode: outputMode(invocation),
+        mode,
         columns: [
           { header: "ID", value: (row) => row.id },
           { header: "TITLE", value: (row) => row.title },
           { header: "STATUS", value: (row) => row.status },
           { header: "PARENT", value: (row) => row.parent_session_id ?? "-" },
+          { header: "WITH CODE", value: (row) => row.with_code ?? false },
+          { header: "CODE RUNTIME", value: (row) => row.code_runtime_id ?? "-" },
           { header: "INHERIT", value: (row) => row.inherit_mode ?? "none" },
           { header: "CUTOFF", value: (row) => row.inherit_cutoff_seq ?? "-" },
-          { header: "INHERITED EVENTS", value: (row) => row.inherited_event_count ?? 0 },
+          { header: "INHERITED EVENTS (PRE-TRUNCATION)", value: (row) => row.inherited_event_count ?? 0 },
+          { header: "PARENT MAX", value: () => inheritedContext?.parent_max_seq },
+          { header: "PARENT CURSORS", value: () => inheritedContext?.lanes?.map((lane) => `${lane.agent_id}/${lane.execution_scope}:${lane.parent_cursor_seq}`).join(", ") },
+          { header: "TOTAL INHERITED TOKENS", value: () => inheritedContext?.inherited_tokens_total },
+          { header: "FOLLOW TOKEN LIMIT", value: () => inheritedContext?.follow_token_limit },
+          { header: "FOLLOW FROZEN", value: () => inheritedContext?.follow_frozen },
+          { header: "FROZEN AT", value: () => inheritedContext?.follow_frozen_seq },
+          { header: "TRUNCATED", value: () => inheritedContext?.diagnostics?.truncated ?? "-" },
+        ],
+      });
+    }),
+    nativeSpec("session.inherited-context", ["session", "inherited-context"], "Show inherited context diagnostics, follow progress and token costs (event count is before truncation)", "read", HUMAN_TASK, [refPositional("session")], [], async (invocation) => {
+      const client = await clientFor(invocation);
+      const response = await client.request<MultiremiSessionInheritedContext>({
+        method: "GET", path: `/api/sessions/${encodePath(positional(invocation, 0, "session"))}/inherited-context`,
+      });
+      new CliRenderer().render<MultiremiSessionInheritedContext>(response.data, {
+        mode: outputMode(invocation),
+        columns: [
+          { header: "SESSION", value: (row) => row.session_id },
+          { header: "PARENT", value: (row) => row.parent_session_id },
+          { header: "CUTOFF", value: (row) => row.inherit_cutoff_seq },
+          { header: "INHERITED EVENTS (PRE-TRUNCATION)", value: (row) => row.inherited_event_count },
+          { header: "TRUNCATED", value: (row) => row.diagnostics?.truncated },
+          { header: "OMITTED", value: (row) => row.diagnostics?.omitted_events },
+          { header: "EST TOKENS", value: (row) => row.diagnostics?.estimated_tokens },
+          { header: "TOKEN BUDGET", value: (row) => row.diagnostics?.token_budget },
+          { header: "INHERIT", value: (row) => row.inherit_mode },
+          { header: "PARENT MAX", value: (row) => row.parent_max_seq },
+          { header: "PARENT CURSORS", value: (row) => row.lanes?.map((lane) => `${lane.agent_id}/${lane.execution_scope}:${lane.parent_cursor_seq}`).join(", ") },
+          { header: "TOTAL INHERITED TOKENS", value: (row) => row.inherited_tokens_total },
+          { header: "FOLLOW TOKEN LIMIT", value: (row) => row.follow_token_limit },
+          { header: "FOLLOW FROZEN", value: (row) => row.follow_frozen },
+          { header: "FROZEN AT", value: (row) => row.follow_frozen_seq },
         ],
       });
     }),
     nativeSpec("session.create", ["session", "create"], "Create an issue Session", "write", HUMAN, [refPositional("issue")], [
       ...INPUT_OPTIONS, ...titleStatusOptions(), discussionOption(),
-      { name: "from", type: "string", valueName: "session-id", description: "Inherit a parent Session snapshot (implies --discussion)" },
+      { name: "from", type: "string", valueName: "session-id", description: "Inherit parent Session context (implies --discussion; snapshot by default)" },
+      { name: "inherit-mode", type: "string", valueName: "snapshot|follow", description: "Use a frozen snapshot or follow new parent events (requires --from)" },
+      { name: "with-code", type: "boolean", description: "Attach a read-only parent code snapshot (requires --from and a parent Runtime)" },
     ], async (invocation) => {
       const parentSessionId = stringOption(invocation, "from");
       const body = await requestBody(invocation, {
         title: stringOption(invocation, "title") ?? undefined,
         holds_workspace: invocation.options.discussion === true || parentSessionId ? false : undefined,
         parent_session_id: parentSessionId ?? undefined,
+        inherit_mode: stringOption(invocation, "inherit-mode") ?? undefined,
+        with_code: invocation.options["with-code"] === true ? true : undefined,
       });
       await mutateAndRender(invocation, "POST", `/api/issues/${encodePath(positional(invocation, 0, "issue"))}/sessions`, body);
     }),
@@ -512,6 +557,7 @@ function chatCommandSpecs(): CommandSpec[] {
   const chatFields: readonly CliOptionSpec[] = [
     { name: "title", type: "string", valueName: "title", description: "Chat title" },
     { name: "agent", type: "string", valueName: "agent-id", description: "Chat agent" },
+    { name: "project", type: "string", valueName: "project-id|none", description: "Choose a Project when creating the Chat, or use none for pure chat" },
     { name: "status", type: "string", valueName: "status", description: "Chat status" },
   ];
   return [
@@ -526,11 +572,23 @@ function chatCommandSpecs(): CommandSpec[] {
       await getAndRender(invocation, `/api/chat/sessions/${encodePath(String(chat.id))}`);
     }),
     nativeSpec("chat.create", ["chat", "create"], "Create a chat", "write", HUMAN, [], [...INPUT_OPTIONS, ...chatFields], async (invocation) => {
-      await mutateAndRender(invocation, "POST", "/api/chat/sessions", await requestBody(invocation, { workspace_id: requiredWorkspace(invocation), title: stringOption(invocation, "title") ?? undefined, agent_id: requiredOption(invocation, "agent") }));
+      await mutateAndRender(invocation, "POST", "/api/chat/sessions", await requestBody(invocation, {
+        workspace_id: requiredWorkspace(invocation),
+        title: stringOption(invocation, "title") ?? undefined,
+        agent_id: requiredOption(invocation, "agent"),
+        projectId: chatProjectOption(invocation),
+      }));
     }),
-    nativeSpec("chat.update", ["chat", "update"], "Update a chat", "write", HUMAN, [refPositional("chat")], [...INPUT_OPTIONS, ...chatFields], async (invocation) => {
+    nativeSpec("chat.update", ["chat", "update"], "Update a chat", "write", HUMAN, [refPositional("chat")], [...INPUT_OPTIONS, ...chatFields.filter((field) => field.name !== "project")], async (invocation) => {
+      const body = await requestBody(invocation, {
+        title: stringOption(invocation, "title") ?? undefined,
+        status: stringOption(invocation, "status") ?? undefined,
+      });
+      if (Object.hasOwn(body, "projectId") || Object.hasOwn(body, "project_id")) {
+        throw new CliError("usage", "A Chat Project can only be selected when creating the session");
+      }
       const chat = await resolveChat(invocation, positional(invocation, 0, "chat"));
-      await mutateAndRender(invocation, "PATCH", `/api/chat/sessions/${encodePath(String(chat.id))}`, await requestBody(invocation, { title: stringOption(invocation, "title") ?? undefined, status: stringOption(invocation, "status") ?? undefined }));
+      await mutateAndRender(invocation, "PATCH", `/api/chat/sessions/${encodePath(String(chat.id))}`, body);
     }),
     ...([
       ["pin", "Pin a chat", { pinned: true }],
@@ -812,6 +870,12 @@ async function resolveLabel(invocation: CommandInvocation, ref: string): Promise
     id: (label) => String(label.id ?? ""),
     name: (label) => typeof label.name === "string" ? label.name : null,
   }).resolve(ref);
+}
+
+function chatProjectOption(invocation: CommandInvocation): string | null | undefined {
+  if (!Object.hasOwn(invocation.options, "project")) return undefined;
+  const project = requiredOption(invocation, "project");
+  return project === "none" ? null : project;
 }
 
 async function resolveChat(invocation: CommandInvocation, ref: string): Promise<Record<string, unknown>> {

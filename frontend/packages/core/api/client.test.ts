@@ -6,6 +6,47 @@ afterEach(() => {
 });
 
 describe("ApiClient", () => {
+  it("sends the parent session in snake case and preserves side-chat metadata", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      id: "sess_side",
+      issue_id: "issue_1",
+      workspace_id: "ws_1",
+      title: "Review",
+      status: "active",
+      holds_workspace: false,
+      parent_session_id: "sess_main",
+      inherit_mode: "snapshot",
+      inherit_cutoff_seq: 42,
+      inherited_event_count: 38,
+      created_at: "2026-09-18T00:00:00Z",
+      updated_at: "2026-09-18T00:00:00Z",
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.createIssueSession("issue_1", {
+      title: "Review",
+      parent_session_id: "sess_main",
+    })).resolves.toMatchObject({
+      id: "sess_side",
+      holds_workspace: false,
+      parent_session_id: "sess_main",
+      inherit_mode: "snapshot",
+      inherit_cutoff_seq: 42,
+      inherited_event_count: 38,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.test/api/issues/issue_1/sessions",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ title: "Review", parent_session_id: "sess_main" }),
+      }),
+    );
+  });
+
   it("preserves HTTP status on failed requests", async () => {
     vi.stubGlobal(
       "fetch",

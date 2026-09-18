@@ -70,7 +70,7 @@ import type {
   UpdateWorkspaceRuntimeProvisionInput,
 } from "@multiremi/contracts/types.js";
 import { createId, nowIso } from "@multiremi/ids.js";
-import { RepositoryWikiUnavailableError } from "@multiremi/repository-wiki/service.js";
+import { REPOSITORY_WIKI_BATCH_LIMIT, RepositoryWikiUnavailableError } from "@multiremi/repository-wiki/service.js";
 import { normalizeRepositoryWikiPath } from "@multiremi/store/repos/repository-wiki-repo.js";
 import {
   defaultRepositoryWikiPath,
@@ -506,6 +506,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
         store.listLatestRepositoryAutopilotRuns(workspaceId)
           .map((run) => [run.repositoryId!, run] as const),
       );
+      const observability = store.repositoryWikiObservability(workspaceId);
       return c.json({ repositories: repositories.map((repository) => {
         const repositoryDocs = docsByRepository.get(repository.id) ?? [];
         const latest = repositoryDocs.reduce<MultiremiRepositoryWikiDoc | null>(
@@ -513,23 +514,30 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
           null,
         );
         const build = repositoryWikiBuildState(store, buildRuns.get(repository.id) ?? null);
-        // An active build overrides the doc-derived status ("building"), and a
-        // failed last build surfaces as "failed" — the docs themselves are
-        // untouched and keep being listed either way.
+        const metrics = observability[repository.id];
+        // Execution completion is not publication success. Only explicit
+        // blocked reports make an otherwise healthy Wiki stale; noop is normal.
         const status = build.status === "queued" || build.status === "building"
           ? "building"
-          : build.status === "failed"
-            ? "failed"
-            : latest?.status ?? "unbuilt";
+          : metrics?.latest_completed_outcome?.status === "blocked"
+            ? "stale"
+            : build.status === "failed"
+              ? "failed"
+              : latest?.status ?? "unbuilt";
         return {
           repository_id: repository.id,
           repository_name: repository.name,
           status,
-          status_message: latest?.statusMessage ?? null,
+          status_message: status === "stale" && metrics?.latest_completed_outcome?.status === "blocked"
+            ? metrics.latest_completed_outcome.reason : latest?.statusMessage ?? null,
           source_revision: latest?.sourceRevision ?? null,
           page_count: repositoryDocs.length,
           updated_at: latest?.updatedAt ?? null,
           build,
+          last_published_at: metrics?.last_published_at ?? null,
+          builds_since_publish: metrics?.builds_since_publish ?? 0,
+          consecutive_blocked: metrics?.consecutive_blocked ?? 0,
+          alert: metrics?.alert ?? null,
         };
       }) });
     } catch (error) {
@@ -726,8 +734,8 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const hasPublishedWiki = store.listRepositoryWikiDocs(workspaceId, repositoryId).length > 0;
     const mode = hasPublishedWiki ? "lint" : "bootstrap_repository";
     const prompt = hasPublishedWiki
-      ? "Review and organize the existing Repository Wiki in Atlas lint mode. Read the complete current Wiki and repository evidence, repair structure and durable content, maintain a non-empty root index.md, append this run to the non-empty root log.md without rewriting its history, and let repository semantics determine every other page and directory. Inspect remi wiki status and diff, then publish the coherent working copy."
-      : "Bootstrap the Repository Wiki from the checked-out default branch. Create a non-empty root index.md reading map and a non-empty append-only root log.md; let repository semantics determine whether overview.md, directories, or nesting are useful, without fixed directories or arbitrary depth limits. Resolve the checked-out HEAD revision, inspect remi wiki status and diff, then publish with remi wiki push --source-revision <sha>.";
+      ? "Review and organize the existing Repository Wiki in Atlas lint mode. Read the complete current Wiki and repository evidence, repair structure and durable content, maintain a non-empty root index.md, and append this run to the non-empty root log.md without rewriting its history. Repository semantics choose the directory names, but every directory must hold at most 20 body pages directly, the root at most 5 non-index body pages, and nesting at most 4 levels; split any directory that exceeds this by subsystem and report the per-directory page counts. Inspect remi wiki status and diff, then publish the coherent working copy. Before the run ends, record the result with `remi wiki repository outcome <repo> --outcome <published|published_with_warnings|noop|blocked> --reason '<specifics>'`: a run that reports nothing is indistinguishable from a successful one, and prose in the summary registers nowhere. Skip the report only when `remi wiki repository outcome --help` shows the deployed CLI predates the command."
+      : "Bootstrap the Repository Wiki from the checked-out default branch. Create a non-empty root index.md reading map and a non-empty append-only root log.md; repository semantics choose the directory names, without a fixed vocabulary and without mirroring the source tree. Keep at most 20 body pages directly inside any directory, at most 5 non-index body pages at the root, and at most 4 levels of nesting. Resolve the checked-out HEAD revision, inspect remi wiki status and diff, then publish with remi wiki push --source-revision <sha>. Before the run ends, record the result with `remi wiki repository outcome <repo> --outcome <published|published_with_warnings|noop|blocked> --reason '<specifics>'`: a run that reports nothing is indistinguishable from a successful one, and prose in the summary registers nowhere. Skip the report only when `remi wiki repository outcome --help` shows the deployed CLI predates the command.";
     const run = store.runAutopilot(automation.id, {
       source: "api",
       prompt,
@@ -1293,7 +1301,7 @@ function normalizeRepositoryWikiBatchOperations(input: {
   if (!Array.isArray(input.operations) || input.operations.length === 0) {
     throw new Error("repository wiki batch operations are required");
   }
-  if (input.operations.length > 256) throw new Error("repository wiki batch supports at most 256 operations");
+  if (input.operations.length > REPOSITORY_WIKI_BATCH_LIMIT) throw new Error(`repository wiki batch supports at most ${REPOSITORY_WIKI_BATCH_LIMIT} operations`);
   const operations: RepositoryWikiBatchOperation[] = [];
   for (const value of input.operations) {
     if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid repository wiki batch operation");
@@ -1366,6 +1374,7 @@ interface RepositoryWikiBuildState {
   updated_at: string | null;
   source_revision: string | null;
   published: boolean | null;
+  outcome: import("@multiremi/store/repository-wiki-outcome.js").RepositoryWikiOutcome | null;
 }
 
 /**
@@ -1388,6 +1397,7 @@ function repositoryWikiBuildState(
       updated_at: null,
       source_revision: null,
       published: null,
+      outcome: null,
     };
   }
   const task = run.taskId ? store.getTask(run.taskId) : null;
@@ -1405,6 +1415,7 @@ function repositoryWikiBuildState(
     updated_at: run.completedAt ?? task?.updatedAt ?? run.triggeredAt,
     source_revision: autopilotRunSourceRevision(run),
     published: run.status === "completed" ? store.isRepositoryWikiRunPublished(run.id) : null,
+    outcome: task && run.repositoryId ? store.repositoryWikiTaskOutcome(task.workspaceId, run.repositoryId, task.id) : null,
   };
 }
 

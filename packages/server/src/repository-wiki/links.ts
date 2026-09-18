@@ -6,7 +6,10 @@ import {
   type WikiLinkToken,
 } from "@multiremi/contracts/wiki-links";
 
-export type RepositoryWikiGraphDoc = Pick<MultiremiRepositoryWikiDoc, "id" | "path" | "body">;
+export type RepositoryWikiGraphDoc = Pick<MultiremiRepositoryWikiDoc, "id" | "path" | "body"> & {
+  /** Outgoing links are unknown; identity still participates in resolution. */
+  bodyUnavailable?: boolean;
+};
 
 export interface RepositoryWikiLinkProblem {
   sourceId: string;
@@ -75,7 +78,7 @@ export function repositoryWikiBacklinks<T extends RepositoryWikiGraphDoc>(
   target: RepositoryWikiGraphDoc,
   documents: readonly T[],
 ): T[] {
-  return documents.filter((document) => document.id !== target.id && tokenizeWikiLinks(document.body).some((token) => {
+  return documents.filter((document) => !document.bodyUnavailable && document.id !== target.id && tokenizeWikiLinks(document.body).some((token) => {
     const resolution = resolveRepositoryWikiRef(token.ref, document.path, documents);
     return resolution.status === "resolved" && resolution.document.id === target.id;
   }));
@@ -86,6 +89,34 @@ export function defaultRepositoryWikiPath(title: unknown, id: string): string {
     .replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-")
     .replace(/^-+|-+$/g, "");
   return `${slug || id}.md`;
+}
+
+/** Preserve each resolved target when a source/target moves, including relative refs. */
+export function rewriteRepositoryWikiLinks(
+  body: string,
+  sourcePath: string,
+  nextSourcePath: string,
+  before: readonly RepositoryWikiGraphDoc[],
+  after: readonly RepositoryWikiGraphDoc[],
+  mergedIds: ReadonlyMap<string, string> = new Map(),
+): string {
+  let rewritten = body;
+  for (const token of tokenizeWikiLinks(body).reverse()) {
+    const old = resolveRepositoryWikiRef(token.ref, sourcePath, before);
+    if (old.status !== "resolved") continue;
+    const targetId = mergedIds.get(old.document.id) ?? old.document.id;
+    const current = resolveRepositoryWikiRef(token.ref, nextSourcePath, after);
+    if (current.status === "resolved" && current.document.id === targetId) continue;
+    const target = after.find(doc => doc.id === targetId);
+    if (!target) throw new Error(`repository wiki rewrite target not found: ${targetId}`);
+    // Bare root paths can resolve to a same-named sibling first. Use stable ID
+    // in that case, rather than silently retargeting an otherwise valid link.
+    const byPath = resolveRepositoryWikiRef(target.path, nextSourcePath, after);
+    const ref = byPath.status === "resolved" && byPath.document.id === target.id ? target.path : target.id;
+    const replacement = `[[${ref}${token.anchor ? `#${token.anchor}` : ""}${token.label !== null ? `|${token.label}` : ""}]]`;
+    rewritten = rewritten.slice(0, token.start) + replacement + rewritten.slice(token.end);
+  }
+  return rewritten;
 }
 
 export function repositoryWikiGraphWithUpserts(
@@ -118,6 +149,7 @@ interface RepositoryWikiLinkState {
 function linkStatesByKey(documents: readonly RepositoryWikiGraphDoc[]): Map<string, RepositoryWikiLinkState[]> {
   const states = new Map<string, RepositoryWikiLinkState[]>();
   for (const document of documents) {
+    if (document.bodyUnavailable) continue;
     for (const token of tokenizeWikiLinks(document.body)) {
       const resolution = resolveRepositoryWikiRef(token.ref, document.path, documents);
       const key = `${document.id}\u0000${token.ref ?? "#self"}\u0000${token.anchor ?? ""}`;

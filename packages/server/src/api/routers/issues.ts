@@ -1228,6 +1228,13 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       store.listSessionParticipants(session.id),
     ));
   });
+  app.get("/api/sessions/:sessionId/inherited-context", (c) => {
+    const session = store.getIssueSession(c.req.param("sessionId"));
+    if (!session) return c.json({ error: "session not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, session.workspaceId);
+    if (denied) return denied;
+    return c.json(store.getSessionInheritedContext(session.id));
+  });
   app.get("/api/issues/:id/sessions", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
@@ -1247,13 +1254,14 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJson<CreateIssueSessionInput & { inheritMode?: unknown; inherit_mode?: unknown }>(c);
     const creator = issueSubscriberCaller(c);
     try {
-      // Inheritance is derived from the parent, never a separate mutable mode.
-      // Reject unsupported or contradictory input instead of silently ignoring it.
+      // Validate both spellings so contradictory inheritance requests are not ignored.
       const parentSessionId = body.parentSessionId ?? body.parent_session_id;
-      const inheritMode = typeof parentSessionId === "string" && parentSessionId.trim() ? "snapshot" : "none";
+      const hasParent = typeof parentSessionId === "string" && Boolean(parentSessionId.trim());
+      const inheritMode = body.inheritMode ?? body.inherit_mode ?? (hasParent ? "snapshot" : "none");
       for (const requestedMode of [body.inheritMode, body.inherit_mode]) {
-        if (requestedMode !== undefined && requestedMode !== inheritMode) {
-          throw new Error(`inherit_mode must be ${inheritMode} for this parent_session_id; only none and snapshot are supported`);
+        if (requestedMode !== undefined && (requestedMode !== inheritMode
+          || (hasParent ? requestedMode !== "snapshot" && requestedMode !== "follow" : requestedMode !== "none"))) {
+          throw new Error(`inherit_mode must be ${hasParent ? "snapshot or follow" : "none"} for this parent_session_id; inheritMode and inherit_mode must agree`);
         }
       }
       const session = store.createIssueSession(issue.id, {

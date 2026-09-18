@@ -200,6 +200,34 @@ describe("knowledge compilation control plane", () => {
     expect(agentHasKnowledgePublishCapability(store, store.getAgent(maintainer.id)!)).toBe(false);
   });
 
+  it("reports the actual submission filter intersection without silently hiding repository Raw by task project", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    store.updateWorkspaceRepositories("local", [{ id: "repo_shared_raw", name: "shared", url: "https://github.com/acme/shared.git", source: "github" }]);
+    const project = store.createProject({ title: "Issue project" });
+    const issue = store.createIssue({ title: "Inspect Raw", projectId: project.id });
+    const agent = store.createAgent({ name: "Reader", provider: "claude" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "inspect" });
+    const token = await store.createTaskAccessToken(task, "local");
+    const raw = store.createKnowledgeSubmission({
+      workspaceId: "local", repositoryId: "repo_shared_raw", scope: "repository_wiki", sourceType: "agent", body: "pending repository evidence",
+    }).submission;
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const headers = { Authorization: `Bearer ${token.token}` };
+    const repoOnly = await app.request("/api/knowledge/submissions?workspace_id=local&repository_id=repo_shared_raw", { headers });
+    expect(repoOnly.status).toBe(200);
+    const visible = await repoOnly.json() as any;
+    expect(visible.submissions.map((s: any) => s.id)).toEqual([raw.id]);
+    expect(visible.applied_filters).toEqual({ workspace_id: "local", repository_id: "repo_shared_raw", project_id: null, scope: null, status: null, combination: "intersection" });
+    const combined = await app.request(`/api/knowledge/submissions?workspace_id=local&repository_id=repo_shared_raw&project_id=${project.id}`, { headers });
+    expect(combined.status).toBe(200);
+    const empty = await combined.json() as any;
+    expect(empty.submissions).toEqual([]);
+    expect(empty.applied_filters.project_id).toBe(project.id);
+    expect(empty.applied_filters.repository_id).toBe("repo_shared_raw");
+    expect(empty.applied_filters.combination).toBe("intersection");
+  });
+
   it("routes ordinary task writes to Raw, trusts only token identity, and excludes Raw from recall", async () => {
     const store = createStore();
     const project = store.createProject({ title: "Raw routing" });

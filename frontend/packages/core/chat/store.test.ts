@@ -77,3 +77,22 @@ describe("chat attachment drafts", () => {
     expect(createChatStore({ storage }).getState().inputDraftAttachments).toEqual({ "chat-1": { good: "attachment-1" } });
   });
 });
+
+describe("new chat project selection", () => {
+  it("preserves the draft selection across surfaces and isolates workspaces", () => {
+    const storage = memoryStorage();
+    const store = createChatStore({ storage });
+    expect(store.getState().draftProjectId).toBeNull();
+    store.getState().setDraftProjectId("project-a");
+    expect(createChatStore({ storage }).getState().draftProjectId).toBe("project-a");
+    workspace.slug = "workspace-b";
+    workspace.rehydrate.forEach(callback => callback());
+    expect(store.getState().draftProjectId).toBeNull();
+    store.getState().setDraftProjectId("project-b");
+    workspace.slug = "workspace-a";
+    workspace.rehydrate.forEach(callback => callback());
+    expect(store.getState().draftProjectId).toBe("project-a");
+    store.getState().setDraftProjectId(null);
+    expect(createChatStore({ storage }).getState().draftProjectId).toBeNull();
+  });
+});

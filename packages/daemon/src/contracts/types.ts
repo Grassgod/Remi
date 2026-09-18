@@ -93,11 +93,15 @@ export interface AgentTaskIssue {
 }
 
 export interface AgentTaskIssueSession {
+  withCode?: boolean;
+  with_code?: boolean;
+  codeRuntimeId?: string | null;
+  code_runtime_id?: string | null;
   id: string;
   parentSessionId?: string | null;
   parent_session_id?: string | null;
-  inheritMode?: "none" | "snapshot";
-  inherit_mode?: "none" | "snapshot";
+  inheritMode?: "none" | "snapshot" | "follow";
+  inherit_mode?: "none" | "snapshot" | "follow";
   inheritCutoffSeq?: number | null;
   inherit_cutoff_seq?: number | null;
   issueId?: string;
@@ -113,7 +117,7 @@ export interface AgentTaskSessionProjection {
   session_id?: string;
   targetAgentId?: string;
   target_agent_id?: string;
-  mode: "bootstrap" | "delta";
+  mode: "bootstrap" | "delta" | "inherited_delta";
   fromSeq?: number;
   from_seq?: number;
   toSeq?: number;
@@ -139,6 +143,8 @@ export interface AgentTaskIssueSessionResult {
 
 /** Project attached to a task. */
 export interface AgentTaskProject {
+  workspaceId?: string;
+  workspace_id?: string;
   id: string;
   title: string;
   description: string | null;
@@ -284,6 +290,12 @@ export interface AgentTask {
   holdsWorkspace?: boolean;
   holds_workspace?: boolean;
   chatSessionId: string | null;
+  /** Explicit Chat Project binding, independent of any historical Issue context. */
+  chatProjectId?: string | null;
+  chat_project_id?: string | null;
+  /** Explicit Project repositories only; kept separate from the display catalog. */
+  chatAutoCheckoutRepos?: AgentTaskRepo[];
+  chat_auto_checkout_repos?: AgentTaskRepo[];
   autopilotRunId: string | null;
   completedAt: string | null;
   createdAt: string;

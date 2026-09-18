@@ -31,6 +31,94 @@ afterEach(() => {
 });
 
 describe("native collaboration CLI contracts", () => {
+  it("creates chats with optional Project binding and keeps pure-chat requests unchanged", async () => {
+    useCliEnv();
+    const spec = specById("chat.create");
+    const bodies: unknown[] = [];
+    globalThis.fetch = capabilityFetch(spec.id, async (request) => {
+      expect(request.method).toBe("POST");
+      expect(new URL(request.url).pathname).toBe("/api/chat/sessions");
+      bodies.push(await request.json());
+      return Response.json({ id: "chat_1" }, { status: 201 });
+    });
+    for (const projectArgs of [[], ["--project", "prj_1"], ["--project", "none"]]) {
+      await capture(() => registryFor([spec]).execute([
+        ...spec.path, "--agent", "agt_1", "--title", "Work", ...projectArgs, "--output", "json",
+      ]));
+    }
+    expect(bodies).toEqual([
+      { workspace_id: "ws_1", title: "Work", agent_id: "agt_1" },
+      { workspace_id: "ws_1", title: "Work", agent_id: "agt_1", projectId: "prj_1" },
+      { workspace_id: "ws_1", title: "Work", agent_id: "agt_1", projectId: null },
+    ]);
+  });
+
+  it("updates Chat metadata without exposing Project changes", async () => {
+    useCliEnv();
+    const spec = specById("chat.update");
+    expect(registryFor([spec]).renderHelp(spec.path)).not.toContain("--project");
+    const bodies: unknown[] = [];
+    globalThis.fetch = capabilityFetch(spec.id, async (request) => {
+      const path = new URL(request.url).pathname;
+      if (request.method === "GET" && path === "/api/chat/sessions") {
+        return Response.json([{ id: "chat_1", title: "Work" }]);
+      }
+      expect(request.method).toBe("PATCH");
+      expect(path).toBe("/api/chat/sessions/chat_1");
+      bodies.push(await request.json());
+      return Response.json({ id: "chat_1" });
+    });
+    for (const args of [
+      ["--title", "Renamed"],
+      ["--status", "archived"],
+      ["--data", '{"pinned":true}'],
+    ]) {
+      await capture(() => registryFor([spec]).execute([...spec.path, "Work", ...args, "--output", "json"]));
+    }
+    expect(bodies).toEqual([{ title: "Renamed" }, { status: "archived" }, { pinned: true }]);
+  });
+
+  it("rejects Project update flags and generic input before any Chat lookup or mutation", async () => {
+    useCliEnv();
+    const spec = specById("chat.update");
+    const registry = registryFor([spec]);
+    let requests = 0;
+    globalThis.fetch = capabilityFetch(spec.id, async () => { requests++; throw new Error("unexpected Chat request"); });
+    for (const value of ["prj_1", "none"]) {
+      await expect(capture(() => registry.execute([...spec.path, "chat_1", "--project", value])))
+        .rejects.toThrow("--project");
+    }
+    const dir = await mkdtemp(resolve(tmpdir(), "chat-fixed-project-"));
+    try {
+      for (const field of ["projectId", "project_id"]) {
+        for (const value of ["prj_1", null]) {
+          const body = JSON.stringify({ [field]: value });
+          const path = resolve(dir, "update.json");
+          await writeFile(path, body);
+          for (const args of [["--data", body], ["--file", path]]) {
+            await expect(capture(() => registry.execute([...spec.path, "chat_1", ...args])))
+              .rejects.toThrow("A Chat Project can only be selected when creating the session");
+          }
+        }
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+    expect(requests).toBe(0);
+  });
+
+  it("advertises the Project flag only for creation and rejects empty Project values", async () => {
+    useCliEnv();
+    let requests = 0;
+    globalThis.fetch = (async () => { requests++; throw new Error("unexpected network"); }) as unknown as typeof fetch;
+    const spec = specById("chat.create");
+    const registry = registryFor([spec]);
+    expect(registry.renderHelp(spec.path)).toContain("--project <project-id|none>");
+    await expect(capture(() => registry.execute([...spec.path, "--agent", "agt_1", "--project", "   "])))
+      .rejects.toThrow("--project");
+    expect(requests).toBe(0);
+  });
+
   it("sends repeated local Chat attachments and a caption using the Task destination", async () => {
     useCliEnv();
     const dir = await mkdtemp(resolve(tmpdir(), "chat-cli-"));
@@ -366,9 +454,15 @@ describe("native collaboration CLI contracts", () => {
       id: "ises_side", title: "Side", status: "active", parent_session_id: "ises_main",
       inherit_mode: "snapshot", inherit_cutoff_seq: 42, inherited_event_count: 37,
     };
+    const paths: string[] = [];
     globalThis.fetch = capabilityFetch(spec.id, (request) => {
       expect(request.method).toBe("GET");
-      expect(new URL(request.url).pathname).toBe("/api/sessions/ises_side");
+      const path = new URL(request.url).pathname;
+      paths.push(path);
+      if (path === "/api/sessions/ises_side/inherited-context") {
+        return Response.json({ diagnostics: { truncated: true } });
+      }
+      expect(path).toBe("/api/sessions/ises_side");
       return Response.json(session);
     });
     for (const mode of ["json", "jsonl"]) {
@@ -376,10 +470,169 @@ describe("native collaboration CLI contracts", () => {
       expect(JSON.parse(result.stdout)).toEqual(session);
     }
     const table = await capture(() => registryFor([spec]).execute(["session", "show", "ises_side"]));
-    for (const value of ["PARENT", "CUTOFF", "INHERITED EVENTS", "ises_main", "snapshot", "42", "37"]) {
+    for (const value of ["PARENT", "CUTOFF", "INHERITED EVENTS (PRE-TRUNCATION)", "TRUNCATED", "ises_main", "snapshot", "42", "37"]) {
       expect(table.stdout).toContain(value);
     }
+    expect(table.stdout.split("\n")[1]?.trim().split(/\s{2,}/).at(-1)).toBe("true");
+    expect(paths).toEqual([
+      "/api/sessions/ises_side", "/api/sessions/ises_side", "/api/sessions/ises_side",
+      "/api/sessions/ises_side/inherited-context",
+    ]);
     expect(registryFor(specs).resolve(["session", "get", "MUL-312", "ises_side"])?.spec.id).toBe("session.get");
+  });
+
+  it("creates follow Sessions with an explicit inheritance mode", async () => {
+    useCliEnv();
+    const spec = specById("session.create");
+    let body: unknown;
+    globalThis.fetch = capabilityFetch(spec.id, async (request) => {
+      body = await request.json();
+      return Response.json({ id: "ises_follow" }, { status: 201 });
+    });
+    await capture(() => registryFor([spec]).execute([
+      "session", "create", "MUL-324", "--title", "Follow", "--from", "ises_main", "--inherit-mode", "follow",
+    ]));
+    expect(body).toEqual({ title: "Follow", holds_workspace: false, parent_session_id: "ises_main", inherit_mode: "follow" });
+    expect(registryFor([spec]).renderHelpForArgv(["session", "create", "--help"]))
+      .toContain("--inherit-mode <snapshot|follow>");
+  });
+
+  it("opts into code snapshots independently of inheritance mode and defaults to no code", async () => {
+    useCliEnv();
+    const spec = specById("session.create");
+    const bodies: unknown[] = [];
+    globalThis.fetch = capabilityFetch(spec.id, async (request) => {
+      expect(new URL(request.url).pathname).toBe("/api/issues/MUL-324/sessions");
+      bodies.push(await request.json());
+      return Response.json({ id: "ises_code" }, { status: 201 });
+    });
+    for (const inheritMode of ["snapshot", "follow"]) {
+      for (const extra of [[], ["--with-code"]]) {
+        await capture(() => registryFor([spec]).execute([
+          "session", "create", "MUL-324", "--from", "ises_main", "--inherit-mode", inheritMode, ...extra,
+        ]));
+      }
+    }
+    expect(bodies).toEqual([
+      { holds_workspace: false, parent_session_id: "ises_main", inherit_mode: "snapshot" },
+      { holds_workspace: false, parent_session_id: "ises_main", inherit_mode: "snapshot", with_code: true },
+      { holds_workspace: false, parent_session_id: "ises_main", inherit_mode: "follow" },
+      { holds_workspace: false, parent_session_id: "ises_main", inherit_mode: "follow", with_code: true },
+    ]);
+    expect(registryFor([spec]).renderHelpForArgv(["session", "create", "--help"]))
+      .toContain("--with-code");
+  });
+
+  it("keeps missing Session diagnostics distinct from a recorded untruncated projection", async () => {
+    useCliEnv();
+    const spec = specById("session.show");
+    for (const diagnostics of [null, { truncated: false }]) {
+      globalThis.fetch = capabilityFetch(spec.id, (request) => {
+        const path = new URL(request.url).pathname;
+        if (path === "/api/sessions/ises_side/inherited-context") return Response.json({ diagnostics });
+        expect(path).toBe("/api/sessions/ises_side");
+        return Response.json({ id: "ises_side", title: "Side", status: "active", inherit_mode: "snapshot" });
+      });
+      const result = await capture(() => registryFor([spec]).execute(["session", "show", "ises_side"]));
+      expect(result.stdout.split("\n")[1]?.trim().split(/\s{2,}/).at(-1)).toBe(diagnostics ? "false" : "-");
+    }
+  });
+
+  it("reads recorded inherited context through its registered command in all output modes", async () => {
+    useCliEnv();
+    const spec = specById("session.inherited-context");
+    const registry = registryFor([spec]);
+    expect(spec.auth).toEqual(["human", "task"]);
+    expect(registry.renderHelpForArgv(["session", "inherited-context", "--help"]))
+      .toContain("<session>");
+    const context = {
+      session_id: "ises_side", parent_session_id: "ises_main", parent_session_title: "Main",
+      inherit_mode: "snapshot", inherit_cutoff_seq: 42, inherited_event_count: 37,
+      diagnostics: {
+        task_id: "tsk_latest", agent_id: "agt_worker", to_seq: 42, truncated: true,
+        omitted_events: 25, estimated_tokens: 12800, token_budget: 32000,
+        recorded_at: "2026-09-17T16:33:37.961Z",
+      },
+    };
+    globalThis.fetch = capabilityFetch(spec.id, (request) => {
+      expect(request.method).toBe("GET");
+      expect(new URL(request.url).pathname).toBe("/api/sessions/ises_side/inherited-context");
+      return Response.json(context);
+    });
+    for (const mode of ["json", "jsonl"]) {
+      const result = await capture(() => registry.execute(["session", "inherited-context", "ises_side", "--output", mode]));
+      expect(JSON.parse(result.stdout)).toEqual(context);
+    }
+    const table = await capture(() => registry.execute(["session", "inherited-context", "ises_side"]));
+    expect(table.stdout.split("\n")[0]?.trim().split(/\s{2,}/)).toEqual([
+      "SESSION", "PARENT", "CUTOFF", "INHERITED EVENTS (PRE-TRUNCATION)",
+      "TRUNCATED", "OMITTED", "EST TOKENS", "TOKEN BUDGET",
+      "INHERIT", "PARENT MAX", "PARENT CURSORS", "TOTAL INHERITED TOKENS", "FOLLOW TOKEN LIMIT", "FOLLOW FROZEN", "FROZEN AT",
+    ]);
+    expect(table.stdout.split("\n")[1]?.trim().split(/\s{2,}/)).toEqual([
+      "ises_side", "ises_main", "42", "37", "true", "25", "12800", "32000",
+      "snapshot", "-", "-", "-", "-", "-", "-",
+    ]);
+  });
+
+  it("preserves null and zero inherited diagnostics without inventing a truncation result", async () => {
+    useCliEnv();
+    const spec = specById("session.inherited-context");
+    for (const state of ["pending", "none", "untruncated"] as const) {
+      const inherits = state !== "none";
+      const context = {
+        session_id: "ises_side", parent_session_id: inherits ? "ises_main" : null,
+        parent_session_title: inherits ? "Main" : null, inherit_mode: inherits ? "snapshot" : "none",
+        inherit_cutoff_seq: inherits ? 0 : null, inherited_event_count: inherits ? 0 : null,
+        diagnostics: state === "untruncated" ? {
+          task_id: "tsk_latest", agent_id: "agt_worker", to_seq: 0, truncated: false,
+          omitted_events: 0, estimated_tokens: 0, token_budget: 32000,
+          recorded_at: "2026-09-17T16:33:37.961Z",
+        } : null,
+      };
+      globalThis.fetch = capabilityFetch(spec.id, (request) => {
+        expect(new URL(request.url).pathname).toBe("/api/sessions/ises_side/inherited-context");
+        return Response.json(context);
+      });
+      const registry = registryFor([spec]);
+      const json = await capture(() => registry.execute([...spec.path, "ises_side", "--output", "json"]));
+      expect(JSON.parse(json.stdout)).toEqual(context);
+      const table = await capture(() => registry.execute([...spec.path, "ises_side"]));
+      expect(table.stdout.split("\n")[1]?.trim().split(/\s{2,}/)).toEqual([
+        "ises_side", inherits ? "ises_main" : "-", inherits ? "0" : "-", inherits ? "0" : "-",
+        ...(state === "untruncated" ? ["false", "0", "0", "32000"] : ["-", "-", "-", "-"]),
+        inherits ? "snapshot" : "none", "-", "-", "-", "-", "-", "-",
+      ]);
+    }
+  });
+
+  it("shows each follow lane's progress and cumulative token freeze state", async () => {
+    useCliEnv();
+    const context = {
+      session_id: "ises_follow", parent_session_id: "ises_main", parent_session_title: "Main",
+      inherit_mode: "follow", inherit_cutoff_seq: 42, inherited_event_count: 80, parent_max_seq: 91,
+      lanes: [
+        { agent_id: "agt_first", execution_scope: "prod", parent_cursor_seq: 73 },
+        { agent_id: "agt_second", execution_scope: "prod", parent_cursor_seq: 54 },
+      ],
+      inherited_tokens_total: 45000, follow_token_limit: 200000, follow_frozen: false, follow_frozen_seq: null as number | null, diagnostics: null,
+    };
+    const spec = specById("session.inherited-context");
+    globalThis.fetch = capabilityFetch(spec.id, () => Response.json(context));
+    const registry = registryFor([spec]);
+    const table = await capture(() => registry.execute([...spec.path, "ises_follow"]));
+    for (const expected of ["follow", "91", "agt_first/prod:73", "agt_second/prod:54", "45000", "200000", "false"]) {
+      expect(table.stdout).toContain(expected);
+    }
+    for (const mode of ["json", "jsonl"]) {
+      const result = await capture(() => registry.execute([...spec.path, "ises_follow", "--output", mode]));
+      expect(JSON.parse(result.stdout)).toEqual(context);
+    }
+    context.follow_frozen = true;
+    context.follow_frozen_seq = 73;
+    const frozen = await capture(() => registry.execute([...spec.path, "ises_follow"]));
+    expect(frozen.stdout).toContain("follow");
+    expect(frozen.stdout.trim().split(/\s{2,}/).slice(-2)).toEqual(["true", "73"]);
   });
 
   it("executes task inspection and supervisor-only redispatch commands", async () => {
