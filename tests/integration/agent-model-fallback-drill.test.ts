@@ -69,7 +69,10 @@ interface Drill {
  * The model process: no accounts for the primary model, works for everything
  * else — the shape of a real gateway exhaustion, minus the gateway.
  */
-function gatewayProviderFactory(engineModels: Drill["engineModels"]): MultiremiDaemonProviderFactory {
+function gatewayProviderFactory(
+  engineModels: Drill["engineModels"],
+  fallbackLevels: string[] = ["high"],
+): MultiremiDaemonProviderFactory {
   return (options: AcpProviderOptions) => ({
     async *sendStream() {
       const model = options.model ?? null;
@@ -83,10 +86,20 @@ function gatewayProviderFactory(engineModels: Drill["engineModels"]): MultiremiD
       requestId: "req-fallback",
     }),
     // Both models are genuinely runnable on this runtime, so the recovery
-    // attempt passes the same capability gate a fresh task would.
+    // attempt passes the same capability gate a fresh task would. The fallback
+    // is allowed a DIFFERENT set of effort levels than the primary: models do
+    // not agree on what they accept, which is what makes an inherited level
+    // unrunnable rather than merely odd.
     discoverModelCapabilities: async () => [
       { id: PRIMARY_MODEL, label: PRIMARY_MODEL, default: true, effort: { supportedLevels: [{ value: "high", label: "high" }], defaultLevel: "high" } },
-      { id: FALLBACK_MODEL, label: FALLBACK_MODEL, effort: { supportedLevels: [{ value: "high", label: "high" }], defaultLevel: "high" } },
+      {
+        id: FALLBACK_MODEL,
+        label: FALLBACK_MODEL,
+        effort: {
+          supportedLevels: fallbackLevels.map((value) => ({ value, label: value })),
+          defaultLevel: fallbackLevels[0],
+        },
+      },
     ] as never,
     close: async () => {},
   });
@@ -103,16 +116,19 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 10_000, de
   throw new Error(`condition was not met before timeout${describeState ? ` — ${describeState()}` : ""}`);
 }
 
-async function runDrill(options: { fallback: boolean }): Promise<Drill & { taskId: string; issueId: string }> {
+async function runDrill(options: { fallback: boolean; fallbackLevels?: string[]; fallbackThinkingLevel?: string | null }): Promise<Drill & { taskId: string; issueId: string }> {
   db = new Database(":memory:");
   workDir = mkdtempSync(join(tmpdir(), "multiremi-fallback-drill-"));
   const store = new MultiremiStore(db);
   const engineModels: Drill["engineModels"] = [];
   store.ensureLocalWorkspace();
+  const fallbackThinkingLevel = options.fallbackThinkingLevel === undefined ? "high" : options.fallbackThinkingLevel;
   const agent = store.createAgent({
     name: "Drill agent", provider: "claude", maxConcurrentTasks: 2,
     model: PRIMARY_MODEL, thinkingLevel: "high",
-    ...(options.fallback ? { fallbackModel: FALLBACK_MODEL, fallbackThinkingLevel: "high" } : {}),
+    ...(options.fallback
+      ? { fallbackModel: FALLBACK_MODEL, ...(fallbackThinkingLevel == null ? {} : { fallbackThinkingLevel }) }
+      : {}),
   });
   const issue = store.createIssue({ title: "Gateway drill", workspaceId: "local", assigneeType: "agent", assigneeId: agent.id });
   const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Do the work" });
@@ -131,7 +147,7 @@ async function runDrill(options: { fallback: boolean }): Promise<Drill & { taskI
     inProcessRuntimeModelDiscoveryEnabled: true,
     workspacesRoot: join(workDir, "daemon-state"),
     repoCacheRoot: join(workDir, "repo-cache"),
-    providerFactory: gatewayProviderFactory(engineModels),
+    providerFactory: gatewayProviderFactory(engineModels, options.fallbackLevels),
   });
 
   let daemonRun: Promise<void> | null = null;
@@ -191,6 +207,34 @@ describe("MUL-336 real-engine fallback drill", () => {
     // Requirement 4: the Agent keeps its own selection for the next task.
     expect(store.getAgent(failed.agentId)).toMatchObject({
       model: PRIMARY_MODEL, fallbackModel: FALLBACK_MODEL,
+    });
+  });
+
+  drillIt("recovers onto a fallback model that does not share the primary's reasoning level", async () => {
+    // The Agent configured a fallback model but no level for it, and the
+    // fallback does not accept the primary's 'high'. The recovery attempt must
+    // still reach the engine instead of being excluded from every Runtime by a
+    // level that was never the fallback's to begin with.
+    const { store, engineModels, taskId, issueId } = await runDrill({
+      fallback: true, fallbackLevels: ["low"], fallbackThinkingLevel: null,
+    });
+
+    expect(engineModels).toEqual([PRIMARY_MODEL, FALLBACK_MODEL]);
+
+    const recovered = store.listTasksForIssue(issueId).find((attempt) => attempt.parentTaskId === taskId)!;
+    expect(recovered).toMatchObject({
+      status: "completed",
+      attempt: 2,
+      executionModel: FALLBACK_MODEL,
+      // No level was configured for the fallback, so the record carries none —
+      // the engine applied the model's own default rather than the primary's.
+      executionThinkingLevel: null,
+      fallbackSwitched: true,
+      result: FALLBACK_OUTPUT,
+    });
+    // Requirement 4 still holds: the Agent keeps its primary selection.
+    expect(store.getAgent(recovered.agentId)).toMatchObject({
+      model: PRIMARY_MODEL, thinkingLevel: "high", fallbackThinkingLevel: null,
     });
   });
 

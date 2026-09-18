@@ -37,6 +37,22 @@ function model(id: string, available = true): MultiremiRuntimeModel {
   };
 }
 
+/** A model that supports exactly `levels` — models differ in what they accept,
+ *  which is what makes an inherited reasoning level unrunnable. */
+function modelWithLevels(id: string, levels: string[]): MultiremiRuntimeModel {
+  return {
+    id,
+    label: id,
+    provider: "anthropic",
+    default: id === PRIMARY,
+    thinking: {
+      status: "supported",
+      supportedLevels: levels.map((value) => ({ value, label: value })),
+      defaultLevel: levels[0],
+    },
+  };
+}
+
 type Store = ReturnType<typeof createStore>;
 
 /** Primary model exhausted; the fallback is a different, runnable model. */
@@ -423,5 +439,55 @@ describe("MUL-336 model fallback recovery chain", () => {
       .filter((task) => task.agentId === leader.id && task.delegationId === "dlg_fallback");
     expect(returns).toHaveLength(1);
     expect(returns[0]!.parentTaskId).toBe(retry.id);
+  });
+
+  it("runs a switched task on the fallback's own level when the Agent configured none", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({
+      name: "Gateway", provider: "claude", maxConcurrency: 4,
+      models: [modelWithLevels(PRIMARY, ["high"]), modelWithLevels(FALLBACK, ["low"])],
+    });
+    const agent = store.createAgent({
+      name: "Level mismatch", provider: "claude", maxConcurrentTasks: 4,
+      model: PRIMARY, thinkingLevel: "high", fallbackModel: FALLBACK,
+    });
+    const issue = store.createIssue({
+      title: "Level mismatch", assigneeType: "agent", assigneeId: agent.id,
+    });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Recover at another level" });
+
+    failClaimed(store, runtime.id, task.id, NO_ACCOUNT_ERROR);
+    const retry = successor(store, task.id)!;
+    // The Agent's 'high' was chosen for the primary model and the fallback does
+    // not accept it, so the chain must not carry it across as an override.
+    expect(retry.executionModel).toBe(FALLBACK);
+    expect(retry.executionThinkingLevel).toBeNull();
+
+    // The recovered task must actually be claimable: pinning the primary's level
+    // leaves every Runtime rejecting the fallback model, and the task waits
+    // forever instead of recovering.
+    const recovered = store.claimTask(runtime.id);
+    expect(recovered?.id).toBe(retry.id);
+    const claimAgent = daemonTaskClaimResponse(store, recovered!).agent as Record<string, unknown>;
+    // An empty level means "the engine's default for THIS model", which for the
+    // fallback is its own 'low' rather than the primary's 'high'.
+    expect(claimAgent).toMatchObject({ model: FALLBACK, thinking_level: "" });
+  });
+
+  it("ends a throttled chain instead of retrying inside a Retry-After window it cannot honour", () => {
+    const { store, runtime, agent, issue } = fixture();
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Long throttle" });
+
+    failClaimed(store, runtime.id, task.id, "429 Too Many Requests; Retry-After: 3600");
+
+    expect(store.getTask(task.id)).toMatchObject({
+      status: "failed",
+      failureReason: TaskFailureReason.AgentProviderCapacityOrRateLimit,
+    });
+    // The gateway said the pool is unavailable for an hour: retrying at the
+    // short backoff would fire inside that window and hammer the same pool, so
+    // the chain ends instead and keeps the throttle as its reported reason.
+    expect(successor(store, task.id)).toBeNull();
+    expect(store.claimTask(runtime.id)).toBeNull();
   });
 });

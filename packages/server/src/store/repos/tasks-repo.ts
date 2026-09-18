@@ -173,8 +173,18 @@ function effectiveTaskModelSql(): string {
   return "COALESCE(NULLIF(t.execution_model, ''), NULLIF(a.model, ''), '')";
 }
 
+/** SQL twin of `taskExecutionTarget`'s reasoning level. The Agent's level is
+ *  inherited only while the task still executes the Agent's own model: a task
+ *  switched to another model (fallback recovery) gets NULL — the model's own
+ *  default — because the primary's level may be unsupported there. Routing and
+ *  claim exclusion both read the target through here, so if this disagreed with
+ *  the JS resolver a recovered task would be excluded from every Runtime. */
 function effectiveTaskThinkingSql(): string {
-  return "COALESCE(NULLIF(t.execution_thinking_level, ''), NULLIF(a.thinking_level, ''), '')";
+  return `CASE WHEN NULLIF(t.execution_model, '') IS NOT NULL
+                 AND NULLIF(t.execution_model, '') <> COALESCE(NULLIF(a.model, ''), '')
+          THEN COALESCE(NULLIF(t.execution_thinking_level, ''), '')
+          ELSE COALESCE(NULLIF(t.execution_thinking_level, ''), NULLIF(a.thinking_level, ''), '')
+         END`;
 }
 
 function normalizeExecutionFlag(value: unknown): number {
@@ -183,7 +193,10 @@ function normalizeExecutionFlag(value: unknown): number {
 
 /** Retry-After the provider embedded in its error text, in ms. Accepts the
  *  `retry-after: 30` header form and the `retry after 30 seconds` prose form.
- *  Returns null when absent, unparseable, or so long the task should not wait. */
+ *  Returns null only when the window is absent or unparseable. Whether a window
+ *  is too long to honour is the CALLER's decision: conflating the two made a
+ *  3600s window look like no window at all, and the caller then substituted a
+ *  short backoff and retried far inside the window the gateway had demanded. */
 export function parseRetryAfterMs(error: string | null | undefined): number | null {
   const text = String(error ?? "");
   if (!text) return null;
@@ -195,8 +208,7 @@ export function parseRetryAfterMs(error: string | null | undefined): number | nu
   const scale = unit.startsWith("ms") || unit.startsWith("millisecond") ? 1
     : unit.startsWith("m") && !unit.startsWith("ms") ? 60_000
     : 1000;
-  const ms = value * scale;
-  return ms > TRANSIENT_RETRY_MAX_HONOURED_MS ? null : ms;
+  return value * scale;
 }
 
 /**
@@ -1548,8 +1560,8 @@ export class TasksRepo {
       // execution target rather than by Agent id.
       const capabilityTargetRows = this.ctx.db.query(
         `SELECT DISTINCT a.id AS agent_id,
-                COALESCE(NULLIF(t.execution_model, ''), NULLIF(a.model, '')) AS model,
-                COALESCE(NULLIF(t.execution_thinking_level, ''), NULLIF(a.thinking_level, '')) AS thinking_level
+                ${effectiveTaskModelSql()} AS model,
+                ${effectiveTaskThinkingSql()} AS thinking_level
          FROM multiremi_agents a
          JOIN multiremi_tasks t ON t.agent_id = a.id
          WHERE a.workspace_id = ? AND t.status IN ('queued', 'dispatched')
@@ -2981,11 +2993,15 @@ export class TasksRepo {
     // Resource exhaustion with no usable fallback keeps the previous behaviour:
     // the task ends. Re-running a model whose pool is empty cannot help.
     if (isResourceExhaustion && !canSwitchToFallback) return null;
-    // Throttling retries the same model after a bounded delay. A wait the
-    // provider asked for that is too long to be useful is treated as terminal
-    // rather than parking the task for hours.
+    // Throttling retries the same model after a bounded delay. A window the
+    // provider asked for that is too long to sit on ends the chain here: this
+    // refuses to retry BEFORE the declared window, which would only hammer a
+    // shared pool and burn the chain's attempts without getting through. The
+    // failure keeps its own reason, so the throttle stays visible.
+    const retryAfterMs = isTransientThrottle ? parseRetryAfterMs(parent.error) : null;
+    if (isTransientThrottle && retryAfterMs != null && retryAfterMs > TRANSIENT_RETRY_MAX_HONOURED_MS) return null;
     const transientDelayMs = isTransientThrottle
-      ? transientRetryDelayMs(parseRetryAfterMs(parent.error), parent.attempt)
+      ? transientRetryDelayMs(retryAfterMs, parent.attempt)
       : null;
     if (isTransientThrottle && transientDelayMs == null) return null;
     // A chain that already switched keeps running the fallback model; a chain

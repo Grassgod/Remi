@@ -25,10 +25,20 @@ export function taskExecutionTarget(
     execution_thinking_level?: string | null;
   } | null | undefined,
 ): { model: string | null; thinkingLevel: string | null } {
+  const agentModel = trimmed(agent?.model);
+  const executionModel = trimmed(task?.executionModel ?? task?.execution_model);
+  const explicitLevel = trimmed(task?.executionThinkingLevel ?? task?.execution_thinking_level);
+  // The Agent's reasoning level belongs to the Agent's OWN model. A task that
+  // executes a different model (a fallback recovery) must not inherit it: the
+  // level was chosen for the primary model and the model this task really runs
+  // may not support it, which leaves the task with no Runtime able to claim it
+  // and it waits forever instead of recovering. A null level means "whatever
+  // the model's own default is", which is exactly what a switched task needs.
+  const runsAgentModel = executionModel == null || executionModel === agentModel;
   return {
-    model: trimmed(task?.executionModel ?? task?.execution_model) ?? trimmed(agent?.model),
-    thinkingLevel: trimmed(task?.executionThinkingLevel ?? task?.execution_thinking_level)
-      ?? trimmed(agent?.thinkingLevel ?? agent?.thinking_level),
+    model: executionModel ?? agentModel,
+    thinkingLevel: explicitLevel
+      ?? (runsAgentModel ? trimmed(agent?.thinkingLevel ?? agent?.thinking_level) : null),
   };
 }
 
