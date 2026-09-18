@@ -276,6 +276,7 @@ describe("native collaboration CLI contracts", () => {
     ["task.list", ["task", "list"], "/api/multiremi/tasks"],
     ["task.get", ["task", "get", "tsk_queued"], "/api/multiremi/tasks/tsk_queued"],
     ["session.task.list", ["session", "task", "list", "iss_1", "ises_1"], "/api/issues/iss_1/sessions/ises_1/tasks"],
+    ["issue.active-task", ["issue", "active-task", "iss_1"], "/api/issues/iss_1/active-task"],
   ] as const)("shows complete queued task wait reasons through %s", async (id, argv, path) => {
     useCliEnv();
     const spec = specById(id);
@@ -298,6 +299,32 @@ describe("native collaboration CLI contracts", () => {
     expect(JSON.parse(json.stdout)).toEqual(response);
     const jsonl = await capture(() => registryFor([spec]).execute([...argv, "--output", "jsonl"]));
     expect(JSON.parse(jsonl.stdout)).toEqual(task);
+  });
+
+  it.each(["wait_reason", "waitReason"] as const)("shows complete issue run wait reasons from %s", async (reasonField) => {
+    useCliEnv();
+    const spec = specById("issue.task-runs");
+    const waitReason = "等待模型能力恢复（任务创建已达 15 分钟）：3 个候选 Runtime 均无法执行 claude-opus-5-with-an-extra-long-model-name（thinking: high）";
+    const tasks = [
+      { id: "tsk_queued", status: "queued", [reasonField]: waitReason },
+      { id: "tsk_human", status: "awaiting_human", [reasonField]: "Need approval" },
+      { id: "tsk_dir", status: "waiting_local_directory", [reasonField]: "/tmp/workspace" },
+      { id: "tsk_done", status: "running", [reasonField]: null },
+    ];
+    globalThis.fetch = capabilityFetch(spec.id, (request) => {
+      expect(request.method).toBe("GET");
+      expect(new URL(request.url).pathname).toBe("/api/issues/iss_1/task-runs");
+      return Response.json(tasks);
+    });
+
+    const table = await capture(() => registryFor([spec]).execute(["issue", "runs", "iss_1"]));
+    expect(table.stdout).toContain("WAIT REASON");
+    expect(table.stdout.split("\n").find((line) => line.startsWith("tsk_queued"))).toContain(waitReason);
+    expect(table.stdout.split("\n").find((line) => line.startsWith("tsk_human"))).toContain("Need approval");
+    expect(table.stdout.split("\n").find((line) => line.startsWith("tsk_dir"))).toContain("/tmp/workspace");
+    expect(table.stdout.split("\n").find((line) => line.startsWith("tsk_done"))).toMatch(/running\s+(?:-\s+){4}-$/);
+    const json = await capture(() => registryFor([spec]).execute(["issue", "runs", "iss_1", "--output", "json"]));
+    expect(JSON.parse(json.stdout)).toEqual(tasks);
   });
 
   it("preserves other waiting states and cleared reasons in task tables", async () => {

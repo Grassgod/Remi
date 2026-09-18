@@ -276,10 +276,10 @@ export class TasksRepo {
 
   refreshQueuedCapabilityWaitReasons(now = Date.now()): { updated: number; alerted: number } {
     const rows = this.ctx.db.query(
-      `SELECT id, agent_id, workspace_id, created_at, wait_reason FROM multiremi_tasks
+      `SELECT id, agent_id, runtime_id, workspace_id, created_at, wait_reason FROM multiremi_tasks
        WHERE status = 'queued' AND created_at <= ?`,
     ).all(new Date(now - QUEUED_CAPABILITY_GRACE_MS).toISOString()) as Array<{
-      id: string; agent_id: string; workspace_id: string | null; created_at: string; wait_reason: string | null;
+      id: string; agent_id: string; runtime_id: string | null; workspace_id: string | null; created_at: string; wait_reason: string | null;
     }>;
     const result = { updated: 0, alerted: 0 };
     if (!rows.length) return result;
@@ -290,17 +290,21 @@ export class TasksRepo {
       // This observer owns only its own reason. Human and directory waits, and
       // any future queued reason, retain their independent lifecycle.
       if (row.wait_reason && !isQueuedCapabilityWaitReason(row.wait_reason)) continue;
-      let decision = decisions.get(row.agent_id);
+      // Tasks for the same agent can have different runtime pins; match the
+      // claim predicate and cache only tasks with the same routing constraints.
+      const decisionKey = JSON.stringify([row.agent_id, row.runtime_id ?? ""]);
+      let decision = decisions.get(decisionKey);
       if (!decision) {
         const agent = this.ctx.agents().getAgent(row.agent_id);
         decision = {
           agent,
           candidateSupportsModel: agent && !agent.archivedAt
-            ? runtimes.filter(runtime => runtimesRepo.runtimeCanRouteAgent(runtime, agent))
+            ? runtimes.filter(runtime => (row.runtime_id === null || runtime.id === row.runtime_id)
+                && runtimesRepo.runtimeCanRouteAgent(runtime, agent))
               .map(runtime => runtimesRepo.runtimeSupportsAgentModel(runtime, agent))
             : [],
         };
-        decisions.set(row.agent_id, decision);
+        decisions.set(decisionKey, decision);
       }
       const { agent, candidateSupportsModel } = decision;
       const wait = agent && (agent.workspaceId ?? "local") === (row.workspace_id ?? "local")

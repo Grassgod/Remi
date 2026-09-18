@@ -19,7 +19,7 @@ function models(available = true): MultiremiRuntimeModel[] {
   }];
 }
 
-function fixture(binding: "automatic" | "runtime" | "group" = "automatic") {
+function fixture(binding: "automatic" | "runtime" | "group" | "task" = "automatic") {
   const store = createLocalStore();
   store.setRelayModelDiscovery("local", true);
   const revision = store.upsertRelayConfig("local", "codex", {
@@ -39,7 +39,10 @@ function fixture(binding: "automatic" | "runtime" | "group" = "automatic") {
     ...(binding === "runtime" ? { runtimeId: runtime.id }
       : binding === "group" ? { executionGroupId: "capability-group" } : {}),
   });
-  const task = store.createTask({ agentId: agent.id, prompt: "Wait for the configured model" });
+  const task = store.createTask({
+    agentId: agent.id, prompt: "Wait for the configured model",
+    ...(binding === "task" ? { runtimeId: runtime.id } : {}),
+  });
   const now = Date.now();
   ageTask(task.id, GRACE_MS, now);
   const fail = () => store.updateRuntimeModels(runtime.id, models(false));
@@ -115,6 +118,51 @@ describe("queued task model capability waits", () => {
     ageTask(task.id, ALERT_MS, now);
     expect(store.refreshQueuedCapabilityWaitReasons(now)).toEqual({ updated: 0, alerted: 0 });
     expect(store.getTask(task.id)?.waitReason).toBeNull();
+  });
+
+  it("explains a task pinned to an incapable runtime despite another capable runtime", () => {
+    const { store, runtime, agent, task, now, fail, recover } = fixture("task");
+    const healthy = store.registerRuntime({ name: "Healthy", provider: "codex", workspaceId: "local", models: models() });
+    fail();
+    expect(agent.runtimeId).toBeNull();
+    expect(task.runtimeId).toBe(runtime.id);
+    expect(store.claimTask(runtime.id)).toBeNull();
+    expect(store.claimTask(healthy.id)).toBeNull();
+
+    expect(store.refreshQueuedCapabilityWaitReasons(now)).toEqual({ updated: 1, alerted: 0 });
+    expect(store.getTask(task.id)).toMatchObject({
+      status: "queued", runtimeId: runtime.id,
+      waitReason: expect.stringContaining(`1 个候选 Runtime 均无法执行 ${MODEL}`),
+    });
+    recover();
+    expect(store.claimTask(runtime.id)).toMatchObject({ id: task.id, status: "dispatched", waitReason: null });
+  });
+
+  it("evaluates runtime pins independently for tasks sharing an agent", () => {
+    const { store, runtime, agent, task: unpinned, now, fail } = fixture();
+    const healthy = store.registerRuntime({ name: "Healthy", provider: "codex", workspaceId: "local", models: models() });
+    const blocked = store.createTask({ agentId: agent.id, runtimeId: runtime.id, prompt: "Pinned to incapable runtime" });
+    const runnable = store.createTask({ agentId: agent.id, runtimeId: healthy.id, prompt: "Pinned to capable runtime" });
+    for (const task of [blocked, runnable]) ageTask(task.id, GRACE_MS, now);
+    fail();
+
+    expect(store.refreshQueuedCapabilityWaitReasons(now)).toEqual({ updated: 1, alerted: 0 });
+    expect(store.getTask(blocked.id)?.waitReason).toContain(MODEL);
+    expect(store.getTask(runnable.id)?.waitReason).toBeNull();
+    expect(store.getTask(unpinned.id)?.waitReason).toBeNull();
+  });
+
+  it("leaves a task with no routing-eligible pinned runtime unlabelled", () => {
+    const { store, agent, now, fail } = fixture();
+    const workspace = store.createWorkspace({ name: "Other workspace", slug: "pinned-capability" });
+    const foreign = store.registerRuntime({ name: "Foreign runtime", provider: "codex", workspaceId: workspace.id, models: models(false) });
+    const task = store.createTask({ agentId: agent.id, runtimeId: foreign.id, prompt: "Unroutable pin" });
+    ageTask(task.id, ALERT_MS, now);
+    fail();
+
+    store.refreshQueuedCapabilityWaitReasons(now);
+    expect(store.getTask(task.id)).toMatchObject({ status: "queued", runtimeId: foreign.id, waitReason: null });
+    expect(store.listAnalyticsEvents({ name: EVENT })).toHaveLength(0);
   });
 
   for (const restriction of ["owner", "provider", "workspace", "group", "runtime"] as const) {

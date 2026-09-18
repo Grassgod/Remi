@@ -1,5 +1,9 @@
 export const QUEUED_CAPABILITY_GRACE_MS = 120_000;
+// This lightweight alert uses task creation age. Before adding Inbox/Feishu
+// delivery, persist starvation_started_at and measure continuous capability failure.
 export const QUEUED_CAPABILITY_ALERT_MS = 15 * 60_000;
+// Ownership is coupled to this text prefix until a structured reason code exists.
+// Other queued wait reasons must not reuse it, or this observer may overwrite/clear them.
 const CAPABILITY_WAIT_PREFIX = "等待模型能力恢复：";
 // Keep the threshold stable: an increasing elapsed-minute counter would write
 // every sweep and defeat persisted transition-based notification deduplication.

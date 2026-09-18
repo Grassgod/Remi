@@ -121,6 +121,7 @@ export function printTaskRuns(value: unknown, options: CliOptions): void {
     { header: "STARTED", value: (row) => shortDate(field(row, "started_at", "startedAt", "created_at", "createdAt")) },
     { header: "COMPLETED", value: (row) => shortDate(field(row, "completed_at", "completedAt", "updated_at", "updatedAt")) },
     { header: "ERROR", value: (row) => field(row, "error", "error_message", "errorMessage"), maxWidth: 50 },
+    { header: "WAIT REASON", value: (row) => field(row, "wait_reason", "waitReason") },
   ], "No task runs found.");
 }
 

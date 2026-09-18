@@ -360,7 +360,7 @@ function issueExtendedSpecs(): CommandSpec[] {
       });
     }),
     nativeSpec("issue.active-task", ["issue", "active-task"], "Show an issue's active task", "read", HUMAN_TASK, [refPositional("issue")], [], async (invocation) => {
-      await getAndRender(invocation, `/api/issues/${encodePath(positional(invocation, 0, "issue"))}/active-task`);
+      await getAndRender(invocation, `/api/issues/${encodePath(positional(invocation, 0, "issue"))}/active-task`, ["tasks"]);
     }),
     nativeSpec("issue.usage", ["issue", "usage"], "Show issue usage", "read", HUMAN_TASK, [refPositional("issue")], [], async (invocation) => {
       await getAndRender(invocation, `/api/issues/${encodePath(positional(invocation, 0, "issue"))}/usage`);
