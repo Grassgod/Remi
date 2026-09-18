@@ -32,6 +32,7 @@ Runtime 详情的「Codex 连接」页支持一个自定义 Responses provider�
 - 这里的 Profile 是 Remi 的命名连接，不是直接复制本机 `--profile` 配置。Remi 展开有效配置，不依赖本机 profile 文件的布局。
 - [任务快照](../../packages/server/src/store/repos/tasks-repo.ts)在 claim 时冻结连接、所选模型和凭据版本，并把连接纳入执行指纹。修改配置只影响新任务；运行中任务使用原快照，自动重试在原 Runtime 仍兼容当前 Agent 时保留快照。连接或所选模型变化后从产品会话记录重新启动原生会话，不把旧 provider 会话 ID 传给新接口。若 Agent 切换 provider 或原 Runtime 不再兼容，重试清除旧快照，由兼容 Runtime 重新领取。
 - [模型发现](../../packages/server/src/worker/runtime-profile-models.ts)由所属 daemon 使用连接凭据请求基础地址下的 `/models`（遵循 [Models API](https://platform.openai.com/docs/api-reference/models/list)），例如 `/v2` 对应 `/v2/models`。成功后保存完整目录，并保留配置默认模型；失败保留上次目录，首次失败仍可使用配置模型。目录不证明模型推理成功；thinking 能力仅按准确模型 ID 合并 ACP 实测结果。未在 Codex 内置目录中的模型可由启动配置使用；兼容性取决于实际 Responses 服务。
+- 若自定义 `/models` 还提供 Codex 格式的完整 `models` 元数据，daemon 在任务启动前用同一 ACP bridge 对应的 Codex 执行离线 `debug models` 校验，通过后原子写入隔离 Home，并通过 `model_catalog_json` 交给 Codex，保留供应商声明的上下文窗口、工具及推理能力。只有普通 `data` 模型列表时不推断这些能力；元数据加载失败会记录诊断并保留 Codex 原有行为。此修复只需更新 daemon。
 - 供应商目录不可用但 ACP 探测成功时，保留已有目录（首次使用配置默认模型）并更新已知模型的能力，日志明确记录目录探测失败；不会把 ACP 的官方模型列表当作 custom 供应商目录。
 - 模型上报携带本次探测的 `model_profile`，服务端只接受与当前连接匹配的目录；旧 daemon 的无标识上报不能覆盖 custom 目录。部署此能力需同时更新平台和 daemon。
 - 可选的 LLM 进度摘要使用 Chat Completions 协议，因此不自动复用自定义 Responses 连接的密钥；需单独配置 `MULTIREMI_PROGRESS_SUMMARY_OPENAI_BASE_URL` 与 `MULTIREMI_PROGRESS_SUMMARY_OPENAI_API_KEY` 才启用该摘要。任务状态与执行消息照常上报。
@@ -69,6 +70,7 @@ remi runtime model list <runtime> --json
 | 真实 API → daemon → ACP 任务 | [smoke-multiremi-acp.ts](../../tests/integration/smoke-multiremi-acp.ts) |
 | 自定义连接、密钥权限/加密与会话快照 | [runtime-codex-profile.test.ts](../../tests/unit/multiremi/runtime-codex-profile.test.ts)、[codex-profile.test.ts](../../tests/unit/daemon/codex-profile.test.ts) |
 | API → daemon 的配置与密钥注入（provider fixture） | [runtime-codex-profile.test.ts](../../tests/integration/runtime-codex-profile.test.ts) |
+| 自定义 Codex 模型元数据注入 | [runtime-codex-model-catalog.test.ts](../../tests/unit/daemon/runtime-codex-model-catalog.test.ts) |
 | 自定义目录发现、缓存及所选模型执行（provider fixture） | [runtime-profile-model-discovery.test.ts](../../tests/integration/runtime-profile-model-discovery.test.ts) |
 | Runtime 表单与凭据保留 | [runtime-codex-profile-tab.test.tsx](../../frontend/packages/views/runtimes/components/runtime-codex-profile-tab.test.tsx) |
 
