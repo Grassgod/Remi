@@ -80,6 +80,7 @@ import type {
 import { RuntimeWorkspacesRepo, RuntimeWorkspaceError } from "./runtime-workspaces-repo.js";
 import type { RuntimeConnectionProfile } from "@multiremi/contracts/runtime-connection.js";
 import { normalizeTaskRuntimeProfile, runtimeProfileCapabilityIdentity } from "@multiremi/store/task-execution-requirements.js";
+import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 
 interface TaskExecutionRequirement {
   provider: string | null;
@@ -1780,12 +1781,21 @@ export class TasksRepo {
       this.ctx.runtimes().runtimeAgentModelChecker(runtime));
   }
 
+  private missingTaskProfileProtocol(runtime: MultiremiRuntime, requirement: TaskExecutionRequirement): string | null {
+    if (requirement.codexProfileJson && runtime.metadata.codex_profiles !== 1) return "codex_profiles";
+    if (requirement.claudeProfileJson && runtime.metadata.claude_profiles !== 1) return "claude_profiles";
+    return null;
+  }
+
   private runtimeCanRunTaskRequirement(
     runtime: MultiremiRuntime, agent: MultiremiAgent, requirement: TaskExecutionRequirement,
     supportsModel: (agent: MultiremiAgent) => boolean,
   ): boolean {
     const repo = this.ctx.runtimes();
     if (!repo.runtimeCanRouteAgent(runtime, agent)) return false;
+    // Keep the capability monitor and retry/reclaim predicates aligned with
+    // the claim SQL's protocol guards, even after the live profile is removed.
+    if (this.missingTaskProfileProtocol(runtime, requirement)) return false;
     const { profile, origin, transition } = requirement;
     if (!profile) return !requirement.codexProfileJson && !requirement.claudeProfileJson && supportsModel(agent);
     if (!normalizeTaskRuntimeProfile(agent.provider, profile)) return false;
@@ -1824,6 +1834,8 @@ export class TasksRepo {
     if (!this.ctx.runtimes().runtimeCanRouteAgent(runtime, agent)) {
       return wait("来源 Runtime 不再满足 Agent 的路由权限或绑定");
     }
+    const missingProtocol = this.missingTaskProfileProtocol(runtime, requirement);
+    if (missingProtocol) return wait(`来源 Runtime 未声明 ${missingProtocol} 协议支持；请恢复支持该连接的 daemon`);
     if (profile.auth_mode === "api_key" && !this.ctx.db.query(
       "SELECT id FROM multiremi_runtime_provider_credentials WHERE id = ? AND runtime_id = ?",
     ).get(profile.credential_id ?? "", origin)) return wait("原凭据版本已不可用；请取消后重新创建任务");
@@ -2044,6 +2056,11 @@ export class TasksRepo {
     const agents = new Map<string, MultiremiAgent | null>();
     const decisions = new Map<string, boolean>();
     const supportsModel = this.ctx.runtimes().runtimeAgentModelChecker(runtime);
+    // OFFSET pages require a total order even inside the workspace lock.
+    // Preserve SQLite's existing same-millisecond insertion order; PostgreSQL
+    // had no defined tie order, so use its immutable primary key (not ctid,
+    // which can change when a candidate's wait_reason is updated mid-scan).
+    const tieBreaker = this.ctx.db instanceof PostgresSyncDatabase ? "t.id" : "t.rowid";
     let offset = 0;
     // Pages keep SQL parameters bounded. Preserve the existing priority/time
     // ordering, including its insertion-order ties on SQLite. The workspace
@@ -2181,7 +2198,7 @@ export class TasksRepo {
            )
            ${runtime.metadata.codex_profiles !== 1 ? "AND t.codex_profile IS NULL" : ""}
            ${runtime.metadata.claude_profiles !== 1 ? "AND t.claude_profile IS NULL" : ""}
-         ORDER BY t.priority DESC, t.created_at ASC
+         ORDER BY t.priority DESC, t.created_at ASC, ${tieBreaker} ASC
          LIMIT 128 OFFSET ?`,
       ).all(...params, offset) as Row[];
       for (const row of rows) {

@@ -20,9 +20,14 @@ protocol capability and shared-directory serialization rules.
 Retirement can leave it queued with an actionable `wait_reason`; cancel and create
 a new task to deliberately select a replacement connection.
 
-Migration backfills known historical sources. An existing chat-workspace
-transition's encoded source is authoritative. An ambiguous unpinned legacy
-snapshot remains unknown and cannot use a future claimant as its inferred source.
+Startup backfills missing historical sources only from immutable evidence: an
+existing chat-workspace transition's encoded source, or a frozen API-key
+credential's Runtime ownership within the task's workspace and provider.
+The mutable dispatch pin is never evidence. Legacy environment-auth snapshots
+without an encoded source remain unknown even if currently pinned or dispatched;
+cancel and recreate these tasks to deliberately choose a connection. The
+null-only recovery runs on each startup, including after a rollback to an older
+binary, and never overwrites a recorded source.
 Explicit Runtime identity merging is different from retirement: it already
 re-encrypts and transfers credentials, and transfers this internal identity too.
 Explicit chat-workspace transitions retain their existing destination-connection
@@ -48,15 +53,20 @@ pinned tasks retain main's model validation.
 ## Claim cost and observability
 
 Claim SQL retains workspace/owner, pin/group, plugin, device, lane, capacity and
-chat-order guards. Candidate rows are read in pages of 128 preserving existing priority/time ordering. Agent hydration,
+chat-order guards. Candidate rows are read in pages of 128 preserving existing
+priority/time ordering with a stable final key: SQLite rowid preserves its
+same-millisecond insertion order; PostgreSQL task ID defines its previously
+unspecified tie order. Physical PostgreSQL tuple IDs are not used because
+updating a wait reason can move a row during the scan. Agent hydration,
 capability decisions and catalog reads are cached for the duration of a claim;
 only the chosen task is fully hydrated. No task-ID exclusion list is generated.
 SQL parameter count is bounded regardless of queue length. Reading candidate rows
 still scales with the queue, offset pages may rescan earlier rows inside the
 database, and distinct requirements require distinct checks.
 
-Frozen-source/credential problems use the owned wait-reason prefix
+Frozen-source/credential/protocol problems use the owned wait-reason prefix
 `等待冻结执行连接恢复：`, including when retirement leaves no candidates. The existing
-capability monitor evaluates the frozen model and clears recovered reasons;
+capability monitor evaluates the frozen model, requires the same profile
+protocol support as claim/reclaim, and clears recovered reasons;
 ordinary model waits retain MUL-335's grace period and alert behavior. Existing
 Task API/CLI `wait_reason` fields expose these reasons without a new endpoint.

@@ -95,7 +95,17 @@ describe("frozen execution Runtime migration", () => {
       [id, runtime, fingerprint, frozen ? JSON.stringify(profile) : null, origin]);
     };
     insert("known", "rt_original", "frozen", true);
-    insert("retired", "rt_already_deleted", "frozen", true);
+    // A mutable dispatch pin is not provenance. This known API-key snapshot
+    // has immutable credential ownership; the retired env source has an
+    // explicitly encoded transition source. Keep the same migration outcomes
+    // while requiring evidence that remains valid after repool/reassignment.
+    db.run(`INSERT INTO multiremi_runtimes (id, name, provider, status, workspace_id, created_at, updated_at)
+      VALUES ('rt_original', 'Origin', 'codex', 'online', 'local', '2026-09-18', '2026-09-18')`);
+    db.run(`INSERT INTO multiremi_runtime_provider_credentials (id, runtime_id, ciphertext)
+      VALUES ('rck_known', 'rt_original', 'unused-fixture-ciphertext')`);
+    db.run("UPDATE multiremi_tasks SET workspace_id = 'local', provider = 'codex', codex_profile = ? WHERE id = 'known'",
+      [JSON.stringify({ ...profile, auth_mode: "api_key", env_key: "", credential_id: "rck_known" })]);
+    insert("retired", "rt_already_deleted", "chat-workspace-transition-rt_already_deleted:frozen", true);
     insert("ambiguous", null, "frozen", true);
     insert("fresh", "rt_selected", null, true);
     insert("native", "rt_selected", "native-fingerprint", false);
