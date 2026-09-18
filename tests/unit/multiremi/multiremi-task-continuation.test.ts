@@ -198,6 +198,57 @@ describe("delegated task continuation API", () => {
     });
   });
 
+  // The API-level cases above stop at lineage derivation, and the store-level
+  // lane tests start from a delegation ID they set themselves. Neither alone
+  // protects the wiring in between, so cover the whole chain once: a real claim
+  // freezes the execution fingerprint and runtime snapshot, and skipping it (by
+  // forcing `dispatched` in SQL, as the other fixtures do) makes the lane look
+  // resume-unsafe and cold-boots back to bootstrap for reasons unrelated to the
+  // continuation entry point.
+  it("resumes the original provider session when an API continuation is claimed", async () => {
+    const f = fixture();
+    const runtime = f.store.registerRuntime({
+      id: "rt_continuation_e2e",
+      name: "Continuation end to end",
+      provider: "claude",
+      maxConcurrency: 6,
+      metadata: { parallel_agent_execution: 1, cli_version: "0.2.66" },
+    });
+    // The Leader turn and its delegation are both queued here; the scheduler may
+    // hand back either one first. Only the delegated task's lane matters, so
+    // drain both rather than pinning an order this test does not own.
+    // The Leader turn and its delegation are both queued here, and a child is
+    // only claimable once its parent is running, so claim and start one at a
+    // time instead of pinning an order this test does not own.
+    const claimed: string[] = [];
+    for (let turn = 0; turn < 2; turn += 1) {
+      const task = f.store.claimTask(runtime.id);
+      if (!task) break;
+      claimed.push(task.id);
+      const projection = f.store.buildTaskSessionProjection(task.id);
+      if (task.id === f.delegated.id) expect(projection?.mode).toBe("bootstrap");
+      f.store.startTask(task.id);
+    }
+    expect(claimed).toContain(f.delegated.id);
+    f.store.completeTask(f.delegated.id, {
+      output: "First round done.",
+      sessionId: "provider_continuation_e2e",
+      workDir: "/tmp/continuation-e2e",
+    });
+
+    const continued = await createContinuation(f, "Continue the same work.");
+    expect(f.store.claimTask(runtime.id)?.id).toBe(continued.task.id);
+    expect(f.store.getTask(continued.task.id)).toMatchObject({
+      sessionId: "provider_continuation_e2e",
+      workDir: "/tmp/continuation-e2e",
+      delegationId: f.delegated.delegationId,
+      continuedFromTaskId: f.delegated.id,
+    });
+    expect(f.store.buildTaskSessionProjection(continued.task.id)?.mode).toBe("delta");
+    expect(f.store.getSessionAgentLane(f.session.id, f.worker.id, f.delegated.delegationId!)?.providerSessionId)
+      .toBe("provider_continuation_e2e");
+  });
+
   it("rejects missing, cross-context, mismatched and unauthorized continuation targets", async () => {
     const f = fixture();
     const headers = await taskHeaders(f);
