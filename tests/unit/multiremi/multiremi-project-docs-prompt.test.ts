@@ -391,6 +391,8 @@ describe("bootstrap and delta task prompts", () => {
     expect(prompt).toContain("Reviewer (agent: agt_reviewer) - reviewer - Owns security reviews");
     expect(prompt).toContain("`[@Reviewer](mention://agent/agt_reviewer)`");
     expect(prompt).toContain("independent workstreams");
+    expect(prompt).toContain("remi task continue <previous-delegated-task-id>");
+    expect(prompt).toContain("never infer a continuation target from prose");
     expect(prompt).toContain(`remi comment add ${issue.id} --content-stdin`);
     expect(prompt).toContain("cat <<'MULTIREMI_COMMENT'");
     // Delegation happens via comments inside this issue; the squad block must

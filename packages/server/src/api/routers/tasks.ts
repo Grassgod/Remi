@@ -58,6 +58,19 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     const sideDenied = denySideSessionDispatch(c);
     if (sideDenied) return sideDenied;
     const body = await readJson<CreateTaskInput>(c);
+    const continueTaskId = cleanString(body.continueTaskId ?? body.continue_task_id);
+    const taskToken = currentTaskAccessToken(c);
+    const sourceTask = taskToken?.taskId ? store.getTaskWithAgent(taskToken.taskId) : null;
+    const continuedTask = continueTaskId ? store.getTask(continueTaskId) : null;
+    if (continueTaskId && (!taskToken || !sourceTask)) {
+      return c.json({ error: "continuing a delegation requires a task credential" }, 403);
+    }
+    if (continueTaskId && !continuedTask) {
+      return c.json({ error: `continued task not found: ${continueTaskId}` }, 404);
+    }
+    if (continuedTask && continuedTask.workspaceId !== taskToken!.workspaceId) {
+      return c.json({ error: "continued task belongs to another workspace" }, 403);
+    }
     // Gate on the target agent: without this, any member could create a task
     // for another workspace's (private) agent and drive its machine +
     // credentials. The task always runs in the agent's workspace, so that's
@@ -95,24 +108,51 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
       holds_workspace: _holdsWorkspaceSnake,
       parentTaskId: _parentTaskId,
       parent_task_id: _parentTaskIdSnake,
+      continuedFromTaskId: _continuedFromTaskId,
+      continued_from_task_id: _continuedFromTaskIdSnake,
       issueCreationRestricted: _issueCreationRestricted,
       issue_creation_restricted: _issueCreationRestrictedSnake,
       delegationId: _delegationId,
       delegation_id: _delegationIdSnake,
       delegatedByAgentId: _delegatedByAgentId,
       delegated_by_agent_id: _delegatedByAgentIdSnake,
+      continueTaskId: _continueTaskId,
+      continue_task_id: _continueTaskIdSnake,
       assignmentSourceEventId: _assignmentSourceEventId,
       assignment_source_event_id: _assignmentSourceEventIdSnake,
       ...publicInput
     } = body;
-    const taskToken = currentTaskAccessToken(c);
-    const sourceTask = taskToken?.taskId ? store.getTaskWithAgent(taskToken.taskId) : null;
     const issueId = cleanString(publicInput.issueId);
     const issue = issueId ? store.getIssue(issueId) : null;
     const requestedIssueSessionId = cleanString(publicInput.issueSessionId ?? publicInput.issue_session_id);
     const inheritedIssueSessionId = requestedIssueSessionId ?? sourceTask?.issueSessionId ?? null;
+    if (continuedTask) {
+      if (!continuedTask.delegationId || !continuedTask.delegatedByAgentId
+        || continuedTask.agentId === continuedTask.delegatedByAgentId) {
+        return c.json({ error: "continued task is not a delegated task" }, 400);
+      }
+      if (agent.id !== continuedTask.agentId) {
+        return c.json({ error: "target agent does not match the continued task" }, 400);
+      }
+      if (continuedTask.delegatedByAgentId !== taskToken!.agentId) {
+        return c.json({ error: "continued task was delegated by another agent" }, 403);
+      }
+      if (!continuedTask.issueId || !continuedTask.issueSessionId) {
+        return c.json({ error: "continued task does not belong to an Issue Session" }, 400);
+      }
+      if (sourceTask!.issueSessionId !== continuedTask.issueSessionId) {
+        return c.json({ error: "continued task belongs to another Issue Session" }, 400);
+      }
+      if (issueId && issueId !== continuedTask.issueId) {
+        return c.json({ error: "requested issue does not match the continued task" }, 400);
+      }
+      if (requestedIssueSessionId && requestedIssueSessionId !== continuedTask.issueSessionId) {
+        return c.json({ error: "requested Issue Session does not match the continued task" }, 400);
+      }
+    }
     const leaderDelegation = Boolean(
-      taskToken
+      !continuedTask
+      && taskToken
       && sourceTask
       && issue
       && store.isSquadLeaderDelegation({
@@ -123,10 +163,23 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
         issueSessionId: inheritedIssueSessionId,
       })
     );
+    // Keep continuation ancestry on the current Leader turn. A same-agent,
+    // same-delegation successor of the previous child is reserved for retry /
+    // self-continuation and intentionally suppresses that child's return in
+    // drainDelegationReturnsWithinWorkspaceLock. This is a new requested round,
+    // so every completed child Task must remain independently returnable.
     const createInput: CreateTaskInput = {
       ...publicInput,
       parentTaskId: currentTaskParentId(c),
-      ...(leaderDelegation
+      ...(continuedTask
+        ? {
+          issueId: continuedTask.issueId,
+          issueSessionId: continuedTask.issueSessionId,
+          continuedFromTaskId: continuedTask.id,
+          delegationId: continuedTask.delegationId,
+          delegatedByAgentId: continuedTask.delegatedByAgentId,
+        }
+        : leaderDelegation
         ? {
           issueSessionId: inheritedIssueSessionId,
           delegationId: createId("dlg"),

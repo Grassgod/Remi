@@ -246,6 +246,25 @@ function runtimeSupportsIssueWorkspaces(runtime: MultiremiRuntime): boolean {
   return true;
 }
 
+function sessionLaneResetReason(input: {
+  lane: MultiremiSessionAgentLane;
+  expectedProvider: string;
+  fingerprintResumable: boolean;
+  runtimeAvailable: boolean;
+  runtimeCompatible: boolean;
+  runtimeConflict: boolean;
+  resetRequested: boolean;
+}): string {
+  if (input.resetRequested) return "provider_session_reset_requested";
+  if (!input.lane.providerSessionId) return "provider_session_missing";
+  if (input.lane.provider !== input.expectedProvider) return "provider_changed";
+  if (!input.fingerprintResumable) return "execution_fingerprint_changed";
+  if (!input.runtimeAvailable) return "runtime_unavailable";
+  if (input.runtimeConflict) return "runtime_affinity_changed";
+  if (!input.runtimeCompatible) return "runtime_incompatible";
+  return "provider_session_unavailable";
+}
+
 export class TasksRepo {
   constructor(private ctx: StoreContext) {}
 
@@ -391,6 +410,16 @@ export class TasksRepo {
     if (parentTask && parentTask.workspaceId !== agent.workspaceId) {
       throw new Error("Parent task belongs to another workspace");
     }
+    const continuedFromTaskId = cleanOptionalString(
+      input.continuedFromTaskId ?? input.continued_from_task_id,
+    );
+    const continuedFromTask = continuedFromTaskId ? this.getTask(continuedFromTaskId) : null;
+    if (continuedFromTaskId && !continuedFromTask) {
+      throw new Error(`Continued task not found: ${continuedFromTaskId}`);
+    }
+    if (continuedFromTask && continuedFromTask.workspaceId !== agent.workspaceId) {
+      throw new Error("Continued task belongs to another workspace");
+    }
     // A side task cannot dispatch a different agent through another Session.
     // Same-agent retries/redispatch still use parentTaskId and remain valid.
     const parentIssueSession = parentTask?.issueSessionId
@@ -499,23 +528,37 @@ export class TasksRepo {
       const laneRuntime = issueLane.runtimeId ? this.ctx.runtimes().getRuntime(issueLane.runtimeId) : null;
       const laneProfile = laneRuntime
         ? this.runtimeProfileForAgent(laneRuntime.id, agent) : null;
+      const expectedLaneFingerprint = inheritedExecutionFingerprint
+        ?? withRuntimeProfileFingerprint(expectedExecutionFingerprint, laneProfile);
+      const laneFingerprintResumable = executionFingerprintResumable(
+        issueLane.executionFingerprint,
+        expectedLaneFingerprint,
+        currentPluginSnapshot.length > 0 || Boolean(laneProfile),
+      );
+      const laneRuntimeCompatible = laneRuntime != null
+        && this.ctx.runtimes().runtimeCanRunAgent(laneRuntime, agent);
       const laneResumable =
         !input.resetProviderSession
         && !!issueLane.providerSessionId
         && issueLane.provider === agent.provider
-        && executionFingerprintResumable(
-          issueLane.executionFingerprint,
-          inheritedExecutionFingerprint ?? withRuntimeProfileFingerprint(expectedExecutionFingerprint, laneProfile),
-          currentPluginSnapshot.length > 0 || Boolean(laneProfile),
-        )
-        && laneRuntime != null
-        && this.ctx.runtimes().runtimeCanRunAgent(laneRuntime, agent);
+        && laneFingerprintResumable
+        && laneRuntimeCompatible;
       const runtimeConflict = Boolean(affinity.runtimeId && issueLane.runtimeId && affinity.runtimeId !== issueLane.runtimeId);
       if (laneResumable && !runtimeConflict) {
         runtimeId = issueLane.runtimeId;
         inheritIssueLane = true;
       } else if (issueLane.providerSessionId || issueLane.cursorSeq > 0) {
-        this.resetSessionAgentLane(issueSession.id, agent.id, executionScope);
+        this.resetSessionAgentLane(issueSession.id, agent.id, executionScope, {
+          reason: sessionLaneResetReason({
+            lane: issueLane,
+            expectedProvider: agent.provider,
+            fingerprintResumable: laneFingerprintResumable,
+            runtimeAvailable: laneRuntime != null,
+            runtimeCompatible: laneRuntimeCompatible,
+            runtimeConflict,
+            resetRequested: Boolean(input.resetProviderSession),
+          }),
+        });
         issueLane = this.ctx.issueSessions().getOrCreateSessionAgentLane(issueSession.id, agent.id, executionScope);
       }
     }
@@ -553,13 +596,13 @@ export class TasksRepo {
         id, task_kind, agent_id, runtime_id, issue_id, issue_session_id, issue_session_generation, holds_workspace, chat_session_id,
         trigger_comment_id, trigger_summary, requesting_user_name,
         requesting_user_profile_description, workspace_id, status, priority, prompt,
-        attempt, max_attempts, parent_task_id, issue_creation_restricted, delegation_id, delegated_by_agent_id,
+        attempt, max_attempts, parent_task_id, continued_from_task_id, issue_creation_restricted, delegation_id, delegated_by_agent_id,
         assignment_event_id, assignment_source_event_id, projection_degrade_level,
         provider, plugin_snapshot, execution_fingerprint, codex_profile, claude_profile,
         session_id, work_dir, created_at, updated_at
       ) VALUES (
         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?,
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       )`,
       [
         id,
@@ -587,6 +630,7 @@ export class TasksRepo {
         attempt,
         maxAttempts,
         parentTaskId,
+        continuedFromTaskId,
         issueCreationRestricted ? 1 : 0,
         delegationId,
         delegatedByAgentId,
@@ -658,6 +702,7 @@ export class TasksRepo {
             source_event_id: input.assignmentSourceEventId ?? input.assignment_source_event_id ?? null,
             attempt,
             parent_task_id: parentTaskId,
+            ...(continuedFromTaskId ? { continued_from_task_id: continuedFromTaskId } : {}),
             ...(delegationId ? {
               delegation_id: delegationId,
               delegated_by_agent_id: delegatedByAgentId,
@@ -677,7 +722,12 @@ export class TasksRepo {
     return task;
   }
 
-  resetSessionAgentLane(sessionId: string, agentId: string, executionScope = ""): MultiremiSessionAgentLane | null {
+  resetSessionAgentLane(
+    sessionId: string,
+    agentId: string,
+    executionScope = "",
+    audit?: { reason: string; taskId?: string | null },
+  ): MultiremiSessionAgentLane | null {
     const lane = this.ctx.issueSessions().getSessionAgentLane(sessionId, agentId, executionScope);
     // A legacy task can predate lane creation, and an agent may already have
     // been archived as part of runtime teardown. In both cases there is no
@@ -698,6 +748,27 @@ export class TasksRepo {
        WHERE session_id = ? AND agent_id = ? AND execution_scope = ?`,
       [nowIso(), sessionId, agentId, executionScope],
     );
+    if (audit) {
+      const session = this.ctx.issueSessions().getIssueSession(sessionId);
+      if (session) {
+        this.ctx.appendIssueActivity(session.issueId, {
+          actorType: "system",
+          actorId: null,
+          type: "session_agent_lane_reset",
+          body: `Reset Agent execution lane: ${audit.reason}`,
+          data: {
+            reason: audit.reason,
+            issueSessionId: sessionId,
+            agentId,
+            executionScope,
+            taskId: cleanOptionalString(audit.taskId),
+            previousGeneration: lane.generation,
+            previousRuntimeId: lane.runtimeId,
+            previousProvider: lane.provider,
+          },
+        });
+      }
+    }
     return this.ctx.issueSessions().getSessionAgentLane(sessionId, agentId, executionScope) ?? lane;
   }
 
@@ -1382,23 +1453,36 @@ export class TasksRepo {
       issueSessionId = task.issueSessionId;
       let lane = this.ctx.issueSessions().getOrCreateSessionAgentLane(task.issueSessionId, task.agentId, taskExecutionScope(task));
       const laneRuntime = lane.runtimeId ? this.ctx.runtimes().getRuntime(lane.runtimeId) : null;
+      const laneFingerprintResumable = executionFingerprintResumable(
+        lane.executionFingerprint,
+        executionFingerprint,
+        pluginSnapshot.length > 0 || Boolean(runtimeProfile),
+      );
+      const laneRuntimeCompatible = laneRuntime != null
+        && this.ctx.runtimes().runtimeCanRunAgent(laneRuntime, currentAgent);
       const laneResumable =
         !!lane.providerSessionId
         && lane.provider === provider
-        && executionFingerprintResumable(
-          lane.executionFingerprint,
-          executionFingerprint,
-          pluginSnapshot.length > 0 || Boolean(runtimeProfile),
-        )
+        && laneFingerprintResumable
         && lane.runtimeId === runtime.id
-        && laneRuntime != null
-        && this.ctx.runtimes().runtimeCanRunAgent(laneRuntime, currentAgent);
+        && laneRuntimeCompatible;
       if (laneResumable) {
         issueProviderSessionId = lane.providerSessionId;
         issueWorkDir = lane.workDir;
       } else {
         if (lane.providerSessionId || lane.cursorSeq > 0) {
-          lane = this.resetSessionAgentLane(task.issueSessionId, task.agentId, taskExecutionScope(task)) ?? lane;
+          lane = this.resetSessionAgentLane(task.issueSessionId, task.agentId, taskExecutionScope(task), {
+            reason: sessionLaneResetReason({
+              lane,
+              expectedProvider: provider,
+              fingerprintResumable: laneFingerprintResumable,
+              runtimeAvailable: laneRuntime != null,
+              runtimeCompatible: laneRuntimeCompatible,
+              runtimeConflict: Boolean(lane.runtimeId && lane.runtimeId !== runtime.id),
+              resetRequested: false,
+            }),
+            taskId: task.id,
+          }) ?? lane;
         }
         issueProviderSessionId = null;
         issueWorkDir = null;
@@ -2443,6 +2527,7 @@ export class TasksRepo {
       attempt: nextAttempt,
       maxAttempts: Math.max(current.maxAttempts, nextAttempt),
       parentTaskId: current.id,
+      continuedFromTaskId: current.continuedFromTaskId,
       delegationId: current.delegationId,
       delegatedByAgentId: current.delegatedByAgentId,
       assignmentSourceEventId: current.assignmentSourceEventId,
@@ -2650,6 +2735,7 @@ export class TasksRepo {
         ? parent.projectionDegradeLevel + 1
         : 0,
       parentTaskId: parent.id,
+      continuedFromTaskId: parent.continuedFromTaskId,
       delegationId: parent.delegationId,
       delegatedByAgentId: parent.delegatedByAgentId,
       assignmentSourceEventId: parent.assignmentSourceEventId,
@@ -3300,7 +3386,10 @@ export class TasksRepo {
         // resume-unsafe, which resets the lane then and falls back to a bounded bootstrap.
         if (status === "completed") this.promoteSessionAgentLane(task);
         else if (!retry && status !== "cancelled")
-          this.resetSessionAgentLane(task.issueSessionId, task.agentId, taskExecutionScope(task));
+          this.resetSessionAgentLane(task.issueSessionId, task.agentId, taskExecutionScope(task), {
+            reason: task.failureReason ? `terminal_failure:${task.failureReason}` : "terminal_failure",
+            taskId: task.id,
+          });
         if (!replacementPlanned) {
           const wakeup = workspaceLockHeld
             ? this.ensureDelegationWakeupWithinWorkspaceLock(task, {
@@ -4028,6 +4117,8 @@ function toTask(row: Row): MultiremiTask {
     attempt: Number(row.attempt ?? 1),
     maxAttempts: Number(row.max_attempts ?? 3),
     parentTaskId: nullableString(row.parent_task_id),
+    continuedFromTaskId: nullableString(row.continued_from_task_id),
+    continued_from_task_id: nullableString(row.continued_from_task_id),
     issueCreationRestricted: Boolean(row.issue_creation_restricted),
     issue_creation_restricted: Boolean(row.issue_creation_restricted),
     delegationId: nullableString(row.delegation_id),

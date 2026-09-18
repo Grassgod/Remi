@@ -261,6 +261,49 @@ function countFeishuRoundPushes(): number {
 }
 
 describe("task-level agent delegation return", () => {
+  it("returns every explicit continuation round once", () => {
+    const fixture = createDelegationFixture();
+    fixture.store.completeTask(fixture.childTask.id, {
+      output: "first result",
+      sessionId: "qa_session_1",
+      workDir: "/tmp/delegation-qa",
+    });
+    const firstReturnId = fixture.store.getTask(fixture.childTask.id)!.delegationReturnTaskId!;
+    expect(firstReturnId).toBeTruthy();
+    expect(fixture.store.getTask(firstReturnId)?.prompt).toContain("first result");
+    expect(fixture.store.claimTask(fixture.leaderRuntime.id)?.id).toBe(firstReturnId);
+    fixture.store.buildTaskSessionProjection(firstReturnId);
+    fixture.store.startTask(firstReturnId);
+
+    const continued = fixture.store.createTask({
+      agentId: fixture.qa.id,
+      issueId: fixture.issue.id,
+      issueSessionId: fixture.childTask.issueSessionId,
+      prompt: "Address the follow-up.",
+      delegationId: fixture.childTask.delegationId,
+      delegatedByAgentId: fixture.leader.id,
+      parentTaskId: firstReturnId,
+    });
+    fixture.store.completeTask(firstReturnId, { output: "Continue the same delegation." });
+    expect(fixture.store.claimTask(fixture.qaRuntime.id)?.id).toBe(continued.id);
+    fixture.store.buildTaskSessionProjection(continued.id);
+    fixture.store.startTask(continued.id);
+    fixture.store.completeTask(continued.id, { output: "second result", sessionId: "qa_session_1" });
+
+    const secondReturnId = fixture.store.getTask(continued.id)!.delegationReturnTaskId!;
+    expect(secondReturnId).toBeTruthy();
+    expect(secondReturnId).not.toBe(firstReturnId);
+    expect(fixture.store.getTask(secondReturnId)?.prompt).toContain("second result");
+    const duplicate = fixture.store.ensureDelegationWakeup({
+      sourceTaskId: continued.id,
+      requiredEventSeq: 1,
+      terminalStatus: "completed",
+      terminalBody: "second result",
+    });
+    expect(duplicate).toMatchObject({ created: false, covered: true });
+    expect(duplicate.task?.id).toBe(secondReturnId);
+  });
+
   it("allows human rich mentions but rejects unlinked agent delegation", () => {
     const store = createStore();
     const leader = store.createAgent({ name: "Leader", provider: "claude" });
@@ -425,6 +468,7 @@ describe("task-level agent delegation return", () => {
     const qaTasks = store.listTasksForIssue(issue.id).filter((task) => task.agentId === qa.id);
     expect(qaTasks).toHaveLength(1);
     expect(qaTasks[0]!.status).toBe("queued");
+    expect(qaTasks[0]!.continuedFromTaskId).toBeNull();
 
     const coalesced = store.listIssueActivity(issue.id)
       .filter((activity) => activity.type === "comment_mention_coalesced");

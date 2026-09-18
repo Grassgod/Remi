@@ -1450,6 +1450,7 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
     workspaceId: stringOrNull(raw.workspace_id ?? raw.workspaceId) ?? "local",
     maxAttempts: numberOrDefault(raw.max_attempts ?? raw.maxAttempts, 1),
     parentTaskId: stringOrNull(raw.parent_task_id ?? raw.parentTaskId),
+    continuedFromTaskId: stringOrNull(raw.continued_from_task_id ?? raw.continuedFromTaskId),
     failureReason: stringOrNull(raw.failure_reason ?? raw.failureReason),
     codexProfile: parseRuntimeCodexProfile(raw.codex_profile ?? raw.codexProfile ?? null),
     claudeProfile: parseRuntimeClaudeProfile(raw.claude_profile ?? raw.claudeProfile ?? null),

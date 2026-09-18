@@ -2181,6 +2181,7 @@ export function runMigrations(db: SqlDatabase): void {
       attempt INTEGER NOT NULL DEFAULT 1,
       max_attempts INTEGER NOT NULL DEFAULT 3,
       parent_task_id TEXT,
+      continued_from_task_id TEXT,
       issue_creation_restricted INTEGER NOT NULL DEFAULT 0,
       delegation_id TEXT,
       delegated_by_agent_id TEXT,
@@ -2800,6 +2801,7 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_tasks", "attempt INTEGER NOT NULL DEFAULT 1");
   addColumnIfMissing(db, "multiremi_tasks", "max_attempts INTEGER NOT NULL DEFAULT 3");
   addColumnIfMissing(db, "multiremi_tasks", "parent_task_id TEXT");
+  addColumnIfMissing(db, "multiremi_tasks", "continued_from_task_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "delegation_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "delegated_by_agent_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "delegation_return_task_id TEXT");
