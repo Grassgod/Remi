@@ -29,7 +29,7 @@ Runtime 详情的「Claude Code 连接」支持一个 Anthropic Messages 兼容�
 - [Claude 注入器](../../packages/daemon/src/agent-runtime/claude-profile.ts)将模型、基础地址和模型别名写入隔离的 `CLAUDE_CONFIG_DIR/settings.json`，密钥仅存在子进程环境。清空另一种鉴权、旧 OAuth token 和额外鉴权头，并关闭继承的 Bedrock/Vertex/Foundry 路由开关。模型别名及子 Agent 模型统一指向配置模型，避免辅助请求跑到其他模型。
 - 非秘密路由通过桥接器支持的 `claudeCode.options.settings` 再传入 SDK，覆盖项目/local 设置中的冲突地址、模型和云路由，其余项目设置继续加载。凭据不放入该元数据，也不写入基础 Home 或隔离配置文件。
 - Claude Code 会用项目设置中的凭据覆盖进程环境。启用 Runtime 连接时，执行前检查工作目录及父目录的 `.claude/settings.json` / `settings.local.json`；若包含鉴权环境变量、`CLAUDE_CONFIG_DIR` 或 `apiKeyHelper`，任务明确报错并要求将凭据移至 Runtime 配置，不修改项目文件，也不把密钥写入 SDK settings/命令行来覆盖它们。
-- 任务 claim 时冻结配置、所选模型和凭据版本，并纳入执行指纹。Claude 自定义连接按执行指纹隔离 Home；连接和模型未变时延续原生会话，变更后从产品记录重新启动。运行中任务使用冻结连接和模型；自动重试在原 Runtime 仍兼容当前 Agent 时保留快照和 Runtime 归属，否则清除旧快照并重新调度。旧 daemon 不可领取带 Claude profile 的任务。
+- 任务 claim 时冻结配置、所选模型和凭据版本，并纳入执行指纹。Claude 自定义连接按执行指纹隔离 Home；连接和模型未变时延续原生会话，变更后从产品记录重新启动。运行中任务和普通自动重试使用冻结连接、模型、凭据版本及独立保存的来源 Runtime，不受 Agent 后来修改模型影响。来源 Runtime 退役、旧凭据缺失或原连接的 thinking 能力无法确认时，明确等待恢复或取消重建，不自动切换连接。凭据轮换继续使用保留的旧版本，远端撤销由执行报告认证失败；provider / 路由所有权变更及显式迁移沿用各自契约，详见[冻结任务路由](../frozen-task-routing.md)。旧 daemon 不可领取带 Claude profile 的任务。
 - 可选的 Chat Completions 进度摘要不复用此连接密钥；需要单独配置 `MULTIREMI_PROGRESS_SUMMARY_OPENAI_BASE_URL` 与 `MULTIREMI_PROGRESS_SUMMARY_OPENAI_API_KEY`。正常任务消息不受影响。
 
 ## API 与 CLI
