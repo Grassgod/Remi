@@ -21,6 +21,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
+import type { MultiremiRuntimeModel } from "@multiremi/contracts/types.js";
 import { PostgresSyncDatabase, translateSqliteToPg } from "@multiremi/store/db/postgres.js";
 import { daemonRuntimeId, MultiremiStore } from "@multiremi/store.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
@@ -425,6 +426,63 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const slug = `pgtest-${process.pid}-${wsCounter}`;
     return store.createWorkspace({ name: `PG Test ${wsCounter}`, slug }).id;
   };
+
+  it("persists queued capability waits through escalation, recovery and dispatch on Postgres", () => {
+    const workspaceId = freshWorkspace();
+    const healthy: MultiremiRuntimeModel[] = [{
+      id: "claude-opus-5", label: "Opus", provider: "anthropic", default: true,
+      thinking: { status: "supported", supportedLevels: [{ value: "high", label: "high" }] },
+    }];
+    const unavailable: MultiremiRuntimeModel[] = [{
+      ...healthy[0]!, thinking: { status: "error", supportedLevels: [], error: "catalog unavailable (fixture)" },
+    }];
+    const runtime = store.registerRuntime({ name: "PG capability candidate", provider: "claude", workspaceId, models: healthy });
+    const agent = store.createAgent({
+      name: "PG capability waiter", provider: "claude", workspaceId, runtimeId: runtime.id,
+      model: "claude-opus-5", thinkingLevel: "high",
+    });
+    const task = store.createTask({ agentId: agent.id, prompt: "Wait for the configured capability" });
+    const now = Date.now();
+    db.run("UPDATE multiremi_tasks SET created_at = ? WHERE id = ?", [new Date(now - 120_000).toISOString(), task.id]);
+    const events: Array<string | null> = [];
+    const unsubscribe = store.onTaskEvent(({ type, task: updated }) => {
+      if (type === "task:queued" && updated.id === task.id) events.push(updated.waitReason);
+    });
+    try {
+      store.updateRuntimeModels(runtime.id, unavailable);
+      expect(store.getTask(task.id)?.waitReason).toBeNull();
+      store.refreshQueuedCapabilityWaitReasons(now);
+      const waiting = store.getTask(task.id)!;
+      expect(waiting).toMatchObject({ status: "queued", waitReason: expect.stringContaining("claude-opus-5") });
+      expect(events).toEqual([waiting.waitReason]);
+
+      const alertAt = now + 13 * 60_000;
+      store.refreshQueuedCapabilityWaitReasons(alertAt);
+      const alerted = store.getTask(task.id)!;
+      expect(alerted.waitReason).not.toBe(waiting.waitReason);
+      expect(alerted.waitReason).toContain("15");
+      store.refreshQueuedCapabilityWaitReasons(alertAt + 60_000);
+      expect(store.getTask(task.id)?.updatedAt).toBe(alerted.updatedAt);
+      expect(events).toEqual([waiting.waitReason, alerted.waitReason]);
+      expect(store.listAnalyticsEvents({ name: "task_queued_capability_timeout" })
+        .filter(event => event.properties.task_id === task.id)).toHaveLength(1);
+
+      store.updateRuntimeModels(runtime.id, healthy);
+      store.refreshQueuedCapabilityWaitReasons(alertAt + 120_000);
+      expect(store.getTask(task.id)).toMatchObject({ status: "queued", waitReason: null });
+      expect(events.at(-1)).toBeNull();
+
+      store.updateRuntimeModels(runtime.id, unavailable);
+      store.refreshQueuedCapabilityWaitReasons(alertAt + 180_000);
+      expect(store.getTask(task.id)?.waitReason).toContain("claude-opus-5");
+      store.updateRuntimeModels(runtime.id, healthy);
+      expect(store.claimTask(runtime.id)).toMatchObject({ id: task.id, status: "dispatched", waitReason: null });
+      expect(store.startTask(task.id)).toMatchObject({ status: "running", waitReason: null });
+      store.completeTask(task.id, { output: "Capability recovered" });
+    } finally {
+      unsubscribe();
+    }
+  });
 
   it("lists an agent task snapshot through the batched autopilot lookup", () => {
     const workspaceId = freshWorkspace();

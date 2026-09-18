@@ -1,4 +1,4 @@
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatPendingTask, ChatSession } from "../../types";
 import { chatKeys } from "../../chat/queries";
@@ -30,6 +30,37 @@ beforeEach(() => {
 afterEach(() => qc.clear());
 
 describe("chat queue realtime", () => {
+  it("refetches queued reason changes, including recovery events that omit the cleared reason", async () => {
+    let pending: ChatPendingTask = {
+      task_id: "task-1", status: "queued", wait_reason: "Waiting for model support", supports_queue: true, queued_tasks: [queued],
+    };
+    const observer = new QueryObserver(qc, {
+      queryKey: chatKeys.pendingTask("chat-1"), queryFn: async () => pending,
+    });
+    const unsubscribe = observer.subscribe(() => {});
+    try {
+      await observer.refetch();
+      expect(qc.getQueryData<ChatPendingTask>(chatKeys.pendingTask("chat-1"))?.wait_reason).toBe(pending.wait_reason);
+      pending = { task_id: "task-1", status: "queued", supports_queue: true, queued_tasks: [queued] };
+      handlers["task:queued"]?.({ chat_session_id: "chat-1", task_id: "task-1" });
+      await vi.waitFor(() => expect(qc.getQueryData(chatKeys.pendingTask("chat-1"))).toEqual(pending));
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it.each(["task:dispatch", "task:running"] as const)("clears a queued reason when %s starts execution", event => {
+    qc.setQueryData(chatKeys.pendingTask("chat-1"), {
+      task_id: "task-1", status: "queued", wait_reason: "Waiting for model support", supports_queue: true, queued_tasks: [queued],
+    });
+    handlers[event]?.({ chat_session_id: "chat-1", task_id: "task-2" });
+    expect(qc.getQueryData<ChatPendingTask>(chatKeys.pendingTask("chat-1"))?.wait_reason).toBe("Waiting for model support");
+    handlers[event]?.({ chat_session_id: "chat-1", task_id: "task-1" });
+    expect(qc.getQueryData(chatKeys.pendingTask("chat-1"))).toMatchObject({
+      task_id: "task-1", status: "running", wait_reason: null, queued_tasks: [queued],
+    });
+  });
+
   it("writes preparation progress only to the matching pending head", () => {
     handlers["task:progress"]?.({ chat_session_id: "chat-1", task_id: "task-1", progress_summary: "正在准备项目仓库…" });
     expect(qc.getQueryData(chatKeys.pendingTask("chat-1"))).toMatchObject({

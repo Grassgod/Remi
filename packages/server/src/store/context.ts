@@ -85,12 +85,14 @@ export const EVENT_RUNTIME_REGISTERED = "runtime_registered";
 export const EVENT_RUNTIME_READY = "runtime_ready";
 export const EVENT_RUNTIME_FAILED = "runtime_failed";
 export const EVENT_RUNTIME_OFFLINE = "runtime_offline";
+export const EVENT_TASK_QUEUED_CAPABILITY_TIMEOUT = "task_queued_capability_timeout";
 export const EVENT_AGENT_CREATED = "agent_created";
 export const EVENT_AUTOPILOT_CREATED = "autopilot_created";
 export const EVENT_AUTOPILOT_RUN_STARTED = "autopilot_run_started";
 export const EVENT_AUTOPILOT_RUN_COMPLETED = "autopilot_run_completed";
 export const EVENT_AUTOPILOT_RUN_FAILED = "autopilot_run_failed";
 const METRICS_ONLY_EVENTS = new Set([
+  EVENT_TASK_QUEUED_CAPABILITY_TIMEOUT,
   EVENT_RUNTIME_REGISTERED,
   EVENT_RUNTIME_READY,
   EVENT_RUNTIME_FAILED,
@@ -444,6 +446,8 @@ export interface RuntimesSurface {
     agentPluginProtocol?: number;
   }): MultiremiDaemonHeartbeatAck;
   runtimeCanRunAgent(runtime: MultiremiRuntime, agent: MultiremiAgent): boolean;
+  runtimeCanRouteAgent(runtime: MultiremiRuntime, agent: MultiremiAgent): boolean;
+  runtimeSupportsAgentModel(runtime: MultiremiRuntime, agent: MultiremiAgent): boolean;
 }
 
 /**
@@ -723,6 +727,11 @@ export class StoreContext {
 
   incrementMetricForAnalyticsEvent(event: MultiremiAnalyticsEvent): void {
     switch (event.name) {
+      case EVENT_TASK_QUEUED_CAPABILITY_TIMEOUT:
+        this.incrementMetricCounter("multiremi_task_queued_capability_timeout_total", {
+          provider: normalizeRuntimeProviderLabel(stringProp(event.properties, "provider")),
+        });
+        break;
       case EVENT_RUNTIME_REGISTERED:
         this.incrementMetricCounter(METRIC_RUNTIME_REGISTERED, {
           runtime_mode: normalizeRuntimeModeLabel(stringProp(event.properties, "runtime_mode")),

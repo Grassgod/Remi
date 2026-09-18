@@ -81,6 +81,8 @@ export function AgentActivityHoverContent({
             : "offline";
           const isRunning = task.status === "running";
           const isAwaitingHuman = task.status === "awaiting_human";
+          const queuedWaitReason = task.status === "queued" && typeof task.wait_reason === "string"
+            ? task.wait_reason.trim() : "";
           // queued/dispatched both read as "queued" in the user-facing
           // copy — `dispatched` is the daemon-acked sub-state of queued
           // and not user-meaningful here.
@@ -105,7 +107,7 @@ export function AgentActivityHoverContent({
           return (
             <div
               key={task.id}
-              className="flex items-center gap-2 text-xs"
+              className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs"
             >
               <ActorAvatarBase
                 name={getActorName("agent", task.agent_id)}
@@ -130,6 +132,11 @@ export function AgentActivityHoverContent({
                   {formatElapsedSince(startedFrom, now, HOVER_DURATION)}
                 </span>
               </span>
+              {queuedWaitReason && (
+                <span className="basis-full min-w-0 pl-6 text-muted-foreground break-words">
+                  {queuedWaitReason}
+                </span>
+              )}
             </div>
           );
         })}

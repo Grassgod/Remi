@@ -166,7 +166,12 @@ export function TaskStatusPill({
   // running; we trust that observation over a stale cache.
   const status = taskMessages.length > 0 ? "running" : pendingTask.status;
   const elapsedSecs = Math.max(0, Math.floor((now - anchor) / 1000));
-  const stage = resolveStage(status, taskMessages, availability);
+  const queuedWaitReason = status === "queued" && typeof pendingTask.wait_reason === "string"
+    ? pendingTask.wait_reason.trim() : "";
+  // A task-specific explanation takes priority over coarse agent availability.
+  const stage = queuedWaitReason
+    ? { ...resolveStage(status, taskMessages, undefined), static: true }
+    : resolveStage(status, taskMessages, availability);
   const preparationSummary = taskMessages.length === 0 && !stage.static
     && (status === "running" || status === "dispatched")
     && typeof pendingTask.progress_summary === "string"
@@ -174,7 +179,7 @@ export function TaskStatusPill({
 
   return (
     <div
-      className="flex items-center gap-1.5 px-1 text-xs text-muted-foreground"
+      className="flex flex-wrap items-center gap-1.5 px-1 text-xs text-muted-foreground"
       aria-live="polite"
     >
       {!stage.static && (
@@ -186,6 +191,9 @@ export function TaskStatusPill({
         </span>
         <span className="opacity-70"> · {formatElapsedSecs(elapsedSecs)}</span>
       </span>
+      {queuedWaitReason && (
+        <span className="basis-full min-w-0 break-words">{queuedWaitReason}</span>
+      )}
     </div>
   );
 }
