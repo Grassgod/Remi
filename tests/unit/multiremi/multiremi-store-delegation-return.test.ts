@@ -468,6 +468,7 @@ describe("task-level agent delegation return", () => {
     const qaTasks = store.listTasksForIssue(issue.id).filter((task) => task.agentId === qa.id);
     expect(qaTasks).toHaveLength(1);
     expect(qaTasks[0]!.status).toBe("queued");
+    expect(qaTasks[0]!.continuedFromTaskId).toBeNull();
 
     const coalesced = store.listIssueActivity(issue.id)
       .filter((activity) => activity.type === "comment_mention_coalesced");

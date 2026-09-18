@@ -281,6 +281,7 @@ export function daemonTaskWireResponse(
   };
   if (task.failureReason) response.failure_reason = task.failureReason;
   if (task.parentTaskId) response.parent_task_id = task.parentTaskId;
+  if (task.continuedFromTaskId) response.continued_from_task_id = task.continuedFromTaskId;
   if (task.waitReason) response.wait_reason = task.waitReason;
   if (task.progressSummary) response.progress_summary = task.progressSummary;
   if (task.progressStep != null) response.progress_step = task.progressStep;

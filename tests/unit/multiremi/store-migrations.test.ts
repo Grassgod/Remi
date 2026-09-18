@@ -122,6 +122,7 @@ describe("store migrations", () => {
     ]));
     expect(columnNames(database, "multiremi_tasks")).toContain("task_kind");
     expect(columnNames(database, "multiremi_tasks")).toContain("delegation_return_task_id");
+    expect(columnNames(database, "multiremi_tasks")).toContain("continued_from_task_id");
     expect(columnNames(database, "multiremi_chat_sessions")).not.toContain("issue_id");
     expect(columnNames(database, "multiremi_feishu_bot_chat_bindings")).toContain("issue_id");
     expect(columnNames(database, "multiremi_tasks")).toContain("issue_creation_restricted");
@@ -176,6 +177,34 @@ describe("store migrations", () => {
       "auto_update_last_checked_at",
       "auto_update_last_result",
     ]));
+  });
+
+  it("adds continuation lineage to an existing task table idempotently without losing rows", () => {
+    const database = freshDb();
+    migrate(database);
+    database.exec("ALTER TABLE multiremi_tasks DROP COLUMN continued_from_task_id");
+    const timestamp = "2026-09-18T00:00:00.000Z";
+    database.run(
+      "INSERT INTO multiremi_agents (id, name, provider, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+      ["agt_continuation_migration", "Migration worker", "claude", timestamp, timestamp],
+    );
+    database.run(
+      `INSERT INTO multiremi_tasks
+        (id, agent_id, workspace_id, status, prompt, created_at, updated_at)
+       VALUES (?, ?, 'local', 'completed', ?, ?, ?)`,
+      ["tsk_continuation_migration", "agt_continuation_migration", "Legacy task", timestamp, timestamp],
+    );
+
+    migrate(database);
+    migrate(database);
+
+    expect(columnNames(database, "multiremi_tasks")).toContain("continued_from_task_id");
+    expect(database.query(
+      "SELECT id, continued_from_task_id FROM multiremi_tasks WHERE id = ?",
+    ).get("tsk_continuation_migration")).toEqual({
+      id: "tsk_continuation_migration",
+      continued_from_task_id: null,
+    });
   });
 
   it("adds legacy Chat sequence columns before indexing and preserves message order", () => {

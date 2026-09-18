@@ -1372,6 +1372,10 @@ export interface MultiremiTask {
   attempt: number;
   maxAttempts: number;
   parentTaskId: string | null;
+  /** Exact delegated Task explicitly continued by this requested round. This
+   * is separate from parentTaskId, which represents execution retry lineage. */
+  continuedFromTaskId: string | null;
+  continued_from_task_id?: string | null;
   /** Immutable capability attenuation snapshot. Once true, every descendant
    * task must also require a human-approved proposal before creating Issues. */
   issueCreationRestricted: boolean;
@@ -1610,6 +1614,10 @@ export interface CreateTaskInput {
   projection_degrade_level?: number | null;
   parentTaskId?: string | null;
   parent_task_id?: string | null;
+  /** Server-derived continuation lineage. Public task creation strips this
+   * field and derives it only from continueTaskId. */
+  continuedFromTaskId?: string | null;
+  continued_from_task_id?: string | null;
   /** Server-derived capability snapshot. Public task creation must not trust
    * this value; TasksRepo derives it from parent lineage and the target Agent. */
   issueCreationRestricted?: boolean;

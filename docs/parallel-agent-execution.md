@@ -12,7 +12,10 @@
   affinity. The caller must identify the exact prior delegated Task; the server
   never infers continuation from an Issue or Agent match.
 - Continued Tasks in one execution scope are serialized. A new rich-mention
-  delegation gets a new scope and remains eligible to run in parallel. If the
+  delegation gets a new scope and remains eligible to run in parallel. Queued
+  rich mentions may coalesce only with ordinary mention-created work; an
+  explicit continuation is marked by `continued_from_task_id` and is never a
+  coalescing candidate for an independent mention. If the
   prior provider session or execution fingerprint is no longer resumable, the
   existing lane reset path cold-bootstraps only that scope and records a
   `session_agent_lane_reset` Issue activity with the recovery reason.

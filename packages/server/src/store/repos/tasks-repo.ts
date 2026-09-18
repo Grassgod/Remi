@@ -410,6 +410,16 @@ export class TasksRepo {
     if (parentTask && parentTask.workspaceId !== agent.workspaceId) {
       throw new Error("Parent task belongs to another workspace");
     }
+    const continuedFromTaskId = cleanOptionalString(
+      input.continuedFromTaskId ?? input.continued_from_task_id,
+    );
+    const continuedFromTask = continuedFromTaskId ? this.getTask(continuedFromTaskId) : null;
+    if (continuedFromTaskId && !continuedFromTask) {
+      throw new Error(`Continued task not found: ${continuedFromTaskId}`);
+    }
+    if (continuedFromTask && continuedFromTask.workspaceId !== agent.workspaceId) {
+      throw new Error("Continued task belongs to another workspace");
+    }
     // A side task cannot dispatch a different agent through another Session.
     // Same-agent retries/redispatch still use parentTaskId and remain valid.
     const parentIssueSession = parentTask?.issueSessionId
@@ -586,13 +596,13 @@ export class TasksRepo {
         id, task_kind, agent_id, runtime_id, issue_id, issue_session_id, issue_session_generation, holds_workspace, chat_session_id,
         trigger_comment_id, trigger_summary, requesting_user_name,
         requesting_user_profile_description, workspace_id, status, priority, prompt,
-        attempt, max_attempts, parent_task_id, issue_creation_restricted, delegation_id, delegated_by_agent_id,
+        attempt, max_attempts, parent_task_id, continued_from_task_id, issue_creation_restricted, delegation_id, delegated_by_agent_id,
         assignment_event_id, assignment_source_event_id, projection_degrade_level,
         provider, plugin_snapshot, execution_fingerprint, codex_profile, claude_profile,
         session_id, work_dir, created_at, updated_at
       ) VALUES (
         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?,
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       )`,
       [
         id,
@@ -620,6 +630,7 @@ export class TasksRepo {
         attempt,
         maxAttempts,
         parentTaskId,
+        continuedFromTaskId,
         issueCreationRestricted ? 1 : 0,
         delegationId,
         delegatedByAgentId,
@@ -691,6 +702,7 @@ export class TasksRepo {
             source_event_id: input.assignmentSourceEventId ?? input.assignment_source_event_id ?? null,
             attempt,
             parent_task_id: parentTaskId,
+            ...(continuedFromTaskId ? { continued_from_task_id: continuedFromTaskId } : {}),
             ...(delegationId ? {
               delegation_id: delegationId,
               delegated_by_agent_id: delegatedByAgentId,
@@ -2511,6 +2523,7 @@ export class TasksRepo {
       attempt: nextAttempt,
       maxAttempts: Math.max(current.maxAttempts, nextAttempt),
       parentTaskId: current.id,
+      continuedFromTaskId: current.continuedFromTaskId,
       delegationId: current.delegationId,
       delegatedByAgentId: current.delegatedByAgentId,
       assignmentSourceEventId: current.assignmentSourceEventId,
@@ -2718,6 +2731,7 @@ export class TasksRepo {
         ? parent.projectionDegradeLevel + 1
         : 0,
       parentTaskId: parent.id,
+      continuedFromTaskId: parent.continuedFromTaskId,
       delegationId: parent.delegationId,
       delegatedByAgentId: parent.delegatedByAgentId,
       assignmentSourceEventId: parent.assignmentSourceEventId,
@@ -4099,6 +4113,8 @@ function toTask(row: Row): MultiremiTask {
     attempt: Number(row.attempt ?? 1),
     maxAttempts: Number(row.max_attempts ?? 3),
     parentTaskId: nullableString(row.parent_task_id),
+    continuedFromTaskId: nullableString(row.continued_from_task_id),
+    continued_from_task_id: nullableString(row.continued_from_task_id),
     issueCreationRestricted: Boolean(row.issue_creation_restricted),
     issue_creation_restricted: Boolean(row.issue_creation_restricted),
     delegationId: nullableString(row.delegation_id),

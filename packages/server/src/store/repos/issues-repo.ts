@@ -3179,6 +3179,8 @@ export class IssuesRepo {
       // still-queued task: it has not been claimed, so its session projection is
       // built later and already carries this comment. A dispatched or running
       // task has its context frozen, so a follow-up there must get its own turn.
+      // Explicit continuation tasks are also excluded: they belong to a prior
+      // delegation lane, while this rich mention is an independent delegation.
       // Human mentions are never coalesced, so that a mentioning comment and a
       // plain one behave alike: an un-mentioned human comment always dispatches
       // individually (no batching, by request — see triggerAssigneeAutoResponse),
@@ -3359,6 +3361,7 @@ export class IssuesRepo {
     const row = this.ctx.db.query(
       `SELECT id FROM multiremi_tasks
        WHERE issue_id = ? AND agent_id = ? AND status = 'queued'
+         AND continued_from_task_id IS NULL
          AND ${sessionClause}
        ORDER BY created_at DESC
        LIMIT 1`,

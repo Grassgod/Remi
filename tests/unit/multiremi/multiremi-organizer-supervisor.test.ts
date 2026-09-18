@@ -441,11 +441,18 @@ describe("Organizer supervisor privilege layer", () => {
     expect(fixture.store.listIssueComments(fixture.patrolIssue.id).at(-1)?.body).toContain("Organizer action: cancel");
 
     const redispatchIssue = fixture.store.createIssue({ title: "Redispatch target", workspaceId: "local" });
+    const continuedFromTask = fixture.store.createTask({
+      agentId: fixture.targetAgent.id,
+      issueId: redispatchIssue.id,
+      workspaceId: "local",
+      prompt: "original delegated round",
+    });
     const redispatchTask = fixture.store.createTask({
       agentId: fixture.targetAgent.id,
       issueId: redispatchIssue.id,
       workspaceId: "local",
       prompt: "queued too long",
+      continuedFromTaskId: continuedFromTask.id,
     });
     const redispatched = await fixture.app.request(`/api/tasks/${redispatchTask.id}/redispatch`, {
       method: "POST",
@@ -460,6 +467,7 @@ describe("Organizer supervisor privilege layer", () => {
       agentId: fixture.targetAgent.id,
       issueId: redispatchIssue.id,
       parentTaskId: redispatchTask.id,
+      continuedFromTaskId: continuedFromTask.id,
       status: "queued",
       attempt: 2,
     });

@@ -108,6 +108,8 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
       holds_workspace: _holdsWorkspaceSnake,
       parentTaskId: _parentTaskId,
       parent_task_id: _parentTaskIdSnake,
+      continuedFromTaskId: _continuedFromTaskId,
+      continued_from_task_id: _continuedFromTaskIdSnake,
       issueCreationRestricted: _issueCreationRestricted,
       issue_creation_restricted: _issueCreationRestrictedSnake,
       delegationId: _delegationId,
@@ -173,6 +175,7 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
         ? {
           issueId: continuedTask.issueId,
           issueSessionId: continuedTask.issueSessionId,
+          continuedFromTaskId: continuedTask.id,
           delegationId: continuedTask.delegationId,
           delegatedByAgentId: continuedTask.delegatedByAgentId,
         }
