@@ -1,0 +1,324 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly QA_BROWSER_ROOT="${MULTIREMI_QA_BROWSER_ROOT:-/data00/multiremi/qa-browser}"
+readonly SOURCE_PROFILE="${QA_BROWSER_ROOT}/source-profile"
+readonly SESSION_ROOT="${QA_BROWSER_ROOT}/sessions"
+readonly AGENT_BROWSER_BIN="${AGENT_BROWSER_BIN:-/usr/local/bin/agent-browser}"
+readonly AGENT_BROWSER_NAMESPACE="multiremi-qa"
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  multiremi-qa-browser prepare <issue-key>
+  multiremi-qa-browser run <issue-key> <agent-browser command...>
+  multiremi-qa-browser prepare-empty <issue-key>
+  multiremi-qa-browser run-empty <issue-key> <agent-browser command...>
+  multiremi-qa-browser authenticate <issue-key> [multiremi-url]
+  multiremi-qa-browser ppe-authenticate <issue-key> <ppe-url>
+  multiremi-qa-browser close <issue-key>
+  multiremi-qa-browser cleanup <issue-key>
+  multiremi-qa-browser path <issue-key>
+  multiremi-qa-browser empty-path <issue-key>
+
+Use run for SSO targets such as Aiden. Use run-empty/authenticate for Multiremi.
+Use ppe-authenticate for an isolated PPE: mint the PAT on that PPE itself and
+pipe it in on stdin. A PPE never accepts a production credential.
+Each Issue receives isolated browser profiles and sessions.
+USAGE
+}
+
+validate_issue_key() {
+  local issue_key="${1:-}"
+  if [[ ! "${issue_key}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]]; then
+    echo "invalid issue key: use 1-80 letters, digits, dots, underscores, or dashes" >&2
+    exit 2
+  fi
+}
+
+session_dir() {
+  local issue_key="$1"
+  printf '%s/%s\n' "${SESSION_ROOT}" "${issue_key}"
+}
+
+profile_dir() {
+  local issue_key="$1"
+  printf '%s/profile\n' "$(session_dir "${issue_key}")"
+}
+
+empty_profile_dir() {
+  local issue_key="$1"
+  printf '%s/empty-profile\n' "$(session_dir "${issue_key}")"
+}
+
+assert_session_path() {
+  local path="$1"
+  local root_real
+  local path_real
+  if [[ -L "${SESSION_ROOT}" ]]; then
+    echo "refusing symlinked session root: ${SESSION_ROOT}" >&2
+    exit 2
+  fi
+  root_real="$(realpath -m "${SESSION_ROOT}")"
+  path_real="$(realpath -m "${path}")"
+  if [[ "${path_real}" != "${root_real}/"* || "${path_real}" == "${root_real}" ]]; then
+    echo "refusing unsafe session path: ${path}" >&2
+    exit 2
+  fi
+}
+
+source_profile_in_use() {
+  local expected="--user-data-dir=${SOURCE_PROFILE}"
+  local cmdline
+  local arg
+  local -a args
+  for cmdline in /proc/[0-9]*/cmdline; do
+    [[ -r "${cmdline}" ]] || continue
+    args=()
+    mapfile -d '' -t args <"${cmdline}" 2>/dev/null || continue
+    for arg in "${args[@]}"; do
+      # agent-browser currently launches Chrome with the complete command line
+      # stored in one argv entry; direct Chrome launches use one entry per flag.
+      [[ "${arg}" == *"${expected}"* ]] && return 0
+    done
+  done
+  return 1
+}
+
+prepare_profile() {
+  local issue_key="$1"
+  local target
+  target="$(profile_dir "${issue_key}")"
+  assert_session_path "${target}"
+
+  if [[ ! -d "${SOURCE_PROFILE}" || -L "${SOURCE_PROFILE}" ]]; then
+    echo "source profile is missing: ${SOURCE_PROFILE}" >&2
+    exit 1
+  fi
+  if source_profile_in_use; then
+    echo "source login Chrome is still running; close it before preparing a test profile" >&2
+    exit 1
+  fi
+  if [[ -L "$(session_dir "${issue_key}")" || -L "${target}" ]]; then
+    echo "refusing symlinked session path: ${target}" >&2
+    exit 2
+  fi
+  if [[ -d "${target}" ]]; then
+    printf '%s\n' "${target}"
+    return
+  fi
+
+  install -d -m 700 "$(session_dir "${issue_key}")" "${target}"
+  cp -a --reflink=auto "${SOURCE_PROFILE}/." "${target}/"
+  for lock_name in SingletonCookie SingletonLock SingletonSocket; do
+    local lock_path="${target}/${lock_name}"
+    if [[ -L "${lock_path}" ]]; then
+      unlink "${lock_path}"
+    elif [[ -e "${lock_path}" ]]; then
+      rm -f -- "${lock_path}"
+    fi
+  done
+  chmod -R go-rwx "${target}"
+  printf '%s\n' "${target}"
+}
+
+prepare_empty_profile() {
+  local issue_key="$1"
+  local target
+  target="$(empty_profile_dir "${issue_key}")"
+  assert_session_path "${target}"
+  if [[ -L "$(session_dir "${issue_key}")" || -L "${target}" ]]; then
+    echo "refusing symlinked session path: ${target}" >&2
+    exit 2
+  fi
+  install -d -m 700 "${target}"
+  printf '%s\n' "${target}"
+}
+
+run_browser() {
+  local session="$1"
+  local target="$2"
+  shift 2
+  env DISPLAY=:0 XAUTHORITY=/run/user/0/gdm/Xauthority \
+    "${AGENT_BROWSER_BIN}" \
+    --namespace "${AGENT_BROWSER_NAMESPACE}" \
+    --session "${session}" \
+    --profile "${target}" \
+    --headed \
+    --executable-path /usr/bin/google-chrome \
+    --args "--no-sandbox" \
+    "$@"
+}
+
+browser_command() {
+  local issue_key="$1"
+  shift
+  local target
+  target="$(prepare_profile "${issue_key}")"
+  run_browser "${issue_key}" "${target}" "$@"
+}
+
+empty_browser_command() {
+  local issue_key="$1"
+  shift
+  local target
+  target="$(prepare_empty_profile "${issue_key}")"
+  run_browser "${issue_key}-pat" "${target}" "$@"
+}
+
+close_profile_browser() {
+  local session="$1"
+  local target="$2"
+  if [[ ! -d "${target}" ]]; then
+    return
+  fi
+  env DISPLAY=:0 XAUTHORITY=/run/user/0/gdm/Xauthority \
+    "${AGENT_BROWSER_BIN}" \
+    --namespace "${AGENT_BROWSER_NAMESPACE}" \
+    --session "${session}" \
+    --profile "${target}" \
+    --headed \
+    --executable-path /usr/bin/google-chrome \
+    --args "--no-sandbox" \
+    close >/dev/null 2>&1 || true
+}
+
+close_browser() {
+  local issue_key="$1"
+  close_profile_browser "${issue_key}" "$(profile_dir "${issue_key}")"
+  close_profile_browser "${issue_key}-pat" "$(empty_profile_dir "${issue_key}")"
+}
+
+authenticate_browser() {
+  local issue_key="$1"
+  local target_url="${2:-http://n37-117-209.byted.org}"
+  if [[ ! "${target_url}" =~ ^http://n37-117-209\.byted\.org(/.*)?$ ]]; then
+    echo "refusing to inject a Multiremi PAT into an untrusted origin" >&2
+    exit 2
+  fi
+
+  local token=""
+  IFS= read -r token || [[ -n "${token}" ]]
+  if [[ -z "${token}" || "${#token}" -gt 8192 ]]; then
+    echo "missing or invalid Multiremi QA token on stdin" >&2
+    exit 2
+  fi
+
+  empty_browser_command "${issue_key}" --json open "http://n37-117-209.byted.org/login" >/dev/null
+  local encoded
+  local script
+  encoded="$(printf '%s' "${token}" | base64 -w0)"
+  script="localStorage.setItem(\"multimira_token\", atob(\"${encoded}\"))"
+  printf '%s' "${script}" | empty_browser_command "${issue_key}" --json eval --stdin >/dev/null
+  token=""
+  encoded=""
+  script=""
+  empty_browser_command "${issue_key}" --json open "${target_url}" >/dev/null
+  echo "Multiremi QA authentication installed for ${issue_key}"
+}
+
+# MUL-334: 隔离 PPE 的登录引导。PPE 以无认证模式运行（MULTIREMI_TOKEN 未设置），
+# 服务端把任何请求都当本地管理员放行，但 Web 前端是 token 模式：localStorage 里
+# 没有 multimira_token 就直接判未登录并跳 /login，根本不会去问 /api/me。所以真实
+# 页面验收必须先注入一个该 PPE 自己签发的短期本地 PAT。
+# 白名单只含 32101-32106 的 PPE slot：生产 Origin 在这里一律拒绝，
+# 生产 PAT 也永远不应该走到这条路径上来。
+ppe_authenticate_browser() {
+  local issue_key="$1"
+  local target_url="${2:-}"
+  if [[ -z "${target_url}" ]]; then
+    echo "usage: multiremi-qa-browser ppe-authenticate <issue-key> <ppe-url>" >&2
+    exit 2
+  fi
+  if [[ ! "${target_url}" =~ ^(http://(10\.37\.117\.209|n37-117-209\.byted\.org):3210[1-6])(/.*)?$ ]]; then
+    echo "refusing to inject a token into a non-PPE origin" >&2
+    exit 2
+  fi
+  local origin="${BASH_REMATCH[1]}"
+
+  # 不要照抄生产路径的 `read ... || [[ -n ... ]]`：stdin 为空时那种写法会被
+  # set -e 直接掐断，调用方只看到 exit 1 而看不到原因。这里先无条件收下，
+  # 再显式报错，失败路径才可读。
+  local token=""
+  IFS= read -r token || true
+  if [[ -z "${token}" || "${#token}" -gt 8192 ]]; then
+    echo "missing or invalid PPE token on stdin" >&2
+    exit 2
+  fi
+
+  empty_browser_command "${issue_key}" --json open "${origin}/login" >/dev/null
+  local encoded
+  local script
+  encoded="$(printf '%s' "${token}" | base64 -w0)"
+  script="localStorage.setItem(\"multimira_token\", atob(\"${encoded}\"))"
+  printf '%s' "${script}" | empty_browser_command "${issue_key}" --json eval --stdin >/dev/null
+  token=""
+  encoded=""
+  script=""
+  empty_browser_command "${issue_key}" --json open "${target_url}" >/dev/null
+  echo "PPE QA authentication installed for ${issue_key} on ${origin}"
+}
+
+command="${1:-}"
+issue_key="${2:-}"
+if [[ -z "${command}" || -z "${issue_key}" ]]; then
+  usage >&2
+  exit 2
+fi
+validate_issue_key "${issue_key}"
+
+case "${command}" in
+  prepare)
+    prepare_profile "${issue_key}"
+    ;;
+  prepare-empty)
+    prepare_empty_profile "${issue_key}"
+    ;;
+  run)
+    shift 2
+    if [[ "$#" -eq 0 ]]; then
+      usage >&2
+      exit 2
+    fi
+    browser_command "${issue_key}" "$@"
+    ;;
+  run-empty)
+    shift 2
+    if [[ "$#" -eq 0 ]]; then
+      usage >&2
+      exit 2
+    fi
+    empty_browser_command "${issue_key}" "$@"
+    ;;
+  authenticate)
+    authenticate_browser "${issue_key}" "${3:-http://n37-117-209.byted.org}"
+    ;;
+  ppe-authenticate)
+    ppe_authenticate_browser "${issue_key}" "${3:-}"
+    ;;
+  close)
+    close_browser "${issue_key}"
+    ;;
+  cleanup)
+    target="$(session_dir "${issue_key}")"
+    assert_session_path "${target}"
+    if [[ -L "${target}" ]]; then
+      echo "refusing symlinked session path: ${target}" >&2
+      exit 2
+    fi
+    close_browser "${issue_key}"
+    if [[ -d "${target}" ]]; then
+      rm -rf -- "${target}"
+    fi
+    ;;
+  path)
+    profile_dir "${issue_key}"
+    ;;
+  empty-path)
+    empty_profile_dir "${issue_key}"
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac
