@@ -24,6 +24,9 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 qa_browser_ssh="${here}/qa-browser-ssh.sh"
 state_root="${MULTIREMI_PPE_QA_STATE_DIR:-${TMPDIR:-/tmp}/multiremi-ppe-qa}"
+# 单次 HTTP 的上限。PPE 已经释放或网络黑洞时，curl 会一直挂到超时；收尾阶段不该
+# 为一个已经没用的环境干等，测试也需要能把它调小。
+http_timeout="${MULTIREMI_PPE_QA_HTTP_TIMEOUT:-15}"
 
 # 只接受工作流分配的六个 PPE slot。生产 Origin 落不进来，误把生产地址传进来会硬失败。
 readonly PPE_URL_RE='^(http://(10\.37\.117\.209|n37-117-209\.byted\.org):3210[1-6])(/.*)?$'
@@ -49,7 +52,7 @@ ppe_origin() {
 # 不要在一个带认证的环境里乱签 token。
 assert_open_mode() {
   local origin="$1" code
-  code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "${origin}/api/me" || true)"
+  code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time "${http_timeout}" "${origin}/api/me" || true)"
   [[ "${code}" == "200" ]] ||
     die "refusing to mint: ${origin}/api/me returned ${code:-<none>}, this is not an open-mode PPE"
 }
@@ -115,7 +118,7 @@ cmd_logout() {
 
   if [[ -n "${origin}" && -n "${token_id}" ]]; then
     local code
-    code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
+    code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time "${http_timeout}" \
       -X DELETE "${origin}/api/tokens/${token_id}" || true)"
     # 204 = 已撤销；404 = PPE 已经释放或 token 早就没了，同样算收干净。
     if [[ "${code}" == "204" || "${code}" == "404" ]]; then

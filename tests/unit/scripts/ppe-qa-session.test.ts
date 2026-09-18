@@ -104,16 +104,21 @@ describe("ppe-qa-session.sh", () => {
     // 退出码非零，这样上层才知道还有一枚 PAT 挂在那个 PPE 上。
     const dir = stateDir();
     const state = join(dir, "MUL-334.state");
-    // 指向一个不会应答的地址，让 DELETE 必然失败
+    // 指向一个不会应答的地址，让 DELETE 必然失败。本地是立刻拒绝，CI 的出口网络
+    // 会一路挂到 curl 超时，所以这里显式把超时压到 1 秒，别让默认的 15 秒把用例
+    // 拖过 bun 的超时（这正是本用例在 CI 上挂过的原因）。
     writeFileSync(state, "http://10.37.117.209:32106\ntok_unreachable\n");
-    const result = runSession(["logout", "MUL-334"], { MULTIREMI_PPE_QA_STATE_DIR: dir });
+    const result = runSession(["logout", "MUL-334"], {
+      MULTIREMI_PPE_QA_STATE_DIR: dir,
+      MULTIREMI_PPE_QA_HTTP_TIMEOUT: "1",
+    });
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain("failed to revoke the PPE PAT");
     expect(result.stderr).toContain("token_id=tok_unreachable");
     expect(result.stderr).toContain("/api/tokens/tok_unreachable");
     expect(existsSync(state)).toBe(true);
     rmSync(dir, { recursive: true, force: true });
-  });
+  }, 15000);
 
   test("logout is safe when there is nothing to clean up", () => {
     const dir = stateDir();
