@@ -208,7 +208,7 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
           chatKeys.pendingTask(payload.chat_session_id),
           (old) => {
             if (!old || old.task_id !== payload.task_id) return old;
-            return { ...old, status: "running" };
+            return { ...old, status: "running", wait_reason: null };
           },
         );
       },
@@ -225,7 +225,7 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
           chatKeys.pendingTask(payload.chat_session_id),
           (old) => {
             if (!old || old.task_id !== payload.task_id) return old;
-            return { ...old, status: "running" };
+            return { ...old, status: "running", wait_reason: null };
           },
         );
         // awaiting_human → running means the request was resolved (respond or

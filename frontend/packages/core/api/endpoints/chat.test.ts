@@ -104,6 +104,18 @@ describe("ChatEndpoints contracts", () => {
     }
   });
 
+  it("loads optional queued wait reasons and ignores malformed reason fields", async () => {
+    const pending = { task_id: "task-1", status: "queued", created_at: session.created_at, supports_queue: true, queued_tasks: [] };
+    const wait_reason = "等待模型能力恢复：2 个候选 Runtime 均无法执行 claude-opus-5";
+    await expect(endpointsWithResponse({ ...pending, wait_reason }).getPendingChatTask("chat-1"))
+      .resolves.toMatchObject({ status: "queued", wait_reason });
+    for (const wait_reason of [null, undefined, 17, { label: "bad shape" }]) {
+      const result = await endpointsWithResponse({ ...pending, wait_reason }).getPendingChatTask("chat-1");
+      expect(result.task_id).toBe("task-1");
+      expect(result.wait_reason).toBe(wait_reason === null ? null : undefined);
+    }
+  });
+
   it("edits a queue item and validates its response", async () => {
     await expect(endpointsWithResponse(queuedTask).editQueuedChatMessage("chat-1", "task-2", "follow up")).resolves.toEqual(queuedTask);
     expect(fetch).toHaveBeenCalledWith("https://api.example.test/api/chat/sessions/chat-1/queue/task-2", expect.objectContaining({ method: "PATCH" }));

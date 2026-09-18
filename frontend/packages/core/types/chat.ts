@@ -122,6 +122,8 @@ export interface ChatPendingTask {
   task_id?: string;
   status?: string;
   created_at?: string;
+  /** Server-provided explanation for the task's current waiting state. */
+  wait_reason?: string | null;
   /** Optional Project preparation status, shown until provider output starts. */
   progress_summary?: string | null;
   /** Absent only in the short-lived optimistic cache seed. */

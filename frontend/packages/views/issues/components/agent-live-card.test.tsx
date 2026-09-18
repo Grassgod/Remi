@@ -337,6 +337,30 @@ describe("AgentLiveCard reconcile race", () => {
 });
 
 describe("AgentLiveCard queued rendering", () => {
+  it("refreshes a queued capability reason and removes it on recovery without opening a human request", async () => {
+    const wait_reason = "等待模型能力恢复：2 个候选 Runtime 均无法执行 claude-opus-5";
+    const task = makeTask("task-q", { status: "queued", dispatched_at: null, started_at: null });
+    mockApi.getActiveTasksForIssue.mockResolvedValue({ tasks: [task] });
+    renderCard();
+    await screen.findByText(/is queued/);
+
+    mockApi.getActiveTasksForIssue.mockResolvedValue({ tasks: [{ ...task, wait_reason }] });
+    act(() => fireEvent("task:queued", { task_id: task.id, issue_id: task.issue_id }));
+    expect(await screen.findByText(wait_reason)).toBeInTheDocument();
+    expect(screen.getByText(/is queued/)).toBeInTheDocument();
+    expect(screen.queryByTestId("human-request-task-q")).not.toBeInTheDocument();
+
+    mockApi.getActiveTasksForIssue.mockResolvedValue({ tasks: [{ ...task, wait_reason: null }] });
+    act(() => fireEvent("task:queued", { task_id: task.id, issue_id: task.issue_id }));
+    await waitFor(() => expect(screen.queryByText(wait_reason)).not.toBeInTheDocument());
+    expect(screen.getByText(/is queued/)).toBeInTheDocument();
+
+    mockApi.getActiveTasksForIssue.mockResolvedValue({ tasks: [{ ...task, status: "running", wait_reason }] });
+    act(() => fireEvent("task:running", { task_id: task.id, issue_id: task.issue_id }));
+    await screen.findByText(/is working/);
+    expect(screen.queryByText(wait_reason)).not.toBeInTheDocument();
+  });
+
   it("renders 'is queued' copy without transcript when status is queued", async () => {
     const queuedTask = makeTask("task-q", {
       status: "queued",

@@ -110,6 +110,8 @@ export interface AgentTask {
     | "failed"
     | "cancelled";
   priority: number;
+  /** Server-provided explanation for the task's current waiting state. */
+  wait_reason?: string | null;
   /** LLM-generated one-line progress for the run; refreshed while running and
    * finalized with a terminal summary when the run ends. */
   progress_summary?: string | null;

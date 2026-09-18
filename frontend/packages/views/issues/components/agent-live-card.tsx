@@ -409,6 +409,7 @@ function AgentLiveRow({ task, items, agentName, onRequestCancel, cancelling }: A
   const [elapsed, setElapsed] = useState("");
 
   const isQueued = task.status === "queued";
+  const queuedWaitReason = isQueued && typeof task.wait_reason === "string" ? task.wait_reason.trim() : "";
   // `waiting_local_directory` is the daemon-parked stage of an otherwise-
   // active task: it's been dispatched (no longer pure-queued) but hasn't
   // entered the running phase yet because another task on this daemon
@@ -498,6 +499,11 @@ function AgentLiveRow({ task, items, agentName, onRequestCancel, cancelling }: A
           <span className="hidden sm:inline">{t(($) => $.agent_live.stop_button)}</span>
         </button>
       </div>
+      {queuedWaitReason && (
+        <div className="basis-full min-w-0 pl-7 text-xs text-muted-foreground break-words">
+          {queuedWaitReason}
+        </div>
+      )}
     </div>
   );
 }

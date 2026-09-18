@@ -23,6 +23,7 @@ export const ChatPendingTaskSchema = z.object({
   task_id: z.string().min(1).optional(),
   status: z.string().optional(),
   created_at: z.string().optional(),
+  wait_reason: z.string().nullable().optional().catch(undefined),
   progress_summary: z.string().nullable().optional().catch(undefined),
   supports_queue: z.literal(true),
   queued_tasks: z.array(ChatQueuedTaskSchema),
