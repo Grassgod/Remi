@@ -87,6 +87,11 @@ describe("frozen execution Runtime migration", () => {
     db = new Database(":memory:");
     const migrate = () => runMigrations(db! as unknown as SqlDatabase);
     migrate();
+    // Real task writes follow workspace resolution (which ensures "local").
+    // This raw-SQL fixture also needs that lifecycle-lock owner; orphaned rows
+    // must not be recovered without a row that serializes Runtime identity edits.
+    db.run(`INSERT INTO multiremi_workspaces (id, name, slug, created_at, updated_at)
+      VALUES ('local', 'Local Workspace', 'local', '2026-09-18', '2026-09-18')`);
     db.run("DELETE FROM multiremi_schema_migrations WHERE id = ?", ["20260918_task_execution_runtime"]);
     const insert = (id: string, runtime: string | null, fingerprint: string | null, frozen: boolean, origin: string | null = null) => {
       db!.run(`INSERT INTO multiremi_tasks (id, agent_id, prompt, status, created_at, updated_at,

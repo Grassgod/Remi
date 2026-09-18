@@ -294,7 +294,8 @@ export class TasksRepo {
     const rows = this.ctx.db.query(
       `SELECT id, agent_id, runtime_id, workspace_id, created_at, wait_reason,
          provider, execution_fingerprint, execution_runtime_id, codex_profile,
-         claude_profile, chat_session_id, issue_id FROM multiremi_tasks
+         claude_profile, chat_session_id, issue_id, issue_session_id, runtime_workspace_id,
+         holds_workspace, plugin_snapshot FROM multiremi_tasks
        WHERE status = 'queued' AND (created_at <= ? OR
          (execution_fingerprint IS NOT NULL AND (codex_profile IS NOT NULL OR claude_profile IS NOT NULL)))`,
     ).all(new Date(now - QUEUED_CAPABILITY_GRACE_MS).toISOString()) as Array<Row & {
@@ -304,7 +305,7 @@ export class TasksRepo {
     if (!rows.length) return result;
     const runtimesRepo = this.ctx.runtimes();
     const runtimes = runtimesRepo.listRuntimes();
-    const decisions = new Map<string, { agent: MultiremiAgent | null; candidateSupportsModel: boolean[]; frozenReason: string | null }>();
+    const decisions = new Map<string, { agent: MultiremiAgent | null; candidateSupportsModel: boolean[]; candidateBlockers: Array<string | null>; frozenReason: string | null }>();
     const checkers = new Map(runtimes.map(runtime => [runtime.id, runtimesRepo.runtimeAgentModelChecker(runtime)]));
     for (const row of rows) {
       // This observer owns only its own reason. Human and directory waits, and
@@ -314,25 +315,31 @@ export class TasksRepo {
       // Tasks for the same agent can have different runtime pins; match the
       // claim predicate and cache only tasks with the same routing constraints.
       const requirement = this.taskExecutionRequirement(row);
-      const decisionKey = JSON.stringify([row.agent_id, row.runtime_id ?? "", requirement]);
+      const decisionKey = JSON.stringify([row.agent_id, row.runtime_id ?? "", row.workspace_id,
+        requirement, row.runtime_workspace_id, row.issue_id, row.issue_session_id,
+        row.chat_session_id, row.holds_workspace, row.execution_fingerprint, row.plugin_snapshot]);
       let decision = decisions.get(decisionKey);
       if (!decision) {
         const agent = this.ctx.agents().getAgent(row.agent_id);
+        const task = toTask(row);
+        const candidates = agent && !agent.archivedAt
+          ? runtimes.filter(runtime => (row.runtime_id === null || runtime.id === row.runtime_id)
+              && runtimesRepo.runtimeCanRouteAgent(runtime, agent)) : [];
+        const candidateBlockers = candidates.map(runtime => this.runtimeTaskEnvironmentBlocker(runtime, task));
         decision = {
           agent,
           frozenReason: agent ? this.frozenTaskWaitReason(agent, requirement) : null,
-          candidateSupportsModel: agent && !agent.archivedAt
-            ? runtimes.filter(runtime => (row.runtime_id === null || runtime.id === row.runtime_id)
-                && runtimesRepo.runtimeCanRouteAgent(runtime, agent))
-              .map(runtime => this.runtimeCanRunTaskRequirement(runtime, agent, requirement, checkers.get(runtime.id)!))
-            : [],
+          candidateBlockers,
+          candidateSupportsModel: candidates.map((runtime, index) => !candidateBlockers[index]
+            && this.runtimeCanRunTaskRequirement(runtime, agent!, requirement, checkers.get(runtime.id)!)),
         };
         decisions.set(decisionKey, decision);
       }
-      const { agent, candidateSupportsModel, frozenReason } = decision;
+      const { agent, candidateSupportsModel, candidateBlockers, frozenReason } = decision;
       const wait = agent && (agent.workspaceId ?? "local") === (row.workspace_id ?? "local")
         ? queuedCapabilityWait({
           candidateSupportsModel,
+          candidateBlockers,
           model: requirement.profile?.model ?? agent.model,
           thinkingLevel: agent.thinkingLevel,
           createdAt: row.created_at,
@@ -354,7 +361,7 @@ export class TasksRepo {
       this.ctx.notifyTaskEvent("task:queued", task);
       if (wait?.alerted && !isQueuedCapabilityAlert(row.wait_reason)) {
         result.alerted++;
-        log.warn(`queued task ${task.id} has no model-capable runtime after the waiting threshold`);
+        log.warn(`queued task ${task.id} has no eligible runtime after the waiting threshold`);
         this.ctx.recordAnalyticsEvent(EVENT_TASK_QUEUED_CAPABILITY_TIMEOUT, agent!.ownerId ?? task.workspaceId ?? "local", task.workspaceId, {
           task_id: task.id,
           agent_id: task.agentId,
@@ -1864,7 +1871,7 @@ export class TasksRepo {
     for (const row of changed) events.set(String(row.id), toTask(row));
   }
 
-  private runtimeMatchesCodeSnapshot(runtime: MultiremiRuntime, task: MultiremiTaskWithAgent): boolean {
+  private runtimeMatchesCodeSnapshot(runtime: MultiremiRuntime, task: MultiremiTask): boolean {
     const session = task.issueSessionId ? this.ctx.issueSessions().getIssueSession(task.issueSessionId) : null;
     if (!session?.withCode) return true;
     const parentRuntime = session.codeRuntimeId ? this.ctx.runtimes().getRuntime(session.codeRuntimeId) : null;
@@ -1872,24 +1879,54 @@ export class TasksRepo {
       .some((alias) => runtimeDaemonAliases(parentRuntime).includes(alias));
   }
 
+  /** Static execution requirements shared by stale reclaim and the observer.
+   * Normal claim keeps equivalent SQL guards to filter before hydration. Busy,
+   * offline, drain, lane and queue-order states are deliberately not capabilities.
+   */
+  private runtimeTaskEnvironmentBlocker(runtime: MultiremiRuntime, task: MultiremiTask): string | null {
+    if (task.runtimeWorkspaceId) {
+      const workspace = new RuntimeWorkspacesRepo(this.ctx).get(task.runtimeWorkspaceId);
+      if (!workspace || workspace.workspaceId !== task.workspaceId) return "绑定的 Runtime 工作目录不存在或不属于任务工作区";
+      if (workspace.archivedAt) return "绑定的 Runtime 工作目录已归档";
+      if (runtime.metadata.runtime_workspaces !== 1) return "Runtime 未声明 runtime_workspaces 协议支持";
+      if (workspace.daemonId !== runtime.daemonId) return "Runtime 不属于绑定工作目录的 daemon";
+    }
+    // A live custom connection also requires the protocol before a first claim
+    // has produced a frozen profile (claimTask's daemon-level guard).
+    if (runtime.metadata[`${runtime.provider}_profiles`] !== 1
+      && this.ctx.runtimes().getRuntimeExecutionProfile(runtime.id, runtime.provider)) {
+      return `Runtime 未声明 ${runtime.provider}_profiles 协议支持`;
+    }
+    if (!this.runtimeHasReadyTaskPlugins(runtime, task)) return "任务的连接协议或插件版本尚未就绪";
+    if (!this.runtimeMatchesCodeSnapshot(runtime, task)) return "Runtime 不属于代码快照所在的 daemon";
+    if (task.issueId && task.holdsWorkspace && !runtimeSupportsIssueWorkspaces(runtime)) {
+      return "Runtime 版本不支持 Issue 工作区";
+    }
+    if (task.issueId && !runtimeSupportsParallelExecution(runtime)) return "Runtime 未声明 parallel_agent_execution 协议支持";
+    if (task.holdsWorkspace && !this.runtimePassesProjectDeviceRouting(runtime, task.id)) {
+      return "Runtime 不满足项目设备绑定或专用设备路由";
+    }
+    if (task.issueId && task.holdsWorkspace && !task.runtimeWorkspaceId) {
+      const aliases = runtimeDaemonAliases(runtime);
+      const workspaces = this.ctx.db.query(`SELECT w.runtime_id, r.daemon_id, r.legacy_daemon_id
+        FROM multiremi_issue_workspaces w LEFT JOIN multiremi_runtimes r ON r.id = w.runtime_id
+        WHERE w.issue_id = ? AND w.status <> 'cleaned'`).all(task.issueId) as Row[];
+      if (workspaces.length && !workspaces.some(row => [row.runtime_id, row.daemon_id, row.legacy_daemon_id]
+        .some(id => typeof id === "string" && aliases.includes(id)))) {
+        return "Runtime 不属于保留的 Issue 工作区所在 daemon";
+      }
+    }
+    return null;
+  }
+
   private runtimeMeetsTaskClaimEligibility(
     runtime: MultiremiRuntime,
     task: MultiremiTaskWithAgent,
   ): boolean {
     return task.agent != null
-      && (!task.runtimeWorkspaceId || (
-        runtime.metadata.runtime_workspaces === 1
-        && task.runtimeWorkspace?.daemonId === runtime.daemonId
-        && task.runtimeWorkspace?.workspaceId === task.workspaceId
-        && !task.runtimeWorkspace?.archivedAt
-      ))
       && !task.agent.archivedAt
       && this.runtimeCanRunTaskAgent(runtime, task.agent, task)
-      && this.runtimeHasReadyTaskPlugins(runtime, task)
-      && this.runtimeMatchesCodeSnapshot(runtime, task)
-      && (!task.issueId || !task.holdsWorkspace || runtimeSupportsIssueWorkspaces(runtime))
-      && (!task.issueId || runtimeSupportsParallelExecution(runtime))
-      && (!task.holdsWorkspace || this.runtimePassesProjectDeviceRouting(runtime, task.id));
+      && this.runtimeTaskEnvironmentBlocker(runtime, task) === null;
   }
 
   private reclaimStaleDispatchedTaskForRuntime(runtimeId: string, excludedAgentIds: string[] = []): MultiremiTaskWithAgent | null {

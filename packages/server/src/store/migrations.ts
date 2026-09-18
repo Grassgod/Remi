@@ -13,6 +13,11 @@ import { createLogger } from "@shared/logger.js";
 import { canonicalizeDaemonRoutingWithinTransaction } from "@multiremi/store/daemon-routing.js";
 import { isPostgresConfigured } from "@multiremi/store/db/postgres.js";
 
+import {
+  MISSING_TASK_EXECUTION_PROVENANCE_SQL,
+  recoverTaskExecutionRuntimeWithinLock,
+} from "@multiremi/store/task-execution-provenance.js";
+
 const log = createLogger("multiremi-store");
 const SCM_CONNECTION_ORIGIN_MIGRATION = "20260822_scm_connection_origins";
 const SCM_DEFAULT_SCOPE_MIGRATION = "20260822_scm_default_repository_scope";
@@ -3170,50 +3175,20 @@ export function runMigrations(db: SqlDatabase): void {
 }
 
 function backfillTaskExecutionRuntime(db: SqlDatabase): void {
-  const rows = db.query(`SELECT id, workspace_id, provider, execution_fingerprint,
-      codex_profile, claude_profile FROM multiremi_tasks
-    WHERE execution_runtime_id IS NULL AND NULLIF(execution_fingerprint, '') IS NOT NULL
-      AND (codex_profile IS NOT NULL OR claude_profile IS NOT NULL)`).all() as Array<{
-    id: string; workspace_id: string; provider: string | null; execution_fingerprint: string;
-    codex_profile: string | null; claude_profile: string | null;
-  }>;
-  const transitionPrefix = "chat-workspace-transition-";
-  for (const row of rows) {
-    let origin: string | null = null;
-    if (row.execution_fingerprint.startsWith(transitionPrefix)) {
-      // A transition may already be pinned to its destination. Only the
-      // source encoded before migration is trustworthy, including an explicit
-      // unknown source. Malformed historical data must not abort an upgrade.
-      const transition = row.execution_fingerprint.slice(transitionPrefix.length);
-      const separator = transition.indexOf(":");
-      const encoded = separator < 0 ? "" : transition.slice(0, separator);
-      try { origin = decodeURIComponent(encoded) || null; } catch { origin = null; }
-    } else {
-      // runtime_id is a mutable claimant, even for an already dispatched task:
-      // an older scheduler may have assigned a repooled R1 snapshot to R2.
-      // An immutable credential version is the only other ownership evidence.
-      // Env references, the current live profile, and parent runtime_id cannot
-      // prove which machine's original environment authenticated the snapshot.
-      if ((row.codex_profile === null) === (row.claude_profile === null)) continue;
-      const provider = row.codex_profile !== null ? "codex" : "claude";
-      if (row.provider && row.provider !== provider) continue;
-      let profile: unknown;
-      try { profile = JSON.parse((row.codex_profile ?? row.claude_profile)!); } catch { continue; }
-      if (!profile || typeof profile !== "object" || Array.isArray(profile)) continue;
-      const { auth_mode, credential_id } = profile as Record<string, unknown>;
-      if (auth_mode !== "api_key" || typeof credential_id !== "string"
-        || !/^rck_[a-zA-Z0-9_-]{1,100}$/.test(credential_id)) continue;
-      const credential = db.query(`SELECT c.runtime_id FROM multiremi_runtime_provider_credentials c
-        JOIN multiremi_runtimes r ON r.id = c.runtime_id
-        WHERE c.id = ? AND COALESCE(r.workspace_id, 'local') = ? AND r.provider = ?`)
-        .get(credential_id, row.workspace_id, provider) as { runtime_id: string } | null;
-      origin = credential?.runtime_id ?? null;
-    }
-    if (!origin) continue;
-    db.run("UPDATE multiremi_tasks SET execution_runtime_id = ? WHERE id = ? AND execution_runtime_id IS NULL", [origin, row.id]);
+  // Discover workspaces only outside the lock. Neither a snapshot nor its
+  // credential owner read here may be reused after an identity merge commits.
+  const workspaces = db.query(`SELECT DISTINCT workspace_id FROM multiremi_tasks
+    WHERE ${MISSING_TASK_EXECUTION_PROVENANCE_SQL} ORDER BY workspace_id`).all() as Array<{ workspace_id: string }>;
+  for (const { workspace_id: workspaceId } of workspaces) {
+    db.transaction(() => {
+      // Same row lock and order as StoreContext.lockWorkspaceRuntimeLifecycle.
+      // Hold it through both source resolution and writes: mergeRuntimeInto
+      // either moves the recovered source afterward or commits before we read
+      // the new credential owner. A missing workspace has no lockable owner.
+      if (!db.run("UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?", [workspaceId]).changes) return;
+      recoverTaskExecutionRuntimeWithinLock(db, workspaceId);
+    })();
   }
-  // Ambiguous snapshots remain unknown even while pinned or dispatched. The
-  // scheduler diagnoses them instead of silently choosing another host's key.
 }
 
 function ensureFeishuBotAgentRoutesSchema(db: SqlDatabase): void {

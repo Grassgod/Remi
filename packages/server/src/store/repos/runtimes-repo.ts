@@ -1,3 +1,4 @@
+import { recoverTaskExecutionRuntimeWithinLock } from "@multiremi/store/task-execution-provenance.js";
 import { catalogAllowsModel, runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
 import { runtimeConnectionModels } from "@multiremi/contracts/runtime-connection";
 import { modelThinkingLevels } from "@multiremi/contracts/model-thinking.js";
@@ -893,6 +894,11 @@ export class RuntimesRepo {
         return { agentsReassigned: 0, tasksReassigned: 0, deleted: false };
       }
       const workspaceId = lockedNewRuntime.workspaceId ?? "local";
+      // Resolve strong historical evidence before moving identity-affine state.
+      // In particular, a NULL-source transition may still encode the old ID;
+      // record it now so the provenance update below moves it with the host.
+      // Ambiguous env snapshots remain unknown rather than guessed from a pin.
+      recoverTaskExecutionRuntimeWithinLock(this.ctx.db, workspaceId);
       const canonicalDaemonId = cleanOptionalString(lockedNewRuntime.daemonId);
       if (canonicalDaemonId) {
         const legacyDaemonIds = new Set([
