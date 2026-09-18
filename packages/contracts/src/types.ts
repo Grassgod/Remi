@@ -88,11 +88,15 @@ export interface MultiremiAgent {
   max_concurrent_tasks?: number;
   executable: string | null;
   model: string | null;
+  fallbackModel?: string | null;
+  fallback_model?: string | null;
   allowedTools: string[];
   customEnv: Record<string, string>;
   customArgs: string[];
   mcpConfig: unknown | null;
   thinkingLevel: string | null;
+  fallbackThinkingLevel?: string | null;
+  fallback_thinking_level?: string | null;
   issueCreationRequiresProposal: boolean;
   issue_creation_requires_proposal?: boolean;
   role: MultiremiAgentRole;
@@ -125,6 +129,8 @@ export interface CreateAgentInput {
   max_concurrent_tasks?: number;
   executable?: string | null;
   model?: string | null;
+  fallbackModel?: string | null;
+  fallback_model?: string | null;
   allowedTools?: string[];
   allowed_tools?: string[];
   customEnv?: Record<string, string>;
@@ -135,6 +141,8 @@ export interface CreateAgentInput {
   mcp_config?: unknown | null;
   thinkingLevel?: string | null;
   thinking_level?: string | null;
+  fallbackThinkingLevel?: string | null;
+  fallback_thinking_level?: string | null;
   issueCreationRequiresProposal?: boolean;
   issue_creation_requires_proposal?: boolean;
   role?: MultiremiAgentRole;
@@ -161,6 +169,8 @@ export interface UpdateAgentInput {
   max_concurrent_tasks?: number;
   executable?: string | null;
   model?: string | null;
+  fallbackModel?: string | null;
+  fallback_model?: string | null;
   allowedTools?: string[];
   allowed_tools?: string[];
   customEnv?: Record<string, string>;
@@ -171,6 +181,8 @@ export interface UpdateAgentInput {
   mcp_config?: unknown | null;
   thinkingLevel?: string | null;
   thinking_level?: string | null;
+  fallbackThinkingLevel?: string | null;
+  fallback_thinking_level?: string | null;
   issueCreationRequiresProposal?: boolean;
   issue_creation_requires_proposal?: boolean;
   role?: MultiremiAgentRole;
@@ -186,8 +198,12 @@ export interface CreateAgentFromTemplateInput {
   runtime_id?: string | null;
   provider?: MultiremiAgentProvider | null;
   model?: string | null;
+  fallbackModel?: string | null;
+  fallback_model?: string | null;
   thinkingLevel?: string | null;
   thinking_level?: string | null;
+  fallbackThinkingLevel?: string | null;
+  fallback_thinking_level?: string | null;
   visibility?: string;
   maxConcurrentTasks?: number;
   max_concurrent_tasks?: number;

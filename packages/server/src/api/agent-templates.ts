@@ -190,6 +190,8 @@ export async function createAgentFromTemplate(
     avatarUrl: templateAvatarUrl(input),
     instructions: input.instructions ?? template.instructions,
     model: input.model ?? ((input.runtimeId ?? input.runtime_id ?? input.executionGroupId ?? input.execution_group_id) ? null : template.recommendedModel) ?? null,
+    fallbackModel: input.fallbackModel ?? input.fallback_model ?? null,
+    fallbackThinkingLevel: input.fallbackThinkingLevel ?? input.fallback_thinking_level ?? null,
     maxConcurrentTasks: normalizeTemplateMaxConcurrentTasks(input.maxConcurrentTasks ?? input.max_concurrent_tasks),
     issueCreationRequiresProposal: input.issueCreationRequiresProposal ?? input.issue_creation_requires_proposal,
     role: input.role,

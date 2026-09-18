@@ -3157,6 +3157,10 @@ export function runMigrations(db: SqlDatabase): void {
       SELECT group_id FROM multiremi_execution_group_members m WHERE m.runtime_id = multiremi_agents.runtime_id AND m.provider = multiremi_agents.provider
     ) WHERE execution_group_id IS NULL AND runtime_id IS NOT NULL`);
   });
+  runMigrationOnce(db, "20260919_agent_fallback_model", () => {
+    addColumnIfMissing(db, "multiremi_agents", "fallback_model TEXT");
+    addColumnIfMissing(db, "multiremi_agents", "fallback_thinking_level TEXT");
+  });
   backfillDefaultIssueSessions(db);
   backfillIssueKeys(db);
   migrateLegacyGithubProjection(db, legacyGithubTables);

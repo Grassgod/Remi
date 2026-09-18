@@ -31,7 +31,7 @@ export async function agent(positional: string[], options: CliOptions): Promise<
     const agentId = positional[1]?.trim();
     if (!agentId) {
       throw new Error(
-        "usage: multiremi agent edit <agent-id> [--name <name>] [--description <text>] [--instructions <text>] [--avatar-url <url>] [--provider claude|codex|antigravity] [--model <model>] [--thinking-level <level>] [--visibility private|workspace] [--max-concurrent-tasks <n>]",
+        "usage: multiremi agent edit <agent-id> [--name <name>] [--description <text>] [--instructions <text>] [--avatar-url <url>] [--provider claude|codex|antigravity] [--model <model>] [--fallback-model <model>] [--thinking-level <level>] [--fallback-thinking-level <level>] [--visibility private|workspace] [--max-concurrent-tasks <n>]",
       );
     }
     await agentEdit(agentId, options);
@@ -53,7 +53,9 @@ export async function agentEdit(agentId: string, options: CliOptions): Promise<v
 
   addStringBodyField(body, options, "avatar_url", "avatar-url");
   addStringBodyField(body, options, "model", "model");
+  addStringBodyField(body, options, "fallback_model", "fallback-model");
   addStringBodyField(body, options, "thinking_level", "thinking-level");
+  addStringBodyField(body, options, "fallback_thinking_level", "fallback-thinking-level");
 
   if (hasOption(options, "provider")) {
     const provider = rawStringOption(options, "provider");
@@ -81,7 +83,7 @@ export async function agentEdit(agentId: string, options: CliOptions): Promise<v
 
   if (Object.keys(body).length === 0) {
     throw new Error(
-      "no fields to edit; pass --name, --description, --instructions, --avatar-url, --provider, --model, --thinking-level, --visibility, or --max-concurrent-tasks",
+      "no fields to edit; pass --name, --description, --instructions, --avatar-url, --provider, --model, --fallback-model, --thinking-level, --fallback-thinking-level, --visibility, or --max-concurrent-tasks",
     );
   }
 

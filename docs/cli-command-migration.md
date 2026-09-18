@@ -11,6 +11,13 @@ machine first. See [Antigravity Runtime](antigravity.md) for model discovery,
 configuration and execution limits. Agent Plugin provider filters remain scoped
 to Claude/Codex.
 
+`remi agent create|update|template create` accept `--fallback-model <model>` and
+`--fallback-thinking-level <level>`. The backup must differ from the primary
+model and be executable on the same selected target; its reasoning level must
+belong to the backup model's catalog. Use `remi agent update <agent>
+--fallback-model ''` to clear the backup. Changing an Agent's provider, Runtime,
+execution group or workspace clears the saved backup unless supplied again.
+
 `remi agent create`, `remi agent template create <template>`, `remi agent update
 <agent>` and `remi agent default` accept `--execution-group <group-id>`.
 Use `remi runtime group list` to find groups and their online Runtime counts,
