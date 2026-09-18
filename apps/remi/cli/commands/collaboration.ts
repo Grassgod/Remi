@@ -30,6 +30,7 @@ import {
   encodePath,
   extractRecords,
   integerOption,
+  isRecord,
   outputMode,
   positional,
   queryOptions,
@@ -709,7 +710,7 @@ function taskCommandSpecs(): CommandSpec[] {
         method: "GET",
         path: `/api/multiremi/tasks/${encodePath(taskId)}`,
       });
-      const continued = extractRecords(response.data, ["task"])[0];
+      const continued = isRecord(response.data.task) ? response.data.task : response.data;
       const agentId = continued?.agentId ?? continued?.agent_id;
       if (typeof agentId !== "string" || !agentId.trim()) {
         throw new CliError("server", "continued task response is missing agentId");

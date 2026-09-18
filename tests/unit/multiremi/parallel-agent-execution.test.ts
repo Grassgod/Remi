@@ -86,7 +86,7 @@ describe("parallel agent execution", () => {
     const second = f.delegate(f.worker.id, "dlg_two");
     expect(f.store.claimTask(f.runtime.id)?.id).toBe(first.id);
     expect(f.store.claimTask(f.runtime.id)?.id).toBe(second.id);
-    f.store.buildTaskSessionProjection(first.id);
+    expect(f.store.buildTaskSessionProjection(first.id)?.mode).toBe("bootstrap");
     f.store.buildTaskSessionProjection(second.id);
     f.store.startTask(first.id);
     f.store.startTask(second.id);
@@ -101,6 +101,32 @@ describe("parallel agent execution", () => {
     expect(f.store.getTask(continued.id)?.sessionId).toBe("provider_one");
     expect(f.store.buildTaskSessionProjection(continued.id)?.mode).toBe("delta");
     expect(daemonTaskClaimResponse(f.store, f.store.getTaskWithAgent(continued.id)!).execution_scope).toBe("dlg_one");
+  });
+
+  it("serializes a continued task without blocking an independent lane", () => {
+    const f = fixture();
+    const first = f.delegate(f.worker.id, "dlg_serial");
+    expect(f.store.claimTask(f.runtime.id)?.id).toBe(first.id);
+    f.store.buildTaskSessionProjection(first.id);
+    f.store.startTask(first.id);
+
+    const continued = f.delegate(f.worker.id, "dlg_serial");
+    const independent = f.delegate(f.worker.id, "dlg_independent");
+    expect(f.store.claimTask(f.runtime.id)?.id).toBe(independent.id);
+    f.store.buildTaskSessionProjection(independent.id);
+    f.store.startTask(independent.id);
+    expect(f.store.claimTask(f.runtime.id)).toBeNull();
+
+    f.store.completeTask(first.id, {
+      output: "first round",
+      sessionId: "provider_serial",
+      workDir: "/tmp/serial",
+    });
+    expect(f.store.claimTask(f.runtime.id)?.id).toBe(continued.id);
+    expect(f.store.getTask(continued.id)?.sessionId).toBe("provider_serial");
+    expect(f.store.buildTaskSessionProjection(continued.id)?.mode).toBe("delta");
+    expect(f.store.getTask(independent.id)?.status).toBe("running");
+    expect(f.store.getTask(f.main.id)?.status).toBe("running");
   });
 
   it("keeps an infrastructure retry in its delegation without resetting a sibling checkpoint", () => {
@@ -118,6 +144,45 @@ describe("parallel agent execution", () => {
     expect(f.store.claimTask(f.runtime.id)?.id).toBe(retry.id);
     expect(daemonTaskClaimResponse(f.store, f.store.getTaskWithAgent(retry.id)!).execution_scope).toBe("dlg_retry");
     expect(f.store.getSessionAgentLane(first.issueSessionId!, f.worker.id, "dlg_stable")?.providerSessionId).toBe("stable_provider");
+  });
+
+  it("cold-bootstraps only the incompatible continuation lane and records why", () => {
+    const f = fixture();
+    const changed = f.delegate(f.worker.id, "dlg_changed");
+    const stable = f.delegate(f.worker.id, "dlg_still_stable");
+    expect(f.store.claimTask(f.runtime.id)?.id).toBe(changed.id);
+    expect(f.store.claimTask(f.runtime.id)?.id).toBe(stable.id);
+    f.store.buildTaskSessionProjection(changed.id);
+    f.store.buildTaskSessionProjection(stable.id);
+    f.store.startTask(changed.id);
+    f.store.startTask(stable.id);
+    f.store.completeTask(changed.id, { output: "changed", sessionId: "provider_changed", workDir: "/tmp/changed" });
+    f.store.completeTask(stable.id, { output: "stable", sessionId: "provider_stable", workDir: "/tmp/stable" });
+
+    const sessionId = changed.issueSessionId!;
+    const generation = f.store.getSessionAgentLane(sessionId, f.worker.id, "dlg_changed")!.generation;
+    db!.run(
+      "UPDATE multiremi_session_agent_lanes SET provider = 'codex' WHERE session_id = ? AND agent_id = ? AND execution_scope = ?",
+      [sessionId, f.worker.id, "dlg_changed"],
+    );
+    const continued = f.delegate(f.worker.id, "dlg_changed");
+    expect(f.store.getTask(continued.id)).toMatchObject({ sessionId: null, workDir: null });
+    expect(f.store.getSessionAgentLane(sessionId, f.worker.id, "dlg_changed")).toMatchObject({
+      generation: generation + 1,
+      providerSessionId: null,
+      cursorSeq: 0,
+    });
+    expect(f.store.getSessionAgentLane(sessionId, f.worker.id, "dlg_still_stable")?.providerSessionId)
+      .toBe("provider_stable");
+    expect(f.store.listIssueActivity(f.issue.id).find((entry) => entry.type === "session_agent_lane_reset")?.data)
+      .toMatchObject({
+        reason: "provider_changed",
+        issueSessionId: sessionId,
+        agentId: f.worker.id,
+        executionScope: "dlg_changed",
+      });
+    expect(f.store.claimTask(f.runtime.id)?.id).toBe(continued.id);
+    expect(f.store.buildTaskSessionProjection(continued.id)?.mode).toBe("bootstrap");
   });
 
   it("wakes the serial Leader as soon as one result is ready while QA still runs", () => {

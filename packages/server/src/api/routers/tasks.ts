@@ -161,6 +161,11 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
         issueSessionId: inheritedIssueSessionId,
       })
     );
+    // Keep continuation ancestry on the current Leader turn. A same-agent,
+    // same-delegation successor of the previous child is reserved for retry /
+    // self-continuation and intentionally suppresses that child's return in
+    // drainDelegationReturnsWithinWorkspaceLock. This is a new requested round,
+    // so every completed child Task must remain independently returnable.
     const createInput: CreateTaskInput = {
       ...publicInput,
       parentTaskId: currentTaskParentId(c),

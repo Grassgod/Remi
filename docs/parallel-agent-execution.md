@@ -14,7 +14,8 @@
 - Continued Tasks in one execution scope are serialized. A new rich-mention
   delegation gets a new scope and remains eligible to run in parallel. If the
   prior provider session or execution fingerprint is no longer resumable, the
-  existing lane reset path cold-bootstraps only that scope.
+  existing lane reset path cold-bootstraps only that scope and records a
+  `session_agent_lane_reset` Issue activity with the recovery reason.
 - Issue-free one-shot tasks (including Wiki builds) are independent. Private
   Chat turns remain serialized. Existing Agent and Runtime capacity limits,
   project device routing, permissions and workspace affinity still apply.

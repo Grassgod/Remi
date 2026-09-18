@@ -262,6 +262,7 @@ describe("native collaboration CLI contracts", () => {
       ["session.task.list", ["session", "task", "list", "iss_1", "ises_1", "--output", "json"]],
       ["session.task.create", ["session", "task", "create", "iss_1", "ises_1", "--agent", "agt_owner", "--prompt", "Continue", "--output", "json"]],
       ["task.get", ["task", "get", "tsk_1", "--output", "json"]],
+      ["task.continue", ["task", "continue", "tsk_1", "--prompt", "Follow-up", "--output", "json"]],
       ["task.steer", ["task", "steer", "tsk_1", "--content", "Follow-up", "--output", "json"]],
       ["task.steer.list", ["task", "steer", "list", "tsk_1", "--output", "json"]],
     ] as const;
@@ -269,6 +270,46 @@ describe("native collaboration CLI contracts", () => {
       expect(inventory.get(id)?.auth, id).toContain("task");
       expect(registry.resolve([...argv])?.spec.id).toBe(id);
     }
+  });
+
+  it("continues the exact delegated task through the registered command", async () => {
+    useCliEnv();
+    const spec = specById("task.continue");
+    const requests: Array<{ method: string; path: string; body?: unknown }> = [];
+    globalThis.fetch = capabilityFetch(spec.id, async (request) => {
+      const path = new URL(request.url).pathname;
+      requests.push({
+        method: request.method,
+        path,
+        ...(request.method === "POST" ? { body: await request.json() } : {}),
+      });
+      if (request.method === "GET") {
+        return Response.json({ task: { id: "tsk_previous", agentId: "agt_worker" } });
+      }
+      return Response.json({ task: { id: "tsk_continued", status: "queued" } }, { status: 201 });
+    });
+
+    const result = await capture(() => registryFor([spec]).execute([
+      ...spec.path,
+      "tsk_previous",
+      "--prompt",
+      "Fix the review feedback",
+      "--output",
+      "json",
+    ]));
+    expect(requests).toEqual([
+      { method: "GET", path: "/api/multiremi/tasks/tsk_previous" },
+      {
+        method: "POST",
+        path: "/api/multiremi/tasks",
+        body: {
+          agentId: "agt_worker",
+          prompt: "Fix the review feedback",
+          continueTaskId: "tsk_previous",
+        },
+      },
+    ]);
+    expect(JSON.parse(result.stdout)).toMatchObject({ task: { id: "tsk_continued" } });
   });
 
   it("keeps issue share capability management human-only", () => {
