@@ -155,6 +155,10 @@ describe("Multiremi API - workspace repositories", () => {
     // the size baseline and to report the per-directory counts it checked against.
     expect(store.getTask(firstBody.task_id)?.prompt).toContain("at most 20 body pages directly");
     expect(store.getTask(firstBody.task_id)?.prompt).toContain("report the per-directory page counts");
+    // A run that reports nothing looks exactly like a successful one, which is how
+    // 176 blocked builds stayed green. The agent template cannot carry this (it is
+    // capped at 4000 chars), so the build prompt has to.
+    expect(store.getTask(firstBody.task_id)?.prompt).toContain("remi wiki repository outcome");
     expect(store.getTask(firstBody.task_id)?.prompt).toContain("maintain a non-empty root index.md");
     expect(store.getTask(firstBody.task_id)?.prompt).toContain("append this run to the non-empty root log.md without rewriting its history");
     expect(store.getTask(firstBody.task_id)?.prompt).not.toContain("maintain root index.md and overview.md");
