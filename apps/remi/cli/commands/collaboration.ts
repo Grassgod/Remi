@@ -700,6 +700,31 @@ function taskCommandSpecs(): CommandSpec[] {
     ], async (invocation) => {
       await mutateAndRender(invocation, "POST", "/api/multiremi/tasks", await requestBody(invocation, { agentId: requiredOption(invocation, "agent"), prompt: stringOption(invocation, "prompt") ?? undefined, issueId: stringOption(invocation, "issue") ?? undefined, chatSessionId: stringOption(invocation, "chat") ?? undefined }));
     }),
+    nativeSpec("task.continue", ["task", "continue"], "Continue an existing delegated task in its provider session", "write", TASK, [refPositional("task")], [
+      { name: "prompt", type: "string", valueName: "text", description: "Continuation request", required: true },
+    ], async (invocation) => {
+      const taskId = positional(invocation, 0, "task");
+      const client = await clientFor(invocation);
+      const response = await client.request<Record<string, unknown>>({
+        method: "GET",
+        path: `/api/multiremi/tasks/${encodePath(taskId)}`,
+      });
+      const continued = extractRecords(response.data, ["task"])[0];
+      const agentId = continued?.agentId ?? continued?.agent_id;
+      if (typeof agentId !== "string" || !agentId.trim()) {
+        throw new CliError("server", "continued task response is missing agentId");
+      }
+      const created = await client.request({
+        method: "POST",
+        path: "/api/multiremi/tasks",
+        body: {
+          agentId,
+          prompt: requiredOption(invocation, "prompt"),
+          continueTaskId: taskId,
+        },
+      });
+      renderResource(invocation, created.data);
+    }),
     nativeSpec("task.cancel", ["task", "cancel"], "Cancel a task", "destructive", HUMAN_TASK, [refPositional("task")], [YES_OPTION,
       { name: "reason", type: "string", valueName: "text", description: "Organizer action criterion" },
     ], async (invocation) => {

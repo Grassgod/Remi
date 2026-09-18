@@ -1619,6 +1619,10 @@ export interface CreateTaskInput {
   delegation_id?: string | null;
   delegatedByAgentId?: string | null;
   delegated_by_agent_id?: string | null;
+  /** Public dispatch hint. The API validates the referenced delegated task and
+   * derives its lineage; callers cannot provide a delegation ID directly. */
+  continueTaskId?: string | null;
+  continue_task_id?: string | null;
   assignmentEventId?: string | null;
   assignment_event_id?: string | null;
   assignmentAuthorType?: string;

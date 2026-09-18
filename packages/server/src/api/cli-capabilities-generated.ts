@@ -3201,6 +3201,18 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "task.continue": {
+      "command": "remi task continue",
+      "auth": [
+        "task"
+      ],
+      "capability": "task.continue",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "task.cancel": {
       "command": "remi task cancel",
       "auth": [

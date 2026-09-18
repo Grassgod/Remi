@@ -4474,6 +4474,22 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "task.continue": {
+      "command": "remi task continue",
+      "aliases": [],
+      "auth": [
+        "task"
+      ],
+      "capability": "task.continue",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "task.cancel": {
       "command": "remi task cancel",
       "aliases": [],
