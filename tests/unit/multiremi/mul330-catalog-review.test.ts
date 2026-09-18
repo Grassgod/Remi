@@ -151,4 +151,19 @@ describe("MUL-330 independent mixed-runtime catalog regression", () => {
     expect(store.getTask(task.id)?.status).toBe("queued");
   });
 
+  it("uses actual fallback membership even when gateway inventory discovery is disabled", async () => {
+    const { store, fallback, app } = setup();
+    store.setRelayModelDiscovery("local", false);
+    const blocked = await app.request("/api/agents", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Unlisted", provider: "codex", model: "gateway-only", runtime_id: fallback.id }) });
+    expect(blocked.status).toBe(400);
+    const saved = store.createAgent({ name: "Saved unlisted", provider: "codex", model: "gateway-only" });
+    const task = store.createTask({ agentId: saved.id, prompt: "Cannot execute" });
+    expect(store.claimTask(fallback.id)).toBeNull();
+    expect(store.getTask(task.id)?.status).toBe("queued");
+    const allowed = store.createAgent({ name: "Actual fallback", provider: "codex", model: "bundled-model", thinkingLevel: "low" });
+    const runnable = store.createTask({ agentId: allowed.id, prompt: "Actual GPT" });
+    expect(store.claimTask(fallback.id)?.id).toBe(runnable.id);
+  });
+
 });

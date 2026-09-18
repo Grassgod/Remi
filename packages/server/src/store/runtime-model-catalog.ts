@@ -179,7 +179,10 @@ export function runtimeModelCompatibilityResponse(model: MultiremiRuntimeModel):
     id: model.id,
     label: model.label,
   };
-  if (model.catalog) response.catalog = model.catalog;
+  if (model.catalog) {
+    response.catalog = model.catalog;
+    response.execution_status = "available";
+  }
   if (model.provider) response.provider = model.provider;
   if (model.default) response.default = true;
   if (model.providerDefault) response.provider_default = true;
@@ -417,6 +420,8 @@ export function catalogAllowsModel(catalog: FleetProviderModelsResponse | undefi
   if (model?.execution_status === "available") return true;
   if (model?.execution_status === "unavailable" || model?.execution_status === "unknown") return false;
   if (catalog?.model_catalog_status === "unknown") return false;
+  // Disabling the display overlay must not disable a Runtime's actual selector contract.
+  if (catalog?.provider === "codex" && catalog.runtime_catalog_status) return Boolean(model?.catalog);
   if (catalog?.model_catalog_status === "ready" || catalog?.model_catalog_status === "error") return Boolean(model);
   return true;
 }
