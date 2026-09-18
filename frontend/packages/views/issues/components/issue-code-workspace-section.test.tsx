@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import type { IssueWorkspace } from "@multiremi/core/types";
@@ -8,11 +8,16 @@ import enIssues from "../../locales/en/issues.json";
 
 const TEST_RESOURCES = { en: { common: enCommon, issues: enIssues } };
 const mockApiObj = vi.hoisted(() => ({ getIssueWorkspace: vi.fn() }));
+const mockCopyText = vi.hoisted(() => vi.fn());
 
 vi.mock("@multiremi/core/api", () => ({
   api: mockApiObj,
   getApi: () => mockApiObj,
   setApiInstance: vi.fn(),
+}));
+
+vi.mock("@multiremi/ui/lib/clipboard", () => ({
+  copyText: mockCopyText,
 }));
 
 import { IssueCodeWorkspaceSection } from "./issue-code-workspace-section";
@@ -62,6 +67,28 @@ describe("IssueCodeWorkspaceSection", () => {
     expect(screen.getByTitle("build-host · claude")).toBeInTheDocument();
     expect(screen.getByTitle(WORKSPACE.root_path)).toBeInTheDocument();
     expect(screen.getByTitle(WORKSPACE.repos[0]!.worktree_path)).toBeInTheDocument();
+  });
+
+  it("shows copied state only when the clipboard fallback succeeds", async () => {
+    mockCopyText.mockReset();
+    mockApiObj.getIssueWorkspace.mockResolvedValue({ workspace: WORKSPACE });
+    mockCopyText.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { container } = render(
+      <QueryClientProvider client={qc}>
+        <I18nProvider resources={TEST_RESOURCES} locale="en">
+          <IssueCodeWorkspaceSection issueId="issue-31" />
+        </I18nProvider>
+      </QueryClientProvider>,
+    );
+    const copyBranch = (await screen.findAllByRole("button", { name: "Copy" }))[0]!;
+
+    fireEvent.click(copyBranch);
+    await waitFor(() => expect(mockCopyText).toHaveBeenCalledWith("agent/MUL-31"));
+    expect(container.querySelector(".lucide-check")).toBeNull();
+
+    fireEvent.click(copyBranch);
+    await waitFor(() => expect(container.querySelector(".lucide-check")).not.toBeNull());
   });
 
   it("labels intake directories as read-only snapshots instead of showing an empty branch", async () => {

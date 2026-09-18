@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import { createChatStore, registerChatStore } from "@multiremi/core/chat";
 import type { ChatSession } from "@multiremi/core/types";
@@ -92,6 +92,41 @@ beforeEach(() => {
     return backend.sessions[0];
   });
   backend.send.mockReset().mockResolvedValue({ task_id: "task-a", message_id: "message-a", created_at: "2026-09-17", supports_queue: true, queued: false });
+});
+
+describe("ChatWindow plain HTTP sends", () => {
+  const getRandomValues = globalThis.crypto.getRandomValues.bind(globalThis.crypto);
+
+  beforeEach(() => {
+    vi.stubGlobal("crypto", { getRandomValues });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("creates a new session and sends its first message without randomUUID", async () => {
+    const { client } = mount();
+    await waitFor(() => expect(client.getQueryData(["workspaces", "workspace-a", "agents"])).toBeDefined());
+
+    expect(globalThis.crypto.randomUUID).toBeUndefined();
+    fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
+
+    await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ agent_id: "agent-a", title: "Hello" }));
+    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined));
+  });
+
+  it("sends a follow-up in an existing session without randomUUID", async () => {
+    backend.sessions = [session];
+    const { client } = mount(true);
+    await waitFor(() => expect(client.getQueryData(["workspaces", "workspace-a", "agents"])).toBeDefined());
+
+    expect(globalThis.crypto.randomUUID).toBeUndefined();
+    fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
+
+    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined));
+    expect(backend.create).not.toHaveBeenCalled();
+  });
 });
 
 describe("ChatWindow project settings", () => {
