@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { prepareIssueWikiWorkspace } from "@daemon/agent-runtime/workspace/wiki.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
 import { buildTaskPrompt } from "@multiremi/prompt.js";
+import { writeProjectResourceContext } from "@daemon/agent-runtime/skills/ephemeral.js";
 
 const roots: string[] = [];
 
@@ -13,6 +14,14 @@ afterEach(() => {
 });
 
 describe("Issue Wiki workspace", () => {
+  test("leaves an unbound Chat directory untouched when no Project metadata exists", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-pure-chat-wiki-"));
+    roots.push(root);
+    const unbound = { ...task("unused", 1), chatSessionId: "chat_1", chatProjectId: null, issueId: null, issue: null, project: null, projectWikiDocs: [] };
+    expect(await prepareIssueWikiWorkspace(root, unbound)).toBeNull();
+    expect(readdirSync(root)).toEqual([]);
+  });
+
   test("materializes Wiki bodies and fast-forwards only clean files", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-issue-wiki-"));
     roots.push(root);
@@ -54,6 +63,47 @@ describe("Issue Wiki workspace", () => {
     await expect(prepareIssueWikiWorkspace(root, task("project two", 1, { projectId: "prj_2" })))
       .rejects.toThrow("belongs to prj_1, not prj_2");
     expect(readFileSync(join(root, "wiki", "guide.md"), "utf8")).toBe("project one\n");
+  });
+
+  test("fails closed on a Chat Wiki Project mismatch even with a matching binding marker", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-chat-wiki-project-"));
+    roots.push(root);
+    const first = { ...task("project one", 1), chatSessionId: "chat_1", chatProjectId: "prj_1", issueId: null, issue: null };
+    await prepareIssueWikiWorkspace(root, first);
+    writeProjectResourceContext(root, first);
+    writeFileSync(join(root, "wiki", "guide.md"), "unpublished edit\n");
+    writeFileSync(join(root, "wiki", "new-page.md"), "unpublished new page\n");
+    const manifestPath = join(root, ".multiremi", "wiki-base", "manifest.json");
+    const previousManifest = readFileSync(manifestPath, "utf8");
+    const next = {
+      ...task("project two", 1, { projectId: "prj_2" }),
+      chatSessionId: "chat_1", chatProjectId: "prj_2", issueId: null, issue: null,
+    };
+
+    await expect(prepareIssueWikiWorkspace(root, next)).rejects.toThrow("belongs to prj_1, not prj_2");
+    expect(readFileSync(join(root, "wiki", "guide.md"), "utf8")).toBe("unpublished edit\n");
+    expect(readFileSync(join(root, "wiki", "new-page.md"), "utf8")).toBe("unpublished new page\n");
+    expect(readFileSync(manifestPath, "utf8")).toBe(previousManifest);
+    expect(readFileSync(join(root, ".multiremi", "wiki-base", "files", "guide.md"), "utf8")).toBe("project one\n");
+    expect(JSON.parse(readFileSync(join(root, ".multiremi", "project", "resources.json"), "utf8")).project_id).toBe("prj_1");
+    expect(existsSync(join(root, ".multiremi", "wiki-archive"))).toBe(false);
+  });
+
+  test("leaves existing Chat Wiki and metadata untouched when the bound Project becomes unavailable", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-chat-project-unavailable-"));
+    roots.push(root);
+    const first = { ...task("project one", 1), chatSessionId: "chat_1", chatProjectId: "prj_1", issueId: null, issue: null };
+    await prepareIssueWikiWorkspace(root, first);
+    writeProjectResourceContext(root, first);
+    writeFileSync(join(root, "wiki", "guide.md"), "local work\n");
+    const manifestPath = join(root, ".multiremi", "wiki-base", "manifest.json");
+    const previousManifest = readFileSync(manifestPath, "utf8");
+    const result = await prepareIssueWikiWorkspace(root, { ...first, project: null, projectWikiDocs: [] });
+    expect(result).toBeNull();
+    expect(readFileSync(join(root, "wiki", "guide.md"), "utf8")).toBe("local work\n");
+    expect(readFileSync(manifestPath, "utf8")).toBe(previousManifest);
+    expect(JSON.parse(readFileSync(join(root, ".multiremi", "project", "resources.json"), "utf8")).project_id).toBe("prj_1");
+    expect(existsSync(join(root, ".multiremi", "wiki-archive"))).toBe(false);
   });
 
   test("rejects a tampered baseline and symbolic-link Wiki directory", async () => {

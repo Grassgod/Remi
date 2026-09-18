@@ -50,6 +50,10 @@ remi session archive status <issue-id> --json
 
 Session get 等命令同时需要 Issue ID 和 Session ID；成果 publish 的 Session 则是选项。成果类型为 `mr|report|deploy|decision|doc|other`，发布可复用结论并附实际证据，不把未完成的运行写成成果。参与者、消息、配置从 `session participant/message/config` 按需操作。
 
+需要基于既有讨论另开侧会话时，用 `remi session create <issue> --from <parent-session> --title <title>`；父会话须属于同一 Issue，侧会话不能继续派生。它冻结创建时的父会话快照，后续父消息不自动进入；继承内容只作参考，当前请求和后续本会话输入才是执行指令。侧会话不占用 Issue 工作区，Agent 不得从其中委派子任务；文件、Git 或配置修改须由用户在该侧会话明确提出。
+
+`remi session show <session>` 查看会话，`remi session inherited-context <session>` 查看最近一次领取记录的继承诊断。事件数量是截断前计数，实际上下文可能受 token 预算截断，尚未领取时不能声称继承内容已全部送入模型。
+
 `session archive verify/retry` 会执行校验或重试归档，不是单纯读取；先看 status 和 list，针对已有失败记录处理。Issue run-messages 接收的是 **Task ID**，也可直接使用 `task message list` 查询执行消息。
 
 ## 附件与分享

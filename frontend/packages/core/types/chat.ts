@@ -1,9 +1,9 @@
 export interface ChatSession {
-  project_id?: string | null;
   runtime_workspace_id?: string | null;
   id: string;
   workspace_id: string;
   agent_id: string;
+  project_id?: string | null;
   creator_id: string;
   title: string;
   status: "active" | "archived";
@@ -14,6 +14,13 @@ export interface ChatSession {
   last_message: { content: string; role: "user" | "assistant"; created_at: string } | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface CreateChatSessionInput {
+  runtime_workspace_id?: string | null;
+  agent_id: string;
+  title?: string;
+  project_id?: string | null;
 }
 
 export interface UpdateChatSessionInput {
@@ -117,6 +124,8 @@ export interface ChatPendingTask {
   task_id?: string;
   status?: string;
   created_at?: string;
+  /** Optional Project preparation status, shown until provider output starts. */
+  progress_summary?: string | null;
   /** Absent only in the short-lived optimistic cache seed. */
   supports_queue?: true;
   /** Follow-up messages only; the current head is represented by task_id. */

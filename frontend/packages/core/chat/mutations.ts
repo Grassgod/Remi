@@ -4,7 +4,7 @@ import { useWorkspaceId } from "../hooks";
 import { chatKeys } from "./queries";
 import { createLogger } from "../logger";
 import { getCurrentWsId } from "../platform/workspace-storage";
-import type { ChatSession, UpdateChatSessionInput } from "../types";
+import type { ChatSession, CreateChatSessionInput, UpdateChatSessionInput } from "../types";
 import { useChatStore } from "./index";
 import { removeChatSessionFromCache, updateChatSessionInCache } from "./session-cache";
 
@@ -16,7 +16,7 @@ export function useCreateChatSession() {
 
   return useMutation({
     onMutate: () => ({ wsId }),
-    mutationFn: (data: { agent_id: string; title?: string; project_id?: string | null; runtime_workspace_id?: string | null }) => {
+    mutationFn: (data: CreateChatSessionInput) => {
       logger.info("createChatSession.start", { agent_id: data.agent_id, titleLength: data.title?.length ?? 0 });
       return api.createChatSession(data);
     },
@@ -54,7 +54,7 @@ export function useMarkChatSessionRead() {
   });
 }
 
-/** Renaming, pinning, archive and restore share the authoritative session response. */
+/** Session settings share the authoritative session response. */
 export function useUpdateChatSession() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();

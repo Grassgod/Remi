@@ -102,6 +102,41 @@ describe("ThinkingPropRow", () => {
     cleanup();
   });
 
+  it("lets the default model select common reported efforts on an older daemon", async () => {
+    mockListFleetModels.mockResolvedValue(fleet([
+      { ...CLAUDE_MODEL, default: false },
+      { id: "opus", label: "Opus", thinking: { supported_levels: [{ value: "high", label: "High" }] } },
+      { id: "haiku", label: "Haiku" },
+    ]));
+    const { onChange } = renderRow({ model: "", executionGroupId: null });
+    await screen.findByText("Follow runtime default");
+    fireEvent.click(screen.getByRole("button"));
+    fireEvent.click(await screen.findByText("High"));
+    expect(onChange).toHaveBeenCalledWith("high");
+    expect(screen.queryByText("Low")).toBeNull();
+  });
+
+  it("prefers the provider default capability to concrete model metadata", async () => {
+    mockListFleetModels.mockResolvedValue({ providers: [{ provider: "claude", online_runtime_count: 1,
+      models: [{ ...CLAUDE_MODEL, default: false }],
+      default_thinking: { supported_levels: [{ value: "max", label: "Max" }] },
+    }] });
+    const { onChange } = renderRow({ model: "" });
+    await screen.findByText("Follow runtime default");
+    fireEvent.click(screen.getByRole("button"));
+    expect(screen.queryByText("High")).toBeNull();
+    fireEvent.click(await screen.findByText("Max"));
+    expect(onChange).toHaveBeenCalledWith("max");
+  });
+
+  it("does not replace a reported empty default capability with a heuristic", async () => {
+    mockListFleetModels.mockResolvedValue({ providers: [{ provider: "claude", online_runtime_count: 1,
+      models: [CLAUDE_MODEL], default_thinking: { supported_levels: [] },
+    }] });
+    renderRow({ model: "" });
+    expect(await screen.findByText("Reasoning options not reported")).toBeInTheDocument();
+  });
+
   it("shows unknown capabilities instead of hiding a supported engine's row", async () => {
     mockListFleetModels.mockResolvedValue(fleet([NO_THINKING_MODEL]));
     renderRow({ model: "gemini-2.5-pro", value: "" });

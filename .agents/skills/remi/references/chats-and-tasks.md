@@ -12,6 +12,8 @@ remi chat message create <chat-id> --content-file <request.md> --json
 
 继续已有话题先读取对应 Chat；用户要求新的会话时才 create。项目与 `--runtime-workspace` 是互斥工作位置，选择见 [Runtime](runtimes.md)。create 保存会话，message create 发送工作内容并可能启动执行，记录返回的 Task ID。
 
+选择 Project 后，使用项目指令、资源、Memory 和 Wiki；有项目 `local_directory` 时在所选真实目录执行，否则 daemon 自动准备项目显式声明的仓库，已有 worktree 后续直接复用。Runtime 工作区保持注册目录，不自动检出仓库。仓库准备失败时先读返回的提示，确需重试或刷新再用 `remi repo checkout`；目录选择和项目失效行为见 [Chat 契约](../../../../docs/chat.md#项目仓库与工作目录)。
+
 Chat 与 Issue 独立：在聊天中创建 Issue 只创建工作项，Chat 保持自己的上下文，不接收 Issue 活动播报。需要查看 Issue 进展时使用 [Issue 查询](issues-and-sessions.md)；飞书群 Issue 话题保留自己的归属与更新入口。
 
 `pin/unpin` 只改变置顶，`archive` 会停止未完成运行并使 Chat 只读，`restore` 恢复可用状态；不要用 archive 实现“稍后再看”。

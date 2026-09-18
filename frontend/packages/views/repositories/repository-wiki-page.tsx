@@ -34,6 +34,15 @@ import { PageHeader } from "../layout/page-header";
 import { useT } from "../i18n";
 import { KnowledgeProvenance } from "../knowledge/knowledge-provenance";
 
+/**
+ * Repository Wiki rows are keyed by path, but a record can reach the client with
+ * it missing. Fall back the same way Project Wiki does so one bad row degrades to
+ * a synthesized path instead of an unusable tree.
+ */
+export function docWikiPath(doc: Pick<RepositoryWikiDoc, "path" | "slug" | "id">): string {
+  return doc.path || `${doc.slug || doc.id}.md`;
+}
+
 export function RepositoryWikiStatusBadge({ status }: { status: RepositoryWikiStatus }) {
   const { t } = useT("repositories");
   const quiet = status === "healthy";
@@ -99,10 +108,14 @@ export function RepositoryWikiPage({ repositoryId, wikiPath }: { repositoryId: s
   const repository = repositoriesQuery.data?.repositories.find((item) => item.id === repositoryId);
   const summary = summariesQuery.data?.find((item) => item.repository_id === repositoryId);
   const docs = useMemo(() => docsQuery.data ?? [], [docsQuery.data]);
-  const selected = docs.find((doc) => doc.path === wikiPath || doc.slug === wikiPath || doc.id === wikiPath) ?? docs[0] ?? null;
+  // The server orders by path, and "_" sorts before lowercase letters, so falling
+  // back to docs[0] opened a repository on whatever page sorted first — a leftover
+  // probe page in practice. The curated reading map is the right landing page.
+  const defaultDoc = docs.find((doc) => docWikiPath(doc) === "index.md") ?? docs[0] ?? null;
+  const selected = docs.find((doc) => docWikiPath(doc) === wikiPath || doc.slug === wikiPath || doc.id === wikiPath) ?? defaultDoc;
   const treePages = useMemo(() => docs.map((doc) => ({
     id: doc.id,
-    path: doc.path,
+    path: docWikiPath(doc),
     title: doc.title,
     searchText: `${doc.summary ?? ""}\n${doc.tags.join(" ")}`,
   })), [docs]);
@@ -288,7 +301,7 @@ export function RepositoryWikiPage({ repositoryId, wikiPath }: { repositoryId: s
               <article className="mx-auto max-w-3xl px-6 py-6">
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0">
-                    <WikiPathBreadcrumb path={selected.path} />
+                    <WikiPathBreadcrumb path={docWikiPath(selected)} />
                     <h1 className="mt-1 text-xl font-semibold">{selected.title}</h1>
                     {selected.summary && <p className="mt-1 text-sm text-muted-foreground">{selected.summary}</p>}
                   </div>

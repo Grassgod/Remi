@@ -727,6 +727,7 @@ export class MultiremiDaemonClient {
   async reportRuntimeModelListResult(runtimeId: string, requestId: string, result: {
     status: string;
     models?: MultiremiRuntimeModel[];
+    model_profile?: RuntimeCodexProfile | RuntimeClaudeProfile | null;
     supported?: boolean;
     error?: string;
   }): Promise<void> {
@@ -737,10 +738,11 @@ export class MultiremiDaemonClient {
     runtimeId: string,
     models: MultiremiRuntimeModel[],
     signal?: AbortSignal,
+    modelProfile?: RuntimeCodexProfile | RuntimeClaudeProfile | null,
   ): Promise<MultiremiRuntimeModel[]> {
     const response = await this.put<{ models: MultiremiRuntimeModel[] }>(
       `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/models`,
-      { models, supported: true },
+      { models, supported: true, model_profile: modelProfile },
       signal,
     );
     return response.models;
@@ -1439,7 +1441,6 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
     execution_scope: typeof raw.execution_scope === "string" ? raw.execution_scope : "",
     holdsWorkspace: booleanOrDefault(raw.holds_workspace ?? raw.holdsWorkspace, true),
     chatSessionId: stringOrNull(raw.chat_session_id ?? raw.chatSessionId),
-    chatProjectId: stringOrNull(raw.chat_project_id ?? raw.chatProjectId),
     autopilotRunId: stringOrNull(raw.autopilot_run_id ?? raw.autopilotRunId),
     triggerCommentId: stringOrNull(raw.trigger_comment_id ?? raw.triggerCommentId),
     triggerSummary: stringOrNull(raw.trigger_summary ?? raw.triggerSummary),
@@ -1468,6 +1469,7 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
     priorWorkDir: stringOrNull(raw.prior_work_dir ?? raw.priorWorkDir ?? raw.work_dir ?? raw.workDir),
     authToken: stringOrNull(raw.auth_token ?? raw.authToken),
     chatMessage: stringOrNull(raw.chat_message ?? raw.chatMessage),
+    chatProjectId: stringOrNull(raw.chat_project_id ?? raw.chatProjectId),
     boundIssueUpdates: Array.isArray(raw.bound_issue_updates)
       ? raw.bound_issue_updates.filter((value: unknown): value is string => typeof value === "string")
       : Array.isArray(raw.boundIssueUpdates)
@@ -1516,6 +1518,7 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
     issue: normalizeDaemonClaimIssue(raw.issue),
     issueSession: raw.issue_session ?? raw.issueSession ?? null,
     sessionProjection: raw.session_projection ?? raw.sessionProjection ?? null,
+    inheritedSessionProjection: raw.inherited_session_projection ?? raw.inheritedSessionProjection ?? null,
     issueSessionResults: Array.isArray(raw.issue_session_results)
       ? raw.issue_session_results
       : Array.isArray(raw.issueSessionResults)
@@ -1533,6 +1536,17 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
     repos: normalizeRepoList(Array.isArray(raw.repos) ? raw.repos : []),
     usage: Array.isArray(raw.usage) ? raw.usage : [],
   };
+  if (Object.hasOwn(raw, "chat_auto_checkout_repos") || Object.hasOwn(raw, "chatAutoCheckoutRepos")) {
+    const keepChatRepos = !normalized.runtimeWorkspaceId && normalized.chatSessionId && !normalized.issueId && !normalized.issue
+      && normalized.chatProjectId && normalized.chatProjectId === normalized.project?.id
+      && normalized.project.workspaceId === normalized.workspaceId;
+    const chatRepos = raw.chat_auto_checkout_repos ?? raw.chatAutoCheckoutRepos;
+    normalized.chatAutoCheckoutRepos = keepChatRepos && Array.isArray(chatRepos)
+      ? normalizeRepoList(chatRepos)
+      : [];
+    // Do not leave a rejected snake_case alias available to daemon field helpers.
+    delete normalized.chat_auto_checkout_repos;
+  }
   return normalized as MultiremiTaskWithAgent;
 }
 

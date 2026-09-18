@@ -1,5 +1,6 @@
 import type { MultiremiRuntime, MultiremiRuntimeModel } from "@multiremi/contracts/types.js";
 import { runtimeConnectionModels } from "@multiremi/contracts/runtime-connection";
+import { commonThinkingLevels, modelThinkingLevels } from "@multiremi/contracts/model-thinking.js";
 import type { MultiremiStore } from "./store.js";
 
 /** Minimal data source shared by API catalogs and dispatch capability checks. */
@@ -40,6 +41,7 @@ export interface FleetModelResponse {
   label: string;
   provider?: string;
   default?: boolean;
+  provider_default?: boolean;
   thinking?: FleetModelThinkingResponse;
 }
 
@@ -47,17 +49,23 @@ export interface FleetProviderModelsResponse {
   provider: string;
   online_runtime_count: number;
   models: FleetModelResponse[];
+  default_thinking?: FleetModelThinkingResponse;
 }
 
 export function fleetModelsResponse(runtimes: MultiremiRuntime[], callerOwnerId: string): FleetProviderModelsResponse[] {
   const usable = runtimes.filter(
     (r) => r.visibility === "public" || (r.ownerId ?? "local") === (callerOwnerId ?? "local"),
   );
-  const buckets = new Map<string, { online: number; models: Map<string, MultiremiRuntimeModel> }>();
+  const buckets = new Map<string, {
+    online: number;
+    models: Map<string, MultiremiRuntimeModel>;
+    defaultLevels: FleetModelThinkingLevelResponse[][];
+    hasDefaultReport: boolean;
+  }>();
   const bucket = (provider: string) => {
     let entry = buckets.get(provider);
     if (!entry) {
-      entry = { online: 0, models: new Map() };
+      entry = { online: 0, models: new Map(), defaultLevels: [], hasDefaultReport: false };
       buckets.set(provider, entry);
     }
     return entry;
@@ -78,6 +86,7 @@ export function fleetModelsResponse(runtimes: MultiremiRuntime[], callerOwnerId:
       const engine = runtime.provider !== "any" ? runtime.provider : MODEL_VENDOR_TO_ENGINE[model.provider ?? ""];
       if (!engine) continue;
       const entry = bucket(engine);
+      if (model.providerDefault) continue;
       const existing = entry.models.get(model.id);
       if (!existing || (model.default && !existing.default)) entry.models.set(model.id, model);
     }
@@ -85,7 +94,17 @@ export function fleetModelsResponse(runtimes: MultiremiRuntime[], callerOwnerId:
   for (const runtime of usable) {
     if (runtime.status !== "online") continue;
     for (const [provider, entry] of buckets) {
-      if (runtime.provider === provider || runtime.provider === "any") entry.online += 1;
+      if (runtime.provider === provider || runtime.provider === "any") {
+        entry.online += 1;
+        const models = (runtime.models ?? []).filter((model) => runtime.provider !== "any"
+          || MODEL_VENDOR_TO_ENGINE[model.provider ?? ""] === provider);
+        const reported = models.find((model) => model.providerDefault);
+        entry.hasDefaultReport ||= Boolean(reported);
+        entry.defaultLevels.push(modelThinkingLevels(
+          models.filter((model) => !model.providerDefault).map(runtimeModelCompatibilityResponse), "",
+          reported ? { supported_levels: reported.thinking?.supportedLevels ?? reported.thinking?.supported_levels ?? [] } : undefined,
+        ));
+      }
     }
   }
   return [...buckets.entries()]
@@ -94,6 +113,7 @@ export function fleetModelsResponse(runtimes: MultiremiRuntime[], callerOwnerId:
       provider,
       online_runtime_count: entry.online,
       models: [...entry.models.values()].map(runtimeModelCompatibilityResponse),
+      ...(entry.hasDefaultReport ? { default_thinking: { supported_levels: commonThinkingLevels(entry.defaultLevels) } } : {}),
     }));
 }
 
@@ -104,6 +124,7 @@ export function runtimeModelCompatibilityResponse(model: MultiremiRuntimeModel):
   };
   if (model.provider) response.provider = model.provider;
   if (model.default) response.default = true;
+  if (model.providerDefault) response.provider_default = true;
   if (model.thinking) {
     response.thinking = {
       supported_levels: (model.thinking.supportedLevels ?? model.thinking.supported_levels ?? []).map((level) => ({
@@ -252,6 +273,7 @@ export function overlayGatewayModels(
       provider: engine,
       online_runtime_count: existing?.online_runtime_count ?? 0,
       models,
+      ...(existing?.default_thinking ? { default_thinking: existing.default_thinking } : {}),
     });
   }
   return [...byEngine.values()].sort((a, b) => a.provider.localeCompare(b.provider));
@@ -270,6 +292,8 @@ export function runtimeTargetModelCatalog(
     const models = profile
       ? runtimeConnectionModels(profile, entry.provider, entry.models)
       : overlayGatewayModels(store, workspaceId, [entry]).find((candidate) => candidate.provider === entry.provider)?.models ?? [];
-    return { ...entry, online_runtime_count: runtime.status === "online" ? 1 : 0, models };
+    return { ...entry, online_runtime_count: runtime.status === "online" ? 1 : 0, models,
+      ...(profile ? { default_thinking: { supported_levels: modelThinkingLevels(models, "") } } : {}),
+    };
   });
 }

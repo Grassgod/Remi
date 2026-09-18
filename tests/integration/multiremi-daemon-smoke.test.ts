@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
@@ -25,6 +25,31 @@ import { MultiremiRepoCache } from "@multiremi/repo-cache.js";
 
 let db: Database | null = null;
 let workDir: string | null = null;
+
+/**
+ * Pin the provider base homes at an empty temp dir for this file.
+ *
+ * The runtime model probe resolves its base home from `CLAUDE_CONFIG_DIR` /
+ * `CODEX_HOME` and falls back to `~/.claude` / `~/.codex`. `bun test` now runs with
+ * the repo's env namespace stripped (tests/setup/hermetic-env.ts, MUL-318), so
+ * without this the probe would read the developer's real Claude credentials and
+ * report a credential-link error instead of the expected probe failure — green in
+ * CI (no `~/.claude`), red on any machine that has actually logged in.
+ */
+let providerHomeBase: string | null = null;
+
+beforeAll(() => {
+  providerHomeBase = mkdtempSync(join(tmpdir(), "multiremi-daemon-provider-home-"));
+  process.env.CLAUDE_CONFIG_DIR = join(providerHomeBase, "claude");
+  process.env.CODEX_HOME = join(providerHomeBase, "codex");
+});
+
+afterAll(() => {
+  delete process.env.CLAUDE_CONFIG_DIR;
+  delete process.env.CODEX_HOME;
+  if (providerHomeBase) rmSync(providerHomeBase, { recursive: true, force: true });
+  providerHomeBase = null;
+});
 
 afterEach(() => {
   db?.close();
@@ -61,6 +86,7 @@ describe("Bun Multiremi daemon smoke", () => {
     const previousHome = process.env.CLAUDE_CONFIG_DIR;
     process.env.CLAUDE_CONFIG_DIR = baseHome;
     let sends = 0;
+    let sideWorkDir: string | null = null;
     const daemon = new MultiremiDaemon({
       serverUrl: `http://127.0.0.1:${server.port}`, token: token.token, daemonId: "workspace-laptop", runtimeName: "Local workspace test",
       provider: "claude", workspaceId: "local", daemonPort: 0, pollIntervalMs: 20, gcEnabled: false,
@@ -68,9 +94,14 @@ describe("Bun Multiremi daemon smoke", () => {
       providerFactory: messageProviderFactory({ text: "Local workspace verified", sessionId: "local-session", requestId: "local-request",
         onSend: (prompt, options) => {
           sends++;
-          expect(options.cwd).toBe(cwd);
-          expect(options.env?.LOCAL_DEPENDENCY).toBe("retained");
-          expect(readFileSync(join(options.env!.CLAUDE_CONFIG_DIR!, "CLAUDE.md"), "utf8")).toContain("PRIVATE_PARENT_CONTEXT");
+          expect(options.cwd).toBe(sideWorkDir ?? cwd);
+          if (sideWorkDir) {
+            expect(options.env?.LOCAL_DEPENDENCY).toBeUndefined();
+            expect(prompt).not.toContain("## Runtime Workspace");
+          } else {
+            expect(options.env?.LOCAL_DEPENDENCY).toBe("retained");
+            expect(readFileSync(join(options.env!.CLAUDE_CONFIG_DIR!, "CLAUDE.md"), "utf8")).toContain("PRIVATE_PARENT_CONTEXT");
+          }
           expect(prompt).not.toContain("PRIVATE_PARENT_CONTEXT");
           expect(existsSync(join(cwd, ".multiremi"))).toBe(false);
           expect(existsSync(join(cwd, "wiki"))).toBe(false);
@@ -96,6 +127,28 @@ describe("Bun Multiremi daemon smoke", () => {
         expect(store.getTask(task.id)?.workDir).toBe(cwd);
       }
       expect(sends).toBe(2);
+      const sideIssue = store.createIssue({ title: "Discuss outside the user directory", runtime_workspace_id: workspace.id });
+      const parent = store.getOrCreateDefaultIssueSession(sideIssue.id);
+      const side = store.createIssueSession(sideIssue.id, { title: "Side", parentSessionId: parent.id });
+      sideWorkDir = join(daemonState, ".runtime", side.id, agent.id, "1", "work");
+      // Emulate an older server returning the parent directory in a side claim.
+      const client = (daemon as any).client;
+      const claim = client.claimTask.bind(client);
+      const claimSpy = spyOn(client, "claimTask").mockImplementation(async (id: string) => {
+        const claimed = await claim(id);
+        return claimed?.holdsWorkspace === false
+          ? { ...claimed, runtimeWorkspaceId: workspace.id, runtimeWorkspace: workspace }
+          : claimed;
+      });
+      try {
+        const sideTask = store.createTask({ agentId: agent.id, issueId: sideIssue.id, issueSessionId: side.id, prompt: "Discuss only" });
+        expect(sideTask.runtimeWorkspaceId).toBeNull();
+        await waitForCondition(() => ["completed", "failed"].includes(store.getTask(sideTask.id)?.status ?? ""), 10_000);
+        expect(store.getTask(sideTask.id)?.error).toBeNull();
+        expect(store.getTask(sideTask.id)?.status).toBe("completed");
+        expect(store.getTask(sideTask.id)?.workDir).toBe(sideWorkDir);
+      } finally { claimSpy.mockRestore(); }
+      expect(sends).toBe(3);
       expect(readFileSync(join(cwd, "local-state.txt"), "utf8")).toBe("private ignored state");
       expect(existsSync(join(root, "repo-cache"))).toBe(false);
       store.runtimeWorkspaces.archive(workspace.id);
@@ -176,6 +229,10 @@ describe("Bun Multiremi daemon smoke", () => {
   });
 
   it("maps ACP model-specific effort capabilities to runtime model metadata", () => {
+    expect(runtimeModelsFromAcpCapabilities("claude", [{ id: "default", label: "Default", default: true,
+      providerDefault: true, effort: { supportedLevels: [] } }])).toEqual([
+      { id: "default", label: "Default", default: true, providerDefault: true, provider: "anthropic", thinking: { supportedLevels: [] } },
+    ]);
     expect(runtimeModelsFromAcpCapabilities("codex", [
       {
         id: "gpt-probe",
@@ -1228,7 +1285,9 @@ describe("Bun Multiremi daemon smoke", () => {
     try {
       await withTimeout(bothStarted.promise, 5_000, "Issue delegations serialized in daemon");
       expect(homes.size).toBe(2);
-      expect(tasks.map((task) => store.getTask(task.id)?.status)).toEqual(["running", "running"]);
+      // `dispatched -> running` is written back asynchronously by the daemon, so poll instead of
+      // reading the status right after both providers started.
+      await waitForCondition(() => tasks.every((task) => store.getTask(task.id)?.status === "running"), 5_000);
       for (const task of tasks) expect([...contexts.values()].some((value) => value.includes(task.id))).toBe(true);
       expect(store.getIssueWorkspace(issue.id)?.rootPath).toBe(join(workDir, "workspaces", "issues", issue.key));
       release.resolve();

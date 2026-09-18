@@ -3133,9 +3133,26 @@ export class IssuesRepo {
     const targets = this.resolveCommentMentionTargets(comment.body, issue.workspaceId);
     if (!targets.length) return [];
 
+    const session = comment.issueSessionId
+      ? this.ctx.issueSessions().getIssueSession(comment.issueSessionId) : null;
+    const sourceTask = comment.taskId ? this.ctx.tasks().getTask(comment.taskId) : null;
+    const sourceSession = sourceTask?.issueSessionId
+      ? this.ctx.issueSessions().getIssueSession(sourceTask.issueSessionId) : null;
+    // The user can still ask any agent a question in a side conversation;
+    // only model-authored dispatch is forbidden, including deferred mentions.
+    if (comment.authorType === "agent" && (
+      (session && session.inheritMode !== "none")
+      || (sourceSession && sourceSession.inheritMode !== "none")
+    )) {
+      for (const target of targets) {
+        const agent = this.ctx.resolveRunnableAgentForAssignee(target.assigneeType, target.assigneeId);
+        this.recordCommentMentionSkipped(issue, comment, agent, target, "side_session_delegation_blocked");
+      }
+      return [];
+    }
+
     const tasks: MultiremiTask[] = [];
     const seenAgents = new Set<string>();
-    const sourceTask = comment.taskId ? this.ctx.tasks().getTask(comment.taskId) : null;
     const taskAuthoredByCommentAgent = comment.authorType === "agent"
       && !!comment.authorId
       && sourceTask?.agentId === comment.authorId
@@ -3255,7 +3272,7 @@ export class IssuesRepo {
     comment: MultiremiIssueComment,
     agent: MultiremiAgent | null,
     target: { assigneeType: "agent" | "squad"; assigneeId: string },
-    reason: "self_mention" | "unsupported_direction" | "unlinked_agent_comment" | "target_unavailable",
+    reason: "self_mention" | "unsupported_direction" | "unlinked_agent_comment" | "target_unavailable" | "side_session_delegation_blocked",
   ): void {
     this.ctx.appendIssueActivity(issue.id, {
       actorType: "system",

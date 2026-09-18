@@ -1,4 +1,4 @@
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import { assertRuntimeWorkspaceAccess } from "../helpers/runtime-workspaces.js";
 import {
   canCurrentUserAccessAgent,
@@ -28,6 +28,16 @@ import type { RouterDeps } from "./deps.js";
 
 export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
   const { store } = deps;
+  const denySideSessionDispatch = (c: Context): Response | null => {
+    const sourceTaskId = currentTaskAccessToken(c)?.taskId;
+    const sourceTask = sourceTaskId ? store.getTask(sourceTaskId) : null;
+    const sourceSession = sourceTask?.issueSessionId ? store.getIssueSession(sourceTask.issueSessionId) : null;
+    // The source credential governs both ordinary dispatch and supervisor
+    // redispatch, regardless of the caller-selected target or delegation fields.
+    return sourceSession && sourceSession.inheritMode !== "none"
+      ? c.json({ error: "Agent delegation is not allowed from side sessions" }, 403)
+      : null;
+  };
 
   app.get("/api/multiremi/tasks", (c) => {
     const status = c.req.query("status") as any;
@@ -46,6 +56,8 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     return c.json({ tasks: tasks.map(taskPublicResponse) });
   });
   app.post("/api/multiremi/tasks", async (c) => {
+    const sideDenied = denySideSessionDispatch(c);
+    if (sideDenied) return sideDenied;
     const body = await readJson<CreateTaskInput>(c);
     // Gate on the target agent: without this, any member could create a task
     // for another workspace's (private) agent and drive its machine +
@@ -223,6 +235,8 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/multiremi/tasks/:id/inspection", inspectTaskRoute);
   app.get("/api/tasks/:id/inspection", inspectTaskRoute);
   const redispatchTaskRoute = async (c: any) => {
+    const sideDenied = denySideSessionDispatch(c);
+    if (sideDenied) return sideDenied;
     const task = taskFromParam(store, c, "id");
     if (!task) return c.json({ error: "task not found" }, 404);
     const taskDenied = denyCurrentUserWorkspaceAccess(c, store, task.workspaceId);

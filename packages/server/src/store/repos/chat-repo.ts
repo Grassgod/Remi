@@ -79,13 +79,9 @@ export class ChatRepo {
     if (agent.workspaceId !== workspaceId) throw new Error("Agent belongs to another workspace");
     const runtimeWorkspaceId = input.runtimeWorkspaceId ?? input.runtime_workspace_id ?? null;
     if (runtimeWorkspaceId) new RuntimeWorkspacesRepo(this.ctx).require(runtimeWorkspaceId, workspaceId);
-    const projectId = cleanOptionalString(input.projectId ?? input.project_id);
+    const projectId = this.validateProjectBinding(workspaceId,
+      Object.hasOwn(input, "projectId") ? input.projectId : input.project_id);
     if (projectId && runtimeWorkspaceId) throw new RuntimeWorkspaceError("Choose either a project or a runtime workspace");
-    if (projectId) {
-      const project = this.ctx.projects().getProject(projectId);
-      if (!project || project.workspaceId !== workspaceId) throw new RuntimeWorkspaceError("Project not found", 404);
-      if (project.archivedAt) throw new RuntimeWorkspaceError("Project is archived", 409);
-    }
     const id = input.id ?? createId("chat");
     if (this.getChatSession(id) || this.ctx.db.query("SELECT id FROM multiremi_tasks WHERE chat_session_id = ? LIMIT 1").get(id)) {
       throw new ChatConflictError("Chat session id has already been used");
@@ -101,6 +97,18 @@ export class ChatRepo {
     );
     const session = this.getChatSession(id)!;
     return session;
+  }
+
+  private validateProjectBinding(workspaceId: string, value: unknown): string | null {
+    if (value == null) return null;
+    if (typeof value !== "string" || !value.trim()) {
+      throw new ChatValidationError("project_id must be a Project ID or null");
+    }
+    const project = this.ctx.projects().getProject(value.trim());
+    if (!project || project.workspaceId !== workspaceId || project.archivedAt) {
+      throw new ChatValidationError("Project must exist, belong to this workspace, and not be archived");
+    }
+    return project.id;
   }
 
   listChatSessions(workspaceId?: string | null, options: { creatorId?: string | null; includeArchived?: boolean } = {}): MultiremiChatSession[] {
@@ -128,6 +136,9 @@ export class ChatRepo {
   }
 
   updateChatSession(id: string, input: UpdateChatSessionInput): MultiremiChatSession {
+    if (Object.hasOwn(input, "projectId") || Object.hasOwn(input, "project_id")) {
+      throw new ChatValidationError("A Chat Project can only be selected when creating the session");
+    }
     if (Object.hasOwn(input, "issueId") || Object.hasOwn(input, "issue_id")) {
       throw new ChatValidationError("Chat sessions cannot be bound to an Issue");
     }
@@ -140,7 +151,6 @@ export class ChatRepo {
       if (!current) throw new Error(`Chat session not found: ${id}`);
       const location = input as UpdateChatSessionInput & CreateChatSessionInput;
       for (const [field, saved] of [
-        ["projectId", current.projectId], ["project_id", current.projectId],
         ["runtimeWorkspaceId", current.runtimeWorkspaceId], ["runtime_workspace_id", current.runtimeWorkspaceId],
       ] as const) {
         if (Object.hasOwn(location, field) && (location[field] ?? null) !== (saved ?? null)) {
@@ -168,6 +178,7 @@ export class ChatRepo {
       title: updated.title,
       status: updated.status,
       pinned: updated.pinned,
+      project_id: updated.projectId,
       updated_at: updated.updatedAt,
     });
     return updated;
@@ -367,7 +378,10 @@ export class ChatRepo {
       const events = chatMessagesAsSessionEvents(messages, session, task.id, currentLineageTaskIds);
       const detachedChatIssue = (task.issueId && topicIssueId !== task.issueId)
         || (task.issueSessionId && !topicIssueId);
-      const warmProviderSessionId = detachedChatIssue ? null : task.sessionId;
+      // Workspace validation may reject an active lease's old directory without
+      // mutating its immutable execution snapshot. Projection must use that
+      // same live decision, otherwise a cold provider receives only a delta.
+      const warmProviderSessionId = detachedChatIssue ? null : this.ctx.tasks().getTaskWithAgent(task.id)?.sessionId ?? null;
       const tokenBudget = resolveProjectionTokenBudget({
         provider: agent?.provider,
         model: agent?.model,
@@ -614,12 +628,12 @@ function chatMessagesAsSessionEvents(
 
 function toChatSession(row: Row): MultiremiChatSession {
   return {
-    projectId: nullableString(row.project_id),
     runtimeWorkspaceId: nullableString(row.runtime_workspace_id),
     id: String(row.id),
     workspaceId: String(row.workspace_id ?? "local"),
     creatorId: nullableString(row.creator_id) ?? "local",
     agentId: String(row.agent_id),
+    projectId: nullableString(row.project_id),
     title: String(row.title ?? ""),
     status: String(row.status ?? "active") as MultiremiChatSession["status"],
     sessionId: nullableString(row.session_id),

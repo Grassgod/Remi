@@ -10,11 +10,13 @@
  */
 
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve, relative, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, relative, sep } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { readdirSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { lstat, readFile, realpath } from "node:fs/promises";
+import { selectChatLocalDirectory } from "@multiremi/contracts/chat-local-directory.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
-import { resolveWorkDir } from "./persistent.js";
+import { isPathWithinWorkspacesRoot, resolveWorkDir } from "./persistent.js";
 import { acquireWorkspaceSupervisorLease, WorkspaceSupervisorOwnedError } from "./process-owner.js";
 
 export interface ResolvedTaskWorkDir {
@@ -25,6 +27,8 @@ export interface ResolvedTaskWorkDir {
   // that must already exist; daemon-owned Task/session paths are created.
   ensureDir: boolean;
   release?: () => void;
+  /** The inherited provider must not resume after its directory was rejected. */
+  resetSession?: true;
 }
 
 export class LocalDirectoryError extends Error {
@@ -68,21 +72,49 @@ export class LocalPathLocker {
       return this.releaser(realPath, entry, taskId);
     }
 
-    await onWait(entry.holderId);
     return new Promise<() => void>((resolve, reject) => {
+      const holderId = entry.holderId;
+      let notified = false;
+      let settled = false;
+      let grantedRelease: (() => void) | null = null;
+      const fail = (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        const index = entry.queue.indexOf(waiter);
+        if (index >= 0) entry.queue.splice(index, 1);
+        signal.removeEventListener("abort", waiter.abort);
+        // The prior holder may have released while the notification was in
+        // flight. Release a promoted waiter too, otherwise the path leaks.
+        grantedRelease?.();
+        reject(error);
+      };
+      const finish = () => {
+        if (settled || !notified || !grantedRelease) return;
+        settled = true;
+        signal.removeEventListener("abort", waiter.abort);
+        resolve(grantedRelease);
+      };
       const waiter: LocalPathLockWaiter = {
         taskId,
-        resolve,
-        reject,
-        signal,
-        abort: () => {
-          const index = entry.queue.indexOf(waiter);
-          if (index >= 0) entry.queue.splice(index, 1);
-          reject(new LocalDirectoryError("local_directory: wait cancelled"));
+        resolve: (release) => {
+          if (settled) return release();
+          grantedRelease = release;
+          finish();
         },
+        reject: fail,
+        signal,
+        abort: () => fail(new LocalDirectoryError("local_directory: wait cancelled")),
       };
       signal.addEventListener("abort", waiter.abort, { once: true });
+      // Enqueue before any asynchronous wait notification: the holder can
+      // release during that notification, and later arrivals must stay FIFO.
       entry.queue.push(waiter);
+      Promise.resolve().then(() => {
+        if (!settled) return onWait(holderId);
+      }).then(() => {
+        notified = true;
+        finish();
+      }, fail);
     });
   }
 
@@ -94,7 +126,6 @@ export class LocalPathLocker {
       if (entry.holderId !== taskId) return;
       while (entry.queue.length) {
         const next = entry.queue.shift()!;
-        next.signal.removeEventListener("abort", next.abort);
         if (next.signal.aborted) continue;
         entry.holderId = next.taskId;
         next.resolve(this.releaser(realPath, entry, next.taskId));
@@ -165,6 +196,25 @@ export async function resolveTaskWorkDir(
   // checkout; they are retained here only for non-Issue compatibility while
   // archived local_directory projects are removed.
   const assignment = task.issueId ? null : findLocalDirectoryAssignment(task, opts.daemonIds);
+  if (task.chatSessionId) {
+    // A changed assignment never redirects an existing Chat into another user
+    // directory. It either retains its current, locked assignment, or stays in
+    // a verified daemon-owned directory. Reject stale paths before any writes.
+    const matchesAssignment = Boolean(task.workDir && assignment
+      && resolve(task.workDir) === assignment.absPath
+      && resolveLocalRealPath(task.workDir) === assignment.realPath);
+    if (task.workDir && !matchesAssignment) {
+      const owned = await isDaemonOwnedChatPath(task.workDir, opts.workspacesRoot);
+      const resolved = resolveWorkDir(owned ? task : { ...task, workDir: null }, opts.workspacesRoot);
+      await assertDaemonOwnedChatPath(resolved.workDir, opts.workspacesRoot);
+      return { ...resolved, localDirectory: false, ...(!owned ? { resetSession: true as const } : {}) };
+    }
+    if (!assignment) {
+      const resolved = resolveWorkDir(task, opts.workspacesRoot);
+      await assertDaemonOwnedChatPath(resolved.workDir, opts.workspacesRoot);
+      return { ...resolved, localDirectory: false };
+    }
+  }
   if (!assignment) {
     const resolved = resolveWorkDir(task, opts.workspacesRoot);
     return {
@@ -188,23 +238,77 @@ export async function resolveTaskWorkDir(
   };
 }
 
+/** Resolve existing ancestors too, so a not-yet-created child cannot escape via a symlink. */
+async function prospectiveRealPath(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    // A dangling symlink must not be interpreted as a missing owned directory.
+    try { if ((await lstat(path)).isSymbolicLink()) throw new Error("dangling workspace symlink"); }
+    catch (statError) { if ((statError as NodeJS.ErrnoException).code !== "ENOENT") throw statError; }
+    const parent = dirname(path);
+    if (parent === path) throw error;
+    return join(await prospectiveRealPath(parent), basename(path));
+  }
+}
+
+async function isDaemonOwnedChatPath(path: string, root: string): Promise<boolean> {
+  if (!isPathWithinWorkspacesRoot(path, root)) return false;
+  try {
+    const [realRoot, realPath] = await Promise.all([
+      prospectiveRealPath(resolve(root)), prospectiveRealPath(resolve(path)),
+    ]);
+    if (!isPathWithinWorkspacesRoot(realPath, realRoot)) return false;
+    // User local_directory roots may themselves live below workspacesRoot.
+    // Their durable marker takes precedence over lexical containment, including
+    // when a previously managed path is a symlink into such a user directory.
+    for (let current = realPath; ; current = dirname(current)) {
+      try {
+        const metadataDir = join(current, ".multiremi");
+        const marker = join(metadataDir, "gc.json");
+        if ((await lstat(metadataDir)).isSymbolicLink() || (await lstat(marker)).isSymbolicLink()) return false;
+        const meta = JSON.parse(await readFile(marker, "utf8"));
+        if (meta.local_directory) return false;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
+      }
+      if (current === realRoot) break;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function assertDaemonOwnedChatPath(path: string, root: string): Promise<void> {
+  if (!await isDaemonOwnedChatPath(path, root)) {
+    throw new LocalDirectoryError("Chat workspace is not daemon-owned; refusing to write to a user directory");
+  }
+}
+
 function findLocalDirectoryAssignment(task: AgentTask, daemonIds: string[]): LocalDirectoryAssignment | null {
   const ids = new Set(daemonIds.map((id) => id.trim()).filter(Boolean));
   if (!ids.size) return null;
-  let assignment: LocalDirectoryAssignment | null = null;
+  let localResourceCount = 0;
   for (const resource of task.projectResources) {
     if (resource.resourceType !== "local_directory") continue;
     const ref = resource.resourceRef ?? {};
     const daemonId = stringField(ref.daemonId ?? ref.daemon_id);
     if (!daemonId) throw new LocalDirectoryError("local_directory: resource_ref missing daemon_id");
     if (!ids.has(daemonId)) continue;
-    if (assignment) {
+    if (++localResourceCount > 1) {
       throw new LocalDirectoryError("local_directory: project has multiple local_directory resources for this daemon");
     }
-    const absPath = normalizeLocalDirectoryPath(ref.localPath ?? ref.local_path);
-    assignment = { absPath, realPath: resolveLocalRealPath(absPath) };
   }
-  return assignment;
+  // Chat routing selects globally. Non-Chat tasks (e.g. run-only schedules)
+  // retain their existing daemon-local eligibility without another selector.
+  const resources = task.chatSessionId ? task.projectResources : task.projectResources.filter((resource) =>
+    ids.has(stringField(resource.resourceRef?.daemonId ?? resource.resourceRef?.daemon_id) ?? ""));
+  const selected = selectChatLocalDirectory(resources);
+  if (!selected || !ids.has(selected.daemon)) return null;
+  const absPath = normalizeLocalDirectoryPath(selected.path);
+  return { absPath, realPath: resolveLocalRealPath(absPath) };
 }
 
 function normalizeLocalDirectoryPath(value: unknown): string {

@@ -1,4 +1,5 @@
 import { getExecutionGroup, listExecutionGroups } from "@multiremi/store/execution-groups.js";
+import type { RuntimeConnectionProfile } from "@multiremi/contracts/runtime-connection";
 import { type SqlDatabase, openMultiremiDatabase } from "@multiremi/store/db/postgres.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
 import { daemonRuntimeId, isTerminalStatus } from "@multiremi/store/helpers.js";
@@ -321,6 +322,7 @@ import type {
   MultiremiSessionEvent,
   MultiremiSessionParticipant,
   MultiremiSessionProjection,
+  MultiremiSessionInheritedContext,
   MultiremiSessionResult,
   MultiremiSystemEvent,
   MultiremiSquad,
@@ -2750,8 +2752,8 @@ runMigrations(this.db);
     return this.runtimes.listRuntimeModels(runtimeId);
   }
 
-  updateRuntimeModels(runtimeId: string, models: MultiremiRuntimeModel[]): MultiremiRuntimeModel[] {
-    return this.runtimes.updateRuntimeModels(runtimeId, models);
+  updateRuntimeModels(runtimeId: string, models: MultiremiRuntimeModel[], modelProfile?: RuntimeConnectionProfile | null): MultiremiRuntimeModel[] {
+    return this.runtimes.updateRuntimeModels(runtimeId, models, modelProfile);
   }
 
   createRuntimeModelListRequest(runtimeId: string): MultiremiRuntimeModelListRequest {
@@ -3488,6 +3490,10 @@ runMigrations(this.db);
     return this.sessions.getIssueSession(id);
   }
 
+  getSessionInheritedContext(sessionId: string): MultiremiSessionInheritedContext | null {
+    return this.sessions.getSessionInheritedContext(sessionId);
+  }
+
   listIssueSessions(issueId: string, includeArchived = false): MultiremiIssueSession[] {
     return this.sessions.listIssueSessions(issueId, includeArchived);
   }
@@ -3841,6 +3847,18 @@ runMigrations(this.db);
     deduplicated: boolean;
   } {
     return this.knowledge.createSubmission(input);
+  }
+
+  reportRepositoryWikiOutcome(input: import("./repos/knowledge-repo.js").ReportRepositoryWikiOutcomeInput) {
+    return this.knowledge.reportRepositoryOutcome(input);
+  }
+
+  repositoryWikiTaskOutcome(workspaceId: string, repositoryId: string, taskId: string) {
+    return this.knowledge.repositoryTaskOutcome(workspaceId, repositoryId, taskId);
+  }
+
+  repositoryWikiObservability(workspaceId: string) {
+    return this.knowledge.repositoryObservability(workspaceId);
   }
 
   getKnowledgeSubmission(id: string): MultiremiKnowledgeSubmission | null {

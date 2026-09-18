@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { FeishuStreamingSession } from "@connectors/feishu/streaming.js";
 import { FeishuChannel } from "@connectors/feishu/channel.js";
 import { buildFinalCard } from "@connectors/feishu/streaming/card-elements.js";
+import { buildCardHeader } from "@connectors/feishu/send.js";
 import { compactModelName, formatCardStats, formatExecutionSubtitle } from "@connectors/feishu/card-metadata.js";
 import { readContextUsage, readExecutionModel } from "@shared/agent-execution.js";
 import type { TaskStreamEvent } from "@connectors/base.js";
@@ -165,5 +166,43 @@ describe("Feishu card execution identity and context", () => {
     }
     const noContext = buildFinalCard({ text: "Answer", stats: "54s · 3 tools" }) as any;
     expect(noContext.body.elements.at(-1).columns[1].elements[0].icon.token).toBe("setting-inter_outlined");
+  });
+});
+
+/** The title is how a reader tells one provider session apart from the next. */
+describe("Feishu card session identity", () => {
+  const title = (options?: Parameters<typeof buildCardHeader>[0]) =>
+    String((buildCardHeader(options) as any).title.content).replace(/ {2}\d{2}:\d{2}$/, "");
+
+  it("labels a card by its provider session and keeps the label stable", () => {
+    expect(title({ sessionId: "sess_same", agentName: "Remi" })).toBe("龟速的 Remi·Gadus");
+    expect(title({ sessionId: "sess_same", agentName: "Remi" })).toBe(title({ sessionId: "sess_same", agentName: "Remi" }));
+    expect(title({ sessionId: "sess_a", agentName: "Remi" })).not.toBe(title({ sessionId: "sess_b", agentName: "Remi" }));
+  });
+
+  it("substitutes the agent's own name instead of a hardcoded Remi", () => {
+    expect(title({ sessionId: "sess_same", agentName: "小助手" })).toBe("龟速的 小助手·Gadus");
+    expect(title({ sessionId: null, agentName: "小助手" })).toMatch(/^.+的 小助手$/);
+    expect(title({ agentName: "小助手" })).toBe("小助手");
+  });
+
+  it("shows a newborn name until the session exists, and no session label without one", () => {
+    expect(title({ sessionId: null, agentName: "Remi" })).toMatch(/^.+的 Remi$/);
+    expect(title({ sessionId: null, agentName: "Remi" })).not.toContain("·");
+    // `undefined` is the command/notification card case: plain agent name.
+    expect(title({ agentName: "Remi" })).toBe("Remi");
+    expect(title()).toBe("Remi");
+  });
+
+  it("still honours a pre-resolved registry display name", () => {
+    expect(title({ sessionId: "sess_same", displayName: "开心的 Remi·Vulpes", agentName: "Remi" })).toBe("开心的 Remi·Vulpes");
+  });
+
+  it("puts the session label in the title and leaves the subtitle to the execution identity", async () => {
+    const h = harness();
+    await h.channel.handleTaskStream("oc_chat", "topic1", stream([execution]), { ...meta, sessionId: null });
+    const final = h.cards.at(-1);
+    expect(final.header.title.content).toStartWith("龟速的 Remi·Gadus  ");
+    expect(final.header.subtitle.content).toBe("Remi Claude opus5");
   });
 });

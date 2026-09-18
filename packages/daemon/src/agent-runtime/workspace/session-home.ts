@@ -9,6 +9,7 @@ import { AgentPluginError } from "../agent-plugins/types.js";
 import { sanitizeProviderConfigValue } from "../provider-config-sanitize.js";
 import { mergeClaudeSettings, mergeCodexSessionConfig } from "../relay-sync.js";
 import { removeOwnedDirectorySync } from "./safe-remove.js";
+import { SIDE_CONVERSATION_INSTRUCTIONS } from "../prompts/side-conversation.js";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 
 const SESSION_HOME_MARKER = ".multiremi-session-home.json";
@@ -39,6 +40,8 @@ export interface IssueSessionRuntimeRoot {
 }
 
 export interface PrepareIssueSessionProviderHomeOptions {
+  /** Codex ACP has no system-prompt channel; install side policy in its private config. */
+  sideConversation?: boolean;
   /** A Codex Plugin installer already created and seeded this exact home. */
   codexPluginInstalled?: boolean;
   baseClaudeConfigDir?: string;
@@ -463,7 +466,16 @@ async function reconcileIssueSessionProviderConfig(
     options.relayFragment ?? "",
     options.codexRelayUsesEnvApiKey === true,
   );
-  await writePrivateFileIfChanged(target, merged);
+  if (options.sideConversation) {
+    const config = parseToml(merged);
+    const inheritedInstructions = typeof config.developer_instructions === "string"
+      ? config.developer_instructions : "";
+    config.developer_instructions = [inheritedInstructions, SIDE_CONVERSATION_INSTRUCTIONS]
+      .filter(Boolean).join("\n\n");
+    await writePrivateFileIfChanged(target, stringifyToml(config));
+  } else {
+    await writePrivateFileIfChanged(target, merged);
+  }
 }
 
 interface ProviderConfigBaseline {

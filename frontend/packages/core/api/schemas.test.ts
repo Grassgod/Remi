@@ -557,7 +557,7 @@ describe("TimelinePageSchema", () => {
 describe("IssueSessionListSchema", () => {
   const opts = { endpoint: "GET /api/issues/:id/sessions" };
 
-  it("defaults optional participant and summary fields for older responses", () => {
+  it("defaults participant, summary, and inheritance fields for older responses", () => {
     const parsed = parseWithFallback([
       {
         id: "sess_1",
@@ -573,8 +573,64 @@ describe("IssueSessionListSchema", () => {
       id: "sess_1",
       is_default: false,
       holds_workspace: true,
+      parent_session_id: null,
+      inherit_mode: "none",
+      inherit_cutoff_seq: null,
+      inherited_event_count: 0,
       summary: null,
       participants: [],
+    });
+  });
+
+  it("preserves side-session inheritance metadata without confusing the cutoff and count", () => {
+    const parsed = parseWithFallback([
+      {
+        id: "sess_side",
+        issue_id: "issue_1",
+        workspace_id: "ws_1",
+        title: "Review",
+        status: "active",
+        holds_workspace: false,
+        parent_session_id: "sess_main",
+        inherit_mode: "snapshot",
+        inherit_cutoff_seq: 42,
+        inherited_event_count: 38,
+        created_at: "2026-09-18T00:00:00Z",
+        updated_at: "2026-09-18T00:00:00Z",
+      },
+    ], IssueSessionListSchema, EMPTY_ISSUE_SESSIONS, opts);
+
+    expect(parsed[0]).toMatchObject({
+      id: "sess_side",
+      holds_workspace: false,
+      parent_session_id: "sess_main",
+      inherit_mode: "snapshot",
+      inherit_cutoff_seq: 42,
+      inherited_event_count: 38,
+    });
+  });
+
+  it("keeps sessions visible when a newer server returns an unknown inheritance mode", () => {
+    const parsed = parseWithFallback([
+      {
+        id: "sess_side",
+        issue_id: "issue_1",
+        workspace_id: "ws_1",
+        title: "Review",
+        status: "active",
+        parent_session_id: "sess_main",
+        inherit_mode: "future-mode",
+        inherited_event_count: 12,
+        created_at: "2026-09-18T00:00:00Z",
+        updated_at: "2026-09-18T00:00:00Z",
+      },
+    ], IssueSessionListSchema, EMPTY_ISSUE_SESSIONS, opts);
+
+    expect(parsed[0]).toMatchObject({
+      id: "sess_side",
+      parent_session_id: "sess_main",
+      inherit_mode: "none",
+      inherited_event_count: 12,
     });
   });
 
@@ -806,6 +862,18 @@ describe("RuntimeDirectoryScanRequestSchema", () => {
 
 describe("FleetModelsResponseSchema", () => {
   const opts = { endpoint: "GET /api/models (test)" };
+
+  it("validates optional provider default thinking, including an explicit empty set", () => {
+    for (const supported_levels of [[], [{ value: "high", label: "High" }]]) {
+      const parsed = parseWithFallback({ providers: [{ provider: "claude", default_thinking: { supported_levels } }] },
+        FleetModelsResponseSchema, EMPTY_FLEET_MODELS, opts);
+      expect(parsed.providers[0]?.default_thinking?.supported_levels).toEqual(supported_levels);
+    }
+    for (const default_thinking of [null, {}, { supported_levels: null }, { supported_levels: [{ value: 42 }] }]) {
+      expect(parseWithFallback({ providers: [{ provider: "claude", default_thinking }] },
+        FleetModelsResponseSchema, EMPTY_FLEET_MODELS, opts)).toBe(EMPTY_FLEET_MODELS);
+    }
+  });
 
   it("parses a well-formed catalog and defaults missing counts / models", () => {
     const parsed = parseWithFallback(

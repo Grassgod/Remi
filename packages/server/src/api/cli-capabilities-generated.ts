@@ -1594,6 +1594,57 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "wiki.repository.mv": {
+      "command": "remi wiki repository mv",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.repository.mv",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "wiki.repository.merge": {
+      "command": "remi wiki repository merge",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.repository.merge",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "wiki.repository.outcome": {
+      "command": "remi wiki repository outcome",
+      "auth": [
+        "task"
+      ],
+      "capability": "wiki.repository.outcome",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "wiki.repository.restore": {
+      "command": "remi wiki repository restore",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.repository.restore",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "wiki.repository.revisions": {
       "command": "remi wiki repository revisions",
       "auth": [
@@ -2069,6 +2120,32 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "task"
       ],
       "capability": "session.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "session.show": {
+      "command": "remi session show",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "session.show",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "session.inherited-context": {
+      "command": "remi session inherited-context",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "session.inherited-context",
       "output": [
         "table",
         "json",

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, statSync, appendFileSync, chmodSync, copyFileSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, type Dirent } from "node:fs";
-import { basename, dirname, isAbsolute, join } from "node:path";
+import { existsSync, mkdirSync, statSync, lstatSync, realpathSync, appendFileSync, chmodSync, copyFileSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, type Dirent } from "node:fs";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import type { RepoSpec } from "@daemon/contracts/types.js";
 import { createLogger } from "@shared/logger.js";
@@ -96,6 +96,12 @@ export interface MultiremiWorktreeState {
   dirty: boolean;
   hasChanges: boolean;
   hasUnpushedCommits: boolean;
+}
+
+export interface ManagedWorktreeParams {
+  workspaceId: string;
+  repoUrl: string;
+  workDir: string;
 }
 
 const AGENT_GIT_EXCLUDE_PATTERNS = [".agent_context", ".multiremi", "CLAUDE.md", "AGENTS.md", ".claude", ".opencode"];
@@ -245,6 +251,46 @@ export class MultiremiRepoCache {
   lookup(workspaceId: string, repoUrl: string): string | null {
     const barePath = this.barePath(workspaceId, repoUrl);
     return isBareRepo(barePath) ? barePath : null;
+  }
+
+  expectedWorktreePath(workDir: string, repoUrl: string): string {
+    const path = resolve(workDir, worktreeDirectoryName(repoUrl));
+    if (dirname(path) !== resolve(workDir)) throw new Error("repository name escapes the workspace");
+    return path;
+  }
+
+  /** Inspect local registration only; occupied paths must never be adopted as another repo. */
+  hasWorktree(params: ManagedWorktreeParams): boolean {
+    const path = this.expectedWorktreePath(params.workDir, params.repoUrl);
+    const info = lstatSync(path, { throwIfNoEntry: false });
+    if (!info) return false;
+    if (info.isSymbolicLink() || !info.isDirectory()
+      || lstatSync(params.workDir).isSymbolicLink()) {
+      throw new Error(`unsafe managed worktree path: ${path}`);
+    }
+    const barePath = this.barePath(params.workspaceId, params.repoUrl);
+    const gitFile = lstatSync(join(path, ".git"), { throwIfNoEntry: false });
+    if (!gitFile?.isFile() || gitFile.isSymbolicLink()
+      || !isBareRepo(barePath) || lstatSync(barePath).isSymbolicLink()) {
+      throw new Error(`path is not a registered worktree for the requested repository: ${path}`);
+    }
+    const commonDir = git(path, ["rev-parse", "--git-common-dir"]);
+    if (realpathSync(resolve(path, commonDir)) !== realpathSync(barePath)) {
+      throw new Error(`worktree belongs to another repository: ${path}`);
+    }
+    // Validate the standard worktree backlink directly. Older supported Git
+    // versions lack `worktree list -z`; line parsing would mishandle paths
+    // containing newlines, so verify the exact registered path instead.
+    const gitDir = resolve(path, git(path, ["rev-parse", "--git-dir"]));
+    const registeredFile = join(gitDir, "gitdir");
+    const registeredInfo = lstatSync(registeredFile, { throwIfNoEntry: false });
+    if (lstatSync(gitDir).isSymbolicLink() || lstatSync(join(barePath, "worktrees")).isSymbolicLink()
+      || dirname(realpathSync(gitDir)) !== realpathSync(join(barePath, "worktrees"))
+      || !registeredInfo?.isFile() || registeredInfo.isSymbolicLink()
+      || realpathSync(readFileSync(registeredFile, "utf8").replace(/\r?\n$/, "")) !== realpathSync(join(path, ".git"))) {
+      throw new Error(`worktree registration does not match its path: ${path}`);
+    }
+    return true;
   }
 
   async createWorktree(params: MultiremiWorktreeParams): Promise<MultiremiWorktreeResult> {

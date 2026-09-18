@@ -310,6 +310,30 @@ describe("RepositoryWikiPage build state", () => {
       .toHaveTextContent("Runbook");
   });
 
+  it("opens on index.md instead of whatever page sorts first", () => {
+    // The server orders by path and "_" sorts before lowercase letters, so a
+    // leftover probe page used to win the landing slot over the reading map.
+    mockDocs.value = [
+      doc({ id: "doc-probe", path: "_probe_batch_test.md", slug: "_probe_batch_test", title: "Probe Page", body: "probe body" }),
+      doc({ id: "doc-index", path: "index.md", slug: "index", title: "Reading Map", body: "the reading map body" }),
+    ];
+    renderPage();
+
+    expect(screen.getByText("the reading map body")).toBeInTheDocument();
+    expect(screen.queryByText("probe body")).not.toBeInTheDocument();
+  });
+  it("still renders the tree when a doc arrives without a path", () => {
+    // One malformed record must not blank the whole repository Wiki: the schema
+    // degrades the field and the page synthesizes a path from slug or id.
+    mockDocs.value = [
+      doc({ id: "doc-broken", path: "", slug: "", title: "Pathless Page", body: "pathless body" }),
+      doc({ id: "doc-index", path: "index.md", slug: "index", title: "Reading Map", body: "the reading map body" }),
+    ];
+    renderPage();
+
+    expect(screen.getByText("the reading map body")).toBeInTheDocument();
+    expect(screen.getAllByText("Pathless Page").length).toBeGreaterThan(0);
+  });
   it("forces the mobile Wiki drawer to the specified 280px width", async () => {
     const user = userEvent.setup();
     renderPage();

@@ -34,6 +34,29 @@ describe("ChatEndpoints contracts", () => {
     await expect(endpointsWithResponse({ created: true }).createChatSession({ agent_id: "agent-1" })).rejects.toBeInstanceOf(ApiContractError);
   });
 
+  it("sends an optional project only when creating the session", async () => {
+    const linked = { ...session, project_id: "project-a" };
+    await expect(endpointsWithResponse(linked).createChatSession({ agent_id: "agent-1", project_id: "project-a" })).resolves.toEqual(linked);
+    expect(fetch).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      body: JSON.stringify({ agent_id: "agent-1", project_id: "project-a" }),
+    }));
+  });
+
+  it("retains runtime workspace selection and rejects an unacknowledged or malformed binding", async () => {
+    const linked = { ...session, runtime_workspace_id: "rws-a" };
+    await expect(endpointsWithResponse(linked).createChatSession({ agent_id: "agent-1", runtime_workspace_id: "rws-a" })).resolves.toEqual(linked);
+    expect(fetch).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      body: JSON.stringify({ agent_id: "agent-1", runtime_workspace_id: "rws-a" }),
+    }));
+    await expect(endpointsWithResponse(session).createChatSession({ agent_id: "agent-1", runtime_workspace_id: "rws-a" })).rejects.toBeInstanceOf(ApiContractError);
+    await expect(endpointsWithResponse({ ...session, runtime_workspace_id: 123 }).getChatSession("chat-1")).rejects.toBeInstanceOf(ApiContractError);
+  });
+
+  it("rejects malformed project data and unacknowledged project selection on create", async () => {
+    await expect(endpointsWithResponse(session).createChatSession({ agent_id: "agent-1", project_id: "project-a" })).rejects.toBeInstanceOf(ApiContractError);
+    await expect(endpointsWithResponse({ ...session, project_id: 123 }).getChatSession("chat-1")).rejects.toBeInstanceOf(ApiContractError);
+  });
+
   it("reads summaries while preserving unknown display enums", async () => {
     const api = endpointsWithResponse([{ ...session, status: "future-status", last_message: { ...session.last_message, role: "future-role" } }]);
     const sessions = await api.listChatSessions({ status: "all" });
@@ -78,6 +101,17 @@ describe("ChatEndpoints contracts", () => {
     await expect(endpointsWithResponse(pending).getPendingChatTask("chat-1")).resolves.toEqual(pending);
     await expect(endpointsWithResponse({ ...pending, queued_tasks: [{ ...queuedTask, attachment_ids: null }] }).getPendingChatTask("chat-1")).rejects.toBeInstanceOf(ApiContractError);
     await expect(endpointsWithResponse({ ...pending, created_at: undefined }).getPendingChatTask("chat-1")).rejects.toBeInstanceOf(ApiContractError);
+  });
+
+  it("recovers optional preparation progress while ignoring malformed summary fields", async () => {
+    const pending = { task_id: "task-1", status: "running", created_at: session.created_at, supports_queue: true, queued_tasks: [] };
+    await expect(endpointsWithResponse({ ...pending, progress_summary: "正在准备项目仓库…" }).getPendingChatTask("chat-1"))
+      .resolves.toMatchObject({ progress_summary: "正在准备项目仓库…" });
+    for (const progress_summary of [null, undefined, 17, { label: "bad shape" }]) {
+      const result = await endpointsWithResponse({ ...pending, progress_summary }).getPendingChatTask("chat-1");
+      expect(result.task_id).toBe("task-1");
+      expect(result.progress_summary).toBe(progress_summary === null ? null : undefined);
+    }
   });
 
   it("edits a queue item and validates its response", async () => {

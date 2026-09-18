@@ -632,7 +632,9 @@ export function controlPlaneConciergeHost(deps: {
         const sessionKey = threadId ? `${delivery.chatId}:thread:${threadId}` : delivery.chatId;
         return handle.streamProactiveTask(delivery.chatId, sessionKey,
           pollFeishuTask(daemon, taskId, options.signal), {
-            taskId, displayName, signal: options.signal,
+            // `null` until the first snapshot pins the provider session, so the
+            // card opens as "刚醒来的 <agent>" instead of a bare agent name.
+            taskId, displayName, sessionId: null, signal: options.signal,
             isHumanRequestPending: requestId => daemon.isFeishuBotHumanRequestPending(taskId, requestId),
             getHumanRequest: requestId => daemon.getFeishuBotHumanRequest(taskId, requestId),
             respondHumanRequest: (requestId, response) => daemon.respondFeishuBotHumanRequest(taskId, requestId, response),
@@ -734,6 +736,7 @@ export function createFeishuTaskHandler(
     await consumer(pollFeishuTask(daemon, submitted.taskId), {
       taskId: submitted.taskId,
       displayName: submitted.agentName,
+      sessionId: null,
       getHumanRequest: requestId => daemon.getFeishuBotHumanRequest(submitted.taskId, requestId),
       respondHumanRequest: (requestId, response) =>
         daemon.respondFeishuBotHumanRequest(submitted.taskId, requestId, response),
@@ -778,6 +781,7 @@ async function* pollFeishuTask(
   signal?: AbortSignal,
 ): AsyncGenerator<TaskStreamEvent> {
   let sinceSeq = 0;
+  let reportedSessionId: string | null = null;
   for (;;) {
     signal?.throwIfAborted();
     const messages = await daemon.listFeishuBotTaskMessages(taskId, sinceSeq);
@@ -799,6 +803,13 @@ async function* pollFeishuTask(
       }
       yield { kind: "snapshot", snapshot };
       return;
+    }
+    // The provider session is pinned before the Task finishes on a continued
+    // conversation. Surface it early so the live approval and question cards
+    // carry the same session label as the result card.
+    if (snapshot.sessionId && snapshot.sessionId !== reportedSessionId) {
+      reportedSessionId = snapshot.sessionId;
+      yield { kind: "snapshot", snapshot };
     }
     await sleep(400);
   }

@@ -1,4 +1,5 @@
 import type {
+  CreateChatSessionInput,
   ChatMessage,
   ChatMessagesPage,
   ChatPendingTask,
@@ -33,7 +34,7 @@ export class ChatEndpoints {
     return parseStrictResponse(raw, ChatSessionSchema, { endpoint: "GET /api/chat/sessions/:id" });
   }
 
-  async createChatSession(data: { agent_id: string; title?: string; project_id?: string | null; runtime_workspace_id?: string | null }): Promise<ChatSession> {
+  async createChatSession(data: CreateChatSessionInput): Promise<ChatSession> {
     const raw = await this.http.fetch<unknown>("/api/chat/sessions", {
       method: "POST",
       body: JSON.stringify(data),

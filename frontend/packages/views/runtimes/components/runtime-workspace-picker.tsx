@@ -83,7 +83,7 @@ export function WorkLocationPicker({ wsId, projectId = null, value, onChange, di
   </div>;
 }
 
-/** Chat has no Project execution binding; retain its independent directory selection. */
+/** Directory-only variant for callers that do not offer Project selection. */
 export function RuntimeWorkspacePicker(props: { wsId: string; value: string | null; onChange: (id: string | null) => void; disabled?: boolean }) {
   return <WorkLocationPicker {...props} includeProjects={false} onChange={location => props.onChange(location.runtime_workspace_id)} />;
 }

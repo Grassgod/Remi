@@ -11,6 +11,7 @@
 import type { AgentTask } from "@daemon/contracts/types.js";
 import type { IssueSessionProviderHome } from "../workspace/session-home.js";
 import { appendGitCredentialBrokerEnv } from "../repo/credential-broker.js";
+import { isSideConversation, SIDE_CONVERSATION_INSTRUCTIONS } from "../prompts/side-conversation.js";
 
 export interface BuildTaskEnvOptions {
   /** Port of the daemon's local repo-checkout server. */
@@ -77,7 +78,36 @@ export function buildTaskEnv(task: AgentTask, opts: BuildTaskEnvOptions): Record
   // AcpProvider merges this overlay on top of the daemon process environment.
   // Keep an explicit tombstone so an inherited daemon token cannot reappear.
   if (!taskAuthToken) brokerEnv.MULTIREMI_TOKEN = "";
+  if (agent?.provider === "codex" && isSideConversation(task)) {
+    preserveSideCodexInstructions(brokerEnv);
+  }
   return cleanProcessEnv(brokerEnv);
+}
+
+/** ACP sends CODEX_CONFIG as per-thread overrides, ahead of private config.toml. */
+function preserveSideCodexInstructions(env: NodeJS.ProcessEnv): void {
+  // An explicit empty value disables the machine override and must stay empty.
+  const raw = env.CODEX_CONFIG !== undefined ? env.CODEX_CONFIG : process.env.CODEX_CONFIG;
+  if (raw === undefined || raw === "") return;
+  let config: unknown;
+  try {
+    config = typeof raw === "string" ? JSON.parse(raw) : null;
+  } catch {
+    // JSON parser errors can contain source text and credentials. Never forward
+    // the parser's message or the raw config to task logs.
+    throw new Error("Side conversation CODEX_CONFIG must be a valid JSON object");
+  }
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    throw new Error("Side conversation CODEX_CONFIG must be a valid JSON object");
+  }
+  if (!Object.prototype.hasOwnProperty.call(config, "developer_instructions")) return;
+  const overrides = config as Record<string, unknown>;
+  if (typeof overrides.developer_instructions !== "string") {
+    throw new Error("Side conversation CODEX_CONFIG developer_instructions must be a string");
+  }
+  overrides.developer_instructions = [overrides.developer_instructions, SIDE_CONVERSATION_INSTRUCTIONS]
+    .filter(Boolean).join("\n\n");
+  env.CODEX_CONFIG = JSON.stringify(overrides);
 }
 
 /** Drop undefined values so the result is a string-only env for Bun.spawn. */

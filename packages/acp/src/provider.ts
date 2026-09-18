@@ -95,6 +95,8 @@ export interface AcpModelCapability {
   label: string;
   description?: string;
   default: boolean;
+  /** The bridge's default selector state, not a guessed concrete model. */
+  providerDefault?: boolean;
   effort?: AcpModelEffortCapability;
 }
 
@@ -467,6 +469,9 @@ export class AcpProvider implements Provider {
 
       const initialModel = modelOption.currentValue;
       const models = flattenSelectOptions(modelOption).filter((model) => !isAcpDefaultSentinel(model.value));
+      if (isAcpDefaultSentinel(initialModel)) {
+        models.unshift({ value: initialModel, name: "Default" });
+      }
       const discovered: AcpModelCapability[] = [];
 
       for (const model of models) {
@@ -483,7 +488,8 @@ export class AcpProvider implements Provider {
           label: model.name || model.value,
           ...(model.description ? { description: model.description } : {}),
           default: model.value === initialModel,
-          ...(effortLevels.length
+          ...(isAcpDefaultSentinel(model.value) ? { providerDefault: true } : {}),
+          ...(effortLevels.length || isAcpDefaultSentinel(model.value)
             ? {
                 effort: {
                   supportedLevels: effortLevels.map((level) => ({

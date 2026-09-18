@@ -140,6 +140,7 @@ describe("Multiremi store — chat sessions and private agent access", () => {
     ]);
     expect(createdBody.creator_id).toBe("alice");
     expect(createdBody.agent_id).toBe(agent.id);
+    expect(createdBody.project_id).toBeNull();
     expect(createdBody).not.toHaveProperty("issue_id");
     expect(createdBody.runtime_workspace_id).toBeNull();
     expect(createdBody.has_unread).toBe(false);

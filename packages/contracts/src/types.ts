@@ -1044,6 +1044,8 @@ export interface MultiremiRuntimeModel {
   label: string;
   provider: string;
   default: boolean;
+  /** Capability of the provider's default selector; excluded from concrete model pickers. */
+  providerDefault?: boolean;
   thinking?: MultiremiRuntimeModelThinking;
   createdAt?: string;
   updatedAt?: string;
@@ -1162,6 +1164,8 @@ export interface ReportRuntimeLocalSkillImportInput {
 export interface ReportRuntimeModelListInput {
   status?: string;
   models?: MultiremiRuntimeModel[];
+  /** Connection used by this probe; null denotes the native/relay catalog. */
+  model_profile?: RuntimeCodexProfile | RuntimeClaudeProfile | null;
   supported?: boolean;
   error?: string;
 }
@@ -1433,6 +1437,19 @@ export interface MultiremiTask {
   projection_omitted_events?: number;
   projectionEstimatedTokens: number;
   projection_estimated_tokens?: number;
+  /** Actual inherited projection recorded at claim; null before claim or without inheritance. */
+  inheritedProjectionTruncated: boolean | null;
+  inherited_projection_truncated?: boolean | null;
+  inheritedProjectionOmittedEvents: number | null;
+  inherited_projection_omitted_events?: number | null;
+  inheritedProjectionEstimatedTokens: number | null;
+  inherited_projection_estimated_tokens?: number | null;
+  inheritedProjectionToSeq: number | null;
+  inherited_projection_to_seq?: number | null;
+  inheritedProjectionTokenBudget: number | null;
+  inherited_projection_token_budget?: number | null;
+  inheritedProjectionRecordedAt: string | null;
+  inherited_projection_recorded_at?: string | null;
   result: string | null;
   error: string | null;
   failureReason: string | null;
@@ -1480,8 +1497,12 @@ export interface MultiremiTaskTriggerMetadata {
 }
 
 export interface MultiremiTaskWithAgent extends MultiremiTask {
-  /** Explicit Chat project binding, never inherited from an Issue. */
+  /** Explicit Chat binding; consumers must match this to project.id. */
   chatProjectId?: string | null;
+  /** Explicit Project repositories eligible for Chat checkout; never includes the workspace fallback catalog. */
+  chatAutoCheckoutRepos?: MultiremiRepoData[];
+  inheritedSessionProjection?: MultiremiSessionProjection | null;
+  inherited_session_projection?: MultiremiSessionProjection | null;
   runtimeWorkspace?: MultiremiRuntimeWorkspace | null;
   agent: MultiremiAgent | null;
   issue: MultiremiIssue | null;
@@ -2215,6 +2236,8 @@ export interface MultiremiProjectSearchResult extends MultiremiProject {
 
 export type MultiremiIssueSessionStatus = "active" | "archived";
 
+export type MultiremiIssueSessionInheritMode = "none" | "snapshot";
+
 export type MultiremiSessionParticipantType = "agent" | "member";
 
 export type MultiremiSessionProjectionMode = "bootstrap" | "delta";
@@ -2231,6 +2254,15 @@ export interface MultiremiIssueSession {
   is_default?: boolean;
   holdsWorkspace: boolean;
   holds_workspace?: boolean;
+  parentSessionId: string | null;
+  parent_session_id?: string | null;
+  inheritMode: MultiremiIssueSessionInheritMode;
+  inherit_mode?: MultiremiIssueSessionInheritMode;
+  inheritCutoffSeq: number | null;
+  inherit_cutoff_seq?: number | null;
+  /** Parent events through the frozen cutoff, before projection truncation. */
+  inheritedEventCount: number;
+  inherited_event_count?: number;
   summary: string | null;
   createdByType: string;
   created_by_type?: string;
@@ -2240,6 +2272,28 @@ export interface MultiremiIssueSession {
   created_at?: string;
   updatedAt: string;
   updated_at?: string;
+}
+
+/** On-demand diagnostics for the latest task with a recorded inherited projection. */
+export interface MultiremiSessionInheritedContext {
+  session_id: string;
+  parent_session_id: string | null;
+  parent_session_title: string | null;
+  inherit_mode: MultiremiIssueSessionInheritMode;
+  inherit_cutoff_seq: number | null;
+  /** Raw parent event count before truncation, not the number supplied to the model. */
+  inherited_event_count: number | null;
+  diagnostics: {
+    task_id: string;
+    agent_id: string;
+    to_seq: number;
+    truncated: boolean;
+    omitted_events: number;
+    estimated_tokens: number;
+    token_budget: number;
+    /** Time the inherited projection was recorded at claim, independent of later task updates. */
+    recorded_at: string;
+  } | null;
 }
 
 export interface MultiremiSessionParticipant {
@@ -2338,6 +2392,12 @@ export interface MultiremiSessionProjection {
   omitted_events?: number;
   estimatedTokens: number;
   estimated_tokens?: number;
+  /** Present on a parent projection so prompt renderers can identify its source. */
+  sessionTitle?: string;
+  session_title?: string;
+  /** Side-session snapshot; absent for ordinary Sessions. */
+  inheritedSessionProjection?: MultiremiSessionProjection;
+  inherited_session_projection?: MultiremiSessionProjection;
 }
 
 export interface CreateIssueSessionInput {
@@ -2353,6 +2413,9 @@ export interface CreateIssueSessionInput {
   participant_agent_ids?: string[];
   holdsWorkspace?: boolean;
   holds_workspace?: boolean;
+  /** A parent creates a discussion Session with a frozen snapshot of its events. */
+  parentSessionId?: string | null;
+  parent_session_id?: string | null;
 }
 
 export interface UpdateIssueSessionInput {
@@ -2921,6 +2984,7 @@ export type MultiremiKnowledgeCompilationStatus =
   | "validating"
   | "published"
   | "published_with_warnings"
+  | "blocked"
   | "failed"
   | "noop";
 export type MultiremiKnowledgeCompilationAction =
@@ -4493,12 +4557,12 @@ export type MultiremiChatMessageRole = "user" | "assistant" | "system";
 
 export interface MultiremiChatSession {
   /** Explicit work location, independent of a linked Issue. */
-  projectId?: string | null;
   runtimeWorkspaceId?: string | null;
   id: string;
   workspaceId: string;
   creatorId: string | null;
   agentId: string;
+  projectId: string | null;
   title: string;
   status: MultiremiChatSessionStatus;
   sessionId: string | null;
@@ -4533,8 +4597,6 @@ export interface MultiremiChatMessage {
 }
 
 export interface CreateChatSessionInput {
-  projectId?: string | null;
-  project_id?: string | null;
   runtimeWorkspaceId?: string | null;
   runtime_workspace_id?: string | null;
   id?: string;
@@ -4545,6 +4607,8 @@ export interface CreateChatSessionInput {
   creatorId?: string | null;
   creator_id?: string | null;
   title?: string | null;
+  projectId?: string | null;
+  project_id?: string | null;
 }
 
 export interface UpdateChatSessionInput {

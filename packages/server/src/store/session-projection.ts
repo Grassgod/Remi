@@ -8,6 +8,9 @@ import { estimateProjectionTokens } from "@multiremi/store/session-projection-bu
 const DEFAULT_EVENT_BODY_MAX_CHARS = 4_000;
 const ELISION_NOTE = "Earlier session events omitted to fit the projection token budget.";
 
+type EventPerspective = "assistant_history" | "external_agent" | "user" | "operator"
+  | "inherited_agent" | "inherited_user" | "inherited_operator";
+
 export interface BuildSessionProjectionInput {
   sessionId: string;
   targetAgentId: string;
@@ -15,6 +18,10 @@ export interface BuildSessionProjectionInput {
   cursorSeq: number;
   providerSessionId: string | null;
   tokenBudget: number;
+  /** Inherited records are reference context, even when authored by the target agent. */
+  perspectiveMode?: "own" | "inherited";
+  /** Inclusive immutable parent snapshot boundary. */
+  toSeq?: number;
   /** The current request is rendered in its own prompt section, not replayed as history. */
   currentTaskId?: string | null;
   resolveAuthorName?: (authorType: string, authorId: string | null) => string | null;
@@ -31,9 +38,11 @@ export interface BuildSessionProjectionInput {
  * already exist as assistant turns inside that provider session.
  */
 export function buildSessionProjection(input: BuildSessionProjectionInput): MultiremiSessionProjection {
-  const sorted = [...input.events].sort((left, right) => left.seq - right.seq);
+  const sorted = input.events
+    .filter((event) => input.toSeq === undefined || event.seq <= input.toSeq)
+    .sort((left, right) => left.seq - right.seq);
   const toSeq = sorted.at(-1)?.seq ?? 0;
-  const warm = Boolean(input.providerSessionId) && input.cursorSeq > 0;
+  const warm = input.perspectiveMode !== "inherited" && Boolean(input.providerSessionId) && input.cursorSeq > 0;
   const mode: MultiremiSessionProjectionMode = warm ? "delta" : "bootstrap";
   const fromSeq = warm ? input.cursorSeq : 0;
   const projected = sorted.filter((event) => {
@@ -166,7 +175,7 @@ interface AssembledProjection {
 
 interface PreparedProjectionEvent {
   event: MultiremiSessionEvent;
-  perspective: "assistant_history" | "external_agent" | "user" | "operator";
+  perspective: EventPerspective;
   authorName: string | null;
   metadata: unknown;
   fullJson: string;
@@ -185,8 +194,10 @@ function prepareProjectionEvents(
       authorName = input.resolveAuthorName?.(event.authorType, event.authorId) ?? null;
       authorNames.set(authorKey, authorName);
     }
-    const metadata = stableJsonValue(event.metadata);
-    const perspective = eventPerspective(event, input.targetAgentId);
+    const metadata = stableJsonValue(input.perspectiveMode === "inherited"
+      ? inheritedEventMetadata(event.metadata)
+      : event.metadata);
+    const perspective = eventPerspective(event, input.targetAgentId, input.perspectiveMode);
     const fullLine = eventLine(event, perspective, authorName ?? null, metadata, event.body, 0);
     const fullJson = JSON.stringify(fullLine);
     return {
@@ -273,7 +284,7 @@ function renderPreparedEvent(
 
 function eventLine(
   event: MultiremiSessionEvent,
-  perspective: "assistant_history" | "external_agent" | "user" | "operator",
+  perspective: EventPerspective,
   authorName: string | null,
   metadata: unknown,
   body: string,
@@ -330,12 +341,28 @@ function projectionEventBodyMaxChars(): number {
 function eventPerspective(
   event: MultiremiSessionEvent,
   targetAgentId: string,
-): "assistant_history" | "external_agent" | "user" | "operator" {
+  mode: BuildSessionProjectionInput["perspectiveMode"],
+): EventPerspective {
+  if (mode === "inherited") {
+    if (event.authorType === "agent") return "inherited_agent";
+    if (event.authorType === "system") return "inherited_operator";
+    return "inherited_user";
+  }
   if (event.authorType === "agent") {
     return event.authorId === targetAgentId ? "assistant_history" : "external_agent";
   }
   if (event.authorType === "system") return "operator";
   return "user";
+}
+
+function inheritedEventMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
+  // Only carry typed lifecycle indicators into another Session. Arbitrary
+  // metadata may include provider payloads, credentials or nested instructions;
+  // leave those in the source Session. Own projections stay byte-compatible.
+  const safe: Record<string, unknown> = {};
+  if (typeof metadata.status === "string" && metadata.status.length <= 64) safe.status = metadata.status;
+  if (typeof metadata.result_available === "boolean") safe.result_available = metadata.result_available;
+  return safe;
 }
 
 function stableJsonValue(value: unknown): unknown {
