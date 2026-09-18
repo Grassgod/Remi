@@ -4,6 +4,7 @@ import { parseRuntimeClaudeProfile, type RuntimeClaudeProfile } from "@multiremi
 import { assertRuntimeClaudeProjectCredentials, resolveRuntimeClaudeProfile, runtimeClaudeProfileEnv, runtimeClaudeProfileRouting } from "@daemon/agent-runtime/claude-profile.js";
 import { resolveRuntimeCodexProfile } from "@daemon/agent-runtime/codex-profile.js";
 import { discoverRuntimeProfileModels } from "./runtime-profile-models.js";
+import { prepareRuntimeCodexModelCatalog } from "./runtime-codex-model-catalog.js";
 import { isPermanentFeishuDeliveryError } from "@shared/feishu-delivery-error.js";
 import { mkdirSync, realpathSync } from "node:fs";
 import { cpus, homedir, hostname } from "node:os";
@@ -670,6 +671,28 @@ export class MultiremiDaemon {
       ...(codexProfile ? { codex: resolveRuntimeCodexProfile(codexProfile, process.env, await this.runtimeProfileKey(codexProfile, "codex")) } : {}),
       ...(claudeProfile ? { claude: resolveRuntimeClaudeProfile(claudeProfile, process.env, await this.runtimeProfileKey(claudeProfile, "claude")) } : {}),
     };
+  }
+  private async prepareCodexModelCatalog(
+    profile: RuntimeCodexProfile,
+    token: string,
+    home: string,
+    signal: AbortSignal,
+    taskId?: string,
+  ): Promise<void> {
+    const startedAt = Date.now();
+    try {
+      await prepareRuntimeCodexModelCatalog(profile, token, home, signal);
+    } catch (error) {
+      signal.throwIfAborted();
+      // Metadata is optional for existing Responses providers. Keep their
+      // native Codex fallback behavior when no usable catalog can be loaded.
+      log.warn("Runtime Codex model metadata unavailable", {
+        event: "runtime_codex_model_catalog_unavailable",
+        runtimeId: this.options.runtimeId, taskId, model: profile.model,
+        durationMs: Date.now() - startedAt,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
   private stopped = false;
   private pollAbort = new AbortController();
@@ -2848,6 +2871,9 @@ export class MultiremiDaemon {
           ...(relayAuthoritative ? { relayFragment: relay?.fragment ?? "" } : {}),
           codexRelayUsesEnvApiKey: task.agent?.provider === "codex" && Boolean(providerInstallEnv?.OPENAI_API_KEY),
         });
+        if (codexProfile) {
+          await this.prepareCodexModelCatalog(codexProfile, relay!.auth_token, providerHome.home, abort.signal, task.id);
+        }
       }
       this.enqueueTaskReport(task.id, "start", {});
       this.enqueueTaskReport(task.id, "progress", { summary: pickTaskStartupLine(task.agent?.name), step: 1, total: 3 });

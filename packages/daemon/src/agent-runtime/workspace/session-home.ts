@@ -595,7 +595,7 @@ async function readTextFileForReconcile(path: string): Promise<string | null> {
   return readFile(path, "utf8");
 }
 
-async function writePrivateFileIfChanged(path: string, content: string): Promise<void> {
+export async function writePrivateFileIfChanged(path: string, content: string): Promise<void> {
   const current = await readTextFileForReconcile(path);
   if (current === content) return;
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
