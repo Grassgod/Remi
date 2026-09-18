@@ -3,7 +3,13 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { join } from "node:path";
 import { createServer } from "node:net";
 import { randomUUID } from "node:crypto";
-import { AcpClient, isolateProcessTmp, mapPrivateTmpPath } from "@acp/index.js";
+import {
+  AcpClient,
+  isolateProcessTmp,
+  mapPrivateTmpPath,
+  privateTmpVisiblePath,
+  PrivateTmpIsolationUnavailableError,
+} from "@acp/index.js";
 
 const roots: string[] = [];
 
@@ -19,12 +25,28 @@ function privateDirectory(label: string): string {
   return root;
 }
 
+function unavailableIsolation(directory: string): PrivateTmpIsolationUnavailableError | null {
+  try {
+    isolateProcessTmp({ executable: Bun.which("true") ?? "true", args: [] }, directory);
+    return null;
+  } catch (error) {
+    if (error instanceof PrivateTmpIsolationUnavailableError) return error;
+    throw error;
+  }
+}
+
 describe("task private /tmp", () => {
   it("isolates the same literal /tmp path across concurrent process trees", async () => {
     if (process.platform !== "linux") return;
     const first = privateDirectory("first");
     const second = privateDirectory("second");
     const barrier = privateDirectory("barrier");
+    const unavailable = unavailableIsolation(first);
+    if (unavailable) {
+      expect(unavailable.code).toBe("private_tmp_isolation_unavailable");
+      expect(unavailable.message).toContain("runtime cannot create a private /tmp mount");
+      return;
+    }
     const shell = Bun.which("sh")!;
     const script = 'printf "%s" "$1" > /tmp/log.json; touch "$2/$1"; while [ ! -f "$2/first" ] || [ ! -f "$2/second" ]; do sleep 0.01; done; cat /tmp/log.json';
     const run = (directory: string, value: string) => {
@@ -48,11 +70,20 @@ describe("task private /tmp", () => {
     expect(mapPrivateTmpPath("/tmp/nested/../result.txt", directory)).toBe(join(directory, "result.txt"));
     expect(mapPrivateTmpPath("/tmp/../etc/hosts", directory)).toBe("/tmp/../etc/hosts");
     expect(mapPrivateTmpPath("relative.txt", directory)).toBe("relative.txt");
+    expect(privateTmpVisiblePath(join(directory, "nested", "result.txt"), directory)).toBe("/tmp/nested/result.txt");
+    expect(() => privateTmpVisiblePath(join(directory, "..", "outside.txt"), directory))
+      .toThrow("task temporary path escapes its private directory");
   });
 
   it("shares the private mount between child tools and daemon-served ACP file tools", async () => {
     if (process.platform !== "linux") return;
     const directory = privateDirectory("acp-fs");
+    const unavailable = unavailableIsolation(directory);
+    if (unavailable) {
+      expect(unavailable.code).toBe("private_tmp_isolation_unavailable");
+      expect(unavailable.message).toContain("runtime cannot create a private /tmp mount");
+      return;
+    }
     const executable = join(directory, "fake-agent.cjs");
     writeFileSync(executable, `#!/usr/bin/env node
 const fs = require("node:fs");
@@ -103,26 +134,35 @@ rl.on("line", line => {
       .toThrow("private_tmp_isolation_unavailable");
   });
 
-  it("preserves an environment-referenced host Unix socket inside private /tmp", async () => {
+  it("preserves environment-referenced host files and Unix sockets inside private /tmp", async () => {
     if (process.platform !== "linux") return;
     const directory = privateDirectory("socket");
+    const unavailable = unavailableIsolation(directory);
+    if (unavailable) {
+      expect(unavailable.code).toBe("private_tmp_isolation_unavailable");
+      expect(unavailable.message).toContain("runtime cannot create a private /tmp mount");
+      return;
+    }
     const socketPath = `/tmp/remi-private-tmp-${randomUUID()}.sock`;
+    const credentialPath = `/tmp/remi-private-tmp-${randomUUID()}.credential`;
+    writeFileSync(credentialPath, "credential");
     const server = createServer(socket => socket.end("ok"));
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(socketPath, resolve);
     });
     try {
-      const env = { ...process.env, SSH_AUTH_SOCK: socketPath };
+      const env = { ...process.env, SSH_AUTH_SOCK: socketPath, TEST_CREDENTIAL_FILE: credentialPath };
       const launch = isolateProcessTmp({
         executable: Bun.which("sh")!,
-        args: ["-ceu", 'test -S "$SSH_AUTH_SOCK"'],
+        args: ["-ceu", 'test -S "$SSH_AUTH_SOCK" && test "$(cat "$TEST_CREDENTIAL_FILE")" = credential'],
       }, directory, env);
       const child = Bun.spawn([launch.executable, ...launch.args], { env, stdout: "ignore", stderr: "pipe" });
       expect(await child.exited).toBe(0);
     } finally {
       await new Promise<void>(resolve => server.close(() => resolve()));
       try { rmSync(socketPath, { force: true }); } catch {}
+      rmSync(credentialPath, { force: true });
     }
   });
 });

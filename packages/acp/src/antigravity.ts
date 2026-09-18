@@ -7,7 +7,7 @@ import { createInterface } from "node:readline";
 import type { AgentResponse, Provider, ProviderEvent, SendOptions } from "@shared/contracts/provider-types.js";
 import { createAgentResponse } from "@shared/contracts/provider-types.js";
 import type { AcpModelCapability, AcpProviderOptions } from "./provider.js";
-import { isolateProcessTmp } from "./private-tmp.js";
+import { isolateProcessTmp, privateTmpVisiblePath } from "./private-tmp.js";
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const MAX_OUTPUT = 16 * 1024 * 1024;
@@ -211,8 +211,9 @@ export class AntigravityProvider implements Provider {
     const contextDir = this.env.MULTIREMI_ANTIGRAVITY_CONTEXT_DIR;
     const localContext = contextDir ? await readBounded(join(contextDir, "AGENTS.md"), 256 * 1024) : "";
     const prompt = [options.systemPrompt, options.context, localContext, message].filter(Boolean).join("\n\n");
-    const directory = await mkdtemp(join(tmpdir(), "remi-agy-"));
-    const logPath = join(directory, "run.log");
+    const directory = await mkdtemp(join(this.options.privateTmpDirectory ?? tmpdir(), "remi-agy-"));
+    const hostLogPath = join(directory, "run.log");
+    const logPath = privateTmpVisiblePath(hostLogPath, this.options.privateTmpDirectory);
     const started = Date.now();
     const timeoutMs = options.deadlineMs != null ? Math.max(1, options.deadlineMs - started) : this.options.timeout ? this.options.timeout * 1000 : 24 * 60 * 60 * 1000;
     const args = ["--log-file", logPath, "--print-timeout", `${Math.max(1, Math.ceil(timeoutMs / 1000))}s`];
@@ -294,7 +295,7 @@ export class AntigravityProvider implements Provider {
         }
       }
       const exit = await outcome;
-      const log = parseAntigravityLog(await readBounded(logPath));
+      const log = parseAntigravityLog(await readBounded(hostLogPath));
       if (options.sessionId && log.sessionId && log.sessionId !== options.sessionId) {
         throw new Error("Stale provider session: no conversation found for the requested Antigravity ID");
       }
