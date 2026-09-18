@@ -13,6 +13,15 @@ const verifier = readFileSync(resolve(deployRoot, "verify.sh"), "utf8");
 const remover = readFileSync(resolve(deployRoot, "remove.sh"), "utf8");
 const skill = readFileSync(resolve(deployRoot, "skill/multiremi-ppe-qa/SKILL.md"), "utf8");
 const webQaSkill = readFileSync(resolve(deployRoot, "skill/multiremi-web-qa/SKILL.md"), "utf8");
+const ppeSession = readFileSync(
+  resolve(deployRoot, "skill/multiremi-web-qa/scripts/ppe-qa-session.sh"),
+  "utf8",
+);
+const ppeMint = readFileSync(
+  resolve(deployRoot, "skill/multiremi-web-qa/scripts/ppe-qa-mint.py"),
+  "utf8",
+);
+const desktopWrapper = readFileSync(resolve(deployRoot, "desktop-qa/multiremi-qa-browser"), "utf8");
 const workflow = readFileSync(resolve(deployRoot, "ppe/workflow.sh"), "utf8");
 const collector = readFileSync(resolve(deployRoot, "ppe/gc.sh"), "utf8");
 const dockerfileWeb = readFileSync(resolve(repoRoot, "deploy/docker/Dockerfile.web"), "utf8");
@@ -173,10 +182,48 @@ describe("Zadig PPE deployment", () => {
   test("keeps PPE browser auth isolated from production", () => {
     expect(skill).toContain("PPE_SLOT=auto");
     expect(skill).toContain("PPE_RESULT.state=released");
-    expect(skill).toContain("不得读取或\n   传入生产 Web Token");
+    expect(skill).toContain("不得读取或传入生产\n   Web Token");
     expect(webQaSkill).toContain("3210[1-6]");
-    expect(webQaSkill).toContain("PPE 模式直接进入目标页面，不读取 Token");
     expect(webQaSkill).toContain("其他地址全部按生产认证处理");
+    // MUL-334：PPE 服务端无认证，但前端是 token 模式，空浏览器必被守卫弹回
+    // /login。旧文案「PPE 模式直接进入目标页面，不读取 Token」是错的，两个
+    // Skill 都不得再出现它，否则下一轮 QA 还会照着它撞上同一个阻塞。
+    expect(webQaSkill).not.toContain("PPE 模式直接进入目标页面，不读取 Token");
+    expect(webQaSkill).toContain("ppe-qa-session.sh login");
+    expect(webQaSkill).toContain("该 PPE 自己签发");
+    expect(skill).toContain("服务端无认证不等于浏览器可以免登录");
+  });
+
+  test("mints the PPE browser credential on the PPE itself and revokes it", () => {
+    // 签发/撤销只针对 32101-32106 的 PPE slot，生产 Origin 落不进这条路径。
+    expect(ppeSession).toContain("3210[1-6]");
+    expect(ppeSession).toContain("refusing a non-PPE URL");
+    expect(ppeMint).toContain('PPE_PORTS = tuple(str(p) for p in range(32101, 32107))');
+    expect(ppeMint).toContain("refusing a non-PPE origin");
+
+    // 目标必须确实处于无认证模式，否则不签。
+    expect(ppeSession).toContain("this is not an open-mode PPE");
+
+    // 生产凭证既不读取也不传递给子进程。
+    expect(ppeSession).toContain("env -u MULTIREMI_QA_WEB_TOKEN");
+    expect(ppeSession).not.toMatch(/\$\{?MULTIREMI_QA_WEB_TOKEN/u);
+
+    // 明文 token 只走管道；状态文件只留 origin + token id。
+    expect(ppeMint).toContain("sys.stdout.write(token)");
+    expect(ppeMint).toContain("0o600");
+    expect(ppeMint).not.toContain("handle.write(token");
+
+    // 注入失败要立刻撤销，撤销失败要给出可恢复信息。
+    expect(ppeSession).toContain("revoking the freshly minted PAT");
+    expect(ppeSession).toContain("curl -X DELETE ${origin}/api/tokens/${token_id}");
+
+    // 212 wrapper 的两条注入路径 Origin 白名单互不相交。
+    expect(desktopWrapper).toContain("ppe-authenticate");
+    expect(desktopWrapper).toContain("refusing to inject a token into a non-PPE origin");
+    expect(desktopWrapper).toContain("refusing to inject a Multiremi PAT into an untrusted origin");
+    expect(desktopWrapper).toMatch(
+      /ppe_authenticate_browser[\s\S]*?\^\(http:\/\/\(10\\\.37\\\.117\\\.209\|n37-117-209\\\.byted\\\.org\):3210\[1-6\]\)/u,
+    );
   });
 
   test("keeps removal explicit and production updates outside Zadig", () => {

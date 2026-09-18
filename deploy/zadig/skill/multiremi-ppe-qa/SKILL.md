@@ -11,7 +11,9 @@ Multiremi 的自动回写。
 ## 开始前
 
 1. 阅读目标仓库的 `AGENTS.md`。
-2. 仅检查 `ZADIG_API_TOKEN` 和 `ZADIG_HOST` 是否存在，不得打印、记录或持久化 Token。
+2. 仅检查 `ZADIG_API_TOKEN` 和 Zadig 地址是否存在，不得打印、记录或持久化 Token。
+   地址键当前是 `ZADIG_API_HOST`，旧任务里可能仍是 `ZADIG_HOST`，两个都读一下取非空的那个；
+   两个都缺就停下报管理员，不要猜地址，更不要退到生产控制面。
 3. 使用固定版本的官方 CLI，不依赖 Runtime 是否安装全局命令：
 
    ```bash
@@ -24,7 +26,8 @@ Multiremi 的自动回写。
    ```
 
    后续命令均使用 `"${zadig_cli[@]}"` 调用，不得使用 `latest`。
-4. 在任务临时 HOME 下运行 `"${zadig_cli[@]}" auth login --host "$ZADIG_HOST" --token "$ZADIG_API_TOKEN"`，随后检查
+4. 在任务临时 HOME 下运行
+   `"${zadig_cli[@]}" auth login --host "${ZADIG_API_HOST:-$ZADIG_HOST}" --token "$ZADIG_API_TOKEN"`，随后检查
    `auth status --output json` 和 `doctor --output json`。任务结束安全删除 `$zadig_home`。
 5. 读取目标 Issue、仓库、分支、Commit 和已有 PPE 评论，避免重复部署。
 
@@ -67,8 +70,11 @@ Multiremi 的自动回写。
 4. 等待工作流结束。失败时读取 Zadig 工作流与 Pod 日志，修复后重试，不得转向生产环境验证。
 5. `platform-daemon` 还需验证测试 Runtime 在线、任务可分派、最小任务可结束且日志可回传。
 6. 只访问 `PPE_RESULT.url`。合法地址为 `http://10.37.117.209:32101` 至 `:32106`
-   或同端口的 `n37-117-209.byted.org`。PPE 不启用飞书 SSO，不需要 Header，也不得读取或
-   传入生产 Web Token。使用 `$multiremi-web-qa` 在 212 桌面执行真实浏览器验收。
+   或同端口的 `n37-117-209.byted.org`。PPE 不启用飞书 SSO，也不得读取或传入生产
+   Web Token；但**服务端无认证不等于浏览器可以免登录**——前端是 token 模式，
+   `localStorage` 没有 `multimira_token` 就会直接跳 `/login`（MUL-334）。页面验收
+   前先用该 PPE 自己签发的短期本地 PAT 引导登录态，再用 `$multiremi-web-qa` 在 212
+   桌面执行真实浏览器验收；收尾撤销该 PAT。
 7. 验证目标流程、Console Error、失败请求、健康接口和相关桌面/移动端视口。
 8. 使用 Remi CLI 自行回复 Issue。按任务需要说明 PPE、Commit、测试模式、测试结论和
    Zadig 日志链接，不强制固定格式，也不复制完整日志。
