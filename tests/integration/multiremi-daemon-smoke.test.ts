@@ -749,6 +749,7 @@ describe("Bun Multiremi daemon smoke", () => {
       id: expectedRuntimeId,
       name: "smoke-runtime",
       provider: "claude",
+      models: [{ id: "claude-smoke", label: "Smoke", provider: "anthropic", default: true }],
       workspaceId: "local",
       ownerId: "local",
     });
@@ -1944,6 +1945,12 @@ describe("Bun Multiremi daemon smoke", () => {
   it("resumes chat tasks with the pinned provider session after daemon restart", async () => {
     const { store, workDir } = daemonTestBed("multiremi-daemon-chat-resume-");
     const workspacesRoot = join(workDir, "workspaces");
+    store.registerRuntime({
+      id: daemonRuntimeIdForTest("daemon-chat-resume", "claude"),
+      name: "chat-resume-runtime", provider: "claude", workspaceId: "local", ownerId: "local",
+      models: [{ id: "claude-chat", label: "Chat", provider: "anthropic", default: true,
+        thinking: { supportedLevels: [{ value: "xhigh", label: "Extra high" }] } }],
+    });
     const agent = store.createAgent({
       name: "Chat Claude",
       provider: "claude",
@@ -2014,6 +2021,7 @@ describe("Bun Multiremi daemon smoke", () => {
       token: daemonToken.token,
       runtimeName: "chat-resume-runtime",
       runtimeId: runtime.id,
+      daemonId: "daemon-chat-resume",
       provider: "claude",
       workspaceId: "local",
       once: true,

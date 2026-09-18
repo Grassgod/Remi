@@ -38,20 +38,21 @@ export function ExecutionTargetSelect({ wsId, value, onChange, compact = false, 
     runtime.visibility === "public" || (runtime.owner_id ?? "local") === agentOwnerId,
   );
   const eligibleRuntimeIds = new Set(eligibleRuntimes.map((runtime) => runtime.id));
-  const automaticTargets = ENGINES.map((provider) => {
+  const modelRoutingTargets = ENGINES.map((provider) => {
     const members = eligibleRuntimes.filter((runtime) => runtime.provider === provider || runtime.provider === "any");
     return {
       executionGroupId: "", provider,
-      label: t(($) => $.execution_target.automatic, { provider: provider === "claude" ? "Claude Code" : provider === "codex" ? "Codex" : "Antigravity" }),
+      label: t(($) => provider === "antigravity" ? $.execution_target.automatic : $.execution_target.model_routing,
+        { provider: provider === "claude" ? "Claude Code" : provider === "codex" ? "Codex" : "Antigravity" }),
       members: members.map((runtime) => runtime.id),
       online: members.filter((runtime) => runtime.status === "online").length,
       legacySelected: false,
     };
   });
-  const targets = [...automaticTargets, ...(query.data?.groups ?? []).map((group) => ({
+  const targets = [...modelRoutingTargets, ...(query.data?.groups ?? []).map((group) => ({
     executionGroupId: group.id,
     provider: group.provider,
-    label: group.name,
+    label: t(($) => $.execution_target.fixed_group, { group: group.name }),
     members: group.runtime_ids.filter((id) => eligibleRuntimeIds.has(id)),
     online: group.online_runtime_count,
     legacySelected: !value.executionGroupId && !!legacyRuntimeId && group.runtime_ids.includes(legacyRuntimeId) && group.provider === value.provider,
@@ -67,7 +68,8 @@ export function ExecutionTargetSelect({ wsId, value, onChange, compact = false, 
   const isError = query.isError || runtimesQuery.isError;
   const status = isLoading ? t(($) => $.execution_target.loading)
     : isError ? t(($) => $.execution_target.error)
-    : selected && !selected.executionGroupId ? t(($) => $.execution_target.automatic_hint)
+    : selected && !selected.executionGroupId ? t(($) => selected.provider === "antigravity"
+      ? $.execution_target.automatic_hint : $.execution_target.model_routing_hint)
     : selected && selected.members.length === 0 ? t(($) => $.execution_target.unavailable)
     : selected && legacyRuntimeId ? t(($) => $.execution_target.pinned, { runtime: legacyRuntimeId })
     : selected ? selected.online > 0 ? t(($) => $.execution_target.hint, { target: selected.label })

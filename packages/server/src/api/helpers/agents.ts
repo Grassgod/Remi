@@ -181,6 +181,10 @@ function validateAgentModelSelection(
   if (groupModels && input.model && !groupModels.some((model) => model.id === input.model)) {
     return c.json({ error: `model "${input.model}" is not supported by every available member of the selected execution group` }, 400);
   }
+  // Allow saving model IDs before a gateway refresh; model routing still waits
+  // for a Runtime to advertise them. Validate explicit effort overrides here
+  // against the concrete model or provider default capability.
+  if (!input.thinkingLevel) return null;
   const catalog = input.executionGroupId && !input.runtimeId ? groupCatalog : workspaceProviderCatalog(
     store,
     input.workspaceId,

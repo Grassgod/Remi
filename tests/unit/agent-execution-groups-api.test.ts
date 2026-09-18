@@ -46,6 +46,36 @@ describe("execution group API", () => {
     expect(catalog.providers[0].provider).toBe("antigravity");
   });
 
+  it("routes a native model across groups without blocking compatible queued work", () => {
+    const { store, runtime, peer } = setup();
+    const routed = store.createAgent({ name: "Model routed", provider: "codex", model: "peer-only" });
+    const waiting = store.createTask({ agentId: routed.id, prompt: "Needs peer model" });
+    const compatible = store.createAgent({ name: "Compatible", provider: "codex", model: "common" });
+    const runnable = store.createTask({ agentId: compatible.id, prompt: "Can run here" });
+    expect(store.claimTask(runtime.id)?.id).toBe(runnable.id);
+    expect(store.getTask(waiting.id)?.status).toBe("queued");
+    expect(store.claimTask(peer.id)?.id).toBe(waiting.id);
+  });
+
+  it("matches thinking requirements even when the Runtime default model is used", () => {
+    const { store, runtime, peer } = setup();
+    const agent = store.createAgent({ name: "Thinking routed", provider: "codex", thinkingLevel: "high" });
+    const task = store.createTask({ agentId: agent.id, prompt: "Needs high thinking" });
+    expect(store.claimTask(peer.id)).toBeNull();
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+  });
+
+  it("rechecks model capabilities after enqueue and keeps fixed groups bounded", () => {
+    const { store, runtime, peer } = setup();
+    const group = store.listExecutionGroups("local").find(entry => entry.runtimeIds.includes(runtime.id))!;
+    const fixed = store.createAgent({ name: "Fixed", provider: "codex", executionGroupId: group.id, model: "peer-only" });
+    const fixedTask = store.createTask({ agentId: fixed.id, prompt: "Stay in group" });
+    expect(store.claimTask(peer.id)).toBeNull();
+    expect(store.claimTask(runtime.id)).toBeNull();
+    store.updateRuntimeModels(runtime.id, [{ id: "peer-only", label: "Peer", provider: "openai", default: true }]);
+    expect(store.claimTask(runtime.id)?.id).toBe(fixedTask.id);
+  });
+
   for (const provider of ["codex", "claude"] as const) {
     it(`preserves reported ${provider} reasoning through custom connections, group validation and dispatch`, async () => {
       const { store, app, request } = setup();
