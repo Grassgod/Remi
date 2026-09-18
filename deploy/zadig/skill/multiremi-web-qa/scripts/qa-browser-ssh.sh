@@ -28,12 +28,14 @@ if ((${#aliases[@]} == 0)); then
 fi
 
 selected=""
-ssh_stdin=()
-if [[ "${1:-}" == "check" ]]; then
-  ssh_stdin=(-n)
-fi
+# 探针必须始终 -n。authenticate / ppe-authenticate 是把凭证从管道喂进来的，
+# 而 ssh 会把本地 stdin 转发给远端命令——探针那句 `test -x` 根本不读它，却会
+# 在转发过程中把管道抽干，凭证于是永远到不了最后那次 exec。这里原来只在
+# `check` 模式加 -n，生产 authenticate 一直靠「探针先退出」的竞态侥幸通过，
+# PPE 链路则稳定复现为 `missing or invalid PPE token on stdin`（MUL-334）。
+# 末尾的 exec 是另一次独立 ssh 调用，照常继承调用方 stdin，不受这里影响。
 for alias_name in "${aliases[@]}"; do
-  if ssh "${ssh_stdin[@]}" -o BatchMode=yes -o ConnectTimeout=5 "${alias_name}" test -x "${remote_browser}" 2>/dev/null; then
+  if ssh -n -o BatchMode=yes -o ConnectTimeout=5 "${alias_name}" test -x "${remote_browser}" 2>/dev/null; then
     selected="${alias_name}"
     break
   fi

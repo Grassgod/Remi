@@ -11,7 +11,9 @@ Multiremi 的自动回写。
 ## 开始前
 
 1. 阅读目标仓库的 `AGENTS.md`。
-2. 仅检查 `ZADIG_API_TOKEN` 和 `ZADIG_HOST` 是否存在，不得打印、记录或持久化 Token。
+2. 仅检查 `ZADIG_API_TOKEN` 和 Zadig 地址是否存在，不得打印、记录或持久化 Token。
+   地址键当前是 `ZADIG_API_HOST`，旧任务里可能仍是 `ZADIG_HOST`，两个都读一下取非空的那个；
+   两个都缺就停下报管理员，不要猜地址，更不要退到生产控制面。
 3. 使用固定版本的官方 CLI，不依赖 Runtime 是否安装全局命令：
 
    ```bash
@@ -24,7 +26,8 @@ Multiremi 的自动回写。
    ```
 
    后续命令均使用 `"${zadig_cli[@]}"` 调用，不得使用 `latest`。
-4. 在任务临时 HOME 下运行 `"${zadig_cli[@]}" auth login --host "$ZADIG_HOST" --token "$ZADIG_API_TOKEN"`，随后检查
+4. 在任务临时 HOME 下运行
+   `"${zadig_cli[@]}" auth login --host "${ZADIG_API_HOST:-$ZADIG_HOST}" --token "$ZADIG_API_TOKEN"`，随后检查
    `auth status --output json` 和 `doctor --output json`。任务结束安全删除 `$zadig_home`。
 5. 读取目标 Issue、仓库、分支、Commit 和已有 PPE 评论，避免重复部署。
 
