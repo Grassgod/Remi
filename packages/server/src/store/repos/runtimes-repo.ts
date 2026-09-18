@@ -1904,7 +1904,7 @@ export class RuntimesRepo {
     const models = catalog?.models ?? [];
     if (!catalogAllowsModel(catalog, agent.model ?? "")) return false;
     if (agent.model && !models.some(model => model.id === agent.model)
-      && (!agent.runtimeId || catalog?.model_catalog_status === "ready" || agent.thinkingLevel
+      && ((!agent.runtimeId && agent.provider === "codex") || catalog?.model_catalog_status === "ready" || agent.thinkingLevel
         || (agent.executionGroupId && !agent.runtimeId))) return false;
     return !agent.thinkingLevel || modelThinkingLevels(models, agent.model ?? "", catalog?.default_thinking)
       .some(level => level.value === agent.thinkingLevel);
