@@ -27,6 +27,7 @@ import { type StoreContext } from "@multiremi/store/context.js";
 import { PROJECT_REF_MAX_DEPTH } from "@multiremi/store/repos/projects-repo.js";
 import { runtimeSupportsAgentPlugins } from "@multiremi/store/repos/agent-plugins-repo.js";
 import { runtimeDaemonAliases } from "@multiremi/store/runtime-affinity.js";
+import { repositoryWikiTaskOutcome, repositoryWikiObservability } from "@multiremi/store/repository-wiki-outcome.js";
 import {
   autopilotOutcomeBody,
   autopilotTriggerObjectLabel,
@@ -436,7 +437,7 @@ export class TasksRepo {
       throw new Error("holds_workspace must be a boolean");
     }
     const holdsWorkspace = issueId
-      ? (requestedHoldsWorkspace ?? issueSession?.holdsWorkspace ?? true)
+      ? (issueSession?.withCode ? false : requestedHoldsWorkspace ?? issueSession?.holdsWorkspace ?? true)
       : true;
     let runtimeId = resolveOptionalStringField(input, "runtimeId", "runtime_id", agent.runtimeId);
     if (chatSession && !issue && this.ctx.feishuBot().getFeishuIssueIdForChatSession(chatSession.id)) {
@@ -472,6 +473,16 @@ export class TasksRepo {
       currentPluginSnapshot.length > 0 || Boolean(chatProfile),
       chatSession?.projectId,
     );
+    if (issueSession?.withCode) {
+      const parentRuntime = issueSession.codeRuntimeId
+        ? this.ctx.runtimes().getRuntime(issueSession.codeRuntimeId) : null;
+      if (!parentRuntime) throw new Error("Read-only code snapshot Runtime is unavailable");
+      const daemonId = parentRuntime.daemonId ?? parentRuntime.id;
+      const codeRuntime = this.ctx.runtimes().getRuntimeByDaemonAndProvider(daemonId, agent.provider);
+      // Code lives on this machine even if the provider cache is reset. An
+      // explicit Runtime or an existing side lane must not override this pin.
+      affinity.runtimeId = codeRuntime?.id ?? daemonRuntimeId(daemonId, agent.provider);
+    }
     if (affinity.runtimeId) runtimeId = affinity.runtimeId;
     if (!input.resetProviderSession) inheritChatSession = affinity.inheritChatSession;
 
@@ -680,6 +691,7 @@ export class TasksRepo {
            execution_fingerprint = NULL,
            work_dir = NULL,
            cursor_seq = 0,
+           parent_cursor_seq = 0,
            generation = generation + 1,
            last_task_id = NULL,
            updated_at = ?
@@ -943,6 +955,7 @@ export class TasksRepo {
     // would erase the evidence that this task must stay in managed mode.
     const chatWorkspace = ordinaryChat ? resolveChatWorkspace(this.ctx, chat, task) : null;
     if (chatWorkspace?.changed) task = { ...task, sessionId: null, workDir: null };
+    const issueSession = task.issueSessionId ? this.ctx.issueSessions().getIssueSession(task.issueSessionId) : null;
     const resources = project ? this.ctx.projects().listProjectResources(project.id) : [];
     const projectResources = chatWorkspace?.mode === "managed"
       ? resources.filter((resource) => resource.resourceType !== "local_directory") : resources;
@@ -954,6 +967,7 @@ export class TasksRepo {
     return {
       ...task,
       agent: this.ctx.agents().getAgent(task.agentId),
+      ...(issueSession?.withCode ? { issueSession, issue_session: issueSession } : {}),
       issue,
       project,
       chatProjectId,
@@ -966,7 +980,7 @@ export class TasksRepo {
       // Unbound Chat discovers repositories through the CLI. Bound Chat keeps
       // the existing Project catalog for display and on-demand checkout; its
       // separate explicit-only list controls automatic checkout in the worker.
-      repos: scheduleTarget || task.holdsWorkspace === false || (task.chatSessionId && !task.issueId && !project)
+      repos: scheduleTarget || (task.holdsWorkspace === false && !issueSession?.withCode) || (task.chatSessionId && !task.issueId && !project)
         ? []
         : projectContexts.length
           ? normalizeRepos(projectContexts.flatMap((context) => context.repos))
@@ -1511,6 +1525,14 @@ export class TasksRepo {
     return profile ? { ...profile, model: cleanOptionalString(agent.model) ?? profile.model } : null;
   }
 
+  private runtimeMatchesCodeSnapshot(runtime: MultiremiRuntime, task: MultiremiTaskWithAgent): boolean {
+    const session = task.issueSessionId ? this.ctx.issueSessions().getIssueSession(task.issueSessionId) : null;
+    if (!session?.withCode) return true;
+    const parentRuntime = session.codeRuntimeId ? this.ctx.runtimes().getRuntime(session.codeRuntimeId) : null;
+    return parentRuntime != null && runtimeDaemonAliases(runtime)
+      .some((alias) => runtimeDaemonAliases(parentRuntime).includes(alias));
+  }
+
   private runtimeMeetsTaskClaimEligibility(
     runtime: MultiremiRuntime,
     task: MultiremiTaskWithAgent,
@@ -1519,6 +1541,7 @@ export class TasksRepo {
       && !task.agent.archivedAt
       && this.ctx.runtimes().runtimeCanRunAgent(runtime, task.agent)
       && this.runtimeHasReadyTaskPlugins(runtime, task)
+      && this.runtimeMatchesCodeSnapshot(runtime, task)
       && (!task.issueId || !task.holdsWorkspace || runtimeSupportsIssueWorkspaces(runtime))
       && (!task.issueId || runtimeSupportsParallelExecution(runtime))
       && (!task.holdsWorkspace || this.runtimePassesProjectDeviceRouting(runtime, task.id));
@@ -1644,6 +1667,9 @@ export class TasksRepo {
       ...daemonAliases,
       ...daemonAliases,
       ...deviceRouting.params,
+      ...daemonAliases,
+      ...daemonAliases,
+      ...daemonAliases,
       runtime.id,
       runtime.id,
       runtime.id,
@@ -1673,6 +1699,8 @@ export class TasksRepo {
          JOIN multiremi_agents a ON a.id = t.agent_id
          LEFT JOIN multiremi_chat_sessions project_chat ON project_chat.id = t.chat_session_id
          LEFT JOIN multiremi_issues project_issue ON project_issue.id = t.issue_id
+         LEFT JOIN multiremi_issue_sessions code_session ON code_session.id = t.issue_session_id
+         LEFT JOIN multiremi_runtimes code_runtime ON code_runtime.id = code_session.code_runtime_id
          WHERE t.status = 'queued'
            AND a.archived_at IS NULL
            AND (t.chat_session_id IS NULL OR project_chat.status = 'active')
@@ -1717,6 +1745,12 @@ export class TasksRepo {
              )
            )
            AND (t.holds_workspace = 0 OR ${PROJECT_DEVICE_ROUTING_ELIGIBILITY_SQL})
+           AND (
+             COALESCE(code_session.with_code, 0) = 0
+             OR code_session.code_runtime_id IN (${daemonAliasPlaceholders})
+             OR code_runtime.daemon_id IN (${daemonAliasPlaceholders})
+             OR code_runtime.legacy_daemon_id IN (${daemonAliasPlaceholders})
+           )
            AND (t.runtime_id IS NULL OR t.runtime_id = ?)
            AND (a.runtime_id IS NULL OR a.runtime_id = ?)
            AND (a.execution_group_id IS NULL OR EXISTS (
@@ -3315,8 +3349,14 @@ export class TasksRepo {
       "SELECT id FROM multiremi_autopilot_runs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
     ).get(task.id) as { id: string } | null;
     if (runRow) {
-      const runStatus = status === "completed" ? "completed" : "failed";
-      const failureReason = autopilotTaskFailureReason(status, task);
+      const previousRun = this.ctx.autopilots().getAutopilotRun(runRow.id);
+      const scopedRepository = (previousRun as { repositoryId?: string | null } | null)?.repositoryId
+        ?? (previousRun?.scheduleTarget?.kind === "repository" ? previousRun.scheduleTarget.id : null);
+      const wikiOutcome = scopedRepository
+        ? repositoryWikiTaskOutcome(this.ctx, task.workspaceId, scopedRepository, task.id) : null;
+      const runStatus = status === "completed" && wikiOutcome?.status !== "blocked" ? "completed" : "failed";
+      const failureReason = status === "completed" && wikiOutcome?.status === "blocked"
+        ? `Wiki blocked: ${wikiOutcome.reason}` : autopilotTaskFailureReason(status, task);
       this.ctx.db.run(
         `UPDATE multiremi_autopilot_runs
          SET status = ?, completed_at = ?, failure_reason = ?, result = ?
@@ -3325,13 +3365,16 @@ export class TasksRepo {
           runStatus,
           now,
           runStatus === "failed" ? failureReason : null,
-          toJson({ taskId: task.id, status, output: task.result, error: task.error }),
+          toJson({ taskId: task.id, status, output: task.result, error: task.error,
+            ...(wikiOutcome ? { knowledge_outcome: wikiOutcome } : {}) }),
           runRow.id,
         ],
       );
       const run = this.ctx.autopilots().getAutopilotRun(runRow.id);
       const autopilot = run ? this.ctx.autopilots().getAutopilot(run.autopilotId) : null;
       if (run && autopilot) {
+        const wikiAlert = scopedRepository
+          ? repositoryWikiObservability(this.ctx, task.workspaceId)[scopedRepository]?.alert ?? null : null;
         if (runStatus === "completed") this.ctx.analytics().recordAutopilotRunCompletedAnalytics(autopilot, run);
         else this.ctx.analytics().recordAutopilotRunFailedAnalytics(autopilot, run, failureReason);
         const durationSeconds = autopilotRunDurationSeconds(run.triggeredAt, run.completedAt);
@@ -3345,19 +3388,32 @@ export class TasksRepo {
           (repositoryId) => repositoryNames.get(repositoryId) ?? null,
         );
         const triggerObjectLabel = autopilotTriggerObjectLabel(triggerObject, trigger, run.triggeredAt);
-        const title = triggerObjectLabel
+        const baseTitle = triggerObjectLabel
           ? `${autopilot.title} · ${triggerObjectLabel}`
           : autopilot.title;
+        const title = wikiAlert ? `Wiki blocked ${wikiAlert.count} consecutive runs · ${baseTitle}` : baseTitle;
         const recipients = this.ctx.resolveAutopilotNotificationRecipients(autopilot);
+        // Seeded/orphaned automations may have no resolvable creator. A Wiki
+        // health alert must still reach the workspace's human administrators.
+        if (wikiAlert && recipients.length === 0) {
+          recipients.push(...this.ctx.workspaces().listWorkspaceMembers(autopilot.workspaceId)
+            .filter(member => !member.archivedAt && (member.role === "owner" || member.role === "admin"))
+            .map(member => member.id));
+        }
         for (const recipientId of recipients) {
           if (runStatus === "completed") {
-            const outcome = summarizeAutopilotOutcome(task.result);
+            const outcome = wikiOutcome ? {
+              kind: wikiOutcome.status === "noop" ? "no_change" as const : "changes" as const,
+              headline: `Wiki ${wikiOutcome.status}`, text: wikiOutcome.reason, links: [], counts: null,
+              risks: wikiOutcome.status === "published_with_warnings" ? [wikiOutcome.reason] : [],
+              action: { kind: wikiOutcome.status === "published_with_warnings" ? "investigate" as const : "none" as const, text: null },
+            } : summarizeAutopilotOutcome(task.result);
             this.ctx.createInboxItem({
               workspaceId: autopilot.workspaceId,
               issueId: run.issueId,
               memberId: recipientId,
               type: "autopilot_run_completed",
-              severity: "info",
+              severity: wikiOutcome?.status === "published_with_warnings" ? "attention" : "info",
               title,
               body: autopilotOutcomeBody(outcome, durationSeconds),
               actorType: "system",
@@ -3374,6 +3430,7 @@ export class TasksRepo {
                 issue_session_id: run.issueSessionId,
                 trigger_object: triggerObject,
                 outcome,
+                ...(wikiOutcome ? { knowledge_outcome: wikiOutcome } : {}),
               },
               emitEvent: true,
             });
@@ -3386,7 +3443,9 @@ export class TasksRepo {
               type: "autopilot_run_failed",
               severity: "attention",
               title,
-              body: autopilotOutcomeBody(outcome, durationSeconds),
+              body: wikiAlert
+                ? `Repository Wiki has been blocked for ${wikiAlert.count} consecutive runs (threshold ${wikiAlert.threshold}). ${wikiAlert.reason}`
+                : autopilotOutcomeBody(outcome, durationSeconds),
               actorType: "system",
               actorId: null,
               details: {
@@ -3401,6 +3460,8 @@ export class TasksRepo {
                 issue_session_id: run.issueSessionId,
                 trigger_object: triggerObject,
                 outcome,
+                ...(wikiOutcome ? { knowledge_outcome: wikiOutcome } : {}),
+                ...(wikiAlert ? { wiki_alert: wikiAlert, repository_id: scopedRepository } : {}),
               },
               emitEvent: true,
             });
@@ -3484,6 +3545,14 @@ export class TasksRepo {
     // must still be empty. This prevents a late completion from overwriting a
     // manually reset or replaced lane.
     const expectedProviderSessionId = task.projectionMode === "delta" ? task.sessionId : null;
+    // Resume-safe failures also call this method to retain the own transcript.
+    // Parent progress is acknowledged only after successful completion.
+    const followWindow = task.status === "completed" ? this.ctx.db.query(
+      "SELECT inherited_projection_from_seq FROM multiremi_tasks WHERE id = ?",
+    ).get(task.id) as Row | null : null;
+    const parentCursorSeq = followWindow?.inherited_projection_from_seq != null && task.inheritedProjectionToSeq !== null
+      ? Math.max(lane.parentCursorSeq, task.inheritedProjectionToSeq)
+      : lane.parentCursorSeq;
     const update = `UPDATE multiremi_session_agent_lanes
       SET provider_session_id = ?,
           runtime_id = ?,
@@ -3491,6 +3560,7 @@ export class TasksRepo {
           execution_fingerprint = ?,
           work_dir = ?,
           cursor_seq = ?,
+          parent_cursor_seq = ?,
           last_task_id = ?,
           updated_at = ?
       WHERE session_id = ? AND agent_id = ? AND generation = ? AND execution_scope = ?`;
@@ -3501,6 +3571,7 @@ export class TasksRepo {
       task.executionFingerprint,
       task.workDir,
       cursorSeq,
+      parentCursorSeq,
       task.id,
       now,
       task.issueSessionId,

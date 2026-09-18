@@ -6,14 +6,14 @@ import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
-function sideSessionFixture() {
+function sideSessionFixture(inheritMode: "snapshot" | "follow" = "snapshot") {
   const store = createStore();
   const leader = store.createAgent({ name: "Leader", provider: "claude" });
   const teammate = store.createAgent({ name: "Teammate", provider: "claude" });
   const squad = store.createSquad({ name: "Delivery", leaderId: leader.id, memberIds: [teammate.id] });
   const issue = store.createIssue({ title: "Side conversation", assigneeType: "squad", assigneeId: squad.id });
   const main = store.getOrCreateDefaultIssueSession(issue.id);
-  const side = store.createIssueSession(issue.id, { title: "Side", parentSessionId: main.id });
+  const side = store.createIssueSession(issue.id, { title: "Side", parentSessionId: main.id, inheritMode });
   const sideTask = store.createTask({
     agentId: leader.id,
     issueId: issue.id,
@@ -24,8 +24,8 @@ function sideSessionFixture() {
 }
 
 describe("Side session delegation boundary", () => {
-  it("records blocked agent rich mentions without dispatching a task", () => {
-    const { store, leader, teammate, issue, side, sideTask } = sideSessionFixture();
+  it.each(["snapshot", "follow"] as const)("records blocked agent rich mentions in %s without dispatching a task", (inheritMode) => {
+    const { store, leader, teammate, issue, side, sideTask } = sideSessionFixture(inheritMode);
     const comment = store.createIssueComment(issue.id, {
       authorType: "agent",
       authorId: leader.id,
@@ -61,8 +61,8 @@ describe("Side session delegation boundary", () => {
       .toMatchObject({ reason: "side_session_delegation_blocked", commentId: comment.id });
   });
 
-  it("still dispatches human rich mentions in a side session", () => {
-    const { store, teammate, issue, side } = sideSessionFixture();
+  it.each(["snapshot", "follow"] as const)("still dispatches human rich mentions in a %s side session", (inheritMode) => {
+    const { store, teammate, issue, side } = sideSessionFixture(inheritMode);
     const comment = store.createIssueComment(issue.id, {
       authorType: "member",
       issueSessionId: side.id,
@@ -108,8 +108,8 @@ describe("Side session delegation boundary", () => {
     expect(store.listTasksForIssue(issue.id)).toHaveLength(1);
   });
 
-  it("rejects task-token dispatch from a side session regardless of selected target session", async () => {
-    const { store, leader, teammate, issue, main, side, sideTask } = sideSessionFixture();
+  it.each(["snapshot", "follow"] as const)("rejects task-token dispatch from %s regardless of selected target session", async (inheritMode) => {
+    const { store, leader, teammate, issue, main, side, sideTask } = sideSessionFixture(inheritMode);
     const token = await store.createTaskAccessToken(sideTask, "local");
     const app = createMultiremiApp({ store, authToken: "test-root-token" });
     for (const targetSessionId of [side.id, main.id, undefined]) {
@@ -322,8 +322,8 @@ describe("Side session delegation boundary", () => {
     }
   });
 
-  it("allows a side Agent to post discussion and a human to request an Agent through the API", async () => {
-    const { store, teammate, issue, side, sideTask } = sideSessionFixture();
+  it.each(["snapshot", "follow"] as const)("allows %s discussion and human Agent requests through the API", async (inheritMode) => {
+    const { store, teammate, issue, side, sideTask } = sideSessionFixture(inheritMode);
     const token = await store.createTaskAccessToken(sideTask, "local");
     const app = createMultiremiApp({ store, authToken: "test-root-token" });
     const discussion = await app.request(`/api/issues/${issue.id}/sessions/${side.id}/messages`, {

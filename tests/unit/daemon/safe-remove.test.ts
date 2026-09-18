@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -25,7 +26,10 @@ describe("descriptor-safe owned directory removal", () => {
   const roots: string[] = [];
 
   afterEach(() => {
-    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+    for (const root of roots.splice(0)) {
+      restoreFixturePermissions(root);
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("reports descriptor-safe cleanup support to runtime health", () => {
@@ -158,10 +162,57 @@ describe("descriptor-safe owned directory removal", () => {
     expect(recoverOwnedDirectoryQuarantineSync(root)).toBe(1);
     expect(readdirSync(join(root, OWNED_DIRECTORY_QUARANTINE))).toEqual([]);
   });
+
+  it.each(["direct", "quarantine recovery"])("removes a 0555 tree via %s without chmod through symlinks", (mode) => {
+    const root = tempRoot(roots);
+    const target = join(root, "side-session");
+    const nested = join(target, "repo", "src");
+    const outside = tempRoot(roots);
+    const outsideFile = join(outside, "keep.txt");
+    mkdirSync(nested, { recursive: true });
+    writeFileSync(join(nested, "code.ts"), "export const value = 1;\n", { mode: 0o444 });
+    writeFileSync(outsideFile, "external data\n", { mode: 0o444 });
+    symlinkSync(outside, join(nested, "linked-dir"), "dir");
+    symlinkSync(outsideFile, join(nested, "linked-file"));
+    for (const path of [nested, join(target, "repo"), target, outside]) chmodSync(path, 0o555);
+
+    if (mode === "direct") {
+      expect(removeOwnedDirectorySync(root, target)).toBe(true);
+    } else {
+      let fences = 0;
+      expect(() => removeOwnedDirectorySync(root, target, {
+        assertRootOwner: () => {
+          if (++fences === 3) throw new Error("interrupt before deletion");
+        },
+      })).toThrow("interrupt before deletion");
+      const generation = readdirSync(join(root, OWNED_DIRECTORY_QUARANTINE))[0]!;
+      const quarantinedPath = join(root, OWNED_DIRECTORY_QUARANTINE, generation);
+      // Recovery also handles generations whose root remains read-only,
+      // regardless of whether a previous cleanup granted root write access.
+      chmodSync(quarantinedPath, 0o555);
+      expect(statSync(quarantinedPath).mode & 0o777).toBe(0o555);
+      expect(recoverOwnedDirectoryQuarantineSync(root)).toBe(1);
+    }
+
+    expect(existsSync(target)).toBe(false);
+    expect(readdirSync(join(root, OWNED_DIRECTORY_QUARANTINE))).toEqual([]);
+    expect(statSync(outside).mode & 0o777).toBe(0o555);
+    expect(statSync(outsideFile).mode & 0o777).toBe(0o444);
+    expect(readFileSync(outsideFile, "utf8")).toBe("external data\n");
+  });
 });
 
 function tempRoot(roots: string[]): string {
   const root = mkdtempSync(join(tmpdir(), "multiremi-safe-remove-"));
   roots.push(root);
   return root;
+}
+
+function restoreFixturePermissions(path: string): void {
+  const info = lstatSync(path);
+  if (info.isSymbolicLink()) return;
+  chmodSync(path, info.mode | 0o700);
+  if (info.isDirectory()) {
+    for (const name of readdirSync(path)) restoreFixturePermissions(join(path, name));
+  }
 }

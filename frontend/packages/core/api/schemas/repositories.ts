@@ -74,8 +74,13 @@ export const repositoryWikiDocSchema = z.object({
   id: z.string(),
   repository_id: z.string(),
   workspace_id: z.string(),
-  path: z.string(),
-  slug: z.string(),
+  // A doc that somehow lost its path or slug must degrade to just that row, not
+  // take the whole repository Wiki down with it: `parseWithFallback` discards the
+  // entire response when one entry fails, so a single bad record would render the
+  // Wiki as empty. Callers recover a usable path through `docWikiPath`, matching
+  // the fallback Project Wiki already has.
+  path: z.string().catch("").default(""),
+  slug: z.string().catch("").default(""),
   title: z.string(),
   summary: z.string().nullable().default(null),
   body: z.string(),

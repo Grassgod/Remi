@@ -233,6 +233,28 @@ describe("snapshot TTL GC", () => {
     }
   });
 
+  it("rejects unsafe cached snapshots without renewing their TTL so the sweep can reclaim them", async () => {
+    const f = await snapshotFixture();
+    const first = await f.create();
+    const outsideFile = join(f.source, "README.md");
+    const outsideMode = statSync(outsideFile).mode;
+    chmodSync(first.path, 0o755);
+    symlinkSync(outsideFile, join(first.path, "legacy-escape-link"));
+    chmodSync(first.path, 0o555);
+    age(first.path, Date.now() - ttlMs * 2);
+    const originalMtime = statSync(first.path).mtimeMs;
+
+    await expect(f.create()).rejects.toThrow("symlink escapes snapshot root");
+    expect(statSync(first.path).mtimeMs).toBe(originalMtime);
+    expect(statSync(first.path).mode & 0o777).toBe(0o555);
+    expect(statSync(outsideFile).mode).toBe(outsideMode);
+    expect(await runSnapshotGcOnce({ ...f.options, now: Date.now() }))
+      .toEqual({ removed: 1, retained: 0, skipped: 0 });
+    expect(existsSync(first.path)).toBe(false);
+    expect(statSync(outsideFile).mode).toBe(outsideMode);
+    expect(readFileSync(outsideFile, "utf8")).toBe("committed content\n");
+  });
+
   it("refreshes reused snapshot access time so it survives the next sweep", async () => {
     const f = await snapshotFixture();
     const first = await f.create();

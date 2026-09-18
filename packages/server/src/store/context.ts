@@ -890,6 +890,13 @@ export class StoreContext {
 
   // Cross-domain: read by the agents (updateAgent rescheduling), runtimes and tasks bands.
   localDirectoryDaemonForTask(taskRow: Row): string | null {
+    // Both local directories and read-only side snapshots require a specific
+    // machine. Preserve that constraint across provider changes and re-pooling.
+    const sessionId = cleanOptionalString(taskRow.issue_session_id);
+    const session = sessionId ? this.issueSessions().getIssueSession(sessionId) : null;
+    if (session?.withCode && session.codeRuntimeId) {
+      return this.runtimes().getRuntime(session.codeRuntimeId)?.daemonId ?? session.codeRuntimeId;
+    }
     const issueId = cleanOptionalString(taskRow.issue_id);
     const issue = issueId ? this.issues().getIssue(issueId) : null;
     const chatId = cleanOptionalString(taskRow.chat_session_id);

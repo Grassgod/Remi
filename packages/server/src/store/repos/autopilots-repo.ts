@@ -968,13 +968,18 @@ export class AutopilotsRepo {
     const rows = this.ctx.db.query(
       `SELECT r.* FROM multiremi_autopilot_runs r
        JOIN multiremi_autopilots a ON a.id = r.autopilot_id
-       WHERE a.workspace_id = ? AND r.repository_id IS NOT NULL
+       WHERE a.workspace_id = ? AND (r.repository_id IS NOT NULL OR
+         (r.schedule_target IS NOT NULL AND EXISTS (
+           SELECT 1 FROM multiremi_knowledge_compilation_runs k
+           WHERE k.autopilot_run_id = r.id AND k.repository_id IS NOT NULL)))
        ORDER BY r.created_at DESC, r.id DESC`,
     ).all(workspaceId) as Row[];
     const isActive = (status: MultiremiAutopilotRun["status"]): boolean =>
       (ACTIVE_RUN_STATUSES as readonly string[]).includes(status);
     const latest = new Map<string, MultiremiAutopilotRunRecord>();
     for (const row of rows.map(toAutopilotRun)) {
+      row.repositoryId ??= row.scheduleTarget?.kind === "repository" ? row.scheduleTarget.id : null;
+      if (!row.repositoryId) continue;
       const current = latest.get(row.repositoryId!);
       if (!current) {
         latest.set(row.repositoryId!, row);
@@ -994,7 +999,9 @@ export class AutopilotsRepo {
    */
   isRepositoryWikiRunPublished(runId: string): boolean {
     const run = this.getAutopilotRun(runId);
-    if (!run?.repositoryId) return false;
+    if (!run) return false;
+    run.repositoryId ??= run.scheduleTarget?.kind === "repository" ? run.scheduleTarget.id : null;
+    if (!run.repositoryId) return false;
     return this.repositoryWikiRunHasPublication(run);
   }
 

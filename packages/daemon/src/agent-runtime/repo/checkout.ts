@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, statSync, lstatSync, realpathSync, appendFileSync, chmodSync, copyFileSync, readFileSync, readdirSync, renameSync, rmSync, utimesSync, writeFileSync, type Dirent } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import type { RepoSpec } from "@daemon/contracts/types.js";
 import { createLogger } from "@shared/logger.js";
@@ -33,6 +33,8 @@ export interface MultiremiWorktreeParams {
   reuseExisting?: boolean;
   /** The caller already refreshed this repo in the same preparation flow. */
   skipFetch?: boolean;
+  /** Create a read-only detached worktree from an explicit full ref or commit OID. */
+  detach?: boolean;
   signal?: AbortSignal;
 }
 
@@ -327,6 +329,8 @@ export class MultiremiRepoCache {
       );
       const snapshotPath = join(repoRoot, commit);
       if (existsSync(snapshotPath)) {
+        // Revalidate snapshots created before the symlink containment guard.
+        makeTreeReadOnly(snapshotPath);
         // GC shares this lock and uses the root mtime as last access. A failed
         // touch must reject preparation rather than hand out an expired tree.
         const now = new Date();
@@ -337,6 +341,7 @@ export class MultiremiRepoCache {
       mkdirSync(repoRoot, { recursive: true });
       const temporaryPath = join(repoRoot, `.${commit}.tmp-${process.pid}-${Date.now()}`);
       mkdirSync(temporaryPath, { recursive: true });
+      let published = false;
       try {
         const archive = spawnSync("git", ["--git-dir", barePath, "archive", "--format=tar", commit], {
           encoding: null,
@@ -358,8 +363,12 @@ export class MultiremiRepoCache {
         }
         makeTreeReadOnly(temporaryPath);
         renameSync(temporaryPath, snapshotPath);
+        published = true;
+        // Relative links survive the rename; absolute links must also remain
+        // contained at the published location, not point back into staging.
+        assertSnapshotSymlinksContained(snapshotPath);
       } catch (error) {
-        rmSync(temporaryPath, { recursive: true, force: true });
+        removeFailedSnapshotTree(published ? snapshotPath : temporaryPath);
         throw error;
       }
       const now = new Date();
@@ -379,6 +388,7 @@ export class MultiremiRepoCache {
     barePath: string,
     params: MultiremiWorktreeParams,
   ): Promise<MultiremiWorktreeResult> {
+    if (params.detach) return this.createDetachedWorktreeLocked(barePath, params);
     const worktreePath = join(params.workDir, worktreeDirectoryName(params.repoUrl));
     const legacyWorktreePath = join(params.workDir, repoNameFromUrl(params.repoUrl));
     if (
@@ -441,6 +451,62 @@ export class MultiremiRepoCache {
     excludeAgentFiles(worktreePath);
     applyCoAuthoredByHook(worktreePath, params.coAuthoredByEnabled !== false);
     return { path: worktreePath, branch_name: branchName, branchName, created: true, ...worktreeBaseResult(worktreePath, resolution) };
+  }
+
+  private async createDetachedWorktreeLocked(
+    barePath: string,
+    params: MultiremiWorktreeParams,
+  ): Promise<MultiremiWorktreeResult> {
+    const baseRef = params.ref?.trim();
+    if (!baseRef || (!baseRef.startsWith("refs/") && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(baseRef))) {
+      throw new Error("detached worktree requires an explicit full ref or commit OID");
+    }
+    if (baseRef.startsWith("refs/")) git(barePath, ["check-ref-format", baseRef]);
+    if (params.branchName) throw new Error("detached worktree cannot request a branch name");
+    const worktreePath = this.expectedWorktreePath(params.workDir, params.repoUrl);
+    const result = (created: boolean): MultiremiWorktreeResult => {
+      const commit = git(worktreePath, ["rev-parse", "--verify", "HEAD^{commit}"]);
+      return {
+        path: worktreePath, branch_name: "HEAD", branchName: "HEAD", created,
+        base_ref: baseRef, baseRef, base_commit: commit, baseCommit: commit,
+      };
+    };
+    if (this.hasWorktree(params)) {
+      const branch = git(worktreePath, ["symbolic-ref", "--quiet", "HEAD"], { allowFailure: true });
+      if (branch) throw new Error(`worktree ${worktreePath} is on ${branch}; refusing to detach an existing branch`);
+      // A side conversation keeps its original snapshot even if the parent's
+      // branch advances or disappears. Never reset or re-resolve that branch.
+      const existing = result(false);
+      makeTreeReadOnly(worktreePath);
+      return existing;
+    }
+    if (!params.skipFetch) {
+      await this.fetch(barePath, {
+        env: this.gitAuth(params.workspaceId, params.repoUrl),
+        signal: params.signal,
+      });
+    }
+    // Resolve exactly the caller's local ref under the repository lock, without
+    // origin/default-branch fallback. This includes unpushed Issue commits.
+    const commit = git(barePath, ["rev-parse", "--verify", `${baseRef}^{commit}`]);
+    mkdirSync(params.workDir, { recursive: true });
+    if (lstatSync(params.workDir).isSymbolicLink()) {
+      throw new Error(`unsafe managed worktree parent: ${params.workDir}`);
+    }
+    // GC removes the private directory; the next add collects its stale
+    // registration through the same lazy pruning as regular worktrees.
+    git(barePath, ["worktree", "prune"], { allowFailure: true });
+    try {
+      git(barePath, ["worktree", "add", "--detach", worktreePath, commit]);
+      makeTreeReadOnly(worktreePath);
+      return result(true);
+    } catch (error) {
+      // Never leave a rejected or partially protected tree available for reuse.
+      // We still hold the repo lock, so its stale registration can be removed now.
+      removeFailedSnapshotTree(worktreePath);
+      git(barePath, ["worktree", "prune"]);
+      throw error;
+    }
   }
 
   private barePath(workspaceId: string, repoUrl: string): string {
@@ -587,17 +653,66 @@ function safeReadDir(path: string): Dirent[] {
 }
 
 function makeTreeReadOnly(root: string): void {
-  for (const entry of safeReadDir(root)) {
+  // Validate the entire tree before changing permissions. chmod must never
+  // follow a symlink: its target could be the writable parent Issue checkout.
+  assertSnapshotSymlinksContained(root);
+  setSnapshotTreeReadOnly(root);
+}
+
+function assertSnapshotSymlinksContained(root: string): void {
+  const info = lstatSync(root);
+  if (!info.isDirectory() || info.isSymbolicLink()) {
+    throw new Error(`unsafe read-only snapshot root: ${root}`);
+  }
+  const canonicalRoot = realpathSync(root);
+  const visit = (directory: string): void => {
+    // Fail closed on unreadable directories as well as unresolved links.
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isSymbolicLink()) {
+        let target: string;
+        try {
+          target = realpathSync(path);
+        } catch (error) {
+          throw new Error(`cannot resolve read-only snapshot symlink: ${path}`, { cause: error });
+        }
+        const rel = relative(canonicalRoot, target);
+        if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+          throw new Error(`read-only snapshot symlink escapes snapshot root: ${path}`);
+        }
+      } else if (entry.isDirectory()) {
+        visit(path);
+      }
+    }
+  };
+  visit(root);
+}
+
+function setSnapshotTreeReadOnly(root: string): void {
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
     const path = join(root, entry.name);
     if (entry.isSymbolicLink()) continue;
     if (entry.isDirectory()) {
-      makeTreeReadOnly(path);
-      chmodSync(path, 0o555);
+      setSnapshotTreeReadOnly(path);
     } else {
       chmodSync(path, 0o444);
     }
   }
   chmodSync(root, 0o555);
+}
+
+/** Roll back only a newly created tree, without touching any symlink target. */
+function removeFailedSnapshotTree(root: string): void {
+  const makeDirectoriesWritable = (path: string): void => {
+    const info = lstatSync(path, { throwIfNoEntry: false });
+    if (!info?.isDirectory() || info.isSymbolicLink()) return;
+    chmodSync(path, info.mode | 0o700);
+    for (const entry of readdirSync(path, { withFileTypes: true })) {
+      if (entry.isDirectory() && !entry.isSymbolicLink()) makeDirectoriesWritable(join(path, entry.name));
+    }
+  };
+  makeDirectoriesWritable(root);
+  rmSync(root, { recursive: true, force: true });
 }
 
 function git(

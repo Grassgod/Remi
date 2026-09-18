@@ -220,7 +220,7 @@ function sessionCommandSpecs(): CommandSpec[] {
       const issue = positional(invocation, 0, "issue");
       await getAndRender(invocation, `/api/issues/${encodePath(issue)}/sessions/${encodePath(positional(invocation, 1, "session"))}`);
     }),
-    nativeSpec("session.show", ["session", "show"], "Show a Session and its inherited snapshot", "read", HUMAN_TASK, [refPositional("session")], [], async (invocation) => {
+    nativeSpec("session.show", ["session", "show"], "Show a Session and its inherited context", "read", HUMAN_TASK, [refPositional("session")], [], async (invocation) => {
       const client = await clientFor(invocation);
       const path = `/api/sessions/${encodePath(positional(invocation, 0, "session"))}`;
       const response = await client.request({ method: "GET", path });
@@ -235,14 +235,22 @@ function sessionCommandSpecs(): CommandSpec[] {
           { header: "TITLE", value: (row) => row.title },
           { header: "STATUS", value: (row) => row.status },
           { header: "PARENT", value: (row) => row.parent_session_id ?? "-" },
+          { header: "WITH CODE", value: (row) => row.with_code ?? false },
+          { header: "CODE RUNTIME", value: (row) => row.code_runtime_id ?? "-" },
           { header: "INHERIT", value: (row) => row.inherit_mode ?? "none" },
           { header: "CUTOFF", value: (row) => row.inherit_cutoff_seq ?? "-" },
           { header: "INHERITED EVENTS (PRE-TRUNCATION)", value: (row) => row.inherited_event_count ?? 0 },
+          { header: "PARENT MAX", value: () => inheritedContext?.parent_max_seq },
+          { header: "PARENT CURSORS", value: () => inheritedContext?.lanes?.map((lane) => `${lane.agent_id}/${lane.execution_scope}:${lane.parent_cursor_seq}`).join(", ") },
+          { header: "TOTAL INHERITED TOKENS", value: () => inheritedContext?.inherited_tokens_total },
+          { header: "FOLLOW TOKEN LIMIT", value: () => inheritedContext?.follow_token_limit },
+          { header: "FOLLOW FROZEN", value: () => inheritedContext?.follow_frozen },
+          { header: "FROZEN AT", value: () => inheritedContext?.follow_frozen_seq },
           { header: "TRUNCATED", value: () => inheritedContext?.diagnostics?.truncated ?? "-" },
         ],
       });
     }),
-    nativeSpec("session.inherited-context", ["session", "inherited-context"], "Show recorded inherited context diagnostics (event count is before truncation)", "read", HUMAN_TASK, [refPositional("session")], [], async (invocation) => {
+    nativeSpec("session.inherited-context", ["session", "inherited-context"], "Show inherited context diagnostics, follow progress and token costs (event count is before truncation)", "read", HUMAN_TASK, [refPositional("session")], [], async (invocation) => {
       const client = await clientFor(invocation);
       const response = await client.request<MultiremiSessionInheritedContext>({
         method: "GET", path: `/api/sessions/${encodePath(positional(invocation, 0, "session"))}/inherited-context`,
@@ -258,18 +266,29 @@ function sessionCommandSpecs(): CommandSpec[] {
           { header: "OMITTED", value: (row) => row.diagnostics?.omitted_events },
           { header: "EST TOKENS", value: (row) => row.diagnostics?.estimated_tokens },
           { header: "TOKEN BUDGET", value: (row) => row.diagnostics?.token_budget },
+          { header: "INHERIT", value: (row) => row.inherit_mode },
+          { header: "PARENT MAX", value: (row) => row.parent_max_seq },
+          { header: "PARENT CURSORS", value: (row) => row.lanes?.map((lane) => `${lane.agent_id}/${lane.execution_scope}:${lane.parent_cursor_seq}`).join(", ") },
+          { header: "TOTAL INHERITED TOKENS", value: (row) => row.inherited_tokens_total },
+          { header: "FOLLOW TOKEN LIMIT", value: (row) => row.follow_token_limit },
+          { header: "FOLLOW FROZEN", value: (row) => row.follow_frozen },
+          { header: "FROZEN AT", value: (row) => row.follow_frozen_seq },
         ],
       });
     }),
     nativeSpec("session.create", ["session", "create"], "Create an issue Session", "write", HUMAN, [refPositional("issue")], [
       ...INPUT_OPTIONS, ...titleStatusOptions(), discussionOption(),
-      { name: "from", type: "string", valueName: "session-id", description: "Inherit a parent Session snapshot (implies --discussion)" },
+      { name: "from", type: "string", valueName: "session-id", description: "Inherit parent Session context (implies --discussion; snapshot by default)" },
+      { name: "inherit-mode", type: "string", valueName: "snapshot|follow", description: "Use a frozen snapshot or follow new parent events (requires --from)" },
+      { name: "with-code", type: "boolean", description: "Attach a read-only parent code snapshot (requires --from and a parent Runtime)" },
     ], async (invocation) => {
       const parentSessionId = stringOption(invocation, "from");
       const body = await requestBody(invocation, {
         title: stringOption(invocation, "title") ?? undefined,
         holds_workspace: invocation.options.discussion === true || parentSessionId ? false : undefined,
         parent_session_id: parentSessionId ?? undefined,
+        inherit_mode: stringOption(invocation, "inherit-mode") ?? undefined,
+        with_code: invocation.options["with-code"] === true ? true : undefined,
       });
       await mutateAndRender(invocation, "POST", `/api/issues/${encodePath(positional(invocation, 0, "issue"))}/sessions`, body);
     }),

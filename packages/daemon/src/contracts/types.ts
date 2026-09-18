@@ -93,11 +93,15 @@ export interface AgentTaskIssue {
 }
 
 export interface AgentTaskIssueSession {
+  withCode?: boolean;
+  with_code?: boolean;
+  codeRuntimeId?: string | null;
+  code_runtime_id?: string | null;
   id: string;
   parentSessionId?: string | null;
   parent_session_id?: string | null;
-  inheritMode?: "none" | "snapshot";
-  inherit_mode?: "none" | "snapshot";
+  inheritMode?: "none" | "snapshot" | "follow";
+  inherit_mode?: "none" | "snapshot" | "follow";
   inheritCutoffSeq?: number | null;
   inherit_cutoff_seq?: number | null;
   issueId?: string;
@@ -113,7 +117,7 @@ export interface AgentTaskSessionProjection {
   session_id?: string;
   targetAgentId?: string;
   target_agent_id?: string;
-  mode: "bootstrap" | "delta";
+  mode: "bootstrap" | "delta" | "inherited_delta";
   fromSeq?: number;
   from_seq?: number;
   toSeq?: number;

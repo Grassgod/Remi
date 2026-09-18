@@ -169,6 +169,9 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     if (token?.type === "task" && (!task || isTerminalTaskStatus(task.status))) {
       return c.json({ error: "task credential is no longer active", code: "task_credential_inactive" }, 403);
     }
+    if (task?.issueSessionId && store.getIssueSession(task.issueSessionId)?.withCode) {
+      return c.json({ error: "Read-only code snapshots cannot obtain Git credentials", code: "readonly_code_snapshot" }, 403);
+    }
     const workspaceId = token?.workspaceId
       ?? cleanString(body.workspaceId ?? body.workspace_id)
       ?? "local";

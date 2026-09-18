@@ -8,6 +8,7 @@ import {
 import { ProjectKnowledgeService } from "@multiremi/project-knowledge/service.js";
 import { repositoryWikiDocUri, repositoryWikiStorageRootUri } from "@multiremi/repository-wiki/codec.js";
 import { RepositoryWikiService } from "@multiremi/repository-wiki/service.js";
+import { resolveRepositoryWikiRef, tokenizeWikiLinks } from "@multiremi/contracts/wiki-links";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type {
   OpenVikingClientContract,
@@ -116,6 +117,569 @@ class FakeOpenViking implements OpenVikingClientContract {
     throw new Error("planned OpenViking write failure");
   }
 }
+
+describe("Repository Wiki snapshot restoration", () => {
+  async function fixture() {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    store.updateWorkspaceRepositories("local", [
+      { id: "repo_restore", name: "restore", url: "https://github.com/acme/restore.git", source: "github", default_branch: "main" },
+      { id: "repo_other", name: "other", url: "https://github.com/acme/other.git", source: "github", default_branch: "main" },
+    ]);
+    const client = new FakeOpenViking();
+    const service = new RepositoryWikiService(store, client, "openviking");
+    const docs = (await service.applyBatch("local", "repo_restore", [
+      { kind: "create", input: { path: "target.md", title: "Target", body: "恢复的正文" } },
+      { kind: "create", input: { path: "source.md", title: "Source", body: "[[target]]" } },
+    ])).map(result => result.doc);
+    await service.runStorageJobs();
+    const targets = docs.map(doc => {
+      const current = store.getRepositoryWikiDocByRef("local", "repo_restore", doc.id)!;
+      return { ref: current.id, expected_version: current.version, snapshot_oid: current.snapshotOid!, content_sha256: current.contentSha256! };
+    });
+    const before = store.listRepositoryWikiDocs("local", "repo_restore");
+    const revisions = before.map(doc => store.listRepositoryWikiDocRevisions(doc.id));
+    for (const doc of before) client.files.delete(doc.contentUri!);
+    const app = createMultiremiApp({ store, repositoryWiki: service, authToken: "root-secret" });
+    const request = (body: unknown, token = "root-secret") => app.request("/api/workspaces/local/repos/repo_restore/wiki/restore", {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify(body),
+    });
+    return { store, client, service, docs, targets, before, revisions, app, request };
+  }
+
+  it("preflights without storage writes, restores exact bytes with audit, and unlocks strict reads and the next write", async () => {
+    const f = await fixture();
+    await expect(f.service.listStrict("local", "repo_restore")).rejects.toThrow("not found");
+    const writes = f.client.writeAttempts;
+    const tags = [...f.client.tags];
+    const commits = f.client.commits.length;
+    const dry = await f.request({ targets: f.targets });
+    expect(dry.status).toBe(200);
+    const plan = await dry.json() as any;
+    expect(plan.dry_run).toBe(true);
+    expect(plan.results.map((r: any) => r.state)).toEqual(["missing", "missing"]);
+    expect(plan.repository_readable).toBe(false);
+    expect(f.client.writeAttempts).toBe(writes);
+    expect([...f.client.tags]).toEqual(tags);
+    expect(f.client.commits.length).toBe(commits);
+    const response = await f.request({ targets: f.targets, dry_run: false });
+    expect(response.status).toBe(200);
+    const report = await response.json() as any;
+    expect(report.results.map((r: any) => r.state)).toEqual(["restored", "restored"]);
+    expect(report.repository_readable).toBe(true);
+    expect(report.unreadable).toEqual([]);
+    expect(report.run.status).toBe("noop");
+    const audit = JSON.parse(f.store.getKnowledgeCompilationRun(report.run.id)!.resultSummary!);
+    expect(audit).toMatchObject({ operation: "repository_wiki_restore", dry_run: false, actor: { kind: "member" }, results: report.results });
+    const inspected = await f.app.request(`/api/knowledge/runs/${report.run.id}`, { headers: { Authorization: "Bearer root-secret" } });
+    expect(inspected.status).toBe(200);
+    expect((await inspected.json() as any).run.result_summary).toContain("repository_wiki_restore");
+    for (const doc of f.before) {
+      expect(f.client.files.get(doc.contentUri!)).toBe(await f.client.show(doc.snapshotOid!, doc.contentUri!));
+      expect(sha256Text(f.client.files.get(doc.contentUri!)!)).toBe(doc.contentSha256!);
+    }
+    expect(f.store.listRepositoryWikiDocs("local", "repo_restore")).toEqual(f.before);
+    expect(f.before.map(doc => f.store.listRepositoryWikiDocRevisions(doc.id))).toEqual(f.revisions);
+    expect((await f.service.listStrict("local", "repo_restore")).map(doc => doc.body).sort()).toEqual(["[[target]]", "恢复的正文"].sort());
+    // Exercise the ordinary authenticated REST write, not only the restore API.
+    const updated = await f.app.request(`/api/workspaces/local/repos/repo_restore/wiki/${f.docs[0]!.id}`, {
+      method: "PUT", headers: { "Content-Type": "application/json", Authorization: "Bearer root-secret" },
+      body: JSON.stringify({ expected_version: 1, body: "恢复后正常写入" }),
+    });
+    expect(updated.status).toBe(200);
+    expect((await f.service.get("local", "repo_restore", f.docs[0]!.id))?.version).toBe(2);
+  });
+
+  it("rejects any corrupt snapshot before creating even the first valid object, with a failed audit", async () => {
+    const f = await fixture();
+    const last = f.before.find(doc => doc.id === f.targets[1]!.ref)!;
+    f.client.commits.find(commit => commit.oid === last.snapshotOid)!.files.set(last.contentUri!, "corrupt");
+    const writes = f.client.writeAttempts;
+    const directories = [...f.client.directories];
+    const response = await f.request({ targets: f.targets, dry_run: false });
+    expect(response.status).toBe(409);
+    expect((await response.json() as any).error).toContain("Snapshot checksum mismatch");
+    expect(f.client.writeAttempts).toBe(writes);
+    expect([...f.client.directories]).toEqual(directories);
+    for (const doc of f.before) expect(f.client.files.has(doc.contentUri!)).toBe(false);
+    const audit = f.store.listKnowledgeCompilationRuns({ workspaceId: "local", repositoryId: "repo_restore" })[0]!;
+    expect(audit.status).toBe("failed");
+    expect(JSON.parse(audit.resultSummary!)).toMatchObject({ operation: "repository_wiki_restore", targets: f.targets });
+    expect(f.store.listRepositoryWikiDocs("local", "repo_restore")).toEqual(f.before);
+  });
+
+  it("is idempotent and never overwrites an existing conflicting object", async () => {
+    const f = await fixture();
+    const first = f.before.find(doc => doc.id === f.targets[0]!.ref)!;
+    f.client.files.set(first.contentUri!, "someone else's content");
+    const writes = f.client.writeAttempts;
+    expect((await f.request({ targets: f.targets, dry_run: false })).status).toBe(409);
+    expect(f.client.writeAttempts).toBe(writes);
+    expect(f.client.files.get(first.contentUri!)).toBe("someone else's content");
+    f.client.files.delete(first.contentUri!);
+    expect((await f.request({ targets: f.targets, dry_run: false })).status).toBe(200);
+    const afterWrites = f.client.writeAttempts;
+    const afterFiles = [...f.client.files];
+    const retry = await f.request({ targets: f.targets, dry_run: false });
+    expect(retry.status).toBe(200);
+    expect((await retry.json() as any).results.map((r: any) => r.state)).toEqual(["present", "present"]);
+    expect(f.client.writeAttempts).toBe(afterWrites);
+    expect([...f.client.files]).toEqual(afterFiles);
+    expect(f.store.listRepositoryWikiDocs("local", "repo_restore")).toEqual(f.before);
+  });
+
+  it("preserves partial progress on transport failure and safely finishes on retry", async () => {
+    const f = await fixture();
+    f.client.failWriteAt = f.client.writeAttempts + 2;
+    const failed = await f.request({ targets: f.targets, dry_run: false });
+    expect(failed.status).toBe(400);
+    const first = f.before.find(doc => doc.id === f.targets[0]!.ref)!;
+    expect(f.client.files.has(first.contentUri!)).toBe(true);
+    const audit = f.store.listKnowledgeCompilationRuns({ workspaceId: "local", repositoryId: "repo_restore" })[0]!;
+    expect(audit.status).toBe("failed");
+    expect(JSON.parse(audit.resultSummary!).results[0].state).toBe("restored");
+    f.client.failWriteAt = null;
+    const retry = await f.request({ targets: f.targets, dry_run: false });
+    expect(retry.status).toBe(200);
+    expect((await retry.json() as any).results.map((r: any) => r.state)).toEqual(["present", "restored"]);
+    expect(f.store.listRepositoryWikiDocs("local", "repo_restore")).toEqual(f.before);
+  });
+
+  it("rejects stale pins and malformed targets without storage writes", async () => {
+    const f = await fixture();
+    const writes = f.client.writeAttempts;
+    for (const patch of [{ expected_version: 2 }, { snapshot_oid: "old-snapshot" }, { content_sha256: "0".repeat(64) }]) {
+      expect((await f.request({ targets: [{ ...f.targets[0], ...patch }], dry_run: false })).status).toBe(409);
+    }
+    for (const targets of [[], [f.targets[0], f.targets[0]], [{ ...f.targets[0], content_sha256: "invalid" }], [null]]) {
+      expect((await f.request({ targets, dry_run: false })).status).toBe(400);
+    }
+    expect(f.client.writeAttempts).toBe(writes);
+  });
+
+  it("does not overwrite an object created by another writer after preflight", async () => {
+    const f = await fixture();
+    const create = f.client.create.bind(f.client);
+    let raced = false;
+    f.client.create = async (uri, root, content) => {
+      if (!raced) { raced = true; f.client.files.set(uri, "concurrent content"); }
+      return create(uri, root, content);
+    };
+    const response = await f.request({ targets: f.targets, dry_run: false });
+    expect(response.status).toBe(409);
+    expect((await response.json() as any).error).toContain("Concurrent object checksum mismatch");
+    const first = f.before.find(doc => doc.id === f.targets[0]!.ref)!;
+    expect(f.client.files.get(first.contentUri!)).toBe("concurrent content");
+    expect(f.store.listRepositoryWikiDocs("local", "repo_restore")).toEqual(f.before);
+  });
+
+  it("refuses recovery while canonical promotion/cleanup is pending", async () => {
+    const f = await fixture();
+    await f.request({ targets: f.targets, dry_run: false });
+    await f.service.update("local", "repo_restore", f.docs[0]!.id, { body: "new content" });
+    expect(f.store.listRepositoryWikiStorageJobs("local", "repo_restore").length).toBeGreaterThan(0);
+    const writes = f.client.writeAttempts;
+    const response = await f.request({ targets: f.targets, dry_run: false });
+    expect(response.status).toBe(503);
+    expect((await response.json() as any).error).toBe("Repository wiki storage repair is still pending");
+    expect(f.client.writeAttempts).toBe(writes);
+  });
+
+  it("enforces admin human membership and scoped publishing tasks before accessing snapshots", async () => {
+    const f = await fixture();
+    const writes = f.client.writeAttempts;
+    const user = f.store.getOrCreateUser({ email: "restore-member@example.test", name: "Reader" });
+    f.store.createWorkspaceMember({ workspaceId: "local", userId: user.id, name: "Reader", role: "member" });
+    const pat = await f.store.createAccessToken({ workspaceId: "local", userId: user.id, name: "Reader", type: "pat", purpose: "session" });
+    expect((await f.request({ targets: f.targets, dry_run: false }, pat.token)).status).toBe(403);
+    const outsider = f.store.getOrCreateUser({ email: "restore-outsider@example.test", name: "Outsider" });
+    const outsidePat = await f.store.createAccessToken({ workspaceId: "local", userId: outsider.id, name: "Outsider", type: "pat", purpose: "session" });
+    // Existing workspace middleware hides non-member workspace existence.
+    expect((await f.request({ targets: f.targets, dry_run: false }, outsidePat.token)).status).toBe(404);
+    expect((await f.request({ targets: f.targets, dry_run: false }, "invalid-token")).status).toBe(401);
+    const { autopilot } = configureRepositoryWikiAutomation(f.store);
+    const run = f.store.runAutopilot(autopilot.id, { source: "scm_event", repositoryId: "repo_other", dedupeKey: "repo_other:incremental_update:restore", payload: { repository_wiki_repository_id: "repo_other" } });
+    const outOfScope = await f.store.createTaskAccessToken(f.store.getTask(run.taskId!)!, "local");
+    const denied = await f.request({ targets: f.targets, dry_run: false }, outOfScope.token);
+    expect(denied.status).toBe(403);
+    expect((await denied.json() as any).error).toBe("task knowledge target does not match its repository scope");
+    const project = f.store.createProject({ title: "Restore project" });
+    f.store.createProjectResource(project.id, { resourceType: "github_repo", resourceRef: { url: "https://github.com/acme/restore.git" } });
+    const issue = f.store.createIssue({ title: "Restore", projectId: project.id });
+    const agent = f.store.createAgent({ name: "Non-publisher", provider: "claude" });
+    const task = f.store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "restore" });
+    const ordinary = await f.store.createTaskAccessToken(task, "local");
+    const noPublish = await f.request({ targets: f.targets, dry_run: false }, ordinary.token);
+    expect(noPublish.status).toBe(403);
+    expect((await noPublish.json() as any).error).toBe("knowledge publish capability is required");
+    expect(f.client.writeAttempts).toBe(writes);
+    expect(f.store.listKnowledgeCompilationRuns({ workspaceId: "local", repositoryId: "repo_restore" })).toEqual([]);
+    const scopedRun = f.store.runAutopilot(autopilot.id, { source: "scm_event", repositoryId: "repo_restore", dedupeKey: "repo_restore:incremental_update:restore", payload: { repository_wiki_repository_id: "repo_restore" } });
+    const scoped = await f.store.createTaskAccessToken(f.store.getTask(scopedRun.taskId!)!, "local");
+    expect((await f.request({ targets: f.targets, dry_run: false }, scoped.token)).status).toBe(200);
+    expect(await f.service.listStrict("local", "repo_restore")).toHaveLength(2);
+    const admin = f.store.getOrCreateUser({ email: "restore-admin@example.test", name: "Admin" });
+    f.store.createWorkspaceMember({ workspaceId: "local", userId: admin.id, name: "Admin", role: "admin" });
+    const adminPat = await f.store.createAccessToken({ workspaceId: "local", userId: admin.id, name: "Admin", type: "pat", purpose: "session" });
+    expect((await f.request({ targets: f.targets, dry_run: false }, adminPat.token)).status).toBe(200);
+  });
+});
+
+describe("Repository Wiki availability and migration safeguards", () => {
+  it("publishes an 84-page connected component through OpenViking, drains storage jobs and accepts the next batch", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    store.updateWorkspaceRepositories("local", [{ id: "repo_large", name: "large", url: "https://github.com/acme/large.git", source: "github", default_branch: "main" }]);
+    const client = new FakeOpenViking();
+    let activeWrites = 0;
+    let maxActiveWrites = 0;
+    const create = client.create.bind(client);
+    client.create = async (...args) => {
+      activeWrites++;
+      maxActiveWrites = Math.max(maxActiveWrites, activeWrites);
+      try { await Bun.sleep(1); await create(...args); }
+      finally { activeWrites--; }
+    };
+    const service = new RepositoryWikiService(store, client, "openviking");
+    const docs = (await service.applyBatch("local", "repo_large", Array.from({ length: 84 }, (_, i) => ({
+      kind: "create" as const, input: { path: `old/page-${i}.md`, title: `Page ${i}`, body: `[[old/page-${(i + 1) % 84}]]` },
+    })))).map(result => result.doc);
+    await service.runStorageJobs();
+    const { agent, autopilot } = configureRepositoryWikiAutomation(store);
+    const run = store.runAutopilot(autopilot.id, { source: "scm_event", repositoryId: "repo_large", dedupeKey: "repo_large:incremental_update:test", payload: { repository_wiki_repository_id: "repo_large" } });
+    const task = store.getTask(run.taskId!)!;
+    const credential = await store.createTaskAccessToken(task, "local");
+    const submission = store.createKnowledgeSubmission({ workspaceId: "local", repositoryId: "repo_large", scope: "repository_wiki", sourceType: "agent", body: "Regroup the connected section", sourceTaskId: task.id, authorAgentId: agent.id }).submission;
+    const app = createMultiremiApp({ store, repositoryWiki: service, authToken: "root-secret" });
+    const path = (i: number) => `concepts/domain-${Math.floor(i / 20)}/page-${i}.md`;
+    const response = await app.request("/api/workspaces/local/repos/repo_large/wiki/publish", {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${credential.token}` },
+      body: JSON.stringify({ submission_ids: [submission.id], dedupe_key: "whole-openviking-migration", outputs: docs.map((doc, i) => ({
+        action: "update", ref: doc.id, expected_version: 1, path: path(i), body: `[[${path((i + 1) % 84)}]]`,
+      })) }),
+    });
+    expect(response.status).toBe(200);
+    expect((await response.json() as any).run.status).toBe("published");
+    const after = await service.listStrict("local", "repo_large");
+    expect(after.map(doc => doc.id).sort()).toEqual(docs.map(doc => doc.id).sort());
+    for (const doc of after) {
+      expect(doc.version).toBe(2);
+      expect(doc.contentUri).toBe(repositoryWikiDocUri("local", "repo_large", doc.path));
+      expect(sha256Text(client.files.get(doc.contentUri!)!)).toBe(doc.contentSha256!);
+      expect(sha256Text(await client.show(doc.snapshotOid!, doc.contentUri!))).toBe(doc.contentSha256!);
+      expect(resolveRepositoryWikiRef(tokenizeWikiLinks(doc.body)[0]!.ref, doc.path, after).status).toBe("resolved");
+    }
+    expect(maxActiveWrites).toBeGreaterThan(1);
+    expect(maxActiveWrites).toBeLessThanOrEqual(4);
+    expect(store.listRepositoryWikiStorageJobs("local", "repo_large").every(job => job.state === "cleanup")).toBe(true);
+    await service.runStorageJobs();
+    expect(store.listRepositoryWikiStorageJobs("local", "repo_large")).toEqual([]);
+    for (const doc of docs) expect(client.files.has(repositoryWikiDocUri("local", "repo_large", doc.path))).toBe(false);
+    const next = await service.update("local", "repo_large", after[0]!.id, { body: `${after[0]!.body}\nNext batch`, expectedVersion: 2 });
+    expect(next.version).toBe(3);
+    expect(next.contentUri).toBe(repositoryWikiDocUri("local", "repo_large", next.path));
+    await service.runStorageJobs();
+    expect(store.listRepositoryWikiStorageJobs("local", "repo_large")).toEqual([]);
+    expect((await service.get("local", "repo_large", next.id))?.body).toContain("Next batch");
+  });
+
+  it("checkpoints promotion across repeated timeouts and restarts without replaying completed pages", async () => {
+    const store = createStore();
+    const client = new FakeOpenViking();
+    const service = new RepositoryWikiService(store, client, "openviking");
+    const docs = (await service.applyBatch("local", "repo_resume", Array.from({ length: 24 }, (_, i) => ({
+      kind: "create" as const, input: { path: `old/page-${i}.md`, title: `Page ${i}`, body: `[[old/page-${(i + 1) % 24}]]` },
+    })))).map(result => result.doc);
+    await service.runStorageJobs();
+    // Each attempt has enough time for one checkpoint, but its second
+    // snapshot never responds (also exercises a client ignoring abort).
+    const commit = client.commit.bind(client);
+    let promotionCommits = 0;
+    let releaseLateSnapshot!: () => void;
+    client.commit = async (message) => {
+      if (message.endsWith(":promote") && ++promotionCommits === 2) {
+        await new Promise<void>(resolve => { releaseLateSnapshot = resolve; });
+      }
+      return commit(message);
+    };
+    const restartedService = () => new RepositoryWikiService(store, client, "openviking", { storageJobTimeoutMs: 100, writeTimeoutMs: 2_000 });
+    const moved = await restartedService().applyBatch("local", "repo_resume", docs.map((doc, i) => ({
+      kind: "update" as const, ref: doc.id, input: { path: `new/page-${i}.md`, body: `[[new/page-${(i + 1) % 24}]]`, expectedVersion: 1 },
+    })));
+    expect(moved.every(result => result.doc.version === 2)).toBe(true);
+    for (const remaining of [16, 8]) {
+      const job = store.listRepositoryWikiStorageJobs("local", "repo_resume")[0]!;
+      expect(job.state).toBe("pending");
+      expect(job.manifest.promotions).toHaveLength(remaining);
+      expect(job.lastError).toContain("storage job deadline exceeded");
+      const outstanding = new Set(job.manifest.promotions.map(entry => entry.docId));
+      const readable = await service.listStrict("local", "repo_resume");
+      const completed = readable.filter(doc => !outstanding.has(doc.id));
+      expect(completed).toHaveLength(24 - remaining);
+      for (const doc of readable) {
+        expect(doc.version).toBe(2);
+        expect(resolveRepositoryWikiRef(tokenizeWikiLinks(doc.body)[0]!.ref, doc.path, readable).status).toBe("resolved");
+      }
+      // A late snapshot must not publish another checkpoint after lease release.
+      releaseLateSnapshot();
+      await Bun.sleep(0);
+      expect(store.listRepositoryWikiStorageJobs("local", "repo_resume")[0]!.manifest.promotions).toHaveLength(remaining);
+      const completedUris = new Set(completed.map(doc => doc.contentUri!));
+      client.readCalls.length = 0;
+      promotionCommits = 0;
+      await restartedService().runStorageJobs(undefined, Date.now() + 600_000);
+      expect(client.readCalls.some(uri => completedUris.has(uri))).toBe(false);
+    }
+    expect(store.listRepositoryWikiStorageJobs("local", "repo_resume")).toEqual([]);
+    const after = await service.listStrict("local", "repo_resume");
+    expect(after.every(doc => doc.contentUri === repositoryWikiDocUri("local", "repo_resume", doc.path))).toBe(true);
+    client.commit = commit;
+    const next = await service.update("local", "repo_resume", after[0]!.id, { body: `${after[0]!.body}\nWritable`, expectedVersion: 2 });
+    expect(next.version).toBe(3);
+    await service.runStorageJobs();
+    expect(store.listRepositoryWikiStorageJobs("local", "repo_resume")).toEqual([]);
+  });
+
+  it("rolls back only the unfinished promotion chunk and retains durable checkpoints", async () => {
+    const store = createStore();
+    const client = new FakeOpenViking();
+    const commit = client.commit.bind(client);
+    let promotions = 0;
+    client.commit = async (message) => {
+      if (message.endsWith(":promote") && ++promotions === 2) throw new Error("second promotion snapshot failed");
+      return commit(message);
+    };
+    const service = new RepositoryWikiService(store, client, "openviking");
+    const results = await service.applyBatch("local", "repo_checkpoint", Array.from({ length: 16 }, (_, i) => ({
+      kind: "create" as const, input: { path: `page-${i}.md`, title: `Page ${i}`, body: `Facts ${i}` },
+    })));
+    const job = store.listRepositoryWikiStorageJobs("local", "repo_checkpoint")[0]!;
+    expect(job.manifest.promotions).toHaveLength(8);
+    for (const [i, result] of results.entries()) {
+      const canonical = repositoryWikiDocUri("local", "repo_checkpoint", result.doc.path);
+      expect(client.files.has(canonical)).toBe(i < 8);
+      expect((await service.get("local", "repo_checkpoint", result.doc.id))?.body).toBe(`Facts ${i}`);
+    }
+    await service.runStorageJobs(undefined, Date.now() + 600_000);
+    expect(store.listRepositoryWikiStorageJobs("local", "repo_checkpoint")).toEqual([]);
+    expect((await service.listStrict("local", "repo_checkpoint")).every(doc => doc.contentUri === repositoryWikiDocUri("local", "repo_checkpoint", doc.path))).toBe(true);
+  });
+
+  it("fences promotion checkpoints after lease loss without releasing the successor lease", async () => {
+    const store = createStore();
+    const client = new FakeOpenViking();
+    const commit = client.commit.bind(client);
+    let promotions = 0;
+    client.commit = async (message) => {
+      const oid = await commit(message);
+      if (message.endsWith(":promote") && ++promotions === 2) {
+        db!.run("UPDATE multiremi_repository_wiki_storage_jobs SET lease_token = 'successor' WHERE repository_id = 'repo_lease'");
+      }
+      return oid;
+    };
+    const service = new RepositoryWikiService(store, client, "openviking");
+    const results = await service.applyBatch("local", "repo_lease", Array.from({ length: 16 }, (_, i) => ({
+      kind: "create" as const, input: { path: `page-${i}.md`, title: `Page ${i}`, body: `Facts ${i}` },
+    })));
+    const job = store.listRepositoryWikiStorageJobs("local", "repo_lease")[0]!;
+    expect(job.state).toBe("pending");
+    expect(job.manifest.promotions).toHaveLength(8);
+    expect(job.lastError).toContain("lease lost");
+    expect(store.claimRepositoryWikiStorageJob(job.id, "outsider", new Date(Date.now() + 120_000).toISOString(), new Date().toISOString())).toBe(false);
+    for (const [i, result] of results.entries()) {
+      const doc = store.getRepositoryWikiDocByRef("local", "repo_lease", result.doc.id)!;
+      expect(doc.contentUri === repositoryWikiDocUri("local", "repo_lease", doc.path)).toBe(i < 8);
+      expect(store.listRepositoryWikiDocRevisions(doc.id)[0]!.contentUri).toBe(doc.contentUri);
+    }
+    store.releaseRepositoryWikiStorageJob(job.id, "successor");
+    await new RepositoryWikiService(store, client, "openviking").runStorageJobs(undefined, Date.now() + 600_000);
+    expect(store.listRepositoryWikiStorageJobs("local", "repo_lease")).toEqual([]);
+  });
+
+  it("publishes beside a missing object and marks a timed-out publication failed instead of validating", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    store.updateWorkspaceRepositories("local", [{ id: "repo_publish_degraded", name: "publish-degraded", url: "https://github.com/acme/publish-degraded.git", source: "github", default_branch: "main" }]);
+    const client = new FakeOpenViking();
+    const service = new RepositoryWikiService(store, client, "openviking", { writeTimeoutMs: 50 });
+    const missing = await service.create("local", "repo_publish_degraded", { path: "missing.md", title: "Missing", body: "Original" });
+    const target = await service.create("local", "repo_publish_degraded", { path: "target.md", title: "Target", body: "Original" });
+    await service.runStorageJobs();
+    client.files.delete(missing.contentUri!);
+    const { agent, autopilot } = configureRepositoryWikiAutomation(store);
+    const automation = store.runAutopilot(autopilot.id, { source: "scm_event", repositoryId: "repo_publish_degraded", dedupeKey: "repo_publish_degraded:incremental_update:test", payload: { repository_wiki_repository_id: "repo_publish_degraded" } });
+    const task = store.getTask(automation.taskId!)!;
+    const credential = await store.createTaskAccessToken(task, "local");
+    const app = createMultiremiApp({ store, repositoryWiki: service, authToken: "root-secret" });
+    const publish = (key: string, version: number, pathInput: { path?: string; slug?: string } = {}) => {
+      const source = store.createKnowledgeSubmission({ workspaceId: "local", repositoryId: "repo_publish_degraded", scope: "repository_wiki", sourceType: "agent", body: `New facts for ${key}`, sourceTaskId: task.id, authorAgentId: agent.id }).submission;
+      return app.request("/api/workspaces/local/repos/repo_publish_degraded/wiki/publish", {
+        method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${credential.token}` },
+        body: JSON.stringify({ submission_ids: [source.id], dedupe_key: key, output: { action: "update", ref: target.id, expected_version: version, body: "New facts [[missing]]", ...pathInput } }),
+      });
+    };
+    expect((await publish("degraded-publish", 1)).status).toBe(200);
+    for (const pathInput of [{ path: "guides/target.md" }, { slug: "guides/target" }]) {
+      const rejected = await publish(`degraded-move-${Object.keys(pathInput)[0]}`, 2, pathInput);
+      expect(rejected.status).toBe(503);
+      const error = (await rejected.json() as any).error;
+      expect(error).toContain(missing.id);
+      expect(error).toContain(missing.path);
+      expect(store.getRepositoryWikiDocByRef("local", "repo_publish_degraded", target.id)).toMatchObject({ path: "target.md", version: 2 });
+    }
+    const create = client.create.bind(client);
+    client.create = async () => new Promise(() => {});
+    const response = await publish("timeout-publish", 2);
+    expect(response.status).toBe(503);
+    expect((await response.json() as any).error).toContain("deadline exceeded");
+    const runs = store.listKnowledgeCompilationRunsPage({ workspaceId: "local", repositoryId: "repo_publish_degraded" }).items;
+    expect(runs.find(run => run.dedupeKey === "timeout-publish")?.status).toBe("failed");
+    expect(store.getRepositoryWikiDocByRef("local", "repo_publish_degraded", target.id)?.version).toBe(2);
+    client.create = create;
+    expect((await publish("after-timeout", 2)).status).toBe(200);
+  });
+
+  it("bounds a hung write, releases the repository lane and fences late metadata commits", async () => {
+    const store = createStore();
+    const client = new FakeOpenViking();
+    const service = new RepositoryWikiService(store, client, "openviking", { writeTimeoutMs: 50 });
+    const target = await service.create("local", "repo_deadline", { path: "target.md", title: "Target", body: "Original" });
+    await service.runStorageJobs();
+    const create = client.create.bind(client);
+    let finishLate!: () => void;
+    client.create = async (uri, root, content) => {
+      await new Promise<void>(resolve => { finishLate = resolve; });
+      await create(uri, root, content);
+    };
+    await expect(service.update("local", "repo_deadline", target.id, { body: "Timed out" })).rejects.toThrow("write deadline exceeded");
+    expect(store.getRepositoryWikiDocByRef("local", "repo_deadline", target.id)?.version).toBe(1);
+    client.create = create;
+    const recovered = await service.update("local", "repo_deadline", target.id, { body: "Recovered" });
+    expect(recovered).toMatchObject({ version: 2, body: "Recovered" });
+    finishLate();
+    await Bun.sleep(5);
+    expect(await service.get("local", "repo_deadline", target.id)).toMatchObject({ version: 2, body: "Recovered" });
+  });
+
+  it("refuses migration when outgoing links are unknown and rolls back failed move/merge staging", async () => {
+    const store = createStore();
+    const client = new FakeOpenViking();
+    const service = new RepositoryWikiService(store, client, "openviking");
+    const target = await service.create("local", "repo_migrate", { path: "target.md", title: "Target", body: "Target" });
+    const source = await service.create("local", "repo_migrate", { path: "source.md", title: "Source", body: "Source" });
+    const incoming = await service.create("local", "repo_migrate", { path: "index.md", title: "Index", body: "[[./target]] [[source]]" });
+    await service.runStorageJobs();
+    client.failReadUris.add(incoming.contentUri!);
+    await expect(service.move("local", "repo_migrate", target.id, "guides/target.md")).rejects.toThrow("unreadable");
+    await expect(service.merge("local", "repo_migrate", target.id, [source.id])).rejects.toThrow("unreadable");
+    client.failReadUris.clear();
+    const before = new Map(client.files);
+    client.failWriteAt = client.writeAttempts + 2;
+    await expect(service.move("local", "repo_migrate", target.id, "guides/target.md")).rejects.toThrow("planned OpenViking write failure");
+    expect(client.files).toEqual(before);
+    expect(store.getRepositoryWikiDocByRef("local", "repo_migrate", target.id)?.path).toBe("target.md");
+    client.failWriteAt = client.writeAttempts + 2;
+    await expect(service.merge("local", "repo_migrate", target.id, [source.id])).rejects.toThrow("planned OpenViking write failure");
+    expect(client.files).toEqual(before);
+    expect(store.getRepositoryWikiDocByRef("local", "repo_migrate", source.id)?.version).toBe(1);
+    client.failWriteAt = null;
+    await service.move("local", "repo_migrate", target.id, "guides/target.md");
+    await service.merge("local", "repo_migrate", target.id, [source.id]);
+    expect(await service.get("local", "repo_migrate", target.id)).toMatchObject({ id: target.id, path: "guides/target.md", version: 3 });
+    expect((await service.backlinks("local", "repo_migrate", target.id)).map(doc => doc.id)).toEqual([incoming.id]);
+  });
+
+  it("keeps content updates and backlinks available but requires readable bodies before deleting", async () => {
+    const store = createStore();
+    const client = new FakeOpenViking();
+    const service = new RepositoryWikiService(store, client, "openviking");
+    const missing = await service.create("local", "repo_degraded", { path: "missing.md", title: "Missing", body: "Old content" });
+    const target = await service.create("local", "repo_degraded", { path: "target.md", title: "Target", body: "Target" });
+    const source = await service.create("local", "repo_degraded", { path: "source.md", title: "Source", body: "[[target]] [[missing]]" });
+    const original = client.files.get(missing.contentUri!)!;
+    client.files.delete(missing.contentUri!);
+    const updated = await service.update("local", "repo_degraded", source.id, { body: "Updated [[target]] [[missing]]" });
+    expect(updated.version).toBe(2);
+    expect((await service.backlinks("local", "repo_degraded", target.id)).map(doc => doc.id)).toEqual([source.id]);
+    expect((await service.backlinks("local", "repo_degraded", missing.id)).map(doc => doc.id)).toEqual([source.id]);
+    await expect(service.delete("local", "repo_degraded", target.id)).rejects.toThrow(missing.id);
+    await expect(service.update("local", "repo_degraded", source.id, { body: "[[unknown]]" })).rejects.toThrow("unresolved repository wiki link");
+    await expect(service.update("local", "repo_degraded", missing.id, { body: "must not overwrite missing data" })).rejects.toThrow("not found");
+    await expect(service.delete("local", "repo_degraded", source.id)).rejects.toThrow(missing.id);
+    expect(store.getRepositoryWikiDocByRef("local", "repo_degraded", source.id)?.version).toBe(2);
+    expect((await service.list("local", "repo_degraded")).find(doc => doc.id === missing.id))
+      .toMatchObject({ status: "failed", bodyUnavailable: true });
+    client.files.set(missing.contentUri!, original);
+    await expect(service.delete("local", "repo_degraded", target.id)).rejects.toThrow("unresolved repository wiki link");
+    await service.delete("local", "repo_degraded", source.id);
+    await service.delete("local", "repo_degraded", target.id);
+    expect(store.getRepositoryWikiDocByRef("local", "repo_degraded", missing.id)?.version).toBe(1);
+    expect((await service.list("local", "repo_degraded"))[0]).toMatchObject({ id: missing.id, status: "healthy" });
+  });
+
+  it.each(["missing", "corrupt"])("rejects path changes and deletes atomically when an untouched referrer is %s", async (failure) => {
+    const store = createLocalStore();
+    store.updateWorkspaceRepositories("local", [{ id: "repo_graph", name: "graph", url: "https://github.com/acme/graph.git", source: "github", default_branch: "main" }]);
+    const client = new FakeOpenViking();
+    const service = new RepositoryWikiService(store, client, "openviking");
+    const target = await service.create("local", "repo_graph", { path: "target.md", title: "Target", body: "Original" });
+    const hidden = await service.create("local", "repo_graph", { path: "hidden.md", title: "Hidden referrer", body: "[[./target]]" });
+    await service.runStorageJobs();
+    const raw = client.files.get(hidden.contentUri!)!;
+    if (failure === "missing") client.files.delete(hidden.contentUri!);
+    else client.files.set(hidden.contentUri!, `${raw}\ncorrupt`);
+
+    // An explicit but unchanged normalized path is still a content edit.
+    await service.update("local", "repo_graph", target.id, { path: "target", body: "Edited", expectedVersion: 1 });
+    const added = await service.create("local", "repo_graph", { path: "added.md", title: "Added", body: "New facts" });
+    expect(await service.backlinks("local", "repo_graph", target.id)).toEqual([]);
+    await service.runStorageJobs();
+    const metadata = store.listRepositoryWikiDocs("local", "repo_graph");
+    const files = new Map(client.files);
+    const writeAttempts = client.writeAttempts;
+    const commits = client.commits.length;
+    const app = createMultiremiApp({ store, repositoryWiki: service, authToken: "root-secret" });
+    const requests = [
+      { method: "PUT", path: `/${target.id}`, body: { path: "guides/target.md", expected_version: 2 } },
+      { method: "POST", path: "/batch", body: { operations: [
+        { kind: "create", input: { path: "must-not-exist.md", title: "Pending", body: "Pending" } },
+        { kind: "update", ref: target.id, input: { slug: "guides/target", expected_version: 2 } },
+      ] } },
+      { method: "DELETE", path: `/${target.id}`, body: undefined },
+      { method: "POST", path: "/batch", body: { operations: [
+        { kind: "update", ref: added.id, input: { body: "Must roll back", expected_version: 1 } },
+        { kind: "delete", ref: target.id, expected_version: 2 },
+      ] } },
+      { method: "POST", path: "/move", body: { ref: target.id, path: "guides/target.md", expected_version: 2 } },
+      { method: "POST", path: "/merge", body: { target: target.id, sources: [added.id], expected_version: 2 } },
+    ];
+    for (const request of requests) {
+      const response = await app.request(`/api/workspaces/local/repos/repo_graph/wiki${request.path}`, {
+        method: request.method,
+        headers: { "Content-Type": "application/json", Authorization: "Bearer root-secret" },
+        body: request.body === undefined ? undefined : JSON.stringify(request.body),
+      });
+      expect(response.status).toBe(503);
+      const error = (await response.json() as any).error;
+      expect(error).toContain(hidden.id);
+      expect(error).toContain(hidden.path);
+      expect(store.listRepositoryWikiDocs("local", "repo_graph")).toEqual(metadata);
+      expect(client.files).toEqual(files);
+      expect(client.writeAttempts).toBe(writeAttempts);
+      expect(client.commits).toHaveLength(commits);
+      expect(store.listRepositoryWikiStorageJobs("local", "repo_graph")).toEqual([]);
+    }
+
+    // Recovery restores both the full graph and migration, without losing IDs.
+    client.files.set(hidden.contentUri!, raw);
+    await expect(service.delete("local", "repo_graph", target.id)).rejects.toThrow("unresolved repository wiki link");
+    await service.move("local", "repo_graph", target.id, "guides/target.md");
+    expect(await service.get("local", "repo_graph", target.id)).toMatchObject({ id: target.id, path: "guides/target.md", version: 3 });
+    expect((await service.backlinks("local", "repo_graph", target.id)).map(doc => doc.id)).toEqual([hidden.id]);
+    expect((await service.get("local", "repo_graph", hidden.id))?.body).toBe("[[guides/target.md]]");
+  });
+
+});
 
 describe("project knowledge URIs", () => {
   it("rejects path traversal and cross-project URI decoding", () => {
@@ -670,7 +1234,7 @@ describe("RepositoryWikiService OpenViking mode", () => {
       .toEqual([source.id]);
   });
 
-  it("fails closed when a Repository Wiki body cannot be read for graph operations", async () => {
+  it("isolates unreadable graph sources while failing closed for touched bodies and new broken links", async () => {
     const store = createStore();
     const client = new FakeOpenViking();
     const service = new RepositoryWikiService(store, client, "openviking");
@@ -682,14 +1246,26 @@ describe("RepositoryWikiService OpenViking mode", () => {
     });
     client.failReadUris.add(source.contentUri!);
 
-    await expect(service.backlinks("local", "repo_alpha", target.id))
-      .rejects.toThrow("planned unreadable content");
-    await expect(service.applyBatch("local", "repo_alpha", [{
+    // MUL-316 changes the ordinary-write contract; listStrict and all writes
+    // to the unreadable source must still fail closed.
+    expect(await service.backlinks("local", "repo_alpha", target.id)).toEqual([]);
+    await expect(service.listStrict("local", "repo_alpha")).rejects.toThrow("planned unreadable content");
+    const result = await service.applyBatch("local", "repo_alpha", [{
       kind: "update",
       ref: target.id,
-      input: { body: "Must not publish", expected_version: target.version },
+      input: { body: "Independent update", expected_version: target.version },
+    }]);
+    expect(result[0]?.doc).toMatchObject({ id: target.id, version: 2, body: "Independent update" });
+    await expect(service.applyBatch("local", "repo_alpha", [{
+      kind: "update", ref: source.id,
+      input: { body: "Must not overwrite an unreadable source", expected_version: source.version },
     }])).rejects.toThrow("planned unreadable content");
-    expect(store.getRepositoryWikiDocByRef("local", "repo_alpha", target.id)).toMatchObject({ version: 1 });
+    await expect(service.applyBatch("local", "repo_alpha", [{
+      kind: "update", ref: target.id,
+      input: { body: "[[new-broken]]", expected_version: 2 },
+    }])).rejects.toThrow("unresolved repository wiki link");
+    expect(store.getRepositoryWikiDocByRef("local", "repo_alpha", target.id)).toMatchObject({ version: 2 });
+    expect(store.getRepositoryWikiDocByRef("local", "repo_alpha", source.id)).toMatchObject({ version: 1 });
   });
 
   it("compensates staged OpenViking writes when a repository batch fails before metadata commit", async () => {
