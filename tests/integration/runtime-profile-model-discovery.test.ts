@@ -1,6 +1,6 @@
 import { expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "smol-toml";
@@ -17,6 +17,12 @@ for (const provider of ["codex", "claude"] as const) {
     const envKey = provider === "codex" ? "REMI_CODEX_CATALOG_TEST_KEY" : "REMI_CLAUDE_CATALOG_TEST_KEY";
     const oldKey = process.env[envKey];
     process.env[envKey] = "private-catalog-key";
+    const oldCodexExecutable = process.env.REMI_CODEX_AGENT_ACP_EXECUTABLE;
+    if (provider === "codex") {
+      const validator = join(root, "codex-acp");
+      writeFileSync(validator, '#!/usr/bin/env node\nprocess.exit(process.argv.slice(2, 5).join(" ") === "cli debug models" ? 0 : 1);\n', { mode: 0o700 });
+      process.env.REMI_CODEX_AGENT_ACP_EXECUTABLE = validator;
+    }
     let probes = 0;
     let failProbe = false;
     let failAcp = false;
@@ -25,7 +31,11 @@ for (const provider of ["codex", "claude"] as const) {
       probes++;
       expect(request.headers.get("authorization")).toBe("Bearer private-catalog-key");
       return failProbe ? new Response("do not expose private-catalog-key", { status: 503 })
-        : Response.json({ data: [{ id: "astra" }, { id: "sol" }] });
+        : Response.json({ data: [{ id: "astra" }, { id: "sol" }], ...(provider === "codex" ? { models: [{
+          slug: "sol", display_name: "Sol", base_instructions: "Provider instructions", supported_reasoning_levels: [], shell_type: "shell_command",
+          visibility: "list", supported_in_api: true, priority: 0, support_verbosity: false,
+          truncation_policy: { mode: "tokens", limit: 10_000 }, experimental_supported_tools: [], context_window: 270_000,
+        }] } : {}) });
     } });
     const runtime = store.registerRuntime({ id: "rt_catalog", name: "Catalog", provider, daemonId: "catalog-daemon", workspaceId: "local", ownerId: "local", metadata: { codex_profiles: 1, claude_profiles: 1 } });
     const profile = { name: "catalog", base_url: `http://127.0.0.1:${catalog.port}/v1`, model: "astra", env_key: envKey };
@@ -34,6 +44,7 @@ for (const provider of ["codex", "claude"] as const) {
     const credential = await store.createAccessToken({ name: "Catalog", type: "daemon", workspaceId: "local", daemonId: "catalog-daemon", userId: "local" });
     const server = startMultiremiServer({ store, scheduler: null, authToken: "catalog-test-master", hostname: "127.0.0.1", port: 0 });
     let model: unknown;
+    let modelMetadata: Record<string, unknown> | undefined;
     let reports = 0;
     const updateModels = store.updateRuntimeModels.bind(store);
     store.updateRuntimeModels = (...args) => { reports++; return updateModels(...args); };
@@ -47,6 +58,10 @@ for (const provider of ["codex", "claude"] as const) {
           model = provider === "codex"
             ? parse(readFileSync(join(options.env!.CODEX_HOME!, "config.toml"), "utf8")).model
             : JSON.parse(readFileSync(join(options.env!.CLAUDE_CONFIG_DIR!, "settings.json"), "utf8")).model;
+          if (provider === "codex") {
+            const config = parse(readFileSync(join(options.env!.CODEX_HOME!, "config.toml"), "utf8"));
+            modelMetadata = JSON.parse(readFileSync(String(config.model_catalog_json), "utf8")).models[0];
+          }
           yield { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "Selected model executed" }] } as any;
         },
         getLastResponse: () => ({ text: "Selected model executed", sessionId: "catalog-session", requestId: "catalog-request" }),
@@ -81,6 +96,7 @@ for (const provider of ["codex", "claude"] as const) {
       expect(store.getTask(task.id)?.error).toBeNull();
       expect(store.getTask(task.id)?.status).toBe("completed");
       expect(model).toBe("sol");
+      if (provider === "codex") expect(modelMetadata).toMatchObject({ slug: "sol", context_window: 270_000 });
       failProbe = true;
       revokeThinking = true;
       const capabilityRefresh = store.createRuntimeModelListRequest(runtime.id);
@@ -101,6 +117,8 @@ for (const provider of ["codex", "claude"] as const) {
       catalog.stop(true);
       db.close();
       if (oldKey === undefined) delete process.env[envKey]; else process.env[envKey] = oldKey;
+      if (oldCodexExecutable === undefined) delete process.env.REMI_CODEX_AGENT_ACP_EXECUTABLE;
+      else process.env.REMI_CODEX_AGENT_ACP_EXECUTABLE = oldCodexExecutable;
       rmSync(root, { recursive: true, force: true });
     }
   }, 30_000);
