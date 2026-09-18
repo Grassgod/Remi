@@ -1,8 +1,49 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiClient, ApiError } from "./client";
+import { toSafeErrorDetails } from "./http";
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe("toSafeErrorDetails", () => {
+  it("allowlists ApiError metadata without exposing its body or cause", () => {
+    const sensitiveToken = "secret-token-value";
+    const sensitiveMessage = "private message body";
+    const sensitiveCause = "credential-bearing upstream URL";
+    const error = new ApiError("request rejected", 502, "Bad Gateway", {
+      token: sensitiveToken,
+      content: sensitiveMessage,
+    });
+    Object.defineProperty(error, "cause", {
+      value: new Error(sensitiveCause),
+      enumerable: true,
+    });
+
+    const details = toSafeErrorDetails(error);
+
+    expect(details).toEqual({
+      name: "ApiError",
+      message: "request rejected",
+      status: 502,
+      statusText: "Bad Gateway",
+    });
+    expect(details).not.toHaveProperty("body");
+    expect(details).not.toHaveProperty("cause");
+    expect(JSON.stringify(details)).not.toContain(sensitiveToken);
+    expect(JSON.stringify(details)).not.toContain(sensitiveMessage);
+    expect(JSON.stringify(details)).not.toContain(sensitiveCause);
+  });
+
+  it.each(["raw failure", { message: "object failure" }, undefined])(
+    "uses a fixed safe fallback for non-Error input %#",
+    (error) => {
+      expect(toSafeErrorDetails(error)).toEqual({
+        name: "UnknownError",
+        message: "Unknown error",
+      });
+    },
+  );
 });
 
 describe("ApiClient", () => {

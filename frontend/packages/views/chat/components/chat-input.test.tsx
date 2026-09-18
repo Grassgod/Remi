@@ -144,6 +144,7 @@ vi.mock("@multiremi/core/chat", () => {
 });
 
 import { ChatInput } from "./chat-input";
+import { ApiError } from "@multiremi/core/api";
 import { useChatStore } from "@multiremi/core/chat";
 import { setCurrentWorkspace } from "@multiremi/core/platform";
 beforeEach(() => {
@@ -338,7 +339,17 @@ describe("ChatInput sending and queue", () => {
 
   it("retains the draft and attachment binding after a send failure", async () => {
     useChatStore.getState().activeSessionId = "session-1";
-    const error = new Error("offline");
+    const sensitiveToken = "secret-chat-token";
+    const sensitiveBody = "private draft echoed by gateway";
+    const sensitiveCause = "https://gateway.example/?authorization=secret";
+    const error = new ApiError("send failed", 502, "Bad Gateway", {
+      token: sensitiveToken,
+      content: sensitiveBody,
+    });
+    Object.defineProperty(error, "cause", {
+      value: new Error(sensitiveCause),
+      enumerable: true,
+    });
     const attachment = makeUpload({
       id: "att-failed",
       link: "https://cdn.example/failed.png",
@@ -372,9 +383,18 @@ describe("ChatInput sending and queue", () => {
       draftKey: "session-1",
       contentLength: content.length,
       attachmentCount: 1,
-      error,
+      error: {
+        name: "ApiError",
+        message: "send failed",
+        status: 502,
+        statusText: "Bad Gateway",
+      },
     });
-    expect(logger.error.mock.calls[0]?.[1]).not.toHaveProperty("content");
+    const logged = JSON.stringify(logger.error.mock.calls[0]?.[1]);
+    expect(logged).not.toContain(content);
+    expect(logged).not.toContain(sensitiveToken);
+    expect(logged).not.toContain(sensitiveBody);
+    expect(logged).not.toContain(sensitiveCause);
   });
 
   it("allows queueing without removing the current stop control", async () => {

@@ -13,6 +13,7 @@ import { FileUploadButton } from "@multiremi/ui/components/common/file-upload-bu
 import { ArrowUp, Loader2, Square } from "lucide-react";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { useChatStore, DRAFT_NEW_SESSION } from "@multiremi/core/chat";
+import { toSafeErrorDetails } from "@multiremi/core/api";
 import { createLogger } from "@multiremi/core/logger";
 import {
   getCurrentWsId,
@@ -218,7 +219,7 @@ export function ChatInput({
         draftKey: keyAtSend,
         contentLength: content.length,
         attachmentCount: activeIds.length,
-        error,
+        error: toSafeErrorDetails(error),
       });
       if (getCurrentWsId() !== workspaceAtSend) return;
       if (

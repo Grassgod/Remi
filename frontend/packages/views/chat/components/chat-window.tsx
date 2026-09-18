@@ -30,7 +30,7 @@ import {
   memberListOptions,
 } from "@multiremi/core/workspace/queries";
 import { canAssignAgent } from "@multiremi/views/issues/components";
-import { api } from "@multiremi/core/api";
+import { api, toSafeErrorDetails } from "@multiremi/core/api";
 import { projectListOptions } from "@multiremi/core/projects/queries";
 import {
   useAgentPresenceDetail,
@@ -434,7 +434,10 @@ export function ChatWindow({
           });
         }
       } catch (error) {
-        apiLogger.error("sendChatMessage.error", { sessionId, error });
+        apiLogger.error("sendChatMessage.error", {
+          sessionId,
+          error: toSafeErrorDetails(error),
+        });
         throw error;
       } finally {
         // Drop only this send's optimistic row. Concurrent WS messages stay intact.
