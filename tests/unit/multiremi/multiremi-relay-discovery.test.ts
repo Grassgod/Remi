@@ -37,10 +37,11 @@ describe("relay model discovery", () => {
     expect(store.getGatewayModels("local", "claude")?.models).toEqual([{ id: "claude-opus-4-8", label: "Claude Opus 4.8" }]);
   });
 
-  it("queries codex /models and dedups by id", async () => {
+  it("queries codex /models and origin capability catalog, and dedups by id", async () => {
     const store = createStore();
     store.upsertRelayConfig("local", "codex", { fragment: CODEX_FRAG, tokenOp: "set", authToken: "sk-codex" });
     const s = stub((url) => {
+      if (url === "https://vip.openremi.fun/backend-api/codex/models") return ok({ models: [] });
       expect(url).toBe("https://vip.openremi.fun/v1/models");
       return ok({ data: [
         { id: "gpt-5.6-sol", display_name: "GPT-5.6 Sol" },
@@ -50,13 +51,105 @@ describe("relay model discovery", () => {
     });
     await discoverGatewayModels(store, "local", "codex", s.get);
     const models = store.getGatewayModels("local", "codex")?.models;
-    expect(models).toEqual([{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }, { id: "gpt-5.5", label: "gpt-5.5" }]);
+    expect(models).toEqual([
+      { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", thinking: { status: "unknown", supportedLevels: [] } },
+      { id: "gpt-5.5", label: "gpt-5.5", thinking: { status: "unknown", supportedLevels: [] } },
+    ]);
+    expect(s.calls).toBe(2);
+  });
+
+  it("persists generic effort values, descriptions and per-model defaults without prompt templates", async () => {
+    const store = createStore();
+    store.upsertRelayConfig("local", "codex", { fragment: CODEX_FRAG, tokenOp: "set", authToken: "sk-codex" });
+    const s = stub((url, headers) => {
+      expect(headers.Authorization).toBe("Bearer sk-codex");
+      return url.endsWith("/backend-api/codex/models") ? ok({ models: [{
+        slug: "custom-model",
+        default_reasoning_level: "deep",
+        supported_reasoning_levels: [{ effort: "brief", description: "Quick result" }, { effort: "deep", description: "Detailed result" }],
+        model_messages: { instructions_template: "Must not enter the control-plane snapshot" },
+      }] }) : ok({ data: [{ id: "custom-model", display_name: "Custom" }] });
+    });
+    await discoverGatewayModels(store, "local", "codex", s.get);
+    expect(store.getGatewayModels("local", "codex")?.models).toEqual([{
+      id: "custom-model", label: "Custom", thinking: {
+        status: "supported", defaultLevel: "deep", supportedLevels: [
+          { value: "brief", label: "brief", description: "Quick result" },
+          { value: "deep", label: "deep", description: "Detailed result" },
+        ],
+      },
+    }]);
+  });
+
+  it("distinguishes missing, empty and invalid declarations per model", async () => {
+    const store = createStore();
+    store.upsertRelayConfig("local", "codex", { fragment: CODEX_FRAG, tokenOp: "set", authToken: "sk-codex" });
+    const declarations = [
+      { slug: "missing" },
+      { slug: "empty", supported_reasoning_levels: [] },
+      { slug: "invalid-array", supported_reasoning_levels: "high" },
+      { slug: "invalid-level", supported_reasoning_levels: [{ effort: 42 }] },
+      { slug: "invalid-default", supported_reasoning_levels: [{ effort: "high" }], default_reasoning_level: "other" },
+      { slug: "missing-default", supported_reasoning_levels: [{ effort: "high" }] },
+    ];
+    await discoverGatewayModels(store, "local", "codex", stub((url) => url.endsWith("/backend-api/codex/models")
+      ? ok({ models: declarations }) : ok({ data: declarations.map(({ slug }) => ({ id: slug })) })).get);
+    expect(store.getGatewayModels("local", "codex")?.models.map((model) => model.thinking?.status))
+      .toEqual(["unknown", "unsupported", "error", "error", "error", "supported"]);
+  });
+
+  it("omits native models that Codex hides or cannot use through the API", async () => {
+    const store = createStore();
+    store.upsertRelayConfig("local", "codex", { fragment: CODEX_FRAG, tokenOp: "set", authToken: "sk-codex" });
+    await discoverGatewayModels(store, "local", "codex", stub((url) => url.endsWith("/backend-api/codex/models")
+      ? ok({ models: [
+        { slug: "hidden", visibility: "hide", supported_in_api: true, supported_reasoning_levels: [{ effort: "high" }] },
+        { slug: "unavailable", visibility: "list", supported_in_api: false, supported_reasoning_levels: [{ effort: "high" }] },
+        { slug: "visible", visibility: "list", supported_in_api: true, supported_reasoning_levels: [{ effort: "high" }] },
+      ] }) : ok({ data: ["hidden", "unavailable", "visible", "unknown"].map(id => ({ id })) })).get);
+    expect(store.getGatewayModels("local", "codex")?.models.map(model => [model.id, model.thinking?.status]))
+      .toEqual([["visible", "supported"], ["unknown", "unknown"]]);
+  });
+
+  for (const failure of ["http", "invalid-json", "invalid-shape", "timeout"] as const) {
+    it(`keeps model inventory and reports capability ${failure} failure`, async () => {
+      const store = createStore();
+      store.upsertRelayConfig("local", "codex", { fragment: CODEX_FRAG, tokenOp: "set", authToken: "test-private-credential" });
+      await discoverGatewayModels(store, "local", "codex", stub((url) => {
+        if (!url.endsWith("/backend-api/codex/models")) return ok({ data: [{ id: "custom-model" }] });
+        if (failure === "timeout") throw new Error("timed out test-private-credential\nrequest");
+        if (failure === "invalid-json") return { status: 200, text: "test-private-credential invalid JSON" };
+        if (failure === "invalid-shape") return ok({ models: null });
+        return { status: 503, text: "test-private-credential" };
+      }).get);
+      const snapshot = store.getGatewayModels("local", "codex")!;
+      expect(snapshot.models[0].id).toBe("custom-model");
+      expect(snapshot.models[0].thinking?.status).toBe("error");
+      expect(snapshot.models[0].thinking?.supportedLevels).toEqual([]);
+      expect(snapshot.lastError).toBeTruthy();
+      expect(JSON.stringify(snapshot)).not.toContain("test-private-credential");
+    });
+  }
+
+  it("fences a late capability response behind a newer relay revision", async () => {
+    const store = createStore();
+    const revision = store.upsertRelayConfig("local", "codex", { fragment: CODEX_FRAG, tokenOp: "set", authToken: "sk-codex" });
+    await discoverGatewayModels(store, "local", "codex", stub((url) => {
+      if (!url.endsWith("/backend-api/codex/models")) return ok({ data: [{ id: "old-model" }] });
+      const newer = store.upsertRelayConfig("local", "codex", { fragment: CODEX_FRAG, tokenOp: "keep" });
+      store.saveGatewayModels("local", "codex", { sourceRevision: newer, models: [{ id: "new-model", label: "New" }] });
+      return ok({ models: [{ slug: "old-model", supported_reasoning_levels: [] }] });
+    }).get);
+    expect(store.getGatewayModels("local", "codex")?.sourceRevision).toBe(revision + 1);
+    expect(store.getGatewayModels("local", "codex")?.models[0].id).toBe("new-model");
   });
 
   it("keeps last-known-good models AND source_revision on gateway failure", async () => {
     const store = createStore();
     store.upsertRelayConfig("local", "codex", { fragment: CODEX_FRAG, tokenOp: "set", authToken: "sk-codex" });
-    await discoverGatewayModels(store, "local", "codex", stub(() => ok({ data: [{ id: "gpt-5.6-sol", display_name: "GPT-5.6 Sol" }] })).get);
+    await discoverGatewayModels(store, "local", "codex", stub((url) => ok(url.endsWith("/backend-api/codex/models")
+      ? { models: [{ slug: "gpt-5.6-sol", supported_reasoning_levels: [{ effort: "high" }], default_reasoning_level: "high" }] }
+      : { data: [{ id: "gpt-5.6-sol", display_name: "GPT-5.6 Sol" }] })).get);
     const successRev = store.getGatewayModels("local", "codex")!.sourceRevision;
     store.upsertRelayConfig("local", "codex", { fragment: CODEX_FRAG, tokenOp: "keep" }); // bumps revision
     await discoverGatewayModels(store, "local", "codex", stub(() => ({ status: 401, text: "nope" })).get);

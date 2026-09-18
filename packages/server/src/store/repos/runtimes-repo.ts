@@ -1876,7 +1876,8 @@ export class RuntimesRepo {
   runtimeCanRunAgent(runtime: MultiremiRuntime, agent: MultiremiAgent): boolean {
     if (agent.runtimeId && agent.runtimeId !== runtime.id) return false;
     if (agent.executionGroupId && runtimeExecutionGroupId(this.ctx.db, runtime.id, agent.provider) !== agent.executionGroupId) return false;
-    if (agent.executionGroupId && !agent.runtimeId && !this.runtimeSupportsAgentModel(runtime, agent)) return false;
+    if ((agent.thinkingLevel || (agent.executionGroupId && !agent.runtimeId))
+      && !this.runtimeSupportsAgentModel(runtime, agent)) return false;
     if (runtime.provider !== "any" && runtime.provider !== agent.provider) return false;
     // A task runs in its agent's workspace and the claim SQL requires the
     // runtime's workspace to match, so a runtime in a different workspace can
@@ -2192,10 +2193,17 @@ function normalizeRuntimeModelThinking(value: MultiremiRuntimeModel["thinking"])
     label: String(level.label ?? level.value ?? "").trim(),
     ...(level.description ? { description: String(level.description) } : {}),
   })).filter((level) => level.value);
-  if (!supportedLevels.length) return undefined;
+  const status = value.status;
+  if (status !== undefined && !["supported", "unsupported", "unknown", "error"].includes(status)) {
+    return { status: "error", supportedLevels: [], error: "invalid runtime reasoning metadata" };
+  }
+  const availableLevels = status && status !== "supported" ? [] : supportedLevels;
+  const defaultLevel = value.defaultLevel ?? value.default_level;
   return {
-    supportedLevels,
-    ...(value.defaultLevel || value.default_level ? { defaultLevel: String(value.defaultLevel ?? value.default_level) } : {}),
+    supportedLevels: availableLevels,
+    ...(defaultLevel && availableLevels.some((level) => level.value === defaultLevel) ? { defaultLevel: String(defaultLevel) } : {}),
+    ...(status ? { status } : {}),
+    ...(status === "error" && value.error ? { error: String(value.error).replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, 200) } : {}),
   };
 }
 

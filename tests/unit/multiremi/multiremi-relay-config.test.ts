@@ -112,6 +112,11 @@ describe("relay fragment validation", () => {
     expect(validateRelayFragment("codex", CODEX_FRAGMENT.replace("https://vip.openremi.fun/v1", "https://localhost/v1")).ok).toBe(false);
   });
 
+  it("rejects user-supplied Codex catalog paths at the fragment boundary", () => {
+    expect(validateRelayFragment("codex", 'model_catalog_json = "/host/private.json"\n' + CODEX_FRAGMENT))
+      .toEqual({ ok: false, error: "only model_provider / model_providers allowed, got: model_catalog_json" });
+  });
+
   it("extractBaseUrl reads the gateway URL from stored fragments", () => {
     expect(extractBaseUrl("claude", CLAUDE_FRAGMENT)).toBe("https://ai.openremi.fun");
     expect(extractBaseUrl("codex", CODEX_FRAGMENT)).toBe("https://vip.openremi.fun/v1");

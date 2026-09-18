@@ -85,5 +85,7 @@ function validCapability(value: unknown): value is AcpModelCapability {
     && typeof m.default === "boolean"
     && (m.providerDefault === undefined || typeof m.providerDefault === "boolean")
     && (m.effort === undefined || (Array.isArray(m.effort?.supportedLevels)
-      && m.effort.supportedLevels.every(l => typeof l?.value === "string" && typeof l.label === "string")));
+      && m.effort.supportedLevels.every(l => typeof l?.value === "string" && typeof l.label === "string")
+      && (m.effort.defaultLevel === undefined || typeof m.effort.defaultLevel === "string")
+      && (m.effort.status === undefined || ["supported", "unsupported", "unknown", "error"].includes(m.effort.status))));
 }

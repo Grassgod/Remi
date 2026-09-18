@@ -113,7 +113,7 @@ import { prepareIssueWikiWorkspace } from "@daemon/agent-runtime/workspace/wiki.
 import { prepareChatRepositories } from "@daemon/agent-runtime/workspace/chat-repos.js";
 import { materializeChatAttachments } from "@daemon/agent-runtime/workspace/chat-attachments.js";
 import { cleanProcessEnv } from "@daemon/agent-runtime/env/injector.js";
-import { mergeCodexSessionConfig } from "@daemon/agent-runtime/relay-sync.js";
+import { loadCodexGatewayInventory, mergeCodexSessionConfig, type CodexModelCatalogState } from "@daemon/agent-runtime/relay-sync.js";
 import { AgentRuntime } from "@daemon/agent-runtime/runtime.js";
 import { AgentSession } from "@daemon/agent-runtime/session.js";
 import type { EphemeralContext } from "@daemon/agent-runtime/types.js";
@@ -1866,34 +1866,57 @@ export class MultiremiDaemon {
   }
 
   private async discoverAcpRuntimeModels(signal: AbortSignal): Promise<MultiremiRuntimeModel[]> {
-    if (!this.options.inProcessRuntimeModelDiscoveryEnabled) {
-      const capabilities = await probeRuntimeModels(await this.runtimeModelProbeProviderOptions(), {
-        signal, timeoutMs: RUNTIME_MODEL_PROBE_TIMEOUT_MS,
-      });
-      signal.throwIfAborted();
-      return runtimeModelsFromAcpCapabilities(this.options.provider, capabilities);
-    }
-    const provider = this.providerFactory(await this.runtimeModelProbeProviderOptions());
-    try {
-      if (!provider.discoverModelCapabilities) {
-        throw new Error(`ACP model discovery is not supported by provider: ${this.options.provider}`);
+    const prepared = await this.runtimeModelProbeProviderOptions();
+    const probe = async (): Promise<MultiremiRuntimeModel[]> => {
+      if (!this.options.inProcessRuntimeModelDiscoveryEnabled) {
+        const capabilities = await probeRuntimeModels(prepared.options, {
+          signal, timeoutMs: RUNTIME_MODEL_PROBE_TIMEOUT_MS,
+        });
+        signal.throwIfAborted();
+        return runtimeModelsFromAcpCapabilities(this.options.provider, capabilities);
       }
-      const capabilities = await withTimeout(
-        provider.discoverModelCapabilities(), RUNTIME_MODEL_PROBE_TIMEOUT_MS,
-        `ACP model discovery timed out after ${RUNTIME_MODEL_PROBE_TIMEOUT_MS}ms`, signal,
-      );
-      signal.throwIfAborted();
-      if (!capabilities.length) throw new Error(`ACP did not advertise any models for provider: ${this.options.provider}`);
-      return runtimeModelsFromAcpCapabilities(this.options.provider, capabilities);
-    } finally {
-      await provider.close?.();
-    }
+      const provider = this.providerFactory(prepared.options);
+      try {
+        if (!provider.discoverModelCapabilities) {
+          throw new Error(`ACP model discovery is not supported by provider: ${this.options.provider}`);
+        }
+        const capabilities = await withTimeout(
+          provider.discoverModelCapabilities(), RUNTIME_MODEL_PROBE_TIMEOUT_MS,
+          `ACP model discovery timed out after ${RUNTIME_MODEL_PROBE_TIMEOUT_MS}ms`, signal,
+        );
+        signal.throwIfAborted();
+        if (!capabilities.length) throw new Error(`ACP did not advertise any models for provider: ${this.options.provider}`);
+        return runtimeModelsFromAcpCapabilities(this.options.provider, capabilities);
+      } finally {
+        await provider.close?.();
+      }
+    };
+    if (prepared.catalogState?.status !== "error") return probe();
+    // The fallback bundled catalog can omit every gateway-only model. Include
+    // the normal inventory in the failure report so those models cannot appear
+    // supported just because the control plane successfully fetched its copy.
+    const [probed, inventory] = await Promise.allSettled([
+      probe(),
+      loadCodexGatewayInventory(prepared.relay?.fragment ?? "", prepared.relay?.auth_token ?? ""),
+    ]);
+    signal.throwIfAborted();
+    const models = runtimeModelsWithCatalogError(
+      [...(this.runtimeModels ?? []), ...(probed.status === "fulfilled" ? probed.value : [])],
+      inventory.status === "fulfilled" ? inventory.value : [],
+      prepared.catalogState.error,
+    );
+    if (!models.length && probed.status === "rejected") throw probed.reason;
+    return models;
   }
 
-  private async runtimeModelProbeProviderOptions(): Promise<AcpProviderOptions> {
+  private async runtimeModelProbeProviderOptions(): Promise<{
+    options: AcpProviderOptions;
+    catalogState?: CodexModelCatalogState;
+    relay?: MultiremiRelayEngineWire | null;
+  }> {
     const provider = this.options.provider;
     if (provider !== "claude" && provider !== "codex") {
-      return { agentType: provider, cwd: homedir() };
+      return { options: { agentType: provider, cwd: homedir() } };
     }
     const workspaceId = this.options.workspaceId ?? "local";
     const workspaceRelay = await this.effectiveWorkspaceRelay(workspaceId);
@@ -1924,22 +1947,29 @@ export class MultiremiDaemon {
     });
     if (provider === "claude" && this.runtimeClaudeProfile) Object.assign(providerEnv, runtimeClaudeProfileEnv(this.runtimeClaudeProfile, relay!.auth_token));
     const usesCodexRelayKey = provider === "codex" && Boolean(providerEnv.OPENAI_API_KEY);
-    await prepareIssueSessionProviderHome(providerHome, {
+    const prepared = await prepareIssueSessionProviderHome(providerHome, {
       linkCodexAuth: provider === "codex" && !usesCodexRelayKey,
       linkClaudeCredentials: provider === "claude"
         && !providerEnv.ANTHROPIC_AUTH_TOKEN
         && !providerEnv.ANTHROPIC_API_KEY,
       ...(relayAuthoritative ? { relayFragment: relay?.fragment ?? "" } : {}),
       codexRelayUsesEnvApiKey: usesCodexRelayKey,
+      // Runtime profiles may be LAN/OpenAI-compatible services with their own
+      // ACP capabilities. Only workspace Relays opt into the native catalog.
+      relayAuthToken: this.runtimeCodexProfile ? undefined : relay?.auth_token,
     });
     return {
-      agentType: provider,
-      cwd: root,
-      env: {
-        ...providerEnv,
-        ...(provider === "claude"
-          ? { CLAUDE_CONFIG_DIR: providerHome.home }
-          : { CODEX_HOME: providerHome.home }),
+      catalogState: prepared.codexModelCatalog,
+      relay,
+      options: {
+        agentType: provider,
+        cwd: root,
+        env: {
+          ...providerEnv,
+          ...(provider === "claude"
+            ? { CLAUDE_CONFIG_DIR: providerHome.home }
+            : { CODEX_HOME: providerHome.home }),
+        },
       },
     };
   }
@@ -2862,18 +2892,31 @@ export class MultiremiDaemon {
           providerInstallEnv,
         );
       }
+      let codexCatalogError: string | undefined;
       if (providerHome) {
         this.assertWorkspaceRootOwner();
-        await prepareIssueSessionProviderHome(providerHome, {
+        const prepared = await prepareIssueSessionProviderHome(providerHome, {
           sideConversation: isSideConversation(task),
           codexPluginInstalled: task.agent?.provider === "codex" && Boolean(pluginRuntime?.codexHome),
           linkCodexAuth: !providerInstallEnv?.OPENAI_API_KEY,
           linkClaudeCredentials: !providerInstallEnv?.ANTHROPIC_AUTH_TOKEN && !providerInstallEnv?.ANTHROPIC_API_KEY,
           ...(relayAuthoritative ? { relayFragment: relay?.fragment ?? "" } : {}),
           codexRelayUsesEnvApiKey: task.agent?.provider === "codex" && Boolean(providerInstallEnv?.OPENAI_API_KEY),
+          relayAuthToken: codexProfile ? undefined : relay?.auth_token,
         });
+        if (prepared.codexModelCatalog?.status === "error") {
+          codexCatalogError = prepared.codexModelCatalog.error;
+          log.warn("Codex capability catalog load failed; using bundled catalog", { error: codexCatalogError });
+          this.runtimeModelsDiscoveredAt = 0;
+          this.startRuntimeModelRefresh();
+        }
       }
       this.enqueueTaskReport(task.id, "start", {});
+      if (codexCatalogError) {
+        this.enqueueTaskReport(task.id, "progress", {
+          summary: `能力加载失败，已回退 Codex 内置目录：${codexCatalogError}`,
+        });
+      }
       this.enqueueTaskReport(task.id, "progress", { summary: pickTaskStartupLine(task.agent?.name), step: 1, total: 3 });
       progressSummarizer = await this.createTaskProgressSummarizer(task, providerEnv, relay?.fragment);
       summary = await this.runAgent(task, abort.signal, resolvedWorkDir, pluginRuntime, providerHome, providerEnv, progressSummarizer);
@@ -4413,13 +4456,31 @@ export function runtimeModelsFromAcpCapabilities(
     provider: vendor,
     default: model.default,
     ...(model.providerDefault ? { providerDefault: true } : {}),
-    ...(model.effort?.supportedLevels.length || model.providerDefault
+    ...(model.effort || model.providerDefault
       ? {
           thinking: {
             supportedLevels: (model.effort?.supportedLevels ?? []).map((level) => ({ ...level })),
+            ...(model.effort?.defaultLevel ? { defaultLevel: model.effort.defaultLevel } : {}),
+            ...(model.effort?.status ? { status: model.effort.status } : {}),
           },
         }
       : {}),
+  }));
+}
+
+/** A daemon catalog failure overrides successful control-plane discovery. */
+export function runtimeModelsWithCatalogError(
+  models: MultiremiRuntimeModel[],
+  gatewayInventory: Array<{ id: string; label: string }>,
+  error: string,
+): MultiremiRuntimeModel[] {
+  const byId = new Map<string, MultiremiRuntimeModel>(models.map(model => [model.id, model]));
+  for (const model of gatewayInventory) {
+    if (!byId.has(model.id)) byId.set(model.id, { ...model, provider: "openai", default: false });
+  }
+  return [...byId.values()].map(model => ({
+    ...model,
+    thinking: { status: "error", supportedLevels: [], error },
   }));
 }
 

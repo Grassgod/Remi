@@ -671,11 +671,9 @@ export interface RuntimeModelThinking {
   error?: string;
   /** Levels the user is allowed to pick for this model. */
   supported_levels: RuntimeModelThinkingLevel[];
-  /** Informational: the level the upstream CLI documents as its built-in
-   *  default when no `--effort` flag is passed. Surfaced by the daemon
-   *  but not actively rendered today — Multiremi's empty `thinking_level`
-   *  means "no override; follow the runtime default", which may itself
-   *  differ from this value. */
+  /** Informational model default shown alongside the picker. An empty saved
+   *  thinking_level still means no override: follow runtime settings, which
+   *  can differ from this value. */
   default_level?: string;
 }
 

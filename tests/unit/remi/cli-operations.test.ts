@@ -27,6 +27,18 @@ afterEach(() => {
 });
 
 describe("operations CLI contracts", () => {
+  it("returns an agent's capability states and model default without losing metadata", async () => {
+    useCliEnv();
+    const spec = specById("runtime.model.catalog");
+    const thinking = { status: "supported", supported_levels: [{ value: "custom", label: "Custom" }], default_level: "custom" };
+    globalThis.fetch = capabilityFetch(spec.id, (request) => {
+      expect(new URL(request.url).searchParams.get("agent_id")).toBe("agt_codex");
+      return Response.json({ providers: [{ provider: "codex", models: [{ id: "gateway-model", thinking }] }] });
+    });
+    const output = await capture(() => registryFor([spec]).execute(["runtime", "model", "catalog", "--agent", "agt_codex", "--json"]));
+    expect(JSON.parse(output.stdout).providers[0].models[0].thinking).toEqual(thinking);
+  });
+
   it("filters the model catalog by the selected runtime", async () => {
     useCliEnv();
     const spec = specById("runtime.model.catalog");

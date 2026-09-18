@@ -1,24 +1,29 @@
 "use client";
 
 import { useId } from "react";
-import type { RuntimeModelThinkingLevel } from "@multiremi/core/types";
+import type { RuntimeModelThinking, RuntimeModelThinkingLevel } from "@multiremi/core/types";
 import { Label } from "@multiremi/ui/components/ui/label";
 import { useT } from "../../i18n";
 import { ThinkingPicker } from "./inspector/thinking-picker";
+import { ThinkingStatus } from "./inspector/thinking-status";
 
 export function ThinkingField({
   value,
   levels,
   onChange,
+  thinking,
+  isLoading,
+  isError,
 }: {
   value: string;
   levels: RuntimeModelThinkingLevel[];
   onChange: (next: string) => Promise<void> | void;
+  thinking?: RuntimeModelThinking;
+  isLoading?: boolean;
+  isError?: boolean;
 }) {
   const { t } = useT("agents");
   const labelId = useId();
-
-  if (levels.length === 0 && !value) return null;
 
   return (
     <div>
@@ -28,9 +33,10 @@ export function ThinkingField({
       <div
         role="group"
         aria-labelledby={labelId}
-        className="mt-1 flex h-9 items-center"
+        className="mt-1 flex min-h-9 flex-wrap items-center gap-1"
       >
-        <ThinkingPicker value={value} levels={levels} onChange={onChange} />
+        {(levels.length > 0 || value) && <ThinkingPicker value={value} levels={levels} onChange={onChange} />}
+        {(thinking || levels.length === 0) && <ThinkingStatus thinking={thinking} isLoading={isLoading} isError={isError} />}
       </div>
     </div>
   );

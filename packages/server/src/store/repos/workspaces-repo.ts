@@ -19,6 +19,7 @@ import type {
   MultiremiNotificationGroupKey,
   MultiremiNotificationPreferenceResponse,
   MultiremiNotificationPreferences,
+  MultiremiRuntimeModelThinking,
   MultiremiUser,
   MultiremiWorkspace,
   MultiremiWorkspaceInvitation,
@@ -51,7 +52,7 @@ export interface RelayConfigForBrowser {
   modelDiscovery: boolean;
 }
 export interface GatewayModelsSnapshot {
-  models: Array<{ id: string; label: string }>;
+  models: Array<{ id: string; label: string; thinking?: MultiremiRuntimeModelThinking }>;
   sourceRevision: number;
   lastSuccessAt: string | null;
   lastError: string | null;
@@ -838,7 +839,7 @@ export class WorkspacesRepo {
       .get(workspaceId, engine) as Row | null;
     if (!row) return null;
     return {
-      models: parseJson<Array<{ id: string; label: string }>>(row.models, []),
+      models: parseJson<GatewayModelsSnapshot["models"]>(row.models, []),
       sourceRevision: Number(row.source_revision ?? 0),
       lastSuccessAt: nullableString(row.last_success_at),
       lastError: nullableString(row.last_error),
@@ -849,7 +850,7 @@ export class WorkspacesRepo {
   saveGatewayModels(
     workspaceId: string,
     engine: RelayEngine,
-    input: { models?: Array<{ id: string; label: string }>; sourceRevision: number; error?: string | null },
+    input: { models?: GatewayModelsSnapshot["models"]; sourceRevision: number; error?: string | null },
   ): void {
     const now = nowIso();
     // Read the fence and write in one transaction so a slow, stale discovery run

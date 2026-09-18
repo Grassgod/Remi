@@ -5,6 +5,13 @@ import type {
 } from "@multiremi/core/types";
 import { modelThinkingLevels } from "@multiremi/core/runtimes";
 
+export function getModelThinking(
+  models: RuntimeModel[], model: string, defaultThinking?: RuntimeModelThinking,
+): RuntimeModelThinking | undefined {
+  if (model) return models.find((entry) => entry.id === model)?.thinking;
+  return defaultThinking ?? models.find((entry) => entry.default)?.thinking;
+}
+
 export function getModelThinkingLevels(
   models: RuntimeModel[],
   model: string,

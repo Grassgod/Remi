@@ -38,6 +38,7 @@ import { InstructionsEditor } from "./instructions-editor";
 import { ModelDropdown } from "./model-dropdown";
 import { ThinkingField } from "./thinking-field";
 import {
+  getModelThinking,
   getModelThinkingLevels,
   supportsThinkingLevel,
 } from "./inspector/thinking-levels";
@@ -305,6 +306,9 @@ export function EditAgentDialog({
               <ThinkingField
                 value={thinkingLevel}
                 levels={thinkingLevels}
+              thinking={getModelThinking(targetModels.models, model, targetModels.defaultThinking)}
+              isLoading={targetModels.isLoading}
+              isError={targetModels.isError}
                 onChange={setThinkingLevel}
               />
             </div>

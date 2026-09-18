@@ -10,6 +10,14 @@ const models: RuntimeModel[] = [
 ];
 
 describe("default model reasoning capabilities", () => {
+  it("never offers stale levels when the authoritative capability state is unavailable", () => {
+    for (const status of ["unknown", "unsupported", "error"] as const) {
+      const unavailable = { ...thinking("high"), status };
+      expect(getModelThinkingLevels([{ id: "a", label: "A", thinking: unavailable }], "a")).toEqual([]);
+      expect(getModelThinkingLevels(models, "", unavailable)).toEqual([]);
+    }
+  });
+
   it("offers only the intersection of advertised effort values for legacy catalogs", () => {
     expect(getModelThinkingLevels(models, "")).toEqual(thinking("high").supported_levels);
   });
