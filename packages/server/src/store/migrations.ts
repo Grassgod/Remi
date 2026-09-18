@@ -832,6 +832,10 @@ export function runMigrations(db: SqlDatabase): void {
       parent_session_id TEXT,
       inherit_mode TEXT NOT NULL DEFAULT 'none',
       inherit_cutoff_seq INTEGER,
+      inherited_tokens_total INTEGER NOT NULL DEFAULT 0,
+      follow_frozen_seq INTEGER,
+      with_code INTEGER NOT NULL DEFAULT 0,
+      code_runtime_id TEXT,
       summary TEXT,
       created_by_type TEXT NOT NULL DEFAULT 'member',
       created_by_id TEXT,
@@ -899,6 +903,7 @@ export function runMigrations(db: SqlDatabase): void {
       provider TEXT,
       work_dir TEXT,
       cursor_seq INTEGER NOT NULL DEFAULT 0,
+      parent_cursor_seq INTEGER NOT NULL DEFAULT 0,
       generation INTEGER NOT NULL DEFAULT 1,
       status TEXT NOT NULL DEFAULT 'active',
       last_task_id TEXT,
@@ -2745,6 +2750,10 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_issue_sessions", "parent_session_id TEXT");
   addColumnIfMissing(db, "multiremi_issue_sessions", "inherit_mode TEXT NOT NULL DEFAULT 'none'");
   addColumnIfMissing(db, "multiremi_issue_sessions", "inherit_cutoff_seq INTEGER");
+  addColumnIfMissing(db, "multiremi_issue_sessions", "inherited_tokens_total INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "multiremi_issue_sessions", "follow_frozen_seq INTEGER");
+  addColumnIfMissing(db, "multiremi_issue_sessions", "with_code INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "multiremi_issue_sessions", "code_runtime_id TEXT");
   // Agent auto-reply comments point back at the run that produced them, so the
   // chat stream can open that task's transcript. Forward-only: no backfill.
   addColumnIfMissing(db, "multiremi_issue_comments", "task_id TEXT");
@@ -2871,6 +2880,8 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_tasks", "inherited_projection_omitted_events INTEGER");
   addColumnIfMissing(db, "multiremi_tasks", "inherited_projection_estimated_tokens INTEGER");
   addColumnIfMissing(db, "multiremi_tasks", "inherited_projection_to_seq INTEGER");
+  // A recorded follow window also pins retries of an empty parent round.
+  addColumnIfMissing(db, "multiremi_tasks", "inherited_projection_from_seq INTEGER");
   addColumnIfMissing(db, "multiremi_tasks", "inherited_projection_token_budget INTEGER");
   addColumnIfMissing(db, "multiremi_tasks", "inherited_projection_recorded_at TEXT");
   addColumnIfMissing(db, "multiremi_task_messages", "tool_call_id TEXT");
@@ -2886,6 +2897,7 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_tasks", "execution_fingerprint TEXT");
   addColumnIfMissing(db, "multiremi_session_agent_lanes", "execution_fingerprint TEXT");
   migrateExecutionScopedLanes(db);
+  addColumnIfMissing(db, "multiremi_session_agent_lanes", "parent_cursor_seq INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(db, "multiremi_inbox_items", "recipient_type TEXT NOT NULL DEFAULT 'member'");
   addColumnIfMissing(db, "multiremi_inbox_items", "recipient_id TEXT");
   addColumnIfMissing(db, "multiremi_inbox_items", "severity TEXT NOT NULL DEFAULT 'info'");
@@ -3879,6 +3891,7 @@ function migrateExecutionScopedLanes(db: SqlDatabase): void {
       provider TEXT,
       work_dir TEXT,
       cursor_seq INTEGER NOT NULL DEFAULT 0,
+      parent_cursor_seq INTEGER NOT NULL DEFAULT 0,
       generation INTEGER NOT NULL DEFAULT 1,
       status TEXT NOT NULL DEFAULT 'active',
       last_task_id TEXT,

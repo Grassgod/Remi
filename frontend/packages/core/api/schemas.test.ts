@@ -582,7 +582,19 @@ describe("IssueSessionListSchema", () => {
     });
   });
 
-  it("preserves side-session inheritance metadata without confusing the cutoff and count", () => {
+  it("preserves the code snapshot opt-in and its Runtime without making it a held workspace", () => {
+    const parsed = parseWithFallback([{
+      id: "sess_code", issue_id: "issue_1", workspace_id: "ws_1", title: "Read code", status: "active",
+      holds_workspace: false, with_code: true, code_runtime_id: "rt_parent",
+      parent_session_id: "sess_main", inherit_mode: "follow", inherit_cutoff_seq: 42,
+      created_at: "2026-09-18T00:00:00Z", updated_at: "2026-09-18T00:00:00Z",
+    }], IssueSessionListSchema, EMPTY_ISSUE_SESSIONS, opts);
+    expect(parsed[0]).toMatchObject({
+      with_code: true, code_runtime_id: "rt_parent", holds_workspace: false, inherit_mode: "follow",
+    });
+  });
+
+  it.each(["snapshot", "follow"])("preserves %s inheritance metadata without confusing the cutoff and count", (inheritMode) => {
     const parsed = parseWithFallback([
       {
         id: "sess_side",
@@ -592,7 +604,7 @@ describe("IssueSessionListSchema", () => {
         status: "active",
         holds_workspace: false,
         parent_session_id: "sess_main",
-        inherit_mode: "snapshot",
+        inherit_mode: inheritMode,
         inherit_cutoff_seq: 42,
         inherited_event_count: 38,
         created_at: "2026-09-18T00:00:00Z",
@@ -604,7 +616,7 @@ describe("IssueSessionListSchema", () => {
       id: "sess_side",
       holds_workspace: false,
       parent_session_id: "sess_main",
-      inherit_mode: "snapshot",
+      inherit_mode: inheritMode,
       inherit_cutoff_seq: 42,
       inherited_event_count: 38,
     });

@@ -107,6 +107,8 @@ export function issueSessionCompatibilityResponse(
     status: session.status,
     is_default: session.isDefault,
     holds_workspace: session.holdsWorkspace,
+    with_code: session.withCode ?? false,
+    code_runtime_id: session.codeRuntimeId ?? null,
     parent_session_id: session.parentSessionId,
     inherit_mode: session.inheritMode,
     inherit_cutoff_seq: session.inheritCutoffSeq,

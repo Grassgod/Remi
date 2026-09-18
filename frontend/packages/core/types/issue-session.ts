@@ -22,8 +22,10 @@ export interface IssueSession {
   status: IssueSessionStatus;
   is_default: boolean;
   holds_workspace?: boolean;
+  with_code?: boolean;
+  code_runtime_id?: string | null;
   parent_session_id: string | null;
-  inherit_mode: "none" | "snapshot";
+  inherit_mode: "none" | "snapshot" | "follow";
   inherit_cutoff_seq: number | null;
   inherited_event_count: number;
   summary: string | null;
@@ -61,9 +63,11 @@ export interface SessionResult {
 }
 
 export interface CreateIssueSessionRequest {
+  with_code?: boolean;
   title: string;
   holds_workspace?: boolean;
   parent_session_id?: string;
+  inherit_mode?: "none" | "snapshot" | "follow";
 }
 
 export interface CreateSessionTaskRequest {

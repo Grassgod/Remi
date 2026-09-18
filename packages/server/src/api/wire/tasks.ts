@@ -392,7 +392,7 @@ export function daemonTaskClaimResponse(
   if (task.issueSessionId || task.chatSessionId) {
     const projection = store.buildTaskSessionProjection(task.id);
     if (projection) {
-      projectionMode = projection.mode;
+      projectionMode = projection.mode === "delta" ? "delta" : "bootstrap";
       response.session_projection = {
         session_id: projection.sessionId,
         target_agent_id: projection.targetAgentId,
@@ -418,6 +418,8 @@ export function daemonTaskClaimResponse(
           omitted_events: inherited.omittedEvents,
           estimated_tokens: inherited.estimatedTokens,
         };
+      } else if (inherited === null) {
+        response.inherited_session_projection = null;
       }
     }
   }
