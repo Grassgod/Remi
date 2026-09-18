@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import { createChatStore, registerChatStore } from "@multiremi/core/chat";
 import type { ChatSession } from "@multiremi/core/types";
@@ -13,20 +13,34 @@ const backend = vi.hoisted(() => ({
   pending: {} as Record<string, unknown>,
   create: vi.fn(), update: vi.fn(), send: vi.fn(),
 }));
-vi.mock("@multiremi/core/api", () => ({ api: {
-  listAgents: async () => [{ id: "agent-a", name: "Alpha", archived_at: null, owner_id: "user-a" }],
-  listMembers: async () => [{ user_id: "user-a", role: "owner" }],
-  listProjects: async () => ({ projects: [
-    { id: "project-a", title: "Remi", archived_at: null, icon: null },
-    { id: "project-b", title: "Docs", archived_at: null, icon: null },
-  ] }),
-  listChatSessions: async () => backend.sessions,
-  listChatMessagesPage: async () => ({ messages: [], limit: 50, has_more: false, next_cursor: null }),
-  getPendingChatTask: async () => backend.pending,
-  createChatSession: backend.create,
-  updateChatSession: backend.update,
-  sendChatMessage: backend.send,
-} }));
+const apiLogger = vi.hoisted(() => ({ error: vi.fn() }));
+vi.mock("@multiremi/core/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@multiremi/core/api")>();
+  return { ...actual, api: {
+    listAgents: async () => [{ id: "agent-a", name: "Alpha", archived_at: null, owner_id: "user-a" }],
+    listMembers: async () => [{ user_id: "user-a", role: "owner" }],
+    listProjects: async () => ({ projects: [
+      { id: "project-a", title: "Remi", archived_at: null, icon: null },
+      { id: "project-b", title: "Docs", archived_at: null, icon: null },
+    ] }),
+    listChatSessions: async () => backend.sessions,
+    listChatMessagesPage: async () => ({ messages: [], limit: 50, has_more: false, next_cursor: null }),
+    getPendingChatTask: async () => backend.pending,
+    createChatSession: backend.create,
+    updateChatSession: backend.update,
+    sendChatMessage: backend.send,
+  } };
+});
+vi.mock("@multiremi/core/logger", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@multiremi/core/logger")>();
+  return {
+    ...actual,
+    createLogger: (namespace: string) =>
+      namespace === "chat.api"
+        ? { ...actual.noopLogger, error: apiLogger.error }
+        : actual.noopLogger,
+  };
+});
 vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "workspace-a" }));
 vi.mock("@multiremi/core/auth", () => ({ useAuthStore: (select: (s: unknown) => unknown) => select({ user: { id: "user-a" } }) }));
 vi.mock("@multiremi/core/platform", () => ({ getCurrentWsId: () => "workspace-a" }));
@@ -48,9 +62,10 @@ vi.mock("./chat-empty-state", () => ({ EmptyState: () => null }));
 vi.mock("./agent-dropdown", () => ({ AgentDropdown: () => null }));
 vi.mock("./session-dropdown", () => ({ SessionDropdown: () => null }));
 vi.mock("./chat-input", () => ({ ChatInput: ({ onSend, disabled }: { onSend: (value: string) => Promise<void>; disabled: boolean }) => (
-  <button disabled={disabled} onClick={() => void onSend("Hello")}>Send test message</button>
+  <button disabled={disabled} onClick={() => void onSend("Hello").catch(() => {})}>Send test message</button>
 ) }));
 
+import { ApiError } from "@multiremi/core/api";
 import { ChatWindow } from "./chat-window";
 
 const session: ChatSession = {
@@ -92,6 +107,79 @@ beforeEach(() => {
     return backend.sessions[0];
   });
   backend.send.mockReset().mockResolvedValue({ task_id: "task-a", message_id: "message-a", created_at: "2026-09-17", supports_queue: true, queued: false });
+  apiLogger.error.mockReset();
+});
+
+describe("ChatWindow plain HTTP sends", () => {
+  const getRandomValues = globalThis.crypto.getRandomValues.bind(globalThis.crypto);
+
+  beforeEach(() => {
+    vi.stubGlobal("crypto", { getRandomValues });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("creates a new session and sends its first message without randomUUID", async () => {
+    const { client } = mount();
+    await waitFor(() => expect(client.getQueryData(["workspaces", "workspace-a", "agents"])).toBeDefined());
+
+    expect(globalThis.crypto.randomUUID).toBeUndefined();
+    fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
+
+    await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ agent_id: "agent-a", title: "Hello" }));
+    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined));
+  });
+
+  it("sends a follow-up in an existing session without randomUUID", async () => {
+    backend.sessions = [session];
+    const { client } = mount(true);
+    await waitFor(() => expect(client.getQueryData(["workspaces", "workspace-a", "agents"])).toBeDefined());
+
+    expect(globalThis.crypto.randomUUID).toBeUndefined();
+    fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
+
+    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined));
+    expect(backend.create).not.toHaveBeenCalled();
+  });
+
+  it("logs only allowlisted error details when message submission fails", async () => {
+    const sensitiveToken = "secret-send-token";
+    const sensitiveBody = "private user message in response";
+    const sensitiveCause = "https://gateway.example/?token=secret";
+    const error = new ApiError("upstream rejected send", 503, "Unavailable", {
+      token: sensitiveToken,
+      content: sensitiveBody,
+    });
+    Object.defineProperty(error, "cause", {
+      value: new Error(sensitiveCause),
+      enumerable: true,
+    });
+    backend.sessions = [session];
+    backend.send.mockRejectedValueOnce(error);
+    const { client } = mount(true);
+    await waitFor(() => expect(client.getQueryData(["workspaces", "workspace-a", "agents"])).toBeDefined());
+
+    fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
+
+    await waitFor(() => expect(apiLogger.error).toHaveBeenCalledWith(
+      "sendChatMessage.error",
+      {
+        sessionId: "chat-a",
+        error: {
+          name: "ApiError",
+          message: "upstream rejected send",
+          status: 503,
+          statusText: "Unavailable",
+        },
+      },
+    ));
+    const logged = JSON.stringify(apiLogger.error.mock.calls[0]?.[1]);
+    expect(logged).not.toContain(sensitiveToken);
+    expect(logged).not.toContain(sensitiveBody);
+    expect(logged).not.toContain(sensitiveCause);
+  });
 });
 
 describe("ChatWindow project settings", () => {

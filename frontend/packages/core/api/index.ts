@@ -5,6 +5,8 @@ export {
   PreviewUnsupportedError,
 } from "./client";
 export type { ApiClientOptions } from "./client";
+export { toSafeErrorDetails } from "./http";
+export type { SafeErrorDetails } from "./http";
 export {
   ApiContractError,
   parseStrictResponse,

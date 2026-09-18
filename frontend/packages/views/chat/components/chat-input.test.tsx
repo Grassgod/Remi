@@ -45,6 +45,16 @@ const dropHandlers = vi.hoisted(() => ({
 const editorProps = vi.hoisted(() => ({
   last: null as null | Record<string, unknown>,
 }));
+const logger = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  error: vi.fn(),
+}));
+
+vi.mock("@multiremi/core/logger", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@multiremi/core/logger")>();
+  return { ...actual, createLogger: () => logger };
+});
 
 vi.mock("../../editor", () => ({
   useFileDropZone: ({ onDrop }: { onDrop: (files: File[]) => void }) => {
@@ -134,9 +144,11 @@ vi.mock("@multiremi/core/chat", () => {
 });
 
 import { ChatInput } from "./chat-input";
+import { ApiError } from "@multiremi/core/api";
 import { useChatStore } from "@multiremi/core/chat";
 import { setCurrentWorkspace } from "@multiremi/core/platform";
 beforeEach(() => {
+  vi.clearAllMocks();
   setCurrentWorkspace("demo", "ws-1");
   const state = useChatStore.getState();
   state.inputDrafts = {};
@@ -323,6 +335,66 @@ describe("ChatInput sending and queue", () => {
     await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2));
     expect(onSend).toHaveBeenLastCalledWith("Please keep this", undefined);
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  });
+
+  it("retains the draft and attachment binding after a send failure", async () => {
+    useChatStore.getState().activeSessionId = "session-1";
+    const sensitiveToken = "secret-chat-token";
+    const sensitiveBody = "private draft echoed by gateway";
+    const sensitiveCause = "https://gateway.example/?authorization=secret";
+    const error = new ApiError("send failed", 502, "Bad Gateway", {
+      token: sensitiveToken,
+      content: sensitiveBody,
+    });
+    Object.defineProperty(error, "cause", {
+      value: new Error(sensitiveCause),
+      enumerable: true,
+    });
+    const attachment = makeUpload({
+      id: "att-failed",
+      link: "https://cdn.example/failed.png",
+      filename: "failed.png",
+      chat_session_id: "session-1",
+    });
+    const onSend = vi.fn().mockRejectedValue(error);
+    renderInput({
+      onSend,
+      onUploadFile: vi.fn().mockResolvedValue(attachment),
+    });
+    fireEvent.change(screen.getByTestId("editor"), {
+      target: { value: "Keep this draft" },
+    });
+    await act(async () => {
+      dropHandlers.onDrop?.([new File(["x"], "failed.png")]);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const content = "Keep this draft![](https://cdn.example/failed.png)";
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await screen.findByRole("alert");
+    expect(onSend).toHaveBeenCalledWith(content, ["att-failed"]);
+    expect(useChatStore.getState().inputDrafts["session-1"]).toBe(content);
+    expect(useChatStore.getState().inputDraftAttachments["session-1"]).toEqual({
+      "https://cdn.example/failed.png": "att-failed",
+    });
+    expect(logger.error).toHaveBeenCalledWith("input.send.error", {
+      draftKey: "session-1",
+      contentLength: content.length,
+      attachmentCount: 1,
+      error: {
+        name: "ApiError",
+        message: "send failed",
+        status: 502,
+        statusText: "Bad Gateway",
+      },
+    });
+    const logged = JSON.stringify(logger.error.mock.calls[0]?.[1]);
+    expect(logged).not.toContain(content);
+    expect(logged).not.toContain(sensitiveToken);
+    expect(logged).not.toContain(sensitiveBody);
+    expect(logged).not.toContain(sensitiveCause);
   });
 
   it("allows queueing without removing the current stop control", async () => {

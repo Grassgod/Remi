@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Check, ChevronRight, Copy, FolderGit2, GitBranch, Server, TriangleAlert } from "lucide-react";
 import { issueWorkspaceOptions } from "@multiremi/core/issues/queries";
 import type { IssueWorkspace, IssueWorkspaceStatus } from "@multiremi/core/types";
+import { copyText } from "@multiremi/ui/lib/clipboard";
 import { useT } from "../../i18n";
 import { capitalize, shortDaemonId, splitRuntimeName } from "../../runtimes/components/runtime-machines";
 
@@ -20,7 +21,6 @@ export function IssueCodeWorkspaceSection({
   const { data: workspace } = useQuery(issueWorkspaceOptions(issueId));
   if (!workspace) return null;
 
-  const copy = (value: string) => void navigator.clipboard?.writeText(value);
   const statusLabel = t(($) => $.detail.workspace_status[workspace.status]);
   const runtime = runtimePresentation(
     workspace,
@@ -49,7 +49,7 @@ export function IssueCodeWorkspaceSection({
             </WorkspaceRow>
           ) : (
             <WorkspaceRow icon={<GitBranch className="size-3.5" />} label={t(($) => $.detail.workspace_branch)}>
-              <CopyValue value={workspace.branch_name} onCopy={copy} />
+              <CopyValue value={workspace.branch_name} onCopy={copyText} />
             </WorkspaceRow>
           )}
           <WorkspaceRow icon={<Server className="size-3.5" />} label={t(($) => $.detail.workspace_runtime)}>
@@ -76,7 +76,7 @@ export function IssueCodeWorkspaceSection({
             <CopyValue
               value={workspace.root_path}
               displayValue={displayWorkspacePath(workspace.root_path)}
-              onCopy={copy}
+              onCopy={copyText}
               wrap
             />
           </WorkspaceRow>
@@ -101,7 +101,7 @@ export function IssueCodeWorkspaceSection({
                       <CopyValue
                         value={repo.worktree_path}
                         displayValue={displayRepoPath(workspace.root_path, repo.worktree_path)}
-                        onCopy={copy}
+                        onCopy={copyText}
                       />
                     </div>
                     {repo.error && <div className="ml-5 mt-0.5 text-[10px] text-destructive">{repo.error}</div>}
@@ -181,7 +181,7 @@ function CopyValue({
 }: {
   value: string;
   displayValue?: string;
-  onCopy: (value: string) => void;
+  onCopy: (value: string) => Promise<boolean>;
   wrap?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
@@ -199,9 +199,11 @@ function CopyValue({
         title="Copy"
         aria-label="Copy"
         onClick={() => {
-          onCopy(value);
-          setCopied(true);
-          window.setTimeout(() => setCopied(false), 1200);
+          void onCopy(value).then((ok) => {
+            if (!ok) return;
+            setCopied(true);
+            window.setTimeout(() => setCopied(false), 1200);
+          });
         }}
       >
         {copied ? <Check className="size-3" /> : <Copy className="size-3" />}

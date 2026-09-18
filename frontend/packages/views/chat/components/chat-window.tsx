@@ -30,7 +30,7 @@ import {
   memberListOptions,
 } from "@multiremi/core/workspace/queries";
 import { canAssignAgent } from "@multiremi/views/issues/components";
-import { api } from "@multiremi/core/api";
+import { api, toSafeErrorDetails } from "@multiremi/core/api";
 import { projectListOptions } from "@multiremi/core/projects/queries";
 import {
   useAgentPresenceDetail,
@@ -78,6 +78,7 @@ import { useT } from "../../i18n";
 import { useNavigation } from "../../navigation";
 import { useWorkspacePaths } from "@multiremi/core/paths";
 import { getCurrentWsId } from "@multiremi/core/platform";
+import { createSafeId } from "@multiremi/core/utils";
 import { PageHeader } from "../../layout/page-header";
 import { ChatQueue } from "./chat-queue";
 
@@ -378,7 +379,7 @@ export function ChatWindow({
       const isFollowup = !!priorPending?.task_id;
       const sentAt = new Date().toISOString();
       const optimistic: ChatMessage = {
-        id: `optimistic-${crypto.randomUUID()}`,
+        id: `optimistic-${createSafeId()}`,
         chat_session_id: sessionId,
         role: "user",
         content,
@@ -433,7 +434,10 @@ export function ChatWindow({
           });
         }
       } catch (error) {
-        apiLogger.error("sendChatMessage.error", { sessionId, error });
+        apiLogger.error("sendChatMessage.error", {
+          sessionId,
+          error: toSafeErrorDetails(error),
+        });
         throw error;
       } finally {
         // Drop only this send's optimistic row. Concurrent WS messages stay intact.

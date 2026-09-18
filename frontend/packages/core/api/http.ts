@@ -39,6 +39,29 @@ export class ApiError extends Error {
   }
 }
 
+export interface SafeErrorDetails {
+  name: string;
+  message: string;
+  status?: number;
+  statusText?: string;
+}
+
+/** Projects errors onto an explicit logging allowlist so response bodies and causes cannot leak. */
+export function toSafeErrorDetails(error: unknown): SafeErrorDetails {
+  if (error instanceof ApiError) {
+    return {
+      name: error.name,
+      message: error.message,
+      status: error.status,
+      statusText: error.statusText,
+    };
+  }
+  if (error instanceof Error) {
+    return { name: error.name, message: error.message };
+  }
+  return { name: "UnknownError", message: "Unknown error" };
+}
+
 // Thrown by getAttachmentTextContent when the server refuses to inline a
 // file because it exceeds the 2 MB cap. UI maps to a "too large, please
 // download" affordance with the Download CTA still available.
