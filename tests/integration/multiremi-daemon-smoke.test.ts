@@ -1856,6 +1856,14 @@ describe("Bun Multiremi daemon smoke", () => {
       thinkingLevel: "xhigh",
       mcpConfig: { mcpServers: { recall: { command: "/bin/recall", env: { TOKEN: "t" } } } },
     });
+    // The injected provider deliberately bypasses live capability discovery.
+    // Advertise its fixture model so task eligibility can validate xhigh while
+    // this test continues to exercise session persistence across daemon restarts.
+    const runtime = store.registerRuntime({ id: "rt_chat_resume", name: "chat-resume-runtime", provider: "claude", workspaceId: "local" });
+    store.updateRuntimeModels(runtime.id, [{
+      id: "claude-chat", label: "Chat Claude", provider: "anthropic", default: true,
+      thinking: { supportedLevels: [{ value: "xhigh", label: "Extra high" }] },
+    }]);
     const session = store.createChatSession({ agentId: agent.id, title: "Resume chat" });
     const first = store.sendChatMessage(session.id, { body: "Start the chat" });
     const daemonToken = await store.createAccessToken({
@@ -1910,6 +1918,7 @@ describe("Bun Multiremi daemon smoke", () => {
       serverUrl: `http://127.0.0.1:${server.port}`,
       token: daemonToken.token,
       runtimeName: "chat-resume-runtime",
+      runtimeId: runtime.id,
       provider: "claude",
       workspaceId: "local",
       once: true,
