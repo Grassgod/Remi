@@ -60,6 +60,8 @@ export interface AcpProviderOptions {
   allowedTools?: string[];
   /** Working directory. */
   cwd?: string;
+  /** Daemon-owned directory mounted as this task execution's literal /tmp. */
+  privateTmpDirectory?: string;
   /** Inject MCP servers at construction time (ACP wire shape — see {@link McpServerConfig}). */
   getMcpServers?: () => McpServerConfig[];
   /** Extra environment variables for the spawned ACP process. */
@@ -833,6 +835,7 @@ export class AcpProvider implements Provider {
       args: this._options.args,
       agentType: this._adapter.agentType,
       cwd,
+      privateTmpDirectory: this._options.privateTmpDirectory,
       env,
       onPermissionRequest: (params) => this._handlePermission(params),
       onElicitationRequest: (params) => this._handleElicitation(params),

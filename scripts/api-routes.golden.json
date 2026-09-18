@@ -1,10 +1,10 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 755,
+    "routeCount": 756,
     "routeCountByPrefix": {
       "native": 210,
-      "compat": 531,
+      "compat": 532,
       "root": 14
     },
     "getRoutes": 323,
@@ -14,7 +14,7 @@
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 432,
+    "mutationRoutes": 433,
     "mutationRoutesCovered": 282,
     "flows": [
       "agents-compat",
@@ -737,6 +737,7 @@
     "POST /api/workspaces/:id/repos/:repositoryId/wiki/move",
     "POST /api/workspaces/:id/repos/:repositoryId/wiki/outcome",
     "POST /api/workspaces/:id/repos/:repositoryId/wiki/publish",
+    "POST /api/workspaces/:id/repos/:repositoryId/wiki/repair-log",
     "POST /api/workspaces/:id/repos/:repositoryId/wiki/restore",
     "POST /api/workspaces/:id/repos/inspect",
     "POST /api/workspaces/:id/runtime-provisions",
@@ -12766,6 +12767,17 @@
               "jsonl"
             ],
             "allowed": false
+          },
+          {
+            "id": "wiki.repository.repair-log",
+            "command": "remi wiki repository repair-log",
+            "capability": "wiki.repository.repair-log",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
           },
           {
             "id": "wiki.repository.restore",

@@ -35,7 +35,7 @@ import { sha256Text } from "@multiremi/project-knowledge/codec.js";
 import { resolveTaskRepositoryWikiRepositories } from "@multiremi/repository-wiki/task-scope.js";
 import { autopilotRunTriggerSummary } from "../wire/autopilots.js";
 import { createId } from "@multiremi/ids.js";
-import { assertRepositoryWikiPathChangesReadable, REPOSITORY_WIKI_BATCH_LIMIT, RepositoryWikiUnavailableError, RepositoryWikiRestoreConflictError, RepositoryWikiRestoreInputError, type RepositoryWikiRestoreTarget, type RepositoryWikiRestoreResult } from "@multiremi/repository-wiki/service.js";
+import { assertRepositoryWikiPathChangesReadable, REPOSITORY_WIKI_BATCH_LIMIT, RepositoryWikiLogHistoryError, RepositoryWikiLogRepairConflictError, RepositoryWikiLogRepairInputError, RepositoryWikiUnavailableError, RepositoryWikiRestoreConflictError, RepositoryWikiRestoreInputError, type RepositoryWikiRestoreTarget, type RepositoryWikiRestoreResult } from "@multiremi/repository-wiki/service.js";
 import { authenticatedRequestUserId } from "../wire/index.js";
 import { RepositoryWikiOutcomeConflictError } from "@multiremi/store/repos/knowledge-repo.js";
 import type { RepositoryWikiOutcomeStatus } from "@multiremi/store/repository-wiki-outcome.js";
@@ -213,6 +213,91 @@ export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
     } catch (error) {
       if (runId) store.completeKnowledgeCompilationRun(runId, "failed", JSON.stringify({
         ...audit, error: error instanceof Error ? error.message : "restore failed",
+      }));
+      return knowledgeError(c, error);
+    }
+  });
+
+  app.post("/api/workspaces/:id/repos/:repositoryId/wiki/repair-log", async c => {
+    const workspaceId = c.req.param("id");
+    const repositoryId = c.req.param("repositoryId");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    let runId: string | null = null;
+    let audit: Record<string, unknown> = {};
+    try {
+      const actor = resolveKnowledgeWriteActor(c, store);
+      assertRepositoryKnowledgeTarget(actor, store, repositoryId);
+      if (actor.task) requirePublisherOrMember(c, store);
+      else {
+        const adminDenied = requireWorkspaceAdmin(c, store, workspaceId);
+        if (adminDenied) return adminDenied;
+      }
+      if (!hasRepository(store, workspaceId, repositoryId)) return c.json({ error: "repository not found" }, 404);
+      const body = await readJsonStrict<{
+        body?: unknown;
+        expected_version?: unknown;
+        expected_body_sha256?: unknown;
+        reason?: unknown;
+      }>(c);
+      if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+      if (typeof body.body !== "string") throw new RepositoryWikiLogRepairInputError("Log repair body must be a string");
+      const expectedVersion = Number(body.expected_version);
+      const expectedBodySha256 = String(body.expected_body_sha256 ?? "");
+      const reason = String(body.reason ?? "").trim();
+      audit = {
+        operation: "repository_wiki_log_repair",
+        reason,
+        expected_version: expectedVersion,
+        expected_body_sha256: expectedBodySha256,
+        actor: {
+          kind: actor.kind,
+          user_id: authenticatedRequestUserId(c),
+          task_id: actor.task?.id ?? null,
+          agent_id: actor.agent?.id ?? null,
+        },
+      };
+      runId = createFormalWriteRun({ store, actor, workspaceId, repositoryId, scope: "repository_wiki" }).id;
+      store.completeKnowledgeCompilationRun(runId, "validating", JSON.stringify(audit));
+      const report = await repositoryWiki.repairLog(workspaceId, repositoryId, {
+        body: body.body,
+        expectedVersion,
+        expectedBodySha256,
+        reason,
+        updatedByType: actor.kind,
+        updatedById: actor.agent?.id ?? authenticatedRequestUserId(c),
+        sourceRevision: `repository_wiki_log_repair:${runId}`,
+      });
+      store.linkKnowledgeFormalVersion({
+        runId,
+        artifactScope: "repository_wiki",
+        docId: report.doc.id,
+        version: report.doc.version,
+        action: "update",
+        contentSha256: report.doc.contentSha256 ?? sha256Text(report.doc.body),
+      });
+      audit = { ...audit, ...report.audit, doc_id: report.doc.id, path: report.doc.path };
+      const run = store.completeKnowledgeCompilationRun(runId, "published", JSON.stringify(audit));
+      return c.json({
+        doc: {
+          id: report.doc.id,
+          repository_id: report.doc.repositoryId,
+          workspace_id: report.doc.workspaceId,
+          path: report.doc.path,
+          title: report.doc.title,
+          body: report.doc.body,
+          version: report.doc.version,
+          content_sha256: report.doc.contentSha256,
+          sync_status: report.doc.syncStatus,
+          compilation_run_id: report.doc.compilationRunId ?? null,
+        },
+        audit: report.audit,
+        run: runResponse(store, run),
+      });
+    } catch (error) {
+      if (runId) store.completeKnowledgeCompilationRun(runId, "failed", JSON.stringify({
+        ...audit,
+        error: error instanceof Error ? error.message : "log repair failed",
       }));
       return knowledgeError(c, error);
     }
@@ -1105,6 +1190,9 @@ function knowledgeError(c: Parameters<typeof knowledgePolicyErrorResponse>[0], e
   if (error instanceof RepositoryWikiUnavailableError) return c.json({ error: message }, 503);
   if (error instanceof RepositoryWikiRestoreConflictError) return c.json({ error: message }, 409);
   if (error instanceof RepositoryWikiRestoreInputError) return c.json({ error: message }, 400);
+  if (error instanceof RepositoryWikiLogRepairConflictError) return c.json({ error: message }, 409);
+  if (error instanceof RepositoryWikiLogRepairInputError) return c.json({ error: message }, 400);
+  if (error instanceof RepositoryWikiLogHistoryError) return c.json({ error: message }, 409);
   if (error instanceof RepositoryWikiLinkValidationError) return c.json({ error: message }, 409);
   if (/not found/i.test(message)) return c.json({ error: message }, 404);
   if (/conflict|duplicate|already/i.test(message)) return c.json({ error: message }, 409);

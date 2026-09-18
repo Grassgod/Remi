@@ -70,7 +70,7 @@ import type {
   UpdateWorkspaceRuntimeProvisionInput,
 } from "@multiremi/contracts/types.js";
 import { createId, nowIso } from "@multiremi/ids.js";
-import { REPOSITORY_WIKI_BATCH_LIMIT, RepositoryWikiUnavailableError } from "@multiremi/repository-wiki/service.js";
+import { REPOSITORY_WIKI_BATCH_LIMIT, RepositoryWikiLogHistoryError, RepositoryWikiUnavailableError } from "@multiremi/repository-wiki/service.js";
 import { normalizeRepositoryWikiPath } from "@multiremi/store/repos/repository-wiki-repo.js";
 import {
   defaultRepositoryWikiPath,
@@ -1563,6 +1563,7 @@ function repositoryWikiRevisionResponse(revision: MultiremiRepositoryWikiDocRevi
 function repositoryWikiError(c: Context, error: unknown): Response {
   const message = error instanceof Error ? error.message : "repository wiki request failed";
   if (error instanceof RepositoryWikiUnavailableError) return c.json({ error: message }, 503);
+  if (error instanceof RepositoryWikiLogHistoryError) return c.json({ error: message }, 409);
   if (error instanceof RepositoryWikiLinkValidationError) return c.json({ error: message }, 409);
   if (message.includes("not found")) return c.json({ error: message }, 404);
   if (message.includes("conflict") || message.includes("already exists")) return c.json({ error: message }, 409);

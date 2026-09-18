@@ -4,8 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   cleanupTemporaryTaskProviderHome,
+  cleanupTaskPrivateTempDirectory,
   prepareIssueSessionProviderHome,
   prepareIssueExecutionDirectory,
+  prepareTaskPrivateTempDirectory,
   loadIssueSessionProviderEnv,
   resolveIssueRuntimeStateRoot,
   resolveIssueSessionProviderHome,
@@ -33,6 +35,24 @@ function task(provider: "claude" | "codex", generation = 3): AgentTask {
 }
 
 describe("Issue Session provider home", () => {
+  it("allocates a fresh private temp per execution and cleans only its own directory", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-task-private-tmp-"));
+    roots.push(root);
+    const workspaces = join(root, "workspaces");
+    const home = resolveTaskProviderHome(task("claude"), join(root, "issue-runtime"), workspaces)!;
+    const first = await prepareTaskPrivateTempDirectory(home, "tsk_same");
+    const second = await prepareTaskPrivateTempDirectory(home, "tsk_same");
+    expect(first.path).not.toBe(second.path);
+    writeFileSync(join(first.path, "first.txt"), "first");
+    writeFileSync(join(second.path, "second.txt"), "second");
+
+    await cleanupTaskPrivateTempDirectory(first);
+    expect(existsSync(first.path)).toBe(false);
+    expect(readFileSync(join(second.path, "second.txt"), "utf8")).toBe("second");
+    await cleanupTaskPrivateTempDirectory(second);
+    expect(existsSync(second.path)).toBe(false);
+  });
+
   it("isolates delegation working directories and refuses a symlinked directory", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-delegation-home-"));
     roots.push(root);

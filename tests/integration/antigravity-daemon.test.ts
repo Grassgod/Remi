@@ -7,6 +7,7 @@ import { join, resolve } from "node:path";
 import { startMultiremiServer } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { MultiremiDaemon } from "@multiremi/daemon.js";
+import { isolateProcessTmp, PrivateTmpIsolationUnavailableError } from "@acp/index.js";
 
 it("runs native Antigravity through API, daemon, Chat resume and an Issue in a retained directory", async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "remi-agy-daemon-")));
@@ -15,7 +16,17 @@ it("runs native Antigravity through API, daemon, Chat resume and an Issue in a r
   store.ensureLocalWorkspace();
   const local = join(root, "user-project");
   const capture = join(root, "capture.json");
+  const isolationProbe = join(root, "isolation-probe");
   mkdirSync(local);
+  mkdirSync(isolationProbe);
+  writeFileSync(capture, "");
+  let isolationUnavailable: PrivateTmpIsolationUnavailableError | null = null;
+  try {
+    isolateProcessTmp({ executable: Bun.which("true") ?? "true", args: [] }, isolationProbe);
+  } catch (error) {
+    if (!(error instanceof PrivateTmpIsolationUnavailableError)) throw error;
+    isolationUnavailable = error;
+  }
   writeFileSync(join(local, "AGENTS.md"), "AGY_LOCAL_CONTEXT_SENTINEL");
   writeFileSync(join(local, "user-file.txt"), "retained");
   const agent = store.createAgent({ name: "AGY", provider: "antigravity", executable: Bun.which("node") ?? process.execPath,
@@ -44,6 +55,12 @@ it("runs native Antigravity through API, daemon, Chat resume and an Issue in a r
         : store.sendChatMessage(chat.id, { body: "Inspect project" }).task;
       await poll(() => ["completed", "failed"].includes(store.getTask(task.id)?.status ?? ""));
       const complete = store.getTask(task.id)!;
+      if (isolationUnavailable) {
+        expect(complete.status).toBe("failed");
+        expect(complete.error).toContain("[private_tmp_isolation_unavailable]");
+        expect(complete.error).toContain("runtime cannot create a private /tmp mount");
+        break;
+      }
       expect(complete.error).toBeNull();
       expect(complete.status).toBe("completed");
       expect(complete.sessionId).toBe("12345678-1234-1234-1234-123456789abc");

@@ -36,7 +36,7 @@ export function repositoryWikiRetrievalTags(doc: MultiremiRepositoryWikiDoc): st
 }
 
 export function encodeRepositoryWikiDocument(doc: MultiremiRepositoryWikiDoc): string {
-  return matter.stringify(normalizeBody(doc.body), {
+  return matter.stringify(`${canonicalRepositoryWikiBody(doc.body)}\n`, {
     schema_version: 1,
     id: doc.id,
     workspace_id: doc.workspaceId,
@@ -75,6 +75,7 @@ export function decodeRepositoryWikiBody(content: string, expected: MultiremiRep
   return parsed.content.replace(/^\n/, "").replace(/\n$/, "");
 }
 
-function normalizeBody(value: string): string {
-  return value.replace(/\r\n/g, "\n").replace(/\s+$/, "") + "\n";
+/** Match the body bytes encoded before gray-matter adds the final newline. */
+export function canonicalRepositoryWikiBody(value: string): string {
+  return value.replace(/\r\n/g, "\n").replace(/\s+$/, "");
 }
