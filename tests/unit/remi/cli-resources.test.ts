@@ -67,6 +67,47 @@ describe("native CLI resource contracts", () => {
     await execute(spec, ["ws_1", "--agent", "agt_bot", "--runtime", "rt_bot", "--app-id", "cli_bot", "--domain", "feishu", "--enabled", "--sender-access-policy", "agent"]);
     expect(saved).toMatchObject({ sender_access_policy: "agent", enabled: true });
   });
+  for (const action of ["set", "deploy"] as const) {
+    for (const code of ["runtime_offline", "runtime_config_unsupported"]) {
+      it(`surfaces ${code} when concierge ${action} is rejected`, async () => {
+        useCliEnv();
+        const spec = specById(`workspace.feishu-bot.${action}`);
+        globalThis.fetch = mockFetch(spec.id, [], (request) => {
+          const path = new URL(request.url).pathname;
+          if (path === "/api/workspaces/ws_1") return Response.json({ id: "ws_1", name: "Workspace" });
+          if (path === `/api/workspaces/ws_1/feishu-bot${action === "deploy" ? "/deploy" : ""}`) {
+            return Response.json({ code, error: "Select an online Runtime with concierge support" }, { status: 409 });
+          }
+          throw new Error(`unexpected request ${request.method} ${path}`);
+        });
+        const args = action === "set"
+          ? ["ws_1", "--agent", "agt_bot", "--runtime", "rt_bot", "--app-id", "cli_bot", "--enabled"]
+          : ["ws_1"];
+        await expect(execute(spec, args)).rejects.toMatchObject({
+          code: "conflict", status: 409, details: { code },
+          message: "Select an online Runtime with concierge support",
+        });
+      });
+    }
+  }
+
+  it("sends an explicit disabled config for a host that cannot run the concierge yet", async () => {
+    useCliEnv();
+    const spec = specById("workspace.feishu-bot.set");
+    let saved: unknown;
+    globalThis.fetch = mockFetch(spec.id, [], async (request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/workspaces/ws_1") return Response.json({ id: "ws_1", name: "Workspace" });
+      if (path === "/api/workspaces/ws_1/feishu-bot" && request.method === "PUT") {
+        saved = await request.json();
+        return Response.json({ runtime_supports_config: false, ...saved as object });
+      }
+      throw new Error(`unexpected request ${request.method} ${path}`);
+    });
+    await execute(spec, ["ws_1", "--agent", "agt_bot", "--runtime", "rt_pending", "--app-id", "cli_bot", "--disabled"]);
+    expect(saved).toMatchObject({ runtime_id: "rt_pending", enabled: false });
+  });
+
   it("advertises task parity except for identity and workspace lifecycle commands", () => {
     const registry = registryFor(SPECS);
     const inventory = new Map(registry.inventory().map((entry) => [entry.id, entry]));

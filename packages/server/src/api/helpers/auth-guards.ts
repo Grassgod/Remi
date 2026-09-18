@@ -650,6 +650,12 @@ export function isFeishuBotOutboundAttachmentRequest(c: Context): boolean {
     .test(new URL(c.req.url).pathname);
 }
 
+function isFeishuBotTaskTransportRequest(c: Context): boolean {
+  const path = new URL(c.req.url).pathname;
+  return (c.req.method === "GET" && /^\/api\/daemon\/tasks\/[^/]+\/(?:status|messages)$/.test(path))
+    || (c.req.method === "POST" && /^\/api\/daemon\/tasks\/[^/]+\/human-requests\/[^/]+\/respond$/.test(path));
+}
+
 export function denyDaemonTokenWorkspace(c: Context, workspaceId?: string | null, options: DaemonWorkspaceDenyOptions = {}): Response | null {
   const token = currentAccessToken(c);
   if (token?.type !== "daemon") return null;
@@ -766,6 +772,10 @@ export function denyDaemonTokenTaskRuntimeIdentity(
   }
   const tokenDaemonId = cleanString(token.daemonId);
   const runtimeDaemonId = cleanString(runtime?.daemonId);
+  // Only transport read/answer routes qualify. Task execution mutations must
+  // still belong to the claiming Runtime's daemon, even for the bot host.
+  if (isFeishuBotTaskTransportRequest(c) && tokenDaemonId
+    && store.canFeishuBotDaemonAccessTask(task.workspaceId, tokenDaemonId, task.id)) return null;
   if (!tokenDaemonId || !runtimeDaemonId || tokenDaemonId !== runtimeDaemonId) {
     if (options.hideForbiddenAsNotFound) return c.json({ error: "task not found" }, 404);
     return c.json({ error: "forbidden for daemon identity", code: "daemon_identity_forbidden" }, 403);

@@ -68,7 +68,7 @@ describe("workspace bot menu API", () => {
       provider: "codex",
       workspaceId: "local",
       status: "online",
-      metadata: { feishu_bot_menu: true },
+      metadata: { feishu_bot_menu: true, feishu_concierge_config_v1: true },
     });
     configureConcierge(store, "rt_bot_menu");
     store.updateWorkspace("local", {
@@ -155,11 +155,13 @@ describe("workspace bot menu API", () => {
       name: "concierge host",
       provider: "codex",
       workspaceId: "local",
-      status: "offline",
-      metadata: { feishu_bot_menu: true },
+      status: "online",
+      metadata: { feishu_bot_menu: true, feishu_concierge_config_v1: true },
     });
     registerPublisher(store, "rt_other", 1_000);
     configureConcierge(store, "rt_concierge");
+    // The host went offline after a valid deployment.
+    db!.run("UPDATE multiremi_runtimes SET status = 'offline' WHERE id = ?", ["rt_concierge"]);
 
     const publish = await app.request("/api/workspaces/local/bot-menu/publish", {
       method: "POST",
@@ -309,7 +311,7 @@ function registerPublisher(store: MultiremiStore, id: string, ageMs: number): vo
     provider: "codex",
     workspaceId: "local",
     status: "online",
-    metadata: { feishu_bot_menu: true },
+    metadata: { feishu_bot_menu: true, feishu_concierge_config_v1: true },
   });
   const heartbeatAt = new Date(Date.now() - ageMs).toISOString();
   db?.run("UPDATE multiremi_runtimes SET last_heartbeat_at = ? WHERE id = ?", [heartbeatAt, id]);

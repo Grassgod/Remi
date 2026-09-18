@@ -129,6 +129,69 @@ async function report(
 }
 
 describe("Feishu bot control-plane delivery", () => {
+  it("lets only the selected transport stream and answer a Chat executed by another provider", async () => {
+    const test = await scaffold();
+    test.store.registerRuntime({ id: "rt_claude", name: "Claude executor", provider: "claude",
+      workspaceId: "local", daemonId: "daemon-claude" });
+    const executor = await test.store.createAccessToken({ name: "executor", type: "daemon",
+      workspaceId: "local", daemonId: "daemon-claude" });
+    test.store.updateAgent(test.agentId, { provider: "claude" });
+    await report(test, "rt_a", { applied_revision: 1, state: "online" });
+    const submitted = test.store.submitFeishuBotMessage("local", "rt_a", {
+      revision: 1, externalSessionKey: "oc_cross_provider", externalMessageId: "om_cross_provider",
+      chatId: "oc_cross_provider", chatType: "p2p", text: "Hello", deliveryMode: "native_cot_v1",
+    });
+    const taskPath = `/api/daemon/tasks/${submitted.taskId}`;
+    for (const endpoint of ["status", "messages"]) {
+      expect((await test.app.request(`${taskPath}/${endpoint}`, {
+        headers: daemonHeaders(test.tokens.rt_a!),
+      })).status).toBe(200);
+      expect((await test.app.request(`${taskPath}/${endpoint}`, {
+        headers: daemonHeaders(test.tokens.rt_b!),
+      })).status).toBe(403);
+    }
+    expect(test.store.claimTask("rt_a")).toBeNull();
+    expect(test.store.claimTask("rt_claude")?.id).toBe(submitted.taskId);
+    test.store.startTask(submitted.taskId);
+    const sent = await test.app.request(`${taskPath}/messages`, {
+      method: "POST", headers: daemonHeaders(executor.token),
+      body: JSON.stringify({ messages: [{ type: "text", content: "Answer from Claude" }] }),
+    });
+    expect(sent.status).toBe(200);
+    const messages = await test.app.request(`${taskPath}/messages`, { headers: daemonHeaders(test.tokens.rt_a!) });
+    expect(messages.status).toBe(200);
+    expect(await messages.json()).toEqual(expect.arrayContaining([expect.objectContaining({ content: "Answer from Claude" })]));
+    const question = test.store.createTaskHumanRequest({ taskId: submitted.taskId, kind: "question",
+      payload: { question: "Continue?" } });
+    const answer = await test.app.request(`${taskPath}/human-requests/${question.id}/respond`, {
+      method: "POST", headers: daemonHeaders(test.tokens.rt_a!),
+      body: JSON.stringify({ response: { answer: "yes" }, responded_by: "feishu" }),
+    });
+    expect(answer.status).toBe(200);
+    expect(test.store.getTaskHumanRequest(question.id)?.response).toEqual({ answer: "yes" });
+    for (const endpoint of ["start", "messages", "progress", "complete", "fail"]) {
+      expect((await test.app.request(`${taskPath}/${endpoint}`, {
+        method: "POST", headers: daemonHeaders(test.tokens.rt_a!), body: "{}",
+      })).status).toBe(403);
+    }
+    const privateChat = test.store.createChatSession({ agentId: test.agentId, creatorId: "local" });
+    const unrelated = test.store.createTask({ agentId: test.agentId, chatSessionId: privateChat.id, prompt: "private" });
+    for (const endpoint of ["status", "messages"]) {
+      expect((await test.app.request(`/api/daemon/tasks/${unrelated.id}/${endpoint}`, {
+        headers: daemonHeaders(test.tokens.rt_a!),
+      })).status).toBe(403);
+    }
+    test.store.completeTask(submitted.taskId, { output: "Completed on Claude" });
+    const snapshot = await test.app.request(`${taskPath}/status`, { headers: daemonHeaders(test.tokens.rt_a!) });
+    expect(snapshot.status).toBe(200);
+    expect(await snapshot.json()).toMatchObject({ status: "completed", result: "Completed on Claude" });
+    // Reassigning the connector revokes the old transport's access immediately.
+    test.store.heartbeatRuntime("rt_claude", { supportsFeishuBotConfig: true });
+    test.store.upsertFeishuBotConfig("local", { agentId: test.agentId, runtimeId: "rt_claude",
+      appId: "cli_a1b2c3d4e5f6g7h8", appSecretOp: "keep", enabled: true, domain: "feishu" });
+    expect((await test.app.request(`${taskPath}/status`, { headers: daemonHeaders(test.tokens.rt_a!) })).status).toBe(403);
+  });
+
   it("queues native inbound replies once and recovers CoT, interaction and result IDs through the daemon API", async () => {
     const test = await scaffold();
     await report(test, "rt_a", { applied_revision: 1, state: "online" });

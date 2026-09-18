@@ -63,8 +63,8 @@ const FEISHU_BOT_FIELDS: readonly CliOptionSpec[] = [
   { name: "app-id", type: "string", valueName: "cli_xxx", description: "Feishu App ID" },
   { name: "app-secret", type: "string", valueName: "secret", description: "Feishu App Secret (stored encrypted)" },
   { name: "domain", type: "string", valueName: "feishu|lark|bytedance", description: "Open platform domain" },
-  { name: "enabled", type: "boolean", description: "Run the concierge after saving" },
-  { name: "disabled", type: "boolean", description: "Save the configuration without running it" },
+  { name: "enabled", type: "boolean", description: "Run after saving; requires an online Runtime with concierge support" },
+  { name: "disabled", type: "boolean", description: "Save without running; permits an offline Runtime or one without concierge support" },
 ];
 
 export function workspaceCommandSpecs(): CommandSpec[] {
@@ -240,7 +240,7 @@ export function workspaceCommandSpecs(): CommandSpec[] {
       feishuBotBody,
     ),
     scopedWrite("workspace.feishu-bot.test", ["workspace", "feishu-bot", "test"], "Test the Feishu concierge credentials", "/feishu-bot/test", "POST"),
-    scopedWrite("workspace.feishu-bot.deploy", ["workspace", "feishu-bot", "deploy"], "Enable and deploy the Feishu concierge", "/feishu-bot/deploy", "POST"),
+    scopedWrite("workspace.feishu-bot.deploy", ["workspace", "feishu-bot", "deploy"], "Enable and deploy the Feishu concierge; requires an online Runtime with concierge support", "/feishu-bot/deploy", "POST"),
     scopedWrite("workspace.feishu-bot.stop", ["workspace", "feishu-bot", "stop"], "Stop the Feishu concierge", "/feishu-bot/stop", "POST"),
     scopedWrite(
       "workspace.feishu-bot.register",

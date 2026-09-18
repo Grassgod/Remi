@@ -25,7 +25,7 @@ afterEach(() => {
   resetMultiremiTestEnv();
 });
 
-function scaffold() {
+function scaffold(provider: "claude" | "codex" = "codex") {
   const store = createLocalStore();
   const owner = store.getCurrentUser();
   store.getOrCreateUser({
@@ -34,11 +34,11 @@ function scaffold() {
     email: owner.email,
     name: "Workspace Owner",
   });
-  const agent = store.createAgent({ name: "Remi", provider: "codex", workspaceId: "local" });
+  const agent = store.createAgent({ name: "Remi", provider, workspaceId: "local" });
   store.registerRuntime({
     id: "rt_bot",
-    name: "codex",
-    provider: "codex",
+    name: provider,
+    provider,
     workspaceId: "local",
     daemonId: "n37-066-008-hehuajie",
   });
@@ -57,6 +57,119 @@ function scaffold() {
 }
 
 describe("Feishu bot standard Task bridge", () => {
+  it("hands an in-flight card to the new connector after the old Runtime lease expires", () => {
+    const { store, agent, config } = scaffold();
+    store.registerRuntime({ id: "rt_next", name: "New host", provider: "codex", workspaceId: "local",
+      daemonId: "another-machine" });
+    store.heartbeatRuntime("rt_next", { supportsFeishuBotConfig: true });
+    store.reportFeishuBotRuntimeStatus("local", "rt_bot", { appliedRevision: config.revision, state: "online" });
+    const inbound = store.submitFeishuBotMessage("local", "rt_bot", {
+      revision: config.revision, externalSessionKey: "oc_handover", chatType: "p2p", chatId: "oc_handover",
+      externalMessageId: "om_handover", senderUnionId: "on_owner", deliveryMode: "native_cot_v1",
+      text: "Keep answering while the connector moves",
+    });
+    expect(store.claimTask("rt_bot")?.id).toBe(inbound.taskId);
+    store.startTask(inbound.taskId);
+    const started = new Date();
+    const at = (seconds: number) => new Date(started.getTime() + seconds * 1_000);
+    const original = store.claimFeishuBotOutbound("local", "rt_bot", started, true, true)!;
+    expect(original.taskId).toBe(inbound.taskId);
+    expect(store.reportFeishuBotOutbound("local", "rt_bot", original.id, {
+      claimToken: original.claimToken, status: "streaming", externalMessageId: "om_handover_card",
+    }, started)).toBe(true);
+
+    const moved = store.upsertFeishuBotConfig("local", {
+      agentId: agent.id, runtimeId: "rt_next", appId: config.appId,
+      appSecretOp: "keep", domain: "feishu", enabled: true,
+    });
+    expect(store.feishuBotDirectiveForRuntime("local", "rt_next")).toMatchObject({
+      desired_state: "stopped", config_available: false,
+    });
+    expect(store.reportFeishuBotOutbound("local", "rt_bot", original.id, {
+      claimToken: original.claimToken, status: "sent", externalMessageId: "om_handover_card",
+    }, at(1))).toBe(false);
+    store.reportFeishuBotRuntimeStatus("local", "rt_bot", { appliedRevision: config.revision, state: "stopped" });
+    expect(store.feishuBotDirectiveForRuntime("local", "rt_next")).toMatchObject({
+      desired_state: "running", config_available: true,
+    });
+    store.reportFeishuBotRuntimeStatus("local", "rt_next", { appliedRevision: moved.revision, state: "online" });
+    // Moving the connector does not interrupt execution on the original machine.
+    expect(store.getTask(inbound.taskId)).toMatchObject({ status: "running", runtimeId: "rt_bot" });
+    store.completeTask(inbound.taskId, { output: "Answer survives the handover", sessionId: "sess_handover" });
+    expect(store.claimFeishuBotOutbound("local", "rt_next", at(119), true, true)).toBeNull();
+    const resumed = store.claimFeishuBotOutbound("local", "rt_next", at(121), true, true)!;
+    expect(resumed).toMatchObject({ id: original.id, taskId: inbound.taskId, resumeMessageId: "om_handover_card" });
+    expect(resumed.claimToken).not.toBe(original.claimToken);
+    expect(store.reportFeishuBotOutbound("local", "rt_next", resumed.id, {
+      claimToken: original.claimToken, status: "sent",
+    }, at(122))).toBe(false);
+    expect(store.reportFeishuBotOutbound("local", "rt_next", resumed.id, {
+      claimToken: resumed.claimToken, status: "sent", externalMessageId: resumed.resumeMessageId,
+    }, at(122))).toBe(true);
+    expect(store.claimFeishuBotOutbound("local", "rt_next", at(250), true, true)).toBeNull();
+  });
+
+  for (const [from, to, explicitModel] of [
+    ["claude", "codex", "gpt-5.6-sol"],
+    ["codex", "claude", "claude-opus-5"],
+  ] as const) {
+    for (const model of ["", explicitModel]) {
+      for (const previousTurn of ["none", "queued", "completed"] as const) {
+        it(`schedules ${from} -> ${to} with model=${model || "default"} and ${previousTurn} prior turn`, () => {
+          const { store, agent, config } = scaffold(from);
+          store.registerRuntime({ id: "rt_executor", name: to, provider: to, workspaceId: "local",
+            daemonId: "another-machine" });
+          store.reportFeishuBotRuntimeStatus("local", "rt_bot", {
+            appliedRevision: config.revision, state: "online",
+          });
+          const submit = (id: string) => store.submitFeishuBotMessage("local", "rt_bot", {
+            revision: config.revision, externalSessionKey: "oc_provider_switch", chatType: "p2p",
+            chatId: "oc_provider_switch", externalMessageId: id, senderUnionId: "on_owner",
+            deliveryMode: "native_cot_v1", text: `Message ${id}`,
+          });
+          const previous = previousTurn === "none" ? null : submit("om_before");
+          if (previousTurn === "completed") {
+            expect(store.claimTask("rt_bot")?.id).toBe(previous!.taskId);
+            store.startTask(previous!.taskId);
+            store.completeTask(previous!.taskId, { output: "Previous answer", sessionId: "sess_previous" });
+            const reply = store.claimFeishuBotOutbound("local", "rt_bot", undefined, true, true)!;
+            expect(store.reportFeishuBotOutbound("local", "rt_bot", reply.id, {
+              claimToken: reply.claimToken, status: "sent", externalMessageId: "om_previous_reply",
+            })).toBe(true);
+          }
+          store.updateAgent(agent.id, { provider: to, model });
+          if (previousTurn === "queued") {
+            // Old code could create a transport-pinned Task after the Agent
+            // changed provider. Reproduce that stored state across an upgrade.
+            db!.run("UPDATE multiremi_tasks SET runtime_id = 'rt_bot' WHERE id = ?", [previous!.taskId]);
+          }
+          const next = submit("om_after");
+          if (previous) expect(next.chatSessionId).toBe(previous.chatSessionId);
+          if (previousTurn === "queued") expect(next.taskId).toBe(previous!.taskId);
+          expect(store.claimTask("rt_bot")).toBeNull();
+          const claimed = store.claimTask("rt_executor");
+          expect(claimed?.id).toBe(next.taskId);
+          expect(claimed?.sessionId).toBeNull();
+          expect(claimed?.agent?.provider).toBe(to);
+          store.startTask(next.taskId);
+          store.consumeTaskSteerMessages(next.taskId, store.listTaskSteerMessages(next.taskId).map(message => message.id));
+          store.completeTask(next.taskId, { output: "Answer after switch", sessionId: "sess_new_provider" });
+          // Execution can move machines; the configured connector still owns replies.
+          expect(store.claimFeishuBotOutbound("local", "rt_executor", undefined, true, true)).toBeNull();
+          const reply = store.claimFeishuBotOutbound("local", "rt_bot", undefined, true, true)!;
+          expect(reply.taskId).toBe(next.taskId);
+          expect(store.reportFeishuBotOutbound("local", "rt_bot", reply.id, {
+            claimToken: reply.claimToken, status: "sent", externalMessageId: "om_new_reply",
+          })).toBe(true);
+          const followup = submit("om_followup");
+          expect(store.claimTask("rt_executor")).toMatchObject({
+            id: followup.taskId, sessionId: "sess_new_provider",
+          });
+        });
+      }
+    }
+  }
+
   for (const path of ["p2p", "group", "canonical-topic"] as const) {
     it(`rejects shared Chat binding creation and rolls back ${path}`, () => {
       const { store, config } = scaffold();
@@ -98,6 +211,7 @@ describe("Feishu bot standard Task bridge", () => {
       // No outstanding task is needed to trigger the provider reset.
       db!.run("UPDATE multiremi_tasks SET status = 'completed'");
       store.registerRuntime({ id: "rt_legacy", name: "Original machine", provider: "codex", workspaceId: "local" });
+      store.heartbeatRuntime("rt_legacy", { supportsFeishuBotConfig: true });
       const config = store.upsertFeishuBotConfig("local", {
         agentId: "agt_chat_migration", runtimeId: "rt_legacy", appId: "cli_migration",
         senderAccessPolicy: "allowlist", appSecretOp: "set", appSecret: APP_SECRET,
@@ -306,6 +420,9 @@ describe("Feishu bot standard Task bridge", () => {
     });
     expect(store.listTasks()).toHaveLength(taskCountBeforeComment);
 
+    // The reply/retry scenario below expects a specific executor. Express that
+    // as Agent placement now that the transport does not impose it.
+    store.updateAgent(agent.id, { runtimeId: "rt_bot" });
     store.completeTask(leaderTask.id, {
       output: "The implementation and migration are complete.",
       sessionId: "sess_leader_round",
@@ -408,6 +525,8 @@ describe("Feishu bot standard Task bridge", () => {
     })).toBe(true);
     expect(store.claimFeishuBotOutbound("local", "rt_bot", new Date(Date.now() + 60_000))).toBeNull();
 
+    // Resume normal placement for the next Issue round on its workspace host.
+    store.updateAgent(agent.id, { runtimeId: null });
     const failedLeader = store.createSessionTask(session.id, {
       agentId: agent.id,
       prompt: "This round will fail.",
@@ -649,7 +768,10 @@ describe("Feishu bot standard Task bridge", () => {
   });
 
   it("deduplicates events and steers an active Task in the bound Chat Session", () => {
-    const { store, config } = scaffold();
+    const { store, agent, config } = scaffold();
+    // This deduplication fixture exercises an explicitly pinned Agent. The
+    // connector no longer supplies task placement for automatically scheduled Agents.
+    store.updateAgent(agent.id, { runtimeId: "rt_bot" });
     const first = store.submitFeishuBotMessage("local", "rt_bot", {
       revision: config.revision,
       externalSessionKey: "oc_chat_1",

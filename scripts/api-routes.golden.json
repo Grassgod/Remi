@@ -5554,7 +5554,7 @@
         "runtime_id": "rt_snapshot",
         "runtime_name": "dmn_snapshot",
         "runtime_online": true,
-        "runtime_supports_config": false,
+        "runtime_supports_config": true,
         "app_id": "cli_snapshot_bot",
         "domain": "feishu",
         "enabled": false,
@@ -5586,7 +5586,7 @@
         "runtime_id": "rt_snapshot",
         "runtime_name": "dmn_snapshot",
         "runtime_online": true,
-        "runtime_supports_config": false,
+        "runtime_supports_config": true,
         "app_id": "cli_snapshot_bot",
         "domain": "lark",
         "enabled": true,
@@ -5615,7 +5615,7 @@
         "bot_open_id": null,
         "app_name": null,
         "runtime_online": true,
-        "runtime_supports_config": false,
+        "runtime_supports_config": true,
         "error_code": "unknown",
         "error_message": "Feishu rejected the credentials (code -1): "
       }
@@ -20300,7 +20300,8 @@
             "runtimeMode": "local",
             "deviceInfo": "",
             "metadata": {
-              "feishu_bot_menu": true
+              "feishu_bot_menu": true,
+              "feishu_concierge_config_v1": true
             },
             "workspaceId": "local",
             "ownerId": "local",
@@ -20353,7 +20354,8 @@
           "runtimeMode": "local",
           "deviceInfo": "",
           "metadata": {
-            "feishu_bot_menu": true
+            "feishu_bot_menu": true,
+            "feishu_concierge_config_v1": true
           },
           "workspaceId": "local",
           "ownerId": "local",
@@ -22030,7 +22032,8 @@
           "status": "online",
           "device_info": "",
           "metadata": {
-            "feishu_bot_menu": true
+            "feishu_bot_menu": true,
+            "feishu_concierge_config_v1": true
           },
           "owner_id": "local",
           "visibility": "public",
@@ -22058,7 +22061,8 @@
           "runtimeMode": "local",
           "deviceInfo": "",
           "metadata": {
-            "feishu_bot_menu": true
+            "feishu_bot_menu": true,
+            "feishu_concierge_config_v1": true
           },
           "workspaceId": "local",
           "ownerId": "local",
@@ -23034,7 +23038,7 @@
             "provider": "claude",
             "daemon_id": "dmn_snapshot",
             "online": true,
-            "supports_config": false,
+            "supports_config": true,
             "last_heartbeat_at": "<timestamp>"
           }
         ],
@@ -26219,7 +26223,8 @@
           "runtimeMode": "local",
           "deviceInfo": "",
           "metadata": {
-            "feishu_bot_menu": true
+            "feishu_bot_menu": true,
+            "feishu_concierge_config_v1": true
           },
           "workspaceId": "local",
           "ownerId": "local",
@@ -26274,7 +26279,8 @@
         "status": "online",
         "device_info": "",
         "metadata": {
-          "feishu_bot_menu": true
+          "feishu_bot_menu": true,
+          "feishu_concierge_config_v1": true
         },
         "owner_id": "local",
         "visibility": "public",

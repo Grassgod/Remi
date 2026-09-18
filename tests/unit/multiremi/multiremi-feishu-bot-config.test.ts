@@ -218,6 +218,94 @@ describe("workspace Feishu bot config API", () => {
     expect(store.getFeishuBotConfig("local")).toBeNull();
   });
 
+  for (const [unavailable, code] of [
+    ["unsupported", "runtime_config_unsupported"],
+    ["unadvertised", "runtime_config_unsupported"],
+    ["offline", "runtime_offline"],
+    ["stale", "runtime_offline"],
+  ] as const) {
+    function makeUnavailable(store: MultiremiStore, runtimeId: string): void {
+      store.heartbeatRuntime(runtimeId, { supportsFeishuBotConfig: unavailable !== "unsupported" });
+      if (unavailable === "unadvertised") {
+        db!.run("UPDATE multiremi_runtimes SET metadata = '{}' WHERE id = ?", [runtimeId]);
+      } else if (unavailable === "offline") {
+        db!.run("UPDATE multiremi_runtimes SET status = 'offline' WHERE id = ?", [runtimeId]);
+      } else if (unavailable === "stale") {
+        db!.run("UPDATE multiremi_runtimes SET last_heartbeat_at = ? WHERE id = ?",
+          [new Date(Date.now() - 600_000).toISOString(), runtimeId]);
+      }
+    }
+
+    it(`rejects an enabled switch to an ${unavailable} host without changing the running config`, async () => {
+      const { store, app, agentId } = scaffold();
+      expect((await save(app, agentId)).status).toBe(200);
+      const original = store.getFeishuBotConfig("local")!;
+      store.reportFeishuBotRuntimeStatus("local", "rt_bot", { appliedRevision: original.revision, state: "online" });
+      const audit = store.listFeishuBotAudit("local");
+      store.registerRuntime({ id: "rt_target", name: "Target host", provider: "codex", workspaceId: "local" });
+      makeUnavailable(store, "rt_target");
+
+      const refused = await save(app, agentId, { runtime_id: "rt_target", app_secret: OTHER_SECRET });
+
+      expect(refused.status).toBe(409);
+      expect(await refused.json()).toMatchObject({ code, error: expect.any(String) });
+      expect(store.getFeishuBotConfig("local")).toEqual(original);
+      expect(store.revealFeishuBotSecrets("local")?.appSecret).toBe(APP_SECRET);
+      expect(store.listFeishuBotAudit("local")).toEqual(audit);
+      expect(store.feishuBotDirectiveForRuntime("local", "rt_bot")).toMatchObject({
+        desired_state: "running", revision: original.revision,
+      });
+    });
+
+    it(`allows disabled save to an ${unavailable} host but rejects enable and deploy until it recovers`, async () => {
+      const { store, app, agentId } = scaffold();
+      makeUnavailable(store, "rt_bot");
+      const saved = await save(app, agentId, { enabled: false });
+      expect(saved.status).toBe(200);
+      expect(await saved.json()).toMatchObject({ enabled: false, runtime_id: "rt_bot" });
+      const original = store.getFeishuBotConfig("local");
+      const audit = store.listFeishuBotAudit("local");
+
+      const enabled = await save(app, agentId, { enabled: true });
+      expect(enabled.status).toBe(409);
+      expect(await enabled.json()).toMatchObject({ code });
+      const deployed = await app.request("/api/workspaces/local/feishu-bot/deploy", {
+        method: "POST", headers: MASTER, body: "{}",
+      });
+      expect(deployed.status).toBe(409);
+      expect(await deployed.json()).toMatchObject({ code });
+      expect(store.getFeishuBotConfig("local")).toEqual(original);
+      expect(store.listFeishuBotAudit("local")).toEqual(audit);
+
+      store.heartbeatRuntime("rt_bot", { supportsFeishuBotConfig: true });
+      const recovered = await app.request("/api/workspaces/local/feishu-bot/deploy", {
+        method: "POST", headers: MASTER, body: "{}",
+      });
+      expect(recovered.status).toBe(200);
+      expect(await recovered.json()).toMatchObject({ enabled: true, desired_state: "running" });
+    });
+
+    it(`rejects redeploy after the host becomes ${unavailable} but still permits stop`, async () => {
+      const { store, app, agentId } = scaffold();
+      expect((await save(app, agentId)).status).toBe(200);
+      const original = store.getFeishuBotConfig("local");
+      const audit = store.listFeishuBotAudit("local");
+      makeUnavailable(store, "rt_bot");
+      const deployed = await app.request("/api/workspaces/local/feishu-bot/deploy", {
+        method: "POST", headers: MASTER, body: "{}",
+      });
+      expect(deployed.status).toBe(409);
+      expect(await deployed.json()).toMatchObject({ code });
+      expect(store.getFeishuBotConfig("local")).toEqual(original);
+      expect(store.listFeishuBotAudit("local")).toEqual(audit);
+      const stopped = await app.request("/api/workspaces/local/feishu-bot/stop", {
+        method: "POST", headers: MASTER, body: "{}",
+      });
+      expect(stopped.status).toBe(200);
+      expect(await stopped.json()).toMatchObject({ enabled: false, desired_state: "stopped" });
+    });
+  }
+
   it("stops the bot when its Agent is archived", async () => {
     // An archived Agent cannot answer, so leaving the connector running would
     // mean a bot that reads Feishu messages and silently drops them.

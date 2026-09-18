@@ -33,6 +33,7 @@ import { isRuntimeEffectivelyOnline } from "@multiremi/store/repos/runtimes-repo
 import { readWorkspaceIssueTopics } from "@multiremi/issue-topics/config.js";
 import { findMarkdownImages } from "@shared/feishu-markdown-images.js";
 import { isFeishuOpenId, parseOutboundMention } from "@shared/feishu-mention.js";
+import { FEISHU_CONCIERGE_CONFIG_CAPABILITY } from "@multiremi/contracts/types.js";
 import type {
   FeishuBotAuditAction,
   FeishuPresentationCheckpoint,
@@ -338,6 +339,28 @@ export class FeishuBotRepo {
     return { agentId: config.agentId, agentName: agent?.name ?? config.agentId };
   }
 
+  /** Reject run intent before changing the saved host, secrets, or revision. */
+  private requireDeployableRuntime(workspaceId: string, runtimeId: string): void {
+    const runtime = this.ctx.runtimes().getRuntime(runtimeId);
+    if (!runtime || runtime.workspaceId !== workspaceId) {
+      throw new FeishuBotConfigError("runtime does not belong to this workspace", 400, "runtime_not_in_workspace");
+    }
+    if (!isRuntimeEffectivelyOnline(runtime)) {
+      throw new FeishuBotConfigError(
+        "runtime is offline or its heartbeat has expired; bring it online before enabling or deploying, or save with enabled=false",
+        409,
+        "runtime_offline",
+      );
+    }
+    if (runtime.metadata[FEISHU_CONCIERGE_CONFIG_CAPABILITY] !== true) {
+      throw new FeishuBotConfigError(
+        "runtime does not advertise Feishu concierge configuration support; select a capable runtime or save with enabled=false",
+        409,
+        "runtime_config_unsupported",
+      );
+    }
+  }
+
   /**
    * Create or replace the workspace's config. Secret columns follow the
    * caller's per-field op so a PUT that only changes the domain cannot wipe an
@@ -370,6 +393,7 @@ export class FeishuBotRepo {
         "runtime_agent_incompatible",
       );
     }
+    if (input.enabled) this.requireDeployableRuntime(workspaceId, runtimeId);
 
     const existing = this.rawConfigRow(workspaceId);
     const senderAccessPolicy = input.senderAccessPolicy ?? existing?.sender_access_policy ?? "agent";
@@ -462,6 +486,7 @@ export class FeishuBotRepo {
   setEnabled(workspaceId: string, enabled: boolean, actor?: string | null): MultiremiFeishuBotConfig | null {
     const existing = this.rawConfigRow(workspaceId);
     if (!existing) return null;
+    if (enabled) this.requireDeployableRuntime(workspaceId, String(existing.runtime_id));
     this.ctx.db.run(
       `UPDATE multiremi_feishu_bot_configs
           SET enabled = ?, revision = revision + 1, updated_at = ?, updated_by = ?
@@ -819,7 +844,8 @@ export class FeishuBotRepo {
       } else {
         task = this.ctx.tasks().createTaskWithinTransaction({
           agentId: routeAgent.agentId,
-          runtimeId,
+          // The selected Runtime owns the connector transport. Task execution
+          // follows the routed Agent and normal Chat/session affinity instead.
           chatSessionId,
           issueId: nullableString(binding.issue_id),
           workspaceId,
@@ -938,6 +964,19 @@ export class FeishuBotRepo {
       `SELECT 1 AS present FROM multiremi_feishu_bot_chat_bindings
        WHERE chat_session_id = ? LIMIT 1`,
     ).get(chatSessionId) != null;
+  }
+
+  /** The selected transport may stream and relay answers for its bound Chats
+   * even when execution is queued or assigned to a different machine. */
+  canDaemonAccessTask(workspaceId: string, daemonId: string, taskId: string): boolean {
+    return this.ctx.db.query(`SELECT 1 AS present
+      FROM multiremi_feishu_bot_configs c
+      JOIN multiremi_runtimes r ON r.id = c.runtime_id AND r.workspace_id = c.workspace_id
+      JOIN multiremi_feishu_bot_chat_bindings b ON b.workspace_id = c.workspace_id AND b.app_id = c.app_id
+      JOIN multiremi_tasks t ON t.chat_session_id = b.chat_session_id
+        AND t.workspace_id = b.workspace_id AND t.agent_id = b.agent_id
+      WHERE c.workspace_id = ? AND c.enabled = 1 AND r.daemon_id = ? AND t.id = ? LIMIT 1`)
+      .get(workspaceId, daemonId, taskId) != null;
   }
 
   private ensureDefaultAgentIssueUpdatesChannel(session: MultiremiChatSession): void {
@@ -1079,12 +1118,10 @@ export class FeishuBotRepo {
       if (existing) return this.ctx.tasks().getTask(String(existing.wake_task_id));
 
       const agentId = String(binding.agent_id ?? "");
-      const runtimeId = bot.config?.runtimeId;
-      if (!agentId || !runtimeId) return null;
+      if (!agentId) return null;
       const payload = request.payload ?? {};
       const wakeTask = this.ctx.tasks().createTaskWithinTransaction({
         agentId,
-        runtimeId,
         chatSessionId: String(binding.chat_session_id),
         issueId: issue.id,
         workspaceId: issue.workspaceId,
@@ -1192,7 +1229,6 @@ export class FeishuBotRepo {
         deliveryMode = "proactive";
         wakeTask = this.ctx.tasks().createTaskWithinTransaction({
           agentId: String(binding.agent_id),
-          runtimeId: config.runtimeId,
           chatSessionId,
           issueId: input.issue.id,
           workspaceId: input.issue.workspaceId,

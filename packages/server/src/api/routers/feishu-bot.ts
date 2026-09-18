@@ -330,13 +330,17 @@ export function registerFeishuBotRoutes(
     if (!config) return c.json({ error: "feishu bot is not configured" }, 404);
     // Deploy means "run, and pick up whatever is stored now" — enabling and
     // bumping the revision together covers both a cold start and a redeploy.
-    const enabled = store.setFeishuBotEnabled(workspaceId, true, currentRequestUserId(c));
-    store.recordFeishuBotAudit(workspaceId, config.enabled ? "redeployed" : "enabled", {
-      actorId: currentRequestUserId(c),
-      details: { runtime_id: config.runtimeId, revision: enabled?.revision ?? config.revision },
-    });
-    c.header("Cache-Control", "no-store");
-    return c.json(statusView(store, workspaceId));
+    try {
+      const enabled = store.setFeishuBotEnabled(workspaceId, true, currentRequestUserId(c));
+      store.recordFeishuBotAudit(workspaceId, config.enabled ? "redeployed" : "enabled", {
+        actorId: currentRequestUserId(c),
+        details: { runtime_id: config.runtimeId, revision: enabled?.revision ?? config.revision },
+      });
+      c.header("Cache-Control", "no-store");
+      return c.json(statusView(store, workspaceId));
+    } catch (error) {
+      return configErrorResponse(c, error);
+    }
   });
 
   app.post("/api/workspaces/:id/feishu-bot/stop", async (c) => {

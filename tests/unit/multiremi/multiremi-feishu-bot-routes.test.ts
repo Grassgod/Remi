@@ -31,6 +31,7 @@ function scaffold() {
   const groupAgent = store.createAgent({ name: "Broad", provider: "codex", workspaceId: "local" });
   const chatAgent = store.createAgent({ name: "Special", provider: "codex", workspaceId: "local" });
   store.registerRuntime({ id: "rt_bot", name: "Bot host", provider: "codex", workspaceId: "local" });
+  store.heartbeatRuntime("rt_bot", { supportsFeishuBotConfig: true });
   const config = store.upsertFeishuBotConfig("local", {
     agentId: defaultAgent.id,
     runtimeId: "rt_bot",
