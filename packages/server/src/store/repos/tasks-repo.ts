@@ -1996,9 +1996,11 @@ export class TasksRepo {
     const agents = new Map<string, MultiremiAgent | null>();
     const decisions = new Map<string, boolean>();
     const supportsModel = this.ctx.runtimes().runtimeAgentModelChecker(runtime);
-    let cursor: { priority: number; createdAt: string; id: string } | null = null;
-    // Keyset pages keep SQL parameters bounded. Inspect lightweight rows and
-    // hydrate only the selected task; repeated requirements share one check.
+    let offset = 0;
+    // Pages keep SQL parameters bounded. Preserve the existing priority/time
+    // ordering, including its insertion-order ties on SQLite. The workspace
+    // lock keeps candidates stable until we select one. Inspect lightweight
+    // rows and hydrate only the selected task; repeated requirements share a check.
     for (;;) {
       const rows = this.ctx.db.query(
       `SELECT t.id, t.agent_id, t.priority, t.created_at, t.provider,
@@ -2126,12 +2128,9 @@ export class TasksRepo {
            )
            ${runtime.metadata.codex_profiles !== 1 ? "AND t.codex_profile IS NULL" : ""}
            ${runtime.metadata.claude_profiles !== 1 ? "AND t.claude_profile IS NULL" : ""}
-           ${cursor ? `AND (t.priority < ? OR (t.priority = ? AND t.created_at > ?)
-             OR (t.priority = ? AND t.created_at = ? AND t.id > ?))` : ""}
-         ORDER BY t.priority DESC, t.created_at ASC, t.id ASC
-         LIMIT 128`,
-      ).all(...params, ...(cursor ? [cursor.priority, cursor.priority, cursor.createdAt,
-        cursor.priority, cursor.createdAt, cursor.id] : [])) as Row[];
+         ORDER BY t.priority DESC, t.created_at ASC
+         LIMIT 128 OFFSET ?`,
+      ).all(...params, offset) as Row[];
       for (const row of rows) {
         const agentId = String(row.agent_id);
         if (excluded.has(agentId)) continue;
@@ -2154,8 +2153,7 @@ export class TasksRepo {
         if (claimed) return this.getTaskWithAgent(String(claimed.id));
       }
       if (rows.length < 128) return null;
-      const last = rows[rows.length - 1]!;
-      cursor = { priority: Number(last.priority), createdAt: String(last.created_at), id: String(last.id) };
+      offset += rows.length;
     }
   }
 

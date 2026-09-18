@@ -26,13 +26,13 @@ function fixture(provider: Provider, destinationModel: string, customDestination
   const saved = provider === "codex"
     ? store.setRuntimeCodexProfile(previous.id, profile)!
     : store.setRuntimeClaudeProfile(previous.id, profile)!;
-  store.updateRuntimeModels(previous.id, [{ id: FROZEN_MODEL, label: FROZEN_MODEL, provider, thinking }], saved);
+  store.updateRuntimeModels(previous.id, [{ id: FROZEN_MODEL, label: FROZEN_MODEL, provider, default: true, thinking }], saved);
   const nextProfile = customDestination ? { ...profile, name: "destination", base_url: "https://destination.example/v1", model: "destination-default" } : null;
   const nextSaved = provider === "codex"
     ? store.setRuntimeCodexProfile(destination.id, nextProfile)
     : store.setRuntimeClaudeProfile(destination.id, nextProfile);
   store.updateRuntimeModels(destination.id, [{
-    id: destinationModel, label: destinationModel, provider, thinking, catalog: { status: "ready" },
+    id: destinationModel, label: destinationModel, provider, default: true, thinking, catalog: { status: "ready" },
   }], nextSaved);
 
   const agent = store.createAgent({ name: "Chat", provider, model: FROZEN_MODEL, thinkingLevel: "high" });
@@ -121,7 +121,7 @@ describe("frozen retry destination model during explicit chat workspace migratio
       expect(store.runtimeSupportsAgentModel(store.getRuntime(destination.id)!, store.getAgent(agent.id)!)).toBe(false);
       const claimed = store.claimTask(destination.id);
       expect(claimed?.id).toBe(retry.id);
-      expect(claimed?.codexProfile ?? claimed?.claudeProfile).toEqual({ ...nextSaved, model: FROZEN_MODEL });
+      expect(claimed?.codexProfile ?? claimed?.claudeProfile).toEqual({ ...nextSaved!, model: FROZEN_MODEL });
       expect(claimed?.sessionId).toBeNull();
       expect(claimed?.workDir).toBeNull();
     });

@@ -43,11 +43,12 @@ pinned tasks retain main's model validation.
 ## Claim cost and observability
 
 Claim SQL retains workspace/owner, pin/group, plugin, device, lane, capacity and
-chat-order guards. Candidate rows are read in keyset pages of 128. Agent hydration,
+chat-order guards. Candidate rows are read in pages of 128 preserving existing priority/time ordering. Agent hydration,
 capability decisions and catalog reads are cached for the duration of a claim;
 only the chosen task is fully hydrated. No task-ID exclusion list is generated.
 SQL parameter count is bounded regardless of queue length. Reading candidate rows
-still scales with the queue, and distinct requirements require distinct checks.
+still scales with the queue, offset pages may rescan earlier rows inside the
+database, and distinct requirements require distinct checks.
 
 Frozen-source/credential problems use the owned wait-reason prefix
 `等待冻结执行连接恢复：`, including when retirement leaves no candidates. The existing
