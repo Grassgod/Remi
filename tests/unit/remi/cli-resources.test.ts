@@ -773,6 +773,30 @@ describe("native CLI resource contracts", () => {
     expect(sent).toHaveLength(2);
   });
 
+  it("repairs repository log history only with explicit confirmation and pinned input", async () => {
+    useCliEnv();
+    const spec = specById("wiki.repository.repair-log");
+    const input = {
+      body: "# Recovered log",
+      expected_version: 50,
+      expected_body_sha256: "a".repeat(64),
+      reason: "MUL-316 restore verified history",
+    };
+    let sent: unknown;
+    globalThis.fetch = mockFetch(spec.id, [], async request => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/workspaces/ws_1/repos") return Response.json({ repositories: [{ id: "repo_123456", name: "Remi" }] });
+      if (path === "/api/workspaces/ws_1/repos/repo_123456/wiki/repair-log" && request.method === "POST") {
+        sent = await request.json();
+        return Response.json({ doc: { id: "rwdoc_log", version: 51 } });
+      }
+      throw new Error(`unexpected request ${request.method} ${path}`);
+    });
+    await expect(execute(spec, ["Remi", "--data", JSON.stringify(input)])).rejects.toThrow();
+    await execute(spec, ["Remi", "--data", JSON.stringify(input), "--yes", "--output", "json"]);
+    expect(sent).toEqual(input);
+  });
+
   it("does not silently intersect repository knowledge queries with the inherited Issue project", async () => {
     useCliEnv();
     process.env.MULTIREMI_PROJECT_ID = "prj_ambient";

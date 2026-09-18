@@ -168,15 +168,16 @@ describe("CLI capabilities manifest", () => {
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 664,
+      mapped: 665,
       exempt: 91,
       missing: 0,
-      total: 755,
+      total: 756,
     });
     expect(manifest.max_planned_routes).toBe(0);
     expect(manifest.routes["POST /api/workspaces/:id/repos/:repositoryId/wiki/move"]).toEqual({ command: "wiki.repository.mv" });
     expect(manifest.routes["POST /api/workspaces/:id/repos/:repositoryId/wiki/merge"]).toEqual({ command: "wiki.repository.merge" });
     expect(manifest.routes["POST /api/workspaces/:id/repos/:repositoryId/wiki/restore"]).toEqual({ command: "wiki.repository.restore" });
+    expect(manifest.routes["POST /api/workspaces/:id/repos/:repositoryId/wiki/repair-log"]).toEqual({ command: "wiki.repository.repair-log" });
     expect(manifest.routes["POST /api/workspaces/:id/repos/:repositoryId/wiki/outcome"]).toEqual({ command: "wiki.repository.outcome" });
     expect(manifest.commands["wiki.repository.outcome"]?.auth).toEqual(["task"]);
     expect(manifest.routes["GET /api/sessions/:sessionId/inherited-context"])

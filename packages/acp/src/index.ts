@@ -94,3 +94,4 @@ export type { StreamMeta, StreamHandlerLog } from "@shared/contracts/acp-protoco
 // ── ACP Client (lower-level) ──────────────────────────────────
 export { AcpClient } from "./client.js";
 export type { AcpClientOptions } from "./client.js";
+export { isolateProcessTmp, mapPrivateTmpPath, PrivateTmpIsolationUnavailableError } from "./private-tmp.js";

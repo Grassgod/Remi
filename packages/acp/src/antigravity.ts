@@ -7,6 +7,7 @@ import { createInterface } from "node:readline";
 import type { AgentResponse, Provider, ProviderEvent, SendOptions } from "@shared/contracts/provider-types.js";
 import { createAgentResponse } from "@shared/contracts/provider-types.js";
 import type { AcpModelCapability, AcpProviderOptions } from "./provider.js";
+import { isolateProcessTmp } from "./private-tmp.js";
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const MAX_OUTPUT = 16 * 1024 * 1024;
@@ -138,7 +139,8 @@ export class AntigravityProvider implements Provider {
 
   private launch(args: string[], cwd?: string): ChildProcess {
     // argv is never composed into a shell command. Windows uses the native exe.
-    const child = spawn(this.executable, [...this.prefix, ...args], {
+    const launch = isolateProcessTmp({ executable: this.executable, args: [...this.prefix, ...args] }, this.options.privateTmpDirectory, this.env);
+    const child = spawn(launch.executable, launch.args, {
       cwd, env: this.env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
       detached: process.platform !== "win32" && !this.options.inheritProcessGroup,
     });

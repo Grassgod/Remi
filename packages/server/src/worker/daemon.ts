@@ -103,6 +103,7 @@ import { prepareReadOnlyCodeWorkspace } from "@daemon/agent-runtime/workspace/re
 import {
   assertIssueSessionNativeCodexOAuth,
   cleanupTemporaryTaskProviderHome,
+  cleanupTaskPrivateTempDirectory,
   ensureProviderHomeDirectory,
   prepareIssueExecutionDirectory,
   loadIssueSessionProviderEnv,
@@ -110,6 +111,8 @@ import {
   prepareIssueSessionProviderHome,
   resolveIssueRuntimeStateRoot,
   resolveTaskProviderHome,
+  prepareTaskPrivateTempDirectory,
+  type TaskPrivateTempDirectory,
   type IssueSessionProviderHome,
 } from "@daemon/agent-runtime/workspace/session-home.js";
 import { prepareIssueWikiWorkspace } from "@daemon/agent-runtime/workspace/wiki.js";
@@ -2786,6 +2789,7 @@ export class MultiremiDaemon {
     let pluginRuntimeBase: string | null = null;
     let pluginRuntime: PreparedAgentPluginRuntime | undefined;
     let providerHome: IssueSessionProviderHome | null = null;
+    let taskPrivateTmp: TaskPrivateTempDirectory | null = null;
     let providerEnv: Record<string, string> | undefined;
     let providerInstallEnv: Record<string, string> | undefined;
     let releaseIssueWorkspaceLifecycle: (() => void) | null = null;
@@ -2952,6 +2956,8 @@ export class MultiremiDaemon {
           providerEnv = { ...localEnv, ...providerEnv };
         }
       }
+      if (!providerHome) throw new Error(`Task ${task.id} has no isolated provider home`);
+      taskPrivateTmp = await prepareTaskPrivateTempDirectory(providerHome, task.id);
       this.enqueueTaskReport(task.id, "start", {});
       if (codexCatalogError) {
         this.enqueueTaskReport(task.id, "progress", {
@@ -2960,7 +2966,7 @@ export class MultiremiDaemon {
       }
       this.enqueueTaskReport(task.id, "progress", { summary: pickTaskStartupLine(task.agent?.name), step: 1, total: 3 });
       progressSummarizer = await this.createTaskProgressSummarizer(task, providerEnv, relay?.fragment);
-      summary = await this.runAgent(task, abort.signal, resolvedWorkDir, pluginRuntime, providerHome, providerEnv, progressSummarizer);
+      summary = await this.runAgent(task, abort.signal, resolvedWorkDir, pluginRuntime, providerHome, providerEnv, progressSummarizer, taskPrivateTmp.path);
       if (!summary.completed) {
         const failureReason = summary.failureReason
           ?? classifyPoisonedOutput(summary.output)
@@ -3010,6 +3016,12 @@ export class MultiremiDaemon {
       this.finalizeTaskProgress(progressSummarizer, "failed", error);
       await awaitFinalReportDrain();
     } finally {
+      await cleanupTaskPrivateTempDirectory(
+        taskPrivateTmp,
+        () => this.assertWorkspaceRootOwner(),
+      ).catch((error) => {
+        log.warn(`Failed to clean task private temp for ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
+      });
       if (pluginRuntimeBase && !task.issueId && !task.chatSessionId) {
         await cleanupNonIssueTaskPluginRuntime(
           task,
@@ -3654,6 +3666,7 @@ export class MultiremiDaemon {
     providerHome?: IssueSessionProviderHome | null,
     providerEnv?: Record<string, string>,
     progressSummarizer?: TaskProgressSummarizer | null,
+    privateTmpDirectory?: string,
   ): Promise<RunSummary> {
     this.assertWorkspaceRootOwner();
     const agent = task.agent;
@@ -3741,6 +3754,7 @@ export class MultiremiDaemon {
       ...(task.claudeProfile ? { claudeSettings: { model: task.claudeProfile.model, env: runtimeClaudeProfileRouting(task.claudeProfile) } } : {}),
       allowedTools: config.allowedTools,
       cwd: config.cwd,
+      privateTmpDirectory,
       env: config.env,
       getMcpServers: () => config.mcpServers,
       pluginPaths: config.pluginPaths,

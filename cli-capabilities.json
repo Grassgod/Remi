@@ -2328,6 +2328,23 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "wiki.repository.repair-log": {
+      "command": "remi wiki repository repair-log",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.repository.repair-log",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "wiki.repository.revisions": {
       "command": "remi wiki repository revisions",
       "aliases": [],
@@ -11896,6 +11913,9 @@
     },
     "POST /api/workspaces/:id/repos/:repositoryId/wiki/publish": {
       "command": "wiki.publish"
+    },
+    "POST /api/workspaces/:id/repos/:repositoryId/wiki/repair-log": {
+      "command": "wiki.repository.repair-log"
     },
     "POST /api/workspaces/:id/repos/:repositoryId/wiki/restore": {
       "command": "wiki.repository.restore"

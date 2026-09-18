@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { lstatSync, readFileSync, readdirSync } from "node:fs";
-import { access, chmod, lstat, mkdir, readFile, readlink, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { access, chmod, lstat, mkdir, mkdtemp, readFile, readlink, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { AgentTask } from "@daemon/contracts/types.js";
@@ -38,6 +38,11 @@ export interface IssueSessionProviderHome {
 export interface IssueSessionRuntimeRoot {
   sessionId: string;
   root: string;
+}
+
+export interface TaskPrivateTempDirectory {
+  storageRoot: string;
+  path: string;
 }
 
 export interface PrepareIssueSessionProviderHomeOptions {
@@ -258,6 +263,32 @@ export async function prepareIssueExecutionDirectory(resolvedHome: IssueSessionP
   const workDir = join(resolvedHome.root, "work");
   await ensureRealDirectoryTree(resolvedHome.storageRoot, workDir, "Execution directory");
   return workDir;
+}
+
+/** Create one non-reused /tmp backing directory for a claimed task execution. */
+export async function prepareTaskPrivateTempDirectory(
+  resolvedHome: IssueSessionProviderHome,
+  taskId: string,
+): Promise<TaskPrivateTempDirectory> {
+  const parent = join(resolvedHome.root, "task-tmp");
+  await ensureRealDirectoryTree(resolvedHome.storageRoot, parent, "Task private temp root");
+  const path = await mkdtemp(join(parent, `${safePathSegment(taskId)}-`));
+  await chmod(path, 0o700);
+  await assertRealDirectory(path, "Task private temp directory");
+  return { storageRoot: resolvedHome.storageRoot, path };
+}
+
+/** Remove only the exact directory allocated to this execution. */
+export async function cleanupTaskPrivateTempDirectory(
+  directory: TaskPrivateTempDirectory | null | undefined,
+  assertRootOwner?: () => void,
+): Promise<void> {
+  if (!directory) return;
+  const runtimeRelative = relative(resolve(directory.storageRoot), resolve(directory.path));
+  if (!runtimeRelative || runtimeRelative === ".." || runtimeRelative.startsWith(`..${sep}`) || isAbsolute(runtimeRelative)) {
+    throw new Error(`Task private temp directory escapes daemon storage: ${directory.path}`);
+  }
+  removeOwnedDirectorySync(directory.storageRoot, directory.path, { assertRootOwner });
 }
 
 /** Reject linked parents before a plugin installer or provider can write through them. */

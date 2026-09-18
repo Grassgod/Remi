@@ -327,6 +327,21 @@ function repositoryWikiSpecs(): CommandSpec[] {
       const response = await target.client.request({ method: "POST", path: target.path, body });
       renderResource(invocation, response.data);
     }),
+    spec("wiki.repository.repair-log", ["wiki", "repository", "repair-log"], "Replace a damaged log.md with pinned baseline and audit metadata", "destructive", [refPositional("repository")], [
+      ...INPUT_OPTIONS, YES_OPTION,
+    ], async invocation => {
+      requireConfirmation(invocation);
+      const body = await requestBody(invocation);
+      if (typeof body.body !== "string"
+        || !Number.isSafeInteger(Number(body.expected_version))
+        || typeof body.expected_body_sha256 !== "string"
+        || typeof body.reason !== "string") {
+        throw new CliError("usage", "repair-log requires --file or --data with body, expected_version, expected_body_sha256, and reason");
+      }
+      const target = await requestPath(invocation, repositoryRef(invocation, 0), "/repair-log");
+      const response = await target.client.request({ method: "POST", path: target.path, body });
+      renderResource(invocation, response.data);
+    }),
     spec("wiki.repository.revisions", ["wiki", "repository", "revisions"], "List repository Wiki document revisions", "read", [refPositional("repository"), refPositional("document")], [], async (invocation) => {
       const target = await requestPath(invocation, repositoryRef(invocation, 0), `/${encodePath(positional(invocation, 1, "document"))}/revisions`);
       const response = await target.client.request({ method: "GET", path: target.path });
