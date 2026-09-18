@@ -130,6 +130,7 @@ export function taskCompatibilityResponse(
   result: unknown | null;
   agent_id: string;
   runtime_id: string | null;
+  runtime_workspace_id: string | null;
   issue_id: string | null;
   issue_session_id: string | null;
   chat_session_id: string | null;
@@ -169,6 +170,7 @@ export function taskCompatibilityResponse(
     result: unknown | null;
     agent_id: string;
     runtime_id: string | null;
+    runtime_workspace_id: string | null;
     issue_id: string | null;
     issue_session_id: string | null;
     chat_session_id: string | null;
@@ -210,6 +212,7 @@ export function taskCompatibilityResponse(
     result: taskResultWireValue(task),
     agent_id: task.agentId,
     runtime_id: task.runtimeId,
+    runtime_workspace_id: task.runtimeWorkspaceId ?? null,
     issue_id: task.issueId,
     issue_session_id: task.issueSessionId,
     chat_session_id: task.chatSessionId,
@@ -347,7 +350,7 @@ export function daemonTaskClaimResponse(
         if (task.runtimeId !== current.runtimeId) task = { ...task, sessionId: null, workDir: null, codexProfile: null, claudeProfile: null };
       }
     }
-    const keepProject = Boolean(currentProject && !currentProject.archivedAt
+    const keepProject = Boolean(!task.runtimeWorkspaceId && currentProject && !currentProject.archivedAt
       && currentProject.workspaceId === task.workspaceId && chat?.projectId && chat.workspaceId === task.workspaceId
       && chat.projectId === task.chatProjectId && chat.projectId === task.project?.id
       && task.project.workspaceId === task.workspaceId);
@@ -369,6 +372,9 @@ export function daemonTaskClaimResponse(
   }
   const response = daemonTaskWireResponse(task, triggerMetadata);
   if (task.chatProjectId && task.chatProjectId === task.project?.id) response.chat_project_id = task.chatProjectId;
+  response.runtime_workspace_id = task.runtimeWorkspaceId ?? null;
+  // Path metadata only. Instruction/configuration contents are read on the host.
+  response.runtime_workspace = task.runtimeWorkspace ?? null;
   const defaultBranchFor = workspaceDefaultBranchResolver(store.getWorkspace(task.workspaceId)?.repos ?? []);
   if (task.knowledgeWarnings?.length) response.knowledge_warnings = task.knowledgeWarnings;
   let projectionMode: "bootstrap" | "delta" | null = null;

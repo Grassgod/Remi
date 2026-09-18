@@ -1,4 +1,5 @@
 import type { Context, Hono } from "hono";
+import { assertRuntimeWorkspaceAccess } from "../helpers/runtime-workspaces.js";
 import {
   canCurrentUserAccessAgent,
   canCurrentUserAccessChatTask,
@@ -187,6 +188,7 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
         }
         : {}),
     };
+    assertRuntimeWorkspaceAccess(c, store, createInput.runtimeWorkspaceId ?? createInput.runtime_workspace_id, agent.workspaceId);
     try {
       const task = store.createTask(createInput);
       return c.json({ task: taskPublicResponse(task) }, 201);

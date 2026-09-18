@@ -141,6 +141,7 @@ export function withIssueCreateRequestContext(
     title: input.title,
     workspace_id: workspaceId,
     created_by: userId,
+    runtime_workspace_id: input.runtimeWorkspaceId ?? input.runtime_workspace_id ?? null,
   };
   if (hasRequestField(input, "description")) out.description = input.description ?? null;
   if (hasRequestField(input, "status")) out.status = input.status;

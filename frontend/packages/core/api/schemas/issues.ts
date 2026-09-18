@@ -12,6 +12,7 @@ import type {
 const IssueMetadataSchema = z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({});
 
 export const IssueSchema = z.object({
+  runtime_workspace_id: z.string().nullable().optional(),
   id: z.string(),
   workspace_id: z.string(),
   number: z.number(),
@@ -182,3 +183,5 @@ export interface DuplicateIssueErrorBody {
     title: string;
   };
 }
+
+export const QuickCreateIssueResponseSchema = z.object({ task_id: z.string().min(1), issue: IssueSchema });

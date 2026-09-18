@@ -2,6 +2,7 @@
 
 import { Suspense, useMemo } from "react";
 import { CoreProvider } from "@multiremi/core/platform";
+import { api } from "@multiremi/core/api";
 import { createBrowserCookieLocaleAdapter } from "@multiremi/core/i18n/browser";
 import type { LocaleResources, SupportedLocale } from "@multiremi/core/i18n";
 import packageJson from "../package.json";
@@ -37,9 +38,8 @@ export function WebProviders({
   locale: SupportedLocale;
   resources: Record<string, LocaleResources>;
 }) {
-  // This deployment runs the token-based Bun multiremi server: login returns a
-  // token in the response body and sets NO auth cookie. cookieAuth mode would
-  // discard that token and 401 every protected request, so force token mode.
+  // Keep bearer-token authentication for token-based login. Password login also
+  // establishes an HttpOnly browser session, which the Web logout hook clears.
   const cookieAuth = false;
   // Stable identity reference so downstream effects keyed on it don't see a
   // new object on every parent render.
@@ -56,6 +56,10 @@ export function WebProviders({
       onLogin={setLoggedInCookie}
       onLogout={() => {
         clearLoggedInCookie();
+        // The token-mode store has already cleared its bearer token. Include
+        // browser cookies so the server revokes this session and expires the
+        // HttpOnly cookie; native token-only clients keep their existing flow.
+        void api.logout().catch(() => {});
       }}
       identity={identity}
       locale={locale}

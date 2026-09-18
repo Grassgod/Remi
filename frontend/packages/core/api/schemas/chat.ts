@@ -6,6 +6,7 @@ export const ChatSessionSchema = z.object({
   title: z.string(), status: z.string(), has_unread: z.boolean().default(false),
   pinned: z.boolean().default(false), unread_count: z.number().int().nonnegative().default(0),
   last_message: z.object({ content: z.string(), role: z.string(), created_at: z.string() }).nullable().default(null),
+  runtime_workspace_id: z.string().nullable().optional(),
   created_at: z.string(), updated_at: z.string(),
 }).loose();
 export const ChatSessionListSchema = z.array(ChatSessionSchema);

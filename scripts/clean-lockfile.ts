@@ -37,7 +37,7 @@ import { join } from "node:path";
 const LOCK_PATH = join(import.meta.dir, "..", "bun.lock");
 
 /** `    "key": [ ... ],` — every packages entry in bun.lock is one line. */
-const ENTRY_RE = /^ {4}("(?:[^"\\]|\\.)*"): (\[.*\]),$/;
+const ENTRY_RE = /^ {4}("(?:[^"\\]|\\.)*"): (\[.*\]),\r?$/;
 
 /** Split `@scope/name@1.2.3` into its name and version halves. */
 function splitSpec(spec: string): { name: string; version: string } | null {

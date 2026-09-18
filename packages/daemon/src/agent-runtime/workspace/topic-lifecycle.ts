@@ -897,7 +897,7 @@ function copyTreeDurably(source: string, target: string): void {
   }
   if (!info.isFile()) throw new Error(`Unsupported workspace entry during copy: ${source}`);
   copyFileSync(source, target);
-  const fd = openSync(target, "r");
+  const fd = openSync(target, process.platform === "win32" ? "r+" : "r");
   try { fsyncSync(fd); } finally { closeSync(fd); }
 }
 
@@ -937,6 +937,8 @@ function hashFile(path: string): string {
 }
 
 function fsyncDirectory(path: string): void {
+  // Windows supports flushing files, but not directory handles.
+  if (process.platform === "win32") return;
   const fd = openSync(path, "r");
   try { fsyncSync(fd); } finally { closeSync(fd); }
 }

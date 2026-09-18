@@ -513,6 +513,7 @@ export async function issueCreate(options: CliOptions): Promise<void> {
   addStringBodyField(body, options, "status", "status", true);
   addStringBodyField(body, options, "priority", "priority");
   addStringBodyField(body, options, "project_id", "project", false, true);
+  addStringBodyField(body, options, "runtime_workspace_id", "runtime-workspace", false, true);
   addStringBodyField(body, options, "parent_issue_id", "parent", false, true);
   addStringBodyField(body, options, "start_date", "start-date", false, true);
   addStringBodyField(body, options, "due_date", "due-date", false, true);
@@ -776,6 +777,7 @@ export async function issueUpdate(issueId: string, options: CliOptions): Promise
   addStringBodyField(body, options, "status", "status", true, true);
   addStringBodyField(body, options, "priority", "priority", false, true);
   addStringBodyField(body, options, "project_id", "project", false, true);
+  addStringBodyField(body, options, "runtime_workspace_id", "runtime-workspace", false, true);
   addStringBodyField(body, options, "parent_issue_id", "parent", false, true);
   addStringBodyField(body, options, "start_date", "start-date", false, true);
   addStringBodyField(body, options, "due_date", "due-date", false, true);

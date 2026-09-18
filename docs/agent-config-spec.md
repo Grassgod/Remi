@@ -6,7 +6,7 @@
 
 - **工作区云友**：Multiremi 里通过 UI/API 配置的 Agent（DB 表 `multiremi_agents`），含 Squad 成员。
 - **内置模板**：`packages/server/src/api/agent-templates/*.json`。
-- **仓库内 Skill**：`.remi/pipeline/skills/*/SKILL.md`、`frontend/.agents/skills/*/SKILL.md`。
+- **仓库内 Skill**：`.agents/skills/*/SKILL.md`、`.remi/pipeline/skills/*/SKILL.md`、`frontend/.agents/skills/*/SKILL.md`。
 - **Plugin**：`packages/plugin-sdk` manifest 与 Multiremi agent plugin。
 
 自动校验：`bun test tests/arch/agent-config-metadata.test.ts`（CI 由 `release-build-check.yml` 的 tests/arch 整目录覆盖）。DB 里的工作区云友无法用仓库测试兜底，靠本规范 + 变更时人工对照。
@@ -22,7 +22,7 @@
 | 平台公共底座 | daemon ephemeral prompt（`packages/daemon/src/agent-runtime/prompts/ephemeral.ts`） | 平台在 bootstrap 时自动拼装：workspace/issue/env/身份/权限等区块 | 由平台代码维护，云友配置者不用管 | —— |
 | **云友个性** | `multiremi_agents.instructions`（UI「指令」框） | bootstrap 时作为 `## Agent Instructions` 区块注入 | 身份、职责边界、个性化工作方式（见 §2 骨架） | 平台已注入的内容（Issue 流程、workspace 说明）；仓库规则；大段可复用操作手册（应做成 Skill） |
 | 仓库规则 | 各仓库 `AGENTS.md` / `CLAUDE.md` | 编码 CLI 按 cwd 自动读取 | 仓库级开发约定 | 云友人设 |
-| 飞书 Remi 人格 | `multiremi_agents.instructions` | daemon 注册/心跳解析 `MULTIREMI_BOT_AGENT_ID` 后注入 persistent runtime | 飞书聊天 Remi 的身份、职责与工具约定 | 不另建 `soul.md` 或本地 group 配置；同一 agent row 是唯一来源 |
+| 飞书 Remi 人格 | 工作区 bot 配置所选 Agent 的 `multiremi_agents.instructions` | 控制面按 `multiremi_feishu_bot_configs.agent_id` 绑定 Chat/Task；消息沿 Task → AgentSession → ACP 执行并加载 Agent 指令，见[配置与分配链路](deploy/66-8-remi-environment.md) | 飞书聊天 Remi 的身份、职责与工具约定 | 不另建 `soul.md` 或本地 group 配置；同一 agent row 是唯一来源 |
 | 可复用操作知识 | Skill（`SKILL.md`） | 物化到 workdir + bootstrap prompt 注入 | 有触发条件的操作手册（见 §4） | 人设、一次性任务说明 |
 
 ## 2. 提示词（instructions）规范
@@ -94,11 +94,12 @@ description 是模型决定「何时触发」的唯一依据，写得随意直�
 | `packages/daemon/src/agent-runtime/plugins/` | **机制**：Remi host 插件 registry（in-tree 表当前为空） | ❌ |
 | `packages/daemon/src/agent-runtime/agent-plugins/` | **机制**：云友挂载的 provider 原生 bundle 的拉取/物化（与上一行刻意分离） | ❌ |
 | `packages/plugin-sdk/` | Remi host 插件的 manifest 类型与 SDK | ❌（只有类型） |
+| `.agents/skills/` | 随仓库维护的开发与平台操作 skill，例如 MR 表述和 [Remi 平台使用与管理](../.agents/skills/remi/SKILL.md)；按触发条件加载 | ✅ |
 | `.remi/pipeline/skills/` | 历史 Remi 流水线 skill 定义（intake/rfc/execute 等 7 个）。MUL-80 审计确认读取链路已删（死目录，待清理单处理）；清理前仍按本规范校验 | ✅（存量） |
 | `frontend/.agents/skills/` | frontend 仓库开发用 skill | ✅ |
 | `packages/server/src/api/agent-templates/*.json` | 云友模板（含内嵌 skill 引用） | ✅ |
 
-新定义只落在打 ✅ 的三处；在机制目录里新增定义文件视为分层违规。
+新定义落在上表允许的定义目录，并按仓库级、前端或云友模板的用途选择归属；在机制目录里新增定义文件视为分层违规。
 
 ## 6. 自动校验范围
 
@@ -115,4 +116,3 @@ description 是模型决定「何时触发」的唯一依据，写得随意直�
 - 旧 Remi admin 与本地 `soul.md` 装配已在 MUL-69 删除；后续文档不得再把它们列为活配置入口。
 - `multiremi_agents.skills` JSON 列与 `multiremi_agent_skills` 连接表双轨存储，写路径互不同步，靠读时 merge 掩盖。
 - skill 正文全量内联进 bootstrap prompt（非按需加载），长 skill 有 token 成本。
-- `docs/MULTIREMI_PARITY_MATRIX.md` 与 `docs/ARCHITECTURE.md` 存在对 pipeline/skills 现状的过时描述。

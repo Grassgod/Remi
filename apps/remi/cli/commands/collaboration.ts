@@ -59,6 +59,7 @@ const ISSUE_LIST_OPTIONS: readonly CliOptionSpec[] = [
 ];
 
 const ISSUE_FIELDS: readonly CliOptionSpec[] = [
+  { name: "runtime-workspace", type: "string", valueName: "id", description: "Persistent Runtime workspace (immutable after execution)" },
   { name: "title", type: "string", valueName: "title", description: "Issue title" },
   { name: "description", type: "string", valueName: "text", description: "Issue description" },
   { name: "description-file", type: "string", valueName: "path|-", description: "Read description from a file or stdin" },
@@ -410,8 +411,18 @@ function issueExtendedSpecs(): CommandSpec[] {
       requireConfirmation(invocation);
       await mutateAndRender(invocation, "POST", "/api/issues/batch-delete", await requestBody(invocation));
     }),
-    nativeSpec("issue.quick-create", ["issue", "quick-create"], "Quick-create an issue", "write", HUMAN, [], [...INPUT_OPTIONS, ...ISSUE_FIELDS], async (invocation) => {
-      await mutateAndRender(invocation, "POST", "/api/issues/quick-create", await requestBody(invocation, { title: stringOption(invocation, "title") ?? undefined }));
+    nativeSpec("issue.quick-create", ["issue", "quick-create"], "Quick-create an issue", "write", HUMAN, [], [...INPUT_OPTIONS,
+      { name: "agent", type: "string", valueName: "id", description: "Creator agent", conflictsWith: ["squad"] },
+      { name: "squad", type: "string", valueName: "id", description: "Creator squad", conflictsWith: ["agent"] },
+      { name: "prompt", type: "string", valueName: "text", description: "Work to plan" },
+      { name: "project", type: "string", valueName: "id", description: "Project work location", conflictsWith: ["runtime-workspace"] },
+      { name: "runtime-workspace", type: "string", valueName: "id", description: "Local directory work location", conflictsWith: ["project"] },
+    ], async (invocation) => {
+      await mutateAndRender(invocation, "POST", "/api/issues/quick-create", await requestBody(invocation, {
+        workspace_id: requiredWorkspace(invocation), agent_id: stringOption(invocation, "agent") ?? undefined,
+        squad_id: stringOption(invocation, "squad") ?? undefined, prompt: stringOption(invocation, "prompt") ?? undefined,
+        project_id: stringOption(invocation, "project") ?? undefined, runtime_workspace_id: stringOption(invocation, "runtime-workspace") ?? undefined,
+      }));
     }),
     nativeSpec("issue.squad-evaluated", ["issue", "squad-evaluated"], "Record squad evaluation", "write", HUMAN_TASK, [refPositional("issue")], INPUT_OPTIONS, async (invocation) => {
       await mutateAndRender(invocation, "POST", issueSubpath(invocation, "squad-evaluated"), await requestBody(invocation));
@@ -572,12 +583,13 @@ function chatCommandSpecs(): CommandSpec[] {
       const chat = await resolveChat(invocation, positional(invocation, 0, "chat"));
       await getAndRender(invocation, `/api/chat/sessions/${encodePath(String(chat.id))}`);
     }),
-    nativeSpec("chat.create", ["chat", "create"], "Create a chat", "write", HUMAN, [], [...INPUT_OPTIONS, ...chatFields], async (invocation) => {
+    nativeSpec("chat.create", ["chat", "create"], "Create a chat", "write", HUMAN, [], [...INPUT_OPTIONS, ...chatFields, { name: "runtime-workspace", type: "string", valueName: "id", description: "Persistent Runtime workspace", conflictsWith: ["project"] }], async (invocation) => {
       await mutateAndRender(invocation, "POST", "/api/chat/sessions", await requestBody(invocation, {
         workspace_id: requiredWorkspace(invocation),
         title: stringOption(invocation, "title") ?? undefined,
         agent_id: requiredOption(invocation, "agent"),
         projectId: chatProjectOption(invocation),
+        runtime_workspace_id: stringOption(invocation, "runtime-workspace") ?? undefined,
       }));
     }),
     nativeSpec("chat.update", ["chat", "update"], "Update a chat", "write", HUMAN, [refPositional("chat")], [...INPUT_OPTIONS, ...chatFields.filter((field) => field.name !== "project")], async (invocation) => {

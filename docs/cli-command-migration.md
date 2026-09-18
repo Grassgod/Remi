@@ -4,6 +4,13 @@ This document is the user-facing migration contract for the Registry-based Remi 
 The machine-readable source of truth remains `cli-capabilities.json`; CI checks this
 table against that manifest.
 
+Agent creation, editing and default-agent commands accept `--provider antigravity`.
+`remi daemon start --provider antigravity` selects the native `agy` runtime;
+automatic daemon discovery also detects it. Install/sign in to agy on the daemon
+machine first. See [Antigravity Runtime](antigravity.md) for model discovery,
+configuration and execution limits. Agent Plugin provider filters remain scoped
+to Claude/Codex.
+
 `remi agent create`, `remi agent template create <template>`, `remi agent update
 <agent>` and `remi agent default` accept `--execution-group <group-id>`.
 Use `remi runtime group list` to find groups and their online Runtime counts,
@@ -104,6 +111,7 @@ remi runtime
 remi daemon
 remi autopilot
 remi scm
+remi messaging
 remi feishu
 
 remi inbox
@@ -118,6 +126,26 @@ remi lark
 Use `remi help <path>` or `remi <path> --help` for the registered positional and
 option contract. All capability commands declare their authentication identities,
 mutation class, and `table|json|jsonl` output contract in the Registry.
+
+Password authentication uses `remi context auth password --file -` with JSON
+containing `email` and `password` on standard input. It saves the returned session
+in the selected CLI configuration and prints a user summary without credentials.
+Deployment administrators can provision or reset an account with
+`remi context auth password-account set --file -`; the body additionally accepts
+`name` and `workspaceId` (default `local`). That operation requires the deployment
+master token and grants the account owner membership in the selected workspace.
+Both commands are unavailable to task identities; password values have no dedicated
+command-line flag and should be supplied without putting them in shell history.
+Both commands validate file/stdin JSON before resolving request context or making
+network requests, so malformed input errors cannot quote password fragments.
+Account provisioning sends only the API's `workspaceId` field; `--workspace`
+overrides either workspace spelling in the input and selects the same request header.
+
+`remi runtime workspace list|create|get|rename|archive` manages persistent execution
+directories owned by a Runtime's daemon. This is distinct from the team tenant
+managed by `remi workspace`. Use `--runtime-workspace <id>` on `chat create` or
+`issue create|update` to select it. See the [runtime workspace contract](dev/runtime-workspaces.md)
+for local context, directory lifetime, and the immutable execution binding.
 
 `remi runtime prepare [--provider claude|codex]` installs this release's fixed ACP
 and Agent dependencies, verifying executables and ACP initialization without
@@ -407,9 +435,10 @@ The server-injected agent prompt now uses only canonical commands in
 - `remi session result publish`
 - `remi memory search|get|create|update`
 
-The matching durable command examples were updated in
+The matching durable command examples use canonical commands in
 `docs/project-wiki-memory-spec.md`, `docs/issue-key-results.md`, and the frontend
-Session-result convention comment. There are no tracked `SKILL.md` files in this
-repository, so there were no in-repository skill command strings to migrate.
+Session-result convention comment. The repository-maintained
+[Remi skill](../.agents/skills/remi/SKILL.md) provides CLI workflows with
+task-specific references; keep its examples aligned with this command contract.
 Legacy handler usage strings remain unchanged because they document commands
 that are deliberately supported during the compatibility period.

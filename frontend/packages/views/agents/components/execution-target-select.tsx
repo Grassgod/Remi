@@ -9,6 +9,7 @@ import { ProviderLogo } from "../../runtimes/components/provider-logo";
 import { PickerItem, PropertyPicker } from "../../issues/components/pickers";
 import { useT } from "../../i18n";
 import { CHIP_CLASS } from "./inspector/chip";
+import { ENGINES } from "./engine-select";
 
 export interface ExecutionTarget {
   executionGroupId: string;
@@ -37,11 +38,11 @@ export function ExecutionTargetSelect({ wsId, value, onChange, compact = false, 
     runtime.visibility === "public" || (runtime.owner_id ?? "local") === agentOwnerId,
   );
   const eligibleRuntimeIds = new Set(eligibleRuntimes.map((runtime) => runtime.id));
-  const automaticTargets = ["claude", "codex"].map((provider) => {
+  const automaticTargets = ENGINES.map((provider) => {
     const members = eligibleRuntimes.filter((runtime) => runtime.provider === provider || runtime.provider === "any");
     return {
       executionGroupId: "", provider,
-      label: t(($) => $.execution_target.automatic, { provider: provider === "claude" ? "Claude Code" : "Codex" }),
+      label: t(($) => $.execution_target.automatic, { provider: provider === "claude" ? "Claude Code" : provider === "codex" ? "Codex" : "Antigravity" }),
       members: members.map((runtime) => runtime.id),
       online: members.filter((runtime) => runtime.status === "online").length,
       legacySelected: false,

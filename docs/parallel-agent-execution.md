@@ -22,6 +22,9 @@
 - Issue-free one-shot tasks (including Wiki builds) are independent. Private
   Chat turns remain serialized. Existing Agent and Runtime capacity limits,
   project device routing, permissions and workspace affinity still apply.
+- Tasks bound to the same [Runtime workspace](dev/runtime-workspaces.md) remain
+  serialized across Agents and Sessions. Explicit Chat project selections keep
+  their device routing even though Chat tasks do not hold an Issue workspace.
 - A child result can immediately queue a Leader turn; other children do not
   delay it. Unclaimed returns coalesce, but a frozen prompt gets a later turn.
 - Scheduled Wiki targets fill available Agent slots. Builds for the same

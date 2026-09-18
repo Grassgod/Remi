@@ -13,6 +13,8 @@
  */
 
 // ── Provider ──────────────────────────────────────────────────
+export { AntigravityProvider, resolveAntigravityExecutable } from "./antigravity.js";
+export { createRuntimeProvider } from "./runtime-provider.js";
 export {
   AcpProvider,
   resolveAcpPermissionMode,

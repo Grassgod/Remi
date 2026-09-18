@@ -12,6 +12,6 @@ export const workspaceBlock: CapabilityBlock = {
   },
 
   ephemeral(ctx: EphemeralContext) {
-    return { cwd: ctx.workDir };
+    return { cwd: ctx.workDir, ...(ctx.task.runtimeWorkspace ? { addDirs: [ctx.task.runtimeWorkspace.rootPath] } : {}) };
   },
 };

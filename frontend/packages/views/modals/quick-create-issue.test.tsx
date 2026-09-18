@@ -153,13 +153,14 @@ vi.mock("../issues/components", () => ({
   DueDatePicker: () => <div data-testid="due-date-picker" />,
 }));
 
-vi.mock("../projects/components/project-picker", () => ({
-  ProjectPicker: ({ onUpdate }: { onUpdate?: (u: { project_id?: string | null }) => void }) => (
+vi.mock("../runtimes/components/runtime-workspace-picker", () => ({
+  WorkLocationPicker: ({ onChange }: { onChange?: (u: { project_id: string | null; runtime_workspace_id: string | null }) => void }) => (
     <div data-testid="project-picker">
-      <button type="button" onClick={() => onUpdate?.({ project_id: "proj-a" })}>
+      <button type="button" onClick={() => onChange?.({ project_id: null, runtime_workspace_id: "rws-local" })}>Pick local directory</button>
+      <button type="button" onClick={() => onChange?.({ project_id: "proj-a", runtime_workspace_id: null })}>
         Pick project A
       </button>
-      <button type="button" onClick={() => onUpdate?.({ project_id: "proj-b" })}>
+      <button type="button" onClick={() => onChange?.({ project_id: "proj-b", runtime_workspace_id: null })}>
         Pick project B
       </button>
     </div>
@@ -321,6 +322,15 @@ describe("AgentCreatePanel", () => {
     });
   });
 
+  it("submits the local directory instead of the previous project", async () => {
+    const user = userEvent.setup();
+    renderPanel({ onClose: vi.fn(), onSwitchMode: vi.fn(), isExpanded: false, setIsExpanded: vi.fn() });
+    await user.click(screen.getByRole("button", { name: "Pick project A" }));
+    await user.click(screen.getByRole("button", { name: "Pick local directory" }));
+    await user.click(screen.getByRole("button", { name: /^Let agent create \(/i }));
+    await waitFor(() => expect(mockQuickCreateIssue).toHaveBeenCalledWith(expect.objectContaining({ project_id: null, runtime_workspace_id: "rws-local" })));
+  });
+
   it("loads the persisted prompt draft when no transient prompt is provided", () => {
     renderPanel({ onClose: vi.fn(), isExpanded: false, setIsExpanded: vi.fn() });
 
@@ -351,7 +361,8 @@ describe("AgentCreatePanel", () => {
       expect(mockQuickCreateIssue).toHaveBeenCalledWith({
         agent_id: "agent-1",
         prompt: "New agent prompt",
-        project_id: undefined,
+        project_id: null,
+        runtime_workspace_id: null,
       });
     });
 
@@ -391,7 +402,8 @@ describe("AgentCreatePanel", () => {
       expect(mockQuickCreateIssue).toHaveBeenCalledWith({
         squad_id: "squad-1",
         prompt: "Investigate the regression",
-        project_id: undefined,
+        project_id: null,
+        runtime_workspace_id: null,
       });
     });
     expect(mockSetLastActor).toHaveBeenCalledWith("squad", "squad-1");
@@ -435,7 +447,7 @@ describe("AgentCreatePanel", () => {
 
     await user.click(screen.getByRole("button", { name: /^Let agent create \(/i }));
     await waitFor(() => expect(mockQuickCreateIssue).toHaveBeenCalledWith(
-      expect.objectContaining({ project_id: undefined }),
+      expect.objectContaining({ project_id: null }),
     ));
   });
 
@@ -497,6 +509,7 @@ describe("AgentCreatePanel", () => {
         agent_id: "agent-2",
         prompt: "Create the issue",
         project_id: "proj-a",
+        runtime_workspace_id: null,
       });
     });
   });
@@ -552,7 +565,8 @@ describe("AgentCreatePanel", () => {
       expect(mockQuickCreateIssue).toHaveBeenCalledWith({
         agent_id: "agent-1",
         prompt: "Investigate the regression",
-        project_id: undefined,
+        project_id: null,
+        runtime_workspace_id: null,
         parent_issue_id: "parent-uuid-1",
       });
     });

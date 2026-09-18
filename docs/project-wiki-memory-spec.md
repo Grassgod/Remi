@@ -1,311 +1,98 @@
-# Project Wiki + Memory — Phase 1 实现规格（构建契约）
+---
+title: Project Memory 与 Wiki
+status: active
+summary: 当前知识存储、按需读取、任务 Wiki 工作副本、发布权限和 OpenViking 切换的实现入口。
+---
 
-> 状态：实现中（codex/llm_wiki 分支）
-> 编排：Fable（本文档 = 各构建 agent 的唯一契约来源，冲突以本文档为准）
-> 范围：Phase 1 = 表 + Store + REST API + agent CLI + task prompt 注入 + 前端 Wiki tab（只读）
-> 明确不做（后续阶段）：前端编辑器、project_ref 知识继承、FTS/向量检索、审核队列、workspace 级 memory。Wiki 的语义整理由 Atlas lint 模式负责，不另建启发式 CLI 工作流。
+# Project Memory 与 Wiki
 
-## 0. 概念
+本页描述当前实现。模块总览见[架构](ARCHITECTURE.md)；字段、参数和权限以链接的源码及测试为准。
 
-一张表承载两种知识：
-- `kind='memory'`：agent 运维记忆条目。title = 事实一句话（必填），body = 可选细节。默认 pinned=1（进 prompt 注入索引）。
-- `kind='wiki'`：文档页。title + body(markdown)。默认 pinned=0。
+## 内容与读写边界
 
-每条记录带出处（source_task_id / source_issue_id，软引用无 FK——task 会被 GC，知识不能跟着消失）与作者（author_type: member|agent）。所有写入落 revision，可回滚可审计。
-
-## 0.5 Karpathy LLM-wiki 原则对齐（v2 修订，来源：gist.github.com/karpathy/442a6bf555914893e9891c11519de94f）
-
-| Karpathy 原则 | 本方案落法 |
+| 对象 | 当前用途与实现 |
 |---|---|
-| 三层：不可变来源 / LLM 拥有的 wiki / schema 约定文档 | 来源层 = multiremi 原生的 issue 讨论、task transcript、代码库（本就不可变）；wiki 层 = project_docs；**schema 层 = 每 project 一个保留 slug `_schema` 的 wiki 文档**（本次新增，见 §3/§6） |
-| wiki 内容从来源蒸馏并引用来源 | source_task_id/source_issue_id（自动出处）+ **refs 引用数组**（本次新增：多来源引用 issue/task/comment/url） |
-| 整合优于堆积：新信息更新既有页面、矛盾要显式标注，而不是无限追加 | prompt 写回纪律改写（§6）：先 search/get → 能 update 不 create → 矛盾时修订旧条目并注明依据；Atlas 的 lint 模式负责把 memory 快速记录合并进 wiki 页。 |
-| [[wiki-links]] 页面互链 | Project Wiki 使用稳定 slug；Repository Wiki 使用仓库根相对 canonical path（省略 `.md`）。Repository Wiki 的最终链接图由服务端发布校验；Project Wiki 由稳定 slug、backlinks 与 Atlas 发布前检查共同保证，语义整理仍由 Atlas lint 模式负责。 |
-| index.md 目录先读、~100 源内不需要向量检索 | 每个非空 Wiki 由 Atlas 维护实际的根级 `index.md`，作为经过整理的阅读地图；数据库索引只负责检索和元数据，不替代可读入口。 |
-| log.md 追加式日志 | 每次 Atlas 正式发布在根级 `log.md` 追加来源、revision、运行和页面变化；revision 表负责回滚，不替代面向读者的加工日志。 |
-| lint：矛盾/过时/孤儿页/缺页检查 | Atlas lint 模式的检查和修订清单（见 §10）；不再把启发式 CLI 输出当成结论。 |
-| markdown 为载体、git 为版本 | body 即纯 markdown；revisions 即版本史；DB 替代文件系统的理由不变（多 repo/零 repo、前端浏览、多机 agent、实时推送）；后续可选把 wiki 物化进 task workdir（对齐 skills 物化机制） |
+| Project Memory | 项目范围的可复用知识，`kind=memory`，创建要求非空 title 和 body，默认 pinned。与 Wiki 共用文档元数据和 revision。见[知识服务](../packages/server/src/project-knowledge/service.ts)、[项目仓储](../packages/server/src/store/repos/projects-repo.ts)。 |
+| Project Wiki | 项目内的 Markdown 页面，包含 slug、path、来源 refs 和版本，保存项目层面及跨仓库的整理结果。 |
+| Repository Wiki | 按仓库共享代码知识，同一个仓库被多个项目引用时复用。见[仓库 Wiki 仓储](../packages/server/src/store/repos/repository-wiki-repo.ts)、[任务仓库范围](../packages/server/src/repository-wiki/task-scope.ts)。 |
+| Submission / compilation run | 原始提交和知识加工记录，与正式文档分开存储，记录来源、状态、输出版本及哈希。见[知识仓储](../packages/server/src/store/repos/knowledge-repo.ts)、[发布路由](../packages/server/src/api/routers/knowledge.ts)。 |
 
-**memory 与 wiki 的关系（叙事修正）**：memory 条目 = 未整合的快速捕获（hot path，对齐老 remi 的 daily），wiki 页 = 整合后的长期知识（对齐长期记忆）；librarian 蒸馏 = compaction。
+项目文档普通读写端点在[projects.ts](../packages/server/src/api/routers/projects.ts)：`/api/projects/:id/docs`、单篇读取/版本/反链及 `/knowledge/recall`；工作区检索使用 `/api/project-docs`。服务层选择正文和搜索后端，调用方不能直接把 SQL body 当作当前正文。
 
-### 0.6 双链命名与发布契约
+[写入身份判断](../packages/server/src/api/helpers/knowledge.ts)区分工作区成员、普通 task agent 和具有发布能力的 agent。普通 agent 的 create/update/delete 返回 **202 和 submission**，不表示正式知识已改变。正式写入关联 compilation run；批量发布要求发布能力及任务作用域匹配。
 
-- Project Wiki 的页面身份是稳定 slug，链接写作 `[[deployment-model]]`；标题变化不改变引用。
-- Repository Wiki 的页面身份是仓库根相对 canonical path，链接省略 `.md`，例如 `[[architecture/runtime]]`。只有目标在来源页同目录内且解析唯一时，才能使用 `[[details]]` 这类短名；有歧义时必须写 canonical path。
-- 页面移动或内容归并前，Atlas 必须先搜索并枚举全部入链，逐条改写为目标页面的 canonical 引用，再执行移动、更新或删除。不得用一步式合并掩盖未更新的入链。
-- CLI 负责读取、编辑和提交内容。Repository Wiki 服务端在发布边界解析最终文档图，并拒绝本次变更新引入的断链或歧义；Atlas 根据返回的来源页和引用诊断修复后重试，不能绕过该校验。Project Wiki 使用稳定 slug，并要求 Atlas 在移动或归并前通过 backlinks 完成入链检查与改写。
+发布权来自[平台能力配置](../packages/server/src/knowledge/capability.ts)：角色至少为 maintainer，且绑定并启用了允许的 `code-to-wiki` 插件。显示名称不授予权限；代码中的 Atlas 发布流程也受此检查。任务 token 绑定的 issue/project/repository 范围必须匹配目标。
 
-## 1. DDL（加入 migrations.ts 的启动 DDL 块，跟随现有风格：无 CHECK 约束，验证在 store 层）
+## Agent 实际读取流程
 
-```sql
-CREATE TABLE IF NOT EXISTS multiremi_project_docs (
-  id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL,
-  workspace_id TEXT NOT NULL DEFAULT 'local',
-  kind TEXT NOT NULL DEFAULT 'wiki',
-  slug TEXT NOT NULL,
-  title TEXT NOT NULL,
-  summary TEXT,
-  body TEXT NOT NULL DEFAULT '',
-  tags TEXT NOT NULL DEFAULT '[]',
-  pinned INTEGER NOT NULL DEFAULT 0,
-  refs TEXT NOT NULL DEFAULT '[]',
-  source_task_id TEXT,
-  source_issue_id TEXT,
-  author_type TEXT,
-  author_id TEXT,
-  updated_by_type TEXT,
-  updated_by_id TEXT,
-  version INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE(project_id, slug),
-  FOREIGN KEY(project_id) REFERENCES multiremi_projects(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_multiremi_project_docs_project ON multiremi_project_docs(project_id, kind, pinned, updated_at);
-CREATE INDEX IF NOT EXISTS idx_multiremi_project_docs_workspace ON multiremi_project_docs(workspace_id);
+[任务提示词](../packages/daemon/src/agent-runtime/prompts/ephemeral.ts)的 `appendProjectKnowledgeSections` 给出按需读取入口：
 
-CREATE TABLE IF NOT EXISTS multiremi_project_doc_revisions (
-  id TEXT PRIMARY KEY,
-  doc_id TEXT NOT NULL,
-  version INTEGER NOT NULL,
-  title TEXT NOT NULL,
-  summary TEXT,
-  body TEXT NOT NULL DEFAULT '',
-  author_type TEXT,
-  author_id TEXT,
-  created_at TEXT NOT NULL,
-  UNIQUE(doc_id, version),
-  FOREIGN KEY(doc_id) REFERENCES multiremi_project_docs(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_multiremi_project_doc_revisions_doc ON multiremi_project_doc_revisions(doc_id, version);
+1. Memory 不直接嵌入提示词。先 `remi memory search "<query>"`，再 `remi memory get <slug-or-id>` 读取有关条目。当前协议要求使用 CLI，不使用 Memory MCP。
+2. Wiki 由[工作区物化器](../packages/daemon/src/agent-runtime/workspace/wiki.ts)放入 `./wiki`；仓库知识位于 `./wiki/repositories/<repository>/`。`.multiremi/wiki-base` 是只读三方合并基线。
+3. 编辑后用 `remi wiki status`、`remi wiki diff` 检查，再 `remi wiki push`；冲突在工作副本解决后重试。普通 agent 的提交仍经过正式发布边界。
+
+提示词要求非空 Wiki 维护根 `index.md` 阅读地图和追加式 `log.md`。这是内容维护约定，不能据此声称所有内容规则已有服务端校验。链接解析及发布检查见[共享解析器](../packages/contracts/src/wiki-links.ts)、[仓库发布链接检查](../packages/server/src/repository-wiki/links.ts)及[发布路由](../packages/server/src/api/routers/knowledge.ts)。移动或归并页面时需要同步修正入链。
+
+## CLI 与验证入口
+
+完整命令、参数、鉴权声明来自[CommandRegistry 的知识模块](../apps/remi/cli/commands/knowledge.ts)。常用 canonical 命令：
+
+```bash
+remi memory search "<query>" --project <project>
+remi memory get <slug-or-id> --project <project>
+remi memory create --project <project> --title "<title>" --content-file <file> --ref issue:<id>
+remi memory update <slug-or-id> --project <project> --content-file <file> --expected-version <n>
+remi wiki list --project <project>
+remi wiki get <slug-or-id> --project <project>
+remi wiki revisions <slug-or-id> --project <project>
+remi wiki backlinks <slug-or-id> --project <project>
+remi knowledge submit --help
+remi wiki publish --help
 ```
 
-新表只需加进启动 DDL 块（`CREATE TABLE IF NOT EXISTS` 每次启动执行，老库自动补建）。不需要 addColumnIfMissing。**PG 注意**：不要写参数级 `? IS NULL`（PG 拒绝，见 72453690 教训）；布尔用 INTEGER 0/1；LIKE 大小写行为两方言不同——搜索用 `LOWER(col) LIKE LOWER(?)`。
+任务环境可提供默认项目；工作区 list/search 可不传项目，单篇操作需要已解析的项目范围。`--expected-version` 检测并发修改，不能在冲突后盲目覆盖。写入前先检索、修订已有条目并保留来源；不把一次性任务细节堆入长期知识。
 
-## 2. Contracts（packages/contracts/src/types.ts）
+按变更选择相关测试；这些是验证入口，不表示本次已执行：
 
-```ts
-export type MultiremiProjectDocKind = "wiki" | "memory";
-
-export interface MultiremiProjectDoc {
-  id: string;
-  projectId: string;
-  workspaceId: string;
-  kind: MultiremiProjectDocKind;
-  slug: string;
-  title: string;
-  summary: string | null;
-  body: string;
-  tags: string[];
-  pinned: boolean;
-  /** 引用的来源。type: issue|task|comment|url|file（宽松校验，未知 type 保留） */
-  refs: MultiremiProjectDocRef[];
-  sourceTaskId: string | null;
-  sourceIssueId: string | null;
-  authorType: "member" | "agent" | null;
-  authorId: string | null;
-  updatedByType: "member" | "agent" | null;
-  updatedById: string | null;
-  version: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface MultiremiProjectDocRevision {
-  id: string;
-  docId: string;
-  version: number;
-  title: string;
-  summary: string | null;
-  body: string;
-  authorType: "member" | "agent" | null;
-  authorId: string | null;
-  createdAt: string;
-}
-
-/** Injection index attached to task dispatch. Bodies only for memory entries, trimmed. */
-export interface MultiremiProjectDocIndexEntry {
-  id: string;
-  slug: string;
-  title: string;
-  summary: string | null;
-  /** memory 条目带 body（截断至 500 字符）；wiki 条目为 null */
-  body: string | null;
-  kind: MultiremiProjectDocKind;
-  pinned: boolean;
-  sourceIssueId: string | null;
-  updatedAt: string;
-}
-
-export interface MultiremiProjectDocRef {
-  type: string;
-  value: string;
-}
-
-export interface MultiremiProjectDocsIndex {
-  memory: MultiremiProjectDocIndexEntry[];
-  wiki: MultiremiProjectDocIndexEntry[];
-  /** `_schema` 文档 body（截 1500 字符），无则 null。`_schema` 不出现在 wiki[] 里。 */
-  schema: string | null;
-}
+```bash
+bun test tests/unit/multiremi/multiremi-project-docs.test.ts tests/unit/multiremi/multiremi-project-docs-api.test.ts
+bun test tests/unit/multiremi/multiremi-project-docs-cli.test.ts tests/unit/multiremi/multiremi-project-docs-prompt.test.ts
+bun test tests/unit/multiremi/multiremi-knowledge.test.ts tests/unit/multiremi/multiremi-knowledge-cli.test.ts
+bun test tests/unit/multiremi/project-knowledge-openviking.test.ts
+bun test tests/unit/daemon/wiki-workspace.test.ts tests/unit/multiremi/multiremi-wiki-working-copy.test.ts tests/unit/multiremi/repository-wiki-links.test.ts
 ```
 
-契约类型只写 camelCase（snake 双字段只出现在既有请求/响应形状里，新类型不加）。`MultiremiTaskWithAgent` 增加：`projectDocs: MultiremiProjectDocsIndex | null;`
+## 存储模式与 OpenViking 切换
 
-Create/Update 输入类型接受 camel/snake 双写（store 层 `input.x ?? input.x_snake` 兜底，照 CreateProjectResourceInput 抄）。
+仅在配置或升级知识存储时阅读本节。当前[服务构造器](../packages/server/src/project-knowledge/service.ts)支持三种模式，默认 `sql`；仓库内容不能证明某个部署当前用了哪种模式。
 
-## 3. Store（packages/server/src/store/store.ts）
-
-方法（全部放在 project resources 方法附近）：
-
-- `listProjectDocs(projectId: string, input?: { kind?: string | null }): MultiremiProjectDoc[]` — 排序 `pinned DESC, updated_at DESC`。project 不存在 → throw `Project not found: <id>`（沿用现有文案）。
-- `getProjectDoc(id: string): MultiremiProjectDoc | null`
-- `getProjectDocByRef(projectId: string, ref: string): MultiremiProjectDoc | null` — ref 先按 id 查再按 slug 查。
-- `createProjectDoc(projectId: string, input: CreateProjectDocInput): MultiremiProjectDoc`
-  - kind 必须 wiki|memory，否则 throw `unknown kind: <k>`；title 必填 trim 非空否则 throw `title is required`。
-  - id = `createId("pdoc")`；slug = 显式传入或 slugify(title)（小写、非字母数字→`-`、折叠去首尾 `-`；结果为空——如纯中文标题——则用 doc id）。slug 冲突（UNIQUE 违反）由调用方收到 error（API 层映射 409），不自动加后缀。
-  - pinned 默认：memory=true，wiki=false。tags 默认 []。summary/body 默认 null/''。
-  - 事务内：INSERT doc(version=1) + INSERT revision(v1) + `UPDATE multiremi_projects SET updated_at`（对齐 createProjectResource:5531 的父表 touch）。
-- `updateProjectDoc(projectId: string, ref: string, input: UpdateProjectDocInput): MultiremiProjectDoc`
-  - 可改 title/summary/body/tags/pinned/slug；`expectedVersion?: number` 提供且 ≠ 当前 version → throw `project doc version conflict`（API 映射 409）。
-  - 事务内：UPDATE（version+1, updated_at, updated_by_*）+ INSERT revision(新 version) + 父表 touch。
-- `deleteProjectDoc(projectId: string, ref: string): void` — 不存在 throw `Project doc not found: <ref>`。
-- `listProjectDocRevisions(docId: string): MultiremiProjectDocRevision[]` — version DESC。
-- `searchProjectDocs(projectId: string, query: string, input?: { kind?: string | null; limit?: number }): MultiremiProjectDoc[]` — `LOWER(title||summary||body||tags) LIKE LOWER('%q%')` 双方言安全写法（各列独立 OR，不做列拼接以免 NULL 传染），limit 默认 20。
-- `getProjectDocsIndex(projectId: string): MultiremiProjectDocsIndex` — memory：pinned 优先再按 updated_at DESC，取 ≤50 条，body 截 500 字符；wiki：全部（≤100，**排除 `_schema`**），body=null，summary 截 160；schema：`_schema` 文档 body 截 1500，无则 null。
-- **refs**：create/update 接受 `refs?: {type,value}[]`（camel/snake 双写 `refs`），normalize 宽松（type/value 转 string trim，value 空的丢弃，最多 20 条），存 JSON；mapper 容错 parse 为 []。
-- **`ensureProjectDocSchema(projectId)`**：createProjectDoc 在创建非 `_schema` 文档时，若该 project 尚无 `_schema`，先在同一事务外播种一篇默认 schema 文档（kind='wiki'、slug='_schema'、title='Wiki Schema'、pinned=false、author_type=null，body = 下方默认模板）。`_schema` 是普通文档：可读可改可有 revision，仅 slug 保留（用户显式创建 slug='_schema' 时不重复播种）。
-
-默认 `_schema` 模板（嵌在 store 代码里的常量，中文）：
-
-```markdown
-# Wiki Schema（本项目知识库维护规则）
-
-本文档约束 agent 如何维护本项目的 wiki 与 memory，人和 agent 都可修订本文档。
-
-## 分层
-- 原始来源（issue 讨论、task transcript、代码库）不可修改；wiki/memory 是从来源蒸馏出的知识。
-- memory 条目 = 未整合的快速记录；wiki 页 = 整合后的长期知识。
-
-## 维护纪律
-- 写入前先 `doc search` / `doc get` 查已有条目；能 update 就不要 create。
-- 新事实与旧条目矛盾时：更新旧条目并在正文注明变化与依据（引用 issue/task），不要静默并存两个版本。
-- 写入时用 --ref 引用来源（issue/task/url）；Project 页面用稳定 `[[slug]]`，Repository 页面按 §0.6 使用 canonical path 交叉链接。
-- 一次性细节、只对当前 issue 有效的信息不要入库。
-```
-- `getTaskWithAgent`（store.ts:7201）返回对象增加 `projectDocs: project ? this.getProjectDocsIndex(project.id) : null`。
-
-行映射器 `toProjectDoc(row)` / `toProjectDocRevision(row)`：tags JSON.parse 容错为 []，pinned `Number(row.pinned) === 1`（PG bridge 可能回 boolean —— 用 `row.pinned === true || Number(row.pinned) === 1`）。
-
-## 4. REST API（packages/server/src/api/api.ts，紧邻 project resources 路由块）
-
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| GET | /api/projects/:projectId/docs?kind=&q=&limit= | q 存在走 search，否则 list。→ `{ docs: [...] }` |
-| POST | /api/projects/:projectId/docs | → `{ doc }` 201 |
-| GET | /api/projects/:projectId/docs/:ref | ref = id 或 slug → `{ doc }` |
-| PUT | /api/projects/:projectId/docs/:ref | → `{ doc }` |
-| DELETE | /api/projects/:projectId/docs/:ref | → `{ deleted: true }` |
-| GET | /api/projects/:projectId/docs/:ref/revisions | → `{ revisions: [...] }` |
-
-- 鉴权：与 project resources 端点完全一致的 helper 组合（workspace 成员 gating + agent/task token 通过既有中间件）。**写操作解析 acting actor**：member → author_type='member'+user id；agent（task token）→ author_type='agent'+agent id。POST body 里 `source_task_id` 仅在 actor 是 agent 时接受；若有 task id 而无 source_issue_id，服务端从 task 反查 issue id 填充。
-- POST/PUT 接受 `refs`（{type,value} 数组），序列化响应带 `refs`。
-- 序列化：`projectDocCompatibilityResponse(doc)` 全 snake_case（含 tags 数组、pinned boolean）；`projectDocRevisionCompatibilityResponse`。
-- 错误映射 `projectDocErrorResponse`：`Project not found`→404、`Project doc not found`→404、`title is required`/`unknown kind`→400、`version conflict`→409、UNIQUE/duplicate key→409（消息 `a doc with this slug already exists`，同时匹配 SQLite `UNIQUE constraint failed` 与 PG `duplicate key value violates unique constraint` 两种文案）。
-- WS：`publishWorkspaceEvent(c, store, "project_doc:created"|"project_doc:updated", ws, { doc: <compat>, project_id })`；`project_doc:deleted` → `{ project_id, doc_id }`。照 project_resource 三连（api.ts:6445-6478）抄。
-- daemon claim 响应：找到 claim 序列化点，将 `projectDocs` 以 `project_docs` snake 形状带上（entry 字段 snake：source_issue_id/updated_at…）。
-
-## 5. CLI（apps/remi/cli/multiremi.ts）
-
-runMultiremi switch 加 `case "memory"` 和 `case "wiki"`。模板 = issue metadata 块（926-959）+ issueComment 的 content 读取。
-
-```
-remi memory list|search <query> [--project <project-id>] [--output json]
-remi memory get <slug-or-id> --project <project-id>
-remi memory create --project <project-id> --title <t>
-remi wiki list|search <query> [--project <project-id>] [--output json]
-remi wiki get <slug-or-id> --project <project-id>
-remi wiki create --project <project-id> --title <t>
-    [--slug <s>] [--summary <s>] [--tags a,b] [--pinned]
-    [--ref issue:<id>] [--ref task:<id>] [--ref url:<url>]   # 可重复，冒号前为 type
-    [--content <text> | --content-stdin | --content-file <path>]
-remi wiki update <slug-or-id> --project <project-id>
-    [--title <t>] [--summary <s>] [--tags a,b] [--pinned true|false]
-    [--expected-version <n>] [--content <text> | --content-stdin | --content-file <path>]
-remi wiki delete|revisions|backlinks <slug-or-id> --project <project-id>
-remi memory update|delete|backlinks <slug-or-id> --project <project-id>
-    [--content <text> | --content-stdin | --content-file <path>]
-```
-
-- `memory create`：kind=memory，**source_task_id 自动取 `process.env.MULTIREMI_TASK_ID`**（有则带）；同样支持 --ref。
-- `--ref` 解析：`stringListOption(options, "ref")`，按第一个冒号切 type:value，无冒号视为 url（http 开头）否则报用法错误。update 传 --ref 则整体替换 refs。
-- content 读取：create/memory add 用 `readContentBody(options, "doc content")`（必填三选一，multiremi.ts:1265），但 doc create 允许无 content（wiki 骨架页/纯 title memory）→ 用 `readOptionalTextBody(options, "content")`（1127）取可选值。
-- 请求走 `multiremiApiRequest(method, path, body, options)`（1424，Bearer token 自动带；in-task 由 daemon 注入的 `MULTIREMI_SERVER_URL`/`MULTIREMI_TOKEN` 生效）。
-- list 的 table 输出照 `printAgentCollection`（1473）用 `printTable`+`extractList` 写 `printProjectDocCollection`：列 SLUG/KIND/TITLE/PINNED/VERSION/UPDATED。
-- help 文本（~1732-1760 区域）加 memory/wiki 段。
-- workspace 级 list/search 不传 `--project`；read/write/delete/history 必须传 `--project`。
-
-## 6. Daemon 注入（packages/daemon/src/…）
-
-- `contracts/types.ts`：`AgentTask` 增加 `projectDocs?: AgentTaskProjectDocsIndex | null; project_docs?: … | null;`（daemon 契约是结构对齐的本地副本，双写 camel/snake 照 sessionProjection 先例）。Entry 结构对齐 §2（snake 双写）。
-- `packages/server/src/worker/client.ts` `normalizeDaemonClaimTask`：加 `projectDocs: normalizeDaemonClaimProjectDocs(raw.project_docs ?? raw.projectDocs)`（归一 entry 字段 snake→camel，非数组给 null）。【注：此文件属 Agent B 所有权，B 按本条实现】
-- `prompts/ephemeral.ts`：在 `if (task.project)` 块内、资源列表之后追加（保持现有 sections.push 风格）：
-  - `## Project Memory`：每条 `- <title>` + 若有 body 首行则 `: <body 首行截 200 字符>`。总字符预算 4000，超出截断并追加一行 `(more entries exist — use search)`。无条目则整段省略。
-  - `## Project Wiki`：每条 `- <title> (slug: <slug>)` + summary 截 120；预算 2000，超出截断加提示。无页面省略。
-  - `## Project Knowledge Commands`（**project 存在就给**，否则 agent 永远学不会第一条）：
-    - 读：`remi memory get <slug> --project <projectId>` / `remi wiki get <slug> --project <projectId>`；搜：`remi memory search "<query>" --project <projectId>`
-    - **写回纪律（Karpathy 整合式维护，替代旧版"追加式"指引）**：完成任务若学到跨 issue 复用的持久事实（构建命令、架构决策、坑）——(1) 先 search 查有没有相关条目；(2) 有相关条目 → `memory update` 或 `wiki update` 整合修订；(3) 确属新知识 → `remi memory create`；(4) 沉淀成体系的理解 → `remi wiki create`；(5) 写入时用 --ref 引用来源，页面间用 [[slug]] 互链；(6) 不要记录一次性细节。
-    - **schema 注入**：`projectDocs.schema` 存在时，在本段末尾附 `Maintenance rules for this project's wiki (from _schema):` + schema body（已截 1500），并注明可用 `doc update <projectId> _schema` 修订规则。
-- 读取顺序不动其他 section，将新段放在 Project Context 与 Available Repositories 之间。
-
-## 7. 前端（frontend/，只读消费）
-
-- `packages/core/api/schemas.ts`：`projectDocSchema`（snake_case 字段 + `parseWithFallback` 惯例，tags 容错 []、pinned 容错 false）；schemas.test.ts 加畸形样本测试（缺字段/错类型/null 数组——CLAUDE.md 硬要求）。
-- `packages/core/api/client.ts`：`listProjectDocs(projectId, {kind?, q?})`、`getProjectDoc(projectId, ref)`、`listProjectDocRevisions(projectId, ref)`。
-- 新域 `packages/core/project-docs/`：`queries.ts`（key 带 wsId：`["project-docs", wsId, projectId, …]`）+ `index.ts` barrel + queries.test.ts；package.json exports 若需照 chat/issues 先例补。
-- `packages/core/realtime/use-realtime-sync.ts`：`project_doc:created|updated|deleted` → invalidate `["project-docs", wsId, project_id]`（照 project_resource/issue 事件先例；有事件名 union/schema 一并扩）。
-- `packages/views/projects/components/wiki/`：
-  - `project-wiki-section.tsx` — 入口：project-detail 内容区顶部加轻量切换（照库内已有 tab 先例；若无合适 tab 原语，用本地 state 的分段控件），Issues | Wiki 两态，默认 Issues，**不改路由**。
-  - 左列列表：顶部固定「Agent Memory」节点 + 下方 wiki 页列表（title，按 updated_at DESC）。
-  - 右区：wiki 页 → 只读 markdown（复用 issue 描述/评论的现成渲染组件）+ 页脚「最后更新 by <ActorAvatar+名字> · 时间 · v<version>」；Memory 节点 → 卡片流：title、body、作者、pinned 徽标、出处（source_issue_id 存在 → 链到 issue，用现有 issue 链接 helper）。
-  - **refs 徽章**：doc 的 refs 渲染成小徽章行——type=issue/task 链到对应详情页（用现有 path helper；task 无独立页则链所属 issue 或仅展示 id），type=url 外链，其余纯文本。
-  - **[[slug]] 内链**：渲染前把 body 中的 `[[slug]]` 转成指向同项目 wiki 页的内链（渲染器不便扩展时允许降级为高亮 chip + onClick 切换选中页，写进组件测试）。
-  - `_schema` 页当普通 wiki 页展示（标题 Wiki Schema），无特殊 UI。
-  - 空状态：现有 empty-state 模式 + 文案「还没有知识条目——把项目交给 agent 干活，或用 CLI 写入第一条」。CTA 按钮不做（Phase 2）。
-- locales：en/ja/ko/zh-Hans 四语齐补，放 projects 命名空间（`wiki.*` 键）。
-- 组件测试：照 project-resources-section.test.tsx 的 mock/QueryClient 装置写 wiki section 渲染测试（列表、memory 卡、空态）。
-
-## 8. 文件所有权（并行安全边界，越界 = 违规）
-
-| Agent | 独占文件 |
+| `MULTIREMI_PROJECT_KNOWLEDGE_MODE` | 正文读写与搜索 |
 |---|---|
-| A 后端底座 | packages/contracts/src/types.ts、packages/server/src/store/{store.ts,migrations.ts}、tests/unit/multiremi/multiremi-project-docs.test.ts |
-| B API+CLI（A 完成后串行） | packages/server/src/api/api.ts、packages/server/src/worker/client.ts、apps/remi/cli/multiremi.ts、tests/unit/multiremi/{multiremi-project-docs-api.test.ts,multiremi-project-docs-cli.test.ts} |
-| C daemon（与 A 并行） | packages/daemon/src/contracts/types.ts、packages/daemon/src/agent-runtime/prompts/ephemeral.ts、daemon prompt 测试文件（放 tests/unit/ 下按现有 daemon 测试位置） |
-| D 前端（与 A 并行） | frontend/packages/core/{api/schemas.ts,api/schemas.test.ts,api/client.ts,project-docs/**,realtime/use-realtime-sync.ts,realtime/index.ts,types/**}、frontend/packages/views/projects/**、frontend/packages/views/locales/** |
+| `sql` | SQL 读写、SQL 搜索，无需 OpenViking。 |
+| `shadow` | SQL 仍是读取和写入来源，写入后镜像至 OpenViking；镜像失败记录 `failed`，不会回滚已完成的 SQL 写入。 |
+| `openviking` | SQL 保留归属、ID、URI、哈希、版本和同步状态；正文及语义召回来自 OpenViking。新正文不写回 SQL，也不在依赖故障时切回 SQL 写入。 |
 
-公共约束：树上有**与本特性无关的未提交改动**，只允许 Edit 增量修改自己名下文件，严禁 git checkout/reset/stash/commit，严禁「顺手改」他人文件；发现契约冲突回报编排者，不自行改契约。
+非 SQL 模式需要服务端 API key：`MULTIREMI_OPENVIKING_API_KEY`（也接受 `OPENVIKING_API_KEY`）。URL 默认 `http://127.0.0.1:1933`，超时默认 30000 ms，最多重试默认 2，分别由 `MULTIREMI_OPENVIKING_URL`、`MULTIREMI_OPENVIKING_TIMEOUT_MS`、`MULTIREMI_OPENVIKING_MAX_RETRIES` 控制。[客户端](../packages/server/src/project-knowledge/openviking-client.ts)只运行在服务端；[URI](../packages/server/src/project-knowledge/codec.ts)由 workspace/project 生成，客户端不直接持有依赖凭据。
 
-## 8.5 已核实的装置与链路事实（构建 agent 直接采用，勿再自行发明）
+读取失败行为依入口而异：单篇和严格列表返回错误；`searchProjectDocs` 及工作区正文列表以最多 16 个并发读取正文，记录并跳过单篇失败。普通项目列表不使用这个上限。因此宽松列表成功不能代替迁移完整性验证。
 
-- **测试装置**（共用装置统一从 `tests/unit/multiremi/helpers.ts` import，范式见 `tests/unit/multiremi/multiremi-api-issues.test.ts`）：`createStore()` 起 `:memory:` 的 `MultiremiStore`；API 测试用 `createMultiremiApp`（`@multiremi/api.js`）+ `app.request()`；member 鉴权用 `signTestJwt(payload)`（HS256，dev secret `multiremi-dev-secret-change-in-production`）；`mockFetch`/`jsonResponse` helper 现成。`buildTaskPrompt` 从 `@multiremi/prompt.js` 导出，已在 `multiremi-project-docs-prompt.test.ts` / `multiremi-issue-sessions.test.ts` 被测——daemon 注入断言可直接加在那里或新建同装置文件。
-- **任务内 CLI 鉴权链路**（已核实 packages/daemon/src/agent-runtime/env/injector.ts:29-41）：daemon 给 agent 子进程注入 `MULTIREMI_SERVER_URL` + `MULTIREMI_TOKEN`（task.authToken）+ `MULTIREMI_TASK_ID` + `MULTIREMI_WORKSPACE_ID` + `MULTIREMI_AGENT_NAME` + `MULTIREMI_DAEMON_PORT`。CLI 侧 `multiremiApiConnection` 自动消费 SERVER_URL/TOKEN。**结论：`remi memory/wiki` 子命令零额外鉴权工作。**
-- **CLI 帮助文本**：showHelp 在 multiremi.ts:1712-1806，issue metadata 行(1757-1760)之后加 project doc 段。
-- **前端 query key 风格**（frontend/packages/core/issues/queries.ts:18-89）：`export const projectDocKeys = { all: (wsId) => ["project-docs", wsId] as const, list: (wsId, projectId) => [...all, projectId] as const, detail: (wsId, projectId, ref) => [...] }`，PREFIX 用于 invalidation / FULL KEY 用于 queryOptions 的注释惯例照抄。
-- **claim 归一**：packages/server/src/worker/client.ts:306-375 `normalizeDaemonClaimTask` —— B 在此加 `projectDocs` 归一（照 normalizeDaemonClaimProjectResources:437 的形状写 normalizeDaemonClaimProjectDocs）。
-- **daemon 契约**：packages/daemon/src/contracts/types.ts 是结构对齐的本地副本（依赖倒置，L2 不 import L3）；`AgentTask` 加 `projectDocs?/project_docs?` 双写，`AgentTaskProjectDocsIndex`/`AgentTaskProjectDocEntry` 新接口放 AgentTaskProjectResource 附近。
+迁移使用[服务方法](../packages/server/src/project-knowledge/service.ts)和[迁移 API](../packages/server/src/api/routers/projects.ts)。先备份 SQL 与 OpenViking 数据并记录应用版本，再检查：
 
-## 9. 验收标准
+```bash
+remi memory migration status --workspace <workspace>
+remi memory migration backfill --dry-run --workspace <workspace>
+```
 
-1. `bun test tests/unit/multiremi/multiremi-project-docs*.test.ts` 全绿（A/B 的新测试）。
-2. daemon prompt 测试绿：含「有 memory/wiki 时注入两段 + 指令段」「无 project 不注入」「预算截断」三类断言。
-3. `cd frontend && bun run test` 无新增失败（schemas 畸形样本 + queries + wiki section 组件测试绿）。
-4. `bun test tests/unit/multiremi/` 全套相对基线无新增失败；前端同理。
-5. 手工链路（验收人跑）：store 建 doc → API list/get → CLI create/get → getTaskWithAgent 带出 projectDocs → buildTaskPrompt 出现 Project Memory 段。
-6. Karpathy 修订项：首次建 doc 自动播种 `_schema`（且 wiki 索引不含它、schema 字段带它）；refs 全链路（CLI --ref → API → store → 前端徽章）；prompt 含整合式写回纪律 + schema 附文；前端 [[slug]] 内链（或降级 chip）有测试。
+SQL 模式只支持上述 dry-run，真实 backfill 需要 OpenViking。先在 `shadow` 模式执行和验证：
 
-## 10. Phase 2 备忘（本期不做）
+```bash
+remi memory migration backfill --workspace <workspace>
+remi memory migration backfill --resume --workspace <workspace>
+remi memory migration retry --workspace <workspace>
+remi memory migration verify --workspace <workspace>
+remi memory migration status --workspace <workspace>
+```
 
-- **Atlas lint 模式**（对齐 Karpathy 的定期整理）：由 Agent 阅读事实和上下文，完成矛盾检测、过时修订、孤儿页归位、缺页补齐与 memory→wiki 整合压缩。触发：手动整理、task 完成后或定时；CLI 只提供读写与 diff，不替 Agent 做语义判断。
-- 反链图 / orphan 可视化；wiki 物化进 task workdir（对齐 skills 物化）；project_ref 知识继承；FTS/向量检索（qmd 式混合检索）；审核队列。
+`--resume` 重新检查可恢复状态并复用已有版本快照，并非跳过所有 `ready` 行。切换到 `openviking` 前暂停写入，再次 backfill/verify/status，确认服务 ready、没有 pending/failed/deleting、验证无失败，并抽查正文与 revision。切换后验证读写、历史、检索、任务 Wiki 物化和 CLI 按需 Memory 读取。
+
+SQL 正文在 shadow 阶段保留，迁移命令不提供清空旧正文的操作。切换后回滚只可恢复 SQL 备份覆盖的时间点；已经写入 OpenViking 的新内容需要先导出和协调，直接改回 SQL 会丢失这些更新。本页不代表已对任何部署执行迁移或验证。

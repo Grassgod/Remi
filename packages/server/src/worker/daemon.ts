@@ -4,6 +4,7 @@ import { parseRuntimeClaudeProfile, type RuntimeClaudeProfile } from "@multiremi
 import { assertRuntimeClaudeProjectCredentials, resolveRuntimeClaudeProfile, runtimeClaudeProfileEnv, runtimeClaudeProfileRouting } from "@daemon/agent-runtime/claude-profile.js";
 import { resolveRuntimeCodexProfile } from "@daemon/agent-runtime/codex-profile.js";
 import { discoverRuntimeProfileModels } from "./runtime-profile-models.js";
+import { antigravityCliVersion, resolveAntigravityExecutable } from "@acp/antigravity.js";
 import { isPermanentFeishuDeliveryError } from "@shared/feishu-delivery-error.js";
 import { mkdirSync, realpathSync } from "node:fs";
 import { cpus, homedir, hostname } from "node:os";
@@ -11,6 +12,7 @@ import { basename, join, resolve } from "node:path";
 import { createLogger } from "@shared/logger.js";
 import {
   AcpProvider,
+  createRuntimeProvider,
   type AcpModelCapability,
   type AcpProviderOptions,
   bridgeVersion,
@@ -115,6 +117,7 @@ import { materializeChatAttachments } from "@daemon/agent-runtime/workspace/chat
 import { cleanProcessEnv } from "@daemon/agent-runtime/env/injector.js";
 import { mergeCodexSessionConfig, type CodexModelCatalogState } from "@daemon/agent-runtime/relay-sync.js";
 import { AgentRuntime } from "@daemon/agent-runtime/runtime.js";
+import { prepareRuntimeWorkspaceContext } from "@daemon/agent-runtime/workspace/runtime-context.js";
 import { AgentSession } from "@daemon/agent-runtime/session.js";
 import type { EphemeralContext } from "@daemon/agent-runtime/types.js";
 import { AgentPluginCache } from "@daemon/agent-runtime/agent-plugins/cache.js";
@@ -752,7 +755,7 @@ export class MultiremiDaemon {
       );
     }
     this.runtimeModelDiscoveryEnabled = options.inProcessRuntimeModelDiscoveryEnabled === true
-      || (!options.providerFactory && ["claude", "codex"].includes(options.provider ?? "claude"));
+      || (!options.providerFactory && ["claude", "codex", "antigravity"].includes(options.provider ?? "claude"));
     const workspacesRoot = configuredMultiremiWorkspacesRoot(options.workspacesRoot);
     const runtimeName = options.runtimeName ?? process.env.MULTIREMI_RUNTIME_NAME ?? `${hostname()}-${Bun.env.USER ?? "local"}-bun-runtime`;
     const deviceName = options.deviceName ?? process.env.MULTIREMI_DEVICE_NAME ?? `${hostname()}-${Bun.env.USER ?? "local"}`;
@@ -836,7 +839,7 @@ export class MultiremiDaemon {
       ttlMs: this.options.gcTtlMs,
       intervalMs: this.options.gcIntervalMs,
     };
-    this.providerFactory = options.providerFactory ?? ((providerOptions) => new AcpProvider(providerOptions));
+    this.providerFactory = options.providerFactory ?? createRuntimeProvider;
     this.updateRunner = options.updateRunner ?? runDefaultMultiremiUpdate;
     this.onRestartRequested = options.onRestartRequested ?? null;
     this.cliUpdateCoordinator?.register({
@@ -1285,6 +1288,7 @@ export class MultiremiDaemon {
   /** Version of the underlying agent CLI (`claude` / `codex`), or null. */
   private agentVersion(): string | null {
     const provider = this.options.provider;
+    if (provider === "antigravity") return antigravityCliVersion();
     return provider === "claude" || provider === "codex" ? agentCliVersion(provider) : null;
   }
 
@@ -1305,6 +1309,7 @@ export class MultiremiDaemon {
         agent_version: this.agentVersion() ?? undefined,
         launched_by: this.options.launchedBy ?? "manual",
         agent_plugin_protocol: MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
+        runtime_workspaces: 1,
         codex_profiles: 1,
         claude_profiles: 1,
         ssh_mesh_protocol: MULTIREMI_SSH_MESH_PROTOCOL_VERSION,
@@ -1488,12 +1493,13 @@ export class MultiremiDaemon {
   /** Update the underlying agent CLI (claude/codex) via its own `update` subcommand. */
   private async updateAgentCli(): Promise<string> {
     const provider = this.options.provider;
-    if (provider !== "claude" && provider !== "codex") {
+    if (!["claude", "codex", "antigravity"].includes(provider)) {
       throw new Error(`agent update not supported for provider: ${provider}`);
     }
     // Spawn with the daemon's own env: it was launched from a login shell, so
     // PATH already resolves claude/codex (incl. Homebrew on macOS).
-    const proc = Bun.spawn([provider, "update"], { stdout: "pipe", stderr: "pipe", env: process.env });
+    const executable = provider === "antigravity" ? resolveAntigravityExecutable() : provider;
+    const proc = Bun.spawn([executable, "update"], { stdout: "pipe", stderr: "pipe", env: process.env });
     const [stdout, stderr, exitCode] = await Promise.all([
       streamText(proc.stdout),
       streamText(proc.stderr),
@@ -2726,6 +2732,11 @@ export class MultiremiDaemon {
   }
 
   private async handleTask(task: MultiremiTaskWithAgent): Promise<void> {
+    // Historical claims may still carry their parent's directory binding.
+    // Non-workspace Sessions execute in their own daemon-owned directory.
+    if (task.issueId && task.holdsWorkspace === false && task.runtimeWorkspaceId) {
+      task = { ...task, runtimeWorkspaceId: null, runtimeWorkspace: null };
+    }
     if (this.activeTaskIds.has(task.id)) {
       log.warn(`Ignored duplicate claim for active task ${task.id}`);
       return;
@@ -2779,7 +2790,7 @@ export class MultiremiDaemon {
         const lifecycleKey = task.holdsWorkspace === false
           ? discussionSessionLifecycleKey(task.issueSessionId ?? "")
           : task.issueId;
-        if (task.holdsWorkspace !== false && task.issue?.key) {
+        if (!task.runtimeWorkspaceId && task.holdsWorkspace !== false && task.issue?.key) {
           const adopted = await this.topicWorkspaces.preparePendingMigrationForIssue(
             task.issueId,
             task.issue.key,
@@ -2908,6 +2919,11 @@ export class MultiremiDaemon {
           log.warn("Codex capability catalog load failed; using bundled catalog", { error: codexCatalogError });
           this.runtimeModelsDiscoveredAt = 0;
           this.startRuntimeModelRefresh();
+        }
+        if (task.runtimeWorkspaceId) {
+          writeAgentSkillContext(providerHome.home, task);
+          const localEnv = prepareRuntimeWorkspaceContext(task, providerHome, resolvedWorkDir.workDir);
+          providerEnv = { ...localEnv, ...providerEnv };
         }
       }
       this.enqueueTaskReport(task.id, "start", {});
@@ -3150,7 +3166,7 @@ export class MultiremiDaemon {
   }
 
   private canAutoCheckoutChatRepos(task: MultiremiTaskWithAgent, workDir: ResolvedTaskWorkDir): boolean {
-    const bound = Boolean(task.chatSessionId && !task.issueId && !task.issue
+    const bound = Boolean(!task.runtimeWorkspaceId && task.chatSessionId && !task.issueId && !task.issue
       && task.chatProjectId && task.chatProjectId === task.project?.id
       && task.project.workspaceId === task.workspaceId && task.holdsWorkspace !== false
       && workDir.ensureDir && !workDir.localDirectory);
@@ -3257,7 +3273,7 @@ export class MultiremiDaemon {
       this.assertWorkspaceRootOwner();
       return prepareReadOnlyCodeWorkspace(resolvedWorkDir.workDir, task, this.repoCache, signal);
     }
-    if (task.holdsWorkspace === false) return { checkouts: [], repos: [], warnings: [] };
+    if (task.runtimeWorkspaceId || task.holdsWorkspace === false) return { checkouts: [], repos: [], warnings: [] };
     if (task.issue?.issueKind !== "intake") {
       const prepared = await this.autoCheckoutTaskRepos(task, resolvedWorkDir, syncResults, signal);
       let wikiMaterialized = false;
@@ -3333,6 +3349,17 @@ export class MultiremiDaemon {
   ): Promise<void> {
     const runtimeId = task.runtimeId ?? this.options.runtimeId;
     if (!task.issueId || task.holdsWorkspace === false || !runtimeId) return;
+    if (task.runtimeWorkspaceId) {
+      // Only native session/archive state belongs to the Issue. Never report
+      // the external directory as an Issue-owned root that GC may reclaim.
+      this.enqueueTaskReport(task.id, "workspace", {
+        runtimeId,
+        rootPath: resolveIssueRuntimeStateRoot(task, rootPath, this.options.workspacesRoot, true),
+        branchName: task.issue?.issueKind === "intake" ? "" : `agent/${task.issue?.key ?? task.id}`,
+        status: "ready", repos: [],
+      });
+      return;
+    }
     if (task.issue?.issueKind === "intake") {
       // A degraded intake run keeps its error repos; the final report must not
       // paper over them with "ready" or the workspace status would contradict
@@ -3605,13 +3632,13 @@ export class MultiremiDaemon {
     this.assertWorkspaceRootOwner();
     const agent = task.agent;
     if (!agent) throw new Error(`Task ${task.id} has no agent`);
-    if (agent.provider !== "claude" && agent.provider !== "codex") {
+    if (!["claude", "codex", "antigravity"].includes(agent.provider)) {
       throw new Error(`Unsupported Bun Multiremi provider: ${agent.provider}`);
     }
 
     const codeWorkDir = resolvedWorkDir.workDir;
     // Private task metadata/skills, shared repositories referenced by absolute paths.
-    const workDir = task.issueSessionId && providerHome
+    const workDir = !task.runtimeWorkspaceId && task.issueSessionId && providerHome
       ? await prepareIssueExecutionDirectory(providerHome)
       : codeWorkDir;
     // Only create dirs the daemon owns. local_directory paths are validated
@@ -3620,7 +3647,7 @@ export class MultiremiDaemon {
     // Unbound Chat retains its on-demand checkout behavior. Bound Chat prepares
     // only explicit Project repositories, fetching only absent worktrees.
     const homepageChat = Boolean(task.chatSessionId && !task.issueId);
-    const repoSyncResults = homepageChat || task.holdsWorkspace === false
+    const repoSyncResults = task.runtimeWorkspaceId || homepageChat || task.holdsWorkspace === false
       ? []
       : await this.registerTaskRepos(task.workspaceId, task.repos ?? [], signal);
     const chatRepoAutoCheckout = this.canAutoCheckoutChatRepos(task, resolvedWorkDir);
@@ -3643,10 +3670,14 @@ export class MultiremiDaemon {
       );
     }
     try {
-      writeTaskContext(workDir, task);
-      writeTaskGcContext(workDir, task, { localDirectory: resolvedWorkDir.localDirectory });
-      writeProjectResourceContext(workDir, task);
-      writeAgentSkillContext(workDir, task);
+      const contextDir = task.runtimeWorkspaceId ? providerHome?.root : workDir;
+      if (!contextDir) throw new Error("Runtime workspace requires an isolated provider home");
+      writeTaskContext(contextDir, task);
+      if (!task.runtimeWorkspaceId) {
+        writeTaskGcContext(workDir, task, { localDirectory: resolvedWorkDir.localDirectory });
+        writeAgentSkillContext(workDir, task);
+      }
+      writeProjectResourceContext(contextDir, task);
     } catch (err) {
       log.warn(`Failed to write task context for ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -3672,6 +3703,9 @@ export class MultiremiDaemon {
       providerEnv,
     };
     const config = runtime.assemble(ctx);
+    if (config.agentType === "antigravity" && workDir !== codeWorkDir) {
+      config.addDirs = [...new Set([...(config.addDirs ?? []), codeWorkDir])];
+    }
 
     const provider = this.providerFactory({
       agentType: config.agentType,

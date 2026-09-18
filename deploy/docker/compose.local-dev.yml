@@ -1,0 +1,95 @@
+# Use with compose.local.yml and -p remi-dev. The manager supplies dev ports
+# (API 16220, Web 14000) and builds before starting Compose watch.
+# Explicit manifest rules work with the local Compose 2.30 release, which does
+# not support watch.include or watch.initial_sync. Keep this list in step with
+# the workspaces; the architecture test checks that none are omitted.
+x-source-watch: &source-watch
+  - action: sync
+    path: ${REMI_SOURCE_DIR:?set REMI_SOURCE_DIR}
+    target: /app
+    ignore:
+      - .git/
+      - "**/node_modules/"
+      - "**/.next/"
+      - "**/dist/"
+      - "**/coverage/"
+      - "**/.env"
+      - "**/.env.*"
+      - "**/package.json"
+      - bun.lock
+      - bunfig.toml
+      - .dockerignore
+      - deploy/docker/Dockerfile.api
+      - deploy/docker/Dockerfile.web
+      - uploads/
+      - data/
+      - tmp/
+  - action: rebuild
+    path: ${REMI_SOURCE_DIR}/package.json
+  - action: rebuild
+    path: ${REMI_SOURCE_DIR}/bun.lock
+  - action: rebuild
+    path: ${REMI_SOURCE_DIR}/bunfig.toml
+  - action: rebuild
+    path: ${REMI_SOURCE_DIR}/.dockerignore
+  - action: rebuild
+    path: ${REMI_SOURCE_DIR}/deploy/docker/Dockerfile.api
+  - action: rebuild
+    path: ${REMI_SOURCE_DIR}/deploy/docker/Dockerfile.web
+  - action: rebuild
+    path: ${REMI_SOURCE_DIR}/packages/acp/package.json
+  - action: rebuild
+    path: ${REMI_SOURCE_DIR}/packages/auth/package.json
+  - action: rebuild
+    path: ${REMI_SOURCE_DIR}/packages/connectors/package.json
+  - action: rebuild
+    path: ${REMI_SOURCE_DIR}/packages/contracts/package.json
+  - action: rebuild
+    path: ${REMI_SOURCE_DIR}/packages/daemon/package.json
+  - action: rebuild
+    path: ${REMI_SOURCE_DIR}/packages/platform-updater/package.json
+  - action: rebuild
+    path: ${REMI_SOURCE_DIR}/packages/plugin-sdk/package.json
+  - action: rebuild
+    path: ${REMI_SOURCE_DIR}/packages/remi/package.json
+  - action: rebuild
+    path: ${REMI_SOURCE_DIR}/packages/server/package.json
+  - action: rebuild
+    path: ${REMI_SOURCE_DIR}/packages/shared/package.json
+  - action: rebuild
+    path: ${REMI_SOURCE_DIR}/frontend/package.json
+  - action: rebuild
+    path: ${REMI_SOURCE_DIR}/frontend/apps/web/package.json
+  - action: rebuild
+    path: ${REMI_SOURCE_DIR}/frontend/packages/core/package.json
+  - action: rebuild
+    path: ${REMI_SOURCE_DIR}/frontend/packages/eslint-config/package.json
+  - action: rebuild
+    path: ${REMI_SOURCE_DIR}/frontend/packages/tsconfig/package.json
+  - action: rebuild
+    path: ${REMI_SOURCE_DIR}/frontend/packages/ui/package.json
+  - action: rebuild
+    path: ${REMI_SOURCE_DIR}/frontend/packages/views/package.json
+
+services:
+  api:
+    command: ["bun", "--watch", "run", "apps/server/main.ts", "serve"]
+    environment:
+      MULTIREMI_BACKGROUND_JOBS: ${REMI_BACKGROUND_JOBS:-0}
+    develop:
+      watch: *source-watch
+
+  web:
+    build:
+      target: development
+    environment:
+      NODE_ENV: development
+      REMOTE_API_URL: http://api:6120
+      FRONTEND_PORT: "3000"
+      CORS_ALLOWED_ORIGINS: ${REMI_PUBLIC_URL:?set REMI_PUBLIC_URL}
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r=await fetch('http://127.0.0.1:3000/login');process.exit(r.ok?0:1)"]
+      timeout: 30s
+      start_period: 60s
+    develop:
+      watch: *source-watch

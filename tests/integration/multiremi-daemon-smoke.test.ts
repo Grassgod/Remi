@@ -1,9 +1,10 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
+import * as os from "node:os";
 import { isAbsolute, join } from "node:path";
 import type { AcpProviderOptions } from "@acp/index.js";
 import type { MultiremiRuntimeModel } from "@multiremi/contracts/types.js";
@@ -67,6 +68,100 @@ afterEach(() => {
 });
 
 describe("Bun Multiremi daemon smoke", () => {
+  it("executes a runtime workspace through server and daemon without changing the local environment", async () => {
+    const { store, workDir: root } = daemonTestBed("remi-runtime-workspace-e2e-");
+    store.ensureLocalWorkspace();
+    const localRoot = join(root, "private-workbench");
+    const cwd = join(localRoot, "app");
+    const daemonState = join(root, "daemon-state");
+    const baseHome = join(root, "claude-home");
+    mkdirSync(cwd, { recursive: true });
+    mkdirSync(baseHome, { recursive: true });
+    writeFileSync(join(localRoot, "AGENTS.md"), "PRIVATE_PARENT_CONTEXT");
+    writeFileSync(join(cwd, ".env.local"), "LOCAL_DEPENDENCY=retained\n");
+    writeFileSync(join(cwd, "local-state.txt"), "private ignored state");
+    const agent = store.createAgent({ name: "Local writer", provider: "claude" });
+    const token = await store.createAccessToken({ name: "Local workspace daemon", type: "daemon", workspaceId: "local", daemonId: "workspace-laptop" });
+    const server = startMultiremiServer({ store, scheduler: null, authToken: "workspace-test-root", hostname: "127.0.0.1", port: 0 });
+    const previousHome = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = baseHome;
+    let sends = 0;
+    let sideWorkDir: string | null = null;
+    const daemon = new MultiremiDaemon({
+      serverUrl: `http://127.0.0.1:${server.port}`, token: token.token, daemonId: "workspace-laptop", runtimeName: "Local workspace test",
+      provider: "claude", workspaceId: "local", daemonPort: 0, pollIntervalMs: 20, gcEnabled: false,
+      workspacesRoot: daemonState, repoCacheRoot: join(root, "repo-cache"),
+      providerFactory: messageProviderFactory({ text: "Local workspace verified", sessionId: "local-session", requestId: "local-request",
+        onSend: (prompt, options) => {
+          sends++;
+          expect(options.cwd).toBe(sideWorkDir ?? cwd);
+          if (sideWorkDir) {
+            expect(options.env?.LOCAL_DEPENDENCY).toBeUndefined();
+            expect(prompt).not.toContain("## Runtime Workspace");
+          } else {
+            expect(options.env?.LOCAL_DEPENDENCY).toBe("retained");
+            expect(readFileSync(join(options.env!.CLAUDE_CONFIG_DIR!, "CLAUDE.md"), "utf8")).toContain("PRIVATE_PARENT_CONTEXT");
+          }
+          expect(prompt).not.toContain("PRIVATE_PARENT_CONTEXT");
+          expect(existsSync(join(cwd, ".multiremi"))).toBe(false);
+          expect(existsSync(join(cwd, "wiki"))).toBe(false);
+        },
+      }),
+    });
+    // Keep local context discovery independent of the developer's installed skills.
+    const homeSpy = spyOn(os, "homedir").mockReturnValue(join(root, "user-home"));
+    let run: Promise<void> | null = null;
+    try {
+      run = daemon.start();
+      await waitForCondition(() => store.listRuntimes().length > 0, 5_000);
+      const runtime = store.listRuntimes()[0]!;
+      expect(runtime.metadata.runtime_workspaces).toBe(1);
+      const workspace = store.runtimeWorkspaces.create(runtime.id, { name: "Private workbench", root_path: localRoot, cwd: "app", env_file: "app/.env.local" });
+      for (const surface of ["chat", "issue"] as const) {
+        const task = surface === "chat"
+          ? store.sendChatMessage(store.createChatSession({ agentId: agent.id, runtime_workspace_id: workspace.id }).id, { body: "Inspect local files" }).task
+          : store.createTask({ agentId: agent.id, issueId: store.createIssue({ title: "Reuse local state", runtime_workspace_id: workspace.id }).id, prompt: "Inspect again" });
+        await waitForCondition(() => ["completed", "failed"].includes(store.getTask(task.id)?.status ?? ""), 10_000);
+        expect(store.getTask(task.id)?.error).toBeNull();
+        expect(store.getTask(task.id)?.status).toBe("completed");
+        expect(store.getTask(task.id)?.workDir).toBe(cwd);
+      }
+      expect(sends).toBe(2);
+      const sideIssue = store.createIssue({ title: "Discuss outside the user directory", runtime_workspace_id: workspace.id });
+      const parent = store.getOrCreateDefaultIssueSession(sideIssue.id);
+      const side = store.createIssueSession(sideIssue.id, { title: "Side", parentSessionId: parent.id });
+      sideWorkDir = join(daemonState, ".runtime", side.id, agent.id, "1", "work");
+      // Emulate an older server returning the parent directory in a side claim.
+      const client = (daemon as any).client;
+      const claim = client.claimTask.bind(client);
+      const claimSpy = spyOn(client, "claimTask").mockImplementation(async (id: string) => {
+        const claimed = await claim(id);
+        return claimed?.holdsWorkspace === false
+          ? { ...claimed, runtimeWorkspaceId: workspace.id, runtimeWorkspace: workspace }
+          : claimed;
+      });
+      try {
+        const sideTask = store.createTask({ agentId: agent.id, issueId: sideIssue.id, issueSessionId: side.id, prompt: "Discuss only" });
+        expect(sideTask.runtimeWorkspaceId).toBeNull();
+        await waitForCondition(() => ["completed", "failed"].includes(store.getTask(sideTask.id)?.status ?? ""), 10_000);
+        expect(store.getTask(sideTask.id)?.error).toBeNull();
+        expect(store.getTask(sideTask.id)?.status).toBe("completed");
+        expect(store.getTask(sideTask.id)?.workDir).toBe(sideWorkDir);
+      } finally { claimSpy.mockRestore(); }
+      expect(sends).toBe(3);
+      expect(readFileSync(join(cwd, "local-state.txt"), "utf8")).toBe("private ignored state");
+      expect(existsSync(join(root, "repo-cache"))).toBe(false);
+      store.runtimeWorkspaces.archive(workspace.id);
+      expect(existsSync(cwd)).toBe(true);
+    } finally {
+      daemon.stop();
+      await run?.catch(() => {});
+      homeSpy.mockRestore();
+      if (previousHome === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = previousHome;
+      server.stop(true);
+    }
+  }, 30_000);
   it("refreshes model capabilities periodically and retries failed probes and reports", async () => {
     const { store, workDir } = daemonTestBed("multiremi-periodic-models-");
     store.upsertRelayConfig("local", "codex", {

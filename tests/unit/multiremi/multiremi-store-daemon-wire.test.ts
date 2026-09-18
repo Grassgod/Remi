@@ -12,6 +12,36 @@ afterEach(resetMultiremiTestEnv);
 
 
 describe("Multiremi store — Go daemon wire shapes", () => {
+
+  it("preserves an explicit Chat project through claim normalization without inheriting stale Issue context", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const runtime = store.registerRuntime({ name: "Project chat runtime", provider: "codex", workspaceId: "local" });
+    const agent = store.createAgent({ name: "Project chat agent", provider: "codex", runtimeId: runtime.id });
+    const project = store.createProject({ title: "Explicit chat project", instructions: "CHAT_PROJECT_BOOTSTRAP", deltaInstructions: "CHAT_PROJECT_DELTA" });
+    const chat = store.createChatSession({ agentId: agent.id, projectId: project.id });
+    const task = store.sendChatMessage(chat.id, { body: "Use the chosen project" }).task;
+    const app = createMultiremiApp({ store });
+    mockFetch((url, init) => {
+      const parsed = new URL(url);
+      return app.request(`${parsed.pathname}${parsed.search}`, init);
+    });
+    const claimed = await new MultiremiDaemonClient("https://remi.example").claimTask(runtime.id);
+    expect(claimed?.id).toBe(task.id);
+    expect(claimed?.chatProjectId).toBe(project.id);
+    expect(claimed?.issue).toBeNull();
+    expect(claimed?.repos).toEqual([]);
+    for (const mode of ["bootstrap", "delta"] as const) {
+      const prompt = buildTaskPrompt({ ...claimed!, sessionProjection: { mode, jsonl: "" } } as any);
+      expect(prompt).toContain(mode === "bootstrap" ? "CHAT_PROJECT_BOOTSTRAP" : "CHAT_PROJECT_DELTA");
+      expect(prompt).not.toContain("## Issue");
+    }
+    const unrelated = store.createProject({ title: "Old Issue project", instructions: "STALE_ISSUE_PROJECT" });
+    const stale = { ...store.getTaskWithAgent(task.id)!, project: unrelated };
+    expect(daemonTaskClaimResponse(store, stale).project).toBeUndefined();
+    expect(buildTaskPrompt({ ...claimed!, project: unrelated } as any)).not.toContain("STALE_ISSUE_PROJECT");
+  });
+
   it("normalizes optional outbound mention snapshots and checkpoints the chosen recipient", async () => {
     const client = new MultiremiDaemonClient("https://remi.example");
     const mention = { mode: "group_owner" as const, resolvedOpenId: "ou_owner" };

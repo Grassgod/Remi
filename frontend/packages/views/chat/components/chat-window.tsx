@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { WorkLocationPicker } from "../../runtimes/components/runtime-workspace-picker";
 import {
   useInfiniteQuery,
   useQuery,
@@ -60,7 +61,7 @@ import { useChatScopeSubscription } from "@multiremi/core/realtime";
 import { ChatMessageList, ChatMessageSkeleton } from "./chat-message-list";
 import { ChatInput } from "./chat-input";
 import { AgentDropdown } from "./agent-dropdown";
-import { ProjectDisplay, ProjectDropdown } from "./project-dropdown";
+import { ProjectDisplay } from "./project-dropdown";
 import { SessionDropdown } from "./session-dropdown";
 import { EmptyState } from "./chat-empty-state";
 import { ChatResizeHandles } from "./chat-resize-handles";
@@ -121,6 +122,8 @@ export function ChatWindow({
   const workspacePaths = useWorkspacePaths();
   const { t } = useT("chat");
   const wsId = useWorkspaceId();
+  const [runtimeWorkspaceId, setRuntimeWorkspaceId] = useState<string | null>(null);
+  useEffect(() => { setRuntimeWorkspaceId(null); }, [wsId]);
   const isOpen = useChatStore((s) => s.isOpen);
   const activeSessionId = useChatStore((s) => s.activeSessionId);
   const selectedAgentId = useChatStore((s) => s.selectedAgentId);
@@ -140,7 +143,7 @@ export function ChatWindow({
   const user = useAuthStore((s) => s.user);
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
-  const { data: projects = [], isError: projectsError } = useQuery(projectListOptions(wsId));
+  const { data: projects = [] } = useQuery(projectListOptions(wsId));
   // Single sessions cache — eliminates the separate active/all queries
   // that used to drift during the WS-invalidate window.
   const {
@@ -331,6 +334,7 @@ export function ChatWindow({
         try {
           const session = await createSession.mutateAsync({
             agent_id: activeAgent.id,
+            ...(runtimeWorkspaceId ? { runtime_workspace_id: runtimeWorkspaceId } : {}),
             title: titleSeed.slice(0, 50),
             ...(draftProjectId ? { project_id: draftProjectId } : {}),
           });
@@ -342,7 +346,7 @@ export function ChatWindow({
       sessionPromiseRef.current = promise;
       return promise;
     },
-    [activeSessionId, activeAgent, createSession, draftProjectId],
+    [activeSessionId, activeAgent, createSession, runtimeWorkspaceId, draftProjectId],
   );
 
   const handleUploadFile = useCallback(
@@ -534,6 +538,7 @@ export function ChatWindow({
       previousSessionId: activeSessionId,
       previousPendingTask: pendingTaskId,
     });
+    setRuntimeWorkspaceId(null);
     setDraftProjectId(null);
     setActiveSession(null);
   }, [activeSessionId, pendingTaskId, setActiveSession, setDraftProjectId]);
@@ -690,18 +695,18 @@ export function ChatWindow({
       </div>
 
       <div className="flex min-w-0 items-center border-b px-4 py-1.5">
-        {activeSessionId ? (
-          <ProjectDisplay
-            projects={projects}
-            projectId={currentSession?.project_id ?? null}
-          />
+        {activeSessionId && !currentSession?.runtime_workspace_id ? (
+          <ProjectDisplay projects={projects} projectId={currentSession?.project_id ?? null} />
         ) : (
-          <ProjectDropdown
-            projects={projects}
-            projectId={draftProjectId}
-            disabled={createSession.isPending}
-            loadError={projectsError}
-            onSelect={setDraftProjectId}
+          <WorkLocationPicker
+            wsId={wsId}
+            value={activeSessionId ? currentSession?.runtime_workspace_id ?? null : runtimeWorkspaceId}
+            projectId={activeSessionId ? currentSession?.project_id ?? null : draftProjectId}
+            onChange={location => {
+              setDraftProjectId(location.project_id);
+              setRuntimeWorkspaceId(location.runtime_workspace_id);
+            }}
+            disabled={Boolean(activeSessionId) || createSession.isPending}
           />
         )}
       </div>

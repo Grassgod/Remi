@@ -91,3 +91,70 @@ describe("authStore.initialize — token mode", () => {
     expect(storage.snapshot().multimira_token).toBe("t");
   });
 });
+
+describe("authStore.loginWithPassword", () => {
+  function passwordApi() {
+    return {
+      ...makeApi(() => Promise.resolve(fakeUser)),
+      passwordLogin: vi.fn().mockResolvedValue({ token: "password-session", user: fakeUser }),
+      logout: vi.fn().mockResolvedValue(undefined),
+    } as unknown as ApiClient;
+  }
+
+  it("stores only the session token and authenticated user, and returns the same token for CLI handoff", async () => {
+    const storage = makeStorage();
+    const api = passwordApi();
+    const onLogin = vi.fn();
+    const store = createAuthStore({ api, storage, onLogin });
+
+    await expect(store.getState().loginWithPassword("reader@localhost", "fixture-password-42"))
+      .resolves.toEqual({ token: "password-session", user: fakeUser });
+
+    expect(api.passwordLogin).toHaveBeenCalledWith("reader@localhost", "fixture-password-42");
+    expect(storage.snapshot()).toEqual({ multimira_token: "password-session" });
+    expect(api.setToken).toHaveBeenCalledWith("password-session");
+    expect(store.getState().user).toEqual(fakeUser);
+    expect(store.getState().isLoading).toBe(false);
+    expect(onLogin).toHaveBeenCalledOnce();
+    expect(store.getState()).not.toHaveProperty("password");
+  });
+
+  it("keeps password sessions out of adapter storage when cookie auth is configured", async () => {
+    const storage = makeStorage();
+    const api = passwordApi();
+    const store = createAuthStore({ api, storage, cookieAuth: true });
+    await store.getState().loginWithPassword("reader@example.test", "fixture-password-42");
+    expect(storage.snapshot()).toEqual({});
+    expect(api.setToken).not.toHaveBeenCalled();
+    expect(store.getState().user).toEqual(fakeUser);
+  });
+
+  it("clears a stale authenticated state when credentials or response validation fail", async () => {
+    const storage = makeStorage({ multimira_token: "stale-session" });
+    const api = passwordApi();
+    vi.mocked(api.passwordLogin).mockRejectedValue(new Error("Login rejected"));
+    const onLogin = vi.fn();
+    const store = createAuthStore({ api, storage, onLogin });
+    store.setState({ user: fakeUser });
+
+    await expect(store.getState().loginWithPassword("reader@example.test", "incorrect-fixture"))
+      .rejects.toThrow("Login rejected");
+
+    expect(store.getState().user).toBeNull();
+    expect(store.getState().isLoading).toBe(false);
+    expect(storage.snapshot()).toEqual({});
+    expect(api.setToken).toHaveBeenLastCalledWith(null);
+    expect(onLogin).not.toHaveBeenCalled();
+  });
+
+  it("cleans up a partial session when persistence fails after the server authenticates", async () => {
+    const storage = makeStorage();
+    storage.setItem = () => { throw new Error("Storage unavailable"); };
+    const api = passwordApi();
+    const store = createAuthStore({ api, storage });
+    await expect(store.getState().loginWithPassword("reader@example.test", "fixture-password-42"))
+      .rejects.toThrow("Storage unavailable");
+    expect(store.getState().user).toBeNull();
+    expect(api.setToken).toHaveBeenLastCalledWith(null);
+  });
+});

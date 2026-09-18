@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { User, StorageAdapter } from "../types";
 import { identify as identifyAnalytics, resetAnalytics } from "../analytics";
-import { ApiError, type ApiClient } from "../api/client";
+import { ApiError, type ApiClient, type LoginResponse } from "../api/client";
 import { setCurrentWorkspace } from "../platform/workspace-storage";
 
 export interface AuthStoreOptions {
@@ -22,6 +22,7 @@ export interface AuthState {
   verifyCode: (email: string, code: string) => Promise<User>;
   loginWithLark: (code: string, redirectUri: string) => Promise<User>;
   loginWithToken: (token: string) => Promise<User>;
+  loginWithPassword: (email: string, password: string) => Promise<LoginResponse>;
   logout: () => void;
   setUser: (user: User) => void;
   refreshMe: () => Promise<void>;
@@ -30,7 +31,7 @@ export interface AuthState {
 export function createAuthStore(options: AuthStoreOptions) {
   const { api, storage, onLogin, onLogout, cookieAuth } = options;
 
-  return create<AuthState>((set) => ({
+  return create<AuthState>((set, get) => ({
     user: null,
     isLoading: true,
 
@@ -111,6 +112,26 @@ export function createAuthStore(options: AuthStoreOptions) {
       identifyAnalytics(user.id, { email: user.email, name: user.name });
       set({ user, isLoading: false });
       return user;
+    },
+
+    loginWithPassword: async (email: string, password: string) => {
+      try {
+        const { token, user } = await api.passwordLogin(email, password);
+        if (!cookieAuth) {
+          storage.setItem("multimira_token", token);
+          api.setToken(token);
+        }
+        onLogin?.();
+        identifyAnalytics(user.id, { email: user.email, name: user.name });
+        set({ user, isLoading: false });
+        return { token, user };
+      } catch (error) {
+        // A rejected response or failed token write must not leave an old or
+        // partially created session visible as a successful password login.
+        get().logout();
+        set({ isLoading: false });
+        throw error;
+      }
     },
 
     logout: () => {

@@ -1,169 +1,86 @@
-# Remi × Multiremi —— 分层架构与目录体系
-
-> **历史文档**:记录 2026-06 目录重设计的决策语境,路径写法停留在 `src/` 时代。
-> 当前布局已迁到 `packages/*` + `apps/*`,以 `README.md` 的 Project Structure 与 `CLAUDE.md` 为准;
-> 文中设想的 `scripts/check-layers.ts` 最终落地为 `tests/arch/package-boundaries.test.ts`。
-
-> 目标:一套**人和 AI agent 都能快速定位、安全修改、独立验证**的代码分层。
-> 配套 [`FUSION.md`](./FUSION.md)(品牌/实现统一目标)与 [`MULTIREMI_PARITY_MATRIX.md`](./MULTIREMI_PARITY_MATRIX.md)(后端能力对标)。
-> 本文档由全仓扫描(7 区域测绘 + 架构 + 对抗式评审)综合得出,已并入评审发现的修正。
-
+---
+title: Remi 当前架构地图
+status: active
+summary: 从 CLI、Web 和飞书入口追踪到 API、存储与 Agent 执行，并定位配置和验证边界。
 ---
 
-## 1. 现状诊断(诚实版)
+# 当前架构地图
 
-仓库融合了两个产品:**Remi**(个人助理:memory + Feishu + Claude Code)和 **Multiremi**(类 Linear 任务管理,正用 Bun 原生重写)。核心 hub-and-spoke(`core.ts` 在 connectors↔providers 间路由)是清晰的;**乱主要集中在后端内部,不在边界**。量化:
+本页描述当前工作树的实现位置。运行命令见[根 CLAUDE.md](../CLAUDE.md)，包成员和脚本以[根 package.json](../package.json)为准。
+任务导航见[开发入口](dev/README.md)。本页与源码一起维护；接口字段和默认值回到其定义处读取。
 
-| 文件 | 行数 | 问题 |
+## 入口与职责
+
+| 入口或模块 | 当前职责 | 读代码从这里开始 |
 |---|---|---|
-| `src/multiremi/store.ts` | 10,704 | 上帝对象:277 公有方法 + ~713 处内部 `this.` 互调 + 共享可变状态(listener Sets / metric Map)|
-| `src/multiremi/api.ts` | 9,139 | 489 路由内联;`/api/*` 与 `/api/multiremi/*` 双前缀,其中 **34 条 compat 路由行为不同**(不是单纯重复)|
-| `src/multiremi/dashboard.ts` | 5,132 | 手写 HTML 内置看板,与真前端职责重叠 |
-| `src/core.ts` | 1,163 | 助理 hub 上帝对象(路由/会话/命令/恢复混在一起)|
-| `tests/multiremi-core.test.ts` | 11,466 | 单文件测试巨石(827 处 `app.request`)|
-| `src/cli/multiremi.ts` | 1,991 | 解析 + 业务逻辑混杂 |
-| `packages/feishu-channel/src/streaming.ts` | 1,387 | 卡片渲染/状态同步/转录映射混在一起 |
+| `apps/remi` | `remi` CLI、登录、服务生命周期和平台命令 | [main.ts](../apps/remi/main.ts)、[CommandRegistry](../apps/remi/cli/core/command-registry.ts) |
+| `apps/server` | 平台 CLI 入口，复用服务端启动分发 | [main.ts](../apps/server/main.ts)、[multiremi.ts](../apps/remi/cli/multiremi.ts) |
+| `frontend/apps/web` | Next.js Web 入口 | [应用目录](../frontend/apps/web)、[前端地图](dev/frontend.md) |
+| `packages/server` | Hono API、wire 序列化、领域存储、平台 worker | [API 组合与服务启动](../packages/server/src/api/server.ts)、[Store](../packages/server/src/store/store.ts) |
+| `packages/daemon` | 共享 AgentRuntime、工作目录/插件/MCP/提示词组装、lane 和定时调度 | [runtime.ts](../packages/daemon/src/agent-runtime/runtime.ts)、[orchestrator.ts](../packages/daemon/src/orchestrator.ts)、[scheduler.ts](../packages/daemon/src/scheduler.ts) |
+| `packages/remi` | Remi core 库与会话辅助代码；当前 foreground 的飞书消息接线位于 `apps/remi/cli/multiremi.ts` | [core.ts](../packages/remi/src/core.ts)、[当前 foreground](../apps/remi/cli/multiremi.ts) |
+| `packages/acp` | ACP 连接、原生 agy 与统一 provider 事件 | [provider 工厂](../packages/acp/src/runtime-provider.ts)、[client.ts](../packages/acp/src/client.ts)、[adapter registry](../packages/acp/src/adapters/index.ts) |
+| `packages/connectors` | 平台消息接收与回复适配 | [base.ts](../packages/connectors/src/base.ts)、[feishu](../packages/connectors/src/feishu) |
+| `packages/contracts` / `shared` / `auth` | 共享类型、配置/基础设施、认证 | [contracts](../packages/contracts/src)、[shared](../packages/shared/src)、[auth](../packages/auth/src) |
 
-其它结构性债务:
-- **前端无家可归**:真正在用的 Next.js 漂亮 UI 在 **gitignore 的 `multiremi/` 运行时副本**里(CI 看不见,改动不入库)。同时还存在 `web/frontend`(Vite SPA,已跟踪)和 `dashboard.ts`——**三套 UI 干一件事**。
-- **命名残留**:`multica`/`Multimira`(gitignore 前端里 ~144 文件含 `multimira`)。
-- **PG 桥**:`sql-database.ts` 用 Worker+SharedArrayBuffer+Atomics 把异步 Postgres 同步化 + 正则翻译 SQL 方言,**CI 未覆盖**。
-- **跨树泄漏**:`src/multiremi/builtin-skills.ts` 直接读 `pipeline/skills/*`(评审发现,层模型必须显式纳入)。
+当前执行实现跨两个包：领取、上报、取消与恢复的主循环在
+[server/worker/daemon.ts](../packages/server/src/worker/daemon.ts)，它调用 `packages/daemon` 的运行时构件。
+排查任务执行时两个位置都要看；包名不等于全部生命周期的归属。
 
----
+## 三条数据流
 
-## 2. 设计原则
+**Web / CLI 读写平台数据**：前端查询或 CommandRegistry → Hono [routers](../packages/server/src/api/routers) →
+[Store facade](../packages/server/src/store/store.ts) / [领域 repos](../packages/server/src/store/repos) → 数据库。
+对外形状集中到 [wire](../packages/server/src/api/wire)；事件经 [realtime](../packages/server/src/api/realtime.ts) 到前端缓存。
 
-1. **依赖单向向下**,且**可被 lint 强制**(不是口号)。
-2. **同一 feature 词跨层同名** —— agent 靠文件名定位,无需 grep。
-3. **业务逻辑下沉到能拥有它的最低层**;route/CLI 只是适配器。
-4. **一处翻译**:所有 snake/camel + Go-compat 序列化集中在 `contracts/wire.ts`。
-5. **文件预算**:目标 <500 行,硬顶 800(旧巨石只准拆、不准加)。
-6. **测试镜像源码**,且每层能**单独验证**(改 L2 跑该域单测,不必起 e2e)。
-7. **gitignore 的代码不算"家"**:产品依赖的东西必须入库 + 进 CI。
-8. **每次重构提交保持 `bun test` 绿**,纯搬迁与行为变更分开提交。
+**任务执行**：issue/chat/autopilot 产生 task → [任务存储](../packages/server/src/store/repos/tasks-repo.ts) →
+[daemon client](../packages/server/src/worker/client.ts) / [worker loop](../packages/server/src/worker/daemon.ts) 领取 →
+[AgentRuntime](../packages/daemon/src/agent-runtime/runtime.ts) 组装执行上下文 → ACP 或原生 agy provider → 消息、usage 和终态上报。
+权限请求、会话延续、工作目录归属与重试都在这条链路中，不可只以模型输出判断完成。
 
----
+Runtime 可持有独立的[持久化工作区](dev/runtime-workspaces.md)：绑定 daemon 的已有目录。任务和聊天通过统一的「工作位置」选择项目或本机目录，二者互斥；Agent 可在不同任务中选择不同位置。目录绑定只能在所属机器执行；未指定位置时沿用自动任务目录。
 
-## 3. 分层模型(依赖只能向下)
+Chat 与 Issue 独立，Chat 创建时保存项目或本机目录选择；Runtime 本机目录不附加项目仓库；项目聊天优先采用项目所选的 `local_directory`，否则在托管 Chat 目录自动准备项目显式声明的仓库，后续复用已有 worktree。未选工作位置时使用自动 Chat 目录。在 Chat 中创建 Issue 不绑定会话，也不继承新 Issue 的上下文；普通私聊不接收 Issue 播报。飞书群 Issue 话题的归属由 [FeishuBotRepo](../packages/server/src/store/repos/feishu-bot-repo.ts)维护，投递和任务领取检查绑定、Issue、工作区、Chat 与 Agent 一致性；归属不明的旧关联按[迁移手册](migrations/chat-issue-decoupling.md)审计恢复。[claim wire](../packages/server/src/api/wire/tasks.ts)保留有预算的会话 projection，仅向已确认的 Issue 话题附加 Issue 与增量摘要。详见 [Chat 契约](chat.md)。
 
-| 层 | 目录 | 职责 | 可依赖 | 怎么测 |
-|---|---|---|---|---|
-| **L0 共享原语** | `src/shared/` | logger、ids、db(sqlite)、`sql-database`+`pg-worker`(PG 桥)、version、tracing | 无(纯基础设施) | 纯函数单测;**PG 桥契约测试(SQLite vs 真 PG 同一批 query)必须是 CI 硬门禁** |
-| **L1 契约** | `src/multiremi/contracts/` | 按域拆的 types + **唯一序列化器 `wire.ts`**(native 与 compat 两个 shaper) | L0 | round-trip 单测 + schema-drift(喂坏数据走 parseWithFallback)|
-| **L2 数据/Store** | `src/multiremi/store/` | 按域拆的 store 模块 + `StoreContext`(db+事件发射器+listener) + `schema.ts`(DDL) | L0,L1 | `new MultiremiStore(db)` + `:memory:`,每文件独立、各自 fresh DB |
-| **L3 服务/领域** | `src/multiremi/service/` | 用例编排:组合 store、发事件、经接口调 provider | L0,L1,L2,L5(接口) | 用例单测,mock provider/connector |
-| **L4 传输/适配** | `src/multiremi/api/`(Hono 按域 router)、`src/cli/` | HTTP 路由(native+compat 经 wire.ts)、CLI 薄分发 | L0–L3 | `createMultiremiApp({store})` + `app.request()`,无 socket/子进程 |
-| **L4 守护/运行时** | `src/multiremi/daemon/` | daemon、scheduler、client、repo-cache、task-failure、prompt | L0–L3,L5 | daemon-once smoke |
-| **L5 Provider** | `packages/acp-provider`(canonical)、`src/providers/*`(re-export 垫片) | Claude/Codex ACP | L0 | provider 构造/health 单测 + ACP smoke |
-| **L6 前端** | `apps/<console>`(**唯一一套,待定**) | Web UI | 只经 HTTP 调 L4 | Playwright e2e against 真后端 |
+**飞书聊天**：[controlPlaneConciergeHost / createFeishuTaskHandler](../apps/remi/cli/multiremi.ts)启动 connector；普通消息经 daemon client 提交平台 Chat/Task，再走上面的任务执行链。connector 从 task 事件流回复；去重、运行中 steering、取消与人工请求也使用平台 task。当前 foreground 不实例化 `packages/remi` 的 `Remi` core，不能以该库的 `_process()` 作为当前 bot 入口。
+工作区的 [Feishu bot 配置](../packages/server/src/store/repos/feishu-bot-repo.ts)指定 Agent 和 Runtime；
+bot 控制指令携带版本和期望状态。[concierge supervisor](../packages/server/src/worker/feishu-concierge.ts)经鉴权接口拉取 assignment 后串行协调 connector 的启动、停止与重试，应用凭据不随心跳下发。心跳还可领取持久化出站投递，由 connector 发送并回报；自动 Issue 话题及负责人轮次完成推送见[飞书接入契约](feishu-message-ingestion.md)。
 
-**Remi 助理侧**(与 multiremi 平级的产品,共享 L0/L1):`src/assistant/`
-`core/{routing,session,commands,recovery}`(拆自 core.ts)、`memory`、`conversation`、`mission`、`project`、`group`、`agents`、`queue`;`src/connectors/`(Feishu 适配)。
-**硬规则:`src/multiremi/*` 与 `src/assistant/*` 互不 import 对方 L2+,只共享 L0/L1。**
+## 存储与事务
 
----
+当前 Store 使用同步 `SqlDatabase` 接口。[openMultiremiDatabase](../packages/server/src/store/db/postgres.ts)
+根据 `MULTIREMI_DATABASE_URL` 选择 PostgreSQL，否则使用本地 SQLite。
+这是底层存储适配的选择；生产 server 启动还有[必要配置检查](dev/auth.md)，不能据此省略部署配置。
+PostgreSQL 的 `PgBridge.request` 用 `Atomics.wait` 等待 [pg-worker](../packages/server/src/store/db/pg-worker.ts)，worker 使用单连接。
+这是真实实现约束，不应被“整体 async/await”概述掩盖。
 
-## 4. 目标目录树
+该适配文件记录的动机是兼容已有同步 Store 调用；不能据此推断它仍适合当前并发负载。
+改为异步时需同时处理调用链与事务连接归属，不能只调大连接数。
+性能影响、现有基线脚本和待测项见[性能调查](dev/performance.md)。
 
-```text
-src/
-├─ shared/                      # L0 logger ids db sql-database pg-worker version tracing
-├─ multiremi/                   # 任务管理产品(后端)
-│  ├─ contracts/                # L1 types/*.ts + wire.ts(唯一序列化:native + compat)
-│  ├─ store/                    # L2 context.ts schema.ts events.ts + 按域: agents/issues/tasks-runtimes/projects/workspace-auth/automation/chat/attachments/analytics.ts + index.ts(facade,保 `new MultiremiStore(db)` 不变)
-│  ├─ service/                  # L3 用例编排
-│  ├─ api/                      # L4 server.ts + routers/*.ts(Hono app.route,native+compat)
-│  ├─ daemon/                   # L4 daemon client scheduler repo-cache task-failure prompt
-│  ├─ skills/                   # builtin-skills skill-import agent-templates
-│  └─ index.ts
-├─ assistant/                   # 个人助理产品
-│  ├─ core/                     # routing session commands recovery(拆自 core.ts)
-│  ├─ memory/ conversation/ mission/ project/ group/ agents/
-│  └─ queue/handlers/{conversation,memory,cron,mission}.ts(拆自 cron-bridge)
-├─ connectors/                  # L4 feishu 适配
-├─ providers/                   # L5 packages/acp-provider 的 re-export 垫片
-├─ plugins/ infra/ metrics/ imaging/ auth/   # 跨产品插件/基础设施
-├─ cli/                         # L4 薄解析+分发
-└─ main.ts  multiremi-main.ts   # 两个入口
+## 配置与能力定位
 
-packages/  acp-provider(canonical) feishu-channel(streaming/ 拆分) plugin-sdk
-apps/      <console>            # L6 唯一一套被跟踪的前端(待决策)
-tests/     multiremi/{store-*,api-*}.test.ts  contracts/*  assistant/*  e2e/  helpers.ts
-scripts/   docs/
-```
+- bot assignment 由工作区独立的 `multiremi_feishu_bot_configs` 记录关联 Agent/Runtime；实际任务通过 Agent 行组装执行参数。bot 凭据在控制面配置，daemon 环境仅承载连接和进程设置，见[配置说明](deploy/66-8-remi-environment.md)。
+- 当前运行时支持 Claude、Codex 和 [Antigravity](antigravity.md)：前两者通过 ACP，Antigravity 通过原生 `agy` CLI，统一输出 Remi 事件。认证方式按各 CLI 和[安装说明](../README.md)配置，不能把所有后端概括为“不需要 API key”。
+- Codex 与 Claude Code 的 Runtime 详情支持自定义模型连接，执行时注入隔离 Home；鉴权、任务快照与协议分别见 [Codex 连接](design/acp-codex-via-codex-acp.md) 和 [Claude Code 连接](design/acp-claude-via-claude-agent-acp.md)。
+- [MCP 组装](../packages/daemon/src/agent-runtime/mcp/ephemeral.ts)当前接受 `command` 形式的 stdio 服务；远程 HTTP 配置不能仅因存进 agent 字段就视为已注入。
+- 项目知识由[知识服务](../packages/server/src/project-knowledge/service.ts)和[知识路由](../packages/server/src/api/routers/knowledge.ts)提供；用户项目知识与本仓库开发文档分别维护。
 
----
+## 验证与修改边界
 
-## 5. 现状 → 新家(关键映射)
+| 修改范围 | 先检查的依据 |
+|---|---|
+| 包依赖与共享类型 | [package-boundaries.test.ts](../tests/arch/package-boundaries.test.ts)、[tsconfig.json](../tsconfig.json) |
+| HTTP 能力与 CLI | [仓库规则](../AGENTS.md)、[路由快照脚本](../scripts/snapshot-api-routes.ts)、[CLI 能力检查](../scripts/check-cli-capabilities.ts) |
+| 任务路由、重试与会话 | [tasks-repo.ts](../packages/server/src/store/repos/tasks-repo.ts) 与 [worker/daemon.ts](../packages/server/src/worker/daemon.ts) 的相关测试；发现方式见[测试指南](../TESTING.md) |
+| Chat/Issue 隔离、话题归属与飞书推送 | [claim wire 测试](../tests/unit/multiremi/multiremi-store-daemon-wire.test.ts)、[Issue 更新测试](../tests/unit/multiremi/multiremi-agent-issue-updates.test.ts)、[话题测试](../tests/unit/multiremi/multiremi-feishu-issue-topics.test.ts) |
+| 前端缓存与渲染 | [前端规则](../frontend/AGENTS.md)、[前端地图](dev/frontend.md) |
 
-| 现状 | 去向 | 关键说明 |
-|---|---|---|
-| `store.ts`(10.7k) | `store/<域>.ts` + `store/index.ts` facade + `store/schema.ts` | 按已验证的 9 个域簇拆;**先抽 `StoreContext`(db+events+listeners)再拆**;facade 保签名→273 处调用点零改 |
-| `api.ts`(9.1k) | `api/server.ts` + `api/routers/<域>.ts` | Hono `app.route()` 挂载;**34 条 compat 路由是"行为不同的一等公民",经 wire.ts 双 shaper,不可合并删除** |
-| `types.ts`(snake+camel 混) | `contracts/types/*` + `contracts/wire.ts` | 内部统一 camelCase,snake_case 只在 wire 边缘 |
-| `dashboard.ts`(5.1k) | 选定前端后**删/缩**(见待决策) | 选定 SPA 前作零依赖本地兜底 |
-| `core.ts`(1.1k) | `assistant/core/{routing,session,commands,recovery}` | 拆前**先写 characterization 测试**锁住现有行为(恢复逻辑脆弱)|
-| `queue/handlers/cron-bridge.ts`(774) | `assistant/queue/handlers/*`(每任务一文件) | |
-| `cli/multiremi.ts`(1991) | 保留薄解析;业务 helper 下沉到 daemon/service | 测试改从新位置 import |
-| `packages/feishu-channel/streaming.ts`(1.4k) | `streaming/{card-render,state-sync,transcript-map,acp-adapter}` | |
-| `multiremi/apps/web`+`packages/{core,ui,views}`(gitignore) | **待决策**:提升为 `apps/console`(入库)或删 | 最高优先级债务:CI 看不见 |
-| `web/`(Vite SPA + `remi-data.ts` 2.1k,已跟踪,含提交的 `dist/`) | **待决策**:作助理仪表盘留存或删 | `dist/` 不该入库 |
-| `tests/multiremi-core.test.ts`(11.4k) | `tests/multiremi/{store-*,api-*}.test.ts` + `tests/contracts/*` | 抽公共 fixture 到 `helpers.ts`;每文件独立 `:memory:` DB |
-
----
-
-## 6. 人 & Agent 协作规则(可执行)
-
-1. **依赖方向(硬规则 + lint)**:import 只能向下。`src/multiremi/*` 永不 import `src/assistant/*`/`connectors`/`mission`。**先用 `scripts/check-layers.ts` 跑出真实 import 图**(评审发现 `pipeline/skills` 是真实跨树边——必须显式归类,否则 lint 是摆设),CI 先 WARN、迁移末期转 ERROR。
-2. **X 住哪(定位规则)**:`<feature>.<layer>`。改 issues 的数据访问 → `store/issues.ts`;改 issues 的路由 → `api/routers/issues.ts`;改 issues 的类型 → `contracts/types/issues.ts`。同一词跨层,agent 凭名定位。
-3. **新代码进能拥有它的最低层**。想往 `api.ts` 加 SQL?停——它属于 `store/`。
-4. **一处序列化**:所有 snake↔camel / Go-wire 翻译只在 `contracts/wire.ts`。改字段=改一处。
-5. **文件预算** <500/硬顶 800;旧巨石只拆不加。
-6. **唯一实现**:provider 只在 `packages/acp-provider`(`src/providers/*` 是垫片,别 fork);后端只在 `src/multiremi`;前端定案后 `apps/` 只留一套,其余删不留。
-7. **测试镜像源码 + 单层可验证**:改 `store/issues.ts` → `tests/multiremi/store-issues.test.ts`(`:memory:`,不起服务);改路由 → `api-*.test.ts`(`app.request`)。**改 L2 跑该域单测,几乎永远不需要 e2e 验证局部改动。**
-8. **不许新增 `multica`/`Multimira`**;旧名只在明确标注的 migration 块里识别。
-9. **gitignore 不是家**:产品依赖的代码必须入库 + 进 CI 才能继续在其上开发。
-
----
-
-## 7. 测试策略(四层,各自独立可验)
-
-- **① 单元**(快,最多 `:memory:` SQLite):按域 store 模块、纯工具(ids/wire/task-failure)、助理域模块。每个拆出的文件配一个从巨石碾出的兄弟测试,**各自 fresh DB + teardown**(否则合跑过、单跑挂)。
-- **② 契约(层缝,收益最高)**:`wire.ts` round-trip;schema-drift(坏数据走 parseWithFallback);**parity-matrix 测试**(每个 Go 参考端点都有活的 Bun 路由,掉一个 CI 红);**PG 桥契约**(SQLite vs 真 PG 同一批 query——必须硬门禁,否则方言漂移无人察觉);**34 条 compat 路由的 golden 快照**(改 api 前先把现有字节快照下来,改完逐字节比对,防止 compat 行为悄悄变)。
-- **③ HTTP/服务**(无 socket/子进程):`createMultiremiApp({store})` + `app.request()` 按 router 测;用例测 mock provider/connector。
-- **④ e2e/smoke**(慢,门禁式):`e2e-multiremi.ts`、`e2e-frontend-ours.ts`、`smoke-multiremi-acp.ts`、daemon-smoke。
-- **CI 门禁**:每 PR 跑 ①②③ + 层 lint;e2e/smoke 在 release tag 跑。
-
----
-
-## 8. 迁移路线(增量、每步保绿;已并入评审修正)
-
-| 阶段 | 动作 | 风险 | 验证 |
-|---|---|---|---|
-| **P0 铺骨架不搬逻辑** | 建目标目录 + tsconfig 路径别名;加 `scripts/check-layers.ts`(**先跑真实 import 图**,WARN 模式);建 parity-matrix 骨架 | 近零 | `bun test` 不变绿;lint 报当前违规为警告 |
-| **P1 抽 L0 共享** | logger/version/ids/db/sql-database/pg-worker 移入 `src/shared`,旧路径留 re-export 垫片;**加 PG 桥契约测试并设为门禁** | 低(垫片保 import) | 绿 + PG 桥测试过 |
-| **P2 拆 store(facade 后)** | **先抽 `StoreContext`(db+events+listeners)**,再按域搬,`store/index.ts` 保 `new MultiremiStore(db)` 不变;**最耦合的 Tasks/Runtimes 放最后**,Analytics/Chat 等先行;每域搬完碾出对应测试 | 中(类大;每 PR 一域) | 每 PR 后绿;碾出的域测试 `:memory:` 独立过 |
-| **P3 拆 api → router** | handler 进 `api/routers/*`,`app.route()` 挂载;引入 `wire.ts` 双 shaper;**compat 当作保留的一等差异**(先 golden 快照,再搬,逐字节比对——不合并删除) | 中(compat 偏移) | 按 router HTTP 测 + golden 快照不变 + parity-matrix 不掉端点 |
-| **P4 拆 core/cron/streaming/cli** | core.ts→assistant/core/*(**先写 characterization 测试**);cron-bridge→每任务一文件;streaming 拆;cli 薄化 | core.ts 中高(恢复逻辑脆) | 新 characterization 测试搬前后都过 |
-| **P4.5 后端冻结点** | 确保 P0–P4 在**不动现有三套前端**下全部可发布、全绿 | — | 后端独立于前端决策可交付 |
-| **P5 前端定案(需人决策)** | 选定唯一 UI → 入库 `apps/console`(一次性 `multimira→multiremi` 改名)→ 删另两套 → 接 CI build + Playwright | 产品风险高、技术风险低 | 前端进 CI 构建;e2e 绿;gitignore 不再藏产品码 |
-| **P6 品牌 + 死码清扫** | 清 `multica`/`Multimira` 残留;未用导出检测;层 lint 转 ERROR | 低 | 绿;grep 仅剩标注的 migration 码 |
-
----
-
-## 9. 待决策项(需要人拍板,挡住相应阶段)
-
-1. **前端归宿(#1 决策)**:三套 UI 干一件事(`dashboard.ts` 已跟踪 / `web/frontend` 已跟踪 / Next.js console gitignore 未入 CI)。选一套删其余。倾向:把最完整的 Next.js console 提升入库——但代价是把 Next.js+pnpm 工具链引进 Bun 仓库,需确认团队接受这份长期构建复杂度。**(此决策不应阻塞 P0–P4 后端重构。)**
-2. **Remi vs Multiremi 主从**:一个产品(助理+任务管理作模块)还是两个产品共享库?决定 `src/assistant` 与 `src/multiremi` 是平级共享 L0/L1,还是 multiremi 最终独立成包。当前树假设"两产品一仓共享基座"。
-3. **Postgres 地位**:SAB+Atomics 同步桥是生产支持路径还是实验?现 CI 只测 SQLite。要么把 PG 桥契约测试设硬门禁,要么标实验、停止实时翻译 SQL 方言。
-4. **内置看板取舍**:选定 SPA 后,是否保留 `dashboard.ts` 作零依赖本地 daemon 兜底,还是删。
-5. **CLI 形态**:`multiremi` 与 `remi` 是两个二进制,还是 `multiremi` 收编为子命令。
-6. **wire 规范大小写**:内部统一 camelCase、snake_case 只在 wire 边缘(推荐),以便彻底删掉 types.ts 的双字段而非永久保留。
+链接和静态检查只提供定位依据。本页不宣称已经启动生产服务、通过全部测试或完成性能测量。
 
 ## 云友执行能力组
 
-云友通过 `execution_group_id` 选择执行能力组，`provider` 表示 Runtime 类型。系统默认按工作区、机器（优先使用 daemon ID）与 Runtime 类型生成稳定的 `eg_` 组标识；Runtime 也可配置自定义组标识，将同工作区、同类型的多个 Runtime 合并调度。自定义标识使用 1–128 位字母、数字、下划线、点、冒号或连字符，首位必须为字母或数字，`eg_` 前缀保留给默认组。旧机器身份补齐时保留默认组，已有同机器默认组时归并并迁移云友引用。将 Runtime 的 `execution_group_id` 设为 `null` 可恢复默认组；`execution_group_ids` 返回实际成员关系。通用 `any` Runtime 自动加入各引擎默认组，自定义组要求具体类型。
+[执行组存储](../packages/server/src/store/execution-groups.ts)与[调度](../packages/server/src/store/repos/tasks-repo.ts)共同管理执行能力组。云友通过 `execution_group_id` 选择执行能力组，`provider` 表示 Runtime 类型。系统默认按工作区、机器（优先使用 daemon ID）与 Runtime 类型生成稳定的 `eg_` 组标识；Runtime 也可配置自定义组标识，将同工作区、同类型的多个 Runtime 合并调度。自定义标识使用 1–128 位字母、数字、下划线、点、冒号或连字符，首位必须为字母或数字，`eg_` 前缀保留给默认组。旧机器身份补齐时保留默认组，已有同机器默认组时归并并迁移云友引用。将 Runtime 的 `execution_group_id` 设为 `null` 可恢复默认组；`execution_group_ids` 返回实际成员关系。通用 `any` Runtime 自动加入 Claude/Codex 默认组，自定义组要求具体类型。
 
 创建和编辑云友共用能力组选择器，显示组标识、成员和在线数量；也可选择「自动调度」，保留按引擎和归属在工作区内跨机器调度的原有行为。自动调度的模型与思考选项使用云友所有者可用的工作区目录。选择具体组时，模型及思考选项取各可执行成员（含离线成员）的有效连接目录交集：自定义连接优先，并保留 daemon 为配置模型实际探测到的思考能力，否则应用工作区网关；成员一致时才标记默认模型。组内任务领取及重领通过 `runtimeCanRunAgent` 复验成员关系、模型能力、类型、工作区和归属，并与项目设备和本机目录约束取交集。组离线或无可用成员时排队，不转到组外机器。
 

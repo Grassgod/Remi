@@ -1,47 +1,35 @@
-# Repository Guidelines
+# 前端 Agent 规则
 
-This file provides guidance to AI agents when working with code in this repository.
+先读[仓库级规则](../AGENTS.md)。本文件只补充 `frontend/` 的约束；当前结构与源码导航见[前端开发上下文](../docs/dev/frontend.md)。
 
-> **Single source of truth:** This file is a concise pointer document.
-> All authoritative architecture, coding rules, commands, and conventions
-> live in **CLAUDE.md** at the project root. Read that file first.
+## 包边界
 
-## Quick Reference
+- `packages/core/` 放 API、查询、纯业务逻辑及共享 Zustand store；不引入 `react-dom`、UI 库或 `process.env`。持久化通过 `StorageAdapter`，业务代码不直接访问 `localStorage`。
+- `packages/ui/` 放基础组件和样式，不依赖 `@multiremi/core`。
+- `packages/views/` 放业务页面和组件，不定义共享 store，不引入 `next/*` 或 `react-router-dom`；导航使用 `useNavigation()` / `AppLink`。
+- `apps/web/` 承接 Next.js 路由、服务端布局和浏览器配置；共享导航的框架适配放在 `apps/web/platform/navigation.tsx`。
+- 各包显式声明直接导入的外部依赖。共享版本引用根 `package.json` 的 `catalog`；安装与工作区命令遵循根文档。
 
-### Architecture
+## 状态与实时数据
 
-Go backend + monorepo frontend (pnpm workspaces + Turborepo) with shared packages.
+- TanStack Query 保存服务端数据；Zustand 保存筛选、草稿、选择等客户端状态。不要把查询结果复制进 store。
+- 工作区身份来自 URL，由工作区 layout 同步给平台层。工作区集合查询的 key 必须包含 `wsId`；资源查询沿用该领域现有 key 工厂及切换、删除清理规则。
+- 可复用的工作区查询/hook 接收 `wsId`，避免假定调用位置一定在页面 Provider 内。
+- Zustand selector 返回稳定引用；需要组合结果时使用浅比较。只持久化有长期价值的偏好与草稿，工作区数据使用分区存储。
+- WS 的服务端数据更新写入或失效 Query cache，不写入 Zustand。清理客户端选择、导航等副作用沿用现有领域处理器。
+- 新事件同时检查 `realtime/sync/` 的精确处理器和 `prefix-refresh.ts`，避免重复刷新；保留流式消息的批处理与订阅清理。
+- 乐观更新必须有可恢复的缓存快照和失败回滚。创建、删除及依赖服务器结果的导航等待请求成功；发送消息保留 pending/失败重试状态。
 
-- `server/` — Go backend (Chi router, sqlc, gorilla/websocket)
-- `apps/web/` — Next.js frontend (App Router)
-- `apps/desktop/` — Electron desktop app
-- `packages/core/` — Headless business logic (Zustand stores, React Query hooks, API client)
-- `packages/ui/` — Atomic UI components (shadcn/Base UI, zero business logic)
-- `packages/views/` — Shared business pages/components
-- `packages/tsconfig/` — Shared TypeScript config
+## API 与 UI
 
-### State Management (critical)
+- API 响应通过 `packages/core/api/schema.ts` 的 schema 边界解析，不把裸 JSON 强制断言为业务类型。展示读取可显式降级；命令响应不能把格式异常当成成功，使用适当的严格解析。
+- 对未知服务端枚举保留展示兜底；修改响应消费逻辑时覆盖缺字段、错误类型等边界。
+- 优先复用现有基础组件、`packages/ui/styles/` 的语义 token，以及 `packages/views/i18n/` 的翻译入口；修改文案同步检查 `locales/` 的语言键。
+- 保持长文本截断、滚动容器、加载态与空态可用。新增全局路由需检查工作区 slug 路由冲突。
 
-- **React Query** owns all server state (issues, members, agents, inbox, workspace list)
-- **Zustand** owns all client state (current workspace selection, view filters, drafts, modals)
-- All Zustand stores live in `packages/core/` — never in `packages/views/` or app directories
-- WS events invalidate React Query — never write directly to stores
+## 测试
 
-### Package Boundaries (hard rules)
-
-- `packages/core/` — zero react-dom, zero localStorage, zero process.env
-- `packages/ui/` — zero `@multiremi/core` imports
-- `packages/views/` — zero `next/*`, zero `react-router-dom`, use `NavigationAdapter` for routing
-- `apps/web/platform/` — only place for Next.js APIs
-
-### Commands
-
-```bash
-make dev              # Auto-setup + start everything
-pnpm typecheck        # TypeScript check
-pnpm test             # TS unit tests (Vitest)
-make test             # Go tests
-make check            # Full verification pipeline
-```
-
-See CLAUDE.md for the complete command reference.
+- 测试跟随实现：数据/状态在 `packages/core/`，业务组件在 `packages/views/`，Next.js 接线在 `apps/web/`。
+- `packages/views/` 测试不 mock `next/*` 或 `react-router-dom`；通过导航适配器和 `@multiremi/core/api` 隔离平台及网络。
+- Mock Zustand store 时保留可调用 selector 与 `.getState()` 的形状；沿用同目录已有 fixture。
+- 先运行受影响包的针对性测试，再按影响范围扩展检查；不为文档修改启动服务或执行完整端到端流程。实际测试环境和入口见[开发上下文](../docs/dev/frontend.md#验证入口)。

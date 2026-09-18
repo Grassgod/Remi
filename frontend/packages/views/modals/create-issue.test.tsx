@@ -236,17 +236,18 @@ vi.mock("../issues/components", () => ({
   DueDatePicker: () => <div data-testid="due-date-picker" />,
 }));
 
-vi.mock("../projects/components/project-picker", () => ({
+vi.mock("../runtimes/components/runtime-workspace-picker", () => ({
   // Fixed picks so tests can flip between projects with different defaults.
-  ProjectPicker: ({ onUpdate }: { onUpdate?: (u: { project_id?: string | null }) => void }) => (
+  WorkLocationPicker: ({ onChange }: { onChange?: (u: { project_id: string | null; runtime_workspace_id: string | null }) => void }) => (
     <div data-testid="project-picker">
-      <button type="button" onClick={() => onUpdate?.({ project_id: "prj_squad" })}>
+      <button type="button" onClick={() => onChange?.({ project_id: null, runtime_workspace_id: "rws-local" })}>Pick local directory</button>
+      <button type="button" onClick={() => onChange?.({ project_id: "prj_squad", runtime_workspace_id: null })}>
         Pick squad project
       </button>
-      <button type="button" onClick={() => onUpdate?.({ project_id: "prj_plain" })}>
+      <button type="button" onClick={() => onChange?.({ project_id: "prj_plain", runtime_workspace_id: null })}>
         Pick plain project
       </button>
-      <button type="button" onClick={() => onUpdate?.({ project_id: "prj_agent" })}>
+      <button type="button" onClick={() => onChange?.({ project_id: "prj_agent", runtime_workspace_id: null })}>
         Pick agent project
       </button>
     </div>
@@ -371,6 +372,18 @@ describe("CreateIssueModal", () => {
     });
   });
 
+  it("sends a local directory instead of the previously selected project", async () => {
+    const user = userEvent.setup();
+    renderModal(<CreateIssueModal onClose={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "Pick squad project" }));
+    await user.click(screen.getByRole("button", { name: "Pick local directory" }));
+    await user.type(screen.getByPlaceholderText("Issue title"), "Inspect local files");
+    await user.click(screen.getByRole("button", { name: "Create Issue" }));
+    await waitFor(() => expect(mockCreateIssue).toHaveBeenCalledWith(expect.objectContaining({
+      project_id: null, runtime_workspace_id: "rws-local", assignee_id: null,
+    })));
+  });
+
   it("shows success feedback with a direct path to the new issue", async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
@@ -394,7 +407,8 @@ describe("CreateIssueModal", () => {
         due_date: undefined,
         attachment_ids: undefined,
         parent_issue_id: undefined,
-        project_id: undefined,
+        project_id: null,
+        runtime_workspace_id: null,
       });
     });
 
@@ -441,7 +455,8 @@ describe("CreateIssueModal", () => {
         due_date: undefined,
         attachment_ids: undefined,
         parent_issue_id: undefined,
-        project_id: undefined,
+        project_id: null,
+        runtime_workspace_id: null,
       });
     });
 

@@ -49,6 +49,7 @@ const DOMAIN_ALIASES: Record<string, string> = {
   pins: "pin",
   projects: "project",
   runtimes: "runtime",
+  "runtime-workspaces": "runtime",
   skills: "skill",
   squads: "squad",
   tasks: "task",
@@ -488,6 +489,12 @@ function mappedResourceCommand(route: string): string | null {
 function mappedOperationsCommand(route: string): string | null {
   const exact: Record<string, string> = {
     "GET /api/runtimes": "runtime.list",
+    "GET /api/runtime-workspaces": "runtime.workspace.list",
+    "GET /api/runtimes/:id/workspaces": "runtime.workspace.list",
+    "POST /api/runtimes/:id/workspaces": "runtime.workspace.create",
+    "GET /api/runtime-workspaces/:id": "runtime.workspace.get",
+    "PATCH /api/runtime-workspaces/:id": "runtime.workspace.rename",
+    "DELETE /api/runtime-workspaces/:id": "runtime.workspace.archive",
     "GET /api/multiremi/runtimes": "runtime.list",
     "POST /api/multiremi/runtimes": "runtime.create",
     "GET /api/execution-groups": "runtime.group.list",
@@ -578,6 +585,8 @@ function mappedOperationsCommand(route: string): string | null {
     "POST /auth/google": "context.auth.google",
     "POST /auth/send-code": "context.auth.send-code",
     "POST /auth/verify-code": "context.auth.verify-code",
+    "POST /auth/password": "context.auth.password",
+    "POST /api/auth/password-accounts": "context.auth.password-account.set",
     "POST /auth/logout": "context.auth.logout",
   };
   if (exact[route]) return exact[route]!;

@@ -6,6 +6,7 @@ import { daemonRuntimeId, isTerminalStatus } from "@multiremi/store/helpers.js";
 import { agentRoleAtLeast } from "@multiremi/store/agent-role.js";
 import { FeedbackRepo } from "@multiremi/store/repos/feedback-repo.js";
 import { AccessTokensRepo } from "@multiremi/store/repos/access-tokens-repo.js";
+import { PasswordAccountsRepo, type ConfigurePasswordAccountInput } from "@multiremi/store/repos/password-accounts-repo.js";
 import { IssueSharesRepo } from "@multiremi/store/repos/issue-shares-repo.js";
 import { TaskCapabilityMonitor } from "@multiremi/store/task-capability-monitor.js";
 import {
@@ -88,6 +89,7 @@ import {
   type IssueMutationActivityContext,
 } from "@multiremi/store/repos/issues-repo.js";
 import { IssueWorkspacesRepo } from "@multiremi/store/repos/issue-workspaces-repo.js";
+import { RuntimeWorkspacesRepo } from "@multiremi/store/repos/runtime-workspaces-repo.js";
 import {
   SessionArchivesRepo,
   type SessionArchiveStatusSnapshot,
@@ -440,6 +442,7 @@ export class MultiremiStore {
   private ctx: StoreContext;
   private feedback: FeedbackRepo;
   private accessTokens: AccessTokensRepo;
+  private passwordAccounts: PasswordAccountsRepo;
   private issueShares: IssueSharesRepo;
   private notificationChannels: NotificationChannelsRepo;
   private notificationDispatcher: OutboundNotificationDispatcher;
@@ -482,6 +485,7 @@ export class MultiremiStore {
   private issues: IssuesRepo;
   private issueWorkspaces: IssueWorkspacesRepo;
   private sessionArchives: SessionArchivesRepo;
+  readonly runtimeWorkspaces: RuntimeWorkspacesRepo;
   private runtimes: RuntimesRepo;
   private daemonProfiles: DaemonProfilesRepo;
   private runtimeProvisions: RuntimeProvisionsRepo;
@@ -522,6 +526,7 @@ export class MultiremiStore {
     this.agents = new AgentsSkillsRepo(this.ctx);
     this.agentPlugins = new AgentPluginsRepo(this.ctx);
     this.workspaces = new WorkspacesRepo(this.ctx);
+    this.passwordAccounts = new PasswordAccountsRepo(this.db, this.workspaces, this.accessTokens);
     this.scm = new ScmRepo(this.ctx);
     this.feishuIngest = new FeishuIngestRepo(this.ctx);
     this.feishuBot = new FeishuBotRepo(this.ctx);
@@ -545,6 +550,7 @@ export class MultiremiStore {
     this.issueWorkspaces = new IssueWorkspacesRepo(this.ctx);
     this.sessionArchives = new SessionArchivesRepo(this.ctx);
     this.runtimes = new RuntimesRepo(this.ctx);
+    this.runtimeWorkspaces = new RuntimeWorkspacesRepo(this.ctx);
     this.daemonProfiles = new DaemonProfilesRepo(this.ctx);
     this.runtimeProvisions = new RuntimeProvisionsRepo(this.ctx);
     this.daemonRetirement = new DaemonRetirementRepo(this.ctx);
@@ -1106,6 +1112,14 @@ runMigrations(this.db);
 
   getCurrentUser(userId?: string | null): MultiremiUser {
     return this.workspaces.getCurrentUser(userId);
+  }
+
+  configurePasswordAccount(input: ConfigurePasswordAccountInput) {
+    return this.passwordAccounts.configure(input);
+  }
+
+  loginWithPassword(email: string, password: string) {
+    return this.passwordAccounts.login(email, password);
   }
 
   getUser(id: string): MultiremiUser | null {

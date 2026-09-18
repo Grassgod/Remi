@@ -31,7 +31,7 @@ export async function agent(positional: string[], options: CliOptions): Promise<
     const agentId = positional[1]?.trim();
     if (!agentId) {
       throw new Error(
-        "usage: multiremi agent edit <agent-id> [--name <name>] [--description <text>] [--instructions <text>] [--avatar-url <url>] [--provider claude|codex] [--model <model>] [--thinking-level <level>] [--visibility private|workspace] [--max-concurrent-tasks <n>]",
+        "usage: multiremi agent edit <agent-id> [--name <name>] [--description <text>] [--instructions <text>] [--avatar-url <url>] [--provider claude|codex|antigravity] [--model <model>] [--thinking-level <level>] [--visibility private|workspace] [--max-concurrent-tasks <n>]",
       );
     }
     await agentEdit(agentId, options);

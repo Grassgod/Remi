@@ -168,5 +168,7 @@ function buildPreviewArtifact(mode: TaskPromptMode) {
       },
     ],
   };
-  return buildTaskPromptArtifact(task, options);
+  // This is a canonical template without a target Runtime. Actual daemon
+  // prompts use the execution host's platform, not the API server's OS.
+  return buildTaskPromptArtifact(task, { ...options, platform: "linux" });
 }

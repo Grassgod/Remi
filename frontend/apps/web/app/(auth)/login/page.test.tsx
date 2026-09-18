@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -99,7 +99,10 @@ describe("LoginPage", () => {
     searchParamsState.params = new URLSearchParams();
     authStateRef.state.user = null;
     authStateRef.state.isLoading = false;
+    vi.stubEnv("NEXT_PUBLIC_LOCAL_PROFILE", "");
   });
+
+  afterEach(() => vi.unstubAllEnvs());
 
   it("renders Feishu-only login for regular (non-CLI) web users", () => {
     render(<LoginPage />, { wrapper: createWrapper() });
@@ -110,9 +113,45 @@ describe("LoginPage", () => {
     ).toBeInTheDocument();
     // No email OTP form on regular web login — it survives only for the CLI.
     expect(screen.queryByLabelText("Email")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Local session key (24 hours)")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Password")).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Continue" })
     ).not.toBeInTheDocument();
+  });
+
+  it.each(["dev", "stable"])("exposes local token login for the explicit %s profile on localhost", async (profile) => {
+    vi.stubEnv("NEXT_PUBLIC_LOCAL_PROFILE", profile);
+    render(<LoginPage />, { wrapper: createWrapper() });
+    expect(await screen.findByLabelText("Local session key (24 hours)")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Password")).toBeInTheDocument();
+  });
+
+  it("keeps token login hidden on a public host even for a local build profile", () => {
+    vi.stubEnv("NEXT_PUBLIC_LOCAL_PROFILE", "dev");
+    const previousLocation = window.location;
+    Object.defineProperty(window, "location", { configurable: true, value: { ...previousLocation, hostname: "remi.example.com" } });
+    try {
+      render(<LoginPage />, { wrapper: createWrapper() });
+      expect(screen.queryByLabelText("Local session key (24 hours)")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("Password")).not.toBeInTheDocument();
+    } finally {
+      Object.defineProperty(window, "location", { configurable: true, value: previousLocation });
+    }
+  });
+
+  it("exposes password login at the configured stable LAN host", async () => {
+    vi.stubEnv("NEXT_PUBLIC_LOCAL_PROFILE", "stable");
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "http://192.168.40.12:13000");
+    const previousLocation = window.location;
+    Object.defineProperty(window, "location", { configurable: true, value: { ...previousLocation, hostname: "192.168.40.12" } });
+    try {
+      render(<LoginPage />, { wrapper: createWrapper() });
+      expect(await screen.findByLabelText("Password")).toBeInTheDocument();
+      expect(screen.queryByLabelText("Local session key (24 hours)")).not.toBeInTheDocument();
+    } finally {
+      Object.defineProperty(window, "location", { configurable: true, value: previousLocation });
+    }
   });
 
   it("does not call sendCode when email is empty", async () => {

@@ -77,6 +77,8 @@ import type {
   RecordTaskPromptInput,
 } from "@multiremi/contracts/types.js";
 
+import { RuntimeWorkspacesRepo, RuntimeWorkspaceError } from "./runtime-workspaces-repo.js";
+
 const log = createLogger("multiremi-store");
 
 type Row = Record<string, unknown>;
@@ -109,11 +111,11 @@ const ISSUE_WORKSPACE_MIN_CLI_VERSION = [0, 2, 26] as const;
 
 // Chat binding is immutable, but an archived/deleted Project no longer routes
 // its ordinary turns. Issue routing retains its existing Project semantics.
-const TASK_ROUTING_PROJECT_SQL = `COALESCE(project_issue.project_id, (
+const TASK_ROUTING_PROJECT_SQL = `CASE WHEN t.runtime_workspace_id IS NOT NULL THEN NULL ELSE COALESCE(project_issue.project_id, (
   SELECT chat_project.id FROM multiremi_projects chat_project
   WHERE chat_project.id = project_chat.project_id
     AND chat_project.workspace_id = t.workspace_id AND chat_project.archived_at IS NULL
-))`;
+)) END`;
 
 const PROJECT_DEVICE_ROUTING_ELIGIBILITY_SQL = `(
   (
@@ -224,13 +226,14 @@ function executionScopeSql(alias: string): string {
 }
 
 function sameExecutionLaneSql(queued: string, active: string): string {
-  return `(${active}.agent_id = ${queued}.agent_id AND (
+  return `((${queued}.runtime_workspace_id IS NOT NULL AND ${active}.runtime_workspace_id = ${queued}.runtime_workspace_id)
+    OR (${active}.agent_id = ${queued}.agent_id AND (
     (${queued}.issue_session_id IS NOT NULL AND ${active}.issue_session_id = ${queued}.issue_session_id
       AND ${executionScopeSql(queued)} = ${executionScopeSql(active)})
     OR (${queued}.chat_session_id IS NOT NULL AND ${active}.chat_session_id = ${queued}.chat_session_id)
     OR (${queued}.issue_id IS NOT NULL AND ${queued}.issue_session_id IS NULL
       AND ${active}.issue_id = ${queued}.issue_id AND ${active}.issue_session_id IS NULL)
-  ))`;
+  )))`;
 }
 
 function runtimeSupportsParallelExecution(runtime: MultiremiRuntime): boolean {
@@ -544,6 +547,24 @@ export class TasksRepo {
     const holdsWorkspace = issueId
       ? (issueSession?.withCode ? false : requestedHoldsWorkspace ?? issueSession?.holdsWorkspace ?? true)
       : true;
+    const surfaceWorkspaceId = chatSession ? chatSession.runtimeWorkspaceId : holdsWorkspace ? issue?.runtimeWorkspaceId : null;
+    const explicitWorkspaceId = input.runtimeWorkspaceId ?? input.runtime_workspace_id;
+    if (issueId && !holdsWorkspace && explicitWorkspaceId != null) {
+      throw new RuntimeWorkspaceError("A task without workspace ownership cannot select a runtime workspace", 409);
+    }
+    if ((chatSession || issue) && explicitWorkspaceId != null && explicitWorkspaceId !== surfaceWorkspaceId) {
+      throw new RuntimeWorkspaceError("Task runtime workspace must match its Chat or Issue", 409);
+    }
+    const runtimeWorkspaceId = surfaceWorkspaceId ?? explicitWorkspaceId ?? null;
+    const runtimeWorkspace = runtimeWorkspaceId
+      ? new RuntimeWorkspacesRepo(this.ctx).require(runtimeWorkspaceId, agent.workspaceId) : null;
+    if (runtimeWorkspace && agent.runtimeId) {
+      const pinned = this.ctx.runtimes().getRuntime(agent.runtimeId);
+      if (pinned?.daemonId !== runtimeWorkspace.daemonId) {
+        throw new RuntimeWorkspaceError("Agent is bound to a different machine", 409);
+      }
+    }
+
     let runtimeId = resolveOptionalStringField(input, "runtimeId", "runtime_id", agent.runtimeId);
     if (chatSession && !issue && this.ctx.feishuBot().getFeishuIssueIdForChatSession(chatSession.id)) {
       // A private turn sharing a topic Chat must not inherit its execution host.
@@ -577,6 +598,7 @@ export class TasksRepo {
       inheritedExecutionFingerprint ?? withRuntimeProfileFingerprint(expectedExecutionFingerprint, chatProfile),
       currentPluginSnapshot.length > 0 || Boolean(chatProfile),
       chatSession?.projectId,
+      runtimeWorkspaceId,
     );
     if (issueSession?.withCode) {
       const parentRuntime = issueSession.codeRuntimeId
@@ -590,6 +612,13 @@ export class TasksRepo {
     }
     if (affinity.runtimeId) runtimeId = affinity.runtimeId;
     if (!input.resetProviderSession) inheritChatSession = affinity.inheritChatSession;
+    if (runtimeWorkspace && runtimeId) {
+      const candidate = this.ctx.runtimes().getRuntime(runtimeId);
+      if (candidate?.daemonId !== runtimeWorkspace.daemonId) {
+        runtimeId = null;
+        inheritChatSession = false;
+      }
+    }
 
     // Product-session affinity is per (session, agent), not per Issue and not
     // shared with other agents. A valid lane pins this task to the runtime that
@@ -612,6 +641,7 @@ export class TasksRepo {
         currentPluginSnapshot.length > 0 || Boolean(laneProfile),
       );
       const laneRuntimeCompatible = laneRuntime != null
+        && (!runtimeWorkspace || laneRuntime.daemonId === runtimeWorkspace.daemonId)
         && this.ctx.runtimes().runtimeCanRunAgent(laneRuntime, agent);
       const laneResumable =
         !input.resetProviderSession
@@ -669,7 +699,7 @@ export class TasksRepo {
     );
     this.ctx.db.run(
       `INSERT INTO multiremi_tasks (
-        id, task_kind, agent_id, runtime_id, issue_id, issue_session_id, issue_session_generation, holds_workspace, chat_session_id,
+        runtime_workspace_id, id, task_kind, agent_id, runtime_id, issue_id, issue_session_id, issue_session_generation, holds_workspace, chat_session_id,
         trigger_comment_id, trigger_summary, requesting_user_name,
         requesting_user_profile_description, workspace_id, status, priority, prompt,
         attempt, max_attempts, parent_task_id, continued_from_task_id, issue_creation_restricted, delegation_id, delegated_by_agent_id,
@@ -677,10 +707,11 @@ export class TasksRepo {
         provider, plugin_snapshot, execution_fingerprint, codex_profile, claude_profile,
         session_id, work_dir, created_at, updated_at
       ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?,
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?,
         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       )`,
       [
+        runtimeWorkspaceId,
         id,
         taskKind,
         input.agentId,
@@ -909,6 +940,7 @@ export class TasksRepo {
     executionFingerprint: string,
     hasPlugins: boolean,
     chatProjectId?: string | null,
+    runtimeWorkspaceId?: string | null,
   ): { runtimeId: string | null; inheritChatSession: boolean } {
     if (!issue && chatSession && this.ctx.feishuBot().getFeishuIssueIdForChatSession(chatSession.id)) {
       // Preserve the topic's files in storage, but never lend them to private turns.
@@ -926,7 +958,7 @@ export class TasksRepo {
     const availableChatProjectId = boundChatProject?.workspaceId === agent.workspaceId && !boundChatProject.archivedAt
       ? boundChatProject.id : null;
     const chatWorkspace = resolveChatWorkspace(this.ctx, chatSession);
-    const directoryProjectId = issue?.projectId ?? (chatWorkspace?.mode === "managed" ? null : availableChatProjectId);
+    const directoryProjectId = runtimeWorkspaceId ? null : issue?.projectId ?? (chatWorkspace?.mode === "managed" ? null : availableChatProjectId);
     const assignment = holdsWorkspace && directoryProjectId && issue?.issueKind !== "intake"
       ? (chatWorkspace && !issue ? chatWorkspace.assignment
         : selectChatLocalDirectory(this.ctx.projects().listProjectResources(directoryProjectId)))
@@ -1075,6 +1107,7 @@ export class TasksRepo {
   getTaskWithAgent(id: string): MultiremiTaskWithAgent | null {
     let task = this.getTask(id);
     if (!task) return null;
+    if (task.issueId && !task.holdsWorkspace) task = { ...task, runtimeWorkspaceId: null };
     if (task.executionFingerprint === CHAT_ISSUE_DECOUPLED_FINGERPRINT) task = { ...task, sessionId: null };
     // Retained task audits may still carry a pre-MUL-301 private Chat binding.
     // Never let that old association re-enter a daemon claim or eager checkout.
@@ -1091,28 +1124,29 @@ export class TasksRepo {
       };
     }
     const issue = task.issueId ? this.ctx.issues().getIssue(task.issueId) : null;
-    const scheduleTarget = task.autopilotRunId ? this.ctx.autopilots().getAutopilotRun(task.autopilotRunId)?.scheduleTarget : null;
     const chat = task.chatSessionId ? this.ctx.chat().getChatSession(task.chatSessionId) : null;
-    const chatProjectId = chat?.projectId ?? null;
-    const projectId = issue?.projectId ?? (scheduleTarget?.kind === "project" ? scheduleTarget.id : null) ?? chatProjectId;
+    const scheduleTarget = task.autopilotRunId ? this.ctx.autopilots().getAutopilotRun(task.autopilotRunId)?.scheduleTarget : null;
+    const chatProjectId = task.runtimeWorkspaceId ? null : chat?.projectId ?? null;
+    const projectId = task.runtimeWorkspaceId ? null : issue?.projectId ?? (scheduleTarget?.kind === "project" ? scheduleTarget.id : null) ?? chatProjectId;
     const candidateProject = projectId ? this.ctx.projects().getProject(projectId) : null;
     const project = candidateProject?.workspaceId === task.workspaceId && !(ordinaryChat && candidateProject.archivedAt)
       ? candidateProject : null;
     // Decide once from the inherited path. Clearing rejected lineage first
     // would erase the evidence that this task must stay in managed mode.
-    const chatWorkspace = ordinaryChat ? resolveChatWorkspace(this.ctx, chat, task) : null;
+    const chatWorkspace = ordinaryChat && !task.runtimeWorkspaceId ? resolveChatWorkspace(this.ctx, chat, task) : null;
     if (chatWorkspace?.changed) task = { ...task, sessionId: null, workDir: null };
     const issueSession = task.issueSessionId ? this.ctx.issueSessions().getIssueSession(task.issueSessionId) : null;
     const resources = project ? this.ctx.projects().listProjectResources(project.id) : [];
     const projectResources = chatWorkspace?.mode === "managed"
       ? resources.filter((resource) => resource.resourceType !== "local_directory") : resources;
-    const projectContexts = issue?.issueKind === "intake"
+    const projectContexts = !task.runtimeWorkspaceId && issue?.issueKind === "intake"
       ? this.resolveIntakeProjectContexts(task.workspaceId, project)
       : [];
     const boundChatProject = ordinaryChat && chat?.workspaceId === task.workspaceId
       && chatProjectId && chatProjectId === project?.id;
     return {
       ...task,
+      runtimeWorkspace: task.runtimeWorkspaceId ? new RuntimeWorkspacesRepo(this.ctx).get(task.runtimeWorkspaceId) : null,
       agent: this.ctx.agents().getAgent(task.agentId),
       ...(issueSession?.withCode ? { issueSession, issue_session: issueSession } : {}),
       issue,
@@ -1127,7 +1161,7 @@ export class TasksRepo {
       // Unbound Chat discovers repositories through the CLI. Bound Chat keeps
       // the existing Project catalog for display and on-demand checkout; its
       // separate explicit-only list controls automatic checkout in the worker.
-      repos: scheduleTarget || (task.holdsWorkspace === false && !issueSession?.withCode) || (task.chatSessionId && !task.issueId && !project)
+      repos: task.runtimeWorkspaceId || scheduleTarget || (task.holdsWorkspace === false && !issueSession?.withCode) || (task.chatSessionId && !task.issueId && !project)
         ? []
         : projectContexts.length
           ? normalizeRepos(projectContexts.flatMap((context) => context.repos))
@@ -1702,6 +1736,12 @@ export class TasksRepo {
     task: MultiremiTaskWithAgent,
   ): boolean {
     return task.agent != null
+      && (!task.runtimeWorkspaceId || (
+        runtime.metadata.runtime_workspaces === 1
+        && task.runtimeWorkspace?.daemonId === runtime.daemonId
+        && task.runtimeWorkspace?.workspaceId === task.workspaceId
+        && !task.runtimeWorkspace?.archivedAt
+      ))
       && !task.agent.archivedAt
       && this.ctx.runtimes().runtimeCanRunAgent(runtime, task.agent)
       && this.runtimeHasReadyTaskPlugins(runtime, task)
@@ -1803,15 +1843,22 @@ export class TasksRepo {
       const fingerprint = this.ctx.agentPlugins().getAgentPluginCapabilityRevision(agent.id);
       const issue = task.issueId ? this.ctx.issues().getIssue(task.issueId) : null;
       const profile = chat.sessionRuntimeId ? this.runtimeProfileForAgent(chat.sessionRuntimeId, agent) : null;
-      const affinity = this.resolveTaskAffinity(agent, chat, issue, task.holdsWorkspace, withRuntimeProfileFingerprint(fingerprint, profile), plugins.length > 0 || Boolean(profile));
+      const affinity = this.resolveTaskAffinity(agent, chat, issue, task.holdsWorkspace, withRuntimeProfileFingerprint(fingerprint, profile), plugins.length > 0 || Boolean(profile), chat.projectId, task.runtimeWorkspaceId);
       // A managed fallback must release the previous assignment's directory
       // pin. A resumable session still supplies normal machine affinity above.
       // Pre-upgrade Feishu turns may still carry the connector's Runtime pin.
       // Recompute those from the Agent while preserving strong affinity above.
       const resetRuntime = task.sessionId || Boolean(row.feishu_transport)
         || resolveChatWorkspace(this.ctx, chat)?.mode === "managed";
-      const runtimeId = affinity.runtimeId ?? (resetRuntime ? agent.runtimeId : task.runtimeId);
-      const inherit = affinity.inheritChatSession;
+      let runtimeId = affinity.runtimeId ?? (resetRuntime ? agent.runtimeId : task.runtimeId);
+      let inherit = affinity.inheritChatSession;
+      if (task.runtimeWorkspaceId && runtimeId) {
+        const workspace = new RuntimeWorkspacesRepo(this.ctx).require(task.runtimeWorkspaceId, task.workspaceId);
+        if (this.ctx.runtimes().getRuntime(runtimeId)?.daemonId !== workspace.daemonId) {
+          runtimeId = null;
+          inherit = false;
+        }
+      }
       if (task.runtimeId === runtimeId && task.sessionId === (inherit ? chat.sessionId : null) && task.workDir === (inherit ? chat.workDir : null)) continue;
       this.ctx.db.run(`UPDATE multiremi_tasks SET runtime_id = ?, session_id = ?, work_dir = ?
         WHERE id = ? AND status = 'queued' AND execution_fingerprint IS NULL`,
@@ -1838,6 +1885,8 @@ export class TasksRepo {
       runtime.workspaceId ?? "local",
       runtimeSupportsIssueWorkspaces(runtime) ? 1 : 0,
       runtimeSupportsParallelExecution(runtime) ? 1 : 0,
+      runtime.metadata.runtime_workspaces === 1 ? 1 : 0,
+      runtime.daemonId ?? "",
       ...daemonAliases,
       ...daemonAliases,
       ...daemonAliases,
@@ -1898,8 +1947,13 @@ export class TasksRepo {
            ${workspaceFilter}
            AND (t.issue_id IS NULL OR t.holds_workspace = 0 OR ? = 1)
            AND (t.issue_id IS NULL OR ? = 1)
+           AND (t.runtime_workspace_id IS NULL OR (? = 1 AND EXISTS (
+             SELECT 1 FROM multiremi_runtime_workspaces rw
+             WHERE rw.id = t.runtime_workspace_id AND rw.workspace_id = t.workspace_id
+               AND rw.daemon_id = ? AND rw.archived_at IS NULL
+           )))
            AND (
-             t.issue_id IS NULL
+             t.runtime_workspace_id IS NOT NULL OR t.issue_id IS NULL
              OR t.holds_workspace = 0
              OR NOT EXISTS (
                SELECT 1 FROM multiremi_issue_workspaces issue_workspace
@@ -2589,6 +2643,7 @@ export class TasksRepo {
     const replacement = this.createTaskWithinWorkspaceLock({
       agentId: current.agentId,
       taskKind: current.taskKind,
+      runtimeWorkspaceId: current.issueId && !current.holdsWorkspace ? null : current.runtimeWorkspaceId,
       runtimeId: null,
       issueId: detachedChatIssue ? null : current.issueId,
       issueSessionId: detachedChatIssue ? null : current.issueSessionId,
@@ -2733,7 +2788,7 @@ export class TasksRepo {
     if (!parent.failureReason || !AUTO_RETRY_FAILURE_REASONS.has(parent.failureReason)) return null;
     if (parent.attempt >= parent.maxAttempts) return null;
     if (parent.autopilotRunId) return null;
-    if (!parent.issueId && !parent.chatSessionId) return null;
+    if (!parent.issueId && !parent.chatSessionId && !parent.runtimeWorkspaceId) return null;
 
     // Resume-safe only if the parent's machine can STILL run this agent. If the
     // agent switched engine/owner (or the runtime changed) since the parent ran,
@@ -2764,7 +2819,7 @@ export class TasksRepo {
     const invalidatedChatWorkspace = Boolean(parent.chatSessionId && !parent.issueId
       && !chatWorkspaceLineageCurrent(this.ctx, this.ctx.chat().getChatSession(parent.chatSessionId), parent));
     const invalidatedChatLineage = parent.executionFingerprint === CHAT_ISSUE_DECOUPLED_FINGERPRINT || invalidatedChatWorkspace;
-    const resumeSafe = !detachedChatIssue && !invalidatedChatLineage
+    const resumeSafe = Boolean(parent.issueId || parent.chatSessionId) && !detachedChatIssue && !invalidatedChatLineage
       && !RESUME_UNSAFE_FAILURE_REASONS.has(parent.failureReason) && parentRuntimeUsable;
     // If the Agent changed provider before this failure was reported, the old
     // provider/plugin snapshot can no longer be executed with the Agent's
@@ -2791,6 +2846,7 @@ export class TasksRepo {
       // A retained session or Runtime credential snapshot must return to its
       // original machine; otherwise let an eligible pool Runtime claim it.
       runtimeId: resumeSafe || (inheritExecutionSnapshot && hasRuntimeProfile) ? parent.runtimeId : null,
+      runtimeWorkspaceId: parent.issueId && !parent.holdsWorkspace ? null : parent.runtimeWorkspaceId,
       issueId: detachedChatIssue ? null : parent.issueId,
       issueSessionId: detachedChatIssue ? null : parent.issueSessionId,
       chatSessionId: parent.chatSessionId,
@@ -4164,6 +4220,7 @@ function toTask(row: Row): MultiremiTask {
     taskKind: row.task_kind === "quick_create" ? "quick_create" : "direct",
     agentId: String(row.agent_id),
     runtimeId: nullableString(row.runtime_id),
+    runtimeWorkspaceId: nullableString(row.runtime_workspace_id),
     provider: nullableString(row.provider),
     pluginSnapshot: parseJson<MultiremiTaskPluginSnapshotEntry[]>(row.plugin_snapshot, []),
     codexProfile: parseJson(row.codex_profile, null),
