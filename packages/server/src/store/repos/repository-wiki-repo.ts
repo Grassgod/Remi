@@ -315,11 +315,18 @@ export class RepositoryWikiRepo {
       return this.getById(entry.docId)!;
       });
       if (storageJobId) {
+        const row = this.ctx.db.query("SELECT * FROM multiremi_repository_wiki_storage_jobs WHERE id = ?").get(storageJobId) as Row | null;
+        if (!row) throw new Error("repository wiki storage job not found");
+        const job = toRepositoryWikiStorageJob(row);
+        // Keep the remaining work in the same transaction as the canonical
+        // pointers, so a restart cannot replay already checkpointed pages.
+        const finished = new Set(entries.map(entry => entry.docId));
+        job.manifest.promotions = job.manifest.promotions.filter(entry => !finished.has(entry.docId));
         const updated = this.ctx.db.run(
           `UPDATE multiremi_repository_wiki_storage_jobs
-           SET state = 'cleanup', last_error = NULL, updated_at = ?
+           SET state = ?, manifest = ?, last_error = NULL, updated_at = ?
            WHERE id = ?`,
-          [nowIso(), storageJobId],
+          [job.manifest.promotions.length ? "pending" : "cleanup", toJson(job.manifest), nowIso(), storageJobId],
         );
         if (updated.changes !== 1) throw new Error("repository wiki storage job not found");
       }

@@ -2945,6 +2945,7 @@ export type MultiremiKnowledgeCompilationStatus =
   | "validating"
   | "published"
   | "published_with_warnings"
+  | "blocked"
   | "failed"
   | "noop";
 export type MultiremiKnowledgeCompilationAction =
