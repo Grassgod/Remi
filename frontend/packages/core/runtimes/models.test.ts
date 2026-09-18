@@ -5,9 +5,21 @@ import { QueryClient } from "@tanstack/react-query";
 import type { RuntimeModel } from "../types";
 const listFleetModels = vi.hoisted(() => vi.fn());
 vi.mock("../api", () => ({ api: { listFleetModels } }));
-import { executionTargetModelsOptions, fleetModelsOptions, isModelExecutionUnknown, isModelUnavailable, runtimeModelsKeys } from "./models";
+import { executionTargetModelsOptions, fleetModelsOptions, isFallbackModelUnavailable, isModelExecutionUnknown, isModelUnavailable, runtimeModelsKeys } from "./models";
 
 describe("execution target model catalog", () => {
+  it("requires fallback selection to be executable in the target's authoritative catalog", () => {
+    const models: RuntimeModel[] = [
+      { id: "ready", label: "Ready", execution_status: "available" },
+      { id: "offline", label: "Offline", execution_status: "unavailable" },
+    ];
+    expect(isFallbackModelUnavailable("claude", "ready", models, "ready")).toBe(false);
+    expect(isFallbackModelUnavailable("claude", "offline", models, "ready")).toBe(true);
+    expect(isFallbackModelUnavailable("claude", "absent", models, "ready")).toBe(true);
+    expect(isFallbackModelUnavailable("codex", "absent", models, "unknown")).toBe(true);
+    expect(isFallbackModelUnavailable("claude", "custom", models)).toBe(false);
+    expect(isFallbackModelUnavailable("claude", "", models, "ready")).toBe(false);
+  });
   it("only marks absent explicit Codex models unavailable after an authoritative load", () => {
     const models = [{ id: "selectable", label: "Selectable" }];
     expect(isModelUnavailable("codex", "inventory-only", models, "ready")).toBe(true);

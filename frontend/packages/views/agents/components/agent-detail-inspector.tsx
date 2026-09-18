@@ -93,7 +93,7 @@ export function AgentDetailInspector({
   const { models, defaultThinking } = useExecutionTargetModels(wsId ?? "", provider, agent.runtime_id, agent.execution_group_id, agent.id);
   const showIntegrations = useHasIntegrations(agent.id);
   const switchTarget = (next: ExecutionTarget) =>
-    update({ execution_group_id: next.executionGroupId || null, provider: next.provider, model: "", thinking_level: "" });
+    update({ execution_group_id: next.executionGroupId || null, provider: next.provider, model: "", thinking_level: "", fallback_model: "", fallback_thinking_level: "" });
   const switchModel = (next: string) => {
     const data: Record<string, unknown> = { model: next };
     if (
@@ -101,6 +101,19 @@ export function AgentDetailInspector({
       !supportsThinkingLevel(models, next, agent.thinking_level ?? "", defaultThinking)
     ) {
       data.thinking_level = "";
+    }
+    if ((next || models.find((entry) => entry.default)?.id) === (agent.fallback_model ?? agent.fallbackModel)) {
+      data.fallback_model = "";
+      data.fallback_thinking_level = "";
+    }
+    return update(data);
+  };
+  const fallbackModel = agent.fallback_model ?? agent.fallbackModel ?? "";
+  const primaryModel = agent.model || models.find((entry) => entry.default)?.id || "";
+  const switchFallback = (next: string) => {
+    const data: Record<string, unknown> = { fallback_model: next };
+    if (!next || !supportsThinkingLevel(models, next, agent.fallback_thinking_level ?? agent.fallbackThinkingLevel ?? "", defaultThinking)) {
+      data.fallback_thinking_level = "";
     }
     return update(data);
   };
@@ -157,6 +170,32 @@ export function AgentDetailInspector({
           canEdit={canEdit}
           onChange={(v) => update({ thinking_level: v })}
         />
+        <PropRow label={t(($) => $.fallback.model_label)} interactive={false}>
+          <ModelPicker
+            runtimeId={agent.runtime_id}
+            executionGroupId={agent.execution_group_id}
+            agentId={agent.id}
+            wsId={wsId ?? ""}
+            provider={provider}
+            value={fallbackModel}
+            fallback
+            excludedModel={primaryModel}
+            canEdit={canEdit}
+            onChange={switchFallback}
+          />
+        </PropRow>
+        {fallbackModel && <ThinkingPropRow
+          runtimeId={agent.runtime_id}
+          executionGroupId={agent.execution_group_id}
+          agentId={agent.id}
+          wsId={wsId ?? ""}
+          provider={provider}
+          model={fallbackModel}
+          value={agent.fallback_thinking_level ?? agent.fallbackThinkingLevel ?? ""}
+          label={t(($) => $.fallback.thinking_label)}
+          canEdit={canEdit}
+          onChange={(v) => update({ fallback_thinking_level: v })}
+        />}
         <PropRow label={t(($) => $.inspector.prop_visibility)} interactive={false}>
           <VisibilityPicker
             value={agent.visibility}

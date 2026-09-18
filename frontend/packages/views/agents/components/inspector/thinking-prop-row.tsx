@@ -18,6 +18,7 @@ export function ThinkingPropRow({
   value,
   canEdit,
   onChange,
+  label,
 }: {
   wsId: string;
   runtimeId?: string | null;
@@ -28,6 +29,7 @@ export function ThinkingPropRow({
   value: string;
   canEdit: boolean;
   onChange: (next: string) => Promise<void> | void;
+  label?: string;
 }) {
   const { t } = useT("agents");
   const { models, modelCatalogStatus, defaultThinking, isLoading, isError } = useExecutionTargetModels(wsId, provider, runtimeId, executionGroupId, agentId);
@@ -39,14 +41,14 @@ export function ThinkingPropRow({
   if (levels.length === 0 && !value) {
     if (provider !== "claude" && provider !== "codex") return null;
     return (
-      <PropRow label={t(($) => $.inspector.prop_thinking)} interactive={false}>
+      <PropRow label={label ?? t(($) => $.inspector.prop_thinking)} interactive={false}>
         <ThinkingStatus modelUnavailable={unavailable} modelExecutionUnknown={executionUnknown} thinking={thinking} isLoading={isLoading} isError={isError} />
       </PropRow>
     );
   }
 
   return (
-    <PropRow label={t(($) => $.inspector.prop_thinking)} interactive={false}>
+    <PropRow label={label ?? t(($) => $.inspector.prop_thinking)} interactive={false}>
       <div className="flex min-w-0 flex-wrap items-center gap-1">
       <ThinkingPicker
         value={value}

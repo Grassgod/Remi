@@ -51,12 +51,14 @@ vi.mock("./model-dropdown", () => ({
   ModelDropdown: ({
     value,
     onChange,
+    fallback,
   }: {
     value: string;
     onChange: (value: string) => void;
+    fallback?: boolean;
   }) => (
     <input
-      aria-label="Model"
+      aria-label={fallback ? "Fallback model" : "Model"}
       value={value}
       onChange={(event) => onChange(event.target.value)}
     />
@@ -271,6 +273,37 @@ describe("CreateAgentDialog (execution targets)", () => {
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
     expect(onCreate.mock.calls[0]?.[0]).toMatchObject({ execution_group_id: "group-codex", provider: "codex", model: undefined });
     expect(onCreate.mock.calls[0]?.[0]).not.toHaveProperty("thinking_level");
+  });
+
+  it("saves a distinct fallback with its own supported reasoning effort", async () => {
+    mockListFleetModels.mockResolvedValue(fleetWithCapacity({ claude: 2 }, { claude: CLAUDE_MODELS }));
+    const { onCreate } = renderDialog();
+    fireEvent.change(screen.getByPlaceholderText(/e\.g\./i), { target: { value: "Research" } });
+    await waitFor(() => expect(mockListFleetModels).toHaveBeenCalled());
+    fireEvent.change(screen.getByLabelText("Fallback model"), { target: { value: "claude-haiku" } });
+    fireEvent.change(screen.getByRole("group", { name: "Fallback reasoning effort" }).querySelector("select")!, { target: { value: "low" } });
+    fireEvent.click(createButton());
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0]?.[0]).toMatchObject({ fallback_model: "claude-haiku", fallback_thinking_level: "low" });
+  });
+
+  it("blocks a fallback matching the catalog default and clears fallback on target change", async () => {
+    mockListFleetModels.mockResolvedValue(fleetWithCapacity({ claude: 2, codex: 1 }, { claude: CLAUDE_MODELS }));
+    const { onCreate } = renderDialog(makeTemplate({ provider: "claude", model: "", fallback_model: "claude-sonnet", fallback_thinking_level: "high" }));
+    await waitFor(() => expect(screen.getByText("Must differ from the primary model")).toBeInTheDocument());
+    expect(createButton()).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "codex" }));
+    fireEvent.click(createButton());
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0]?.[0]).toMatchObject({ fallback_model: undefined, fallback_thinking_level: undefined });
+  });
+
+  it("rejects a fallback effort unsupported by its own model", async () => {
+    mockListFleetModels.mockResolvedValue(fleetWithCapacity({ claude: 2 }, { claude: CLAUDE_MODELS }));
+    const { onCreate } = renderDialog(makeTemplate({ provider: "claude", model: "claude-sonnet", fallback_model: "claude-haiku", fallback_thinking_level: "high" }));
+    await waitFor(() => expect(mockListFleetModels).toHaveBeenCalled());
+    expect(createButton()).toBeDisabled();
+    expect(onCreate).not.toHaveBeenCalled();
   });
 
   it("duplicate mode inherits the template's engine", async () => {

@@ -16,6 +16,7 @@ export function ThinkingField({
   isError,
   modelUnavailable,
   modelExecutionUnknown,
+  label,
 }: {
   value: string;
   levels: RuntimeModelThinkingLevel[];
@@ -25,6 +26,7 @@ export function ThinkingField({
   isError?: boolean;
   modelUnavailable?: boolean;
   modelExecutionUnknown?: boolean;
+  label?: string;
 }) {
   const { t } = useT("agents");
   const labelId = useId();
@@ -32,7 +34,7 @@ export function ThinkingField({
   return (
     <div>
       <Label id={labelId} className="text-xs text-muted-foreground">
-        {t(($) => $.inspector.prop_thinking)}
+        {label ?? t(($) => $.inspector.prop_thinking)}
       </Label>
       <div
         role="group"

@@ -57,6 +57,17 @@ function renderPicker(props: Partial<React.ComponentProps<typeof ModelPicker>> =
 }
 
 describe("ModelPicker", () => {
+  it("shows an explicit unconfigured fallback to viewers and prevents selecting the primary", async () => {
+    renderPicker({ fallback: true, canEdit: false });
+    expect(screen.getByText("Not configured")).toBeInTheDocument();
+    expect(screen.queryByRole("button")).toBeNull();
+    cleanup();
+
+    const { onChange } = renderPicker({ fallback: true, excludedModel: "claude-opus-4-6" });
+    fireEvent.click(screen.getByRole("button", { name: /Fallback model/ }));
+    expect(await screen.findByRole("button", { name: /Claude Opus 4.6/ })).toBeDisabled();
+    expect(onChange).not.toHaveBeenCalled();
+  });
   it.each([true, false])("shows an unavailable saved model without changing it (editable %s)", async (canEdit) => {
     mockListFleetModels.mockResolvedValue({ providers: [{ provider: "codex", model_catalog_status: "ready", models: [{ id: "available", label: "Available" }] }] });
     const { onChange } = renderPicker({ provider: "codex", value: "inventory-only", canEdit });

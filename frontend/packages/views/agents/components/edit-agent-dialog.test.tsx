@@ -93,12 +93,14 @@ vi.mock("./model-dropdown", () => ({
   ModelDropdown: ({
     value,
     onChange,
+    fallback,
   }: {
     value: string;
     onChange: (value: string) => void;
+    fallback?: boolean;
   }) => (
     <input
-      aria-label="Model"
+      aria-label={fallback ? "Fallback model" : "Model"}
       value={value}
       onChange={(event) => onChange(event.target.value)}
     />
@@ -302,7 +304,7 @@ describe("EditAgentDialog", () => {
   });
 
   it("clears target-specific model and thinking settings when changing targets", async () => {
-    const { onSave } = renderDialog();
+    const { onSave } = renderDialog(makeAgent({ fallback_model: "claude-opus", fallback_thinking_level: "high" }));
 
     fireEvent.click(screen.getByRole("button", { name: "codex" }));
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
@@ -313,7 +315,43 @@ describe("EditAgentDialog", () => {
       execution_group_id: "group-codex",
       model: "",
       thinking_level: "",
+      fallback_model: "",
+      fallback_thinking_level: "",
     });
+  });
+
+  it("persists fallback selection and explicit clearing without changing unrelated fields", async () => {
+    const { onSave } = renderDialog();
+    fireEvent.change(screen.getByLabelText("Fallback model"), { target: { value: "claude-opus" } });
+    expect(screen.getByRole("group", { name: "Fallback reasoning effort" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ fallback_model: "claude-opus" })));
+  });
+
+  it("clears the saved fallback and effort, and prevents choosing the primary", async () => {
+    const { onSave } = renderDialog(makeAgent({ fallback_model: "claude-opus", fallback_thinking_level: "high" }));
+    fireEvent.change(screen.getByLabelText("Fallback model"), { target: { value: "claude-sonnet" } });
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Fallback model"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ fallback_model: "", fallback_thinking_level: "" })));
+  });
+
+  it("preserves a saved unavailable fallback on unrelated edits", async () => {
+    catalog.models = [{ id: "old", label: "Old", execution_status: "unavailable" }];
+    const { onSave } = renderDialog(makeAgent({ provider: "codex", model: "", thinking_level: "", fallback_model: "old" }));
+    fireEvent.change(screen.getByLabelText("Description"), { target: { value: "Updated" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ description: "Updated" })));
+    expect(onSave.mock.calls[0]?.[0]).not.toHaveProperty("fallback_model");
+  });
+
+  it("blocks a newly selected unavailable fallback", () => {
+    catalog.models = [{ id: "old", label: "Old", execution_status: "unavailable" }];
+    const { onSave } = renderDialog(makeAgent({ provider: "codex", model: "", thinking_level: "" }));
+    fireEvent.change(screen.getByLabelText("Fallback model"), { target: { value: "old" } });
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    expect(onSave).not.toHaveBeenCalled();
   });
 
   it("clears an effort that the newly selected model does not support", async () => {
