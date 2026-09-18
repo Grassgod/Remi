@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { accessSync, constants, existsSync, mkdirSync, statSync, lstatSync, realpathSync, appendFileSync, chmodSync, copyFileSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, type Dirent } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, statSync, lstatSync, realpathSync, appendFileSync, chmodSync, copyFileSync, readFileSync, readdirSync, renameSync, rmSync, utimesSync, writeFileSync, type Dirent } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import type { RepoSpec } from "@daemon/contracts/types.js";
@@ -354,6 +354,10 @@ export class MultiremiRepoCache {
       if (existsSync(snapshotPath)) {
         // Revalidate snapshots created before the symlink containment guard.
         makeTreeReadOnly(snapshotPath);
+        // GC shares this lock and uses the root mtime as last access. A failed
+        // touch must reject preparation rather than hand out an expired tree.
+        const now = new Date();
+        utimesSync(snapshotPath, now, now);
         return { path: snapshotPath, commit, ...resolution, created: false };
       }
 
@@ -390,6 +394,8 @@ export class MultiremiRepoCache {
         removeFailedSnapshotTree(published ? snapshotPath : temporaryPath);
         throw error;
       }
+      const now = new Date();
+      utimesSync(snapshotPath, now, now);
       return { path: snapshotPath, commit, ...resolution, created: true };
     }, params.signal);
   }
@@ -575,17 +581,38 @@ export class MultiremiRepoCache {
     fn: () => Promise<T> | T,
     signal?: AbortSignal,
   ): Promise<T> {
-    const release = await acquireRepoCacheLock(
-      barePath,
-      this.options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS,
-      this.options.staleLockMs ?? DEFAULT_STALE_LOCK_MS,
+    return await this.runExclusiveForBarePath(barePath, fn, signal);
+  }
+
+  /** Share snapshot creation's lock and configured budgets with maintenance. */
+  async runExclusiveForBarePath<T>(
+    barePath: string,
+    fn: () => Promise<T> | T,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    return await withRepoCacheLock(barePath, fn, {
+      timeoutMs: this.options.lockTimeoutMs,
+      staleLockMs: this.options.staleLockMs,
       signal,
-    );
-    try {
-      return await fn();
-    } finally {
-      release();
-    }
+    });
+  }
+}
+
+export async function withRepoCacheLock<T>(
+  barePath: string,
+  fn: () => Promise<T> | T,
+  options: { timeoutMs?: number; staleLockMs?: number; signal?: AbortSignal } = {},
+): Promise<T> {
+  const release = await acquireRepoCacheLock(
+    barePath,
+    options.timeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS,
+    options.staleLockMs ?? DEFAULT_STALE_LOCK_MS,
+    options.signal,
+  );
+  try {
+    return await fn();
+  } finally {
+    release();
   }
 }
 
