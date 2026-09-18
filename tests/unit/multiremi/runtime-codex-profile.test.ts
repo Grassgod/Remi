@@ -165,6 +165,7 @@ describe("Runtime Codex profiles", () => {
     const { store, runtime } = setup();
     process.env.MULTIREMI_PROVIDER_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
     const saved = store.setRuntimeCodexProfile(runtime.id, apiProfile, "first-private-key")!;
+    store.updateRuntimeModels(runtime.id, [{ id: "custom-alternative", label: "Alternative", provider: "codex", default: false }], saved);
     const agent = store.createAgent({ name: "Custom", provider: "codex", model: "custom-alternative" });
     const frozen = { ...saved, model: "custom-alternative" };
     const task = store.createTask({ agentId: agent.id, issueId: store.createIssue({ title: "Retry profile" }).id, prompt: "work" });
@@ -179,7 +180,30 @@ describe("Runtime Codex profiles", () => {
     expect(retry.runtimeId).toBe(runtime.id);
     expect(retry.executionFingerprint).toBe(claimed.executionFingerprint);
     expect(store.getRuntimeCodexProfileKey(runtime.id, retry.codexProfile!.credential_id!)).toBe("first-private-key");
+    const later = store.createTask({ agentId: agent.id, prompt: "Needs the new model", priority: 10 });
     expect(store.claimTask(runtime.id)?.codexProfile).toEqual(frozen);
+    expect(store.getTask(later.id)?.status).toBe("queued");
+  });
+
+  it("rechecks current thinking against the frozen model before claiming a profile retry", () => {
+    const { store, runtime } = setup();
+    store.setRuntimeCodexProfile(runtime.id, profile);
+    store.updateRuntimeModels(runtime.id, [{ id: "custom-alternative", label: "Alternative", provider: "codex",
+      default: false, thinking: { supportedLevels: [{ value: "low", label: "Low" }] } }], profile);
+    const agent = store.createAgent({ name: "Custom", provider: "codex", model: "custom-alternative", thinkingLevel: "low" });
+    const chat = store.createChatSession({ agentId: agent.id });
+    const first = store.sendChatMessage(chat.id, { body: "First" }).task;
+    expect(store.claimTask(runtime.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.failTask(first.id, { error: "Runtime unavailable", failureReason: "runtime_offline" });
+    const retry = store.listTasks().find(task => task.parentTaskId === first.id)!;
+    store.updateAgent(agent.id, { thinkingLevel: "high" });
+    expect(store.claimTask(runtime.id)).toBeNull();
+    expect(store.getTask(retry.id)?.status).toBe("queued");
+    store.updateAgent(agent.id, { thinkingLevel: "low" });
+    expect(store.claimTask(runtime.id)).toMatchObject({
+      id: retry.id, codexProfile: { ...profile, model: "custom-alternative" }, agent: { thinkingLevel: "low" },
+    });
   });
 
   for (const provider of ["codex", "claude"] as const) {

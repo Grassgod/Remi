@@ -29,6 +29,13 @@ until a compatible Runtime reports it. Claims recheck current capabilities and
 skip incompatible queued work so another runnable task can proceed. Existing
 ownership, capacity and session-affinity constraints still apply.
 
+Custom-connection retries keep their frozen model and credentials on the
+original host. A thinking override still requires matching reported capabilities
+for that connection. After a workspace transition, a destination with a custom
+connection must support the frozen model; a native destination uses and checks
+the current Agent model. Queue filtering is per Task so an incompatible new
+turn does not hide a compatible frozen retry from the same Agent.
+
 ## Shared code, private execution state
 
 Repository checkouts remain under the existing `issues/<issue-key>` root and

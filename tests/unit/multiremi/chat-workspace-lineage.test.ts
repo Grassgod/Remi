@@ -217,6 +217,35 @@ describe("Chat selects one ordered local directory", () => {
 
 describe("Chat workspace assignment lineage", () => {
   for (const provider of ["codex", "claude"] as const) {
+    it(`checks the actual ${provider} model when a retry moves to a native Runtime`, () => {
+      const store = createStore();
+      const metadata = { codex_profiles: 1, claude_profiles: 1, agent_plugin_protocol: 1 };
+      const previous = store.registerRuntime({ name: "Previous", provider, daemonId: "previous", metadata });
+      const destination = store.registerRuntime({ name: "Native", provider, daemonId: "destination", metadata,
+        models: [{ id: "selected-model", label: "Selected model", provider, default: false }] });
+      const profile = { name: "previous", base_url: "http://127.0.0.1:8001/v1", model: "selected-model",
+        env_key: provider === "codex" ? "REMI_CODEX_MODEL_TEST" : "REMI_CLAUDE_MODEL_TEST" };
+      if (provider === "codex") store.setRuntimeCodexProfile(previous.id, profile);
+      else store.setRuntimeClaudeProfile(previous.id, profile);
+      const agent = store.createAgent({ name: "Chat", provider, model: "selected-model" });
+      const project = store.createProject({ title: "Project" });
+      store.createProjectDevice(project.id, { daemonId: "previous" });
+      store.updateDaemonDedicated("local", "previous", true, "local");
+      const chat = store.createChatSession({ agentId: agent.id, projectId: project.id });
+      const first = store.sendChatMessage(chat.id, { body: "First" }).task;
+      expect(store.claimTask(previous.id)?.id).toBe(first.id);
+      store.startTask(first.id);
+      store.failTask(first.id, { error: "Runtime unavailable", failureReason: "runtime_offline" });
+      const retry = store.listTasks().find(task => task.parentTaskId === first.id)!;
+      store.updateAgent(agent.id, { model: "later-selection" });
+      store.archiveProject(project.id);
+      expect(store.claimTask(destination.id)).toBeNull();
+      expect(store.getTask(retry.id)?.status).toBe("queued");
+      store.updateRuntimeModels(destination.id, [{ id: "later-selection", label: "Later selection", provider, default: false }]);
+      const claimed = store.claimTask(destination.id)!;
+      expect(claimed).toMatchObject({ id: retry.id, agent: { model: "later-selection" }, codexProfile: null, claudeProfile: null });
+    });
+
     for (const priorProfile of [true, false]) {
       it(`keeps selected ${provider} models while a workspace transition replaces host credentials (prior profile: ${priorProfile})`, () => {
         const store = createStore();
@@ -234,6 +263,9 @@ describe("Chat workspace assignment lineage", () => {
           if (priorProfile) store.setRuntimeClaudeProfile(previous.id, profile);
           store.setRuntimeClaudeProfile(destination.id, nextProfile);
         }
+        const models = [{ id: "selected-model", label: "Selected model", provider, default: false }];
+        store.updateRuntimeModels(previous.id, models, store.getRuntimeExecutionProfile(previous.id, provider));
+        store.updateRuntimeModels(destination.id, models, store.getRuntimeExecutionProfile(destination.id, provider));
         const agent = store.createAgent({ name: "Chat", provider, model: "selected-model" });
         const project = store.createProject({ title: "Project" });
         store.createProjectDevice(project.id, { daemonId: "previous" });
