@@ -25,7 +25,7 @@ afterEach(() => {
   resetMultiremiTestEnv();
 });
 
-function scaffold() {
+function scaffold(provider: "claude" | "codex" = "codex") {
   const store = createLocalStore();
   const owner = store.getCurrentUser();
   store.getOrCreateUser({
@@ -34,11 +34,11 @@ function scaffold() {
     email: owner.email,
     name: "Workspace Owner",
   });
-  const agent = store.createAgent({ name: "Remi", provider: "codex", workspaceId: "local" });
+  const agent = store.createAgent({ name: "Remi", provider, workspaceId: "local" });
   store.registerRuntime({
     id: "rt_bot",
-    name: "codex",
-    provider: "codex",
+    name: provider,
+    provider,
     workspaceId: "local",
     daemonId: "n37-066-008-hehuajie",
   });
@@ -57,6 +57,67 @@ function scaffold() {
 }
 
 describe("Feishu bot standard Task bridge", () => {
+  for (const [from, to, explicitModel] of [
+    ["claude", "codex", "gpt-5.6-sol"],
+    ["codex", "claude", "claude-opus-5"],
+  ] as const) {
+    for (const model of ["", explicitModel]) {
+      for (const previousTurn of ["none", "queued", "completed"] as const) {
+        it(`schedules ${from} -> ${to} with model=${model || "default"} and ${previousTurn} prior turn`, () => {
+          const { store, agent, config } = scaffold(from);
+          store.registerRuntime({ id: "rt_executor", name: to, provider: to, workspaceId: "local",
+            daemonId: "another-machine" });
+          store.reportFeishuBotRuntimeStatus("local", "rt_bot", {
+            appliedRevision: config.revision, state: "online",
+          });
+          const submit = (id: string) => store.submitFeishuBotMessage("local", "rt_bot", {
+            revision: config.revision, externalSessionKey: "oc_provider_switch", chatType: "p2p",
+            chatId: "oc_provider_switch", externalMessageId: id, senderUnionId: "on_owner",
+            deliveryMode: "native_cot_v1", text: `Message ${id}`,
+          });
+          const previous = previousTurn === "none" ? null : submit("om_before");
+          if (previousTurn === "completed") {
+            expect(store.claimTask("rt_bot")?.id).toBe(previous!.taskId);
+            store.startTask(previous!.taskId);
+            store.completeTask(previous!.taskId, { output: "Previous answer", sessionId: "sess_previous" });
+            const reply = store.claimFeishuBotOutbound("local", "rt_bot", undefined, true, true)!;
+            expect(store.reportFeishuBotOutbound("local", "rt_bot", reply.id, {
+              claimToken: reply.claimToken, status: "sent", externalMessageId: "om_previous_reply",
+            })).toBe(true);
+          }
+          store.updateAgent(agent.id, { provider: to, model });
+          if (previousTurn === "queued") {
+            // Old code could create a transport-pinned Task after the Agent
+            // changed provider. Reproduce that stored state across an upgrade.
+            db!.run("UPDATE multiremi_tasks SET runtime_id = 'rt_bot' WHERE id = ?", [previous!.taskId]);
+          }
+          const next = submit("om_after");
+          if (previous) expect(next.chatSessionId).toBe(previous.chatSessionId);
+          if (previousTurn === "queued") expect(next.taskId).toBe(previous!.taskId);
+          expect(store.claimTask("rt_bot")).toBeNull();
+          const claimed = store.claimTask("rt_executor");
+          expect(claimed?.id).toBe(next.taskId);
+          expect(claimed?.sessionId).toBeNull();
+          expect(claimed?.agent?.provider).toBe(to);
+          store.startTask(next.taskId);
+          store.consumeTaskSteerMessages(next.taskId, store.listTaskSteerMessages(next.taskId).map(message => message.id));
+          store.completeTask(next.taskId, { output: "Answer after switch", sessionId: "sess_new_provider" });
+          // Execution can move machines; the configured connector still owns replies.
+          expect(store.claimFeishuBotOutbound("local", "rt_executor", undefined, true, true)).toBeNull();
+          const reply = store.claimFeishuBotOutbound("local", "rt_bot", undefined, true, true)!;
+          expect(reply.taskId).toBe(next.taskId);
+          expect(store.reportFeishuBotOutbound("local", "rt_bot", reply.id, {
+            claimToken: reply.claimToken, status: "sent", externalMessageId: "om_new_reply",
+          })).toBe(true);
+          const followup = submit("om_followup");
+          expect(store.claimTask("rt_executor")).toMatchObject({
+            id: followup.taskId, sessionId: "sess_new_provider",
+          });
+        });
+      }
+    }
+  }
+
   for (const path of ["p2p", "group", "canonical-topic"] as const) {
     it(`rejects shared Chat binding creation and rolls back ${path}`, () => {
       const { store, config } = scaffold();

@@ -1620,7 +1620,10 @@ export class TasksRepo {
   /** Queued user turns inherit the last completed turn at claim time. Retries
    * (attempt > 1) keep their explicitly chosen resume/reset behavior. */
   private refreshQueuedChatAffinity(workspaceId: string): void {
-    const rows = this.ctx.db.query(`SELECT t.id FROM multiremi_tasks t WHERE t.workspace_id = ?
+    const rows = this.ctx.db.query(`SELECT t.id,
+      EXISTS (SELECT 1 FROM multiremi_feishu_bot_deliveries d
+        WHERE d.task_id = t.id AND d.workspace_id = t.workspace_id) AS feishu_inbound
+      FROM multiremi_tasks t WHERE t.workspace_id = ?
       AND t.chat_session_id IS NOT NULL AND t.status = 'queued' AND t.execution_fingerprint IS NULL AND t.attempt = 1
       AND EXISTS (SELECT 1 FROM multiremi_chat_messages m WHERE m.task_id = t.id AND m.role = 'user')`).all(workspaceId) as Row[];
     for (const row of rows) {
@@ -1635,7 +1638,11 @@ export class TasksRepo {
       const affinity = this.resolveTaskAffinity(agent, chat, issue, task.holdsWorkspace, withRuntimeProfileFingerprint(fingerprint, profile), plugins.length > 0 || Boolean(profile));
       // A managed fallback must release the previous assignment's directory
       // pin. A resumable session still supplies normal machine affinity above.
-      const runtimeId = affinity.runtimeId ?? (task.sessionId || resolveChatWorkspace(this.ctx, chat)?.mode === "managed" ? agent.runtimeId : task.runtimeId);
+      // Pre-upgrade Feishu turns may still carry the connector's Runtime pin.
+      // Recompute those from the Agent while preserving strong affinity above.
+      const resetRuntime = task.sessionId || Boolean(row.feishu_inbound)
+        || resolveChatWorkspace(this.ctx, chat)?.mode === "managed";
+      const runtimeId = affinity.runtimeId ?? (resetRuntime ? agent.runtimeId : task.runtimeId);
       const inherit = affinity.inheritChatSession;
       if (task.runtimeId === runtimeId && task.sessionId === (inherit ? chat.sessionId : null) && task.workDir === (inherit ? chat.workDir : null)) continue;
       this.ctx.db.run(`UPDATE multiremi_tasks SET runtime_id = ?, session_id = ?, work_dir = ?

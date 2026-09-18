@@ -819,7 +819,8 @@ export class FeishuBotRepo {
       } else {
         task = this.ctx.tasks().createTaskWithinTransaction({
           agentId: routeAgent.agentId,
-          runtimeId,
+          // The selected Runtime owns the connector transport. Task execution
+          // follows the routed Agent and normal Chat/session affinity instead.
           chatSessionId,
           issueId: nullableString(binding.issue_id),
           workspaceId,
