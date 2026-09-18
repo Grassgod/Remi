@@ -657,6 +657,8 @@ export interface RuntimeModel {
   label: string;
   provider?: string;
   default?: boolean;
+  /** Whether the execution target can select this model (separate from display inventory). */
+  execution_status?: "available" | "unavailable" | "unknown";
   /**
    * Per-model reasoning/effort catalog discovered by the daemon. Currently
    * populated for claude, codex, and opencode runtimes; omitted (or undefined)
@@ -723,7 +725,7 @@ export interface RuntimeModelsResult {
 export interface FleetProviderModels {
   provider: string;
   /** A ready Codex catalog is the authoritative set of selectable models. */
-  model_catalog_status?: "ready" | "error";
+  model_catalog_status?: "ready" | "error" | "unknown";
   online_runtime_count: number;
   models: RuntimeModel[];
   default_thinking?: RuntimeModelThinking;

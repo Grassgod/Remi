@@ -1,5 +1,5 @@
-import { commonThinkingCapabilities, overlayGatewayModels, runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
-export { overlayGatewayModels, runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
+import { workspaceRuntimeModelCatalog, catalogAllowsModel, commonThinkingCapabilities, runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
+export { workspaceRuntimeModelCatalog, overlayGatewayModels, runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
 // Agent and skill request plumbing: the `with*RequestContext` builders that fold caller identity
 // and defaults into create/update inputs, the `load*For*` guards, and the provider/thinking-level
 // validation shared by the agents, skills and agent-template routers.
@@ -34,7 +34,6 @@ import {
 import { canCurrentUserUseRuntime } from "./runtimes.js";
 import { resolveRequestWorkspaceId } from "./workspace-context.js";
 import {
-  fleetModelsResponse,
   type FleetModelResponse,
   type FleetProviderModelsResponse,
 } from "../wire/runtimes.js";
@@ -88,6 +87,10 @@ export function executionGroupModelCatalog(store: MultiremiStore, workspaceId: s
       && matches.every((candidate) => candidate?.thinking?.default_level === defaultLevel) ? defaultLevel : undefined;
     return [{
       id: model.id, label: model.label, provider: group.provider,
+      ...(matches.some(candidate => candidate?.execution_status !== undefined) ? {
+        execution_status: matches.some(candidate => candidate?.execution_status === "unknown") ? "unknown" as const
+          : matches.some(candidate => candidate?.execution_status === "unavailable") ? "unavailable" as const : "available" as const,
+      } : {}),
       ...(matches.every((candidate) => candidate?.default) ? { default: true } : {}),
       ...(supported.length || explicitStatus || matches.every((candidate) => candidate?.thinking) ? { thinking: {
         supported_levels: supported,
@@ -98,10 +101,12 @@ export function executionGroupModelCatalog(store: MultiremiStore, workspaceId: s
     }];
   });
   return [{ provider: group.provider, models, online_runtime_count: runtimes.filter((runtime) => runtime.status === "online").length,
-    ...(providers.some((entry) => entry?.model_catalog_status === "ready")
-      ? { model_catalog_status: "ready" as const }
+    ...(providers.some((entry) => entry?.model_catalog_status === "unknown")
+      ? { model_catalog_status: "unknown" as const }
       : providers.some((entry) => entry?.model_catalog_status === "error")
-      ? { model_catalog_status: "error" as const } : {}),
+      ? { model_catalog_status: "error" as const }
+      : providers.some((entry) => entry?.model_catalog_status === "ready")
+      ? { model_catalog_status: "ready" as const } : {}),
     ...(providers.some((entry) => entry?.default_thinking) ? { default_thinking: commonThinkingCapabilities(providers.map((entry) =>
       entry?.default_thinking ?? { supported_levels: modelThinkingLevels(entry?.models ?? [], "") })),
     } : {}),
@@ -142,7 +147,7 @@ function workspaceProviderCatalog(
       : undefined;
   }
   const runtimes = store.listRuntimes().filter((runtime) => (runtime.workspaceId ?? "local") === workspaceId);
-  const providers = overlayGatewayModels(store, workspaceId, fleetModelsResponse(runtimes, callerOwnerId));
+  const providers = workspaceRuntimeModelCatalog(store, workspaceId, runtimes, callerOwnerId);
   return providers.find((entry) => entry.provider === provider);
 }
 
@@ -184,15 +189,15 @@ function validateAgentModelSelection(
     input.runtimeId,
   );
   const models = catalog?.models ?? [];
-  if (input.model && catalog?.model_catalog_status === "ready"
-    && !models.some((model) => model.id === input.model)) {
+  if (!catalogAllowsModel(catalog, input.model)) {
     return c.json({
-      code: "model_not_in_execution_catalog",
-      error: `model "${input.model}" is not in the Codex execution catalog and cannot be executed`,
+      code: catalog?.model_catalog_status === "unknown" ? "model_execution_catalog_unknown" : "model_not_in_execution_catalog",
+      error: catalog?.model_catalog_status === "unknown"
+        ? `model "${input.model}" cannot be selected while the Codex execution catalog is unknown or loading`
+        : `model "${input.model}" is not in the available Codex execution catalog and cannot be executed`,
     }, 400);
   }
-  // Without an authoritative catalog retain the gateway's existing model-ID
-  // escape hatch. Explicit effort still requires a reported capability.
+  // Unmanaged/custom connections retain their own model selection behavior.
   if (!input.thinkingLevel) return null;
   const supportedLevels = modelThinkingLevels(models, input.model, catalog?.default_thinking);
   const selectedModel = input.model

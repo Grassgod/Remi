@@ -9,7 +9,7 @@ import { SkillMultiSelect } from "./skill-multi-select";
 import { AvatarPicker } from "./avatar-picker";
 import { api } from "@multiremi/core/api";
 import { useWorkspaceId } from "@multiremi/core/hooks";
-import { isModelUnavailable, useExecutionTargetModels } from "@multiremi/core/runtimes";
+import { isModelExecutionUnknown, isModelUnavailable, useExecutionTargetModels } from "@multiremi/core/runtimes";
 import { workspaceKeys } from "@multiremi/core/workspace/queries";
 import type {
   Agent,
@@ -94,6 +94,7 @@ export function CreateAgentDialog({
   const [executionGroupId, setExecutionGroupId] = useState(template?.execution_group_id ?? "");
   const [legacyRuntimeId, setLegacyRuntimeId] = useState(template?.runtime_id ?? "");
   const targetModels = useExecutionTargetModels(wsId ?? "", provider, executionGroupId ? undefined : legacyRuntimeId, executionGroupId);
+  const executionUnknown = isModelExecutionUnknown(provider, model, targetModels.models, targetModels.modelCatalogStatus);
   const unavailable = isModelUnavailable(provider, model, targetModels.models, targetModels.modelCatalogStatus);
   const thinkingLevels = useMemo(
     () => getModelThinkingLevels(targetModels.models, model, targetModels.defaultThinking),
@@ -354,7 +355,7 @@ export function CreateAgentDialog({
               thinking={getModelThinking(targetModels.models, model, targetModels.defaultThinking)}
               isLoading={targetModels.isLoading}
               isError={targetModels.isError}
-              modelUnavailable={unavailable}
+              modelUnavailable={unavailable} modelExecutionUnknown={executionUnknown}
               onChange={setThinkingLevel}
             />
 

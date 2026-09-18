@@ -15,6 +15,7 @@ export function ThinkingField({
   isLoading,
   isError,
   modelUnavailable,
+  modelExecutionUnknown,
 }: {
   value: string;
   levels: RuntimeModelThinkingLevel[];
@@ -23,6 +24,7 @@ export function ThinkingField({
   isLoading?: boolean;
   isError?: boolean;
   modelUnavailable?: boolean;
+  modelExecutionUnknown?: boolean;
 }) {
   const { t } = useT("agents");
   const labelId = useId();
@@ -37,8 +39,8 @@ export function ThinkingField({
         aria-labelledby={labelId}
         className="mt-1 flex min-h-9 flex-wrap items-center gap-1"
       >
-        {(levels.length > 0 || value) && <ThinkingPicker value={value} levels={levels} onChange={onChange} />}
-        {(thinking || levels.length === 0) && <ThinkingStatus modelUnavailable={modelUnavailable} thinking={thinking} isLoading={isLoading} isError={isError} />}
+        {(levels.length > 0 || value) && <ThinkingPicker value={value} levels={levels} canEdit={!modelUnavailable && !modelExecutionUnknown} onChange={onChange} />}
+        {(thinking || levels.length === 0) && <ThinkingStatus modelUnavailable={modelUnavailable} modelExecutionUnknown={modelExecutionUnknown} thinking={thinking} isLoading={isLoading} isError={isError} />}
       </div>
     </div>
   );

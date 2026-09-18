@@ -28,7 +28,13 @@ catalog. A saved model absent from that list is not executable; its saved model
 and thinking level remain intact. New selections of that model return
 `model_not_in_execution_catalog`. `model_catalog_status: "error"` retains the
 ordinary gateway inventory and reports capability loading failure instead of
-emptying the picker. Custom Runtime connections keep their own catalogs.
+emptying the picker. Each model's `execution_status` distinguishes `available`,
+`unavailable`, and `unknown`; only actual ACP fallback members stay executable
+when that Runtime cannot load the native catalog. Bundled GPT reasoning options
+remain usable. `model_catalog_status: "unknown"` marks missing, obsolete, or
+unrefreshed snapshots; new explicit selections return
+`model_execution_catalog_unknown` until discovery finishes. The saved model and
+thinking level are preserved. Custom Runtime connections keep their own catalogs.
 
 ## Canonical command tree
 

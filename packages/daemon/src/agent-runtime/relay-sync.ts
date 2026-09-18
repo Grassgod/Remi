@@ -1,3 +1,4 @@
+import { validCodexNativeCatalog } from "@multiremi/contracts/codex-model-catalog.js";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { sanitizeProviderConfigValue } from "./provider-config-sanitize.js";
 import { publicRelayHttpRequest, type RelayHttpRequest } from "@shared/relay-http.js";
@@ -54,8 +55,7 @@ export async function loadCodexModelCatalog(
     let catalog: unknown;
     try { catalog = JSON.parse(response.text); }
     catch { return { status: "error", error: "Codex model catalog returned invalid JSON" }; }
-    if (!isPlainObject(catalog) || !Array.isArray(catalog.models) || !catalog.models.length
-      || !catalog.models.every(validCodexNativeModel)) {
+    if (!validCodexNativeCatalog(catalog)) {
       return { status: "error", error: "Codex model catalog contains incomplete or invalid native model metadata" };
     }
     return { status: "loaded", content: response.text };
@@ -63,31 +63,6 @@ export async function loadCodexModelCatalog(
     // Fetch/DNS/JSON diagnostics can contain URLs, headers or echoed payloads.
     return { status: "error", error: "Codex model catalog request failed or timed out" };
   }
-}
-
-/** Check native required fields before Codex can discard the whole invalid config. */
-function validCodexNativeModel(model: unknown): boolean {
-  if (!isPlainObject(model)) return false;
-  for (const key of ["slug", "display_name", "shell_type", "visibility"]) {
-    if (typeof model[key] !== "string" || !(model[key] as string).trim()) return false;
-  }
-  if (typeof model.supported_in_api !== "boolean" || typeof model.support_verbosity !== "boolean"
-    || !Number.isInteger(model.priority)) return false;
-  const policy = model.truncation_policy;
-  if (!isPlainObject(policy) || typeof policy.mode !== "string" || !Number.isInteger(policy.limit)) return false;
-  if (!Array.isArray(model.experimental_supported_tools) || !model.experimental_supported_tools.every(tool => typeof tool === "string")) return false;
-  if (!Array.isArray(model.supported_reasoning_levels) || !model.supported_reasoning_levels.every(level =>
-    isPlainObject(level) && typeof level.effort === "string" && Boolean(level.effort.trim())
-      && typeof level.description === "string")) return false;
-  if (model.default_reasoning_level != null && typeof model.default_reasoning_level !== "string") return false;
-  if (model.context_window != null && !Number.isInteger(model.context_window)) return false;
-  if (model.input_modalities !== undefined
-    && (!Array.isArray(model.input_modalities) || !model.input_modalities.every(modality => typeof modality === "string"))) return false;
-  if (model.base_instructions !== undefined && typeof model.base_instructions !== "string") return false;
-  if (model.model_messages != null && !isPlainObject(model.model_messages)) return false;
-  const messages = isPlainObject(model.model_messages) ? model.model_messages : {};
-  if (messages.instructions_template !== undefined && typeof messages.instructions_template !== "string") return false;
-  return typeof model.base_instructions === "string" || typeof messages.instructions_template === "string";
 }
 
 /** Used after a catalog failure so gateway-only models also receive the error status. */

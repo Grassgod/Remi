@@ -873,10 +873,17 @@ describe("RuntimeDirectoryScanRequestSchema", () => {
 });
 
 describe("FleetModelsResponseSchema", () => {
-  it("preserves authoritative catalogs and treats malformed catalog statuses as failed loads", () => {
-    for (const [model_catalog_status, expected] of [["ready", "ready"], ["error", "error"], ["future", "error"], [42, "error"], [null, "error"], [undefined, undefined]]) {
+  it("preserves authoritative catalogs and treats malformed catalog statuses as unknown", () => {
+    for (const [model_catalog_status, expected] of [["ready", "ready"], ["error", "error"], ["unknown", "unknown"], ["future", "unknown"], [42, "unknown"], [null, "unknown"], [undefined, undefined]]) {
       const parsed = FleetModelsResponseSchema.parse({ providers: [{ provider: "codex", model_catalog_status, models: [] }] });
       expect(parsed.providers[0]?.model_catalog_status).toBe(expected);
+    }
+  });
+
+  it("preserves model execution states and blocks unknown future or malformed states", () => {
+    for (const [execution_status, expected] of [["available", "available"], ["unavailable", "unavailable"], ["unknown", "unknown"], ["future", "unknown"], [42, "unknown"], [undefined, undefined]]) {
+      const parsed = FleetModelsResponseSchema.parse({ providers: [{ provider: "codex", models: [{ id: "model", execution_status }] }] });
+      expect(parsed.providers[0]?.models[0]?.execution_status).toBe(expected);
     }
   });
 

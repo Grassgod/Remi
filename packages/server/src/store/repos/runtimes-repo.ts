@@ -1,4 +1,4 @@
-import { runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
+import { catalogAllowsModel, runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
 import { runtimeConnectionModels } from "@multiremi/contracts/runtime-connection";
 import { modelThinkingLevels } from "@multiremi/contracts/model-thinking.js";
 import { syncRuntimeExecutionGroups, runtimeExecutionGroupId } from "@multiremi/store/execution-groups.js";
@@ -1898,6 +1898,7 @@ export class RuntimesRepo {
       getRuntimeExecutionProfile: (id, provider) => this.getRuntimeExecutionProfile(id, provider),
     }, agent.workspaceId, runtime).find(entry => entry.provider === agent.provider);
     const models = catalog?.models ?? [];
+    if (!catalogAllowsModel(catalog, agent.model ?? "")) return false;
     if (agent.model && !models.some(model => model.id === agent.model)
       && (catalog?.model_catalog_status === "ready" || agent.thinkingLevel
         || (agent.executionGroupId && !agent.runtimeId))) return false;
@@ -2012,8 +2013,8 @@ export class RuntimesRepo {
     for (const model of normalized) {
       this.ctx.db.run(
         `INSERT INTO multiremi_runtime_models (
-          runtime_id, model_id, label, provider, is_default, thinking, created_at, updated_at, is_provider_default
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          runtime_id, model_id, label, provider, is_default, thinking, created_at, updated_at, is_provider_default, catalog
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           runtimeId,
           model.id,
@@ -2024,6 +2025,7 @@ export class RuntimesRepo {
           now,
           now,
           model.providerDefault ? 1 : 0,
+          model.catalog ? toJson(model.catalog) : null,
         ],
       );
     }
@@ -2183,8 +2185,16 @@ function normalizeRuntimeModels(models: MultiremiRuntimeModel[], provider: strin
       default: Boolean(model.default),
       ...(model.providerDefault === true ? { providerDefault: true } : {}),
       thinking: normalizeRuntimeModelThinking(model.thinking),
+      ...(model.catalog ? { catalog: normalizeRuntimeModelCatalog(model.catalog) } : {}),
     };
   });
+}
+
+function normalizeRuntimeModelCatalog(value: NonNullable<MultiremiRuntimeModel["catalog"]>): NonNullable<MultiremiRuntimeModel["catalog"]> {
+  return value.status === "ready" ? { status: "ready" } : {
+    status: "error",
+    error: typeof value.error === "string" ? value.error.replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, 200) : "Codex model catalog unavailable",
+  };
 }
 
 function normalizeRuntimeModelThinking(value: MultiremiRuntimeModel["thinking"]): MultiremiRuntimeModel["thinking"] | undefined {
@@ -2518,6 +2528,7 @@ function toRuntimeModel(row: Row): MultiremiRuntimeModel {
     default: Boolean(Number(row.is_default ?? 0)),
     ...(Number(row.is_provider_default) === 1 ? { providerDefault: true } : {}),
     thinking: row.thinking == null ? undefined : parseJson(row.thinking, undefined),
+    ...(row.catalog == null ? {} : { catalog: parseJson(row.catalog, undefined) }),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };

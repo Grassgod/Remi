@@ -1,3 +1,4 @@
+import { codexNativeModel } from "../../fixtures/codex-native-catalog.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { MultiremiRuntimeModelThinking } from "@multiremi/contracts/types.js";
@@ -33,9 +34,9 @@ describe("gateway reasoning capability data flow", () => {
     const { store, runtime, app } = setup();
     await discoverGatewayModels(store, "local", "codex", async url => ({ status: 200, text: JSON.stringify(
       url.endsWith("/backend-api/codex/models") ? { models: [
-        { slug: "deepseek-flash", default_reasoning_level: "high", supported_reasoning_levels: ["low", "high", "max"].map(effort => ({ effort })) },
-        { slug: "native-only", display_name: "Native only", supported_reasoning_levels: [] },
-        { slug: "hidden-model", visibility: "hide" },
+        codexNativeModel({ slug: "deepseek-flash", default_reasoning_level: "high", supported_reasoning_levels: ["low", "high", "max"].map(effort => ({ effort, description: "" })) }),
+        codexNativeModel({ slug: "native-only", display_name: "Native only", supported_reasoning_levels: [] }),
+        codexNativeModel({ slug: "hidden-model", visibility: "hide" }),
       ] } : { data: ["deepseek-flash", "inventory-only", "hidden-model"].map(id => ({ id })) },
     ) }));
     for (const query of ["", `?runtime_id=${runtime.id}`]) {
@@ -51,7 +52,7 @@ describe("gateway reasoning capability data flow", () => {
     const { store, runtime, app } = setup();
     await discoverGatewayModels(store, "local", "codex", async url => ({ status: 200, text: JSON.stringify(
       url.endsWith("/backend-api/codex/models")
-        ? { models: [{ slug: "hidden-model", visibility: "hide" }] }
+        ? { models: [codexNativeModel({ slug: "hidden-model", visibility: "hide" })] }
         : { data: [{ id: "inventory-only" }] },
     ) }));
     for (const query of ["", `?runtime_id=${runtime.id}`]) {
@@ -104,8 +105,8 @@ describe("gateway reasoning capability data flow", () => {
     const { store, runtime, app } = setup();
     await discoverGatewayModels(store, "local", "codex", async url => ({ status: 200, text: JSON.stringify(
       url.endsWith("/backend-api/codex/models") ? { models: [
-        { slug: "deepseek-flash", default_reasoning_level: "high", supported_reasoning_levels: ["low", "high", "max"].map(effort => ({ effort })) },
-        { slug: "gpt-runtime", default_reasoning_level: "high", supported_reasoning_levels: ["low", "high"].map(effort => ({ effort })) },
+        codexNativeModel({ slug: "deepseek-flash", default_reasoning_level: "high", supported_reasoning_levels: ["low", "high", "max"].map(effort => ({ effort, description: "" })) }),
+        codexNativeModel({ slug: "gpt-runtime", default_reasoning_level: "high", supported_reasoning_levels: ["low", "high"].map(effort => ({ effort, description: "" })) }),
       ] } : { data: [{ id: "deepseek-flash", display_name: "DeepSeek Flash" }, { id: "gpt-runtime" }] },
     ) }));
     for (const query of ["", `?runtime_id=${runtime.id}`, "?execution_group_id=reasoning-group"]) {
@@ -129,7 +130,7 @@ describe("gateway reasoning capability data flow", () => {
 
   it("keeps unknown, unsupported and failure distinct and rejects unavailable effort", async () => {
     const { store, revision, runtime, app } = setup();
-    store.saveGatewayModels("local", "codex", { sourceRevision: revision, models: [
+    store.saveGatewayModels("local", "codex", { sourceRevision: revision, nativeCatalogStatus: "ready", models: [
       { id: "unknown-model", label: "Unknown", thinking: { status: "unknown", supportedLevels: [] } },
       { id: "deepseek-flash", label: "Unsupported", thinking: reasoning([]) },
       { id: "failed-model", label: "Failed", thinking: { status: "error", supportedLevels: [], error: "catalog unavailable" } },
@@ -152,7 +153,7 @@ describe("gateway reasoning capability data flow", () => {
     store.updateRuntimeModels(runtime.id, [{ id: "deepseek-flash", label: "DeepSeek", provider: "openai", default: true,
       thinking: { status: "error", supportedLevels: [], error: "gateway catalog HTTP 503" },
     }]);
-    store.saveGatewayModels("local", "codex", { sourceRevision: revision, models: [
+    store.saveGatewayModels("local", "codex", { sourceRevision: revision, nativeCatalogStatus: "ready", models: [
       { id: "deepseek-flash", label: "DeepSeek", thinking: reasoning(["low", "high", "max"], "high") },
     ] });
     for (const query of [`?runtime_id=${runtime.id}`, "?execution_group_id=reasoning-group"]) {
@@ -180,7 +181,7 @@ describe("gateway reasoning capability data flow", () => {
     store.updateRuntimeModels(runtime.id, [{ id: "gpt-bundled", label: "Bundled GPT", provider: "openai", default: true,
       thinking: { status: "error", supportedLevels: [], error: "catalog request failed" },
     }]);
-    store.saveGatewayModels("local", "codex", { sourceRevision: revision, models: [
+    store.saveGatewayModels("local", "codex", { sourceRevision: revision, nativeCatalogStatus: "ready", models: [
       { id: "deepseek-flash", label: "DeepSeek", thinking: reasoning(["low", "high", "max"], "high") },
     ] });
     const { providers } = await (await app.request(`/api/models?runtime_id=${runtime.id}`)).json();
@@ -198,7 +199,7 @@ describe("gateway reasoning capability data flow", () => {
         thinking: { status: "error", supportedLevels: [], error: "catalog unavailable" } },
       { id: "deepseek-flash", label: "DeepSeek", provider: "openai", default: false, thinking: reasoning(["high"]) },
     ]);
-    store.saveGatewayModels("local", "codex", { sourceRevision: revision, models: [
+    store.saveGatewayModels("local", "codex", { sourceRevision: revision, nativeCatalogStatus: "ready", models: [
       { id: "deepseek-flash", label: "DeepSeek", thinking: reasoning(["low", "high", "max"], "high") },
     ] });
     for (const query of ["", `?runtime_id=${runtime.id}`, "?execution_group_id=reasoning-group"]) {
@@ -229,7 +230,7 @@ describe("gateway reasoning capability data flow", () => {
   for (const binding of ["automatic", "runtime", "group"] as const) {
     it(`blocks ${binding} task claims during capability failure and resumes after recovery without changing running tasks`, () => {
       const { store, revision, runtime } = setup();
-      store.saveGatewayModels("local", "codex", { sourceRevision: revision, models: [
+      store.saveGatewayModels("local", "codex", { sourceRevision: revision, nativeCatalogStatus: "ready", models: [
         { id: "deepseek-flash", label: "DeepSeek", thinking: reasoning(["low", "high", "max"], "high") },
       ] });
       const agent = store.createAgent({ name: "Reasoning task", provider: "codex", model: "deepseek-flash", thinkingLevel: "max",
@@ -262,7 +263,7 @@ describe("gateway reasoning capability data flow", () => {
     const healthy = store.registerRuntime({ name: "Healthy runtime", provider: "codex", workspaceId: "local", models: [
       { id: "deepseek-flash", label: "DeepSeek loaded", provider: "openai", default: false, thinking: reasoning(["high", "max"], "high") },
     ] });
-    store.saveGatewayModels("local", "codex", { sourceRevision: revision, models: [
+    store.saveGatewayModels("local", "codex", { sourceRevision: revision, nativeCatalogStatus: "ready", models: [
       { id: "deepseek-flash", label: "DeepSeek", thinking: reasoning(["high", "max"], "high") },
     ] });
     const { providers } = await (await app.request("/api/models")).json();

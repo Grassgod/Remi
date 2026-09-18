@@ -1022,6 +1022,8 @@ export interface MultiremiRuntimeModel {
   /** Capability of the provider's default selector; excluded from concrete model pickers. */
   providerDefault?: boolean;
   thinking?: MultiremiRuntimeModelThinking;
+  /** Native catalog load result. Concrete entries are actual ACP-selectable members, even on fallback. */
+  catalog?: { status: "ready" | "error"; error?: string };
   createdAt?: string;
   updatedAt?: string;
 }

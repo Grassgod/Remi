@@ -164,6 +164,7 @@
     "concurrency_tooltip": "Concurrency · {{value}} max concurrent tasks",
     "concurrency_range": "Max concurrent tasks ({{min}}–{{max}})",
     "model_unavailable": "Not in execution catalog · Cannot run",
+    "model_execution_unknown": "Execution capability unknown · Refreshing catalog",
     "model_default": "Default",
     "model_tooltip": "Model · {{value}}",
     "model_search_placeholder": "Search or type a model ID",

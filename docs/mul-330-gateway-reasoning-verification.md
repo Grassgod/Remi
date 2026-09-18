@@ -220,3 +220,84 @@ Queued-task wait diagnostics remain a follow-up: a rejection by one Runtime does
 not mean a healthy sibling cannot claim the task. Reusing the task wait reason
 would require fleet-wide aggregation and clearing rules, beyond this membership
 fix. Tasks still wait while their only target has persistent capability errors.
+
+## QA follow-up: shared validity and actual Runtime membership
+
+The next review found three remaining failure boundaries: Server accepted a
+partial native document that the daemon rejected; failed daemon reports mixed
+ordinary inventory IDs into the bundled executable members; and pre-native
+snapshots were still selectable while their asynchronous refresh was pending.
+
+Server discovery and daemon loading now call the same strict
+`validCodexNativeCatalog` contract. Missing required native fields reject the
+whole document on both sides, including a malformed hidden member. The parser
+regression intentionally replaces the old "missing required levels means
+unknown" assumption with whole-catalog failure; explicit empty levels remain
+`unsupported`, and an absent optional default stays absent.
+
+Runtime reports separately retain catalog health and the models actually found
+by ACP. A failed native download no longer adds inventory-only IDs to this
+executable membership or erases a working bundled model's efforts/default.
+The API may retain inventory entries for display, with `execution_status` set
+to `unavailable`; create validation and task claims use that status even without
+an explicit effort. The old regression that allowed a failed inventory-only
+model to be created and claimed is deliberately corrected, with positive bundled
+GPT assertions retained. An unrefreshed snapshot reports an unknown execution
+state and cannot authorize a new model selection.
+
+### Real gateway rerun with the shared strict contract
+
+Executed at **2026-09-18 11:35:13 UTC**, Bun **1.3.14**. Production
+`discoverGatewayModels` and `publicRelayHttpRequest` read both real gateway
+endpoints into an in-memory SQLite store. A loopback-only HTTP API served the
+modified application. The key was read in-process from local Codex auth; no
+credential, native response body, or instruction template was written to the
+verification files or this repository. The listener and database were closed.
+
+The healthy Runtime report in this rerun was a **local fixture derived from the
+same fetched native response**, including the new catalog provenance marker.
+The daemon loader was given that exact captured response to verify matching
+acceptance and byte preservation. This rerun did not start ACP or issue model
+inference; the earlier real ACP/max and independent QA/low evidence above still
+provides that execution coverage.
+
+| Check | Observed result |
+| --- | --- |
+| Ordinary endpoint | HTTP 200, 11 entries, 1,110 bytes |
+| Native endpoint | HTTP 200, 10 entries, 395,186 bytes |
+| Shared strict validator | **10/10** individual entries valid; complete document valid |
+| Daemon loading the same document | `loaded`; original bytes preserved |
+| Workspace / Runtime / execution group / Agent-owner HTTP catalogs | All `ready`, all **9 models**, each `execution_status: available` |
+| Absent and hidden routes | `codex-auto-review` and `gpt-reserve` absent in every scope |
+| DeepSeek Flash in every scope | `available`, low/high/max, default high |
+| New absent-route Agent | HTTP 400, `model_not_in_execution_catalog` |
+| Unrelated edit of a saved absent-route Agent | HTTP 200; original model and high effort retained |
+
+Ordinary response SHA-256:
+`02e0b40897bacd5de4cd448238d3b610e3e894d5920cb13296e588108a9dc767`.
+Native response SHA-256:
+`65ef7c2624c0af69295543c46233eda6c6bac986280b7317e9521a602bf90b2e`.
+The native response is unchanged from the previous rerun, and unifying validation
+to the strict daemon contract still accepts all ten current gateway entries.
+
+### Controlled daemon failure against that same real ready snapshot
+
+After the live discovery, the local store kept its real `ready` snapshot while a
+controlled Runtime report used production `runtimeModelsWithCatalogError` with
+one bundled GPT member and a simulated HTTP 503. This is a **failure injection**,
+not a claim that the live gateway returned 503.
+
+The persisted Runtime member list contained only `gpt-5.6-sol`; DeepSeek was
+absent from it. The HTTP API retained DeepSeek for display as `unavailable`,
+while bundled GPT remained `available`. For automatic, fixed-Runtime and
+execution-group bindings, creating DeepSeek with no effort returned HTTP 400
+`model_not_in_execution_catalog`. Existing equivalent Agents were ineligible;
+their tasks stayed queued with **zero `task:dispatch` events**. A GPT Agent with
+explicit high effort returned HTTP 201 and its task was claimed past those
+queued tasks, producing the sole dispatch event. No executor processed that
+local test task.
+
+Real browser readback remains **未验证** (tracked separately by MUL-334), as do
+DeepSeek high inference, GPT/Claude live inference, GPT template quality, and
+continuity of real running tasks across an upgrade. This rerun changes no
+production state, shared relay configuration, deployment, or running session.

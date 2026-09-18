@@ -113,7 +113,7 @@ import { prepareIssueWikiWorkspace } from "@daemon/agent-runtime/workspace/wiki.
 import { prepareChatRepositories } from "@daemon/agent-runtime/workspace/chat-repos.js";
 import { materializeChatAttachments } from "@daemon/agent-runtime/workspace/chat-attachments.js";
 import { cleanProcessEnv } from "@daemon/agent-runtime/env/injector.js";
-import { loadCodexGatewayInventory, mergeCodexSessionConfig, type CodexModelCatalogState } from "@daemon/agent-runtime/relay-sync.js";
+import { mergeCodexSessionConfig, type CodexModelCatalogState } from "@daemon/agent-runtime/relay-sync.js";
 import { AgentRuntime } from "@daemon/agent-runtime/runtime.js";
 import { AgentSession } from "@daemon/agent-runtime/session.js";
 import type { EphemeralContext } from "@daemon/agent-runtime/types.js";
@@ -1891,22 +1891,21 @@ export class MultiremiDaemon {
         await provider.close?.();
       }
     };
-    if (prepared.catalogState?.status !== "error") return probe();
-    // The fallback bundled catalog can omit every gateway-only model. Include
-    // the normal inventory in the failure report so those models cannot appear
-    // supported just because the control plane successfully fetched its copy.
-    const [probed, inventory] = await Promise.allSettled([
-      probe(),
-      loadCodexGatewayInventory(prepared.relay?.fragment ?? "", prepared.relay?.auth_token ?? ""),
-    ]);
-    signal.throwIfAborted();
-    const models = runtimeModelsWithCatalogError(
-      [...(this.runtimeModels ?? []), ...(probed.status === "fulfilled" ? probed.value : [])],
-      inventory.status === "fulfilled" ? inventory.value : [],
-      prepared.catalogState.error,
+    if (prepared.catalogState?.status !== "error") {
+      const models = await probe();
+      return prepared.catalogState?.status === "loaded"
+        ? models.map(model => ({ ...model, catalog: { status: "ready" as const } }))
+        : models;
+    }
+    // The ACP selector now uses the bundled catalog. Only this probe's actual
+    // members are executable: neither a previous successful native catalog nor
+    // the gateway's generic inventory can add members to the fallback selector.
+    const probed = await probe().then(
+      models => models,
+      () => [],
     );
-    if (!models.length && probed.status === "rejected") throw probed.reason;
-    return models;
+    signal.throwIfAborted();
+    return runtimeModelsWithCatalogError(probed, prepared.catalogState.error);
   }
 
   private async runtimeModelProbeProviderOptions(): Promise<{
@@ -4468,19 +4467,24 @@ export function runtimeModelsFromAcpCapabilities(
   }));
 }
 
-/** A daemon catalog failure overrides successful control-plane discovery. */
+/** Retain actual fallback capabilities separately from native-catalog health. */
 export function runtimeModelsWithCatalogError(
   models: MultiremiRuntimeModel[],
-  gatewayInventory: Array<{ id: string; label: string }>,
   error: string,
 ): MultiremiRuntimeModel[] {
-  const byId = new Map<string, MultiremiRuntimeModel>(models.map(model => [model.id, model]));
-  for (const model of gatewayInventory) {
-    if (!byId.has(model.id)) byId.set(model.id, { ...model, provider: "openai", default: false });
-  }
-  return [...byId.values()].map(model => ({
+  // A diagnostic provider-default entry publishes the failure even when ACP
+  // itself fails. It replaces stale reports without inventing an executable ID.
+  const actualModels: MultiremiRuntimeModel[] = models.length ? models : [{
+    id: "__codex_catalog_unavailable__",
+    label: "Codex model catalog unavailable",
+    provider: "openai",
+    default: false,
+    providerDefault: true,
+    thinking: { status: "unknown", supportedLevels: [] },
+  }];
+  return actualModels.map(model => ({
     ...model,
-    thinking: { status: "error", supportedLevels: [], error },
+    catalog: { status: "error", error },
   }));
 }
 

@@ -34,7 +34,7 @@ function saveGatewayCatalog(
     tokenOp: "set",
     authToken: "test-token",
   });
-  store.saveGatewayModels("local", engine, { sourceRevision: revision, models });
+  store.saveGatewayModels("local", engine, { sourceRevision: revision, ...(engine === "codex" ? { nativeCatalogStatus: "ready" as const } : {}), models });
 }
 
 describe("Multiremi store — fleet engine and model catalog", () => {

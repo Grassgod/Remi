@@ -1,3 +1,5 @@
+import { loadCodexModelCatalog } from "@daemon/agent-runtime/relay-sync.js";
+import { codexNativeModel } from "../../fixtures/codex-native-catalog.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { MultiremiStore } from "@multiremi/store.js";
 import { discoverGatewayModels, refreshStaleGatewayModels, type HttpGet, type HttpResponse } from "@multiremi/relay/discovery.js";
@@ -29,7 +31,7 @@ describe("relay model discovery", () => {
     const revision = store.upsertRelayConfig(workspace.id, "codex", { fragment: CODEX_FRAG, tokenOp: "set", authToken: "sk-codex" });
     store.saveGatewayModels(workspace.id, "codex", { sourceRevision: revision, models: [{ id: "inventory-only", label: "Legacy inventory" }] });
     const s = stub(url => url.endsWith("/backend-api/codex/models")
-      ? ok({ models: [{ slug: "native-model", supported_reasoning_levels: [] }] })
+      ? ok({ models: [codexNativeModel({ slug: "native-model", supported_reasoning_levels: [] })] })
       : ok({ data: [{ id: "inventory-only" }, { id: "native-model" }] }));
     refreshStaleGatewayModels(store, workspace.id, s.get);
     await Bun.sleep(0); // allow the injected async transport and snapshot write to finish
@@ -68,7 +70,7 @@ describe("relay model discovery", () => {
     store.upsertRelayConfig("local", "codex", { fragment: CODEX_FRAG, tokenOp: "set", authToken: "sk-codex" });
     const s = stub((url) => {
       if (url === "https://vip.openremi.fun/backend-api/codex/models") return ok({ models: [
-        { slug: "gpt-5.6-sol" }, { slug: "gpt-5.6-sol" }, { slug: "gpt-5.5" },
+        codexNativeModel({ slug: "gpt-5.6-sol" }), codexNativeModel({ slug: "gpt-5.6-sol" }), codexNativeModel({ slug: "gpt-5.5" }),
       ] });
       expect(url).toBe("https://vip.openremi.fun/v1/models");
       return ok({ data: [
@@ -80,8 +82,8 @@ describe("relay model discovery", () => {
     await discoverGatewayModels(store, "local", "codex", s.get);
     const models = store.getGatewayModels("local", "codex")?.models;
     expect(models).toEqual([
-      { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", thinking: { status: "unknown", supportedLevels: [] } },
-      { id: "gpt-5.5", label: "gpt-5.5", thinking: { status: "unknown", supportedLevels: [] } },
+      { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", thinking: { status: "unsupported", supportedLevels: [] } },
+      { id: "gpt-5.5", label: "gpt-5.5", thinking: { status: "unsupported", supportedLevels: [] } },
     ]);
     expect(s.calls).toBe(2);
     expect(store.getGatewayModels("local", "codex")?.nativeCatalogStatus).toBe("ready");
@@ -92,12 +94,12 @@ describe("relay model discovery", () => {
     store.upsertRelayConfig("local", "codex", { fragment: CODEX_FRAG, tokenOp: "set", authToken: "sk-codex" });
     const s = stub((url, headers) => {
       expect(headers.Authorization).toBe("Bearer sk-codex");
-      return url.endsWith("/backend-api/codex/models") ? ok({ models: [{
+      return url.endsWith("/backend-api/codex/models") ? ok({ models: [codexNativeModel({
         slug: "custom-model",
         default_reasoning_level: "deep",
         supported_reasoning_levels: [{ effort: "brief", description: "Quick result" }, { effort: "deep", description: "Detailed result" }],
         model_messages: { instructions_template: "Must not enter the control-plane snapshot" },
-      }] }) : ok({ data: [{ id: "custom-model", display_name: "Custom" }] });
+      })] }) : ok({ data: [{ id: "custom-model", display_name: "Custom" }] });
     });
     await discoverGatewayModels(store, "local", "codex", s.get);
     expect(store.getGatewayModels("local", "codex")?.models).toEqual([{
@@ -110,21 +112,59 @@ describe("relay model discovery", () => {
     }]);
   });
 
-  it("distinguishes missing, empty and invalid declarations per model", async () => {
+  it("distinguishes explicit empty levels, invalid default and absent default in loadable catalogs", async () => {
     const store = createStore();
     store.upsertRelayConfig("local", "codex", { fragment: CODEX_FRAG, tokenOp: "set", authToken: "sk-codex" });
     const declarations = [
-      { slug: "missing" },
-      { slug: "empty", supported_reasoning_levels: [] },
-      { slug: "invalid-array", supported_reasoning_levels: "high" },
-      { slug: "invalid-level", supported_reasoning_levels: [{ effort: 42 }] },
-      { slug: "invalid-default", supported_reasoning_levels: [{ effort: "high" }], default_reasoning_level: "other" },
-      { slug: "missing-default", supported_reasoning_levels: [{ effort: "high" }] },
+      codexNativeModel({ slug: "empty", supported_reasoning_levels: [] }),
+      codexNativeModel({ slug: "invalid-default", supported_reasoning_levels: [{ effort: "high", description: "" }], default_reasoning_level: "other" }),
+      codexNativeModel({ slug: "missing-default", supported_reasoning_levels: [{ effort: "high", description: "" }] }),
     ];
     await discoverGatewayModels(store, "local", "codex", stub((url) => url.endsWith("/backend-api/codex/models")
       ? ok({ models: declarations }) : ok({ data: declarations.map(({ slug }) => ({ id: slug })) })).get);
+    expect(store.getGatewayModels("local", "codex")?.nativeCatalogStatus).toBe("ready");
     expect(store.getGatewayModels("local", "codex")?.models.map((model) => model.thinking?.status))
-      .toEqual(["unknown", "unsupported", "error", "error", "error", "supported"]);
+      .toEqual(["unsupported", "error", "supported"]);
+    expect(store.getGatewayModels("local", "codex")?.models[2].thinking?.defaultLevel).toBeUndefined();
+  });
+
+  it("rejects the same incomplete native directory in server discovery and daemon loading", async () => {
+    const store = createStore();
+    store.upsertRelayConfig("local", "codex", { fragment: CODEX_FRAG, tokenOp: "set", authToken: "fixture-key" });
+    const partial = { slug: "partial-native", display_name: "Partial native", visibility: "list", supported_in_api: true,
+      default_reasoning_level: "high", supported_reasoning_levels: [{ effort: "high", description: "" }] };
+    const incompleteModels = [
+      partial,
+      ...["slug", "display_name", "shell_type", "visibility", "supported_in_api", "support_verbosity", "priority",
+        "truncation_policy", "experimental_supported_tools", "supported_reasoning_levels", "model_messages"]
+        .map(key => {
+          const model = codexNativeModel({ slug: "partial-native" });
+          delete model[key];
+          return model;
+        }),
+      codexNativeModel({ slug: "partial-native", supported_reasoning_levels: "high" }),
+      codexNativeModel({ slug: "partial-native", supported_reasoning_levels: [{ effort: 42 }] }),
+      codexNativeModel({ slug: "partial-native", supported_reasoning_levels: [{ effort: "high" }] }),
+      codexNativeModel({ slug: "partial-native", visibility: "hide", shell_type: undefined }),
+    ];
+    for (const incomplete of incompleteModels) {
+      // One malformed member rejects the entire document, even beside valid or hidden models.
+      const response = ok({ models: [codexNativeModel({ slug: "healthy-native" }), incomplete] });
+      await discoverGatewayModels(store, "local", "codex", stub(url => url.endsWith("/backend-api/codex/models")
+        ? response : ok({ data: [{ id: "partial-native" }, { id: "healthy-native" }] })).get);
+      const loaded = await loadCodexModelCatalog(CODEX_FRAG, "fixture-key", async () => response);
+      const snapshot = store.getGatewayModels("local", "codex")!;
+      expect(loaded.status).toBe("error");
+      expect(snapshot.nativeCatalogStatus).toBe("error");
+      expect(snapshot.models.map(model => model.id)).toEqual(["partial-native", "healthy-native"]);
+      expect(snapshot.models.every(model => model.thinking?.status === "error")).toBe(true);
+      expect(snapshot.lastError).toContain("incomplete or invalid native model metadata");
+    }
+    const valid = ok({ models: [codexNativeModel({ slug: "healthy-native" })] });
+    await discoverGatewayModels(store, "local", "codex", stub(url => url.endsWith("/backend-api/codex/models")
+      ? valid : ok({ data: [{ id: "healthy-native" }] })).get);
+    expect((await loadCodexModelCatalog(CODEX_FRAG, "fixture-key", async () => valid)).status).toBe("loaded");
+    expect(store.getGatewayModels("local", "codex")?.nativeCatalogStatus).toBe("ready");
   });
 
   it("omits native models that Codex hides or cannot use through the API", async () => {
@@ -132,9 +172,9 @@ describe("relay model discovery", () => {
     store.upsertRelayConfig("local", "codex", { fragment: CODEX_FRAG, tokenOp: "set", authToken: "sk-codex" });
     await discoverGatewayModels(store, "local", "codex", stub((url) => url.endsWith("/backend-api/codex/models")
       ? ok({ models: [
-        { slug: "hidden", visibility: "hide", supported_in_api: true, supported_reasoning_levels: [{ effort: "high" }] },
-        { slug: "unavailable", visibility: "list", supported_in_api: false, supported_reasoning_levels: [{ effort: "high" }] },
-        { slug: "visible", visibility: "list", supported_in_api: true, supported_reasoning_levels: [{ effort: "high" }] },
+        codexNativeModel({ slug: "hidden", visibility: "hide", supported_in_api: true, supported_reasoning_levels: [{ effort: "high", description: "" }] }),
+        codexNativeModel({ slug: "unavailable", visibility: "list", supported_in_api: false, supported_reasoning_levels: [{ effort: "high", description: "" }] }),
+        codexNativeModel({ slug: "visible", visibility: "list", supported_in_api: true, supported_reasoning_levels: [{ effort: "high", description: "" }] }),
       ] }) : ok({ data: ["hidden", "unavailable", "visible", "unknown"].map(id => ({ id })) })).get);
     expect(store.getGatewayModels("local", "codex")?.models.map(model => [model.id, model.thinking?.status]))
       .toEqual([["visible", "supported"]]);
@@ -145,8 +185,8 @@ describe("relay model discovery", () => {
     store.upsertRelayConfig("local", "codex", { fragment: CODEX_FRAG, tokenOp: "set", authToken: "sk-codex" });
     await discoverGatewayModels(store, "local", "codex", stub((url) => url.endsWith("/backend-api/codex/models")
       ? ok({ models: [
-        { slug: "native-only", display_name: "Native model", supported_reasoning_levels: [{ effort: "deep" }], default_reasoning_level: "deep" },
-        { slug: "shared", display_name: "Native label" },
+        codexNativeModel({ slug: "native-only", display_name: "Native model", supported_reasoning_levels: [{ effort: "deep", description: "" }], default_reasoning_level: "deep" }),
+        codexNativeModel({ slug: "shared", display_name: "Native label" }),
       ] }) : ok({ data: [{ id: "inventory-only" }, { id: "shared", display_name: "Inventory label" }] })).get);
     const snapshot = store.getGatewayModels("local", "codex")!;
     expect(snapshot.nativeCatalogStatus).toBe("ready");
@@ -160,7 +200,7 @@ describe("relay model discovery", () => {
     const store = createStore();
     store.upsertRelayConfig("local", "codex", { fragment: CODEX_FRAG, tokenOp: "set", authToken: "sk-codex" });
     await discoverGatewayModels(store, "local", "codex", stub((url) => url.endsWith("/backend-api/codex/models")
-      ? ok({ models: [{ slug: "hidden", visibility: "hide", supported_in_api: true }] })
+      ? ok({ models: [codexNativeModel({ slug: "hidden", visibility: "hide", supported_in_api: true })] })
       : ok({ data: [{ id: "inventory-only" }, { id: "hidden" }] })).get);
     const snapshot = store.getGatewayModels("local", "codex")!;
     expect(snapshot.models).toEqual([]);
@@ -198,7 +238,7 @@ describe("relay model discovery", () => {
       if (!url.endsWith("/backend-api/codex/models")) return ok({ data: [{ id: "old-model" }] });
       const newer = store.upsertRelayConfig("local", "codex", { fragment: CODEX_FRAG, tokenOp: "keep" });
       store.saveGatewayModels("local", "codex", { sourceRevision: newer, nativeCatalogStatus: "error", error: "newer failure", models: [{ id: "new-model", label: "New" }] });
-      return ok({ models: [{ slug: "old-model", supported_reasoning_levels: [] }] });
+      return ok({ models: [codexNativeModel({ slug: "old-model", supported_reasoning_levels: [] })] });
     }).get);
     expect(store.getGatewayModels("local", "codex")?.sourceRevision).toBe(revision + 1);
     expect(store.getGatewayModels("local", "codex")?.models[0].id).toBe("new-model");
@@ -209,7 +249,7 @@ describe("relay model discovery", () => {
     const store = createStore();
     store.upsertRelayConfig("local", "codex", { fragment: CODEX_FRAG, tokenOp: "set", authToken: "sk-codex" });
     await discoverGatewayModels(store, "local", "codex", stub((url) => ok(url.endsWith("/backend-api/codex/models")
-      ? { models: [{ slug: "gpt-5.6-sol", supported_reasoning_levels: [{ effort: "high" }], default_reasoning_level: "high" }] }
+      ? { models: [codexNativeModel({ slug: "gpt-5.6-sol", supported_reasoning_levels: [{ effort: "high", description: "" }], default_reasoning_level: "high" })] }
       : { data: [{ id: "gpt-5.6-sol", display_name: "GPT-5.6 Sol" }] })).get);
     const successRev = store.getGatewayModels("local", "codex")!.sourceRevision;
     store.upsertRelayConfig("local", "codex", { fragment: CODEX_FRAG, tokenOp: "keep" }); // bumps revision

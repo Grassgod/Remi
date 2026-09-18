@@ -1,3 +1,7 @@
+import { codexNativeModel } from "../../fixtures/codex-native-catalog.js";
+import { refreshStaleGatewayModels } from "@multiremi/relay/discovery.js";
+import { runtimeModelsWithCatalogError } from "@multiremi/worker/daemon.js";
+import { loadCodexModelCatalog } from "@daemon/agent-runtime/relay-sync.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { discoverGatewayModels } from "@multiremi/relay/discovery.js";
@@ -24,10 +28,10 @@ function setup() {
   const app = createMultiremiApp({ store });
   const discover = (nativeIds = ["executable-model"], nativeStatus = 200) => discoverGatewayModels(
     store, "local", "codex", async url => url.endsWith("/backend-api/codex/models")
-      ? { status: nativeStatus, text: JSON.stringify({ models: nativeIds.map(slug => ({
+      ? { status: nativeStatus, text: JSON.stringify({ models: nativeIds.map(slug => codexNativeModel({
         slug, display_name: slug, visibility: "list", supported_in_api: true,
         default_reasoning_level: "high",
-        supported_reasoning_levels: ["low", "high", "max"].map(effort => ({ effort })),
+        supported_reasoning_levels: ["low", "high", "max"].map(effort => ({ effort, description: "" })),
       })) }) }
       : { status: 200, text: JSON.stringify({ data: inventory.map(id => ({ id, display_name: id })) }) },
   );
@@ -153,32 +157,122 @@ describe("Codex native model membership through API and dispatch", () => {
     expect(store.getAgent(agent.id)?.model).toBe("inventory-only-route");
   });
 
-  it("keeps generic fallback models and the failure reason on catalog load failure, blocking only explicit effort", async () => {
-    const { store, runtime, app, discover } = setup();
-    await discover();
-    await discover([], 503);
-    for (const query of ["", `?runtime_id=${runtime.id}`, "?execution_group_id=catalog-group"]) {
-      const { providers } = await (await app.request(`/api/models${query}`)).json();
-      const codex = providers.find((provider: any) => provider.provider === "codex");
-      expect(codex.model_catalog_status).toBe("error");
-      expect(codex.models.map((model: any) => model.id)).toEqual(inventory);
-      for (const model of codex.models) expect(model.thinking).toMatchObject({ status: "error", supported_levels: [], error: expect.stringContaining("503") });
+  for (const binding of bindings) for (const serverFailed of [false, true]) {
+    it(`keeps display inventory but only dispatches ACP-proven bundled members for ${binding} (server failure=${serverFailed})`, async () => {
+      const { store, runtime, app, discover } = setup();
+      await discover(inventory);
+      if (serverFailed) await discover([], 503);
+      const fallbackModels = runtimeModelsWithCatalogError([{
+        id: "bundled-gpt", label: "Bundled GPT", provider: "openai", default: true,
+        thinking: { status: "supported", supportedLevels: [{ value: "high", label: "high" }], defaultLevel: "high" },
+      }], "Codex model catalog HTTP 503");
+      store.updateRuntimeModels(runtime.id, fallbackModels);
+      const refreshed = store.getRuntime(runtime.id)!;
+      const saved = store.createAgent({ name: "Saved gateway model", provider: "codex", model: "inventory-only-route", ...target(binding, runtime.id) });
+      const waiting = store.createTask({ agentId: saved.id, prompt: "Do not dispatch an unavailable model", priority: 100 });
+      const dispatches: string[] = [];
+      store.onTaskEvent(({ type, task }) => { if (type === "task:dispatch") dispatches.push(task.id); });
+      for (const query of ["", `?runtime_id=${runtime.id}`, "?execution_group_id=catalog-group", `?agent_id=${saved.id}`]) {
+        const { providers } = await (await app.request(`/api/models${query}`)).json();
+        const codex = providers.find((provider: any) => provider.provider === "codex");
+        expect(codex.model_catalog_status).toBe("error");
+        const unavailable = codex.models.find((model: any) => model.id === "inventory-only-route");
+        expect(unavailable.execution_status).toBe("unavailable");
+        expect(unavailable.thinking).toMatchObject({ status: "error", supported_levels: [] });
+        expect(codex.models.find((model: any) => model.id === "bundled-gpt")).toMatchObject({ execution_status: "available",
+          thinking: { status: "supported", default_level: "high", supported_levels: [{ value: "high", label: "high" }] } });
+      }
+      for (const path of ["/api/agents", "/api/multiremi/agents"]) {
+        const rejected = await app.request(path, { method: "POST", headers, body: JSON.stringify({
+          name: "Cannot execute fallback", provider: "codex", model: "inventory-only-route", ...target(binding, runtime.id),
+        }) });
+        expect(rejected.status).toBe(400);
+        expect((await rejected.json()).code).toBe("model_not_in_execution_catalog");
+      }
+      expect(store.runtimeCanRunAgent(refreshed, saved)).toBe(false);
+      const emptyClaim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+      expect((await emptyClaim.json()).task).toBeNull();
+      expect(store.getTask(waiting.id)?.status).toBe("queued");
+      expect(dispatches).toEqual([]);
+      const updated = await app.request(`/api/agents/${saved.id}`, { method: "PUT", headers, body: JSON.stringify({ name: "Unrelated edit" }) });
+      expect(updated.status).toBe(200);
+      expect(store.getAgent(saved.id)?.model).toBe("inventory-only-route");
+      for (const thinking_level of [undefined, "high"]) {
+        const allowed = await app.request("/api/agents", { method: "POST", headers, body: JSON.stringify({
+          name: `Bundled GPT ${thinking_level ?? "default"}`, provider: "codex", model: "bundled-gpt", thinking_level, ...target(binding, runtime.id),
+        }) });
+        expect(allowed.status).toBe(201);
+        const agent = await allowed.json();
+        const task = store.createTask({ agentId: agent.id, prompt: "Run actual fallback member" });
+        expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+        store.startTask(task.id);
+        store.heartbeatRuntime(runtime.id);
+        expect(store.getTask(task.id)?.status).toBe("running");
+      }
+      store.updateRuntimeModels(runtime.id, inventory.map(id => ({ id, label: id, provider: "openai", default: false,
+        catalog: { status: "ready" as const } })));
+      await discover(inventory);
+      expect(store.claimTask(runtime.id)?.id).toBe(waiting.id);
+    });
+  }
+
+  it("rejects the same incomplete native directory on server and daemon and never dispatches its invented member", async () => {
+    const { store, runtime, app } = setup();
+    const partial = { models: [{ slug: "partial-native", display_name: "Partial", visibility: "list", supported_in_api: true,
+      default_reasoning_level: "high", supported_reasoning_levels: [{ effort: "high", description: "High" }] }] };
+    await discoverGatewayModels(store, "local", "codex", async url => ({ status: 200, text: JSON.stringify(
+      url.endsWith("/backend-api/codex/models") ? partial : { data: [{ id: "partial-native" }] },
+    ) }));
+    const daemon = await loadCodexModelCatalog('model_provider = "gateway"\n[model_providers.gateway]\nbase_url = "https://gateway.example/v1"', "fixture-token", async () => ({ status: 200, text: JSON.stringify(partial) }));
+    expect(daemon.status).toBe("error");
+    expect(store.getGatewayModels("local", "codex")?.nativeCatalogStatus).toBe("error");
+    const catalog = (await (await app.request("/api/models")).json()).providers[0];
+    expect(catalog).toMatchObject({ model_catalog_status: "error", models: [{ id: "partial-native", execution_status: "unavailable" }] });
+    for (const binding of bindings) {
+      const selected = { name: `Incomplete ${binding}`, provider: "codex", model: "partial-native", ...target(binding, runtime.id) };
+      const rejected = await app.request("/api/agents", { method: "POST", headers, body: JSON.stringify(selected) });
+      expect(rejected.status).toBe(400);
+      const saved = store.createAgent(selected);
+      const task = store.createTask({ agentId: saved.id, prompt: "Must wait" });
+      expect(store.runtimeCanRunAgent(runtime, saved)).toBe(false);
+      expect(store.claimTask(runtime.id)).toBeNull();
+      expect(store.getTask(task.id)?.status).toBe("queued");
     }
-    const fallback = await app.request("/api/agents", { method: "POST", headers,
-      body: JSON.stringify({ name: "Fallback preserved", provider: "codex", model: "inventory-only-route" }),
+  });
+
+  it("never treats an unrefreshed legacy snapshot as authority while discovery remains pending", async () => {
+    const { store, runtime, app, discover } = setup();
+    const revision = store.getRelayConfigForDaemon("local").codex!.revision;
+    store.saveGatewayModels("local", "codex", { sourceRevision: revision, models: inventory.map(id => ({ id, label: id })) });
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    refreshStaleGatewayModels(store, "local", async url => {
+      await pending;
+      return { status: 200, text: JSON.stringify(url.endsWith("/backend-api/codex/models")
+        ? { models: [codexNativeModel({ slug: "executable-model" })] } : { data: inventory.map(id => ({ id })) }) };
     });
-    expect(fallback.status).toBe(201);
-    const fallbackAgent = await fallback.json();
-    const task = store.createTask({ agentId: fallbackAgent.id, prompt: "Existing fallback behavior" });
-    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
-    const explicit = await app.request("/api/agents", { method: "POST", headers,
-      body: JSON.stringify({ name: "No unchecked effort", provider: "codex", model: "executable-model", thinking_level: "max" }),
-    });
-    expect(explicit.status).toBe(400);
-    const saved = store.createAgent({ name: "Saved effort", provider: "codex", model: "executable-model", thinkingLevel: "max" });
-    const waiting = store.createTask({ agentId: saved.id, prompt: "Wait for capability recovery" });
-    expect(store.claimTask(runtime.id)).toBeNull();
-    expect(store.getTask(waiting.id)?.status).toBe("queued");
+    try {
+      for (const query of ["", `?runtime_id=${runtime.id}`, "?execution_group_id=catalog-group"]) {
+        const codex = (await (await app.request(`/api/models${query}`)).json()).providers[0];
+        expect(codex.model_catalog_status).toBe("unknown");
+        expect(codex.models.every((model: any) => model.execution_status === "unknown")).toBe(true);
+      }
+      for (const binding of bindings) {
+        const selection = { name: `Old inventory ${binding}`, provider: "codex", model: "inventory-only-route", ...target(binding, runtime.id) };
+        const rejected = await app.request("/api/agents", { method: "POST", headers, body: JSON.stringify(selection) });
+        expect(rejected.status).toBe(400);
+        expect((await rejected.json()).code).toBe("model_execution_catalog_unknown");
+        const saved = store.createAgent(selection);
+        const waiting = store.createTask({ agentId: saved.id, prompt: "Wait for authoritative refresh" });
+        expect(store.runtimeCanRunAgent(runtime, saved)).toBe(false);
+        expect(store.claimTask(runtime.id)).toBeNull();
+        expect(store.getTask(waiting.id)?.status).toBe("queued");
+      }
+    } finally { release(); }
+    await discover();
+    const codex = (await (await app.request("/api/models")).json()).providers[0];
+    expect(codex.model_catalog_status).toBe("ready");
+    expect(codex.models.map((model: any) => model.id)).toEqual(["executable-model"]);
   });
 
   it("does not apply Codex native membership restrictions to Claude model selection or claims", async () => {

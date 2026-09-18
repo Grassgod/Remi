@@ -160,6 +160,7 @@
     "concurrency_tooltip": "同時実行数 · 最大 {{value}} 件の同時タスク",
     "concurrency_range": "最大同時タスク数（{{min}}–{{max}}）",
     "model_unavailable": "実行カタログにないため実行できません",
+    "model_execution_unknown": "実行可否が不明です · カタログを更新中",
     "model_default": "デフォルト",
     "model_tooltip": "モデル · {{value}}",
     "model_search_placeholder": "モデル ID を検索または入力",

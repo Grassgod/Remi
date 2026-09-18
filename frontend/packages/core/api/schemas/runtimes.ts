@@ -239,7 +239,7 @@ const ModelThinkingSchema = z.object({
 
 const FleetProviderModelsSchema = z.object({
   provider: z.string(),
-  model_catalog_status: z.enum(["ready", "error"]).catch("error").optional(),
+  model_catalog_status: z.enum(["ready", "error", "unknown"]).catch("unknown").optional(),
   online_runtime_count: z.number().default(0),
   default_thinking: ModelThinkingSchema.optional(),
   models: z.array(
@@ -248,6 +248,7 @@ const FleetProviderModelsSchema = z.object({
       label: z.string().default(""),
       provider: z.string().optional(),
       default: z.boolean().optional(),
+      execution_status: z.enum(["available", "unavailable", "unknown"]).catch("unknown").optional(),
       thinking: ModelThinkingSchema.optional(),
     }).loose(),
   ).default([]),

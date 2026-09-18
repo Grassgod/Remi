@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import {
-  loadCodexGatewayInventory,
   loadCodexModelCatalog,
   mergeCodexSessionConfig,
 } from "@daemon/agent-runtime/relay-sync.js";
@@ -154,21 +153,26 @@ describe("isolated Codex Relay model catalog", () => {
     expect(readFileSync(join(outside, "config.toml"), "utf8")).toBe(originalConfig);
   });
 
-  it("queries the normal inventory after a native-catalog failure for gateway-only error reporting", async () => {
-    const inventory = await loadCodexGatewayInventory(fragment, "fixture-key", async (url, _init, options) => {
-      expect(url).toBe("https://gateway.example/v1/models");
-      expect(options).toEqual({ timeoutMs: 10_000, maxBodyBytes: 1_000_000 });
-      return { status: 200, text: JSON.stringify({ data: [{ id: "custom-model", display_name: "Custom" }] }) };
-    });
+  it("reports only actual bundled members and preserves their reasoning capabilities after a catalog failure", () => {
     expect(runtimeModelsWithCatalogError([
       { id: "bundled-gpt", label: "Bundled GPT", provider: "openai", default: true,
-        thinking: { status: "supported", supportedLevels: [{ value: "low", label: "Low" }] } },
-    ], inventory, "Codex model catalog HTTP 503")).toEqual([
+        thinking: { status: "supported", defaultLevel: "low", supportedLevels: [{ value: "low", label: "Low" }] } },
+    ], "Codex model catalog HTTP 503")).toEqual([
       { id: "bundled-gpt", label: "Bundled GPT", provider: "openai", default: true,
-        thinking: { status: "error", supportedLevels: [], error: "Codex model catalog HTTP 503" } },
-      { id: "custom-model", label: "Custom", provider: "openai", default: false,
-        thinking: { status: "error", supportedLevels: [], error: "Codex model catalog HTTP 503" } },
+        thinking: { status: "supported", defaultLevel: "low", supportedLevels: [{ value: "low", label: "Low" }] },
+        catalog: { status: "error", error: "Codex model catalog HTTP 503" } },
     ]);
+  });
+
+  it("publishes a diagnostic-only report when no actual fallback members could be discovered", () => {
+    const models = runtimeModelsWithCatalogError([], "Codex model catalog HTTP 503");
+    expect(models).toHaveLength(1);
+    expect(models[0]).toMatchObject({
+      default: false, providerDefault: true,
+      thinking: { status: "unknown", supportedLevels: [] },
+      catalog: { status: "error", error: "Codex model catalog HTTP 503" },
+    });
+    expect(models.filter(model => !model.providerDefault)).toEqual([]);
   });
 
   it("preserves ACP defaults and distinguishes unknown capabilities from explicit empty levels", () => {

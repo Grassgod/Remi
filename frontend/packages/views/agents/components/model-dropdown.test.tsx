@@ -42,7 +42,53 @@ describe("ModelDropdown execution catalog", () => {
     expect(onChange).toHaveBeenCalledWith("available");
   });
 
-  it.each(["error", undefined])("keeps fallback models and custom selection with status %s", async (model_catalog_status) => {
+  it("keeps failed inventory visible but disabled while bundled GPT remains selectable", async () => {
+    const models = [
+      { id: "inventory-only", label: "Inventory only", execution_status: "unavailable" },
+      { id: "bundled", label: "Bundled GPT", execution_status: "available" },
+    ];
+    listFleetModels.mockResolvedValue({ providers: [{ provider: "codex", model_catalog_status: "error", models }] });
+    const onChange = renderDropdown();
+    expect(await screen.findByText("Not in execution catalog · Cannot run")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /inventory-only/ }));
+    const inventory = await screen.findByRole("button", { name: /Inventory only/ });
+    expect(inventory).toBeDisabled();
+    fireEvent.click(inventory);
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByPlaceholderText("Search or type a model ID"), { target: { value: "custom-new" } });
+    expect(screen.queryByRole("button", { name: 'Use "custom-new"' })).toBeNull();
+    fireEvent.change(screen.getByPlaceholderText("Search or type a model ID"), { target: { value: "bundled" } });
+    fireEvent.click(screen.getByRole("button", { name: /Bundled GPT/ }));
+    expect(onChange).toHaveBeenCalledWith("bundled");
+  });
+
+  it("allows a confirmed custom Runtime model while the workspace relay catalog is unknown", async () => {
+    listFleetModels.mockResolvedValue({ providers: [{ provider: "codex", model_catalog_status: "unknown", models: [
+      { id: "custom-runtime", label: "Custom Runtime", execution_status: "available" },
+      { id: "inventory-only", label: "Inventory only", execution_status: "unknown" },
+    ] }] });
+    const onChange = renderDropdown("codex", "custom-runtime");
+    fireEvent.click(screen.getByRole("button", { name: /custom-runtime/ }));
+    const custom = await screen.findByRole("button", { name: /Custom Runtime/ });
+    expect(custom).toBeEnabled();
+    expect(screen.getByRole("button", { name: /Inventory only/ })).toBeDisabled();
+    fireEvent.change(screen.getByPlaceholderText("Search or type a model ID"), { target: { value: "custom-new" } });
+    expect(screen.queryByRole("button", { name: 'Use "custom-new"' })).toBeNull();
+    fireEvent.change(screen.getByPlaceholderText("Search or type a model ID"), { target: { value: "custom-runtime" } });
+    fireEvent.click(screen.getByRole("button", { name: /Custom Runtime/ }));
+    expect(onChange).toHaveBeenCalledWith("custom-runtime");
+  });
+
+  it("shows unknown execution capability without selecting or replacing the saved model", async () => {
+    listFleetModels.mockResolvedValue({ providers: [{ provider: "codex", model_catalog_status: "unknown", models: [{ id: "inventory-only", label: "Inventory only", execution_status: "unknown" }] }] });
+    const onChange = renderDropdown();
+    expect(await screen.findByText("Execution capability unknown · Refreshing catalog")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /inventory-only/ }));
+    expect(await screen.findByRole("button", { name: /Inventory only/ })).toBeDisabled();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it.each(["error", undefined])("keeps legacy responses without execution metadata compatible (status %s)", async (model_catalog_status) => {
     listFleetModels.mockResolvedValue({ providers: [{ provider: "codex", model_catalog_status, models: [{ id: "inventory-only", label: "Inventory only" }] }] });
     const onChange = renderDropdown();
     fireEvent.click(screen.getByRole("button", { name: /inventory-only/ }));

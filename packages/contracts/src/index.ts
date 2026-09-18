@@ -8,3 +8,4 @@ export * from "./attachments.js";
 export * from "./messaging.js";
 export * from "./wiki-links.js";
 export * from "./model-thinking.js";
+export * from "./codex-model-catalog.js";

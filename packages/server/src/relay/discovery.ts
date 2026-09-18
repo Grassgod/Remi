@@ -1,3 +1,4 @@
+import { validCodexNativeCatalog } from "@multiremi/contracts/codex-model-catalog.js";
 import { createLogger } from "@shared/logger.js";
 import type { GatewayModelsSnapshot, MultiremiStore, RelayEngine } from "@multiremi/store/store.js";
 import type { MultiremiRuntimeModelThinking } from "@multiremi/contracts/types.js";
@@ -114,13 +115,11 @@ async function fetchGatewayModels(
     const catalog = await httpGet(new URL("/backend-api/codex/models", base).href, headers);
     if (catalog.status < 200 || catalog.status >= 300) throw new Error(`gateway capability catalog HTTP ${catalog.status}`);
     const parsed = parseBody(catalog.text);
-    if (!Array.isArray(parsed.models) || !parsed.models.length) throw new Error("gateway returned an invalid capability catalog");
+    if (!validCodexNativeCatalog(parsed)) throw new Error("gateway capability catalog contains incomplete or invalid native model metadata");
     const inventory = new Map(out.map(model => [model.id, model]));
     const models: GatewayModelsSnapshot["models"] = [];
     const nativeIds = new Set<string>();
-    for (const candidate of parsed.models) {
-      const model = object(candidate);
-      if (!model || typeof model.slug !== "string" || !model.slug.trim()) throw new Error("gateway returned an invalid capability catalog");
+    for (const model of parsed.models) {
       if (nativeIds.has(model.slug)) continue;
       nativeIds.add(model.slug);
       // The loaded native catalog replaces Codex's bundled catalog. Its selector
@@ -187,7 +186,7 @@ export function triggerGatewayDiscovery(store: MultiremiStore, workspaceId: stri
 
 // Per (workspace,engine) backoff so a persistently-failing gateway isn't hammered by
 // every GET /api/models (singleflight-ish; the trigger is request-driven, not a loop).
-const lastDiscoveryAttempt = new Map<string, number>();
+const discoveryAttempts = new WeakMap<MultiremiStore, Map<string, number>>();
 const DISCOVERY_BACKOFF_MS = 30_000;
 
 /** Lazily refresh a snapshot that is missing, stale, or was discovered for an OLD
@@ -195,6 +194,8 @@ const DISCOVERY_BACKOFF_MS = 30_000;
 export function refreshStaleGatewayModels(store: MultiremiStore, workspaceId: string, httpGet: HttpGet = defaultHttpGet): void {
   if (!store.getRelayModelDiscovery(workspaceId)) return;
   const now = Date.now();
+  const lastDiscoveryAttempt = discoveryAttempts.get(store) ?? new Map<string, number>();
+  discoveryAttempts.set(store, lastDiscoveryAttempt);
   const config = store.getRelayConfigForDaemon(workspaceId);
   for (const engine of ["claude", "codex"] as const) {
     const engineConfig = config[engine];

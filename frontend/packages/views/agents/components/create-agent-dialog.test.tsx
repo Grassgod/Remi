@@ -197,6 +197,17 @@ function createButton(): HTMLButtonElement {
 }
 
 describe("CreateAgentDialog (execution targets)", () => {
+  it.each(["unknown", "error"])("preserves duplicate settings but blocks an unexecutable model with catalog status %s", async (model_catalog_status) => {
+    mockListFleetModels.mockResolvedValue({ providers: [{ provider: "codex", model_catalog_status, models: [{ id: "inventory-only", label: "Inventory only", execution_status: model_catalog_status === "unknown" ? "unknown" : "unavailable" }] }] });
+    const { onCreate } = renderDialog(makeTemplate({ provider: "codex", model: "inventory-only", thinking_level: "saved-effort" }));
+    expect(await screen.findByText(model_catalog_status === "unknown" ? "Execution capability unknown · Refreshing catalog" : "Not in execution catalog · Cannot run")).toBeInTheDocument();
+    expect(screen.getByLabelText("Model")).toHaveValue("inventory-only");
+    expect(screen.getByRole("combobox", { name: "Reasoning effort" })).toHaveValue("saved-effort");
+    expect(createButton()).toBeDisabled();
+    fireEvent.click(createButton());
+    expect(onCreate).not.toHaveBeenCalled();
+  });
+
   it("prevents duplicating a model absent from the execution catalog while retaining the draft settings", async () => {
     mockListFleetModels.mockResolvedValue({ providers: [{ provider: "codex", model_catalog_status: "ready", models: [] }] });
     const { onCreate } = renderDialog(makeTemplate({ provider: "codex", model: "inventory-only", thinking_level: "saved-effort" }));
