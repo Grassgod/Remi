@@ -42,6 +42,16 @@ describe("ChatEndpoints contracts", () => {
     }));
   });
 
+  it("retains runtime workspace selection and rejects an unacknowledged or malformed binding", async () => {
+    const linked = { ...session, runtime_workspace_id: "rws-a" };
+    await expect(endpointsWithResponse(linked).createChatSession({ agent_id: "agent-1", runtime_workspace_id: "rws-a" })).resolves.toEqual(linked);
+    expect(fetch).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      body: JSON.stringify({ agent_id: "agent-1", runtime_workspace_id: "rws-a" }),
+    }));
+    await expect(endpointsWithResponse(session).createChatSession({ agent_id: "agent-1", runtime_workspace_id: "rws-a" })).rejects.toBeInstanceOf(ApiContractError);
+    await expect(endpointsWithResponse({ ...session, runtime_workspace_id: 123 }).getChatSession("chat-1")).rejects.toBeInstanceOf(ApiContractError);
+  });
+
   it("rejects malformed project data and unacknowledged project selection on create", async () => {
     await expect(endpointsWithResponse(session).createChatSession({ agent_id: "agent-1", project_id: "project-a" })).rejects.toBeInstanceOf(ApiContractError);
     await expect(endpointsWithResponse({ ...session, project_id: 123 }).getChatSession("chat-1")).rejects.toBeInstanceOf(ApiContractError);

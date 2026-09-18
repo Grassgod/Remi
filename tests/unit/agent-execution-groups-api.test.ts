@@ -29,6 +29,23 @@ function setup() {
 }
 
 describe("execution group API", () => {
+  it("creates Antigravity groups and dispatches their agents", async () => {
+    const { store, app, request } = setup();
+    const registered = await request("/api/multiremi/runtimes", {
+      name: "Antigravity", provider: "antigravity", execution_group_id: "agy-group",
+    });
+    expect(registered.status).toBe(201);
+    const { runtime } = await registered.json();
+    const response = await request("/api/agents", { name: "Antigravity worker", execution_group_id: "agy-group" });
+    expect(response.status).toBe(201);
+    const agent = await response.json();
+    expect(agent.provider).toBe("antigravity");
+    const task = store.createTask({ agentId: agent.id, prompt: "Run in the group" });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    const catalog = await (await app.request("/api/models?execution_group_id=agy-group")).json();
+    expect(catalog.providers[0].provider).toBe("antigravity");
+  });
+
   for (const provider of ["codex", "claude"] as const) {
     it(`preserves reported ${provider} reasoning through custom connections, group validation and dispatch`, async () => {
       const { store, app, request } = setup();

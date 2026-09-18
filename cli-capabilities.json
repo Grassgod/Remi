@@ -5761,6 +5761,88 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "runtime.workspace.list": {
+      "command": "remi runtime workspace list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "runtime.workspace.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "runtime.workspace.create": {
+      "command": "remi runtime workspace create",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.workspace.create",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "runtime.workspace.get": {
+      "command": "remi runtime workspace get",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "runtime.workspace.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "runtime.workspace.rename": {
+      "command": "remi runtime workspace rename",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.workspace.rename",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "runtime.workspace.archive": {
+      "command": "remi runtime workspace archive",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.workspace.archive",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "runtime.list": {
       "command": "remi runtime list",
       "aliases": [],
@@ -9064,6 +9146,38 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "context.auth.password": {
+      "command": "remi context auth password",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "context.auth.password",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "context.auth.password-account.set": {
+      "command": "remi context auth password-account set",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "context.auth.password-account.set",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "context.auth.lark": {
       "command": "remi context auth lark",
       "aliases": [],
@@ -9734,6 +9848,9 @@
     },
     "DELETE /api/projects/:id/resources/:resourceId": {
       "command": "project.resource.delete"
+    },
+    "DELETE /api/runtime-workspaces/:id": {
+      "command": "runtime.workspace.archive"
     },
     "DELETE /api/runtimes/:id": {
       "command": "runtime.delete"
@@ -10503,6 +10620,12 @@
     "GET /api/remi/releases/latest/version": {
       "command": "platform.release.version"
     },
+    "GET /api/runtime-workspaces": {
+      "command": "runtime.workspace.list"
+    },
+    "GET /api/runtime-workspaces/:id": {
+      "command": "runtime.workspace.get"
+    },
     "GET /api/runtimes": {
       "command": "runtime.list"
     },
@@ -10550,6 +10673,9 @@
     },
     "GET /api/runtimes/:id/usage/by-hour": {
       "command": "runtime.usage.by-hour"
+    },
+    "GET /api/runtimes/:id/workspaces": {
+      "command": "runtime.workspace.list"
     },
     "GET /api/scm/capabilities": {
       "command": "scm.capabilities"
@@ -10885,6 +11011,9 @@
     "PATCH /api/multiremi/squads/:id/members": {
       "command": "squad.member.update"
     },
+    "PATCH /api/runtime-workspaces/:id": {
+      "command": "runtime.workspace.rename"
+    },
     "PATCH /api/runtimes/:id": {
       "command": "runtime.update"
     },
@@ -10935,6 +11064,9 @@
     },
     "POST /api/agents/from-template": {
       "command": "agent.template.create"
+    },
+    "POST /api/auth/password-accounts": {
+      "command": "context.auth.password-account.set"
     },
     "POST /api/autopilots": {
       "command": "autopilot.create"
@@ -11660,6 +11792,9 @@
     "POST /api/runtimes/:id/update": {
       "command": "runtime.release.start"
     },
+    "POST /api/runtimes/:id/workspaces": {
+      "command": "runtime.workspace.create"
+    },
     "POST /api/skills": {
       "command": "skill.create"
     },
@@ -11853,6 +11988,9 @@
     },
     "POST /auth/logout": {
       "command": "context.auth.logout"
+    },
+    "POST /auth/password": {
+      "command": "context.auth.password"
     },
     "POST /auth/send-code": {
       "command": "context.auth.send-code"

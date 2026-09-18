@@ -12,7 +12,7 @@ import type {
   UpdateIssueRequest,
 } from "../../types";
 import type { HttpClient } from "../http";
-import { parseStrictResponse, parseWithFallback } from "../schema";
+import { ApiContractError, parseStrictResponse, parseWithFallback } from "../schema";
 import {
   ChildIssuesResponseSchema,
   EMPTY_ISSUE_RETITLE_RESPONSE,
@@ -21,6 +21,7 @@ import {
   EMPTY_LIST_ISSUES_RESPONSE,
   GroupedIssuesResponseSchema,
   IssueSchema,
+  QuickCreateIssueResponseSchema,
   IssueRetitleResponseSchema,
   IssueWorkspaceResponseSchema,
   ListIssuesResponseSchema,
@@ -127,23 +128,27 @@ export class IssuesEndpoints {
   }
 
   async createIssue(data: CreateIssueRequest): Promise<Issue> {
-    return this.http.fetch("/api/issues", {
+    const raw = await this.http.fetch<unknown>("/api/issues", {
       method: "POST",
       body: JSON.stringify(data),
     });
+    return parseIssueMutation(raw, "POST /api/issues", data);
   }
 
   async quickCreateIssue(data: {
+    runtime_workspace_id?: string | null;
     agent_id?: string;
     squad_id?: string;
     prompt: string;
     project_id?: string | null;
     parent_issue_id?: string | null;
   }): Promise<{ task_id: string; issue: Issue }> {
-    return this.http.fetch("/api/issues/quick-create", {
+    const raw = await this.http.fetch<unknown>("/api/issues/quick-create", {
       method: "POST",
       body: JSON.stringify(data),
     });
+    const result = parseStrictResponse<{ task_id: string; issue: Issue }>(raw, QuickCreateIssueResponseSchema, { endpoint: "POST /api/issues/quick-create" });
+    return { task_id: result.task_id, issue: parseIssueMutation(result.issue, "POST /api/issues/quick-create", data) };
   }
 
   async listGeneratedIssues(id: string): Promise<{ issues: Issue[]; total: number }> {
@@ -154,17 +159,19 @@ export class IssuesEndpoints {
   }
 
   async updateIssue(id: string, data: UpdateIssueRequest): Promise<Issue> {
-    return this.http.fetch(`/api/issues/${id}`, {
+    const raw = await this.http.fetch<unknown>(`/api/issues/${id}`, {
       method: "PUT",
       body: JSON.stringify(data),
     });
+    return parseIssueMutation(raw, "PUT /api/issues/:id", data);
   }
 
   async patchIssue(id: string, data: UpdateIssueRequest): Promise<Issue> {
-    return this.http.fetch(`/api/issues/${id}`, {
+    const raw = await this.http.fetch<unknown>(`/api/issues/${id}`, {
       method: "PATCH",
       body: JSON.stringify(data),
     });
+    return parseIssueMutation(raw, "PATCH /api/issues/:id", data);
   }
 
   async retitleIssue(id: string, apply = true): Promise<IssueRetitleResponse> {
@@ -230,4 +237,12 @@ export class IssuesEndpoints {
       body: JSON.stringify({ issue_ids: issueIds }),
     });
   }
+}
+
+function parseIssueMutation(raw: unknown, endpoint: string, input: { runtime_workspace_id?: string | null }): Issue {
+  const issue = parseStrictResponse<Issue>(raw, IssueSchema, { endpoint });
+  if (input.runtime_workspace_id !== undefined && (issue.runtime_workspace_id ?? null) !== input.runtime_workspace_id) {
+    throw new ApiContractError(endpoint, "Server did not retain the selected runtime workspace");
+  }
+  return issue;
 }

@@ -1,15 +1,10 @@
 /**
  * Daemon orchestration primitives.
  *
- * The reusable, product-agnostic seeds of the runtime orchestrator: per-lane
- * serialization (AsyncLock) and thread-aware session-key derivation. Extracted
- * verbatim from src/core.ts in D6.
- *
- * NOTE: the deep orchestration in the Remi class (message routing loop, provider
- * selection, lane dispatch, auto-recovery) reads/writes Remi instance state and
- * is NOT mechanically separable without a stateful refactor; it stays in the Remi
- * product (→ remi/ in D7) and a fuller Orchestrator extraction is deferred behind
- * characterization tests (see DIR-REDESIGN 铁律#5).
+ * Per-lane serialization (AsyncLock) and thread-aware session-key derivation.
+ * Used by the Remi core library; the foreground Feishu connector submits
+ * platform Chat/Task operations through apps/remi/cli/multiremi.ts. Task
+ * claiming and reporting live in packages/server/src/worker/daemon.ts.
  */
 
 import type { IncomingMessage } from "@connectors/base.js";

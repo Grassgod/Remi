@@ -496,12 +496,7 @@ export class SessionArchiveService {
     try {
       const actual = await this.promoteVerifiedPartial(partialPath, finalPath, archive);
       await this.writeManifest(finalPath, archive, actual.sizeBytes);
-      const directory = await open(dirname(finalPath), constants.O_RDONLY);
-      try {
-        await directory.sync();
-      } finally {
-        await directory.close();
-      }
+      await this.syncDirectory(dirname(finalPath));
       const ready = this.store.markSessionArchiveReadyAttempt(
         archive.id,
         runtimeId,
@@ -1010,6 +1005,9 @@ export class SessionArchiveService {
   }
 
   private async syncDirectory(path: string): Promise<void> {
+    // Windows cannot flush directory handles. Data files are still flushed
+    // before atomic promotion; do not report successful writes as failed.
+    if (process.platform === "win32") return;
     const directory = await open(path, constants.O_RDONLY);
     try {
       await directory.sync();

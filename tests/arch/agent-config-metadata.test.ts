@@ -8,7 +8,7 @@ import { join } from "node:path";
 
 const ROOT = join(import.meta.dir, "../..");
 const TEMPLATES_DIR = join(ROOT, "packages/server/src/api/agent-templates");
-const SKILL_ROOTS = [".remi/pipeline/skills", "frontend/.agents/skills"];
+const SKILL_ROOTS = [".agents/skills", ".remi/pipeline/skills", "frontend/.agents/skills"];
 
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const CATEGORIES = new Set([

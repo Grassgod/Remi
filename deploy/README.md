@@ -1,5 +1,9 @@
 # Platform deployment
 
+For two isolated environments on one development computer, use the
+[local stable/dev guide](../docs/deploy/local-profiles.md). It runs separate
+API/Web/PostgreSQL projects and does not use the host updater described below.
+
 The API records lifecycle operations. A host-owned `remi-platform-updater`
 service executes them through one deployment driver. The API container never
 receives the Docker socket and cannot invoke `systemctl`.
@@ -10,7 +14,7 @@ Prepare every release, including nightly releases, with Bun 1.3.14:
 
 ```bash
 git fetch origin --tags
-bun run release:prepare --version 0.2.70
+bun run release:prepare --version <next-unused-version>
 ```
 
 This resolves the latest stable ACP bridges, Claude SDK/CC and Codex from the
@@ -26,10 +30,9 @@ CLI GitHub Release first, then calls the reusable `Platform release` workflow
 to publish the API/Web images and attach the platform manifest and systemd
 archive to the same release.
 
-```bash
-git tag v0.2.70
-git push origin v0.2.70
-```
+Select a new, unused SemVer version only for an explicitly requested release;
+the package version, tag, and GitHub Release must agree. See [repository release
+rules](../AGENTS.md).
 
 CI rejects version bumps without a matching prepared runtime snapshot. The tag
 workflow checks that snapshot and successful full CI on the exact main commit
@@ -187,13 +190,10 @@ the sample configuration describes. Add
 `proxy_set_header X-Remi-Archive-Direct-Route "";` to the enclosing server block
 so only the direct location supplies the proof.
 
-The 8 MiB fallback is deliberately fail-closed and is a compatibility change.
-Production history includes one 8.912 MiB archive that previously succeeded,
-while the smallest observed failed archive was 10.051 MiB. Therefore an
-unconfigured deployment now explicitly rejects some archives in the 8-10 MiB
-range instead of risking a truncated upload. Operators may raise
-`MULTIREMI_ARCHIVE_PROXY_MAX_BYTES`, but doing so moves the limit toward a
-known failure size and is not recommended as a substitute for the direct route.
+The default 8 MiB fallback rejects larger archives unless a direct route is
+attested. Operators may configure `MULTIREMI_ARCHIVE_PROXY_MAX_BYTES`, but a
+larger limit does not establish the capacity of their proxy. Validate the actual
+deployment route and upload behavior before changing it.
 
 Use [`nginx/session-archive-direct.conf`](nginx/session-archive-direct.conf) in
 the public server block. It disables request/response buffering, allows bodies
@@ -208,20 +208,18 @@ Audit the complete effective configuration with `nginx -T`. Ordinary prefix
 location order does not decide this match. A broader regex declared earlier can
 win, and a covering `^~` prefix such as `^~ /api/` prevents regex locations from
 being evaluated at all. Place this regex before broader matching regexes and
-remove or narrow any covering `^~` prefix. QA read-only inspection found that
-the current production-209 topology (ordinary Web catch-all, three API
-WebSocket prefixes, and `^~ /api/webhooks/scm/`) permits this location to match;
-the location itself was not installed by this change.
+remove or narrow any covering `^~` prefix. Inspect the target deployment's
+effective configuration; a configuration checked on another host or release
+does not establish the current route.
 
-For the production host `n37-117-209`, an authorized operator must perform the
-following steps. This repository change does not perform them:
+When enabling direct uploads on a deployment, perform these checks:
 
 1. Read the deployment's Compose env and confirm the effective host API port;
    do not assume the sample port.
 2. Inspect `nginx -T` for earlier matching regexes and covering `^~` prefixes,
    then add the direct location, run `nginx -t`, and reload Nginx. Its position
    relative to an ordinary Web catch-all is irrelevant.
-3. Add `MULTIREMI_DAEMON_DIRECT_BASE_URL=https://n37-117-209.byted.org` to the
+3. Add `MULTIREMI_DAEMON_DIRECT_BASE_URL=https://<public-api-host>` to the
    API secret env file and redeploy through the normal release/updater flow.
 4. Upgrade Runtime daemon CLIs through their normal release flow to obtain
    streaming uploads, URL validation, the proxy-size guard, and durable upload
@@ -234,8 +232,7 @@ following steps. This repository change does not perform them:
    Web/Next.js logs do not, and each archive becomes `ready` with its declared
    size and SHA-256. Check Web process memory/event-loop health during the run.
 
-`remi issue archive retry <issue> <archive-id>` (the compatibility alias of
-`remi session archive retry`) also accepts an exhausted failed archive. It
+`remi session archive retry <issue> <archive-id>` also accepts an exhausted failed archive. It
 resets the attempt count, error, backoff timestamp, and exhaustion timestamp,
 returning the row to `pending` with `retry_state=eligible`. Run it once per
 failed archive only after the direct route and API setting pass the HEAD check;

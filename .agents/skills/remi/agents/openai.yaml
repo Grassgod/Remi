@@ -1,0 +1,4 @@
+interface:
+  display_name: "Remi"
+  short_description: "通过 Remi CLI 管理任务、云友、模型、项目知识与集成，并排查运行问题"
+  default_prompt: "使用 $remi，根据当前实例的 CLI 能力完成我的操作，并核验实际结果。"

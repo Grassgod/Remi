@@ -197,7 +197,7 @@ describe("Execution groups", () => {
     const store = createStore();
     const runtime = store.registerRuntime({ name: "Legacy", provider: "any", daemonId: "a" });
     const groups = store.listExecutionGroups("local");
-    expect(groups.map(group => group.provider).sort()).toEqual(["claude", "codex"]);
-    expect(runtime.executionGroupIds).toHaveLength(2);
+    expect(groups.map(group => group.provider).sort()).toEqual(["antigravity", "claude", "codex"]);
+    expect(runtime.executionGroupIds).toHaveLength(3);
   });
 });

@@ -925,6 +925,7 @@ const BY_NAME: Record<string, keyof SeedRefs> = {
 };
 
 function resolveParam(pattern: string, name: string, refs: SeedRefs): string {
+  if (name === "id" && pattern.startsWith("/api/runtime-workspaces/")) return "rws_snapshot";
   switch (name) {
     case "digest":
       return "0".repeat(64);

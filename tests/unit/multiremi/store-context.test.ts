@@ -1,5 +1,5 @@
 // Sibling test for packages/server/src/store/context.ts — proves the StoreContext
-// carved out in SPLIT-PLAN §1.1 is wired to the same state the MultiremiStore
+// is wired to the same state the MultiremiStore
 // facade exposes (listener Sets, analytics buffers) and that its lazy host
 // getter resolves back into the store for cross-domain lookups.
 import { afterEach, describe, expect, it } from "bun:test";

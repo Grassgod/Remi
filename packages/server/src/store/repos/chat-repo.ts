@@ -3,6 +3,7 @@
 import { createId, nowIso } from "@multiremi/ids.js";
 import { cleanOptionalString, nullableString } from "@multiremi/store/helpers.js";
 import { type StoreContext } from "@multiremi/store/context.js";
+import { RuntimeWorkspaceError, RuntimeWorkspacesRepo } from "./runtime-workspaces-repo.js";
 import type { CancelTaskResult } from "./tasks-repo.js";
 import { buildSessionProjection } from "@multiremi/store/session-projection.js";
 import { resolveProjectionTokenBudget } from "@multiremi/store/session-projection-budget.js";
@@ -76,8 +77,11 @@ export class ChatRepo {
     if (!agent) throw new Error(`Agent not found: ${agentId}`);
     if (agent.archivedAt) throw new Error(`Agent is archived: ${agentId}`);
     if (agent.workspaceId !== workspaceId) throw new Error("Agent belongs to another workspace");
+    const runtimeWorkspaceId = input.runtimeWorkspaceId ?? input.runtime_workspace_id ?? null;
+    if (runtimeWorkspaceId) new RuntimeWorkspacesRepo(this.ctx).require(runtimeWorkspaceId, workspaceId);
     const projectId = this.validateProjectBinding(workspaceId,
       Object.hasOwn(input, "projectId") ? input.projectId : input.project_id);
+    if (projectId && runtimeWorkspaceId) throw new RuntimeWorkspaceError("Choose either a project or a runtime workspace");
     const id = input.id ?? createId("chat");
     if (this.getChatSession(id) || this.ctx.db.query("SELECT id FROM multiremi_tasks WHERE chat_session_id = ? LIMIT 1").get(id)) {
       throw new ChatConflictError("Chat session id has already been used");
@@ -86,10 +90,10 @@ export class ChatRepo {
     const title = input.title?.trim() || `Chat with ${agent.name}`;
     this.ctx.db.run(
       `INSERT INTO multiremi_chat_sessions (
-        id, workspace_id, creator_id, agent_id, project_id, title, status, session_id, work_dir, latest_task_id,
+        project_id, runtime_workspace_id, id, workspace_id, creator_id, agent_id, title, status, session_id, work_dir, latest_task_id,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, 'active', NULL, NULL, NULL, ?, ?)`,
-      [id, workspaceId, input.creatorId ?? input.creator_id ?? "local", agentId, projectId, title, now, now],
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', NULL, NULL, NULL, ?, ?)`,
+      [projectId, runtimeWorkspaceId, id, workspaceId, input.creatorId ?? input.creator_id ?? "local", agentId, title, now, now],
     );
     const session = this.getChatSession(id)!;
     return session;
@@ -145,6 +149,14 @@ export class ChatRepo {
       this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
       const current = this.getChatSession(id);
       if (!current) throw new Error(`Chat session not found: ${id}`);
+      const location = input as UpdateChatSessionInput & CreateChatSessionInput;
+      for (const [field, saved] of [
+        ["runtimeWorkspaceId", current.runtimeWorkspaceId], ["runtime_workspace_id", current.runtimeWorkspaceId],
+      ] as const) {
+        if (Object.hasOwn(location, field) && (location[field] ?? null) !== (saved ?? null)) {
+          throw new RuntimeWorkspaceError("Chat work location is fixed; create a new Chat to change it", 409);
+        }
+      }
       const now = nowIso();
       this.ctx.db.run(
         `UPDATE multiremi_chat_sessions
@@ -616,6 +628,7 @@ function chatMessagesAsSessionEvents(
 
 function toChatSession(row: Row): MultiremiChatSession {
   return {
+    runtimeWorkspaceId: nullableString(row.runtime_workspace_id),
     id: String(row.id),
     workspaceId: String(row.workspace_id ?? "local"),
     creatorId: nullableString(row.creator_id) ?? "local",

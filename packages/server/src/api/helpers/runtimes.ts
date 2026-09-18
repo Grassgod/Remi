@@ -48,6 +48,7 @@ export type DaemonRegisterRequestBody = {
   cli_version?: string;
   launched_by?: string;
   capabilities?: {
+    runtime_workspaces?: number;
     parallel_agent_execution?: number;
     codex_profiles?: number;
     claude_profiles?: number;
@@ -67,6 +68,7 @@ export type DaemonRegisterRequestBody = {
 export function buildDaemonInstallInstructions(input: {
   requestUrl: string;
   serverUrl?: string | null;
+  daemonServerUrl?: string | null;
   workspaceId?: string | null;
   token?: string | null;
   tokenId?: string | null;
@@ -76,6 +78,7 @@ export function buildDaemonInstallInstructions(input: {
 }) {
   const workspaceId = cleanString(input.workspaceId) ?? "local";
   const serverUrl = cleanString(input.serverUrl)
+    ?? cleanString(input.daemonServerUrl)
     ?? cleanString(process.env.MULTIREMI_PUBLIC_URL)
     ?? requestOrigin(input.requestUrl);
   const provider = cleanString(input.provider);
@@ -363,6 +366,7 @@ export function registerDaemonRuntimes(
           cli_version: cliVersion,
           launched_by: launchedBy,
           agent_plugin_protocol: agentPluginProtocol,
+          runtime_workspaces: body.capabilities?.runtime_workspaces === 1 ? 1 : 0,
           codex_profiles: body.capabilities?.codex_profiles === 1 ? 1 : 0,
           claude_profiles: body.capabilities?.claude_profiles === 1 ? 1 : 0,
           ...(body.capabilities?.parallel_agent_execution === 1 ? { parallel_agent_execution: 1 } : {}),

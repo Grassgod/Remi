@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { CommandRegistry } from "../../../apps/remi/cli/core/index.js";
 import { collaborationCommandSpecs } from "../../../apps/remi/cli/commands/collaboration.js";
 import { agentExtensionCommandSpecs } from "../../../apps/remi/cli/commands/agent-extensions.js";
@@ -126,8 +127,8 @@ describe("CLI explicit input workspace", () => {
 
   it("consumes stdin once and keeps input scoped to each command invocation", () => {
     const script = `
-      import { CommandRegistry } from ${JSON.stringify(new URL("../../../apps/remi/cli/core/index.ts", import.meta.url).pathname)};
-      import { tokenCommandSpecs } from ${JSON.stringify(new URL("../../../apps/remi/cli/commands/token.ts", import.meta.url).pathname)};
+      import { CommandRegistry } from ${JSON.stringify(fileURLToPath(new URL("../../../apps/remi/cli/core/index.ts", import.meta.url)))};
+      import { tokenCommandSpecs } from ${JSON.stringify(fileURLToPath(new URL("../../../apps/remi/cli/commands/token.ts", import.meta.url)))};
       const requests = [];
       globalThis.fetch = async (input, init) => {
         const request = new Request(input, init);

@@ -4,38 +4,37 @@
 
 Remi connects coding agents such as Claude Code and Codex to Feishu through the Agent Client
 Protocol. Multiremi owns agent definitions, project memory, issues, tasks, and runtime state; the
-Remi process supplies the persistent chat lane and connector lifecycle.
+Remi daemon supplies the connector lifecycle and executes platform tasks.
 
 ## Highlights
 
-- **Hub-and-Spoke orchestration** — A single `Remi` core (`packages/remi/src/core.ts`) routes messages between any **Connector** (input adapter) and any **Provider** (AI backend). A per-session-key `LaneScheduler` serializes concurrent traffic without blocking unrelated lanes.
-- **One agent configuration** — The `multiremi_agents` row selected by `MULTIREMI_BOT_AGENT_ID` controls the bot's instructions, cwd, provider, model, executable, tools, env, args, MCP servers, thinking level, and concurrency.
+- **Unified task execution** — Feishu messages enter the platform Chat/Task path through the daemon concierge. Task history, steering, cancellation, human requests, and ACP execution share the same runtime flow.
+- **Control-plane bot configuration** — Workspace Feishu concierge settings select an Agent and Runtime. The assigned `multiremi_agents` row controls instructions and execution options; the daemon reconciles configuration revisions delivered through heartbeats.
 - **Multiremi project memory** — Agents recall and record durable knowledge through the canonical `remi memory` CLI and API.
 - **Multi-connector by design** — Ships with a full Feishu/Lark connector (cards, streaming, mentions, reactions, threading, dynamic menus). The `Connector` interface is a small surface — Slack, Discord, or HTTP webhooks fit the same shape.
 - **ACP providers** — One `AcpProvider` speaks the Agent Client Protocol over stdio to Claude Code or Codex (`acp:claude` / `acp:codex`), using your existing subscription — no API key required. Per-agent behavior lives in swappable adapters.
 - **Multiremi platform** — A Hono API (`apps/server/main.ts`) plus a Next.js dashboard (`frontend/`) for workspaces, projects, issues, agents, autopilots, and live task transcripts. The `remi` CLI is its agent-side client.
-- **SQLite plus Postgres** — Persistent ACP session bindings and connector configuration live in local SQLite; Multiremi's authoritative data lives in SQLite or Postgres on the server.
+- **SQLite plus Postgres** — The server owns authoritative task and session state in SQLite or Postgres; the daemon keeps local operational state. Feishu bot configuration is stored by the control plane.
 - **Agent runtime** — The daemon (`packages/daemon/`) checks out repos, assembles per-task context, and spawns isolated agent sessions for issues and autopilot runs.
 
 ## Architecture
 
-```
-Feishu → Connector → lane/session → persistent AgentRuntime → ACP provider
-                               ↑
-             Multiremi daemon registration/heartbeat
-                               ↑
-           multiremi_agents + projects/memory/issues/tasks
+```text
+Workspace Feishu bot config → heartbeat directive → Runtime concierge supervisor
+                                                     ↓ config fetch
+Feishu message → Connector → platform Chat / Task → daemon worker → AgentRuntime → ACP
+                                 ↑                                      ↓
+                                 └──────── messages / usage / result ────┘
 ```
 
-Message flow inside `Remi._process()` → `processStream()`:
+The current foreground daemon boots a Feishu transport through `controlPlaneConciergeHost`.
+Ordinary messages become canonical platform Chat/Task operations; live-task steering, duplicate
+messages, cancellation, and human requests use that same task path. Connector replies consume
+persisted task events. The control plane selects the bot Agent and Runtime and coordinates
+configuration revisions and handover.
 
-1. **Acquire lane lock** — a per-session-key `AsyncLock` prevents interleaved replies.
-2. **Resolve session** — `chatId` → `sessionId` from `~/.remi/remi.db` (multi-turn continuity).
-3. **Resolve agent** — registration/heartbeat fetches the configured agent from the runtime's workspace.
-4. **Assemble runtime** — the agent row supplies cwd, instructions, provider/model, tools, env, args, MCP, thinking, and permissions.
-5. **Run an ACP session** — provider events stream back to the connector in real time.
-6. **Persist** — retain the ACP session binding and token metrics.
-7. **Reply** — `AgentResponse` returned via the originating connector.
+See the [current architecture map](docs/ARCHITECTURE.md) for source ownership and the separate
+[message ingestion service](docs/feishu-message-ingestion.md) for Connection/Source polling.
 
 ## Quick Start
 
@@ -48,7 +47,7 @@ Message flow inside `Remi._process()` → `processStream()`:
 ### Install
 
 ```bash
-git clone https://github.com/grasscoder/remi.git
+git clone https://github.com/moesin-lab/Remi.git remi
 cd remi
 bun install
 ```
@@ -56,12 +55,11 @@ bun install
 ### Run the agent
 
 ```bash
-# 1. Configure connector credentials and the Multiremi connection
+# 1. Authenticate and configure the Multiremi connection
 bun run apps/remi/main.ts login
 bun run apps/remi/main.ts setup
 
-# 2. Select one active agent in the same workspace and start the co-resident daemon
-export MULTIREMI_BOT_AGENT_ID=<agent-id>
+# 2. Start the Runtime daemon
 bun run apps/remi/main.ts start
 
 # 3. Check status
@@ -69,17 +67,21 @@ bun run apps/remi/main.ts status
 bun run apps/remi/main.ts doctor
 ```
 
-`remi --help` lists every subcommand. `remi start` is the supported lifecycle entry; the legacy
-top-level `remi serve` command no longer exists.
+In workspace settings, configure the Feishu concierge credentials, select an eligible Agent and
+Runtime, test the credentials, and deploy. The daemon starts the assigned bot after receiving the
+control-plane directive. `remi workspace feishu-bot --help` exposes the corresponding CLI operations.
+See the [daemon configuration guide](docs/deploy/66-8-remi-environment.md) for prerequisites.
+
+`remi --help` lists every subcommand. `remi start` is the daemon lifecycle entry.
 
 ## Configuration
 
-ACP execution configuration has one source of truth: an active `multiremi_agents` row in the
-daemon runtime's workspace. Set `MULTIREMI_BOT_AGENT_ID` to select it. Startup fails if the ID is
-missing, cross-workspace, archived, unknown, or has no cwd; Remi does not fall back to local
-provider settings or the home directory.
+For bot tasks, ACP execution configuration comes from the Agent assigned by workspace Feishu concierge settings.
+The control plane validates the Agent and Runtime, and coordinates handover before releasing the
+configuration. The daemon supervisor fetches the assignment, reconciles its revision, and reports
+the actual connector state. Implementation entry points are in the [architecture map](docs/ARCHITECTURE.md).
 
-Connector, plugin, token-sync, and log settings are assembled from defaults plus environment
+Process-level plugin, token-sync, and log settings are assembled from defaults plus environment
 variables; see [`docs/deploy/66-8-remi-environment.md`](docs/deploy/66-8-remi-environment.md) for
 the complete contract. `remi login` performs user authentication only and stores OAuth tokens in
 `~/.remi/auth/tokens.json`. The provider/model/executable, agent instructions, cwd, tools, custom
@@ -87,9 +89,12 @@ env/args, MCP configuration, thinking level, and concurrency all come from the a
 
 ## Development
 
+Start with the [developer context index](docs/dev/README.md) for current architecture,
+frontend ownership, performance investigation, and validation commands.
+
 ```bash
 # Clone and install (one bun workspace covers backend + frontend)
-git clone https://github.com/grasscoder/remi.git
+git clone https://github.com/moesin-lab/Remi.git remi
 cd remi
 bun install
 
@@ -99,8 +104,8 @@ bun test tests/unit/daemon/agent-runtime-send-options.test.ts
 bunx tsc --noEmit
 
 # Frontend: Vitest suites + typecheck
-cd frontend && bun run test
-cd frontend && bun run typecheck
+bun run test:frontend
+bun run typecheck:frontend
 
 # Guard: the API route surface must match the golden snapshot
 bun run scripts/snapshot-api-routes.ts --check
@@ -115,10 +120,10 @@ for how to extend Remi.
 Conventions:
 
 - **TypeScript strict mode** everywhere.
-- **Full async/await** — no sync blocking in async paths; use `Bun.spawn()` for subprocesses.
+- **Concurrency constraints** — the Store and PostgreSQL bridge currently expose synchronous calls. Read the [storage and performance constraints](docs/ARCHITECTURE.md#存储与事务) before changing request concurrency or transactions.
 - **Interfaces over inheritance** — Providers and Connectors are small interfaces, not class hierarchies.
 - **Plain data types** — `IncomingMessage`, `AgentResponse`, `ToolDefinition` are interfaces, not classes.
-- **Per-session-key `AsyncLock`** (via `LaneScheduler`) to serialize a single conversation while keeping lanes independent.
+- **Task lifecycle** — use platform task history and runtime state when changing chat continuation, steering, cancellation, or retries.
 
 ## Project Structure
 
@@ -140,7 +145,7 @@ remi/
 │   ├── auth/                  # L1: 1Passport — Feishu OAuth, token sync, adapters
 │   ├── daemon/                # L2: agent runtime (repo checkout, prompts, skills, plugins),
 │   │                          #     orchestrator (LaneScheduler), autopilot scheduler
-│   ├── remi/                  # L3: persistent chat core + project/session integration
+│   ├── remi/                  # Remi core library + project/session helpers
 │   ├── server/                # L3: Multiremi — Hono api/ (routers + wire), store/ (repos), worker/
 │   └── plugin-sdk/            # Public plugin contract (@remi/plugin-sdk)
 ├── frontend/                  # Nested workspace — Next.js dashboard

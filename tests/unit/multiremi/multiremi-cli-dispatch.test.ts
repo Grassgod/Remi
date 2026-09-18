@@ -193,6 +193,11 @@ describe("remi CLI dispatcher", () => {
 });
 
 describe("remi CLI provider detection", () => {
+  it("detects the native agy executable as Antigravity", () => {
+    expect(detectMultiremiProviders({
+      pathEnv: "/mock/bin", canExecute: path => path === join("/mock/bin", "agy"),
+    })).toEqual(["antigravity"]);
+  });
   it("detects supported daemon providers from PATH", () => {
     const pathEnv = ["/mock/bin", "/other/bin"].join(delimiter);
 

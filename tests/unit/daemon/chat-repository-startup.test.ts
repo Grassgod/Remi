@@ -40,6 +40,19 @@ function fixture() {
 }
 
 describe("bound Chat repository startup", () => {
+  it("keeps a Runtime Workspace outside Project Chat checkout even with stale Project metadata", async () => {
+    const f = fixture();
+    const repo = f.source("project_repo");
+    const task = { ...f.task("project_a", [repo]), runtimeWorkspaceId: "rws_local" };
+    expect(f.daemon.canAutoCheckoutChatRepos(task, f.resolved)).toBe(false);
+    const sync = spyOn(f.repoCache, "sync");
+    const prepared = await f.daemon.prepareTaskWorkspace(task, f.resolved, [], signal());
+    expect(prepared.checkouts).toEqual([]);
+    expect(sync).not.toHaveBeenCalled();
+    expect(existsSync(join(f.workDir, "wiki"))).toBe(false);
+    expect(existsSync(join(f.workDir, "project_repo"))).toBe(false);
+  });
+
   it("fetches the first turn, then reuses one session branch and preserves edits without network", async () => {
     const f = fixture();
     const repo = f.source("first");

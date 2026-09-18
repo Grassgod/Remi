@@ -1,5 +1,5 @@
 // Sibling test for packages/server/src/store/migrations.ts — the extracted schema
-// module that SPLIT-PLAN §1.2 calls for (`MultiremiStore.migrate()` is a one-line
+// module invoked by MultiremiStore.migrate() (the facade is a one-line
 // call into it). Covers a fresh database, idempotency across restarts, and the
 // three legacy migrations that MUST run on every startup (8f20d1c8: losing them
 // breaks old-database upgrades).

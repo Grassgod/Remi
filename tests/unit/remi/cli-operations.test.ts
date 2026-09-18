@@ -139,6 +139,31 @@ describe("operations CLI contracts", () => {
     expect(bodies).toEqual([config, { profile: null }]);
   });
 
+  it("registers local workspace paths and archives only the registration", async () => {
+    useCliEnv();
+    const create = specById("runtime.workspace.create");
+    const archive = specById("runtime.workspace.archive");
+    const requests: Request[] = [];
+    globalThis.fetch = (async (input, init) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      const path = new URL(request.url).pathname;
+      if (path === "/api/cli/capabilities") return Response.json({ identity: "human", commands: [create, archive].map(s => ({ id: s.id, allowed: true })) });
+      if (path === "/api/runtimes") return Response.json([{ id: "rt_local", name: "Laptop" }]);
+      requests.push(request);
+      return Response.json({ id: "rws_local", name: "Workbench" });
+    }) as typeof fetch;
+    await capture(() => registryFor([create, archive]).execute([
+      "runtime", "workspace", "create", "Laptop", "--name", "Workbench", "--root", "C:\\workbench", "--cwd", "app",
+      "--context-path", "AGENTS.md", "--context-path", "skills", "--env-file", "app/.env.local", "--output", "json",
+    ]));
+    expect(new URL(requests[0]!.url).pathname).toBe("/api/runtimes/rt_local/workspaces");
+    expect(await requests[0]!.json()).toEqual({ name: "Workbench", root_path: "C:\\workbench", cwd: "app", context_paths: ["AGENTS.md", "skills"], env_file: "app/.env.local" });
+    await capture(() => registryFor([create, archive]).execute(["runtime", "workspace", "archive", "rws_local", "--output", "json"]));
+    expect(requests[1]!.method).toBe("DELETE");
+    expect(new URL(requests[1]!.url).pathname).toBe("/api/runtime-workspaces/rws_local");
+    expect(archive.mutation).toBe("write");
+  });
+
   it("scans the selected runtime directory without expanding it on the CLI machine", async () => {
     useCliEnv();
     const spec = specById("runtime.skill.scan");

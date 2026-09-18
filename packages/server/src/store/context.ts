@@ -1,4 +1,4 @@
-// Cross-domain shared surface for the MultiremiStore domain split (docs/SPLIT-PLAN.md §1.1).
+// Cross-domain shared surface for MultiremiStore and its domain repositories.
 // Holds the db handle, the realtime listener registries, the analytics/metric buffers and the
 // private helpers that more than one domain calls. Every member here was moved verbatim out of
 // MultiremiStore; the facade now calls through `this.ctx`.

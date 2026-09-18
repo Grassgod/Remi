@@ -11,7 +11,7 @@ summary: 说明任务到 Codex ACP 的当前执行链、配置来源、会话隔
 ## 配置与运行
 
 - 在工作区 Agent 上设置 `provider: codex`，由符合路由条件的 Codex runtime 领取任务。[CLI Registry](../../apps/remi/cli/commands/agent-extensions.ts)提供 `remi agent create`、`remi agent update` 的 `--provider`、`--model` 和 `--thinking-level` 参数；先用对应命令的 `--help` 核对当前参数与身份要求。
-- [daemon 启动入口](../../apps/remi/cli/multiremi.ts)调用 [ensureAcpBridges](../../packages/acp/src/provision.ts)，使用源码固定的 `@agentclientprotocol/codex-acp` 版本及 Remi usage 补丁。版本以 `BRIDGE_PIN` 为准，不从一次外部包查询结果推导。
+- [daemon 启动入口](../../apps/remi/cli/multiremi.ts)调用 [ensureAcpBridges](../../packages/acp/src/provision.ts)，使用源码固定的 `@agentclientprotocol/codex-acp` 版本及 Remi usage 补丁。版本以 [runtime-versions.json](../../packages/acp/src/runtime-versions.json) 为准；它同时固定 bridge、配套 Codex SDK 和实际执行文件版本。发版准备与安装校验见[配套升级说明](../daemon-runtime-upgrades.md)。系统或 Homebrew 的 Codex 升级不会替换 Remi 托管依赖。
 - ACP 执行文件按显式 `executable`、`REMI_CODEX_AGENT_ACP_EXECUTABLE`、Remi 管理目录与 PATH 解析，具体顺序见 `resolveAcpExecutableForAgent`。Windows 的扩展名解析也在该函数所在文件中。
 - 当前 Codex 健康检查只确认执行文件可解析，不启动模型进程。检查通过不等于登录、网络、模型或真实任务已可用。
 
@@ -64,6 +64,7 @@ remi runtime model list <runtime> --json
 |---|---|
 | 执行文件、健康检查与显示适配 | [providers.test.ts](../../tests/unit/acp/providers.test.ts) |
 | 桥接器版本与 provision | [provision.test.ts](../../tests/unit/acp/provision.test.ts) |
+| npm 发布包、配套 Codex、usage 补丁和真实 ACP 协商 | [verify-codex-bridge.ts](../../tests/integration/verify-codex-bridge.ts) |
 | 模型/effort/权限协商与隔离 Home | [acp-session-negotiation.test.ts](../../tests/unit/acp/acp-session-negotiation.test.ts)、[session-home.test.ts](../../tests/unit/daemon/session-home.test.ts) |
 | 真实 API → daemon → ACP 任务 | [smoke-multiremi-acp.ts](../../tests/integration/smoke-multiremi-acp.ts) |
 | 自定义连接、密钥权限/加密与会话快照 | [runtime-codex-profile.test.ts](../../tests/unit/multiremi/runtime-codex-profile.test.ts)、[codex-profile.test.ts](../../tests/unit/daemon/codex-profile.test.ts) |
@@ -79,3 +80,13 @@ bun run tests/integration/smoke-multiremi-acp.ts --provider=codex --check-only
 ```
 
 移除 `--check-only` 会运行真实任务并调用模型，需要当前机器上有效的认证与模型访问。保留实际输出中的 `available`、`unavailable`、`passed`、`failed` 差别；这里列的是验证入口，不是本次执行结果。
+
+发版准备会在隔离目录安装并验证快照组合。需要进一步验证真实会话时，可将该固定 bundle 中的 bridge 目录传给检查器：
+
+```bash
+bun run tests/integration/verify-codex-bridge.ts --package-dir=<bundle>/node_modules/@agentclientprotocol/codex-acp
+```
+
+检查器核对发布包的依赖声明和实际 CLI 版本，应用 usage 补丁并执行发布包中的 token 转换，随后验证 ACP 初始化、会话创建、model/effort/权限协商和关闭。它从当前 `CODEX_HOME`（默认 `~/.codex`）复制 `auth.json` 到临时 Home，真实会话需要有效登录；不复制本机配置。加 `--prompt` 会调用模型并校验回复及实际 usage 事件。不加该参数时不会发送 prompt，也不能视为真实模型调用通过。
+
+检查器应核对发行快照中的配套 Codex 基线；usage 补丁仍用于逐请求累加，不能用只包含最后一次模型请求的 prompt 结算替代。协议回归夹具使用 Node shebang，Windows 可在 WSL 中运行 `acp-session-negotiation.test.ts`；发布包检查器直接通过 Node 启动 bridge，可在原生 Windows 运行。

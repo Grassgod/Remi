@@ -4131,6 +4131,68 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "runtime.workspace.list": {
+      "command": "remi runtime workspace list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "runtime.workspace.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.workspace.create": {
+      "command": "remi runtime workspace create",
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.workspace.create",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.workspace.get": {
+      "command": "remi runtime workspace get",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "runtime.workspace.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.workspace.rename": {
+      "command": "remi runtime workspace rename",
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.workspace.rename",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.workspace.archive": {
+      "command": "remi runtime workspace archive",
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.workspace.archive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "runtime.list": {
       "command": "remi runtime list",
       "auth": [
@@ -6442,6 +6504,30 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "human"
       ],
       "capability": "lark.daemon.status",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "context.auth.password": {
+      "command": "remi context auth password",
+      "auth": [
+        "human"
+      ],
+      "capability": "context.auth.password",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "context.auth.password-account.set": {
+      "command": "remi context auth password-account set",
+      "auth": [
+        "human"
+      ],
+      "capability": "context.auth.password-account.set",
       "output": [
         "table",
         "json",

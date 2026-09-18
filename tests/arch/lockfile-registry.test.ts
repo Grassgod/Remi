@@ -45,7 +45,7 @@ describe("bun.lock registry neutrality", () => {
     const offenders: string[] = [];
     let entries = 0;
 
-    for (const line of raw.split("\n")) {
+    for (const line of raw.split(/\r?\n/)) {
       const match = ENTRY_RE.exec(line);
       if (match === null) continue;
       entries++;

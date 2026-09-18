@@ -36,6 +36,8 @@ import type { RuntimeCodexProfileConfig, RuntimeCodexProfileInput } from "@multi
 import { RuntimeCodexProfileConfigSchema } from "../schemas/codex-profile";
 import type { RuntimeClaudeProfileConfig, RuntimeClaudeProfileInput } from "@multiremi/contracts/claude-profile";
 import { RuntimeClaudeProfileConfigSchema } from "../schemas/claude-profile";
+import type { RuntimeWorkspace, CreateRuntimeWorkspaceRequest } from "../../runtimes/workspace-types";
+import { RuntimeWorkspaceSchema, RuntimeWorkspaceListSchema } from "../schemas/runtime-workspaces";
 import { RuntimeLocalSkillListRequestSchema, RuntimeLocalSkillImportRequestSchema } from "../schemas/runtime-local-skills";
 import {
   ApiContractError,
@@ -107,6 +109,22 @@ export class RuntimesEndpoints {
   async setRuntimeClaudeProfile(runtimeId: string, input: RuntimeClaudeProfileInput): Promise<RuntimeClaudeProfileConfig> {
     const raw = await this.http.fetch<unknown>(`/api/runtimes/${encodeURIComponent(runtimeId)}/claude-profile`, { method: "PUT", body: JSON.stringify(input) });
     return parseStrictResponse(raw, RuntimeClaudeProfileConfigSchema, { endpoint: "PUT /api/runtimes/:id/claude-profile" });
+  }
+
+  async listRuntimeWorkspaces(wsId: string): Promise<RuntimeWorkspace[]> {
+    const raw = await this.http.fetch<unknown>(`/api/runtime-workspaces?workspace_id=${encodeURIComponent(wsId)}`);
+    // A failed catalog must not silently switch a saved local selection to automatic.
+    return parseStrictResponse<{ workspaces: RuntimeWorkspace[] }>(raw, RuntimeWorkspaceListSchema, { endpoint: "GET /api/runtime-workspaces" }).workspaces;
+  }
+
+  async createRuntimeWorkspace(runtimeId: string, input: CreateRuntimeWorkspaceRequest): Promise<RuntimeWorkspace> {
+    const raw = await this.http.fetch<unknown>(`/api/runtimes/${encodeURIComponent(runtimeId)}/workspaces`, { method: "POST", body: JSON.stringify(input) });
+    return parseStrictResponse(raw, RuntimeWorkspaceSchema, { endpoint: "POST /api/runtimes/:id/workspaces" });
+  }
+
+  async archiveRuntimeWorkspace(id: string): Promise<RuntimeWorkspace> {
+    const raw = await this.http.fetch<unknown>(`/api/runtime-workspaces/${encodeURIComponent(id)}`, { method: "DELETE" });
+    return parseStrictResponse(raw, RuntimeWorkspaceSchema, { endpoint: "DELETE /api/runtime-workspaces/:id" });
   }
 
   async listRuntimes(params?: { workspace_id?: string; owner?: "me" }): Promise<AgentRuntime[]> {

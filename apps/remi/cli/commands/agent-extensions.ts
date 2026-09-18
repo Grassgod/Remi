@@ -38,7 +38,7 @@ const AGENT_FIELDS: readonly CliOptionSpec[] = [
   { name: "description", type: "string", valueName: "text", description: "Agent description" },
   { name: "instructions", type: "string", valueName: "text", description: "Agent instructions" },
   { name: "avatar-url", type: "string", valueName: "url", description: "Agent avatar URL" },
-  { name: "provider", type: "string", valueName: "claude|codex", description: "Agent provider" },
+  { name: "provider", type: "string", valueName: "claude|codex|antigravity", description: "Agent provider" },
   { name: "runtime", type: "string", valueName: "runtime-id", description: "Legacy Runtime execution target", conflictsWith: ["execution-group"] },
   { name: "execution-group", type: "string", valueName: "group-id", description: "Execution group", conflictsWith: ["runtime"] },
   { name: "model", type: "string", valueName: "model", description: "Agent model" },
@@ -146,7 +146,7 @@ function agentSpecs(): CommandSpec[] {
       renderResource(invocation, response.data);
     }),
     spec("agent.default", ["agent", "default"], "Create or get the current user's default agent", "write", HUMAN, [], [
-      { name: "provider", type: "string", valueName: "claude|codex", description: "Agent provider" },
+      { name: "provider", type: "string", valueName: "claude|codex|antigravity", description: "Agent provider" },
       { name: "runtime", type: "string", valueName: "runtime-id", description: "Legacy Runtime execution target", conflictsWith: ["execution-group"] },
       { name: "execution-group", type: "string", valueName: "group-id", description: "Execution group", conflictsWith: ["runtime"] },
     ], async (invocation) => {

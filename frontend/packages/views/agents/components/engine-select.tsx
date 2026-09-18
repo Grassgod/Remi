@@ -1,2 +1,2 @@
-// Provider types used by filters and legacy multi-provider Runtime targets.
-export const ENGINES = ["claude", "codex"] as const;
+// Provider types used by filters and automatic execution targets.
+export const ENGINES = ["claude", "codex", "antigravity"] as const;

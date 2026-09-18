@@ -7,6 +7,7 @@ import { createChatStore, registerChatStore } from "@multiremi/core/chat";
 import type { ChatSession } from "@multiremi/core/types";
 import enChat from "../../locales/en/chat.json";
 import enIssues from "../../locales/en/issues.json";
+import enRuntimes from "../../locales/en/runtimes.json";
 
 const backend = vi.hoisted(() => ({
   sessions: [] as ChatSession[],
@@ -23,6 +24,8 @@ vi.mock("@multiremi/core/api", async (importOriginal) => {
       { id: "project-a", title: "Remi", archived_at: null, icon: null },
       { id: "project-b", title: "Docs", archived_at: null, icon: null },
     ] }),
+    listRuntimeWorkspaces: async () => [{ id: "rws-a", name: "Local workbench", root_path: "/work", cwd: ".", daemon_id: "daemon-a", status: "available" }],
+    listRuntimes: async () => [],
     listChatSessions: async () => backend.sessions,
     listChatMessagesPage: async () => ({ messages: [], limit: 50, has_more: false, next_cursor: null }),
     getPendingChatTask: async () => backend.pending,
@@ -86,7 +89,7 @@ function mount(active: boolean = false) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   const result = render(
     <QueryClientProvider client={client}>
-      <I18nProvider locale="en" resources={{ en: { chat: enChat, issues: enIssues } }}>
+      <I18nProvider locale="en" resources={{ en: { chat: enChat, issues: enIssues, runtimes: enRuntimes } }}>
         <ChatWindow presentation="page" />
       </I18nProvider>
     </QueryClientProvider>,
@@ -183,11 +186,34 @@ describe("ChatWindow plain HTTP sends", () => {
 });
 
 describe("ChatWindow project settings", () => {
+  it("replaces a project draft with a fixed local working directory", async () => {
+    const { store } = mount();
+    fireEvent.click(screen.getByRole("button", { name: "Work location: Automatic" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Remi" }));
+    expect(store.getState().draftProjectId).toBe("project-a");
+    fireEvent.click(screen.getByRole("button", { name: "Work location: Remi" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Local workbench/ }));
+    expect(store.getState().draftProjectId).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
+    await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ agent_id: "agent-a", title: "Hello", runtime_workspace_id: "rws-a" }));
+    expect(await screen.findByRole("button", { name: "Work location: Local workbench" })).toBeDisabled();
+  });
+
+  it("replaces a local directory draft with a project without sending both bindings", async () => {
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: "Work location: Automatic" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Local workbench/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Work location: Local workbench" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Remi" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
+    await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ agent_id: "agent-a", title: "Hello", project_id: "project-a" }));
+  });
+
   it("creates a conversation with the selected draft project", async () => {
     mount();
-    fireEvent.click(screen.getByRole("button", { name: "Project: No project · Just chat" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Remi" }));
-    expect(screen.getByRole("button", { name: "Project: Remi" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Work location: Automatic" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Remi" }));
+    expect(screen.getByRole("button", { name: "Work location: Remi" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
     await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ agent_id: "agent-a", title: "Hello", project_id: "project-a" }));
     await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined));
@@ -204,10 +230,10 @@ describe("ChatWindow project settings", () => {
 
   it("can clear a project draft before creating a pure chat", async () => {
     mount();
-    fireEvent.click(screen.getByRole("button", { name: "Project: No project · Just chat" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Remi" }));
-    fireEvent.click(screen.getByRole("button", { name: "Project: Remi" }));
-    fireEvent.click(await screen.findByRole("button", { name: "No project · Just chat" }));
+    fireEvent.click(screen.getByRole("button", { name: "Work location: Automatic" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Remi" }));
+    fireEvent.click(screen.getByRole("button", { name: "Work location: Remi" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Automatic" }));
     fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
     await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ agent_id: "agent-a", title: "Hello" }));
     expect(await screen.findByRole("group", { name: "Project: No project · Just chat" })).toBeInTheDocument();
@@ -267,6 +293,6 @@ describe("ChatWindow project settings", () => {
     act(() => store.getState().setDraftProjectId("project-b"));
     fireEvent.click(screen.getByRole("button", { name: "New chat" }));
     expect(store.getState().draftProjectId).toBeNull();
-    expect(screen.getByRole("button", { name: "Project: No project · Just chat" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Work location: Automatic" })).toBeEnabled();
   });
 });

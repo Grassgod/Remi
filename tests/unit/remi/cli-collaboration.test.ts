@@ -31,6 +31,26 @@ afterEach(() => {
 });
 
 describe("native collaboration CLI contracts", () => {
+  it("forwards project and directory work locations through real Chat and quick-create commands", async () => {
+    useCliEnv();
+    for (const [command, flag, field] of [
+      ["chat.create", "project", "projectId"],
+      ["chat.create", "runtime-workspace", "runtime_workspace_id"],
+      ["issue.quick-create", "runtime-workspace", "runtime_workspace_id"],
+    ]) {
+      const spec = specById(command);
+      let body: Record<string, unknown> | undefined;
+      globalThis.fetch = capabilityFetch(spec.id, async request => {
+        body = await request.json() as Record<string, unknown>;
+        return Response.json({ id: "created" });
+      });
+      await capture(() => registryFor([spec]).execute([...spec.path, "--agent", "agent-1", `--${flag}`, "location-1", ...(command === "issue.quick-create" ? ["--prompt", "Inspect files"] : []), "--output", "json"]));
+      expect(body?.agent_id).toBe("agent-1");
+      expect(body?.[field]).toBe("location-1");
+      if (command === "issue.quick-create") expect(body?.prompt).toBe("Inspect files");
+    }
+  });
+
   it("creates chats with optional Project binding and keeps pure-chat requests unchanged", async () => {
     useCliEnv();
     const spec = specById("chat.create");
@@ -116,6 +136,8 @@ describe("native collaboration CLI contracts", () => {
     expect(registry.renderHelp(spec.path)).toContain("--project <project-id|none>");
     await expect(capture(() => registry.execute([...spec.path, "--agent", "agt_1", "--project", "   "])))
       .rejects.toThrow("--project");
+    await expect(capture(() => registry.execute([...spec.path, "--agent", "agt_1", "--project", "prj_1", "--runtime-workspace", "rws_1"])))
+      .rejects.toThrow("conflict");
     expect(requests).toBe(0);
   });
 

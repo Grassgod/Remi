@@ -1,27 +1,58 @@
-# Feishu message ingestion
+---
+title: Feishu 消息接入
+status: active
+summary: 当前机器人 Chat/Issue 话题与轮次推送，以及独立的 Messaging Core 采集、授权和验证入口。
+---
 
-Feishu is one channel of the Messaging Core. The Core owns scheduling,
-deduplication, cursors, retention, and outcomes; a Provider owns everything
-channel-specific. `LarkCliMessageProvider` is the Provider for Feishu, and it
-reaches Feishu by running `lark-cli` with argv — no shell, no HTTP service, no
-long-lived credential in Remi's own storage.
+# Feishu 消息接入
 
-A workspace wires a channel in two objects:
+本页分别说明机器人对话和 [Messaging Core](../packages/server/src/messaging/index.ts)的 Lark CLI 采集。机器人连接器在[packages/connectors/src/feishu](../packages/connectors/src/feishu)，由[工作区 bot 配置与 Runtime 分配](deploy/66-8-remi-environment.md)驱动；两者的凭据、消息处理和验证不能混用。
 
-- a **Connection** names a Provider and holds its configuration. For lark-cli
-  the configuration is which executable to run and how long to wait; the
-  credential belongs to lark-cli, not to the Connection.
-- a **Source** binds a Connection to a set of conversations, plus the allowlist,
-  poll interval, and retention.
+## 机器人对话、Issue 话题与更新
+
+[FeishuBotRepo](../packages/server/src/store/repos/feishu-bot-repo.ts)维护飞书传输会话及群 Issue 话题归属。普通 Web Chat 和飞书私聊与 Issue 独立，在其中创建 Issue 不绑定会话，也不继承新 Issue 的项目、仓库、附件或 Wiki。Chat 的 Issue 绑定和订阅 API/CLI 已移除，见[命令迁移](cli-command-migration.md#removed-chat-issue-binding-mul-301)。
+
+- **自动话题**：[工作区配置](../packages/server/src/issue-topics/config.ts)默认关闭，启用需目标群 `chat_id`，可按 `project_ids` 限制；空项目列表表示不限制项目。配置写入要求人类工作区管理员，[workspace CLI](../apps/remi/cli/commands/workspace.ts)提供 `remi workspace issue-topics get/set`。话题创建还需 bot 在线，根消息进入持久化 outbox；缺少条件不代表以后会自动补建。群消息自动建单另受发送者与 Agent 提议策略约束。
+- **增量上下文**：[AgentIssueUpdatesRepo](../packages/server/src/store/repos/agent-issue-updates-repo.ts)仅对有效飞书 Issue 话题及已启用的通知通道合并活动，过滤目标会话自己的回声。更新写成待投递消息，不逐条唤醒 Agent；[claim wire](../packages/server/src/api/wire/tasks.ts)按预算附加该话题的 Issue 与摘要。普通私聊不接收这些播报，摘要不能替代 Issue 详情与评论查询。
+- **轮次推送**：负责人 Issue Session 任务完成并满足活跃任务条件时，[TasksRepo](../packages/server/src/store/repos/tasks-repo.ts)准备话题总结；需要人工输入时也可准备话题提醒。领取、投递与完成均核对绑定、Issue、工作区、Chat 和 Agent 的一致性，失配不继续发送。话题总结本身不自动修改 Issue 状态或追加 Issue 评论。
+- **出站投递**：daemon 心跳领取带租约的 delivery，经 [concierge host](../apps/remi/cli/multiremi.ts)发送并回报；失败按持久化 outbox 规则重试。[send.ts](../packages/connectors/src/feishu/send.ts)使用 delivery 幂等键，根消息成功后以返回的消息 ID 固定话题目标；这不等于真实飞书端已验证恰好一次投递。
+
+Issue 话题不出现在 Web/CLI 私聊和待处理列表中。旧关联按确定归属证据迁移，无法确认的关联暂停 Issue 通知，保留管理员审计记录；修复流程及数据回滚条件见[迁移手册](migrations/chat-issue-decoupling.md)。不得通过旧 Chat Issue 字段或历史任务重新恢复普通私聊的 Issue 上下文。
+
+## 当前组件与能力
+
+| 组件 | 职责与源码 |
+|---|---|
+| Connection | 绑定 provider/channel 与配置，保存连接健康状态。见[MessagingRepo](../packages/server/src/store/repos/messaging-repo.ts)。 |
+| Source | 绑定 Connection，设置会话 allowlist、启用状态、轮询间隔及保留策略。 |
+| Scheduler | 租约、增量游标、重叠时间窗、去重、未处理重试和过期清理。见[scheduler.ts](../packages/server/src/messaging/scheduler.ts)。 |
+| Lark CLI Provider | 通过 argv 调用 lark-cli；执行渠道读取、结构归一、连接配置和交互授权。见[provider.ts](../packages/server/src/messaging/providers/lark-cli/provider.ts)、[runner.ts](../packages/server/src/messaging/providers/lark-cli/runner.ts)。 |
+| Outcomes | 通知、回复草稿、Issue 提案和处理审计。见[outcomes.ts](../packages/server/src/messaging/outcomes.ts)。 |
+
+Provider manifest 当前声明 pull、会话检索/读取、send/reply、attachmentDownload、edit/recall、连接配置及交互授权；不支持 push、attachmentUpload、mention、reaction。**Provider 能力不等于已发布的用户 API**：当前 [Messaging 路由](../packages/server/src/api/routers/messaging.ts)提供采集/查询/处理结果/提案操作，没有通用发送或附件下载端点。采集产生的回复草稿是 Inbox 内容，不会自动发送飞书消息。
+
+附件归一支持结构化 `attachments` 和内容中的 file/image key。若 lark-cli 只给渲染后的文字占位符，Provider 不从 `[Image: ...]` 猜测文件 key；不能据此声称所有历史消息都能下载附件。
+
+## 部署与连接授权
+
+API 镜像内置固定版本并校验摘要的 lark-cli；版本及构建参数见[Dockerfile.api](../deploy/docker/Dockerfile.api)，运行配置见[部署指南](../deploy/README.md)。Provider 当前最低版本为 `LARK_CLI_MINIMUM_VERSION=1.0.90`。Core 不依赖另起一个采集 sidecar。
+
+通过 Connection 配置应用时，Provider 为每个连接创建 managed profile；应用 secret 经 stdin 交给 lark-cli，数据库配置只保存 profile 引用。交互授权会返回用于用户完成授权的 URL 和公开会话状态；私有 device code 留在服务端会话内。实现见 Provider 的 `provisionConnection`、`beginAuthorization` 以及 Messaging 路由，不能把一次全局 CLI login 当作每个 Connection 都已完成授权。
+
+[CLI 声明](../apps/remi/cli/commands/operations.ts)中的常用入口：
 
 ```bash
-remi messaging connection add --provider lark_cli --name "Feishu (personal)"
-remi messaging source add --connection <connection> --name "Team chats"
+remi messaging provider list
+remi messaging connection add --help
+remi messaging connection authorization start <connection>
+remi messaging connection authorization get <connection> <session>
+remi messaging connection check <connection>
+remi messaging source add --help
+remi messaging source available-conversations <source>
+remi messaging source status <source>
 ```
 
-The older `remi feishu ...` commands and the `/feishu` API still work: they are
-the same workflow bound to one channel and the legacy id space, kept for shipped
-clients.
+Connection 的 Provider 配置走结构化输入，具体字段以 API 和 CLI help 为准。现有 profile 与 managed profile 的清理行为不同：删除 managed Connection 会调用 lark-cli logout/remove profile；不直接编辑凭据文件。旧 `remi feishu` 命令仍有兼容路由，新接入使用上述 Messaging 入口。
 
 ## 机器人发送者白名单
 
@@ -55,146 +86,30 @@ remi workspace feishu-bot sender revoke <workspace> <sender>
 
 - **消息回应**：原消息收到后保留 🤔（`THINKING`）；任务正常完成且结果卡已确认发送后移除本机器人的处理中回应，不再添加 `DONE`；失败或取消仍替换为 ❌（`CROSSMARK`）。入队和 steer 返回不清除回应；最终任务快照携带全部原消息 ID，确保执行期间追加的消息也能更新。失败替换先添加新回应，再删除旧状态；成功清理也兼容旧版本的 `DONE`，保留其他人、其他应用及非回执类表情。本进程记录最近完成的消息，避免迟到的 received 回调恢复处理中；跨重启的入站事件由接收去重处理，投递重试则依据已持久化的结果卡 ID 跳过处理中回应。终态回应清理的可重试错误由持久化 outbox 重试，已确认的结果卡不重复发送，Runtime 交接不标记失败。实现见[回应状态](../packages/connectors/src/feishu/message-receipt.ts)与[任务投递](../packages/connectors/src/feishu/task-presentation.ts)。本次回执修复需要升级承载机器人的 Runtime。
 
-## Deployment
+## 采集与处理约束
 
-There is no ingestion service, port, or endpoint registry. `lark-cli` is baked
-into the API image at a pinned version whose archive digest is verified during
-the build (`LARK_CLI_VERSION` and the two `LARK_CLI_SHA256_*` args in
-`deploy/docker/Dockerfile.api`), and the API server spawns it in its own
-container. `LARK_CLI_MINIMUM_VERSION` in the Provider is the floor the image
-must stay at or above; a lower version reports the Connection as
-`incompatible` rather than failing at some later call.
+这些约束来自 Scheduler、MessagingRepo、Provider 和 Outcomes，不代表已验证任何当前部署：
 
-Authorize it once, inside the API container:
+- 空 allowlist 不采集；Scheduler 和落库层均检查范围。落库层比较消息及会话激活时间的分钟值，仅接受后续分钟，激活所在分钟的部分消息可能被跳过。
+- 消息身份为 `(connection_id, external_message_id)`；内容更新不会重置已有处理状态。Scheduler 使用重叠时间窗接住延迟出现的消息，避免仅依赖严格单向时间游标。
+- Runner 强制 `TZ=UTC` 归一 lark-cli 无时区的分钟时间。消息搜索页上限 50、会话搜索上限 100，Provider 按各命令上限截取。
+- `processed_at` 标识处理完成；默认 900 秒检查未处理消息，达到默认 3 次重试限额后写入 `dismissed/unprocessed_timeout`。实际值由 Source 配置决定。
+- notify/draft-reply 受 `feishu_messages` 通知偏好控制；明确静音产生 `recipient_muted` 终态。Issue 提案需经人类管理员批准/拒绝；批准路径有去重与审计，task token 不能批准提案。
+- 对 watcher 启用 `issue_creation_requires_proposal` 时，直接和 Autopilot 间接建 Issue 都受策略限制；此策略不是所有 agent 的默认行为。
+- 缺失 CLI、未授权、版本不兼容等通过 Connection 状态及错误码暴露；限流/超时的可重试处理见 Provider，不能把这些状态等同于 Source 永久停用。
+
+**暂停与删除有不同的数据结果**：停用 Source 停止后续采集；已有内容仍受保留策略管理。删除 Source 会删除关联消息、outcome 和游标；删除 Connection 会连同 Sources、消息和 outcomes 一并删除。需要保留数据时使用停用操作，不能把删除作为无损暂停。
+
+## 验证入口
+
+按改动选择当前单元测试：
 
 ```bash
-docker compose exec api lark-cli login
+bun test tests/unit/multiremi/multiremi-feishu-issue-topics.test.ts tests/unit/multiremi/multiremi-feishu-bot-task-bridge.test.ts
+bun test tests/unit/multiremi/multiremi-agent-issue-updates.test.ts tests/unit/multiremi/multiremi-store-daemon-wire.test.ts tests/unit/connectors/feishu-send.test.ts
+bun test tests/unit/multiremi/lark-cli-message-provider.test.ts tests/unit/multiremi/messaging-scheduler.test.ts
+bun test tests/unit/multiremi/messaging-repo.test.ts tests/unit/multiremi/messaging-outcomes.test.ts
+bun test tests/unit/multiremi/messaging-api.test.ts tests/unit/multiremi/messaging-contract.test.ts tests/unit/multiremi/feishu-compat.test.ts
 ```
 
-lark-cli writes its credential under `$HOME`, which in the API container is the
-`REMI_HOME_DIR` bind mount. It therefore survives image upgrades, stays under
-the operator's control, and never appears in Compose, an env file, a log line,
-or Git. No Remi component reads or writes that file.
-
-The Connection reports what it finds, so each failure mode is a visible status
-rather than a silent stall:
-
-| Situation | Connection status | Error code |
-| --- | --- | --- |
-| lark-cli not on PATH | `unavailable` | `provider_unavailable` |
-| Not logged in, or the credential expired | `unauthenticated` | `unauthenticated` |
-| Version below the Provider's floor | `incompatible` | `provider_incompatible` |
-| Required subcommand missing | `incompatible` | `capability_unsupported` |
-| Feishu throttled the call | `ready` | `rate_limited` (retried with backoff) |
-| Command exceeded its timeout | `ready` | `timeout` (retried) |
-
-`rate_limited` and `timeout` are retryable and never disable a Source; the
-others need an operator and say which one.
-
-An access token that has aged out is **not** one of these. lark-cli reports it
-as `needs_refresh` and mints a new one on the next call, so the Connection stays
-`ready`. Only a dead *refresh* token — roughly a week without use — reads as
-`unauthenticated`, and only that needs a new `lark-cli login`.
-
-### What lark-cli 1.0.90 cannot do yet
-
-Constraints the Provider works within, verified against a live CLI by
-`tests/integration/lark-cli-message-provider.test.ts`:
-
-- **Page sizes are capped per subcommand** — 50 for `im +messages-search`, 100
-  for `im +chat-search`. A Source configured for more gets the cap, not an
-  error.
-- **Timestamps arrive as a zoneless `YYYY-MM-DD HH:MM`**, rendered in the CLI's
-  own timezone and with no seconds. The Provider runs lark-cli with `TZ=UTC` so
-  the value means one instant everywhere; do not override `TZ` for the API
-  container without changing the Provider to match. Ordering within a minute is
-  not recoverable, which is why message identity is `(connection, message id)`
-  rather than anything time-based.
-- **Attachments are not addressable.** lark-cli renders them into the message
-  text (`[Image: img_v3_…]`) and exposes no file key, so ingested messages carry
-  their text but no attachment refs. Recovering the key by parsing that string
-  would mean reading human-facing output, which this Provider does not do —
-  closing the gap needs a structured attachment field in lark-cli.
-
-## Production rollout runbook
-
-Each step needs explicit per-session authorization from the platform owner.
-Nothing here runs as part of ordinary development.
-
-1. **Stage first.** Deploy the new API image to a non-production stack and run
-   `docker compose exec api lark-cli --version`, then `lark-cli login`.
-2. **Add the Connection and check it.** `remi messaging connection add
-   --provider lark_cli`, then `remi messaging connection check <connection>`
-   must report `ready`.
-   Assert that no response body contains a credential path or a command line.
-3. **Create the source disabled with an empty allowlist.** An empty allowlist
-   ingests nothing, which is the intended state until the owner picks chats.
-4. **Enable chats, then the source.** Confirm the activation watermark by
-   checking that no message older than the enable time is stored, then verify
-   ingestion, cursor advance, deduplication, and the Inbox/proposal paths on a
-   low-traffic chat before adding busy ones.
-
-### Upgrading from the retired sidecar
-
-Installations before this release ran ingestion in a `feishu-sidecar` container
-that shared the API container's network namespace. Nothing needs to be migrated
-by hand:
-
-- Existing sources, messages, outcomes, and cursors are carried over by the
-  `20260831_messaging_core_v1` migration, which maps each legacy source to a
-  Connection and re-keys messages by `(connection, external message id)`. It
-  copies rather than moves, so history is not re-processed and nothing is lost
-  if the release is rolled back.
-- `DockerComposeDriver` removes the leftover sidecar container before it
-  replaces the API container — Docker would otherwise refuse the switch, since
-  the sidecar borrowed that namespace. Its named data volumes are left alone;
-  deleting them is the operator's call.
-- The pre-existing `personal-automation` deployment, if any, is untouched and
-  needs no restoration step. It is no longer a runtime dependency.
-
-### Rollback
-
-1. Disable the source in the control panel. Ingestion stops immediately; stored
-   messages and outcomes are retained.
-2. Roll the API image back through the platform updater. Legacy rows were copied,
-   not moved, so the previous release finds its own data where it left it.
-3. To stop ingestion without a rollback, delete the Connection. The Sources bound
-   to it stop polling and their stored messages stay readable.
-
-## Processing guarantees
-
-- An empty allowlist means zero ingestion in both the scheduler and storage
-  layer.
-- Enabling a chat records an activation watermark rounded conservatively to the
-  next whole minute. Messages in that minute can be skipped, by at most about 60
-  seconds, so no message from before authorization is retained.
-- `processed_at` on each message is the processing source of truth. Unresolved
-  messages are retried after 15 minutes by default. After three retries, the
-  system records a terminal `dismissed` outcome with reason
-  `unprocessed_timeout`.
-- `notify` and `draft-reply` use the dedicated `feishu_messages` notification
-  preference group and create Inbox items only. Ingestion never sends a Feishu
-  message; a draft still requires a separate human-approved send path. When the
-  recipient explicitly mutes this group, the system records a terminal
-  `dismissed` outcome with reason `recipient_muted` instead of retrying and
-  eventually reporting an unrelated processing timeout.
-- `propose-issue` creates a non-blocking Inbox proposal and audited
-  `issue_proposed` outcome. Only a human workspace admin can approve or reject
-  it; approval creates the Issue and `issue_created` outcome atomically and
-  idempotently, while rejection records `dismissed/proposal_rejected`.
-- Configure the Feishu watcher agent with
-  `remi agent update <agent> --issue-creation-requires-proposal`. This
-  human-managed, default-off policy blocks that task identity from every direct
-  and Autopilot-mediated Issue creation path while leaving ordinary collaboration
-  agents unchanged. The caller-specific CLI capability response also marks
-  `issue.create` and `issue.quick-create` unavailable for the restricted agent.
-- The direct `create-issue` command is human-only. Task tokens cannot approve,
-  reject, or bypass the proposal flow.
-- Source status exposes the most recent successful ingestion, last sanitized
-  error code, connection lag, consecutive failures, unresolved backlog, and
-  timeout count, muted-delivery count, and pending Issue proposal count through
-  `remi feishu source status <source>`.
-- After three consecutive connection failures, the workspace owner receives a
-  deduplicated Inbox alert in the `system_notifications` group, independently
-  from Feishu message reminder preferences. Further failures do not create more
-  alerts until a successful poll resets the failure episode.
+[真实 CLI 集成测试](../tests/integration/lark-cli-message-provider.test.ts)只读取当前已授权账户，不发送/回复/上传；缺少 lark-cli 或登录时会跳过。`bun test tests/integration/lark-cli-message-provider.test.ts` 的绿色结果必须同时检查执行/跳过数量。更改连接授权、发送等 Provider 能力时，还需分别验证对应能力；只读采集测试不覆盖它们。实际执行结果和真实飞书验证范围应记录在对应任务或 PR。

@@ -19,7 +19,7 @@ import type { MultiremiAgent, MultiremiDaemonBotProject } from "@multiremi/contr
 import type { Connector, IncomingMessage } from "@connectors/base.js";
 import { LaneScheduler, resolveSessionKey } from "@daemon/orchestrator.js";
 import { createAgentResponse, type AgentResponse, type Provider, type ProviderEvent } from "@shared/contracts/provider-types.js";
-import { AcpProvider } from "@acp/index.js";
+import { createRuntimeProvider } from "@acp/index.js";
 import { AgentRuntime } from "@daemon/agent-runtime/runtime.js";
 import { buildAgentMcpServers } from "@daemon/agent-runtime/mcp/ephemeral.js";
 import { FeishuConnector, type FeishuSenderAuthorizer } from "@connectors/feishu/index.js";
@@ -278,10 +278,10 @@ export class Remi {
   private static _buildProvider(agent: MultiremiAgent, runtimeEnv: Record<string, string> = {}) {
     const rawType = agent.provider;
     const type = rawType.startsWith("acp:") ? rawType.slice("acp:".length) : rawType;
-    if (type !== "claude" && type !== "codex") {
-      throw new Error(`Unknown ACP provider: ${rawType}`);
+    if (!["claude", "codex", "antigravity"].includes(type)) {
+      throw new Error(`Unknown runtime provider: ${rawType}`);
     }
-    return new AcpProvider({
+    return createRuntimeProvider({
       agentType: type,
       model: agent.model,
       allowedTools: agent.allowedTools,
