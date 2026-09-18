@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { ChevronDown, Cpu, Loader2, Plus, Check } from "lucide-react";
-import { useExecutionTargetModels } from "@multiremi/core/runtimes";
+import { isModelUnavailable, useExecutionTargetModels } from "@multiremi/core/runtimes";
 import {
   Popover,
   PopoverTrigger,
@@ -34,7 +34,7 @@ export function ModelDropdown({
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
 
-  const { models, isLoading, isError } = useExecutionTargetModels(wsId, provider, runtimeId, executionGroupId, agentId);
+  const { models, modelCatalogStatus, isLoading, isError } = useExecutionTargetModels(wsId, provider, runtimeId, executionGroupId, agentId);
 
   const filtered = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -50,7 +50,9 @@ export function ModelDropdown({
   const exactMatch = models.some(
     (m) => m.id === trimmedSearch || m.label === trimmedSearch,
   );
-  const canCreate = trimmedSearch.length > 0 && !exactMatch;
+  const authoritative = provider === "codex" && modelCatalogStatus === "ready";
+  const unavailable = isModelUnavailable(provider, value, models, modelCatalogStatus);
+  const canCreate = !authoritative && trimmedSearch.length > 0 && !exactMatch;
 
   const select = (id: string) => {
     onChange(id);
@@ -167,6 +169,9 @@ export function ModelDropdown({
           </div>
         </PopoverContent>
       </Popover>
+      {unavailable && <span className="mt-1 text-xs text-destructive" role="status">
+        {t(($) => $.pickers.model_unavailable)}
+      </span>}
     </div>
   );
 }

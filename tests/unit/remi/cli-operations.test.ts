@@ -33,10 +33,11 @@ describe("operations CLI contracts", () => {
     const thinking = { status: "supported", supported_levels: [{ value: "custom", label: "Custom" }], default_level: "custom" };
     globalThis.fetch = capabilityFetch(spec.id, (request) => {
       expect(new URL(request.url).searchParams.get("agent_id")).toBe("agt_codex");
-      return Response.json({ providers: [{ provider: "codex", models: [{ id: "gateway-model", thinking }] }] });
+      return Response.json({ providers: [{ provider: "codex", model_catalog_status: "ready", models: [{ id: "gateway-model", thinking }] }] });
     });
     const output = await capture(() => registryFor([spec]).execute(["runtime", "model", "catalog", "--agent", "agt_codex", "--json"]));
     expect(JSON.parse(output.stdout).providers[0].models[0].thinking).toEqual(thinking);
+    expect(JSON.parse(output.stdout).providers[0].model_catalog_status).toBe("ready");
   });
 
   it("filters the model catalog by the selected runtime", async () => {

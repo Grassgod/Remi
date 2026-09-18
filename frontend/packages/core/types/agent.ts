@@ -722,6 +722,8 @@ export interface RuntimeModelsResult {
  */
 export interface FleetProviderModels {
   provider: string;
+  /** A ready Codex catalog is the authoritative set of selectable models. */
+  model_catalog_status?: "ready" | "error";
   online_runtime_count: number;
   models: RuntimeModel[];
   default_thinking?: RuntimeModelThinking;

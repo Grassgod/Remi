@@ -2,12 +2,18 @@ import type { RuntimeModelThinking } from "@multiremi/core/types";
 import { useT } from "../../../i18n";
 
 /** Keep absence, authoritative empty sets and failed loads distinct. */
-export function ThinkingStatus({ thinking, isLoading, isError }: {
+export function ThinkingStatus({ thinking, isLoading, isError, modelUnavailable }: {
   thinking?: RuntimeModelThinking;
   isLoading?: boolean;
   isError?: boolean;
+  modelUnavailable?: boolean;
 }) {
   const { t } = useT("agents");
+  if (modelUnavailable) {
+    return <span className="px-1.5 py-0.5 text-xs text-destructive" role="status">
+      {t(($) => $.pickers.model_unavailable)}
+    </span>;
+  }
   const status = isError ? "error" : thinking?.status
     ?? (thinking ? (thinking.supported_levels.length ? "supported" : "unsupported") : "unknown");
   if (!isLoading && status === "supported") {

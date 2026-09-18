@@ -57,6 +57,31 @@ function renderPicker(props: Partial<React.ComponentProps<typeof ModelPicker>> =
 }
 
 describe("ModelPicker", () => {
+  it.each([true, false])("shows an unavailable saved model without changing it (editable %s)", async (canEdit) => {
+    mockListFleetModels.mockResolvedValue({ providers: [{ provider: "codex", model_catalog_status: "ready", models: [{ id: "available", label: "Available" }] }] });
+    const { onChange } = renderPicker({ provider: "codex", value: "inventory-only", canEdit });
+    expect(await screen.findByText("Not in execution catalog · Cannot run")).toBeInTheDocument();
+    expect(screen.getByText("inventory-only")).toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
+    if (canEdit) {
+      fireEvent.click(screen.getByRole("button", { name: "Model · inventory-only" }));
+      fireEvent.change(screen.getByPlaceholderText("Search or type a model ID"), { target: { value: "inventory-only" } });
+      expect(screen.queryByText('Use "inventory-only"')).toBeNull();
+      expect(onChange).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(["error", undefined])("preserves custom model fallback when catalog status is %s", async (model_catalog_status) => {
+    mockListFleetModels.mockResolvedValue({ providers: [{ provider: "codex", model_catalog_status, models: [{ id: "inventory-only", label: "Inventory only" }] }] });
+    const { onChange } = renderPicker({ provider: "codex", value: "inventory-only" });
+    fireEvent.click(screen.getByRole("button", { name: "Model · inventory-only" }));
+    expect(await screen.findByText("Inventory only")).toBeInTheDocument();
+    expect(screen.queryByText("Not in execution catalog · Cannot run")).toBeNull();
+    fireEvent.change(screen.getByPlaceholderText("Search or type a model ID"), { target: { value: "custom-new" } });
+    fireEvent.click(screen.getByText('Use "custom-new"'));
+    expect(onChange).toHaveBeenCalledWith("custom-new");
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockListFleetModels.mockResolvedValue(fleet([CLAUDE_MODEL]));

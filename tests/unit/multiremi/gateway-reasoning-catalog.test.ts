@@ -29,6 +29,77 @@ function setup() {
 }
 
 describe("gateway reasoning capability data flow", () => {
+  it("exposes native membership and its authority consistently for workspace and Runtime catalogs", async () => {
+    const { store, runtime, app } = setup();
+    await discoverGatewayModels(store, "local", "codex", async url => ({ status: 200, text: JSON.stringify(
+      url.endsWith("/backend-api/codex/models") ? { models: [
+        { slug: "deepseek-flash", default_reasoning_level: "high", supported_reasoning_levels: ["low", "high", "max"].map(effort => ({ effort })) },
+        { slug: "native-only", display_name: "Native only", supported_reasoning_levels: [] },
+        { slug: "hidden-model", visibility: "hide" },
+      ] } : { data: ["deepseek-flash", "inventory-only", "hidden-model"].map(id => ({ id })) },
+    ) }));
+    for (const query of ["", `?runtime_id=${runtime.id}`]) {
+      const { providers } = await (await app.request(`/api/models${query}`)).json();
+      expect(providers[0].model_catalog_status).toBe("ready");
+      expect(providers[0].models.map((model: any) => model.id)).toEqual(["deepseek-flash", "native-only"]);
+      expect(providers[0].models[0].thinking.default_level).toBe("high");
+      expect(providers[0].models[0].thinking.supported_levels.map((level: any) => level.value)).toEqual(["low", "high", "max"]);
+    }
+  });
+
+  it("does not restore bundled models when a successful native catalog has no selectable entries", async () => {
+    const { store, runtime, app } = setup();
+    await discoverGatewayModels(store, "local", "codex", async url => ({ status: 200, text: JSON.stringify(
+      url.endsWith("/backend-api/codex/models")
+        ? { models: [{ slug: "hidden-model", visibility: "hide" }] }
+        : { data: [{ id: "inventory-only" }] },
+    ) }));
+    for (const query of ["", `?runtime_id=${runtime.id}`]) {
+      const { providers } = await (await app.request(`/api/models${query}`)).json();
+      expect(providers[0].model_catalog_status).toBe("ready");
+      expect(providers[0].models).toEqual([]);
+    }
+  });
+
+  it("keeps the ordinary list on native loading failure and clears authoritative membership", async () => {
+    const { store, runtime, app } = setup();
+    await discoverGatewayModels(store, "local", "codex", async url => url.endsWith("/backend-api/codex/models")
+      ? { status: 503, text: "unavailable" }
+      : { status: 200, text: JSON.stringify({ data: [{ id: "inventory-only" }, { id: "deepseek-flash" }] }) });
+    for (const query of ["", `?runtime_id=${runtime.id}`]) {
+      const { providers } = await (await app.request(`/api/models${query}`)).json();
+      expect(providers[0].model_catalog_status).toBe("error");
+      expect(providers[0].models.map((model: any) => model.id)).toEqual(["inventory-only", "deepseek-flash"]);
+      expect(providers[0].models.every((model: any) => model.thinking.status === "error")).toBe(true);
+    }
+  });
+
+  it("keeps custom profiles separate from a successful gateway execution catalog", async () => {
+    const { store, revision, runtime, app } = setup();
+    const profile = { name: "private", base_url: "https://private.example/v1", model: "profile-only", env_key: "REMI_CODEX_TEST_KEY", auth_mode: "env" as const };
+    const custom = store.registerRuntime({ name: "Custom", provider: "codex", daemonId: "custom-daemon", workspaceId: "local", metadata: { codex_profiles: 1 } });
+    store.setRuntimeCodexProfile(custom.id, profile);
+    store.updateRuntimeModels(custom.id, [{ id: "profile-only", label: "Profile", provider: "codex", default: true, thinking: reasoning(["high"]) }], profile);
+    // Even a stale native runtime report must not borrow a peer's custom-profile membership.
+    store.updateRuntimeModels(runtime.id, [
+      { id: "deepseek-flash", label: "DeepSeek", provider: "openai", default: true },
+      { id: "profile-only", label: "Stale profile", provider: "openai", default: false },
+    ]);
+    store.saveGatewayModels("local", "codex", { sourceRevision: revision, nativeCatalogStatus: "ready", models: [
+      { id: "deepseek-flash", label: "Gateway", thinking: reasoning(["high", "max"], "high") },
+    ] });
+    const fleet = (await (await app.request("/api/models")).json()).providers[0];
+    expect(fleet.model_catalog_status).toBe("ready");
+    expect(fleet.models.map((model: any) => model.id).sort()).toEqual(["deepseek-flash", "profile-only"]);
+    const gateway = (await (await app.request(`/api/models?runtime_id=${runtime.id}`)).json()).providers[0];
+    expect(gateway.model_catalog_status).toBe("ready");
+    expect(gateway.models.map((model: any) => model.id)).toEqual(["deepseek-flash"]);
+    const privateCatalog = (await (await app.request(`/api/models?runtime_id=${custom.id}`)).json()).providers[0];
+    expect(privateCatalog.model_catalog_status).toBeUndefined();
+    expect(privateCatalog.models.map((model: any) => model.id)).toEqual(["profile-only"]);
+    expect(privateCatalog.default_thinking.supported_levels.map((level: any) => level.value)).toEqual(["high"]);
+  });
+
   it("uses gateway per-model capabilities and defaults for workspace, target, group validation and dispatch", async () => {
     const { store, runtime, app } = setup();
     await discoverGatewayModels(store, "local", "codex", async url => ({ status: 200, text: JSON.stringify(

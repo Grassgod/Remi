@@ -72,6 +72,7 @@ vi.mock("@multiremi/core/runtimes", async (importOriginal) => ({
             },
           ]
         : [],
+    modelCatalogStatus: provider === "codex" ? "ready" : undefined,
     onlineRuntimeCount: 1,
     isLoading: false,
     isError: false,
@@ -202,6 +203,18 @@ afterEach(() => {
 });
 
 describe("EditAgentDialog", () => {
+  it("keeps an unavailable saved model and reasoning unchanged during an unrelated save", async () => {
+    const { onSave } = renderDialog(makeAgent({ provider: "codex", model: "inventory-only", thinking_level: "saved-effort" }));
+    expect(screen.getByText("Not in execution catalog · Cannot run")).toBeInTheDocument();
+    expect(screen.queryByText("Reasoning capability unknown")).toBeNull();
+    expect(screen.getByLabelText("Model")).toHaveValue("inventory-only");
+    expect(screen.getByRole("combobox", { name: "Reasoning effort" })).toHaveValue("saved-effort");
+    fireEvent.change(screen.getByLabelText("Description"), { target: { value: "Updated description" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0]?.[0]).toMatchObject({ description: "Updated description", model: "inventory-only", thinking_level: "saved-effort" });
+  });
+
   it("submits the editable platform metadata in one update", async () => {
     const { onSave, onClose } = renderDialog();
 

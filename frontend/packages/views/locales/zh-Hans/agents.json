@@ -159,6 +159,7 @@
   "pickers": {
     "concurrency_tooltip": "并发 · 最多 {{value}} 个并行 task",
     "concurrency_range": "最大并行 task 数（{{min}}–{{max}}）",
+    "model_unavailable": "不在执行目录 / 不可执行",
     "model_default": "默认",
     "model_tooltip": "模型 · {{value}}",
     "model_search_placeholder": "搜索或输入模型 ID",

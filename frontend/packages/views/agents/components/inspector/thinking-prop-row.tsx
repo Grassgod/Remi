@@ -1,6 +1,6 @@
 "use client";
 
-import { useExecutionTargetModels } from "@multiremi/core/runtimes";
+import { isModelUnavailable, useExecutionTargetModels } from "@multiremi/core/runtimes";
 import { PropRow } from "../../../common/prop-row";
 import { useT } from "../../../i18n";
 import { ThinkingPicker } from "./thinking-picker";
@@ -30,15 +30,16 @@ export function ThinkingPropRow({
   onChange: (next: string) => Promise<void> | void;
 }) {
   const { t } = useT("agents");
-  const { models, defaultThinking, isLoading, isError } = useExecutionTargetModels(wsId, provider, runtimeId, executionGroupId, agentId);
+  const { models, modelCatalogStatus, defaultThinking, isLoading, isError } = useExecutionTargetModels(wsId, provider, runtimeId, executionGroupId, agentId);
 
+  const unavailable = isModelUnavailable(provider, model, models, modelCatalogStatus);
   const levels = getModelThinkingLevels(models, model, defaultThinking);
   const thinking = getModelThinking(models, model, defaultThinking);
   if (levels.length === 0 && !value) {
     if (provider !== "claude" && provider !== "codex") return null;
     return (
       <PropRow label={t(($) => $.inspector.prop_thinking)} interactive={false}>
-        <ThinkingStatus thinking={thinking} isLoading={isLoading} isError={isError} />
+        <ThinkingStatus modelUnavailable={unavailable} thinking={thinking} isLoading={isLoading} isError={isError} />
       </PropRow>
     );
   }
@@ -52,7 +53,7 @@ export function ThinkingPropRow({
         canEdit={canEdit}
         onChange={onChange}
       />
-      {(thinking || levels.length === 0) && <ThinkingStatus thinking={thinking} isLoading={isLoading} isError={isError} />}
+      {(thinking || levels.length === 0) && <ThinkingStatus modelUnavailable={unavailable} thinking={thinking} isLoading={isLoading} isError={isError} />}
       </div>
     </PropRow>
   );

@@ -1876,15 +1876,14 @@ export class RuntimesRepo {
   runtimeCanRunAgent(runtime: MultiremiRuntime, agent: MultiremiAgent): boolean {
     if (agent.runtimeId && agent.runtimeId !== runtime.id) return false;
     if (agent.executionGroupId && runtimeExecutionGroupId(this.ctx.db, runtime.id, agent.provider) !== agent.executionGroupId) return false;
-    if ((agent.thinkingLevel || (agent.executionGroupId && !agent.runtimeId))
-      && !this.runtimeSupportsAgentModel(runtime, agent)) return false;
     if (runtime.provider !== "any" && runtime.provider !== agent.provider) return false;
     // A task runs in its agent's workspace and the claim SQL requires the
     // runtime's workspace to match, so a runtime in a different workspace can
     // never run this agent (COALESCE(...,'local') for NULL-workspace runtimes).
     if ((runtime.workspaceId ?? "local") !== (agent.workspaceId ?? "local")) return false;
-    if (runtime.visibility === "public") return true;
-    return (runtime.ownerId ?? "local") === (agent.ownerId ?? "local");
+    if (runtime.visibility !== "public" && (runtime.ownerId ?? "local") !== (agent.ownerId ?? "local")) return false;
+    return !(agent.model || agent.thinkingLevel || (agent.executionGroupId && !agent.runtimeId))
+      || this.runtimeSupportsAgentModel(runtime, agent);
   }
 
   private runtimeSupportsAgentModel(runtime: MultiremiRuntime, agent: MultiremiAgent): boolean {
@@ -1899,7 +1898,9 @@ export class RuntimesRepo {
       getRuntimeExecutionProfile: (id, provider) => this.getRuntimeExecutionProfile(id, provider),
     }, agent.workspaceId, runtime).find(entry => entry.provider === agent.provider);
     const models = catalog?.models ?? [];
-    if (agent.model && !models.some(model => model.id === agent.model)) return false;
+    if (agent.model && !models.some(model => model.id === agent.model)
+      && (catalog?.model_catalog_status === "ready" || agent.thinkingLevel
+        || (agent.executionGroupId && !agent.runtimeId))) return false;
     return !agent.thinkingLevel || modelThinkingLevels(models, agent.model ?? "", catalog?.default_thinking)
       .some(level => level.value === agent.thinkingLevel);
   }

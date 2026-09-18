@@ -873,6 +873,13 @@ describe("RuntimeDirectoryScanRequestSchema", () => {
 });
 
 describe("FleetModelsResponseSchema", () => {
+  it("preserves authoritative catalogs and treats malformed catalog statuses as failed loads", () => {
+    for (const [model_catalog_status, expected] of [["ready", "ready"], ["error", "error"], ["future", "error"], [42, "error"], [null, "error"], [undefined, undefined]]) {
+      const parsed = FleetModelsResponseSchema.parse({ providers: [{ provider: "codex", model_catalog_status, models: [] }] });
+      expect(parsed.providers[0]?.model_catalog_status).toBe(expected);
+    }
+  });
+
   it("preserves capability states and defaults, and downgrades future or malformed states", () => {
     for (const [status, expected] of [["supported", "supported"], ["unsupported", "unsupported"], ["unknown", "unknown"], ["error", "error"], ["future", "unknown"], [42, "unknown"]]) {
       const parsed = FleetModelsResponseSchema.parse({ providers: [{ provider: "codex", models: [{

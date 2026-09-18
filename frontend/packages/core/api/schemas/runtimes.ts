@@ -239,6 +239,7 @@ const ModelThinkingSchema = z.object({
 
 const FleetProviderModelsSchema = z.object({
   provider: z.string(),
+  model_catalog_status: z.enum(["ready", "error"]).catch("error").optional(),
   online_runtime_count: z.number().default(0),
   default_thinking: ModelThinkingSchema.optional(),
   models: z.array(

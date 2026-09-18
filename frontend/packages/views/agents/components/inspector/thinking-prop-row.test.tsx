@@ -13,10 +13,17 @@ import type { FleetModelsResponse, RuntimeModel } from "@multiremi/core/types";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import enCommon from "../../../locales/en/common.json";
 import enAgents from "../../../locales/en/agents.json";
+import zhAgents from "../../../locales/zh-Hans/agents.json";
+import jaAgents from "../../../locales/ja/agents.json";
+import koAgents from "../../../locales/ko/agents.json";
+import type { SupportedLocale } from "@multiremi/core/i18n";
 import enIssues from "../../../locales/en/issues.json";
 
 const TEST_RESOURCES = {
   en: { common: enCommon, agents: enAgents, issues: enIssues },
+  "zh-Hans": { common: enCommon, agents: zhAgents, issues: enIssues },
+  ja: { common: enCommon, agents: jaAgents, issues: enIssues },
+  ko: { common: enCommon, agents: koAgents, issues: enIssues },
 };
 
 const mockListFleetModels = vi.hoisted(() => vi.fn());
@@ -61,6 +68,7 @@ function fleet(models: RuntimeModel[]): FleetModelsResponse {
 
 function renderRow(
   props: Partial<React.ComponentProps<typeof ThinkingPropRow>> = {},
+  locale: SupportedLocale = "en",
 ) {
   const onChange = vi.fn();
   const queryClient = new QueryClient({
@@ -71,7 +79,7 @@ function renderRow(
     // inspector parent declares — otherwise the row mounts without a
     // grid context and the column layout warns. Behaviour we care about
     // (visibility + clear flow) is independent of layout.
-    <I18nProvider locale="en" resources={TEST_RESOURCES}>
+    <I18nProvider locale={locale} resources={TEST_RESOURCES}>
       <QueryClientProvider client={queryClient}>
         <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
           <ThinkingPropRow
@@ -93,6 +101,20 @@ function renderRow(
 }
 
 describe("ThinkingPropRow", () => {
+  it.each([
+    ["en", "Not in execution catalog · Cannot run"],
+    ["zh-Hans", "不在执行目录 / 不可执行"],
+    ["ja", "実行カタログにないため実行できません"],
+    ["ko", "실행 카탈로그에 없어 실행할 수 없습니다"],
+  ] as const)("shows unavailable instead of unknown and preserves saved reasoning in %s", async (locale, message) => {
+    mockListFleetModels.mockResolvedValue({ providers: [{ provider: "codex", model_catalog_status: "ready", models: [] }] });
+    const { onChange } = renderRow({ provider: "codex", model: "inventory-only", value: "saved-effort" }, locale);
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(screen.queryByText("Reasoning capability unknown")).toBeNull();
+    expect(screen.getByText("saved-effort")).toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it("renders gateway-native levels and high default and emits the selected max", async () => {
     mockListFleetModels.mockResolvedValue({ providers: [{ provider: "codex", online_runtime_count: 1, models: [{
       id: "deepseek-flash", label: "DeepSeek Flash", thinking: {

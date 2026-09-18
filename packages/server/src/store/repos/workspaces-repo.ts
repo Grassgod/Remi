@@ -53,6 +53,8 @@ export interface RelayConfigForBrowser {
 }
 export interface GatewayModelsSnapshot {
   models: Array<{ id: string; label: string; thinking?: MultiremiRuntimeModelThinking }>;
+  /** A ready native Codex directory is authoritative even when models is empty. */
+  nativeCatalogStatus?: "ready" | "error";
   sourceRevision: number;
   lastSuccessAt: string | null;
   lastError: string | null;
@@ -840,6 +842,8 @@ export class WorkspacesRepo {
     if (!row) return null;
     return {
       models: parseJson<GatewayModelsSnapshot["models"]>(row.models, []),
+      ...(row.native_catalog_status === "ready" || row.native_catalog_status === "error"
+        ? { nativeCatalogStatus: row.native_catalog_status } : {}),
       sourceRevision: Number(row.source_revision ?? 0),
       lastSuccessAt: nullableString(row.last_success_at),
       lastError: nullableString(row.last_error),
@@ -850,7 +854,7 @@ export class WorkspacesRepo {
   saveGatewayModels(
     workspaceId: string,
     engine: RelayEngine,
-    input: { models?: GatewayModelsSnapshot["models"]; sourceRevision: number; error?: string | null },
+    input: { models?: GatewayModelsSnapshot["models"]; sourceRevision: number; nativeCatalogStatus?: GatewayModelsSnapshot["nativeCatalogStatus"]; error?: string | null },
   ): void {
     const now = nowIso();
     // Read the fence and write in one transaction so a slow, stale discovery run
@@ -864,16 +868,18 @@ export class WorkspacesRepo {
       // On a FAILED discovery keep the source_revision of the last SUCCESS, so a
       // stale catalog can never masquerade as freshly discovered for a new config.
       const sourceRevision = success ? input.sourceRevision : (existing?.sourceRevision ?? input.sourceRevision);
+      const nativeCatalogStatus = input.nativeCatalogStatus ?? (success ? null : existing?.nativeCatalogStatus ?? null);
       this.ctx.db.run(
-        `INSERT INTO multiremi_gateway_models (workspace_id, engine, models, source_revision, last_success_at, last_error, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO multiremi_gateway_models (workspace_id, engine, models, source_revision, last_success_at, last_error, native_catalog_status, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(workspace_id, engine) DO UPDATE SET
            models = excluded.models,
            source_revision = excluded.source_revision,
            last_success_at = excluded.last_success_at,
            last_error = excluded.last_error,
+           native_catalog_status = excluded.native_catalog_status,
            updated_at = excluded.updated_at`,
-        [workspaceId, engine, toJson(models), sourceRevision, lastSuccessAt, input.error ?? null, now],
+        [workspaceId, engine, toJson(models), sourceRevision, lastSuccessAt, input.error ?? null, nativeCatalogStatus, now],
       );
     })();
   }

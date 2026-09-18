@@ -143,9 +143,80 @@ The complete ACP suite finished with 196 pass / 0 fail / 519 assertions (13 file
 Result: 78 passed, 0 failed, 186 assertions. `bunx tsc --noEmit` also completed
 with no errors after integrating the type-compatible metadata fields.
 
-The real execution checked `deepseek-flash` at `max`. Real requests at `low` and
-`high`, live Claude inference, and GPT upstream inference are **未验证**. This
+The initial implementation runs checked `deepseek-flash` at `max`; independent
+QA subsequently verified `low` (see the follow-up below). Real requests at
+`high`, live Claude inference, and GPT upstream inference remain **未验证**. This
 isolated verification manually prepared the catalog/home; deployment to the
 production daemon, production `/api/models` and browser readback, and continuity
 of a real running user task across an upgrade are **未验证**. No deployment is
 part of MUL-330's current authorization.
+
+## QA follow-up: authoritative selectable membership
+
+QA found that the ordinary list advertised `codex-auto-review` while the loaded
+native execution catalog omitted it. The first implementation filtered hidden
+entries but retained ordinary-only IDs as capability-unknown, allowing users to
+save a model that ACP could not select. As confirmed by the task owner, that
+route was not selectable before this PR either: the old ACP path could silently
+continue with the previous model. The strict selection check exposed the problem;
+it did not introduce the prior inability to select that route. The earlier
+`includeHidden: true` bundled comparison is not a list of normal ACP choices.
+
+The server now uses the native catalog's visible API-capable entries as Codex's
+selectable set. IDs and effort values are not hardcoded. An ordinary-only model
+will become selectable automatically if a later native catalog advertises it.
+`model_catalog_status: ready` makes even an empty selectable set authoritative;
+`error` preserves the ordinary inventory with capability-loading errors. Old
+snapshots missing the new marker trigger immediate discovery after upgrade.
+Custom Runtime connections retain their own model catalogs; Claude is unchanged.
+
+API validation and task claiming consume that same target catalog, including
+Agents with no effort override. Saved absent models show **不在执行目录 / 不可执行**
+in the editor without replacing their model or effort. Unrelated metadata edits
+may resend the unchanged selection. Rejected models do not block a runnable
+Agent behind them in the queue, and catalog changes do not cancel running tasks.
+
+### Real gateway and local HTTP API rerun
+
+Executed at **2026-09-18 10:51:15 UTC** with Bun 1.3.14. The modified server used
+an in-memory SQLite store and a loopback HTTP listener. Its production discovery
+function and HTTP transport read the existing real gateway using the local key
+in-process; no shared configuration, production data, or upstream prompt changed.
+The listener and in-memory store were closed afterward. Only safe output fields
+were captured; neither credentials nor instruction templates were persisted.
+
+| Check | Observed result |
+| --- | --- |
+| `GET /v1/models` | HTTP 200, 11 ordinary entries |
+| `GET /backend-api/codex/models` | HTTP 200, 10 native entries, 395,186 UTF-8 bytes (394,730 characters) |
+| Native response SHA-256 | `65ef7c2624c0af69295543c46233eda6c6bac986280b7317e9521a602bf90b2e` |
+| Actual HTTP `GET /api/models` | `ready`, 9 selectable entries; same result for workspace, Runtime, execution group and Agent-owner scopes |
+| Removed ordinary-only route | `codex-auto-review` absent from all four API lists |
+| Hidden native route | `gpt-reserve` absent from all four API lists |
+| `deepseek-flash` | `supported`, low/high/max, default high in all four API responses |
+| API create with absent model and no effort | HTTP 400, `code: model_not_in_execution_catalog` |
+| Metadata-only update resending saved absent model/effort | HTTP 200, saved `codex-auto-review` / `high` unchanged |
+| Claim saved absent model with no effort | null claim; task stays queued, no dispatch |
+
+The nine selectable IDs were gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra,
+gpt-5.6-luna, gpt-5.5, deepseek-flash, deepseek-v4-pro, deepseek-v4-flash,
+and deepseek-v4.1-flash. These names are observations, not implementation rules.
+
+### Independent evidence and remaining limits
+
+QA's separate report (`cmt_am7bnhayi20s`) verified an actual DeepSeek **low**
+request: `reasoning.effort=low`, upstream HTTP 200 / OK, pinned ACP 1.12.0 and
+Codex 0.155.0. That adds to this implementer's two max executions above; this
+membership follow-up did not repeat inference because it changes selection and
+validation, not ACP transmission. DeepSeek **high**, GPT/Claude live inference,
+GPT instruction quality, and real tasks spanning an upgrade remain **未验证**.
+
+QA's PPE browser was redirected to login despite a local unauthenticated API.
+No deployment or browser retest was performed in this follow-up; real desktop
+page readback remains **未验证**, while component tests cover saved-value status
+and four-language text. This local API rerun does not claim production verification.
+
+Queued-task wait diagnostics remain a follow-up: a rejection by one Runtime does
+not mean a healthy sibling cannot claim the task. Reusing the task wait reason
+would require fleet-wide aggregation and clearing rules, beyond this membership
+fix. Tasks still wait while their only target has persistent capability errors.

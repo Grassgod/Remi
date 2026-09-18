@@ -10,7 +10,7 @@ import type {
 } from "@multiremi/core/types";
 import { AGENT_DESCRIPTION_MAX_LENGTH } from "@multiremi/core/agents";
 import { useWorkspaceId } from "@multiremi/core/hooks";
-import { useExecutionTargetModels } from "@multiremi/core/runtimes";
+import { isModelUnavailable, useExecutionTargetModels } from "@multiremi/core/runtimes";
 import { isImeComposing } from "@multiremi/core/utils";
 import { Button } from "@multiremi/ui/components/ui/button";
 import {
@@ -88,6 +88,7 @@ export function EditAgentDialog({
   const [saving, setSaving] = useState(false);
 
   const targetModels = useExecutionTargetModels(wsId ?? "", provider, executionGroupId ? undefined : legacyRuntimeId, executionGroupId, agent.id);
+  const unavailable = isModelUnavailable(provider, model, targetModels.models, targetModels.modelCatalogStatus);
   const thinkingLevels = useMemo(
     () => getModelThinkingLevels(targetModels.models, model, targetModels.defaultThinking),
     [targetModels.models, model, targetModels.defaultThinking],
@@ -306,9 +307,10 @@ export function EditAgentDialog({
               <ThinkingField
                 value={thinkingLevel}
                 levels={thinkingLevels}
-              thinking={getModelThinking(targetModels.models, model, targetModels.defaultThinking)}
-              isLoading={targetModels.isLoading}
-              isError={targetModels.isError}
+                thinking={getModelThinking(targetModels.models, model, targetModels.defaultThinking)}
+                isLoading={targetModels.isLoading}
+                isError={targetModels.isError}
+                modelUnavailable={unavailable}
                 onChange={setThinkingLevel}
               />
             </div>

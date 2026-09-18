@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { queryOptions, useQuery } from "@tanstack/react-query";
 import { api } from "../api";
-import type { RuntimeModel, RuntimeModelsResult } from "../types/agent";
+import type { FleetProviderModels, RuntimeModel, RuntimeModelsResult } from "../types/agent";
 
 export const runtimeModelsKeys = {
   all: () => ["runtimes", "models"] as const,
@@ -47,6 +47,7 @@ export function useExecutionTargetModels(wsId: string, provider: string, runtime
   const bucket = query.data?.providers.find((entry) => entry.provider === provider);
   return {
     models: bucket?.models ?? NO_MODELS,
+    modelCatalogStatus: bucket?.model_catalog_status,
     defaultThinking: bucket?.default_thinking,
     onlineRuntimeCount: bucket?.online_runtime_count ?? 0,
     isLoading: query.isLoading,
@@ -62,6 +63,7 @@ export function useFleetProviderModels(
   provider: string,
 ): {
   models: RuntimeModel[];
+  modelCatalogStatus: FleetProviderModels["model_catalog_status"];
   onlineRuntimeCount: number;
   isLoading: boolean;
   isError: boolean;
@@ -73,10 +75,22 @@ export function useFleetProviderModels(
   );
   return {
     models: bucket?.models ?? NO_MODELS,
+    modelCatalogStatus: bucket?.model_catalog_status,
     onlineRuntimeCount: bucket?.online_runtime_count ?? 0,
     isLoading: query.isLoading,
     isError: query.isError,
   };
+}
+
+/** Missing models are unavailable only when Codex has an authoritative catalog. */
+export function isModelUnavailable(
+  provider: string,
+  model: string,
+  models: RuntimeModel[],
+  catalogStatus?: FleetProviderModels["model_catalog_status"],
+): boolean {
+  return provider === "codex" && catalogStatus === "ready" && Boolean(model.trim())
+    && !models.some((entry) => entry.id === model.trim());
 }
 
 const POLL_INTERVAL_MS = 500;

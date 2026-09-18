@@ -1,9 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 import { RuntimesEndpoints } from "../api/endpoints/runtimes";
 import type { HttpClient } from "../api/http";
-import { executionTargetModelsOptions, runtimeModelsKeys } from "./models";
+import { executionTargetModelsOptions, isModelUnavailable, runtimeModelsKeys } from "./models";
 
 describe("execution target model catalog", () => {
+  it("only marks absent explicit Codex models unavailable after an authoritative load", () => {
+    const models = [{ id: "selectable", label: "Selectable" }];
+    expect(isModelUnavailable("codex", "inventory-only", models, "ready")).toBe(true);
+    expect(isModelUnavailable("codex", "selectable", models, "ready")).toBe(false);
+    expect(isModelUnavailable("codex", "", models, "ready")).toBe(false);
+    expect(isModelUnavailable("codex", "inventory-only", models, "error")).toBe(false);
+    expect(isModelUnavailable("codex", "inventory-only", models)).toBe(false);
+    expect(isModelUnavailable("claude", "inventory-only", models, "ready")).toBe(false);
+  });
+
   it("isolates group models by workspace, group and agent owner context", () => {
     const first = executionTargetModelsOptions("ws", null, "team", "agent-a");
     expect(first.enabled).toBe(true);

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { MultiremiStore } from "@multiremi/store.js";
-import { discoverGatewayModels, type HttpGet, type HttpResponse } from "@multiremi/relay/discovery.js";
+import { discoverGatewayModels, refreshStaleGatewayModels, type HttpGet, type HttpResponse } from "@multiremi/relay/discovery.js";
 import { createLocalStore, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -22,6 +22,32 @@ const CLAUDE_FRAG = JSON.stringify({ env: { ANTHROPIC_BASE_URL: "https://ai.open
 const CODEX_FRAG = ['model_provider = "OpenAI"', "[model_providers.OpenAI]", 'base_url = "https://vip.openremi.fun/v1"'].join("\n");
 
 describe("relay model discovery", () => {
+  it("refreshes pre-native snapshots immediately and respects a fresh ready catalog", async () => {
+    const store = createStore();
+    const workspace = store.createWorkspace({ name: "Legacy catalog refresh" });
+    store.setRelayModelDiscovery(workspace.id, true);
+    const revision = store.upsertRelayConfig(workspace.id, "codex", { fragment: CODEX_FRAG, tokenOp: "set", authToken: "sk-codex" });
+    store.saveGatewayModels(workspace.id, "codex", { sourceRevision: revision, models: [{ id: "inventory-only", label: "Legacy inventory" }] });
+    const s = stub(url => url.endsWith("/backend-api/codex/models")
+      ? ok({ models: [{ slug: "native-model", supported_reasoning_levels: [] }] })
+      : ok({ data: [{ id: "inventory-only" }, { id: "native-model" }] }));
+    refreshStaleGatewayModels(store, workspace.id, s.get);
+    await Bun.sleep(0); // allow the injected async transport and snapshot write to finish
+    expect(s.calls).toBe(2);
+    expect(store.getGatewayModels(workspace.id, "codex")?.nativeCatalogStatus).toBe("ready");
+    expect(store.getGatewayModels(workspace.id, "codex")?.models.map(model => model.id)).toEqual(["native-model"]);
+    const readyWorkspace = store.createWorkspace({ name: "Fresh native catalog" });
+    store.setRelayModelDiscovery(readyWorkspace.id, true);
+    const readyRevision = store.upsertRelayConfig(readyWorkspace.id, "codex", { fragment: CODEX_FRAG, tokenOp: "set", authToken: "sk-codex" });
+    store.saveGatewayModels(readyWorkspace.id, "codex", {
+      sourceRevision: readyRevision, nativeCatalogStatus: "ready", models: [{ id: "native-model", label: "Native" }],
+    });
+    // This workspace has no retry backoff; only freshness may suppress discovery.
+    refreshStaleGatewayModels(store, readyWorkspace.id, s.get);
+    await Bun.sleep(0);
+    expect(s.calls).toBe(2);
+  });
+
   it("queries claude /v1/models with bearer + anthropic-version and caches models", async () => {
     const store = createStore();
     store.upsertRelayConfig("local", "claude", { fragment: CLAUDE_FRAG, tokenOp: "set", authToken: "sk-ant" });
@@ -41,7 +67,9 @@ describe("relay model discovery", () => {
     const store = createStore();
     store.upsertRelayConfig("local", "codex", { fragment: CODEX_FRAG, tokenOp: "set", authToken: "sk-codex" });
     const s = stub((url) => {
-      if (url === "https://vip.openremi.fun/backend-api/codex/models") return ok({ models: [] });
+      if (url === "https://vip.openremi.fun/backend-api/codex/models") return ok({ models: [
+        { slug: "gpt-5.6-sol" }, { slug: "gpt-5.6-sol" }, { slug: "gpt-5.5" },
+      ] });
       expect(url).toBe("https://vip.openremi.fun/v1/models");
       return ok({ data: [
         { id: "gpt-5.6-sol", display_name: "GPT-5.6 Sol" },
@@ -56,6 +84,7 @@ describe("relay model discovery", () => {
       { id: "gpt-5.5", label: "gpt-5.5", thinking: { status: "unknown", supportedLevels: [] } },
     ]);
     expect(s.calls).toBe(2);
+    expect(store.getGatewayModels("local", "codex")?.nativeCatalogStatus).toBe("ready");
   });
 
   it("persists generic effort values, descriptions and per-model defaults without prompt templates", async () => {
@@ -108,10 +137,38 @@ describe("relay model discovery", () => {
         { slug: "visible", visibility: "list", supported_in_api: true, supported_reasoning_levels: [{ effort: "high" }] },
       ] }) : ok({ data: ["hidden", "unavailable", "visible", "unknown"].map(id => ({ id })) })).get);
     expect(store.getGatewayModels("local", "codex")?.models.map(model => [model.id, model.thinking?.status]))
-      .toEqual([["visible", "supported"], ["unknown", "unknown"]]);
+      .toEqual([["visible", "supported"]]);
   });
 
-  for (const failure of ["http", "invalid-json", "invalid-shape", "timeout"] as const) {
+  it("takes membership from the native directory, including native-only models and their labels", async () => {
+    const store = createStore();
+    store.upsertRelayConfig("local", "codex", { fragment: CODEX_FRAG, tokenOp: "set", authToken: "sk-codex" });
+    await discoverGatewayModels(store, "local", "codex", stub((url) => url.endsWith("/backend-api/codex/models")
+      ? ok({ models: [
+        { slug: "native-only", display_name: "Native model", supported_reasoning_levels: [{ effort: "deep" }], default_reasoning_level: "deep" },
+        { slug: "shared", display_name: "Native label" },
+      ] }) : ok({ data: [{ id: "inventory-only" }, { id: "shared", display_name: "Inventory label" }] })).get);
+    const snapshot = store.getGatewayModels("local", "codex")!;
+    expect(snapshot.nativeCatalogStatus).toBe("ready");
+    expect(snapshot.models.map(({ id, label }) => ({ id, label }))).toEqual([
+      { id: "native-only", label: "Native model" }, { id: "shared", label: "Inventory label" },
+    ]);
+    expect(snapshot.models[0].thinking?.defaultLevel).toBe("deep");
+  });
+
+  it("preserves an authoritative empty selectable set when the native directory contains only hidden models", async () => {
+    const store = createStore();
+    store.upsertRelayConfig("local", "codex", { fragment: CODEX_FRAG, tokenOp: "set", authToken: "sk-codex" });
+    await discoverGatewayModels(store, "local", "codex", stub((url) => url.endsWith("/backend-api/codex/models")
+      ? ok({ models: [{ slug: "hidden", visibility: "hide", supported_in_api: true }] })
+      : ok({ data: [{ id: "inventory-only" }, { id: "hidden" }] })).get);
+    const snapshot = store.getGatewayModels("local", "codex")!;
+    expect(snapshot.models).toEqual([]);
+    expect(snapshot.nativeCatalogStatus).toBe("ready");
+    expect(snapshot.lastError).toBeNull();
+  });
+
+  for (const failure of ["http", "invalid-json", "invalid-shape", "empty-native", "invalid-slug", "timeout"] as const) {
     it(`keeps model inventory and reports capability ${failure} failure`, async () => {
       const store = createStore();
       store.upsertRelayConfig("local", "codex", { fragment: CODEX_FRAG, tokenOp: "set", authToken: "test-private-credential" });
@@ -120,6 +177,8 @@ describe("relay model discovery", () => {
         if (failure === "timeout") throw new Error("timed out test-private-credential\nrequest");
         if (failure === "invalid-json") return { status: 200, text: "test-private-credential invalid JSON" };
         if (failure === "invalid-shape") return ok({ models: null });
+        if (failure === "empty-native") return ok({ models: [] });
+        if (failure === "invalid-slug") return ok({ models: [{ slug: 7 }] });
         return { status: 503, text: "test-private-credential" };
       }).get);
       const snapshot = store.getGatewayModels("local", "codex")!;
@@ -127,6 +186,7 @@ describe("relay model discovery", () => {
       expect(snapshot.models[0].thinking?.status).toBe("error");
       expect(snapshot.models[0].thinking?.supportedLevels).toEqual([]);
       expect(snapshot.lastError).toBeTruthy();
+      expect(snapshot.nativeCatalogStatus).toBe("error");
       expect(JSON.stringify(snapshot)).not.toContain("test-private-credential");
     });
   }
@@ -137,11 +197,12 @@ describe("relay model discovery", () => {
     await discoverGatewayModels(store, "local", "codex", stub((url) => {
       if (!url.endsWith("/backend-api/codex/models")) return ok({ data: [{ id: "old-model" }] });
       const newer = store.upsertRelayConfig("local", "codex", { fragment: CODEX_FRAG, tokenOp: "keep" });
-      store.saveGatewayModels("local", "codex", { sourceRevision: newer, models: [{ id: "new-model", label: "New" }] });
+      store.saveGatewayModels("local", "codex", { sourceRevision: newer, nativeCatalogStatus: "error", error: "newer failure", models: [{ id: "new-model", label: "New" }] });
       return ok({ models: [{ slug: "old-model", supported_reasoning_levels: [] }] });
     }).get);
     expect(store.getGatewayModels("local", "codex")?.sourceRevision).toBe(revision + 1);
     expect(store.getGatewayModels("local", "codex")?.models[0].id).toBe("new-model");
+    expect(store.getGatewayModels("local", "codex")?.nativeCatalogStatus).toBe("error");
   });
 
   it("keeps last-known-good models AND source_revision on gateway failure", async () => {

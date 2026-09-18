@@ -14,6 +14,7 @@ export function ThinkingField({
   thinking,
   isLoading,
   isError,
+  modelUnavailable,
 }: {
   value: string;
   levels: RuntimeModelThinkingLevel[];
@@ -21,6 +22,7 @@ export function ThinkingField({
   thinking?: RuntimeModelThinking;
   isLoading?: boolean;
   isError?: boolean;
+  modelUnavailable?: boolean;
 }) {
   const { t } = useT("agents");
   const labelId = useId();
@@ -36,7 +38,7 @@ export function ThinkingField({
         className="mt-1 flex min-h-9 flex-wrap items-center gap-1"
       >
         {(levels.length > 0 || value) && <ThinkingPicker value={value} levels={levels} onChange={onChange} />}
-        {(thinking || levels.length === 0) && <ThinkingStatus thinking={thinking} isLoading={isLoading} isError={isError} />}
+        {(thinking || levels.length === 0) && <ThinkingStatus modelUnavailable={modelUnavailable} thinking={thinking} isLoading={isLoading} isError={isError} />}
       </div>
     </div>
   );

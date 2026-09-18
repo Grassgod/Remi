@@ -51,6 +51,8 @@ export interface FleetProviderModelsResponse {
   provider: string;
   online_runtime_count: number;
   models: FleetModelResponse[];
+  /** ready: models is the authoritative selectable set, including an empty set. */
+  model_catalog_status?: "ready" | "error";
   default_thinking?: FleetModelThinkingResponse;
 }
 
@@ -224,6 +226,7 @@ export function overlayGatewayModels(
   store: RuntimeModelCatalogSource,
   workspaceId: string,
   providers: FleetProviderModelsResponse[],
+  options: { preserveCustomProfileModels?: boolean } = {},
 ): FleetProviderModelsResponse[] {
   // Discovery off → never surface a (possibly stale) gateway snapshot; fall back
   // to the per-runtime union so turning the toggle off actually hides the models.
@@ -242,15 +245,18 @@ export function overlayGatewayModels(
     if (snapshot.sourceRevision !== engineConfig.revision) continue;
     const existing = byEngine.get(engine);
     const existingModels = existing?.models ?? [];
+    const modelCatalogStatus = engine === "codex"
+      ? snapshot.lastError ? "error" : snapshot.nativeCatalogStatus
+      : undefined;
     // If both the native catalog and generic inventory failed on this machine,
     // its fallback report contains only bundled IDs. The failure still applies
     // to gateway-only models absent from that fallback report.
     const runtimeCatalogError = engine === "codex" && existingModels.length > 0
       && existingModels.every((model) => model.thinking?.status === "error")
       ? existingModels[0].thinking : undefined;
-    if (snapshot.models.length === 0) {
+    if (snapshot.models.length === 0 && modelCatalogStatus !== "ready") {
       if (engine === "codex" && snapshot.lastError && existing) {
-        byEngine.set(engine, { ...existing, models: existingModels.map((model) => ({
+        byEngine.set(engine, { ...existing, model_catalog_status: "error", models: existingModels.map((model) => ({
           ...model, thinking: { status: "error", supported_levels: [], error: snapshot.lastError! },
         })), default_thinking: { status: "error", supported_levels: [], error: snapshot.lastError } });
       }
@@ -301,7 +307,7 @@ export function overlayGatewayModels(
         ...(thinking ? { thinking } : {}),
       };
     });
-    if (engine === "codex" || engine === "claude") {
+    if (options.preserveCustomProfileModels !== false) {
       const customIds = new Set(engine === "codex" ? store.listWorkspaceCodexProfileModels(workspaceId) : store.listWorkspaceClaudeProfileModels(workspaceId));
       for (const model of existingModels) {
         if (customIds.has(model.id) && !models.some(candidate => candidate.id === model.id)) models.push(model);
@@ -311,6 +317,7 @@ export function overlayGatewayModels(
       provider: engine,
       online_runtime_count: existing?.online_runtime_count ?? 0,
       models,
+      ...(modelCatalogStatus ? { model_catalog_status: modelCatalogStatus } : {}),
       ...(existing?.default_thinking ? { default_thinking: engine === "codex"
         ? existing.default_thinking.status === "error" ? existing.default_thinking : defaultModelThinking(models)
         : existing.default_thinking } : {}),
@@ -329,11 +336,15 @@ export function runtimeTargetModelCatalog(
   const providers = fleetModelsResponse([{ ...runtime, status: "online", visibility: "public" }], runtime.ownerId ?? "local");
   return providers.map((entry) => {
     const profile = store.getRuntimeExecutionProfile(runtime.id, entry.provider);
-    const models = profile
-      ? runtimeConnectionModels(profile, entry.provider, entry.models)
-      : overlayGatewayModels(store, workspaceId, [entry]).find((candidate) => candidate.provider === entry.provider)?.models ?? [];
-    return { ...entry, online_runtime_count: runtime.status === "online" ? 1 : 0, models,
-      ...(profile ? { default_thinking: defaultModelThinking(models) } : {}),
-    };
+    const online_runtime_count = runtime.status === "online" ? 1 : 0;
+    if (profile) {
+      const models = runtimeConnectionModels(profile, entry.provider, entry.models);
+      // Custom connections use their own catalog and never inherit a workspace
+      // gateway's native membership constraint or loading status.
+      return { ...entry, online_runtime_count, models, default_thinking: defaultModelThinking(models) };
+    }
+    const gateway = overlayGatewayModels(store, workspaceId, [entry], { preserveCustomProfileModels: entry.provider !== "codex" })
+      .find((candidate) => candidate.provider === entry.provider);
+    return { ...(gateway ?? entry), online_runtime_count };
   });
 }

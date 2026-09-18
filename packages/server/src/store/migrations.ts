@@ -407,6 +407,7 @@ export function runMigrations(db: SqlDatabase): void {
       engine TEXT NOT NULL,
       models TEXT NOT NULL DEFAULT '[]',
       source_revision INTEGER NOT NULL DEFAULT 0,
+      native_catalog_status TEXT,
       last_success_at TEXT,
       last_error TEXT,
       updated_at TEXT NOT NULL,
@@ -2656,6 +2657,7 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_runtimes", "visibility TEXT NOT NULL DEFAULT 'private'");
   addColumnIfMissing(db, "multiremi_runtimes", "name_customized INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(db, "multiremi_runtime_models", "is_provider_default INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "multiremi_gateway_models", "native_catalog_status TEXT");
   runMigrationOnce(db, DAEMON_PROFILES_MIGRATION, () => {
     createDaemonProfilesAndBackfill(db);
   });

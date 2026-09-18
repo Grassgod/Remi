@@ -21,6 +21,15 @@ the selected target unless explicitly supplied; an explicit provider must match.
 Tasks use eligible members of the selected group and wait when none is available;
 they do not fall back to unrelated Runtimes sharing a provider.
 
+`remi runtime model catalog --agent <agent-id> --json` returns the same selectable
+models and reasoning capabilities as the Agent editor. For the Codex gateway,
+`model_catalog_status: "ready"` means `models` is the authoritative execution
+catalog. A saved model absent from that list is not executable; its saved model
+and thinking level remain intact. New selections of that model return
+`model_not_in_execution_catalog`. `model_catalog_status: "error"` retains the
+ordinary gateway inventory and reports capability loading failure instead of
+emptying the picker. Custom Runtime connections keep their own catalogs.
+
 ## Canonical command tree
 
 Codex Runtime connections use `remi runtime codex-profile get <runtime>` and

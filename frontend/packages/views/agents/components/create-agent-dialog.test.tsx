@@ -197,6 +197,18 @@ function createButton(): HTMLButtonElement {
 }
 
 describe("CreateAgentDialog (execution targets)", () => {
+  it("prevents duplicating a model absent from the execution catalog while retaining the draft settings", async () => {
+    mockListFleetModels.mockResolvedValue({ providers: [{ provider: "codex", model_catalog_status: "ready", models: [] }] });
+    const { onCreate } = renderDialog(makeTemplate({ provider: "codex", model: "inventory-only", thinking_level: "saved-effort" }));
+    expect(await screen.findByText("Not in execution catalog · Cannot run")).toBeInTheDocument();
+    expect(screen.getByLabelText("Model")).toHaveValue("inventory-only");
+    expect(screen.getByRole("combobox", { name: "Reasoning effort" })).toHaveValue("saved-effort");
+    const button = createButton();
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(onCreate).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockListFleetModels.mockResolvedValue(fleetWithCapacity({ claude: 2, codex: 1 }));

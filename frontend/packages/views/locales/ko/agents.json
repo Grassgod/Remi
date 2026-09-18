@@ -163,6 +163,7 @@
   "pickers": {
     "concurrency_tooltip": "동시 실행 · 최대 {{value}}개 작업",
     "concurrency_range": "최대 동시 작업 수({{min}}-{{max}})",
+    "model_unavailable": "실행 카탈로그에 없어 실행할 수 없습니다",
     "model_default": "기본값",
     "model_tooltip": "모델 · {{value}}",
     "model_search_placeholder": "모델 ID 검색 또는 입력",

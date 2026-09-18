@@ -98,6 +98,10 @@ export function executionGroupModelCatalog(store: MultiremiStore, workspaceId: s
     }];
   });
   return [{ provider: group.provider, models, online_runtime_count: runtimes.filter((runtime) => runtime.status === "online").length,
+    ...(providers.some((entry) => entry?.model_catalog_status === "ready")
+      ? { model_catalog_status: "ready" as const }
+      : providers.some((entry) => entry?.model_catalog_status === "error")
+      ? { model_catalog_status: "error" as const } : {}),
     ...(providers.some((entry) => entry?.default_thinking) ? { default_thinking: commonThinkingCapabilities(providers.map((entry) =>
       entry?.default_thinking ?? { supported_levels: modelThinkingLevels(entry?.models ?? [], "") })),
     } : {}),
@@ -153,12 +157,16 @@ function validateAgentModelSelection(
     runtimeId?: string | null;
     executionGroupId?: string | null;
     ownerId?: string;
+    preserveSavedSelection?: boolean;
   },
 ): Response | null {
   const profile = input.runtimeId ? store.getRuntimeExecutionProfile(input.runtimeId, input.provider) : null;
   if (profile && input.model && input.model !== profile.model) {
     return c.json({ error: `model "${input.model}" is not supported by the selected Runtime connection; expected "${profile.model}"` }, 400);
   }
+  // Unrelated edits may resend the saved selection. Discovery must never force
+  // users to replace a saved model/effort just to edit an Agent's metadata.
+  if (input.preserveSavedSelection) return null;
   const groupCatalog = !input.runtimeId && input.executionGroupId
     ? executionGroupModelCatalog(store, input.workspaceId, input.executionGroupId, input.ownerId ?? currentRequestUserId(c))[0]
     : undefined;
@@ -168,10 +176,6 @@ function validateAgentModelSelection(
   if (groupModels && input.model && !groupModels.some((model) => model.id === input.model)) {
     return c.json({ error: `model "${input.model}" is not supported by every available member of the selected execution group` }, 400);
   }
-  // Model IDs remain an escape hatch for gateways that have not refreshed yet.
-  // Capability validation is needed only when an explicit effort override is
-  // requested, using either the concrete model or provider default capability.
-  if (!input.thinkingLevel) return null;
   const catalog = input.executionGroupId && !input.runtimeId ? groupCatalog : workspaceProviderCatalog(
     store,
     input.workspaceId,
@@ -180,6 +184,16 @@ function validateAgentModelSelection(
     input.runtimeId,
   );
   const models = catalog?.models ?? [];
+  if (input.model && catalog?.model_catalog_status === "ready"
+    && !models.some((model) => model.id === input.model)) {
+    return c.json({
+      code: "model_not_in_execution_catalog",
+      error: `model "${input.model}" is not in the Codex execution catalog and cannot be executed`,
+    }, 400);
+  }
+  // Without an authoritative catalog retain the gateway's existing model-ID
+  // escape hatch. Explicit effort still requires a reported capability.
+  if (!input.thinkingLevel) return null;
   const supportedLevels = modelThinkingLevels(models, input.model, catalog?.default_thinking);
   const selectedModel = input.model
     ? models.find((model) => model.id === input.model)
@@ -549,6 +563,7 @@ export function withAgentUpdateRequestContext(
       runtimeId: targetRuntimeId,
       executionGroupId: targetGroupId,
       ownerId: targetOwnerId,
+      preserveSavedSelection: !selectionChanged,
     });
     if (invalidSelection) return invalidSelection;
   }

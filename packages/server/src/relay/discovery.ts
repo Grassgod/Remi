@@ -91,7 +91,7 @@ async function fetchGatewayModels(
   base: string,
   token: string,
   httpGet: HttpGet,
-): Promise<{ models: GatewayModelsSnapshot["models"]; error?: string }> {
+): Promise<{ models: GatewayModelsSnapshot["models"]; nativeCatalogStatus?: GatewayModelsSnapshot["nativeCatalogStatus"]; error?: string }> {
   const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
   if (engine === "claude") headers["anthropic-version"] = "2023-06-01";
   const res = await httpGet(joinUrl(base, MODEL_PATH[engine]), headers);
@@ -114,25 +114,31 @@ async function fetchGatewayModels(
     const catalog = await httpGet(new URL("/backend-api/codex/models", base).href, headers);
     if (catalog.status < 200 || catalog.status >= 300) throw new Error(`gateway capability catalog HTTP ${catalog.status}`);
     const parsed = parseBody(catalog.text);
-    if (!Array.isArray(parsed.models)) throw new Error("gateway returned an invalid capability catalog");
-    const capabilities = new Map<string, MultiremiRuntimeModelThinking>();
-    const unavailable = new Set<string>();
+    if (!Array.isArray(parsed.models) || !parsed.models.length) throw new Error("gateway returned an invalid capability catalog");
+    const inventory = new Map(out.map(model => [model.id, model]));
+    const models: GatewayModelsSnapshot["models"] = [];
+    const nativeIds = new Set<string>();
     for (const candidate of parsed.models) {
       const model = object(candidate);
-      if (!model || typeof model.slug !== "string" || !model.slug || capabilities.has(model.slug)) continue;
-      // Codex's model selector excludes native hidden/non-API entries even if
-      // the generic gateway inventory advertises them. Match that selector.
-      if (model.visibility === "hide" || model.supported_in_api === false) unavailable.add(model.slug);
-      capabilities.set(model.slug, codexThinking(model));
+      if (!model || typeof model.slug !== "string" || !model.slug.trim()) throw new Error("gateway returned an invalid capability catalog");
+      if (nativeIds.has(model.slug)) continue;
+      nativeIds.add(model.slug);
+      // The loaded native catalog replaces Codex's bundled catalog. Its selector
+      // is authoritative for membership, including native-only models; ordinary
+      // /models entries absent here cannot be selected by the execution engine.
+      if (model.visibility === "hide" || model.supported_in_api === false) continue;
+      models.push({
+        id: model.slug,
+        label: inventory.get(model.slug)?.label
+          ?? (typeof model.display_name === "string" && model.display_name ? model.display_name : model.slug),
+        thinking: codexThinking(model),
+      });
     }
-    return { models: out.filter((model) => !unavailable.has(model.id)).map((model) => ({
-      ...model,
-      thinking: capabilities.get(model.id) ?? { status: "unknown", supportedLevels: [] },
-    })) };
+    return { models, nativeCatalogStatus: "ready" };
   } catch (err) {
     // Preserve model availability, but do not present stale or guessed effort options.
     const error = discoveryError(err, token);
-    return { models: out.map((model) => ({ ...model, thinking: { status: "error", supportedLevels: [], error } })), error };
+    return { models: out.map((model) => ({ ...model, thinking: { status: "error", supportedLevels: [], error } })), nativeCatalogStatus: "error", error };
   }
 }
 
@@ -160,14 +166,15 @@ export async function discoverGatewayModels(
     return;
   }
   try {
-    const { models, error } = await fetchGatewayModels(engine, base, engineConfig.authToken, httpGet);
-    store.saveGatewayModels(workspaceId, engine, { models, sourceRevision: engineConfig.revision, error });
+    const { models, nativeCatalogStatus, error } = await fetchGatewayModels(engine, base, engineConfig.authToken, httpGet);
+    store.saveGatewayModels(workspaceId, engine, { models, sourceRevision: engineConfig.revision, nativeCatalogStatus, error });
     if (error) log.warn(`relay ${engine} capability discovery failed: ${error}`);
     log.info(`relay ${engine} discovery: ${models.length} models for workspace ${workspaceId}`);
   } catch (err) {
     // Cap + sanitize the stored/logged error so a gateway can't smuggle bytes into the DB/logs.
     const message = discoveryError(err, engineConfig.authToken);
-    store.saveGatewayModels(workspaceId, engine, { sourceRevision: engineConfig.revision, error: message });
+    store.saveGatewayModels(workspaceId, engine, { sourceRevision: engineConfig.revision,
+      ...(engine === "codex" ? { nativeCatalogStatus: "error" } : {}), error: message });
     log.warn(`relay ${engine} discovery failed: ${message}`);
   }
 }
@@ -185,7 +192,7 @@ const DISCOVERY_BACKOFF_MS = 30_000;
 
 /** Lazily refresh a snapshot that is missing, stale, or was discovered for an OLD
  *  config revision (fire-and-forget); returns immediately. */
-export function refreshStaleGatewayModels(store: MultiremiStore, workspaceId: string): void {
+export function refreshStaleGatewayModels(store: MultiremiStore, workspaceId: string, httpGet: HttpGet = defaultHttpGet): void {
   if (!store.getRelayModelDiscovery(workspaceId)) return;
   const now = Date.now();
   const config = store.getRelayConfigForDaemon(workspaceId);
@@ -197,6 +204,9 @@ export function refreshStaleGatewayModels(store: MultiremiStore, workspaceId: st
     // makes any older snapshot stale even if lastSuccessAt is recent.
     const fresh = snap
       && !snap.lastError
+      // Pre-native snapshots contain ordinary inventory, whose membership is
+      // not executable authority. Upgrade those immediately instead of waiting 1h.
+      && (engine !== "codex" || snap.nativeCatalogStatus === "ready")
       && snap.sourceRevision === engineConfig.revision
       && !!snap.lastSuccessAt
       && now - Date.parse(snap.lastSuccessAt) < DISCOVERY_TTL_MS;
@@ -204,6 +214,6 @@ export function refreshStaleGatewayModels(store: MultiremiStore, workspaceId: st
     const key = `${workspaceId}:${engine}`;
     if (now - (lastDiscoveryAttempt.get(key) ?? 0) < DISCOVERY_BACKOFF_MS) continue;
     lastDiscoveryAttempt.set(key, now);
-    void discoverGatewayModels(store, workspaceId, engine).catch(() => {});
+    void discoverGatewayModels(store, workspaceId, engine, httpGet).catch(() => {});
   }
 }
