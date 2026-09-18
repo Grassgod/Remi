@@ -486,6 +486,27 @@ describe("Claude 1M session negotiation", () => {
     } finally { await provider.close(); }
   });
 
+  it("preserves a non-1M Claude full ID selected through session metadata when the picker uses an alias", async () => {
+    const agent = fakeAgent({
+      ...claudeProfile(),
+      configOptions: [
+        { id: "model", name: "Model", category: "model", type: "select", currentValue: "opus",
+          options: [{ value: "opus", name: "Opus" }] },
+        CLAUDE_CONFIG_OPTIONS[1]!,
+      ],
+    });
+    const provider = new AcpProvider({
+      agentType: "claude", executable: agent.executable, cwd: tempCwd(),
+      env: { CLAUDE_CODE_DISABLE_1M_CONTEXT: "1" },
+    });
+    try {
+      await drain(provider.sendStream("hi", { model: "claude-opus-4-8" }));
+      expect(only(agent.requests(), "session/new")[0]!.params._meta.claudeCode.options.model).toBe("claude-opus-4-8");
+      expect(only(agent.requests(), "session/set_config_option")).toHaveLength(0);
+      expect(only(agent.requests(), "session/prompt")).toHaveLength(1);
+    } finally { await provider.close(); }
+  });
+
   it("does not normalize Claude-shaped model IDs for Codex", async () => {
     const agent = fakeAgent(codexProfile());
     const provider = new AcpProvider({ agentType: "codex", executable: agent.executable, cwd: tempCwd() });

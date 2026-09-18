@@ -46,7 +46,7 @@ The actual request's `instructions` was 21,335 characters, SHA-256
 `c2a980bc28af132eb89e0b4c68ae884043faae83a1afd3fd4889f7e8a1ada7b0`, exactly matching
 that model's gateway `instructions_template`. This verifies a real engine
 request and successful gateway response, beyond merely saving a UI setting.
-After strict model/effort acknowledgment checks were added, the same isolated
+After strict Codex model/effort acknowledgment checks were added, the same isolated
 DeepSeek max execution again returned HTTP 200 / OK with effort max on the wire.
 
 ## Default effort: current selection can survive model changes
@@ -139,7 +139,7 @@ when current effort persists, omitted unknown defaults, absent versus explicitly
 empty selectors, arbitrary advertised effort values, wire ordering of
 `set_config_option` before `session/prompt`, explicit model rejection and mismatched
 model/effort acknowledgment without any prompt, and existing Claude negotiation.
-The complete ACP suite finished with 195 pass / 0 fail / 516 assertions (13 files).
+The complete ACP suite finished with 196 pass / 0 fail / 519 assertions (13 files).
 Result: 78 passed, 0 failed, 186 assertions. `bunx tsc --noEmit` also completed
 with no errors after integrating the type-compatible metadata fields.
 

@@ -104,7 +104,7 @@ export interface AcpModelCapability {
   effort?: AcpModelEffortCapability;
 }
 
-/** Never run an explicitly selected model on a different, previously active model. */
+/** Codex cannot run an explicitly selected model on a different, previously active model. */
 export class UnsupportedAcpModelError extends Error {
   readonly code = "acp_model_unsupported";
 
@@ -279,7 +279,8 @@ export function resolveAvailableAcpPermissionMode(
  * The `session/set_config_option` call for a requested select value, or null
  * when the bridge does not advertise it. Codex rejects unknown values;
  * Claude can additionally resolve full model IDs to SDK picker aliases.
- * Callers reject a missing explicit selection or let Claude resolve a 1M alias.
+ * Codex rejects missing explicit selections; Claude also supports SDK model
+ * IDs via session metadata and resolves explicit 1M aliases through its bridge.
  */
 export function resolveConfigOptionChange(
   configOptions: SessionConfigOption[] | undefined,
@@ -980,7 +981,8 @@ export class AcpProvider implements Provider {
       if (requestedEffort === entry.appliedEffort) return;
       const result = await entry.client.setConfigOption(entry.acpSessionId, option.id, requestedEffort);
       if (result?.configOptions) entry.configOptions = result.configOptions;
-      if (currentConfigValue(entry.configOptions, EFFORT_OPTION_CATEGORY) !== requestedEffort) {
+      if (this._adapter.agentType === "codex"
+        && currentConfigValue(entry.configOptions, EFFORT_OPTION_CATEGORY) !== requestedEffort) {
         throw new Error(`[acp_effort_unacknowledged] ${this._adapter.agentType}: the agent did not select effort "${requestedEffort}"`);
       }
       entry.appliedEffort = requestedEffort;
@@ -1005,6 +1007,13 @@ export class AcpProvider implements Provider {
       change = { configId: option.id, value };
     }
     if (!change) {
+      if (this._adapter.agentType !== "codex") {
+        // Claude's session metadata can already select a full SDK model ID
+        // while its picker reports an alias. Preserve that existing path;
+        // the explicit 1M resolver above still validates context selection.
+        console.warn(`[acp] ${this._adapter.agentType}: skipping ${category}="${value}" — the agent does not offer it`);
+        return false;
+      }
       throw new UnsupportedAcpModelError(
         this._adapter.agentType,
         value,
@@ -1019,7 +1028,8 @@ export class AcpProvider implements Provider {
       if (!selected || !hasOneMillionContext(selected)) {
         throw new Error(`[acp_model_context_unsupported] Claude did not select ${value} (selected: ${selected ?? "unknown"})`);
       }
-    } else if (category === MODEL_OPTION_CATEGORY && currentConfigValue(entry.configOptions, category) !== value) {
+    } else if (this._adapter.agentType === "codex"
+      && category === MODEL_OPTION_CATEGORY && currentConfigValue(entry.configOptions, category) !== value) {
       throw new UnsupportedAcpModelError(
         this._adapter.agentType,
         value,

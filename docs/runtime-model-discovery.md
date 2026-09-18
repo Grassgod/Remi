@@ -22,9 +22,10 @@ through the `thought_level` selector; Remi probes each model and reports the
 supported values and the model default. On bridges supporting recommended config
 values, that metadata is authoritative: model switches can otherwise retain a
 previous effort, so `currentValue` is not always the model default. User settings
-are not changed by this independent probe. Before a real prompt, unavailable
+are not changed by this independent probe. Before a real Codex prompt, unavailable
 explicit models and unacknowledged model/effort changes produce an error; the
-bridge cannot silently keep a different model or effort.
+Codex bridge cannot silently keep a different model or effort. Claude keeps its
+existing SDK model alias and 1M context negotiation.
 The startup override follows the [official Codex configuration mechanism](https://developers.openai.com/zh-Hans/docs/config-file/config-advanced).
 
 `GET /api/models` and `remi runtime model catalog --agent <agent-id> --json`
