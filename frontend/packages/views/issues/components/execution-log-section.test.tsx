@@ -13,11 +13,12 @@ const task: AgentTask = {
   executionModel: "deepseek-flash", executionThinkingLevel: "high", fallbackSwitched: true,
   switchReason: "gateway_resource:agent_error.provider_no_available_account;provider_session_reset",
 };
+let displayedTask: AgentTask = task;
 
 vi.mock("@tanstack/react-query", async (importOriginal) => ({
   ...await importOriginal<typeof import("@tanstack/react-query")>(),
   useQuery: ({ queryKey }: { queryKey: unknown[] }) => ({
-    data: queryKey.includes("agents") ? [{ id: "agent-1", model: "gpt-primary", thinking_level: "low" }] : [task],
+    data: queryKey.includes("agents") ? [{ id: "agent-1", model: "gpt-primary", thinking_level: "low" }] : [displayedTask],
   }),
 }));
 vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
@@ -46,6 +47,21 @@ describe("ExecutionLogSection", () => {
       expect(screen.getByText("deepseek-flash")).toBeInTheDocument();
     } finally {
       task.status = "running";
+    }
+  });
+
+  it("uses legacy task usage instead of the Agent's current model and effort", () => {
+    displayedTask = { ...task, status: "completed", executionModel: undefined,
+      executionThinkingLevel: undefined, fallbackSwitched: false,
+      usage: [{ model: "observed-backup", inputTokens: 7 }] };
+    try {
+      renderWithI18n(<ExecutionLogSection issueId="issue-1" />);
+      fireEvent.click(screen.getByRole("button", { name: /Show past runs/ }));
+      expect(screen.getByText("observed-backup")).toBeInTheDocument();
+      expect(screen.queryByText("gpt-primary")).toBeNull();
+      expect(screen.queryByText("(low)")).toBeNull();
+    } finally {
+      displayedTask = task;
     }
   });
 });

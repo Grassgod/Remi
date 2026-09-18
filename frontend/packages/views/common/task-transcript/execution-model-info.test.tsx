@@ -32,6 +32,21 @@ describe("ExecutionModelInfo", () => {
     expect(screen.queryByText(/Switched from primary/)).toBeNull();
   });
 
+  it("does not borrow the Agent effort when legacy usage names a different model", () => {
+    renderWithI18n(<ExecutionModelInfo task={task} usageModel="observed-backup"
+      agentModel="current-primary" agentThinkingLevel="high" />);
+    expect(screen.getByText("observed-backup")).toBeInTheDocument();
+    expect(screen.queryByText("current-primary")).toBeNull();
+    expect(screen.queryByText("(high)")).toBeNull();
+  });
+
+  it("retains the Agent effort when legacy usage names the same model", () => {
+    renderWithI18n(<ExecutionModelInfo task={task} usageModel="current-primary"
+      agentModel="current-primary" agentThinkingLevel="high" />);
+    expect(screen.getByText("current-primary")).toBeInTheDocument();
+    expect(screen.getByText("(high)")).toBeInTheDocument();
+  });
+
   it("never attributes the primary effort to a switched task without an execution effort snapshot", () => {
     renderWithI18n(<ExecutionModelInfo task={{ ...task, execution_model: "deepseek-flash", fallback_switched: true }}
       agentModel="gpt-primary" agentThinkingLevel="low" />);

@@ -11,10 +11,15 @@ export function ExecutionModelInfo({ task, agentModel, agentThinkingLevel, usage
   usageModel?: string | null;
 }) {
   const { t } = useT("agents");
-  const model = [task.executionModel, task.execution_model, usageModel, agentModel].find((value) => typeof value === "string" && value.trim())?.trim();
+  const executionModel = [task.executionModel, task.execution_model]
+    .find((value) => typeof value === "string" && value.trim())?.trim();
+  const model = executionModel ?? [usageModel, agentModel]
+    .find((value) => typeof value === "string" && value.trim())?.trim();
   const switched = task.fallbackSwitched === true || task.fallback_switched === true;
+  const inheritedThinking = !switched && !executionModel && model && model === agentModel?.trim()
+    ? agentThinkingLevel : null;
   const thinking = [task.executionThinkingLevel, task.execution_thinking_level,
-    switched || task.executionModel || task.execution_model ? null : agentThinkingLevel]
+    inheritedThinking]
     .find((value) => typeof value === "string" && value.trim())?.trim();
   const reason = task.switchReason ?? task.switch_reason;
   const reasonLabel = typeof reason === "string" && reason.startsWith("gateway_resource:")

@@ -92,6 +92,10 @@ describe("transcript pending task state", () => {
     expect(screen.getByText(/No available gateway account/)).toBeInTheDocument();
     expect(screen.getByText(/1 switch/)).toBeInTheDocument();
   });
+  it("uses legacy task usage as the model when no execution snapshot exists", () => {
+    renderTranscript([], { task: { usage: [{ model: "observed-backup", inputTokens: 7 }] } });
+    expect(screen.getByText("observed-backup")).toBeInTheDocument();
+  });
   it("shows a queued task as waiting for a runtime, even if a caller marks the dialog live", () => {
     renderTranscript([], { task: { status: "queued" }, isLive: true });
 

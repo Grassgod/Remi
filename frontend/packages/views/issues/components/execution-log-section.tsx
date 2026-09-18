@@ -17,6 +17,7 @@ import {
 } from "@multiremi/ui/components/ui/tooltip";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { TranscriptButton } from "../../common/task-transcript";
+import { usageSnapshotFromTask } from "../../common/task-transcript/event-format";
 import { ExecutionModelInfo } from "../../common/task-transcript/execution-model-info";
 import { failureReasonLabel } from "../../agents/components/tabs/task-failure";
 import { useT } from "../../i18n";
@@ -440,7 +441,7 @@ function RowShell({
 function TriggerText({ text, task, agentModel, agentThinkingLevel }: { text: string; task: AgentTask; agentModel?: string; agentThinkingLevel?: string }) {
   return <span className="min-w-0 flex-1 text-xs text-muted-foreground">
     <span className="block truncate">{text}</span>
-    <ExecutionModelInfo task={task} agentModel={agentModel} agentThinkingLevel={agentThinkingLevel} />
+    <ExecutionModelInfo task={task} usageModel={usageSnapshotFromTask(task)?.model} agentModel={agentModel} agentThinkingLevel={agentThinkingLevel} />
   </span>;
 }
 
