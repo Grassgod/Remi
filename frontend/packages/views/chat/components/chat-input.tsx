@@ -213,7 +213,13 @@ export function ChatInput({
           clearInputDraft(currentSession);
         setIsEmpty(true);
       }
-    } catch {
+    } catch (error) {
+      logger.error("input.send.error", {
+        draftKey: keyAtSend,
+        contentLength: content.length,
+        attachmentCount: activeIds.length,
+        error,
+      });
       if (getCurrentWsId() !== workspaceAtSend) return;
       if (
         `${useChatStore.getState().selectedAgentId ?? "no-agent"}:${editorIdentity.current.version}` !==

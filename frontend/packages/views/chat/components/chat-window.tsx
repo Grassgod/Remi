@@ -78,6 +78,7 @@ import { useT } from "../../i18n";
 import { useNavigation } from "../../navigation";
 import { useWorkspacePaths } from "@multiremi/core/paths";
 import { getCurrentWsId } from "@multiremi/core/platform";
+import { createSafeId } from "@multiremi/core/utils";
 import { PageHeader } from "../../layout/page-header";
 import { ChatQueue } from "./chat-queue";
 
@@ -378,7 +379,7 @@ export function ChatWindow({
       const isFollowup = !!priorPending?.task_id;
       const sentAt = new Date().toISOString();
       const optimistic: ChatMessage = {
-        id: `optimistic-${crypto.randomUUID()}`,
+        id: `optimistic-${createSafeId()}`,
         chat_session_id: sessionId,
         role: "user",
         content,
