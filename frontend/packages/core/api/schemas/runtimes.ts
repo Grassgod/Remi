@@ -227,6 +227,8 @@ export const EMPTY_RUNTIME_PROVISION_RESPONSE: RuntimeProvisionResponse = {
 // Workspace or execution-target model catalog (`GET /api/models`).
 // Invalid capability metadata must not become selectable effort values.
 const ModelThinkingSchema = z.object({
+  status: z.enum(["supported", "unsupported", "unknown", "error"]).catch("unknown").optional(),
+  error: z.string().optional(),
   supported_levels: z.array(z.object({
     value: z.string(),
     label: z.string(),

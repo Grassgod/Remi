@@ -1005,6 +1005,9 @@ export interface MultiremiRuntimeModelThinkingLevel {
 }
 
 export interface MultiremiRuntimeModelThinking {
+  /** Missing status is a legacy report; an explicit empty level set is unsupported. */
+  status?: "supported" | "unsupported" | "unknown" | "error";
+  error?: string;
   supportedLevels: MultiremiRuntimeModelThinkingLevel[];
   supported_levels?: MultiremiRuntimeModelThinkingLevel[];
   defaultLevel?: string;

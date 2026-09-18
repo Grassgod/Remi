@@ -5,6 +5,7 @@ interface ThinkingLevel {
 }
 
 interface Thinking {
+  status?: "supported" | "unsupported" | "unknown" | "error";
   supported_levels: ThinkingLevel[];
 }
 
@@ -22,15 +23,20 @@ export function commonThinkingLevels(sets: ThinkingLevel[][]): ThinkingLevel[] {
 
 /** Shared by API validation and UI selection, including older daemon catalogs. */
 export function modelThinkingLevels(models: Model[], model: string, providerDefault?: Thinking): ThinkingLevel[] {
-  if (model) return models.find((entry) => entry.id === model)?.thinking?.supported_levels ?? [];
+  if (model) return usableLevels(models.find((entry) => entry.id === model)?.thinking);
   // An explicitly empty capability is authoritative, not a missing report.
-  if (providerDefault) return providerDefault.supported_levels;
+  if (providerDefault) return usableLevels(providerDefault);
   const selected = models.find((entry) => entry.default);
-  if (selected) return selected.thinking?.supported_levels ?? [];
+  if (selected) return usableLevels(selected.thinking);
   // Older bridges omitted the default selector. Offer only common advertised
   // efforts, without inferring a model ID. Models without metadata are unknown;
   // the live bridge still validates the actual default before sending a prompt.
-  const capable = models.flatMap((entry) => entry.thinking?.supported_levels.length
-    ? [entry.thinking.supported_levels] : []);
+  const capable = models.flatMap((entry) => usableLevels(entry.thinking).length
+    ? [usableLevels(entry.thinking)] : []);
   return commonThinkingLevels(capable);
+}
+
+function usableLevels(thinking?: Thinking): ThinkingLevel[] {
+  if (thinking?.status && thinking.status !== "supported") return [];
+  return thinking?.supported_levels ?? [];
 }

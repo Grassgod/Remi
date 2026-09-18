@@ -667,6 +667,8 @@ export interface RuntimeModel {
 }
 
 export interface RuntimeModelThinking {
+  status?: "supported" | "unsupported" | "unknown" | "error";
+  error?: string;
   /** Levels the user is allowed to pick for this model. */
   supported_levels: RuntimeModelThinkingLevel[];
   /** Informational: the level the upstream CLI documents as its built-in
