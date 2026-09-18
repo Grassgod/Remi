@@ -7,6 +7,7 @@ import { agentRoleAtLeast } from "@multiremi/store/agent-role.js";
 import { FeedbackRepo } from "@multiremi/store/repos/feedback-repo.js";
 import { AccessTokensRepo } from "@multiremi/store/repos/access-tokens-repo.js";
 import { IssueSharesRepo } from "@multiremi/store/repos/issue-shares-repo.js";
+import { TaskCapabilityMonitor } from "@multiremi/store/task-capability-monitor.js";
 import {
   NotificationChannelsRepo,
   type CreateNotificationChannelInput,
@@ -442,6 +443,7 @@ export class MultiremiStore {
   private issueShares: IssueSharesRepo;
   private notificationChannels: NotificationChannelsRepo;
   private notificationDispatcher: OutboundNotificationDispatcher;
+  private taskCapabilityMonitor: TaskCapabilityMonitor;
   private agentIssueUpdates: AgentIssueUpdatesRepo;
   private cloudNodes: CloudRuntimeNodesRepo;
   private platformOperations: PlatformOperationsRepo;
@@ -549,6 +551,7 @@ export class MultiremiStore {
     this.sshMesh = new SshMeshRepo(this.ctx);
     this.autopilots = new AutopilotsRepo(this.ctx);
     this.tasks = new TasksRepo(this.ctx);
+    this.taskCapabilityMonitor = new TaskCapabilityMonitor(now => this.tasks.refreshQueuedCapabilityWaitReasons(now));
     this.migrate();
   }
 
@@ -1552,10 +1555,12 @@ runMigrations(this.db);
 
   startNotificationDeliverySweeper(): void {
     this.notificationDispatcher.start();
+    this.taskCapabilityMonitor.start();
   }
 
   stopNotificationDeliverySweeper(): void {
     this.notificationDispatcher.stop();
+    this.taskCapabilityMonitor.stop();
   }
 
   createFeedback(input: CreateFeedbackInput): MultiremiFeedback {
@@ -4299,6 +4304,18 @@ runMigrations(this.db);
    */
   runtimeCanRunAgent(runtime: MultiremiRuntime, agent: MultiremiAgent): boolean {
     return this.runtimes.runtimeCanRunAgent(runtime, agent);
+  }
+
+  runtimeCanRouteAgent(runtime: MultiremiRuntime, agent: MultiremiAgent): boolean {
+    return this.runtimes.runtimeCanRouteAgent(runtime, agent);
+  }
+
+  runtimeSupportsAgentModel(runtime: MultiremiRuntime, agent: MultiremiAgent): boolean {
+    return this.runtimes.runtimeSupportsAgentModel(runtime, agent);
+  }
+
+  refreshQueuedCapabilityWaitReasons(now = Date.now()): { updated: number; alerted: number } {
+    return this.tasks.refreshQueuedCapabilityWaitReasons(now);
   }
 
   getRuntimeByDaemonAndProvider(daemonId: string, provider: string): MultiremiRuntime | null {

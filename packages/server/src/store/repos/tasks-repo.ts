@@ -23,7 +23,13 @@ import {
 } from "@multiremi/store/helpers.js";
 import { selectChatLocalDirectory } from "@multiremi/contracts/chat-local-directory.js";
 import { chatWorkspaceLineageCurrent, parseChatWorkspaceFingerprint, resolveChatWorkspace } from "@multiremi/store/chat-workspace.js";
-import { type StoreContext } from "@multiremi/store/context.js";
+import { EVENT_TASK_QUEUED_CAPABILITY_TIMEOUT, type StoreContext } from "@multiremi/store/context.js";
+import {
+  isQueuedCapabilityAlert,
+  isQueuedCapabilityWaitReason,
+  queuedCapabilityWait,
+  QUEUED_CAPABILITY_GRACE_MS,
+} from "@multiremi/store/task-wait-reason.js";
 import { PROJECT_REF_MAX_DEPTH } from "@multiremi/store/repos/projects-repo.js";
 import { runtimeSupportsAgentPlugins } from "@multiremi/store/repos/agent-plugins-repo.js";
 import { runtimeDaemonAliases } from "@multiremi/store/runtime-affinity.js";
@@ -267,6 +273,72 @@ function sessionLaneResetReason(input: {
 
 export class TasksRepo {
   constructor(private ctx: StoreContext) {}
+
+  refreshQueuedCapabilityWaitReasons(now = Date.now()): { updated: number; alerted: number } {
+    const rows = this.ctx.db.query(
+      `SELECT id, agent_id, workspace_id, created_at, wait_reason FROM multiremi_tasks
+       WHERE status = 'queued' AND created_at <= ?`,
+    ).all(new Date(now - QUEUED_CAPABILITY_GRACE_MS).toISOString()) as Array<{
+      id: string; agent_id: string; workspace_id: string | null; created_at: string; wait_reason: string | null;
+    }>;
+    const result = { updated: 0, alerted: 0 };
+    if (!rows.length) return result;
+    const runtimesRepo = this.ctx.runtimes();
+    const runtimes = runtimesRepo.listRuntimes();
+    const decisions = new Map<string, { agent: MultiremiAgent | null; candidateSupportsModel: boolean[] }>();
+    for (const row of rows) {
+      // This observer owns only its own reason. Human and directory waits, and
+      // any future queued reason, retain their independent lifecycle.
+      if (row.wait_reason && !isQueuedCapabilityWaitReason(row.wait_reason)) continue;
+      let decision = decisions.get(row.agent_id);
+      if (!decision) {
+        const agent = this.ctx.agents().getAgent(row.agent_id);
+        decision = {
+          agent,
+          candidateSupportsModel: agent && !agent.archivedAt
+            ? runtimes.filter(runtime => runtimesRepo.runtimeCanRouteAgent(runtime, agent))
+              .map(runtime => runtimesRepo.runtimeSupportsAgentModel(runtime, agent))
+            : [],
+        };
+        decisions.set(row.agent_id, decision);
+      }
+      const { agent, candidateSupportsModel } = decision;
+      const wait = agent && (agent.workspaceId ?? "local") === (row.workspace_id ?? "local")
+        ? queuedCapabilityWait({
+          candidateSupportsModel,
+          model: agent.model,
+          thinkingLevel: agent.thinkingLevel,
+          createdAt: row.created_at,
+          now,
+        }) : null;
+      const reason = wait?.reason ?? null;
+      if (reason === row.wait_reason) continue;
+      // Compare the observed reason as well as status: another server's sweep
+      // or a concurrent claim must win without duplicate events or alerts.
+      const updatedRow = this.ctx.db.query(
+        `UPDATE multiremi_tasks SET wait_reason = ?, updated_at = ?
+         WHERE id = ? AND status = 'queued'
+           AND ${row.wait_reason === null ? "wait_reason IS NULL" : "wait_reason = ?"}
+         RETURNING *`,
+      ).get(reason, new Date(now).toISOString(), row.id, ...(row.wait_reason === null ? [] : [row.wait_reason])) as Row | null;
+      if (!updatedRow) continue;
+      result.updated++;
+      const task = toTask(updatedRow);
+      this.ctx.notifyTaskEvent("task:queued", task);
+      if (wait?.alerted && !isQueuedCapabilityAlert(row.wait_reason)) {
+        result.alerted++;
+        log.warn(`queued task ${task.id} has no model-capable runtime after the waiting threshold`);
+        this.ctx.recordAnalyticsEvent(EVENT_TASK_QUEUED_CAPABILITY_TIMEOUT, agent!.ownerId ?? task.workspaceId ?? "local", task.workspaceId, {
+          task_id: task.id,
+          agent_id: task.agentId,
+          provider: agent!.provider,
+          candidate_count: candidateSupportsModel.length,
+          task_age_ms: now - Date.parse(task.createdAt),
+        });
+      }
+    }
+    return result;
+  }
 
   listTasksForIssue(issueId: string): MultiremiTask[] {
     const rows = this.ctx.db.query(
@@ -1791,7 +1863,7 @@ export class TasksRepo {
     // in an in-string `--` comment corrupts the sqlite→pg placeholder scanner.
     const row = this.ctx.db.query(
       `UPDATE multiremi_tasks
-       SET status = 'dispatched', runtime_id = ?, dispatched_at = ?, updated_at = ?
+       SET status = 'dispatched', runtime_id = ?, dispatched_at = ?, wait_reason = NULL, updated_at = ?
        WHERE id = (
          SELECT t.id
          FROM multiremi_tasks t

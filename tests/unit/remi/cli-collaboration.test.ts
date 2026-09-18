@@ -272,6 +272,50 @@ describe("native collaboration CLI contracts", () => {
     }
   });
 
+  it.each([
+    ["task.list", ["task", "list"], "/api/multiremi/tasks"],
+    ["task.get", ["task", "get", "tsk_queued"], "/api/multiremi/tasks/tsk_queued"],
+    ["session.task.list", ["session", "task", "list", "iss_1", "ises_1"], "/api/issues/iss_1/sessions/ises_1/tasks"],
+  ] as const)("shows complete queued task wait reasons through %s", async (id, argv, path) => {
+    useCliEnv();
+    const spec = specById(id);
+    const waitReason = "等待模型能力恢复（已等待至少 15 分钟）：3 个候选 Runtime 均无法执行 claude-opus-5-with-an-extra-long-model-name（thinking: high）";
+    const task = { id: "tsk_queued", status: "queued", wait_reason: waitReason };
+    const response = id === "task.get" ? { task } : { tasks: [task] };
+    globalThis.fetch = capabilityFetch(spec.id, (request) => {
+      expect(request.method).toBe("GET");
+      expect(new URL(request.url).pathname).toBe(path);
+      return Response.json(response);
+    });
+
+    const table = await capture(() => registryFor([spec]).execute([...argv]));
+    expect(table.stdout).toContain("WAIT REASON");
+    expect(table.stdout).toContain("tsk_queued");
+    expect(table.stdout).toContain("queued");
+    expect(table.stdout).toContain(waitReason);
+    expect(table.stdout).not.toContain("awaiting_human");
+    const json = await capture(() => registryFor([spec]).execute([...argv, "--output", "json"]));
+    expect(JSON.parse(json.stdout)).toEqual(response);
+    const jsonl = await capture(() => registryFor([spec]).execute([...argv, "--output", "jsonl"]));
+    expect(JSON.parse(jsonl.stdout)).toEqual(task);
+  });
+
+  it("preserves other waiting states and cleared reasons in task tables", async () => {
+    useCliEnv();
+    const spec = specById("task.list");
+    globalThis.fetch = capabilityFetch(spec.id, () => Response.json({ tasks: [
+      { id: "tsk_human", status: "awaiting_human", wait_reason: "Need approval" },
+      { id: "tsk_directory", status: "waiting_local_directory", waitReason: "/tmp/workspace" },
+      { id: "tsk_recovered", status: "running", wait_reason: null },
+    ] }));
+    const table = await capture(() => registryFor([spec]).execute(["task", "list"]));
+    expect(table.stdout).toContain("awaiting_human");
+    expect(table.stdout).toContain("Need approval");
+    expect(table.stdout).toContain("waiting_local_directory");
+    expect(table.stdout).toContain("/tmp/workspace");
+    expect(table.stdout.split("\n").find((line) => line.startsWith("tsk_recovered"))).toMatch(/running\s+-\s+-$/);
+  });
+
   it("continues the exact delegated task through the registered command", async () => {
     useCliEnv();
     const spec = specById("task.continue");

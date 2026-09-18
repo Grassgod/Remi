@@ -77,6 +77,28 @@ describe("agent extension CLI contracts", () => {
     expect(JSON.parse(jsonl)).toMatchObject({ id: "agt_123", name: "Builder" });
   });
 
+  it("includes model capability wait reasons when listing an agent's tasks", async () => {
+    useCliEnv();
+    const spec = specById("agent.task.list");
+    const task = {
+      id: "tsk_queued",
+      status: "queued",
+      wait_reason: "等待模型能力恢复：3 个候选 Runtime 均无法执行 claude-opus-5（thinking: high）",
+    };
+    globalThis.fetch = capabilityFetch(spec.id, (request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/agents") return Response.json({ agents: [{ id: "agt_123", name: "Builder" }] });
+      expect(path).toBe("/api/agents/agt_123/tasks");
+      return Response.json({ tasks: [task] });
+    });
+    const table = await capture(() => registryFor([spec]).execute(["agent", "task", "list", "Builder"]));
+    expect(table).toContain("WAIT REASON");
+    expect(table).toContain("queued");
+    expect(table).toContain(task.wait_reason);
+    const jsonl = await capture(() => registryFor([spec]).execute(["agent", "task", "list", "Builder", "--output", "jsonl"]));
+    expect(JSON.parse(jsonl)).toEqual(task);
+  });
+
   it.each([
     ["agent.create", ["agent", "create"], "POST", "/api/agents"],
     ["agent.template.create", ["agent", "template", "create", "builder"], "POST", "/api/agents/from-template"],

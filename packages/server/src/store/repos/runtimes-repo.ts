@@ -1874,6 +1874,11 @@ export class RuntimesRepo {
    * so single-machine NULL owners still pair). The provider must also match.
    */
   runtimeCanRunAgent(runtime: MultiremiRuntime, agent: MultiremiAgent): boolean {
+    return this.runtimeCanRouteAgent(runtime, agent) && this.runtimeSupportsAgentModel(runtime, agent);
+  }
+
+  /** Routing eligibility is independent of liveness, concurrency and model capability. */
+  runtimeCanRouteAgent(runtime: MultiremiRuntime, agent: MultiremiAgent): boolean {
     if (agent.runtimeId && agent.runtimeId !== runtime.id) return false;
     if (agent.executionGroupId && runtimeExecutionGroupId(this.ctx.db, runtime.id, agent.provider) !== agent.executionGroupId) return false;
     if (runtime.provider !== "any" && runtime.provider !== agent.provider) return false;
@@ -1882,11 +1887,10 @@ export class RuntimesRepo {
     // never run this agent (COALESCE(...,'local') for NULL-workspace runtimes).
     if ((runtime.workspaceId ?? "local") !== (agent.workspaceId ?? "local")) return false;
     if (runtime.visibility !== "public" && (runtime.ownerId ?? "local") !== (agent.ownerId ?? "local")) return false;
-    return !(agent.model || agent.thinkingLevel || (agent.executionGroupId && !agent.runtimeId))
-      || this.runtimeSupportsAgentModel(runtime, agent);
+    return true;
   }
 
-  private runtimeSupportsAgentModel(runtime: MultiremiRuntime, agent: MultiremiAgent): boolean {
+  runtimeSupportsAgentModel(runtime: MultiremiRuntime, agent: MultiremiAgent): boolean {
     if (!agent.model && !agent.thinkingLevel) return true;
     const workspaces = new WorkspacesRepo(this.ctx);
     const catalog = runtimeTargetModelCatalog({
