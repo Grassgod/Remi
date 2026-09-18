@@ -38,6 +38,7 @@ const FEISHU_BOT_AGENT_ROUTE_DEFAULT_UNIQUENESS_MIGRATION =
   "20260909_feishu_bot_agent_route_default_uniqueness";
 const CHAT_ISSUE_DECOUPLING_MIGRATION = "20260916_chat_issue_decoupling";
 const AGENT_PAGE_QUERY_INDEXES_MIGRATION = "20260910_agent_page_query_indexes";
+const TASK_EXECUTION_RUNTIME_MIGRATION = "20260918_task_execution_runtime";
 
 // Stable Feishu open_id of the deployment owner (hehuajie / 贺华杰). The seed
 // `local` user is tagged with this on migration so SSO login re-binds to it
@@ -2900,6 +2901,10 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_tasks", "codex_profile TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "claude_profile TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "execution_fingerprint TEXT");
+  // Internal immutable snapshot provenance, deliberately not a foreign key:
+  // retiring a Runtime must not erase which host owns a frozen credential.
+  addColumnIfMissing(db, "multiremi_tasks", "execution_runtime_id TEXT");
+  runMigrationOnce(db, TASK_EXECUTION_RUNTIME_MIGRATION, () => backfillTaskExecutionRuntime(db));
   addColumnIfMissing(db, "multiremi_session_agent_lanes", "execution_fingerprint TEXT");
   migrateExecutionScopedLanes(db);
   addColumnIfMissing(db, "multiremi_session_agent_lanes", "parent_cursor_seq INTEGER NOT NULL DEFAULT 0");
@@ -3126,6 +3131,31 @@ export function runMigrations(db: SqlDatabase): void {
   backfillDefaultIssueSessions(db);
   backfillIssueKeys(db);
   migrateLegacyGithubProjection(db, legacyGithubTables);
+}
+
+function backfillTaskExecutionRuntime(db: SqlDatabase): void {
+  const rows = db.query(`SELECT id, runtime_id, execution_fingerprint FROM multiremi_tasks
+    WHERE execution_runtime_id IS NULL AND NULLIF(execution_fingerprint, '') IS NOT NULL
+      AND (codex_profile IS NOT NULL OR claude_profile IS NOT NULL)`).all() as Array<{
+    id: string; runtime_id: string | null; execution_fingerprint: string;
+  }>;
+  const transitionPrefix = "chat-workspace-transition-";
+  for (const row of rows) {
+    let origin = row.runtime_id;
+    if (row.execution_fingerprint.startsWith(transitionPrefix)) {
+      // A transition may already be pinned to its destination. Only the
+      // source encoded before migration is trustworthy, including an explicit
+      // unknown source. Malformed historical data must not abort an upgrade.
+      const transition = row.execution_fingerprint.slice(transitionPrefix.length);
+      const separator = transition.indexOf(":");
+      const encoded = separator < 0 ? "" : transition.slice(0, separator);
+      try { origin = decodeURIComponent(encoded) || null; } catch { origin = null; }
+    }
+    if (!origin) continue;
+    db.run("UPDATE multiremi_tasks SET execution_runtime_id = ? WHERE id = ? AND execution_runtime_id IS NULL", [origin, row.id]);
+  }
+  // Already re-pooled snapshots without provenance remain unknown. They must
+  // be diagnosed by the scheduler, never attributed to their next claimant.
 }
 
 function ensureFeishuBotAgentRoutesSchema(db: SqlDatabase): void {

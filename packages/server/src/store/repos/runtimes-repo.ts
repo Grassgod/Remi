@@ -978,6 +978,14 @@ export class RuntimesRepo {
         const ciphertext = encryptRuntimeProviderKey(value, { ...scope, runtimeId: newRuntimeId });
         this.ctx.db.run("UPDATE multiremi_runtime_provider_credentials SET runtime_id = ?, ciphertext = ? WHERE id = ?", [newRuntimeId, ciphertext, credential.id]);
       }
+      // This is an explicit identity migration: the same execution host and
+      // its credential versions now use the new Runtime ID. Move frozen
+      // provenance with those credentials, including retries already repooled.
+      // Ordinary retirement/repool must retain the original execution source.
+      this.ctx.db.run(
+        "UPDATE multiremi_tasks SET execution_runtime_id = ?, updated_at = ? WHERE execution_runtime_id = ?",
+        [newRuntimeId, now, oldRuntimeId],
+      );
       const deleted = this.deleteRuntimeWithinTransaction(oldRuntimeId, { repoolQueuedTasks: false });
       return { agentsReassigned: agents, tasksReassigned: tasks, deleted };
     });
@@ -1892,22 +1900,40 @@ export class RuntimesRepo {
 
   runtimeSupportsAgentModel(runtime: MultiremiRuntime, agent: MultiremiAgent): boolean {
     if (!agent.model && !agent.thinkingLevel) return true;
-    const workspaces = new WorkspacesRepo(this.ctx);
-    const catalog = runtimeTargetModelCatalog({
-      getRelayModelDiscovery: (id) => workspaces.getRelayModelDiscovery(id),
-      getRelayConfigForDaemon: (id) => workspaces.getRelayConfigForDaemon(id),
-      getGatewayModels: (id, provider) => workspaces.getGatewayModels(id, provider),
-      listWorkspaceCodexProfileModels: (id) => this.listWorkspaceCodexProfileModels(id),
-      listWorkspaceClaudeProfileModels: (id) => this.listWorkspaceClaudeProfileModels(id),
-      getRuntimeExecutionProfile: (id, provider) => this.getRuntimeExecutionProfile(id, provider),
-    }, agent.workspaceId, runtime).find(entry => entry.provider === agent.provider);
-    const models = catalog?.models ?? [];
-    if (!catalogAllowsModel(catalog, agent.model ?? "")) return false;
-    if (agent.model && !models.some(model => model.id === agent.model)
-      && (catalog?.model_catalog_status === "ready" || agent.thinkingLevel
-        || (agent.executionGroupId && !agent.runtimeId))) return false;
-    return !agent.thinkingLevel || modelThinkingLevels(models, agent.model ?? "", catalog?.default_thinking)
-      .some(level => level.value === agent.thinkingLevel);
+    return this.runtimeAgentModelChecker(runtime)(agent);
+  }
+
+  /**
+   * Share one lazy catalog snapshot across a claim's execution requirements.
+   * Keep the checker scoped to that operation so later claims see catalog and
+   * connection updates. Routing eligibility remains a separate check.
+   */
+  runtimeAgentModelChecker(runtime: MultiremiRuntime): (agent: MultiremiAgent) => boolean {
+    const catalogsByWorkspace = new Map<string, ReturnType<typeof runtimeTargetModelCatalog>>();
+    return (agent) => {
+      if (!agent.model && !agent.thinkingLevel) return true;
+      let catalogs = catalogsByWorkspace.get(agent.workspaceId);
+      if (!catalogs) {
+        const workspaces = new WorkspacesRepo(this.ctx);
+        catalogs = runtimeTargetModelCatalog({
+          getRelayModelDiscovery: (id) => workspaces.getRelayModelDiscovery(id),
+          getRelayConfigForDaemon: (id) => workspaces.getRelayConfigForDaemon(id),
+          getGatewayModels: (id, provider) => workspaces.getGatewayModels(id, provider),
+          listWorkspaceCodexProfileModels: (id) => this.listWorkspaceCodexProfileModels(id),
+          listWorkspaceClaudeProfileModels: (id) => this.listWorkspaceClaudeProfileModels(id),
+          getRuntimeExecutionProfile: (id, provider) => this.getRuntimeExecutionProfile(id, provider),
+        }, agent.workspaceId, runtime);
+        catalogsByWorkspace.set(agent.workspaceId, catalogs);
+      }
+      const catalog = catalogs.find(entry => entry.provider === agent.provider);
+      const models = catalog?.models ?? [];
+      if (!catalogAllowsModel(catalog, agent.model ?? "")) return false;
+      if (agent.model && !models.some(model => model.id === agent.model)
+        && (catalog?.model_catalog_status === "ready" || agent.thinkingLevel
+          || (agent.executionGroupId && !agent.runtimeId))) return false;
+      return !agent.thinkingLevel || modelThinkingLevels(models, agent.model ?? "", catalog?.default_thinking)
+        .some(level => level.value === agent.thinkingLevel);
+    };
   }
 
   getRuntimeByDaemonAndProvider(daemonId: string, provider: string): MultiremiRuntime | null {
