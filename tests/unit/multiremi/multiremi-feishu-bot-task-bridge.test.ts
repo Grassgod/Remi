@@ -367,6 +367,9 @@ describe("Feishu bot standard Task bridge", () => {
     });
     expect(store.listTasks()).toHaveLength(taskCountBeforeComment);
 
+    // The reply/retry scenario below expects a specific executor. Express that
+    // as Agent placement now that the transport does not impose it.
+    store.updateAgent(agent.id, { runtimeId: "rt_bot" });
     store.completeTask(leaderTask.id, {
       output: "The implementation and migration are complete.",
       sessionId: "sess_leader_round",
@@ -469,6 +472,8 @@ describe("Feishu bot standard Task bridge", () => {
     })).toBe(true);
     expect(store.claimFeishuBotOutbound("local", "rt_bot", new Date(Date.now() + 60_000))).toBeNull();
 
+    // Resume normal placement for the next Issue round on its workspace host.
+    store.updateAgent(agent.id, { runtimeId: null });
     const failedLeader = store.createSessionTask(session.id, {
       agentId: agent.id,
       prompt: "This round will fail.",
@@ -710,7 +715,10 @@ describe("Feishu bot standard Task bridge", () => {
   });
 
   it("deduplicates events and steers an active Task in the bound Chat Session", () => {
-    const { store, config } = scaffold();
+    const { store, agent, config } = scaffold();
+    // This deduplication fixture exercises an explicitly pinned Agent. The
+    // connector no longer supplies task placement for automatically scheduled Agents.
+    store.updateAgent(agent.id, { runtimeId: "rt_bot" });
     const first = store.submitFeishuBotMessage("local", "rt_bot", {
       revision: config.revision,
       externalSessionKey: "oc_chat_1",

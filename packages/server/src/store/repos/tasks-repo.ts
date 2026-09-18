@@ -1621,11 +1621,15 @@ export class TasksRepo {
    * (attempt > 1) keep their explicitly chosen resume/reset behavior. */
   private refreshQueuedChatAffinity(workspaceId: string): void {
     const rows = this.ctx.db.query(`SELECT t.id,
-      EXISTS (SELECT 1 FROM multiremi_feishu_bot_deliveries d
-        WHERE d.task_id = t.id AND d.workspace_id = t.workspace_id) AS feishu_inbound
+      EXISTS (SELECT 1 FROM multiremi_feishu_bot_chat_bindings b
+        WHERE b.chat_session_id = t.chat_session_id AND b.workspace_id = t.workspace_id
+          AND b.agent_id = t.agent_id) AS feishu_transport
       FROM multiremi_tasks t WHERE t.workspace_id = ?
       AND t.chat_session_id IS NOT NULL AND t.status = 'queued' AND t.execution_fingerprint IS NULL AND t.attempt = 1
-      AND EXISTS (SELECT 1 FROM multiremi_chat_messages m WHERE m.task_id = t.id AND m.role = 'user')`).all(workspaceId) as Row[];
+      AND (EXISTS (SELECT 1 FROM multiremi_chat_messages m WHERE m.task_id = t.id AND m.role = 'user')
+        OR EXISTS (SELECT 1 FROM multiremi_feishu_bot_chat_bindings b
+          WHERE b.chat_session_id = t.chat_session_id AND b.workspace_id = t.workspace_id
+            AND b.agent_id = t.agent_id))`).all(workspaceId) as Row[];
     for (const row of rows) {
       const task = this.getTask(String(row.id))!;
       const chat = this.ctx.chat().getChatSession(task.chatSessionId!);
@@ -1640,7 +1644,7 @@ export class TasksRepo {
       // pin. A resumable session still supplies normal machine affinity above.
       // Pre-upgrade Feishu turns may still carry the connector's Runtime pin.
       // Recompute those from the Agent while preserving strong affinity above.
-      const resetRuntime = task.sessionId || Boolean(row.feishu_inbound)
+      const resetRuntime = task.sessionId || Boolean(row.feishu_transport)
         || resolveChatWorkspace(this.ctx, chat)?.mode === "managed";
       const runtimeId = affinity.runtimeId ?? (resetRuntime ? agent.runtimeId : task.runtimeId);
       const inherit = affinity.inheritChatSession;

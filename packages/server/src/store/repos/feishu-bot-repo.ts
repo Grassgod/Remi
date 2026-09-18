@@ -941,6 +941,19 @@ export class FeishuBotRepo {
     ).get(chatSessionId) != null;
   }
 
+  /** The selected transport may stream and relay answers for its bound Chats
+   * even when execution is queued or assigned to a different machine. */
+  canDaemonAccessTask(workspaceId: string, daemonId: string, taskId: string): boolean {
+    return this.ctx.db.query(`SELECT 1 AS present
+      FROM multiremi_feishu_bot_configs c
+      JOIN multiremi_runtimes r ON r.id = c.runtime_id AND r.workspace_id = c.workspace_id
+      JOIN multiremi_feishu_bot_chat_bindings b ON b.workspace_id = c.workspace_id AND b.app_id = c.app_id
+      JOIN multiremi_tasks t ON t.chat_session_id = b.chat_session_id
+        AND t.workspace_id = b.workspace_id AND t.agent_id = b.agent_id
+      WHERE c.workspace_id = ? AND c.enabled = 1 AND r.daemon_id = ? AND t.id = ? LIMIT 1`)
+      .get(workspaceId, daemonId, taskId) != null;
+  }
+
   private ensureDefaultAgentIssueUpdatesChannel(session: MultiremiChatSession): void {
     const member = session.creatorId
       ? this.ctx.workspaces().getWorkspaceMember(session.creatorId)
@@ -1080,12 +1093,10 @@ export class FeishuBotRepo {
       if (existing) return this.ctx.tasks().getTask(String(existing.wake_task_id));
 
       const agentId = String(binding.agent_id ?? "");
-      const runtimeId = bot.config?.runtimeId;
-      if (!agentId || !runtimeId) return null;
+      if (!agentId) return null;
       const payload = request.payload ?? {};
       const wakeTask = this.ctx.tasks().createTaskWithinTransaction({
         agentId,
-        runtimeId,
         chatSessionId: String(binding.chat_session_id),
         issueId: issue.id,
         workspaceId: issue.workspaceId,
@@ -1193,7 +1204,6 @@ export class FeishuBotRepo {
         deliveryMode = "proactive";
         wakeTask = this.ctx.tasks().createTaskWithinTransaction({
           agentId: String(binding.agent_id),
-          runtimeId: config.runtimeId,
           chatSessionId,
           issueId: input.issue.id,
           workspaceId: input.issue.workspaceId,

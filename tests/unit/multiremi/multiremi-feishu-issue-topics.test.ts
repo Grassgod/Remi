@@ -87,6 +87,38 @@ function prepareReport(store: MultiremiStore) {
 }
 
 describe("Feishu Issue topics", () => {
+  for (const kind of ["round", "human-request"] as const) {
+    for (const legacyPin of [false, true]) {
+      it(`schedules ${kind} notifications on the changed provider (legacy pin=${legacyPin})`, () => {
+        const { store } = scaffold();
+        configureTopics(store);
+        const botAgentId = store.getFeishuBotConfig("local")!.agentId;
+        const issue = store.createIssue({ title: "Cross-provider notification", workspaceId: "local" });
+        store.prepareFeishuIssueTopicWithinTransaction(issue);
+        const root = store.claimFeishuBotOutbound("local", "rt_bot")!;
+        store.reportFeishuBotOutbound("local", "rt_bot", root.id, {
+          claimToken: root.claimToken, status: "sent", externalMessageId: "om_topic_root",
+        });
+        const worker = store.createAgent({ name: "Issue worker", provider: "codex", workspaceId: "local" });
+        const sourceTask = store.createTask({ agentId: worker.id, issueId: issue.id, prompt: "Issue work" });
+        store.registerRuntime({ id: "rt_claude", name: "Claude", provider: "claude", workspaceId: "local" });
+        store.updateAgent(botAgentId, { provider: "claude" });
+        const wake = kind === "round"
+          ? store.prepareFeishuIssueRoundPushesWithinTransaction({ issue, leaderTask: sourceTask })[0]!
+          : store.prepareFeishuBotHumanRequestPush(store.createTaskHumanRequest({
+            taskId: sourceTask.id, kind: "question", payload: { message: "Continue?" },
+          }))!;
+        expect(wake.runtimeId).toBeNull();
+        if (legacyPin) {
+          db!.run("UPDATE multiremi_tasks SET runtime_id = 'rt_bot' WHERE id = ?", [wake.id]);
+        }
+        expect(store.claimTask("rt_claude")?.id).toBe(wake.id);
+        expect(store.getTask(wake.id)?.runtimeId).toBe("rt_claude");
+        expect(store.claimFeishuBotOutbound("local", "rt_bot", undefined, true)?.taskId).toBe(wake.id);
+      });
+    }
+  }
+
   it.each(["linked-member-id", "unbound-member-id", "user-id"])("keeps the topic creator's notification member for %s", (creatorKind) => {
     const { store } = scaffold();
     configureTopics(store);

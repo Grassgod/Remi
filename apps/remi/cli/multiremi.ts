@@ -404,13 +404,40 @@ export function instantiateCoResidentWorkerDaemons(
   });
 }
 
+/** Each provider can own the transport; the control plane selects one Runtime
+ * and waits for the previous owner to stop before allowing a handover. Handles
+ * must remain per Runtime so an idle sibling cannot stop the active channel. */
+export function attachControlPlaneConciergeHosts(
+  daemons: readonly MultiremiDaemon[],
+  deps: { workspacesRoot: () => string | undefined; boot?: typeof bootFeishuChannel },
+): () => Promise<void> {
+  const stops = daemons.map((daemon) => {
+    let channel: FeishuChannelHandle | null = null;
+    const host = controlPlaneConciergeHost({
+      daemon: () => daemon,
+      workspacesRoot: deps.workspacesRoot,
+      current: () => channel,
+      attach: (handle) => { channel = handle; },
+      boot: deps.boot,
+    });
+    daemon.setFeishuConciergeHost(host);
+    return async () => {
+      // Report stopped before the process disappears so handovers need not
+      // wait for the old owner's heartbeat to become stale.
+      await daemon.shutdownFeishuConcierge();
+      await host.stop();
+    };
+  });
+  let stopping: Promise<void> | null = null;
+  return () => stopping ??= Promise.all(stops.map(stop => stop())).then(() => {});
+}
+
 async function runDaemonForeground(options: CliOptions, programName: string): Promise<void> {
   let workspaceSupervisor: WorkspaceSupervisorLease | null = acquireWorkspaceSupervisorLease(
     configuredMultiremiWorkspacesRoot(),
     { basePort: daemonPortFromOptions(options) },
   );
   let daemons: MultiremiDaemon[] = [];
-  let feishu: Awaited<ReturnType<typeof bootFeishuChannel>> | null = null;
   let stopAll = (): void => {};
   let signalsRegistered = false;
   let ownerWatch: ReturnType<typeof setInterval> | null = null;
@@ -436,18 +463,12 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
       throw new Error(`Nothing to start: no healthy runtime provider (install/authenticate one of: ${SUPPORTED_DAEMON_PROVIDERS.join(", ")}) and Feishu is not configured.`);
     }
 
-    /**
-     * Tear down whichever concierge is running. The supervisor goes first so
-     * the control plane hears `stopped` from this Runtime before the process
-     * disappears; otherwise a workspace whose bot was moved elsewhere waits out
-     * the staleness window before the new Runtime is allowed to start.
-     */
-    const stopFeishu = async (): Promise<void> => {
-      await daemons[0]?.shutdownFeishuConcierge();
-      const handle = feishu;
-      feishu = null;
-      if (handle) await handle.stop();
-    };
+    // Install before registration so every provider advertises the capability
+    // from its first heartbeat, including Codex when Claude is also installed.
+    const stopFeishu = attachControlPlaneConciergeHosts(
+      conciergeFromControlPlane ? daemons : [],
+      { workspacesRoot: () => workspaceSupervisor?.workspaceRoot },
+    );
     stopAll = (): void => {
       for (const runtimeDaemon of daemons) runtimeDaemon.stop();
       stopFeishu().catch(() => {});
@@ -474,14 +495,6 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
     const providerRuns = daemons.map((runtimeDaemon) => runtimeDaemon.start());
     const running: Promise<void>[] = [...providerRuns];
     try {
-      if (conciergeFromControlPlane) {
-        daemons[0]!.setFeishuConciergeHost(controlPlaneConciergeHost({
-          daemon: () => daemons[0],
-          workspacesRoot: () => workspaceSupervisor?.workspaceRoot,
-          current: () => feishu,
-          attach: (handle) => { feishu = handle; },
-        }));
-      }
       stopChannelWhenProvidersFinish(providerRuns, { stop: stopFeishu });
       await Promise.all(running);
     } catch (error) {

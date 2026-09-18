@@ -1812,6 +1812,10 @@ runMigrations(this.db);
     return this.feishuBot.isTransportChatSession(chatSessionId);
   }
 
+  canFeishuBotDaemonAccessTask(workspaceId: string, daemonId: string, taskId: string): boolean {
+    return this.feishuBot.canDaemonAccessTask(workspaceId, daemonId, taskId);
+  }
+
   assertFeishuBotInboundAttachmentScope(...args: Parameters<FeishuBotRepo["assertInboundAttachmentScope"]>) {
     return this.feishuBot.assertInboundAttachmentScope(...args);
   }
