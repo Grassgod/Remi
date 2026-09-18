@@ -270,6 +270,13 @@ describe("Runtime Codex profiles", () => {
     const { store, runtime } = setup();
     process.env.MULTIREMI_PROVIDER_ENCRYPTION_KEY = Buffer.alloc(32, 9).toString("base64");
     const first = store.setRuntimeCodexProfile(runtime.id, apiProfile, "historical-key")!;
+    const agent = store.createAgent({ name: "Frozen identity", provider: "codex" });
+    const task = store.createTask({ agentId: agent.id, issueId: store.createIssue({ title: "Identity retry" }).id, prompt: "work" });
+    expect(store.claimTask(runtime.id)?.codexProfile).toEqual(first);
+    store.startTask(task.id);
+    store.failTask(task.id, { error: "stalled", failureReason: "codex_semantic_inactivity" });
+    const retry = store.listTasks().find(candidate => candidate.parentTaskId === task.id)!;
+    expect(retry.codexProfile).toEqual(first);
     const current = store.setRuntimeCodexProfile(runtime.id, apiProfile, "current-key")!;
     const replacement = store.registerRuntime({ id: "rt_replacement", name: "Replacement", provider: "codex", daemonId: runtime.daemonId, workspaceId: "local", ownerId: "local", metadata: { codex_profiles: 1 } });
     store.mergeRuntimeInto(runtime.id, replacement.id);
@@ -277,6 +284,11 @@ describe("Runtime Codex profiles", () => {
     expect(store.getRuntimeCodexProfileKey(replacement.id, first.credential_id!)).toBe("historical-key");
     expect(store.getRuntimeCodexProfileKey(replacement.id, current.credential_id!)).toBe("current-key");
     expect(store.getRuntimeCodexProfileKey(runtime.id, current.credential_id!)).toBeNull();
+    expect(db!.query("SELECT execution_runtime_id FROM multiremi_tasks WHERE id = ?").get(retry.id))
+      .toEqual({ execution_runtime_id: replacement.id });
+    const claimed = store.claimTask(replacement.id);
+    expect(claimed?.id).toBe(retry.id);
+    expect(claimed?.codexProfile).toEqual(first);
   });
 
   it("removes configuration and historical keys with the Runtime", () => {

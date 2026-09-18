@@ -4328,6 +4328,10 @@ runMigrations(this.db);
     return this.runtimes.runtimeSupportsAgentModel(runtime, agent);
   }
 
+  runtimeAgentModelChecker(runtime: MultiremiRuntime): (agent: MultiremiAgent) => boolean {
+    return this.runtimes.runtimeAgentModelChecker(runtime);
+  }
+
   refreshQueuedCapabilityWaitReasons(now = Date.now()): { updated: number; alerted: number } {
     return this.tasks.refreshQueuedCapabilityWaitReasons(now);
   }

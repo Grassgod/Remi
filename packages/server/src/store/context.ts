@@ -448,6 +448,7 @@ export interface RuntimesSurface {
   runtimeCanRunAgent(runtime: MultiremiRuntime, agent: MultiremiAgent): boolean;
   runtimeCanRouteAgent(runtime: MultiremiRuntime, agent: MultiremiAgent): boolean;
   runtimeSupportsAgentModel(runtime: MultiremiRuntime, agent: MultiremiAgent): boolean;
+  runtimeAgentModelChecker(runtime: MultiremiRuntime): (agent: MultiremiAgent) => boolean;
 }
 
 /**

@@ -47,6 +47,21 @@ describe("queued capability wait decision", () => {
     expect(isQueuedCapabilityAlert(null)).toBe(false);
   });
 
+  it("owns execution-condition waits, deduplicates blockers and retains escalation across recovery scans", () => {
+    const blocked = { ...input, candidateBlockers: ["工作目录协议缺失", "工作目录协议缺失"] };
+    const before = queuedCapabilityWait(blocked)!;
+    expect(before.reason).toBe("等待执行条件恢复：工作目录协议缺失");
+    expect(isQueuedCapabilityWaitReason(before.reason)).toBe(true);
+    expect(isQueuedCapabilityAlert(before.reason)).toBe(false);
+    const alert = queuedCapabilityWait({ ...blocked, now: created + QUEUED_CAPABILITY_ALERT_MS })!;
+    expect(isQueuedCapabilityAlert(alert.reason)).toBe(true);
+    expect(queuedCapabilityWait({ ...blocked, now: created + 2 * QUEUED_CAPABILITY_ALERT_MS })).toEqual(alert);
+    expect(queuedCapabilityWait({ ...blocked, candidateSupportsModel: [false, true] })).toBeNull();
+    expect(queuedCapabilityWait({ ...input, candidateBlockers: ["工作目录协议缺失", null] })?.reason)
+      .toContain("模型能力不支持 claude-opus-5（thinking: high）");
+    expect(isQueuedCapabilityWaitReason("等待目录锁：owned elsewhere")).toBe(false);
+  });
+
   it("describes a default model with an explicit thinking requirement", () => {
     expect(queuedCapabilityWait({ ...input, model: null })?.reason).toContain("默认模型（thinking: high）");
     expect(queuedCapabilityWait({ ...input, thinkingLevel: null })?.reason).not.toContain("thinking:");

@@ -13,6 +13,11 @@ import { createLogger } from "@shared/logger.js";
 import { canonicalizeDaemonRoutingWithinTransaction } from "@multiremi/store/daemon-routing.js";
 import { isPostgresConfigured } from "@multiremi/store/db/postgres.js";
 
+import {
+  MISSING_TASK_EXECUTION_PROVENANCE_SQL,
+  recoverTaskExecutionRuntimeWithinLock,
+} from "@multiremi/store/task-execution-provenance.js";
+
 const log = createLogger("multiremi-store");
 const SCM_CONNECTION_ORIGIN_MIGRATION = "20260822_scm_connection_origins";
 const SCM_DEFAULT_SCOPE_MIGRATION = "20260822_scm_default_repository_scope";
@@ -2934,6 +2939,13 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_tasks", "codex_profile TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "claude_profile TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "execution_fingerprint TEXT");
+  // Internal immutable snapshot provenance, deliberately not a foreign key:
+  // retiring a Runtime must not erase which host owns a frozen credential.
+  addColumnIfMissing(db, "multiremi_tasks", "execution_runtime_id TEXT");
+  // Retry null-only recovery on every startup: an older binary may have written
+  // more snapshots after a rollback, even if the previous migration was stamped.
+  // Existing provenance is never rewritten.
+  backfillTaskExecutionRuntime(db);
   addColumnIfMissing(db, "multiremi_session_agent_lanes", "execution_fingerprint TEXT");
   migrateExecutionScopedLanes(db);
   addColumnIfMissing(db, "multiremi_session_agent_lanes", "parent_cursor_seq INTEGER NOT NULL DEFAULT 0");
@@ -3160,6 +3172,23 @@ export function runMigrations(db: SqlDatabase): void {
   backfillDefaultIssueSessions(db);
   backfillIssueKeys(db);
   migrateLegacyGithubProjection(db, legacyGithubTables);
+}
+
+function backfillTaskExecutionRuntime(db: SqlDatabase): void {
+  // Discover workspaces only outside the lock. Neither a snapshot nor its
+  // credential owner read here may be reused after an identity merge commits.
+  const workspaces = db.query(`SELECT DISTINCT workspace_id FROM multiremi_tasks
+    WHERE ${MISSING_TASK_EXECUTION_PROVENANCE_SQL} ORDER BY workspace_id`).all() as Array<{ workspace_id: string }>;
+  for (const { workspace_id: workspaceId } of workspaces) {
+    db.transaction(() => {
+      // Same row lock and order as StoreContext.lockWorkspaceRuntimeLifecycle.
+      // Hold it through both source resolution and writes: mergeRuntimeInto
+      // either moves the recovered source afterward or commits before we read
+      // the new credential owner. A missing workspace has no lockable owner.
+      if (!db.run("UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?", [workspaceId]).changes) return;
+      recoverTaskExecutionRuntimeWithinLock(db, workspaceId);
+    })();
+  }
 }
 
 function ensureFeishuBotAgentRoutesSchema(db: SqlDatabase): void {
