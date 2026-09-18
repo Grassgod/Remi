@@ -1,9 +1,58 @@
 import { describe, expect, it, vi } from "vitest";
 import { RuntimesEndpoints } from "../api/endpoints/runtimes";
 import type { HttpClient } from "../api/http";
-import { executionTargetModelsOptions, runtimeModelsKeys } from "./models";
+import { QueryClient } from "@tanstack/react-query";
+import type { RuntimeModel } from "../types";
+const listFleetModels = vi.hoisted(() => vi.fn());
+vi.mock("../api", () => ({ api: { listFleetModels } }));
+import { executionTargetModelsOptions, fleetModelsOptions, isModelExecutionUnknown, isModelUnavailable, runtimeModelsKeys } from "./models";
 
 describe("execution target model catalog", () => {
+  it("only marks absent explicit Codex models unavailable after an authoritative load", () => {
+    const models = [{ id: "selectable", label: "Selectable" }];
+    expect(isModelUnavailable("codex", "inventory-only", models, "ready")).toBe(true);
+    expect(isModelUnavailable("codex", "selectable", models, "ready")).toBe(false);
+    expect(isModelUnavailable("codex", "", models, "ready")).toBe(false);
+    expect(isModelUnavailable("codex", "inventory-only", models, "error")).toBe(false);
+    expect(isModelUnavailable("codex", "inventory-only", models)).toBe(false);
+    expect(isModelUnavailable("claude", "inventory-only", models, "ready")).toBe(false);
+  });
+
+  it("distinguishes failed inventory from executable bundled models without restricting Claude", () => {
+    const models: RuntimeModel[] = [
+      { id: "gateway-only", label: "Gateway", execution_status: "unavailable" },
+      { id: "bundled", label: "Bundled", execution_status: "available" },
+      { id: "pending", label: "Pending", execution_status: "unknown" },
+    ];
+    expect(isModelUnavailable("codex", "gateway-only", models, "error")).toBe(true);
+    expect(isModelUnavailable("codex", "bundled", models, "error")).toBe(false);
+    expect(isModelUnavailable("codex", "custom", models, "error")).toBe(true);
+    expect(isModelUnavailable("codex", "pending", models, "ready")).toBe(true);
+    expect(isModelUnavailable("codex", "bundled", models, "unknown")).toBe(false);
+    expect(isModelExecutionUnknown("codex", "bundled", models, "unknown")).toBe(false);
+    expect(isModelUnavailable("codex", "custom-new", models, "unknown")).toBe(true);
+    expect(isModelExecutionUnknown("codex", "custom-new", models, "unknown")).toBe(true);
+    expect(isModelUnavailable("codex", "", models, "unknown")).toBe(false);
+    expect(isModelUnavailable("claude", "gateway-only", models, "error")).toBe(false);
+  });
+
+  it.each([fleetModelsOptions("ws"), executionTargetModelsOptions("ws", "rt")])(
+    "refetches unknown catalogs immediately while caching the resulting authoritative response", async (options) => {
+      const pending = { providers: [{ provider: "codex", model_catalog_status: "unknown", models: [] }] };
+      const ready = { providers: [{ provider: "codex", model_catalog_status: "ready", models: [{ id: "selectable", label: "Selectable" }] }] };
+      listFleetModels.mockReset().mockResolvedValueOnce(pending).mockResolvedValue(ready);
+      const client = new QueryClient();
+      try {
+        expect(await client.fetchQuery(options)).toEqual(pending);
+        expect(await client.fetchQuery(options)).toEqual(ready);
+        expect(await client.fetchQuery(options)).toEqual(ready);
+        expect(listFleetModels).toHaveBeenCalledTimes(2);
+      } finally {
+        client.clear();
+      }
+    },
+  );
+
   it("isolates group models by workspace, group and agent owner context", () => {
     const first = executionTargetModelsOptions("ws", null, "team", "agent-a");
     expect(first.enabled).toBe(true);

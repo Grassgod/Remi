@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
+import type { GatewayModelsSnapshot } from "@multiremi/store/store.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -21,7 +22,7 @@ function runtimeThinking(values: string[], defaultLevel?: string) {
 function saveGatewayCatalog(
   store: MultiremiStore,
   engine: "claude" | "codex",
-  models: Array<{ id: string; label: string }>,
+  models: GatewayModelsSnapshot["models"],
 ): void {
   store.setRelayModelDiscovery("local", true);
   const revision = store.upsertRelayConfig("local", engine, {
@@ -33,7 +34,7 @@ function saveGatewayCatalog(
     tokenOp: "set",
     authToken: "test-token",
   });
-  store.saveGatewayModels("local", engine, { sourceRevision: revision, models });
+  store.saveGatewayModels("local", engine, { sourceRevision: revision, ...(engine === "codex" ? { nativeCatalogStatus: "ready" as const } : {}), models });
 }
 
 describe("Multiremi store — fleet engine and model catalog", () => {
@@ -264,7 +265,7 @@ describe("Multiremi store — fleet engine and model catalog", () => {
     expect(fable.thinking.supported_levels.map((level: any) => level.value).sort()).toEqual(["high", "low"]);
   });
 
-  it("resolves mismatched Claude families and provider effort metadata", async () => {
+  it("resolves known Claude families without inventing effort metadata for unrelated models", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
     const levels = ["low", "medium", "high", "xhigh", "max"];
@@ -308,8 +309,7 @@ describe("Multiremi store — fleet engine and model catalog", () => {
     const haiku = models.get("claude-haiku-4-5-20251001") as any;
     expect(opus.thinking.supported_levels.map((level: any) => level.value)).toEqual(levels);
     expect(opus.default).toBe(true);
-    expect(fable.thinking.supported_levels.map((level: any) => level.value)).toEqual(levels);
-    expect(fable.thinking.default_level).toBeUndefined();
+    expect(fable.thinking).toBeUndefined();
     expect(fable.default).toBeUndefined();
     // A known non-thinking family is a negative match, not a provider-fallback candidate.
     expect(haiku.thinking).toBeUndefined();
@@ -322,13 +322,19 @@ describe("Multiremi store — fleet engine and model catalog", () => {
     });
     expect(created.status).toBe(201);
     const agent = await created.json();
-    const valid = await app.request(`/api/agents/${agent.id}`, {
+    const unverified = await app.request(`/api/agents/${agent.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model: "claude-fable-5", thinking_level: "max" }),
     });
+    expect(unverified.status).toBe(400);
+    const valid = await app.request(`/api/agents/${agent.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "claude-opus-5", thinking_level: "max" }),
+    });
     expect(valid.status).toBe(200);
-    expect(store.getAgent(agent.id)).toMatchObject({ model: "claude-fable-5", thinkingLevel: "max" });
+    expect(store.getAgent(agent.id)).toMatchObject({ model: "claude-opus-5", thinkingLevel: "max" });
 
     const invalid = await app.request(`/api/agents/${agent.id}`, {
       method: "PUT",

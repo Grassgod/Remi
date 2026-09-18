@@ -15,6 +15,7 @@
     "./claude-profile": "./src/claude-profile.ts",
     "./runtime-connection": "./src/runtime-connection.ts",
     "./model-thinking": "./src/model-thinking.ts",
+    "./codex-model-catalog": "./src/codex-model-catalog.ts",
     "./wiki-path": "./src/wiki-path.ts",
     "./wiki-links": "./src/wiki-links.ts"
   },

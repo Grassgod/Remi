@@ -82,6 +82,10 @@ export interface AcpAgentPluginSendOptions {
 }
 
 export interface AcpModelEffortCapability {
+  /** Missing selectors are unknown; an advertised empty selector is unsupported. */
+  status?: "supported" | "unsupported" | "unknown" | "error";
+  /** Concrete default reported after selecting this model, if available. */
+  defaultLevel?: string;
   supportedLevels: Array<{
     value: string;
     label: string;
@@ -98,6 +102,22 @@ export interface AcpModelCapability {
   /** The bridge's default selector state, not a guessed concrete model. */
   providerDefault?: boolean;
   effort?: AcpModelEffortCapability;
+}
+
+/** Codex cannot run an explicitly selected model on a different, previously active model. */
+export class UnsupportedAcpModelError extends Error {
+  readonly code = "acp_model_unsupported";
+
+  constructor(
+    readonly agentType: string,
+    readonly model: string,
+    readonly supportedModels: string[],
+    readonly selectedModel?: string | null,
+  ) {
+    super(`[acp_model_unsupported] ${agentType}: cannot select model "${model}" ` +
+      `(selected: ${selectedModel ?? "unknown"}; available: ${supportedModels.join(", ") || "none"})`);
+    this.name = "UnsupportedAcpModelError";
+  }
 }
 
 /** A caller explicitly requested an effort value the selected model does not advertise. */
@@ -259,8 +279,8 @@ export function resolveAvailableAcpPermissionMode(
  * The `session/set_config_option` call for a requested select value, or null
  * when the bridge does not advertise it. Codex rejects unknown values;
  * Claude can additionally resolve full model IDs to SDK picker aliases.
- * Callers choose whether a missing value is optional (model), must be
- * resolved by Claude (1M model), or must fail (effort).
+ * Codex rejects missing explicit selections; Claude also supports SDK model
+ * IDs via session metadata and resolves explicit 1M aliases through its bridge.
  */
 export function resolveConfigOptionChange(
   configOptions: SessionConfigOption[] | undefined,
@@ -292,6 +312,15 @@ function selectConfigOption(
 
 function flattenSelectOptions(option: Extract<SessionConfigOption, { type: "select" }>): SessionConfigSelectOption[] {
   return option.options.flatMap((item) => ("options" in item ? item.options : [item]));
+}
+
+function recommendedConfigValue(option: SessionConfigOption | undefined): string | undefined {
+  const jetbrains = option?._meta?.jetbrains;
+  if (!jetbrains || typeof jetbrains !== "object") return undefined;
+  const air = (jetbrains as Record<string, unknown>).air;
+  if (!air || typeof air !== "object") return undefined;
+  const value = (air as Record<string, unknown>).recommendedValue;
+  return typeof value === "string" ? value : undefined;
 }
 
 function isAcpDefaultSentinel(value: string): boolean {
@@ -475,7 +504,9 @@ export class AcpProvider implements Provider {
       const discovered: AcpModelCapability[] = [];
 
       for (const model of models) {
-        if (currentConfigValue(entry.configOptions, MODEL_OPTION_CATEGORY) !== model.value) {
+        const previousEffort = currentConfigValue(entry.configOptions, EFFORT_OPTION_CATEGORY);
+        const modelChanged = currentConfigValue(entry.configOptions, MODEL_OPTION_CATEGORY) !== model.value;
+        if (modelChanged) {
           await this._setConfigOption(entry, MODEL_OPTION_CATEGORY, model.value);
         }
 
@@ -483,23 +514,29 @@ export class AcpProvider implements Provider {
         const effortLevels = effortOption
           ? flattenSelectOptions(effortOption).filter((level) => !isAcpDefaultSentinel(level.value))
           : [];
+        // Recent Codex bridges preserve the prior effort when both models
+        // support it. Prefer their recommendation; unchanged currentValue
+        // after switching is not evidence of the new model's default.
+        const recommendedEffort = recommendedConfigValue(effortOption);
+        const defaultEffort = recommendedEffort
+          ?? (!modelChanged || effortOption?.currentValue !== previousEffort ? effortOption?.currentValue : undefined);
         discovered.push({
           id: model.value,
           label: model.name || model.value,
           ...(model.description ? { description: model.description } : {}),
           default: model.value === initialModel,
           ...(isAcpDefaultSentinel(model.value) ? { providerDefault: true } : {}),
-          ...(effortLevels.length || isAcpDefaultSentinel(model.value)
-            ? {
-                effort: {
-                  supportedLevels: effortLevels.map((level) => ({
-                    value: level.value,
-                    label: level.name || level.value,
-                    ...(level.description ? { description: level.description } : {}),
-                  })),
-                },
-              }
-            : {}),
+          effort: {
+            status: !effortOption ? "unknown" : effortLevels.length ? "supported" : "unsupported",
+            ...(defaultEffort && effortLevels.some((level) => level.value === defaultEffort)
+              ? { defaultLevel: defaultEffort }
+              : {}),
+            supportedLevels: effortLevels.map((level) => ({
+              value: level.value,
+              label: level.name || level.value,
+              ...(level.description ? { description: level.description } : {}),
+            })),
+          },
         });
       }
 
@@ -910,9 +947,8 @@ export class AcpProvider implements Provider {
   }
 
   /**
-   * Model first, then effort: changing the model resets the effort to the new
-   * model's default and rewrites the effort option's valid values
-   * (claude-agent-acp dist/acp-agent.js:4084-4100, codex-acp dist/index.js:29369-29374).
+   * Model first, then effort: switching rewrites the valid effort values and
+   * may reset or retain the current effort, depending on the bridge.
    */
   private async _applyModelAndEffort(entry: PoolEntry, model: string | null, effort: string | null): Promise<void> {
     if (model && model !== entry.appliedModel) {
@@ -945,11 +981,19 @@ export class AcpProvider implements Provider {
       if (requestedEffort === entry.appliedEffort) return;
       const result = await entry.client.setConfigOption(entry.acpSessionId, option.id, requestedEffort);
       if (result?.configOptions) entry.configOptions = result.configOptions;
+      if (this._adapter.agentType === "codex"
+        && currentConfigValue(entry.configOptions, EFFORT_OPTION_CATEGORY) !== requestedEffort) {
+        throw new Error(`[acp_effort_unacknowledged] ${this._adapter.agentType}: the agent did not select effort "${requestedEffort}"`);
+      }
       entry.appliedEffort = requestedEffort;
     }
   }
 
   private async _setConfigOption(entry: PoolEntry, category: string, value: string): Promise<boolean> {
+    const option = selectConfigOption(entry.configOptions, category);
+    if (option?.currentValue === value) return true;
+    if (!option && category === MODEL_OPTION_CATEGORY
+      && entry.models?.currentModelId.replace(/\[[^\]]*\]$/, "") === value) return true;
     const claudeOneMillion = this._adapter.agentType === "claude"
       && category === MODEL_OPTION_CATEGORY && hasOneMillionContext(value);
     let change = resolveConfigOptionChange(entry.configOptions, category, value);
@@ -963,10 +1007,19 @@ export class AcpProvider implements Provider {
       change = { configId: option.id, value };
     }
     if (!change) {
-      console.warn(
-        `[acp] ${this._adapter.agentType}: skipping ${category}="${value}" — the agent does not offer it`,
+      if (this._adapter.agentType !== "codex") {
+        // Claude's session metadata can already select a full SDK model ID
+        // while its picker reports an alias. Preserve that existing path;
+        // the explicit 1M resolver above still validates context selection.
+        console.warn(`[acp] ${this._adapter.agentType}: skipping ${category}="${value}" — the agent does not offer it`);
+        return false;
+      }
+      throw new UnsupportedAcpModelError(
+        this._adapter.agentType,
+        value,
+        option ? flattenSelectOptions(option).map((item) => item.value) : [],
+        currentConfigValue(entry.configOptions, MODEL_OPTION_CATEGORY) ?? entry.models?.currentModelId,
       );
-      return false;
     }
     const result = await entry.client.setConfigOption(entry.acpSessionId, change.configId, change.value);
     if (result?.configOptions) entry.configOptions = result.configOptions;
@@ -975,6 +1028,14 @@ export class AcpProvider implements Provider {
       if (!selected || !hasOneMillionContext(selected)) {
         throw new Error(`[acp_model_context_unsupported] Claude did not select ${value} (selected: ${selected ?? "unknown"})`);
       }
+    } else if (this._adapter.agentType === "codex"
+      && category === MODEL_OPTION_CATEGORY && currentConfigValue(entry.configOptions, category) !== value) {
+      throw new UnsupportedAcpModelError(
+        this._adapter.agentType,
+        value,
+        option ? flattenSelectOptions(option).map((item) => item.value) : [],
+        currentConfigValue(entry.configOptions, category),
+      );
     }
     return true;
   }

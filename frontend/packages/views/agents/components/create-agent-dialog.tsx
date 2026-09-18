@@ -9,7 +9,7 @@ import { SkillMultiSelect } from "./skill-multi-select";
 import { AvatarPicker } from "./avatar-picker";
 import { api } from "@multiremi/core/api";
 import { useWorkspaceId } from "@multiremi/core/hooks";
-import { useExecutionTargetModels } from "@multiremi/core/runtimes";
+import { isModelExecutionUnknown, isModelUnavailable, useExecutionTargetModels } from "@multiremi/core/runtimes";
 import { workspaceKeys } from "@multiremi/core/workspace/queries";
 import type {
   Agent,
@@ -34,6 +34,7 @@ import { ExecutionTargetSelect, type ExecutionTarget } from "./execution-target-
 import { useT } from "../../i18n";
 import { ThinkingField } from "./thinking-field";
 import {
+  getModelThinking,
   getModelThinkingLevels,
   supportsThinkingLevel,
 } from "./inspector/thinking-levels";
@@ -93,6 +94,8 @@ export function CreateAgentDialog({
   const [executionGroupId, setExecutionGroupId] = useState(template?.execution_group_id ?? "");
   const [legacyRuntimeId, setLegacyRuntimeId] = useState(template?.runtime_id ?? "");
   const targetModels = useExecutionTargetModels(wsId ?? "", provider, executionGroupId ? undefined : legacyRuntimeId, executionGroupId);
+  const executionUnknown = isModelExecutionUnknown(provider, model, targetModels.models, targetModels.modelCatalogStatus);
+  const unavailable = isModelUnavailable(provider, model, targetModels.models, targetModels.modelCatalogStatus);
   const thinkingLevels = useMemo(
     () => getModelThinkingLevels(targetModels.models, model, targetModels.defaultThinking),
     [targetModels.models, model, targetModels.defaultThinking],
@@ -148,7 +151,7 @@ export function CreateAgentDialog({
   };
 
   const handleSubmit = async () => {
-    if (!name.trim() || !provider) return;
+    if (!name.trim() || !provider || unavailable) return;
     setCreating(true);
 
     try {
@@ -349,6 +352,10 @@ export function CreateAgentDialog({
             <ThinkingField
               value={thinkingLevel}
               levels={thinkingLevels}
+              thinking={getModelThinking(targetModels.models, model, targetModels.defaultThinking)}
+              isLoading={targetModels.isLoading}
+              isError={targetModels.isError}
+              modelUnavailable={unavailable} modelExecutionUnknown={executionUnknown}
               onChange={setThinkingLevel}
             />
 
@@ -382,7 +389,7 @@ export function CreateAgentDialog({
           <Button variant="ghost" onClick={onClose}>
             {t(($) => $.create_dialog.cancel)}
           </Button>
-          <Button onClick={handleSubmit} disabled={creating || !name.trim() || !provider}>
+          <Button onClick={handleSubmit} disabled={creating || !name.trim() || !provider || unavailable}>
             {creating ? t(($) => $.create_dialog.creating) : t(($) => $.create_dialog.create)}
           </Button>
         </div>

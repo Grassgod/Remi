@@ -873,6 +873,30 @@ describe("RuntimeDirectoryScanRequestSchema", () => {
 });
 
 describe("FleetModelsResponseSchema", () => {
+  it("preserves authoritative catalogs and treats malformed catalog statuses as unknown", () => {
+    for (const [model_catalog_status, expected] of [["ready", "ready"], ["error", "error"], ["unknown", "unknown"], ["future", "unknown"], [42, "unknown"], [null, "unknown"], [undefined, undefined]]) {
+      const parsed = FleetModelsResponseSchema.parse({ providers: [{ provider: "codex", model_catalog_status, models: [] }] });
+      expect(parsed.providers[0]?.model_catalog_status).toBe(expected);
+    }
+  });
+
+  it("preserves model execution states and blocks unknown future or malformed states", () => {
+    for (const [execution_status, expected] of [["available", "available"], ["unavailable", "unavailable"], ["unknown", "unknown"], ["future", "unknown"], [42, "unknown"], [undefined, undefined]]) {
+      const parsed = FleetModelsResponseSchema.parse({ providers: [{ provider: "codex", models: [{ id: "model", execution_status }] }] });
+      expect(parsed.providers[0]?.models[0]?.execution_status).toBe(expected);
+    }
+  });
+
+  it("preserves capability states and defaults, and downgrades future or malformed states", () => {
+    for (const [status, expected] of [["supported", "supported"], ["unsupported", "unsupported"], ["unknown", "unknown"], ["error", "error"], ["future", "unknown"], [42, "unknown"]]) {
+      const parsed = FleetModelsResponseSchema.parse({ providers: [{ provider: "codex", models: [{
+        id: "gateway", thinking: { status, supported_levels: [{ value: "high", label: "High" }], default_level: "high" },
+      }] }] });
+      expect(parsed.providers[0]?.models[0]?.thinking).toEqual({ status: expected, supported_levels: [{ value: "high", label: "High" }], default_level: "high" });
+    }
+    expect(FleetModelsResponseSchema.safeParse({ providers: [{ provider: "codex", models: [{ id: "broken", thinking: { supported_levels: null } }] }] }).success).toBe(false);
+  });
+
   const opts = { endpoint: "GET /api/models (test)" };
 
   it("validates optional provider default thinking, including an explicit empty set", () => {

@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { Loader2, Plus } from "lucide-react";
-import { useExecutionTargetModels } from "@multiremi/core/runtimes";
+import { isModelCatalogRestricted, isModelExecutionUnknown, isModelUnavailable, useExecutionTargetModels } from "@multiremi/core/runtimes";
 import { Input } from "@multiremi/ui/components/ui/input";
 import {
   PickerItem,
@@ -36,7 +36,7 @@ export function ModelPicker({
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
 
-  const { models, isLoading } = useExecutionTargetModels(wsId, provider, runtimeId, executionGroupId, agentId);
+  const { models, modelCatalogStatus, isLoading } = useExecutionTargetModels(wsId, provider, runtimeId, executionGroupId, agentId);
 
   const filtered = useMemo(() => {
     const s = search.trim().toLowerCase();
@@ -51,32 +51,44 @@ export function ModelPicker({
   const exactMatch = models.some(
     (m) => m.id === trimmedSearch || m.label === trimmedSearch,
   );
-  const canCreate = trimmedSearch.length > 0 && !exactMatch;
+  const authoritative = isModelCatalogRestricted(provider, models, modelCatalogStatus);
+  const unknown = isModelExecutionUnknown(provider, value, models, modelCatalogStatus);
+  const unavailable = isModelUnavailable(provider, value, models, modelCatalogStatus);
+  const canCreate = !isLoading && !authoritative && trimmedSearch.length > 0 && !exactMatch;
 
   const triggerLabel = value || t(($) => $.pickers.model_default);
   const triggerTitle = t(($) => $.pickers.model_tooltip, { value: triggerLabel });
 
   const select = async (id: string) => {
+    if (isModelUnavailable(provider, id, models, modelCatalogStatus)) return;
     setOpen(false);
     setSearch("");
     if (id !== value) await onChange(id);
   };
+
+  const unavailableStatus = (unavailable || unknown) && <span className="text-xs text-destructive" role="status">
+    {unknown ? t(($) => $.pickers.model_execution_unknown) : t(($) => $.pickers.model_unavailable)}
+  </span>;
 
   // Automatic scheduling binds neither a Runtime nor a group, yet the fleet
   // catalog still answers for the selected provider — only a missing provider
   // means there is no execution target to pick a model for.
   if (!canEdit || !provider) {
     return (
+      <div className="flex min-w-0 flex-col items-start">
       <span
         className="min-w-0 truncate px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
         title={triggerTitle}
       >
         {triggerLabel}
       </span>
+      {unavailableStatus}
+      </div>
     );
   }
 
   return (
+    <div className="flex min-w-0 flex-col items-start">
     <PropertyPicker
       open={open}
       onOpenChange={setOpen}
@@ -118,6 +130,7 @@ export function ModelPicker({
         filtered.map((m) => (
           <PickerItem
             key={m.id}
+            disabled={isModelUnavailable(provider, m.id, models, modelCatalogStatus)}
             selected={m.id === value}
             onClick={() => void select(m.id)}
             // Tooltip carries the canonical model id even when the chip
@@ -137,6 +150,12 @@ export function ModelPicker({
               {m.label !== m.id && (
                 <span className="mt-0.5 block truncate font-mono text-[10px] leading-snug text-muted-foreground">
                   {m.id}
+                </span>
+              )}
+              {isModelUnavailable(provider, m.id, models, modelCatalogStatus) && (
+                <span className="block text-xs text-muted-foreground">
+                  {isModelExecutionUnknown(provider, m.id, models, modelCatalogStatus)
+                    ? t(($) => $.pickers.model_execution_unknown) : t(($) => $.pickers.model_unavailable)}
                 </span>
               )}
             </span>
@@ -173,5 +192,7 @@ export function ModelPicker({
         </button>
       )}
     </PropertyPicker>
+    {unavailableStatus}
+    </div>
   );
 }

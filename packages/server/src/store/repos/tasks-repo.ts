@@ -1223,15 +1223,19 @@ export class TasksRepo {
         && this.ctx.runtimes().getRuntimeExecutionProfile(runtimeId, lockedRuntime.provider)) return null;
 
       this.resetStaleChatWorkspaceTasks(lockedRuntime.workspaceId ?? "local");
+      // Recovery must examine stale dispatches even when their Agent can no
+      // longer run here. It rechecks eligibility and requeues incompatible
+      // work instead of leaving it permanently dispatched on the old member.
       const stale = this.reclaimStaleDispatchedTaskForRuntime(runtimeId, [...excludedAgentIds]);
       // Group membership and reported model capabilities can change while work
       // is queued. Skip incompatible Agents before selecting, so they cannot
       // block another runnable task at the head of the queue.
-      const groupAgentRows = this.ctx.db.query(`SELECT DISTINCT a.id FROM multiremi_agents a
+      const capabilityAgentRows = this.ctx.db.query(`SELECT DISTINCT a.id FROM multiremi_agents a
         JOIN multiremi_tasks t ON t.agent_id = a.id
-        WHERE a.workspace_id = ? AND a.execution_group_id IS NOT NULL
+        WHERE a.workspace_id = ? AND (a.execution_group_id IS NOT NULL
+          OR NULLIF(a.model, '') IS NOT NULL OR NULLIF(a.thinking_level, '') IS NOT NULL)
           AND t.status IN ('queued', 'dispatched')`).all(lockedRuntime.workspaceId ?? "local") as { id: string }[];
-      for (const row of groupAgentRows) {
+      for (const row of capabilityAgentRows) {
         const agent = this.ctx.agents().getAgent(row.id);
         if (agent && !this.ctx.runtimes().runtimeCanRunAgent(lockedRuntime, agent)) excludedAgentIds.add(agent.id);
       }

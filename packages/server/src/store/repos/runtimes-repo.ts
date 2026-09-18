@@ -1,4 +1,4 @@
-import { runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
+import { catalogAllowsModel, runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
 import { runtimeConnectionModels } from "@multiremi/contracts/runtime-connection";
 import { modelThinkingLevels } from "@multiremi/contracts/model-thinking.js";
 import { syncRuntimeExecutionGroups, runtimeExecutionGroupId } from "@multiremi/store/execution-groups.js";
@@ -1876,14 +1876,14 @@ export class RuntimesRepo {
   runtimeCanRunAgent(runtime: MultiremiRuntime, agent: MultiremiAgent): boolean {
     if (agent.runtimeId && agent.runtimeId !== runtime.id) return false;
     if (agent.executionGroupId && runtimeExecutionGroupId(this.ctx.db, runtime.id, agent.provider) !== agent.executionGroupId) return false;
-    if (agent.executionGroupId && !agent.runtimeId && !this.runtimeSupportsAgentModel(runtime, agent)) return false;
     if (runtime.provider !== "any" && runtime.provider !== agent.provider) return false;
     // A task runs in its agent's workspace and the claim SQL requires the
     // runtime's workspace to match, so a runtime in a different workspace can
     // never run this agent (COALESCE(...,'local') for NULL-workspace runtimes).
     if ((runtime.workspaceId ?? "local") !== (agent.workspaceId ?? "local")) return false;
-    if (runtime.visibility === "public") return true;
-    return (runtime.ownerId ?? "local") === (agent.ownerId ?? "local");
+    if (runtime.visibility !== "public" && (runtime.ownerId ?? "local") !== (agent.ownerId ?? "local")) return false;
+    return !(agent.model || agent.thinkingLevel || (agent.executionGroupId && !agent.runtimeId))
+      || this.runtimeSupportsAgentModel(runtime, agent);
   }
 
   private runtimeSupportsAgentModel(runtime: MultiremiRuntime, agent: MultiremiAgent): boolean {
@@ -1898,7 +1898,10 @@ export class RuntimesRepo {
       getRuntimeExecutionProfile: (id, provider) => this.getRuntimeExecutionProfile(id, provider),
     }, agent.workspaceId, runtime).find(entry => entry.provider === agent.provider);
     const models = catalog?.models ?? [];
-    if (agent.model && !models.some(model => model.id === agent.model)) return false;
+    if (!catalogAllowsModel(catalog, agent.model ?? "")) return false;
+    if (agent.model && !models.some(model => model.id === agent.model)
+      && (catalog?.model_catalog_status === "ready" || agent.thinkingLevel
+        || (agent.executionGroupId && !agent.runtimeId))) return false;
     return !agent.thinkingLevel || modelThinkingLevels(models, agent.model ?? "", catalog?.default_thinking)
       .some(level => level.value === agent.thinkingLevel);
   }
@@ -2010,8 +2013,8 @@ export class RuntimesRepo {
     for (const model of normalized) {
       this.ctx.db.run(
         `INSERT INTO multiremi_runtime_models (
-          runtime_id, model_id, label, provider, is_default, thinking, created_at, updated_at, is_provider_default
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          runtime_id, model_id, label, provider, is_default, thinking, created_at, updated_at, is_provider_default, catalog
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           runtimeId,
           model.id,
@@ -2022,6 +2025,7 @@ export class RuntimesRepo {
           now,
           now,
           model.providerDefault ? 1 : 0,
+          model.catalog ? toJson(model.catalog) : null,
         ],
       );
     }
@@ -2181,8 +2185,16 @@ function normalizeRuntimeModels(models: MultiremiRuntimeModel[], provider: strin
       default: Boolean(model.default),
       ...(model.providerDefault === true ? { providerDefault: true } : {}),
       thinking: normalizeRuntimeModelThinking(model.thinking),
+      ...(model.catalog ? { catalog: normalizeRuntimeModelCatalog(model.catalog) } : {}),
     };
   });
+}
+
+function normalizeRuntimeModelCatalog(value: NonNullable<MultiremiRuntimeModel["catalog"]>): NonNullable<MultiremiRuntimeModel["catalog"]> {
+  return value.status === "ready" ? { status: "ready" } : {
+    status: "error",
+    error: typeof value.error === "string" ? value.error.replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, 200) : "Codex model catalog unavailable",
+  };
 }
 
 function normalizeRuntimeModelThinking(value: MultiremiRuntimeModel["thinking"]): MultiremiRuntimeModel["thinking"] | undefined {
@@ -2192,10 +2204,17 @@ function normalizeRuntimeModelThinking(value: MultiremiRuntimeModel["thinking"])
     label: String(level.label ?? level.value ?? "").trim(),
     ...(level.description ? { description: String(level.description) } : {}),
   })).filter((level) => level.value);
-  if (!supportedLevels.length) return undefined;
+  const status = value.status;
+  if (status !== undefined && !["supported", "unsupported", "unknown", "error"].includes(status)) {
+    return { status: "error", supportedLevels: [], error: "invalid runtime reasoning metadata" };
+  }
+  const availableLevels = status && status !== "supported" ? [] : supportedLevels;
+  const defaultLevel = value.defaultLevel ?? value.default_level;
   return {
-    supportedLevels,
-    ...(value.defaultLevel || value.default_level ? { defaultLevel: String(value.defaultLevel ?? value.default_level) } : {}),
+    supportedLevels: availableLevels,
+    ...(defaultLevel && availableLevels.some((level) => level.value === defaultLevel) ? { defaultLevel: String(defaultLevel) } : {}),
+    ...(status ? { status } : {}),
+    ...(status === "error" && value.error ? { error: String(value.error).replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, 200) } : {}),
   };
 }
 
@@ -2509,6 +2528,7 @@ function toRuntimeModel(row: Row): MultiremiRuntimeModel {
     default: Boolean(Number(row.is_default ?? 0)),
     ...(Number(row.is_provider_default) === 1 ? { providerDefault: true } : {}),
     thinking: row.thinking == null ? undefined : parseJson(row.thinking, undefined),
+    ...(row.catalog == null ? {} : { catalog: parseJson(row.catalog, undefined) }),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };

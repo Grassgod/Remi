@@ -20,6 +20,7 @@ export {
   resolveAcpExecutableForAgent,
   resolveAcpHealthCheckCommand,
   UnsupportedAcpEffortError,
+  UnsupportedAcpModelError,
 } from "./provider.js";
 export type {
   AcpProviderOptions,

@@ -1,10 +1,11 @@
 "use client";
 
-import { useExecutionTargetModels } from "@multiremi/core/runtimes";
+import { isModelExecutionUnknown, isModelUnavailable, useExecutionTargetModels } from "@multiremi/core/runtimes";
 import { PropRow } from "../../../common/prop-row";
 import { useT } from "../../../i18n";
 import { ThinkingPicker } from "./thinking-picker";
-import { getModelThinkingLevels } from "./thinking-levels";
+import { getModelThinking, getModelThinkingLevels } from "./thinking-levels";
+import { ThinkingStatus } from "./thinking-status";
 
 // The catalog is scoped to the selected machine and Runtime type.
 export function ThinkingPropRow({
@@ -29,32 +30,32 @@ export function ThinkingPropRow({
   onChange: (next: string) => Promise<void> | void;
 }) {
   const { t } = useT("agents");
-  const { models, defaultThinking, isLoading, isError } = useExecutionTargetModels(wsId, provider, runtimeId, executionGroupId, agentId);
+  const { models, modelCatalogStatus, defaultThinking, isLoading, isError } = useExecutionTargetModels(wsId, provider, runtimeId, executionGroupId, agentId);
 
+  const executionUnknown = isModelExecutionUnknown(provider, model, models, modelCatalogStatus);
+  const unavailable = isModelUnavailable(provider, model, models, modelCatalogStatus);
   const levels = getModelThinkingLevels(models, model, defaultThinking);
+  const thinking = getModelThinking(models, model, defaultThinking);
   if (levels.length === 0 && !value) {
     if (provider !== "claude" && provider !== "codex") return null;
     return (
       <PropRow label={t(($) => $.inspector.prop_thinking)} interactive={false}>
-        <span className="px-1.5 py-0.5 text-xs text-muted-foreground" role="status">
-          {isLoading
-            ? t(($) => $.pickers.thinking_loading)
-            : isError
-              ? t(($) => $.pickers.thinking_load_error)
-              : t(($) => $.pickers.thinking_unknown)}
-        </span>
+        <ThinkingStatus modelUnavailable={unavailable} modelExecutionUnknown={executionUnknown} thinking={thinking} isLoading={isLoading} isError={isError} />
       </PropRow>
     );
   }
 
   return (
     <PropRow label={t(($) => $.inspector.prop_thinking)} interactive={false}>
+      <div className="flex min-w-0 flex-wrap items-center gap-1">
       <ThinkingPicker
         value={value}
         levels={levels}
-        canEdit={canEdit}
+        canEdit={canEdit && !unavailable && !executionUnknown}
         onChange={onChange}
       />
+      {(thinking || levels.length === 0) && <ThinkingStatus modelUnavailable={unavailable} modelExecutionUnknown={executionUnknown} thinking={thinking} isLoading={isLoading} isError={isError} />}
+      </div>
     </PropRow>
   );
 }

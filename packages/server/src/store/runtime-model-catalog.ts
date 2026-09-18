@@ -1,4 +1,4 @@
-import type { MultiremiRuntime, MultiremiRuntimeModel } from "@multiremi/contracts/types.js";
+import type { MultiremiRuntime, MultiremiRuntimeModel, MultiremiRuntimeModelThinking } from "@multiremi/contracts/types.js";
 import { runtimeConnectionModels } from "@multiremi/contracts/runtime-connection";
 import { commonThinkingLevels, modelThinkingLevels } from "@multiremi/contracts/model-thinking.js";
 import type { MultiremiStore } from "./store.js";
@@ -34,6 +34,8 @@ export interface FleetModelThinkingLevelResponse {
 export interface FleetModelThinkingResponse {
   supported_levels: FleetModelThinkingLevelResponse[];
   default_level?: string;
+  status?: MultiremiRuntimeModelThinking["status"];
+  error?: string;
 }
 
 export interface FleetModelResponse {
@@ -43,13 +45,57 @@ export interface FleetModelResponse {
   default?: boolean;
   provider_default?: boolean;
   thinking?: FleetModelThinkingResponse;
+  execution_status?: "available" | "unavailable" | "unknown";
+  catalog?: MultiremiRuntimeModel["catalog"];
 }
 
 export interface FleetProviderModelsResponse {
   provider: string;
   online_runtime_count: number;
   models: FleetModelResponse[];
+  /** ready: models is the authoritative selectable set, including an empty set. */
+  model_catalog_status?: "ready" | "error" | "unknown";
+  /** Runtime-side load outcome, independent of the control-plane snapshot. */
+  runtime_catalog_status?: "ready" | "error";
+  runtime_catalog_error?: string;
   default_thinking?: FleetModelThinkingResponse;
+}
+
+/** Intersect execution targets without losing why a capability is unavailable. */
+export function commonThinkingCapabilities(capabilities: FleetModelThinkingResponse[]): FleetModelThinkingResponse {
+  const supported_levels = commonThinkingLevels(capabilities.map((thinking) => modelThinkingLevels([], "", thinking)));
+  const failed = capabilities.find((thinking) => thinking.status === "error");
+  const explicitStatus = capabilities.some((thinking) => thinking.status !== undefined);
+  const status = failed ? "error" : capabilities.some((thinking) => thinking.status === "unknown")
+    ? "unknown" : supported_levels.length ? "supported" : "unsupported";
+  const defaultLevel = capabilities[0]?.default_level;
+  return {
+    supported_levels,
+    ...(explicitStatus ? { status } : {}),
+    ...(failed?.error ? { error: failed.error } : {}),
+    ...(defaultLevel && supported_levels.some((level) => level.value === defaultLevel)
+      && capabilities.every((thinking) => thinking.default_level === defaultLevel) ? { default_level: defaultLevel } : {}),
+  };
+}
+
+function defaultModelThinking(models: FleetModelResponse[]): FleetModelThinkingResponse {
+  const selected = models.find((model) => model.default);
+  if (selected?.thinking) return selected.thinking;
+  const supported_levels = modelThinkingLevels(models, "");
+  if (supported_levels.length) return { supported_levels };
+  const failed = models.find((model) => model.thinking?.status === "error")?.thinking;
+  if (failed) return { ...failed, supported_levels: [] };
+  return { supported_levels, ...(models.some((model) => model.thinking?.status !== undefined)
+    ? { status: models.every((model) => model.thinking?.status === "unsupported") ? "unsupported" as const : "unknown" as const } : {}) };
+}
+
+function capabilityRank(model: MultiremiRuntimeModel): number {
+  const thinking = model.thinking;
+  const provenance = model.catalog?.status === "ready" ? 20 : model.catalog?.status === "error" ? 10 : 0;
+  if ((!thinking?.status || thinking.status === "supported") && (thinking?.supportedLevels ?? thinking?.supported_levels)?.length) return provenance + 3;
+  if (thinking?.status === "error") return provenance + 2;
+  if (thinking && thinking.status !== "unknown") return provenance + 1;
+  return provenance;
 }
 
 export function fleetModelsResponse(runtimes: MultiremiRuntime[], callerOwnerId: string): FleetProviderModelsResponse[] {
@@ -59,13 +105,15 @@ export function fleetModelsResponse(runtimes: MultiremiRuntime[], callerOwnerId:
   const buckets = new Map<string, {
     online: number;
     models: Map<string, MultiremiRuntimeModel>;
-    defaultLevels: FleetModelThinkingLevelResponse[][];
+    defaultCapabilities: FleetModelThinkingResponse[];
     hasDefaultReport: boolean;
+    catalogStatuses: Array<"ready" | "error" | undefined>;
+    catalogError?: string;
   }>();
   const bucket = (provider: string) => {
     let entry = buckets.get(provider);
     if (!entry) {
-      entry = { online: 0, models: new Map(), defaultLevels: [], hasDefaultReport: false };
+      entry = { online: 0, models: new Map(), defaultCapabilities: [], hasDefaultReport: false, catalogStatuses: [] };
       buckets.set(provider, entry);
     }
     return entry;
@@ -88,7 +136,10 @@ export function fleetModelsResponse(runtimes: MultiremiRuntime[], callerOwnerId:
       const entry = bucket(engine);
       if (model.providerDefault) continue;
       const existing = entry.models.get(model.id);
-      if (!existing || (model.default && !existing.default)) entry.models.set(model.id, model);
+      // A fleet is a union of usable targets. Prefer a successful report; the
+      // claim path still checks the selected runtime's own capabilities.
+      if (!existing || capabilityRank(model) > capabilityRank(existing)
+        || (capabilityRank(model) === capabilityRank(existing) && model.default && !existing.default)) entry.models.set(model.id, model);
     }
   }
   for (const runtime of usable) {
@@ -98,12 +149,15 @@ export function fleetModelsResponse(runtimes: MultiremiRuntime[], callerOwnerId:
         entry.online += 1;
         const models = (runtime.models ?? []).filter((model) => runtime.provider !== "any"
           || MODEL_VENDOR_TO_ENGINE[model.provider ?? ""] === provider);
+        const native = models.find(model => model.catalog)?.catalog;
+        const legacyError = models.length > 0 && models.every(model => model.thinking?.status === "error");
+        entry.catalogStatuses.push(native?.status ?? (legacyError ? "error" : undefined));
+        entry.catalogError ??= native?.error ?? (legacyError ? models[0]?.thinking?.error : undefined);
         const reported = models.find((model) => model.providerDefault);
         entry.hasDefaultReport ||= Boolean(reported);
-        entry.defaultLevels.push(modelThinkingLevels(
-          models.filter((model) => !model.providerDefault).map(runtimeModelCompatibilityResponse), "",
-          reported ? { supported_levels: reported.thinking?.supportedLevels ?? reported.thinking?.supported_levels ?? [] } : undefined,
-        ));
+        entry.defaultCapabilities.push(reported
+          ? reported.thinking ? thinkingCompatibilityResponse(reported.thinking) : { status: "unknown", supported_levels: [] }
+          : defaultModelThinking(models.filter((model) => !model.providerDefault).map(runtimeModelCompatibilityResponse)));
       }
     }
   }
@@ -113,7 +167,10 @@ export function fleetModelsResponse(runtimes: MultiremiRuntime[], callerOwnerId:
       provider,
       online_runtime_count: entry.online,
       models: [...entry.models.values()].map(runtimeModelCompatibilityResponse),
-      ...(entry.hasDefaultReport ? { default_thinking: { supported_levels: commonThinkingLevels(entry.defaultLevels) } } : {}),
+      ...(entry.catalogStatuses.length && entry.catalogStatuses.every(status => status === "error")
+        ? { runtime_catalog_status: "error" as const, runtime_catalog_error: entry.catalogError }
+        : entry.catalogStatuses.some(status => status === "ready") ? { runtime_catalog_status: "ready" as const } : {}),
+      ...(entry.hasDefaultReport ? { default_thinking: commonThinkingCapabilities(entry.defaultCapabilities) } : {}),
     }));
 }
 
@@ -122,22 +179,32 @@ export function runtimeModelCompatibilityResponse(model: MultiremiRuntimeModel):
     id: model.id,
     label: model.label,
   };
+  if (model.catalog) {
+    response.catalog = model.catalog;
+    response.execution_status = "available";
+  }
   if (model.provider) response.provider = model.provider;
   if (model.default) response.default = true;
   if (model.providerDefault) response.provider_default = true;
   if (model.thinking) {
-    response.thinking = {
-      supported_levels: (model.thinking.supportedLevels ?? model.thinking.supported_levels ?? []).map((level) => ({
-        value: level.value,
-        label: level.label,
-        ...(level.description ? { description: level.description } : {}),
-      })),
-      ...(model.thinking.defaultLevel ?? model.thinking.default_level
-        ? { default_level: model.thinking.defaultLevel ?? model.thinking.default_level }
-        : {}),
-    };
+    response.thinking = thinkingCompatibilityResponse(model.thinking);
   }
   return response;
+}
+
+function thinkingCompatibilityResponse(thinking: MultiremiRuntimeModelThinking): FleetModelThinkingResponse {
+  return {
+    supported_levels: (thinking.supportedLevels ?? thinking.supported_levels ?? []).map((level) => ({
+      value: level.value,
+      label: level.label,
+      ...(level.description ? { description: level.description } : {}),
+    })),
+    ...(thinking.defaultLevel ?? thinking.default_level
+      ? { default_level: thinking.defaultLevel ?? thinking.default_level }
+      : {}),
+    ...(thinking.status ? { status: thinking.status } : {}),
+    ...(thinking.error ? { error: thinking.error } : {}),
+  };
 }
 
 type ClaudeModelFamily = "opus" | "sonnet" | "haiku";
@@ -160,40 +227,13 @@ function thinkingLevelsKey(thinking: FleetModelThinkingResponse): string {
 function familyThinkingConsensus(models: FleetModelResponse[]): FleetModelThinkingResponse | undefined {
   const first = models[0]?.thinking;
   const firstKey = first
-    ? `${thinkingLevelsKey(first)}\0${first.default_level ?? ""}`
+    ? `${thinkingLevelsKey(first)}\0${first.default_level ?? ""}\0${first.status ?? ""}`
     : undefined;
   if (!models.every((model) => {
     if (!model.thinking) return firstKey === undefined;
-    return `${thinkingLevelsKey(model.thinking)}\0${model.thinking.default_level ?? ""}` === firstKey;
+    return `${thinkingLevelsKey(model.thinking)}\0${model.thinking.default_level ?? ""}\0${model.thinking.status ?? ""}` === firstKey;
   })) return undefined;
   return first;
-}
-
-/**
- * Last-resort tier for gateway models with no exact and no family counterpart
- * (e.g. `claude-fable-5`, which has no runtime id at all): if every effort-capable
- * runtime model of this provider agrees on one level set, assume a new model of the
- * same provider shares it. This is a heuristic, so it fails closed on any
- * disagreement — Codex, whose runtimes expose 4- and 6-level sets, never reaches a
- * consensus here. It never propagates `default`; only an exact or unambiguous family
- * hit may do that. Revisit if a future Claude model ships an effort set that diverges
- * from its siblings — it would be given the consensus set rather than its own.
- */
-function providerThinkingConsensus(models: FleetModelResponse[]): FleetModelThinkingResponse | undefined {
-  const capable = models.flatMap((model) =>
-    model.thinking?.supported_levels.length ? [model.thinking] : []
-  );
-  const first = capable[0];
-  if (!first) return undefined;
-  const levelsKey = thinkingLevelsKey(first);
-  if (!capable.every((thinking) => thinkingLevelsKey(thinking) === levelsKey)) return undefined;
-  const defaultLevel = capable.every((thinking) => thinking.default_level === first.default_level)
-    ? first.default_level
-    : undefined;
-  return {
-    supported_levels: first.supported_levels,
-    ...(defaultLevel ? { default_level: defaultLevel } : {}),
-  };
 }
 
 /**
@@ -205,6 +245,7 @@ export function overlayGatewayModels(
   store: RuntimeModelCatalogSource,
   workspaceId: string,
   providers: FleetProviderModelsResponse[],
+  options: { preserveCustomProfileModels?: boolean; requireRuntimeMembership?: boolean } = {},
 ): FleetProviderModelsResponse[] {
   // Discovery off → never surface a (possibly stale) gateway snapshot; fall back
   // to the per-runtime union so turning the toggle off actually hides the models.
@@ -217,11 +258,57 @@ export function overlayGatewayModels(
     // No live gateway credential → don't surface any (possibly stale) snapshot.
     if (!engineConfig || !engineConfig.authToken) continue;
     const snapshot = store.getGatewayModels(workspaceId, engine);
-    if (!snapshot || snapshot.models.length === 0) continue;
-    // Only show a snapshot discovered for the CURRENT config revision — a changed
-    // gateway/token invalidates the old catalog until rediscovery catches up.
-    if (snapshot.sourceRevision !== engineConfig.revision) continue;
     const existing = byEngine.get(engine);
+    if (engine === "codex") {
+      const current = snapshot?.sourceRevision === engineConfig.revision ? snapshot : null;
+      const status = current ? current.lastError ? "error" : current.nativeCatalogStatus ?? "unknown" : "unknown";
+      const runtimeStatus = existing?.runtime_catalog_status;
+      const fallback = status === "error" || runtimeStatus === "error";
+      const runtimeModels = new Map((existing?.models ?? []).map(model => [model.id, model]));
+      const error = existing?.runtime_catalog_error ?? current?.lastError ?? "Codex model catalog unavailable";
+      const source = current?.models ?? [];
+      const models: FleetModelResponse[] = source.map(model => {
+        const reported = runtimeModels.get(model.id);
+        // Only entries from the actual ACP probe carry catalog provenance. Old
+        // error reports included inventory-only IDs, so their membership is untrusted.
+        const actual = reported?.catalog !== undefined;
+        const modelFallback = fallback || reported?.catalog?.status === "error";
+        const legacyFailure = !actual && reported?.thinking?.status === "error";
+        const execution_status = status === "unknown" ? "unknown" as const
+          : legacyFailure || (options.requireRuntimeMembership && !reported) ? "unavailable" as const
+          : modelFallback ? actual ? "available" as const : "unavailable" as const
+          : runtimeStatus === "ready" && !actual ? "unavailable" as const : "available" as const;
+        const thinking = status === "unknown" ? { status: "unknown" as const, supported_levels: [] }
+          : modelFallback ? actual ? reported.thinking : { status: "error" as const, supported_levels: [], error }
+          : reported?.thinking?.status === "error" ? reported.thinking
+          : model.thinking && model.thinking.status !== "unknown" ? thinkingCompatibilityResponse(model.thinking)
+          : reported?.thinking ?? (model.thinking ? thinkingCompatibilityResponse(model.thinking) : undefined);
+        return { id: model.id, label: model.label, provider: engine, execution_status,
+          ...(reported?.default && execution_status === "available" ? { default: true } : {}),
+          ...(thinking ? { thinking } : {}),
+        };
+      });
+      // A failed native download falls back to Codex's actual bundled selector.
+      // Keep those working members (and their real default/effort) visible too.
+      if (status !== "unknown") for (const model of runtimeModels.values()) {
+        if (model.catalog && (fallback || model.catalog.status === "error") && !models.some(candidate => candidate.id === model.id)) {
+          models.push({ ...model, execution_status: "available" });
+        }
+      }
+      if (options.preserveCustomProfileModels !== false) {
+        const customIds = new Set(store.listWorkspaceCodexProfileModels(workspaceId));
+        for (const model of runtimeModels.values()) if (customIds.has(model.id) && !models.some(candidate => candidate.id === model.id)) models.push(model);
+      }
+      byEngine.set(engine, {
+        provider: engine, online_runtime_count: existing?.online_runtime_count ?? 0, models,
+        model_catalog_status: status === "unknown" ? "unknown" : fallback ? "error" : "ready",
+        ...(existing?.default_thinking ? { default_thinking: status === "unknown"
+          ? { status: "unknown", supported_levels: [] }
+          : existing.default_thinking.status === "error" ? existing.default_thinking : defaultModelThinking(models) } : {}),
+      });
+      continue;
+    }
+    if (!snapshot || snapshot.sourceRevision !== engineConfig.revision || snapshot.models.length === 0) continue;
     const existingModels = existing?.models ?? [];
     const runtimeModels = new Map(existingModels.map((model) => [model.id, model]));
     const familyModels = new Map<ClaudeModelFamily, FleetModelResponse[]>();
@@ -236,19 +323,21 @@ export function overlayGatewayModels(
         if (family) gatewayFamilyCounts.set(family, (gatewayFamilyCounts.get(family) ?? 0) + 1);
       }
     }
-    const providerThinking = providerThinkingConsensus(existingModels);
     const models = snapshot.models.map((model): FleetModelResponse => {
       const runtimeModel = runtimeModels.get(model.id);
       const family = engine === "claude" ? claudeModelFamily(model.id) : undefined;
       const matchingFamilyModels = family ? familyModels.get(family) ?? [] : [];
       const familyMatched = matchingFamilyModels.length > 0;
-      // A match with no thinking metadata is a negative result and must not
-      // continue to the broader provider fallback (notably for Claude Haiku).
-      const thinking = runtimeModel
+      const gatewayThinking = model.thinking ? thinkingCompatibilityResponse(model.thinking) : undefined;
+      // Runtime loading failures mean the execution engine cannot honor even a
+      // valid gateway declaration. Otherwise per-model gateway data is authoritative.
+      const thinking = (runtimeModel?.thinking?.status === "error"
         ? runtimeModel.thinking
-        : familyMatched
-        ? familyThinkingConsensus(matchingFamilyModels)
-        : providerThinking;
+        : gatewayThinking && gatewayThinking.status !== "unknown"
+        ? gatewayThinking
+        : runtimeModel?.thinking
+          ?? (familyMatched ? familyThinkingConsensus(matchingFamilyModels) : undefined)
+          ?? gatewayThinking);
       const isDefault = runtimeModel
         ? runtimeModel.default === true
         : family !== undefined
@@ -263,8 +352,8 @@ export function overlayGatewayModels(
         ...(thinking ? { thinking } : {}),
       };
     });
-    if (engine === "codex" || engine === "claude") {
-      const customIds = new Set(engine === "codex" ? store.listWorkspaceCodexProfileModels(workspaceId) : store.listWorkspaceClaudeProfileModels(workspaceId));
+    if (options.preserveCustomProfileModels !== false) {
+      const customIds = new Set(store.listWorkspaceClaudeProfileModels(workspaceId));
       for (const model of existingModels) {
         if (customIds.has(model.id) && !models.some(candidate => candidate.id === model.id)) models.push(model);
       }
@@ -279,6 +368,28 @@ export function overlayGatewayModels(
   return [...byEngine.values()].sort((a, b) => a.provider.localeCompare(b.provider));
 }
 
+/** Separate custom connections before applying workspace gateway load status. */
+export function workspaceRuntimeModelCatalog(
+  store: RuntimeModelCatalogSource, workspaceId: string, runtimes: MultiremiRuntime[], ownerId: string,
+): FleetProviderModelsResponse[] {
+  const custom = runtimes.filter(runtime => runtime.provider === "codex" && store.getRuntimeExecutionProfile(runtime.id, "codex"));
+  const customIds = new Set(custom.map(runtime => runtime.id));
+  const providers = overlayGatewayModels(store, workspaceId,
+    fleetModelsResponse(runtimes.filter(runtime => !customIds.has(runtime.id)), ownerId));
+  const customs = fleetModelsResponse(custom, ownerId).find(provider => provider.provider === "codex");
+  if (!customs) return providers;
+  const codex = providers.find(provider => provider.provider === "codex");
+  if (!codex) return [...providers, customs].sort((a, b) => a.provider.localeCompare(b.provider));
+  codex.online_runtime_count += customs.online_runtime_count;
+  for (const model of customs.models) {
+    const available = { ...model, execution_status: "available" as const };
+    const index = codex.models.findIndex(candidate => candidate.id === model.id);
+    if (index < 0) codex.models.push(available);
+    else if (codex.models[index].execution_status !== "available") codex.models[index] = available;
+  }
+  return providers;
+}
+
 /** The selected machine/type is one execution target; its catalog never includes peers. */
 export function runtimeTargetModelCatalog(
   store: RuntimeModelCatalogSource,
@@ -289,11 +400,28 @@ export function runtimeTargetModelCatalog(
   const providers = fleetModelsResponse([{ ...runtime, status: "online", visibility: "public" }], runtime.ownerId ?? "local");
   return providers.map((entry) => {
     const profile = store.getRuntimeExecutionProfile(runtime.id, entry.provider);
-    const models = profile
-      ? runtimeConnectionModels(profile, entry.provider, entry.models)
-      : overlayGatewayModels(store, workspaceId, [entry]).find((candidate) => candidate.provider === entry.provider)?.models ?? [];
-    return { ...entry, online_runtime_count: runtime.status === "online" ? 1 : 0, models,
-      ...(profile ? { default_thinking: { supported_levels: modelThinkingLevels(models, "") } } : {}),
-    };
+    const online_runtime_count = runtime.status === "online" ? 1 : 0;
+    if (profile) {
+      const models = runtimeConnectionModels(profile, entry.provider, entry.models);
+      // Custom connections use their own catalog and never inherit a workspace
+      // gateway's native membership constraint or loading status.
+      return { ...entry, online_runtime_count, models, default_thinking: defaultModelThinking(models) };
+    }
+    const gateway = overlayGatewayModels(store, workspaceId, [entry], { preserveCustomProfileModels: entry.provider !== "codex", requireRuntimeMembership: entry.provider === "codex" })
+      .find((candidate) => candidate.provider === entry.provider);
+    return { ...(gateway ?? entry), online_runtime_count };
   });
+}
+
+/** Explicit Codex selections must be executable, regardless of effort overrides. */
+export function catalogAllowsModel(catalog: FleetProviderModelsResponse | undefined, modelId: string): boolean {
+  if (!modelId) return true;
+  const model = catalog?.models.find(model => model.id === modelId);
+  if (model?.execution_status === "available") return true;
+  if (model?.execution_status === "unavailable" || model?.execution_status === "unknown") return false;
+  if (catalog?.model_catalog_status === "unknown") return false;
+  // Disabling the display overlay must not disable a Runtime's actual selector contract.
+  if (catalog?.provider === "codex" && catalog.runtime_catalog_status) return Boolean(model?.catalog);
+  if (catalog?.model_catalog_status === "ready" || catalog?.model_catalog_status === "error") return Boolean(model);
+  return true;
 }

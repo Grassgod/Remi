@@ -30,10 +30,13 @@ interface AgentProfile {
   effortAfterModel?: Record<string, string>;
   /** Model-specific effort selector contents returned after a model switch. */
   effortOptionsAfterModel?: Record<string, Array<{ value: string; name: string; description?: string }>>;
+  /** Codex 1.12 keeps current effort and advertises the model default separately. */
+  effortRecommendationAfterModel?: Record<string, string>;
   /** Claude resolves full IDs to picker aliases; missing aliases must fail. */
   modelAliases?: Record<string, string>;
   rejectUnknownModels?: boolean;
   selectedModelOverride?: string;
+  ignoreEffortChange?: boolean;
 }
 
 interface LoggedRequest {
@@ -165,6 +168,9 @@ rl.on("line", (line) => {
     case "session/load": return ok({ sessionId: msg.params.sessionId, modes: PROFILE.modes, configOptions, models: PROFILE.models });
     case "session/set_mode": return ok({});
     case "session/set_config_option": {
+      if (PROFILE.ignoreEffortChange && configOptions.some((o) => o.id === msg.params.configId && o.category === "thought_level")) {
+        return ok({ configOptions });
+      }
       let selectedValue = msg.params.value;
       if (msg.params.configId === "model") {
         const option = configOptions.find((o) => o.id === "model");
@@ -177,11 +183,13 @@ rl.on("line", (line) => {
       configOptions = configOptions.map((o) => o.id === msg.params.configId ? { ...o, currentValue: selectedValue } : o);
       const forcedEffort = msg.params.configId === "model" ? (PROFILE.effortAfterModel || {})[msg.params.value] : undefined;
       const forcedEffortOptions = msg.params.configId === "model" ? (PROFILE.effortOptionsAfterModel || {})[msg.params.value] : undefined;
-      if (forcedEffort || forcedEffortOptions) {
+      const recommendedEffort = msg.params.configId === "model" ? (PROFILE.effortRecommendationAfterModel || {})[msg.params.value] : undefined;
+      if (forcedEffort || forcedEffortOptions || recommendedEffort) {
         configOptions = configOptions.map((o) => o.category === "thought_level" ? {
           ...o,
           ...(forcedEffort ? { currentValue: forcedEffort } : {}),
           ...(forcedEffortOptions ? { options: forcedEffortOptions } : {}),
+          ...(recommendedEffort ? { _meta: { jetbrains: { air: { recommendedValue: recommendedEffort } } } } : {}),
         } : o);
       }
       return ok({ configOptions });
@@ -279,9 +287,11 @@ describe("AcpProvider session/new payload", () => {
     expect(agent.env().ANTHROPIC_API_KEY).toBe(process.env.ANTHROPIC_API_KEY ?? null);
     expect(agent.env().ANTHROPIC_BASE_URL).toBe(process.env.ANTHROPIC_BASE_URL ?? null);
     const [initialize] = only(agent.requests(), "initialize");
-    // codex-acp reads only `terminal_output` from client capability _meta
-    // (dist/index.js:22754-22760).
-    expect(initialize.params.clientCapabilities._meta).toEqual({ terminal_output: true });
+    // Request the bridge's model recommendation without changing its current effort.
+    expect(initialize.params.clientCapabilities._meta).toEqual({
+      terminal_output: true,
+      jetbrains: { air: { version: 1, capabilities: ["recommendedValue"] } },
+    });
   });
 
   it("keeps the claude subagent-transcript capability", async () => {
@@ -476,14 +486,37 @@ describe("Claude 1M session negotiation", () => {
     } finally { await provider.close(); }
   });
 
+  it("preserves a non-1M Claude full ID selected through session metadata when the picker uses an alias", async () => {
+    const agent = fakeAgent({
+      ...claudeProfile(),
+      configOptions: [
+        { id: "model", name: "Model", category: "model", type: "select", currentValue: "opus",
+          options: [{ value: "opus", name: "Opus" }] },
+        CLAUDE_CONFIG_OPTIONS[1]!,
+      ],
+    });
+    const provider = new AcpProvider({
+      agentType: "claude", executable: agent.executable, cwd: tempCwd(),
+      env: { CLAUDE_CODE_DISABLE_1M_CONTEXT: "1" },
+    });
+    try {
+      await drain(provider.sendStream("hi", { model: "claude-opus-4-8" }));
+      expect(only(agent.requests(), "session/new")[0]!.params._meta.claudeCode.options.model).toBe("claude-opus-4-8");
+      expect(only(agent.requests(), "session/set_config_option")).toHaveLength(0);
+      expect(only(agent.requests(), "session/prompt")).toHaveLength(1);
+    } finally { await provider.close(); }
+  });
+
   it("does not normalize Claude-shaped model IDs for Codex", async () => {
     const agent = fakeAgent(codexProfile());
     const provider = new AcpProvider({ agentType: "codex", executable: agent.executable, cwd: tempCwd() });
     try {
-      await drain(provider.sendStream("hi", { model: "claude-fable-5-1" }));
+      await expect(drain(provider.sendStream("hi", { model: "claude-fable-5-1" }))).rejects.toMatchObject({
+        code: "acp_model_unsupported", model: "claude-fable-5-1",
+      });
       expect(only(agent.requests(), "session/new")[0]!.params._meta).toBeUndefined();
       expect(only(agent.requests(), "session/set_config_option")).toHaveLength(0);
-      expect(only(agent.requests(), "session/prompt")).toHaveLength(1);
+      expect(only(agent.requests(), "session/prompt")).toHaveLength(0);
     } finally { await provider.close(); }
   });
 });
@@ -504,9 +537,9 @@ describe("AcpProvider model and effort", () => {
     const models = await probeRuntimeModels({ agentType: "claude", executable: agent.executable, cwd: tempCwd() });
     expect(models).toEqual([
       { id: "default", label: "Default", default: true, providerDefault: true,
-        effort: { supportedLevels: [{ value: "high", label: "High" }] } },
+        effort: { status: "supported", supportedLevels: [{ value: "high", label: "High" }] } },
       { id: "claude-sonnet-4-6", label: "Sonnet", default: false,
-        effort: { supportedLevels: [{ value: "low", label: "Low" }] } },
+        effort: { status: "supported", supportedLevels: [{ value: "low", label: "Low" }] } },
     ]);
     expect(only(agent.requests(), "session/prompt")).toHaveLength(0);
   }, 15_000);
@@ -561,6 +594,7 @@ describe("AcpProvider model and effort", () => {
         label: "Sonnet",
         default: true,
         effort: {
+          status: "supported",
           supportedLevels: [
             { value: "high", label: "High" },
           ],
@@ -571,6 +605,8 @@ describe("AcpProvider model and effort", () => {
         label: "Opus",
         default: false,
         effort: {
+          status: "supported",
+          defaultLevel: "max",
           supportedLevels: [
             { value: "low", label: "Low" },
             { value: "max", label: "Max", description: "Deepest reasoning" },
@@ -583,6 +619,87 @@ describe("AcpProvider model and effort", () => {
     ]);
     expect(only(agent.requests(), "session/prompt")).toHaveLength(0);
     expect(only(agent.requests(), "session/close")).toHaveLength(1);
+  });
+
+  it("distinguishes absent reasoning metadata from an explicitly empty selector", async () => {
+    const cases: Array<[SessionConfigOption[], "unknown" | "unsupported"]> = [
+      [[CODEX_CONFIG_OPTIONS[0]!], "unknown"],
+      [[CODEX_CONFIG_OPTIONS[0]!, {
+        id: "reasoning_effort", name: "Reasoning effort", category: "thought_level",
+        type: "select", options: [], currentValue: "",
+      }], "unsupported"],
+    ];
+    for (const [configOptions, status] of cases) {
+      const agent = fakeAgent({ ...codexProfile(), configOptions });
+      const provider = new AcpProvider({ agentType: "codex", executable: agent.executable, cwd: tempCwd() });
+      try {
+        const models = await provider.discoverModelCapabilities();
+        expect(models).toHaveLength(2);
+        for (const model of models) {
+          expect(model.effort).toEqual({ status, supportedLevels: [] });
+        }
+      } finally {
+        await provider.close();
+      }
+      expect(only(agent.requests(), "session/prompt")).toHaveLength(0);
+    }
+  });
+
+  it("uses the recommended default when Codex preserves the previous model's current effort", async () => {
+    const agent = fakeAgent({
+      ...codexProfile(),
+      effortRecommendationAfterModel: { "gpt-5.5": "xhigh" },
+    });
+    const provider = new AcpProvider({ agentType: "codex", executable: agent.executable, cwd: tempCwd() });
+    try {
+      const models = await provider.discoverModelCapabilities();
+      expect(models[0]?.effort?.defaultLevel).toBe("medium");
+      expect(models[1]?.effort?.defaultLevel).toBe("xhigh");
+      const [initialize] = only(agent.requests(), "initialize");
+      expect(initialize?.params.clientCapabilities._meta.jetbrains.air).toEqual({
+        version: 1, capabilities: ["recommendedValue"],
+      });
+    } finally {
+      await provider.close();
+    }
+  });
+
+  it("does not report a retained effort as a model default without recommendation metadata", async () => {
+    const agent = fakeAgent(codexProfile());
+    const provider = new AcpProvider({ agentType: "codex", executable: agent.executable, cwd: tempCwd() });
+    try {
+      const models = await provider.discoverModelCapabilities();
+      expect(models[0]?.effort?.defaultLevel).toBe("medium");
+      expect(models[1]?.effort?.defaultLevel).toBeUndefined();
+      expect(models[1]?.effort?.status).toBe("supported");
+    } finally {
+      await provider.close();
+    }
+  });
+
+  it("preserves model-specific defaults and sends arbitrary advertised effort before prompting", async () => {
+    const agent = fakeAgent({
+      ...codexProfile(),
+      effortAfterModel: { "gpt-5.5": "deep" },
+      effortOptionsAfterModel: {
+        "gpt-5.5": [{ value: "deep", name: "Deep" }, { value: "thorough", name: "Thorough" }],
+      },
+    });
+    const provider = new AcpProvider({ agentType: "codex", executable: agent.executable, cwd: tempCwd() });
+    try {
+      const models = await provider.discoverModelCapabilities();
+      expect(models[0]?.effort?.defaultLevel).toBe("medium");
+      expect(models[1]?.effort?.defaultLevel).toBe("deep");
+      expect(models[1]?.effort?.supportedLevels.map((level) => level.value)).toEqual(["deep", "thorough"]);
+      await drain(provider.sendStream("hi", { chatId: "custom-effort", model: "gpt-5.5", effort: "thorough" }));
+    } finally {
+      await provider.close();
+    }
+    const requests = agent.requests();
+    const setEffortIndex = requests.findIndex((request) => request.method === "session/set_config_option"
+      && request.params.configId === "reasoning_effort" && request.params.value === "thorough");
+    expect(setEffortIndex).toBeGreaterThan(-1);
+    expect(requests.findIndex((request) => request.method === "session/prompt")).toBeGreaterThan(setEffortIndex);
   });
 
   // codex-acp registers session/set_config_option (dist/index.js:29298) and
@@ -625,7 +742,7 @@ describe("AcpProvider model and effort", () => {
     ]);
   });
 
-  it("skips a model the agent does not advertise instead of failing the turn", async () => {
+  it("rejects an unavailable explicit model before applying effort or sending a prompt", async () => {
     const agent = fakeAgent(codexProfile());
     const provider = new AcpProvider({
       agentType: "codex",
@@ -634,11 +751,55 @@ describe("AcpProvider model and effort", () => {
       getMcpServers: () => [],
     });
 
-    await drain(provider.sendStream("hi", { chatId: "c1", model: "o3-not-offered" }));
+    await expect(drain(provider.sendStream("hi", { chatId: "c1", model: "o3-not-offered", effort: "xhigh" }))).rejects.toMatchObject({
+      name: "UnsupportedAcpModelError", code: "acp_model_unsupported", model: "o3-not-offered",
+      selectedModel: "gpt-5.4",
+    });
     await provider.close();
 
     expect(only(agent.requests(), "session/set_config_option")).toHaveLength(0);
-    expect(only(agent.requests(), "session/prompt")).toHaveLength(1);
+    expect(only(agent.requests(), "session/prompt")).toHaveLength(0);
+  });
+
+  it("rejects an advertised model when the bridge acknowledges a different model", async () => {
+    const agent = fakeAgent({ ...codexProfile(), selectedModelOverride: "gpt-5.4" });
+    const provider = new AcpProvider({ agentType: "codex", executable: agent.executable, cwd: tempCwd() });
+    try {
+      await expect(drain(provider.sendStream("hi", { model: "gpt-5.5", effort: "xhigh" }))).rejects.toMatchObject({
+        code: "acp_model_unsupported", model: "gpt-5.5", selectedModel: "gpt-5.4",
+      });
+      expect(only(agent.requests(), "session/set_config_option").map((request) => request.params.configId)).toEqual(["model"]);
+      expect(only(agent.requests(), "session/prompt")).toHaveLength(0);
+    } finally {
+      await provider.close();
+    }
+  });
+
+  it("keeps an acknowledged legacy current model but rejects switching without a selector", async () => {
+    const agent = fakeAgent({ ...codexProfile(), configOptions: [] });
+    const provider = new AcpProvider({ agentType: "codex", executable: agent.executable, cwd: tempCwd() });
+    try {
+      await drain(provider.sendStream("first", { chatId: "legacy", model: "gpt-5.4" }));
+      await expect(drain(provider.sendStream("must not run", { chatId: "legacy", model: "gpt-5.5" }))).rejects.toMatchObject({
+        code: "acp_model_unsupported", model: "gpt-5.5",
+      });
+      expect(only(agent.requests(), "session/prompt")).toHaveLength(1);
+      expect(only(agent.requests(), "session/set_config_option")).toHaveLength(0);
+    } finally {
+      await provider.close();
+    }
+  });
+
+  it("does not prompt when the bridge silently retains a different effort", async () => {
+    const agent = fakeAgent({ ...codexProfile(), ignoreEffortChange: true });
+    const provider = new AcpProvider({ agentType: "codex", executable: agent.executable, cwd: tempCwd() });
+    try {
+      await expect(drain(provider.sendStream("must not run", { model: "gpt-5.4", effort: "xhigh" }))).rejects.toThrow("acp_effort_unacknowledged");
+      expect(only(agent.requests(), "session/set_config_option")).toHaveLength(1);
+      expect(only(agent.requests(), "session/prompt")).toHaveLength(0);
+    } finally {
+      await provider.close();
+    }
   });
 
   it("rejects an explicitly requested effort the selected model does not advertise", async () => {

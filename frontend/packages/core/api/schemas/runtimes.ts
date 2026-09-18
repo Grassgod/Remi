@@ -227,6 +227,8 @@ export const EMPTY_RUNTIME_PROVISION_RESPONSE: RuntimeProvisionResponse = {
 // Workspace or execution-target model catalog (`GET /api/models`).
 // Invalid capability metadata must not become selectable effort values.
 const ModelThinkingSchema = z.object({
+  status: z.enum(["supported", "unsupported", "unknown", "error"]).catch("unknown").optional(),
+  error: z.string().optional(),
   supported_levels: z.array(z.object({
     value: z.string(),
     label: z.string(),
@@ -237,6 +239,7 @@ const ModelThinkingSchema = z.object({
 
 const FleetProviderModelsSchema = z.object({
   provider: z.string(),
+  model_catalog_status: z.enum(["ready", "error", "unknown"]).catch("unknown").optional(),
   online_runtime_count: z.number().default(0),
   default_thinking: ModelThinkingSchema.optional(),
   models: z.array(
@@ -245,6 +248,7 @@ const FleetProviderModelsSchema = z.object({
       label: z.string().default(""),
       provider: z.string().optional(),
       default: z.boolean().optional(),
+      execution_status: z.enum(["available", "unavailable", "unknown"]).catch("unknown").optional(),
       thinking: ModelThinkingSchema.optional(),
     }).loose(),
   ).default([]),

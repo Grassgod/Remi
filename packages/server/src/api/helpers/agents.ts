@@ -1,5 +1,5 @@
-import { overlayGatewayModels, runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
-export { overlayGatewayModels, runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
+import { workspaceRuntimeModelCatalog, catalogAllowsModel, commonThinkingCapabilities, runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
+export { workspaceRuntimeModelCatalog, overlayGatewayModels, runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
 // Agent and skill request plumbing: the `with*RequestContext` builders that fold caller identity
 // and defaults into create/update inputs, the `load*For*` guards, and the provider/thinking-level
 // validation shared by the agents, skills and agent-template routers.
@@ -34,13 +34,12 @@ import {
 import { canCurrentUserUseRuntime } from "./runtimes.js";
 import { resolveRequestWorkspaceId } from "./workspace-context.js";
 import {
-  fleetModelsResponse,
   type FleetModelResponse,
   type FleetProviderModelsResponse,
 } from "../wire/runtimes.js";
 import { isAgentRole } from "@multiremi/store/agent-role.js";
 import { currentTaskIssueCreationRestricted } from "./issues.js";
-import { commonThinkingLevels, modelThinkingLevels } from "@multiremi/contracts/model-thinking.js";
+import { modelThinkingLevels } from "@multiremi/contracts/model-thinking.js";
 
 export const MAX_AGENT_DESCRIPTION_LENGTH = 255;
 
@@ -77,21 +76,40 @@ export function executionGroupModelCatalog(store: MultiremiStore, workspaceId: s
   const models = (catalogs[0] ?? []).flatMap((model): FleetModelResponse[] => {
     const matches = catalogs.map((catalog) => catalog.find((candidate) => candidate.id === model.id));
     if (matches.some((candidate) => !candidate)) return [];
-    const supported = (model.thinking?.supported_levels ?? []).filter((level) => matches.every((candidate) =>
-      candidate?.thinking?.supported_levels.some((entry) => entry.value === level.value)));
+    const supported = modelThinkingLevels([model], model.id).filter((level) => matches.every((candidate) =>
+      candidate && modelThinkingLevels([candidate], candidate.id).some((entry) => entry.value === level.value)));
+    const failed = matches.find((candidate) => candidate?.thinking?.status === "error")?.thinking;
+    const unknown = matches.some((candidate) => !candidate?.thinking || candidate.thinking.status === "unknown");
+    const status = failed ? "error" : unknown ? "unknown" : supported.length ? "supported" : "unsupported";
+    const explicitStatus = matches.some((candidate) => candidate?.thinking?.status !== undefined);
     const defaultLevel = model.thinking?.default_level;
     const thinkingDefault = defaultLevel && supported.some((level) => level.value === defaultLevel)
       && matches.every((candidate) => candidate?.thinking?.default_level === defaultLevel) ? defaultLevel : undefined;
     return [{
       id: model.id, label: model.label, provider: group.provider,
+      ...(matches.some(candidate => candidate?.execution_status !== undefined) ? {
+        execution_status: matches.some(candidate => candidate?.execution_status === "unknown") ? "unknown" as const
+          : matches.some(candidate => candidate?.execution_status === "unavailable") ? "unavailable" as const : "available" as const,
+      } : {}),
       ...(matches.every((candidate) => candidate?.default) ? { default: true } : {}),
-      ...(supported.length ? { thinking: { supported_levels: supported, ...(thinkingDefault ? { default_level: thinkingDefault } : {}) } } : {}),
+      ...(supported.length || explicitStatus || matches.every((candidate) => candidate?.thinking) ? { thinking: {
+        supported_levels: supported,
+        ...(explicitStatus ? { status } : {}),
+        ...(failed?.error ? { error: failed.error } : {}),
+        ...(thinkingDefault ? { default_level: thinkingDefault } : {}),
+      } } : {}),
     }];
   });
   return [{ provider: group.provider, models, online_runtime_count: runtimes.filter((runtime) => runtime.status === "online").length,
-    ...(providers.some((entry) => entry?.default_thinking) ? { default_thinking: {
-      supported_levels: commonThinkingLevels(providers.map((entry) => modelThinkingLevels(entry?.models ?? [], "", entry?.default_thinking))),
-    } } : {}),
+    ...(providers.some((entry) => entry?.model_catalog_status === "unknown")
+      ? { model_catalog_status: "unknown" as const }
+      : providers.some((entry) => entry?.model_catalog_status === "error")
+      ? { model_catalog_status: "error" as const }
+      : providers.some((entry) => entry?.model_catalog_status === "ready")
+      ? { model_catalog_status: "ready" as const } : {}),
+    ...(providers.some((entry) => entry?.default_thinking) ? { default_thinking: commonThinkingCapabilities(providers.map((entry) =>
+      entry?.default_thinking ?? { supported_levels: modelThinkingLevels(entry?.models ?? [], "") })),
+    } : {}),
   }];
 }
 
@@ -129,7 +147,7 @@ function workspaceProviderCatalog(
       : undefined;
   }
   const runtimes = store.listRuntimes().filter((runtime) => (runtime.workspaceId ?? "local") === workspaceId);
-  const providers = overlayGatewayModels(store, workspaceId, fleetModelsResponse(runtimes, callerOwnerId));
+  const providers = workspaceRuntimeModelCatalog(store, workspaceId, runtimes, callerOwnerId);
   return providers.find((entry) => entry.provider === provider);
 }
 
@@ -144,12 +162,16 @@ function validateAgentModelSelection(
     runtimeId?: string | null;
     executionGroupId?: string | null;
     ownerId?: string;
+    preserveSavedSelection?: boolean;
   },
 ): Response | null {
   const profile = input.runtimeId ? store.getRuntimeExecutionProfile(input.runtimeId, input.provider) : null;
   if (profile && input.model && input.model !== profile.model) {
     return c.json({ error: `model "${input.model}" is not supported by the selected Runtime connection; expected "${profile.model}"` }, 400);
   }
+  // Unrelated edits may resend the saved selection. Discovery must never force
+  // users to replace a saved model/effort just to edit an Agent's metadata.
+  if (input.preserveSavedSelection) return null;
   const groupCatalog = !input.runtimeId && input.executionGroupId
     ? executionGroupModelCatalog(store, input.workspaceId, input.executionGroupId, input.ownerId ?? currentRequestUserId(c))[0]
     : undefined;
@@ -159,10 +181,6 @@ function validateAgentModelSelection(
   if (groupModels && input.model && !groupModels.some((model) => model.id === input.model)) {
     return c.json({ error: `model "${input.model}" is not supported by every available member of the selected execution group` }, 400);
   }
-  // Model IDs remain an escape hatch for gateways that have not refreshed yet.
-  // Capability validation is needed only when an explicit effort override is
-  // requested, using either the concrete model or provider default capability.
-  if (!input.thinkingLevel) return null;
   const catalog = input.executionGroupId && !input.runtimeId ? groupCatalog : workspaceProviderCatalog(
     store,
     input.workspaceId,
@@ -171,6 +189,16 @@ function validateAgentModelSelection(
     input.runtimeId,
   );
   const models = catalog?.models ?? [];
+  if (!catalogAllowsModel(catalog, input.model)) {
+    return c.json({
+      code: catalog?.model_catalog_status === "unknown" ? "model_execution_catalog_unknown" : "model_not_in_execution_catalog",
+      error: catalog?.model_catalog_status === "unknown"
+        ? `model "${input.model}" cannot be selected while the Codex execution catalog is unknown or loading`
+        : `model "${input.model}" is not in the available Codex execution catalog and cannot be executed`,
+    }, 400);
+  }
+  // Unmanaged/custom connections retain their own model selection behavior.
+  if (!input.thinkingLevel) return null;
   const supportedLevels = modelThinkingLevels(models, input.model, catalog?.default_thinking);
   const selectedModel = input.model
     ? models.find((model) => model.id === input.model)
@@ -540,6 +568,7 @@ export function withAgentUpdateRequestContext(
       runtimeId: targetRuntimeId,
       executionGroupId: targetGroupId,
       ownerId: targetOwnerId,
+      preserveSavedSelection: !selectionChanged,
     });
     if (invalidSelection) return invalidSelection;
   }

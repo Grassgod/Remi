@@ -1349,7 +1349,7 @@ runMigrations(this.db);
   saveGatewayModels(
     workspaceId: string,
     engine: RelayEngine,
-    input: { models?: Array<{ id: string; label: string }>; sourceRevision: number; error?: string | null },
+    input: { models?: GatewayModelsSnapshot["models"]; sourceRevision: number; nativeCatalogStatus?: GatewayModelsSnapshot["nativeCatalogStatus"]; error?: string | null },
   ): void {
     return this.workspaces.saveGatewayModels(workspaceId, engine, input);
   }

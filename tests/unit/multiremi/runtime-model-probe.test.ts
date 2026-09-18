@@ -31,6 +31,20 @@ describe("isolated runtime model probe", () => {
     expect(await probeRuntimeModels(provider, { command: child(`process.stdout.write(${JSON.stringify(JSON.stringify(capabilities))})`) })).toEqual(capabilities);
   });
 
+  it("preserves defaults and capability states across the isolated child boundary", async () => {
+    const models = [{ id: "custom", label: "Custom", default: false,
+      effort: { status: "supported" as const, defaultLevel: "balanced", supportedLevels: [{ value: "balanced", label: "Balanced" }] } }];
+    expect(await probeRuntimeModels(provider, {
+      command: child(`process.stdout.write(${JSON.stringify(JSON.stringify(models))})`),
+    })).toEqual(models);
+    for (const invalid of [{ status: "bogus" }, { defaultLevel: 12 }]) {
+      const malformed = [{ ...models[0], effort: { ...models[0]!.effort, ...invalid } }];
+      await expect(probeRuntimeModels(provider, {
+        command: child(`process.stdout.write(${JSON.stringify(JSON.stringify(malformed))})`),
+      })).rejects.toThrow("invalid capabilities");
+    }
+  });
+
   it("bounds a hung child and supports cancellation", async () => {
     const command = child("setInterval(() => {}, 1000)");
     await expect(probeRuntimeModels(provider, { command, timeoutMs: 100 })).rejects.toThrow("timed out");

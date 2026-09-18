@@ -657,6 +657,8 @@ export interface RuntimeModel {
   label: string;
   provider?: string;
   default?: boolean;
+  /** Whether the execution target can select this model (separate from display inventory). */
+  execution_status?: "available" | "unavailable" | "unknown";
   /**
    * Per-model reasoning/effort catalog discovered by the daemon. Currently
    * populated for claude, codex, and opencode runtimes; omitted (or undefined)
@@ -667,13 +669,13 @@ export interface RuntimeModel {
 }
 
 export interface RuntimeModelThinking {
+  status?: "supported" | "unsupported" | "unknown" | "error";
+  error?: string;
   /** Levels the user is allowed to pick for this model. */
   supported_levels: RuntimeModelThinkingLevel[];
-  /** Informational: the level the upstream CLI documents as its built-in
-   *  default when no `--effort` flag is passed. Surfaced by the daemon
-   *  but not actively rendered today — Multiremi's empty `thinking_level`
-   *  means "no override; follow the runtime default", which may itself
-   *  differ from this value. */
+  /** Informational model default shown alongside the picker. An empty saved
+   *  thinking_level still means no override: follow runtime settings, which
+   *  can differ from this value. */
   default_level?: string;
 }
 
@@ -722,6 +724,8 @@ export interface RuntimeModelsResult {
  */
 export interface FleetProviderModels {
   provider: string;
+  /** A ready Codex catalog is the authoritative set of selectable models. */
+  model_catalog_status?: "ready" | "error" | "unknown";
   online_runtime_count: number;
   models: RuntimeModel[];
   default_thinking?: RuntimeModelThinking;

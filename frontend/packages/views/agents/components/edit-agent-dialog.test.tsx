@@ -35,6 +35,8 @@ vi.mock("@multiremi/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
 }));
 
+const catalog = vi.hoisted(() => ({ status: "ready", models: [] as Array<{ id: string; label: string; execution_status: string }> }));
+
 vi.mock("@multiremi/core/runtimes", async (importOriginal) => ({
   ...await importOriginal<typeof import("@multiremi/core/runtimes")>(),
   useExecutionTargetModels: (_wsId: string, provider: string) => ({
@@ -71,7 +73,8 @@ vi.mock("@multiremi/core/runtimes", async (importOriginal) => ({
               },
             },
           ]
-        : [],
+        : catalog.models,
+    modelCatalogStatus: provider === "codex" ? catalog.status : undefined,
     onlineRuntimeCount: 1,
     isLoading: false,
     isError: false,
@@ -197,11 +200,45 @@ function renderDialog(
 }
 
 afterEach(() => {
+  catalog.status = "ready";
+  catalog.models = [];
   cleanup();
   document.body.innerHTML = "";
 });
 
 describe("EditAgentDialog", () => {
+  it.each(["unknown", "error"])("allows only unrelated edits when the saved execution capability is %s", async (status) => {
+    catalog.status = status;
+    catalog.models = [{ id: "inventory-only", label: "Inventory only", execution_status: status === "unknown" ? "unknown" : "unavailable" }];
+    const { onSave } = renderDialog(makeAgent({ provider: "codex", model: "inventory-only", thinking_level: "saved-effort" }));
+    expect(screen.getByText(status === "unknown" ? "Execution capability unknown · Refreshing catalog" : "Not in execution catalog · Cannot run")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Description"), { target: { value: "Updated description" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0]?.[0]).toMatchObject({ description: "Updated description", model: "inventory-only", thinking_level: "saved-effort" });
+  });
+
+  it("blocks execution edits while the catalog is unknown", () => {
+    catalog.status = "unknown";
+    const { onSave } = renderDialog(makeAgent({ provider: "codex", model: "inventory-only", thinking_level: "" }));
+    fireEvent.change(screen.getByLabelText("Model"), { target: { value: "other-route" } });
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("keeps an unavailable saved model and reasoning unchanged during an unrelated save", async () => {
+    const { onSave } = renderDialog(makeAgent({ provider: "codex", model: "inventory-only", thinking_level: "saved-effort" }));
+    expect(screen.getByText("Not in execution catalog · Cannot run")).toBeInTheDocument();
+    expect(screen.queryByText("Reasoning capability unknown")).toBeNull();
+    expect(screen.getByLabelText("Model")).toHaveValue("inventory-only");
+    expect(screen.getByRole("combobox", { name: "Reasoning effort" })).toHaveValue("saved-effort");
+    fireEvent.change(screen.getByLabelText("Description"), { target: { value: "Updated description" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0]?.[0]).toMatchObject({ description: "Updated description", model: "inventory-only", thinking_level: "saved-effort" });
+  });
+
   it("submits the editable platform metadata in one update", async () => {
     const { onSave, onClose } = renderDialog();
 

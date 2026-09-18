@@ -20,7 +20,7 @@ import {
   loadRuntimeForCurrentEditor,
   loadRuntimeForCurrentOwner,
   loadRuntimeForCurrentUser,
-  overlayGatewayModels,
+  workspaceRuntimeModelCatalog,
   runtimeTargetModelCatalog,
   executionGroupRuntimes,
   executionGroupModelCatalog,
@@ -45,7 +45,6 @@ import {
   currentAccessToken,
   currentRequestUserId,
   directoryScanErrorResponse,
-  fleetModelsResponse,
   hasRequestField,
   parseOptionalInt,
   runtimeCompatibilityResponse,
@@ -653,9 +652,8 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
       refreshStaleGatewayModels(store, workspaceId);
       return c.json({ providers: runtimeTargetModelCatalog(store, workspaceId, runtime) });
     }
-    const providers = fleetModelsResponse(loaded.runtimes, ownerId);
     refreshStaleGatewayModels(store, workspaceId);
-    return c.json({ providers: overlayGatewayModels(store, workspaceId, providers) });
+    return c.json({ providers: workspaceRuntimeModelCatalog(store, workspaceId, loaded.runtimes, ownerId) });
   };
   app.get("/api/models", fleetModelsHandler);
   app.get("/api/multiremi/models", fleetModelsHandler);

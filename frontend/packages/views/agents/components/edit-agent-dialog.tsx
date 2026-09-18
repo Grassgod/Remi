@@ -10,7 +10,7 @@ import type {
 } from "@multiremi/core/types";
 import { AGENT_DESCRIPTION_MAX_LENGTH } from "@multiremi/core/agents";
 import { useWorkspaceId } from "@multiremi/core/hooks";
-import { useExecutionTargetModels } from "@multiremi/core/runtimes";
+import { isModelExecutionUnknown, isModelUnavailable, useExecutionTargetModels } from "@multiremi/core/runtimes";
 import { isImeComposing } from "@multiremi/core/utils";
 import { Button } from "@multiremi/ui/components/ui/button";
 import {
@@ -38,6 +38,7 @@ import { InstructionsEditor } from "./instructions-editor";
 import { ModelDropdown } from "./model-dropdown";
 import { ThinkingField } from "./thinking-field";
 import {
+  getModelThinking,
   getModelThinkingLevels,
   supportsThinkingLevel,
 } from "./inspector/thinking-levels";
@@ -87,6 +88,8 @@ export function EditAgentDialog({
   const [saving, setSaving] = useState(false);
 
   const targetModels = useExecutionTargetModels(wsId ?? "", provider, executionGroupId ? undefined : legacyRuntimeId, executionGroupId, agent.id);
+  const executionUnknown = isModelExecutionUnknown(provider, model, targetModels.models, targetModels.modelCatalogStatus);
+  const unavailable = isModelUnavailable(provider, model, targetModels.models, targetModels.modelCatalogStatus);
   const thinkingLevels = useMemo(
     () => getModelThinkingLevels(targetModels.models, model, targetModels.defaultThinking),
     [targetModels.models, model, targetModels.defaultThinking],
@@ -97,7 +100,10 @@ export function EditAgentDialog({
     Number.isInteger(concurrency) &&
     concurrency >= MIN_CONCURRENCY &&
     concurrency <= MAX_CONCURRENCY;
-  const canSave =
+  const executionChanged = provider !== (agent.provider ?? "") || model !== (agent.model ?? "")
+    || thinkingLevel !== (agent.thinking_level ?? "") || executionGroupId !== (agent.execution_group_id ?? "")
+    || legacyRuntimeId !== (agent.runtime_id ?? "");
+  const canSave = (!executionChanged || !unavailable) &&
     name.trim().length > 0 &&
     [...description].length <= AGENT_DESCRIPTION_MAX_LENGTH &&
     validConcurrency;
@@ -305,6 +311,10 @@ export function EditAgentDialog({
               <ThinkingField
                 value={thinkingLevel}
                 levels={thinkingLevels}
+                thinking={getModelThinking(targetModels.models, model, targetModels.defaultThinking)}
+                isLoading={targetModels.isLoading}
+                isError={targetModels.isError}
+                modelUnavailable={unavailable} modelExecutionUnknown={executionUnknown}
                 onChange={setThinkingLevel}
               />
             </div>

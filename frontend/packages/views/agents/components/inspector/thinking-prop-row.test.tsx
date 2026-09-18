@@ -13,10 +13,17 @@ import type { FleetModelsResponse, RuntimeModel } from "@multiremi/core/types";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import enCommon from "../../../locales/en/common.json";
 import enAgents from "../../../locales/en/agents.json";
+import zhAgents from "../../../locales/zh-Hans/agents.json";
+import jaAgents from "../../../locales/ja/agents.json";
+import koAgents from "../../../locales/ko/agents.json";
+import type { SupportedLocale } from "@multiremi/core/i18n";
 import enIssues from "../../../locales/en/issues.json";
 
 const TEST_RESOURCES = {
   en: { common: enCommon, agents: enAgents, issues: enIssues },
+  "zh-Hans": { common: enCommon, agents: zhAgents, issues: enIssues },
+  ja: { common: enCommon, agents: jaAgents, issues: enIssues },
+  ko: { common: enCommon, agents: koAgents, issues: enIssues },
 };
 
 const mockListFleetModels = vi.hoisted(() => vi.fn());
@@ -61,6 +68,7 @@ function fleet(models: RuntimeModel[]): FleetModelsResponse {
 
 function renderRow(
   props: Partial<React.ComponentProps<typeof ThinkingPropRow>> = {},
+  locale: SupportedLocale = "en",
 ) {
   const onChange = vi.fn();
   const queryClient = new QueryClient({
@@ -71,7 +79,7 @@ function renderRow(
     // inspector parent declares — otherwise the row mounts without a
     // grid context and the column layout warns. Behaviour we care about
     // (visibility + clear flow) is independent of layout.
-    <I18nProvider locale="en" resources={TEST_RESOURCES}>
+    <I18nProvider locale={locale} resources={TEST_RESOURCES}>
       <QueryClientProvider client={queryClient}>
         <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
           <ThinkingPropRow
@@ -93,6 +101,55 @@ function renderRow(
 }
 
 describe("ThinkingPropRow", () => {
+  it.each([
+    ["en", "Not in execution catalog · Cannot run"],
+    ["zh-Hans", "不在执行目录 / 不可执行"],
+    ["ja", "実行カタログにないため実行できません"],
+    ["ko", "실행 카탈로그에 없어 실행할 수 없습니다"],
+  ] as const)("shows unavailable instead of unknown and preserves saved reasoning in %s", async (locale, message) => {
+    mockListFleetModels.mockResolvedValue({ providers: [{ provider: "codex", model_catalog_status: "ready", models: [] }] });
+    const { onChange } = renderRow({ provider: "codex", model: "inventory-only", value: "saved-effort" }, locale);
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(screen.queryByText("Reasoning capability unknown")).toBeNull();
+    expect(screen.getByText("saved-effort")).toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("renders gateway-native levels and high default and emits the selected max", async () => {
+    mockListFleetModels.mockResolvedValue({ providers: [{ provider: "codex", online_runtime_count: 1, models: [{
+      id: "deepseek-flash", label: "DeepSeek Flash", thinking: {
+        status: "supported", default_level: "high",
+        supported_levels: ["low", "high", "max"].map(value => ({ value, label: value })),
+      },
+    }] }] });
+    const { onChange } = renderRow({ provider: "codex", model: "deepseek-flash" });
+    expect(await screen.findByText("Model default: high")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button"));
+    expect(await screen.findByText("low")).toBeInTheDocument();
+    expect(screen.getByText("high")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("max"));
+    expect(onChange).toHaveBeenCalledWith("max");
+  });
+
+  it("shows an authoritative capability error while preserving a saved override", async () => {
+    mockListFleetModels.mockResolvedValue(fleet([{ ...CLAUDE_MODEL, thinking: {
+      supported_levels: [{ value: "high", label: "High" }], status: "error",
+    } }]));
+    const { onChange } = renderRow({ value: "max" });
+    expect(await screen.findByText("Reasoning capability loading failed")).toBeInTheDocument();
+    expect(await screen.findByText("max")).toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button"));
+    expect(screen.queryByText("High")).toBeNull();
+  });
+
+  it("shows the advertised model default without overwriting the runtime override", async () => {
+    const { onChange } = renderRow();
+    expect(await screen.findByText("Model default: Medium")).toBeInTheDocument();
+    expect(screen.getByText("Follow runtime default")).toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockListFleetModels.mockResolvedValue(fleet([CLAUDE_MODEL]));
@@ -134,7 +191,7 @@ describe("ThinkingPropRow", () => {
       models: [CLAUDE_MODEL], default_thinking: { supported_levels: [] },
     }] });
     renderRow({ model: "" });
-    expect(await screen.findByText("Reasoning options not reported")).toBeInTheDocument();
+    expect(await screen.findByText("Reasoning configuration not supported")).toBeInTheDocument();
   });
 
   it("shows unknown capabilities instead of hiding a supported engine's row", async () => {
@@ -149,7 +206,7 @@ describe("ThinkingPropRow", () => {
         agent_id: "agent-1",
       });
     });
-    expect(await screen.findByText("Reasoning options not reported")).toBeInTheDocument();
+    expect(await screen.findByText("Reasoning capability unknown")).toBeInTheDocument();
   });
 
   it("keeps the row when Codex has no group catalog bucket", async () => {
@@ -159,7 +216,7 @@ describe("ThinkingPropRow", () => {
     await waitFor(() => {
       expect(mockListFleetModels).toHaveBeenCalled();
     });
-    expect(await screen.findByText("Reasoning options not reported")).toBeInTheDocument();
+    expect(await screen.findByText("Reasoning capability unknown")).toBeInTheDocument();
   });
 
   it("preserves reasoning choices for existing agents using automatic scheduling", async () => {
@@ -186,19 +243,19 @@ describe("ThinkingPropRow", () => {
     renderRow({ provider: "codex", model: "gpt-6-astra" });
     expect(await screen.findByText("Loading reasoning options...")).toBeInTheDocument();
     reject(new Error("catalog unavailable"));
-    expect(await screen.findByText("Could not load reasoning options")).toBeInTheDocument();
+    expect(await screen.findByText("Reasoning capability loading failed")).toBeInTheDocument();
   });
 
   it("shows newly reported Codex efforts after the catalog refreshes", async () => {
     mockListFleetModels.mockResolvedValue({ providers: [{ provider: "codex", online_runtime_count: 1,
       models: [{ id: "gpt-6-astra", label: "Astra" }] }] });
     const { queryClient } = renderRow({ provider: "codex", model: "gpt-6-astra" });
-    expect(await screen.findByText("Reasoning options not reported")).toBeInTheDocument();
+    expect(await screen.findByText("Reasoning capability unknown")).toBeInTheDocument();
     mockListFleetModels.mockResolvedValue({ providers: [{ provider: "codex", online_runtime_count: 1,
       models: [{ ...CLAUDE_MODEL, id: "gpt-6-astra", label: "Astra" }] }] });
     await queryClient.invalidateQueries();
     expect(await screen.findByText("Follow runtime default")).toBeInTheDocument();
-    expect(screen.queryByText("Reasoning options not reported")).toBeNull();
+    expect(screen.queryByText("Reasoning capability unknown")).toBeNull();
   });
 
   it("renders the row with the persisted raw token when levels are empty but value is set (stale orphan)", async () => {

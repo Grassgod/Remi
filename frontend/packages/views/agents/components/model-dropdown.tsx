@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { ChevronDown, Cpu, Loader2, Plus, Check } from "lucide-react";
-import { useExecutionTargetModels } from "@multiremi/core/runtimes";
+import { isModelCatalogRestricted, isModelExecutionUnknown, isModelUnavailable, useExecutionTargetModels } from "@multiremi/core/runtimes";
 import {
   Popover,
   PopoverTrigger,
@@ -34,7 +34,7 @@ export function ModelDropdown({
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
 
-  const { models, isLoading, isError } = useExecutionTargetModels(wsId, provider, runtimeId, executionGroupId, agentId);
+  const { models, modelCatalogStatus, isLoading, isError } = useExecutionTargetModels(wsId, provider, runtimeId, executionGroupId, agentId);
 
   const filtered = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -50,9 +50,13 @@ export function ModelDropdown({
   const exactMatch = models.some(
     (m) => m.id === trimmedSearch || m.label === trimmedSearch,
   );
-  const canCreate = trimmedSearch.length > 0 && !exactMatch;
+  const authoritative = isModelCatalogRestricted(provider, models, modelCatalogStatus);
+  const unknown = isModelExecutionUnknown(provider, value, models, modelCatalogStatus);
+  const unavailable = isModelUnavailable(provider, value, models, modelCatalogStatus);
+  const canCreate = !isLoading && !authoritative && trimmedSearch.length > 0 && !exactMatch;
 
   const select = (id: string) => {
+    if (isModelUnavailable(provider, id, models, modelCatalogStatus)) return;
     onChange(id);
     setOpen(false);
     setSearch("");
@@ -117,8 +121,9 @@ export function ModelDropdown({
                 <button
                   type="button"
                   key={m.id}
+                  disabled={isModelUnavailable(provider, m.id, models, modelCatalogStatus)}
                   onClick={() => select(m.id)}
-                  className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors ${
+                  className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                     m.id === value ? "bg-accent" : "hover:bg-accent/50"
                   }`}
                 >
@@ -127,6 +132,12 @@ export function ModelDropdown({
                     {m.label !== m.id && (
                       <div className="truncate text-xs text-muted-foreground">
                         {m.id}
+                      </div>
+                    )}
+                    {isModelUnavailable(provider, m.id, models, modelCatalogStatus) && (
+                      <div className="text-xs text-muted-foreground">
+                        {isModelExecutionUnknown(provider, m.id, models, modelCatalogStatus)
+                          ? t(($) => $.pickers.model_execution_unknown) : t(($) => $.pickers.model_unavailable)}
                       </div>
                     )}
                   </div>
@@ -167,6 +178,9 @@ export function ModelDropdown({
           </div>
         </PopoverContent>
       </Popover>
+      {(unavailable || unknown) && <span className="mt-1 text-xs text-destructive" role="status">
+        {unknown ? t(($) => $.pickers.model_execution_unknown) : t(($) => $.pickers.model_unavailable)}
+      </span>}
     </div>
   );
 }

@@ -488,11 +488,13 @@ export class AcpClient {
         // `subagent-transcript` opts into subagent prose: claude-agent-acp >= 0.66
         // strips a subagent's text/thinking chunks unless the client declares it
         // (the bridge checks `capabilities?._meta?.["subagent-transcript"] === true`).
-        // codex-acp reads exactly one client `_meta` key — `terminal_output`
-        // (dist/index.js:22754-22760) — so the claude-only key is left out there.
+        // Codex's recommendedValue extension distinguishes model defaults from
+        // a session's current effort, which can survive a model switch.
         _meta: {
           terminal_output: true,
-          ...(this._options.agentType === "codex" ? {} : { "subagent-transcript": true }),
+          ...(this._options.agentType === "codex"
+            ? { jetbrains: { air: { version: 1, capabilities: ["recommendedValue"] } } }
+            : { "subagent-transcript": true }),
         },
         fs: { readTextFile: true, writeTextFile: true },
         // Form-elicitation support: the agent keeps AskUserQuestion enabled and

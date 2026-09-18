@@ -1005,6 +1005,9 @@ export interface MultiremiRuntimeModelThinkingLevel {
 }
 
 export interface MultiremiRuntimeModelThinking {
+  /** Missing status is a legacy report; an explicit empty level set is unsupported. */
+  status?: "supported" | "unsupported" | "unknown" | "error";
+  error?: string;
   supportedLevels: MultiremiRuntimeModelThinkingLevel[];
   supported_levels?: MultiremiRuntimeModelThinkingLevel[];
   defaultLevel?: string;
@@ -1019,6 +1022,8 @@ export interface MultiremiRuntimeModel {
   /** Capability of the provider's default selector; excluded from concrete model pickers. */
   providerDefault?: boolean;
   thinking?: MultiremiRuntimeModelThinking;
+  /** Native catalog load result. Concrete entries are actual ACP-selectable members, even on fallback. */
+  catalog?: { status: "ready" | "error"; error?: string };
   createdAt?: string;
   updatedAt?: string;
 }
