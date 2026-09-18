@@ -2752,6 +2752,7 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_attachments", "chat_message_id TEXT");
   ensureIssueSubscriberTypedSchema(db);
   addColumnIfMissing(db, "multiremi_chat_sessions", "creator_id TEXT");
+  addColumnIfMissing(db, "multiremi_chat_sessions", "project_id TEXT");
   addColumnIfMissing(db, "multiremi_chat_sessions", "unread_since TEXT");
   addColumnIfMissing(db, "multiremi_chat_sessions", "pinned INTEGER NOT NULL DEFAULT 0");
   // Pool scheduling records the machine + engine that produced the promoted
@@ -2865,6 +2866,13 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_tasks", "projection_truncated INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(db, "multiremi_tasks", "projection_omitted_events INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(db, "multiremi_tasks", "projection_estimated_tokens INTEGER NOT NULL DEFAULT 0");
+  // NULL means no inherited projection has been recorded for this task.
+  addColumnIfMissing(db, "multiremi_tasks", "inherited_projection_truncated INTEGER");
+  addColumnIfMissing(db, "multiremi_tasks", "inherited_projection_omitted_events INTEGER");
+  addColumnIfMissing(db, "multiremi_tasks", "inherited_projection_estimated_tokens INTEGER");
+  addColumnIfMissing(db, "multiremi_tasks", "inherited_projection_to_seq INTEGER");
+  addColumnIfMissing(db, "multiremi_tasks", "inherited_projection_token_budget INTEGER");
+  addColumnIfMissing(db, "multiremi_tasks", "inherited_projection_recorded_at TEXT");
   addColumnIfMissing(db, "multiremi_task_messages", "tool_call_id TEXT");
   addColumnIfMissing(db, "multiremi_task_messages", "status TEXT");
   addColumnIfMissing(db, "multiremi_task_messages", "meta TEXT");

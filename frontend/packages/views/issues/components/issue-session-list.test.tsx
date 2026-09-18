@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import type { Agent, IssueSession } from "@multiremi/core/types";
 import enCommon from "../../locales/en/common.json";
@@ -14,14 +14,11 @@ const addParticipantState = vi.hoisted(() => ({
   isPending: false,
   variables: undefined as { participantType: string; participantId: string } | undefined,
 }));
+const createSession = vi.hoisted(() => vi.fn());
 
 vi.mock("@multiremi/core/issues", () => ({
   useAddSessionParticipant: () => addParticipantState,
-}));
-
-// The session bar has its own spec; stub it so this file only exercises the rail.
-vi.mock("./issue-session-bar", () => ({
-  NewSessionButton: () => <button type="button">New session</button>,
+  useCreateIssueSession: () => ({ mutateAsync: createSession, isPending: false }),
 }));
 
 vi.mock("../../common/actor-avatar", () => ({
@@ -60,6 +57,10 @@ function makeSession(overrides: Partial<IssueSession> = {}): IssueSession {
     title: "Main",
     status: "active",
     is_default: true,
+    parent_session_id: null,
+    inherit_mode: "none",
+    inherit_cutoff_seq: null,
+    inherited_event_count: 0,
     summary: null,
     created_by_type: "system",
     created_by_id: null,
@@ -72,15 +73,19 @@ function makeSession(overrides: Partial<IssueSession> = {}): IssueSession {
 
 const SESSIONS = [makeSession(), makeSession({ id: "session-2", title: "Review", is_default: false })];
 
-function renderRail(sessions: IssueSession[], agents: Agent[] = []) {
+function renderRail(
+  sessions: IssueSession[],
+  agents: Agent[] = [],
+  options: { selectedSessionId?: string; onSelectSession?: (sessionId: string) => void } = {},
+) {
   return render(
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
       <IssueSessionList
         issueId="issue-1"
         sessions={sessions}
-        selectedSessionId="session-main"
+        selectedSessionId={options.selectedSessionId ?? "session-main"}
         agents={agents}
-        onSelectSession={vi.fn()}
+        onSelectSession={options.onSelectSession ?? vi.fn()}
       />
     </I18nProvider>,
   );
@@ -112,7 +117,7 @@ describe("IssueSessionList rail", () => {
     expect(screen.getByText("Sessions").parentElement).toContainElement(newSession[0]!);
   });
 
-  it("offers participants and nothing else in the row menu", async () => {
+  it("offers participants and side chat in a regular session's row menu", async () => {
     // Publishing a result and delegating a task used to sit here too. Both are
     // agent-side actions driven from the CLI — members never used the buttons,
     // so the page no longer shows them (MUL-204).
@@ -120,7 +125,98 @@ describe("IssueSessionList rail", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Session actions" })[0]!);
 
     const items = await screen.findAllByRole("menuitem");
+    expect(items.map((item) => item.textContent)).toEqual(["Session participants", "Side chat"]);
+  });
+
+  it("opens a discussion prefilled with the chosen parent and selects the created side chat", async () => {
+    createSession.mockResolvedValue({ id: "session-side" });
+    const onSelectSession = vi.fn();
+    renderRail(SESSIONS, [], { onSelectSession });
+    fireEvent.click(screen.getAllByRole("button", { name: "Session actions" })[1]!);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Side chat" }));
+
+    expect(await screen.findByRole("combobox")).toHaveValue("session-2");
+    expect(screen.getByRole("button", { name: "Discussion" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Work" })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Session name"), {
+      target: { value: "Review side chat" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(createSession).toHaveBeenCalledWith({
+      title: "Review side chat",
+      holds_workspace: false,
+      parent_session_id: "session-2",
+    }));
+    expect(onSelectSession).toHaveBeenCalledWith("session-side");
+  });
+
+  it("does not offer side chat from an existing side session", async () => {
+    renderRail([makeSession({ parent_session_id: "absent-parent" })]);
+    fireEvent.click(screen.getByRole("button", { name: "Session actions" }));
+
+    const items = await screen.findAllByRole("menuitem");
     expect(items.map((item) => item.textContent)).toEqual(["Session participants"]);
+  });
+
+  it("groups children immediately after their parent with one indent and preserves selection", () => {
+    const onSelectSession = vi.fn();
+    renderRail([
+      makeSession({ id: "side-1", title: "First side", is_default: false, parent_session_id: "session-main" }),
+      SESSIONS[0]!,
+      SESSIONS[1]!,
+      makeSession({ id: "side-2", title: "Second side", is_default: false, parent_session_id: "session-main" }),
+    ], [], { selectedSessionId: "side-2", onSelectSession });
+
+    const rows = screen.getAllByRole("button", { name: /^(Main|First side|Second side|Review)/ });
+    expect(rows.map((row) => row.querySelector(".text-xs")?.textContent)).toEqual([
+      "Main", "First side", "Second side", "Review",
+    ]);
+    expect(rows[0]!.parentElement).not.toHaveClass("ml-3");
+    expect(rows[1]!.parentElement).toHaveClass("ml-3");
+    expect(rows[2]!.parentElement).toHaveClass("ml-3", "bg-accent");
+    expect(rows[3]!.parentElement).not.toHaveClass("ml-3");
+    fireEvent.click(rows[0]!);
+    fireEvent.click(rows[2]!);
+    expect(onSelectSession.mock.calls).toEqual([["session-main"], ["side-2"]]);
+  });
+
+  it("keeps an orphan side session visible as a flat, selectable row", () => {
+    const onSelectSession = vi.fn();
+    renderRail([
+      makeSession({ id: "orphan", title: "Orphan", is_default: false, parent_session_id: "filtered-parent" }),
+      SESSIONS[0]!,
+    ], [], { onSelectSession });
+
+    const orphan = screen.getByRole("button", { name: /^Orphan/ });
+    expect(orphan.parentElement).not.toHaveClass("ml-3");
+    fireEvent.click(orphan);
+    expect(onSelectSession).toHaveBeenCalledWith("orphan");
+  });
+
+  it("shows the inherited raw event range using the parent's display name", () => {
+    renderRail([
+      makeSession({ title: "Stored default title" }),
+      makeSession({ id: "side", title: "Side", is_default: false, parent_session_id: "session-main", inherited_event_count: 12 }),
+      SESSIONS[1]!,
+      makeSession({ id: "review-side", title: "Review side", is_default: false, parent_session_id: "session-2", inherited_event_count: 3 }),
+    ]);
+
+    expect(screen.getByText("Inherits Main 1–12")).toBeInTheDocument();
+    expect(screen.getByText("Inherits Review 1–3")).toBeInTheDocument();
+    expect(screen.queryByText(/Stored default title/)).not.toBeInTheDocument();
+  });
+
+  it("omits the inherited range when the count is zero or the parent is absent", () => {
+    renderRail([
+      SESSIONS[0]!,
+      makeSession({ id: "empty-side", title: "Empty side", is_default: false, parent_session_id: "session-main", inherited_event_count: 0 }),
+      makeSession({ id: "orphan", title: "Orphan", is_default: false, parent_session_id: "absent-parent", inherited_event_count: 12 }),
+    ]);
+
+    expect(screen.getByRole("button", { name: /^Empty side/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Orphan/ })).toBeInTheDocument();
+    expect(screen.queryByText(/^Inherits /)).not.toBeInTheDocument();
   });
 
   it("carries the scope as a tooltip so the narrow header can stay one word", () => {

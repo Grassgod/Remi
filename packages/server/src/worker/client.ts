@@ -1466,6 +1466,7 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
     priorWorkDir: stringOrNull(raw.prior_work_dir ?? raw.priorWorkDir ?? raw.work_dir ?? raw.workDir),
     authToken: stringOrNull(raw.auth_token ?? raw.authToken),
     chatMessage: stringOrNull(raw.chat_message ?? raw.chatMessage),
+    chatProjectId: stringOrNull(raw.chat_project_id ?? raw.chatProjectId),
     boundIssueUpdates: Array.isArray(raw.bound_issue_updates)
       ? raw.bound_issue_updates.filter((value: unknown): value is string => typeof value === "string")
       : Array.isArray(raw.boundIssueUpdates)
@@ -1532,6 +1533,17 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
     repos: normalizeRepoList(Array.isArray(raw.repos) ? raw.repos : []),
     usage: Array.isArray(raw.usage) ? raw.usage : [],
   };
+  if (Object.hasOwn(raw, "chat_auto_checkout_repos") || Object.hasOwn(raw, "chatAutoCheckoutRepos")) {
+    const keepChatRepos = normalized.chatSessionId && !normalized.issueId && !normalized.issue
+      && normalized.chatProjectId && normalized.chatProjectId === normalized.project?.id
+      && normalized.project.workspaceId === normalized.workspaceId;
+    const chatRepos = raw.chat_auto_checkout_repos ?? raw.chatAutoCheckoutRepos;
+    normalized.chatAutoCheckoutRepos = keepChatRepos && Array.isArray(chatRepos)
+      ? normalizeRepoList(chatRepos)
+      : [];
+    // Do not leave a rejected snake_case alias available to daemon field helpers.
+    delete normalized.chat_auto_checkout_repos;
+  }
   return normalized as MultiremiTaskWithAgent;
 }
 

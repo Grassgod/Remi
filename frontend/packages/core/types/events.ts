@@ -271,6 +271,12 @@ export interface TaskMessagePayload {
   created_at?: string;
 }
 
+export interface TaskProgressPayload {
+  task_id: string;
+  chat_session_id?: string;
+  progress_summary?: string | null;
+}
+
 export interface TaskQueuedPayload {
   task_id: string;
   agent_id: string;
@@ -503,7 +509,7 @@ export interface WSEventPayloadMap {
   "task:failed": TaskFailedPayload;
   "task:message": TaskMessagePayload;
   "task:cancelled": TaskCancelledPayload;
-  "task:progress": unknown;
+  "task:progress": TaskProgressPayload;
   "inbox:new": InboxNewPayload;
   "inbox:read": InboxReadPayload;
   "inbox:archived": InboxArchivedPayload;

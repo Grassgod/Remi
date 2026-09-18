@@ -320,6 +320,7 @@ import type {
   MultiremiSessionEvent,
   MultiremiSessionParticipant,
   MultiremiSessionProjection,
+  MultiremiSessionInheritedContext,
   MultiremiSessionResult,
   MultiremiSystemEvent,
   MultiremiSquad,
@@ -3473,6 +3474,10 @@ runMigrations(this.db);
 
   getIssueSession(id: string): MultiremiIssueSession | null {
     return this.sessions.getIssueSession(id);
+  }
+
+  getSessionInheritedContext(sessionId: string): MultiremiSessionInheritedContext | null {
+    return this.sessions.getSessionInheritedContext(sessionId);
   }
 
   listIssueSessions(issueId: string, includeArchived = false): MultiremiIssueSession[] {

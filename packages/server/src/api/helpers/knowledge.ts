@@ -28,6 +28,7 @@ export interface KnowledgeWriteActor {
   agent: MultiremiAgent | null;
   canPublish: boolean;
   scheduledProjectId?: string | null;
+  chatProjectId?: string | null;
   sourceRevision: string | null;
 }
 
@@ -62,6 +63,20 @@ export function resolveKnowledgeWriteActor(c: Context, store: MultiremiStore): K
   }
   const target = task.autopilotRunId ? store.getAutopilotRun(task.autopilotRunId)?.scheduleTarget : null;
   const project = target?.kind === "project" ? store.getProject(target.id) : null;
+  const chat = task.chatSessionId && !task.issueId ? store.getChatSession(task.chatSessionId) : null;
+  // Project context alone is not authority: old Chat task audits can retain an
+  // Issue's Project. Require the explicit binding marker and the current Chat
+  // binding to agree with the hydrated, same-workspace Project.
+  const chatProjectId = task.chatProjectId
+    && chat?.status === "active"
+    && chat.workspaceId === task.workspaceId
+    && chat.agentId === task.agentId
+    && chat.projectId === task.chatProjectId
+    && task.project?.id === task.chatProjectId
+    && task.project.workspaceId === task.workspaceId
+    && !task.project.archivedAt
+    ? task.chatProjectId
+    : null;
   return {
     kind: "agent",
     task,
@@ -69,6 +84,7 @@ export function resolveKnowledgeWriteActor(c: Context, store: MultiremiStore): K
     agent,
     canPublish: agentHasKnowledgePublishCapability(store, agent),
     scheduledProjectId: project?.workspaceId === task.workspaceId && !project.archivedAt ? project.id : null,
+    chatProjectId,
     sourceRevision: resolveTaskSourceRevision(store, task),
   };
 }
@@ -83,6 +99,7 @@ export function resolveTaskSourceRevision(store: MultiremiStore, task: Multiremi
 export function assertProjectKnowledgeTarget(actor: KnowledgeWriteActor, projectId: string): void {
   if (!actor.task) return;
   if (actor.scheduledProjectId === projectId) return;
+  if (actor.chatProjectId === projectId) return;
   if (!actor.issue || actor.issue.projectId !== projectId) {
     throw new KnowledgeWritePolicyError("task knowledge target does not match its issue project");
   }

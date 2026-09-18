@@ -22,6 +22,10 @@ export interface IssueSession {
   status: IssueSessionStatus;
   is_default: boolean;
   holds_workspace?: boolean;
+  parent_session_id: string | null;
+  inherit_mode: "none" | "snapshot";
+  inherit_cutoff_seq: number | null;
+  inherited_event_count: number;
   summary: string | null;
   created_by_type: string;
   created_by_id: string | null;
@@ -59,6 +63,7 @@ export interface SessionResult {
 export interface CreateIssueSessionRequest {
   title: string;
   holds_workspace?: boolean;
+  parent_session_id?: string;
 }
 
 export interface CreateSessionTaskRequest {

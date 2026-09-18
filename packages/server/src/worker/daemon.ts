@@ -5,7 +5,7 @@ import { assertRuntimeClaudeProjectCredentials, resolveRuntimeClaudeProfile, run
 import { resolveRuntimeCodexProfile } from "@daemon/agent-runtime/codex-profile.js";
 import { discoverRuntimeProfileModels } from "./runtime-profile-models.js";
 import { isPermanentFeishuDeliveryError } from "@shared/feishu-delivery-error.js";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, realpathSync } from "node:fs";
 import { cpus, homedir, hostname } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { createLogger } from "@shared/logger.js";
@@ -22,6 +22,7 @@ import {
 import type { ElicitationCreateParams, ElicitationResult, PermissionOutcome, RequestPermissionParams } from "@shared/contracts/acp-protocol.js";
 import { answersToElicitationContent, elicitationToQuestions } from "@shared/contracts/acp-elicitation.js";
 import type { AgentResponse, Provider } from "@shared/contracts/provider-types.js";
+import type { AgentTask } from "@daemon/contracts/types.js";
 import {
   DEFAULT_DAEMON_REQUEST_TIMEOUT_MS,
   isTerminalDaemonAuthorityError,
@@ -106,6 +107,7 @@ import {
   type IssueSessionProviderHome,
 } from "@daemon/agent-runtime/workspace/session-home.js";
 import { prepareIssueWikiWorkspace } from "@daemon/agent-runtime/workspace/wiki.js";
+import { prepareChatRepositories } from "@daemon/agent-runtime/workspace/chat-repos.js";
 import { materializeChatAttachments } from "@daemon/agent-runtime/workspace/chat-attachments.js";
 import { cleanProcessEnv } from "@daemon/agent-runtime/env/injector.js";
 import { mergeCodexSessionConfig } from "@daemon/agent-runtime/relay-sync.js";
@@ -477,6 +479,7 @@ interface RunSummary {
 }
 
 interface PreparedIssueWorkspace {
+  wikiMaterialized?: boolean;
   checkouts: TaskRepoCheckout[];
   repos: MultiremiIssueWorkspaceRepo[];
   warnings: TaskRepoWarning[];
@@ -2736,6 +2739,18 @@ export class MultiremiDaemon {
         this.assertWorkspaceRootOwner();
       }
       resolvedWorkDir = await this.resolveTaskWorkDir(task, abort.signal);
+      if (resolvedWorkDir.resetSession) {
+        const projection = (task as AgentTask).sessionProjection ?? (task as AgentTask).session_projection;
+        if (projection?.mode === "delta") {
+          // Only this host can detect symlink/ownership changes. A delta lacks
+          // the earlier conversation, so use the existing resume-unsafe retry
+          // to obtain a complete bootstrap projection before starting a provider.
+          const error = new LocalDirectoryError("Chat workspace changed; a full bootstrap is required before resuming");
+          error.failureReason = "agent_error.stale_session";
+          throw error;
+        }
+        task = { ...task, sessionId: null, workDir: resolvedWorkDir.workDir };
+      }
       const issueRuntimeStateRoot = resolveIssueRuntimeStateRoot(
         task,
         resolvedWorkDir.workDir,
@@ -2964,8 +2979,8 @@ export class MultiremiDaemon {
    * Pre-flight repo materialization: check out every task repo as a worktree
    * in the task's workDir before the agent starts, so an issue's work is
    * branch-isolated from the first turn without relying on the agent running
-   * `remi repo checkout` itself. Scope is deliberately narrow: issue tasks
-   * only, and only in daemon-owned dirs (never local_directory).
+   * `remi repo checkout` itself. Project-bound Chat uses only its explicitly
+   * declared repository list, in daemon-owned dirs (never local_directory).
    * An existing worktree is reused as-is so a resumed task keeps uncommitted
    * work, and any failure degrades to the manual-checkout prompt instead of
    * failing the task.
@@ -2976,16 +2991,17 @@ export class MultiremiDaemon {
     syncResults: MultiremiRepoSyncResult[],
     signal: AbortSignal,
   ): Promise<PreparedIssueWorkspace> {
-    const repos = normalizeRepoList(task.repos ?? []);
+    const boundChat = this.canAutoCheckoutChatRepos(task, resolvedWorkDir);
+    const repos = normalizeRepoList(boundChat ? task.chatAutoCheckoutRepos ?? [] : task.repos ?? []);
     const warnings = repoWarningsFromSyncResults(syncResults);
-    if (!repos.length || !task.issueId || !resolvedWorkDir.ensureDir || resolvedWorkDir.localDirectory) {
+    if (!repos.length || (!task.issueId && !boundChat) || !resolvedWorkDir.ensureDir || resolvedWorkDir.localDirectory) {
       return { checkouts: [], repos: [], warnings };
     }
     const checkouts: TaskRepoCheckout[] = [];
     const workspaceRepos: MultiremiIssueWorkspaceRepo[] = [];
     const runtimeId = task.runtimeId ?? this.options.runtimeId;
-    const branchName = `agent/${task.issue?.key ?? task.id}`;
-    if (runtimeId) {
+    const branchName = boundChat ? `chat/${task.chatSessionId}` : `agent/${task.issue?.key ?? task.id}`;
+    if (runtimeId && task.issueId) {
       this.enqueueTaskReport(task.id, "workspace", {
         runtimeId,
         rootPath: resolvedWorkDir.workDir,
@@ -3002,6 +3018,7 @@ export class MultiremiDaemon {
         }
         await this.ensureRepoReady(task.workspaceId, repo.url, signal);
         this.assertWorkspaceRootOwner();
+        if (boundChat) this.repoCache.hasWorktree({ workspaceId: task.workspaceId, repoUrl: repo.url, workDir: resolvedWorkDir.workDir });
         const result = await this.repoCache.createWorktree({
           workspaceId: task.workspaceId,
           repoUrl: repo.url,
@@ -3054,7 +3071,7 @@ export class MultiremiDaemon {
         log.warn(`Auto checkout of ${repo.url} failed for task ${task.id}: ${error}`);
       }
     }
-    if (runtimeId) {
+    if (runtimeId && task.issueId) {
       this.enqueueTaskReport(task.id, "workspace", {
         runtimeId,
         rootPath: resolvedWorkDir.workDir,
@@ -3066,6 +3083,101 @@ export class MultiremiDaemon {
     return { checkouts, repos: workspaceRepos, warnings };
   }
 
+  private canAutoCheckoutChatRepos(task: MultiremiTaskWithAgent, workDir: ResolvedTaskWorkDir): boolean {
+    const bound = Boolean(task.chatSessionId && !task.issueId && !task.issue
+      && task.chatProjectId && task.chatProjectId === task.project?.id
+      && task.project.workspaceId === task.workspaceId && task.holdsWorkspace !== false
+      && workDir.ensureDir && !workDir.localDirectory);
+    if (!bound) return false;
+    // A former local_directory can survive in task.workDir after the Project
+    // resource is removed. ensureDir alone does not prove daemon ownership.
+    try {
+      const root = realpathSync(this.options.workspacesRoot);
+      return realpathSync(workDir.workDir) === join(root, "chats", task.chatSessionId!);
+    } catch {
+      return false;
+    }
+  }
+
+  private async prepareChatTaskWorkspace(
+    task: MultiremiTaskWithAgent,
+    resolvedWorkDir: ResolvedTaskWorkDir,
+    signal: AbortSignal,
+  ): Promise<PreparedIssueWorkspace> {
+    const plan = await prepareChatRepositories({
+      workDir: resolvedWorkDir.workDir,
+      workspaceId: task.workspaceId,
+      chatSessionId: task.chatSessionId!,
+      projectId: task.chatProjectId!,
+      repos: normalizeRepoList(task.chatAutoCheckoutRepos ?? []),
+      cache: this.repoCache,
+      signal,
+    });
+    // Register the allowlist on every turn, including after daemon restart,
+    // without fetching an already materialized worktree.
+    const allowed = this.workspaceRepoUrls.get(task.workspaceId) ?? new Set<string>();
+    for (const repo of plan.repos) allowed.add(repo.url);
+    this.workspaceRepoUrls.set(task.workspaceId, allowed);
+    if (plan.reposToSync.length) this.enqueueTaskReport(task.id, "progress", {
+      summary: "正在准备项目仓库…", step: 1, total: 3,
+    });
+    const syncResults = await this.syncColdChatRepos(task.workspaceId, plan.reposToSync, signal);
+    const prepared = await this.prepareTaskWorkspace(
+      { ...task, chatAutoCheckoutRepos: plan.repos }, resolvedWorkDir, syncResults, signal,
+    );
+    await plan.recordCheckouts(prepared.checkouts);
+    if (plan.reposToSync.length) this.enqueueTaskReport(task.id, "progress", {
+      summary: "项目仓库准备完成，正在启动智能体…", step: 1, total: 3,
+    });
+    return { ...prepared, warnings: [...plan.warnings, ...prepared.warnings] };
+  }
+
+  private async syncColdChatRepos(
+    workspaceId: string,
+    repos: MultiremiRepoData[],
+    signal: AbortSignal,
+    budgetMs = chatRepoStartupBudgetMs(),
+  ): Promise<MultiremiRepoSyncResult[]> {
+    if (!repos.length) return [];
+    // Chat has one shared network budget, independent of the much longer
+    // per-repository budgets needed by Issue jobs. Await cancellation so no
+    // background clone races the agent or a subsequent checkout.
+    const expiresAt = Date.now() + budgetMs;
+    const results: MultiremiRepoSyncResult[] = [];
+    for (const repo of repos) {
+      signal.throwIfAborted();
+      const remainingMs = expiresAt - Date.now();
+      const cached = Boolean(this.repoCache.lookup(workspaceId, repo.url));
+      const timeoutError = `Chat repository startup exceeded ${budgetMs}ms network budget`;
+      if (remainingMs <= 0) {
+        results.push({ repoUrl: repo.url, status: cached ? "cached" : "failed", error: timeoutError });
+        continue;
+      }
+      // Refreshing an existing cache gets a short budget; initial clones may
+      // consume the remainder. Earlier successes survive a later timeout.
+      const repoBudgetMs = cached ? Math.min(30_000, remainingMs) : remainingMs;
+      const deadline = new AbortController();
+      const error = cached && repoBudgetMs < remainingMs
+        ? `Chat cached repository refresh exceeded ${repoBudgetMs}ms network budget`
+        : timeoutError;
+      const timeout = setTimeout(() => deadline.abort(new Error(error)), repoBudgetMs);
+      try {
+        results.push(...await this.registerTaskRepos(workspaceId, [repo], AbortSignal.any([signal, deadline.signal])));
+      } catch (error) {
+        signal.throwIfAborted();
+        if (!deadline.signal.aborted) throw error;
+        results.push({
+          repoUrl: repo.url,
+          status: this.repoCache.lookup(workspaceId, repo.url) ? "cached" : "failed",
+          error: deadline.signal.reason.message,
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+    return results;
+  }
+
   private async prepareTaskWorkspace(
     task: MultiremiTaskWithAgent,
     resolvedWorkDir: ResolvedTaskWorkDir,
@@ -3075,10 +3187,11 @@ export class MultiremiDaemon {
     if (task.holdsWorkspace === false) return { checkouts: [], repos: [], warnings: [] };
     if (task.issue?.issueKind !== "intake") {
       const prepared = await this.autoCheckoutTaskRepos(task, resolvedWorkDir, syncResults, signal);
+      let wikiMaterialized = false;
       if (!resolvedWorkDir.localDirectory && !task.issueSessionId) {
-        await prepareIssueWikiWorkspace(resolvedWorkDir.workDir, task);
+        wikiMaterialized = Boolean(await prepareIssueWikiWorkspace(resolvedWorkDir.workDir, task));
       }
-      return prepared;
+      return { ...prepared, wikiMaterialized };
     }
     if (!task.issueId || !resolvedWorkDir.ensureDir || resolvedWorkDir.localDirectory) {
       throw new Error("Intake tasks require a daemon-owned issue workspace");
@@ -3431,18 +3544,20 @@ export class MultiremiDaemon {
     // Only create dirs the daemon owns. local_directory paths are validated
     // separately and carry ensureDir=false.
     if (resolvedWorkDir.ensureDir) mkdirSync(workDir, { recursive: true });
-    // Homepage Chat starts from the safe database directory and performs Git
-    // work only through an explicit `remi repo checkout`. Keep Issue task repo
-    // preparation unchanged, including for any task that also carries Chat
-    // metadata but is anchored to an Issue workspace.
+    // Unbound Chat retains its on-demand checkout behavior. Bound Chat prepares
+    // only explicit Project repositories, fetching only absent worktrees.
     const homepageChat = Boolean(task.chatSessionId && !task.issueId);
     const repoSyncResults = homepageChat || task.holdsWorkspace === false
       ? []
       : await this.registerTaskRepos(task.workspaceId, task.repos ?? [], signal);
+    const chatRepoAutoCheckout = this.canAutoCheckoutChatRepos(task, resolvedWorkDir);
     const preparedWorkspace = await this.issueWorkspaceLifecycleLocks.runExclusive(`prepare:${codeWorkDir}`, () =>
-      this.prepareTaskWorkspace(task, resolvedWorkDir, repoSyncResults, signal));
+      chatRepoAutoCheckout
+        ? this.prepareChatTaskWorkspace(task, resolvedWorkDir, signal)
+        : this.prepareTaskWorkspace(task, resolvedWorkDir, repoSyncResults, signal));
+    let wikiMaterialized = preparedWorkspace.wikiMaterialized ?? false;
     if (task.issueSessionId && task.holdsWorkspace !== false && !resolvedWorkDir.localDirectory) {
-      await prepareIssueWikiWorkspace(workDir, task);
+      wikiMaterialized = Boolean(await prepareIssueWikiWorkspace(workDir, task));
     }
     this.assertWorkspaceRootOwner();
     if (task.chatMessageAttachments?.length) {
@@ -3540,8 +3655,10 @@ export class MultiremiDaemon {
       const session = new AgentSession(provider as any, config);
       messageBatcher.push([{ type: "execution", meta: { agentName: agent.name, provider: config.agentType } }]);
       const promptArtifact = buildTaskPromptArtifact(task, {
+        wikiMaterialized,
         repoCheckouts: preparedWorkspace.checkouts,
         repoWarnings: preparedWorkspace.warnings,
+        chatRepoAutoCheckout,
         issueWorkspacePath: codeWorkDir,
         sessionHistoryPaths: task.issueId && this.options.workspacesRoot
           ? listIssueSessionRuntimeRoots(this.options.workspacesRoot, task.issueId).map((root) => root.root)
@@ -4162,6 +4279,11 @@ async function pluginProbeCommandSucceeds(
     if (timer) clearTimeout(timer);
     if (signal && abortHandler) signal.removeEventListener("abort", abortHandler);
   }
+}
+
+export function chatRepoStartupBudgetMs(env: Record<string, string | undefined> = process.env): number {
+  const value = Number(env.MULTIREMI_REPO_CHAT_STARTUP_TIMEOUT_MS);
+  return Number.isSafeInteger(value) && value > 0 && value <= 2_147_483_647 ? value : 120_000;
 }
 
 function stringField(value: unknown): string | null {

@@ -3010,6 +3010,23 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "session.inherited-context": {
+      "command": "remi session inherited-context",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "session.inherited-context",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "session.create": {
       "command": "remi session create",
       "aliases": [],
@@ -10523,6 +10540,9 @@
     },
     "GET /api/sessions/:sessionId": {
       "command": "session.show"
+    },
+    "GET /api/sessions/:sessionId/inherited-context": {
+      "command": "session.inherited-context"
     },
     "GET /api/shares/:token": {
       "command": "share.view"

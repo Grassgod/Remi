@@ -1,0 +1,56 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`Chat Project prompts preserves the unbound Chat bootstrap prompt byte for byte 1`] = `
+"# Bootstrap Prompt
+
+## Current Request
+Continue our conversation.
+
+## Current Chat Attachment Delivery
+Chat supports attachment delivery through \`remi chat attachment send --attachment <path>\`; repeat \`--attachment\` for multiple files. The current Task identifies the destination Chat; no Feishu chat ID is needed.
+- Attach files the user explicitly requested, reports longer than one screen, and charts. Send plain-text conclusions without attachments when no file is needed.
+- Do not attach repository source code, raw logs, configuration containing secrets, or files larger than 20MB. The server validates allowed file types and size before queueing delivery.
+- For HTML, produce a self-contained file with inline CSS and JavaScript and no external stylesheet, script, or font URLs; do not depend on localStorage, cookies, or parent-frame access.
+- Report the attachment IDs and filenames returned by the command. A workspace path alone is not a delivered attachment.
+- Incoming Chat attachments are listed with local paths when available. Read those files directly; otherwise use the listed \`remi attachment download\` command. Use lark-cli download only as a fallback when platform attachment access is unavailable.
+
+## Remi Context
+Use \`remi context\` for the current identity and allowed operations. Use \`remi project list|get|search\` and \`remi repo list|get|search\` to inspect the database-backed safe directory.
+Repositories are not fetched for Chat startup, and \`remi repo list\` never contacts Git. Run \`remi repo checkout <repo-id>\` only when repository files are needed; checkout fetches that one repository and returns timeout or fetch failures as a tool error.
+
+## Current Session Context
+This is your first turn on this provider-session lineage. The JSONL below is the complete canonical session history from your perspective.
+\`assistant_history\` means your own earlier output; \`external_agent\` means a named peer; \`user\` means a human; \`operator\` means authoritative orchestration state.
+Treat event order and author labels as authoritative. Do not claim another participant's words as your own.
+
+\`\`\`jsonl
+{"type":"session_event","body":"Earlier conversation"}
+\`\`\`
+
+## Output
+When finished, summarize what changed, how it was verified, and any remaining risks."
+`;
+
+exports[`Chat Project prompts preserves the unbound Chat delta prompt byte for byte 1`] = `
+"# Delta Prompt
+
+## Current Request
+Continue our conversation.
+
+## Current Chat Attachment Delivery
+Chat supports attachment delivery through \`remi chat attachment send --attachment <path>\`; repeat \`--attachment\` for multiple files. The current Task identifies the destination Chat; no Feishu chat ID is needed.
+- Attach files the user explicitly requested, reports longer than one screen, and charts. Send plain-text conclusions without attachments when no file is needed.
+- Do not attach repository source code, raw logs, configuration containing secrets, or files larger than 20MB. The server validates allowed file types and size before queueing delivery.
+- For HTML, produce a self-contained file with inline CSS and JavaScript and no external stylesheet, script, or font URLs; do not depend on localStorage, cookies, or parent-frame access.
+- Report the attachment IDs and filenames returned by the command. A workspace path alone is not a delivered attachment.
+- Incoming Chat attachments are listed with local paths when available. Read those files directly; otherwise use the listed \`remi attachment download\` command. Use lark-cli download only as a fallback when platform attachment access is unavailable.
+
+## Current Session Context
+You are resuming your own provider session. The JSONL below contains only canonical events added since your last committed cursor.
+\`assistant_history\` means your own earlier output; \`external_agent\` means a named peer; \`user\` means a human; \`operator\` means authoritative orchestration state.
+Treat event order and author labels as authoritative. Do not claim another participant's words as your own.
+
+\`\`\`jsonl
+{"type":"session_event","body":"Earlier conversation"}
+\`\`\`"
+`;
