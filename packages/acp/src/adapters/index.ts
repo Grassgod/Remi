@@ -5,10 +5,12 @@ export { CodexAdapter } from "./codex/index.js";
 import type { AgentAdapter } from "@shared/contracts/acp-protocol.js";
 import { ClaudeAdapter } from "./claude-code/index.js";
 import { CodexAdapter } from "./codex/index.js";
+import { antigravityAdapter } from "./antigravity.js";
 
 const registry: Record<string, () => AgentAdapter> = {
   claude: () => new ClaudeAdapter(),
   codex: () => new CodexAdapter(),
+  antigravity: () => antigravityAdapter,
 };
 
 export function createAdapter(agentType: string): AgentAdapter {

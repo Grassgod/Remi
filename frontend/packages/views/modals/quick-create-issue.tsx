@@ -30,7 +30,7 @@ import { formatShortcut, modKey, enterKey } from "@multiremi/core/platform";
 import type { Agent, Squad } from "@multiremi/core/types";
 import { ActorAvatar } from "../common/actor-avatar";
 import { PillButton } from "../common/pill-button";
-import { ProjectPicker } from "../projects/components/project-picker";
+import { WorkLocationPicker } from "../runtimes/components/runtime-workspace-picker";
 import { canAssignAgent } from "../issues/components/pickers/assignee-picker";
 import {
   PropertyPicker,
@@ -197,6 +197,7 @@ export function AgentCreatePanel({
   // (project page, or manual -> agent mode switch) may seed it explicitly;
   // otherwise null tells the creator agent to inspect existing projects and
   // choose the best match.
+  const [runtimeWorkspaceId, setRuntimeWorkspaceId] = useState<string | null>((data?.runtime_workspace_id as string) || null);
   const [projectId, setProjectId] = useState<string | null>(
     () => (data?.project_id as string | undefined) ?? null,
   );
@@ -295,7 +296,8 @@ export function AgentCreatePanel({
           ? { agent_id: actor.id }
           : { squad_id: actor.id }),
         prompt: md,
-        project_id: projectId ?? undefined,
+        project_id: projectId ?? null,
+        runtime_workspace_id: runtimeWorkspaceId,
         parent_issue_id: parentIssueId,
       });
       setLastActor(actor.type, actor.id);
@@ -381,6 +383,7 @@ export function AgentCreatePanel({
     // through.
     const carry: Record<string, unknown> = {};
     if (projectId) carry.project_id = projectId;
+    if (runtimeWorkspaceId) carry.runtime_workspace_id = runtimeWorkspaceId;
     if (parentIssueId) carry.parent_issue_id = parentIssueId;
     if (parentIssueIdentifier) carry.parent_issue_identifier = parentIssueIdentifier;
     onSwitchMode?.(Object.keys(carry).length > 0 ? carry : null);
@@ -505,12 +508,9 @@ export function AgentCreatePanel({
             }}
             t={t}
           />
-          <ProjectPicker
-            projectId={projectId}
-            onUpdate={(u) => setProjectId(u.project_id ?? null)}
-            triggerRender={<PillButton />}
-            align="start"
-          />
+          <WorkLocationPicker wsId={wsId} projectId={projectId} value={runtimeWorkspaceId}
+            onChange={location => { setProjectId(location.project_id); setRuntimeWorkspaceId(location.runtime_workspace_id); }}
+            disabled={submitting} triggerRender={<PillButton />} />
           {parentIssueId && (
             <span
               data-testid="agent-sub-issue-chip"

@@ -34,6 +34,9 @@ export function localSkillRootForProvider(provider: string, overrides: Record<st
   if (normalized === "codex") {
     return process.env.MULTIREMI_CODEX_SKILLS_DIR ?? join(process.env.CODEX_HOME || join(homedir(), ".codex"), "skills");
   }
+  if (normalized === "antigravity") {
+    return process.env.MULTIREMI_ANTIGRAVITY_SKILLS_DIR ?? join(homedir(), ".agents", "skills");
+  }
   return null;
 }
 

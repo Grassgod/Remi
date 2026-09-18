@@ -10,6 +10,10 @@ export function canonicalizeDaemonRoutingWithinTransaction(
   const legacy = legacyDaemonId.trim();
   const canonical = canonicalDaemonId.trim();
   if (!legacy || !canonical || legacy === canonical) return;
+  db.run(
+    "UPDATE multiremi_runtime_workspaces SET daemon_id = ?, updated_at = ? WHERE workspace_id = ? AND daemon_id = ?",
+    [canonical, now, workspaceId, legacy],
+  );
 
   db.run(
     `INSERT INTO multiremi_project_devices (

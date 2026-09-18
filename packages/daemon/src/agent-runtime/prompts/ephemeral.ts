@@ -28,6 +28,7 @@ export interface BuildTaskPromptOptions {
   repoCheckouts?: TaskRepoCheckout[];
   repoSnapshots?: TaskRepoSnapshot[];
   repoWarnings?: TaskRepoWarning[];
+  platform?: NodeJS.Platform;
   sessionHistoryPaths?: string[];
   issueWorkspacePath?: string;
   /** Actual workspace preparation result; false means Wiki is available through CLI only. */
@@ -63,11 +64,18 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
 
   appendClaimContextSections(sections, task, mode);
   appendWorkspacePromptSection(sections, task, mode);
+  if (task.runtimeWorkspace) {
+    sections.push("", "## Runtime Workspace",
+      `Persistent workspace: ${JSON.stringify(task.runtimeWorkspace.name)} (${task.runtimeWorkspace.id}).`,
+      `Root: ${JSON.stringify(task.runtimeWorkspace.rootPath)}; working directory relative to root: ${JSON.stringify(task.runtimeWorkspace.cwd)}.`,
+      "Work in the existing directory. It may contain multiple repositories, private local context, dependencies, or no Git repository. Inspect existing files before deciding whether Git is relevant. Preserve local configuration and directory relationships.",
+      "Workspace instruction files and the local skill catalog are supplied through the provider's local instruction file. Their source contents are loaded on this machine.");
+  }
   if (task.chatSessionId) {
     sections.push("", "## Current Chat Attachment Delivery", CHAT_ARTIFACT_DELIVERY_CONTRACT);
   }
   if (mode === "bootstrap") appendHomepageChatCliSection(sections, task, opts.chatRepoAutoCheckout);
-  appendSessionContextSections(sections, task, mode, opts.sessionHistoryPaths);
+  appendSessionContextSections(sections, task, mode, opts.platform ?? process.platform, opts.sessionHistoryPaths);
 
   if (task.issue) {
     sections.push("");
@@ -92,7 +100,7 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
     }
   }
 
-  appendTriggerCommentSection(sections, task);
+  appendTriggerCommentSection(sections, task, opts.platform ?? process.platform);
 
   if (!privateChat || task.project) appendRepositoryWarnings(sections, opts.repoWarnings ?? [], privateChat);
   appendRepositoryWikiAvailabilityWarnings(sections, task);
@@ -100,7 +108,7 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
     sections.push("", "## Knowledge Availability Warnings", ...task.knowledgeWarnings);
   }
 
-  appendProjectPromptSections(sections, task, mode, opts.wikiMaterialized);
+  appendProjectPromptSections(sections, task, mode, task.runtimeWorkspaceId ? false : opts.wikiMaterialized);
   if (mode === "bootstrap" && task.issue) appendProjectDiscoverySection(sections);
 
   if (hasReadOnlyCodeSnapshot(task)) {
@@ -113,7 +121,7 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
     }
   }
 
-  if (mode === "bootstrap" && task.repos.length && taskHoldsWorkspace(task)) {
+  if (mode === "bootstrap" && !task.runtimeWorkspaceId && task.repos.length && taskHoldsWorkspace(task)) {
     const checkouts = opts.repoCheckouts ?? [];
     const checkoutByUrl = new Map(checkouts.map((checkout) => [checkout.repoUrl.trim(), checkout]));
     sections.push("");
@@ -185,7 +193,7 @@ function taskHoldsWorkspace(task: AgentTask): boolean {
 function withoutIssueContext(task: AgentTask): AgentTask {
   const chatProjectId = stringField(task, "chatProjectId", "chat_project_id");
   const projectWorkspaceId = task.project?.workspaceId ?? task.project?.workspace_id;
-  const preserveProject = Boolean(chatProjectId && task.project?.id === chatProjectId
+  const preserveProject = Boolean(!task.runtimeWorkspaceId && chatProjectId && task.project?.id === chatProjectId
     && (projectWorkspaceId === undefined || projectWorkspaceId === task.workspaceId));
   return {
     ...task,
@@ -458,7 +466,7 @@ function appendHomepageChatCliSection(sections: string[], task: AgentTask, chatR
   }
 }
 
-function appendSessionContextSections(sections: string[], task: AgentTask, mode: TaskPromptMode, historyPaths?: string[]): void {
+function appendSessionContextSections(sections: string[], task: AgentTask, mode: TaskPromptMode, platform: NodeJS.Platform, historyPaths?: string[]): void {
   const issueSession = task.issueSession ?? task.issue_session ?? null;
   const projection = task.sessionProjection ?? task.session_projection ?? null;
   const inherited = task.inheritedSessionProjection ?? task.inherited_session_projection;
@@ -520,7 +528,7 @@ function appendSessionContextSections(sections: string[], task: AgentTask, mode:
     sections.push("");
     sections.push("## Sharing Results Across Sessions");
     sections.push("Historical transcripts are supporting evidence, while published Session results are the canonical cross-session handoff. If you produce a durable decision, artifact, or finding that other Sessions should reuse, explicitly publish only that result. Do not republish an unchanged result.");
-    if (process.platform === "win32") {
+    if (platform === "win32") {
       sections.push(`Write the result body to a UTF-8 file, then run: \`remi session result publish ${issueId} --session ${sessionId} --title "Short title" --type decision --content-file ./session-result.md\`.`);
     } else {
       sections.push([
@@ -536,6 +544,7 @@ function appendSessionContextSections(sections: string[], task: AgentTask, mode:
 }
 
 function hasIssueWorkspaceProviderHistory(task: AgentTask): boolean {
+  if (task.runtimeWorkspaceId) return false;
   const issueId = stringField(task, "issueId", "issue_id") ?? task.issue?.id ?? "";
   const issueSessionId = stringField(task, "issueSessionId", "issue_session_id")
     ?? task.issueSession?.id
@@ -546,7 +555,7 @@ function hasIssueWorkspaceProviderHistory(task: AgentTask): boolean {
   return Boolean(issueId && issueSessionId && agentId && (provider === "claude" || provider === "codex"));
 }
 
-function appendTriggerCommentSection(sections: string[], task: AgentTask): void {
+function appendTriggerCommentSection(sections: string[], task: AgentTask, platform: NodeJS.Platform): void {
   const triggerCommentId = stringField(task, "triggerCommentId", "trigger_comment_id");
   if (!triggerCommentId) return;
   const issueId = stringField(task, "issueId", "issue_id") ?? task.issue?.id ?? "";
@@ -591,7 +600,7 @@ function appendTriggerCommentSection(sections: string[], task: AgentTask): void 
       sections.push(readHint);
     }
   }
-  const replyInstructions = buildCommentReplyInstructions(issueId, triggerCommentId);
+  const replyInstructions = buildCommentReplyInstructions(issueId, triggerCommentId, platform);
   if (replyInstructions) {
     sections.push("");
     sections.push(replyInstructions);
@@ -617,9 +626,9 @@ function buildCommentReadHint(
   return `Read the triggering conversation first: \`remi comment list ${issueId} --thread ${threadId} --tail 30 --output json\`. Need cross-thread background? \`remi comment list ${issueId} --recent 20 --output json\`.`;
 }
 
-function buildCommentReplyInstructions(issueId: string, triggerCommentId: string): string {
+function buildCommentReplyInstructions(issueId: string, triggerCommentId: string, platform: NodeJS.Platform): string {
   if (!issueId || !triggerCommentId) return "";
-  if (process.platform === "win32") {
+  if (platform === "win32") {
     return [
       "If you decide to reply, post it as a comment. Always use the trigger comment ID below, and do not reuse --parent values from previous turns.",
       "",

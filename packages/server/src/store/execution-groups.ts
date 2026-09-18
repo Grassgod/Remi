@@ -11,7 +11,7 @@ export function syncRuntimeExecutionGroups(db: SqlDatabase, runtimeId: string): 
   const customId = runtime.execution_group_id;
   if (customId && (customId.startsWith("eg_") || !/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/.test(customId))) throw new Error("Invalid execution group identifier (eg_ is reserved)");
   if (customId && runtime.provider === "any") throw new Error("Custom execution groups require a concrete Runtime provider");
-  const providers = runtime.provider === "any" ? ["claude", "codex"] : [runtime.provider];
+  const providers = runtime.provider === "any" ? ["claude", "codex", "antigravity"] : [runtime.provider];
   // A pre-daemon registration gaining its machine identity is still the same
   // target. Preserve its ID, or migrate references to an already known identity.
   if (runtime.daemon_id) {

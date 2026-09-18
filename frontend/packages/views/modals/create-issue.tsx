@@ -1,4 +1,5 @@
 "use client";
+import { WorkLocationPicker } from "../runtimes/components/runtime-workspace-picker";
 
 import { useEffect, useState, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -36,7 +37,6 @@ import { Switch } from "@multiremi/ui/components/ui/switch";
 import { ContentEditor, type ContentEditorRef, TitleEditor, useFileDropZone, FileDropOverlay } from "../editor";
 import { StatusIcon, StatusPicker, PriorityPicker, AssigneePicker, StartDatePicker, DueDatePicker } from "../issues/components";
 import { BacklogAgentHintContent } from "../issues/components/backlog-agent-hint-dialog";
-import { ProjectPicker } from "../projects/components/project-picker";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multiremi/core/paths";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useIssueDraftStore } from "@multiremi/core/issues/stores/draft-store";
@@ -129,6 +129,7 @@ export function ManualCreatePanel({
   const [parentIssueId, setParentIssueId] = useState<string | undefined>(
     (data?.parent_issue_id as string) || undefined,
   );
+  const [runtimeWorkspaceId, setRuntimeWorkspaceId] = useState<string | null>((data?.runtime_workspace_id as string) || null);
   const [parentPickerOpen, setParentPickerOpen] = useState(false);
   // Start date is a low-frequency field — by default it lives in the
   // overflow ⋯ menu. Clicking the menu item flips this open, which both
@@ -227,6 +228,7 @@ export function ManualCreatePanel({
     setStartDate(null);
     setDueDate(null);
     setProjectId(undefined);
+    setRuntimeWorkspaceId(null);
     setParentIssueId(undefined);
     setChildIssues([]);
     setAttachmentIds([]);
@@ -262,7 +264,8 @@ export function ManualCreatePanel({
         due_date: dueDate || undefined,
         attachment_ids: attachmentIds.length > 0 ? attachmentIds : undefined,
         parent_issue_id: parentIssueId,
-        project_id: projectId,
+        project_id: projectId ?? null,
+        runtime_workspace_id: runtimeWorkspaceId,
       });
 
       // Link queued children to the new parent. Deferred to after create
@@ -427,6 +430,7 @@ export function ManualCreatePanel({
     onSwitchMode?.({
       prompt,
       ...(projectId ? { project_id: projectId } : {}),
+      ...(runtimeWorkspaceId ? { runtime_workspace_id: runtimeWorkspaceId } : {}),
       ...(parentIssueId ? { parent_issue_id: parentIssueId } : {}),
       ...(carryParentIdentifier ? { parent_issue_identifier: carryParentIdentifier } : {}),
     });
@@ -570,13 +574,11 @@ export function ManualCreatePanel({
                 align="start"
               />
 
-              {/* Project */}
-              <ProjectPicker
-                projectId={projectId ?? null}
-                onUpdate={(u) => handleProjectPicked(u.project_id ?? undefined)}
-                triggerRender={<PillButton />}
-                align="start"
-              />
+              <WorkLocationPicker wsId={wsId} value={runtimeWorkspaceId} projectId={projectId ?? null}
+                onChange={location => {
+                  handleProjectPicked(location.project_id ?? undefined);
+                  setRuntimeWorkspaceId(location.runtime_workspace_id);
+                }} disabled={submitting} triggerRender={<PillButton />} />
 
               {/* Start date — collapsed into the ⋯ menu by default since it's
                   a low-frequency field. Renders inline only when the field

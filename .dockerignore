@@ -12,3 +12,9 @@ node_modules
 uploads
 data
 tmp
+.mcp.json
+**/*.tokens.json
+.claude/
+.codex/
+.remi/*
+!.remi/pipeline/

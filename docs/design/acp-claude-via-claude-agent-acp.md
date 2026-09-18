@@ -6,7 +6,7 @@ summary: 说明 Claude Code 的 Runtime 自定义 Messages 连接、鉴权注入
 
 # Claude Code ACP 接入
 
-Claude Code 由 [daemon worker](../../packages/server/src/worker/daemon.ts) 组装任务，经 [AcpProvider](../../packages/acp/src/provider.ts)、[ClaudeAdapter](../../packages/acp/src/adapters/claude-code/index.ts) 和仓库固定的 `@agentclientprotocol/claude-agent-acp` 启动。桥接版本以 [BRIDGE_PIN](../../packages/acp/src/provision.ts) 为准。
+Claude Code 由 [daemon worker](../../packages/server/src/worker/daemon.ts) 组装任务，经 [AcpProvider](../../packages/acp/src/provider.ts)、[ClaudeAdapter](../../packages/acp/src/adapters/claude-code/index.ts) 和仓库固定的 `@agentclientprotocol/claude-agent-acp` 启动。桥接器、SDK 和实际执行文件版本以 [runtime-versions.json](../../packages/acp/src/runtime-versions.json) 为准，准备与安装步骤见[配套升级说明](../daemon-runtime-upgrades.md)。
 
 Windows 通过 Node 启动随仓库提供的无扩展名 `remi-claude-agent-acp` 脚本，健康检查与实际 ACP 会话共用[启动解析](../../packages/acp/src/launch.ts)；机器需安装 Node 并将其加入 PATH。
 

@@ -6,6 +6,7 @@ import { cleanString, currentRequestUserId } from "../wire/index.js";
 import type { CreateChatSessionInput, SendChatMessageInput } from "@multiremi/contracts/types.js";
 import { canCurrentUserAccessAgent, denyCurrentUserWorkspaceAccess } from "./auth-guards.js";
 import { uniqueStrings } from "./common.js";
+import { assertRuntimeWorkspaceAccess } from "./runtime-workspaces.js";
 import { resolveRequestWorkspaceId } from "./workspace-context.js";
 
 export function withChatSessionCreator(
@@ -34,6 +35,7 @@ export function withChatSessionRequestContext(c: Context, store: MultiremiStore,
   if (workspaceId instanceof Response) return workspaceId;
   const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
   if (denied) return denied;
+  assertRuntimeWorkspaceAccess(c, store, input.runtimeWorkspaceId ?? input.runtime_workspace_id, workspaceId);
   const agentId = cleanString(input.agentId ?? input.agent_id);
   if (!agentId) return c.json({ error: "agent_id is required" }, 400);
   const agent = store.getAgent(agentId);

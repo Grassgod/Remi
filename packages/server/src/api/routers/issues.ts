@@ -1,5 +1,6 @@
 import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
 import type { Context, Hono } from "hono";
+import { assertRuntimeWorkspaceAccess } from "../helpers/runtime-workspaces.js";
 import {
   assigneeFrequencyQuery,
   canCurrentUserAccessAgent,
@@ -573,9 +574,24 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const issues = listAccessibleChildIssues(c, parentIds);
     return c.json({ issues, total: issues.length });
   });
+  function validateBatchWorkspaceBinding(c: Context, input: BatchUpdateIssuesInput): Response | null {
+    const updates = input.updates;
+    if (!updates || !("runtimeWorkspaceId" in updates || "runtime_workspace_id" in updates)) return null;
+    for (const id of input.issueIds ?? input.issue_ids ?? []) {
+      const issue = store.getIssue(id);
+      if (!issue) continue;
+      const workspaceId = updates.workspaceId ?? updates.workspace_id ?? issue.workspaceId;
+      const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId)
+        ?? denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+      if (denied) return denied;
+      assertRuntimeWorkspaceAccess(c, store, updates.runtimeWorkspaceId ?? updates.runtime_workspace_id, workspaceId);
+    }
+    return null;
+  }
+
   app.post("/api/multiremi/issues/batch-update", async (c) => {
     const body = await readJson<BatchUpdateIssuesInput>(c);
-    const denied = issueBatchUpdateAccess(c, body);
+    const denied = issueBatchUpdateAccess(c, body) ?? validateBatchWorkspaceBinding(c, body);
     if (denied) return denied;
     return c.json(store.batchUpdateIssues({
       ...body,
@@ -586,7 +602,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJson<BatchUpdateIssuesInput>(c);
     try {
       const input = issueBatchUpdateCompatibilityInput(body);
-      const denied = issueBatchUpdateAccess(c, input);
+      const denied = issueBatchUpdateAccess(c, input) ?? validateBatchWorkspaceBinding(c, input);
       if (denied) return denied;
       const result = store.batchUpdateIssues({
         ...input,
@@ -634,6 +650,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const assigneeType = body.assigneeType ?? body.assignee_type ?? (body.agentId ? "agent" : null);
+    assertRuntimeWorkspaceAccess(c, store, body.runtimeWorkspaceId ?? body.runtime_workspace_id, workspaceId);
     const assigneeId = body.assigneeId ?? body.assignee_id ?? body.agentId ?? null;
     const dispatchDenied = denySideSessionAssigneeDispatch(c, store, workspaceId, assigneeType, assigneeId);
     if (dispatchDenied) return dispatchDenied;
@@ -669,6 +686,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (workspaceId instanceof Response) return workspaceId;
     try {
       const issueInput = withIssueCreateRequestContext(c, { ...body, workspace_id: workspaceId }, store);
+      assertRuntimeWorkspaceAccess(c, store, issueInput.runtime_workspace_id, workspaceId);
       const denied = denyCurrentUserWorkspaceAccess(c, store, issueInput.workspace_id ?? "local");
       if (denied) return denied;
       const dispatchDenied = String(issueInput.status ?? "todo").trim() === "backlog" ? null
@@ -758,6 +776,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
+    assertRuntimeWorkspaceAccess(c, store, body.runtimeWorkspaceId ?? body.runtime_workspace_id, workspaceId);
     const result = safeQuickCreateIssue(store, { ...body, workspaceId });
     if ("error" in result) return c.json({ error: result.error }, 400);
     return c.json({
@@ -778,6 +797,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const input = { ...issueQuickCreateCompatibilityInput(body), workspaceId };
     const denied = denyCurrentUserWorkspaceAccess(c, store, input.workspaceId ?? input.workspace_id ?? "local");
     if (denied) return denied;
+    assertRuntimeWorkspaceAccess(c, store, input.runtimeWorkspaceId ?? input.runtime_workspace_id, input.workspaceId ?? input.workspace_id ?? "local");
     const result = safeQuickCreateIssue(store, input);
     if ("error" in result) return c.json({ error: result.error }, 400);
     return c.json({
@@ -1081,6 +1101,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJson<UpdateIssueInput>(c);
     const { actorType, actorId } = issueMutationActivity(c);
     const input = { ...body, actorType, actorId, parentTaskId: currentTaskParentId(c) };
+    assertRuntimeWorkspaceAccess(c, store, body.runtimeWorkspaceId ?? body.runtime_workspace_id, issue.workspaceId);
     const dispatchDenied = denySideSessionIssueUpdate(c, store, issue, input);
     if (dispatchDenied) return dispatchDenied;
     const { issue: updated, cancelledTasks } = store.updateIssueWithOutcome(issue.id, input);
@@ -1105,6 +1126,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const dispatchDenied = denySideSessionIssueUpdate(c, store, issue, input);
     if (dispatchDenied) return dispatchDenied;
     try {
+      assertRuntimeWorkspaceAccess(c, store, input.runtimeWorkspaceId ?? input.runtime_workspace_id, issue.workspaceId);
       const { issue: updated, cancelledTasks } = store.updateIssueWithOutcome(issue.id, input);
       lockAutoTitleAfterHumanEdit(c, updated, input);
       const dispatched = maybeDispatchOnIssueUpdate(store, issue, updated, input);

@@ -28,6 +28,7 @@ export function workspaceMemberToGoResponse(member: MultiremiWorkspaceMember, op
 }
 
 function workspaceMemberUserId(member: MultiremiWorkspaceMember): string {
+  if (member.userId) return member.userId;
   const prefix = `mem_${member.workspaceId}_`;
   return member.id.startsWith(prefix) ? member.id.slice(prefix.length) || member.id : member.id;
 }

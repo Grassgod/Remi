@@ -12,6 +12,11 @@ The internal `multiremi_tasks.execution_runtime_id` records the Runtime that own
 that frozen connection. It is separate from the mutable `runtime_id` dispatch pin,
 has no foreign key, survives repooling and retirement, and is inherited by retry.
 A regular frozen retry never moves credentials or selects a different upstream.
+The separate `runtime_workspace_id` retains a persistent directory binding; it
+does not authorize moving that connection to a replacement Runtime. Standalone
+workspace retries keep the directory and connection provenance but start a fresh
+provider session. Claim and stale reclaim still enforce the workspace daemon,
+protocol capability and shared-directory serialization rules.
 Retirement can leave it queued with an actionable `wait_reason`; cancel and create
 a new task to deliberately select a replacement connection.
 

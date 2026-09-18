@@ -168,10 +168,10 @@ describe("CLI capabilities manifest", () => {
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 656,
+      mapped: 664,
       exempt: 91,
       missing: 0,
-      total: 747,
+      total: 755,
     });
     expect(manifest.max_planned_routes).toBe(0);
     expect(manifest.routes["POST /api/workspaces/:id/repos/:repositoryId/wiki/move"]).toEqual({ command: "wiki.repository.mv" });
@@ -200,6 +200,8 @@ describe("CLI capabilities manifest", () => {
     expect(manifest.routes["PUT /api/runtimes/:id/claude-profile"]).toEqual({ command: "runtime.claude-profile.set" });
     expect(manifest.routes["GET /api/daemon/runtimes/:id/claude-profile-key"]).toMatchObject({ cli_exempt: true, category: "daemon_internal_protocol" });
     expect(manifest.routes["GET /api/cli/capabilities"]).toEqual({ command: "context.get" });
+    expect(manifest.routes["POST /auth/password"]).toEqual({ command: "context.auth.password" });
+    expect(manifest.routes["POST /api/auth/password-accounts"]).toEqual({ command: "context.auth.password-account.set" });
     expect(manifest.routes["GET /api/cli/latest-version"]).toEqual({
       cli_exempt: true,
       category: "platform_updater_internal",

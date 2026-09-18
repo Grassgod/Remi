@@ -1,7 +1,14 @@
 # 仓库指南
 
-本文件是仓库级 Agent 规则的唯一事实来源；项目架构和命令见 `CLAUDE.md`。
+本文件是仓库级 Agent 规则的唯一事实来源；架构见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)，命令见 [`CLAUDE.md`](CLAUDE.md)。
 处理子目录时，还需遵循该目录中的指令文件。
+
+## 开发上下文
+
+- 从 [`docs/dev/README.md`](docs/dev/README.md) 按任务读取当前说明，再定位源码和验证入口；不默认加载全量文档、旧方案或任务记录。文档与实现冲突时核对源码并修正文档，不能只加历史提示后继续作为开发依据。
+- 代码改变已记录的架构、契约或命令时，同批更新对应文档；维护归属、文档状态与检查方式见 [`context-maintenance.md`](docs/dev/context-maintenance.md)。仓库级规则仍只在本文件定义，前端专属规则见 [`frontend/AGENTS.md`](frontend/AGENTS.md)。
+- 文档中的完成状态、性能数字和验证结论必须有实际证据；没有执行的检查明确标为未执行。
+- 过时内容在原归属处重写，已被替代的方案从工作树移除并通过 Git 历史追溯；提交前运行 `npm run docs:test` 和 `npm run docs:check`，避免默认阅读链重新引入过期资料。
 
 ## CLI 能力对齐
 

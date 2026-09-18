@@ -33,6 +33,7 @@ export type IssueMetadataValue = string | number | boolean;
 export type IssueMetadata = Record<string, IssueMetadataValue>;
 
 export interface Issue {
+  runtime_workspace_id?: string | null;
   id: string;
   workspace_id: string;
   number: number;

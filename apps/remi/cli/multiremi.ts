@@ -193,7 +193,7 @@ function setup(options: CliOptions, programName: string): boolean {
   // or already present). The user only needs `claude` / `codex` themselves.
   const provisionTargets = (next.provider && isSupportedDaemonProvider(next.provider)
     ? [next.provider]
-    : [...SUPPORTED_DAEMON_PROVIDERS]) as ProvisionProvider[];
+    : [...SUPPORTED_DAEMON_PROVIDERS]).filter((provider): provider is ProvisionProvider => provider === "claude" || provider === "codex");
   ensureAcpBridges(provisionTargets, (m) => console.log(`  ${m}`));
   if (!next.token) {
     console.log("Token is not set. Run:");
@@ -318,7 +318,8 @@ export async function resolveWorkerDaemons(
   // Provision the ACP bridges for the candidate providers (install any that are
   // missing) before the health check decides what's available — the user only
   // needs `claude` / `codex` themselves.
-  ensureAcpBridges((requestedProvider ? [requestedProvider] : [...SUPPORTED_DAEMON_PROVIDERS]) as ProvisionProvider[]);
+  ensureAcpBridges((requestedProvider ? [requestedProvider] : [...SUPPORTED_DAEMON_PROVIDERS])
+    .filter((provider): provider is ProvisionProvider => provider === "claude" || provider === "codex"));
   const providers = await resolveHealthyDaemonProviders(requestedProvider);
   if (providers.length === 0) return [];
 

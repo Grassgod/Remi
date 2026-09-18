@@ -47,6 +47,7 @@ export function issueCompatibilityResponse(
     issue_kind: issue.issueKind,
     source_issue_id: issue.sourceIssueId,
     project_id: issue.projectId,
+    runtime_workspace_id: issue.runtimeWorkspaceId ?? null,
     position: issue.position,
     start_date: issue.startDate,
     due_date: issue.dueDate,
@@ -281,6 +282,7 @@ export function issueDependencyErrorResponse(c: Context, err: unknown): Response
 
 export function issueUpdateCompatibilityInput(input: UpdateIssueInput = {}): UpdateIssueInput {
   const out: UpdateIssueInput = {};
+  if (hasRequestField(input, "runtime_workspace_id")) out.runtime_workspace_id = input.runtime_workspace_id ?? null;
   if (hasRequestField(input, "title")) out.title = input.title;
   if (hasRequestField(input, "description")) out.description = input.description ?? null;
   if (hasRequestField(input, "status")) out.status = input.status;
@@ -300,6 +302,7 @@ export function issueUpdateCompatibilityInput(input: UpdateIssueInput = {}): Upd
 
 export function issueQuickCreateCompatibilityInput(input: QuickCreateIssueInput): QuickCreateIssueInput {
   const out: QuickCreateIssueInput = { prompt: input.prompt };
+  if (hasRequestField(input, "runtime_workspace_id")) out.runtime_workspace_id = input.runtime_workspace_id ?? null;
   if (hasRequestField(input, "agent_id")) out.agent_id = input.agent_id ?? null;
   if (hasRequestField(input, "squad_id")) out.squad_id = input.squad_id ?? null;
   if (hasRequestField(input, "project_id")) out.project_id = input.project_id ?? null;

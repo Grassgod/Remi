@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import {
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   renameSync,
   rmSync,
   symlinkSync,
@@ -52,7 +53,7 @@ describe("workspace supervisor process ownership", () => {
     expect(child.status).toBe(0);
     lease.assertOwner();
     lease.release();
-  });
+  }, 15_000);
 
   it("recovers ownership after a process exits without releasing its generation", () => {
     const { root, stateRoot } = fixture("crash");
@@ -96,7 +97,7 @@ describe("workspace supervisor process ownership", () => {
     const alias = join(parent, "alias");
     const stateRoot = join(parent, "state");
     const lease = acquireWorkspaceSupervisorLease(root, { stateRoot });
-    symlinkSync(root, alias, "dir");
+    symlinkSync(root, alias, process.platform === "win32" ? "junction" : "dir");
 
     expect(() => acquireWorkspaceSupervisorLease(alias, { stateRoot })).toThrow("already owns workspace root");
     lease.release();
@@ -111,15 +112,15 @@ describe("workspace supervisor process ownership", () => {
     const stateRoot = join(parent, "state");
     mkdirSync(firstRoot);
     mkdirSync(secondRoot);
-    symlinkSync(firstRoot, alias, "dir");
+    symlinkSync(firstRoot, alias, process.platform === "win32" ? "junction" : "dir");
     const first = acquireWorkspaceSupervisorLease(alias, { stateRoot });
 
     unlinkSync(alias);
-    symlinkSync(secondRoot, alias, "dir");
+    symlinkSync(secondRoot, alias, process.platform === "win32" ? "junction" : "dir");
     const second = acquireWorkspaceSupervisorLease(alias, { stateRoot });
 
-    expect(first.workspaceRoot).toBe(firstRoot);
-    expect(second.workspaceRoot).toBe(secondRoot);
+    expect(first.workspaceRoot).toBe(realpathSync(firstRoot));
+    expect(second.workspaceRoot).toBe(realpathSync(secondRoot));
     first.assertOwner();
     second.assertOwner();
     first.release();

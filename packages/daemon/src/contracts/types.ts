@@ -275,6 +275,18 @@ export interface AgentTaskRepo {
  * structurally assignable.
  */
 export interface AgentTask {
+  runtimeWorkspaceId?: string | null;
+  runtimeWorkspace?: {
+    id: string;
+    workspaceId: string;
+    daemonId: string;
+    name: string;
+    rootPath: string;
+    cwd: string;
+    contextPaths: string[];
+    envFile: string | null;
+    archivedAt: string | null;
+  } | null;
   id: string;
   workspaceId: string;
   prompt: string;

@@ -8,7 +8,7 @@ export type RuntimeModelCatalogSource = Pick<MultiremiStore,
   "getRelayModelDiscovery" | "getRelayConfigForDaemon" | "getGatewayModels" |
   "listWorkspaceCodexProfileModels" | "listWorkspaceClaudeProfileModels" | "getRuntimeExecutionProfile">;
 
-export const MULTIREMI_DAEMON_PROVIDERS = new Set(["claude", "codex"]);
+export const MULTIREMI_DAEMON_PROVIDERS = new Set(["claude", "codex", "antigravity"]);
 
 /**
  * Union of the online runtimes' model catalogs, grouped by provider — the

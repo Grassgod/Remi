@@ -1,5 +1,5 @@
 # Deploy the frontend apps from the monorepo root.
-# Keep apps/web, apps/docs, shared packages, and root workspace metadata.
+# Keep apps/web, shared packages, and root workspace metadata.
 # Exclude unrelated workspaces and local artifacts that can make
 # `vercel deploy` upload far more than the app needs.
 
@@ -20,7 +20,6 @@ _features
 /.goreleaser.yml
 /AGENTS.md
 /CLAUDE.md
-/CLI_AND_DAEMON.md
 /CLI_INSTALL.md
 /CONTRIBUTING.md
 /Dockerfile
@@ -41,7 +40,6 @@ _features
 /docs/
 /e2e/
 /server/
-/apps/desktop/
 /scripts/
 
 *.log

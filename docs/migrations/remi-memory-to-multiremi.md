@@ -1,46 +1,28 @@
-# Migrate Legacy Remi Memory
+---
+title: 迁移本地 Remi Memory
+status: active
+summary: 仅适用于仍持有本地 Markdown 记忆的升级安装，逐篇审阅后导入当前 Project Memory。
+---
 
-MUL-69 W2 removed the local `packages/memory` runtime. Existing Markdown under
-`~/.remi/memory/` is preserved but is no longer read automatically. Multiremi project memory is
-the authoritative replacement.
+# 迁移本地 Remi Memory
 
-This is a manual, one-time migration. Review every document before uploading it, choose the
-correct Multiremi project, and do not remove the source files until the imported content has been
-verified.
+仅当已有安装仍保存 `~/.remi/memory/` 的 Markdown 时使用本页。当前运行时通过[Project Memory](../project-wiki-memory-spec.md)读取知识，不自动载入该目录；新安装无需执行此迁移。
 
-## Mapping
+这是手动导入，不是启动迁移。先保留源目录备份，再逐篇审阅归属与有效性：
 
-| Legacy content | Destination |
+| 原内容 | 当前目标 |
 |---|---|
-| Persona, durable operating rules, tool conventions | The bot agent's `instructions` in the Multiremi agent editor |
-| Project facts, decisions, runbooks, and ownership notes | Multiremi project memory via `remi memory create` |
-| Daily logs and obsolete observations | Review and distill first; do not bulk-import raw logs |
+| Persona、持久操作规则、工具约定 | 所选 agent 的 instructions，遵循[Agent 配置规范](../agent-config-spec.md)。 |
+| 项目事实、决策、运行说明与归属 | 对应项目的 Memory 或整理后的 Wiki。 |
+| 日志及已经失效的观察 | 不直接导入；只提取仍然成立且有来源的知识。 |
 
-## Procedure
+先用文件浏览器或只读列举命令清点 Markdown，然后使用当前 [CLI](../../apps/remi/cli/commands/knowledge.ts)查询已有条目，避免重复：
 
-1. Inventory the source files without changing them:
+```bash
+remi memory search "<distinct phrase>" --project <project>
+remi memory create --project <project> --title "<title>" --slug <slug> --content-file <path>
+remi memory get <slug> --project <project>
+remi memory search "<distinct phrase>" --project <project>
+```
 
-   ```bash
-   find ~/.remi/memory -type f -name '*.md' -print
-   ```
-
-2. Move persona and operating rules into the selected bot agent's `instructions`. Keep reusable
-   project knowledge out of the persona.
-
-3. Import each reviewed project document. Use a stable slug and the project that owns the facts:
-
-   ```bash
-   remi memory create --project <project-id> --title "<title>" --slug <slug> --content-file <path>
-   ```
-
-4. Verify the imported document and search behavior:
-
-   ```bash
-   remi memory get <slug> --project <project-id>
-   remi memory recall "<distinct phrase>" --project <project-id>
-   ```
-
-5. Keep `~/.remi/memory/` as a backup until the migration has been reviewed. W2 does not delete
-   it. Old `vec_items` metadata, when present, may require a maintenance binary with sqlite-vec
-   loaded before SQLite can drop the virtual table; it contains a derived index, not source
-   Markdown.
+已有同主题条目时使用 `remi memory update` 并保留来源。用具备目标工作区权限的成员身份进行手工导入；普通 task agent 的写入会成为 202 submission，需要经过发布后才能验证正式知识。确认内容、归属和检索结果前不要删除源文件。本步骤不迁移旧向量索引，也不对个人本地文件执行自动清理。

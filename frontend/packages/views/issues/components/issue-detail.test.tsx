@@ -195,8 +195,8 @@ vi.mock("../../common/actor-avatar", () => ({
   ),
 }));
 
-vi.mock("../../projects/components/project-picker", () => ({
-  ProjectPicker: () => <span data-testid="project-picker">Project</span>,
+vi.mock("../../runtimes/components/runtime-workspace-picker", () => ({
+  WorkLocationPicker: () => <span data-testid="project-picker">Work location</span>,
 }));
 
 // Mock api

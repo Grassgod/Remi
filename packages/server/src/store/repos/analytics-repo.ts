@@ -1,7 +1,7 @@
 // Analytics + metrics domain: the public event/counter readers, the public analytics recorders and
 // the per-domain recorder helpers the runtimes/autopilots/webhook bands call. Extracted verbatim
 // from MultiremiStore. The buffers themselves and recordAnalyticsEvent/incrementMetricCounter live
-// on StoreContext (SPLIT-PLAN §1.1), because every domain writes to them.
+// on StoreContext, because every domain writes to them.
 import {
   EVENT_AGENT_CREATED,
   EVENT_AUTOPILOT_CREATED,

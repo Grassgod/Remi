@@ -137,7 +137,7 @@ export function writeProjectResourceContext(workDir: string, task: AgentTask): v
  * sees skills materialized under `<workDir>/.agents/skills`.
  */
 export function agentSkillRoot(workDir: string, provider: string | undefined): string {
-  return provider === "codex"
+  return provider === "codex" || provider === "antigravity"
     ? join(workDir, ".agents", "skills")
     : join(workDir, ".claude", "skills");
 }

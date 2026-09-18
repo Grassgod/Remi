@@ -1,0 +1,4 @@
+interface:
+  display_name: "编写 MR"
+  short_description: "按仓库规范编写中文 MR，核对标题、契约依据与真实验证证据"
+  default_prompt: "使用 $write-mr 检查当前变更，并编写或修正 MR 的标题与描述。"

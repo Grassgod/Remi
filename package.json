@@ -38,6 +38,8 @@
     "release:check": "bun run scripts/release-runtime.ts check",
     "lock:clean": "bun run scripts/clean-lockfile.ts",
     "test": "bun test",
+    "docs:check": "node scripts/check-dev-context.mjs",
+    "docs:test": "node --test scripts/check-dev-context.test.mjs",
     "cli:capabilities:generate": "bun run scripts/generate-cli-capabilities.ts",
     "cli:capabilities:check": "bun run scripts/check-cli-capabilities.ts",
     "test:frontend": "bun run --filter '@multiremi/*' test",

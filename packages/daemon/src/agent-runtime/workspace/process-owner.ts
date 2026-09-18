@@ -133,7 +133,7 @@ export function acquireWorkspaceSupervisorLease(
           options.beforeReleaseCommit,
         );
       } catch (error) {
-        if (!isExistingDestination(error)) throw error;
+        if (!isExistingDestination(error, lockPath)) throw error;
       }
 
       let observed: ObservedOwner;
@@ -448,6 +448,9 @@ function assertExpectedOwner(lockPath: string, expected: ObservedOwner): void {
 }
 
 function fsyncDirectory(path: string): void {
+  // Windows does not support fsync on a directory handle (Bun returns EPERM).
+  // Owner-file fsync and atomic rename still run before the lease is released.
+  if (process.platform === "win32") return;
   const fd = openSync(path, "r");
   try {
     fsyncSync(fd);
@@ -495,9 +498,14 @@ function assertOwnedByCurrentUser(stat: Stats, label: string): void {
   }
 }
 
-function isExistingDestination(error: unknown): boolean {
+function isExistingDestination(error: unknown, destination?: string): boolean {
   const code = (error as NodeJS.ErrnoException).code;
-  return code === "EEXIST" || code === "ENOTEMPTY";
+  return code === "EEXIST" || code === "ENOTEMPTY"
+    // Windows reports a rename over an existing non-empty directory as EPERM.
+    // Verify the destination before inspecting its owner; other permission
+    // errors remain fatal.
+    || (process.platform === "win32" && (code === "EPERM" || code === "EACCES")
+      && Boolean(destination && existsSync(destination)));
 }
 
 function isMissingPath(error: unknown): boolean {

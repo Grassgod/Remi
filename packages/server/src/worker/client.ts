@@ -282,6 +282,7 @@ export class MultiremiDaemonClient {
       capabilities: {
         codex_profiles: 1,
         claude_profiles: 1,
+        runtime_workspaces: 1,
         parallel_agent_execution: 1,
         agent_plugins: input.agentPluginProtocol ?? MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
         ssh_mesh: input.sshMeshProtocol ?? MULTIREMI_SSH_MESH_PROTOCOL_VERSION,
@@ -1432,6 +1433,8 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
     taskKind: raw.task_kind === "quick_create" || raw.kind === "quick_create" ? "quick_create" : "direct",
     agentId: stringOrNull(raw.agent_id ?? raw.agentId) ?? "",
     runtimeId: stringOrNull(raw.runtime_id ?? raw.runtimeId),
+    runtimeWorkspaceId: stringOrNull(raw.runtime_workspace_id ?? raw.runtimeWorkspaceId),
+    runtimeWorkspace: raw.runtime_workspace ?? raw.runtimeWorkspace ?? null,
     issueId: stringOrNull(raw.issue_id ?? raw.issueId),
     issueSessionId: stringOrNull(raw.issue_session_id ?? raw.issueSessionId),
     issueSessionGeneration: numberOrNull(raw.issue_session_generation ?? raw.issueSessionGeneration),
@@ -1535,7 +1538,7 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
     usage: Array.isArray(raw.usage) ? raw.usage : [],
   };
   if (Object.hasOwn(raw, "chat_auto_checkout_repos") || Object.hasOwn(raw, "chatAutoCheckoutRepos")) {
-    const keepChatRepos = normalized.chatSessionId && !normalized.issueId && !normalized.issue
+    const keepChatRepos = !normalized.runtimeWorkspaceId && normalized.chatSessionId && !normalized.issueId && !normalized.issue
       && normalized.chatProjectId && normalized.chatProjectId === normalized.project?.id
       && normalized.project.workspaceId === normalized.workspaceId;
     const chatRepos = raw.chat_auto_checkout_repos ?? raw.chatAutoCheckoutRepos;

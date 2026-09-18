@@ -6,9 +6,9 @@
 
 import { accessSync, constants } from "node:fs";
 import { delimiter, join } from "node:path";
-import { AcpProvider } from "@acp/index.js";
+import { createRuntimeProvider, resolveAntigravityExecutable } from "@acp/index.js";
 
-export const SUPPORTED_DAEMON_PROVIDERS = ["claude", "codex"] as const;
+export const SUPPORTED_DAEMON_PROVIDERS = ["claude", "codex", "antigravity"] as const;
 
 export type SupportedDaemonProvider = typeof SUPPORTED_DAEMON_PROVIDERS[number];
 
@@ -131,9 +131,13 @@ export function detectMultiremiProviders(options: {
   const paths = pathEnv.split(delimiter).filter(Boolean);
   const extensions = executableExtensions(options.pathExt);
   return SUPPORTED_DAEMON_PROVIDERS.filter((provider) => {
+    if (provider === "antigravity") {
+      const executable = resolveAntigravityExecutable();
+      if (executable !== "agy" && canExecute(executable)) return true;
+    }
     const commands = provider === "claude"
       ? ["remi-claude-agent-acp", "claude-agent-acp", "claude"]
-      : ["codex-acp", "codex"];
+      : provider === "codex" ? ["codex-acp", "codex"] : ["agy"];
     return paths.some((dir) => commands.some((command) => {
       return extensions.some((extension) => canExecute(join(dir, `${command}${extension}`)));
     }));
@@ -144,12 +148,12 @@ export async function resolveHealthyDaemonProviders(explicitProvider: SupportedD
   const candidates = explicitProvider ? [explicitProvider] : detectMultiremiProviders();
   const healthy: SupportedDaemonProvider[] = [];
   for (const provider of candidates) {
-    const checker = new AcpProvider({ agentType: provider });
+    const checker = createRuntimeProvider({ agentType: provider });
     try {
       if (await checker.healthCheck()) {
         healthy.push(provider);
       } else if (explicitProvider) {
-        throw new Error(`Multiremi provider ${provider} failed ACP health check`);
+        throw new Error(`Multiremi provider ${provider} failed runtime health check`);
       }
     } finally {
       await checker.close?.();

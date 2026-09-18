@@ -1,4 +1,5 @@
 export interface ChatSession {
+  runtime_workspace_id?: string | null;
   id: string;
   workspace_id: string;
   agent_id: string;
@@ -16,6 +17,7 @@ export interface ChatSession {
 }
 
 export interface CreateChatSessionInput {
+  runtime_workspace_id?: string | null;
   agent_id: string;
   title?: string;
   project_id?: string | null;
