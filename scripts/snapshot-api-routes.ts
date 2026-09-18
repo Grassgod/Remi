@@ -550,7 +550,7 @@ async function seedStore(store: MultiremiStore, db: Database): Promise<SeedRefs>
     // Roomy enough that the daemon flow can claim its own task even though the
     // seeded chat session already holds one dispatch slot.
     maxConcurrency: 6,
-    metadata: { feishu_bot_menu: true },
+    metadata: { feishu_bot_menu: true, feishu_concierge_config_v1: true },
   });
 
   const skill = store.createSkill({
