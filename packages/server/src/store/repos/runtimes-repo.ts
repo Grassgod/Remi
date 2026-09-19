@@ -1923,7 +1923,8 @@ export class RuntimesRepo {
     const models = catalog?.models ?? [];
     if (!catalogAllowsModel(catalog, agent.model ?? "")) return false;
     if (agent.model && !models.some(model => model.id === agent.model)
-      && (catalog?.model_catalog_status === "ready" || agent.thinkingLevel
+      && ((!agent.runtimeId && (agent.provider === "codex" || runtime.metadata[`${agent.provider}_profiles`] === 1))
+        || catalog?.model_catalog_status === "ready" || agent.thinkingLevel
         || (agent.executionGroupId && !agent.runtimeId))) return false;
     if (!agent.thinkingLevel) return true;
     const capability = modelThinkingState(models, agent.model ?? "", catalog?.default_thinking);

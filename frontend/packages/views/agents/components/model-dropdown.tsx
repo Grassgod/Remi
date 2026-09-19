@@ -12,7 +12,7 @@ import { Input } from "@multiremi/ui/components/ui/input";
 import { Label } from "@multiremi/ui/components/ui/label";
 import { useT } from "../../i18n";
 
-// The catalog is scoped to the selected machine and Runtime type.
+// Model routing uses the workspace pool; explicit targets scope the catalog.
 export function ModelDropdown({
   wsId,
   runtimeId,
@@ -82,7 +82,7 @@ export function ModelDropdown({
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger
           aria-label={fallback ? t(($) => $.fallback.model_label) : undefined}
-          // Automatic scheduling has no Runtime or group binding; the fleet
+          // Model routing has no Runtime or group binding; the fleet
           // catalog still answers for the provider, so only a missing
           // provider disables the dropdown.
           disabled={!provider}

@@ -118,7 +118,8 @@ describe("Feishu bot standard Task bridge", () => {
         it(`schedules ${from} -> ${to} with model=${model || "default"} and ${previousTurn} prior turn`, () => {
           const { store, agent, config } = scaffold(from);
           store.registerRuntime({ id: "rt_executor", name: to, provider: to, workspaceId: "local",
-            daemonId: "another-machine" });
+            daemonId: "another-machine",
+            models: [{ id: explicitModel, label: explicitModel, provider: to, default: true }] });
           store.reportFeishuBotRuntimeStatus("local", "rt_bot", {
             appliedRevision: config.revision, state: "online",
           });

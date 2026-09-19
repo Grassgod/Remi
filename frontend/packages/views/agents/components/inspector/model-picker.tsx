@@ -11,7 +11,7 @@ import {
 import { CHIP_CLASS } from "./chip";
 import { useT } from "../../../i18n";
 
-// The catalog is scoped to the selected machine and Runtime type.
+// Model routing uses the workspace pool; explicit targets scope the catalog.
 export function ModelPicker({
   wsId,
   runtimeId,
@@ -79,7 +79,7 @@ export function ModelPicker({
     {unknown ? t(($) => $.pickers.model_execution_unknown) : t(($) => $.pickers.model_unavailable)}
   </span>;
 
-  // Automatic scheduling binds neither a Runtime nor a group, yet the fleet
+  // Model routing binds neither a Runtime nor a group, yet the fleet
   // catalog still answers for the selected provider — only a missing provider
   // means there is no execution target to pick a model for.
   if (!canEdit || !provider) {

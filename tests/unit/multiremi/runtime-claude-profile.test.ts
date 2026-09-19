@@ -165,6 +165,7 @@ describe("Runtime Claude profiles", () => {
     const { store, runtime } = setup();
     process.env.MULTIREMI_PROVIDER_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
     const saved = store.setRuntimeClaudeProfile(runtime.id, apiProfile, "first-private-key")!;
+    store.updateRuntimeModels(runtime.id, [{ id: "custom-alternative", label: "Alternative", provider: "claude", default: false }], saved);
     const agent = store.createAgent({ name: "Custom", provider: "claude", model: "custom-alternative" });
     const frozen = { ...saved, model: "custom-alternative" };
     const task = store.createTask({ agentId: agent.id, issueId: store.createIssue({ title: "Retry profile" }).id, prompt: "work" });
@@ -179,7 +180,9 @@ describe("Runtime Claude profiles", () => {
     expect(retry.runtimeId).toBe(runtime.id);
     expect(retry.executionFingerprint).toBe(claimed.executionFingerprint);
     expect(store.getRuntimeClaudeProfileKey(runtime.id, retry.claudeProfile!.credential_id!)).toBe("first-private-key");
+    const later = store.createTask({ agentId: agent.id, prompt: "Needs the new model", priority: 10 });
     expect(store.claimTask(runtime.id)?.claudeProfile).toEqual(frozen);
+    expect(store.getTask(later.id)?.status).toBe("queued");
   });
 
   it("encrypts keys and restricts delivery to the bound daemon, never browser or task credentials", async () => {

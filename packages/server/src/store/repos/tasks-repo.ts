@@ -155,7 +155,9 @@ function excludedExecutionTargetSql(excludedTargets: readonly ExecutionTargetExc
   const clauses = excludedTargets.map(() =>
     `NOT (t.agent_id = ? AND ${effectiveTaskModelSql()} = ? AND ${effectiveTaskThinkingSql()} = ?)`,
   );
-  return `AND (${clauses.join(" AND ")})`;
+  // Frozen profiles carry their own connection/model and are checked by task
+  // id. An Agent-level target exclusion must not mask one of those retries.
+  return `AND (t.codex_profile IS NOT NULL OR t.claude_profile IS NOT NULL OR (${clauses.join(" AND ")}))`;
 }
 
 /** Positional params for `excludedExecutionTargetSql`, in clause order. */
@@ -1565,6 +1567,7 @@ export class TasksRepo {
          FROM multiremi_agents a
          JOIN multiremi_tasks t ON t.agent_id = a.id
          WHERE a.workspace_id = ? AND t.status IN ('queued', 'dispatched')
+           AND t.codex_profile IS NULL AND t.claude_profile IS NULL
            AND (a.execution_group_id IS NOT NULL
              OR NULLIF(a.model, '') IS NOT NULL OR NULLIF(a.thinking_level, '') IS NOT NULL
              OR NULLIF(t.execution_model, '') IS NOT NULL OR NULLIF(t.execution_thinking_level, '') IS NOT NULL)`,
@@ -1581,9 +1584,28 @@ export class TasksRepo {
           excludedTargets.set(executionTargetKey(row.agent_id, target), { agentId: row.agent_id, ...target });
         }
       }
+      // A retry can retain a frozen Runtime profile after its Agent changes
+      // model. Check those tasks individually so the frozen connection stays
+      // eligible without hiding compatible work from the same Agent.
+      const profileTaskRows = this.ctx.db.query(`SELECT t.id FROM multiremi_tasks t
+        JOIN multiremi_agents a ON a.id = t.agent_id
+        WHERE a.workspace_id = ? AND t.status = 'queued'
+          AND (t.codex_profile IS NOT NULL OR t.claude_profile IS NOT NULL)`
+      ).all(lockedRuntime.workspaceId ?? "local") as { id: string }[];
+      const excludedTaskIds: string[] = [];
+      for (const row of profileTaskRows) {
+        const task = this.getTask(row.id);
+        const agent = task && this.ctx.agents().getAgent(task.agentId);
+        if (task && agent && !this.runtimeCanRunTaskAgent(lockedRuntime, agent, task)) excludedTaskIds.push(task.id);
+      }
       if (!stale) this.refreshQueuedChatAffinity(lockedRuntime.workspaceId ?? "local");
       const candidate = stale
-        ?? this.claimNextTaskForRuntime(lockedRuntime, [...excludedAgentIds], [...excludedTargets.values()]);
+        ?? this.claimNextTaskForRuntime(
+          lockedRuntime,
+          [...excludedAgentIds],
+          [...excludedTargets.values()],
+          excludedTaskIds,
+        );
       if (!candidate) return null;
       const task = this.snapshotTaskExecution(candidate, lockedRuntime);
       // Check the actual hydrated payload, including both linked and legacy
@@ -1651,7 +1673,7 @@ export class TasksRepo {
     // Agent's primary selection may be exactly the model this Runtime cannot
     // serve (that is why the chain switched).
     if (!currentAgent || currentAgent.archivedAt
-      || !this.ctx.runtimes().runtimeCanRunAgent(runtime, agentAtTaskTarget(currentAgent, task))) {
+      || !this.runtimeCanRunTaskAgent(runtime, currentAgent, task)) {
       throw new AgentPluginReadinessChangedError("claimed Agent is no longer executable");
     }
     const provider = runtime.provider !== "any" ? runtime.provider : currentAgent.provider;
@@ -1899,6 +1921,28 @@ export class TasksRepo {
       .some((alias) => runtimeDaemonAliases(parentRuntime).includes(alias));
   }
 
+  private runtimeCanRunTaskAgent(runtime: MultiremiRuntime, agent: MultiremiAgent, task: MultiremiTask): boolean {
+    const effectiveAgent = agentAtTaskTarget(agent, task);
+    const profile = task.executionFingerprint ? task.codexProfile ?? task.claudeProfile : null;
+    if (!profile) return this.ctx.runtimes().runtimeCanRunAgent(runtime, effectiveAgent);
+    const transition = chatWorkspaceTransition(task.executionFingerprint);
+    const originalRuntimeId = transition ? transition.runtimeId : task.runtimeId;
+    const originalHost = originalRuntimeId === runtime.id;
+    const liveProfile = this.ctx.runtimes().getRuntimeExecutionProfile(runtime.id, effectiveAgent.provider);
+    // A native destination executes the current Agent model: the transition
+    // cannot carry a custom connection onto a host with no such connection.
+    if (!originalHost && !liveProfile) return this.ctx.runtimes().runtimeCanRunAgent(runtime, effectiveAgent);
+    // The original host retains its frozen connection/credentials, which may
+    // no longer appear in the live catalog. Thinking is not frozen: an effort
+    // override requires capabilities for that exact connection and model.
+    if (originalHost && effectiveAgent.thinkingLevel
+      && (!liveProfile || canonicalJson({ ...liveProfile, model: profile.model }) !== canonicalJson(profile))) return false;
+    return this.ctx.runtimes().runtimeCanRunAgent(runtime, {
+      ...effectiveAgent,
+      model: originalHost && !effectiveAgent.thinkingLevel ? "" : profile.model,
+    });
+  }
+
   private runtimeMeetsTaskClaimEligibility(
     runtime: MultiremiRuntime,
     task: MultiremiTaskWithAgent,
@@ -1911,7 +1955,7 @@ export class TasksRepo {
         && !task.runtimeWorkspace?.archivedAt
       ))
       && !task.agent.archivedAt
-      && this.ctx.runtimes().runtimeCanRunAgent(runtime, agentAtTaskTarget(task.agent, task))
+      && this.runtimeCanRunTaskAgent(runtime, task.agent, task)
       && this.runtimeHasReadyTaskPlugins(runtime, task)
       && this.runtimeMatchesCodeSnapshot(runtime, task)
       && (!task.issueId || !task.holdsWorkspace || runtimeSupportsIssueWorkspaces(runtime))
@@ -2038,6 +2082,7 @@ export class TasksRepo {
     runtime: MultiremiRuntime,
     excludedAgentIds: string[] = [],
     excludedTargets: ExecutionTargetExclusion[] = [],
+    excludedTaskIds: string[] = [],
   ): MultiremiTaskWithAgent | null {
     const now = nowIso();
     const deviceRouting = this.runtimeDeviceRoutingContext(runtime);
@@ -2080,6 +2125,7 @@ export class TasksRepo {
       runtime.id,
       ...excludedAgentIds,
       ...excludedExecutionTargetParams(excludedTargets),
+      ...excludedTaskIds,
     ];
     // Ownership guard: a private runtime only executes its owner's agents — a
     // claim hands the runtime the agent's custom_env / mcp_config. Owner match
@@ -2225,6 +2271,7 @@ export class TasksRepo {
            ${runtime.metadata.claude_profiles !== 1 ? "AND t.claude_profile IS NULL" : ""}
            ${excludedAgentIds.length ? `AND t.agent_id NOT IN (${excludedAgentIds.map(() => "?").join(", ")})` : ""}
            ${excludedExecutionTargetSql(excludedTargets)}
+           ${excludedTaskIds.length ? `AND t.id NOT IN (${excludedTaskIds.map(() => "?").join(", ")})` : ""}
          ORDER BY t.priority DESC, t.created_at ASC
          LIMIT 1
        )
@@ -3038,7 +3085,7 @@ export class TasksRepo {
       && parentEffectiveAgent != null
       && parent.provider != null
       && parent.provider === parentEffectiveAgent.provider
-      && this.ctx.runtimes().runtimeCanRunAgent(parentRuntime, parentEffectiveAgent);
+      && this.runtimeCanRunTaskAgent(parentRuntime, parentEffectiveAgent, parent);
     const detachedChatIssue = !!parent.chatSessionId && !!parent.issueId
       && this.ctx.feishuBot().getFeishuIssueIdForChatSession(parent.chatSessionId) !== parent.issueId;
     const invalidatedChatWorkspace = Boolean(parent.chatSessionId && !parent.issueId
