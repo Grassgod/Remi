@@ -398,6 +398,8 @@ export function CreateAgentDialog({
                 value={fallbackThinkingLevel}
                 levels={fallbackLevels}
                 thinking={getModelThinking(targetModels.models, fallbackModel, targetModels.defaultThinking)}
+                isLoading={targetModels.isLoading}
+                isError={targetModels.isError}
                 modelUnavailable={fallbackUnavailable}
                 modelExecutionUnknown={isModelExecutionUnknown(provider, fallbackModel, targetModels.models, targetModels.modelCatalogStatus)}
                 label={t(($) => $.fallback.thinking_label)}
