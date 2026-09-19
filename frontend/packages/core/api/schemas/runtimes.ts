@@ -317,12 +317,30 @@ const RelayReasoningLevelOptionSchema = z.object({
   description: z.string().optional(),
 }).loose();
 
+export const RelayReasoningLevelManualStateSchema = z.enum(["effective", "outranked", "blocked"]);
+export const RelayReasoningLevelManualStateCodeSchema = z.enum([
+  "not_in_execution_catalog",
+  "execution_catalog_unknown",
+  "not_in_catalog",
+]);
+
+// `state` is required: a declaration that is stored but inert (`blocked`, for
+// example a Codex model the execution catalog does not list) must never render
+// as if it were in force, so a body that omits the field is a contract error
+// rather than "nothing to report". A blocked row must also carry the reason it
+// is blocked, so the page states the exact rule instead of a generic label.
 export const RelayReasoningLevelManualSchema = z.object({
   levels: z.array(z.string()),
   default_level: z.string().nullable().default(null),
   updated_by: z.string().nullable().default(null),
   updated_at: z.string().nullable().default(null),
-}).loose();
+  state: RelayReasoningLevelManualStateSchema,
+  state_code: RelayReasoningLevelManualStateCodeSchema.nullable().default(null),
+}).loose().superRefine((manual, ctx) => {
+  if (manual.state === "blocked" && manual.state_code === null) {
+    ctx.addIssue({ code: "custom", message: "a blocked declaration must carry a state_code" });
+  }
+});
 
 export const RelayReasoningLevelEffectiveSchema = z.object({
   supported_levels: z.array(RelayReasoningLevelOptionSchema).default([]),
@@ -359,6 +377,8 @@ export const RelayReasoningLevelSaveResultSchema = z.object({
 }).loose();
 
 export type RelayReasoningLevelManual = z.infer<typeof RelayReasoningLevelManualSchema>;
+export type RelayReasoningLevelManualState = z.infer<typeof RelayReasoningLevelManualStateSchema>;
+export type RelayReasoningLevelManualStateCode = z.infer<typeof RelayReasoningLevelManualStateCodeSchema>;
 export type RelayReasoningLevelEffective = z.infer<typeof RelayReasoningLevelEffectiveSchema>;
 export type RelayReasoningLevelModel = z.infer<typeof RelayReasoningLevelModelSchema>;
 export type RelayReasoningLevelsResponse = z.infer<typeof RelayReasoningLevelsResponseSchema>;

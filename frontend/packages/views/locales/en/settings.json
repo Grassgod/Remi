@@ -634,7 +634,7 @@
     "probe_failed": "Probe failed",
     "reasoning_title": "Model reasoning levels",
     "reasoning_description": "Declare reasoning levels for gateway models that report none. Manual declarations only fill gaps: gateway and runtime declarations always take precedence.",
-    "reasoning_empty": "No models in the probe snapshot yet. Run \"Probe now\" to load the gateway model list.",
+    "reasoning_empty": "No gateway models probed for this engine yet. You can still declare one manually.",
     "reasoning_load_failed": "Couldn't load reasoning-level settings",
     "reasoning_edit": "Configure",
     "reasoning_close": "Close",
@@ -661,7 +661,16 @@
     "reasoning_effect_none": "Effective: no levels",
     "reasoning_manual_badge": "Manual: {{levels}}",
     "reasoning_manual_meta": "Updated by {{user}} · {{time}}",
-    "reasoning_conflict": "Overridden by the {{source}} declaration — the effective value comes from {{source}}."
+    "reasoning_conflict": "Overridden by the {{source}} declaration — the effective value comes from {{source}}.",
+    "reasoning_add_model": "Add model",
+    "reasoning_add_close": "Cancel",
+    "reasoning_add_model_label": "Model ID",
+    "reasoning_add_model_placeholder": "e.g. deepseek-v4-flash",
+    "reasoning_state_blocked": "Not effective",
+    "reasoning_blocked_not_in_execution_catalog": "This model is not in the Codex execution catalog, so the declaration cannot take effect and the model stays unselectable.",
+    "reasoning_blocked_execution_catalog_unknown": "The Codex execution catalog is unknown or still loading, so the declaration cannot take effect yet.",
+    "reasoning_blocked_not_in_catalog": "This model is not in the engine catalog (for example, no Runtime of this engine is available), so the declaration cannot take effect yet.",
+    "reasoning_blocked_unknown_reason": "This declaration is not in effect."
   },
   "feishu": {
     "title": "Feishu Messages",

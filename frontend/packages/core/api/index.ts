@@ -22,6 +22,8 @@ export type {
   RelayEngineProbe,
   RelayReasoningLevelEffective,
   RelayReasoningLevelManual,
+  RelayReasoningLevelManualState,
+  RelayReasoningLevelManualStateCode,
   RelayReasoningLevelModel,
   RelayReasoningLevelsResponse,
   RelayReasoningLevelSaveResult,

@@ -632,7 +632,7 @@
     "probe_failed": "検出に失敗しました",
     "reasoning_title": "モデルの推論レベル",
     "reasoning_description": "ゲートウェイが推論レベルを返さないモデルに、管理者が手動でレベルを宣言できます。手動宣言は空欄を補うだけで、ゲートウェイや Runtime の宣言が常に優先されます。",
-    "reasoning_empty": "検出スナップショットにモデルがありません。先に「今すぐ検出」を実行してください。",
+    "reasoning_empty": "このエンジンではまだゲートウェイモデルを検出していません。「モデルを追加」から手動で宣言できます。",
     "reasoning_load_failed": "推論レベル設定の読み込みに失敗しました",
     "reasoning_edit": "設定",
     "reasoning_close": "閉じる",
@@ -659,7 +659,16 @@
     "reasoning_effect_none": "有効: レベルなし",
     "reasoning_manual_badge": "手動宣言: {{levels}}",
     "reasoning_manual_meta": "{{user}} が {{time}} に更新",
-    "reasoning_conflict": "{{source}}の宣言が優先されています。有効値は{{source}}由来です。"
+    "reasoning_conflict": "{{source}}の宣言が優先されています。有効値は{{source}}由来です。",
+    "reasoning_add_model": "モデルを追加",
+    "reasoning_add_close": "キャンセル",
+    "reasoning_add_model_label": "モデル ID",
+    "reasoning_add_model_placeholder": "例: deepseek-v4-flash",
+    "reasoning_state_blocked": "未反映",
+    "reasoning_blocked_not_in_execution_catalog": "このモデルは Codex 実行カタログにないため、宣言は反映されず、モデルも選択できません。",
+    "reasoning_blocked_execution_catalog_unknown": "Codex 実行カタログが不明または読み込み中のため、宣言はまだ反映されません。",
+    "reasoning_blocked_not_in_catalog": "このエンジンのカタログにモデルがないため（例: 利用可能な Runtime がない）、宣言はまだ反映されません。",
+    "reasoning_blocked_unknown_reason": "この宣言は現在反映されていません。"
   },
   "feishu": {
     "title": "Feishu メッセージ",

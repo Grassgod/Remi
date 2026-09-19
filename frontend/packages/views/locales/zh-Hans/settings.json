@@ -633,7 +633,7 @@
     "probe_failed": "探测失败",
     "reasoning_title": "模型推理等级",
     "reasoning_description": "当网关不提供推理等级时，可为单个模型手动声明。手动声明只补空缺：网关或 Runtime 的权威声明始终优先。",
-    "reasoning_empty": "探测快照里还没有模型，先点「立即探测」。",
+    "reasoning_empty": "该引擎尚未探测到网关模型，仍可用「新增模型」手工声明。",
     "reasoning_load_failed": "推理等级配置加载失败",
     "reasoning_edit": "配置",
     "reasoning_close": "收起",
@@ -660,7 +660,16 @@
     "reasoning_effect_none": "当前生效：无等级",
     "reasoning_manual_badge": "手动声明：{{levels}}",
     "reasoning_manual_meta": "{{user}} 更新于 {{time}}",
-    "reasoning_conflict": "已被{{source}}声明覆盖，当前生效值来自{{source}}。"
+    "reasoning_conflict": "已被{{source}}声明覆盖，当前生效值来自{{source}}。",
+    "reasoning_add_model": "新增模型",
+    "reasoning_add_close": "取消",
+    "reasoning_add_model_label": "模型 ID",
+    "reasoning_add_model_placeholder": "例如 deepseek-v4-flash",
+    "reasoning_state_blocked": "未生效",
+    "reasoning_blocked_not_in_execution_catalog": "该模型不在 Codex 执行目录中，声明不会让它可选，也无法生效。",
+    "reasoning_blocked_execution_catalog_unknown": "Codex 执行目录未知或加载中，暂时无法判定，声明暂不生效。",
+    "reasoning_blocked_not_in_catalog": "当前引擎目录中没有这个模型（例如没有可用的该引擎 Runtime），声明暂不生效。",
+    "reasoning_blocked_unknown_reason": "该声明当前未生效。"
   },
   "feishu": {
     "title": "飞书消息",

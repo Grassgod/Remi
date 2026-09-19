@@ -23,6 +23,7 @@ describe("relay reasoning-levels endpoints", () => {
             default_level: "high",
             updated_by: "owner@example.test",
             updated_at: "2026-09-19T08:00:00.000Z",
+            state: "effective",
           },
           effective: {
             supported_levels: [{ value: "low", label: "low" }, { value: "high", label: "high" }],
@@ -60,6 +61,7 @@ describe("relay reasoning-levels endpoints", () => {
           default_level: "high",
           updated_by: "owner@example.test",
           updated_at: "2026-09-19T08:10:00.000Z",
+          state: "effective",
         },
         effective: {
           supported_levels: [{ value: "low", label: "low" }, { value: "high", label: "high" }],
@@ -148,6 +150,70 @@ describe("relay reasoning-levels endpoints", () => {
           status: "supported",
           source: "teammate",
         },
+      }],
+    })));
+
+    await expect(api().getRelayReasoningLevels("ws-1", "claude")).rejects.toBeInstanceOf(ApiContractError);
+  });
+  it("parses a blocked declaration's reason code", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({
+      engine: "codex",
+      allowed_levels: ["minimal", "low", "medium", "high", "xhigh", "max"],
+      models: [{
+        model_id: "gpt-6-astra",
+        label: "GPT-6 Astra",
+        manual: {
+          levels: ["high"],
+          default_level: "high",
+          updated_by: "owner@example.test",
+          updated_at: "2026-09-19T08:30:00.000Z",
+          state: "blocked",
+          state_code: "not_in_execution_catalog",
+        },
+        effective: null,
+      }],
+    })));
+
+    const result = await api().getRelayReasoningLevels("ws-1", "codex");
+
+    expect(result.models[0]?.manual?.state).toBe("blocked");
+    expect(result.models[0]?.manual?.state_code).toBe("not_in_execution_catalog");
+    expect(result.models[0]?.effective).toBeNull();
+  });
+
+  it("rejects a blocked declaration that hides its reason", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({
+      engine: "codex",
+      allowed_levels: ["high"],
+      models: [{
+        model_id: "gpt-6-astra",
+        label: "GPT-6 Astra",
+        manual: {
+          levels: ["high"],
+          updated_by: "owner@example.test",
+          updated_at: "2026-09-19T08:30:00.000Z",
+          state: "blocked",
+        },
+        effective: null,
+      }],
+    })));
+
+    await expect(api().getRelayReasoningLevels("ws-1", "codex")).rejects.toBeInstanceOf(ApiContractError);
+  });
+
+  it("rejects a declaration that drops the state instead of guessing it", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({
+      engine: "claude",
+      allowed_levels: ["low", "high"],
+      models: [{
+        model_id: "deepseek-v4-flash",
+        label: "DeepSeek V4 Flash",
+        manual: {
+          levels: ["low", "high"],
+          updated_by: "owner@example.test",
+          updated_at: "2026-09-19T08:30:00.000Z",
+        },
+        effective: null,
       }],
     })));
 

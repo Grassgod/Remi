@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Activity, AlertCircle, Eye, EyeOff, Radar, Save, SlidersHorizontal, Sparkles, Waypoints } from "lucide-react";
+import { Activity, AlertCircle, Eye, EyeOff, Plus, Radar, Save, SlidersHorizontal, Sparkles, Waypoints } from "lucide-react";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { Card, CardContent } from "@multiremi/ui/components/ui/card";
 import { Badge } from "@multiremi/ui/components/ui/badge";
@@ -663,21 +663,40 @@ function ReasoningLevelsSection({ engine, wsId }: { engine: Engine; wsId: string
     queryFn: () => api.getRelayReasoningLevels(wsId, engine),
   });
 
+  const [adding, setAdding] = useState(false);
+
   const models = data?.models ?? [];
+  const allowedLevels = data?.allowed_levels ?? [];
 
   return (
     <section className="space-y-3">
-      <div>
-        <h4 className="flex items-center gap-2 text-sm font-semibold">
-          <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
-          {t(($) => $.modelGateway.reasoning_title)}
-        </h4>
-        <p className="mt-1 text-xs text-muted-foreground">
-          {t(($) => $.modelGateway.reasoning_description)}
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h4 className="flex items-center gap-2 text-sm font-semibold">
+            <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
+            {t(($) => $.modelGateway.reasoning_title)}
+          </h4>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {t(($) => $.modelGateway.reasoning_description)}
+          </p>
+        </div>
+        {/* A declaration is a statement about the engine, not probe output, so
+            it stays configurable when the snapshot is empty, stale or gone. */}
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          aria-expanded={adding}
+          onClick={() => setAdding((value) => !value)}
+        >
+          <Plus className="h-3 w-3" />
+          {adding
+            ? t(($) => $.modelGateway.reasoning_add_close)
+            : t(($) => $.modelGateway.reasoning_add_model)}
+        </Button>
       </div>
       <Card>
-        <CardContent className="space-y-2">
+        <CardContent className="space-y-3">
           {isPending ? (
             <Skeleton className="h-16 w-full" />
           ) : isError ? (
@@ -690,26 +709,191 @@ function ReasoningLevelsSection({ engine, wsId }: { engine: Engine; wsId: string
                 {t(($) => $.modelGateway.try_again)}
               </Button>
             </div>
-          ) : models.length === 0 ? (
-            <p className="text-xs text-muted-foreground">
-              {t(($) => $.modelGateway.reasoning_empty)}
-            </p>
           ) : (
-            <ul className="divide-y">
-              {models.map((model) => (
-                <ReasoningLevelRow
-                  key={`${model.model_id}:${model.manual?.updated_at ?? "none"}`}
+            <>
+              {adding ? (
+                <AddReasoningLevelForm
                   engine={engine}
                   wsId={wsId}
-                  model={model}
-                  allowedLevels={data?.allowed_levels ?? []}
+                  allowedLevels={allowedLevels}
+                  onDone={() => setAdding(false)}
                 />
-              ))}
-            </ul>
+              ) : null}
+              {models.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  {t(($) => $.modelGateway.reasoning_empty)}
+                </p>
+              ) : (
+                <ul className="divide-y">
+                  {models.map((model) => (
+                    <ReasoningLevelRow
+                      key={`${model.model_id}:${model.manual?.updated_at ?? "none"}`}
+                      engine={engine}
+                      wsId={wsId}
+                      model={model}
+                      allowedLevels={allowedLevels}
+                    />
+                  ))}
+                </ul>
+              )}
+            </>
           )}
         </CardContent>
       </Card>
     </section>
+  );
+}
+
+// A declaration does not depend on the probe snapshot, so this form takes a
+// model id nobody discovered. Same PUT as a row editor: the server stores the
+// declaration first and reports back whether it can take effect.
+function AddReasoningLevelForm({ engine, wsId, allowedLevels, onDone }: {
+  engine: Engine;
+  wsId: string;
+  allowedLevels: string[];
+  onDone: () => void;
+}) {
+  const { t } = useT("settings");
+  const qc = useQueryClient();
+  const [modelId, setModelId] = useState("");
+  const [selected, setSelected] = useState<string[]>([]);
+  const [defaultLevel, setDefaultLevel] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const model = modelId.trim();
+
+  function toggleLevel(level: string, checked: boolean) {
+    const next = checked
+      ? [...selected, level]
+      : selected.filter((value) => value !== level);
+    setSelected(next);
+    if (defaultLevel && !next.includes(defaultLevel)) setDefaultLevel("");
+  }
+
+  async function submit() {
+    if (!model || selected.length === 0) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await api.putRelayReasoningLevel(wsId, engine, {
+        model,
+        levels: selected,
+        ...(defaultLevel ? { default_level: defaultLevel } : {}),
+      });
+      await qc.invalidateQueries({ queryKey: relayKeys.reasoningLevels(wsId, engine) });
+      // The declaration feeds the agent model/effort selection, so the fleet
+      // catalog must refetch as well.
+      await qc.invalidateQueries({ queryKey: runtimeModelsKeys.fleet(wsId) });
+      toast.success(t(($) => $.modelGateway.reasoning_saved));
+      onDone();
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : t(($) => $.modelGateway.reasoning_save_failed));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3 rounded-md border bg-muted/30 p-3">
+      <div className="space-y-1.5">
+        <Label htmlFor={`reasoning-model-${engine}`} className="text-xs font-medium">
+          {t(($) => $.modelGateway.reasoning_add_model_label)}
+        </Label>
+        <Input
+          id={`reasoning-model-${engine}`}
+          value={modelId}
+          onChange={(e) => setModelId(e.target.value)}
+          placeholder={t(($) => $.modelGateway.reasoning_add_model_placeholder)}
+          className="font-mono text-xs sm:max-w-xs"
+          spellCheck={false}
+          disabled={saving}
+        />
+      </div>
+      <ReasoningLevelFields
+        idPrefix={`add-${engine}`}
+        allowedLevels={allowedLevels}
+        selected={selected}
+        defaultLevel={defaultLevel}
+        disabled={saving}
+        onToggle={toggleLevel}
+        onDefaultChange={setDefaultLevel}
+      />
+      {saveError ? (
+        <p role="alert" className="text-xs text-destructive">{saveError}</p>
+      ) : null}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          type="button"
+          size="sm"
+          onClick={() => void submit()}
+          disabled={saving || !model || selected.length === 0}
+        >
+          {saving
+            ? t(($) => $.modelGateway.reasoning_saving)
+            : t(($) => $.modelGateway.reasoning_save)}
+        </Button>
+        <Button type="button" size="sm" variant="ghost" onClick={onDone} disabled={saving}>
+          {t(($) => $.modelGateway.reasoning_add_close)}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function ReasoningLevelFields({ idPrefix, allowedLevels, selected, defaultLevel, disabled, onToggle, onDefaultChange }: {
+  idPrefix: string;
+  allowedLevels: string[];
+  selected: string[];
+  defaultLevel: string;
+  disabled: boolean;
+  onToggle: (level: string, checked: boolean) => void;
+  onDefaultChange: (level: string) => void;
+}) {
+  const { t } = useT("settings");
+  const defaultId = `reasoning-default-${idPrefix}`;
+
+  return (
+    <>
+      <div className="space-y-1.5">
+        <Label className="text-xs font-medium">
+          {t(($) => $.modelGateway.reasoning_levels_label)}
+        </Label>
+        <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+          {allowedLevels.map((level) => (
+            <label key={level} className="flex cursor-pointer items-center gap-2 font-mono text-xs">
+              <Checkbox
+                checked={selected.includes(level)}
+                disabled={disabled}
+                onCheckedChange={(checked) => onToggle(level, checked === true)}
+              />
+              {level}
+            </label>
+          ))}
+        </div>
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor={defaultId} className="text-xs font-medium">
+          {t(($) => $.modelGateway.reasoning_default_label)}
+        </Label>
+        <Select
+          value={defaultLevel || REASONING_DEFAULT_NONE}
+          onValueChange={(value) => onDefaultChange(!value || value === REASONING_DEFAULT_NONE ? "" : value)}
+          disabled={disabled}
+        >
+          <SelectTrigger id={defaultId} className="w-full sm:max-w-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={REASONING_DEFAULT_NONE}>
+              {t(($) => $.modelGateway.reasoning_default_none)}
+            </SelectItem>
+            {selected.map((level) => (
+              <SelectItem key={level} value={level}>{level}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+    </>
   );
 }
 
@@ -728,7 +912,24 @@ function ReasoningLevelRow({ engine, wsId, model, allowedLevels }: {
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const effective = model.effective;
-  const conflict = model.manual !== null && effective !== null && effective.source !== "manual";
+  // The server's `state` keeps a stored-but-inert declaration from rendering as
+  // if it were in force: `outranked` keeps the existing conflict hint, and
+  // `blocked` states the exact reason the declaration cannot apply.
+  const outranked = model.manual?.state === "outranked";
+  const blocked = model.manual?.state === "blocked";
+  function blockedReason(): string {
+    const code = model.manual?.state_code;
+    if (code === "not_in_execution_catalog") {
+      return t(($) => $.modelGateway.reasoning_blocked_not_in_execution_catalog);
+    }
+    if (code === "execution_catalog_unknown") {
+      return t(($) => $.modelGateway.reasoning_blocked_execution_catalog_unknown);
+    }
+    if (code === "not_in_catalog") {
+      return t(($) => $.modelGateway.reasoning_blocked_not_in_catalog);
+    }
+    return t(($) => $.modelGateway.reasoning_blocked_unknown_reason);
+  }
   const effectiveSource = effective?.source === "gateway"
     ? t(($) => $.modelGateway.reasoning_source_gateway)
     : effective?.source === "runtime"
@@ -800,7 +1001,7 @@ function ReasoningLevelRow({ engine, wsId, model, allowedLevels }: {
                     : t(($) => $.modelGateway.reasoning_effect_none)}
                 </span>
               </>
-            ) : (
+            ) : model.manual ? null : (
               <span className="text-[11px] text-muted-foreground">
                 {t(($) => $.modelGateway.reasoning_not_declared)}
               </span>
@@ -812,10 +1013,20 @@ function ReasoningLevelRow({ engine, wsId, model, allowedLevels }: {
                 })}
               </Badge>
             ) : null}
+            {blocked ? (
+              <Badge variant="destructive">
+                {t(($) => $.modelGateway.reasoning_state_blocked)}
+              </Badge>
+            ) : null}
           </div>
-          {conflict ? (
+          {outranked ? (
             <p className="text-[11px] text-amber-600 dark:text-amber-400" role="status">
               {t(($) => $.modelGateway.reasoning_conflict, { source: effectiveSource })}
+            </p>
+          ) : null}
+          {blocked ? (
+            <p className="text-[11px] text-destructive" role="status">
+              {blockedReason()}
             </p>
           ) : null}
           {model.manual && (model.manual.updated_by || model.manual.updated_at) ? (
@@ -842,51 +1053,15 @@ function ReasoningLevelRow({ engine, wsId, model, allowedLevels }: {
       </div>
       {open ? (
         <div className="mt-3 space-y-3 rounded-md border bg-muted/30 p-3">
-          <div className="space-y-1.5">
-            <Label className="text-xs font-medium">
-              {t(($) => $.modelGateway.reasoning_levels_label)}
-            </Label>
-            <div className="flex flex-wrap gap-x-4 gap-y-1.5">
-              {allowedLevels.map((level) => (
-                <label key={level} className="flex cursor-pointer items-center gap-2 font-mono text-xs">
-                  <Checkbox
-                    checked={selected.includes(level)}
-                    disabled={saving}
-                    onCheckedChange={(checked) => toggleLevel(level, checked === true)}
-                  />
-                  {level}
-                </label>
-              ))}
-            </div>
-          </div>
-          <div className="space-y-1.5">
-            <Label
-              htmlFor={`reasoning-default-${engine}-${model.model_id}`}
-              className="text-xs font-medium"
-            >
-              {t(($) => $.modelGateway.reasoning_default_label)}
-            </Label>
-            <Select
-              value={defaultLevel || REASONING_DEFAULT_NONE}
-              onValueChange={(value) => setDefaultLevel(!value || value === REASONING_DEFAULT_NONE ? "" : value)}
-              disabled={saving}
-            >
-              <SelectTrigger
-                id={`reasoning-default-${engine}-${model.model_id}`}
-                className="w-full sm:max-w-xs"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={REASONING_DEFAULT_NONE}>
-                  {t(($) => $.modelGateway.reasoning_default_none)}
-                </SelectItem>
-                {selected.map((level) => (
-                  <SelectItem key={level} value={level}>{level}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          <ReasoningLevelFields
+            idPrefix={`${engine}-${model.model_id}`}
+            allowedLevels={allowedLevels}
+            selected={selected}
+            defaultLevel={defaultLevel}
+            disabled={saving}
+            onToggle={toggleLevel}
+            onDefaultChange={setDefaultLevel}
+          />
           {saveError ? (
             <p role="alert" className="text-xs text-destructive">{saveError}</p>
           ) : null}

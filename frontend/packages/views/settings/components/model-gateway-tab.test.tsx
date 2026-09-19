@@ -359,6 +359,7 @@ describe("ModelGatewayTab", () => {
           default_level: "high",
           updated_by: "owner@example.test",
           updated_at: "2026-09-19T08:10:00.000Z",
+          state: "effective",
         },
         effective: {
           supported_levels: [{ value: "low", label: "low" }, { value: "high", label: "high" }],
@@ -392,7 +393,7 @@ describe("ModelGatewayTab", () => {
     }));
   });
 
-  it("marks the effective source and flags a manual declaration a higher-priority source overrides", () => {
+  it("flags an outranked declaration with the existing conflict hint", () => {
     reasoningRef.current.claude = {
       engine: "claude",
       allowed_levels: ["low", "medium", "high", "xhigh", "max"],
@@ -404,6 +405,7 @@ describe("ModelGatewayTab", () => {
           default_level: "high",
           updated_by: "owner@example.test",
           updated_at: "2026-09-19T08:10:00.000Z",
+          state: "outranked",
         },
         effective: {
           supported_levels: [{ value: "low", label: "low" }, { value: "high", label: "high" }],
@@ -447,6 +449,7 @@ describe("ModelGatewayTab", () => {
           default_level: "high",
           updated_by: "owner@example.test",
           updated_at: "2026-09-19T08:10:00.000Z",
+          state: "effective",
         },
         effective: {
           supported_levels: [{ value: "high", label: "high" }],
@@ -506,6 +509,7 @@ describe("ModelGatewayTab", () => {
           default_level: "high",
           updated_by: "owner@example.test",
           updated_at: "2026-09-19T08:10:00.000Z",
+          state: "effective",
         },
         effective: {
           supported_levels: [{ value: "low", label: "low" }, { value: "high", label: "high" }],
@@ -533,5 +537,116 @@ describe("ModelGatewayTab", () => {
       queryKey: ["relay-reasoning-levels", "workspace-1", "claude"],
     }));
     expect(screen.getByText("Manual: low, high")).toBeInTheDocument();
+  });
+  it("adds a model manually when the engine has no probed models", async () => {
+    reasoningRef.current.claude = {
+      engine: "claude",
+      allowed_levels: ["low", "medium", "high", "xhigh", "max"],
+      models: [],
+    };
+    mockPutReasoningLevel.mockResolvedValue({
+      deleted: false,
+      engine: "claude",
+      allowed_levels: ["low", "medium", "high", "xhigh", "max"],
+      models: [{
+        model_id: "deepseek-v4-flash",
+        label: "deepseek-v4-flash",
+        manual: {
+          levels: ["low", "high"],
+          default_level: "high",
+          updated_by: "owner@example.test",
+          updated_at: "2026-09-19T08:30:00.000Z",
+          state: "effective",
+        },
+        effective: {
+          supported_levels: [{ value: "low", label: "low" }, { value: "high", label: "high" }],
+          default_level: "high",
+          status: "supported",
+          source: "manual",
+        },
+      }],
+    });
+    const user = userEvent.setup();
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    expect(screen.getAllByText(
+      "No gateway models probed for this engine yet. You can still declare one manually.",
+    ).length).toBeGreaterThan(0);
+    await user.click(screen.getAllByRole("button", { name: "Add model" })[0]!);
+    await user.type(screen.getByLabelText("Model ID"), "deepseek-v4-flash");
+    await user.click(screen.getByRole("checkbox", { name: "low" }));
+    await user.click(screen.getByRole("checkbox", { name: "high" }));
+    await user.click(screen.getByRole("combobox", { name: "Default level" }));
+    await user.click(await screen.findByRole("option", { name: "high" }));
+    await user.click(screen.getByRole("button", { name: "Save levels" }));
+
+    await waitFor(() => expect(mockPutReasoningLevel).toHaveBeenCalledWith("workspace-1", "claude", {
+      model: "deepseek-v4-flash",
+      levels: ["low", "high"],
+      default_level: "high",
+    }));
+    await waitFor(() => expect(mockInvalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["relay-reasoning-levels", "workspace-1", "claude"],
+    }));
+    await waitFor(() => expect(mockInvalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["runtimes", "models", "fleet", "workspace-1"],
+    }));
+  });
+
+  it("renders a distinct blocked reason for every state code", () => {
+    const blocked = (stateCode: string) => ({
+      levels: ["high"],
+      default_level: "high",
+      updated_by: "owner@example.test",
+      updated_at: "2026-09-19T08:40:00.000Z",
+      state: "blocked",
+      state_code: stateCode,
+    });
+    reasoningRef.current.claude = {
+      engine: "claude",
+      allowed_levels: ["low", "medium", "high"],
+      models: [
+        { model_id: "codex-absent", label: "Codex absent", manual: blocked("not_in_execution_catalog"), effective: null },
+        { model_id: "codex-loading", label: "Codex loading", manual: blocked("execution_catalog_unknown"), effective: null },
+        { model_id: "engine-absent", label: "Engine absent", manual: blocked("not_in_catalog"), effective: null },
+      ],
+    };
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    expect(screen.getAllByText("Not effective")).toHaveLength(3);
+    expect(screen.getByText(/not in the Codex execution catalog/)).toBeInTheDocument();
+    expect(screen.getByText(/execution catalog is unknown or still loading/)).toBeInTheDocument();
+    expect(screen.getByText(/not in the engine catalog/)).toBeInTheDocument();
+    expect(screen.queryByText("Not declared")).toBeNull();
+  });
+
+  it("keeps an effective declaration in force without a conflict hint", () => {
+    reasoningRef.current.claude = {
+      engine: "claude",
+      allowed_levels: ["low", "medium", "high"],
+      models: [{
+        model_id: "deepseek-v4-flash",
+        label: "DeepSeek V4 Flash",
+        manual: {
+          levels: ["low", "high"],
+          default_level: "high",
+          updated_by: "owner@example.test",
+          updated_at: "2026-09-19T08:50:00.000Z",
+          state: "effective",
+        },
+        effective: {
+          supported_levels: [{ value: "low", label: "low" }, { value: "high", label: "high" }],
+          default_level: "high",
+          status: "supported",
+          source: "manual",
+        },
+      }],
+    };
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    expect(screen.getByText("manual")).toBeInTheDocument();
+    expect(screen.getByText("Manual: low, high")).toBeInTheDocument();
+    expect(screen.queryByText("Not effective")).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
   });
 });
