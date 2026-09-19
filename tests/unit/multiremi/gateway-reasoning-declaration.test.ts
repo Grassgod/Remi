@@ -399,6 +399,65 @@ describe("MUL-338 gateway reasoning declarations: routing", () => {
   });
 });
 
+describe("MUL-338 gateway reasoning declarations: the group-scoped catalog", () => {
+  // Two Claude members that both offer the same gateway model, one report each.
+  function setupGroup(reports: Array<MultiremiRuntimeModelThinking | undefined>) {
+    const store = createLocalStore();
+    store.setRelayModelDiscovery("local", true);
+    const revision = store.upsertRelayConfig("local", "claude", {
+      fragment: CLAUDE_FRAG, tokenOp: "set", authToken: "test-key",
+    });
+    store.saveGatewayModels("local", "claude", {
+      sourceRevision: revision, models: GATEWAY_MODELS.map(id => ({ id, label: id })),
+    });
+    const runtimes = reports.map((thinking, index) => store.registerRuntime({
+      name: `member-${index}`, provider: "claude", workspaceId: "local", executionGroupId: "reasoning-group",
+      models: [...claudeRuntimeModels(), {
+        id: "deepseek-v4-flash", label: "deepseek-v4-flash", provider: "anthropic", default: false,
+        ...(thinking ? { thinking } : {}),
+      }],
+    }));
+    return { store, runtimes, app: createMultiremiApp({ store }) };
+  }
+
+  async function groupModel(app: ReturnType<typeof createMultiremiApp>) {
+    const response = await app.request("/api/models?execution_group_id=reasoning-group");
+    const { providers } = await response.json() as { providers: FleetProviderModelsResponse[] };
+    return providers.find(entry => entry.provider === "claude")?.models.find(entry => entry.id === "deepseek-v4-flash");
+  }
+
+  async function runtimeModel(app: ReturnType<typeof createMultiremiApp>, runtimeId: string) {
+    const response = await app.request(`/api/models?workspace_id=local&runtime_id=${runtimeId}`);
+    const { providers } = await response.json() as { providers: FleetProviderModelsResponse[] };
+    return providers.find(entry => entry.provider === "claude")?.models.find(entry => entry.id === "deepseek-v4-flash");
+  }
+
+  it("names the source when every member agrees on it", async () => {
+    // Both members report the model themselves, so the group's intersection is
+    // still that report and can say so.
+    const { app } = setupGroup([reasoning(NATIVE_LEVELS, "medium"), reasoning(NATIVE_LEVELS, "medium")]);
+
+    const model = await groupModel(app);
+    expect(levelsOf(model?.thinking)).toEqual(NATIVE_LEVELS);
+    expect(model?.thinking_source).toBe("runtime");
+  });
+
+  it("omits the source rather than attributing the intersection to one member", async () => {
+    // member-0 states the levels; member-1 leaves the model to the administrator's
+    // declaration, so the two members disagree about who spoke for the model.
+    const { store, runtimes, app } = setupGroup([reasoning(NATIVE_LEVELS, "medium"), undefined]);
+    declareLevels(store, "claude", "deepseek-v4-flash", NATIVE_LEVELS, "medium");
+
+    expect((await runtimeModel(app, runtimes[0].id))?.thinking_source).toBe("runtime");
+    expect((await runtimeModel(app, runtimes[1].id))?.thinking_source).toBe("manual");
+    // The intersection is still reported — with levels both members can honour —
+    // but naming either member's source for it would misattribute the other's.
+    const model = await groupModel(app);
+    expect(levelsOf(model?.thinking)).toEqual(NATIVE_LEVELS);
+    expect(model?.thinking_source).toBeUndefined();
+  });
+});
+
 describe("MUL-338 gateway reasoning declarations: the write side", () => {
   function agentWith(store: ReturnType<typeof createLocalStore>, model: string, thinkingLevel: string) {
     return store.createAgent({ name: `agent-${model}-${thinkingLevel}`, provider: "claude", model, thinkingLevel });

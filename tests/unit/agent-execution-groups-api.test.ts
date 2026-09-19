@@ -64,9 +64,13 @@ describe("execution group API", () => {
         expect(providers[0].models.map((model: { default?: boolean }) => ({ ...model, default: model.default === true }))).toEqual([{
           id: "custom-model", label: "Custom model", provider, default: true,
           thinking: { supported_levels: [{ value: "high", label: "High" }], default_level: "high" },
+          // Reported by the Runtime itself, so the catalog names it as that source
+          // rather than leaving the levels unattributed.
+          thinking_source: "runtime",
         }, {
           id: "alternative-model", label: "Alternative", provider, default: false,
           thinking: { supported_levels: [{ value: "high", label: "High" }] },
+          thinking_source: "runtime",
         }]);
       }
       const response = await request("/api/agents", { name: "Reasoning", execution_group_id: "custom-group", model: "alternative-model", thinking_level: "high" });

@@ -91,6 +91,12 @@ export function executionGroupModelCatalog(store: MultiremiStore, workspaceId: s
     const defaultLevel = model.thinking?.default_level;
     const thinkingDefault = defaultLevel && supported.some((level) => level.value === defaultLevel)
       && matches.every((candidate) => candidate?.thinking?.default_level === defaultLevel) ? defaultLevel : undefined;
+    // These levels are the intersection across the group's members, so naming a
+    // single member's source for the consensus would misattribute it: report one
+    // only when every member that offers the model states the same source.
+    const sources = matches.map((candidate) => candidate?.thinking_source);
+    const thinkingSource = sources.length > 0
+      && sources.every((source) => source !== undefined && source === sources[0]) ? sources[0] : undefined;
     return [{
       id: model.id, label: model.label, provider: group.provider,
       ...(matches.some(candidate => candidate?.execution_status !== undefined) ? {
@@ -104,6 +110,7 @@ export function executionGroupModelCatalog(store: MultiremiStore, workspaceId: s
         ...(failed?.error ? { error: failed.error } : {}),
         ...(thinkingDefault ? { default_level: thinkingDefault } : {}),
       } } : {}),
+      ...(thinkingSource ? { thinking_source: thinkingSource } : {}),
     }];
   });
   return [{ provider: group.provider, models, online_runtime_count: runtimes.filter((runtime) => runtime.status === "online").length,
