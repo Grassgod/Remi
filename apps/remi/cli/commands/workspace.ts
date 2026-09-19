@@ -177,6 +177,22 @@ export function workspaceCommandSpecs(): CommandSpec[] {
     scopedWrite("workspace.relay.update", ["workspace", "relay", "update"], "Update a relay engine", "/relay-config/:engine", "PUT", [refPositional("engine")]),
     scopedWrite("workspace.relay.reveal", ["workspace", "relay", "reveal"], "Reveal a relay engine credential", "/relay-config/:engine/reveal", "POST", [refPositional("engine")]),
     scopedWrite("workspace.relay.probe", ["workspace", "relay", "probe"], "Probe a relay engine's gateway for its model catalog and reasoning levels", "/relay-config/:engine/probe", "POST", [refPositional("engine")]),
+    scopedRead("workspace.relay.reasoning-levels.get", ["workspace", "relay", "reasoning-levels", "get"], "Read a gateway engine's declared reasoning levels and what routes for each model", "/relay-config/:engine/reasoning-levels", [refPositional("engine")]),
+    scopedWrite(
+      "workspace.relay.reasoning-levels.update",
+      ["workspace", "relay", "reasoning-levels", "update"],
+      "Declare the reasoning levels of a gateway model whose engine publishes none",
+      "/relay-config/:engine/reasoning-levels",
+      "PUT",
+      [
+        refPositional("engine"),
+        { name: "model", type: "string", valueName: "model-id", description: "Gateway model id as listed by probe" },
+        { name: "level", type: "string", valueName: "level", repeatable: true, description: "Declared reasoning level, in the engine's order of increasing effort" },
+        { name: "default-level", type: "string", valueName: "level", description: "Default level; must be one of --level" },
+        { name: "clear", type: "boolean", description: "Remove the declaration instead of setting one" },
+      ],
+      reasoningLevelsBody,
+    ),
     scopedRead("workspace.bot-menu.get", ["workspace", "bot-menu", "get"], "Read the workspace Feishu bot menu", "/bot-menu"),
     scopedWrite(
       "workspace.bot-menu.update",
@@ -402,11 +418,19 @@ function destructiveSpec(
   };
 }
 
-function scopedRead(id: string, path: string[], description: string, suffix: string): CommandSpec {
-  return readSpec(id, path, description, [refPositional("workspace")], async (invocation) => {
+function scopedRead(
+  id: string,
+  path: string[],
+  description: string,
+  suffix: string,
+  extra: readonly ReturnType<typeof refPositional>[] = [],
+): CommandSpec {
+  return readSpec(id, path, description, [refPositional("workspace"), ...extra], async (invocation) => {
     const client = await clientFor(invocation);
     const workspace = await resolveWorkspace(client, positional(invocation, 0, "workspace"));
-    const response = await client.request({ method: "GET", path: `/api/workspaces/${encodePath(String(workspace.id))}${suffix}` });
+    const engine = extra.length ? positional(invocation, 1, extra[0]!.name) : "";
+    const scopedSuffix = suffix.replace(":engine", encodePath(engine));
+    const response = await client.request({ method: "GET", path: `/api/workspaces/${encodePath(String(workspace.id))}${scopedSuffix}` });
     renderResource(invocation, response.data);
   });
 }
@@ -522,6 +546,26 @@ async function runtimeProvisionBody(invocation: CommandInvocation): Promise<Reco
     cron_expression: stringOption(invocation, "cron-expression") ?? undefined,
     timezone: stringOption(invocation, "timezone") ?? undefined,
     timeout_ms: integerOption(invocation, "timeout-ms") ?? undefined,
+  });
+}
+
+/**
+ * A declaration is the administrator's explicit statement about a model whose
+ * engine publishes no reasoning metadata. Clearing it is a distinct intent, so it
+ * needs its own flag: without one, a typo'd `--model` and no `--level` would delete
+ * a declaration rather than fail.
+ */
+async function reasoningLevelsBody(invocation: CommandInvocation): Promise<Record<string, unknown>> {
+  const model = stringOption(invocation, "model");
+  if (!model) throw new CliError("usage", "workspace relay reasoning-levels update requires --model");
+  const clear = booleanOption(invocation, "clear") === true;
+  const levels = stringOptions(invocation, "level").map((level) => level.trim()).filter(Boolean);
+  if (clear && levels.length) throw new CliError("usage", "--clear cannot be combined with --level");
+  if (!clear && !levels.length) throw new CliError("usage", "workspace relay reasoning-levels update requires --level (repeatable) or --clear");
+  return requestBody(invocation, {
+    model,
+    levels: clear ? [] : levels,
+    default_level: clear ? undefined : stringOption(invocation, "default-level") ?? undefined,
   });
 }
 

@@ -1915,6 +1915,7 @@ export class RuntimesRepo {
       getRelayModelDiscovery: (id) => workspaces.getRelayModelDiscovery(id),
       getRelayConfigForDaemon: (id) => workspaces.getRelayConfigForDaemon(id),
       getGatewayModels: (id, provider) => workspaces.getGatewayModels(id, provider),
+      listGatewayModelReasoning: (id, provider) => workspaces.listGatewayModelReasoning(id, provider),
       listWorkspaceCodexProfileModels: (id) => this.listWorkspaceCodexProfileModels(id),
       listWorkspaceClaudeProfileModels: (id) => this.listWorkspaceClaudeProfileModels(id),
       getRuntimeExecutionProfile: (id, provider) => this.getRuntimeExecutionProfile(id, provider),

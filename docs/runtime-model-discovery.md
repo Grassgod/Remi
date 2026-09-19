@@ -43,6 +43,30 @@ can use an exact runtime model match; it cannot borrow another provider model's
 levels. Claude retains exact-model and existing unambiguous Claude-family
 capabilities, without a provider-wide guess for unrelated models.
 
+A workspace administrator can state a gateway model's reasoning levels explicitly
+(`remi workspace relay reasoning-levels update`, or
+`PUT /api/workspaces/:id/relay-config/:engine/reasoning-levels`). That
+declaration is a source in its own right, not a borrowed set: the gateway
+inventory carries ids and labels only and the bridge publishes a selector merely
+for its own aliases, so for a gateway-only alias an operator stating the levels is
+the only source that can exist at all. It is stored per workspace × engine ×
+model, apart from the discovery snapshot — every probe rewrites that snapshot
+wholesale — so re-probing never clears it, and it joins the same priority order:
+gateway metadata, runtime report, manual declaration, Claude-family consensus. It
+therefore only ever fills a gap. When a higher-priority source already declares
+levels the declaration is stored but not applied, and the read model
+(`remi workspace relay reasoning-levels get`) reports the stored declaration and
+the effective levels with their source — `gateway`, `runtime`, `manual`,
+`family`, or none — so the settings page can show a declaration that is being
+outranked instead of appearing to ignore it. A declaration names one model id and
+never applies to any other. An empty level set removes it rather than storing an
+empty list, because an empty list would read as an authoritative *unsupported*
+and re-create the permanent queueing described above. Levels are validated
+server-side against the engine's enum — Claude `low`/`medium`/`high`/`xhigh`/`max`,
+Codex additionally `minimal` — and an unknown spelling is rejected with a 400
+rather than forwarded to execution, as are a default level outside the declared
+set and a missing model id.
+
 Task eligibility reads these four states as three different questions
 (`modelThinkingState`). A model that declares levels (`supported`) must offer the
 saved level, and a runtime whose capability load failed (`error`) cannot claim the
@@ -72,6 +96,12 @@ with a 400 when the catalog cannot confirm it, so a caller is told its request w
 not honoured rather than silently getting a different Agent. Engines that do
 report levels are never converged: clearing there would turn a rejected selection
 into a runnable one at the default effort.
+
+A model that declares levels from any source — including an administrator's
+declaration — keeps a stored level that set contains and converges away one it
+does not, on the terms above: an unusable value is not kept silently, and an
+effort named in the same request as a selection change is still rejected with a
+400 before that convergence could hide the mismatch.
 
 Production daemons discover capabilities at startup and refresh every 15 minutes.
 Manual model-list requests use the same single-flight probe without blocking the

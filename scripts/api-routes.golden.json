@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 757,
+    "routeCount": 759,
     "routeCountByPrefix": {
       "native": 210,
-      "compat": 533,
+      "compat": 535,
       "root": 14
     },
-    "getRoutes": 323,
-    "getRoutesWithBody": 320,
+    "getRoutes": 324,
+    "getRoutesWithBody": 321,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 434,
+    "mutationRoutes": 435,
     "mutationRoutesCovered": 282,
     "flows": [
       "agents-compat",
@@ -415,6 +415,7 @@
     "GET /api/workspaces/:id/prompt-template",
     "GET /api/workspaces/:id/prompts",
     "GET /api/workspaces/:id/relay-config",
+    "GET /api/workspaces/:id/relay-config/:engine/reasoning-levels",
     "GET /api/workspaces/:id/repos",
     "GET /api/workspaces/:id/repos/:repositoryId/wiki",
     "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
@@ -817,6 +818,7 @@
     "PUT /api/workspaces/:id/organizer",
     "PUT /api/workspaces/:id/prompts",
     "PUT /api/workspaces/:id/relay-config/:engine",
+    "PUT /api/workspaces/:id/relay-config/:engine/reasoning-levels",
     "PUT /api/workspaces/:id/relay-config/discovery",
     "PUT /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
     "PUT /api/workspaces/:id/session-archive",
@@ -1157,6 +1159,7 @@
     "GET /api/workspaces/:id/prompt-template",
     "GET /api/workspaces/:id/prompts",
     "GET /api/workspaces/:id/relay-config",
+    "GET /api/workspaces/:id/relay-config/:engine/reasoning-levels",
     "GET /api/workspaces/:id/repos",
     "GET /api/workspaces/:id/repos/:repositoryId/wiki",
     "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
@@ -13436,6 +13439,28 @@
             "allowed": true
           },
           {
+            "id": "workspace.relay.reasoning-levels.get",
+            "command": "remi workspace relay reasoning-levels get",
+            "capability": "workspace.relay.reasoning-levels.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.relay.reasoning-levels.update",
+            "command": "remi workspace relay reasoning-levels update",
+            "capability": "workspace.relay.reasoning-levels.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "workspace.relay.reveal",
             "command": "remi workspace relay reveal",
             "capability": "workspace.relay.reveal",
@@ -23978,6 +24003,23 @@
         "claude": null,
         "codex": null,
         "modelDiscovery": false
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/relay-config/:engine/reasoning-levels",
+      "route": "GET /api/workspaces/:id/relay-config/:engine/reasoning-levels",
+      "path": "/api/workspaces/local/relay-config/claude/reasoning-levels",
+      "status": 200,
+      "body": {
+        "engine": "claude",
+        "allowed_levels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "models": []
       }
     },
     {

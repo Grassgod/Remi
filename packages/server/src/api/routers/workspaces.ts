@@ -4,6 +4,7 @@ import {
   createScmAwareGitRemoteInspector,
   currentTaskParentId,
   denyCurrentUserWorkspaceAccess,
+  gatewayReasoningLevels,
   importWorkspaceRepository,
   inspectWorkspaceRepository,
   isFirstAgentInWorkspace,
@@ -25,6 +26,7 @@ import {
   safeCreateWorkspace,
   safeLeaveWorkspace,
   updateWorkspaceRepository,
+  validateGatewayReasoningLevels,
   WorkspaceRepositoryError,
 } from "../helpers.js";
 import type {
@@ -1251,6 +1253,53 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     c.header("Cache-Control", "no-store");
     return c.json(await probeGatewayModels(store, workspaceId, engine));
+  });
+  // ── Model gateway: administrator-declared reasoning levels ─────
+  // A gateway alias whose engine publishes no reasoning metadata (every Claude
+  // alias outside the ACP selector) is otherwise permanently unusable at a chosen
+  // effort. An administrator can state its levels here; that declaration is stored
+  // separately from the discovery snapshot and only ever fills a gap, so re-probing
+  // never erases it and it never overrides a real gateway/Runtime statement.
+  app.get("/api/workspaces/:id/relay-config/:engine/reasoning-levels", (c) => {
+    const workspaceId = c.req.param("id");
+    const engine = c.req.param("engine");
+    if (engine !== "claude" && engine !== "codex") return c.json({ error: "invalid engine" }, 400);
+    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    c.header("Cache-Control", "no-store");
+    return c.json(gatewayReasoningLevels(store, workspaceId, engine, currentRequestUserId(c)));
+  });
+  app.put("/api/workspaces/:id/relay-config/:engine/reasoning-levels", async (c) => {
+    const workspaceId = c.req.param("id");
+    const engine = c.req.param("engine");
+    if (engine !== "claude" && engine !== "codex") return c.json({ error: "invalid engine" }, 400);
+    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    c.header("Cache-Control", "no-store");
+    const body = await readJsonStrict<{ model?: unknown; levels?: unknown; default_level?: unknown }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const validation = validateGatewayReasoningLevels(engine, body);
+    if (!validation.ok) return c.json({ error: validation.error }, 400);
+    const updatedBy = currentRequestUserId(c);
+    // An empty level set means "stop declaring this model" — stored as a deleted row
+    // rather than an empty list, because an empty list reads as "unsupported" and
+    // would silently re-create the MUL-338 hang for that alias.
+    let deleted = false;
+    if (validation.levels.length === 0) {
+      deleted = store.deleteGatewayModelReasoning(workspaceId, engine, validation.modelId);
+    } else {
+      store.saveGatewayModelReasoning(workspaceId, engine, {
+        modelId: validation.modelId,
+        levels: validation.levels,
+        ...(validation.defaultLevel ? { defaultLevel: validation.defaultLevel } : {}),
+        updatedBy,
+      });
+    }
+    // The write answers with the same listing the GET returns (plus `deleted`), so
+    // the client never has to guess whether its own write took effect — a
+    // declaration can be outranked by a gateway/Runtime statement, and the row's
+    // `effective.source` is the only honest answer to that.
+    return c.json({ deleted, ...gatewayReasoningLevels(store, workspaceId, engine, updatedBy) });
   });
   app.post("/api/workspaces/:id/leave", async (c) => {
     const workspaceId = c.req.param("id");

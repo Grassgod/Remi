@@ -168,16 +168,25 @@ describe("CLI capabilities manifest", () => {
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 666,
+      mapped: 668,
       exempt: 91,
       missing: 0,
-      total: 757,
+      total: 759,
     });
     expect(manifest.max_planned_routes).toBe(0);
     expect(manifest.routes["POST /api/workspaces/:id/relay-config/:engine/probe"])
       .toEqual({ command: "workspace.relay.probe" });
     expect(manifest.commands["workspace.relay.probe"]).toMatchObject({
       command: "remi workspace relay probe",
+      mutation: "write",
+      output: ["table", "json", "jsonl"],
+    });
+    expect(manifest.routes["GET /api/workspaces/:id/relay-config/:engine/reasoning-levels"])
+      .toEqual({ command: "workspace.relay.reasoning-levels.get" });
+    expect(manifest.routes["PUT /api/workspaces/:id/relay-config/:engine/reasoning-levels"])
+      .toEqual({ command: "workspace.relay.reasoning-levels.update" });
+    expect(manifest.commands["workspace.relay.reasoning-levels.update"]).toMatchObject({
+      command: "remi workspace relay reasoning-levels update",
       mutation: "write",
       output: ["table", "json", "jsonl"],
     });

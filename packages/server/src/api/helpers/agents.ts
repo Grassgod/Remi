@@ -1,5 +1,8 @@
 import { createLogger } from "@shared/logger.js";
 import { workspaceRuntimeModelCatalog, catalogAllowsModel, commonThinkingCapabilities, modelThinkingState, providerDeclaresReasoningLevels, runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
+import { GATEWAY_REASONING_LEVELS, manualThinkingResponse } from "@multiremi/store/runtime-model-catalog.js";
+import type { FleetModelThinkingResponse, FleetModelThinkingSource } from "@multiremi/store/runtime-model-catalog.js";
+import type { RelayEngine } from "@multiremi/store/store.js";
 export { workspaceRuntimeModelCatalog, overlayGatewayModels, runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
 // Agent and skill request plumbing: the `with*RequestContext` builders that fold caller identity
 // and defaults into create/update inputs, the `load*For*` guards, and the provider/thinking-level
@@ -154,6 +157,113 @@ function workspaceProviderCatalog(
   return providers.find((entry) => entry.provider === provider);
 }
 
+/** One gateway model's declared reasoning levels and what they resolve to. */
+export interface GatewayReasoningLevelRow {
+  model_id: string;
+  label: string;
+  /** The administrator's stored declaration, or null when none is stored. */
+  manual: GatewayReasoningLevelManual | null;
+  /** What routing will use, or null when the model has no reasoning entry. */
+  effective: (FleetModelThinkingResponse & { source: FleetModelThinkingSource }) | null;
+}
+
+export interface GatewayReasoningLevelManual {
+  levels: string[];
+  default_level?: string;
+  updated_by: string | null;
+  updated_at: string;
+}
+
+function gatewayReasoningLevelManual(decl: {
+  levels: string[]; defaultLevel?: string; updatedBy: string | null; updatedAt: string;
+}): GatewayReasoningLevelManual {
+  return {
+    levels: decl.levels,
+    ...(decl.defaultLevel ? { default_level: decl.defaultLevel } : {}),
+    updated_by: decl.updatedBy,
+    updated_at: decl.updatedAt,
+  };
+}
+
+/**
+ * The gateway model list for one engine, each row carrying the stored
+ * declaration and the levels that actually take effect.
+ *
+ * `effective` is read from the same catalog an Agent's selection is validated
+ * against, so the page cannot disagree with routing. `source` says where those
+ * levels came from — that is what lets the UI tell an administrator their
+ * declaration is being outranked by a real gateway/Runtime statement instead of
+ * silently ignoring it.
+ */
+export function gatewayReasoningLevels(
+  store: MultiremiStore,
+  workspaceId: string,
+  engine: RelayEngine,
+  callerOwnerId: string,
+): { engine: RelayEngine; allowed_levels: readonly string[]; models: GatewayReasoningLevelRow[] } {
+  const snapshot = store.getGatewayModels(workspaceId, engine);
+  const declarations = store.listGatewayModelReasoning(workspaceId, engine);
+  const effectiveModels = new Map(
+    workspaceProviderModelCatalog(store, workspaceId, engine, callerOwnerId).map(model => [model.id, model]),
+  );
+  const rows = new Map<string, GatewayReasoningLevelRow>();
+  for (const model of snapshot?.models ?? []) {
+    rows.set(model.id, { model_id: model.id, label: model.label, manual: null, effective: null });
+  }
+  // A declaration outlives the model's gateway entry: the snapshot is replaced on
+  // every probe, so an alias that disappears would otherwise become impossible to
+  // clear from the page that created it.
+  for (const decl of declarations) {
+    const existing = rows.get(decl.modelId);
+    rows.set(decl.modelId, {
+      model_id: decl.modelId,
+      label: existing?.label ?? decl.modelId,
+      manual: gatewayReasoningLevelManual(decl),
+      effective: null,
+    });
+  }
+  for (const [modelId, row] of rows) {
+    const resolved = effectiveModels.get(modelId);
+    if (!resolved?.thinking) continue;
+    row.effective = { ...resolved.thinking, source: resolved.thinking_source ?? "none" };
+  }
+  return {
+    engine,
+    allowed_levels: GATEWAY_REASONING_LEVELS[engine],
+    models: [...rows.values()].sort((a, b) => a.model_id.localeCompare(b.model_id)),
+  };
+}
+
+/**
+ * Validate one declaration request. Returns the normalized pair or an error
+ * string; the enum is checked server-side because the values are forwarded to the
+ * CLI verbatim — an unknown spelling would route as if declared and then fail at
+ * execution, which is worse than a 400 here.
+ */
+export function validateGatewayReasoningLevels(
+  engine: RelayEngine,
+  input: { model?: unknown; levels?: unknown; default_level?: unknown },
+): { ok: true; modelId: string; levels: string[]; defaultLevel?: string } | { ok: false; error: string } {
+  const modelId = cleanString(typeof input.model === "string" ? input.model : "");
+  if (!modelId) return { ok: false, error: "model is required" };
+  if (!Array.isArray(input.levels)) return { ok: false, error: "levels must be an array" };
+  const allowed = GATEWAY_REASONING_LEVELS[engine];
+  const levels: string[] = [];
+  for (const value of input.levels) {
+    if (!allowed.includes(value as string)) {
+      return { ok: false, error: `unsupported reasoning level "${String(value)}" for engine "${engine}" (allowed: ${allowed.join(", ")})` };
+    }
+    if (!levels.includes(value as string)) levels.push(value as string);
+  }
+  if (input.default_level !== undefined && input.default_level !== null && input.default_level !== "") {
+    if (typeof input.default_level !== "string" || !levels.includes(input.default_level)) {
+      return { ok: false, error: "default_level must be one of levels" };
+    }
+    return { ok: true, modelId, levels, defaultLevel: input.default_level };
+  }
+  return { ok: true, modelId, levels };
+}
+
 /** The catalog the selection is validated against: the execution group's common
  *  set when one is selected, otherwise the workspace/provider (or pinned Runtime). */
 function agentSelectionCatalog(
@@ -215,6 +325,8 @@ function convergeAgentThinkingLevel(
     ownerId?: string;
     /** True when the level comes from the stored Agent rather than this request. */
     carriedOver: boolean;
+    /** True when this request changes model/provider/target, not just metadata. */
+    selectionChanged: boolean;
   },
 ): string {
   if (!input.thinkingLevel) return "";
@@ -230,8 +342,18 @@ function convergeAgentThinkingLevel(
     ? models.some((model) => model.id === input.model)
     : Boolean(catalog?.default_thinking);
   if (!known) return input.thinkingLevel;
-  if (modelThinkingState(models, input.model, catalog?.default_thinking).state === "supported") {
-    return input.thinkingLevel;
+  const capability = modelThinkingState(models, input.model, catalog?.default_thinking);
+  if (capability.state === "supported") {
+    // The model does declare levels — from the engine, or from an administrator's
+    // gateway declaration (MUL-338). A stored level inside that set is a valid
+    // selection and is preserved here; one outside it is not usable at all.
+    if (capability.levels.some((level) => level.value === input.thinkingLevel)) return input.thinkingLevel;
+    // Unusable, and the model itself did not change: nothing can make this value
+    // valid, so clear it rather than keep it stored forever. When the selection IS
+    // changing, the caller is moving to a model that does offer efforts, and the
+    // carried value is a mismatch it must be told about — leave it for validation
+    // to reject, which is MUL-330/#220's atomic model+effort contract.
+    return input.selectionChanged ? input.thinkingLevel : "";
   }
   log.info(`clearing carried-over thinking_level "${input.thinkingLevel}" for ${input.provider} model "${input.model || "default"}": the model declares no reasoning levels`);
   return "";
@@ -704,13 +826,14 @@ export function withAgentUpdateRequestContext(
     workspaceId: targetWorkspaceId, provider: targetProvider, model: targetModel,
     thinkingLevel: targetThinkingLevel, runtimeId: targetRuntimeId,
     executionGroupId: targetGroupId, ownerId: targetOwnerId,
-    carriedOver,
+    carriedOver, selectionChanged,
   });
   const effectiveFallbackThinkingLevel = !targetFallbackModel ? "" : convergeAgentThinkingLevel(c, store, {
     workspaceId: targetWorkspaceId, provider: targetProvider, model: targetFallbackModel,
     thinkingLevel: targetFallbackThinkingLevel, runtimeId: targetRuntimeId,
     executionGroupId: targetGroupId, ownerId: targetOwnerId,
     carriedOver: !fallbackThinkingLevelProvided || !selectionChanged,
+    selectionChanged,
   });
   if (modelProvided) {
     next.model = targetModel;

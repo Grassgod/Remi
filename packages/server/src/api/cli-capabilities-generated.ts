@@ -360,6 +360,32 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "workspace.relay.reasoning-levels.get": {
+      "command": "remi workspace relay reasoning-levels get",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.relay.reasoning-levels.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.relay.reasoning-levels.update": {
+      "command": "remi workspace relay reasoning-levels update",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.relay.reasoning-levels.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "workspace.bot-menu.get": {
       "command": "remi workspace bot-menu get",
       "auth": [

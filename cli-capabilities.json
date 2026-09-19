@@ -530,6 +530,40 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "workspace.relay.reasoning-levels.get": {
+      "command": "remi workspace relay reasoning-levels get",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.relay.reasoning-levels.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.relay.reasoning-levels.update": {
+      "command": "remi workspace relay reasoning-levels update",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.relay.reasoning-levels.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "workspace.bot-menu.get": {
       "command": "remi workspace bot-menu get",
       "aliases": [],
@@ -10837,6 +10871,9 @@
     "GET /api/workspaces/:id/relay-config": {
       "command": "workspace.relay.get"
     },
+    "GET /api/workspaces/:id/relay-config/:engine/reasoning-levels": {
+      "command": "workspace.relay.reasoning-levels.get"
+    },
     "GET /api/workspaces/:id/repos": {
       "command": "repo.list"
     },
@@ -12176,6 +12213,9 @@
     },
     "PUT /api/workspaces/:id/relay-config/:engine": {
       "command": "workspace.relay.update"
+    },
+    "PUT /api/workspaces/:id/relay-config/:engine/reasoning-levels": {
+      "command": "workspace.relay.reasoning-levels.update"
     },
     "PUT /api/workspaces/:id/relay-config/discovery": {
       "command": "workspace.relay.discovery"
