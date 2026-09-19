@@ -282,6 +282,108 @@ export type RelayEngineConfig = z.infer<typeof RelayEngineConfigSchema>;
 
 export const EMPTY_RELAY_CONFIG: RelayConfigResponse = { claude: null, codex: null, modelDiscovery: false };
 
+// Explicit gateway probe (`POST /api/workspaces/:id/relay-config/:engine/probe`).
+// The server answers with the snapshot it just refreshed: `status` is `error`
+// when the last attempt failed (models may still carry the last success),
+// `ready` when a success was recorded and `unknown` when nothing has run yet.
+const RelayProbeModelSchema = z.object({
+  id: z.string(),
+  label: z.string().default(""),
+  thinking: ModelThinkingSchema.optional(),
+}).loose();
+
+export const RelayEngineProbeSchema = z.object({
+  engine: z.string(),
+  status: z.enum(["ready", "error", "unknown"]).catch("unknown"),
+  error: z.string().nullable().default(null),
+  models: z.array(RelayProbeModelSchema).default([]),
+  last_success_at: z.string().nullable().default(null),
+}).loose();
+
+export type RelayEngineProbeModel = z.infer<typeof RelayProbeModelSchema>;
+export type RelayEngineProbe = z.infer<typeof RelayEngineProbeSchema>;
+
+// Admin-declared reasoning levels for individual gateway models
+// (`GET/PUT /api/workspaces/:id/relay-config/:engine/reasoning-levels`).
+//
+// Sources are ranked gateway > runtime > manual > family; `manual` only fills
+// gaps and never silently overrides a higher-ranked declaration. The GET feeds
+// an admin form where every row is a claim about what will be enforced, so a
+// drifted body must raise ApiContractError instead of rendering "not declared"
+// for models that do carry a declaration — hence the strict parse upstream.
+const RelayReasoningLevelOptionSchema = z.object({
+  value: z.string(),
+  label: z.string().default(""),
+  description: z.string().optional(),
+}).loose();
+
+export const RelayReasoningLevelManualStateSchema = z.enum(["effective", "outranked", "blocked"]);
+export const RelayReasoningLevelManualStateCodeSchema = z.enum([
+  "not_in_execution_catalog",
+  "execution_catalog_unknown",
+  "not_in_catalog",
+]);
+
+// `state` is required: a declaration that is stored but inert (`blocked`, for
+// example a Codex model the execution catalog does not list) must never render
+// as if it were in force, so a body that omits the field is a contract error
+// rather than "nothing to report". A blocked row must also carry the reason it
+// is blocked, so the page states the exact rule instead of a generic label.
+export const RelayReasoningLevelManualSchema = z.object({
+  levels: z.array(z.string()),
+  default_level: z.string().nullable().default(null),
+  updated_by: z.string().nullable().default(null),
+  updated_at: z.string().nullable().default(null),
+  state: RelayReasoningLevelManualStateSchema,
+  state_code: RelayReasoningLevelManualStateCodeSchema.nullable().default(null),
+}).loose().superRefine((manual, ctx) => {
+  if (manual.state === "blocked" && manual.state_code === null) {
+    ctx.addIssue({ code: "custom", message: "a blocked declaration must carry a state_code" });
+  }
+});
+
+export const RelayReasoningLevelEffectiveSchema = z.object({
+  supported_levels: z.array(RelayReasoningLevelOptionSchema).default([]),
+  default_level: z.string().nullable().default(null),
+  status: z.enum(["supported", "unsupported", "unknown", "error"]).catch("unknown"),
+  // Unknown sources stay a contract error: the UI labels every source and has
+  // no honest fallback label for one this client does not know.
+  source: z.enum(["gateway", "runtime", "manual", "family", "none"]),
+}).loose();
+
+const RelayReasoningLevelModelSchema = z.object({
+  model_id: z.string(),
+  label: z.string().default(""),
+  manual: RelayReasoningLevelManualSchema.nullable().default(null),
+  effective: RelayReasoningLevelEffectiveSchema.nullable().default(null),
+}).loose();
+
+export const RelayReasoningLevelsResponseSchema = z.object({
+  engine: z.string(),
+  allowed_levels: z.array(z.string()),
+  models: z.array(RelayReasoningLevelModelSchema).default([]),
+}).loose();
+
+// The PUT answers with the same listing as the GET plus `deleted`, which is
+// true when `levels: []` removed a declaration. One shape covers both methods,
+// and the caller reads the post-write effective state — including a declaration
+// a higher-ranked source outranks — without a second round trip. The listing
+// fields default so a client that only reads `deleted` still parses.
+export const RelayReasoningLevelSaveResultSchema = z.object({
+  deleted: z.boolean().default(false),
+  engine: z.string().default(""),
+  allowed_levels: z.array(z.string()).default([]),
+  models: z.array(RelayReasoningLevelModelSchema).default([]),
+}).loose();
+
+export type RelayReasoningLevelManual = z.infer<typeof RelayReasoningLevelManualSchema>;
+export type RelayReasoningLevelManualState = z.infer<typeof RelayReasoningLevelManualStateSchema>;
+export type RelayReasoningLevelManualStateCode = z.infer<typeof RelayReasoningLevelManualStateCodeSchema>;
+export type RelayReasoningLevelEffective = z.infer<typeof RelayReasoningLevelEffectiveSchema>;
+export type RelayReasoningLevelModel = z.infer<typeof RelayReasoningLevelModelSchema>;
+export type RelayReasoningLevelsResponse = z.infer<typeof RelayReasoningLevelsResponseSchema>;
+export type RelayReasoningLevelSaveResult = z.infer<typeof RelayReasoningLevelSaveResultSchema>;
+
 // ---------------------------------------------------------------------------
 // Runtime usage schemas — the runtime-detail page's four usage endpoints
 // (`/api/runtimes/:id/usage*`).

@@ -22,6 +22,16 @@ const relayRef = vi.hoisted(() => ({
 const mockRefetchRelay = vi.hoisted(() => vi.fn());
 const mockUpdateRelay = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockSetDiscovery = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const mockProbeRelay = vi.hoisted(() => vi.fn());
+const mockGetReasoningLevels = vi.hoisted(() => vi.fn());
+const mockPutReasoningLevel = vi.hoisted(() => vi.fn());
+const mockRefetchReasoning = vi.hoisted(() => vi.fn());
+const reasoningRef = vi.hoisted(() => ({
+  current: {} as Record<string, unknown>,
+  pending: false,
+  error: null as Error | null,
+}));
+const mockInvalidateQueries = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockUpdateWorkspace = vi.hoisted(() => vi.fn());
 const mockSetQueryData = vi.hoisted(() => vi.fn());
 const workspaceRef = vi.hoisted(() => ({
@@ -45,9 +55,19 @@ vi.mock("@tanstack/react-query", () => ({
         refetch: mockRefetchRelay,
       };
     }
+    if (key.includes("relay-reasoning-levels")) {
+      const engine = String(opts?.queryKey?.[2] ?? "");
+      return {
+        data: reasoningRef.error ? undefined : reasoningRef.current[engine],
+        isPending: reasoningRef.pending,
+        isError: reasoningRef.error !== null,
+        error: reasoningRef.error,
+        refetch: mockRefetchReasoning,
+      };
+    }
     return { data: membersRef.current, isPending: membersRef.pending };
   },
-  useQueryClient: () => ({ setQueryData: mockSetQueryData, invalidateQueries: vi.fn() }),
+  useQueryClient: () => ({ setQueryData: mockSetQueryData, invalidateQueries: mockInvalidateQueries }),
 }));
 
 vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "workspace-1" }));
@@ -69,6 +89,9 @@ vi.mock("@multiremi/core/api", () => ({
     getRelayConfig: vi.fn(() => Promise.resolve(relayRef.current)),
     updateRelayConfig: mockUpdateRelay,
     setRelayDiscovery: mockSetDiscovery,
+    probeRelayEngine: mockProbeRelay,
+    getRelayReasoningLevels: mockGetReasoningLevels,
+    putRelayReasoningLevel: mockPutReasoningLevel,
     revealRelayToken: vi.fn(() => Promise.resolve("sk-revealed")),
     updateWorkspace: mockUpdateWorkspace,
   },
@@ -94,6 +117,13 @@ describe("ModelGatewayTab", () => {
     };
     relayRef.pending = false;
     relayRef.error = null;
+    reasoningRef.current = {
+      claude: { engine: "claude", allowed_levels: ["low", "medium", "high", "xhigh", "max"], models: [] },
+      codex: { engine: "codex", allowed_levels: ["minimal", "low", "medium", "high", "xhigh", "max"], models: [] },
+    };
+    reasoningRef.pending = false;
+    reasoningRef.error = null;
+    mockPutReasoningLevel.mockReset();
     workspaceRef.current.settings = {};
     mockUpdateWorkspace.mockImplementation(async (_id: string, input: { settings: Record<string, unknown> }) => ({
       ...workspaceRef.current,
@@ -229,5 +259,394 @@ describe("ModelGatewayTab", () => {
 
     expect(screen.queryByText(/Only workspace owners and admins/)).not.toBeInTheDocument();
     expect(screen.getByTestId("model-gateway-skeleton")).toBeInTheDocument();
+  });
+
+  it("probes one engine on demand and refreshes the fleet model catalog", async () => {
+    mockProbeRelay.mockResolvedValue({
+      engine: "codex",
+      status: "ready",
+      error: null,
+      models: [
+        {
+          id: "gpt-6-astra",
+          label: "Astra",
+          thinking: { status: "supported", supported_levels: [{ value: "high", label: "High" }] },
+        },
+        { id: "gpt-6-luna", label: "Luna" },
+      ],
+      last_success_at: "2026-09-19T06:00:00.000Z",
+    });
+    const user = userEvent.setup();
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    const [, codexProbe] = screen.getAllByRole("button", { name: "Probe now" });
+    if (!codexProbe) throw new Error("Codex probe button not found");
+    await user.click(codexProbe);
+
+    await waitFor(() => expect(mockProbeRelay).toHaveBeenCalledWith("workspace-1", "codex"));
+    expect(await screen.findByText("2 models · effort high on 1/2 models")).toBeInTheDocument();
+    await waitFor(() => expect(mockInvalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["runtimes", "models", "fleet", "workspace-1"],
+    }));
+  });
+
+  it("reports a gateway-declared absence of reasoning levels without calling it a failure", async () => {
+    mockProbeRelay.mockResolvedValue({
+      engine: "claude",
+      status: "ready",
+      error: null,
+      models: [{ id: "deepseek-v4-flash", label: "DeepSeek V4 Flash" }],
+      last_success_at: "2026-09-19T06:00:00.000Z",
+    });
+    const user = userEvent.setup();
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    const [claudeProbe] = screen.getAllByRole("button", { name: "Probe now" });
+    if (!claudeProbe) throw new Error("Claude probe button not found");
+    await user.click(claudeProbe);
+
+    expect(await screen.findByText("1 model · gateway declares no reasoning levels")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("surfaces the server's sanitized probe error inline", async () => {
+    mockProbeRelay.mockResolvedValue({
+      engine: "claude",
+      status: "error",
+      error: "gateway HTTP 502",
+      models: [],
+      last_success_at: null,
+    });
+    const user = userEvent.setup();
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    const [claudeProbe] = screen.getAllByRole("button", { name: "Probe now" });
+    if (!claudeProbe) throw new Error("Claude probe button not found");
+    await user.click(claudeProbe);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("gateway HTTP 502");
+  });
+
+  it("disables probing while auto-discovery is off", () => {
+    relayRef.current = { ...relayRef.current, modelDiscovery: false };
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    for (const button of screen.getAllByRole("button", { name: "Probe now" })) {
+      expect(button).toBeDisabled();
+    }
+  });
+
+  it("saves manual reasoning levels and the default level for a gateway model", async () => {
+    reasoningRef.current.claude = {
+      engine: "claude",
+      allowed_levels: ["low", "medium", "high", "xhigh", "max"],
+      models: [{
+        model_id: "deepseek-v4-flash",
+        label: "DeepSeek V4 Flash",
+        manual: null,
+        effective: null,
+      }],
+    };
+    mockPutReasoningLevel.mockResolvedValue({
+      deleted: false,
+      engine: "claude",
+      allowed_levels: ["low", "medium", "high", "xhigh", "max"],
+      models: [{
+        model_id: "deepseek-v4-flash",
+        label: "DeepSeek V4 Flash",
+        manual: {
+          levels: ["low", "high"],
+          default_level: "high",
+          updated_by: "owner@example.test",
+          updated_at: "2026-09-19T08:10:00.000Z",
+          state: "effective",
+        },
+        effective: {
+          supported_levels: [{ value: "low", label: "low" }, { value: "high", label: "high" }],
+          default_level: "high",
+          status: "supported",
+          source: "manual",
+        },
+      }],
+    });
+    const user = userEvent.setup();
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    expect(screen.getByText("Not declared")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Configure" }));
+    await user.click(screen.getByRole("checkbox", { name: "low" }));
+    await user.click(screen.getByRole("checkbox", { name: "high" }));
+    await user.click(screen.getByRole("combobox", { name: "Default level" }));
+    await user.click(await screen.findByRole("option", { name: "high" }));
+    await user.click(screen.getByRole("button", { name: "Save levels" }));
+
+    await waitFor(() => expect(mockPutReasoningLevel).toHaveBeenCalledWith("workspace-1", "claude", {
+      model: "deepseek-v4-flash",
+      levels: ["low", "high"],
+      default_level: "high",
+    }));
+    await waitFor(() => expect(mockInvalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["relay-reasoning-levels", "workspace-1", "claude"],
+    }));
+    await waitFor(() => expect(mockInvalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["runtimes", "models", "fleet", "workspace-1"],
+    }));
+  });
+
+  it("flags an outranked declaration with the existing conflict hint", () => {
+    reasoningRef.current.claude = {
+      engine: "claude",
+      allowed_levels: ["low", "medium", "high", "xhigh", "max"],
+      models: [{
+        model_id: "deepseek-v4-flash",
+        label: "DeepSeek V4 Flash",
+        manual: {
+          levels: ["low", "high"],
+          default_level: "high",
+          updated_by: "owner@example.test",
+          updated_at: "2026-09-19T08:10:00.000Z",
+          state: "outranked",
+        },
+        effective: {
+          supported_levels: [{ value: "low", label: "low" }, { value: "high", label: "high" }],
+          default_level: "low",
+          status: "supported",
+          source: "gateway",
+        },
+      }],
+    };
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    expect(screen.getByText("gateway")).toBeInTheDocument();
+    expect(screen.getByText("Manual: low, high")).toBeInTheDocument();
+    expect(screen.getByText("supported · Effective: low, high")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Overridden by the gateway declaration — the effective value comes from gateway.",
+    );
+  });
+
+  it("renders the undeclared state for a model without any source", () => {
+    reasoningRef.current.claude = {
+      engine: "claude",
+      allowed_levels: ["low", "medium", "high"],
+      models: [{ model_id: "deepseek-flash", label: "DeepSeek Flash", manual: null, effective: null }],
+    };
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    expect(screen.getByText("Not declared")).toBeInTheDocument();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("clears a manual declaration with an explicit empty levels payload", async () => {
+    reasoningRef.current.claude = {
+      engine: "claude",
+      allowed_levels: ["low", "medium", "high", "xhigh", "max"],
+      models: [{
+        model_id: "deepseek-v4-flash",
+        label: "DeepSeek V4 Flash",
+        manual: {
+          levels: ["high"],
+          default_level: "high",
+          updated_by: "owner@example.test",
+          updated_at: "2026-09-19T08:10:00.000Z",
+          state: "effective",
+        },
+        effective: {
+          supported_levels: [{ value: "high", label: "high" }],
+          default_level: "high",
+          status: "supported",
+          source: "manual",
+        },
+      }],
+    };
+    mockPutReasoningLevel.mockResolvedValue({ deleted: true, engine: "claude", allowed_levels: [], models: [] });
+    const user = userEvent.setup();
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    await user.click(screen.getByRole("button", { name: "Configure" }));
+    await user.click(screen.getByRole("button", { name: "Clear declaration" }));
+
+    await waitFor(() => expect(mockPutReasoningLevel).toHaveBeenCalledWith(
+      "workspace-1",
+      "claude",
+      { model: "deepseek-v4-flash", levels: [] },
+    ));
+  });
+
+  it("surfaces a rejected reasoning-level save inline", async () => {
+    reasoningRef.current.claude = {
+      engine: "claude",
+      allowed_levels: ["low", "medium", "high"],
+      models: [{
+        model_id: "deepseek-v4-flash",
+        label: "DeepSeek V4 Flash",
+        manual: null,
+        effective: null,
+      }],
+    };
+    mockPutReasoningLevel.mockRejectedValue(new Error('level "ultra" is not allowed for claude'));
+    const user = userEvent.setup();
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    await user.click(screen.getByRole("button", { name: "Configure" }));
+    await user.click(screen.getByRole("checkbox", { name: "low" }));
+    await user.click(screen.getByRole("button", { name: "Save levels" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      'level "ultra" is not allowed for claude',
+    );
+  });
+
+  it("keeps manual declarations after a probe refresh", async () => {
+    reasoningRef.current.claude = {
+      engine: "claude",
+      allowed_levels: ["low", "medium", "high", "xhigh", "max"],
+      models: [{
+        model_id: "deepseek-v4-flash",
+        label: "DeepSeek V4 Flash",
+        manual: {
+          levels: ["low", "high"],
+          default_level: "high",
+          updated_by: "owner@example.test",
+          updated_at: "2026-09-19T08:10:00.000Z",
+          state: "effective",
+        },
+        effective: {
+          supported_levels: [{ value: "low", label: "low" }, { value: "high", label: "high" }],
+          default_level: "high",
+          status: "supported",
+          source: "manual",
+        },
+      }],
+    };
+    mockProbeRelay.mockResolvedValue({
+      engine: "claude",
+      status: "ready",
+      error: null,
+      models: [{ id: "deepseek-v4-flash", label: "DeepSeek V4 Flash" }],
+      last_success_at: "2026-09-19T08:20:00.000Z",
+    });
+    const user = userEvent.setup();
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    expect(screen.getByText("Manual: low, high")).toBeInTheDocument();
+    await user.click(screen.getAllByRole("button", { name: "Probe now" })[0]!);
+
+    await waitFor(() => expect(mockProbeRelay).toHaveBeenCalledWith("workspace-1", "claude"));
+    await waitFor(() => expect(mockInvalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["relay-reasoning-levels", "workspace-1", "claude"],
+    }));
+    expect(screen.getByText("Manual: low, high")).toBeInTheDocument();
+  });
+  it("adds a model manually when the engine has no probed models", async () => {
+    reasoningRef.current.claude = {
+      engine: "claude",
+      allowed_levels: ["low", "medium", "high", "xhigh", "max"],
+      models: [],
+    };
+    mockPutReasoningLevel.mockResolvedValue({
+      deleted: false,
+      engine: "claude",
+      allowed_levels: ["low", "medium", "high", "xhigh", "max"],
+      models: [{
+        model_id: "deepseek-v4-flash",
+        label: "deepseek-v4-flash",
+        manual: {
+          levels: ["low", "high"],
+          default_level: "high",
+          updated_by: "owner@example.test",
+          updated_at: "2026-09-19T08:30:00.000Z",
+          state: "effective",
+        },
+        effective: {
+          supported_levels: [{ value: "low", label: "low" }, { value: "high", label: "high" }],
+          default_level: "high",
+          status: "supported",
+          source: "manual",
+        },
+      }],
+    });
+    const user = userEvent.setup();
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    expect(screen.getAllByText(
+      "No gateway models probed for this engine yet. You can still declare one manually.",
+    ).length).toBeGreaterThan(0);
+    await user.click(screen.getAllByRole("button", { name: "Add model" })[0]!);
+    await user.type(screen.getByLabelText("Model ID"), "deepseek-v4-flash");
+    await user.click(screen.getByRole("checkbox", { name: "low" }));
+    await user.click(screen.getByRole("checkbox", { name: "high" }));
+    await user.click(screen.getByRole("combobox", { name: "Default level" }));
+    await user.click(await screen.findByRole("option", { name: "high" }));
+    await user.click(screen.getByRole("button", { name: "Save levels" }));
+
+    await waitFor(() => expect(mockPutReasoningLevel).toHaveBeenCalledWith("workspace-1", "claude", {
+      model: "deepseek-v4-flash",
+      levels: ["low", "high"],
+      default_level: "high",
+    }));
+    await waitFor(() => expect(mockInvalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["relay-reasoning-levels", "workspace-1", "claude"],
+    }));
+    await waitFor(() => expect(mockInvalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["runtimes", "models", "fleet", "workspace-1"],
+    }));
+  });
+
+  it("renders a distinct blocked reason for every state code", () => {
+    const blocked = (stateCode: string) => ({
+      levels: ["high"],
+      default_level: "high",
+      updated_by: "owner@example.test",
+      updated_at: "2026-09-19T08:40:00.000Z",
+      state: "blocked",
+      state_code: stateCode,
+    });
+    reasoningRef.current.claude = {
+      engine: "claude",
+      allowed_levels: ["low", "medium", "high"],
+      models: [
+        { model_id: "codex-absent", label: "Codex absent", manual: blocked("not_in_execution_catalog"), effective: null },
+        { model_id: "codex-loading", label: "Codex loading", manual: blocked("execution_catalog_unknown"), effective: null },
+        { model_id: "engine-absent", label: "Engine absent", manual: blocked("not_in_catalog"), effective: null },
+      ],
+    };
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    expect(screen.getAllByText("Not effective")).toHaveLength(3);
+    expect(screen.getByText(/not in the Codex execution catalog/)).toBeInTheDocument();
+    expect(screen.getByText(/execution catalog is unknown or still loading/)).toBeInTheDocument();
+    expect(screen.getByText(/not in the engine catalog/)).toBeInTheDocument();
+    expect(screen.queryByText("Not declared")).toBeNull();
+  });
+
+  it("keeps an effective declaration in force without a conflict hint", () => {
+    reasoningRef.current.claude = {
+      engine: "claude",
+      allowed_levels: ["low", "medium", "high"],
+      models: [{
+        model_id: "deepseek-v4-flash",
+        label: "DeepSeek V4 Flash",
+        manual: {
+          levels: ["low", "high"],
+          default_level: "high",
+          updated_by: "owner@example.test",
+          updated_at: "2026-09-19T08:50:00.000Z",
+          state: "effective",
+        },
+        effective: {
+          supported_levels: [{ value: "low", label: "low" }, { value: "high", label: "high" }],
+          default_level: "high",
+          status: "supported",
+          source: "manual",
+        },
+      }],
+    };
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    expect(screen.getByText("manual")).toBeInTheDocument();
+    expect(screen.getByText("Manual: low, high")).toBeInTheDocument();
+    expect(screen.queryByText("Not effective")).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
   });
 });

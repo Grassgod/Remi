@@ -290,6 +290,42 @@ describe("ThinkingPropRow", () => {
     expect(onChange).toHaveBeenCalledWith("");
   });
 
+  it("disables the picker and explains when the model explicitly supports no levels", async () => {
+    mockListFleetModels.mockResolvedValue(fleet([{
+      ...NO_THINKING_MODEL,
+      thinking: { status: "unsupported", supported_levels: [] },
+    }]));
+    const { onChange } = renderRow({ model: "gemini-2.5-pro", value: "xhigh" });
+
+    expect(await screen.findByText("Reasoning configuration not supported")).toBeInTheDocument();
+    expect(screen.getByText("xhigh")).toBeInTheDocument();
+    // No editable empty picker: the only remaining control is "clear".
+    const button = screen.getByRole("button");
+    expect(button).toHaveAccessibleName(/Clear the override/i);
+    fireEvent.click(button);
+    expect(onChange).toHaveBeenCalledWith("");
+  });
+
+  it("distinguishes an undeclared gateway capability from a failed load", async () => {
+    // Gateway-only Claude aliases arrive with no `thinking` block at all: the
+    // row must say "unknown", not "loading failed", and must not offer levels.
+    mockListFleetModels.mockResolvedValue(fleet([NO_THINKING_MODEL]));
+    const { onChange } = renderRow({ model: "gemini-2.5-pro", value: "xhigh" });
+
+    expect(await screen.findByText("Reasoning capability unknown")).toBeInTheDocument();
+    expect(screen.queryByText("Reasoning capability loading failed")).toBeNull();
+    expect(screen.getByRole("button")).toHaveAccessibleName(/Clear the override/i);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("hides the clear control but keeps the saved token for read-only viewers", async () => {
+    mockListFleetModels.mockResolvedValue(fleet([NO_THINKING_MODEL]));
+    renderRow({ model: "gemini-2.5-pro", value: "xhigh", canEdit: false });
+
+    expect(await screen.findByText("xhigh")).toBeInTheDocument();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
   it("renders the row with the matched label when the model still advertises the value", async () => {
     renderRow({ value: "high" });
 

@@ -141,6 +141,7 @@ import {
 } from "@multiremi/store/repos/analytics-repo.js";
 import {
   WorkspacesRepo,
+  type GatewayModelReasoningDecl,
   type GatewayModelsSnapshot,
   type RelayConfigForBrowser,
   type RelayConfigForDaemon,
@@ -148,6 +149,7 @@ import {
 } from "@multiremi/store/repos/workspaces-repo.js";
 // The relay/gateway config types used to be declared here; keep the public surface unchanged.
 export type {
+  GatewayModelReasoningDecl,
   GatewayModelsSnapshot,
   RelayConfigForBrowser,
   RelayConfigForDaemon,
@@ -1369,6 +1371,26 @@ runMigrations(this.db);
     input: { models?: GatewayModelsSnapshot["models"]; sourceRevision: number; nativeCatalogStatus?: GatewayModelsSnapshot["nativeCatalogStatus"]; error?: string | null },
   ): void {
     return this.workspaces.saveGatewayModels(workspaceId, engine, input);
+  }
+
+  listGatewayModelReasoning(workspaceId: string, engine: RelayEngine): GatewayModelReasoningDecl[] {
+    return this.workspaces.listGatewayModelReasoning(workspaceId, engine);
+  }
+
+  getGatewayModelReasoning(workspaceId: string, engine: RelayEngine, modelId: string): GatewayModelReasoningDecl | null {
+    return this.workspaces.getGatewayModelReasoning(workspaceId, engine, modelId);
+  }
+
+  saveGatewayModelReasoning(
+    workspaceId: string,
+    engine: RelayEngine,
+    input: { modelId: string; levels: string[]; defaultLevel?: string | null; updatedBy?: string | null },
+  ): GatewayModelReasoningDecl | null {
+    return this.workspaces.saveGatewayModelReasoning(workspaceId, engine, input);
+  }
+
+  deleteGatewayModelReasoning(workspaceId: string, engine: RelayEngine, modelId: string): boolean {
+    return this.workspaces.deleteGatewayModelReasoning(workspaceId, engine, modelId);
   }
 
   createWorkspaceInvitation(workspaceId: string, input: CreateWorkspaceInvitationInput, inviterUserId?: string | null): MultiremiWorkspaceInvitation {

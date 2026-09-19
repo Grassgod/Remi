@@ -39,6 +39,7 @@ const FEISHU_BOT_AGENT_ROUTE_DEFAULT_UNIQUENESS_MIGRATION =
 const CHAT_ISSUE_DECOUPLING_MIGRATION = "20260916_chat_issue_decoupling";
 const AGENT_PAGE_QUERY_INDEXES_MIGRATION = "20260910_agent_page_query_indexes";
 const TASK_FALLBACK_MODEL_MIGRATION = "20260919_task_fallback_model";
+const GATEWAY_MODEL_REASONING_MIGRATION = "20260919_gateway_model_reasoning";
 
 // Stable Feishu open_id of the deployment owner (hehuajie / 贺华杰). The seed
 // `local` user is tagged with this on migration so SSO login re-binds to it
@@ -3177,6 +3178,25 @@ export function runMigrations(db: SqlDatabase): void {
   runMigrationOnce(db, "20260919_agent_fallback_model", () => {
     addColumnIfMissing(db, "multiremi_agents", "fallback_model TEXT");
     addColumnIfMissing(db, "multiremi_agents", "fallback_thinking_level TEXT");
+  });
+  // MUL-338: a gateway model whose engine publishes no reasoning metadata (every
+  // Claude alias outside the ACP selector) can have its levels declared by an
+  // administrator. That is an explicit operator statement, not a borrowed one, so
+  // it lives in its own table: the discovery snapshot is rewritten on every probe
+  // with `models = excluded.models`, and sharing a row would clear the declaration.
+  runMigrationOnce(db, GATEWAY_MODEL_REASONING_MIGRATION, () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS multiremi_gateway_model_reasoning (
+        workspace_id TEXT NOT NULL,
+        engine TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        levels TEXT NOT NULL DEFAULT '[]',
+        default_level TEXT,
+        updated_by TEXT,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(workspace_id, engine, model_id)
+      );
+    `);
   });
   backfillDefaultIssueSessions(db);
   backfillIssueKeys(db);

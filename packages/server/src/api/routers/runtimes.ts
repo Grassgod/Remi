@@ -1,6 +1,5 @@
 import type { Context, Hono } from "hono";
 import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
-import { refreshStaleGatewayModels } from "@multiremi/relay/discovery.js";
 import {
   bindDaemonTokenIdentityOrDeny,
   daemonLocalSkillImportReportBody,
@@ -642,17 +641,14 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
       const runtimes = executionGroupRuntimes(store, workspaceId, groupId, ownerId);
       const visibleIds = new Set(loaded.runtimes.map((runtime) => runtime.id));
       if (!runtimes.length || runtimes.some((runtime) => !visibleIds.has(runtime.id))) return c.json({ error: "no accessible execution group members" }, 403);
-      refreshStaleGatewayModels(store, workspaceId);
       return c.json({ providers: executionGroupModelCatalog(store, workspaceId, groupId, ownerId) });
     }
     if (runtimeId) {
       const runtime = loaded.runtimes.find((candidate) => candidate.id === runtimeId);
       if (!runtime) return c.json({ error: "invalid runtime_id" }, 400);
       if (!canCurrentUserUseRuntime(c, store, runtime)) return c.json({ error: "runtime is private" }, 403);
-      refreshStaleGatewayModels(store, workspaceId);
       return c.json({ providers: runtimeTargetModelCatalog(store, workspaceId, runtime) });
     }
-    refreshStaleGatewayModels(store, workspaceId);
     return c.json({ providers: workspaceRuntimeModelCatalog(store, workspaceId, loaded.runtimes, ownerId) });
   };
   app.get("/api/models", fleetModelsHandler);

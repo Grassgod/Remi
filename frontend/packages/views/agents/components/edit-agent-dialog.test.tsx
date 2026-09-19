@@ -7,6 +7,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type {
@@ -71,6 +72,13 @@ vi.mock("@multiremi/core/runtimes", async (importOriginal) => ({
                   { value: "low", label: "Low", description: "" },
                 ],
               },
+            },
+            {
+              // Capability load failed for this model: the thinking block
+              // carries an explicit error instead of an empty level set.
+              id: "claude-flaky",
+              label: "Flaky",
+              thinking: { status: "error", supported_levels: [] },
             },
           ]
         : catalog.models,
@@ -234,7 +242,12 @@ describe("EditAgentDialog", () => {
     expect(screen.getByText("Not in execution catalog · Cannot run")).toBeInTheDocument();
     expect(screen.queryByText("Reasoning capability unknown")).toBeNull();
     expect(screen.getByLabelText("Model")).toHaveValue("inventory-only");
-    expect(screen.getByRole("combobox", { name: "Reasoning effort" })).toHaveValue("saved-effort");
+    // The model declares no levels, so the draft's effort renders read-only
+    // instead of as an editable picker. The unexecutable model is not editable
+    // here, so no clear control is offered either.
+    expect(screen.queryByRole("combobox", { name: "Reasoning effort" })).toBeNull();
+    expect(screen.getByText("saved-effort")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Clear the override/i })).toBeNull();
     fireEvent.change(screen.getByLabelText("Description"), { target: { value: "Updated description" } });
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
@@ -394,18 +407,57 @@ describe("EditAgentDialog", () => {
     });
   });
 
-  it("surfaces an orphan effort until the user explicitly clears it", async () => {
+  it("shows an orphan effort read-only until the user explicitly clears it", async () => {
     const { onSave } = renderDialog(
       makeAgent({ model: "claude-retired", thinking_level: "xhigh" }),
     );
 
-    const effort = screen.getByRole("combobox", { name: "Reasoning effort" });
-    expect((effort as HTMLSelectElement).value).toBe("xhigh");
-    fireEvent.change(effort, { target: { value: "" } });
+    // A model that declares no levels gets a read-only value plus an explicit
+    // clear control, not an empty editable picker.
+    expect(screen.getByText("xhigh")).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Reasoning effort" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Clear the override/i }));
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
     expect(onSave.mock.calls[0]?.[0].thinking_level).toBe("");
+  });
+
+  it("keeps the editable picker when the model's capability load failed", () => {
+    // A failed load is not an authoritative "no levels" verdict, so the saved
+    // effort stays editable (and clearable) exactly as before.
+    renderDialog(makeAgent({ provider: "claude", model: "claude-flaky", thinking_level: "high" }));
+
+    expect(screen.getByRole("combobox", { name: "Reasoning effort" })).toHaveValue("high");
+    expect(screen.getByText("Reasoning capability loading failed")).toBeInTheDocument();
+  });
+
+  it("keeps the editable picker when the model declares reasoning levels", () => {
+    renderDialog(makeAgent({ provider: "claude", model: "claude-opus", thinking_level: "high" }));
+
+    expect(screen.getByRole("combobox", { name: "Reasoning effort" })).toHaveValue("high");
+    expect(screen.getByRole("option", { name: "High" })).toBeInTheDocument();
+  });
+
+  it("shows a level-less fallback effort read-only and clears it", async () => {
+    const { onSave } = renderDialog(makeAgent({
+      provider: "claude",
+      model: "claude-sonnet",
+      thinking_level: "low",
+      fallback_model: "claude-retired",
+      fallback_thinking_level: "xhigh",
+    }));
+
+    const fallbackGroup = screen.getByRole("group", { name: "Fallback reasoning effort" });
+    expect(within(fallbackGroup).getByText("xhigh")).toBeInTheDocument();
+    expect(fallbackGroup.querySelector("select")).toBeNull();
+    fireEvent.click(within(fallbackGroup).getByRole("button", { name: /Clear the override/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    // The fallback model itself is unchanged, so only the cleared effort ships.
+    expect(onSave.mock.calls[0]?.[0]).toMatchObject({ fallback_thinking_level: "" });
+    expect(onSave.mock.calls[0]?.[0].fallback_model).toBeUndefined();
   });
 
   it("rejects an empty name and out-of-range concurrency locally", () => {
