@@ -61,6 +61,59 @@ export interface FleetProviderModelsResponse {
   default_thinking?: FleetModelThinkingResponse;
 }
 
+/**
+ * Why a model exposes no reasoning levels. `modelThinkingLevels` collapses all
+ * four into an empty array; routing must not, because they call for opposite
+ * decisions (see docs/runtime-model-discovery.md):
+ *
+ *  - `supported`   — the model declares levels; the Agent's saved effort is a real
+ *                    capability constraint and must be honoured.
+ *  - `unsupported` — the model declares none at all. The effort is not applicable.
+ *  - `unknown`     — nobody declared anything (gateway-only Claude aliases). Also
+ *                    not applicable. Filling it from another model's levels is
+ *                    exactly what this codebase forbids.
+ *  - `error`       — the execution engine reported a failed capability load. That
+ *                    is a transient state it recovers from, and it genuinely
+ *                    cannot honour the model, so the Runtime stays out.
+ */
+export type ModelThinkingState = "supported" | "unsupported" | "unknown" | "error";
+
+export function modelThinkingState(
+  models: FleetModelResponse[],
+  model: string,
+  providerDefault?: FleetModelThinkingResponse,
+): { state: ModelThinkingState; levels: FleetModelThinkingResponse["supported_levels"] } {
+  // Reuse the selector's own resolution order so routing can never disagree with
+  // the levels the UI offers.
+  const levels = modelThinkingLevels(models, model, providerDefault);
+  if (levels.length) return { state: "supported", levels };
+  const thinking = model
+    ? models.find((entry) => entry.id === model)?.thinking
+    : providerDefault ?? models.find((entry) => entry.default)?.thinking;
+  if (thinking?.status === "error") return { state: "error", levels: [] };
+  if (thinking?.status === "unsupported") return { state: "unsupported", levels: [] };
+  return { state: "unknown", levels: [] };
+}
+
+/**
+ * Whether the provider's execution engine publishes a reasoning catalog that is
+ * authoritative about a model having *no* levels.
+ *
+ * Codex does: its native catalog endpoint lists `supported_reasoning_levels` per
+ * model, and a model absent from it cannot be executed at all. So for Codex "no
+ * levels" is a statement about the model, and MUL-330/#220 keeps REJECTING an
+ * explicitly requested effort rather than silently rewriting the request.
+ *
+ * Claude does not. The gateway `/v1/models` inventory carries ids and labels
+ * only, and the ACP bridge reports the native selector solely for its own
+ * aliases, so a gateway-only alias has no reasoning source behind it at all.
+ * There, an empty level list says nothing about the model — see
+ * `modelThinkingState` — and the only useful reading is "not applicable".
+ */
+export function providerPublishesReasoningCatalog(provider: string): boolean {
+  return provider === "codex";
+}
+
 /** Intersect execution targets without losing why a capability is unavailable. */
 export function commonThinkingCapabilities(capabilities: FleetModelThinkingResponse[]): FleetModelThinkingResponse {
   const supported_levels = commonThinkingLevels(capabilities.map((thinking) => modelThinkingLevels([], "", thinking)));

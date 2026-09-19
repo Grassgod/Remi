@@ -1,4 +1,5 @@
-import { workspaceRuntimeModelCatalog, catalogAllowsModel, commonThinkingCapabilities, runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
+import { createLogger } from "@shared/logger.js";
+import { workspaceRuntimeModelCatalog, catalogAllowsModel, commonThinkingCapabilities, modelThinkingState, runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
 export { workspaceRuntimeModelCatalog, overlayGatewayModels, runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
 // Agent and skill request plumbing: the `with*RequestContext` builders that fold caller identity
 // and defaults into create/update inputs, the `load*For*` guards, and the provider/thinking-level
@@ -42,6 +43,8 @@ import { currentTaskIssueCreationRestricted } from "./issues.js";
 import { modelThinkingLevels } from "@multiremi/contracts/model-thinking.js";
 
 export const MAX_AGENT_DESCRIPTION_LENGTH = 255;
+
+const log = createLogger("agent-selection");
 
 export function requestedAgentWorkspaceId(
   c: Context,
@@ -151,6 +154,78 @@ function workspaceProviderCatalog(
   return providers.find((entry) => entry.provider === provider);
 }
 
+/** The catalog the selection is validated against: the execution group's common
+ *  set when one is selected, otherwise the workspace/provider (or pinned Runtime). */
+function agentSelectionCatalog(
+  c: Context,
+  store: MultiremiStore,
+  input: {
+    workspaceId: string;
+    provider: string;
+    runtimeId?: string | null;
+    executionGroupId?: string | null;
+    ownerId?: string;
+  },
+): FleetProviderModelsResponse | undefined {
+  return input.executionGroupId && !input.runtimeId
+    ? executionGroupModelCatalog(store, input.workspaceId, input.executionGroupId, input.ownerId ?? currentRequestUserId(c))[0]
+    : workspaceProviderCatalog(store, input.workspaceId, input.provider, currentRequestUserId(c), input.runtimeId);
+}
+
+/**
+ * Drop a reasoning level the target model cannot honour, instead of storing it.
+ *
+ * Gateway-only models — Claude has no `supported_reasoning_levels`, and the
+ * Runtime reports the native ACP selector only for its own aliases — declare no
+ * levels at all. The Agent can still carry a level from before that was true
+ * (MUL-338), and validation only ever looked at an EXPLICITLY sent level, so any
+ * later metadata-only edit preserved the unusable value forever. Clearing it is
+ * what the capability contract actually says: `docs/runtime-model-discovery.md`
+ * forbids borrowing another model's levels, so "no declaration" means the effort
+ * is not applicable rather than pending. Routing ignores such a level too, but
+ * leaving it stored keeps the Agent pinned to a value the UI cannot even render.
+ *
+ * This only rewrites a level the caller did NOT freshly choose. An effort named
+ * while also changing the selection is judged as before and rejected with a 400
+ * when the catalog cannot confirm it, so an API client is told its request was
+ * not honoured instead of silently getting something else. Everything else is a
+ * leftover: no level sent at all, or the saved selection echoed back verbatim —
+ * the case that used to short-circuit validation, which is why the stale value
+ * survived every later edit.
+ *
+ * Only a catalog that actually lists the model (or identifies the provider
+ * default) may clear it: an absent entry is missing metadata, not an answer.
+ */
+function convergeAgentThinkingLevel(
+  c: Context,
+  store: MultiremiStore,
+  input: {
+    workspaceId: string;
+    provider: string;
+    model: string;
+    thinkingLevel: string;
+    runtimeId?: string | null;
+    executionGroupId?: string | null;
+    ownerId?: string;
+    /** True when the level comes from the stored Agent rather than this request. */
+    carriedOver: boolean;
+  },
+): string {
+  if (!input.thinkingLevel) return "";
+  if (!input.carriedOver) return input.thinkingLevel;
+  const catalog = agentSelectionCatalog(c, store, input);
+  const models = catalog?.models ?? [];
+  const known = input.model
+    ? models.some((model) => model.id === input.model)
+    : Boolean(catalog?.default_thinking);
+  if (!known) return input.thinkingLevel;
+  if (modelThinkingState(models, input.model, catalog?.default_thinking).state === "supported") {
+    return input.thinkingLevel;
+  }
+  log.info(`clearing carried-over thinking_level "${input.thinkingLevel}" for ${input.provider} model "${input.model || "default"}": the model declares no reasoning levels`);
+  return "";
+}
+
 function validateAgentModelSelection(
   c: Context,
   store: MultiremiStore,
@@ -181,13 +256,7 @@ function validateAgentModelSelection(
   if (groupModels && input.model && !groupModels.some((model) => model.id === input.model)) {
     return c.json({ error: `model "${input.model}" is not supported by every available member of the selected execution group` }, 400);
   }
-  const catalog = input.executionGroupId && !input.runtimeId ? groupCatalog : workspaceProviderCatalog(
-    store,
-    input.workspaceId,
-    input.provider,
-    currentRequestUserId(c),
-    input.runtimeId,
-  );
+  const catalog = input.executionGroupId && !input.runtimeId ? groupCatalog : agentSelectionCatalog(c, store, input);
   const models = catalog?.models ?? [];
   if (!catalogAllowsModel(catalog, input.model)) {
     return c.json({
@@ -246,9 +315,7 @@ function validateAgentFallbackSelection(
 ): Response | null {
   if (!input.fallbackModel || input.preserveSavedSelection) return null;
   const profile = input.runtimeId ? store.getRuntimeExecutionProfile(input.runtimeId, input.provider) : null;
-  const catalog = input.executionGroupId && !input.runtimeId
-    ? executionGroupModelCatalog(store, input.workspaceId, input.executionGroupId, input.ownerId ?? currentRequestUserId(c))[0]
-    : workspaceProviderCatalog(store, input.workspaceId, input.provider, currentRequestUserId(c), input.runtimeId);
+  const catalog = agentSelectionCatalog(c, store, input);
   const effectiveModel = input.model || profile?.model || catalog?.models.find((model) => model.default)?.id;
   if (effectiveModel === input.fallbackModel) {
     return c.json({ error: "fallback_model must be different from the primary model" }, 400);
@@ -436,23 +503,26 @@ export function withAgentRequestContext(c: Context, store: MultiremiStore, input
   const description = normalizeAgentRequestDescription(c, input.description);
   if (description instanceof Response) return description;
   const model = agentRequestModel(input);
-  const thinkingLevel = agentRequestThinkingLevel(input);
   const fallbackModel = agentRequestFallbackModel(input);
+  const runtimeId = cleanString(input.runtimeId ?? input.runtime_id);
+  const executionGroupId = cleanString(input.executionGroupId ?? input.execution_group_id);
+  // A new Agent has no stored selection to carry over, so an effort named here is
+  // a deliberate request: validation judges it, and rejects what it cannot confirm.
+  const thinkingLevel = agentRequestThinkingLevel(input);
   const fallbackThinkingLevel = fallbackModel ? agentRequestFallbackThinkingLevel(input) : "";
   const invalidSelection = validateAgentModelSelection(c, store, {
     workspaceId,
     provider,
     model,
     thinkingLevel,
-    runtimeId: cleanString(input.runtimeId ?? input.runtime_id),
-    executionGroupId: cleanString(input.executionGroupId ?? input.execution_group_id),
+    runtimeId,
+    executionGroupId,
   });
   if (invalidSelection) return invalidSelection;
   const ownerId = currentRequestUserId(c);
   const invalidFallback = validateAgentFallbackSelection(c, store, {
     workspaceId, provider, model, fallbackModel, fallbackThinkingLevel,
-    runtimeId: cleanString(input.runtimeId ?? input.runtime_id),
-    executionGroupId: cleanString(input.executionGroupId ?? input.execution_group_id), ownerId,
+    runtimeId, executionGroupId, ownerId,
   });
   if (invalidFallback) return invalidFallback;
   return {
@@ -464,10 +534,10 @@ export function withAgentRequestContext(c: Context, store: MultiremiStore, input
     workspace_id: workspaceId,
     ownerId,
     owner_id: ownerId,
-    runtimeId: cleanString(input.runtimeId ?? input.runtime_id) ?? null,
-    runtime_id: cleanString(input.runtimeId ?? input.runtime_id) ?? null,
-    executionGroupId: cleanString(input.executionGroupId ?? input.execution_group_id) ?? null,
-    execution_group_id: cleanString(input.executionGroupId ?? input.execution_group_id) ?? null,
+    runtimeId: runtimeId ?? null,
+    runtime_id: runtimeId ?? null,
+    executionGroupId: executionGroupId ?? null,
+    execution_group_id: executionGroupId ?? null,
     model: model || null,
     fallbackModel: fallbackModel || null,
     fallback_model: fallbackModel || null,
@@ -606,29 +676,49 @@ export function withAgentUpdateRequestContext(
   const targetFallbackThinkingLevel = !targetFallbackModel ? "" : fallbackThinkingLevelProvided
     ? agentRequestFallbackThinkingLevel(input)
     : targetChanged ? "" : cleanString(current.fallbackThinkingLevel) ?? "";
-  if (modelProvided) {
-    next.model = targetModel;
-  } else if (targetChanged) {
-    next.model = "";
-  }
-  if (thinkingLevelProvided || targetChanged) {
-    next.thinkingLevel = targetThinkingLevel;
-    next.thinking_level = targetThinkingLevel;
-  }
-  if (fallbackModelProvided || targetChanged) {
-    next.fallbackModel = targetFallbackModel || null;
-    next.fallback_model = targetFallbackModel || null;
-  }
-  if (fallbackThinkingLevelProvided || fallbackModelProvided && !targetFallbackModel || targetChanged) {
-    next.fallbackThinkingLevel = targetFallbackThinkingLevel || null;
-    next.fallback_thinking_level = targetFallbackThinkingLevel || null;
-  }
   const currentModel = cleanString(current.model) ?? "";
   const currentThinkingLevel = cleanString(current.thinkingLevel) ?? "";
   const selectionChanged = runtimeChanged || groupChanged || targetOwnerId !== (current.ownerId ?? "local") || targetWorkspaceId !== current.workspaceId ||
     targetProvider !== current.provider ||
     targetModel !== currentModel ||
     targetThinkingLevel !== currentThinkingLevel;
+  // MUL-338: a model that declares no reasoning levels must not keep one stored.
+  // This runs on EVERY update, including one that changed nothing else, because
+  // the unusable level is usually already saved and no later edit ever revisited it.
+  // A level the caller actively named while changing the selection is the one case
+  // that stays a request rather than a leftover; everything else — no level sent,
+  // or the saved selection echoed back verbatim — is the stored value surviving.
+  const carriedOver = !thinkingLevelProvided || !selectionChanged;
+  const effectiveThinkingLevel = convergeAgentThinkingLevel(c, store, {
+    workspaceId: targetWorkspaceId, provider: targetProvider, model: targetModel,
+    thinkingLevel: targetThinkingLevel, runtimeId: targetRuntimeId,
+    executionGroupId: targetGroupId, ownerId: targetOwnerId,
+    carriedOver,
+  });
+  const effectiveFallbackThinkingLevel = !targetFallbackModel ? "" : convergeAgentThinkingLevel(c, store, {
+    workspaceId: targetWorkspaceId, provider: targetProvider, model: targetFallbackModel,
+    thinkingLevel: targetFallbackThinkingLevel, runtimeId: targetRuntimeId,
+    executionGroupId: targetGroupId, ownerId: targetOwnerId,
+    carriedOver: !fallbackThinkingLevelProvided || !selectionChanged,
+  });
+  if (modelProvided) {
+    next.model = targetModel;
+  } else if (targetChanged) {
+    next.model = "";
+  }
+  if (thinkingLevelProvided || targetChanged || effectiveThinkingLevel !== targetThinkingLevel) {
+    next.thinkingLevel = effectiveThinkingLevel;
+    next.thinking_level = effectiveThinkingLevel;
+  }
+  if (fallbackModelProvided || targetChanged) {
+    next.fallbackModel = targetFallbackModel || null;
+    next.fallback_model = targetFallbackModel || null;
+  }
+  if (fallbackThinkingLevelProvided || fallbackModelProvided && !targetFallbackModel || targetChanged
+    || effectiveFallbackThinkingLevel !== targetFallbackThinkingLevel) {
+    next.fallbackThinkingLevel = effectiveFallbackThinkingLevel || null;
+    next.fallback_thinking_level = effectiveFallbackThinkingLevel || null;
+  }
   if (selectionChanged || modelProvided) {
     const invalidSelection = validateAgentModelSelection(c, store, {
       workspaceId: targetWorkspaceId,
@@ -636,7 +726,7 @@ export function withAgentUpdateRequestContext(
       model: targetModel,
       // Metadata edits may resend an unchanged selection while discovery is unavailable.
       // Still enforce a fixed connection model, but revalidate effort only when it changes.
-      thinkingLevel: selectionChanged ? targetThinkingLevel : "",
+      thinkingLevel: selectionChanged ? effectiveThinkingLevel : "",
       runtimeId: targetRuntimeId,
       executionGroupId: targetGroupId,
       ownerId: targetOwnerId,
@@ -650,7 +740,7 @@ export function withAgentUpdateRequestContext(
   if (fallbackSelectionChanged) {
     const invalidFallback = validateAgentFallbackSelection(c, store, {
       workspaceId: targetWorkspaceId, provider: targetProvider, model: targetModel,
-      fallbackModel: targetFallbackModel, fallbackThinkingLevel: targetFallbackThinkingLevel,
+      fallbackModel: targetFallbackModel, fallbackThinkingLevel: effectiveFallbackThinkingLevel,
       runtimeId: targetRuntimeId, executionGroupId: targetGroupId, ownerId: targetOwnerId,
     });
     if (invalidFallback) return invalidFallback;
@@ -722,16 +812,22 @@ export function withAgentTemplateRequestContext(
   const fallbackThinkingLevel = fallbackModel ? agentRequestFallbackThinkingLevel(input) : "";
   const effectiveModel = model || ((input.runtimeId ?? input.runtime_id ?? input.executionGroupId ?? input.execution_group_id)
     ? "" : cleanString(template.recommendedModel) ?? "");
+  const runtimeId = cleanString(input.runtimeId ?? input.runtime_id);
+  const executionGroupId = cleanString(input.executionGroupId ?? input.execution_group_id);
+  // Like the create path: nothing stored to carry over, so the request is judged
+  // as what it is — a fresh selection.
+  const requestedThinkingLevel = agentRequestThinkingLevel(input);
+  const thinkingLevel = requestedThinkingLevel;
+  const effectiveFallbackThinkingLevel = !fallbackModel ? "" : fallbackThinkingLevel;
   const invalidSelection = validateAgentModelSelection(c, store, {
-    workspaceId, provider, model, thinkingLevel: agentRequestThinkingLevel(input),
-    runtimeId: cleanString(input.runtimeId ?? input.runtime_id),
-    executionGroupId: cleanString(input.executionGroupId ?? input.execution_group_id),
+    workspaceId, provider, model, thinkingLevel,
+    runtimeId, executionGroupId,
   });
   if (invalidSelection) return invalidSelection;
   const invalidFallback = validateAgentFallbackSelection(c, store, {
-    workspaceId, provider, model: effectiveModel, fallbackModel, fallbackThinkingLevel,
-    runtimeId: cleanString(input.runtimeId ?? input.runtime_id),
-    executionGroupId: cleanString(input.executionGroupId ?? input.execution_group_id),
+    workspaceId, provider, model: effectiveModel, fallbackModel,
+    fallbackThinkingLevel: effectiveFallbackThinkingLevel,
+    runtimeId, executionGroupId,
   });
   if (invalidFallback) return invalidFallback;
   const maxConcurrentTasks = normalizeAgentRequestMaxConcurrentTasks(c, input.maxConcurrentTasks ?? input.max_concurrent_tasks);
@@ -748,15 +844,17 @@ export function withAgentTemplateRequestContext(
     workspace_id: workspaceId,
     ownerId,
     owner_id: ownerId,
-    runtimeId: cleanString(input.runtimeId ?? input.runtime_id) ?? null,
-    runtime_id: cleanString(input.runtimeId ?? input.runtime_id) ?? null,
-    executionGroupId: cleanString(input.executionGroupId ?? input.execution_group_id) ?? null,
-    execution_group_id: cleanString(input.executionGroupId ?? input.execution_group_id) ?? null,
+    runtimeId: runtimeId ?? null,
+    runtime_id: runtimeId ?? null,
+    executionGroupId: executionGroupId ?? null,
+    execution_group_id: executionGroupId ?? null,
     model: model || null,
     fallbackModel: fallbackModel || null,
     fallback_model: fallbackModel || null,
-    fallbackThinkingLevel: fallbackThinkingLevel || null,
-    fallback_thinking_level: fallbackThinkingLevel || null,
+    // Only override the passthrough when convergence actually dropped a level.
+    ...(thinkingLevel === requestedThinkingLevel ? {} : { thinkingLevel: thinkingLevel || null, thinking_level: thinkingLevel || null }),
+    fallbackThinkingLevel: effectiveFallbackThinkingLevel || null,
+    fallback_thinking_level: effectiveFallbackThinkingLevel || null,
     maxConcurrentTasks,
     max_concurrent_tasks: maxConcurrentTasks,
     ...role,

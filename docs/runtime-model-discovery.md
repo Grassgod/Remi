@@ -43,6 +43,31 @@ can use an exact runtime model match; it cannot borrow another provider model's
 levels. Claude retains exact-model and existing unambiguous Claude-family
 capabilities, without a provider-wide guess for unrelated models.
 
+Task eligibility reads these four states as three different questions
+(`modelThinkingState`). A model that declares levels (`supported`) must offer the
+saved level, and a runtime whose capability load failed (`error`) cannot claim the
+task — both remain blocking. A model that publishes no reasoning catalog at all
+(`providerPublishesReasoningCatalog`: Claude today) and declares no levels
+(`unsupported`) or has nothing described (`unknown`) does not thereby become
+unrunnable: the level is not applicable rather than unavailable, so the runtime
+stays eligible and the ignored level is logged once per provider/model/level.
+Reading an empty level list as a missing capability instead left gateway-only
+Claude aliases — which the gateway `/v1/models` inventory describes with ids and
+labels only — unclaimable on every runtime while the same model without a saved
+level was claimable, so the task queued forever. Codex does publish an
+authoritative catalog, so there an empty level list still means the runtime
+cannot honour the effort, exactly as in MUL-330.
+
+Writes converge the other way round, and only for a selection the caller did not
+choose. An agent carrying a stored `thinking_level` for a model that declares no
+levels gets it cleared on the next update, including a metadata-only edit or a
+verbatim resend of the saved selection — the cases that previously short-circuited
+validation and kept the value forever, because the stale level is usually already
+saved and no later edit ever mentions it. An effort the request actively sets is
+still judged by validation and rejected with a 400 when the catalog cannot confirm
+it, so a caller is told its request was not honoured rather than silently getting a
+different Agent.
+
 Production daemons discover capabilities at startup and refresh every 15 minutes.
 Manual model-list requests use the same single-flight probe without blocking the
 heartbeat loop. The probe runs as a separate `remi runtime-model-probe` process.
