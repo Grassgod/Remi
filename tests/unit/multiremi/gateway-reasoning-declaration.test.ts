@@ -110,7 +110,11 @@ async function listing(app: ReturnType<typeof createMultiremiApp>, engine = "cla
     models: Array<{
       model_id: string;
       label: string;
-      manual: { levels: string[]; default_level?: string; updated_by: string | null; updated_at: string } | null;
+      manual: {
+        levels: string[]; default_level?: string; updated_by: string | null; updated_at: string;
+        state: "effective" | "outranked" | "blocked";
+        state_code?: "not_in_execution_catalog" | "execution_catalog_unknown" | "not_in_catalog";
+      } | null;
       effective: { supported_levels: Array<{ value: string }>; default_level?: string; status?: string; source: string } | null;
     }>;
   };
@@ -202,18 +206,38 @@ describe("MUL-338 gateway reasoning declarations: the read model", () => {
     expect(declared.effective?.source).toBe("manual");
   });
 
-  it("keeps listing a declaration whose model left the gateway inventory", async () => {
-    const { store, app } = setupClaude();
+  it("keeps offering a declared model after a probe drops it from the snapshot", async () => {
+    const { store, runtimes, app } = setupClaude();
+    const revision = store.getRelayConfigForDaemon("local").claude!.revision;
+    // It is in the inventory to begin with: this is a model that *left*, not one
+    // that was never there.
+    store.saveGatewayModels("local", "claude", {
+      sourceRevision: revision, models: [...GATEWAY_MODELS, "retired-alias"].map(id => ({ id, label: id })),
+    });
     declareLevels(store, "claude", "retired-alias", ["low"]);
 
-    const orphan = row(await listing(app), "retired-alias")!;
+    // The next probe replaces the snapshot wholesale and the alias is gone.
+    store.saveGatewayModels("local", "claude", {
+      sourceRevision: revision, models: GATEWAY_MODELS.map(id => ({ id, label: id })),
+    });
+    expect(store.getGatewayModels("local", "claude")?.models.some(model => model.id === "retired-alias")).toBe(false);
 
-    // The snapshot is replaced wholesale on every probe, so a declaration that
-    // outlives its model has to stay visible — otherwise the page that created it
-    // can never clear it again.
+    const orphan = row(await listing(app), "retired-alias")!;
+    // The snapshot is rewritten on every probe, so a declaration that outlives
+    // its model has to stay visible — otherwise the page that created it could
+    // never clear it again. It is also what keeps the alias selectable now that a
+    // declaration is a source in its own right rather than an annotation on
+    // whatever the probe happened to return.
     expect(orphan.manual?.levels).toEqual(["low"]);
     expect(orphan.label).toBe("retired-alias");
-    expect(orphan.effective).toBeNull();
+    expect(orphan.manual?.state).toBe("effective");
+    expect(orphan.effective?.source).toBe("manual");
+    expect(levelsOf(orphan.effective)).toEqual(["low"]);
+
+    // And it is still routable: an Agent on the retired id is not stranded.
+    const agent = store.createAgent({ name: "retired", provider: "claude", model: "retired-alias", thinkingLevel: "low" });
+    const task = store.createTask({ agentId: agent.id, prompt: "run" });
+    expect(store.claimTask(runtimes[0].id)?.id).toBe(task.id);
   });
 
   it("does not lose the declaration when the gateway is probed again", async () => {
@@ -396,6 +420,123 @@ describe("MUL-338 gateway reasoning declarations: routing", () => {
     // Every other model keeps its own answer.
     expect(levelsOf(row(await listing(app), "deepseek-flash")?.effective)).toBeUndefined();
     expect(runtimes.filter(runtime => store.runtimeSupportsAgentModel(runtime, agentWith(store, "deepseek-flash", "high"))).length).toBe(3);
+  });
+});
+
+describe("MUL-338 gateway reasoning declarations: a source in its own right", () => {
+  /** One Claude Runtime and no relay config at all: discovery has never run. */
+  function setupUndiscovered() {
+    const store = createLocalStore();
+    store.setRelayModelDiscovery("local", true);
+    const runtime = store.registerRuntime({
+      name: "claude-0", provider: "claude", workspaceId: "local", models: claudeRuntimeModels(),
+    });
+    return { store, runtime, app: createMultiremiApp({ store }) };
+  }
+
+  function claimable(store: ReturnType<typeof createLocalStore>, modelId: string) {
+    return store.createAgent({ name: `claim-${modelId}`, provider: "claude", model: modelId, thinkingLevel: "high" });
+  }
+
+  it("adds a model nobody ever discovered when there is no snapshot at all", async () => {
+    const { store, runtime, app } = setupUndiscovered();
+    expect(store.getGatewayModels("local", "claude")).toBeNull();
+
+    declareLevels(store, "claude", "future-alias", ["low", "high", "max"], "high");
+
+    // The catalog an Agent's selection is validated against shows it — from the
+    // declaration, which is the only thing that has ever spoken about this id.
+    const listed = (await catalogFor(app, "claude"))?.models.find(entry => entry.id === "future-alias");
+    expect(listed?.thinking_source).toBe("manual");
+    expect(levelsOf(listed?.thinking)).toEqual(["low", "high", "max"]);
+    const created = await app.request("/api/agents", {
+      method: "POST", headers,
+      body: JSON.stringify({ name: "Future", provider: "claude", model: "future-alias", thinking_level: "high" }),
+    });
+    expect(created.status).toBe(201);
+
+    // The page agrees with routing, and routing is what the Runtime does.
+    const declared = row(await listing(app), "future-alias")!;
+    expect(declared.manual?.state).toBe("effective");
+    expect(declared.effective?.source).toBe("manual");
+    const agent = claimable(store, "future-alias");
+    expect(store.runtimeSupportsAgentModel(runtime, agent)).toBe(true);
+    const task = store.createTask({ agentId: agent.id, prompt: "run" });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+
+    // A level outside the declaration is refused, as any other undeclared level is.
+    const off = store.createAgent({ name: "Future medium", provider: "claude", model: "future-alias", thinkingLevel: "medium" });
+    expect(store.runtimeSupportsAgentModel(runtime, off)).toBe(false);
+  });
+
+  it("survives a probe that failed and left the snapshot empty", async () => {
+    const { store, runtimes, app } = setupClaude();
+    const revision = store.getRelayConfigForDaemon("local").claude!.revision;
+    store.saveGatewayModels("local", "claude", {
+      sourceRevision: revision, models: [], error: "gateway HTTP 500",
+    });
+    // The failure is the probe's, not the administrator's: the declaration is a
+    // separate statement and has to keep working exactly when probing does not.
+    expect(store.getGatewayModels("local", "claude")?.lastError).toBe("gateway HTTP 500");
+
+    declareLevels(store, "claude", "future-alias", ["low", "high"], "low");
+
+    const listed = (await catalogFor(app, "claude"))?.models.find(entry => entry.id === "future-alias");
+    expect(listed?.thinking_source).toBe("manual");
+    expect(levelsOf(listed?.thinking)).toEqual(["low", "high"]);
+    const agent = claimable(store, "future-alias");
+    const task = store.createTask({ agentId: agent.id, prompt: "run" });
+    expect(store.claimTask(runtimes[0].id)?.id).toBe(task.id);
+    // Listing a declaration does not invent the models the failed probe could not
+    // fetch: the row exists because it was declared, and says so.
+    expect(row(await listing(app), "future-alias")?.effective?.source).toBe("manual");
+  });
+
+  it("keeps declaring a model while discovery is switched off", async () => {
+    const { store, app } = setupClaude();
+    store.setRelayModelDiscovery("local", false);
+    declareLevels(store, "claude", "future-alias", ["low"]);
+
+    const models = (await catalogFor(app, "claude"))?.models ?? [];
+    // The toggle hides the (possibly stale) snapshot — that is its job.
+    expect(models.some(entry => entry.id === "deepseek-v4-flash")).toBe(false);
+    // It does not hide an administrator's own declaration, which is not probe data.
+    expect(models.find(entry => entry.id === "future-alias")?.thinking_source).toBe("manual");
+  });
+
+  it("stores a Codex declaration for a non-member and reports why it is inert", async () => {
+    const { store, app } = setupCodex();
+    declareLevels(store, "codex", "ghost-model", ["low", "high"]);
+
+    const ghost = row(await listing(app, "codex"), "ghost-model")!;
+    // Stored and shown — an administrator may be declaring it for when the gateway
+    // offers it — but never dressed up as selectable.
+    expect(ghost.manual?.levels).toEqual(["low", "high"]);
+    expect(ghost.manual?.state).toBe("blocked");
+    expect(ghost.manual?.state_code).toBe("not_in_execution_catalog");
+    expect(ghost.effective).toBeNull();
+    expect((await catalogFor(app, "codex"))?.models.some(entry => entry.id === "ghost-model")).toBe(false);
+
+    const created = await app.request("/api/agents", {
+      method: "POST", headers,
+      body: JSON.stringify({ name: "Ghost", provider: "codex", model: "ghost-model", thinking_level: "low" }),
+    });
+    expect(created.status).toBe(400);
+    expect((await created.json()).code).toBe("model_not_in_execution_catalog");
+  });
+
+  it("reports an unknown Codex execution catalog as unresolved rather than absent", async () => {
+    const store = createLocalStore();
+    store.setRelayModelDiscovery("local", true);
+    store.upsertRelayConfig("local", "codex", { fragment: CODEX_FRAG, tokenOp: "set", authToken: "test-key" });
+    const app = createMultiremiApp({ store });
+    declareLevels(store, "codex", "ghost-model", ["low"]);
+
+    const ghost = row(await listing(app, "codex"), "ghost-model")!;
+    expect(ghost.manual?.state).toBe("blocked");
+    // Nothing has been probed yet, so the honest answer is "not decided", not
+    // "this model is not in the catalog".
+    expect(ghost.manual?.state_code).toBe("execution_catalog_unknown");
   });
 });
 

@@ -186,7 +186,7 @@ export function workspaceCommandSpecs(): CommandSpec[] {
       "PUT",
       [
         refPositional("engine"),
-        { name: "model", type: "string", valueName: "model-id", description: "Gateway model id as listed by probe" },
+        { name: "model", type: "string", valueName: "model-id", description: "Gateway model id; need not be one the probe returned" },
         { name: "level", type: "string", valueName: "level", repeatable: true, description: "Declared reasoning level, in the engine's order of increasing effort" },
         { name: "default-level", type: "string", valueName: "level", description: "Default level; must be one of --level" },
         { name: "clear", type: "boolean", description: "Remove the declaration instead of setting one" },

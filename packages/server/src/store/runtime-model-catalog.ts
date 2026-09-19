@@ -411,9 +411,32 @@ export function overlayGatewayModels(
   providers: FleetProviderModelsResponse[],
   options: { preserveCustomProfileModels?: boolean; requireRuntimeMembership?: boolean } = {},
 ): FleetProviderModelsResponse[] {
+  // An administrator's declaration is a statement about the engine, not probe
+  // output, so it is applied to whatever this function produced — before the
+  // discovery check and after the snapshot overlay. It has to hold when a probe
+  // never ran, failed, or dropped the alias: that is the whole point of the
+  // manual source, and being a *snapshot annotation* kept it out of the catalog
+  // exactly when the snapshot was the thing that was missing.
+  //
+  // Claude only, deliberately. For Codex the execution catalog decides which
+  // models are executable at all (#220), so a declaration may state levels for a
+  // model but must never make it selectable — see `catalogAllowsModel`.
+  const claudeDecls = manualReasoningByModel(store, workspaceId, "claude");
+  const withDeclarations = (list: FleetProviderModelsResponse[]): FleetProviderModelsResponse[] => {
+    if (claudeDecls.size === 0) return list;
+    const index = list.findIndex(entry => entry.provider === "claude");
+    const entry = index >= 0 ? list[index] : { provider: "claude", online_runtime_count: 0, models: [] };
+    const merged = withManualModels(entry, claudeDecls);
+    if (merged === entry) return list;
+    const next = [...list];
+    if (index >= 0) next[index] = merged;
+    else next.push(merged);
+    return next;
+  };
   // Discovery off → never surface a (possibly stale) gateway snapshot; fall back
   // to the per-runtime union so turning the toggle off actually hides the models.
-  if (!store.getRelayModelDiscovery(workspaceId)) return providers;
+  // A declaration is not snapshot data, so it survives the toggle.
+  if (!store.getRelayModelDiscovery(workspaceId)) return withDeclarations(providers);
   const config = store.getRelayConfigForDaemon(workspaceId);
   const byEngine = new Map<string, FleetProviderModelsResponse>();
   for (const provider of providers) byEngine.set(provider.provider, provider);
@@ -545,7 +568,35 @@ export function overlayGatewayModels(
       ...(existing?.default_thinking ? { default_thinking: existing.default_thinking } : {}),
     });
   }
-  return [...byEngine.values()].sort((a, b) => a.provider.localeCompare(b.provider));
+  return withDeclarations([...byEngine.values()].sort((a, b) => a.provider.localeCompare(b.provider)));
+}
+
+/**
+ * Add the models an administrator declared that no catalog offers yet.
+ *
+ * The declared levels are the model's only statement about itself, so the entry
+ * carries them at `thinking_source: "manual"` — the same attribution the
+ * snapshot path already uses when a declaration fills a gap. Ids the list
+ * already has are left alone: those go through `resolveDeclaredThinking`, which
+ * keeps a declaration below gateway and Runtime statements.
+ */
+function withManualModels(
+  entry: FleetProviderModelsResponse,
+  decls: Map<string, GatewayModelReasoningDecl>,
+): FleetProviderModelsResponse {
+  const missing = [...decls.keys()].filter(id => !entry.models.some(model => model.id === id));
+  if (missing.length === 0) return entry;
+  return {
+    ...entry,
+    models: [...entry.models, ...missing.map((id): FleetModelResponse => ({
+      id,
+      // Nothing ever discovered this id, so it is its own label.
+      label: id,
+      provider: entry.provider,
+      thinking: manualThinkingResponse(decls.get(id)!),
+      thinking_source: "manual",
+    }))],
+  };
 }
 
 /** Separate custom connections before applying workspace gateway load status. */

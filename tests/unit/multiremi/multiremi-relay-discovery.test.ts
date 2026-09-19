@@ -2,7 +2,7 @@ import { loadCodexModelCatalog } from "@daemon/agent-runtime/relay-sync.js";
 import { codexNativeModel } from "../../fixtures/codex-native-catalog.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { MultiremiStore } from "@multiremi/store.js";
-import { discoverGatewayModels, refreshStaleGatewayModels, type HttpGet, type HttpResponse } from "@multiremi/relay/discovery.js";
+import { discoverGatewayModels, refreshPreNativeCodexSnapshots, type HttpGet, type HttpResponse } from "@multiremi/relay/discovery.js";
 import { createLocalStore, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -24,7 +24,7 @@ const CLAUDE_FRAG = JSON.stringify({ env: { ANTHROPIC_BASE_URL: "https://ai.open
 const CODEX_FRAG = ['model_provider = "OpenAI"', "[model_providers.OpenAI]", 'base_url = "https://vip.openremi.fun/v1"'].join("\n");
 
 describe("relay model discovery", () => {
-  it("refreshes pre-native snapshots immediately and respects a fresh ready catalog", async () => {
+  it("repairs a pre-native codex snapshot at boot and leaves a ready catalog alone", async () => {
     const store = createStore();
     const workspace = store.createWorkspace({ name: "Legacy catalog refresh" });
     store.setRelayModelDiscovery(workspace.id, true);
@@ -33,7 +33,7 @@ describe("relay model discovery", () => {
     const s = stub(url => url.endsWith("/backend-api/codex/models")
       ? ok({ models: [codexNativeModel({ slug: "native-model", supported_reasoning_levels: [] })] })
       : ok({ data: [{ id: "inventory-only" }, { id: "native-model" }] }));
-    refreshStaleGatewayModels(store, workspace.id, s.get);
+    refreshPreNativeCodexSnapshots(store, s.get);
     await Bun.sleep(0); // allow the injected async transport and snapshot write to finish
     expect(s.calls).toBe(2);
     expect(store.getGatewayModels(workspace.id, "codex")?.nativeCatalogStatus).toBe("ready");
@@ -44,8 +44,8 @@ describe("relay model discovery", () => {
     store.saveGatewayModels(readyWorkspace.id, "codex", {
       sourceRevision: readyRevision, nativeCatalogStatus: "ready", models: [{ id: "native-model", label: "Native" }],
     });
-    // This workspace has no retry backoff; only freshness may suppress discovery.
-    refreshStaleGatewayModels(store, readyWorkspace.id, s.get);
+    // A snapshot that already carries native authority is not repaired.
+    refreshPreNativeCodexSnapshots(store, s.get);
     await Bun.sleep(0);
     expect(s.calls).toBe(2);
   });

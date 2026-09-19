@@ -1,5 +1,5 @@
 import { codexNativeModel } from "../../fixtures/codex-native-catalog.js";
-import { refreshStaleGatewayModels } from "@multiremi/relay/discovery.js";
+import { refreshPreNativeCodexSnapshots } from "@multiremi/relay/discovery.js";
 import { runtimeModelsWithCatalogError } from "@multiremi/worker/daemon.js";
 import { loadCodexModelCatalog } from "@daemon/agent-runtime/relay-sync.js";
 import { afterEach, describe, expect, it } from "bun:test";
@@ -246,7 +246,7 @@ describe("Codex native model membership through API and dispatch", () => {
     store.saveGatewayModels("local", "codex", { sourceRevision: revision, models: inventory.map(id => ({ id, label: id })) });
     let release!: () => void;
     const pending = new Promise<void>(resolve => { release = resolve; });
-    refreshStaleGatewayModels(store, "local", async url => {
+    refreshPreNativeCodexSnapshots(store, async url => {
       await pending;
       return { status: 200, text: JSON.stringify(url.endsWith("/backend-api/codex/models")
         ? { models: [codexNativeModel({ slug: "executable-model" })] } : { data: inventory.map(id => ({ id })) }) };

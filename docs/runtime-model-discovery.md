@@ -67,6 +67,27 @@ Codex additionally `minimal` — and an unknown spelling is rejected with a 400
 rather than forwarded to execution, as are a default level outside the declared
 set and a missing model id.
 
+A declaration does not depend on discovery ever having succeeded — that is what
+makes it a source rather than a footnote to the snapshot. It applies to any model
+id the administrator names, including one the gateway inventory never listed, and
+a Claude model that only a declaration describes is added to the catalog as an
+entry carrying `thinking_source: manual` with the declared levels, so it appears
+in the Agent model dropdown with those levels selectable and is routable on any
+Claude runtime. An empty snapshot, a snapshot whose last attempt failed, a
+disabled discovery toggle or a model that has since left the inventory therefore
+never blocks declaring levels and never hides the declaration: the settings page
+distinguishes "not discovered" from "not declared" and accepts a manually entered
+model id instead of only offering 立即探测. Executability is a separate question
+from reasoning levels, and the Codex boundary (#220) is unchanged: a declaration
+is stored and listed like any other, but it does not make a model selectable when
+the Codex execution catalog — the native capability catalog — does not contain it.
+That case is not silent. The listing reports the declaration as `state: blocked`
+with a `state_code` of `not_in_execution_catalog`, or `execution_catalog_unknown`
+while the native catalog is unavailable, so the operator is told the declaration
+is inert and why; a model the ordinary `/models` list carries but the native
+catalog omits behaves the same way. A declaration that a higher-priority source
+outranks is `outranked`, and one that is actually applied is `effective`.
+
 Task eligibility reads these four states as three different questions
 (`modelThinkingState`). A model that declares levels (`supported`) must offer the
 saved level, and a runtime whose capability load failed (`error`) cannot claim the
@@ -102,6 +123,27 @@ declaration — keeps a stored level that set contains and converges away one it
 does not, on the terms above: an unusable value is not kept silently, and an
 effort named in the same request as a selection change is still rejected with a
 400 before that convergence could hide the mismatch.
+
+The control plane never refreshes the snapshot while answering a read. `GET
+/api/models` in all three shapes (workspace, `runtime_id`, `execution_group_id`),
+the reasoning-level listing, and the CLI equivalents they mirror read only what is
+already stored: the persisted gateway snapshot, the Runtime reports and the manual
+declarations. A stale, empty or failed snapshot is served exactly as recorded —
+no probe starts in the background, so opening the Agent page or the model gateway
+settings cannot emit a gateway request and cannot overwrite an operator's snapshot
+with an error nobody asked for. The snapshot changes only on an explicit action:
+saving that engine's relay config, enabling the auto-discovery toggle, or pressing
+立即探测 (`POST /api/workspaces/:id/relay-config/:engine/probe`), each bounded by
+the same 8s wait as before. A workspace that has never probed keeps an empty
+catalog until one of those runs; a workspace whose gateway has gone stale keeps
+listing the models it last saw. One legacy snapshot shape cannot wait for an
+explicit action — a Codex snapshot written before the native catalog became the
+executable authority carries no `nativeCatalogStatus`, which reads as `unknown`
+and leaves every model in it unselectable, and a read is no longer allowed to fix
+it. `refreshPreNativeCodexSnapshots` re-probes exactly those workspaces once at
+server start. It is deliberately narrow: pre-native Codex snapshots only, for
+workspaces that have discovery enabled and a stored token. Ordinary staleness is
+an explicit-action concern, and no other shape is refreshed at boot.
 
 Production daemons discover capabilities at startup and refresh every 15 minutes.
 Manual model-list requests use the same single-flight probe without blocking the

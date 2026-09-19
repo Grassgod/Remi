@@ -13,6 +13,7 @@ import {
 } from "@multiremi/store/repos/daemon-retirement-repo.js";
 import { RuntimeLocalSkillRequestError, RuntimeRegistrationIdentityConflictError } from "@multiremi/store/repos/runtimes-repo.js";
 import { PlatformOperationConflictError } from "@multiremi/store/repos/platform-operations-repo.js";
+import { refreshPreNativeCodexSnapshots } from "@multiremi/relay/discovery.js";
 // Domain routers, listed in the order createMultiremiApp registers them.
 import { registerAuthRoutes } from "./routers/auth.js";
 import { registerWebhookRoutes } from "./routers/webhooks.js";
@@ -687,6 +688,9 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   if (backgroundJobs) sessionArchives.startIssueArchivePurgeRecovery();
   const repositoryWiki = options.repositoryWiki ?? createRepositoryWikiServiceFromEnv(store);
   if (backgroundJobs) repositoryWiki.startStorageWorker?.();
+  // Reads no longer probe (MUL-338 round C), so the one legacy snapshot shape that
+  // could not simply wait for the next explicit action is repaired once, here.
+  if (backgroundJobs) refreshPreNativeCodexSnapshots(store);
   const app = createMultiremiApp({
     ...options,
     store,

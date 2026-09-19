@@ -24,8 +24,9 @@ afterEach(resetMultiremiTestEnv);
  * labels only — the gateway declares no reasoning metadata for these aliases).
  */
 const GATEWAY_MODELS = ["claude-fable-5-1", "claude-opus-5", "claude-sonnet-5", "deepseek-v4-flash", "kimi-k2"];
+const CODEX_FRAG = 'model_provider = "gateway"\n[model_providers.gateway]\nbase_url = "https://gateway.example/v1"';
 
-function setup() {
+function setup({ snapshot = true }: { snapshot?: boolean } = {}) {
   const store = createLocalStore();
   store.setRelayModelDiscovery("local", true);
   const revision = store.upsertRelayConfig("local", "claude", {
@@ -33,7 +34,7 @@ function setup() {
     tokenOp: "set",
     authToken: "test-key",
   });
-  store.saveGatewayModels("local", "claude", {
+  if (snapshot) store.saveGatewayModels("local", "claude", {
     sourceRevision: revision,
     models: GATEWAY_MODELS.map(id => ({ id, label: id })),
   });
@@ -112,6 +113,77 @@ describe("MUL-338 reasoning levels: the CLI path", () => {
       ], server);
       expect(cleared.error).toBeNull();
       expect(store.getGatewayModelReasoning("local", "claude", "deepseek-v4-flash")).toBeNull();
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it("publishes a declared model the gateway never listed, without probing for it", async () => {
+    const { store, server } = setup({ snapshot: false });
+    try {
+      // Round C: the declaration stands on its own. No probe has ever succeeded
+      // here (no snapshot row at all), and the model id is not from any inventory.
+      expect(store.getGatewayModels("local", "claude")).toBeNull();
+
+      const declared = await run([
+        "workspace", "relay", "reasoning-levels", "update", "local", "claude",
+        "--model", "future-alias", "--level", "low", "--level", "high", "--default-level", "high", "--json",
+      ], server);
+      expect(declared.error).toBeNull();
+      expect(declared.exitCode).toBe(null);
+
+      const catalog = await run(["runtime", "model", "catalog", "--json"], server);
+      expect(catalog.error).toBeNull();
+      const { providers } = JSON.parse(catalog.stdout.join("\n")) as {
+        providers: Array<{
+          provider: string;
+          models: Array<{ id: string; thinking_source?: string; thinking?: { supported_levels: Array<{ value: string }>; default_level?: string } }>;
+        }>;
+      };
+      const listed = providers.find(entry => entry.provider === "claude")?.models.find(model => model.id === "future-alias");
+      expect(listed?.thinking_source).toBe("manual");
+      expect(listed?.thinking?.supported_levels.map(level => level.value)).toEqual(["low", "high"]);
+      expect(listed?.thinking?.default_level).toBe("high");
+      // Serving the catalog is a read: it neither probed nor invented a snapshot.
+      expect(store.getGatewayModels("local", "claude")).toBeNull();
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it("reports a declaration for a model outside the Codex execution catalog as blocked", async () => {
+    const { store, server } = setup({ snapshot: false });
+    try {
+      const declare = (model: string) => run([
+        "workspace", "relay", "reasoning-levels", "update", "local", "codex",
+        "--model", model, "--level", "low", "--json",
+      ], server);
+      const manual = async (model: string) => {
+        const read = await run(["workspace", "relay", "reasoning-levels", "get", "local", "codex", "--json"], server);
+        expect(read.error).toBeNull();
+        const listing = JSON.parse(read.stdout.join("\n")) as {
+          models: Array<{ model_id: string; manual: { levels: string[]; state: string; state_code?: string } | null }>;
+        };
+        return listing.models.find(entry => entry.model_id === model)?.manual;
+      };
+
+      expect((await declare("gpt-not-in-catalog")).exitCode).toBe(null);
+      // No Codex engine is configured, so nothing has decided anything about this
+      // model: the listing says so rather than claiming a catalog omitted it.
+      expect(await manual("gpt-not-in-catalog")).toMatchObject({
+        levels: ["low"], state: "blocked", state_code: "execution_catalog_unknown",
+      });
+
+      // Now a Codex execution catalog exists and does not list the model. The
+      // declaration is stored and listed, and annotated as inert with the reason
+      // (#220: the native catalog alone decides executability) — never dropped.
+      const revision = store.upsertRelayConfig("local", "codex", { fragment: CODEX_FRAG, tokenOp: "set", authToken: "test-key" });
+      store.saveGatewayModels("local", "codex", { sourceRevision: revision, nativeCatalogStatus: "ready", models: [{ id: "gpt-6-astra", label: "GPT-6 Astra" }] });
+      expect(await manual("gpt-not-in-catalog")).toMatchObject({
+        levels: ["low"], state: "blocked", state_code: "not_in_execution_catalog",
+      });
+      // And it stays that way: a declaration never adds a Codex member.
+      expect(store.getGatewayModelReasoning("local", "codex", "gpt-not-in-catalog")?.levels).toEqual(["low"]);
     } finally {
       server.stop(true);
     }

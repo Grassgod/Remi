@@ -179,14 +179,25 @@ export interface GatewayReasoningLevelManual {
   default_level?: string;
   updated_by: string | null;
   updated_at: string;
+  /**
+   * What this declaration is doing right now. `outranked` is the existing
+   * conflict case (a gateway/Runtime/family statement wins); `blocked` means the
+   * model cannot be selected for this engine at all, which the page has to say
+   * out loud rather than showing a declaration that quietly does nothing.
+   */
+  state: "effective" | "outranked" | "blocked";
+  /** Why it is blocked. Absent in every other state. */
+  state_code?: "not_in_execution_catalog" | "execution_catalog_unknown" | "not_in_catalog";
 }
 
 function gatewayReasoningLevelManual(decl: {
   levels: string[]; defaultLevel?: string; updatedBy: string | null; updatedAt: string;
-}): GatewayReasoningLevelManual {
+}, state: GatewayReasoningLevelManual["state"], stateCode?: GatewayReasoningLevelManual["state_code"]): GatewayReasoningLevelManual {
   return {
     levels: decl.levels,
     ...(decl.defaultLevel ? { default_level: decl.defaultLevel } : {}),
+    state,
+    ...(stateCode ? { state_code: stateCode } : {}),
     updated_by: decl.updatedBy,
     updated_at: decl.updatedAt,
   };
@@ -210,35 +221,75 @@ export function gatewayReasoningLevels(
 ): { engine: RelayEngine; allowed_levels: readonly string[]; models: GatewayReasoningLevelRow[] } {
   const snapshot = store.getGatewayModels(workspaceId, engine);
   const declarations = store.listGatewayModelReasoning(workspaceId, engine);
-  const effectiveModels = new Map(
-    workspaceProviderModelCatalog(store, workspaceId, engine, callerOwnerId).map(model => [model.id, model]),
-  );
-  const rows = new Map<string, GatewayReasoningLevelRow>();
+  // The provider entry (not just its models) is what says whether a model can be
+  // selected at all: the Codex execution catalog's loading state lives here.
+  const catalog = workspaceProviderCatalog(store, workspaceId, engine, callerOwnerId);
+  const effectiveModels = new Map((catalog?.models ?? []).map(model => [model.id, model]));
+  const rows = new Map<string, {
+    model_id: string;
+    label: string;
+    decl: {
+      modelId: string; levels: string[]; defaultLevel?: string;
+      updatedBy: string | null; updatedAt: string;
+    } | null;
+    manual: GatewayReasoningLevelRow["manual"];
+    effective: GatewayReasoningLevelRow["effective"];
+  }>();
   for (const model of snapshot?.models ?? []) {
-    rows.set(model.id, { model_id: model.id, label: model.label, manual: null, effective: null });
+    rows.set(model.id, { model_id: model.id, label: model.label, decl: null, manual: null, effective: null });
   }
   // A declaration outlives the model's gateway entry: the snapshot is replaced on
   // every probe, so an alias that disappears would otherwise become impossible to
-  // clear from the page that created it.
+  // clear from the page that created it. Since round C it is also how a model
+  // nobody discovered gets *into* the catalog, so this row is not merely a
+  // tombstone.
   for (const decl of declarations) {
     const existing = rows.get(decl.modelId);
     rows.set(decl.modelId, {
       model_id: decl.modelId,
       label: existing?.label ?? decl.modelId,
-      manual: gatewayReasoningLevelManual(decl),
+      decl,
+      manual: null,
       effective: null,
     });
   }
   for (const [modelId, row] of rows) {
     const resolved = effectiveModels.get(modelId);
-    if (!resolved?.thinking) continue;
-    row.effective = { ...resolved.thinking, source: resolved.thinking_source ?? "none" };
+    if (resolved?.thinking) row.effective = { ...resolved.thinking, source: resolved.thinking_source ?? "none" };
+    if (row.decl) {
+      const { state, stateCode } = manualState(row.effective, engine, catalog);
+      row.manual = gatewayReasoningLevelManual(row.decl, state, stateCode);
+    }
   }
   return {
     engine,
     allowed_levels: GATEWAY_REASONING_LEVELS[engine],
-    models: [...rows.values()].sort((a, b) => a.model_id.localeCompare(b.model_id)),
+    models: [...rows.values()].map(({ decl: _decl, ...row }) => row)
+      .sort((a, b) => a.model_id.localeCompare(b.model_id)),
   };
+}
+
+/**
+ * Whether a stored declaration is actually doing what it says. `blocked` is the
+ * one the page must never render as "declared and done": on Codex an execution
+ * model is only executable when the native catalog lists it (#220), so a
+ * declaration for anything else is stored, shown, and inert until that catalog
+ * offers the model.
+ */
+function manualState(
+  effective: GatewayReasoningLevelRow["effective"],
+  engine: RelayEngine,
+  catalog: FleetProviderModelsResponse | undefined,
+): { state: GatewayReasoningLevelManual["state"]; stateCode?: GatewayReasoningLevelManual["state_code"] } {
+  if (effective) {
+    return { state: effective.source === "manual" ? "effective" : "outranked" };
+  }
+  if (engine !== "codex") return { state: "blocked", stateCode: "not_in_catalog" };
+  // Only an execution catalog that actually loaded can be said to *omit* the
+  // model. With no catalog at all — engine unconfigured — or one that has not
+  // answered yet, "not decided" is the honest answer.
+  const decided = catalog !== undefined && catalog.model_catalog_status !== "unknown";
+  return { state: "blocked", stateCode: decided ? "not_in_execution_catalog" : "execution_catalog_unknown" };
 }
 
 /**
