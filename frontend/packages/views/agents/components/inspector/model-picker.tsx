@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { Loader2, Plus } from "lucide-react";
-import { isModelCatalogRestricted, isModelExecutionUnknown, isModelUnavailable, useExecutionTargetModels } from "@multiremi/core/runtimes";
+import { isFallbackModelUnavailable, isModelCatalogRestricted, isModelExecutionUnknown, isModelUnavailable, useExecutionTargetModels } from "@multiremi/core/runtimes";
 import { Input } from "@multiremi/ui/components/ui/input";
 import {
   PickerItem,
@@ -21,6 +21,8 @@ export function ModelPicker({
   value,
   canEdit = true,
   onChange,
+  fallback = false,
+  excludedModel,
 }: {
   wsId: string;
   runtimeId?: string | null;
@@ -31,6 +33,8 @@ export function ModelPicker({
   /** When false, render a static read-only display and skip the popover. */
   canEdit?: boolean;
   onChange: (next: string) => Promise<void> | void;
+  fallback?: boolean;
+  excludedModel?: string;
 }) {
   const { t } = useT("agents");
   const [open, setOpen] = useState(false);
@@ -52,15 +56,20 @@ export function ModelPicker({
     (m) => m.id === trimmedSearch || m.label === trimmedSearch,
   );
   const authoritative = isModelCatalogRestricted(provider, models, modelCatalogStatus);
-  const unknown = isModelExecutionUnknown(provider, value, models, modelCatalogStatus);
-  const unavailable = isModelUnavailable(provider, value, models, modelCatalogStatus);
-  const canCreate = !isLoading && !authoritative && trimmedSearch.length > 0 && !exactMatch;
+  const unknown = !!value && isModelExecutionUnknown(provider, value, models, modelCatalogStatus);
+  const isUnavailable = (id: string) => fallback
+    ? isFallbackModelUnavailable(provider, id, models, modelCatalogStatus)
+    : isModelUnavailable(provider, id, models, modelCatalogStatus);
+  const unavailable = isUnavailable(value);
+  const canCreate = !isLoading && !authoritative && trimmedSearch.length > 0 && !exactMatch && trimmedSearch !== excludedModel && !isUnavailable(trimmedSearch);
 
-  const triggerLabel = value || t(($) => $.pickers.model_default);
-  const triggerTitle = t(($) => $.pickers.model_tooltip, { value: triggerLabel });
+  const triggerLabel = value || (fallback ? t(($) => $.fallback.unconfigured) : t(($) => $.pickers.model_default));
+  const triggerTitle = fallback
+    ? `${t(($) => $.fallback.model_label)} · ${triggerLabel}`
+    : t(($) => $.pickers.model_tooltip, { value: triggerLabel });
 
   const select = async (id: string) => {
-    if (isModelUnavailable(provider, id, models, modelCatalogStatus)) return;
+    if (id && (id === excludedModel || isUnavailable(id))) return;
     setOpen(false);
     setSearch("");
     if (id !== value) await onChange(id);
@@ -130,13 +139,13 @@ export function ModelPicker({
         filtered.map((m) => (
           <PickerItem
             key={m.id}
-            disabled={isModelUnavailable(provider, m.id, models, modelCatalogStatus)}
+            disabled={m.id === excludedModel || isUnavailable(m.id)}
             selected={m.id === value}
             onClick={() => void select(m.id)}
             // Tooltip carries the canonical model id even when the chip
             // shows the friendlier label, so users can always see what
             // string actually ships to the agent.
-            tooltip={m.label !== m.id ? `${m.label} · ${m.id}` : m.id}
+            tooltip={m.id === excludedModel ? t(($) => $.fallback.same_as_primary) : m.label !== m.id ? `${m.label} · ${m.id}` : m.id}
           >
             {/* PickerItem wraps children in a flex `<span>`. Putting a
                 `<div>` inside that <span> is block-in-inline (invalid
@@ -152,7 +161,9 @@ export function ModelPicker({
                   {m.id}
                 </span>
               )}
-              {isModelUnavailable(provider, m.id, models, modelCatalogStatus) && (
+              {m.id === excludedModel ? (
+                <span className="block text-xs text-muted-foreground">{t(($) => $.fallback.same_as_primary)}</span>
+              ) : isUnavailable(m.id) && (
                 <span className="block text-xs text-muted-foreground">
                   {isModelExecutionUnknown(provider, m.id, models, modelCatalogStatus)
                     ? t(($) => $.pickers.model_execution_unknown) : t(($) => $.pickers.model_unavailable)}
@@ -186,9 +197,9 @@ export function ModelPicker({
           type="button"
           onClick={() => void select("")}
           className="mt-1 flex w-full items-center border-t px-3 py-2 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50"
-          title={t(($) => $.pickers.model_clear_title)}
+          title={fallback ? t(($) => $.fallback.clear) : t(($) => $.pickers.model_clear_title)}
         >
-          {t(($) => $.pickers.model_clear)}
+          {fallback ? t(($) => $.fallback.clear) : t(($) => $.pickers.model_clear)}
         </button>
       )}
     </PropertyPicker>

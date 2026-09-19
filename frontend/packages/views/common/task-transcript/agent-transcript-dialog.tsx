@@ -56,6 +56,7 @@ import { SortDirectionToggle } from "./sort-direction-toggle";
 import { TimelineBar } from "./timeline-bar";
 import { TranscriptEventRow } from "./transcript-event-row";
 import { TranscriptStepRow } from "./transcript-step-row";
+import { ExecutionModelInfo } from "./execution-model-info";
 
 interface AgentTranscriptDialogProps {
   open: boolean;
@@ -172,6 +173,7 @@ export function AgentTranscriptDialog({
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
+    setAgentInfo(null);
 
     if (task.agent_id) {
       api.getAgent(task.agent_id).then((agent) => {
@@ -559,9 +561,9 @@ export function AgentTranscriptDialog({
                   : usage.totalTokens
                     ? t(($) => $.transcript.tokens_context, { value: formatTokens(usage.totalTokens) })
                     : null}
-                {usage.model && <span className="text-muted-foreground/60 ml-1">{usage.model}</span>}
               </MetadataChip>
             )}
+            <ExecutionModelInfo task={task} usageModel={usage?.model} agentModel={agentInfo?.model} agentThinkingLevel={agentInfo?.thinking_level} />
 
             {/* Working directory — server-derived display path. Falls back to
                 nothing when older backends omit the field rather than rendering

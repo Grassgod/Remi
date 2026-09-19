@@ -11,12 +11,12 @@ const listFleetModels = vi.hoisted(() => vi.fn());
 vi.mock("@multiremi/core/api", () => ({ api: { listFleetModels } }));
 import { ModelDropdown } from "./model-dropdown";
 
-function renderDropdown(provider = "codex", value = "inventory-only") {
+function renderDropdown(provider = "codex", value = "inventory-only", fallback = false, excludedModel?: string) {
   const onChange = vi.fn();
   render(
     <I18nProvider locale="en" resources={{ en: { common: enCommon, agents: enAgents } }}>
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-        <ModelDropdown wsId="ws" provider={provider} value={value} onChange={onChange} />
+        <ModelDropdown wsId="ws" provider={provider} value={value} onChange={onChange} fallback={fallback} excludedModel={excludedModel} />
       </QueryClientProvider>
     </I18nProvider>,
   );
@@ -26,6 +26,32 @@ function renderDropdown(provider = "codex", value = "inventory-only") {
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
 describe("ModelDropdown execution catalog", () => {
+  it("disables the primary model for fallback selection and lets the user clear the fallback", async () => {
+    listFleetModels.mockResolvedValue({ providers: [{ provider: "codex", model_catalog_status: "ready", models: [
+      { id: "primary", label: "Primary", execution_status: "available" },
+      { id: "other", label: "Other", execution_status: "available" },
+    ] }] });
+    const onChange = renderDropdown("codex", "other", true, "primary");
+    fireEvent.click(screen.getByRole("button", { name: "Fallback model" }));
+    expect(await screen.findByRole("button", { name: /Primary/ })).toBeDisabled();
+    expect(screen.getByText("Must differ from the primary model")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Remove fallback model" }));
+    expect(onChange).toHaveBeenCalledWith("");
+  });
+
+  it("does not offer an unlisted fallback against an authoritative non-Codex catalog", async () => {
+    listFleetModels.mockResolvedValue({ providers: [{ provider: "claude", model_catalog_status: "ready", models: [
+      { id: "known", label: "Known", execution_status: "available" },
+      { id: "offline", label: "Offline", execution_status: "unavailable" },
+    ] }] });
+    const onChange = renderDropdown("claude", "", true);
+    fireEvent.click(screen.getByRole("button", { name: "Fallback model" }));
+    expect(await screen.findByRole("button", { name: /Known/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /Offline/ })).toBeDisabled();
+    fireEvent.change(screen.getByPlaceholderText("Search or type a model ID"), { target: { value: "unlisted" } });
+    expect(screen.queryByRole("button", { name: 'Use "unlisted"' })).toBeNull();
+    expect(onChange).not.toHaveBeenCalled();
+  });
   it("retains an absent saved model as unavailable and never offers it as a custom option", async () => {
     listFleetModels.mockResolvedValue({ providers: [{ provider: "codex", model_catalog_status: "ready", models: [{ id: "available", label: "Available" }] }] });
     const onChange = renderDropdown();

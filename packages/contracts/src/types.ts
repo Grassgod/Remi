@@ -88,11 +88,15 @@ export interface MultiremiAgent {
   max_concurrent_tasks?: number;
   executable: string | null;
   model: string | null;
+  fallbackModel?: string | null;
+  fallback_model?: string | null;
   allowedTools: string[];
   customEnv: Record<string, string>;
   customArgs: string[];
   mcpConfig: unknown | null;
   thinkingLevel: string | null;
+  fallbackThinkingLevel?: string | null;
+  fallback_thinking_level?: string | null;
   issueCreationRequiresProposal: boolean;
   issue_creation_requires_proposal?: boolean;
   role: MultiremiAgentRole;
@@ -125,6 +129,8 @@ export interface CreateAgentInput {
   max_concurrent_tasks?: number;
   executable?: string | null;
   model?: string | null;
+  fallbackModel?: string | null;
+  fallback_model?: string | null;
   allowedTools?: string[];
   allowed_tools?: string[];
   customEnv?: Record<string, string>;
@@ -135,6 +141,8 @@ export interface CreateAgentInput {
   mcp_config?: unknown | null;
   thinkingLevel?: string | null;
   thinking_level?: string | null;
+  fallbackThinkingLevel?: string | null;
+  fallback_thinking_level?: string | null;
   issueCreationRequiresProposal?: boolean;
   issue_creation_requires_proposal?: boolean;
   role?: MultiremiAgentRole;
@@ -161,6 +169,8 @@ export interface UpdateAgentInput {
   max_concurrent_tasks?: number;
   executable?: string | null;
   model?: string | null;
+  fallbackModel?: string | null;
+  fallback_model?: string | null;
   allowedTools?: string[];
   allowed_tools?: string[];
   customEnv?: Record<string, string>;
@@ -171,6 +181,8 @@ export interface UpdateAgentInput {
   mcp_config?: unknown | null;
   thinkingLevel?: string | null;
   thinking_level?: string | null;
+  fallbackThinkingLevel?: string | null;
+  fallback_thinking_level?: string | null;
   issueCreationRequiresProposal?: boolean;
   issue_creation_requires_proposal?: boolean;
   role?: MultiremiAgentRole;
@@ -186,8 +198,12 @@ export interface CreateAgentFromTemplateInput {
   runtime_id?: string | null;
   provider?: MultiremiAgentProvider | null;
   model?: string | null;
+  fallbackModel?: string | null;
+  fallback_model?: string | null;
   thinkingLevel?: string | null;
   thinking_level?: string | null;
+  fallbackThinkingLevel?: string | null;
+  fallback_thinking_level?: string | null;
   visibility?: string;
   maxConcurrentTasks?: number;
   max_concurrent_tasks?: number;
@@ -1326,6 +1342,24 @@ export interface MultiremiTask {
    * still matches. Null until a normal queued task is claimed. */
   executionFingerprint: string | null;
   execution_fingerprint?: string | null;
+  /** MUL-336 execution-model override. Null means "use the Agent's model".
+   * Set only by a recovery chain that switched to the Agent's fallback model
+   * after a gateway resource failure; the Agent's own selection is never
+   * rewritten, so concurrent tasks of the same Agent keep theirs. */
+  executionModel?: string | null;
+  execution_model?: string | null;
+  executionThinkingLevel?: string | null;
+  execution_thinking_level?: string | null;
+  /** 1 once this recovery chain has spent its single model switch. Bounds the
+   * chain: a fallback that also fails ends instead of switching again. */
+  fallbackSwitched?: boolean;
+  fallback_switched?: boolean;
+  /** Why the execution model differs from the Agent's selection, for display. */
+  switchReason?: string | null;
+  switch_reason?: string | null;
+  /** Earliest time a deferred retry may be claimed (transient throttling). */
+  nextRetryAt?: string | null;
+  next_retry_at?: string | null;
   issueId: string | null;
   issueSessionId: string | null;
   issue_session_id?: string | null;
@@ -1620,6 +1654,18 @@ export interface CreateTaskInput {
   plugin_snapshot?: MultiremiTaskPluginSnapshotEntry[];
   executionFingerprint?: string | null;
   execution_fingerprint?: string | null;
+  /** MUL-336 recovery chain: the model this task must execute with, overriding
+   * the Agent's selection without mutating it. */
+  executionModel?: string | null;
+  execution_model?: string | null;
+  executionThinkingLevel?: string | null;
+  execution_thinking_level?: string | null;
+  fallbackSwitched?: boolean;
+  fallback_switched?: boolean;
+  switchReason?: string | null;
+  switch_reason?: string | null;
+  nextRetryAt?: string | null;
+  next_retry_at?: string | null;
   issueId?: string | null;
   issueSessionId?: string | null;
   issue_session_id?: string | null;

@@ -2,7 +2,7 @@
 // Go-compat (`*Compatibility*`) and native shapers sit side by side on purpose:
 // the two route prefixes are intentionally divergent and must stay diffable.
 import { CHAT_ISSUE_DECOUPLED_FINGERPRINT } from "@multiremi/store/helpers.js";
-import { taskExecutionScope } from "@multiremi/contracts/task-execution.js";
+import { agentAtTaskTarget, taskExecutionScope } from "@multiremi/contracts/task-execution.js";
 import type {
   MultiremiChatMessage,
   MultiremiDaemonHeartbeatAck,
@@ -385,7 +385,18 @@ export function daemonTaskClaimResponse(
   }
   if (task.branchName) response.branch_name = task.branchName;
   if (task.workDir) response.prior_work_dir = task.workDir;
-  if (task.agent) response.agent = daemonClaimAgentResponse(task.agent);
+  if (task.agent) {
+    // The daemon executes the model/effort it is handed here — it has no view
+    // of the task's recovery override. A chain that already moved to the
+    // fallback model must therefore present that model as the Agent's, or the
+    // dispatched attempt would quietly run the primary one again. A switched
+    // task also carries no further fallback: the chain's single switch is spent
+    // (MUL-336), so the daemon is never invited to bounce back to the primary.
+    const executionAgent = agentAtTaskTarget(task.agent, task);
+    response.agent = daemonClaimAgentResponse(
+      task.executionModel ? { ...executionAgent, fallbackModel: null, fallbackThinkingLevel: null } : executionAgent,
+    );
+  }
   if (task.issue) {
     response.issue = {
       ...issueCompatibilityResponse(task.issue, { includeLabels: true }),

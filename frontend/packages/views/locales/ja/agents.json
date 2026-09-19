@@ -125,6 +125,20 @@
     "agent_restored_toast": "エージェントを復元しました",
     "restore_failed_toast": "エージェントを復元できませんでした"
   },
+  "fallback": {
+    "model_label": "予備モデル",
+    "thinking_label": "予備モデルの推論強度",
+    "description": "主モデルのゲートウェイリソースが利用できない場合にのみ、現在のタスクを引き継ぎます。",
+    "unconfigured": "未設定",
+    "same_as_primary": "主モデルとは異なるモデルを選択してください",
+    "clear": "予備モデルを解除",
+    "actual_model": "実行モデル",
+    "switched": "主モデルから予備モデルへ切り替え済み",
+    "switch_count": "切り替え {{count}} 回",
+    "reason_gateway": "ゲートウェイリソースが利用不可",
+    "reason_no_account": "利用可能なゲートウェイアカウントなし",
+    "reason_unknown": "リソースが利用不可"
+  },
   "inspector": {
     "section_properties": "プロパティ",
     "section_details": "詳細",

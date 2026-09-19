@@ -129,6 +129,20 @@
     "agent_restored_toast": "에이전트를 복원했습니다",
     "restore_failed_toast": "에이전트를 복원하지 못했습니다"
   },
+  "fallback": {
+    "model_label": "예비 모델",
+    "thinking_label": "예비 모델 추론 강도",
+    "description": "기본 모델의 게이트웨이 리소스를 사용할 수 없을 때만 현재 작업을 이어받습니다.",
+    "unconfigured": "설정되지 않음",
+    "same_as_primary": "기본 모델과 다른 모델을 선택하세요",
+    "clear": "예비 모델 제거",
+    "actual_model": "실제 실행 모델",
+    "switched": "기본 모델에서 예비 모델로 전환됨",
+    "switch_count": "전환 {{count}}회",
+    "reason_gateway": "게이트웨이 리소스 사용 불가",
+    "reason_no_account": "사용 가능한 게이트웨이 계정 없음",
+    "reason_unknown": "리소스 사용 불가"
+  },
   "inspector": {
     "section_properties": "속성",
     "section_details": "세부 정보",

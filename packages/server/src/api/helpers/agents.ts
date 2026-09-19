@@ -229,6 +229,50 @@ function validateAgentModelSelection(
   return null;
 }
 
+function validateAgentFallbackSelection(
+  c: Context,
+  store: MultiremiStore,
+  input: {
+    workspaceId: string;
+    provider: string;
+    model: string;
+    fallbackModel: string;
+    fallbackThinkingLevel: string;
+    runtimeId?: string | null;
+    executionGroupId?: string | null;
+    ownerId?: string;
+    preserveSavedSelection?: boolean;
+  },
+): Response | null {
+  if (!input.fallbackModel || input.preserveSavedSelection) return null;
+  const profile = input.runtimeId ? store.getRuntimeExecutionProfile(input.runtimeId, input.provider) : null;
+  const catalog = input.executionGroupId && !input.runtimeId
+    ? executionGroupModelCatalog(store, input.workspaceId, input.executionGroupId, input.ownerId ?? currentRequestUserId(c))[0]
+    : workspaceProviderCatalog(store, input.workspaceId, input.provider, currentRequestUserId(c), input.runtimeId);
+  const effectiveModel = input.model || profile?.model || catalog?.models.find((model) => model.default)?.id;
+  if (effectiveModel === input.fallbackModel) {
+    return c.json({ error: "fallback_model must be different from the primary model" }, 400);
+  }
+  if (profile && input.fallbackModel !== profile.model) {
+    return c.json({
+      code: "model_not_in_execution_catalog",
+      error: `fallback_model "${input.fallbackModel}" is not supported by the selected Runtime connection`,
+    }, 400);
+  }
+  if (!catalogAllowsModel(catalog, input.fallbackModel)
+    || (input.executionGroupId && !input.runtimeId && !catalog?.models.some((model) => model.id === input.fallbackModel))) {
+    return c.json({
+      code: catalog?.model_catalog_status === "unknown" ? "model_execution_catalog_unknown" : "model_not_in_execution_catalog",
+      error: `fallback_model "${input.fallbackModel}" is not in the selected execution target's model catalog`,
+    }, 400);
+  }
+  if (input.fallbackThinkingLevel && !modelThinkingLevels(catalog?.models ?? [], input.fallbackModel, catalog?.default_thinking)
+    .some((level) => level.value === input.fallbackThinkingLevel)) {
+    return c.json({ error: `fallback_thinking_level "${input.fallbackThinkingLevel}" is not supported by model "${input.fallbackModel}"` }, 400);
+  }
+  return null;
+}
+
 export function skillWorkspaceId(skill: MultiremiSkill): string {
   return skill.workspaceId ?? "local";
 }
@@ -393,6 +437,8 @@ export function withAgentRequestContext(c: Context, store: MultiremiStore, input
   if (description instanceof Response) return description;
   const model = agentRequestModel(input);
   const thinkingLevel = agentRequestThinkingLevel(input);
+  const fallbackModel = agentRequestFallbackModel(input);
+  const fallbackThinkingLevel = fallbackModel ? agentRequestFallbackThinkingLevel(input) : "";
   const invalidSelection = validateAgentModelSelection(c, store, {
     workspaceId,
     provider,
@@ -403,6 +449,12 @@ export function withAgentRequestContext(c: Context, store: MultiremiStore, input
   });
   if (invalidSelection) return invalidSelection;
   const ownerId = currentRequestUserId(c);
+  const invalidFallback = validateAgentFallbackSelection(c, store, {
+    workspaceId, provider, model, fallbackModel, fallbackThinkingLevel,
+    runtimeId: cleanString(input.runtimeId ?? input.runtime_id),
+    executionGroupId: cleanString(input.executionGroupId ?? input.execution_group_id), ownerId,
+  });
+  if (invalidFallback) return invalidFallback;
   return {
     ...input,
     name,
@@ -417,8 +469,12 @@ export function withAgentRequestContext(c: Context, store: MultiremiStore, input
     executionGroupId: cleanString(input.executionGroupId ?? input.execution_group_id) ?? null,
     execution_group_id: cleanString(input.executionGroupId ?? input.execution_group_id) ?? null,
     model: model || null,
+    fallbackModel: fallbackModel || null,
+    fallback_model: fallbackModel || null,
     thinkingLevel: thinkingLevel || null,
     thinking_level: thinkingLevel || null,
+    fallbackThinkingLevel: fallbackThinkingLevel || null,
+    fallback_thinking_level: fallbackThinkingLevel || null,
     maxConcurrentTasks,
     max_concurrent_tasks: maxConcurrentTasks,
     ...role,
@@ -536,12 +592,20 @@ export function withAgentUpdateRequestContext(
   const targetChanged = providerChanged || runtimeChanged || groupChanged || targetWorkspaceId !== current.workspaceId;
   const modelProvided = hasRequestField(input, "model");
   const thinkingLevelProvided = hasRequestField(input, "thinkingLevel", "thinking_level");
+  const fallbackModelProvided = hasRequestField(input, "fallbackModel", "fallback_model");
+  const fallbackThinkingLevelProvided = hasRequestField(input, "fallbackThinkingLevel", "fallback_thinking_level");
   const targetModel = modelProvided
     ? agentRequestModel(input)
     : targetChanged ? "" : cleanString(current.model) ?? "";
   const targetThinkingLevel = thinkingLevelProvided
     ? agentRequestThinkingLevel(input)
     : targetChanged ? "" : cleanString(current.thinkingLevel) ?? "";
+  const targetFallbackModel = fallbackModelProvided
+    ? agentRequestFallbackModel(input)
+    : targetChanged ? "" : cleanString(current.fallbackModel) ?? "";
+  const targetFallbackThinkingLevel = !targetFallbackModel ? "" : fallbackThinkingLevelProvided
+    ? agentRequestFallbackThinkingLevel(input)
+    : targetChanged ? "" : cleanString(current.fallbackThinkingLevel) ?? "";
   if (modelProvided) {
     next.model = targetModel;
   } else if (targetChanged) {
@@ -550,6 +614,14 @@ export function withAgentUpdateRequestContext(
   if (thinkingLevelProvided || targetChanged) {
     next.thinkingLevel = targetThinkingLevel;
     next.thinking_level = targetThinkingLevel;
+  }
+  if (fallbackModelProvided || targetChanged) {
+    next.fallbackModel = targetFallbackModel || null;
+    next.fallback_model = targetFallbackModel || null;
+  }
+  if (fallbackThinkingLevelProvided || fallbackModelProvided && !targetFallbackModel || targetChanged) {
+    next.fallbackThinkingLevel = targetFallbackThinkingLevel || null;
+    next.fallback_thinking_level = targetFallbackThinkingLevel || null;
   }
   const currentModel = cleanString(current.model) ?? "";
   const currentThinkingLevel = cleanString(current.thinkingLevel) ?? "";
@@ -571,6 +643,17 @@ export function withAgentUpdateRequestContext(
       preserveSavedSelection: !selectionChanged,
     });
     if (invalidSelection) return invalidSelection;
+  }
+  const fallbackSelectionChanged = selectionChanged ||
+    targetFallbackModel !== (cleanString(current.fallbackModel) ?? "") ||
+    targetFallbackThinkingLevel !== (cleanString(current.fallbackThinkingLevel) ?? "");
+  if (fallbackSelectionChanged) {
+    const invalidFallback = validateAgentFallbackSelection(c, store, {
+      workspaceId: targetWorkspaceId, provider: targetProvider, model: targetModel,
+      fallbackModel: targetFallbackModel, fallbackThinkingLevel: targetFallbackThinkingLevel,
+      runtimeId: targetRuntimeId, executionGroupId: targetGroupId, ownerId: targetOwnerId,
+    });
+    if (invalidFallback) return invalidFallback;
   }
   if (hasRequestField(input, "maxConcurrentTasks", "max_concurrent_tasks")) {
     const maxConcurrentTasks = normalizeAgentRequestMaxConcurrentTasks(c, input.maxConcurrentTasks ?? input.max_concurrent_tasks);
@@ -635,12 +718,22 @@ export function withAgentTemplateRequestContext(
   const provider = resolveAgentRequestProvider(c, store, workspaceId, input);
   if (provider instanceof Response) return provider;
   const model = agentRequestModel(input);
+  const fallbackModel = agentRequestFallbackModel(input);
+  const fallbackThinkingLevel = fallbackModel ? agentRequestFallbackThinkingLevel(input) : "";
+  const effectiveModel = model || ((input.runtimeId ?? input.runtime_id ?? input.executionGroupId ?? input.execution_group_id)
+    ? "" : cleanString(template.recommendedModel) ?? "");
   const invalidSelection = validateAgentModelSelection(c, store, {
     workspaceId, provider, model, thinkingLevel: agentRequestThinkingLevel(input),
     runtimeId: cleanString(input.runtimeId ?? input.runtime_id),
     executionGroupId: cleanString(input.executionGroupId ?? input.execution_group_id),
   });
   if (invalidSelection) return invalidSelection;
+  const invalidFallback = validateAgentFallbackSelection(c, store, {
+    workspaceId, provider, model: effectiveModel, fallbackModel, fallbackThinkingLevel,
+    runtimeId: cleanString(input.runtimeId ?? input.runtime_id),
+    executionGroupId: cleanString(input.executionGroupId ?? input.execution_group_id),
+  });
+  if (invalidFallback) return invalidFallback;
   const maxConcurrentTasks = normalizeAgentRequestMaxConcurrentTasks(c, input.maxConcurrentTasks ?? input.max_concurrent_tasks);
   if (maxConcurrentTasks instanceof Response) return maxConcurrentTasks;
   const description = normalizeAgentRequestDescription(c, input.description ?? template.description);
@@ -660,6 +753,10 @@ export function withAgentTemplateRequestContext(
     executionGroupId: cleanString(input.executionGroupId ?? input.execution_group_id) ?? null,
     execution_group_id: cleanString(input.executionGroupId ?? input.execution_group_id) ?? null,
     model: model || null,
+    fallbackModel: fallbackModel || null,
+    fallback_model: fallbackModel || null,
+    fallbackThinkingLevel: fallbackThinkingLevel || null,
+    fallback_thinking_level: fallbackThinkingLevel || null,
     maxConcurrentTasks,
     max_concurrent_tasks: maxConcurrentTasks,
     ...role,
@@ -750,6 +847,14 @@ export function agentRequestModel(
   input: Pick<CreateAgentInput, "model"> | Pick<UpdateAgentInput, "model"> | Pick<CreateAgentFromTemplateInput, "model">,
 ): string {
   return cleanString(input.model) ?? "";
+}
+
+function agentRequestFallbackModel(input: Pick<CreateAgentInput, "fallbackModel" | "fallback_model">): string {
+  return cleanString(input.fallbackModel ?? input.fallback_model) ?? "";
+}
+
+function agentRequestFallbackThinkingLevel(input: Pick<CreateAgentInput, "fallbackThinkingLevel" | "fallback_thinking_level">): string {
+  return cleanString(input.fallbackThinkingLevel ?? input.fallback_thinking_level) ?? "";
 }
 
 export function agentRequestThinkingLevel(input: Pick<CreateAgentInput, "thinkingLevel" | "thinking_level">): string {

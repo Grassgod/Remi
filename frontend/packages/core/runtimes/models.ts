@@ -137,6 +137,22 @@ export function isModelUnavailable(
   return !entry && isModelCatalogRestricted(provider, models, catalogStatus);
 }
 
+/** Fallbacks must pass the selected target's catalog, even outside Codex. */
+export function isFallbackModelUnavailable(
+  provider: string,
+  model: string,
+  models: RuntimeModel[],
+  catalogStatus?: FleetProviderModels["model_catalog_status"],
+): boolean {
+  if (!model.trim()) return false;
+  if (isModelUnavailable(provider, model, models, catalogStatus)) return true;
+  const entry = models.find((candidate) => candidate.id === model.trim());
+  if (entry?.execution_status === "available") return false;
+  if (entry?.execution_status === "unknown" || entry?.execution_status === "unavailable") return true;
+  return catalogStatus === "unknown" ||
+    ((catalogStatus === "ready" || catalogStatus === "error") && !entry);
+}
+
 const POLL_INTERVAL_MS = 500;
 const POLL_TIMEOUT_MS = 30_000;
 

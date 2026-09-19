@@ -2,7 +2,7 @@
 // terminal-state fan-out into issues/sessions/autopilots), extracted verbatim from MultiremiStore
 // (the facade delegates every public method here).
 import { createHash } from "node:crypto";
-import { taskExecutionScope } from "@multiremi/contracts/task-execution.js";
+import { agentAtTaskTarget, taskExecutionScope, taskExecutionTarget } from "@multiremi/contracts/task-execution.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { canonicalJson } from "@multiremi/agent-plugins/import.js";
 import {
@@ -22,6 +22,11 @@ import {
   type RuntimeUsageEntry,
 } from "@multiremi/store/helpers.js";
 import { selectChatLocalDirectory } from "@multiremi/contracts/chat-local-directory.js";
+import {
+  MODEL_FALLBACK_FAILURE_REASONS,
+  TRANSIENT_RETRY_FAILURE_REASONS,
+  modelFallbackSwitchReason,
+} from "@shared/contracts/task-failure-reasons.js";
 import { chatWorkspaceLineageCurrent, parseChatWorkspaceFingerprint, resolveChatWorkspace } from "@multiremi/store/chat-workspace.js";
 import { EVENT_TASK_QUEUED_CAPABILITY_TIMEOUT, type StoreContext } from "@multiremi/store/context.js";
 import {
@@ -108,6 +113,120 @@ const TRIGGER_SUMMARY_MAX_LENGTH = 200;
 const TASK_PROMPT_MAX_BYTES = 2 * 1024 * 1024;
 const DELEGATION_RETURN_BODY_MAX_LENGTH = 16_000;
 const ISSUE_WORKSPACE_MIN_CLI_VERSION = [0, 2, 26] as const;
+
+// MUL-336: how long a transient-throttle retry waits before it may be claimed
+// again. Used only when the provider did not send an explicit Retry-After.
+const TRANSIENT_RETRY_BASE_DELAY_MS = 60 * 1000;
+const TRANSIENT_RETRY_MAX_DELAY_MS = 15 * 60 * 1000;
+/** Provider-reported throttling windows longer than this are treated as a hard
+ *  resource failure instead of a wait: a task must not sit queued for hours. */
+const TRANSIENT_RETRY_MAX_HONOURED_MS = 30 * 60 * 1000;
+
+/**
+ * Minimal shape needed to resolve a task's effective execution target.
+ *
+ * `taskExecutionTarget` / `agentAtTaskTarget` live in contracts because the
+ * daemon claim payload must resolve the same target: a task override that only
+ * the store honoured would route and freeze the fallback model and then hand
+ * the daemon the Agent's primary one. See @shared/contracts/task-execution.js.
+ */
+type TaskExecutionTargetFields = Pick<MultiremiTask, "executionModel" | "executionThinkingLevel">;
+
+/** Key identifying one (Agent, model, effort) execution target for claim
+ *  exclusion. Distinct tasks of one Agent may target different models. */
+function executionTargetKey(agentId: string, target: { model: string | null; thinkingLevel: string | null }): string {
+  return JSON.stringify([agentId, target.model ?? "", target.thinkingLevel ?? ""]);
+}
+
+/** One (Agent, model, effort) target this Runtime proved it cannot execute. */
+interface ExecutionTargetExclusion {
+  agentId: string;
+  model: string | null;
+  thinkingLevel: string | null;
+}
+
+/**
+ * SQL excluding the tasks whose EFFECTIVE execution target this Runtime cannot
+ * serve. Mirrors the COALESCE(NULLIF(...)) expression used to derive the target
+ * so a fallback task is skipped without excluding the Agent's other tasks.
+ */
+function excludedExecutionTargetSql(excludedTargets: readonly ExecutionTargetExclusion[]): string {
+  if (!excludedTargets.length) return "";
+  const clauses = excludedTargets.map(() =>
+    `NOT (t.agent_id = ? AND ${effectiveTaskModelSql()} = ? AND ${effectiveTaskThinkingSql()} = ?)`,
+  );
+  return `AND (${clauses.join(" AND ")})`;
+}
+
+/** Positional params for `excludedExecutionTargetSql`, in clause order. */
+function excludedExecutionTargetParams(
+  excludedTargets: readonly ExecutionTargetExclusion[],
+): string[] {
+  return excludedTargets.flatMap((target) => [
+    target.agentId,
+    target.model ?? "",
+    target.thinkingLevel ?? "",
+  ]);
+}
+
+function effectiveTaskModelSql(): string {
+  return "COALESCE(NULLIF(t.execution_model, ''), NULLIF(a.model, ''), '')";
+}
+
+/** SQL twin of `taskExecutionTarget`'s reasoning level. The Agent's level is
+ *  inherited only while the task still executes the Agent's own model: a task
+ *  switched to another model (fallback recovery) gets NULL — the model's own
+ *  default — because the primary's level may be unsupported there. Routing and
+ *  claim exclusion both read the target through here, so if this disagreed with
+ *  the JS resolver a recovered task would be excluded from every Runtime. */
+function effectiveTaskThinkingSql(): string {
+  return `CASE WHEN NULLIF(t.execution_model, '') IS NOT NULL
+                 AND NULLIF(t.execution_model, '') <> COALESCE(NULLIF(a.model, ''), '')
+          THEN COALESCE(NULLIF(t.execution_thinking_level, ''), '')
+          ELSE COALESCE(NULLIF(t.execution_thinking_level, ''), NULLIF(a.thinking_level, ''), '')
+         END`;
+}
+
+function normalizeExecutionFlag(value: unknown): number {
+  return value === true || value === 1 || value === "1" ? 1 : 0;
+}
+
+/** Retry-After the provider embedded in its error text, in ms. Accepts the
+ *  `retry-after: 30` header form and the `retry after 30 seconds` prose form.
+ *  Returns null only when the window is absent or unparseable. Whether a window
+ *  is too long to honour is the CALLER's decision: conflating the two made a
+ *  3600s window look like no window at all, and the caller then substituted a
+ *  short backoff and retried far inside the window the gateway had demanded. */
+export function parseRetryAfterMs(error: string | null | undefined): number | null {
+  const text = String(error ?? "");
+  if (!text) return null;
+  const match = /retry[-\s]?after[\s:]*([0-9]+(?:\.[0-9]+)?)\s*(ms|milliseconds?|s|secs?|seconds?|m|mins?|minutes?)?/i.exec(text);
+  if (!match) return null;
+  const value = Number(match[1]);
+  if (!Number.isFinite(value) || value < 0) return null;
+  const unit = (match[2] ?? "s").toLowerCase();
+  const scale = unit.startsWith("ms") || unit.startsWith("millisecond") ? 1
+    : unit.startsWith("m") && !unit.startsWith("ms") ? 60_000
+    : 1000;
+  return value * scale;
+}
+
+/**
+ * Delay before a transient-throttle retry may be claimed again. Honours the
+ * provider's Retry-After when it is sane, otherwise backs off exponentially by
+ * attempt so a shared account pool is not hammered. Returns null when the
+ * provider asked for a wait too long to be useful — the caller then treats the
+ * failure as terminal rather than parking the task for hours.
+ */
+function transientRetryDelayMs(retryAfterMs: number | null, attempt: number): number | null {
+  if (retryAfterMs != null) {
+    if (!Number.isFinite(retryAfterMs) || retryAfterMs < 0) return null;
+    if (retryAfterMs > TRANSIENT_RETRY_MAX_HONOURED_MS) return null;
+    return Math.max(retryAfterMs, TRANSIENT_RETRY_BASE_DELAY_MS);
+  }
+  const exponential = TRANSIENT_RETRY_BASE_DELAY_MS * 2 ** Math.max(0, attempt - 1);
+  return Math.min(exponential, TRANSIENT_RETRY_MAX_DELAY_MS);
+}
 
 // Chat binding is immutable, but an archived/deleted Project no longer routes
 // its ordinary turns. Issue routing retains its existing Project semantics.
@@ -279,10 +398,14 @@ export class TasksRepo {
 
   refreshQueuedCapabilityWaitReasons(now = Date.now()): { updated: number; alerted: number } {
     const rows = this.ctx.db.query(
-      `SELECT id, agent_id, runtime_id, workspace_id, created_at, wait_reason FROM multiremi_tasks
-       WHERE status = 'queued' AND created_at <= ?`,
+      `SELECT id, agent_id, runtime_id, workspace_id, created_at, wait_reason,
+              execution_model, execution_thinking_level
+         FROM multiremi_tasks
+        WHERE status = 'queued' AND created_at <= ?`,
     ).all(new Date(now - QUEUED_CAPABILITY_GRACE_MS).toISOString()) as Array<{
-      id: string; agent_id: string; runtime_id: string | null; workspace_id: string | null; created_at: string; wait_reason: string | null;
+      id: string; agent_id: string; runtime_id: string | null; workspace_id: string | null;
+      created_at: string; wait_reason: string | null;
+      execution_model: string | null; execution_thinking_level: string | null;
     }>;
     const result = { updated: 0, alerted: 0 };
     if (!rows.length) return result;
@@ -295,21 +418,31 @@ export class TasksRepo {
       if (row.wait_reason && !isQueuedCapabilityWaitReason(row.wait_reason)) continue;
       // Tasks for the same agent can have different runtime pins; match the
       // claim predicate and cache only tasks with the same routing constraints.
-      const decisionKey = JSON.stringify([row.agent_id, row.runtime_id ?? ""]);
+      // Cache per (agent, runtime pin, effective execution target): a
+      // fallback-switched task waits on the FALLBACK model's availability, not
+      // on the Agent's primary model that just ran out of gateway capacity.
+      const decisionKey = JSON.stringify([row.agent_id, row.runtime_id ?? "", row.execution_model ?? "", row.execution_thinking_level ?? ""]);
       let decision = decisions.get(decisionKey);
       if (!decision) {
         const agent = this.ctx.agents().getAgent(row.agent_id);
+        const target = agent ? taskExecutionTarget(agent, {
+          executionModel: row.execution_model,
+          executionThinkingLevel: row.execution_thinking_level,
+        }) : { model: null, thinkingLevel: null };
+        const executionAgent = agent ? { ...agent, ...target } : null;
         decision = {
-          agent,
-          candidateSupportsModel: agent && !agent.archivedAt
+          agent: executionAgent,
+          candidateSupportsModel: executionAgent && !executionAgent.archivedAt
             ? runtimes.filter(runtime => (row.runtime_id === null || runtime.id === row.runtime_id)
-                && runtimesRepo.runtimeCanRouteAgent(runtime, agent))
-              .map(runtime => runtimesRepo.runtimeSupportsAgentModel(runtime, agent))
+                && runtimesRepo.runtimeCanRouteAgent(runtime, agent!))
+              .map(runtime => runtimesRepo.runtimeSupportsAgentModel(runtime, executionAgent))
             : [],
         };
         decisions.set(decisionKey, decision);
       }
       const { agent, candidateSupportsModel } = decision;
+      // `agent` already carries the task's effective model/effort, so the wait
+      // text and the capability check describe the same execution.
       const wait = agent && (agent.workspaceId ?? "local") === (row.workspace_id ?? "local")
         ? queuedCapabilityWait({
           candidateSupportsModel,
@@ -705,10 +838,12 @@ export class TasksRepo {
         attempt, max_attempts, parent_task_id, continued_from_task_id, issue_creation_restricted, delegation_id, delegated_by_agent_id,
         assignment_event_id, assignment_source_event_id, projection_degrade_level,
         provider, plugin_snapshot, execution_fingerprint, codex_profile, claude_profile,
-        session_id, work_dir, created_at, updated_at
+        session_id, work_dir, created_at, updated_at,
+        execution_model, execution_thinking_level, fallback_switched, switch_reason, next_retry_at
       ) VALUES (
         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?,
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?
       )`,
       [
         runtimeWorkspaceId,
@@ -782,6 +917,11 @@ export class TasksRepo {
           : (input.workDir ?? null),
         now,
         now,
+        cleanOptionalString(input.executionModel ?? input.execution_model),
+        cleanOptionalString(input.executionThinkingLevel ?? input.execution_thinking_level),
+        normalizeExecutionFlag(input.fallbackSwitched ?? input.fallback_switched),
+        cleanOptionalString(input.switchReason ?? input.switch_reason),
+        cleanOptionalString(input.nextRetryAt ?? input.next_retry_at),
       ],
     );
     if (chatSession) {
@@ -1375,6 +1515,7 @@ export class TasksRepo {
 
   claimTask(runtimeId: string, options: ClaimTaskOptions = {}): MultiremiTaskWithAgent | null {
     const excludedAgentIds = new Set<string>();
+    const excludedTargets = new Map<string, { agentId: string; model: string | null; thinkingLevel: string | null }>();
     const tx = this.ctx.db.transaction(() => {
       const runtime = this.ctx.runtimes().getRuntime(runtimeId);
       if (!runtime) throw new Error(`Runtime not found: ${runtimeId}`);
@@ -1411,17 +1552,38 @@ export class TasksRepo {
       // Group membership and reported model capabilities can change while work
       // is queued. Skip incompatible Agents before selecting, so they cannot
       // block another runnable task at the head of the queue.
-      const capabilityAgentRows = this.ctx.db.query(`SELECT DISTINCT a.id FROM multiremi_agents a
-        JOIN multiremi_tasks t ON t.agent_id = a.id
-        WHERE a.workspace_id = ? AND (a.execution_group_id IS NOT NULL
-          OR NULLIF(a.model, '') IS NOT NULL OR NULLIF(a.thinking_level, '') IS NOT NULL)
-          AND t.status IN ('queued', 'dispatched')`).all(lockedRuntime.workspaceId ?? "local") as { id: string }[];
-      for (const row of capabilityAgentRows) {
-        const agent = this.ctx.agents().getAgent(row.id);
-        if (agent && !this.ctx.runtimes().runtimeCanRunAgent(lockedRuntime, agent)) excludedAgentIds.add(agent.id);
+      //
+      // MUL-336: the capability that matters belongs to the TASK, not the Agent.
+      // A recovery chain may run on the Agent's fallback model, so one Agent can
+      // legitimately have tasks this Runtime can serve (fallback) and tasks it
+      // cannot (primary). Exclusion is therefore keyed by the task's effective
+      // execution target rather than by Agent id.
+      const capabilityTargetRows = this.ctx.db.query(
+        `SELECT DISTINCT a.id AS agent_id,
+                ${effectiveTaskModelSql()} AS model,
+                ${effectiveTaskThinkingSql()} AS thinking_level
+         FROM multiremi_agents a
+         JOIN multiremi_tasks t ON t.agent_id = a.id
+         WHERE a.workspace_id = ? AND t.status IN ('queued', 'dispatched')
+           AND (a.execution_group_id IS NOT NULL
+             OR NULLIF(a.model, '') IS NOT NULL OR NULLIF(a.thinking_level, '') IS NOT NULL
+             OR NULLIF(t.execution_model, '') IS NOT NULL OR NULLIF(t.execution_thinking_level, '') IS NOT NULL)`,
+      ).all(lockedRuntime.workspaceId ?? "local") as Array<{
+        agent_id: string; model: string | null; thinking_level: string | null;
+      }>;
+      for (const row of capabilityTargetRows) {
+        const agent = this.ctx.agents().getAgent(row.agent_id);
+        const target = {
+          model: cleanOptionalString(row.model),
+          thinkingLevel: cleanOptionalString(row.thinking_level),
+        };
+        if (!agent || !this.ctx.runtimes().runtimeCanRunAgent(lockedRuntime, { ...agent, ...target })) {
+          excludedTargets.set(executionTargetKey(row.agent_id, target), { agentId: row.agent_id, ...target });
+        }
       }
       if (!stale) this.refreshQueuedChatAffinity(lockedRuntime.workspaceId ?? "local");
-      const candidate = stale ?? this.claimNextTaskForRuntime(lockedRuntime, [...excludedAgentIds]);
+      const candidate = stale
+        ?? this.claimNextTaskForRuntime(lockedRuntime, [...excludedAgentIds], [...excludedTargets.values()]);
       if (!candidate) return null;
       const task = this.snapshotTaskExecution(candidate, lockedRuntime);
       // Check the actual hydrated payload, including both linked and legacy
@@ -1485,7 +1647,11 @@ export class TasksRepo {
       [task.agentId],
     );
     const currentAgent = this.ctx.agents().getAgent(task.agentId);
-    if (!currentAgent || currentAgent.archivedAt || !this.ctx.runtimes().runtimeCanRunAgent(runtime, currentAgent)) {
+    // A fallback-switched task is judged on the model it will really run: the
+    // Agent's primary selection may be exactly the model this Runtime cannot
+    // serve (that is why the chain switched).
+    if (!currentAgent || currentAgent.archivedAt
+      || !this.ctx.runtimes().runtimeCanRunAgent(runtime, agentAtTaskTarget(currentAgent, task))) {
       throw new AgentPluginReadinessChangedError("claimed Agent is no longer executable");
     }
     const provider = runtime.provider !== "any" ? runtime.provider : currentAgent.provider;
@@ -1501,7 +1667,7 @@ export class TasksRepo {
       // credentials stay on their original host; a new host supplies its own.
       const frozenProfile = task.codexProfile ?? task.claudeProfile ?? null;
       const destinationProfile = transition.runtimeId === runtime.id
-        ? frozenProfile : this.runtimeProfileForAgent(runtime.id, currentAgent);
+        ? frozenProfile : this.runtimeProfileForAgent(runtime.id, currentAgent, task);
       // The selected model is part of the frozen execution, while connection
       // credentials remain host-local. Moving a retry cannot reset its model
       // to the destination Runtime's default or a later Agent selection.
@@ -1539,7 +1705,7 @@ export class TasksRepo {
     }
 
     const pluginSnapshot = this.ctx.agentPlugins().resolveAgentPluginSnapshot(currentAgent.id);
-    const runtimeProfile = this.runtimeProfileForAgent(runtime.id, currentAgent);
+    const runtimeProfile = this.runtimeProfileForAgent(runtime.id, currentAgent, task);
     const chat = task.chatSessionId && !task.issueId ? this.ctx.chat().getChatSession(task.chatSessionId) : null;
     const executionFingerprint = this.chatExecutionFingerprint(withRuntimeProfileFingerprint(
       createHash("sha256").update(canonicalJson(pluginSnapshot)).digest("hex"), runtimeProfile,
@@ -1716,11 +1882,13 @@ export class TasksRepo {
     return Number(row?.eligible ?? 0) === 1;
   }
 
-  private runtimeProfileForAgent(runtimeId: string, agent: MultiremiAgent) {
+  private runtimeProfileForAgent(runtimeId: string, agent: MultiremiAgent, task?: TaskExecutionTargetFields | null) {
     const profile = this.ctx.runtimes().getRuntimeExecutionProfile(runtimeId, agent.provider);
     // Freeze the selected model with its connection; retries keep the stored
     // profile, while changing models invalidates the provider session fingerprint.
-    return profile ? { ...profile, model: cleanOptionalString(agent.model) ?? profile.model } : null;
+    // A fallback-switched task freezes ITS model, not the Agent's selection.
+    const model = task ? taskExecutionTarget(agent, task).model : cleanOptionalString(agent.model);
+    return profile ? { ...profile, model: model ?? profile.model } : null;
   }
 
   private runtimeMatchesCodeSnapshot(runtime: MultiremiRuntime, task: MultiremiTaskWithAgent): boolean {
@@ -1743,7 +1911,7 @@ export class TasksRepo {
         && !task.runtimeWorkspace?.archivedAt
       ))
       && !task.agent.archivedAt
-      && this.ctx.runtimes().runtimeCanRunAgent(runtime, task.agent)
+      && this.ctx.runtimes().runtimeCanRunAgent(runtime, agentAtTaskTarget(task.agent, task))
       && this.runtimeHasReadyTaskPlugins(runtime, task)
       && this.runtimeMatchesCodeSnapshot(runtime, task)
       && (!task.issueId || !task.holdsWorkspace || runtimeSupportsIssueWorkspaces(runtime))
@@ -1866,7 +2034,11 @@ export class TasksRepo {
     }
   }
 
-  private claimNextTaskForRuntime(runtime: MultiremiRuntime, excludedAgentIds: string[] = []): MultiremiTaskWithAgent | null {
+  private claimNextTaskForRuntime(
+    runtime: MultiremiRuntime,
+    excludedAgentIds: string[] = [],
+    excludedTargets: ExecutionTargetExclusion[] = [],
+  ): MultiremiTaskWithAgent | null {
     const now = nowIso();
     const deviceRouting = this.runtimeDeviceRoutingContext(runtime);
     // Always constrain by workspace, COALESCE(...,'local') so a runtime with
@@ -1879,6 +2051,9 @@ export class TasksRepo {
     const params = [
       runtime.id,
       now,
+      now,
+      // Deferred transient-throttle retries are invisible until their window
+      // elapses; everything else is claimable immediately.
       now,
       runtime.id,
       runtime.maxConcurrency,
@@ -1904,6 +2079,7 @@ export class TasksRepo {
       runtime.id,
       runtime.id,
       ...excludedAgentIds,
+      ...excludedExecutionTargetParams(excludedTargets),
     ];
     // Ownership guard: a private runtime only executes its owner's agents — a
     // claim hands the runtime the agent's custom_env / mcp_config. Owner match
@@ -1926,6 +2102,7 @@ export class TasksRepo {
          LEFT JOIN multiremi_issue_sessions code_session ON code_session.id = t.issue_session_id
          LEFT JOIN multiremi_runtimes code_runtime ON code_runtime.id = code_session.code_runtime_id
          WHERE t.status = 'queued'
+           AND (t.next_retry_at IS NULL OR t.next_retry_at <= ?)
            AND a.archived_at IS NULL
            AND (t.chat_session_id IS NULL OR project_chat.status = 'active')
            AND NOT EXISTS (
@@ -2047,6 +2224,7 @@ export class TasksRepo {
            ${runtime.metadata.codex_profiles !== 1 ? "AND t.codex_profile IS NULL" : ""}
            ${runtime.metadata.claude_profiles !== 1 ? "AND t.claude_profile IS NULL" : ""}
            ${excludedAgentIds.length ? `AND t.agent_id NOT IN (${excludedAgentIds.map(() => "?").join(", ")})` : ""}
+           ${excludedExecutionTargetSql(excludedTargets)}
          ORDER BY t.priority DESC, t.created_at ASC
          LIMIT 1
        )
@@ -2785,18 +2963,62 @@ export class TasksRepo {
 
   private maybeRetryFailedTask(parent: MultiremiTask, workspaceLockHeld = false): MultiremiTask | null {
     if (parent.status !== "failed") return null;
-    if (!parent.failureReason || !AUTO_RETRY_FAILURE_REASONS.has(parent.failureReason)) return null;
+    if (!parent.failureReason) return null;
+    // MUL-336 splits failure into three recovery policies. TRANSIENT/throttle
+    // and MODEL_FALLBACK/resource reasons are handled below with their own
+    // eligibility rules; everything else keeps the historical auto-retry set.
+    const isResourceExhaustion = MODEL_FALLBACK_FAILURE_REASONS.has(parent.failureReason);
+    const isTransientThrottle = TRANSIENT_RETRY_FAILURE_REASONS.has(parent.failureReason);
+    if (!isResourceExhaustion && !isTransientThrottle
+      && !AUTO_RETRY_FAILURE_REASONS.has(parent.failureReason)) return null;
     if (parent.attempt >= parent.maxAttempts) return null;
-    if (parent.autopilotRunId) return null;
+    // Automated runs have no human to re-trigger them, so a gateway resource
+    // failure must self-heal. Every other reason keeps the historical exclusion
+    // (autopilot surfaces a retry suggestion instead of retrying itself).
+    if (parent.autopilotRunId && !isResourceExhaustion && !isTransientThrottle) return null;
     if (!parent.issueId && !parent.chatSessionId && !parent.runtimeWorkspaceId) return null;
 
+    const parentAgent = this.ctx.agents().getAgent(parent.agentId);
+    // One switch per recovery chain: `fallbackSwitched` is carried forward by
+    // every retry this chain creates, so a fallback that also runs out of
+    // capacity ends the chain instead of bouncing between two models.
+    const fallbackModel = cleanOptionalString(parentAgent?.fallbackModel);
+    const fallbackThinkingLevel = cleanOptionalString(parentAgent?.fallbackThinkingLevel);
+    const canSwitchToFallback = isResourceExhaustion
+      && !parent.fallbackSwitched
+      && parentAgent != null
+      && !parentAgent.archivedAt
+      && fallbackModel != null
+      && fallbackModel !== cleanOptionalString(parentAgent.model);
+    // Resource exhaustion with no usable fallback keeps the previous behaviour:
+    // the task ends. Re-running a model whose pool is empty cannot help.
+    if (isResourceExhaustion && !canSwitchToFallback) return null;
+    // Throttling retries the same model after a bounded delay. A window the
+    // provider asked for that is too long to sit on ends the chain here: this
+    // refuses to retry BEFORE the declared window, which would only hammer a
+    // shared pool and burn the chain's attempts without getting through. The
+    // failure keeps its own reason, so the throttle stays visible.
+    const retryAfterMs = isTransientThrottle ? parseRetryAfterMs(parent.error) : null;
+    if (isTransientThrottle && retryAfterMs != null && retryAfterMs > TRANSIENT_RETRY_MAX_HONOURED_MS) return null;
+    const transientDelayMs = isTransientThrottle
+      ? transientRetryDelayMs(retryAfterMs, parent.attempt)
+      : null;
+    if (isTransientThrottle && transientDelayMs == null) return null;
+    // A chain that already switched keeps running the fallback model; a chain
+    // that has not keeps the parent's (absent) override.
+    const retryExecutionModel = canSwitchToFallback
+      ? fallbackModel
+      : cleanOptionalString(parent.executionModel);
+    const retryExecutionThinkingLevel = canSwitchToFallback
+      ? fallbackThinkingLevel
+      : cleanOptionalString(parent.executionThinkingLevel);
+    const parentEffectiveAgent = parentAgent ? agentAtTaskTarget(parentAgent, parent) : null;
+    const parentRuntime = parent.runtimeId ? this.ctx.runtimes().getRuntime(parent.runtimeId) : null;
     // Resume-safe only if the parent's machine can STILL run this agent. If the
     // agent switched engine/owner (or the runtime changed) since the parent ran,
     // its session/runtime are void — degrade to resume-unsafe so the retry
     // re-pools and starts fresh instead of being pinned to a machine the claim
     // predicate would reject forever.
-    const agent = this.ctx.agents().getAgent(parent.agentId);
-    const parentRuntime = parent.runtimeId ? this.ctx.runtimes().getRuntime(parent.runtimeId) : null;
     // A resume carries the parent's provider session and work_dir — both are
     // machine-local files. It is only safe when we KNOW that machine and it can
     // still run the agent: the parent must be pinned to a live runtime, that
@@ -2807,19 +3029,25 @@ export class TasksRepo {
     // missing/mismatched snapshot can't be proven machine-safe, so it fails
     // closed to a fresh re-pool that clears session/work_dir. (A resume-unsafe
     // parent with no session takes the same fresh-re-pool path here.)
+    // The parent is judged on the model it ACTUALLY ran: a chain already on the
+    // fallback model must not be pinned back to a machine chosen for the
+    // primary one.
     const parentRuntimeUsable =
       parent.runtimeId != null
       && parentRuntime != null
-      && agent != null
+      && parentEffectiveAgent != null
       && parent.provider != null
-      && parent.provider === agent.provider
-      && this.ctx.runtimes().runtimeCanRunAgent(parentRuntime, agent);
+      && parent.provider === parentEffectiveAgent.provider
+      && this.ctx.runtimes().runtimeCanRunAgent(parentRuntime, parentEffectiveAgent);
     const detachedChatIssue = !!parent.chatSessionId && !!parent.issueId
       && this.ctx.feishuBot().getFeishuIssueIdForChatSession(parent.chatSessionId) !== parent.issueId;
     const invalidatedChatWorkspace = Boolean(parent.chatSessionId && !parent.issueId
       && !chatWorkspaceLineageCurrent(this.ctx, this.ctx.chat().getChatSession(parent.chatSessionId), parent));
     const invalidatedChatLineage = parent.executionFingerprint === CHAT_ISSUE_DECOUPLED_FINGERPRINT || invalidatedChatWorkspace;
-    const resumeSafe = Boolean(parent.issueId || parent.chatSessionId) && !detachedChatIssue && !invalidatedChatLineage
+    // A switch starts a provider session the old model's session cannot carry
+    // (different model, different context window), so it is never a resume.
+    const resumeSafe = !canSwitchToFallback
+      && Boolean(parent.issueId || parent.chatSessionId) && !detachedChatIssue && !invalidatedChatLineage
       && !RESUME_UNSAFE_FAILURE_REASONS.has(parent.failureReason) && parentRuntimeUsable;
     // If the Agent changed provider before this failure was reported, the old
     // provider/plugin snapshot can no longer be executed with the Agent's
@@ -2830,18 +3058,34 @@ export class TasksRepo {
     // Runtime credentials cannot follow a retry to another machine. If the
     // original Runtime no longer accepts this Agent, resolve a fresh snapshot
     // when an eligible Runtime claims the retry.
-    const inheritExecutionSnapshot = parent.executionFingerprint !== CHAT_ISSUE_DECOUPLED_FINGERPRINT
-      && agent != null && parent.provider === agent.provider
+    const inheritExecutionSnapshot = !canSwitchToFallback
+      && parent.executionFingerprint !== CHAT_ISSUE_DECOUPLED_FINGERPRINT
+      && parentAgent != null && parent.provider === parentAgent.provider
       && (invalidatedChatWorkspace || !hasRuntimeProfile || parentRuntimeUsable);
     if (resumeSafe && parent.issueSessionId) this.promoteSessionAgentLane(parent);
     const retryInput: CreateTaskInput = {
       agentId: parent.agentId,
       taskKind: parent.taskKind,
-      provider: inheritExecutionSnapshot ? parent.provider : null,
+      // A switch keeps the same engine and plugin set but MUST drop the frozen
+      // model profile and fingerprint: those encode the primary model, and the
+      // claim re-resolves a profile from the task's execution model.
+      provider: inheritExecutionSnapshot || canSwitchToFallback ? parent.provider : null,
       pluginSnapshot: inheritExecutionSnapshot ? parent.pluginSnapshot : undefined,
       codexProfile: inheritExecutionSnapshot ? parent.codexProfile : null,
       claudeProfile: inheritExecutionSnapshot ? parent.claudeProfile : null,
       executionFingerprint: inheritExecutionSnapshot ? parent.executionFingerprint : null,
+      // MUL-336 recovery chain state. The override and the switch budget are
+      // carried forward by every later retry of this chain, so a fallback that
+      // fails too ends the chain rather than bouncing between two models.
+      executionModel: retryExecutionModel,
+      executionThinkingLevel: retryExecutionThinkingLevel,
+      fallbackSwitched: canSwitchToFallback || parent.fallbackSwitched,
+      switchReason: canSwitchToFallback
+        ? modelFallbackSwitchReason(parent.failureReason, true)
+        : parent.switchReason ?? null,
+      nextRetryAt: transientDelayMs != null
+        ? new Date(Date.now() + transientDelayMs).toISOString()
+        : null,
       issueSessionGeneration: resumeSafe ? parent.issueSessionGeneration : null,
       // A retained session or Runtime credential snapshot must return to its
       // original machine; otherwise let an eligible pool Runtime claim it.
@@ -3393,6 +3637,18 @@ export class TasksRepo {
     if (retry && task.chatSessionId) {
       this.ctx.feishuBot().retargetFeishuRoundPushTaskWithinTransaction(task.id, retry.id);
     }
+    // A run row points at the task that currently IS the run. When the failure
+    // produced a recovery retry, hand the run over instead of letting this
+    // terminal hook finalize it as failed: the run is still in flight, and
+    // finalizing here would report the primary model's failure to the owner
+    // before the fallback had its chance — then report a second time when the
+    // retry finished (MUL-336). The retry adopts the run and finalizes it once.
+    if (retry) {
+      this.ctx.db.run(
+        "UPDATE multiremi_autopilot_runs SET task_id = ? WHERE task_id = ? AND completed_at IS NULL",
+        [retry.id, task.id],
+      );
+    }
     const delegationReturns: MultiremiTask[] = [];
     let roundPushTasks: MultiremiTask[] = [];
     this.ctx.accessTokens().revokeTaskAccessTokens(task.id);
@@ -3522,6 +3778,11 @@ export class TasksRepo {
             reason: task.failureReason ? `terminal_failure:${task.failureReason}` : "terminal_failure",
             taskId: task.id,
           });
+        // A pending recovery retry already suppresses this wakeup for its own
+        // source: the drain below skips any delegation source that has a
+        // successor attempt with the same lineage. The retry carries that
+        // lineage, so the delegator hears the chain's real outcome exactly once
+        // (MUL-336) without this branch having to know about model switching.
         if (!replacementPlanned) {
           const wakeup = workspaceLockHeld
             ? this.ensureDelegationWakeupWithinWorkspaceLock(task, {
@@ -4228,6 +4489,16 @@ function toTask(row: Row): MultiremiTask {
     plugin_snapshot: parseJson<MultiremiTaskPluginSnapshotEntry[]>(row.plugin_snapshot, []),
     executionFingerprint: nullableString(row.execution_fingerprint),
     execution_fingerprint: nullableString(row.execution_fingerprint),
+    executionModel: nullableString(row.execution_model),
+    execution_model: nullableString(row.execution_model),
+    executionThinkingLevel: nullableString(row.execution_thinking_level),
+    execution_thinking_level: nullableString(row.execution_thinking_level),
+    fallbackSwitched: Number(row.fallback_switched ?? 0) === 1,
+    fallback_switched: Number(row.fallback_switched ?? 0) === 1,
+    switchReason: nullableString(row.switch_reason),
+    switch_reason: nullableString(row.switch_reason),
+    nextRetryAt: nullableString(row.next_retry_at),
+    next_retry_at: nullableString(row.next_retry_at),
     issueId: nullableString(row.issue_id),
     issueSessionId: nullableString(row.issue_session_id),
     issue_session_id: nullableString(row.issue_session_id),

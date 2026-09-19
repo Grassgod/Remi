@@ -125,6 +125,20 @@
     "agent_restored_toast": "已恢复智能体",
     "restore_failed_toast": "恢复智能体失败"
   },
+  "fallback": {
+    "model_label": "备用模型",
+    "thinking_label": "备用模型思考等级",
+    "description": "仅在主模型网关资源不可用时自动接管当前任务。",
+    "unconfigured": "未配置",
+    "same_as_primary": "备用模型不能与主模型相同",
+    "clear": "清除备用模型",
+    "actual_model": "执行模型",
+    "switched": "已从主模型切换到备用模型",
+    "switch_count": "切换 {{count}} 次",
+    "reason_gateway": "网关资源不可用",
+    "reason_no_account": "网关无可用账号",
+    "reason_unknown": "资源不可用"
+  },
   "inspector": {
     "section_properties": "属性",
     "section_details": "详情",
