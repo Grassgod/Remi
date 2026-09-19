@@ -77,6 +77,10 @@ import {
   RelayConfigResponseSchema,
   type RelayEngineProbe,
   RelayEngineProbeSchema,
+  type RelayReasoningLevelSaveResult,
+  RelayReasoningLevelSaveResultSchema,
+  type RelayReasoningLevelsResponse,
+  RelayReasoningLevelsResponseSchema,
   RuntimeDirectoryScanRequestSchema,
   RuntimeProvisionListResponseSchema,
   RuntimeProvisionResponseSchema,
@@ -201,6 +205,42 @@ export class RuntimesEndpoints {
     );
     return parseStrictResponse(raw, RelayEngineProbeSchema, {
       endpoint: "POST /api/workspaces/:id/relay-config/:engine/probe",
+    });
+  }
+
+  // Per-model manual reasoning levels (owner/admin only). The GET enumerates
+  // the probe snapshot — including models with no declaration — and the PUT is
+  // a per-model upsert where `levels: []` clears the declaration. Both parse
+  // strictly: the editor renders these rows as enforcement facts, so a drifted
+  // shape must surface as a contract error instead of "not declared".
+  async getRelayReasoningLevels(
+    workspaceId: string,
+    engine: "claude" | "codex",
+  ): Promise<RelayReasoningLevelsResponse> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/workspaces/${workspaceId}/relay-config/${engine}/reasoning-levels`,
+    );
+    return parseStrictResponse(raw, RelayReasoningLevelsResponseSchema, {
+      endpoint: "GET /api/workspaces/:id/relay-config/:engine/reasoning-levels",
+    });
+  }
+
+  async putRelayReasoningLevel(
+    workspaceId: string,
+    engine: "claude" | "codex",
+    data: { model: string; levels: string[]; default_level?: string },
+  ): Promise<RelayReasoningLevelSaveResult> {
+    const body: { model: string; levels: string[]; default_level?: string } = {
+      model: data.model,
+      levels: data.levels,
+    };
+    if (data.default_level) body.default_level = data.default_level;
+    const raw = await this.http.fetch<unknown>(
+      `/api/workspaces/${workspaceId}/relay-config/${engine}/reasoning-levels`,
+      { method: "PUT", body: JSON.stringify(body) },
+    );
+    return parseStrictResponse(raw, RelayReasoningLevelSaveResultSchema, {
+      endpoint: "PUT /api/workspaces/:id/relay-config/:engine/reasoning-levels",
     });
   }
 

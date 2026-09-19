@@ -16,7 +16,16 @@ export {
 export type { ParseOptions } from "./schema";
 export { DuplicateIssueErrorBodySchema } from "./schemas";
 export type { DuplicateIssueErrorBody } from "./schemas";
-export type { RelayConfigResponse, RelayEngineConfig, RelayEngineProbe } from "./schemas";
+export type {
+  RelayConfigResponse,
+  RelayEngineConfig,
+  RelayEngineProbe,
+  RelayReasoningLevelEffective,
+  RelayReasoningLevelManual,
+  RelayReasoningLevelModel,
+  RelayReasoningLevelsResponse,
+  RelayReasoningLevelSaveResult,
+} from "./schemas";
 export type {
   IssueSessionArchivesResponse,
   SessionArchive,

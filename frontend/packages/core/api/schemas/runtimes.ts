@@ -303,6 +303,62 @@ export const RelayEngineProbeSchema = z.object({
 export type RelayEngineProbeModel = z.infer<typeof RelayProbeModelSchema>;
 export type RelayEngineProbe = z.infer<typeof RelayEngineProbeSchema>;
 
+// Admin-declared reasoning levels for individual gateway models
+// (`GET/PUT /api/workspaces/:id/relay-config/:engine/reasoning-levels`).
+//
+// Sources are ranked gateway > runtime > manual > family; `manual` only fills
+// gaps and never silently overrides a higher-ranked declaration. The GET feeds
+// an admin form where every row is a claim about what will be enforced, so a
+// drifted body must raise ApiContractError instead of rendering "not declared"
+// for models that do carry a declaration — hence the strict parse upstream.
+const RelayReasoningLevelOptionSchema = z.object({
+  value: z.string(),
+  label: z.string().default(""),
+  description: z.string().optional(),
+}).loose();
+
+export const RelayReasoningLevelManualSchema = z.object({
+  levels: z.array(z.string()),
+  default_level: z.string().nullable().default(null),
+  updated_by: z.string().nullable().default(null),
+  updated_at: z.string().nullable().default(null),
+}).loose();
+
+export const RelayReasoningLevelEffectiveSchema = z.object({
+  supported_levels: z.array(RelayReasoningLevelOptionSchema).default([]),
+  default_level: z.string().nullable().default(null),
+  status: z.enum(["supported", "unsupported", "unknown", "error"]).catch("unknown"),
+  // Unknown sources stay a contract error: the UI labels every source and has
+  // no honest fallback label for one this client does not know.
+  source: z.enum(["gateway", "runtime", "manual", "family", "none"]),
+}).loose();
+
+const RelayReasoningLevelModelSchema = z.object({
+  model_id: z.string(),
+  label: z.string().default(""),
+  manual: RelayReasoningLevelManualSchema.nullable().default(null),
+  effective: RelayReasoningLevelEffectiveSchema.nullable().default(null),
+}).loose();
+
+export const RelayReasoningLevelsResponseSchema = z.object({
+  engine: z.string(),
+  allowed_levels: z.array(z.string()),
+  models: z.array(RelayReasoningLevelModelSchema).default([]),
+}).loose();
+
+// The PUT answers with the saved declaration, or `{ deleted: true }` when the
+// declaration was cleared with `levels: []`.
+export const RelayReasoningLevelSaveResultSchema = z.union([
+  z.object({ deleted: z.literal(true) }).loose(),
+  RelayReasoningLevelManualSchema,
+]);
+
+export type RelayReasoningLevelManual = z.infer<typeof RelayReasoningLevelManualSchema>;
+export type RelayReasoningLevelEffective = z.infer<typeof RelayReasoningLevelEffectiveSchema>;
+export type RelayReasoningLevelModel = z.infer<typeof RelayReasoningLevelModelSchema>;
+export type RelayReasoningLevelsResponse = z.infer<typeof RelayReasoningLevelsResponseSchema>;
+export type RelayReasoningLevelSaveResult = z.infer<typeof RelayReasoningLevelSaveResultSchema>;
+
 // ---------------------------------------------------------------------------
 // Runtime usage schemas — the runtime-detail page's four usage endpoints
 // (`/api/runtimes/:id/usage*`).

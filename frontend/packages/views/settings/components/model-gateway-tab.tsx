@@ -3,9 +3,11 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Activity, AlertCircle, Eye, EyeOff, Radar, Save, Sparkles, Waypoints } from "lucide-react";
+import { Activity, AlertCircle, Eye, EyeOff, Radar, Save, SlidersHorizontal, Sparkles, Waypoints } from "lucide-react";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { Card, CardContent } from "@multiremi/ui/components/ui/card";
+import { Badge } from "@multiremi/ui/components/ui/badge";
+import { Checkbox } from "@multiremi/ui/components/ui/checkbox";
 import { Label } from "@multiremi/ui/components/ui/label";
 import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
 import { Switch } from "@multiremi/ui/components/ui/switch";
@@ -24,7 +26,7 @@ import { useCurrentWorkspace } from "@multiremi/core/paths";
 import { runtimeModelsKeys } from "@multiremi/core/runtimes";
 import { memberListOptions, workspaceKeys } from "@multiremi/core/workspace/queries";
 import { api } from "@multiremi/core/api";
-import type { RelayConfigResponse, RelayEngineConfig, RelayEngineProbe } from "@multiremi/core/api";
+import type { RelayConfigResponse, RelayEngineConfig, RelayEngineProbe, RelayReasoningLevelModel } from "@multiremi/core/api";
 import type { Workspace } from "@multiremi/core/types";
 import { useT } from "../../i18n";
 import { ClaudeMark, OpenAIMark } from "./engine-marks";
@@ -48,7 +50,10 @@ const ENGINE_PLACEHOLDER: Record<Engine, string> = {
   codex: 'model_provider = "OpenAI"\n\n[model_providers.OpenAI]\nbase_url = "https://…/v1"\nwire_api = "responses"\nrequires_openai_auth = true',
 };
 
-const relayKeys = { config: (wsId: string) => ["relay-config", wsId] as const };
+const relayKeys = {
+  config: (wsId: string) => ["relay-config", wsId] as const,
+  reasoningLevels: (wsId: string, engine: Engine) => ["relay-reasoning-levels", wsId, engine] as const,
+};
 
 export function ModelGatewayTab() {
   const { t } = useT("settings");
@@ -533,6 +538,10 @@ function EngineSection({ engine, config, wsId, discoveryEnabled }: {
       const result = await api.probeRelayEngine(wsId, engine);
       setProbe(result);
       await qc.invalidateQueries({ queryKey: runtimeModelsKeys.fleet(wsId) });
+      // A fresh snapshot can list models that were never there before, so the
+      // per-model reasoning-level rows reload too. Manual declarations survive
+      // the probe on the server side.
+      await qc.invalidateQueries({ queryKey: relayKeys.reasoningLevels(wsId, engine) });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : t(($) => $.modelGateway.probe_failed));
     } finally {
@@ -631,6 +640,281 @@ function EngineSection({ engine, config, wsId, discoveryEnabled }: {
           </div>
         </CardContent>
       </Card>
+      <ReasoningLevelsSection engine={engine} wsId={wsId} />
     </section>
+  );
+}
+
+// The Select cannot carry an empty string value; the "no default" option
+// uses this sentinel and maps back to "".
+const REASONING_DEFAULT_NONE = "__none__";
+
+// ---------------------------------------------------------------------------
+// Per-model reasoning levels. Sources rank gateway > runtime > manual > family:
+// a manual declaration only fills a gap, and when a higher-ranked source wins
+// the row says so instead of hiding the conflict. Levels are never invented —
+// a model with no declaration reads as "not declared".
+// ---------------------------------------------------------------------------
+
+function ReasoningLevelsSection({ engine, wsId }: { engine: Engine; wsId: string }) {
+  const { t } = useT("settings");
+  const { data, isPending, isError, error, refetch } = useQuery({
+    queryKey: relayKeys.reasoningLevels(wsId, engine),
+    queryFn: () => api.getRelayReasoningLevels(wsId, engine),
+  });
+
+  const models = data?.models ?? [];
+
+  return (
+    <section className="space-y-3">
+      <div>
+        <h4 className="flex items-center gap-2 text-sm font-semibold">
+          <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
+          {t(($) => $.modelGateway.reasoning_title)}
+        </h4>
+        <p className="mt-1 text-xs text-muted-foreground">
+          {t(($) => $.modelGateway.reasoning_description)}
+        </p>
+      </div>
+      <Card>
+        <CardContent className="space-y-2">
+          {isPending ? (
+            <Skeleton className="h-16 w-full" />
+          ) : isError ? (
+            <div role="alert" className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-xs text-destructive">
+                {t(($) => $.modelGateway.reasoning_load_failed)}
+                {error instanceof Error ? `: ${error.message}` : ""}
+              </p>
+              <Button type="button" variant="outline" size="sm" onClick={() => void refetch()}>
+                {t(($) => $.modelGateway.try_again)}
+              </Button>
+            </div>
+          ) : models.length === 0 ? (
+            <p className="text-xs text-muted-foreground">
+              {t(($) => $.modelGateway.reasoning_empty)}
+            </p>
+          ) : (
+            <ul className="divide-y">
+              {models.map((model) => (
+                <ReasoningLevelRow
+                  key={`${model.model_id}:${model.manual?.updated_at ?? "none"}`}
+                  engine={engine}
+                  wsId={wsId}
+                  model={model}
+                  allowedLevels={data?.allowed_levels ?? []}
+                />
+              ))}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
+    </section>
+  );
+}
+
+function ReasoningLevelRow({ engine, wsId, model, allowedLevels }: {
+  engine: Engine;
+  wsId: string;
+  model: RelayReasoningLevelModel;
+  allowedLevels: string[];
+}) {
+  const { t } = useT("settings");
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [selected, setSelected] = useState<string[]>(model.manual?.levels ?? []);
+  const [defaultLevel, setDefaultLevel] = useState<string>(model.manual?.default_level ?? "");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const effective = model.effective;
+  const conflict = model.manual !== null && effective !== null && effective.source !== "manual";
+  const effectiveSource = effective?.source === "gateway"
+    ? t(($) => $.modelGateway.reasoning_source_gateway)
+    : effective?.source === "runtime"
+      ? t(($) => $.modelGateway.reasoning_source_runtime)
+      : effective?.source === "manual"
+        ? t(($) => $.modelGateway.reasoning_source_manual)
+        : effective?.source === "family"
+          ? t(($) => $.modelGateway.reasoning_source_family)
+          : t(($) => $.modelGateway.reasoning_source_none);
+  const effectiveStatus = effective?.status === "supported"
+    ? t(($) => $.modelGateway.reasoning_status_supported)
+    : effective?.status === "unsupported"
+      ? t(($) => $.modelGateway.reasoning_status_unsupported)
+      : effective?.status === "error"
+        ? t(($) => $.modelGateway.reasoning_status_error)
+        : t(($) => $.modelGateway.reasoning_status_unknown);
+
+  function toggleLevel(level: string, checked: boolean) {
+    const next = checked
+      ? [...selected, level]
+      : selected.filter((value) => value !== level);
+    setSelected(next);
+    if (defaultLevel && !next.includes(defaultLevel)) setDefaultLevel("");
+  }
+
+  // `levels: []` clears the declaration (the server answers `{deleted:true}`),
+  // so the same path serves both buttons.
+  async function persist(levels: string[]) {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await api.putRelayReasoningLevel(wsId, engine, {
+        model: model.model_id,
+        levels,
+        ...(levels.length > 0 && defaultLevel ? { default_level: defaultLevel } : {}),
+      });
+      await qc.invalidateQueries({ queryKey: relayKeys.reasoningLevels(wsId, engine) });
+      // Declared levels feed the agent model/effort selection, so the fleet
+      // catalog must refetch as well.
+      await qc.invalidateQueries({ queryKey: runtimeModelsKeys.fleet(wsId) });
+      toast.success(levels.length > 0
+        ? t(($) => $.modelGateway.reasoning_saved)
+        : t(($) => $.modelGateway.reasoning_cleared));
+      setOpen(false);
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : t(($) => $.modelGateway.reasoning_save_failed));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <li className="py-3 first:pt-0 last:pb-0">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0 space-y-1">
+          <p className="truncate text-xs font-medium">{model.label || model.model_id}</p>
+          <p className="truncate font-mono text-[11px] text-muted-foreground">{model.model_id}</p>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {effective ? (
+              <>
+                <Badge variant={effective.source === "manual" ? "secondary" : "outline"}>
+                  {effectiveSource}
+                </Badge>
+                <span className="text-[11px] text-muted-foreground">
+                  {effectiveStatus} · {effective.supported_levels.length > 0
+                    ? t(($) => $.modelGateway.reasoning_effect, {
+                        levels: effective.supported_levels.map((level) => level.value).join(", "),
+                      })
+                    : t(($) => $.modelGateway.reasoning_effect_none)}
+                </span>
+              </>
+            ) : (
+              <span className="text-[11px] text-muted-foreground">
+                {t(($) => $.modelGateway.reasoning_not_declared)}
+              </span>
+            )}
+            {model.manual && model.manual.levels.length > 0 ? (
+              <Badge variant="secondary">
+                {t(($) => $.modelGateway.reasoning_manual_badge, {
+                  levels: model.manual.levels.join(", "),
+                })}
+              </Badge>
+            ) : null}
+          </div>
+          {conflict ? (
+            <p className="text-[11px] text-amber-600 dark:text-amber-400" role="status">
+              {t(($) => $.modelGateway.reasoning_conflict, { source: effectiveSource })}
+            </p>
+          ) : null}
+          {model.manual && (model.manual.updated_by || model.manual.updated_at) ? (
+            <p className="text-[11px] text-muted-foreground">
+              {t(($) => $.modelGateway.reasoning_manual_meta, {
+                user: model.manual.updated_by ?? "—",
+                time: model.manual.updated_at ?? "—",
+              })}
+            </p>
+          ) : null}
+        </div>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          aria-expanded={open}
+          onClick={() => setOpen((value) => !value)}
+        >
+          <SlidersHorizontal className="h-3 w-3" />
+          {open
+            ? t(($) => $.modelGateway.reasoning_close)
+            : t(($) => $.modelGateway.reasoning_edit)}
+        </Button>
+      </div>
+      {open ? (
+        <div className="mt-3 space-y-3 rounded-md border bg-muted/30 p-3">
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium">
+              {t(($) => $.modelGateway.reasoning_levels_label)}
+            </Label>
+            <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+              {allowedLevels.map((level) => (
+                <label key={level} className="flex cursor-pointer items-center gap-2 font-mono text-xs">
+                  <Checkbox
+                    checked={selected.includes(level)}
+                    disabled={saving}
+                    onCheckedChange={(checked) => toggleLevel(level, checked === true)}
+                  />
+                  {level}
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label
+              htmlFor={`reasoning-default-${engine}-${model.model_id}`}
+              className="text-xs font-medium"
+            >
+              {t(($) => $.modelGateway.reasoning_default_label)}
+            </Label>
+            <Select
+              value={defaultLevel || REASONING_DEFAULT_NONE}
+              onValueChange={(value) => setDefaultLevel(!value || value === REASONING_DEFAULT_NONE ? "" : value)}
+              disabled={saving}
+            >
+              <SelectTrigger
+                id={`reasoning-default-${engine}-${model.model_id}`}
+                className="w-full sm:max-w-xs"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={REASONING_DEFAULT_NONE}>
+                  {t(($) => $.modelGateway.reasoning_default_none)}
+                </SelectItem>
+                {selected.map((level) => (
+                  <SelectItem key={level} value={level}>{level}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {saveError ? (
+            <p role="alert" className="text-xs text-destructive">{saveError}</p>
+          ) : null}
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => void persist(selected)}
+              disabled={saving || selected.length === 0}
+            >
+              {saving
+                ? t(($) => $.modelGateway.reasoning_saving)
+                : t(($) => $.modelGateway.reasoning_save)}
+            </Button>
+            {model.manual ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => void persist([])}
+                disabled={saving}
+              >
+                {t(($) => $.modelGateway.reasoning_clear)}
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+    </li>
   );
 }

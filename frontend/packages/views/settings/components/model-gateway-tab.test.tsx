@@ -23,6 +23,14 @@ const mockRefetchRelay = vi.hoisted(() => vi.fn());
 const mockUpdateRelay = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockSetDiscovery = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockProbeRelay = vi.hoisted(() => vi.fn());
+const mockGetReasoningLevels = vi.hoisted(() => vi.fn());
+const mockPutReasoningLevel = vi.hoisted(() => vi.fn());
+const mockRefetchReasoning = vi.hoisted(() => vi.fn());
+const reasoningRef = vi.hoisted(() => ({
+  current: {} as Record<string, unknown>,
+  pending: false,
+  error: null as Error | null,
+}));
 const mockInvalidateQueries = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockUpdateWorkspace = vi.hoisted(() => vi.fn());
 const mockSetQueryData = vi.hoisted(() => vi.fn());
@@ -45,6 +53,16 @@ vi.mock("@tanstack/react-query", () => ({
         isError: relayRef.error !== null,
         error: relayRef.error,
         refetch: mockRefetchRelay,
+      };
+    }
+    if (key.includes("relay-reasoning-levels")) {
+      const engine = String(opts?.queryKey?.[2] ?? "");
+      return {
+        data: reasoningRef.error ? undefined : reasoningRef.current[engine],
+        isPending: reasoningRef.pending,
+        isError: reasoningRef.error !== null,
+        error: reasoningRef.error,
+        refetch: mockRefetchReasoning,
       };
     }
     return { data: membersRef.current, isPending: membersRef.pending };
@@ -72,6 +90,8 @@ vi.mock("@multiremi/core/api", () => ({
     updateRelayConfig: mockUpdateRelay,
     setRelayDiscovery: mockSetDiscovery,
     probeRelayEngine: mockProbeRelay,
+    getRelayReasoningLevels: mockGetReasoningLevels,
+    putRelayReasoningLevel: mockPutReasoningLevel,
     revealRelayToken: vi.fn(() => Promise.resolve("sk-revealed")),
     updateWorkspace: mockUpdateWorkspace,
   },
@@ -97,6 +117,13 @@ describe("ModelGatewayTab", () => {
     };
     relayRef.pending = false;
     relayRef.error = null;
+    reasoningRef.current = {
+      claude: { engine: "claude", allowed_levels: ["low", "medium", "high", "xhigh", "max"], models: [] },
+      codex: { engine: "codex", allowed_levels: ["minimal", "low", "medium", "high", "xhigh", "max"], models: [] },
+    };
+    reasoningRef.pending = false;
+    reasoningRef.error = null;
+    mockPutReasoningLevel.mockReset();
     workspaceRef.current.settings = {};
     mockUpdateWorkspace.mockImplementation(async (_id: string, input: { settings: Record<string, unknown> }) => ({
       ...workspaceRef.current,
@@ -307,5 +334,189 @@ describe("ModelGatewayTab", () => {
     for (const button of screen.getAllByRole("button", { name: "Probe now" })) {
       expect(button).toBeDisabled();
     }
+  });
+
+  it("saves manual reasoning levels and the default level for a gateway model", async () => {
+    reasoningRef.current.claude = {
+      engine: "claude",
+      allowed_levels: ["low", "medium", "high", "xhigh", "max"],
+      models: [{
+        model_id: "deepseek-v4-flash",
+        label: "DeepSeek V4 Flash",
+        manual: null,
+        effective: null,
+      }],
+    };
+    mockPutReasoningLevel.mockResolvedValue({
+      levels: ["low", "high"],
+      default_level: "high",
+      updated_by: "owner@example.test",
+      updated_at: "2026-09-19T08:10:00.000Z",
+    });
+    const user = userEvent.setup();
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    expect(screen.getByText("Not declared")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Configure" }));
+    await user.click(screen.getByRole("checkbox", { name: "low" }));
+    await user.click(screen.getByRole("checkbox", { name: "high" }));
+    await user.click(screen.getByRole("combobox", { name: "Default level" }));
+    await user.click(await screen.findByRole("option", { name: "high" }));
+    await user.click(screen.getByRole("button", { name: "Save levels" }));
+
+    await waitFor(() => expect(mockPutReasoningLevel).toHaveBeenCalledWith("workspace-1", "claude", {
+      model: "deepseek-v4-flash",
+      levels: ["low", "high"],
+      default_level: "high",
+    }));
+    await waitFor(() => expect(mockInvalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["relay-reasoning-levels", "workspace-1", "claude"],
+    }));
+    await waitFor(() => expect(mockInvalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["runtimes", "models", "fleet", "workspace-1"],
+    }));
+  });
+
+  it("marks the effective source and flags a manual declaration a higher-priority source overrides", () => {
+    reasoningRef.current.claude = {
+      engine: "claude",
+      allowed_levels: ["low", "medium", "high", "xhigh", "max"],
+      models: [{
+        model_id: "deepseek-v4-flash",
+        label: "DeepSeek V4 Flash",
+        manual: {
+          levels: ["low", "high"],
+          default_level: "high",
+          updated_by: "owner@example.test",
+          updated_at: "2026-09-19T08:10:00.000Z",
+        },
+        effective: {
+          supported_levels: [{ value: "low", label: "low" }, { value: "high", label: "high" }],
+          default_level: "low",
+          status: "supported",
+          source: "gateway",
+        },
+      }],
+    };
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    expect(screen.getByText("gateway")).toBeInTheDocument();
+    expect(screen.getByText("Manual: low, high")).toBeInTheDocument();
+    expect(screen.getByText("supported · Effective: low, high")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Overridden by the gateway declaration — the effective value comes from gateway.",
+    );
+  });
+
+  it("renders the undeclared state for a model without any source", () => {
+    reasoningRef.current.claude = {
+      engine: "claude",
+      allowed_levels: ["low", "medium", "high"],
+      models: [{ model_id: "deepseek-flash", label: "DeepSeek Flash", manual: null, effective: null }],
+    };
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    expect(screen.getByText("Not declared")).toBeInTheDocument();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("clears a manual declaration with an explicit empty levels payload", async () => {
+    reasoningRef.current.claude = {
+      engine: "claude",
+      allowed_levels: ["low", "medium", "high", "xhigh", "max"],
+      models: [{
+        model_id: "deepseek-v4-flash",
+        label: "DeepSeek V4 Flash",
+        manual: {
+          levels: ["high"],
+          default_level: "high",
+          updated_by: "owner@example.test",
+          updated_at: "2026-09-19T08:10:00.000Z",
+        },
+        effective: {
+          supported_levels: [{ value: "high", label: "high" }],
+          default_level: "high",
+          status: "supported",
+          source: "manual",
+        },
+      }],
+    };
+    mockPutReasoningLevel.mockResolvedValue({ deleted: true });
+    const user = userEvent.setup();
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    await user.click(screen.getByRole("button", { name: "Configure" }));
+    await user.click(screen.getByRole("button", { name: "Clear declaration" }));
+
+    await waitFor(() => expect(mockPutReasoningLevel).toHaveBeenCalledWith(
+      "workspace-1",
+      "claude",
+      { model: "deepseek-v4-flash", levels: [] },
+    ));
+  });
+
+  it("surfaces a rejected reasoning-level save inline", async () => {
+    reasoningRef.current.claude = {
+      engine: "claude",
+      allowed_levels: ["low", "medium", "high"],
+      models: [{
+        model_id: "deepseek-v4-flash",
+        label: "DeepSeek V4 Flash",
+        manual: null,
+        effective: null,
+      }],
+    };
+    mockPutReasoningLevel.mockRejectedValue(new Error('level "ultra" is not allowed for claude'));
+    const user = userEvent.setup();
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    await user.click(screen.getByRole("button", { name: "Configure" }));
+    await user.click(screen.getByRole("checkbox", { name: "low" }));
+    await user.click(screen.getByRole("button", { name: "Save levels" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      'level "ultra" is not allowed for claude',
+    );
+  });
+
+  it("keeps manual declarations after a probe refresh", async () => {
+    reasoningRef.current.claude = {
+      engine: "claude",
+      allowed_levels: ["low", "medium", "high", "xhigh", "max"],
+      models: [{
+        model_id: "deepseek-v4-flash",
+        label: "DeepSeek V4 Flash",
+        manual: {
+          levels: ["low", "high"],
+          default_level: "high",
+          updated_by: "owner@example.test",
+          updated_at: "2026-09-19T08:10:00.000Z",
+        },
+        effective: {
+          supported_levels: [{ value: "low", label: "low" }, { value: "high", label: "high" }],
+          default_level: "high",
+          status: "supported",
+          source: "manual",
+        },
+      }],
+    };
+    mockProbeRelay.mockResolvedValue({
+      engine: "claude",
+      status: "ready",
+      error: null,
+      models: [{ id: "deepseek-v4-flash", label: "DeepSeek V4 Flash" }],
+      last_success_at: "2026-09-19T08:20:00.000Z",
+    });
+    const user = userEvent.setup();
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    expect(screen.getByText("Manual: low, high")).toBeInTheDocument();
+    await user.click(screen.getAllByRole("button", { name: "Probe now" })[0]!);
+
+    await waitFor(() => expect(mockProbeRelay).toHaveBeenCalledWith("workspace-1", "claude"));
+    await waitFor(() => expect(mockInvalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["relay-reasoning-levels", "workspace-1", "claude"],
+    }));
+    expect(screen.getByText("Manual: low, high")).toBeInTheDocument();
   });
 });
