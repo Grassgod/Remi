@@ -754,8 +754,8 @@ function ReasoningLevelRow({ engine, wsId, model, allowedLevels }: {
     if (defaultLevel && !next.includes(defaultLevel)) setDefaultLevel("");
   }
 
-  // `levels: []` clears the declaration (the server answers `{deleted:true}`),
-  // so the same path serves both buttons.
+  // `levels: []` clears the declaration (the server answers with the refreshed
+  // listing plus `deleted: true`), so the same path serves both buttons.
   async function persist(levels: string[]) {
     setSaving(true);
     setSaveError(null);

@@ -346,12 +346,17 @@ export const RelayReasoningLevelsResponseSchema = z.object({
   models: z.array(RelayReasoningLevelModelSchema).default([]),
 }).loose();
 
-// The PUT answers with the saved declaration, or `{ deleted: true }` when the
-// declaration was cleared with `levels: []`.
-export const RelayReasoningLevelSaveResultSchema = z.union([
-  z.object({ deleted: z.literal(true) }).loose(),
-  RelayReasoningLevelManualSchema,
-]);
+// The PUT answers with the same listing as the GET plus `deleted`, which is
+// true when `levels: []` removed a declaration. One shape covers both methods,
+// and the caller reads the post-write effective state — including a declaration
+// a higher-ranked source outranks — without a second round trip. The listing
+// fields default so a client that only reads `deleted` still parses.
+export const RelayReasoningLevelSaveResultSchema = z.object({
+  deleted: z.boolean().default(false),
+  engine: z.string().default(""),
+  allowed_levels: z.array(z.string()).default([]),
+  models: z.array(RelayReasoningLevelModelSchema).default([]),
+}).loose();
 
 export type RelayReasoningLevelManual = z.infer<typeof RelayReasoningLevelManualSchema>;
 export type RelayReasoningLevelEffective = z.infer<typeof RelayReasoningLevelEffectiveSchema>;

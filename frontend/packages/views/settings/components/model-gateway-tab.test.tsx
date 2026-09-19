@@ -348,10 +348,25 @@ describe("ModelGatewayTab", () => {
       }],
     };
     mockPutReasoningLevel.mockResolvedValue({
-      levels: ["low", "high"],
-      default_level: "high",
-      updated_by: "owner@example.test",
-      updated_at: "2026-09-19T08:10:00.000Z",
+      deleted: false,
+      engine: "claude",
+      allowed_levels: ["low", "medium", "high", "xhigh", "max"],
+      models: [{
+        model_id: "deepseek-v4-flash",
+        label: "DeepSeek V4 Flash",
+        manual: {
+          levels: ["low", "high"],
+          default_level: "high",
+          updated_by: "owner@example.test",
+          updated_at: "2026-09-19T08:10:00.000Z",
+        },
+        effective: {
+          supported_levels: [{ value: "low", label: "low" }, { value: "high", label: "high" }],
+          default_level: "high",
+          status: "supported",
+          source: "manual",
+        },
+      }],
     });
     const user = userEvent.setup();
     render(<ModelGatewayTab />, { wrapper: Wrapper });
@@ -441,7 +456,7 @@ describe("ModelGatewayTab", () => {
         },
       }],
     };
-    mockPutReasoningLevel.mockResolvedValue({ deleted: true });
+    mockPutReasoningLevel.mockResolvedValue({ deleted: true, engine: "claude", allowed_levels: [], models: [] });
     const user = userEvent.setup();
     render(<ModelGatewayTab />, { wrapper: Wrapper });
 

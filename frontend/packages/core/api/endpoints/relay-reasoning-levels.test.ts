@@ -47,12 +47,27 @@ describe("relay reasoning-levels endpoints", () => {
     expect(result.models[1]?.effective).toBeNull();
   });
 
-  it("PUTs a declaration and keeps the saved manual levels", async () => {
+  it("PUTs a declaration and reads the refreshed listing back", async () => {
     const fetch = vi.fn().mockResolvedValue(response({
-      levels: ["low", "high"],
-      default_level: "high",
-      updated_by: "owner@example.test",
-      updated_at: "2026-09-19T08:10:00.000Z",
+      deleted: false,
+      engine: "claude",
+      allowed_levels: ["low", "medium", "high", "xhigh", "max"],
+      models: [{
+        model_id: "deepseek-v4-flash",
+        label: "DeepSeek V4 Flash",
+        manual: {
+          levels: ["low", "high"],
+          default_level: "high",
+          updated_by: "owner@example.test",
+          updated_at: "2026-09-19T08:10:00.000Z",
+        },
+        effective: {
+          supported_levels: [{ value: "low", label: "low" }, { value: "high", label: "high" }],
+          default_level: "high",
+          status: "supported",
+          source: "manual",
+        },
+      }],
     }));
     vi.stubGlobal("fetch", fetch);
 
@@ -69,26 +84,31 @@ describe("relay reasoning-levels endpoints", () => {
       levels: ["low", "high"],
       default_level: "high",
     });
-    expect(result).toEqual({
-      levels: ["low", "high"],
-      default_level: "high",
-      updated_by: "owner@example.test",
-      updated_at: "2026-09-19T08:10:00.000Z",
-    });
+    expect(result.deleted).toBe(false);
+    expect(result.models[0]?.manual?.levels).toEqual(["low", "high"]);
+    expect(result.models[0]?.effective?.source).toBe("manual");
   });
 
-  it("clears a declaration with levels: [] and accepts the deleted answer", async () => {
-    const fetch = vi.fn().mockResolvedValue(response({ deleted: true }));
+  it("clears a declaration with levels: [] and reports the deletion", async () => {
+    const fetch = vi.fn().mockResolvedValue(response({
+      deleted: true,
+      engine: "codex",
+      allowed_levels: ["minimal", "low", "medium", "high", "xhigh", "max"],
+      models: [{ model_id: "gpt-6-luna", label: "GPT-6 Luna", manual: null, effective: null }],
+    }));
     vi.stubGlobal("fetch", fetch);
 
     const result = await api().putRelayReasoningLevel("ws-1", "codex", { model: "gpt-6-luna", levels: [] });
 
     expect(JSON.parse(fetch.mock.calls[0]![1].body as string)).toEqual({ model: "gpt-6-luna", levels: [] });
-    expect(result).toEqual({ deleted: true });
+    expect(result.deleted).toBe(true);
+    expect(result.models[0]?.manual).toBeNull();
   });
 
   it("omits default_level when the caller has none", async () => {
-    const fetch = vi.fn().mockResolvedValue(response({ deleted: true }));
+    const fetch = vi.fn().mockResolvedValue(response({
+      deleted: true, engine: "claude", allowed_levels: ["low", "high"], models: [],
+    }));
     vi.stubGlobal("fetch", fetch);
 
     await api().putRelayReasoningLevel("ws-1", "claude", { model: "deepseek-v4-flash", levels: [] });
