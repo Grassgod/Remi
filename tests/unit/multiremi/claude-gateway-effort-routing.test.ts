@@ -196,6 +196,38 @@ describe("MUL-338 does not weaken the Codex catalog contract (#220)", () => {
     expect(store.getTask(task.id)?.status).toBe("queued");
   });
 
+  it("does not converge a Codex level the caller echoed back with the selection", async () => {
+    const store = createLocalStore();
+    store.setRelayModelDiscovery("local", true);
+    const runtime = store.registerRuntime({
+      name: "codex-vendor", provider: "codex", workspaceId: "local",
+      models: [{ id: "gpt-levelless", label: "GPT", provider: "openai", default: true }],
+    });
+    const agent = store.createAgent({ name: "codex echo", provider: "codex", model: "gpt-levelless", thinkingLevel: "high" });
+    const app = createMultiremiApp({ store });
+    const response = await app.request(`/api/agents/${agent.id}`, {
+      method: "PUT", headers,
+      body: JSON.stringify({ model: "gpt-levelless", thinking_level: "high" }),
+    });
+    expect(response.status).toBe(200);
+    // Routing still refuses this pair, so clearing it here would smuggle a
+    // rejected selection into a runnable one at the default effort.
+    expect(store.getAgent(agent.id)?.thinkingLevel).toBe("high");
+    expect(store.runtimeSupportsAgentModel(store.getRuntime(runtime.id)!, store.getAgent(agent.id)!)).toBe(false);
+  });
+
+  it("leaves other ACP engines (antigravity) on the strict contract", () => {
+    const store = createLocalStore();
+    const runtime = store.registerRuntime({
+      name: "antigravity", provider: "antigravity", workspaceId: "local",
+      models: [{ id: "ag-model", label: "AG", provider: "antigravity", default: true }],
+    });
+    const agent = store.createAgent({ name: "ag agent", provider: "antigravity", model: "ag-model", thinkingLevel: "high" });
+    // Same ACP thought_level channel as Codex: an empty list is the engine
+    // saying it cannot honour the effort, not missing information.
+    expect(store.runtimeSupportsAgentModel(runtime, agent)).toBe(false);
+  });
+
   it("keeps a Runtime out while its capability load is failing", () => {
     const store = createLocalStore();
     store.setRelayModelDiscovery("local", true);

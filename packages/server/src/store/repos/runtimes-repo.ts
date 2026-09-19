@@ -1,5 +1,5 @@
 import { createLogger } from "@shared/logger.js";
-import { catalogAllowsModel, modelThinkingState, providerPublishesReasoningCatalog, runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
+import { catalogAllowsModel, modelThinkingState, providerDeclaresReasoningLevels, runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
 import { runtimeConnectionModels } from "@multiremi/contracts/runtime-connection";
 import { syncRuntimeExecutionGroups, runtimeExecutionGroupId } from "@multiremi/store/execution-groups.js";
 import { WorkspacesRepo } from "@multiremi/store/repos/workspaces-repo.js";
@@ -1932,11 +1932,11 @@ export class RuntimesRepo {
     // A load failure is the execution engine telling us it cannot honour this
     // model right now; that state recovers, so keep the Runtime out.
     if (capability.state === "error") return false;
-    // Codex publishes an authoritative reasoning catalog, so an empty level list
-    // is a statement about the model: the Runtime genuinely cannot honour the
-    // saved effort. That is MUL-330/#220's contract and it stays blocking.
-    if (providerPublishesReasoningCatalog(agent.provider)) return false;
-    // Claude publishes none — the gateway inventory carries ids and labels only,
+    // Any engine that reports reasoning levels at all is taken at its word: an
+    // empty level list means it cannot honour the saved effort. That is
+    // MUL-330/#220's contract and it stays blocking.
+    if (providerDeclaresReasoningLevels(agent.provider)) return false;
+    // Claude reports none — the gateway inventory carries ids and labels only,
     // and the ACP bridge reports the native selector only for its own aliases —
     // so an empty level list says nothing about the model. The saved effort is
     // not a capability this Runtime can fail to provide. Dropping it is the only

@@ -1,5 +1,5 @@
 import { createLogger } from "@shared/logger.js";
-import { workspaceRuntimeModelCatalog, catalogAllowsModel, commonThinkingCapabilities, modelThinkingState, runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
+import { workspaceRuntimeModelCatalog, catalogAllowsModel, commonThinkingCapabilities, modelThinkingState, providerDeclaresReasoningLevels, runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
 export { workspaceRuntimeModelCatalog, overlayGatewayModels, runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
 // Agent and skill request plumbing: the `with*RequestContext` builders that fold caller identity
 // and defaults into create/update inputs, the `load*For*` guards, and the provider/thinking-level
@@ -193,8 +193,14 @@ function agentSelectionCatalog(
  * the case that used to short-circuit validation, which is why the stale value
  * survived every later edit.
  *
- * Only a catalog that actually lists the model (or identifies the provider
- * default) may clear it: an absent entry is missing metadata, not an answer.
+ * It also only applies where nothing declares levels at all. Engines that do
+ * (`providerDeclaresReasoningLevels`) are left alone: clearing their stored value
+ * would turn a selection routing still refuses into a claimable one running at
+ * the default effort, which is exactly what MUL-330/#220 forbids.
+ *
+ * Finally, only a catalog that actually lists the model (or identifies the
+ * provider default) may clear it: an absent entry is missing metadata, not an
+ * answer.
  */
 function convergeAgentThinkingLevel(
   c: Context,
@@ -213,6 +219,11 @@ function convergeAgentThinkingLevel(
 ): string {
   if (!input.thinkingLevel) return "";
   if (!input.carriedOver) return input.thinkingLevel;
+  // Engines that report reasoning levels answer for themselves: leave the stored
+  // value alone and let validation (or task eligibility) judge it. Clearing it
+  // here would silently turn a rejected selection into a runnable one at the
+  // default effort, which is the one thing MUL-330/#220 forbids.
+  if (providerDeclaresReasoningLevels(input.provider)) return input.thinkingLevel;
   const catalog = agentSelectionCatalog(c, store, input);
   const models = catalog?.models ?? [];
   const known = input.model

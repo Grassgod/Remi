@@ -46,27 +46,32 @@ capabilities, without a provider-wide guess for unrelated models.
 Task eligibility reads these four states as three different questions
 (`modelThinkingState`). A model that declares levels (`supported`) must offer the
 saved level, and a runtime whose capability load failed (`error`) cannot claim the
-task — both remain blocking. A model that publishes no reasoning catalog at all
-(`providerPublishesReasoningCatalog`: Claude today) and declares no levels
-(`unsupported`) or has nothing described (`unknown`) does not thereby become
-unrunnable: the level is not applicable rather than unavailable, so the runtime
-stays eligible and the ignored level is logged once per provider/model/level.
-Reading an empty level list as a missing capability instead left gateway-only
-Claude aliases — which the gateway `/v1/models` inventory describes with ids and
-labels only — unclaimable on every runtime while the same model without a saved
-level was claimable, so the task queued forever. Codex does publish an
-authoritative catalog, so there an empty level list still means the runtime
-cannot honour the effort, exactly as in MUL-330.
+task — both remain blocking. So does an empty level list for any engine that
+reports reasoning levels at all (`providerDeclaresReasoningLevels`), which is the
+MUL-330 behaviour for Codex and every other ACP engine. Claude is the one
+exception, because it reports no reasoning metadata anywhere: the gateway
+`/v1/models` inventory carries ids and labels only and the bridge publishes the
+native selector solely for its own aliases. There an empty list means the level is
+not applicable rather than unavailable, so the runtime stays eligible and the
+ignored level is logged once per provider/model/level. Reading it as a missing
+capability instead left gateway-only Claude aliases — which the same inventory
+describes with ids and labels only — unclaimable on every runtime while the same
+model without a saved level was claimable, so the task queued forever. The
+default is the strict reading: an engine that is in fact like Claude keeps its
+Agents queued, which is visible and recoverable, where the reverse would run work
+at a default effort an engine had said it could not honour.
 
-Writes converge the other way round, and only for a selection the caller did not
-choose. An agent carrying a stored `thinking_level` for a model that declares no
-levels gets it cleared on the next update, including a metadata-only edit or a
-verbatim resend of the saved selection — the cases that previously short-circuited
-validation and kept the value forever, because the stale level is usually already
-saved and no later edit ever mentions it. An effort the request actively sets is
-still judged by validation and rejected with a 400 when the catalog cannot confirm
-it, so a caller is told its request was not honoured rather than silently getting a
-different Agent.
+Writes converge the other way round, only for a selection the caller did not
+choose and only where no engine declaration exists. An agent carrying a stored
+`thinking_level` for a level-less Claude model gets it cleared on the next update,
+including a metadata-only edit or a verbatim resend of the saved selection — the
+cases that previously short-circuited validation and kept the value forever,
+because the stale level is usually already saved and no later edit ever mentions
+it. An effort the request actively sets is still judged by validation and rejected
+with a 400 when the catalog cannot confirm it, so a caller is told its request was
+not honoured rather than silently getting a different Agent. Engines that do
+report levels are never converged: clearing there would turn a rejected selection
+into a runnable one at the default effort.
 
 Production daemons discover capabilities at startup and refresh every 15 minutes.
 Manual model-list requests use the same single-flight probe without blocking the

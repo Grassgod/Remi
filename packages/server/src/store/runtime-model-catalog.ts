@@ -96,22 +96,30 @@ export function modelThinkingState(
 }
 
 /**
- * Whether the provider's execution engine publishes a reasoning catalog that is
- * authoritative about a model having *no* levels.
+ * Whether an empty level list is a statement about the model rather than missing
+ * information — i.e. whether the provider can be taken at its word that this
+ * model offers no reasoning levels.
  *
- * Codex does: its native catalog endpoint lists `supported_reasoning_levels` per
- * model, and a model absent from it cannot be executed at all. So for Codex "no
- * levels" is a statement about the model, and MUL-330/#220 keeps REJECTING an
- * explicitly requested effort rather than silently rewriting the request.
+ * True for every provider except Claude. Codex's native catalog lists
+ * `supported_reasoning_levels` per model, and the ACP `thought_level` probe feeds
+ * the same fields for other ACP engines, so a model they cannot offer levels for
+ * genuinely cannot honour an effort: the Runtime stays out and MUL-330/#220 keeps
+ * REJECTING an explicitly requested effort rather than silently rewriting it.
  *
- * Claude does not. The gateway `/v1/models` inventory carries ids and labels
- * only, and the ACP bridge reports the native selector solely for its own
- * aliases, so a gateway-only alias has no reasoning source behind it at all.
- * There, an empty level list says nothing about the model — see
- * `modelThinkingState` — and the only useful reading is "not applicable".
+ * Claude is the exception because it publishes no reasoning metadata anywhere.
+ * The gateway `/v1/models` inventory carries ids and labels only, and the bridge
+ * reports the native selector solely for its own aliases, so a gateway-only alias
+ * has no reasoning source behind it at all. There an empty level list says
+ * nothing about the model — see `modelThinkingState` — and the only useful
+ * reading is "not applicable".
+ *
+ * The default is deliberately "declares": a brand-new engine that is in fact like
+ * Claude would keep its Agents queued (visible, recoverable, and how MUL-338 was
+ * found), whereas assuming the opposite would silently run work at a default
+ * effort on an engine that had stated it could not honour the requested one.
  */
-export function providerPublishesReasoningCatalog(provider: string): boolean {
-  return provider === "codex";
+export function providerDeclaresReasoningLevels(provider: string): boolean {
+  return provider !== "claude";
 }
 
 /** Intersect execution targets without losing why a capability is unavailable. */
