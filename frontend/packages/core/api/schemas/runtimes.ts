@@ -282,6 +282,27 @@ export type RelayEngineConfig = z.infer<typeof RelayEngineConfigSchema>;
 
 export const EMPTY_RELAY_CONFIG: RelayConfigResponse = { claude: null, codex: null, modelDiscovery: false };
 
+// Explicit gateway probe (`POST /api/workspaces/:id/relay-config/:engine/probe`).
+// The server answers with the snapshot it just refreshed: `status` is `error`
+// when the last attempt failed (models may still carry the last success),
+// `ready` when a success was recorded and `unknown` when nothing has run yet.
+const RelayProbeModelSchema = z.object({
+  id: z.string(),
+  label: z.string().default(""),
+  thinking: ModelThinkingSchema.optional(),
+}).loose();
+
+export const RelayEngineProbeSchema = z.object({
+  engine: z.string(),
+  status: z.enum(["ready", "error", "unknown"]).catch("unknown"),
+  error: z.string().nullable().default(null),
+  models: z.array(RelayProbeModelSchema).default([]),
+  last_success_at: z.string().nullable().default(null),
+}).loose();
+
+export type RelayEngineProbeModel = z.infer<typeof RelayProbeModelSchema>;
+export type RelayEngineProbe = z.infer<typeof RelayEngineProbeSchema>;
+
 // ---------------------------------------------------------------------------
 // Runtime usage schemas — the runtime-detail page's four usage endpoints
 // (`/api/runtimes/:id/usage*`).

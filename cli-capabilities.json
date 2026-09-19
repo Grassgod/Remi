@@ -513,6 +513,23 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "workspace.relay.probe": {
+      "command": "remi workspace relay probe",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.relay.probe",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "workspace.bot-menu.get": {
       "command": "remi workspace bot-menu get",
       "aliases": [],
@@ -11886,6 +11903,9 @@
     },
     "POST /api/workspaces/:id/members": {
       "command": "invite.create"
+    },
+    "POST /api/workspaces/:id/relay-config/:engine/probe": {
+      "command": "workspace.relay.probe"
     },
     "POST /api/workspaces/:id/relay-config/:engine/reveal": {
       "command": "workspace.relay.reveal"

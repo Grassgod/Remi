@@ -621,7 +621,15 @@
     "insufficient": "モデルゲートウェイを管理できるのはワークスペースのオーナーと管理者のみです。",
     "load_failed": "ゲートウェイ設定を読み込めませんでした",
     "load_failed_default": "リレー設定の取得中に問題が発生しました。",
-    "try_again": "再試行"
+    "try_again": "再試行",
+    "probe": "今すぐ検出",
+    "probing": "検出中…",
+    "probe_disabled": "ゲートウェイを検出するには自動検出を有効にしてください",
+    "probe_models_other": "{{count}} モデル",
+    "probe_effort_supported": "{{supported}}/{{total}} モデルで推論レベル（{{levels}}）に対応",
+    "probe_effort_none": "ゲートウェイは推論レベルを宣言していません",
+    "probe_effort_error": "一部のモデルで推論レベルの読み込みに失敗しました",
+    "probe_failed": "検出に失敗しました"
   },
   "feishu": {
     "title": "Feishu メッセージ",

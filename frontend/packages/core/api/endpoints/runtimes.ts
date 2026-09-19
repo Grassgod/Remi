@@ -75,6 +75,8 @@ import {
   EMPTY_DAEMON_ROUTING_RESPONSE,
   type RelayConfigResponse,
   RelayConfigResponseSchema,
+  type RelayEngineProbe,
+  RelayEngineProbeSchema,
   RuntimeDirectoryScanRequestSchema,
   RuntimeProvisionListResponseSchema,
   RuntimeProvisionResponseSchema,
@@ -187,6 +189,19 @@ export class RuntimesEndpoints {
       { method: "POST" },
     );
     return typeof raw?.token === "string" ? raw.token : "";
+  }
+
+  // Explicit "probe now": run gateway discovery once and answer with the fresh
+  // snapshot. Strictly parsed — the caller reports the model/effort counts as
+  // fact, so a drifted body must surface as a contract error, not "0 models".
+  async probeRelayEngine(workspaceId: string, engine: "claude" | "codex"): Promise<RelayEngineProbe> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/workspaces/${workspaceId}/relay-config/${engine}/probe`,
+      { method: "POST" },
+    );
+    return parseStrictResponse(raw, RelayEngineProbeSchema, {
+      endpoint: "POST /api/workspaces/:id/relay-config/:engine/probe",
+    });
   }
 
   async setRelayDiscovery(workspaceId: string, enabled: boolean): Promise<void> {

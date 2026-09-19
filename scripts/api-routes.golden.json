@@ -1,10 +1,10 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 756,
+    "routeCount": 757,
     "routeCountByPrefix": {
       "native": 210,
-      "compat": 532,
+      "compat": 533,
       "root": 14
     },
     "getRoutes": 323,
@@ -14,7 +14,7 @@
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 433,
+    "mutationRoutes": 434,
     "mutationRoutesCovered": 282,
     "flows": [
       "agents-compat",
@@ -728,6 +728,7 @@
     "POST /api/workspaces/:id/lark/install/begin",
     "POST /api/workspaces/:id/leave",
     "POST /api/workspaces/:id/members",
+    "POST /api/workspaces/:id/relay-config/:engine/probe",
     "POST /api/workspaces/:id/relay-config/:engine/reveal",
     "POST /api/workspaces/:id/repos",
     "POST /api/workspaces/:id/repos/:repositoryId/wiki",
@@ -13416,6 +13417,17 @@
             "id": "workspace.relay.get",
             "command": "remi workspace relay get",
             "capability": "workspace.relay.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.relay.probe",
+            "command": "remi workspace relay probe",
+            "capability": "workspace.relay.probe",
             "outputs": [
               "table",
               "json",

@@ -85,6 +85,7 @@ import { buildPlatformPromptTemplatePreview } from "../../prompts/platform-templ
 import { listWorkspaceRepositories } from "../helpers/repositories.js";
 import {
   discoverGatewayModels,
+  probeGatewayModels,
   triggerGatewayDiscovery,
 } from "@multiremi/relay/discovery.js";
 import {
@@ -1238,6 +1239,18 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     c.header("Cache-Control", "no-store");
     return c.json({ token: store.revealRelayToken(workspaceId, engine) ?? "" });
+  });
+  // Explicit "probe now": run discovery once (awaited, same 8s bound as the save
+  // path) and answer with the resulting snapshot, so the client can show the
+  // fresh model list / effort support instead of waiting for the 1h TTL refresh.
+  app.post("/api/workspaces/:id/relay-config/:engine/probe", async (c) => {
+    const workspaceId = c.req.param("id");
+    const engine = c.req.param("engine");
+    if (engine !== "claude" && engine !== "codex") return c.json({ error: "invalid engine" }, 400);
+    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    c.header("Cache-Control", "no-store");
+    return c.json(await probeGatewayModels(store, workspaceId, engine));
   });
   app.post("/api/workspaces/:id/leave", async (c) => {
     const workspaceId = c.req.param("id");

@@ -621,7 +621,15 @@
     "insufficient": "워크스페이스 소유자와 관리자만 모델 게이트웨이를 관리할 수 있습니다.",
     "load_failed": "게이트웨이 설정을 불러오지 못했습니다",
     "load_failed_default": "릴레이 설정을 가져오는 중 문제가 발생했습니다.",
-    "try_again": "다시 시도"
+    "try_again": "다시 시도",
+    "probe": "지금 탐지",
+    "probing": "탐지 중…",
+    "probe_disabled": "게이트웨이를 탐지하려면 자동 검색을 켜세요",
+    "probe_models_other": "모델 {{count}}개",
+    "probe_effort_supported": "모델 {{supported}}/{{total}}개에서 추론 레벨({{levels}}) 지원",
+    "probe_effort_none": "게이트웨이가 추론 레벨을 선언하지 않았습니다",
+    "probe_effort_error": "일부 모델의 추론 레벨 로드 실패",
+    "probe_failed": "탐지 실패"
   },
   "feishu": {
     "title": "Feishu 메시지",

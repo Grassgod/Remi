@@ -622,7 +622,16 @@
     "insufficient": "Only workspace owners and admins can manage the model gateway.",
     "load_failed": "Couldn't load the gateway configuration",
     "load_failed_default": "Something went wrong fetching the relay settings.",
-    "try_again": "Retry"
+    "try_again": "Retry",
+    "probe": "Probe now",
+    "probing": "Probing…",
+    "probe_disabled": "Turn on auto-discovery to probe the gateway",
+    "probe_models_one": "{{count}} model",
+    "probe_models_other": "{{count}} models",
+    "probe_effort_supported": "effort {{levels}} on {{supported}}/{{total}} models",
+    "probe_effort_none": "gateway declares no reasoning levels",
+    "probe_effort_error": "reasoning levels failed to load for some models",
+    "probe_failed": "Probe failed"
   },
   "feishu": {
     "title": "Feishu Messages",

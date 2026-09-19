@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Activity, AlertCircle, Eye, EyeOff, Save, Sparkles, Waypoints } from "lucide-react";
+import { Activity, AlertCircle, Eye, EyeOff, Radar, Save, Sparkles, Waypoints } from "lucide-react";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { Card, CardContent } from "@multiremi/ui/components/ui/card";
 import { Label } from "@multiremi/ui/components/ui/label";
@@ -24,7 +24,7 @@ import { useCurrentWorkspace } from "@multiremi/core/paths";
 import { runtimeModelsKeys } from "@multiremi/core/runtimes";
 import { memberListOptions, workspaceKeys } from "@multiremi/core/workspace/queries";
 import { api } from "@multiremi/core/api";
-import type { RelayConfigResponse, RelayEngineConfig } from "@multiremi/core/api";
+import type { RelayConfigResponse, RelayEngineConfig, RelayEngineProbe } from "@multiremi/core/api";
 import type { Workspace } from "@multiremi/core/types";
 import { useT } from "../../i18n";
 import { ClaudeMark, OpenAIMark } from "./engine-marks";
@@ -141,8 +141,18 @@ export function ModelGatewayTab() {
           {workspace ? <ProgressSummarySection workspace={workspace} /> : null}
           {workspace ? <IssueAutoTitleSection workspace={workspace} /> : null}
 
-          <EngineSection engine="claude" config={config.claude ?? null} wsId={wsId} />
-          <EngineSection engine="codex" config={config.codex ?? null} wsId={wsId} />
+          <EngineSection
+            engine="claude"
+            config={config.claude ?? null}
+            wsId={wsId}
+            discoveryEnabled={config.modelDiscovery === true}
+          />
+          <EngineSection
+            engine="codex"
+            config={config.codex ?? null}
+            wsId={wsId}
+            discoveryEnabled={config.modelDiscovery === true}
+          />
 
           <p className="text-xs text-muted-foreground">{t(($) => $.modelGateway.applied_note)}</p>
         </>
@@ -453,7 +463,12 @@ function ConfigLoadError({ error, onRetry }: { error: unknown; onRetry: () => vo
   );
 }
 
-function EngineSection({ engine, config, wsId }: { engine: Engine; config: RelayEngineConfig; wsId: string }) {
+function EngineSection({ engine, config, wsId, discoveryEnabled }: {
+  engine: Engine;
+  config: RelayEngineConfig;
+  wsId: string;
+  discoveryEnabled: boolean;
+}) {
   const { t } = useT("settings");
   const qc = useQueryClient();
   const [fragment, setFragment] = useState(config?.fragment ?? "");
@@ -461,6 +476,8 @@ function EngineSection({ engine, config, wsId }: { engine: Engine; config: Relay
   const [tokenDirty, setTokenDirty] = useState(false);
   const [revealed, setRevealed] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [probing, setProbing] = useState(false);
+  const [probe, setProbe] = useState<RelayEngineProbe | null>(null);
 
   // Re-seed the editor when the server value arrives/changes and the user hasn't started editing.
   useEffect(() => {
@@ -507,6 +524,43 @@ function EngineSection({ engine, config, wsId }: { engine: Engine; config: Relay
     }
   }
 
+  // Probing discovers the gateway's models and effort metadata in place of the
+  // hourly stale-refresh, so the fleet model dropdown must refetch afterwards.
+  async function runProbe() {
+    setProbing(true);
+    setProbe(null);
+    try {
+      const result = await api.probeRelayEngine(wsId, engine);
+      setProbe(result);
+      await qc.invalidateQueries({ queryKey: runtimeModelsKeys.fleet(wsId) });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : t(($) => $.modelGateway.probe_failed));
+    } finally {
+      setProbing(false);
+    }
+  }
+
+  const probeSummary = (() => {
+    if (!probe) return null;
+    const total = probe.models.length;
+    const supported = probe.models.filter(
+      (model) => (model.thinking?.supported_levels.length ?? 0) > 0,
+    );
+    const failed = probe.models.filter((model) => model.thinking?.status === "error").length;
+    const levels = [...new Set(supported.flatMap((model) => model.thinking?.supported_levels ?? []))]
+      .map((level) => level.value);
+    const effort = supported.length > 0
+      ? t(($) => $.modelGateway.probe_effort_supported, {
+          levels: levels.join(", "),
+          supported: supported.length,
+          total,
+        })
+      : failed > 0
+        ? t(($) => $.modelGateway.probe_effort_error)
+        : t(($) => $.modelGateway.probe_effort_none);
+    return `${t(($) => $.modelGateway.probe_models, { count: total })} · ${effort}`;
+  })();
+
   return (
     <section className="space-y-3">
       <h3 className="text-sm font-semibold flex items-center gap-2">
@@ -552,7 +606,24 @@ function EngineSection({ engine, config, wsId }: { engine: Engine; config: Relay
               {engine === "claude" ? t(($) => $.modelGateway.claude_hint) : t(($) => $.modelGateway.codex_hint)}
             </p>
           </div>
+          {probe?.error ? (
+            <p className="text-xs text-destructive" role="alert">{probe.error}</p>
+          ) : null}
           <div className="flex items-center justify-end gap-2 pt-1">
+            {probeSummary ? (
+              <p className="mr-auto text-xs text-muted-foreground" role="status">{probeSummary}</p>
+            ) : null}
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={runProbe}
+              disabled={probing || !discoveryEnabled}
+              title={discoveryEnabled ? undefined : t(($) => $.modelGateway.probe_disabled)}
+            >
+              <Radar className="h-3 w-3" />
+              {probing ? t(($) => $.modelGateway.probing) : t(($) => $.modelGateway.probe)}
+            </Button>
             <Button size="sm" onClick={save} disabled={saving}>
               <Save className="h-3 w-3" />
               {saving ? t(($) => $.modelGateway.saving) : t(($) => $.modelGateway.save)}

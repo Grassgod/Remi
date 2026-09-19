@@ -176,6 +176,7 @@ export function workspaceCommandSpecs(): CommandSpec[] {
     scopedWrite("workspace.relay.discovery", ["workspace", "relay", "discovery"], "Update relay discovery settings", "/relay-config/discovery", "PUT"),
     scopedWrite("workspace.relay.update", ["workspace", "relay", "update"], "Update a relay engine", "/relay-config/:engine", "PUT", [refPositional("engine")]),
     scopedWrite("workspace.relay.reveal", ["workspace", "relay", "reveal"], "Reveal a relay engine credential", "/relay-config/:engine/reveal", "POST", [refPositional("engine")]),
+    scopedWrite("workspace.relay.probe", ["workspace", "relay", "probe"], "Probe a relay engine's gateway for its model catalog and reasoning levels", "/relay-config/:engine/probe", "POST", [refPositional("engine")]),
     scopedRead("workspace.bot-menu.get", ["workspace", "bot-menu", "get"], "Read the workspace Feishu bot menu", "/bot-menu"),
     scopedWrite(
       "workspace.bot-menu.update",

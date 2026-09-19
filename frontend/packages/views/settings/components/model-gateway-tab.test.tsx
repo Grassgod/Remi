@@ -22,6 +22,8 @@ const relayRef = vi.hoisted(() => ({
 const mockRefetchRelay = vi.hoisted(() => vi.fn());
 const mockUpdateRelay = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockSetDiscovery = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const mockProbeRelay = vi.hoisted(() => vi.fn());
+const mockInvalidateQueries = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockUpdateWorkspace = vi.hoisted(() => vi.fn());
 const mockSetQueryData = vi.hoisted(() => vi.fn());
 const workspaceRef = vi.hoisted(() => ({
@@ -47,7 +49,7 @@ vi.mock("@tanstack/react-query", () => ({
     }
     return { data: membersRef.current, isPending: membersRef.pending };
   },
-  useQueryClient: () => ({ setQueryData: mockSetQueryData, invalidateQueries: vi.fn() }),
+  useQueryClient: () => ({ setQueryData: mockSetQueryData, invalidateQueries: mockInvalidateQueries }),
 }));
 
 vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "workspace-1" }));
@@ -69,6 +71,7 @@ vi.mock("@multiremi/core/api", () => ({
     getRelayConfig: vi.fn(() => Promise.resolve(relayRef.current)),
     updateRelayConfig: mockUpdateRelay,
     setRelayDiscovery: mockSetDiscovery,
+    probeRelayEngine: mockProbeRelay,
     revealRelayToken: vi.fn(() => Promise.resolve("sk-revealed")),
     updateWorkspace: mockUpdateWorkspace,
   },
@@ -229,5 +232,80 @@ describe("ModelGatewayTab", () => {
 
     expect(screen.queryByText(/Only workspace owners and admins/)).not.toBeInTheDocument();
     expect(screen.getByTestId("model-gateway-skeleton")).toBeInTheDocument();
+  });
+
+  it("probes one engine on demand and refreshes the fleet model catalog", async () => {
+    mockProbeRelay.mockResolvedValue({
+      engine: "codex",
+      status: "ready",
+      error: null,
+      models: [
+        {
+          id: "gpt-6-astra",
+          label: "Astra",
+          thinking: { status: "supported", supported_levels: [{ value: "high", label: "High" }] },
+        },
+        { id: "gpt-6-luna", label: "Luna" },
+      ],
+      last_success_at: "2026-09-19T06:00:00.000Z",
+    });
+    const user = userEvent.setup();
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    const [, codexProbe] = screen.getAllByRole("button", { name: "Probe now" });
+    if (!codexProbe) throw new Error("Codex probe button not found");
+    await user.click(codexProbe);
+
+    await waitFor(() => expect(mockProbeRelay).toHaveBeenCalledWith("workspace-1", "codex"));
+    expect(await screen.findByText("2 models · effort high on 1/2 models")).toBeInTheDocument();
+    await waitFor(() => expect(mockInvalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["runtimes", "models", "fleet", "workspace-1"],
+    }));
+  });
+
+  it("reports a gateway-declared absence of reasoning levels without calling it a failure", async () => {
+    mockProbeRelay.mockResolvedValue({
+      engine: "claude",
+      status: "ready",
+      error: null,
+      models: [{ id: "deepseek-v4-flash", label: "DeepSeek V4 Flash" }],
+      last_success_at: "2026-09-19T06:00:00.000Z",
+    });
+    const user = userEvent.setup();
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    const [claudeProbe] = screen.getAllByRole("button", { name: "Probe now" });
+    if (!claudeProbe) throw new Error("Claude probe button not found");
+    await user.click(claudeProbe);
+
+    expect(await screen.findByText("1 model · gateway declares no reasoning levels")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("surfaces the server's sanitized probe error inline", async () => {
+    mockProbeRelay.mockResolvedValue({
+      engine: "claude",
+      status: "error",
+      error: "gateway HTTP 502",
+      models: [],
+      last_success_at: null,
+    });
+    const user = userEvent.setup();
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    const [claudeProbe] = screen.getAllByRole("button", { name: "Probe now" });
+    if (!claudeProbe) throw new Error("Claude probe button not found");
+    await user.click(claudeProbe);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("gateway HTTP 502");
+  });
+
+  it("disables probing while auto-discovery is off", () => {
+    relayRef.current = { ...relayRef.current, modelDiscovery: false };
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    for (const button of screen.getAllByRole("button", { name: "Probe now" })) {
+      expect(button).toBeDisabled();
+    }
   });
 });

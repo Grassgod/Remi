@@ -184,6 +184,94 @@ export function triggerGatewayDiscovery(store: MultiremiStore, workspaceId: stri
   for (const e of engines) void discoverGatewayModels(store, workspaceId, e).catch(() => {});
 }
 
+/**
+ * Snapshot projection returned by the explicit "probe now" button. `status`
+ * collapses the snapshot's two failure axes into what the operator needs to
+ * know: `error` means the last attempt failed (a previous success may still be
+ * listed), `ready` means a success was recorded, `unknown` means nothing ran.
+ */
+export interface GatewayProbeSnapshot {
+  engine: RelayEngine;
+  status: "ready" | "error" | "unknown";
+  error: string | null;
+  models: GatewayProbeModelResponse[];
+  last_success_at: string | null;
+}
+
+/** Browser wire shape for one probed model; mirrors the fleet catalog naming. */
+export interface GatewayProbeModelResponse {
+  id: string;
+  label: string;
+  thinking?: {
+    supported_levels: Array<{ value: string; label: string; description?: string }>;
+    default_level?: string;
+    status?: MultiremiRuntimeModelThinking["status"];
+    error?: string;
+  };
+}
+
+/** The snapshot stores `supportedLevels`; browser routes speak `supported_levels`. */
+function thinkingProbeResponse(thinking: MultiremiRuntimeModelThinking): GatewayProbeModelResponse["thinking"] {
+  const defaultLevel = thinking.defaultLevel ?? thinking.default_level;
+  return {
+    supported_levels: (thinking.supportedLevels ?? thinking.supported_levels ?? []).map((level) => ({
+      value: level.value,
+      label: level.label,
+      ...(level.description ? { description: level.description } : {}),
+    })),
+    ...(defaultLevel ? { default_level: defaultLevel } : {}),
+    ...(thinking.status ? { status: thinking.status } : {}),
+    ...(thinking.error ? { error: thinking.error } : {}),
+  };
+}
+
+/** Read the cached discovery result; never touches the network. */
+export function gatewayProbeSnapshot(
+  store: MultiremiStore,
+  workspaceId: string,
+  engine: RelayEngine,
+): GatewayProbeSnapshot {
+  const snapshot = store.getGatewayModels(workspaceId, engine);
+  return {
+    engine,
+    status: snapshot?.lastError ? "error" : snapshot?.lastSuccessAt ? "ready" : "unknown",
+    error: snapshot?.lastError ?? null,
+    models: (snapshot?.models ?? []).map((model) => ({
+      id: model.id,
+      label: model.label,
+      ...(model.thinking ? { thinking: thinkingProbeResponse(model.thinking) } : {}),
+    })),
+    last_success_at: snapshot?.lastSuccessAt ?? null,
+  };
+}
+
+const PROBE_TIMEOUT_MS = 8_000;
+
+/**
+ * Await one engine's discovery and answer with the resulting snapshot. Bounded
+ * exactly like `PUT /relay-config/:engine`: a slow gateway can't stall the
+ * request, and the discovery run finishes in the background. The discovery
+ * itself keeps its TTL / revision semantics — this only forces one run now.
+ */
+export async function probeGatewayModels(
+  store: MultiremiStore,
+  workspaceId: string,
+  engine: RelayEngine,
+  options: { httpGet?: HttpGet; timeoutMs?: number } = {},
+): Promise<GatewayProbeSnapshot> {
+  const { httpGet = defaultHttpGet, timeoutMs = PROBE_TIMEOUT_MS } = options;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      discoverGatewayModels(store, workspaceId, engine, httpGet).catch(() => {}),
+      new Promise<void>((resolve) => { timer = setTimeout(resolve, timeoutMs); }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  return gatewayProbeSnapshot(store, workspaceId, engine);
+}
+
 // Per (workspace,engine) backoff so a persistently-failing gateway isn't hammered by
 // every GET /api/models (singleflight-ish; the trigger is request-driven, not a loop).
 const discoveryAttempts = new WeakMap<MultiremiStore, Map<string, number>>();

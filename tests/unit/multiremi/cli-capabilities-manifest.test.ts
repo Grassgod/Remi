@@ -168,12 +168,19 @@ describe("CLI capabilities manifest", () => {
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 665,
+      mapped: 666,
       exempt: 91,
       missing: 0,
-      total: 756,
+      total: 757,
     });
     expect(manifest.max_planned_routes).toBe(0);
+    expect(manifest.routes["POST /api/workspaces/:id/relay-config/:engine/probe"])
+      .toEqual({ command: "workspace.relay.probe" });
+    expect(manifest.commands["workspace.relay.probe"]).toMatchObject({
+      command: "remi workspace relay probe",
+      mutation: "write",
+      output: ["table", "json", "jsonl"],
+    });
     expect(manifest.routes["POST /api/workspaces/:id/repos/:repositoryId/wiki/move"]).toEqual({ command: "wiki.repository.mv" });
     expect(manifest.routes["POST /api/workspaces/:id/repos/:repositoryId/wiki/merge"]).toEqual({ command: "wiki.repository.merge" });
     expect(manifest.routes["POST /api/workspaces/:id/repos/:repositoryId/wiki/restore"]).toEqual({ command: "wiki.repository.restore" });
