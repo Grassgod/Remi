@@ -42,7 +42,9 @@ const AGENT_FIELDS: readonly CliOptionSpec[] = [
   { name: "runtime", type: "string", valueName: "runtime-id", description: "Legacy Runtime execution target", conflictsWith: ["execution-group"] },
   { name: "execution-group", type: "string", valueName: "group-id", description: "Execution group", conflictsWith: ["runtime"] },
   { name: "model", type: "string", valueName: "model", description: "Agent model" },
+  { name: "fallback-model", type: "string", valueName: "model", description: "Backup model (empty string clears it)" },
   { name: "thinking-level", type: "string", valueName: "level", description: "Reasoning effort" },
+  { name: "fallback-thinking-level", type: "string", valueName: "level", description: "Backup model reasoning effort (empty string clears it)" },
   { name: "visibility", type: "string", valueName: "private|workspace", description: "Agent visibility" },
   { name: "max-concurrent-tasks", type: "integer", valueName: "n", description: "Maximum concurrent tasks" },
   { name: "issue-creation-requires-proposal", type: "boolean", description: "Require human approval before this agent can create Issues" },
@@ -507,7 +509,11 @@ function agentBody(invocation: CommandInvocation, creating: boolean): Record<str
     runtime_id: stringOption(invocation, "runtime") ?? undefined,
     execution_group_id: stringOption(invocation, "execution-group") ?? undefined,
     model: stringOption(invocation, "model") ?? undefined,
+    fallback_model: typeof invocation.options["fallback-model"] === "string"
+      ? invocation.options["fallback-model"].trim() : undefined,
     thinking_level: stringOption(invocation, "thinking-level") ?? undefined,
+    fallback_thinking_level: typeof invocation.options["fallback-thinking-level"] === "string"
+      ? invocation.options["fallback-thinking-level"].trim() : undefined,
     visibility: stringOption(invocation, "visibility") ?? undefined,
     max_concurrent_tasks: integerOption(invocation, "max-concurrent-tasks") ?? undefined,
     issue_creation_requires_proposal: booleanOption(invocation, "issue-creation-requires-proposal") ?? undefined,

@@ -2,7 +2,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
 import type {
   Agent,
   FleetModelsResponse,
@@ -51,12 +51,14 @@ vi.mock("./model-dropdown", () => ({
   ModelDropdown: ({
     value,
     onChange,
+    fallback,
   }: {
     value: string;
     onChange: (value: string) => void;
+    fallback?: boolean;
   }) => (
     <input
-      aria-label="Model"
+      aria-label={fallback ? "Fallback model" : "Model"}
       value={value}
       onChange={(event) => onChange(event.target.value)}
     />
@@ -202,7 +204,12 @@ describe("CreateAgentDialog (execution targets)", () => {
     const { onCreate } = renderDialog(makeTemplate({ provider: "codex", model: "inventory-only", thinking_level: "saved-effort" }));
     expect(await screen.findByText(model_catalog_status === "unknown" ? "Execution capability unknown · Refreshing catalog" : "Not in execution catalog · Cannot run")).toBeInTheDocument();
     expect(screen.getByLabelText("Model")).toHaveValue("inventory-only");
-    expect(screen.getByRole("combobox", { name: "Reasoning effort" })).toHaveValue("saved-effort");
+    // The model declares no levels, so the draft's effort is no longer an
+    // editable picker — it stays visible as a read-only value. The model is
+    // not editable here either, so no clear control is offered.
+    expect(screen.queryByRole("combobox", { name: "Reasoning effort" })).toBeNull();
+    expect(screen.getByText("saved-effort")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Clear the override/i })).toBeNull();
     expect(createButton()).toBeDisabled();
     fireEvent.click(createButton());
     expect(onCreate).not.toHaveBeenCalled();
@@ -213,7 +220,8 @@ describe("CreateAgentDialog (execution targets)", () => {
     const { onCreate } = renderDialog(makeTemplate({ provider: "codex", model: "inventory-only", thinking_level: "saved-effort" }));
     expect(await screen.findByText("Not in execution catalog · Cannot run")).toBeInTheDocument();
     expect(screen.getByLabelText("Model")).toHaveValue("inventory-only");
-    expect(screen.getByRole("combobox", { name: "Reasoning effort" })).toHaveValue("saved-effort");
+    expect(screen.queryByRole("combobox", { name: "Reasoning effort" })).toBeNull();
+    expect(screen.getByText("saved-effort")).toBeInTheDocument();
     const button = createButton();
     expect(button).toBeDisabled();
     fireEvent.click(button);
@@ -271,6 +279,37 @@ describe("CreateAgentDialog (execution targets)", () => {
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
     expect(onCreate.mock.calls[0]?.[0]).toMatchObject({ execution_group_id: "group-codex", provider: "codex", model: undefined });
     expect(onCreate.mock.calls[0]?.[0]).not.toHaveProperty("thinking_level");
+  });
+
+  it("saves a distinct fallback with its own supported reasoning effort", async () => {
+    mockListFleetModels.mockResolvedValue(fleetWithCapacity({ claude: 2 }, { claude: CLAUDE_MODELS }));
+    const { onCreate } = renderDialog();
+    fireEvent.change(screen.getByPlaceholderText(/e\.g\./i), { target: { value: "Research" } });
+    await waitFor(() => expect(mockListFleetModels).toHaveBeenCalled());
+    fireEvent.change(screen.getByLabelText("Fallback model"), { target: { value: "claude-haiku" } });
+    fireEvent.change(screen.getByRole("group", { name: "Fallback reasoning effort" }).querySelector("select")!, { target: { value: "low" } });
+    fireEvent.click(createButton());
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0]?.[0]).toMatchObject({ fallback_model: "claude-haiku", fallback_thinking_level: "low" });
+  });
+
+  it("blocks a fallback matching the catalog default and clears fallback on target change", async () => {
+    mockListFleetModels.mockResolvedValue(fleetWithCapacity({ claude: 2, codex: 1 }, { claude: CLAUDE_MODELS }));
+    const { onCreate } = renderDialog(makeTemplate({ provider: "claude", model: "", fallback_model: "claude-sonnet", fallback_thinking_level: "high" }));
+    await waitFor(() => expect(screen.getByText("Must differ from the primary model")).toBeInTheDocument());
+    expect(createButton()).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "codex" }));
+    fireEvent.click(createButton());
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0]?.[0]).toMatchObject({ fallback_model: undefined, fallback_thinking_level: undefined });
+  });
+
+  it("rejects a fallback effort unsupported by its own model", async () => {
+    mockListFleetModels.mockResolvedValue(fleetWithCapacity({ claude: 2 }, { claude: CLAUDE_MODELS }));
+    const { onCreate } = renderDialog(makeTemplate({ provider: "claude", model: "claude-sonnet", fallback_model: "claude-haiku", fallback_thinking_level: "high" }));
+    await waitFor(() => expect(mockListFleetModels).toHaveBeenCalled());
+    expect(createButton()).toBeDisabled();
+    expect(onCreate).not.toHaveBeenCalled();
   });
 
   it("duplicate mode inherits the template's engine", async () => {
@@ -382,7 +421,7 @@ describe("CreateAgentDialog (execution targets)", () => {
     expect(onCreate.mock.calls[0]?.[0]).not.toHaveProperty("thinking_level");
   });
 
-  it("shows a duplicated orphan effort and lets the user explicitly clear it", async () => {
+  it("shows a duplicated orphan effort read-only and clears it with the explicit control", async () => {
     const { onCreate } = renderDialog(
       makeTemplate({
         model: "claude-retired",
@@ -390,14 +429,65 @@ describe("CreateAgentDialog (execution targets)", () => {
       }),
     );
 
-    const effort = await screen.findByRole("combobox", {
-      name: "Reasoning effort",
-    });
-    expect((effort as HTMLSelectElement).value).toBe("xhigh");
-    fireEvent.change(effort, { target: { value: "" } });
+    // No editable picker for a model that declares no levels: the stored
+    // effort is displayed read-only next to a clear control.
+    expect(await screen.findByText("xhigh")).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Reasoning effort" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Clear the override/i }));
     fireEvent.click(createButton());
 
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
     expect(onCreate.mock.calls[0]?.[0]).not.toHaveProperty("thinking_level");
+  });
+
+  it("keeps the editable picker when the catalog load failed instead of treating it as level-less", async () => {
+    // A failed load is not an authoritative "no levels" verdict, so the picker
+    // (and its clear row) must stay reachable for the saved effort.
+    mockListFleetModels.mockRejectedValue(new Error("catalog unreachable"));
+    renderDialog(makeTemplate({ provider: "claude", model: "claude-gateway-only", thinking_level: "high" }));
+
+    const effort = await screen.findByRole("combobox", { name: "Reasoning effort" });
+    expect((effort as HTMLSelectElement).value).toBe("high");
+    expect(screen.getByText("Reasoning capability loading failed")).toBeInTheDocument();
+  });
+
+  it("keeps the editable fallback picker when the catalog load failed", async () => {
+    mockListFleetModels.mockRejectedValue(new Error("catalog unreachable"));
+    renderDialog(makeTemplate({
+      provider: "claude",
+      model: "claude-sonnet",
+      fallback_model: "claude-gateway-only",
+      fallback_thinking_level: "high",
+    }));
+
+    const fallbackGroup = await screen.findByRole("group", { name: "Fallback reasoning effort" });
+    // Wait for the failed load to settle: only then is the picker guaranteed
+    // to be the load-failure branch rather than the still-loading state.
+    expect(await within(fallbackGroup).findByText("Reasoning capability loading failed")).toBeInTheDocument();
+    const effort = fallbackGroup.querySelector("select");
+    expect(effort).not.toBeNull();
+    expect((effort as HTMLSelectElement).value).toBe("high");
+  });
+
+  it("shows a level-less fallback effort read-only and clears it", async () => {
+    mockListFleetModels.mockResolvedValue(fleetWithCapacity({ claude: 2 }, { claude: CLAUDE_MODELS }));
+    const { onCreate } = renderDialog(makeTemplate({
+      provider: "claude",
+      model: "claude-sonnet",
+      fallback_model: "claude-retired",
+      fallback_thinking_level: "xhigh",
+    }));
+
+    const fallbackGroup = await screen.findByRole("group", { name: "Fallback reasoning effort" });
+    expect(await screen.findByText("xhigh")).toBeInTheDocument();
+    expect(fallbackGroup.querySelector("select")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Clear the override/i }));
+    fireEvent.click(createButton());
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0]?.[0]).toMatchObject({ fallback_model: "claude-retired" });
+    // Cleared: the create payload omits the fallback effort (undefined keys are
+    // dropped on the wire), so the stored orphan value can no longer survive.
+    expect(onCreate.mock.calls[0]?.[0].fallback_thinking_level).toBeUndefined();
   });
 });

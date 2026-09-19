@@ -60,6 +60,27 @@ export interface GatewayModelsSnapshot {
   lastError: string | null;
 }
 
+/**
+ * An administrator's explicit reasoning-level declaration for one gateway model.
+ *
+ * This is a first-class capability source, not a borrowed one: no engine publishes
+ * levels for these models (the gateway `/v1/models` inventory carries ids and
+ * labels only), so an operator stating them is the only way the model can become
+ * selectable at a chosen effort. It is stored per workspace × engine × model,
+ * apart from the discovery snapshot, so re-probing can never erase it.
+ *
+ * `levels` is always non-empty — clearing a declaration deletes the row rather
+ * than storing an empty set, because an empty set would read as "unsupported"
+ * and silently reintroduce the MUL-338 failure.
+ */
+export interface GatewayModelReasoningDecl {
+  modelId: string;
+  levels: string[];
+  defaultLevel?: string;
+  updatedBy: string | null;
+  updatedAt: string;
+}
+
 export class WorkspaceDaemonRetirementRequiredError extends Error {
   readonly code = "daemon_retirement_required";
 
@@ -882,6 +903,77 @@ export class WorkspacesRepo {
         [workspaceId, engine, toJson(models), sourceRevision, lastSuccessAt, input.error ?? null, nativeCatalogStatus, now],
       );
     })();
+  }
+
+  // ── Model gateway: administrator-declared reasoning levels ─────
+
+  listGatewayModelReasoning(workspaceId: string, engine: RelayEngine): GatewayModelReasoningDecl[] {
+    const rows = this.ctx.db
+      .query("SELECT * FROM multiremi_gateway_model_reasoning WHERE workspace_id = ? AND engine = ? ORDER BY model_id")
+      .all(workspaceId, engine) as Row[];
+    return rows.map(row => this.gatewayModelReasoningFromRow(row));
+  }
+
+  getGatewayModelReasoning(workspaceId: string, engine: RelayEngine, modelId: string): GatewayModelReasoningDecl | null {
+    const row = this.ctx.db
+      .query("SELECT * FROM multiremi_gateway_model_reasoning WHERE workspace_id = ? AND engine = ? AND model_id = ?")
+      .get(workspaceId, engine, modelId) as Row | null;
+    return row ? this.gatewayModelReasoningFromRow(row) : null;
+  }
+
+  /**
+   * Upsert one declaration. An empty `levels` is a delete, not a stored empty
+   * set: persisting "no levels" would read as an authoritative `unsupported`
+   * anywhere the declaration is consulted and re-create the MUL-338 queue hang.
+   */
+  saveGatewayModelReasoning(
+    workspaceId: string,
+    engine: RelayEngine,
+    input: { modelId: string; levels: string[]; defaultLevel?: string | null; updatedBy?: string | null },
+  ): GatewayModelReasoningDecl | null {
+    const modelId = input.modelId.trim();
+    if (!modelId) throw new Error("model id is required");
+    if (input.levels.length === 0) {
+      this.deleteGatewayModelReasoning(workspaceId, engine, modelId);
+      return null;
+    }
+    const now = nowIso();
+    const defaultLevel = input.defaultLevel ? input.defaultLevel : null;
+    this.ctx.db.run(
+      `INSERT INTO multiremi_gateway_model_reasoning (workspace_id, engine, model_id, levels, default_level, updated_by, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(workspace_id, engine, model_id) DO UPDATE SET
+         levels = excluded.levels,
+         default_level = excluded.default_level,
+         updated_by = excluded.updated_by,
+         updated_at = excluded.updated_at`,
+      [workspaceId, engine, modelId, toJson(input.levels), defaultLevel, input.updatedBy ?? null, now],
+    );
+    return this.getGatewayModelReasoning(workspaceId, engine, modelId);
+  }
+
+  deleteGatewayModelReasoning(workspaceId: string, engine: RelayEngine, modelId: string): boolean {
+    const existing = this.getGatewayModelReasoning(workspaceId, engine, modelId);
+    if (!existing) return false;
+    this.ctx.db.run(
+      "DELETE FROM multiremi_gateway_model_reasoning WHERE workspace_id = ? AND engine = ? AND model_id = ?",
+      [workspaceId, engine, modelId],
+    );
+    return true;
+  }
+
+  private gatewayModelReasoningFromRow(row: Row): GatewayModelReasoningDecl {
+    const levels = parseJson<string[]>(row.levels, []).filter(level => typeof level === "string" && level.length > 0);
+    const defaultLevel = nullableString(row.default_level);
+    return {
+      modelId: String(row.model_id),
+      levels,
+      // A default that is not in the declared set is dropped rather than surfaced:
+      // the pair is written together, so a mismatch can only be stale data.
+      ...(defaultLevel && levels.includes(defaultLevel) ? { defaultLevel } : {}),
+      updatedBy: nullableString(row.updated_by),
+      updatedAt: String(row.updated_at ?? ""),
+    };
   }
 
   createWorkspaceInvitation(workspaceId: string, input: CreateWorkspaceInvitationInput, inviterUserId?: string | null): MultiremiWorkspaceInvitation {

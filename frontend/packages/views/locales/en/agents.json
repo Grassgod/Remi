@@ -129,6 +129,20 @@
     "agent_restored_toast": "Agent restored",
     "restore_failed_toast": "Failed to restore agent"
   },
+  "fallback": {
+    "model_label": "Fallback model",
+    "thinking_label": "Fallback reasoning effort",
+    "description": "Only takes over the current task when the primary model's gateway resources are unavailable.",
+    "unconfigured": "Not configured",
+    "same_as_primary": "Must differ from the primary model",
+    "clear": "Remove fallback model",
+    "actual_model": "Execution model",
+    "switched": "Switched from primary to fallback",
+    "switch_count": "{{count}} switch",
+    "reason_gateway": "Gateway resources unavailable",
+    "reason_no_account": "No available gateway account",
+    "reason_unknown": "Resource unavailable"
+  },
   "inspector": {
     "section_properties": "Properties",
     "section_details": "Details",

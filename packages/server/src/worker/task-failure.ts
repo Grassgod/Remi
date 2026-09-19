@@ -6,35 +6,18 @@ const codexSemanticInactivityMarker = "codex semantic inactivity timeout";
 const codexFirstTurnNoProgressMarker = "codex app-server no progress timeout";
 const poisonedOutputMaxLen = 320;
 
-export const TaskFailureReason = {
-  QueuedExpired: "queued_expired",
-  RuntimeOffline: "runtime_offline",
-  RuntimeRecovery: "runtime_recovery",
-  Timeout: "timeout",
-  IterationLimit: "iteration_limit",
-  AgentBlocked: "agent_blocked",
-  ApiInvalidRequest: "api_invalid_request",
-  AgentFallbackMessage: "agent_fallback_message",
-  CodexSemanticInactivity: "codex_semantic_inactivity",
-  AgentProviderAuthOrAccess: "agent_error.provider_auth_or_access",
-  AgentProviderQuotaLimit: "agent_error.provider_quota_limit",
-  AgentProviderCapacityOrRateLimit: "agent_error.provider_capacity_or_rate_limit",
-  AgentProviderServerError: "agent_error.provider_server_error",
-  AgentProviderNetwork: "agent_error.provider_network",
-  AgentProcessFailure: "agent_error.process_failure",
-  AgentEmptyOrUnparseableOutput: "agent_error.empty_or_unparseable_output",
-  AgentTimeout: "agent_error.agent_timeout",
-  AgentContextOverflow: "agent_error.context_overflow",
-  AgentStaleSession: "agent_error.stale_session",
-  AgentMissingConfig: "agent_error.missing_config",
-  AgentModelNotFoundOrUnavailable: "agent_error.model_not_found_or_unavailable",
-  AgentRuntimeVersionUnsupported: "agent_error.runtime_version_unsupported",
-  AgentRuntimeMissingExecutable: "agent_error.runtime_missing_executable",
-  RepoSyncFailed: "repo_sync_failed",
-  AgentUnknown: "agent_error.unknown",
-} as const;
+import {
+  TaskFailureReason,
+  type TaskFailureReasonValue,
+} from "@shared/contracts/task-failure-reasons.js";
 
-export type TaskFailureReasonValue = typeof TaskFailureReason[keyof typeof TaskFailureReason];
+// Re-exported so the reason catalog keeps its historical import path here.
+export {
+  TaskFailureReason,
+  MODEL_FALLBACK_FAILURE_REASONS,
+  TRANSIENT_RETRY_FAILURE_REASONS,
+} from "@shared/contracts/task-failure-reasons.js";
+export type { TaskFailureReasonValue } from "@shared/contracts/task-failure-reasons.js";
 
 export function classifyTaskFailure(rawError: string): TaskFailureReasonValue {
   const trimmed = String(rawError ?? "").trim();
@@ -108,6 +91,23 @@ export function classifyTaskFailure(rawError: string): TaskFailureReasonValue {
     "quota",
   )) {
     return TaskFailureReason.AgentProviderQuotaLimit;
+  }
+
+  // The gateway's account pool is empty for this model. This is the marker
+  // MUL-336 switches models on, so it must be recognised BEFORE the generic
+  // 5xx rule — "503 No available accounts" would otherwise degrade into an
+  // ambiguous provider_server_error and never trigger a fallback. The phrases
+  // are deliberately account-pool specific: a bare 503 stays ambiguous.
+  if (containsAny(
+    lower,
+    "no available accounts",
+    "no available account",
+    "no accounts available",
+    "account pool exhausted",
+    "no available channel",
+    "无可用账号",
+  )) {
+    return TaskFailureReason.AgentProviderNoAvailableAccount;
   }
 
   if (containsAny(lower, "429", "rate limit", "overloaded", "529", "no capacity available")) {

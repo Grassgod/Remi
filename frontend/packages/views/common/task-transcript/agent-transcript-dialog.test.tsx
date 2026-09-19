@@ -81,6 +81,21 @@ function renderTranscript(
 }
 
 describe("transcript pending task state", () => {
+  it("shows the task execution model beside its usage, including the fallback cause", () => {
+    renderTranscript([], { task: {
+      usage: [{ model: "primary", inputTokens: 240, outputTokens: 80 }],
+      executionModel: "deepseek-flash", executionThinkingLevel: "high", fallbackSwitched: true,
+      switchReason: "gateway_resource:agent_error.provider_no_available_account;provider_session_reset",
+    } });
+    expect(screen.getByText("deepseek-flash")).toBeInTheDocument();
+    expect(screen.queryByText("primary")).toBeNull();
+    expect(screen.getByText(/No available gateway account/)).toBeInTheDocument();
+    expect(screen.getByText(/1 switch/)).toBeInTheDocument();
+  });
+  it("uses legacy task usage as the model when no execution snapshot exists", () => {
+    renderTranscript([], { task: { usage: [{ model: "observed-backup", inputTokens: 7 }] } });
+    expect(screen.getByText("observed-backup")).toBeInTheDocument();
+  });
   it("shows a queued task as waiting for a runtime, even if a caller marks the dialog live", () => {
     renderTranscript([], { task: { status: "queued" }, isLive: true });
 

@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { ChevronDown, Cpu, Loader2, Plus, Check } from "lucide-react";
-import { isModelCatalogRestricted, isModelExecutionUnknown, isModelUnavailable, useExecutionTargetModels } from "@multiremi/core/runtimes";
+import { isFallbackModelUnavailable, isModelCatalogRestricted, isModelExecutionUnknown, isModelUnavailable, useExecutionTargetModels } from "@multiremi/core/runtimes";
 import {
   Popover,
   PopoverTrigger,
@@ -21,6 +21,8 @@ export function ModelDropdown({
   provider,
   value,
   onChange,
+  fallback = false,
+  excludedModel,
 }: {
   wsId: string;
   runtimeId?: string | null;
@@ -29,6 +31,8 @@ export function ModelDropdown({
   provider: string;
   value: string;
   onChange: (value: string) => void;
+  fallback?: boolean;
+  excludedModel?: string;
 }) {
   const { t } = useT("agents");
   const [open, setOpen] = useState(false);
@@ -51,29 +55,33 @@ export function ModelDropdown({
     (m) => m.id === trimmedSearch || m.label === trimmedSearch,
   );
   const authoritative = isModelCatalogRestricted(provider, models, modelCatalogStatus);
-  const unknown = isModelExecutionUnknown(provider, value, models, modelCatalogStatus);
-  const unavailable = isModelUnavailable(provider, value, models, modelCatalogStatus);
-  const canCreate = !isLoading && !authoritative && trimmedSearch.length > 0 && !exactMatch;
+  const unknown = !!value && isModelExecutionUnknown(provider, value, models, modelCatalogStatus);
+  const isUnavailable = (id: string) => fallback
+    ? isFallbackModelUnavailable(provider, id, models, modelCatalogStatus)
+    : isModelUnavailable(provider, id, models, modelCatalogStatus);
+  const unavailable = isUnavailable(value);
+  const canCreate = !isLoading && !authoritative && trimmedSearch.length > 0 && !exactMatch && trimmedSearch !== excludedModel && !isUnavailable(trimmedSearch);
 
   const select = (id: string) => {
-    if (isModelUnavailable(provider, id, models, modelCatalogStatus)) return;
+    if (id && (id === excludedModel || isUnavailable(id))) return;
     onChange(id);
     setOpen(false);
     setSearch("");
   };
 
-  const triggerLabel = value || t(($) => $.model_dropdown.default_provider);
+  const triggerLabel = value || (fallback ? t(($) => $.fallback.unconfigured) : t(($) => $.model_dropdown.default_provider));
 
   return (
     <div className="flex flex-col min-w-0">
       <div className="flex h-6 items-center justify-between">
-        <Label className="text-xs text-muted-foreground">{t(($) => $.model_dropdown.label)}</Label>
+        <Label className="text-xs text-muted-foreground">{fallback ? t(($) => $.fallback.model_label) : t(($) => $.model_dropdown.label)}</Label>
         {isError && (
           <span className="text-xs text-muted-foreground">{t(($) => $.model_dropdown.discovery_failed)}</span>
         )}
       </div>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger
+          aria-label={fallback ? t(($) => $.fallback.model_label) : undefined}
           // Model routing has no Runtime or group binding; the fleet
           // catalog still answers for the provider, so only a missing
           // provider disables the dropdown.
@@ -121,7 +129,8 @@ export function ModelDropdown({
                 <button
                   type="button"
                   key={m.id}
-                  disabled={isModelUnavailable(provider, m.id, models, modelCatalogStatus)}
+                  disabled={m.id === excludedModel || isUnavailable(m.id)}
+                  title={m.id === excludedModel ? t(($) => $.fallback.same_as_primary) : undefined}
                   onClick={() => select(m.id)}
                   className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                     m.id === value ? "bg-accent" : "hover:bg-accent/50"
@@ -134,7 +143,9 @@ export function ModelDropdown({
                         {m.id}
                       </div>
                     )}
-                    {isModelUnavailable(provider, m.id, models, modelCatalogStatus) && (
+                    {m.id === excludedModel ? (
+                      <div className="text-xs text-muted-foreground">{t(($) => $.fallback.same_as_primary)}</div>
+                    ) : isUnavailable(m.id) && (
                       <div className="text-xs text-muted-foreground">
                         {isModelExecutionUnknown(provider, m.id, models, modelCatalogStatus)
                           ? t(($) => $.pickers.model_execution_unknown) : t(($) => $.pickers.model_unavailable)}
@@ -172,7 +183,7 @@ export function ModelDropdown({
                 onClick={() => select("")}
                 className="mt-1 flex w-full items-center gap-2 border-t border-border px-3 py-2 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50"
               >
-                {t(($) => $.model_dropdown.clear_full)}
+                {fallback ? t(($) => $.fallback.clear) : t(($) => $.model_dropdown.clear_full)}
               </button>
             )}
           </div>

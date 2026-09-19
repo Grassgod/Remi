@@ -187,6 +187,15 @@ export interface AgentTask {
     cacheWriteTokens?: number;
     totalTokens?: number;
   }>;
+  /** Task-local execution overrides; never infer a switched task from today's Agent config. */
+  executionModel?: string | null;
+  execution_model?: string | null;
+  executionThinkingLevel?: string | null;
+  execution_thinking_level?: string | null;
+  fallbackSwitched?: boolean;
+  fallback_switched?: boolean;
+  switchReason?: string | null;
+  switch_reason?: string | null;
 }
 
 export interface TaskPromptArtifact {
@@ -256,6 +265,10 @@ export interface Agent {
   status: AgentStatus;
   max_concurrent_tasks: number;
   model: string;
+  fallbackModel?: string | null;
+  fallback_model?: string | null;
+  fallbackThinkingLevel?: string | null;
+  fallback_thinking_level?: string | null;
   /**
    * Runtime-native reasoning/effort token (e.g. Claude's
    * `low|medium|high|xhigh|max`, Codex's
@@ -306,6 +319,8 @@ export interface CreateAgentRequest {
   visibility?: AgentVisibility;
   max_concurrent_tasks?: number;
   model?: string;
+  fallback_model?: string | null;
+  fallback_thinking_level?: string | null;
   /** Optional runtime-native reasoning/effort token. See `Agent.thinking_level`. */
   thinking_level?: string;
   /** Optional template slug used by the onboarding agent picker. Surfaced
@@ -357,6 +372,8 @@ export interface CreateAgentFromTemplateRequest {
   /** Execution target; see CreateAgentRequest.runtime_id. */
   runtime_id?: string;
   model?: string;
+  fallback_model?: string | null;
+  fallback_thinking_level?: string | null;
   visibility?: AgentVisibility;
   max_concurrent_tasks?: number;
   /** Optional overrides applied to the template before creation. nil/omit
@@ -421,6 +438,9 @@ export interface UpdateAgentRequest {
   status?: AgentStatus;
   max_concurrent_tasks?: number;
   model?: string;
+  /** Omit to preserve; empty string clears. */
+  fallback_model?: string | null;
+  fallback_thinking_level?: string | null;
   /**
    * Runtime-native reasoning/effort token. Tri-state semantics (MUL-2339):
    *   - field omitted → no change

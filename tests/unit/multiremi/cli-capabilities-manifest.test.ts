@@ -168,15 +168,32 @@ describe("CLI capabilities manifest", () => {
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 664,
+      mapped: 668,
       exempt: 91,
       missing: 0,
-      total: 755,
+      total: 759,
     });
     expect(manifest.max_planned_routes).toBe(0);
+    expect(manifest.routes["POST /api/workspaces/:id/relay-config/:engine/probe"])
+      .toEqual({ command: "workspace.relay.probe" });
+    expect(manifest.commands["workspace.relay.probe"]).toMatchObject({
+      command: "remi workspace relay probe",
+      mutation: "write",
+      output: ["table", "json", "jsonl"],
+    });
+    expect(manifest.routes["GET /api/workspaces/:id/relay-config/:engine/reasoning-levels"])
+      .toEqual({ command: "workspace.relay.reasoning-levels.get" });
+    expect(manifest.routes["PUT /api/workspaces/:id/relay-config/:engine/reasoning-levels"])
+      .toEqual({ command: "workspace.relay.reasoning-levels.update" });
+    expect(manifest.commands["workspace.relay.reasoning-levels.update"]).toMatchObject({
+      command: "remi workspace relay reasoning-levels update",
+      mutation: "write",
+      output: ["table", "json", "jsonl"],
+    });
     expect(manifest.routes["POST /api/workspaces/:id/repos/:repositoryId/wiki/move"]).toEqual({ command: "wiki.repository.mv" });
     expect(manifest.routes["POST /api/workspaces/:id/repos/:repositoryId/wiki/merge"]).toEqual({ command: "wiki.repository.merge" });
     expect(manifest.routes["POST /api/workspaces/:id/repos/:repositoryId/wiki/restore"]).toEqual({ command: "wiki.repository.restore" });
+    expect(manifest.routes["POST /api/workspaces/:id/repos/:repositoryId/wiki/repair-log"]).toEqual({ command: "wiki.repository.repair-log" });
     expect(manifest.routes["POST /api/workspaces/:id/repos/:repositoryId/wiki/outcome"]).toEqual({ command: "wiki.repository.outcome" });
     expect(manifest.commands["wiki.repository.outcome"]?.auth).toEqual(["task"]);
     expect(manifest.routes["GET /api/sessions/:sessionId/inherited-context"])

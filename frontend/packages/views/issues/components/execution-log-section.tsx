@@ -6,6 +6,8 @@ import { Ban, CheckCircle2, ChevronRight, Loader2, RotateCcw, Square, XCircle } 
 import { toast } from "sonner";
 import { api } from "@multiremi/core/api";
 import { issueKeys } from "@multiremi/core/issues/queries";
+import { useWorkspaceId } from "@multiremi/core/hooks";
+import { agentListOptions } from "@multiremi/core/workspace/queries";
 import type { AgentTask, TaskFailureReason } from "@multiremi/core/types";
 import { useTimeAgo } from "../../i18n";
 import {
@@ -15,6 +17,8 @@ import {
 } from "@multiremi/ui/components/ui/tooltip";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { TranscriptButton } from "../../common/task-transcript";
+import { usageSnapshotFromTask } from "../../common/task-transcript/event-format";
+import { ExecutionModelInfo } from "../../common/task-transcript/execution-model-info";
 import { failureReasonLabel } from "../../agents/components/tabs/task-failure";
 import { useT } from "../../i18n";
 import { TerminateTaskConfirmDialog } from "./terminate-task-confirm-dialog";
@@ -60,6 +64,9 @@ export function ExecutionLogSection({ issueId }: ExecutionLogSectionProps) {
   const { t } = useT("issues");
   const [open, setOpen] = useState(true);
   const [showPast, setShowPast] = useState(false);
+  const wsId = useWorkspaceId();
+  const { data: agents = [] } = useQuery({ ...agentListOptions(wsId ?? ""), enabled: !!wsId });
+  const agentById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents]);
 
   // Cache key registered in `issueKeys.tasks` (packages/core/issues/queries.ts)
   // so the global useRealtimeSync `task:` prefix path invalidates it via
@@ -137,7 +144,7 @@ export function ExecutionLogSection({ issueId }: ExecutionLogSectionProps) {
       {open && (
         <div className="space-y-0.5 pl-2">
           {activeTasks.map((task) => (
-            <ActiveRow key={task.id} task={task} issueId={issueId} />
+            <ActiveRow key={task.id} task={task} issueId={issueId} agentModel={agentById.get(task.agent_id)?.model} agentThinkingLevel={agentById.get(task.agent_id)?.thinking_level} />
           ))}
 
           {pastTasks.length > 0 && (
@@ -162,7 +169,7 @@ export function ExecutionLogSection({ issueId }: ExecutionLogSectionProps) {
               {showPast && (
                 <div className="mt-0.5 space-y-0.5">
                   {pastTasks.map((task) => (
-                    <PastRow key={task.id} task={task} issueId={issueId} />
+                    <PastRow key={task.id} task={task} issueId={issueId} agentModel={agentById.get(task.agent_id)?.model} agentThinkingLevel={agentById.get(task.agent_id)?.thinking_level} />
                   ))}
                 </div>
               )}
@@ -245,7 +252,7 @@ function useStatusLabel(status: AgentTask["status"]): string {
   }
 }
 
-function ActiveRow({ task, issueId }: { task: AgentTask; issueId: string }) {
+function ActiveRow({ task, issueId, agentModel, agentThinkingLevel }: { task: AgentTask; issueId: string; agentModel?: string; agentThinkingLevel?: string }) {
   const { t } = useT("issues");
   const [cancelling, setCancelling] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -276,7 +283,7 @@ function ActiveRow({ task, issueId }: { task: AgentTask; issueId: string }) {
 
   return (
     <RowShell task={task}>
-      <TriggerText text={trigger} />
+      <TriggerText text={trigger} task={task} agentModel={agentModel} agentThinkingLevel={agentThinkingLevel} />
       <RowStatus title={label}>
         {task.status === "running" ? (
           <>
@@ -334,7 +341,7 @@ function ActiveRow({ task, issueId }: { task: AgentTask; issueId: string }) {
 
 // ─── Past row ──────────────────────────────────────────────────────────────
 
-function PastRow({ task, issueId }: { task: AgentTask; issueId: string }) {
+function PastRow({ task, issueId, agentModel, agentThinkingLevel }: { task: AgentTask; issueId: string; agentModel?: string; agentThinkingLevel?: string }) {
   const { t } = useT("issues");
   const timeAgo = useTimeAgo();
   const [retrying, setRetrying] = useState(false);
@@ -370,7 +377,7 @@ function PastRow({ task, issueId }: { task: AgentTask; issueId: string }) {
 
   return (
     <RowShell task={task}>
-      <TriggerText text={trigger} />
+      <TriggerText text={trigger} task={task} agentModel={agentModel} agentThinkingLevel={agentThinkingLevel} />
       <RowStatus title={failureLabel ?? label}>
         <TaskStatusIcon status={task.status} />
         <span className="sr-only">{failureLabel ?? label}</span>
@@ -431,8 +438,11 @@ function RowShell({
   );
 }
 
-function TriggerText({ text }: { text: string }) {
-  return <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{text}</span>;
+function TriggerText({ text, task, agentModel, agentThinkingLevel }: { text: string; task: AgentTask; agentModel?: string; agentThinkingLevel?: string }) {
+  return <span className="min-w-0 flex-1 text-xs text-muted-foreground">
+    <span className="block truncate">{text}</span>
+    <ExecutionModelInfo task={task} usageModel={usageSnapshotFromTask(task)?.model} agentModel={agentModel} agentThinkingLevel={agentThinkingLevel} />
+  </span>;
 }
 
 function RowStatus({

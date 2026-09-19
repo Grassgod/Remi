@@ -1,6 +1,6 @@
-import { catalogAllowsModel, runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
+import { createLogger } from "@shared/logger.js";
+import { catalogAllowsModel, modelThinkingState, providerDeclaresReasoningLevels, runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
 import { runtimeConnectionModels } from "@multiremi/contracts/runtime-connection";
-import { modelThinkingLevels } from "@multiremi/contracts/model-thinking.js";
 import { syncRuntimeExecutionGroups, runtimeExecutionGroupId } from "@multiremi/store/execution-groups.js";
 import { WorkspacesRepo } from "@multiremi/store/repos/workspaces-repo.js";
 // Runtimes domain (runtime registration/lifecycle, models, and the five daemon async-request
@@ -101,6 +101,24 @@ import {
 } from "@multiremi/contracts/types.js";
 
 type Row = Record<string, unknown>;
+
+const log = createLogger("runtimes");
+
+// `runtimeSupportsAgentModel` runs per Runtime per queued task (claim, capability
+// sweep, repool), so an unconditional log would flood. The decision itself is
+// silent by design — this is the audit trail that says *why* a configured effort
+// was ignored, keyed so each (provider, model, level) combination is reported
+// once per process.
+const reportedDroppedEfforts = new Set<string>();
+
+function logEffortNotApplicable(provider: string, runtimeId: string, model: string, level: string): void {
+  const key = `${provider}\0${model}\0${level}`;
+  if (reportedDroppedEfforts.has(key)) return;
+  // Bounded: a workspace with many aliases must not grow this without limit.
+  if (reportedDroppedEfforts.size > 500) reportedDroppedEfforts.clear();
+  reportedDroppedEfforts.add(key);
+  log.info(`ignoring reasoning level "${level}" for ${provider} model "${model}": the model declares no levels (runtime ${runtimeId})`);
+}
 
 export class RuntimeLocalSkillRequestError extends Error {}
 
@@ -1897,6 +1915,7 @@ export class RuntimesRepo {
       getRelayModelDiscovery: (id) => workspaces.getRelayModelDiscovery(id),
       getRelayConfigForDaemon: (id) => workspaces.getRelayConfigForDaemon(id),
       getGatewayModels: (id, provider) => workspaces.getGatewayModels(id, provider),
+      listGatewayModelReasoning: (id, provider) => workspaces.listGatewayModelReasoning(id, provider),
       listWorkspaceCodexProfileModels: (id) => this.listWorkspaceCodexProfileModels(id),
       listWorkspaceClaudeProfileModels: (id) => this.listWorkspaceClaudeProfileModels(id),
       getRuntimeExecutionProfile: (id, provider) => this.getRuntimeExecutionProfile(id, provider),
@@ -1907,8 +1926,28 @@ export class RuntimesRepo {
       && ((!agent.runtimeId && (agent.provider === "codex" || runtime.metadata[`${agent.provider}_profiles`] === 1))
         || catalog?.model_catalog_status === "ready" || agent.thinkingLevel
         || (agent.executionGroupId && !agent.runtimeId))) return false;
-    return !agent.thinkingLevel || modelThinkingLevels(models, agent.model ?? "", catalog?.default_thinking)
-      .some(level => level.value === agent.thinkingLevel);
+    if (!agent.thinkingLevel) return true;
+    const capability = modelThinkingState(models, agent.model ?? "", catalog?.default_thinking);
+    if (capability.state === "supported") {
+      return capability.levels.some(level => level.value === agent.thinkingLevel);
+    }
+    // A load failure is the execution engine telling us it cannot honour this
+    // model right now; that state recovers, so keep the Runtime out.
+    if (capability.state === "error") return false;
+    // Any engine that reports reasoning levels at all is taken at its word: an
+    // empty level list means it cannot honour the saved effort. That is
+    // MUL-330/#220's contract and it stays blocking.
+    if (providerDeclaresReasoningLevels(agent.provider)) return false;
+    // Claude reports none — the gateway inventory carries ids and labels only,
+    // and the ACP bridge reports the native selector only for its own aliases —
+    // so an empty level list says nothing about the model. The saved effort is
+    // not a capability this Runtime can fail to provide. Dropping it is the only
+    // option that does not fabricate levels from another model
+    // (docs/runtime-model-discovery.md), and treating it as a constraint instead
+    // strands every task on every Runtime forever: the Agent keeps its effort, no
+    // catalog ever advertises it, and nothing clears the selection.
+    logEffortNotApplicable(agent.provider, runtime.id, agent.model ?? "", agent.thinkingLevel);
+    return true;
   }
 
   getRuntimeByDaemonAndProvider(daemonId: string, provider: string): MultiremiRuntime | null {

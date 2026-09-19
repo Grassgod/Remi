@@ -513,6 +513,57 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "workspace.relay.probe": {
+      "command": "remi workspace relay probe",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.relay.probe",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.relay.reasoning-levels.get": {
+      "command": "remi workspace relay reasoning-levels get",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.relay.reasoning-levels.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.relay.reasoning-levels.update": {
+      "command": "remi workspace relay reasoning-levels update",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.relay.reasoning-levels.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "workspace.bot-menu.get": {
       "command": "remi workspace bot-menu get",
       "aliases": [],
@@ -2320,6 +2371,23 @@
       ],
       "capability": "wiki.repository.restore",
       "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "wiki.repository.repair-log": {
+      "command": "remi wiki repository repair-log",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.repository.repair-log",
+      "mutation": "destructive",
       "output": [
         "table",
         "json",
@@ -10803,6 +10871,9 @@
     "GET /api/workspaces/:id/relay-config": {
       "command": "workspace.relay.get"
     },
+    "GET /api/workspaces/:id/relay-config/:engine/reasoning-levels": {
+      "command": "workspace.relay.reasoning-levels.get"
+    },
     "GET /api/workspaces/:id/repos": {
       "command": "repo.list"
     },
@@ -11870,6 +11941,9 @@
     "POST /api/workspaces/:id/members": {
       "command": "invite.create"
     },
+    "POST /api/workspaces/:id/relay-config/:engine/probe": {
+      "command": "workspace.relay.probe"
+    },
     "POST /api/workspaces/:id/relay-config/:engine/reveal": {
       "command": "workspace.relay.reveal"
     },
@@ -11896,6 +11970,9 @@
     },
     "POST /api/workspaces/:id/repos/:repositoryId/wiki/publish": {
       "command": "wiki.publish"
+    },
+    "POST /api/workspaces/:id/repos/:repositoryId/wiki/repair-log": {
+      "command": "wiki.repository.repair-log"
     },
     "POST /api/workspaces/:id/repos/:repositoryId/wiki/restore": {
       "command": "wiki.repository.restore"
@@ -12136,6 +12213,9 @@
     },
     "PUT /api/workspaces/:id/relay-config/:engine": {
       "command": "workspace.relay.update"
+    },
+    "PUT /api/workspaces/:id/relay-config/:engine/reasoning-levels": {
+      "command": "workspace.relay.reasoning-levels.update"
     },
     "PUT /api/workspaces/:id/relay-config/discovery": {
       "command": "workspace.relay.discovery"

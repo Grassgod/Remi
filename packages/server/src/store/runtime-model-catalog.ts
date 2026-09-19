@@ -1,12 +1,55 @@
 import type { MultiremiRuntime, MultiremiRuntimeModel, MultiremiRuntimeModelThinking } from "@multiremi/contracts/types.js";
 import { runtimeConnectionModels } from "@multiremi/contracts/runtime-connection";
 import { commonThinkingLevels, modelThinkingLevels } from "@multiremi/contracts/model-thinking.js";
-import type { MultiremiStore } from "./store.js";
+import type { GatewayModelReasoningDecl, MultiremiStore, RelayEngine } from "./store.js";
 
 /** Minimal data source shared by API catalogs and dispatch capability checks. */
 export type RuntimeModelCatalogSource = Pick<MultiremiStore,
   "getRelayModelDiscovery" | "getRelayConfigForDaemon" | "getGatewayModels" |
+  "listGatewayModelReasoning" |
   "listWorkspaceCodexProfileModels" | "listWorkspaceClaudeProfileModels" | "getRuntimeExecutionProfile">;
+
+/**
+ * The effort values an administrator may declare per engine. Deliberately the
+ * engines' own vocabularies rather than one normalised scale: the value is
+ * forwarded to the CLI verbatim, so inventing a spelling it does not accept
+ * would produce a declaration that routes fine and then fails at execution.
+ * Claude's list matches what the gateway recognises for Anthropic models.
+ */
+export const GATEWAY_REASONING_LEVELS: Record<RelayEngine, readonly string[]> = {
+  claude: ["low", "medium", "high", "xhigh", "max"],
+  codex: ["minimal", "low", "medium", "high", "xhigh", "max"],
+};
+
+/** Display labels for the declared enum, matching the CLIs' own spelling. */
+const GATEWAY_REASONING_LEVEL_LABELS: Record<string, string> = {
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra high",
+  max: "Max",
+};
+
+export function isGatewayReasoningLevel(engine: RelayEngine, value: unknown): value is string {
+  return typeof value === "string" && GATEWAY_REASONING_LEVELS[engine].includes(value);
+}
+
+/**
+ * Where a model's effective reasoning levels came from. Surfaced so the UI can
+ * explain an outcome instead of showing an unexplained level list — and so an
+ * administrator can see that a declaration of theirs is being outranked rather
+ * than silently ignored.
+ *
+ *  - `gateway` — the model's own entry in a gateway/native catalog.
+ *  - `runtime` — the execution engine's ACP `thought_level` report.
+ *  - `manual`  — an administrator's explicit declaration (see
+ *                `GatewayModelReasoningDecl`). A legitimate source: the operator
+ *                states the levels, nothing is borrowed from another model.
+ *  - `family`  — the Claude same-family consensus, an inference, not a statement.
+ *  - `none`    — nobody declared anything; the model has no selectable levels.
+ */
+export type FleetModelThinkingSource = "gateway" | "runtime" | "manual" | "family" | "none";
 
 export const MULTIREMI_DAEMON_PROVIDERS = new Set(["claude", "codex", "antigravity"]);
 
@@ -45,6 +88,8 @@ export interface FleetModelResponse {
   default?: boolean;
   provider_default?: boolean;
   thinking?: FleetModelThinkingResponse;
+  /** Provenance of `thinking`; absent when the model has no reasoning entry at all. */
+  thinking_source?: FleetModelThinkingSource;
   execution_status?: "available" | "unavailable" | "unknown";
   catalog?: MultiremiRuntimeModel["catalog"];
 }
@@ -59,6 +104,67 @@ export interface FleetProviderModelsResponse {
   runtime_catalog_status?: "ready" | "error";
   runtime_catalog_error?: string;
   default_thinking?: FleetModelThinkingResponse;
+}
+
+/**
+ * Why a model exposes no reasoning levels. `modelThinkingLevels` collapses all
+ * four into an empty array; routing must not, because they call for opposite
+ * decisions (see docs/runtime-model-discovery.md):
+ *
+ *  - `supported`   — the model declares levels; the Agent's saved effort is a real
+ *                    capability constraint and must be honoured.
+ *  - `unsupported` — the model declares none at all. The effort is not applicable.
+ *  - `unknown`     — nobody declared anything (gateway-only Claude aliases). Also
+ *                    not applicable. Filling it from another model's levels is
+ *                    exactly what this codebase forbids.
+ *  - `error`       — the execution engine reported a failed capability load. That
+ *                    is a transient state it recovers from, and it genuinely
+ *                    cannot honour the model, so the Runtime stays out.
+ */
+export type ModelThinkingState = "supported" | "unsupported" | "unknown" | "error";
+
+export function modelThinkingState(
+  models: FleetModelResponse[],
+  model: string,
+  providerDefault?: FleetModelThinkingResponse,
+): { state: ModelThinkingState; levels: FleetModelThinkingResponse["supported_levels"] } {
+  // Reuse the selector's own resolution order so routing can never disagree with
+  // the levels the UI offers.
+  const levels = modelThinkingLevels(models, model, providerDefault);
+  if (levels.length) return { state: "supported", levels };
+  const thinking = model
+    ? models.find((entry) => entry.id === model)?.thinking
+    : providerDefault ?? models.find((entry) => entry.default)?.thinking;
+  if (thinking?.status === "error") return { state: "error", levels: [] };
+  if (thinking?.status === "unsupported") return { state: "unsupported", levels: [] };
+  return { state: "unknown", levels: [] };
+}
+
+/**
+ * Whether an empty level list is a statement about the model rather than missing
+ * information — i.e. whether the provider can be taken at its word that this
+ * model offers no reasoning levels.
+ *
+ * True for every provider except Claude. Codex's native catalog lists
+ * `supported_reasoning_levels` per model, and the ACP `thought_level` probe feeds
+ * the same fields for other ACP engines, so a model they cannot offer levels for
+ * genuinely cannot honour an effort: the Runtime stays out and MUL-330/#220 keeps
+ * REJECTING an explicitly requested effort rather than silently rewriting it.
+ *
+ * Claude is the exception because it publishes no reasoning metadata anywhere.
+ * The gateway `/v1/models` inventory carries ids and labels only, and the bridge
+ * reports the native selector solely for its own aliases, so a gateway-only alias
+ * has no reasoning source behind it at all. There an empty level list says
+ * nothing about the model — see `modelThinkingState` — and the only useful
+ * reading is "not applicable".
+ *
+ * The default is deliberately "declares": a brand-new engine that is in fact like
+ * Claude would keep its Agents queued (visible, recoverable, and how MUL-338 was
+ * found), whereas assuming the opposite would silently run work at a default
+ * effort on an engine that had stated it could not honour the requested one.
+ */
+export function providerDeclaresReasoningLevels(provider: string): boolean {
+  return provider !== "claude";
 }
 
 /** Intersect execution targets without losing why a capability is unavailable. */
@@ -188,8 +294,66 @@ export function runtimeModelCompatibilityResponse(model: MultiremiRuntimeModel):
   if (model.providerDefault) response.provider_default = true;
   if (model.thinking) {
     response.thinking = thinkingCompatibilityResponse(model.thinking);
+    // This catalog is the union of what the engines reported, so anything it
+    // carries is the engine's own statement.
+    response.thinking_source = "runtime";
   }
   return response;
+}
+
+/**
+ * Whether a thinking entry states something about the model, as opposed to being
+ * an empty or unknown placeholder. Used to decide whether an administrator's
+ * declaration is filling a gap or would be overriding a real statement.
+ */
+function declaresThinking(thinking: FleetModelThinkingResponse | undefined): boolean {
+  if (!thinking) return false;
+  if (thinking.status === "error" || thinking.status === "unsupported" || thinking.status === "supported") return true;
+  return thinking.supported_levels.length > 0;
+}
+
+/** Project an administrator's declaration into the shared thinking response shape. */
+export function manualThinkingResponse(decl: GatewayModelReasoningDecl): FleetModelThinkingResponse {
+  return {
+    supported_levels: decl.levels.map(value => ({ value, label: GATEWAY_REASONING_LEVEL_LABELS[value] ?? value })),
+    ...(decl.defaultLevel ? { default_level: decl.defaultLevel } : {}),
+    status: "supported",
+  };
+}
+
+function manualReasoningByModel(store: RuntimeModelCatalogSource, workspaceId: string, engine: RelayEngine): Map<string, GatewayModelReasoningDecl> {
+  return new Map(store.listGatewayModelReasoning(workspaceId, engine).map(decl => [decl.modelId, decl]));
+}
+
+/**
+ * The precedence an administrator's declaration sits in:
+ *
+ *   gateway catalog  >  engine report  >  manual declaration  >  family consensus
+ *
+ * Below the two reports so it can never silently override something the model
+ * actually stated (the one thing this codebase forbids), and above the family
+ * consensus because a declared set beats an inferred one. With no declaration
+ * stored the resolution is byte-for-byte the previous precedence.
+ */
+function resolveDeclaredThinking(input: {
+  runtime?: FleetModelThinkingResponse;
+  gateway?: FleetModelThinkingResponse;
+  manual?: FleetModelThinkingResponse;
+  family?: FleetModelThinkingResponse;
+}): { thinking?: FleetModelThinkingResponse; source?: FleetModelThinkingSource } {
+  const { runtime, gateway, manual, family } = input;
+  // A runtime load failure is the engine saying it cannot honour the model at
+  // all; it outranks every declaration, including the gateway's.
+  if (runtime?.status === "error") return { thinking: runtime, source: "runtime" };
+  if (gateway && gateway.status !== "unknown") return { thinking: gateway, source: "gateway" };
+  if (declaresThinking(runtime)) return { thinking: runtime, source: "runtime" };
+  if (manual) return { thinking: manual, source: "manual" };
+  // A runtime that reported something uninformative still spoke; keep its entry
+  // (and the family inference behind it) exactly as before.
+  if (runtime) return { thinking: runtime, source: "runtime" };
+  if (family) return { thinking: family, source: "family" };
+  if (gateway) return { thinking: gateway, source: "gateway" };
+  return {};
 }
 
 function thinkingCompatibilityResponse(thinking: MultiremiRuntimeModelThinking): FleetModelThinkingResponse {
@@ -247,9 +411,32 @@ export function overlayGatewayModels(
   providers: FleetProviderModelsResponse[],
   options: { preserveCustomProfileModels?: boolean; requireRuntimeMembership?: boolean } = {},
 ): FleetProviderModelsResponse[] {
+  // An administrator's declaration is a statement about the engine, not probe
+  // output, so it is applied to whatever this function produced — before the
+  // discovery check and after the snapshot overlay. It has to hold when a probe
+  // never ran, failed, or dropped the alias: that is the whole point of the
+  // manual source, and being a *snapshot annotation* kept it out of the catalog
+  // exactly when the snapshot was the thing that was missing.
+  //
+  // Claude only, deliberately. For Codex the execution catalog decides which
+  // models are executable at all (#220), so a declaration may state levels for a
+  // model but must never make it selectable — see `catalogAllowsModel`.
+  const claudeDecls = manualReasoningByModel(store, workspaceId, "claude");
+  const withDeclarations = (list: FleetProviderModelsResponse[]): FleetProviderModelsResponse[] => {
+    if (claudeDecls.size === 0) return list;
+    const index = list.findIndex(entry => entry.provider === "claude");
+    const entry = index >= 0 ? list[index] : { provider: "claude", online_runtime_count: 0, models: [] };
+    const merged = withManualModels(entry, claudeDecls);
+    if (merged === entry) return list;
+    const next = [...list];
+    if (index >= 0) next[index] = merged;
+    else next.push(merged);
+    return next;
+  };
   // Discovery off → never surface a (possibly stale) gateway snapshot; fall back
   // to the per-runtime union so turning the toggle off actually hides the models.
-  if (!store.getRelayModelDiscovery(workspaceId)) return providers;
+  // A declaration is not snapshot data, so it survives the toggle.
+  if (!store.getRelayModelDiscovery(workspaceId)) return withDeclarations(providers);
   const config = store.getRelayConfigForDaemon(workspaceId);
   const byEngine = new Map<string, FleetProviderModelsResponse>();
   for (const provider of providers) byEngine.set(provider.provider, provider);
@@ -259,6 +446,7 @@ export function overlayGatewayModels(
     if (!engineConfig || !engineConfig.authToken) continue;
     const snapshot = store.getGatewayModels(workspaceId, engine);
     const existing = byEngine.get(engine);
+    const manualDecls = manualReasoningByModel(store, workspaceId, engine);
     if (engine === "codex") {
       const current = snapshot?.sourceRevision === engineConfig.revision ? snapshot : null;
       const status = current ? current.lastError ? "error" : current.nativeCatalogStatus ?? "unknown" : "unknown";
@@ -278,14 +466,28 @@ export function overlayGatewayModels(
           : legacyFailure || (options.requireRuntimeMembership && !reported) ? "unavailable" as const
           : modelFallback ? actual ? "available" as const : "unavailable" as const
           : runtimeStatus === "ready" && !actual ? "unavailable" as const : "available" as const;
-        const thinking = status === "unknown" ? { status: "unknown" as const, supported_levels: [] }
+        const declaredSource: FleetModelThinkingSource | undefined = status === "unknown" ? "gateway"
+          : modelFallback ? actual ? "runtime" : "gateway"
+          : reported?.thinking?.status === "error" ? "runtime"
+          : model.thinking && model.thinking.status !== "unknown" ? "gateway"
+          : reported?.thinking ? "runtime"
+          : model.thinking ? "gateway"
+          : undefined;
+        const declared = status === "unknown" ? { status: "unknown" as const, supported_levels: [] }
           : modelFallback ? actual ? reported.thinking : { status: "error" as const, supported_levels: [], error }
           : reported?.thinking?.status === "error" ? reported.thinking
           : model.thinking && model.thinking.status !== "unknown" ? thinkingCompatibilityResponse(model.thinking)
           : reported?.thinking ?? (model.thinking ? thinkingCompatibilityResponse(model.thinking) : undefined);
+        // The native catalog stays authoritative: a declaration only fills an
+        // entry nobody stated (or one the catalog could not load at all).
+        const manualDecl = manualDecls.get(model.id);
+        const manualFills = manualDecl !== undefined && !declaresThinking(declared);
+        const thinking = manualFills ? manualThinkingResponse(manualDecl) : declared;
+        const thinkingSource = manualFills ? "manual" as const : declaredSource;
         return { id: model.id, label: model.label, provider: engine, execution_status,
           ...(reported?.default && execution_status === "available" ? { default: true } : {}),
           ...(thinking ? { thinking } : {}),
+          ...(thinking && thinkingSource ? { thinking_source: thinkingSource } : {}),
         };
       });
       // A failed native download falls back to Codex's actual bundled selector.
@@ -329,15 +531,15 @@ export function overlayGatewayModels(
       const matchingFamilyModels = family ? familyModels.get(family) ?? [] : [];
       const familyMatched = matchingFamilyModels.length > 0;
       const gatewayThinking = model.thinking ? thinkingCompatibilityResponse(model.thinking) : undefined;
+      const manualDecl = manualDecls.get(model.id);
       // Runtime loading failures mean the execution engine cannot honor even a
       // valid gateway declaration. Otherwise per-model gateway data is authoritative.
-      const thinking = (runtimeModel?.thinking?.status === "error"
-        ? runtimeModel.thinking
-        : gatewayThinking && gatewayThinking.status !== "unknown"
-        ? gatewayThinking
-        : runtimeModel?.thinking
-          ?? (familyMatched ? familyThinkingConsensus(matchingFamilyModels) : undefined)
-          ?? gatewayThinking);
+      const { thinking, source } = resolveDeclaredThinking({
+        runtime: runtimeModel?.thinking,
+        gateway: gatewayThinking,
+        manual: manualDecl ? manualThinkingResponse(manualDecl) : undefined,
+        family: familyMatched ? familyThinkingConsensus(matchingFamilyModels) : undefined,
+      });
       const isDefault = runtimeModel
         ? runtimeModel.default === true
         : family !== undefined
@@ -350,6 +552,7 @@ export function overlayGatewayModels(
         provider: engine,
         ...(isDefault ? { default: true } : {}),
         ...(thinking ? { thinking } : {}),
+        ...(thinking && source ? { thinking_source: source } : {}),
       };
     });
     if (options.preserveCustomProfileModels !== false) {
@@ -365,7 +568,35 @@ export function overlayGatewayModels(
       ...(existing?.default_thinking ? { default_thinking: existing.default_thinking } : {}),
     });
   }
-  return [...byEngine.values()].sort((a, b) => a.provider.localeCompare(b.provider));
+  return withDeclarations([...byEngine.values()].sort((a, b) => a.provider.localeCompare(b.provider)));
+}
+
+/**
+ * Add the models an administrator declared that no catalog offers yet.
+ *
+ * The declared levels are the model's only statement about itself, so the entry
+ * carries them at `thinking_source: "manual"` — the same attribution the
+ * snapshot path already uses when a declaration fills a gap. Ids the list
+ * already has are left alone: those go through `resolveDeclaredThinking`, which
+ * keeps a declaration below gateway and Runtime statements.
+ */
+function withManualModels(
+  entry: FleetProviderModelsResponse,
+  decls: Map<string, GatewayModelReasoningDecl>,
+): FleetProviderModelsResponse {
+  const missing = [...decls.keys()].filter(id => !entry.models.some(model => model.id === id));
+  if (missing.length === 0) return entry;
+  return {
+    ...entry,
+    models: [...entry.models, ...missing.map((id): FleetModelResponse => ({
+      id,
+      // Nothing ever discovered this id, so it is its own label.
+      label: id,
+      provider: entry.provider,
+      thinking: manualThinkingResponse(decls.get(id)!),
+      thinking_source: "manual",
+    }))],
+  };
 }
 
 /** Separate custom connections before applying workspace gateway load status. */
