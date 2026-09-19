@@ -145,6 +145,15 @@ server start. It is deliberately narrow: pre-native Codex snapshots only, for
 workspaces that have discovery enabled and a stored token. Ordinary staleness is
 an explicit-action concern, and no other shape is refreshed at boot.
 
+A declaration joins the workspace-shaped catalog (`GET /api/models` with no scope).
+A Runtime configured with a custom connection keeps its own catalog in the
+`runtime_id` and `execution_group_id` shapes, so a workspace-wide declaration can be
+listed there while an Agent explicitly bound to that Runtime cannot select it. This
+asymmetry is inherited rather than introduced by declarations: a gateway snapshot
+model is listed and selectable in exactly the same way in exactly the same
+configuration. A workspace-level Agent is unaffected — the declared model is
+claimable there just like a gateway model.
+
 Production daemons discover capabilities at startup and refresh every 15 minutes.
 Manual model-list requests use the same single-flight probe without blocking the
 heartbeat loop. The probe runs as a separate `remi runtime-model-probe` process.
