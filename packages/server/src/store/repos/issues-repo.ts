@@ -3237,7 +3237,17 @@ export class IssuesRepo {
         continue;
       }
 
-      const delegationId = leaderDelegation ? createId("dlg") : null;
+      // A rich mention is the same leader talking to the same teammate again.
+      // Continue the lane that teammate already owns in this Session so it
+      // keeps one provider conversation and receives a delta; a teammate that
+      // has never been delegated to still gets a fresh lane, and `remi task
+      // create` remains the explicit way to start an independent one.
+      const continuedDelegation = leaderDelegation
+        ? this.latestDelegatedTaskForAgent(issue.id, agent.id, comment.authorId, comment.issueSessionId)
+        : null;
+      const delegationId = leaderDelegation
+        ? continuedDelegation?.delegationId ?? createId("dlg")
+        : null;
       const task = this.ctx.tasks().createTask({
         agentId: agent.id,
         issueId: issue.id,
@@ -3370,6 +3380,36 @@ export class IssuesRepo {
       if (hasPlainMention(withoutLinks, member.name)) addTarget(member.id);
     }
     return targets;
+  }
+
+  /**
+   * The most recent task this delegator handed to this agent in the same Issue
+   * Session. A rich mention continues that delegation instead of starting a new
+   * lane, so re-mentioning a teammate resumes its provider conversation rather
+   * than cold-bootstrapping the whole Issue again.
+   */
+  private latestDelegatedTaskForAgent(
+    issueId: string,
+    agentId: string,
+    delegatedByAgentId: string | null,
+    issueSessionId: string | null,
+  ): MultiremiTask | null {
+    if (!delegatedByAgentId) return null;
+    const sessionClause = issueSessionId === null
+      ? "issue_session_id IS NULL"
+      : "issue_session_id = ?";
+    const params: unknown[] = issueSessionId === null
+      ? [issueId, agentId, delegatedByAgentId]
+      : [issueId, agentId, delegatedByAgentId, issueSessionId];
+    const row = this.ctx.db.query(
+      `SELECT id FROM multiremi_tasks
+       WHERE issue_id = ? AND agent_id = ? AND delegated_by_agent_id = ?
+         AND delegation_id IS NOT NULL
+         AND ${sessionClause}
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    ).get(...params) as { id: string } | null;
+    return row ? this.ctx.tasks().getTask(row.id) : null;
   }
 
   /**
