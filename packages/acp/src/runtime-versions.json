@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "preparedFor": "0.2.77",
-  "checkedAt": "2026-09-19T20:02:53.784Z",
+  "preparedFor": "0.2.78",
+  "checkedAt": "2026-09-20T20:03:02.159Z",
   "claude": {
     "acp": "0.79.0",
     "sdk": "0.3.278",
