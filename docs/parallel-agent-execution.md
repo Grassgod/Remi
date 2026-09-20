@@ -7,18 +7,24 @@
 - Each independent delegation has its own execution scope, derived from the
   existing delegation ID. Different delegations can run together, including
   multiple delegations to the same Agent. Retries keep their delegation scope.
-  `remi task continue <task-id> --prompt <request>` creates a distinct Task but
-  reuses the referenced delegation's scope, provider session, cursor and runtime
-  affinity. The caller must identify the exact prior delegated Task; the server
-  never infers continuation from an Issue or Agent match.
-- Continued Tasks in one execution scope are serialized. A new rich-mention
-  delegation gets a new scope and remains eligible to run in parallel. Queued
-  rich mentions may coalesce only with ordinary mention-created work; an
+- A rich mention continues the delegation that teammate already owns in the
+  Session. It reuses that delegation's scope, provider session, cursor and
+  runtime affinity, so an established teammate receives a delta instead of a
+  cold bootstrap; a teammate that has never been delegated to, or whose lane
+  was reset, still starts cold. The server resolves the target from the
+  delegator, Agent, Issue and Session — never from prose.
+- Continued Tasks in one execution scope are serialized, so mentioning a
+  teammate that is still working queues behind it instead of running beside it.
+  Queued rich mentions may coalesce only with ordinary mention-created work; an
   explicit continuation is marked by `continued_from_task_id` and is never a
-  coalescing candidate for an independent mention. If the
-  prior provider session or execution fingerprint is no longer resumable, the
-  existing lane reset path cold-bootstraps only that scope and records a
-  `session_agent_lane_reset` Issue activity with the recovery reason.
+  coalescing candidate for an independent mention.
+- Independent work needs an independent lane. `remi task create` starts a new
+  scope that can run in parallel with the teammate's current conversation, and
+  `remi task continue <task-id> --prompt <request>` reaches a specific earlier
+  lane instead of the most recent one. If the prior provider session or
+  execution fingerprint is no longer resumable, the existing lane reset path
+  cold-bootstraps only that scope and records a `session_agent_lane_reset` Issue
+  activity with the recovery reason.
 - Issue-free one-shot tasks (including Wiki builds) are independent. Private
   Chat turns remain serialized. Existing Agent and Runtime capacity limits,
   project device routing, permissions and workspace affinity still apply.

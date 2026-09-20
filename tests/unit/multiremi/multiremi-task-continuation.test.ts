@@ -88,6 +88,17 @@ async function createContinuation(f: ReturnType<typeof fixture>, prompt: string)
   return { response: body, task: f.store.getTask(body.task.id)! };
 }
 
+async function createIndependentTask(f: ReturnType<typeof fixture>, prompt: string) {
+  const response = await f.app.request("/api/multiremi/tasks", {
+    method: "POST",
+    headers: await taskHeaders(f),
+    body: JSON.stringify({ agentId: f.worker.id, issueId: f.issue.id, prompt }),
+  });
+  expect(response.status).toBe(201);
+  const body = await response.json() as { task: { id: string } };
+  return f.store.getTask(body.task.id)!;
+}
+
 describe("delegated task continuation API", () => {
   it("creates a distinct task while deriving the existing delegation lineage", async () => {
     const f = fixture();
@@ -125,37 +136,38 @@ describe("delegated task continuation API", () => {
     });
   });
 
-  it("keeps an independent rich mention out of a queued continuation lane", async () => {
+  it("queues a rich mention behind an earlier continuation of the same lane", async () => {
     const f = fixture();
-    completeInitialDelegation(f);
+    const runtime = completeInitialDelegation(f);
     const continued = await createContinuation(f, "Fix the review feedback.");
+    expect(f.store.claimTask(runtime.id)?.id).toBe(continued.task.id);
 
     const comment = f.store.createIssueComment(f.issue.id, {
       issueSessionId: f.session.id,
       authorType: "agent",
       authorId: f.leader.id,
       taskId: f.leaderTask.id,
-      body: `Independently investigate this [@Worker](mention://agent/${f.worker.id}).`,
+      body: `Now handle this too [@Worker](mention://agent/${f.worker.id}).`,
     });
 
     const workerTasks = f.store.listTasksForIssue(f.issue.id).filter((task) => task.agentId === f.worker.id);
     expect(workerTasks).toHaveLength(3);
     const mentioned = workerTasks.find((task) => task.triggerCommentId === comment.id)!;
     expect(mentioned).toMatchObject({ continuedFromTaskId: null, status: "queued", sessionId: null });
-    expect(mentioned.delegationId).toBeTruthy();
-    expect(mentioned.delegationId).not.toBe(f.delegated.delegationId);
+    expect(mentioned.delegationId).toBe(f.delegated.delegationId);
     expect(continued.task).toMatchObject({
       continuedFromTaskId: f.delegated.id,
       delegationId: f.delegated.delegationId,
     });
-    expect(f.store.getSessionAgentLane(f.session.id, f.worker.id, mentioned.delegationId!)).not.toBeNull();
-    expect(f.store.getSessionAgentLane(f.session.id, f.worker.id, f.delegated.delegationId!)).not.toBeNull();
+    // A rich mention is the leader talking to the same teammate again, so it
+    // waits behind the turn already in flight instead of opening a second lane.
+    expect(f.store.getTaskQueueBlocker(mentioned.id)?.taskId).toBe(continued.task.id);
     expect(f.store.listIssueActivity(f.issue.id).filter((activity) =>
       activity.type === "comment_mention_coalesced"
       && (activity.data as { commentId?: string } | null)?.commentId === comment.id)).toHaveLength(0);
   });
 
-  it("keeps a queued independent mention alongside a later continuation", async () => {
+  it("lands a queued rich mention and a later continuation in one lane", async () => {
     const f = fixture();
     completeInitialDelegation(f);
     const comment = f.store.createIssueComment(f.issue.id, {
@@ -163,7 +175,7 @@ describe("delegated task continuation API", () => {
       authorType: "agent",
       authorId: f.leader.id,
       taskId: f.leaderTask.id,
-      body: `Independently inspect this [@Worker](mention://agent/${f.worker.id}).`,
+      body: `Now inspect this [@Worker](mention://agent/${f.worker.id}).`,
     });
     const mentioned = f.store.listTasksForIssue(f.issue.id)
       .find((task) => task.agentId === f.worker.id && task.triggerCommentId === comment.id)!;
@@ -177,9 +189,23 @@ describe("delegated task continuation API", () => {
     expect(continued.task).toMatchObject({
       continuedFromTaskId: f.delegated.id,
     });
-    expect(mentioned.delegationId).not.toBe(continued.task.delegationId);
+    expect(mentioned.delegationId).toBe(continued.task.delegationId);
     expect(f.store.getSessionAgentLane(f.session.id, f.worker.id, mentioned.delegationId!)).not.toBeNull();
-    expect(f.store.getSessionAgentLane(f.session.id, f.worker.id, continued.task.delegationId!)).not.toBeNull();
+  });
+
+  it("keeps an explicit task create in its own lane so it can run in parallel", async () => {
+    const f = fixture();
+    const runtime = completeInitialDelegation(f);
+    const continued = await createContinuation(f, "Continue the original implementation.");
+    const independent = await createIndependentTask(f, "Investigate separately.");
+
+    expect(independent.delegationId).toBeTruthy();
+    expect(independent.delegationId).not.toBe(f.delegated.delegationId);
+    expect(independent).toMatchObject({ delegatedByAgentId: f.leader.id, continuedFromTaskId: null });
+    // Independent lanes stay claimable at the same time; only turns inside one
+    // lane serialize.
+    expect(f.store.claimTask(runtime.id)?.id).toBe(continued.task.id);
+    expect(f.store.claimTask(runtime.id)?.id).toBe(independent.id);
   });
 
   it("preserves continuation lineage on an infrastructure retry", async () => {
