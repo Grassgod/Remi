@@ -23,6 +23,58 @@ export interface MultiremiDaemonLaunchSpec {
 
 export type MultiremiDaemonServicePlatform = "launchd" | "systemd";
 
+export type DaemonRestartPlan =
+  | { kind: "service-manager"; command: string; args: string[] }
+  | { kind: "spawn-successor" };
+
+/**
+ * How a foreground daemon should hand off to a freshly installed binary.
+ *
+ * Under systemd or launchd the manager owns the service cgroup and is already
+ * configured to restart the unit (`Restart=always` / `KeepAlive`). Spawning a
+ * detached successor is wrong there in both directions: exiting the main
+ * process makes systemd tear the cgroup down and take the successor with it,
+ * and staying alive to dodge that leak leaves one idle supervisor per upgrade
+ * inside the unit — the pile grows every release and every one of them keeps
+ * its runtime registration alive under the same identity.
+ *
+ * Ask the manager for a restart instead. It replaces the entire cgroup with a
+ * single process on the new binary, which also clears any pile left behind by
+ * an older release.
+ */
+export function planDaemonRestart(input: {
+  platform: NodeJS.Platform;
+  env: Record<string, string | undefined>;
+  /** Contents of /proc/self/cgroup, used to name the unit without systemctl. */
+  cgroup?: string | null;
+  uid?: number | null;
+  defaultUnitName?: string;
+}): DaemonRestartPlan {
+  const fallbackUnit = input.defaultUnitName ?? "multiremi-daemon.service";
+  if (input.platform === "linux" && input.env.INVOCATION_ID) {
+    const unit = systemdUnitFromCgroup(input.cgroup) ?? fallbackUnit;
+    return { kind: "service-manager", command: "systemctl", args: ["--user", "restart", "--no-block", unit] };
+  }
+  const label = input.env.XPC_SERVICE_NAME;
+  if (input.platform === "darwin" && label) {
+    const uid = input.uid ?? 0;
+    return { kind: "service-manager", command: "launchctl", args: ["kickstart", "-k", `gui/${uid}/${label}`] };
+  }
+  return { kind: "spawn-successor" };
+}
+
+/** Last `*.service` slice of a cgroup path, e.g. `/app.slice/multiremi-daemon.service`. */
+function systemdUnitFromCgroup(cgroup: string | null | undefined): string | null {
+  if (!cgroup) return null;
+  for (const line of cgroup.split("\n")) {
+    const segment = line.split(":").at(-1)?.trim();
+    if (!segment) continue;
+    const last = segment.split("/").filter(Boolean).at(-1);
+    if (last && last.endsWith(".service")) return last;
+  }
+  return null;
+}
+
 export interface MultiremiDaemonServiceSpec {
   platform: MultiremiDaemonServicePlatform;
   label: string;

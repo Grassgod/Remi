@@ -58,6 +58,7 @@ import {
   buildMultiremiDaemonServiceSpec,
   daemonPortFromOptions,
   multiremiDaemonPaths,
+  planDaemonRestart,
   runServiceCommands,
   servicePlatformFromOptions,
   shellQuote,
@@ -84,6 +85,7 @@ export {
   detectMultiremiServicePlatform,
   multiremiDaemonPaths,
   multiremiDaemonServicePath,
+  planDaemonRestart,
 } from "./multiremi/service.js";
 export { detectMultiremiProviders } from "./multiremi/daemon-health.js";
 
@@ -1249,6 +1251,24 @@ function removeMatchingPidFile(pidPath: string, expectedPid: number): void {
 }
 
 function restartForegroundDaemonProcess(options: CliOptions, programName: string): void {
+  const plan = planDaemonRestart({
+    platform: process.platform,
+    env: process.env,
+    cgroup: process.platform === "linux" ? readCgroupOrNull() : null,
+    uid: typeof process.getuid === "function" ? process.getuid() : null,
+  });
+  if (plan.kind === "service-manager") {
+    // The unit owns this cgroup: a successor spawned here dies with us, and
+    // staying alive to avoid that would leak one idle supervisor per upgrade.
+    // Let the manager replace the whole cgroup with one process on the new
+    // binary, which also retires any pile an older release left behind.
+    const result = spawnSync(plan.command, plan.args, { stdio: "inherit" });
+    if (result.status === 0) {
+      console.error(`Multiremi daemon restarting via ${plan.command} ${plan.args.join(" ")}`);
+      process.exit(0);
+    }
+    console.error(`Multiremi daemon restart via ${plan.command} failed (${result.status ?? result.signal ?? "unknown"}); falling back to a spawned successor`);
+  }
   const spec = buildMultiremiDaemonLaunchSpec(options, programName);
   const child = spawn(spec.command, spec.args, {
     detached: true,
@@ -1578,3 +1598,7 @@ async function waitForShutdown(stop: () => void): Promise<void> {
 }
 
 export const run = runMultiremi;
+
+function readCgroupOrNull(): string | null {
+  try { return readFileSync("/proc/self/cgroup", "utf8"); } catch { return null; }
+}

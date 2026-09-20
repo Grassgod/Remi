@@ -15,6 +15,7 @@ import {
   buildMultiremiDaemonServiceSpec,
   multiremiDaemonPaths,
   multiremiDaemonServicePath,
+  planDaemonRestart,
   resolveDeviceName,
   resolveSetupConfig,
   runMultiremi,
@@ -348,5 +349,54 @@ describe("Multiremi CLI — config file and daemon service specs", () => {
       console.log = originalLog;
       console.error = originalError;
     }
+  });
+});
+
+describe("Multiremi CLI — daemon restart handoff", () => {
+  test("asks systemd to replace the unit instead of orphaning a successor", () => {
+    // Under KillMode=control-group a detached successor dies with the main
+    // process, and staying alive to dodge that leaks one supervisor per
+    // upgrade. The manager has to own the replacement.
+    const plan = planDaemonRestart({
+      platform: "linux",
+      env: { INVOCATION_ID: "abc123" },
+      cgroup: "0::/user.slice/user-1001.slice/user@1001.service/app.slice/multiremi-daemon.service\n",
+    });
+    expect(plan).toEqual({
+      kind: "service-manager",
+      command: "systemctl",
+      args: ["--user", "restart", "--no-block", "multiremi-daemon.service"],
+    });
+  });
+
+  test("falls back to the default unit name without a usable cgroup", () => {
+    const plan = planDaemonRestart({
+      platform: "linux",
+      env: { INVOCATION_ID: "abc123" },
+      cgroup: "",
+    });
+    expect(plan).toEqual({
+      kind: "service-manager",
+      command: "systemctl",
+      args: ["--user", "restart", "--no-block", "multiremi-daemon.service"],
+    });
+  });
+
+  test("asks launchd to kickstart on macOS", () => {
+    const plan = planDaemonRestart({
+      platform: "darwin",
+      env: { XPC_SERVICE_NAME: "dev.remi.multiremi.daemon" },
+      uid: 501,
+    });
+    expect(plan).toEqual({
+      kind: "service-manager",
+      command: "launchctl",
+      args: ["kickstart", "-k", "gui/501/dev.remi.multiremi.daemon"],
+    });
+  });
+
+  test("spawns a successor when no service manager owns the process", () => {
+    expect(planDaemonRestart({ platform: "linux", env: {} })).toEqual({ kind: "spawn-successor" });
+    expect(planDaemonRestart({ platform: "darwin", env: {} })).toEqual({ kind: "spawn-successor" });
   });
 });
