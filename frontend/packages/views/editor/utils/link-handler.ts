@@ -67,3 +67,20 @@ export function openLink(href: string, currentSlug?: string | null): void {
 export function isMentionHref(href: string | null | undefined): href is string {
   return !!href && href.startsWith("mention://");
 }
+
+/**
+ * Check if a href is a Markdown `.md` path that resolves to no Wiki page.
+ *
+ * A relative `.md` href is a Wiki page reference written without the canonical
+ * `[[...]]` syntax. Wiki surfaces resolve the ones that map to a real page and
+ * rewrite them into an absolute page URL before rendering, so an href still in
+ * this shape points at nothing — clicking it would resolve against the current
+ * route and open a 404 in a new tab. External/site-absolute URLs and fragment
+ * anchors are not relative page references and are left alone.
+ */
+export function isUnresolvedWikiMarkdownHref(href: string | null | undefined): href is string {
+  if (!href || !href.toLowerCase().endsWith(".md")) return false;
+  if (href.startsWith("/") || href.startsWith("#")) return false;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith("//")) return false;
+  return !/\s/.test(href);
+}

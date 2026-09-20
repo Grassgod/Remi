@@ -1,7 +1,8 @@
 import type { MultiremiRepositoryWikiDoc } from "@multiremi/contracts/types.js";
 import {
   resolveRepositoryWikiRef,
-  tokenizeWikiLinks,
+  resolveRepositoryWikiToken,
+  tokenizeRepositoryWikiLinks,
   type RepositoryWikiRefResolution,
   type WikiLinkToken,
 } from "@multiremi/contracts/wiki-links";
@@ -26,6 +27,20 @@ export class RepositoryWikiLinkValidationError extends Error {
   }
 }
 
+/**
+ * Tokens that form the Repository Wiki link graph.
+ *
+ * Canonical `[[ref]]` links always participate. Markdown `.md` links
+ * participate only when they resolve to exactly one existing page — a **hard
+ * link**, which earns a backlink, gets rewritten on move/merge, and can block a
+ * write it breaks. A Markdown link that resolves to no page (a source file
+ * path, a removed page) or to several is a **soft reference**: it stays in the
+ * body untouched and never fails the gate.
+ */
+function graphTokens(body: string): WikiLinkToken[] {
+  return tokenizeRepositoryWikiLinks(body);
+}
+
 /** Return broken links introduced by a proposed graph while tolerating unchanged legacy debt. */
 export function introducedRepositoryWikiLinkProblems(
   before: readonly RepositoryWikiGraphDoc[],
@@ -39,6 +54,11 @@ export function introducedRepositoryWikiLinkProblems(
     for (const [index, state] of states.entries()) {
       const previous = previousStates[index];
       if (state.resolution.status !== "resolved") {
+        // Markdown page links are soft references: a path that matches no page
+        // is an ordinary Markdown link (source file path, external doc), so a
+        // brand-new one is never a problem by itself. One that previously
+        // resolved and no longer does is a regression and still blocks.
+        if (state.token.syntax === "markdown" && !previous) continue;
         if (previous?.resolution.status !== "resolved" && previous) continue;
         introduced.push({
           sourceId: state.source.id,
@@ -78,8 +98,8 @@ export function repositoryWikiBacklinks<T extends RepositoryWikiGraphDoc>(
   target: RepositoryWikiGraphDoc,
   documents: readonly T[],
 ): T[] {
-  return documents.filter((document) => !document.bodyUnavailable && document.id !== target.id && tokenizeWikiLinks(document.body).some((token) => {
-    const resolution = resolveRepositoryWikiRef(token.ref, document.path, documents);
+  return documents.filter((document) => !document.bodyUnavailable && document.id !== target.id && graphTokens(document.body).some((token) => {
+    const resolution = resolveRepositoryWikiToken(token, document.path, documents);
     return resolution.status === "resolved" && resolution.document.id === target.id;
   }));
 }
@@ -91,7 +111,14 @@ export function defaultRepositoryWikiPath(title: unknown, id: string): string {
   return `${slug || id}.md`;
 }
 
-/** Preserve each resolved target when a source/target moves, including relative refs. */
+/**
+ * Preserve each resolved target when a source/target moves, including relative refs.
+ *
+ * A resolvable Markdown `.md` link whose target identity would otherwise change
+ * is rewritten into the canonical `[[...]]` form, so the next move carries it
+ * without depending on a relative path that no longer points anywhere. Soft
+ * Markdown references resolve to nothing and are left byte-identical.
+ */
 export function rewriteRepositoryWikiLinks(
   body: string,
   sourcePath: string,
@@ -101,11 +128,11 @@ export function rewriteRepositoryWikiLinks(
   mergedIds: ReadonlyMap<string, string> = new Map(),
 ): string {
   let rewritten = body;
-  for (const token of tokenizeWikiLinks(body).reverse()) {
-    const old = resolveRepositoryWikiRef(token.ref, sourcePath, before);
+  for (const token of graphTokens(body).reverse()) {
+    const old = resolveRepositoryWikiToken(token, sourcePath, before);
     if (old.status !== "resolved") continue;
     const targetId = mergedIds.get(old.document.id) ?? old.document.id;
-    const current = resolveRepositoryWikiRef(token.ref, nextSourcePath, after);
+    const current = resolveRepositoryWikiToken(token, nextSourcePath, after);
     if (current.status === "resolved" && current.document.id === targetId) continue;
     const target = after.find(doc => doc.id === targetId);
     if (!target) throw new Error(`repository wiki rewrite target not found: ${targetId}`);
@@ -150,8 +177,8 @@ function linkStatesByKey(documents: readonly RepositoryWikiGraphDoc[]): Map<stri
   const states = new Map<string, RepositoryWikiLinkState[]>();
   for (const document of documents) {
     if (document.bodyUnavailable) continue;
-    for (const token of tokenizeWikiLinks(document.body)) {
-      const resolution = resolveRepositoryWikiRef(token.ref, document.path, documents);
+    for (const token of graphTokens(document.body)) {
+      const resolution = resolveRepositoryWikiToken(token, document.path, documents);
       const key = `${document.id}\u0000${token.ref ?? "#self"}\u0000${token.anchor ?? ""}`;
       const grouped = states.get(key) ?? [];
       grouped.push({ source: document, token, resolution });

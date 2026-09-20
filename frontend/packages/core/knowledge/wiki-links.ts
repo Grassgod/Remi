@@ -3,12 +3,17 @@ import { api } from "../api";
 
 export {
   tokenizeWikiLinks,
+  tokenizeMarkdownWikiLinks,
+  tokenizeRepositoryWikiLinks,
   resolveProjectWikiRef,
   resolveRepositoryWikiRef,
+  resolveRepositoryWikiMarkdownRef,
+  resolveRepositoryWikiToken,
   type ProjectWikiRefDocument,
   type ProjectWikiRefResolution,
   type RepositoryWikiRefDocument,
   type RepositoryWikiRefResolution,
+  type WikiLinkSyntax,
   type WikiLinkToken,
 } from "@multiremi/contracts/wiki-links";
 

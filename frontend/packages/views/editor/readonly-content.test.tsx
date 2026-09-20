@@ -40,10 +40,14 @@ vi.mock("./link-hover-card", () => ({
   LinkHoverCard: () => null,
 }));
 
-vi.mock("./utils/link-handler", () => ({
-  openLink: vi.fn(),
-  isMentionHref: (href?: string) => Boolean(href?.startsWith("mention://")),
-}));
+vi.mock("./utils/link-handler", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./utils/link-handler")>();
+  return {
+    // Keep the predicates real — only the navigation side effect is stubbed.
+    ...actual,
+    openLink: vi.fn(),
+  };
+});
 
 vi.mock("mermaid", () => ({
   default: {
@@ -615,5 +619,35 @@ describe("ReadonlyContent slash command rendering", () => {
 
     expect(container.querySelector(".slash-command")).toBeNull();
     expect(container.querySelector("a")).not.toBeNull();
+  });
+});
+
+describe("ReadonlyContent unresolved Wiki Markdown links", () => {
+  // Wiki surfaces rewrite a Markdown `.md` link into an absolute page URL when
+  // it maps to a real page. One that survives to rendering maps to nothing, so
+  // the relative href would resolve against the current route and 404; show the
+  // label with its target instead.
+  it("renders a relative .md link that resolves to no page as plain text", () => {
+    const { container } = render(
+      <ReadonlyContent content="See [removed page](concepts/gone.md)." />,
+    );
+
+    expect(container.querySelector("a")).toBeNull();
+    const placeholder = container.querySelector("span[title='concepts/gone.md']");
+    expect(placeholder).not.toBeNull();
+    expect(placeholder?.textContent).toBe("removed page");
+  });
+
+  it("still renders links whose target is not a relative page reference", () => {
+    for (const content of [
+      "[external](https://example.com/a.md)",
+      "[absolute](/concepts/gone.md)",
+      "[source](packages/server/src/client.ts)",
+      "[anchor](#checks)",
+    ]) {
+      const { container } = render(<ReadonlyContent content={content} />);
+      expect(container.querySelector("a")).not.toBeNull();
+      expect(container.querySelector("span[title]")).toBeNull();
+    }
   });
 });
