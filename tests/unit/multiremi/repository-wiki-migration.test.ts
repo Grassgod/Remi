@@ -35,6 +35,24 @@ describe("Repository Wiki atomic migrations", () => {
     expect((await service.get("local", "repo_migration", moved.id))?.version).toBe(2);
   });
 
+  it("carries a repository-root Markdown link through a move instead of stranding it", async () => {
+    // The shape that broke dy-code-context: a Markdown `.md` link written as a
+    // repository-root path. It resolves as a hard link, so a move must rewrite
+    // it into canonical form rather than leave a page-relative path behind.
+    const { store, service } = fixture();
+    const target = store.createRepositoryWikiDoc("local", "repo_migration", { path: "concepts/loops.md", title: "Loops", body: "Loops" });
+    const source = store.createRepositoryWikiDoc("local", "repo_migration", {
+      path: "concepts/run-observability/overview.md",
+      title: "Overview",
+      body: "See [Loops](concepts/loops.md) and [client](packages/server/src/client.ts).",
+    });
+    await service.move("local", "repo_migration", target.id, "concepts/motion/loops.md", { expectedVersion: 1 });
+    const after = await service.list("local", "repo_migration");
+    const overview = after.find(doc => doc.id === source.id)!;
+    expect(overview.body).toBe("See [[concepts/motion/loops.md|Loops]] and [client](packages/server/src/client.ts).");
+    expect((await service.backlinks("local", "repo_migration", target.id)).map(doc => doc.id)).toEqual([source.id]);
+  });
+
   it("merges content, tags and provenance references into the stable target and rewrites source-ID links", async () => {
     const { store, service } = fixture();
     const target = store.createRepositoryWikiDoc("local", "repo_migration", { path: "guide.md", title: "Guide", body: "Authoritative", tags: ["target"], refs: [{ type: "url", value: "https://example.test/target" }] });

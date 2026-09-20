@@ -4,7 +4,8 @@ import type { ReactNode } from "react";
 import { CornerDownLeft, Link2 } from "lucide-react";
 import {
   resolveProjectWikiRef,
-  resolveRepositoryWikiRef,
+  resolveRepositoryWikiToken,
+  tokenizeRepositoryWikiLinks,
   tokenizeWikiLinks,
   type ProjectWikiRefResolution,
   type RepositoryWikiRefResolution,
@@ -74,7 +75,7 @@ export function WikiDocumentContent({
       : []
   )));
   const unresolved = uniqueUnresolvedLinks(links.flatMap(({ token, resolution }) => (
-    token.ref !== null && resolution.status !== "resolved"
+    token.ref !== null && token.syntax !== "markdown" && resolution.status !== "resolved"
       ? [{
         key: `${resolution.status}:${token.ref}`,
         label: token.label || token.ref,
@@ -203,16 +204,26 @@ function RelationRow({
   );
 }
 
+/**
+ * Repository Wiki bodies also carry ordinary Markdown `.md` links. Those join
+ * the graph only when they resolve to a real page (hard links); a Markdown link
+ * to a source file or a removed page stays a plain link. Project Wiki keeps
+ * canonical-only tokenizing: its refs resolve by slug, not repository path.
+ */
 function resolveDocumentLinks(
   source: WikiLinkDocument,
   pages: readonly WikiLinkDocument[],
   scope: WikiDocumentScope,
 ): ResolvedWikiLink[] {
-  return tokenizeWikiLinks(source.body).map((token) => ({
+  if (scope.kind === "project") {
+    return tokenizeWikiLinks(source.body).map((token) => ({
+      token,
+      resolution: resolveProjectWikiRef(token.ref, source.path, pages),
+    }));
+  }
+  return tokenizeRepositoryWikiLinks(source.body).map((token) => ({
     token,
-    resolution: scope.kind === "project"
-      ? resolveProjectWikiRef(token.ref, source.path, pages)
-      : resolveRepositoryWikiRef(token.ref, source.path, pages),
+    resolution: resolveRepositoryWikiToken(token, source.path, pages),
   }));
 }
 
@@ -236,6 +247,10 @@ function replaceDocumentLinks(
       const anchor = token.anchor ? normalizeWikiHeadingAnchor(token.anchor) : "";
       const href = `${hrefFor(resolution.document)}${anchor ? `#${encodeURIComponent(anchor)}` : ""}`;
       rendered += markdownLink(token.label || resolution.document.title, href);
+    } else if (token.syntax === "markdown") {
+      // Soft Markdown reference (source file path, removed page): emit the
+      // author's link unchanged instead of turning it into a broken badge.
+      rendered += token.raw;
     } else {
       rendered += titledInlineCode(
         token.label || token.ref || token.anchor || token.raw,

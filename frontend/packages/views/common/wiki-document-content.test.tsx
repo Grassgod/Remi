@@ -128,6 +128,54 @@ describe("WikiDocumentContent", () => {
     expect(screen.queryByRole("link", { name: "missing.md" })).not.toBeInTheDocument();
   });
 
+  it("resolves Repository Wiki Markdown .md links and leaves soft references to the author", () => {
+    const source = page({
+      id: "overview",
+      slug: "overview",
+      path: "operations/overview.md",
+      title: "Overview",
+      body: [
+        "See [runbook](./runbook.md), [root guide](guides/guide.md), [client](packages/server/src/client.ts), and [gone](operations/gone.md).",
+        "```bash",
+        "echo '[runbook](./runbook.md)'",
+        "```",
+      ].join("\n"),
+    });
+    const pages = [
+      source,
+      page({ id: "local", slug: "local", path: "operations/runbook.md", title: "Local runbook" }),
+      page({ id: "guide", slug: "guide", path: "guides/guide.md", title: "Unique guide" }),
+    ];
+
+    renderWithI18n(
+      <WikiDocumentContent
+        doc={source}
+        pages={pages}
+        scope={{ kind: "repository", repositoryId: "repo-1" }}
+      />,
+    );
+
+    const body = screen.getByTestId("wiki-body").textContent ?? "";
+    expect(body).toContain("[runbook](/ws/repos/repo-1/wiki/operations/runbook.md)");
+    expect(body).toContain("[root guide](/ws/repos/repo-1/wiki/guides/guide.md)");
+    // A Markdown link to no page stays the author's link — never a broken badge.
+    expect(body).toContain("[client](packages/server/src/client.ts)");
+    expect(body).toContain("[gone](operations/gone.md)");
+    expect(body).not.toContain("No Wiki page matches this reference");
+    expect(body).toContain("echo '[runbook](./runbook.md)'");
+
+    const outgoing = screen.getByRole("group", { name: "References" });
+    expect(within(outgoing).getByRole("link", { name: "Local runbook" })).toHaveAttribute(
+      "href",
+      "/ws/repos/repo-1/wiki/operations/runbook.md",
+    );
+    expect(within(outgoing).getByRole("link", { name: "Unique guide" })).toHaveAttribute(
+      "href",
+      "/ws/repos/repo-1/wiki/guides/guide.md",
+    );
+    expect(within(outgoing).queryByText("gone")).not.toBeInTheDocument();
+  });
+
   it("does not flash an empty backlink state while lazy relations are loading", () => {
     const source = page({ id: "overview", title: "Overview" });
     renderWithI18n(

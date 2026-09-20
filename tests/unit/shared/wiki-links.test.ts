@@ -1,7 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import {
   resolveProjectWikiRef,
+  resolveRepositoryWikiMarkdownRef,
   resolveRepositoryWikiRef,
+  resolveRepositoryWikiToken,
+  tokenizeMarkdownWikiLinks,
+  tokenizeRepositoryWikiLinks,
   tokenizeWikiLinks,
 } from "@multiremi/contracts/wiki-links";
 
@@ -111,5 +115,91 @@ describe("Wiki link contracts", () => {
       status: "resolved",
       document: { id: "source" },
     });
+  });
+});
+
+describe("Markdown Wiki link contracts", () => {
+  it("tokenizes .md links with offsets while ignoring every other link shape", () => {
+    const markdown = [
+      "See [Runbook](concepts/runbook.md) and [Deploy](concepts/runbook.md#deploy).",
+      "Skip ![shot](concepts/runbook.md), [site](https://example.com/a.md), [mail](mailto:a@b.c),",
+      "[abs](/concepts/runbook.md), [anchor](#deploy), [source](packages/server/src/links.ts),",
+      "and `[code](concepts/runbook.md)`.",
+    ].join("\n");
+
+    const tokens = tokenizeMarkdownWikiLinks(markdown);
+
+    expect(tokens.map(({ raw, ref, anchor, label, syntax }) => ({ raw, ref, anchor, label, syntax }))).toEqual([
+      { raw: "[Runbook](concepts/runbook.md)", ref: "concepts/runbook.md", anchor: null, label: "Runbook", syntax: "markdown" },
+      { raw: "[Deploy](concepts/runbook.md#deploy)", ref: "concepts/runbook.md", anchor: "deploy", label: "Deploy", syntax: "markdown" },
+    ]);
+    for (const token of tokens) expect(markdown.slice(token.start, token.end)).toBe(token.raw);
+  });
+
+  it("keeps canonical tokens unchanged and merges Markdown tokens without overlap", () => {
+    const markdown = "[a](a.md) then [[b|B]] then [[guide|[nested](nested.md)]] and [c](c.md).";
+
+    expect(tokenizeWikiLinks(markdown).map(({ raw, syntax }) => ({ raw, syntax }))).toEqual([
+      { raw: "[[b|B]]", syntax: undefined },
+      { raw: "[[guide|[nested](nested.md)]]", syntax: undefined },
+    ]);
+    expect(tokenizeRepositoryWikiLinks(markdown).map(({ raw, syntax }) => ({ raw, syntax }))).toEqual([
+      { raw: "[a](a.md)", syntax: "markdown" },
+      { raw: "[[b|B]]", syntax: undefined },
+      { raw: "[[guide|[nested](nested.md)]]", syntax: undefined },
+      { raw: "[c](c.md)", syntax: "markdown" },
+    ]);
+  });
+
+  it("prefers the page-relative reading, then falls back to a repository-root path", () => {
+    const source = "concepts/run-observability/overview.md";
+    const documents = [
+      { id: "source", path: source },
+      { id: "relative", path: "concepts/run-observability/concepts/loops.md" },
+      { id: "root", path: "concepts/loops.md" },
+    ];
+
+    // Both readings exist — the browser-style page-relative one wins.
+    expect(resolveRepositoryWikiMarkdownRef("concepts/loops.md", source, documents)).toMatchObject({
+      status: "resolved",
+      document: { id: "relative" },
+    });
+    // The shape that produced the dy-code-context breakage: only the
+    // repository-root reading resolves.
+    expect(resolveRepositoryWikiMarkdownRef("concepts/loops.md", source, [documents[0]!, documents[2]!]))
+      .toMatchObject({ status: "resolved", document: { id: "root" } });
+    // A sibling written the way the browser resolves it.
+    expect(resolveRepositoryWikiMarkdownRef("./loops.md", source, [documents[0]!, documents[2]!]))
+      .toEqual({ status: "missing", ref: "./loops.md" });
+  });
+
+  it("returns missing for source file paths, removed pages, and empty targets", () => {
+    const documents = [{ id: "source", path: "index.md" }];
+
+    for (const ref of ["packages/server/src/links.md", "concepts/gone.md", null, "   "]) {
+      expect(resolveRepositoryWikiMarkdownRef(ref, "index.md", documents)).toMatchObject({ status: "missing" });
+    }
+  });
+
+  it("dispatches by source syntax so canonical refs keep their own precedence", () => {
+    const source = "concepts/run-observability/overview.md";
+    const documents = [
+      { id: "source", path: source },
+      { id: "relative", path: "concepts/run-observability/concepts/loops.md" },
+      { id: "root", path: "concepts/loops.md" },
+    ];
+
+    // Canonical refs read a directory-bearing ref as a repository-root path.
+    expect(resolveRepositoryWikiToken({ ref: "concepts/loops.md", syntax: undefined }, source, documents))
+      .toMatchObject({ status: "resolved", document: { id: "root" } });
+    // Markdown links read it the way a browser would: relative to the page first.
+    expect(resolveRepositoryWikiToken({ ref: "concepts/loops.md", syntax: "markdown" }, source, documents))
+      .toMatchObject({ status: "resolved", document: { id: "relative" } });
+    // Drop the page-relative page and the Markdown link falls back to the root path.
+    expect(resolveRepositoryWikiToken(
+      { ref: "concepts/loops.md", syntax: "markdown" },
+      source,
+      [documents[0]!, documents[2]!],
+    )).toMatchObject({ status: "resolved", document: { id: "root" } });
   });
 });

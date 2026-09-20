@@ -38,7 +38,7 @@ import { useNavigation } from "../navigation";
 import { IssueMentionCard } from "../issues/components/issue-mention-card";
 import { ProjectChip } from "../projects/components/project-chip";
 import { useLinkHover, LinkHoverCard } from "./link-hover-card";
-import { openLink, isMentionHref } from "./utils/link-handler";
+import { openLink, isMentionHref, isUnresolvedWikiMarkdownHref } from "./utils/link-handler";
 import { isAllowedFileCardHref } from "@multiremi/ui/markdown";
 import { preprocessMarkdown } from "./utils/preprocess";
 import { highlightToHtml } from "./utils/highlight-markdown";
@@ -202,6 +202,13 @@ function ReadonlyLink({
     }
     // Member / agent / all mentions
     return <span className="mention">{children}</span>;
+  }
+
+  // A Markdown `.md` href that survived Wiki resolution points at no page.
+  // Rendering the <a> would resolve the relative path against the current
+  // route and open a dead URL, so show the label with its target instead.
+  if (isUnresolvedWikiMarkdownHref(href)) {
+    return <span className="text-muted-foreground" title={href}>{children}</span>;
   }
 
   // Regular links — open directly on click

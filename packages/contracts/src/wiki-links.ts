@@ -1,5 +1,15 @@
 import { normalizeWikiPath } from "./wiki-path";
 
+/**
+ * Source syntax a token was read from.
+ *
+ * `bracket` is the canonical `[[ref]]` wiki syntax. `markdown` is an ordinary
+ * Markdown inline link `[label](path.md)`; it only joins the Repository Wiki
+ * link graph when it resolves to an existing page, and stays a plain
+ * Markdown link otherwise (see resolveRepositoryWikiMarkdownRef).
+ */
+export type WikiLinkSyntax = "bracket" | "markdown";
+
 export interface WikiLinkToken {
   /** Inclusive offset in the original Markdown source. */
   start: number;
@@ -12,6 +22,8 @@ export interface WikiLinkToken {
   anchor: string | null;
   /** Optional display label after |. */
   label: string | null;
+  /** Absent means `bracket`, so existing canonical tokens keep their shape. */
+  syntax?: WikiLinkSyntax;
 }
 
 export interface RepositoryWikiRefDocument {
@@ -90,6 +102,107 @@ export function tokenizeWikiLinks(markdown: string): WikiLinkToken[] {
     index = end;
   }
   return tokens;
+}
+
+/**
+ * Tokenize Markdown inline links whose target is a `.md` path.
+ *
+ * Only same-repository page references are returned: images (`![alt](src)`),
+ * fragment-only links (`[label](#section)`), external URLs (`https:`,
+ * `mailto:`, protocol-relative), and non-`.md` targets such as source file
+ * paths are left as ordinary text. Code spans are skipped exactly as in
+ * {@link tokenizeWikiLinks}.
+ */
+export function tokenizeMarkdownWikiLinks(markdown: string): WikiLinkToken[] {
+  const source = String(markdown ?? "");
+  // A Markdown link requires an adjacent `](`; skip the scan when absent.
+  if (!source.includes("](")) return [];
+  const fencedRanges = findCodeBlockRanges(source);
+  const tokens: WikiLinkToken[] = [];
+  let fencedIndex = 0;
+  let index = 0;
+
+  while (index < source.length) {
+    const fenced = fencedRanges[fencedIndex];
+    if (fenced && index >= fenced.start) {
+      index = fenced.end;
+      fencedIndex += 1;
+      continue;
+    }
+
+    if (source[index] === "`") {
+      const tickCount = countRun(source, index, "`");
+      const closing = findMatchingBacktickRun(source, index + tickCount, tickCount);
+      index = closing >= 0 ? closing + tickCount : index + tickCount;
+      continue;
+    }
+
+    const linked = readMarkdownWikiLink(source, index);
+    if (!linked) {
+      index += 1;
+      continue;
+    }
+    tokens.push(linked);
+    index = linked.end;
+  }
+  return tokens;
+}
+
+/**
+ * Every link token that participates in the Repository Wiki link graph:
+ * canonical `[[ref]]` links plus resolvable Markdown `.md` links.
+ *
+ * Tokens never overlap; a Markdown link nested inside a canonical link's body
+ * is dropped in favour of the canonical token.
+ */
+export function tokenizeRepositoryWikiLinks(markdown: string): WikiLinkToken[] {
+  const bracket = tokenizeWikiLinks(markdown);
+  const markdownLinks = tokenizeMarkdownWikiLinks(markdown);
+  if (!markdownLinks.length) return bracket;
+  if (!bracket.length) return markdownLinks;
+  const canonical = bracket.map((token) => [token.start, token.end] as const);
+  return [
+    ...bracket,
+    ...markdownLinks.filter((token) => !canonical.some(([start, end]) => token.start < end && token.end > start)),
+  ].sort((left, right) => left.start - right.start);
+}
+
+/**
+ * Resolve a Markdown `.md` link the way a reader's browser would, then fall
+ * back to a repository-root path.
+ *
+ * Markdown has no `[[...]]` syntax, so a page-relative target wins when both
+ * interpretations exist; only when the relative reading finds nothing do we
+ * accept an author's repository-root style path (the shape that produced the
+ * dy-code-context breakage). Anything that resolves to no page — a source file
+ * path, a removed page — returns `missing`, which callers treat as a **soft
+ * reference**: never rewritten, and never a problem on its own when newly
+ * introduced. A reference that used to resolve and no longer does is a
+ * regression, and is still reported.
+ */
+export function resolveRepositoryWikiMarkdownRef<T extends RepositoryWikiRefDocument>(
+  ref: string | null,
+  sourcePath: string,
+  documents: readonly T[],
+): RepositoryWikiRefResolution<T> {
+  if (ref === null) return { status: "missing", ref: null };
+  const value = ref.trim();
+  if (!value) return { status: "missing", ref: value };
+  const relative = resolveRepositoryWikiRef(`./${value.replace(/^\.\/+/, "")}`, sourcePath, documents);
+  if (relative.status !== "missing") return relative;
+  const root = resolveRepositoryWikiRef(value, sourcePath, documents);
+  return root.status === "missing" ? { status: "missing", ref: value } : root;
+}
+
+/** Resolve a token by its source syntax; the single dispatch point for both forms. */
+export function resolveRepositoryWikiToken<T extends RepositoryWikiRefDocument>(
+  token: Pick<WikiLinkToken, "ref" | "syntax">,
+  sourcePath: string,
+  documents: readonly T[],
+): RepositoryWikiRefResolution<T> {
+  return token.syntax === "markdown"
+    ? resolveRepositoryWikiMarkdownRef(token.ref, sourcePath, documents)
+    : resolveRepositoryWikiRef(token.ref, sourcePath, documents);
 }
 
 /** Resolve a Repository Wiki ref without guessing when basename matches collide. */
@@ -207,6 +320,93 @@ function parseWikiLink(content: string): Pick<WikiLinkToken, "ref" | "anchor" | 
     anchor: anchorText || null,
     label: labelText || null,
   };
+}
+
+function readMarkdownWikiLink(source: string, index: number): WikiLinkToken | null {
+  if (source[index] !== "[" || isEscaped(source, index)) return null;
+  // `![alt](src)` is an attachment/image, not a page reference.
+  if (index > 0 && source[index - 1] === "!") return null;
+  const labelEnd = findClosingBracket(source, index);
+  if (labelEnd < 0 || source[labelEnd + 1] !== "(") return null;
+  const targetEnd = findClosingParen(source, labelEnd + 1);
+  if (targetEnd < 0) return null;
+  const target = parseMarkdownWikiTarget(source.slice(labelEnd + 2, targetEnd));
+  if (!target) return null;
+  return {
+    start: index,
+    end: targetEnd + 1,
+    raw: source.slice(index, targetEnd + 1),
+    ref: target.ref,
+    anchor: target.anchor,
+    label: source.slice(index + 1, labelEnd).trim() || null,
+    syntax: "markdown",
+  };
+}
+
+/** Offset of the `]` matching the `[` at `open`, or -1. Inline links never span lines. */
+function findClosingBracket(source: string, open: number): number {
+  let depth = 0;
+  for (let index = open; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === "\n") return -1;
+    if (character === "\\") {
+      index += 1;
+      continue;
+    }
+    if (character === "[") depth += 1;
+    else if (character === "]") {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
+/** Offset of the `)` matching the `(` at `open`, or -1. */
+function findClosingParen(source: string, open: number): number {
+  let depth = 0;
+  for (let index = open; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === "\n") return -1;
+    if (character === "\\") {
+      index += 1;
+      continue;
+    }
+    if (character === "(") depth += 1;
+    else if (character === ")") {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Parse a Markdown link target into a page reference.
+ *
+ * Returns null for anything that is not a same-repository `.md` page path —
+ * external URLs, protocol-relative URLs, fragment-only anchors, absolute
+ * site paths, source file paths, and targets carrying an optional title.
+ */
+function parseMarkdownWikiTarget(raw: string): Pick<WikiLinkToken, "ref" | "anchor"> | null {
+  const text = raw.trim();
+  if (!text) return null;
+  const withoutTitle = text.replace(/\s+(?:"[^"]*"|'[^']*'|\([^()]*\))\s*$/, "").trim();
+  if (!withoutTitle || isExternalMarkdownTarget(withoutTitle)) return null;
+  if (withoutTitle.startsWith("/") || withoutTitle.startsWith("<")) return null;
+  const hash = withoutTitle.indexOf("#");
+  const path = (hash >= 0 ? withoutTitle.slice(0, hash) : withoutTitle).trim();
+  const anchor = hash >= 0 ? withoutTitle.slice(hash + 1).trim() : "";
+  // A bare `#section` stays inside the current document.
+  if (!path) return null;
+  if (/\s/.test(path)) return null;
+  if (!path.toLowerCase().endsWith(".md")) return null;
+  return { ref: path, anchor: anchor || null };
+}
+
+function isExternalMarkdownTarget(target: string): boolean {
+  // Schemes (https:, mailto:, mention://, slash://) and protocol-relative URLs.
+  return /^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith("//");
 }
 
 function uniqueResolution<T extends RepositoryWikiRefDocument>(
