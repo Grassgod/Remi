@@ -150,6 +150,83 @@ describe("Task list pagination", () => {
     expect(body.next_offset).toBeNull();
   });
 
+  it("returns exactly the rule-allowed tasks when paging through the whole list", async () => {
+    // Mixed fixture covering several visibility rules at once, then paged with
+    // limit=2. Paging must produce the same set the rules allow -- not one task
+    // more (a leak) and not one fewer (an invisible task eating page budget).
+    //
+    // The expected per-identity sets below were dumped from this same fixture on
+    // the parent commit (tests/manual/vis-equivalence-evidence.ts) and are
+    // byte-identical with the pagination change: the page moves, the rule does
+    // not. Ordinary tasks stay workspace-visible on this route; Chat tasks stay
+    // creator-only.
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    store.createWorkspace({ id: "ws_other", name: "Other", slug: "other", issuePrefix: "OTH" });
+    const shared = store.createAgent({ name: "Shared", provider: "codex", workspaceId: "local", visibility: "workspace" });
+    const mine = store.createAgent({ name: "Mine", provider: "codex", workspaceId: "local", visibility: "private", ownerId: "usr_alice" });
+    const theirs = store.createAgent({ name: "Theirs", provider: "codex", workspaceId: "local", visibility: "private", ownerId: "usr_bob" });
+    const foreign = store.createAgent({ name: "Foreign", provider: "codex", workspaceId: "ws_other", visibility: "workspace" });
+    store.createWorkspaceMember({ workspaceId: "local", userId: "usr_alice", name: "Alice", role: "member" });
+    store.createWorkspaceMember({ workspaceId: "local", userId: "usr_bob", name: "Bob", role: "admin" });
+    const alice = await store.createAccessToken({ name: "Alice", type: "pat", userId: "usr_alice", workspaceId: "local" });
+    const bob = await store.createAccessToken({ name: "Bob", type: "pat", userId: "usr_bob", workspaceId: "local" });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+
+    const sharedOrdinary = store.createTask({ agentId: shared.id, prompt: "shared work" }).id;
+    const alicePrivateOrdinary = store.createTask({ agentId: mine.id, prompt: "alice private agent" }).id;
+    const bobPrivateOrdinary = store.createTask({ agentId: theirs.id, prompt: "bob private agent" }).id;
+    const foreignOrdinary = store.createTask({ agentId: foreign.id, prompt: "foreign", workspaceId: "ws_other" }).id;
+
+    const chat = (agentId: string, creatorId: string, content: string) => {
+      const session = store.createChatSession({ agentId, creatorId, workspaceId: store.getAgent(agentId)!.workspaceId });
+      return store.sendChatMessage(session.id, { content }).task.id;
+    };
+    const sharedAliceChat = chat(shared.id, "usr_alice", "alice on shared agent");
+    const sharedBobChat = chat(shared.id, "usr_bob", "bob on shared agent");
+    const alicePrivateBobChat = chat(mine.id, "usr_bob", "bob on alice's private agent");
+
+    const expectedForAlice = new Set([sharedOrdinary, alicePrivateOrdinary, bobPrivateOrdinary, sharedAliceChat]);
+    const expectedForBob = new Set([
+      sharedOrdinary,
+      alicePrivateOrdinary,
+      bobPrivateOrdinary,
+      sharedBobChat,
+      alicePrivateBobChat,
+    ]);
+    expect(expectedForAlice.has(foreignOrdinary)).toBe(false);
+    expect(expectedForBob.has(sharedAliceChat)).toBe(false);
+
+    for (const [identity, token, expected] of [
+      ["alice", alice.token, expectedForAlice],
+      ["bob", bob.token, expectedForBob],
+    ] as const) {
+      const collected: string[] = [];
+      let offset = 0;
+      let rounds = 0;
+      for (;;) {
+        const response = await app.request(`/api/multiremi/tasks?limit=2&offset=${offset}`, {
+          headers: headers(token),
+        });
+        expect(response.status, identity).toBe(200);
+        const body = await response.json() as {
+          tasks: Array<{ id: string }>;
+          has_more: boolean;
+          next_offset: number | null;
+        };
+        collected.push(...body.tasks.map((task) => task.id));
+        rounds += 1;
+        if (!body.has_more) break;
+        expect(body.next_offset).toBe(offset + body.tasks.length);
+        offset = body.next_offset!;
+        expect(rounds, identity).toBeLessThan(20);
+      }
+      expect(rounds, identity).toBeGreaterThan(1);
+      expect(new Set(collected), identity).toEqual(expected);
+      expect(collected.length, identity).toBe(expected.size);
+    }
+  });
+
   it("omits heavy fields from list entries while the detail route keeps them", async () => {
     const { app, entries, root } = await fixture(3, 100);
     const list = await page(app, "?limit=3", root);

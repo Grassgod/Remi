@@ -378,5 +378,35 @@
         "after": 3.95
       }
     }
-  ]
+  ],
+  "visibilityEquivalence": {
+    "harness": "tests/manual/vis-equivalence-evidence.ts",
+    "method": "Same fixture run on the parent commit and on the change; output diffed byte for byte.",
+    "identical": true,
+    "identities": {
+      "root": [
+        "(no-identity admin path: all tasks visible in both runs)"
+      ],
+      "alice": [
+        "alicePrivateAgentAliceChat",
+        "alicePrivateAgentOrdinary",
+        "bobPrivateAgentOrdinary",
+        "sharedAgentAliceChat",
+        "sharedAgentOrdinary"
+      ],
+      "bob": [
+        "alicePrivateAgentBobChat",
+        "alicePrivateAgentOrdinary",
+        "bobPrivateAgentOrdinary",
+        "sharedAgentBobChat",
+        "sharedAgentOrdinary"
+      ],
+      "carol": [
+        "foreignWorkspaceCarolChat",
+        "foreignWorkspaceOrdinary"
+      ]
+    },
+    "detailStatusAndMessages": "Per-task detail + transcript status codes also identical across both runs.",
+    "finding": "This route has always enforced the workspace boundary and the Chat creator boundary; private-agent ownership is not part of its existing rule. MUL-357 preserves that behaviour exactly instead of tightening or loosening it."
+  }
 }
