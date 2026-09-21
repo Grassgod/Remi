@@ -699,11 +699,24 @@ export function createFeishuTaskHandler(
       respondHumanRequest: async () => { throw new Error("command has no human request"); },
     });
     if (command && (command.name === "stop" || command.name === "esc")) {
-      const result = await daemon.cancelFeishuBotSessionTask(revision, sessionKey, {
-        chatId: message.chatId,
-        senderOpenId: stringMetadata(message, "senderOpenId"),
-        target: command.args || null,
-      });
+      // A stop that could not be requested must say so. Letting the error escape
+      // would surface the connector's generic `**Error:** <http text>` card,
+      // which tells the user nothing about whether their Task is still running.
+      let result: FeishuBotCancelResult;
+      try {
+        result = await daemon.cancelFeishuBotSessionTask(revision, sessionKey, {
+          chatId: message.chatId,
+          senderOpenId: stringMetadata(message, "senderOpenId"),
+          target: command.args || null,
+        });
+      } catch (error) {
+        await replyCard(
+          renderFeishuStopFailure(error),
+          "feishu-command-stop",
+          displayName,
+        );
+        return;
+      }
       await replyCard(
         renderFeishuStopResult(result, command.args || null),
         "feishu-command-stop",
@@ -840,6 +853,31 @@ function renderFeishuStopResult(result: FeishuBotCancelResult, target?: string |
     return `没有停止任何任务：${reason}。`;
   }
   return "当前没有正在运行的任务。";
+}
+
+/**
+ * Reply card for a stop request that never reached the server.
+ *
+ * The Task was not confirmed stopped, so the card must not imply either
+ * outcome: it reports the failure and points at the workbench, where the real
+ * state is visible.
+ */
+function renderFeishuStopFailure(error: unknown): string {
+  const detail = error instanceof Error ? error.message : String(error);
+  const reason = formatStopFailureReason(detail);
+  return `停止请求失败：${reason}。任务可能仍在运行，请到工作台确认。`;
+}
+
+/**
+ * Keep the operator-useful part of a transport error without pasting a raw
+ * English HTTP dump into the card.
+ */
+function formatStopFailureReason(detail: string): string {
+  const status = /\breturned (\d{3})\b/.exec(detail) ?? /\b(\d{3})\b/.exec(detail);
+  if (status) return `服务端返回 ${status[1]}`;
+  if (/timed? ?out/i.test(detail)) return "请求超时";
+  if (/fetch failed|ECONNREFUSED|ENOTFOUND|network/i.test(detail)) return "无法连接服务端";
+  return "服务端未确认";
 }
 
 function renderFeishuCancelCandidate(candidate: FeishuBotCancelCandidate): string {

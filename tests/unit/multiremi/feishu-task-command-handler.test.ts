@@ -185,6 +185,52 @@ describe("Feishu Task command handler", () => {
     expect(store.listTasks()).toHaveLength(before + 1);
   });
 
+  it("reports a failure card when the cancel request cannot be made", async () => {
+    const { store, revision } = scaffold();
+    const submitted = store.submitFeishuBotMessage("local", "rt_bot", {
+      revision, externalSessionKey: `${CHAT}:thread:omt_fail`, externalMessageId: "om_fail",
+      chatType: "group", chatId: CHAT, threadId: "omt_fail",
+      senderOpenId: "ou_owner", text: "work that keeps running", deliveryMode: "native_cot_v1",
+    });
+    expect(store.claimTask("rt_bot")?.id).toBe(submitted.taskId);
+    store.startTask(submitted.taskId);
+
+    // The transport itself fails (an internal route answered 500).
+    const daemon = {
+      cancelFeishuBotSessionTask: async () => {
+        throw new Error("GET /api/feishu-bot/session/cancel returned 500: internal error");
+      },
+    } as unknown as MultiremiDaemon;
+    const handle = createFeishuTaskHandler(daemon, revision, "Concierge");
+    const text: string[] = [];
+    await handle(
+      {
+        chatId: CHAT,
+        text: "贺华杰: /stop",
+        metadata: {
+          messageId: "om_fail_click", chatType: "group", senderOpenId: "ou_owner", rawContent: "/stop",
+        },
+      },
+      `${CHAT}:thread:omt_fail_click`,
+      async (stream) => {
+        for await (const event of stream as AsyncIterable<TaskStreamEvent>) {
+          if (event.kind === "message" && event.message.content) text.push(event.message.content);
+        }
+      },
+    );
+
+    const card = text.join("\n");
+    // The user is told the request failed and that the Task may still be alive —
+    // never that it stopped, and never a raw HTTP dump.
+    expect(card).toContain("停止请求失败");
+    expect(card).toContain("任务可能仍在运行");
+    expect(card).toContain("服务端返回 500");
+    expect(card).not.toContain("**Error:**");
+    expect(card).not.toContain("returned 500: internal error");
+    expect(store.getTask(submitted.taskId)?.status).toBe("running");
+    expect(store.listIssues()).toHaveLength(0);
+  });
+
   it("refuses an explicit target outside the sender's own candidates", async () => {
     const { store, revision } = scaffold();
     const submitted = store.submitFeishuBotMessage("local", "rt_bot", {
