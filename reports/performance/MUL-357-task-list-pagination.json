@@ -23,7 +23,9 @@
   },
   "commits": {
     "parent": "9b0f915a9e6bdf7e5afb25bfcbbe9d9279aeecb7",
-    "head": "85e05c05bc8cb3ebba8ad6ef5fc666ee53f659f8"
+    "implementedAndMeasured": "85e05c05",
+    "head": "6bd95aea",
+    "note": "Both harnesses were run at 85e05c05. `git diff --name-only 85e05c05..6bd95aea` lists only this report file, so the implementation under measurement is the implementation at HEAD."
   },
   "visibilityEquivalence": {
     "harness": "tests/manual/vis-equivalence-evidence.ts",
