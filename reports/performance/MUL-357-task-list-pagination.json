@@ -24,8 +24,7 @@
   "commits": {
     "parent": "9b0f915a9e6bdf7e5afb25bfcbbe9d9279aeecb7",
     "implementedAndMeasured": "85e05c05",
-    "head": "6bd95aea",
-    "note": "Both harnesses were run at 85e05c05. `git diff --name-only 85e05c05..6bd95aea` lists only this report file, so the implementation under measurement is the implementation at HEAD."
+    "note": "Both harnesses were run at 85e05c05. Every commit after it on this branch touches only this report file, so the implementation under measurement is still the implementation at HEAD. Naming a specific head SHA here goes stale on the very next commit, so re-check the invariant instead: `git diff --name-only 85e05c05..HEAD` must list only this file."
   },
   "visibilityEquivalence": {
     "harness": "tests/manual/vis-equivalence-evidence.ts",
