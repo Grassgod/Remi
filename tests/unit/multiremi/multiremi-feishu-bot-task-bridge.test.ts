@@ -1167,7 +1167,7 @@ describe("Feishu bot standard Task bridge", () => {
       .toMatchObject({ chatSessionId: second.chatSessionId, agentId: routedAgent.id });
 
     expect(store.cancelFeishuBotSessionTask("local", "rt_bot", config.revision, externalSessionKey))
-      .toBe(second.taskId);
+      .toMatchObject({ outcome: "cancelled", taskId: second.taskId });
     expect(store.getTask(first.taskId)?.status).toBe("cancelled");
     expect(store.getTask(second.taskId)?.status).toBe("cancelled");
     expect(store.resetFeishuBotSession("local", "rt_bot", config.revision, externalSessionKey)).toBe(true);

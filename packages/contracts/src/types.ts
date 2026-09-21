@@ -4385,6 +4385,40 @@ export interface FeishuBotSessionSnapshot {
   task: FeishuBotTaskSnapshot | null;
 }
 
+
+/** One Task that a Feishu `/stop` could target, with the context a human
+ *  needs to tell several concurrent runs apart. */
+export interface FeishuBotCancelCandidate {
+  taskId: string;
+  status: MultiremiTaskStatus;
+  agentName: string | null;
+  issueId: string | null;
+  issueKey: string | null;
+  chatTitle: string | null;
+  startedAt: string | null;
+}
+
+/**
+ * Result of resolving one Feishu stop request against the platform's durable
+ * Tasks. `cancelled` also covers the session-scoped hit every group thread
+ * already relied on; the other outcomes exist so the daemon can answer a
+ * group-top-level stop without guessing which run the user meant.
+ */
+export interface FeishuBotCancelResult {
+  outcome: "cancelled" | "none" | "ambiguous" | "rejected";
+  /** Agent whose Task the request targeted, for the reply card. */
+  agentName: string | null;
+  taskId: string | null;
+  issueKey: string | null;
+  chatTitle: string | null;
+  /** Populated only for `ambiguous`; a bounded, sender-scoped shortlist. */
+  candidates: FeishuBotCancelCandidate[];
+  /** Total candidates before truncation, so the card can say "N more". */
+  candidateCount: number;
+  /** Human-readable reason for `rejected`. */
+  reason: string | null;
+}
+
 export type FeishuBotAgentRouteScope = "p2p_default" | "group_default" | "chat";
 
 export interface MultiremiFeishuBotAgentRoute {

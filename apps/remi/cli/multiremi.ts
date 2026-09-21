@@ -18,9 +18,11 @@ import {
 } from "@multiremi/index.js";
 import type { MultiremiDaemonOptions } from "@multiremi/daemon.js";
 import type {
+  FeishuBotCancelCandidate,
+  FeishuBotCancelResult,
   FeishuBotSessionSnapshot,
 } from "@multiremi/contracts/types.js";
-import type { TaskStreamingHandler, TaskStreamEvent } from "@connectors/base.js";
+import type { IncomingMessage, TaskStreamingHandler, TaskStreamEvent } from "@connectors/base.js";
 import { MultiremiCliUpdateCoordinator } from "@multiremi/worker/cli-update-coordinator.js";
 import { setLogLevel } from "@shared/logger.js";
 import { multiremiVersion } from "@multiremi/version.js";
@@ -41,6 +43,7 @@ import {
   type WorkspaceSupervisorLease,
 } from "@daemon/agent-runtime/workspace/process-owner.js";
 import { type CliOptions, numberOpt, parseArgs, stringOpt } from "./multiremi/options.js";
+import { isUnknownFeishuCommand, resolveFeishuCommand, unknownCommandMessage } from "./feishu-commands.js";
 import {
   SUPPORTED_DAEMON_PROVIDERS,
   type SupportedDaemonProvider,
@@ -685,33 +688,57 @@ export function createFeishuTaskHandler(
   displayName: string,
 ): TaskStreamingHandler {
   return async (message, sessionKey, consumer) => {
-    const command = message.text.trim().toLowerCase();
-    if (command === "/new") {
+    // Commands are matched on the raw body. `message.text` carries the group
+    // speaker prefix and the quoted-reply prefix, so matching it silently made
+    // every command in a group miss and start a Task instead.
+    const rawContent = feishuMessageRawContent(message);
+    const command = resolveFeishuCommand(rawContent);
+    const replyCard = (text: string, taskId: string, name: string) => consumer(singleMessageStream(text), {
+      taskId,
+      displayName: name,
+      respondHumanRequest: async () => { throw new Error("command has no human request"); },
+    });
+    if (command && (command.name === "stop" || command.name === "esc")) {
+      const result = await daemon.cancelFeishuBotSessionTask(revision, sessionKey, {
+        chatId: message.chatId,
+        senderOpenId: stringMetadata(message, "senderOpenId"),
+        target: command.args || null,
+      });
+      await replyCard(
+        renderFeishuStopResult(result),
+        "feishu-command-stop",
+        result.agentName ?? displayName,
+      );
+      return;
+    }
+    if (command && command.name === "new") {
       const snapshot = await daemon.inspectFeishuBotSession(revision, sessionKey);
       await daemon.cancelFeishuBotSessionTask(revision, sessionKey);
       const reset = await daemon.resetFeishuBotSession(revision, sessionKey);
-      await consumer(singleMessageStream(reset ? "New conversation started." : "Conversation is already new."), {
-        taskId: "feishu-command-new",
-        displayName: snapshot.agentName ?? displayName,
-        respondHumanRequest: async () => { throw new Error("command has no human request"); },
-      });
+      await replyCard(
+        reset ? "New conversation started." : "Conversation is already new.",
+        "feishu-command-new",
+        snapshot.agentName ?? displayName,
+      );
       return;
     }
-    if (command === "/status" || command === "/sessions" || command === "/context") {
+    if (command && (command.name === "status" || command.name === "sessions" || command.name === "context")) {
       const snapshot = await daemon.inspectFeishuBotSession(revision, sessionKey);
-      await consumer(singleMessageStream(renderFeishuSessionCommand(command, snapshot)), {
-        taskId: `feishu-command-${command.slice(1)}`,
-        displayName: snapshot.agentName ?? displayName,
-        respondHumanRequest: async () => { throw new Error("command has no human request"); },
-      });
+      await replyCard(
+        renderFeishuSessionCommand(`/${command.name}`, snapshot),
+        `feishu-command-${command.name}`,
+        snapshot.agentName ?? displayName,
+      );
       return;
     }
-    if (command === "/cwd" || command === "/compact") {
-      await consumer(singleMessageStream(`${command} is no longer supported.`), {
-        taskId: "feishu-command-removed",
-        displayName,
-        respondHumanRequest: async () => { throw new Error("command has no human request"); },
-      });
+    if (command && (command.name === "cwd" || command.name === "compact")) {
+      await replyCard(`/${command.name} is no longer supported.`, "feishu-command-removed", displayName);
+      return;
+    }
+    // An unrecognised bare slash message is answered instead of being filed as
+    // new work. `/data00/x …` and other slash-prefixed requests keep working.
+    if (isUnknownFeishuCommand(rawContent)) {
+      await replyCard(unknownCommandMessage(rawContent), "feishu-command-unknown", displayName);
       return;
     }
 
@@ -757,6 +784,77 @@ export function createFeishuTaskHandler(
         daemon.respondFeishuBotHumanRequest(submitted.taskId, requestId, response),
     });
   };
+}
+
+/**
+ * Raw inbound body for command matching. The connector strips the bot mention
+ * before recording it, so `@Remi /stop` is already `/stop` here.
+ */
+function feishuMessageRawContent(message: IncomingMessage): string {
+  const raw = message.metadata?.rawContent;
+  if (typeof raw === "string" && raw.trim()) return raw;
+  return message.text ?? "";
+}
+
+function stringMetadata(message: IncomingMessage, key: string): string | null {
+  const value = message.metadata?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+/**
+ * Reply card for a stop request.
+ *
+ * Only the server's answer is reported: a request that was accepted says so
+ * ("已请求停止"), and the CoT card is what turns an accepted request into the
+ * visible interrupted state. Nothing here claims a Task has already stopped.
+ */
+function renderFeishuStopResult(result: FeishuBotCancelResult): string {
+  if (result.outcome === "cancelled") {
+    const name = result.agentName ?? "the agent";
+    const context = result.issueKey ?? result.chatTitle;
+    return `已请求停止 ${name} 的任务 ${result.taskId}${context ? `（${context}）` : ""}，CoT 会在数秒内标记为已中断。`;
+  }
+  if (result.outcome === "ambiguous") {
+    const listed = result.candidates
+      .map((candidate) => `- ${renderFeishuCancelCandidate(candidate)}`)
+      .join("\n");
+    const omitted = result.candidateCount - result.candidates.length;
+    return [
+      `你在本群还有 ${result.candidateCount} 个未结束的任务，请指定要停止哪一个：`,
+      "",
+      listed,
+      ...(omitted > 0 ? [`另有 ${omitted} 个未列出。`] : []),
+      "",
+      "发送 `/stop <task_id>` 或 `/stop <Issue key>` 停止指定任务；",
+      "或在对应话题内手动发送 `/stop`（话题内可精确定位该轮任务）。",
+    ].join("\n");
+  }
+  if (result.outcome === "rejected") {
+    return `没有停止任何任务：${result.reason ?? "该目标不可用于停止"}。`;
+  }
+  return "当前没有正在运行的任务。";
+}
+
+function renderFeishuCancelCandidate(candidate: FeishuBotCancelCandidate): string {
+  const label = candidate.issueKey ?? candidate.chatTitle ?? "对话";
+  return [
+    label,
+    candidate.taskId,
+    candidate.status,
+    formatFeishuRunningFor(candidate.startedAt),
+  ].join(" · ");
+}
+
+function formatFeishuRunningFor(startedAt: string | null): string {
+  if (!startedAt) return "已运行时长未知";
+  const started = Date.parse(startedAt);
+  if (!Number.isFinite(started)) return "已运行时长未知";
+  const minutes = Math.max(0, Math.floor((Date.now() - started) / 60_000));
+  if (minutes < 1) return "刚启动";
+  if (minutes < 60) return `已运行 ${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `已运行 ${hours} 小时`;
+  return `已运行 ${Math.floor(hours / 24)} 天`;
 }
 
 function renderFeishuSessionCommand(command: string, snapshot: FeishuBotSessionSnapshot): string {

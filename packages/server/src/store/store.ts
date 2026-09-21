@@ -1979,8 +1979,9 @@ runMigrations(this.db);
     runtimeId: string,
     revision: number,
     externalSessionKey: string,
-  ): string | null {
-    return this.feishuBot.cancelSessionTask(workspaceId, runtimeId, revision, externalSessionKey);
+    options: { chatId?: string | null; senderOpenId?: string | null; target?: string | null } = {},
+  ): import("@multiremi/contracts/types.js").FeishuBotCancelResult {
+    return this.feishuBot.cancelSessionTask(workspaceId, runtimeId, revision, externalSessionKey, options);
   }
 
   inspectFeishuBotSession(
@@ -4633,6 +4634,10 @@ runMigrations(this.db);
 
   cancelTask(taskId: string): MultiremiTask {
     return this.tasks.cancelTask(taskId);
+  }
+
+  cancelTaskTree(taskId: string): import("./repos/tasks-repo.js").CancelTaskTreeResult {
+    return this.tasks.cancelTaskTree(taskId);
   }
 
   cancelTasksByTriggerComments(workspaceId: string, commentIds: string[]): number {

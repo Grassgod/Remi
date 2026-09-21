@@ -359,6 +359,8 @@ export interface TasksSurface {
   listTasks(status?: MultiremiTaskStatus): MultiremiTask[];
   listTasksForIssue(issueId: string): MultiremiTask[];
   cancelTask(taskId: string): MultiremiTask;
+  /** Cancel one Task plus every live descendant, in a single transaction. */
+  cancelTaskTree(taskId: string): import("./repos/tasks-repo.js").CancelTaskTreeResult;
   cancelTaskWithinTransaction(taskId: string): import("./repos/tasks-repo.js").CancelTaskResult;
   notifyCancelledTask(result: import("./repos/tasks-repo.js").CancelTaskResult): void;
   cancelTasksByTriggerComments(workspaceId: string, commentIds: string[]): number;

@@ -202,6 +202,7 @@ import type {
   ResolvedBotMenuConfig,
   TaskUsageEntry,
   FeishuBotTaskSnapshot,
+  FeishuBotCancelResult,
   SubmitFeishuBotMessageInput,
   SubmitFeishuBotMessageResult,
 } from "@multiremi/contracts/types.js";
@@ -1005,8 +1006,11 @@ export class MultiremiDaemon {
   cancelFeishuBotSessionTask(
     revision: number,
     externalSessionKey: string,
-  ): Promise<{ cancelled: boolean; taskId: string | null }> {
-    return this.client.cancelFeishuBotSessionTask(this.options.runtimeId!, revision, externalSessionKey);
+    options: { chatId?: string | null; senderOpenId?: string | null; target?: string | null } = {},
+  ): Promise<FeishuBotCancelResult> {
+    return this.client.cancelFeishuBotSessionTask(
+      this.options.runtimeId!, revision, externalSessionKey, options,
+    );
   }
 
   inspectFeishuBotSession(revision: number, externalSessionKey: string) {
