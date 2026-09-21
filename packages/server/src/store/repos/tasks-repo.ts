@@ -490,6 +490,10 @@ export class TasksRepo {
   }
 
   getTaskQueueBlocker(taskId: string): MultiremiTaskQueueBlocker | null {
+    // A dispatched task can still be waiting behind an active sibling when the
+    // daemon has claimed it but has not called /start yet. Returning the
+    // blocker in that state lets the UI explain the wait instead of showing a
+    // perpetually "starting" row.
     const issueBlocker = this.ctx.db.query(
       `SELECT active.id AS task_id,
               active.agent_id,
@@ -510,7 +514,8 @@ export class TasksRepo {
        JOIN multiremi_agents agent ON agent.id = active.agent_id
        LEFT JOIN multiremi_issue_sessions session ON session.id = active.issue_session_id
        WHERE queued.id = ?
-         AND queued.status = 'queued'
+         AND queued.status IN ('queued', 'dispatched')
+         AND active.id <> queued.id
          AND ${sameExecutionLaneSql("queued", "active")}
        ORDER BY active.dispatched_at ASC, active.created_at ASC
        LIMIT 1`,
@@ -531,7 +536,8 @@ export class TasksRepo {
         AND active.status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')
        LEFT JOIN multiremi_issue_sessions session ON session.id = active.issue_session_id
        WHERE queued.id = ?
-         AND queued.status = 'queued'
+         AND queued.status IN ('queued', 'dispatched')
+         AND active.id <> queued.id
          AND (
            SELECT COUNT(*) FROM multiremi_tasks running
            WHERE running.agent_id = queued.agent_id

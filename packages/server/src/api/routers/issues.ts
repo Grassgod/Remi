@@ -923,7 +923,9 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       .map((task) => taskCompatibilityResponse(
         task,
         null,
-        task.status === "queued" ? store.getTaskQueueBlocker(task.id) : null,
+        task.status === "queued" || task.status === "dispatched"
+          ? store.getTaskQueueBlocker(task.id)
+          : null,
       ));
     return c.json({ tasks });
   });
@@ -937,7 +939,9 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       .map((task) => taskCompatibilityResponse(
         task,
         null,
-        task.status === "queued" ? store.getTaskQueueBlocker(task.id) : null,
+        task.status === "queued" || task.status === "dispatched"
+          ? store.getTaskQueueBlocker(task.id)
+          : null,
       )));
   });
   app.get("/api/issues/:id/usage", (c) => {
@@ -1405,7 +1409,9 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       .map((task) => taskCompatibilityResponse(
         task,
         null,
-        task.status === "queued" ? store.getTaskQueueBlocker(task.id) : null,
+        task.status === "queued" || task.status === "dispatched"
+          ? store.getTaskQueueBlocker(task.id)
+          : null,
       )));
   });
   app.post("/api/issues/:id/sessions/:sessionId/tasks", async (c) => {

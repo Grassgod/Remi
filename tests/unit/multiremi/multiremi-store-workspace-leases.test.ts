@@ -101,6 +101,42 @@ describe("Issue Session workspace leases", () => {
     expect(store.claimTask(runtime.id)?.id).toBe(second.id);
   });
 
+  it("reports the blocker for a dispatched task that has not started", () => {
+    const store = createStore();
+    const { runtime, firstAgent, issue } = seed(store);
+    const session = store.createIssueSession(issue.id, { title: "One discussion", holdsWorkspace: false });
+    const first = store.createTask({
+      agentId: firstAgent.id,
+      issueId: issue.id,
+      issueSessionId: session.id,
+      priority: 10,
+      prompt: "First",
+    });
+    const second = store.createTask({
+      agentId: firstAgent.id,
+      issueId: issue.id,
+      issueSessionId: session.id,
+      prompt: "Second",
+    });
+
+    expect(store.claimTask(runtime.id)?.id).toBe(first.id);
+    // Simulate the daemon having claimed the second task before its execution
+    // lock is free; it must still report what it is waiting on.
+    db!.run(
+      "UPDATE multiremi_tasks SET status = 'dispatched', runtime_id = ?, dispatched_at = ?, updated_at = ? WHERE id = ?",
+      [runtime.id, new Date().toISOString(), new Date().toISOString(), second.id],
+    );
+
+    expect(store.getTaskQueueBlocker(second.id)).toMatchObject({
+      taskId: first.id,
+      agentId: firstAgent.id,
+      agentName: "First",
+      issueSessionId: session.id,
+      issueSessionTitle: "One discussion",
+      reason: "session",
+    });
+  });
+
   it("keeps the same Agent context in one Session serialized", () => {
     const store = createStore();
     const { runtime, firstAgent, secondAgent, issue } = seed(store);

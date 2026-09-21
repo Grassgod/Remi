@@ -496,6 +496,7 @@
   "agent_live": {
     "is_working": "{{name}} 작업 중",
     "is_starting": "{{name}} 시작 중",
+    "is_waiting_to_start": "{{name}} 실행 대기 중",
     "is_queued": "{{name}} 대기 중",
     "queued_blocked_by": "{{session}}의 {{agent}} 대기 중 ({{task}})",
     "queue_blocker_issue_fallback": "현재 Issue",
@@ -549,7 +550,7 @@
     "trigger_comment": "댓글 트리거",
     "trigger_initial": "초기 실행",
     "status_queued": "대기 중",
-    "status_dispatched": "시작 중",
+    "status_dispatched": "실행 대기 중",
     "status_waiting_local_directory": "로컬 디렉터리 대기 중",
     "status_running": "작업 중",
     "status_awaiting_human": "검토 대기 중",

@@ -80,7 +80,12 @@ function AgentStreamRow({ task }: { task: AgentTask }) {
   const isWaitingLocalDirectory = task.status === "waiting_local_directory";
   const isAwaitingHuman = task.status === "awaiting_human";
   const isDispatched = task.status === "dispatched";
-  const isParked = isQueued || isWaitingLocalDirectory || isAwaitingHuman;
+  // `dispatched` means the runtime claimed the task, not that the agent has
+  // started. It can still sit behind another task holding the Issue workspace
+  // lock, so render it as a wait whenever a blocker is present. Only an
+  // unblocked dispatched task is genuinely in its short startup window.
+  const isWaitingToStart = isDispatched && Boolean(task.queue_blocker);
+  const isParked = isQueued || isWaitingLocalDirectory || isAwaitingHuman || isWaitingToStart;
   const agentName = task.agent_id ? getActorName("agent", task.agent_id) : t(($) => $.agent_live.fallback_name);
 
   const { data: messages } = useQuery(taskMessagesOptions(task.id));
@@ -100,17 +105,22 @@ function AgentStreamRow({ task }: { task: AgentTask }) {
 
   useEffect(() => {
     if (ended) return;
-    const startRef = task.started_at ?? task.dispatched_at ?? task.created_at;
+    // `dispatched_at` is also the daemon's renewable claim lease, so it moves
+    // forward while a task waits. Anchor a waiting task on created_at to show
+    // total time in the queue instead of a timer that resets every lease.
+    const startRef = isParked
+      ? task.created_at
+      : task.started_at ?? task.dispatched_at ?? task.created_at;
     if (!startRef) return;
     const tick = () => setElapsed(formatElapsedSince(startRef, Date.now(), LIVE_TIMER));
     tick();
     const interval = setInterval(tick, 1000);
     return () => clearInterval(interval);
-  }, [ended, task.started_at, task.dispatched_at, task.created_at]);
+  }, [ended, isParked, task.started_at, task.dispatched_at, task.created_at]);
 
   const StepIcon = toolIcon(currentStep?.tool);
   const stepSummary = currentStep ? formatToolInputSummary(currentStep.tool ?? "", currentStep.input) : "";
-  const blocker = isQueued ? task.queue_blocker : null;
+  const blocker = isQueued || isWaitingToStart ? task.queue_blocker : null;
 
   return (
     <>
@@ -142,9 +152,11 @@ function AgentStreamRow({ task }: { task: AgentTask }) {
                       ? t(($) => $.agent_live.is_waiting_local_directory, { name: agentName })
                       : isAwaitingHuman
                         ? t(($) => $.agent_live.is_awaiting_human, { name: agentName })
-                      : isDispatched
-                        ? t(($) => $.agent_live.is_starting, { name: agentName })
-                        : t(($) => $.agent_live.is_working, { name: agentName })}
+                      : isWaitingToStart
+                        ? t(($) => $.agent_live.is_waiting_to_start, { name: agentName })
+                        : isDispatched
+                          ? t(($) => $.agent_live.is_starting, { name: agentName })
+                          : t(($) => $.agent_live.is_working, { name: agentName })}
             </span>
             {!ended && elapsed && (
               <span className="shrink-0 tabular-nums text-muted-foreground">

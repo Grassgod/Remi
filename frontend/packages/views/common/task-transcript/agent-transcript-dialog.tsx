@@ -343,7 +343,7 @@ export function AgentTranscriptDialog({
   const statusDisplay = task.status === "queued"
     ? { label: t(($) => $.transcript.status_queued), icon: Clock, tone: "bg-muted text-muted-foreground", spins: false }
     : task.status === "dispatched"
-      ? { label: t(($) => $.transcript.status_dispatched), icon: Loader2, tone: "bg-info/15 text-info", spins: true }
+      ? { label: t(($) => $.transcript.status_dispatched), icon: task.queue_blocker ? Clock : Loader2, tone: task.queue_blocker ? "bg-muted text-muted-foreground" : "bg-info/15 text-info", spins: !task.queue_blocker }
       : task.status === "waiting_local_directory"
         ? { label: t(($) => $.transcript.status_waiting_local_directory), icon: Clock, tone: "bg-muted text-muted-foreground", spins: false }
         : task.status === "running"
@@ -375,7 +375,7 @@ export function AgentTranscriptDialog({
         : isLive
           ? t(($) => $.transcript.waiting_events)
           : null;
-  const emptyStateSpins = task.status === "dispatched" || (task.status === "running" && isLive);
+  const emptyStateSpins = (task.status === "dispatched" && !task.queue_blocker) || (task.status === "running" && isLive);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

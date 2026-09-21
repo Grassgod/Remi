@@ -237,11 +237,14 @@ function useTriggerText(task: AgentTask): string {
   return t(($) => $.execution_log.trigger_initial);
 }
 
-function useStatusLabel(status: AgentTask["status"]): string {
+function useStatusLabel(task: Pick<AgentTask, "status" | "queue_blocker">): string {
   const { t } = useT("issues");
-  switch (status) {
+  switch (task.status) {
     case "queued": return t(($) => $.execution_log.status_queued);
-    case "dispatched": return t(($) => $.execution_log.status_dispatched);
+    case "dispatched":
+      return task.queue_blocker
+        ? t(($) => $.execution_log.status_queued)
+        : t(($) => $.execution_log.status_dispatched);
     case "waiting_local_directory":
       return t(($) => $.execution_log.status_waiting_local_directory);
     case "running": return t(($) => $.execution_log.status_running);
@@ -257,13 +260,16 @@ function ActiveRow({ task, issueId, agentModel, agentThinkingLevel }: { task: Ag
   const [cancelling, setCancelling] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const tone = STATUS_TONE[task.status];
-  const label = useStatusLabel(task.status);
+  const label = useStatusLabel(task);
   const trigger = useTriggerText(task);
 
-  // Transcript only meaningful once messages exist — pure-queued and
-  // waiting_local_directory tasks haven't streamed any agent output yet.
+  // Transcript only meaningful once messages exist — queued tasks (including
+  // dispatched-but-blocked ones) and waiting_local_directory tasks haven't
+  // streamed any agent output yet.
   const showTranscript =
-    task.status !== "queued" && task.status !== "waiting_local_directory";
+    task.status !== "queued"
+    && task.status !== "waiting_local_directory"
+    && !(task.status === "dispatched" && task.queue_blocker);
 
   const handleCancel = async () => {
     if (cancelling) return;
@@ -345,7 +351,7 @@ function PastRow({ task, issueId, agentModel, agentThinkingLevel }: { task: Agen
   const { t } = useT("issues");
   const timeAgo = useTimeAgo();
   const [retrying, setRetrying] = useState(false);
-  const label = useStatusLabel(task.status);
+  const label = useStatusLabel(task);
   const trigger = useTriggerText(task);
   const time = task.completed_at ? timeAgo(task.completed_at) : "—";
   const failureLabel =

@@ -382,6 +382,29 @@ describe("AgentLiveCard queued rendering", () => {
     expect(stop.querySelector("span")).toHaveClass("hidden", "sm:inline");
   });
 
+  it("renders a blocked dispatched task as waiting to start, not working", async () => {
+    const blockedTask = makeTask("task-blocked", {
+      status: "dispatched",
+      started_at: null,
+      queue_blocker: {
+        task_id: "task-active",
+        agent_id: "agent-2",
+        agent_name: "Builder",
+        issue_session_id: "session-1",
+        issue_session_title: "Implementation",
+        reason: "issue_workspace",
+      },
+    });
+    mockApi.getActiveTasksForIssue.mockResolvedValueOnce({ tasks: [blockedTask] });
+
+    renderCard();
+
+    await waitFor(() => {
+      expect(screen.getByText(/is waiting to start/)).toBeTruthy();
+    });
+    expect(screen.queryByText(/is working/)).toBeNull();
+  });
+
   it("Stop button opens a confirm dialog and only calls cancelTask after the user confirms", async () => {
     const runningTask = makeTask("task-r", { status: "running" });
     mockApi.getActiveTasksForIssue.mockResolvedValueOnce({ tasks: [runningTask] });

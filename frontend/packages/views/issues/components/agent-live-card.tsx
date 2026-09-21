@@ -416,21 +416,28 @@ function AgentLiveRow({ task, items, agentName, onRequestCancel, cancelling }: A
   // holds the same local_directory lock.
   const isWaitingLocalDirectory = task.status === "waiting_local_directory";
   const isAwaitingHuman = task.status === "awaiting_human";
+  // A dispatched task has been claimed by a runtime but may still be waiting
+  // on the Issue workspace lock. Only treat that as "starting" when nothing
+  // is blocking it; otherwise it is another parked row.
+  const isWaitingToStart = task.status === "dispatched" && Boolean(task.queue_blocker);
   // Parked vs running is signalled by the icon (Clock vs spinning Loader2)
   // and the label below — the container chrome is shared, so there's no
   // per-row background variant.
-  const isParked = isQueued || isWaitingLocalDirectory || isAwaitingHuman;
+  const isParked = isQueued || isWaitingLocalDirectory || isAwaitingHuman || isWaitingToStart;
 
   // Elapsed time — ticks every second so users see the agent is alive.
-  // For queued tasks neither started_at nor dispatched_at is set yet, so
-  // anchor on created_at to show the "queued for Ns" wait window.
+  // For parked tasks anchor on created_at: queued tasks have no dispatch
+  // timestamp, and dispatched_at is a renewable claim lease that would make
+  // a blocked task's timer restart every few seconds.
   useEffect(() => {
-    const startRef = task.started_at ?? task.dispatched_at ?? task.created_at;
+    const startRef = isParked
+      ? task.created_at
+      : task.started_at ?? task.dispatched_at ?? task.created_at;
     if (!startRef) return;
     setElapsed(formatElapsedSince(startRef, Date.now(), LIVE_TIMER));
     const interval = setInterval(() => setElapsed(formatElapsedSince(startRef, Date.now(), LIVE_TIMER)), 1000);
     return () => clearInterval(interval);
-  }, [task.started_at, task.dispatched_at, task.created_at]);
+  }, [isParked, task.started_at, task.dispatched_at, task.created_at]);
 
   const toolCount = countToolCalls(items);
 
@@ -456,7 +463,9 @@ function AgentLiveRow({ task, items, agentName, onRequestCancel, cancelling }: A
               ? t(($) => $.agent_live.is_awaiting_human, { name: agentName })
             : isQueued
               ? t(($) => $.agent_live.is_queued, { name: agentName })
-              : t(($) => $.agent_live.is_working, { name: agentName })}
+              : isWaitingToStart
+                ? t(($) => $.agent_live.is_waiting_to_start, { name: agentName })
+                : t(($) => $.agent_live.is_working, { name: agentName })}
         </span>
         <span className="text-muted-foreground tabular-nums shrink-0">
           {isParked

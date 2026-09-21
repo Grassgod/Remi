@@ -496,6 +496,7 @@
   "agent_live": {
     "is_working": "{{name}} is working",
     "is_starting": "{{name}} is starting",
+    "is_waiting_to_start": "{{name}} is waiting to start",
     "is_queued": "{{name}} is queued",
     "queued_blocked_by": "Waiting for {{agent}} in {{session}} ({{task}})",
     "queue_blocker_issue_fallback": "this issue",
@@ -549,7 +550,7 @@
     "trigger_comment": "Comment trigger",
     "trigger_initial": "Initial run",
     "status_queued": "Queued",
-    "status_dispatched": "Starting",
+    "status_dispatched": "Waiting to start",
     "status_waiting_local_directory": "Waiting for local directory",
     "status_running": "Working",
     "status_awaiting_human": "Waiting for review",

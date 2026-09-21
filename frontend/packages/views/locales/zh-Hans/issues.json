@@ -492,6 +492,7 @@
   "agent_live": {
     "is_working": "{{name}} 正在处理",
     "is_starting": "{{name}} 正在启动",
+    "is_waiting_to_start": "{{name}} 等待执行",
     "is_queued": "{{name}} 排队中",
     "queued_blocked_by": "正等待「{{session}}」中的 {{agent}}（{{task}}）",
     "queue_blocker_issue_fallback": "当前 Issue",
@@ -544,7 +545,7 @@
     "trigger_comment": "评论触发",
     "trigger_initial": "首次运行",
     "status_queued": "排队中",
-    "status_dispatched": "启动中",
+    "status_dispatched": "等待执行",
     "status_waiting_local_directory": "等待本地目录释放",
     "status_running": "处理中",
     "status_awaiting_human": "等待审核",
