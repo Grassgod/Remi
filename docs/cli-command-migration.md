@@ -74,6 +74,16 @@ the connection's configured model remains the default when no model is selected.
 The canonical tree includes a focused top-level Attachment download command;
 Issue and Comment keep their scoped attachment listing and management commands.
 
+`remi task list` accepts `--limit` and `--offset`. The limit applies to the
+tasks the caller is allowed to see, not to the scanned rows: `GET
+/api/multiremi/tasks` walks candidates in chunks, applies the same per-task
+visibility filter as before, and stops once the page is full. Omitting
+`--limit` returns at most 100 tasks (the server cap is 500) and reports
+`has_more` / `next_offset` for the next page. List entries omit `result`,
+`prompt`, `pluginSnapshot` / `plugin_snapshot`, `executionFingerprint` /
+`execution_fingerprint` and `usage`; `remi task get` and
+`GET /api/multiremi/tasks/:id` still return the full task.
+
 Chat Tasks can deliver files to their current conversation with
 `remi chat attachment send --attachment report.html --attachment chart.png`.
 `--content`, `--content-file`, and `--content-stdin` optionally add a caption.

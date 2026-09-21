@@ -58,6 +58,7 @@ summary: 当前性能相关实现、必须保留的语义，以及复用现有�
 | 仓库根 | `bun run scripts/render-api-route-audit-report.ts` | 将上一命令 JSON 渲染为 HTML；脚本内原因标签/建议有静态文字，复用时仍需回读源码核实。 |
 | 仓库根 | `bun run tests/manual/bench-store-n-plus-one.ts "IssuesRepo.searchIssues(includeCommentBodies=true)"` | SQLite 的 0/50/200/500 规模 SQL 数和 11 次样本 p50；输出路径由 `MUL175_BENCH_OUTPUT` 指定，不产出 p95。 |
 | 仓库根 | `bun run tests/manual/bench-pg-bridge-overhead.ts` | 用 echo worker 隔离桥开销，产出微基准 p50/p95；没有访问 PostgreSQL，脚本末尾的固定 SQL 数外推不代表当前实现。 |
+| 仓库根 | `MUL357_TASKS=6000 bun run tests/manual/bench-task-list-pagination.ts --out <path>` | `GET /api/multiremi/tasks` 的 `limit` / 无 limit / 带 status / 普通成员四类请求在 6000 条种子数据下的 p50/p95、响应字节、SQL 条数与序列化耗时。内存 SQLite + `app.request()`，不含真实 HTTP 与 PostgreSQL；改前数字用同一文件在父提交上运行。 |
 | 仓库根 | `bun test tests/unit/multiremi/multiremi-store-issues.test.ts tests/unit/multiremi/multiremi-api-issues.test.ts` | 列表、搜索及 API 行为；功能测试不是性能基线。 |
 | 仓库根 | `bun test tests/unit/multiremi/multiremi-api-search-inbox.test.ts` | 收件箱游标、摘要和原有读/归档契约；不产出性能数据。 |
 | 仓库根 | `bun test tests/unit/multiremi/multiremi-postgres-store.test.ts` | SQL 翻译和真实 PG store 契约；`MULTIREMI_TEST_POSTGRES_URL` 指向可创建临时数据库的测试实例，不可达时集成部分跳过，须记录 skipped。 |

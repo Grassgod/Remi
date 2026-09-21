@@ -314,6 +314,12 @@ export interface ClaimTaskOptions {
   supportsBinarySkillFiles?: boolean;
 }
 
+/** Keyset position for `listTasksChunk`: the full `created_at DESC, id DESC` sort key. */
+export interface TaskListCursor {
+  createdAt: string;
+  id: string;
+}
+
 export class BinarySkillFilesUnsupportedError extends Error {
   constructor(readonly agentId: string) {
     super("Task skills contain binary files. Update the Remi daemon to support binary skill files before claiming this task.");
@@ -1437,6 +1443,41 @@ export class TasksRepo {
       ? this.ctx.db.query("SELECT * FROM multiremi_tasks WHERE status = ? ORDER BY created_at DESC").all(status) as Row[]
       : this.ctx.db.query("SELECT * FROM multiremi_tasks ORDER BY created_at DESC").all() as Row[];
     return this.withTaskAutopilotRuns(rows.map(toTask));
+  }
+
+  /**
+   * MUL-357: keyset page for the global task list. The route cannot push its
+   * `limit` into SQL because the visible set is decided by per-task
+   * authorization after the read, so it walks the table in `chunkSize` slices
+   * and stops once it has enough *authorized* rows.
+   *
+   * `(created_at, id)` is the full sort key — created_at alone is not unique, so
+   * a cursor on it would skip or repeat rows that share a timestamp.
+   */
+  listTasksChunk(
+    status: MultiremiTaskStatus | undefined,
+    cursor: TaskListCursor | null,
+    chunkSize: number,
+  ): { tasks: MultiremiTask[]; nextCursor: TaskListCursor | null } {
+    const size = Math.max(1, Math.floor(chunkSize));
+    const statusFilter = status ? " AND status = ?" : "";
+    const statusParams = status ? [status] : [];
+    const cursorFilter = cursor
+      ? " AND (created_at < ? OR (created_at = ? AND id < ?))"
+      : "";
+    const cursorParams = cursor ? [cursor.createdAt, cursor.createdAt, cursor.id] : [];
+    const rows = this.ctx.db.query(
+      `SELECT * FROM multiremi_tasks
+       WHERE 1 = 1${statusFilter}${cursorFilter}
+       ORDER BY created_at DESC, id DESC
+       LIMIT ?`,
+    ).all(...statusParams, ...cursorParams, size) as Row[];
+    const tasks = this.withTaskAutopilotRuns(rows.map(toTask));
+    const last = tasks[tasks.length - 1];
+    return {
+      tasks,
+      nextCursor: rows.length === size && last ? { createdAt: last.createdAt, id: last.id } : null,
+    };
   }
 
   listAgentTasks(agentId: string): MultiremiTask[] {

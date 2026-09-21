@@ -117,6 +117,41 @@ describe("Chat task privacy across task APIs", () => {
     }
   });
 
+  it("does not let the list-request auth memo leak one caller's Chat visibility to another", async () => {
+    // MUL-357 added a per-request memo behind the list guards. It must not
+    // outlive the request: two identities asking the same question in sequence
+    // have to get their own answers.
+    const { store, agent, task, app, alice, bob } = await setup();
+    const second = store.createChatSession({ agentId: agent.id, creatorId: "bob" });
+    const bobTask = store.sendChatMessage(second.id, { content: "Bob private Chat input" }).task;
+    store.appendTaskMessages(bobTask.id, [{ type: "text", content: "Bob private transcript" }]);
+    const memberChats = store.createChatSession({ agentId: agent.id, creatorId: "bob" });
+    const memberTask = store.sendChatMessage(memberChats.id, { content: "Bob second private input" }).task;
+
+    // Interleave identities so a leaked memo would be read by the next caller.
+    for (let round = 0; round < 3; round += 1) {
+      const aliceList = await app.request("/api/multiremi/tasks", { headers: alice });
+      expect(aliceList.status, `alice ${round}`).toBe(200);
+      const aliceIds = taskIds(await aliceList.json());
+      expect(aliceIds, `alice ${round}`).toContain(task.id);
+      expect(aliceIds, `alice ${round}`).not.toContain(bobTask.id);
+      expect(aliceIds, `alice ${round}`).not.toContain(memberTask.id);
+
+      const bobList = await app.request("/api/multiremi/tasks", { headers: bob });
+      expect(bobList.status, `bob ${round}`).toBe(200);
+      const bobIds = taskIds(await bobList.json());
+      expect(bobIds, `bob ${round}`).toContain(bobTask.id);
+      expect(bobIds, `bob ${round}`).toContain(memberTask.id);
+      expect(bobIds, `bob ${round}`).not.toContain(task.id);
+    }
+
+    // Detail reads stay consistent with what the list just reported.
+    expect((await app.request(`/api/multiremi/tasks/${task.id}`, { headers: alice })).status).toBe(200);
+    expect((await app.request(`/api/multiremi/tasks/${task.id}`, { headers: bob })).status).toBe(403);
+    expect((await app.request(`/api/multiremi/tasks/${bobTask.id}`, { headers: bob })).status).toBe(200);
+    expect((await app.request(`/api/multiremi/tasks/${bobTask.id}`, { headers: alice })).status).toBe(403);
+  });
+
   it("keeps cancelled Chat history readable by its owner without execution context", async () => {
     const { store, task, app, alice, bob } = await setup();
     store.cancelTask(task.id);

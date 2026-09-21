@@ -25,6 +25,22 @@ type InternalTaskField =
   | "issueCreationRestricted"
   | "issue_creation_restricted";
 
+/**
+ * MUL-357: fields the global task *list* deliberately omits. Every task carries
+ * its full prompt, its full result text, the resolved Plugin snapshot (written
+ * twice, camelCase + snake_case) and usage rows; a production list response was
+ * 54.6 MB, of which these were ~38%. The CLI table renders none of them.
+ * `GET /api/multiremi/tasks/:id` still returns the complete shape.
+ */
+type TaskListOmittedField =
+  | "result"
+  | "prompt"
+  | "pluginSnapshot"
+  | "plugin_snapshot"
+  | "executionFingerprint"
+  | "execution_fingerprint"
+  | "usage";
+
 export function taskPublicResponse<T extends MultiremiTask>(task: T): Omit<T, InternalTaskField> {
   const {
     codexProfile: _codexProfile,
@@ -41,6 +57,24 @@ export function taskPublicResponse<T extends MultiremiTask>(task: T): Omit<T, In
   } = task;
   return publicTask;
 }
+
+/** The list shape: public task fields minus the heavy ones above. */
+export type MultiremiTaskListEntry = Omit<MultiremiTask, InternalTaskField | TaskListOmittedField>;
+
+export function taskListResponse(task: MultiremiTask): MultiremiTaskListEntry {
+  const {
+    result: _result,
+    prompt: _prompt,
+    pluginSnapshot: _pluginSnapshot,
+    plugin_snapshot: _pluginSnapshotSnake,
+    executionFingerprint: _executionFingerprint,
+    execution_fingerprint: _executionFingerprintSnake,
+    usage: _usage,
+    ...listTask
+  } = taskPublicResponse(task);
+  return listTask;
+}
+
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import { workspaceDefaultBranchResolver } from "../helpers/repositories.js";
 import { autopilotRunSourceRevision } from "@multiremi/store/repos/autopilots-repo.js";

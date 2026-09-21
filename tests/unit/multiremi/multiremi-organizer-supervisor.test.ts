@@ -213,7 +213,13 @@ describe("Organizer supervisor privilege layer", () => {
       fixture.supervisorTask.id,
       fixture.targetTask.id,
     ]));
-    expect(JSON.stringify(listed)).toContain("TOP SECRET target prompt");
+    // MUL-357 trims `prompt` from list entries, so the same cross-task content
+    // parity is asserted on the detail route, which keeps the full shape.
+    const targetDetail = await fixture.app.request(`/api/multiremi/tasks/${fixture.targetTask.id}`, {
+      headers: headers(supervisorToken.token),
+    });
+    expect(targetDetail.status).toBe(200);
+    expect(JSON.stringify((await targetDetail.json()).task)).toContain("TOP SECRET target prompt");
 
     const normalList = await fixture.app.request("/api/multiremi/tasks", {
       headers: headers(normalTaskToken.token),

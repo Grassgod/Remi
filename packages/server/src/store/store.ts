@@ -118,7 +118,7 @@ import {
   type SshMeshBrowserOverview,
 } from "@multiremi/store/repos/ssh-mesh-repo.js";
 import type { SshMeshKeyMaterial } from "@multiremi/ssh-mesh/keys.js";
-import { TasksRepo, type ClaimTaskOptions } from "@multiremi/store/repos/tasks-repo.js";
+import { TasksRepo, type ClaimTaskOptions, type TaskListCursor } from "@multiremi/store/repos/tasks-repo.js";
 import { OrganizerActionError, readOrganizerMode } from "../organizer/settings.js";
 import {
   AutopilotsRepo,
@@ -4380,6 +4380,14 @@ runMigrations(this.db);
 
   listTasks(status?: MultiremiTaskStatus): MultiremiTask[] {
     return this.tasks.listTasks(status);
+  }
+
+  listTasksChunk(
+    status: MultiremiTaskStatus | undefined,
+    cursor: TaskListCursor | null,
+    chunkSize: number,
+  ): { tasks: MultiremiTask[]; nextCursor: TaskListCursor | null } {
+    return this.tasks.listTasksChunk(status, cursor, chunkSize);
   }
 
   listAgentTasks(agentId: string): MultiremiTask[] {

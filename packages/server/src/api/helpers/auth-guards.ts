@@ -414,14 +414,74 @@ export function canUserAccessAgentByUserId(store: MultiremiStore, userId: string
 // tasks are creator-only, and a private agent's task is owner/admin-only.
 // Workspace membership itself is enforced by the caller (registry keying /
 // route guard). userId null = no-identity admin path.
-export function canUserViewTaskMessages(store: MultiremiStore, userId: string | null, task: MultiremiTask): boolean {
+/**
+ * MUL-357: request-scoped memo for the task-visibility guards. A list request
+ * checks one workspace/session/agent set per candidate task, so without this
+ * the same rows are re-read once per task (N+1).
+ *
+ * It caches query *results* only — never a decision. It must be created inside
+ * a single request and dropped with it: a process-level cache would let one
+ * caller's visibility answer apply to another's.
+ */
+export interface TaskAuthMemo {
+  workspaceAccess: Map<string, boolean>;
+  chatSessions: Map<string, MultiremiChatSession | null>;
+  agents: Map<string, MultiremiAgent | null>;
+}
+
+export function createTaskAuthMemo(): TaskAuthMemo {
+  return { workspaceAccess: new Map(), chatSessions: new Map(), agents: new Map() };
+}
+
+function memoizedChatSession(
+  store: MultiremiStore,
+  memo: TaskAuthMemo | undefined,
+  sessionId: string,
+): MultiremiChatSession | null {
+  if (!memo) return store.getChatSession(sessionId);
+  if (!memo.chatSessions.has(sessionId)) memo.chatSessions.set(sessionId, store.getChatSession(sessionId));
+  return memo.chatSessions.get(sessionId) ?? null;
+}
+
+function memoizedAgent(
+  store: MultiremiStore,
+  memo: TaskAuthMemo | undefined,
+  agentId: string,
+): MultiremiAgent | null {
+  if (!memo) return store.getAgent(agentId);
+  if (!memo.agents.has(agentId)) memo.agents.set(agentId, store.getAgent(agentId));
+  return memo.agents.get(agentId) ?? null;
+}
+
+/** `denyCurrentUserWorkspaceAccess` as a boolean, memoized per workspace. */
+export function currentUserWorkspaceAccessAllowed(
+  c: Context,
+  store: MultiremiStore,
+  memo: TaskAuthMemo | undefined,
+  workspaceId: string,
+): boolean {
+  if (memo) {
+    const cached = memo.workspaceAccess.get(workspaceId);
+    if (cached !== undefined) return cached;
+  }
+  const allowed = denyCurrentUserWorkspaceAccess(c, store, workspaceId) == null;
+  memo?.workspaceAccess.set(workspaceId, allowed);
+  return allowed;
+}
+
+export function canUserViewTaskMessages(
+  store: MultiremiStore,
+  userId: string | null,
+  task: MultiremiTask,
+  memo?: TaskAuthMemo,
+): boolean {
   if (task.chatSessionId) {
-    const session = store.getChatSession(task.chatSessionId);
+    const session = memoizedChatSession(store, memo, task.chatSessionId);
     if (!session) return false;
     if (userId == null) return true;
     return session.creatorId === userId;
   }
-  const agent = task.agentId ? store.getAgent(task.agentId) : null;
+  const agent = task.agentId ? memoizedAgent(store, memo, task.agentId) : null;
   if (!agent) return true;
   return canUserAccessAgentByUserId(store, userId, agent);
 }
@@ -429,15 +489,20 @@ export function canUserViewTaskMessages(store: MultiremiStore, userId: string | 
 // Chat task metadata and controls carry the same creator boundary as its
 // transcript. A task capability may access its own live Chat task even when
 // it was minted for a shared Runtime owner rather than the Chat creator.
-export function canCurrentUserAccessChatTask(c: Context, store: MultiremiStore, task: MultiremiTask): boolean {
+export function canCurrentUserAccessChatTask(
+  c: Context,
+  store: MultiremiStore,
+  task: MultiremiTask,
+  memo?: TaskAuthMemo,
+): boolean {
   if (!task.chatSessionId) return true;
-  if (denyCurrentUserWorkspaceAccess(c, store, task.workspaceId)) return false;
-  const session = store.getChatSession(task.chatSessionId);
+  if (!currentUserWorkspaceAccessAllowed(c, store, memo, task.workspaceId)) return false;
+  const session = memoizedChatSession(store, memo, task.chatSessionId);
   if (!session) return false;
   const token = currentAccessToken(c);
   if (token?.type === "task") return token.taskId === task.id
     && token.agentId === task.agentId && token.workspaceId === task.workspaceId;
-  return canUserViewTaskMessages(store, currentRequestUserId(c), task);
+  return canUserViewTaskMessages(store, currentRequestUserId(c), task, memo);
 }
 
 export function currentWorkspaceRole(c: Context, store: MultiremiStore, workspaceId: string): string {
