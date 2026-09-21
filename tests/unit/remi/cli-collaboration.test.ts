@@ -294,6 +294,29 @@ describe("native collaboration CLI contracts", () => {
     }
   });
 
+  it("forwards task list pagination as query parameters", async () => {
+    useCliEnv();
+    const spec = specById("task.list");
+    const requests: string[] = [];
+    globalThis.fetch = capabilityFetch(spec.id, (request) => {
+      expect(request.method).toBe("GET");
+      requests.push(new URL(request.url).search);
+      return Response.json({ tasks: [] });
+    });
+
+    await capture(() => registryFor([spec]).execute(["task", "list", "--limit", "5", "--offset", "10", "--output", "json"]));
+    await capture(() => registryFor([spec]).execute(["task", "list", "--status", "completed", "--output", "json"]));
+
+    const paged = new URLSearchParams(requests[0]);
+    expect(paged.get("limit")).toBe("5");
+    expect(paged.get("offset")).toBe("10");
+    // An omitted flag must not be sent as an empty parameter the server would
+    // have to interpret.
+    expect(requests[1]).toContain("status=completed");
+    expect(requests[1]).not.toContain("limit=");
+    expect(requests[1]).not.toContain("offset=");
+  });
+
   it.each([
     ["task.list", ["task", "list"], "/api/multiremi/tasks"],
     ["task.get", ["task", "get", "tsk_queued"], "/api/multiremi/tasks/tsk_queued"],
