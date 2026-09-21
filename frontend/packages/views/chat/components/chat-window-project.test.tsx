@@ -236,7 +236,10 @@ describe("ChatWindow project settings", () => {
     fireEvent.click(await screen.findByRole("menuitem", { name: "Automatic" }));
     fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
     await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ agent_id: "agent-a", title: "Hello" }));
-    expect(await screen.findByRole("group", { name: "Project: No project · Just chat" })).toBeInTheDocument();
+    // An unbound chat keeps no location strip: the picker is gone once the
+    // chat exists, so the row would only restate that nothing is bound.
+    await waitFor(() => expect(screen.queryByRole("button", { name: /^Work location:/ })).not.toBeInTheDocument());
+    expect(screen.queryByRole("group", { name: /^Project:/ })).not.toBeInTheDocument();
     expect(backend.update).not.toHaveBeenCalled();
   });
 
@@ -254,13 +257,19 @@ describe("ChatWindow project settings", () => {
     await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined));
   });
 
-  it.each([
-    [null, "No project · Just chat"],
-    ["missing", "Linked project unavailable"],
-  ])("does not allow an existing session with project %s to change its binding", async (project_id, label) => {
-    backend.sessions = [{ ...session, project_id }];
+  it("keeps no location strip for an existing chat with nothing bound", async () => {
+    backend.sessions = [{ ...session, project_id: null }];
     mount(true);
-    const project = await screen.findByRole("group", { name: `Project: ${label}` });
+    await screen.findByRole("button", { name: "Send test message" });
+    expect(screen.queryByRole("group", { name: /^Project:/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Work location:/ })).not.toBeInTheDocument();
+    expect(backend.update).not.toHaveBeenCalled();
+  });
+
+  it("does not allow an existing session with a missing project to change its binding", async () => {
+    backend.sessions = [{ ...session, project_id: "missing" }];
+    mount(true);
+    const project = await screen.findByRole("group", { name: "Project: Linked project unavailable" });
     fireEvent.click(project);
     expect(screen.queryByRole("button", { name: /^Project:/ })).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText("Search projects…")).not.toBeInTheDocument();

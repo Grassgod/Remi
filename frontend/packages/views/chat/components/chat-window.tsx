@@ -198,6 +198,13 @@ export function ChatWindow({
     : null;
   const isSessionArchived = currentSession?.status === "archived";
 
+  // New chats keep the picker: it is the only chance to choose where the
+  // chat runs. An existing chat with neither binding has no location to
+  // report, so the strip would spend a row on the absence of a choice.
+  const showLocationStrip =
+    !activeSessionId ||
+    Boolean(currentSession?.project_id || currentSession?.runtime_workspace_id);
+
   const qc = useQueryClient();
   const previousPendingTaskRef = useRef<PendingChatTaskRef>({
     sessionId: activeSessionId,
@@ -694,22 +701,24 @@ export function ChatWindow({
         )}
       </div>
 
-      <div className="flex min-w-0 items-center border-b px-4 py-1.5">
-        {activeSessionId && !currentSession?.runtime_workspace_id ? (
-          <ProjectDisplay projects={projects} projectId={currentSession?.project_id ?? null} />
-        ) : (
-          <WorkLocationPicker
-            wsId={wsId}
-            value={activeSessionId ? currentSession?.runtime_workspace_id ?? null : runtimeWorkspaceId}
-            projectId={activeSessionId ? currentSession?.project_id ?? null : draftProjectId}
-            onChange={location => {
-              setDraftProjectId(location.project_id);
-              setRuntimeWorkspaceId(location.runtime_workspace_id);
-            }}
-            disabled={Boolean(activeSessionId) || createSession.isPending}
-          />
-        )}
-      </div>
+      {showLocationStrip && (
+        <div className="flex min-w-0 items-center border-b px-4 py-1.5">
+          {activeSessionId && !currentSession?.runtime_workspace_id ? (
+            <ProjectDisplay projects={projects} projectId={currentSession?.project_id ?? null} />
+          ) : (
+            <WorkLocationPicker
+              wsId={wsId}
+              value={activeSessionId ? currentSession?.runtime_workspace_id ?? null : runtimeWorkspaceId}
+              projectId={activeSessionId ? currentSession?.project_id ?? null : draftProjectId}
+              onChange={location => {
+                setDraftProjectId(location.project_id);
+                setRuntimeWorkspaceId(location.runtime_workspace_id);
+              }}
+              disabled={Boolean(activeSessionId) || createSession.isPending}
+            />
+          )}
+        </div>
+      )}
 
       {/* Messages / skeleton / empty state */}
       {messagesError ? (
