@@ -4415,9 +4415,17 @@ export interface FeishuBotCancelResult {
   candidates: FeishuBotCancelCandidate[];
   /** Total candidates before truncation, so the card can say "N more". */
   candidateCount: number;
-  /** Human-readable reason for `rejected`. */
-  reason: string | null;
+  /** Why the request was refused. A stable code, not display copy: the daemon
+   *  owns the wording of the reply card, and the user's own input is echoed
+   *  there rather than passed back through the wire. */
+  reason: FeishuBotCancelRejection | null;
 }
+
+export type FeishuBotCancelRejection =
+  /** The Runtime's bot assignment changed underneath the request. */
+  | "stale_assignment"
+  /** The named target is not one of the sender's own unfinished Tasks here. */
+  | "target_not_candidate";
 
 export type FeishuBotAgentRouteScope = "p2p_default" | "group_default" | "chat";
 

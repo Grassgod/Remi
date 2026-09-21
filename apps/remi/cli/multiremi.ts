@@ -705,7 +705,7 @@ export function createFeishuTaskHandler(
         target: command.args || null,
       });
       await replyCard(
-        renderFeishuStopResult(result),
+        renderFeishuStopResult(result, command.args || null),
         "feishu-command-stop",
         result.agentName ?? displayName,
       );
@@ -808,7 +808,7 @@ function stringMetadata(message: IncomingMessage, key: string): string | null {
  * ("已请求停止"), and the CoT card is what turns an accepted request into the
  * visible interrupted state. Nothing here claims a Task has already stopped.
  */
-function renderFeishuStopResult(result: FeishuBotCancelResult): string {
+function renderFeishuStopResult(result: FeishuBotCancelResult, target?: string | null): string {
   if (result.outcome === "cancelled") {
     const name = result.agentName ?? "the agent";
     const context = result.issueKey ?? result.chatTitle;
@@ -830,7 +830,14 @@ function renderFeishuStopResult(result: FeishuBotCancelResult): string {
     ].join("\n");
   }
   if (result.outcome === "rejected") {
-    return `没有停止任何任务：${result.reason ?? "该目标不可用于停止"}。`;
+    // The card owns its wording, so echo the user's own target here rather than
+    // passing display text back from the server.
+    const reason = result.reason === "stale_assignment"
+      ? "机器人配置已变更，请重试"
+      : result.reason === "target_not_candidate"
+        ? `${target ? `${target} ` : ""}不是你在本群发起的未结束任务`
+        : "该目标不可用于停止";
+    return `没有停止任何任务：${reason}。`;
   }
   return "当前没有正在运行的任务。";
 }

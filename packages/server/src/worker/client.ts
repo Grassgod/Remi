@@ -647,7 +647,9 @@ export class MultiremiDaemonClient {
           }]
         : []),
       candidateCount: Number(response.candidate_count ?? (response.cancelled === true ? 1 : 0)),
-      reason: response.reason ?? null,
+      reason: response.reason === "stale_assignment" || response.reason === "target_not_candidate"
+        ? response.reason
+        : null,
     };
   }
 

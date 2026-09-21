@@ -185,6 +185,42 @@ describe("Feishu Task command handler", () => {
     expect(store.listTasks()).toHaveLength(before + 1);
   });
 
+  it("refuses an explicit target outside the sender's own candidates", async () => {
+    const { store, revision } = scaffold();
+    const submitted = store.submitFeishuBotMessage("local", "rt_bot", {
+      revision, externalSessionKey: `${CHAT}:thread:omt_mine`, externalMessageId: "om_mine",
+      chatType: "group", chatId: CHAT, threadId: "omt_mine",
+      senderOpenId: "ou_owner", text: "my own work", deliveryMode: "native_cot_v1",
+    });
+    // The named Task belongs to someone else in this chat, so it is not in the
+    // sender's candidate set and must not be stopped.
+    const before = store.listTasks().length;
+    const { text } = await run(
+      handler(store, revision),
+      {
+        chatId: CHAT,
+        text: "贺华杰: /stop tsk_someone_else",
+        metadata: {
+          messageId: "om_denied", chatType: "group", senderOpenId: "ou_other",
+          rawContent: "/stop tsk_someone_else",
+        },
+      },
+      `${CHAT}:thread:omt_denied`,
+    );
+    const card = text.join("\n");
+    expect(card).toContain("没有停止任何任务");
+    // The card's own wording, not a server sentence spliced into a Chinese
+    // sentence: the user's target is echoed and the exit punctuation is one
+    // sentence, not two.
+    expect(card).toContain("tsk_someone_else 不是你在本群发起的未结束任务");
+    expect(card).not.toContain("is not one of your unfinished tasks");
+    expect(card).not.toMatch(/。\s*。/);
+    // Untouched: the Task is still live, and no work was added or removed.
+    expect(store.getTask(submitted.taskId)?.status).toBe("queued");
+    expect(store.listTasks()).toHaveLength(before);
+    expect(store.listIssues()).toHaveLength(0);
+  });
+
   it("reports no running task when one cannot be found", async () => {
     const { store, revision } = scaffold();
     const { text } = await run(

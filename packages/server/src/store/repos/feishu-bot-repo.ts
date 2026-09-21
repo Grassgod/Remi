@@ -44,6 +44,7 @@ import type {
   FeishuBotAgentRouteScope,
   FeishuBotSender,
   FeishuBotCancelCandidate,
+  FeishuBotCancelRejection,
   FeishuBotCancelResult,
   FeishuBotSessionSnapshot,
   FeishuBotSecretOp,
@@ -99,7 +100,7 @@ export function resolveFallbackCancelTarget(
   return { kind: "ambiguous", count: candidates.length };
 }
 
-function rejectedCancel(reason: string): FeishuBotCancelResult {
+function rejectedCancel(reason: FeishuBotCancelRejection): FeishuBotCancelResult {
   return {
     outcome: "rejected",
     agentName: null,
@@ -1777,7 +1778,7 @@ export class FeishuBotRepo {
   ): FeishuBotCancelResult {
     const config = this.getConfig(workspaceId);
     if (!config || config.runtimeId !== runtimeId || config.revision !== revision) {
-      return rejectedCancel("the bot assignment is stale");
+      return rejectedCancel("stale_assignment");
     }
     const key = requiredBoundedString(externalSessionKey, "external_session_key", 1_024);
     const target = cleanOptionalString(options.target ?? null);
@@ -1806,7 +1807,7 @@ export class FeishuBotRepo {
     if (target) {
       const match = [...sessionTargets, ...candidates]
         .find((candidate) => candidate.task.id === target || candidate.issueKey === target);
-      if (!match) return rejectedCancel(`${target} is not one of your unfinished tasks in this chat`);
+      if (!match) return rejectedCancel("target_not_candidate");
       this.ctx.tasks().cancelTaskTree(match.task.id);
       return cancelledCancel(match);
     }
