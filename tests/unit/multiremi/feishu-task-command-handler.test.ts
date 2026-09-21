@@ -12,7 +12,7 @@ import type { MultiremiDaemon } from "@multiremi/worker/daemon.js";
 import type { IncomingMessage, TaskStreamEvent, TaskStreamMeta } from "@connectors/base.js";
 import { createFeishuTaskHandler } from "../../../apps/remi/cli/multiremi.js";
 import type { MultiremiStore } from "@multiremi/store.js";
-import { createLocalStore, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 const APP_SECRET = "wJ4tQ7xR2nB8vC5mZ1kL0pS6dF3gH9jA";
 const CHAT = "oc_command_group";
@@ -203,6 +203,18 @@ describe("Feishu Task command handler", () => {
     } as unknown as MultiremiDaemon;
     const handle = createFeishuTaskHandler(daemon, revision, "Concierge");
     const text: string[] = [];
+    const census = () => ({
+      tasks: store.listTasks().length,
+      issues: store.listIssues().length,
+      chatMessages: Number((db!.query("SELECT COUNT(*) AS n FROM multiremi_chat_messages")
+        .get() as { n: number }).n),
+      deliveries: Number((db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_deliveries")
+        .get() as { n: number }).n),
+    });
+    const before = census();
+    // The handler must absorb the failure: if the error escaped, the connector
+    // would mark the inbound message `failed` and send its own `**Error:**`
+    // card on top of ours. Resolving is what keeps that from happening.
     await handle(
       {
         chatId: CHAT,
@@ -228,7 +240,9 @@ describe("Feishu Task command handler", () => {
     expect(card).not.toContain("**Error:**");
     expect(card).not.toContain("returned 500: internal error");
     expect(store.getTask(submitted.taskId)?.status).toBe("running");
-    expect(store.listIssues()).toHaveLength(0);
+    // A failed stop writes nothing at all: the running Task is left alone and
+    // no Task, Issue, chat message, or delivery is added.
+    expect(census()).toEqual(before);
   });
 
   it("refuses an explicit target outside the sender's own candidates", async () => {
