@@ -718,7 +718,7 @@ export function createFeishuTaskHandler(
         return;
       }
       await replyCard(
-        renderFeishuStopResult(result, command.args || null),
+        renderFeishuStopResult(result, command.args || null, displayName),
         "feishu-command-stop",
         result.agentName ?? displayName,
       );
@@ -821,9 +821,15 @@ function stringMetadata(message: IncomingMessage, key: string): string | null {
  * ("已请求停止"), and the CoT card is what turns an accepted request into the
  * visible interrupted state. Nothing here claims a Task has already stopped.
  */
-function renderFeishuStopResult(result: FeishuBotCancelResult, target?: string | null): string {
+function renderFeishuStopResult(
+  result: FeishuBotCancelResult,
+  target?: string | null,
+  fallbackAgentName?: string | null,
+): string {
   if (result.outcome === "cancelled") {
-    const name = result.agentName ?? "the agent";
+    // An older server does not echo `agent_name`. Fall back to the name this
+    // handler already has rather than an English placeholder in a Chinese card.
+    const name = result.agentName ?? fallbackAgentName ?? "该 Agent";
     const context = result.issueKey ?? result.chatTitle;
     return `已请求停止 ${name} 的任务 ${result.taskId}${context ? `（${context}）` : ""}，CoT 会在数秒内标记为已中断。`;
   }
