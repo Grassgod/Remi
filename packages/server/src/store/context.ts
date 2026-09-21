@@ -361,7 +361,12 @@ export interface TasksSurface {
     status: MultiremiTaskStatus | undefined,
     cursor: import("./repos/tasks-repo.js").TaskListCursor | null,
     chunkSize: number,
-  ): { tasks: MultiremiTask[]; nextCursor: import("./repos/tasks-repo.js").TaskListCursor | null };
+  ): {
+    tasks: import("./repos/tasks-repo.js").TaskListCandidate[];
+    nextCursor: import("./repos/tasks-repo.js").TaskListCursor | null;
+  };
+  /** Full rows for the ids a page kept, in the caller's order. */
+  hydrateTasksByIds(ids: readonly string[]): MultiremiTask[];
   listTasksForIssue(issueId: string): MultiremiTask[];
   cancelTask(taskId: string): MultiremiTask;
   cancelTaskWithinTransaction(taskId: string): import("./repos/tasks-repo.js").CancelTaskResult;

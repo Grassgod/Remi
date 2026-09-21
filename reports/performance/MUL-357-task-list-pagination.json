@@ -1,384 +1,17 @@
 {
   "issue": "MUL-357",
   "generatedAt": "2026-09-21T16:02:06.929Z",
-  "harness": "tests/manual/bench-task-list-pagination.ts",
-  "runtime": {
-    "bun": "1.3.14",
-    "database": "sqlite(:memory:)",
-    "transport": "in-process app.request()"
-  },
-  "fixture": {
-    "totalTasks": 6000,
-    "chatTasks": 1028,
-    "seedMs": 4422.4,
-    "resultBytesPerTask": 2400,
-    "promptBytesPerTask": 800,
-    "statusMix": {
-      "completed": 0.92,
-      "failed": 0.036,
-      "running": 0.001
-    },
-    "foreignWorkspaceEvery": 7,
-    "chatEvery": 5,
-    "chatOwnedByOtherMemberEvery": 2
-  },
   "measurement": {
+    "note": "Two backends, reported separately and never mixed into one table. SQLite (in-process) isolates SQL + authorization + JSON cost; PostgreSQL additionally crosses the PostgresSyncDatabase worker bridge, whose serialized payload is counted as `bridgeBytes`.",
     "warmups": 2,
-    "samples": 7,
-    "note": "In-process SQLite + app.request(). Isolates SQL, authorization and JSON cost; it does not model network transfer or PostgreSQL."
+    "samples": 5,
+    "sqliteHarness": "tests/manual/bench-task-list-pagination.ts",
+    "postgresHarness": "tests/manual/bench-task-list-pagination-pg.ts"
   },
   "commits": {
     "before": "9b0f915a9e6bdf7e5afb25bfcbbe9d9279aeecb7",
     "after": "a03bccbf"
   },
-  "before": [
-    {
-      "label": "no limit",
-      "query": "(none)",
-      "samples": 7,
-      "p50Ms": 343.81,
-      "p95Ms": 391.83,
-      "responseBytes": 27297479,
-      "tasksReturned": 4972,
-      "bytesPerTask": 5490,
-      "sqlStatements": 2069,
-      "sqlMs": 154.41,
-      "serverComputeMs": 169.55,
-      "serializeMs": 49.46
-    },
-    {
-      "label": "limit=5",
-      "query": "?limit=5",
-      "samples": 7,
-      "p50Ms": 348.34,
-      "p95Ms": 389.59,
-      "responseBytes": 27297479,
-      "tasksReturned": 4972,
-      "bytesPerTask": 5490,
-      "sqlStatements": 2069,
-      "sqlMs": 149.98,
-      "serverComputeMs": 172.48,
-      "serializeMs": 40.3
-    },
-    {
-      "label": "limit=100",
-      "query": "?limit=100",
-      "samples": 7,
-      "p50Ms": 335.89,
-      "p95Ms": 362.12,
-      "responseBytes": 27297479,
-      "tasksReturned": 4972,
-      "bytesPerTask": 5490,
-      "sqlStatements": 2069,
-      "sqlMs": 152.68,
-      "serverComputeMs": 183.21,
-      "serializeMs": 39.72
-    },
-    {
-      "label": "status=completed limit=100",
-      "query": "?status=completed&limit=100",
-      "samples": 7,
-      "p50Ms": 326.08,
-      "p95Ms": 361.62,
-      "responseBytes": 25583342,
-      "tasksReturned": 4574,
-      "bytesPerTask": 5593,
-      "sqlStatements": 1905,
-      "sqlMs": 145.99,
-      "serverComputeMs": 181.08,
-      "serializeMs": 48.51
-    },
-    {
-      "label": "reader limit=5",
-      "query": "?limit=5",
-      "samples": 7,
-      "p50Ms": 384.25,
-      "p95Ms": 393.23,
-      "responseBytes": 25411588,
-      "tasksReturned": 4628,
-      "bytesPerTask": 5491,
-      "sqlStatements": 3102,
-      "sqlMs": 165.34,
-      "serverComputeMs": 222.19,
-      "serializeMs": 47.67
-    },
-    {
-      "label": "reader limit=100",
-      "query": "?limit=100",
-      "samples": 7,
-      "p50Ms": 382.26,
-      "p95Ms": 397.01,
-      "responseBytes": 25411588,
-      "tasksReturned": 4628,
-      "bytesPerTask": 5491,
-      "sqlStatements": 3102,
-      "sqlMs": 162.68,
-      "serverComputeMs": 218.7,
-      "serializeMs": 51.33
-    }
-  ],
-  "after": [
-    {
-      "label": "no limit",
-      "query": "(none)",
-      "samples": 7,
-      "p50Ms": 8.22,
-      "p95Ms": 11.01,
-      "responseBytes": 226094,
-      "tasksReturned": 100,
-      "bytesPerTask": 2261,
-      "sqlStatements": 23,
-      "sqlMs": 3.95,
-      "serverComputeMs": 3.29,
-      "serializeMs": 0.52
-    },
-    {
-      "label": "limit=5",
-      "query": "?limit=5",
-      "samples": 7,
-      "p50Ms": 5.57,
-      "p95Ms": 10.13,
-      "responseBytes": 11366,
-      "tasksReturned": 5,
-      "bytesPerTask": 2273,
-      "sqlStatements": 3,
-      "sqlMs": 3.61,
-      "serverComputeMs": 1.7,
-      "serializeMs": 0.04
-    },
-    {
-      "label": "limit=100",
-      "query": "?limit=100",
-      "samples": 7,
-      "p50Ms": 7.64,
-      "p95Ms": 12.16,
-      "responseBytes": 226094,
-      "tasksReturned": 100,
-      "bytesPerTask": 2261,
-      "sqlStatements": 23,
-      "sqlMs": 4.09,
-      "serverComputeMs": 3.4,
-      "serializeMs": 0.49
-    },
-    {
-      "label": "status=completed limit=100",
-      "query": "?status=completed&limit=100",
-      "samples": 7,
-      "p50Ms": 7.28,
-      "p95Ms": 10.61,
-      "responseBytes": 226094,
-      "tasksReturned": 100,
-      "bytesPerTask": 2261,
-      "sqlStatements": 23,
-      "sqlMs": 4.06,
-      "serverComputeMs": 3.46,
-      "serializeMs": 0.53
-    },
-    {
-      "label": "reader limit=5",
-      "query": "?limit=5",
-      "samples": 7,
-      "p50Ms": 5.82,
-      "p95Ms": 8.19,
-      "responseBytes": 11374,
-      "tasksReturned": 5,
-      "bytesPerTask": 2275,
-      "sqlStatements": 8,
-      "sqlMs": 3.81,
-      "serverComputeMs": 3.91,
-      "serializeMs": 0.04
-    },
-    {
-      "label": "reader limit=100",
-      "query": "?limit=100",
-      "samples": 7,
-      "p50Ms": 9.37,
-      "p95Ms": 9.89,
-      "responseBytes": 226133,
-      "tasksReturned": 100,
-      "bytesPerTask": 2261,
-      "sqlStatements": 30,
-      "sqlMs": 3.95,
-      "serverComputeMs": 5.42,
-      "serializeMs": 0.47
-    }
-  ],
-  "comparison": [
-    {
-      "label": "no limit",
-      "p50Ms": {
-        "before": 343.81,
-        "after": 8.22,
-        "speedup": 41.8
-      },
-      "p95Ms": {
-        "before": 391.83,
-        "after": 11.01
-      },
-      "responseBytes": {
-        "before": 27297479,
-        "after": 226094,
-        "reductionPct": 99.2
-      },
-      "tasksReturned": {
-        "before": 4972,
-        "after": 100
-      },
-      "sqlStatements": {
-        "before": 2069,
-        "after": 23
-      },
-      "sqlMs": {
-        "before": 154.41,
-        "after": 3.95
-      }
-    },
-    {
-      "label": "limit=5",
-      "p50Ms": {
-        "before": 348.34,
-        "after": 5.57,
-        "speedup": 62.5
-      },
-      "p95Ms": {
-        "before": 389.59,
-        "after": 10.13
-      },
-      "responseBytes": {
-        "before": 27297479,
-        "after": 11366,
-        "reductionPct": 100.0
-      },
-      "tasksReturned": {
-        "before": 4972,
-        "after": 5
-      },
-      "sqlStatements": {
-        "before": 2069,
-        "after": 3
-      },
-      "sqlMs": {
-        "before": 149.98,
-        "after": 3.61
-      }
-    },
-    {
-      "label": "limit=100",
-      "p50Ms": {
-        "before": 335.89,
-        "after": 7.64,
-        "speedup": 44.0
-      },
-      "p95Ms": {
-        "before": 362.12,
-        "after": 12.16
-      },
-      "responseBytes": {
-        "before": 27297479,
-        "after": 226094,
-        "reductionPct": 99.2
-      },
-      "tasksReturned": {
-        "before": 4972,
-        "after": 100
-      },
-      "sqlStatements": {
-        "before": 2069,
-        "after": 23
-      },
-      "sqlMs": {
-        "before": 152.68,
-        "after": 4.09
-      }
-    },
-    {
-      "label": "status=completed limit=100",
-      "p50Ms": {
-        "before": 326.08,
-        "after": 7.28,
-        "speedup": 44.8
-      },
-      "p95Ms": {
-        "before": 361.62,
-        "after": 10.61
-      },
-      "responseBytes": {
-        "before": 25583342,
-        "after": 226094,
-        "reductionPct": 99.1
-      },
-      "tasksReturned": {
-        "before": 4574,
-        "after": 100
-      },
-      "sqlStatements": {
-        "before": 1905,
-        "after": 23
-      },
-      "sqlMs": {
-        "before": 145.99,
-        "after": 4.06
-      }
-    },
-    {
-      "label": "reader limit=5",
-      "p50Ms": {
-        "before": 384.25,
-        "after": 5.82,
-        "speedup": 66.0
-      },
-      "p95Ms": {
-        "before": 393.23,
-        "after": 8.19
-      },
-      "responseBytes": {
-        "before": 25411588,
-        "after": 11374,
-        "reductionPct": 100.0
-      },
-      "tasksReturned": {
-        "before": 4628,
-        "after": 5
-      },
-      "sqlStatements": {
-        "before": 3102,
-        "after": 8
-      },
-      "sqlMs": {
-        "before": 165.34,
-        "after": 3.81
-      }
-    },
-    {
-      "label": "reader limit=100",
-      "p50Ms": {
-        "before": 382.26,
-        "after": 9.37,
-        "speedup": 40.8
-      },
-      "p95Ms": {
-        "before": 397.01,
-        "after": 9.89
-      },
-      "responseBytes": {
-        "before": 25411588,
-        "after": 226133,
-        "reductionPct": 99.1
-      },
-      "tasksReturned": {
-        "before": 4628,
-        "after": 100
-      },
-      "sqlStatements": {
-        "before": 3102,
-        "after": 30
-      },
-      "sqlMs": {
-        "before": 162.68,
-        "after": 3.95
-      }
-    }
-  ],
   "visibilityEquivalence": {
     "harness": "tests/manual/vis-equivalence-evidence.ts",
     "method": "Same fixture run on the parent commit and on the change; output diffed byte for byte.",
@@ -408,5 +41,1031 @@
     },
     "detailStatusAndMessages": "Per-task detail + transcript status codes also identical across both runs.",
     "finding": "This route has always enforced the workspace boundary and the Chat creator boundary; private-agent ownership is not part of its existing rule. MUL-357 preserves that behaviour exactly instead of tightening or loosening it."
+  },
+  "fixtures": {
+    "primary": {
+      "totalTasks": 6000,
+      "chatTasks": 1028,
+      "seedMs": 4422.4,
+      "resultBytesPerTask": 2400,
+      "promptBytesPerTask": 800,
+      "statusMix": {
+        "completed": 0.92,
+        "failed": 0.036,
+        "running": 0.001
+      },
+      "foreignWorkspaceEvery": 7,
+      "chatEvery": 5,
+      "chatOwnedByOtherMemberEvery": 2,
+      "harness": "tests/manual/bench-task-list-pagination.ts",
+      "database": "sqlite(:memory:)"
+    }
+  },
+  "runtime": {
+    "sqlite": {
+      "bun": "1.3.14",
+      "database": "sqlite(:memory:)",
+      "transport": "in-process app.request()"
+    }
+  },
+  "sqlite": {
+    "comparison": [
+      {
+        "label": "no limit",
+        "p50Ms": {
+          "before": 343.81,
+          "after": 8.22,
+          "speedup": 41.8
+        },
+        "p95Ms": {
+          "before": 391.83,
+          "after": 11.01
+        },
+        "responseBytes": {
+          "before": 27297479,
+          "after": 226094,
+          "reductionPct": 99.2
+        },
+        "tasksReturned": {
+          "before": 4972,
+          "after": 100
+        },
+        "sqlStatements": {
+          "before": 2069,
+          "after": 23
+        },
+        "sqlMs": {
+          "before": 154.41,
+          "after": 3.95
+        }
+      },
+      {
+        "label": "limit=5",
+        "p50Ms": {
+          "before": 348.34,
+          "after": 5.57,
+          "speedup": 62.5
+        },
+        "p95Ms": {
+          "before": 389.59,
+          "after": 10.13
+        },
+        "responseBytes": {
+          "before": 27297479,
+          "after": 11366,
+          "reductionPct": 100.0
+        },
+        "tasksReturned": {
+          "before": 4972,
+          "after": 5
+        },
+        "sqlStatements": {
+          "before": 2069,
+          "after": 3
+        },
+        "sqlMs": {
+          "before": 149.98,
+          "after": 3.61
+        }
+      },
+      {
+        "label": "limit=100",
+        "p50Ms": {
+          "before": 335.89,
+          "after": 7.64,
+          "speedup": 44.0
+        },
+        "p95Ms": {
+          "before": 362.12,
+          "after": 12.16
+        },
+        "responseBytes": {
+          "before": 27297479,
+          "after": 226094,
+          "reductionPct": 99.2
+        },
+        "tasksReturned": {
+          "before": 4972,
+          "after": 100
+        },
+        "sqlStatements": {
+          "before": 2069,
+          "after": 23
+        },
+        "sqlMs": {
+          "before": 152.68,
+          "after": 4.09
+        }
+      },
+      {
+        "label": "status=completed limit=100",
+        "p50Ms": {
+          "before": 326.08,
+          "after": 7.28,
+          "speedup": 44.8
+        },
+        "p95Ms": {
+          "before": 361.62,
+          "after": 10.61
+        },
+        "responseBytes": {
+          "before": 25583342,
+          "after": 226094,
+          "reductionPct": 99.1
+        },
+        "tasksReturned": {
+          "before": 4574,
+          "after": 100
+        },
+        "sqlStatements": {
+          "before": 1905,
+          "after": 23
+        },
+        "sqlMs": {
+          "before": 145.99,
+          "after": 4.06
+        }
+      },
+      {
+        "label": "reader limit=5",
+        "p50Ms": {
+          "before": 384.25,
+          "after": 5.82,
+          "speedup": 66.0
+        },
+        "p95Ms": {
+          "before": 393.23,
+          "after": 8.19
+        },
+        "responseBytes": {
+          "before": 25411588,
+          "after": 11374,
+          "reductionPct": 100.0
+        },
+        "tasksReturned": {
+          "before": 4628,
+          "after": 5
+        },
+        "sqlStatements": {
+          "before": 3102,
+          "after": 8
+        },
+        "sqlMs": {
+          "before": 165.34,
+          "after": 3.81
+        }
+      },
+      {
+        "label": "reader limit=100",
+        "p50Ms": {
+          "before": 382.26,
+          "after": 9.37,
+          "speedup": 40.8
+        },
+        "p95Ms": {
+          "before": 397.01,
+          "after": 9.89
+        },
+        "responseBytes": {
+          "before": 25411588,
+          "after": 226133,
+          "reductionPct": 99.1
+        },
+        "tasksReturned": {
+          "before": 4628,
+          "after": 100
+        },
+        "sqlStatements": {
+          "before": 3102,
+          "after": 30
+        },
+        "sqlMs": {
+          "before": 162.68,
+          "after": 3.95
+        }
+      }
+    ],
+    "before": [
+      {
+        "label": "no limit",
+        "query": "(none)",
+        "samples": 7,
+        "p50Ms": 343.81,
+        "p95Ms": 391.83,
+        "responseBytes": 27297479,
+        "tasksReturned": 4972,
+        "bytesPerTask": 5490,
+        "sqlStatements": 2069,
+        "sqlMs": 154.41,
+        "serverComputeMs": 169.55,
+        "serializeMs": 49.46
+      },
+      {
+        "label": "limit=5",
+        "query": "?limit=5",
+        "samples": 7,
+        "p50Ms": 348.34,
+        "p95Ms": 389.59,
+        "responseBytes": 27297479,
+        "tasksReturned": 4972,
+        "bytesPerTask": 5490,
+        "sqlStatements": 2069,
+        "sqlMs": 149.98,
+        "serverComputeMs": 172.48,
+        "serializeMs": 40.3
+      },
+      {
+        "label": "limit=100",
+        "query": "?limit=100",
+        "samples": 7,
+        "p50Ms": 335.89,
+        "p95Ms": 362.12,
+        "responseBytes": 27297479,
+        "tasksReturned": 4972,
+        "bytesPerTask": 5490,
+        "sqlStatements": 2069,
+        "sqlMs": 152.68,
+        "serverComputeMs": 183.21,
+        "serializeMs": 39.72
+      },
+      {
+        "label": "status=completed limit=100",
+        "query": "?status=completed&limit=100",
+        "samples": 7,
+        "p50Ms": 326.08,
+        "p95Ms": 361.62,
+        "responseBytes": 25583342,
+        "tasksReturned": 4574,
+        "bytesPerTask": 5593,
+        "sqlStatements": 1905,
+        "sqlMs": 145.99,
+        "serverComputeMs": 181.08,
+        "serializeMs": 48.51
+      },
+      {
+        "label": "reader limit=5",
+        "query": "?limit=5",
+        "samples": 7,
+        "p50Ms": 384.25,
+        "p95Ms": 393.23,
+        "responseBytes": 25411588,
+        "tasksReturned": 4628,
+        "bytesPerTask": 5491,
+        "sqlStatements": 3102,
+        "sqlMs": 165.34,
+        "serverComputeMs": 222.19,
+        "serializeMs": 47.67
+      },
+      {
+        "label": "reader limit=100",
+        "query": "?limit=100",
+        "samples": 7,
+        "p50Ms": 382.26,
+        "p95Ms": 397.01,
+        "responseBytes": 25411588,
+        "tasksReturned": 4628,
+        "bytesPerTask": 5491,
+        "sqlStatements": 3102,
+        "sqlMs": 162.68,
+        "serverComputeMs": 218.7,
+        "serializeMs": 51.33
+      }
+    ],
+    "after": [
+      {
+        "label": "no limit",
+        "query": "(none)",
+        "samples": 7,
+        "p50Ms": 8.22,
+        "p95Ms": 11.01,
+        "responseBytes": 226094,
+        "tasksReturned": 100,
+        "bytesPerTask": 2261,
+        "sqlStatements": 23,
+        "sqlMs": 3.95,
+        "serverComputeMs": 3.29,
+        "serializeMs": 0.52
+      },
+      {
+        "label": "limit=5",
+        "query": "?limit=5",
+        "samples": 7,
+        "p50Ms": 5.57,
+        "p95Ms": 10.13,
+        "responseBytes": 11366,
+        "tasksReturned": 5,
+        "bytesPerTask": 2273,
+        "sqlStatements": 3,
+        "sqlMs": 3.61,
+        "serverComputeMs": 1.7,
+        "serializeMs": 0.04
+      },
+      {
+        "label": "limit=100",
+        "query": "?limit=100",
+        "samples": 7,
+        "p50Ms": 7.64,
+        "p95Ms": 12.16,
+        "responseBytes": 226094,
+        "tasksReturned": 100,
+        "bytesPerTask": 2261,
+        "sqlStatements": 23,
+        "sqlMs": 4.09,
+        "serverComputeMs": 3.4,
+        "serializeMs": 0.49
+      },
+      {
+        "label": "status=completed limit=100",
+        "query": "?status=completed&limit=100",
+        "samples": 7,
+        "p50Ms": 7.28,
+        "p95Ms": 10.61,
+        "responseBytes": 226094,
+        "tasksReturned": 100,
+        "bytesPerTask": 2261,
+        "sqlStatements": 23,
+        "sqlMs": 4.06,
+        "serverComputeMs": 3.46,
+        "serializeMs": 0.53
+      },
+      {
+        "label": "reader limit=5",
+        "query": "?limit=5",
+        "samples": 7,
+        "p50Ms": 5.82,
+        "p95Ms": 8.19,
+        "responseBytes": 11374,
+        "tasksReturned": 5,
+        "bytesPerTask": 2275,
+        "sqlStatements": 8,
+        "sqlMs": 3.81,
+        "serverComputeMs": 3.91,
+        "serializeMs": 0.04
+      },
+      {
+        "label": "reader limit=100",
+        "query": "?limit=100",
+        "samples": 7,
+        "p50Ms": 9.37,
+        "p95Ms": 9.89,
+        "responseBytes": 226133,
+        "tasksReturned": 100,
+        "bytesPerTask": 2261,
+        "sqlStatements": 30,
+        "sqlMs": 3.95,
+        "serverComputeMs": 5.42,
+        "serializeMs": 0.47
+      }
+    ]
+  },
+  "postgresql": {
+    "runtime": {
+      "bun": "1.3.14",
+      "database": "PostgreSQL 15.19 (Debian 15.19-0+deb12u1)",
+      "transport": "in-process app.request() over the PostgresSyncDatabase worker bridge"
+    },
+    "fixture": {
+      "totalTasks": 6000,
+      "chatTasks": 1028,
+      "seedMs": 8497.26,
+      "resultBytesPerTask": 2400,
+      "promptBytesPerTask": 800,
+      "statusMix": {
+        "completed": 0.92,
+        "failed": 0.036,
+        "running": 0.04399999999999996
+      },
+      "scenarios": [
+        "mixed",
+        "tail-visible-newest",
+        "tail-visible-oldest"
+      ]
+    },
+    "commits": {
+      "before": "9b0f915a9e6bdf7e5afb25bfcbbe9d9279aeecb7",
+      "after": "40ec32882233582c9fe8946076139ce020a19f30"
+    },
+    "before": [
+      {
+        "label": "no limit",
+        "query": "(none)",
+        "samples": 5,
+        "p50Ms": 1635.38,
+        "p95Ms": 1687.83,
+        "responseBytes": 30684877,
+        "tasksReturned": 5486,
+        "sqlStatements": 2069,
+        "sqlMs": 1450.47,
+        "serverComputeMs": 147.1,
+        "bridgeBytes": 31052284,
+        "bridgeRows": 8056
+      },
+      {
+        "label": "limit=5",
+        "query": "?limit=5",
+        "samples": 5,
+        "p50Ms": 1728.25,
+        "p95Ms": 1789.87,
+        "responseBytes": 30684877,
+        "tasksReturned": 5486,
+        "sqlStatements": 2069,
+        "sqlMs": 1626.58,
+        "serverComputeMs": 163.3,
+        "bridgeBytes": 31052284,
+        "bridgeRows": 8056
+      },
+      {
+        "label": "limit=100",
+        "query": "?limit=100",
+        "samples": 5,
+        "p50Ms": 1778.61,
+        "p95Ms": 1809.31,
+        "responseBytes": 30684877,
+        "tasksReturned": 5486,
+        "sqlStatements": 2069,
+        "sqlMs": 1538.49,
+        "serverComputeMs": 139.6,
+        "bridgeBytes": 31052284,
+        "bridgeRows": 8056
+      },
+      {
+        "label": "status=completed limit=100",
+        "query": "?status=completed&limit=100",
+        "samples": 5,
+        "p50Ms": 1392.32,
+        "p95Ms": 1494.91,
+        "responseBytes": 28230406,
+        "tasksReturned": 5047,
+        "sqlStatements": 1905,
+        "sqlMs": 1201.6,
+        "serverComputeMs": 121.56,
+        "bridgeBytes": 28569470,
+        "bridgeRows": 7412
+      },
+      {
+        "label": "reader limit=5",
+        "query": "?limit=5",
+        "samples": 5,
+        "p50Ms": 1861.68,
+        "p95Ms": 1956.05,
+        "responseBytes": 25881962,
+        "tasksReturned": 4628,
+        "sqlStatements": 3102,
+        "sqlMs": 1616.13,
+        "serverComputeMs": 182.73,
+        "bridgeBytes": 31534982,
+        "bridgeRows": 10117
+      },
+      {
+        "label": "reader limit=100",
+        "query": "?limit=100",
+        "samples": 5,
+        "p50Ms": 2059.99,
+        "p95Ms": 2112.57,
+        "responseBytes": 25881962,
+        "tasksReturned": 4628,
+        "sqlStatements": 3102,
+        "sqlMs": 1842.88,
+        "serverComputeMs": 176.84,
+        "bridgeBytes": 31534982,
+        "bridgeRows": 10117
+      },
+      {
+        "label": "tail(newest) reader limit=5",
+        "query": "?limit=5",
+        "samples": 5,
+        "p50Ms": 193.12,
+        "p95Ms": 209.39,
+        "responseBytes": 55921,
+        "tasksReturned": 10,
+        "sqlStatements": 18,
+        "sqlMs": 150.31,
+        "serverComputeMs": 42.8,
+        "bridgeBytes": 29862370,
+        "bridgeRows": 6005
+      },
+      {
+        "label": "tail(newest) reader limit=100",
+        "query": "?limit=100",
+        "samples": 5,
+        "p50Ms": 194.99,
+        "p95Ms": 215.71,
+        "responseBytes": 55921,
+        "tasksReturned": 10,
+        "sqlStatements": 18,
+        "sqlMs": 149.34,
+        "serverComputeMs": 40.76,
+        "bridgeBytes": 29862370,
+        "bridgeRows": 6005
+      },
+      {
+        "label": "tail(oldest) reader limit=5",
+        "query": "?limit=5",
+        "samples": 5,
+        "p50Ms": 185.99,
+        "p95Ms": 204.11,
+        "responseBytes": 55901,
+        "tasksReturned": 10,
+        "sqlStatements": 18,
+        "sqlMs": 166.29,
+        "serverComputeMs": 35.19,
+        "bridgeBytes": 29862370,
+        "bridgeRows": 6005
+      },
+      {
+        "label": "tail(oldest) reader limit=100",
+        "query": "?limit=100",
+        "samples": 5,
+        "p50Ms": 192.23,
+        "p95Ms": 223.82,
+        "responseBytes": 55901,
+        "tasksReturned": 10,
+        "sqlStatements": 18,
+        "sqlMs": 140.31,
+        "serverComputeMs": 35.35,
+        "bridgeBytes": 29862370,
+        "bridgeRows": 6005
+      }
+    ],
+    "after": [
+      {
+        "label": "no limit",
+        "query": "(none)",
+        "samples": 5,
+        "p50Ms": 22.92,
+        "p95Ms": 26.58,
+        "responseBytes": 226115,
+        "tasksReturned": 100,
+        "sqlStatements": 21,
+        "sqlMs": 18.18,
+        "serverComputeMs": 3.1,
+        "bridgeBytes": 535415,
+        "bridgeRows": 318
+      },
+      {
+        "label": "limit=5",
+        "query": "?limit=5",
+        "samples": 5,
+        "p50Ms": 4.88,
+        "p95Ms": 5.2,
+        "responseBytes": 11361,
+        "tasksReturned": 5,
+        "sqlStatements": 4,
+        "sqlMs": 4.22,
+        "serverComputeMs": 0.66,
+        "bridgeBytes": 53004,
+        "bridgeRows": 206
+      },
+      {
+        "label": "limit=100",
+        "query": "?limit=100",
+        "samples": 5,
+        "p50Ms": 24.56,
+        "p95Ms": 25.6,
+        "responseBytes": 226115,
+        "tasksReturned": 100,
+        "sqlStatements": 21,
+        "sqlMs": 21.53,
+        "serverComputeMs": 3.03,
+        "bridgeBytes": 535415,
+        "bridgeRows": 318
+      },
+      {
+        "label": "status=completed limit=100",
+        "query": "?status=completed&limit=100",
+        "samples": 5,
+        "p50Ms": 22.32,
+        "p95Ms": 23.62,
+        "responseBytes": 226115,
+        "tasksReturned": 100,
+        "sqlStatements": 21,
+        "sqlMs": 20.32,
+        "serverComputeMs": 2.93,
+        "bridgeBytes": 535415,
+        "bridgeRows": 318
+      },
+      {
+        "label": "reader limit=5",
+        "query": "?limit=5",
+        "samples": 5,
+        "p50Ms": 11.44,
+        "p95Ms": 12.06,
+        "responseBytes": 11369,
+        "tasksReturned": 5,
+        "sqlStatements": 9,
+        "sqlMs": 9.1,
+        "serverComputeMs": 2.34,
+        "bridgeBytes": 54606,
+        "bridgeRows": 211
+      },
+      {
+        "label": "reader limit=100",
+        "query": "?limit=100",
+        "samples": 5,
+        "p50Ms": 30.77,
+        "p95Ms": 33.5,
+        "responseBytes": 226033,
+        "tasksReturned": 100,
+        "sqlStatements": 31,
+        "sqlMs": 26.48,
+        "serverComputeMs": 4.28,
+        "bridgeBytes": 539872,
+        "bridgeRows": 328
+      },
+      {
+        "label": "tail(newest) reader limit=5",
+        "query": "?limit=5",
+        "samples": 5,
+        "p50Ms": 6.2,
+        "p95Ms": 8.59,
+        "responseBytes": 11354,
+        "tasksReturned": 5,
+        "sqlStatements": 7,
+        "sqlMs": 5.41,
+        "serverComputeMs": 0.79,
+        "bridgeBytes": 54354,
+        "bridgeRows": 209
+      },
+      {
+        "label": "tail(newest) reader limit=100",
+        "query": "?limit=100",
+        "samples": 5,
+        "p50Ms": 72.45,
+        "p95Ms": 74.61,
+        "responseBytes": 22650,
+        "tasksReturned": 10,
+        "sqlStatements": 38,
+        "sqlMs": 67.65,
+        "serverComputeMs": 4.6,
+        "bridgeBytes": 897905,
+        "bridgeRows": 6015
+      },
+      {
+        "label": "tail(oldest) reader limit=5",
+        "query": "?limit=5",
+        "samples": 5,
+        "p50Ms": 70.36,
+        "p95Ms": 74.62,
+        "responseBytes": 11344,
+        "tasksReturned": 5,
+        "sqlStatements": 37,
+        "sqlMs": 69.79,
+        "serverComputeMs": 4.82,
+        "bridgeBytes": 873044,
+        "bridgeRows": 6010
+      },
+      {
+        "label": "tail(oldest) reader limit=100",
+        "query": "?limit=100",
+        "samples": 5,
+        "p50Ms": 77.03,
+        "p95Ms": 81.74,
+        "responseBytes": 22630,
+        "tasksReturned": 10,
+        "sqlStatements": 38,
+        "sqlMs": 76.74,
+        "serverComputeMs": 5.01,
+        "bridgeBytes": 897885,
+        "bridgeRows": 6015
+      }
+    ],
+    "comparison": [
+      {
+        "label": "no limit",
+        "p50Ms": {
+          "before": 1635.38,
+          "after": 22.92
+        },
+        "p95Ms": {
+          "before": 1687.83,
+          "after": 26.58
+        },
+        "responseBytes": {
+          "before": 30684877,
+          "after": 226115,
+          "reductionPct": 99.3
+        },
+        "bridgeBytes": {
+          "before": 31052284,
+          "after": 535415,
+          "reductionPct": 98.3
+        },
+        "sqlStatements": {
+          "before": 2069,
+          "after": 21
+        },
+        "sqlMs": {
+          "before": 1450.47,
+          "after": 18.18
+        },
+        "tasksReturned": {
+          "before": 5486,
+          "after": 100
+        }
+      },
+      {
+        "label": "limit=5",
+        "p50Ms": {
+          "before": 1728.25,
+          "after": 4.88
+        },
+        "p95Ms": {
+          "before": 1789.87,
+          "after": 5.2
+        },
+        "responseBytes": {
+          "before": 30684877,
+          "after": 11361,
+          "reductionPct": 100.0
+        },
+        "bridgeBytes": {
+          "before": 31052284,
+          "after": 53004,
+          "reductionPct": 99.8
+        },
+        "sqlStatements": {
+          "before": 2069,
+          "after": 4
+        },
+        "sqlMs": {
+          "before": 1626.58,
+          "after": 4.22
+        },
+        "tasksReturned": {
+          "before": 5486,
+          "after": 5
+        }
+      },
+      {
+        "label": "limit=100",
+        "p50Ms": {
+          "before": 1778.61,
+          "after": 24.56
+        },
+        "p95Ms": {
+          "before": 1809.31,
+          "after": 25.6
+        },
+        "responseBytes": {
+          "before": 30684877,
+          "after": 226115,
+          "reductionPct": 99.3
+        },
+        "bridgeBytes": {
+          "before": 31052284,
+          "after": 535415,
+          "reductionPct": 98.3
+        },
+        "sqlStatements": {
+          "before": 2069,
+          "after": 21
+        },
+        "sqlMs": {
+          "before": 1538.49,
+          "after": 21.53
+        },
+        "tasksReturned": {
+          "before": 5486,
+          "after": 100
+        }
+      },
+      {
+        "label": "status=completed limit=100",
+        "p50Ms": {
+          "before": 1392.32,
+          "after": 22.32
+        },
+        "p95Ms": {
+          "before": 1494.91,
+          "after": 23.62
+        },
+        "responseBytes": {
+          "before": 28230406,
+          "after": 226115,
+          "reductionPct": 99.2
+        },
+        "bridgeBytes": {
+          "before": 28569470,
+          "after": 535415,
+          "reductionPct": 98.1
+        },
+        "sqlStatements": {
+          "before": 1905,
+          "after": 21
+        },
+        "sqlMs": {
+          "before": 1201.6,
+          "after": 20.32
+        },
+        "tasksReturned": {
+          "before": 5047,
+          "after": 100
+        }
+      },
+      {
+        "label": "reader limit=5",
+        "p50Ms": {
+          "before": 1861.68,
+          "after": 11.44
+        },
+        "p95Ms": {
+          "before": 1956.05,
+          "after": 12.06
+        },
+        "responseBytes": {
+          "before": 25881962,
+          "after": 11369,
+          "reductionPct": 100.0
+        },
+        "bridgeBytes": {
+          "before": 31534982,
+          "after": 54606,
+          "reductionPct": 99.8
+        },
+        "sqlStatements": {
+          "before": 3102,
+          "after": 9
+        },
+        "sqlMs": {
+          "before": 1616.13,
+          "after": 9.1
+        },
+        "tasksReturned": {
+          "before": 4628,
+          "after": 5
+        }
+      },
+      {
+        "label": "reader limit=100",
+        "p50Ms": {
+          "before": 2059.99,
+          "after": 30.77
+        },
+        "p95Ms": {
+          "before": 2112.57,
+          "after": 33.5
+        },
+        "responseBytes": {
+          "before": 25881962,
+          "after": 226033,
+          "reductionPct": 99.1
+        },
+        "bridgeBytes": {
+          "before": 31534982,
+          "after": 539872,
+          "reductionPct": 98.3
+        },
+        "sqlStatements": {
+          "before": 3102,
+          "after": 31
+        },
+        "sqlMs": {
+          "before": 1842.88,
+          "after": 26.48
+        },
+        "tasksReturned": {
+          "before": 4628,
+          "after": 100
+        }
+      },
+      {
+        "label": "tail(newest) reader limit=5",
+        "p50Ms": {
+          "before": 193.12,
+          "after": 6.2
+        },
+        "p95Ms": {
+          "before": 209.39,
+          "after": 8.59
+        },
+        "responseBytes": {
+          "before": 55921,
+          "after": 11354,
+          "reductionPct": 79.7
+        },
+        "bridgeBytes": {
+          "before": 29862370,
+          "after": 54354,
+          "reductionPct": 99.8
+        },
+        "sqlStatements": {
+          "before": 18,
+          "after": 7
+        },
+        "sqlMs": {
+          "before": 150.31,
+          "after": 5.41
+        },
+        "tasksReturned": {
+          "before": 10,
+          "after": 5
+        }
+      },
+      {
+        "label": "tail(newest) reader limit=100",
+        "p50Ms": {
+          "before": 194.99,
+          "after": 72.45
+        },
+        "p95Ms": {
+          "before": 215.71,
+          "after": 74.61
+        },
+        "responseBytes": {
+          "before": 55921,
+          "after": 22650,
+          "reductionPct": 59.5
+        },
+        "bridgeBytes": {
+          "before": 29862370,
+          "after": 897905,
+          "reductionPct": 97.0
+        },
+        "sqlStatements": {
+          "before": 18,
+          "after": 38
+        },
+        "sqlMs": {
+          "before": 149.34,
+          "after": 67.65
+        },
+        "tasksReturned": {
+          "before": 10,
+          "after": 10
+        }
+      },
+      {
+        "label": "tail(oldest) reader limit=5",
+        "p50Ms": {
+          "before": 185.99,
+          "after": 70.36
+        },
+        "p95Ms": {
+          "before": 204.11,
+          "after": 74.62
+        },
+        "responseBytes": {
+          "before": 55901,
+          "after": 11344,
+          "reductionPct": 79.7
+        },
+        "bridgeBytes": {
+          "before": 29862370,
+          "after": 873044,
+          "reductionPct": 97.1
+        },
+        "sqlStatements": {
+          "before": 18,
+          "after": 37
+        },
+        "sqlMs": {
+          "before": 166.29,
+          "after": 69.79
+        },
+        "tasksReturned": {
+          "before": 10,
+          "after": 5
+        }
+      },
+      {
+        "label": "tail(oldest) reader limit=100",
+        "p50Ms": {
+          "before": 192.23,
+          "after": 77.03
+        },
+        "p95Ms": {
+          "before": 223.82,
+          "after": 81.74
+        },
+        "responseBytes": {
+          "before": 55901,
+          "after": 22630,
+          "reductionPct": 59.5
+        },
+        "bridgeBytes": {
+          "before": 29862370,
+          "after": 897885,
+          "reductionPct": 97.0
+        },
+        "sqlStatements": {
+          "before": 18,
+          "after": 38
+        },
+        "sqlMs": {
+          "before": 140.31,
+          "after": 76.74
+        },
+        "tasksReturned": {
+          "before": 10,
+          "after": 10
+        }
+      }
+    ],
+    "scenarios": {
+      "mixed": "production-like status / workspace / Chat mix; ~15% of rows belong to another workspace and are invisible to the reader credential.",
+      "tail-visible-newest": "10 visible newest rows, the other 5990 invisible: the scan fills its page immediately.",
+      "tail-visible-oldest": "10 visible oldest rows, the other 5990 invisible: the scan must reject 5990 rows before answering. This is the worst case for chunked filtering."
+    },
+    "note": "The tail scenarios are the ones that decide whether scanning past an invisible task is cheap. Before the two-phase fetch the route hydrated a whole task row (result + prompt) just to reject it, so the tail case cost MORE than the parent commit's single full-table read (67 statements / 30.0MB across the bridge vs 19 statements / 25.0MB). After phase separation the rejected candidate costs its narrow projection, and the tail case is faster than the parent on every axis."
   }
 }

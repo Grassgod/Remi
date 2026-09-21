@@ -203,12 +203,21 @@ describe.skipIf(!pgAvailable)("Task list pagination on PostgreSQL (MUL-357)", ()
     // Other tasks exist in this database, so walk pages by cursor and pick out
     // this fixture's rows; what matters is that they come back in order, once
     // each, and never mixed with another status.
+    //
+    // MUL-357 made the chunk read a narrow candidate projection (guard columns
+    // only) with the full row loaded separately by `hydrateTasksByIds`. The
+    // status filter still has to hold -- a swapped status/limit binding would
+    // let another status through -- so status is asserted on the hydrated
+    // rows, and the two phases are required to correspond one to one.
     const seen: string[] = [];
     let cursor: import("@multiremi/store/repos/tasks-repo.js").TaskListCursor | null = null;
     const statusesSeen = new Set<string>();
     for (let page = 0; page < 12; page += 1) {
       const chunk = store.listTasksChunk("completed", cursor, 3);
-      for (const task of chunk.tasks) {
+      // The candidate scan returns guard columns only, so the status check runs
+      // on the hydrated rows -- that is exactly the phase-two read the route
+      // performs, so a swapped binding still shows up here.
+      for (const task of store.hydrateTasksByIds(chunk.tasks.map((candidate) => candidate.id))) {
         statusesSeen.add(task.status);
         if (seeded.includes(task.id)) seen.push(task.id);
       }

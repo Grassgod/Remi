@@ -25,7 +25,7 @@ import {
   taskPublicResponse,
 } from "../wire/index.js";
 import type { CreateTaskInput, MultiremiTask, MultiremiTaskStatus } from "@multiremi/contracts/types.js";
-import type { TaskListCursor } from "@multiremi/store/repos/tasks-repo.js";
+import type { TaskListCandidate, TaskListCursor } from "@multiremi/store/repos/tasks-repo.js";
 import { createId } from "@multiremi/ids.js";
 import { ChatIssueTaskConflictError, TaskSteerConflictError } from "@multiremi/store/repos/tasks-repo.js";
 import { OrganizerActionError } from "../../organizer/settings.js";
@@ -67,7 +67,7 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     // One memo per request: it only de-duplicates the reads the guards already
     // perform, and it dies with the response.
     const memo = createTaskAuthMemo();
-    const visible = (task: MultiremiTask): boolean => {
+    const visible = (task: TaskListCandidate): boolean => {
       const allowed = taskToken
         ? taskToken.workspaceId == null || task.workspaceId === taskToken.workspaceId
         : currentUserWorkspaceAccessAllowed(c, store, memo, task.workspaceId);
@@ -78,7 +78,10 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     // into SQL: candidates are read in chunks and filtered one by one until the
     // page is full or the table is exhausted. Skipping `offset` authorized rows
     // is counted the same way, so a caller cannot use it to widen visibility.
-    const tasks: MultiremiTask[] = [];
+    // Phase one keeps ids only: a rejected candidate never gets hydrated, so the
+    // cost of scanning past an invisible task is its few guard columns, not its
+    // full `result` / `prompt` payload. Phase two loads the rows the page keeps.
+    const visibleIds: string[] = [];
     let cursor: TaskListCursor | null = null;
     let skipped = 0;
     let hasMore = false;
@@ -90,8 +93,8 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
           skipped += 1;
           continue;
         }
-        if (tasks.length < limit) {
-          tasks.push(task);
+        if (visibleIds.length < limit) {
+          visibleIds.push(task.id);
           continue;
         }
         hasMore = true;
@@ -101,6 +104,7 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
       cursor = chunk.nextCursor;
       if (!cursor) break;
     }
+    const tasks = store.hydrateTasksByIds(visibleIds);
     return c.json({
       tasks: tasks.map(taskListResponse),
       has_more: hasMore,

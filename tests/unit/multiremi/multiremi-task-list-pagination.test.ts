@@ -227,6 +227,112 @@ describe("Task list pagination", () => {
     }
   });
 
+  it("does not leak or drop a task when an invisible one sits on a chunk boundary", async () => {
+    // MUL-357's scan reads 200-row chunks. Placing the invisible tasks exactly at
+    // the boundary (and straddling it) is the case where an off-by-one in the
+    // chunk walk would either leak a foreign task into the page or drop a
+    // visible task that follows it.
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    store.createWorkspace({ id: "ws_other", name: "Other", slug: "other", issuePrefix: "OTH" });
+    const agent = store.createAgent({ name: "Local", provider: "codex", workspaceId: "local", visibility: "workspace" });
+    const foreign = store.createAgent({ name: "Foreign", provider: "codex", workspaceId: "ws_other", visibility: "workspace" });
+    store.createWorkspaceMember({ workspaceId: "local", userId: "usr_reader", name: "Reader", role: "member" });
+    const reader = await store.createAccessToken({
+      name: "Reader", type: "pat", userId: "usr_reader", workspaceId: "local",
+    });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+
+    // 1-indexed scan positions; the chunk size is 200 and this fixture needs
+    // more than one chunk, so `limit` is raised below to the server maximum.
+    // The rows straddling each seam (200/201 and 400/401) are deliberately
+    // VISIBLE, with an invisible row adjacent on each side: a walk that drops a
+    // row at a seam -- whether the last row of the previous chunk or the first
+    // row of the next -- then loses a task the page must contain, instead of
+    // quietly skipping one that was invisible anyway.
+    const boundaryPositions = new Set([199, 202, 399, 402]);
+    const expected: string[] = [];
+    const hidden: string[] = [];
+    for (let position = 1; position <= 402; position += 1) {
+      const invisible = boundaryPositions.has(position);
+      const task = store.createTask({
+        agentId: invisible ? foreign.id : agent.id,
+        prompt: `position ${position}`,
+        workspaceId: invisible ? "ws_other" : "local",
+      });
+      // Strictly decreasing created_at, so insertion index === scan position.
+      db!.run("UPDATE multiremi_tasks SET created_at = ?, updated_at = ? WHERE id = ?", [
+        new Date(Date.UTC(2026, 8, 21) - position * 60_000).toISOString(),
+        new Date(Date.UTC(2026, 8, 21) - position * 60_000).toISOString(),
+        task.id,
+      ]);
+      if (invisible) hidden.push(task.id);
+      else expected.push(task.id);
+    }
+
+    const collected: string[] = [];
+    let offset = 0;
+    for (let page = 0; page < 10; page += 1) {
+      // 500 is the server cap: the whole (398-row) visible set fits one page,
+      // so the walk still has to cross all three chunks to fill it.
+      const response = await app.request(`/api/multiremi/tasks?limit=500&offset=${offset}`, {
+        headers: headers(reader.token),
+      });
+      expect(response.status).toBe(200);
+      const body = await response.json() as {
+        tasks: Array<{ id: string }>;
+        has_more: boolean;
+        next_offset: number | null;
+      };
+      collected.push(...body.tasks.map((task) => task.id));
+      if (!body.has_more) break;
+      expect(body.next_offset).toBe(offset + body.tasks.length);
+      offset = body.next_offset!;
+    }
+
+    expect(new Set([...collected].filter((id) => hidden.includes(id)))).toEqual(new Set());
+    expect([...collected].sort()).toEqual([...expected].sort());
+    expect(collected.length).toBe(expected.length);
+    // Pin the seams themselves: chunk 1 ends at 200, chunk 2 runs 201..400 and
+    // chunk 3 starts at 401 -- all visible rows, with an invisible neighbour.
+    expect(hidden.length).toBe(4);
+    expect(expected).toHaveLength(398);
+    // `expected` is the visible rows in scan order: the task at scan position P
+    // sits at index P-1 minus however many invisible rows preceded it.
+    expect(collected[0]).toBe(expected[0]);
+    expect(collected).toContain(expected[198]); // scan 200: last of chunk 1
+    expect(collected).toContain(expected[199]); // scan 201: first of chunk 2
+    expect(collected).toContain(expected[396]); // scan 400: last of chunk 2
+    expect(collected).toContain(expected[397]); // scan 401: first of chunk 3
+  });
+
+  it("keeps the page's ids and hydrated rows one-to-one and in order", async () => {
+    // The two-phase fetch must not reorder, duplicate or drop rows: the page
+    // order is `created_at DESC, id DESC` and hydration reads by id, which does
+    // not preserve that order on its own.
+    const { app, store, root } = await fixture(12, 100);
+    const reference = store.listTasks().map((task) => task.id);
+    const collected: string[] = [];
+    let offset = 0;
+    for (let page = 0; page < 8; page += 1) {
+      const response = await app.request(`/api/multiremi/tasks?limit=3&offset=${offset}`, { headers: root });
+      expect(response.status).toBe(200);
+      const body = await response.json() as {
+        tasks: Array<{ id: string; createdAt: string }>;
+        has_more: boolean;
+        next_offset: number | null;
+      };
+      collected.push(...body.tasks.map((task) => task.id));
+      // Within one page the rows come back in the same order the scan produced.
+      const createdAts = body.tasks.map((task) => task.createdAt);
+      expect([...createdAts].sort().reverse()).toEqual(createdAts);
+      if (!body.has_more) break;
+      offset = body.next_offset!;
+    }
+    expect(new Set(collected).size).toBe(collected.length);
+    expect(collected).toEqual(reference);
+  });
+
   it("omits heavy fields from list entries while the detail route keeps them", async () => {
     const { app, entries, root } = await fixture(3, 100);
     const list = await page(app, "?limit=3", root);

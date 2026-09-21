@@ -25,7 +25,6 @@ import type {
   MultiremiAttachment,
   MultiremiChatSession,
   MultiremiRuntime,
-  MultiremiTask,
   MultiremiWorkspaceMember,
 } from "@multiremi/contracts/types.js";
 
@@ -423,6 +422,20 @@ export function canUserAccessAgentByUserId(store: MultiremiStore, userId: string
  * a single request and dropped with it: a process-level cache would let one
  * caller's visibility answer apply to another's.
  */
+/**
+ * MUL-357: the fields a task-visibility decision is allowed to read. Declared
+ * structurally so the list route can pass the narrow candidate projection from
+ * `store.listTasksChunk` (id / workspace / chat session / agent) instead of
+ * hydrating a whole task row -- including its result and prompt -- only to
+ * reject it. `MultiremiTask` satisfies this shape.
+ */
+export interface TaskVisibilitySubject {
+  id: string;
+  workspaceId: string;
+  chatSessionId: string | null;
+  agentId: string;
+}
+
 export interface TaskAuthMemo {
   workspaceAccess: Map<string, boolean>;
   chatSessions: Map<string, MultiremiChatSession | null>;
@@ -472,7 +485,7 @@ export function currentUserWorkspaceAccessAllowed(
 export function canUserViewTaskMessages(
   store: MultiremiStore,
   userId: string | null,
-  task: MultiremiTask,
+  task: TaskVisibilitySubject,
   memo?: TaskAuthMemo,
 ): boolean {
   if (task.chatSessionId) {
@@ -492,7 +505,7 @@ export function canUserViewTaskMessages(
 export function canCurrentUserAccessChatTask(
   c: Context,
   store: MultiremiStore,
-  task: MultiremiTask,
+  task: TaskVisibilitySubject,
   memo?: TaskAuthMemo,
 ): boolean {
   if (!task.chatSessionId) return true;
