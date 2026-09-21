@@ -9,6 +9,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { MultiremiStore } from "@multiremi/store.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { resolveFallbackCancelTarget, type ResolvedCancelTarget } from
+  "@multiremi/store/repos/feishu-bot-repo.js";
 
 const APP_SECRET = "wJ4tQ7xR2nB8vC5mZ1kL0pS6dF3gH9jA";
 const CHAT = "oc_stop_group";
@@ -89,6 +91,27 @@ function start(store: MultiremiStore, taskId: string, startedAt?: string) {
   store.startTask(taskId);
   if (startedAt) db!.run("UPDATE multiremi_tasks SET started_at = ? WHERE id = ?", [startedAt, taskId]);
 }
+
+describe("resolveFallbackCancelTarget", () => {
+  const target = (id: string): ResolvedCancelTarget => ({
+    task: { id } as ResolvedCancelTarget["task"],
+    agentName: null, issueKey: null, chatTitle: null,
+  });
+
+  it("does nothing when the sender has no unfinished Task", () => {
+    expect(resolveFallbackCancelTarget([])).toEqual({ kind: "none" });
+  });
+
+  it("is unambiguous with exactly one candidate", () => {
+    expect(resolveFallbackCancelTarget([target("tsk_only")]))
+      .toMatchObject({ kind: "target", target: { task: { id: "tsk_only" } } });
+  });
+
+  it("refuses to guess between several candidates", () => {
+    expect(resolveFallbackCancelTarget([target("tsk_a"), target("tsk_b")]))
+      .toEqual({ kind: "ambiguous", count: 2 });
+  });
+});
 
 describe("Feishu stop resolution", () => {
   it("cancels the Task bound to the requesting conversation key", () => {

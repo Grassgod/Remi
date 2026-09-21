@@ -73,11 +73,30 @@ type Row = Record<string, unknown>;
 /** How many ambiguous candidates travel to the reply card. */
 const MAX_STOP_CANDIDATES = 5;
 
-interface ResolvedCancelTarget {
+/** One Task a stop request could act on, with the context a human needs. */
+export interface ResolvedCancelTarget {
   task: MultiremiTask;
   agentName: string | null;
   issueKey: string | null;
   chatTitle: string | null;
+}
+
+/**
+ * Tie-break for a group top-level stop, where the Feishu client gives no
+ * thread lineage: stop the sender's only unfinished Task, otherwise list the
+ * choices.
+ *
+ * Guessing which of several concurrent runs the user meant is not recoverable —
+ * a cancelled run cannot be resumed — while asking costs one more message. The
+ * candidates arrive newest-first, so this function is the single place a
+ * "most recent wins" policy would go if that trade-off were ever revisited.
+ */
+export function resolveFallbackCancelTarget(
+  candidates: ResolvedCancelTarget[],
+): { kind: "none" } | { kind: "ambiguous"; count: number } | { kind: "target"; target: ResolvedCancelTarget } {
+  if (candidates.length === 0) return { kind: "none" };
+  if (candidates.length === 1) return { kind: "target", target: candidates[0]! };
+  return { kind: "ambiguous", count: candidates.length };
 }
 
 function rejectedCancel(reason: string): FeishuBotCancelResult {
@@ -1796,11 +1815,12 @@ export class FeishuBotRepo {
       for (const candidate of sessionTargets) this.ctx.tasks().cancelTaskTree(candidate.task.id);
       return cancelledCancel(sessionTargets[0]!);
     }
-    if (candidates.length === 1) {
-      this.ctx.tasks().cancelTaskTree(candidates[0]!.task.id);
-      return cancelledCancel(candidates[0]!);
+    const resolution = resolveFallbackCancelTarget(candidates);
+    if (resolution.kind === "target") {
+      this.ctx.tasks().cancelTaskTree(resolution.target.task.id);
+      return cancelledCancel(resolution.target);
     }
-    if (candidates.length > 1) {
+    if (resolution.kind === "ambiguous") {
       return {
         outcome: "ambiguous",
         agentName: null,
@@ -1808,7 +1828,7 @@ export class FeishuBotRepo {
         issueKey: null,
         chatTitle: null,
         candidates: candidates.slice(0, MAX_STOP_CANDIDATES).map(toCancelCandidate),
-        candidateCount: candidates.length,
+        candidateCount: resolution.count,
         reason: null,
       };
     }
