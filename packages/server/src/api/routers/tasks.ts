@@ -4,7 +4,9 @@ import {
   canCurrentUserAccessAgent,
   canCurrentUserAccessChatTask,
   canUserViewTaskMessages,
+  createTaskAuthMemo,
   currentTaskParentId,
+  currentUserWorkspaceAccessAllowed,
   denyCurrentUserWorkspaceAccess,
   loadChatSessionForCurrentUser,
   organizerTaskInspection,
@@ -17,14 +19,32 @@ import {
   authenticatedRequestUserId,
   cleanString,
   currentTaskAccessToken,
+  parseOptionalInt,
   taskCompatibilityResponse,
+  taskListResponse,
   taskPublicResponse,
 } from "../wire/index.js";
-import type { CreateTaskInput } from "@multiremi/contracts/types.js";
+import type { CreateTaskInput, MultiremiTask, MultiremiTaskStatus } from "@multiremi/contracts/types.js";
+import type { TaskListCandidate, TaskListCursor } from "@multiremi/store/repos/tasks-repo.js";
 import { createId } from "@multiremi/ids.js";
 import { ChatIssueTaskConflictError, TaskSteerConflictError } from "@multiremi/store/repos/tasks-repo.js";
 import { OrganizerActionError } from "../../organizer/settings.js";
 import type { RouterDeps } from "./deps.js";
+
+/**
+ * MUL-357: the global task list defaults to a bounded page. An unbounded call
+ * used to serialize the whole table; the ceiling is deliberate so that
+ * "no --limit" still returns promptly. Authorization still decides *which*
+ * tasks fill the page, never how many rows are read.
+ */
+const TASK_LIST_DEFAULT_LIMIT = 100;
+const TASK_LIST_MAX_LIMIT = 500;
+const TASK_LIST_CHUNK_SIZE = 200;
+
+function clampTaskListLimit(value: number | undefined): number {
+  if (value == null || value <= 0) return TASK_LIST_DEFAULT_LIMIT;
+  return Math.min(value, TASK_LIST_MAX_LIMIT);
+}
 
 export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
   const { store } = deps;
@@ -40,20 +60,58 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
   };
 
   app.get("/api/multiremi/tasks", (c) => {
-    const status = c.req.query("status") as any;
+    const status = c.req.query("status") as MultiremiTaskStatus | undefined;
+    const limit = clampTaskListLimit(parseOptionalInt(c.req.query("limit")));
+    const offset = Math.max(0, parseOptionalInt(c.req.query("offset")) ?? 0);
     const taskToken = currentTaskAccessToken(c);
-    const workspaceAccess = new Map<string, boolean>();
-    const tasks = store.listTasks(status).filter((task) => {
-      let allowed = taskToken
+    // One memo per request: it only de-duplicates the reads the guards already
+    // perform, and it dies with the response.
+    const memo = createTaskAuthMemo();
+    const visible = (task: TaskListCandidate): boolean => {
+      const allowed = taskToken
         ? taskToken.workspaceId == null || task.workspaceId === taskToken.workspaceId
-        : workspaceAccess.get(task.workspaceId);
-      if (allowed === undefined) {
-        allowed = denyCurrentUserWorkspaceAccess(c, store, task.workspaceId) == null;
-        workspaceAccess.set(task.workspaceId, allowed);
+        : currentUserWorkspaceAccessAllowed(c, store, memo, task.workspaceId);
+      return allowed && canCurrentUserAccessChatTask(c, store, task, memo);
+    };
+
+    // `limit` is the limit of the AUTHORIZED result set, so it cannot be pushed
+    // into SQL: candidates are read in chunks and filtered one by one until the
+    // page is full or the table is exhausted. Skipping `offset` authorized rows
+    // is counted the same way, so a caller cannot use it to widen visibility.
+    // Phase one keeps ids only: a rejected candidate never gets hydrated, so the
+    // cost of scanning past an invisible task is its few guard columns, not its
+    // full `result` / `prompt` payload. Phase two loads the rows the page keeps.
+    const visibleIds: string[] = [];
+    let cursor: TaskListCursor | null = null;
+    let skipped = 0;
+    let hasMore = false;
+    for (;;) {
+      const chunk = store.listTasksChunk(status, cursor, TASK_LIST_CHUNK_SIZE);
+      for (const task of chunk.tasks) {
+        if (!visible(task)) continue;
+        if (skipped < offset) {
+          skipped += 1;
+          continue;
+        }
+        if (visibleIds.length < limit) {
+          visibleIds.push(task.id);
+          continue;
+        }
+        hasMore = true;
+        break;
       }
-      return allowed && canCurrentUserAccessChatTask(c, store, task);
+      if (hasMore) break;
+      cursor = chunk.nextCursor;
+      if (!cursor) break;
+    }
+    const tasks = store.hydrateTasksByIds(visibleIds);
+    return c.json({
+      tasks: tasks.map(taskListResponse),
+      has_more: hasMore,
+      next_offset: hasMore ? offset + tasks.length : null,
+      limit,
+      offset,
     });
-    return c.json({ tasks: tasks.map(taskPublicResponse) });
   });
   app.post("/api/multiremi/tasks", async (c) => {
     const sideDenied = denySideSessionDispatch(c);

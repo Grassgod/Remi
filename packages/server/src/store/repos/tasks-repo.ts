@@ -314,6 +314,27 @@ export interface ClaimTaskOptions {
   supportsBinarySkillFiles?: boolean;
 }
 
+/** Keyset position for `listTasksChunk`: the full `created_at DESC, id DESC` sort key. */
+export interface TaskListCursor {
+  createdAt: string;
+  id: string;
+}
+
+/**
+ * MUL-357: the columns the list route's authorization guards actually read.
+ * `canCurrentUserAccessChatTask` / `canUserViewTaskMessages` decide on the task's
+ * id, workspace, chat session and agent, and the cursor needs the sort key — so
+ * the candidate scan can skip `result`, `prompt`, `plugin_snapshot` and `usage`
+ * entirely. Those are the fields that made a scanning request expensive.
+ */
+export interface TaskListCandidate {
+  id: string;
+  workspaceId: string;
+  chatSessionId: string | null;
+  agentId: string;
+  createdAt: string;
+}
+
 export class BinarySkillFilesUnsupportedError extends Error {
   constructor(readonly agentId: string) {
     super("Task skills contain binary files. Update the Remi daemon to support binary skill files before claiming this task.");
@@ -1437,6 +1458,75 @@ export class TasksRepo {
       ? this.ctx.db.query("SELECT * FROM multiremi_tasks WHERE status = ? ORDER BY created_at DESC").all(status) as Row[]
       : this.ctx.db.query("SELECT * FROM multiremi_tasks ORDER BY created_at DESC").all() as Row[];
     return this.withTaskAutopilotRuns(rows.map(toTask));
+  }
+
+  /**
+   * MUL-357 phase one: keyset page of authorization *candidates* for the global
+   * task list. The route cannot push its `limit` into SQL because the visible
+   * set is decided by per-task authorization after the read, so it walks the
+   * table in `chunkSize` slices and stops once it has enough authorized rows.
+   *
+   * Selects only the columns the guards read. A row that turns out to be
+   * invisible is rejected on these few columns alone, so scanning past it costs
+   * bytes proportional to the projection rather than to a whole task row. The
+   * full row (and its autopilot run) is only loaded for ids that reach the page,
+   * by `hydrateTasksByIds`.
+   *
+   * `(created_at, id)` is the full sort key — created_at alone is not unique, so
+   * a cursor on it would skip or repeat rows that share a timestamp.
+   */
+  listTasksChunk(
+    status: MultiremiTaskStatus | undefined,
+    cursor: TaskListCursor | null,
+    chunkSize: number,
+  ): { tasks: TaskListCandidate[]; nextCursor: TaskListCursor | null } {
+    const size = Math.max(1, Math.floor(chunkSize));
+    const statusFilter = status ? " AND status = ?" : "";
+    const statusParams = status ? [status] : [];
+    const cursorFilter = cursor
+      ? " AND (created_at < ? OR (created_at = ? AND id < ?))"
+      : "";
+    const cursorParams = cursor ? [cursor.createdAt, cursor.createdAt, cursor.id] : [];
+    const rows = this.ctx.db.query(
+      `SELECT id, workspace_id, chat_session_id, agent_id, created_at FROM multiremi_tasks
+       WHERE 1 = 1${statusFilter}${cursorFilter}
+       ORDER BY created_at DESC, id DESC
+       LIMIT ?`,
+    ).all(...statusParams, ...cursorParams, size) as Row[];
+    const tasks = rows.map((row) => ({
+      id: String(row.id),
+      workspaceId: String(row.workspace_id ?? "local"),
+      chatSessionId: nullableString(row.chat_session_id),
+      agentId: String(row.agent_id),
+      createdAt: String(row.created_at),
+    }));
+    const last = tasks[tasks.length - 1];
+    return {
+      tasks,
+      nextCursor: rows.length === size && last ? { createdAt: last.createdAt, id: last.id } : null,
+    };
+  }
+
+  /**
+   * MUL-357 phase two: load the full rows for the ids a page actually keeps, in
+   * `created_at DESC, id DESC` order, and attach their autopilot runs once.
+   */
+  hydrateTasksByIds(ids: readonly string[]): MultiremiTask[] {
+    if (!ids.length) return [];
+    const rows: Row[] = [];
+    for (let offset = 0; offset < ids.length; offset += TASK_AUTOPILOT_LOOKUP_BATCH_SIZE) {
+      const batch = ids.slice(offset, offset + TASK_AUTOPILOT_LOOKUP_BATCH_SIZE);
+      const placeholders = batch.map(() => "?").join(", ");
+      rows.push(...this.ctx.db.query(
+        `SELECT * FROM multiremi_tasks WHERE id IN (${placeholders})`,
+      ).all(...batch) as Row[]);
+    }
+    // The IN (…) read does not preserve request order, and the page order is a
+    // contract, so order by the caller's list rather than by whatever the
+    // backend returned.
+    const byId = new Map(rows.map((row) => [String(row.id), toTask(row)]));
+    const ordered = ids.map((id) => byId.get(id)).filter((task): task is MultiremiTask => task != null);
+    return this.withTaskAutopilotRuns(ordered);
   }
 
   listAgentTasks(agentId: string): MultiremiTask[] {

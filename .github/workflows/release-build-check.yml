@@ -138,6 +138,14 @@ jobs:
       # are named `*.ts` without `.test` and stay out of discovery — see
       # TESTING.md.
       - name: Backend test suite
+        # The Postgres service container above is only reachable if the suite is
+        # told where it is. Without this the PG integration tests fall back to a
+        # default URL, which happens to match the service container here -- but a
+        # developer or agent session with no local Postgres got a silent skip of
+        # the entire PG bridge layer (MUL-357 QA). Declare it explicitly so the
+        # intended target is in the workflow, not in a coincidence.
+        env:
+          MULTIREMI_TEST_POSTGRES_URL: postgres://multimira:multimira@localhost:5432/postgres
         run: bun test
 
       # This workflow path-filters on `frontend/**` but used to build only the

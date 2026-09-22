@@ -701,8 +701,14 @@ function taskCommandSpecs(): CommandSpec[] {
     groupSpec("task", "Manage agent tasks and human requests"),
     nativeSpec("task.list", ["task", "list"], "List tasks", "read", HUMAN_TASK, [], [
       { name: "status", type: "string", valueName: "status", description: "Task status" },
+      { name: "limit", type: "integer", valueName: "n", description: "Maximum results (default 100, max 500)" },
+      { name: "offset", type: "integer", valueName: "n", description: "Authorized results to skip" },
     ], async (invocation) => {
-      await getAndRender(invocation, "/api/multiremi/tasks", ["tasks"], { status: stringOption(invocation, "status") });
+      await getAndRender(invocation, "/api/multiremi/tasks", ["tasks"], {
+        status: stringOption(invocation, "status"),
+        limit: integerOption(invocation, "limit"),
+        offset: integerOption(invocation, "offset"),
+      });
     }),
     nativeSpec("task.get", ["task", "get"], "Get a task", "read", HUMAN_TASK, [refPositional("task")], [], async (invocation) => {
       await getAndRender(invocation, `/api/multiremi/tasks/${encodePath(positional(invocation, 0, "task"))}`);
