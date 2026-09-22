@@ -4636,10 +4636,6 @@ runMigrations(this.db);
     return this.tasks.cancelTask(taskId);
   }
 
-  cancelTaskTree(taskId: string): import("./repos/tasks-repo.js").CancelTaskTreeResult {
-    return this.tasks.cancelTaskTree(taskId);
-  }
-
   cancelTasksByTriggerComments(workspaceId: string, commentIds: string[]): number {
     return this.tasks.cancelTasksByTriggerComments(workspaceId, commentIds);
   }

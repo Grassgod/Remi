@@ -138,10 +138,8 @@ describe("Feishu Task command handler", () => {
       `${CHAT}:thread:omt_new`,
     );
     // The command was recognised: a reply card exists and no Task was filed.
-    // (The wording depends on whether a conversation existed yet, so match the
-    // stable part of either answer.)
     expect(meta).toHaveLength(1);
-    expect(text.join("\n").toLowerCase()).toContain("conversation");
+    expect(text.join("\n")).toMatch(/已开启新对话。|当前已是新对话。/);
     expect(store.listTasks()).toHaveLength(before);
     expect(store.listIssues()).toHaveLength(0);
   });
@@ -158,8 +156,61 @@ describe("Feishu Task command handler", () => {
       },
       `${CHAT}:thread:omt_clear`,
     );
-    expect(text.join("\n")).toContain("/clear");
-    expect(text.join("\n")).toContain("Unsupported command");
+    expect(text.join("\n")).toContain("不支持的命令 /clear");
+    expect(text.join("\n")).toContain("可用命令：/stop /new /status");
+    expect(store.listTasks()).toHaveLength(before);
+    expect(store.listIssues()).toHaveLength(0);
+  });
+
+  it("renders /status in Chinese and never as a raw status token", async () => {
+    const { store, revision } = scaffold();
+    const submitted = store.submitFeishuBotMessage("local", "rt_bot", {
+      revision, externalSessionKey: `${CHAT}:thread:omt_status`, externalMessageId: "om_status",
+      chatType: "group", chatId: CHAT, threadId: "omt_status",
+      senderOpenId: "ou_owner", text: "work", deliveryMode: "native_cot_v1",
+    });
+    expect(store.claimTask("rt_bot")?.id).toBe(submitted.taskId);
+    store.startTask(submitted.taskId);
+
+    const { meta, text } = await run(
+      handler(store, revision),
+      {
+        chatId: CHAT,
+        text: "贺华杰: /status",
+        metadata: { messageId: "om_status_cmd", chatType: "group", senderOpenId: "ou_owner", rawContent: "/status" },
+      },
+      `${CHAT}:thread:omt_status`,
+    );
+    const card = text.join("\n");
+    expect(meta).toHaveLength(1);
+    expect(card).toContain("对话：");
+    expect(card).toContain(`任务：${submitted.taskId}`);
+    // The raw enum must not appear: the card shows the Chinese label.
+    expect(card).toContain("状态：运行中");
+    expect(card).not.toContain("running");
+  });
+
+  it("answers retired command names with the unsupported hint", async () => {
+    const { store, revision } = scaffold();
+    const before = store.listTasks().length;
+    for (const retired of ["esc", "sessions", "context", "cwd", "compact", "clear"]) {
+      const { text } = await run(
+        handler(store, revision),
+        {
+          chatId: CHAT,
+          text: `贺华杰: /${retired}`,
+          metadata: {
+            messageId: `om_retired_${retired}`, chatType: "group",
+            senderOpenId: "ou_owner", rawContent: `/${retired}`,
+          },
+        },
+        `${CHAT}:thread:omt_retired_${retired}`,
+      );
+      const card = text.join("\n");
+      expect(card, `/${retired} should be refused`).toContain(`不支持的命令 /${retired}`);
+      expect(card).toContain("可用命令：/stop /new /status");
+    }
+    // Retired names still must not file work.
     expect(store.listTasks()).toHaveLength(before);
     expect(store.listIssues()).toHaveLength(0);
   });

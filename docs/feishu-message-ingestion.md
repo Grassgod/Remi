@@ -25,17 +25,20 @@ summary: 当前机器人 Chat/Issue 话题与轮次推送，以及独立的 Mess
 
 | 命令 | 行为 |
 |---|---|
-| `/stop`、`/esc` | 取消当前会话对应的运行中 Task（含子任务与委派任务），回一张命令卡 |
-| `/stop <task_id\|Issue key>` | 只在**发送者本群的候选任务**里消歧后取消，拒绝跨群/跨发送者 id |
-| `/new`、`/status`、`/sessions`、`/context` | 原有会话命令 |
-| `/cwd`、`/compact` | 已下线 |
-| 其他裸斜杠单 token（如 `/clear`） | 回提示卡，**不建任务、不建 Issue** |
+| `/stop` | 取消该会话当前的**一条** chat task（含 `/stop <task_id\|Issue key>` 消歧形式），回一张命令卡 |
+| `/new` | 取消该会话当前任务并开始新对话 |
+| `/status` | 回一张对话快照卡（对话 / 任务 / 状态 / 工作目录） |
+| 其他裸斜杠单 token（如 `/clear`、已下线的 `/esc` `/sessions` `/context` `/cwd` `/compact`） | 回中文提示卡，列出 `/stop /new /status`，**不建任务、不建 Issue** |
+
+命令表只有这三项（`apps/remi/cli/feishu-commands.ts` 的 `FEISHU_COMMANDS`）。已下线的名字**不留别名**：`/esc` 曾是 `/stop` 的同义词，现在与 `/clear` 一样落入提示卡。
 
 带参数或含第二个 `/` 的消息（如 `/data00/home/x 看下`、`/help 怎么用`）按普通消息提交，避免误伤。`receive.ts` 的 `isSlashCommand` 群准入豁免保持不变——这是群聊里不 @ 机器人也能收到 `/stop` 的前提。
 
 取消定位分三级（[FeishuBotRepo.cancelSessionTask](../packages/server/src/store/repos/feishu-bot-repo.ts)）：① 会话 key 精确命中（私聊 `chatId`、话题内 `chatId:thread:rootId`）；② 群顶层消息按**同 chat + 同发送者**的未结束任务回退，恰好 1 个才取消，≥2 个回候选卡（列出 Issue key / task id / 状态 / 已运行时长，最多 5 条）而不猜；③ 无候选则回「当前没有正在运行的任务」且不做任何写操作。判定候选沿用 Chat 队列的 pending 状态集合（`queued` / `dispatched` / `running` / `waiting_local_directory` / `awaiting_human`），发送者无法匹配时一律不进候选（fail closed）。
 
-取消经已有内部路由 `POST /api/daemon/runtimes/:runtimeId/feishu-bot/session/cancel` 落到 `TasksRepo.cancelTaskTree`：同一事务、同一 workspace 生命周期锁，递归 `parent_task_id` 取消整棵子树，并抑制子任务的 delegation wakeup——否则每个被取消的委派都会给已取消的父任务排一个新的 return task，「停止」反而生出新任务。
+**取消范围只到那一条 chat task。** 飞书 concierge 是独立 agent，它的 run 与 Issue 侧的 run 是两回事，所以 `/stop` 只取消 `getPendingChatTask(binding.chat_session_id)` 定位到的那一个任务（`TasksRepo.cancelTask`）。委派出去的子任务与评论 @ 触发的任务虽然带着 `parent_task_id` 指回它，但那个字段记录的是「谁触发了它」，不是「谁的 run」——这些任务 `chat_session_id IS NULL` 且有自己的 `issue_id`，**继续运行**，它们的回报仍会通过正常的 delegation wakeup 送给 delegator agent。停止一条飞书消息不应结束 Issue 的工作。
+
+取消经已有内部路由 `POST /api/daemon/runtimes/:runtimeId/feishu-bot/session/cancel` 落到 `TasksRepo.cancelTask`：同一事务、同一 workspace 生命周期锁。内部路由与 `FeishuBotCancelResult` wire 契约未变。
 
 反馈以服务端 task 状态为唯一事实源：命令卡只说「已请求停止」，CoT 卡片的 `RUN_FINISHED{status:"interrupted"}` 仍由既有 `pollFeishuTask` 在看到 `cancelled` 快照后触发（见[原生任务呈现](feishu-native-task-presentation.md)）。服务端未确认前不会出现「已停止」字样。
 

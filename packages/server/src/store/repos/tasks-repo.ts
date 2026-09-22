@@ -303,13 +303,6 @@ export interface CancelTaskResult {
   followUps: TaskTerminalFollowUps;
 }
 
-export interface CancelTaskTreeResult {
-  /** The requested root Task, after cancellation. */
-  task: MultiremiTask;
-  /** Root plus every live descendant that was cancelled, root first. */
-  cancelled: MultiremiTask[];
-}
-
 export interface RedispatchTaskResult {
   cancelled: MultiremiTask;
   replacement: MultiremiTask;
@@ -2853,67 +2846,6 @@ export class TasksRepo {
     return terminal.task;
   }
 
-  /**
-   * Cancel one Task together with every descendant Task still alive, in one
-   * workspace-locked transaction.
-   *
-   * A user-facing "stop" means "stop what I am watching", which includes the
-   * work a run fanned out. Cancelling only the root would leave those children
-   * executing, and each cancelled child would normally wake its delegator with
-   * a return Task — so a stop that did not cascade would spawn new work instead
-   * of ending it. Delegation wakeups are suppressed for the whole subtree for
-   * the same reason.
-   */
-  cancelTaskTree(rootId: string): CancelTaskTreeResult {
-    const initial = this.getTask(rootId);
-    if (!initial) throw new Error(`Task not found or terminal: ${rootId}`);
-    const terminals = this.ctx.db.transaction(() => {
-      this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
-      const current = this.getTask(rootId);
-      if (!current || current.workspaceId !== initial.workspaceId) {
-        throw new Error(`Task not found or terminal: ${rootId}`);
-      }
-      const tree = this.cancelTreeWithinWorkspaceLock(current);
-      this.lockTaskIssueSessionsWithinWorkspaceLock(tree);
-      return tree.map((task) => this.cancelTaskWithinWorkspaceLock(task, { suppressDelegationWakeup: true }));
-    })();
-    for (const terminal of terminals) this.notifyCancelledTask(terminal);
-    return { task: terminals[0]!.task, cancelled: terminals.map((terminal) => terminal.task) };
-  }
-
-  /**
-   * Root plus live descendants, breadth-first, oldest first.
-   *
-   * `parent_task_id` is the delegation edge (`routers/tasks.ts` records the
-   * requesting task as the parent), so the walk covers direct delegations and
-   * their own sub-delegations. Only live Tasks are traversed, which also keeps
-   * a redispatch replacement out of an ancestor's tree: its parent is the
-   * already-terminal Task it replaced, and terminal Tasks are not descended
-   * into.
-   */
-  private cancelTreeWithinWorkspaceLock(root: MultiremiTask): MultiremiTask[] {
-    const queued: MultiremiTask[] = [root];
-    const collected = new Map<string, MultiremiTask>([[root.id, root]]);
-    while (queued.length) {
-      const parent = queued.shift()!;
-      const rows = this.ctx.db.query(
-        `SELECT * FROM multiremi_tasks
-         WHERE parent_task_id = ?
-           AND workspace_id = ?
-           AND status NOT IN ('completed', 'failed', 'cancelled')
-         ORDER BY created_at ASC, id ASC`,
-      ).all(parent.id, parent.workspaceId) as Row[];
-      for (const row of rows) {
-        const child = toTask(row);
-        if (collected.has(child.id)) continue;
-        collected.set(child.id, child);
-        queued.push(child);
-      }
-    }
-    // Root first so the reply card reports the Task the user asked to stop.
-    return [root, ...[...collected.values()].filter((task) => task.id !== root.id)];
-  }
-
   /** Caller commits before invoking notifyCancelledTask. */
   cancelTaskWithinTransaction(taskId: string): CancelTaskResult {
     const initial = this.getTask(taskId);
@@ -2935,7 +2867,7 @@ export class TasksRepo {
       throw new Error(`Task not found or terminal: ${taskId}`);
     }
     this.lockTaskIssueSessionsWithinWorkspaceLock([current]);
-    const terminal = this.cancelTaskWithinWorkspaceLock(current, { replacementPlanned: true });
+    const terminal = this.cancelTaskWithinWorkspaceLock(current, true);
     const nextAttempt = current.attempt + 1;
     const detachedChatIssue = !!current.chatSessionId && !!current.issueId
       && this.ctx.feishuBot().getFeishuIssueIdForChatSession(current.chatSessionId) !== current.issueId;
@@ -3720,7 +3652,6 @@ export class TasksRepo {
     body: string | null,
     workspaceLockHeld = false,
     replacementPlanned = false,
-    suppressDelegationWakeup = false,
   ): TaskTerminalFollowUps {
     const now = nowIso();
     // Runtime recovery also invokes this hook directly. Reject stale transport
@@ -3905,7 +3836,7 @@ export class TasksRepo {
         // successor attempt with the same lineage. The retry carries that
         // lineage, so the delegator hears the chain's real outcome exactly once
         // (MUL-336) without this branch having to know about model switching.
-        if (!replacementPlanned && !suppressDelegationWakeup) {
+        if (!replacementPlanned) {
           const wakeup = workspaceLockHeld
             ? this.ensureDelegationWakeupWithinWorkspaceLock(task, {
                 sourceTaskId: task.id,
@@ -4092,10 +4023,7 @@ export class TasksRepo {
   }
 
   /** Caller holds the task workspace lifecycle lock. */
-  private cancelTaskWithinWorkspaceLock(
-    current: MultiremiTask,
-    options: { replacementPlanned?: boolean; suppressDelegationWakeup?: boolean } = {},
-  ): {
+  private cancelTaskWithinWorkspaceLock(current: MultiremiTask, replacementPlanned = false): {
     task: MultiremiTask;
     followUps: TaskTerminalFollowUps;
   } {
@@ -4118,14 +4046,7 @@ export class TasksRepo {
     const cancelled = this.getTask(current.id)!;
     return {
       task: cancelled,
-      followUps: this.afterTaskTerminal(
-        cancelled,
-        "cancelled",
-        null,
-        true,
-        options.replacementPlanned === true,
-        options.suppressDelegationWakeup === true,
-      ),
+      followUps: this.afterTaskTerminal(cancelled, "cancelled", null, true, replacementPlanned),
     };
   }
 

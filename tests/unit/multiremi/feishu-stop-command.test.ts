@@ -225,38 +225,100 @@ describe("Feishu stop resolution", () => {
     expect(store.getTask(second.taskId)?.status).toBe("running");
   });
 
-  it("cancels a parent together with its delegation without queuing a return Task", () => {
-    const { store } = scaffold();
-    const leader = store.createAgent({ name: "Leader", provider: "codex", workspaceId: "local" });
+  it("stops only the Feishu conversation's Task and leaves delegated Issue work running", () => {
+    // The Feishu concierge is its own agent. Stopping the conversation's run
+    // must not end Issue work it delegated: `parent_task_id` records what
+    // triggered a Task, not whose run it belongs to.
+    const { store, agentId, revision } = scaffold();
     const worker = store.createAgent({ name: "Worker", provider: "codex", workspaceId: "local" });
-    const squad = store.createSquad({ name: "Delivery Squad", leaderId: leader.id, memberIds: [worker.id] });
-    const issue = store.createIssue({
-      title: "Delegated stop", workspaceId: "local", assigneeType: "squad", assigneeId: squad.id,
+    const issue = store.createIssue({ title: "Delegated stop", workspaceId: "local" });
+    const sessionKey = `${CHAT}:thread:omt_leader`;
+    const submitted = submit(store, revision, { messageId: "om_leader", senderOpenId: "ou_owner", sessionKey });
+    start(store, submitted.taskId);
+    const leaderTask = store.getTask(submitted.taskId)!;
+    expect(leaderTask.chatSessionId).toBe(submitted.chatSessionId);
+
+    // This is the shape an agent tool call produces: an Issue-side Task whose
+    // parent is the Task that requested it, and which has no chat session.
+    const issueSession = store.getOrCreateDefaultIssueSession(issue.id);
+    const child = store.createTask({
+      agentId: worker.id,
+      issueId: issue.id,
+      issueSessionId: issueSession.id,
+      parentTaskId: leaderTask.id,
+      delegationId: "dlg_stop_test",
+      delegatedByAgentId: agentId,
+      prompt: "Verify the change.",
     });
-    const leaderTask = store.createTask({
-      agentId: leader.id, issueId: issue.id, prompt: "Lead the work.",
-    });
-    expect(store.claimTask("rt_bot")?.id).toBe(leaderTask.id);
-    store.buildTaskSessionProjection(leaderTask.id);
-    store.startTask(leaderTask.id);
-    store.createIssueComment(issue.id, {
-      authorType: "agent", authorId: leader.id, taskId: leaderTask.id,
-      body: `Please verify [@Worker](mention://agent/${worker.id})`,
-    });
-    const child = store.listTasksForIssue(issue.id).find((task) => task.agentId === worker.id)!;
-    expect(child).toMatchObject({ status: "queued", delegatedByAgentId: leader.id });
+    expect(child).toMatchObject({ status: "queued", delegatedByAgentId: agentId });
     expect(child.parentTaskId).toBe(leaderTask.id);
+    expect(child.chatSessionId).toBeNull();
+    expect(child.issueId).toBe(issue.id);
 
-    const queuedBefore = store.listTasks().filter((task) => task.status === "queued").length;
-    const result = store.cancelTaskTree(leaderTask.id);
+    const census = () => ({
+      tasks: Number((db!.query("SELECT COUNT(*) AS n FROM multiremi_tasks").get() as { n: number }).n),
+      issues: store.listIssues().length,
+      chatMessages: Number((db!.query("SELECT COUNT(*) AS n FROM multiremi_chat_messages")
+        .get() as { n: number }).n),
+      deliveries: Number((db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_deliveries")
+        .get() as { n: number }).n),
+    });
+    const before = census();
 
-    expect(result.cancelled.map((task) => task.id).sort()).toEqual([leaderTask.id, child.id].sort());
+    const result = store.cancelFeishuBotSessionTask("local", "rt_bot", revision, sessionKey);
+    expect(result).toMatchObject({ outcome: "cancelled", taskId: leaderTask.id });
+
+    // Only the conversation's own run stopped; the Issue work is untouched.
     expect(store.getTask(leaderTask.id)?.status).toBe("cancelled");
-    expect(store.getTask(child.id)?.status).toBe("cancelled");
-    // A cancelled delegation must not wake its delegator, or stopping would
-    // spawn a brand-new return Task instead of ending the work.
-    expect(store.listTasks().filter((task) => task.status === "queued")).toHaveLength(queuedBefore - 1);
-    expect(store.listTasksForIssue(issue.id)
-      .filter((task) => task.delegationReturnTaskId === leaderTask.id)).toHaveLength(0);
+    expect(store.getTask(child.id)?.status).toBe("queued");
+    expect(store.getTask(child.id)?.parentTaskId).toBe(leaderTask.id);
+    // Nothing was created or destroyed; only the leader's row changed.
+    expect(census()).toEqual(before);
+  });
+
+  it("still returns a delegated child's report after its Feishu parent was stopped", () => {
+    // The delegator's Feishu run was stopped, but its Issue-side delegation
+    // keeps running and reports back through the normal delegation wakeup —
+    // which never inspects the parent Task, only the child's own lineage.
+    const { store, agentId, revision } = scaffold();
+    const worker = store.createAgent({ name: "Worker", provider: "codex", workspaceId: "local" });
+    const issue = store.createIssue({ title: "Delegated stop", workspaceId: "local" });
+    const sessionKey = `${CHAT}:thread:omt_leader_2`;
+    const submitted = submit(store, revision, { messageId: "om_leader_2", senderOpenId: "ou_owner", sessionKey });
+    start(store, submitted.taskId);
+    const leaderTask = store.getTask(submitted.taskId)!;
+    const issueSession = store.getOrCreateDefaultIssueSession(issue.id);
+    const child = store.createTask({
+      agentId: worker.id,
+      issueId: issue.id,
+      issueSessionId: issueSession.id,
+      parentTaskId: leaderTask.id,
+      delegationId: "dlg_stop_test_2",
+      delegatedByAgentId: agentId,
+      prompt: "Verify the change.",
+    });
+
+    store.cancelFeishuBotSessionTask("local", "rt_bot", revision, sessionKey);
+    expect(store.getTask(leaderTask.id)?.status).toBe("cancelled");
+    expect(store.getTask(child.id)?.status).toBe("queued");
+
+    // The child still runs to completion on the Issue side.
+    expect(store.claimTask("rt_bot")?.id).toBe(child.id);
+    store.buildTaskSessionProjection(child.id);
+    store.startTask(child.id);
+    store.completeTask(child.id, { output: "Verified.", sessionId: "child_session" });
+
+    // Its report reaches the delegator agent as a fresh queued Issue Task that
+    // does not belong to the stopped conversation. The child points at it.
+    const returnTaskId = store.getTask(child.id)?.delegationReturnTaskId;
+    expect(returnTaskId).toBeTruthy();
+    const returnTask = store.getTask(returnTaskId!)!;
+    expect(returnTask.agentId).toBe(agentId);
+    expect(returnTask.delegationId).toBe(child.delegationId);
+    expect(returnTask.status).toBe("queued");
+    expect(returnTask.chatSessionId).toBeNull();
+    expect(returnTask.issueId).toBe(issue.id);
+    // The delegator's Feishu run stays stopped: the report did not resurrect it.
+    expect(store.getTask(leaderTask.id)?.status).toBe("cancelled");
   });
 });

@@ -698,7 +698,7 @@ export function createFeishuTaskHandler(
       displayName: name,
       respondHumanRequest: async () => { throw new Error("command has no human request"); },
     });
-    if (command && (command.name === "stop" || command.name === "esc")) {
+    if (command && command.name === "stop") {
       // A stop that could not be requested must say so. Letting the error escape
       // would surface the connector's generic `**Error:** <http text>` card,
       // which tells the user nothing about whether their Task is still running.
@@ -729,23 +729,19 @@ export function createFeishuTaskHandler(
       await daemon.cancelFeishuBotSessionTask(revision, sessionKey);
       const reset = await daemon.resetFeishuBotSession(revision, sessionKey);
       await replyCard(
-        reset ? "New conversation started." : "Conversation is already new.",
+        reset ? "已开启新对话。" : "当前已是新对话。",
         "feishu-command-new",
         snapshot.agentName ?? displayName,
       );
       return;
     }
-    if (command && (command.name === "status" || command.name === "sessions" || command.name === "context")) {
+    if (command && command.name === "status") {
       const snapshot = await daemon.inspectFeishuBotSession(revision, sessionKey);
       await replyCard(
-        renderFeishuSessionCommand(`/${command.name}`, snapshot),
-        `feishu-command-${command.name}`,
+        renderFeishuStatus(snapshot),
+        "feishu-command-status",
         snapshot.agentName ?? displayName,
       );
-      return;
-    }
-    if (command && (command.name === "cwd" || command.name === "compact")) {
-      await replyCard(`/${command.name} is no longer supported.`, "feishu-command-removed", displayName);
       return;
     }
     // An unrecognised bare slash message is answered instead of being filed as
@@ -908,34 +904,31 @@ function formatFeishuRunningFor(startedAt: string | null): string {
   return `已运行 ${Math.floor(hours / 24)} 天`;
 }
 
-function renderFeishuSessionCommand(command: string, snapshot: FeishuBotSessionSnapshot): string {
-  if (!snapshot.chatSessionId) return "No conversation has been started yet.";
+/** Chinese label for one Task status, so the card carries no English. */
+const FEISHU_STATUS_LABELS: Record<string, string> = {
+  queued: "排队中",
+  dispatched: "已派发",
+  running: "运行中",
+  waiting_local_directory: "等待本地目录",
+  awaiting_human: "等待人工",
+  completed: "已完成",
+  failed: "失败",
+  cancelled: "已取消",
+};
+
+/**
+ * `/status` card: the bound conversation, its latest Task, and where that Task
+ * runs. Status values are shown in Chinese; an unknown value is passed through
+ * rather than hidden.
+ */
+function renderFeishuStatus(snapshot: FeishuBotSessionSnapshot): string {
+  if (!snapshot.chatSessionId) return "还没有开始对话。";
   const task = snapshot.task;
-  if (command === "/sessions") {
-    return [
-      `Conversation: ${snapshot.chatSessionId}`,
-      task ? `Latest task: ${task.taskId} (${task.status})` : "Latest task: none",
-    ].join("\n");
-  }
-  if (command === "/context") {
-    if (!task) return `Conversation: ${snapshot.chatSessionId}\nContext usage: no task usage yet.`;
-    const input = task.usage.reduce((sum, entry) => sum + entry.inputTokens, 0);
-    const output = task.usage.reduce((sum, entry) => sum + entry.outputTokens, 0);
-    const total = task.usage.reduce(
-      (sum, entry) => sum + (
-        entry.totalTokens && entry.totalTokens > 0
-          ? entry.totalTokens
-          : entry.inputTokens + entry.outputTokens
-      ),
-      0,
-    );
-    return `Context usage: ${total} tokens (${input} input, ${output} output)`;
-  }
   return [
-    `Conversation: ${snapshot.chatSessionId}`,
-    task ? `Task: ${task.taskId}` : "Task: none",
-    task ? `Status: ${task.status}` : "Status: idle",
-    task?.workDir ? `Working directory: ${task.workDir}` : "Working directory: not created yet",
+    `对话：${snapshot.chatSessionId}`,
+    task ? `任务：${task.taskId}` : "任务：无",
+    task ? `状态：${FEISHU_STATUS_LABELS[task.status] ?? task.status}` : "状态：空闲",
+    task?.workDir ? `工作目录：${task.workDir}` : "工作目录：尚未创建",
   ].join("\n");
 }
 

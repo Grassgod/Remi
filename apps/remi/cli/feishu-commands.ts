@@ -22,17 +22,15 @@ export interface FeishuCommand {
   raw: string;
 }
 
-/** Command names the bot answers. Anything else is not a command. */
-export const FEISHU_COMMANDS = [
-  "stop",
-  "esc",
-  "new",
-  "status",
-  "sessions",
-  "context",
-  "cwd",
-  "compact",
-] as const;
+/**
+ * Command names the bot answers. Anything else is not a command.
+ *
+ * Deliberately short: `/stop` for the CoT stop control, `/new` to start a fresh
+ * conversation, `/status` to inspect the bound conversation. Retired names
+ * (`/esc`, `/sessions`, `/context`, `/cwd`, `/compact`) are not aliased — they
+ * are answered by the unrecognised-command hint instead.
+ */
+export const FEISHU_COMMANDS = ["stop", "new", "status"] as const;
 
 const COMMAND_NAMES = new Set<string>(FEISHU_COMMANDS);
 
@@ -78,14 +76,19 @@ export function isUnknownFeishuCommand(rawContent: string | null | undefined): b
   return !COMMAND_NAMES.has(match[1]!.toLowerCase());
 }
 
+/** Names the reply cards list as available, in one place. */
+export function availableCommandList(): string {
+  return FEISHU_COMMANDS.map((command) => `/${command}`).join(" ");
+}
+
 /** Hint shown for an unrecognised bare slash command. */
 export function unknownCommandMessage(rawContent: string): string {
   const trimmed = rawContent.trim();
   const match = BARE_COMMAND_PATTERN.exec(trimmed);
   const name = match ? match[1]! : trimmed;
   return [
-    `Unsupported command /${name}. Nothing was started.`,
+    `不支持的命令 /${name}，没有启动任何任务。`,
     "",
-    `Available commands: ${FEISHU_COMMANDS.map((command) => `/${command}`).join(" ")}`,
+    `可用命令：${availableCommandList()}`,
   ].join("\n");
 }

@@ -1768,6 +1768,12 @@ export class FeishuBotRepo {
    * A request naming an explicit target (`/stop <task_id|Issue key>`) is only
    * honoured inside the sender's own candidate set, so an id cannot be used to
    * stop someone else's work.
+   *
+   * Scope: exactly one Chat Task is cancelled — the concierge run bound to this
+   * conversation. Work this run delegated carries `parent_task_id` pointing
+   * back at it, but that edge records what triggered the work, not whose run it
+   * belongs to: delegated and Issue-side Tasks have no `chat_session_id` and
+   * keep running. Stopping the Feishu conversation must not end Issue work.
    */
   cancelSessionTask(
     workspaceId: string,
@@ -1808,17 +1814,17 @@ export class FeishuBotRepo {
       const match = [...sessionTargets, ...candidates]
         .find((candidate) => candidate.task.id === target || candidate.issueKey === target);
       if (!match) return rejectedCancel("target_not_candidate");
-      this.ctx.tasks().cancelTaskTree(match.task.id);
+      this.ctx.tasks().cancelTask(match.task.id);
       return cancelledCancel(match);
     }
 
     if (sessionTargets.length) {
-      for (const candidate of sessionTargets) this.ctx.tasks().cancelTaskTree(candidate.task.id);
+      for (const candidate of sessionTargets) this.ctx.tasks().cancelTask(candidate.task.id);
       return cancelledCancel(sessionTargets[0]!);
     }
     const resolution = resolveFallbackCancelTarget(candidates);
     if (resolution.kind === "target") {
-      this.ctx.tasks().cancelTaskTree(resolution.target.task.id);
+      this.ctx.tasks().cancelTask(resolution.target.task.id);
       return cancelledCancel(resolution.target);
     }
     if (resolution.kind === "ambiguous") {

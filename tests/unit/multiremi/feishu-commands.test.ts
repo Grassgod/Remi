@@ -7,17 +7,26 @@
 
 import { describe, expect, it } from "bun:test";
 import {
+  FEISHU_COMMANDS,
   isUnknownFeishuCommand,
   resolveFeishuCommand,
   unknownCommandMessage,
 } from "../../../apps/remi/cli/feishu-commands.js";
 
 describe("resolveFeishuCommand", () => {
-  it("recognises stop and its /esc alias", () => {
+  it("recognises /stop regardless of case or surrounding whitespace", () => {
     expect(resolveFeishuCommand("/stop")).toMatchObject({ name: "stop", args: "" });
-    expect(resolveFeishuCommand("/esc")).toMatchObject({ name: "esc", args: "" });
     expect(resolveFeishuCommand("/STOP")).toMatchObject({ name: "stop" });
     expect(resolveFeishuCommand("  /Stop  ")).toMatchObject({ name: "stop" });
+  });
+
+  it("no longer treats retired names as commands", () => {
+    // The table is deliberately three entries. These were aliases or separate
+    // cards before; now they are answered by the unrecognised-command hint.
+    for (const retired of ["esc", "sessions", "context", "cwd", "compact"]) {
+      expect(resolveFeishuCommand(`/${retired}`)).toBeNull();
+      expect(isUnknownFeishuCommand(`/${retired}`)).toBe(true);
+    }
   });
 
   it("matches the mention-stripped body the connector records", () => {
@@ -27,10 +36,11 @@ describe("resolveFeishuCommand", () => {
     expect(resolveFeishuCommand("/stop")).toMatchObject({ name: "stop" });
   });
 
-  it("keeps the existing command table working", () => {
-    for (const name of ["new", "status", "sessions", "context", "cwd", "compact"]) {
+  it("keeps exactly the three supported commands", () => {
+    for (const name of ["stop", "new", "status"]) {
       expect(resolveFeishuCommand(`/${name}`)).toMatchObject({ name });
     }
+    expect(FEISHU_COMMANDS).toEqual(["stop", "new", "status"]);
   });
 
   it("carries an explicit disambiguation target as args", () => {
@@ -72,10 +82,13 @@ describe("isUnknownFeishuCommand", () => {
     expect(isUnknownFeishuCommand("")).toBe(false);
   });
 
-  it("names the command and the supported set in the hint", () => {
+  it("names the command and the supported set in Chinese", () => {
     const message = unknownCommandMessage("/clear");
-    expect(message).toContain("/clear");
-    expect(message).toContain("/stop");
-    expect(message).toContain("/new");
+    expect(message).toContain("不支持的命令 /clear");
+    expect(message).toContain("没有启动任何任务");
+    expect(message).toContain("可用命令：/stop /new /status");
+    // Nothing was started, and no English text leaks into the card.
+    expect(message).not.toContain("Unsupported");
+    expect(message).not.toContain("Available");
   });
 });
