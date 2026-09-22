@@ -36,6 +36,7 @@ import type {
   MultiremiFeishuBotOutboundDelivery,
   MultiremiTaskMessage,
   FeishuBotTaskSnapshot,
+  FeishuBotCancelResult,
   FeishuBotSessionSnapshot,
   SubmitFeishuBotMessageInput,
   SubmitFeishuBotMessageResult,
@@ -593,12 +594,63 @@ export class MultiremiDaemonClient {
     runtimeId: string,
     revision: number,
     externalSessionKey: string,
-  ): Promise<{ cancelled: boolean; taskId: string | null }> {
-    const response = await this.post<{ cancelled: boolean; task_id?: string | null }>(
+    options: { chatId?: string | null; senderOpenId?: string | null; target?: string | null } = {},
+  ): Promise<FeishuBotCancelResult> {
+    const response = await this.post<{
+      outcome?: string;
+      cancelled?: boolean;
+      task_id?: string | null;
+      agent_name?: string | null;
+      issue_key?: string | null;
+      chat_title?: string | null;
+      candidates?: Array<{
+        task_id?: string;
+        status?: MultiremiTaskStatus;
+        agent_name?: string | null;
+        issue_id?: string | null;
+        issue_key?: string | null;
+        chat_title?: string | null;
+        started_at?: string | null;
+      }>;
+      candidate_count?: number;
+      reason?: string | null;
+    }>(
       `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/feishu-bot/session/cancel`,
-      { revision, external_session_key: externalSessionKey },
+      {
+        revision,
+        external_session_key: externalSessionKey,
+        ...(options.chatId ? { chat_id: options.chatId } : {}),
+        ...(options.senderOpenId ? { sender_open_id: options.senderOpenId } : {}),
+        ...(options.target ? { target: options.target } : {}),
+      },
     );
-    return { cancelled: response.cancelled === true, taskId: response.task_id ?? null };
+    // Servers older than this change answered `{ cancelled, task_id }` only.
+    const outcome = response.outcome === "none" || response.outcome === "ambiguous"
+      || response.outcome === "rejected" || response.outcome === "cancelled"
+      ? response.outcome
+      : response.cancelled === true ? "cancelled" : "none";
+    return {
+      outcome,
+      agentName: response.agent_name ?? null,
+      taskId: response.task_id ?? null,
+      issueKey: response.issue_key ?? null,
+      chatTitle: response.chat_title ?? null,
+      candidates: (response.candidates ?? []).flatMap((candidate) => candidate.task_id
+        ? [{
+            taskId: candidate.task_id,
+            status: candidate.status ?? ("unknown" as MultiremiTaskStatus),
+            agentName: candidate.agent_name ?? null,
+            issueId: candidate.issue_id ?? null,
+            issueKey: candidate.issue_key ?? null,
+            chatTitle: candidate.chat_title ?? null,
+            startedAt: candidate.started_at ?? null,
+          }]
+        : []),
+      candidateCount: Number(response.candidate_count ?? (response.cancelled === true ? 1 : 0)),
+      reason: response.reason === "stale_assignment" || response.reason === "target_not_candidate"
+        ? response.reason
+        : null,
+    };
   }
 
   async inspectFeishuBotSession(

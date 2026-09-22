@@ -201,8 +201,10 @@ export class FeishuConnector implements Connector {
   private async _handleFeishuMessage(msg: ParsedFeishuMessage): Promise<void> {
     if (!this._handler && !this._taskStreamHandler) return;
 
-    // /esc: abort active session
-    if (/^\/esc$/i.test(msg.rawContent.trim())) {
+    // Legacy local-stream mode: /esc aborts the in-process session. In Task
+    // mode the daemon's command router owns /esc and /stop, because only it can
+    // cancel the durable server-side Task the user is watching (MUL-358).
+    if (!this._taskStreamHandler && /^\/esc$/i.test(msg.rawContent.trim())) {
       const sessionKey = this._resolveSessionKey(msg);
       await this._channel.abortSession(sessionKey, msg.chatId);
       return;

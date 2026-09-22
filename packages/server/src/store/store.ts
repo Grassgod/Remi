@@ -1984,8 +1984,9 @@ runMigrations(this.db);
     runtimeId: string,
     revision: number,
     externalSessionKey: string,
-  ): string | null {
-    return this.feishuBot.cancelSessionTask(workspaceId, runtimeId, revision, externalSessionKey);
+    options: { chatId?: string | null; senderOpenId?: string | null; target?: string | null } = {},
+  ): import("@multiremi/contracts/types.js").FeishuBotCancelResult {
+    return this.feishuBot.cancelSessionTask(workspaceId, runtimeId, revision, externalSessionKey, options);
   }
 
   inspectFeishuBotSession(

@@ -754,15 +754,46 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     const runtime = store.getRuntime(runtimeId);
     if (!runtime) return c.json({ error: "runtime not found" }, 404);
-    const body = await readJsonStrict<{ revision?: unknown; external_session_key?: unknown }>(c);
+    const body = await readJsonStrict<{
+      revision?: unknown;
+      external_session_key?: unknown;
+      chat_id?: unknown;
+      sender_open_id?: unknown;
+      target?: unknown;
+    }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const taskId = store.cancelFeishuBotSessionTask(
+    // `chat_id`/`sender_open_id`/`target` are optional: an older daemon omits
+    // them and keeps the original thread-scoped behaviour.
+    const result = store.cancelFeishuBotSessionTask(
       runtime.workspaceId ?? "local",
       runtimeId,
       Number(body.revision),
       cleanString(typeof body.external_session_key === "string" ? body.external_session_key : null) ?? "",
+      {
+        chatId: cleanString(typeof body.chat_id === "string" ? body.chat_id : null),
+        senderOpenId: cleanString(typeof body.sender_open_id === "string" ? body.sender_open_id : null),
+        target: cleanString(typeof body.target === "string" ? body.target : null),
+      },
     );
-    return c.json({ cancelled: Boolean(taskId), task_id: taskId });
+    return c.json({
+      outcome: result.outcome,
+      cancelled: result.outcome === "cancelled",
+      task_id: result.taskId,
+      agent_name: result.agentName,
+      issue_key: result.issueKey,
+      chat_title: result.chatTitle,
+      candidates: result.candidates.map((candidate) => ({
+        task_id: candidate.taskId,
+        status: candidate.status,
+        agent_name: candidate.agentName,
+        issue_id: candidate.issueId,
+        issue_key: candidate.issueKey,
+        chat_title: candidate.chatTitle,
+        started_at: candidate.startedAt,
+      })),
+      candidate_count: result.candidateCount,
+      reason: result.reason,
+    });
   });
   app.post("/api/daemon/runtimes/:runtimeId/feishu-bot/session/inspect", async (c) => {
     const runtimeId = c.req.param("runtimeId");

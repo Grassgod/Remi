@@ -43,6 +43,9 @@ import type {
   FeishuBotRuntimeState,
   FeishuBotAgentRouteScope,
   FeishuBotSender,
+  FeishuBotCancelCandidate,
+  FeishuBotCancelRejection,
+  FeishuBotCancelResult,
   FeishuBotSessionSnapshot,
   FeishuBotSecretOp,
   FeishuBotStatus,
@@ -67,6 +70,79 @@ import type {
 } from "@multiremi/contracts/types.js";
 
 type Row = Record<string, unknown>;
+
+/** How many ambiguous candidates travel to the reply card. */
+const MAX_STOP_CANDIDATES = 5;
+
+/** One Task a stop request could act on, with the context a human needs. */
+export interface ResolvedCancelTarget {
+  task: MultiremiTask;
+  agentName: string | null;
+  issueKey: string | null;
+  chatTitle: string | null;
+}
+
+/**
+ * Tie-break for a group top-level stop, where the Feishu client gives no
+ * thread lineage: stop the sender's only unfinished Task, otherwise list the
+ * choices.
+ *
+ * Guessing which of several concurrent runs the user meant is not recoverable —
+ * a cancelled run cannot be resumed — while asking costs one more message. The
+ * candidates arrive newest-first, so this function is the single place a
+ * "most recent wins" policy would go if that trade-off were ever revisited.
+ */
+export function resolveFallbackCancelTarget(
+  candidates: ResolvedCancelTarget[],
+): { kind: "none" } | { kind: "ambiguous"; count: number } | { kind: "target"; target: ResolvedCancelTarget } {
+  if (candidates.length === 0) return { kind: "none" };
+  if (candidates.length === 1) return { kind: "target", target: candidates[0]! };
+  return { kind: "ambiguous", count: candidates.length };
+}
+
+function rejectedCancel(reason: FeishuBotCancelRejection): FeishuBotCancelResult {
+  return {
+    outcome: "rejected",
+    agentName: null,
+    taskId: null,
+    issueKey: null,
+    chatTitle: null,
+    candidates: [],
+    candidateCount: 0,
+    reason,
+  };
+}
+
+function cancelledCancel(target: ResolvedCancelTarget): FeishuBotCancelResult {
+  return {
+    outcome: "cancelled",
+    agentName: target.agentName,
+    taskId: target.task.id,
+    issueKey: target.issueKey,
+    chatTitle: target.chatTitle,
+    candidates: [],
+    candidateCount: 1,
+    reason: null,
+  };
+}
+
+function toCancelCandidate(target: ResolvedCancelTarget): FeishuBotCancelCandidate {
+  return {
+    taskId: target.task.id,
+    status: target.task.status,
+    agentName: target.agentName,
+    issueId: target.task.issueId,
+    issueKey: target.issueKey,
+    chatTitle: target.chatTitle,
+    startedAt: target.task.startedAt ?? target.task.createdAt,
+  };
+}
+
+/** Newest first: the most recently started run is the likeliest intent. */
+function compareCancelTargets(left: MultiremiTask, right: MultiremiTask): number {
+  const key = (task: MultiremiTask) => `${task.startedAt ?? task.createdAt}\u0000${task.id}`;
+  return key(right).localeCompare(key(left), "en");
+}
 
 interface ResolvedFeishuSender {
   id: string | null;
@@ -1673,27 +1749,167 @@ export class FeishuBotRepo {
     return result.changes > 0;
   }
 
-  cancelSessionTask(workspaceId: string, runtimeId: string, revision: number, externalSessionKey: string): string | null {
+  /**
+   * Resolve and execute one Feishu stop request.
+   *
+   * The Feishu client's CoT "中断" control sends a plain `@bot /stop` text
+   * (single chat: `/stop`) as a *new top-level* message, so it carries no
+   * thread lineage back to the run the user was watching. Resolution therefore
+   * has three levels:
+   *
+   * 1. The conversation key the connector derived (`chatId` in a single chat,
+   *    `chatId:thread:rootId` inside a topic) — the precise case.
+   * 2. Group top-level messages: the sender's own unfinished Tasks in this
+   *    chat. Exactly one candidate can be stopped; several stay untouched and
+   *    come back as a shortlist, because stopping the wrong long run is
+   *    irreversible while asking again is cheap.
+   * 3. Nothing — report "none" without writing anything.
+   *
+   * A request naming an explicit target (`/stop <task_id|Issue key>`) is only
+   * honoured inside the sender's own candidate set, so an id cannot be used to
+   * stop someone else's work.
+   *
+   * Scope: exactly one Chat Task is cancelled — the concierge run bound to this
+   * conversation. Work this run delegated carries `parent_task_id` pointing
+   * back at it, but that edge records what triggered the work, not whose run it
+   * belongs to: delegated and Issue-side Tasks have no `chat_session_id` and
+   * keep running. Stopping the Feishu conversation must not end Issue work.
+   */
+  cancelSessionTask(
+    workspaceId: string,
+    runtimeId: string,
+    revision: number,
+    externalSessionKey: string,
+    options: { chatId?: string | null; senderOpenId?: string | null; target?: string | null } = {},
+  ): FeishuBotCancelResult {
     const config = this.getConfig(workspaceId);
-    if (!config || config.runtimeId !== runtimeId || config.revision !== revision) return null;
+    if (!config || config.runtimeId !== runtimeId || config.revision !== revision) {
+      return rejectedCancel("stale_assignment");
+    }
     const key = requiredBoundedString(externalSessionKey, "external_session_key", 1_024);
+    const target = cleanOptionalString(options.target ?? null);
+    const senderOpenId = cleanOptionalString(options.senderOpenId ?? null);
+    const chatId = cleanOptionalString(options.chatId ?? null);
+
     const bindings = this.ctx.db.query(
       `SELECT chat_session_id FROM multiremi_feishu_bot_chat_bindings
         WHERE workspace_id = ? AND app_id = ? AND external_session_key = ?
         ORDER BY updated_at DESC, id DESC`,
     ).all(workspaceId, config.appId, key) as Row[];
+    const sessionTargets: ResolvedCancelTarget[] = [];
     const seenSessions = new Set<string>();
-    let latestCancelledTaskId: string | null = null;
     for (const binding of bindings) {
       const chatSessionId = String(binding.chat_session_id);
       if (seenSessions.has(chatSessionId)) continue;
       seenSessions.add(chatSessionId);
       const task = this.ctx.chat().getPendingChatTask(chatSessionId);
-      if (!task) continue;
-      this.ctx.tasks().cancelTask(task.id);
-      latestCancelledTaskId ??= task.id;
+      if (task) sessionTargets.push(this.describeCancelTarget(task, chatId));
     }
-    return latestCancelledTaskId;
+
+    const candidates = chatId && senderOpenId
+      ? this.listCancelCandidates(workspaceId, config.appId, chatId, senderOpenId, seenSessions)
+      : [];
+
+    if (target) {
+      const match = [...sessionTargets, ...candidates]
+        .find((candidate) => candidate.task.id === target || candidate.issueKey === target);
+      if (!match) return rejectedCancel("target_not_candidate");
+      this.ctx.tasks().cancelTask(match.task.id);
+      return cancelledCancel(match);
+    }
+
+    if (sessionTargets.length) {
+      for (const candidate of sessionTargets) this.ctx.tasks().cancelTask(candidate.task.id);
+      return cancelledCancel(sessionTargets[0]!);
+    }
+    const resolution = resolveFallbackCancelTarget(candidates);
+    if (resolution.kind === "target") {
+      this.ctx.tasks().cancelTask(resolution.target.task.id);
+      return cancelledCancel(resolution.target);
+    }
+    if (resolution.kind === "ambiguous") {
+      return {
+        outcome: "ambiguous",
+        agentName: null,
+        taskId: null,
+        issueKey: null,
+        chatTitle: null,
+        candidates: candidates.slice(0, MAX_STOP_CANDIDATES).map(toCancelCandidate),
+        candidateCount: resolution.count,
+        reason: null,
+      };
+    }
+    return {
+      outcome: "none",
+      agentName: null,
+      taskId: null,
+      issueKey: null,
+      chatTitle: null,
+      candidates: [],
+      candidateCount: 0,
+      reason: null,
+    };
+  }
+
+  /**
+   * The sender's own unfinished Tasks in one chat.
+   *
+   * "Unfinished" reuses the Chat queue's pending statuses instead of inventing
+   * a second definition, and a Task whose newest inbound delivery cannot be
+   * attributed to this sender is excluded rather than assumed.
+   */
+  private listCancelCandidates(
+    workspaceId: string,
+    appId: string,
+    chatId: string,
+    senderOpenId: string,
+    excludedChatSessionIds: Set<string>,
+  ): ResolvedCancelTarget[] {
+    const rows = this.ctx.db.query(
+      `SELECT b.chat_session_id
+         FROM multiremi_feishu_bot_chat_bindings b
+        WHERE b.workspace_id = ? AND b.app_id = ? AND b.chat_id = ?
+          AND b.external_session_key NOT LIKE '%:closed:%'
+        ORDER BY b.updated_at DESC, b.id DESC`,
+    ).all(workspaceId, appId, chatId) as Row[];
+    const seen = new Set(excludedChatSessionIds);
+    const targets: ResolvedCancelTarget[] = [];
+    for (const row of rows) {
+      const chatSessionId = String(row.chat_session_id);
+      if (seen.has(chatSessionId)) continue;
+      seen.add(chatSessionId);
+      const task = this.ctx.chat().getPendingChatTask(chatSessionId);
+      if (!task) continue;
+      if (!this.isTaskOwnedBySender(workspaceId, task.id, senderOpenId)) continue;
+      targets.push(this.describeCancelTarget(task, chatId));
+    }
+    targets.sort((a, b) => compareCancelTargets(a.task, b.task));
+    return targets;
+  }
+
+  /** Whether the newest inbound delivery for this Task belongs to the sender. */
+  private isTaskOwnedBySender(workspaceId: string, taskId: string, senderOpenId: string): boolean {
+    const row = this.ctx.db.query(
+      `SELECT s.open_id AS open_id
+         FROM multiremi_feishu_bot_deliveries d
+         JOIN multiremi_feishu_bot_senders s ON s.id = d.sender_id
+        WHERE d.workspace_id = ? AND d.task_id = ?
+        ORDER BY d.created_at DESC, d.external_message_id DESC
+        LIMIT 1`,
+    ).get(workspaceId, taskId) as Row | null;
+    return Boolean(row) && String(row!.open_id) === senderOpenId;
+  }
+
+  private describeCancelTarget(task: MultiremiTask, chatId: string | null): ResolvedCancelTarget {
+    const agent = this.ctx.agents().getAgent(task.agentId);
+    const issue = task.issueId ? this.ctx.issues().getIssue(task.issueId) : null;
+    const chat = task.chatSessionId ? this.ctx.chat().getChatSession(task.chatSessionId) : null;
+    return {
+      task,
+      agentName: agent?.name ?? null,
+      issueKey: issue?.key ?? null,
+      chatTitle: chat?.title ?? chatId,
+    };
   }
 
   inspectSession(

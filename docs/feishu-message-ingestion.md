@@ -17,6 +17,31 @@ summary: 当前机器人 Chat/Issue 话题与轮次推送，以及独立的 Mess
 - **轮次推送**：负责人 Issue Session 任务完成并满足活跃任务条件时，[TasksRepo](../packages/server/src/store/repos/tasks-repo.ts)准备话题总结；需要人工输入时也可准备话题提醒。领取、投递与完成均核对绑定、Issue、工作区、Chat 和 Agent 的一致性，失配不继续发送。话题总结本身不自动修改 Issue 状态或追加 Issue 评论。
 - **出站投递**：daemon 心跳领取带租约的 delivery，经 [concierge host](../apps/remi/cli/multiremi.ts)发送并回报；失败按持久化 outbox 规则重试。[send.ts](../packages/connectors/src/feishu/send.ts)使用 delivery 幂等键，根消息成功后以返回的消息 ID 固定话题目标；这不等于真实飞书端已验证恰好一次投递。
 
+### 斜杠命令与「结束任务」
+
+飞书客户端在原生 CoT 消息上渲染「中断」按钮（7.71 起）。点击后**客户端不是回调应用，而是以用户身份发一条普通文本消息**：单聊为 `/stop`，群聊为 `@bot /stop`；飞书接入参考要求接入方像 `/help` 一样在 prompt 前拦截它。正因为它是用户消息，入站链路不会过滤，必须由命令层识别。
+
+命令识别在 daemon Task 模式的 `createFeishuTaskHandler`（[apps/remi/cli/multiremi.ts](../apps/remi/cli/multiremi.ts)），匹配源是 `metadata.rawContent`（连接器已剥离 @机器人），**不是 `message.text`** —— 后者带群聊 `贺华杰: ` 前缀与引用回复的 `[Replying to: …]` 前缀，按它匹配会让群内所有命令失配并落回建任务。解析规则见 [feishu-commands.ts](../apps/remi/cli/feishu-commands.ts)：`^\/([A-Za-z][\w-]*)(?:\s+([\s\S]*))?$`，命令名大小写不敏感，忽略首尾空白。
+
+| 命令 | 行为 |
+|---|---|
+| `/stop` | 取消该会话当前的**一条** chat task（含 `/stop <task_id\|Issue key>` 消歧形式），回一张命令卡 |
+| `/new` | 取消该会话当前任务并开始新对话 |
+| `/status` | 回一张对话快照卡（对话 / 任务 / 状态 / 工作目录） |
+| 其他裸斜杠单 token（如 `/clear`、已下线的 `/esc` `/sessions` `/context` `/cwd` `/compact`） | 回中文提示卡，列出 `/stop /new /status`，**不建任务、不建 Issue** |
+
+命令表只有这三项（`apps/remi/cli/feishu-commands.ts` 的 `FEISHU_COMMANDS`）。已下线的名字**不留别名**：`/esc` 曾是 `/stop` 的同义词，现在与 `/clear` 一样落入提示卡。
+
+带参数或含第二个 `/` 的消息（如 `/data00/home/x 看下`、`/help 怎么用`）按普通消息提交，避免误伤。`receive.ts` 的 `isSlashCommand` 群准入豁免保持不变——这是群聊里不 @ 机器人也能收到 `/stop` 的前提。
+
+取消定位分三级（[FeishuBotRepo.cancelSessionTask](../packages/server/src/store/repos/feishu-bot-repo.ts)）：① 会话 key 精确命中（私聊 `chatId`、话题内 `chatId:thread:rootId`）；② 群顶层消息按**同 chat + 同发送者**的未结束任务回退，恰好 1 个才取消，≥2 个回候选卡（列出 Issue key / task id / 状态 / 已运行时长，最多 5 条）而不猜；③ 无候选则回「当前没有正在运行的任务」且不做任何写操作。判定候选沿用 Chat 队列的 pending 状态集合（`queued` / `dispatched` / `running` / `waiting_local_directory` / `awaiting_human`），发送者无法匹配时一律不进候选（fail closed）。
+
+**取消范围只到那一条 chat task。** 飞书 concierge 是独立 agent，它的 run 与 Issue 侧的 run 是两回事，所以 `/stop` 只取消 `getPendingChatTask(binding.chat_session_id)` 定位到的那一个任务（`TasksRepo.cancelTask`）。委派出去的子任务与评论 @ 触发的任务虽然带着 `parent_task_id` 指回它，但那个字段记录的是「谁触发了它」，不是「谁的 run」——这些任务 `chat_session_id IS NULL` 且有自己的 `issue_id`，**继续运行**，它们的回报仍会通过正常的 delegation wakeup 送给 delegator agent。停止一条飞书消息不应结束 Issue 的工作。
+
+取消经已有内部路由 `POST /api/daemon/runtimes/:runtimeId/feishu-bot/session/cancel` 落到 `TasksRepo.cancelTask`：同一事务、同一 workspace 生命周期锁。内部路由与 `FeishuBotCancelResult` wire 契约未变。
+
+反馈以服务端 task 状态为唯一事实源：命令卡只说「已请求停止」，CoT 卡片的 `RUN_FINISHED{status:"interrupted"}` 仍由既有 `pollFeishuTask` 在看到 `cancelled` 快照后触发（见[原生任务呈现](feishu-native-task-presentation.md)）。服务端未确认前不会出现「已停止」字样。
+
 Issue 话题不出现在 Web/CLI 私聊和待处理列表中。旧关联按确定归属证据迁移，无法确认的关联暂停 Issue 通知，保留管理员审计记录；修复流程及数据回滚条件见[迁移手册](migrations/chat-issue-decoupling.md)。不得通过旧 Chat Issue 字段或历史任务重新恢复普通私聊的 Issue 上下文。
 
 ## 当前组件与能力
