@@ -40,6 +40,7 @@ const CHAT_ISSUE_DECOUPLING_MIGRATION = "20260916_chat_issue_decoupling";
 const AGENT_PAGE_QUERY_INDEXES_MIGRATION = "20260910_agent_page_query_indexes";
 const TASK_FALLBACK_MODEL_MIGRATION = "20260919_task_fallback_model";
 const GATEWAY_MODEL_REASONING_MIGRATION = "20260919_gateway_model_reasoning";
+const TASK_LIST_PAGINATION_INDEXES_MIGRATION = "20260921_task_list_pagination_indexes";
 
 // Stable Feishu open_id of the deployment owner (hehuajie / 贺华杰). The seed
 // `local` user is tagged with this on migration so SSO login re-binds to it
@@ -3174,6 +3175,17 @@ export function runMigrations(db: SqlDatabase): void {
     db.run(
       "CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_next_retry_at ON multiremi_tasks(next_retry_at)",
     );
+  });
+  // MUL-357: the global task list pages with `ORDER BY created_at DESC, id DESC`
+  // (and optionally within one status). Without these the planner reads and
+  // sorts the whole table for every page.
+  runMigrationOnce(db, TASK_LIST_PAGINATION_INDEXES_MIGRATION, () => {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_created_at
+        ON multiremi_tasks(created_at DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_status_created
+        ON multiremi_tasks(status, created_at DESC, id DESC);
+    `);
   });
   runMigrationOnce(db, "20260919_agent_fallback_model", () => {
     addColumnIfMissing(db, "multiremi_agents", "fallback_model TEXT");
