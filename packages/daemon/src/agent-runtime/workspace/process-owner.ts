@@ -160,9 +160,11 @@ export function acquireWorkspaceSupervisorLease(
 
 /**
  * PIDs of every live, unreleased supervisor lease across all workspace roots.
- * The supervisor state root is per user rather than per root, so this sees
- * daemons that run with a different workspace root or state directory too.
- * An owner file that cannot be read throws: callers treat that as busy.
+ * The supervisor state root lives under the home directory rather than the
+ * workspace root, so this sees daemons that share this HOME but run with a
+ * different workspace root or state directory; a daemon started with another
+ * HOME keeps its leases elsewhere. An owner file that cannot be read throws:
+ * callers treat that as busy.
  */
 export function activeWorkspaceSupervisorPids(options: {
   stateRoot?: string;

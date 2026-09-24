@@ -103,12 +103,15 @@ export type SuccessorRestartPlan =
  * such a successor; restarting the unit from here is what retires the pile
  * without waiting for another release.
  *
- * Restarting the unit kills every process in it, so this only proceeds when
- * no other daemon holds a workspace supervisor lease: a live lease means a
- * daemon may be running tasks, or that this process is a foreign daemon (for
- * example one started by a task) that merely inherited INVOCATION_ID. The main
- * process must itself be a foreground daemon, so an unrelated unit that
- * happens to host a daemon is never restarted.
+ * Restarting the unit kills every process in it, so this only proceeds for a
+ * process the fallback itself spawned: every ancestor up to the unit's main
+ * process must be a foreground daemon. Task processes run inside the unit and
+ * inherit INVOCATION_ID, but a daemon a task starts has a shell or agent
+ * runtime between it and the unit's daemons, whatever HOME, state directory
+ * or port it was given. The main process must itself be a foreground daemon,
+ * so an unrelated unit that happens to host a daemon is never restarted. And
+ * no other daemon may hold a workspace supervisor lease, since a live lease
+ * means a daemon may be running tasks.
  */
 export function planSpawnedSuccessorRestart(input: {
   platform: NodeJS.Platform;
@@ -116,6 +119,7 @@ export function planSpawnedSuccessorRestart(input: {
   cgroup: string | null | undefined;
   pid: number;
   mainPid: (unit: string) => number | null;
+  parentPid: (pid: number) => number | null;
   commandLine: (pid: number) => string[] | null;
   activeSupervisorPids: () => number[];
 }): SuccessorRestartPlan {
@@ -126,6 +130,9 @@ export function planSpawnedSuccessorRestart(input: {
   if (!mainPid || mainPid === input.pid) return { kind: "none" };
   if (!isForegroundDaemonCommand(input.commandLine(mainPid))) {
     return { kind: "blocked", unit, mainPid, reason: "the unit's main process is not a foreground daemon" };
+  }
+  if (!descendsThroughDaemons(input.pid, mainPid, input.parentPid, input.commandLine)) {
+    return { kind: "blocked", unit, mainPid, reason: "this process was not spawned by the unit's daemons" };
   }
   let supervisors: number[];
   try {
@@ -138,6 +145,26 @@ export function planSpawnedSuccessorRestart(input: {
     return { kind: "blocked", unit, mainPid, reason: `daemon pid ${supervisors.join(", ")} still owns a workspace root` };
   }
   return { kind: "service-manager", unit, mainPid, command: "systemctl", args: ["--user", "restart", "--no-block", unit] };
+}
+
+/**
+ * Whether `pid` reaches `mainPid` through foreground daemons only — the chain
+ * the spawn fallback leaves behind, one successor per release. A missing
+ * parent (the process exited, or the walk hit the service manager) is false.
+ */
+function descendsThroughDaemons(
+  pid: number,
+  mainPid: number,
+  parentPid: (pid: number) => number | null,
+  commandLine: (pid: number) => string[] | null,
+): boolean {
+  let current = parentPid(pid);
+  for (let depth = 0; current && depth < 64; depth++) {
+    if (current === mainPid) return true;
+    if (!isForegroundDaemonCommand(commandLine(current))) return false;
+    current = parentPid(current);
+  }
+  return false;
 }
 
 /** `… daemon start … --foreground …`, as written by the service installer and the spawn fallback. */

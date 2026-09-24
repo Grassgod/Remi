@@ -1437,6 +1437,7 @@ function restartUnitIfSpawnedSuccessor(): boolean {
     cgroup: process.platform === "linux" ? readCgroupOrNull() : null,
     pid: process.pid,
     mainPid: readSystemdUserMainPid,
+    parentPid: readParentPid,
     commandLine: readProcessCommandLine,
     activeSupervisorPids: () => activeWorkspaceSupervisorPids(),
   });
@@ -1463,6 +1464,15 @@ function readSystemdUserMainPid(unit: string): number | null {
   if (result.status !== 0) return null;
   const pid = Number(result.stdout.trim());
   return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+}
+
+function readParentPid(pid: number): number | null {
+  try {
+    const ppid = Number(/^PPid:\s*(\d+)$/m.exec(readFileSync(`/proc/${pid}/status`, "utf8"))?.[1]);
+    return Number.isSafeInteger(ppid) && ppid > 0 ? ppid : null;
+  } catch {
+    return null;
+  }
 }
 
 function readProcessCommandLine(pid: number): string[] | null {

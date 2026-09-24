@@ -436,6 +436,9 @@ describe("Multiremi CLI — daemon restart handoff", () => {
 
 describe("Multiremi CLI — spawned successor collapses its unit", () => {
   const DAEMON_ARGV = ["/usr/local/bin/remi", "multiremi", "daemon", "start", "--foreground"];
+  // What the spawn fallback leaves in the unit: each successor is a child of
+  // the daemon it replaced, back to the unit's main process.
+  const CHAIN: Record<number, number> = { 1549685: 1427417, 1427417: 3192044, 3192044: 221547, 221547: 39871 };
 
   function successor(overrides: Partial<Parameters<typeof planSpawnedSuccessorRestart>[0]> = {}) {
     return planSpawnedSuccessorRestart({
@@ -444,6 +447,7 @@ describe("Multiremi CLI — spawned successor collapses its unit", () => {
       cgroup: CGROUP_V1_HOST,
       pid: 1549685,
       mainPid: () => 221547,
+      parentPid: (pid) => CHAIN[pid] ?? null,
       commandLine: () => DAEMON_ARGV,
       activeSupervisorPids: () => [],
       ...overrides,
@@ -476,9 +480,26 @@ describe("Multiremi CLI — spawned successor collapses its unit", () => {
     expect(successor({ cgroup: "11:pids:/user.slice/user-1001.slice/user@1001.service\n" })).toEqual({ kind: "none" });
   });
 
+  test("never restarts a unit for a daemon a task started", () => {
+    // Task processes run inside the unit and inherit INVOCATION_ID. A daemon
+    // started from a task shell with its own HOME sees none of the unit's
+    // leases, so only its ancestry tells it apart from a spawned successor.
+    const fromTask: Record<number, number> = { ...CHAIN, 1549685: 1538228, 1538228: 1531090, 1531090: 1427417 };
+    const shell = (pid: number) => pid === 1538228 ? ["/bin/bash", "-c", "remi multiremi daemon start --foreground"] : DAEMON_ARGV;
+    const plan = successor({ parentPid: (pid) => fromTask[pid] ?? null, commandLine: shell });
+    expect(plan.kind).toBe("blocked");
+    expect(plan.kind === "blocked" && plan.reason).toContain("not spawned by the unit's daemons");
+
+    // `daemon start` without --foreground spawns the foreground child.
+    const background = ["/usr/local/bin/remi", "multiremi", "daemon", "start"];
+    expect(successor({ commandLine: (pid) => pid === 1427417 ? background : DAEMON_ARGV }).kind).toBe("blocked");
+    // Orphaned into the service manager, or the parent is already gone.
+    expect(successor({ parentPid: (pid) => pid === 1549685 ? 39871 : null }).kind).toBe("blocked");
+    expect(successor({ parentPid: () => null }).kind).toBe("blocked");
+  });
+
   test("never restarts a unit while another daemon owns a workspace", () => {
-    // A task can start a daemon inside the unit and inherit INVOCATION_ID; the
-    // daemon running that task still holds its lease.
+    // A daemon that still holds its lease may be running tasks.
     const plan = successor({ activeSupervisorPids: () => [1427417] });
     expect(plan.kind).toBe("blocked");
     expect(plan.kind === "blocked" && plan.reason).toContain("1427417");
