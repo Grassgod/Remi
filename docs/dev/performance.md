@@ -94,6 +94,43 @@ bun run tests/manual/smoke-request-metrics.ts
 
 冒烟脚本默认用 0 ms 阈值和 5 s 汇总间隔以便一次跑完就同时看到两个事件；`MUL367_SMOKE_PORT` / `MUL367_SMOKE_SUMMARY_MS` 可覆盖。它只连 127.0.0.1 的临时实例和内存 SQLite，不读凭证、不碰生产。上线后需要真实基线数字时，按本文档开头「复现顺序与记录」的模板记录环境、并发和样本数，**不要**把本页的示例行情当作实测结论。
 
+## 页面测速脚本与基线（MUL-367）
+
+[frontend/scripts/perf/page-speed.ts](../../frontend/scripts/perf/page-speed.ts) 用仓库既有的 `@playwright/test` 打开主要页面，记录每页的就绪时间、API 调用数、API 字节、最慢 API 及 `Server-Timing`。它**不是** e2e 套件，位于 `frontend/e2e` 之外，不会被默认 e2e 扫到；依赖已有 `@playwright/test`，不新增依赖。
+
+**只读保证**：脚本在 `page.route('**/api/**')` 里 abort 所有非 GET/HEAD 请求，并把这些请求按 `method + 脱敏 path` 记进 `blockedWrites`，所以它可以在生产上对着真实账号跑。打开 inbox 页面本身不会写数据（实测 0 个写请求）；点击某一行会触发 `POST /api/inbox/:id/read`，只读探针会把它拦下来并记录尝试次数，**不会**真的标记已读。每次运行还会先做一次护栏自检（对 `/api/inbox/unread-count` 发 POST，必须被拦截），自检结果是报告的一部分——否则“页面从未写数据”和“护栏静默失效”无法区分。
+
+**凭证**：token 只从 `MULTIREMI_QA_WEB_TOKEN` 读取，写进目标 origin 的 `localStorage.multimira_token`，不打印、不落盘、不进 argv、不进报告。输出文件里只有 method、脱敏 path、status、耗时和字节。
+
+```bash
+# 生产只读基线（在持有 MULTIREMI_QA_WEB_TOKEN 的机器上，headless 运行）
+bun run frontend/scripts/perf/page-speed.ts \
+  --base-url http://n37-117-209.byted.org --rounds 3 \
+  --out reports/performance --name MUL-367-page-speed-baseline-<日期>
+
+# 发布后复跑并输出前后对比表
+bun run frontend/scripts/perf/page-speed.ts \
+  --base-url http://n37-117-209.byted.org --rounds 3 \
+  --out reports/performance --name MUL-367-page-speed-after-<日期> \
+  --compare reports/performance/MUL-367-page-speed-baseline-<日期>.json
+```
+
+**口径**（报告里也写了一遍，改脚本时必须同步改）：
+
+| 项 | 口径 |
+| --- | --- |
+| 页面集合 | issues、my-issues、chat、inbox、agents、runtimes、projects、workbench、settings、autopilots、skills |
+| 就绪时间 | 从 `page.goto` 起算，到主内容区域出现 H1 且区域内 `data-slot="skeleton"` 归零 |
+| 加载方式 | 每轮一个全新 browser context，逐页 `page.goto` 整页加载；每轮第一页（issues）含 app shell 冷启动，同轮后续页面复用该 shell |
+| LCP | 由 `addInitScript` 里预装的 `PerformanceObserver` 采集（不在导航前注册就取不到条目） |
+| 字节 | `encodedBodySize`（压缩后）、`decodedBodySize`（解压后 JSON）、`transferSize`（含响应头） |
+| path 脱敏 | 去掉 query；ID 形状的段换成 `:id`；已知的 workspace id / slug / member id 按值掩码，否则 `local`、`remi` 这种没有形状特征的标识会漏出去 |
+| 环境参照 | 运行前后各采 7 次 `/api/config`，记中位耗时。生产是共享环境，复跑对比前先核对这个参照 |
+
+今天的生产基线是 [reports/performance/MUL-367-page-speed-baseline-2026-09-24.json](../../reports/performance/MUL-367-page-speed-baseline-2026-09-24.json)（原始数据）、同名 `.md`（表格）与同名 `.html`（自包含单文件，可直接挂到 Issue 评论）。运行机器、Chromium、API 版本与护栏自检结果都写在报告的 `meta` 里。**明天复跑必须在同一台机器上**，否则机器差异会混进前后对比。
+
+采集当天生产本身处于劣化状态：运行前后各 7 次 `/api/config` 的中位耗时是 2231 ms / 3171 ms（样本里有 2.6 ms 的快速响应，说明不是链路固定延迟）。因此这组数字应作为「劣化态基线」，不要当成稳态性能，也不要在复跑前拿它当目标值。改报告格式时用 `--render-only <json>` 重渲染，不必重新采集。
+
 ## 优化不能破坏的约束
 
 - 数据库层必须保持 SQLite/PostgreSQL 行为一致；`transaction` 的原子性和回滚语义不能因连接池化或 async 改造丢失，不能仅把 `max: 1` 调大。
@@ -110,6 +147,7 @@ bun run tests/manual/smoke-request-metrics.ts
 
 | 工作目录 | 命令 | 用途与限制 |
 | --- | --- | --- |
+| 仓库根 | `bun run frontend/scripts/perf/page-speed.ts --base-url <url> --rounds 3 --out reports/performance --name <stem>` | 真实生产（或任意已部署实例）的浏览器侧基线：11 个主页面各自的就绪时间、API 调用数/字节、最慢 API 与 `Server-Timing`。headless Chromium，只读（所有非 GET/HEAD 的 `/api/**` 被 abort 并列出）。需要 `MULTIREMI_QA_WEB_TOKEN`；不测并发、不测多个 viewport。 |
 | 仓库根 | `bun run scripts/bench-api-route-baseline.ts` | 内存 SQLite、Hono `app.request()`；5 次预热、30 次串行样本；输出 SQL 数、p50/p95、响应 bytes、seed 和查询计划。无真实 HTTP/PG/浏览器测量。 |
 | 仓库根 | `bun run scripts/render-api-route-audit-report.ts` | 将上一命令 JSON 渲染为 HTML；脚本内原因标签/建议有静态文字，复用时仍需回读源码核实。 |
 | 仓库根 | `bun run tests/manual/bench-store-n-plus-one.ts "IssuesRepo.searchIssues(includeCommentBodies=true)"` | SQLite 的 0/50/200/500 规模 SQL 数和 11 次样本 p50；输出路径由 `MUL175_BENCH_OUTPUT` 指定，不产出 p95。 |

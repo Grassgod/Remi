@@ -1,0 +1,2829 @@
+{
+  "meta": {
+    "issue": "MUL-367",
+    "generatedAt": "2026-09-24T11:29:33.929Z",
+    "baseUrl": "http://n37-117-209.byted.org",
+    "workspaceSlug": "remi",
+    "workspaceName": "Remi",
+    "memberName": "贺华杰",
+    "rounds": 3,
+    "runner": "n37-066-008 (linux 5.15.120.bsk.3-amd64 x64, 64 vCPU, 248 GiB RAM)",
+    "mode": "headless Chromium (no desktop session) via frontend/scripts/perf/page-speed.ts",
+    "viewport": "1440x900",
+    "readingRule": "主内容区域（[data-slot=\"sidebar-inset\"]）出现 H1 标题，且区域内没有 data-slot=\"skeleton\" 骨架占位",
+    "byteAccounting": "encodedBodySize=压缩后传输体积，decodedBodySize=解压后 JSON 体积，transferSize=含响应头的传输体积",
+    "lcpNote": "LCP 由 PerformanceObserver 类型条目读取；无候选时为 null",
+    "chromium": "playwright cached chromium-1212 (local cache path omitted)",
+    "writeGuardSelfTest": {
+      "blocked": true,
+      "target": "/api/inbox/unread-count",
+      "detail": "POST 被 page.route 拦截并 abort，护栏生效"
+    },
+    "ambientLatency": {
+      "before": {
+        "path": "/api/config",
+        "samplesMs": [
+          1294,
+          2364.3,
+          2.6,
+          1857.4,
+          2652.3,
+          2231.4,
+          2720.7
+        ],
+        "minMs": 2.6,
+        "medianMs": 2231.4,
+        "maxMs": 2720.7
+      },
+      "after": {
+        "path": "/api/config",
+        "samplesMs": [
+          3030.7,
+          3578.4,
+          3798.4,
+          3170.9,
+          2903.3,
+          2.6,
+          4150.4
+        ],
+        "minMs": 2.6,
+        "medianMs": 3170.9,
+        "maxMs": 4150.4
+      }
+    },
+    "ambientNote": "生产为共享环境：同一台机器复跑时，先看 /api/config 的中位耗时是否与本次接近，再比较页面数字。",
+    "apiVersion": "0.2.80",
+    "apiRef": "2bcd2e1d31f83660c1efe7ce33a6b6c06c23260a",
+    "apiPublishedAt": "2026-09-22T23:02:18.895Z"
+  },
+  "pages": [
+    {
+      "key": "issues",
+      "path": "/{slug}/issues",
+      "url": "http://n37-117-209.byted.org/remi/issues",
+      "rounds": [
+        {
+          "round": 1,
+          "order": 1,
+          "coldShellStart": true,
+          "url": "http://n37-117-209.byted.org/remi/issues",
+          "readyMs": 16576,
+          "readyTimeout": false,
+          "heading": "Issues",
+          "lcpMs": 3136,
+          "domContentLoadedMs": 59,
+          "loadEventMs": 193.3,
+          "apiCalls": 20,
+          "apiEncodedBytes": 139619,
+          "apiDecodedBytes": 446597,
+          "apiTransferBytes": 145619,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/issues",
+            "status": 200,
+            "durationMs": 9998,
+            "encodedBytes": 2277,
+            "decodedBytes": 3657,
+            "transferBytes": 2577,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/issues",
+              "calls": 9,
+              "totalMs": 77144.7,
+              "maxMs": 9998,
+              "encodedBytes": 67359,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/pins",
+              "calls": 1,
+              "totalMs": 6656.3,
+              "maxMs": 6656.3,
+              "encodedBytes": 2,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/cli/latest-version",
+              "calls": 1,
+              "totalMs": 6638.9,
+              "maxMs": 6638.9,
+              "encodedBytes": 21,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/agent-task-snapshot",
+              "calls": 1,
+              "totalMs": 4949.5,
+              "maxMs": 4949.5,
+              "encodedBytes": 41812,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/inbox/summary",
+              "calls": 1,
+              "totalMs": 3391.1,
+              "maxMs": 3391.1,
+              "encodedBytes": 30,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 17418
+        },
+        {
+          "round": 2,
+          "order": 1,
+          "coldShellStart": true,
+          "url": "http://n37-117-209.byted.org/remi/issues",
+          "readyMs": 10164,
+          "readyTimeout": false,
+          "heading": "Issues",
+          "lcpMs": 2444,
+          "domContentLoadedMs": 67.4,
+          "loadEventMs": 213.7,
+          "apiCalls": 21,
+          "apiEncodedBytes": 140086,
+          "apiDecodedBytes": 447390,
+          "apiTransferBytes": 146386,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/issues/child-progress",
+            "status": 200,
+            "durationMs": 4832.9,
+            "encodedBytes": 753,
+            "decodedBytes": 753,
+            "transferBytes": 1053,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/issues",
+              "calls": 9,
+              "totalMs": 37039.200000000004,
+              "maxMs": 4711,
+              "encodedBytes": 67359,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/issues/child-progress",
+              "calls": 1,
+              "totalMs": 4832.9,
+              "maxMs": 4832.9,
+              "encodedBytes": 753,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/pins",
+              "calls": 1,
+              "totalMs": 3407,
+              "maxMs": 3407,
+              "encodedBytes": 2,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/cli/latest-version",
+              "calls": 1,
+              "totalMs": 3310.8,
+              "maxMs": 3310.8,
+              "encodedBytes": 21,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/agent-task-snapshot",
+              "calls": 1,
+              "totalMs": 1715.5,
+              "maxMs": 1715.5,
+              "encodedBytes": 41523,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 11004
+        },
+        {
+          "round": 3,
+          "order": 1,
+          "coldShellStart": true,
+          "url": "http://n37-117-209.byted.org/remi/issues",
+          "readyMs": 16648,
+          "readyTimeout": false,
+          "heading": "Issues",
+          "lcpMs": 3452,
+          "domContentLoadedMs": 58.9,
+          "loadEventMs": 190.7,
+          "apiCalls": 26,
+          "apiEncodedBytes": 148295,
+          "apiDecodedBytes": 472393,
+          "apiTransferBytes": 156095,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/chat/sessions",
+            "status": 200,
+            "durationMs": 8479.1,
+            "encodedBytes": 7415,
+            "decodedBytes": 22078,
+            "transferBytes": 7715,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/issues",
+              "calls": 9,
+              "totalMs": 54773.9,
+              "maxMs": 6709.8,
+              "encodedBytes": 67346,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/chat/sessions",
+              "calls": 1,
+              "totalMs": 8479.1,
+              "maxMs": 8479.1,
+              "encodedBytes": 7415,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/projects",
+              "calls": 1,
+              "totalMs": 8291.8,
+              "maxMs": 8291.8,
+              "encodedBytes": 1035,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/runtime-workspaces",
+              "calls": 1,
+              "totalMs": 8286.8,
+              "maxMs": 8286.8,
+              "encodedBytes": 17,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/chat/pending-tasks",
+              "calls": 1,
+              "totalMs": 8283.6,
+              "maxMs": 8283.6,
+              "encodedBytes": 12,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 18595
+        }
+      ],
+      "median": {
+        "readyMs": 16576,
+        "lcpMs": 3136,
+        "domContentLoadedMs": 59,
+        "apiCalls": 21,
+        "apiEncodedBytes": 140086,
+        "apiDecodedBytes": 447390,
+        "slowestApiMs": 8479.1
+      }
+    },
+    {
+      "key": "my-issues",
+      "path": "/{slug}/my-issues",
+      "url": "http://n37-117-209.byted.org/remi/my-issues",
+      "rounds": [
+        {
+          "round": 1,
+          "order": 2,
+          "coldShellStart": false,
+          "url": "http://n37-117-209.byted.org/remi/my-issues",
+          "readyMs": 18786,
+          "readyTimeout": false,
+          "heading": "我的 issue",
+          "lcpMs": 5580,
+          "domContentLoadedMs": 66.3,
+          "loadEventMs": 425.3,
+          "apiCalls": 20,
+          "apiEncodedBytes": 90711,
+          "apiDecodedBytes": 312930,
+          "apiTransferBytes": 96711,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/issues/child-progress",
+            "status": 200,
+            "durationMs": 13524.2,
+            "encodedBytes": 753,
+            "decodedBytes": 753,
+            "transferBytes": 1053,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/issues",
+              "calls": 8,
+              "totalMs": 95456.59999999999,
+              "maxMs": 13520.4,
+              "encodedBytes": 17985,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/issues/child-progress",
+              "calls": 1,
+              "totalMs": 13524.2,
+              "maxMs": 13524.2,
+              "encodedBytes": 753,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/pins",
+              "calls": 1,
+              "totalMs": 9512.2,
+              "maxMs": 9512.2,
+              "encodedBytes": 2,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/cli/latest-version",
+              "calls": 1,
+              "totalMs": 9504.3,
+              "maxMs": 9504.3,
+              "encodedBytes": 21,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/agent-task-snapshot",
+              "calls": 1,
+              "totalMs": 9289.7,
+              "maxMs": 9289.7,
+              "encodedBytes": 41519,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 19603
+        },
+        {
+          "round": 2,
+          "order": 2,
+          "coldShellStart": false,
+          "url": "http://n37-117-209.byted.org/remi/my-issues",
+          "readyMs": 9209,
+          "readyTimeout": false,
+          "heading": "我的 issue",
+          "lcpMs": 3980,
+          "domContentLoadedMs": 55,
+          "loadEventMs": 410.8,
+          "apiCalls": 25,
+          "apiEncodedBytes": 99277,
+          "apiDecodedBytes": 340176,
+          "apiTransferBytes": 106777,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/chat/sessions",
+            "status": 200,
+            "durationMs": 7265.2,
+            "encodedBytes": 7415,
+            "decodedBytes": 22078,
+            "transferBytes": 7715,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/issues",
+              "calls": 8,
+              "totalMs": 38637.6,
+              "maxMs": 5710.7,
+              "encodedBytes": 17985,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/chat/sessions",
+              "calls": 1,
+              "totalMs": 7265.2,
+              "maxMs": 7265.2,
+              "encodedBytes": 7415,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/projects",
+              "calls": 1,
+              "totalMs": 7254.7,
+              "maxMs": 7254.7,
+              "encodedBytes": 1031,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/runtime-workspaces",
+              "calls": 1,
+              "totalMs": 6895,
+              "maxMs": 6895,
+              "encodedBytes": 17,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/chat/pending-tasks",
+              "calls": 1,
+              "totalMs": 6893.8,
+              "maxMs": 6893.8,
+              "encodedBytes": 12,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 11748
+        },
+        {
+          "round": 3,
+          "order": 2,
+          "coldShellStart": false,
+          "url": "http://n37-117-209.byted.org/remi/my-issues",
+          "readyMs": 11288,
+          "readyTimeout": false,
+          "heading": "我的 issue",
+          "lcpMs": 3876,
+          "domContentLoadedMs": 109.3,
+          "loadEventMs": 429.8,
+          "apiCalls": 20,
+          "apiEncodedBytes": 90424,
+          "apiDecodedBytes": 311029,
+          "apiTransferBytes": 96424,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/issues/child-progress",
+            "status": 200,
+            "durationMs": 7722.6,
+            "encodedBytes": 753,
+            "decodedBytes": 753,
+            "transferBytes": 1053,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/issues",
+              "calls": 8,
+              "totalMs": 53988.100000000006,
+              "maxMs": 7718.7,
+              "encodedBytes": 17985,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/issues/child-progress",
+              "calls": 1,
+              "totalMs": 7722.6,
+              "maxMs": 7722.6,
+              "encodedBytes": 753,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/pins",
+              "calls": 1,
+              "totalMs": 5579.2,
+              "maxMs": 5579.2,
+              "encodedBytes": 2,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/cli/latest-version",
+              "calls": 1,
+              "totalMs": 5571.5,
+              "maxMs": 5571.5,
+              "encodedBytes": 21,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/agent-task-snapshot",
+              "calls": 1,
+              "totalMs": 3922,
+              "maxMs": 3922,
+              "encodedBytes": 41241,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 12107
+        }
+      ],
+      "median": {
+        "readyMs": 11288,
+        "lcpMs": 3980,
+        "domContentLoadedMs": 66.3,
+        "apiCalls": 20,
+        "apiEncodedBytes": 90711,
+        "apiDecodedBytes": 312930,
+        "slowestApiMs": 7722.6
+      }
+    },
+    {
+      "key": "chat",
+      "path": "/{slug}/chat",
+      "url": "http://n37-117-209.byted.org/remi/chat",
+      "rounds": [
+        {
+          "round": 1,
+          "order": 3,
+          "coldShellStart": false,
+          "url": "http://n37-117-209.byted.org/remi/chat",
+          "readyMs": 3242,
+          "readyTimeout": false,
+          "heading": "对话",
+          "lcpMs": 3168,
+          "domContentLoadedMs": 67.9,
+          "loadEventMs": 438,
+          "apiCalls": 3,
+          "apiEncodedBytes": 5312,
+          "apiDecodedBytes": 13456,
+          "apiTransferBytes": 6212,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/workspaces",
+            "status": 200,
+            "durationMs": 2153.3,
+            "encodedBytes": 4364,
+            "decodedBytes": 12508,
+            "transferBytes": 4664,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/workspaces",
+              "calls": 1,
+              "totalMs": 2153.3,
+              "maxMs": 2153.3,
+              "encodedBytes": 4364,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/me",
+              "calls": 1,
+              "totalMs": 2148,
+              "maxMs": 2148,
+              "encodedBytes": 766,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/config",
+              "calls": 1,
+              "totalMs": 569.1,
+              "maxMs": 569.1,
+              "encodedBytes": 182,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 4059
+        },
+        {
+          "round": 2,
+          "order": 3,
+          "coldShellStart": false,
+          "url": "http://n37-117-209.byted.org/remi/chat",
+          "readyMs": 4875,
+          "readyTimeout": false,
+          "heading": "对话",
+          "lcpMs": 4820,
+          "domContentLoadedMs": 63,
+          "loadEventMs": 430.3,
+          "apiCalls": 3,
+          "apiEncodedBytes": 5312,
+          "apiDecodedBytes": 13456,
+          "apiTransferBytes": 6212,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/me",
+            "status": 200,
+            "durationMs": 3840.8,
+            "encodedBytes": 766,
+            "decodedBytes": 766,
+            "transferBytes": 1066,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/me",
+              "calls": 1,
+              "totalMs": 3840.8,
+              "maxMs": 3840.8,
+              "encodedBytes": 766,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/workspaces",
+              "calls": 1,
+              "totalMs": 3838.7,
+              "maxMs": 3838.7,
+              "encodedBytes": 4364,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/config",
+              "calls": 1,
+              "totalMs": 2548.5,
+              "maxMs": 2548.5,
+              "encodedBytes": 182,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 5690
+        },
+        {
+          "round": 3,
+          "order": 3,
+          "coldShellStart": false,
+          "url": "http://n37-117-209.byted.org/remi/chat",
+          "readyMs": 11338,
+          "readyTimeout": false,
+          "heading": "对话",
+          "lcpMs": 11348,
+          "domContentLoadedMs": 62.3,
+          "loadEventMs": 411.1,
+          "apiCalls": 3,
+          "apiEncodedBytes": 5312,
+          "apiDecodedBytes": 13456,
+          "apiTransferBytes": 6212,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/workspaces",
+            "status": 200,
+            "durationMs": 10289.8,
+            "encodedBytes": 4364,
+            "decodedBytes": 12508,
+            "transferBytes": 4664,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/workspaces",
+              "calls": 1,
+              "totalMs": 10289.8,
+              "maxMs": 10289.8,
+              "encodedBytes": 4364,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/me",
+              "calls": 1,
+              "totalMs": 10281.3,
+              "maxMs": 10281.3,
+              "encodedBytes": 766,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/config",
+              "calls": 1,
+              "totalMs": 918.9,
+              "maxMs": 918.9,
+              "encodedBytes": 182,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 12155
+        }
+      ],
+      "median": {
+        "readyMs": 4875,
+        "lcpMs": 4820,
+        "domContentLoadedMs": 63,
+        "apiCalls": 3,
+        "apiEncodedBytes": 5312,
+        "apiDecodedBytes": 13456,
+        "slowestApiMs": 3840.8
+      }
+    },
+    {
+      "key": "inbox",
+      "path": "/{slug}/inbox",
+      "url": "http://n37-117-209.byted.org/remi/inbox",
+      "rounds": [
+        {
+          "round": 1,
+          "order": 4,
+          "coldShellStart": false,
+          "url": "http://n37-117-209.byted.org/remi/inbox",
+          "readyMs": 7736,
+          "readyTimeout": false,
+          "heading": "收件箱",
+          "lcpMs": 4788,
+          "domContentLoadedMs": 53.5,
+          "loadEventMs": 412,
+          "apiCalls": 15,
+          "apiEncodedBytes": 113033,
+          "apiDecodedBytes": 461149,
+          "apiTransferBytes": 117533,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/workspaces",
+            "status": 200,
+            "durationMs": 3400.8,
+            "encodedBytes": 4364,
+            "decodedBytes": 12508,
+            "transferBytes": 4664,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/issues",
+              "calls": 2,
+              "totalMs": 5692.3,
+              "maxMs": 2847.8,
+              "encodedBytes": 17847,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/workspaces",
+              "calls": 1,
+              "totalMs": 3400.8,
+              "maxMs": 3400.8,
+              "encodedBytes": 4364,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/me",
+              "calls": 1,
+              "totalMs": 3395.5,
+              "maxMs": 3395.5,
+              "encodedBytes": 766,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/workspaces/:id/members",
+              "calls": 1,
+              "totalMs": 3261.6,
+              "maxMs": 3261.6,
+              "encodedBytes": 159,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/inbox/page",
+              "calls": 1,
+              "totalMs": 3256.3,
+              "maxMs": 3256.3,
+              "encodedBytes": 22686,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 8562
+        },
+        {
+          "round": 2,
+          "order": 4,
+          "coldShellStart": false,
+          "url": "http://n37-117-209.byted.org/remi/inbox",
+          "readyMs": 10380,
+          "readyTimeout": false,
+          "heading": "收件箱",
+          "lcpMs": 4612,
+          "domContentLoadedMs": 57.3,
+          "loadEventMs": 417.2,
+          "apiCalls": 15,
+          "apiEncodedBytes": 112795,
+          "apiDecodedBytes": 461212,
+          "apiTransferBytes": 117295,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/workspaces/:id/members",
+            "status": 200,
+            "durationMs": 6274.2,
+            "encodedBytes": 159,
+            "decodedBytes": 159,
+            "transferBytes": 459,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/issues",
+              "calls": 2,
+              "totalMs": 11121.599999999999,
+              "maxMs": 5561.7,
+              "encodedBytes": 17847,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/workspaces/:id/members",
+              "calls": 1,
+              "totalMs": 6274.2,
+              "maxMs": 6274.2,
+              "encodedBytes": 159,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/inbox/page",
+              "calls": 1,
+              "totalMs": 6045.3,
+              "maxMs": 6045.3,
+              "encodedBytes": 22686,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/pins",
+              "calls": 1,
+              "totalMs": 5563.4,
+              "maxMs": 5563.4,
+              "encodedBytes": 2,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/cli/latest-version",
+              "calls": 1,
+              "totalMs": 5517.4,
+              "maxMs": 5517.4,
+              "encodedBytes": 21,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 11399
+        },
+        {
+          "round": 3,
+          "order": 4,
+          "coldShellStart": false,
+          "url": "http://n37-117-209.byted.org/remi/inbox",
+          "readyMs": 20178,
+          "readyTimeout": false,
+          "heading": "收件箱",
+          "lcpMs": 7900,
+          "domContentLoadedMs": 65.1,
+          "loadEventMs": 419.2,
+          "apiCalls": 15,
+          "apiEncodedBytes": 112504,
+          "apiDecodedBytes": 459258,
+          "apiTransferBytes": 117004,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/workspaces/:id/members",
+            "status": 200,
+            "durationMs": 12687,
+            "encodedBytes": 159,
+            "decodedBytes": 159,
+            "transferBytes": 459,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/issues",
+              "calls": 2,
+              "totalMs": 23781.5,
+              "maxMs": 11893.1,
+              "encodedBytes": 17847,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/workspaces/:id/members",
+              "calls": 1,
+              "totalMs": 12687,
+              "maxMs": 12687,
+              "encodedBytes": 159,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/inbox/page",
+              "calls": 1,
+              "totalMs": 12561.2,
+              "maxMs": 12561.2,
+              "encodedBytes": 22686,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/pins",
+              "calls": 1,
+              "totalMs": 11896.4,
+              "maxMs": 11896.4,
+              "encodedBytes": 2,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/cli/latest-version",
+              "calls": 1,
+              "totalMs": 11880.4,
+              "maxMs": 11880.4,
+              "encodedBytes": 21,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 21102
+        }
+      ],
+      "median": {
+        "readyMs": 10380,
+        "lcpMs": 4788,
+        "domContentLoadedMs": 57.3,
+        "apiCalls": 15,
+        "apiEncodedBytes": 112795,
+        "apiDecodedBytes": 461149,
+        "slowestApiMs": 6274.2
+      }
+    },
+    {
+      "key": "agents",
+      "path": "/{slug}/agents",
+      "url": "http://n37-117-209.byted.org/remi/agents",
+      "rounds": [
+        {
+          "round": 1,
+          "order": 5,
+          "coldShellStart": false,
+          "url": "http://n37-117-209.byted.org/remi/agents",
+          "readyMs": 3082,
+          "readyTimeout": false,
+          "heading": "智能体",
+          "lcpMs": 2652,
+          "domContentLoadedMs": 73.8,
+          "loadEventMs": 445.8,
+          "apiCalls": 9,
+          "apiEncodedBytes": 30417,
+          "apiDecodedBytes": 94820,
+          "apiTransferBytes": 32817,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/me",
+            "status": 200,
+            "durationMs": 1291.1,
+            "encodedBytes": 766,
+            "decodedBytes": 766,
+            "transferBytes": 1066,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/me",
+              "calls": 1,
+              "totalMs": 1291.1,
+              "maxMs": 1291.1,
+              "encodedBytes": 766,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/workspaces",
+              "calls": 1,
+              "totalMs": 1288.7,
+              "maxMs": 1288.7,
+              "encodedBytes": 4364,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/inbox/summary",
+              "calls": 1,
+              "totalMs": 1181,
+              "maxMs": 1181,
+              "encodedBytes": 30,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/invitations",
+              "calls": 1,
+              "totalMs": 1086.6,
+              "maxMs": 1086.6,
+              "encodedBytes": 2,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/squads",
+              "calls": 1,
+              "totalMs": 1086.4,
+              "maxMs": 1086.4,
+              "encodedBytes": 3030,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 4100
+        },
+        {
+          "round": 2,
+          "order": 5,
+          "coldShellStart": false,
+          "url": "http://n37-117-209.byted.org/remi/agents",
+          "readyMs": 4707,
+          "readyTimeout": false,
+          "heading": "智能体",
+          "lcpMs": 3972,
+          "domContentLoadedMs": 59.1,
+          "loadEventMs": 433.2,
+          "apiCalls": 9,
+          "apiEncodedBytes": 30421,
+          "apiDecodedBytes": 94820,
+          "apiTransferBytes": 32821,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/workspaces",
+            "status": 200,
+            "durationMs": 2727,
+            "encodedBytes": 4364,
+            "decodedBytes": 12508,
+            "transferBytes": 4664,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/workspaces",
+              "calls": 1,
+              "totalMs": 2727,
+              "maxMs": 2727,
+              "encodedBytes": 4364,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/me",
+              "calls": 1,
+              "totalMs": 2721.8,
+              "maxMs": 2721.8,
+              "encodedBytes": 766,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/config",
+              "calls": 1,
+              "totalMs": 2154,
+              "maxMs": 2154,
+              "encodedBytes": 182,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/inbox/summary",
+              "calls": 1,
+              "totalMs": 1286.7,
+              "maxMs": 1286.7,
+              "encodedBytes": 30,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/invitations",
+              "calls": 1,
+              "totalMs": 1203.3,
+              "maxMs": 1203.3,
+              "encodedBytes": 2,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 5729
+        },
+        {
+          "round": 3,
+          "order": 5,
+          "coldShellStart": false,
+          "url": "http://n37-117-209.byted.org/remi/agents",
+          "readyMs": 13354,
+          "readyTimeout": false,
+          "heading": "智能体",
+          "lcpMs": 7692,
+          "domContentLoadedMs": 61.2,
+          "loadEventMs": 425.6,
+          "apiCalls": 9,
+          "apiEncodedBytes": 30436,
+          "apiDecodedBytes": 94820,
+          "apiTransferBytes": 32836,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/workspaces",
+            "status": 200,
+            "durationMs": 6386.3,
+            "encodedBytes": 4364,
+            "decodedBytes": 12508,
+            "transferBytes": 4664,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/workspaces",
+              "calls": 1,
+              "totalMs": 6386.3,
+              "maxMs": 6386.3,
+              "encodedBytes": 4364,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/inbox/summary",
+              "calls": 1,
+              "totalMs": 6381.4,
+              "maxMs": 6381.4,
+              "encodedBytes": 30,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/me",
+              "calls": 1,
+              "totalMs": 6381.1,
+              "maxMs": 6381.1,
+              "encodedBytes": 766,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/invitations",
+              "calls": 1,
+              "totalMs": 6281.9,
+              "maxMs": 6281.9,
+              "encodedBytes": 2,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/squads",
+              "calls": 1,
+              "totalMs": 6280.8,
+              "maxMs": 6280.8,
+              "encodedBytes": 3030,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 14375
+        }
+      ],
+      "median": {
+        "readyMs": 4707,
+        "lcpMs": 3972,
+        "domContentLoadedMs": 61.2,
+        "apiCalls": 9,
+        "apiEncodedBytes": 30421,
+        "apiDecodedBytes": 94820,
+        "slowestApiMs": 2727
+      }
+    },
+    {
+      "key": "runtimes",
+      "path": "/{slug}/runtimes",
+      "url": "http://n37-117-209.byted.org/remi/runtimes",
+      "rounds": [
+        {
+          "round": 1,
+          "order": 6,
+          "coldShellStart": false,
+          "url": "http://n37-117-209.byted.org/remi/runtimes",
+          "readyMs": 4881,
+          "readyTimeout": false,
+          "heading": "运行时",
+          "lcpMs": 3396,
+          "domContentLoadedMs": 54.1,
+          "loadEventMs": 446.8,
+          "apiCalls": 9,
+          "apiEncodedBytes": 71961,
+          "apiDecodedBytes": 251788,
+          "apiTransferBytes": 74661,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/workspaces",
+            "status": 200,
+            "durationMs": 2083.6,
+            "encodedBytes": 4364,
+            "decodedBytes": 12508,
+            "transferBytes": 4664,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/workspaces",
+              "calls": 1,
+              "totalMs": 2083.6,
+              "maxMs": 2083.6,
+              "encodedBytes": 4364,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/me",
+              "calls": 1,
+              "totalMs": 2078,
+              "maxMs": 2078,
+              "encodedBytes": 766,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/agent-task-snapshot",
+              "calls": 1,
+              "totalMs": 1910,
+              "maxMs": 1910,
+              "encodedBytes": 41542,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/inbox/summary",
+              "calls": 1,
+              "totalMs": 1873.9,
+              "maxMs": 1873.9,
+              "encodedBytes": 30,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/invitations",
+              "calls": 1,
+              "totalMs": 1789.2,
+              "maxMs": 1789.2,
+              "encodedBytes": 2,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 5702
+        },
+        {
+          "round": 2,
+          "order": 6,
+          "coldShellStart": false,
+          "url": "http://n37-117-209.byted.org/remi/runtimes",
+          "readyMs": 4839,
+          "readyTimeout": false,
+          "heading": "运行时",
+          "lcpMs": 3188,
+          "domContentLoadedMs": 62.3,
+          "loadEventMs": 446.7,
+          "apiCalls": 9,
+          "apiEncodedBytes": 30414,
+          "apiDecodedBytes": 94820,
+          "apiTransferBytes": 32814,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/inbox/summary",
+            "status": 200,
+            "durationMs": 2040.6,
+            "encodedBytes": 30,
+            "decodedBytes": 30,
+            "transferBytes": 330,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/inbox/summary",
+              "calls": 1,
+              "totalMs": 2040.6,
+              "maxMs": 2040.6,
+              "encodedBytes": 30,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/invitations",
+              "calls": 1,
+              "totalMs": 1953.8,
+              "maxMs": 1953.8,
+              "encodedBytes": 2,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/squads",
+              "calls": 1,
+              "totalMs": 1952.6,
+              "maxMs": 1952.6,
+              "encodedBytes": 3030,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/runtimes",
+              "calls": 1,
+              "totalMs": 1900.5,
+              "maxMs": 1900.5,
+              "encodedBytes": 1092,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/workspaces",
+              "calls": 1,
+              "totalMs": 1863.6,
+              "maxMs": 1863.6,
+              "encodedBytes": 4364,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 5655
+        },
+        {
+          "round": 3,
+          "order": 6,
+          "coldShellStart": false,
+          "url": "http://n37-117-209.byted.org/remi/runtimes",
+          "readyMs": 10221,
+          "readyTimeout": false,
+          "heading": "运行时",
+          "lcpMs": 5976,
+          "domContentLoadedMs": 68.3,
+          "loadEventMs": 459.1,
+          "apiCalls": 9,
+          "apiEncodedBytes": 30414,
+          "apiDecodedBytes": 94820,
+          "apiTransferBytes": 32814,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/inbox/summary",
+            "status": 200,
+            "durationMs": 4796.1,
+            "encodedBytes": 30,
+            "decodedBytes": 30,
+            "transferBytes": 330,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/inbox/summary",
+              "calls": 1,
+              "totalMs": 4796.1,
+              "maxMs": 4796.1,
+              "encodedBytes": 30,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/invitations",
+              "calls": 1,
+              "totalMs": 4707.3,
+              "maxMs": 4707.3,
+              "encodedBytes": 2,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/squads",
+              "calls": 1,
+              "totalMs": 4704.5,
+              "maxMs": 4704.5,
+              "encodedBytes": 3030,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/runtimes",
+              "calls": 1,
+              "totalMs": 4651.7,
+              "maxMs": 4651.7,
+              "encodedBytes": 1092,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/workspaces",
+              "calls": 1,
+              "totalMs": 4604.3,
+              "maxMs": 4604.3,
+              "encodedBytes": 4364,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 11038
+        }
+      ],
+      "median": {
+        "readyMs": 4881,
+        "lcpMs": 3396,
+        "domContentLoadedMs": 62.3,
+        "apiCalls": 9,
+        "apiEncodedBytes": 30414,
+        "apiDecodedBytes": 94820,
+        "slowestApiMs": 2083.6
+      }
+    },
+    {
+      "key": "projects",
+      "path": "/{slug}/projects",
+      "url": "http://n37-117-209.byted.org/remi/projects",
+      "rounds": [
+        {
+          "round": 1,
+          "order": 7,
+          "coldShellStart": false,
+          "url": "http://n37-117-209.byted.org/remi/projects",
+          "readyMs": 7096,
+          "readyTimeout": false,
+          "heading": "项目",
+          "lcpMs": 3140,
+          "domContentLoadedMs": 60,
+          "loadEventMs": 417.2,
+          "apiCalls": 15,
+          "apiEncodedBytes": 90996,
+          "apiDecodedBytes": 317171,
+          "apiTransferBytes": 95496,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/workspaces/:id/members",
+            "status": 200,
+            "durationMs": 4098.3,
+            "encodedBytes": 159,
+            "decodedBytes": 159,
+            "transferBytes": 459,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/issues",
+              "calls": 2,
+              "totalMs": 7893.1,
+              "maxMs": 3948.5,
+              "encodedBytes": 17847,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/workspaces/:id/members",
+              "calls": 1,
+              "totalMs": 4098.3,
+              "maxMs": 4098.3,
+              "encodedBytes": 159,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/projects",
+              "calls": 1,
+              "totalMs": 3957.2,
+              "maxMs": 3957.2,
+              "encodedBytes": 1031,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/pins",
+              "calls": 1,
+              "totalMs": 3952.2,
+              "maxMs": 3952.2,
+              "encodedBytes": 2,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/cli/latest-version",
+              "calls": 1,
+              "totalMs": 3581.5,
+              "maxMs": 3581.5,
+              "encodedBytes": 21,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 8016
+        },
+        {
+          "round": 2,
+          "order": 7,
+          "coldShellStart": false,
+          "url": "http://n37-117-209.byted.org/remi/projects",
+          "readyMs": 9414,
+          "readyTimeout": false,
+          "heading": "项目",
+          "lcpMs": 3840,
+          "domContentLoadedMs": 50.9,
+          "loadEventMs": 415.2,
+          "apiCalls": 15,
+          "apiEncodedBytes": 90989,
+          "apiDecodedBytes": 317234,
+          "apiTransferBytes": 95489,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/workspaces/:id/members",
+            "status": 200,
+            "durationMs": 6677.6,
+            "encodedBytes": 159,
+            "decodedBytes": 159,
+            "transferBytes": 459,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/issues",
+              "calls": 2,
+              "totalMs": 11675.599999999999,
+              "maxMs": 5874.2,
+              "encodedBytes": 17847,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/workspaces/:id/members",
+              "calls": 1,
+              "totalMs": 6677.6,
+              "maxMs": 6677.6,
+              "encodedBytes": 159,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/projects",
+              "calls": 1,
+              "totalMs": 5948.8,
+              "maxMs": 5948.8,
+              "encodedBytes": 1031,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/pins",
+              "calls": 1,
+              "totalMs": 5877.1,
+              "maxMs": 5877.1,
+              "encodedBytes": 2,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/cli/latest-version",
+              "calls": 1,
+              "totalMs": 5793.9,
+              "maxMs": 5793.9,
+              "encodedBytes": 21,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 10942
+        },
+        {
+          "round": 3,
+          "order": 7,
+          "coldShellStart": false,
+          "url": "http://n37-117-209.byted.org/remi/projects",
+          "readyMs": 11500,
+          "readyTimeout": false,
+          "heading": "项目",
+          "lcpMs": 5396,
+          "domContentLoadedMs": 63.1,
+          "loadEventMs": 423.7,
+          "apiCalls": 14,
+          "apiEncodedBytes": 90714,
+          "apiDecodedBytes": 315205,
+          "apiTransferBytes": 94914,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/projects",
+            "status": 200,
+            "durationMs": 6565.8,
+            "encodedBytes": 1035,
+            "decodedBytes": 4985,
+            "transferBytes": 1335,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/issues",
+              "calls": 2,
+              "totalMs": 13113,
+              "maxMs": 6558.6,
+              "encodedBytes": 17847,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/projects",
+              "calls": 1,
+              "totalMs": 6565.8,
+              "maxMs": 6565.8,
+              "encodedBytes": 1035,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/pins",
+              "calls": 1,
+              "totalMs": 6561.6,
+              "maxMs": 6561.6,
+              "encodedBytes": 2,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/cli/latest-version",
+              "calls": 1,
+              "totalMs": 6546.7,
+              "maxMs": 6546.7,
+              "encodedBytes": 21,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/agent-task-snapshot",
+              "calls": 1,
+              "totalMs": 6539.2,
+              "maxMs": 6539.2,
+              "encodedBytes": 41377,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 12319
+        }
+      ],
+      "median": {
+        "readyMs": 9414,
+        "lcpMs": 3840,
+        "domContentLoadedMs": 60,
+        "apiCalls": 15,
+        "apiEncodedBytes": 90989,
+        "apiDecodedBytes": 317171,
+        "slowestApiMs": 6565.8
+      }
+    },
+    {
+      "key": "workbench",
+      "path": "/{slug}/workbench",
+      "url": "http://n37-117-209.byted.org/remi/workbench",
+      "rounds": [
+        {
+          "round": 1,
+          "order": 8,
+          "coldShellStart": false,
+          "url": "http://n37-117-209.byted.org/remi/workbench",
+          "readyMs": 8788,
+          "readyTimeout": false,
+          "heading": "工作台",
+          "lcpMs": 4084,
+          "domContentLoadedMs": 51.8,
+          "loadEventMs": 420.3,
+          "apiCalls": 15,
+          "apiEncodedBytes": 98296,
+          "apiDecodedBytes": 330687,
+          "apiTransferBytes": 102796,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/workspaces/:id/members",
+            "status": 200,
+            "durationMs": 5095.7,
+            "encodedBytes": 159,
+            "decodedBytes": 159,
+            "transferBytes": 459,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/issues",
+              "calls": 3,
+              "totalMs": 14873.800000000001,
+              "maxMs": 4965.3,
+              "encodedBytes": 26176,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/workspaces/:id/members",
+              "calls": 1,
+              "totalMs": 5095.7,
+              "maxMs": 5095.7,
+              "encodedBytes": 159,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/pins",
+              "calls": 1,
+              "totalMs": 4959.7,
+              "maxMs": 4959.7,
+              "encodedBytes": 2,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/cli/latest-version",
+              "calls": 1,
+              "totalMs": 4945.6,
+              "maxMs": 4945.6,
+              "encodedBytes": 21,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/agent-task-snapshot",
+              "calls": 1,
+              "totalMs": 3497.1,
+              "maxMs": 3497.1,
+              "encodedBytes": 41519,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 9708
+        },
+        {
+          "round": 2,
+          "order": 8,
+          "coldShellStart": false,
+          "url": "http://n37-117-209.byted.org/remi/workbench",
+          "readyMs": 9690,
+          "readyTimeout": false,
+          "heading": "工作台",
+          "lcpMs": 3656,
+          "domContentLoadedMs": 59.4,
+          "loadEventMs": 410.4,
+          "apiCalls": 15,
+          "apiEncodedBytes": 98394,
+          "apiDecodedBytes": 330750,
+          "apiTransferBytes": 102894,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/workspaces/:id/members",
+            "status": 200,
+            "durationMs": 7144,
+            "encodedBytes": 159,
+            "decodedBytes": 159,
+            "transferBytes": 459,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/issues",
+              "calls": 3,
+              "totalMs": 18903.5,
+              "maxMs": 6308.7,
+              "encodedBytes": 26176,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/workspaces/:id/members",
+              "calls": 1,
+              "totalMs": 7144,
+              "maxMs": 7144,
+              "encodedBytes": 159,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/pins",
+              "calls": 1,
+              "totalMs": 6303.5,
+              "maxMs": 6303.5,
+              "encodedBytes": 2,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/cli/latest-version",
+              "calls": 1,
+              "totalMs": 6285.9,
+              "maxMs": 6285.9,
+              "encodedBytes": 21,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/agent-task-snapshot",
+              "calls": 1,
+              "totalMs": 4627,
+              "maxMs": 4627,
+              "encodedBytes": 41609,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 11310
+        },
+        {
+          "round": 3,
+          "order": 8,
+          "coldShellStart": false,
+          "url": "http://n37-117-209.byted.org/remi/workbench",
+          "readyMs": 11541,
+          "readyTimeout": false,
+          "heading": "工作台",
+          "lcpMs": 4736,
+          "domContentLoadedMs": 63.8,
+          "loadEventMs": 423.8,
+          "apiCalls": 14,
+          "apiEncodedBytes": 97890,
+          "apiDecodedBytes": 328718,
+          "apiTransferBytes": 102090,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/issues",
+            "status": 200,
+            "durationMs": 7123.1,
+            "encodedBytes": 8316,
+            "decodedBytes": 18498,
+            "transferBytes": 8616,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/issues",
+              "calls": 3,
+              "totalMs": 21099.2,
+              "maxMs": 7123.1,
+              "encodedBytes": 26163,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/pins",
+              "calls": 1,
+              "totalMs": 7063.5,
+              "maxMs": 7063.5,
+              "encodedBytes": 2,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/cli/latest-version",
+              "calls": 1,
+              "totalMs": 6910.8,
+              "maxMs": 6910.8,
+              "encodedBytes": 21,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/agent-task-snapshot",
+              "calls": 1,
+              "totalMs": 3899.3,
+              "maxMs": 3899.3,
+              "encodedBytes": 41296,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/workspaces",
+              "calls": 1,
+              "totalMs": 3396.1,
+              "maxMs": 3396.1,
+              "encodedBytes": 4364,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 12357
+        }
+      ],
+      "median": {
+        "readyMs": 9690,
+        "lcpMs": 4084,
+        "domContentLoadedMs": 59.4,
+        "apiCalls": 15,
+        "apiEncodedBytes": 98296,
+        "apiDecodedBytes": 330687,
+        "slowestApiMs": 7123.1
+      }
+    },
+    {
+      "key": "settings",
+      "path": "/{slug}/settings",
+      "url": "http://n37-117-209.byted.org/remi/settings",
+      "rounds": [
+        {
+          "round": 1,
+          "order": 9,
+          "coldShellStart": false,
+          "url": "http://n37-117-209.byted.org/remi/settings",
+          "readyMs": 4650,
+          "readyTimeout": false,
+          "heading": "设置",
+          "lcpMs": 4996,
+          "domContentLoadedMs": 55,
+          "loadEventMs": 431.2,
+          "apiCalls": 13,
+          "apiEncodedBytes": 89807,
+          "apiDecodedBytes": 312035,
+          "apiTransferBytes": 93407,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/workspaces",
+            "status": 200,
+            "durationMs": 3518.5,
+            "encodedBytes": 4364,
+            "decodedBytes": 12508,
+            "transferBytes": 4664,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/issues",
+              "calls": 2,
+              "totalMs": 5534.7,
+              "maxMs": 2769,
+              "encodedBytes": 17847,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/workspaces",
+              "calls": 1,
+              "totalMs": 3518.5,
+              "maxMs": 3518.5,
+              "encodedBytes": 4364,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/me",
+              "calls": 1,
+              "totalMs": 3514.4,
+              "maxMs": 3514.4,
+              "encodedBytes": 766,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/cli/latest-version",
+              "calls": 1,
+              "totalMs": 2757.1,
+              "maxMs": 2757.1,
+              "encodedBytes": 21,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/inbox/summary",
+              "calls": 1,
+              "totalMs": 2755.3,
+              "maxMs": 2755.3,
+              "encodedBytes": 30,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 7906
+        },
+        {
+          "round": 2,
+          "order": 9,
+          "coldShellStart": false,
+          "url": "http://n37-117-209.byted.org/remi/settings",
+          "readyMs": 5293,
+          "readyTimeout": false,
+          "heading": "设置",
+          "lcpMs": 5576,
+          "domContentLoadedMs": 59,
+          "loadEventMs": 439.5,
+          "apiCalls": 3,
+          "apiEncodedBytes": 5312,
+          "apiDecodedBytes": 13456,
+          "apiTransferBytes": 6212,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/workspaces",
+            "status": 200,
+            "durationMs": 4153.5,
+            "encodedBytes": 4364,
+            "decodedBytes": 12508,
+            "transferBytes": 4664,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/workspaces",
+              "calls": 1,
+              "totalMs": 4153.5,
+              "maxMs": 4153.5,
+              "encodedBytes": 4364,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/me",
+              "calls": 1,
+              "totalMs": 4124.4,
+              "maxMs": 4124.4,
+              "encodedBytes": 766,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/config",
+              "calls": 1,
+              "totalMs": 1519.6,
+              "maxMs": 1519.6,
+              "encodedBytes": 182,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 6111
+        },
+        {
+          "round": 3,
+          "order": 9,
+          "coldShellStart": false,
+          "url": "http://n37-117-209.byted.org/remi/settings",
+          "readyMs": 4953,
+          "readyTimeout": false,
+          "heading": "设置",
+          "lcpMs": 5256,
+          "domContentLoadedMs": 65.7,
+          "loadEventMs": 429.4,
+          "apiCalls": 3,
+          "apiEncodedBytes": 5312,
+          "apiDecodedBytes": 13456,
+          "apiTransferBytes": 6212,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/workspaces",
+            "status": 200,
+            "durationMs": 3841.6,
+            "encodedBytes": 4364,
+            "decodedBytes": 12508,
+            "transferBytes": 4664,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/workspaces",
+              "calls": 1,
+              "totalMs": 3841.6,
+              "maxMs": 3841.6,
+              "encodedBytes": 4364,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/me",
+              "calls": 1,
+              "totalMs": 3836.5,
+              "maxMs": 3836.5,
+              "encodedBytes": 766,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/config",
+              "calls": 1,
+              "totalMs": 865.4,
+              "maxMs": 865.4,
+              "encodedBytes": 182,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 5768
+        }
+      ],
+      "median": {
+        "readyMs": 4953,
+        "lcpMs": 5256,
+        "domContentLoadedMs": 59,
+        "apiCalls": 3,
+        "apiEncodedBytes": 5312,
+        "apiDecodedBytes": 13456,
+        "slowestApiMs": 3841.6
+      }
+    },
+    {
+      "key": "autopilots",
+      "path": "/{slug}/autopilots",
+      "url": "http://n37-117-209.byted.org/remi/autopilots",
+      "rounds": [
+        {
+          "round": 1,
+          "order": 10,
+          "coldShellStart": false,
+          "url": "http://n37-117-209.byted.org/remi/autopilots",
+          "readyMs": 8013,
+          "readyTimeout": false,
+          "heading": "自动化",
+          "lcpMs": 3296,
+          "domContentLoadedMs": 54.1,
+          "loadEventMs": 415.5,
+          "apiCalls": 14,
+          "apiEncodedBytes": 99033,
+          "apiDecodedBytes": 333433,
+          "apiTransferBytes": 103233,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/autopilots",
+            "status": 200,
+            "durationMs": 5036.3,
+            "encodedBytes": 9229,
+            "decodedBytes": 21396,
+            "transferBytes": 9529,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/issues",
+              "calls": 2,
+              "totalMs": 10054.5,
+              "maxMs": 5028.6,
+              "encodedBytes": 17847,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/autopilots",
+              "calls": 1,
+              "totalMs": 5036.3,
+              "maxMs": 5036.3,
+              "encodedBytes": 9229,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/pins",
+              "calls": 1,
+              "totalMs": 5032.4,
+              "maxMs": 5032.4,
+              "encodedBytes": 2,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/cli/latest-version",
+              "calls": 1,
+              "totalMs": 5016.2,
+              "maxMs": 5016.2,
+              "encodedBytes": 21,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/agent-task-snapshot",
+              "calls": 1,
+              "totalMs": 4439.8,
+              "maxMs": 4439.8,
+              "encodedBytes": 41515,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 8831
+        },
+        {
+          "round": 2,
+          "order": 10,
+          "coldShellStart": false,
+          "url": "http://n37-117-209.byted.org/remi/autopilots",
+          "readyMs": 10259,
+          "readyTimeout": false,
+          "heading": "自动化",
+          "lcpMs": 5436,
+          "domContentLoadedMs": 59.2,
+          "loadEventMs": 410.2,
+          "apiCalls": 14,
+          "apiEncodedBytes": 99409,
+          "apiDecodedBytes": 336339,
+          "apiTransferBytes": 103609,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/autopilots",
+            "status": 200,
+            "durationMs": 5136.9,
+            "encodedBytes": 9229,
+            "decodedBytes": 21396,
+            "transferBytes": 9529,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/issues",
+              "calls": 2,
+              "totalMs": 10217.2,
+              "maxMs": 5109.5,
+              "encodedBytes": 17847,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/autopilots",
+              "calls": 1,
+              "totalMs": 5136.9,
+              "maxMs": 5136.9,
+              "encodedBytes": 9229,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/pins",
+              "calls": 1,
+              "totalMs": 5112.2,
+              "maxMs": 5112.2,
+              "encodedBytes": 2,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/cli/latest-version",
+              "calls": 1,
+              "totalMs": 5037.2,
+              "maxMs": 5037.2,
+              "encodedBytes": 21,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/workspaces",
+              "calls": 1,
+              "totalMs": 4110.9,
+              "maxMs": 4110.9,
+              "encodedBytes": 4364,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 11078
+        },
+        {
+          "round": 3,
+          "order": 10,
+          "coldShellStart": false,
+          "url": "http://n37-117-209.byted.org/remi/autopilots",
+          "readyMs": 17146,
+          "readyTimeout": false,
+          "heading": "自动化",
+          "lcpMs": 7680,
+          "domContentLoadedMs": 62.9,
+          "loadEventMs": 424.4,
+          "apiCalls": 14,
+          "apiEncodedBytes": 99233,
+          "apiDecodedBytes": 331587,
+          "apiTransferBytes": 103433,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/autopilots",
+            "status": 200,
+            "durationMs": 9764.1,
+            "encodedBytes": 9229,
+            "decodedBytes": 21396,
+            "transferBytes": 9529,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/issues",
+              "calls": 2,
+              "totalMs": 19411.5,
+              "maxMs": 9707.4,
+              "encodedBytes": 17847,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/autopilots",
+              "calls": 1,
+              "totalMs": 9764.1,
+              "maxMs": 9764.1,
+              "encodedBytes": 9229,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/pins",
+              "calls": 1,
+              "totalMs": 9710.6,
+              "maxMs": 9710.6,
+              "encodedBytes": 2,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/cli/latest-version",
+              "calls": 1,
+              "totalMs": 9695.5,
+              "maxMs": 9695.5,
+              "encodedBytes": 21,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/agent-task-snapshot",
+              "calls": 1,
+              "totalMs": 8369.6,
+              "maxMs": 8369.6,
+              "encodedBytes": 41721,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 17962
+        }
+      ],
+      "median": {
+        "readyMs": 10259,
+        "lcpMs": 5436,
+        "domContentLoadedMs": 59.2,
+        "apiCalls": 14,
+        "apiEncodedBytes": 99233,
+        "apiDecodedBytes": 333433,
+        "slowestApiMs": 5136.9
+      }
+    },
+    {
+      "key": "skills",
+      "path": "/{slug}/skills",
+      "url": "http://n37-117-209.byted.org/remi/skills",
+      "rounds": [
+        {
+          "round": 1,
+          "order": 11,
+          "coldShellStart": false,
+          "url": "http://n37-117-209.byted.org/remi/skills",
+          "readyMs": 7199,
+          "readyTimeout": false,
+          "heading": "Skills",
+          "lcpMs": 7232,
+          "domContentLoadedMs": 73.2,
+          "loadEventMs": 436.7,
+          "apiCalls": 14,
+          "apiEncodedBytes": 92506,
+          "apiDecodedBytes": 317887,
+          "apiTransferBytes": 96706,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/skills",
+            "status": 200,
+            "durationMs": 4116.3,
+            "encodedBytes": 2708,
+            "decodedBytes": 5850,
+            "transferBytes": 3008,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/issues",
+              "calls": 2,
+              "totalMs": 8195.099999999999,
+              "maxMs": 4108.4,
+              "encodedBytes": 17847,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/skills",
+              "calls": 1,
+              "totalMs": 4116.3,
+              "maxMs": 4116.3,
+              "encodedBytes": 2708,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/pins",
+              "calls": 1,
+              "totalMs": 4113.8,
+              "maxMs": 4113.8,
+              "encodedBytes": 2,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/cli/latest-version",
+              "calls": 1,
+              "totalMs": 4078.8,
+              "maxMs": 4078.8,
+              "encodedBytes": 21,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/agent-task-snapshot",
+              "calls": 1,
+              "totalMs": 3486.6,
+              "maxMs": 3486.6,
+              "encodedBytes": 41503,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 8019
+        },
+        {
+          "round": 2,
+          "order": 11,
+          "coldShellStart": false,
+          "url": "http://n37-117-209.byted.org/remi/skills",
+          "readyMs": 10407,
+          "readyTimeout": false,
+          "heading": "Skills",
+          "lcpMs": 10428,
+          "domContentLoadedMs": 60.7,
+          "loadEventMs": 424.6,
+          "apiCalls": 14,
+          "apiEncodedBytes": 93081,
+          "apiDecodedBytes": 321823,
+          "apiTransferBytes": 97281,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/cli/latest-version",
+            "status": 200,
+            "durationMs": 6553.4,
+            "encodedBytes": 21,
+            "decodedBytes": 21,
+            "transferBytes": 321,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/issues",
+              "calls": 2,
+              "totalMs": 13085.9,
+              "maxMs": 6548.4,
+              "encodedBytes": 17847,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/cli/latest-version",
+              "calls": 1,
+              "totalMs": 6553.4,
+              "maxMs": 6553.4,
+              "encodedBytes": 21,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/skills",
+              "calls": 1,
+              "totalMs": 6553.4,
+              "maxMs": 6553.4,
+              "encodedBytes": 2708,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/pins",
+              "calls": 1,
+              "totalMs": 6531.1,
+              "maxMs": 6531.1,
+              "encodedBytes": 2,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/agent-task-snapshot",
+              "calls": 1,
+              "totalMs": 4177.9,
+              "maxMs": 4177.9,
+              "encodedBytes": 42091,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 11228
+        },
+        {
+          "round": 3,
+          "order": 11,
+          "coldShellStart": false,
+          "url": "http://n37-117-209.byted.org/remi/skills",
+          "readyMs": 14084,
+          "readyTimeout": false,
+          "heading": "Skills",
+          "lcpMs": 14116,
+          "domContentLoadedMs": 65.5,
+          "loadEventMs": 425,
+          "apiCalls": 14,
+          "apiEncodedBytes": 92630,
+          "apiDecodedBytes": 316041,
+          "apiTransferBytes": 96830,
+          "slowestApi": {
+            "method": "GET",
+            "path": "/api/skills",
+            "status": 200,
+            "durationMs": 9083.1,
+            "encodedBytes": 2708,
+            "decodedBytes": 5850,
+            "transferBytes": 3008,
+            "serverTiming": null
+          },
+          "apiTopPatterns": [
+            {
+              "method": "GET",
+              "path": "/api/issues",
+              "calls": 2,
+              "totalMs": 18108.9,
+              "maxMs": 9074.8,
+              "encodedBytes": 17847,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/skills",
+              "calls": 1,
+              "totalMs": 9083.1,
+              "maxMs": 9083.1,
+              "encodedBytes": 2708,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/pins",
+              "calls": 1,
+              "totalMs": 9077.5,
+              "maxMs": 9077.5,
+              "encodedBytes": 2,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/cli/latest-version",
+              "calls": 1,
+              "totalMs": 9027.5,
+              "maxMs": 9027.5,
+              "encodedBytes": 21,
+              "statuses": "200",
+              "serverTiming": null
+            },
+            {
+              "method": "GET",
+              "path": "/api/agent-task-snapshot",
+              "calls": 1,
+              "totalMs": 6373.5,
+              "maxMs": 6373.5,
+              "encodedBytes": 41638,
+              "statuses": "200",
+              "serverTiming": null
+            }
+          ],
+          "blockedWrites": 0,
+          "wallClockMs": 14900
+        }
+      ],
+      "median": {
+        "readyMs": 10407,
+        "lcpMs": 10428,
+        "domContentLoadedMs": 65.5,
+        "apiCalls": 14,
+        "apiEncodedBytes": 92630,
+        "apiDecodedBytes": 317887,
+        "slowestApiMs": 6553.4
+      }
+    }
+  ],
+  "blockedWrites": [],
+  "inboxProbe": [
+    {
+      "path": "/api/inbox",
+      "status": 200,
+      "decodedBytes": 15572964,
+      "encodedBytes": null,
+      "itemCount": 4410,
+      "extra": {}
+    },
+    {
+      "path": "/api/inbox/summary",
+      "status": 200,
+      "decodedBytes": 30,
+      "encodedBytes": null,
+      "itemCount": null,
+      "extra": {
+        "unread": 170,
+        "attention": 199
+      }
+    },
+    {
+      "path": "/api/inbox/unread-count",
+      "status": 200,
+      "decodedBytes": 14,
+      "encodedBytes": null,
+      "itemCount": null,
+      "extra": {
+        "count": 3039
+      }
+    },
+    {
+      "path": "/api/inbox/page?limit=50",
+      "status": 200,
+      "decodedBytes": 148963,
+      "encodedBytes": null,
+      "itemCount": 50,
+      "extra": {
+        "hasMore": true,
+        "hasNextCursor": true
+      }
+    }
+  ],
+  "inboxGuard": [
+    {
+      "round": 0,
+      "page": "inbox-guard-click",
+      "method": "POST",
+      "path": "/api/inbox/:id/read",
+      "attempts": 930
+    }
+  ]
+}
