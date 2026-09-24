@@ -48,7 +48,17 @@ async function faultTestBed(fault: Fault, requestTimeoutMs = 250) {
           pending.push(() => resolve(Response.json({})));
         });
       }
-      const response = await app.fetch(request);
+      let response = await app.fetch(request);
+      if (heartbeat && response.ok) {
+        // This bed exercises transport failures, and only the fallback path
+        // re-reads desired state on every round: once the server reports a
+        // revision (MUL-368 PR-1), an unchanged revision correctly skips the
+        // GET. Strip the field so the fault below still has something to fail
+        // on; the revision-skip path has its own tests.
+        const ack = await response.json() as Record<string, unknown>;
+        delete ack.agent_plugins;
+        response = Response.json(ack, { status: response.status });
+      }
       if (state.armed && matches && fault === "retired-body" && !response.ok) {
         state.failures++;
         state.authorityStatus = response.status;
