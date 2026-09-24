@@ -16,9 +16,11 @@ import {
   multiremiDaemonPaths,
   multiremiDaemonServicePath,
   planDaemonRestart,
+  planSpawnedSuccessorRestart,
   resolveDeviceName,
   resolveSetupConfig,
   runMultiremi,
+  systemdUnitFromCgroup,
 } from "../../../apps/remi/cli/multiremi.js";
 
 let tmp: string | null = null;
@@ -369,6 +371,37 @@ describe("Multiremi CLI — daemon restart handoff", () => {
     });
   });
 
+  test("names the daemon unit, not the user manager, on a cgroup v1 host", () => {
+    // Only name=systemd reaches the daemon unit; the controller lines above it
+    // name user@1001.service, which `systemctl --user` cannot find.
+    const plan = planDaemonRestart({
+      platform: "linux",
+      env: { INVOCATION_ID: "abc123" },
+      cgroup: CGROUP_V1_HOST,
+    });
+    expect(plan).toEqual({
+      kind: "service-manager",
+      command: "systemctl",
+      args: ["--user", "restart", "--no-block", "multiremi-daemon.service"],
+    });
+  });
+
+  test("reads the unit only from the unified or name=systemd hierarchy", () => {
+    expect(systemdUnitFromCgroup("0::/user.slice/user-1001.slice/user@1001.service/app.slice/multiremi-daemon.service\n"))
+      .toBe("multiremi-daemon.service");
+    expect(systemdUnitFromCgroup([
+      "0::/",
+      "1:name=systemd:/user.slice/user-1001.slice/user@1001.service/app.slice/renamed.service",
+    ].join("\n"))).toBe("renamed.service");
+    // Only controller hierarchies name a service: that is the user manager.
+    expect(systemdUnitFromCgroup([
+      "11:pids:/user.slice/user-1001.slice/user@1001.service",
+      "10:memory:/user.slice/user-1001.slice/user@1001.service",
+      "1:name=systemd:/user.slice/user-1001.slice/session-4.scope",
+    ].join("\n"))).toBeNull();
+    expect(systemdUnitFromCgroup(null)).toBeNull();
+  });
+
   test("falls back to the default unit name without a usable cgroup", () => {
     const plan = planDaemonRestart({
       platform: "linux",
@@ -400,3 +433,79 @@ describe("Multiremi CLI — daemon restart handoff", () => {
     expect(planDaemonRestart({ platform: "darwin", env: {} })).toEqual({ kind: "spawn-successor" });
   });
 });
+
+describe("Multiremi CLI — spawned successor collapses its unit", () => {
+  const DAEMON_ARGV = ["/usr/local/bin/remi", "multiremi", "daemon", "start", "--foreground"];
+
+  function successor(overrides: Partial<Parameters<typeof planSpawnedSuccessorRestart>[0]> = {}) {
+    return planSpawnedSuccessorRestart({
+      platform: "linux",
+      env: { INVOCATION_ID: "abc123" },
+      cgroup: CGROUP_V1_HOST,
+      pid: 1549685,
+      mainPid: () => 221547,
+      commandLine: () => DAEMON_ARGV,
+      activeSupervisorPids: () => [],
+      ...overrides,
+    });
+  }
+
+  test("restarts the unit when it runs beside an idle main daemon", () => {
+    expect(successor()).toEqual({
+      kind: "service-manager",
+      unit: "multiremi-daemon.service",
+      mainPid: 221547,
+      command: "systemctl",
+      args: ["--user", "restart", "--no-block", "multiremi-daemon.service"],
+    });
+    // Its own lease is not a reason to hold back.
+    expect(successor({ activeSupervisorPids: () => [1549685] }).kind).toBe("service-manager");
+  });
+
+  test("does nothing once it is the unit's main process", () => {
+    // The process systemd starts after the restart is MainPID, so this
+    // cannot trigger a second restart.
+    expect(successor({ mainPid: () => 1549685 })).toEqual({ kind: "none" });
+    expect(successor({ mainPid: () => null })).toEqual({ kind: "none" });
+  });
+
+  test("does nothing outside a systemd unit", () => {
+    expect(successor({ env: {} })).toEqual({ kind: "none" });
+    expect(successor({ platform: "darwin" })).toEqual({ kind: "none" });
+    expect(successor({ cgroup: null })).toEqual({ kind: "none" });
+    expect(successor({ cgroup: "11:pids:/user.slice/user-1001.slice/user@1001.service\n" })).toEqual({ kind: "none" });
+  });
+
+  test("never restarts a unit while another daemon owns a workspace", () => {
+    // A task can start a daemon inside the unit and inherit INVOCATION_ID; the
+    // daemon running that task still holds its lease.
+    const plan = successor({ activeSupervisorPids: () => [1427417] });
+    expect(plan.kind).toBe("blocked");
+    expect(plan.kind === "blocked" && plan.reason).toContain("1427417");
+
+    const unreadable = successor({ activeSupervisorPids: () => { throw new Error("EACCES"); } });
+    expect(unreadable.kind).toBe("blocked");
+  });
+
+  test("never restarts a unit whose main process is not a daemon", () => {
+    expect(successor({ commandLine: () => ["/usr/bin/tmux", "new-session", "-d"] }).kind).toBe("blocked");
+    expect(successor({ commandLine: () => null }).kind).toBe("blocked");
+  });
+});
+
+// /proc/self/cgroup of the daemon unit on n37-066-008, verbatim; n37-206-133
+// has the same layout. Every controller hierarchy stops at the user manager.
+const CGROUP_V1_HOST = [
+  "11:memory:/user.slice/user-1001.slice/user@1001.service",
+  "10:hugetlb:/",
+  "9:freezer:/",
+  "8:pids:/user.slice/user-1001.slice/user@1001.service",
+  "7:blkio:/",
+  "6:cpuset:/",
+  "5:net_cls,net_prio:/",
+  "4:devices:/user.slice",
+  "3:cpu,cpuacct:/user.slice/user-1001.slice",
+  "2:perf_event:/",
+  "1:name=systemd:/user.slice/user-1001.slice/user@1001.service/app.slice/multiremi-daemon.service",
+  "",
+].join("\n");
