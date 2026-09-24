@@ -629,6 +629,39 @@ describe("AgentPluginRuntimeReconciler", () => {
     expect(reports.length).toBe(afterBump);
   });
 
+  it("re-reports after the server marks a stuck plugin blocked", async () => {
+    const root = tempRoot();
+    const artifact = makeArtifact("claude");
+    const cache = new AgentPluginCache({
+      root: join(root, "cache"),
+      fetch: async () => artifactResponse(artifact.bytes),
+    });
+    const reports: RuntimePluginState[] = [];
+    const reconciler = new AgentPluginRuntimeReconciler({
+      cache,
+      reportState: (state) => { reports.push(state); },
+    });
+    const snapshot = { ...makeSnapshot("claude", artifact.digest), artifactUrl: "https://example.test/a" };
+    const ready = (await reconciler.reconcile([snapshot]))[0]!;
+    await reconciler.reconcile([snapshot]);
+    const steady = reports.length;
+
+    // A plugin that never reported (daemon offline, desired added while down)
+    // gets marked blocked server-side by AGENT_PLUGIN_PENDING_HEARTBEAT_LIMIT.
+    // Nothing the daemon reports changes, so only the desired refresh can turn
+    // that back into a report; the daemon must not dedupe it away.
+    const blocked = { ...ready, status: "blocked" as const, lastErrorCode: "daemon_plugin_reconcile_timeout" };
+    reconciler.restoreStates([blocked]);
+    reconciler.syncReportedStates([blocked]);
+    expect((await reconciler.reconcile([snapshot]))[0]?.status).toBe("ready");
+    expect(reports.length).toBe(steady + 1);
+    expect(reports.at(-1)?.status).toBe("ready");
+
+    // And it settles again immediately after that one recovery report.
+    await reconciler.reconcile([snapshot]);
+    expect(reports.length).toBe(steady + 1);
+  });
+
   it("drops the dedupe baseline when a plugin stops being desired", async () => {
     const root = tempRoot();
     const artifact = makeArtifact("claude");

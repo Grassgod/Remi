@@ -254,6 +254,43 @@ describe("daemon poll cadence", () => {
     expect(probe.reconciles).toBeGreaterThanOrEqual(probe.heartbeats);
   });
 
+  it("re-fetches desired state and drops the report baseline after a re-registration", async () => {
+    jest.useFakeTimers();
+    const probe = track(createLoopDaemon({
+      ack: () => ({ agent_plugins: { revision: "rev-1" } }),
+    }));
+    const internal = probe.daemon as unknown as {
+      lastDesired: unknown;
+      desiredFetchedAt: number;
+      lastDesiredRefreshAt: number;
+      agentPluginReconciler: { clearReportedStates(): void };
+      clearDesiredAgentPlugins(): void;
+    };
+
+    await flushMicrotasks();
+    await advance(30_000);
+    expect(probe.desiredGets).toBe(1);
+    expect(internal.lastDesired).not.toBeNull();
+
+    // A replacement Runtime is a new identity: neither the cached desired set
+    // nor the report dedupe baseline may be carried across it, or the daemon
+    // could skip a fetch the new Runtime actually needs.
+    let cleared = 0;
+    const originalClear = internal.agentPluginReconciler.clearReportedStates.bind(internal.agentPluginReconciler);
+    internal.agentPluginReconciler.clearReportedStates = () => { cleared++; originalClear(); };
+
+    internal.clearDesiredAgentPlugins();
+    expect(internal.lastDesired).toBeNull();
+    expect(internal.desiredFetchedAt).toBe(0);
+    expect(internal.lastDesiredRefreshAt).toBe(0);
+    expect(cleared).toBe(1);
+
+    // The next heartbeat therefore fetches again even though the revision text
+    // is unchanged, and the reconcile baseline was reset with it.
+    await advance(30_000);
+    expect(probe.desiredGets).toBe(2);
+  }, 20_000);
+
   it("re-fetches desired state when the ack revision moves", async () => {
     jest.useFakeTimers();
     let revision = "rev-1";
