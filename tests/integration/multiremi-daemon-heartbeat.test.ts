@@ -86,6 +86,10 @@ async function faultTestBed(fault: Fault, requestTimeoutMs = 250) {
     pollIntervalMs: 20,
     requestTimeoutMs,
     gcEnabled: false,
+    // The daemon now only re-reads desired state when the heartbeat ack reports
+    // a new revision (or on its periodic fallback). This bed exercises transport
+    // failures, so keep the fallback refresh prompt instead of waiting 30s.
+    pluginDesiredRefreshMs: 20,
     workspacesRoot: join(root, "workspaces"),
     repoCacheRoot: join(root, "repos"),
     pluginCacheRoot: join(root, "plugins"),

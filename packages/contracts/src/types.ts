@@ -949,6 +949,7 @@ export interface MultiremiDaemonHeartbeatAck {
   ssh_mesh?: MultiremiSshMeshHeartbeatAck;
   /** Platform maintenance directive: daemons must pause task claims while draining. */
   drain?: MultiremiDaemonDrainDirective;
+  agent_plugins?: { revision: string };
 }
 
 /** Server → daemon drain instruction carried in every heartbeat ack. */
