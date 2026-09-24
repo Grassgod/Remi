@@ -125,6 +125,11 @@ describe("AgentPluginsRepo", () => {
       files: claudePluginInput("2.0.0", "# Lark v2\n").files,
       sourceRevision: "commit-2.0.0",
     });
+    // Non-default values, so a column dropped from the trimmed SELECT shows up as a mismatch.
+    db!.run(
+      "UPDATE multiremi_agent_plugin_versions SET created_by = ?, requirements = ?, metadata = ? WHERE id = ?",
+      ["usr_mul366", JSON.stringify({ minDaemon: "1.2.3" }), JSON.stringify({ channel: "stable" }), candidate.id],
+    );
 
     // A second store on the same database starts with a cold version cache.
     const reader = new MultiremiStore(db!);
@@ -134,6 +139,12 @@ describe("AgentPluginsRepo", () => {
     for (const id of [plugin.activeVersionId!, candidate.id]) {
       expect(reader.getAgentPluginVersion(id)).toEqual(legacyVersionRead(reader, id));
     }
+    expect(reader.getAgentPluginVersion(candidate.id)).toMatchObject({
+      createdBy: "usr_mul366",
+      requirements: { minDaemon: "1.2.3" },
+      metadata: { channel: "stable" },
+      sourceRevision: "commit-2.0.0",
+    });
     expect(reader.getAgentPluginVersion("apv_missing")).toBeNull();
     const listed = reader.listAgentPluginVersions(plugin.id);
     expect(listed.map((version) => version.id)).toEqual([candidate.id, plugin.activeVersionId!]);

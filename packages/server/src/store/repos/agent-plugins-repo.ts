@@ -79,8 +79,9 @@ const VERSION_COLUMNS = [
   "created_at",
 ].join(", ");
 // Version rows are immutable once inserted and never deleted, so a cached entry cannot go stale.
-// The cap only bounds memory; eviction is oldest-first.
-const VERSION_CACHE_LIMIT = 256;
+// Entries hold metadata only (file contents are stripped); the cap just bounds memory, evicting
+// the least recently used.
+const VERSION_CACHE_LIMIT = 1024;
 
 export class AgentPluginStoreError extends Error {
   constructor(message: string, readonly code: string, readonly status: number) {
@@ -323,7 +324,9 @@ export class AgentPluginsRepo {
 
   getAgentPluginVersion(id: string): MultiremiAgentPluginVersion | null {
     let version = this.versionCache.get(id);
-    if (!version) {
+    if (version) {
+      this.versionCache.delete(id);
+    } else {
       const row = this.ctx.db.query(
         `SELECT ${VERSION_COLUMNS} FROM multiremi_agent_plugin_versions WHERE id = ?`,
       ).get(id) as Row | null;
@@ -332,8 +335,8 @@ export class AgentPluginsRepo {
       if (this.versionCache.size >= VERSION_CACHE_LIMIT) {
         this.versionCache.delete(this.versionCache.keys().next().value!);
       }
-      this.versionCache.set(id, version);
     }
+    this.versionCache.set(id, version);
     // Callers get their own copy so nothing can mutate the shared cached entry.
     return structuredClone(version);
   }
