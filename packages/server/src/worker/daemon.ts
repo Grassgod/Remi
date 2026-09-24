@@ -43,6 +43,7 @@ import {
 import { createEventMapper, responseToUsage } from "./acp-event-mapper.js";
 import {
   DaemonWakeupSocket,
+  type DaemonWakeupConnect,
   type DaemonWakeupStatus,
   type DaemonWakeupTransport,
 } from "./daemon-websocket.js";
@@ -496,6 +497,8 @@ export interface MultiremiDaemonOptions {
   taskWakeupEnabled?: boolean;
   /** Injectable wake-up transport for tests. */
   taskWakeup?: DaemonWakeupTransport;
+  /** Injectable socket factory for the wake-up channel. */
+  taskWakeupConnect?: DaemonWakeupConnect;
   /** Injectable probe schedule for terminal-authority tests. */
   authorityProbeDelaysMs?: number[];
 }
@@ -629,7 +632,7 @@ export class MultiremiRuntimeReregisterGate {
 
 export class MultiremiDaemon {
   private client: MultiremiDaemonClient;
-  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcTtlMs" | "gcOrphanTtlMs" | "gcRequireArchive" | "gitWorktreeInspector" | "sessionArchiveMaxSourceBytes" | "sessionArchiveUploadBaseUrl" | "sessionArchiveProxyMaxBytes" | "sessionArchiveDirectProbeTtlMs" | "sessionArchiveDirectProbeTimeoutMs" | "sessionArchiveUploadTimeoutMs" | "sessionArchiveFailureReportTimeoutMs" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager" | "terminalAuthorityCleanupRetryDelaysMs" | "issueWorkspaceLifecycleLocker" | "workspaceRootFence" | "supervisorReady" | "onReadyChange" | "cliUpdateCoordinator" | "outboxPath" | "outboxBackoffMs" | "outboxMaxBytes" | "heartbeatIntervalMs" | "claimIdleMaxMs" | "pluginDesiredRefreshMs" | "taskWakeupEnabled" | "taskWakeup" | "authorityProbeDelaysMs">> & {
+  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcTtlMs" | "gcOrphanTtlMs" | "gcRequireArchive" | "gitWorktreeInspector" | "sessionArchiveMaxSourceBytes" | "sessionArchiveUploadBaseUrl" | "sessionArchiveProxyMaxBytes" | "sessionArchiveDirectProbeTtlMs" | "sessionArchiveDirectProbeTimeoutMs" | "sessionArchiveUploadTimeoutMs" | "sessionArchiveFailureReportTimeoutMs" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager" | "terminalAuthorityCleanupRetryDelaysMs" | "issueWorkspaceLifecycleLocker" | "workspaceRootFence" | "supervisorReady" | "onReadyChange" | "cliUpdateCoordinator" | "outboxPath" | "outboxBackoffMs" | "outboxMaxBytes" | "heartbeatIntervalMs" | "claimIdleMaxMs" | "pluginDesiredRefreshMs" | "taskWakeupEnabled" | "taskWakeup" | "taskWakeupConnect" | "authorityProbeDelaysMs">> & {
     token: string | null;
     runtimeId: string | null;
     daemonId: string | null;
@@ -647,6 +650,7 @@ export class MultiremiDaemon {
     sessionArchiveMaxSourceBytes: number;
     pluginCacheRoot: string;
     taskWakeup: DaemonWakeupTransport | null;
+    taskWakeupConnect: DaemonWakeupConnect | undefined;
     authorityProbeDelaysMs: number[];
     heartbeatIntervalMs: number | null;
     claimIdleMaxMs: number;
@@ -921,6 +925,7 @@ export class MultiremiDaemon {
       ),
       taskWakeupEnabled: options.taskWakeupEnabled ?? true,
       taskWakeup: options.taskWakeup ?? null,
+      taskWakeupConnect: options.taskWakeupConnect,
       authorityProbeDelaysMs: [],
       runtimeModelRetryBaseMs,
       runtimeModelRetryMaxMs,
@@ -1381,9 +1386,12 @@ export class MultiremiDaemon {
       serverUrl: this.options.serverUrl,
       token: this.options.token,
       onTaskAvailable: () => {
+        // Queued work may have appeared: drop the idle backoff and interrupt the
+        // pending sleep instead of waiting out the remainder of the interval.
         this.resetClaimBackoff();
         this.wakeClaim();
       },
+      ...(this.options.taskWakeupConnect ? { connect: this.options.taskWakeupConnect } : {}),
       log: { info: (message) => log.info(message), warn: (message) => log.warn(message) },
     });
     return this.taskWakeup;
@@ -2344,10 +2352,16 @@ export class MultiremiDaemon {
     try {
       const now = Date.now();
       const cached = this.lastDesired;
-      const cachedMatches = cached !== null && serverRevision !== null && cached.revision === serverRevision;
-      const refreshDue = now - this.lastDesiredRefreshAt >= PLUGIN_DESIRED_FORCED_REFRESH_MS;
-      const fallbackDue = serverRevision === null && now - this.desiredFetchedAt >= this.options.pluginDesiredRefreshMs;
-      if (!cachedMatches && (options.force || refreshDue || fallbackDue || cached === null)) {
+      // Every branch below must be able to *cause* a fetch on its own. In
+      // particular the forced refresh cannot be nested under "revision differs",
+      // because a revision that never moves is the case it exists for.
+      const mustFetch = cached === null
+        || options.force === true
+        || now - this.lastDesiredRefreshAt >= PLUGIN_DESIRED_FORCED_REFRESH_MS
+        || (serverRevision === null
+          ? now - this.desiredFetchedAt >= this.options.pluginDesiredRefreshMs
+          : cached.revision !== serverRevision);
+      if (mustFetch) {
         const desired = await this.client.getRuntimeAgentPluginDesired(runtimeId, abort.signal);
         if (desired.runtime_id && desired.runtime_id !== runtimeId) {
           throw new Error(`Agent Plugin desired state belongs to Runtime ${desired.runtime_id}, expected ${runtimeId}`);
@@ -2532,33 +2546,37 @@ export class MultiremiDaemon {
     await this.authorityProbeTask;
   }
 
+  /** Interval to wait before probe number `completed + 1`, capped at the last step. */
+  private authorityProbeDelayMs(completed: number): number {
+    return this.authorityProbeDelaysMs[Math.min(completed, this.authorityProbeDelaysMs.length - 1)]!;
+  }
+
   private async runAuthorityProbeLoop(): Promise<void> {
-    let attempt = 0;
+    let completed = 0;
     while (!this.stopped) {
-      const delayMs = this.authorityProbeDelaysMs[
-        Math.min(attempt, this.authorityProbeDelaysMs.length - 1)
-      ]!;
-      attempt++;
-      this.authorityProbeAttempts = attempt;
+      const delayMs = this.authorityProbeDelayMs(completed);
+      // `attempts` counts probes that actually ran, so the status JSON reads
+      // "attempts: 0, next_probe_at: <first probe>" while the daemon waits.
       this.authorityProbeNextAt = new Date(Date.now() + delayMs).toISOString();
       await this.waitForAuthorityProbe(delayMs);
       if (this.stopped) return;
+      completed++;
+      this.authorityProbeAttempts = completed;
       try {
         await this.registerCurrentRuntime();
         log.info(
-          `daemon authorization restored after ${attempt} probe${attempt === 1 ? "" : "s"}; restarting the daemon process`,
+          `daemon authorization restored after ${completed} probe${completed === 1 ? "" : "s"}; restarting the daemon process`,
         );
         this.authorityProbeNextAt = null;
         this.requestRestart();
         return;
       } catch (error) {
-        this.authorityProbeNextAt = new Date(Date.now() + this.authorityProbeDelaysMs[
-          Math.min(attempt, this.authorityProbeDelaysMs.length - 1)
-        ]!).toISOString();
+        const nextDelayMs = this.authorityProbeDelayMs(completed);
+        this.authorityProbeNextAt = new Date(Date.now() + nextDelayMs).toISOString();
         const detail = error instanceof Error ? error.message : String(error);
-        const nextIn = `${this.authorityProbeDelaysMs[Math.min(attempt, this.authorityProbeDelaysMs.length - 1)]!}ms`;
         log.warn(
-          `daemon authority probe ${attempt} failed (${detail}); claim/heartbeat stay paused, next probe in ${nextIn} at ${this.authorityProbeNextAt}`,
+          `daemon authority probe ${completed} failed (${detail}); claim/heartbeat stay paused, `
+            + `next probe in ${nextDelayMs}ms at ${this.authorityProbeNextAt}`,
         );
       }
     }
@@ -4559,7 +4577,8 @@ export class MultiremiDaemon {
         next_probe_at: this.authorityProbeNextAt,
       },
       claim_wake_ws: this.claimWakeWsStatus(),
-      claim_idle_next_at: new Date(this.nextClaimAt).toISOString(),
+      // Null when no poll loop has started yet (health is served from startup).
+      claim_idle_next_at: this.nextClaimAt > 0 ? new Date(this.nextClaimAt).toISOString() : null,
       pid: process.pid,
       uptime: formatDuration(Date.now() - this.startedAt.getTime()),
       runtime_id: this.options.runtimeId,

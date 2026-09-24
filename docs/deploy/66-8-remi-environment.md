@@ -20,6 +20,10 @@ summary: 说明 daemon 进程配置、工作区 bot 的控制面分配、凭据�
 | `MULTIREMI_DAEMON_PORT` | 本机 daemon 控制端口，默认 6131；多 provider 时分配相邻端口。 |
 | `MULTIREMI_GC_ENABLED` | 默认 true；是否运行周期性 workspace GC。 |
 | `MULTIREMI_GC_INTERVAL_MS` / `MULTIREMI_GC_TTL_MS` | 启动默认分别为 900000 / 259200000 ms。工作区 `settings.session_archive` 可覆盖有效间隔和 TTL，见[GC policy](../../packages/daemon/src/agent-runtime/workspace/gc-policy.ts)。 |
+| `MULTIREMI_HEARTBEAT_INTERVAL_MS` | 心跳间隔，默认 10000 ms。承载 Feishu concierge 的那台 daemon 固定用 3000 ms，因为 `pending_feishu_outbound` 只通过 heartbeat ack 下发；该取值不随此变量变大。 |
+| `MULTIREMI_CLAIM_IDLE_MAX_MS` | 空闲 claim 的退避上限，默认 30000 ms；退避从 3000 ms 起翻倍到该值。 |
+| `MULTIREMI_PLUGIN_DESIRED_REFRESH_MS` | 只在 server 未在 heartbeat ack 里返回 desired revision 时生效的兜底刷新间隔，默认 30000 ms。 |
+| `MULTIREMI_AUTHORITY_PROBE_MAX_MS` | terminal authority 之后 register 探测的间隔上限，默认 900000 ms（15 分钟）。 |
 
 bot 的 Agent、承载 Runtime、App ID、App Secret 和 domain 从控制面配置获取，不在本机环境文件中指定。共享配置层仍支持一些 Feishu/OAuth 相关环境变量，但当前 bot 启动的身份由 assignment 覆盖；设置本地应用凭据不会创建或启用工作区 bot。
 
@@ -47,12 +51,46 @@ otherwise block subsequent polling. Archive content uploads retain their
 separate timeout budget.
 
 The running [poll loop](../../packages/server/src/worker/daemon.ts) logs transient
-failures and retries at the polling interval (3 seconds by default). Timeout
-errors identify the method, path, and deadline. The same daemon resumes polling
-when the connection recovers; the HTTP client does not automatically replay
-writes. Authority failures such as 401, 403, and 410 still enter terminal cleanup,
+failures and retries at the heartbeat interval. Timeout errors identify the
+method, path, and deadline. The same daemon resumes polling when the connection
+recovers; the HTTP client does not automatically replay writes.
+
+Heartbeat, desired-state refresh, and task claim run on separate timers:
+
+- **Heartbeat**: 10 s by default, 3 s on the Runtime that hosts the workspace
+  Feishu concierge (its ack carries proactive replies). Runtime liveness tolerates
+  this easily — the stale window is 5 minutes, see
+  [runtime-health](../../packages/contracts/src/runtime-health.ts).
+- **Desired Agent Plugins**: fetched when the heartbeat ack reports a revision
+  that differs from the cached one, forced every 10 minutes as a backstop, and
+  fetched at most every `MULTIREMI_PLUGIN_DESIRED_REFRESH_MS` against a server
+  that does not report a revision at all. A matching revision still re-runs the
+  local reconcile so retry deadlines and setup re-checks stay on schedule.
+- **Task claim**: an empty claim doubles the wait from 3 s up to
+  `MULTIREMI_CLAIM_IDLE_MAX_MS` (30 s). Claiming work, finishing a task, a drain
+  release, an update-pause release, and a `daemon:task_available` frame all reset
+  it to 3 s.
+
+The daemon subscribes to `GET /api/daemon/ws?runtime_ids=<runtimeId>` only to
+receive `daemon:task_available`, which is what keeps the 30 s claim ceiling from
+becoming task-start latency. It is an accelerator, never a control channel: no
+liveness, heartbeat, or task state travels over it, and if the upgrade cannot be
+established the polling backoff alone still delivers work. `/health` reports
+`claim_wake_ws` with `state` (`connected` / `connecting` / `disconnected` /
+`disabled`), `connected_since`, `last_error`, `reconnect_attempts`, and
+`next_reconnect_at`, plus `claim_idle_next_at`.
+
+Authority failures such as 401, 403, and 410 still enter terminal cleanup,
 including when their response headers arrive but the error body times out or is
-interrupted. `--once` still surfaces request failures to its caller.
+interrupted. A long-running daemon then stays alive and probes
+`POST /api/daemon/register` on a widening schedule (30 s, 1 m, 2 m, 4 m, 8 m,
+then `MULTIREMI_AUTHORITY_PROBE_MAX_MS`) instead of exiting: exiting hands the
+retry cadence to the service manager's restart policy, which is what turned a
+revoked credential into a request every few seconds. The first failure is logged
+at ERROR, later probes at WARN with the next probe time, and `/health` exposes
+`authority_probe: { attempts, next_probe_at }`. A successful probe requests a
+process restart through the existing restart channel. `--once` still surfaces
+request failures to its caller.
 
 Stopping the daemon cancels pending heartbeat and plugin configuration requests.
 Cancelling the initial plugin query also finishes startup cleanly; workspace
@@ -61,11 +99,14 @@ Task claims, execution, and durable reports keep their existing drain semantics.
 These deadlines do not resolve operating-system network permissions, service
 launch configuration, or synchronous event-loop blocking.
 
-The [client tests](../../tests/unit/multiremi/multiremi-daemon-client.test.ts) and
+The [client tests](../../tests/unit/multiremi/multiremi-daemon-client.test.ts),
+[poll cadence tests](../../tests/unit/daemon/poll-cadence.test.ts),
+[authority probe tests](../../tests/unit/daemon/authority-probe.test.ts), and
 [HTTP recovery tests](../../tests/integration/multiremi-daemon-heartbeat.test.ts)
 cover connection loss/reopening, stalled headers and bodies, stalled plugin
-queries and claims, 503 responses, and shutdown cancellation using isolated
-databases and directories without contacting a production Runtime.
+queries and claims, 503 responses, the cadence and wake-up rules above, and
+shutdown cancellation using isolated databases and directories without
+contacting a production Runtime.
 
 ## 工作区 bot 配置与启动
 

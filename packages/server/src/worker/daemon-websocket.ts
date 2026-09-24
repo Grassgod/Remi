@@ -40,6 +40,11 @@ export interface DaemonWakeupSocketLike {
   addEventListener(type: string, listener: (event: unknown) => void): void;
 }
 
+export type DaemonWakeupConnect = (
+  url: string,
+  init: { headers: Record<string, string> },
+) => DaemonWakeupSocketLike;
+
 export interface DaemonWakeupSocketOptions {
   serverUrl: string;
   token?: string | null;
@@ -50,7 +55,7 @@ export interface DaemonWakeupSocketOptions {
     warn(message: string): void;
   };
   /** Injectable socket factory for tests. */
-  connect?: (url: string, init: { headers: Record<string, string> }) => DaemonWakeupSocketLike;
+  connect?: DaemonWakeupConnect;
   pingIntervalMs?: number;
   reconnectBaseMs?: number;
   reconnectMaxMs?: number;
