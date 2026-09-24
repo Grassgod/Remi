@@ -1242,9 +1242,11 @@ export class MultiremiDaemon {
             }
             if (this.stopped) break;
             if (skipClaim) {
-              // The Runtime identity changed under this iteration; the next
-              // heartbeat and claim must use the replacement id.
+              // The Runtime vanished and could not be replaced yet, so there is
+              // nothing safe to claim. Push the claim deadline out before
+              // sleeping, or an already-due deadline would spin the loop.
               if (this.options.once) return;
+              this.deferClaimLane();
               await this.waitForNextTick();
               continue;
             }
@@ -1260,10 +1262,15 @@ export class MultiremiDaemon {
             return;
           }
 
-          // A sibling can pause claims while it installs the shared CLI. Keep
-          // this lane ready and heartbeating so a failed install can release
-          // the pause. Only a successful update explicitly stops the supervisor.
-          if (!this.claimsPaused && !this.serverDrainActive && Date.now() >= this.nextClaimAt) {
+          if (this.claimsPaused || this.serverDrainActive) {
+            // A sibling can pause claims while it installs the shared CLI, or
+            // the platform can be draining. Keep this lane ready and
+            // heartbeating so a failed install can release the pause; only a
+            // successful update explicitly stops the supervisor. The claim
+            // deadline has to move with it, otherwise the sleep below sees a
+            // deadline that is already due and returns immediately.
+            this.deferClaimLane();
+          } else if (Date.now() >= this.nextClaimAt) {
             await this.runClaimPump();
           }
           await this.waitForNextTick();
@@ -1405,6 +1412,23 @@ export class MultiremiDaemon {
   private resetClaimBackoff(): void {
     this.claimIdleMs = this.claimIdleBaseMs;
     this.nextClaimAt = Date.now();
+  }
+
+  /**
+   * Push the next claim attempt out without claiming.
+   *
+   * Used whenever the claim lane is suppressed (paused, draining, or a lost
+   * Runtime): the poll sleep waits for the earliest deadline, so leaving a due
+   * deadline in place would turn the sleep into a busy loop.
+   */
+  private deferClaimLane(): void {
+    // Wake for the next heartbeat rather than a short poll: while claims are
+    // suppressed there is nothing to do in between, and the heartbeat is what
+    // can lift the suppression (a drain directive or a released update pause).
+    this.nextClaimAt = Math.max(
+      this.nextHeartbeatAt,
+      Date.now() + this.options.pollIntervalMs,
+    );
   }
 
   /**

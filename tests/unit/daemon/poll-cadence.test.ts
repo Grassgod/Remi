@@ -358,6 +358,42 @@ describe("daemon poll cadence", () => {
     expect(Math.max(...deltas)).toBeLessThanOrEqual(30_010);
   }, 20_000);
 
+  it("does not spin the poll loop while claims are paused or draining", async () => {
+    jest.useFakeTimers();
+    let loops = 0;
+    const probe = track(createLoopDaemon({
+      ack: () => ({ agent_plugins: { revision: "rev-1" } }),
+    }));
+    // Count poll iterations independently of heartbeats: a suppressed claim lane
+    // that leaves an already-due deadline would run this flat out.
+    const internal = probe.daemon as unknown as {
+      claimsPaused: boolean;
+      serverDrainActive: boolean;
+      waitForNextTick(): Promise<void>;
+    };
+    const originalWait = internal.waitForNextTick.bind(probe.daemon);
+    internal.waitForNextTick = async () => { loops++; await originalWait(); };
+
+    await flushMicrotasks();
+    // The loop is live (one immediate claim) before the pause is applied.
+    const claimsBeforePause = probe.claims;
+    internal.claimsPaused = true;
+    await advance(60_000);
+    const pausedLoops = loops;
+    // Paused: bounded by the 10s heartbeat cadence, not a tight loop. Before
+    // the claim deadline moved with the suppression this was ~230 iterations.
+    expect(pausedLoops).toBeLessThanOrEqual(10);
+
+    internal.claimsPaused = false;
+    internal.serverDrainActive = true;
+    const beforeDrain = loops;
+    await advance(60_000);
+    expect(loops - beforeDrain).toBeLessThanOrEqual(10);
+
+    // No claim was attempted while either suppression was active.
+    expect(probe.claims).toBe(claimsBeforePause);
+  }, 20_000);
+
   it("resets the idle backoff when a claim finally returns work", async () => {
     jest.useFakeTimers();
     let deliverTask = false;
