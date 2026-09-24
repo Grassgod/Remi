@@ -1381,6 +1381,10 @@ export class MultiremiDaemon {
   }
 
   private ensureTaskWakeup(): DaemonWakeupTransport | null {
+    // `--once` runs claim a single task and return, so a wake-up channel would
+    // outlive the loop that consumes it. Also keeps single-run harnesses from
+    // dialing a socket merely to register.
+    if (this.options.once) return null;
     if (this.taskWakeup || !this.options.taskWakeupEnabled) return this.taskWakeup;
     this.taskWakeup = new DaemonWakeupSocket({
       serverUrl: this.options.serverUrl,

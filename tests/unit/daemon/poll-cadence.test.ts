@@ -588,10 +588,15 @@ describe("daemon wake-up channel", () => {
 
   it("keeps once mode strictly serial", async () => {
     jest.useFakeTimers();
+    let connects = 0;
     const probe = track(createLoopDaemon({
       once: true,
       ack: () => ({ agent_plugins: { revision: "rev-1" } }),
       client: { handleTask: async () => {} },
+      taskWakeupConnect: () => {
+        connects++;
+        return { send: () => {}, close: () => {}, addEventListener: () => {} };
+      },
     }));
     (probe.daemon as unknown as { handleTask: () => Promise<void> }).handleTask = async () => {};
 
@@ -600,5 +605,8 @@ describe("daemon wake-up channel", () => {
     // One heartbeat, one claim, then return — no backoff and no idle loop.
     expect(probe.heartbeats).toBe(1);
     expect(probe.claims).toBe(1);
+    // A one-shot run never dials the wake-up socket.
+    expect(connects).toBe(0);
+    expect(probe.daemon.taskWakeupStatus()).toBeNull();
   });
 });
