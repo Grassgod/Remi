@@ -27,7 +27,7 @@ export const ACTIVE_TASK_STATUSES: readonly MultiremiTaskStatus[] = [
   "waiting_local_directory",
   "awaiting_human",
 ];
-const IN_FLIGHT_TASK_STATUSES: MultiremiTaskStatus[] = ["dispatched", "running", "waiting_local_directory", "awaiting_human"];
+export const IN_FLIGHT_TASK_STATUSES: readonly MultiremiTaskStatus[] = ["dispatched", "running", "waiting_local_directory", "awaiting_human"];
 
 export function isTerminalStatus(status: MultiremiTaskStatus): boolean {
   return TERMINAL_STATUSES.includes(status);

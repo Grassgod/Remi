@@ -26,6 +26,7 @@ import {
   cleanOptionalString,
   daemonRuntimeId,
   hasAnyField,
+  IN_FLIGHT_TASK_STATUSES,
   isActiveTaskStatus,
   isInFlightTaskStatus,
   isRecord,
@@ -37,6 +38,7 @@ import {
   toJson,
 } from "@multiremi/store/helpers.js";
 import { type StoreContext } from "@multiremi/store/context.js";
+import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { canonicalizeDaemonRoutingWithinTransaction } from "@multiremi/store/daemon-routing.js";
 import { RuntimeRequestQueue, type RuntimeRequestSpec } from "@multiremi/store/repos/runtime-request-queue.js";
 import { runtimeDaemonAliases } from "@multiremi/store/runtime-affinity.js";
@@ -2076,16 +2078,12 @@ export class RuntimesRepo {
     return true;
   }
 
-  private runtimeUsageSummary(runtimeId: string): Pick<MultiremiRuntime,
-    "taskCount" |
-    "activeTaskCount" |
-    "completedTaskCount" |
-    "failedTaskCount" |
-    "inputTokens" |
-    "outputTokens" |
-    "cacheReadTokens" |
-    "cacheWriteTokens"
-  > {
+  private runtimeUsageSummary(runtimeId: string): RuntimeUsageSummary {
+    // Every runtime read (heartbeat, claim, runtime lists) lands here. On Postgres each row crosses
+    // the worker bridge as JSON, so pulling a runtime's whole task history into JS dominated those
+    // requests; aggregate in SQL instead. bun:sqlite reads in-process and keeps the JS reference
+    // implementation below, which the Postgres query must match field for field.
+    if (this.ctx.db instanceof PostgresSyncDatabase) return this.runtimeUsageSummaryPostgres(runtimeId);
     const rows = this.ctx.db.query(
       "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
     ).all(runtimeId) as Row[];
@@ -2113,6 +2111,83 @@ export class RuntimesRepo {
     }
     return stats;
   }
+
+  private runtimeUsageSummaryPostgres(runtimeId: string): RuntimeUsageSummary {
+    const inFlight = IN_FLIGHT_TASK_STATUSES.map(() => "?").join(", ");
+    const row = this.ctx.db.query(
+      `SELECT COUNT(*) AS task_count,
+              COUNT(*) FILTER (WHERE t.status IN (${inFlight})) AS active_task_count,
+              COUNT(*) FILTER (WHERE t.status = 'completed') AS completed_task_count,
+              COUNT(*) FILTER (WHERE t.status = 'failed') AS failed_task_count,
+              COALESCE(SUM(u.input_tokens), 0) AS input_tokens,
+              COALESCE(SUM(u.output_tokens), 0) AS output_tokens,
+              COALESCE(SUM(u.cache_read_tokens), 0) AS cache_read_tokens,
+              COALESCE(SUM(u.cache_write_tokens), 0) AS cache_write_tokens
+       FROM multiremi_tasks t
+       LEFT JOIN LATERAL (
+         SELECT SUM(${pgUsageNumber("f.input_tokens")}) AS input_tokens,
+                SUM(${pgUsageNumber("f.output_tokens")}) AS output_tokens,
+                SUM(${pgUsageNumber("f.cache_read_tokens")}) AS cache_read_tokens,
+                SUM(${pgUsageNumber("f.cache_write_tokens")}) AS cache_write_tokens
+         FROM jsonb_array_elements(
+           CASE
+             WHEN NOT pg_input_is_valid(t.usage, 'jsonb') THEN '[]'::jsonb
+             WHEN jsonb_typeof(t.usage::jsonb) = 'array' THEN t.usage::jsonb
+             ELSE '[]'::jsonb
+           END
+         ) AS e(entry)
+         CROSS JOIN LATERAL (
+           SELECT ${pgUsageField("inputTokens", "input_tokens")} AS input_tokens,
+                  ${pgUsageField("outputTokens", "output_tokens")} AS output_tokens,
+                  ${pgUsageField("cacheReadTokens", "cache_read_tokens")} AS cache_read_tokens,
+                  ${pgUsageField("cacheWriteTokens", "cache_write_tokens")} AS cache_write_tokens
+         ) AS f
+         WHERE jsonb_typeof(e.entry) = 'object'
+       ) u ON TRUE
+       WHERE t.runtime_id = ?`,
+    ).get(...IN_FLIGHT_TASK_STATUSES, runtimeId) as Row;
+    return {
+      taskCount: Number(row.task_count ?? 0),
+      activeTaskCount: Number(row.active_task_count ?? 0),
+      completedTaskCount: Number(row.completed_task_count ?? 0),
+      failedTaskCount: Number(row.failed_task_count ?? 0),
+      inputTokens: Number(row.input_tokens ?? 0),
+      outputTokens: Number(row.output_tokens ?? 0),
+      cacheReadTokens: Number(row.cache_read_tokens ?? 0),
+      cacheWriteTokens: Number(row.cache_write_tokens ?? 0),
+    };
+  }
+}
+
+type RuntimeUsageSummary = Pick<MultiremiRuntime,
+  "taskCount" |
+  "activeTaskCount" |
+  "completedTaskCount" |
+  "failedTaskCount" |
+  "inputTokens" |
+  "outputTokens" |
+  "cacheReadTokens" |
+  "cacheWriteTokens"
+>;
+
+/** `record.camel ?? record.snake` from `normalizeTaskUsageEntries`: a JSON null falls through too. */
+function pgUsageField(camel: string, snake: string): string {
+  return `COALESCE(NULLIF(e.entry -> '${camel}', 'null'::jsonb), e.entry -> '${snake}')`;
+}
+
+/**
+ * `normalizeUsageNumber` in SQL: finite, non-negative, floored, anything else 0. Covers JSON
+ * numbers (all the writer produces), `true`, and plain decimal strings; exotic `Number()` inputs
+ * (hex or exponent strings, one-element arrays) count as 0 rather than risk a cast error.
+ */
+function pgUsageNumber(value: string): string {
+  return `CASE
+    WHEN jsonb_typeof(${value}) = 'number' THEN GREATEST(FLOOR((${value})::numeric), 0)
+    WHEN jsonb_typeof(${value}) = 'string' AND (${value} #>> '{}') ~ '^\\s*\\+?([0-9]+\\.?[0-9]*|\\.[0-9]+)\\s*$'
+      THEN FLOOR((${value} #>> '{}')::numeric)
+    WHEN ${value} = 'true'::jsonb THEN 1
+    ELSE 0
+  END`;
 }
 
 function normalizeAgentPluginProtocol(value: unknown): number {

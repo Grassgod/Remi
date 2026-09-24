@@ -60,6 +60,28 @@ const DAEMON_RECONCILE_TIMEOUT_CODE = "daemon_plugin_reconcile_timeout";
 const DAEMON_RECONCILE_TIMEOUT_MESSAGE =
   "The daemon advertised Agent Plugin support but did not start reconciliation after 3 heartbeats.";
 
+// Every version column `toVersion` reads. `artifact_json` (the full bundle, ~1 MB per row in
+// production) is deliberately absent: only the artifact download reads it. `artifact_files` still
+// has to be read once because `files` is derived from it, which is what `versionCache` amortizes.
+const VERSION_COLUMNS = [
+  "id",
+  "plugin_id",
+  "version",
+  "manifest_path",
+  "manifest",
+  "artifact_files",
+  "artifact_digest",
+  "artifact_size",
+  "source_revision",
+  "requirements",
+  "metadata",
+  "created_by",
+  "created_at",
+].join(", ");
+// Version rows are immutable once inserted and never deleted, so a cached entry cannot go stale.
+// The cap only bounds memory; eviction is oldest-first.
+const VERSION_CACHE_LIMIT = 256;
+
 export class AgentPluginStoreError extends Error {
   constructor(message: string, readonly code: string, readonly status: number) {
     super(message);
@@ -68,6 +90,11 @@ export class AgentPluginStoreError extends Error {
 }
 
 export class AgentPluginsRepo {
+  // Daemon plugin polling resolves the same few versions on every request (plugin active/candidate
+  // version, binding resolved version, runtime state version). Without this each resolution
+  // re-read the version's artifact payload through the Postgres worker bridge.
+  private readonly versionCache = new Map<string, MultiremiAgentPluginVersion>();
+
   constructor(private readonly ctx: StoreContext) {}
 
   /** Must be called inside a database transaction. */
@@ -289,14 +316,26 @@ export class AgentPluginsRepo {
   listAgentPluginVersions(pluginId: string): MultiremiAgentPluginVersion[] {
     this.requirePlugin(pluginId, true);
     const rows = this.ctx.db.query(
-      "SELECT * FROM multiremi_agent_plugin_versions WHERE plugin_id = ? ORDER BY created_at DESC",
+      "SELECT id FROM multiremi_agent_plugin_versions WHERE plugin_id = ? ORDER BY created_at DESC",
     ).all(pluginId) as Row[];
-    return rows.map((row) => this.toVersion(row));
+    return rows.map((row) => this.requireVersion(String(row.id)));
   }
 
   getAgentPluginVersion(id: string): MultiremiAgentPluginVersion | null {
-    const row = this.ctx.db.query("SELECT * FROM multiremi_agent_plugin_versions WHERE id = ?").get(id) as Row | null;
-    return row ? this.toVersion(row) : null;
+    let version = this.versionCache.get(id);
+    if (!version) {
+      const row = this.ctx.db.query(
+        `SELECT ${VERSION_COLUMNS} FROM multiremi_agent_plugin_versions WHERE id = ?`,
+      ).get(id) as Row | null;
+      if (!row) return null;
+      version = this.toVersion(row);
+      if (this.versionCache.size >= VERSION_CACHE_LIMIT) {
+        this.versionCache.delete(this.versionCache.keys().next().value!);
+      }
+      this.versionCache.set(id, version);
+    }
+    // Callers get their own copy so nothing can mutate the shared cached entry.
+    return structuredClone(version);
   }
 
   activateAgentPluginVersion(pluginId: string, versionId: string): MultiremiAgentPlugin {
@@ -839,19 +878,19 @@ export class AgentPluginsRepo {
   } | null {
     const row = workspaceId
       ? this.ctx.db.query(
-        `SELECT v.* FROM multiremi_agent_plugin_versions v
+        `SELECT v.id, v.artifact_json FROM multiremi_agent_plugin_versions v
          JOIN multiremi_agent_plugins p ON p.id = v.plugin_id
          WHERE v.artifact_digest = ? AND p.workspace_id = ?
          ORDER BY v.created_at DESC LIMIT 1`,
       ).get(digest, workspaceId) as Row | null
       : this.ctx.db.query(
-        `SELECT v.* FROM multiremi_agent_plugin_versions v
+        `SELECT v.id, v.artifact_json FROM multiremi_agent_plugin_versions v
          JOIN multiremi_agent_plugins p ON p.id = v.plugin_id
          WHERE v.artifact_digest = ?
          ORDER BY v.created_at DESC LIMIT 1`,
       ).get(digest) as Row | null;
     if (!row) return null;
-    const version = this.toVersion(row);
+    const version = this.requireVersion(String(row.id));
     return {
       plugin: this.requirePlugin(version.pluginId, true),
       version,
@@ -1093,7 +1132,7 @@ export class AgentPluginsRepo {
     },
   ): MultiremiAgentPluginVersion {
     const existing = this.ctx.db.query(
-      "SELECT * FROM multiremi_agent_plugin_versions WHERE plugin_id = ? AND version = ?",
+      "SELECT id, artifact_digest FROM multiremi_agent_plugin_versions WHERE plugin_id = ? AND version = ?",
     ).get(pluginId, artifact.version) as Row | null;
     if (existing) {
       if (String(existing.artifact_digest) !== artifact.artifactDigest) {
@@ -1102,7 +1141,7 @@ export class AgentPluginsRepo {
           "plugin_version_conflict",
         );
       }
-      return this.toVersion(existing);
+      return this.requireVersion(String(existing.id));
     }
     const id = createId("apv");
     this.ctx.db.run(
@@ -1196,10 +1235,10 @@ export class AgentPluginsRepo {
 
   private previousPluginVersion(plugin: MultiremiAgentPlugin): MultiremiAgentPluginVersion | null {
     const row = this.ctx.db.query(
-      `SELECT * FROM multiremi_agent_plugin_versions
+      `SELECT id FROM multiremi_agent_plugin_versions
        WHERE plugin_id = ? AND id <> ? ORDER BY created_at DESC LIMIT 1`,
     ).get(plugin.id, plugin.activeVersionId ?? "") as Row | null;
-    return row ? this.toVersion(row) : null;
+    return row ? this.getAgentPluginVersion(String(row.id)) : null;
   }
 
   private addDesired(
