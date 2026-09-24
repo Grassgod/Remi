@@ -136,10 +136,17 @@ describe("daemon heartbeat network recovery", () => {
       const plan = bed.store.getDaemonRetirementPlan("local", "heartbeat-test");
       expect(bed.store.retireDaemon("local", "heartbeat-test", plan.snapshot, "local").status).toBe("retired");
       bed.state.armed = true;
-      await waitUntil(bed.isSettled, "retirement cleanup after an incomplete authority response", 1_500);
+      // The response headers are enough to detect the revocation even when the
+      // body never arrives, and local cleanup still runs.
+      await waitUntil(() => bed.state.cleanupCalls >= 1, "retirement cleanup after an incomplete authority response", 1_500);
       expect(bed.state.authorityStatus).toBe(401);
       expect(bed.state.failures).toBe(1);
-      expect(bed.state.cleanupCalls).toBe(1);
+
+      // Cleanup success no longer ends the process: exiting here is what let the
+      // service manager's restart policy retry every few seconds. The daemon
+      // stays alive and probes register instead.
+      await waitUntil(() => !bed.isSettled() && bed.state.cleanupCalls >= 1, "keep-alive after retirement", 300);
+      expect(bed.isSettled()).toBe(false);
       expect(bed.error()).toBeUndefined();
     } finally {
       await bed.close();
