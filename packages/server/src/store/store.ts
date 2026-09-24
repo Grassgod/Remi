@@ -1042,7 +1042,9 @@ runMigrations(this.db);
   }
 
   /** Internal cross-domain primitive; caller owns workspace lifecycle + Plugin locks. */
-  recordAgentPluginRuntimeHeartbeatWithinLock(runtimeId: string): MultiremiAgentPluginRuntimeState[] {
+  recordAgentPluginRuntimeHeartbeatWithinLock(
+    runtimeId: string,
+  ): { changes: MultiremiAgentPluginRuntimeState[]; revision: string } {
     return this.agentPlugins.recordAgentPluginRuntimeHeartbeatWithinLock(runtimeId);
   }
 

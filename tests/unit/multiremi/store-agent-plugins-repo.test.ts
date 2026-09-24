@@ -482,6 +482,119 @@ describe("AgentPluginsRepo", () => {
     });
   });
 
+  it("keeps the desired revision stable across observed-state churn and probes control-plane changes", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Claude", provider: "claude" });
+    const runtime = store.registerRuntime({
+      id: "rt_plugin_revision",
+      name: "Revision runtime",
+      provider: "claude",
+      daemonId: "daemon-revision",
+      workspaceId: "local",
+      metadata: { agent_plugin_protocol: 1 },
+    });
+    const plugin = store.importAgentPlugin(claudePluginInput());
+    const binding = store.createAgentPluginBinding(agent.id, { pluginId: plugin.id });
+    const revision = () => store.getRuntimeAgentPluginDesiredSnapshot(runtime.id).revision;
+
+    const bound = revision();
+    expect(bound).toMatch(/^[0-9a-f]{64}$/);
+
+    // The daemon's own reports are not desired-state changes. Hashing observed
+    // status here would make every state POST bump the revision, and the daemon
+    // would fetch desired state again immediately after every report.
+    store.reportAgentPluginRuntimeState(runtime.id, plugin.activeVersionId!, {
+      status: "ready",
+      observedDigest: plugin.activeVersion!.artifactDigest,
+    });
+    expect(revision()).toBe(bound);
+    store.retryAgentPluginRuntime(plugin.id, runtime.id);
+    const retried = revision();
+    expect(retried).not.toBe(bound);
+
+    // A no-op reconciliation (the heartbeat path) must not move it either.
+    store.reconcileAgentPluginDesiredState("local");
+    expect(revision()).toBe(retried);
+
+    // Server-side state changes that require new daemon work do move it.
+    store.deleteAgentPluginBinding(agent.id, binding.id);
+    const unbound = revision();
+    expect(unbound).not.toBe(retried);
+    // Re-binding resurrects the row with a bumped retry generation, which is a
+    // real "install this again" instruction, so the revision must move too.
+    const reboundBinding = store.createAgentPluginBinding(agent.id, { pluginId: plugin.id });
+    const rebound = revision();
+    expect(rebound).not.toBe(unbound);
+    expect(rebound).not.toBe(retried);
+
+    const candidate = store.createAgentPluginVersion(plugin.id, {
+      ...claudePluginInput("2.0.0").manifest,
+      manifest: claudePluginInput("2.0.0").manifest,
+      files: claudePluginInput("2.0.0").files,
+      sourceRevision: "commit-2.0.0",
+    });
+    const candidacy = revision();
+    expect(candidacy).not.toBe(rebound);
+    store.reportAgentPluginRuntimeState(runtime.id, candidate.id, {
+      status: "ready",
+      observedDigest: candidate.artifactDigest,
+    });
+    expect(revision()).toBe(candidacy);
+    store.activateAgentPluginVersion(plugin.id, candidate.id);
+    const activated = revision();
+    expect(activated).not.toBe(candidacy);
+
+    // A pinned binding holds its version across activation, and the desired set
+    // as a whole is what the token describes.
+    const pinned = store.createAgentPluginVersion(plugin.id, {
+      ...claudePluginInput("3.0.0").manifest,
+      manifest: claudePluginInput("3.0.0").manifest,
+      files: claudePluginInput("3.0.0").files,
+      sourceRevision: "commit-3.0.0",
+    });
+    store.updateAgentPluginBinding(agent.id, reboundBinding.id, {
+      version_policy: "pinned",
+      version_id: pinned.id,
+    });
+    const pinnedRevision = revision();
+    expect(pinnedRevision).not.toBe(activated);
+    store.reconcileAgentPluginDesiredState("local");
+    expect(revision()).toBe(pinnedRevision);
+  });
+
+  it("returns the same desired revision from the heartbeat path as from the snapshot", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Claude", provider: "claude" });
+    const runtime = store.registerRuntime({
+      id: "rt_plugin_revision_ack",
+      name: "Revision ack runtime",
+      provider: "claude",
+      daemonId: "daemon-revision-ack",
+      workspaceId: "local",
+      metadata: { agent_plugin_protocol: 1 },
+    });
+    const plugin = store.importAgentPlugin(claudePluginInput());
+    store.createAgentPluginBinding(agent.id, { pluginId: plugin.id });
+
+    // The heartbeat query has no ORDER BY and the snapshot orders by
+    // provider/name/version, so the revision must not depend on row order.
+    const heartbeatAck = store.heartbeatRuntime(runtime.id, { agentPluginProtocol: 1 });
+    expect(heartbeatAck.agent_plugins?.revision).toBe(
+      store.getRuntimeAgentPluginDesiredSnapshot(runtime.id).revision,
+    );
+
+    // A daemon without Plugin support gets no field, and a heartbeat that does
+    // not advertise the protocol never claims a revision.
+    expect(store.heartbeatRuntime(runtime.id, { agentPluginProtocol: 0 }).agent_plugins).toBeUndefined();
+    const plainRuntime = store.registerRuntime({
+      id: "rt_plugin_revision_plain",
+      name: "Plain revision runtime",
+      provider: "claude",
+      workspaceId: "local",
+    });
+    expect(store.heartbeatRuntime(plainRuntime.id).agent_plugins).toBeUndefined();
+  });
+
   it("treats a stale Runtime heartbeat as offline for readiness and activation", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Claude stale", provider: "claude" });

@@ -1743,6 +1743,11 @@ export class RuntimesRepo {
     let previousAgentPluginProtocol = readAgentPluginProtocol(runtime.metadata);
     let agentPluginProtocol = previousAgentPluginProtocol;
     let pluginStateChanges: MultiremiAgentPluginRuntimeState[] = [];
+    // Revision of the Runtime's desired Plugin set, echoed back in the ack so a
+    // daemon can skip `GET .../agent-plugins/desired` while nothing it must act
+    // on changed. Computed by the same helper the desired snapshot uses, from
+    // rows this transaction already loaded — no extra query.
+    let agentPluginDesiredRevision: string | null = null;
     if (options.agentPluginProtocol !== undefined) {
       const workspaceId = runtime.workspaceId ?? "local";
       const result = this.ctx.db.transaction(() => {
@@ -1758,14 +1763,16 @@ export class RuntimesRepo {
           [toJson({ ...lockedRuntime.metadata, agent_plugin_protocol: protocol, ...metadataPatch }), now, now, runtimeId],
         );
         const updatedRuntime = this.getRuntime(runtimeId)!;
-        const changes = this.ctx.agentPlugins().recordAgentPluginRuntimeHeartbeatWithinLock(runtimeId);
-        return { runtime: updatedRuntime, previous, protocol, changes };
+        const { changes, revision } =
+          this.ctx.agentPlugins().recordAgentPluginRuntimeHeartbeatWithinLock(runtimeId);
+        return { runtime: updatedRuntime, previous, protocol, changes, revision };
       })();
       if (!result) return { runtime_id: runtimeId, status: "runtime_gone", runtime_gone: true };
       runtime = result.runtime;
       previousAgentPluginProtocol = result.previous;
       agentPluginProtocol = result.protocol;
       pluginStateChanges = result.changes;
+      agentPluginDesiredRevision = result.revision;
       for (const state of pluginStateChanges) {
         this.ctx.emitWorkspaceEvent({
           type: "agent_plugin:runtime_state",
@@ -1818,6 +1825,14 @@ export class RuntimesRepo {
       );
     }
     const ack: MultiremiDaemonHeartbeatAck = { runtime_id: runtimeId, status: "ok" };
+    // Only a daemon that speaks the Plugin protocol can use this; a legacy
+    // daemon that advertises protocol 0 ignores unknown ack fields anyway.
+    if (
+      agentPluginDesiredRevision
+      && (agentPluginProtocol ?? 0) >= MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION
+    ) {
+      ack.agent_plugins = { revision: agentPluginDesiredRevision };
+    }
     if (options.claimPending === false) return ack;
 
     const pendingUpdate = this.claimRuntimeUpdateRequest(runtimeId);
