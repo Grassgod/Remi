@@ -729,9 +729,11 @@ export function isFeishuBotOutboundAttachmentRequest(c: Context): boolean {
     .test(new URL(c.req.url).pathname);
 }
 
+/** Reads the bot host needs to present a Task, plus answering its requests.
+ * Creating or expiring a human request stays with the executing daemon. */
 function isFeishuBotTaskTransportRequest(c: Context): boolean {
   const path = new URL(c.req.url).pathname;
-  return (c.req.method === "GET" && /^\/api\/daemon\/tasks\/[^/]+\/(?:status|messages)$/.test(path))
+  return (c.req.method === "GET" && /^\/api\/daemon\/tasks\/[^/]+\/(?:status|messages|human-requests\/[^/]+)$/.test(path))
     || (c.req.method === "POST" && /^\/api\/daemon\/tasks\/[^/]+\/human-requests\/[^/]+\/respond$/.test(path));
 }
 
