@@ -38,6 +38,62 @@ summary: 当前性能相关实现、必须保留的语义，以及复用现有�
 - 侧栏和页内计数复用 `/api/inbox/summary`，摘要不返回正文、不补全 Issue，仅成功自动运行保留分组所需的 `details`。但服务端仍读取该成员所有未归档精简行，在 JavaScript 中去重和计数；分页并未把这部分成本变成常数。旧 `/api/inbox` 全量接口仍存在，页面已使用分页入口。
 - 测量时分别记录首屏、摘要、追加页、定位较后页通知，以及 mutation/WS 失效后的刷新。来源筛选和展示折叠仅处理已加载项；URL 定位可能连续读取多页，不能把 50 条默认页大小当作每次页面交互的总工作量。当前没有这些场景的延迟或内存基线。
 
+## 请求级观测：Server-Timing 与两类日志（MUL-367）
+
+自 MUL-367 起后端自带按请求的耗时数据，不必再用 nginx 临时日志或人工采样 PG。实现位于 [request-metrics.ts](../../packages/server/src/observability/request-metrics.ts)，入口有两处：[createMultiremiApp](../../packages/server/src/api/server.ts) 里**第一个**注册的中间件，以及 [startMultiremiServer](../../packages/server/src/api/server.ts) 里带 `unref()` 的汇总 timer。中间件顺序是硬约束：Hono 只包裹注册在其后的 handler，排在鉴权之后就会漏掉 `verifyAccessToken` 的查库时间。
+
+**响应头** `Server-Timing`（浏览器 DevTools 的 Network → Timing 直接可见）：
+
+```text
+Server-Timing: total;dur=12.3, db;dur=4.5, dbp;dur=0.2, dbq;desc="7", dbb;desc="12345"
+```
+
+| 指标 | 含义 |
+| --- | --- |
+| `total` | 请求总耗时，包含鉴权与路由处理 |
+| `db` | 在 [PgBridge](../../packages/server/src/store/db/postgres.ts) 的 `Atomics.wait` 上阻塞的累计时间 |
+| `dbp` | 主线程 `TextDecoder` + `JSON.parse` 解析桥回包的累计时间，是 MUL-366「序列化 + GC」假设的直接证据 |
+| `dbq` / `dbb` | 该请求的 SQL 条数与过桥字节数；计数不是时长，因此放在 `desc` |
+
+耗时保留 1 位小数。404、`onError` 返回的 500、以及 handler 抛出但被 Hono 转成 500 的请求同样带这个头。`route` 始终是 Hono 路由模式（如 `/api/shares/:token`），绝不记录原始 path 或 query —— 后者的 path 段就带凭证；未匹配到路由时为 `<unmatched>`。
+
+**慢请求日志**（阈值 `MULTIREMI_SLOW_REQUEST_MS`，默认 500 ms），每行一个 JSON 对象写到 **stdout**：
+
+```json
+{"event":"api_slow_request","ts":"2026-09-24T11:14:49.392Z","method":"GET","route":"/health","status":200,"total_ms":1.3,"db_ms":0,"db_parse_ms":0,"db_queries":0,"db_bytes":0}
+```
+
+不含 query、header、body、原始 path、user 或 token。这里用 `console.log(JSON.stringify(...))` 而不是 `createLogger`：后者的 INFO 才走 stdout（WARN/ERROR 走 stderr）、带人读前缀使一行不是一个 JSON 对象，且在 `initLogPersistence()` 之后每条都会 `appendFileSync`，等于在请求路径上做同步磁盘 IO。
+
+**每分钟汇总**（`api_minute_summary`，同样只写 stdout、不写 DB、不做同步 IO）：
+
+```json
+{"event":"api_minute_summary","ts":"2026-09-24T11:14:54.369Z","window_ms":5001,"requests":3,"status_5xx":0,"slow":3,"dropped":0,"db_busy_pct":0,"db_queries":0,"event_loop_lag_max_ms":2.7,"routes":[{"method":"GET","route":"/health","count":1,"p50_ms":1.3,"p95_ms":1.3,"sum_ms":1.3}]}
+```
+
+- 数据源是固定容量的内存环形缓冲区（typed array，route 字符串 intern 成整数 id）。写满后覆盖最旧样本并把次数记进 `dropped`，缓冲区不随流量增长。
+- `routes` 按 `sum_ms` 取前 N（默认 10）。分位数用最近秩法，与 [bench-task-list-pagination.ts](../../tests/manual/bench-task-list-pagination.ts) 和 API baseline 脚本一致，因此这些数字可以和既有报告对照。
+- `db_busy_pct` = 该窗口内**进程级** DB 阻塞时间 / 窗口时长。进程级计数包含没有请求上下文的调用，所以后台 job 的 DB 时间也算进去，这正是「DB 忙碌占比」需要的分母口径。
+- `event_loop_lag_max_ms` 用 250 ms 间隔的 `setInterval` 漂移测量并取窗口内最大值；同步 PG 桥阻塞主线程时会直接体现为晚 tick。
+
+**环境变量**（都在 [api.env.example](../../deploy/docker/api.env.example) 有登记）：`MULTIREMI_REQUEST_METRICS`（默认开，`0/false/off` 整体关闭，关闭后不加响应头也不写任何日志）、`MULTIREMI_SLOW_REQUEST_MS`（默认 500，设 0 可让每个请求都打一行，适合短时冒烟）、`MULTIREMI_METRICS_SUMMARY_INTERVAL_MS`（默认 60000）、`MULTIREMI_METRICS_SUMMARY_TOP_N`（默认 10）、`MULTIREMI_METRICS_BUFFER_SIZE`（默认 4096）。
+
+**观测与验证入口**：
+
+```bash
+# 生产容器里的两类日志（209 上的 API 容器）
+docker logs multiremi-platform-app-api-1 | grep api_minute_summary
+docker logs multiremi-platform-app-api-1 | grep api_slow_request
+
+# 单元测试：并发归属、Server-Timing 格式、慢请求日志脱敏、汇总器
+bun test tests/unit/multiremi/request-metrics.test.ts
+
+# 真实 HTTP 冒烟：起一个本地实例，读 Server-Timing + 两类日志
+bun run tests/manual/smoke-request-metrics.ts
+```
+
+冒烟脚本默认用 0 ms 阈值和 5 s 汇总间隔以便一次跑完就同时看到两个事件；`MUL367_SMOKE_PORT` / `MUL367_SMOKE_SUMMARY_MS` 可覆盖。它只连 127.0.0.1 的临时实例和内存 SQLite，不读凭证、不碰生产。上线后需要真实基线数字时，按本文档开头「复现顺序与记录」的模板记录环境、并发和样本数，**不要**把本页的示例行情当作实测结论。
+
 ## 优化不能破坏的约束
 
 - 数据库层必须保持 SQLite/PostgreSQL 行为一致；`transaction` 的原子性和回滚语义不能因连接池化或 async 改造丢失，不能仅把 `max: 1` 调大。
