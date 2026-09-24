@@ -4,6 +4,7 @@
 // WebSocket upgrade wiring itself stays in api/server.ts.
 import {
   canUserViewTaskMessages,
+  createTaskAuthMemo,
   hasJwtWorkspaceAccess,
   isDaemonOwnerWorkspaceMember,
   isDaemonTokenAllowedRequest,
@@ -268,6 +269,29 @@ export function notifyBrowserTaskMessages(
   task: MultiremiTask,
   messages: MultiremiTaskMessage[],
 ): void {
+  if (messages.length === 0) return;
+  if (task.chatSessionId) {
+    for (const message of messages) {
+      const frame = JSON.stringify({
+        type: "task:message",
+        payload: taskMessageRealtimePayload(message, task),
+        actor_id: task.agentId,
+        actor_type: "agent",
+      });
+      // Chat tasks are creator-only; subscriptions were authorized on subscribe.
+      sendFrameToBrowserScopes(scopeRegistry, frame, [["chat", task.chatSessionId], ["task", task.id]]);
+    }
+    return;
+  }
+  const memo = createTaskAuthMemo();
+  const allowedByUser = new Map<string | null, boolean>();
+  const allowedClients = new Set([...(workspaceRegistry.get(task.workspaceId) ?? [])].filter((client) => {
+    const userId = client.data.kind === "browser" ? client.data.userId : null;
+    if (!allowedByUser.has(userId)) {
+      allowedByUser.set(userId, canUserViewTaskMessages(store, userId, task, memo));
+    }
+    return allowedByUser.get(userId);
+  }));
   for (const message of messages) {
     const frame = JSON.stringify({
       type: "task:message",
@@ -275,13 +299,8 @@ export function notifyBrowserTaskMessages(
       actor_id: task.agentId,
       actor_type: "agent",
     });
-    if (task.chatSessionId) {
-      // Chat tasks: only the creator's chat/task subscriptions (authorized on subscribe).
-      sendFrameToBrowserScopes(scopeRegistry, frame, [["chat", task.chatSessionId], ["task", task.id]]);
-      continue;
-    }
     sendFrameToBrowserWorkspaceClientsFiltered(workspaceRegistry, task.workspaceId, frame, (client) =>
-      canUserViewTaskMessages(store, client.data.kind === "browser" ? client.data.userId : null, task),
+      allowedClients.has(client),
     );
   }
 }

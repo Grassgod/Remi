@@ -1461,6 +1461,27 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(store.claimTask(runtime.id)).toBeNull();
   });
 
+  it("skips identical task-message retries but persists changed seqs on Postgres", () => {
+    const ws = freshWorkspace();
+    const agent = store.createAgent({ name: "Replay", provider: "claude", workspaceId: ws });
+    const task = store.createTask({ agentId: agent.id, prompt: "go", workspaceId: ws });
+    const events: number[][] = [];
+    const unsub = store.onTaskMessages(({ task: notified, messages }) => {
+      if (notified.id === task.id) events.push(messages.map((message) => message.seq));
+    });
+
+    const first = store.appendTaskMessages(task.id, [{ seq: 1, type: "tool_use", status: "in_progress" }]);
+    db.run("UPDATE multiremi_tasks SET updated_at = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", task.id]);
+    expect(store.appendTaskMessages(task.id, [{ seq: 1, type: "tool_use", status: "in_progress" }])).toEqual([]);
+    expect(store.getTask(task.id)?.updatedAt).toBe("2000-01-01T00:00:00.000Z");
+
+    const changed = store.appendTaskMessages(task.id, [{ seq: 1, type: "tool_result", status: "completed" }]);
+    expect(changed).toHaveLength(1);
+    expect(changed[0]).toMatchObject({ id: first[0]!.id, createdAt: first[0]!.createdAt, type: "tool_result" });
+    expect(events).toEqual([[1], [1]]);
+    unsub();
+  });
+
   it.each([false, true])("claims contexts atomically across connections (independent Agents: %s)", async (independent) => {
     const ws = freshWorkspace();
     const firstRuntime = store.registerRuntime({
