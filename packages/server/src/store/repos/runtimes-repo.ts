@@ -244,8 +244,8 @@ export class RuntimesRepo {
   private readonly localSkillImportQueue: RuntimeRequestQueue<MultiremiRuntimeLocalSkillImportRequest>;
   private readonly commandQueue: RuntimeRequestQueue<MultiremiRuntimeCommandRequest>;
   private readonly botMenuPublishQueue: RuntimeRequestQueue<MultiremiBotMenuPublishRequest>;
-  // Resolved on first use: the usage aggregate needs `pg_input_is_valid` (PostgreSQL 16+).
-  private postgresUsageAggregate: boolean | null = null;
+  // Postgres only: per runtime, token totals over its settled tasks and the row version they reflect.
+  private readonly settledUsageCache = new Map<string, { version: string; tokens: TaskTokenTotals }>();
 
   constructor(private ctx: StoreContext) {
     this.modelListQueue = new RuntimeRequestQueue(ctx.db, MODEL_LIST_REQUESTS);
@@ -2082,10 +2082,13 @@ export class RuntimesRepo {
 
   private runtimeUsageSummary(runtimeId: string): RuntimeUsageSummary {
     // Every runtime read (heartbeat, claim, runtime lists) lands here. On Postgres each row crosses
-    // the worker bridge as JSON, so pulling a runtime's whole task history into JS dominated those
-    // requests; aggregate in SQL instead. bun:sqlite reads in-process and keeps the JS reference
-    // implementation below, which the Postgres path must match field for field.
-    if (this.canAggregateUsageInPostgres()) return this.runtimeUsageSummaryPostgres(runtimeId);
+    // the worker bridge as JSON, so re-reading a runtime's whole task history on every read
+    // dominated those requests. bun:sqlite reads in-process and keeps the plain scan.
+    if (this.ctx.db instanceof PostgresSyncDatabase) return this.runtimeUsageSummaryPostgres(this.ctx.db, runtimeId);
+    return this.runtimeUsageSummaryScan(runtimeId);
+  }
+
+  private runtimeUsageSummaryScan(runtimeId: string): RuntimeUsageSummary {
     const rows = this.ctx.db.query(
       "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
     ).all(runtimeId) as Row[];
@@ -2109,82 +2112,57 @@ export class RuntimesRepo {
     return stats;
   }
 
-  private canAggregateUsageInPostgres(): boolean {
-    if (this.postgresUsageAggregate === null) {
-      this.postgresUsageAggregate = this.ctx.db instanceof PostgresSyncDatabase
-        && Number((this.ctx.db.query("SELECT current_setting('server_version_num') AS version").get() as Row).version)
-          >= 160000;
-    }
-    return this.postgresUsageAggregate;
-  }
-
   /**
-   * SQL sums only tasks whose usage is in the shape the writer produces: JSON under
-   * USAGE_AGGREGATE_MAX_LENGTH, and every counted token field absent, null or a non-negative safe
-   * integer. There the SQL and `normalizeUsageNumber` agree exactly. Any other task's raw usage is
-   * returned and folded in by the JS reference, so legacy or malformed rows cannot make the two
-   * paths diverge, and nothing in the query can raise a cast error.
+   * Counts come from SQL. Token totals still come from `parseTaskUsageEntries`, so they match the
+   * scan exactly, but only unsettled tasks (a handful) send their usage every time. Settled tasks'
+   * totals are cached per runtime under a version of those rows (ids plus `xmin`, which every
+   * insert, update or delete changes) and re-read only when the version moves.
    */
-  private runtimeUsageSummaryPostgres(runtimeId: string): RuntimeUsageSummary {
+  private runtimeUsageSummaryPostgres(db: PostgresSyncDatabase, runtimeId: string): RuntimeUsageSummary {
     const inFlight = IN_FLIGHT_TASK_STATUSES.map(() => "?").join(", ");
-    const row = this.ctx.db.query(
+    const settled = SETTLED_TASK_STATUSES.map(() => "?").join(", ");
+    const row = db.query(
       `SELECT COUNT(*) AS task_count,
-              COUNT(*) FILTER (WHERE t.status IN (${inFlight})) AS active_task_count,
-              COUNT(*) FILTER (WHERE t.status = 'completed') AS completed_task_count,
-              COUNT(*) FILTER (WHERE t.status = 'failed') AS failed_task_count,
-              COALESCE(SUM(u.input_tokens) FILTER (WHERE NOT u.fallback), 0) AS input_tokens,
-              COALESCE(SUM(u.output_tokens) FILTER (WHERE NOT u.fallback), 0) AS output_tokens,
-              COALESCE(SUM(u.cache_read_tokens) FILTER (WHERE NOT u.fallback), 0) AS cache_read_tokens,
-              COALESCE(SUM(u.cache_write_tokens) FILTER (WHERE NOT u.fallback), 0) AS cache_write_tokens,
-              (json_agg(t.usage) FILTER (WHERE u.fallback))::text AS fallback_usage
-       FROM multiremi_tasks t
-       CROSS JOIN LATERAL (
-         -- Length first: very deeply nested JSON makes pg_input_is_valid itself raise.
-         SELECT CASE
-           WHEN length(t.usage) > ${USAGE_AGGREGATE_MAX_LENGTH} THEN FALSE
-           ELSE pg_input_is_valid(t.usage, 'jsonb')
-         END AS parsable
-       ) AS p
-       CROSS JOIN LATERAL (
-         SELECT SUM(${pgUsageTokens("f.input_tokens")}) AS input_tokens,
-                SUM(${pgUsageTokens("f.output_tokens")}) AS output_tokens,
-                SUM(${pgUsageTokens("f.cache_read_tokens")}) AS cache_read_tokens,
-                SUM(${pgUsageTokens("f.cache_write_tokens")}) AS cache_write_tokens,
-                NOT p.parsable OR COALESCE(BOOL_OR(NOT (
-                  ${pgCanonicalTokens("f.input_tokens")}
-                  AND ${pgCanonicalTokens("f.output_tokens")}
-                  AND ${pgCanonicalTokens("f.cache_read_tokens")}
-                  AND ${pgCanonicalTokens("f.cache_write_tokens")}
-                )), FALSE) AS fallback
-         FROM jsonb_array_elements(
-           CASE
-             WHEN NOT p.parsable THEN '[]'::jsonb
-             WHEN jsonb_typeof(t.usage::jsonb) = 'array' THEN t.usage::jsonb
-             ELSE '[]'::jsonb
-           END
-         ) AS e(entry)
-         CROSS JOIN LATERAL (
-           SELECT ${pgUsageField("inputTokens", "input_tokens")} AS input_tokens,
-                  ${pgUsageField("outputTokens", "output_tokens")} AS output_tokens,
-                  ${pgUsageField("cacheReadTokens", "cache_read_tokens")} AS cache_read_tokens,
-                  ${pgUsageField("cacheWriteTokens", "cache_write_tokens")} AS cache_write_tokens
-         ) AS f
-         WHERE jsonb_typeof(e.entry) = 'object'
-       ) AS u
-       WHERE t.runtime_id = ?`,
-    ).get(...IN_FLIGHT_TASK_STATUSES, runtimeId) as Row;
+              COUNT(*) FILTER (WHERE status IN (${inFlight})) AS active_task_count,
+              COUNT(*) FILTER (WHERE status = 'completed') AS completed_task_count,
+              COUNT(*) FILTER (WHERE status = 'failed') AS failed_task_count,
+              ${tasksVersionSql(` FILTER (WHERE status IN (${settled}))`)} AS settled_version,
+              (json_agg(usage) FILTER (WHERE status NOT IN (${settled})))::text AS open_usage
+       FROM multiremi_tasks
+       WHERE runtime_id = ?`,
+    ).get(...IN_FLIGHT_TASK_STATUSES, ...SETTLED_TASK_STATUSES, ...SETTLED_TASK_STATUSES, runtimeId) as Row;
+    const settledTokens = this.settledTaskTokens(db, runtimeId, String(row.settled_version ?? ""));
+    // A task settled or changed between the two reads; rescan rather than mix two snapshots.
+    if (!settledTokens) return this.runtimeUsageSummaryScan(runtimeId);
     const stats = {
       taskCount: Number(row.task_count ?? 0),
       activeTaskCount: Number(row.active_task_count ?? 0),
       completedTaskCount: Number(row.completed_task_count ?? 0),
       failedTaskCount: Number(row.failed_task_count ?? 0),
-      inputTokens: Number(row.input_tokens ?? 0),
-      outputTokens: Number(row.output_tokens ?? 0),
-      cacheReadTokens: Number(row.cache_read_tokens ?? 0),
-      cacheWriteTokens: Number(row.cache_write_tokens ?? 0),
+      ...settledTokens,
     };
-    for (const usage of parseJson<unknown[]>(row.fallback_usage, [])) addTaskUsage(stats, usage);
+    for (const usage of parseJson<unknown[]>(row.open_usage, [])) addTaskUsage(stats, usage);
     return stats;
+  }
+
+  /** Token totals over the runtime's settled tasks at `version`, or null if the rows moved past it. */
+  private settledTaskTokens(db: PostgresSyncDatabase, runtimeId: string, version: string): TaskTokenTotals | null {
+    const cached = this.settledUsageCache.get(runtimeId);
+    if (cached?.version === version) return { ...cached.tokens };
+    const settled = SETTLED_TASK_STATUSES.map(() => "?").join(", ");
+    const row = db.query(
+      `SELECT ${tasksVersionSql()} AS settled_version, json_agg(usage)::text AS settled_usage
+       FROM multiremi_tasks
+       WHERE runtime_id = ? AND status IN (${settled})`,
+    ).get(runtimeId, ...SETTLED_TASK_STATUSES) as Row;
+    const tokens = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    for (const usage of parseJson<unknown[]>(row.settled_usage, [])) addTaskUsage(tokens, usage);
+    const current = String(row.settled_version ?? "");
+    // Two writes to one row inside a transaction leave the same `xmin`, so a version read between
+    // them could outlive the second write. Cache only outside transactions; lookups inside one stay
+    // safe, since no cached version can include rows this transaction wrote.
+    if (!db.inTransaction) this.settledUsageCache.set(runtimeId, { version: current, tokens });
+    return current === version ? { ...tokens } : null;
   }
 }
 
@@ -2199,37 +2177,27 @@ type RuntimeUsageSummary = Pick<MultiremiRuntime,
   "cacheWriteTokens"
 >;
 
-// Usage the writer produces is a few hundred characters. Nesting deep enough to make PostgreSQL's
-// JSON parser exceed its stack needs tens of thousands of characters, so longer text goes to JS.
-const USAGE_AGGREGATE_MAX_LENGTH = 16_384;
+type TaskTokenTotals = Pick<MultiremiRuntime, "inputTokens" | "outputTokens" | "cacheReadTokens" | "cacheWriteTokens">;
 
-function addTaskUsage(stats: RuntimeUsageSummary, usage: unknown): void {
+// Tasks in these states are finished; their rows (and usage) rarely change again.
+const SETTLED_TASK_STATUSES: readonly MultiremiTaskStatus[] = ["completed", "failed", "cancelled"];
+
+/**
+ * Digest of task ids and `xmin`. A row's `xmin` is the transaction that wrote its current version,
+ * so inserting, updating, deleting or re-homing any matched row changes the digest. "C" collation
+ * keeps the order independent of the database locale.
+ */
+function tasksVersionSql(filter = ""): string {
+  return `md5(string_agg(id || ':' || xmin::text, ',' ORDER BY id COLLATE "C")${filter})`;
+}
+
+function addTaskUsage(stats: TaskTokenTotals, usage: unknown): void {
   for (const entry of parseTaskUsageEntries(usage)) {
     stats.inputTokens += entry.inputTokens;
     stats.outputTokens += entry.outputTokens;
     stats.cacheReadTokens += entry.cacheReadTokens;
     stats.cacheWriteTokens += entry.cacheWriteTokens;
   }
-}
-
-/** `record.camel ?? record.snake` from `normalizeTaskUsageEntries`: a JSON null falls through too. */
-function pgUsageField(camel: string, snake: string): string {
-  return `COALESCE(NULLIF(e.entry -> '${camel}', 'null'::jsonb), e.entry -> '${snake}')`;
-}
-
-/** Absent, null, or a non-negative safe integer: the values `normalizeUsageNumber` returns unchanged. */
-function pgCanonicalTokens(value: string): string {
-  return `CASE
-    WHEN ${value} IS NULL OR ${value} = 'null'::jsonb THEN TRUE
-    WHEN jsonb_typeof(${value}) = 'number'
-      THEN (${value})::numeric BETWEEN 0 AND ${Number.MAX_SAFE_INTEGER} AND (${value})::numeric = TRUNC((${value})::numeric)
-    ELSE FALSE
-  END`;
-}
-
-/** The token count for a canonical value. Other tasks are summed in JS, so their SQL sums are discarded. */
-function pgUsageTokens(value: string): string {
-  return `CASE WHEN jsonb_typeof(${value}) = 'number' THEN (${value})::numeric ELSE 0 END`;
 }
 
 function normalizeAgentPluginProtocol(value: unknown): number {

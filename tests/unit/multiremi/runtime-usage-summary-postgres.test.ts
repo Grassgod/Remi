@@ -1,9 +1,10 @@
 /**
  * MUL-366: on PostgreSQL the runtime usage summary (task counts and token totals on every
- * hydrated runtime) is aggregated in SQL instead of pulling each task's `usage` through the
- * worker bridge. bun:sqlite still runs the original JS implementation, so the same fixture goes
- * through both backends and every field must match, including the malformed and legacy usage
- * shapes the JS parser tolerates.
+ * hydrated runtime) no longer pulls each task's `usage` through the worker bridge on every read.
+ * Counts come from SQL; settled tasks' token totals are cached per runtime under a version of
+ * those rows, and only unsettled tasks' usage is read each time. Tokens are still summed by the JS
+ * parser, and bun:sqlite keeps the plain scan, so the same fixture goes through both backends and
+ * every field must match, including after the rows change.
  *
  * Skipped (not failed) when Postgres is unreachable, matching `multiremi-postgres-store.test.ts`.
  * Point `MULTIREMI_TEST_POSTGRES_URL` at an instance where the configured role may CREATE DATABASE.
@@ -41,28 +42,21 @@ if (!pgAvailable) {
 /** Subclass rather than wrap, so the store still recognizes the Postgres backend. */
 class RecordingPostgresDb extends PostgresSyncDatabase {
   readonly statements: string[] = [];
-  readonly results: Array<{ sql: string; row: Record<string, unknown> | null }> = [];
+  /** Runs once, right after the next usage summary query returns. */
+  afterSummaryQuery: (() => void) | null = null;
   override query(sql: string): SqlStatement {
     this.statements.push(sql);
     const statement = super.query(sql);
+    if (!sql.includes("open_usage")) return statement;
     const get = statement.get.bind(statement);
     statement.get = (...params: unknown[]) => {
       const row = get(...params);
-      this.results.push({ sql, row });
+      const hook = this.afterSummaryQuery;
+      this.afterSummaryQuery = null;
+      hook?.();
       return row;
     };
     return statement;
-  }
-}
-
-/** Reports a pre-16 server, which lacks `pg_input_is_valid`. */
-class LegacyPostgresDb extends RecordingPostgresDb {
-  override query(sql: string): SqlStatement {
-    if (sql.includes("server_version_num")) {
-      this.statements.push(sql);
-      return { get: () => ({ version: "150013" }) } as unknown as SqlStatement;
-    }
-    return super.query(sql);
   }
 }
 
@@ -101,10 +95,8 @@ const EXPECTED_RUNTIME_A = {
   cacheWriteTokens: 7 + 0 + 1 + 0 + 12 + 0,
 };
 
-// The rows of runtime A the SQL cannot sum exactly (fractions, strings, invalid JSON, empty text).
-const RUNTIME_A_FALLBACK = [RUNTIME_A_TASKS[4]![1], RUNTIME_A_TASKS[5]![1], RUNTIME_A_TASKS[7]![1], RUNTIME_A_TASKS[10]![1]];
-
-// Inputs `Number()` and `JSON.parse` treat differently from PostgreSQL's numeric and jsonb parsers.
+// Inputs `Number()` and `JSON.parse` treat differently from PostgreSQL's numeric and jsonb parsers,
+// which is why the Postgres path still sums tokens in JS.
 const RUNTIME_D_USAGE: string[] = [
   JSON.stringify([{ inputTokens: 1, outputTokens: 2, cacheReadTokens: 3, cacheWriteTokens: 4 }]),
   // Unicode whitespace (numeric casts only trim ASCII), tab, hex and exponent strings.
@@ -115,10 +107,10 @@ const RUNTIME_D_USAGE: string[] = [
   JSON.stringify([{ model: "gpt\u0000", inputTokens: 200 }]),
   // Beyond double precision and range.
   `[{"inputTokens": 5.99999999999999999999, "outputTokens": 1e400}]`,
-  // Past the SQL length guard: long text, and nesting deep enough to overflow PostgreSQL's parser.
+  // Long text, and nesting deep enough to overflow PostgreSQL's parser.
   JSON.stringify([{ inputTokens: 9, model: "m".repeat(17_000) }]),
   `[{"inputTokens": 4, "nested": ${"[".repeat(20_000)}${"]".repeat(20_000)}}]`,
-  // One odd entry sends the whole task to JS.
+  // A numeric-string entry next to a plain number.
   JSON.stringify([{ inputTokens: 10 }, { inputTokens: "2" }]),
 ];
 
@@ -206,7 +198,21 @@ describe.skipIf(!pgAvailable)("Runtime usage summary on PostgreSQL (MUL-366)", (
     await admin.end();
   });
 
-  const aggregateRow = () => [...pg.results].reverse().find((result) => result.sql.includes("fallback_usage"))!.row!;
+  const LEGACY_SCAN = "SELECT id, status, usage FROM multiremi_tasks";
+  type Runtimes = ReturnType<typeof seed>;
+
+  /** Applies the same raw write to both backends. */
+  function mutate(sql: string, params: (runtimes: Runtimes) => string[]) {
+    pg.run(sql, params(pgRuntimes));
+    sqlite.run(sql, params(sqliteRuntimes));
+  }
+
+  function expectBackendsAgree(...keys: Array<keyof Runtimes>) {
+    for (const key of keys) {
+      expect(usageSummary(pgStore.getRuntime(pgRuntimes[key])))
+        .toEqual(usageSummary(sqliteStore.getRuntime(sqliteRuntimes[key])));
+    }
+  }
 
   it("matches the JS reference implementation field for field", () => {
     const pgA = usageSummary(pgStore.getRuntime(pgRuntimes.runtimeA));
@@ -215,8 +221,7 @@ describe.skipIf(!pgAvailable)("Runtime usage summary on PostgreSQL (MUL-366)", (
     expect(pgA).toEqual(sqliteA);
     for (const value of Object.values(pgA)) expect(typeof value).toBe("number");
 
-    expect(usageSummary(pgStore.getRuntime(pgRuntimes.runtimeB)))
-      .toEqual(usageSummary(sqliteStore.getRuntime(sqliteRuntimes.runtimeB)));
+    expectBackendsAgree("runtimeB");
     expect(usageSummary(pgStore.getRuntime(pgRuntimes.runtimeB))).toMatchObject({
       taskCount: 2, activeTaskCount: 1, completedTaskCount: 1, inputTokens: 1000, outputTokens: 1,
     });
@@ -226,7 +231,7 @@ describe.skipIf(!pgAvailable)("Runtime usage summary on PostgreSQL (MUL-366)", (
     });
   });
 
-  it("matches JS on inputs PostgreSQL parses differently, without raising", () => {
+  it("matches JS on usage PostgreSQL would parse differently", () => {
     const expected = {
       taskCount: RUNTIME_D_USAGE.length,
       activeTaskCount: 0,
@@ -237,33 +242,98 @@ describe.skipIf(!pgAvailable)("Runtime usage summary on PostgreSQL (MUL-366)", (
     expect(expected.inputTokens).toBeGreaterThan(300);
     expect(usageSummary(sqliteStore.getRuntime(sqliteRuntimes.runtimeD))).toEqual(expected);
     expect(usageSummary(pgStore.getRuntime(pgRuntimes.runtimeD))).toEqual(expected);
-    expect(JSON.parse(String(aggregateRow().fallback_usage))).toHaveLength(RUNTIME_D_USAGE.length - 1);
   });
 
-  it("sums writer-shaped usage in SQL and hands only other shapes to JS", () => {
+  it("reads settled usage once and again only after those rows change", () => {
+    pgStore.listRuntimes();
     pg.statements.length = 0;
     const listed = pgStore.listRuntimes().find((runtime) => runtime.id === pgRuntimes.runtimeA) ?? null;
     expect(usageSummary(listed)).toEqual(EXPECTED_RUNTIME_A);
-    expect(pg.statements.some((sql) => sql.includes("SELECT id, status, usage FROM multiremi_tasks"))).toBe(false);
-    expect(pg.statements.some((sql) => sql.includes("jsonb_array_elements"))).toBe(true);
+    expect(pg.statements.some((sql) => sql.includes("open_usage"))).toBe(true);
+    expect(pg.statements.some((sql) => sql.includes("settled_usage"))).toBe(false);
+    expect(pg.statements.some((sql) => sql.includes(LEGACY_SCAN))).toBe(false);
 
-    pgStore.getRuntime(pgRuntimes.runtimeA);
-    expect((JSON.parse(String(aggregateRow().fallback_usage)) as string[]).sort()).toEqual([...RUNTIME_A_FALLBACK].sort());
-    pgStore.getRuntime(pgRuntimes.runtimeB);
-    expect(aggregateRow().fallback_usage).toBeNull();
-    expect(Number(aggregateRow().input_tokens)).toBe(1000);
+    const settledRereads = (change: () => void) => {
+      change();
+      pg.statements.length = 0;
+      expectBackendsAgree("runtimeA", "runtimeB");
+      return pg.statements.filter((sql) => sql.includes("settled_usage")).length;
+    };
+    // Unsettled usage is read live, so its changes need no re-read.
+    expect(settledRereads(() => mutate(
+      "UPDATE multiremi_tasks SET usage = ? WHERE id = ?",
+      () => [JSON.stringify([{ inputTokens: 40, outputTokens: 4 }]), "tsk_mul366_4"],
+    ))).toBe(0);
+    expect(settledRereads(() => mutate(
+      "UPDATE multiremi_tasks SET usage = ? WHERE id = ?",
+      () => [JSON.stringify([{ inputTokens: 5000, cacheReadTokens: 9 }]), "tsk_mul366_1"],
+    ))).toBe(1);
+    expect(settledRereads(() => mutate(
+      "UPDATE multiremi_tasks SET status = 'completed' WHERE id = ?",
+      () => ["tsk_mul366_4"],
+    ))).toBe(1);
+    // Rewriting a settled row with identical values is still a new row version.
+    expect(settledRereads(() => mutate(
+      "UPDATE multiremi_tasks SET usage = usage WHERE id = ?",
+      () => ["tsk_mul366_2"],
+    ))).toBe(1);
+    expect(settledRereads(() => mutate("DELETE FROM multiremi_tasks WHERE id = ?", () => ["tsk_mul366_2"]))).toBe(1);
+    // Moving a settled task changes both runtimes.
+    expect(settledRereads(() => mutate(
+      "UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?",
+      (runtimes) => [runtimes.runtimeB, "tsk_mul366_1"],
+    ))).toBe(2);
+    expect(usageSummary(pgStore.getRuntime(pgRuntimes.runtimeB)).inputTokens).toBe(6000);
+    expect(settledRereads(() => mutate(
+      `INSERT INTO multiremi_tasks
+         (id, task_kind, agent_id, workspace_id, status, priority, prompt, attempt, max_attempts, holds_workspace,
+          created_at, updated_at, runtime_id, usage)
+       SELECT 'tsk_mul366_new', task_kind, agent_id, workspace_id, 'cancelled', priority, prompt, attempt, max_attempts,
+              holds_workspace, created_at, updated_at, runtime_id, ?
+       FROM multiremi_tasks WHERE id = ?`,
+      () => [JSON.stringify([{ inputTokens: 70 }]), "tsk_mul366_3"],
+    ))).toBe(1);
+    expect(pg.statements.some((sql) => sql.includes(LEGACY_SCAN))).toBe(false);
+
+    // Nothing changed since: no settled usage is read again.
+    expect(settledRereads(() => {})).toBe(0);
   });
 
-  it("keeps the JS path on PostgreSQL releases without pg_input_is_valid", () => {
-    const legacy = new LegacyPostgresDb(url);
+  it("rescans from one snapshot when a task settles between its two reads", () => {
+    // A second store starts with a cold cache, so its first summary reads settled usage separately.
+    const racing = new RecordingPostgresDb(url);
     try {
-      const legacyStore = new MultiremiStore(legacy);
-      legacy.statements.length = 0;
-      expect(usageSummary(legacyStore.getRuntime(pgRuntimes.runtimeA))).toEqual(EXPECTED_RUNTIME_A);
-      expect(legacy.statements.some((sql) => sql.includes("SELECT id, status, usage FROM multiremi_tasks"))).toBe(true);
-      expect(legacy.statements.some((sql) => sql.includes("jsonb_array_elements"))).toBe(false);
+      const racingStore = new MultiremiStore(racing);
+      const settle = [JSON.stringify([{ inputTokens: 800, outputTokens: 8 }]), "tsk_mul366_5"];
+      racing.afterSummaryQuery = () => {
+        racing.run("UPDATE multiremi_tasks SET status = 'completed', usage = ? WHERE id = ?", settle);
+      };
+      sqlite.run("UPDATE multiremi_tasks SET status = 'completed', usage = ? WHERE id = ?", settle);
+      racing.statements.length = 0;
+      const summary = usageSummary(racingStore.getRuntime(pgRuntimes.runtimeA));
+      expect(racing.afterSummaryQuery).toBeNull();
+      expect(racing.statements.some((sql) => sql.includes(LEGACY_SCAN))).toBe(true);
+      expect(summary).toEqual(usageSummary(sqliteStore.getRuntime(sqliteRuntimes.runtimeA)));
+      expect(usageSummary(racingStore.getRuntime(pgRuntimes.runtimeA))).toEqual(summary);
+      expectBackendsAgree("runtimeA");
     } finally {
-      legacy.close();
+      racing.close();
     }
   }, 60_000);
+
+  it("does not cache settled totals read between two writes in one transaction", () => {
+    expectBackendsAgree("runtimeA");
+    const sql = "UPDATE multiremi_tasks SET usage = ? WHERE id = ?";
+    const usage = (inputTokens: number) => [JSON.stringify([{ inputTokens }]), "tsk_mul366_10"];
+    pg.transaction(() => {
+      pg.run(sql, usage(111));
+      pg.statements.length = 0;
+      pgStore.getRuntime(pgRuntimes.runtimeA);
+      expect(pg.statements.some((statement) => statement.includes("settled_usage"))).toBe(true);
+      // Same row, same transaction: the row keeps the `xmin` the read above saw.
+      pg.run(sql, usage(222));
+    })();
+    sqlite.run(sql, usage(222));
+    expectBackendsAgree("runtimeA");
+  });
 });

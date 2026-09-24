@@ -215,8 +215,13 @@ class PgStatement implements SqlStatement {
 
 export class PostgresSyncDatabase implements SqlDatabase {
   private readonly bridge: PgBridge;
+  private transactionDepth = 0;
   constructor(url: string) {
     this.bridge = new PgBridge(url);
+  }
+  /** True while a `transaction()` callback runs; its writes are not committed yet. */
+  get inTransaction(): boolean {
+    return this.transactionDepth > 0;
   }
   query(sql: string): SqlStatement {
     return new PgStatement(this.bridge, translateSqliteToPg(sql));
@@ -236,6 +241,7 @@ export class PostgresSyncDatabase implements SqlDatabase {
   transaction<T>(fn: (...args: any[]) => T): (...args: any[]) => T {
     return (...args: any[]): T => {
       this.bridge.exec("BEGIN", []);
+      this.transactionDepth += 1;
       try {
         const result = fn(...args);
         this.bridge.exec("COMMIT", []);
@@ -247,6 +253,8 @@ export class PostgresSyncDatabase implements SqlDatabase {
           // connection already aborted the transaction
         }
         throw err;
+      } finally {
+        this.transactionDepth -= 1;
       }
     };
   }
