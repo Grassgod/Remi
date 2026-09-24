@@ -134,6 +134,8 @@ interface PageRound {
   /** Top patterns by summed duration; `serverTiming` is the first header seen. */
   apiTopPatterns: PatternAggregate[];
   blockedWrites: number;
+  /** `X-Client-Version` the deployed web bundle reported on its API calls. */
+  webClientVersion: string | null;
   /** Present only when the navigation or readiness wait failed. */
   navigationError?: string;
   wallClockMs?: number;
@@ -141,6 +143,8 @@ interface PageRound {
 
 interface Median {
   readyMs: number | null;
+  /** Rounds whose readiness wait hit the timeout; these do not enter the median. */
+  readyTimeouts: number;
   lcpMs: number | null;
   domContentLoadedMs: number | null;
   apiCalls: number | null;
@@ -307,9 +311,19 @@ function round1(value: number | null): number | null {
   return value === null ? null : Math.round(value * 10) / 10;
 }
 
+/**
+ * Rounds whose readiness wait hit the timeout. Reports written before this was
+ * a stored field still carry `readyTimeout` per round, so prefer that source.
+ */
+function countReadyTimeouts(page: PageSummary): number {
+  if (typeof page.median.readyTimeouts === "number") return page.median.readyTimeouts;
+  return page.rounds.filter((round) => round.readyTimeout).length;
+}
+
 function medianOfRounds(rounds: PageRound[]): Median {
   return {
     readyMs: round1(median(rounds.map((r) => r.readyMs).filter((v): v is number => v !== null))),
+    readyTimeouts: rounds.filter((round) => round.readyTimeout).length,
     lcpMs: round1(median(rounds.map((r) => r.lcpMs).filter((v): v is number => v !== null))),
     domContentLoadedMs: round1(
       median(rounds.map((r) => r.domContentLoadedMs).filter((v): v is number => v !== null)),
@@ -344,12 +358,23 @@ function resolveCachedChromium(): string {
 
 // ── Measurement ──────────────────────────────────────────────────────────────
 
+interface ApiResponseInfo {
+  method: string;
+  url: string;
+  status: number | null;
+  serverTiming: string | null;
+  /** `X-Client-Version` the deployed web app puts on its own API calls. */
+  clientVersion: string | null;
+}
+
 interface PageCollectors {
-  apiResponses: Map<string, { method: string; url: string; status: number | null; serverTiming: string | null }>;
+  apiResponses: Map<string, ApiResponseInfo>;
   blockedWrites: BlockedWrite[];
   requestStart: Map<unknown, number>;
   /** Identifiers masked by value, not shape (workspace id/slug, member id). */
   knownIds: string[];
+  /** First client version observed this page load. */
+  webClientVersion: string | null;
 }
 
 function attachCollectors(
@@ -363,6 +388,7 @@ function attachCollectors(
     blockedWrites: [],
     requestStart: new Map(),
     knownIds,
+    webClientVersion: null,
   };
 
   // Read-only guard: only GET/HEAD reach the server. Everything else is
@@ -399,12 +425,17 @@ function attachCollectors(
     const request = response.request();
     const started = collectors.requestStart.get(request);
     if (started !== undefined) collectors.requestStart.delete(request);
+    const clientVersion = request.headers()["x-client-version"] ?? null;
+    if (!collectors.webClientVersion && clientVersion) {
+      collectors.webClientVersion = clientVersion;
+    }
     const existing = collectors.apiResponses.get(url);
     collectors.apiResponses.set(url, {
       method: request.method(),
       url,
       status: response.status(),
       serverTiming: response.headers()["server-timing"] ?? existing?.serverTiming ?? null,
+      clientVersion: clientVersion ?? existing?.clientVersion ?? null,
     });
   });
 
@@ -676,6 +707,15 @@ async function resolveIdentity(baseUrl: string, token: string): Promise<Identity
   };
 }
 
+/** Reduces `ghcr.io/org/image@sha256:...` to `sha256:abcd1234` for the report. */
+function digestOf(imageRef: string | undefined): string | null {
+  if (!imageRef) return null;
+  const digest = imageRef.split("@")[1];
+  if (!digest) return null;
+  const [algorithm, value] = digest.split(":");
+  return value ? `${algorithm}:${value.slice(0, 12)}` : null;
+}
+
 /** Reads the live release so the report names the build it measured. */
 async function readDeployedVersion(
   baseUrl: string,
@@ -687,12 +727,23 @@ async function readDeployedVersion(
     });
     if (!res.ok) return { error: `HTTP ${res.status}` };
     const body = (await res.json()) as {
-      currentRelease?: { version?: string; ref?: string; publishedAt?: string };
+      currentRelease?: {
+        version?: string;
+        ref?: string;
+        publishedAt?: string;
+        apiImage?: string;
+        webImage?: string;
+      };
     };
+    const current = body.currentRelease;
     return {
-      apiVersion: body.currentRelease?.version ?? null,
-      apiRef: body.currentRelease?.ref ?? null,
-      apiPublishedAt: body.currentRelease?.publishedAt ?? null,
+      apiVersion: current?.version ?? null,
+      apiRef: current?.ref ?? null,
+      apiPublishedAt: current?.publishedAt ?? null,
+      // Image digests identify the running containers even when the releases
+      // share a version tag.
+      apiImageDigest: digestOf(current?.apiImage),
+      webImageDigest: digestOf(current?.webImage),
     };
   } catch (error) {
     return { error: (error as Error).message };
@@ -956,8 +1007,15 @@ function buildMarkdown(report: {
   lines.push(`- 运行机器：${meta.runner ?? "unknown"}`);
   lines.push(`- 运行模式：${meta.mode ?? "unknown"}`);
   lines.push(`- 每页轮数：${meta.rounds ?? "?"}`);
-  lines.push(`- API 版本：${meta.apiVersion ?? "未知"}`);
-  lines.push(`- 前端版本：${meta.apiRef ? "未知（未暴露版本接口）" : "未知"}`);
+  const webVersion = (meta as { webVersion?: string | null }).webVersion;
+  const webDigest = (meta as { webImageDigest?: string | null }).webImageDigest;
+  const apiDigest = (meta as { apiImageDigest?: string | null }).apiImageDigest;
+  lines.push(
+    `- 前端版本：${webVersion ? `\`${webVersion}\`` : "未知"}（部署包上报的 \`X-Client-Version\`；镜像 ${webDigest ?? "未知"}）`,
+  );
+  lines.push(
+    `- API 版本：${meta.apiVersion ?? "未知"}（ref ${meta.apiRef ? meta.apiRef.slice(0, 12) : "未知"}；镜像 ${apiDigest ?? "未知"}）`,
+  );
   lines.push("");
   lines.push("## 判定口径");
   lines.push("");
@@ -977,11 +1035,20 @@ function buildMarkdown(report: {
   lines.push("| 页面 | 就绪 ms | LCP ms | DOMContentLoaded ms | API 数 | API 传输字节 | 最慢 API ms |");
   lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: |");
   for (const page of report.pages) {
+    const pageTimeouts = countReadyTimeouts(page);
+    const timeoutNote = pageTimeouts > 0 ? ` ⚠${pageTimeouts}` : "";
     lines.push(
-      `| ${page.key} | ${fmtMs(page.median.readyMs)} | ${fmtMs(page.median.lcpMs)} | ${fmtMs(page.median.domContentLoadedMs)} | ${page.median.apiCalls ?? "-"} | ${fmtBytes(page.median.apiEncodedBytes)} | ${fmtMs(page.median.slowestApiMs)} |`,
+      `| ${page.key} | ${fmtMs(page.median.readyMs)}${timeoutNote} | ${fmtMs(page.median.lcpMs)} | ${fmtMs(page.median.domContentLoadedMs)} | ${page.median.apiCalls ?? "-"} | ${fmtBytes(page.median.apiEncodedBytes)} | ${fmtMs(page.median.slowestApiMs)} |`,
     );
   }
   lines.push("");
+  const totalTimeouts = report.pages.reduce((sum, page) => sum + countReadyTimeouts(page), 0);
+  if (totalTimeouts > 0) {
+    lines.push(
+      `> ⚠ 有 ${totalTimeouts} 次页面加载在 ${Math.round(READY_TIMEOUT_MS / 1000)} s 就绪等待内没有满足口径（上表标 ⚠N）。这些轮次不进中位数，只保留在明细里；中位数由剩余轮次计算。`,
+    );
+    lines.push("");
+  }
   lines.push("## 每轮明细");
   lines.push("");
   lines.push("| 轮 | 页面 | 就绪 ms | API 数 | 传输字节 | 解码字节 | 最慢 API | 耗时 ms | Server-Timing |");
@@ -1130,7 +1197,7 @@ function buildHtml(report: {
     .map(
       (page) => `<tr>
     <td class="key">${esc(page.key)}</td>
-    <td class="num${(page.median.readyMs ?? 0) >= 10000 ? " bad" : ""}">${fmtMs(page.median.readyMs)}</td>
+    <td class="num${(page.median.readyMs ?? 0) >= 10000 ? " bad" : ""}">${fmtMs(page.median.readyMs)}${countReadyTimeouts(page) > 0 ? ` <span class="muted">⚠${countReadyTimeouts(page)}</span>` : ""}</td>
     <td class="num">${fmtMs(page.median.lcpMs)}</td>
     <td class="num">${fmtMs(page.median.domContentLoadedMs)}</td>
     <td class="num">${page.median.apiCalls ?? "-"}</td>
@@ -1222,6 +1289,7 @@ function buildHtml(report: {
 
   const ambient = meta.ambientLatency;
   const selfTest = meta.writeGuardSelfTest;
+  const totalTimeouts = report.pages.reduce((sum, page) => sum + countReadyTimeouts(page), 0);
 
   return `<!doctype html>
 <html lang="zh-CN">
@@ -1284,6 +1352,7 @@ tr:last-child td{border-bottom:0}
 </section>
 <section>
   <h2>每页中位数</h2>
+  ${totalTimeouts > 0 ? `<div class="callout">⚠ 有 ${totalTimeouts} 次页面加载在 ${Math.round(READY_TIMEOUT_MS / 1000)} s 内没有满足就绪口径（表中标 ⚠N）。这些轮次不进中位数，只保留在「每轮明细」里。</div>` : ""}
   <div class="tablewrap"><table>
     <thead><tr><th>页面</th><th class="num">就绪 ms</th><th class="num">LCP ms</th><th class="num">DCL ms</th><th class="num">API 数</th><th class="num">API 传输</th><th class="num">API 解码</th><th class="num">最慢 API ms</th></tr></thead>
     <tbody>
@@ -1391,6 +1460,7 @@ async function runPageRound(
     slowestApi: calls[0] ?? null,
     apiTopPatterns: aggregateByPattern(calls).slice(0, 5),
     blockedWrites: collectors.blockedWrites.length,
+    webClientVersion: collectors.webClientVersion,
     wallClockMs: totalMs,
     ...(navigationError ? { navigationError } : {}),
   };
@@ -1525,6 +1595,11 @@ async function main(): Promise<void> {
   const inboxProbe = opts.skipInboxProbe ? [] : await inboxPayloadProbe(opts.baseUrl, token);
 
   const generatedAt = new Date().toISOString();
+  const webVersions = pages
+    .flatMap((page) => page.rounds.map((round) => round.webClientVersion))
+    .filter((value): value is string => typeof value === "string" && value.length > 0);
+  const webVersion = webVersions.length > 0 ? webVersions[0] : null;
+
   const meta: Record<string, unknown> = {
     issue: "MUL-367",
     generatedAt,
@@ -1550,6 +1625,9 @@ async function main(): Promise<void> {
     ambientLatency: { before: ambientBefore, after: ambientAfter },
     ambientNote:
       "生产为共享环境：同一台机器复跑时，先看 /api/config 的中位耗时是否与本次接近，再比较页面数字。",
+    webVersion,
+    webVersionNote:
+      "取自部署后的 Web 包在每次 API 调用上带的 X-Client-Version。当前生产由发布流水线构建，未注入 NEXT_PUBLIC_APP_VERSION 时该值为包内默认版本，不能等同于 Release tag。",
     ...deployed,
   };
 
