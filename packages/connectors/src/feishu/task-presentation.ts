@@ -77,7 +77,11 @@ export class FeishuTaskPresentation {
     try { return await this.consumeTask(stream); }
     catch (error) {
       // Handover/shutdown is not a task failure; the next leased consumer will resume.
-      if (!this.signal.aborted && !this.state.resultMessageId) await this.receipt("failed");
+      // The marker is best effort: the original error decides whether the outbox retries.
+      if (!this.signal.aborted && !this.state.resultMessageId) {
+        await this.receipt("failed").catch(failure =>
+          this.options.log?.(`Failure receipt update failed: ${String(failure)}`));
+      }
       throw error;
     }
   }
