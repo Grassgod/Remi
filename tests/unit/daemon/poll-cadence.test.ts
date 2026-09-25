@@ -7,6 +7,7 @@ import {
   type DaemonWakeupTransport,
 } from "../../../packages/server/src/worker/daemon-websocket.js";
 import { MultiremiDaemon } from "@multiremi/daemon.js";
+import type { FeishuBotRuntimeState } from "@multiremi/contracts/types.js";
 
 interface LoopProbe {
   daemon: MultiremiDaemon & Record<string, unknown>;
@@ -38,6 +39,13 @@ function createLoopDaemon(options: {
   taskWakeup?: DaemonWakeupTransport | null;
   taskWakeupConnect?: (url: string, init: { headers: Record<string, string> }) => DaemonWakeupSocketLike;
   pluginDesiredRefreshMs?: number;
+  heartbeatIntervalMs?: number | null;
+  /**
+   * The concierge supervisor. `hostAttached` is what `setFeishuConciergeHost()`
+   * installs (every long-running daemon gets one); `state` is what the control
+   * plane actually assigned, which is the distinction the cadence turns on.
+   */
+  concierge?: { state: FeishuBotRuntimeState } | null;
 } = {}): LoopProbe {
   const state = { heartbeats: 0, claims: 0, desiredGets: 0 };
   const probe: LoopProbe = {
@@ -85,7 +93,7 @@ function createLoopDaemon(options: {
     agentPluginReconcileAbort: null,
     gcTimer: null,
     gcInFlight: null,
-    feishuConcierge: null,
+    feishuConcierge: conciergeStub(options.concierge),
     botMenuPublisher: null,
     terminalAuthorityCleanupRetryWake: null,
     claimIdleBaseMs: 3000,
@@ -104,7 +112,7 @@ function createLoopDaemon(options: {
       pollIntervalMs: 20,
       maxConcurrency: 1,
       runtimeId: "rt_cadence",
-      heartbeatIntervalMs: null,
+      heartbeatIntervalMs: options.heartbeatIntervalMs ?? null,
       claimIdleMaxMs: 30_000,
       pluginDesiredRefreshMs: options.pluginDesiredRefreshMs ?? 30_000,
       taskWakeupEnabled: options.taskWakeupConnect !== undefined || options.taskWakeup !== undefined,
@@ -232,6 +240,20 @@ afterEach(async () => {
   jest.useRealTimers();
 });
 
+/**
+ * Minimal stand-in for `FeishuConciergeSupervisor`: the cadence reads
+ * `snapshot().state`, and the test mutates `state` to simulate a handover.
+ */
+function conciergeStub(state: { state: FeishuBotRuntimeState } | null | undefined) {
+  if (!state) return null;
+  return { snapshot: () => ({ state: state.state, appliedRevision: 0, botName: null }) };
+}
+
+/** The interval the daemon would use for the next heartbeat right now. */
+function heartbeatIntervalOf(probe: LoopProbe): number {
+  return (probe.daemon as unknown as { heartbeatIntervalMs(): number }).heartbeatIntervalMs();
+}
+
 function track(probe: LoopProbe): LoopProbe {
   running.push(probe.stop);
   return probe;
@@ -346,21 +368,97 @@ describe("daemon poll cadence", () => {
     expect(probe.desiredGets).toBe(2);
   });
 
-  it("heartbeats every 10s, or every 3s while hosting the Feishu concierge", async () => {
+  /**
+   * Every long-running daemon is *offered* the concierge host so the control
+   * plane may hand it the bot, but only the assigned Runtime may run the fast
+   * heartbeat. Reading "has a host" as "is hosting" pinned the whole fleet to 3s.
+   */
+  it("keeps a candidate-but-unassigned host on the 10s heartbeat", async () => {
     jest.useFakeTimers();
-    const plain = track(createLoopDaemon({ ack: () => ({ agent_plugins: { revision: "rev-1" } }) }));
-    await flushMicrotasks();
-    await advance(60_000);
-    expect((plain.daemon as unknown as { heartbeatIntervalMs(): number }).heartbeatIntervalMs()).toBe(10_000);
-    expect(plain.heartbeats).toBe(7);
+    const probe = track(createLoopDaemon({
+      ack: () => ({ agent_plugins: { revision: "rev-1" } }),
+      concierge: { state: "stopped" },
+    }));
 
-    const concierge = track(createLoopDaemon({ ack: () => ({ agent_plugins: { revision: "rev-1" } }) }));
-    (concierge.daemon as unknown as { feishuConcierge: unknown }).feishuConcierge = { host: true };
     await flushMicrotasks();
+    expect(heartbeatIntervalOf(probe)).toBe(10_000);
     await advance(60_000);
-    expect((concierge.daemon as unknown as { heartbeatIntervalMs(): number }).heartbeatIntervalMs()).toBe(3_000);
+    // The immediate first heartbeat plus one per 10s window.
+    expect(probe.heartbeats).toBe(7);
+  });
+
+  it("moves an assigned, running host to the 3s heartbeat", async () => {
+    jest.useFakeTimers();
+    const probe = track(createLoopDaemon({
+      ack: () => ({ agent_plugins: { revision: "rev-1" } }),
+      concierge: { state: "online" },
+    }));
+
+    await flushMicrotasks();
+    expect(heartbeatIntervalOf(probe)).toBe(3_000);
+    await advance(60_000);
     // 3s cadence plus the immediate first heartbeat in the same window.
-    expect(concierge.heartbeats).toBe(21);
+    expect(probe.heartbeats).toBe(21);
+  });
+
+  it("returns to the 10s heartbeat after the concierge is stopped or handed over", async () => {
+    jest.useFakeTimers();
+    const concierge = { state: "online" as FeishuBotRuntimeState };
+    const probe = track(createLoopDaemon({
+      ack: () => ({ agent_plugins: { revision: "rev-1" } }),
+      concierge,
+    }));
+
+    await flushMicrotasks();
+    expect(heartbeatIntervalOf(probe)).toBe(3_000);
+    await advance(30_000);
+    expect(probe.heartbeats).toBeGreaterThanOrEqual(10);
+
+    // The handover target reports `stopped`; this Runtime must drop back to the
+    // slow lane instead of keeping the fleet-wide 3s cadence alive.
+    concierge.state = "stopped";
+    (probe.daemon as unknown as { refreshHeartbeatCadence(): void }).refreshHeartbeatCadence();
+    expect(heartbeatIntervalOf(probe)).toBe(10_000);
+
+    const before = probe.heartbeats;
+    await advance(30_000);
+    // ~3 heartbeats in 30s at 10s, not the 10 the fast lane would have sent.
+    expect(probe.heartbeats - before).toBeLessThanOrEqual(4);
+  });
+
+  it("shortens the pending wait when the concierge is assigned, and honours the env override", async () => {
+    jest.useFakeTimers();
+    const concierge = { state: "stopped" as FeishuBotRuntimeState };
+    const probe = track(createLoopDaemon({
+      ack: () => ({ agent_plugins: { revision: "rev-1" } }),
+      concierge,
+      heartbeatIntervalMs: 4_000,
+    }));
+    const internal = probe.daemon as unknown as {
+      nextHeartbeatAt: number;
+      appliedHeartbeatIntervalMs: number;
+      refreshHeartbeatCadence(): void;
+    };
+
+    await flushMicrotasks();
+    // The override replaces the *normal* cadence, and the concierge is not
+    // assigned yet, so this is what the daemon runs on.
+    expect(heartbeatIntervalOf(probe)).toBe(4_000);
+
+    // Assignment must not wait out the remainder of the old interval: with 3s
+    // applied the next heartbeat is due within 3s of now, not up to 4s.
+    await advance(1_000);
+    concierge.state = "starting";
+    internal.refreshHeartbeatCadence();
+    expect(internal.appliedHeartbeatIntervalMs).toBe(3_000);
+    expect(internal.nextHeartbeatAt - Date.now()).toBeLessThanOrEqual(3_000);
+
+    // The assigned host keeps 3s: MULTIREMI_HEARTBEAT_INTERVAL_MS covers the
+    // normal cadence only, so a privileged 3s lane cannot be widened by it.
+    await advance(30_000);
+    const before = probe.heartbeats;
+    await advance(30_000);
+    expect(probe.heartbeats - before).toBeGreaterThanOrEqual(9);
   });
 
   it("backs idle claims off 3s -> 30s and caps there", async () => {

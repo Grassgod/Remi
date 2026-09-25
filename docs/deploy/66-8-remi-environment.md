@@ -20,7 +20,7 @@ summary: 说明 daemon 进程配置、工作区 bot 的控制面分配、凭据�
 | `MULTIREMI_DAEMON_PORT` | 本机 daemon 控制端口，默认 6131；多 provider 时分配相邻端口。 |
 | `MULTIREMI_GC_ENABLED` | 默认 true；是否运行周期性 workspace GC。 |
 | `MULTIREMI_GC_INTERVAL_MS` / `MULTIREMI_GC_TTL_MS` | 启动默认分别为 900000 / 259200000 ms。工作区 `settings.session_archive` 可覆盖有效间隔和 TTL，见[GC policy](../../packages/daemon/src/agent-runtime/workspace/gc-policy.ts)。 |
-| `MULTIREMI_HEARTBEAT_INTERVAL_MS` | 心跳间隔，默认 10000 ms。承载 Feishu concierge 的那台 daemon 固定用 3000 ms，因为 `pending_feishu_outbound` 只通过 heartbeat ack 下发；该取值不随此变量变大。 |
+| `MULTIREMI_HEARTBEAT_INTERVAL_MS` | 普通心跳间隔，默认 10000 ms。**只覆盖普通间隔**：被控制面分配到 Feishu concierge 的那台 daemon 固定用 3000 ms（`pending_feishu_outbound` 只通过 heartbeat ack 下发），不随此变量变大。是否属于「那台」按 supervisor 的实际状态判断，而不是「有没有挂 concierge host」——每台常驻 daemon 都会挂 host，否则所有机器都会停在 3 s。 |
 | `MULTIREMI_CLAIM_IDLE_MAX_MS` | 空闲 claim 的退避上限，默认 30000 ms；退避从 3000 ms 起翻倍到该值。 |
 | `MULTIREMI_PLUGIN_DESIRED_REFRESH_MS` | 只在 server 未在 heartbeat ack 里返回 desired revision 时生效的兜底刷新间隔，默认 30000 ms。 |
 | `MULTIREMI_AUTHORITY_PROBE_MAX_MS` | terminal authority 之后 register 探测的间隔上限，默认 900000 ms（15 分钟）。 |
@@ -57,9 +57,17 @@ recovers; the HTTP client does not automatically replay writes.
 
 Heartbeat, desired-state refresh, and task claim run on separate timers:
 
-- **Heartbeat**: 10 s by default, 3 s on the Runtime that hosts the workspace
-  Feishu concierge (its ack carries proactive replies). Runtime liveness tolerates
-  this easily — the stale window is 5 minutes, see
+- **Heartbeat**: 10 s by default. The Runtime the control plane actually
+  *assigned* the workspace Feishu concierge to runs 3 s, because its ack carries
+  proactive replies. Being able to host the bot is not the same thing: every
+  long-running daemon is offered the host so the bot can be handed to any of
+  them, and only `FeishuConciergeSupervisor.snapshot().state !== "stopped"`
+  (starting, online, failed) selects the fast lane. Assignment and handover
+  re-apply the cadence immediately, so a Runtime receiving the bot does not wait
+  out a pending 10 s interval, and one that hands it back returns to 10 s.
+  `MULTIREMI_HEARTBEAT_INTERVAL_MS` replaces the normal interval only; the
+  assigned Runtime keeps 3 s. `/health` reports `heartbeat_interval_ms`. Runtime
+  liveness tolerates this easily — the stale window is 5 minutes, see
   [runtime-health](../../packages/contracts/src/runtime-health.ts).
 - **Desired Agent Plugins**: fetched when the heartbeat ack reports a revision
   that differs from the cached one, forced every 10 minutes as a backstop, and

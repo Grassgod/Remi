@@ -805,6 +805,8 @@ export class MultiremiDaemon {
   /** Heartbeat/claim/desired cadences, split so an idle lane cannot slow the others. */
   private nextHeartbeatAt = 0;
   private nextClaimAt = 0;
+  /** Interval applied by the last cadence refresh, to detect a lane change. */
+  private appliedHeartbeatIntervalMs = 0;
   private claimIdleMs: number;
   private readonly claimIdleBaseMs: number;
   private lastDesired: { revision: string; artifacts: AgentPluginArtifactSpec[] } | null = null;
@@ -1219,8 +1221,13 @@ export class MultiremiDaemon {
             await sleep(Math.max(10, Math.min(this.options.pollIntervalMs, 100)));
             continue;
           }
+          // The concierge can be assigned or released at any time, so pick up a
+          // new cadence before testing the deadline.
+          this.refreshHeartbeatCadence();
           if (this.options.once || Date.now() >= this.nextHeartbeatAt) {
-            this.nextHeartbeatAt = Date.now() + this.heartbeatIntervalMs();
+            const heartbeatIntervalMs = this.heartbeatIntervalMs();
+            this.appliedHeartbeatIntervalMs = heartbeatIntervalMs;
+            this.nextHeartbeatAt = Date.now() + heartbeatIntervalMs;
             const ack = await this.client.heartbeatRuntime(
               this.options.runtimeId!,
               this.sshMeshManager.getHeartbeatStatus(),
@@ -1348,13 +1355,52 @@ export class MultiremiDaemon {
   }
 
   /**
-   * Heartbeat cadence. The concierge host keeps a fast loop because its ack is
-   * the only delivery path for proactive Feishu replies; every other Runtime
-   * tolerates the slower cadence against the 5-minute staleness window.
+   * Heartbeat cadence. Only the Runtime the control plane actually assigned the
+   * concierge to runs the fast loop, because its ack is the only delivery path
+   * for proactive Feishu replies.
+   *
+   * Being *able* to host the bot is not the same thing: every long-running
+   * daemon is offered the host so the control plane may hand the bot to any of
+   * them, and treating that as "hosting" pinned the whole fleet to 3s.
+   * `this.options.heartbeatIntervalMs` (the MULTIREMI_HEARTBEAT_INTERVAL_MS
+   * override and the legacy pollIntervalMs) therefore applies to the normal
+   * cadence only — the assigned Runtime stays at 3s.
    */
   private heartbeatIntervalMs(): number {
-    return this.options.heartbeatIntervalMs
-      ?? (this.feishuConcierge !== null ? CONCIERGE_HEARTBEAT_INTERVAL_MS : DEFAULT_HEARTBEAT_INTERVAL_MS);
+    if (this.conciergeIsAssigned()) return CONCIERGE_HEARTBEAT_INTERVAL_MS;
+    return this.options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+  }
+
+  /**
+   * Whether the control plane currently has the concierge running here.
+   *
+   * `starting` and `failed` also count as assigned: both follow a directive that
+   * picked this Runtime, and the failed retry ladder depends on the fast
+   * heartbeat to re-read that directive. Only `stopped` means it is not ours.
+   */
+  private conciergeIsAssigned(): boolean {
+    return (this.feishuConcierge?.snapshot().state ?? "stopped") !== "stopped";
+  }
+
+  /**
+   * Re-apply the heartbeat interval after the assignment can have changed.
+   *
+   * Shortening it has to take effect within the new interval rather than after
+   * the remainder of the old one: a Runtime that just received the bot cannot
+   * sit out a pending 10s wait before its first 3s heartbeat. Lengthening it
+   * only affects the deadline the next heartbeat sets, which is what a handover
+   * away wants — losing the bot never provokes an extra heartbeat.
+   */
+  private refreshHeartbeatCadence(): void {
+    const interval = this.heartbeatIntervalMs();
+    if (interval === this.appliedHeartbeatIntervalMs) return;
+    const previous = this.appliedHeartbeatIntervalMs;
+    this.appliedHeartbeatIntervalMs = interval;
+    if (previous === 0 || interval >= previous) return;
+    this.nextHeartbeatAt = Math.min(this.nextHeartbeatAt, Date.now() + interval);
+    // The poll sleep is waiting on the old, longer deadline; wake it so it can
+    // recompute against the new one.
+    this.wakeClaim();
   }
 
   /**
@@ -1924,6 +1970,11 @@ export class MultiremiDaemon {
       .then(() => supervisor.apply(directive))
       .catch((error) => {
         log.warn(`Feishu concierge reconcile failed: ${error instanceof Error ? error.message : String(error)}`);
+      })
+      .finally(() => {
+        // Applying a directive is what moves this Runtime into or out of the
+        // concierge lane, so the heartbeat cadence has to follow it.
+        this.refreshHeartbeatCadence();
       });
   }
 
@@ -4605,6 +4656,7 @@ export class MultiremiDaemon {
         next_probe_at: this.authorityProbeNextAt,
       },
       claim_wake_ws: this.claimWakeWsStatus(),
+      heartbeat_interval_ms: this.heartbeatIntervalMs(),
       // Null when no poll loop has started yet (health is served from startup).
       claim_idle_next_at: this.nextClaimAt > 0 ? new Date(this.nextClaimAt).toISOString() : null,
       pid: process.pid,
