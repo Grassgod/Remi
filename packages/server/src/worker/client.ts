@@ -382,10 +382,23 @@ export class MultiremiDaemonClient {
           } : {}),
         }
       : undefined;
+    // `agent_plugins.revision` is the daemon's change token for the desired
+    // Plugin set: while it is unchanged the poll loop skips that GET entirely.
+    // Normalize it here so a server that omits the field, or a proxy that
+    // reshapes it, degrades to the periodic refresh instead of `undefined`.
+    const rawAgentPlugins = resp.agent_plugins as { revision?: unknown } | undefined;
+    const agentPlugins = typeof rawAgentPlugins?.revision === "string" && rawAgentPlugins.revision
+      ? { revision: rawAgentPlugins.revision }
+      : undefined;
+    // Strip the raw value first: spreading `resp` after this block would
+    // otherwise put a malformed revision back and defeat the normalization.
+    const { agent_plugins: _rawAgentPlugins, ...rest } = resp;
+    void _rawAgentPlugins;
     return {
       runtime_id: runtimeId,
-      status: resp.status ?? "ok",
-      ...resp,
+      status: rest.status ?? "ok",
+      ...rest,
+      ...(agentPlugins ? { agent_plugins: agentPlugins } : {}),
       ...(pendingFeishuOutbound ? { pending_feishu_outbound: pendingFeishuOutbound } : {}),
     } as MultiremiDaemonHeartbeatConfigAck;
   }

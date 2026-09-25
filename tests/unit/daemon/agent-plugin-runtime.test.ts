@@ -509,6 +509,185 @@ describe("AgentPluginRuntimeReconciler", () => {
       installedDigest: null,
     });
   });
+
+  it("deduplicates steady-state reports across repeated reconciler rounds", async () => {
+    const root = tempRoot();
+    const artifact = makeArtifact("claude");
+    const cache = new AgentPluginCache({
+      root: join(root, "cache"),
+      fetch: async () => artifactResponse(artifact.bytes),
+    });
+    const reports: RuntimePluginState[] = [];
+    const reconciler = new AgentPluginRuntimeReconciler({
+      cache,
+      reportState: (state) => { reports.push(state); },
+    });
+    const snapshot = { ...makeSnapshot("claude", artifact.digest), artifactUrl: "https://example.test/a" };
+
+    expect((await reconciler.reconcile([snapshot]))[0]?.status).toBe("ready");
+    const afterInstall = reports.length;
+    expect(afterInstall).toBeGreaterThan(0);
+    expect(reports.at(-1)?.status).toBe("ready");
+
+    for (let round = 0; round < 10; round++) {
+      expect((await reconciler.reconcile([snapshot]))[0]?.status).toBe("ready");
+    }
+    expect(reports.length).toBe(afterInstall);
+  });
+
+  it("does not re-report when only updatedAt moved, but does when a compared field changes", async () => {
+    const root = tempRoot();
+    const artifact = makeArtifact("claude");
+    const cache = new AgentPluginCache({
+      root: join(root, "cache"),
+      fetch: async () => artifactResponse(artifact.bytes),
+    });
+    const reports: RuntimePluginState[] = [];
+    const reconciler = new AgentPluginRuntimeReconciler({
+      cache,
+      reportState: (state) => { reports.push(state); },
+    });
+    const snapshot = { ...makeSnapshot("claude", artifact.digest), artifactUrl: "https://example.test/a" };
+    const ready = (await reconciler.reconcile([snapshot]))[0]!;
+    const afterInstall = reports.length;
+
+    // The server baseline carries a different updatedAt only; that alone must dedupe.
+    reconciler.syncReportedStates([{ ...ready, updatedAt: new Date(Date.parse(ready.updatedAt) + 60_000).toISOString() }]);
+    await reconciler.reconcile([snapshot]);
+    expect(reports.length).toBe(afterInstall);
+
+    // A compared field the server holds differently must be re-reported once.
+    reconciler.syncReportedStates([{ ...ready, status: "pending", installedDigest: null }]);
+    expect((await reconciler.reconcile([snapshot]))[0]?.status).toBe("ready");
+    expect(reports.length).toBe(afterInstall + 1);
+    expect(reports.at(-1)?.status).toBe("ready");
+  });
+
+  it("re-reports once after a failed report instead of losing the transition", async () => {
+    const root = tempRoot();
+    const artifact = makeArtifact("claude");
+    const cache = new AgentPluginCache({
+      root: join(root, "cache"),
+      fetch: async () => artifactResponse(artifact.bytes),
+    });
+    const attempts: RuntimePluginState[] = [];
+    let failNext = false;
+    const reconciler = new AgentPluginRuntimeReconciler({
+      cache,
+      reportState: (state) => {
+        attempts.push(state);
+        if (failNext) {
+          failNext = false;
+          throw new Error("control plane unreachable");
+        }
+      },
+    });
+    const snapshot = { ...makeSnapshot("claude", artifact.digest), artifactUrl: "https://example.test/a" };
+    expect((await reconciler.reconcile([snapshot]))[0]?.status).toBe("ready");
+    const delivered = attempts.length;
+
+    failNext = true;
+    reconciler.clearReportedStates();
+    await reconciler.reconcile([snapshot]);
+    expect(attempts.length).toBe(delivered + 1);
+
+    // The failed POST dropped the baseline, so the next round retries exactly once.
+    await reconciler.reconcile([snapshot]);
+    expect(attempts.length).toBe(delivered + 2);
+    await reconciler.reconcile([snapshot]);
+    expect(attempts.length).toBe(delivered + 2);
+  });
+
+  it("re-reports after the server baseline diverges and after a retry generation bump", async () => {
+    const root = tempRoot();
+    const artifact = makeArtifact("claude");
+    const cache = new AgentPluginCache({
+      root: join(root, "cache"),
+      fetch: async () => artifactResponse(artifact.bytes),
+    });
+    const reports: RuntimePluginState[] = [];
+    const reconciler = new AgentPluginRuntimeReconciler({
+      cache,
+      reportState: (state) => { reports.push(state); },
+    });
+    const snapshot = { ...makeSnapshot("claude", artifact.digest), artifactUrl: "https://example.test/a" };
+    const ready = (await reconciler.reconcile([snapshot]))[0]!;
+    await reconciler.reconcile([snapshot]);
+    const steady = reports.length;
+
+    // A desired-state refresh that reports a different server view forces one report.
+    reconciler.syncReportedStates([{ ...ready, status: "blocked", lastErrorCode: "daemon_plugin_reconcile_timeout" }]);
+    expect((await reconciler.reconcile([snapshot]))[0]?.status).toBe("ready");
+    expect(reports.length).toBe(steady + 1);
+
+    // A server-requested retry (UI "retry") bumps retryGeneration on the desired payload.
+    const bumped = { ...snapshot, retryGeneration: 1 };
+    expect((await reconciler.reconcile([bumped]))[0]).toMatchObject({ status: "ready", retryGeneration: 1 });
+    expect(reports.at(-1)).toMatchObject({ retryGeneration: 1, status: "ready" });
+    const afterBump = reports.length;
+    await reconciler.reconcile([bumped]);
+    expect(reports.length).toBe(afterBump);
+  });
+
+  it("re-reports after the server marks a stuck plugin blocked", async () => {
+    const root = tempRoot();
+    const artifact = makeArtifact("claude");
+    const cache = new AgentPluginCache({
+      root: join(root, "cache"),
+      fetch: async () => artifactResponse(artifact.bytes),
+    });
+    const reports: RuntimePluginState[] = [];
+    const reconciler = new AgentPluginRuntimeReconciler({
+      cache,
+      reportState: (state) => { reports.push(state); },
+    });
+    const snapshot = { ...makeSnapshot("claude", artifact.digest), artifactUrl: "https://example.test/a" };
+    const ready = (await reconciler.reconcile([snapshot]))[0]!;
+    await reconciler.reconcile([snapshot]);
+    const steady = reports.length;
+
+    // A plugin that never reported (daemon offline, desired added while down)
+    // gets marked blocked server-side by AGENT_PLUGIN_PENDING_HEARTBEAT_LIMIT.
+    // Nothing the daemon reports changes, so only the desired refresh can turn
+    // that back into a report; the daemon must not dedupe it away.
+    const blocked = { ...ready, status: "blocked" as const, lastErrorCode: "daemon_plugin_reconcile_timeout" };
+    reconciler.restoreStates([blocked]);
+    reconciler.syncReportedStates([blocked]);
+    expect((await reconciler.reconcile([snapshot]))[0]?.status).toBe("ready");
+    expect(reports.length).toBe(steady + 1);
+    expect(reports.at(-1)?.status).toBe("ready");
+
+    // And it settles again immediately after that one recovery report.
+    await reconciler.reconcile([snapshot]);
+    expect(reports.length).toBe(steady + 1);
+  });
+
+  it("drops the dedupe baseline when a plugin stops being desired", async () => {
+    const root = tempRoot();
+    const artifact = makeArtifact("claude");
+    const cache = new AgentPluginCache({
+      root: join(root, "cache"),
+      fetch: async () => artifactResponse(artifact.bytes),
+    });
+    const reports: RuntimePluginState[] = [];
+    const reconciler = new AgentPluginRuntimeReconciler({
+      cache,
+      reportState: (state) => { reports.push(state); },
+    });
+    const snapshot = { ...makeSnapshot("claude", artifact.digest), artifactUrl: "https://example.test/a" };
+    await reconciler.reconcile([snapshot]);
+    const reported = reports.length;
+
+    await reconciler.reconcile([]);
+    expect((reconciler as unknown as { lastReported: Map<string, string> }).lastReported.size).toBe(0);
+
+    // Re-enabling the same version must report again from a clean baseline
+    // instead of being suppressed by the previous generation's fingerprint.
+    expect((await reconciler.reconcile([snapshot]))[0]?.status).toBe("ready");
+    expect(reports.length).toBeGreaterThan(reported);
+    expect(reports.at(-1)?.status).toBe("ready");
+  });
+
 });
 
 describe("task-private Agent Plugin runtime", () => {

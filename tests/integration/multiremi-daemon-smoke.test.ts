@@ -3131,7 +3131,7 @@ describe("Bun Multiremi daemon smoke", () => {
     }
   });
 
-  it("retries SSH Mesh cleanup and waits for success before stopping after daemon authority is revoked", async () => {
+  it("retries SSH Mesh cleanup, then keeps probing instead of exiting after daemon authority is revoked", async () => {
     const { store, workDir } = daemonTestBed("multiremi-daemon-authority-cleanup-");
     const daemonToken = await store.createAccessToken({
       name: "Authority cleanup daemon",
@@ -3173,6 +3173,7 @@ describe("Bun Multiremi daemon smoke", () => {
         },
       },
       terminalAuthorityCleanupRetryDelaysMs: [10],
+      authorityProbeDelaysMs: [10],
     });
     let settled = false;
     const daemonRun = daemon.start().finally(() => { settled = true; });
@@ -3192,9 +3193,26 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(settled).toBe(false);
 
       releaseCleanup();
-      await daemonRun;
+      // Cleanup success no longer ends the process: exiting here is what let
+      // systemd's Restart=always turn a revoked credential into a retry storm.
+      // The daemon stays alive and probes register on the authority schedule.
+      const probeHealth = await waitForHealth(
+        port,
+        (health) => Number(
+          (health.authority_probe as { attempts?: number } | undefined)?.attempts ?? 0,
+        ) >= 1,
+        5_000,
+      );
+      // The wake-up channel stays connected while the process is alive…
+      expect(["connected", "connecting", "disconnected"]).toContain(
+        String((probeHealth.claim_wake_ws as { state?: string }).state),
+      );
       expect(cleanupCalls).toBe(2);
-      expect(settled).toBe(true);
+      expect(settled).toBe(false);
+      // …and is torn down once the daemon stops, so an idle socket never
+      // outlives the poll loop that consumes its frames.
+      daemon.stop();
+      expect(daemon.taskWakeupStatus()).toMatchObject({ state: "disabled", connected: false });
     } finally {
       releaseCleanup();
       daemon.stop();
@@ -3203,7 +3221,93 @@ describe("Bun Multiremi daemon smoke", () => {
     }
   });
 
+  it("logs the first authority failure as ERROR and later probes as WARN with the next probe time", async () => {
+    const { store, workDir } = daemonTestBed("multiremi-daemon-authority-log-");
+    const daemonToken = await store.createAccessToken({
+      name: "Authority log daemon",
+      type: "daemon",
+      workspaceId: "local",
+    });
+    const server = startMultiremiServer({
+      store,
+      scheduler: null,
+      authToken: "root-authority-log-secret",
+      hostname: "127.0.0.1",
+      port: 0,
+    });
+    const lines: string[] = [];
+    const errorSpy = spyOn(console, "error").mockImplementation(((message: unknown) => {
+      lines.push(`ERROR ${String(message)}`);
+    }) as never);
+    const warnSpy = spyOn(console, "warn").mockImplementation(((message: unknown) => {
+      lines.push(`WARN ${String(message)}`);
+    }) as never);
+    const daemon = new MultiremiDaemon({
+      serverUrl: `http://127.0.0.1:${server.port}`,
+      token: daemonToken.token,
+      daemonId: "daemon-authority-log",
+      runtimeName: "authority-log-runtime",
+      provider: "claude",
+      workspaceId: "local",
+      daemonPort: 0,
+      pollIntervalMs: 10,
+      repoCacheRoot: join(workDir, ".repo-cache"),
+      providerFactory: () => ({
+        async *sendStream() {},
+        getLastResponse: () => null,
+      }),
+      sshMeshManager: {
+        getHeartbeatStatus: () => ({ status: "disabled" }),
+        reconcile: async () => {},
+        cleanupForRetirement: async () => {},
+      },
+      terminalAuthorityCleanupRetryDelaysMs: [10],
+      authorityProbeDelaysMs: [10, 10, 10],
+    });
+    const daemonRun = daemon.start();
+    try {
+      await waitForLocalPort(daemon);
+      const retirementPlan = store.getDaemonRetirementPlan("local", "daemon-authority-log");
+      expect(store.retireDaemon(
+        "local",
+        "daemon-authority-log",
+        retirementPlan.snapshot,
+        "local",
+      )).toMatchObject({ status: "retired" });
+
+      await waitForCondition(
+        () => lines.filter((line) => line.startsWith("WARN") && line.includes("authority probe")).length >= 2,
+        5_000,
+      );
+    } finally {
+      daemon.stop();
+      await daemonRun.catch(() => {});
+      errorSpy.mockRestore();
+      warnSpy.mockRestore();
+      server.stop(true);
+    }
+
+    const errors = lines.filter((line) => line.startsWith("ERROR"));
+    const warnings = lines.filter((line) => line.startsWith("WARN") && line.includes("authority probe"));
+    // The revocation itself is the one ERROR line an operator must see.
+    expect(errors.join("\n")).toContain("authorization was revoked or retired");
+    // The line has to name the HTTP cause so an operator can tell a revoked
+    // credential (401/403) from a retired daemon (410) without reading the server.
+    expect(errors.join("\n")).toMatch(/HTTP (401|403|410)/);
+    expect(errors.join("\n")).toContain("daemon_retired");
+    // Every later probe is a WARN that names the next probe time.
+    expect(warnings.length).toBeGreaterThanOrEqual(2);
+    for (const warning of warnings) {
+      // "next probe in <delay>ms at <iso time>": both halves are required so an
+      // operator can tell how long the daemon will stay paused and until when.
+      expect(warning).toContain("next probe in");
+      expect(warning).toMatch(/ at \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    }
+    expect(errors.filter((line) => line.includes("authority probe"))).toHaveLength(0);
+  }, 20_000);
+
   it("stays cleanup-only and stops claiming while terminal SSH Mesh cleanup keeps failing", async () => {
+
     const { store, workDir } = daemonTestBed("multiremi-daemon-authority-cleanup-failure-");
     const daemonToken = await store.createAccessToken({
       name: "Authority cleanup failure daemon",
@@ -3714,6 +3818,23 @@ async function waitForRunningHealth(port: number): Promise<Record<string, unknow
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   throw new Error(`daemon did not report running health: ${JSON.stringify(last)}`);
+}
+
+/** Poll `/health` until `predicate` holds, returning the matching payload. */
+async function waitForHealth(
+  port: number,
+  predicate: (health: Record<string, unknown>) => boolean,
+  timeoutMs = 2_000,
+): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + timeoutMs;
+  let last: Record<string, unknown> = {};
+  while (Date.now() < deadline) {
+    const response = await fetch(`http://127.0.0.1:${port}/health`);
+    last = await response.json() as Record<string, unknown>;
+    if (predicate(last)) return last;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`daemon health never matched: ${JSON.stringify(last)}`);
 }
 
 function deferred<T = void>(): {

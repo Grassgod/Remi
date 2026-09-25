@@ -284,6 +284,35 @@ describe("MultiremiDaemonClient HTTP failures", () => {
     expect(isTerminalDaemonAuthorityError(error)).toBe(false);
   });
 
+  it("preserves the desired Plugin revision from the heartbeat ack", async () => {
+    globalThis.fetch = (async () => Response.json({
+      status: "ok",
+      agent_plugins: { revision: "rev-abc" },
+    })) as unknown as typeof globalThis.fetch;
+    const response = await new MultiremiDaemonClient("https://remi.example", "daemon-token")
+      .heartbeatRuntime("rt_1");
+    expect(response.agent_plugins).toEqual({ revision: "rev-abc" });
+  });
+
+  it("drops a malformed desired Plugin revision instead of caching garbage", async () => {
+    globalThis.fetch = (async () => Response.json({
+      status: "ok",
+      agent_plugins: { revision: "" },
+    })) as unknown as typeof globalThis.fetch;
+    const response = await new MultiremiDaemonClient("https://remi.example", "daemon-token")
+      .heartbeatRuntime("rt_1");
+    // A server from before PR-1 simply omits the field; an unusable value must
+    // behave the same so the daemon keeps its periodic desired refresh.
+    expect(response.agent_plugins).toBeUndefined();
+  });
+
+  it("omits the desired Plugin revision when the ack has no such field", async () => {
+    globalThis.fetch = (async () => Response.json({ status: "ok" })) as unknown as typeof globalThis.fetch;
+    const response = await new MultiremiDaemonClient("https://remi.example", "daemon-token")
+      .heartbeatRuntime("rt_1");
+    expect(response.agent_plugins).toBeUndefined();
+  });
+
   it("treats an old server without Agent Plugin routes as protocol zero", async () => {
     globalThis.fetch = (async () => new Response("404 Not Found", { status: 404 })) as unknown as typeof globalThis.fetch;
 

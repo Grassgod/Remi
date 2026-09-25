@@ -38,6 +38,8 @@ export interface ReconcileAgentPluginsOptions {
 export class AgentPluginRuntimeReconciler {
   private readonly states = new Map<string, RuntimePluginState>();
   private readonly verifiedReady = new Set<string>();
+  /** Last observed-state fingerprint acknowledged by the server, keyed like {@link states}. */
+  private readonly lastReported = new Map<string, string>();
   private readonly cache: AgentPluginCache;
   private readonly preflight?: AgentPluginRuntimeReconcilerOptions["preflight"];
   private readonly reportState?: AgentPluginRuntimeReconcilerOptions["reportState"];
@@ -66,6 +68,26 @@ export class AgentPluginRuntimeReconciler {
       const key = stateKey(state);
       if (!this.states.has(key)) this.states.set(key, { ...state });
     }
+  }
+
+  /**
+   * Adopt the server's observed state as the dedupe baseline.
+   *
+   * A successful desired-state fetch is the only view of what the server
+   * already knows, so overwriting the cache here turns a server-side rewrite
+   * (manual retry, pending-heartbeat timeout, restored database) back into a
+   * change on the next reconcile.
+   */
+  syncReportedStates(states: RuntimePluginState[]): void {
+    for (const state of states) {
+      const key = stateKey(state);
+      if (this.states.has(key)) this.lastReported.set(key, stateFingerprint(state));
+    }
+  }
+
+  /** Forget every dedupe baseline so the next reconcile re-reports each state. */
+  clearReportedStates(): void {
+    this.lastReported.clear();
   }
 
   /** Clear retry/blocked state so the next reconcile attempts this digest now. */
@@ -104,6 +126,7 @@ export class AgentPluginRuntimeReconciler {
       if (!desiredKeys.has(key)) {
         this.states.delete(key);
         this.verifiedReady.delete(key);
+        this.lastReported.delete(key);
       }
     }
     return [...this.states.entries()]
@@ -232,11 +255,20 @@ export class AgentPluginRuntimeReconciler {
 
   private async emit(state: RuntimePluginState): Promise<void> {
     if (!this.reportState) return;
+    const key = stateKey(state);
+    const fingerprint = stateFingerprint(state);
+    // Steady state must not re-POST an unchanged observation every heartbeat.
+    // The server compares the same field set in
+    // reportAgentPluginRuntimeStateWithinLock; `updatedAt` is deliberately
+    // excluded because every transition rewrites it.
+    if (this.lastReported.get(key) === fingerprint) return;
     try {
       await this.reportState({ ...state });
+      this.lastReported.set(key, fingerprint);
     } catch (error) {
       // Deployment must not be reclassified as failed merely because reporting
-      // briefly failed. The next heartbeat reports the latest observed state.
+      // briefly failed. Drop the baseline so the next reconcile re-reports.
+      this.lastReported.delete(key);
       console.warn(
         `[agent-plugins] failed to report ${state.pluginId}@${state.desiredVersion} ${state.status}: ` +
           (error instanceof Error ? error.message : String(error)),
@@ -291,6 +323,23 @@ function snapshotKey(snapshot: Pick<AgentPluginArtifactSpec, "pluginId" | "versi
 
 function stateKey(state: RuntimePluginState): string {
   return `${state.provider}:${state.pluginId}:${state.versionId}:${normalizeSha256Digest(state.desiredDigest)}`;
+}
+
+/**
+ * Field set the server compares before deciding a report is `unchanged`
+ * (agent-plugins-repo.ts), minus the volatile `updatedAt`. Keep the two in sync:
+ * a field the server compares but the daemon omits would be silently deduped.
+ */
+function stateFingerprint(state: RuntimePluginState): string {
+  return JSON.stringify([
+    state.status,
+    state.installedDigest ? canonicalDigest(state.installedDigest) : null,
+    state.attempts,
+    state.retryGeneration,
+    state.nextRetryAt,
+    state.lastErrorCode,
+    state.lastError,
+  ]);
 }
 
 function canonicalDigest(value: string): string {

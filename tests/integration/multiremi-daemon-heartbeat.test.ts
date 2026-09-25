@@ -48,7 +48,17 @@ async function faultTestBed(fault: Fault, requestTimeoutMs = 250) {
           pending.push(() => resolve(Response.json({})));
         });
       }
-      const response = await app.fetch(request);
+      let response = await app.fetch(request);
+      if (heartbeat && response.ok) {
+        // This bed exercises transport failures, and only the fallback path
+        // re-reads desired state on every round: once the server reports a
+        // revision (MUL-368 PR-1), an unchanged revision correctly skips the
+        // GET. Strip the field so the fault below still has something to fail
+        // on; the revision-skip path has its own tests.
+        const ack = await response.json() as Record<string, unknown>;
+        delete ack.agent_plugins;
+        response = Response.json(ack, { status: response.status });
+      }
       if (state.armed && matches && fault === "retired-body" && !response.ok) {
         state.failures++;
         state.authorityStatus = response.status;
@@ -86,6 +96,10 @@ async function faultTestBed(fault: Fault, requestTimeoutMs = 250) {
     pollIntervalMs: 20,
     requestTimeoutMs,
     gcEnabled: false,
+    // The daemon now only re-reads desired state when the heartbeat ack reports
+    // a new revision (or on its periodic fallback). This bed exercises transport
+    // failures, so keep the fallback refresh prompt instead of waiting 30s.
+    pluginDesiredRefreshMs: 20,
     workspacesRoot: join(root, "workspaces"),
     repoCacheRoot: join(root, "repos"),
     pluginCacheRoot: join(root, "plugins"),
@@ -132,10 +146,17 @@ describe("daemon heartbeat network recovery", () => {
       const plan = bed.store.getDaemonRetirementPlan("local", "heartbeat-test");
       expect(bed.store.retireDaemon("local", "heartbeat-test", plan.snapshot, "local").status).toBe("retired");
       bed.state.armed = true;
-      await waitUntil(bed.isSettled, "retirement cleanup after an incomplete authority response", 1_500);
+      // The response headers are enough to detect the revocation even when the
+      // body never arrives, and local cleanup still runs.
+      await waitUntil(() => bed.state.cleanupCalls >= 1, "retirement cleanup after an incomplete authority response", 1_500);
       expect(bed.state.authorityStatus).toBe(401);
       expect(bed.state.failures).toBe(1);
-      expect(bed.state.cleanupCalls).toBe(1);
+
+      // Cleanup success no longer ends the process: exiting here is what let the
+      // service manager's restart policy retry every few seconds. The daemon
+      // stays alive and probes register instead.
+      await waitUntil(() => !bed.isSettled() && bed.state.cleanupCalls >= 1, "keep-alive after retirement", 300);
+      expect(bed.isSettled()).toBe(false);
       expect(bed.error()).toBeUndefined();
     } finally {
       await bed.close();
