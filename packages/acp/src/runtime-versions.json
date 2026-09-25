@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "preparedFor": "0.2.81",
-  "checkedAt": "2026-09-24T20:02:32.099Z",
+  "preparedFor": "0.2.82",
+  "checkedAt": "2026-09-25T20:03:08.379Z",
   "claude": {
     "acp": "0.81.2",
     "sdk": "0.3.282",
@@ -9,7 +9,7 @@
   },
   "codex": {
     "acp": "1.13.1",
-    "sdk": "0.156.1",
-    "executable": "0.156.1"
+    "sdk": "0.157.0",
+    "executable": "0.157.0"
   }
 }
