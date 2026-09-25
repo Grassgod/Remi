@@ -60,6 +60,11 @@ export const SCRUBBED_ENV_KEYS = [
   "POSTHOG_API_KEY",
   "POSTHOG_HOST",
   "ANALYTICS_DISABLED",
+  // Service-manager identity. Tasks run `bun test` inside the daemon's own
+  // unit and inherit these, which would let a daemon restart path under test
+  // restart the host's real daemon unit.
+  "INVOCATION_ID",
+  "XPC_SERVICE_NAME",
 ] as const;
 
 /** True when `name` is one of the variables the preload removes. */
