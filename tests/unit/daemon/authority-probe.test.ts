@@ -267,6 +267,38 @@ describe("daemon terminal-authority keep-alive probe", () => {
     }
   }, 20_000);
 
+  it("pauses the wake-up channel while authority is revoked and resumes it on start", async () => {
+    jest.useFakeTimers();
+    const logger = captureLogger();
+    const calls: boolean[] = [];
+    const bed = createProbeDaemon();
+    (bed.daemon as unknown as { taskWakeup: unknown }).taskWakeup = {
+      setRuntimeId: () => {},
+      setAuthoritySuspended: (suspended: boolean) => { calls.push(suspended); },
+      close: () => {},
+      status: () => ({
+        state: "disabled", connected: false, runtime_id: null, connected_since: null,
+        last_error: null, reconnect_attempts: 0, next_reconnect_at: null, suspended: true,
+      }),
+    };
+    try {
+      await startProbe(bed);
+      // A refused credential refuses the handshake too, so reconnecting every
+      // 30s for the whole probe window would only add noise.
+      expect(calls).toEqual([true]);
+
+      // A reused instance must not inherit the pause.
+      const start = (bed.daemon as unknown as { start(): Promise<void> }).start.bind(bed.daemon);
+      calls.length = 0;
+      void start().catch(() => {});
+      await Promise.resolve();
+      expect(calls).toEqual([false]);
+    } finally {
+      bed.daemon.stop();
+      logger.restore();
+    }
+  }, 20_000);
+
   it("stops immediately on SIGTERM while the probe loop is waiting", async () => {
     jest.useFakeTimers();
     const logger = captureLogger();

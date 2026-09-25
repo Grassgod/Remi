@@ -24,11 +24,21 @@ export interface DaemonWakeupStatus {
   last_error: string | null;
   reconnect_attempts: number;
   next_reconnect_at: string | null;
+  /** Reconnects are deliberately paused while this daemon's authority is revoked. */
+  suspended: boolean;
 }
 
 export interface DaemonWakeupTransport {
   /** Point the transport at the current Runtime; reconnects when the id changes. */
   setRuntimeId(runtimeId: string | null): void;
+  /**
+   * Pause (or resume) reconnecting while the control plane rejects this
+   * daemon's credential.
+   *
+   * A 401/403/410 means the handshake is refused too, so retrying every 30s is
+   * pure noise. The authority probe reconnects once it restores the credential.
+   */
+  setAuthoritySuspended(suspended: boolean): void;
   close(): void;
   status(): DaemonWakeupStatus;
 }
@@ -59,11 +69,21 @@ export interface DaemonWakeupSocketOptions {
   pingIntervalMs?: number;
   reconnectBaseMs?: number;
   reconnectMaxMs?: number;
+  /** Jitter source for the reconnect delay; injectable so tests stay exact. */
+  random?: () => number;
 }
 
 const DEFAULT_PING_INTERVAL_MS = 30_000;
 const DEFAULT_RECONNECT_BASE_MS = 1_000;
 const DEFAULT_RECONNECT_MAX_MS = 30_000;
+/**
+ * Fraction of a reconnect delay that is randomised.
+ *
+ * Without it, every daemon disconnected by the same server restart would come
+ * back in lockstep. Jitter spreads the reconnect wave while the ceiling still
+ * bounds how long a queued task can wait for the socket.
+ */
+const RECONNECT_JITTER_RATIO = 0.3;
 
 /** `http(s)://host/base` → `ws(s)://host/base/api/daemon/ws?runtime_ids=<id>`. */
 export function daemonWakeupUrl(serverUrl: string, runtimeId: string): string {
@@ -83,12 +103,15 @@ export class DaemonWakeupSocket implements DaemonWakeupTransport {
   private readonly pingIntervalMs: number;
   private readonly reconnectBaseMs: number;
   private readonly reconnectMaxMs: number;
+  private readonly random: () => number;
   private socket: DaemonWakeupSocketLike | null = null;
   private runtimeId: string | null = null;
   private closed = false;
+  private suspended = false;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectDelayMs: number;
+  private connected = false;
   private connectedAt: string | null = null;
   private lastError: string | null = null;
   private reconnectAttempts = 0;
@@ -102,6 +125,7 @@ export class DaemonWakeupSocket implements DaemonWakeupTransport {
     this.pingIntervalMs = positive(options.pingIntervalMs, DEFAULT_PING_INTERVAL_MS);
     this.reconnectBaseMs = positive(options.reconnectBaseMs, DEFAULT_RECONNECT_BASE_MS);
     this.reconnectMaxMs = Math.max(this.reconnectBaseMs, positive(options.reconnectMaxMs, DEFAULT_RECONNECT_MAX_MS));
+    this.random = options.random ?? Math.random;
     this.reconnectDelayMs = this.reconnectBaseMs;
   }
 
@@ -118,7 +142,31 @@ export class DaemonWakeupSocket implements DaemonWakeupTransport {
     // A new Runtime id invalidates the previous subscription, so reconnect
     // immediately instead of waiting out the current backoff.
     this.teardown();
+    this.reconnectDelayMs = this.reconnectBaseMs;
     this.connectNow();
+  }
+
+  setAuthoritySuspended(suspended: boolean): void {
+    if (this.closed) return;
+    if (suspended === this.suspended) return;
+    this.suspended = suspended;
+    // Either way the socket on hand is unusable: while suspended the control
+    // plane refuses the handshake, and once authority is restored the process
+    // restarts with a fresh credential, so carrying the old socket across is
+    // never correct.
+    this.teardown();
+    if (suspended) {
+      // "disconnected" is the truthful word for it — there is no socket — and
+      // `suspended` says the pause is deliberate rather than a broken Upgrade.
+      this.state = "disconnected";
+      this.lastError = "daemon authority was revoked; wake-up channel paused until the probe succeeds";
+      return;
+    }
+    this.lastError = null;
+    this.reconnectDelayMs = this.reconnectBaseMs;
+    this.reconnectAttempts = 0;
+    this.repeatedFailures = 0;
+    if (this.runtimeId) this.connectNow();
   }
 
   close(): void {
@@ -131,21 +179,26 @@ export class DaemonWakeupSocket implements DaemonWakeupTransport {
   status(): DaemonWakeupStatus {
     return {
       state: this.closed || !this.runtimeId ? "disabled" : this.state,
-      connected: this.socket !== null,
+      // The open event is the only proof the control plane accepted the
+      // handshake. A socket that merely exists is still `connecting`, and
+      // calling that "connected" would hide exactly the failure this status
+      // exists to expose.
+      connected: this.connected,
       runtime_id: this.runtimeId,
       connected_since: this.connectedAt,
       last_error: this.lastError,
       reconnect_attempts: this.reconnectAttempts,
       next_reconnect_at: this.nextReconnectAt,
+      suspended: this.suspended,
     };
   }
 
   private connectNow(): void {
     const runtimeId = this.runtimeId;
-    if (this.closed || !runtimeId) return;
+    if (this.closed || this.suspended || !runtimeId) return;
     let url: string;
     try {
-      url = daemonWakeupUrl(this.options.serverUrl, runtimeId!);
+      url = daemonWakeupUrl(this.options.serverUrl, runtimeId);
     } catch (error) {
       this.lastError = messageOf(error);
       this.options.log?.warn(`daemon wake-up channel disabled: ${this.lastError}`);
@@ -165,7 +218,10 @@ export class DaemonWakeupSocket implements DaemonWakeupTransport {
     this.socket = socket;
     this.state = "connecting";
     socket.addEventListener("open", () => {
-      if (this.socket !== socket || this.closed) return;
+      // A stale socket from a replaced Runtime id must not publish state or
+      // start a ping loop for a connection nobody is tracking any more.
+      if (this.socket !== socket || this.closed || this.suspended) return;
+      this.connected = true;
       this.connectedAt = new Date().toISOString();
       this.reconnectDelayMs = this.reconnectBaseMs;
       this.reconnectAttempts = 0;
@@ -198,20 +254,25 @@ export class DaemonWakeupSocket implements DaemonWakeupTransport {
   }
 
   private handleDisconnect(socket: DaemonWakeupSocketLike, reason: string): void {
-    if (this.socket === socket) this.teardown();
-    if (this.closed || !this.runtimeId) return;
+    // `teardown()` clears `this.socket` before closing it, so an event from the
+    // socket that was already replaced must stop here. Otherwise it would
+    // overwrite the state of the current socket and schedule a second reconnect.
+    if (this.socket !== socket) return;
+    this.teardown();
+    if (this.closed || this.suspended || !this.runtimeId) return;
     this.scheduleReconnect(reason);
   }
 
   private scheduleReconnect(reason: string): void {
-    if (this.closed || !this.runtimeId || this.reconnectTimer) return;
+    if (this.closed || this.suspended || !this.runtimeId || this.reconnectTimer) return;
     this.lastError = reason;
     this.state = "disconnected";
     this.reconnectAttempts++;
     this.repeatedFailures++;
     const delay = this.reconnectDelayMs;
     this.reconnectDelayMs = Math.min(this.reconnectDelayMs * 2, this.reconnectMaxMs);
-    this.nextReconnectAt = new Date(Date.now() + delay).toISOString();
+    const waitMs = jittered(delay, this.reconnectMaxMs, this.random);
+    this.nextReconnectAt = new Date(Date.now() + waitMs).toISOString();
     // The first failure of a streak is the one an operator has to act on; the
     // rest repeat on an unchanged backoff and would otherwise fill the journal.
     if (this.repeatedFailures === 1 || this.repeatedFailures % 10 === 0) {
@@ -223,8 +284,12 @@ export class DaemonWakeupSocket implements DaemonWakeupTransport {
     }
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
+      // The transport may have been suspended or retargeted while the timer was
+      // pending; neither a new connect nor a stale one is safe here.
+      if (this.closed || this.suspended) return;
+      if (!this.runtimeId) return;
       this.connectNow();
-    }, delay);
+    }, waitMs);
     this.reconnectTimer.unref?.();
   }
 
@@ -255,6 +320,7 @@ export class DaemonWakeupSocket implements DaemonWakeupTransport {
     }
     const socket = this.socket;
     this.socket = null;
+    this.connected = false;
     this.connectedAt = null;
     this.nextReconnectAt = null;
     if (socket && this.state === "connected") this.state = "disconnected";
@@ -265,6 +331,12 @@ export class DaemonWakeupSocket implements DaemonWakeupTransport {
       // Already closed.
     }
   }
+}
+
+/** Spread a reconnect delay inside ±`RECONNECT_JITTER_RATIO`, never above the ceiling. */
+function jittered(delayMs: number, maxMs: number, random: () => number): number {
+  const spread = (random() - 0.5) * 2 * RECONNECT_JITTER_RATIO * delayMs;
+  return Math.max(1, Math.min(maxMs, Math.round(delayMs + spread)));
 }
 
 function positive(value: number | undefined, fallback: number): number {

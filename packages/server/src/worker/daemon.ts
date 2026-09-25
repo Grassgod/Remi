@@ -1176,6 +1176,9 @@ export class MultiremiDaemon {
     this.terminalAuthorityCleanupAttempts = 0;
     this.restartRequestedFlag = false;
     this.workspaceOwnershipLost = false;
+    // A reused instance (tests, an embedded harness) must not inherit the pause
+    // a previous terminal-authority failure left on the wake-up channel.
+    this.taskWakeup?.setAuthoritySuspended(false);
     this.onReadyChange(false);
     this.assertWorkspaceRootOwner();
     const outbox = this.ensureOutbox();
@@ -1504,7 +1507,15 @@ export class MultiremiDaemon {
   private claimWakeWsStatus(): Record<string, unknown> {
     const status = this.taskWakeup?.status();
     if (!status) {
-      return { state: "disabled", connected: false, connected_since: null, last_error: null, reconnect_attempts: 0, next_reconnect_at: null };
+      return {
+        state: "disabled",
+        connected: false,
+        connected_since: null,
+        last_error: null,
+        reconnect_attempts: 0,
+        next_reconnect_at: null,
+        suspended: false,
+      };
     }
     return {
       state: status.state,
@@ -1513,6 +1524,7 @@ export class MultiremiDaemon {
       last_error: status.last_error,
       reconnect_attempts: status.reconnect_attempts,
       next_reconnect_at: status.next_reconnect_at,
+      suspended: status.suspended,
     };
   }
 
@@ -2570,6 +2582,10 @@ export class MultiremiDaemon {
     this.claimsPaused = true;
     this.ready = false;
     this.terminalAuthorityMode = true;
+    // The control plane refuses this credential, so it refuses the wake-up
+    // handshake too. Reconnecting every 30s until the probe restores us would
+    // add noise to the outage without delivering a single frame.
+    this.taskWakeup?.setAuthoritySuspended(true);
     this.stopGcLoop();
     for (const abort of this.activeTaskAborts) abort.abort();
     this.agentPluginReconcileAbort?.abort();

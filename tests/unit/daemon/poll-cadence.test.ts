@@ -780,4 +780,158 @@ describe("daemon wake-up channel", () => {
     expect(connects).toBe(0);
     expect(probe.daemon.taskWakeupStatus()).toBeNull();
   });
+
+  it("reports connecting, not connected, until the handshake completes", () => {
+    const listeners = new Map<string, (event: unknown) => void>();
+    const transport = new DaemonWakeupSocket({
+      serverUrl: "https://remi.example",
+      token: "daemon-secret",
+      onTaskAvailable: () => {},
+      connect: () => ({
+        send: () => {},
+        close: () => {},
+        addEventListener: (type, listener) => { listeners.set(type, listener); },
+      }),
+      log: { info: () => {}, warn: () => {} },
+    });
+
+    transport.setRuntimeId("rt_1");
+    // A socket object exists, but nothing has been accepted yet: reporting
+    // `connected` here would hide exactly the stalled handshake this status
+    // exists to expose.
+    expect(transport.status()).toMatchObject({ state: "connecting", connected: false });
+    listeners.get("open")!({});
+    expect(transport.status()).toMatchObject({ state: "connected", connected: true });
+    transport.close();
+  });
+
+  it("stops reconnecting while authority is revoked and resumes once it is restored", () => {
+    jest.useFakeTimers();
+    const sockets: Array<Map<string, (event: unknown) => void>> = [];
+    let connects = 0;
+    const transport = new DaemonWakeupSocket({
+      serverUrl: "https://remi.example",
+      token: "daemon-secret",
+      onTaskAvailable: () => {},
+      connect: () => {
+        connects++;
+        const listeners = new Map<string, (event: unknown) => void>();
+        sockets.push(listeners);
+        return {
+          send: () => {},
+          close: () => {},
+          addEventListener: (type, listener) => { listeners.set(type, listener); },
+        };
+      },
+      log: { info: () => {}, warn: () => {} },
+      reconnectBaseMs: 1000,
+      reconnectMaxMs: 30_000,
+      random: () => 0.5,
+    });
+    transport.setRuntimeId("rt_1");
+    expect(connects).toBe(1);
+
+    // A terminal authority failure refuses the credential, so the handshake is
+    // refused too; retrying every 30s would only add noise to the outage.
+    transport.setAuthoritySuspended(true);
+    expect(transport.status()).toMatchObject({ state: "disconnected", connected: false, suspended: true });
+    jest.advanceTimersByTime(10 * 60_000);
+    expect(connects).toBe(1);
+
+    // The probe restored the credential: reconnect immediately rather than
+    // waiting out a backoff earned by the revoked one.
+    transport.setAuthoritySuspended(false);
+    expect(connects).toBe(2);
+    expect(transport.status()).toMatchObject({ suspended: false, state: "connecting" });
+    transport.close();
+  });
+
+  it("ignores a superseded socket's close so a new runtime id cannot leak a reconnect", () => {
+    jest.useFakeTimers();
+    const sockets: Array<{ listeners: Map<string, (event: unknown) => void>; closes: number }> = [];
+    let connects = 0;
+    const transport = new DaemonWakeupSocket({
+      serverUrl: "https://remi.example",
+      token: "daemon-secret",
+      onTaskAvailable: () => {},
+      connect: () => {
+        connects++;
+        const listeners = new Map<string, (event: unknown) => void>();
+        const record = { listeners, closes: 0 };
+        sockets.push(record);
+        return {
+          send: () => {},
+          close: () => { record.closes++; },
+          addEventListener: (type, listener) => { listeners.set(type, listener); },
+        };
+      },
+      log: { info: () => {}, warn: () => {} },
+      reconnectBaseMs: 1000,
+      reconnectMaxMs: 30_000,
+      random: () => 0.5,
+    });
+
+    transport.setRuntimeId("rt_1");
+    sockets[0]!.listeners.get("open")!({});
+    expect(transport.status()).toMatchObject({ state: "connected" });
+
+    // Re-registration replaces the Runtime, so the old subscription is torn
+    // down and a fresh socket dialed with the new id.
+    transport.setRuntimeId("rt_2");
+    expect(connects).toBe(2);
+    expect(sockets[0]!.closes).toBe(1);
+    expect(transport.status()).toMatchObject({ state: "connecting", runtime_id: "rt_2" });
+
+    // The replaced socket reports its close after the swap. It must not be
+    // mistaken for the current one: doing so would overwrite the live socket's
+    // state and schedule a reconnect that nothing ever tracks.
+    sockets[0]!.listeners.get("close")!({});
+    expect(transport.status()).toMatchObject({
+      state: "connecting",
+      runtime_id: "rt_2",
+      reconnect_attempts: 0,
+    });
+    jest.advanceTimersByTime(60_000);
+    expect(connects).toBe(2);
+
+    // The replacement still becomes healthy.
+    sockets[1]!.listeners.get("open")!({});
+    expect(transport.status()).toMatchObject({ state: "connected", connected: true });
+    transport.close();
+  });
+
+  it("spreads reconnects with jitter without exceeding the ceiling", () => {
+    jest.useFakeTimers();
+    const delaysFor = (random: number): number[] => {
+      const seen: number[] = [];
+      const transport = new DaemonWakeupSocket({
+        serverUrl: "https://remi.example",
+        token: "daemon-secret",
+        onTaskAvailable: () => {},
+        connect: () => { throw new Error("Expected 101 status code"); },
+        log: { info: () => {}, warn: () => {} },
+        reconnectBaseMs: 1000,
+        reconnectMaxMs: 30_000,
+        random: () => random,
+      });
+      transport.setRuntimeId(`rt_${random}`);
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const at = transport.status().next_reconnect_at;
+        seen.push(new Date(at!).getTime() - Date.now());
+        jest.advanceTimersByTime(30_000);
+      }
+      transport.close();
+      return seen;
+    };
+
+    const low = delaysFor(0);
+    const high = delaysFor(1);
+    // Same ladder, different wall-clock schedule: the point of the jitter.
+    expect(low[0]).not.toBe(high[0]);
+    // Never above the ceiling, and never a zero-delay hot retry loop.
+    for (const delay of [...low, ...high]) {
+      expect(delay).toBeGreaterThan(0);
+      expect(delay).toBeLessThanOrEqual(30_000);
+    }
+  });
 });

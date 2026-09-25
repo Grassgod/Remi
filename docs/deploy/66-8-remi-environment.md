@@ -85,8 +85,13 @@ becoming task-start latency. It is an accelerator, never a control channel: no
 liveness, heartbeat, or task state travels over it, and if the upgrade cannot be
 established the polling backoff alone still delivers work. `/health` reports
 `claim_wake_ws` with `state` (`connected` / `connecting` / `disconnected` /
-`disabled`), `connected_since`, `last_error`, `reconnect_attempts`, and
-`next_reconnect_at`, plus `claim_idle_next_at`.
+`disabled`), `connected_since`, `last_error`, `reconnect_attempts`,
+`next_reconnect_at`, and `suspended`, plus `claim_idle_next_at`. `connected` is
+set by the socket's `open` event, so a socket still completing its handshake
+reports `connecting` rather than a false `connected`. Reconnects back off
+exponentially (1 s to 30 s) with jitter, and a replaced Runtime id tears the old
+socket down without letting its late `close` corrupt the new one or schedule a
+second reconnect.
 
 Authority failures such as 401, 403, and 410 still enter terminal cleanup,
 including when their response headers arrive but the error body times out or is
@@ -97,8 +102,10 @@ retry cadence to the service manager's restart policy, which is what turned a
 revoked credential into a request every few seconds. The first failure is logged
 at ERROR, later probes at WARN with the next probe time, and `/health` exposes
 `authority_probe: { attempts, next_probe_at }`. A successful probe requests a
-process restart through the existing restart channel. `--once` still surfaces
-request failures to its caller.
+process restart through the existing restart channel, and the wake-up socket
+also stops reconnecting while authority is revoked (`claim_wake_ws.suspended`)
+so a refused credential does not produce a handshake attempt every 30 s. `--once`
+still surfaces request failures to its caller.
 
 Stopping the daemon cancels pending heartbeat and plugin configuration requests.
 Cancelling the initial plugin query also finishes startup cleanly; workspace
