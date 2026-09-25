@@ -169,6 +169,29 @@ describe("AgentPluginsRepo", () => {
     expect(versionReads()).toEqual([]);
   });
 
+  it("drops a version from the cache when the transaction that inserted it rolls back", () => {
+    const store = createStore();
+    const plugin = store.importAgentPlugin(claudePluginInput());
+    const repo = (store as unknown as { agentPlugins: { reconcileAgentPluginDesiredStateLocked(workspaceId: string): void } })
+      .agentPlugins;
+    let insertedId: string | null = null;
+    repo.reconcileAgentPluginDesiredStateLocked = () => {
+      // Runs after the insert, inside the same transaction; this read caches the uncommitted row.
+      insertedId = (db!.query("SELECT id FROM multiremi_agent_plugin_versions WHERE version = '2.0.0'").get() as { id: string }).id;
+      expect(store.getAgentPluginVersion(insertedId)?.version).toBe("2.0.0");
+      throw new Error("reconcile failed");
+    };
+
+    expect(() => store.createAgentPluginVersion(plugin.id, {
+      manifest: claudePluginInput("2.0.0").manifest,
+      files: claudePluginInput("2.0.0", "# Lark v2\n").files,
+    })).toThrow("reconcile failed");
+    expect(insertedId).not.toBeNull();
+    expect(db!.query("SELECT id FROM multiremi_agent_plugin_versions WHERE id = ?").get(insertedId)).toBeNull();
+    expect(store.getAgentPluginVersion(insertedId!)).toBeNull();
+    expect(store.getAgentPluginVersion(plugin.activeVersionId!)?.version).toBe("1.0.0");
+  });
+
   it("hands out copies of cached versions", () => {
     const store = createStore();
     const plugin = store.importAgentPlugin(claudePluginInput());

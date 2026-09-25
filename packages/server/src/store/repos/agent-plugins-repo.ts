@@ -95,6 +95,9 @@ export class AgentPluginsRepo {
   // version, binding resolved version, runtime state version). Without this each resolution
   // re-read the version's artifact payload through the Postgres worker bridge.
   private readonly versionCache = new Map<string, MultiremiAgentPluginVersion>();
+  // Versions inserted by the running transaction. Reads inside it cache them before they commit,
+  // so a rollback must evict them (see `runVersionTransaction`).
+  private readonly uncommittedVersionIds = new Set<string>();
 
   constructor(private readonly ctx: StoreContext) {}
 
@@ -215,7 +218,7 @@ export class AgentPluginsRepo {
         this.reconcileAgentPluginDesiredStateLocked(workspaceId);
         result = this.getAgentPlugin(String(pluginRow.id));
       });
-      transaction();
+      this.runVersionTransaction(transaction);
       return result!;
     } catch (error) {
       throw normalizeStoreError(error);
@@ -255,7 +258,7 @@ export class AgentPluginsRepo {
       this.reconcileAgentPluginDesiredStateLocked(plugin.workspaceId);
     });
     try {
-      transaction();
+      this.runVersionTransaction(transaction);
       return result!;
     } catch (error) {
       throw normalizeStoreError(error);
@@ -1169,7 +1172,20 @@ export class AgentPluginsRepo {
         nowIso(),
       ],
     );
+    this.uncommittedVersionIds.add(id);
     return this.requireVersion(id);
+  }
+
+  /** Runs a transaction that may insert versions; if it rolls back, those versions leave `versionCache`. */
+  private runVersionTransaction(transaction: () => void): void {
+    try {
+      transaction();
+    } catch (error) {
+      for (const id of this.uncommittedVersionIds) this.versionCache.delete(id);
+      throw error;
+    } finally {
+      this.uncommittedVersionIds.clear();
+    }
   }
 
   private normalizeBindingVersion(
