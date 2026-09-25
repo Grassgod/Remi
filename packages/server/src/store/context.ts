@@ -235,7 +235,9 @@ export interface AgentPluginsSurface {
   runtimeHasReadyAgentPlugins(runtimeId: string, agentId: string): boolean;
   assertAgentPluginProviderCompatible(agentId: string, provider: string): void;
   recordAgentPluginRuntimeHeartbeat(runtimeId: string): MultiremiAgentPluginRuntimeState[];
-  recordAgentPluginRuntimeHeartbeatWithinLock(runtimeId: string): MultiremiAgentPluginRuntimeState[];
+  recordAgentPluginRuntimeHeartbeatWithinLock(
+    runtimeId: string,
+  ): { changes: MultiremiAgentPluginRuntimeState[]; revision: string };
 }
 
 // The analytics recorders are shared by the runtimes, autopilots and tasks domains but are not part

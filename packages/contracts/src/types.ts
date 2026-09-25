@@ -939,6 +939,14 @@ export interface MultiremiDaemonHeartbeatAck {
     dry_run: boolean;
   };
   /**
+   * Revision of this Runtime's desired Plugin set. Present only when the daemon
+   * advertised `agent_plugin_protocol`. A daemon whose cached revision matches
+   * may skip `GET .../agent-plugins/desired`; the value is a pure optimization,
+   * so a daemon that ignores it (or a server that omits it) stays correct.
+   * Additive field: the protocol version stays at 1.
+   */
+  agent_plugins?: { revision: string };
+  /**
    * Feishu concierge assignment for this Runtime. Present only when the daemon
    * advertised `feishu_concierge_protocol`. Carries no credentials — see
    * `MultiremiFeishuBotDirective`.

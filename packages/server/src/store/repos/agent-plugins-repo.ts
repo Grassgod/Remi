@@ -649,7 +649,7 @@ export class AgentPluginsRepo {
       lastError: cleanString(row.last_error),
       updatedAt: String(row.updated_at),
     }));
-    const revision = createHash("sha256").update(canonicalJson(plugins)).digest("hex");
+    const revision = desiredRevision(rows);
     return { runtimeId: runtime.id, revision, plugins };
   }
 
@@ -768,11 +768,19 @@ export class AgentPluginsRepo {
       this.lockAgentPluginWorkspace(workspaceId);
       return this.recordAgentPluginRuntimeHeartbeatWithinLock(runtimeId);
     });
-    return transaction();
+    return transaction().changes;
   }
 
-  /** Caller owns the workspace lifecycle and Plugin locks in that order. */
-  recordAgentPluginRuntimeHeartbeatWithinLock(runtimeId: string): MultiremiAgentPluginRuntimeState[] {
+  /**
+   * Caller owns the workspace lifecycle and Plugin locks in that order.
+   *
+   * Returns the observed-state transitions plus the desired revision that was
+   * computed from the same rows the reconciliation already read, so a heartbeat
+   * ack can hand the daemon a change token without any extra query.
+   */
+  recordAgentPluginRuntimeHeartbeatWithinLock(
+    runtimeId: string,
+  ): { changes: MultiremiAgentPluginRuntimeState[]; revision: string } {
     const runtime = this.requireRuntime(runtimeId);
     const workspaceId = runtime.workspaceId ?? "local";
     const beforeRows = this.ctx.db.query(
@@ -796,8 +804,9 @@ export class AgentPluginsRepo {
       // the historical row so heartbeat callers can publish the removal.
       if (!reconciledIds.has(id)) changed.add(id);
     }
+    const revision = desiredRevision(reconciledRows);
     if (!runtimeSupportsAgentPlugins(this.requireRuntime(runtimeId))) {
-      return [...changed].map((id) => this.requireRuntimeState(id));
+      return { changes: [...changed].map((id) => this.requireRuntimeState(id)), revision };
     }
 
     const rows = this.ctx.db.query(
@@ -828,7 +837,7 @@ export class AgentPluginsRepo {
       );
       changed.add(id);
     }
-    return [...changed].map((id) => this.requireRuntimeState(id));
+    return { changes: [...changed].map((id) => this.requireRuntimeState(id)), revision };
   }
 
   retryAgentPluginRuntime(pluginId: string, runtimeId?: string | null, versionId?: string | null): MultiremiAgentPluginRuntimeState[] {
@@ -1543,6 +1552,31 @@ export function runtimeSupportsAgentPlugins(runtime: {
     runtime.metadata.agent_plugin_protocol ?? runtime.metadata.agentPluginProtocol ?? 0,
   );
   return Number.isSafeInteger(protocol) && protocol >= MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION;
+}
+
+/**
+ * Change token for one Runtime's desired Plugin set.
+ *
+ * Only fields that can change what a daemon has to do are hashed: which desired
+ * rows exist, which immutable Plugin version each one pins, and the retry
+ * generation the control plane is demanding. Observed state (`status`,
+ * `observed_digest`, `retry_count`, `updated_at`) is excluded on purpose —
+ * the daemon produces those itself, so including them would bump the revision
+ * on every state report and send the daemon straight back to `GET desired`.
+ *
+ * The row id list is sorted so the token does not depend on query order: the
+ * snapshot query orders by provider/name/version and the heartbeat query has no
+ * ORDER BY, yet both must agree on the same desired set.
+ */
+function desiredRevision(rows: Row[]): string {
+  const entries = rows
+    .map((row) => ({
+      id: String(row.id),
+      pluginVersionId: String(row.plugin_version_id),
+      retryGeneration: Number(row.retry_generation ?? 0),
+    }))
+    .sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
+  return createHash("sha256").update(canonicalJson(entries)).digest("hex");
 }
 
 function runtimeStateFingerprint(row: Row): string {

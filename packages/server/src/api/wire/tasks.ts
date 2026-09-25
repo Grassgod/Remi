@@ -106,6 +106,10 @@ export function daemonHeartbeatHttpResponse(ack: MultiremiDaemonHeartbeatAck): R
   // allowlist is not a dropped field — it is a request consumed and destroyed,
   // which the operator only sees minutes later as an unexplained timeout.
   if (ack.pending_bot_menu) response.pending_bot_menu = ack.pending_bot_menu;
+  // Not a `pending_*`: the daemon only uses this to decide whether it can skip
+  // a desired-state GET, but dropping it here would silently restore the polling
+  // this field exists to remove.
+  if (ack.agent_plugins) response.agent_plugins = ack.agent_plugins;
   if (ack.ssh_mesh) response.ssh_mesh = ack.ssh_mesh;
   if (ack.drain) response.drain = ack.drain;
   return response;

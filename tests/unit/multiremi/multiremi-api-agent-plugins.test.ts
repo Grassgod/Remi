@@ -1064,6 +1064,120 @@ describe("Multiremi API — agent plugins", () => {
     });
   });
 
+  it("echoes the desired Plugin revision in the heartbeat ack without extra work", async () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({
+      id: "rt_api_plugin_ack",
+      name: "Plugin ack runtime",
+      provider: "claude",
+      daemonId: "daemon-ack",
+      workspaceId: "local",
+      metadata: { agent_plugin_protocol: 1 },
+    });
+    const agent = store.createAgent({ name: "Ack agent", provider: "claude" });
+    const plugin = store.importAgentPlugin({
+      provider: "claude",
+      manifest: { name: "ack-plugin", version: "1.0.0" },
+    });
+    const binding = store.createAgentPluginBinding(agent.id, { pluginId: plugin.id });
+    const daemonToken = await store.createAccessToken({
+      name: "Ack daemon",
+      type: "daemon",
+      daemonId: "daemon-ack",
+      workspaceId: "local",
+    });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const headers = { Authorization: `Bearer ${daemonToken.token}`, "Content-Type": "application/json" };
+
+    const desiredRevision = async () => {
+      const response = await app.request(`/api/daemon/runtimes/${runtime.id}/agent-plugins/desired`, { headers });
+      expect(response.status).toBe(200);
+      return (await response.json()).revision as string;
+    };
+    const heartbeat = async (protocol: number | undefined = 1) => {
+      const response = await app.request("/api/daemon/heartbeat", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          runtime_id: runtime.id,
+          ...(protocol === undefined ? {} : { agent_plugin_protocol: protocol }),
+        }),
+      });
+      expect(response.status).toBe(200);
+      return await response.json() as Record<string, any>;
+    };
+
+    // The ack revision and the desired snapshot must be the same token, or a
+    // daemon that trusts the ack would skip a GET it actually needed.
+    const initialRevision = await desiredRevision();
+    expect(initialRevision).toMatch(/^[0-9a-f]{64}$/);
+    expect((await heartbeat()).agent_plugins).toEqual({ revision: initialRevision });
+
+    // Daemon-observed state is excluded: the daemon produces it, so reporting it
+    // must not look like a control-plane change and re-trigger the desired GET.
+    const report = await app.request(
+      `/api/daemon/runtimes/${runtime.id}/agent-plugins/${plugin.activeVersionId}/state`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ status: "ready", observed_digest: plugin.activeVersion!.artifactDigest }),
+      },
+    );
+    expect(report.status).toBe(200);
+    expect(await desiredRevision()).toBe(initialRevision);
+    expect((await heartbeat()).agent_plugins).toEqual({ revision: initialRevision });
+
+    // Every control-plane change that alters what the daemon must install bumps it.
+    const replacement = store.importAgentPlugin({
+      provider: "claude",
+      manifest: { name: "ack-plugin-extra", version: "1.0.0" },
+    });
+    store.createAgentPluginBinding(agent.id, { pluginId: replacement.id });
+    const boundRevision = await desiredRevision();
+    expect(boundRevision).not.toBe(initialRevision);
+    expect((await heartbeat()).agent_plugins).toEqual({ revision: boundRevision });
+
+    store.deleteAgentPluginBinding(agent.id, binding.id);
+    const unboundRevision = await desiredRevision();
+    expect(unboundRevision).not.toBe(boundRevision);
+    expect((await heartbeat()).agent_plugins).toEqual({ revision: unboundRevision });
+
+    const nextVersion = store.createAgentPluginVersion(replacement.id, {
+      manifest: { name: "ack-plugin-extra", version: "1.1.0" },
+    });
+    store.reportAgentPluginRuntimeState(runtime.id, nextVersion.id, {
+      status: "ready",
+      observedDigest: nextVersion.artifactDigest,
+    });
+    store.activateAgentPluginVersion(replacement.id, nextVersion.id);
+    const activatedRevision = await desiredRevision();
+    expect(activatedRevision).not.toBe(unboundRevision);
+    expect((await heartbeat()).agent_plugins).toEqual({ revision: activatedRevision });
+
+    store.retryAgentPluginRuntime(replacement.id, runtime.id);
+    const retriedRevision = await desiredRevision();
+    expect(retriedRevision).not.toBe(activatedRevision);
+    expect((await heartbeat()).agent_plugins).toEqual({ revision: retriedRevision });
+
+    // A daemon that never advertised the Plugin protocol has nothing to reconcile,
+    // so it must not receive a field it cannot interpret.
+    expect((await heartbeat(0)).agent_plugins).toBeUndefined();
+    const plainRuntime = store.registerRuntime({
+      id: "rt_api_plugin_ack_plain",
+      name: "Plain heartbeat runtime",
+      provider: "claude",
+      daemonId: "daemon-ack",
+      workspaceId: "local",
+    });
+    const plainHeartbeat = await app.request("/api/daemon/heartbeat", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ runtime_id: plainRuntime.id }),
+    });
+    expect(plainHeartbeat.status).toBe(200);
+    expect((await plainHeartbeat.json()).agent_plugins).toBeUndefined();
+  });
+
   it("blocks activation until online runtimes report the candidate digest ready", async () => {
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_api_activate", name: "Runtime", provider: "codex", workspaceId: "local" });
