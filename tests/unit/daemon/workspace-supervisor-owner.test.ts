@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   acquireWorkspaceSupervisorLease,
+  activeWorkspaceSupervisorPids,
   type WorkspaceSupervisorProcessProbe,
 } from "@daemon/agent-runtime/workspace/process-owner.js";
 
@@ -163,6 +164,21 @@ describe("workspace supervisor process ownership", () => {
     const replacement = acquireWorkspaceSupervisorLease(root, { stateRoot });
     replacement.assertOwner();
     replacement.release();
+  });
+
+  it("lists live owners across every workspace root and skips released ones", () => {
+    const { parent, stateRoot } = fixture("scan");
+    expect(activeWorkspaceSupervisorPids({ stateRoot: join(parent, "missing") })).toEqual([]);
+
+    const first = acquireWorkspaceSupervisorLease(join(parent, "first"), { processProbe: fakeProbe(4242, "a"), stateRoot });
+    const second = acquireWorkspaceSupervisorLease(join(parent, "second"), { processProbe: fakeProbe(4343, "b"), stateRoot });
+    const probe = { ...fakeProbe(1, "self"), startId: (pid: number) => pid === 4242 ? "a" : "b" };
+    expect(activeWorkspaceSupervisorPids({ stateRoot, processProbe: probe }).sort()).toEqual([4242, 4343]);
+
+    second.release();
+    expect(activeWorkspaceSupervisorPids({ stateRoot, processProbe: probe })).toEqual([4242]);
+    expect(activeWorkspaceSupervisorPids({ stateRoot, processProbe: { ...probe, isAlive: () => false } })).toEqual([]);
+    first.release();
   });
 
   function fixture(label: string): { parent: string; root: string; stateRoot: string } {

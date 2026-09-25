@@ -26,6 +26,7 @@ import {
   cleanOptionalString,
   daemonRuntimeId,
   hasAnyField,
+  IN_FLIGHT_TASK_STATUSES,
   isActiveTaskStatus,
   isInFlightTaskStatus,
   isRecord,
@@ -37,6 +38,7 @@ import {
   toJson,
 } from "@multiremi/store/helpers.js";
 import { type StoreContext } from "@multiremi/store/context.js";
+import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { canonicalizeDaemonRoutingWithinTransaction } from "@multiremi/store/daemon-routing.js";
 import { RuntimeRequestQueue, type RuntimeRequestSpec } from "@multiremi/store/repos/runtime-request-queue.js";
 import { runtimeDaemonAliases } from "@multiremi/store/runtime-affinity.js";
@@ -242,6 +244,8 @@ export class RuntimesRepo {
   private readonly localSkillImportQueue: RuntimeRequestQueue<MultiremiRuntimeLocalSkillImportRequest>;
   private readonly commandQueue: RuntimeRequestQueue<MultiremiRuntimeCommandRequest>;
   private readonly botMenuPublishQueue: RuntimeRequestQueue<MultiremiBotMenuPublishRequest>;
+  // Postgres only: per runtime, token totals over its settled tasks and the row version they reflect.
+  private readonly settledUsageCache = new Map<string, { version: string; tokens: TaskTokenTotals }>();
 
   constructor(private ctx: StoreContext) {
     this.modelListQueue = new RuntimeRequestQueue(ctx.db, MODEL_LIST_REQUESTS);
@@ -1743,6 +1747,11 @@ export class RuntimesRepo {
     let previousAgentPluginProtocol = readAgentPluginProtocol(runtime.metadata);
     let agentPluginProtocol = previousAgentPluginProtocol;
     let pluginStateChanges: MultiremiAgentPluginRuntimeState[] = [];
+    // Revision of the Runtime's desired Plugin set, echoed back in the ack so a
+    // daemon can skip `GET .../agent-plugins/desired` while nothing it must act
+    // on changed. Computed by the same helper the desired snapshot uses, from
+    // rows this transaction already loaded — no extra query.
+    let agentPluginDesiredRevision: string | null = null;
     if (options.agentPluginProtocol !== undefined) {
       const workspaceId = runtime.workspaceId ?? "local";
       const result = this.ctx.db.transaction(() => {
@@ -1758,14 +1767,16 @@ export class RuntimesRepo {
           [toJson({ ...lockedRuntime.metadata, agent_plugin_protocol: protocol, ...metadataPatch }), now, now, runtimeId],
         );
         const updatedRuntime = this.getRuntime(runtimeId)!;
-        const changes = this.ctx.agentPlugins().recordAgentPluginRuntimeHeartbeatWithinLock(runtimeId);
-        return { runtime: updatedRuntime, previous, protocol, changes };
+        const { changes, revision } =
+          this.ctx.agentPlugins().recordAgentPluginRuntimeHeartbeatWithinLock(runtimeId);
+        return { runtime: updatedRuntime, previous, protocol, changes, revision };
       })();
       if (!result) return { runtime_id: runtimeId, status: "runtime_gone", runtime_gone: true };
       runtime = result.runtime;
       previousAgentPluginProtocol = result.previous;
       agentPluginProtocol = result.protocol;
       pluginStateChanges = result.changes;
+      agentPluginDesiredRevision = result.revision;
       for (const state of pluginStateChanges) {
         this.ctx.emitWorkspaceEvent({
           type: "agent_plugin:runtime_state",
@@ -1818,6 +1829,14 @@ export class RuntimesRepo {
       );
     }
     const ack: MultiremiDaemonHeartbeatAck = { runtime_id: runtimeId, status: "ok" };
+    // Only a daemon that speaks the Plugin protocol can use this; a legacy
+    // daemon that advertises protocol 0 ignores unknown ack fields anyway.
+    if (
+      agentPluginDesiredRevision
+      && (agentPluginProtocol ?? 0) >= MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION
+    ) {
+      ack.agent_plugins = { revision: agentPluginDesiredRevision };
+    }
     if (options.claimPending === false) return ack;
 
     const pendingUpdate = this.claimRuntimeUpdateRequest(runtimeId);
@@ -2076,16 +2095,15 @@ export class RuntimesRepo {
     return true;
   }
 
-  private runtimeUsageSummary(runtimeId: string): Pick<MultiremiRuntime,
-    "taskCount" |
-    "activeTaskCount" |
-    "completedTaskCount" |
-    "failedTaskCount" |
-    "inputTokens" |
-    "outputTokens" |
-    "cacheReadTokens" |
-    "cacheWriteTokens"
-  > {
+  private runtimeUsageSummary(runtimeId: string): RuntimeUsageSummary {
+    // Every runtime read (heartbeat, claim, runtime lists) lands here. On Postgres each row crosses
+    // the worker bridge as JSON, so re-reading a runtime's whole task history on every read
+    // dominated those requests. bun:sqlite reads in-process and keeps the plain scan.
+    if (this.ctx.db instanceof PostgresSyncDatabase) return this.runtimeUsageSummaryPostgres(this.ctx.db, runtimeId);
+    return this.runtimeUsageSummaryScan(runtimeId);
+  }
+
+  private runtimeUsageSummaryScan(runtimeId: string): RuntimeUsageSummary {
     const rows = this.ctx.db.query(
       "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
     ).all(runtimeId) as Row[];
@@ -2104,14 +2122,96 @@ export class RuntimesRepo {
       if (isInFlightTaskStatus(status)) stats.activeTaskCount += 1;
       if (status === "completed") stats.completedTaskCount += 1;
       if (status === "failed") stats.failedTaskCount += 1;
-      for (const entry of parseTaskUsageEntries(row.usage)) {
-        stats.inputTokens += entry.inputTokens;
-        stats.outputTokens += entry.outputTokens;
-        stats.cacheReadTokens += entry.cacheReadTokens;
-        stats.cacheWriteTokens += entry.cacheWriteTokens;
-      }
+      addTaskUsage(stats, row.usage);
     }
     return stats;
+  }
+
+  /**
+   * Counts come from SQL. Token totals still come from `parseTaskUsageEntries`, so they match the
+   * scan exactly, but only unsettled tasks (a handful) send their usage every time. Settled tasks'
+   * totals are cached per runtime under a version of those rows (ids plus `xmin`, which every
+   * insert, update or delete changes) and re-read only when the version moves.
+   */
+  private runtimeUsageSummaryPostgres(db: PostgresSyncDatabase, runtimeId: string): RuntimeUsageSummary {
+    const inFlight = IN_FLIGHT_TASK_STATUSES.map(() => "?").join(", ");
+    const settled = SETTLED_TASK_STATUSES.map(() => "?").join(", ");
+    const row = db.query(
+      `SELECT COUNT(*) AS task_count,
+              COUNT(*) FILTER (WHERE status IN (${inFlight})) AS active_task_count,
+              COUNT(*) FILTER (WHERE status = 'completed') AS completed_task_count,
+              COUNT(*) FILTER (WHERE status = 'failed') AS failed_task_count,
+              ${tasksVersionSql(` FILTER (WHERE status IN (${settled}))`)} AS settled_version,
+              (json_agg(usage) FILTER (WHERE status NOT IN (${settled})))::text AS open_usage
+       FROM multiremi_tasks
+       WHERE runtime_id = ?`,
+    ).get(...IN_FLIGHT_TASK_STATUSES, ...SETTLED_TASK_STATUSES, ...SETTLED_TASK_STATUSES, runtimeId) as Row;
+    const settledTokens = this.settledTaskTokens(db, runtimeId, String(row.settled_version ?? ""));
+    // A task settled or changed between the two reads; rescan rather than mix two snapshots.
+    if (!settledTokens) return this.runtimeUsageSummaryScan(runtimeId);
+    const stats = {
+      taskCount: Number(row.task_count ?? 0),
+      activeTaskCount: Number(row.active_task_count ?? 0),
+      completedTaskCount: Number(row.completed_task_count ?? 0),
+      failedTaskCount: Number(row.failed_task_count ?? 0),
+      ...settledTokens,
+    };
+    for (const usage of parseJson<unknown[]>(row.open_usage, [])) addTaskUsage(stats, usage);
+    return stats;
+  }
+
+  /** Token totals over the runtime's settled tasks at `version`, or null if the rows moved past it. */
+  private settledTaskTokens(db: PostgresSyncDatabase, runtimeId: string, version: string): TaskTokenTotals | null {
+    const cached = this.settledUsageCache.get(runtimeId);
+    if (cached?.version === version) return { ...cached.tokens };
+    const settled = SETTLED_TASK_STATUSES.map(() => "?").join(", ");
+    const row = db.query(
+      `SELECT ${tasksVersionSql()} AS settled_version, json_agg(usage)::text AS settled_usage
+       FROM multiremi_tasks
+       WHERE runtime_id = ? AND status IN (${settled})`,
+    ).get(runtimeId, ...SETTLED_TASK_STATUSES) as Row;
+    const tokens = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    for (const usage of parseJson<unknown[]>(row.settled_usage, [])) addTaskUsage(tokens, usage);
+    const current = String(row.settled_version ?? "");
+    // Two writes to one row inside a transaction leave the same `xmin`, so a version read between
+    // them could outlive the second write. Cache only outside transactions; lookups inside one stay
+    // safe, since no cached version can include rows this transaction wrote.
+    if (!db.inTransaction) this.settledUsageCache.set(runtimeId, { version: current, tokens });
+    return current === version ? { ...tokens } : null;
+  }
+}
+
+type RuntimeUsageSummary = Pick<MultiremiRuntime,
+  "taskCount" |
+  "activeTaskCount" |
+  "completedTaskCount" |
+  "failedTaskCount" |
+  "inputTokens" |
+  "outputTokens" |
+  "cacheReadTokens" |
+  "cacheWriteTokens"
+>;
+
+type TaskTokenTotals = Pick<MultiremiRuntime, "inputTokens" | "outputTokens" | "cacheReadTokens" | "cacheWriteTokens">;
+
+// Tasks in these states are finished; their rows (and usage) rarely change again.
+const SETTLED_TASK_STATUSES: readonly MultiremiTaskStatus[] = ["completed", "failed", "cancelled"];
+
+/**
+ * Digest of task ids and `xmin`. A row's `xmin` is the transaction that wrote its current version,
+ * so inserting, updating, deleting or re-homing any matched row changes the digest. "C" collation
+ * keeps the order independent of the database locale.
+ */
+function tasksVersionSql(filter = ""): string {
+  return `md5(string_agg(id || ':' || xmin::text, ',' ORDER BY id COLLATE "C")${filter})`;
+}
+
+function addTaskUsage(stats: TaskTokenTotals, usage: unknown): void {
+  for (const entry of parseTaskUsageEntries(usage)) {
+    stats.inputTokens += entry.inputTokens;
+    stats.outputTokens += entry.outputTokens;
+    stats.cacheReadTokens += entry.cacheReadTokens;
+    stats.cacheWriteTokens += entry.cacheWriteTokens;
   }
 }
 

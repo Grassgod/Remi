@@ -63,7 +63,16 @@ describe("hermetic test environment", () => {
   test("the scrub list covers the auth-relevant variables", () => {
     // Named explicitly so dropping a prefix or key is a test failure, not a silent
     // widening of what the host can influence.
-    for (const name of ["MULTIREMI_TOKEN", "MULTIREMI_SHARE_SECRET", "JWT_SECRET", "GITHUB_TOKEN"]) {
+    for (const name of [
+      "MULTIREMI_TOKEN",
+      "MULTIREMI_SHARE_SECRET",
+      "JWT_SECRET",
+      "GITHUB_TOKEN",
+      // Absent in CI, present in every task on a daemon host: without them a
+      // restart path under test would restart the host's real daemon unit.
+      "INVOCATION_ID",
+      "XPC_SERVICE_NAME",
+    ]) {
       expect(isScrubbedEnvKey(name), `${name} must stay in the scrub list`).toBe(true);
     }
     expect([...SCRUBBED_ENV_PREFIXES]).toContain("MULTIREMI_");

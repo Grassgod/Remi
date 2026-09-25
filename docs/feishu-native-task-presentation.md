@@ -38,6 +38,9 @@ persistent receipt mechanism removes it on success, without adding `DONE`, after
 the final card is acknowledged. Failure or cancellation still replaces it with
 `CROSSMARK`. A delivery resumed from an acknowledged result checkpoint does not
 add `THINKING` again; receipt cleanup can retry without resending the result.
+When delivery fails before a result is acknowledged, `CROSSMARK` is best effort:
+a refused reaction is only logged, and the original error is reported as the
+delivery's `last_error` and decides whether the outbox retries (MUL-365).
 Native CoT contains actual
 provider process events; a silent wait is represented by the receipt.
 
@@ -102,6 +105,11 @@ receipt states cannot be discarded. Inbound event deduplication and queue
 insertion commit together. Callback recovery reconstructs handlers from the
 original Task request and saved card ID; operator/app/chat/message are checked,
 and the canonical server compare-and-set accepts only the first human response.
+
+The bot host daemon may differ from the daemon executing the Task. For Tasks of
+Chats bound to the enabled bot, it may read Task status, messages and a single
+human request, and submit a response. Creating or expiring a human request and
+every execution mutation stay with the executing daemon (MUL-321, MUL-365).
 
 Native CoT creation/append has no verified idempotency parameter. A durable
 write intent precedes those requests. If a crash leaves an ambiguous write, the

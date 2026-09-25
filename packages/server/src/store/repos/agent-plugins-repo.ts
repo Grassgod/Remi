@@ -60,6 +60,29 @@ const DAEMON_RECONCILE_TIMEOUT_CODE = "daemon_plugin_reconcile_timeout";
 const DAEMON_RECONCILE_TIMEOUT_MESSAGE =
   "The daemon advertised Agent Plugin support but did not start reconciliation after 3 heartbeats.";
 
+// Every version column `toVersion` reads. `artifact_json` (the full bundle, ~1 MB per row in
+// production) is deliberately absent: only the artifact download reads it. `artifact_files` still
+// has to be read once because `files` is derived from it, which is what `versionCache` amortizes.
+const VERSION_COLUMNS = [
+  "id",
+  "plugin_id",
+  "version",
+  "manifest_path",
+  "manifest",
+  "artifact_files",
+  "artifact_digest",
+  "artifact_size",
+  "source_revision",
+  "requirements",
+  "metadata",
+  "created_by",
+  "created_at",
+].join(", ");
+// Version rows are immutable once inserted and never deleted, so a cached entry cannot go stale.
+// Entries hold metadata only (file contents are stripped); the cap just bounds memory, evicting
+// the least recently used.
+const VERSION_CACHE_LIMIT = 1024;
+
 export class AgentPluginStoreError extends Error {
   constructor(message: string, readonly code: string, readonly status: number) {
     super(message);
@@ -68,6 +91,14 @@ export class AgentPluginStoreError extends Error {
 }
 
 export class AgentPluginsRepo {
+  // Daemon plugin polling resolves the same few versions on every request (plugin active/candidate
+  // version, binding resolved version, runtime state version). Without this each resolution
+  // re-read the version's artifact payload through the Postgres worker bridge.
+  private readonly versionCache = new Map<string, MultiremiAgentPluginVersion>();
+  // Versions inserted by the running transaction. Reads inside it cache them before they commit,
+  // so a rollback must evict them (see `runVersionTransaction`).
+  private readonly uncommittedVersionIds = new Set<string>();
+
   constructor(private readonly ctx: StoreContext) {}
 
   /** Must be called inside a database transaction. */
@@ -187,7 +218,7 @@ export class AgentPluginsRepo {
         this.reconcileAgentPluginDesiredStateLocked(workspaceId);
         result = this.getAgentPlugin(String(pluginRow.id));
       });
-      transaction();
+      this.runVersionTransaction(transaction);
       return result!;
     } catch (error) {
       throw normalizeStoreError(error);
@@ -227,7 +258,7 @@ export class AgentPluginsRepo {
       this.reconcileAgentPluginDesiredStateLocked(plugin.workspaceId);
     });
     try {
-      transaction();
+      this.runVersionTransaction(transaction);
       return result!;
     } catch (error) {
       throw normalizeStoreError(error);
@@ -289,14 +320,28 @@ export class AgentPluginsRepo {
   listAgentPluginVersions(pluginId: string): MultiremiAgentPluginVersion[] {
     this.requirePlugin(pluginId, true);
     const rows = this.ctx.db.query(
-      "SELECT * FROM multiremi_agent_plugin_versions WHERE plugin_id = ? ORDER BY created_at DESC",
+      "SELECT id FROM multiremi_agent_plugin_versions WHERE plugin_id = ? ORDER BY created_at DESC",
     ).all(pluginId) as Row[];
-    return rows.map((row) => this.toVersion(row));
+    return rows.map((row) => this.requireVersion(String(row.id)));
   }
 
   getAgentPluginVersion(id: string): MultiremiAgentPluginVersion | null {
-    const row = this.ctx.db.query("SELECT * FROM multiremi_agent_plugin_versions WHERE id = ?").get(id) as Row | null;
-    return row ? this.toVersion(row) : null;
+    let version = this.versionCache.get(id);
+    if (version) {
+      this.versionCache.delete(id);
+    } else {
+      const row = this.ctx.db.query(
+        `SELECT ${VERSION_COLUMNS} FROM multiremi_agent_plugin_versions WHERE id = ?`,
+      ).get(id) as Row | null;
+      if (!row) return null;
+      version = this.toVersion(row);
+      if (this.versionCache.size >= VERSION_CACHE_LIMIT) {
+        this.versionCache.delete(this.versionCache.keys().next().value!);
+      }
+    }
+    this.versionCache.set(id, version);
+    // Callers get their own copy so nothing can mutate the shared cached entry.
+    return structuredClone(version);
   }
 
   activateAgentPluginVersion(pluginId: string, versionId: string): MultiremiAgentPlugin {
@@ -604,7 +649,7 @@ export class AgentPluginsRepo {
       lastError: cleanString(row.last_error),
       updatedAt: String(row.updated_at),
     }));
-    const revision = createHash("sha256").update(canonicalJson(plugins)).digest("hex");
+    const revision = desiredRevision(rows);
     return { runtimeId: runtime.id, revision, plugins };
   }
 
@@ -723,11 +768,19 @@ export class AgentPluginsRepo {
       this.lockAgentPluginWorkspace(workspaceId);
       return this.recordAgentPluginRuntimeHeartbeatWithinLock(runtimeId);
     });
-    return transaction();
+    return transaction().changes;
   }
 
-  /** Caller owns the workspace lifecycle and Plugin locks in that order. */
-  recordAgentPluginRuntimeHeartbeatWithinLock(runtimeId: string): MultiremiAgentPluginRuntimeState[] {
+  /**
+   * Caller owns the workspace lifecycle and Plugin locks in that order.
+   *
+   * Returns the observed-state transitions plus the desired revision that was
+   * computed from the same rows the reconciliation already read, so a heartbeat
+   * ack can hand the daemon a change token without any extra query.
+   */
+  recordAgentPluginRuntimeHeartbeatWithinLock(
+    runtimeId: string,
+  ): { changes: MultiremiAgentPluginRuntimeState[]; revision: string } {
     const runtime = this.requireRuntime(runtimeId);
     const workspaceId = runtime.workspaceId ?? "local";
     const beforeRows = this.ctx.db.query(
@@ -751,8 +804,9 @@ export class AgentPluginsRepo {
       // the historical row so heartbeat callers can publish the removal.
       if (!reconciledIds.has(id)) changed.add(id);
     }
+    const revision = desiredRevision(reconciledRows);
     if (!runtimeSupportsAgentPlugins(this.requireRuntime(runtimeId))) {
-      return [...changed].map((id) => this.requireRuntimeState(id));
+      return { changes: [...changed].map((id) => this.requireRuntimeState(id)), revision };
     }
 
     const rows = this.ctx.db.query(
@@ -783,7 +837,7 @@ export class AgentPluginsRepo {
       );
       changed.add(id);
     }
-    return [...changed].map((id) => this.requireRuntimeState(id));
+    return { changes: [...changed].map((id) => this.requireRuntimeState(id)), revision };
   }
 
   retryAgentPluginRuntime(pluginId: string, runtimeId?: string | null, versionId?: string | null): MultiremiAgentPluginRuntimeState[] {
@@ -839,19 +893,19 @@ export class AgentPluginsRepo {
   } | null {
     const row = workspaceId
       ? this.ctx.db.query(
-        `SELECT v.* FROM multiremi_agent_plugin_versions v
+        `SELECT v.id, v.artifact_json FROM multiremi_agent_plugin_versions v
          JOIN multiremi_agent_plugins p ON p.id = v.plugin_id
          WHERE v.artifact_digest = ? AND p.workspace_id = ?
          ORDER BY v.created_at DESC LIMIT 1`,
       ).get(digest, workspaceId) as Row | null
       : this.ctx.db.query(
-        `SELECT v.* FROM multiremi_agent_plugin_versions v
+        `SELECT v.id, v.artifact_json FROM multiremi_agent_plugin_versions v
          JOIN multiremi_agent_plugins p ON p.id = v.plugin_id
          WHERE v.artifact_digest = ?
          ORDER BY v.created_at DESC LIMIT 1`,
       ).get(digest) as Row | null;
     if (!row) return null;
-    const version = this.toVersion(row);
+    const version = this.requireVersion(String(row.id));
     return {
       plugin: this.requirePlugin(version.pluginId, true),
       version,
@@ -1093,7 +1147,7 @@ export class AgentPluginsRepo {
     },
   ): MultiremiAgentPluginVersion {
     const existing = this.ctx.db.query(
-      "SELECT * FROM multiremi_agent_plugin_versions WHERE plugin_id = ? AND version = ?",
+      "SELECT id, artifact_digest FROM multiremi_agent_plugin_versions WHERE plugin_id = ? AND version = ?",
     ).get(pluginId, artifact.version) as Row | null;
     if (existing) {
       if (String(existing.artifact_digest) !== artifact.artifactDigest) {
@@ -1102,7 +1156,7 @@ export class AgentPluginsRepo {
           "plugin_version_conflict",
         );
       }
-      return this.toVersion(existing);
+      return this.requireVersion(String(existing.id));
     }
     const id = createId("apv");
     this.ctx.db.run(
@@ -1127,7 +1181,20 @@ export class AgentPluginsRepo {
         nowIso(),
       ],
     );
+    this.uncommittedVersionIds.add(id);
     return this.requireVersion(id);
+  }
+
+  /** Runs a transaction that may insert versions; if it rolls back, those versions leave `versionCache`. */
+  private runVersionTransaction(transaction: () => void): void {
+    try {
+      transaction();
+    } catch (error) {
+      for (const id of this.uncommittedVersionIds) this.versionCache.delete(id);
+      throw error;
+    } finally {
+      this.uncommittedVersionIds.clear();
+    }
   }
 
   private normalizeBindingVersion(
@@ -1196,10 +1263,10 @@ export class AgentPluginsRepo {
 
   private previousPluginVersion(plugin: MultiremiAgentPlugin): MultiremiAgentPluginVersion | null {
     const row = this.ctx.db.query(
-      `SELECT * FROM multiremi_agent_plugin_versions
+      `SELECT id FROM multiremi_agent_plugin_versions
        WHERE plugin_id = ? AND id <> ? ORDER BY created_at DESC LIMIT 1`,
     ).get(plugin.id, plugin.activeVersionId ?? "") as Row | null;
-    return row ? this.toVersion(row) : null;
+    return row ? this.getAgentPluginVersion(String(row.id)) : null;
   }
 
   private addDesired(
@@ -1485,6 +1552,31 @@ export function runtimeSupportsAgentPlugins(runtime: {
     runtime.metadata.agent_plugin_protocol ?? runtime.metadata.agentPluginProtocol ?? 0,
   );
   return Number.isSafeInteger(protocol) && protocol >= MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION;
+}
+
+/**
+ * Change token for one Runtime's desired Plugin set.
+ *
+ * Only fields that can change what a daemon has to do are hashed: which desired
+ * rows exist, which immutable Plugin version each one pins, and the retry
+ * generation the control plane is demanding. Observed state (`status`,
+ * `observed_digest`, `retry_count`, `updated_at`) is excluded on purpose —
+ * the daemon produces those itself, so including them would bump the revision
+ * on every state report and send the daemon straight back to `GET desired`.
+ *
+ * The row id list is sorted so the token does not depend on query order: the
+ * snapshot query orders by provider/name/version and the heartbeat query has no
+ * ORDER BY, yet both must agree on the same desired set.
+ */
+function desiredRevision(rows: Row[]): string {
+  const entries = rows
+    .map((row) => ({
+      id: String(row.id),
+      pluginVersionId: String(row.plugin_version_id),
+      retryGeneration: Number(row.retry_generation ?? 0),
+    }))
+    .sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
+  return createHash("sha256").update(canonicalJson(entries)).digest("hex");
 }
 
 function runtimeStateFingerprint(row: Row): string {

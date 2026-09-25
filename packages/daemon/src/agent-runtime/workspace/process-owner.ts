@@ -158,6 +158,41 @@ export function acquireWorkspaceSupervisorLease(
   }
 }
 
+/**
+ * PIDs of every live, unreleased supervisor lease across all workspace roots.
+ * The supervisor state root lives under the home directory rather than the
+ * workspace root, so this sees daemons that share this HOME but run with a
+ * different workspace root or state directory; a daemon started with another
+ * HOME keeps its leases elsewhere. An owner file that cannot be read throws:
+ * callers treat that as busy.
+ */
+export function activeWorkspaceSupervisorPids(options: {
+  stateRoot?: string;
+  processProbe?: WorkspaceSupervisorProcessProbe;
+} = {}): number[] {
+  const root = resolve(options.stateRoot ?? defaultSupervisorStateRoot());
+  let entries: string[];
+  try {
+    entries = readdirSync(root);
+  } catch (error) {
+    if (isMissingPath(error)) return [];
+    throw error;
+  }
+  const probe = options.processProbe ?? defaultProcessProbe();
+  const pids: number[] = [];
+  for (const entry of entries) {
+    let observed: ObservedOwner;
+    try {
+      observed = inspectOwner(join(root, entry, OWNER_LOCK_DIR));
+    } catch (error) {
+      if (isMissingPath(error)) continue;
+      throw error;
+    }
+    if (ownerIsActive(observed.owner, probe)) pids.push(observed.owner.pid);
+  }
+  return pids;
+}
+
 function createLease(
   lockPath: string,
   workspaceRoot: string,
@@ -252,10 +287,12 @@ function prepareWorkspaceRoot(input: string): { workspaceRoot: string; identity:
   return { workspaceRoot: root, identity: stat };
 }
 
+function defaultSupervisorStateRoot(): string {
+  return join(userInfo().homedir, ".multiremi", "workspace-supervisors");
+}
+
 function prepareSupervisorStateRoot(input?: string): string {
-  const requested = resolve(
-    input ?? join(userInfo().homedir, ".multiremi", "workspace-supervisors"),
-  );
+  const requested = resolve(input ?? defaultSupervisorStateRoot());
   mkdirSync(requested, { recursive: true, mode: 0o700 });
   const root = realpathSync(requested);
   const stat = lstatSync(root);

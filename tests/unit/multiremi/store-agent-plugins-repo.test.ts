@@ -1,8 +1,35 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
+import type { Database } from "bun:sqlite";
+import { MultiremiStore } from "@multiremi/store.js";
+import type { MultiremiAgentPluginVersion } from "@multiremi/contracts/types.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
+
+/** Records every statement the store prepares on `database` from now on. */
+function recordStatements(database: Database): string[] {
+  const statements: string[] = [];
+  const query = database.query.bind(database);
+  const prepare = database.prepare.bind(database);
+  database.query = ((sql: string) => {
+    statements.push(sql);
+    return query(sql);
+  }) as Database["query"];
+  database.prepare = ((sql: string, ...rest: unknown[]) => {
+    statements.push(sql);
+    return (prepare as (sql: string, ...rest: unknown[]) => ReturnType<Database["prepare"]>)(sql, ...rest);
+  }) as Database["prepare"];
+  return statements;
+}
+
+/** The pre-MUL-366 read: every column of the row, mapped by the repo's own `toVersion`. */
+function legacyVersionRead(store: MultiremiStore, id: string): MultiremiAgentPluginVersion {
+  const row = db!.query("SELECT * FROM multiremi_agent_plugin_versions WHERE id = ?").get(id) as Record<string, unknown>;
+  const repo = (store as unknown as { agentPlugins: { toVersion(row: Record<string, unknown>): MultiremiAgentPluginVersion } })
+    .agentPlugins;
+  return repo.toVersion(row);
+}
 
 function claudePluginInput(version = "1.0.0", content = "# Lark\n") {
   return {
@@ -88,6 +115,117 @@ describe("AgentPluginsRepo", () => {
     expect(candidate.version).toBe("1.1.0");
     expect(updated.activeVersion?.version).toBe("1.0.0");
     expect(updated.candidateVersion?.version).toBe("1.1.0");
+  });
+
+  it("reads versions without the artifact bundle and returns what the full-row read returned (MUL-366)", () => {
+    const writer = createStore();
+    const plugin = writer.importAgentPlugin(claudePluginInput());
+    const candidate = writer.createAgentPluginVersion(plugin.id, {
+      manifest: claudePluginInput("2.0.0").manifest,
+      files: claudePluginInput("2.0.0", "# Lark v2\n").files,
+      sourceRevision: "commit-2.0.0",
+    });
+    // Non-default values, so a column dropped from the trimmed SELECT shows up as a mismatch.
+    db!.run(
+      "UPDATE multiremi_agent_plugin_versions SET created_by = ?, requirements = ?, metadata = ? WHERE id = ?",
+      ["usr_mul366", JSON.stringify({ minDaemon: "1.2.3" }), JSON.stringify({ channel: "stable" }), candidate.id],
+    );
+
+    // A second store on the same database starts with a cold version cache.
+    const reader = new MultiremiStore(db!);
+    const statements = recordStatements(db!);
+    const versionReads = () => statements.filter((sql) => sql.includes("multiremi_agent_plugin_versions"));
+
+    for (const id of [plugin.activeVersionId!, candidate.id]) {
+      expect(reader.getAgentPluginVersion(id)).toEqual(legacyVersionRead(reader, id));
+    }
+    expect(reader.getAgentPluginVersion(candidate.id)).toMatchObject({
+      createdBy: "usr_mul366",
+      requirements: { minDaemon: "1.2.3" },
+      metadata: { channel: "stable" },
+      sourceRevision: "commit-2.0.0",
+    });
+    expect(reader.getAgentPluginVersion("apv_missing")).toBeNull();
+    const listed = reader.listAgentPluginVersions(plugin.id);
+    expect(listed.map((version) => version.id)).toEqual([candidate.id, plugin.activeVersionId!]);
+    expect(listed).toEqual(listed.map((version) => legacyVersionRead(reader, version.id)));
+    const fetched = reader.getAgentPlugin(plugin.id)!;
+    expect(fetched.activeVersion).toEqual(legacyVersionRead(reader, plugin.activeVersionId!));
+    expect(fetched.candidateVersion).toEqual(legacyVersionRead(reader, candidate.id));
+
+    const repoReads = versionReads().filter((sql) => !sql.startsWith("SELECT * FROM multiremi_agent_plugin_versions WHERE id = ?"));
+    expect(repoReads.length).toBeGreaterThan(0);
+    for (const sql of repoReads) {
+      expect(sql).not.toContain("artifact_json");
+      expect(sql).not.toMatch(/SELECT\s+(\w+\.)?\*/);
+    }
+
+    // Each version row is read once; later reads, including the daemon's repeated plugin lookups, hit the cache.
+    statements.length = 0;
+    for (let i = 0; i < 3; i += 1) {
+      reader.getAgentPluginVersion(candidate.id);
+      reader.getAgentPlugin(plugin.id);
+    }
+    expect(versionReads()).toEqual([]);
+  });
+
+  it("drops a version from the cache when the transaction that inserted it rolls back", () => {
+    const store = createStore();
+    const plugin = store.importAgentPlugin(claudePluginInput());
+    const repo = (store as unknown as { agentPlugins: { reconcileAgentPluginDesiredStateLocked(workspaceId: string): void } })
+      .agentPlugins;
+    let insertedId: string | null = null;
+    repo.reconcileAgentPluginDesiredStateLocked = () => {
+      // Runs after the insert, inside the same transaction; this read caches the uncommitted row.
+      insertedId = (db!.query("SELECT id FROM multiremi_agent_plugin_versions WHERE version = '2.0.0'").get() as { id: string }).id;
+      expect(store.getAgentPluginVersion(insertedId)?.version).toBe("2.0.0");
+      throw new Error("reconcile failed");
+    };
+
+    expect(() => store.createAgentPluginVersion(plugin.id, {
+      manifest: claudePluginInput("2.0.0").manifest,
+      files: claudePluginInput("2.0.0", "# Lark v2\n").files,
+    })).toThrow("reconcile failed");
+    expect(insertedId).not.toBeNull();
+    expect(db!.query("SELECT id FROM multiremi_agent_plugin_versions WHERE id = ?").get(insertedId)).toBeNull();
+    expect(store.getAgentPluginVersion(insertedId!)).toBeNull();
+    expect(store.getAgentPluginVersion(plugin.activeVersionId!)?.version).toBe("1.0.0");
+  });
+
+  it("hands out copies of cached versions", () => {
+    const store = createStore();
+    const plugin = store.importAgentPlugin(claudePluginInput());
+    const id = plugin.activeVersionId!;
+    const first = store.getAgentPluginVersion(id)!;
+    first.files.length = 0;
+    first.manifest.version = "tampered";
+    first.metadata.injected = true;
+    const second = store.getAgentPluginVersion(id)!;
+    expect(second).not.toBe(first);
+    expect(second).toEqual(legacyVersionRead(store, id));
+    expect(second.files).toHaveLength(3);
+    expect(store.getAgentPlugin(plugin.id)!.activeVersion?.manifest.version).toBe("1.0.0");
+  });
+
+  it("downloads the stored artifact bytes unchanged after the column trim (MUL-366)", () => {
+    const store = createStore();
+    const plugin = store.importAgentPlugin(claudePluginInput());
+    const digest = plugin.activeVersion!.artifactDigest;
+    const raw = db!.query("SELECT artifact_json FROM multiremi_agent_plugin_versions WHERE id = ?")
+      .get(plugin.activeVersionId!) as { artifact_json: string };
+
+    for (const artifact of [
+      store.getAgentPluginArtifactByDigest(digest)!,
+      store.getAgentPluginArtifactByDigest(digest, plugin.workspaceId)!,
+    ]) {
+      expect(artifact.artifactJson).toBe(raw.artifact_json);
+      expect(createHash("sha256").update(artifact.artifactJson).digest("hex")).toBe(digest);
+      expect(artifact.artifact).toEqual(JSON.parse(raw.artifact_json));
+      expect(artifact.version).toEqual(legacyVersionRead(store, plugin.activeVersionId!));
+      expect(artifact.plugin.id).toBe(plugin.id);
+    }
+    expect(store.getAgentPluginArtifactByDigest(digest, "ws_other")).toBeNull();
+    expect(store.getAgentPluginArtifactByDigest("0".repeat(64))).toBeNull();
   });
 
   it("validates provider manifests and safe artifact paths", () => {
@@ -480,6 +618,119 @@ describe("AgentPluginsRepo", () => {
       agent_plugin_protocol: 0,
       supported: false,
     });
+  });
+
+  it("keeps the desired revision stable across observed-state churn and probes control-plane changes", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Claude", provider: "claude" });
+    const runtime = store.registerRuntime({
+      id: "rt_plugin_revision",
+      name: "Revision runtime",
+      provider: "claude",
+      daemonId: "daemon-revision",
+      workspaceId: "local",
+      metadata: { agent_plugin_protocol: 1 },
+    });
+    const plugin = store.importAgentPlugin(claudePluginInput());
+    const binding = store.createAgentPluginBinding(agent.id, { pluginId: plugin.id });
+    const revision = () => store.getRuntimeAgentPluginDesiredSnapshot(runtime.id).revision;
+
+    const bound = revision();
+    expect(bound).toMatch(/^[0-9a-f]{64}$/);
+
+    // The daemon's own reports are not desired-state changes. Hashing observed
+    // status here would make every state POST bump the revision, and the daemon
+    // would fetch desired state again immediately after every report.
+    store.reportAgentPluginRuntimeState(runtime.id, plugin.activeVersionId!, {
+      status: "ready",
+      observedDigest: plugin.activeVersion!.artifactDigest,
+    });
+    expect(revision()).toBe(bound);
+    store.retryAgentPluginRuntime(plugin.id, runtime.id);
+    const retried = revision();
+    expect(retried).not.toBe(bound);
+
+    // A no-op reconciliation (the heartbeat path) must not move it either.
+    store.reconcileAgentPluginDesiredState("local");
+    expect(revision()).toBe(retried);
+
+    // Server-side state changes that require new daemon work do move it.
+    store.deleteAgentPluginBinding(agent.id, binding.id);
+    const unbound = revision();
+    expect(unbound).not.toBe(retried);
+    // Re-binding resurrects the row with a bumped retry generation, which is a
+    // real "install this again" instruction, so the revision must move too.
+    const reboundBinding = store.createAgentPluginBinding(agent.id, { pluginId: plugin.id });
+    const rebound = revision();
+    expect(rebound).not.toBe(unbound);
+    expect(rebound).not.toBe(retried);
+
+    const candidate = store.createAgentPluginVersion(plugin.id, {
+      ...claudePluginInput("2.0.0").manifest,
+      manifest: claudePluginInput("2.0.0").manifest,
+      files: claudePluginInput("2.0.0").files,
+      sourceRevision: "commit-2.0.0",
+    });
+    const candidacy = revision();
+    expect(candidacy).not.toBe(rebound);
+    store.reportAgentPluginRuntimeState(runtime.id, candidate.id, {
+      status: "ready",
+      observedDigest: candidate.artifactDigest,
+    });
+    expect(revision()).toBe(candidacy);
+    store.activateAgentPluginVersion(plugin.id, candidate.id);
+    const activated = revision();
+    expect(activated).not.toBe(candidacy);
+
+    // A pinned binding holds its version across activation, and the desired set
+    // as a whole is what the token describes.
+    const pinned = store.createAgentPluginVersion(plugin.id, {
+      ...claudePluginInput("3.0.0").manifest,
+      manifest: claudePluginInput("3.0.0").manifest,
+      files: claudePluginInput("3.0.0").files,
+      sourceRevision: "commit-3.0.0",
+    });
+    store.updateAgentPluginBinding(agent.id, reboundBinding.id, {
+      version_policy: "pinned",
+      version_id: pinned.id,
+    });
+    const pinnedRevision = revision();
+    expect(pinnedRevision).not.toBe(activated);
+    store.reconcileAgentPluginDesiredState("local");
+    expect(revision()).toBe(pinnedRevision);
+  });
+
+  it("returns the same desired revision from the heartbeat path as from the snapshot", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Claude", provider: "claude" });
+    const runtime = store.registerRuntime({
+      id: "rt_plugin_revision_ack",
+      name: "Revision ack runtime",
+      provider: "claude",
+      daemonId: "daemon-revision-ack",
+      workspaceId: "local",
+      metadata: { agent_plugin_protocol: 1 },
+    });
+    const plugin = store.importAgentPlugin(claudePluginInput());
+    store.createAgentPluginBinding(agent.id, { pluginId: plugin.id });
+
+    // The heartbeat query has no ORDER BY and the snapshot orders by
+    // provider/name/version, so the revision must not depend on row order.
+    const heartbeatAck = store.heartbeatRuntime(runtime.id, { agentPluginProtocol: 1 });
+    expect(heartbeatAck.agent_plugins?.revision).toBe(
+      store.getRuntimeAgentPluginDesiredSnapshot(runtime.id).revision,
+    );
+
+    // A daemon without Plugin support gets no field, and a heartbeat that does
+    // not advertise the protocol never claims a revision.
+    expect(store.heartbeatRuntime(runtime.id, { agentPluginProtocol: 0 }).agent_plugins).toBeUndefined();
+    const plainRuntime = store.registerRuntime({
+      id: "rt_plugin_revision_plain",
+      name: "Plain revision runtime",
+      provider: "claude",
+      workspaceId: "local",
+    });
+    expect(store.heartbeatRuntime(plainRuntime.id).agent_plugins).toBeUndefined();
   });
 
   it("treats a stale Runtime heartbeat as offline for readiness and activation", () => {

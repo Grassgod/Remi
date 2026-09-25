@@ -63,16 +63,115 @@ export function planDaemonRestart(input: {
   return { kind: "spawn-successor" };
 }
 
-/** Last `*.service` slice of a cgroup path, e.g. `/app.slice/multiremi-daemon.service`. */
-function systemdUnitFromCgroup(cgroup: string | null | undefined): string | null {
+/**
+ * The unit this process runs in, read from /proc/self/cgroup, e.g.
+ * `multiremi-daemon.service`.
+ *
+ * Only the unified (`0::`) and `name=systemd` hierarchies follow systemd's unit
+ * tree. On a cgroup v1 host the controller hierarchies (`pids`, `memory`, …)
+ * stop at the user manager, so the first `.service` there is
+ * `user@<uid>.service` — a system unit `systemctl --user` cannot find, which
+ * silently sent every upgrade back to the spawned-successor path.
+ */
+export function systemdUnitFromCgroup(cgroup: string | null | undefined): string | null {
   if (!cgroup) return null;
+  const paths = new Map<string, string>();
   for (const line of cgroup.split("\n")) {
-    const segment = line.split(":").at(-1)?.trim();
-    if (!segment) continue;
-    const last = segment.split("/").filter(Boolean).at(-1);
+    const match = /^\d+:([^:]*):(.*)$/.exec(line.trim());
+    if (match) paths.set(match[1]!, match[2]!);
+  }
+  for (const hierarchy of ["", "name=systemd"]) {
+    const last = paths.get(hierarchy)?.split("/").filter(Boolean).at(-1);
     if (last && last.endsWith(".service")) return last;
   }
   return null;
+}
+
+export type SuccessorRestartPlan =
+  | { kind: "none" }
+  | { kind: "blocked"; unit: string; mainPid: number; reason: string }
+  | { kind: "service-manager"; unit: string; mainPid: number; command: string; args: string[] };
+
+/**
+ * Whether this daemon was spawned beside its systemd unit's main process and
+ * should ask systemd to collapse the unit into a single process.
+ *
+ * Releases before the cgroup fix could not name the unit on cgroup v1 hosts,
+ * so their upgrade fell back to spawning a successor and left the predecessor
+ * (and every earlier one) inside the unit. The release that ships the fix is
+ * still started by that old code, so the first process on the new binary is
+ * such a successor; restarting the unit from here is what retires the pile
+ * without waiting for another release.
+ *
+ * Restarting the unit kills every process in it, so this only proceeds for a
+ * process the fallback itself spawned: every ancestor up to the unit's main
+ * process must be a foreground daemon. Task processes run inside the unit and
+ * inherit INVOCATION_ID, but a daemon a task starts has a shell or agent
+ * runtime between it and the unit's daemons, whatever HOME, state directory
+ * or port it was given. The main process must itself be a foreground daemon,
+ * so an unrelated unit that happens to host a daemon is never restarted. And
+ * no other daemon may hold a workspace supervisor lease, since a live lease
+ * means a daemon may be running tasks.
+ */
+export function planSpawnedSuccessorRestart(input: {
+  platform: NodeJS.Platform;
+  env: Record<string, string | undefined>;
+  cgroup: string | null | undefined;
+  pid: number;
+  mainPid: (unit: string) => number | null;
+  parentPid: (pid: number) => number | null;
+  commandLine: (pid: number) => string[] | null;
+  activeSupervisorPids: () => number[];
+}): SuccessorRestartPlan {
+  if (input.platform !== "linux" || !input.env.INVOCATION_ID) return { kind: "none" };
+  const unit = systemdUnitFromCgroup(input.cgroup);
+  if (!unit) return { kind: "none" };
+  const mainPid = input.mainPid(unit);
+  if (!mainPid || mainPid === input.pid) return { kind: "none" };
+  if (!isForegroundDaemonCommand(input.commandLine(mainPid))) {
+    return { kind: "blocked", unit, mainPid, reason: "the unit's main process is not a foreground daemon" };
+  }
+  if (!descendsThroughDaemons(input.pid, mainPid, input.parentPid, input.commandLine)) {
+    return { kind: "blocked", unit, mainPid, reason: "this process was not spawned by the unit's daemons" };
+  }
+  let supervisors: number[];
+  try {
+    supervisors = input.activeSupervisorPids().filter((pid) => pid !== input.pid);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { kind: "blocked", unit, mainPid, reason: `workspace supervisor leases are unreadable (${message})` };
+  }
+  if (supervisors.length > 0) {
+    return { kind: "blocked", unit, mainPid, reason: `daemon pid ${supervisors.join(", ")} still owns a workspace root` };
+  }
+  return { kind: "service-manager", unit, mainPid, command: "systemctl", args: ["--user", "restart", "--no-block", unit] };
+}
+
+/**
+ * Whether `pid` reaches `mainPid` through foreground daemons only — the chain
+ * the spawn fallback leaves behind, one successor per release. A missing
+ * parent (the process exited, or the walk hit the service manager) is false.
+ */
+function descendsThroughDaemons(
+  pid: number,
+  mainPid: number,
+  parentPid: (pid: number) => number | null,
+  commandLine: (pid: number) => string[] | null,
+): boolean {
+  let current = parentPid(pid);
+  for (let depth = 0; current && depth < 64; depth++) {
+    if (current === mainPid) return true;
+    if (!isForegroundDaemonCommand(commandLine(current))) return false;
+    current = parentPid(current);
+  }
+  return false;
+}
+
+/** `… daemon start … --foreground …`, as written by the service installer and the spawn fallback. */
+function isForegroundDaemonCommand(argv: string[] | null | undefined): boolean {
+  if (!argv) return false;
+  const daemon = argv.indexOf("daemon");
+  return daemon >= 0 && argv[daemon + 1] === "start" && argv.includes("--foreground");
 }
 
 export interface MultiremiDaemonServiceSpec {

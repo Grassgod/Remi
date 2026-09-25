@@ -2719,7 +2719,7 @@ export class TasksRepo {
     const current = this.ctx.db.query("SELECT COALESCE(MAX(seq), 0) AS seq FROM multiremi_task_messages WHERE task_id = ?")
       .get(taskId) as { seq: number } | null;
     let nextSeq = Number(current?.seq ?? 0) + 1;
-    const insertedSeqs: number[] = [];
+    const changedSeqs: number[] = [];
     const insert = this.ctx.db.prepare(
       `INSERT INTO multiremi_task_messages (
         id, task_id, seq, type, tool, content, input, output, tool_call_id, status, meta, created_at
@@ -2732,15 +2732,20 @@ export class TasksRepo {
         output = excluded.output,
         tool_call_id = excluded.tool_call_id,
         status = excluded.status,
-        meta = excluded.meta`,
+        meta = excluded.meta
+      WHERE (multiremi_task_messages.type, multiremi_task_messages.tool, multiremi_task_messages.content,
+             multiremi_task_messages.input, multiremi_task_messages.output, multiremi_task_messages.tool_call_id,
+             multiremi_task_messages.status, multiremi_task_messages.meta)
+        IS DISTINCT FROM
+            (excluded.type, excluded.tool, excluded.content, excluded.input, excluded.output,
+             excluded.tool_call_id, excluded.status, excluded.meta)`,
     );
     const persistedAt = nowIso();
     const tx = this.ctx.db.transaction(() => {
       for (const message of messages) {
         const seq = message.seq ?? nextSeq++;
-        insertedSeqs.push(seq);
         const id = createId("msg");
-        insert.run(
+        const result = insert.run(
           id,
           taskId,
           seq,
@@ -2754,24 +2759,27 @@ export class TasksRepo {
           message.meta == null ? null : truncateUtf8(toJson(sanitizeTaskMessageJson(message.meta)), TASK_MESSAGE_META_MAX),
           persistedAt,
         );
+        if (result.changes > 0) changedSeqs.push(seq);
       }
-      this.ctx.db.run("UPDATE multiremi_tasks SET updated_at = ? WHERE id = ?", [persistedAt, taskId]);
+      if (changedSeqs.length > 0) {
+        this.ctx.db.run("UPDATE multiremi_tasks SET updated_at = ? WHERE id = ?", [persistedAt, taskId]);
+      }
     });
     tx();
-    const insertedSeqSet = new Set(insertedSeqs);
-    const minSeq = Math.min(...insertedSeqs);
-    const maxSeq = Math.max(...insertedSeqs);
-    const inserted = (this.ctx.db.query(
+    if (changedSeqs.length === 0) return [];
+    const changedSeqSet = new Set(changedSeqs);
+    const minSeq = Math.min(...changedSeqs);
+    const maxSeq = Math.max(...changedSeqs);
+    const changed = (this.ctx.db.query(
       `SELECT * FROM multiremi_task_messages
        WHERE task_id = ? AND seq >= ? AND seq <= ?
        ORDER BY seq ASC`,
     ).all(taskId, minSeq, maxSeq) as Row[])
-      .filter((row) => insertedSeqSet.has(Number(row.seq)))
+      .filter((row) => changedSeqSet.has(Number(row.seq)))
       .map(toTaskMessage);
-    // Re-read the task so listeners see the bumped updated_at, then broadcast
-    // the actual persisted rows (post-truncation / post-upsert).
-    this.ctx.notifyTaskMessages(this.getTask(taskId) ?? task, inserted);
-    return inserted;
+    // Listeners see only rows that changed, using their persisted, sanitized values.
+    this.ctx.notifyTaskMessages(this.getTask(taskId) ?? task, changed);
+    return changed;
   }
 
   listTaskMessages(taskId: string, sinceSeq?: number | null): MultiremiTaskMessage[] {

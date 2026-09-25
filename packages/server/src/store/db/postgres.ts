@@ -10,6 +10,7 @@
  * otherwise the shared bun:sqlite database (core Remi's ~/.remi/remi.db) is used.
  */
 import { getDb } from "@shared/db/index.js";
+import { recordDbParse, recordDbQuery } from "../../observability/request-metrics.js";
 
 export interface SqlStatement {
   get(...params: unknown[]): any;
@@ -174,13 +175,38 @@ class PgBridge {
   private request(msg: { init?: string; sql?: string; params?: unknown[] }): any {
     Atomics.store(this.ctl, 0, STATUS_PENDING);
     this.worker.postMessage({ control: this.control, data: this.data, ...msg });
-    const waited = Atomics.wait(this.ctl, 0, STATUS_PENDING, QUERY_TIMEOUT_MS);
-    if (waited === "timed-out") throw new Error("postgres bridge timed out");
-    const status = Atomics.load(this.ctl, 0);
-    const len = Atomics.load(this.ctl, 1);
-    const obj = JSON.parse(new TextDecoder().decode(this.buf.slice(0, len)));
-    if (status === STATUS_ERROR || obj.error) throw new Error(`postgres: ${obj.error}`);
-    return obj;
+    // MUL-367: measure only real SQL. `init` opens the connection, so counting it
+    // would invent one query per process and inflate the first request's numbers.
+    const measured = msg.sql !== undefined;
+    const startedAt = measured ? performance.now() : 0;
+    let waitRecorded = false;
+    try {
+      const waited = Atomics.wait(this.ctl, 0, STATUS_PENDING, QUERY_TIMEOUT_MS);
+      if (waited === "timed-out") throw new Error("postgres bridge timed out");
+      const status = Atomics.load(this.ctl, 0);
+      const len = Atomics.load(this.ctl, 1);
+      // The reply is on the shared buffer by now, so its size is what crossed the
+      // bridge for this statement.
+      if (measured) {
+        recordDbQuery(performance.now() - startedAt, len);
+        waitRecorded = true;
+      }
+      const parseStartedAt = performance.now();
+      try {
+        const obj = JSON.parse(new TextDecoder().decode(this.buf.slice(0, len)));
+        if (status === STATUS_ERROR || obj.error) throw new Error(`postgres: ${obj.error}`);
+        return obj;
+      } finally {
+        // Main-thread decode + parse is a separate cost from waiting on Postgres;
+        // it is the measurable half of the MUL-366 "serialization + GC" hypothesis.
+        if (measured) recordDbParse(performance.now() - parseStartedAt);
+      }
+    } finally {
+      // A timed-out statement still spent the whole timeout blocked on the bridge.
+      // Counting it keeps a stuck database visible as busy time instead of letting
+      // the request look fast.
+      if (measured && !waitRecorded) recordDbQuery(performance.now() - startedAt, 0);
+    }
   }
 
   exec(sql: string, params: unknown[]): { rows: any[]; count: number } {
@@ -215,8 +241,13 @@ class PgStatement implements SqlStatement {
 
 export class PostgresSyncDatabase implements SqlDatabase {
   private readonly bridge: PgBridge;
+  private transactionDepth = 0;
   constructor(url: string) {
     this.bridge = new PgBridge(url);
+  }
+  /** True while a `transaction()` callback runs; its writes are not committed yet. */
+  get inTransaction(): boolean {
+    return this.transactionDepth > 0;
   }
   query(sql: string): SqlStatement {
     return new PgStatement(this.bridge, translateSqliteToPg(sql));
@@ -236,6 +267,7 @@ export class PostgresSyncDatabase implements SqlDatabase {
   transaction<T>(fn: (...args: any[]) => T): (...args: any[]) => T {
     return (...args: any[]): T => {
       this.bridge.exec("BEGIN", []);
+      this.transactionDepth += 1;
       try {
         const result = fn(...args);
         this.bridge.exec("COMMIT", []);
@@ -247,6 +279,8 @@ export class PostgresSyncDatabase implements SqlDatabase {
           // connection already aborted the transaction
         }
         throw err;
+      } finally {
+        this.transactionDepth -= 1;
       }
     };
   }

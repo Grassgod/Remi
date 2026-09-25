@@ -192,6 +192,55 @@ describe("Feishu bot control-plane delivery", () => {
     expect((await test.app.request(`${taskPath}/status`, { headers: daemonHeaders(test.tokens.rt_a!) })).status).toBe(403);
   });
 
+  it("lets the bot host read, but not create or expire, human requests of a bound Chat on another daemon", async () => {
+    const test = await scaffold();
+    test.store.registerRuntime({ id: "rt_claude", name: "Claude executor", provider: "claude",
+      workspaceId: "local", daemonId: "daemon-claude" });
+    const executor = await test.store.createAccessToken({ name: "executor", type: "daemon",
+      workspaceId: "local", daemonId: "daemon-claude" });
+    test.store.updateAgent(test.agentId, { provider: "claude" });
+    await report(test, "rt_a", { applied_revision: 1, state: "online" });
+    const submitted = test.store.submitFeishuBotMessage("local", "rt_a", {
+      revision: 1, externalSessionKey: "oc_question", externalMessageId: "om_question",
+      chatId: "oc_question", chatType: "p2p", text: "Ask me", deliveryMode: "native_cot_v1",
+    });
+    expect(test.store.claimTask("rt_claude")?.id).toBe(submitted.taskId);
+    const privateChat = test.store.createChatSession({ agentId: test.agentId, creatorId: "local" });
+    const unbound = test.store.createTask({ agentId: test.agentId, chatSessionId: privateChat.id, prompt: "private" });
+    // Same executing daemon as the bound Task, so only the missing binding can refuse it.
+    db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", ["rt_claude", unbound.id]);
+    const question = test.store.createTaskHumanRequest({ taskId: submitted.taskId, kind: "question",
+      payload: { question: "Continue?" } });
+    const privateQuestion = test.store.createTaskHumanRequest({ taskId: unbound.id, kind: "question",
+      payload: { question: "Private?" } });
+    const read = (taskId: string, requestId: string, token: string) =>
+      test.app.request(`/api/daemon/tasks/${taskId}/human-requests/${requestId}`, { headers: daemonHeaders(token) });
+
+    const hosted = await read(submitted.taskId, question.id, test.tokens.rt_a!);
+    expect(hosted.status).toBe(200);
+    expect(await hosted.json()).toMatchObject({ request: { id: question.id, taskId: submitted.taskId, status: "pending" } });
+    expect((await read(submitted.taskId, question.id, executor.token)).status).toBe(200);
+    expect((await read(unbound.id, privateQuestion.id, executor.token)).status).toBe(200);
+    // Not the bot host.
+    expect((await read(submitted.taskId, question.id, test.tokens.rt_b!)).status).toBe(403);
+    // Not a Chat bound to the bot.
+    expect((await read(unbound.id, privateQuestion.id, test.tokens.rt_a!)).status).toBe(403);
+    // Access to one bound Task does not reach another Task's request.
+    expect((await read(submitted.taskId, privateQuestion.id, test.tokens.rt_a!)).status).toBe(404);
+
+    const taskPath = `/api/daemon/tasks/${submitted.taskId}/human-requests`;
+    const create = (token: string) => test.app.request(taskPath, { method: "POST", headers: daemonHeaders(token),
+      body: JSON.stringify({ kind: "question", payload: { question: "Another?" } }) });
+    const expire = (token: string) => test.app.request(`${taskPath}/${question.id}/expire`, {
+      method: "POST", headers: daemonHeaders(token), body: JSON.stringify({ status: "cancelled" }) });
+    expect((await create(test.tokens.rt_a!)).status).toBe(403);
+    expect((await expire(test.tokens.rt_a!)).status).toBe(403);
+    expect(test.store.getTaskHumanRequest(question.id)?.status).toBe("pending");
+    expect((await create(executor.token)).status).toBe(201);
+    expect((await expire(executor.token)).status).toBe(200);
+    expect(test.store.getTaskHumanRequest(question.id)?.status).toBe("cancelled");
+  });
+
   it("queues native inbound replies once and recovers CoT, interaction and result IDs through the daemon API", async () => {
     const test = await scaffold();
     await report(test, "rt_a", { applied_revision: 1, state: "online" });

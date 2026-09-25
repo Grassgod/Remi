@@ -4,6 +4,7 @@ import { setFeishuMessageReceipt } from "@connectors/feishu/message-receipt.js";
 import { FeishuTaskPresentation } from "@connectors/feishu/task-presentation.js";
 import { completed, nativeHarness, taskEvent } from "./feishu-native-harness.js";
 import type { TaskStreamEvent } from "@connectors/base.js";
+import { FeishuDeliveryError, isPermanentFeishuDeliveryError } from "@shared/feishu-delivery-error.js";
 
 function transport() {
   const appId = `cli_${crypto.randomUUID()}`;
@@ -11,6 +12,7 @@ function transport() {
   const rows = new Map<string, any[]>();
   const calls: Array<{ method: string; emoji?: string; id?: string; messageId: string }> = [];
   let rejectEmoji: string | null = null;
+  let rejectCode = 99991500;
   let rejectDelete = false;
   const client = { request: async (input: any): Promise<any> => {
     const [, messageId, reactionId] = input.url.match(/messages\/([^/]+)\/reactions(?:\/([^/]+))?$/)!;
@@ -23,12 +25,13 @@ function transport() {
       if (rejectDelete) return { code: 99991500, data: {} };
       rows.set(messageId, items.filter(item => item.reaction_id !== reactionId)); return { code: 0 };
     }
-    if (emoji === rejectEmoji) return { code: 99991500, data: {} };
+    if (emoji === rejectEmoji) return { code: rejectCode, data: {} };
     const item = { reaction_id: `r_${++next}`, operator: { operator_type: "app", operator_id: appId }, reaction_type: { emoji_type: emoji } };
     items.push(item);
     return { code: 0, data: item };
   } };
-  return { appId, client, calls, rows, fail: (emoji: string | null) => { rejectEmoji = emoji; }, failDelete: (fail: boolean) => { rejectDelete = fail; },
+  return { appId, client, calls, rows, failDelete: (fail: boolean) => { rejectDelete = fail; },
+    fail: (emoji: string | null, code = 99991500) => { rejectEmoji = emoji; rejectCode = code; },
     emojis: (id = "om_original") => (rows.get(id) ?? []).map(item => item.reaction_type.emoji_type) };
 }
 const meta = { taskId: "tsk_test", respondHumanRequest: async () => { throw new Error("not expected"); } };
@@ -204,4 +207,27 @@ describe("persistent Feishu message receipts", () => {
     }).consume(stream())).rejects.toThrow("handover");
     expect(reactions.emojis()).toEqual(["THINKING"]);
   });
+
+  // A refused CROSSMARK used to replace the real failure and its retry classification (MUL-365).
+  for (const [label, original, refusal, permanent] of [
+    ["a transient daemon error stays retryable", new Error("GET /api/daemon/tasks/tsk_test/human-requests/hr_1 returned 403"), 231001, false],
+    ["a permanent Feishu refusal stays permanent", new FeishuDeliveryError("Feishu delivery: Feishu code 230002", false), 99991500, true],
+  ] as const) {
+    it(`reports the original failure when the failure receipt is refused: ${label}`, async () => {
+      const h = nativeHarness(), reactions = transport(), logs: string[] = [];
+      const request = h.client.request;
+      h.client.request = input => input.url.includes("/reactions") ? reactions.client.request(input) : request(input);
+      reactions.fail("CROSSMARK", refusal);
+      async function* stream() { yield taskEvent(1, "question_request", { input: { request_id: "hr_1" } }); yield completed; }
+      const failure = await new FeishuTaskPresentation(h.client as any, "oc_chat",
+        { ...meta, getHumanRequest: async () => { throw original; } },
+        { appId: reactions.appId, idempotencyKey: "delivery", receiptMessageIds: ["om_original"], save: h.save,
+          log: message => logs.push(message) }).consume(stream()).catch(error => error);
+      expect(failure).toBe(original);
+      expect(isPermanentFeishuDeliveryError(failure)).toBe(permanent);
+      expect(h.cards()).toHaveLength(0);
+      expect(reactions.emojis()).toEqual(["THINKING"]);
+      expect(logs).toEqual([expect.stringContaining(`Feishu code ${refusal}`)]);
+    });
+  }
 });

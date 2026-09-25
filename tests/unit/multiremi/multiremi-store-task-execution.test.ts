@@ -77,6 +77,50 @@ describe("Multiremi store — task message ingress, completion, and capacity", (
     unsub();
   });
 
+  it("does not rewrite or rebroadcast identical task-message retries", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Replay Bot", provider: "claude", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, workspaceId: "local", prompt: "x" });
+    const messages = [
+      { seq: 1, type: "text", content: "first" },
+      { seq: 2, type: "tool_result", output: "done", status: "completed" },
+    ];
+    const notifications: number[][] = [];
+    const unsub = store.onTaskMessages(({ messages: changed }) => {
+      notifications.push(changed.map((message) => message.seq));
+    });
+
+    const first = store.appendTaskMessages(task.id, messages);
+    db!.run("UPDATE multiremi_tasks SET updated_at = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", task.id]);
+    expect(store.appendTaskMessages(task.id, messages)).toEqual([]);
+    expect(store.listTaskMessages(task.id)).toEqual(first);
+    expect(store.getTask(task.id)?.updatedAt).toBe("2000-01-01T00:00:00.000Z");
+    expect(notifications).toEqual([[1, 2]]);
+    unsub();
+  });
+
+  it("only notifies changed and new seqs when a retry includes a tool update", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Update Bot", provider: "claude", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, workspaceId: "local", prompt: "x" });
+    const notifications: number[][] = [];
+    const unsub = store.onTaskMessages(({ messages }) => notifications.push(messages.map((message) => message.seq)));
+    const first = store.appendTaskMessages(task.id, [
+      { seq: 1, type: "text", content: "unchanged" },
+      { seq: 2, type: "tool_use", toolCallId: "tc_1", status: "in_progress" },
+    ]);
+
+    const changed = store.appendTaskMessages(task.id, [
+      { seq: 1, type: "text", content: "unchanged" },
+      { seq: 2, type: "tool_result", toolCallId: "tc_1", output: "done", status: "completed" },
+      { seq: 3, type: "text", content: "next" },
+    ]);
+    expect(changed.map((message) => message.seq)).toEqual([2, 3]);
+    expect(changed[0]).toMatchObject({ id: first[1]!.id, createdAt: first[1]!.createdAt, output: "done" });
+    expect(notifications).toEqual([[1, 2], [2, 3]]);
+    unsub();
+  });
+
   it("masks sensitive keys and byte-caps oversized fields on the message ingress", () => {
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_caps", name: "caps", provider: "claude", workspaceId: "local" });

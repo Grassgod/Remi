@@ -121,6 +121,12 @@ import {
   withFeedbackRequestMetadata,
 } from "./helpers.js";
 import { SessionArchiveService } from "@multiremi/session-archive/service.js";
+import {
+  createRequestMetricsMiddleware,
+  resolveRequestMetricsOptions,
+  startRequestMetricsSummary,
+  type RequestMetricsOptions,
+} from "../observability/request-metrics.js";
 import { ScmPollingScheduler } from "@multiremi/scm/poller.js";
 import { IssueTitleScheduler } from "@multiremi/issue-title/poller.js";
 import { retitleIssue } from "@multiremi/issue-title/service.js";
@@ -227,6 +233,8 @@ export interface MultiremiApiOptions {
   /** Disable every server-owned background job for a read-only blue/green candidate. */
   backgroundJobs?: boolean;
   verifyScmConnection?: ScmConnectionVerifier;
+  /** Per-request performance metrics (MUL-367). Undefined reads the env config. */
+  requestMetrics?: RequestMetricsOptions;
 }
 
 export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
@@ -248,6 +256,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   const repositoryWiki = options.repositoryWiki ?? createRepositoryWikiServiceFromEnv(store);
   const sessionArchives = options.sessionArchives ?? new SessionArchiveService(store);
   const messagingProviders = options.messagingProviders ?? createMessageProviderRegistry();
+  const requestMetricsOptions = options.requestMetrics ?? resolveRequestMetricsOptions();
   const daemonDirectBaseUrl = normalizeDaemonDirectBaseUrl(
     options.daemonDirectBaseUrl === undefined
       ? process.env.MULTIREMI_DAEMON_DIRECT_BASE_URL
@@ -276,6 +285,11 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     issueRetitle: options.issueRetitle ?? retitleIssue,
   };
 
+  // MUL-367: MUST stay the first registration in the app. Hono only wraps
+  // handlers registered after a middleware, so anything earlier than this would
+  // be unmeasured — and auth's own `verifyAccessToken` DB lookup is part of the
+  // request cost we need in `Server-Timing`.
+  app.use("*", createRequestMetricsMiddleware(requestMetricsOptions));
   app.use("*", cors());
   // Server-rendered dashboard removed in D11 — the UI is now the Next.js app in frontend/.
   app.get("/", (c) => c.json({ service: "multiremi-api", ui: "frontend/apps/web" }));
@@ -657,6 +671,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
       : options.scmPolling)
     : null;
   const messagingProviders = options.messagingProviders ?? createMessageProviderRegistry();
+  const requestMetricsOptions = options.requestMetrics ?? resolveRequestMetricsOptions();
   const messaging = backgroundJobs
     ? (options.messaging === undefined
       ? new MessagingScheduler({
@@ -699,7 +714,11 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     sessionArchives,
     messagingProviders,
     repositoryWiki,
+    requestMetrics: requestMetricsOptions,
   });
+  // MUL-367: the per-minute summary belongs to a long-lived server only. Tests
+  // build apps with `createMultiremiApp` and must not inherit a timer.
+  const requestMetricsSummary = startRequestMetricsSummary(requestMetricsOptions);
   const port = options.port ?? parseInt(process.env.MULTIREMI_PORT ?? "6120", 10);
   const hostname = options.hostname ?? process.env.MULTIREMI_HOST ?? "0.0.0.0";
   const daemonWebSockets: DaemonWebSocketRegistry = new Map();
@@ -898,6 +917,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   const stopServer = server.stop.bind(server);
   controlPlaneSshMesh?.start();
   server.stop = (closeActiveConnections?: boolean) => {
+    requestMetricsSummary?.stop();
     if (backgroundJobs) repositoryWiki.stopStorageWorker?.();
     if (backgroundJobs) sessionArchives.stopIssueArchivePurgeRecovery();
     controlPlaneSshMesh?.stop();

@@ -25,6 +25,8 @@ Claude ACP 使用 @anthropic-ai/claude-agent-sdk 内的 CC 执行文件，Codex 
 
 平台的 CLI 升级请求沿用现有排空/暂停接单流程。安装脚本解压发布包后，由新包的 remi runtime prepare 安装并验证该版本的固定依赖。验证成功后才替换 remi 与配套 Claude wrapper，随后 daemon 重启、重新注册。依赖准备失败时安装命令返回失败，已有 daemon 二进制保持不变。
 
+daemon 由 systemd 托管时，重启交给 `systemctl --user restart --no-block <unit>`，由 systemd 重建整个 unit cgroup，只留一个新进程；launchd 托管时使用 `launchctl kickstart -k`。unit 名只从 /proc/self/cgroup 的 `0::` 或 `name=systemd` 行取，cgroup v1 主机上其它控制器行只到 `user@<uid>.service`（见 [apps/remi/cli/multiremi/service.ts](../apps/remi/cli/multiremi/service.ts)）。管理器调用失败或进程不受管理器托管时才退回 spawn 后继进程。修复前的版本在 cgroup v1 主机上总是退回 spawn，旧进程留在 unit 里；这样启动的新进程在接管工作区和接单前自检，以下条件全部满足时请求一次 unit 重启：自己不是 unit 的 MainPID；MainPID 是前台 daemon；从自己往上直到 MainPID 的每一级父进程都是前台 daemon，也就是由 spawn 回退逐代拉起；同一 HOME 下没有其它 daemon 持有工作区 supervisor 租约。任务进程同样在 unit 里并继承 INVOCATION_ID，任务里起的 daemon 与 unit 的 daemon 之间隔着 shell 或 agent 运行时，因此无论它换了 HOME、状态目录还是端口，都只记日志、不重启。租约仍被占用说明有 daemon 可能在跑任务，同样只记日志。
+
 每个 provider 安装到 ${REMI_HOME:-~/.remi}/acp/bundles/<provider>-<bridge>-<sdk>-<executable>/，先在同级临时目录安装。预检直接运行新 bundle，不切换旧 daemon 使用的 Codex 启动链接；新 daemon 启动时才启用。旧的 ~/.remi/acp/node_modules 和全局安装保留为兼容入口。修复同一 bundle 时旧目录保留为 .previous-<timestamp>-<pid>，可人工回收。
 
 全局 claude、codex 命令与用户登录配置不被覆盖。显式配置的自定义执行文件仍由用户管理；发行版校验针对 Remi 托管依赖。启动和 ACP 重装入口使用相同的版本与安装逻辑。仅 bridge 版本正确不代表 SDK 与实际执行文件正确。

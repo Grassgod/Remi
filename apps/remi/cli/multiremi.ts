@@ -39,6 +39,7 @@ import { ensureAcpBridges, type ProvisionProvider } from "@acp/provision.js";
 import { IssueWorkspaceLifecycleLocker } from "@daemon/agent-runtime/workspace/lifecycle-lock.js";
 import {
   acquireWorkspaceSupervisorLease,
+  activeWorkspaceSupervisorPids,
   configuredMultiremiWorkspacesRoot,
   type WorkspaceSupervisorLease,
 } from "@daemon/agent-runtime/workspace/process-owner.js";
@@ -62,6 +63,7 @@ import {
   daemonPortFromOptions,
   multiremiDaemonPaths,
   planDaemonRestart,
+  planSpawnedSuccessorRestart,
   runServiceCommands,
   servicePlatformFromOptions,
   shellQuote,
@@ -89,6 +91,8 @@ export {
   multiremiDaemonPaths,
   multiremiDaemonServicePath,
   planDaemonRestart,
+  planSpawnedSuccessorRestart,
+  systemdUnitFromCgroup,
 } from "./multiremi/service.js";
 export { detectMultiremiProviders } from "./multiremi/daemon-health.js";
 
@@ -439,6 +443,7 @@ export function attachControlPlaneConciergeHosts(
 }
 
 async function runDaemonForeground(options: CliOptions, programName: string): Promise<void> {
+  if (!options.once && restartUnitIfSpawnedSuccessor()) process.exit(0);
   let workspaceSupervisor: WorkspaceSupervisorLease | null = acquireWorkspaceSupervisorLease(
     configuredMultiremiWorkspacesRoot(),
     { basePort: daemonPortFromOptions(options) },
@@ -1419,6 +1424,63 @@ function restartForegroundDaemonProcess(options: CliOptions, programName: string
   });
   child.unref();
   console.error(`Multiremi daemon restarting with updated binary (pid ${child.pid ?? "unknown"})`);
+}
+
+/**
+ * Runs before this process claims a workspace or any task, so the only work a
+ * unit restart can interrupt here is its own startup.
+ */
+function restartUnitIfSpawnedSuccessor(): boolean {
+  const plan = planSpawnedSuccessorRestart({
+    platform: process.platform,
+    env: process.env,
+    cgroup: process.platform === "linux" ? readCgroupOrNull() : null,
+    pid: process.pid,
+    mainPid: readSystemdUserMainPid,
+    parentPid: readParentPid,
+    commandLine: readProcessCommandLine,
+    activeSupervisorPids: () => activeWorkspaceSupervisorPids(),
+  });
+  if (plan.kind === "none") return false;
+  if (plan.kind === "blocked") {
+    console.error(`Multiremi daemon runs beside ${plan.unit} main pid ${plan.mainPid}; not restarting the unit because ${plan.reason}`);
+    return false;
+  }
+  const result = spawnSync(plan.command, plan.args, { stdio: "inherit", timeout: 15_000 });
+  if (result.status === 0) {
+    console.error(`Multiremi daemon runs beside ${plan.unit} main pid ${plan.mainPid}; restarting via ${plan.command} ${plan.args.join(" ")}`);
+    return true;
+  }
+  console.error(`Multiremi daemon restart via ${plan.command} failed (${result.status ?? result.signal ?? result.error?.message ?? "unknown"}); continuing beside ${plan.unit} main pid ${plan.mainPid}`);
+  return false;
+}
+
+function readSystemdUserMainPid(unit: string): number | null {
+  const result = spawnSync("systemctl", ["--user", "show", "-p", "MainPID", "--value", unit], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 5_000,
+  });
+  if (result.status !== 0) return null;
+  const pid = Number(result.stdout.trim());
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+}
+
+function readParentPid(pid: number): number | null {
+  try {
+    const ppid = Number(/^PPid:\s*(\d+)$/m.exec(readFileSync(`/proc/${pid}/status`, "utf8"))?.[1]);
+    return Number.isSafeInteger(ppid) && ppid > 0 ? ppid : null;
+  } catch {
+    return null;
+  }
+}
+
+function readProcessCommandLine(pid: number): string[] | null {
+  try {
+    return readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").filter(Boolean);
+  } catch {
+    return null;
+  }
 }
 
 async function stopDaemon(options: CliOptions, opts: { quietIfStopped?: boolean } = {}): Promise<void> {
