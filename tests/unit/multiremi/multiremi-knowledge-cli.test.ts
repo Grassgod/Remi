@@ -136,7 +136,7 @@ describe("knowledge CLI control plane", () => {
   it("documents the exact server-side scope of the submissions --query option", () => {
     const submissions = knowledgeCommandSpecs().find((command) => command.id === "knowledge.submissions");
     expect(submissions).toBeDefined();
-    const query = submissions!.options.find((option) => option.name === "query");
+    const query = (submissions!.options ?? []).find((option) => option.name === "query");
     expect(query?.description).toBe(
       "Server-side search over body, id, proposed_path, proposed_slug, source_type, scope "
         + "(case-insensitive). Does not match issue key or agent name",
