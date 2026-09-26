@@ -1821,7 +1821,7 @@ export interface MultiremiIssueWithTasks extends MultiremiIssue {
   attachments: MultiremiAttachment[];
   children: MultiremiIssue[];
   childProgress: MultiremiIssueChildProgress;
-  dependencies: MultiremiIssueDependency[];
+  dependencies: MultiremiIssueDependencyView[];
 }
 
 export interface MultiremiIssueShare {
@@ -1986,16 +1986,19 @@ export interface MultiremiIssueChildProgress {
   total: number;
   done: number;
   /**
-   * Child buckets used by the issue surfaces (MUL-400 E1). `cancelled` and
-   * `blocked` are terminal/parked states, `active` counts children with work
-   * in flight, and `waiting` is reserved for dependency gating (S2) and is
-   * always 0 until that lands.
+   * Child buckets used by the issue surfaces (MUL-400 E1/E3). `cancelled` and
+   * `blocked` are terminal/parked states, `active` counts children with work in
+   * flight, and `waiting` counts children parked in `backlog` with at least one
+   * unmet `blocked_by` prerequisite.
    */
   cancelled: number;
   blocked: number;
   waiting: number;
   active: number;
 }
+
+/** MUL-400 E3: which column the caller is on for this dependency row. */
+export type MultiremiIssueDependencyDirection = "blocked_by" | "blocks";
 
 export interface MultiremiIssueDependency {
   id: string;
@@ -2006,6 +2009,42 @@ export interface MultiremiIssueDependency {
   issue: MultiremiIssue | null;
   dependsOnIssue: MultiremiIssue | null;
   createdAt: string;
+}
+
+/**
+ * MUL-400 E3: one dependency row as read from a single issue's point of view.
+ * `direction` is computed relative to the requested issue: `blocked_by` means
+ * this issue waits on `issue`, `blocks` means `issue` waits on this one. Rows
+ * stored as `blocks` are read back reversed, so no migration is needed.
+ */
+export interface MultiremiIssueDependencyView {
+  id: string;
+  workspaceId: string;
+  issueId: string;
+  dependsOnIssueId: string;
+  type: MultiremiIssueDependencyType;
+  direction: MultiremiIssueDependencyDirection;
+  /** The issue on the other side of the relation, relative to the queried issue. */
+  issue: MultiremiIssue | null;
+  dependsOnIssue: MultiremiIssue | null;
+  createdAt: string;
+}
+
+/** MUL-400 E3: one unmet prerequisite of an issue, for gates and page data. */
+export interface MultiremiIssuePrerequisite {
+  issueId: string;
+  dependsOnIssueId: string;
+  key: string;
+  title: string;
+  status: string;
+  dependencyId: string;
+}
+
+export interface MultiremiIssueWaitingOn {
+  /** Direct prerequisites that are not `done` yet. */
+  unmet: MultiremiIssuePrerequisite[];
+  /** The full direct prerequisite list, met or not. */
+  prerequisites: MultiremiIssuePrerequisite[];
 }
 
 export interface MultiremiIssueComment {
@@ -2126,6 +2165,15 @@ export interface MultiremiTimelinePage {
 }
 
 export interface CreateIssueInput {
+  /**
+   * MUL-400 E3: prerequisite issues this one waits on, as keys or ids. Created
+   * with the issue in the same transaction, with cycle and ancestor checks.
+   * When any prerequisite is unmet the issue parks at `backlog` whatever
+   * `status` asked for, and the create response reports
+   * `dispatch_skipped_reason: dependencies_unmet`.
+   */
+  blockedBy?: string[];
+  blocked_by?: string[];
   runtimeWorkspaceId?: string | null;
   runtime_workspace_id?: string | null;
   id?: string;
@@ -2198,10 +2246,12 @@ export interface UpdateIssueInput {
   parentTaskId?: string | null;
   parent_task_id?: string | null;
   /**
-   * Member-only override for the parent-status guard (MUL-400 E1). A parent
-   * issue with unfinished children cannot enter `in_review`/`done` unless the
-   * caller is a member and passes `force: true`; task identities always get a
-   * 403 so a run can never bypass the guard on its own.
+   * Member-only override for the parent-status guard (MUL-400 E1) and for the
+   * dependency gate (MUL-400 E3). A parent issue with unfinished children cannot
+   * enter `in_review`/`done`, and an issue with unmet prerequisites cannot leave
+   * `backlog`, unless the caller is a member and passes `force: true`; task
+   * identities always get a 403 from the routes, so a run can never bypass
+   * either guard on its own.
    */
   force?: boolean;
 }
@@ -2235,6 +2285,12 @@ export interface ListIssuesInput {
   projectIds?: string[];
   project_ids?: string[];
   metadata?: Record<string, string | number | boolean> | null;
+  /** MUL-400 E3: only direct children of this issue (key or id). */
+  parentId?: string | null;
+  parent_id?: string | null;
+  /** MUL-400 E3: only issues without a parent. Takes precedence over `parentId`. */
+  topLevelOnly?: boolean;
+  top_level_only?: boolean;
   includeNoAssignee?: boolean;
   includeNoProject?: boolean;
   includeArchived?: boolean;
@@ -2289,9 +2345,21 @@ export interface QuickCreateIssueResult {
 
 export interface CreateIssueDependencyInput {
   id?: string;
+  /**
+   * MUL-400 E3: a key (`MUL-12`) or an id, resolved server-side. Stored rows are
+   * always `blocked_by`; when `type: blocks` is requested the pair is flipped so
+   * the table keeps exactly one direction.
+   */
   dependsOnIssueId?: string;
   depends_on_issue_id?: string;
   type?: MultiremiIssueDependencyType | string;
+  /** Server-internal attribution for the `issue_dependency_added` activity. */
+  actorType?: string;
+  actor_type?: string;
+  actorId?: string | null;
+  actor_id?: string | null;
+  parentTaskId?: string | null;
+  parent_task_id?: string | null;
 }
 
 export interface CreateIssueCommentInput {

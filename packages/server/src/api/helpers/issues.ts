@@ -155,6 +155,10 @@ export function withIssueCreateRequestContext(
   if (hasRequestField(input, "due_date")) out.due_date = input.due_date ?? null;
   if (hasRequestField(input, "acceptance_criteria")) out.acceptance_criteria = input.acceptance_criteria ?? [];
   if (hasRequestField(input, "context_refs")) out.context_refs = input.context_refs ?? [];
+  // MUL-400 E3: prerequisites travel with the creation request so they land in
+  // the same transaction as the issue itself.
+  if (hasRequestField(input, "blocked_by")) out.blocked_by = input.blocked_by ?? [];
+  if (hasRequestField(input, "blockedBy")) out.blockedBy = input.blockedBy ?? [];
 
   const taskToken = currentTaskAccessToken(c);
   // Historical task rows remain an audit trail, not an implicit Issue binding
@@ -260,6 +264,16 @@ export function issueListQuery(
       .map((ref) => resolveAssigneeFilterId(store, workspaceId, ref, assigneeTypes) ?? ref),
     projectId: (compat ? c.req.query("project_id") : c.req.query("projectId") ?? c.req.query("project_id")) ?? null,
     projectIds: splitQueryList(compat ? c.req.query("project_ids") : c.req.query("projectIds") ?? c.req.query("project_ids")),
+    // MUL-400 E3: hierarchy filters. `--parent` accepts a key or an id, and
+    // `top_level_only` is the "hide sub-issues" switch's server-side half.
+    parentId: store.getIssueByRef(
+      (compat ? c.req.query("parent_id") : c.req.query("parentId") ?? c.req.query("parent_id")) ?? "",
+      workspaceId,
+    )?.id
+      ?? (compat ? c.req.query("parent_id") : c.req.query("parentId") ?? c.req.query("parent_id")) ?? null,
+    topLevelOnly: compat
+      ? c.req.query("top_level_only") === "true"
+      : c.req.query("topLevelOnly") === "true" || c.req.query("top_level_only") === "true",
     metadata: parseIssueMetadataFilter(c.req.query("metadata")),
     includeNoAssignee: compat
       ? c.req.query("include_no_assignee") === "true"

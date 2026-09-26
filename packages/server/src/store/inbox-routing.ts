@@ -94,6 +94,18 @@ export const INBOX_ROUTING: Record<string, InboxRoutingEntry> = {
     severity: "info",
     why: "MUL-400 E2: a child issue that finished, failed or got blocked is a personal action for the parent owner; failed/blocked callers pass warning explicitly.",
   },
+  dependency_prerequisite_failed: {
+    rule: "R1",
+    route: INBOX_ROUTE_BY_TYPE.dependency_prerequisite_failed,
+    severity: "attention",
+    why: "A prerequisite will not finish; only a human can re-plan, cancel or drop the dependency, and the inbox is where that decision is visible.",
+  },
+  dependency_satisfied: {
+    rule: "R1",
+    route: INBOX_ROUTE_BY_TYPE.dependency_satisfied,
+    severity: "info",
+    why: "Every prerequisite finished but the owner is a human, so starting the issue is a decision waiting on that person.",
+  },
 };
 
 export function inboxRouteFor(

@@ -635,11 +635,16 @@ async function seedStore(store: MultiremiStore, db: Database): Promise<SeedRefs>
     parentIssueId: issue.id,
     createdBy: member.id,
   });
+  // MUL-400 E3: the snapshot's `blocks` row means the blocked issue waits on
+  // `issue`, so this one carries the unmet prerequisite. The assignment below
+  // must therefore stay a plain owner change (gate 1 records it and skips the
+  // dispatch), and the progress/children rows exercise the waiting buckets.
   const blockedIssue = store.createIssue({
     id: "iss_snapshot_blocked",
     title: "Snapshot blocked issue",
     workspaceId,
     createdBy: member.id,
+    status: "backlog",
   });
   store.attachLabelToIssue(issue.id, label.id);
   store.setIssueMetadataKey(issue.id, "snapshot_key", "snapshot_value");
