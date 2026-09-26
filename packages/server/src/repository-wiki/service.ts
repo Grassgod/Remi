@@ -100,6 +100,8 @@ export class RepositoryWikiLogHistoryError extends Error {}
 export interface RepositoryWikiServiceContract {
   readonly mode: ProjectKnowledgeMode;
   list(workspaceId: string, repositoryId: string): Promise<MultiremiRepositoryWikiDoc[]>;
+  listMetadata(workspaceId: string, repositoryId: string, ids?: readonly string[]): MultiremiRepositoryWikiDoc[];
+  readBodies(workspaceId: string, repositoryId: string, ids: readonly string[]): Promise<MultiremiRepositoryWikiDoc[]>;
   listStrict(workspaceId: string, repositoryId: string): Promise<MultiremiRepositoryWikiDoc[]>;
   listWorkspace(workspaceId: string): Promise<MultiremiRepositoryWikiDoc[]>;
   get(workspaceId: string, repositoryId: string, ref: string): Promise<MultiremiRepositoryWikiDoc | null>;
@@ -123,6 +125,10 @@ export interface RepositoryWikiServiceContract {
 
 export class RepositoryWikiUnavailableError extends Error {}
 export const REPOSITORY_WIKI_BATCH_LIMIT = 256;
+/** Bodies are an explicit, bounded request: one route call reads at most this
+ *  many documents. See docs/adr/0002-repository-wiki-list-without-bodies.md. */
+export const REPOSITORY_WIKI_BODY_BATCH_LIMIT = 20;
+export const REPOSITORY_WIKI_BODY_READ_CONCURRENCY = 4;
 const STORAGE_WRITE_CONCURRENCY = 4;
 const PROMOTION_CHECKPOINT_SIZE = 8;
 
@@ -241,6 +247,41 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
     const docs = this.store.listRepositoryWikiDocs(workspaceId, repositoryId);
     if (this.mode === "sql") return docs;
     return Promise.all(docs.map((doc) => this.hydrateTolerant(doc)));
+  }
+
+  /**
+   * The metadata list path: DB rows only, never an OpenViking read. `ids`
+   * filters to those documents; ids absent from the list are omitted, which is
+   * how callers learn a document was deleted.
+   */
+  listMetadata(workspaceId: string, repositoryId: string, ids?: readonly string[]): MultiremiRepositoryWikiDoc[] {
+    const docs = this.store.listRepositoryWikiDocs(workspaceId, repositoryId);
+    if (ids === undefined) return docs;
+    const wanted = new Set(ids);
+    return docs.filter((doc) => wanted.has(doc.id));
+  }
+
+  /**
+   * Reads bodies for the requested documents with a bounded concurrency and
+   * strict failure: a document that cannot be read fails the whole call instead
+   * of degrading to an empty body.
+   */
+  async readBodies(workspaceId: string, repositoryId: string, ids: readonly string[]): Promise<MultiremiRepositoryWikiDoc[]> {
+    const unique = [...new Set(ids)];
+    const byId = new Map(this.listMetadata(workspaceId, repositoryId, unique).map((doc) => [doc.id, doc]));
+    const ordered = unique.flatMap((id) => {
+      const doc = byId.get(id);
+      return doc ? [doc] : [];
+    });
+    if (this.mode === "sql") return ordered;
+    return mapWithConcurrency(ordered, REPOSITORY_WIKI_BODY_READ_CONCURRENCY, async (doc) => {
+      try {
+        return await this.hydrate(doc);
+      } catch (error) {
+        this.operationSignal?.throwIfAborted();
+        throw new RepositoryWikiUnavailableError(repositoryWikiHydrationError(doc, error));
+      }
+    });
   }
 
   private async hydrateTolerant(doc: MultiremiRepositoryWikiDoc): Promise<MultiremiRepositoryWikiDoc & { bodyUnavailable?: boolean }> {
@@ -1088,6 +1129,28 @@ async function forEachStorageEntry<T>(entries: readonly T[], operation: (entry: 
     }
   }));
   for (const result of results) if (result.status === "rejected") throw result.reason;
+}
+
+/** Ordered map with a hard ceiling on in-flight operations; the first failure
+ *  stops scheduling new work and rejects the whole call. */
+async function mapWithConcurrency<T, R>(
+  entries: readonly T[],
+  limit: number,
+  operation: (entry: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(entries.length);
+  let cursor = 0;
+  let failed = false;
+  const workers = Array.from({ length: Math.min(Math.max(1, limit), entries.length) }, async () => {
+    while (!failed && cursor < entries.length) {
+      const index = cursor++;
+      try { results[index] = await operation(entries[index]!, index); }
+      catch (error) { failed = true; throw error; }
+    }
+  });
+  const settled = await Promise.allSettled(workers);
+  for (const result of settled) if (result.status === "rejected") throw result.reason;
+  return results;
 }
 
 function resolveBatchDocument(

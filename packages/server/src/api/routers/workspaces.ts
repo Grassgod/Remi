@@ -72,7 +72,12 @@ import type {
   UpdateWorkspaceRuntimeProvisionInput,
 } from "@multiremi/contracts/types.js";
 import { createId, nowIso } from "@multiremi/ids.js";
-import { REPOSITORY_WIKI_BATCH_LIMIT, RepositoryWikiLogHistoryError, RepositoryWikiUnavailableError } from "@multiremi/repository-wiki/service.js";
+import {
+  REPOSITORY_WIKI_BATCH_LIMIT,
+  REPOSITORY_WIKI_BODY_BATCH_LIMIT,
+  RepositoryWikiLogHistoryError,
+  RepositoryWikiUnavailableError,
+} from "@multiremi/repository-wiki/service.js";
 import { normalizeRepositoryWikiPath } from "@multiremi/store/repos/repository-wiki-repo.js";
 import {
   defaultRepositoryWikiPath,
@@ -556,10 +561,38 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     if (missing) return c.json({ error: "repository not found" }, 404);
     try {
       const query = String(c.req.query("q") ?? "").trim();
-      const docs = query
-        ? await deps.repositoryWiki.search(workspaceId, repositoryId, query, Number(c.req.query("limit") ?? 20))
-        : await deps.repositoryWiki.list(workspaceId, repositoryId);
-      return c.json({ docs: docs.map(repositoryWikiDocResponse) });
+      const includeBody = readRepositoryWikiIncludeBody(c);
+      const ids = readRepositoryWikiIds(c);
+      if (query && (includeBody || ids)) {
+        return c.json({ error: "q cannot be combined with include_body or ids" }, 400);
+      }
+      // Transitional shim for daemons predating the metadata contract; see
+      // docs/adr/0002-repository-wiki-list-without-bodies.md. The old CLI
+      // cannot announce its own version, so the Bun runtime UA is the only
+      // mark that separates it from a browser or from the new CLI.
+      //
+      // Only the default list shape is served this way. A request that carries
+      // the new bounded contract (`include_body` / `ids`) is answered strictly
+      // even under `always`: a tolerant legacy reply would hand an upgraded CLI
+      // an unreadable page as `body: ""` and let it merge against nothing.
+      if (!query && !includeBody && !ids && repositoryWikiLegacyListEnabled(c)) {
+        const docs = await deps.repositoryWiki.list(workspaceId, repositoryId);
+        return c.json({ docs: docs.map((doc) => repositoryWikiDocResponse(doc, true)) });
+      }
+      if (query) {
+        const docs = await deps.repositoryWiki.search(workspaceId, repositoryId, query, Number(c.req.query("limit") ?? 20));
+        return c.json({ docs: docs.map((doc) => repositoryWikiDocResponse(doc, true)) });
+      }
+      if (includeBody) {
+        if (!ids?.length) return c.json({ error: "include_body requires ids" }, 400);
+        if (ids.length > REPOSITORY_WIKI_BODY_BATCH_LIMIT) {
+          return c.json({ error: `include_body supports at most ${REPOSITORY_WIKI_BODY_BATCH_LIMIT} ids` }, 400);
+        }
+        const docs = await deps.repositoryWiki.readBodies(workspaceId, repositoryId, ids);
+        return c.json({ docs: docs.map((doc) => repositoryWikiDocResponse(doc, true)) });
+      }
+      const docs = deps.repositoryWiki.listMetadata(workspaceId, repositoryId, ids ?? undefined);
+      return c.json({ docs: docs.map((doc) => repositoryWikiDocResponse(doc, false)) });
     } catch (error) {
       return repositoryWikiError(c, error);
     }
@@ -765,7 +798,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     if (requireWorkspaceRepository(store, workspaceId, repositoryId)) return c.json({ error: "repository not found" }, 404);
     try {
       const docs = await deps.repositoryWiki.backlinks(workspaceId, repositoryId, c.req.param("ref"));
-      return c.json({ docs: docs.map(repositoryWikiDocResponse) });
+      return c.json({ docs: docs.map((doc) => repositoryWikiDocResponse(doc)) });
     } catch (error) {
       return repositoryWikiError(c, error);
     }
@@ -1481,7 +1514,7 @@ function repositoryWikiBuildState(
   };
 }
 
-function repositoryWikiDocResponse(doc: MultiremiRepositoryWikiDoc): Record<string, unknown> {
+function repositoryWikiDocResponse(doc: MultiremiRepositoryWikiDoc, includeBody = true): Record<string, unknown> {
   return {
     id: doc.id,
     repository_id: doc.repositoryId,
@@ -1490,7 +1523,9 @@ function repositoryWikiDocResponse(doc: MultiremiRepositoryWikiDoc): Record<stri
     slug: doc.slug,
     title: doc.title,
     summary: doc.summary,
-    body: doc.body,
+    // Omitting the key (not sending "") keeps "not requested" distinguishable
+    // from an empty page for every consumer.
+    ...(includeBody ? { body: doc.body } : {}),
     tags: doc.tags,
     refs: doc.refs,
     source_task_id: doc.sourceTaskId,
@@ -1600,6 +1635,33 @@ function botMenuError(c: Context, error: unknown): Response {
   }
   const message = error instanceof Error ? error.message : "bot menu operation failed";
   return c.json({ error: message }, 400);
+}
+
+/**
+ * Selects the transitional legacy response for the repository Wiki list.
+ * `auto` (default) serves the pre-ADR-0002 full-body response to requests whose
+ * User-Agent identifies a Bun runtime, i.e. a daemon CLI that predates the
+ * metadata contract. `always` / `never` override the sniff without a redeploy.
+ */
+function repositoryWikiLegacyListEnabled(c: Context): boolean {
+  const mode = (process.env.MULTIREMI_REPOSITORY_WIKI_LEGACY_LIST ?? "auto").trim().toLowerCase();
+  if (mode === "always") return true;
+  if (mode === "never") return false;
+  return (c.req.header("user-agent") ?? "").trim().startsWith("Bun/");
+}
+
+function readRepositoryWikiIncludeBody(c: Context): boolean {
+  const raw = c.req.query("include_body");
+  if (raw === undefined) return false;
+  return raw === "true" || raw === "1";
+}
+
+/** Accepts `ids=a,b` and repeated `ids=`; order is preserved and duplicates dropped. */
+function readRepositoryWikiIds(c: Context): string[] | null {
+  const values = c.req.queries("ids");
+  if (!values?.length) return null;
+  const ids = values.flatMap((value) => value.split(",")).map((value) => value.trim()).filter(Boolean);
+  return ids.length ? [...new Set(ids)] : null;
 }
 
 function repositoryWikiRevisionResponse(revision: MultiremiRepositoryWikiDocRevision): Record<string, unknown> {

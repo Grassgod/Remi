@@ -66,6 +66,24 @@ vi.mock("@tanstack/react-query", () => ({
     if (key[0] === "repositories") {
       const summaries = key[2] === "wiki-summaries";
       const docs = key[3] === "wiki";
+      // MUL-387: the open document's body is a separate query; the fake serves
+      // the same row so the rendered page is unchanged.
+      if (key[3] === "wiki-doc") {
+        const repositoryId = String(key[2]);
+        const ref = String(key[4] ?? "");
+        const rows = state.repositoryDocs[repositoryId] ?? [];
+        const match = rows.find((row) => {
+          const candidate = row as { id?: string; slug?: string; path?: string };
+          return candidate.id === ref || candidate.slug === ref || candidate.path === ref;
+        });
+        return {
+          data: match ?? null,
+          isPending: state.basePending || state.repositoryPending,
+          isError: (state.baseError ?? state.repositoryError) !== null,
+          error: state.baseError ?? state.repositoryError,
+          refetch: refetchBase,
+        };
+      }
       return {
         data: summaries
           ? state.summaries

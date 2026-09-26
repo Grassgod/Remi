@@ -1,4 +1,5 @@
 import { CliError, cliErrorCodeForStatus } from "./errors.js";
+import { remiCliUserAgent } from "./user-agent.js";
 
 export type CliHttpMethod = "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE";
 export type CliQueryValue = string | number | boolean | null | undefined;
@@ -171,6 +172,7 @@ export class CliApiClient {
     for (const [key, value] of query) url.searchParams.append(key, value);
     const headers = new Headers(request.headers);
     headers.set("Accept", "application/json");
+    headers.set("User-Agent", remiCliUserAgent());
     if (this.token) headers.set("Authorization", `Bearer ${this.token}`);
     if (this.shareToken) headers.set("X-Remi-Share", this.shareToken);
     if (this.workspaceId) headers.set("X-Workspace-ID", this.workspaceId);

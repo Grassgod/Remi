@@ -255,16 +255,36 @@ function repositoryWikiSpecs(): CommandSpec[] {
     };
   };
   return [
-    spec("wiki.repository.list", ["wiki", "repository", "list"], "List repository Wiki status or documents", "read", [{ name: "repository", required: false }], [REPOSITORY_OPTION], async (invocation) => {
+    spec("wiki.repository.list", ["wiki", "repository", "list"], "List repository Wiki metadata, or fetch bodies for specific documents", "read", [{ name: "repository", required: false }], [
+      REPOSITORY_OPTION,
+      { name: "include-body", type: "boolean", description: "Include document bodies for --ids" },
+      { name: "ids", type: "string", valueName: "a,b", repeatable: true, description: "Document IDs (required with --include-body)" },
+    ], async (invocation) => {
       const ref = stringOption(invocation, "repo") ?? invocation.positionals[0]?.trim() ?? null;
       if (!ref) {
+        if (booleanOption(invocation, "include-body") || stringOptions(invocation, "ids").length) {
+          throw new CliError("usage", "--include-body and --ids require a repository argument");
+        }
         const client = await clientFor(invocation);
         const response = await client.request({ method: "GET", path: `/api/workspaces/${encodePath(requiredWorkspace(invocation))}/repository-wikis` });
         renderResource(invocation, response.data, ["repositories"]);
         return;
       }
+      const includeBody = booleanOption(invocation, "include-body") === true;
+      const ids = stringOptions(invocation, "ids").flatMap((value) => value.split(",")).map((value) => value.trim()).filter(Boolean);
+      if (includeBody && ids.length === 0) throw new CliError("usage", "--include-body requires --ids");
+      if (!includeBody && ids.length > 0) throw new CliError("usage", "--ids requires --include-body");
       const target = await requestPath(invocation, ref);
-      const response = await target.client.request({ method: "GET", path: target.path, query: queryOptions(invocation) });
+      const response = await target.client.request({
+        method: "GET",
+        path: target.path,
+        query: queryOptions(invocation, {
+          // The API takes one comma-separated value; send it in that shape so
+          // the batch limit and de-duplication stay server-side.
+          ids: ids.length ? [...new Set(ids)].join(",") : undefined,
+          include_body: includeBody ? true : undefined,
+        }),
+      });
       renderResource(invocation, response.data, ["docs"]);
     }),
     spec("wiki.repository.get", ["wiki", "repository", "get"], "Get a repository Wiki document", "read", [refPositional("repository"), refPositional("document")], [], async (invocation) => {
