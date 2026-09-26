@@ -3,8 +3,8 @@
 - 父单：MUL-383（方案 §1 的 S4）
 - 本单：MUL-385
 - 生成时间：2026-09-26T10:14:36.760Z
-- 改前 commit：`a1e6162312b34d272e22b633d185f014f535f23e`（`origin/main` 上本分支的父提交）
-- 改后 commit：`a1e6162312b34d272e22b633d185f014f535f23e`
+- 改前 commit：`a1e6162312b34d272e22b633d185f014f535f23e`（本分支的父提交）
+- 实测 commit：`aeda289197252a86aad1492f60c8be904eaef6a9`。两阶段都用同一份 harness 与同一个 seed 在这个提交上跑；报告 JSON 里 `after.commit` 字段记的是提交前的工作树版本，两种情况下被测实现都是本提交的实现。这里不写 head SHA（下一次提交就会过期），复核不变量用 `git diff --name-only aeda2891..HEAD`，应只列出本报告。
 - 运行机器：linux x64，64 vCPU，248 GiB RAM
 - Bun：1.3.14（Node v24.3.0）
 - 数据库：**SQLite（in-memory）+ 模拟过桥字节**。本机无 PostgreSQL 服务、无 docker 权限，`MULTIREMI_TEST_POSTGRES_URL` 未设置，因此按 MUL-176 / MUL-357 的降级口径采集，报告口径声明为「SQLite + 模拟过桥字节」。

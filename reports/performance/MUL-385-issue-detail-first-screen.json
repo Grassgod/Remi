@@ -687,5 +687,10 @@
       ],
       "note": "user PAT adds verifyAccessToken (3 statements: hash lookup, last_used_at write, re-read) and one workspace membership read; the master token adds none. Unchanged by MUL-385 - recorded so a later drift is visible."
     }
+  },
+  "commits": {
+    "parent": "a1e6162312b34d272e22b633d185f014f535f23e",
+    "implementedAndMeasured": "aeda289197252a86aad1492f60c8be904eaef6a9",
+    "note": "Both stages were measured with the same harness and the same seed at aeda289197252a86aad1492f60c8be904eaef6a9. The commit named in `after.commit` is the working-tree revision the harness recorded before the change was committed; it is not a head SHA. Naming a head SHA here goes stale on the next commit, so re-check the invariant instead: `git diff --name-only aeda289197252a86aad1492f60c8be904eaef6a9..HEAD` must list only this report."
   }
 }
