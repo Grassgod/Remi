@@ -1578,7 +1578,9 @@ async function main(): Promise<void> {
         token,
         baseUrl: opts.baseUrl,
         slug: identity.workspaceSlug,
-        scenarios: selected,
+        // Skipped scenarios are never measured, so warming their pages only spends
+        // the compile budget on a route this run will not visit.
+        scenarios: selected.filter((scenario) => scenario.skipReason === null),
       });
       phase("warmup", phaseStarted);
     }
