@@ -3996,6 +3996,8 @@ export class MultiremiDaemon {
           const request = await this.client.createTaskHumanRequest(task.id, {
             kind: "permission",
             payload: { session_id: params.sessionId, tool_call: params.toolCall ?? null, options: params.options },
+            // Publish the deadline so the topic can remind before it elapses.
+            timeoutMs: humanRequestTimeoutMs,
           });
           await this.reportHumanRequestMessage(task.id, nextSeq(), "permission_request", `Permission requested: ${toolTitle}`, {
             request_id: request.id,
@@ -4050,6 +4052,7 @@ export class MultiremiDaemon {
             questions,
             ...(context ? { context } : {}),
           },
+          timeoutMs: humanRequestTimeoutMs,
         });
         await this.reportHumanRequestMessage(task.id, nextSeq(), "question_request", params.message || "Agent asked a question", {
           request_id: request.id,

@@ -50,6 +50,7 @@ import {
 } from "../wire/index.js";
 import {
   FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION,
+  FEISHU_DECISION_CARD_PROTOCOL_VERSION,
   FEISHU_CONCIERGE_TASK_STREAM_PROTOCOL_VERSION,
   FEISHU_CONCIERGE_NATIVE_COT_PROTOCOL_VERSION,
   FEISHU_CONCIERGE_ATTACHMENT_PROTOCOL_VERSION,
@@ -379,6 +380,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       active_task_count?: number;
       supports_bot_menu?: boolean;
       feishu_concierge_protocol?: number;
+      feishu_decision_card?: number;
     }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const runtimeId = body.runtime_id ?? "";
@@ -412,6 +414,8 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       agentPluginProtocol: reportsAgentPluginProtocol ? body.agent_plugin_protocol : undefined,
       supportsBotMenu: body.supports_bot_menu,
       supportsFeishuBotConfig,
+      supportsDecisionCard: normalizeDaemonProtocolVersion(body.feishu_decision_card)
+        >= FEISHU_DECISION_CARD_PROTOCOL_VERSION,
     });
     if (ack.status === "runtime_gone") return c.json({ error: "runtime not found" }, 404);
     if (reportsSshMeshProtocol) {
@@ -482,6 +486,10 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
           ...(outbound.presentation ? { presentation: outbound.presentation } : {}),
           ...(outbound.interactionOpenId ? { interaction_open_id: outbound.interactionOpenId } : {}),
           ...(outbound.receiptMessageIds ? { receipt_message_ids: outbound.receiptMessageIds } : {}),
+          ...(outbound.kind ? { kind: outbound.kind } : {}),
+          ...(outbound.humanRequestId ? { human_request_id: outbound.humanRequestId } : {}),
+          ...(outbound.targetMessageId ? { target_message_id: outbound.targetMessageId } : {}),
+          ...(outbound.expiresAt ? { expires_at: outbound.expiresAt } : {}),
         };
       }
     }
@@ -995,7 +1003,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.post("/api/daemon/tasks/:taskId/human-requests", async (c) => {
     const taskId = c.req.param("taskId");
-    const body = await readJsonStrict<{ kind?: string; payload?: Record<string, unknown> }>(c);
+    const body = await readJsonStrict<{ kind?: string; payload?: Record<string, unknown>; timeout_ms?: number }>(c);
     if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
     const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
     if (identityDenied) return identityDenied;
@@ -1003,7 +1011,12 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     if (!existing) return c.json({ error: "task not found" }, 404);
     if (isTerminalTaskStatus(existing.status)) return c.json({ error: "task is terminal" }, 400);
     const kind = body.kind === "question" ? "question" : "permission";
-    const request = store.createTaskHumanRequest({ taskId, kind, payload: body.payload ?? {} });
+    const request = store.createTaskHumanRequest({
+      taskId,
+      kind,
+      payload: body.payload ?? {},
+      timeoutMs: body.timeout_ms,
+    });
     return c.json({ request }, 201);
   });
   app.get("/api/daemon/tasks/:taskId/human-requests/:requestId", (c) => {

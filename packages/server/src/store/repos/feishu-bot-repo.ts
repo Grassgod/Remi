@@ -34,9 +34,14 @@ import { isRuntimeEffectivelyOnline } from "@multiremi/store/repos/runtimes-repo
 import { readWorkspaceIssueTopics } from "@multiremi/issue-topics/config.js";
 import { findMarkdownImages } from "@shared/feishu-markdown-images.js";
 import { isFeishuOpenId, parseOutboundMention } from "@shared/feishu-mention.js";
-import { FEISHU_CONCIERGE_CONFIG_CAPABILITY } from "@multiremi/contracts/types.js";
+import { buildCardHeader, buildTaskInteractionCard, decisionMentionElement } from "@shared/feishu-task-card.js";
+import {
+  FEISHU_CONCIERGE_CONFIG_CAPABILITY,
+  FEISHU_DECISION_CARD_CAPABILITY,
+} from "@multiremi/contracts/types.js";
 import type {
   FeishuBotAuditAction,
+  IssueTopicConfig,
   FeishuPresentationCheckpoint,
   FeishuBotDesiredState,
   FeishuBotDomain,
@@ -1056,6 +1061,26 @@ export class FeishuBotRepo {
       .get(workspaceId, daemonId, taskId) != null;
   }
 
+  /**
+   * MUL-407: an Issue task has no chat session, so the Runtime that hosts the
+   * Issue's Feishu topic cannot read or answer that task's human requests even
+   * though the card was delivered there. A live topic binding for the task's
+   * own Issue qualifies it — and only for reading a request and responding to
+   * it. Creating and expiring stay with the executing daemon, so this predicate
+   * must never be consulted for those verbs.
+   */
+  canDaemonAccessIssueTaskHumanRequest(workspaceId: string, daemonId: string, taskId: string): boolean {
+    return this.ctx.db.query(`SELECT 1 AS present
+      FROM multiremi_feishu_bot_configs c
+      JOIN multiremi_runtimes r ON r.id = c.runtime_id AND r.workspace_id = c.workspace_id
+      JOIN multiremi_feishu_bot_chat_bindings b ON b.workspace_id = c.workspace_id AND b.app_id = c.app_id
+      JOIN multiremi_chat_sessions s ON s.id = b.chat_session_id AND s.status = 'active'
+      JOIN multiremi_tasks t ON t.issue_id = b.issue_id AND t.workspace_id = b.workspace_id
+      WHERE c.workspace_id = ? AND c.enabled = 1 AND r.daemon_id = ?
+        AND b.issue_id IS NOT NULL AND t.id = ? LIMIT 1`)
+      .get(workspaceId, daemonId, taskId) != null;
+  }
+
   private ensureDefaultAgentIssueUpdatesChannel(session: MultiremiChatSession): void {
     const member = session.creatorId
       ? this.ctx.workspaces().getWorkspaceMember(session.creatorId)
@@ -1176,27 +1201,80 @@ export class FeishuBotRepo {
     if (!topics.enabled || !topics.chatId) return null;
     const bot = this.statusSnapshot(issue.workspaceId);
     if (bot.status !== "online" || !bot.config) return null;
+    const botConfig = bot.config;
 
     return this.ctx.db.transaction(() => {
       const binding = this.ctx.db.query(
         `SELECT b.* FROM multiremi_feishu_bot_chat_bindings b
          JOIN multiremi_chat_sessions c ON c.id = b.chat_session_id
          WHERE b.workspace_id = ? AND b.issue_id = ? AND c.status = 'active'
-           AND b.chat_id = ? AND b.reply_to_message_id IS NOT NULL
+           AND b.chat_id = ?
          ORDER BY b.updated_at DESC, b.created_at DESC, b.id DESC
          LIMIT 1`,
       ).get(issue.workspaceId, issue.id, topics.chatId) as Row | null;
       if (!binding) return null;
       const bindingId = String(binding.id);
       const existing = this.ctx.db.query(
-        `SELECT wake_task_id FROM multiremi_feishu_bot_human_request_pushes
+        `SELECT wake_task_id, delivery_id FROM multiremi_feishu_bot_human_request_pushes
          WHERE binding_id = ? AND request_id = ? LIMIT 1`,
       ).get(bindingId, request.id) as Row | null;
-      if (existing) return this.ctx.tasks().getTask(String(existing.wake_task_id));
+      if (existing) {
+        return existing.wake_task_id == null
+          ? null
+          : this.ctx.tasks().getTask(String(existing.wake_task_id));
+      }
 
       const agentId = String(binding.agent_id ?? "");
       if (!agentId) return null;
       const payload = request.payload ?? {};
+      // Without a topic seed there is no thread to reply into, so the request
+      // stays on the web workbench. Record why instead of failing silently.
+      if (!cleanOptionalString(binding.reply_to_message_id)) {
+        this.ctx.appendIssueActivity(issue.id, {
+          actorType: "system",
+          type: "decision_card_skipped",
+          body: request.id,
+          data: { request_id: request.id, source_task_id: sourceTask.id, reason: "no_topic" },
+        });
+        return null;
+      }
+      // A host that can render a server-built card gets one; every other host
+      // keeps the pre-MUL-407 relay wake, so a platform deploy never depends on
+      // the fleet having upgraded its daemon first.
+      if (this.supportsDecisionCard(issue.workspaceId, botConfig.runtimeId)
+        && topics.notifyMode !== "none") {
+        const deliveryId = this.enqueueDecisionCardWithinTransaction({
+          issue, sourceTask, request, topics, binding, bindingId, payload,
+        });
+        const now = nowIso();
+        this.ctx.db.run(
+          `INSERT INTO multiremi_feishu_bot_human_request_pushes (
+             id, workspace_id, binding_id, issue_id, source_task_id,
+             request_id, wake_task_id, delivery_id, created_at, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
+          [
+            createId("fhrp"), issue.workspaceId, bindingId, issue.id,
+            sourceTask.id, request.id, deliveryId, now, now,
+          ],
+        );
+        return null;
+      }
+      // `notifyMode = none` never builds a clickable card: there would be nobody
+      // allowed to press it. The request still reaches the web workbench.
+      if (topics.notifyMode === "none") {
+        const now = nowIso();
+        this.ctx.db.run(
+          `INSERT INTO multiremi_feishu_bot_human_request_pushes (
+             id, workspace_id, binding_id, issue_id, source_task_id,
+             request_id, wake_task_id, delivery_id, created_at, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`,
+          [
+            createId("fhrp"), issue.workspaceId, bindingId, issue.id,
+            sourceTask.id, request.id, now, now,
+          ],
+        );
+        return null;
+      }
       const wakeTask = this.ctx.tasks().createTaskWithinTransaction({
         agentId,
         chatSessionId: String(binding.chat_session_id),
@@ -1246,6 +1324,237 @@ export class FeishuBotRepo {
       );
       return wakeTask;
     })();
+  }
+
+  /**
+   * A bot host renders a server-built card only when it says it can (MUL-407).
+   * The flag is re-advertised on every heartbeat, so silence means an older
+   * build and the request keeps the relay-wake path until it upgrades.
+   */
+  supportsDecisionCard(workspaceId: string, runtimeId: string | null | undefined): boolean {
+    if (!runtimeId) return false;
+    const runtime = this.ctx.runtimes().getRuntime(runtimeId);
+    if (!runtime || runtime.workspaceId !== workspaceId) return false;
+    return runtime.metadata[FEISHU_DECISION_CARD_CAPABILITY] === 1;
+  }
+
+  /**
+   * Write the `decision_card` delivery for a pending human request. Runs inside
+   * the caller's transaction: the push row, the delivery and the request's
+   * deadline must become visible together, or the host would poll a request the
+   * control plane has not committed yet.
+   */
+  private enqueueDecisionCardWithinTransaction(input: {
+    issue: MultiremiIssue;
+    sourceTask: MultiremiTask;
+    request: MultiremiTaskHumanRequest;
+    topics: IssueTopicConfig;
+    binding: Row;
+    bindingId: string;
+    payload: Record<string, unknown>;
+  }): string {
+    const { issue, sourceTask, request, topics, binding, bindingId } = input;
+    const replyToMessageId = cleanOptionalString(binding.reply_to_message_id);
+    const recipientOpenId = topics.notifyMode === "person" ? topics.notifyOpenId : undefined;
+    const deliveryId = createId("fbo");
+    const now = nowIso();
+    const card = buildTaskInteractionCard(request, {
+      header: buildCardHeader({ agentName: this.botAgentName(issue.workspaceId) }),
+      recipientOpenId,
+      // `group_owner` is resolvable only by the host, which holds the bot token.
+      recipientPending: !recipientOpenId,
+    });
+    // The card and its plain-text degradation travel together, so a terminal
+    // send failure can degrade in the same claim without a second round trip.
+    const body = toJson({
+      card,
+      fallback_text: decisionCardTextBody({
+        issue,
+        workspaceSlug: this.ctx.workspaces().getWorkspace(issue.workspaceId)?.slug ?? null,
+        request,
+      }),
+    });
+    this.ctx.db.run(
+      `INSERT INTO multiremi_feishu_bot_outbound_deliveries (
+         id, workspace_id, binding_id, task_id, chat_id, thread_id,
+         reply_to_message_id, body, status, available_at, created_at, updated_at,
+         mention_snapshot, interaction_open_id, kind, human_request_id, expires_at
+       ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, 'decision_card', ?, ?)`,
+      [
+        deliveryId,
+        issue.workspaceId,
+        bindingId,
+        topics.chatId,
+        cleanOptionalString(binding.thread_id),
+        replyToMessageId,
+        body,
+        now,
+        now,
+        now,
+        toJson({ mode: topics.notifyMode ?? "group_owner",
+          ...(topics.notifyMode === "person" ? { openId: topics.notifyOpenId } : {}) }),
+        recipientOpenId ?? null,
+        request.id,
+        request.expiresAt ?? null,
+      ],
+    );
+    this.ctx.appendIssueActivity(issue.id, {
+      actorType: "system",
+      type: "decision_card_queued",
+      body: request.id,
+      data: {
+        request_id: request.id,
+        source_task_id: sourceTask.id,
+        delivery_id: deliveryId,
+        kind: "decision_card",
+        notify_mode: topics.notifyMode ?? "group_owner",
+      },
+    });
+    return deliveryId;
+  }
+
+  /**
+   * A request that leaves `pending` must rewrite its card in place, no matter
+   * where the answer came from (MUL-407). The patch is its own delivery so a
+   * Feishu failure retries on the normal outbox backoff without touching the
+   * original send or the request's own status.
+   */
+  enqueueDecisionCardPatch(request: MultiremiTaskHumanRequest, nowInput: string | Date = new Date()): void {
+    const row = this.ctx.db.query(
+      `SELECT o.id, o.workspace_id, o.binding_id, o.chat_id, o.thread_id,
+              o.external_message_id, o.human_request_id
+       FROM multiremi_feishu_bot_outbound_deliveries o
+       WHERE o.kind = 'decision_card' AND o.human_request_id = ?
+       ORDER BY o.created_at DESC, o.id DESC LIMIT 1`,
+    ).get(request.id) as Row | null;
+    // Nothing to patch when the card never left the outbox, was skipped, or the
+    // send degraded to text; the text fallback already carried the question.
+    const messageId = cleanOptionalString(row?.external_message_id);
+    if (!row || !messageId) return;
+    const now = nowInput instanceof Date ? nowInput : new Date(nowInput);
+    const nowIsoValue = now.toISOString();
+    // One terminal patch per request: the answer may be written twice (web then
+    // Feishu) but the card only needs the first terminal state.
+    const existing = this.ctx.db.query(
+      `SELECT 1 AS present FROM multiremi_feishu_bot_outbound_deliveries
+       WHERE kind = 'decision_card_patch' AND human_request_id = ? LIMIT 1`,
+    ).get(request.id) as Row | null;
+    if (existing) return;
+    const card = buildTaskInteractionCard(request, {
+      header: buildCardHeader({ agentName: this.botAgentName(String(row.workspace_id)) }),
+      receipt: true,
+    });
+    this.ctx.db.run(
+      `INSERT INTO multiremi_feishu_bot_outbound_deliveries (
+         id, workspace_id, binding_id, task_id, chat_id, thread_id,
+         reply_to_message_id, body, status, available_at, created_at, updated_at,
+         kind, human_request_id, target_message_id
+       ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 'pending', ?, ?, ?, 'decision_card_patch', ?, ?)`,
+      [
+        createId("fbo"),
+        String(row.workspace_id),
+        String(row.binding_id),
+        String(row.chat_id),
+        cleanOptionalString(row.thread_id),
+        messageId,
+        toJson(card),
+        nowIsoValue,
+        nowIsoValue,
+        nowIsoValue,
+        request.id,
+        messageId,
+      ],
+    );
+  }
+
+  /**
+   * Queue the one text nudge a pending decision card gets before its deadline.
+   *
+   * Deriving reminders at claim time is what keeps them correct: a request that
+   * was answered a second earlier produces nothing, and `reminder_sent_at` is a
+   * single compare-and-set so concurrent claims cannot each decide to nudge.
+   * The window is [expires_at - lead, expires_at], so a host that was offline for
+   * the whole window still delivers exactly one reminder when it comes back.
+   */
+  private materializeDecisionRemindersWithinTransaction(workspaceId: string, now: Date): void {
+    const windowEnd = new Date(now.getTime() + ISSUE_DECISION_REMINDER_LEAD_MS).toISOString();
+    const due = this.ctx.db.query(
+      `SELECT request.id, request.task_id, request.expires_at
+       FROM multiremi_task_human_requests request
+       JOIN multiremi_tasks task ON task.id = request.task_id
+       WHERE request.status = 'pending' AND request.reminder_sent_at IS NULL
+         AND request.expires_at IS NOT NULL AND request.expires_at <= ?
+         AND task.issue_id IS NOT NULL AND task.workspace_id = ?
+       ORDER BY request.expires_at ASC, request.id ASC`,
+    ).all(windowEnd, workspaceId) as Row[];
+    for (const row of due) {
+      const claimed = this.ctx.db.run(
+        `UPDATE multiremi_task_human_requests SET reminder_sent_at = ?
+         WHERE id = ? AND status = 'pending' AND reminder_sent_at IS NULL`,
+        [now.toISOString(), String(row.id)],
+      );
+      if (claimed.changes !== 1) continue;
+      const request = this.ctx.tasks().getTaskHumanRequest(String(row.id));
+      const task = this.ctx.tasks().getTask(String(row.task_id));
+      const issue = task?.issueId ? this.ctx.issues().getIssue(task.issueId) : null;
+      if (!request || !issue) continue;
+      // Only a card that actually reached the topic deserves a reminder; a
+      // request with no card (no seed, notifyMode none, or a degraded send) is
+      // already only visible on the web workbench.
+      const card = this.ctx.db.query(
+        `SELECT o.binding_id, o.chat_id, o.thread_id, o.reply_to_message_id
+         FROM multiremi_feishu_bot_outbound_deliveries o
+         WHERE o.kind = 'decision_card' AND o.human_request_id = ?
+           AND o.status = 'sent' AND o.external_message_id IS NOT NULL
+         ORDER BY o.created_at DESC, o.id DESC LIMIT 1`,
+      ).get(request.id) as Row | null;
+      if (!card) continue;
+      const workspace = this.ctx.workspaces().getWorkspace(issue.workspaceId);
+      const topics = readWorkspaceIssueTopics(workspace?.settings ?? {});
+      const recipientOpenId = topics.notifyMode === "person" ? topics.notifyOpenId : null;
+      const mention = topics.notifyMode === "none"
+        ? undefined
+        : { mode: topics.notifyMode ?? "group_owner",
+          ...(topics.notifyMode === "person" ? { openId: topics.notifyOpenId } : {}),
+          ...(recipientOpenId ? { resolvedOpenId: recipientOpenId } : {}) };
+      const nowIsoValue = now.toISOString();
+      this.ctx.db.run(
+        `INSERT INTO multiremi_feishu_bot_outbound_deliveries (
+           id, workspace_id, binding_id, task_id, chat_id, thread_id,
+           reply_to_message_id, body, status, available_at, created_at, updated_at,
+           mention_snapshot, interaction_open_id, kind, human_request_id, expires_at
+         ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, 'decision_reminder', ?, ?)`,
+        [
+          createId("fbo"),
+          issue.workspaceId,
+          String(card.binding_id),
+          String(card.chat_id),
+          cleanOptionalString(card.thread_id),
+          cleanOptionalString(card.reply_to_message_id),
+          decisionReminderBody(issue, request),
+          nowIsoValue,
+          nowIsoValue,
+          nowIsoValue,
+          mention ? toJson(mention) : null,
+          recipientOpenId,
+          request.id,
+          request.expiresAt ?? null,
+        ],
+      );
+    this.ctx.appendIssueActivity(issue.id, {
+      actorType: "system",
+      type: "decision_card_reminder",
+      body: request.id,
+      data: { request_id: request.id, expires_at: request.expiresAt ?? null },
+    });
+    }
+  }
+
+  /** The Agent's name is the card's conversation label for a server-built card. */
+  private botAgentName(workspaceId: string): string | null {
+    const config = this.getConfig(workspaceId);
+    if (!config) return null;
+    return this.ctx.agents().getAgent(config.agentId)?.name ?? null;
   }
 
   /** Caller owns the terminal-task transaction. */
@@ -1421,6 +1730,11 @@ export class FeishuBotRepo {
     ) return null;
     return this.ctx.db.transaction(() => {
       const nowIsoValue = now.toISOString();
+      // The reminder lane is materialized here rather than at request creation:
+      // a request answered before its window closes must never produce one, and
+      // `reminder_sent_at` is the single dedupe record. Doing it inside the claim
+      // transaction means a host that polls continuously still queues one nudge.
+      this.materializeDecisionRemindersWithinTransaction(workspaceId, now);
       const row = this.ctx.db.query(
         `SELECT o.* FROM multiremi_feishu_bot_outbound_deliveries o
          JOIN multiremi_feishu_bot_chat_bindings b ON b.id = o.binding_id
@@ -1449,6 +1763,11 @@ export class FeishuBotRepo {
          ORDER BY o.created_at ASC, o.id ASC LIMIT 1`,
       ).get(workspaceId, config.appId, supportsTaskStream ? 1 : 0, supportsNativeCot ? 1 : 0, supportsAttachments ? 1 : 0, nowIsoValue, nowIsoValue) as Row | null;
       if (!row) return null;
+      // A decision lane only exists for a host that advertised the capability.
+      // Defensive: a downgrade between enqueue and claim leaves the row pending
+      // rather than handing a card to a host that cannot render it.
+      const kind = cleanOptionalString(row.kind);
+      if (kind && !this.supportsDecisionCard(workspaceId, runtimeId)) return null;
       let mention = parseOutboundMention(parseJson(row.mention_snapshot, null));
       if (supportsTaskStream && row.task_id && !row.mention_snapshot) {
         const topics = readWorkspaceIssueTopics(this.ctx.workspaces().getWorkspace(workspaceId)?.settings ?? {});
@@ -1485,6 +1804,12 @@ export class FeishuBotRepo {
       if (updated.changes !== 1) return null;
       return {
         ...outboundDelivery(row, claimToken),
+        // The decision lanes carry their own recipient checkpoint and need no
+        // Task stream, so they read these outside the `task_id` branch.
+        ...(kind ? {
+          ...(mention ? { mention } : {}),
+          ...(row.interaction_open_id ? { interactionOpenId: String(row.interaction_open_id) } : {}),
+        } : {}),
         ...(supportsTaskStream && row.task_id ? {
           taskId: String(row.task_id),
           receiptMessageIds: this.listTaskReceiptMessageIds(workspaceId, String(row.task_id)),
@@ -2475,6 +2800,94 @@ function issueTopicBody(issue: Pick<MultiremiIssue, "key" | "title" | "descripti
   return description ? `${title}\n\n${description}` : title;
 }
 
+/** How long before its deadline a pending card gets its one nudge. */
+export const ISSUE_DECISION_REMINDER_LEAD_MS = 10 * 60 * 1000;
+
+/**
+ * The plain-text degradation of a decision card (MUL-407). It must carry
+ * everything the card carried: the question, its numbered options, and a link
+ * to the parent Issue's web workbench.
+ */
+export function decisionCardTextBody(input: {
+  issue: Pick<MultiremiIssue, "id" | "key" | "title">;
+  workspaceSlug?: string | null;
+  publicUrl?: string | null;
+  request: MultiremiTaskHumanRequest;
+}): string {
+  const { issue, request } = input;
+  const payload = request.payload ?? {};
+  const lines = [
+    `**${issue.key} - ${issue.title}**`,
+    "",
+    request.kind === "permission"
+      ? "任务在等你确认一项操作，需要你在 Remi 里点一下。"
+      : "任务在等你回答一个问题，需要你在 Remi 里点一下。",
+  ];
+  const message = cleanOptionalString(payload.message);
+  if (message) lines.push("", message);
+  const questions = Array.isArray(payload.questions) ? payload.questions : [];
+  if (questions.length) {
+    lines.push("");
+    questions.forEach((question, index) => {
+      const row = (question ?? {}) as Record<string, unknown>;
+      const nested = (row.question ?? {}) as Record<string, unknown>;
+      const source = typeof nested === "object" && nested !== null && nested.question ? nested : row;
+      lines.push(`${questions.length > 1 ? `${index + 1}. ` : ""}${String(source.question ?? "问题")}`);
+      const options = Array.isArray(source.options) ? source.options : [];
+      options.forEach((option, optionIndex) => {
+        const item = (option ?? {}) as Record<string, unknown>;
+        lines.push(`  ${optionIndex + 1}. ${String(item.label ?? item.value ?? "选项")}`);
+      });
+    });
+  }
+  const options = Array.isArray(payload.options) ? payload.options : [];
+  if (options.length) {
+    const title = String((payload.tool_call as Record<string, unknown> | undefined)?.title ?? "操作审批");
+    lines.push("", `**${title}**`);
+    options.forEach((option, index) => {
+      const item = (option ?? {}) as Record<string, unknown>;
+      lines.push(`${index + 1}. ${String(item.name ?? item.optionId ?? item.option_id ?? "选项")}`);
+    });
+  }
+  const link = issueWebUrl(input);
+  lines.push("", link
+    ? `请在 Remi 工作台处理：[${issue.key}](${link})`
+    : "请在 Remi 工作台处理此请求。");
+  lines.push(`Request ID: ${request.id}`);
+  return lines.join("\n");
+}
+
+function decisionReminderBody(
+  issue: Pick<MultiremiIssue, "id" | "key" | "title">,
+  request: MultiremiTaskHumanRequest,
+): string {
+  const message = cleanOptionalString(request.payload?.message);
+  return [
+    `**${issue.key} - ${issue.title}**`,
+    "",
+    request.kind === "permission"
+      ? "上面这张卡片还没人处理，再过一会儿就会超时。"
+      : "上面这个问题还没人回答，再过一会儿就会超时。",
+    ...(message ? ["", message] : []),
+    "",
+    "超时会视为未回答，未获授权的操作不会继续。",
+  ].join("\n");
+}
+
+/** Absolute web URL, or null when the deployment has no public address yet. */
+function issueWebUrl(input: {
+  issue: Pick<MultiremiIssue, "id">;
+  workspaceSlug?: string | null;
+  publicUrl?: string | null;
+}): string | null {
+  const base = cleanOptionalString(input.publicUrl ?? process.env.MULTIREMI_PUBLIC_URL);
+  if (!base) return null;
+  const trimmed = base.replace(/\/+$/, "");
+  const slug = cleanOptionalString(input.workspaceSlug);
+  const path = slug ? `/${encodeURIComponent(slug)}/issues/` : "/issues/";
+  return `${trimmed}${path}${encodeURIComponent(input.issue.id)}`;
+}
+
 function humanRequestPushBody(
   issue: Pick<MultiremiIssue, "key" | "title">,
   sourceTask: Pick<MultiremiTask, "id">,
@@ -2516,6 +2929,7 @@ function humanRequestPushPrompt(
 function outboundDelivery(row: Row, claimToken: string): MultiremiFeishuBotOutboundDelivery {
   const id = String(row.id);
   const bodyOrigin = row.task_id == null && !row.attachments ? "issue" : "agent";
+  const kind = cleanOptionalString(row.kind);
   return {
     id,
     claimToken,
@@ -2532,6 +2946,16 @@ function outboundDelivery(row: Row, claimToken: string): MultiremiFeishuBotOutbo
     idempotencyKey: id,
     idempotency_key: id,
     ...(row.attachments ? { attachments: parseJson(row.attachments, []) } : {}),
+    ...(kind ? { kind: kind as MultiremiFeishuBotOutboundDelivery["kind"] } : {}),
+    ...(row.human_request_id ? {
+      humanRequestId: String(row.human_request_id),
+      human_request_id: String(row.human_request_id),
+    } : {}),
+    ...(row.target_message_id ? {
+      targetMessageId: String(row.target_message_id),
+      target_message_id: String(row.target_message_id),
+    } : {}),
+    ...(row.expires_at ? { expiresAt: String(row.expires_at), expires_at: String(row.expires_at) } : {}),
   };
 }
 

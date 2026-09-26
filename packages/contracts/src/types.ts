@@ -1260,6 +1260,13 @@ export interface MultiremiTaskHumanRequest {
   respondedBy: string | null;
   createdAt: string;
   respondedAt: string | null;
+  /**
+   * Deadline the executing daemon asked for (MUL-407). The server defaults it
+   * to an hour when an older daemon omits `timeout_ms`; the reminder lane and
+   * the terminal card both read it. The daemon still owns the actual timeout
+   * decision, so this is a scheduling hint rather than a second authority.
+   */
+  expiresAt?: string | null;
 }
 
 export type MultiremiTaskPromptMode = "bootstrap" | "delta";
@@ -1283,6 +1290,8 @@ export interface CreateTaskHumanRequestInput {
   taskId: string;
   kind: MultiremiTaskHumanRequestKind;
   payload: Record<string, unknown>;
+  /** Requested lifetime in milliseconds; omitted by daemons that predate it. */
+  timeoutMs?: number;
 }
 
 export type MultiremiTaskSteerKind = "steer" | "force_answer";
@@ -4040,6 +4049,17 @@ export interface ReportBotMenuPublishInput {
 /** Capability a Runtime must advertise before it can be selected to host the bot. */
 export const FEISHU_CONCIERGE_CONFIG_CAPABILITY = "feishu_concierge_config_v1";
 
+/**
+ * Metadata flag a bot host sets when it can render server-built decision cards
+ * (MUL-407). The control plane only writes a `decision_card` delivery for a host
+ * that reports it, so an older daemon keeps the previous "wake a relay Agent"
+ * behavior until it is upgraded.
+ */
+export const FEISHU_DECISION_CARD_CAPABILITY = "feishu_decision_card";
+
+/** Heartbeat field carrying {@link FEISHU_DECISION_CARD_CAPABILITY}. */
+export const FEISHU_DECISION_CARD_PROTOCOL_VERSION = 1;
+
 /** Protocol version a daemon reports in register/heartbeat when it can host the bot. */
 export const FEISHU_CONCIERGE_PROTOCOL_VERSION = 1;
 
@@ -4076,6 +4096,28 @@ export interface FeishuBotOutboundMention {
   /** Omitted until prepared; null means a deliberate no-mention outcome. */
   resolvedOpenId?: string | null;
 }
+
+/**
+ * Feishu outbound lanes (MUL-407 / E5). The human-request lifecycle feeds only
+ * these; MUL-403 replaces the event source (Live Hub subscription) without
+ * changing the kinds or the checkpoint fields.
+ */
+export type FeishuBotOutboundDeliveryKind =
+  | "decision_card"
+  | "decision_card_patch"
+  | "decision_reminder";
+
+/**
+ * Lifecycle events a decision-card pipeline consumes, keyed by request id.
+ * Today the source is the request write plus bot-host polling; MUL-403 swaps in
+ * a subscription. Names are part of the interface with MUL-403.
+ */
+export type FeishuHumanRequestLifecycleEvent =
+  | "created"
+  | "reminder_due"
+  | "responded"
+  | "expired"
+  | "cancelled";
 
 /** What the control plane wants the selected Runtime to do with the connector. */
 export type FeishuBotDesiredState = "running" | "stopped";
@@ -4133,6 +4175,23 @@ export interface MultiremiFeishuBotOutboundDelivery {
   presentation?: FeishuPresentationCheckpoint;
   /** The requester, including in private chats where the final card needs no @. */
   interactionOpenId?: string;
+  /**
+   * What the host should do with this delivery (MUL-407). Absent means the
+   * legacy behavior: text for a topic seed, a Task stream when `taskId` is set.
+   * `decision_card` carries a server-built card in `body` and posts it as a
+   * proactive thread reply; `decision_card_patch` edits the message named by
+   * `previousDeliveryId`; `decision_reminder` is a plain text nudge.
+   */
+  kind?: FeishuBotOutboundDeliveryKind;
+  /** Set on every decision-card lane so the host can poll the request. */
+  humanRequestId?: string;
+  human_request_id?: string;
+  /** `decision_card_patch` only: the message this lane rewrites in place. */
+  targetMessageId?: string;
+  target_message_id?: string;
+  /** Reminder deadline for `decision_card` / `decision_reminder`. */
+  expiresAt?: string | null;
+  expires_at?: string | null;
 }
 
 /**

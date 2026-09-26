@@ -737,6 +737,17 @@ function isFeishuBotTaskTransportRequest(c: Context): boolean {
     || (c.req.method === "POST" && /^\/api\/daemon\/tasks\/[^/]+\/human-requests\/[^/]+\/respond$/.test(path));
 }
 
+/**
+ * MUL-407: the two verbs an Issue topic's host may use on another machine's
+ * task. Creating and expiring a human request are deliberately absent — the
+ * executing daemon stays the only authority for those.
+ */
+function isFeishuBotIssueTaskRequestTransport(c: Context): boolean {
+  const path = new URL(c.req.url).pathname;
+  return (c.req.method === "GET" && /^\/api\/daemon\/tasks\/[^/]+\/human-requests\/[^/]+$/.test(path))
+    || (c.req.method === "POST" && /^\/api\/daemon\/tasks\/[^/]+\/human-requests\/[^/]+\/respond$/.test(path));
+}
+
 export function denyDaemonTokenWorkspace(c: Context, workspaceId?: string | null, options: DaemonWorkspaceDenyOptions = {}): Response | null {
   const token = currentAccessToken(c);
   if (token?.type !== "daemon") return null;
@@ -860,6 +871,8 @@ export function denyDaemonTokenTaskRuntimeIdentity(
   // still belong to the claiming Runtime's daemon, even for the bot host.
   if (isFeishuBotTaskTransportRequest(c) && tokenDaemonId
     && store.canFeishuBotDaemonAccessTask(task.workspaceId, tokenDaemonId, task.id)) return null;
+  if (isFeishuBotIssueTaskRequestTransport(c) && tokenDaemonId
+    && store.canFeishuBotDaemonAccessIssueTaskHumanRequest(task.workspaceId, tokenDaemonId, task.id)) return null;
   if (!tokenDaemonId || !runtimeDaemonId || tokenDaemonId !== runtimeDaemonId) {
     if (options.hideForbiddenAsNotFound) return c.json({ error: "task not found" }, 404);
     return c.json({ error: "forbidden for daemon identity", code: "daemon_identity_forbidden" }, 403);
