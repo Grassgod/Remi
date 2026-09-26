@@ -38,7 +38,13 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multiremi/ui/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@multiremi/ui/components/ui/tooltip";
 import { projectDocDetailOptions, workspaceDocListOptions } from "@multiremi/core/project-docs";
-import { knowledgeRunOptions, knowledgeRunsOptions, knowledgeSubmissionsOptions, wikiBacklinksOptions } from "@multiremi/core/knowledge";
+import {
+  knowledgeRunOptions,
+  knowledgeRunsOptions,
+  knowledgeSubmissionOptions,
+  knowledgeSubmissionsOptions,
+  wikiBacklinksOptions,
+} from "@multiremi/core/knowledge";
 import { projectListOptions } from "@multiremi/core/projects/queries";
 import { repositoryListOptions, repositoryWikiDocsOptions, repositoryWikiSummariesOptions } from "@multiremi/core/repositories";
 import { useWorkspaceId } from "@multiremi/core/hooks";
@@ -47,7 +53,7 @@ import type {
   KnowledgeRunDetail,
   KnowledgeCompilationOutput,
   KnowledgeCompilationRun,
-  KnowledgeSubmission,
+  KnowledgeSubmissionListItem,
   Project,
   ProjectDoc,
   RepositoryWikiDoc,
@@ -875,14 +881,49 @@ function KnowledgeRunSheet({
   );
 }
 
-function RawBodyPreview({ body, fallback }: { body: string; fallback: string }) {
-  const content = body || fallback;
+/**
+ * One-line Raw preview plus the full body on hover.
+ *
+ * The list no longer ships `body` (MUL-386 C.2), so the row renders the
+ * SQL-truncated `body_excerpt` immediately and fetches the full text by id only
+ * when the user actually points at the row. The tooltip therefore opens with the
+ * excerpt and swaps to the complete content once that request lands, which keeps
+ * the preview usable on the first paint of a 100-row page.
+ */
+/** Trailing-edge debounce for values that drive a server request. */
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delayMs);
+    return () => clearTimeout(timer);
+  }, [value, delayMs]);
+  return debounced;
+}
+
+function RawBodyPreview({
+  excerpt,
+  fallback,
+  workspaceId,
+  submissionId,
+}: {
+  excerpt: string;
+  fallback: string;
+  workspaceId: string;
+  submissionId: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const detailQuery = useQuery({
+    ...knowledgeSubmissionOptions(workspaceId, open ? submissionId : null),
+  });
+  const fullBody = detailQuery.data?.submission?.body ?? "";
+  const label = excerpt || fallback;
+  const content = fullBody || excerpt || fallback;
   return (
-    <Tooltip>
+    <Tooltip open={open} onOpenChange={setOpen}>
       <TooltipTrigger
         render={
           <button type="button" className="mt-1 block w-full truncate text-left text-xs text-muted-foreground">
-            {content}
+            {label}
           </button>
         }
       />
@@ -897,18 +938,40 @@ function RawBodyPreview({ body, fallback }: { body: string; fallback: string }) 
   );
 }
 
-function RawPane({ submissions, search }: { submissions: KnowledgeSubmission[]; search: string }) {
+/**
+ * Raw submissions pane.
+ *
+ * Search is split by where the field lives: `body`, id, path, slug, scope and
+ * source type are matched by the server (`q`, so the client never needs the
+ * bodies), while issue key and agent name are still matched locally because the
+ * SQL predicate deliberately does not join those tables. A row survives when
+ * either side matches, so every query that used to hit still hits.
+ */
+function RawPane({
+  submissions,
+  search,
+  serverQuery,
+  workspaceId,
+}: {
+  submissions: KnowledgeSubmissionListItem[];
+  search: string;
+  serverQuery: string;
+  workspaceId: string;
+}) {
   const { t } = useT("projects");
   const paths = useWorkspacePaths();
   const { getAgentName } = useActorName();
   const formatRelativeDate = useFormatRelativeDate();
   const query = search.trim().toLowerCase();
-  const rows = submissions.filter((submission) => !query || [
-    submission.id, submission.body, submission.source_type, submission.scope,
-    submission.proposed_path ?? "", submission.proposed_slug ?? "",
-    submission.source_issue?.key ?? submission.source_issue_id ?? "",
-    submission.author_agent?.name ?? submission.author_agent_id ?? "",
-  ].some((value) => value.toLowerCase().includes(query)));
+  const serverMatches = Boolean(serverQuery.trim());
+  const rows = query && serverMatches
+    ? submissions
+    : submissions.filter((submission) => !query || [
+      submission.id, submission.source_type, submission.scope,
+      submission.proposed_path ?? "", submission.proposed_slug ?? "",
+      submission.source_issue?.key ?? submission.source_issue_id ?? "",
+      submission.author_agent?.name ?? submission.author_agent_id ?? "",
+    ].some((value) => value.toLowerCase().includes(query)));
   if (rows.length === 0) return <EmptyState icon={FileInput} title={query ? t(($) => $.knowledge.no_results) : t(($) => $.knowledge.raw_empty)} />;
   const groups = [
     { key: "evidence", title: t(($) => $.knowledge.raw_evidence_group), rows: rows.filter((submission) => submission.source_type !== "agent") },
@@ -934,7 +997,12 @@ function RawPane({ submissions, search }: { submissions: KnowledgeSubmission[]; 
               <article key={submission.id} className="grid gap-2 border-b px-4 py-3 last:border-b-0 lg:grid-cols-[minmax(160px,1fr)_120px_130px_minmax(180px,1.2fr)_110px_96px] lg:items-center lg:gap-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5"><FileInput className="size-3.5 shrink-0 text-muted-foreground" /><span className="truncate text-xs font-medium">{submission.source_type}</span></div>
-                  <RawBodyPreview body={submission.body} fallback={submission.id} />
+                  <RawBodyPreview
+                    excerpt={submission.body_excerpt}
+                    fallback={submission.id}
+                    workspaceId={workspaceId}
+                    submissionId={submission.id}
+                  />
                 </div>
                 <div className="min-w-0 text-xs">
                   {issueLabel && submission.source_issue_id ? <AppLink href={paths.issueDetail(submission.source_issue_id)} className="block truncate hover:underline">{issueLabel}</AppLink> : <span className="text-muted-foreground">--</span>}
@@ -1127,7 +1195,15 @@ export function KnowledgePage() {
   });
   const repositoriesQuery = useQuery({ ...repositoryListOptions(workspaceId), enabled: Boolean(workspaceId) && activeTab === "wiki" });
   const repositoryWikiQuery = useQuery({ ...repositoryWikiSummariesOptions(workspaceId), enabled: Boolean(workspaceId) && activeTab === "wiki" });
-  const submissionsQuery = useQuery({ ...knowledgeSubmissionsOptions(workspaceId), enabled: Boolean(workspaceId) && activeTab === "raw" });
+  // The Raw tab is the only consumer of `q`, so the debounce is scoped here and
+  // the other tabs keep their single list query. Debouncing matters because every
+  // keystroke would otherwise re-run the server-side body scan (MUL-386 C.2).
+  const serverQuery = useDebouncedValue(search, 300);
+  const rawQuery = activeTab === "raw" ? serverQuery.trim() : "";
+  const submissionsQuery = useQuery({
+    ...knowledgeSubmissionsOptions(workspaceId, rawQuery),
+    enabled: Boolean(workspaceId) && activeTab === "raw",
+  });
   const runsQuery = useQuery({ ...knowledgeRunsOptions(workspaceId), enabled: Boolean(workspaceId) && activeTab === "runs" });
   const projects = projectsQuery.data ?? [];
   const docs = docsQuery.data ?? [];
@@ -1218,7 +1294,7 @@ export function KnowledgePage() {
         {panelPending ? <LoadingPane /> : panelError ? <ErrorPane error={panelError} retry={retry} /> : (
           <>
             <TabsContent value="wiki" className="min-h-0 overflow-y-auto lg:flex lg:flex-col"><WikiPane projects={projects} docs={docs} repositories={repositories} summaries={summaries} search={search} sortOrder={sortOrder} projectState={projectState} repositoryState={repositoryState} /></TabsContent>
-            <TabsContent value="raw" className="min-h-0 overflow-y-auto"><RawPane submissions={submissions} search={search} /></TabsContent>
+            <TabsContent value="raw" className="min-h-0 overflow-y-auto"><RawPane submissions={submissions} search={search} serverQuery={rawQuery} workspaceId={workspaceId} /></TabsContent>
             <TabsContent value="memory" className="min-h-0 overflow-y-auto lg:flex lg:flex-col"><MemoryPane projects={projects} docs={memoryDocs} wikiPages={docs} search={search} /></TabsContent>
             <TabsContent value="runs" className="min-h-0 overflow-y-auto"><RunPane runs={runs} search={search} /></TabsContent>
           </>

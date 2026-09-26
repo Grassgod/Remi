@@ -523,3 +523,77 @@ describe.skipIf(!pgAvailable)("MUL-367 request metrics — real Postgres bridge"
     }
   });
 });
+
+/**
+ * MUL-386 C.1 — the PG bridge reply guardrail.
+ *
+ * A reply over 1 MB logs `api_large_db_reply`, with the Hono route PATTERN and
+ * the byte count and nothing else. The privacy assertions are structural: the
+ * emitted line is compared against the exact expected key set, so a future field
+ * (SQL text, a parameter, the real path) fails the test instead of shipping.
+ */
+describe("MUL-386 bridge reply guardrails", () => {
+  /** Big enough to exceed the 1 MB default warning threshold. */
+  const BIG_ROWS = "x".repeat(1_200_000);
+
+  /** Collect stdout lines, tolerating a throwing operation so lines survive. */
+  async function capture<T>(run: () => Promise<T> | T): Promise<{ lines: string[]; result: T | null; error: unknown }> {
+    const lines: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => { lines.push(args.map((arg) => String(arg)).join(" ")); };
+    try {
+      return { lines, result: await run(), error: null };
+    } catch (error) {
+      return { lines, result: null, error };
+    } finally {
+      console.log = original;
+    }
+  }
+
+  it("logs api_large_db_reply with the route pattern and byte count only", async () => {
+    const database = new PostgresSyncDatabase(PG_URL);
+    const app = new Hono();
+    app.use("*", createRequestMetricsMiddleware(OPTIONS));
+    app.get("/api/leaky/:id/reply", (c) => {
+      // The secret lives in the path and in a parameter; neither may reach the log.
+      const rows = database.query("SELECT ?::text AS payload").all(BIG_ROWS) as Array<{ payload: string }>;
+      return c.json({ bytes: rows[0]?.payload.length ?? 0 });
+    });
+
+    try {
+      const { lines } = await capture(() => app.request("/api/leaky/super-secret-id/reply"));
+      const event = lines.map((line) => JSON.parse(line) as Record<string, unknown>)
+        .find((line) => line.event === "api_large_db_reply");
+      expect(event).toBeDefined();
+      // Exact key set: no SQL text, no params, no real path, no query string.
+      expect(Object.keys(event!).sort()).toEqual(["bytes", "event", "method", "route", "ts"]);
+      expect(event!.route).toBe("/api/leaky/:id/reply");
+      expect(event!.method).toBe("GET");
+      expect(Number(event!.bytes)).toBeGreaterThan(1_048_576);
+      for (const line of lines) {
+        expect(line).not.toContain("super-secret-id");
+        expect(line).not.toContain("SELECT");
+        expect(line).not.toContain(BIG_ROWS.slice(0, 40));
+      }
+    } finally {
+      database.close();
+    }
+  });
+
+  it("labels a query with no request context as <background>", async () => {
+    const database = new PostgresSyncDatabase(PG_URL);
+    try {
+      const { lines } = await capture(() => {
+        database.query("SELECT ?::text AS payload").all(BIG_ROWS);
+      });
+      const event = lines.map((line) => JSON.parse(line) as Record<string, unknown>)
+        .find((line) => line.event === "api_large_db_reply");
+      expect(event).toBeDefined();
+      expect(event!.route).toBe("<background>");
+      expect(event!.method).toBe("<background>");
+    } finally {
+      database.close();
+    }
+  });
+
+});

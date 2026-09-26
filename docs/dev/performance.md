@@ -77,16 +77,25 @@ Server-Timing: total;dur=12.3, db;dur=4.5, dbp;dur=0.2, dbq;desc="7", dbb;desc="
 - `db_busy_pct` = 该窗口内**进程级** DB 阻塞时间 / 窗口时长。进程级计数包含没有请求上下文的调用，所以后台 job 的 DB 时间也算进去，这正是「DB 忙碌占比」需要的分母口径。
 - `event_loop_lag_max_ms` 用 250 ms 间隔的 `setInterval` 漂移测量并取窗口内最大值；同步 PG 桥阻塞主线程时会直接体现为晚 tick。
 
+**PG 桥回包护栏**（MUL-386 C.1）。同步桥的单次回包体积直接决定主线程被阻塞多久，所以除了慢请求日志之外，桥本身对超体积回包有独立规则：单次回包 `len > 1 MB` 时输出一行 `api_large_db_reply`，只带路由模式、方法与字节数。
+
+```json
+{"event":"api_large_db_reply","ts":"2026-09-26T09:12:03.771Z","method":"GET","route":"/api/knowledge/submissions","bytes":12085257}
+```
+
+该日志与 `api_slow_request` 共用同一套脱敏口径：只有路由模式、方法、字节数，没有 SQL 文本、参数、原始 path 或 query。没有请求上下文的后台任务记为 `<background>`。
+
 **环境变量**（都在 [api.env.example](../../deploy/docker/api.env.example) 有登记）：`MULTIREMI_REQUEST_METRICS`（默认开，`0/false/off` 整体关闭，关闭后不加响应头也不写任何日志）、`MULTIREMI_SLOW_REQUEST_MS`（默认 500，设 0 可让每个请求都打一行，适合短时冒烟）、`MULTIREMI_METRICS_SUMMARY_INTERVAL_MS`（默认 60000）、`MULTIREMI_METRICS_SUMMARY_TOP_N`（默认 10）、`MULTIREMI_METRICS_BUFFER_SIZE`（默认 4096）。
 
 **观测与验证入口**：
 
 ```bash
-# 生产容器里的两类日志（209 上的 API 容器）
+# 生产容器里的三类日志（209 上的 API 容器）
 docker logs multiremi-platform-app-api-1 | grep api_minute_summary
 docker logs multiremi-platform-app-api-1 | grep api_slow_request
+docker logs multiremi-platform-app-api-1 | grep api_large_db_reply
 
-# 单元测试：并发归属、Server-Timing 格式、慢请求日志脱敏、汇总器
+# 单元测试：并发归属、Server-Timing 格式、慢请求日志脱敏、汇总器、桥回包日志
 bun test tests/unit/multiremi/request-metrics.test.ts
 
 # 真实 HTTP 冒烟：起一个本地实例，读 Server-Timing + 两类日志

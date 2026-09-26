@@ -65,6 +65,37 @@ export const KnowledgeSubmissionSchema = z.object({
   source_task: KnowledgeTaskSummarySchema.nullable().catch(null).default(null),
 }).loose();
 
+/**
+ * List-row submission (MUL-386 C.2).
+ *
+ * `body`/`patch` are absent by contract — the list route no longer reads them
+ * from the database — so the schema does not accept them either. `body_excerpt`
+ * is the SQL-truncated prefix the row preview renders.
+ */
+export const KnowledgeSubmissionListItemSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string().default(""),
+  project_id: nullableString,
+  repository_id: nullableString,
+  scope: z.string().catch("unknown").default("unknown"),
+  source_type: z.string().catch("unknown").default("unknown"),
+  proposed_path: nullableString,
+  proposed_slug: nullableString,
+  body_excerpt: z.string().catch("").default(""),
+  base_revision: nullableString,
+  source_task_id: nullableString,
+  source_issue_id: nullableString,
+  source_revision: nullableString,
+  author_agent_id: nullableString,
+  content_sha256: z.string().catch("").default(""),
+  status: z.string().catch("unknown").default("unknown"),
+  created_at: z.string().catch("").default(""),
+  updated_at: z.string().catch("").default(""),
+  source_issue: KnowledgeIssueSummarySchema.nullable().catch(null).default(null),
+  author_agent: KnowledgeAgentSummarySchema.nullable().catch(null).default(null),
+  source_task: KnowledgeTaskSummarySchema.nullable().catch(null).default(null),
+}).loose();
+
 export const KnowledgeCompilationRunSchema = z.object({
   id: z.string(),
   workspace_id: z.string().default(""),
@@ -89,7 +120,8 @@ export const KnowledgeCompilationSourceSchema = z.object({
   submission_id: nullableString,
   source_type: z.string().catch("unknown").default("unknown"),
   source_ref: nullableString,
-  metadata: z.record(z.string(), z.unknown()).catch({}).default({}),
+  // Absent in list responses by design (MUL-386 C.2); present on the detail route.
+  metadata: z.record(z.string(), z.unknown()).optional().catch(undefined),
   created_at: z.string().catch("").default(""),
   submission: KnowledgeSubmissionSchema.nullable().catch(null).default(null),
 }).loose();
@@ -127,7 +159,7 @@ function validRows<T extends z.ZodTypeAny>(schema: T) {
 }
 
 export const ListKnowledgeSubmissionsResponseSchema = z.object({
-  submissions: validRows(KnowledgeSubmissionSchema),
+  submissions: validRows(KnowledgeSubmissionListItemSchema),
 }).loose();
 
 export const GetKnowledgeSubmissionResponseSchema = z.object({

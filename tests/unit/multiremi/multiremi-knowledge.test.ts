@@ -614,3 +614,215 @@ describe("knowledge compilation control plane", () => {
     expect(store.getProjectDoc(legacyMemory.id)?.body).toBe("still recalled");
   });
 });
+
+/**
+ * MUL-386 C.2 — the list routes must stop crossing the PG bridge with the large
+ * columns, while the single-item routes keep returning everything.
+ *
+ * These assert on the LIST SQL itself (`projection`) as well as the response
+ * shape, because deleting fields from the JSON while still reading `body` from
+ * the database would leave `db_bytes` unchanged — which is the number the
+ * acceptance criterion is stated in.
+ */
+describe("knowledge list payloads (MUL-386 C.2)", () => {
+  it("omits body and patch from the submissions list but keeps an excerpt", async () => {
+    const store = createStore();
+    const longBody = `first line of the raw body\n${"filler ".repeat(400)}`;
+    const longPatch = `--- a/file\n${"patch filler\n".repeat(200)}`;
+    const submission = store.createKnowledgeSubmission({
+      workspaceId: "local",
+      scope: "memory",
+      sourceType: "agent",
+      body: longBody,
+      patch: longPatch,
+    }).submission;
+
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const listResponse = await app.request("/api/knowledge/submissions", { headers: ROOT_JSON_HEADERS });
+    expect(listResponse.status).toBe(200);
+    const list = await listResponse.json() as any;
+    const row = list.submissions.find((candidate: any) => candidate.id === submission.id);
+    expect(row).toBeDefined();
+    expect(row).not.toHaveProperty("body");
+    expect(row).not.toHaveProperty("patch");
+    // The excerpt is what keeps the one-line list preview working.
+    expect(row.body_excerpt.length).toBeGreaterThan(0);
+    expect(row.body_excerpt.length).toBeLessThan(longBody.length);
+    expect(longBody.startsWith(row.body_excerpt)).toBe(true);
+
+    // The by-id route is unchanged: full body and patch.
+    const detailResponse = await app.request(`/api/knowledge/submissions/${submission.id}`, { headers: ROOT_JSON_HEADERS });
+    expect(detailResponse.status).toBe(200);
+    const detail = await detailResponse.json() as any;
+    expect(detail.submission.body).toBe(longBody);
+    // `createKnowledgeSubmission` trims the optional patch, so compare trimmed.
+    expect(detail.submission.patch).toBe(longPatch.trim());
+  });
+
+  it("answers the submissions list from a projection that never selects body or patch", async () => {
+    const store = createStore();
+    const statements: string[] = [];
+    const db2 = new (await import("bun:sqlite")).Database(":memory:");
+    void db2;
+    // Record the SQL the store emits for the list page, then assert on it.
+    const original = store.listKnowledgeSubmissionsPage.bind(store);
+    const probe = new Proxy(store as any, {
+      get(target, property, receiver) {
+        if (property === "listKnowledgeSubmissionsPage") {
+          return (input: unknown) => {
+            const page = original(input as never);
+            return page;
+          };
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    void probe;
+    store.createKnowledgeSubmission({
+      workspaceId: "local", scope: "memory", sourceType: "agent",
+      body: "body that must not be selected", patch: "patch that must not be selected",
+    });
+    const collected: string[] = [];
+    const spy = db!;
+    const originalQuery = spy.query.bind(spy);
+    (spy as any).query = (sql: string) => {
+      collected.push(sql);
+      return originalQuery(sql);
+    };
+    try {
+      store.listKnowledgeSubmissionsPage({ workspaceId: "local", limit: 10 });
+    } finally {
+      (spy as any).query = originalQuery;
+    }
+    const listSql = collected.find((sql) => sql.includes("FROM multiremi_knowledge_submissions"))!;
+    expect(listSql).toBeDefined();
+    expect(listSql).not.toMatch(/SELECT\s+\*/i);
+    expect(listSql).not.toMatch(/\bpatch\b/);
+    // `body` may only appear inside substr(), never as a selected column: the
+    // whole point is that the raw column does not cross the bridge.
+    expect(listSql).toMatch(/substr\(body, 1, \d+\) AS body_excerpt/);
+    expect(listSql.replace(/substr\(body, 1, \d+\) AS body_excerpt/g, "")).not.toMatch(/\bbody\b/);
+    void statements;
+  });
+
+  it("searches submissions server-side on body, id, path, slug, type and scope", async () => {
+    const store = createStore();
+    const project = store.createProject({ title: "Search" });
+    const needle = "NeeDle-Token-42";
+    const hit = store.createKnowledgeSubmission({
+      workspaceId: "local", projectId: project.id, scope: "project_wiki", sourceType: "agent",
+      proposedPath: "guides/deploy.md", proposedSlug: "deploy-guide",
+      body: `intro\n${needle}\nrest`,
+    }).submission;
+    const byPath = store.createKnowledgeSubmission({
+      workspaceId: "local", projectId: project.id, scope: "memory", sourceType: "external",
+      proposedPath: "runs/path-marker.md", body: "unrelated",
+    }).submission;
+    store.createKnowledgeSubmission({
+      workspaceId: "local", projectId: project.id, scope: "memory", sourceType: "agent", body: "not a match",
+    });
+
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const search = async (q: string) => {
+      const response = await app.request(`/api/knowledge/submissions?workspace_id=local&q=${encodeURIComponent(q)}`, { headers: ROOT_JSON_HEADERS });
+      expect(response.status).toBe(200);
+      return await response.json() as any;
+    };
+
+    // Body match, case-insensitive.
+    const bodyHit = await search("needle-token-42");
+    expect(bodyHit.submissions.map((row: any) => row.id)).toEqual([hit.id]);
+    expect(bodyHit.applied_filters.query).toBe("needle-token-42");
+    // id / slug / scope / path / source_type.
+    expect((await search(hit.id)).submissions.map((row: any) => row.id)).toEqual([hit.id]);
+    expect((await search("DEPLOY-GUIDE")).submissions.map((row: any) => row.id)).toEqual([hit.id]);
+    expect((await search("project_wiki")).submissions.map((row: any) => row.id)).toEqual([hit.id]);
+    expect((await search("path-marker")).submissions.map((row: any) => row.id)).toEqual([byPath.id]);
+    expect((await search("EXTERNAL")).submissions.map((row: any) => row.id)).toEqual([byPath.id]);
+    // LIKE metacharacters are literal, not wildcards. `%` matches nothing here;
+    // `_` only matches rows whose own text contains an underscore.
+    expect((await search("%")).submissions).toEqual([]);
+    const underscore = await search("_");
+    for (const candidate of underscore.submissions) {
+      expect(JSON.stringify(candidate)).toContain("_");
+    }
+    // No q keeps the previous behaviour and filter shape.
+    const unfiltered = await (await app.request("/api/knowledge/submissions?workspace_id=local", { headers: ROOT_JSON_HEADERS })).json() as any;
+    expect(unfiltered.submissions).toHaveLength(3);
+    expect(unfiltered.applied_filters).not.toHaveProperty("query");
+  });
+
+  it("omits sources[].metadata from the runs list but keeps it on the single run", async () => {
+    const store = createStore();
+    const run = store.createKnowledgeCompilationRun({
+      workspaceId: "local", mode: "repository_update",
+    }).run;
+    store.addKnowledgeRunScmSource(run.id, "scm_event_1", {
+      event_type: "change.merged",
+      changed_files: ["a".repeat(500), "b".repeat(500)],
+    });
+
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const list = await (await app.request("/api/knowledge/runs", { headers: ROOT_JSON_HEADERS })).json() as any;
+    const listRow = list.runs.find((candidate: any) => candidate.id === run.id);
+    expect(listRow).toBeDefined();
+    expect(listRow.sources).toHaveLength(1);
+    expect(listRow.sources[0]).not.toHaveProperty("metadata");
+    expect(listRow.sources[0].source_ref).toBe("scm_event_1");
+    expect(listRow.sources[0].submission).toBeNull();
+
+    const detail = await (await app.request(`/api/knowledge/runs/${run.id}`, { headers: ROOT_JSON_HEADERS })).json() as any;
+    expect(detail.sources[0].metadata).toMatchObject({ event_type: "change.merged" });
+    expect(detail.sources[0].metadata.changed_files).toHaveLength(2);
+  });
+
+  it("resolves runs-list artifacts from a bounded id lookup instead of whole doc tables", async () => {
+    const store = createStore();
+    const workspace = store.getWorkspace("local") ?? store.ensureLocalWorkspace();
+    store.updateWorkspaceRepositories("local", [...workspace.repos, {
+      id: "repo_artifact_scope", name: "artifacts", url: "https://github.com/acme/artifacts.git", source: "github",
+    }]);
+    const project = store.createProject({ title: "Artifacts" });
+    const repositoryDoc = store.createRepositoryWikiDoc("local", "repo_artifact_scope", {
+      path: "index.md", title: "Repo index", body: "repo body",
+    });
+    const projectDoc = store.createProjectDoc(project.id, {
+      kind: "wiki", slug: "index", path: "index.md", title: "Project index", body: "project body",
+    });
+    const run = store.createKnowledgeCompilationRun({
+      workspaceId: "local", projectId: project.id, repositoryId: "repo_artifact_scope", mode: "issue_ingest",
+    }).run;
+    store.recordKnowledgeCompilationOutput({ runId: run.id, artifactScope: "repository_wiki", docId: repositoryDoc.id, version: 1, action: "create" });
+    store.recordKnowledgeCompilationOutput({ runId: run.id, artifactScope: "project_wiki", docId: projectDoc.id, version: 1, action: "create" });
+
+    const collected: string[] = [];
+    const spy = db!;
+    const originalQuery = spy.query.bind(spy);
+    (spy as any).query = (sql: string) => {
+      collected.push(sql);
+      return originalQuery(sql);
+    };
+    let body: any;
+    try {
+      const app = createMultiremiApp({ store, authToken: "root-secret" });
+      body = await (await app.request("/api/knowledge/runs", { headers: ROOT_JSON_HEADERS })).json();
+    } finally {
+      (spy as any).query = originalQuery;
+    }
+    const row = body.runs.find((candidate: any) => candidate.id === run.id);
+    // Outputs are ordered by `created_at, id`; both rows share a millisecond and
+    // the ids are random, so compare as a set rather than by position.
+    expect(row.outputs.map((output: any) => output.artifact).sort((a: any, b: any) => a.id.localeCompare(b.id)))
+      .toEqual([
+        { id: repositoryDoc.id, title: "Repo index", path: "index.md" },
+        { id: projectDoc.id, title: "Project index", path: "index.md" },
+      ].sort((a, b) => a.id.localeCompare(b.id)));
+    // No SELECT * against either doc table: only the id/title/path projection.
+    const docReads = collected.filter((sql) => /FROM multiremi_(repository_wiki_docs|project_docs)\b/.test(sql));
+    expect(docReads.length).toBeGreaterThan(0);
+    for (const sql of docReads) {
+      expect(sql).not.toMatch(/SELECT\s+\*/i);
+      expect(sql).toMatch(/SELECT id, title, path/);
+    }
+  });
+});

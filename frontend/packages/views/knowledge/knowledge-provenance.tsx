@@ -23,8 +23,15 @@ import { ActorAvatar } from "../common/actor-avatar";
 import { AppLink } from "../navigation";
 import { useT } from "../i18n";
 
-function metadataText(metadata: Record<string, unknown>, key: string): string | null {
-  const value = metadata[key];
+/**
+ * Read a string out of run-source metadata.
+ *
+ * `metadata` is optional on the type because the runs list no longer returns it
+ * (MUL-386 C.2); it is only present on the single-run detail response this
+ * component queries, so the absence is tolerated rather than assumed.
+ */
+function metadataText(metadata: Record<string, unknown> | undefined, key: string): string | null {
+  const value = metadata?.[key];
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 

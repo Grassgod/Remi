@@ -2,12 +2,13 @@
 
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import type {
   KnowledgeRunDetail,
   KnowledgeSubmission,
+  KnowledgeSubmissionListItem,
   Project,
   RepositoryWikiSummary,
   WorkspaceDoc,
@@ -28,6 +29,8 @@ const state = vi.hoisted(() => ({
   backlinks: {} as Record<string, unknown[]>,
   repositoryDocs: {} as Record<string, unknown[]>,
   submissions: [] as unknown[],
+  submissionDetails: {} as Record<string, unknown>,
+  submissionDetailPending: false,
   runs: [] as unknown[],
   runDetail: null as unknown,
   basePending: false,
@@ -54,10 +57,23 @@ vi.mock("@tanstack/react-query", () => ({
     state.observedQueries.push({ key, enabled: (options as { enabled?: boolean }).enabled });
     if (key[0] === "knowledge") {
       const submissions = key[2] === "submissions";
+      const submissionDetail = key[2] === "submission";
       const runDetail = key[2] === "runs" && key.length > 3;
       return {
-        data: submissions ? state.submissions : runDetail ? state.runDetail : state.runs,
-        isPending: submissions ? state.submissionsPending : runDetail ? state.runDetailPending : state.runsPending,
+        data: submissions
+          ? state.submissions
+          : submissionDetail
+            ? state.submissionDetails[String(key[3])]
+            : runDetail
+              ? state.runDetail
+              : state.runs,
+        isPending: submissions
+          ? state.submissionsPending
+          : submissionDetail
+            ? state.submissionDetailPending
+            : runDetail
+              ? state.runDetailPending
+              : state.runsPending,
         isError: (submissions ? state.submissionsError : state.runsError) !== null,
         error: submissions ? state.submissionsError : state.runsError,
         refetch: submissions ? refetchSubmissions : refetchRuns,
@@ -120,7 +136,13 @@ vi.mock("@multiremi/core/knowledge", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@multiremi/core/knowledge")>();
   return {
     ...actual,
-    knowledgeSubmissionsOptions: () => ({ queryKey: ["knowledge", "ws-1", "submissions"] }),
+    knowledgeSubmissionsOptions: (_workspaceId: string, q = "") => ({
+      queryKey: ["knowledge", "ws-1", "submissions", q],
+    }),
+    knowledgeSubmissionOptions: (_workspaceId: string, submissionId: string | null | undefined) => ({
+      queryKey: ["knowledge", "ws-1", "submission", submissionId ?? ""],
+      enabled: Boolean(submissionId),
+    }),
     knowledgeRunsOptions: () => ({ queryKey: ["knowledge", "ws-1", "runs"] }),
     knowledgeRunOptions: (_workspaceId: string, runId: string | null | undefined) => ({
       queryKey: ["knowledge", "ws-1", "runs", runId ?? ""],
@@ -174,9 +196,33 @@ vi.mock("../projects/components/wiki/project-wiki-section", () => ({
 vi.mock("../navigation", () => ({
   AppLink: ({ href, children, ...props }: { href: string; children: ReactNode }) => <a href={href} {...props}>{children}</a>,
 }));
+/**
+ * Tooltip stand-in that honours `open`/`onOpenChange` like the real control.
+ *
+ * The Raw preview is a *controlled* tooltip that fetches the full body when it
+ * opens, so a mock which always renders its content would both hide the lazy
+ * fetch and make the assertion vacuous.
+ */
 vi.mock("@multiremi/ui/components/ui/tooltip", () => ({
   TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
-  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Tooltip: ({
+    children,
+    open,
+    onOpenChange,
+  }: {
+    children: ReactNode;
+    open?: boolean;
+    onOpenChange?: (open: boolean) => void;
+  }) => (
+    <div
+      data-testid="tooltip-root"
+      data-open={open ? "true" : "false"}
+      onPointerEnter={open === undefined ? undefined : () => onOpenChange?.(true)}
+      onPointerLeave={open === undefined ? undefined : () => onOpenChange?.(false)}
+    >
+      {children}
+    </div>
+  ),
   TooltipTrigger: ({ render }: { render: ReactNode }) => <>{render}</>,
   TooltipContent: ({ children }: { children: ReactNode }) => <div role="tooltip">{children}</div>,
 }));
@@ -220,14 +266,30 @@ function summary(partial: Partial<RepositoryWikiSummary> & { repository_id: stri
   };
 }
 
-function submission(partial: Partial<KnowledgeSubmission> & { id: string }): KnowledgeSubmission {
+/**
+ * List-row fixture. The list contract has no `body`/`patch` (MUL-386 C.2), so the
+ * helper only offers `body_excerpt`; full bodies come from `submissionDetail`.
+ */
+function submission(partial: Partial<KnowledgeSubmissionListItem> & { id: string }): KnowledgeSubmissionListItem {
   return {
     workspace_id: "ws-1", project_id: "proj-1", repository_id: null, scope: "memory",
-    source_type: "agent", proposed_path: null, proposed_slug: null, body: "raw body", patch: null,
+    source_type: "agent", proposed_path: null, proposed_slug: null, body_excerpt: "raw body",
     base_revision: null, source_task_id: null, source_issue_id: null, source_revision: null,
     author_agent_id: null, content_sha256: "sha", status: "pending",
     created_at: "2026-08-31T00:00:00Z", updated_at: "2026-08-31T00:00:00Z",
     source_issue: null, author_agent: null, source_task: null, ...partial,
+  };
+}
+
+/** Full submission as returned by the by-id route (the list never carries this). */
+function submissionDetail(body: string, id = "ksub-1"): KnowledgeSubmission {
+  return {
+    id, workspace_id: "ws-1", project_id: "proj-1", repository_id: null, scope: "memory",
+    source_type: "agent", proposed_path: null, proposed_slug: null, body, patch: null,
+    base_revision: null, source_task_id: null, source_issue_id: null, source_revision: null,
+    author_agent_id: null, content_sha256: "sha", status: "pending",
+    created_at: "2026-08-31T00:00:00Z", updated_at: "2026-08-31T00:00:00Z",
+    source_issue: null, author_agent: null, source_task: null,
   };
 }
 
@@ -254,7 +316,7 @@ describe("KnowledgePage", () => {
   beforeEach(() => {
     Object.assign(state, {
       projects: [], docs: [], memoryDocs: [], repositories: [], summaries: [], projectDetails: {}, backlinks: {}, repositoryDocs: {},
-      submissions: [], runs: [], runDetail: null,
+      submissions: [], submissionDetails: {}, submissionDetailPending: false, runs: [], runDetail: null,
       basePending: false, submissionsPending: false, runsPending: false, runDetailPending: false,
       repositoryPending: false, repositoryError: null, projectPending: false, projectError: null,
       baseError: null, submissionsError: null, runsError: null,
@@ -430,7 +492,7 @@ describe("KnowledgePage", () => {
   it("shows only formal memory in Memory and keeps memory Raw in Raw", () => {
     state.projects = [project({ id: "proj-1", title: "Apollo" })];
     state.memoryDocs = [doc({ id: "formal", kind: "memory", title: "Formal memory" })];
-    state.submissions = [submission({ id: "raw-memory", body: "Memory waiting for Atlas" })];
+    state.submissions = [submission({ id: "raw-memory", body_excerpt: "Memory waiting for Atlas" })];
     renderPage();
 
     fireEvent.click(screen.getByRole("tab", { name: /Memory/ }));
@@ -562,15 +624,24 @@ describe("KnowledgePage", () => {
     expect(screen.getByText("processing")).toBeInTheDocument();
   });
 
-  it("pairs the truncated Raw preview with its complete tooltip content", () => {
+  it("pairs the truncated Raw excerpt with the lazily fetched complete body", async () => {
     const body = "A complete Raw submission body that is intentionally longer than the table preview.";
-    state.submissions = [submission({ id: "ksub-long", body })];
+    // The list row only carries the SQL excerpt; the full text arrives from the
+    // by-id route that the tooltip triggers on hover (MUL-386 C.2).
+    state.submissions = [submission({ id: "ksub-long", body_excerpt: "A complete Raw submission body" })];
+    state.submissionDetails["ksub-long"] = { submission: submissionDetail(body, "ksub-long") };
     renderPage();
     fireEvent.click(screen.getByRole("tab", { name: /Raw/ }));
 
-    const preview = screen.getByRole("button", { name: body });
+    const preview = screen.getByRole("button", { name: "A complete Raw submission body" });
     expect(preview).toHaveClass("truncate");
-    expect(screen.getByRole("tooltip")).toHaveTextContent(body);
+    // Closed tooltip: the row only holds the SQL-truncated excerpt, so the full
+    // body is not rendered anywhere yet.
+    const tooltipRoot = screen.getAllByTestId("tooltip-root").find((node) => node.getAttribute("data-open") === "false")!;
+    expect(tooltipRoot).not.toHaveTextContent(body);
+
+    fireEvent.pointerEnter(tooltipRoot);
+    await waitFor(() => expect(screen.getByRole("tooltip")).toHaveTextContent(body));
   });
 
   it("renders a compilation run with multiple Raw inputs and multiple outputs", () => {

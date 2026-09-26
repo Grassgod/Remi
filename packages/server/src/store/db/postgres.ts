@@ -10,7 +10,11 @@
  * otherwise the shared bun:sqlite database (core Remi's ~/.remi/remi.db) is used.
  */
 import { getDb } from "@shared/db/index.js";
-import { recordDbParse, recordDbQuery } from "../../observability/request-metrics.js";
+import {
+  emitLargeDbReply,
+  recordDbParse,
+  recordDbQuery,
+} from "../../observability/request-metrics.js";
 
 export interface SqlStatement {
   get(...params: unknown[]): any;
@@ -191,6 +195,9 @@ class PgBridge {
         recordDbQuery(performance.now() - startedAt, len);
         waitRecorded = true;
       }
+      // MUL-386 C.1: make an oversized reply visible in the logs. The size is
+      // recorded before decode/parse because that is the cost this guards.
+      if (measured) emitLargeDbReply(len);
       const parseStartedAt = performance.now();
       try {
         const obj = JSON.parse(new TextDecoder().decode(this.buf.slice(0, len)));

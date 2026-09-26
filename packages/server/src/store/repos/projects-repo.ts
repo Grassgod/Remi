@@ -28,6 +28,7 @@ import type {
   MultiremiProjectDevice,
   MultiremiProjectDoc,
   MultiremiProjectDocIndexEntry,
+  MultiremiKnowledgeDocSummary,
   MultiremiProjectDocKind,
   MultiremiProjectDocRef,
   MultiremiProjectDocRevision,
@@ -708,6 +709,66 @@ export class ProjectsRepo {
         "SELECT * FROM multiremi_project_docs WHERE project_id = ? ORDER BY pinned DESC, updated_at DESC",
       ).all(projectId) as Row[];
     return rows.map(toProjectDoc);
+  }
+
+  /**
+   * Id/title/path for a bounded set of docs (MUL-386 C.2).
+   *
+   * Run-list responses only need `artifact{id,title,path}`; reading the whole
+   * doc — `body` included — per output row was 2 MB of bridge payload for 100
+   * runs. Bounded by the caller's id list.
+   */
+  listProjectDocSummariesByIds(ids: readonly string[]): MultiremiKnowledgeDocSummary[] {
+    const unique = [...new Set(ids.map((id) => String(id ?? "").trim()).filter(Boolean))];
+    if (!unique.length) return [];
+    const placeholders = unique.map(() => "?").join(", ");
+    return (this.ctx.db.query(
+      `SELECT id, title, path FROM multiremi_project_docs WHERE id IN (${placeholders})`,
+    ).all(...unique) as Row[]).map((row) => ({
+      id: String(row.id),
+      title: String(row.title ?? ""),
+      path: String(row.path ?? ""),
+    }));
+  }
+
+  /**
+   * Resolve one OpenViking URI to its owning doc (MUL-386 C.2).
+   *
+   * Recall used to call `listProjectDocs` — every doc in the project, bodies
+   * included — once per search hit and compare URIs in JavaScript, which is
+   * where production's 15.5 MB `db_bytes` and `db_queries=101` came from. This is
+   * the single-statement replacement with the same precedence:
+   *
+   *   1. `content_uri = uri` (the URI stored on the row), or
+   *   2. a URI derived from `kind` + `slug` (`content_uri` empty or stale).
+   *
+   * `candidates` carries the codec-derived `kind`/`slug` pairs, because only the
+   * caller knows the workspace the URI must belong to. Ties resolve by the same
+   * `pinned DESC, updated_at DESC` order the previous full-list scan used, so a
+   * project with several docs on one URI keeps returning the row a full scan
+   * would have picked. Only the list columns are selected: `body` stays in the
+   * database and never crosses the PG bridge.
+   */
+  findProjectDocByUri(
+    projectId: string,
+    uri: string,
+    candidates: ReadonlyArray<{ kind: MultiremiProjectDocKind; slug: string }> = [],
+  ): MultiremiProjectDoc | null {
+    if (!this.getProject(projectId)) throw new Error(`Project not found: ${projectId}`);
+    const conditions = ["content_uri = ?"];
+    const params: unknown[] = [uri];
+    for (const candidate of candidates) {
+      const slug = cleanOptionalString(candidate.slug);
+      if (!slug) continue;
+      conditions.push("(kind = ? AND slug = ?)");
+      params.push(normalizeProjectDocKind(candidate.kind), slug);
+    }
+    const row = this.ctx.db.query(
+      `SELECT ${PROJECT_DOC_LIST_COLUMNS} FROM multiremi_project_docs
+       WHERE project_id = ? AND (${conditions.join(" OR ")})
+       ORDER BY pinned DESC, updated_at DESC LIMIT 1`,
+    ).get(projectId, ...params) as Row | null;
+    return row ? toProjectDoc(row) : null;
   }
 
   getProjectDoc(id: string): MultiremiProjectDoc | null {
@@ -1425,6 +1486,17 @@ function toProjectResource(row: Row): MultiremiProjectResource {
     createdBy: nullableString(row.created_by),
   };
 }
+
+/**
+ * Columns a doc-list reader needs when the body is not part of the answer.
+ * `toProjectDoc` treats a missing `body` as empty, which is why the projection
+ * is safe to reuse for the summary paths.
+ */
+const PROJECT_DOC_LIST_COLUMNS =
+  "id, project_id, workspace_id, kind, slug, path, title, summary, '' AS body, tags, pinned, refs, "
+  + "source_task_id, source_issue_id, author_type, author_id, updated_by_type, updated_by_id, version, "
+  + "storage_backend, content_uri, content_sha256, sync_status, sync_error, snapshot_oid, "
+  + "compilation_run_id, created_at, updated_at";
 
 function toProjectDoc(row: Row): MultiremiProjectDoc {
   return {
