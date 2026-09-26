@@ -10,8 +10,6 @@
  * one `pread` for the compressed body and never touches the rest of the blob.
  */
 
-import { crc32 } from "node:zlib";
-
 export const ZIP_LOCAL_HEADER_SIGNATURE = 0x04034b50;
 export const ZIP_DATA_DESCRIPTOR_SIGNATURE = 0x08074b50;
 export const ZIP_CENTRAL_DIRECTORY_SIGNATURE = 0x02014b50;
@@ -40,11 +38,6 @@ export const ZIP_UINT32_MAX = 0xffffffff;
 /** Sizes and offsets above this need Zip64 rather than a 32-bit field. */
 export function isZip64Value(value: number): boolean {
   return !Number.isSafeInteger(value) || value < 0 || value > ZIP_UINT32_MAX;
-}
-
-/** CRC-32 over buffered bytes; `seed` continues a digest across chunks. */
-export function zipCrc32(bytes: Uint8Array, seed = 0): number {
-  return crc32(bytes, seed >>> 0) >>> 0;
 }
 
 export interface ZipMemberSizes {
@@ -102,10 +95,6 @@ export function buildCentralZip64ExtraField(member: ZipMemberSizes): Buffer {
 
 export function localHeaderSize(nameLength: number, extraLength: number): number {
   return 30 + nameLength + extraLength;
-}
-
-export function centralHeaderSize(nameLength: number, extraLength: number): number {
-  return 46 + nameLength + extraLength;
 }
 
 export function dataDescriptorSize(zip64: boolean): number {

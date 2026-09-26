@@ -37,7 +37,6 @@ import {
   SESSION_ARCHIVE_TRACES_PREFIX,
   SESSION_ARCHIVE_TRACE_SUFFIX,
   SESSION_ARCHIVE_V2_FORMAT,
-  SESSION_ARCHIVE_V1_FORMAT,
   type SessionArchiveIndex,
   type SessionArchiveMemberIndexEntry,
   type SessionArchiveSubject,
@@ -700,11 +699,6 @@ export async function removePreparedSessionArchive(archivePath: string): Promise
   }
 }
 
-/** Kept for callers that only need the legacy Issue receipt path. */
-export async function removePreparedIssueSessionArchive(archivePath: string): Promise<void> {
-  await removePreparedSessionArchive(archivePath);
-}
-
 /**
  * Platforms with a traversal strategy.
  *
@@ -863,6 +857,3 @@ function isNotFound(error: unknown): boolean {
 function isAlreadyExists(error: unknown): boolean {
   return error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "EEXIST";
 }
-
-/** Re-exported so callers can name the legacy format without importing contracts. */
-export const LEGACY_SESSION_ARCHIVE_FORMAT = SESSION_ARCHIVE_V1_FORMAT;
