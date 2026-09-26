@@ -130,6 +130,7 @@ import {
 import { withRequestReadCache } from "@multiremi/store/request-read-cache.js";
 import { ScmPollingScheduler } from "@multiremi/scm/poller.js";
 import { IssueTitleScheduler } from "@multiremi/issue-title/poller.js";
+import { BodyHtmlBackfillTask } from "@multiremi/render/body-html-backfill.js";
 import { retitleIssue } from "@multiremi/issue-title/service.js";
 import {
   createScmConnectionVerifier,
@@ -230,6 +231,11 @@ export interface MultiremiApiOptions {
   feishuBotRegistrations?: FeishuBotRegistrationOptions;
   /** Undefined enables server-owned Issue title scanning; null explicitly disables it. */
   issueTitleScheduler?: IssueTitleScheduler | null;
+  /**
+   * MUL-439: the idle `body_html` backfill. Defaults to a real task when
+   * background jobs run; pass null to disable it in a test.
+   */
+  bodyHtmlBackfill?: BodyHtmlBackfillTask | null;
   issueRetitle?: typeof retitleIssue;
   /** Disable every server-owned background job for a read-only blue/green candidate. */
   backgroundJobs?: boolean;
@@ -700,11 +706,19 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
       ? createControlPlaneSshMeshFromEnv(store)
       : options.controlPlaneSshMesh)
     : null;
+  // MUL-439: refuses to start when B1's `body_html`/`render_version` columns are
+  // absent, so this is a no-op on a database that predates MUL-426.
+  const bodyHtmlBackfill = backgroundJobs
+    ? (options.bodyHtmlBackfill === undefined
+      ? new BodyHtmlBackfillTask({ store })
+      : options.bodyHtmlBackfill)
+    : null;
   scheduler?.start();
   scmPolling?.start();
   messaging?.start();
   issueTitleScheduler?.start();
   if (backgroundJobs) store.startNotificationDeliverySweeper();
+  bodyHtmlBackfill?.start();
   const realtimeState = options.realtimeState ?? { enabled: true, connections: 0 };
   const authToken = options.authToken ?? process.env.MULTIREMI_TOKEN ?? "";
   const sessionArchives = options.sessionArchives ?? new SessionArchiveService(store);
@@ -938,6 +952,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     messaging?.stop();
     issueTitleScheduler?.stop();
     store.stopNotificationDeliverySweeper();
+    bodyHtmlBackfill?.stop();
     return stopServer(closeActiveConnections);
   };
   return server;
