@@ -1,6 +1,6 @@
 import { createId, nowIso } from "@multiremi/ids.js";
 import { createLogger } from "@shared/logger.js";
-import { abortable, deadlineClient } from "./deadline.js";
+import { abortable, clientWithDeadline, deadlineClient } from "./deadline.js";
 import type {
   CreateRepositoryWikiDocInput,
   MultiremiRepositoryWikiDoc,
@@ -17,7 +17,13 @@ import {
   type RepositoryWikiStorageJobInput,
   type RepositoryWikiStoreBatchOperation,
 } from "@multiremi/store/repos/repository-wiki-repo.js";
-import { OPENVIKING_DEFAULT_ATTEMPT_TIMEOUT_MS, OPENVIKING_MAX_RETRIES, OpenVikingClient } from "@multiremi/project-knowledge/openviking-client.js";
+import {
+  isOpenVikingTimeout,
+  OPENVIKING_DEFAULT_ATTEMPT_TIMEOUT_MS,
+  OPENVIKING_MAX_RETRIES,
+  OpenVikingClient,
+} from "@multiremi/project-knowledge/openviking-client.js";
+import { PROJECT_KNOWLEDGE_REQUEST_BUDGET_MS } from "@multiremi/project-knowledge/service.js";
 import type { OpenVikingClientContract, ProjectKnowledgeMode } from "@multiremi/project-knowledge/types.js";
 import {
   decodeRepositoryWikiBody,
@@ -119,9 +125,14 @@ export interface RepositoryWikiServiceContract {
   search(workspaceId: string, repositoryId: string, query: string, limit?: number): Promise<MultiremiRepositoryWikiDoc[]>;
   backlinks(workspaceId: string, repositoryId: string, ref: string): Promise<MultiremiRepositoryWikiDoc[]>;
   hydrateTaskWiki(task: MultiremiTaskWithAgent, signal?: AbortSignal): Promise<MultiremiTaskWithAgent>;
+  /** Reads whose OpenViking calls all share one deadline; use one per API request. */
+  withRequestDeadline(budgetMs?: number): RepositoryWikiRequestReader;
   startStorageWorker?(): void;
   stopStorageWorker?(): void;
 }
+
+/** Read-only on purpose: writes must stay on the service that owns the per-repository write lane. */
+export type RepositoryWikiRequestReader = Pick<RepositoryWikiServiceContract, "get" | "readBodies">;
 
 export class RepositoryWikiUnavailableError extends Error {}
 export const REPOSITORY_WIKI_BATCH_LIMIT = 256;
@@ -204,6 +215,11 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
     this.operationSignal = options.signal;
   }
 
+  withRequestDeadline(budgetMs = PROJECT_KNOWLEDGE_REQUEST_BUDGET_MS): RepositoryWikiRequestReader {
+    if (!this.client) return this;
+    return new RepositoryWikiService(this.store, clientWithDeadline(this.client, Date.now() + budgetMs), this.mode);
+  }
+
   startStorageWorker(): void {
     if (this.mode === "sql" || this.storageAbort) return;
     const abort = new AbortController();
@@ -279,6 +295,8 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
         return await this.hydrate(doc);
       } catch (error) {
         this.operationSignal?.throwIfAborted();
+        // A read that ran out of time answers like the single-doc read, not as unreadable content.
+        if (isOpenVikingTimeout(error)) throw error;
         throw new RepositoryWikiUnavailableError(repositoryWikiHydrationError(doc, error));
       }
     });
