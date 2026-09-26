@@ -192,17 +192,37 @@ export function recordDbParse(parseMs: number): void {
 export const DB_REPLY_WARN_BYTES = 1_048_576;
 
 /**
- * Hard limit on a single bridge reply. 0 disables the limit entirely, which is
- * the rollback switch (`MULTIREMI_PG_REPLY_MAX_BYTES=0`).
+ * Default value of the hard limit: 0, i.e. disabled.
+ *
+ * A size limit only forces pagination when every path that can trip it already
+ * has a pagination or projection exit. Production still has paths whose single
+ * reply exceeds 8 MB with no such exit (repository-wikis and un-bounded task
+ * messages — MUL-398), so default-on would convert them from slow into failing
+ * rather than into paginated. The bridge keeps its 64 MB `RESULT_BUFFER_BYTES`
+ * ceiling, and the 1 MB warning line provides visibility in the meantime.
  */
-export const DEFAULT_DB_REPLY_MAX_BYTES = 8 * 1_048_576;
+export const DEFAULT_DB_REPLY_MAX_BYTES = 0;
 
-/** Resolve the hard limit, honouring the env override and treating 0 as "off". */
+/**
+ * The limit production moves to once MUL-398 lands and one week of
+ * `api_large_db_reply` shows no route above it.
+ *
+ * The test suite enables this value (see `tests/setup/hermetic-env.ts`) so the
+ * guardrail keeps catching unbounded reads in CI — it already caught
+ * `/tasks/pending` reading the whole task table.
+ */
+export const RECOMMENDED_DB_REPLY_MAX_BYTES = 8 * 1_048_576;
+
+/**
+ * Resolve the hard limit. Unset, empty, non-numeric and negative all mean "off"
+ * (0) rather than falling back to 8 MB: the disabled default is deliberate, and
+ * a typo in the env var must not silently arm a limit in production.
+ */
 export function resolveDbReplyMaxBytes(env: Record<string, string | undefined> = process.env): number {
   const raw = env.MULTIREMI_PG_REPLY_MAX_BYTES?.trim();
   if (!raw) return DEFAULT_DB_REPLY_MAX_BYTES;
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_DB_REPLY_MAX_BYTES;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 0) return DEFAULT_DB_REPLY_MAX_BYTES;
   return parsed;
 }
 
