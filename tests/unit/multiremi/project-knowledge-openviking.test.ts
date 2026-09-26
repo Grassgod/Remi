@@ -1769,6 +1769,10 @@ describe("recall URI resolution (MUL-386 C.2)", () => {
       expect(hit.doc.path).toBe(reference.path);
       expect(hit.doc.version).toBe(reference.version);
       expect(hit.doc.kind).toBe(reference.kind);
+      // The lookup deliberately does not select `body`: recall hits never carried
+      // a usable body (the HTTP response deletes it and `hydrate` re-reads
+      // OpenViking), so the projection leaves it empty instead of shipping it.
+      expect(hit.doc.body).toBe("");
       expect(hit.doc.contentUri ?? projectKnowledgeDocUri({
         workspaceId: hit.doc.workspaceId, projectId: f.project.id, kind: hit.doc.kind, slug: hit.doc.slug,
       })).toBe(reference.contentUri ?? projectKnowledgeDocUri({
