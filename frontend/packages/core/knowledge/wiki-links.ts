@@ -29,6 +29,21 @@ export interface WikiBacklinkDocument {
   body: string;
 }
 
+/**
+ * A Repository Wiki list row may omit `body`, but the backlinks route still
+ * hydrates its documents. Normalize the boundary so the rest of the view can
+ * keep requiring a body where it actually renders one.
+ */
+function backlinkDocuments(docs: readonly { id: string; slug?: string; path: string; title: string; body?: string }[]): WikiBacklinkDocument[] {
+  return docs.map((doc) => ({
+    id: doc.id,
+    slug: doc.slug ?? doc.path.replace(/\.md$/i, ""),
+    path: doc.path,
+    title: doc.title,
+    body: doc.body ?? "",
+  }));
+}
+
 export const wikiBacklinkKeys = {
   detail: (workspaceId: string, scope: WikiBacklinksScope, ref: string) => [
     "wiki-backlinks",
@@ -48,7 +63,7 @@ export function wikiBacklinksOptions(
     queryKey: wikiBacklinkKeys.detail(workspaceId, scope, ref),
     queryFn: async (): Promise<WikiBacklinkDocument[]> => scope.kind === "project"
       ? await api.listProjectDocBacklinks(scope.projectId, ref)
-      : await api.listRepositoryWikiBacklinks(workspaceId, scope.repositoryId, ref),
+      : backlinkDocuments(await api.listRepositoryWikiBacklinks(workspaceId, scope.repositoryId, ref)),
     enabled: Boolean(
       workspaceId
       && ref
