@@ -166,7 +166,10 @@ for local context, directory lifetime, and the immutable execution binding.
 
 `remi runtime prepare [--provider claude|codex]` installs this release's fixed ACP
 and Agent dependencies, verifying executables and ACP initialization without
-switching a running daemon. This local command does not require server authentication.
+switching a running daemon. Without `--provider` it prepares the configured or
+detected providers that have an ACP bundle and skips the rest (such as
+antigravity), succeeding with empty `runtimes` when none remain; an explicit
+`--provider` other than claude or codex is rejected. This local command does not require server authentication.
 Maintainers refresh dependencies before every release with
 `bun run release:prepare --version <next>`; daemons do not poll the registry.
 See [daemon runtime upgrades](daemon-runtime-upgrades.md) for the release and
