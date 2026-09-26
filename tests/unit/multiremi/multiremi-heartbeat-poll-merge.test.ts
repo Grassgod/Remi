@@ -8,8 +8,9 @@
 //   4. a batch import claims ten rows in one write;
 //   5. the CLI-scope update drain branch still refuses to hand the update out.
 import { afterEach, describe, expect, it } from "bun:test";
+import { Database } from "bun:sqlite";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
-import type { MultiremiStore } from "@multiremi/store.js";
+import { MultiremiStore } from "@multiremi/store.js";
 import type { MultiremiRuntime } from "@multiremi/contracts/types.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -237,5 +238,114 @@ describe("merged heartbeat poll", () => {
     expect(store.getRuntimeCommandRequest(runtime.id, request.id)?.args).toEqual([]);
     // The redacted pair is the audit copy and must survive the scrub.
     expect(store.getRuntimeCommandRequest(runtime.id, request.id)?.redactedCommand).toBe("printf secret");
+  });
+});
+
+// ── structural assertion: an idle heartbeat touches the seven pending tables once ──────────────
+//
+// Senior大哥's ruling states this acceptance item as "heartbeat.idle 里触及 7 张待办表的语句只有
+// probe 那 1 条". That is a property of the generated SQL — the probe is one statement whose
+// `EXISTS` sub-queries name all seven tables — so it is asserted here on the statements the store
+// emits, independent of the benchmark's query counts.
+describe("idle heartbeat — pending-table statement count", () => {
+  /** The seven async-request families the merged probe covers. */
+  const PENDING_TABLES = [
+    "multiremi_runtime_update_requests",
+    "multiremi_runtime_model_list_requests",
+    "multiremi_runtime_command_requests",
+    "multiremi_bot_menu_publish_requests",
+    "multiremi_runtime_local_skill_list_requests",
+    "multiremi_runtime_directory_scan_requests",
+    "multiremi_runtime_local_skill_import_requests",
+  ];
+
+  /** A store whose raw handle records every statement the store prepares or runs, verbatim. */
+  function recordingFixture(metadata: Record<string, unknown> = {}): {
+    store: MultiremiStore;
+    runtime: MultiremiRuntime;
+    statements: string[];
+  } {
+    const statements: string[] = [];
+    const raw = new Database(":memory:");
+    const proxy = new Proxy(raw, {
+      get(target, key) {
+        const value = Reflect.get(target, key, target);
+        if (key === "prepare") {
+          return (sql: string, ...callArgs: unknown[]) => {
+            statements.push(String(sql));
+            return (value as (...a: unknown[]) => unknown).apply(target, [sql, ...callArgs]);
+          };
+        }
+        if (key === "run" || key === "exec") {
+          return (sql: string, ...callArgs: unknown[]) => {
+            statements.push(String(sql));
+            return (value as (...a: unknown[]) => unknown).apply(target, [sql, ...callArgs]);
+          };
+        }
+        if (key === "query") {
+          return (sql: string, ...callArgs: unknown[]) => {
+            statements.push(String(sql));
+            return (value as (...a: unknown[]) => unknown).apply(target, [sql, ...callArgs]);
+          };
+        }
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as Database;
+    const store = new MultiremiStore(proxy);
+    store.ensureLocalWorkspace();
+    const runtime = store.registerRuntime({
+      id: "rt_probe_structural",
+      name: "Probe runtime",
+      provider: "codex",
+      daemonId: "daemon-probe",
+      workspaceId: "local",
+      ownerId: "local",
+      status: "online",
+      metadata: { agent_plugin_protocol: 1, feishu_bot_menu: true, ...metadata },
+    });
+    statements.length = 0;
+    return { store, runtime, statements };
+  }
+
+  it("touches the seven pending tables in exactly one statement while the queues are empty", () => {
+    const { store, runtime, statements } = recordingFixture();
+    store.heartbeatRuntime(runtime.id, FULL);
+
+    const touching = statements.filter((sql) => PENDING_TABLES.some((table) => sql.includes(table)));
+    // Exactly one statement — the `UNION ALL` probe — and it names every family it gated on.
+    expect(touching).toHaveLength(1);
+    expect(touching[0]).toContain("UNION ALL");
+    for (const table of PENDING_TABLES) expect(touching[0]).toContain(table);
+  });
+
+  it("gates on every family once per heartbeat, whatever the queue state", () => {
+    const { store, runtime, statements } = recordingFixture();
+    store.createRuntimeLocalSkillImportRequest(runtime.id, { skillKey: "one" });
+    store.heartbeatRuntime(runtime.id, FULL);
+
+    const probes = statements.filter((sql) => sql.includes("UNION ALL"));
+    // One probe per heartbeat, never one per family.
+    expect(probes).toHaveLength(1);
+    for (const table of PENDING_TABLES) expect(probes[0]).toContain(table);
+  });
+
+  it("omits a family whose capability the daemon did not advertise", () => {
+    const { store, runtime, statements } = recordingFixture();
+    // Bot menu and directory scan are capability-gated, so a daemon that does not advertise them
+    // must not have those tables probed at all — the gate lives inside the probe itself.
+    store.heartbeatRuntime(runtime.id, {
+      supportsBatchImport: true,
+      supportsSkillDirectory: true,
+      agentPluginProtocol: 1,
+    });
+
+    const [probe] = statements.filter((sql) => sql.includes("UNION ALL"));
+    expect(probe).toBeDefined();
+    expect(probe).not.toContain("multiremi_bot_menu_publish_requests");
+    expect(probe).not.toContain("multiremi_runtime_directory_scan_requests");
+    // The five ungated families are still covered in the same statement.
+    for (const table of PENDING_TABLES.slice(0, 3).concat(PENDING_TABLES[4]!, PENDING_TABLES[6]!)) {
+      expect(probe).toContain(table);
+    }
   });
 });
