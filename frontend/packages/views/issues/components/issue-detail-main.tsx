@@ -118,6 +118,7 @@ export function IssueDetailMain({
         <div
           ref={onScrollContainerRef}
           data-tab-scroll-root
+          data-perf-scroll="issue-detail"
           className="relative min-w-0 flex-1 overflow-y-auto"
         >
           <div className="mx-auto w-full max-w-4xl px-4 py-6 sm:px-8 sm:py-8">

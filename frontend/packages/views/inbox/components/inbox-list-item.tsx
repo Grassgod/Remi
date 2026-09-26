@@ -61,6 +61,8 @@ export function InboxListItem({
       <div
         role="button"
         tabIndex={0}
+        data-perf-item="inbox"
+        data-perf-key={item.id}
         onClick={onClick}
         onKeyDown={handleRowKeyDown}
         className={`group flex w-full cursor-pointer items-center gap-3 px-4 py-2.5 text-left transition-colors ${

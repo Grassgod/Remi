@@ -338,6 +338,8 @@ export const DraggableBoardCard = memo(function DraggableBoardCard({ issue, chil
         style={style}
         {...attributes}
         {...listeners}
+        data-perf-item="issue"
+        data-perf-key={issue.id}
         className={`group/card ${isDragging ? "opacity-30" : ""}`}
       >
         <AppLink

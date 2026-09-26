@@ -104,6 +104,7 @@ export function ChatMessageList({
     <div
       ref={setScrollContainerRef}
       data-tab-scroll-root
+      data-perf-scroll="chat"
       style={fadeStyle}
       className="flex-1 overflow-y-auto"
     >
@@ -151,8 +152,16 @@ export function ChatMessageList({
             </div>
           ),
         }}
-        itemContent={(_, msg) => (
-          <div className="mx-auto w-full max-w-4xl px-5 py-2">
+        itemContent={(index, msg) => (
+          // MUL-384 measurement contract: `data-perf-item` marks a real message,
+          // `data-perf-key` keys it, and the last one carries the terminal anchor.
+          // Attributes only — nothing here changes rendering or behavior.
+          <div
+            className="mx-auto w-full max-w-4xl px-5 py-2"
+            data-perf-item="message"
+            data-perf-key={msg.id}
+            {...(index === messages.length - 1 ? { "data-perf-anchor": "latest-message" } : null)}
+          >
             <MessageBubble
               message={msg}
               isPending={!!pendingTaskId && msg.task_id === pendingTaskId}
