@@ -55,8 +55,6 @@ export interface BodyHtmlBackfillOptions {
   render?: (markdown: string) => { html: string; render_version: string };
   /** Overrides the version rows are compared against, for tests. */
   renderVersion?: string;
-  /** Overrides the clock wait, so tests do not sleep. */
-  sleep?: (ms: number) => Promise<void>;
 }
 
 /** The store surface the task needs, so a test can drive it without a database. */
@@ -96,7 +94,6 @@ export class BodyHtmlBackfillTask {
   private readonly intervalMs: number;
   private readonly render: (markdown: string) => { html: string; render_version: string };
   private readonly renderVersion: string;
-  private readonly sleep: (ms: number) => Promise<void>;
 
   private timer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
@@ -109,7 +106,6 @@ export class BodyHtmlBackfillTask {
     this.intervalMs = options.intervalMs ?? BODY_HTML_BACKFILL_INTERVAL_MS;
     this.render = options.render ?? ((markdown) => renderMarkdown(markdown));
     this.renderVersion = options.renderVersion ?? RENDER_VERSION;
-    this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   }
 
   /** True once the column probe has succeeded and the loop is armed. */
@@ -166,10 +162,9 @@ export class BodyHtmlBackfillTask {
     }
     if (this.stopped) return;
     // A full batch means there is more waiting, so come back immediately; a
-    // short one means the queue is drained and the pause applies.
+    // short one means the queue is drained and the pause applies. The pause is
+    // the timer itself, so `stop()` cancels it rather than waiting it out.
     const delay = processed >= this.batchSize ? 0 : this.intervalMs;
-    if (delay > 0) await this.sleep(delay);
-    if (this.stopped) return;
     this.timer = setTimeout(() => void this.tick(), delay);
     this.timer.unref?.();
   }
