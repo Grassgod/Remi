@@ -293,10 +293,11 @@ export class SessionArchiveService {
     if (Buffer.byteLength(JSON.stringify(metadata), "utf8") > 64 * 1024) {
       throw new SessionArchiveError("metadata exceeds 65536 bytes", 413, "metadata_too_large");
     }
-    const format = input.format ?? SESSION_ARCHIVE_FORMAT_V1;
-    // Reject a v1 upload before it can claim or re-label anything: `init` is
-    // the first request a daemon makes, and refusing it here (rather than at
-    // complete) is what keeps an old daemon from consuming the retry budget.
+    // A request that names no format is a new upload and therefore v2. A
+    // request that names one is held to it: `init` is the first call a daemon
+    // makes, so refusing v1 here (rather than at complete) is what keeps an old
+    // daemon from consuming the retry budget.
+    const format = input.format ?? SESSION_ARCHIVE_FORMAT_V2;
     if (!isV2Format(format)) throw this.unsupportedFormat(format);
     const archiveId = createId("sar");
     try {
@@ -668,6 +669,16 @@ export class SessionArchiveService {
         throw new SessionArchiveIngestError(
           `archive subject mismatch: index ${verification.index.subject.kind}:${verification.index.subject.id}, `
           + `expected ${archive.subjectKind}:${archive.subjectId}`,
+        );
+      }
+      // The row was created with a declared revision before any bytes existed.
+      // Recompute it from the manifest the daemon actually wrote: a mismatch
+      // means the uploaded content is not the snapshot the control plane
+      // agreed to, and the GC barrier must never accept it.
+      if (verification.sourceRevision !== archive.sourceRevision) {
+        throw new SessionArchiveIngestError(
+          `archive content revision mismatch: manifest digest ${verification.sourceRevision}, `
+          + `declared ${archive.sourceRevision}`,
         );
       }
       return verification;
@@ -1269,6 +1280,9 @@ export class SessionArchiveService {
       schema_version: 1,
       archive_id: archive.id,
       workspace_id: archive.workspaceId,
+      subject_kind: archive.subjectKind,
+      subject_id: archive.subjectId,
+      format: archive.format,
       issue_id: archive.issueId,
       runtime_id: archive.runtimeId,
       daemon_id: archive.daemonId,

@@ -95,6 +95,30 @@ export interface MultiremiTaskTrace {
   updatedAt: string;
 }
 
+/** Parse `manifest.json` defensively; ingest rejects anything malformed. */
+export function parseSessionArchiveManifest(value: unknown): SessionArchiveManifest | null {
+  if (!isRecord(value)) return null;
+  if (value.format !== SESSION_ARCHIVE_V2_FORMAT) return null;
+  const subject = value.subject;
+  if (!isRecord(subject)) return null;
+  if (subject.kind !== "issue" && subject.kind !== "chat" && subject.kind !== "task") return null;
+  if (typeof subject.id !== "string" || !subject.id) return null;
+  if (!Array.isArray(value.files)) return null;
+  const files: SessionArchiveManifest["files"] = [];
+  for (const entry of value.files) {
+    if (!isRecord(entry)) return null;
+    if (typeof entry.path !== "string" || !entry.path) return null;
+    if (!Number.isSafeInteger(entry.size) || Number(entry.size) < 0) return null;
+    if (typeof entry.sha256 !== "string" || !/^[a-f0-9]{64}$/i.test(entry.sha256)) return null;
+    files.push({ path: entry.path, size: Number(entry.size), sha256: entry.sha256.toLowerCase() });
+  }
+  return {
+    format: SESSION_ARCHIVE_V2_FORMAT,
+    subject: { kind: subject.kind, id: subject.id },
+    files,
+  };
+}
+
 /** Parse `index.json` defensively: ingest must reject anything malformed. */
 export function parseSessionArchiveIndex(value: unknown): SessionArchiveIndex | null {
   if (!isRecord(value)) return null;

@@ -59,6 +59,9 @@ function archiveWire(archive: MultiremiSessionArchive | null): Record<string, un
   return {
     id: archive.id,
     workspace_id: archive.workspaceId,
+    subject_kind: archive.subjectKind,
+    subject_id: archive.subjectId,
+    format: archive.format,
     issue_id: archive.issueId,
     runtime_id: archive.runtimeId,
     daemon_id: archive.daemonId,

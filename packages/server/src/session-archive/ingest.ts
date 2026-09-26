@@ -16,16 +16,17 @@
  * and can never produce trace pointers.
  */
 
-import { createHash } from "node:crypto";
 import type { FileHandle } from "node:fs/promises";
 import {
   SESSION_ARCHIVE_INDEX_MEMBER,
   SESSION_ARCHIVE_MANIFEST_MEMBER,
   parseSessionArchiveIndex,
+  parseSessionArchiveManifest,
   type SessionArchiveIndex,
   type SessionArchiveMemberIndexEntry,
 } from "@multiremi/contracts/session-archive.js";
 import { readZipCentralDirectory, readZipMember } from "@shared/zip/reader.js";
+import { sessionArchiveSourceRevision } from "@shared/session-archive/source-revision.js";
 
 export class SessionArchiveIngestError extends Error {
   constructor(message: string, readonly code = "session_archive_ingest_invalid") {
@@ -40,6 +41,8 @@ export interface ArchiveIngestVerification {
   traces: SessionArchiveMemberIndexEntry[];
   /** Members whose sha256 was recomputed during validation. */
   verifiedMembers: number;
+  /** Digest of the content manifest, which must equal the row's source_revision. */
+  sourceRevision: string;
   bytesRead: number;
 }
 
@@ -94,11 +97,19 @@ export async function verifyArchiveIngest(
     compressedSize: manifestEntry.compressedSize,
     uncompressedSize: manifestEntry.uncompressedSize,
   });
-  const manifest = parseJson(manifestBytes.bytes, SESSION_ARCHIVE_MANIFEST_MEMBER) as
-    | { format?: unknown; subject?: unknown }
-    | null;
-  if (!manifest || typeof manifest.format !== "string") {
+  const manifest = parseSessionArchiveManifest(
+    parseJson(manifestBytes.bytes, SESSION_ARCHIVE_MANIFEST_MEMBER),
+  );
+  if (!manifest) {
     throw new SessionArchiveIngestError("archive manifest.json is not a valid v2 manifest");
+  }
+  if (
+    manifest.subject.kind !== parsedIndex.subject.kind
+    || manifest.subject.id !== parsedIndex.subject.id
+  ) {
+    throw new SessionArchiveIngestError(
+      "archive manifest and index disagree on the subject",
+    );
   }
 
   const seen = new Set<string>();
@@ -162,12 +173,15 @@ export async function verifyArchiveIngest(
       `archive contains ${byPath.size} members but the index plus index.json implies ${expectedMembers}`,
     );
   }
-  return { index: parsedIndex, traces, verifiedMembers: parsedIndex.members.length, bytesRead };
+  return {
+    index: parsedIndex,
+    traces,
+    verifiedMembers: parsedIndex.members.length,
+    sourceRevision: sessionArchiveSourceRevision(manifest),
+    bytesRead,
+  };
 }
 
-export function sha256Hex(bytes: Uint8Array): string {
-  return createHash("sha256").update(bytes).digest("hex");
-}
 
 function parseJson(bytes: Buffer, member: string): unknown {
   try {

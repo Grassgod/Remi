@@ -44,6 +44,7 @@ import {
   type SessionArchiveSubjectKind,
 } from "@multiremi/contracts/session-archive.js";
 import { ZipStreamWriter, type ZipStreamMember } from "@shared/zip/writer.js";
+import { sessionArchiveSourceRevision } from "@shared/session-archive/source-revision.js";
 import { createLogger } from "@shared/logger.js";
 
 const log = createLogger("multiremi-session-archive");
@@ -186,7 +187,7 @@ export async function prepareSessionArchive(
     subject: options.subject,
     files: files.map((file) => ({ path: file.archivePath, size: file.size, sha256: file.sha256 })),
   } as const;
-  const sourceRevision = createHash("sha256").update(JSON.stringify(manifest), "utf8").digest("hex");
+  const sourceRevision = sessionArchiveSourceRevision(manifest);
   log.debug(
     `Session archive source scanned: subject=${options.subject.kind}:${options.subject.id} files=${files.length}`,
   );
