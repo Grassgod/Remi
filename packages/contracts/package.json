@@ -17,7 +17,8 @@
     "./model-thinking": "./src/model-thinking.ts",
     "./codex-model-catalog": "./src/codex-model-catalog.ts",
     "./wiki-path": "./src/wiki-path.ts",
-    "./wiki-links": "./src/wiki-links.ts"
+    "./wiki-links": "./src/wiki-links.ts",
+    "./live-hub": "./src/live-hub.ts"
   },
   "dependencies": {}
 }
