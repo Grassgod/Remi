@@ -94,6 +94,13 @@ describe("remi runtime prepare", () => {
     expect(JSON.parse(stdout.join("\n"))).toEqual({ runtimes: [] });
   });
 
+  it("prepares explicit bundled providers even when antigravity is configured", async () => {
+    const { prepared, done } = run(["--provider", "claude", "--provider", "codex"], { configured: "antigravity", detected: ["antigravity"] });
+    expect(await done).toBe(true);
+    expect(prepared).toEqual([["claude", "codex"]]);
+    expect(JSON.parse(stdout.join("\n")).runtimes.map((r: { provider: string }) => r.provider)).toEqual(["claude", "codex"]);
+  });
+
   it("fails on an explicit --provider antigravity before preparing anything", async () => {
     const { prepared, done } = run(["--provider", "antigravity"], { detected: ["claude", "antigravity"] });
     await expect(done).rejects.toThrow("--provider must be claude or codex");
