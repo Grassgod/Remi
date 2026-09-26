@@ -20,6 +20,7 @@
  *   MUL384_ROUNDS        rounds per scenario (default 1)
  *   MUL384_NAME          report stem (default MUL-384-local-e2e)
  *   MUL384_KEEP          keep the servers up and print the command to re-run
+ *   MUL384_SELECTORS     pass through to --selectors (auto|contract|legacy)
  */
 import { Database } from "bun:sqlite";
 import { mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync } from "node:fs";
@@ -114,6 +115,36 @@ try {
       body: `long comment ${i}\n\nwith a second paragraph so the row has height`,
     });
   }
+  // Production's long-issue failure mode: MUL-307's newest comment renders as a
+  // single 3065px row inside an ~836px scroll root, so the legacy `contained`
+  // rule could never be satisfied. Reproduce an oversized row here so the local
+  // matrix exercises the tall-row rule instead of only finding it on 209.
+  store.createIssueComment(longIssue.id, {
+    issueSessionId: longSession.id,
+    authorType: "agent",
+    authorId: store.getCurrentUser().id,
+    body: Array.from({ length: 90 }, (_, i) => `## section ${i + 1}\n\n${"filler ".repeat(60)}`).join("\n\n"),
+  });
+
+  // A cancelled and an archived issue, so the local run covers the fixtures the
+  // warm path must skip rather than only the ones it can click.
+  const cancelledIssue = store.createIssue({
+    id: "iss_local_cancelled",
+    title: "Local cancelled issue",
+    description: "Cancelled issues are not listed in the default issue list.",
+    status: "cancelled",
+    priority: "low",
+  });
+  session(cancelledIssue.id);
+  const archivedIssue = store.createIssue({
+    id: "iss_local_archived",
+    title: "Local archived issue",
+    description: "Archived issues are not listed in the default issue list.",
+    status: "done",
+    priority: "low",
+  });
+  session(archivedIssue.id);
+  database.run("UPDATE multiremi_issues SET archived_at = ? WHERE id = ?", [new Date().toISOString(), archivedIssue.id]);
 
   const runningIssue = store.createIssue({
     id: "iss_local_running",
@@ -175,7 +206,13 @@ try {
     ?? store.listWorkspaceMembers(workspace.id)[0];
   if (!member) throw new Error("local workspace has no member to seed an inbox row for");
   const now = new Date().toISOString();
-  const insertInbox = (id: string, type: string, title: string, details: Record<string, unknown>): void => {
+  const insertInbox = (
+    id: string,
+    type: string,
+    title: string,
+    details: Record<string, unknown>,
+    createdAt: string = now,
+  ): void => {
     database.run(
       `INSERT INTO multiremi_inbox_items (
         id, workspace_id, issue_id, member_id, recipient_type, recipient_id, severity,
@@ -192,7 +229,7 @@ try {
         title,
         "points at a comment inside a session",
         JSON.stringify(details),
-        now,
+        createdAt,
       ],
     );
   };
@@ -206,6 +243,18 @@ try {
     comment_id: targetComment?.id ?? null,
     issue_session_id: deepLinkSession.id,
   });
+  // Rows with no comment/session cannot be deep-link targets. A later timestamp
+  // keeps them ahead of the eligible row, so the probe has to reject them
+  // instead of taking whatever the API returned first.
+  for (let i = 0; i < 3; i++) {
+    insertInbox(
+      `inb_local_bare_${i}`,
+      "comment_created",
+      `Bare notification ${i}`,
+      {},
+      new Date(Date.now() + 60_000).toISOString(),
+    );
+  }
   const inboxItem = { id: inboxItemId };
 
   process.stdout.write(
@@ -310,9 +359,9 @@ try {
       longIssue.id,
       "--issue-running",
       runningIssue.id,
-      "--inbox-item",
-      inboxItem?.id ?? "",
       ...(process.env.MUL384_ONLY ? ["--only", process.env.MUL384_ONLY] : []),
+      ...(process.env.MUL384_SELECTORS ? ["--selectors", process.env.MUL384_SELECTORS] : []),
+      ...(process.env.MUL384_INBOX_MODE === "unpinned" ? [] : ["--inbox-item", inboxItem?.id ?? ""]),
     ],
     cwd: REPO_ROOT,
     env: { ...process.env, MULTIREMI_QA_WEB_TOKEN: token },

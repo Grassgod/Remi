@@ -69,6 +69,13 @@ export interface PerfProfileConfig {
   name: PerfProfileName;
   /** Measured viewport. */
   scrollRoot: string;
+  /**
+   * Root used when `scrollRoot` is absent from the page. Only the legacy chat
+   * profile sets it: an empty chat renders `EmptyState` instead of the message
+   * list, so the measured viewport genuinely does not exist and the heading rule
+   * could otherwise never fire. See `scrollRootFallbackSelector`.
+   */
+  scrollRootFallback?: string | null;
   /** Real data rows, evaluated inside the scroll root. Empty string disables row sampling. */
   items: string;
   /** Skeleton placeholder, evaluated inside the scroll root. */
@@ -181,6 +188,15 @@ export interface PerfRecorderSummary {
   frameCount: number;
   stopped: boolean;
   profiles: Record<string, PerfProfileSummary>;
+  /**
+   * The document carries at least one `[data-perf-scroll]`.
+   *
+   * `--selectors auto` resolves contract vs legacy from this, not from whichever
+   * profile happens to satisfy its rule first: a list page satisfies the heading
+   * rule in both tables, so readiness alone cannot tell the two DOM generations
+   * apart.
+   */
+  contractDom: boolean;
 }
 
 // ── Browser half (runs inside the page) ──────────────────────────────────────
@@ -297,10 +313,24 @@ export function installJumpRecorder(config: PerfRecorderConfig): void {
   // applies: its top edge being visible is the strongest reachable state.
   // Keep in sync with `anchorSatisfied` on the Node side.
   const anchorOk = (spec: PerfAnchorSpec, anchor: Anchor, rootHeight: number): boolean => {
-    if (spec.visibility === "top-visible") return anchor.topVisible;
+    const top = anchor.top ?? 0;
+    const bottom = anchor.bottom ?? 0;
+    const height = bottom - top;
+    // A row taller than the viewport can never be fully contained. The plan
+    // accepts two reachable states for it: covering the viewport, or having its
+    // bottom edge on screen (S2 settles at the bottom, where the composer is
+    // visible). Keep in sync with `anchorSatisfied` on the Node side.
+    const tall = height > rootHeight;
+    const covers = top <= 1 && bottom >= rootHeight - 1;
+    const bottomVisible = bottom >= 0 && bottom <= rootHeight + 1;
+    if (spec.visibility === "top-visible") {
+      // A deep-link target scrolls to `block: "center"`, which pushes the top of
+      // an oversized target above the viewport; without this exception such a
+      // target could never satisfy its own rule.
+      return anchor.topVisible || (tall && covers);
+    }
     if (anchor.contained) return true;
-    const height = (anchor.bottom ?? 0) - (anchor.top ?? 0);
-    return height > rootHeight && anchor.topVisible;
+    return tall && (covers || bottomVisible);
   };
 
   const sample = (): void => {
@@ -312,7 +342,11 @@ export function installJumpRecorder(config: PerfRecorderConfig): void {
     let budget = MAX_ROWS;
 
     for (const profile of config.profiles) {
-      const root = document.querySelector(profile.scrollRoot) as HTMLElement | null;
+      const primaryRoot = document.querySelector(profile.scrollRoot) as HTMLElement | null;
+      const fallbackRoot = !primaryRoot && profile.scrollRootFallback
+        ? document.querySelector(profile.scrollRootFallback) as HTMLElement | null
+        : null;
+      const root = primaryRoot ?? fallbackRoot;
       const entry: Profile = {
         rootFound: !!root,
         rootId: root ? idOf(root) : null,
@@ -409,12 +443,7 @@ export function installJumpRecorder(config: PerfRecorderConfig): void {
     return Math.abs((current.scrollTop ?? 0) - (previous.scrollTop ?? 0)) > THRESHOLD_PX;
   };
 
-  const summary = (): {
-    t: number;
-    frameCount: number;
-    stopped: boolean;
-    profiles: Record<string, PerfProfileSummary>;
-  } => {
+  const summary = (): PerfRecorderSummary => {
     const out: Record<string, PerfProfileSummary> = {};
     for (const profile of config.profiles) {
       let firstRealItemT: number | null = null;
@@ -475,6 +504,7 @@ export function installJumpRecorder(config: PerfRecorderConfig): void {
       frameCount: state.frames.length,
       stopped: state.stopped,
       profiles: out,
+      contractDom: document.querySelector("[data-perf-scroll]") !== null,
     };
   };
 
@@ -842,6 +872,21 @@ export interface PerfReadyResult {
   /** Which anchor name satisfied the rule at `anchorVisibleMs`. */
   anchorName: string | null;
   readyTimeout: boolean;
+  /**
+   * The anchor's rect at the frame the ready window opened on, in root-relative
+   * coordinates, exactly as sampled. Raw numbers only: whether a landing
+   * position is *good* is a judgement for the reader (and for S2's acceptance),
+   * not for this recorder.
+   */
+  anchorRectAtReady: PerfAnchorRect | null;
+}
+
+/** Root-relative geometry of the anchor at one frame. */
+export interface PerfAnchorRect {
+  top: number;
+  bottom: number;
+  height: number;
+  rootHeight: number;
 }
 
 /**
@@ -850,10 +895,18 @@ export interface PerfReadyResult {
  * the browser half so both agree on the same frame.
  */
 export function anchorSatisfied(spec: PerfAnchorSpec, anchor: PerfFrameAnchor, rootHeight: number): boolean {
-  if (spec.visibility === "top-visible") return anchor.topVisible;
+  const top = anchor.top ?? 0;
+  const bottom = anchor.bottom ?? 0;
+  const height = bottom - top;
+  // Mirrors the in-page `anchorOk`: a row taller than its viewport is accepted
+  // when it covers the viewport or when its bottom edge is on screen. See the
+  // comment there for why `top-visible` needs the same exception.
+  const tall = height > rootHeight;
+  const covers = top <= 1 && bottom >= rootHeight - 1;
+  const bottomVisible = bottom >= 0 && bottom <= rootHeight + 1;
+  if (spec.visibility === "top-visible") return anchor.topVisible || (tall && covers);
   if (anchor.contained) return true;
-  const height = (anchor.bottom ?? 0) - (anchor.top ?? 0);
-  return height > rootHeight && anchor.topVisible;
+  return tall && (covers || bottomVisible);
 }
 
 /** Rules resolved against one frame: which anchors pass, and whether the rule as a whole holds. */
@@ -914,6 +967,7 @@ export function computeReadyWindow(
   let anchorName: string | null = null;
   let satisfiedSinceT: number | null = null;
   let previous: PerfProfileFrame | null = null;
+  let anchorRectAtReady: PerfAnchorRect | null = null;
 
   for (const frame of ordered) {
     const verdict = evaluateRule(frame, options.profile);
@@ -927,20 +981,35 @@ export function computeReadyWindow(
       previous = current;
       continue;
     }
-    if (satisfiedSinceT === null) {
+    // The window restarts on the first satisfying frame and after every moving
+    // frame; the rect that describes the surviving window is the one sampled when
+    // it (re)opened, so capture it at each restart rather than only the first.
+    const moved = satisfiedSinceT !== null && previous !== null
+      && (firstRealMs === null || frame.t >= firstRealMs)
+      ? frameMoved(previous, current)
+      : false;
+    if (satisfiedSinceT === null || moved) {
       satisfiedSinceT = frame.t;
-    } else if (previous) {
-      const moved = firstRealMs === null || frame.t >= firstRealMs ? frameMoved(previous, current) : false;
-      if (moved) satisfiedSinceT = frame.t;
+      const anchor = current.anchors.find((candidate) => candidate.name === verdict.anchorName)
+        ?? current.anchors.find((candidate) => candidate.contained || candidate.topVisible)
+        ?? null;
+      anchorRectAtReady = anchor && anchor.top !== null && anchor.bottom !== null
+        ? {
+          top: anchor.top,
+          bottom: anchor.bottom,
+          height: Math.round((anchor.bottom - anchor.top) * 10) / 10,
+          rootHeight: current.rootHeight,
+        }
+        : null;
     }
     previous = current;
   }
 
   const newestT = ordered.length > 0 ? ordered[ordered.length - 1]!.t : 0;
   if (satisfiedSinceT !== null && newestT - satisfiedSinceT >= quietMs) {
-    return { readyMs: satisfiedSinceT, anchorVisibleMs, anchorName, readyTimeout: false };
+    return { readyMs: satisfiedSinceT, anchorVisibleMs, anchorName, readyTimeout: false, anchorRectAtReady };
   }
-  return { readyMs: null, anchorVisibleMs, anchorName, readyTimeout: true };
+  return { readyMs: null, anchorVisibleMs, anchorName, readyTimeout: true, anchorRectAtReady };
 }
 
 export interface PerfLayoutShiftSummary {

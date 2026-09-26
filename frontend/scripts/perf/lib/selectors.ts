@@ -50,6 +50,12 @@ export const CONTRACT = {
 
 export const LEGACY = {
   scrollRoot: "[data-tab-scroll-root]",
+  /**
+   * List pages carry no scroll root of their own. MUL-367 measured them inside
+   * the content region, and that region is still where their rows live, so both
+   * tables root a list round here.
+   */
+  listRoot: '[data-slot="sidebar-inset"]',
   /** Timeline rows carry `id="comment-<id>"`; DOM order is chronological. */
   items: '[data-tab-scroll-root] [id^="comment-"]',
   /** Anchors are matched inside the scroll root, so the id-only form is enough. */
@@ -59,9 +65,21 @@ export const LEGACY = {
   /** Issue rows: the row link points at the issue detail route. */
   issueRowLink: (issueId: string): string =>
     `[data-slot="sidebar-inset"] a[href$="/issues/${cssEscape(issueId)}"]`,
-  /** Inbox rows are the focusable role=button elements inside the content region. */
-  inboxRow: '[data-slot="sidebar-inset"] div[role="button"][tabindex="0"]',
+  /**
+   * Inbox rows are the focusable role=button elements inside the content region.
+   *
+   * UNRELIABLE: QA measured this matching toolbar buttons rather than
+   * notification rows on 209 (MUL-384 cmt_3d2bb3s7ceeh). It stays in the table
+   * because selectorEquivalence samples both tables on the same DOM, but no
+   * flow may be driven by it; see LEGACY_INBOX_ROW_RELIABLE.
+   */
+  // Scoped to the date-group sections, which are what actually contain the
+  // notification rows; the unscoped form also matched toolbar buttons on 209.
+  inboxRow: 'section[aria-labelledby^="inbox-group-"] div[role="button"][tabindex="0"]',
 } as const;
+
+/** The legacy inbox-row selector is comparison-only; never drive a click with it. */
+export const LEGACY_INBOX_ROW_RELIABLE = false;
 
 /** `CSS.escape` is browser-only; the Node side needs the same id-safe form. */
 export function cssEscape(value: string): string {
@@ -69,8 +87,25 @@ export function cssEscape(value: string): string {
 }
 
 export function scrollRootSelector(mode: SelectorMode, shape: PageShape): string {
+  // A list page has neither data-tab-scroll-root nor a data-perf-scroll of its
+  // own, so requiring either one left every list round structurally unable to
+  // reach ready. Fall back to the content region MUL-367 measured inside.
+  if (shape === "list") return LEGACY.listRoot;
   if (mode === "legacy") return LEGACY.scrollRoot;
   return shape === "chat" ? CONTRACT.scrollRootChat : CONTRACT.scrollRootIssueDetail;
+}
+
+/**
+ * Root the profile falls back to when its primary one is missing.
+ *
+ * Only the legacy chat profile needs it: an empty chat renders EmptyState
+ * instead of ChatMessageList, so data-tab-scroll-root is genuinely absent and
+ * the heading rule could otherwise never fire. With messages present the
+ * primary root wins, leaving the chat reading rule untouched.
+ */
+export function scrollRootFallbackSelector(mode: SelectorMode, shape: PageShape): string | null {
+  if (shape === "chat" && mode === "legacy") return LEGACY.listRoot;
+  return null;
 }
 
 /** Clickable row for one issue in the list, in either mode. */
@@ -195,9 +230,11 @@ export function profileFor(options: {
   targetCommentId?: string | null;
 }): PerfProfileConfig {
   const plan = anchorPlan(options);
+  const fallback = scrollRootFallbackSelector(options.mode, options.shape);
   return {
     name: options.mode,
     scrollRoot: scrollRootSelector(options.mode, options.shape),
+    ...(fallback ? { scrollRootFallback: fallback } : null),
     items: options.shape === "list" ? "" : options.mode === "legacy" ? LEGACY.items : CONTRACT.items,
     skeleton: options.mode === "legacy" ? LEGACY.skeleton : CONTRACT.skeleton,
     anchors: plan.specs,

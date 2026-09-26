@@ -4,6 +4,7 @@
 // rounds, wave tolerance, `data-perf-state` timing and `--compare` pairing.
 import { describe, expect, it } from "bun:test";
 import {
+  anchorSatisfied,
   computeAppReadyMs,
   computeFirstRealMs,
   computeJumps,
@@ -16,11 +17,19 @@ import {
   pairForCompare,
   READY_QUIET_MS,
   WAVE_TOLERANCE_MS,
+  type PerfAnchorSpec,
   type PerfFrame,
   type PerfProfileFrame,
   type PerfStateTransition,
 } from "../../../frontend/scripts/perf/lib/jump-recorder";
-import { profileFor, profilesFor, issueRowSelector } from "../../../frontend/scripts/perf/lib/selectors";
+import {
+  LEGACY,
+  profileFor,
+  profilesFor,
+  issueRowSelector,
+  scrollRootFallbackSelector,
+  scrollRootSelector,
+} from "../../../frontend/scripts/perf/lib/selectors";
 
 /** One sampled frame with a single visible row at `top`, relative to the scroll root. */
 function view(top: number, options: { scrollTop?: number; skeleton?: boolean; key?: string } = {}): PerfProfileFrame {
@@ -171,6 +180,76 @@ describe("computeReadyWindow", () => {
     ];
     const result = computeReadyWindow(frames, { profile: issueDetailProfile, firstRealMs: 800 });
     expect(result.readyMs).toBe(800);
+  });
+});
+
+/** A row taller than the 900px root used by `view`, at the given position. */
+function tallView(top: number, bottom: number): PerfProfileFrame {
+  const base = view(top);
+  return {
+    ...base,
+    items: [{ key: "long-comment", elId: 11, top, bottom }],
+    anchors: [
+      {
+        name: "latest-comment",
+        elId: 11,
+        top,
+        bottom,
+        contained: top >= -1 && bottom <= 901,
+        topVisible: top >= -1 && top <= 901,
+      },
+    ],
+  };
+}
+
+describe("anchorSatisfied on a row taller than the viewport", () => {
+  const spec: PerfAnchorSpec = { name: "latest-comment", selector: "x", pick: "first", visibility: "contained" };
+  /** QA measured MUL-307's newest comment as 3065px tall inside an 836px root. */
+  const ROOT = 836;
+  const anchorOf = (top: number, bottom: number) => ({
+    name: "latest-comment",
+    elId: 11,
+    top,
+    bottom,
+    contained: top >= -1 && bottom <= ROOT + 1,
+    topVisible: top >= -1 && top <= ROOT + 1,
+  });
+
+  it("accepts a tall row whose bottom edge is on screen", () => {
+    // `bottomVisible`: S2 settles with the composer in view, which puts the row's
+    // bottom edge inside the root even though its top is far above.
+    expect(anchorSatisfied(spec, anchorOf(-2173, 800), ROOT)).toBe(true);
+    expect(anchorSatisfied(spec, anchorOf(0, ROOT + 1), ROOT)).toBe(true);
+  });
+
+  it("accepts the production shape that overshoots the bottom by 56px", () => {
+    // top=-2173 / bottom=892 in an 836px root spans the viewport, so `covers`
+    // accepts it; the overshoot stays in `anchorRectAtReady` for S2 instead of
+    // being turned into a timeout.
+    expect(anchorSatisfied(spec, anchorOf(-2173, 892), ROOT)).toBe(true);
+  });
+
+  it("accepts a tall row that covers the viewport", () => {
+    expect(anchorSatisfied(spec, anchorOf(-10, ROOT + 10), ROOT)).toBe(true);
+  });
+
+  it("still rejects a tall row entirely above or below the viewport", () => {
+    expect(anchorSatisfied(spec, anchorOf(-3000, -2000), ROOT)).toBe(false);
+    expect(anchorSatisfied(spec, anchorOf(900, 3000), ROOT)).toBe(false);
+  });
+
+  it("keeps the contained rule for rows that fit", () => {
+    expect(anchorSatisfied(spec, anchorOf(100, 200), ROOT)).toBe(true);
+    expect(anchorSatisfied(spec, anchorOf(700, 900), ROOT)).toBe(false);
+  });
+
+  it("lets a deep-link target taller than the root pass while it covers the viewport", () => {
+    // `scrollIntoView({ block: "center" })` pushes the top edge out of view for an
+    // oversized target, so `topVisible` alone can never be satisfied.
+    const target: PerfAnchorSpec = { ...spec, visibility: "top-visible" };
+    expect(anchorSatisfied(target, anchorOf(-282, ROOT + 282), ROOT)).toBe(true);
+    expect(anchorSatisfied(target, anchorOf(-500, 400), ROOT)).toBe(false);
+    expect(anchorSatisfied(target, anchorOf(-5000, -100), ROOT)).toBe(false);
   });
 });
 
@@ -325,6 +404,25 @@ describe("selectors", () => {
     expect(running.anchors[0]).toMatchObject({ name: "latest-comment", pick: "last" });
     const deepLink = profileFor({ mode: "legacy", shape: "issue-detail", targetCommentId: "cmt_1" });
     expect(deepLink.anchors[0]!.selector).toBe('[id="comment-cmt_1"]');
+  });
+
+  it("roots list pages in the content region for both tables", () => {
+    // Neither `[data-tab-scroll-root]` nor `data-perf-scroll` exists on the 11
+    // list pages, so requiring either one left them structurally unable to ready.
+    expect(scrollRootSelector("legacy", "list")).toBe(LEGACY.listRoot);
+    expect(scrollRootSelector("contract", "list")).toBe(LEGACY.listRoot);
+    expect(profileFor({ mode: "contract", shape: "list" }).scrollRoot).toBe('[data-slot="sidebar-inset"]');
+    expect(profileFor({ mode: "legacy", shape: "list" }).scrollRoot).toBe('[data-slot="sidebar-inset"]');
+  });
+
+  it("falls back to the content region for an empty legacy chat", () => {
+    // An empty chat renders `EmptyState`, so the chat scroll root is genuinely
+    // absent and the MUL-367 heading rule needs another root to see a heading.
+    expect(scrollRootFallbackSelector("legacy", "chat")).toBe(LEGACY.listRoot);
+    expect(profileFor({ mode: "legacy", shape: "chat" }).scrollRootFallback).toBe('[data-slot="sidebar-inset"]');
+    // Issue detail keeps its own root, and contract chat has a real one.
+    expect(profileFor({ mode: "legacy", shape: "issue-detail" }).scrollRootFallback).toBeUndefined();
+    expect(profileFor({ mode: "contract", shape: "chat" }).scrollRootFallback).toBeUndefined();
   });
 
   it("samples the legacy table alongside the contract one so equivalence is provable", () => {

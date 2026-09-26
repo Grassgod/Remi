@@ -162,8 +162,8 @@ function parseArgs(argv: string[]): Options {
     quietMs: DEFAULT_QUIET_MS,
     window: "offpeak",
     selectors: "auto",
-    issueShort: "iss_1or5ray9rrj8",
-    issueLong: "iss_8vhk0frd8thl",
+    issueShort: "iss_rejcqsln6wag",
+    issueLong: "iss_enbrunyg86jc",
     issueRunning: null,
     inboxItem: null,
     hoverLeadMs: DEFAULT_HOVER_LEAD_MS,
@@ -253,8 +253,8 @@ function printUsage(): void {
       `  --rounds <n>           repetitions per scenario, each in a fresh context (default ${DEFAULT_ROUNDS})`,
       `  --window peak|offpeak  label recorded in the report (default offpeak)`,
       "  --selectors auto|contract|legacy   DOM contract to use (default auto)",
-      "  --issue-short <id>     short issue for detail-short (default iss_1or5ray9rrj8)",
-      "  --issue-long <id>      long issue for detail-long (default iss_8vhk0frd8thl)",
+      "  --issue-short <id>     short issue for detail-short (default iss_rejcqsln6wag, MUL-353)",
+      "  --issue-long <id>      long issue for detail-long (default iss_enbrunyg86jc, MUL-70)",
       "  --issue-running <id>   agent-running issue; auto-selected when omitted",
       "  --inbox-item <id>      deep-link inbox item; auto-selected from page one when omitted",
       `  --hover-lead-ms <n>    hover lead before an in-app click (default ${DEFAULT_HOVER_LEAD_MS})`,
@@ -288,16 +288,26 @@ interface Scenario {
   /** Inbox row index, resolved by the deep-link probe. */
   inboxRowIndex: number | null;
   inboxItemId: string | null;
+  /** Issue id the warm deep link must land on, asserted through `?issue=`. */
+  expectIssueId: string | null;
   target: { identifier: string; note?: string };
   targetSelection: string | null;
+  /**
+   * Set when this scenario cannot be measured. The row is still emitted, so a
+   * reader can tell "intentionally skipped" from "the script never covered it"
+   * — the two used to look identical in the artifacts.
+   */
+  skipReason: string | null;
 }
 
 interface DeepLinkTarget {
   inboxItemId: string;
   commentId: string;
-  sessionId: string | null;
+  sessionId: string;
   issueId: string;
   issueIdentifier: string;
+  /** An issue with a running task can append comments inside the quiet window. */
+  issueHasRunningTask: boolean;
   read: boolean;
   rowIndex: number;
   type: string;
@@ -319,6 +329,8 @@ interface RoundMeasurement {
   firstRealMs: number | null;
   anchorVisibleMs: number | null;
   anchorName: string | null;
+  /** Root-relative anchor rect at the ready frame; raw numbers, no verdict. */
+  anchorRectAtReady: { top: number; bottom: number; height: number; rootHeight: number } | null;
   anchorRule: string;
   appReadyMs: number | null;
   appReadyForced: boolean;
@@ -360,13 +372,20 @@ function roundSummary(round: RoundMeasurement): ReportRoundSummary {
     dataFreshAtReady: round.dataFreshAtReady,
     jumpCount: round.jumpCount,
     jumpPx: round.jumpPx,
+    jumps: round.jumps,
     layoutShiftCount: round.layoutShiftCount,
     cls: round.cls,
     serialDepth: round.serialDepth,
     apiCallsTotal: round.apiCallsTotal,
     apiFirstScreen: round.apiFirstScreen,
+    chunksLoaded: round.chunksLoaded,
+    chunkBytes: round.chunkBytes,
+    lcpMs: round.lcpMs,
+    slowestServerTotalMs: round.slowestServerTotalMs,
+    ...(round.error ? { error: round.error } : null),
     blockedWrites: round.blockedWrites,
     heapBytes: null,
+    anchorRectAtReady: round.anchorRectAtReady,
     // Only the deep link has a target inside the timeline; every other scenario
     // leaves both fields at zero/null so the JSON shape stays uniform.
     targetDepth: {
@@ -397,56 +416,27 @@ interface InboxPageItem {
  * Picks the deep-link target from the first inbox page.
  *
  * A fixed item would defeat the measurement: `inbox-page.tsx` walks pages until
- * it finds `?item=`, so an item at position ~769 turns a cold deep link into a
- * paging test. The probe therefore uses a row that is on page one, is not an
- * autopilot-run notification (those render a report instead of a timeline) and
- * carries both a comment id and a session id.
+ * it finds the selection key, so an item buried thousands of rows deep turns a
+ * cold deep link into a paging test. The probe therefore picks from page one
+ * (`/api/inbox/page?limit=50`, newest-first) and both modes use the same choice.
  *
- * `--inbox-item` is an explicit override; if it is not on page one the scenario
- * is skipped rather than measured as paging.
+ * The selected key is an *issue*, not a notification id: `inboxItemSelectionKind`
+ * sends every notification carrying an `issue_id` to `?issue=<issueId>&session=`,
+ * which resolves to that issue's newest notification in the loaded list. Only
+ * ledger rows (autopilot runs, organizer actions) select by `?item=`, and those
+ * render `AutopilotRunReport` instead of an issue timeline, so they are not
+ * eligible here anyway.
+ *
+ * `--inbox-item` remains an explicit override and must be on page one; an item
+ * that is not is reported as skipped rather than measured as a paging exercise.
  */
 async function probeDeepLinkTarget(options: {
   baseUrl: string;
   token: string;
-  slug: string;
-  browser: Browser;
   pinnedItemId: string | null;
-  excludedIssueIds: Set<string>;
-  round: number;
-  knownIds: string[];
-  selectors: SelectorModeOption;
+  runningIssueIds: Set<string>;
 }): Promise<{ target: DeepLinkTarget | null; skipped: string | null }> {
-  const { baseUrl, token, slug, browser, pinnedItemId, excludedIssueIds, round, knownIds, selectors } = options;
-
-  // Read the rendered rows' item ids from the DOM where possible. Each row
-  // carries `data-perf-key=<inboxItemId>` once MUL-384 is deployed; on a legacy
-  // DOM the id is learned by clicking the row, which the app reflects into
-  // `?item=`. That walk is capped at a handful of rows — clicking all of page
-  // one makes the probe slower than the measurement it prepares.
-  const context = await mktContext(browser, token, [], baseUrl);
-  const page = await context.newPage();
-  const collectors = attachCollectors(page, round, "inbox-probe", knownIds);
-  let rowItemIds: string[] = [];
-  try {
-    await page.goto(workspaceUrl(baseUrl, slug, "/inbox"), { waitUntil: "commit", timeout: ROUND_TIMEOUT_MS });
-    await page.waitForTimeout(1_500);
-    const selector = inboxRowSelector("legacy");
-    const count = await page.locator(selector).count().catch(() => 0);
-    for (let index = 0; index < Math.min(count, 3); index++) {
-      const row = page.locator(selector).nth(index);
-      await row.click({ timeout: 3_000 }).catch(() => {});
-      const match = /[?&]item=([^&]+)/.exec(page.url());
-      if (match) rowItemIds.push(decodeURIComponent(match[1]!));
-      await page.goBack({ waitUntil: "commit", timeout: 10_000 }).catch(() => {});
-      await page.waitForTimeout(200);
-    }
-    rowItemIds = rowItemIds.filter((id) => id.length > 0);
-  } catch {
-    // The API probe below still has a chance to resolve the target.
-  } finally {
-    await context.close();
-  }
-  void selectors;
+  const { baseUrl, token, pinnedItemId, runningIssueIds } = options;
 
   const headers = { Authorization: `Bearer ${token}` };
   let firstPage: InboxPageItem[] = [];
@@ -464,51 +454,90 @@ async function probeDeepLinkTarget(options: {
     const index = firstPage.findIndex((item) => item.id === pinnedItemId);
     if (index < 0) return { target: null, skipped: "inbox-item-not-on-first-page" };
     const item = firstPage[index]!;
-    const candidate = toDeepLinkTarget(item, pinnedItemId, index, excludedIssueIds);
+    const candidate = toDeepLinkTarget(item, pinnedItemId, index, runningIssueIds);
     if (!candidate) return { target: null, skipped: "inbox-item-has-no-comment" };
     return { target: candidate, skipped: null };
   }
 
-  // Prefer a row we actually saw rendered: its index is what the warm round
-  // clicks, and a mismatch between the DOM order and the API page would
-  // otherwise silently measure a different notification.
-  const preferred: number[] = [];
-  for (const itemId of rowItemIds) {
-    const index = firstPage.findIndex((item) => item.id === itemId);
-    if (index >= 0 && !preferred.includes(index)) preferred.push(index);
-  }
-  const order = [...preferred, ...firstPage.map((_, index) => index).filter((index) => !preferred.includes(index))];
-  for (const index of order) {
-    const item = firstPage[index]!;
-    const candidate = toDeepLinkTarget(item, item.id ?? "", index, excludedIssueIds);
-    if (candidate) return { target: candidate, skipped: null };
-  }
-  return { target: null, skipped: "no-eligible-inbox-item" };
+  const candidates = rankDeepLinkCandidates(firstPage, runningIssueIds);
+  if (candidates.length === 0) return { target: null, skipped: "no-eligible-inbox-item" };
+  return { target: candidates[0]!, skipped: null };
+}
+
+/**
+ * Builds the ranked deep-link candidates from one inbox page.
+ *
+ * The MUL-383 family is deliberately *not* excluded: this scenario measures the
+ * path inbox -> sidebar `IssueDetail` -> flat timeline, and a family issue is a
+ * legitimate instance of it. Content churn is handled by preferring an issue with
+ * no running task, and reported through `issueHasRunningTask`, `timelineRequests`
+ * and `targetIndexFromLatest` rather than by dropping candidates.
+ *
+ * One candidate per issue: `?issue=` lands on that issue's newest notification,
+ * so older notifications for the same issue would never be the selection.
+ */
+export function rankDeepLinkCandidates(
+  firstPage: InboxPageItem[],
+  runningIssueIds: Set<string>,
+): DeepLinkTarget[] {
+  const newestPerIssue = new Map<string, DeepLinkTarget>();
+  firstPage.forEach((item, index) => {
+    const candidate = toDeepLinkTarget(item, item.id ?? "", index, runningIssueIds);
+    if (!candidate) return;
+    const existing = newestPerIssue.get(candidate.issueId);
+    // The API is newest-first, so the first row for an issue is its newest.
+    if (!existing) newestPerIssue.set(candidate.issueId, candidate);
+  });
+  const candidates = [...newestPerIssue.values()];
+  // An issue with a running task can append comments inside the quiet window,
+  // which would read as a jump; prefer a quiet issue, then keep API order.
+  return candidates.sort((a, b) => {
+    if (a.issueHasRunningTask !== b.issueHasRunningTask) return a.issueHasRunningTask ? 1 : -1;
+    return a.rowIndex - b.rowIndex;
+  });
 }
 
 function toDeepLinkTarget(
   item: InboxPageItem,
   inboxItemId: string,
   rowIndex: number,
-  excludedIssueIds: Set<string>,
+  runningIssueIds: Set<string>,
 ): DeepLinkTarget | null {
   if (!inboxItemId) return null;
   const type = String(item.type ?? "");
   if (AUTOPILOT_INBOX_TYPES.some((candidate) => type === candidate || type.startsWith(`${candidate}_`))) return null;
   const commentId = item.details?.comment_id ?? null;
+  const sessionId = item.details?.issue_session_id ?? null;
   const issueId = item.issue_id ?? null;
-  if (!commentId || !issueId) return null;
-  if (excludedIssueIds.has(issueId)) return null;
+  if (!commentId || !sessionId || !issueId) return null;
   return {
     inboxItemId,
     commentId,
-    sessionId: item.details?.issue_session_id ?? null,
+    sessionId,
     issueId,
     issueIdentifier: issueId,
+    issueHasRunningTask: runningIssueIds.has(issueId),
     read: item.read === true,
     rowIndex,
     type,
   };
+}
+
+/**
+ * Timeline entry count for the report, so a reader can see which fixture
+ * produced a number without re-querying the issue.
+ *
+ * This is the same read the measured page itself makes, and the timeline is
+ * paginated, so the count is read from the "no cursor" form that returns the
+ * whole session in one response. A failure is reported as `null` rather than
+ * silently as zero.
+ */
+async function probeCommentCount(baseUrl: string, token: string, issueId: string): Promise<number | null> {
+  const body = await fetchJson<{ entries?: unknown[] }>(
+    `${baseUrl}/api/issues/${encodeURIComponent(issueId)}/timeline`,
+    { Authorization: `Bearer ${token}` },
+  ).catch(() => null);
+  return body && Array.isArray(body.entries) ? body.entries.length : null;
 }
 
 /** Resolves an identifier for reporting without needing the issue detail endpoint. */
@@ -549,6 +578,28 @@ interface TaskListRow {
 
 function taskIssueId(task: TaskListRow): string | null {
   return task.issueId ?? task.issue_id ?? null;
+}
+
+/**
+ * Every issue that currently has a running task, regardless of which one the
+ * `detail-running` scenario picked.
+ *
+ * The deep-link probe ranks candidates by this: a running issue can append a
+ * comment inside the 500 ms quiet window, which would be recorded as a jump that
+ * has nothing to do with the landing position. One read-only call, shared by both
+ * users, instead of two list requests.
+ */
+async function loadRunningIssueIds(baseUrl: string, token: string): Promise<Set<string>> {
+  const body = await fetchJson<{ tasks?: Array<TaskListRow> }>(
+    `${baseUrl}/api/multiremi/tasks?status=running&limit=200`,
+    { Authorization: `Bearer ${token}` },
+  ).catch(() => null);
+  const ids = new Set<string>();
+  for (const task of body?.tasks ?? []) {
+    const issueId = taskIssueId(task);
+    if (issueId) ids.add(issueId);
+  }
+  return ids;
 }
 
 async function probeRunningIssue(options: {
@@ -631,6 +682,7 @@ function blankRound(round: number, url: string): RoundMeasurement {
     firstRealMs: null,
     anchorVisibleMs: null,
     anchorName: null,
+    anchorRectAtReady: null,
     anchorRule: "",
     appReadyMs: null,
     appReadyForced: false,
@@ -701,9 +753,13 @@ async function resetRecorderAt(page: Page, from: number | null): Promise<number 
 /**
  * Waits for the ready window of whichever profile this page actually has.
  *
- * Contract is preferred; a DOM that predates MUL-384 never populates it, so the
- * legacy profile carries the round instead. Both are polled in one loop, which
- * keeps a legacy round from paying the contract timeout first.
+ * The mode comes from the DOM generation (`contractDom`: does the document carry
+ * a `[data-perf-scroll]`?), never from which profile reached ready first. A list
+ * page satisfies the heading rule in *both* tables because they share the
+ * content-region root, so readiness alone cannot say which DOM was measured; the
+ * old "first profile to be ready wins" rule therefore reported `contract` for a
+ * production legacy round. Both profiles are polled in one loop, so a legacy
+ * round never pays a contract timeout first.
  */
 async function waitForReady(
   page: Page,
@@ -711,24 +767,18 @@ async function waitForReady(
 ): Promise<{ summary: PerfRecorderSummary | null; profile: PerfProfileName | null }> {
   const started = Date.now();
   let last: PerfRecorderSummary | null = null;
-  let legacyGraceUntil = started + 6_000;
   while (Date.now() - started < deadlineMs) {
     const summary = await recorderSummary(page);
     if (summary) {
       last = summary;
-      const contract = summary.profiles.contract;
-      const legacy = summary.profiles.legacy;
-      if (contract?.ready) return { summary, profile: "contract" };
-      if (legacy?.ready && (!contract?.rootFound || Date.now() > legacyGraceUntil)) {
-        return { summary, profile: "legacy" };
-      }
-      // Once the contract table has been absent for the whole grace period, the
-      // legacy profile is the only one this DOM can satisfy: stop preferring it.
-      if (!contract?.rootFound && Date.now() > legacyGraceUntil) legacyGraceUntil = 0;
+      const mode: PerfProfileName = summary.contractDom ? "contract" : "legacy";
+      if (summary.profiles[mode]?.ready) return { summary, profile: mode };
     }
     await page.waitForTimeout(50);
   }
-  return { summary: last, profile: last?.profiles.contract?.rootFound ? "contract" : last?.profiles.legacy?.rootFound ? "legacy" : null };
+  if (!last) return { summary: null, profile: null };
+  const mode: PerfProfileName = last.contractDom ? "contract" : "legacy";
+  return { summary: last, profile: last.profiles[mode]?.rootFound ? mode : null };
 }
 
 /**
@@ -850,9 +900,15 @@ function timelineInfo(bodies: Map<string, unknown>, targetCommentId: string | nu
 /**
  * Hovers then clicks the row that opens this scenario's page.
  *
- * Both selector tables are tried, because the click target lives on the *entry*
- * page (the issues list or the inbox), whose DOM may or may not carry the
- * MUL-384 attributes — and the entry page is not what the round measures.
+/**
+ * Hovers then clicks the row that opens this scenario's page.
+ *
+ * The click target lives on the *entry* page (the issues list or the inbox),
+ * whose DOM may or may not carry the MUL-384 attributes, so both tables are
+ * tried. A row that is not in the first render of the list is a hard skip rather
+ * than a reason to fall back to another entry path: the warm scenario exists to
+ * exercise `ListRow`'s hover prefetch, and measuring a different route would
+ * report a number for a code path S3 does not touch.
  */
 async function clickWarmTarget(page: Page, scenario: Scenario, opts: Options): Promise<void> {
   const selectors: string[] = [];
@@ -871,16 +927,18 @@ async function clickWarmTarget(page: Page, scenario: Scenario, opts: Options): P
   // has to exist before the click. A fixed sleep is not enough: the first hit on
   // a route can take seconds (dev compile, or a cold data fetch), and clicking
   // an empty list leaves the round on the entry page measuring the wrong screen.
+  //
+  // The inbox row index comes from the app's own grouping functions (see
+  // `inboxRowIndexOf`), not from a probing click: clicking an inbox row fires
+  // `POST /api/inbox/:id/read` and does not reflect the notification id into the
+  // URL, so a DOM-discovered target was both write-adjacent and wrong.
   const deadline = Date.now() + WARM_ENTRY_TIMEOUT_MS;
   let chosen: { selector: string; index: number; count: number } | null = null;
   while (chosen === null && Date.now() < deadline) {
     for (const selector of selectors) {
       const count = await page.locator(selector).count().catch(() => 0);
       if (count === 0) continue;
-      const index = scenario.inboxItemId !== null && typeof scenario.inboxRowIndex === "number"
-        ? Math.min(scenario.inboxRowIndex, count - 1)
-        : 0;
-      chosen = { selector, index, count };
+      chosen = { selector, index: warmRowIndex(scenario, count), count };
       break;
     }
     if (chosen === null) await page.waitForTimeout(200);
@@ -892,10 +950,7 @@ async function clickWarmTarget(page: Page, scenario: Scenario, opts: Options): P
     const locator = page.locator(selector);
     const count = await locator.count().catch(() => 0);
     if (count === 0) continue;
-    const index = scenario.inboxItemId !== null && typeof scenario.inboxRowIndex === "number"
-      ? Math.min(scenario.inboxRowIndex, count - 1)
-      : Math.min(chosen.index, count - 1);
-    const row = locator.nth(index);
+    const row = locator.nth(Math.min(warmRowIndex(scenario, count), count - 1));
     try {
       await row.scrollIntoViewIfNeeded({ timeout: 2_000 }).catch(() => {});
       await row.hover({ timeout: 5_000 });
@@ -908,6 +963,17 @@ async function clickWarmTarget(page: Page, scenario: Scenario, opts: Options): P
     }
   }
   throw new Error(`warm target not found for ${scenario.key}${lastError ? `: ${lastError.split("\n")[0]}` : ""}`);
+}
+
+/**
+ * Row index to click for a warm round.
+ *
+ * The deep link knows its row from the app's grouping functions; every other
+ * scenario clicks the first matching row.
+ */
+function warmRowIndex(scenario: Scenario, count: number): number {
+  if (scenario.inboxItemId === null || scenario.inboxRowIndex === null) return 0;
+  return Math.min(scenario.inboxRowIndex, Math.max(0, count - 1));
 }
 
 /**
@@ -928,7 +994,7 @@ function buildRoundMeasurement(input: {
   quietMs: number;
 }): RoundMeasurement {
   const { measurement, scenario, summary, measuredProfile, buffer, vitals, resources, collectors, quietMs } = input;
-  const mode: SelectorMode = measuredProfile ?? (summary?.profiles.contract?.rootFound ? "contract" : "legacy");
+  const mode: SelectorMode = measuredProfile ?? (summary?.contractDom ? "contract" : "legacy");
   measurement.selectorMode = mode;
   const frames: PerfFrame[] = buffer?.frames ?? [];
   const profile = profileForMeasurement(mode, scenario.shape, scenario.targetCommentId);
@@ -940,6 +1006,7 @@ function buildRoundMeasurement(input: {
 
   measurement.firstRealMs = firstRealMs;
   measurement.anchorVisibleMs = ready.anchorVisibleMs;
+  measurement.anchorRectAtReady = ready.anchorRectAtReady;
   measurement.anchorName = ready.anchorName ?? profile.anchorName;
   measurement.readyMs = ready.readyMs;
   measurement.readyTimeout = ready.readyTimeout || !ready.readyMs && profileSummary?.ready !== true;
@@ -1044,140 +1111,131 @@ function profileForMeasurement(
 
 function buildScenarios(options: {
   deepLink: DeepLinkTarget | null;
+  deepLinkSkip: string | null;
   runningIssue: RunningIssue | null;
+  runningSkip: string;
   issueShort: string;
   issueLong: string;
   issueShortIdentifier: string;
   issueLongIdentifier: string;
+  /** Comment counts from the API, so the report states what was actually measured. */
+  issueShortComments: number | null;
+  issueLongComments: number | null;
   pinnedInboxItem: string | null;
   deepLinkAuto: boolean;
 }): Scenario[] {
   const scenarios: Scenario[] = [];
+  const withCount = (note: string | undefined, count: number | null): string | undefined => {
+    if (count === null) return note;
+    return note ? `${note}，${count} 条评论` : `${count} 条评论`;
+  };
   const detailScenarios = [
     {
       key: "detail-short",
       issueId: options.issueShort,
       identifier: options.issueShortIdentifier,
-      note: undefined as string | undefined,
+      note: withCount(undefined, options.issueShortComments),
+      skipReason: null as string | null,
     },
     {
       key: "detail-long",
       issueId: options.issueLong,
       identifier: options.issueLongIdentifier,
-      note: "长（173 条）",
+      note: withCount("长", options.issueLongComments),
+      skipReason: null as string | null,
     },
   ];
-  if (options.runningIssue) {
-    detailScenarios.push({
-      key: "detail-running",
-      issueId: options.runningIssue.issueId,
-      identifier: options.runningIssue.identifier,
-      note: `运行中任务 ${options.runningIssue.taskCount}`,
-    });
-  }
+  detailScenarios.push({
+    key: "detail-running",
+    issueId: options.runningIssue?.issueId ?? "",
+    identifier: options.runningIssue?.identifier ?? "(none)",
+    note: options.runningIssue ? `运行中任务 ${options.runningIssue.taskCount}` : undefined,
+    skipReason: options.runningIssue ? null : options.runningSkip,
+  });
 
   for (const detail of detailScenarios) {
-    const path = `/issues/${encodeURIComponent(detail.issueId)}`;
-    scenarios.push({
-      key: detail.key,
-      mode: "cold",
-      shape: "issue-detail",
-      path,
-      targetCommentId: null,
-      entry: "issues-list",
-      clickIssueId: detail.issueId,
-      sidebarPath: null,
-      inboxRowIndex: null,
-      inboxItemId: null,
-      target: { identifier: detail.identifier, ...(detail.note ? { note: detail.note } : {}) },
-      targetSelection: null,
-    });
-    scenarios.push({
-      key: detail.key,
-      mode: "warm",
-      shape: "issue-detail",
-      path,
-      targetCommentId: null,
-      entry: "issues-list",
-      clickIssueId: detail.issueId,
-      sidebarPath: null,
-      inboxRowIndex: null,
-      inboxItemId: null,
-      target: { identifier: detail.identifier, ...(detail.note ? { note: detail.note } : {}) },
-      targetSelection: null,
-    });
+    // The cold scenario always has a URL worth loading; a skipped scenario
+    // simply never measures it.
+    const path = `/issues/${encodeURIComponent(detail.issueId || "none")}`;
+    for (const mode of ["cold", "warm"] as const) {
+      scenarios.push({
+        key: detail.key,
+        mode,
+        shape: "issue-detail" as PageShape,
+        path,
+        targetCommentId: null,
+        entry: "issues-list" as WarmEntry,
+        clickIssueId: detail.issueId || null,
+        sidebarPath: null,
+        inboxRowIndex: null,
+        inboxItemId: null,
+        expectIssueId: null,
+        target: { identifier: detail.identifier, ...(detail.note ? { note: detail.note } : {}) },
+        targetSelection: null,
+        skipReason: detail.skipReason,
+      });
+    }
   }
 
-  if (options.deepLink) {
-    const deepLink = options.deepLink;
-    const path = `/inbox?item=${encodeURIComponent(deepLink.inboxItemId)}${
-      deepLink.sessionId ? `&session=${encodeURIComponent(deepLink.sessionId)}` : ""
-    }`;
+  const deepLink = options.deepLink;
+  {
+    // `?issue=` is the form every notification carrying an issue resolves to:
+    // `inboxItemSelectionKind` keeps `?item=` for ledger rows only, and those
+    // render a report rather than a timeline. See `probeDeepLinkTarget`.
+    const path = deepLink
+      ? `/inbox?issue=${encodeURIComponent(deepLink.issueId)}${
+        deepLink.sessionId ? `&session=${encodeURIComponent(deepLink.sessionId)}` : ""
+      }`
+      : "/inbox";
     const targetSelection = options.pinnedInboxItem
       ? "pinned"
       : options.deepLinkAuto
         ? "auto-first-page"
         : "pinned";
-    scenarios.push({
-      key: "deeplink",
-      mode: "cold",
-      shape: "issue-detail",
-      path,
-      targetCommentId: deepLink.commentId,
-      entry: "inbox",
-      clickIssueId: null,
-      sidebarPath: null,
-      inboxRowIndex: deepLink.rowIndex,
-      inboxItemId: deepLink.inboxItemId,
-      target: { identifier: `${deepLink.inboxItemId} → ${deepLink.issueIdentifier}` },
-      targetSelection,
-    });
-    scenarios.push({
-      key: "deeplink",
-      mode: "warm",
-      shape: "issue-detail",
-      path,
-      targetCommentId: deepLink.commentId,
-      entry: "inbox",
-      clickIssueId: null,
-      sidebarPath: null,
-      inboxRowIndex: deepLink.rowIndex,
-      inboxItemId: deepLink.inboxItemId,
-      target: { identifier: `${deepLink.inboxItemId} → ${deepLink.issueIdentifier}` },
-      targetSelection,
-    });
+    for (const mode of ["cold", "warm"] as const) {
+      scenarios.push({
+        key: "deeplink",
+        mode,
+        shape: "issue-detail" as PageShape,
+        path,
+        targetCommentId: deepLink?.commentId ?? null,
+        entry: "inbox" as WarmEntry,
+        clickIssueId: null,
+        sidebarPath: null,
+        inboxRowIndex: deepLink?.rowIndex ?? null,
+        inboxItemId: deepLink?.inboxItemId ?? null,
+        expectIssueId: deepLink?.issueId ?? null,
+        target: {
+          identifier: deepLink
+            ? `${deepLink.issueId}${deepLink.issueHasRunningTask ? "（running）" : ""}`
+            : options.pinnedInboxItem ?? "(auto)",
+        },
+        targetSelection,
+        skipReason: deepLink ? null : options.deepLinkSkip ?? "no-eligible-inbox-item",
+      });
+    }
   }
 
   for (const page of PAGE_SEQUENCE) {
     const shape: PageShape = page.key === "chat" ? "chat" : "list";
-    scenarios.push({
-      key: `page-${page.key}`,
-      mode: "cold",
-      shape,
-      path: page.path,
-      targetCommentId: null,
-      entry: "issues-list",
-      clickIssueId: null,
-      sidebarPath: null,
-      inboxRowIndex: null,
-      inboxItemId: null,
-      target: { identifier: page.key },
-      targetSelection: null,
-    });
-    scenarios.push({
-      key: `page-${page.key}`,
-      mode: "warm",
-      shape,
-      path: page.path,
-      targetCommentId: null,
-      entry: "issues-list",
-      clickIssueId: null,
-      sidebarPath: page.path,
-      inboxRowIndex: null,
-      inboxItemId: null,
-      target: { identifier: page.key },
-      targetSelection: null,
-    });
+    for (const mode of ["cold", "warm"] as const) {
+      scenarios.push({
+        key: `page-${page.key}`,
+        mode,
+        shape,
+        path: page.path,
+        targetCommentId: null,
+        entry: "issues-list" as WarmEntry,
+        clickIssueId: null,
+        sidebarPath: mode === "warm" ? page.path : null,
+        inboxRowIndex: null,
+        inboxItemId: null,
+        expectIssueId: null,
+        target: { identifier: page.key },
+        targetSelection: null,
+        skipReason: null,
+      });
+    }
   }
   return scenarios;
 }
@@ -1258,6 +1316,14 @@ async function main(): Promise<void> {
     process.stdout.write(
       `  guard self-test: ${guardSelfTest.blocked ? "blocked" : "FAILED"} (${guardSelfTest.detail})\n`,
     );
+    // A guard that cannot stop a deliberate POST is not a read-only guarantee:
+    // measuring production with it would risk real writes. Refuse to start, and
+    // write no artifact, so a broken guard can never be mistaken for a baseline.
+    if (!guardSelfTest.blocked) {
+      throw new Error(
+        `write guard self-test FAILED (${guardSelfTest.detail}); refusing to run any scenario`,
+      );
+    }
 
     const phase = (label: string, startedAt: number): void => {
       process.stdout.write(`  ${label} took ${((Date.now() - startedAt) / 1000).toFixed(1)}s\n`);
@@ -1266,6 +1332,10 @@ async function main(): Promise<void> {
     let phaseStarted = Date.now();
     const excluded = await loadExcludedIssueIds(opts.baseUrl, token);
     phase("loadExcludedIssueIds", phaseStarted);
+
+    phaseStarted = Date.now();
+    const allRunningIssueIds = await loadRunningIssueIds(opts.baseUrl, token);
+    phase("loadRunningIssueIds", phaseStarted);
 
     phaseStarted = Date.now();
     const running = await probeRunningIssue({
@@ -1280,13 +1350,8 @@ async function main(): Promise<void> {
     const deepLinkProbe = await probeDeepLinkTarget({
       baseUrl: opts.baseUrl,
       token,
-      slug: identity.workspaceSlug,
-      browser,
       pinnedItemId: opts.inboxItem,
-      excludedIssueIds: excluded,
-      round: 0,
-      knownIds,
-      selectors: opts.selectors,
+      runningIssueIds: allRunningIssueIds,
     });
     phase("probeDeepLinkTarget", phaseStarted);
 
@@ -1298,13 +1363,24 @@ async function main(): Promise<void> {
     phase("resolveIdentifiers", phaseStarted);
     const label = (issueId: string): string => identifiers.get(issueId) ?? issueId;
 
+    phaseStarted = Date.now();
+    const commentCounts = await Promise.all([
+      probeCommentCount(opts.baseUrl, token, opts.issueShort),
+      probeCommentCount(opts.baseUrl, token, opts.issueLong),
+    ]);
+    phase("probeCommentCounts", phaseStarted);
+
     const scenarios = buildScenarios({
       deepLink: deepLinkProbe.target,
+      deepLinkSkip: deepLinkProbe.skipped,
       runningIssue: running,
+      runningSkip: "all-running-issues-in-mul383-family",
       issueShort: opts.issueShort,
       issueLong: opts.issueLong,
       issueShortIdentifier: label(opts.issueShort),
       issueLongIdentifier: label(opts.issueLong),
+      issueShortComments: commentCounts[0],
+      issueLongComments: commentCounts[1],
       pinnedInboxItem: opts.inboxItem,
       deepLinkAuto: deepLinkProbe.target !== null,
     });
@@ -1340,7 +1416,10 @@ async function main(): Promise<void> {
 
     const byScenario: ReportScenario[] = [];
     for (const scenario of selected) {
-      if (scenario.key === "detail-running" && !running) {
+      // A skipped scenario still produces a row, so a reader can tell "the rule
+      // excluded this" from "the script never looked". Both used to collapse into
+      // a missing row, which is exactly what QA flagged on 209.
+      if (scenario.skipReason !== null) {
         byScenario.push({
           key: scenario.key,
           mode: scenario.mode,
@@ -1348,22 +1427,8 @@ async function main(): Promise<void> {
           rule: READING_RULE,
           anchorRule: anchorRulePreview(scenario),
           selectorMode: opts.selectors === "contract" ? "contract" : "legacy",
-          skipped: "no running agent",
-          hoverLeadMs: scenario.mode === "warm" ? opts.hoverLeadMs : null,
-          rounds: [],
-          stats: computeScenarioStats([]),
-        });
-        continue;
-      }
-      if (scenario.key === "deeplink" && !deepLinkProbe.target) {
-        byScenario.push({
-          key: scenario.key,
-          mode: scenario.mode,
-          target: { identifier: opts.inboxItem ?? "(auto)" },
-          rule: READING_RULE,
-          anchorRule: anchorRulePreview(scenario),
-          selectorMode: opts.selectors === "contract" ? "contract" : "legacy",
-          skipped: deepLinkProbe.skipped ?? "no eligible inbox item",
+          skipped: true,
+          skipReason: scenario.skipReason,
           hoverLeadMs: scenario.mode === "warm" ? opts.hoverLeadMs : null,
           rounds: [],
           stats: computeScenarioStats([]),
@@ -1408,8 +1473,15 @@ async function main(): Promise<void> {
         rule: READING_RULE,
         anchorRule: rounds[0]?.anchorRule ?? anchorRulePreview(scenario),
         selectorMode: mode,
-        skipped: null,
+        skipped: false,
+        skipReason: null,
         ...(scenario.targetSelection ? { targetSelection: scenario.targetSelection } : {}),
+        ...(scenario.key === "deeplink" && deepLinkProbe.target
+          ? {
+            issueHasRunningTask: deepLinkProbe.target.issueHasRunningTask,
+            inboxItemId: deepLinkProbe.target.inboxItemId,
+          }
+          : null),
         hoverLeadMs: scenario.mode === "warm" ? opts.hoverLeadMs : null,
         rounds: rounds.map(roundSummary),
         stats: computeScenarioStats(

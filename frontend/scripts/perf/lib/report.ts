@@ -25,13 +25,24 @@ export interface ReportRoundSummary {
   dataFreshAtReady: boolean;
   jumpCount: number;
   jumpPx: number;
+  /** Per-jump detail: a bare count cannot say where or in which direction. */
+  jumps: Array<{ startMs: number; endMs: number; px: number; scrollPx: number; kind: string; frames: number }>;
   layoutShiftCount: number;
   cls: number;
   serialDepth: number | null;
   apiCallsTotal: number;
   apiFirstScreen: number;
+  /** Script/JS chunk accounting for the round. */
+  chunksLoaded: number;
+  chunkBytes: number;
+  lcpMs: number | null;
+  slowestServerTotalMs: number | null;
+  /** Failure text for the round (`warm target not found`, navigation errors, ...). */
+  error?: string;
   blockedWrites: number;
   heapBytes: number | null;
+  /** The anchor's rect at the ready frame, in root-relative coordinates. */
+  anchorRectAtReady?: { top: number; bottom: number; height: number; rootHeight: number } | null;
   /**
    * Deep-link depth, from the `/comments` responses this round already made.
    * Recorded on every round so a target that sits deeper in one run than another
@@ -59,9 +70,14 @@ export interface ReportScenario {
   rule: string;
   anchorRule: string;
   selectorMode: "contract" | "legacy";
-  /** Why the scenario produced no measurement, when it did not. */
-  skipped: string | null;
+  /** True when the scenario was deliberately not measured. */
+  skipped: boolean;
+  /** The machine-readable reason for `skipped`; null when it was measured. */
+  skipReason: string | null;
   targetSelection?: string;
+  /** Deep-link bookkeeping: which notification/issue was measured. */
+  inboxItemId?: string | null;
+  issueHasRunningTask?: boolean;
   hoverLeadMs: number | null;
   rounds: ReportRoundSummary[];
   stats: PerfScenarioStats;
@@ -143,15 +159,16 @@ export function buildMarkdown(report: {
   lines.push("## 每场景汇总");
   lines.push("");
   lines.push(
-    "| 场景 | 模式 | 目标 | 选择器 | anchor | n | ready p50 | p75 | p95 | max | 超时 | firstReal p50 | jumps max | 位移 max | 串行深度 | 首屏 API p50 |",
+    "| 场景 | 模式 | 状态 | 目标 | 选择器 | anchor | n | ready p50 | p75 | p95 | max | 超时 | firstReal p50 | jumps max | 位移 max | 串行深度 | 首屏 API p50 |",
   );
   lines.push(
-    "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    "| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
   );
   for (const scenario of report.scenarios) {
     const stats = scenario.stats;
+    const status = scenario.skipped ? `skipped: ${scenario.skipReason ?? "unknown"}` : "measured";
     lines.push(
-      `| ${scenario.key} | ${scenario.mode} | ${scenario.target.identifier}${scenario.target.note ? `（${scenario.target.note}）` : ""} | ${scenario.selectorMode} | ${scenario.anchorRule} | ${stats.n} | ${fmtMs(stats.readyP50)} | ${fmtMs(stats.readyP75)} | ${fmtMs(stats.readyP95)} | ${fmtMs(stats.readyMax)} | ${stats.timeouts} | ${fmtMs(stats.firstRealP50)} | ${stats.jumpsMax ?? "-"} | ${fmtMs(stats.jumpPxMax)} | ${stats.serialDepthMax ?? "-"} | ${fmtMs(stats.apiFirstScreenP50)} |`,
+      `| ${scenario.key} | ${scenario.mode} | ${status} | ${scenario.target.identifier}${scenario.target.note ? `（${scenario.target.note}）` : ""} | ${scenario.selectorMode} | ${scenario.anchorRule} | ${stats.n} | ${fmtMs(stats.readyP50)} | ${fmtMs(stats.readyP75)} | ${fmtMs(stats.readyP95)} | ${fmtMs(stats.readyMax)} | ${stats.timeouts} | ${fmtMs(stats.firstRealP50)} | ${stats.jumpsMax ?? "-"} | ${fmtMs(stats.jumpPxMax)} | ${stats.serialDepthMax ?? "-"} | ${fmtMs(stats.apiFirstScreenP50)} |`,
     );
   }
   lines.push("");
@@ -160,26 +177,46 @@ export function buildMarkdown(report: {
     lines.push("### 跳过的场景");
     lines.push("");
     for (const scenario of skipped) {
-      lines.push(`- \`${scenario.key}\` (${scenario.mode})：${scenario.skipped}`);
+      lines.push(`- \`${scenario.key}\` (${scenario.mode})：${scenario.skipReason ?? "unknown"}`);
     }
     lines.push("");
   }
   lines.push("## 每轮明细");
   lines.push("");
   lines.push(
-    "| 场景 | 模式 | 轮 | ready ms | firstReal ms | anchorVisible ms | anchor | appReady ms | 跳动数 | 位移 px | CLS | 串行深度 | 首屏 API | 写请求 |",
+    "| 场景 | 模式 | 轮 | ready ms | firstReal ms | anchorVisible ms | anchor | anchorRect(top/bottom/height/root) | appReady ms | 跳动数 | 位移 px | CLS | LCP ms | 最慢 Server-Timing ms | chunks | chunk bytes | 串行深度 | 首屏 API | 写请求 | error |",
   );
   lines.push(
-    "| --- | --- | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    "| --- | --- | ---: | ---: | ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
   );
   for (const scenario of report.scenarios) {
     for (const round of scenario.rounds) {
+      const rect = round.anchorRectAtReady;
+      const rectText = rect
+        ? `${rect.top}/${rect.bottom}/${rect.height}/${rect.rootHeight}`
+        : "-";
       lines.push(
-        `| ${scenario.key} | ${scenario.mode} | ${round.round} | ${fmtMs(round.readyMs)}${round.readyTimeout ? " ⚠" : ""} | ${fmtMs(round.firstRealMs)} | ${fmtMs(round.anchorVisibleMs)} | ${round.anchorName ?? "-"} | ${fmtMs(round.appReadyMs)}${round.appReadyForced ? " (forced)" : ""} | ${round.jumpCount} | ${fmtMs(round.jumpPx)} | ${round.cls} | ${round.serialDepth ?? "-"} | ${round.apiFirstScreen}/${round.apiCallsTotal} | ${round.blockedWrites} |`,
+        `| ${scenario.key} | ${scenario.mode} | ${round.round} | ${fmtMs(round.readyMs)}${round.readyTimeout ? " ⚠" : ""} | ${fmtMs(round.firstRealMs)} | ${fmtMs(round.anchorVisibleMs)} | ${round.anchorName ?? "-"} | ${rectText} | ${fmtMs(round.appReadyMs)}${round.appReadyForced ? " (forced)" : ""} | ${round.jumpCount} | ${fmtMs(round.jumpPx)} | ${round.cls} | ${fmtMs(round.lcpMs)} | ${fmtMs(round.slowestServerTotalMs)} | ${round.chunksLoaded} | ${fmtBytes(round.chunkBytes)} | ${round.serialDepth ?? "-"} | ${round.apiFirstScreen}/${round.apiCallsTotal} | ${round.blockedWrites} | ${round.error ?? "-"} |`,
       );
     }
   }
   lines.push("");
+  // Jump detail: the acceptance criterion is "every detail page shows its jumps",
+  // so the per-jump geometry belongs in the artifact.
+  const jumpRows = report.scenarios.flatMap((scenario) => scenario.rounds.flatMap((round) =>
+    round.jumps.map((jump) => ({ scenario, round, jump }))));
+  if (jumpRows.length > 0) {
+    lines.push("### 跳动明细");
+    lines.push("");
+    lines.push("| 场景 | 模式 | 轮 | start ms | end ms | 位移 px | scroll px | kind | frames |");
+    lines.push("| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | ---: |");
+    for (const { scenario, round, jump } of jumpRows) {
+      lines.push(
+        `| ${scenario.key} | ${scenario.mode} | ${round.round} | ${fmtMs(jump.startMs)} | ${fmtMs(jump.endMs)} | ${fmtMs(jump.px)} | ${fmtMs(jump.scrollPx)} | ${jump.kind} | ${jump.frames} |`,
+      );
+    }
+    lines.push("");
+  }
   if (report.blockedWrites.length > 0) {
     lines.push("## 被拦截的写请求");
     lines.push("");
@@ -218,9 +255,13 @@ export function buildHtml(report: {
     .map((scenario) => {
       const stats = scenario.stats;
       const bad = (stats.jumpsMax ?? 0) > 0;
+      const status = scenario.skipped
+        ? `<span class="warn">skipped: ${esc(scenario.skipReason ?? "unknown")}</span>`
+        : '<span class="good">measured</span>';
       return `<tr>
       <td class="key">${esc(scenario.key)}</td>
       <td>${esc(scenario.mode)}</td>
+      <td>${status}</td>
       <td>${esc(scenario.target.identifier)}${scenario.target.note ? ` <span class="muted">${esc(scenario.target.note)}</span>` : ""}</td>
       <td class="muted">${esc(scenario.selectorMode)}</td>
       <td class="muted">${esc(scenario.anchorRule)}</td>
@@ -250,16 +291,39 @@ export function buildHtml(report: {
       <td class="num">${fmtMs(round.firstRealMs)}</td>
       <td class="num">${fmtMs(round.anchorVisibleMs)}</td>
       <td class="muted">${esc(round.anchorName ?? "-")}</td>
+      <td class="num">${round.anchorRectAtReady
+        ? `${round.anchorRectAtReady.top}/${round.anchorRectAtReady.bottom}/${round.anchorRectAtReady.height}/${round.anchorRectAtReady.rootHeight}`
+        : "-"}</td>
       <td class="num">${fmtMs(round.appReadyMs)}${round.appReadyForced ? " (forced)" : ""}</td>
       <td class="num${round.jumpCount > 0 ? " bad" : " good"}">${round.jumpCount}</td>
       <td class="num">${fmtMs(round.jumpPx)}</td>
       <td class="num">${round.cls}</td>
+      <td class="num">${fmtMs(round.lcpMs)}</td>
+      <td class="num">${fmtMs(round.slowestServerTotalMs)}</td>
+      <td class="num">${round.chunksLoaded}</td>
+      <td class="num">${fmtBytes(round.chunkBytes)}</td>
       <td class="num">${round.serialDepth ?? "-"}</td>
       <td class="num">${round.apiFirstScreen}/${round.apiCallsTotal}</td>
       <td class="num">${round.blockedWrites}</td>
+      <td class="muted">${esc(round.error ?? "-")}</td>
     </tr>`,
       ),
     )
+    .join("\n");
+
+  const jumpRows = report.scenarios
+    .flatMap((scenario) => scenario.rounds.flatMap((round) =>
+      round.jumps.map((jump) => `<tr>
+      <td class="key">${esc(scenario.key)}</td>
+      <td>${esc(scenario.mode)}</td>
+      <td class="num">${round.round}</td>
+      <td class="num">${fmtMs(jump.startMs)}</td>
+      <td class="num">${fmtMs(jump.endMs)}</td>
+      <td class="num">${fmtMs(jump.px)}</td>
+      <td class="num">${fmtMs(jump.scrollPx)}</td>
+      <td>${esc(jump.kind)}</td>
+      <td class="num">${jump.frames}</td>
+    </tr>`)))
     .join("\n");
 
   const blockedRows = report.blockedWrites
@@ -342,11 +406,12 @@ ${rows}
 </table></div>
 <h2>每轮明细</h2>
 <div class="tablewrap"><table>
-<thead><tr><th>场景</th><th>模式</th><th class="num">轮</th><th class="num">ready ms</th><th class="num">firstReal ms</th><th class="num">anchorVisible ms</th><th>anchor</th><th class="num">appReady ms</th><th class="num">跳动数</th><th class="num">位移 px</th><th class="num">CLS</th><th class="num">串行深度</th><th class="num">首屏 API</th><th class="num">写请求</th></tr></thead>
+<thead><tr><th>场景</th><th>模式</th><th class="num">轮</th><th class="num">ready ms</th><th class="num">firstReal ms</th><th class="num">anchorVisible ms</th><th>anchor</th><th>anchorRect(top/bottom/height/root)</th><th class="num">appReady ms</th><th class="num">跳动数</th><th class="num">位移 px</th><th class="num">CLS</th><th class="num">LCP ms</th><th class="num">最慢 Server-Timing ms</th><th class="num">chunks</th><th class="num">chunk bytes</th><th class="num">串行深度</th><th class="num">首屏 API</th><th class="num">写请求</th><th>error</th></tr></thead>
 <tbody>
 ${detailRows}
 </tbody>
 </table></div>
+${jumpRows ? `<h2>跳动明细</h2>\n<div class="tablewrap"><table>\n<thead><tr><th>场景</th><th>模式</th><th class="num">轮</th><th class="num">start ms</th><th class="num">end ms</th><th class="num">位移 px</th><th class="num">scroll px</th><th>kind</th><th class="num">frames</th></tr></thead>\n<tbody>\n${jumpRows}\n</tbody>\n</table></div>` : ""}
 ${blockedRows ? `<h2>被拦截的写请求（全部为 abort）</h2>\n<div class="tablewrap"><table>\n<thead><tr><th>页面</th><th>方法</th><th>path 模式</th><th class="num">尝试</th></tr></thead>\n<tbody>\n${blockedRows}\n</tbody>\n</table></div>` : ""}
 ${compareRows ? `<h2>与基线对比</h2>\n<div class="tablewrap"><table>\n<thead><tr><th>场景</th><th>模式</th><th>选择器</th><th class="num">ready p75</th><th class="num">Δ</th><th class="num">ready p95</th><th class="num">Δ</th><th class="num">jumps max</th><th class="num">串行深度</th><th class="num">首屏 API p50</th></tr></thead>\n<tbody>\n${compareRows}\n</tbody>\n</table></div>` : ""}
 <footer>由 frontend/scripts/perf/page-speed.ts 生成。自包含 HTML：无外链资源、无存储、无父窗口访问。</footer>
