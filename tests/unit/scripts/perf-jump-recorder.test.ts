@@ -13,9 +13,11 @@ import {
   computeSelectorEquivalence,
   computeWaves,
   frameMoved,
+  JUMP_THRESHOLD_PX,
   nearestRankPercentile,
   pairForCompare,
   READY_QUIET_MS,
+  ROUND_TIMEOUT_MS,
   WAVE_TOLERANCE_MS,
   type PerfAnchorSpec,
   type PerfFrame,
@@ -78,6 +80,18 @@ function frame(t: number, contract: PerfProfileFrame, legacy?: PerfProfileFrame)
 }
 
 const issueDetailProfile = profileFor({ mode: "contract", shape: "issue-detail" });
+
+describe("scoring constants", () => {
+  // These are the figures MUL-384's design section fixes, and the report's
+  // "口径" table quotes them. They are asserted here because the behavioural tests
+  // alone would stay green if someone widened the threshold or the quiet window —
+  // the runner would simply score a different contract than the one documented.
+  it("matches the documented jump threshold, quiet window and round timeout", () => {
+    expect(JUMP_THRESHOLD_PX).toBe(1);
+    expect(READY_QUIET_MS).toBe(500);
+    expect(ROUND_TIMEOUT_MS).toBe(20_000);
+  });
+});
 
 describe("computeJumps", () => {
   it("merges a run of consecutive moving frames into one jump", () => {
