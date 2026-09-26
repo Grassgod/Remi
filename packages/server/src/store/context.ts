@@ -359,6 +359,12 @@ export interface TasksSurface {
   getTask(id: string): MultiremiTask | null;
   getTaskWithAgent(id: string): import("@multiremi/contracts/types.js").MultiremiTaskWithAgent | null;
   listTasks(status?: MultiremiTaskStatus): MultiremiTask[];
+  listTasksForRuntimeStatuses(runtimeId: string, statuses: readonly MultiremiTaskStatus[]): MultiremiTask[];
+  listTaskRefs(input: {
+    statuses: readonly MultiremiTaskStatus[];
+    runtimeId?: string | null;
+    agentIds?: readonly string[];
+  }): import("./repos/tasks-repo.js").TaskRef[];
   listTasksChunk(
     status: MultiremiTaskStatus | undefined,
     cursor: import("./repos/tasks-repo.js").TaskListCursor | null,

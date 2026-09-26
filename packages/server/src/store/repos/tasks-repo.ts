@@ -335,6 +335,14 @@ export interface TaskListCandidate {
   createdAt: string;
 }
 
+/** Lightweight identity column set for "does any task match?" guards. */
+export interface TaskRef {
+  id: string;
+  status: MultiremiTaskStatus;
+  runtimeId: string | null;
+  agentId: string;
+}
+
 export class BinarySkillFilesUnsupportedError extends Error {
   constructor(readonly agentId: string) {
     super("Task skills contain binary files. Update the Remi daemon to support binary skill files before claiming this task.");
@@ -1453,11 +1461,83 @@ export class TasksRepo {
     return normalizeRepos(workspaceRepos, defaultBranchFor);
   }
 
+  /**
+   * Unbounded whole-table read of full task rows.
+   *
+   * Kept because it is the store's general-purpose accessor, but it is NOT safe
+   * on a large table: 6k rows of `prompt` + `result` are already >8 MB of bridge
+   * payload, which the MUL-386 C.1 hard limit refuses. Callers that know the
+   * status or runtime they want must use `listTasksForRuntimeStatuses` or
+   * `listTaskRefs` instead; see the MUL-386 risk note in
+   * `docs/dev/performance.md`.
+   */
   listTasks(status?: MultiremiTaskStatus): MultiremiTask[] {
     const rows = status
       ? this.ctx.db.query("SELECT * FROM multiremi_tasks WHERE status = ? ORDER BY created_at DESC").all(status) as Row[]
       : this.ctx.db.query("SELECT * FROM multiremi_tasks ORDER BY created_at DESC").all() as Row[];
     return this.withTaskAutopilotRuns(rows.map(toTask));
+  }
+
+  /**
+   * Full task rows for one runtime in the given statuses (MUL-386 C.1).
+   *
+   * The daemon's pending-task route used to read every task in the deployment and
+   * discard all but its own runtime's queued/dispatched rows. Pushing the runtime
+   * and status predicates into SQL keeps the reply proportional to the work that
+   * is actually pending for that daemon instead of to the whole history.
+   */
+  listTasksForRuntimeStatuses(runtimeId: string, statuses: readonly MultiremiTaskStatus[]): MultiremiTask[] {
+    if (!statuses.length) return [];
+    const placeholders = statuses.map(() => "?").join(", ");
+    const rows = this.ctx.db.query(
+      `SELECT * FROM multiremi_tasks WHERE runtime_id = ? AND status IN (${placeholders})
+       ORDER BY created_at DESC`,
+    ).all(runtimeId, ...statuses) as Row[];
+    return this.withTaskAutopilotRuns(rows.map(toTask));
+  }
+
+  /**
+   * Narrow `id/status/runtime_id/agent_id` projection over the tasks table.
+   *
+   * Answers "is any task of this runtime/agent in these statuses, and which" for
+   * the runtime lifecycle guards without reading `prompt` or `result`. Those
+   * guards run inside runtime deletion, where a whole-table row read used to be
+   * the largest thing crossing the bridge (MUL-386 C.1).
+   */
+  listTaskRefs(input: {
+    statuses: readonly MultiremiTaskStatus[];
+    runtimeId?: string | null;
+    agentIds?: readonly string[];
+  }): TaskRef[] {
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    if (input.statuses.length) {
+      conditions.push(`status IN (${input.statuses.map(() => "?").join(", ")})`);
+      params.push(...input.statuses);
+    }
+    const runtimeId = cleanOptionalString(input.runtimeId);
+    const agentIds = [...new Set((input.agentIds ?? []).map((id) => String(id ?? "").trim()).filter(Boolean))];
+    if (runtimeId && agentIds.length) {
+      conditions.push(`(runtime_id = ? OR agent_id IN (${agentIds.map(() => "?").join(", ")}))`);
+      params.push(runtimeId, ...agentIds);
+    } else if (runtimeId) {
+      conditions.push("runtime_id = ?");
+      params.push(runtimeId);
+    } else if (agentIds.length) {
+      conditions.push(`agent_id IN (${agentIds.map(() => "?").join(", ")})`);
+      params.push(...agentIds);
+    }
+    const rows = this.ctx.db.query(
+      `SELECT id, status, runtime_id, agent_id FROM multiremi_tasks
+       ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""}
+       ORDER BY created_at DESC`,
+    ).all(...params) as Row[];
+    return rows.map((row) => ({
+      id: String(row.id),
+      status: String(row.status) as MultiremiTaskStatus,
+      runtimeId: nullableString(row.runtime_id),
+      agentId: String(row.agent_id),
+    }));
   }
 
   /**

@@ -536,7 +536,12 @@ describe.skipIf(!pgAvailable)("MUL-367 request metrics — real Postgres bridge"
  * exact expected key set, so a future field (SQL text, a parameter, the real path)
  * fails the test instead of quietly shipping.
  */
-describe("MUL-386 bridge reply guardrails", () => {
+/**
+ * These cases need a real `PostgresSyncDatabase`: the guardrail lives in the
+ * bridge, which does not exist in the SQLite path. Skipped, never failed, when no
+ * Postgres is reachable — the same contract as the other PG-backed suites.
+ */
+describe.skipIf(!pgAvailable)("MUL-386 bridge reply guardrails", () => {
   /** Big enough to exceed the 1 MB default warning threshold. */
   const BIG_ROWS = "x".repeat(1_200_000);
 

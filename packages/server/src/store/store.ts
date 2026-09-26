@@ -122,6 +122,7 @@ import {
   TasksRepo,
   type ClaimTaskOptions,
   type TaskListCandidate,
+  type TaskRef,
   type TaskListCursor,
 } from "@multiremi/store/repos/tasks-repo.js";
 import { OrganizerActionError, readOrganizerMode } from "../organizer/settings.js";
@@ -4417,6 +4418,20 @@ runMigrations(this.db);
 
   listTasks(status?: MultiremiTaskStatus): MultiremiTask[] {
     return this.tasks.listTasks(status);
+  }
+
+  /** Full rows for one runtime's pending statuses; avoids a whole-table read. */
+  listTasksForRuntimeStatuses(runtimeId: string, statuses: readonly MultiremiTaskStatus[]): MultiremiTask[] {
+    return this.tasks.listTasksForRuntimeStatuses(runtimeId, statuses);
+  }
+
+  /** `id/status/runtime_id/agent_id` projection for lifecycle guards. */
+  listTaskRefs(input: {
+    statuses: readonly MultiremiTaskStatus[];
+    runtimeId?: string | null;
+    agentIds?: readonly string[];
+  }): TaskRef[] {
+    return this.tasks.listTaskRefs(input);
   }
 
   listTasksChunk(
