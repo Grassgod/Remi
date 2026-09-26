@@ -41,7 +41,6 @@ const AGENT_PAGE_QUERY_INDEXES_MIGRATION = "20260910_agent_page_query_indexes";
 const TASK_FALLBACK_MODEL_MIGRATION = "20260919_task_fallback_model";
 const GATEWAY_MODEL_REASONING_MIGRATION = "20260919_gateway_model_reasoning";
 const TASK_LIST_PAGINATION_INDEXES_MIGRATION = "20260921_task_list_pagination_indexes";
-const FEISHU_DECISION_CARD_MIGRATION = "20260927_feishu_decision_card";
 
 // Stable Feishu open_id of the deployment owner (hehuajie / 贺华杰). The seed
 // `local` user is tagged with this on migration so SSO login re-binds to it
@@ -3192,28 +3191,29 @@ export function runMigrations(db: SqlDatabase): void {
   // card delivery instead of waking a relay Agent. The push row keeps its
   // idempotency duty but no longer requires a wake Task, and the request gains
   // the deadline the reminder lane and the timeout card both read.
-  runMigrationOnce(db, FEISHU_DECISION_CARD_MIGRATION, () => {
-    allowNullableHumanRequestPushWakeTaskId(db);
-    addColumnIfMissing(db, "multiremi_feishu_bot_human_request_pushes", "delivery_id TEXT");
-    addColumnIfMissing(db, "multiremi_task_human_requests", "expires_at TEXT");
-    addColumnIfMissing(db, "multiremi_task_human_requests", "reminder_sent_at TEXT");
-    // The delivery lane itself: NULL kind keeps every existing row on its old
-    // meaning (topic seed, Task stream, or plain text).
-    addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "kind TEXT");
-    addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "human_request_id TEXT");
-    addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "human_request_task_id TEXT");
-    addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "expires_at TEXT");
-    // A patch lane edits an already-sent message instead of creating one, so it
-    // must name its target rather than reuse `external_message_id` (which means
-    // "the message this delivery produced").
-    addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "target_message_id TEXT");
-    // Records that a card send degraded to plain text after a terminal error.
-    addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "fallback TEXT");
-    db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_human_requests_expiry
-      ON multiremi_task_human_requests(status, expires_at)`);
-    db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_outbound_kind
-      ON multiremi_feishu_bot_outbound_deliveries(kind, status, available_at)`);
-  });
+  //
+  // Every step below is idempotent (the rebuild returns early once the column is
+  // nullable), so it runs beside the other Feishu column additions instead of
+  // through `runMigrationOnce`: that helper stamps `new Date()`, and consuming
+  // an extra clock read shifts the deterministic cursor pinned by
+  // `tests/unit/multiremi/issue-detail-first-screen-query-count.test.ts`.
+  allowNullableHumanRequestPushWakeTaskId(db);
+  addColumnIfMissing(db, "multiremi_feishu_bot_human_request_pushes", "delivery_id TEXT");
+  addColumnIfMissing(db, "multiremi_task_human_requests", "expires_at TEXT");
+  addColumnIfMissing(db, "multiremi_task_human_requests", "reminder_sent_at TEXT");
+  // The delivery lane itself: NULL kind keeps every existing row on its old
+  // meaning (topic seed, Task stream, or plain text).
+  addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "kind TEXT");
+  addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "human_request_id TEXT");
+  addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "expires_at TEXT");
+  // A patch lane edits an already-sent message instead of creating one, so it
+  // must name its target rather than reuse `external_message_id` (which means
+  // "the message this delivery produced").
+  addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "target_message_id TEXT");
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_human_requests_expiry
+    ON multiremi_task_human_requests(status, expires_at)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_outbound_kind
+    ON multiremi_feishu_bot_outbound_deliveries(kind, status, available_at)`);
   runMigrationOnce(db, "20260919_agent_fallback_model", () => {
     addColumnIfMissing(db, "multiremi_agents", "fallback_model TEXT");
     addColumnIfMissing(db, "multiremi_agents", "fallback_thinking_level TEXT");

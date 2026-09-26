@@ -1273,6 +1273,12 @@ export class FeishuBotRepo {
             sourceTask.id, request.id, now, now,
           ],
         );
+        this.ctx.appendIssueActivity(issue.id, {
+          actorType: "system",
+          type: "decision_card_skipped",
+          body: request.id,
+          data: { request_id: request.id, source_task_id: sourceTask.id, reason: "notify_none" },
+        });
         return null;
       }
       const wakeTask = this.ctx.tasks().createTaskWithinTransaction({
