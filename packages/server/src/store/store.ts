@@ -97,6 +97,11 @@ import {
   type SessionArchiveWorkspaceUsage,
 } from "@multiremi/store/repos/session-archives-repo.js";
 import {
+  TaskTracesRepo,
+  type TaskTraceArchivePointer,
+} from "@multiremi/store/repos/task-traces-repo.js";
+import type { MultiremiTaskTrace } from "@multiremi/contracts/session-archive.js";
+import {
   RuntimesRepo,
   type ArchiveAgentsAndDeleteRuntimeResult,
   type StrictRuntimeDeleteResult,
@@ -493,6 +498,7 @@ export class MultiremiStore {
   private issues: IssuesRepo;
   private issueWorkspaces: IssueWorkspacesRepo;
   private sessionArchives: SessionArchivesRepo;
+  private taskTraces: TaskTracesRepo;
   readonly runtimeWorkspaces: RuntimeWorkspacesRepo;
   private runtimes: RuntimesRepo;
   private daemonProfiles: DaemonProfilesRepo;
@@ -559,6 +565,7 @@ export class MultiremiStore {
     this.issues = new IssuesRepo(this.ctx);
     this.issueWorkspaces = new IssueWorkspacesRepo(this.ctx);
     this.sessionArchives = new SessionArchivesRepo(this.ctx);
+    this.taskTraces = new TaskTracesRepo(this.ctx);
     this.runtimes = new RuntimesRepo(this.ctx);
     this.runtimeWorkspaces = new RuntimeWorkspacesRepo(this.ctx);
     this.daemonProfiles = new DaemonProfilesRepo(this.ctx);
@@ -789,6 +796,22 @@ runMigrations(this.db);
     return this.sessionArchives.markReadyAttempt(id, runtimeId, attemptCount, uploadedSizeBytes);
   }
 
+  completeSessionArchiveWithTracePointers(
+    id: string,
+    runtimeId: string,
+    attemptCount: number,
+    uploadedSizeBytes: number,
+    pointers: readonly TaskTraceArchivePointer[],
+  ): { archive: MultiremiSessionArchive; pointerCount: number } | null {
+    return this.sessionArchives.completeWithTracePointers(
+      id,
+      runtimeId,
+      attemptCount,
+      uploadedSizeBytes,
+      pointers,
+    );
+  }
+
   markSessionArchiveFailedAttempt(
     id: string,
     runtimeId: string,
@@ -812,6 +835,22 @@ runMigrations(this.db);
 
   retrySessionArchive(id: string): MultiremiSessionArchive | null {
     return this.sessionArchives.retry(id);
+  }
+
+  getTaskTrace(taskId: string): MultiremiTaskTrace | null {
+    return this.taskTraces.get(taskId);
+  }
+
+  listTaskTracesForArchive(archiveId: string): MultiremiTaskTrace[] {
+    return this.taskTraces.listForArchive(archiveId);
+  }
+
+  writeTaskTraceArchivePointers(pointers: readonly TaskTraceArchivePointer[]): number {
+    return this.taskTraces.writeArchivePointers(pointers);
+  }
+
+  clearTaskTraceArchivePointers(archiveId: string): number {
+    return this.taskTraces.clearArchivePointers(archiveId);
   }
 
   listExecutionGroups(workspaceId: string) { return listExecutionGroups(this.db, workspaceId); }

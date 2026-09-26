@@ -29,10 +29,22 @@ import type {
   InitSessionArchiveInput,
   MultiremiIssueWorkspaceArchiveBinding,
   MultiremiSessionArchive,
+  MultiremiSessionArchiveSubjectKind,
 } from "@multiremi/contracts/types.js";
+import {
+  SESSION_ARCHIVE_V2_FORMAT,
+  SESSION_ARCHIVE_V1_FORMAT,
+} from "@multiremi/contracts/session-archive.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import { createId } from "@multiremi/ids.js";
 import { createLogger } from "@shared/logger.js";
+import {
+  SessionArchiveIngestError,
+  verifyArchiveIngest,
+  type ArchiveIngestVerification,
+} from "@multiremi/session-archive/ingest.js";
+import type { TaskTraceArchivePointer } from "@multiremi/store/repos/task-traces-repo.js";
+import type { SessionArchiveMemberIndexEntry } from "@multiremi/contracts/session-archive.js";
 
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 const DEFAULT_MIN_FREE_BYTES = 10 * 1024 * 1024 * 1024;
@@ -97,16 +109,36 @@ function encodedSegment(value: string): string {
 
 function archiveRelativePath(input: Pick<
   InitSessionArchiveInput,
-  "workspaceId" | "issueId"
+  "workspaceId" | "subjectKind" | "subjectId"
 > & { archiveId: string }): string {
   return join(
     "workspaces",
     encodedSegment(input.workspaceId),
-    "issues",
-    encodedSegment(input.issueId),
+    input.subjectKind === "issue" ? "issues" : "subjects",
+    encodedSegment(input.subjectId),
     input.archiveId,
-    "sessions.tar.gz",
+    "sessions.zip",
   );
+}
+
+/**
+ * New uploads must be v2.
+ *
+ * This is checked before any attempt is claimed: during an upgrade window a v1
+ * daemon would otherwise burn the whole retry budget re-uploading a container
+ * this server no longer indexes. Existing v1 rows stay readable and stay
+ * `ready` — the hard-delete barrier binds to them — so a request that names one
+ * of those is served as before instead of being rejected.
+ */
+const SESSION_ARCHIVE_FORMAT_V1 = SESSION_ARCHIVE_V1_FORMAT;
+const SESSION_ARCHIVE_FORMAT_V2 = SESSION_ARCHIVE_V2_FORMAT;
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && Boolean(value.trim());
+}
+
+function isV2Format(format: string | undefined | null): boolean {
+  return format === SESSION_ARCHIVE_FORMAT_V2;
 }
 
 function assertArchiveScope(
@@ -115,6 +147,24 @@ function assertArchiveScope(
   issueId: string,
 ): MultiremiSessionArchive {
   if (!archive || archive.runtimeId !== runtimeId || archive.issueId !== issueId) {
+    throw new SessionArchiveError("session archive not found", 404, "session_archive_not_found");
+  }
+  return archive;
+}
+
+/** Resolve an archive by subject and refuse a Runtime that does not own it. */
+function assertSubjectArchiveScope(
+  archive: MultiremiSessionArchive | null,
+  runtimeId: string,
+  subjectKind: MultiremiSessionArchiveSubjectKind,
+  subjectId: string,
+): MultiremiSessionArchive {
+  if (
+    !archive
+    || archive.runtimeId !== runtimeId
+    || archive.subjectKind !== subjectKind
+    || archive.subjectId !== subjectId
+  ) {
     throw new SessionArchiveError("session archive not found", 404, "session_archive_not_found");
   }
   return archive;
@@ -164,6 +214,30 @@ async function hashFile(path: string, expectedSizeBytes: number): Promise<{ sha2
   }
 }
 
+/**
+ * Turn verified trace members into pointer rows.
+ *
+ * `event_count` comes from the trace file's own line count once B3's writer is
+ * in place; until then it stays null and readers derive the count from the
+ * member. The byte range is what matters for random access.
+ */
+function buildTracePointers(
+  archive: MultiremiSessionArchive,
+  traces: readonly SessionArchiveMemberIndexEntry[],
+): TaskTraceArchivePointer[] {
+  return traces.map((member) => ({
+    taskId: member.task_id ?? "",
+    archiveId: archive.id,
+    memberPath: member.path,
+    dataOffset: member.data_offset,
+    compressedSize: member.compressed_size,
+    uncompressedSize: member.uncompressed_size,
+    sha256: member.sha256,
+    eventCount: null,
+    runtimeId: archive.runtimeId,
+  })).filter((pointer) => pointer.taskId.length > 0);
+}
+
 export class SessionArchiveService {
   readonly config: SessionArchiveStorageConfig;
   private completionAttempts = new Map<string, Promise<MultiremiSessionArchive>>();
@@ -190,6 +264,12 @@ export class SessionArchiveService {
     archive: MultiremiSessionArchive;
     created: boolean;
   } {
+    if (!/^[a-zA-Z0-9_.:-]{1,128}$/.test(input.subjectId)) {
+      throw new SessionArchiveError("subject_id must be a plain identifier", 400, "session_archive_invalid_subject");
+    }
+    if (input.subjectKind === "issue" && !nonEmptyString(input.issueId ?? input.subjectId)) {
+      throw new SessionArchiveError("Issue archives require an Issue id", 400, "session_archive_invalid_subject");
+    }
     if (!input.sourceRevision.trim() || input.sourceRevision.length > 512) {
       throw new SessionArchiveError("source_revision must be between 1 and 512 characters");
     }
@@ -213,10 +293,15 @@ export class SessionArchiveService {
     if (Buffer.byteLength(JSON.stringify(metadata), "utf8") > 64 * 1024) {
       throw new SessionArchiveError("metadata exceeds 65536 bytes", 413, "metadata_too_large");
     }
+    const format = input.format ?? SESSION_ARCHIVE_FORMAT_V1;
+    // Reject a v1 upload before it can claim or re-label anything: `init` is
+    // the first request a daemon makes, and refusing it here (rather than at
+    // complete) is what keeps an old daemon from consuming the retry budget.
+    if (!isV2Format(format)) throw this.unsupportedFormat(format);
     const archiveId = createId("sar");
     try {
       return this.store.initSessionArchive(
-        { ...input, sha256: input.sha256.toLowerCase(), metadata },
+        { ...input, format, sha256: input.sha256.toLowerCase(), metadata },
         archiveId,
         archiveRelativePath({ ...input, archiveId }),
       );
@@ -245,6 +330,9 @@ export class SessionArchiveService {
     let archive = assertArchiveScope(this.store.getSessionArchive(archiveId), runtimeId, issueId);
     archive = this.requireWritableArchive(archive, runtimeId);
     if (archive.status === "ready") return { archive, uploadAttempt: null };
+    // Refuse before touching the retry budget: an old daemon retrying a v1
+    // container must not exhaust the attempts a v2 upload will need.
+    if (!isV2Format(archive.format)) throw this.unsupportedFormat(archive.format);
     if (archive.status === "superseded") {
       throw new SessionArchiveError("session archive has been superseded", 409, "archive_superseded");
     }
@@ -304,6 +392,7 @@ export class SessionArchiveService {
     if (archive.status === "superseded") {
       throw new SessionArchiveError("session archive has been superseded", 409, "archive_superseded");
     }
+    if (!isV2Format(archive.format)) throw this.unsupportedFormat(archive.format);
     if (!body) throw new SessionArchiveError("archive body is required");
 
     const finalPath = await this.resolveArchivePath(archive.relativePath, true);
@@ -413,6 +502,9 @@ export class SessionArchiveService {
     let archive = assertArchiveScope(this.store.getSessionArchive(archiveId), runtimeId, issueId);
     archive = this.requireWritableArchive(archive, runtimeId);
     this.assertCurrentAttempt(archive, attemptCount);
+    if (!isV2Format(archive.format) && archive.status !== "ready") {
+      throw this.unsupportedFormat(archive.format);
+    }
     if (archive.status !== "pending" && archive.status !== "uploading") {
       throw new SessionArchiveError(
         `cannot upload archive in ${archive.status} state`,
@@ -433,6 +525,7 @@ export class SessionArchiveService {
     archive = this.requireWritableArchive(archive, runtimeId);
     this.assertCurrentAttempt(archive, attemptCount);
     if (archive.status === "failed") return archive;
+    if (!isV2Format(archive.format)) throw this.unsupportedFormat(archive.format);
     if (archive.status !== "pending" && archive.status !== "uploading") {
       throw new SessionArchiveError(
         `cannot fail archive upload in ${archive.status} state`,
@@ -491,19 +584,29 @@ export class SessionArchiveService {
         "session_archive_invalid_state",
       );
     }
+    if (!isV2Format(archive.format)) throw this.unsupportedFormat(archive.format);
     const finalPath = await this.resolveArchivePath(archive.relativePath, false);
     const partialPath = this.partialPath(finalPath, attemptCount);
     try {
+      // 1. Blob digest first: the declared sha256 must match the bytes on disk.
       const actual = await this.promoteVerifiedPartial(partialPath, finalPath, archive);
+      // 2. Cross-check the container against its own index, then derive the
+      //    per-task pointers from the verified members. A tampered index fails
+      //    here and never reaches `ready`.
+      const ingest = await this.validateArchiveIngest(finalPath, archive);
+      const pointers = buildTracePointers(archive, ingest.traces);
       await this.writeManifest(finalPath, archive, actual.sizeBytes);
       await this.syncDirectory(dirname(finalPath));
-      const ready = this.store.markSessionArchiveReadyAttempt(
+      // 3. `ready` and the pointers land together; a reader can never see one
+      //    without the other.
+      const completed = this.store.completeSessionArchiveWithTracePointers(
         archive.id,
         runtimeId,
         attemptCount,
         actual.sizeBytes,
+        pointers,
       );
-      if (!ready) {
+      if (!completed) {
         const current = this.store.getSessionArchive(archive.id);
         if (
           current?.status === "ready"
@@ -518,7 +621,7 @@ export class SessionArchiveService {
           "session_archive_attempt_conflict",
         );
       }
-      return ready;
+      return completed.archive;
     } catch (error) {
       const current = this.store.getSessionArchive(archive.id);
       if (
@@ -537,6 +640,44 @@ export class SessionArchiveService {
       );
       await this.cleanupExhaustedPartials(failed);
       throw error;
+    }
+  }
+
+  /**
+   * Parse the central directory and cross-check `index.json` member by member.
+   *
+   * Every offset, size and digest in the index must match the container, and
+   * trace members are hashed from their bytes. Failure is terminal for the
+   * attempt: it throws, and the caller marks the row `failed` with the reason.
+   */
+  private async validateArchiveIngest(
+    finalPath: string,
+    archive: MultiremiSessionArchive,
+  ): Promise<ArchiveIngestVerification> {
+    const handle = await open(finalPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    try {
+      const info = await handle.stat();
+      if (!info.isFile()) {
+        throw new SessionArchiveError("archive is not a regular file", 409, "unsafe_archive_path");
+      }
+      const verification = await verifyArchiveIngest(handle);
+      if (
+        verification.index.subject.kind !== archive.subjectKind
+        || verification.index.subject.id !== archive.subjectId
+      ) {
+        throw new SessionArchiveIngestError(
+          `archive subject mismatch: index ${verification.index.subject.kind}:${verification.index.subject.id}, `
+          + `expected ${archive.subjectKind}:${archive.subjectId}`,
+        );
+      }
+      return verification;
+    } catch (error) {
+      if (error instanceof SessionArchiveIngestError) {
+        throw new SessionArchiveError(error.message, 422, error.code);
+      }
+      throw error;
+    } finally {
+      await handle.close().catch(() => {});
     }
   }
 
@@ -722,6 +863,15 @@ export class SessionArchiveService {
     const writable = this.store.touchWritableSessionArchive(archive.id, runtimeId);
     if (!writable) throw this.issueLifecycleClosed();
     return writable;
+  }
+
+  private unsupportedFormat(format: string): SessionArchiveError {
+    return new SessionArchiveError(
+      `session archive format ${format} is no longer accepted for new uploads; `
+      + `upgrade the daemon to upload ${SESSION_ARCHIVE_FORMAT_V2}`,
+      409,
+      "session_archive_format_unsupported",
+    );
   }
 
   private issueLifecycleClosed(): SessionArchiveError {

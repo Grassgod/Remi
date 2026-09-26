@@ -20,6 +20,7 @@ import {
   requireWorkspaceAdmin,
 } from "../helpers.js";
 import { SessionArchiveError } from "@multiremi/session-archive/service.js";
+import { SESSION_ARCHIVE_V2_FORMAT } from "@multiremi/contracts/session-archive.js";
 import { createId } from "@multiremi/ids.js";
 import type { RouterDeps } from "./deps.js";
 
@@ -301,7 +302,11 @@ export function registerSessionArchiveRoutes(app: Hono, deps: RouterDeps): void 
     }
     const input: InitSessionArchiveInput = {
       workspaceId: issue.workspaceId,
+      // v2 uploads are subject-scoped; this router only serves Issue subjects.
+      subjectKind: "issue",
+      subjectId: scope.issueId,
       issueId: scope.issueId,
+      format: SESSION_ARCHIVE_V2_FORMAT,
       runtimeId: scope.runtimeId,
       daemonId: runtime.daemonId?.trim() || "unbound",
       sourceRevision: typeof body.source_revision === "string" ? body.source_revision : "",
@@ -359,6 +364,8 @@ export function registerSessionArchiveRoutes(app: Hono, deps: RouterDeps): void 
     const id = createId("sar");
     const input: ReportSessionArchiveFailureInput = {
       workspaceId: issue.workspaceId,
+      subjectKind: "issue",
+      subjectId: scope.issueId,
       issueId: scope.issueId,
       runtimeId: scope.runtimeId,
       daemonId: runtime.daemonId?.trim() || "unbound",
@@ -369,7 +376,7 @@ export function registerSessionArchiveRoutes(app: Hono, deps: RouterDeps): void 
       const reported = store.reportSessionArchiveFailure(
         input,
         id,
-        `failures/${id}/sessions.tar.gz`,
+        `failures/${id}/sessions.zip`,
       );
       return c.json(
         { archive: archiveWire(reported.archive) },

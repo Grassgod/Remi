@@ -2850,6 +2850,7 @@ export class MultiremiDaemon {
     try {
       this.assertWorkspaceRootOwner();
       prepared = await prepareIssueSessionArchive(workspaceDir, {
+        issueId,
         maxSourceBytes: this.options.sessionArchiveMaxSourceBytes,
         ...(runtimeStorageRoot
           ? {

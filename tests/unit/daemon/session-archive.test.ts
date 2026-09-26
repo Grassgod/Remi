@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   mkdtempSync,
   mkdirSync,
@@ -11,43 +12,66 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { gunzipSync } from "node:zlib";
+import { open } from "node:fs/promises";
 import {
+  assertTraversalSupported,
   prepareIssueSessionArchive,
+  prepareSessionArchive,
   readIssueSessionArchiveReceipt,
-  resolveSessionArchiveFileDescriptorPath,
   writeIssueSessionArchiveReceipt,
 } from "@daemon/agent-runtime/workspace/session-archive.js";
+import { readZipCentralDirectory, readZipMemberBody } from "@shared/zip/reader.js";
+import {
+  SESSION_ARCHIVE_INDEX_MEMBER,
+  SESSION_ARCHIVE_V2_FORMAT,
+  type SessionArchiveIndex,
+} from "@multiremi/contracts/session-archive.js";
 
-describe("Issue session archive", () => {
+interface ArchiveContents {
+  members: Map<string, Buffer>;
+  index: SessionArchiveIndex;
+  bytes: Buffer;
+}
+
+async function readArchive(path: string): Promise<ArchiveContents> {
+  const bytes = readFileSync(path);
+  const handle = await open(path, "r");
+  try {
+    const directory = await readZipCentralDirectory(handle);
+    const members = new Map<string, Buffer>();
+    for (const entry of directory.entries) {
+      const member = await readZipMemberBody(handle, {
+        dataOffset: entry.dataOffset,
+        compressedSize: entry.compressedSize,
+        uncompressedSize: entry.uncompressedSize,
+      });
+      members.set(entry.path, member.bytes);
+    }
+    const index = JSON.parse(members.get(SESSION_ARCHIVE_INDEX_MEMBER)!.toString("utf8")) as SessionArchiveIndex;
+    return { members, index, bytes };
+  } finally {
+    await handle.close();
+  }
+}
+
+function sha256(value: Uint8Array | string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+describe("Session archive v2 writer", () => {
   const roots: string[] = [];
-  const supportedPlatformIt = process.platform === "linux" ? it : it.skip;
 
   afterEach(() => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
-  it("uses the native descriptor filesystem on supported daemon platforms", () => {
-    expect(resolveSessionArchiveFileDescriptorPath(17, "linux")).toBe("/proc/self/fd/17");
-    expect(() => resolveSessionArchiveFileDescriptorPath(17, "darwin")).toThrow("unsupported on darwin");
-    expect(() => resolveSessionArchiveFileDescriptorPath(17, "win32")).toThrow("unsupported on win32");
+  it("rejects Windows, where a junction is not reported as a symlink", () => {
+    expect(() => assertTraversalSupported("win32")).toThrow("unsupported on win32");
+    expect(() => assertTraversalSupported("linux")).not.toThrow();
+    expect(() => assertTraversalSupported("darwin")).not.toThrow();
   });
 
-  it("fails closed instead of emitting an empty archive on unsupported platforms", async () => {
-    if (process.platform === "linux") return;
-    const root = mkdtempSync(join(tmpdir(), "multiremi-session-archive-unsupported-"));
-    roots.push(root);
-    const home = join(root, ".multiremi", "sessions", "ises_1", "agt_1", "1", "home");
-    mkdirSync(home, { recursive: true });
-    writeFileSync(join(home, "history.jsonl"), "{\"message\":\"must-not-be-lost\"}\n");
-
-    await expect(prepareIssueSessionArchive(root)).rejects.toThrow(
-      `unsupported on ${process.platform}`,
-    );
-    expect(() => readdirSync(join(root, ".multiremi", "archive-spool"))).toThrow();
-  });
-
-  supportedPlatformIt("archives provider history deterministically without credentials or config", async () => {
+  it("archives legacy Issue sessions deterministically without credentials", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-session-archive-"));
     roots.push(root);
     const home = join(root, ".multiremi", "sessions", "ises_1", "agt_1", "1", "home");
@@ -59,52 +83,153 @@ describe("Issue session archive", () => {
     writeFileSync(join(home, "settings.json"), "{\"token\":\"DO_NOT_ARCHIVE\"}");
     writeFileSync(join(dirname(home), "meta.json"), "{\"provider\":\"codex\"}\n");
 
-    const first = await prepareIssueSessionArchive(root);
-    const second = await prepareIssueSessionArchive(root);
+    const first = await prepareIssueSessionArchive(root, { issueId: "iss_1" });
+    const second = await prepareIssueSessionArchive(root, { issueId: "iss_1" });
 
     expect(first.sourceRevision).toBe(second.sourceRevision);
     expect(first.sha256).toBe(second.sha256);
     expect(first.fileCount).toBe(3);
-    const files = readTarGzip(first.archivePath);
-    expect(files.get("sessions/ises_1/agt_1/1/home/projects/history.jsonl")?.toString()).toContain("hello");
-    expect(files.get("sessions/ises_1/agt_1/1/home/state_5.sqlite")).toEqual(Buffer.from([0, 1, 2, 3]));
-    expect(files.get("sessions/ises_1/agt_1/1/meta.json")?.toString()).toContain("codex");
-    expect([...files.keys()].some((path) => /auth\.json|config\.toml|settings\.json/.test(path))).toBe(false);
-    expect(gunzipSync(readFileSync(first.archivePath)).toString()).not.toContain("DO_NOT_ARCHIVE");
+    expect(first.metadata.format).toBe(SESSION_ARCHIVE_V2_FORMAT);
+    expect(first.metadata.subject).toEqual({ kind: "issue", id: "iss_1" });
+    const archive = await readArchive(first.archivePath);
+    expect(archive.members.get("manifest.json")?.toString()).toContain(SESSION_ARCHIVE_V2_FORMAT);
+    expect(archive.members.get("sessions/ises_1/agt_1/1/home/projects/history.jsonl")?.toString())
+      .toContain("hello");
+    expect(archive.members.get("sessions/ises_1/agt_1/1/home/state_5.sqlite")).toEqual(Buffer.from([0, 1, 2, 3]));
+    expect(archive.members.get("sessions/ises_1/agt_1/1/meta.json")?.toString()).toContain("codex");
+    expect([...archive.members.keys()].some((path) => /auth\.json|config\.toml|settings\.json/.test(path))).toBe(false);
+    expect(archive.bytes.toString("latin1")).not.toContain("DO_NOT_ARCHIVE");
   });
 
-  supportedPlatformIt("archives canonical runtime Session roots", async () => {
-    const root = mkdtempSync(join(tmpdir(), "multiremi-runtime-session-archive-"));
+  it("records offsets, sizes and digests in index.json that match the container", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-session-archive-index-"));
     roots.push(root);
-    const storageRoot = join(root, "workspaces");
-    const sessionRoot = join(storageRoot, ".runtime", "ises_2");
-    const issueRoot = join(storageRoot, "issues", "MUL-2");
+    const home = join(root, ".multiremi", "sessions", "ises_1", "agt_1", "1", "home");
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "big.jsonl"), "x".repeat(200_000));
+    writeFileSync(join(home, "empty.txt"), "");
+
+    const prepared = await prepareIssueSessionArchive(root, { issueId: "iss_1" });
+    const archive = await readArchive(prepared.archivePath);
+    const zipEntries = new Map(archive.index.members.map((entry) => [entry.path, entry]));
+    expect(archive.index.format).toBe(SESSION_ARCHIVE_V2_FORMAT);
+    expect(archive.index.subject).toEqual({ kind: "issue", id: "iss_1" });
+    // index.json is the last member, manifest.json the first.
+    expect([...archive.members.keys()].at(0)).toBe("manifest.json");
+    expect([...archive.members.keys()].at(-1)).toBe("index.json");
+
+    const handle = await open(prepared.archivePath, "r");
+    try {
+      const directory = await readZipCentralDirectory(handle);
+      // index.json is the one member the index cannot describe: its own record
+      // would have to contain the size of the bytes that describe it.
+      expect(zipEntries.has("index.json")).toBe(false);
+      expect(directory.entries.length).toBe(zipEntries.size + 1);
+      for (const entry of directory.entries) {
+        if (entry.path === "index.json") continue;
+        const indexed = zipEntries.get(entry.path);
+        expect(indexed).toBeDefined();
+        expect(indexed!.local_header_offset).toBe(entry.localHeaderOffset);
+        expect(indexed!.data_offset).toBe(entry.dataOffset);
+        expect(indexed!.compressed_size).toBe(entry.compressedSize);
+        expect(indexed!.uncompressed_size).toBe(entry.uncompressedSize);
+        expect(indexed!.sha256).toBe(sha256(archive.members.get(entry.path)!));
+      }
+    } finally {
+      await handle.close();
+    }
+
+    // A single trace member read must not exceed its compressed size plus 64 KiB.
+    const traceMember = { path: "sessions/ises_1/agt_1/1/home/big.jsonl" };
+    const big = archive.index.members.find((entry) => entry.path === traceMember.path)!;
+    const handle2 = await open(prepared.archivePath, "r");
+    try {
+      const read = await readZipMemberBody(handle2, {
+        dataOffset: big.data_offset,
+        compressedSize: big.compressed_size,
+        uncompressedSize: big.uncompressed_size,
+        sha256: big.sha256,
+      });
+      expect(read.bytesRead).toBe(big.compressed_size);
+      expect(read.bytesRead).toBeLessThanOrEqual(big.compressed_size + 64 * 1024);
+    } finally {
+      await handle2.close();
+    }
+  });
+
+  it("hoists per-session traces to archive-level trace members with task ids", async () => {
+    const storage = mkdtempSync(join(tmpdir(), "multiremi-runtime-session-archive-"));
+    roots.push(storage);
+    const issueRoot = join(storage, "issues", "MUL-2");
+    const sessionRoot = join(storage, ".runtime", "ises_2");
     const home = join(sessionRoot, "agt_2", "4", "home");
     mkdirSync(issueRoot, { recursive: true });
     mkdirSync(join(home, "projects"), { recursive: true });
+    mkdirSync(join(sessionRoot, "traces"), { recursive: true });
     mkdirSync(join(sessionRoot, ".multiremi"), { recursive: true });
     writeFileSync(join(home, "projects", "history.jsonl"), "{\"message\":\"runtime\"}\n");
     writeFileSync(join(home, "settings.json"), "DO_NOT_ARCHIVE");
-    const claudeCredentials = join(root, "claude-credentials.json");
+    writeFileSync(join(sessionRoot, "traces", "tsk_a.jsonl"), "{\"seq\":0}\n{\"seq\":1}\n");
+    writeFileSync(join(sessionRoot, "traces", "tsk_b.jsonl"), "{\"seq\":0}\n");
+    const claudeCredentials = join(storage, "claude-credentials.json");
     writeFileSync(claudeCredentials, "CLAUDE_CREDENTIALS_MUST_NOT_BE_ARCHIVED");
     symlinkSync(claudeCredentials, join(home, ".credentials.json"));
     writeFileSync(join(sessionRoot, ".multiremi", "gc.json"), "DO_NOT_ARCHIVE");
 
-    const archive = await prepareIssueSessionArchive(issueRoot, {
+    const prepared = await prepareIssueSessionArchive(issueRoot, {
+      issueId: "iss_2",
       sessionRoots: [{ sessionId: "ises_2", root: sessionRoot }],
-      sessionRootBoundary: storageRoot,
+      sessionRootBoundary: storage,
     });
-    const files = readTarGzip(archive.archivePath);
+    const archive = await readArchive(prepared.archivePath);
 
-    expect(files.get("sessions/ises_2/agt_2/4/home/projects/history.jsonl")?.toString())
+    expect(archive.members.get("sessions/ises_2/agt_2/4/home/projects/history.jsonl")?.toString())
       .toContain("runtime");
-    expect([...files.keys()].some((path) => /\.credentials\.json|settings\.json|gc\.json/.test(path))).toBe(false);
-    expect(gunzipSync(readFileSync(archive.archivePath)).toString()).not.toContain(
-      "CLAUDE_CREDENTIALS_MUST_NOT_BE_ARCHIVED",
-    );
+    expect(archive.members.has("sessions/ises_2/traces/tsk_a.jsonl")).toBe(false);
+    expect(archive.members.get("traces/tsk_a.jsonl")?.toString()).toBe("{\"seq\":0}\n{\"seq\":1}\n");
+    expect(archive.members.get("traces/tsk_b.jsonl")?.toString()).toBe("{\"seq\":0}\n");
+    const traces = archive.index.members.filter((entry) => entry.kind === "trace");
+    expect(traces.map((entry) => entry.task_id).sort()).toEqual(["tsk_a", "tsk_b"]);
+    expect(prepared.traceCount).toBe(2);
+    expect([...archive.members.keys()].some((path) => /\.credentials\.json|settings\.json|gc\.json/.test(path)))
+      .toBe(false);
   });
 
-  supportedPlatformIt("refuses unexpected symlinks", async () => {
+  it("supports chat and one-shot task subjects", async () => {
+    const storage = mkdtempSync(join(tmpdir(), "multiremi-subject-archive-"));
+    roots.push(storage);
+    const chatRoot = join(storage, ".runtime", "chat_1");
+    const taskRoot = join(storage, ".runtime", "tsk_1");
+    const workspaceRoot = join(storage, "issues", "MUL-3");
+    mkdirSync(workspaceRoot, { recursive: true });
+    mkdirSync(join(chatRoot, "traces"), { recursive: true });
+    mkdirSync(join(chatRoot, "agt_1", "1", "home"), { recursive: true });
+    mkdirSync(join(taskRoot, "traces"), { recursive: true });
+    writeFileSync(join(chatRoot, "traces", "tsk_chat.jsonl"), "{\"seq\":0}\n");
+    writeFileSync(join(chatRoot, "agt_1", "1", "home", "history.jsonl"), "chat history\n");
+    writeFileSync(join(taskRoot, "traces", "tsk_1.jsonl"), "{\"seq\":0}\n");
+
+    const chat = await prepareSessionArchive(workspaceRoot, {
+      subject: { kind: "chat", id: "chat_1" },
+      providerRoots: [{ sessionId: "chat_1", root: chatRoot }],
+      storageBoundary: storage,
+    });
+    const task = await prepareSessionArchive(workspaceRoot, {
+      subject: { kind: "task", id: "tsk_1" },
+      providerRoots: [{ sessionId: "tsk_1", root: taskRoot }],
+      storageBoundary: storage,
+    });
+    const chatArchive = await readArchive(chat.archivePath);
+    const taskArchive = await readArchive(task.archivePath);
+
+    expect(chatArchive.index.subject).toEqual({ kind: "chat", id: "chat_1" });
+    expect(chatArchive.index.members.find((entry) => entry.kind === "trace")?.task_id).toBe("tsk_chat");
+    expect(taskArchive.index.subject).toEqual({ kind: "task", id: "tsk_1" });
+    expect(taskArchive.index.members.find((entry) => entry.kind === "trace")?.task_id).toBe("tsk_1");
+    expect(taskArchive.members.get("traces/tsk_1.jsonl")?.toString()).toBe("{\"seq\":0}\n");
+  });
+
+  it("refuses unexpected symlinks in provider history", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-session-archive-link-"));
     roots.push(root);
     const home = join(root, ".multiremi", "sessions", "ises_1", "agt_1", "1", "home");
@@ -113,35 +238,51 @@ describe("Issue session archive", () => {
     writeFileSync(outside, "outside\n");
     symlinkSync(outside, join(home, "rollout.jsonl"));
 
-    await expect(prepareIssueSessionArchive(root)).rejects.toThrow("Refusing to archive symlink");
+    await expect(prepareIssueSessionArchive(root, { issueId: "iss_1" }))
+      .rejects.toThrow("Refusing to archive symlink");
   });
 
-  supportedPlatformIt("enforces the source byte limit against bytes read from regular files", async () => {
+  it("enforces the source byte limit against bytes read from regular files", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-session-archive-limit-"));
     roots.push(root);
     const home = join(root, ".multiremi", "sessions", "ises_1", "agt_1", "1", "home");
     mkdirSync(home, { recursive: true });
     writeFileSync(join(home, "rollout.jsonl"), "123456789");
 
-    await expect(prepareIssueSessionArchive(root, { maxSourceBytes: 8 }))
-      .rejects.toThrow("Issue session history exceeds 8 bytes");
+    await expect(prepareIssueSessionArchive(root, { issueId: "iss_1", maxSourceBytes: 8 }))
+      .rejects.toThrow("exceed 8 bytes");
   });
 
-  supportedPlatformIt("rejects a snapshot when a provider adds history during archive creation", async () => {
+  it("detects a file added while the archive is being written", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-session-archive-late-file-"));
     roots.push(root);
     const home = join(root, ".multiremi", "sessions", "ises_1", "agt_1", "1", "home");
     mkdirSync(home, { recursive: true });
     writeFileSync(join(home, "a-slow.jsonl"), Buffer.alloc(64 * 1024 * 1024, 0x61));
 
-    const pending = prepareIssueSessionArchive(root);
+    const pending = prepareIssueSessionArchive(root, { issueId: "iss_1" });
     await waitForArchivePartial(join(root, ".multiremi", "archive-spool"));
     writeFileSync(join(home, "late.jsonl"), "{\"message\":\"late\"}\n");
 
-    await expect(pending).rejects.toThrow("history changed while archiving");
+    await expect(pending).rejects.toThrow("changed while");
   });
 
-  supportedPlatformIt("rejects an intermediate directory replaced by a symlink while archiving", async () => {
+  it("detects a file modified while the archive is being written", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-session-archive-modified-"));
+    roots.push(root);
+    const home = join(root, ".multiremi", "sessions", "ises_1", "agt_1", "1", "home");
+    mkdirSync(home, { recursive: true });
+    const target = join(home, "a-slow.jsonl");
+    writeFileSync(target, Buffer.alloc(64 * 1024 * 1024, 0x61));
+
+    const pending = prepareIssueSessionArchive(root, { issueId: "iss_1" });
+    await waitForArchivePartial(join(root, ".multiremi", "archive-spool"));
+    writeFileSync(target, Buffer.alloc(64 * 1024 * 1024, 0x62));
+
+    await expect(pending).rejects.toThrow("changed while");
+  });
+
+  it("rejects an intermediate directory replaced by a symlink while archiving", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-session-archive-parent-race-"));
     roots.push(root);
     const outside = mkdtempSync(join(tmpdir(), "multiremi-session-archive-parent-race-outside-"));
@@ -154,15 +295,15 @@ describe("Issue session archive", () => {
     writeFileSync(join(outside, "a-slow.jsonl"), "outside\n");
     writeFileSync(join(outside, "z-history.jsonl"), "outside-secret\n");
 
-    const pending = prepareIssueSessionArchive(root);
+    const pending = prepareIssueSessionArchive(root, { issueId: "iss_1" });
     await waitForArchivePartial(join(root, ".multiremi", "archive-spool"));
     renameSync(home, movedHome);
     symlinkSync(outside, home);
 
-    await expect(pending).rejects.toThrow(/symlink|changed while archiving/);
+    await expect(pending).rejects.toThrow(/symlink|changed while/);
   });
 
-  supportedPlatformIt("refuses a symlink in the provider history parent path", async () => {
+  it("refuses a symlink in the legacy sessions parent path", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-session-parent-link-"));
     roots.push(root);
     const outside = mkdtempSync(join(tmpdir(), "multiremi-session-parent-outside-"));
@@ -171,17 +312,22 @@ describe("Issue session archive", () => {
     writeFileSync(join(outside, "sessions", "ises_1", "history.jsonl"), "outside\n");
     symlinkSync(outside, join(root, ".multiremi"));
 
-    await expect(prepareIssueSessionArchive(root)).rejects.toThrow("must not contain symlinks");
+    await expect(prepareIssueSessionArchive(root, { issueId: "iss_1" }))
+      .rejects.toThrow("must not contain symlinks");
   });
 
-  supportedPlatformIt("produces a valid empty archive when an Issue has no provider history", async () => {
+  it("produces a valid empty archive when a subject has no history", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-session-archive-empty-"));
     roots.push(root);
-    const archive = await prepareIssueSessionArchive(root);
-    const files = readTarGzip(archive.archivePath);
+    const prepared = await prepareIssueSessionArchive(root, { issueId: "iss_1" });
+    const archive = await readArchive(prepared.archivePath);
 
-    expect(archive.fileCount).toBe(0);
-    expect(files.get("manifest.json")?.toString()).toContain("multiremi.issue-sessions.v1");
+    expect(prepared.fileCount).toBe(0);
+    expect(prepared.traceCount).toBe(0);
+    expect(archive.members.get("manifest.json")?.toString()).toContain(SESSION_ARCHIVE_V2_FORMAT);
+    expect([...archive.members.keys()]).toEqual(["manifest.json", "index.json"]);
+    // The index describes the manifest; it cannot describe its own bytes.
+    expect(archive.index.members.map((entry) => entry.path)).toEqual(["manifest.json"]);
   });
 
   it("persists and reads an atomic server-verified receipt", async () => {
@@ -206,62 +352,33 @@ describe("Issue session archive", () => {
     });
   });
 
-  supportedPlatformIt("rejects a staging directory symlink or non-directory", async () => {
+  it("rejects a staging directory symlink or non-directory", async () => {
     const symlinkRoot = mkdtempSync(join(tmpdir(), "multiremi-session-staging-link-"));
     roots.push(symlinkRoot);
     const outside = mkdtempSync(join(tmpdir(), "multiremi-session-staging-outside-"));
     roots.push(outside);
     mkdirSync(join(symlinkRoot, ".multiremi"), { recursive: true });
     symlinkSync(outside, join(symlinkRoot, ".multiremi", "archive-spool"));
-    await expect(prepareIssueSessionArchive(symlinkRoot)).rejects.toThrow("must not contain symlinks");
+    await expect(prepareIssueSessionArchive(symlinkRoot, { issueId: "iss_1" }))
+      .rejects.toThrow("must not contain symlinks");
 
     const fileRoot = mkdtempSync(join(tmpdir(), "multiremi-session-staging-file-"));
     roots.push(fileRoot);
     mkdirSync(join(fileRoot, ".multiremi"), { recursive: true });
     writeFileSync(join(fileRoot, ".multiremi", "archive-spool"), "not a directory");
-    await expect(prepareIssueSessionArchive(fileRoot)).rejects.toThrow("non-directories");
+    await expect(prepareIssueSessionArchive(fileRoot, { issueId: "iss_1" }))
+      .rejects.toThrow("non-directories");
   });
 });
 
-function readTarGzip(path: string): Map<string, Buffer> {
-  const tar = gunzipSync(readFileSync(path));
-  const files = new Map<string, Buffer>();
-  let offset = 0;
-  let paxPath: string | null = null;
-  while (offset + 512 <= tar.length) {
-    const header = tar.subarray(offset, offset + 512);
-    if (header.every((byte) => byte === 0)) break;
-    const name = tarString(header.subarray(0, 100));
-    const size = Number.parseInt(tarString(header.subarray(124, 136)).trim() || "0", 8);
-    const type = String.fromCharCode(header[156] ?? 0);
-    const bodyStart = offset + 512;
-    const body = tar.subarray(bodyStart, bodyStart + size);
-    if (type === "x") {
-      const record = body.toString("utf8");
-      const match = record.match(/ path=([^\n]+)\n/);
-      paxPath = match?.[1] ?? null;
-    } else {
-      files.set(paxPath ?? name, Buffer.from(body));
-      paxPath = null;
-    }
-    offset = bodyStart + Math.ceil(size / 512) * 512;
-  }
-  return files;
-}
-
-function tarString(value: Buffer): string {
-  const zero = value.indexOf(0);
-  return value.subarray(0, zero >= 0 ? zero : value.length).toString("utf8");
-}
-
 async function waitForArchivePartial(spool: string): Promise<void> {
-  for (let attempt = 0; attempt < 2_000; attempt++) {
+  for (let attempt = 0; attempt < 5_000; attempt++) {
     try {
       if (readdirSync(spool).some((name) => name.endsWith(".partial"))) return;
     } catch {
-      // The initial source scan creates the spool only after it completes.
+      // The spool directory only appears once the initial scan finishes.
     }
     await Bun.sleep(1);
   }
-  throw new Error("Timed out waiting for session archive creation to start");
+  throw new Error("Timed out waiting for the session archive writer to start");
 }
