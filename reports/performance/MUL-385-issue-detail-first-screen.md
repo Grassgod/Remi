@@ -4,7 +4,7 @@
 - 本单：MUL-385
 - 生成时间：2026-09-26T10:14:36.760Z
 - 改前 commit：`a1e6162312b34d272e22b633d185f014f535f23e`（本分支的父提交）
-- 实测 commit：`aeda289197252a86aad1492f60c8be904eaef6a9`。两阶段都用同一份 harness 与同一个 seed 在这个提交上跑；报告 JSON 里 `after.commit` 字段记的是提交前的工作树版本，两种情况下被测实现都是本提交的实现。这里不写 head SHA（下一次提交就会过期），复核不变量用 `git diff --name-only aeda2891..HEAD`，应只列出本报告。
+- 实测 commit：`aeda289197252a86aad1492f60c8be904eaef6a9`。两阶段都用同一份 harness 与同一个 seed 在这个提交上跑；报告 JSON 里 `after.commit` 字段记的是提交前的工作树版本，两种情况下被测实现都是本提交的实现。这里不写 head SHA（下一次提交就会过期），复核不变量用 `git diff --name-only aeda2891..HEAD -- packages/`，应为空：之后的提交只改报告与 golden 元数据，不改被测实现。
 - 运行机器：linux x64，64 vCPU，248 GiB RAM
 - Bun：1.3.14（Node v24.3.0）
 - 数据库：**SQLite（in-memory）+ 模拟过桥字节**。本机无 PostgreSQL 服务、无 docker 权限，`MULTIREMI_TEST_POSTGRES_URL` 未设置，因此按 MUL-176 / MUL-357 的降级口径采集，报告口径声明为「SQLite + 模拟过桥字节」。
@@ -63,7 +63,7 @@ seed 固定（id 由种子 PRNG 生成、时间戳与 cursor 由种子时钟生�
 | 7 | `hydrateIssue` 自身 | 每次 hydrate 会带一条 label join | **保留**。这是 `MultiremiIssue.labels` 的契约，`/api/multiremi/issues/:id`、列表、搜索结果都依赖它。本单只去掉多余的 hydrate 次数，不再改 hydrate 的内容。 |
 | 8 | `GET /api/issues/:id/comments` | 改前 `dbq=6`：评论全量查询 1 条、批量 hydration 2 条、外加 4 条 `SELECT id` 存在性复读（来自 `listLabelsForIssue` 的校验） | **未专门改 `comments`**（前端首屏不调用它），只测基线留档。改后变 5 条是第 6 条附带的效果：`hydrateIssue` 不再做存在性复读。改后 p95 与改前同一量级，响应逐字节不变。 |
 | 9 | `POST`/`PATCH` 等写路由上的同类 `getIssue` 用法 | 不在本单范围 | **不修**。写路由不是首屏路径，改动会扩大评审面；已按需求只处理三个首屏接口。 |
-| 10 | 鉴权链（`verifyAccessToken` + `denyCurrentUserWorkspaceAccess`） | 用户 PAT 每请求固定 4 条语句（token 3 条 + 成员 1 条） | **不修**。任务要求只核查、记录查询数，不削弱鉴权。数字见下一节。 |
+| 10 | 鉴权链（`verifyAccessToken` + `denyCurrentUserWorkspaceAccess`） | 用户 PAT 每请求固定 3 或 4 条语句（token 3 条，登录态 PAT 再加成员 1 条，见下一节） | **不修**。任务要求只核查、记录查询数，不削弱鉴权。数字见下一节。 |
 
 ## 鉴权开销（只核查，未改动）
 
@@ -73,6 +73,23 @@ seed 固定（id 由种子 PRNG 生成、时间戳与 cursor 由种子时钟生�
 - 用户 PAT：`issue detail` 8、`sessions` 8、`timeline @default limit=40` 10、`comments (baseline only)` 9
 - 用户 PAT 比 master token 多 4 条语句：`verifyAccessToken` 的 3 条（`token_hash` 查询、`last_used_at` 写入、按 id 复读）和 1 条工作区成员查询。`denyCurrentUserWorkspaceAccess` 自身不查库。这与 MUL-385 的改动无关，是本单要保留的语义。
 - 备注：user PAT adds verifyAccessToken (3 statements: hash lookup, last_used_at write, re-read) and one workspace membership read; the master token adds none. Unchanged by MUL-385 - recorded so a later drift is visible.
+- 成员查询只对「登录态 PAT」发生（`auth-guards.ts` 里 `humanPat`：`userId !== "local"` 或 `purpose === "session"`）。harness 的 PAT 属于这一支，所以是 +4。迁移期 `userId === "local"` 的非 session PAT 不查成员，只有 +3。因此两个环境对照时，±1 的差异来自 token 分支，不是回归。
+
+## 与生产 `dbq` 的对照（改前）
+
+生产值取自 209 的 Server-Timing（改前，v0.2.82）。它与本 fixture 的差值可以逐条对上（QA 复核实测，误差 0）：
+
+| 路由 | 生产 | fixture（master token） | 差值拆解 |
+| --- | ---: | ---: | --- |
+| `GET /api/issues/:id` | 27 | 44 | 鉴权 +3，子 issue −8，依赖 −12 |
+| `GET /api/issues/:id/sessions` | 10+2N | 7+2N | 鉴权 +3 |
+| `GET /api/issues/:id/timeline` | 19 | 16 | 鉴权 +3 |
+| `GET /api/issues/:id/comments` | 9 | 6 | 鉴权 +3 |
+
+- 鉴权 +3：生产那只 token 走的是 `userId === "local"` 的 PAT 分支（上一节）。
+- 子 issue：改前 `listChildIssues` 对每个子 issue 调单数 `hydrateIssue`，每个付 `SELECT id` 和 label join 共 2 条。fixture 有 4 个子 issue，共 8 条。`parent_issue_id` 查询本身只有 1 条，与子 issue 数无关。
+- 依赖：每条依赖 6 条，即 `listIssueDependencies` 自身 1 条，再加 `hydrateIssueDependency` 对两端各 `getIssue` 一次（每次 3 条）。2 条依赖共 12 条。
+- 把 fixture 改成生产形状（无子 issue、无依赖），用 `userId === "local"` 的 PAT 实测，`/api/issues/:id` 为 27，与生产一致。改后子 issue 与依赖两项不再发生（路由不再加载 children / dependencies）；鉴权的 3 或 4 条保持不变。
 
 ## 复现命令
 
