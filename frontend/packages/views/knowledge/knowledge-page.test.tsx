@@ -661,6 +661,34 @@ describe("KnowledgePage", () => {
   }
 
   /**
+   * The tab badge keeps the baseline meaning — the size of the raw input list —
+   * rather than becoming the size of the current server `q` result (MUL-386).
+   */
+  it("keeps the Raw count badge at the unfiltered list size while searching", async () => {
+    const user = userEvent.setup();
+    state.submissions = [
+      submission({ id: "ksub-a", body_excerpt: "first" }),
+      submission({ id: "ksub-b", body_excerpt: "second" }),
+      submission({ id: "ksub-c", body_excerpt: "third" }),
+    ];
+    state.submissionsByQuery.only = [state.submissions[0] as never];
+
+    renderPage();
+    await user.click(screen.getByRole("tab", { name: /Raw/ }));
+    const tab = () => screen.getByRole("tab", { name: /Raw/ });
+    await waitFor(() => expect(tab()).toHaveTextContent("3"));
+
+    await user.type(screen.getByPlaceholderText("Search source, issue, agent, or proposed target..."), "only");
+    await waitForServerQuery("only");
+    // One row rendered (the excerpt shows in the row and in its tooltip content),
+    // badge still 3.
+    expect(screen.getAllByText("first").length).toBeGreaterThan(0);
+    expect(screen.queryByText("second")).not.toBeInTheDocument();
+    expect(screen.queryByText("third")).not.toBeInTheDocument();
+    expect(tab()).toHaveTextContent("3");
+  });
+
+  /**
    * QA regression (MUL-386): the Raw pane used to render the server `q` result
    * as soon as it landed, so a row that only matched issue key or agent name —
    * fields the server predicate deliberately does not join — disappeared.
