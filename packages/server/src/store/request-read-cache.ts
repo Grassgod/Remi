@@ -23,10 +23,10 @@ import { AsyncLocalStorage } from "node:async_hooks";
  * - writes performed through the store invalidate the rows of the table they wrote
  *   (`invalidateTable`), so a write inside the scope can never be followed by a stale read of the
  *   rows it changed, while unrelated cached rows survive for the rest of the request;
- * - inside a transaction only rows read since that transaction began are served. They stay cached
- *   after it commits, so the rest of the request sees the rows as they were under the lock; a
- *   transaction that fails (including at COMMIT) clears the cache, which may hold its uncommitted
- *   rows.
+ * - inside a transaction only rows read since its latest lock (or, before any lock, since it
+ *   began) are served. They stay cached after it commits, so the rest of the request sees the rows
+ *   as they were under the lock; a transaction that fails (including at COMMIT) clears the cache,
+ *   which may hold its uncommitted rows.
  *
  * Outside a transaction a cached row can be as old as the start of the request. That is the same
  * window as reading a row once and using it for the rest of the request, which is what the store
@@ -45,7 +45,10 @@ export interface RequestReadCache {
 const storage = new AsyncLocalStorage<MapReadCache>();
 
 class MapReadCache implements RequestReadCache {
-  /** `generation` is the transaction an entry was stored in; bumped as each outermost one begins. */
+  /**
+   * `generation` is the stretch of a transaction an entry was stored in: bumped as each outermost
+   * transaction begins and again after each lock it takes.
+   */
   private readonly entries = new Map<string, { value: unknown; generation: number }>();
   private generation = 0;
   private transactionDepth = 0;
@@ -62,6 +65,9 @@ class MapReadCache implements RequestReadCache {
   leaveTransaction(committed: boolean): void {
     this.transactionDepth -= 1;
     if (!committed) this.entries.clear();
+  }
+  lockTaken(): void {
+    if (this.transactionDepth > 0) this.generation += 1;
   }
   set<T>(key: string, value: T): void {
     this.entries.set(key, { value, generation: this.generation });
@@ -103,6 +109,16 @@ export function withRequestReadCache<T>(fn: () => T): T {
   return storage.run(new MapReadCache(), fn);
 }
 
+/**
+ * Record that the running transaction just took a lock. Rows it read before the lock are not
+ * served after it, so a re-read under the lock always reaches the database — even if a read of
+ * the same row is later moved above the lock. The store's lock helpers call this right after
+ * their locking statement. No-op outside a scope or a transaction.
+ */
+export function markRequestReadCacheLockTaken(): void {
+  storage.getStore()?.lockTaken();
+}
+
 /** Forget everything cached in the current scope. No-op outside a scope. */
 export function invalidateRequestReadCache(): void {
   storage.getStore()?.clear();
@@ -137,8 +153,9 @@ function writtenTable(sql: string): string | null {
  * Transactions are where the store takes its locks and re-reads rows under them (the heartbeat
  * re-reads its Runtime row after the workspace lifecycle lock, so a Runtime deleted meanwhile is
  * reported gone). Serving that re-read from a row cached before the lock would undo the lock.
- * Rows the transaction itself read are served, which relies on the store's rule that a
- * transaction takes its lock before it reads what the lock protects.
+ * Rows the transaction read after its latest lock are served: the lock helpers call
+ * {@link markRequestReadCacheLockTaken}, so this does not depend on every transaction taking its
+ * lock before its first read.
  */
 export function invalidatingDatabase<T extends object>(database: T): T {
   const interceptStatement = (statement: unknown, sql: string): unknown => {

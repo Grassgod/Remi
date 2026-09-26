@@ -2,7 +2,11 @@ import { createHash } from "node:crypto";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { parseJson, toJson } from "@multiremi/store/helpers.js";
 import type { StoreContext } from "@multiremi/store/context.js";
-import { activeRequestReadCache, cacheKey } from "@multiremi/store/request-read-cache.js";
+import {
+  activeRequestReadCache,
+  cacheKey,
+  markRequestReadCacheLockTaken,
+} from "@multiremi/store/request-read-cache.js";
 import {
   isRuntimeEffectivelyOnline,
   withRuntimeLiveness,
@@ -102,7 +106,10 @@ export class AgentPluginsRepo {
 
   constructor(private readonly ctx: StoreContext) {}
 
-  /** Must be called inside a database transaction. */
+  /**
+   * Must be called inside a database transaction. The per-request read cache serves none of the
+   * rows read before the lock.
+   */
   lockAgentPluginWorkspace(workspaceId: string): void {
     const now = nowIso();
     this.ctx.db.run(
@@ -114,6 +121,7 @@ export class AgentPluginsRepo {
       "UPDATE multiremi_agent_plugin_workspace_locks SET updated_at = ? WHERE workspace_id = ?",
       [now, workspaceId],
     );
+    markRequestReadCacheLockTaken();
   }
 
   listAgentPlugins(

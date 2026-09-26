@@ -15,6 +15,7 @@ import { createId, nowIso } from "@multiremi/ids.js";
 import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import { createLogger } from "@shared/logger.js";
 import { INBOX_ROUTING, inboxRouteFor } from "@multiremi/store/inbox-routing.js";
+import { markRequestReadCacheLockTaken } from "@multiremi/store/request-read-cache.js";
 import type {
   AddSessionParticipantInput,
   CreateChatSessionInput,
@@ -576,7 +577,9 @@ export class StoreContext {
    * Serialize workspace-scoped Runtime lifecycle mutations across SQLite and
    * Postgres. Daemon retirement holds this row lock while it re-reads its plan
    * and removes Runtime-affine state; every write that can add such state must
-   * take the same lock and revalidate after acquiring it.
+   * take the same lock and revalidate after acquiring it. The per-request read
+   * cache serves none of the rows read before the lock, so that revalidation
+   * always reaches the database.
    *
    * The caller must already be inside a database transaction.
    */
@@ -585,6 +588,7 @@ export class StoreContext {
       "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
       [workspaceId],
     );
+    markRequestReadCacheLockTaken();
   }
 
   /** Serialize repository topology and project repository-resource mutations. */

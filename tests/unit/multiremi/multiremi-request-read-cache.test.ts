@@ -19,7 +19,10 @@ import {
   withRequestReadCache,
   invalidatingDatabase,
   cacheKey,
+  markRequestReadCacheLockTaken,
 } from "@multiremi/store/request-read-cache.js";
+import type { StoreContext } from "@multiremi/store/context.js";
+import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -224,6 +227,56 @@ describe("request-scoped read cache", () => {
       // One read before the transaction, one inside it; the second read inside it and the one
       // after it are served from the cache.
       expect(reads()).toBe(2);
+    });
+
+    it("never serves a row read before a lock to a read after it", () => {
+      // The store's rule is "lock first, then read what the lock protects". The cache must not
+      // depend on it: if a read is moved above the lock, the re-read under the lock still has to
+      // reach the database.
+      const { raw, wrapped, read, reads } = cachedTable();
+      withRequestReadCache(() => {
+        const seen = wrapped.transaction(() => {
+          const beforeLock = read();
+          raw.run("UPDATE t SET v = 'after' WHERE id = 'a'");
+          markRequestReadCacheLockTaken();
+          return [beforeLock, read(), read()];
+        })();
+        expect(seen).toEqual(["before", "after", "after"]);
+      });
+      // Before the lock, under it, then served from the cache for the rest of the lock.
+      expect(reads()).toBe(2);
+    });
+
+    it("re-reads a Runtime under each store lock even when the transaction read it first", () => {
+      const store = createStore();
+      store.ensureLocalWorkspace();
+      const { db: storeDb, ctx } = store as unknown as { db: SqlDatabase; ctx: StoreContext };
+      const locks = {
+        workspaceRuntimeLifecycle: () => ctx.lockWorkspaceRuntimeLifecycle("local"),
+        agentPluginWorkspace: () => ctx.agentPlugins().lockAgentPluginWorkspace("local"),
+      };
+      for (const [name, lock] of Object.entries(locks)) {
+        const id = `rt_relock_${name}`;
+        store.registerRuntime({
+          id,
+          name,
+          provider: "claude",
+          daemonId: `daemon-${name}`,
+          workspaceId: "local",
+          ownerId: "local",
+          status: "online",
+        });
+        withRequestReadCache(() => {
+          const seen = storeDb.transaction(() => {
+            const beforeLock = store.getRuntimeLite(id);
+            db!.run("DELETE FROM multiremi_runtimes WHERE id = ?", [id]);
+            lock();
+            return { beforeLock, underLock: store.getRuntimeLite(id) };
+          })();
+          expect(seen.beforeLock, name).not.toBeNull();
+          expect(seen.underLock, name).toBeNull();
+        });
+      }
     });
 
     it("drops what a failed transaction read", () => {
