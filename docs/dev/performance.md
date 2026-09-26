@@ -99,7 +99,29 @@ bun run tests/manual/smoke-request-metrics.ts
 
 [frontend/scripts/perf/page-speed.ts](../../frontend/scripts/perf/page-speed.ts) 用仓库既有的 `@playwright/test` 打开主要页面，记录每页的就绪时间、API 调用数、API 字节、最慢 API 及 `Server-Timing`。它**不是** e2e 套件，位于 `frontend/e2e` 之外，不会被默认 e2e 扫到；依赖已有 `@playwright/test`，不新增依赖。
 
-**只读保证**：脚本在 `page.route('**/api/**')` 里 abort 所有非 GET/HEAD 请求，并把这些请求按 `method + 脱敏 path` 记进 `blockedWrites`，所以它可以在生产上对着真实账号跑。打开 inbox 页面本身不会写数据（实测 0 个写请求）；点击某一行会触发 `POST /api/inbox/:id/read`，只读探针会把它拦下来并记录尝试次数，**不会**真的标记已读。每次运行还会先做一次护栏自检（对 `/api/inbox/unread-count` 发 POST，必须被拦截），自检结果是报告的一部分——否则“页面从未写数据”和“护栏静默失效”无法区分。
+**只读保证**：脚本在 `page.route('**/api/**')` 里阻止所有非 GET/HEAD 请求，所以它可以在生产上对着真实账号跑。打开 inbox 页面本身不会写数据（实测 0 个写请求）；点击某一行会触发 `POST /api/inbox/:id/read`。每次运行还会先做一次护栏自检（对 `/api/inbox/unread-count` 发 POST，必须被阻止），自检结果是报告的一部分——否则“页面从未写数据”和“护栏静默失效”无法区分。
+
+### 允许表：一个被 fulfill 而不是被 abort 的端点
+
+写请求只有一条被放行（允许表），读响应有两处改写（`meta.inboxResponseRewrites`）：
+
+| 改写 | 作用 | 为什么 |
+| --- | --- | --- |
+| `target-injection` | 在 deeplink 轮把探测到的目标条目并入浏览器收到的**无 cursor 第一页**响应，并从有 cursor 的页里删掉它 | 生产首页只覆盖数小时，只看首页会让 deeplink 整天选不到目标；而把翻页放进测量窗口会让 `readyMs` 混入「目标有多旧」（MUL-384 `cmt_lkj0gsgtkfey`）。并入位置不影响渲染顺序：页面按 `created_at` 分组排序 |
+| `read-state` | 把已桩过的 id 标成 `read: true` | `useMarkInboxItemsRead` 没有 `onSuccess`，只有 refetch 回来的 `read` 为真，重试循环才会停 |
+
+[frontend/scripts/perf/lib/stub-writes.ts](../../frontend/scripts/perf/lib/stub-writes.ts) 维护一张显式允许表，目前只有一项：
+
+| 方法 | path | 处理 | 为什么 |
+| --- | --- | --- | --- |
+| `POST` | `/api/inbox/:id/read` | 在浏览器内 `route.fulfill(200)`，响应体取本次 context 见过的该 item 且 `read: true` | 点中任何未读通知都会自动触发它；abort 之后前端会 `POST → abort → 回滚 → refetch → 再 POST` 循环 55–100 次，把 `?issue=` 的提交从 181ms 拖到约 5s（209 实测，MUL-384 `cmt_cxrxocj4vp3q`） |
+
+- **生产仍然零写入**：`fulfill` 不出浏览器。允许表改变的是「一律 abort」这个手段，不是「生产只读」这个目的。
+- 同一 context 内改写 `GET /api/inbox/page*` 与 `GET /api/inbox` 的响应：先 `injectInboxTarget`（仅 deeplink 轮），再 `rewriteInboxReadState`。`unread-count` / `summary` 不改写（只影响角标）。两个改写都是纯函数、都不修改输入对象，各有单测。deeplink 轮对所有 inbox 读态请求一律 `route.fetch()` + fulfill（不只等到有桩之后），这样每轮的固定开销一致；其他场景保持原行为。
+- **计数分列**：被 abort 的仍计入 `blockedWrites`（MD/HTML 列名「拦截写请求」），被允许表接管的计入 `stubbedWrites`（「桩写请求」），两者不混。每轮与聚合严格相等（读 collectors 之前先冻结页面路由）。
+- **新自检**：每轮 `stubbedWrites` 不得超过 `2 ×` 目标所在行的未读 id 数（一次成功 + 至多一次重试）。超过说明改写没生效、循环仍在，该轮记 `error: stub-loop-not-terminated` 并结束。非 deeplink 轮的未读数为 0，因此不得出现桩写请求。
+- **验收口径（§2.9 修订）**：`blockedWrites` 全部为 abort；`stubbedWrites` 只含 `/api/inbox/:id/read`，且每轮次数不超过 `2 × 未读 id 数`。`meta.stubbedWriteAllowList` 记录当前允许表。
+- URL 断言窗口 10s，只用于检查「点对了行」，**不参与 readyMs**；每轮记 `urlCommitMs`。
 
 **凭证**：token 只从 `MULTIREMI_QA_WEB_TOKEN` 读取，写进目标 origin 的 `localStorage.multimira_token`，不打印、不落盘、不进 argv、不进报告。输出文件里只有 method、脱敏 path、status、耗时和字节。
 
@@ -130,7 +152,107 @@ bun run frontend/scripts/perf/page-speed.ts \
 
 今天的生产基线是 [reports/performance/MUL-367-page-speed-baseline-2026-09-24.json](../../reports/performance/MUL-367-page-speed-baseline-2026-09-24.json)（原始数据）、同名 `.md`（表格）与同名 `.html`（自包含单文件，可直接挂到 Issue 评论）。运行机器、Chromium、API 版本与护栏自检结果都写在报告的 `meta` 里。**明天复跑必须在同一台机器上**，否则机器差异会混进前后对比。
 
-采集当天生产本身处于劣化状态：运行前后各 7 次 `/api/config` 的中位耗时是 1886 ms / 3735 ms（同一窗口里还混着 1.2–2.7 s 的样本，说明不是链路固定延迟，而是服务端在排队）。11 个页面里有 1 次 `issues` 加载在 60 s 就绪等待内没有满足口径，报告把它标出来且不计入中位数。因此这组数字是**劣化态记录**，既不能当稳态性能，也不适合直接拿来定优化目标。改报告格式时用 `--render-only <json>` 重渲染，不必重新采集。
+采集当天生产本身处于劣化状态：运行前后各 7 次 `/api/config` 的中位耗时是 1886 ms / 3735 ms（同一窗口里还混着 1.2–2.7 s 的样本，说明不是链路固定延迟，而是服务端在排队）。11 个页面里有 1 次 `issues` 加载在 60 s 就绪等待内没有满足口径，报告把它标出来且不计入中位数。因此这组数字是**劣化态记录**，既不能当稳态性能，也不适合直接拿来定优化目标。改报告格式时只能重新采集——MUL-384 重写后的脚本不再提供「只重渲染已有 JSON」的开关，JSON/MD/HTML 三份产物是一次运行一起写出的。
+
+## 内容到最终位置的口径（MUL-384 / MUL-383 S1）
+
+MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内容先出现、随后被顶开的过程。[frontend/scripts/perf/page-speed.ts](../../frontend/scripts/perf/page-speed.ts) 现在按父单（MUL-383）口径重写：终点是**内容停在最终位置**，跳动单独计数。MUL-367 的 profile（11 个页面）保留为同一脚本里的列表场景。
+
+### DOM 契约：五个属性
+
+应用侧只加属性、不改行为。前四个由本单打标，第五个由 S2 的 `useAnchoredReveal` 写入：
+
+| 属性 | 宿主 | 取值 | 写入方 |
+| --- | --- | --- | --- |
+| `data-perf-scroll` | 被测量的滚动根：issue 详情、chat | `issue-detail` \| `chat` | S1 打标 |
+| `data-perf-item` | 真实数据行（timeline 行、chat 消息、issue 行、board card、inbox 行、子单行） | `comment` \| `activity` \| `resolved-bar` \| `message` \| `issue` \| `inbox` \| `sub-issue` | S1 打标 |
+| `data-perf-key` | 同一行 | 行自身的稳定 id | S1 打标 |
+| `data-perf-anchor` | 该页面口径的终点元素 | `latest-comment` \| `agent-stream` \| `target-comment` \| `latest-message` | S1 打标 |
+| `data-perf-state` | `data-tab-scroll-root` | `pending` \| `ready` \| `ready-forced` | **S2 的 `useAnchoredReveal`**，S1 不写 |
+
+`data-perf-state` 是**只读**契约：S1 应用侧不写它（没有 hook 就写死 `ready` 是假数据，会让 S7 的断言空过）。记录器在浏览器内用 `MutationObserver` 抓它的变化时间戳，不从 Node 侧轮询；属性不存在时 `appReadyMs` 为 `null`，且**永远不作为终点**。S2 无权改名、改宿主或改取值。
+
+### 判定口径
+
+| 项 | 口径 |
+| --- | --- |
+| 终点 | 详情/深链：anchor（agent-stream 优先，否则最新一条评论；深链为 target-comment）可见 + 骨架 0 + 之后 500 ms 无移动帧。列表：区域内无骨架且至少 1 个真实行可见 + 500 ms 安静。chat：最新一条消息可见 + 500 ms 安静 |
+| 超高行 | 行高 > 根高时，`covers`（top ≤ 1 且 bottom ≥ 根高 − 1）或 `bottomVisible`（0 ≤ bottom ≤ 根高 + 1）任一成立即算可见；`target-comment` 为 `topVisible \| (tall && covers)`，因为 `scrollIntoView({ block: "center" })` 会把超高目标的顶边推出视口。每轮在就绪帧记原始 `anchorRectAtReady: { top, bottom, height, rootHeight }`（根相对坐标，只记数不下结论） |
+| 列表页滚动根 | 11 个列表页既没有 `[data-tab-scroll-root]` 也没有自己 `data-perf-scroll`，两种模式都以 `[data-slot="sidebar-inset"]`（MUL-367 的 `READY_SELECTOR`）为根；空 chat 的 legacy heading 规则也用这个回退根（它渲染 `EmptyState`，没有 chat 滚动根） |
+| 跳动 | 首次出现真实内容之后，相邻帧中同一 `data-perf-key` 的可见行位移 > 1 px（或 scrollTop 位移 > 1 px）即移动帧；连续移动帧合并为**一次**跳动。`jumps = 0` 才合格 |
+| readyMs | 取 500 ms 安静窗口的**起点**，不是终点 |
+| 超时 | 单轮 20 s；超时轮记 `readyTimeout`，**不进任何分位数** |
+| 分位数 | 最近秩法，与 API baseline / `bench-task-list-pagination.ts` 一致 |
+| 冷启动 | `page.goto` 整页加载，全新 context |
+| 应用内切页 | 先 hover 150 ms，再真实 click；`navStart` 取**页面内记录的 click 时间戳**（避免 CDP 往返误差） |
+| 串行深度 | `wave = 1 + max(wave(p) \| p.responseEnd ≤ start + 8ms)`；`Server-Timing` 从 resource timing 同源读取 |
+| 深链目标 | 冷启动与应用内切页用**同一条**首屏通知。候选从探测窗口（最多 `--inbox-probe-pages` 页 × `limit=100`）取，按 `issue_id` 归并（`?issue=` 命中的是该 issue 最新一条）；合格项必须非 ledger 类且同时有 `details.comment_id` 与 `details.issue_session_id`，其中当前没有 running task 的 issue 优先，其次按 API 顺序。选中的条目会被并入浏览器的第一页（见下节），所以四种场景测的都是「目标在首屏」。记 `{ issueId, issueIdentifier, inboxItemId, commentId, issueHasRunningTask, inboxApiPage, rowIndex, targetRead }`；都选不到则 `skipped: no-eligible-inbox-item`。`--inbox-item` 必须在探测窗口内，否则 `skipped: inbox-item-not-found-within-probe-depth` |
+| 深链 URL | `/{slug}/inbox?issue=<issueId>&session=<issue_session_id>`。只带 `issue_id` 的通知走 `?issue=`（`inboxItemSelectionKind`），`?item=` 只属于 ledger 类通知，而 ledger 渲染 `AutopilotRunReport` 不测 timeline |
+| 深链 warm | DOM 行序由 `inboxDomRowIndex`（`lib/selectors.ts`）给出：它 import `core/inbox/grouping.ts` 的 `deduplicateInboxItems → filterInboxItemsBySource(…, "all") → groupInboxItemsByDate`，取 `flatMap(g => g.entries)` 的下标。**API 数组下标不是 DOM 行号**：生产上首页 50 条经归并只剩 8 行，成功的 autopilot run 会合并成一行。**行号在点击前一刻重算**，且算在「真实第一页 + 注入目标」这份快照上——那才是浏览器渲染的列表。目标不在当前列表里时记 `skipped: warm-target-not-in-list`。点击后等 URL 的 `issue` 参数变成选中 issueId（`replace` 在 `startTransition` 里，异步提交，轮询上限 10s）并记 `urlCommitMs`；不匹配则立刻结束该轮并写 `error: deeplink warm: url issue=<实际值> expected <id>`。被点中行的文本记入 `clickedRowText`，用来核对点的就是目标 issue |
+| 深链目标读态 | 候选在同等条件下**优先选未读**（所在分组条目里至少一条 `read=false`）。未读目标会走「自动已读成功 → refetch → 渲染」这条真实用户最常见的路径，而允许表保证它可完成；报告记 `targetRead` 与 `targetGroupHasUnread` |
+| 目标深度 | `targetDepth: { timelineRequests, targetIndexFromLatest }`，从本轮已捕获的 `/comments` 响应计算，不额外预查 |
+
+**warmup 也挂护栏**：`--warmup` 会访问每个被测路由，其中包含深链的 `?issue=` URL，而该 URL 会自动把目标标为已读。warmup 页与测量轮使用同一套护栏与允许表，否则预热会改变后续测量读到的 fixture 状态。
+
+参数：`--base-url`、`--rounds`（默认 3）、`--window peak|offpeak`、`--name`、`--out`、`--compare`、`--selectors auto|contract|legacy`、`--only <prefix>`、`--warmup`、`--issue-short`（默认 `iss_in41j1x1dq66`，MUL-67）、`--issue-long`（默认 `iss_enbrunyg86jc`，MUL-70）、`--issue-running`（默认现场选取，排除 MUL-383 `iss_j67lb0r8djw4` 及其全部子单；选不到则 `skipped: all-running-issues-in-mul383-family`）、`--inbox-item`（默认在探测窗口内自动选取）、`--inbox-probe-pages`（默认 10）。`targetSelection` 取 `auto | pinned | none`。
+
+**测速数据**：cold 与 warm 用同一 fixture，且必须是**非 archived、非 cancelled** 的 issue，否则默认 `/issues` 列表不渲染 `ListRow`，warm 找不到入口。报告标注实际评论条数（按 timeline 里 `type === "comment"` 计数；`timelineEntries` 另记条目总数，两者不同）。warm 目标行不在首批渲染里时记 `skipped: warm-target-not-in-list`，不改走搜索或 archived 手风琴（那些不是 S3 的验收入口）。参考量级：short ≤ 20 条、long ≥ 41 条（把「首页 40 条 + has_more」的分页路径踩到）；MUL-249 之后打开路径成本与总条数基本无关，≥200 的口径由 S7 的 250 条 fixture 与 S6 深链覆盖。
+
+**fixture 选择约束**：非 archived、非 cancelled，且 `completed_at` 为空或远新于归档 TTL。`issues-repo.ts` 的 `archiveEligibleIssues` 会把 `completed_at` 超过 TTL（约 72h）的 done / cancelled issue **自动归档**——MUL-353 就是这样在选定后几小时被归档的，于是 warm 找不到入口。脚本在跑之前对两个 fixture 各做一次只读预检，状态不对就直接输出 `skipped: fixture-archived` / `fixture-cancelled` / `fixture-unreadable`，**不再等满 20s**。`warm-target-not-in-list` 同样立即以 skipped 结束。
+| 目标深度 | `targetDepth: { timelineRequests, targetIndexFromLatest }`，从本轮已捕获的 `/comments` 响应计算，不额外预查 |
+
+**为什么深链不用固定 `inb_...`**：[inbox-page.tsx](../../frontend/packages/views/inbox/components/inbox-page.tsx) 对不在已加载页里的 `?item=` 会逐页 `fetchNextPage()` 直到找到，页大小 50；固定项在第 769 位左右 ⇒ 冷启动先串行拉约 16 页，测到的是翻页而不是深链落点。
+
+### 选择器回退：contract / legacy
+
+生产在本单合入并发布之前没有 `data-perf-*`，所以 [frontend/scripts/perf/lib/selectors.ts](../../frontend/scripts/perf/lib/selectors.ts) 维护两套选择器，`--selectors auto|contract|legacy`（默认 `auto`：页面存在 `[data-perf-scroll]` 即用 contract，否则 legacy）。**所有选择器都集中在这个模块里**，不散落在脚本各处。每一轮都记 `selectorMode`。
+
+| 用途 | legacy 选择器 / 规则 |
+| --- | --- |
+| 滚动根 | `[data-tab-scroll-root]`；列表页用 `[data-slot="sidebar-inset"]`（见上） |
+| timeline 行 | `[data-tab-scroll-root] [id^="comment-"]` |
+| latest-comment | DOM 顺序中最后一个 `[id^="comment-"]` |
+| target-comment | `#comment-<id>` |
+| 骨架 | `[data-slot="skeleton"]` |
+| issue 列表行 | `[data-slot="sidebar-inset"] a[href$="/issues/<issueId>"]` |
+| inbox 行 | `section[aria-labelledby^="inbox-group-"] div[role="button"][tabindex="0"]`。**不可靠**：QA 在 209 上实测未加作用域的形式匹配到工具栏按钮（`cmt_3d2bb3s7ceeh`）；该表只保留给等价性比对，**不得用它驱动点击**，深链 warm 的行序由 `core/inbox/grouping.ts` 的纯函数给出 |
+| agent-stream | **没有稳定钩子**，禁止用 class 选择器凑：legacy 下 `detail-running` 以 latest-comment 为 anchor，记 `anchorRule: legacy-latest-comment` |
+| chat | 退回 `h1-no-skeleton`，记 `anchor: none` |
+
+**等价性证明**不用比较两次运行的时间（噪声太大），而是比较**同一 DOM 上元素的同一性**：contract 模式的每一轮在就绪时刻同时用 legacy 表求值，记 `selectorEquivalence: { scrollRoot, anchor: same|differs, itemsContractOnly, itemsLegacyOnly }`，元素用 `===` 比较。两个门槛：
+
+1. 本地端到端：除 `detail-running`（anchor 已知不同）外全部 `anchor: same` 且 `itemsLegacyOnly = 0`，否则不推送。
+2. 209 上第一次 contract 运行（高峰基线或终验）由 QA 复核同一字段；不通过则对应场景的 legacy 基线标 `invalid` 并重跑。
+
+两版基线按实际 `selectorMode` 如实标注；`--compare` 遇到模式不同**只警告不拒绝**。
+
+**legacy 表的删除条件**：满足两条才删——S2 已合入，且已有一版 contract 模式的基线。删表时同步删掉本节这张表与 `selectors.ts` 里的 `LEGACY`。
+
+### 深链目标：探测可以翻页，测量不翻页
+
+探测轮按 `next_cursor` 读 `/api/inbox/page?limit=100`，最多 `--inbox-probe-pages` 页（默认 10，约最近 1000 条），在整个窗口上按「无 running → 未读优先 → API 顺序」排序取第一个合格目标。选中的条目随后被并入浏览器的第一页，所以 cold 与 warm 始终测「目标在首屏」这一种形态，全部进同一个 p75。
+
+报告里 `inboxApiPage` 记目标来自第几页（供读者判断），`inboxInjected` 记真实首页是否本来没有它，`inboxPageRequestsBeforeStub` 记首个桩写之前浏览器发了几次 `GET /api/inbox/page`（预期 1）。真实首页若有同一 issue 且更新的**按 issue 选中**的通知，`?issue=` 会选中它而不是探测目标，该轮记 `skipped: inbox-target-superseded`；ledger 行按 `?item=` 选中，不参与这个判断。
+
+### 场景矩阵与参数
+
+详情页 `detail-short` / `detail-long` / `detail-running` / `deeplink` × {cold, warm}，外加 MUL-367 的 11 个页面 × {cold, warm}。
+
+```bash
+# 本地/生产只读基线（token 只从 MULTIREMI_QA_WEB_TOKEN 读）
+bun run frontend/scripts/perf/page-speed.ts   --base-url http://n37-117-209.byted.org --rounds 5   --window offpeak --out reports/performance --name MUL-383-baseline-offpeak-<日期>
+
+# 与另一份 JSON 对比：按 key + mode 配对
+bun run frontend/scripts/perf/page-speed.ts   --base-url http://n37-117-209.byted.org --rounds 5   --out reports/performance --name MUL-383-baseline-peak-<日期>   --compare reports/performance/MUL-383-baseline-offpeak-<日期>.json
+```
+
+### 输出与复核方式
+
+JSON 用 `schema: 2`，同时输出同名 `.md`（表格）与 `.html`（**自包含**单文件：内联 CSS/数据，无外链样式表/脚本/字体，无 localStorage 与父 frame 依赖，可直接挂 Issue 评论渲染）。JSON 里的 `compare` 段带 `warnings`：`selectorMode` 不同、`target.identifier` 不同、`targetSelection` 不同、`timelineRequests` 不同都会警告，但都不阻断配对。
+
+基线产物放 `reports/performance/`，HTML 用 `remi comment add --attachment` 同时挂到本单和父单。
+
+本地端到端（不需要生产凭证）用 [tests/manual/mul384-perf-harness.ts](../../tests/manual/mul384-perf-harness.ts)：起内存 SQLite 的 API + 本地 web，铸造本地 PAT 注入 `MULTIREMI_QA_WEB_TOKEN`，跑完全部场景并 grep 产物确认 0 个 token 泄漏。**不要把生产凭证用于本地。** 它跑的是 `next dev`：首个访问的路由要现场编译（实测 `/[slug]/inbox` 首次 17.6 s），会撞 20 s 的单轮超时，所以 harness 传 `--warmup`，先对每个场景各访问一次再开始测量。**`--warmup` 只是本地 dev 服务器的让步**：209 跑的是构建产物，没有现场编译，生产基线的数字不含这一步。
 
 ## 优化不能破坏的约束
 
