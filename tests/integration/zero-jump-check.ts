@@ -78,6 +78,14 @@ const ROUND_TIMEOUT_MS = 25_000;
 const ENTRY_TIMEOUT_MS = 20_000;
 /** Viewport and motion settings the plan fixes, so a run is comparable run to run. */
 const VIEWPORT = { width: 1440, height: 900 } as const;
+/**
+ * Where failing rounds write their screenshot.
+ *
+ * Overridable because the CI job uploads this directory as an artifact, and
+ * `os.tmpdir()` (usually `/tmp`) is not `${{ runner.temp }}` on a GitHub runner;
+ * a hard-coded `/tmp` path uploads nothing and reads as "no failure frames".
+ */
+const SHOT_DIR_ENV = "MUL394_ZERO_JUMP_SHOT_DIR";
 /** A deliberately non-default sidebar width, to exercise the localStorage restore. */
 const SIDEBAR_WIDTH_STORAGE_KEY = "sidebar_width";
 const NON_DEFAULT_SIDEBAR_WIDTH = "360";
@@ -523,7 +531,7 @@ async function runRound(input: {
   }
 
   if (violationsForRound(result).length > 0) {
-    const shotDir = join(tmpdir(), "mul394-zero-jump");
+    const shotDir = process.env[SHOT_DIR_ENV] ?? join(tmpdir(), "mul394-zero-jump");
     ensureDir(shotDir);
     await page.screenshot({ path: join(shotDir, `${scenario.key}-${scenario.mode}-${round}.png`) }).catch(() => {});
   }
@@ -734,6 +742,7 @@ async function main(): Promise<void> {
   }, null, 2)}\n`);
 
   log(`\nreport: ${options.out}`);
+  log(`failure frames (written only for failing rounds): ${process.env[SHOT_DIR_ENV] ?? join(tmpdir(), "mul394-zero-jump")}`);
   log(`rows: ${grouped.map((row) => zeroJumpPairKey(row)).join(", ")}`);
   if (verdict.ok) {
     log(`\nOK: ${grouped.length} row(s) × ${options.rounds} repetition(s), no unlisted violation${options.strict ? "" : " and no stale allowlist entry"}.`);

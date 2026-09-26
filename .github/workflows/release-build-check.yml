@@ -195,7 +195,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      # `fetch-depth: 0` is what makes the change detector below real: the
+      # default shallow clone does not contain the base commit, so `git diff`
+      # against it fails and the step would fall back to "run" on every pull
+      # request — spending a Chromium download and a Next build on, say, a
+      # daemon-only change.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Detect whether this job has anything to check
         id: relevant
@@ -250,6 +257,11 @@ jobs:
 
       - name: Zero-jump check (allowlist mode)
         if: steps.relevant.outputs.run == 'true'
+        # The failure frames go to a path this workflow owns, not the runner's
+        # `/tmp`: the upload step below has to read the same directory the check
+        # wrote.
+        env:
+          MUL394_ZERO_JUMP_SHOT_DIR: ${{ runner.temp }}/mul394-zero-jump
         run: bun run tests/integration/zero-jump-check.ts --out reports/performance/MUL-394-zero-jump-ci.json
 
       # `always()`: the artifact is what lets a reviewer see the debt the

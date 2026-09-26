@@ -710,17 +710,29 @@ export function installJumpRecorder(config: PerfRecorderConfig): void {
 // ── Node half: driver helpers ────────────────────────────────────────────────
 
 /** Installs the recorder for every document this context creates. */
+/**
+ * The one method this module needs from a context.
+ *
+ * Declared with method syntax on purpose: `BrowserContext` from `playwright-core`
+ * and from `@playwright/test` are two declarations of the same object with
+ * different generic `addInitScript` signatures, and method syntax is compared
+ * bivariantly, which is what lets both satisfy this. It is also called as a
+ * method, never extracted — `addInitScript` reads `this` internally, and an
+ * unbound call fails with `undefined is not an object (evaluating
+ * 'this._platform')`.
+ */
+export interface InitScriptHost {
+  addInitScript(
+    script: (config: PerfRecorderConfig) => void,
+    arg?: PerfRecorderConfig,
+  ): Promise<unknown>;
+}
+
 export async function installRecorderOnContext(
-  // `BrowserContext` from `playwright-core` and from `@playwright/test` are two
-  // distinct declarations of the same object with different generic
-  // `addInitScript` signatures, so no single structural type accepts both. The
-  // shape is asserted once here, at the only call this module makes.
-  context: { addInitScript: unknown },
+  context: InitScriptHost,
   config: PerfRecorderConfig,
 ): Promise<void> {
-  const addInitScript = context.addInitScript as
-    (script: (config: PerfRecorderConfig) => void, arg?: PerfRecorderConfig) => Promise<void>;
-  await addInitScript(installJumpRecorder, config);
+  await context.addInitScript(installJumpRecorder, config);
 }
 
 export async function resetRecorder(page: Page, visibleFrom?: number): Promise<void> {
