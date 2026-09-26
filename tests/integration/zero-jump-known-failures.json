@@ -1,0 +1,96 @@
+{
+  "note": "main 上已知的零跳动违例，按 <场景 key>::<cold|warm> 记录。本文件由 --strict 在未修复代码上的实测结果生成（见 tests/integration/zero-jump-check.ts），不靠猜测。每行只允许收紧：修好一个类型就删掉它，类型删空就删掉整行。",
+  "generatedFrom": {
+    "check": "tests/integration/zero-jump-check.ts",
+    "mode": "--strict",
+    "rounds": 3,
+    "commit": "4248ef0767c687116beac08e1fae55033f580ac1",
+    "report": "reports/performance/MUL-394-zero-jump-strict-main-2026-09-26.json",
+    "generatedAt": "2026-09-26",
+    "summary": "9 个 key::mode 行全部失败，与清单一一对应：8 行只有 perf-state，detail-deeplink::cold 另有 jumps（跳动 1 次）。"
+  },
+  "rows": [
+    {
+      "key": "detail-short",
+      "mode": "cold",
+      "violations": [
+        "perf-state"
+      ],
+      "reason": "main 上没有任何应用代码写 data-perf-state（写入方改到 MUL-443），因此就绪判定必然缺失",
+      "owner": "MUL-443 / MUL-444"
+    },
+    {
+      "key": "detail-short",
+      "mode": "warm",
+      "violations": [
+        "perf-state"
+      ],
+      "reason": "main 上没有任何应用代码写 data-perf-state（写入方改到 MUL-443），因此就绪判定必然缺失",
+      "owner": "MUL-443 / MUL-444"
+    },
+    {
+      "key": "detail-long",
+      "mode": "cold",
+      "violations": [
+        "perf-state"
+      ],
+      "reason": "main 上没有任何应用代码写 data-perf-state（写入方改到 MUL-443），因此就绪判定必然缺失",
+      "owner": "MUL-443 / MUL-444"
+    },
+    {
+      "key": "detail-long",
+      "mode": "warm",
+      "violations": [
+        "perf-state"
+      ],
+      "reason": "main 上没有任何应用代码写 data-perf-state（写入方改到 MUL-443），因此就绪判定必然缺失",
+      "owner": "MUL-443 / MUL-444"
+    },
+    {
+      "key": "detail-running",
+      "mode": "cold",
+      "violations": [
+        "perf-state"
+      ],
+      "reason": "main 上没有任何应用代码写 data-perf-state（写入方改到 MUL-443），因此就绪判定必然缺失",
+      "owner": "MUL-443 / MUL-444"
+    },
+    {
+      "key": "detail-running",
+      "mode": "warm",
+      "violations": [
+        "perf-state"
+      ],
+      "reason": "main 上没有任何应用代码写 data-perf-state（写入方改到 MUL-443），因此就绪判定必然缺失",
+      "owner": "MUL-443 / MUL-444"
+    },
+    {
+      "key": "detail-deeplink",
+      "mode": "cold",
+      "violations": [
+        "jumps",
+        "perf-state"
+      ],
+      "reason": "深链目标在第 40 条评论，落位前页面先按最新一页渲染再滚到目标，未修复前会跳动；深链落位时内容整体位移一次（8359.8px 内容、2450px 滚动），由 MUL-393 的深链改写负责",
+      "owner": "MUL-393"
+    },
+    {
+      "key": "detail-deeplink",
+      "mode": "warm",
+      "violations": [
+        "perf-state"
+      ],
+      "reason": "深链目标在第 40 条评论，落位前页面先按最新一页渲染再滚到目标；冷启动会跳动，热路径当前不跳",
+      "owner": "MUL-393"
+    },
+    {
+      "key": "detail-long-sidebar",
+      "mode": "cold",
+      "violations": [
+        "perf-state"
+      ],
+      "reason": "main 上没有任何应用代码写 data-perf-state（写入方改到 MUL-443），因此就绪判定必然缺失",
+      "owner": "MUL-443 / MUL-444"
+    }
+  ]
+}

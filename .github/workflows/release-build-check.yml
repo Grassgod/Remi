@@ -177,3 +177,97 @@ jobs:
           push: false
           cache-from: type=gha,scope=platform-web-check
           cache-to: type=gha,scope=platform-web-check,mode=max
+
+  # MUL-394 (MUL-383 S7): open an Issue detail page in a real browser and fail if
+  # the content moves during load. Structural assertions only, so the gate is
+  # about jumps and never about milliseconds.
+  #
+  # Its own job, not a step in `build`: it needs a Chromium download and several
+  # minutes, and a failure should name the check in the Actions list.
+  #
+  # Path filter: the workflow's trigger-level filter is repo-wide by design (a
+  # pull request touching `frontend/**` runs the whole gate). This job is the one
+  # that would be pure waste on, say, a daemon-only change, so it is skipped
+  # explicitly unless frontend, the server it proxies, or the check itself moved.
+  # `always()` is deliberately not used on the conditions below: a skipped
+  # dependency must not run them.
+  frontend-zero-jump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect whether this job has anything to check
+        id: relevant
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != "pull_request" ] && [ "$EVENT_NAME" != "push" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "${BASE_SHA:-}" ] || ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" || true)"
+          echo "$changed" | sed 's/^/  changed: /'
+          if echo "$changed" | grep -qE '^(frontend/|packages/server/|tests/integration/zero-jump|tests/fixtures/multiremi/|reports/performance/MUL-394-zero-jump)'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "no frontend/server change; skipping the zero-jump check"
+          fi
+
+      - uses: oven-sh/setup-bun@v2
+        if: steps.relevant.outputs.run == 'true'
+        with:
+          bun-version: 1.3.14
+
+      - name: Install dependencies from the public registry
+        if: steps.relevant.outputs.run == 'true'
+        run: bun install --registry https://registry.npmjs.org --frozen-lockfile --ignore-scripts
+
+      # The check drives the production build, and Next bakes the `/api/*`
+      # rewrite destination into the routes manifest at build time, so it builds
+      # the web app itself after it knows its API port. Restoring `.next/cache`
+      # keeps that mandatory build near the cost of an incremental one.
+      - name: Cache the Next build cache
+        if: steps.relevant.outputs.run == 'true'
+        uses: actions/cache@v4
+        with:
+          path: frontend/apps/web/.next/cache
+          key: zero-jump-next-${{ runner.os }}-${{ hashFiles('bun.lock', 'frontend/**') }}
+          restore-keys: |
+            zero-jump-next-${{ runner.os }}-
+
+      - name: Install Chromium for Playwright
+        if: steps.relevant.outputs.run == 'true'
+        run: bunx playwright install chromium --with-deps
+
+      - name: Zero-jump check (allowlist mode)
+        if: steps.relevant.outputs.run == 'true'
+        run: bun run tests/integration/zero-jump-check.ts --out reports/performance/MUL-394-zero-jump-ci.json
+
+      # `always()`: the artifact is what lets a reviewer see the debt the
+      # allowlist describes without re-running strict locally, so it is uploaded
+      # on success and failure alike. Screenshots exist only for failing rounds,
+      # so the second upload is naturally failure-only.
+      - name: Upload the zero-jump report
+        if: always() && steps.relevant.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: zero-jump-report
+          path: reports/performance/MUL-394-zero-jump-ci.json
+          if-no-files-found: warn
+
+      - name: Upload failure-frame screenshots
+        if: failure() && steps.relevant.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: zero-jump-failure-frames
+          path: ${{ runner.temp }}/mul394-zero-jump/*.png
+          if-no-files-found: warn

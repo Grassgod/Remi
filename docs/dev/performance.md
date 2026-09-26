@@ -169,8 +169,14 @@ MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内
 | `data-perf-key` | 同一行 | 行自身的稳定 id | S1 打标 |
 | `data-perf-anchor` | 该页面口径的终点元素 | `latest-comment` \| `agent-stream` \| `target-comment` \| `latest-message` | S1 打标 |
 | `data-perf-state` | `data-tab-scroll-root` | `pending` \| `ready` \| `ready-forced` | **S2 的 `useAnchoredReveal`**，S1 不写 |
+| `data-perf-fresh` | 同上 | `0` \| `1` | **MUL-443（MUL-403 C8）**，尚未上线 |
 
 `data-perf-state` 是**只读**契约：S1 应用侧不写它（没有 hook 就写死 `ready` 是假数据，会让 S7 的断言空过）。记录器在浏览器内用 `MutationObserver` 抓它的变化时间戳，不从 Node 侧轮询；属性不存在时 `appReadyMs` 为 `null`，且**永远不作为终点**。S2 无权改名、改宿主或改取值。
+
+`data-perf-fresh` 是 MUL-443 新增的**新鲜度**位，本仓库今天还没有任何代码写它。记录器按「属性在不在」分两套口径：
+
+- **属性存在**时，只有 `data-perf-state = ready` **且** `data-perf-fresh = 1` 的帧才算加载完成；`ready` 但 `fresh = 0` 不算，`ready-forced` 也不算通过，但会在报告里**单独列出**（`appReadyForced`）。
+- **属性不存在**时，维持原逻辑（只看 `data-perf-state`），所以 MUL-443 上线前后同一份清单都可用。
 
 ### 判定口径
 
@@ -253,6 +259,40 @@ JSON 用 `schema: 2`，同时输出同名 `.md`（表格）与 `.html`（**自�
 基线产物放 `reports/performance/`，HTML 用 `remi comment add --attachment` 同时挂到本单和父单。
 
 本地端到端（不需要生产凭证）用 [tests/manual/mul384-perf-harness.ts](../../tests/manual/mul384-perf-harness.ts)：起内存 SQLite 的 API + 本地 web，铸造本地 PAT 注入 `MULTIREMI_QA_WEB_TOKEN`，跑完全部场景并 grep 产物确认 0 个 token 泄漏。**不要把生产凭证用于本地。** 它跑的是 `next dev`：首个访问的路由要现场编译（实测 `/[slug]/inbox` 首次 17.6 s），会撞 20 s 的单轮超时，所以 harness 传 `--warmup`，先对每个场景各访问一次再开始测量。**`--warmup` 只是本地 dev 服务器的让步**：209 跑的是构建产物，没有现场编译，生产基线的数字不含这一步。
+
+## CI 零跳动检查（MUL-394 / MUL-383 S7）
+
+[tests/integration/zero-jump-check.ts](../../tests/integration/zero-jump-check.ts) 把上面这套口径搬进 CI：内存 SQLite 起 API（`startMultiremiServer`，fixture 见 [tests/integration/zero-jump-fixture.ts](../../tests/integration/zero-jump-fixture.ts)：短 issue 3 条评论、长 issue 250 条含 20 个代码块与 5 张图片并分 3 个 session、一个带消息的 running task、一条指向长 issue 第 40 条评论的 inbox 深链），`next build` + `next start` 起 web，Playwright + Chromium 驱动同一个浏览器侧记录器，每行跑 3 次。**只断言结构量**（`jumps = 0`、anchor 完整可见、骨架为 0、就绪状态合格），不断言毫秒数。
+
+两条容易踩的实现事实：
+
+- **`REMOTE_API_URL` 是构建期烘焙的。** Next 把 `/api/*` 的 rewrite 目标写进 `.next/routes-manifest.json`，`next start` 时再设 env 不会改变它。所以检查必须**先固定 API 端口、再 build、最后 start**（写完第一版后才实测到：`next start` 带着新 `REMOTE_API_URL` 仍代理到 build 时的端口，所有 API 都是 500）。
+- **深链冷启动的 URL 是 `/{slug}/inbox?issue=…&session=…`**，不是 `/issues/:id`。`highlightCommentId` 只在 inbox 面板里被传给 `IssueDetail`（`inbox-page.tsx`），因此 `target-comment` 这个 anchor 只在深链 URL 上存在；改成 issue 详情路由会让该 anchor 永远找不到。
+
+### 已知失败清单与判定规则
+
+main 上现在必然失败的行写在 [tests/integration/zero-jump-known-failures.json](../../tests/integration/zero-jump-known-failures.json)：**行 = `<场景 key>::<cold|warm>`**（沿用 `report.ts` 里 `--compare` 的配对键），每行显式列出它还被允许出现的违例类型（`jumps` / `anchor` / `skeleton` / `perf-state`）。判定是纯函数（[lib/zero-jump-verdict.ts](../../frontend/scripts/perf/lib/zero-jump-verdict.ts)），四条规则：
+
+1. 行不在清单，出现任何违例 → 失败。
+2. 行在清单，出现该行没列出的类型 → 失败（「已经过的部分」由此立刻受保护）。
+3. 行在清单，某个列出的类型 3 次都没出现 → 失败，提示从该行删掉这个类型、类型删空就删整行。只出现 2/3 次不触发。
+4. `--strict` 忽略清单，所有行都按规则 1 判。
+
+**清单必须与 strict 输出一一对应**：strict 里出现的每一行/类型都要在清单里，反之亦然；这条一致性由 `tests/unit/scripts/zero-jump-verdict.test.ts` 直接读那两个文件断言。规则 3 只在默认模式生效——它就是「MUL-443 / MUL-393 修好之后顺手清掉自己那几行」的机制。
+
+「localStorage 里有非默认侧栏布局」那一轮刻意用**独立的 `detail-long-sidebar::cold`**，不与 `detail-long` 共键：它触发的是另一条机制（[sidebar.tsx](../../frontend/packages/ui/components/ui/sidebar.tsx) 在 `useEffect` 里恢复宽度，首帧之后才改正文宽度），共键会让清单表达不了「长 issue 已修、侧栏轮还没修」。
+
+### 运行方式
+
+```text
+bun run tests/integration/zero-jump-check.ts                      # 默认：清单模式，CI 门禁用
+bun run tests/integration/zero-jump-check.ts --strict             # 忽略清单：证明「未修复代码上会失败」
+bun run tests/integration/zero-jump-check.ts --only detail-long --rounds 1   # 单场景排查
+```
+
+`--skip-build` 复用已有 `.next`；`--api-port` / `--web-port` 固定端口（注意上面的构建期烘焙）；`--out` 指定报告路径。报告是记录器 JSON，含每轮 `jumps` / `anchorRectAtReady` / `skeleton` 数与清单判定结论。
+
+**当前 main 的 strict 实测**（`4248ef07`，3 次/行）存于 [reports/performance/MUL-394-zero-jump-strict-main-2026-09-26.json](../../reports/performance/MUL-394-zero-jump-strict-main-2026-09-26.json)：9 个 `key::mode` 行全部失败，其中 8 行只有 `perf-state`，`detail-deeplink::cold` 另有 `jumps`（每次 1 跳、内容位移 8359.8 px、滚动 2450 px）。该 JSON 同时是 MUL-443 / MUL-444 / MUL-393 前后对比的「前」基线。
 
 ## 优化不能破坏的约束
 
