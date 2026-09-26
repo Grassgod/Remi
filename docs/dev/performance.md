@@ -77,7 +77,7 @@ Server-Timing: total;dur=12.3, db;dur=4.5, dbp;dur=0.2, dbq;desc="7", dbb;desc="
 - `db_busy_pct` = 该窗口内**进程级** DB 阻塞时间 / 窗口时长。进程级计数包含没有请求上下文的调用，所以后台 job 的 DB 时间也算进去，这正是「DB 忙碌占比」需要的分母口径。
 - `event_loop_lag_max_ms` 用 250 ms 间隔的 `setInterval` 漂移测量并取窗口内最大值；同步 PG 桥阻塞主线程时会直接体现为晚 tick。
 
-**环境变量**（都在 [api.env.example](../../deploy/docker/api.env.example) 有登记）：`MULTIREMI_REQUEST_METRICS`（默认开，`0/false/off` 整体关闭，关闭后不加响应头也不写任何日志）、`MULTIREMI_SLOW_REQUEST_MS`（默认 500，设 0 可让每个请求都打一行，适合短时冒烟）、`MULTIREMI_METRICS_SUMMARY_INTERVAL_MS`（默认 60000）、`MULTIREMI_METRICS_SUMMARY_TOP_N`（默认 10）、`MULTIREMI_METRICS_BUFFER_SIZE`（默认 4096）。
+**环境变量**（都在 [api.env.example](../../deploy/docker/api.env.example) 有登记）：`MULTIREMI_REQUEST_METRICS`（默认开，`0/false/off` 整体关闭，关闭后不加响应头也不写任何日志）、`MULTIREMI_SLOW_REQUEST_MS`（默认 500，设 0 可让每个请求都打一行，适合短时冒烟）、`MULTIREMI_METRICS_SUMMARY_INTERVAL_MS`（默认 60000）、`MULTIREMI_METRICS_SUMMARY_TOP_N`（默认 10）、`MULTIREMI_METRICS_BUFFER_SIZE`（默认 4096）。这五项同时管 `ws_minute_summary`，见下一节。
 
 **观测与验证入口**：
 
@@ -94,6 +94,48 @@ bun run tests/manual/smoke-request-metrics.ts
 ```
 
 冒烟脚本默认用 0 ms 阈值和 5 s 汇总间隔以便一次跑完就同时看到两个事件；`MUL367_SMOKE_PORT` / `MUL367_SMOKE_SUMMARY_MS` 可覆盖。它只连 127.0.0.1 的临时实例和内存 SQLite，不读凭证、不碰生产。上线后需要真实基线数字时，按本文档开头「复现顺序与记录」的模板记录环境、并发和样本数，**不要**把本页的示例行情当作实测结论。
+
+## WebSocket 帧汇总：`ws_minute_summary`（MUL-417）
+
+daemon 的流量从 HTTP 轮询搬到协议 v2 的 socket 之后，它的 DB 时间不再落在任何 HTTP 路由上：
+`db_busy_pct` 会单纯因为工作换了通道而下降，看起来像收益。`ws_minute_summary` 就是补上这一段的
+计数器，口径与 `api_minute_summary` 相同，两条线按同一时间窗相加即「HTTP + WS 的 daemon 归属
+db_ms」。
+
+- **实现**：[api/daemon-protocol/metrics.ts](../../packages/server/src/api/daemon-protocol/metrics.ts)。
+  固定容量的 typed-array 环形缓冲区，帧类型 intern 成整数 id；写满后覆盖最旧样本并记进
+  `dropped`，缓冲区不随流量增长。
+- **同一个窗**：窗口参数（开关、间隔、前 N、缓冲容量）由 HTTP 那一份配置派生，不在 WS 侧再读一次
+  环境变量。两者独立解析时，只要有一方被显式覆盖（`startMultiremiServer({ requestMetrics })`，
+  测试与冒烟脚本都这么做）就会错位，而「同一时间窗」是这两条线可以相加的前提。
+- **归因**：每条帧按**帧类型 + 方向**汇总 `count / db_ms / db_queries`，另带 `violations`
+  （超长帧、未知帧、无法解析的帧）。`db_ms` 是处理该帧期间进程级 DB 计数器的增量，所以它测的是
+  这次处理真正花在 PostgreSQL 桥上的时间，而不是把窗口内所有 DB 时间平摊到帧上。
+- **不写内容**：与 `api_minute_summary` 一样只写 stdout 的一行 JSON，不含 query、header、payload、
+  原始 path、user 或 token；帧类型是唯一的字符串来源。
+
+```json
+{"event":"ws_minute_summary","ts":"2026-09-26T23:00:31.679Z","window_ms":2001,"frames":4,"dropped":0,"db_busy_pct":0,"db_queries":0,"types":[{"type":"hb","direction":"uplink","count":3,"violations":0,"db_ms":0,"db_queries":0,"p50_ms":0.4,"p95_ms":2},{"type":"hello","direction":"uplink","count":1,"violations":0,"db_ms":0,"db_queries":0,"p50_ms":1.5,"p95_ms":1.5}]}
+```
+
+`types` 按 `db_ms`、`db_queries`、`count` 排序，取前 N（默认 20，且不低于 HTTP 侧的 N）；分位数用
+与 [bench-task-list-pagination.ts](../../tests/manual/bench-task-list-pagination.ts) 相同的最近秩法。
+空闲窗口同样每分钟一行，`frames: 0`，这样「没有 daemon 流量」和「这条线死了」可以区分。
+
+**观测与验证入口**：
+
+```bash
+# 生产容器里同时看两条汇总线
+docker logs multiremi-platform-app-api-1 | grep -E 'api_minute_summary|ws_minute_summary'
+
+# 单元测试：汇总口径、环形缓冲、计时器、脱敏
+bun test tests/unit/daemon/daemon-protocol-metrics.test.ts
+
+# 真实 socket 冒烟：起一个本地实例，握手 + 3 个 hb，读两条汇总线
+bun run tests/manual/smoke-ws-minute-summary.ts
+```
+
+与 `api_minute_summary` 一样，上面示例行里的数字是冒烟运行的输出，不是生产基线。
 
 ## 页面测速脚本与基线（MUL-367）
 
