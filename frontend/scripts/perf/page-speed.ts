@@ -67,6 +67,7 @@ import {
   verifyWriteGuard,
   type ApiCollectors,
   type BlockedWrite,
+  type StubbedWrite,
 } from "./lib/harness";
 import {
   anchorPlan,
@@ -80,6 +81,13 @@ import {
   type SelectorMode,
   type SelectorModeOption,
 } from "./lib/selectors";
+import {
+  rankDeepLinkCandidates,
+  unreadIdsInRow,
+  type DeepLinkCandidate,
+  type InboxCandidateInput,
+} from "./lib/deeplink-target";
+import { STUBBED_WRITES, stubLoopNotTerminated } from "./lib/stub-writes";
 import type { InboxItem } from "../../packages/core/types/inbox";
 import {
   buildCompare,
@@ -102,6 +110,15 @@ const RECORDER_GLOBAL = "__mul383Recorder";
 const WARM_ENTRY_TIMEOUT_MS = 15_000;
 /** After the click, the app still has to route and mount the target page. */
 const WARM_NAV_TIMEOUT_MS = 10_000;
+/**
+ * Bound on the click -> `?issue=` commit, as a correctness check on the click.
+ *
+ * The commit is asynchronous and, while the guard fulfils the auto mark-read, it
+ * can take seconds: measured on 209 at ~5 s when the mark-read was aborted, and
+ * ~181 ms when it was fulfilled (MUL-384 `cmt_cxrxocj4vp3q`). Ten seconds covers a
+ * long timeline starving the transition; it never feeds into `readyMs`.
+ */
+const URL_COMMIT_TIMEOUT_MS = 10_000;
 
 /** The eleven MUL-367 pages, in the order one round visits them. */
 const PAGE_SEQUENCE = [
@@ -294,6 +311,14 @@ interface Scenario {
   inboxItemId: string | null;
   /** Issue id the warm deep link must land on, asserted through `?issue=`. */
   expectIssueId: string | null;
+  /** Reported identifier of that issue, checked against the clicked row's text. */
+  expectIdentifier: string | null;
+  /**
+   * Unread notification ids in the deep-link target's rendered row. This is the
+   * auto mark-read effect's working set, so it bounds the stub self-check; empty
+   * for every non-deep-link scenario.
+   */
+  inboxUnreadIds: string[];
   target: { identifier: string; note?: string };
   targetSelection: string | null;
   /**
@@ -304,20 +329,12 @@ interface Scenario {
   skipReason: string | null;
 }
 
-interface DeepLinkTarget {
-  inboxItemId: string;
-  commentId: string;
-  sessionId: string;
-  issueId: string;
+interface DeepLinkTarget extends DeepLinkCandidate {
   issueIdentifier: string;
-  /** An issue with a running task can append comments inside the quiet window. */
-  issueHasRunningTask: boolean;
-  read: boolean;
-  /** Position in the `/api/inbox/page` array, kept for the report. */
-  apiIndex: number;
   /** DOM row to click, derived from the page's own grouping functions. */
   rowIndex: number;
-  type: string;
+  /** Unread notification ids in this target's rendered row, for the stub bound. */
+  unreadIdsInRow: string[];
 }
 
 interface RunningIssue {
@@ -354,10 +371,17 @@ interface RoundMeasurement {
   apiFirstScreen: number;
   chunksLoaded: number;
   chunkBytes: number;
+  /** Writes the guard stopped. Always aborted, never sent. */
   blockedWrites: number;
+  /** Writes the allow-list fulfilled inside the browser (see lib/stub-writes). */
+  stubbedWrites: number;
   selectorEquivalence: ReturnType<typeof computeSelectorEquivalence>;
   navStartMs: number;
   clickT: number | null;
+  /** Milliseconds from the click to the URL committing `?issue=`; null when N/A. */
+  urlCommitMs: number | null;
+  /** Text of the row the warm click targeted, for post-hoc attribution. */
+  clickedRowText: string | null;
   timelineRequests: number;
   targetIndexFromLatest: number | null;
   slowestServerTotalMs: number | null;
@@ -365,6 +389,17 @@ interface RoundMeasurement {
   /** Set when the round never left its entry page, so it is a skip not a timeout. */
   entryFailed: boolean;
   error?: string;
+}
+
+/**
+ * Copies the guard's counters onto the round.
+ *
+ * Both come from the collectors rather than from `blankRound`, and the aggregate is
+ * the sum of these, so the two always agree.
+ */
+function recordWriteCounts(measurement: RoundMeasurement, collectors: ApiCollectors): void {
+  measurement.blockedWrites = collectors.blockedWrites.reduce((sum, write) => sum + write.attempts, 0);
+  measurement.stubbedWrites = collectors.stubbedWrites.reduce((sum, write) => sum + write.attempts, 0);
 }
 
 function roundSummary(round: RoundMeasurement): ReportRoundSummary {
@@ -393,6 +428,8 @@ function roundSummary(round: RoundMeasurement): ReportRoundSummary {
     slowestServerTotalMs: round.slowestServerTotalMs,
     ...(round.error ? { error: round.error } : null),
     blockedWrites: round.blockedWrites,
+    stubbedWrites: round.stubbedWrites,
+    urlCommitMs: round.urlCommitMs,
     heapBytes: null,
     anchorRectAtReady: round.anchorRectAtReady,
     // Only the deep link has a target inside the timeline; every other scenario
@@ -462,12 +499,10 @@ async function probeDeepLinkTarget(options: {
   if (pinnedItemId) {
     const index = firstPage.findIndex((item) => item.id === pinnedItemId);
     if (index < 0) return { target: null, skipped: "inbox-item-not-on-first-page" };
-    const item = firstPage[index]!;
-    const candidate = toDeepLinkTarget(item, pinnedItemId, index, runningIssueIds);
+    const candidate = rankDeepLinkCandidates(firstPage, runningIssueIds)
+      .find((entry) => entry.inboxItemId === pinnedItemId);
     if (!candidate) return { target: null, skipped: "inbox-item-has-no-comment" };
-    const rowIndex = inboxDomRowIndex(firstPage as InboxItem[], pinnedItemId);
-    if (rowIndex === null) return { target: null, skipped: "inbox-item-not-rendered" };
-    return { target: { ...candidate, rowIndex }, skipped: null };
+    return finishDeepLinkTarget(candidate, firstPage);
   }
 
   const candidates = rankDeepLinkCandidates(firstPage, runningIssueIds);
@@ -475,78 +510,37 @@ async function probeDeepLinkTarget(options: {
   // The API page is not the DOM: the page collapses it before rendering. Resolve
   // every candidate to its DOM row here, in the probe, so a target that cannot be
   // clicked is a skip instead of a click on the wrong row.
-  const ranked = candidates
-    .map((candidate) => ({ candidate, rowIndex: inboxDomRowIndex(firstPage as InboxItem[], candidate.inboxItemId) }))
-    .filter((entry): entry is { candidate: DeepLinkTarget; rowIndex: number } => entry.rowIndex !== null)
-    .map((entry) => ({ ...entry.candidate, rowIndex: entry.rowIndex }));
-  const chosen = ranked[0] ?? null;
-  if (chosen) return { target: chosen, skipped: null };
+  for (const candidate of candidates) {
+    const finished = finishDeepLinkTarget(candidate, firstPage);
+    if (finished.target) return finished;
+  }
   // Nothing eligible survives the DOM mapping. Distinguish "no eligible item at
   // all" from "eligible but not rendered", because the fixes differ.
-  return {
-    target: null,
-    skipped: candidates.length > 0 ? "no-eligible-inbox-item-in-dom" : "no-eligible-inbox-item",
-  };
+  return { target: null, skipped: "no-eligible-inbox-item-in-dom" };
 }
 
 /**
- * Builds the ranked deep-link candidates from one inbox page.
+ * Attaches the click-time facts to a ranked candidate: the DOM row the page will
+ * actually render it in, and the unread ids that a click will auto-mark-read.
  *
- * The MUL-383 family is deliberately *not* excluded: this scenario measures the
- * path inbox -> sidebar `IssueDetail` -> flat timeline, and a family issue is a
- * legitimate instance of it. Content churn is handled by preferring an issue with
- * no running task, and reported through `issueHasRunningTask`, `timelineRequests`
- * and `targetIndexFromLatest` rather than by dropping candidates.
- *
- * One candidate per issue: `?issue=` lands on that issue's newest notification,
- * so older notifications for the same issue would never be the selection.
+ * The row comes from the page's own grouping functions, and the unread ids are the
+ * auto mark-read effect's working set — both are needed before the click, one to
+ * find the row and one to bound the stub self-check.
  */
-export function rankDeepLinkCandidates(
+function finishDeepLinkTarget(
+  candidate: DeepLinkCandidate,
   firstPage: InboxPageItem[],
-  runningIssueIds: Set<string>,
-): DeepLinkTarget[] {
-  const newestPerIssue = new Map<string, DeepLinkTarget>();
-  firstPage.forEach((item, index) => {
-    const candidate = toDeepLinkTarget(item, item.id ?? "", index, runningIssueIds);
-    if (!candidate) return;
-    const existing = newestPerIssue.get(candidate.issueId);
-    // The API is newest-first, so the first row for an issue is its newest.
-    if (!existing) newestPerIssue.set(candidate.issueId, candidate);
-  });
-  const candidates = [...newestPerIssue.values()];
-  // An issue with a running task can append comments inside the quiet window,
-  // which would read as a jump; prefer a quiet issue, then keep API order.
-  return candidates.sort((a, b) => {
-    if (a.issueHasRunningTask !== b.issueHasRunningTask) return a.issueHasRunningTask ? 1 : -1;
-    return a.rowIndex - b.rowIndex;
-  });
-}
-
-function toDeepLinkTarget(
-  item: InboxPageItem,
-  inboxItemId: string,
-  apiIndex: number,
-  runningIssueIds: Set<string>,
-): DeepLinkTarget | null {
-  if (!inboxItemId) return null;
-  const type = String(item.type ?? "");
-  if (AUTOPILOT_INBOX_TYPES.some((candidate) => type === candidate || type.startsWith(`${candidate}_`))) return null;
-  const commentId = item.details?.comment_id ?? null;
-  const sessionId = item.details?.issue_session_id ?? null;
-  const issueId = item.issue_id ?? null;
-  if (!commentId || !sessionId || !issueId) return null;
+): { target: DeepLinkTarget | null; skipped: string | null } {
+  const rowIndex = inboxDomRowIndex(firstPage as unknown as InboxItem[], candidate.inboxItemId);
+  if (rowIndex === null) return { target: null, skipped: "no-eligible-inbox-item-in-dom" };
   return {
-    inboxItemId,
-    commentId,
-    sessionId,
-    issueId,
-    issueIdentifier: issueId,
-    issueHasRunningTask: runningIssueIds.has(issueId),
-    read: item.read === true,
-    apiIndex,
-    // Replaced with the DOM row by the caller; the API index is never clickable.
-    rowIndex: apiIndex,
-    type,
+    target: {
+      ...candidate,
+      issueIdentifier: candidate.issueId,
+      rowIndex,
+      unreadIdsInRow: unreadIdsInRow(firstPage as unknown as InboxCandidateInput[], candidate.issueId),
+    },
+    skipped: null,
   };
 }
 
@@ -771,8 +765,11 @@ function blankRound(round: number, url: string): RoundMeasurement {
     chunksLoaded: 0,
     chunkBytes: 0,
     blockedWrites: 0,
+    stubbedWrites: 0,
     selectorEquivalence: null,
     navStartMs: 0,
+    urlCommitMs: null,
+    clickedRowText: null,
     clickT: null,
     timelineRequests: 0,
     targetIndexFromLatest: null,
@@ -875,7 +872,12 @@ async function measureRound(options: {
   round: number;
   opts: Options;
   knownIds: string[];
-}): Promise<{ round: RoundMeasurement; blocked: BlockedWrite[]; collectors: ApiCollectors }> {
+}): Promise<{
+  round: RoundMeasurement;
+  blocked: BlockedWrite[];
+  stubbed: StubbedWrite[];
+  collectors: ApiCollectors;
+}> {
   const { browser, baseUrl, slug, scenario, round, opts, knownIds } = options;
   const targetUrl = workspaceUrl(baseUrl, slug, scenario.path);
   const cold = scenario.mode === "cold";
@@ -901,7 +903,9 @@ async function measureRound(options: {
       // The row poll inside `clickWarmTarget` is the entry page's readiness
       // condition: a rendered row in a skeleton-free content region. The recorder
       // cannot judge this page, because it samples the *target* page's shape.
-      await clickWarmTarget(page, scenario, opts);
+      const warm = await clickWarmTarget(page, scenario, opts, options.token);
+      measurement.urlCommitMs = warm.urlCommitMs;
+      measurement.clickedRowText = warm.clickedRowText;
       const clickT = await page
         .evaluate((name) => {
           const recorder = (window as unknown as Record<string, { read?: () => { clicks: Array<{ t: number }> } }>)[name];
@@ -922,7 +926,7 @@ async function measureRound(options: {
     // page. Close the context and report the reason.
     if (!cold && isEntryFailure(measurement.error)) {
       measurement.entryFailed = true;
-      measurement.blockedWrites = collectors.blockedWrites.reduce((sum, write) => sum + write.attempts, 0);
+      recordWriteCounts(measurement, collectors);
       await page.close();
       return {
         round: buildRoundMeasurement({
@@ -936,7 +940,8 @@ async function measureRound(options: {
           collectors,
           quietMs: opts.quietMs,
         }),
-        blocked: collectors.blockedWrites,
+        blocked: [...collectors.blockedWrites],
+        stubbed: [...collectors.stubbedWrites],
         collectors,
       };
     }
@@ -944,9 +949,37 @@ async function measureRound(options: {
 
   const { summary, profile: measuredProfile } = await waitForReady(page, ROUND_TIMEOUT_MS, opts.selectors);
 
-  // The guard's abort count belongs to the collectors, not to `blankRound`; the
-  // per-round column stayed 0 until this was wired up.
-  measurement.blockedWrites = collectors.blockedWrites.reduce((sum, write) => sum + write.attempts, 0);
+  // Freeze the page before reading the guard's counters: a request that lands while
+  // the round is being wrapped up would otherwise be counted here but not in the
+  // aggregate (the two used to differ by three attempts).
+  await page.route("**/api/**", (route) => route.abort()).catch(() => {});
+  recordWriteCounts(measurement, collectors);
+
+  // Self-check: every stubbed mark-read should settle its item, so more than
+  // `2 x` the row's unread ids means the response rewrite did not take effect and
+  // the page is still looping. Abandon the round rather than measure inside the
+  // failure loop (MUL-384 `cmt_5857w2m9uiyi`).
+  const unreadIds = scenario.inboxUnreadIds ?? [];
+  if (stubLoopNotTerminated(measurement.stubbedWrites, unreadIds.length)) {
+    measurement.error = "stub-loop-not-terminated";
+    await page.close();
+    return {
+      round: buildRoundMeasurement({
+        measurement,
+        scenario,
+        summary: null,
+        measuredProfile: null,
+        buffer: null,
+        vitals: { lcpMs: null },
+        resources: [],
+        collectors,
+        quietMs: opts.quietMs,
+      }),
+      blocked: [...collectors.blockedWrites],
+      stubbed: [...collectors.stubbedWrites],
+      collectors,
+    };
+  }
 
   await freezeRecorder(page);
   const buffer = await readRecorderBuffer(page);
@@ -966,7 +999,8 @@ async function measureRound(options: {
       collectors,
       quietMs: opts.quietMs,
     }),
-    blocked: collectors.blockedWrites,
+    blocked: [...collectors.blockedWrites],
+    stubbed: [...collectors.stubbedWrites],
     collectors,
   };
 }
@@ -1010,7 +1044,12 @@ function timelineInfo(bodies: Map<string, unknown>, targetCommentId: string | nu
  * exercise `ListRow`'s hover prefetch, and measuring a different route would
  * report a number for a code path S3 does not touch.
  */
-async function clickWarmTarget(page: Page, scenario: Scenario, opts: Options): Promise<void> {
+async function clickWarmTarget(
+  page: Page,
+  scenario: Scenario,
+  opts: Options,
+  token: string,
+): Promise<{ urlCommitMs: number | null; clickedRowText: string | null }> {
   const selectors: string[] = [];
   if (scenario.shape === "issue-detail" && scenario.inboxItemId !== null) {
     selectors.push(inboxRowSelector("contract"), inboxRowSelector("legacy"));
@@ -1023,48 +1062,57 @@ async function clickWarmTarget(page: Page, scenario: Scenario, opts: Options): P
     selectors.push(`a[href$="${scenario.sidebarPath}"]`);
   }
 
-  // A warm round lands on the entry page and then clicks a real row, so the row
-  // has to exist before the click. A fixed sleep is not enough: the first hit on
-  // a route can take seconds (dev compile, or a cold data fetch), and clicking
-  // an empty list leaves the round on the entry page measuring the wrong screen.
-  //
-  // The inbox row index comes from the app's own grouping functions (see
-  // `inboxRowIndexOf`), not from a probing click: clicking an inbox row fires
-  // `POST /api/inbox/:id/read` and does not reflect the notification id into the
-  // URL, so a DOM-discovered target was both write-adjacent and wrong.
+  // A warm round lands on the entry page and then clicks a real row, so the row has
+  // to exist before the click. The row poll below is also the entry page's
+  // readiness condition — a rendered row in a skeleton-free content region — so no
+  // fixed sleep is needed. The recorder cannot judge this page, because it samples
+  // the *target* page's shape.
   const deadline = Date.now() + WARM_ENTRY_TIMEOUT_MS;
   let chosen: { selector: string; index: number; count: number } | null = null;
   while (chosen === null && Date.now() < deadline) {
-    // "Rows present and no skeleton": a row can mount before the entry page has
-    // finished settling, and clicking mid-load would measure the wrong screen.
     const skeletons = await page
       .locator(`${LEGACY.listRoot} [data-slot="skeleton"]`)
       .count()
       .catch(() => 0);
     if (skeletons === 0) {
+      // The inbox row index is recomputed here, at click time, from the list the
+      // page has actually rendered. A probe-time index goes stale: the production
+      // inbox is a rolling window and the four detail rounds in between took about
+      // a minute, which moved the target from row 7 to row 8 and made the click
+      // land on an unrelated notification (MUL-384 `cmt_cxrxocj4vp3q`).
       for (const selector of selectors) {
         const count = await page.locator(selector).count().catch(() => 0);
         if (count === 0) continue;
-        chosen = { selector, index: warmRowIndex(scenario, count), count };
+        const fresh = await resolveWarmRowIndex(scenario, opts, token, count);
+        if (fresh === null) continue;
+        chosen = { selector, index: fresh, count };
         break;
       }
     }
+    // Keep polling until the deadline: "no skeleton" is true before the rows mount,
+    // so a missing row is only a verdict once the whole entry budget is spent.
     if (chosen === null) await page.waitForTimeout(200);
   }
-  if (chosen === null) throw new Error(`warm target not found for ${scenario.key}`);
+  if (chosen === null) {
+    throw new Error(`warm target not found for ${scenario.key}`);
+  }
 
   let lastError: string | null = null;
+  let clickedRowText: string | null = null;
   let clicked = false;
   for (const selector of [chosen.selector, ...selectors.filter((candidate) => candidate !== chosen!.selector)]) {
     const locator = page.locator(selector);
     const count = await locator.count().catch(() => 0);
     if (count === 0) continue;
-    const row = locator.nth(Math.min(warmRowIndex(scenario, count), count - 1));
+    const index = await resolveWarmRowIndex(scenario, opts, token, count) ?? Math.min(chosen.index, count - 1);
+    const row = locator.nth(index);
     try {
       await row.scrollIntoViewIfNeeded({ timeout: 2_000 }).catch(() => {});
       await row.hover({ timeout: 5_000 });
       await page.waitForTimeout(opts.hoverLeadMs);
+      const text = await row.innerText().catch(() => "");
       await row.click({ timeout: 5_000 });
+      clickedRowText = text.slice(0, 200);
       clicked = true;
       break;
     } catch (error) {
@@ -1076,19 +1124,61 @@ async function clickWarmTarget(page: Page, scenario: Scenario, opts: Options): P
     throw new Error(`warm target not found for ${scenario.key}${lastError ? `: ${lastError.split("\n")[0]}` : ""}`);
   }
 
-  // The click only counts once the app has actually selected the intended issue.
-  // `replace` runs inside `startTransition`, so the URL commits a beat after the
-  // click; poll for it rather than sleeping. Throwing (instead of falling through
-  // to a 20 s ready wait) makes the round record `error` immediately and keeps a
-  // wrong landing from being reported as a slow one.
-  if (scenario.expectIssueId !== null) {
-    const issueParam = await waitForUrlIssue(page, scenario.expectIssueId);
-    if (issueParam !== scenario.expectIssueId) {
-      throw new Error(
-        `deeplink warm: url issue=${issueParam ?? "(none)"} expected ${scenario.expectIssueId}`,
-      );
-    }
+  // The click only counts once the app has selected the intended issue. The URL
+  // commit is asynchronous (`replace` runs inside `startTransition`) and, while the
+  // guard is fulfilling the auto mark-read, it can take seconds; 10 s is the agreed
+  // bound. This is a correctness check on the click, never part of `readyMs`.
+  if (scenario.expectIssueId === null) return { urlCommitMs: null, clickedRowText };
+  const startedAt = Date.now();
+  const issueParam = await waitForUrlIssue(page, scenario.expectIssueId, URL_COMMIT_TIMEOUT_MS);
+  const urlCommitMs = Date.now() - startedAt;
+  if (issueParam !== scenario.expectIssueId) {
+    throw new Error(
+      `deeplink warm: url issue=${issueParam ?? "(none)"} expected ${scenario.expectIssueId}`,
+    );
   }
+  return { urlCommitMs, clickedRowText };
+}
+
+/**
+ * Row index to click for a warm round.
+ *
+ * Every non-deep-link scenario clicks the first matching row. The deep link is the
+ * only one that needs a specific row, and its index must be computed *now*: the
+ * probe's snapshot is taken before the detail rounds run, and the production inbox
+ * is a rolling window, so a probe-time index is routinely stale by click time
+ * (MUL-384 `cmt_cxrxocj4vp3q`: `domRow=7` clicked an unrelated notification while
+ * the target had moved to row 8).
+ *
+ * Returns null when the target is not in the current snapshot, which the caller
+ * reports as `skipped: warm-target-not-in-list` rather than clicking a clamped
+ * index.
+ */
+async function resolveWarmRowIndex(
+  scenario: Scenario,
+  opts: Options,
+  token: string,
+  count: number,
+): Promise<number | null> {
+  // Only the deep link needs a specific row: every other scenario clicks the first
+  // matching issue row (or the sidebar link it already selected).
+  if (scenario.inboxItemId === null) return 0;
+  const fresh = await fetchInboxPageItems(opts.baseUrl, token);
+  if (fresh.length === 0) return null;
+  const index = inboxDomRowIndex(fresh as unknown as InboxItem[], scenario.inboxItemId);
+  if (index === null || index >= count) return null;
+  return index;
+}
+
+/** One page of inbox rows, read straight from the API. */
+async function fetchInboxPageItems(baseUrl: string, token: string): Promise<Array<Record<string, unknown>>> {
+  const res = await fetch(`${baseUrl}/api/inbox/page?limit=50`, {
+    headers: { Authorization: `Bearer ${token}` },
+  }).catch(() => null);
+  if (!res || !res.ok) return [];
+  const body = (await res.json().catch(() => null)) as { items?: unknown[] } | null;
+  const items = Array.isArray(body?.items) ? body.items : [];
+  return items.filter((item): item is Record<string, unknown> => !!item && typeof item === "object");
 }
 
 /** `?issue=` currently in the URL, or null when the parameter is absent. */
@@ -1316,6 +1406,8 @@ function buildScenarios(options: {
         inboxRowIndex: null,
         inboxItemId: null,
         expectIssueId: null,
+        expectIdentifier: null,
+        inboxUnreadIds: [],
         target: { identifier: detail.identifier, ...(detail.note ? { note: detail.note } : {}) },
         targetSelection: null,
         skipReason: detail.skipReason,
@@ -1351,6 +1443,8 @@ function buildScenarios(options: {
         inboxRowIndex: deepLink?.rowIndex ?? null,
         inboxItemId: deepLink?.inboxItemId ?? null,
         expectIssueId: deepLink?.issueId ?? null,
+        expectIdentifier: deepLink?.issueIdentifier ?? null,
+        inboxUnreadIds: deepLink?.unreadIdsInRow ?? [],
         target: {
           identifier: deepLink
             ? `${deepLink.issueId}${deepLink.issueHasRunningTask ? "（running）" : ""}`
@@ -1377,6 +1471,8 @@ function buildScenarios(options: {
         inboxRowIndex: null,
         inboxItemId: null,
         expectIssueId: null,
+        expectIdentifier: null,
+        inboxUnreadIds: [],
         target: { identifier: page.key },
         targetSelection: null,
         skipReason: null,
@@ -1407,6 +1503,11 @@ async function warmupScenarios(options: {
     profiles: profilesFor({ modes: ["legacy"], shape: "issue-detail", targetCommentId: null }),
   });
   const page = await context.newPage();
+  // Warmup visits the measured routes, which includes the deep-link `?issue=` URL.
+  // That URL auto-marks its target read, so without the guard here the warmup would
+  // change the fixture state the measured rounds then read. Attach the same guard the
+  // rounds use; the warmup's own counters are discarded.
+  attachCollectors(page, 0, "warmup", []);
   // Warm the entry pages once: both the issues list and the inbox are the
   // starting point of every warm round.
   const entries = new Set<string>();
@@ -1451,6 +1552,7 @@ async function main(): Promise<void> {
   const runner = `${hostname()} (${platform()} ${osRelease()} ${arch()}, ${cpus().length} vCPU, ${Math.round(totalmem() / 1024 ** 3)} GiB RAM)`;
   const browser = await launchBrowser();
   const allBlocked: BlockedWrite[] = [];
+  const allStubbed: StubbedWrite[] = [];
 
   try {
     process.stdout.write(
@@ -1599,7 +1701,7 @@ async function main(): Promise<void> {
 
       const rounds: RoundMeasurement[] = [];
       for (let round = 1; round <= opts.rounds; round++) {
-        const { round: measured, blocked } = await measureRound({
+        const { round: measured, blocked, stubbed } = await measureRound({
           browser,
           token,
           baseUrl: opts.baseUrl,
@@ -1610,6 +1712,7 @@ async function main(): Promise<void> {
           knownIds,
         });
         allBlocked.push(...blocked);
+        allStubbed.push(...stubbed);
         rounds.push(measured);
         process.stdout.write(
           `  ${scenario.key.padEnd(18)} ${scenario.mode.padEnd(4)} round ${round}: ` +
@@ -1693,6 +1796,13 @@ async function main(): Promise<void> {
         "encodedBodySize=压缩后传输体积，decodedBodySize=解压后 JSON 体积，transferSize=含响应头的传输体积",
       lcpNote: "LCP 由 PerformanceObserver 类型条目读取；无候选时为 null",
       writeGuardSelfTest: guardSelfTest,
+      // The allow-list is part of the measurement contract, so the report states
+      // exactly which writes were stubbed rather than aborted.
+      stubbedWriteAllowList: STUBBED_WRITES.map((rule) => ({
+        method: rule.method,
+        label: rule.label,
+        reason: rule.reason,
+      })),
       ambientLatency: { before: ambientBefore, after: ambientAfter },
       ambientNote:
         "生产为共享环境：同一台机器复跑时，先看 /api/config 的中位耗时是否与本次接近，再比较页面数字。",
@@ -1713,6 +1823,7 @@ async function main(): Promise<void> {
       meta,
       scenarios: byScenario,
       blockedWrites: allBlocked,
+      stubbedWrites: allStubbed,
       ...(compare ? { compare: { rows: compare.rows, warnings: compare.warnings } } : {}),
     };
 
@@ -1725,7 +1836,13 @@ async function main(): Promise<void> {
     writeFileSync(jsonPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
     writeFileSync(
       mdPath,
-      buildMarkdown({ meta, scenarios: byScenario, blockedWrites: allBlocked, compare: compare?.markdown ?? null }),
+      buildMarkdown({
+        meta,
+        scenarios: byScenario,
+        blockedWrites: allBlocked,
+        stubbedWrites: allStubbed,
+        compare: compare?.markdown ?? null,
+      }),
       "utf8",
     );
     writeFileSync(
@@ -1734,6 +1851,7 @@ async function main(): Promise<void> {
         meta,
         scenarios: byScenario,
         blockedWrites: allBlocked,
+        stubbedWrites: allStubbed,
         compareTable: compare?.rows ?? null,
       }),
       "utf8",
@@ -1766,6 +1884,8 @@ function deepLinkScenarioFields(
   issueHasRunningTask?: boolean;
   inboxApiIndex?: number | null;
   inboxDomRowIndex?: number | null;
+  targetRead?: boolean;
+  targetGroupHasUnread?: boolean;
 } {
   if (scenario.key !== "deeplink") return {};
   if (!target) return scenario.targetSelection ? { targetSelection: scenario.targetSelection } : {};
@@ -1775,6 +1895,12 @@ function deepLinkScenarioFields(
     issueHasRunningTask: target.issueHasRunningTask,
     inboxApiIndex: target.apiIndex,
     inboxDomRowIndex: target.rowIndex,
+    // The probe prefers an unread target, because selecting one is the path a user
+    // almost always takes and it therefore exercises the auto mark-read. Reporting
+    // `targetRead` makes the choice visible, and `targetGroupHasUnread` says whether
+    // a mark-read was expected at all (the stub self-check's denominator).
+    targetRead: target.read,
+    targetGroupHasUnread: target.groupHasUnread,
   };
 }
 

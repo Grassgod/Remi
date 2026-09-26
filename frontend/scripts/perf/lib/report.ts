@@ -39,7 +39,12 @@ export interface ReportRoundSummary {
   slowestServerTotalMs: number | null;
   /** Failure text for the round (`warm target not found`, navigation errors, ...). */
   error?: string;
+  /** Writes the guard stopped; always aborted, never sent to the server. */
   blockedWrites: number;
+  /** Writes the allow-list fulfilled inside the browser (see lib/stub-writes.ts). */
+  stubbedWrites: number;
+  /** Milliseconds from the click to the `?issue=` commit; a correctness check. */
+  urlCommitMs: number | null;
   heapBytes: number | null;
   /** The anchor's rect at the ready frame, in root-relative coordinates. */
   anchorRectAtReady?: { top: number; bottom: number; height: number; rootHeight: number } | null;
@@ -87,6 +92,10 @@ export interface ReportScenario {
   inboxApiIndex?: number | null;
   /** The DOM row the warm click must use, from the page's grouping functions. */
   inboxDomRowIndex?: number | null;
+  /** Read state of the chosen notification, per the third review round. */
+  targetRead?: boolean;
+  /** True when any notification on the target's rendered row is unread. */
+  targetGroupHasUnread?: boolean;
   hoverLeadMs: number | null;
   rounds: ReportRoundSummary[];
   stats: PerfScenarioStats;
@@ -107,6 +116,8 @@ export function buildMarkdown(report: {
   meta: Record<string, unknown>;
   scenarios: ReportScenario[];
   blockedWrites: Array<{ page: string; method: string; path: string; attempts: number }>;
+  /** Writes fulfilled by the allow-list, reported separately from the aborts. */
+  stubbedWrites?: Array<{ page: string; method: string; path: string; attempts: number }>;
   compare?: string | null;
 }): string {
   const meta = report.meta as {
@@ -193,10 +204,10 @@ export function buildMarkdown(report: {
   lines.push("## 每轮明细");
   lines.push("");
   lines.push(
-    "| 场景 | 模式 | 轮 | ready ms | firstReal ms | anchorVisible ms | anchor | anchorRect(top/bottom/height/root) | appReady ms | 跳动数 | 位移 px | CLS | LCP ms | 最慢 Server-Timing ms | chunks | chunk bytes | 串行深度 | 首屏 API | 写请求 | error |",
+    "| 场景 | 模式 | 轮 | ready ms | firstReal ms | anchorVisible ms | anchor | anchorRect(top/bottom/height/root) | appReady ms | 跳动数 | 位移 px | CLS | LCP ms | 最慢 Server-Timing ms | chunks | chunk bytes | 串行深度 | 首屏 API | 拦截写请求 | 桩写请求 | URL 提交 ms | error |",
   );
   lines.push(
-    "| --- | --- | ---: | ---: | ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+    "| --- | --- | ---: | ---: | ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
   );
   for (const scenario of report.scenarios) {
     for (const round of scenario.rounds) {
@@ -205,7 +216,7 @@ export function buildMarkdown(report: {
         ? `${rect.top}/${rect.bottom}/${rect.height}/${rect.rootHeight}`
         : "-";
       lines.push(
-        `| ${scenario.key} | ${scenario.mode} | ${round.round} | ${fmtMs(round.readyMs)}${round.readyTimeout ? " ⚠" : ""} | ${fmtMs(round.firstRealMs)} | ${fmtMs(round.anchorVisibleMs)} | ${round.anchorName ?? "-"} | ${rectText} | ${fmtMs(round.appReadyMs)}${round.appReadyForced ? " (forced)" : ""} | ${round.jumpCount} | ${fmtMs(round.jumpPx)} | ${round.cls} | ${fmtMs(round.lcpMs)} | ${fmtMs(round.slowestServerTotalMs)} | ${round.chunksLoaded} | ${fmtBytes(round.chunkBytes)} | ${round.serialDepth ?? "-"} | ${round.apiFirstScreen}/${round.apiCallsTotal} | ${round.blockedWrites} | ${round.error ?? "-"} |`,
+        `| ${scenario.key} | ${scenario.mode} | ${round.round} | ${fmtMs(round.readyMs)}${round.readyTimeout ? " ⚠" : ""} | ${fmtMs(round.firstRealMs)} | ${fmtMs(round.anchorVisibleMs)} | ${round.anchorName ?? "-"} | ${rectText} | ${fmtMs(round.appReadyMs)}${round.appReadyForced ? " (forced)" : ""} | ${round.jumpCount} | ${fmtMs(round.jumpPx)} | ${round.cls} | ${fmtMs(round.lcpMs)} | ${fmtMs(round.slowestServerTotalMs)} | ${round.chunksLoaded} | ${fmtBytes(round.chunkBytes)} | ${round.serialDepth ?? "-"} | ${round.apiFirstScreen}/${round.apiCallsTotal} | ${round.blockedWrites} | ${round.stubbedWrites} | ${fmtMs(round.urlCommitMs)} | ${round.error ?? "-"} |`,
       );
     }
   }
@@ -238,6 +249,19 @@ export function buildMarkdown(report: {
     lines.push("> 全部为 abort，未到达服务端。");
     lines.push("");
   }
+  const stubs = report.stubbedWrites ?? [];
+  if (stubs.length > 0) {
+    lines.push("## 被允许表接管的写请求（在浏览器内 fulfill，未到达服务端）");
+    lines.push("");
+    lines.push("| 页面 | 方法 | path 模式 | 次数 |");
+    lines.push("| --- | --- | --- | ---: |");
+    for (const write of stubs) {
+      lines.push(`| ${write.page} | ${write.method} | \`${write.path}\` | ${write.attempts} |`);
+    }
+    lines.push("");
+    lines.push("> 仅 `POST /api/inbox/:id/read`；响应在浏览器内生成，服务器仍为零写入。");
+    lines.push("");
+  }
   if (report.compare) {
     lines.push("## 与基线对比");
     lines.push("");
@@ -251,6 +275,7 @@ export function buildHtml(report: {
   meta: Record<string, unknown>;
   scenarios: ReportScenario[];
   blockedWrites: Array<{ page: string; method: string; path: string; attempts: number }>;
+  stubbedWrites?: Array<{ page: string; method: string; path: string; attempts: number }>;
   compareTable?: CompareRow[] | null;
 }): string {
   const esc = (value: unknown): string =>
@@ -314,6 +339,8 @@ export function buildHtml(report: {
       <td class="num">${round.serialDepth ?? "-"}</td>
       <td class="num">${round.apiFirstScreen}/${round.apiCallsTotal}</td>
       <td class="num">${round.blockedWrites}</td>
+      <td class="num">${round.stubbedWrites}</td>
+      <td class="num">${fmtMs(round.urlCommitMs)}</td>
       <td class="muted">${esc(round.error ?? "-")}</td>
     </tr>`,
       ),
@@ -333,6 +360,13 @@ export function buildHtml(report: {
       <td>${esc(jump.kind)}</td>
       <td class="num">${jump.frames}</td>
     </tr>`)))
+    .join("\n");
+
+  const stubbedRows = (report.stubbedWrites ?? [])
+    .map(
+      (write) =>
+        `<tr><td>${esc(write.page)}</td><td>${esc(write.method)}</td><td><code>${esc(write.path)}</code></td><td class="num">${write.attempts}</td></tr>`,
+    )
     .join("\n");
 
   const blockedRows = report.blockedWrites
@@ -415,12 +449,13 @@ ${rows}
 </table></div>
 <h2>每轮明细</h2>
 <div class="tablewrap"><table>
-<thead><tr><th>场景</th><th>模式</th><th class="num">轮</th><th class="num">ready ms</th><th class="num">firstReal ms</th><th class="num">anchorVisible ms</th><th>anchor</th><th>anchorRect(top/bottom/height/root)</th><th class="num">appReady ms</th><th class="num">跳动数</th><th class="num">位移 px</th><th class="num">CLS</th><th class="num">LCP ms</th><th class="num">最慢 Server-Timing ms</th><th class="num">chunks</th><th class="num">chunk bytes</th><th class="num">串行深度</th><th class="num">首屏 API</th><th class="num">写请求</th><th>error</th></tr></thead>
+<thead><tr><th>场景</th><th>模式</th><th class="num">轮</th><th class="num">ready ms</th><th class="num">firstReal ms</th><th class="num">anchorVisible ms</th><th>anchor</th><th>anchorRect(top/bottom/height/root)</th><th class="num">appReady ms</th><th class="num">跳动数</th><th class="num">位移 px</th><th class="num">CLS</th><th class="num">LCP ms</th><th class="num">最慢 Server-Timing ms</th><th class="num">chunks</th><th class="num">chunk bytes</th><th class="num">串行深度</th><th class="num">首屏 API</th><th class="num">拦截写请求</th><th class="num">桩写请求</th><th class="num">URL 提交 ms</th><th>error</th></tr></thead>
 <tbody>
 ${detailRows}
 </tbody>
 </table></div>
 ${jumpRows ? `<h2>跳动明细</h2>\n<div class="tablewrap"><table>\n<thead><tr><th>场景</th><th>模式</th><th class="num">轮</th><th class="num">start ms</th><th class="num">end ms</th><th class="num">位移 px</th><th class="num">scroll px</th><th>kind</th><th class="num">frames</th></tr></thead>\n<tbody>\n${jumpRows}\n</tbody>\n</table></div>` : ""}
+${stubbedRows ? `<h2>被允许表接管的写请求（浏览器内 fulfill）</h2>\n<div class="tablewrap"><table>\n<thead><tr><th>页面</th><th>方法</th><th>path 模式</th><th class="num">次数</th></tr></thead>\n<tbody>\n${stubbedRows}\n</tbody>\n</table></div>` : ""}
 ${blockedRows ? `<h2>被拦截的写请求（全部为 abort）</h2>\n<div class="tablewrap"><table>\n<thead><tr><th>页面</th><th>方法</th><th>path 模式</th><th class="num">尝试</th></tr></thead>\n<tbody>\n${blockedRows}\n</tbody>\n</table></div>` : ""}
 ${compareRows ? `<h2>与基线对比</h2>\n<div class="tablewrap"><table>\n<thead><tr><th>场景</th><th>模式</th><th>选择器</th><th class="num">ready p75</th><th class="num">Δ</th><th class="num">ready p95</th><th class="num">Δ</th><th class="num">jumps max</th><th class="num">串行深度</th><th class="num">首屏 API p50</th></tr></thead>\n<tbody>\n${compareRows}\n</tbody>\n</table></div>` : ""}
 <footer>由 frontend/scripts/perf/page-speed.ts 生成。自包含 HTML：无外链资源、无存储、无父窗口访问。</footer>

@@ -8,9 +8,18 @@
  * `localStorage.multimira_token`, and never reaches argv, a log line or a report.
  */
 
-import { chromium, type Browser, type BrowserContext, type Page } from "@playwright/test";
+import { chromium, type Browser, type BrowserContext, type Page, type Route } from "@playwright/test";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import {
+  inboxItemsFromBody,
+  isInboxReadStateEndpoint,
+  isStubbedWrite,
+  rewriteInboxReadState,
+  STUBBED_WRITES,
+  stubbedReadResponseBody,
+  stubbedWriteItemId,
+} from "./stub-writes";
 
 export const TOKEN_ENV = "MULTIREMI_QA_WEB_TOKEN";
 export const VIEWPORT = { width: 1440, height: 900 };
@@ -41,9 +50,32 @@ export interface ApiResponseInfo {
   clientVersion: string | null;
 }
 
+export interface StubbedWrite {
+  round: number;
+  page: string;
+  method: string;
+  path: string;
+  /** How many times this allowed write was fulfilled. */
+  attempts: number;
+}
+
 export interface ApiCollectors {
   responses: Map<string, ApiResponseInfo>;
   blockedWrites: BlockedWrite[];
+  /**
+   * Writes the allow-list fulfilled instead of aborting. Kept separate from
+   * `blockedWrites` so the read-only guarantee stays auditable: everything in
+   * `blockedWrites` was stopped, everything in `stubbedWrites` never left the
+   * browser. See `lib/stub-writes.ts`.
+   */
+  stubbedWrites: StubbedWrite[];
+  /** Item ids this context has stubbed a mark-read for. */
+  stubbedItemIds: Set<string>;
+  /**
+   * Snapshot of the inbox bodies this context served, so a stubbed POST can answer
+   * with the item the server would have returned. Keyed by item id.
+   */
+  inboxItemSnapshot: Map<string, Record<string, unknown>>;
   /** Identifiers masked by value, not shape (workspace id/slug, member id). */
   knownIds: string[];
   webClientVersion: string | null;
@@ -178,6 +210,9 @@ export function attachCollectors(page: Page, round: number, label: string, known
   const collectors: ApiCollectors = {
     responses: new Map(),
     blockedWrites: [],
+    stubbedWrites: [],
+    stubbedItemIds: new Set(),
+    inboxItemSnapshot: new Map(),
     knownIds,
     webClientVersion: null,
     timelineBodies: new Map(),
@@ -185,11 +220,32 @@ export function attachCollectors(page: Page, round: number, label: string, known
 
   void page.route("**/api/**", async (route) => {
     const method = route.request().method();
+    const url = route.request().url();
     if (method === "GET" || method === "HEAD") {
-      await route.continue();
+      await continueWithStubbedReadState(route, method, url, collectors);
       return;
     }
-    const safePath = sanitizePath(route.request().url(), "", collectors.knownIds);
+    // The allow-list is explicit and one entry long; anything else is aborted, so
+    // production still never receives a write. See `lib/stub-writes.ts` for why
+    // `POST /api/inbox/:id/read` is fulfilled rather than stopped: aborting it puts
+    // the inbox into a retry loop that delays the URL commit past the assertion
+    // window (measured on 209, MUL-384 `cmt_cxrxocj4vp3q`).
+    if (isStubbedWrite(method, url)) {
+      const safePath = sanitizePath(url, "", collectors.knownIds);
+      const existing = collectors.stubbedWrites.find(
+        (write) => write.method === method && write.path === safePath,
+      );
+      if (existing) existing.attempts += 1;
+      else collectors.stubbedWrites.push({ round, page: label, method, path: safePath, attempts: 1 });
+      const itemId = stubbedWriteItemId(url);
+      if (itemId) collectors.stubbedItemIds.add(itemId);
+      await route.fulfill({
+        status: 200,
+        json: stubbedReadResponseBody(itemId ?? "", collectors.inboxItemSnapshot),
+      });
+      return;
+    }
+    const safePath = sanitizePath(url, "", collectors.knownIds);
     const existing = collectors.blockedWrites.find(
       (write) => write.method === method && write.path === safePath,
     );
@@ -223,6 +279,43 @@ export function attachCollectors(page: Page, round: number, label: string, known
   });
 
   return collectors;
+}
+
+/**
+ * Forwards a GET, rewriting the inbox read state first when this context has
+ * stubbed any mark-read call.
+ *
+ * The rewrite is what makes the stub terminate: `useMarkInboxItemsRead` has no
+ * `onSuccess` and invalidates on settle, so the loop only ends when the refetched
+ * page reports `read: true` for the stubbed item. `unread-count` and `summary` are
+ * deliberately left alone — they only drive the sidebar badge.
+ */
+async function continueWithStubbedReadState(
+  route: Route,
+  method: string,
+  url: string,
+  collectors: ApiCollectors,
+): Promise<void> {
+  if (collectors.stubbedItemIds.size === 0 || !isInboxReadStateEndpoint(method, url)) {
+    await route.continue();
+    return;
+  }
+  try {
+    const response = await route.fetch();
+    const body = await response.json().catch(() => null);
+    for (const item of inboxItemsFromBody(body)) {
+      const id = typeof item.id === "string" ? item.id : null;
+      if (id) collectors.inboxItemSnapshot.set(id, item);
+    }
+    await route.fulfill({
+      response,
+      json: rewriteInboxReadState(body, collectors.stubbedItemIds),
+    });
+  } catch {
+    // The rewrite must never turn a readable API into a failed one; an unreadable
+    // body simply passes through and the self-check will catch a stuck loop.
+    await route.continue();
+  }
 }
 
 export interface ResourceEntry {
@@ -445,7 +538,7 @@ export async function verifyWriteGuard(
   browser: Browser,
   token: string,
   baseUrl: string,
-): Promise<{ blocked: boolean; target: string; detail: string }> {
+): Promise<{ blocked: boolean; target: string; detail: string; allowedWrites: string[] }> {
   const target = "/api/inbox/unread-count";
   const context = await mktContext(browser, token);
   const page = await context.newPage();
@@ -473,9 +566,15 @@ export async function verifyWriteGuard(
       detail: blocked
         ? `deliberate POST ${target} was aborted by the guard`
         : `POST ${target} was NOT aborted — the write guard is not working`,
+      allowedWrites: STUBBED_WRITES.map((rule) => rule.label),
     };
   } catch (error) {
-    return { blocked, target, detail: (error as Error).message };
+    return {
+      blocked,
+      target,
+      detail: (error as Error).message,
+      allowedWrites: STUBBED_WRITES.map((rule) => rule.label),
+    };
   } finally {
     await context.close();
   }

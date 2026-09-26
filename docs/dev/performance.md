@@ -99,7 +99,22 @@ bun run tests/manual/smoke-request-metrics.ts
 
 [frontend/scripts/perf/page-speed.ts](../../frontend/scripts/perf/page-speed.ts) 用仓库既有的 `@playwright/test` 打开主要页面，记录每页的就绪时间、API 调用数、API 字节、最慢 API 及 `Server-Timing`。它**不是** e2e 套件，位于 `frontend/e2e` 之外，不会被默认 e2e 扫到；依赖已有 `@playwright/test`，不新增依赖。
 
-**只读保证**：脚本在 `page.route('**/api/**')` 里 abort 所有非 GET/HEAD 请求，并把这些请求按 `method + 脱敏 path` 记进 `blockedWrites`，所以它可以在生产上对着真实账号跑。打开 inbox 页面本身不会写数据（实测 0 个写请求）；点击某一行会触发 `POST /api/inbox/:id/read`，只读探针会把它拦下来并记录尝试次数，**不会**真的标记已读。每次运行还会先做一次护栏自检（对 `/api/inbox/unread-count` 发 POST，必须被拦截），自检结果是报告的一部分——否则“页面从未写数据”和“护栏静默失效”无法区分。
+**只读保证**：脚本在 `page.route('**/api/**')` 里阻止所有非 GET/HEAD 请求，所以它可以在生产上对着真实账号跑。打开 inbox 页面本身不会写数据（实测 0 个写请求）；点击某一行会触发 `POST /api/inbox/:id/read`。每次运行还会先做一次护栏自检（对 `/api/inbox/unread-count` 发 POST，必须被阻止），自检结果是报告的一部分——否则“页面从未写数据”和“护栏静默失效”无法区分。
+
+### 允许表：一个被 fulfill 而不是被 abort 的端点
+
+[frontend/scripts/perf/lib/stub-writes.ts](../../frontend/scripts/perf/lib/stub-writes.ts) 维护一张显式允许表，目前只有一项：
+
+| 方法 | path | 处理 | 为什么 |
+| --- | --- | --- | --- |
+| `POST` | `/api/inbox/:id/read` | 在浏览器内 `route.fulfill(200)`，响应体取本次 context 见过的该 item 且 `read: true` | 点中任何未读通知都会自动触发它；abort 之后前端会 `POST → abort → 回滚 → refetch → 再 POST` 循环 55–100 次，把 `?issue=` 的提交从 181ms 拖到约 5s（209 实测，MUL-384 `cmt_cxrxocj4vp3q`） |
+
+- **生产仍然零写入**：`fulfill` 不出浏览器。允许表改变的是「一律 abort」这个手段，不是「生产只读」这个目的。
+- 同一 context 内改写 `GET /api/inbox/page*` 与 `GET /api/inbox` 的响应，把已桩过的 id 标成 `read: true`——`useMarkInboxItemsRead` 没有 `onSuccess`，`onSettled` 只 invalidate，所以循环能否终止只取决于 refetch 回来的 `read`。`unread-count` / `summary` 不改写（只影响角标）。改写是纯函数 `rewriteInboxReadState`，有单测。
+- **计数分列**：被 abort 的仍计入 `blockedWrites`（MD/HTML 列名「拦截写请求」），被允许表接管的计入 `stubbedWrites`（「桩写请求」），两者不混。每轮与聚合严格相等（读 collectors 之前先冻结页面路由）。
+- **新自检**：每轮 `stubbedWrites` 不得超过 `2 ×` 目标所在行的未读 id 数（一次成功 + 至多一次重试）。超过说明改写没生效、循环仍在，该轮记 `error: stub-loop-not-terminated` 并结束。非 deeplink 轮的未读数为 0，因此不得出现桩写请求。
+- **验收口径（§2.9 修订）**：`blockedWrites` 全部为 abort；`stubbedWrites` 只含 `/api/inbox/:id/read`，且每轮次数不超过 `2 × 未读 id 数`。`meta.stubbedWriteAllowList` 记录当前允许表。
+- URL 断言窗口 10s，只用于检查「点对了行」，**不参与 readyMs**；每轮记 `urlCommitMs`。
 
 **凭证**：token 只从 `MULTIREMI_QA_WEB_TOKEN` 读取，写进目标 origin 的 `localStorage.multimira_token`，不打印、不落盘、不进 argv、不进报告。输出文件里只有 method、脱敏 path、status、耗时和字节。
 
@@ -166,11 +181,14 @@ MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内
 | 串行深度 | `wave = 1 + max(wave(p) \| p.responseEnd ≤ start + 8ms)`；`Server-Timing` 从 resource timing 同源读取 |
 | 深链目标 | 冷启动与应用内切页用**同一条**首屏通知。候选只从 `/api/inbox/page?limit=50` 取，按 `issue_id` 归并（`?issue=` 命中的是该 issue 最新一条）；合格项必须非 ledger 类且同时有 `details.comment_id` 与 `details.issue_session_id`，其中当前没有 running task 的 issue 优先，其次按 API 顺序。记 `{ issueId, issueIdentifier, inboxItemId, commentId, issueHasRunningTask, rowIndex }`；都选不到则 `skipped: no-eligible-inbox-item`。`--inbox-item` 只在第一页有效，否则 `skipped: inbox-item-not-on-first-page` |
 | 深链 URL | `/{slug}/inbox?issue=<issueId>&session=<issue_session_id>`。只带 `issue_id` 的通知走 `?issue=`（`inboxItemSelectionKind`），`?item=` 只属于 ledger 类通知，而 ledger 渲染 `AutopilotRunReport` 不测 timeline |
-| 深链 warm | DOM 行序由 `inboxDomRowIndex`（`lib/selectors.ts`）给出：它 import `core/inbox/grouping.ts` 的 `deduplicateInboxItems → filterInboxItemsBySource(…, "all") → groupInboxItemsByDate`，取 `flatMap(g => g.entries)` 的下标。**API 数组下标不是 DOM 行号**：生产上首页 50 条经归并只剩 8 行，成功的 autopilot run 会合并成一行。目标不在渲染列表里时记 `skipped: no-eligible-inbox-item-in-dom`。点该行后等 URL 的 `issue` 参数变成选中 issueId（`replace` 在 `startTransition` 里，异步提交，轮询上限 3s）；不匹配则立刻结束该轮并写 `error: deeplink warm: url issue=<实际值> expected <id>`，不再静默跑满 20s |
+| 深链 warm | DOM 行序由 `inboxDomRowIndex`（`lib/selectors.ts`）给出：它 import `core/inbox/grouping.ts` 的 `deduplicateInboxItems → filterInboxItemsBySource(…, "all") → groupInboxItemsByDate`，取 `flatMap(g => g.entries)` 的下标。**API 数组下标不是 DOM 行号**：生产上首页 50 条经归并只剩 8 行，成功的 autopilot run 会合并成一行。**行号在点击前一刻重算**，不用探测轮的旧值——探测到点击之间隔着 detail 四轮（约 1 分钟），生产 inbox 是滚动窗口，旧行号会点到别的通知。目标不在当前列表里时记 `skipped: warm-target-not-in-list`。点该行后等 URL 的 `issue` 参数变成选中 issueId（`replace` 在 `startTransition` 里，异步提交，轮询上限 10s）；不匹配则立刻结束该轮并写 `error: deeplink warm: url issue=<实际值> expected <id>` |
+| 深链目标读态 | 候选在同等条件下**优先选未读**（所在分组条目里至少一条 `read=false`）。未读目标会走「自动已读成功 → refetch → 渲染」这条真实用户最常见的路径，而允许表保证它可完成；报告记 `targetRead` 与 `targetGroupHasUnread` |
 OLDEOF
 
 # Fixture description.
 swap(<<'OLDEOF', <<'NEWEOF', "fixtures");
+**warmup 也挂护栏**：`--warmup` 会访问每个被测路由，其中包含深链的 `?issue=` URL，而该 URL 会自动把目标标为已读。warmup 页与测量轮使用同一套护栏与允许表，否则预热会改变后续测量读到的 fixture 状态。
+
 参数：`--base-url`、`--rounds`（默认 3）、`--window peak|offpeak`、`--name`、`--out`、`--compare`、`--selectors auto|contract|legacy`、`--only <prefix>`、`--warmup`、`--issue-short`（默认 `iss_1or5ray9rrj8`）、`--issue-long`（默认 `iss_8vhk0frd8thl`，报告标注「长（173 条）」）、`--issue-running`（默认现场选取，排除 MUL-383 `iss_j67lb0r8djw4` 及其全部子单；选不到则 `skipped`）、`--inbox-item`（默认首屏自动选取）。
 
 **测速数据**：短 issue 用 MUL-383 及其子单之外的单（它们有 agent 在跑、评论持续变化）；长 issue 目前最大 173 条，生产没有 ≥200 条评论的 issue，≥200 的口径由 S7 的 250 条 fixture 覆盖。
