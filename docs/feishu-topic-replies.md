@@ -90,6 +90,48 @@ The Feishu message ID is persisted before event consumption; retries replay into
 that card, with the delivery UUID deduplicating initial sends. Delivery failures
 remain retryable. Settled human requests are not reopened during replay.
 
+## Decision Cards For Human Requests
+
+An Issue task that asks a human for input no longer wakes a relay Agent to ask in
+prose. The control plane builds the card itself and queues it as a
+`decision_card` outbound delivery; the bot host only resolves the @, sends it,
+and later rewrites it. `buildTaskInteractionCard` lives in
+`packages/shared/src/feishu-task-card.ts` so both sides render the same JSON.
+
+The lane is gated on the host's own declaration: a daemon that reports
+`feishu_decision_card: 1` on its heartbeat gets cards, and one that does not keeps
+the previous relay-wake behavior. Silence is an answer, so a downgraded build
+stops receiving cards on its next heartbeat.
+
+Who may press the button comes from the topic's `notifyMode`. `person` names the
+open ID in `interaction_open_id` before the delivery is queued; `group_owner` is
+resolved by the host with the bot token and filled into the card's @ slot; `none`
+queues no card at all. A click is accepted only when the callback's chat matches
+and the operator's open ID equals the checkpointed recipient — anyone else gets a
+toast. `multiremi_task_human_requests.expires_at` carries the deadline (the
+server defaults to one hour when an older daemon sends no `timeout_ms`).
+
+The lifecycle feeds three delivery kinds, keyed by request id:
+`decision_card` (send), `decision_card_patch` (rewrite in place after a response,
+timeout, or cancellation) and `decision_reminder` (one text nudge mentioning the
+requester, materialized at claim time inside
+`[expires_at - 10min, expires_at]` and deduplicated by `reminder_sent_at`).
+MUL-403 replaces the event source — the request write plus host polling today,
+a Live Hub subscription later — without changing these kinds or the checkpoint
+fields.
+
+Two degradations keep the question from being lost. A send that fails with a
+non-retryable Feishu error falls back to the text twin the delivery already
+carries: the question, its numbered options, and the parent Issue's workbench
+link. A retryable failure stays on the outbox backoff. An Issue whose topic has
+no seed message gets no card and records the `decision_card_skipped` activity,
+so the request is visible on the web workbench only.
+
+An expired request is never an approval: the terminal card reads
+「已超时，未回答」and the task takes the existing cancel path. Receipts and
+reaction updates are best-effort; their failure is logged and never moves a
+delivery's state.
+
 An additive nullable `mention_snapshot` column on outbound deliveries stores
 recipient policy/resolution. Existing settings default to `group_owner`, with no
 history backfill or resend. Old v2/v3 daemons keep receiving final-body deliveries
