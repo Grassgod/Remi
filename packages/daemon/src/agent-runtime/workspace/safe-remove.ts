@@ -56,6 +56,7 @@ import {
   mkdirSync,
   openSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -272,10 +273,13 @@ function prepareRemoval(
   if (!targetName) throw new Error("owned directory target has no basename");
   const opened: OpenedAnchor[] = [];
   const close = () => {
-    for (const anchor of opened.reverse()) {
+    for (const anchor of [...opened].reverse()) {
       try { closeSync(anchor.fd); } catch {}
     }
   };
+  // A missing target or ancestor is an ordinary outcome, not a failure, so the
+  // descriptors opened on the way there must be released on every exit path.
+  let handedOff = false;
   try {
     const ancestorNames = segments;
     const ancestors: OpenedAnchor[] = [];
@@ -332,6 +336,7 @@ function prepareRemoval(
       assertSameFile(target.info, fstatSync(target.fd), "opened deletion target identity changed");
       assertRealDirectoryPath(quarantine.path, quarantine.info, "owned deletion quarantine");
     };
+    handedOff = true;
     return {
       strategy,
       sourcePath: join(parentReference, targetName),
@@ -353,9 +358,8 @@ function prepareRemoval(
         : verifyPathContainers,
       close,
     };
-  } catch (error) {
-    close();
-    throw error;
+  } finally {
+    if (!handedOff) close();
   }
 }
 
@@ -511,7 +515,8 @@ function openRecoveryQuarantine(
     const fd = openOptionalRealDirectory(join(rootAlias, OWNED_DIRECTORY_QUARANTINE), "owned deletion quarantine");
     if (fd === null) return null;
     const info = fstatSync(fd);
-    assertPrivateQuarantine(info, join(rootAlias, OWNED_DIRECTORY_QUARANTINE));
+    // Report the caller-facing path, not the procfs alias.
+    assertPrivateQuarantine(info, quarantinePath);
     const alias = descriptorDirectoryPath(fd, info, platform);
     if (!alias) {
       closeSync(fd);
@@ -640,7 +645,9 @@ function ensureQuarantine(rootReference: string): string {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
   }
   const info = assertRealDirectory(path, "owned deletion quarantine");
-  assertPrivateQuarantine(info, path);
+  // Report the caller-facing path even when `path` is a `/proc/self/fd` alias,
+  // so the message names a directory an operator can act on.
+  assertPrivateQuarantine(info, quarantineReportPath(rootReference));
   // The quarantine is daemon-private so no untrusted process can replace a
   // verified entry between identity validation and recursive removal.
   return path;
@@ -718,6 +725,20 @@ function parseQuarantineGeneration(entryName: string): QuarantineGeneration | nu
 function baseName(path: string): string {
   const parts = path.split(sep).filter(Boolean);
   return parts[parts.length - 1] ?? path;
+}
+
+/**
+ * Human-facing quarantine path for diagnostics. `rootReference` is a
+ * `/proc/self/fd` alias on Linux, which is meaningless in a log line, so the
+ * alias's target is used when it can be resolved.
+ */
+function quarantineReportPath(rootReference: string): string {
+  if (!rootReference.startsWith("/proc/self/fd/")) return join(rootReference, OWNED_DIRECTORY_QUARANTINE);
+  try {
+    return join(realpathSync(rootReference), OWNED_DIRECTORY_QUARANTINE);
+  } catch {
+    return join(rootReference, OWNED_DIRECTORY_QUARANTINE);
+  }
 }
 
 function assertPrivateQuarantine(info: Stats, path: string): void {

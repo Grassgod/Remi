@@ -149,15 +149,20 @@ function classifyGcFailure(error: unknown, options: RunWorkspaceGcOnceOptions): 
 /**
  * Report one directory-level GC failure the way the sweep treats it, then
  * rethrow ownership loss so the daemon stops instead of skipping past it.
+ *
+ * `countsAsSkipped` is false for the control-plane report steps: the workspace
+ * itself was already reclaimed and counted, so charging the round another skip
+ * for a failed bookkeeping call would double-count one directory.
  */
 function handleGcFailure(
   workspaceDir: string,
   error: unknown,
   options: RunWorkspaceGcOnceOptions,
   summary: MultiremiDaemonGcSummary,
+  countsAsSkipped = true,
 ): void {
   if (classifyGcFailure(error, options) === "abort") throw error;
-  summary.skipped++;
+  if (countsAsSkipped) summary.skipped++;
   options.onError?.(workspaceDir, error);
 }
 
@@ -171,16 +176,37 @@ export async function runWorkspaceGcOnce(options: RunWorkspaceGcOnceOptions): Pr
   // deletion out of its live path. Finish that deletion before replaying the
   // cleaned-state outbox so the control plane never reports retained bytes as
   // physically removed.
-  const quarantine = recoverOwnedDirectoryQuarantineSync(root, {
-    assertRootOwner: options.assertRootOwner,
-    onError: (path, error) => options.onError?.(path, error),
-  });
+  let retainedQuarantineNames = new Set<string>();
+  let quarantineRecovered = false;
+  try {
+    const quarantine = recoverOwnedDirectoryQuarantineSync(root, {
+      assertRootOwner: options.assertRootOwner,
+      onError: (path, error) => options.onError?.(path, error),
+    });
+    retainedQuarantineNames = new Set(quarantine.retained);
+    quarantineRecovered = true;
+  } catch (error) {
+    // A quarantine that cannot be opened or read is a per-directory style
+    // failure: report it and keep sweeping the workspaces. Ownership loss is
+    // the exception and still ends the round.
+    if (classifyGcFailure(error, options) === "abort") throw error;
+    summary.skipped++;
+    options.onError?.(join(root, OWNED_DIRECTORY_QUARANTINE), error);
+  }
   log.debug(`Workspace GC quarantine recovery finished: ${root}`);
-  // Retained quarantine bytes were never proven identical to a verified
-  // deletion target, so the outbox must not report their workspace as
-  // physically removed yet.
-  await flushIssueWorkspaceCleanedOutbox(root, options, new Set(quarantine.retained));
-  log.debug(`Workspace GC outbox flush finished: ${root}`);
+  if (quarantineRecovered) {
+    // Retained quarantine bytes were never proven identical to a verified
+    // deletion target, so the outbox must not report their workspace as
+    // physically removed yet.
+    await flushIssueWorkspaceCleanedOutbox(root, options, summary, retainedQuarantineNames);
+    log.debug(`Workspace GC outbox flush finished: ${root}`);
+  } else {
+    // Recovery did not finish, so which bytes are still in the quarantine is
+    // unknown. Flushing now could report a workspace as cleaned while its bytes
+    // are retained, so the outbox waits for a round that can read the
+    // quarantine.
+    log.warn(`Workspace GC deferred the cleaned-state outbox after quarantine recovery failed: ${root}`);
+  }
 
   const workspaces = safeReadDir(root) ?? [];
   // Scan the topic snapshot before Issue workspaces. A terminal Issue can move
@@ -426,7 +452,9 @@ async function collectWorkspaceGcDecisionUnlocked(
       options.assertRootOwner?.();
       rmSync(reportReceipt, { force: true });
     } catch (error) {
-      options.onError?.(reportReceipt, error);
+      // Same rule as the outbox replay: keep the receipt for a later round, but
+      // never swallow ownership loss.
+      handleGcFailure(reportReceipt, error, options, summary, false);
     }
   }
   if (decision === "orphan") summary.orphaned++;
@@ -486,6 +514,7 @@ function persistIssueWorkspaceCleanedReceipt(
 async function flushIssueWorkspaceCleanedOutbox(
   root: string,
   options: RunWorkspaceGcOnceOptions,
+  summary: MultiremiDaemonGcSummary,
   retainedQuarantineNames: ReadonlySet<string> = new Set(),
 ): Promise<void> {
   if (!options.client.reportIssueWorkspaceCleaned) return;
@@ -540,7 +569,9 @@ async function flushIssueWorkspaceCleanedOutbox(
       options.assertRootOwner?.();
       rmSync(path, { force: true });
     } catch (error) {
-      options.onError?.(path, error);
+      // One undeliverable receipt must not stall the rest of the outbox, but
+      // ownership loss still ends the round.
+      handleGcFailure(path, error, options, summary, false);
     }
   }
 }

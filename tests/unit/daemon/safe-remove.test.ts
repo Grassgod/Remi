@@ -151,6 +151,46 @@ describe.each(PLATFORMS)("anchored owned directory removal (%s)", (platform) => 
     expect(existsSync(join(root, OWNED_DIRECTORY_QUARANTINE))).toBe(false);
   });
 
+  it("releases every descriptor when the target or an ancestor is already gone", () => {
+    const root = tempRoot(roots);
+    const present = join(root, ".task-runtime", "task-1");
+    mkdirSync(join(root, ".task-runtime"), { recursive: true });
+    mkdirSync(present);
+    // Count only descriptors that were actually opened: a probe on a missing
+    // path throws out of openSync, and nothing leaks by failing to open.
+    const originalOpen = fs.openSync;
+    const originalClose = fs.closeSync;
+    let opened = 0;
+    let closed = 0;
+    const open = spyOn(fs, "openSync").mockImplementation((...args: Parameters<typeof originalOpen>) => {
+      const fd = originalOpen(...args);
+      opened++;
+      return fd;
+    });
+    const close = spyOn(fs, "closeSync").mockImplementation((...args: Parameters<typeof originalClose>) => {
+      closed++;
+      return originalClose(...args);
+    });
+    try {
+      for (let attempt = 0; attempt < 25; attempt++) {
+        // Deep path whose middle component exists but whose target is gone.
+        expect(removeOwnedDirectorySync(root, join(root, ".task-runtime", "missing-target"), { platform }))
+          .toBe(false);
+        // Deep path whose intermediate ancestor is gone.
+        expect(removeOwnedDirectorySync(root, join(root, ".missing-runtime", "missing-target"), { platform }))
+          .toBe(false);
+      }
+      expect(opened).toBe(75);
+      expect(closed).toBe(opened);
+    } finally {
+      open.mockRestore();
+      close.mockRestore();
+    }
+    // The fixtures are untouched, so no path leaked into a deletion.
+    expect(existsSync(present)).toBe(true);
+    expect(existsSync(join(root, OWNED_DIRECTORY_QUARANTINE))).toBe(false);
+  });
+
   it("retains a verified quarantine generation when the root fence is lost", () => {
     const root = tempRoot(roots);
     const target = join(root, "MUL-1");
