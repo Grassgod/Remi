@@ -2199,7 +2199,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
 
     // The single-statement expire has to write each row's OWN timeout copy on PG too.
     const toRun = store.createRuntimeCommandRequest(runtime.id, { command: "slow", args: [] });
-    expect(store.claimRuntimeCommandRequest(runtime.id, false)?.id).toBe(toRun.id);
+    expect(store.claimRuntimeCommandRequest(runtime.id)?.id).toBe(toRun.id);
     const toStayPending = store.createRuntimeCommandRequest(runtime.id, { command: "wait", args: [] });
     const staleRun = new Date(Date.now() - 30 * 60 * 1000).toISOString();
     const stalePending = new Date(Date.now() - 10 * 60 * 1000).toISOString();

@@ -806,12 +806,13 @@ export class AgentPluginsRepo {
     const beforeRows = desiredRows();
     const before = new Map(beforeRows.map((row) => [String(row.id), runtimeStateFingerprint(row)]));
     this.reconcileAgentPluginDesiredStateLocked(workspaceId);
-    // Reconciliation may have inserted, removed or flipped rows, so this read must be fresh even
-    // though the reader above is memoized: any write it performed cleared the entry.
-    const reconciledRows = this.ctx.db.query(
-      `SELECT * FROM multiremi_agent_plugin_runtime_states
-       WHERE runtime_id = ? AND desired = 1`,
-    ).all(runtimeId) as Row[];
+    // Reconciliation may have inserted, removed or flipped rows, so this read has to be fresh.
+    // Going back through the memoized reader is what makes it fresh *and* free when nothing
+    // changed: reconciliation writes this table through the same store handle, so a write clears
+    // the entry and `desiredRows()` re-selects, while a no-op reconcile leaves the entry in place
+    // and the second read costs nothing. Reading around the reader here is what made every idle
+    // heartbeat pay for this slice twice.
+    const reconciledRows = desiredRows();
     const changed = new Set(
       reconciledRows
         .filter((row) => before.get(String(row.id)) !== runtimeStateFingerprint(row))
