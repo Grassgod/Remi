@@ -91,7 +91,7 @@ export class SessionArchiveReader {
         uncompressedSize: options.uncompressedSize,
         sha256: options.sha256,
       });
-      return { bytesRead: member.bytesRead };
+      return { bytes: member.bytes, bytesRead: member.bytesRead };
     } finally {
       await handle.close().catch(() => {});
     }

@@ -872,8 +872,17 @@ export class SessionArchiveService {
     runtimeId: string,
   ): MultiremiSessionArchive {
     const writable = this.store.touchWritableSessionArchive(archive.id, runtimeId);
-    if (!writable) throw this.issueLifecycleClosed();
+    if (!writable) throw this.subjectNotWritable(archive.subjectKind);
     return writable;
+  }
+
+  private subjectNotWritable(subjectKind: MultiremiSessionArchiveSubjectKind): SessionArchiveError {
+    if (subjectKind === "issue") return this.issueLifecycleClosed();
+    return new SessionArchiveError(
+      `${subjectKind} session archive is not writable: the Runtime no longer owns this subject`,
+      409,
+      "session_archive_subject_not_writable",
+    );
   }
 
   private unsupportedFormat(format: string): SessionArchiveError {
