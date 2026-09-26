@@ -38,6 +38,13 @@ summary: 从 CLI、Web 和飞书入口追踪到 API、存储与 Agent 执行，�
 [AgentRuntime](../packages/daemon/src/agent-runtime/runtime.ts) 组装执行上下文 → ACP 或原生 agy provider → 消息、usage 和终态上报。
 权限请求、会话延续、工作目录归属与重试都在这条链路中，不可只以模型输出判断完成。
 
+上面这段是当前工作树的实现：领取走 HTTP claim 轮询，过程消息经 `TaskMessageBatcher` 写入
+`multiremi_task_messages`。MUL-401（协议 v2）把它换成 daemon 进程一条全双工 socket——服务端推送派活、
+过程事件作为 trace 流交给 Live Hub 而不再落库、`trace.read` 作为反向 RPC 读热 trace。**协议 v2 尚未接线**：
+契约与内存实现随 A-0 落地，连接层与派活在其后的子单，规范见
+[daemon 协议 v2](daemon-protocol-v2.md)，取舍见 [ADR 0005](adr/0005-daemon-protocol-v2-single-socket-and-db-derived-downlink.md)。
+在这条链路换完之前，以本段描述的 HTTP 路径为准。
+
 Runtime 可持有独立的[持久化工作区](dev/runtime-workspaces.md)：绑定 daemon 的已有目录。任务和聊天通过统一的「工作位置」选择项目或本机目录，二者互斥；Agent 可在不同任务中选择不同位置。目录绑定只能在所属机器执行；未指定位置时沿用自动任务目录。
 
 Chat 与 Issue 独立，Chat 创建时保存项目或本机目录选择；Runtime 本机目录不附加项目仓库；项目聊天优先采用项目所选的 `local_directory`，否则在托管 Chat 目录自动准备项目显式声明的仓库，后续复用已有 worktree。未选工作位置时使用自动 Chat 目录。在 Chat 中创建 Issue 不绑定会话，也不继承新 Issue 的上下文；普通私聊不接收 Issue 播报。飞书群 Issue 话题的归属由 [FeishuBotRepo](../packages/server/src/store/repos/feishu-bot-repo.ts)维护，投递和任务领取检查绑定、Issue、工作区、Chat 与 Agent 一致性；归属不明的旧关联按[迁移手册](migrations/chat-issue-decoupling.md)审计恢复。[claim wire](../packages/server/src/api/wire/tasks.ts)保留有预算的会话 projection，仅向已确认的 Issue 话题附加 Issue 与增量摘要。详见 [Chat 契约](chat.md)。

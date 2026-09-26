@@ -1,0 +1,146 @@
+import { describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import {
+  TRACE_EVENT_CONTENT_MAX_BYTES,
+  TRACE_EVENT_INPUT_MAX_BYTES,
+  TRACE_EVENT_META_MAX_BYTES,
+  TRACE_EVENT_OUTPUT_MAX_BYTES,
+  TRACE_EVENT_TOOL_MAX_BYTES,
+  TRACE_EVENT_TYPES,
+  isTraceEventType,
+  taskMessageToTraceEvent,
+  traceEventToTaskMessage,
+} from "@multiremi/contracts/trace.js";
+
+const REPO_ROOT = join(import.meta.dir, "../../..");
+const MAPPER = join(REPO_ROOT, "packages/server/src/worker/acp-event-mapper.ts");
+const DAEMON = join(REPO_ROOT, "packages/server/src/worker/daemon.ts");
+const TASKS_REPO = join(REPO_ROOT, "packages/server/src/store/repos/tasks-repo.ts");
+
+/**
+ * Drift guards for the two things A-0 states about existing behaviour: the event
+ * type inventory and the field byte caps. Both are restatements of code that
+ * lives elsewhere, so both need a mechanical check - a comment would not notice
+ * the day someone adds a fourteenth type or changes a cap.
+ */
+describe("trace contract drift guards", () => {
+  /**
+   * The producer inventory, read from the two files that build TaskMessageInput
+   * objects. Three shapes count, and nothing else does - in particular
+   * `status: "error"` on a workspace report is a different field and must not be
+   * mistaken for an event type:
+   *
+   *   1. an object literal `type: "x"`
+   *   2. the mapper's chunk ternary `? "thinking" : isCompaction ? "compaction" : "text"`
+   *   3. a `reportHumanRequestMessage(..., "x", ...)` argument
+   */
+  function producerEventTypes(): Set<string> {
+    const found = new Set<string>();
+
+    // (1) Object literals. Scoped to `{ type:` / `, type:` / a `type:` line start
+    // so an unrelated `status: "error"` or a nested option object cannot match.
+    for (const file of [MAPPER, DAEMON]) {
+      const src = readFileSync(file, "utf8");
+      for (const match of src.matchAll(/(?:^\s*|[{,]\s*)type:\s*"([a-z_]+)"/gm)) found.add(match[1]!);
+    }
+
+    // (2) The chunk ternary, which lives only in the mapper. Kept out of the
+    // daemon: a 4.7k-line file is full of unrelated `? "a" : "b"` expressions.
+    const mapperSrc = readFileSync(MAPPER, "utf8");
+    for (const match of mapperSrc.matchAll(/\?\s*"([a-z_]+)"\s*:\s*isCompaction/g)) found.add(match[1]!);
+    for (const match of mapperSrc.matchAll(/\?\s*"([a-z_]+)"\s*:\s*"([a-z_]+)"/g)) {
+      found.add(match[1]!);
+      found.add(match[2]!);
+    }
+
+    // (3) Human-request and steer reporters, which pass the type positionally.
+    for (const match of readFileSync(DAEMON, "utf8").matchAll(
+      // `[^,]+` rather than `[^,(]+`: the second argument is `nextSeq()`, and a
+      // paren-blind class would skip every multi-line call in the file.
+      /reportHumanRequestMessage\(\s*[^,]+,\s*[^,]+,\s*"([a-z_]+)"/g,
+    )) {
+      found.add(match[1]!);
+    }
+    return found;
+  }
+
+  it("names exactly the types the daemon's producers emit", () => {
+    const literalTypes = producerEventTypes();
+
+    // `assistant` and `error` are viewer-side unions, not producers; if either
+    // ever gains a writer this guard should fail and force a decision.
+    for (const viewerOnly of ["assistant", "error"]) {
+      expect(literalTypes.has(viewerOnly), `${viewerOnly} now has a daemon writer`).toBe(false);
+    }
+
+    for (const type of literalTypes) {
+      expect(isTraceEventType(type), `producer emits "${type}" but trace.ts does not list it`).toBe(true);
+    }
+    // Every claimed type except the three the mapper builds from a ternary must
+    // appear literally; that keeps a typo from silently shrinking the contract.
+    for (const type of TRACE_EVENT_TYPES) {
+      if (type === "text" || type === "thinking" || type === "compaction") continue;
+      expect(literalTypes.has(type), `trace.ts claims "${type}" but no producer emits it`).toBe(true);
+    }
+  });
+
+  it("finds all thirteen types, so the guard is not silently matching nothing", () => {
+    const literalTypes = producerEventTypes();
+    expect([...literalTypes].sort()).toEqual([...TRACE_EVENT_TYPES].sort());
+    expect(literalTypes.size).toBe(13);
+  });
+
+  it("keeps the field byte caps equal to the write path it mirrors", () => {
+    const src = readFileSync(TASKS_REPO, "utf8");
+    // Evaluate the literal the same way the source does - a product of integers -
+    // without handing an arbitrary string to eval.
+    const read = (name: string): number => {
+      const match = new RegExp(`const ${name} = ([0-9*\\s]+);`).exec(src);
+      if (!match) throw new Error(`tasks-repo.ts no longer defines ${name}`);
+      return match[1]!.split("*").reduce((total, factor) => total * Number(factor.trim()), 1);
+    };
+    expect(TRACE_EVENT_TOOL_MAX_BYTES).toBe(read("TASK_MESSAGE_TOOL_MAX"));
+    expect(TRACE_EVENT_CONTENT_MAX_BYTES).toBe(read("TASK_MESSAGE_TEXT_MAX"));
+    expect(TRACE_EVENT_INPUT_MAX_BYTES).toBe(read("TASK_MESSAGE_INPUT_MAX"));
+    expect(TRACE_EVENT_OUTPUT_MAX_BYTES).toBe(read("TASK_MESSAGE_OUTPUT_MAX"));
+    expect(TRACE_EVENT_META_MAX_BYTES).toBe(read("TASK_MESSAGE_META_MAX"));
+  });
+
+  it("keeps the status set in step with the write path", () => {
+    const src = readFileSync(TASKS_REPO, "utf8");
+    const match = /const TASK_MESSAGE_STATUSES = new Set\(\[([^\]]+)\]\)/.exec(src);
+    expect(match).not.toBeNull();
+    const statuses = match![1]!.split(",").map((s) => s.trim().replace(/^"|"$/g, "")).filter(Boolean).sort();
+    expect(statuses).toEqual(["completed", "failed", "in_progress", "pending"]);
+  });
+
+  it("round-trips a TaskMessageInput without losing a field", () => {
+    const message = {
+      seq: 7,
+      type: "tool_result",
+      tool: "Bash",
+      content: "done",
+      input: { command: "ls" },
+      output: "{\"ok\":true}",
+      toolCallId: "tc_9",
+      status: "completed",
+      meta: { duration_ms: 42 },
+    } as const;
+
+    const event = taskMessageToTraceEvent(message, 1_700_000_000_000);
+    expect(event.type).toBe("tool_result");
+    expect(event.tool_call_id).toBe("tc_9");
+
+    const restored = traceEventToTaskMessage({ ...event, seq: message.seq });
+    expect(restored).toEqual(message);
+  });
+
+  it("maps an unknown legacy type to text rather than dropping it", () => {
+    // The backfill must not lose rows it does not recognize; `text` keeps the
+    // content visible and is the type the viewer already renders as prose.
+    const event = taskMessageToTraceEvent({ type: "assistant", content: "legacy row" }, 1);
+    expect(event.type).toBe("text");
+    expect(event.content).toBe("legacy row");
+  });
+});
