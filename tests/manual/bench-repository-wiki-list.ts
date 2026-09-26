@@ -66,9 +66,9 @@ class SlowOpenViking implements OpenVikingClientContract {
   async remove(uri: string): Promise<void> { this.files.delete(uri); }
   async setTags(): Promise<void> {}
   async find(): Promise<OpenVikingFindHit[]> { return []; }
-  async commit(): Promise<string> { return "bench"; }
-  async show(_oid: string, uri: string): Promise<string> { return this.files.get(uri) ?? ""; }
-  async history(): Promise<OpenVikingSnapshotCommit[]> { return []; }
+  async commit(): Promise<string | null> { return "bench"; }
+  async log(): Promise<OpenVikingSnapshotCommit[]> { return []; }
+  async show(_targetRef: string, path: string): Promise<string> { return this.files.get(path) ?? ""; }
 }
 
 function percentile(sorted: readonly number[], ratio: number): number {

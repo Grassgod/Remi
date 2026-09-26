@@ -1,19 +1,22 @@
 {
   "issue": "MUL-387",
-  "generatedAt": "2026-09-26T10:33:28.144Z",
+  "generatedAt": "2026-09-26T10:38:23.199Z",
   "measurement": {
-    "note": "In-process SQLite measurement through app.request(). It isolates the route from PostgreSQL, network transfer and serialization cost, and it is not a production measurement.",
+    "note": "In-process SQLite measurement through app.request(). It isolates the route from PostgreSQL, network transfer and serialization cost; it is not a production measurement.",
+    "harness": "tests/manual/bench-repository-wiki-list.ts",
     "mockOpenVikingReadDelayMs": 700,
     "pages": 146,
     "warmups": 5,
     "samples": 100,
-    "reproduce": "bun run tests/manual/bench-repository-wiki-list.ts --out <path>"
+    "reproduce": {
+      "after": "bun run tests/manual/bench-repository-wiki-list.ts --out reports/performance/MUL-387-repository-wiki-list.json",
+      "before": "Run the same harness from a checkout of a1e6162 (the parent of agent/MUL-387)."
+    }
   },
   "commits": {
     "before": "a1e6162312b34d272e22b633d185f014f535f23e",
     "beforeLabel": "parent of agent/MUL-387 (pre-change route)",
-    "after": "working tree of agent/MUL-387 (PENDING_COMMIT)",
-    "note": "Both runs used the same script and the same mock OpenViking read delay. Re-run on the parent commit in a separate checkout to reproduce the before row."
+    "after": "be2e5823 (agent/MUL-387)"
   },
   "before": {
     "list": {
@@ -24,24 +27,36 @@
       "max_ms": 705.9672510000019,
       "samples": 100
     },
-    "openviking": { "readCalls": 15330, "maxActiveReads": 146 },
-    "acceptance": { "p95Under200ms": false, "noOpenVikingReads": false }
+    "openviking": {
+      "readCalls": 15330,
+      "maxActiveReads": 146
+    },
+    "acceptance": {
+      "p95Under200ms": false,
+      "noOpenVikingReads": false
+    }
   },
   "after": {
     "list": {
       "pageCount": 146,
-      "p50_ms": 0.9226330000000189,
-      "p95_ms": 1.1928010000000313,
-      "p99_ms": 2.9117929999999888,
-      "max_ms": 3.598549999999932,
+      "p50_ms": 0.8284850000000006,
+      "p95_ms": 1.270622000000003,
+      "p99_ms": 2.8147659999999632,
+      "max_ms": 4.156211999999982,
       "samples": 100
     },
-    "openviking": { "readCalls": 0, "maxActiveReads": 0 },
-    "acceptance": { "p95Under200ms": true, "noOpenVikingReads": true }
+    "openviking": {
+      "readCalls": 0,
+      "maxActiveReads": 0
+    },
+    "acceptance": {
+      "p95Under200ms": true,
+      "noOpenVikingReads": true
+    }
   },
   "acceptance": {
     "p95Under200ms": true,
     "noOpenVikingReads": true,
-    "note": "The 700ms mock is the single-read floor measured on 209. Production p95 (13.87s) was far worse than this floor because 138-146 concurrent content/read calls inflate each individual read; the local harness therefore measures the best case the old route could reach, and the old route still missed the target by 3.5x."
+    "note": "The 700ms mock is the single-read floor measured on 209. Production p95 was 13.87s because 138-146 concurrent content/read calls inflate each individual read above that floor, so this harness measures the best case the old route could reach; the old route still missed the 200ms target by 3.5x."
   }
 }
