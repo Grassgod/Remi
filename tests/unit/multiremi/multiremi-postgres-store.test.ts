@@ -2161,6 +2161,57 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     ]);
   });
 
+  // MUL-389: the merged heartbeat probe and the rewritten claim/expire statements only ever ran on
+  // SQLite before this test. Postgres is stricter in two ways that matter here: `UNION ALL`
+  // requires every branch to agree on a column type (the `housekeeping` column used to be integer
+  // `0` in six branches and boolean `EXISTS` in the command branch), and `UPDATE ... RETURNING`
+  // plus `IN (SELECT ... LIMIT n)` have to be accepted by the real planner.
+  it("runs the merged heartbeat probe and the rewritten request-queue statements on Postgres", () => {
+    const ws = freshWorkspace();
+    const runtime = store.registerRuntime({ name: "rt-pg-probe", provider: "claude", workspaceId: ws, daemonId: `pg_probe_${wsCounter}` });
+    const capabilities = { supportsBatchImport: true, supportsDirectoryScan: true, supportsSkillDirectory: true, supportsBotMenu: true };
+
+    // Idle: one probe row per family, nothing to claim.
+    const idle = store.heartbeatRuntime(runtime.id, capabilities);
+    expect(idle.status).toBe("ok");
+    expect(idle.pending_update).toBeUndefined();
+
+    // One row in every family, and ten in the batch family. The batch claim is the
+    // `IN (SELECT ... LIMIT ?)` form, the rest are the single-row `WHERE id = (...)` form.
+    const update = store.createRuntimeUpdateRequest(runtime.id, { targetVersion: "9.9.9" });
+    const modelList = store.createRuntimeModelListRequest(runtime.id);
+    const command = store.createRuntimeCommandRequest(runtime.id, { command: "printf pg", args: ["a"] });
+    store.createRuntimeLocalSkillListRequest(runtime.id, {});
+    const batch = Array.from({ length: 10 }, (_v, index) =>
+      store.createRuntimeLocalSkillImportRequest(runtime.id, { skillKey: `pg-${index}` }));
+    const scan = store.createRuntimeDirectoryScanRequest(runtime.id, { root: "/tmp", maxDepth: 2 });
+
+    const claimed = store.heartbeatRuntime(runtime.id, capabilities);
+    expect(claimed.status).toBe("ok");
+    expect(claimed.pending_update).toMatchObject({ id: update.id, target_version: "9.9.9" });
+    expect(claimed.pending_model_list).toMatchObject({ id: modelList.id });
+    expect(claimed.pending_command).toMatchObject({ id: command.id, command: "printf pg" });
+    expect(claimed.pending_directory_scan).toMatchObject({ id: scan.id, root: "/tmp", max_depth: 2 });
+    const claimedBatch = claimed.pending_local_skill_imports ?? [];
+    expect(claimedBatch).toHaveLength(10);
+    // Oldest first, and exactly the ten rows that were queued.
+    expect(claimedBatch.map((entry) => entry.skill_key)).toEqual(batch.map((entry) => entry.skillKey));
+
+    // The single-statement expire has to write each row's OWN timeout copy on PG too.
+    const toRun = store.createRuntimeCommandRequest(runtime.id, { command: "slow", args: [] });
+    expect(store.claimRuntimeCommandRequest(runtime.id)?.id).toBe(toRun.id);
+    const toStayPending = store.createRuntimeCommandRequest(runtime.id, { command: "wait", args: [] });
+    const staleRun = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    const stalePending = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    db.run("UPDATE multiremi_runtime_command_requests SET run_started_at = ? WHERE id = ?", [staleRun, toRun.id]);
+    db.run("UPDATE multiremi_runtime_command_requests SET created_at = ? WHERE id = ?", [stalePending, toStayPending.id]);
+    store.getRuntimeCommandRequest(runtime.id, toStayPending.id);
+    expect(db.query("SELECT status, error FROM multiremi_runtime_command_requests WHERE id = ?").get(toRun.id))
+      .toMatchObject({ status: "timeout", error: "daemon did not finish the command within 20 minutes" });
+    expect(db.query("SELECT status, error FROM multiremi_runtime_command_requests WHERE id = ?").get(toStayPending.id))
+      .toMatchObject({ status: "timeout", error: "daemon did not respond within 3 minutes" });
+  });
+
   it("resolves project_ref expansion and rejects duplicate refs via the UNIQUE index", () => {
     const ws = freshWorkspace();
     store.updateWorkspaceRepositories(ws, [

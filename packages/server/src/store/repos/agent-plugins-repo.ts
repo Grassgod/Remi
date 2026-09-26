@@ -3,6 +3,11 @@ import { createId, nowIso } from "@multiremi/ids.js";
 import { parseJson, toJson } from "@multiremi/store/helpers.js";
 import type { StoreContext } from "@multiremi/store/context.js";
 import {
+  activeRequestReadCache,
+  cacheKey,
+  markRequestReadCacheLockTaken,
+} from "@multiremi/store/request-read-cache.js";
+import {
   isRuntimeEffectivelyOnline,
   withRuntimeLiveness,
 } from "@multiremi/store/repos/runtimes-repo.js";
@@ -101,7 +106,10 @@ export class AgentPluginsRepo {
 
   constructor(private readonly ctx: StoreContext) {}
 
-  /** Must be called inside a database transaction. */
+  /**
+   * Must be called inside a database transaction. The per-request read cache serves none of the
+   * rows read before the lock.
+   */
   lockAgentPluginWorkspace(workspaceId: string): void {
     const now = nowIso();
     this.ctx.db.run(
@@ -113,6 +121,7 @@ export class AgentPluginsRepo {
       "UPDATE multiremi_agent_plugin_workspace_locks SET updated_at = ? WHERE workspace_id = ?",
       [now, workspaceId],
     );
+    markRequestReadCacheLockTaken();
   }
 
   listAgentPlugins(
@@ -766,7 +775,7 @@ export class AgentPluginsRepo {
     const transaction = this.ctx.db.transaction(() => {
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
       this.lockAgentPluginWorkspace(workspaceId);
-      return this.recordAgentPluginRuntimeHeartbeatWithinLock(runtimeId);
+      return this.recordAgentPluginRuntimeHeartbeatWithinLock(runtimeId, runtime);
     });
     return transaction().changes;
   }
@@ -780,19 +789,38 @@ export class AgentPluginsRepo {
    */
   recordAgentPluginRuntimeHeartbeatWithinLock(
     runtimeId: string,
+    knownRuntime?: { daemonId: string | null; metadata: Record<string, unknown>; workspaceId: string | null },
   ): { changes: MultiremiAgentPluginRuntimeState[]; revision: string } {
-    const runtime = this.requireRuntime(runtimeId);
+    // The heartbeat path already holds the Runtime row it just wrote; re-reading it here was one
+    // query per heartbeat. Callers that do not have it (the websocket heartbeat, tests) keep the
+    // original lookup by leaving the argument out.
+    const runtime = knownRuntime ?? this.requireRuntime(runtimeId);
     const workspaceId = runtime.workspaceId ?? "local";
-    const beforeRows = this.ctx.db.query(
-      `SELECT * FROM multiremi_agent_plugin_runtime_states
-       WHERE runtime_id = ? AND desired = 1`,
-    ).all(runtimeId) as Row[];
+    // Three reads of the same slice in one pass: the pre-reconcile snapshot, the post-reconcile
+    // snapshot and the pending-counter scan. Reconciliation is the only writer here and it
+    // invalidates this table, so the second read still observes its result.
+    const desiredRows = (): Row[] => {
+      const cache = activeRequestReadCache();
+      const key = cacheKey("multiremi_agent_plugin_runtime_states", "desired", runtimeId);
+      const cached = cache?.get<Row[]>(key);
+      if (cached !== undefined) return cached;
+      const rows = this.ctx.db.query(
+        `SELECT * FROM multiremi_agent_plugin_runtime_states
+         WHERE runtime_id = ? AND desired = 1`,
+      ).all(runtimeId) as Row[];
+      cache?.set(key, rows);
+      return rows;
+    };
+    const beforeRows = desiredRows();
     const before = new Map(beforeRows.map((row) => [String(row.id), runtimeStateFingerprint(row)]));
     this.reconcileAgentPluginDesiredStateLocked(workspaceId);
-    const reconciledRows = this.ctx.db.query(
-      `SELECT * FROM multiremi_agent_plugin_runtime_states
-       WHERE runtime_id = ? AND desired = 1`,
-    ).all(runtimeId) as Row[];
+    // Reconciliation may have inserted, removed or flipped rows, so this read has to be fresh.
+    // Going back through the memoized reader is what makes it fresh *and* free when nothing
+    // changed: reconciliation writes this table through the same store handle, so a write clears
+    // the entry and `desiredRows()` re-selects, while a no-op reconcile leaves the entry in place
+    // and the second read costs nothing. Reading around the reader here is what made every idle
+    // heartbeat pay for this slice twice.
+    const reconciledRows = desiredRows();
     const changed = new Set(
       reconciledRows
         .filter((row) => before.get(String(row.id)) !== runtimeStateFingerprint(row))
@@ -805,8 +833,8 @@ export class AgentPluginsRepo {
       if (!reconciledIds.has(id)) changed.add(id);
     }
     const revision = desiredRevision(reconciledRows);
-    if (!runtimeSupportsAgentPlugins(this.requireRuntime(runtimeId))) {
-      return { changes: [...changed].map((id) => this.requireRuntimeState(id)), revision };
+    if (!runtimeSupportsAgentPlugins(runtime)) {
+      return { changes: this.requireRuntimeStates([...changed]), revision };
     }
 
     const rows = this.ctx.db.query(
@@ -814,7 +842,15 @@ export class AgentPluginsRepo {
        FROM multiremi_agent_plugin_runtime_states
        WHERE runtime_id = ? AND desired = 1 AND status = 'pending' AND last_attempt_at IS NULL`,
     ).all(runtimeId) as Row[];
+    if (!rows.length) return { changes: this.requireRuntimeStates([...changed]), revision };
+
+    // Two statements for the whole runtime instead of two per state row: one UPDATE for
+    // every counter that merely advances, one for the states that cross the limit. The
+    // crossing states are known in JS before either statement runs, so the second batch
+    // can be built without a per-row read or a second pass over the table.
     const now = nowIso();
+    const advancedIds: string[] = [];
+    const blockedIds: string[] = [];
     for (const row of rows) {
       const count = Number(row.pending_heartbeat_count ?? 0) + 1;
       const id = String(row.id);
@@ -822,22 +858,34 @@ export class AgentPluginsRepo {
         // This counter is diagnostic state, not a user-visible transition. In
         // particular it must not move updated_at, which is the desired-state
         // wait origin shown by API clients.
-        this.ctx.db.run(
-          "UPDATE multiremi_agent_plugin_runtime_states SET pending_heartbeat_count = ? WHERE id = ?",
-          [count, id],
-        );
+        advancedIds.push(id);
         continue;
       }
-      this.ctx.db.run(
-        `UPDATE multiremi_agent_plugin_runtime_states
-         SET status = 'blocked', pending_heartbeat_count = ?, next_retry_at = NULL,
-             last_error_code = ?, last_error = ?, updated_at = ?
-         WHERE id = ? AND status = 'pending' AND last_attempt_at IS NULL`,
-        [count, DAEMON_RECONCILE_TIMEOUT_CODE, DAEMON_RECONCILE_TIMEOUT_MESSAGE, now, id],
-      );
+      blockedIds.push(id);
       changed.add(id);
     }
-    return { changes: [...changed].map((id) => this.requireRuntimeState(id)), revision };
+    if (advancedIds.length) {
+      // A single statement cannot carry a different value per row, and these counters
+      // only ever advance by one, so the value is the same for every row in the batch.
+      this.ctx.db.run(
+        `UPDATE multiremi_agent_plugin_runtime_states
+         SET pending_heartbeat_count = pending_heartbeat_count + 1
+         WHERE id IN (${advancedIds.map(() => "?").join(", ")})
+           AND runtime_id = ? AND status = 'pending' AND last_attempt_at IS NULL`,
+        [...advancedIds, runtimeId],
+      );
+    }
+    if (blockedIds.length) {
+      this.ctx.db.run(
+        `UPDATE multiremi_agent_plugin_runtime_states
+         SET status = 'blocked', pending_heartbeat_count = pending_heartbeat_count + 1,
+             next_retry_at = NULL, last_error_code = ?, last_error = ?, updated_at = ?
+         WHERE id IN (${blockedIds.map(() => "?").join(", ")})
+           AND runtime_id = ? AND status = 'pending' AND last_attempt_at IS NULL`,
+        [DAEMON_RECONCILE_TIMEOUT_CODE, DAEMON_RECONCILE_TIMEOUT_MESSAGE, now, ...blockedIds, runtimeId],
+      );
+    }
+    return { changes: this.requireRuntimeStates([...changed]), revision };
   }
 
   retryAgentPluginRuntime(pluginId: string, runtimeId?: string | null, versionId?: string | null): MultiremiAgentPluginRuntimeState[] {
@@ -1328,6 +1376,28 @@ export class AgentPluginsRepo {
     const row = this.ctx.db.query("SELECT * FROM multiremi_agent_plugin_runtime_states WHERE id = ?").get(id) as Row | null;
     if (!row) throw notFound("runtime plugin state not found", "runtime_plugin_state_not_found");
     return this.toRuntimeState(row);
+  }
+
+  /**
+   * Read a set of runtime states in one statement, preserving the caller's order.
+   *
+   * A heartbeat publishes one transition event per changed state, and the old code
+   * re-read each one by id — a per-row N+1 on top of the per-row counter UPDATE. The
+   * caller's order is what the events are emitted in, so it is restored here rather
+   * than taken from the result set.
+   */
+  private requireRuntimeStates(ids: readonly string[]): MultiremiAgentPluginRuntimeState[] {
+    if (!ids.length) return [];
+    const rows = this.ctx.db.query(
+      `SELECT * FROM multiremi_agent_plugin_runtime_states
+       WHERE id IN (${ids.map(() => "?").join(", ")})`,
+    ).all(...ids) as Row[];
+    const byId = new Map(rows.map((row) => [String(row.id), this.toRuntimeState(row)]));
+    return ids.map((id) => {
+      const state = byId.get(id);
+      if (!state) throw notFound("runtime plugin state not found", "runtime_plugin_state_not_found");
+      return state;
+    });
   }
 
   private requireAgent(id: string) {

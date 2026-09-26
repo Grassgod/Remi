@@ -423,7 +423,8 @@ export class IssueSessionsRepo {
   getOrCreateSessionAgentLane(sessionId: string, agentId: string, executionScope = ""): MultiremiSessionAgentLane {
     const session = this.getIssueSession(sessionId);
     if (!session) throw new Error(`Issue session not found: ${sessionId}`);
-    const agent = this.ctx.agents().getAgent(agentId);
+    // Lane bookkeeping reads the Agent's identity and workspace only.
+    const agent = this.ctx.agents().getAgentLite(agentId);
     if (!agent || agent.archivedAt) throw new Error(`Agent not found: ${agentId}`);
     if (agent.workspaceId !== session.workspaceId) throw new Error("Agent belongs to another workspace");
     const now = nowIso();
@@ -464,7 +465,8 @@ export class IssueSessionsRepo {
         );
       }
       const lane = this.getOrCreateSessionAgentLane(task.issueSessionId, task.agentId, taskExecutionScope(task));
-      const agent = this.ctx.agents().getAgent(task.agentId);
+      // The projection budget needs the Agent's provider/model, not its Skills.
+      const agent = this.ctx.agents().getAgentLite(task.agentId);
       const session = this.getIssueSession(task.issueSessionId)!;
       const events = this.listSessionEvents(task.issueSessionId);
       const tokenBudget = resolveProjectionTokenBudget({

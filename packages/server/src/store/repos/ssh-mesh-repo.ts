@@ -15,6 +15,7 @@ import {
   type SshMeshKeyMaterial,
 } from "@multiremi/ssh-mesh/keys.js";
 import { type StoreContext } from "@multiremi/store/context.js";
+import { activeRequestReadCache, cacheKey } from "@multiremi/store/request-read-cache.js";
 import { nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import {
   isRuntimeEffectivelyOnline,
@@ -766,21 +767,42 @@ export class SshMeshRepo {
   }
 
   private getWorkspaceConfig(workspaceId: string): SshMeshWorkspaceConfigRow | null {
+    // A heartbeat reads this row from `recordNodeHeartbeat`, `maybeFinalizeRotation` and the ack
+    // builder. It only changes inside this repo, and those writers invalidate the table.
+    const cache = activeRequestReadCache();
+    const key = cacheKey("multiremi_workspace_ssh_mesh", "config", workspaceId);
+    const cached = cache?.get<SshMeshWorkspaceConfigRow | null>(key);
+    if (cached !== undefined) return cached;
     const row = this.ctx.db.query(
       "SELECT * FROM multiremi_workspace_ssh_mesh WHERE workspace_id = ?",
     ).get(workspaceId) as Row | null;
-    return row ? hydrateWorkspaceConfig(row) : null;
+    const value = row ? hydrateWorkspaceConfig(row) : null;
+    cache?.set(key, value);
+    return value;
   }
 
   private getDaemonState(workspaceId: string, daemonId: string): DaemonStateRow | null {
+    // One heartbeat reads this daemon's state from `assertNodeKindCompatible`,
+    // `recordNodeHeartbeat` (twice) and the ack builder. The upsert in `recordNodeHeartbeat`
+    // invalidates the table, so the reload after it still sees the new row.
+    const cache = activeRequestReadCache();
+    const key = cacheKey("multiremi_daemon_ssh_mesh_states", "row", workspaceId, daemonId);
+    const cached = cache?.get<DaemonStateRow | null>(key);
+    if (cached !== undefined) return cached;
     const row = this.ctx.db.query(
       "SELECT * FROM multiremi_daemon_ssh_mesh_states WHERE workspace_id = ? AND daemon_id = ?",
     ).get(workspaceId, daemonId) as Row | null;
-    return row ? hydrateDaemonState(row) : null;
+    const value = row ? hydrateDaemonState(row) : null;
+    cache?.set(key, value);
+    return value;
   }
 
   private listDaemonStates(workspaceId: string): DaemonStateRow[] {
-    return (this.ctx.db.query(
+    const cache = activeRequestReadCache();
+    const listKey = cacheKey("multiremi_daemon_ssh_mesh_states", "list", workspaceId);
+    const cached = cache?.get<DaemonStateRow[]>(listKey);
+    if (cached !== undefined) return cached;
+    const states = (this.ctx.db.query(
       `SELECT state.* FROM multiremi_daemon_ssh_mesh_states state
        WHERE state.workspace_id = ?
          AND (
@@ -801,6 +823,8 @@ export class SshMeshRepo {
          )
        ORDER BY state.daemon_id ASC`,
     ).all(workspaceId) as Row[]).map(hydrateDaemonState);
+    cache?.set(listKey, states);
+    return states;
   }
 
   private listDaemonInventory(
@@ -856,13 +880,12 @@ export class SshMeshRepo {
   }
 
   private runtimeIdentity(runtimeId: string): { workspaceId: string; daemonId: string | null } | null {
-    const row = this.ctx.db.query(
-      "SELECT COALESCE(workspace_id, 'local') AS workspace_id, daemon_id FROM multiremi_runtimes WHERE id = ?",
-    ).get(runtimeId) as Row | null;
-    return row ? {
-      workspaceId: String(row.workspace_id ?? "local"),
-      daemonId: nullableString(row.daemon_id),
-    } : null;
+    // `recordSshMeshHeartbeat` needs the Runtime's workspace, and the same request has already
+    // read that row (the daemon-identity guard, and the heartbeat itself). Go through the shared
+    // Runtime read so the request pays for the row once, and `recordHeartbeat` inside the lock
+    // reuses the same entry.
+    const runtime = this.ctx.runtimes().getRuntimeLite(runtimeId);
+    return runtime ? { workspaceId: runtime.workspaceId ?? "local", daemonId: nullableString(runtime.daemonId) } : null;
   }
 
   private assertWorkspaceExists(workspaceId: string): void {

@@ -771,7 +771,10 @@ export function denyDaemonTokenRuntimeIdentity(
 ): Response | null {
   const token = currentAccessToken(c);
   if (token?.type !== "daemon") return null;
-  const runtime = store.getRuntime(runtimeId);
+  // Identity only: this guard compares the token's daemon id with the Runtime's and hands the
+  // workspace to `denyDaemonTokenWorkspace`. The derived usage/model/group reads it used to pull
+  // in were three queries per guarded request.
+  const runtime = store.getRuntimeLite(runtimeId);
   if (!runtime) return c.json({ error: "runtime not found" }, 404);
   const workspaceDenied = denyDaemonTokenWorkspace(c, runtime.workspaceId ?? "local", options);
   if (workspaceDenied) return workspaceDenied;

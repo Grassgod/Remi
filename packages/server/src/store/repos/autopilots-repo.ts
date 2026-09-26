@@ -1483,7 +1483,7 @@ export class AutopilotsRepo {
     if (!repositoryId || !dedupeKey) return;
 
     const repositoryAutopilot = resolveRepositoryWikiAutomation({
-      listAgents: () => this.ctx.agents().listAgents(),
+      listAgents: () => this.ctx.agents().listAgentsLite(),
       listAutopilots: (workspaceId) => this.listAutopilots(workspaceId),
       listAgentPlugins: (workspaceId, options) => this.ctx.agentPlugins().listAgentPlugins(workspaceId, options),
       listAgentPluginBindings: (agentId) => this.ctx.agentPlugins().listAgentPluginBindings(agentId),

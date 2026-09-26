@@ -1244,7 +1244,7 @@ export class ScmRepo {
           // repository and a revision-pinned dedupe key so change.merged and
           // default_branch.updated for the same merge produce a single run.
           const wikiAutopilot = resolveRepositoryWikiAutomation({
-            listAgents: () => this.ctx.agents().listAgents(),
+            listAgents: () => this.ctx.agents().listAgentsLite(),
             listAutopilots: (workspaceId) => this.ctx.autopilots().listAutopilots(workspaceId),
             listAgentPlugins: (workspaceId, options) => this.ctx.agentPlugins().listAgentPlugins(workspaceId, options),
             listAgentPluginBindings: (agentId) => this.ctx.agentPlugins().listAgentPluginBindings(agentId),

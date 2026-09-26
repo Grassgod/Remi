@@ -15,6 +15,7 @@ import { createId, nowIso } from "@multiremi/ids.js";
 import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import { createLogger } from "@shared/logger.js";
 import { INBOX_ROUTING, inboxRouteFor } from "@multiremi/store/inbox-routing.js";
+import { markRequestReadCacheLockTaken } from "@multiremi/store/request-read-cache.js";
 import type {
   AddSessionParticipantInput,
   CreateChatSessionInput,
@@ -214,7 +215,11 @@ export interface IssuesSurface {
 
 export interface AgentsSurface {
   getAgent(id: string): MultiremiAgent | null;
+  /** The Agent row without Skills or Skill files — eligibility decisions only. */
+  getAgentLite(id: string): MultiremiAgent | null;
   listAgents(options?: { includeArchived?: boolean }): MultiremiAgent[];
+  /** Every Agent row without Skills — capability decisions only. */
+  listAgentsLite(options?: { includeArchived?: boolean }): MultiremiAgent[];
   getAgentByRef(ref: string, workspaceId?: string | null): MultiremiAgent | null;
   listActiveAgentsByRuntime(runtimeId: string): MultiremiAgent[];
   createSkill(input: CreateSkillInput): MultiremiSkill;
@@ -238,6 +243,8 @@ export interface AgentPluginsSurface {
   recordAgentPluginRuntimeHeartbeat(runtimeId: string): MultiremiAgentPluginRuntimeState[];
   recordAgentPluginRuntimeHeartbeatWithinLock(
     runtimeId: string,
+    /** The Runtime row the caller already holds, so the heartbeat does not re-read it. */
+    knownRuntime?: { daemonId: string | null; metadata: Record<string, unknown>; workspaceId: string | null },
   ): { changes: MultiremiAgentPluginRuntimeState[]; revision: string };
 }
 
@@ -447,6 +454,8 @@ export interface RuntimesSurface {
   getRuntimeCodexProfile(id: string): import("@multiremi/contracts/codex-profile").RuntimeCodexProfile | null;
   getRuntimeExecutionProfile(id: string, provider: string): import("@multiremi/contracts/codex-profile").RuntimeCodexProfile | null;
   getRuntime(id: string): MultiremiRuntime | null;
+  /** The Runtime row without the derived usage / model / execution-group reads. */
+  getRuntimeLite(id: string): MultiremiRuntime | null;
   listRuntimes(): MultiremiRuntime[];
   hasCliUpdateDrainForRuntime(runtimeId: string): boolean;
   createRuntimeCommandRequest(runtimeId: string, input: import("@multiremi/contracts/types.js").CreateRuntimeCommandInput): MultiremiRuntimeCommandRequest;
@@ -569,7 +578,9 @@ export class StoreContext {
    * Serialize workspace-scoped Runtime lifecycle mutations across SQLite and
    * Postgres. Daemon retirement holds this row lock while it re-reads its plan
    * and removes Runtime-affine state; every write that can add such state must
-   * take the same lock and revalidate after acquiring it.
+   * take the same lock and revalidate after acquiring it. The per-request read
+   * cache serves none of the rows read before the lock, so that revalidation
+   * always reaches the database.
    *
    * The caller must already be inside a database transaction.
    */
@@ -578,6 +589,7 @@ export class StoreContext {
       "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
       [workspaceId],
     );
+    markRequestReadCacheLockTaken();
   }
 
   /** Serialize repository topology and project repository-resource mutations. */

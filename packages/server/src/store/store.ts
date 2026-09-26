@@ -2,6 +2,7 @@ import { getExecutionGroup, listExecutionGroups } from "@multiremi/store/executi
 import type { RuntimeConnectionProfile } from "@multiremi/contracts/runtime-connection";
 import { type SqlDatabase, openMultiremiDatabase } from "@multiremi/store/db/postgres.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
+import { invalidatingDatabase } from "@multiremi/store/request-read-cache.js";
 import { daemonRuntimeId, isTerminalStatus } from "@multiremi/store/helpers.js";
 import { agentRoleAtLeast } from "@multiremi/store/agent-role.js";
 import { FeedbackRepo } from "@multiremi/store/repos/feedback-repo.js";
@@ -511,7 +512,9 @@ export class MultiremiStore {
     agentIssueUpdateDebounceMs?: number;
     publicUrl?: string | null;
   } = {}) {
-    this.db = db ?? openMultiremiDatabase();
+    // The wrapper clears the per-request read cache on every write, so a cached row can never
+    // outlive a write that changed it. See request-read-cache.ts for the contract.
+    this.db = invalidatingDatabase(db ?? openMultiremiDatabase());
     this.ctx = new StoreContext(this.db, () => this);
     this.feedback = new FeedbackRepo(this.db);
     this.accessTokens = new AccessTokensRepo(this.db);
@@ -1044,8 +1047,9 @@ runMigrations(this.db);
   /** Internal cross-domain primitive; caller owns workspace lifecycle + Plugin locks. */
   recordAgentPluginRuntimeHeartbeatWithinLock(
     runtimeId: string,
+    knownRuntime?: { daemonId: string | null; metadata: Record<string, unknown>; workspaceId: string | null },
   ): { changes: MultiremiAgentPluginRuntimeState[]; revision: string } {
-    return this.agentPlugins.recordAgentPluginRuntimeHeartbeatWithinLock(runtimeId);
+    return this.agentPlugins.recordAgentPluginRuntimeHeartbeatWithinLock(runtimeId, knownRuntime);
   }
 
   retryAgentPluginRuntime(
@@ -1081,6 +1085,15 @@ runMigrations(this.db);
 
   getAgent(id: string): MultiremiAgent | null {
     return this.agents.getAgent(id);
+  }
+
+  /** The Agent row without its Skills or Skill files — for eligibility decisions only. */
+  getAgentLite(id: string): MultiremiAgent | null {
+    return this.agents.getAgentLite(id);
+  }
+
+  listAgentsLite(options: { includeArchived?: boolean } = {}): MultiremiAgent[] {
+    return this.agents.listAgentsLite(options);
   }
 
   getAgentByWorkspaceAndName(workspaceId: string, name: string): MultiremiAgent | null {
@@ -2234,12 +2247,21 @@ runMigrations(this.db);
     task: Pick<MultiremiTask, "id" | "agentId" | "workspaceId">,
     userId: string,
   ): Promise<MultiremiCreatedAccessToken> {
-    const agent = this.getAgent(task.agentId);
+    // Scope decisions read role/workspace/provider; the token payload never carries Skills.
+    const agent = this.getAgentLite(task.agentId);
     const scopes: string[] = [];
     if (agent && agentRoleAtLeast(agent.role, "supervisor")) scopes.push("organizer:supervisor");
     const storedTask = this.getTask(task.id);
     const run = storedTask?.autopilotRunId ? this.getAutopilotRun(storedTask.autopilotRunId) : null;
-    const repositoryWikiAutomation = resolveRepositoryWikiAutomation(this, task.workspaceId);
+    // Capability resolution reads roles and plugin bindings; hydrating every Agent's
+    // Skills to answer it is what made a claim cross megabytes it never used.
+    const repositoryWikiAutomation = resolveRepositoryWikiAutomation({
+      listAgents: () => this.listAgentsLite(),
+      listAutopilots: (workspaceId) => this.listAutopilots(workspaceId),
+      listAgentPlugins: (workspaceId, options) => this.listAgentPlugins(workspaceId, options),
+      listAgentPluginBindings: (agentId) => this.listAgentPluginBindings(agentId),
+      listAutopilotTriggers: (autopilotId) => this.listAutopilotTriggers(autopilotId),
+    }, task.workspaceId);
     if (
       agent
       && agentRoleAtLeast(agent.role, "maintainer")
@@ -2656,6 +2678,11 @@ runMigrations(this.db);
 
   getRuntime(id: string): MultiremiRuntime | null {
     return this.runtimes.getRuntime(id);
+  }
+
+  /** The Runtime row without the derived usage/model/group reads. */
+  getRuntimeLite(id: string): MultiremiRuntime | null {
+    return this.runtimes.getRuntimeLite(id);
   }
 
   getRuntimeCodexProfile(id: string) {

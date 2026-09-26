@@ -8,6 +8,7 @@ import type {
 import { agentHasKnowledgePublishCapability } from "@multiremi/knowledge/capability.js";
 
 export interface RepositoryWikiAutomationReader {
+  /** Agent rows are enough: publish capability reads role/provider plus the plugin tables. */
   listAgents(): MultiremiAgent[];
   listAutopilots(workspaceId: string): MultiremiAutopilot[];
   listAgentPlugins(

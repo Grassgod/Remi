@@ -7,11 +7,18 @@ import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
-/** Records every statement the store prepares on `database` from now on. */
+/**
+ * Records every statement the store issues on `database` from now on.
+ *
+ * `run` is wrapped as well as `query`/`prepare`: the batched UPDATEs this test asserts on are
+ * issued through `run`, so a spy that only saw prepared statements would miss exactly the
+ * writes under test.
+ */
 function recordStatements(database: Database): string[] {
   const statements: string[] = [];
   const query = database.query.bind(database);
   const prepare = database.prepare.bind(database);
+  const run = database.run.bind(database);
   database.query = ((sql: string) => {
     statements.push(sql);
     return query(sql);
@@ -20,6 +27,10 @@ function recordStatements(database: Database): string[] {
     statements.push(sql);
     return (prepare as (sql: string, ...rest: unknown[]) => ReturnType<Database["prepare"]>)(sql, ...rest);
   }) as Database["prepare"];
+  database.run = ((sql: string, ...rest: unknown[]) => {
+    statements.push(sql);
+    return (run as (sql: string, ...rest: unknown[]) => ReturnType<Database["run"]>)(sql, ...rest);
+  }) as Database["run"];
   return statements;
 }
 
@@ -52,6 +63,75 @@ function claudePluginInput(version = "1.0.0", content = "# Lark\n") {
 }
 
 describe("AgentPluginsRepo", () => {
+  it("advances every pending state and crosses the limit in a bounded number of writes", () => {
+    // MUL-389: the heartbeat used to issue two statements per pending state row (a counter
+    // UPDATE and a `blocked` UPDATE) plus one read per changed state, so a Runtime with several
+    // pending Plugins paid that count into every heartbeat. Both the counter pass and the
+    // transition pass are now one statement each, and the changed states are read together.
+    const store = createStore();
+    const runtime = store.registerRuntime({
+      id: "rt_plugin_batch",
+      name: "Batch runtime",
+      provider: "claude",
+      daemonId: "daemon-batch",
+      workspaceId: "local",
+      metadata: { agent_plugin_protocol: 1 },
+    });
+    const states = Array.from({ length: 4 }, (_value, index) => {
+      const agent = store.createAgent({ name: `Agent ${index}`, provider: "claude", workspaceId: "local" });
+      const plugin = store.importAgentPlugin({
+        ...claudePluginInput(`1.0.${index}`, `# Lark ${index}\n`),
+        name: `Lark for Claude ${index}`,
+        id: `apl_batch_${index}`,
+      });
+      store.createAgentPluginBinding(agent.id, { pluginId: plugin.id });
+      return plugin;
+    });
+    expect(store.listAgentPluginRuntimeStates({ runtimeId: runtime.id })).toHaveLength(states.length);
+
+    const statements = recordStatements(db!);
+    const ack = store.heartbeatRuntime(runtime.id, { agentPluginProtocol: 1 });
+    expect(ack.status).toBe("ok");
+
+    // Every counter advances in ONE statement. The old per-row loop issued a separate write per
+    // state, so this is the assertion that fails if the batching is undone.
+    const batchedCounter = statements.filter((sql) =>
+      sql.includes("SET pending_heartbeat_count = pending_heartbeat_count + 1")
+      && sql.includes("WHERE id IN"));
+    expect(batchedCounter).toHaveLength(1);
+    expect(batchedCounter[0]).toContain("IN (?, ?, ?, ?)");
+    // The counter is diagnostic state and is not on the public shape, so read the rows directly.
+    const counters = db!.query(
+      "SELECT pending_heartbeat_count AS count FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+    ).all(runtime.id) as Array<{ count: number }>;
+    expect(counters.map((row) => row.count)).toEqual([1, 1, 1, 1]);
+    for (const state of store.listAgentPluginRuntimeStates({ runtimeId: runtime.id })) {
+      expect(state.status).toBe("pending");
+    }
+
+    // One more heartbeat lifts every counter to two; the next crosses the three-heartbeat limit.
+    store.heartbeatRuntime(runtime.id, { agentPluginProtocol: 1 });
+    const crossing = recordStatements(db!);
+    const crossingAck = store.heartbeatRuntime(runtime.id, { agentPluginProtocol: 1 });
+    expect(crossingAck.status).toBe("ok");
+    // All four states cross in ONE statement rather than four.
+    const batchedBlock = crossing.filter((sql) =>
+      sql.includes("SET status = 'blocked'") && sql.includes("WHERE id IN"));
+    expect(batchedBlock).toHaveLength(1);
+    expect(batchedBlock[0]).toContain("IN (?, ?, ?, ?)");
+    // Every state crossed at once, so all four transitions are published from a single read.
+    const afterCrossing = store.listAgentPluginRuntimeStates({ runtimeId: runtime.id });
+    expect(afterCrossing).toHaveLength(4);
+    for (const state of afterCrossing) {
+      expect(state.status).toBe("blocked");
+      expect(state.lastErrorCode).toBe("daemon_plugin_reconcile_timeout");
+    }
+    const countersAfter = db!.query(
+      "SELECT pending_heartbeat_count AS count FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+    ).all(runtime.id) as Array<{ count: number }>;
+    expect(countersAfter.map((row) => row.count)).toEqual([3, 3, 3, 3]);
+  });
+
   it("preserves disabled plugins across engine switches without poisoning tasks", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Switchable leader", provider: "claude" });

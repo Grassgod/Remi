@@ -698,6 +698,23 @@ export class AgentsSkillsRepo {
     return row ? this.hydrateAgent(toAgent(row)) : null;
   }
 
+  /**
+   * The Agent row without its skills or skill files.
+   *
+   * Eligibility checks (may this Runtime run this Agent?) read identity, ownership, provider,
+   * model and archival state — nothing that lives in `multiremi_skill_files`. Hydrating those
+   * rows costs one query per Agent plus the entire body of every Skill file: on a workspace
+   * whose Agents carry a few hundred KB of Skills each, a claim that only ever *selects* one
+   * Agent pays megabytes to answer questions the Skills cannot affect.
+   *
+   * Callers that ship an Agent to a daemon must still use {@link getAgent}; this is only for
+   * decisions.
+   */
+  getAgentLite(id: string): MultiremiAgent | null {
+    const row = this.ctx.db.query("SELECT * FROM multiremi_agents WHERE id = ?").get(id) as Row | null;
+    return row ? toAgent(row) : null;
+  }
+
   getAgentByWorkspaceAndName(workspaceId: string, name: string): MultiremiAgent | null {
     const row = this.ctx.db
       .query("SELECT * FROM multiremi_agents WHERE workspace_id = ? AND name = ? ORDER BY created_at ASC LIMIT 1")
@@ -723,6 +740,21 @@ export class AgentsSkillsRepo {
       ? "SELECT * FROM multiremi_agents ORDER BY created_at ASC"
       : "SELECT * FROM multiremi_agents WHERE archived_at IS NULL ORDER BY created_at ASC").all() as Row[];
     return rows.map((row) => this.hydrateAgent(toAgent(row)));
+  }
+
+  /**
+   * Every Agent row, without Skills or Skill files.
+   *
+   * Capability questions ("which Agent may publish a Wiki?") are answered from a
+   * role/provider plus the plugin tables, so they must not pull every Skill body in the
+   * workspace across the bridge. Callers that ship an Agent to a client use
+   * {@link listAgents}.
+   */
+  listAgentsLite(options: { includeArchived?: boolean } = {}): MultiremiAgent[] {
+    const rows = this.ctx.db.query(options.includeArchived
+      ? "SELECT * FROM multiremi_agents ORDER BY created_at ASC"
+      : "SELECT * FROM multiremi_agents WHERE archived_at IS NULL ORDER BY created_at ASC").all() as Row[];
+    return rows.map(toAgent);
   }
 
   listActiveAgentsByRuntime(runtimeId: string): MultiremiAgent[] {

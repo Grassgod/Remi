@@ -735,7 +735,17 @@ function appendDaemonClaimAutopilotContext(store: MultiremiStore, task: Multirem
   response.autopilot_source = run.source;
   if (run.payload != null) response.autopilot_trigger_payload = run.payload;
   const autopilot = store.getAutopilot(run.autopilotId);
-  const repositoryWikiRun = resolveRepositoryWikiAutomation(store, task.workspaceId)?.id === run.autopilotId;
+  // Capability resolution reads roles and plugin bindings; the Agent's Skills cannot
+  // change the answer, so it reads the rows without them.
+  // Capability resolution reads roles and plugin bindings; the Agent's Skills cannot
+  // change the answer, so it reads the Agent rows without them.
+  const repositoryWikiRun = resolveRepositoryWikiAutomation({
+    listAgents: () => store.listAgentsLite(),
+    listAutopilots: (workspaceId) => store.listAutopilots(workspaceId),
+    listAgentPlugins: (workspaceId, options) => store.listAgentPlugins(workspaceId, options),
+    listAgentPluginBindings: (agentId) => store.listAgentPluginBindings(agentId),
+    listAutopilotTriggers: (autopilotId) => store.listAutopilotTriggers(autopilotId),
+  }, task.workspaceId)?.id === run.autopilotId;
   if (repositoryWikiRun && task.repositoryWikiContexts?.length) {
     const scmRevision = autopilotRunSourceRevision(run);
     if (scmRevision) response.scm_revision = scmRevision;
@@ -862,3 +872,4 @@ function daemonBasename(path: string): string {
   const index = trimmed.lastIndexOf("/");
   return index >= 0 ? trimmed.slice(index + 1) : trimmed;
 }
+

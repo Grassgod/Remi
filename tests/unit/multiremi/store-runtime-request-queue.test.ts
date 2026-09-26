@@ -55,23 +55,55 @@ afterEach(() => {
 });
 
 // ── golden SQL ────────────────────────────────────────────────────────────────
-// Continuation lines in the original template literals were indented seven columns.
+// Continuation lines in the queue's template literals are indented seven columns.
 const NL = "\n       ";
 
 function goldenGet(table: string): string {
   return `SELECT * FROM ${table} WHERE id = ? AND runtime_id = ?`;
 }
-function goldenClaimSelect(table: string, limit: "1" | "?"): string {
-  return `SELECT * FROM ${table}${NL}WHERE runtime_id = ? AND status = 'pending'${NL}ORDER BY created_at ASC${NL}LIMIT ${limit}`;
+
+/**
+ * MUL-389: selection and the state change became one statement. Before the change this was a
+ * `SELECT ... LIMIT 1` followed by `UPDATE ... WHERE id = ?`; the pair is now folded into
+ * `UPDATE ... WHERE id = (SELECT ...) RETURNING *`, so the queue emits the UPDATE and no
+ * separate claim SELECT. The ordering guarantee (`ORDER BY created_at ASC`) moves inside the
+ * sub-select, and `RETURNING *` replaces the read-back.
+ */
+function goldenClaim(table: string): string {
+  // `AND status = 'pending'` outside the sub-select is the concurrency guard: under PG READ
+  // COMMITTED a claim that lost the row race must re-evaluate it and drop out (MUL-389).
+  return `UPDATE ${table}${NL}SET status = 'running', run_started_at = ?, updated_at = ?`
+    + `${NL}WHERE status = 'pending'${NL}  AND id = (`
+    + `${NL}    SELECT id FROM ${table}${NL}    WHERE runtime_id = ? AND status = 'pending'`
+    + `${NL}    ORDER BY created_at ASC${NL}    LIMIT 1${NL}  )${NL}RETURNING *`;
 }
-function goldenClaimUpdate(table: string): string {
-  return `UPDATE ${table} SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ?`;
+
+/** Batch form of {@link goldenClaim}: one statement for the whole batch, `id IN (...)` instead of `id = (...)`. */
+function goldenClaimBatch(table: string): string {
+  return `UPDATE ${table}${NL}SET status = 'running', run_started_at = ?, updated_at = ?`
+    + `${NL}WHERE status = 'pending'${NL}  AND id IN (`
+    + `${NL}    SELECT id FROM ${table}${NL}    WHERE runtime_id = ? AND status = 'pending'`
+    + `${NL}    ORDER BY created_at ASC${NL}    LIMIT ?${NL}  )${NL}RETURNING *`;
 }
-function goldenExpirePending(table: string, message: string, column = "created_at"): string {
-  return `UPDATE ${table}${NL}SET status = 'timeout', error = '${message}', updated_at = ?${NL}WHERE runtime_id = ? AND status = 'pending' AND ${column} < ?`;
+
+/**
+ * MUL-389: both deadlines are swept by one `CASE`-guarded UPDATE instead of two per-deadline
+ * UPDATEs. The family texts are still bound as parameters and still selected per row by the
+ * pre-update `status`, so each row keeps the message it had before.
+ */
+function goldenExpire(table: string): string {
+  return `UPDATE ${table}${NL}SET status = 'timeout',`
+    + `${NL}    error = CASE WHEN status = 'running' THEN ? ELSE ? END,`
+    + `${NL}    updated_at = ?`
+    + `${NL}WHERE runtime_id = ?`
+    + `${NL}  AND (`
+    + `${NL}    (status = 'pending' AND PLACEHOLDER < ?)`
+    + `${NL}    OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < ?)`
+    + `${NL}  )`;
 }
-function goldenExpireRunning(table: string, message: string): string {
-  return `UPDATE ${table}${NL}SET status = 'timeout', error = '${message}', updated_at = ?${NL}WHERE runtime_id = ? AND status = 'running' AND run_started_at IS NOT NULL AND run_started_at < ?`;
+
+function goldenExpireFor(table: string, pendingDeadlineColumn = "created_at"): string {
+  return goldenExpire(table).replace("PLACEHOLDER", pendingDeadlineColumn);
 }
 
 const DID_NOT_FINISH_60 = "daemon did not finish within 60 seconds";
@@ -161,19 +193,22 @@ const FAMILIES: Family[] = [
 
 describe("RuntimeRequestQueue SQL", () => {
   for (const family of FAMILIES) {
-    it(`emits the pre-refactor statements for the ${family.name} family`, () => {
+    it(`emits the merged claim and single-sweep statements for the ${family.name} family`, () => {
       const repo = createRepo();
       family.drive(repo);
 
       const emitted = new Set(sqlLog.filter((sql) => sql.includes(family.table)));
       for (const expected of [
         goldenGet(family.table),
-        goldenClaimSelect(family.table, family.batchClaim ? "?" : "1"),
-        goldenClaimUpdate(family.table),
-        goldenExpirePending(family.table, family.pendingTimeoutError, family.pendingDeadlineColumn),
-        goldenExpireRunning(family.table, family.runningTimeoutError),
+        family.batchClaim ? goldenClaimBatch(family.table) : goldenClaim(family.table),
+        goldenExpireFor(family.table, family.pendingDeadlineColumn),
       ]) {
         expect(emitted).toContain(expected);
+      }
+      // The two-deadline sweep and the separate claim SELECT/UPDATE pair are gone; nothing may
+      // reintroduce a per-deadline UPDATE or a row-by-row claim write.
+      for (const sql of emitted) {
+        expect(sql).not.toContain("status = 'running', run_started_at = ?, updated_at = ? WHERE id = ?");
       }
       // No other family's table may be touched — the specs must not have been crossed over.
       const otherTables = FAMILIES.filter((entry) => entry.table !== family.table).map((entry) => entry.table);
@@ -188,27 +223,37 @@ describe("RuntimeRequestQueue SQL", () => {
     FAMILIES[0]!.drive(repo);
     const emitted = new Set(sqlLog);
 
-    // Copied verbatim out of the five hand-written families this template replaced.
+    // MUL-389 folded the claim into one statement and the two deadline sweeps into one.
     expect(emitted).toContain("SELECT * FROM multiremi_runtime_model_list_requests WHERE id = ? AND runtime_id = ?");
     expect(emitted).toContain(
-      "UPDATE multiremi_runtime_model_list_requests SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ?",
-    );
-    expect(emitted).toContain(
-      "SELECT * FROM multiremi_runtime_model_list_requests\n" +
-        "       WHERE runtime_id = ? AND status = 'pending'\n" +
-        "       ORDER BY created_at ASC\n" +
-        "       LIMIT 1",
+      "UPDATE multiremi_runtime_model_list_requests\n" +
+        "       SET status = 'running', run_started_at = ?, updated_at = ?\n" +
+        "       WHERE status = 'pending'\n" +
+        "         AND id = (\n" +
+        "           SELECT id FROM multiremi_runtime_model_list_requests\n" +
+        "           WHERE runtime_id = ? AND status = 'pending'\n" +
+        "           ORDER BY created_at ASC\n" +
+        "           LIMIT 1\n" +
+        "         )\n" +
+        "       RETURNING *",
     );
     expect(emitted).toContain(
       "UPDATE multiremi_runtime_model_list_requests\n" +
-        "       SET status = 'timeout', error = 'daemon did not respond within 30 seconds', updated_at = ?\n" +
-        "       WHERE runtime_id = ? AND status = 'pending' AND created_at < ?",
+        "       SET status = 'timeout',\n" +
+        "           error = CASE WHEN status = 'running' THEN ? ELSE ? END,\n" +
+        "           updated_at = ?\n" +
+        "       WHERE runtime_id = ?\n" +
+        "         AND (\n" +
+        "           (status = 'pending' AND created_at < ?)\n" +
+        "           OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < ?)\n" +
+        "         )",
     );
-    expect(emitted).toContain(
-      "UPDATE multiremi_runtime_model_list_requests\n" +
-        "       SET status = 'timeout', error = 'daemon did not finish within 60 seconds', updated_at = ?\n" +
-        "       WHERE runtime_id = ? AND status = 'running' AND run_started_at IS NOT NULL AND run_started_at < ?",
-    );
+    // The per-deadline sweeps must not come back: they were the two writes an idle heartbeat
+    // paid for every family, and their error text now rides in the CASE parameters.
+    expect([...emitted].some((sql) =>
+      sql.includes("SET status = 'timeout', error = 'daemon did not respond within 30 seconds'"))).toBe(false);
+    expect([...emitted].some((sql) =>
+      sql.includes("SET status = 'timeout', error = 'daemon did not finish within 60 seconds'"))).toBe(false);
   });
 });
 
@@ -228,6 +273,54 @@ describe("RuntimeRequestQueue lifecycle", () => {
     expect(repo.getRuntimeLocalSkillImportRequest("rt_q", first.id)?.status).toBe("pending");
   });
 
+  it("re-checks the row status on the UPDATE, not only in the sub-select", () => {
+    // The race this guards against cannot be reproduced on SQLite (one writer, and the whole
+    // statement is atomic), so the predicate itself is what gets asserted. Under Postgres READ
+    // COMMITTED two concurrent claims can both pick the same id in their sub-selects; the loser
+    // blocks on the row lock and then Postgres RE-EVALUATES the outer WHERE against the committed
+    // row. If that WHERE only said `id = ?` the loser would match and return the request the
+    // winner already took — the same pending item delivered to two daemons. `AND status =
+    // 'pending'` makes it match nothing.
+    //
+    // Asserting the SHAPE is therefore the test: the guard must sit on the outer UPDATE. A guard
+    // only inside the sub-select is what the pre-MUL-389 code had, and it is not enough.
+    const repo = createRepo();
+    FAMILIES[0]!.drive(repo);
+    const claims = sqlLog.filter((sql) =>
+      sql.includes("UPDATE multiremi_runtime_model_list_requests") && sql.includes("RETURNING *"));
+    expect(claims).toHaveLength(1);
+    const [outerPredicate] = claims[0]!.split("SELECT id FROM");
+    expect(outerPredicate).toContain("WHERE status = 'pending'");
+
+    // The batch form carries the same guard: a batch can lose the race for a subset of its ids.
+    const batchRepo = createRepo();
+    const batches = (() => {
+      batchRepo.createRuntimeLocalSkillImportRequest("rt_q", { skillKey: "a" });
+      const before = sqlLog.length;
+      batchRepo.claimRuntimeLocalSkillImportRequests("rt_q", 10);
+      // Only the claim statement: the same call also sweeps deadlines on this table.
+      return sqlLog.slice(before).filter((sql) =>
+        sql.includes("UPDATE multiremi_runtime_local_skill_import_requests") && sql.includes("RETURNING *"));
+    })();
+    expect(batches).toHaveLength(1);
+    const [batchOuterPredicate] = batches[0]!.split("SELECT id FROM");
+    expect(batchOuterPredicate).toContain("WHERE status = 'pending'");
+
+    // And the behavior a caller sees: a row already taken by another claim is not handed out again.
+    const again = batchRepo.claimRuntimeLocalSkillImportRequests("rt_q", 10);
+    expect(again).toEqual([]);
+  });
+
+  it("claims nothing when the only pending row was taken by a competing claim", () => {
+    // End-to-end shape of the same guarantee: after the row moves to `running`, a second claim on
+    // the same runtime finds no pending work rather than re-returning the owned request.
+    const repo = createRepo();
+    const request = repo.createRuntimeLocalSkillImportRequest("rt_q", { skillKey: "only" });
+    expect(repo.claimRuntimeLocalSkillImportRequests("rt_q", 10).map((entry) => entry.id)).toEqual([request.id]);
+    expect(repo.claimRuntimeLocalSkillImportRequests("rt_q", 10)).toEqual([]);
+    expect(repo.getRuntimeLocalSkillImportRequest("rt_q", request.id)?.status).toBe("running");
+  });
+
   it("honours the batch limit and floors it at one", () => {
     const repo = createRepo();
     repo.createRuntimeLocalSkillImportRequest("rt_q", { skillKey: "a" });
@@ -237,6 +330,44 @@ describe("RuntimeRequestQueue lifecycle", () => {
     expect(repo.claimRuntimeLocalSkillImportRequests("rt_q", 0)).toHaveLength(1);
     expect(repo.claimRuntimeLocalSkillImportRequests("rt_q", 10)).toHaveLength(2);
     expect(repo.claimRuntimeLocalSkillImportRequests("rt_q", 10)).toEqual([]);
+  });
+
+  it("keeps queue order for rows stamped with the same millisecond", () => {
+    // Regression guard for the MUL-389 batch rewrite. `created_at` is not unique — a caller that
+    // queues ten imports in one turn stamps them all with one millisecond — and the pre-MUL-389
+    // `SELECT ... ORDER BY created_at LIMIT n` left the tie order to the engine, which on SQLite
+    // is insertion order. A post-write JS sort by `id` looked deterministic but replaced that
+    // with a random order, because ids are random; an `api-runtimes` heartbeat test caught it.
+    const repo = createRepo();
+    const queued = Array.from({ length: 6 }, (_v, index) =>
+      repo.createRuntimeLocalSkillImportRequest("rt_q", { skillKey: `k${index}` }));
+    // Force the interesting case instead of depending on clock resolution. The stamp has to stay
+    // inside the family's pending deadline (10 minutes) or the sweep would time the rows out
+    // before the claim ever sees them.
+    const sameStamp = new Date(Date.now() - 1000).toISOString();
+    for (const request of queued) {
+      db!.run("UPDATE multiremi_runtime_local_skill_import_requests SET created_at = ? WHERE id = ?", [sameStamp, request.id]);
+    }
+
+    const claimed = repo.claimRuntimeLocalSkillImportRequests("rt_q", 10);
+    expect(claimed.map((entry) => entry.id)).toEqual(queued.map((entry) => entry.id));
+  });
+
+  it("keeps queue order when only some rows share a millisecond", () => {
+    // The mixed case: a tie at the oldest stamp still has to come out in insertion order, and the
+    // strictly newer row still goes last.
+    const repo = createRepo();
+    const old1 = repo.createRuntimeLocalSkillImportRequest("rt_q", { skillKey: "old1" });
+    const old2 = repo.createRuntimeLocalSkillImportRequest("rt_q", { skillKey: "old2" });
+    const fresh = repo.createRuntimeLocalSkillImportRequest("rt_q", { skillKey: "fresh" });
+    // Two minutes back for the pair, one second back for the lone row: both inside this family's
+    // three-minute pending deadline, and only their relative order matters.
+    const older = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+    const newer = new Date(Date.now() - 1000).toISOString();
+    db!.run("UPDATE multiremi_runtime_local_skill_import_requests SET created_at = ? WHERE id IN (?, ?)", [older, old1.id, old2.id]);
+    db!.run("UPDATE multiremi_runtime_local_skill_import_requests SET created_at = ? WHERE id = ?", [newer, fresh.id]);
+    expect(repo.claimRuntimeLocalSkillImportRequests("rt_q", 10).map((entry) => entry.id))
+      .toEqual([old1.id, old2.id, fresh.id]);
   });
 
   it("times out a pending request past its own deadline", () => {
