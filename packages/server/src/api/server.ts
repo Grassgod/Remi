@@ -123,10 +123,21 @@ import {
 import { SessionArchiveService } from "@multiremi/session-archive/service.js";
 import {
   createRequestMetricsMiddleware,
+  readProcessDbCounters,
   resolveRequestMetricsOptions,
   startRequestMetricsSummary,
   type RequestMetricsOptions,
 } from "../observability/request-metrics.js";
+import { DAEMON_WS_MAX_PAYLOAD_BYTES } from "@multiremi/contracts/daemon-protocol.js";
+import { multiremiVersion } from "@multiremi/version.js";
+import {
+  DaemonProtocolLayer,
+  hasRuntimeParameters,
+  requestsDaemonProtocolV2,
+  type DaemonProtocolSocket,
+} from "./daemon-protocol/index.js";
+import { wsFrameMetricsFromHttp } from "./daemon-protocol/metrics.js";
+import type { DaemonProtocolSession } from "./daemon-protocol/session.js";
 import { withRequestReadCache } from "@multiremi/store/request-read-cache.js";
 import { ScmPollingScheduler } from "@multiremi/scm/poller.js";
 import { IssueTitleScheduler } from "@multiremi/issue-title/poller.js";
@@ -174,6 +185,23 @@ import type {
   MultiremiWebSocketData,
   WebhookRateLimitConfig,
 } from "./helpers.js";
+
+/**
+ * Adapt Bun's server socket to the session's narrow socket interface (MUL-417).
+ *
+ * `send` must return Bun's raw status rather than swallow it: `-1` (backpressure)
+ * and `0` (dropped) are the two signals the connection layer's flow control is
+ * built on, and a wrapper that returned `void` would silently disable both.
+ */
+function sessionSocket(ws: { send(data: string): number; close(code?: number, reason?: string): void; bufferedAmount?: number }): DaemonProtocolSocket {
+  return {
+    send: (text: string) => ws.send(text),
+    close: (code?: number, reason?: string) => ws.close(code, reason),
+    get bufferedAmount() {
+      return ws.bufferedAmount ?? 0;
+    },
+  };
+}
 
 let authDisabledWarningEmitted = false;
 
@@ -730,6 +758,15 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   const port = options.port ?? parseInt(process.env.MULTIREMI_PORT ?? "6120", 10);
   const hostname = options.hostname ?? process.env.MULTIREMI_HOST ?? "0.0.0.0";
   const daemonWebSockets: DaemonWebSocketRegistry = new Map();
+  // MUL-417: the v2 connection layer. It coexists with the v1 wake-up path for
+  // exactly this sub-issue; A-2 removes `daemonWebSockets` and the `ready` frame.
+  const daemonProtocol = new DaemonProtocolLayer({
+    store,
+    serverVersion: multiremiVersion,
+    // Same resolved window as `api_minute_summary`, so the two lines add up.
+    metrics: wsFrameMetricsFromHttp(requestMetricsOptions),
+    dbCounters: () => readProcessDbCounters(),
+  });
   const browserWebSockets: BrowserWebSocketRegistry = new Map();
   const browserUserWebSockets: BrowserUserWebSocketRegistry = new Map();
   const browserScopeWebSockets: BrowserScopeWebSocketRegistry = new Map();
@@ -760,6 +797,34 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
       if (url.pathname === "/api/daemon/ws") {
         const runtimeIds = parseDaemonWebSocketRuntimeIds(url);
         if (isWebSocketUpgrade(req)) {
+          // MUL-417: a v1 socket names its runtimes in the query string; a v2
+          // socket names none, because it reports them in `hello`. Everything that
+          // decides between the two lives in the connection layer so A-2 can
+          // delete the v1 branch in one piece.
+          if (!hasRuntimeParameters(url)) {
+            const explicitV2 = requestsDaemonProtocolV2(url);
+            // A missing credential with no marker is not a v2 attempt: answering
+            // it with the historical 400 keeps a malformed v1 upgrade (and a
+            // hand-typed URL) as debuggable as it is today.
+            const presented = (req.headers.get("Authorization") ?? "").trim();
+            if (explicitV2 || presented) {
+              const resolved = await daemonProtocol.resolveIdentity(req, authToken);
+              if ("response" in resolved) return resolved.response;
+              if (daemonProtocol.isV2Upgrade(url, resolved.identity, explicitV2)) {
+                const upgraded = server.upgrade(req, {
+                  data: {
+                    connectedAt: new Date().toISOString(),
+                    kind: "daemon-protocol",
+                    accessToken: resolved.identity.accessToken,
+                    masterToken: resolved.identity.masterToken,
+                    session: null,
+                  },
+                });
+                if (upgraded) return undefined;
+              }
+            }
+            return Response.json({ error: "runtime_ids required" }, { status: 400 });
+          }
           if (runtimeIds.length === 0) {
             return Response.json({ error: "runtime_ids required" }, { status: 400 });
           }
@@ -804,8 +869,28 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
       return app.fetch(req);
     },
     websocket: {
+      // MUL-417 §8. `maxPayloadLength` sits above the protocol's own 1 MiB frame
+      // cap so an oversized frame arrives whole and can be answered with a close
+      // code the daemon can read, instead of being severed mid-frame. Backpressure
+      // pauses rather than disconnects: `closeOnBackpressureLimit: false` is what
+      // makes `ws.send === -1` a recoverable state. `perMessageDeflate` stays off
+      // (one internal hop; compression buys nothing here) and `idleTimeout: 120`
+      // above is unchanged.
+      maxPayloadLength: DAEMON_WS_MAX_PAYLOAD_BYTES,
+      backpressureLimit: DAEMON_WS_MAX_PAYLOAD_BYTES,
+      closeOnBackpressureLimit: false,
       open(ws) {
         realtimeState.connections += 1;
+        if (ws.data.kind === "daemon-protocol") {
+          // A v2 session answers every frame itself; nothing is sent here,
+          // because the daemon speaks first and one greeting must not race
+          // another.
+          ws.data.session = daemonProtocol.openSession(sessionSocket(ws), {
+            accessToken: ws.data.accessToken,
+            masterToken: ws.data.masterToken,
+          });
+          return;
+        }
         if (ws.data.kind === "daemon") {
           registerDaemonWebSocketClient(daemonWebSockets, ws);
           ws.sendText(JSON.stringify({
@@ -824,6 +909,21 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
         }
       },
       async message(ws, message) {
+        if (ws.data.kind === "daemon-protocol") {
+          // Errors never escape into Bun's handler: a throwing handler would be
+          // logged per frame and leave the session in an unknown state, while
+          // the session itself already answers a malformed frame with a close
+          // code the peer can act on.
+          try {
+            await ws.data.session?.handleMessage(message as string | Uint8Array);
+          } catch (error) {
+            log.warn("daemon protocol frame failed", {
+              session_id: ws.data.session?.sessionId ?? null,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+          return;
+        }
         if (ws.data.kind === "browser") {
           const event = parseDaemonWebSocketMessage(message);
           if (!ws.data.authenticated) {
@@ -911,9 +1011,15 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
           ts: new Date().toISOString(),
         }));
       },
+      drain(ws) {
+        // The socket caught up: pausable traffic (offers, non-critical pushes)
+        // may resume. `res` and `ack` were never paused, so nothing else to do.
+        if (ws.data.kind === "daemon-protocol") ws.data.session?.handleDrain();
+      },
       close(ws) {
         realtimeState.connections = Math.max(0, realtimeState.connections - 1);
-        if (ws.data.kind === "daemon") unregisterDaemonWebSocketClient(daemonWebSockets, ws);
+        if (ws.data.kind === "daemon-protocol") ws.data.session?.handleSocketClose();
+        else if (ws.data.kind === "daemon") unregisterDaemonWebSocketClient(daemonWebSockets, ws);
         else {
           unregisterBrowserWebSocketClient(browserWebSockets, ws);
           unregisterBrowserUserWebSocketClient(browserUserWebSockets, ws);
@@ -926,6 +1032,10 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   controlPlaneSshMesh?.start();
   server.stop = (closeActiveConnections?: boolean) => {
     requestMetricsSummary?.stop();
+    // Daemons are told 4001 rather than dropped: that code means "server is
+    // going away, reconnect with backoff", which is the deploy path.
+    daemonProtocol.closeAll();
+    daemonProtocol.stop();
     if (backgroundJobs) repositoryWiki.stopStorageWorker?.();
     if (backgroundJobs) sessionArchives.stopIssueArchivePurgeRecovery();
     controlPlaneSshMesh?.stop();

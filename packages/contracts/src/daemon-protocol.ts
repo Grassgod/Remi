@@ -36,6 +36,7 @@
  */
 
 import type { TraceEvent } from "./trace.js";
+import type { MultiremiDaemonHeartbeatAck } from "./types.js";
 
 export const DAEMON_PROTOCOL_VERSION = 2;
 
@@ -431,6 +432,60 @@ export interface DaemonTraceAppendPayload {
   task_id: string;
   events: TraceEvent[];
   closed: boolean;
+}
+
+/**
+ * `hb`, daemon -> server (spec §4).
+ *
+ * Best-effort liveness for one daemon process: losing a heartbeat costs nothing
+ * because the next one recomputes the same facts. The payload is deliberately
+ * three fields - a live socket already proves every runtime it advertises is
+ * reachable, so the only things the server cannot derive are the daemon's own
+ * view of its load, its queue, and whether it has applied a drain.
+ */
+export interface DaemonHeartbeatPayload {
+  /** Tasks this process is executing right now, across every runtime it serves. */
+  active_task_count: number;
+  /** Local outbox pressure, so an operator can see a daemon that cannot drain. */
+  outbox?: DaemonHeartbeatOutboxStats;
+  /** Drain generation this daemon has applied; absent means "none observed yet". */
+  drain_ack_generation?: number;
+}
+
+/**
+ * The daemon's own outbox counters, split by partition.
+ *
+ * `pending` counts rows not yet sent, `unacked` counts rows sent but not yet
+ * acknowledged by the server. Both are the daemon's numbers, reported for
+ * observability only: the server never drives the outbox from them.
+ */
+export interface DaemonHeartbeatOutboxStats {
+  pending: number;
+  unacked: number;
+  /** Newest outbox row id, so a gap in what the server has seen is visible. */
+  head_seq?: number;
+}
+
+/**
+ * The server's answer to one `hb`.
+ *
+ * `runtime_acks` is one entry per runtime the `hello` advertised, and it carries
+ * the SAME structure the v1 HTTP heartbeat returned (`MultiremiDaemonHeartbeatAck`
+ * in `./types.js`), including `status: "runtime_gone"` with `runtime_gone: true`
+ * for a runtime whose row no longer exists.
+ *
+ * Why per-runtime and not one status for the connection: a socket serves every
+ * runtime of one daemon process, so a missing runtime row is a fact about that
+ * runtime only. The daemon reacts to `runtime_gone` by registering again (its
+ * existing recovery path), so the server must report it WITHOUT closing the
+ * socket - closing would strand the daemon's other, healthy runtimes.
+ *
+ * Drained runtimes are skipped here rather than reported as gone: a shutdown that
+ * deleted them said so directly, and the daemon must not treat that as "register
+ * me again".
+ */
+export interface DaemonHeartbeatReplyPayload {
+  runtime_acks: MultiremiDaemonHeartbeatAck[];
 }
 
 /** `trace.push`, server -> daemon, for a task this daemon subscribed to. */

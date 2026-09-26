@@ -67,7 +67,7 @@ JSON 文本帧，不用二进制：
 | 类别 | 帧 | 可靠性与重放 |
 |---|---|---|
 | `handshake` | `hello` / `welcome` / `reject` | 每连接一次 |
-| `best_effort` | `hb`、`runtime.ready`、`concierge.status` | 不带 `seq`，不重放 |
+| `best_effort` | `hb`、`runtime.ready`、`concierge.status` | 不带 `seq`，不重放；`hb` 的服务端答复是 `res`（见 §4） |
 | `event` | 见下 §1.4 | 带 `seq`，未确认前重放 |
 | `rpc` | 见下 §1.5 | 按 `id`/`re` 配对，由调用方重试 |
 | `reply` | `res` | 答复某个 rpc |
@@ -269,6 +269,27 @@ p95 12,159 ms，其中混入了所有 runtime 都忙时的排队等待，不是�
 服务端只做两件事：更新 `last_heartbeat_at`（`RUNTIME_HEARTBEAT_STALE_MS` 5 分钟的规则不动，
 platform-maintenance 与 ssh-mesh 继续用它）和记录 drain ack。`heartbeatRuntime` 里 7 类待办的
 合并轮询（MUL-389）在 v2 服务端不再由心跳触发。
+
+**`hb` 的回复按 runtime 逐条给出，且不关连接。** 服务端用 `res` 回
+`{ runtime_acks: [MultiremiDaemonHeartbeatAck, ...] }`，顺序与 `hello` 报的 runtime 一致，
+结构就是 v1 HTTP 心跳返回的那一个（`contracts/types.ts` 的 `MultiremiDaemonHeartbeatAck`）。
+
+这一条是**必须的，不是可选的**：一条 socket 承载这台 daemon 的全部 runtime，所以「某个 runtime
+的行没了」只关系到那个 runtime。运行时行不存在时返回 `status: "runtime_gone"` /
+`runtime_gone: true`，socket 保持打开、daemon 的其它 runtime 照常收派活与 ack，daemon 按既有
+恢复路径（重新注册 + 回收孤儿任务）自行处理。
+
+不能用 close code 代替，三种都不行：
+
+- 4410 是「daemon 已退役」的终态，同一 daemon 上其它正常 runtime 会被永久断供；
+- 4001 会让 daemon 退避重连，重连后又遇到同一个 runtime，形成循环；
+- 映射成 `authority_revoked` 会让该分区停摆，daemon 就不再重新注册了。
+
+只有两种情况才关 socket：daemon 本身被退役或 token 被吊销（4410 / 4401），以及整条连接出错
+（4000 / 4001）。
+
+被 drain 清理掉的 runtime 不在 `runtime_acks` 里出现：那次关停已经直接说过，daemon 不能把
+「运维把它删了」当成「重新注册我」。
 
 008 的 `rt_fkmqtl` 被分配为飞书 concierge，今天心跳 3 s；出站改推送后这个 3 s 节奏不再需要。
 
