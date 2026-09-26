@@ -2,12 +2,13 @@
 
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import type {
   KnowledgeRunDetail,
   KnowledgeSubmission,
+  KnowledgeSubmissionListItem,
   Project,
   RepositoryWikiSummary,
   WorkspaceDoc,
@@ -28,6 +29,10 @@ const state = vi.hoisted(() => ({
   backlinks: {} as Record<string, unknown[]>,
   repositoryDocs: {} as Record<string, unknown[]>,
   submissions: [] as unknown[],
+  /** Per-`q` server results. An absent term falls back to `submissions`. */
+  submissionsByQuery: {} as Record<string, unknown[]>,
+  submissionDetails: {} as Record<string, unknown>,
+  submissionDetailPending: false,
   runs: [] as unknown[],
   runDetail: null as unknown,
   basePending: false,
@@ -54,10 +59,26 @@ vi.mock("@tanstack/react-query", () => ({
     state.observedQueries.push({ key, enabled: (options as { enabled?: boolean }).enabled });
     if (key[0] === "knowledge") {
       const submissions = key[2] === "submissions";
+      const submissionsQuery = String(key[3] ?? "");
+      const submissionDetail = key[2] === "submission";
       const runDetail = key[2] === "runs" && key.length > 3;
       return {
-        data: submissions ? state.submissions : runDetail ? state.runDetail : state.runs,
-        isPending: submissions ? state.submissionsPending : runDetail ? state.runDetailPending : state.runsPending,
+        data: submissions
+          ? (submissionsQuery && state.submissionsByQuery[submissionsQuery]
+            ? state.submissionsByQuery[submissionsQuery]
+            : state.submissions)
+          : submissionDetail
+            ? state.submissionDetails[String(key[3])]
+            : runDetail
+              ? state.runDetail
+              : state.runs,
+        isPending: submissions
+          ? state.submissionsPending
+          : submissionDetail
+            ? state.submissionDetailPending
+            : runDetail
+              ? state.runDetailPending
+              : state.runsPending,
         isError: (submissions ? state.submissionsError : state.runsError) !== null,
         error: submissions ? state.submissionsError : state.runsError,
         refetch: submissions ? refetchSubmissions : refetchRuns,
@@ -120,7 +141,13 @@ vi.mock("@multiremi/core/knowledge", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@multiremi/core/knowledge")>();
   return {
     ...actual,
-    knowledgeSubmissionsOptions: () => ({ queryKey: ["knowledge", "ws-1", "submissions"] }),
+    knowledgeSubmissionsOptions: (_workspaceId: string, q = "") => ({
+      queryKey: ["knowledge", "ws-1", "submissions", q],
+    }),
+    knowledgeSubmissionOptions: (_workspaceId: string, submissionId: string | null | undefined) => ({
+      queryKey: ["knowledge", "ws-1", "submission", submissionId ?? ""],
+      enabled: Boolean(submissionId),
+    }),
     knowledgeRunsOptions: () => ({ queryKey: ["knowledge", "ws-1", "runs"] }),
     knowledgeRunOptions: (_workspaceId: string, runId: string | null | undefined) => ({
       queryKey: ["knowledge", "ws-1", "runs", runId ?? ""],
@@ -174,9 +201,33 @@ vi.mock("../projects/components/wiki/project-wiki-section", () => ({
 vi.mock("../navigation", () => ({
   AppLink: ({ href, children, ...props }: { href: string; children: ReactNode }) => <a href={href} {...props}>{children}</a>,
 }));
+/**
+ * Tooltip stand-in that honours `open`/`onOpenChange` like the real control.
+ *
+ * The Raw preview is a *controlled* tooltip that fetches the full body when it
+ * opens, so a mock which always renders its content would both hide the lazy
+ * fetch and make the assertion vacuous.
+ */
 vi.mock("@multiremi/ui/components/ui/tooltip", () => ({
   TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
-  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Tooltip: ({
+    children,
+    open,
+    onOpenChange,
+  }: {
+    children: ReactNode;
+    open?: boolean;
+    onOpenChange?: (open: boolean) => void;
+  }) => (
+    <div
+      data-testid="tooltip-root"
+      data-open={open ? "true" : "false"}
+      onPointerEnter={open === undefined ? undefined : () => onOpenChange?.(true)}
+      onPointerLeave={open === undefined ? undefined : () => onOpenChange?.(false)}
+    >
+      {children}
+    </div>
+  ),
   TooltipTrigger: ({ render }: { render: ReactNode }) => <>{render}</>,
   TooltipContent: ({ children }: { children: ReactNode }) => <div role="tooltip">{children}</div>,
 }));
@@ -220,14 +271,30 @@ function summary(partial: Partial<RepositoryWikiSummary> & { repository_id: stri
   };
 }
 
-function submission(partial: Partial<KnowledgeSubmission> & { id: string }): KnowledgeSubmission {
+/**
+ * List-row fixture. The list contract has no `body`/`patch` (MUL-386 C.2), so the
+ * helper only offers `body_excerpt`; full bodies come from `submissionDetail`.
+ */
+function submission(partial: Partial<KnowledgeSubmissionListItem> & { id: string }): KnowledgeSubmissionListItem {
   return {
     workspace_id: "ws-1", project_id: "proj-1", repository_id: null, scope: "memory",
-    source_type: "agent", proposed_path: null, proposed_slug: null, body: "raw body", patch: null,
+    source_type: "agent", proposed_path: null, proposed_slug: null, body_excerpt: "raw body",
     base_revision: null, source_task_id: null, source_issue_id: null, source_revision: null,
     author_agent_id: null, content_sha256: "sha", status: "pending",
     created_at: "2026-08-31T00:00:00Z", updated_at: "2026-08-31T00:00:00Z",
     source_issue: null, author_agent: null, source_task: null, ...partial,
+  };
+}
+
+/** Full submission as returned by the by-id route (the list never carries this). */
+function submissionDetail(body: string, id = "ksub-1"): KnowledgeSubmission {
+  return {
+    id, workspace_id: "ws-1", project_id: "proj-1", repository_id: null, scope: "memory",
+    source_type: "agent", proposed_path: null, proposed_slug: null, body, patch: null,
+    base_revision: null, source_task_id: null, source_issue_id: null, source_revision: null,
+    author_agent_id: null, content_sha256: "sha", status: "pending",
+    created_at: "2026-08-31T00:00:00Z", updated_at: "2026-08-31T00:00:00Z",
+    source_issue: null, author_agent: null, source_task: null,
   };
 }
 
@@ -254,7 +321,7 @@ describe("KnowledgePage", () => {
   beforeEach(() => {
     Object.assign(state, {
       projects: [], docs: [], memoryDocs: [], repositories: [], summaries: [], projectDetails: {}, backlinks: {}, repositoryDocs: {},
-      submissions: [], runs: [], runDetail: null,
+      submissions: [], submissionsByQuery: {}, submissionDetails: {}, submissionDetailPending: false, runs: [], runDetail: null,
       basePending: false, submissionsPending: false, runsPending: false, runDetailPending: false,
       repositoryPending: false, repositoryError: null, projectPending: false, projectError: null,
       baseError: null, submissionsError: null, runsError: null,
@@ -430,7 +497,7 @@ describe("KnowledgePage", () => {
   it("shows only formal memory in Memory and keeps memory Raw in Raw", () => {
     state.projects = [project({ id: "proj-1", title: "Apollo" })];
     state.memoryDocs = [doc({ id: "formal", kind: "memory", title: "Formal memory" })];
-    state.submissions = [submission({ id: "raw-memory", body: "Memory waiting for Atlas" })];
+    state.submissions = [submission({ id: "raw-memory", body_excerpt: "Memory waiting for Atlas" })];
     renderPage();
 
     fireEvent.click(screen.getByRole("tab", { name: /Memory/ }));
@@ -562,15 +629,174 @@ describe("KnowledgePage", () => {
     expect(screen.getByText("processing")).toBeInTheDocument();
   });
 
-  it("pairs the truncated Raw preview with its complete tooltip content", () => {
+  it("pairs the truncated Raw excerpt with the lazily fetched complete body", async () => {
     const body = "A complete Raw submission body that is intentionally longer than the table preview.";
-    state.submissions = [submission({ id: "ksub-long", body })];
+    // The list row only carries the SQL excerpt; the full text arrives from the
+    // by-id route that the tooltip triggers on hover (MUL-386 C.2).
+    state.submissions = [submission({ id: "ksub-long", body_excerpt: "A complete Raw submission body" })];
+    state.submissionDetails["ksub-long"] = { submission: submissionDetail(body, "ksub-long") };
     renderPage();
     fireEvent.click(screen.getByRole("tab", { name: /Raw/ }));
 
-    const preview = screen.getByRole("button", { name: body });
+    const preview = screen.getByRole("button", { name: "A complete Raw submission body" });
     expect(preview).toHaveClass("truncate");
-    expect(screen.getByRole("tooltip")).toHaveTextContent(body);
+    // Closed tooltip: the row only holds the SQL-truncated excerpt, so the full
+    // body is not rendered anywhere yet.
+    const tooltipRoot = screen.getAllByTestId("tooltip-root").find((node) => node.getAttribute("data-open") === "false")!;
+    expect(tooltipRoot).not.toHaveTextContent(body);
+
+    fireEvent.pointerEnter(tooltipRoot);
+    await waitFor(() => expect(screen.getByRole("tooltip")).toHaveTextContent(body));
+  });
+
+  /**
+   * Waits until the debounced Raw query for `term` has actually been issued, so a
+   * test asserts the post-server-result state rather than the debounce window
+   * (where the pane still filters locally and every implementation looks right).
+   */
+  async function waitForServerQuery(term: string) {
+    await waitFor(() => expect(
+      state.observedQueries.some(({ key }) => key[0] === "knowledge" && key[2] === "submissions" && key[3] === term),
+    ).toBe(true));
+  }
+
+  /**
+   * The tab badge keeps the baseline meaning — the size of the raw input list —
+   * rather than becoming the size of the current server `q` result (MUL-386).
+   */
+  it("keeps the Raw count badge at the unfiltered list size while searching", async () => {
+    const user = userEvent.setup();
+    state.submissions = [
+      submission({ id: "ksub-a", body_excerpt: "first" }),
+      submission({ id: "ksub-b", body_excerpt: "second" }),
+      submission({ id: "ksub-c", body_excerpt: "third" }),
+    ];
+    state.submissionsByQuery.only = [state.submissions[0] as never];
+
+    renderPage();
+    await user.click(screen.getByRole("tab", { name: /Raw/ }));
+    const tab = () => screen.getByRole("tab", { name: /Raw/ });
+    await waitFor(() => expect(tab()).toHaveTextContent("3"));
+
+    await user.type(screen.getByPlaceholderText("Search source, issue, agent, or proposed target..."), "only");
+    await waitForServerQuery("only");
+    // One row rendered (the excerpt shows in the row and in its tooltip content),
+    // badge still 3.
+    expect(screen.getAllByText("first").length).toBeGreaterThan(0);
+    expect(screen.queryByText("second")).not.toBeInTheDocument();
+    expect(screen.queryByText("third")).not.toBeInTheDocument();
+    expect(tab()).toHaveTextContent("3");
+  });
+
+  /**
+   * QA regression (MUL-386): the Raw pane used to render the server `q` result
+   * as soon as it landed, so a row that only matched issue key or agent name —
+   * fields the server predicate deliberately does not join — disappeared.
+   */
+  it("keeps Raw rows that only match issue key or agent name after the server query lands", async () => {
+    const user = userEvent.setup();
+    state.submissions = [
+      submission({
+        id: "ksub-issue",
+        source_issue_id: "issue-4",
+        source_issue: { id: "issue-4", key: "MUL-4", title: "Knowledge chain" },
+        body_excerpt: "neutral body text",
+      }),
+      submission({
+        id: "ksub-agent",
+        author_agent_id: "agent-onyx",
+        author_agent: { id: "agent-onyx", name: "Onyx Draft Writer" },
+        body_excerpt: "another neutral body",
+      }),
+    ];
+    // The server cannot see either field, so both terms come back empty.
+    state.submissionsByQuery["MUL-4"] = [];
+    state.submissionsByQuery["Onyx Draft Writer"] = [];
+
+    renderPage();
+    await user.click(screen.getByRole("tab", { name: /Raw/ }));
+    const input = screen.getByPlaceholderText("Search source, issue, agent, or proposed target...");
+
+    await user.type(input, "MUL-4");
+    await waitForServerQuery("MUL-4");
+    expect(screen.getByRole("link", { name: "MUL-4" })).toBeInTheDocument();
+    expect(screen.queryByText("Nothing matches your search")).not.toBeInTheDocument();
+
+    await user.clear(input);
+    await user.type(input, "Onyx Draft Writer");
+    await waitForServerQuery("Onyx Draft Writer");
+    expect(screen.getByText("Onyx Draft Writer")).toBeInTheDocument();
+  });
+
+  it("keeps a server-side body hit and does not duplicate rows matched on both sides", async () => {
+    const user = userEvent.setup();
+    state.submissions = [
+      submission({ id: "ksub-body", body_excerpt: "server side needle", proposed_path: "guides/deploy.md" }),
+      submission({ id: "ksub-other", body_excerpt: "unrelated" }),
+    ];
+    // `deploy` matches both the server (proposed_path) and the local predicate.
+    state.submissionsByQuery.deploy = [state.submissions[0] as never];
+
+    renderPage();
+    await user.click(screen.getByRole("tab", { name: /Raw/ }));
+    await user.type(screen.getByPlaceholderText("Search source, issue, agent, or proposed target..."), "deploy");
+
+    await waitForServerQuery("deploy");
+    expect(screen.getByText("guides/deploy.md")).toBeInTheDocument();
+    // One row, exactly once: the union is keyed by id.
+    expect(screen.getAllByText("guides/deploy.md")).toHaveLength(1);
+    expect(screen.queryByText("unrelated")).not.toBeInTheDocument();
+  });
+
+  it("filters locally during the debounce window instead of flashing the full list", async () => {
+    const user = userEvent.setup();
+    state.submissions = [
+      submission({ id: "ksub-keep", source_issue_id: "issue-9", source_issue: { id: "issue-9", key: "MUL-9", title: "Keep" } }),
+      submission({ id: "ksub-drop", source_issue_id: "issue-8", source_issue: { id: "issue-8", key: "MUL-8", title: "Drop" } }),
+    ];
+    state.submissionsByQuery["MUL-9"] = [];
+
+    renderPage();
+    await user.click(screen.getByRole("tab", { name: /Raw/ }));
+    await user.type(screen.getByPlaceholderText("Search source, issue, agent, or proposed target..."), "MUL-9");
+
+    // During the debounce window, the local predicate already narrows the list.
+    expect(screen.getByRole("link", { name: "MUL-9" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "MUL-8" })).not.toBeInTheDocument();
+
+    // And it stays narrowed after the server returns an empty result for the term.
+    await waitForServerQuery("MUL-9");
+    expect(screen.getByRole("link", { name: "MUL-9" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "MUL-8" })).not.toBeInTheDocument();
+  });
+
+  /**
+   * While the user is still typing, the previous term's server response is stale
+   * and must not leak rows that no longer match — the pane keeps using the local
+   * predicate until the debounced term catches up.
+   */
+  it("does not show the previous term's server rows while the user keeps typing", async () => {
+    const user = userEvent.setup();
+    state.submissions = [
+      submission({ id: "ksub-alpha", source_issue_id: "issue-8", source_issue: { id: "issue-8", key: "MUL-8", title: "Alpha" }, body_excerpt: "alpha body" }),
+      // Body-only match for the first term: the local predicate cannot see it.
+      submission({ id: "ksub-stale", source_issue_id: "issue-9", source_issue: { id: "issue-9", key: "MUL-9", title: "Beta" }, body_excerpt: "server side beta" }),
+    ];
+    state.submissionsByQuery["MUL-9"] = [state.submissions[1] as never];
+
+    renderPage();
+    await user.click(screen.getByRole("tab", { name: /Raw/ }));
+    const input = screen.getByPlaceholderText("Search source, issue, agent, or proposed target...");
+
+    await user.type(input, "MUL-9");
+    await waitForServerQuery("MUL-9");
+    // The row's excerpt shows in the row and in its tooltip content.
+    expect(screen.getAllByText("server side beta").length).toBeGreaterThan(0);
+
+    // New term, debounce not yet elapsed: the MUL-9 server rows are stale.
+    fireEvent.change(input, { target: { value: "MUL-8" } });
+    expect(screen.queryByText("server side beta")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "MUL-8" })).toBeInTheDocument();
   });
 
   it("renders a compilation run with multiple Raw inputs and multiple outputs", () => {
@@ -607,7 +833,9 @@ describe("KnowledgePage", () => {
       ...detail,
       sources: detail.sources.map((source, index) => ({
         ...source,
-        submission: submission({ id: source.submission_id ?? `raw-${index}`, body: `Complete Raw input ${index + 1}` }),
+        // The single-run route still returns full nested submissions; only the
+        // list rows are excerpt-only (MUL-386 C.2).
+        submission: submissionDetail(`Complete Raw input ${index + 1}`, source.submission_id ?? `raw-${index}`),
       })),
     };
     renderPage();

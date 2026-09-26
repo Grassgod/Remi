@@ -5,7 +5,10 @@ import type {
   CreateRepositoryWikiDocInput,
   MultiremiKnowledgeCompilationAction,
   MultiremiKnowledgeScope,
+  MultiremiKnowledgeCompilationRunSourceListItem,
+  MultiremiKnowledgeDocSummary,
   MultiremiKnowledgeSubmission,
+  MultiremiKnowledgeSubmissionListItem,
   RepositoryWikiBatchOperation,
   RepositoryWikiBatchResult,
   UpdateProjectDocInput,
@@ -361,16 +364,21 @@ export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
         repositoryId: clean(c.req.query("repository_id")),
         scope: clean(c.req.query("scope")),
         status: clean(c.req.query("status")),
+        q: clean(c.req.query("q")),
         cursor: clean(c.req.query("cursor")),
         limit: optionalInt(c.req.query("limit")),
       });
       return c.json({
-        submissions: page.items.map((submission) => submissionResponse(store, submission)),
+        submissions: page.items.map((submission) => submissionListResponse(store, submission)),
         next_cursor: page.nextCursor,
         applied_filters: {
           workspace_id: workspaceId, project_id: clean(c.req.query("project_id")),
           repository_id: clean(c.req.query("repository_id")), scope: clean(c.req.query("scope")),
-          status: clean(c.req.query("status")), combination: "intersection",
+          status: clean(c.req.query("status")),
+          // Only present when a server-side body/path search was applied, so the
+          // existing filter shape is unchanged for callers that do not pass `q`.
+          ...(clean(c.req.query("q")) ? { query: clean(c.req.query("q")) } : {}),
+          combination: "intersection",
         },
       });
     } catch (error) {
@@ -403,21 +411,20 @@ export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
       const repositories = new Map(
         listWorkspaceRepositories(store, workspaceId).map((repository) => [repository.id, repository]),
       );
-      const repositoryDocs = new Map<string, ReturnType<typeof store.listRepositoryWikiDocs>>();
+      // MUL-386 C.2: resolve only the docs this page's outputs actually reference
+      // (`artifact{id,title,path}`). Reading the repository's whole doc table per
+      // run — bodies included — was one of the two largest bridge payloads here.
+      const outputsByRun = page.items.map((run) => ({
+        run,
+        outputs: store.listKnowledgeRunOutputs(run.id),
+      }));
+      const summaries = listKnowledgeArtifactSummaries(store, workspaceId, outputsByRun.flatMap((entry) => entry.outputs));
       return c.json({
-        runs: page.items.map((run) => {
-          const docs = run.repositoryId
-            ? repositoryDocs.get(run.repositoryId)
-              ?? store.listRepositoryWikiDocs(run.workspaceId, run.repositoryId)
-            : [];
-          if (run.repositoryId && !repositoryDocs.has(run.repositoryId)) repositoryDocs.set(run.repositoryId, docs);
-          const detail = runRelationshipsResponse(store, run, { repositoryDocs: docs, includeSubmissions: false });
-          return {
-            ...runResponse(store, run, (repositoryId) => repositories.get(repositoryId)?.name ?? null),
-            sources: detail.sources,
-            outputs: detail.outputs,
-          };
-        }),
+        runs: outputsByRun.map(({ run, outputs }) => ({
+          ...runResponse(store, run, (repositoryId) => repositories.get(repositoryId)?.name ?? null),
+          sources: runSourceSummariesResponse(store, run.id),
+          outputs: outputs.map((output) => outputResponse(output, summaries)),
+        })),
         next_cursor: page.nextCursor,
       });
     } catch (error) {
@@ -1002,6 +1009,114 @@ function normalizeScope(value: unknown): MultiremiKnowledgeScope {
   const scope = String(value ?? "");
   if (scope === "project_wiki" || scope === "repository_wiki" || scope === "memory") return scope;
   throw new KnowledgeWritePolicyError("scope must be project_wiki, repository_wiki, or memory", 400);
+}
+
+/**
+ * List-row submission (MUL-386 C.2).
+ *
+ * `body` and `patch` are intentionally absent: the list route no longer reads
+ * them from the database, so it cannot return them. `body_excerpt` carries the
+ * SQL-truncated prefix the one-line preview shows; the full text comes from
+ * `GET /api/knowledge/submissions/:id` when a row is opened.
+ */
+function submissionListResponse(
+  store: RouterDeps["store"],
+  submission: MultiremiKnowledgeSubmissionListItem,
+): Record<string, unknown> {
+  const issue = submission.sourceIssueId ? store.getIssue(submission.sourceIssueId) : null;
+  const agent = submission.authorAgentId ? store.getAgent(submission.authorAgentId) : null;
+  const task = submission.sourceTaskId ? store.getTask(submission.sourceTaskId) : null;
+  return {
+    id: submission.id,
+    workspace_id: submission.workspaceId,
+    project_id: submission.projectId,
+    repository_id: submission.repositoryId,
+    scope: submission.scope,
+    source_type: submission.sourceType,
+    proposed_path: submission.proposedPath,
+    proposed_slug: submission.proposedSlug,
+    body_excerpt: submission.bodyExcerpt,
+    base_revision: submission.baseRevision,
+    source_task_id: submission.sourceTaskId,
+    source_issue_id: submission.sourceIssueId,
+    source_revision: submission.sourceRevision,
+    author_agent_id: submission.authorAgentId,
+    content_sha256: submission.contentSha256,
+    status: submission.status,
+    created_at: submission.createdAt,
+    updated_at: submission.updatedAt,
+    source_issue: issue ? { id: issue.id, key: issue.key, title: issue.title } : null,
+    author_agent: agent ? { id: agent.id, name: agent.name } : null,
+    source_task: task ? { id: task.id, status: task.status } : null,
+  };
+}
+
+/**
+ * Sources for a run list row: identity only, no `metadata` (MUL-386 C.2).
+ *
+ * The list SQL no longer selects the `metadata` column, so arbitrary SCM payload
+ * metadata cannot be returned here even by accident. The single-run route still
+ * answers with full `metadata` and nested submissions.
+ */
+function runSourceSummariesResponse(
+  store: RouterDeps["store"],
+  runId: string,
+): Record<string, unknown>[] {
+  return store.listKnowledgeRunSourceSummaries(runId).map((source: MultiremiKnowledgeCompilationRunSourceListItem) => ({
+    id: source.id,
+    run_id: source.runId,
+    submission_id: source.submissionId,
+    source_type: source.sourceType,
+    source_ref: source.sourceRef,
+    created_at: source.createdAt,
+    submission: null,
+  }));
+}
+
+/**
+ * Resolve `artifact{id,title,path}` for one page of run outputs.
+ *
+ * Both calls are `IN (…)` lookups against a projection that selects only
+ * id/title/path, so a page of runs touches exactly the docs it references
+ * instead of reading whole tables (bodies included) through the bridge.
+ */
+function listKnowledgeArtifactSummaries(
+  store: RouterDeps["store"],
+  workspaceId: string,
+  outputs: Array<ReturnType<RouterDeps["store"]["listKnowledgeRunOutputs"]>[number]>,
+): Map<string, MultiremiKnowledgeDocSummary> {
+  const repositoryDocIds: string[] = [];
+  const projectDocIds: string[] = [];
+  for (const output of outputs) {
+    if (!output.docId) continue;
+    if (output.artifactScope === "repository_wiki") repositoryDocIds.push(output.docId);
+    else projectDocIds.push(output.docId);
+  }
+  const summaries = new Map<string, MultiremiKnowledgeDocSummary>();
+  for (const summary of store.listProjectDocSummariesByIds(projectDocIds)) summaries.set(summary.id, summary);
+  for (const summary of store.listRepositoryWikiDocSummariesByIds(workspaceId, repositoryDocIds)) {
+    summaries.set(summary.id, summary);
+  }
+  return summaries;
+}
+
+function outputResponse(
+  output: ReturnType<RouterDeps["store"]["listKnowledgeRunOutputs"]>[number],
+  summaries: Map<string, MultiremiKnowledgeDocSummary>,
+): Record<string, unknown> {
+  const doc = output.docId ? summaries.get(output.docId) ?? null : null;
+  return {
+    id: output.id,
+    run_id: output.runId,
+    artifact_scope: output.artifactScope,
+    doc_id: output.docId,
+    revision_id: output.revisionId,
+    version: output.version,
+    action: output.action,
+    content_sha256: output.contentSha256,
+    created_at: output.createdAt,
+    artifact: doc ? { id: doc.id, title: doc.title, path: doc.path } : null,
+  };
 }
 
 function submissionResponse(

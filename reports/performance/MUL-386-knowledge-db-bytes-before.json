@@ -1,0 +1,372 @@
+{
+  "generatedAt": "2026-09-26T09:49:50.999Z",
+  "commit": "a1e6162312b34d272e22b633d185f014f535f23e",
+  "runtime": {
+    "bun": "1.3.14"
+  },
+  "accounting": "db_bytes = JSON.stringify({ rows, count }) per statement, matching pg-worker.ts",
+  "reports": [
+    {
+      "mode": "postgres",
+      "database": "PostgreSQL 15.19 (Debian 15.19-0+deb12u1)",
+      "fixture": {
+        "submissions": 100,
+        "submission_body_bytes": 80000,
+        "submission_patch_bytes": 40000,
+        "runs": 100,
+        "scm_sources_per_run": 2,
+        "scm_metadata_bytes": 35000,
+        "repository_wiki_docs": 120,
+        "repository_wiki_body_bytes": 50000,
+        "project_docs": 40,
+        "project_doc_body_bytes": 20000,
+        "recall_hits": 20
+      },
+      "routes": [
+        {
+          "route": "submissions list",
+          "method": "GET",
+          "samples": 3,
+          "p50Ms": 341.57,
+          "responseBytes": 11675137,
+          "itemsReturned": 100,
+          "statements": 694,
+          "dbBytes": 12085257,
+          "statements_": [
+            {
+              "sql": "SELECT * FROM multiremi_knowledge_submissions",
+              "calls": 1,
+              "rows": 101,
+              "bytes": 11772417,
+              "maxBytes": 11772417
+            },
+            {
+              "sql": "SELECT * FROM multiremi_tasks",
+              "calls": 99,
+              "rows": 99,
+              "bytes": 182457,
+              "maxBytes": 1843
+            },
+            {
+              "sql": "SELECT * FROM multiremi_agents",
+              "calls": 99,
+              "rows": 99,
+              "bytes": 63162,
+              "maxBytes": 638
+            },
+            {
+              "sql": "SELECT * FROM multiremi_issues",
+              "calls": 99,
+              "rows": 99,
+              "bytes": 62667,
+              "maxBytes": 633
+            },
+            {
+              "sql": "SELECT id FROM multiremi_issues",
+              "calls": 99,
+              "rows": 99,
+              "bytes": 4554,
+              "maxBytes": 46
+            },
+            {
+              "sql": "SELECT l.* FROM multiremi_issue_labels",
+              "calls": 99,
+              "rows": 0,
+              "bytes": 0,
+              "maxBytes": 0
+            },
+            {
+              "sql": "SELECT s.* FROM multiremi_skills",
+              "calls": 99,
+              "rows": 0,
+              "bytes": 0,
+              "maxBytes": 0
+            },
+            {
+              "sql": "SELECT id FROM multiremi_autopilot_runs",
+              "calls": 99,
+              "rows": 0,
+              "bytes": 0,
+              "maxBytes": 0
+            }
+          ]
+        },
+        {
+          "route": "runs list",
+          "method": "GET",
+          "samples": 3,
+          "p50Ms": 311.22,
+          "responseBytes": 7074287,
+          "itemsReturned": 100,
+          "statements": 503,
+          "dbBytes": 15082499,
+          "statements_": [
+            {
+              "sql": "SELECT * FROM multiremi_knowledge_compilation_run_sources",
+              "calls": 100,
+              "rows": 300,
+              "bytes": 6965638,
+              "maxBytes": 69657
+            },
+            {
+              "sql": "SELECT * FROM multiremi_repository_wiki_docs",
+              "calls": 1,
+              "rows": 120,
+              "bytes": 5937782,
+              "maxBytes": 5937782
+            },
+            {
+              "sql": "SELECT * FROM multiremi_project_docs",
+              "calls": 100,
+              "rows": 100,
+              "bytes": 2032435,
+              "maxBytes": 20411
+            },
+            {
+              "sql": "SELECT * FROM multiremi_agents",
+              "calls": 100,
+              "rows": 100,
+              "bytes": 63800,
+              "maxBytes": 638
+            },
+            {
+              "sql": "SELECT * FROM multiremi_knowledge_compilation_outputs",
+              "calls": 100,
+              "rows": 200,
+              "bytes": 48000,
+              "maxBytes": 480
+            },
+            {
+              "sql": "SELECT * FROM multiremi_knowledge_compilation_runs",
+              "calls": 1,
+              "rows": 100,
+              "bytes": 34422,
+              "maxBytes": 34422
+            },
+            {
+              "sql": "SELECT * FROM multiremi_workspaces",
+              "calls": 1,
+              "rows": 1,
+              "bytes": 422,
+              "maxBytes": 422
+            },
+            {
+              "sql": "SELECT s.* FROM multiremi_skills",
+              "calls": 100,
+              "rows": 0,
+              "bytes": 0,
+              "maxBytes": 0
+            }
+          ]
+        },
+        {
+          "route": "recall",
+          "method": "GET",
+          "samples": 3,
+          "p50Ms": 163.09,
+          "responseBytes": 13445,
+          "itemsReturned": 20,
+          "statements": 42,
+          "dbBytes": 16286206,
+          "statements_": [
+            {
+              "sql": "SELECT * FROM multiremi_project_docs",
+              "calls": 20,
+              "rows": 820,
+              "bytes": 16274260,
+              "maxBytes": 813713
+            },
+            {
+              "sql": "SELECT p.*, COUNT(i.id) AS issue_count, COALESC FROM multiremi_project_resources",
+              "calls": 22,
+              "rows": 22,
+              "bytes": 11946,
+              "maxBytes": 543
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "sqlite",
+      "database": "bun:sqlite in-memory",
+      "fixture": {
+        "submissions": 100,
+        "submission_body_bytes": 80000,
+        "submission_patch_bytes": 40000,
+        "runs": 100,
+        "scm_sources_per_run": 2,
+        "scm_metadata_bytes": 35000,
+        "repository_wiki_docs": 120,
+        "repository_wiki_body_bytes": 50000,
+        "project_docs": 40,
+        "project_doc_body_bytes": 20000,
+        "recall_hits": 20
+      },
+      "routes": [
+        {
+          "route": "submissions list",
+          "method": "GET",
+          "samples": 3,
+          "p50Ms": 86.88,
+          "responseBytes": 11675137,
+          "itemsReturned": 100,
+          "statements": 694,
+          "dbBytes": 12085257,
+          "statements_": [
+            {
+              "sql": "SELECT * FROM multiremi_knowledge_submissions",
+              "calls": 1,
+              "rows": 101,
+              "bytes": 11772417,
+              "maxBytes": 11772417
+            },
+            {
+              "sql": "SELECT * FROM multiremi_tasks",
+              "calls": 99,
+              "rows": 99,
+              "bytes": 182457,
+              "maxBytes": 1843
+            },
+            {
+              "sql": "SELECT * FROM multiremi_agents",
+              "calls": 99,
+              "rows": 99,
+              "bytes": 63162,
+              "maxBytes": 638
+            },
+            {
+              "sql": "SELECT * FROM multiremi_issues",
+              "calls": 99,
+              "rows": 99,
+              "bytes": 62667,
+              "maxBytes": 633
+            },
+            {
+              "sql": "SELECT id FROM multiremi_issues",
+              "calls": 99,
+              "rows": 99,
+              "bytes": 4554,
+              "maxBytes": 46
+            },
+            {
+              "sql": "SELECT l.* FROM multiremi_issue_labels",
+              "calls": 99,
+              "rows": 0,
+              "bytes": 0,
+              "maxBytes": 0
+            },
+            {
+              "sql": "SELECT s.* FROM multiremi_skills",
+              "calls": 99,
+              "rows": 0,
+              "bytes": 0,
+              "maxBytes": 0
+            },
+            {
+              "sql": "SELECT id FROM multiremi_autopilot_runs",
+              "calls": 99,
+              "rows": 0,
+              "bytes": 0,
+              "maxBytes": 0
+            }
+          ]
+        },
+        {
+          "route": "runs list",
+          "method": "GET",
+          "samples": 3,
+          "p50Ms": 52.81,
+          "responseBytes": 7074287,
+          "itemsReturned": 100,
+          "statements": 503,
+          "dbBytes": 15082499,
+          "statements_": [
+            {
+              "sql": "SELECT * FROM multiremi_knowledge_compilation_run_sources",
+              "calls": 100,
+              "rows": 300,
+              "bytes": 6965638,
+              "maxBytes": 69657
+            },
+            {
+              "sql": "SELECT * FROM multiremi_repository_wiki_docs",
+              "calls": 1,
+              "rows": 120,
+              "bytes": 5937782,
+              "maxBytes": 5937782
+            },
+            {
+              "sql": "SELECT * FROM multiremi_project_docs",
+              "calls": 100,
+              "rows": 100,
+              "bytes": 2032435,
+              "maxBytes": 20411
+            },
+            {
+              "sql": "SELECT * FROM multiremi_agents",
+              "calls": 100,
+              "rows": 100,
+              "bytes": 63800,
+              "maxBytes": 638
+            },
+            {
+              "sql": "SELECT * FROM multiremi_knowledge_compilation_outputs",
+              "calls": 100,
+              "rows": 200,
+              "bytes": 48000,
+              "maxBytes": 480
+            },
+            {
+              "sql": "SELECT * FROM multiremi_knowledge_compilation_runs",
+              "calls": 1,
+              "rows": 100,
+              "bytes": 34422,
+              "maxBytes": 34422
+            },
+            {
+              "sql": "SELECT * FROM multiremi_workspaces",
+              "calls": 1,
+              "rows": 1,
+              "bytes": 422,
+              "maxBytes": 422
+            },
+            {
+              "sql": "SELECT s.* FROM multiremi_skills",
+              "calls": 100,
+              "rows": 0,
+              "bytes": 0,
+              "maxBytes": 0
+            }
+          ]
+        },
+        {
+          "route": "recall",
+          "method": "GET",
+          "samples": 3,
+          "p50Ms": 52.67,
+          "responseBytes": 13445,
+          "itemsReturned": 20,
+          "statements": 42,
+          "dbBytes": 16286074,
+          "statements_": [
+            {
+              "sql": "SELECT * FROM multiremi_project_docs",
+              "calls": 20,
+              "rows": 820,
+              "bytes": 16274260,
+              "maxBytes": 813713
+            },
+            {
+              "sql": "SELECT p.*, COUNT(i.id) AS issue_count, COALESC FROM multiremi_project_resources",
+              "calls": 22,
+              "rows": 22,
+              "bytes": 11814,
+              "maxBytes": 537
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

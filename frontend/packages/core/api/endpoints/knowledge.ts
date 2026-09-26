@@ -20,8 +20,18 @@ import {
 export class KnowledgeEndpoints {
   constructor(readonly http: HttpClient) {}
 
-  async listKnowledgeSubmissions(workspaceId: string): Promise<ListKnowledgeSubmissionsResponse> {
+  /**
+   * List raw submissions. Returns light rows (no `body`/`patch`) — pass `q` to
+   * search bodies and paths on the server, and use `getKnowledgeSubmission(id)`
+   * for full content (MUL-386 C.2).
+   */
+  async listKnowledgeSubmissions(
+    workspaceId: string,
+    options: { q?: string | null } = {},
+  ): Promise<ListKnowledgeSubmissionsResponse> {
     const search = new URLSearchParams({ workspace_id: workspaceId, limit: "50" });
+    const query = options.q?.trim();
+    if (query) search.set("q", query);
     const raw = await this.http.fetch<unknown>(`/api/knowledge/submissions?${search}`);
     return parseWithFallback(
       raw,

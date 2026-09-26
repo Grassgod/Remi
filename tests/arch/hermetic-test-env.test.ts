@@ -6,11 +6,13 @@ import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { Database } from "bun:sqlite";
 import {
+  HERMETIC_ENV_DEFAULTS,
   HERMETIC_ENV_SENTINEL,
   SCRUBBED_ENV_KEYS,
   SCRUBBED_ENV_PREFIXES,
   isScrubbedEnvKey,
 } from "../setup/hermetic-env-policy.js";
+import { RECOMMENDED_DB_REPLY_MAX_BYTES } from "@multiremi/observability/request-metrics.js";
 
 /**
  * The backend suite must not read this repo's configuration out of the host shell.
@@ -52,12 +54,28 @@ describe("hermetic test environment", () => {
   });
 
   test("no repo-owned env var survives into the test process", () => {
-    const leaked = Object.keys(process.env).filter(isScrubbedEnvKey).sort();
+    // Variables the preload sets deliberately are exempt from the leak check, but
+    // only at the exact value it set: anything else under the scrubbed prefixes
+    // (a host value, a different default, a leftover from another test) fails.
+    const defaults = HERMETIC_ENV_DEFAULTS as Record<string, string>;
+    const leaked = Object.keys(process.env)
+      .filter((name) => isScrubbedEnvKey(name) && process.env[name] !== defaults[name])
+      .sort();
     expect(
       leaked,
       "these env vars change server behavior and must not be inherited or leaked between "
         + `tests (set and restore them inside the test that needs them): ${leaked.join(", ")}`,
     ).toEqual([]);
+  });
+
+  test("the preload applies every declared default, with the ruled value", () => {
+    for (const [name, value] of Object.entries(HERMETIC_ENV_DEFAULTS)) {
+      expect(process.env[name], `${name} must be set by the preload`).toBe(value);
+    }
+    // MUL-386 ruling: production defaults the bridge limit to off, the suite arms
+    // it. Pin both halves so moving one without the other is a test failure.
+    expect(HERMETIC_ENV_DEFAULTS.MULTIREMI_PG_REPLY_MAX_BYTES)
+      .toBe(String(RECOMMENDED_DB_REPLY_MAX_BYTES));
   });
 
   test("the scrub list covers the auth-relevant variables", () => {

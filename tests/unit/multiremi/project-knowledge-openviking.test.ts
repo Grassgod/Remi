@@ -1678,3 +1678,175 @@ describe("ProjectKnowledgeService migration", () => {
     expect((await new ProjectKnowledgeService(store, client, "shadow").migrationStatus("local")).openviking).toBe("unavailable");
   });
 });
+
+/**
+ * MUL-386 C.2 — `recall` must resolve URIs without scanning every project doc.
+ *
+ * The old implementation called `listProjectDocs(projectId)` per hit and matched
+ * `contentUri === uri || docUri(doc) === uri` in JavaScript, which is where
+ * production's 15.5 MB of bridge payload came from. These cases pin the two
+ * clauses and the tie-break order so the single-statement replacement cannot
+ * drift from the behaviour it replaced.
+ */
+describe("recall URI resolution (MUL-386 C.2)", () => {
+  /**
+   * Index stub with an explicit hit list.
+   *
+   * `recallProjectDocs` is driven by whatever the index returns, so the fake must
+   * answer `find` from a list the test controls — not from substring matching over
+   * stored content — to pin the URI resolution precisely.
+   */
+  class IndexClient extends FakeOpenViking {
+    hits: OpenVikingFindHit[] = [];
+    override async find(_query: string, _target: string | string[], limit: number): Promise<OpenVikingFindHit[]> {
+      this.findTargets.push(_target);
+      return this.hits.slice(0, limit);
+    }
+  }
+
+  /** Reference implementation: the per-hit full scan the service used to run. */
+  function legacyFindDocByUri(
+    store: ReturnType<typeof createStore>,
+    projectId: string,
+    uri: string,
+  ): MultiremiProjectDoc | null {
+    const kindUri = (doc: MultiremiProjectDoc) =>
+      projectKnowledgeDocUri({ workspaceId: doc.workspaceId, projectId, kind: doc.kind, slug: doc.slug });
+    return store.listProjectDocs(projectId).find((doc) => doc.contentUri === uri || kindUri(doc) === uri) ?? null;
+  }
+
+  /** Build an OpenViking-mode project plus a recall hit list at the given URIs. */
+  async function fixture(hits: Array<{ docRef: string; via: "stored" | "derived" }>) {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const client = new IndexClient();
+    const service = new ProjectKnowledgeService(store, client, "openviking");
+    const project = store.createProject({ title: "Recall" });
+    const docs: MultiremiProjectDoc[] = [];
+    for (const slug of ["alpha", "beta", "gamma"]) {
+      const created = await service.createProjectDoc(project.id, {
+        kind: "wiki",
+        slug,
+        path: `${slug}.md`,
+        title: slug.toUpperCase(),
+        body: `${slug} body mentions Phoenix rollback.`,
+      });
+      docs.push(store.getProjectDoc(created.id)!);
+    }
+    // Make the indexed URI look stale/empty for the "derived" cases: the doc must
+    // still be found through kind+slug, exactly like the old second clause.
+    for (const doc of docs) {
+      if (hits.some((hit) => hit.docRef === doc.slug && hit.via === "derived")) {
+        store.setProjectDocSyncState(doc.id, { storageBackend: "openviking", syncStatus: "ready", contentUri: undefined });
+      }
+    }
+    const bySlug = new Map(docs.map((doc) => [doc.slug, store.getProjectDoc(doc.id)!]));
+    client.hits = hits.map((hit) => {
+      const doc = bySlug.get(hit.docRef)!;
+      const uri = hit.via === "stored" && doc.contentUri
+        ? doc.contentUri
+        : projectKnowledgeDocUri({ workspaceId: doc.workspaceId, projectId: project.id, kind: doc.kind, slug: doc.slug });
+      return { uri, score: 0.9, abstract: "recall hit", tags: [] };
+    });
+    return { store, service, project, docs: bySlug };
+  }
+
+  it("matches stored URIs and kind+slug fallbacks exactly as the full scan did", async () => {
+    const f = await fixture([
+      { docRef: "alpha", via: "stored" },
+      { docRef: "beta", via: "derived" },
+    ]);
+    const hits = await f.service.recallProjectDocs(f.project.id, "Phoenix rollback");
+
+    // Same order, same doc ids, same fields as the reference implementation.
+    expect(hits.map((hit) => hit.doc.slug)).toEqual(["alpha", "beta"]);
+    expect(hits.map((hit) => hit.doc.slug)).toEqual(["alpha", "beta"]);
+    for (const hit of hits) {
+      const reference = legacyFindDocByUri(f.store, f.project.id, hit.uri)!;
+      expect(reference).not.toBeNull();
+      expect(hit.doc.id).toBe(reference.id);
+      expect(hit.doc.title).toBe(reference.title);
+      expect(hit.doc.path).toBe(reference.path);
+      expect(hit.doc.version).toBe(reference.version);
+      expect(hit.doc.kind).toBe(reference.kind);
+      // The lookup deliberately does not select `body`: recall hits never carried
+      // a usable body (the HTTP response deletes it and `hydrate` re-reads
+      // OpenViking), so the projection leaves it empty instead of shipping it.
+      expect(hit.doc.body).toBe("");
+      expect(hit.doc.contentUri ?? projectKnowledgeDocUri({
+        workspaceId: hit.doc.workspaceId, projectId: f.project.id, kind: hit.doc.kind, slug: hit.doc.slug,
+      })).toBe(reference.contentUri ?? projectKnowledgeDocUri({
+        workspaceId: reference.workspaceId, projectId: f.project.id, kind: reference.kind, slug: reference.slug,
+      }));
+      expect(hit.uri).toBe(reference.contentUri ?? projectKnowledgeDocUri({
+        workspaceId: reference.workspaceId, projectId: f.project.id, kind: reference.kind, slug: reference.slug,
+      }));
+    }
+  });
+
+  it("resolves a URI that several docs could claim exactly like the pinned-first scan", async () => {
+    // A stale `content_uri` on one doc can collide with another doc's derived URI.
+    // The old scan returned the first row of `pinned DESC, updated_at DESC`; the
+    // SQL lookup must break the tie the same way.
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const client = new IndexClient();
+    const service = new ProjectKnowledgeService(store, client, "openviking");
+    const project = store.createProject({ title: "Tie-break" });
+    const sharedUri = projectKnowledgeDocUri({ workspaceId: "local", projectId: project.id, kind: "wiki", slug: "shared" });
+
+    const older = store.createProjectDoc(project.id, {
+      kind: "wiki", slug: "older", path: "older.md", title: "Older", body: "older body",
+    });
+    store.setProjectDocSyncState(older.id, { storageBackend: "openviking", syncStatus: "ready", contentUri: sharedUri });
+    const newer = store.createProjectDoc(project.id, {
+      kind: "wiki", slug: "shared", path: "shared.md", title: "Shared", body: "shared body",
+    });
+    store.setProjectDocSyncState(newer.id, { storageBackend: "openviking", syncStatus: "ready", contentUri: undefined });
+    db!.run("UPDATE multiremi_project_docs SET pinned = 1, updated_at = ? WHERE id = ?", ["2026-09-01T00:00:00.000Z", newer.id]);
+    db!.run("UPDATE multiremi_project_docs SET updated_at = ? WHERE id = ?", ["2026-09-02T00:00:00.000Z", older.id]);
+
+    const expected = legacyFindDocByUri(store, project.id, sharedUri);
+    expect(expected).not.toBeNull();
+    client.hits = [{ uri: sharedUri, score: 1, abstract: "tie", tags: [] }];
+    const hits = await service.recallProjectDocs(project.id, "body");
+    expect(hits.map((hit) => hit.doc.id)).toEqual([expected!.id]);
+
+    // An unrelated project's URI must not match, mirrored from the old `docUri`
+    // scope check.
+    const foreign = store.createProject({ title: "Foreign" });
+    const foreignUri = projectKnowledgeDocUri({ workspaceId: "local", projectId: foreign.id, kind: "wiki", slug: "shared" });
+    client.hits = [{ uri: foreignUri, score: 1, abstract: "foreign", tags: [] }];
+    expect((await service.recallProjectDocs(project.id, "body")).map((hit) => hit.doc.id)).toEqual([]);
+  });
+
+  it("reads no doc body while resolving recall hits", async () => {
+    const f = await fixture([{ docRef: "alpha", via: "stored" }, { docRef: "beta", via: "derived" }]);
+    const collected: string[] = [];
+    const spy = db!;
+    const originalQuery = spy.query.bind(spy);
+    (spy as any).query = (sql: string) => {
+      collected.push(sql);
+      return originalQuery(sql);
+    };
+    try {
+      await f.service.recallProjectDocs(f.project.id, "Phoenix rollback");
+    } finally {
+      (spy as any).query = originalQuery;
+    }
+    const docReads = collected.filter((sql) => sql.includes("FROM multiremi_project_docs"));
+    expect(docReads.length).toBeGreaterThan(0);
+    for (const sql of docReads) {
+      expect(sql).not.toMatch(/SELECT\s+\*/i);
+      expect(sql).toContain("LIMIT 1");
+    }
+    // The old path read the whole project once per hit; the new one is one
+    // statement per hit and never selects `body`.
+    expect(docReads.length).toBeLessThanOrEqual(collected.length);
+    // `'' AS body` is the alias that keeps the row shape; the raw column must not
+    // be selected.
+    for (const sql of docReads) {
+      expect(sql.replace(/'' AS body/g, "")).not.toMatch(/\bbody\b/);
+    }
+  });
+});

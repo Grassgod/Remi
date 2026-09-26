@@ -77,16 +77,35 @@ Server-Timing: total;dur=12.3, db;dur=4.5, dbp;dur=0.2, dbq;desc="7", dbb;desc="
 - `db_busy_pct` = 该窗口内**进程级** DB 阻塞时间 / 窗口时长。进程级计数包含没有请求上下文的调用，所以后台 job 的 DB 时间也算进去，这正是「DB 忙碌占比」需要的分母口径。
 - `event_loop_lag_max_ms` 用 250 ms 间隔的 `setInterval` 漂移测量并取窗口内最大值；同步 PG 桥阻塞主线程时会直接体现为晚 tick。
 
-**环境变量**（都在 [api.env.example](../../deploy/docker/api.env.example) 有登记）：`MULTIREMI_REQUEST_METRICS`（默认开，`0/false/off` 整体关闭，关闭后不加响应头也不写任何日志）、`MULTIREMI_SLOW_REQUEST_MS`（默认 500，设 0 可让每个请求都打一行，适合短时冒烟）、`MULTIREMI_METRICS_SUMMARY_INTERVAL_MS`（默认 60000）、`MULTIREMI_METRICS_SUMMARY_TOP_N`（默认 10）、`MULTIREMI_METRICS_BUFFER_SIZE`（默认 4096）。
+**PG 桥回包护栏**（MUL-386 C.1）。同步桥的单次回包体积直接决定主线程被阻塞多久，所以除了慢请求日志之外，桥本身对超体积回包有两条独立规则：
+
+- 单次回包 `len > 1 MB` 时输出一行 `api_large_db_reply`，只带路由模式、方法与字节数：
+
+```json
+{"event":"api_large_db_reply","ts":"2026-09-26T09:12:03.771Z","method":"GET","route":"/api/knowledge/submissions","bytes":12085257}
+```
+
+- 单次回包超过硬上限时在 `TextDecoder`/`JSON.parse` **之前**抛错，并输出一行 `api_db_reply_rejected`（字段同上，另加 `max_bytes`）。消息形如 `postgres reply of N bytes exceeds M bytes bridge limit; paginate or project columns`。
+- **默认关闭**（MUL-386 裁决）：`MULTIREMI_PG_REPLY_MAX_BYTES` 未设置、空串、非数字或负数都解析为 `0`，即不设上限；`8388608`（8 MiB）是 MUL-398 落地后的目标值，不是当前默认。现有兜底是桥自身的 64 MB 共享缓冲（`postgres.ts` 的 `RESULT_BUFFER_BYTES`，超限由 worker 直接回错）。
+- 测试套件反向配置：`bun test` 的 preload（[hermetic-env.ts](../../tests/setup/hermetic-env.ts)）在剥离宿主 `MULTIREMI_*` 之后固定设置 `MULTIREMI_PG_REPLY_MAX_BYTES=8388608`，让护栏在 CI 里继续抓无界读——它已经抓到过 `/tasks/pending` 读整张任务表。生产默认与测试默认是分开的两件事，改动其一时 [hermetic-env-policy.ts](../../tests/setup/hermetic-env-policy.ts) 的 `HERMETIC_ENV_DEFAULTS` 与架构守卫会一起失败。
+- 两条日志与 `api_slow_request` 共用同一套脱敏口径：只有路由模式、方法、字节数，没有 SQL 文本、参数、原始 path 或 query。没有请求上下文的后台任务记为 `<background>`。
+- 硬上限的错误消息会向上冒泡，可能进入 HTTP 响应体，因此 `PgBridge.exec` 不为它拼接 SQL 片段（其它错误仍会追加 SQL 前 400 字符用于排查）。
+- 翻转默认的条件（MUL-398 验收）：A 类 repository-wikis 两条 `SELECT r.*` 改列投影、B 类 task messages 改有界读并各自发版后，观测一周 `api_large_db_reply` 中 `bytes > 8388608` 的路由集合为空，再把默认值改为 `8388608` 并同步本文与 env 示例。
+
+**已知未修的大回包路径**（生产只读复核，MUL-386 评论 `cmt_cecxmzj19eea`），也是上面「默认关闭」的依据：`repositoryWikiObservability` 的 `SELECT r.* FROM multiremi_autopilot_runs`（单 workspace 约 12.2 MB）与 `listLatestRepositoryAutopilotRuns`（约 10.8 MB），都用于 `GET /api/workspaces/:id/repository-wikis`；不带 `since_seq` 的 task messages（单任务最大约 22.7 MB，28 个任务超过 8 MB），对应 `/api/tasks/:taskId/messages` 与 `/api/multiremi/tasks/:id/messages`。另有两条当前量级未触线但同为无 LIMIT 整读、长期需投影的路径：`ProjectsRepo.listProjectDocsForMigration` 与 `RepositoryWikiRepo.listWorkspace`。
+
+**环境变量**（都在 [api.env.example](../../deploy/docker/api.env.example) 有登记）：`MULTIREMI_REQUEST_METRICS`（默认开，`0/false/off` 整体关闭，关闭后不加响应头也不写任何日志）、`MULTIREMI_SLOW_REQUEST_MS`（默认 500，设 0 可让每个请求都打一行，适合短时冒烟）、`MULTIREMI_METRICS_SUMMARY_INTERVAL_MS`（默认 60000）、`MULTIREMI_METRICS_SUMMARY_TOP_N`（默认 10）、`MULTIREMI_METRICS_BUFFER_SIZE`（默认 4096）、`MULTIREMI_PG_REPLY_MAX_BYTES`（**默认 0 = 关闭**；未设置/空串/非法值也视为关闭。设成 `8388608` 才启用 8 MiB 硬上限，MUL-398 落地后才是目标默认）。
 
 **观测与验证入口**：
 
 ```bash
-# 生产容器里的两类日志（209 上的 API 容器）
+# 生产容器里的四类日志（209 上的 API 容器）
 docker logs multiremi-platform-app-api-1 | grep api_minute_summary
 docker logs multiremi-platform-app-api-1 | grep api_slow_request
+docker logs multiremi-platform-app-api-1 | grep api_large_db_reply
+docker logs multiremi-platform-app-api-1 | grep api_db_reply_rejected
 
-# 单元测试：并发归属、Server-Timing 格式、慢请求日志脱敏、汇总器
+# 单元测试：并发归属、Server-Timing 格式、慢请求日志脱敏、汇总器、桥回包护栏
 bun test tests/unit/multiremi/request-metrics.test.ts
 
 # 真实 HTTP 冒烟：起一个本地实例，读 Server-Timing + 两类日志

@@ -180,6 +180,7 @@ export type {
   KnowledgeAgentSummary,
   KnowledgeTaskSummary,
   KnowledgeSubmission,
+  KnowledgeSubmissionListItem,
   KnowledgeCompilationRun,
   KnowledgeCompilationSource,
   KnowledgeArtifactSummary,

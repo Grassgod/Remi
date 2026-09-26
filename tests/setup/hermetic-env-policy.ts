@@ -67,6 +67,24 @@ export const SCRUBBED_ENV_KEYS = [
   "XPC_SERVICE_NAME",
 ] as const;
 
+/**
+ * Repo-owned variables the preload *sets* after scrubbing, as opposed to leaving
+ * empty.
+ *
+ * `MULTIREMI_PG_REPLY_MAX_BYTES` is here on purpose (MUL-386 ruling): production
+ * ships the bridge hard limit disabled, but the suite must keep it armed so an
+ * unbounded read fails in CI the way it failed for `/tasks/pending`. The value is
+ * duplicated from the source constant rather than imported, so this preload stays
+ * dependency-free; `tests/arch/hermetic-test-env.test.ts` asserts the two agree.
+ *
+ * The guard exempts only these exact keys-with-values. Everything else under the
+ * scrubbed prefixes must still be absent, so this cannot become a general escape
+ * hatch for host configuration.
+ */
+export const HERMETIC_ENV_DEFAULTS: Readonly<Record<string, string>> = {
+  MULTIREMI_PG_REPLY_MAX_BYTES: String(8 * 1_048_576),
+};
+
 /** True when `name` is one of the variables the preload removes. */
 export function isScrubbedEnvKey(name: string): boolean {
   if (SCRUBBED_ENV_EXEMPT_PREFIXES.some((prefix) => name.startsWith(prefix))) return false;

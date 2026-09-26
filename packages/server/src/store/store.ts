@@ -122,6 +122,7 @@ import {
   TasksRepo,
   type ClaimTaskOptions,
   type TaskListCandidate,
+  type TaskRef,
   type TaskListCursor,
 } from "@multiremi/store/repos/tasks-repo.js";
 import { OrganizerActionError, readOrganizerMode } from "../organizer/settings.js";
@@ -263,9 +264,12 @@ import type {
   MultiremiKnowledgeCompilationOutput,
   MultiremiKnowledgeCompilationRun,
   MultiremiKnowledgeCompilationRunSource,
+  MultiremiKnowledgeCompilationRunSourceListItem,
   MultiremiKnowledgeCompilationStatus,
   MultiremiKnowledgeCursorPage,
+  MultiremiKnowledgeDocSummary,
   MultiremiKnowledgeSubmission,
+  MultiremiKnowledgeSubmissionListItem,
   MultiremiKnowledgeSubmissionStatus,
   MultiremiIssueShare,
   MultiremiIssueSession,
@@ -292,6 +296,7 @@ import type {
   MultiremiProject,
   MultiremiProjectDevice,
   MultiremiProjectDoc,
+  MultiremiProjectDocKind,
   MultiremiProjectDocRevision,
   MultiremiRepositoryWikiDoc,
   MultiremiRepositoryWikiDocRevision,
@@ -3728,6 +3733,20 @@ runMigrations(this.db);
     return this.projects.listProjectDocs(projectId, input);
   }
 
+  /** Id/title/path for a bounded doc-id set; run-list artifact summaries (MUL-386 C.2). */
+  listProjectDocSummariesByIds(ids: readonly string[]): MultiremiKnowledgeDocSummary[] {
+    return this.projects.listProjectDocSummariesByIds(ids);
+  }
+
+  /** Single-statement URI lookup backing recall; replaces a full project scan. */
+  findProjectDocByUri(
+    projectId: string,
+    uri: string,
+    candidates?: ReadonlyArray<{ kind: MultiremiProjectDocKind; slug: string }>,
+  ): MultiremiProjectDoc | null {
+    return this.projects.findProjectDocByUri(projectId, uri, candidates);
+  }
+
   getProjectDoc(id: string): MultiremiProjectDoc | null {
     return this.projects.getProjectDoc(id);
   }
@@ -3804,6 +3823,11 @@ runMigrations(this.db);
 
   listWorkspaceRepositoryWikiDocs(workspaceId: string): MultiremiRepositoryWikiDoc[] {
     return this.repositoryWiki.listWorkspace(workspaceId);
+  }
+
+  /** Id/title/path for a bounded doc-id set; run-list artifact summaries (MUL-386 C.2). */
+  listRepositoryWikiDocSummariesByIds(workspaceId: string, ids: readonly string[]): MultiremiKnowledgeDocSummary[] {
+    return this.repositoryWiki.listSummariesByIds(workspaceId, ids);
   }
 
   getRepositoryWikiDocByRef(workspaceId: string, repositoryId: string, ref: string): MultiremiRepositoryWikiDoc | null {
@@ -3908,7 +3932,8 @@ runMigrations(this.db);
     return this.knowledge.listSubmissions(input);
   }
 
-  listKnowledgeSubmissionsPage(input: KnowledgeListInput): MultiremiKnowledgeCursorPage<MultiremiKnowledgeSubmission> {
+  /** List projection: no `body`/`patch`, only `bodyExcerpt` (MUL-386 C.2). */
+  listKnowledgeSubmissionsPage(input: KnowledgeListInput): MultiremiKnowledgeCursorPage<MultiremiKnowledgeSubmissionListItem> {
     return this.knowledge.listSubmissionsPage(input);
   }
 
@@ -3963,6 +3988,11 @@ runMigrations(this.db);
 
   listKnowledgeRunSources(runId: string): MultiremiKnowledgeCompilationRunSource[] {
     return this.knowledge.listRunSources(runId);
+  }
+
+  /** Run sources without `metadata`; the runs list route uses this (MUL-386 C.2). */
+  listKnowledgeRunSourceSummaries(runId: string): MultiremiKnowledgeCompilationRunSourceListItem[] {
+    return this.knowledge.listRunSourceSummaries(runId);
   }
 
   recordKnowledgeCompilationOutput(input: RecordKnowledgeOutputInput): MultiremiKnowledgeCompilationOutput {
@@ -4388,6 +4418,20 @@ runMigrations(this.db);
 
   listTasks(status?: MultiremiTaskStatus): MultiremiTask[] {
     return this.tasks.listTasks(status);
+  }
+
+  /** Full rows for one runtime's pending statuses; avoids a whole-table read. */
+  listTasksForRuntimeStatuses(runtimeId: string, statuses: readonly MultiremiTaskStatus[]): MultiremiTask[] {
+    return this.tasks.listTasksForRuntimeStatuses(runtimeId, statuses);
+  }
+
+  /** `id/status/runtime_id/agent_id` projection for lifecycle guards. */
+  listTaskRefs(input: {
+    statuses: readonly MultiremiTaskStatus[];
+    runtimeId?: string | null;
+    agentIds?: readonly string[];
+  }): TaskRef[] {
+    return this.tasks.listTaskRefs(input);
   }
 
   listTasksChunk(

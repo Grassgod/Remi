@@ -10,7 +10,13 @@
  * otherwise the shared bun:sqlite database (core Remi's ~/.remi/remi.db) is used.
  */
 import { getDb } from "@shared/db/index.js";
-import { recordDbParse, recordDbQuery } from "../../observability/request-metrics.js";
+import {
+  emitDbReplyRejected,
+  emitLargeDbReply,
+  recordDbParse,
+  recordDbQuery,
+  resolveDbReplyMaxBytes,
+} from "../../observability/request-metrics.js";
 
 export interface SqlStatement {
   get(...params: unknown[]): any;
@@ -160,6 +166,41 @@ const STATUS_ERROR = 2;
 const RESULT_BUFFER_BYTES = 64 * 1024 * 1024;
 const QUERY_TIMEOUT_MS = 60_000;
 
+/**
+ * Raised when a single statement's reply exceeds the bridge limit (MUL-386 C.1).
+ *
+ * Its message is deliberately self-contained: `PgBridge.exec` must NOT append the
+ * SQL text it adds to every other failure, because this error can surface through
+ * a route handler's `c.json({ error: message })` and would then leak SQL into an
+ * HTTP response body.
+ */
+export class PostgresReplyTooLargeError extends Error {
+  constructor(readonly bytes: number, readonly maxBytes: number) {
+    super(
+      `postgres reply of ${bytes} bytes exceeds ${maxBytes} bytes bridge limit; `
+      + "paginate or project columns",
+    );
+    this.name = "PostgresReplyTooLargeError";
+  }
+}
+
+/**
+ * Resolved lazily and cached: the check runs on every SQL round trip, and
+ * `process.env` lookups are not free on that path. Tests that change the limit
+ * call `resetDbReplyLimitForTest`.
+ */
+let cachedReplyMaxBytes: number | null = null;
+
+function dbReplyMaxBytes(): number {
+  if (cachedReplyMaxBytes === null) cachedReplyMaxBytes = resolveDbReplyMaxBytes();
+  return cachedReplyMaxBytes;
+}
+
+/** Test seam: drop the cached limit so the next query re-reads the environment. */
+export function resetDbReplyLimitForTest(): void {
+  cachedReplyMaxBytes = null;
+}
+
 class PgBridge {
   private readonly control = new SharedArrayBuffer(16);
   private readonly data = new SharedArrayBuffer(RESULT_BUFFER_BYTES);
@@ -191,6 +232,18 @@ class PgBridge {
         recordDbQuery(performance.now() - startedAt, len);
         waitRecorded = true;
       }
+      // MUL-386 C.1 guardrails. Both run BEFORE decode/parse: the point of the
+      // hard limit is to refuse the payload before the main thread pays the
+      // TextDecoder + JSON.parse cost, and the warning line exists so the size is
+      // visible in logs without turning the request into a failure.
+      if (measured) {
+        const limit = dbReplyMaxBytes();
+        if (limit > 0 && len > limit) {
+          emitDbReplyRejected(len, limit);
+          throw new PostgresReplyTooLargeError(len, limit);
+        }
+        emitLargeDbReply(len);
+      }
       const parseStartedAt = performance.now();
       try {
         const obj = JSON.parse(new TextDecoder().decode(this.buf.slice(0, len)));
@@ -214,6 +267,10 @@ class PgBridge {
       const r = this.request({ sql, params });
       return { rows: r.rows ?? [], count: r.count ?? 0 };
     } catch (err) {
+      // The size guardrail's message is user-facing: route handlers answer with
+      // `c.json({ error: message })`, so appending SQL here would leak schema
+      // details into an HTTP response body.
+      if (err instanceof PostgresReplyTooLargeError) throw err;
       throw new Error(`${(err as Error).message}\n  SQL: ${sql.slice(0, 400)}`);
     }
   }

@@ -80,6 +80,9 @@ import { resolveScmRepositoryRemote } from "@multiremi/scm/repository-url.js";
 import type { DaemonRegisterRequestBody } from "../helpers.js";
 import type { RouterDeps } from "./deps.js";
 import { hydrateClaimKnowledge } from "@multiremi/project-knowledge/claim-hydration.js";
+
+/** The statuses `isDaemonPendingTaskForRuntime` accepts, pushed into SQL. */
+const DAEMON_PENDING_TASK_STATUSES = ["queued", "dispatched"] as const;
 import { resolveTaskRepositoryWikiRepositories, canonicalRepositoryRemote } from "@multiremi/repository-wiki/task-scope.js";
 
 type DaemonInstallRequestBody = {
@@ -940,8 +943,11 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/daemon/runtimes/:runtimeId/tasks/pending", (c) => {
     const runtime = store.getRuntime(c.req.param("runtimeId"));
     if (!runtime) return c.json({ error: "runtime not found" }, 404);
-    const tasks = store.listTasks()
-      .filter((task) => isDaemonPendingTaskForRuntime(task, runtime.id))
+    // MUL-386 C.1: was `store.listTasks()` (every task in the deployment, full
+    // rows) filtered down to this runtime's queued/dispatched work. `/tasks/pending`
+    // is polled by daemons, so the unbounded read turned into an 8 MB+ bridge reply
+    // that the bridge hard limit now refuses. Filter in SQL instead.
+    const tasks = store.listTasksForRuntimeStatuses(runtime.id, DAEMON_PENDING_TASK_STATUSES)
       .sort(compareDaemonPendingTasks)
       .map((task) => daemonTaskWireResponse(task, store.getTaskTriggerMetadata(task)));
     return c.json(tasks);

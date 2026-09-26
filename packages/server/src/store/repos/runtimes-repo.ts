@@ -23,6 +23,7 @@ import {
 } from "@multiremi/contracts/runtime-health";
 export { RUNTIME_HEARTBEAT_STALE_MS } from "@multiremi/contracts/runtime-health";
 import {
+  ACTIVE_TASK_STATUSES,
   cleanOptionalString,
   daemonRuntimeId,
   hasAnyField,
@@ -774,10 +775,11 @@ export class RuntimesRepo {
   }
 
   private cancelActiveTasksByRuntimeOrAgentIds(runtimeId: string, agentIds: string[]): number {
-    const agentSet = new Set(agentIds);
+    // MUL-386 C.1: this ran inside runtime deletion and used to read every task
+    // row (`prompt` + `result`) just to find the ids to cancel. The guard columns
+    // are all it needs, and both predicates are pushed into SQL.
     const taskIds = [...new Set(
-      this.ctx.tasks().listTasks()
-        .filter((task) => isActiveTaskStatus(task.status) && (task.runtimeId === runtimeId || agentSet.has(task.agentId)))
+      this.ctx.tasks().listTaskRefs({ statuses: ACTIVE_TASK_STATUSES, runtimeId, agentIds })
         .map((task) => task.id),
     )];
     let cancelled = 0;
@@ -793,15 +795,12 @@ export class RuntimesRepo {
   }
 
   private hasInFlightTasksForRuntime(runtimeId: string): boolean {
-    return this.ctx.tasks().listTasks()
-      .some((task) => task.runtimeId === runtimeId && isInFlightTaskStatus(task.status));
+    return this.ctx.tasks().listTaskRefs({ statuses: IN_FLIGHT_TASK_STATUSES, runtimeId }).length > 0;
   }
 
   private hasActiveTasksForAgents(agentIds: string[]): boolean {
     if (!agentIds.length) return false;
-    const agents = new Set(agentIds);
-    return this.ctx.tasks().listTasks()
-      .some((task) => agents.has(task.agentId) && isActiveTaskStatus(task.status));
+    return this.ctx.tasks().listTaskRefs({ statuses: ACTIVE_TASK_STATUSES, agentIds }).length > 0;
   }
 
   private hasUnrepoolableQueuedTasksForRuntime(runtimeId: string): boolean {

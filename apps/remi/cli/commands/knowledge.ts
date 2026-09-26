@@ -28,6 +28,19 @@ import { resolveRepository } from "./repo.js";
 
 type KnowledgeKind = "memory" | "wiki";
 
+/**
+ * The submissions list's `--query` is narrower than the generic page option: the
+ * server predicate covers the columns it can see, and the SQL deliberately does
+ * not join issues or agents. Say so here, because the Knowledge page keeps
+ * matching those two fields client-side on top of the server result (MUL-386).
+ */
+const SUBMISSION_QUERY_OPTION: CliOptionSpec = {
+  name: "query",
+  type: "string",
+  valueName: "text",
+  description: "Server-side search over body, id, proposed_path, proposed_slug, source_type, scope "
+    + "(case-insensitive). Does not match issue key or agent name",
+};
 const PROJECT_OPTION: CliOptionSpec = { name: "project", type: "string", valueName: "project", description: "Project ID, unique short ID, or unique name" };
 const REPOSITORY_OPTION: CliOptionSpec = { name: "repo", type: "string", valueName: "repository", description: "Repository ID, unique short ID, or unique name" };
 const KNOWLEDGE_FIELDS: readonly CliOptionSpec[] = [
@@ -113,7 +126,19 @@ function knowledgeControlPlaneSpecs(): CommandSpec[] {
       const response = await client.request({ method: "POST", path: "/api/knowledge/submissions", body });
       renderResource(invocation, response.data, ["submission"]);
     }),
-    spec("knowledge.submissions", ["knowledge", "submissions"], "List raw knowledge submissions", "read", [], [...scopeOptions, ...PAGE_OPTIONS], async (invocation) => {
+    // MUL-386 C.2: the list deliberately stopped returning `body` and `patch`
+    // (100 rows were 11.8–14 MB of bridge payload), so the help text has to say
+    // where the full text went and that `--query` now searches bodies server-side.
+    spec(
+      "knowledge.submissions",
+      ["knowledge", "submissions"],
+      "List raw knowledge submissions (no body/patch; only body_excerpt — "
+        + "use `remi knowledge inspect <id>` for full content; --query searches body, id, proposed_path, "
+        + "proposed_slug, source_type and scope server-side, but not issue key or agent name)",
+      "read",
+      [],
+      [...scopeOptions, SUBMISSION_QUERY_OPTION, ...PAGE_OPTIONS],
+      async (invocation) => {
       const client = await clientFor(invocation);
       const project = await resolvedProjectOption(invocation, client, false, true);
       const repository = await resolvedRepositoryOption(invocation, client);
@@ -129,7 +154,8 @@ function knowledgeControlPlaneSpecs(): CommandSpec[] {
         }),
       });
       if (outputMode(invocation) !== "json") {
-        console.error(`Filters (intersection): workspace=${requiredWorkspace(invocation)}, project=${project?.id ?? "*"}, repository=${repository?.id ?? "*"}, scope=${stringOption(invocation, "scope") ?? "*"}, status=${stringOption(invocation, "status") ?? "*"}`);
+        console.error(`Filters (intersection): workspace=${requiredWorkspace(invocation)}, project=${project?.id ?? "*"}, repository=${repository?.id ?? "*"}, scope=${stringOption(invocation, "scope") ?? "*"}, status=${stringOption(invocation, "status") ?? "*"}, query=${stringOption(invocation, "query") ?? "*"}`);
+        console.error("Rows carry body_excerpt only; run `remi knowledge inspect <submission>` for body and patch. --query matches body/id/proposed_path/proposed_slug/source_type/scope, not issue key or agent name.");
       }
       renderResource(invocation, response.data, ["submissions"]);
     }),
@@ -140,7 +166,15 @@ function knowledgeControlPlaneSpecs(): CommandSpec[] {
       });
       renderResource(invocation, response.data, ["submission"]);
     }),
-    spec("knowledge.runs", ["knowledge", "runs"], "List knowledge compilation runs", "read", [], [PROJECT_OPTION, REPOSITORY_OPTION, { name: "status", type: "string", valueName: "status", description: "Compilation run status" }, ...PAGE_OPTIONS], async (invocation) => {
+    spec(
+      "knowledge.runs",
+      ["knowledge", "runs"],
+      "List knowledge compilation runs (no sources[].metadata — use "
+        + "`remi knowledge run show <run>` for full source metadata and nested submissions)",
+      "read",
+      [],
+      [PROJECT_OPTION, REPOSITORY_OPTION, { name: "status", type: "string", valueName: "status", description: "Compilation run status" }, ...PAGE_OPTIONS],
+      async (invocation) => {
       const client = await clientFor(invocation);
       const project = await resolvedProjectOption(invocation, client, false, true);
       const repository = await resolvedRepositoryOption(invocation, client);
@@ -154,6 +188,9 @@ function knowledgeControlPlaneSpecs(): CommandSpec[] {
           status: stringOption(invocation, "status"),
         }),
       });
+      if (outputMode(invocation) !== "json") {
+        console.error("Rows omit sources[].metadata; run `remi knowledge run show <run>` for full provenance.");
+      }
       renderResource(invocation, response.data, ["runs"]);
     }),
     spec("knowledge.run.show", ["knowledge", "run", "show"], "Show a knowledge compilation run and its provenance", "read", [refPositional("run")], [], async (invocation) => {

@@ -277,7 +277,7 @@ export class ProjectKnowledgeService implements ProjectKnowledgeServiceContract 
     const output: ProjectKnowledgeSearchHit[] = [];
     for (const hit of hits) {
       if (!hit.uri.endsWith(".md") || hit.uri.endsWith("/.abstract.md")) continue;
-      const metadata = this.findDocByUri(projectId, hit.uri);
+      const metadata = this.findDocByUri(project, hit.uri);
       if (!metadata || (kind && metadata.kind !== kind)) continue;
       output.push({ doc: asKnowledgeDoc(metadata), score: hit.score, snippet: hit.abstract, uri: hit.uri });
     }
@@ -575,8 +575,39 @@ export class ProjectKnowledgeService implements ProjectKnowledgeServiceContract 
     return projectKnowledgeDocUri(doc);
   }
 
-  private findDocByUri(projectId: string, uri: string): MultiremiProjectDoc | null {
-    return this.store.listProjectDocs(projectId).find((doc) => doc.contentUri === uri || this.docUri(doc) === uri) ?? null;
+  /**
+   * Resolve one OpenViking URI to its doc (MUL-386 C.2).
+   *
+   * This used to call `listProjectDocs` and compare URIs in JavaScript, reading
+   * every doc in the project — body included — once per search hit. That is
+   * where production's 15.5 MB `db_bytes` and `db_queries=101` on
+   * `/knowledge/recall` came from. The lookup is now a single indexed statement
+   * with the same two-clause precedence: stored `content_uri` first, then the
+   * URI derived from `kind` + `slug` for rows whose stored URI is empty or stale.
+   *
+   * Only the candidate the caller's URI can possibly encode is passed through:
+   * `projectKnowledgeSlugFromUri` rejects a URI outside this project/kind scope,
+   * which is exactly the filter the in-memory `docUri(doc) === uri` comparison
+   * performed. A malformed or foreign URI therefore still yields no match.
+   */
+  private findDocByUri(
+    project: Pick<MultiremiProject, "id" | "workspaceId">,
+    uri: string,
+  ): MultiremiProjectDoc | null {
+    // The caller already holds the project: resolving it again here would add
+    // one lookup per search hit, which is the N+1 this change exists to remove.
+    const candidates: Array<{ kind: MultiremiProjectDoc["kind"]; slug: string }> = [];
+    for (const kind of ["wiki", "memory"] as const) {
+      try {
+        candidates.push({
+          kind,
+          slug: projectKnowledgeSlugFromUri(uri, { workspaceId: project.workspaceId, projectId: project.id, kind }),
+        });
+      } catch {
+        // Not a URI this project/kind could own; the SQL predicate skips it.
+      }
+    }
+    return this.store.findProjectDocByUri(project.id, uri, candidates);
   }
 
   private async ensureDirectories(doc: Pick<MultiremiProjectDoc, "workspaceId" | "projectId" | "kind">): Promise<void> {
