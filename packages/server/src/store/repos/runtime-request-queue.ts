@@ -122,9 +122,17 @@ export class RuntimeRequestQueue<T> {
          )
        RETURNING *`,
     ).all(now, now, runtimeId, Math.max(1, Math.floor(limit))) as Row[];
+    // `RETURNING` does not promise the order of the written rows, so the `ORDER BY created_at`
+    // that selected them is re-applied here. That sort is deliberately NOT extended with a
+    // tie-break: `created_at` is not unique (a caller that queues ten imports in one turn stamps
+    // them with one millisecond), and the pre-MUL-389 code left the tie order to the engine as
+    // well — on SQLite the `(runtime_id, status, created_at)` index yields insertion order
+    // (rowid order within equal keys) and the existing API test relies on that; on Postgres the
+    // plan decides. Sorting by `id` here would look deterministic but is worse than either: ids
+    // are random, so it would replace the established SQLite order with a RANDOM one. The JS sort
+    // is stable, so equal `created_at` values keep whatever order the engine returned.
     return rows
-      .sort((left, right) => String(left.created_at).localeCompare(String(right.created_at))
-        || String(left.id).localeCompare(String(right.id)))
+      .sort((left, right) => String(left.created_at).localeCompare(String(right.created_at)))
       .map((row) => this.spec.hydrate(row));
   }
 

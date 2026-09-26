@@ -332,6 +332,44 @@ describe("RuntimeRequestQueue lifecycle", () => {
     expect(repo.claimRuntimeLocalSkillImportRequests("rt_q", 10)).toEqual([]);
   });
 
+  it("keeps queue order for rows stamped with the same millisecond", () => {
+    // Regression guard for the MUL-389 batch rewrite. `created_at` is not unique — a caller that
+    // queues ten imports in one turn stamps them all with one millisecond — and the pre-MUL-389
+    // `SELECT ... ORDER BY created_at LIMIT n` left the tie order to the engine, which on SQLite
+    // is insertion order. A post-write JS sort by `id` looked deterministic but replaced that
+    // with a random order, because ids are random; an `api-runtimes` heartbeat test caught it.
+    const repo = createRepo();
+    const queued = Array.from({ length: 6 }, (_v, index) =>
+      repo.createRuntimeLocalSkillImportRequest("rt_q", { skillKey: `k${index}` }));
+    // Force the interesting case instead of depending on clock resolution. The stamp has to stay
+    // inside the family's pending deadline (10 minutes) or the sweep would time the rows out
+    // before the claim ever sees them.
+    const sameStamp = new Date(Date.now() - 1000).toISOString();
+    for (const request of queued) {
+      db!.run("UPDATE multiremi_runtime_local_skill_import_requests SET created_at = ? WHERE id = ?", [sameStamp, request.id]);
+    }
+
+    const claimed = repo.claimRuntimeLocalSkillImportRequests("rt_q", 10);
+    expect(claimed.map((entry) => entry.id)).toEqual(queued.map((entry) => entry.id));
+  });
+
+  it("keeps queue order when only some rows share a millisecond", () => {
+    // The mixed case: a tie at the oldest stamp still has to come out in insertion order, and the
+    // strictly newer row still goes last.
+    const repo = createRepo();
+    const old1 = repo.createRuntimeLocalSkillImportRequest("rt_q", { skillKey: "old1" });
+    const old2 = repo.createRuntimeLocalSkillImportRequest("rt_q", { skillKey: "old2" });
+    const fresh = repo.createRuntimeLocalSkillImportRequest("rt_q", { skillKey: "fresh" });
+    // Two minutes back for the pair, one second back for the lone row: both inside this family's
+    // three-minute pending deadline, and only their relative order matters.
+    const older = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+    const newer = new Date(Date.now() - 1000).toISOString();
+    db!.run("UPDATE multiremi_runtime_local_skill_import_requests SET created_at = ? WHERE id IN (?, ?)", [older, old1.id, old2.id]);
+    db!.run("UPDATE multiremi_runtime_local_skill_import_requests SET created_at = ? WHERE id = ?", [newer, fresh.id]);
+    expect(repo.claimRuntimeLocalSkillImportRequests("rt_q", 10).map((entry) => entry.id))
+      .toEqual([old1.id, old2.id, fresh.id]);
+  });
+
   it("times out a pending request past its own deadline", () => {
     const repo = createRepo();
     // The model-list family gives up on a pending request after 30s.
