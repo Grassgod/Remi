@@ -141,8 +141,15 @@ export const REPOSITORY_WIKI_BATCH_LIMIT = 256;
  *  many documents. See docs/adr/0002-repository-wiki-list-without-bodies.md. */
 export const REPOSITORY_WIKI_BODY_BATCH_LIMIT = 20;
 export const REPOSITORY_WIKI_BODY_READ_CONCURRENCY = 4;
-/** Backlinks hydrate every page of a repository: bound that fan-out like the explicit body batch. */
-export const REPOSITORY_WIKI_BACKLINK_HYDRATE_CONCURRENCY = 4;
+/**
+ * Backlinks hydrate every page of a repository, so the fan-out needs a ceiling: at the
+ * largest measured repository (146 pages) one read per page inflated each 209 read well
+ * past its 700 ms floor. 16 keeps a full repository inside the 25 s request budget
+ * (`ceil(146 / 16) * 700 ms ~= 7 s`, about 8.3 s at the measured ~830 ms concurrent p95),
+ * whereas 4 would need 25.9 s and answer a healthy read with a 504.
+ * See tests/manual/bench-mul399-backlinks.ts.
+ */
+export const REPOSITORY_WIKI_BACKLINK_HYDRATE_CONCURRENCY = 16;
 const STORAGE_WRITE_CONCURRENCY = 4;
 const PROMOTION_CHECKPOINT_SIZE = 8;
 

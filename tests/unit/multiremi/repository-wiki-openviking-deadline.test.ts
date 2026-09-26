@@ -4,7 +4,10 @@ import { createMultiremiApp } from "@multiremi/api.js";
 import { OpenVikingClient, OpenVikingClientError } from "@multiremi/project-knowledge/openviking-client.js";
 import { PROJECT_KNOWLEDGE_REQUEST_BUDGET_MS } from "@multiremi/project-knowledge/service.js";
 import type { OpenVikingClientContract } from "@multiremi/project-knowledge/types.js";
-import { RepositoryWikiService } from "@multiremi/repository-wiki/service.js";
+import {
+  REPOSITORY_WIKI_BACKLINK_HYDRATE_CONCURRENCY,
+  RepositoryWikiService,
+} from "@multiremi/repository-wiki/service.js";
 import { createStore, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -23,6 +26,8 @@ class FakeOpenVikingHttp {
   hang: HangRule = () => false;
   /** Reads answered with a retryable 503 before the next one succeeds. */
   failReads = 0;
+  /** Per-read latency once the fixture is published; models the 209 read floor. */
+  readDelayMs = 0;
   private commits = 0;
   private activeReads = 0;
   maxActiveReads = 0;
@@ -42,6 +47,7 @@ class FakeOpenVikingHttp {
         const signal = init!.signal!;
         return await new Promise<Response>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
       }
+      if (reading && this.readDelayMs > 0) await Bun.sleep(this.readDelayMs);
       return this.handle(op, url.searchParams.get("uri") ?? "", body);
     } finally {
       if (reading) this.activeReads -= 1;
@@ -257,9 +263,12 @@ describe("repository wiki reads under an OpenViking request deadline", () => {
     expect(openviking.finds()).toBe(2);
   });
 
-  it("answers hung backlinks with 504 inside the budget, hydrating at most four pages at once", async () => {
+  it("answers hung backlinks with 504 inside the budget without scheduling past the hydration bound", async () => {
+    // One page more than the bound, so the hung case shows both the in-flight ceiling
+    // and that no further round is scheduled after the deadline.
+    const pages = REPOSITORY_WIKI_BACKLINK_HYDRATE_CONCURRENCY + 1;
     const { openviking, docs, request, budgets, store } = await setup({
-      pages: 6,
+      pages,
       body: (index) => index === 0 ? "Body 0" : `See [[page-0]].\nBody ${index}`,
     });
     openviking.hang = ({ op }) => op === "GET /api/v1/content/read";
@@ -268,9 +277,9 @@ describe("repository wiki reads under an OpenViking request deadline", () => {
     expect(Date.now() - started).toBeLessThan(TEST_BUDGET_MS + 500);
     expect(response.status).toBe(504);
     expect(await response.json()).toEqual({ error: "OpenViking did not respond in time", code: "DEADLINE_EXCEEDED" });
-    // Six pages to hydrate, four in flight, none retried after the deadline.
-    expect(openviking.reads()).toBe(4);
-    expect(openviking.maxActiveReads).toBe(4);
+    // Every page but the one in flight reached the bound; none was retried after the deadline.
+    expect(openviking.reads()).toBe(REPOSITORY_WIKI_BACKLINK_HYDRATE_CONCURRENCY);
+    expect(openviking.maxActiveReads).toBe(REPOSITORY_WIKI_BACKLINK_HYDRATE_CONCURRENCY);
     expect(lines).toHaveLength(1);
     expect(JSON.parse(lines[0]!)).toMatchObject({
       event: "openviking_request_timeout",
@@ -284,14 +293,17 @@ describe("repository wiki reads under an OpenViking request deadline", () => {
     openviking.hang = () => false;
     const healthy = await request(`${WIKI_ROOT}/${docs[0]!.id}/backlinks`);
     expect(healthy.status).toBe(200);
-    expect((await healthy.json() as any).docs.map((doc: any) => doc.id)).toEqual(docs.slice(1).map((doc) => doc.id));
+    // Paths sort lexicographically (page-10 before page-2), so compare as sets.
+    const backlinkIds = (payload: any) => (payload.docs as any[]).map((doc) => doc.id).sort();
+    expect(backlinkIds(await healthy.json())).toEqual(docs.slice(1).map((doc) => doc.id).sort());
 
     // A single unreadable source still degrades to a skipped page instead of failing the request.
     const metadata = store.listRepositoryWikiDocs("local", "repo_deadline");
-    openviking.files.delete(metadata[1]!.contentUri!);
+    const skipped = metadata.find((doc) => doc.id !== docs[0]!.id)!;
+    openviking.files.delete(skipped.contentUri!);
     const tolerated = await request(`${WIKI_ROOT}/${docs[0]!.id}/backlinks`);
     expect(tolerated.status).toBe(200);
-    expect((await tolerated.json() as any).docs.map((doc: any) => doc.id)).toEqual(docs.slice(2).map((doc) => doc.id));
+    expect(backlinkIds(await tolerated.json())).toEqual(docs.slice(1).map((doc) => doc.id).filter((id) => id !== skipped.id).sort());
   });
 
   it("answers a hung legacy list shim with 504 inside the budget and one timeout line", async () => {
@@ -319,6 +331,34 @@ describe("repository wiki reads under an OpenViking request deadline", () => {
     const healthy = await request(WIKI_ROOT, { headers: { "User-Agent": "Bun/1.3.14" } });
     expect(healthy.status).toBe(200);
     expect((await healthy.json() as any).docs.map((doc: any) => doc.body)).toEqual(docs.map((_, index) => `Body ${index}`));
+  });
+
+  it("sizes the backlinks hydration bound to finish the largest repository inside the budget", async () => {
+    // The bound is what keeps a full repository off the deadline: the largest shape
+    // measured on 209 is 146 pages at a 700 ms single-read floor, and production
+    // inflated that floor to about 830 ms under the old unbounded fan-out.
+    expect(REPOSITORY_WIKI_BACKLINK_HYDRATE_CONCURRENCY).toBeGreaterThanOrEqual(
+      Math.ceil(146 * 830 / PROJECT_KNOWLEDGE_REQUEST_BUDGET_MS),
+    );
+    expect(REPOSITORY_WIKI_BACKLINK_HYDRATE_CONCURRENCY).toBeLessThanOrEqual(64);
+
+    // The same shape against a fake with the 700 ms floor: the read answers 200 well
+    // inside the budget with one read per page. See tests/manual/bench-mul399-backlinks.ts.
+    const pages = 146;
+    const { openviking, docs, request } = await setup({
+      pages,
+      body: (index) => index === 0 ? "Body 0" : `See [[page-0]].\nBody ${index}`,
+    });
+    const started = Date.now();
+    openviking.readDelayMs = 20;
+    const response = await request(`${WIKI_ROOT}/${docs[0]!.id}/backlinks`);
+    const wall = Date.now() - started;
+    expect(response.status).toBe(200);
+    expect((await response.json() as any).docs).toHaveLength(pages - 1);
+    expect(openviking.reads()).toBe(pages);
+    expect(openviking.maxActiveReads).toBe(REPOSITORY_WIKI_BACKLINK_HYDRATE_CONCURRENCY);
+    // 146 pages / 16 in flight x 20 ms = 200 ms promised; the 600 ms test budget must hold.
+    expect(wall).toBeLessThan(TEST_BUDGET_MS);
   });
 
   it("stops a configured attempt timeout shorter than the budget at the deadline", async () => {
