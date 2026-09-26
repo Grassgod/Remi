@@ -294,8 +294,10 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   // MUL-389: one request-scoped read cache, opened before auth so the identity lookups share it
   // with the handler. It is opt-in per row (see request-read-cache.ts) and every store write
   // clears it, so a route may look the same Runtime / workspace / relay row up as often as it
-  // likes without paying a round trip each time. Background jobs never run inside this scope.
-  app.use("*", async (_c, next) => withRequestReadCache(() => next()));
+  // likes without paying a round trip each time. Scoped to the daemon protocol routes, which are
+  // what it was measured on: async work a handler starts without awaiting inherits the scope
+  // through AsyncLocalStorage, and outside these routes nobody has checked what such work reads.
+  app.use("/api/daemon/*", async (_c, next) => withRequestReadCache(() => next()));
   app.use("*", cors());
   // Server-rendered dashboard removed in D11 — the UI is now the Next.js app in frontend/.
   app.get("/", (c) => c.json({ service: "multiremi-api", ui: "frontend/apps/web" }));
