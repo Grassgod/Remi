@@ -898,7 +898,11 @@ describe("Multiremi API — issue endpoints", () => {
     expect(detailBody.issue.dueDate).toBe("2026-06-10T04:00:00.000Z");
     expect(detailBody.issue.acceptanceCriteria).toEqual(["works"]);
     expect(detailBody.children.map((item: any) => item.id)).toEqual([child.id]);
-    expect(detailBody.childProgress).toEqual({ parentIssueId: parent.id, total: 1, done: 1 });
+    expect(detailBody.childProgress).toEqual({
+      parentIssueId: parent.id, total: 1, done: 1, cancelled: 0, blocked: 0, waiting: 0, active: 0,
+    });
+    // MUL-400 E1: the detail response carries child_count.
+    expect(detailBody.issue.child_count).toBe(1);
 
     const compatChildren = await app.request(`/api/issues/${parent.id}/children`);
     const compatChildrenBody = await compatChildren.json();
@@ -927,15 +931,21 @@ describe("Multiremi API — issue endpoints", () => {
     expect(nativeChildrenBody.issues[0].identifier).toBeUndefined();
 
     const progress = await app.request("/api/issues/child-progress?workspaceId=local");
-    expect((await progress.json()).progress).toEqual([{ parentIssueId: parent.id, total: 1, done: 1 }]);
+    expect((await progress.json()).progress).toEqual([{
+      parentIssueId: parent.id, total: 1, done: 1, cancelled: 0, blocked: 0, waiting: 0, active: 0,
+    }]);
 
     const remoteParent = store.createIssue({ title: "Remote API parent", workspaceId: "remote" });
     const remoteChild = store.createIssue({ title: "Remote API child", workspaceId: "remote", parentIssueId: remoteParent.id });
 
     const camelProgress = await app.request("/api/issues/child-progress?workspaceId=remote");
-    expect((await camelProgress.json()).progress).toEqual([{ parentIssueId: parent.id, total: 1, done: 1 }]);
+    expect((await camelProgress.json()).progress).toEqual([{
+      parentIssueId: parent.id, total: 1, done: 1, cancelled: 0, blocked: 0, waiting: 0, active: 0,
+    }]);
     const snakeProgress = await app.request("/api/issues/child-progress?workspace_id=remote");
-    expect((await snakeProgress.json()).progress).toEqual([{ parentIssueId: remoteParent.id, total: 1, done: 0 }]);
+    expect((await snakeProgress.json()).progress).toEqual([{
+      parentIssueId: remoteParent.id, total: 1, done: 0, cancelled: 0, blocked: 0, waiting: 0, active: 1,
+    }]);
 
     const camelBatchChildren = await app.request(`/api/issues/children?parentIds=${remoteParent.id}`);
     expect(await camelBatchChildren.json()).toEqual({ issues: [], total: 0 });

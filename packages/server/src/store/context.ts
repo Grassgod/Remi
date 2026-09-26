@@ -201,6 +201,17 @@ export interface IssuesSurface {
   listIssues(input?: ListIssuesInput): MultiremiIssue[];
   listGeneratedIssues(sourceIssueId: string): MultiremiIssue[];
   updateIssue(id: string, input: UpdateIssueInput): MultiremiIssue;
+  /** MUL-400 E1: children that still count as unfinished (not done/cancelled). */
+  countOpenChildIssues(parentIssueId: string): number;
+  /** MUL-400 E1 guard B: hold a parent at in_progress while children are open. */
+  holdParentStatusForOpenChildren(issueId: string, requested: string): string;
+  /** MUL-400 E1/E2 post-commit hook shared by both Issue write paths. */
+  notifyChildStatusChange(
+    previous: MultiremiIssue,
+    issue: MultiremiIssue,
+    parentTaskId: string | null,
+    options?: { taskTerminalStatus?: "completed" | "failed" | "cancelled" },
+  ): void;
   restoreIssue(id: string): MultiremiIssue;
   archiveEligibleIssues(now?: Date): MultiremiIssue[];
   issueArchiveSweepIntervalMs(): number;

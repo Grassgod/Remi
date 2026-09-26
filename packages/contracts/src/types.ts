@@ -1684,6 +1684,13 @@ export interface CreateTaskInput {
   /** Server-internal lane generation. Public task creation strips this field. */
   issueSessionGeneration?: number | null;
   issue_session_generation?: number | null;
+  /**
+   * Server-internal: do not let this task's creation park its Issue at `todo`.
+   * MUL-400 E2 uses it for the round that wakes a parent owner after a child
+   * ends, so a manual child edit cannot knock the parent out of `in_review`.
+   */
+  preserveIssueStatus?: boolean;
+  preserve_issue_status?: boolean;
   chatSessionId?: string | null;
   triggerCommentId?: string | null;
   trigger_comment_id?: string | null;
@@ -1978,6 +1985,16 @@ export interface MultiremiIssueChildProgress {
   parentIssueId: string;
   total: number;
   done: number;
+  /**
+   * Child buckets used by the issue surfaces (MUL-400 E1). `cancelled` and
+   * `blocked` are terminal/parked states, `active` counts children with work
+   * in flight, and `waiting` is reserved for dependency gating (S2) and is
+   * always 0 until that lands.
+   */
+  cancelled: number;
+  blocked: number;
+  waiting: number;
+  active: number;
 }
 
 export interface MultiremiIssueDependency {
@@ -2180,6 +2197,13 @@ export interface UpdateIssueInput {
   /** Server-internal creator lineage for assignment/status-triggered tasks. */
   parentTaskId?: string | null;
   parent_task_id?: string | null;
+  /**
+   * Member-only override for the parent-status guard (MUL-400 E1). A parent
+   * issue with unfinished children cannot enter `in_review`/`done` unless the
+   * caller is a member and passes `force: true`; task identities always get a
+   * 403 so a run can never bypass the guard on its own.
+   */
+  force?: boolean;
 }
 
 export interface BatchUpdateIssuesInput {

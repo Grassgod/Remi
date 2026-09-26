@@ -158,8 +158,12 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     expect(store.getIssueWithTasks(parent.id)?.children[0]?.id).toBe(child.id);
 
     store.updateIssue(child.id, { status: "done" });
-    expect(store.getChildIssueProgress(parent.id)).toEqual({ parentIssueId: parent.id, total: 1, done: 1 });
-    expect(store.listChildIssueProgress("local")).toEqual([{ parentIssueId: parent.id, total: 1, done: 1 }]);
+    expect(store.getChildIssueProgress(parent.id)).toEqual({
+      parentIssueId: parent.id, total: 1, done: 1, cancelled: 0, blocked: 0, waiting: 0, active: 0,
+    });
+    expect(store.listChildIssueProgress("local")).toEqual([{
+      parentIssueId: parent.id, total: 1, done: 1, cancelled: 0, blocked: 0, waiting: 0, active: 0,
+    }]);
 
     const sibling = store.createIssue({ title: "Sibling", parentIssueId: parent.id, priority: "urgent", position: 1 });
     expect(store.listChildIssues(parent.id).map((item) => item.id)).toEqual([sibling.id, child.id]);
@@ -234,7 +238,10 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     expect(tasks).toHaveLength(1);
     expect(tasks[0]?.agentId).toBe(agent.id);
     expect(tasks[0]?.triggerCommentId).toBe(comments[0]?.id);
-    expect(tasks[0]?.prompt).toContain("A sub-issue assigned under this issue was marked done.");
+    // MUL-400 E2: the round states which ending it reports.
+    expect(tasks[0]?.prompt).toContain("A sub-issue under this issue reported is done.");
+    expect(comments[0]?.body).toContain("is done");
+    expect(comments[0]?.body).not.toContain("read each sibling's description");
 
     const member = store.createWorkspaceMember({ name: "Human parent", role: "member" });
     const memberParent = store.createIssue({
@@ -245,7 +252,13 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     });
     const memberChild = store.createIssue({ title: "Member child", parentIssueId: memberParent.id, status: "in_progress" });
     store.updateIssue(memberChild.id, { status: "done" });
+    // MUL-400 E2: a human parent gets an inbox item instead of a system comment
+    // and a wakeup round.
     expect(store.listIssueComments(memberParent.id).filter((comment) => comment.authorType === "system")).toHaveLength(0);
+    expect(store.listTasksForIssue(memberParent.id)).toHaveLength(0);
+    const memberInbox = store.listInboxItems(member.id).filter((item) => item.type === "child_issue_terminal");
+    expect(memberInbox).toHaveLength(1);
+    expect(memberInbox[0]).toMatchObject({ severity: "info", issueId: memberParent.id });
 
     const leader = store.createAgent({ name: "Squad leader", provider: "claude" });
     const squad = store.createSquad({ name: "Parent Squad", leaderId: leader.id });
@@ -306,27 +319,52 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
       assigneeType: "squad",
       assigneeId: squad.id,
     });
-    store.createTask({ agentId: leader.id, issueId: busyParent.id, prompt: "Already working" });
+    // A busy owner no longer suppresses the report: while a running round holds
+    // the lane, the child report becomes its own queued round.
+    const running = store.createTask({ agentId: leader.id, issueId: busyParent.id, prompt: "Already working" });
+    db!.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [running.id]);
     const busyChild = store.createIssue({ title: "Busy child", parentIssueId: busyParent.id, status: "in_progress" });
 
     store.updateIssue(busyChild.id, { status: "done" });
 
-    expect(store.listTasksForIssue(busyParent.id)).toHaveLength(1);
-    const activeTaskSkip = store.listIssueActivity(busyParent.id)
-      .find((activity) => activity.type === "child_done_parent_skipped");
-    expect(activeTaskSkip?.data).toMatchObject({
-      reason: "active_task_exists",
-      assigneeType: "squad",
-      assigneeId: squad.id,
-      agentId: leader.id,
-    });
+    const busyTasks = store.listTasksForIssue(busyParent.id);
+    expect(busyTasks).toHaveLength(2);
+    expect(busyTasks.filter((task) => task.status === "queued").map((task) => task.agentId)).toEqual([leader.id]);
+    expect(store.listIssueActivity(busyParent.id)
+      .find((activity) => activity.type === "child_done_parent_skipped")).toBeUndefined();
+    expect(store.listIssueActivity(busyParent.id)
+      .find((activity) => activity.type === "child_done_parent_triggered")?.data)
+      .toMatchObject({ outcome: "done", assigneeType: "squad", assigneeId: squad.id, agentId: leader.id });
+
+    // Two more children ending while that round is still queued coalesce into it
+    // instead of queueing further rounds: one pending round per parent.
+    const queuedRound = busyTasks.find((task) => task.status === "queued")!;
+    for (const status of ["blocked", "cancelled"] as const) {
+      const sibling = store.createIssue({
+        title: `Sibling ${status}`,
+        parentIssueId: busyParent.id,
+        status: "in_progress",
+      });
+      store.updateIssue(sibling.id, { status });
+    }
+    const coalescedTasks = store.listTasksForIssue(busyParent.id).filter((task) => task.status === "queued");
+    expect(coalescedTasks).toHaveLength(1);
+    expect(coalescedTasks[0]?.id).toBe(queuedRound.id);
+    expect(coalescedTasks[0]?.prompt).toContain("## Additional Sub-Issue Report");
+    expect(coalescedTasks[0]?.prompt).toContain("Outcome: blocked");
+    expect(coalescedTasks[0]?.prompt).toContain("Outcome: cancelled");
+    expect(store.listIssueActivity(busyParent.id)
+      .filter((activity) => activity.type === "child_status_parent_coalesced")).toHaveLength(2);
+    const notifications = store.listIssueComments(busyParent.id)
+      .filter((comment) => comment.authorType === "system" && comment.body.includes("Sibling"));
+    expect(notifications).toHaveLength(2);
 
     const unassignedParent = store.createIssue({ title: "Unassigned parent", status: "in_progress" });
     const unassignedChild = store.createIssue({ title: "Unassigned child", parentIssueId: unassignedParent.id, status: "in_progress" });
     store.updateIssue(unassignedChild.id, { status: "done" });
     expect(store.listIssueActivity(unassignedParent.id)
       .find((activity) => activity.type === "child_done_parent_skipped")?.data)
-      .toMatchObject({ reason: "no_assignee" });
+      .toMatchObject({ reason: "no_assignee", outcome: "done" });
 
     const archivedAgent = store.createAgent({ name: "Archived parent agent", provider: "codex" });
     const archivedAgentParent = store.createIssue({
@@ -936,7 +974,7 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     store.createIssueComment(oldDone.id, { body: "Historical note" });
     expect(store.getIssue(oldDone.id)?.archivedAt).toBe(now.toISOString());
     expect(store.listChildIssues(parent.id).map((issue) => issue.id)).toEqual([recentCancelled.id]);
-    expect(store.getChildIssueProgress(parent.id)).toMatchObject({ total: 1, done: 1 });
+    expect(store.getChildIssueProgress(parent.id)).toMatchObject({ total: 1, done: 0, cancelled: 1 });
     expect(store.restoreIssue(oldDone.id)).toMatchObject({ completedAt: null, archivedAt: null, status: "done" });
     expect(store.listIssues().map((issue) => issue.id)).toContain(oldDone.id);
     runMigrations(db! as unknown as SqlDatabase);

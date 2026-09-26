@@ -161,11 +161,12 @@ describe("formatActivity", () => {
     expect(formatActivity(activity("child_done_parent_triggered"), t)).toBe(
       "activity.child_done_parent_triggered",
     );
+    // MUL-400 E2 retired `active_task_exists`: a busy owner coalesces the report
+    // into its queued round instead of skipping the wakeup.
     const reasons = {
       no_assignee: "no_assignee",
       agent_unavailable: "agent_unavailable",
       squad_leader_unavailable: "squad_leader_unavailable",
-      active_task_exists: "active_task_exists",
     };
     for (const [reason, key] of Object.entries(reasons)) {
       expect(
@@ -175,11 +176,28 @@ describe("formatActivity", () => {
       );
     }
     expect(
+      formatActivity(activity("child_done_parent_skipped", { details: { reason: "active_task_exists" } }), t),
+    ).toBe('activity.child_done_parent_skipped {"reason":"active_task_exists"}');
+    expect(
       formatActivity(
         activity("child_done_parent_skipped", { details: { reason: "future_reason" } }),
         t,
       ),
     ).toBe('activity.child_done_parent_skipped {"reason":"future_reason"}');
+
+    // MUL-400 E1/E2 activities the parent and child pages now render.
+    expect(formatActivity(activity("child_status_parent_coalesced"), t)).toBe(
+      "activity.child_status_parent_coalesced",
+    );
+    expect(formatActivity(activity("parent_status_derived"), t)).toBe(
+      "activity.parent_status_derived",
+    );
+    expect(
+      formatActivity(activity("parent_status_held", { details: { requested: "in_review" } }), t),
+    ).toBe('activity.parent_status_held {"status":"status.in_review"}');
+    expect(
+      formatActivity(activity("issue_status_forced", { details: { status: "done" } }), t),
+    ).toBe('activity.issue_status_forced {"status":"status.done"}');
   });
 
   it("explains why an agent comment mention was skipped", () => {
