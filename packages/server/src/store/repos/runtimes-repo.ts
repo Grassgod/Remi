@@ -2079,11 +2079,14 @@ export class RuntimesRepo {
       // The command scrub is unconditional: the command family is advertised by every
       // daemon, so a command that finished a moment ago must still be told to wipe its
       // raw text even though no queue row is pending.
+      // Both branches have to be the same SQL type: Postgres refuses `UNION ALL` over an
+      // integer and a boolean column with "UNION types integer and boolean cannot be matched"
+      // (SQLite is loose enough not to care). `FALSE` keeps the column boolean everywhere.
       const housekeeping = family === "command"
         ? `EXISTS (SELECT 1 FROM ${COMMAND_REQUESTS.table}
             WHERE runtime_id = ? AND status IN ('completed', 'failed', 'timeout')
               AND (command <> '' OR args <> '[]'))`
-        : "0";
+        : "FALSE";
       if (family === "command") params.push(runtimeId);
       return `SELECT '${family}' AS family,
         EXISTS (SELECT 1 FROM ${spec.table}
