@@ -1,11 +1,11 @@
 # MUL-389 性能归因与前后对比（heartbeat 待办 poll 合并 + claim 只 hydrate 选中任务）
 
 - 生成时间：2026-09-26
-- before 提交：`a1e61623`（`agent/MUL-389` 的起点；harness 在 Phase 0 提交 `d17337f4` 里加入，该提交不改生产代码）；after 提交：`21470603`
+- before 提交：`a1e61623`（`agent/MUL-389` 的起点；harness 在 Phase 0 提交 `d17337f4` 里加入，该提交不改生产代码）；after 提交：`585c5d7a`（缓存换代点移到拿锁之后，见 Phase 3 第 8 条；`62cf6ef7` 与它的 heartbeat 数字完全相同，claim 少 1 条查询）
 - 复现入口：`bun run tests/manual/bench-daemon-heartbeat-claim.ts`
   - 环境变量：`MUL389_BENCH_SAMPLES`（默认 3）、`MUL389_BENCH_TOP_N`（默认 12）、`MUL389_BENCH_OUTPUT`（默认 `/tmp/MUL-389-heartbeat-claim.json`）
   - 原始数据：before `reports/performance/MUL-389-heartbeat-claim-baseline.json`、after `reports/performance/MUL-389-heartbeat-claim-after.json`（同一个 harness、同一台机器的完整运行结果；after 用 `MUL389_BENCH_TOP_N=200` 跑，逐条语句全量列出）
-- 关联：父单 MUL-383 的 C.5 节（诊断评论 `cmt_eq02zhglhl3u`）、方案评论 `cmt_gstdr9auvjlm`、验收口径裁决 `cmt_0xz79shqif5t`（Senior大哥）
+- 关联：父单 MUL-383 的 C.5 节（诊断评论 `cmt_eq02zhglhl3u`）、方案评论 `cmt_gstdr9auvjlm`、验收口径裁决 `cmt_0xz79shqif5t` 与复裁 `cmt_4i1vbal7tpeq`（Senior大哥）
 
 ## 口径（重要，先读这一节）
 
@@ -84,16 +84,22 @@ before 与 after 是**同一个 harness、同一台机器、各 3 个样本**（
 
 | scenario | fixture | dbq before | dbb before | dbq after | dbb after |
 | --- | --- | ---: | ---: | ---: | ---: |
-| `heartbeat.idle` | 7 queues empty, plugin protocol advertised | 93 | 12437 | **29** | 4637 |
-| `heartbeat.pending.update` | one `pending` row: CLI update | 99 | 13117 | 34 | 5058 |
-| `heartbeat.pending.model_list` | one `pending` row: model list | 97 | 12965 | 30 | 4891 |
-| `heartbeat.pending.command` | one `pending` row: command | 97 | 13341 | 31 | 5100 |
-| `heartbeat.pending.bot_menu` | one `pending` row: bot menu publish | 97 | 13229 | 30 | 5023 |
-| `heartbeat.pending.local_skills` | one `pending` row: local skill list | 97 | 13021 | 30 | 4919 |
-| `heartbeat.pending.directory_scan` | one `pending` row: directory scan | 97 | 13101 | 30 | 4959 |
-| `heartbeat.pending.local_skill_import` | one `pending` row: local skill import | 97 | 13167 | 30 | 4992 |
-| `heartbeat.worst_case` | every flag on, 4 `pending` plugin states, 10-item batch import | 163 | 31692 | 42 | 15091 |
-| `heartbeat.worst_case_with_side_channels` | same + ssh mesh, drain ack, concierge protocol | 168 | 31806 | **47** | 15950 |
+| `heartbeat.idle` | 7 queues empty, plugin protocol advertised | 93 | 12437 | **31** | 5924 |
+| `heartbeat.pending.update` | one `pending` row: CLI update | 99 | 13117 | 37 | 7007 |
+| `heartbeat.pending.model_list` | one `pending` row: model list | 97 | 12965 | 32 | 6178 |
+| `heartbeat.pending.command` | one `pending` row: command | 97 | 13341 | 33 | 6387 |
+| `heartbeat.pending.bot_menu` | one `pending` row: bot menu publish | 97 | 13229 | 32 | 6310 |
+| `heartbeat.pending.local_skills` | one `pending` row: local skill list | 97 | 13021 | 32 | 6206 |
+| `heartbeat.pending.directory_scan` | one `pending` row: directory scan | 97 | 13101 | 32 | 6246 |
+| `heartbeat.pending.local_skill_import` | one `pending` row: local skill import | 97 | 13167 | 32 | 6279 |
+| `heartbeat.worst_case` | every flag on, 4 `pending` plugin states, 10-item batch import | 163 | 31692 | 45 | 17373 |
+| `heartbeat.worst_case_with_side_channels` | same + ssh mesh, drain ack, concierge protocol | 168 | 31806 | **50** | 18230 |
+
+HTTP 口径比 `21470603`（QA 首轮复核的提交）多出的查询全部是 Runtime 行的锁后重读，每个「拿锁后重读 Runtime」的事务多一次。在 `62cf6ef7` 之前，这些重读都被缓存里锁前读到的行顶替了（见 Phase 3 第 7 条）：
+- idle 多 2 次：heartbeat 事务和 SSH mesh 事务；
+- `pending.update` 与两个 `worst_case` 多 3 次：CLI update 的 claim 走 `withRuntimeLifecycleLock`，它在锁后也重读一次（`runtimes-repo.ts:2261`）。
+
+store 直调口径的数字不变：它直接调 `store.heartbeatRuntime()`，不经过 `/api/daemon/*` 中间件，请求级读缓存根本没开，每次读本来就读库。
 
 ### Store call only (`store.heartbeatRuntime`)
 
@@ -115,35 +121,41 @@ before 与 after 是**同一个 harness、同一台机器、各 3 个样本**（
 
 | scenario | fixture | dbq before | dbb before | dbq after | dbb after |
 | --- | --- | ---: | ---: | ---: | ---: |
-| `claim.mixed_workspace` | 5 agents w/ ~300 KiB skill files, 4 profile tasks, 4 chat turns, 9 project wiki docs + 8 repo wiki docs | 398 | 6650345 | 307 | **438486** |
+| `claim.mixed_workspace` | 5 agents w/ ~300 KiB skill files, 4 profile tasks, 4 chat turns, 9 project wiki docs + 8 repo wiki docs | 398 | 6650345 | 309 | **439784** |
 
 after 的 claim 响应：`status=200`、`response_bytes=610131`、`skill_file_bytes=309355`、project wiki 9 篇 / 148764 字节、repo wiki 8 篇 / 145735 字节、`knowledge_warnings=0`。与 before 逐项相同——下发给 daemon 的内容没变，省掉的全是过桥后被丢弃的字节。本 fixture 的知识正文不触发 512 KiB cap，cap 的行为由单测覆盖（见「测试」）。
 
 ### 达标情况
 
-验收口径按 Senior大哥的裁决 `cmt_0xz79shqif5t`（替代原「heartbeat 最坏 `db_queries ≤ 20`」），所有数字都从 `tests/manual/bench-daemon-heartbeat-claim.ts` 输出的 `queries` / `bytes` 字段读取。
+验收口径按 Senior大哥的裁决 `cmt_0xz79shqif5t`（替代原「heartbeat 最坏 `db_queries ≤ 20`」）和复裁 `cmt_4i1vbal7tpeq`（典型 heartbeat 改为 ≤ 31，其余不变）。所有数字都从 `tests/manual/bench-daemon-heartbeat-claim.ts` 输出的 `queries` / `bytes` 字段读取。
 
 | 验收项 | 场景 / 读法 | before | after | 目标 | 结论 |
 | --- | --- | ---: | ---: | --- | --- |
-| 典型 heartbeat | `heartbeat.idle` | 93 | **29** | ≤ 30 | ✅ 达标（−68.8%） |
-| 最坏 heartbeat | `heartbeat.worst_case_with_side_channels` | 168 | **47** | ≤ 55 | ✅ 达标（−72.0%） |
+| 典型 heartbeat | `heartbeat.idle` | 93 | **31** | ≤ 31 | ✅ 达标（−66.7%） |
+| 最坏 heartbeat | `heartbeat.worst_case_with_side_channels` | 168 | **50** | ≤ 55 | ✅ 达标（−70.2%） |
 | 待办 poll 合并 | `heartbeat.idle` 里触及 7 张待办表的语句数 | 23 | **1**（`UNION ALL` probe） | = 1 | ✅ 达标；`multiremi-heartbeat-poll-merge.test.ts` 有结构断言锁定 |
 | 待办 poll 增量 | `store_only.pending.every_family − store_only.idle` | 30 | **14** | ≤ 20 | ✅ 达标 |
-| claim 过桥字节 | `claim.mixed_workspace` 的 `bytes` | 6,650,345 | **438,486** | < 1MB | ✅ 达标（−93.4%） |
+| claim 过桥字节 | `claim.mixed_workspace` 的 `bytes` | 6,650,345 | **439,784** | < 1MB | ✅ 达标（−93.4%） |
+| CI | PR 的 `Release build check`（含 `tests/integration/`）在被复核的 SHA 上 | —（本单 `3ed629ac` 起红，`62cf6ef7` 修复） | **绿**（`585c5d7a`，run `36249325191`） | 绿 | ✅ 达标（复裁新增的落地条件；QA 复核的 SHA 另记在 QA 报告里） |
 
-裁决的推翻条件都没有触发：idle 已经 ≤ 30，不需要改用「去重后剩余语句数」作为目标；209 的复核条件见文末。
+**为什么 idle 的目标从 30 改成 31**（复裁 `cmt_4i1vbal7tpeq`）：
+- `62cf6ef7` 修掉了请求缓存用锁前读到的 Runtime 行回答锁后重读的问题（Phase 3 第 7 条）。修完以后，两个事务里锁后的 Runtime 重读都要真的读库，idle 从 29 变成 31。
+- 这两条和锁前那次读是不同的数据需求：锁就是为了让锁后那次读看到最新提交的行。
+- 按上一条裁决事先写好的推翻条件，目标改成去重后的实测数，不留余量。
+- 「手工拼 SSH mesh 状态行写进缓存来省 1 条」被否决：那是一条缓存行 ≠ 库行的路径，刚出过一次同类问题。
+- 209 的判定口径不变。
 
 为什么原来的「≤ 20」要换掉（详见裁决）：7 个 family 全有待办时，一次请求至少要写 7 张表 7 次，加上 probe、插件批量写、workspace 级 reconcile、runtime 读/写/锁和鉴权，下界约 27 条。所以整请求最坏值在任何方案下都到不了 20。revision gating 只能省「没变化」的路径，而最坏值正是「全都变了」的路径。
 
-#### `heartbeat.idle` after 的全部语句（29 条）
+#### `heartbeat.idle` after 的全部语句（31 条）
 
 | statement | count | bytes |
 | --- | ---: | ---: |
+| `SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon…` | 3 | 1912 |
 | `SELECT * FROM multiremi_daemon_ssh_mesh_states WHERE workspace_id = ? AND daemon_id = ?` | 2 | 622 |
 | `SELECT fragment, auth_token, revision FROM multiremi_relay_config WHERE workspace_id = ? AND engine = ?` | 2 | 42 |
 | `UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?` | 2 | 42 |
 | `SELECT * FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?` | 1 | 635 |
-| `SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon…` | 1 | 625 |
 | `SELECT state.* FROM multiremi_daemon_ssh_mesh_states state WHERE state.workspace_id = ? AND ( COALESCE(state.node_kind, …` | 1 | 601 |
 | `SELECT 'update' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_update_requests …) … UNION ALL …`（合并 probe） | 1 | 480 |
 | `SELECT * FROM multiremi_access_tokens WHERE token_hash = ?` | 1 | 422 |
@@ -166,7 +178,17 @@ after 的 claim 响应：`status=200`、`response_bytes=610131`、`skill_file_by
 | `UPDATE multiremi_agent_plugin_workspace_locks SET updated_at = ? WHERE workspace_id = ?` | 1 | 21 |
 | `UPDATE multiremi_runtimes SET status = 'online', metadata = ?, last_heartbeat_at = ?, updated_at = ? WHERE id = ?` | 1 | 21 |
 
-还剩 3 个重复形状（各 ×2）：本 daemon 的 `ssh_mesh_states` 行、`relay_config`、workspace 生命周期锁的自写。去掉它们也只到 26，已在目标内，本单不再追。
+出现不止一次的 4 个形状逐次说明。归属用 bench 加临时栈追踪实测确认，追踪代码没有提交：
+
+- **Runtime 行 ×3**，每次都是不同的数据需求：
+  1. 鉴权 `denyDaemonTokenRuntimeIdentity`（`api/helpers/auth-guards.ts:777`，经 `getRuntimeLite`）。不在事务里，也没有拿锁，这一行随后供整个请求的非事务读复用。
+  2. **heartbeat 事务**（`runtimes-repo.ts:1837`）：先拿 `lockWorkspaceRuntimeLifecycle` 与 `lockAgentPluginWorkspace`，再在 `runtimes-repo.ts:1840` 重读。读不到或 workspace 变了，就回 `runtime_gone`。
+  3. **SSH mesh 事务**：`recordSshMeshHeartbeat`（`store.ts:1297`）走 `withSshMeshLifecycleLock`，先拿 `lockWorkspaceRuntimeLifecycle`，再经 `ssh-mesh-repo.ts:415` 调 `runtimeIdentity`（`ssh-mesh-repo.ts:887`）重读。
+- **本 daemon 的 `ssh_mesh_states` 行 ×2**：SSH mesh 事务里 upsert 前读一次当前状态（`ssh-mesh-repo.ts:459`），upsert 后读回一次（`ssh-mesh-repo.ts:533`）。
+- **`relay_config` ×2**：`claude` 和 `codex` 两个 engine 各一行，键不同，不是重复读。
+- **`UPDATE multiremi_workspaces SET updated_at = updated_at` ×2**：workspace 生命周期锁本身，上面两个事务各拿一次。
+
+除了这 4 个形状，其余 22 条各出现一次。
 
 idle 剩下的基本都是路由的旁路字段：ssh mesh、drain/maintenance、relay、workspace 配置、provider profile 和鉴权。把它们改成「revision 变化才下发」是建议的后续单：
 - 属于 ADR 0001 的扩展，需要写明老 daemon 的降级路径；
@@ -181,8 +203,8 @@ idle 剩下的基本都是路由的旁路字段：ssh mesh、drain/maintenance�
 
 | statement | count | bytes |
 | --- | ---: | ---: |
+| `SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon…` | 5 | 3816 |
 | `UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?` | 3 | 63 |
-| `SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon…` | 2 | 1536 |
 | `SELECT * FROM multiremi_daemon_ssh_mesh_states WHERE workspace_id = ? AND daemon_id = ?` | 2 | 622 |
 | `SELECT * FROM multiremi_feishu_bot_configs WHERE workspace_id = ?` | 2 | 42 |
 | `SELECT fragment, auth_token, revision FROM multiremi_relay_config WHERE workspace_id = ? AND engine = ?` | 2 | 42 |
@@ -191,6 +213,13 @@ idle 剩下的基本都是路由的旁路字段：ssh mesh、drain/maintenance�
 | `SELECT * FROM multiremi_agent_plugin_runtime_states WHERE workspace_id = ?` | 1 | 1932 |
 
 10 条 batch import 现在是 1 条 `UPDATE … WHERE status = 'pending' AND id IN (SELECT … LIMIT ?) RETURNING *`。
+
+Runtime 行 ×5 的构成：
+- 鉴权读 1 次；
+- 三个锁后重读：heartbeat 事务、SSH mesh 事务、CLI update 的 `withRuntimeLifecycleLock`；
+- 路由组装响应时的 1 次读（`api/routers/daemon.ts:443`）：本场景带 `drain_ack_generation`，`recordRuntimeDrainAck`（`daemon.ts:432`）先 `UPDATE multiremi_runtimes`，清掉了 Runtime 缓存，所以这次是写后读。idle 不带 drain ack，这次读命中缓存。
+
+workspace 生命周期锁 ×3 就是上面三个事务各拿一次。
 
 #### `claim.mixed_workspace` after 前几名
 
@@ -203,8 +232,15 @@ idle 剩下的基本都是路由的旁路字段：ssh mesh、drain/maintenance�
 | `SELECT * FROM multiremi_agents WHERE id = ? AND archived_at IS NULL` | 18 | 12114 |
 | `SELECT * FROM multiremi_agents WHERE id = ?` | 16 | 10824 |
 | `SELECT * FROM multiremi_tasks WHERE id = ?` | 11 | 20860 |
+| `SELECT id FROM multiremi_autopilot_runs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1` | 11 | 231 |
+| `SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?` | 9 | 4805 |
+| `SELECT * FROM multiremi_skill_files WHERE skill_id = ? ORDER BY path ASC` | 1 | 309420 |
 
-claim 剩下的查询数（307）主要是项目聚合和 chat affinity。它们的字节都很小（单项不到 30KB），不在本单的字节目标里。`SELECT * FROM multiremi_skill_files` 已经不在前几名里了。
+claim 剩下的 309 条查询主要是项目聚合和 chat affinity。它们的字节都很小（单项不到 30KB），不在本单的字节目标里。`multiremi_skill_files` 从 21 次降到 1 次，这 1 次就是选中任务的技能文件，占 after 字节的 70%。
+
+309 比 `21470603` 的 307 多 2 条，都是 `claimTask`（`tasks-repo.ts:1626`）事务里 Runtime 行的读：
+- `62cf6ef7` +1：事务开头 `tasks-repo.ts:1630` 的 `getRuntime` 不再用鉴权时缓存的行，要读库；
+- 本次 +1：拿锁后 `tasks-repo.ts:1644` 的重读不再用 1630 锁前读到的行，要读库（Phase 3 第 8 条）。
 
 ## 实现要点
 
@@ -261,6 +297,21 @@ claim 剩下的查询数（307）主要是项目聚合和 chat affinity。它们
    - 修复：probe 的 `sweep` 列为真时，该 family 也进 claim 路径（先 sweep 再 claim）。只在确实有过期行时多出这几条语句，idle 和 bench 各场景的数字不变。
    - 两条回归测试直接读表，不走 getter，因为 getter 读之前会先 sweep，会把问题掩盖掉。同样这两条测试在 `a1e61623`（改动前）上通过、在 `77127310` 上失败、在 `cd80d24d` 上通过。
 6. **请求级读缓存只在 `/api/daemon/*` 上开启**（`21470603`）：handler 里没有 await 的异步任务会通过 AsyncLocalStorage 继承缓存作用域。daemon 路由以外，没人检查过这类任务会读什么，所以其余 API 保持直接读库，与改动前一致。heartbeat 和 claim 都在 `/api/daemon/*` 下，实测数字不受影响。
+7. **事务里不再用事务开始前缓存的行**（`62cf6ef7`）：
+   - 问题：heartbeat 拿 workspace 生命周期锁后重读 Runtime 行，读不到就回 `runtime_gone`。缓存却用鉴权时（锁前）读到的行回答了这次重读，于是 Runtime 被别的连接删掉后，heartbeat 仍回 ok，daemon 要到下一次调用才发现。
+   - PR 的 CI 从 `3ed629ac` 起一直红，失败的就是 `tests/integration/multiremi-daemon-smoke.test.ts` 的「re-registers and continues when heartbeat reports runtime_gone」。
+   - 本地和 QA 之前只跑了 `tests/unit/multiremi/`、`tests/arch/`、`tests/unit/daemon/` 这几组，没跑 `tests/integration/`，所以都没发现。现在以 CI 同款的全量 `bun test` 为准（见「测试」）。
+   - 修复：每个最外层事务开始时缓存换一代，事务里只用本代的行；事务里读到的行提交后继续缓存；事务失败（包括 COMMIT 失败）就清空缓存，因为里面可能有未提交的行。
+   - 代价：heartbeat 事务和 SSH mesh 事务里锁后的 Runtime 重读都要真的读库，idle 从 29 变成 31。复裁 `cmt_4i1vbal7tpeq` 据此把目标改成 ≤ 31（见「达标情况」）。
+8. **拿锁后缓存再换一代**（复裁的落地条件 2）：
+   - 第 7 条的规则依赖「事务先拿锁、再读」。事务如果在拿锁前读过某一行，锁后的重读仍会拿到锁前的行。在 PG 的 READ COMMITTED 下每条语句各取一次快照，锁前读到的行可能在拿锁前就已经过时，所以这是真实的竞态。
+   - 实现：`request-read-cache.ts` 新增 `markRequestReadCacheLockTaken()`，在事务里调用时缓存换一代。`lockWorkspaceRuntimeLifecycle`（`context.ts`）和 `lockAgentPluginWorkspace`（`agent-plugins-repo.ts`）在加锁语句之后调用它。事务开始时的换代保留，两者叠加。
+   - 测试：`multiremi-request-read-cache.test.ts` 新增 2 条：
+     - 事务里先读、再拿锁、再读，第二次必须读库；
+     - 对这两个锁各跑一遍：事务里先读 Runtime、另一连接删掉它、拿锁、再读，必须读到「不存在」。
+     把 `lockTaken` 改成空操作，这 2 条都失败。
+   - 数字变化与定位：heartbeat 各场景一条不变。claim 从 308 变成 309（+649 字节，正好一行 Runtime）。按复裁先定位锁前读：`claimTask` 的事务先在 `tasks-repo.ts:1630` 读 Runtime，再拿两把锁（1639、1643），1644 重读后检查 workspace。在 `62cf6ef7` 上，1644 用的就是 1630 锁前读到的行，锁后的 workspace 检查因此落空。这正是落地条件 2 要防的情况，现在已经修掉，代价 1 条查询。
+   - 没有覆盖的锁：`lockWorkspaceRepositoryTopology`、`lockIssueArchiveLifecycle`（`context.ts`）和 `daemon-retirement-repo.ts` 的 `lockLifecycle` 按复裁的范围没有加标记，仍只靠事务开始时的换代，以及「先拿锁再读」的写法。
 
 ## PG 验证
 
@@ -273,19 +324,20 @@ claim 剩下的查询数（307）主要是项目聚合和 chat affinity。它们
 
 ## 测试
 
-以下结果在 `21470603` 上由带头大哥本机实跑（2026-09-26），QA 会独立复跑。
+前 4 行在 `585c5d7a` 的代码上由带头大哥本机实跑（2026-09-26）。其余逐文件的行来自 `21470603`，那些文件之后没有改动，也都包含在全量 `bun test` 里。QA 会独立复跑。CI 结果见本表之后。
 
 | 命令 | 结果 |
 | --- | --- |
 | `bunx tsc --noEmit` | 通过 |
 | `bun run cli:capabilities:check` | `668 mapped / 91 exempt / 0 missing (759 routes)` |
+| `bun test`（全量，与 CI 的 Backend test suite 相同，含 `tests/integration/`） | 4537 pass / 85 skip / 2 fail。2 条失败就是下面 `tests/unit/daemon/` 那两条既有问题；`multiremi-daemon-smoke.test.ts`（含 runtime_gone 用例）全部通过。`62cf6ef7` 上同一命令是 4535 pass，多出的 2 条是第 8 条新增的测试 |
+| `multiremi-request-read-cache.test.ts`（新增） | 11 pass：作用域外不生效、不跨请求（已退役的 daemon token 下一次心跳即被拒）、token 有效期间持续可用、作用域内写后读不陈旧、按表失效；事务里不用事务开始前缓存的行、不用锁前读到的行、两把锁下各重读一次 Runtime、失败的事务清空缓存、另一连接删掉 Runtime 后 heartbeat 回 `runtime_gone`。把 `lockTaken` 改成空操作，锁相关的 2 条失败 |
 | `bun test tests/unit/multiremi/`（全量，260 个文件） | 2970 pass / 85 skip / 0 fail |
 | `bun test tests/arch/` | 91 pass / 0 fail |
 | `bun test tests/unit/daemon/` | 519 pass / 2 fail：`safe-remove`（quarantine rename 失败时恢复 0555）和 `gc-policy`（单条删除失败后继续）。两条在 `a1e61623` 上同样失败，是既有问题，与本单无关 |
 | `multiremi-heartbeat-poll-merge.test.ts`（新增） | 15 pass：7 类 family 在一次心跳里全部 claim、同 family 取最老的行、10 条 batch 一次写、capability 关闭不 claim 也不进 probe、不支持 skill directory 仍失败、逐 family 超时文案、仅 running 超时、未到期不超时、CLI update drain、command scrub、**只有过期行时心跳仍 sweep（update running / model_list pending 各一条）**、idle 只有 1 条语句触及 7 张待办表（结构断言）、每次心跳只有一个 probe、capability 关闭的表不进 probe |
 | `multiremi-claim-hydrate-selected.test.ts`（新增） | 8 pass：选中任务的 payload 完整（skill 正文与 files）、priority / created_at 定序、profile、stale dispatch 回收、HTTP 与 daemon client 两条入口选中同一任务 |
 | `multiremi-claim-knowledge-byte-cap.test.ts`（新增） | 8 pass：未超限不变、project 超限整篇丢弃且有 warning、绝不发空 body、Intake context 同步移除、repo 超限变 unavailable、共享预算 |
-| `multiremi-request-read-cache.test.ts`（新增） | 6 pass：作用域外不生效、不跨请求（已退役的 daemon token 下一次心跳即被拒）、token 有效期间持续可用、作用域内写后读不陈旧、按表失效 |
 | `store-runtime-request-queue.test.ts`（扩展） | 19 pass：golden SQL 更新为合并后的 claim / expire，并发 claim 保护，同毫秒顺序两条 |
 | `store-agent-plugins-repo.test.ts`（扩展） | 22 pass（含批量写入断言） |
 | `tests/unit/daemon/wiki-workspace.test.ts`（扩展） | 13 pass（含「被省略的 project doc」与「repo doc unavailable 保留旧副本」） |
@@ -293,9 +345,11 @@ claim 剩下的查询数（307）主要是项目聚合和 chat affinity。它们
 
 已知的既有问题：`multiremi-api-realtime.test.ts` 的 WebSocket 用例在并行全量运行时偶发超时，单独运行 9/9 通过；本次全量运行未出现。
 
+**CI**：PR #254 的 `Release build check` 在 `585c5d7a` 上通过（run `36249325191`）：Architecture guard tests、Backend test suite（全量 `bun test`，含 `tests/integration/`）、前端 typecheck 与测试、镜像构建都是绿的。`62cf6ef7` 上同样通过（run `36246877733`）。
+
 ## 发版后在 209 复核
 
 - 209 **只读**：只跑 `docker logs` 和只读 API 探测，不改配置、不重启服务、不写库。不在 209 上启动 daemon。
-- **判定口径（裁决）**：只和同源数据比，即 `POST /api/daemon/heartbeat` 的 `Server-Timing` `dbq`。先记录发版前一个窗口的 `api_slow_request` / `api_minute_summary` 基线，再看发版后同一 route 的值：**典型 heartbeat 的 `dbq` p50 下降 ≥ 50%** 即达标。本地 fixture 上 idle 降了 68.8%。
+- **判定口径（裁决）**：只和同源数据比，即 `POST /api/daemon/heartbeat` 的 `Server-Timing` `dbq`。先记录发版前一个窗口的 `api_slow_request` / `api_minute_summary` 基线，再看发版后同一 route 的值：**典型 heartbeat 的 `dbq` p50 下降 ≥ 50%** 即达标。本地 fixture 上 idle 降了 66.7%。
 - **推翻条件**：如果 209 的降幅 < 50%，就用生产日志里的语句重新归因。生产的 workspace 里 runtime、task、member 更多，旁路字段的占比可能和本地 fixture 不同。
 - claim 同样只比同源：C.5 那次最坏的 claim 是 `q=445 bytes=5012751 total=3866ms db_ms=278`，发版后同类请求的 `dbb` 应当明显低于这个值。如果 `dbb` 还 > 1MB，先确认 byte cap 有没有触发（Wiki 正文本来就不大时不会触发），以及 eligibility 阶段的重复读是否还在。
