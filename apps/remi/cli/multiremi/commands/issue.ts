@@ -90,7 +90,7 @@ export async function issue(positional: string[], options: CliOptions): Promise<
   }
   if (action === "update") {
     const issueId = positional[1]?.trim();
-    if (!issueId) throw new Error("usage: multiremi issue update <issue-id> [--title <title>] [--description <text>] [--status <status>] [--priority <priority>] [--assignee <id|name|email> --assignee-type <type>] [--project <id>] [--parent <id>] [--start-date <date>] [--due-date <date>]");
+    if (!issueId) throw new Error("usage: multiremi issue update <issue-id> [--title <title>] [--description <text>] [--status <status>] [--priority <priority>] [--assignee <id|name|email> --assignee-type <type>] [--project <id>] [--parent <id>] [--start-date <date>] [--due-date <date>] [--force]");
     await issueUpdate(issueId, options);
     return;
   }
@@ -782,6 +782,10 @@ export async function issueUpdate(issueId: string, options: CliOptions): Promise
   addStringBodyField(body, options, "start_date", "start-date", false, true);
   addStringBodyField(body, options, "due_date", "due-date", false, true);
   addAssigneeBodyFields(body, options, "assignee-id", "assignee-type", "assignee");
+  // MUL-400 E1: `--force` is the member override for the parent-status guard.
+  // The first attempt without it returns the 409 reason, which is the intended
+  // second confirmation; task identities are rejected by the server.
+  if (booleanFlag(options, "force")) body.force = true;
   if (Object.keys(body).length === 0) throw new Error("no fields to update; pass --title, --description, --status, --priority, --assignee, --project, --parent, --start-date, or --due-date");
   printJson(await multiremiApiRequest("PUT", `/api/issues/${encodeURIComponent(issueId)}`, body, options));
 }

@@ -593,6 +593,10 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
 
   app.post("/api/multiremi/issues/batch-update", async (c) => {
     const body = await readJson<BatchUpdateIssuesInput>(c);
+    // MUL-400 E1: batch update is the third status writer, so it takes the same
+    // member-only rule for `force` as the two PATCH routes.
+    const forceDenied = denyTaskIdentityIssueForce(c, body.updates ?? {});
+    if (forceDenied) return forceDenied;
     const denied = issueBatchUpdateAccess(c, body) ?? validateBatchWorkspaceBinding(c, body);
     if (denied) return denied;
     return c.json(store.batchUpdateIssues({
@@ -604,6 +608,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJson<BatchUpdateIssuesInput>(c);
     try {
       const input = issueBatchUpdateCompatibilityInput(body);
+      const forceDenied = denyTaskIdentityIssueForce(c, body.updates ?? {});
+      if (forceDenied) return forceDenied;
       const denied = issueBatchUpdateAccess(c, input) ?? validateBatchWorkspaceBinding(c, input);
       if (denied) return denied;
       const result = store.batchUpdateIssues({

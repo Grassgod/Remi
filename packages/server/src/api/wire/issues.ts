@@ -406,6 +406,9 @@ export function issueDetailCompatibilityResponse(
   const attachments = withExtras.attachments ?? store.listAttachmentsForExistingIssue(issue.id);
   if (reactions.length) response.reactions = reactions.map(issueReactionCompatibilityResponse);
   if (attachments.length) response.attachments = attachments.map(issueDetailAttachmentCompatibilityResponse);
+  // MUL-400 E1: a plain COUNT so the detail surfaces can say "N sub-issues"
+  // without hydrating any child body (MUL-385 removed that payload on purpose).
+  response.child_count = store.countChildIssues(issue.id);
   return response;
 }
 

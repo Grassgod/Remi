@@ -32,8 +32,6 @@ function childDoneParentReason(reason: string | undefined, t: IssuesT): string {
       return t(($) => $.activity.child_done_parent_reason_agent_unavailable);
     case "squad_leader_unavailable":
       return t(($) => $.activity.child_done_parent_reason_squad_leader_unavailable);
-    case "active_task_exists":
-      return t(($) => $.activity.child_done_parent_reason_active_task_exists);
     default:
       return reason?.trim() || t(($) => $.activity.reason_unknown);
   }
@@ -127,6 +125,18 @@ export function formatActivity(
       });
     case "child_done_parent_triggered":
       return t(($) => $.activity.child_done_parent_triggered);
+    case "child_status_parent_coalesced":
+      return t(($) => $.activity.child_status_parent_coalesced);
+    case "parent_status_held":
+      return t(($) => $.activity.parent_status_held, {
+        status: statusLabel(details.requested ?? details.status ?? "?", t),
+      });
+    case "parent_status_derived":
+      return t(($) => $.activity.parent_status_derived);
+    case "issue_status_forced":
+      return t(($) => $.activity.issue_status_forced, {
+        status: statusLabel(details.status ?? "?", t),
+      });
     case "child_done_parent_skipped":
       return t(($) => $.activity.child_done_parent_skipped, {
         reason: childDoneParentReason(details.reason, t),

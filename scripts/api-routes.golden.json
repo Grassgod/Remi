@@ -14673,7 +14673,8 @@
             "emoji": "+1",
             "created_at": "<timestamp>"
           }
-        ]
+        ],
+        "child_count": 1
       }
     },
     {
@@ -19338,7 +19339,11 @@
           "childProgress": {
             "parentIssueId": "iss_snapshot",
             "total": 1,
-            "done": 0
+            "done": 0,
+            "cancelled": 0,
+            "blocked": 0,
+            "waiting": 0,
+            "active": 1
           },
           "dependencies": [
             {
@@ -19418,7 +19423,8 @@
               },
               "createdAt": "<timestamp>"
             }
-          ]
+          ],
+          "child_count": 1
         },
         "children": [
           {
@@ -19454,7 +19460,11 @@
         "childProgress": {
           "parentIssueId": "iss_snapshot",
           "total": 1,
-          "done": 0
+          "done": 0,
+          "cancelled": 0,
+          "blocked": 0,
+          "waiting": 0,
+          "active": 1
         },
         "dependencies": [
           {
