@@ -13,6 +13,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import {
   inboxItemsFromBody,
+  injectInboxTarget,
   isInboxReadStateEndpoint,
   isStubbedWrite,
   rewriteInboxReadState,
@@ -81,6 +82,17 @@ export interface ApiCollectors {
   webClientVersion: string | null;
   /** Response bodies of timeline requests, keyed by request URL. */
   timelineBodies: Map<string, unknown>;
+  /**
+   * The deep-link target this round wants on the browser's first inbox page, or
+   * null for every other scenario. See `injectInboxTarget`.
+   */
+  inboxTarget: Record<string, unknown> | null;
+  /** True once a first-page response had to have the target added. */
+  inboxInjected: boolean;
+  /** GET `/api/inbox/page` responses served before the first stubbed write. */
+  inboxPageRequestsBeforeStub: number;
+  /** Stubbed-write counters seen at the moment the first stub was fulfilled. */
+  inboxPageRequestsAtFirstStub: number | null;
 }
 
 /**
@@ -206,7 +218,13 @@ export async function seedSessionCookies(context: BrowserContext, origin: string
  * so a page that tries to write cannot reach the server; each distinct
  * method+path pair is reported with its attempt count.
  */
-export function attachCollectors(page: Page, round: number, label: string, knownIds: string[]): ApiCollectors {
+export function attachCollectors(
+  page: Page,
+  round: number,
+  label: string,
+  knownIds: string[],
+  options: { inboxTarget?: Record<string, unknown> | null } = {},
+): ApiCollectors {
   const collectors: ApiCollectors = {
     responses: new Map(),
     blockedWrites: [],
@@ -216,6 +234,10 @@ export function attachCollectors(page: Page, round: number, label: string, known
     knownIds,
     webClientVersion: null,
     timelineBodies: new Map(),
+    inboxTarget: options.inboxTarget ?? null,
+    inboxInjected: false,
+    inboxPageRequestsBeforeStub: 0,
+    inboxPageRequestsAtFirstStub: null,
   };
 
   void page.route("**/api/**", async (route) => {
@@ -235,6 +257,11 @@ export function attachCollectors(page: Page, round: number, label: string, known
       const existing = collectors.stubbedWrites.find(
         (write) => write.method === method && write.path === safePath,
       );
+      if (!existing) {
+        // Freeze the page-request count at the first stub: anything after this is
+        // the mark-read loop, not the initial load.
+        collectors.inboxPageRequestsAtFirstStub = collectors.inboxPageRequestsBeforeStub;
+      }
       if (existing) existing.attempts += 1;
       else collectors.stubbedWrites.push({ round, page: label, method, path: safePath, attempts: 1 });
       const itemId = stubbedWriteItemId(url);
@@ -296,9 +323,19 @@ async function continueWithStubbedReadState(
   url: string,
   collectors: ApiCollectors,
 ): Promise<void> {
-  if (collectors.stubbedItemIds.size === 0 || !isInboxReadStateEndpoint(method, url)) {
+  const isInboxRead = isInboxReadStateEndpoint(method, url);
+  // A deeplink round rewrites every inbox read-state response, whether or not a
+  // mark-read has happened yet: the target has to be on the first page from the
+  // very first load, and going through fetch+fulfill on every request keeps that
+  // fixed cost identical in each deeplink round. Every other scenario keeps the
+  // old behaviour (forward until a stub exists).
+  const wantsInjection = collectors.inboxTarget !== null && isInboxRead;
+  if (!isInboxRead || (!wantsInjection && collectors.stubbedItemIds.size === 0)) {
     await route.continue();
     return;
+  }
+  if (isInboxPageRequest(method, url) && collectors.inboxPageRequestsAtFirstStub === null) {
+    collectors.inboxPageRequestsBeforeStub += 1;
   }
   try {
     const response = await route.fetch();
@@ -306,6 +343,24 @@ async function continueWithStubbedReadState(
     for (const item of inboxItemsFromBody(body)) {
       const id = typeof item.id === "string" ? item.id : null;
       if (id) collectors.inboxItemSnapshot.set(id, item);
+    }
+    if (collectors.inboxTarget) {
+      const target = collectors.inboxTarget;
+      const targetId = typeof target.id === "string" ? target.id : null;
+      const hasCursor = hasCursorParam(url);
+      const injected = injectInboxTarget(body, target, { hasCursor });
+      // "Injected" means the first page did not already carry the target — the
+      // reader needs that to tell a natural first-screen hit from a prepared one.
+      if (!hasCursor && targetId && !pageContainsId(body, targetId)) collectors.inboxInjected = true;
+      for (const item of inboxItemsFromBody(injected)) {
+        const id = typeof item.id === "string" ? item.id : null;
+        if (id) collectors.inboxItemSnapshot.set(id, item);
+      }
+      await route.fulfill({
+        response,
+        json: rewriteInboxReadState(injected, collectors.stubbedItemIds),
+      });
+      return;
     }
     await route.fulfill({
       response,
@@ -316,6 +371,37 @@ async function continueWithStubbedReadState(
     // body simply passes through and the self-check will catch a stuck loop.
     await route.continue();
   }
+}
+
+/** True for `GET /api/inbox/page` — the request the injection counts. */
+function isInboxPageRequest(method: string, rawUrl: string): boolean {
+  const upper = method.toUpperCase();
+  return (upper === "GET" || upper === "HEAD") && pathnameWithoutQuery(rawUrl) === "/api/inbox/page";
+}
+
+/**
+ * Whether this inbox-page request carries a cursor. The response shape cannot say,
+ * and the injection behaves differently for the first page (add) and later pages
+ * (remove), so the request URL is the signal.
+ */
+function hasCursorParam(rawUrl: string): boolean {
+  try {
+    return new URL(rawUrl).searchParams.has("cursor");
+  } catch {
+    return /[?&]cursor=/.test(rawUrl);
+  }
+}
+
+function pathnameWithoutQuery(rawUrl: string): string {
+  try {
+    return new URL(rawUrl).pathname;
+  } catch {
+    return (rawUrl.split("?")[0] ?? rawUrl).replace(/^https?:\/\/[^/]+/, "");
+  }
+}
+
+function pageContainsId(body: unknown, id: string): boolean {
+  return inboxItemsFromBody(body).some((item) => item.id === id);
 }
 
 export interface ResourceEntry {

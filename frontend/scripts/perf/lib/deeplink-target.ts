@@ -6,8 +6,24 @@
  * `cmt_5857w2m9uiyi`) sits next to the code that applies it.
  */
 
+// Deep import, not the package barrel: grouping.ts does the same, and the barrel
+// pulls in NodeNext-specified protocol modules the probe has no use for.
+import { isInboxLedgerType } from "@multiremi/contracts/inbox";
+
 /** Inbox notification types that render `AutopilotRunReport` instead of a timeline. */
 export const AUTOPILOT_INBOX_TYPES = ["autopilot_run", "autopilot_run_report", "autopilot"];
+
+/**
+ * Whether selecting this notification would win `?issue=<issueId>`.
+ *
+ * `inboxItemSelectionKind` sends ledger rows (autopilot runs, organizer actions) to
+ * `?item=<id>` instead, so they never compete for an `?issue=` selection. Only rows
+ * that resolve by issue can supersede the probe's chosen target.
+ */
+export function selectsByIssue(item: InboxCandidateInput): boolean {
+  const type = String(item.type ?? "");
+  return Boolean(item.issue_id) && !isInboxLedgerType(type);
+}
 
 /** The subset of an `/api/inbox/page` row this module reads. */
 export interface InboxCandidateInput {

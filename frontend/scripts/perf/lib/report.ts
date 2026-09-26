@@ -45,6 +45,15 @@ export interface ReportRoundSummary {
   stubbedWrites: number;
   /** Milliseconds from the click to the `?issue=` commit; a correctness check. */
   urlCommitMs: number | null;
+  /** True when the browser's first inbox page had the target injected. */
+  inboxInjected: boolean;
+  /** GET `/api/inbox/page` responses served before the first stubbed write. */
+  inboxPageRequestsBeforeStub: number | null;
+  /**
+   * Text of the row the warm click targeted. The acceptance check is "the clicked
+   * row is the target issue", and only the row's own text can show that.
+   */
+  clickedRowText?: string | null;
   heapBytes: number | null;
   /** The anchor's rect at the ready frame, in root-relative coordinates. */
   anchorRectAtReady?: { top: number; bottom: number; height: number; rootHeight: number } | null;
@@ -96,6 +105,8 @@ export interface ReportScenario {
   targetRead?: boolean;
   /** True when any notification on the target's rendered row is unread. */
   targetGroupHasUnread?: boolean;
+  /** 1-based API page the probe read the target from. */
+  inboxApiPage?: number | null;
   hoverLeadMs: number | null;
   rounds: ReportRoundSummary[];
   stats: PerfScenarioStats;
@@ -204,10 +215,10 @@ export function buildMarkdown(report: {
   lines.push("## 每轮明细");
   lines.push("");
   lines.push(
-    "| 场景 | 模式 | 轮 | ready ms | firstReal ms | anchorVisible ms | anchor | anchorRect(top/bottom/height/root) | appReady ms | 跳动数 | 位移 px | CLS | LCP ms | 最慢 Server-Timing ms | chunks | chunk bytes | 串行深度 | 首屏 API | 拦截写请求 | 桩写请求 | URL 提交 ms | error |",
+    "| 场景 | 模式 | 轮 | ready ms | firstReal ms | anchorVisible ms | anchor | anchorRect(top/bottom/height/root) | appReady ms | 跳动数 | 位移 px | CLS | LCP ms | 最慢 Server-Timing ms | chunks | chunk bytes | 串行深度 | 首屏 API | 拦截写请求 | 桩写请求 | URL 提交 ms | 目标前置 | 前置前 inbox 请求 | 点击行文本 | error |",
   );
   lines.push(
-    "| --- | --- | ---: | ---: | ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+    "| --- | --- | ---: | ---: | ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |",
   );
   for (const scenario of report.scenarios) {
     for (const round of scenario.rounds) {
@@ -216,7 +227,7 @@ export function buildMarkdown(report: {
         ? `${rect.top}/${rect.bottom}/${rect.height}/${rect.rootHeight}`
         : "-";
       lines.push(
-        `| ${scenario.key} | ${scenario.mode} | ${round.round} | ${fmtMs(round.readyMs)}${round.readyTimeout ? " ⚠" : ""} | ${fmtMs(round.firstRealMs)} | ${fmtMs(round.anchorVisibleMs)} | ${round.anchorName ?? "-"} | ${rectText} | ${fmtMs(round.appReadyMs)}${round.appReadyForced ? " (forced)" : ""} | ${round.jumpCount} | ${fmtMs(round.jumpPx)} | ${round.cls} | ${fmtMs(round.lcpMs)} | ${fmtMs(round.slowestServerTotalMs)} | ${round.chunksLoaded} | ${fmtBytes(round.chunkBytes)} | ${round.serialDepth ?? "-"} | ${round.apiFirstScreen}/${round.apiCallsTotal} | ${round.blockedWrites} | ${round.stubbedWrites} | ${fmtMs(round.urlCommitMs)} | ${round.error ?? "-"} |`,
+        `| ${scenario.key} | ${scenario.mode} | ${round.round} | ${fmtMs(round.readyMs)}${round.readyTimeout ? " ⚠" : ""} | ${fmtMs(round.firstRealMs)} | ${fmtMs(round.anchorVisibleMs)} | ${round.anchorName ?? "-"} | ${rectText} | ${fmtMs(round.appReadyMs)}${round.appReadyForced ? " (forced)" : ""} | ${round.jumpCount} | ${fmtMs(round.jumpPx)} | ${round.cls} | ${fmtMs(round.lcpMs)} | ${fmtMs(round.slowestServerTotalMs)} | ${round.chunksLoaded} | ${fmtBytes(round.chunkBytes)} | ${round.serialDepth ?? "-"} | ${round.apiFirstScreen}/${round.apiCallsTotal} | ${round.blockedWrites} | ${round.stubbedWrites} | ${fmtMs(round.urlCommitMs)} | ${round.inboxInjected ? "注入" : "-"} | ${round.inboxPageRequestsBeforeStub ?? "-"} | ${(round.clickedRowText ?? "-").replace(/\|/g, "\\|").replace(/\n/g, " ").slice(0, 60)} | ${round.error ?? "-"} |`,
       );
     }
   }
@@ -341,6 +352,9 @@ export function buildHtml(report: {
       <td class="num">${round.blockedWrites}</td>
       <td class="num">${round.stubbedWrites}</td>
       <td class="num">${fmtMs(round.urlCommitMs)}</td>
+      <td>${round.inboxInjected ? "注入" : "-"}</td>
+      <td class="num">${round.inboxPageRequestsBeforeStub ?? "-"}</td>
+      <td class="muted">${esc((round.clickedRowText ?? "-").slice(0, 60))}</td>
       <td class="muted">${esc(round.error ?? "-")}</td>
     </tr>`,
       ),
@@ -449,7 +463,7 @@ ${rows}
 </table></div>
 <h2>每轮明细</h2>
 <div class="tablewrap"><table>
-<thead><tr><th>场景</th><th>模式</th><th class="num">轮</th><th class="num">ready ms</th><th class="num">firstReal ms</th><th class="num">anchorVisible ms</th><th>anchor</th><th>anchorRect(top/bottom/height/root)</th><th class="num">appReady ms</th><th class="num">跳动数</th><th class="num">位移 px</th><th class="num">CLS</th><th class="num">LCP ms</th><th class="num">最慢 Server-Timing ms</th><th class="num">chunks</th><th class="num">chunk bytes</th><th class="num">串行深度</th><th class="num">首屏 API</th><th class="num">拦截写请求</th><th class="num">桩写请求</th><th class="num">URL 提交 ms</th><th>error</th></tr></thead>
+<thead><tr><th>场景</th><th>模式</th><th class="num">轮</th><th class="num">ready ms</th><th class="num">firstReal ms</th><th class="num">anchorVisible ms</th><th>anchor</th><th>anchorRect(top/bottom/height/root)</th><th class="num">appReady ms</th><th class="num">跳动数</th><th class="num">位移 px</th><th class="num">CLS</th><th class="num">LCP ms</th><th class="num">最慢 Server-Timing ms</th><th class="num">chunks</th><th class="num">chunk bytes</th><th class="num">串行深度</th><th class="num">首屏 API</th><th class="num">拦截写请求</th><th class="num">桩写请求</th><th class="num">URL 提交 ms</th><th>目标前置</th><th class="num">前置前 inbox 请求</th><th>点击行文本</th><th>error</th></tr></thead>
 <tbody>
 ${detailRows}
 </tbody>

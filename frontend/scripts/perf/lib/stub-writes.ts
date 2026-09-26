@@ -131,6 +131,69 @@ export function stubLoopNotTerminated(stubbedCalls: number, unreadIdCount: numbe
   return stubbedCalls > 2 * unreadIdCount;
 }
 
+/** How to treat one inbox response body when injecting the deep-link target. */
+export interface InboxInjectionContext {
+  /**
+   * True when the response answers a cursor request. The response shape does not
+   * say which request produced it, so the caller passes this in: it decides whether
+   * the target is added (first page) or removed (later pages).
+   */
+  hasCursor: boolean;
+}
+
+/**
+ * Puts the deep-link target on the browser's first inbox page.
+ *
+ * The probe picks its target from up to `--inbox-probe-pages` API pages, but the
+ * scenario must still measure "the target is on the first screen": letting the
+ * extra pages into the measurement window would mix how old the newest mention
+ * happens to be into `readyMs`, and a row whose page number changes between runs
+ * cannot be compared (MUL-384 `cmt_lkj0gsgtkfey`). So instead of paging the UI,
+ * the first-page response is rewritten to include the target, and later pages drop
+ * it so the client never loads it twice.
+ *
+ * The injected position does not matter: `inbox-page.tsx` flattens the loaded
+ * pages and then groups by date and created_at, so the rendered order comes from
+ * the item's own timestamp rather than from where it sat in the array.
+ *
+ * Returns a new object; the input is never mutated, because the caller reuses the
+ * body it fetched for the item snapshot.
+ */
+export function injectInboxTarget(
+  body: unknown,
+  target: Record<string, unknown> | null,
+  context: InboxInjectionContext,
+): unknown {
+  if (!target) return body;
+  const targetId = typeof target.id === "string" ? target.id : null;
+  if (!targetId) return body;
+  if (Array.isArray(body)) {
+    // `/api/inbox` returns the whole list with no cursor, so it behaves like the
+    // first page: make sure the target is in it.
+    return containsTarget(body, targetId) ? body : [...body, target];
+  }
+  if (body && typeof body === "object" && Array.isArray((body as { items?: unknown }).items)) {
+    const page = body as { items: unknown[] };
+    if (context.hasCursor) {
+      // A later page must not also carry the target, or the client would load two
+      // copies of the same notification and the DOM row index would be ambiguous.
+      return { ...page, items: page.items.filter((item) => !isItemWithId(item, targetId)) };
+    }
+    return containsTarget(page.items, targetId)
+      ? body
+      : { ...page, items: [...page.items, target] };
+  }
+  return body;
+}
+
+function isItemWithId(item: unknown, id: string): boolean {
+  return !!item && typeof item === "object" && (item as Record<string, unknown>).id === id;
+}
+
+function containsTarget(items: readonly unknown[], id: string): boolean {
+  return items.some((item) => isItemWithId(item, id));
+}
+
 /** The body the stubbed POST answers with: the snapshot item, marked read. */
 export function stubbedReadResponseBody(
   itemId: string,

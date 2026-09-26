@@ -83,11 +83,12 @@ import {
 } from "./lib/selectors";
 import {
   rankDeepLinkCandidates,
+  selectsByIssue,
   unreadIdsInRow,
   type DeepLinkCandidate,
   type InboxCandidateInput,
 } from "./lib/deeplink-target";
-import { STUBBED_WRITES, stubLoopNotTerminated } from "./lib/stub-writes";
+import { injectInboxTarget, STUBBED_WRITES, stubLoopNotTerminated } from "./lib/stub-writes";
 import type { InboxItem } from "../../packages/core/types/inbox";
 import {
   buildCompare,
@@ -105,6 +106,17 @@ const DEFAULT_ROUNDS = 3;
 const DEFAULT_OUT_DIR = "reports/performance";
 const DEFAULT_QUIET_MS = 500;
 const DEFAULT_HOVER_LEAD_MS = 150;
+/**
+ * How many inbox API pages the deep-link probe reads before giving up.
+ *
+ * The target must exist in the account's inbox, not necessarily on page one: the
+ * first page only covers a few hours on a busy account, so a page-one-only rule
+ * made the scenario untestable for most of the day (MUL-384 `cmt_sr7dl2nrdyq7`).
+ * Ten pages at `limit=100` reach roughly the last 1000 notifications.
+ */
+const DEFAULT_INBOX_PROBE_PAGES = 10;
+/** Page size for the probe reads; 100 is the server's maximum. */
+const INBOX_PROBE_PAGE_SIZE = 100;
 const RECORDER_GLOBAL = "__mul383Recorder";
 /** Entry-page rows appear only after the route's data lands; dev servers also compile on first hit. */
 const WARM_ENTRY_TIMEOUT_MS = 15_000;
@@ -162,6 +174,8 @@ interface Options {
   issueLong: string;
   issueRunning: string | null;
   inboxItem: string | null;
+  /** How many inbox API pages the probe may read to find a target (default 10). */
+  inboxProbePages: number;
   hoverLeadMs: number;
   only: string | null;
   /**
@@ -187,6 +201,7 @@ function parseArgs(argv: string[]): Options {
     issueLong: "iss_enbrunyg86jc",
     issueRunning: null,
     inboxItem: null,
+    inboxProbePages: DEFAULT_INBOX_PROBE_PAGES,
     hoverLeadMs: DEFAULT_HOVER_LEAD_MS,
     only: null,
     warmup: false,
@@ -243,6 +258,9 @@ function parseArgs(argv: string[]): Options {
       case "--inbox-item":
         opts.inboxItem = next();
         break;
+      case "--inbox-probe-pages":
+        opts.inboxProbePages = Number.parseInt(next(), 10);
+        break;
       case "--hover-lead-ms":
         opts.hoverLeadMs = Number.parseInt(next(), 10);
         break;
@@ -262,6 +280,9 @@ function parseArgs(argv: string[]): Options {
     }
   }
   if (!Number.isFinite(opts.rounds) || opts.rounds < 1) throw new Error("--rounds must be >= 1");
+  if (!Number.isFinite(opts.inboxProbePages) || opts.inboxProbePages < 1) {
+    throw new Error("--inbox-probe-pages must be >= 1");
+  }
   return opts;
 }
 
@@ -277,7 +298,8 @@ function printUsage(): void {
       "  --issue-short <id>     short issue for detail-short (default iss_in41j1x1dq66, MUL-67)",
       "  --issue-long <id>      long issue for detail-long (default iss_enbrunyg86jc, MUL-70)",
       "  --issue-running <id>   agent-running issue; auto-selected when omitted",
-      "  --inbox-item <id>      deep-link inbox item; auto-selected from page one when omitted",
+      "  --inbox-item <id>      deep-link inbox item; auto-selected from the probe window when omitted",
+      `  --inbox-probe-pages <n>  how many inbox API pages the target probe may read (default ${DEFAULT_INBOX_PROBE_PAGES})`,
       `  --hover-lead-ms <n>    hover lead before an in-app click (default ${DEFAULT_HOVER_LEAD_MS})`,
       `  --out <dir>            output directory (default ${DEFAULT_OUT_DIR})`,
       "  --name <stem>          output file stem (default mul383-page-speed-<timestamp>)",
@@ -319,6 +341,11 @@ interface Scenario {
    * for every non-deep-link scenario.
    */
   inboxUnreadIds: string[];
+  /**
+   * The raw inbox row the browser's first page must contain, or null when the
+   * scenario does not need the response rewrite. See `injectInboxTarget`.
+   */
+  inboxTarget: Record<string, unknown> | null;
   target: { identifier: string; note?: string };
   targetSelection: string | null;
   /**
@@ -335,6 +362,10 @@ interface DeepLinkTarget extends DeepLinkCandidate {
   rowIndex: number;
   /** Unread notification ids in this target's rendered row, for the stub bound. */
   unreadIdsInRow: string[];
+  /** The raw API row, injected into the browser's first page and used as the stub body. */
+  raw: InboxPageItem;
+  /** 1-based API page the probe found this target on. */
+  apiPage: number;
 }
 
 interface RunningIssue {
@@ -382,6 +413,10 @@ interface RoundMeasurement {
   urlCommitMs: number | null;
   /** Text of the row the warm click targeted, for post-hoc attribution. */
   clickedRowText: string | null;
+  /** True when the browser's first page had to have the target injected. */
+  inboxInjected: boolean;
+  /** GET `/api/inbox/page` responses served before the first stubbed write. */
+  inboxPageRequestsBeforeStub: number | null;
   timelineRequests: number;
   targetIndexFromLatest: number | null;
   slowestServerTotalMs: number | null;
@@ -400,6 +435,8 @@ interface RoundMeasurement {
 function recordWriteCounts(measurement: RoundMeasurement, collectors: ApiCollectors): void {
   measurement.blockedWrites = collectors.blockedWrites.reduce((sum, write) => sum + write.attempts, 0);
   measurement.stubbedWrites = collectors.stubbedWrites.reduce((sum, write) => sum + write.attempts, 0);
+  measurement.inboxInjected = collectors.inboxInjected;
+  measurement.inboxPageRequestsBeforeStub = collectors.inboxPageRequestsAtFirstStub;
 }
 
 function roundSummary(round: RoundMeasurement): ReportRoundSummary {
@@ -430,6 +467,9 @@ function roundSummary(round: RoundMeasurement): ReportRoundSummary {
     blockedWrites: round.blockedWrites,
     stubbedWrites: round.stubbedWrites,
     urlCommitMs: round.urlCommitMs,
+    inboxInjected: round.inboxInjected,
+    inboxPageRequestsBeforeStub: round.inboxPageRequestsBeforeStub,
+    clickedRowText: round.clickedRowText,
     heapBytes: null,
     anchorRectAtReady: round.anchorRectAtReady,
     // Only the deep link has a target inside the timeline; every other scenario
@@ -455,16 +495,22 @@ interface InboxPageItem {
   type?: string;
   read?: boolean;
   archived?: boolean;
+  created_at?: string;
   details?: { comment_id?: string | null; issue_session_id?: string | null } | null;
 }
 
 /**
- * Picks the deep-link target from the first inbox page.
+ * Picks the deep-link target from the recent inbox pages.
  *
- * A fixed item would defeat the measurement: `inbox-page.tsx` walks pages until
- * it finds the selection key, so an item buried thousands of rows deep turns a
- * cold deep link into a paging test. The probe therefore picks from page one
- * (`/api/inbox/page?limit=50`, newest-first) and both modes use the same choice.
+ * Reading more than one API page is what keeps this scenario measurable: page one
+ * covers only a few hours on a busy account, so a page-one-only rule skipped the
+ * whole scenario whenever no recent mention existed (MUL-384 `cmt_sr7dl2nrdyq7`).
+ *
+ * The extra pages are *only* used to choose a target. The measured round still
+ * exercises "the target is on the first screen", because `lib/harness.ts` injects
+ * the chosen item into the browser's first-page response — paging the UI would mix
+ * how old the newest mention happens to be into `readyMs`, and a row whose page
+ * number changes between runs cannot be compared (MUL-384 `cmt_lkj0gsgtkfey`).
  *
  * The selected key is an *issue*, not a notification id: `inboxItemSelectionKind`
  * sends every notification carrying an `issue_id` to `?issue=<issueId>&session=`,
@@ -473,50 +519,87 @@ interface InboxPageItem {
  * render `AutopilotRunReport` instead of an issue timeline, so they are not
  * eligible here anyway.
  *
- * `--inbox-item` remains an explicit override and must be on page one; an item
- * that is not is reported as skipped rather than measured as a paging exercise.
+ * `--inbox-item` remains an explicit override and must be inside the probe window.
  */
 async function probeDeepLinkTarget(options: {
   baseUrl: string;
   token: string;
   pinnedItemId: string | null;
   runningIssueIds: Set<string>;
+  probePages: number;
 }): Promise<{ target: DeepLinkTarget | null; skipped: string | null }> {
-  const { baseUrl, token, pinnedItemId, runningIssueIds } = options;
+  const { baseUrl, token, pinnedItemId, runningIssueIds, probePages } = options;
 
   const headers = { Authorization: `Bearer ${token}` };
-  let firstPage: InboxPageItem[] = [];
+  const pages: Array<{ items: InboxPageItem[]; hasCursor: boolean }> = [];
+  let cursor: string | null = null;
   try {
-    const res = await fetch(`${baseUrl}/api/inbox/page?limit=50`, { headers });
-    if (res.ok) {
-      const body = (await res.json()) as { items?: InboxPageItem[] };
-      firstPage = Array.isArray(body.items) ? body.items : [];
+    for (let page = 0; page < probePages; page++) {
+      const query = new URLSearchParams({ limit: String(INBOX_PROBE_PAGE_SIZE) });
+      if (cursor) query.set("cursor", cursor);
+      const res = await fetch(`${baseUrl}/api/inbox/page?${query.toString()}`, { headers });
+      if (!res.ok) break;
+      const body = (await res.json()) as { items?: InboxPageItem[]; next_cursor?: string | null; has_more?: boolean };
+      const items = Array.isArray(body.items) ? body.items : [];
+      pages.push({ items, hasCursor: page > 0 });
+      cursor = typeof body.next_cursor === "string" ? body.next_cursor : null;
+      if (!cursor || body.has_more === false) break;
     }
   } catch {
     // Reported as "no eligible item" below.
   }
 
+  // Newest-first across pages: page order already reflects the keyset cursor.
+  const allItems: Array<InboxPageItem & { __page?: number }> = pages.flatMap((entry, index) =>
+    entry.items.map((item) => ({ ...item, __page: index + 1 })),
+  );
+  // The first page drives the injection decision and the row index; it is the page
+  // the browser actually receives unmodified.
+  const firstPage = pages[0]?.items ?? [];
+
   if (pinnedItemId) {
-    const index = firstPage.findIndex((item) => item.id === pinnedItemId);
-    if (index < 0) return { target: null, skipped: "inbox-item-not-on-first-page" };
-    const candidate = rankDeepLinkCandidates(firstPage, runningIssueIds)
+    const candidate = rankDeepLinkCandidates(allItems, runningIssueIds)
       .find((entry) => entry.inboxItemId === pinnedItemId);
-    if (!candidate) return { target: null, skipped: "inbox-item-has-no-comment" };
-    return finishDeepLinkTarget(candidate, firstPage);
+    if (!candidate) {
+      const raw = allItems.find((item) => item.id === pinnedItemId);
+      // Distinguish "not in the probe window" from "in the window but ineligible":
+      // the two need different follow-ups.
+      return {
+        target: null,
+        skipped: raw ? "inbox-item-has-no-comment" : "inbox-item-not-found-within-probe-depth",
+      };
+    }
+    return finishDeepLinkTarget(candidate, firstPage, allItems);
   }
 
-  const candidates = rankDeepLinkCandidates(firstPage, runningIssueIds);
+  const candidates = rankDeepLinkCandidates(allItems, runningIssueIds);
   if (candidates.length === 0) return { target: null, skipped: "no-eligible-inbox-item" };
-  // The API page is not the DOM: the page collapses it before rendering. Resolve
-  // every candidate to its DOM row here, in the probe, so a target that cannot be
-  // clicked is a skip instead of a click on the wrong row.
   for (const candidate of candidates) {
-    const finished = finishDeepLinkTarget(candidate, firstPage);
+    const finished = finishDeepLinkTarget(candidate, firstPage, allItems);
     if (finished.target) return finished;
   }
-  // Nothing eligible survives the DOM mapping. Distinguish "no eligible item at
-  // all" from "eligible but not rendered", because the fixes differ.
   return { target: null, skipped: "no-eligible-inbox-item-in-dom" };
+}
+
+/**
+ * True when the real first page already carries a newer notification for the
+ * target's issue.
+ *
+ * `?issue=` selects that issue's *newest* notification, so a newer one on page one
+ * would be selected instead of the probed item: the measured landing point would
+ * differ from the reported target. Reported as a skip rather than measured as
+ * something else.
+ */
+function isTargetSuperseded(firstPage: InboxPageItem[], targetIssueId: string, targetCreatedAt: string): boolean {
+  return firstPage.some(
+    (item) =>
+      item.issue_id === targetIssueId
+      // A ledger row selects by `?item=`, so it never competes for the `?issue=`
+      // selection and cannot supersede the target.
+      && selectsByIssue(item as InboxCandidateInput)
+      && typeof item.created_at === "string"
+      && item.created_at > targetCreatedAt,
+  );
 }
 
 /**
@@ -530,15 +613,36 @@ async function probeDeepLinkTarget(options: {
 function finishDeepLinkTarget(
   candidate: DeepLinkCandidate,
   firstPage: InboxPageItem[],
+  allItems: InboxPageItem[],
 ): { target: DeepLinkTarget | null; skipped: string | null } {
-  const rowIndex = inboxDomRowIndex(firstPage as unknown as InboxItem[], candidate.inboxItemId);
+  const raw = allItems[candidate.apiIndex] as (InboxPageItem & { __page?: number }) | undefined;
+  if (!raw) return { target: null, skipped: "no-eligible-inbox-item" };
+  const apiPage = typeof raw.__page === "number" ? raw.__page : 1;
+  const createdAt = typeof raw.created_at === "string" ? raw.created_at : "";
+  // A newer notification for the same issue on the real first page would win the
+  // `?issue=` selection, so the measured landing point would not be this target.
+  if (createdAt && isTargetSuperseded(firstPage, candidate.issueId, createdAt)) {
+    return { target: null, skipped: "inbox-target-superseded" };
+  }
+  // The row index and the unread set are computed on the page the browser will
+  // actually receive: the real first page with the target injected. Anything else
+  // would describe a list the measured round never renders.
+  const prepared = injectInboxTarget(
+    { items: firstPage },
+    raw as unknown as Record<string, unknown>,
+    { hasCursor: false },
+  );
+  const preparedItems = (prepared as { items: InboxPageItem[] }).items;
+  const rowIndex = inboxDomRowIndex(preparedItems as unknown as InboxItem[], candidate.inboxItemId);
   if (rowIndex === null) return { target: null, skipped: "no-eligible-inbox-item-in-dom" };
   return {
     target: {
       ...candidate,
       issueIdentifier: candidate.issueId,
       rowIndex,
-      unreadIdsInRow: unreadIdsInRow(firstPage as unknown as InboxCandidateInput[], candidate.issueId),
+      unreadIdsInRow: unreadIdsInRow(preparedItems as unknown as InboxCandidateInput[], candidate.issueId),
+      raw,
+      apiPage,
     },
     skipped: null,
   };
@@ -770,6 +874,8 @@ function blankRound(round: number, url: string): RoundMeasurement {
     navStartMs: 0,
     urlCommitMs: null,
     clickedRowText: null,
+    inboxInjected: false,
+    inboxPageRequestsBeforeStub: null,
     clickT: null,
     timelineRequests: 0,
     targetIndexFromLatest: null,
@@ -892,7 +998,11 @@ async function measureRound(options: {
     profiles: profilesFor({ modes: ["contract", "legacy"], shape: scenario.shape, targetCommentId: scenario.targetCommentId }),
   });
   const page = await context.newPage();
-  const collectors = attachCollectors(page, round, scenario.key, knownIds);
+  const collectors = attachCollectors(page, round, scenario.key, knownIds, {
+    // Only the deep link needs the response rewrite: its target has to be on the
+    // browser's first inbox page even when the probe found it further down.
+    inboxTarget: scenario.inboxTarget,
+  });
 
   try {
     if (cold) {
@@ -1165,7 +1275,14 @@ async function resolveWarmRowIndex(
   if (scenario.inboxItemId === null) return 0;
   const fresh = await fetchInboxPageItems(opts.baseUrl, token);
   if (fresh.length === 0) return null;
-  const index = inboxDomRowIndex(fresh as unknown as InboxItem[], scenario.inboxItemId);
+  // The row index has to describe the list the browser actually received: the real
+  // first page with the target injected. Indexing the un-injected page would point
+  // at a different notification whenever the probe read past page one.
+  const prepared = scenario.inboxTarget
+    ? injectInboxTarget({ items: fresh }, scenario.inboxTarget, { hasCursor: false })
+    : { items: fresh };
+  const preparedItems = (prepared as { items: Array<Record<string, unknown>> }).items;
+  const index = inboxDomRowIndex(preparedItems as unknown as InboxItem[], scenario.inboxItemId);
   if (index === null || index >= count) return null;
   return index;
 }
@@ -1408,6 +1525,7 @@ function buildScenarios(options: {
         expectIssueId: null,
         expectIdentifier: null,
         inboxUnreadIds: [],
+        inboxTarget: null,
         target: { identifier: detail.identifier, ...(detail.note ? { note: detail.note } : {}) },
         targetSelection: null,
         skipReason: detail.skipReason,
@@ -1425,11 +1543,14 @@ function buildScenarios(options: {
         deepLink.sessionId ? `&session=${encodeURIComponent(deepLink.sessionId)}` : ""
       }`
       : "/inbox";
+    // `none` when the probe produced no target: the old ternary folded that case
+    // into `pinned`, so a skipped row claimed a pinned target it never had
+    // (MUL-384 `cmt_sr7dl2nrdyq7`).
     const targetSelection = options.pinnedInboxItem
       ? "pinned"
       : options.deepLinkAuto
-        ? "auto-first-page"
-        : "pinned";
+        ? "auto"
+        : "none";
     for (const mode of ["cold", "warm"] as const) {
       scenarios.push({
         key: "deeplink",
@@ -1445,6 +1566,7 @@ function buildScenarios(options: {
         expectIssueId: deepLink?.issueId ?? null,
         expectIdentifier: deepLink?.issueIdentifier ?? null,
         inboxUnreadIds: deepLink?.unreadIdsInRow ?? [],
+        inboxTarget: (deepLink?.raw as Record<string, unknown> | undefined) ?? null,
         target: {
           identifier: deepLink
             ? `${deepLink.issueId}${deepLink.issueHasRunningTask ? "（running）" : ""}`
@@ -1473,6 +1595,7 @@ function buildScenarios(options: {
         expectIssueId: null,
         expectIdentifier: null,
         inboxUnreadIds: [],
+        inboxTarget: null,
         target: { identifier: page.key },
         targetSelection: null,
         skipReason: null,
@@ -1600,6 +1723,7 @@ async function main(): Promise<void> {
       token,
       pinnedItemId: opts.inboxItem,
       runningIssueIds: allRunningIssueIds,
+      probePages: opts.inboxProbePages,
     });
     phase("probeDeepLinkTarget", phaseStarted);
 
@@ -1803,6 +1927,10 @@ async function main(): Promise<void> {
         label: rule.label,
         reason: rule.reason,
       })),
+      // The response rewrites are part of the measurement contract: the first puts
+      // the deep-link target on the browser's first page, the second stops the
+      // mark-read retry loop.
+      inboxResponseRewrites: ["target-injection", "read-state"],
       ambientLatency: { before: ambientBefore, after: ambientAfter },
       ambientNote:
         "生产为共享环境：同一台机器复跑时，先看 /api/config 的中位耗时是否与本次接近，再比较页面数字。",
@@ -1886,6 +2014,8 @@ function deepLinkScenarioFields(
   inboxDomRowIndex?: number | null;
   targetRead?: boolean;
   targetGroupHasUnread?: boolean;
+  /** 1-based API page the probe read the target from. */
+  inboxApiPage?: number | null;
 } {
   if (scenario.key !== "deeplink") return {};
   if (!target) return scenario.targetSelection ? { targetSelection: scenario.targetSelection } : {};
@@ -1901,6 +2031,7 @@ function deepLinkScenarioFields(
     // a mark-read was expected at all (the stub self-check's denominator).
     targetRead: target.read,
     targetGroupHasUnread: target.groupHasUnread,
+    inboxApiPage: target.apiPage,
   };
 }
 

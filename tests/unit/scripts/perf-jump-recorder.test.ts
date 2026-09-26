@@ -36,6 +36,7 @@ import {
 } from "../../../frontend/scripts/perf/lib/selectors";
 import { buildHtml, buildMarkdown } from "../../../frontend/scripts/perf/lib/report";
 import {
+  injectInboxTarget,
   isInboxReadStateEndpoint,
   isStubbedWrite,
   rewriteInboxReadState,
@@ -616,6 +617,8 @@ describe("report write-counter columns", () => {
     blockedWrites: 2,
     stubbedWrites: 1,
     urlCommitMs: 880,
+    inboxInjected: true,
+    inboxPageRequestsBeforeStub: 1,
     heapBytes: null,
     anchorRectAtReady: null,
     targetDepth: { timelineRequests: 0, targetIndexFromLatest: null },
@@ -642,10 +645,10 @@ describe("report write-counter columns", () => {
 
   it("reports aborted and stubbed writes in separate columns in MD", () => {
     const md = buildMarkdown({ meta: {}, scenarios: [scenario] as never, blockedWrites: [], stubbedWrites: stubs as never, compare: null });
-    expect(md).toContain("| 拦截写请求 | 桩写请求 | URL 提交 ms |");
+    expect(md).toContain("| 拦截写请求 | 桩写请求 | URL 提交 ms | 目标前置 | 前置前 inbox 请求 | error |");
     expect(md).toContain("被允许表接管的写请求");
     // The round row carries both counters and the URL commit.
-    expect(md).toMatch(/\| deeplink \| warm \| 1 \|.*\| 2 \| 1 \| 880\.0 \|/);
+    expect(md).toMatch(/\| deeplink \| warm \| 1 \|.*\| 2 \| 1 \| 880\.0 \| 注入 \| 1 \|/);
   });
 
   it("keeps every HTML table's header and body cell counts equal", () => {
@@ -721,6 +724,56 @@ describe("rankDeepLinkCandidates", () => {
     ];
     const ranked = rankDeepLinkCandidates(page, new Set());
     expect(ranked.map((candidate) => candidate.inboxItemId)).toEqual(["good"]);
+  });
+});
+
+describe("injectInboxTarget", () => {
+  const target = { id: "inb_target", issue_id: "iss_1", read: false, created_at: "2026-09-27T00:00:00.000Z" };
+  const other = { id: "inb_other", issue_id: "iss_2", read: false, created_at: "2026-09-27T01:00:00.000Z" };
+
+  it("adds the target to a first-page body", () => {
+    // Without this the measured round would page the UI to reach a target the
+    // probe found on page 2+, which would fold the target's age into readyMs.
+    const body = { items: [other], limit: 50, has_more: true };
+    const injected = injectInboxTarget(body, target, { hasCursor: false }) as { items: unknown[] };
+    expect(injected.items).toHaveLength(2);
+    expect(injected.items).toContainEqual(target);
+    expect(injected.has_more).toBe(true);
+  });
+
+  it("leaves a first-page body alone when the target is already there", () => {
+    const body = { items: [other, target], limit: 50 };
+    expect(injectInboxTarget(body, target, { hasCursor: false })).toBe(body);
+  });
+
+  it("removes the target from a cursor page so the client cannot load it twice", () => {
+    const body = { items: [other, target], limit: 50 };
+    const injected = injectInboxTarget(body, target, { hasCursor: true }) as { items: unknown[] };
+    expect(injected.items).toEqual([other]);
+  });
+
+  it("treats the bare-array endpoint like a first page", () => {
+    const injected = injectInboxTarget([other], target, { hasCursor: false }) as unknown[];
+    expect(injected).toHaveLength(2);
+    // Already present: the input is returned untouched.
+    const present = [other, target];
+    expect(injectInboxTarget(present, target, { hasCursor: false })).toBe(present);
+  });
+
+  it("never mutates the input, because the caller reuses it as the item snapshot", () => {
+    const items = [other];
+    const body = { items };
+    injectInboxTarget(body, target, { hasCursor: false });
+    expect(items).toEqual([other]);
+    const cursorBody = { items: [other, target] };
+    injectInboxTarget(cursorBody, target, { hasCursor: true });
+    expect(cursorBody.items).toHaveLength(2);
+  });
+
+  it("is a no-op without a target or with an id-less target", () => {
+    const body = { items: [other] };
+    expect(injectInboxTarget(body, null, { hasCursor: false })).toBe(body);
+    expect(injectInboxTarget(body, { issue_id: "iss_1" }, { hasCursor: false })).toBe(body);
   });
 });
 

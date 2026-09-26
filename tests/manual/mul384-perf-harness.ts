@@ -28,6 +28,9 @@
  *                        so auto-selection has nothing eligible to pick
  *   MUL384_ARCHIVE_FIXTURE=1  archive the short fixture, so the fixture precheck's
  *                        skip path (`skipped: fixture-archived`) is exercised
+ *   MUL384_INBOX_PAGE2=1  bury the deep-link target under >100 newer ledger rows, so
+ *                        it naturally lands on page 2 and the probe must read
+ *                        beyond page one (`inboxInjected=true`)
  */
 import { Database } from "bun:sqlite";
 import { mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync } from "node:fs";
@@ -249,12 +252,27 @@ try {
   const deepLinkDetails = process.env.MUL384_INBOX_ELIGIBLE === "0"
     ? {}
     : { comment_id: targetComment?.id ?? null, issue_session_id: deepLinkSession.id };
-  insertInbox(inboxItemId, "comment_created", "Local deep-link notification", deepLinkDetails);
-  // A second, autopilot-shaped row proves the probe filters those out.
-  insertInbox("inb_local_autopilot", "autopilot_run_report", "Autopilot run", {
-    comment_id: targetComment?.id ?? null,
-    issue_session_id: deepLinkSession.id,
-  });
+  // The title carries the issue key, like the production mention rows
+  // ("MUL-387: mentioned you…"). That makes "the clicked row's text names the
+  // target issue" checkable in the local report too, not only on 209.
+  insertInbox(
+    inboxItemId,
+    "comment_created",
+    `${deepLinkIssue.key}: mentioned you`,
+    deepLinkDetails,
+  );
+  // A second, autopilot-shaped row proves the probe filters those out. It hangs off
+  // another issue on purpose: sharing the deep-link issue would make it newer than
+  // the target and therefore the winner of `?issue=`, so the target would report
+  // `inbox-target-superseded` instead of being measured.
+  insertInbox(
+    "inb_local_autopilot",
+    "autopilot_run_report",
+    "Autopilot run",
+    { comment_id: targetComment?.id ?? null, issue_session_id: deepLinkSession.id },
+    now,
+    cancelledIssue.id,
+  );
   // Rows with no comment/session cannot be deep-link targets. They sit ahead of
   // the eligible row (a later timestamp) so the probe has to reject them, and
   // they hang off a *different* issue: `?issue=` resolves to that issue's newest
@@ -284,6 +302,31 @@ try {
       cancelledIssue.id,
     );
   }
+  // `MUL384_INBOX_PAGE2=1` reproduces production's actual shape: page one is
+  // nothing but newer ledger rows, and the only usable notification sits on page
+  // two. The probe must read past page one and the browser must still receive the
+  // target on its first page.
+  if (process.env.MUL384_INBOX_PAGE2 === "1") {
+    // Created first, so every row below is newer and page one holds only ledger
+    // notifications — exactly what 209 looked like.
+    database.run(
+      "UPDATE multiremi_inbox_items SET created_at = ? WHERE id = ?",
+      [new Date(Date.now() - 48 * 3_600_000).toISOString(), inboxItemId],
+    );
+    const nowMs = Date.now();
+    for (let i = 0; i < 120; i++) {
+      insertInbox(
+        `inb_page2_ledger_${i}`,
+        i % 10 === 0 ? "autopilot_run_failed" : "autopilot_run_completed",
+        `Page-two ledger ${i}`,
+        { autopilot_id: `auto_page2_${i}`, autopilot_title: "Local autopilot" },
+        // Inside the page-one window (newest first), all newer than the target.
+        new Date(nowMs - i * 1_000).toISOString(),
+        cancelledIssue.id,
+      );
+    }
+  }
+
   const inboxItem = { id: inboxItemId };
 
   // Archive the short fixture on demand: the default `/issues` list renders
