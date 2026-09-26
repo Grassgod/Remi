@@ -34,31 +34,43 @@ import { RENDER_PIPELINE_INPUTS } from "@multiremi/render/render-version.js";
 import { FIXTURES } from "./render-markdown-fixtures.js";
 import { describeNodes, normalizeBrowserHtml, normalizeHtml } from "./render-markdown-compare.js";
 
+interface MinimalMarkdownProps {
+  children: string;
+  mode?: string;
+  cdnDomain?: string;
+}
+
 interface MinimalMarkdownModule {
-  Markdown: (props: { children: string; mode?: string; cdnDomain?: string }) => React.ReactElement;
+  /** React component: props in, element out. */
+  Markdown: (props: MinimalMarkdownProps) => React.ReactElement;
 }
 
 /**
- * The browser component. Imported through the ui package's export map, so this
- * test breaks if that entry point ever stops exposing `Markdown`.
+ * The browser component, through the ui package's export map.
+ *
+ * The specifier is held in a variable so the root `tsconfig.json` does not
+ * follow it into the frontend ui package's TypeScript sources. That program has
+ * no `jsx` setting and does not include the frontend tree, so a literal
+ * specifier here turns `bunx tsc --noEmit` red for a file the frontend's own
+ * typecheck already covers (`bun run typecheck:frontend`). The import still
+ * resolves at runtime, and if the export map stops exposing `Markdown`, this
+ * test fails.
  */
-const FRONTEND_MD = (await import("@multiremi/ui/markdown")) as unknown as MinimalMarkdownModule;
+const FRONTEND_MARKDOWN_SPECIFIER = "@multiremi/ui/markdown";
+const FRONTEND_MD = (await import(FRONTEND_MARKDOWN_SPECIFIER)) as unknown as MinimalMarkdownModule;
 
 describe("renderMarkdown parity with frontend Markdown.tsx (MUL-439)", () => {
   for (const fixture of FIXTURES) {
     test(fixture.name, () => {
       const server = renderMarkdown(fixture.markdown, { cdnDomain: fixture.cdnDomain });
       const browser = renderToStaticMarkup(
-        React.createElement(
-          FRONTEND_MD.Markdown,
-          {
-            // `minimal` is the mode messages and comments use; it is the mode
-            // `body_html` has to match.
-            mode: "minimal",
-            ...(fixture.cdnDomain ? { cdnDomain: fixture.cdnDomain } : {}),
-          },
-          fixture.markdown,
-        ),
+        React.createElement(FRONTEND_MD.Markdown, {
+          // `minimal` is the mode messages and comments use; it is the mode
+          // `body_html` has to match.
+          mode: "minimal",
+          children: fixture.markdown,
+          ...(fixture.cdnDomain ? { cdnDomain: fixture.cdnDomain } : {}),
+        }),
       );
 
       if (fixture.skipStructureCompare) {

@@ -69,7 +69,7 @@ export interface RenderedMarkdown {
  * frontend copy cannot be imported from this package (workspace-alias
  * boundary); `render-markdown-parity.test.ts` fails if the two drift.
  */
-export const SANITIZE_SCHEMA = {
+export const SANITIZE_SCHEMA: typeof defaultSchema = {
   ...defaultSchema,
   protocols: {
     ...defaultSchema.protocols,
@@ -91,7 +91,7 @@ export const SANITIZE_SCHEMA = {
     ],
     img: [...(defaultSchema.attributes?.img ?? []), "alt"],
   },
-} as const;
+};
 
 /**
  * The browser's URL transform: keep the two internal protocols, defer the rest
@@ -292,7 +292,7 @@ function createProcessor(context: { downgraded: boolean }) {
     .use(remarkBreaks)
     .use(remarkRehype, { allowDangerousHtml: true })
     .use(rehypeRaw)
-    .use(rehypeSanitize, SANITIZE_SCHEMA as never)
+    .use(rehypeSanitize, SANITIZE_SCHEMA)
     .use(rehypeTableScrollWrapper)
     .use(rehypeShiki, context)
     .use(rehypeKatex)
