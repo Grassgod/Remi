@@ -992,7 +992,11 @@ export class TasksRepo {
       }
     }
     const task = this.getTask(id)!;
-    if (task.issueId && !parentTaskId && !this.hasInFlightTaskForIssue(task.issueId)) {
+    // MUL-400 E2: the child-status wakeup carries `preserveIssueStatus` so a
+    // manual child edit cannot knock an in-review parent back to `todo` while
+    // that round is waiting to be claimed.
+    const preserveIssueStatus = Boolean(input.preserveIssueStatus ?? input.preserve_issue_status);
+    if (task.issueId && !parentTaskId && !preserveIssueStatus && !this.hasInFlightTaskForIssue(task.issueId)) {
       this.syncIssueStatusFromTaskWithinTransaction(task, "todo");
     }
     return task;
@@ -4421,6 +4425,10 @@ export class TasksRepo {
     // task rows. Explicit terminal/retry decisions pass rederive=false because
     // they are not recoverable from the remaining-task set alone.
     if (options.rederive) status = this.issueStatusForRemainingTasks(task.issueId) ?? status;
+    // MUL-400 E1 guard B: a task finishing on a parent that still has unfinished
+    // children must keep the parent in_progress instead of parking it in review
+    // (or closing an intake parent whose generated children are still open).
+    status = this.ctx.issues().holdParentStatusForOpenChildren(task.issueId, status);
     const issue = this.ctx.issues().getIssue(task.issueId);
     // Explicit issue terminal states are user decisions. A late worker event
     // (or a cancellation racing with it) must not reopen accepted/cancelled
@@ -4442,6 +4450,14 @@ export class TasksRepo {
         actorId: task.agentId,
         automationSourceEventId: task.assignmentSourceEventId,
         automationSourceTaskId: task.id,
+      });
+      // MUL-400 E1/E2: the task path is the second writer that must re-derive
+      // the parent and report child endings, so it enters the same hook as the
+      // direct Issue update path.
+      this.ctx.issues().notifyChildStatusChange(issue, updatedIssue, task.id, {
+        taskTerminalStatus: task.status === "completed" || task.status === "failed" || task.status === "cancelled"
+          ? task.status
+          : undefined,
       });
     }
     // Task lifecycle writes bypass the HTTP layer, so publish the same partial

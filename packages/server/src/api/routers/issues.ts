@@ -48,6 +48,7 @@ import {
   issueCompatibilityResponse,
   issueDependencyCompatibilityResponse,
   issueDependencyErrorResponse,
+  denyTaskIdentityIssueForce,
   issueDetailCompatibilityResponse,
   issueErrorResponse,
   issueQuickCreateCompatibilityInput,
@@ -823,7 +824,9 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const tasks = issue.tasks.filter((task) => canCurrentUserAccessChatTask(c, store, task)).map(taskPublicResponse);
     const comments = store.listIssueComments(issue.id);
     return c.json({
-      issue: { ...issue, tasks },
+      // MUL-400 E1: `child_count` is a plain COUNT (no child bodies), so the
+      // detail surfaces can show "N sub-issues" without the MUL-385 cost.
+      issue: { ...issue, tasks, child_count: issue.childProgress.total },
       children: issue.children,
       childProgress: issue.childProgress,
       dependencies: issue.dependencies,
@@ -1105,6 +1108,10 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<UpdateIssueInput>(c);
+    // MUL-400 E1: `force` is member-only; a run that sends it is rejected before
+    // any other validation so the guard cannot be bypassed by an agent.
+    const forceDenied = denyTaskIdentityIssueForce(c, body);
+    if (forceDenied) return forceDenied;
     const { actorType, actorId } = issueMutationActivity(c);
     const input = { ...body, actorType, actorId, parentTaskId: currentTaskParentId(c) };
     assertRuntimeWorkspaceAccess(c, store, body.runtimeWorkspaceId ?? body.runtime_workspace_id, issue.workspaceId);
@@ -1122,6 +1129,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     const body = await readJsonStrict<UpdateIssueInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const forceDenied = denyTaskIdentityIssueForce(c, body);
+    if (forceDenied) return forceDenied;
     const { actorType, actorId } = issueMutationActivity(c);
     const input = {
       ...issueUpdateCompatibilityInput(body),

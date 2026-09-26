@@ -84,6 +84,7 @@ import { IssueSessionsRepo } from "@multiremi/store/repos/issue-sessions-repo.js
 import { ChatRepo } from "@multiremi/store/repos/chat-repo.js";
 import {
   IssuesRepo,
+  ParentStatusGuardError,
   type IssueTimelineCursor,
   type IssueTimelinePageResult,
   type BeginIssueDeletionResult,
@@ -3218,6 +3219,23 @@ runMigrations(this.db);
 
   updateIssueWithOutcome(id: string, input: UpdateIssueInput): { issue: MultiremiIssue; cancelledTasks: number } {
     return this.issues.updateIssueWithOutcome(id, input);
+  }
+
+  countOpenChildIssues(parentIssueId: string): number {
+    return this.issues.countOpenChildIssues(parentIssueId);
+  }
+
+  holdParentStatusForOpenChildren(issueId: string, requested: string): string {
+    return this.issues.holdParentStatusForOpenChildren(issueId, requested);
+  }
+
+  notifyChildStatusChange(
+    previous: MultiremiIssue,
+    issue: MultiremiIssue,
+    parentTaskId: string | null,
+    options: { taskTerminalStatus?: "completed" | "failed" | "cancelled" } = {},
+  ): void {
+    return this.issues.notifyChildStatusChange(previous, issue, parentTaskId, options);
   }
 
   restoreIssue(id: string): MultiremiIssue {
