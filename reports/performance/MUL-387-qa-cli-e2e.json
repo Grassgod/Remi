@@ -1,0 +1,179 @@
+{
+  "generatedAt": "2026-09-26T11:02:35.768Z",
+  "commit": "16119de8c22239d0a8182d44af50cd63db143b35",
+  "sourceDigest": {
+    "files": {
+      "packages/server/src/repository-wiki/service.ts": "ff5b2d053e66d3b2a301392ded6580ce3f52f9eb086be8e289a910271bc535f4",
+      "packages/server/src/api/routers/workspaces.ts": "4493d2821543d90729648490b669c12da8dd0166d47c293a4575e90874f22071",
+      "packages/server/src/api/server.ts": "0676223f7b28a53246beb39afbf184fd0dd9f9da41de41ed6195617578576ab3",
+      "apps/remi/cli/multiremi/commands/repository-wiki-docs.ts": "b74872aeeacd92ba9b916b6f61f9d7954137767c02cf311e8812c06d03df8197",
+      "apps/remi/cli/multiremi/commands/wiki-working-copy.ts": "5b584b0dc1de83eb3953f8854913b0f9add923c77fad88c2b1e2f233605acd25",
+      "packages/daemon/src/agent-runtime/workspace/wiki.ts": "1bc17be4162edf7e36738f6694236a8468ed4efd490415e40985b4e8c2b107a3"
+    },
+    "combined": "4be5cd8bcd2e65a1ef45f6ef510ab5e7b73c91d9e80838c439d99a7c2eeaf67d"
+  },
+  "environment": {
+    "cliRoot": "/data00/home/hehuajie/.remi/multiremi/workspaces/issues/MUL-387/qa-bench-after",
+    "oldCliRoot": "/data00/home/hehuajie/.remi/multiremi/workspaces/issues/MUL-387/qa-bench-before",
+    "apiPort": 20320,
+    "workspaceRoot": "/tmp/mul387-cli-e2e-SCYFbf",
+    "oldCliWorkspaceRoot": "/tmp/mul387-cli-old-bboje4",
+    "pages": 6,
+    "readDelayMs": 0,
+    "note": "Real `bun apps/remi/main.ts` CLI subprocesses against a real Bun.serve API on loopback, backed by in-memory SQLite and an in-process OpenViking stub. Working copies are materialized by the daemon's own prepareIssueWikiWorkspace. No production contact; ./wiki untouched."
+  },
+  "results": [
+    {
+      "clause": "新 CLI 对候选服务端",
+      "detail": "工作副本已物化 6 篇",
+      "expected": "6",
+      "observed": "6",
+      "passed": true
+    },
+    {
+      "clause": "新 CLI 对候选服务端",
+      "detail": "物化正文与服务端一致",
+      "expected": "0",
+      "observed": "0",
+      "passed": true
+    },
+    {
+      "clause": "新 CLI 对候选服务端",
+      "detail": "无改动时 status 退出码 0",
+      "expected": "0",
+      "observed": "0",
+      "passed": true
+    },
+    {
+      "clause": "新 CLI 对候选服务端",
+      "detail": "无改动时 status clean=true",
+      "expected": "true",
+      "observed": "true",
+      "passed": true
+    },
+    {
+      "clause": "新 CLI 对候选服务端",
+      "detail": "无改动时一次正文都不读（复用本地 base）",
+      "expected": "0",
+      "observed": "0",
+      "passed": true
+    },
+    {
+      "clause": "新 CLI 对候选服务端",
+      "detail": "改一篇后 status 退出码 0",
+      "expected": "0",
+      "observed": "0",
+      "passed": true
+    },
+    {
+      "clause": "新 CLI 对候选服务端",
+      "detail": "只取变更的那 1 篇正文",
+      "expected": "1",
+      "observed": "1",
+      "passed": true
+    },
+    {
+      "clause": "新 CLI 对候选服务端",
+      "detail": "远端改动后 pull 退出码 0",
+      "expected": "0",
+      "observed": "0",
+      "passed": true
+    },
+    {
+      "clause": "新 CLI 对候选服务端",
+      "detail": "变更的读命中该篇 contentUri",
+      "expected": "true",
+      "observed": "true",
+      "passed": true
+    },
+    {
+      "clause": "新 CLI 对候选服务端",
+      "detail": "正文不可读时 status 非 0 退出",
+      "expected": "true",
+      "observed": "true",
+      "passed": true
+    },
+    {
+      "clause": "新 CLI 对候选服务端",
+      "detail": "正文不可读时本地文件零改动",
+      "expected": "0",
+      "observed": "0",
+      "passed": true
+    },
+    {
+      "clause": "新 CLI 对候选服务端",
+      "detail": "报错信息说明正文不可读",
+      "expected": "true",
+      "observed": "true",
+      "passed": true
+    },
+    {
+      "clause": "老 CLI 对候选服务端",
+      "detail": "工作副本已物化 6 篇",
+      "expected": "6",
+      "observed": "6",
+      "passed": true
+    },
+    {
+      "clause": "老 CLI 对候选服务端",
+      "detail": "远端改动后 pull 退出码 0",
+      "expected": "0",
+      "observed": "0",
+      "passed": true
+    },
+    {
+      "clause": "新旧 CLI 行为对照",
+      "detail": "远端改动后 pull 的收敛结果一致",
+      "expected": "true",
+      "observed": "true",
+      "passed": true
+    },
+    {
+      "clause": "老 CLI 对候选服务端",
+      "detail": "status 退出码 0",
+      "expected": "0",
+      "observed": "0",
+      "passed": true
+    },
+    {
+      "clause": "老 CLI 对候选服务端",
+      "detail": "status clean=true（未把远端误判为空）",
+      "expected": "true",
+      "observed": "true",
+      "passed": true
+    },
+    {
+      "clause": "老 CLI 对候选服务端",
+      "detail": "旧版走整包 shim，读满 6 篇",
+      "expected": "6",
+      "observed": "6",
+      "passed": true
+    },
+    {
+      "clause": "老 CLI 对候选服务端",
+      "detail": "shim 响应每篇都带 body 键",
+      "expected": "true",
+      "observed": "true",
+      "passed": true
+    },
+    {
+      "clause": "老 CLI 对候选服务端",
+      "detail": "老 CLI 未拉出任何空文件",
+      "expected": "0",
+      "observed": "0",
+      "passed": true
+    },
+    {
+      "clause": "新 CLI 对老服务端",
+      "detail": "老服务端超集响应（含 body）被当作正文直接使用",
+      "expected": "true",
+      "observed": "true",
+      "passed": true
+    }
+  ],
+  "summary": {
+    "total": 21,
+    "passed": 21,
+    "failed": 0
+  }
+}
