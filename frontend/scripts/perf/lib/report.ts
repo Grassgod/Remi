@@ -67,6 +67,11 @@ export interface ReportScenario {
   mode: "cold" | "warm";
   /** Reported identifier only; never a raw id list. */
   target: { identifier: string; note?: string };
+  /**
+   * Timeline entries seen for this fixture, next to the comment count in the
+   * target note. The two differ because activity entries are not comments.
+   */
+  timelineEntries?: number | null;
   rule: string;
   anchorRule: string;
   selectorMode: "contract" | "legacy";
@@ -75,9 +80,13 @@ export interface ReportScenario {
   /** The machine-readable reason for `skipped`; null when it was measured. */
   skipReason: string | null;
   targetSelection?: string;
-  /** Deep-link bookkeeping: which notification/issue was measured. */
+  /** Deep-link bookkeeping: which notification/issue was measured, and where. */
   inboxItemId?: string | null;
   issueHasRunningTask?: boolean;
+  /** Position in the `/api/inbox/page` response, for comparison with the DOM row. */
+  inboxApiIndex?: number | null;
+  /** The DOM row the warm click must use, from the page's grouping functions. */
+  inboxDomRowIndex?: number | null;
   hoverLeadMs: number | null;
   rounds: ReportRoundSummary[];
   stats: PerfScenarioStats;
@@ -399,7 +408,7 @@ export function buildHtml(report: {
 </dl>
 <h2>每场景汇总</h2>
 <div class="tablewrap"><table>
-<thead><tr><th>场景</th><th>模式</th><th>目标</th><th>选择器</th><th>anchor</th><th class="num">n</th><th class="num">ready p50</th><th class="num">p75</th><th class="num">p95</th><th class="num">max</th><th class="num">超时</th><th class="num">firstReal p50</th><th class="num">jumps max</th><th class="num">位移 max</th><th class="num">串行深度</th><th class="num">首屏 API p50</th></tr></thead>
+<thead><tr><th>场景</th><th>模式</th><th>状态</th><th>目标</th><th>选择器</th><th>anchor</th><th class="num">n</th><th class="num">ready p50</th><th class="num">p75</th><th class="num">p95</th><th class="num">max</th><th class="num">超时</th><th class="num">firstReal p50</th><th class="num">jumps max</th><th class="num">位移 max</th><th class="num">串行深度</th><th class="num">首屏 API p50</th></tr></thead>
 <tbody>
 ${rows}
 </tbody>

@@ -166,7 +166,7 @@ MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内
 | 串行深度 | `wave = 1 + max(wave(p) \| p.responseEnd ≤ start + 8ms)`；`Server-Timing` 从 resource timing 同源读取 |
 | 深链目标 | 冷启动与应用内切页用**同一条**首屏通知。候选只从 `/api/inbox/page?limit=50` 取，按 `issue_id` 归并（`?issue=` 命中的是该 issue 最新一条）；合格项必须非 ledger 类且同时有 `details.comment_id` 与 `details.issue_session_id`，其中当前没有 running task 的 issue 优先，其次按 API 顺序。记 `{ issueId, issueIdentifier, inboxItemId, commentId, issueHasRunningTask, rowIndex }`；都选不到则 `skipped: no-eligible-inbox-item`。`--inbox-item` 只在第一页有效，否则 `skipped: inbox-item-not-on-first-page` |
 | 深链 URL | `/{slug}/inbox?issue=<issueId>&session=<issue_session_id>`。只带 `issue_id` 的通知走 `?issue=`（`inboxItemSelectionKind`），`?item=` 只属于 ledger 类通知，而 ledger 渲染 `AutopilotRunReport` 不测 timeline |
-| 深链 warm | 直接 import `core/inbox/grouping.ts` 的 `deduplicateInboxItems → filterInboxItemsBySource(…, "all") → groupInboxItemsByDate`，`flatMap(g => g.entries)` 的下标就是 DOM 行序；点该行后断言 URL 的 `issue` 参数等于选中 issueId。等行用「有行且无骨架」，不用固定 sleep |
+| 深链 warm | DOM 行序由 `inboxDomRowIndex`（`lib/selectors.ts`）给出：它 import `core/inbox/grouping.ts` 的 `deduplicateInboxItems → filterInboxItemsBySource(…, "all") → groupInboxItemsByDate`，取 `flatMap(g => g.entries)` 的下标。**API 数组下标不是 DOM 行号**：生产上首页 50 条经归并只剩 8 行，成功的 autopilot run 会合并成一行。目标不在渲染列表里时记 `skipped: no-eligible-inbox-item-in-dom`。点该行后等 URL 的 `issue` 参数变成选中 issueId（`replace` 在 `startTransition` 里，异步提交，轮询上限 3s）；不匹配则立刻结束该轮并写 `error: deeplink warm: url issue=<实际值> expected <id>`，不再静默跑满 20s |
 OLDEOF
 
 # Fixture description.
@@ -177,7 +177,9 @@ swap(<<'OLDEOF', <<'NEWEOF', "fixtures");
 OLDEOF
 参数：`--base-url`、`--rounds`（默认 3）、`--window peak|offpeak`、`--name`、`--out`、`--compare`、`--selectors auto|contract|legacy`、`--only <prefix>`、`--warmup`、`--issue-short`（默认 `iss_rejcqsln6wag`，MUL-353）、`--issue-long`（默认 `iss_enbrunyg86jc`，MUL-70）、`--issue-running`（默认现场选取，排除 MUL-383 `iss_j67lb0r8djw4` 及其全部子单；选不到则 `skipped: all-running-issues-in-mul383-family`）、`--inbox-item`（默认首屏自动选取）。
 
-**测速数据**：cold 与 warm 用同一 fixture，且必须是**非 archived、非 cancelled** 的 issue，否则默认 `/issues` 列表不渲染 `ListRow`，warm 找不到入口。报告标注实际评论条数。warm 目标行不在首批渲染里时记 `skipped: warm-target-not-in-list`，不改走搜索或 archived 手风琴（那些不是 S3 的验收入口）。参考量级：short ≤ 20 条、long ≥ 41 条（把「首页 40 条 + has_more」的分页路径踩到）；MUL-249 之后打开路径成本与总条数基本无关，≥200 的口径由 S7 的 250 条 fixture 与 S6 深链覆盖。
+**测速数据**：cold 与 warm 用同一 fixture，且必须是**非 archived、非 cancelled** 的 issue，否则默认 `/issues` 列表不渲染 `ListRow`，warm 找不到入口。报告标注实际评论条数（按 timeline 里 `kind === "comment"` 计数；`timelineEntries` 另记条目总数，两者不同）。warm 目标行不在首批渲染里时记 `skipped: warm-target-not-in-list`，不改走搜索或 archived 手风琴（那些不是 S3 的验收入口）。参考量级：short ≤ 20 条、long ≥ 41 条（把「首页 40 条 + has_more」的分页路径踩到）；MUL-249 之后打开路径成本与总条数基本无关，≥200 的口径由 S7 的 250 条 fixture 与 S6 深链覆盖。
+
+**fixture 选择约束**：非 archived、非 cancelled，且 `completed_at` 为空或远新于归档 TTL。`issues-repo.ts` 的 `archiveEligibleIssues` 会把 `completed_at` 超过 TTL（约 72h）的 done / cancelled issue **自动归档**——MUL-353 就是这样在选定后几小时被归档的，于是 warm 找不到入口。脚本在跑之前对两个 fixture 各做一次只读预检，状态不对就直接输出 `skipped: fixture-archived` / `fixture-cancelled` / `fixture-unreadable`，**不再等满 20s**。`warm-target-not-in-list` 同样立即以 skipped 结束。
 | 目标深度 | `targetDepth: { timelineRequests, targetIndexFromLatest }`，从本轮已捕获的 `/comments` 响应计算，不额外预查 |
 
 **为什么深链不用固定 `inb_...`**：[inbox-page.tsx](../../frontend/packages/views/inbox/components/inbox-page.tsx) 对不在已加载页里的 `?item=` 会逐页 `fetchNextPage()` 直到找到，页大小 50；固定项在第 769 位左右 ⇒ 冷启动先串行拉约 16 页，测到的是翻页而不是深链落点。

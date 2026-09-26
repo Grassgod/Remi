@@ -16,6 +16,14 @@
  */
 
 import type { PerfAnchorSpec, PerfProfileConfig, PerfReadyRule, PerfProfileName } from "./jump-recorder";
+// The inbox page's own row order. Imported rather than re-derived so the probe's
+// idea of "which row to click" cannot drift from the page's grouping.
+import {
+  deduplicateInboxItems,
+  filterInboxItemsBySource,
+  groupInboxItemsByDate,
+} from "../../../packages/core/inbox/grouping";
+import type { InboxItem } from "../../../packages/core/types/inbox";
 
 export type SelectorMode = PerfProfileName;
 export type SelectorModeOption = "auto" | SelectorMode;
@@ -253,6 +261,26 @@ export function profilesFor(options: {
   targetCommentId?: string | null;
 }): PerfProfileConfig[] {
   return options.modes.map((mode) => profileFor({ ...options, mode }));
+}
+
+/**
+ * DOM row index of one inbox item, in the order `inbox-page.tsx` renders rows.
+ *
+ * The page does not render the API page verbatim: it dedupes by selection key,
+ * applies the source filter, buckets by date and merges successful autopilot runs
+ * into one row each (`inbox-page.tsx:144-155`, `502-509`). On production that
+ * turned 50 API records into 8 rows, so an API array index addressed a different
+ * notification. Reusing the page's own pure functions keeps the two in step; it
+ * lives beside `inboxRowSelector` for the same reason.
+ *
+ * Returns null when the item is not in the rendered list, which the caller
+ * reports as a skip rather than clicking a clamped index.
+ */
+export function inboxDomRowIndex(items: InboxItem[], targetItemId: string): number | null {
+  const rows = groupInboxItemsByDate(filterInboxItemsBySource(deduplicateInboxItems(items), "all"))
+    .flatMap((group) => group.entries);
+  const index = rows.findIndex((entry) => entry.items.some((item) => item.id === targetItemId));
+  return index >= 0 ? index : null;
 }
 
 /** True when the page already carries the MUL-384 DOM contract. */

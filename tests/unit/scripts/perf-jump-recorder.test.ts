@@ -23,6 +23,7 @@ import {
   type PerfStateTransition,
 } from "../../../frontend/scripts/perf/lib/jump-recorder";
 import {
+  inboxDomRowIndex,
   LEGACY,
   profileFor,
   profilesFor,
@@ -30,6 +31,7 @@ import {
   scrollRootFallbackSelector,
   scrollRootSelector,
 } from "../../../frontend/scripts/perf/lib/selectors";
+import { buildHtml, buildMarkdown } from "../../../frontend/scripts/perf/lib/report";
 
 /** One sampled frame with a single visible row at `top`, relative to the scroll root. */
 function view(top: number, options: { scrollTop?: number; skeleton?: boolean; key?: string } = {}): PerfProfileFrame {
@@ -381,6 +383,151 @@ describe("pairForCompare", () => {
     expect(pairs[1]!.before?.readyP75).toBe(80);
     expect(pairs[1]!.after?.readyP75).toBe(60);
     expect(pairs[2]!.before).toBeNull();
+  });
+});
+
+/** Minimal inbox row for the grouping-based DOM row index. */
+function inboxItem(
+  id: string,
+  options: { type?: string; issueId?: string | null; createdAt?: string; details?: Record<string, unknown> } = {},
+) {
+  return {
+    id,
+    workspace_id: "ws-1",
+    recipient_type: "member" as const,
+    recipient_id: "mem-1",
+    actor_type: "member" as const,
+    actor_id: "mem-1",
+    type: (options.type ?? "comment_mention") as never,
+    severity: "info" as const,
+    issue_id: options.issueId === undefined ? `iss_${id}` : options.issueId,
+    title: id,
+    body: null,
+    issue_status: null,
+    read: false,
+    archived: false,
+    created_at: options.createdAt ?? new Date().toISOString(),
+    details: (options.details ?? {}) as never,
+  };
+}
+
+describe("inboxDomRowIndex", () => {
+  it("is not the API array index when successful autopilot runs collapse", () => {
+    // Production shape: 50 API records rendered as 8 rows. Several successful
+    // runs of one autopilot occupy one row, so an API index lands elsewhere.
+    const items = [
+      inboxItem("inb_run_1", { type: "autopilot_run_completed", details: { autopilot_id: "auto_1" } }),
+      inboxItem("inb_run_2", { type: "autopilot_run_completed", details: { autopilot_id: "auto_1" } }),
+      inboxItem("inb_run_3", { type: "autopilot_run_completed", details: { autopilot_id: "auto_1" } }),
+      inboxItem("inb_target"),
+    ];
+    // API array index of the target is 3; the rendered row is 1.
+    expect(items.findIndex((item) => item.id === "inb_target")).toBe(3);
+    expect(inboxDomRowIndex(items as never, "inb_target")).toBe(1);
+    // The collapsed run row is addressed by its newest member.
+    expect(inboxDomRowIndex(items as never, "inb_run_1")).toBe(0);
+  });
+
+  it("maps every notification of one issue to that issue's single row", () => {
+    const items = [
+      inboxItem("inb_old", { issueId: "iss_same", createdAt: "2026-09-26T00:00:00.000Z" }),
+      inboxItem("inb_new", { issueId: "iss_same", createdAt: "2026-09-26T01:00:00.000Z" }),
+    ];
+    // `deduplicateInboxItems` keeps only the newest notification per selection
+    // key, so the newest is the rendered row and the older one is not rendered at
+    // all — the probe must therefore pick the newest per issue, which it does.
+    expect(inboxDomRowIndex(items as never, "inb_new")).toBe(0);
+    expect(inboxDomRowIndex(items as never, "inb_old")).toBeNull();
+  });
+
+  it("returns null for an item that is not rendered", () => {
+    const items = [inboxItem("inb_present")];
+    expect(inboxDomRowIndex(items as never, "inb_absent")).toBeNull();
+  });
+});
+
+describe("report rendering", () => {
+  const round = {
+    round: 1,
+    readyMs: 100,
+    readyTimeout: false,
+    firstRealMs: 90,
+    anchorVisibleMs: 100,
+    anchorName: "latest-comment",
+    anchorRule: "legacy-latest-comment",
+    appReadyMs: null,
+    appReadyForced: false,
+    dataFreshAtReady: false,
+    jumpCount: 0,
+    jumpPx: 0,
+    jumps: [],
+    layoutShiftCount: 0,
+    cls: 0,
+    serialDepth: 3,
+    apiCallsTotal: 5,
+    apiFirstScreen: 5,
+    chunksLoaded: 4,
+    chunkBytes: 1024,
+    lcpMs: 80,
+    slowestServerTotalMs: 12,
+    blockedWrites: 0,
+    heapBytes: null,
+    anchorRectAtReady: { top: 10, bottom: 20, height: 10, rootHeight: 800 },
+    targetDepth: { timelineRequests: 0, targetIndexFromLatest: null },
+    selectorEquivalence: null,
+  };
+  const scenario = {
+    key: "detail-short",
+    mode: "cold" as const,
+    target: { identifier: "MUL-67", note: "20 条评论" },
+    rule: "rule",
+    anchorRule: "legacy-latest-comment",
+    selectorMode: "legacy" as const,
+    skipped: false,
+    skipReason: null,
+    hoverLeadMs: null,
+    rounds: [round],
+    stats: {
+      n: 1, timeouts: 0, readyP50: 100, readyP75: 100, readyP95: 100, readyMax: 100,
+      firstRealP50: 90, jumpsMax: 0, jumpPxMax: 0, serialDepthMax: 3,
+      apiFirstScreenP50: 5, slowestServerTotalP50: 12,
+    },
+    timelineEntries: 60,
+  };
+
+  it("keeps the HTML summary header and body cell counts equal", () => {
+    // The header was missing its status cell, so every body row rendered one
+    // column to the right of its heading.
+    const html = buildHtml({ meta: {}, scenarios: [scenario] as never, blockedWrites: [] });
+    // Compare each table against its own header: a single shared header count
+    // would compare the summary table's header with the detail table's rows.
+    const tables = [...html.matchAll(/<table>(.*?)<\/table>/gs)].map((match) => match[1] ?? "");
+    expect(tables.length).toBeGreaterThan(0);
+    let checked = 0;
+    for (const table of tables) {
+      // `<th class="num">` and `<td class="num">` carry attributes, so count the
+      // opening tags rather than the bare `<th`/`<td` prefixes.
+      const headerCells = (table.match(/<th[\s>]/g) ?? []).length;
+      const firstRow = /<tbody>\s*<tr>(.*?)<\/tr>/s.exec(table)?.[1] ?? "";
+      const bodyCells = (firstRow.match(/<td[\s>]/g) ?? []).length;
+      if (headerCells === 0 || bodyCells === 0) continue;
+      expect(bodyCells).toBe(headerCells);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("renders the skipped status and the fixture row count in both formats", () => {
+    const skipped = { ...scenario, skipped: true, skipReason: "fixture-archived", rounds: [], stats: { ...scenario.stats, n: 0, timeouts: 0 } };
+    const md = buildMarkdown({ meta: {}, scenarios: [skipped] as never, blockedWrites: [], compare: null });
+    expect(md).toContain("skipped: fixture-archived");
+    const html = buildHtml({ meta: {}, scenarios: [skipped] as never, blockedWrites: [] });
+    expect(html).toContain("skipped: fixture-archived");
+  });
+
+  it("carries the anchor rect into the round detail", () => {
+    const md = buildMarkdown({ meta: {}, scenarios: [scenario] as never, blockedWrites: [], compare: null });
+    expect(md).toContain("10/20/10/800");
   });
 });
 

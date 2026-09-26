@@ -70,6 +70,7 @@ import {
 } from "./lib/harness";
 import {
   anchorPlan,
+  inboxDomRowIndex,
   inboxRowSelector,
   issueRowSelector,
   LEGACY,
@@ -78,6 +79,7 @@ import {
   type SelectorMode,
   type SelectorModeOption,
 } from "./lib/selectors";
+import type { InboxItem } from "../../packages/core/types/inbox";
 import {
   buildCompare,
   buildHtml,
@@ -163,7 +165,7 @@ function parseArgs(argv: string[]): Options {
     quietMs: DEFAULT_QUIET_MS,
     window: "offpeak",
     selectors: "auto",
-    issueShort: "iss_rejcqsln6wag",
+    issueShort: "iss_in41j1x1dq66",
     issueLong: "iss_enbrunyg86jc",
     issueRunning: null,
     inboxItem: null,
@@ -254,7 +256,7 @@ function printUsage(): void {
       `  --rounds <n>           repetitions per scenario, each in a fresh context (default ${DEFAULT_ROUNDS})`,
       `  --window peak|offpeak  label recorded in the report (default offpeak)`,
       "  --selectors auto|contract|legacy   DOM contract to use (default auto)",
-      "  --issue-short <id>     short issue for detail-short (default iss_rejcqsln6wag, MUL-353)",
+      "  --issue-short <id>     short issue for detail-short (default iss_in41j1x1dq66, MUL-67)",
       "  --issue-long <id>      long issue for detail-long (default iss_enbrunyg86jc, MUL-70)",
       "  --issue-running <id>   agent-running issue; auto-selected when omitted",
       "  --inbox-item <id>      deep-link inbox item; auto-selected from page one when omitted",
@@ -310,6 +312,9 @@ interface DeepLinkTarget {
   /** An issue with a running task can append comments inside the quiet window. */
   issueHasRunningTask: boolean;
   read: boolean;
+  /** Position in the `/api/inbox/page` array, kept for the report. */
+  apiIndex: number;
+  /** DOM row to click, derived from the page's own grouping functions. */
   rowIndex: number;
   type: string;
 }
@@ -356,6 +361,8 @@ interface RoundMeasurement {
   targetIndexFromLatest: number | null;
   slowestServerTotalMs: number | null;
   lcpMs: number | null;
+  /** Set when the round never left its entry page, so it is a skip not a timeout. */
+  entryFailed: boolean;
   error?: string;
 }
 
@@ -457,12 +464,28 @@ async function probeDeepLinkTarget(options: {
     const item = firstPage[index]!;
     const candidate = toDeepLinkTarget(item, pinnedItemId, index, runningIssueIds);
     if (!candidate) return { target: null, skipped: "inbox-item-has-no-comment" };
-    return { target: candidate, skipped: null };
+    const rowIndex = inboxDomRowIndex(firstPage as InboxItem[], pinnedItemId);
+    if (rowIndex === null) return { target: null, skipped: "inbox-item-not-rendered" };
+    return { target: { ...candidate, rowIndex }, skipped: null };
   }
 
   const candidates = rankDeepLinkCandidates(firstPage, runningIssueIds);
   if (candidates.length === 0) return { target: null, skipped: "no-eligible-inbox-item" };
-  return { target: candidates[0]!, skipped: null };
+  // The API page is not the DOM: the page collapses it before rendering. Resolve
+  // every candidate to its DOM row here, in the probe, so a target that cannot be
+  // clicked is a skip instead of a click on the wrong row.
+  const ranked = candidates
+    .map((candidate) => ({ candidate, rowIndex: inboxDomRowIndex(firstPage as InboxItem[], candidate.inboxItemId) }))
+    .filter((entry): entry is { candidate: DeepLinkTarget; rowIndex: number } => entry.rowIndex !== null)
+    .map((entry) => ({ ...entry.candidate, rowIndex: entry.rowIndex }));
+  const chosen = ranked[0] ?? null;
+  if (chosen) return { target: chosen, skipped: null };
+  // Nothing eligible survives the DOM mapping. Distinguish "no eligible item at
+  // all" from "eligible but not rendered", because the fixes differ.
+  return {
+    target: null,
+    skipped: candidates.length > 0 ? "no-eligible-inbox-item-in-dom" : "no-eligible-inbox-item",
+  };
 }
 
 /**
@@ -501,7 +524,7 @@ export function rankDeepLinkCandidates(
 function toDeepLinkTarget(
   item: InboxPageItem,
   inboxItemId: string,
-  rowIndex: number,
+  apiIndex: number,
   runningIssueIds: Set<string>,
 ): DeepLinkTarget | null {
   if (!inboxItemId) return null;
@@ -519,31 +542,72 @@ function toDeepLinkTarget(
     issueIdentifier: issueId,
     issueHasRunningTask: runningIssueIds.has(issueId),
     read: item.read === true,
-    rowIndex,
+    apiIndex,
+    // Replaced with the DOM row by the caller; the API index is never clickable.
+    rowIndex: apiIndex,
     type,
   };
 }
 
+interface FixtureState {
+  identifier: string;
+  status: string | null;
+  archived: boolean;
+  commentCount: number | null;
+  timelineEntries: number | null;
+  /** Why this fixture cannot be measured, or null when it can. */
+  skipReason: string | null;
+}
+
 /**
- * Timeline entry count for the report, so a reader can see which fixture
- * produced a number without re-querying the issue.
+ * Everything the report needs about one fixture, in one read-only call each.
  *
- * This is the same read the measured page itself makes, and the timeline is
- * paginated, so the count is read from the "no cursor" form that returns the
- * whole session in one response. A failure is reported as `null` rather than
- * silently as zero.
+ * The fixtures are designated by comment count and must be enterable from the
+ * default issues list, which lists neither archived nor cancelled issues. Finding
+ * that out by clicking is what burned a 20 s round on production, so the state is
+ * checked up front and surfaced as an explicit skip.
+ *
+ * `commentCount` counts timeline entries whose wire `type` is `comment`; the
+ * timeline also carries `activity` entries, so the raw array length is not the
+ * comment count. `timelineEntries` keeps that total separately.
  */
-async function probeCommentCount(baseUrl: string, token: string, issueId: string): Promise<number | null> {
-  const body = await fetchJson<{ entries?: unknown[] } | unknown[]>(
+async function probeFixture(baseUrl: string, token: string, issueId: string): Promise<FixtureState> {
+  const headers = { Authorization: `Bearer ${token}` };
+  const issue = await fetchJson<{ identifier?: string; status?: string; archived_at?: string | null }>(
+    `${baseUrl}/api/issues/${encodeURIComponent(issueId)}`,
+    headers,
+  ).catch(() => null);
+  const timeline = await fetchJson<{ entries?: Array<{ type?: string }> } | Array<{ type?: string }>>(
     `${baseUrl}/api/issues/${encodeURIComponent(issueId)}/timeline`,
-    { Authorization: `Bearer ${token}` },
+    headers,
   ).catch(() => null);
   // The no-cursor form answers with a bare array; the paged form wraps it in
   // `entries`. Both are legitimate shapes for this endpoint.
-  if (Array.isArray(body)) return body.length;
-  return body && Array.isArray((body as { entries?: unknown[] }).entries)
-    ? (body as { entries: unknown[] }).entries.length
+  const entries = Array.isArray(timeline)
+    ? timeline
+    : Array.isArray(timeline?.entries)
+      ? timeline.entries
+      : null;
+  const commentCount = entries
+    ? entries.filter((entry) => entry && typeof entry === "object" && entry.type === "comment").length
     : null;
+  const archived = Boolean(issue?.archived_at);
+  const status = issue?.status ?? null;
+  const skipReason = !issue
+    ? "fixture-unreadable"
+    : archived
+      ? "fixture-archived"
+      : status === "cancelled"
+        ? "fixture-cancelled"
+        : null;
+  return {
+    identifier: issue?.identifier ?? issueId,
+    status,
+    archived,
+    commentCount,
+    timelineEntries: entries ? entries.length : null,
+    skipReason,
+  };
 }
 
 /** Resolves an identifier for reporting without needing the issue detail endpoint. */
@@ -713,6 +777,7 @@ function blankRound(round: number, url: string): RoundMeasurement {
     targetIndexFromLatest: null,
     slowestServerTotalMs: null,
     lcpMs: null,
+    entryFailed: false,
   };
 }
 
@@ -851,9 +916,36 @@ async function measureRound(options: {
     }
   } catch (error) {
     measurement.error = (error as Error).message;
+    // An entry that cannot be driven is a skip, not a slow page: waiting out the
+    // ready budget would report a timeout for a round that never left the entry
+    // page. Close the context and report the reason.
+    if (!cold && isEntryFailure(measurement.error)) {
+      measurement.entryFailed = true;
+      measurement.blockedWrites = collectors.blockedWrites.reduce((sum, write) => sum + write.attempts, 0);
+      await page.close();
+      return {
+        round: buildRoundMeasurement({
+          measurement,
+          scenario,
+          summary: null,
+          measuredProfile: null,
+          buffer: null,
+          vitals: { lcpMs: null },
+          resources: [],
+          collectors,
+          quietMs: opts.quietMs,
+        }),
+        blocked: collectors.blockedWrites,
+        collectors,
+      };
+    }
   }
 
   const { summary, profile: measuredProfile } = await waitForReady(page, ROUND_TIMEOUT_MS, opts.selectors);
+
+  // The guard's abort count belongs to the collectors, not to `blankRound`; the
+  // per-round column stayed 0 until this was wired up.
+  measurement.blockedWrites = collectors.blockedWrites.reduce((sum, write) => sum + write.attempts, 0);
 
   await freezeRecorder(page);
   const buffer = await readRecorderBuffer(page);
@@ -961,6 +1053,7 @@ async function clickWarmTarget(page: Page, scenario: Scenario, opts: Options): P
   if (chosen === null) throw new Error(`warm target not found for ${scenario.key}`);
 
   let lastError: string | null = null;
+  let clicked = false;
   for (const selector of [chosen.selector, ...selectors.filter((candidate) => candidate !== chosen!.selector)]) {
     const locator = page.locator(selector);
     const count = await locator.count().catch(() => 0);
@@ -971,20 +1064,74 @@ async function clickWarmTarget(page: Page, scenario: Scenario, opts: Options): P
       await row.hover({ timeout: 5_000 });
       await page.waitForTimeout(opts.hoverLeadMs);
       await row.click({ timeout: 5_000 });
-      return;
+      clicked = true;
+      break;
     } catch (error) {
       lastError = (error as Error).message;
       continue;
     }
   }
-  throw new Error(`warm target not found for ${scenario.key}${lastError ? `: ${lastError.split("\n")[0]}` : ""}`);
+  if (!clicked) {
+    throw new Error(`warm target not found for ${scenario.key}${lastError ? `: ${lastError.split("\n")[0]}` : ""}`);
+  }
+
+  // The click only counts once the app has actually selected the intended issue.
+  // `replace` runs inside `startTransition`, so the URL commits a beat after the
+  // click; poll for it rather than sleeping. Throwing (instead of falling through
+  // to a 20 s ready wait) makes the round record `error` immediately and keeps a
+  // wrong landing from being reported as a slow one.
+  if (scenario.expectIssueId !== null) {
+    const issueParam = await waitForUrlIssue(page, scenario.expectIssueId);
+    if (issueParam !== scenario.expectIssueId) {
+      throw new Error(
+        `deeplink warm: url issue=${issueParam ?? "(none)"} expected ${scenario.expectIssueId}`,
+      );
+    }
+  }
+}
+
+/** `?issue=` currently in the URL, or null when the parameter is absent. */
+async function selectedIssueInUrl(page: Page): Promise<string | null> {
+  const url = page.url();
+  const match = /[?&]issue=([^&]+)/.exec(url);
+  return match ? decodeURIComponent(match[1]!) : null;
+}
+
+/**
+ * Waits for the URL's `issue` parameter to become `expected`, and returns
+ * whatever it holds when the wait gives up (so the caller can report the actual
+ * value). The inbox commits its selection inside `startTransition`, so the URL
+ * updates a tick after the click rather than synchronously.
+ */
+async function waitForUrlIssue(page: Page, expected: string, timeoutMs = 3_000): Promise<string | null> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const current = await selectedIssueInUrl(page);
+    if (current === expected || Date.now() >= deadline) return current;
+    await page.waitForTimeout(100);
+  }
+}
+
+/**
+ * True when a warm round could not drive its entry page, which is a skip rather
+ * than a timing result.
+ *
+ * Two shapes reach here: the target row is not in the entry list at all
+ * (`warm target not found`), and the click happened but the app never selected
+ * the intended issue (`deeplink warm: url issue=...`). Both mean the measured
+ * page was never opened, so waiting out the ready budget would only report a
+ * timeout for a screen nobody asked to measure.
+ */
+function isEntryFailure(message: string | undefined): boolean {
+  if (!message) return false;
+  return message.startsWith("warm target not found") || message.startsWith("deeplink warm: url issue=");
 }
 
 /**
  * Row index to click for a warm round.
  *
- * The deep link knows its row from the app's grouping functions; every other
- * scenario clicks the first matching row.
+ * The deep link knows its row from `inboxDomRowIndex`; every other scenario
+ * clicks the first matching row.
  */
 function warmRowIndex(scenario: Scenario, count: number): number {
   if (scenario.inboxItemId === null || scenario.inboxRowIndex === null) return 0;
@@ -1131,11 +1278,9 @@ function buildScenarios(options: {
   runningSkip: string;
   issueShort: string;
   issueLong: string;
-  issueShortIdentifier: string;
-  issueLongIdentifier: string;
-  /** Comment counts from the API, so the report states what was actually measured. */
-  issueShortComments: number | null;
-  issueLongComments: number | null;
+  /** Fixture state from the API: identifiers, comment counts and eligibility. */
+  shortFixture: FixtureState;
+  longFixture: FixtureState;
   pinnedInboxItem: string | null;
   deepLinkAuto: boolean;
 }): Scenario[] {
@@ -1148,16 +1293,16 @@ function buildScenarios(options: {
     {
       key: "detail-short",
       issueId: options.issueShort,
-      identifier: options.issueShortIdentifier,
-      note: withCount(undefined, options.issueShortComments),
-      skipReason: null as string | null,
+      identifier: options.shortFixture.identifier,
+      note: withCount(undefined, options.shortFixture.commentCount),
+      skipReason: options.shortFixture.skipReason,
     },
     {
       key: "detail-long",
       issueId: options.issueLong,
-      identifier: options.issueLongIdentifier,
-      note: withCount("长", options.issueLongComments),
-      skipReason: null as string | null,
+      identifier: options.longFixture.identifier,
+      note: withCount("长", options.longFixture.commentCount),
+      skipReason: options.longFixture.skipReason,
     },
   ];
   detailScenarios.push({
@@ -1371,19 +1516,30 @@ async function main(): Promise<void> {
     phase("probeDeepLinkTarget", phaseStarted);
 
     phaseStarted = Date.now();
-    const identifierIds = new Set<string>([opts.issueShort, opts.issueLong]);
+    // One read per fixture gives the identifier, the comment count and whether
+    // the fixture is still enterable from the default list.
+    const [shortFixture, longFixture] = await Promise.all([
+      probeFixture(opts.baseUrl, token, opts.issueShort),
+      probeFixture(opts.baseUrl, token, opts.issueLong),
+    ]);
+    phase("probeFixtures", phaseStarted);
+    for (const [key, fixture] of [["detail-short", shortFixture], ["detail-long", longFixture]] as const) {
+      process.stdout.write(
+        `  ${key}: ${fixture.identifier}${fixture.skipReason ? ` SKIPPED (${fixture.skipReason})` : ""}` +
+          `, ${fixture.commentCount ?? "?"} comment(s), ${fixture.timelineEntries ?? "?"} timeline entries\n`,
+      );
+    }
+
+    const identifierIds = new Set<string>();
     if (running) identifierIds.add(running.issueId);
     if (deepLinkProbe.target) identifierIds.add(deepLinkProbe.target.issueId);
     const identifiers = await resolveIdentifiers(opts.baseUrl, token, [...identifierIds]);
-    phase("resolveIdentifiers", phaseStarted);
     const label = (issueId: string): string => identifiers.get(issueId) ?? issueId;
 
-    phaseStarted = Date.now();
-    const commentCounts = await Promise.all([
-      probeCommentCount(opts.baseUrl, token, opts.issueShort),
-      probeCommentCount(opts.baseUrl, token, opts.issueLong),
+    const fixtureByScenario = new Map<string, FixtureState>([
+      ["detail-short", shortFixture],
+      ["detail-long", longFixture],
     ]);
-    phase("probeCommentCounts", phaseStarted);
 
     const scenarios = buildScenarios({
       deepLink: deepLinkProbe.target,
@@ -1392,10 +1548,8 @@ async function main(): Promise<void> {
       runningSkip: "all-running-issues-in-mul383-family",
       issueShort: opts.issueShort,
       issueLong: opts.issueLong,
-      issueShortIdentifier: label(opts.issueShort),
-      issueLongIdentifier: label(opts.issueLong),
-      issueShortComments: commentCounts[0],
-      issueLongComments: commentCounts[1],
+      shortFixture,
+      longFixture,
       pinnedInboxItem: opts.inboxItem,
       deepLinkAuto: deepLinkProbe.target !== null,
     });
@@ -1407,7 +1561,7 @@ async function main(): Promise<void> {
     }
     if (deepLinkProbe.target) {
       process.stdout.write(
-        `  deeplink: ${deepLinkProbe.target.inboxItemId} row=${deepLinkProbe.target.rowIndex} comment=${deepLinkProbe.target.commentId}${deepLinkProbe.target.sessionId ? " (session scoped)" : ""}\n`,
+        `  deeplink: ${deepLinkProbe.target.inboxItemId} apiIndex=${deepLinkProbe.target.apiIndex} domRow=${deepLinkProbe.target.rowIndex} issue=${deepLinkProbe.target.issueId} comment=${deepLinkProbe.target.commentId}${deepLinkProbe.target.sessionId ? " (session scoped)" : ""}\n`,
       );
     } else {
       process.stdout.write(`  deeplink: skipped (${deepLinkProbe.skipped ?? "unknown"})\n`);
@@ -1447,6 +1601,10 @@ async function main(): Promise<void> {
           hoverLeadMs: scenario.mode === "warm" ? opts.hoverLeadMs : null,
           rounds: [],
           stats: computeScenarioStats([]),
+          ...(fixtureByScenario.has(scenario.key)
+            ? { timelineEntries: fixtureByScenario.get(scenario.key)!.timelineEntries }
+            : null),
+          ...deepLinkScenarioFields(scenario, deepLinkProbe.target),
         });
         continue;
       }
@@ -1481,6 +1639,10 @@ async function main(): Promise<void> {
       }
 
       const mode: SelectorMode = rounds.some((round) => round.selectorMode === "contract") ? "contract" : "legacy";
+      // An entry failure means the measured page was never opened, so the row is
+      // reported as skipped with the reason instead of as a 20 s timeout. The
+      // round detail is still carried, because it holds the error text.
+      const entryFailure = rounds.find((round) => round.entryFailed) ?? null;
       byScenario.push({
         key: scenario.key,
         mode: scenario.mode,
@@ -1488,15 +1650,17 @@ async function main(): Promise<void> {
         rule: READING_RULE,
         anchorRule: rounds[0]?.anchorRule ?? anchorRulePreview(scenario),
         selectorMode: mode,
-        skipped: false,
-        skipReason: null,
+        skipped: entryFailure !== null,
+        skipReason: entryFailure
+          ? (scenario.expectIssueId !== null ? "warm-target-url-mismatch" : "warm-target-not-in-list")
+          : null,
         ...(scenario.targetSelection ? { targetSelection: scenario.targetSelection } : {}),
-        ...(scenario.key === "deeplink" && deepLinkProbe.target
-          ? {
-            issueHasRunningTask: deepLinkProbe.target.issueHasRunningTask,
-            inboxItemId: deepLinkProbe.target.inboxItemId,
-          }
+        ...(fixtureByScenario.has(scenario.key)
+          ? { timelineEntries: fixtureByScenario.get(scenario.key)!.timelineEntries }
           : null),
+        // Deep-link bookkeeping for a measured row: which notification was used,
+        // where it sat in the API page and which DOM row the click targeted.
+        ...deepLinkScenarioFields(scenario, deepLinkProbe.target),
         hoverLeadMs: scenario.mode === "warm" ? opts.hoverLeadMs : null,
         rounds: rounds.map(roundSummary),
         stats: computeScenarioStats(
@@ -1596,6 +1760,34 @@ async function main(): Promise<void> {
   } finally {
     await browser.close().catch(() => {});
   }
+}
+
+/**
+ * Deep-link bookkeeping for a report row.
+ *
+ * Which notification and which DOM row were used is what makes two runs
+ * comparable, and a skipped deep link needs it just as much as a measured one:
+ * the reason it was skipped is usually "the target was not on the rendered page".
+ */
+function deepLinkScenarioFields(
+  scenario: Scenario,
+  target: DeepLinkTarget | null,
+): {
+  targetSelection?: string;
+  inboxItemId?: string | null;
+  issueHasRunningTask?: boolean;
+  inboxApiIndex?: number | null;
+  inboxDomRowIndex?: number | null;
+} {
+  if (scenario.key !== "deeplink") return {};
+  if (!target) return scenario.targetSelection ? { targetSelection: scenario.targetSelection } : {};
+  return {
+    targetSelection: scenario.targetSelection ?? undefined,
+    inboxItemId: target.inboxItemId,
+    issueHasRunningTask: target.issueHasRunningTask,
+    inboxApiIndex: target.apiIndex,
+    inboxDomRowIndex: target.rowIndex,
+  };
 }
 
 /** Anchor rule without a measured frame: used for the skipped-scenario rows. */

@@ -26,6 +26,8 @@
  *   MUL384_INBOX_PIN     explicit --inbox-item override
  *   MUL384_INBOX_ELIGIBLE=0  seed the target row without comment/session details,
  *                        so auto-selection has nothing eligible to pick
+ *   MUL384_ARCHIVE_FIXTURE=1  archive the short fixture, so the fixture precheck's
+ *                        skip path (`skipped: fixture-archived`) is exercised
  */
 import { Database } from "bun:sqlite";
 import { mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync } from "node:fs";
@@ -268,7 +270,31 @@ try {
       cancelledIssue.id,
     );
   }
+  // Successful autopilot runs collapse into ONE display row per autopilot id
+  // (`mergeAutopilotRuns`), so seeding several makes the API index diverge from the
+  // DOM row index — the production shape that broke the warm deep link (50 API
+  // records rendered as 8 rows).
+  for (let i = 0; i < 4; i++) {
+    insertInbox(
+      `inb_local_run_${i}`,
+      "autopilot_run_completed",
+      `Autopilot run ${i}`,
+      { autopilot_id: "auto_local", autopilot_title: "Local autopilot" },
+      new Date(Date.now() + 30_000 + i * 1_000).toISOString(),
+      cancelledIssue.id,
+    );
+  }
   const inboxItem = { id: inboxItemId };
+
+  // Archive the short fixture on demand: the default `/issues` list renders
+  // neither archived nor cancelled issues, so this is the state that made a warm
+  // round burn 20 s before the precheck existed.
+  if (process.env.MUL384_ARCHIVE_FIXTURE === "1") {
+    database.run(
+      "UPDATE multiremi_issues SET archived_at = ? WHERE id = ?",
+      [new Date().toISOString(), shortIssue.id],
+    );
+  }
 
   process.stdout.write(
     `seeded: short=${shortIssue.key} long=${longIssue.key} running=${runningIssue.key} deeplink=${deepLinkIssue.key} inbox=${inboxItem?.id ?? "none"}\n`,
