@@ -939,6 +939,53 @@ function RawBodyPreview({
 }
 
 /**
+ * Fields the pre-MUL-386 client-side list search covered that the server `q`
+ * deliberately does not: issue key and agent name live behind joins the list
+ * predicate has no reason to make, and `body` is no longer on the row.
+ */
+function matchesLocalSubmissionFields(
+  submission: KnowledgeSubmissionListItem,
+  query: string,
+): boolean {
+  return [
+    submission.id, submission.source_type, submission.scope,
+    submission.proposed_path ?? "", submission.proposed_slug ?? "",
+    submission.source_issue?.key ?? submission.source_issue_id ?? "",
+    submission.author_agent?.name ?? submission.author_agent_id ?? "",
+  ].some((value) => value.toLowerCase().includes(query));
+}
+
+/**
+ * Union of the server `q` hits and the rows the local-field predicate keeps.
+ *
+ * QA found the regression this fixes (MUL-386): the pane rendered the server
+ * result as soon as `q` landed, so a row that only matched issue key or agent
+ * name disappeared — the server cannot see those fields. Ordering keeps the
+ * unfiltered list's order (newest first); a server hit that is not on the loaded
+ * page is appended in the server's own order.
+ */
+function mergeSubmissionRows(
+  allRows: KnowledgeSubmissionListItem[],
+  localRows: KnowledgeSubmissionListItem[],
+  serverRows: KnowledgeSubmissionListItem[],
+): KnowledgeSubmissionListItem[] {
+  const kept = new Set([...localRows, ...serverRows].map((row) => row.id));
+  const rows: KnowledgeSubmissionListItem[] = [];
+  const seen = new Set<string>();
+  for (const row of allRows) {
+    if (!kept.has(row.id)) continue;
+    rows.push(row);
+    seen.add(row.id);
+  }
+  for (const row of serverRows) {
+    if (seen.has(row.id)) continue;
+    rows.push(row);
+    seen.add(row.id);
+  }
+  return rows;
+}
+
+/**
  * Raw submissions pane.
  *
  * Search is split by where the field lives: `body`, id, path, slug, scope and
@@ -949,11 +996,13 @@ function RawBodyPreview({
  */
 function RawPane({
   submissions,
+  allSubmissions,
   search,
   serverQuery,
   workspaceId,
 }: {
   submissions: KnowledgeSubmissionListItem[];
+  allSubmissions: KnowledgeSubmissionListItem[];
   search: string;
   serverQuery: string;
   workspaceId: string;
@@ -964,14 +1013,16 @@ function RawPane({
   const formatRelativeDate = useFormatRelativeDate();
   const query = search.trim().toLowerCase();
   const serverMatches = Boolean(serverQuery.trim());
-  const rows = query && serverMatches
-    ? submissions
-    : submissions.filter((submission) => !query || [
-      submission.id, submission.source_type, submission.scope,
-      submission.proposed_path ?? "", submission.proposed_slug ?? "",
-      submission.source_issue?.key ?? submission.source_issue_id ?? "",
-      submission.author_agent?.name ?? submission.author_agent_id ?? "",
-    ].some((value) => value.toLowerCase().includes(query)));
+  const localRows = query
+    ? allSubmissions.filter((submission) => matchesLocalSubmissionFields(submission, query))
+    : allSubmissions;
+  const rows = !query
+    ? allSubmissions
+    : !serverMatches
+      // Debounce window: the server answer for this term has not landed yet, so
+      // keep filtering the full list locally instead of flashing it unfiltered.
+      ? localRows
+      : mergeSubmissionRows(allSubmissions, localRows, submissions);
   if (rows.length === 0) return <EmptyState icon={FileInput} title={query ? t(($) => $.knowledge.no_results) : t(($) => $.knowledge.raw_empty)} />;
   const groups = [
     { key: "evidence", title: t(($) => $.knowledge.raw_evidence_group), rows: rows.filter((submission) => submission.source_type !== "agent") },
@@ -1204,6 +1255,15 @@ export function KnowledgePage() {
     ...knowledgeSubmissionsOptions(workspaceId, rawQuery),
     enabled: Boolean(workspaceId) && activeTab === "raw",
   });
+  // The search box has to keep matching `source_issue.key` and `author_agent.name`,
+  // which the server's `q` deliberately does not join. The pane unions those local
+  // hits with the server result, so it needs the unfiltered page as well. With an
+  // empty query this is the same cache key (and so the same request) as the first
+  // load, and it is only fetched while the Raw tab is on screen (MUL-386 QA).
+  const unfilteredSubmissionsQuery = useQuery({
+    ...knowledgeSubmissionsOptions(workspaceId, ""),
+    enabled: Boolean(workspaceId) && activeTab === "raw",
+  });
   const runsQuery = useQuery({ ...knowledgeRunsOptions(workspaceId), enabled: Boolean(workspaceId) && activeTab === "runs" });
   const projects = projectsQuery.data ?? [];
   const docs = docsQuery.data ?? [];
@@ -1211,13 +1271,16 @@ export function KnowledgePage() {
   const repositories = repositoriesQuery.data?.repositories ?? [];
   const summaries = repositoryWikiQuery.data ?? [];
   const submissions = submissionsQuery.data ?? [];
+  const unfilteredSubmissions = unfilteredSubmissionsQuery.data ?? [];
   const runs = runsQuery.data ?? [];
   const formalMemoryCount = memoryDocs.length;
   const formalWikiCount = docs.filter((doc) => doc.kind === "wiki" && doc.slug !== "_schema").length
     + summaries.reduce((total, summary) => total + summary.page_count, 0);
   const counts: Record<KnowledgeTab, number | undefined> = {
     wiki: docsQuery.data && repositoryWikiQuery.data ? formalWikiCount : undefined,
-    raw: submissionsQuery.data ? submissions.length : undefined,
+    // Count badge keeps the baseline meaning: the size of the raw input list,
+    // not the size of the current server `q` result.
+    raw: unfilteredSubmissionsQuery.data ? unfilteredSubmissions.length : undefined,
     memory: memoryDocsQuery.data ? formalMemoryCount : undefined,
     runs: runsQuery.data ? runs.length : undefined,
   };
@@ -1237,10 +1300,18 @@ export function KnowledgePage() {
   const wikiError = projectState.error && repositoryState.error ? projectState.error : null;
   const memoryPending = projectsQuery.isPending || docsQuery.isPending || memoryDocsQuery.isPending;
   const memoryError = projectsQuery.error ?? docsQuery.error ?? memoryDocsQuery.error;
-  const panelPending = activeTab === "raw" ? submissionsQuery.isPending : activeTab === "runs" ? runsQuery.isPending : activeTab === "memory" ? memoryPending : wikiPending;
-  const panelError = activeTab === "raw" ? submissionsQuery.error : activeTab === "runs" ? runsQuery.error : activeTab === "memory" ? memoryError : wikiError;
+  // A non-empty query makes the pane union two responses, so both have to be
+  // settled before it can claim to be complete.
+  const rawPending = submissionsQuery.isPending
+    || (Boolean(rawQuery) && unfilteredSubmissionsQuery.isPending);
+  const rawError = submissionsQuery.error ?? (rawQuery ? unfilteredSubmissionsQuery.error : null);
+  const panelPending = activeTab === "raw" ? rawPending : activeTab === "runs" ? runsQuery.isPending : activeTab === "memory" ? memoryPending : wikiPending;
+  const panelError = activeTab === "raw" ? rawError : activeTab === "runs" ? runsQuery.error : activeTab === "memory" ? memoryError : wikiError;
   const retry = () => {
-    if (activeTab === "raw") void submissionsQuery.refetch();
+    if (activeTab === "raw") {
+      void submissionsQuery.refetch();
+      if (rawQuery) void unfilteredSubmissionsQuery.refetch();
+    }
     else if (activeTab === "runs") void runsQuery.refetch();
     else if (activeTab === "memory") {
       void projectsQuery.refetch();
@@ -1294,7 +1365,7 @@ export function KnowledgePage() {
         {panelPending ? <LoadingPane /> : panelError ? <ErrorPane error={panelError} retry={retry} /> : (
           <>
             <TabsContent value="wiki" className="min-h-0 overflow-y-auto lg:flex lg:flex-col"><WikiPane projects={projects} docs={docs} repositories={repositories} summaries={summaries} search={search} sortOrder={sortOrder} projectState={projectState} repositoryState={repositoryState} /></TabsContent>
-            <TabsContent value="raw" className="min-h-0 overflow-y-auto"><RawPane submissions={submissions} search={search} serverQuery={rawQuery} workspaceId={workspaceId} /></TabsContent>
+            <TabsContent value="raw" className="min-h-0 overflow-y-auto"><RawPane submissions={submissions} allSubmissions={unfilteredSubmissions} search={search} serverQuery={rawQuery} workspaceId={workspaceId} /></TabsContent>
             <TabsContent value="memory" className="min-h-0 overflow-y-auto lg:flex lg:flex-col"><MemoryPane projects={projects} docs={memoryDocs} wikiPages={docs} search={search} /></TabsContent>
             <TabsContent value="runs" className="min-h-0 overflow-y-auto"><RunPane runs={runs} search={search} /></TabsContent>
           </>

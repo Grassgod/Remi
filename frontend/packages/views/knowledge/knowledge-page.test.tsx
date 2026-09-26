@@ -29,6 +29,8 @@ const state = vi.hoisted(() => ({
   backlinks: {} as Record<string, unknown[]>,
   repositoryDocs: {} as Record<string, unknown[]>,
   submissions: [] as unknown[],
+  /** Per-`q` server results. An absent term falls back to `submissions`. */
+  submissionsByQuery: {} as Record<string, unknown[]>,
   submissionDetails: {} as Record<string, unknown>,
   submissionDetailPending: false,
   runs: [] as unknown[],
@@ -57,11 +59,14 @@ vi.mock("@tanstack/react-query", () => ({
     state.observedQueries.push({ key, enabled: (options as { enabled?: boolean }).enabled });
     if (key[0] === "knowledge") {
       const submissions = key[2] === "submissions";
+      const submissionsQuery = String(key[3] ?? "");
       const submissionDetail = key[2] === "submission";
       const runDetail = key[2] === "runs" && key.length > 3;
       return {
         data: submissions
-          ? state.submissions
+          ? (submissionsQuery && state.submissionsByQuery[submissionsQuery]
+            ? state.submissionsByQuery[submissionsQuery]
+            : state.submissions)
           : submissionDetail
             ? state.submissionDetails[String(key[3])]
             : runDetail
@@ -316,7 +321,7 @@ describe("KnowledgePage", () => {
   beforeEach(() => {
     Object.assign(state, {
       projects: [], docs: [], memoryDocs: [], repositories: [], summaries: [], projectDetails: {}, backlinks: {}, repositoryDocs: {},
-      submissions: [], submissionDetails: {}, submissionDetailPending: false, runs: [], runDetail: null,
+      submissions: [], submissionsByQuery: {}, submissionDetails: {}, submissionDetailPending: false, runs: [], runDetail: null,
       basePending: false, submissionsPending: false, runsPending: false, runDetailPending: false,
       repositoryPending: false, repositoryError: null, projectPending: false, projectError: null,
       baseError: null, submissionsError: null, runsError: null,
@@ -642,6 +647,99 @@ describe("KnowledgePage", () => {
 
     fireEvent.pointerEnter(tooltipRoot);
     await waitFor(() => expect(screen.getByRole("tooltip")).toHaveTextContent(body));
+  });
+
+  /**
+   * Waits until the debounced Raw query for `term` has actually been issued, so a
+   * test asserts the post-server-result state rather than the debounce window
+   * (where the pane still filters locally and every implementation looks right).
+   */
+  async function waitForServerQuery(term: string) {
+    await waitFor(() => expect(
+      state.observedQueries.some(({ key }) => key[0] === "knowledge" && key[2] === "submissions" && key[3] === term),
+    ).toBe(true));
+  }
+
+  /**
+   * QA regression (MUL-386): the Raw pane used to render the server `q` result
+   * as soon as it landed, so a row that only matched issue key or agent name —
+   * fields the server predicate deliberately does not join — disappeared.
+   */
+  it("keeps Raw rows that only match issue key or agent name after the server query lands", async () => {
+    const user = userEvent.setup();
+    state.submissions = [
+      submission({
+        id: "ksub-issue",
+        source_issue_id: "issue-4",
+        source_issue: { id: "issue-4", key: "MUL-4", title: "Knowledge chain" },
+        body_excerpt: "neutral body text",
+      }),
+      submission({
+        id: "ksub-agent",
+        author_agent_id: "agent-onyx",
+        author_agent: { id: "agent-onyx", name: "Onyx Draft Writer" },
+        body_excerpt: "another neutral body",
+      }),
+    ];
+    // The server cannot see either field, so both terms come back empty.
+    state.submissionsByQuery["MUL-4"] = [];
+    state.submissionsByQuery["Onyx Draft Writer"] = [];
+
+    renderPage();
+    await user.click(screen.getByRole("tab", { name: /Raw/ }));
+    const input = screen.getByPlaceholderText("Search source, issue, agent, or proposed target...");
+
+    await user.type(input, "MUL-4");
+    await waitForServerQuery("MUL-4");
+    expect(screen.getByRole("link", { name: "MUL-4" })).toBeInTheDocument();
+    expect(screen.queryByText("Nothing matches your search")).not.toBeInTheDocument();
+
+    await user.clear(input);
+    await user.type(input, "Onyx Draft Writer");
+    await waitForServerQuery("Onyx Draft Writer");
+    expect(screen.getByText("Onyx Draft Writer")).toBeInTheDocument();
+  });
+
+  it("keeps a server-side body hit and does not duplicate rows matched on both sides", async () => {
+    const user = userEvent.setup();
+    state.submissions = [
+      submission({ id: "ksub-body", body_excerpt: "server side needle", proposed_path: "guides/deploy.md" }),
+      submission({ id: "ksub-other", body_excerpt: "unrelated" }),
+    ];
+    // `deploy` matches both the server (proposed_path) and the local predicate.
+    state.submissionsByQuery.deploy = [state.submissions[0] as never];
+
+    renderPage();
+    await user.click(screen.getByRole("tab", { name: /Raw/ }));
+    await user.type(screen.getByPlaceholderText("Search source, issue, agent, or proposed target..."), "deploy");
+
+    await waitForServerQuery("deploy");
+    expect(screen.getByText("guides/deploy.md")).toBeInTheDocument();
+    // One row, exactly once: the union is keyed by id.
+    expect(screen.getAllByText("guides/deploy.md")).toHaveLength(1);
+    expect(screen.queryByText("unrelated")).not.toBeInTheDocument();
+  });
+
+  it("filters locally during the debounce window instead of flashing the full list", async () => {
+    const user = userEvent.setup();
+    state.submissions = [
+      submission({ id: "ksub-keep", source_issue_id: "issue-9", source_issue: { id: "issue-9", key: "MUL-9", title: "Keep" } }),
+      submission({ id: "ksub-drop", source_issue_id: "issue-8", source_issue: { id: "issue-8", key: "MUL-8", title: "Drop" } }),
+    ];
+    state.submissionsByQuery["MUL-9"] = [];
+
+    renderPage();
+    await user.click(screen.getByRole("tab", { name: /Raw/ }));
+    await user.type(screen.getByPlaceholderText("Search source, issue, agent, or proposed target..."), "MUL-9");
+
+    // During the debounce window, the local predicate already narrows the list.
+    expect(screen.getByRole("link", { name: "MUL-9" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "MUL-8" })).not.toBeInTheDocument();
+
+    // And it stays narrowed after the server returns an empty result for the term.
+    await waitForServerQuery("MUL-9");
+    expect(screen.getByRole("link", { name: "MUL-9" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "MUL-8" })).not.toBeInTheDocument();
   });
 
   it("renders a compilation run with multiple Raw inputs and multiple outputs", () => {

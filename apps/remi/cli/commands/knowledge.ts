@@ -28,6 +28,19 @@ import { resolveRepository } from "./repo.js";
 
 type KnowledgeKind = "memory" | "wiki";
 
+/**
+ * The submissions list's `--query` is narrower than the generic page option: the
+ * server predicate covers the columns it can see, and the SQL deliberately does
+ * not join issues or agents. Say so here, because the Knowledge page keeps
+ * matching those two fields client-side on top of the server result (MUL-386).
+ */
+const SUBMISSION_QUERY_OPTION: CliOptionSpec = {
+  name: "query",
+  type: "string",
+  valueName: "text",
+  description: "Server-side search over body, id, proposed_path, proposed_slug, source_type, scope "
+    + "(case-insensitive). Does not match issue key or agent name",
+};
 const PROJECT_OPTION: CliOptionSpec = { name: "project", type: "string", valueName: "project", description: "Project ID, unique short ID, or unique name" };
 const REPOSITORY_OPTION: CliOptionSpec = { name: "repo", type: "string", valueName: "repository", description: "Repository ID, unique short ID, or unique name" };
 const KNOWLEDGE_FIELDS: readonly CliOptionSpec[] = [
@@ -120,10 +133,11 @@ function knowledgeControlPlaneSpecs(): CommandSpec[] {
       "knowledge.submissions",
       ["knowledge", "submissions"],
       "List raw knowledge submissions (no body/patch; only body_excerpt — "
-        + "use `remi knowledge inspect <id>` for full content; --query searches body and path server-side)",
+        + "use `remi knowledge inspect <id>` for full content; --query searches body, id, proposed_path, "
+        + "proposed_slug, source_type and scope server-side, but not issue key or agent name)",
       "read",
       [],
-      [...scopeOptions, ...PAGE_OPTIONS],
+      [...scopeOptions, SUBMISSION_QUERY_OPTION, ...PAGE_OPTIONS],
       async (invocation) => {
       const client = await clientFor(invocation);
       const project = await resolvedProjectOption(invocation, client, false, true);
@@ -141,7 +155,7 @@ function knowledgeControlPlaneSpecs(): CommandSpec[] {
       });
       if (outputMode(invocation) !== "json") {
         console.error(`Filters (intersection): workspace=${requiredWorkspace(invocation)}, project=${project?.id ?? "*"}, repository=${repository?.id ?? "*"}, scope=${stringOption(invocation, "scope") ?? "*"}, status=${stringOption(invocation, "status") ?? "*"}, query=${stringOption(invocation, "query") ?? "*"}`);
-        console.error("Rows carry body_excerpt only; run `remi knowledge inspect <submission>` for body and patch.");
+        console.error("Rows carry body_excerpt only; run `remi knowledge inspect <submission>` for body and patch. --query matches body/id/proposed_path/proposed_slug/source_type/scope, not issue key or agent name.");
       }
       renderResource(invocation, response.data, ["submissions"]);
     }),

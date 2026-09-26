@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { dispatch } from "../../../apps/remi/cli/index.js";
+import { knowledgeCommandSpecs } from "../../../apps/remi/cli/commands/knowledge.js";
 
 const previousProjectId = process.env.MULTIREMI_PROJECT_ID;
 const previousToken = process.env.MULTIREMI_TOKEN;
@@ -125,5 +126,21 @@ describe("knowledge CLI control plane", () => {
       output: { action: "create", kind: "wiki", path: "overview.md", body: "curated" },
     });
     expect(logs).toHaveLength(8);
+  });
+
+  /**
+   * MUL-386: the Knowledge page keeps matching issue key and agent name locally
+   * because the server predicate does not join those tables. The CLI help has to
+   * say exactly that, or `--query` reads as a full-text search it is not.
+   */
+  it("documents the exact server-side scope of the submissions --query option", () => {
+    const submissions = knowledgeCommandSpecs().find((command) => command.id === "knowledge.submissions");
+    expect(submissions).toBeDefined();
+    const query = submissions!.options.find((option) => option.name === "query");
+    expect(query?.description).toBe(
+      "Server-side search over body, id, proposed_path, proposed_slug, source_type, scope "
+        + "(case-insensitive). Does not match issue key or agent name",
+    );
+    expect(submissions!.description).toContain("not issue key or agent name");
   });
 });
