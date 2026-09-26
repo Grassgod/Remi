@@ -17,7 +17,7 @@ import {
   type RepositoryWikiStorageJobInput,
   type RepositoryWikiStoreBatchOperation,
 } from "@multiremi/store/repos/repository-wiki-repo.js";
-import { OpenVikingClient } from "@multiremi/project-knowledge/openviking-client.js";
+import { OPENVIKING_DEFAULT_ATTEMPT_TIMEOUT_MS, OPENVIKING_MAX_RETRIES, OpenVikingClient } from "@multiremi/project-knowledge/openviking-client.js";
 import type { OpenVikingClientContract, ProjectKnowledgeMode } from "@multiremi/project-knowledge/types.js";
 import {
   decodeRepositoryWikiBody,
@@ -1202,8 +1202,8 @@ export function createRepositoryWikiServiceFromEnv(store: MultiremiStore): Repos
   return new RepositoryWikiService(store, new OpenVikingClient({
     baseUrl: process.env.MULTIREMI_OPENVIKING_URL?.trim() || "http://127.0.0.1:1933",
     apiKey,
-    timeoutMs: positiveInt(process.env.MULTIREMI_OPENVIKING_TIMEOUT_MS, 30_000),
-    maxRetries: positiveInt(process.env.MULTIREMI_OPENVIKING_MAX_RETRIES, 2),
+    timeoutMs: positiveInt(process.env.MULTIREMI_OPENVIKING_TIMEOUT_MS, OPENVIKING_DEFAULT_ATTEMPT_TIMEOUT_MS),
+    maxRetries: positiveInt(process.env.MULTIREMI_OPENVIKING_MAX_RETRIES, OPENVIKING_MAX_RETRIES),
   }), mode);
 }
 

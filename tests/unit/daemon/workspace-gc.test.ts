@@ -1,10 +1,12 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import * as fs from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { runWorkspaceGcOnce, type WorkspaceGcClient } from "@daemon/agent-runtime/workspace/gc.js";
+import { OWNED_DIRECTORY_QUARANTINE } from "@daemon/agent-runtime/workspace/safe-remove.js";
 import { MultiremiDaemon } from "@multiremi/daemon.js";
 
 const roots: string[] = [];
@@ -748,10 +750,11 @@ describe("Issue workspace GC", () => {
     expect(readFileSync(join(outside, "victim.txt"), "utf8")).toBe("keep\n");
   });
 
-  it("fails closed when a GC parent is replaced by a symlink during status lookup", async () => {
+  it("fails closed on one directory when a GC parent is replaced by a symlink during status lookup", async () => {
     const root = tempRoot();
     const runtimeRoot = join(root, ".task-runtime");
     const taskDir = join(runtimeRoot, "tsk_race");
+    const healthy = issueWorkspace(root, "MUL-healthy", "iss_healthy");
     const outside = tempRoot();
     const outsideTask = join(outside, "tsk_race");
     mkdirSync(join(taskDir, ".multiremi"), { recursive: true });
@@ -762,6 +765,7 @@ describe("Issue workspace GC", () => {
     }));
     mkdirSync(outsideTask, { recursive: true });
     writeFileSync(join(outsideTask, "victim.txt"), "keep\n");
+    const errors: string[] = [];
     const client = gcClient();
     client.getTaskGcCheck = async () => {
       rmSync(runtimeRoot, { recursive: true, force: true });
@@ -769,14 +773,22 @@ describe("Issue workspace GC", () => {
       return { status: "completed", completed_at: "2000-01-01T00:00:00.000Z" };
     };
 
-    await expect(runWorkspaceGcOnce({
+    // A replaced intermediate path is a per-directory failure: the symlink is
+    // refused, the round keeps going, and the untouched outside data stays.
+    expect(await runWorkspaceGcOnce({
       root,
       ttlMs: 0,
       orphanTtlMs: 0,
+      runtimeId: "rt_1",
       client,
+      requireIssueSessionArchive: true,
+      ensureIssueSessionArchive: async () => archiveBinding(),
+      onError: (_path, error) => errors.push(error instanceof Error ? error.message : String(error)),
       now: Date.now() + 1_000,
-    })).rejects.toThrow("must be a real directory");
+    })).toEqual({ cleaned: 1, orphaned: 0, skipped: 1 });
+    expect(errors).toEqual([expect.stringContaining("owned parent .task-runtime must be a real directory")]);
     expect(readFileSync(join(outsideTask, "victim.txt"), "utf8")).toBe("keep\n");
+    expect(existsSync(healthy)).toBe(false);
   });
 
   it("does not archive an Issue from a replacement workspace root", async () => {
@@ -794,7 +806,10 @@ describe("Issue workspace GC", () => {
       return { status: "done", updated_at: "2000-01-01T00:00:00.000Z" };
     };
 
-    const result = await runWorkspaceGcOnce({
+    // Ownership loss is the one failure that must abort the entire round: the
+    // replacement root belongs to someone else, so the sweep cannot continue
+    // evaluating directories under it.
+    await expect(runWorkspaceGcOnce({
       root,
       ttlMs: 0,
       orphanTtlMs: 0,
@@ -812,9 +827,7 @@ describe("Issue workspace GC", () => {
         return archiveBinding();
       },
       now: Date.now() + 1_000,
-    });
-
-    expect(result).toEqual({ cleaned: 0, orphaned: 0, skipped: 1 });
+    })).rejects.toThrow("workspace root identity changed");
     expect(archived).toBe(false);
     expect(readFileSync(join(root, "MUL-root-race", "private.txt"), "utf8")).toBe("replacement\n");
   });
@@ -856,6 +869,363 @@ describe("Issue workspace GC", () => {
     })).rejects.toThrow("workspace root identity changed");
     expect(readFileSync(join(root, ".task-runtime", "tsk_root_race", "private.txt"), "utf8")).toBe("replacement\n");
   });
+
+  it("skips the failing legacy task and reclaims the next one", async () => {
+    const root = tempRoot();
+    const blocked = legacyTask(root, "tsk_a_blocked");
+    const next = legacyTask(root, "tsk_b_next");
+    const errors: string[] = [];
+    const client = gcClient();
+    client.getTaskGcCheck = async () => ({ status: "completed", completed_at: "2000-01-01T00:00:00.000Z" });
+    const originalRename = fs.renameSync;
+    const rename = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      // The Linux strategy renames through the procfs alias of the parent fd,
+      // so match the basename rather than the resolved path.
+      if (basename(String(from)) === basename(blocked)) throw new Error("quarantine rename denied");
+      originalRename(from, to);
+    });
+    try {
+      expect(await runWorkspaceGcOnce({
+        root,
+        ttlMs: 0,
+        orphanTtlMs: 0,
+        client,
+        onError: (path, error) => errors.push(`${path}:${error instanceof Error ? error.message : error}`),
+        now: Date.now() + 1_000,
+      })).toEqual({ cleaned: 1, orphaned: 0, skipped: 1 });
+    } finally {
+      rename.mockRestore();
+    }
+
+    expect(errors).toEqual([`${blocked}:quarantine rename denied`]);
+    expect(existsSync(blocked)).toBe(true);
+    expect(existsSync(next)).toBe(false);
+  });
+
+  it("skips one directory when the lifecycle lock sees a rebound workspace key", async () => {
+    const root = tempRoot();
+    const rebound = issueWorkspace(root, "MUL-rebound", "iss_rebound");
+    const healthy = issueWorkspace(root, "MUL-after-rebind", "iss_after_rebind");
+    const errors: string[] = [];
+
+    const result = await runWorkspaceGcOnce({
+      root,
+      ttlMs: 0,
+      orphanTtlMs: 0,
+      runtimeId: "rt_1",
+      client: gcClient(),
+      requireIssueSessionArchive: true,
+      ensureIssueSessionArchive: async () => archiveBinding(),
+      withIssueWorkspaceLock: async (key, workspaceDir, action) => {
+        if (workspaceDir === rebound) {
+          // Model another actor rebinding this path to a different Issue while
+          // this sweep waited for the lifecycle lock. The key it locked with is
+          // no longer the key the workspace claims.
+          writeFileSync(join(rebound, ".multiremi", "gc.json"), JSON.stringify({
+            version: 2,
+            kind: "issue",
+            issue_id: "iss_somebody_else",
+            task_id: "tsk_somebody_else",
+          }));
+        }
+        expect(key).toBeString();
+        await action();
+      },
+      onError: (_path, error) => errors.push(error instanceof Error ? error.message : String(error)),
+      now: Date.now() + 1_000,
+    });
+
+    expect(result).toEqual({ cleaned: 1, orphaned: 0, skipped: 1 });
+    expect(errors).toEqual([
+      `Issue workspace ownership changed while waiting for lifecycle lock: ${rebound}`,
+    ]);
+    expect(existsSync(rebound)).toBe(true);
+    expect(existsSync(healthy)).toBe(false);
+  });
+
+  it("keeps sweeping when an unverified quarantine entry blocks one receipt", async () => {
+    const root = tempRoot();
+    const workspace = issueWorkspace(root, "MUL-28-retained", "iss_retained");
+    const quarantine = join(root, ".multiremi-delete-quarantine");
+    const healthy = issueWorkspace(root, "MUL-after-retained", "iss_after_retained");
+    let fail = true;
+    const cleaned: string[] = [];
+    const client = gcClient({ cleaned });
+    client.reportIssueWorkspaceCleaned = async (issueId) => {
+      if (fail && issueId === "iss_retained") throw new Error("server unavailable");
+      cleaned.push(issueId);
+    };
+
+    expect(await runWorkspaceGcOnce({
+      root,
+      ttlMs: 0,
+      orphanTtlMs: 0,
+      runtimeId: "rt_1",
+      client,
+      requireIssueSessionArchive: true,
+      ensureIssueSessionArchive: async () => archiveBinding(),
+      now: Date.now() + 1_000,
+    })).toEqual({ cleaned: 2, orphaned: 0, skipped: 0 });
+    expect(existsSync(workspace)).toBe(false);
+    expect(existsSync(healthy)).toBe(false);
+    expect(cleaned).toEqual(["iss_after_retained"]);
+
+    // Bytes that never proved their identity stay in the quarantine, so their
+    // receipt must not tell the control plane the workspace is gone.
+    mkdirSync(quarantine, { recursive: true, mode: 0o700 });
+    mkdirSync(join(quarantine, "MUL-28-retained"), { recursive: true, mode: 0o700 });
+    const errors: string[] = [];
+    fail = false;
+    // Replay the round without a fresh workspace to collect: only the retained
+    // receipt is left, and the quarantine must hold it back.
+    expect(readdirSync(join(root, ".gc-cleaned-outbox"))).toHaveLength(1);
+
+    const result = await runWorkspaceGcOnce({
+      root,
+      ttlMs: 0,
+      orphanTtlMs: 0,
+      runtimeId: "rt_1",
+      client,
+      requireIssueSessionArchive: true,
+      ensureIssueSessionArchive: async () => archiveBinding(),
+      onError: (_path, error) => errors.push(error instanceof Error ? error.message : String(error)),
+      now: Date.now() + 1_000,
+    });
+
+    expect(result).toEqual({ cleaned: 0, orphaned: 0, skipped: 0 });
+    expect(cleaned).toEqual(["iss_after_retained"]);
+    expect(errors).toEqual([
+      "unexpected entry in owned deletion quarantine: MUL-28-retained",
+      expect.stringContaining("Issue workspace bytes are retained in the deletion quarantine"),
+    ]);
+    expect(readdirSync(join(root, ".gc-cleaned-outbox"))).toHaveLength(1);
+    expect(readdirSync(quarantine)).toEqual(["MUL-28-retained"]);
+  });
+
+  it("aborts the round when the fence is lost while flushing a receipt", async () => {
+    const root = tempRoot();
+    const workspace = issueWorkspace(root, "MUL-outbox-ownership", "iss_outbox_ownership");
+    // Lose the supervisor lease exactly when the replayed report fails, so the
+    // failure classification is what decides whether the round continues.
+    let leaseLost = false;
+    let reportCalls = 0;
+    const client = gcClient();
+    client.reportIssueWorkspaceCleaned = async () => {
+      reportCalls++;
+      // The lease is lost while the replayed report fails, which is the only
+      // moment the outbox catch has to classify.
+      if (reportCalls === 2) leaseLost = true;
+      throw new Error("server unavailable");
+    };
+    const gcOptions = {
+      root,
+      ttlMs: 0,
+      orphanTtlMs: 0,
+      runtimeId: "rt_1",
+      client,
+      requireIssueSessionArchive: true,
+      ensureIssueSessionArchive: async () => archiveBinding(),
+      now: Date.now() + 1_000,
+    };
+
+    // Round 1 reclaims the workspace and parks the failed report.
+    expect(await runWorkspaceGcOnce(gcOptions)).toEqual({ cleaned: 1, orphaned: 0, skipped: 0 });
+    expect(existsSync(workspace)).toBe(false);
+    const outbox = join(root, ".gc-cleaned-outbox");
+    expect(readdirSync(outbox)).toHaveLength(1);
+
+    // Round 2 replays the receipt with the lease gone: the round must end
+    // instead of quietly dropping the cleaned-state report.
+    leaseLost = false;
+    await expect(runWorkspaceGcOnce({
+      ...gcOptions,
+      assertRootOwner: () => {
+        if (leaseLost) throw new Error("workspace supervisor lease lost");
+      },
+    })).rejects.toThrow("server unavailable");
+    expect(readdirSync(outbox)).toHaveLength(1);
+  });
+
+  it("keeps the outbox moving when a receipt fails but the fence holds", async () => {
+    const root = tempRoot();
+    const blocked = issueWorkspace(root, "MUL-outbox-blocked", "iss_outbox_blocked");
+    const healthy = issueWorkspace(root, "MUL-outbox-healthy", "iss_outbox_healthy");
+    const delivered: string[] = [];
+    const client = gcClient();
+    client.reportIssueWorkspaceCleaned = async (issueId) => {
+      if (issueId === "iss_outbox_blocked") throw new Error("receipt rejected");
+      delivered.push(issueId);
+    };
+    const errors: string[] = [];
+
+    const result = await runWorkspaceGcOnce({
+      root,
+      ttlMs: 0,
+      orphanTtlMs: 0,
+      runtimeId: "rt_1",
+      client,
+      requireIssueSessionArchive: true,
+      ensureIssueSessionArchive: async () => archiveBinding(),
+      onError: (_path, error) => errors.push(error instanceof Error ? error.message : String(error)),
+      now: Date.now() + 1_000,
+    });
+
+    // Both workspaces were reclaimed, so the failed report is not charged as a
+    // skipped directory; the healthy receipt is still delivered.
+    expect(result).toEqual({ cleaned: 2, orphaned: 0, skipped: 0 });
+    expect(existsSync(blocked)).toBe(false);
+    expect(existsSync(healthy)).toBe(false);
+    expect(delivered).toEqual(["iss_outbox_healthy"]);
+    expect(errors).toEqual([expect.stringContaining("receipt rejected")]);
+    expect(readdirSync(join(root, ".gc-cleaned-outbox"))).toHaveLength(1);
+  });
+
+  it("keeps sweeping with an unreadable quarantine and defers its outbox", async () => {
+    const root = tempRoot();
+    const quarantine = join(root, OWNED_DIRECTORY_QUARANTINE);
+    const parked = issueWorkspace(root, "MUL-quarantine-parked", "iss_quarantine_parked");
+    // Park a receipt whose report failed, so a later round has to replay it.
+    let reportFails = true;
+    const delivered: string[] = [];
+    const client = gcClient();
+    client.reportIssueWorkspaceCleaned = async (issueId) => {
+      if (reportFails) throw new Error("server unavailable");
+      delivered.push(issueId);
+    };
+    const gcOptions = {
+      root,
+      ttlMs: 0,
+      orphanTtlMs: 0,
+      runtimeId: "rt_1",
+      client,
+      requireIssueSessionArchive: true,
+      ensureIssueSessionArchive: async () => archiveBinding(),
+      now: Date.now() + 1_000,
+    };
+    expect(await runWorkspaceGcOnce(gcOptions)).toEqual({ cleaned: 1, orphaned: 0, skipped: 0 });
+    expect(existsSync(parked)).toBe(false);
+    const outbox = join(root, ".gc-cleaned-outbox");
+    expect(readdirSync(outbox)).toHaveLength(1);
+
+    // Fail only the directory listing of the quarantine itself, whichever way
+    // the platform addresses it (the plain path or a `/proc/self/fd` alias).
+    // Removal never lists the quarantine, so the rest of the round can proceed.
+    const quarantineInfo = statSync(quarantine);
+    const next = issueWorkspace(root, "MUL-quarantine-next", "iss_quarantine_next");
+    reportFails = false;
+    const errors: string[] = [];
+    const originalReaddir = fs.readdirSync;
+    const readdir = spyOn(fs, "readdirSync").mockImplementation(((...args: Parameters<typeof originalReaddir>) => {
+      const target = String(args[0]);
+      let sameDirectory = false;
+      try {
+        const info = statSync(target);
+        sameDirectory = info.dev === quarantineInfo.dev && info.ino === quarantineInfo.ino;
+      } catch {
+        sameDirectory = false;
+      }
+      if (sameDirectory) throw new Error("quarantine directory is unreadable");
+      return originalReaddir(...args);
+    }) as typeof originalReaddir);
+
+    let result;
+    try {
+      result = await runWorkspaceGcOnce({
+        ...gcOptions,
+        onError: (path, error) => errors.push(`${path}:${error instanceof Error ? error.message : String(error)}`),
+      });
+    } finally {
+      readdir.mockRestore();
+    }
+
+    // The unreadable quarantine is reported once and the round keeps going: the
+    // next workspace is still reclaimed and reports its own cleaned state.
+    expect(result).toEqual({ cleaned: 1, orphaned: 0, skipped: 1 });
+    expect(errors).toEqual([`${quarantine}:quarantine directory is unreadable`]);
+    expect(existsSync(next)).toBe(false);
+    expect(delivered).toEqual(["iss_quarantine_next"]);
+    // Which bytes the quarantine holds is unknown after a failed recovery, so
+    // the parked receipt was not replayed in this round.
+    expect(readdirSync(outbox)).toHaveLength(1);
+
+    // A round that can read the quarantine replays the parked receipt.
+    expect(await runWorkspaceGcOnce(gcOptions)).toEqual({ cleaned: 0, orphaned: 0, skipped: 0 });
+    expect(delivered).toEqual(["iss_quarantine_next", "iss_quarantine_parked"]);
+    expect(readdirSync(outbox)).toHaveLength(0);
+  });
+
+  it("fails closed on removal with a non-private quarantine without aborting the round", async () => {
+    const root = tempRoot();
+    const quarantine = join(root, OWNED_DIRECTORY_QUARANTINE);
+    // A quarantine other users can read is not the one this daemon created, so
+    // recovery refuses to read it and every removal refuses to use it.
+    mkdirSync(quarantine, { recursive: true, mode: 0o755 });
+    chmodSync(quarantine, 0o755);
+    const workspace = issueWorkspace(root, "MUL-quarantine-broken", "iss_quarantine_broken");
+    const delivered: string[] = [];
+    const errors: string[] = [];
+    const client = gcClient();
+    client.reportIssueWorkspaceCleaned = async (issueId) => { delivered.push(issueId); };
+
+    const result = await runWorkspaceGcOnce({
+      root,
+      ttlMs: 0,
+      orphanTtlMs: 0,
+      runtimeId: "rt_1",
+      client,
+      requireIssueSessionArchive: true,
+      ensureIssueSessionArchive: async () => archiveBinding(),
+      onError: (path, error) => errors.push(`${path}:${error instanceof Error ? error.message : String(error)}`),
+      now: Date.now() + 1_000,
+    });
+
+    // The round completes instead of aborting, reporting the quarantine once and
+    // the directory it could not remove once. Nothing is deleted and nothing is
+    // reported cleaned: an untrusted quarantine is a hard precondition for both.
+    expect(result).toEqual({ cleaned: 0, orphaned: 0, skipped: 2 });
+    expect(errors).toEqual([
+      `${quarantine}:owned deletion quarantine must not be accessible by group or other users: ${quarantine}`,
+      `${workspace}:owned deletion quarantine must not be accessible by group or other users: ${quarantine}`,
+    ]);
+    expect(existsSync(workspace)).toBe(true);
+    expect(delivered).toEqual([]);
+    // The receipt for the workspace that survived is dropped, so no later round
+    // can report it cleaned while its bytes are still on disk.
+    const outbox = join(root, ".gc-cleaned-outbox");
+    expect(safeOutboxReceipts(outbox)).toEqual([]);
+
+    // Repairing the quarantine lets the next round reclaim the workspace.
+    chmodSync(quarantine, 0o700);
+    expect(await runWorkspaceGcOnce({
+      root,
+      ttlMs: 0,
+      orphanTtlMs: 0,
+      runtimeId: "rt_1",
+      client,
+      requireIssueSessionArchive: true,
+      ensureIssueSessionArchive: async () => archiveBinding(),
+      now: Date.now() + 1_000,
+    })).toEqual({ cleaned: 1, orphaned: 0, skipped: 0 });
+    expect(existsSync(workspace)).toBe(false);
+    expect(delivered).toEqual(["iss_quarantine_broken"]);
+  });
+
+  it("aborts the round when the fence is lost during quarantine recovery", async () => {
+    const root = tempRoot();
+    issueWorkspace(root, "MUL-recovery-ownership", "iss_recovery_ownership");
+
+    await expect(runWorkspaceGcOnce({
+      root,
+      ttlMs: 0,
+      orphanTtlMs: 0,
+      runtimeId: "rt_1",
+      client: gcClient(),
+      requireIssueSessionArchive: true,
+      ensureIssueSessionArchive: async () => archiveBinding(),
+      assertRootOwner: () => { throw new Error("workspace root identity changed"); },
+      now: Date.now() + 1_000,
+    })).rejects.toThrow("workspace root identity changed");
+  });
 });
 
 function tempRoot(): string {
@@ -870,6 +1240,23 @@ function archiveBinding() {
     sourceRevision: "a".repeat(64),
     sha256: "b".repeat(64),
   };
+}
+
+function safeOutboxReceipts(outbox: string): string[] {
+  return existsSync(outbox) ? readdirSync(outbox).filter((name) => name.endsWith(".json")) : [];
+}
+
+function legacyTask(root: string, taskId: string): string {
+  // Legacy layout is <root>/<workspace-id>/<task-id>; a directory directly
+  // under the root is a single v2 unit instead.
+  const taskDir = join(root, "legacy-workspace", taskId);
+  mkdirSync(join(taskDir, ".multiremi"), { recursive: true });
+  writeFileSync(join(taskDir, ".multiremi", "gc.json"), JSON.stringify({
+    version: 2,
+    kind: "quick_create",
+    task_id: taskId,
+  }));
+  return taskDir;
 }
 
 function issueWorkspace(root: string, key: string, issueId: string): string {

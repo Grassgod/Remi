@@ -1,5 +1,22 @@
 import { describe, expect, it } from "bun:test";
-import { OpenVikingClient, OpenVikingClientError } from "@multiremi/project-knowledge/openviking-client.js";
+import {
+  clampAttemptTimeoutMs,
+  OpenVikingClient,
+  OpenVikingClientError,
+  OpenVikingDeadlineError,
+} from "@multiremi/project-knowledge/openviking-client.js";
+
+const PAGE = "viking://resources/multiremi/page.md";
+const ROOT = "viking://resources/multiremi";
+
+/** A fetch that never answers and rejects only when its signal aborts, as real fetch does. */
+function hangingFetch(calls: string[]): typeof fetch {
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push(`${init?.method ?? "GET"} ${new URL(String(input)).pathname}`);
+    const signal = init!.signal!;
+    return new Promise<Response>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+  }) as typeof fetch;
+}
 
 describe("OpenVikingClient", () => {
   it("allows cleanup deletes without waiting for semantic refresh and treats 404 as complete", async () => {
@@ -188,5 +205,115 @@ describe("OpenVikingClient", () => {
       retryable: true,
       status: null,
     });
+  });
+
+  it("clamps an env-sized attempt timeout to the time left before the deadline", async () => {
+    const now = 1_000_000;
+    expect(clampAttemptTimeoutMs(180_000, now + 25_000, now)).toBe(25_000);
+    expect(clampAttemptTimeoutMs(180_000, now + 3_000, now)).toBe(3_000);
+    expect(clampAttemptTimeoutMs(15_000, now + 25_000, now)).toBe(15_000);
+    expect(clampAttemptTimeoutMs(180_000, now - 1, now)).toBe(0);
+    expect(clampAttemptTimeoutMs(180_000, undefined, now)).toBe(180_000);
+
+    const calls: string[] = [];
+    const client = new OpenVikingClient({
+      baseUrl: "http://viking",
+      apiKey: "secret",
+      timeoutMs: 180_000,
+      maxRetries: 5,
+      // No deadline signal here, so only the clamped attempt timer can end the hung read.
+      deadlineAt: Date.now() + 250,
+      fetch: hangingFetch(calls),
+    });
+    const started = Date.now();
+    const error = await client.read(PAGE).catch((e) => e);
+    expect(error).toBeInstanceOf(OpenVikingDeadlineError);
+    expect(error).toMatchObject({ code: "DEADLINE_EXCEEDED", operation: "GET /api/v1/content/read", attempts: 1 });
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(calls).toEqual(["GET /api/v1/content/read"]);
+  });
+
+  it("caps retries at two however many the env asks for", async () => {
+    let calls = 0;
+    const client = new OpenVikingClient({
+      baseUrl: "http://viking",
+      apiKey: "secret",
+      maxRetries: 5,
+      fetch: (async () => {
+        calls++;
+        return Response.json({ status: "error", error: { message: "busy" } }, { status: 503 });
+      }) as unknown as typeof fetch,
+    });
+    await expect(client.read(PAGE)).rejects.toMatchObject({ status: 503, retryable: true });
+    expect(calls).toBe(3);
+  });
+
+  it("does not replay a write whose outcome is unknown", async () => {
+    const calls: string[] = [];
+    const client = new OpenVikingClient({
+      baseUrl: "http://viking",
+      apiKey: "secret",
+      fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        calls.push(`${init?.method} ${new URL(String(input)).pathname}`);
+        return Response.json({ status: "error", error: { message: "upstream" } }, { status: 503 });
+      }) as typeof fetch,
+    });
+    await expect(client.create(PAGE, ROOT, "content")).rejects.toMatchObject({ status: 503, retryable: true });
+    await expect(client.commit("project_doc:v2", [PAGE])).rejects.toMatchObject({ status: 503 });
+    expect(calls).toEqual(["POST /api/v1/content/batch-write", "POST /api/v1/snapshot/commit"]);
+
+    // The attempt timer, not the deadline, ends this write; a read would retry, a write must not.
+    const hung: string[] = [];
+    const slow = new OpenVikingClient({ baseUrl: "http://viking", apiKey: "secret", timeoutMs: 1_000, fetch: hangingFetch(hung) })
+      .withDeadline(Date.now() + 10_000);
+    await expect(slow.replace(PAGE, ROOT, "content", "a".repeat(64))).rejects.toMatchObject({ code: "TIMEOUT" });
+    expect(hung).toEqual(["POST /api/v1/content/batch-write"]);
+  });
+
+  it("replays writes OpenViking rejected unapplied, and idempotent ones", async () => {
+    const calls: string[] = [];
+    const responses = [
+      Response.json({ status: "error", error: { message: "slow down" } }, { status: 429 }),
+      Response.json({ status: "ok", result: {} }),
+      Response.json({ status: "error", error: { message: "busy" } }, { status: 503 }),
+      Response.json({ status: "ok", result: {} }),
+    ];
+    const client = new OpenVikingClient({
+      baseUrl: "http://viking",
+      apiKey: "secret",
+      fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        calls.push(`${init?.method} ${new URL(String(input)).pathname}`);
+        return responses.shift()!;
+      }) as typeof fetch,
+    });
+    await client.create(PAGE, ROOT, "content");
+    await client.ensureDirectory(ROOT);
+    expect(calls).toEqual([
+      "POST /api/v1/content/batch-write",
+      "POST /api/v1/content/batch-write",
+      "POST /api/v1/fs/mkdir",
+      "POST /api/v1/fs/mkdir",
+    ]);
+  });
+
+  it("ends a hung call at the earlier of nested deadlines and makes no call once it has passed", async () => {
+    const calls: string[] = [];
+    const base = new OpenVikingClient({ baseUrl: "http://viking", apiKey: "secret", timeoutMs: 180_000, maxRetries: 5, fetch: hangingFetch(calls) });
+    const scopes = [
+      () => base.withDeadline(Date.now() + 60_000).withDeadline(Date.now() + 200),
+      () => base.withDeadline(Date.now() + 200).withDeadline(Date.now() + 60_000),
+    ];
+    let expired: OpenVikingClient | null = null;
+    for (const scope of scopes) {
+      const client = expired = scope();
+      const started = Date.now();
+      const error = await client.create(PAGE, ROOT, "content").catch((e) => e);
+      expect(Date.now() - started).toBeLessThan(1_000);
+      expect(error).toBeInstanceOf(OpenVikingDeadlineError);
+      expect(error).toMatchObject({ operation: "POST /api/v1/content/batch-write", attempts: 1, status: null });
+    }
+    expect(calls).toHaveLength(2);
+    await expect(expired!.read(PAGE)).rejects.toMatchObject({ code: "DEADLINE_EXCEEDED", attempts: 0 });
+    expect(calls).toHaveLength(2);
   });
 });
