@@ -20,6 +20,9 @@ import { agentHasKnowledgePublishCapability } from "@multiremi/knowledge/capabil
 import { autopilotRunSourceRevision } from "@multiremi/store/repos/autopilots-repo.js";
 import { resolveTaskRepositoryWikiRepositories } from "@multiremi/repository-wiki/task-scope.js";
 import { sha256Text } from "@multiremi/project-knowledge/codec.js";
+import { OpenVikingClientError, OpenVikingDeadlineError } from "@multiremi/project-knowledge/openviking-client.js";
+import { PROJECT_KNOWLEDGE_REQUEST_BUDGET_MS } from "@multiremi/project-knowledge/service.js";
+import { resolveRoutePattern } from "../../observability/request-metrics.js";
 
 export interface KnowledgeWriteActor {
   kind: "member" | "agent";
@@ -248,6 +251,27 @@ export function knowledgePolicyErrorResponse(c: Context, error: unknown): Respon
     return c.json({ error: error.message }, error.status);
   }
   return null;
+}
+
+/**
+ * 504 for an OpenViking call that ran out of time, plus one grep-able line; it pairs
+ * with the same request's `api_slow_request`, which carries `total_ms`.
+ */
+export function openVikingTimeoutResponse(c: Context, error: unknown): Response | null {
+  if (!(error instanceof OpenVikingClientError)) return null;
+  const deadline = error instanceof OpenVikingDeadlineError ? error : null;
+  if (!deadline && error.code !== "TIMEOUT") return null;
+  console.log(JSON.stringify({
+    event: "openviking_request_timeout",
+    ts: new Date().toISOString(),
+    method: c.req.method.toUpperCase(),
+    route: resolveRoutePattern(c),
+    code: error.code,
+    operation: deadline?.operation ?? null,
+    attempts: deadline?.attempts ?? null,
+    budget_ms: PROJECT_KNOWLEDGE_REQUEST_BUDGET_MS,
+  }));
+  return c.json({ error: "OpenViking did not respond in time", code: error.code }, 504);
 }
 
 function safeProjectMutation(input: CreateProjectDocInput | UpdateProjectDocInput): Record<string, unknown> {

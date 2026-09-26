@@ -1,0 +1,696 @@
+{
+  "issue": "MUL-385",
+  "parentIssue": "MUL-383",
+  "generatedAt": "2026-09-26T10:14:36.760Z",
+  "commit": "a1e6162312b34d272e22b633d185f014f535f23e",
+  "baseCommit": "a1e6162312b34d272e22b633d185f014f535f23e",
+  "stage": "before/after (same harness, same seed)",
+  "runtime": {
+    "bun": "1.3.14",
+    "node": "v24.3.0",
+    "platform": "linux x64",
+    "cpus": 64,
+    "totalMemBytes": 265761181696,
+    "database": "sqlite",
+    "bridgeBytes": "simulated (JSON.stringify({ rows, count }), same shape as pg-worker)",
+    "transport": "in-process app.request()",
+    "postgresNote": "MULTIREMI_TEST_POSTGRES_URL is not set"
+  },
+  "fixture": {
+    "seed": "MUL-307 scale (long issue)",
+    "version": 1,
+    "issueId": "iss_mul385_long",
+    "issueKey": "MUL-1",
+    "defaultSessionId": "ises_1dx49led0fc5",
+    "counts": {
+      "rootComments": 105,
+      "replies": 68,
+      "comments": 173,
+      "sessions": 6,
+      "participants": 22,
+      "tasks": 54,
+      "reactions": 6,
+      "commentReactions": 32,
+      "attachments": 28,
+      "labels": 3,
+      "children": 4,
+      "dependencies": 2,
+      "activity": 314
+    },
+    "options": {
+      "rootComments": 105,
+      "replies": 68,
+      "sessions": 6,
+      "tasks": 54,
+      "taskPromptBytes": 1200,
+      "taskResultBytes": 2400,
+      "decoratedComments": 24,
+      "commentsPerSession": 24
+    },
+    "seedMs": 713.23
+  },
+  "warmups": 5,
+  "samples": 30,
+  "before": {
+    "generatedAt": "2026-09-26T10:14:26.936Z",
+    "issue": "MUL-385",
+    "parentIssue": "MUL-383",
+    "stage": "before",
+    "commit": "a1e6162312b34d272e22b633d185f014f535f23e",
+    "runtime": {
+      "bun": "1.3.14",
+      "node": "v24.3.0",
+      "platform": "linux x64",
+      "cpus": 64,
+      "totalMemBytes": 265761181696,
+      "database": "sqlite",
+      "bridgeBytes": "simulated (JSON.stringify({ rows, count }), same shape as pg-worker)",
+      "transport": "in-process app.request()",
+      "postgresNote": "MULTIREMI_TEST_POSTGRES_URL is not set"
+    },
+    "fixture": {
+      "seed": "MUL-307 scale (long issue)",
+      "version": 1,
+      "issueId": "iss_mul385_long",
+      "issueKey": "MUL-1",
+      "defaultSessionId": "ises_x931c4yvm9z8",
+      "counts": {
+        "rootComments": 105,
+        "replies": 68,
+        "comments": 173,
+        "sessions": 6,
+        "participants": 22,
+        "tasks": 54,
+        "reactions": 6,
+        "commentReactions": 32,
+        "attachments": 28,
+        "labels": 3,
+        "children": 4,
+        "dependencies": 2,
+        "activity": 314
+      },
+      "options": {
+        "rootComments": 105,
+        "replies": 68,
+        "sessions": 6,
+        "tasks": 54,
+        "taskPromptBytes": 1200,
+        "taskResultBytes": 2400,
+        "decoratedComments": 24,
+        "commentsPerSession": 24
+      },
+      "seedMs": 733.86
+    },
+    "warmups": 5,
+    "samples": 30,
+    "results": [
+      {
+        "label": "issue detail",
+        "method": "GET",
+        "path": "/api/issues/iss_mul385_long",
+        "status": 200,
+        "samples": 30,
+        "dbq": 44,
+        "dbMs": 3.773,
+        "dbBytes": 606351,
+        "dbRows": 254,
+        "responseBytes": 4623,
+        "responseEntries": 0,
+        "p50Ms": 5.997,
+        "p95Ms": 9.824,
+        "serverComputeMs": 2.376,
+        "sqlBucketsTotal": 44,
+        "repeatedSql": [
+          {
+            "sql": "SELECT id FROM multiremi_issues WHERE id = ?",
+            "count": 14
+          },
+          {
+            "sql": "SELECT l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id = ? ORDER BY lower(l.name) ASC",
+            "count": 14
+          },
+          {
+            "sql": "SELECT * FROM multiremi_issues WHERE id = ?",
+            "count": 10
+          }
+        ],
+        "topSql": [
+          {
+            "sql": "SELECT id FROM multiremi_issues WHERE id = ?",
+            "count": 14
+          },
+          {
+            "sql": "SELECT l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id = ? ORDER BY lower(l.name) ASC",
+            "count": 14
+          },
+          {
+            "sql": "SELECT * FROM multiremi_issues WHERE id = ?",
+            "count": 10
+          },
+          {
+            "sql": "SELECT * FROM multiremi_attachments WHERE issue_id = ? AND comment_id IS NULL ORDER BY created_at ASC",
+            "count": 1
+          },
+          {
+            "sql": "SELECT * FROM multiremi_issue_dependencies WHERE issue_id = ? OR depends_on_issue_id = ? ORDER BY created_at ASC",
+            "count": 1
+          },
+          {
+            "sql": "SELECT * FROM multiremi_issue_reactions WHERE issue_id = ? ORDER BY created_at ASC",
+            "count": 1
+          },
+          {
+            "sql": "SELECT * FROM multiremi_issues WHERE parent_issue_id = ? ORDER BY position ASC, created_at DESC",
+            "count": 1
+          },
+          {
+            "sql": "SELECT * FROM multiremi_tasks WHERE issue_id = ? ORDER BY created_at DESC",
+            "count": 1
+          },
+          {
+            "sql": "SELECT parent_issue_id, COUNT(*) AS total, SUM(CASE WHEN status IN ('done', 'completed', 'closed', 'cancelled') THEN 1 ELSE 0 END) AS done FROM multiremi_issues WHERE parent_issue_id = ? GROUP BY parent_issue_id",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "label": "sessions",
+        "method": "GET",
+        "path": "/api/issues/iss_mul385_long/sessions",
+        "status": 200,
+        "samples": 30,
+        "dbq": 19,
+        "dbMs": 0.173,
+        "dbBytes": 15445,
+        "dbRows": 44,
+        "responseBytes": 7922,
+        "responseEntries": 6,
+        "p50Ms": 0.79,
+        "p95Ms": 1.333,
+        "serverComputeMs": 0.626,
+        "sqlBucketsTotal": 19,
+        "repeatedSql": [
+          {
+            "sql": "SELECT * FROM multiremi_session_participants WHERE session_id = ? AND status = 'active' ORDER BY joined_at ASC",
+            "count": 6
+          },
+          {
+            "sql": "SELECT s.*, ( SELECT COUNT(*) FROM multiremi_session_events e WHERE e.session_id = s.parent_session_id AND ((s.inherit_mode = 'follow' AND (s.follow_frozen_seq IS NULL OR e.seq <= s.follow_frozen_seq)) OR (s.inherit_mode <> 'follow' AND e.seq <= s.inherit_cutoff_seq)) ) AS inherited_event_count FROM multiremi_issue_sessions s WHERE id = ?",
+            "count": 6
+          },
+          {
+            "sql": "SELECT * FROM multiremi_issues WHERE id = ?",
+            "count": 2
+          },
+          {
+            "sql": "SELECT id FROM multiremi_issues WHERE id = ?",
+            "count": 2
+          },
+          {
+            "sql": "SELECT l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id = ? ORDER BY lower(l.name) ASC",
+            "count": 2
+          }
+        ],
+        "topSql": [
+          {
+            "sql": "SELECT * FROM multiremi_session_participants WHERE session_id = ? AND status = 'active' ORDER BY joined_at ASC",
+            "count": 6
+          },
+          {
+            "sql": "SELECT s.*, ( SELECT COUNT(*) FROM multiremi_session_events e WHERE e.session_id = s.parent_session_id AND ((s.inherit_mode = 'follow' AND (s.follow_frozen_seq IS NULL OR e.seq <= s.follow_frozen_seq)) OR (s.inherit_mode <> 'follow' AND e.seq <= s.inherit_cutoff_seq)) ) AS inherited_event_count FROM multiremi_issue_sessions s WHERE id = ?",
+            "count": 6
+          },
+          {
+            "sql": "SELECT * FROM multiremi_issues WHERE id = ?",
+            "count": 2
+          },
+          {
+            "sql": "SELECT id FROM multiremi_issues WHERE id = ?",
+            "count": 2
+          },
+          {
+            "sql": "SELECT l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id = ? ORDER BY lower(l.name) ASC",
+            "count": 2
+          },
+          {
+            "sql": "SELECT s.*, ( SELECT COUNT(*) FROM multiremi_session_events e WHERE e.session_id = s.parent_session_id AND ((s.inherit_mode = 'follow' AND (s.follow_frozen_seq IS NULL OR e.seq <= s.follow_frozen_seq)) OR (s.inherit_mode <> 'follow' AND e.seq <= s.inherit_cutoff_seq)) ) AS inherited_event_count FROM multiremi_issue_sessions s WHERE issue_id = ? AND status = 'active' ORDER BY is_default DESC, updated_at DESC",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "label": "timeline @default limit=40",
+        "method": "GET",
+        "path": "/api/issues/iss_mul385_long/timeline?issue_session_id=%40default&limit=40",
+        "status": 200,
+        "samples": 30,
+        "dbq": 16,
+        "dbMs": 0.417,
+        "dbBytes": 49148,
+        "dbRows": 102,
+        "responseBytes": 38940,
+        "responseEntries": 40,
+        "p50Ms": 1.309,
+        "p95Ms": 1.643,
+        "serverComputeMs": 0.89,
+        "sqlBucketsTotal": 16,
+        "repeatedSql": [
+          {
+            "sql": "SELECT id FROM multiremi_issues WHERE id = ?",
+            "count": 4
+          },
+          {
+            "sql": "SELECT * FROM multiremi_issues WHERE id = ?",
+            "count": 3
+          },
+          {
+            "sql": "SELECT l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id = ? ORDER BY lower(l.name) ASC",
+            "count": 3
+          },
+          {
+            "sql": "SELECT s.*, ( SELECT COUNT(*) FROM multiremi_session_events e WHERE e.session_id = s.parent_session_id AND ((s.inherit_mode = 'follow' AND (s.follow_frozen_seq IS NULL OR e.seq <= s.follow_frozen_seq)) OR (s.inherit_mode <> 'follow' AND e.seq <= s.inherit_cutoff_seq)) ) AS inherited_event_count FROM multiremi_issue_sessions s WHERE id = ?",
+            "count": 2
+          }
+        ],
+        "topSql": [
+          {
+            "sql": "SELECT id FROM multiremi_issues WHERE id = ?",
+            "count": 4
+          },
+          {
+            "sql": "SELECT * FROM multiremi_issues WHERE id = ?",
+            "count": 3
+          },
+          {
+            "sql": "SELECT l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id = ? ORDER BY lower(l.name) ASC",
+            "count": 3
+          },
+          {
+            "sql": "SELECT s.*, ( SELECT COUNT(*) FROM multiremi_session_events e WHERE e.session_id = s.parent_session_id AND ((s.inherit_mode = 'follow' AND (s.follow_frozen_seq IS NULL OR e.seq <= s.follow_frozen_seq)) OR (s.inherit_mode <> 'follow' AND e.seq <= s.inherit_cutoff_seq)) ) AS inherited_event_count FROM multiremi_issue_sessions s WHERE id = ?",
+            "count": 2
+          },
+          {
+            "sql": "SELECT * FROM multiremi_attachments WHERE comment_id IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ORDER BY created_at ASC",
+            "count": 1
+          },
+          {
+            "sql": "SELECT * FROM multiremi_comment_reactions WHERE comment_id IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ORDER BY created_at ASC",
+            "count": 1
+          },
+          {
+            "sql": "SELECT * FROM multiremi_issue_comments WHERE issue_id = ? AND issue_session_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
+            "count": 1
+          },
+          {
+            "sql": "SELECT s.*, ( SELECT COUNT(*) FROM multiremi_session_events e WHERE e.session_id = s.parent_session_id AND ((s.inherit_mode = 'follow' AND (s.follow_frozen_seq IS NULL OR e.seq <= s.follow_frozen_seq)) OR (s.inherit_mode <> 'follow' AND e.seq <= s.inherit_cutoff_seq)) ) AS inherited_event_count FROM multiremi_issue_sessions s WHERE issue_id = ? AND status = 'active' ORDER BY is_default DESC, updated_at DESC",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "label": "comments (baseline only)",
+        "method": "GET",
+        "path": "/api/issues/iss_mul385_long/comments",
+        "status": 200,
+        "samples": 30,
+        "dbq": 6,
+        "dbMs": 0.576,
+        "dbBytes": 143741,
+        "dbRows": 234,
+        "responseBytes": 148358,
+        "responseEntries": 173,
+        "p50Ms": 1.678,
+        "p95Ms": 2.284,
+        "serverComputeMs": 0.845,
+        "sqlBucketsTotal": 6,
+        "repeatedSql": [],
+        "topSql": [
+          {
+            "sql": "SELECT * FROM multiremi_attachments WHERE comment_id IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ORDER BY created_at ASC",
+            "count": 1
+          },
+          {
+            "sql": "SELECT * FROM multiremi_comment_reactions WHERE comment_id IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ORDER BY created_at ASC",
+            "count": 1
+          },
+          {
+            "sql": "SELECT * FROM multiremi_issue_comments WHERE issue_id = ? ORDER BY created_at ASC",
+            "count": 1
+          },
+          {
+            "sql": "SELECT * FROM multiremi_issues WHERE id = ?",
+            "count": 4
+          },
+          {
+            "sql": "SELECT id FROM multiremi_issues WHERE id = ?",
+            "count": 4
+          },
+          {
+            "sql": "SELECT l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id = ? ORDER BY lower(l.name) ASC",
+            "count": 4
+          }
+        ]
+      }
+    ],
+    "sessionsScaleScan": [
+      {
+        "sessions": 1,
+        "participants": 2,
+        "dbq": 9,
+        "dbMs": 0.07,
+        "responseBytes": 925
+      },
+      {
+        "sessions": 5,
+        "participants": 10,
+        "dbq": 17,
+        "dbMs": 0.146,
+        "responseBytes": 4717
+      },
+      {
+        "sessions": 20,
+        "participants": 40,
+        "dbq": 47,
+        "dbMs": 0.418,
+        "responseBytes": 19054
+      }
+    ],
+    "authGuard": {
+      "master": [
+        {
+          "label": "issue detail",
+          "dbq": 44
+        },
+        {
+          "label": "sessions",
+          "dbq": 19
+        },
+        {
+          "label": "timeline @default limit=40",
+          "dbq": 16
+        },
+        {
+          "label": "comments (baseline only)",
+          "dbq": 6
+        }
+      ],
+      "userPat": [
+        {
+          "label": "issue detail",
+          "dbq": 48
+        },
+        {
+          "label": "sessions",
+          "dbq": 23
+        },
+        {
+          "label": "timeline @default limit=40",
+          "dbq": 20
+        },
+        {
+          "label": "comments (baseline only)",
+          "dbq": 10
+        }
+      ],
+      "note": "user PAT adds verifyAccessToken (3 statements: hash lookup, last_used_at write, re-read) and one workspace membership read; the master token adds none. Unchanged by MUL-385 - recorded so a later drift is visible."
+    }
+  },
+  "after": {
+    "generatedAt": "2026-09-26T10:14:36.760Z",
+    "issue": "MUL-385",
+    "parentIssue": "MUL-383",
+    "stage": "before",
+    "commit": "a1e6162312b34d272e22b633d185f014f535f23e",
+    "runtime": {
+      "bun": "1.3.14",
+      "node": "v24.3.0",
+      "platform": "linux x64",
+      "cpus": 64,
+      "totalMemBytes": 265761181696,
+      "database": "sqlite",
+      "bridgeBytes": "simulated (JSON.stringify({ rows, count }), same shape as pg-worker)",
+      "transport": "in-process app.request()",
+      "postgresNote": "MULTIREMI_TEST_POSTGRES_URL is not set"
+    },
+    "fixture": {
+      "seed": "MUL-307 scale (long issue)",
+      "version": 1,
+      "issueId": "iss_mul385_long",
+      "issueKey": "MUL-1",
+      "defaultSessionId": "ises_1dx49led0fc5",
+      "counts": {
+        "rootComments": 105,
+        "replies": 68,
+        "comments": 173,
+        "sessions": 6,
+        "participants": 22,
+        "tasks": 54,
+        "reactions": 6,
+        "commentReactions": 32,
+        "attachments": 28,
+        "labels": 3,
+        "children": 4,
+        "dependencies": 2,
+        "activity": 314
+      },
+      "options": {
+        "rootComments": 105,
+        "replies": 68,
+        "sessions": 6,
+        "tasks": 54,
+        "taskPromptBytes": 1200,
+        "taskResultBytes": 2400,
+        "decoratedComments": 24,
+        "commentsPerSession": 24
+      },
+      "seedMs": 713.23
+    },
+    "warmups": 5,
+    "samples": 30,
+    "results": [
+      {
+        "label": "issue detail",
+        "method": "GET",
+        "path": "/api/issues/iss_mul385_long",
+        "status": 200,
+        "samples": 30,
+        "dbq": 4,
+        "dbMs": 0.063,
+        "dbBytes": 4606,
+        "dbRows": 14,
+        "responseBytes": 4623,
+        "responseEntries": 0,
+        "p50Ms": 0.361,
+        "p95Ms": 0.543,
+        "serverComputeMs": 0.382,
+        "sqlBucketsTotal": 4,
+        "repeatedSql": [],
+        "topSql": [
+          {
+            "sql": "SELECT * FROM multiremi_attachments WHERE issue_id = ? AND comment_id IS NULL ORDER BY created_at ASC",
+            "count": 1
+          },
+          {
+            "sql": "SELECT * FROM multiremi_issue_reactions WHERE issue_id = ? ORDER BY created_at ASC",
+            "count": 1
+          },
+          {
+            "sql": "SELECT * FROM multiremi_issues WHERE id = ?",
+            "count": 1
+          },
+          {
+            "sql": "SELECT l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id = ? ORDER BY lower(l.name) ASC",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "label": "sessions",
+        "method": "GET",
+        "path": "/api/issues/iss_mul385_long/sessions",
+        "status": 200,
+        "samples": 30,
+        "dbq": 4,
+        "dbMs": 0.139,
+        "dbBytes": 10141,
+        "dbRows": 32,
+        "responseBytes": 7922,
+        "responseEntries": 6,
+        "p50Ms": 0.412,
+        "p95Ms": 0.541,
+        "serverComputeMs": 0.286,
+        "sqlBucketsTotal": 4,
+        "repeatedSql": [],
+        "topSql": [
+          {
+            "sql": "SELECT * FROM multiremi_issues WHERE id = ?",
+            "count": 1
+          },
+          {
+            "sql": "SELECT * FROM multiremi_session_participants WHERE session_id IN (?, ?, ?, ?, ?, ?) AND status = 'active' ORDER BY joined_at ASC",
+            "count": 1
+          },
+          {
+            "sql": "SELECT l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id = ? ORDER BY lower(l.name) ASC",
+            "count": 1
+          },
+          {
+            "sql": "SELECT s.*, ( SELECT COUNT(*) FROM multiremi_session_events e WHERE e.session_id = s.parent_session_id AND ((s.inherit_mode = 'follow' AND (s.follow_frozen_seq IS NULL OR e.seq <= s.follow_frozen_seq)) OR (s.inherit_mode <> 'follow' AND e.seq <= s.inherit_cutoff_seq)) ) AS inherited_event_count FROM multiremi_issue_sessions s WHERE issue_id = ? AND status = 'active' ORDER BY is_default DESC, updated_at DESC",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "label": "timeline @default limit=40",
+        "method": "GET",
+        "path": "/api/issues/iss_mul385_long/timeline?issue_session_id=%40default&limit=40",
+        "status": 200,
+        "samples": 30,
+        "dbq": 6,
+        "dbMs": 0.333,
+        "dbBytes": 43898,
+        "dbRows": 88,
+        "responseBytes": 38940,
+        "responseEntries": 40,
+        "p50Ms": 1.06,
+        "p95Ms": 1.257,
+        "serverComputeMs": 0.729,
+        "sqlBucketsTotal": 6,
+        "repeatedSql": [],
+        "topSql": [
+          {
+            "sql": "SELECT * FROM multiremi_attachments WHERE comment_id IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ORDER BY created_at ASC",
+            "count": 1
+          },
+          {
+            "sql": "SELECT * FROM multiremi_comment_reactions WHERE comment_id IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ORDER BY created_at ASC",
+            "count": 1
+          },
+          {
+            "sql": "SELECT * FROM multiremi_issue_comments WHERE issue_id = ? AND issue_session_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
+            "count": 1
+          },
+          {
+            "sql": "SELECT * FROM multiremi_issues WHERE id = ?",
+            "count": 1
+          },
+          {
+            "sql": "SELECT l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id = ? ORDER BY lower(l.name) ASC",
+            "count": 1
+          },
+          {
+            "sql": "SELECT s.*, ( SELECT COUNT(*) FROM multiremi_session_events e WHERE e.session_id = s.parent_session_id AND ((s.inherit_mode = 'follow' AND (s.follow_frozen_seq IS NULL OR e.seq <= s.follow_frozen_seq)) OR (s.inherit_mode <> 'follow' AND e.seq <= s.inherit_cutoff_seq)) ) AS inherited_event_count FROM multiremi_issue_sessions s WHERE issue_id = ? AND status = 'active' ORDER BY is_default DESC, updated_at DESC",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "label": "comments (baseline only)",
+        "method": "GET",
+        "path": "/api/issues/iss_mul385_long/comments",
+        "status": 200,
+        "samples": 30,
+        "dbq": 5,
+        "dbMs": 0.692,
+        "dbBytes": 143696,
+        "dbRows": 233,
+        "responseBytes": 148358,
+        "responseEntries": 173,
+        "p50Ms": 1.582,
+        "p95Ms": 2.303,
+        "serverComputeMs": 1.262,
+        "sqlBucketsTotal": 5,
+        "repeatedSql": [],
+        "topSql": [
+          {
+            "sql": "SELECT * FROM multiremi_attachments WHERE comment_id IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ORDER BY created_at ASC",
+            "count": 1
+          },
+          {
+            "sql": "SELECT * FROM multiremi_comment_reactions WHERE comment_id IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ORDER BY created_at ASC",
+            "count": 1
+          },
+          {
+            "sql": "SELECT * FROM multiremi_issue_comments WHERE issue_id = ? ORDER BY created_at ASC",
+            "count": 1
+          },
+          {
+            "sql": "SELECT * FROM multiremi_issues WHERE id = ?",
+            "count": 4
+          },
+          {
+            "sql": "SELECT l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id = ? ORDER BY lower(l.name) ASC",
+            "count": 4
+          }
+        ]
+      }
+    ],
+    "sessionsScaleScan": [
+      {
+        "sessions": 1,
+        "participants": 2,
+        "dbq": 4,
+        "dbMs": 0.047,
+        "responseBytes": 925
+      },
+      {
+        "sessions": 5,
+        "participants": 10,
+        "dbq": 4,
+        "dbMs": 0.086,
+        "responseBytes": 4717
+      },
+      {
+        "sessions": 20,
+        "participants": 40,
+        "dbq": 4,
+        "dbMs": 0.152,
+        "responseBytes": 19054
+      }
+    ],
+    "authGuard": {
+      "master": [
+        {
+          "label": "issue detail",
+          "dbq": 4
+        },
+        {
+          "label": "sessions",
+          "dbq": 4
+        },
+        {
+          "label": "timeline @default limit=40",
+          "dbq": 6
+        },
+        {
+          "label": "comments (baseline only)",
+          "dbq": 5
+        }
+      ],
+      "userPat": [
+        {
+          "label": "issue detail",
+          "dbq": 8
+        },
+        {
+          "label": "sessions",
+          "dbq": 8
+        },
+        {
+          "label": "timeline @default limit=40",
+          "dbq": 10
+        },
+        {
+          "label": "comments (baseline only)",
+          "dbq": 9
+        }
+      ],
+      "note": "user PAT adds verifyAccessToken (3 statements: hash lookup, last_used_at write, re-read) and one workspace membership read; the master token adds none. Unchanged by MUL-385 - recorded so a later drift is visible."
+    }
+  },
+  "commits": {
+    "parent": "a1e6162312b34d272e22b633d185f014f535f23e",
+    "implementedAndMeasured": "aeda289197252a86aad1492f60c8be904eaef6a9",
+    "note": "Both stages were measured with the same harness and the same seed at aeda289197252a86aad1492f60c8be904eaef6a9. The commit named in `after.commit` is the working-tree revision the harness recorded before the change was committed; it is not a head SHA. Naming a head SHA here goes stale on the next commit, so re-check the invariant instead: `git diff --name-only aeda289197252a86aad1492f60c8be904eaef6a9..HEAD` must list only this report."
+  }
+}

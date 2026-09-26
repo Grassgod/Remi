@@ -363,7 +363,12 @@ describe("Multiremi API - workspace repositories", () => {
     const created = (await createdResponse.json() as any).doc;
     expect(created).toMatchObject({ repository_id: "repo_alpha", path: "architecture/overview.md", version: 1 });
 
-    expect((await (await app.request(root)).json() as any).docs).toMatchObject([{ id: created.id, body: "Alpha facts" }]);
+    // MUL-387: the list carries metadata only; bodies are an explicit request.
+    const listed = (await (await app.request(root)).json() as any).docs;
+    expect(listed).toMatchObject([{ id: created.id, path: "architecture/overview.md", version: 1 }]);
+    expect(listed[0]).not.toHaveProperty("body");
+    expect((await (await app.request(`${root}?include_body=true&ids=${created.id}`)).json() as any).docs)
+      .toMatchObject([{ id: created.id, body: "Alpha facts" }]);
     expect((await app.request(`/api/workspaces/${workspace.id}/repos/repo_beta/wiki/${created.id}`)).status).toBe(404);
 
     const updatedResponse = await app.request(`${root}/${created.id}`, {

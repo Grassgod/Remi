@@ -40,7 +40,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@multi
 import { projectDocDetailOptions, workspaceDocListOptions } from "@multiremi/core/project-docs";
 import { knowledgeRunOptions, knowledgeRunsOptions, knowledgeSubmissionsOptions, wikiBacklinksOptions } from "@multiremi/core/knowledge";
 import { projectListOptions } from "@multiremi/core/projects/queries";
-import { repositoryListOptions, repositoryWikiDocsOptions, repositoryWikiSummariesOptions } from "@multiremi/core/repositories";
+import { repositoryListOptions, repositoryWikiDocOptions, repositoryWikiDocsOptions, repositoryWikiSummariesOptions } from "@multiremi/core/repositories";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useWorkspacePaths } from "@multiremi/core/paths";
 import type {
@@ -133,7 +133,7 @@ function ErrorPane({ error, retry }: { error: unknown; retry: () => void }) {
 }
 
 function matchesDoc(doc: WorkspaceDoc, query: string): boolean {
-  return [doc.title, doc.summary ?? "", doc.body, ...doc.tags]
+  return [doc.title, doc.summary ?? "", doc.body ?? "", ...doc.tags]
     .some((value) => value.toLowerCase().includes(query));
 }
 
@@ -226,7 +226,7 @@ function WikiPane({
     ?? sourceDocs.find((doc) => doc.path === "index.md")
     ?? sourceDocs[0]
     ?? null;
-  const projectDetailQuery = useQuery({
+  const detailQuery = useQuery({
     ...projectDocDetailOptions(
       workspaceId,
       selectedSource?.kind === "project" ? selectedSource.id : "",
@@ -234,9 +234,27 @@ function WikiPane({
     ),
     enabled: Boolean(selectedSource?.kind === "project" && selectedMetadata),
   });
+  // Repository list rows are metadata only (MUL-387), so the open page loads
+  // its body separately, exactly like the Project Wiki side already does.
+  const repositoryDetailQuery = useQuery({
+    ...repositoryWikiDocOptions(workspaceId, selectedRepositoryId, selectedMetadata?.id ?? ""),
+    enabled: Boolean(selectedSource?.kind === "repository" && selectedMetadata?.id),
+  });
   const selectedDoc = selectedSource?.kind === "project"
-    ? (projectDetailQuery.data as ReadableWikiDoc | undefined) ?? selectedMetadata
-    : selectedMetadata;
+    ? (detailQuery.data as ReadableWikiDoc | undefined) ?? selectedMetadata
+    : selectedSource?.kind === "repository"
+      ? (repositoryDetailQuery.data as ReadableWikiDoc | undefined) ?? selectedMetadata
+      : selectedMetadata;
+  const detailPending = selectedSource?.kind === "project"
+    ? detailQuery.isPending && Boolean(selectedMetadata)
+    : selectedSource?.kind === "repository"
+      ? repositoryDetailQuery.isPending && Boolean(selectedMetadata)
+      : false;
+  const detailError = selectedSource?.kind === "project"
+    ? detailQuery.error
+    : selectedSource?.kind === "repository"
+      ? repositoryDetailQuery.error
+      : null;
   const projectBacklinksQuery = useQuery({
     ...wikiBacklinksOptions(
       workspaceId,
@@ -344,9 +362,15 @@ function WikiPane({
         </div>
       </nav>
       <main className="min-h-0 overflow-y-auto">
-        {projectDetailQuery.isPending && selectedSource?.kind === "project" ? <LoadingPane />
-          : projectDetailQuery.error && selectedSource?.kind === "project" ? (
-            <ErrorPane error={projectDetailQuery.error} retry={() => { void projectDetailQuery.refetch(); }} />
+        {detailPending ? <LoadingPane />
+          : detailError ? (
+            <ErrorPane
+              error={detailError}
+              retry={() => {
+                if (selectedSource?.kind === "project") void detailQuery.refetch();
+                else if (selectedSource?.kind === "repository") void repositoryDetailQuery.refetch();
+              }}
+            />
           ) : selectedDoc && selectedSource ? (
           <article className="mx-auto max-w-3xl px-5 py-5 sm:px-7 sm:py-7">
             <div className="flex items-start justify-between gap-4 border-b pb-4">
@@ -453,7 +477,7 @@ function MemoryPane({
     && page.slug !== "_schema"
   ));
   const body = selectedDoc
-    ? replaceWikiLinkMarkers(selectedDoc.body, (slug) => {
+    ? replaceWikiLinkMarkers(selectedDoc.body ?? "", (slug) => {
         const target = selectedWikiPages.find((page) => page.slug === slug);
         return target
           ? {

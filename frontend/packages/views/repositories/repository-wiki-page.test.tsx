@@ -10,6 +10,7 @@ const mockMutate = vi.hoisted(() => vi.fn());
 const mockPending = vi.hoisted(() => ({ value: false }));
 const mockSummaries = vi.hoisted(() => ({ value: [] as unknown[] }));
 const mockDocs = vi.hoisted(() => ({ value: [] as unknown[] }));
+const mockDetail = vi.hoisted(() => ({ value: null as unknown, pending: false, error: null as unknown }));
 const mockInvalidate = vi.hoisted(() => vi.fn());
 
 vi.mock("@tanstack/react-query", async (importOriginal) => {
@@ -42,6 +43,19 @@ vi.mock("@tanstack/react-query", async (importOriginal) => {
         }
         if (key[3] === "wiki") {
           return { data: mockDocs.value, isLoading: false, isError: false };
+        }
+        // MUL-387: the page reads the open document's body separately; the
+        // fake serves the same row so the rendered body stays identical.
+        if (key[3] === "wiki-doc") {
+          const ref = String(key[4] ?? "");
+          const match = (mockDocs.value as RepositoryWikiDoc[]).find((doc) => doc.id === ref || doc.slug === ref || doc.path === ref);
+          return {
+            data: mockDetail.value ?? match ?? null,
+            isLoading: mockDetail.pending,
+            isPending: mockDetail.pending,
+            isError: mockDetail.error !== null,
+            error: mockDetail.error,
+          };
         }
       }
       return { data: undefined, isLoading: false };
@@ -160,6 +174,9 @@ describe("RepositoryWikiPage build state", () => {
     mockPending.value = false;
     mockSummaries.value = [summary()];
     mockDocs.value = [doc()];
+    mockDetail.value = null;
+    mockDetail.pending = false;
+    mockDetail.error = null;
     mockInvalidate.mockReset();
     vi.mocked(toast.success).mockReset();
     vi.mocked(toast.error).mockReset();
@@ -334,6 +351,32 @@ describe("RepositoryWikiPage build state", () => {
     expect(screen.getByText("the reading map body")).toBeInTheDocument();
     expect(screen.getAllByText("Pathless Page").length).toBeGreaterThan(0);
   });
+  it("renders a metadata-only list row by loading the body per selected page", () => {
+    // The list is metadata only (MUL-387): the tree comes from the list rows and
+    // the article body comes from the per-page request.
+    mockDocs.value = [doc({ id: "doc-index", path: "index.md", slug: "index", title: "Reading Map", body: undefined })];
+    mockDetail.value = doc({ id: "doc-index", path: "index.md", slug: "index", title: "Reading Map", body: "loaded separately" });
+
+    renderPage();
+
+    expect(screen.getByText("loaded separately")).toBeInTheDocument();
+  });
+
+  it("shows a loading placeholder instead of an empty page while the body loads", () => {
+    mockDocs.value = [doc({ id: "doc-index", path: "index.md", slug: "index", title: "Reading Map", body: undefined })];
+    mockDetail.pending = true;
+    mockDetail.value = null;
+
+    renderPage();
+
+    // The tree still lists the page; the article is a skeleton, not the
+    // empty-Wiki state.
+    expect(screen.queryByText("The architecture body")).not.toBeInTheDocument();
+    expect(screen.queryByText("loaded separately")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Reading Map").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Repository Wiki is empty/)).not.toBeInTheDocument();
+  });
+
   it("forces the mobile Wiki drawer to the specified 280px width", async () => {
     const user = userEvent.setup();
     renderPage();

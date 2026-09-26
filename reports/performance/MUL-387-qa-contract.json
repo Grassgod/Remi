@@ -1,0 +1,385 @@
+{
+  "generatedAt": "2026-09-26T11:21:49.569Z",
+  "commit": "16119de8c22239d0a8182d44af50cd63db143b35",
+  "sourceDigest": {
+    "files": {
+      "packages/server/src/repository-wiki/service.ts": "ff5b2d053e66d3b2a301392ded6580ce3f52f9eb086be8e289a910271bc535f4",
+      "packages/server/src/api/routers/workspaces.ts": "4493d2821543d90729648490b669c12da8dd0166d47c293a4575e90874f22071",
+      "packages/server/src/api/server.ts": "0676223f7b28a53246beb39afbf184fd0dd9f9da41de41ed6195617578576ab3"
+    },
+    "combined": "875c068ae232cd21e590882529ef250865ffb6a155f5b01c5c2123ba55415dc9"
+  },
+  "fixture": {
+    "docs": 146,
+    "readDelayMs": 700,
+    "bodyBytesPerDoc": 1500
+  },
+  "sample": {
+    "noParamsP95Ms": 1.35,
+    "noParamsP50Ms": 0.93,
+    "includeBody20": {
+      "status": 200,
+      "elapsedMs": 3508.52,
+      "maxInFlightReads": 4,
+      "readCalls": 20
+    },
+    "legacyBunReads": 146
+  },
+  "results": [
+    {
+      "clause": "3 默认列表",
+      "detail": "HTTP 200",
+      "expected": "200",
+      "observed": "200",
+      "passed": true
+    },
+    {
+      "clause": "3 默认列表",
+      "detail": "返回全部 146 篇",
+      "expected": "146",
+      "observed": "146",
+      "passed": true
+    },
+    {
+      "clause": "3 默认列表",
+      "detail": "OpenViking read 次数",
+      "expected": "0",
+      "observed": "0",
+      "passed": true
+    },
+    {
+      "clause": "3 默认列表",
+      "detail": "任何一篇都不带 body 键",
+      "expected": "false",
+      "observed": "false",
+      "passed": true
+    },
+    {
+      "clause": "3 默认列表",
+      "detail": "附带 version",
+      "expected": "true",
+      "observed": "true",
+      "passed": true
+    },
+    {
+      "clause": "3 默认列表",
+      "detail": "附带 content_sha256",
+      "expected": "true",
+      "observed": "true",
+      "passed": true
+    },
+    {
+      "clause": "3 ids 仅过滤",
+      "detail": "HTTP 200",
+      "expected": "200",
+      "observed": "200",
+      "passed": true
+    },
+    {
+      "clause": "3 ids 仅过滤",
+      "detail": "只返回 3 篇",
+      "expected": "3",
+      "observed": "3",
+      "passed": true
+    },
+    {
+      "clause": "3 ids 仅过滤",
+      "detail": "OpenViking read 次数",
+      "expected": "0",
+      "observed": "0",
+      "passed": true
+    },
+    {
+      "clause": "3 ids 仅过滤",
+      "detail": "不带 body 键",
+      "expected": "false",
+      "observed": "false",
+      "passed": true
+    },
+    {
+      "clause": "3 ids 未知 id",
+      "detail": "HTTP 200 且静默省略",
+      "expected": "200",
+      "observed": "200",
+      "passed": true
+    },
+    {
+      "clause": "3 ids 未知 id",
+      "detail": "返回 0 篇",
+      "expected": "0",
+      "observed": "0",
+      "passed": true
+    },
+    {
+      "clause": "3 include_body",
+      "detail": "HTTP 200",
+      "expected": "200",
+      "observed": "200",
+      "passed": true
+    },
+    {
+      "clause": "3 include_body",
+      "detail": "返回 20 篇",
+      "expected": "20",
+      "observed": "20",
+      "passed": true
+    },
+    {
+      "clause": "3 include_body",
+      "detail": "每篇都带 body",
+      "expected": "20",
+      "observed": "20",
+      "passed": true
+    },
+    {
+      "clause": "3 include_body",
+      "detail": "在飞 read 峰值 ≤ 4",
+      "expected": "true",
+      "observed": "true",
+      "passed": true
+    },
+    {
+      "clause": "3 include_body",
+      "detail": "read 次数 20",
+      "expected": "20",
+      "observed": "20",
+      "passed": true
+    },
+    {
+      "clause": "3 include_body",
+      "detail": "总耗时落在 3500~7000ms（5 批 × 700ms）",
+      "expected": "true",
+      "observed": "true",
+      "passed": true
+    },
+    {
+      "clause": "3 上限",
+      "detail": "21 个 id → 400",
+      "expected": "400",
+      "observed": "400",
+      "passed": true
+    },
+    {
+      "clause": "3 上限",
+      "detail": "21 个 id 未触发任何 read",
+      "expected": "0",
+      "observed": "0",
+      "passed": true
+    },
+    {
+      "clause": "3 上限",
+      "detail": "include_body 无 ids → 400",
+      "expected": "400",
+      "observed": "400",
+      "passed": true
+    },
+    {
+      "clause": "3 契约",
+      "detail": "重复 ids= 且去重后 ≤20 → 200",
+      "expected": "200",
+      "observed": "200",
+      "passed": true
+    },
+    {
+      "clause": "3 契约",
+      "detail": "重复 ids= 去重后取 2 篇",
+      "expected": "2",
+      "observed": "2",
+      "passed": true
+    },
+    {
+      "clause": "3 上限",
+      "detail": "重复 21 个同一 id，去重后 1 个 → 200",
+      "expected": "200",
+      "observed": "200",
+      "passed": true
+    },
+    {
+      "clause": "3 上限",
+      "detail": "21 个不同 id → 400",
+      "expected": "400",
+      "observed": "400",
+      "passed": true
+    },
+    {
+      "clause": "3 互斥",
+      "detail": "q + include_body → 400",
+      "expected": "400",
+      "observed": "400",
+      "passed": true
+    },
+    {
+      "clause": "3 互斥",
+      "detail": "q + ids → 400",
+      "expected": "400",
+      "observed": "400",
+      "passed": true
+    },
+    {
+      "clause": "3 搜索",
+      "detail": "q 单独使用 → 200",
+      "expected": "200",
+      "observed": "200",
+      "passed": true
+    },
+    {
+      "clause": "3 搜索",
+      "detail": "搜索结果带正文（原契约不变）",
+      "expected": "true",
+      "observed": "true",
+      "passed": true
+    },
+    {
+      "clause": "3 strict",
+      "detail": "单篇不可读 → 503",
+      "expected": "503",
+      "observed": "503",
+      "passed": true
+    },
+    {
+      "clause": "3 strict",
+      "detail": "503 响应不含空正文",
+      "expected": "0",
+      "observed": "0",
+      "passed": true
+    },
+    {
+      "clause": "3 strict",
+      "detail": "批量中含不可读 → 整个请求 503",
+      "expected": "503",
+      "observed": "503",
+      "passed": true
+    },
+    {
+      "clause": "3 strict",
+      "detail": "混合批量 503 不含空正文",
+      "expected": "0",
+      "observed": "0",
+      "passed": true
+    },
+    {
+      "clause": "3 strict",
+      "detail": "strict 失败不返回部分结果",
+      "expected": "0",
+      "observed": "0",
+      "passed": true
+    },
+    {
+      "clause": "3 shim auto",
+      "detail": "Bun/1.3.14 → 200 且整包带正文",
+      "expected": "true",
+      "observed": "true",
+      "passed": true
+    },
+    {
+      "clause": "3 shim auto",
+      "detail": "Bun/1.3.14 → 读全部 146 篇（老行为）",
+      "expected": "146",
+      "observed": "146",
+      "passed": true
+    },
+    {
+      "clause": "3 shim auto",
+      "detail": "remi-cli/0.2.83 → 快路径，0 次 read",
+      "expected": "0",
+      "observed": "0",
+      "passed": true
+    },
+    {
+      "clause": "3 shim auto",
+      "detail": "remi-cli/0.2.83 → 不带 body",
+      "expected": "false",
+      "observed": "false",
+      "passed": true
+    },
+    {
+      "clause": "3 shim auto",
+      "detail": "浏览器 UA → 快路径，0 次 read",
+      "expected": "0",
+      "observed": "0",
+      "passed": true
+    },
+    {
+      "clause": "3 shim auto",
+      "detail": "浏览器 UA → 不带 body",
+      "expected": "false",
+      "observed": "false",
+      "passed": true
+    },
+    {
+      "clause": "3 shim auto",
+      "detail": "无 UA → 快路径，0 次 read",
+      "expected": "0",
+      "observed": "0",
+      "passed": true
+    },
+    {
+      "clause": "3 shim auto",
+      "detail": "无 UA → 不带 body",
+      "expected": "false",
+      "observed": "false",
+      "passed": true
+    },
+    {
+      "clause": "3 env always",
+      "detail": "always + Bun UA → 整包带正文",
+      "expected": "true",
+      "observed": "true",
+      "passed": true
+    },
+    {
+      "clause": "3 env always",
+      "detail": "always + 新 CLI 的默认列表 → 整包带正文（回滚杆语义）",
+      "expected": "true",
+      "observed": "true",
+      "passed": true
+    },
+    {
+      "clause": "3 env always",
+      "detail": "always + 浏览器 UA → 整包带正文（回滚杆语义）",
+      "expected": "true",
+      "observed": "true",
+      "passed": true
+    },
+    {
+      "clause": "3 env always",
+      "detail": "always + include_body 不可读 → 仍 503（不走老 tolerant 逻辑）",
+      "expected": "503",
+      "observed": "503",
+      "passed": true
+    },
+    {
+      "clause": "3 env always",
+      "detail": "always + include_body 不可读 → 无空正文",
+      "expected": "0",
+      "observed": "0",
+      "passed": true
+    },
+    {
+      "clause": "3 env never",
+      "detail": "never + Bun UA → 快路径，0 次 read",
+      "expected": "0",
+      "observed": "0",
+      "passed": true
+    },
+    {
+      "clause": "3 env never",
+      "detail": "never + Bun UA → 不带 body",
+      "expected": "false",
+      "observed": "false",
+      "passed": true
+    },
+    {
+      "clause": "6 p95",
+      "detail": "146 篇 + 700ms 下无参数列表 p95 < 200ms",
+      "expected": "true",
+      "observed": "true",
+      "passed": true
+    }
+  ],
+  "summary": {
+    "total": 50,
+    "passed": 50,
+    "failed": 0
+  }
+}

@@ -123,7 +123,13 @@ describe("Wiki librarian", () => {
           return Response.json({ docs: [apiDoc("known-memory", "known-memory.md")] });
         }
         if (url.pathname === "/api/workspaces/ws_1/repos/repo_bound/wiki") {
-          return Response.json({ docs: [apiDoc("repository-page", "guides/repository-page.md")] });
+          // MUL-387: metadata by default, bodies only for the bounded request.
+          const includeBody = url.searchParams.get("include_body") === "true";
+          return Response.json({
+            docs: [includeBody
+              ? apiDoc("repository-page", "guides/repository-page.md")
+              : metadataDoc("repository-page", "guides/repository-page.md", { id: "doc_repository-page" })],
+          });
         }
         return Response.json({ error: "unexpected request" }, { status: 500 });
       },
@@ -140,8 +146,68 @@ describe("Wiki librarian", () => {
       expect(report.documents_scanned).toBe(2);
       expect(paths).toContain("/api/cli/context?limit=200");
       expect(paths).toContain("/api/workspaces/ws_1/repos/repo_bound/wiki");
+      expect(paths).toContain("/api/workspaces/ws_1/repos/repo_bound/wiki?include_body=true&ids=doc_repository-page");
       expect(paths.some((path) => path.includes("repo_unrelated/wiki"))).toBe(false);
       expect(paths.some((path) => path === "/api/workspaces/ws_1/repos")).toBe(false);
+    } finally {
+      console.log = originalLog;
+      server.stop(true);
+    }
+  });
+
+  test("reads every repository page through bounded batches", async () => {
+    const bodies = new Map<string, string>();
+    const batchSizes: number[] = [];
+    const pageCount = 45;
+    for (let index = 0; index < pageCount; index++) bodies.set(`doc_page-${index}`, `# Page ${index}`);
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname === "/api/cli/context") {
+          return Response.json({
+            current: { project: { id: "prj_selected", repository_ids: ["repo_bound"] } },
+            catalog: { projects: [], repositories: [{ id: "repo_bound", name: "Remi" }], next_cursor: null },
+          });
+        }
+        if (url.pathname === "/api/projects/prj_selected/docs") {
+          return Response.json({ docs: [] });
+        }
+        if (url.pathname === "/api/workspaces/ws_1/repos/repo_bound/wiki") {
+          if (url.searchParams.get("include_body") === "true") {
+            const ids = (url.searchParams.get("ids") ?? "").split(",").filter(Boolean);
+            batchSizes.push(ids.length);
+            return Response.json({
+              docs: ids.map((id) => ({
+                id,
+                slug: id.replace(/^doc_/, ""),
+                path: `${id.replace(/^doc_/, "")}.md`,
+                title: id,
+                body: bodies.get(id) ?? "",
+                refs: [],
+                version: 1,
+              })),
+            });
+          }
+          return Response.json({
+            docs: [...bodies.keys()].map((id) => metadataDoc(id.replace(/^doc_/, ""), `${id.replace(/^doc_/, "")}.md`, { id })),
+          });
+        }
+        return Response.json({ error: "unexpected request" }, { status: 500 });
+      },
+    });
+    const originalLog = console.log;
+    try {
+      console.log = () => {};
+      const report = await wikiLint({
+        server: `http://127.0.0.1:${server.port}`,
+        token: "token",
+        workspace: "ws_1",
+      }, "prj_selected");
+      expect(report.documents_scanned).toBe(pageCount);
+      // 45 pages at 20 per batch: 20 + 20 + 5, never a single unbounded read.
+      expect(batchSizes.sort((left, right) => right - left)).toEqual([20, 20, 5]);
     } finally {
       console.log = originalLog;
       server.stop(true);
@@ -193,5 +259,18 @@ function apiDoc(slug: string, path: string): Record<string, unknown> {
     body: `# ${slug}`,
     refs: [],
     version: 1,
+  };
+}
+
+/** The metadata-only row the MUL-387 list contract returns by default. */
+function metadataDoc(slug: string, path: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: `doc_${slug}`,
+    slug,
+    path,
+    title: slug,
+    refs: [],
+    version: 1,
+    ...overrides,
   };
 }

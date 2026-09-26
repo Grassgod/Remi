@@ -19,6 +19,19 @@ export interface OpenVikingClientOptions {
   maxRetries?: number;
   fetch?: FetchLike;
   signal?: AbortSignal;
+  /** Epoch ms by which every attempt, retry and backoff must have finished. */
+  deadlineAt?: number;
+}
+
+export const OPENVIKING_DEFAULT_ATTEMPT_TIMEOUT_MS = 15_000;
+/** Hard cap: an env value above this is clamped rather than multiplying a hang. */
+export const OPENVIKING_MAX_RETRIES = 2;
+
+interface RequestOptions {
+  allowPlainJson?: boolean;
+  rawText?: boolean;
+  /** Replaying the request after an ambiguous failure cannot change the outcome. Defaults to GET/HEAD. */
+  idempotent?: boolean;
 }
 
 export class OpenVikingClientError extends Error {
@@ -30,6 +43,27 @@ export class OpenVikingClientError extends Error {
   ) {
     super(message);
   }
+}
+
+/** The caller's overall deadline ran out; no further attempt was or will be made. */
+export class OpenVikingDeadlineError extends OpenVikingClientError {
+  constructor(readonly operation: string | null = null, readonly attempts = 0) {
+    super("OpenViking request deadline exceeded", null, "DEADLINE_EXCEEDED", false);
+  }
+}
+
+/** A configured per-attempt timeout never outlives the caller's deadline, however large the env sets it. */
+export function clampAttemptTimeoutMs(configuredMs: number, deadlineAt: number | undefined, now = Date.now()): number {
+  if (deadlineAt === undefined) return configuredMs;
+  return Math.max(0, Math.min(configuredMs, deadlineAt - now));
+}
+
+/** Aborts at `deadlineAt` with an `OpenVikingDeadlineError`, so callers can tell it from their own cancellation. */
+export function openVikingDeadlineSignal(deadlineAt: number): AbortSignal {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new OpenVikingDeadlineError()), Math.max(0, deadlineAt - Date.now()));
+  (timer as { unref?: () => void }).unref?.();
+  return controller.signal;
 }
 
 export class OpenVikingClient implements OpenVikingClientContract {
@@ -44,8 +78,8 @@ export class OpenVikingClient implements OpenVikingClientContract {
     this.apiKey = options.apiKey.trim();
     if (!this.baseUrl) throw new Error("OpenViking base URL is required");
     if (!this.apiKey) throw new Error("OpenViking API key is required");
-    this.timeoutMs = Math.max(1_000, options.timeoutMs ?? 30_000);
-    this.maxRetries = Math.max(0, Math.min(5, options.maxRetries ?? 2));
+    this.timeoutMs = Math.max(1_000, options.timeoutMs ?? OPENVIKING_DEFAULT_ATTEMPT_TIMEOUT_MS);
+    this.maxRetries = Math.max(0, Math.min(OPENVIKING_MAX_RETRIES, options.maxRetries ?? OPENVIKING_MAX_RETRIES));
     this.fetchImpl = options.fetch ?? fetch;
   }
 
@@ -54,13 +88,25 @@ export class OpenVikingClient implements OpenVikingClientContract {
       ? AbortSignal.any([this.options.signal, signal]) : signal });
   }
 
+  /** Bound every call on the returned client by one overall deadline; nested deadlines keep the earlier one. */
+  withDeadline(deadlineAt: number): OpenVikingClient {
+    const at = Math.min(deadlineAt, this.options.deadlineAt ?? Infinity);
+    const deadline = openVikingDeadlineSignal(at);
+    return new OpenVikingClient({
+      ...this.options,
+      deadlineAt: at,
+      signal: this.options.signal ? AbortSignal.any([this.options.signal, deadline]) : deadline,
+    });
+  }
+
   async health(): Promise<void> {
-    await this.request("/health", { method: "GET" }, true);
+    await this.request("/health", { method: "GET" }, { allowPlainJson: true });
   }
 
   async ensureDirectory(uri: string): Promise<void> {
     try {
-      await this.request("/api/v1/fs/mkdir", { method: "POST", body: JSON.stringify({ uri }) });
+      // mkdir treats an existing directory as success, so a replay is harmless.
+      await this.request("/api/v1/fs/mkdir", { method: "POST", body: JSON.stringify({ uri }) }, { idempotent: true });
     } catch (error) {
       if (error instanceof OpenVikingClientError && (error.status === 409 || error.code === "ALREADY_EXISTS")) return;
       throw error;
@@ -97,7 +143,12 @@ export class OpenVikingClient implements OpenVikingClientContract {
 
   async remove(uri: string, options: { wait?: boolean } = {}): Promise<void> {
     try {
-      await this.request(`/api/v1/fs?uri=${encodeURIComponent(uri)}&wait=${options.wait !== false}`, { method: "DELETE" });
+      // A replayed delete of an already-removed path answers 404, which is success here.
+      await this.request(
+        `/api/v1/fs?uri=${encodeURIComponent(uri)}&wait=${options.wait !== false}`,
+        { method: "DELETE" },
+        { idempotent: true },
+      );
     } catch (error) {
       if (error instanceof OpenVikingClientError && error.status === 404) return;
       throw error;
@@ -105,10 +156,11 @@ export class OpenVikingClient implements OpenVikingClientContract {
   }
 
   async setTags(uri: string, tags: string[]): Promise<void> {
+    // mode=replace sets the full tag list, so applying it twice leaves the same state.
     await this.request("/api/v1/content/set_tags", {
       method: "POST",
       body: JSON.stringify({ uri, tags, mode: "replace", recursive: false }),
-    });
+    }, { idempotent: true });
   }
 
   async find(query: string, targetUri: string | string[], limit: number, tags: string[] = []): Promise<OpenVikingFindHit[]> {
@@ -121,7 +173,7 @@ export class OpenVikingClient implements OpenVikingClientContract {
         tags: tags.length ? tags : undefined,
         include_provenance: true,
       }),
-    });
+    }, { idempotent: true });
     const collections = [result?.resources, result?.memories, result?.skills];
     const hits: OpenVikingFindHit[] = [];
     for (const collection of collections) {
@@ -170,8 +222,7 @@ export class OpenVikingClient implements OpenVikingClientContract {
     const result = await this.request<unknown>(
       `/api/v1/snapshot/show?${params.toString()}`,
       { method: "GET" },
-      false,
-      true,
+      { rawText: true },
     );
     if (typeof result === "string") return result;
     if (isRecord(result)) {
@@ -188,17 +239,21 @@ export class OpenVikingClient implements OpenVikingClientContract {
     });
   }
 
-  private async request<T = unknown>(
-    path: string,
-    init: RequestInit,
-    allowPlainJson = false,
-    rawText = false,
-  ): Promise<T> {
+  private async request<T = unknown>(path: string, init: RequestInit, options: RequestOptions = {}): Promise<T> {
+    const { allowPlainJson = false, rawText = false } = options;
+    const method = (init.method ?? "GET").toUpperCase();
+    const idempotent = options.idempotent ?? (method === "GET" || method === "HEAD");
+    const operation = `${method} ${path.split("?")[0]}`;
     let lastError: unknown;
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
-      this.options.signal?.throwIfAborted();
+      this.throwIfStopped(operation, attempt);
+      const attemptTimeoutMs = clampAttemptTimeoutMs(this.timeoutMs, this.options.deadlineAt);
+      if (attemptTimeoutMs <= 0) throw new OpenVikingDeadlineError(operation, attempt);
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+      const timer = setTimeout(() => controller.abort(), attemptTimeoutMs);
+      // Only a write OpenViking provably did not apply may be replayed; a timeout or
+      // 5xx leaves the outcome unknown, so non-idempotent writes stop there.
+      let replaySafe = idempotent;
       try {
         const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
           ...init,
@@ -225,28 +280,47 @@ export class OpenVikingClient implements OpenVikingClientContract {
         const errorDetails = isRecord(payload?.error) && isRecord(payload.error.details)
           ? payload.error.details
           : null;
-        const retryable = response.status === 429
-          || response.status >= 500
-          || errorDetails?.retryable === true;
+        const rejectedUnapplied = response.status === 429 || errorDetails?.retryable === true;
+        const retryable = rejectedUnapplied || response.status >= 500;
+        if (rejectedUnapplied) replaySafe = true;
         throw new OpenVikingClientError(`OpenViking request failed: ${detail}`, response.status, code, retryable);
       } catch (error) {
-        this.options.signal?.throwIfAborted();
+        this.throwIfStopped(operation, attempt + 1);
+        const timedOut = error instanceof Error && error.name === "AbortError";
+        // The clamp, not the configured attempt timeout, ended this attempt: the deadline is spent.
+        if (timedOut && attemptTimeoutMs < this.timeoutMs) throw new OpenVikingDeadlineError(operation, attempt + 1);
         const normalized = error instanceof OpenVikingClientError
           ? error
           : new OpenVikingClientError(
-            error instanceof Error && error.name === "AbortError" ? "OpenViking request timed out" : "OpenViking request failed",
+            timedOut ? "OpenViking request timed out" : "OpenViking request failed",
             null,
-            null,
+            timedOut ? "TIMEOUT" : null,
             true,
           );
         lastError = normalized;
-        if (!normalized.retryable || attempt === this.maxRetries) throw normalized;
-        await delay(Math.min(2_000, 100 * 2 ** attempt), this.options.signal);
+        if (!normalized.retryable || !replaySafe || attempt === this.maxRetries) throw normalized;
+        const backoffMs = Math.min(2_000, 100 * 2 ** attempt);
+        // No room for another attempt after the backoff: report the real failure now.
+        if (this.options.deadlineAt !== undefined && this.options.deadlineAt - Date.now() <= backoffMs) throw normalized;
+        try {
+          await delay(backoffMs, this.options.signal);
+        } catch (aborted) {
+          this.throwIfStopped(operation, attempt + 1);
+          throw aborted;
+        }
       } finally {
         clearTimeout(timer);
       }
     }
     throw lastError;
+  }
+
+  /** Surface caller cancellation as-is, and deadline expiry with the operation that ran out of time. */
+  private throwIfStopped(operation: string, attempts: number): void {
+    const signal = this.options.signal;
+    if (!signal?.aborted) return;
+    if (signal.reason instanceof OpenVikingDeadlineError) throw new OpenVikingDeadlineError(operation, attempts);
+    throw signal.reason;
   }
 }
 
