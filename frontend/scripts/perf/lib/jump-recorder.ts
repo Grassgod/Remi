@@ -22,6 +22,9 @@
  *  - `data-perf-key`     stable key for that row
  *  - `data-perf-anchor`  terminal element (`latest-comment`, `target-comment`, ...)
  *  - `data-perf-state`   written by S2's reveal hook; recorded here, never a terminal condition
+ *  - `data-perf-fresh`   written by MUL-443 (not deployed yet). While absent the state
+ *                        alone decides; once present, only `ready` + `fresh=1` counts as
+ *                        loaded and `ready-forced` is reported separately.
  *
  * Read-only: nothing in this module mutates the measured page.
  */
@@ -120,6 +123,12 @@ export interface PerfProfileFrame {
   anchors: PerfFrameAnchor[];
   /** `data-perf-state` on the scroll root, or null while absent. */
   state: string | null;
+  /**
+   * `data-perf-fresh` on the scroll root, or null while the attribute is absent.
+   * MUL-443 will write it; until then every frame carries null and the state
+   * attribute alone decides readiness.
+   */
+  fresh: string | null;
 }
 
 export interface PerfFrame {
@@ -149,6 +158,12 @@ export interface PerfClick {
 export interface PerfStateTransition {
   t: number;
   value: string;
+  /**
+   * `data-perf-fresh` sampled in the same mutation callback, or null while that
+   * attribute is absent. Kept with the state so the Node side can tell a real
+   * `ready` from a `ready` the app forced before its data was fresh.
+   */
+  fresh?: string | null;
 }
 
 export interface PerfRecorderBuffer {
@@ -180,6 +195,13 @@ export interface PerfProfileSummary {
   lastMoveT: number | null;
   lastUnsatisfiedT: number | null;
   state: string | null;
+  /** `data-perf-fresh` on the root at the newest frame, or null while absent. */
+  fresh: string | null;
+  /**
+   * The app reached `ready-forced` (its own timeout fallback). Reported on its
+   * own line rather than counted as loaded: see {@link PerfAppReadyResult}.
+   */
+  readyForced: boolean;
 }
 
 export interface PerfRecorderSummary {
@@ -230,11 +252,12 @@ export function installJumpRecorder(config: PerfRecorderConfig): void {
     items: Item[];
     anchors: Anchor[];
     state: string | null;
+    fresh: string | null;
   };
   type Frame = { t: number; profiles: Record<string, Profile>; satisfied: Record<string, boolean> };
   type Shift = { t: number; value: number; hadRecentInput: boolean; sources: string[] };
   type Click = { t: number; href: string | null; label: string };
-  type Transition = { t: number; value: string };
+  type Transition = { t: number; value: string; fresh?: string | null };
 
   const MAX_ROWS = typeof config.maxRows === "number" && config.maxRows > 0 ? config.maxRows : 60;
   const THRESHOLD_PX = 1;
@@ -293,8 +316,20 @@ export function installJumpRecorder(config: PerfRecorderConfig): void {
   // same nodes, and re-reading a rect is the expensive half of sampling.
   let rectCache = new WeakMap<Element, { top: number; bottom: number }>();
 
+  /**
+   * MUL-443 gate: while `data-perf-fresh` exists on the root, a frame only
+   * counts as loaded when the app itself says `data-perf-state=ready` *and*
+   * `data-perf-fresh=1`. `ready-forced` is deliberately not accepted — it is
+   * the app's own timeout fallback and is reported on its own. While the
+   * attribute is absent (today) the structural rule below decides alone, which
+   * keeps the pre-MUL-443 semantics.
+   */
+  const freshGatePassed = (view: Profile): boolean =>
+    view.fresh === null || (view.state === "ready" && view.fresh === "1");
+
   const ruleSatisfied = (profile: PerfProfileConfig, view: Profile): boolean => {
     if (!view.rootFound || view.skeletons > 0) return false;
+    if (!freshGatePassed(view)) return false;
     if (profile.rule.kind === "heading") return !!view.heading;
     if (profile.rule.kind === "items") {
       return view.items.some((item) => item.top < view.rootHeight && item.bottom > 0);
@@ -358,6 +393,9 @@ export function installJumpRecorder(config: PerfRecorderConfig): void {
         items: [],
         anchors: [],
         state: root ? root.getAttribute("data-perf-state") : null,
+        // MUL-443 owns this attribute. Reading it here is what lets the ready
+        // rule below ignore a `ready` the app published before its data arrived.
+        fresh: root ? root.getAttribute("data-perf-fresh") : null,
       };
 
       const rootTop = root ? root.getBoundingClientRect().top : 0;
@@ -497,6 +535,10 @@ export function installJumpRecorder(config: PerfRecorderConfig): void {
         lastMoveT,
         lastUnsatisfiedT,
         state: lastProfile?.state ?? null,
+        fresh: lastProfile?.fresh ?? null,
+        // The app published its own fallback at some point in this round. Kept
+        // out of `ready` on purpose and reported as its own line.
+        readyForced: state.stateTransitions.some((transition) => transition.value === "ready-forced"),
       };
     }
     return {
@@ -537,11 +579,15 @@ export function installJumpRecorder(config: PerfRecorderConfig): void {
   try {
     stateObserver = new MutationObserver((records) => {
       for (const record of records) {
-        const value = (record.target as Element).getAttribute("data-perf-state");
+        const target = record.target as Element;
+        const value = target.getAttribute("data-perf-state");
         if (value === null) continue;
+        // Read both attributes in the same callback so a transition carries the
+        // freshness the app published alongside its state, not a later one.
+        const fresh = target.getAttribute("data-perf-fresh");
         const last = state.stateTransitions[state.stateTransitions.length - 1];
-        if (last && last.value === value) continue;
-        state.stateTransitions.push({ t: Math.round(performance.now() * 10) / 10, value });
+        if (last && last.value === value && (last.fresh ?? null) === fresh) continue;
+        state.stateTransitions.push({ t: Math.round(performance.now() * 10) / 10, value, fresh });
       }
     });
     // `addInitScript` runs at document-start, where `documentElement` can still
@@ -552,7 +598,7 @@ export function installJumpRecorder(config: PerfRecorderConfig): void {
       if (!target || !stateObserver) return;
       stateObserver.observe(target, {
         attributes: true,
-        attributeFilter: ["data-perf-state"],
+        attributeFilter: ["data-perf-state", "data-perf-fresh"],
         subtree: true,
       });
     };
@@ -564,7 +610,13 @@ export function installJumpRecorder(config: PerfRecorderConfig): void {
     // list from the current DOM as well.
     for (const el of document.querySelectorAll("[data-perf-state]")) {
       const value = el.getAttribute("data-perf-state");
-      if (value) state.stateTransitions.push({ t: Math.round(performance.now() * 10) / 10, value });
+      if (value) {
+        state.stateTransitions.push({
+          t: Math.round(performance.now() * 10) / 10,
+          value,
+          fresh: el.getAttribute("data-perf-fresh"),
+        });
+      }
     }
   } catch (error) {
     state.errors.push(`state observer: ${(error as Error).message}`);
@@ -659,10 +711,16 @@ export function installJumpRecorder(config: PerfRecorderConfig): void {
 
 /** Installs the recorder for every document this context creates. */
 export async function installRecorderOnContext(
-  context: { addInitScript: (script: unknown, arg?: unknown) => Promise<void> },
+  // `BrowserContext` from `playwright-core` and from `@playwright/test` are two
+  // distinct declarations of the same object with different generic
+  // `addInitScript` signatures, so no single structural type accepts both. The
+  // shape is asserted once here, at the only call this module makes.
+  context: { addInitScript: unknown },
   config: PerfRecorderConfig,
 ): Promise<void> {
-  await context.addInitScript(installJumpRecorder, config);
+  const addInitScript = context.addInitScript as
+    (script: (config: PerfRecorderConfig) => void, arg?: PerfRecorderConfig) => Promise<void>;
+  await addInitScript(installJumpRecorder, config);
 }
 
 export async function resetRecorder(page: Page, visibleFrom?: number): Promise<void> {
@@ -916,6 +974,10 @@ export function evaluateRule(
 ): { satisfied: boolean; anchorName: string | null } {
   const view = frame.profiles[profile.name];
   if (!view || !view.rootFound || view.skeletons > 0) return { satisfied: false, anchorName: null };
+  // Mirrors the in-page `freshGatePassed`: see its comment for the contract.
+  if (view.fresh != null && !(view.state === "ready" && view.fresh === "1")) {
+    return { satisfied: false, anchorName: null };
+  }
   if (profile.rule.kind === "heading") {
     return { satisfied: !!view.heading, anchorName: null };
   }
@@ -1098,6 +1160,12 @@ export interface PerfAppReadyResult {
   appReadyMs: number | null;
   /** True when the app only ever reached `ready-forced` (S2's fallback path). */
   forced: boolean;
+  /**
+   * True when the app ever published `ready-forced`, including rounds that also
+   * reached a plain `ready` later. Reported separately from the pass/fail
+   * verdict: a forced frame is never counted as loaded.
+   */
+  readyForced: boolean;
 }
 
 /**
@@ -1107,11 +1175,20 @@ export interface PerfAppReadyResult {
  */
 export function computeAppReadyMs(transitions: PerfStateTransition[]): PerfAppReadyResult {
   const ordered = [...transitions].sort((left, right) => left.t - right.t);
-  const ready = ordered.find((transition) => transition.value === "ready");
-  if (ready) return { appReadyMs: ready.t, forced: false };
+  const readyForced = ordered.some((transition) => transition.value === "ready-forced");
+  // While `data-perf-fresh` is present, a `ready` only counts when the app
+  // published the freshness bit with it: MUL-443's contract is
+  // `ready && fresh = 1`, and a bare `ready` there is the pre-fresh publish.
+  const isLoaded = (transition: PerfStateTransition): boolean => {
+    if (transition.value !== "ready") return false;
+    if (transition.fresh == null) return true;
+    return transition.fresh === "1";
+  };
+  const loaded = ordered.find(isLoaded);
+  if (loaded) return { appReadyMs: loaded.t, forced: false, readyForced };
   const forced = ordered.find((transition) => transition.value === "ready-forced");
-  if (forced) return { appReadyMs: forced.t, forced: true };
-  return { appReadyMs: null, forced: false };
+  if (forced) return { appReadyMs: forced.t, forced: true, readyForced };
+  return { appReadyMs: null, forced: false, readyForced };
 }
 
 export interface PerfSelectorEquivalence {
