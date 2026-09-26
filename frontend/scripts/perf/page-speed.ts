@@ -94,6 +94,10 @@ const DEFAULT_OUT_DIR = "reports/performance";
 const DEFAULT_QUIET_MS = 500;
 const DEFAULT_HOVER_LEAD_MS = 150;
 const RECORDER_GLOBAL = "__mul383Recorder";
+/** Entry-page rows appear only after the route's data lands; dev servers also compile on first hit. */
+const WARM_ENTRY_TIMEOUT_MS = 15_000;
+/** After the click, the app still has to route and mount the target page. */
+const WARM_NAV_TIMEOUT_MS = 10_000;
 
 /** The eleven MUL-367 pages, in the order one round visits them. */
 const PAGE_SEQUENCE = [
@@ -863,13 +867,34 @@ async function clickWarmTarget(page: Page, scenario: Scenario, opts: Options): P
     selectors.push(`a[href$="${scenario.sidebarPath}"]`);
   }
 
-  for (const selector of selectors) {
+  // A warm round lands on the entry page and then clicks a real row, so the row
+  // has to exist before the click. A fixed sleep is not enough: the first hit on
+  // a route can take seconds (dev compile, or a cold data fetch), and clicking
+  // an empty list leaves the round on the entry page measuring the wrong screen.
+  const deadline = Date.now() + WARM_ENTRY_TIMEOUT_MS;
+  let chosen: { selector: string; index: number; count: number } | null = null;
+  while (chosen === null && Date.now() < deadline) {
+    for (const selector of selectors) {
+      const count = await page.locator(selector).count().catch(() => 0);
+      if (count === 0) continue;
+      const index = scenario.inboxItemId !== null && typeof scenario.inboxRowIndex === "number"
+        ? Math.min(scenario.inboxRowIndex, count - 1)
+        : 0;
+      chosen = { selector, index, count };
+      break;
+    }
+    if (chosen === null) await page.waitForTimeout(200);
+  }
+  if (chosen === null) throw new Error(`warm target not found for ${scenario.key}`);
+
+  let lastError: string | null = null;
+  for (const selector of [chosen.selector, ...selectors.filter((candidate) => candidate !== chosen!.selector)]) {
     const locator = page.locator(selector);
     const count = await locator.count().catch(() => 0);
     if (count === 0) continue;
     const index = scenario.inboxItemId !== null && typeof scenario.inboxRowIndex === "number"
       ? Math.min(scenario.inboxRowIndex, count - 1)
-      : 0;
+      : Math.min(chosen.index, count - 1);
     const row = locator.nth(index);
     try {
       await row.scrollIntoViewIfNeeded({ timeout: 2_000 }).catch(() => {});
@@ -877,11 +902,12 @@ async function clickWarmTarget(page: Page, scenario: Scenario, opts: Options): P
       await page.waitForTimeout(opts.hoverLeadMs);
       await row.click({ timeout: 5_000 });
       return;
-    } catch {
+    } catch (error) {
+      lastError = (error as Error).message;
       continue;
     }
   }
-  throw new Error(`warm target not found for ${scenario.key}`);
+  throw new Error(`warm target not found for ${scenario.key}${lastError ? `: ${lastError.split("\n")[0]}` : ""}`);
 }
 
 /**

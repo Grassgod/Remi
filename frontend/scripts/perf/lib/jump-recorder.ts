@@ -373,13 +373,17 @@ export function installJumpRecorder(config: PerfRecorderConfig): void {
           continue;
         }
         const rect = rectOf(el);
+        // A positioned-but-hidden anchor is not "visible": the row can hold its
+        // final rect while `visibility: hidden` still suppresses the content, and
+        // counting that as ready would report a settle time before paint.
+        const visible = isVisible(el);
         entry.anchors.push({
           name: spec.name,
           elId: idOf(el),
           top: rect.top,
           bottom: rect.bottom,
-          contained: rect.top >= -1 && rect.bottom <= entry.rootHeight + 1,
-          topVisible: rect.top >= -1 && rect.top <= entry.rootHeight + 1 && rect.bottom > 0,
+          contained: visible && rect.top >= -1 && rect.bottom <= entry.rootHeight + 1,
+          topVisible: visible && rect.top >= -1 && rect.top <= entry.rootHeight + 1 && rect.bottom > 0,
         });
       }
 
