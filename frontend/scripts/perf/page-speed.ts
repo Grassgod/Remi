@@ -1,80 +1,128 @@
 #!/usr/bin/env bun
 /**
- * Standalone read-only page-speed probe (MUL-367 part 2).
+ * Standalone read-only page-speed probe (MUL-383 S1 / plan §2).
  *
- * Opens the main workspace pages in headless Chromium, measures how long the
- * main content region takes to show real (non-skeleton) content, and records
- * the `/api/**` traffic each load produces: call count, bytes, the slowest call
- * and its raw `Server-Timing` value once the API ships that header.
+ * Measures how long the Issue detail, deep-link, chat and list pages take to
+ * settle into their final position, how far they jump on the way there, and what
+ * the first screen costs in API requests. Scenarios are `detail-short`,
+ * `detail-long`, `detail-running` and `deeplink`, each in a cold-start and an
+ * in-app-navigation variant, plus the eleven MUL-367 pages in both variants.
  *
- * Read-only guarantee: every `/api/**` request that is not GET/HEAD is aborted
- * inside `page.route()` and reported under `blockedWrites`. This script never
- * writes to the target.
+ * Read-only guarantee: every non-GET/HEAD `/api/**` request is aborted inside
+ * `page.route()` and reported under `blockedWrites`, so this can run against
+ * production. `verifyWriteGuard` proves the guard itself works first.
  *
- * Credentials: the token comes from `MULTIREMI_QA_WEB_TOKEN` only. It is put
- * into `localStorage.multimira_token` for the target origin and is never
- * printed, logged, stored in an output file, or passed through argv.
+ * Credentials: the token comes from `MULTIREMI_QA_WEB_TOKEN` only. It is written
+ * into the target origin's `localStorage` and never printed, logged, stored in
+ * an output file or passed through argv.
  *
  * Usage:
  *   MULTIREMI_QA_WEB_TOKEN=... bun run frontend/scripts/perf/page-speed.ts \
- *     --base-url http://n37-117-209.byted.org --rounds 3 \
- *     --out reports/performance --name MUL-367-page-speed-baseline-<date>
+ *     --base-url http://n37-117-209.byted.org --window peak --rounds 5 \
+ *     --name MUL-383-baseline-peak-<date>
  *
- * Compare a later run against a stored baseline:
- *   ... --compare reports/performance/MUL-367-page-speed-baseline-<date>.json
+ * Compare against an earlier schema-2 baseline (pairing is by key + mode):
+ *   ... --compare reports/performance/MUL-383-baseline-offpeak-<date>.json
  *
- * Operating notes and result paths: docs/dev/performance.md
+ * Rule definitions and the selector tables: `docs/dev/performance.md`.
  */
 
-import { chromium, type Browser, type BrowserContext, type Page } from "@playwright/test";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import type { Browser, BrowserContext, Page } from "@playwright/test";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { arch, cpus, hostname, platform, release as osRelease, totalmem } from "node:os";
 import { join, resolve } from "node:path";
+import {
+  computeAppReadyMs,
+  computeFirstRealMs,
+  computeJumps,
+  computeReadyWindow,
+  computeScenarioStats,
+  computeSelectorEquivalence,
+  computeWaves,
+  frameAt,
+  installRecorderOnContext,
+  ROUND_TIMEOUT_MS,
+  summarizeLayoutShifts,
+  type PerfFrame,
+  type PerfLayoutShift,
+  type PerfProfileConfig,
+  type PerfProfileName,
+  type PerfRecorderBuffer,
+  type PerfRecorderSummary,
+} from "./lib/jump-recorder";
+import {
+  ambientProbe,
+  attachCollectors,
+  launchBrowser,
+  median,
+  mktContext,
+  parseServerTiming,
+  readDeployedVersion,
+  readResourceEntries,
+  readWebVitals,
+  resolveIdentity,
+  sanitizePath,
+  TOKEN_ENV,
+  VIEWPORT,
+  verifyWriteGuard,
+  type ApiCollectors,
+  type BlockedWrite,
+} from "./lib/harness";
+import {
+  anchorPlan,
+  inboxRowSelector,
+  issueRowSelector,
+  profilesFor,
+  type PageShape,
+  type SelectorMode,
+  type SelectorModeOption,
+} from "./lib/selectors";
+import {
+  buildCompare,
+  buildHtml,
+  buildMarkdown,
+  fmtMs,
+  type CompareRow,
+  type CompareWarning,
+  type ReportRoundSummary,
+  type ReportScenario,
+} from "./lib/report";
 
-const TOKEN_ENV = "MULTIREMI_QA_WEB_TOKEN";
 const DEFAULT_BASE_URL = "http://n37-117-209.byted.org";
 const DEFAULT_ROUNDS = 3;
 const DEFAULT_OUT_DIR = "reports/performance";
-const VIEWPORT = { width: 1440, height: 900 };
-const READY_TIMEOUT_MS = 60_000;
-const DEFAULT_QUIET_MS = 800;
-const DEFAULT_SETTLE_CAP_MS = 20_000;
+const DEFAULT_QUIET_MS = 500;
+const DEFAULT_HOVER_LEAD_MS = 150;
+const RECORDER_GLOBAL = "__mul383Recorder";
 
-/** Main pages, in the order one round visits them. */
+/** The eleven MUL-367 pages, in the order one round visits them. */
 const PAGE_SEQUENCE = [
-  { key: "issues", path: "/{slug}/issues" },
-  { key: "my-issues", path: "/{slug}/my-issues" },
-  { key: "chat", path: "/{slug}/chat" },
-  { key: "inbox", path: "/{slug}/inbox" },
-  { key: "agents", path: "/{slug}/agents" },
-  { key: "runtimes", path: "/{slug}/runtimes" },
-  { key: "projects", path: "/{slug}/projects" },
-  { key: "workbench", path: "/{slug}/workbench" },
-  { key: "settings", path: "/{slug}/settings" },
-  { key: "autopilots", path: "/{slug}/autopilots" },
-  { key: "skills", path: "/{slug}/skills" },
+  { key: "issues", path: "/issues" },
+  { key: "my-issues", path: "/my-issues" },
+  { key: "chat", path: "/chat" },
+  { key: "inbox", path: "/inbox" },
+  { key: "agents", path: "/agents" },
+  { key: "runtimes", path: "/runtimes" },
+  { key: "projects", path: "/projects" },
+  { key: "workbench", path: "/workbench" },
+  { key: "settings", path: "/settings" },
+  { key: "autopilots", path: "/autopilots" },
+  { key: "skills", path: "/skills" },
 ] as const;
 
 type PageKey = (typeof PAGE_SEQUENCE)[number]["key"];
 
-/**
- * One readiness rule for every page, so the numbers stay comparable: the
- * workspace content region exists, its page heading is rendered, and no
- * skeleton placeholder is left inside it.
- */
-const READY_SELECTOR = '[data-slot="sidebar-inset"]';
-const READY_RULE_SOURCE =
-  '主内容区域（[data-slot="sidebar-inset"]）出现 H1 标题，且区域内没有 data-slot="skeleton" 骨架占位';
+/** MUL-383 and every child of it: excluded from the running-issue pick. */
+const EXCLUDED_RUNNING_ISSUES = ["iss_j67lb0r8djw4"];
 
-/** Runs in the page; keep it self-contained so it survives serialization. */
-function readyPredicate(selector: string): boolean {
-  const inset = document.querySelector(selector);
-  if (!inset) return false;
-  const heading = inset.querySelector("h1");
-  if (!heading || !(heading.textContent ?? "").trim()) return false;
-  if (inset.querySelectorAll('[data-slot="skeleton"]').length > 0) return false;
-  return (inset as HTMLElement).innerText.trim().length > 0;
-}
+/**
+ * Inbox notification types that render `AutopilotRunReport` instead of an issue
+ * timeline, so a deep link into them would not exercise the timeline path.
+ */
+const AUTOPILOT_INBOX_TYPES = ["autopilot_run", "autopilot_run_report", "autopilot"];
+
+const READING_RULE =
+  "详情/深链：anchor（agent-stream 优先，否则最新一条评论；深链为 target-comment）可见 + 骨架 0 + 之后 500ms 无移动帧。列表：区域内无骨架且至少 1 个真实行可见 + 500ms 安静。chat：最新一条消息可见 + 500ms 安静；legacy 下 chat/列表退回 H1+无骨架。";
 
 interface Options {
   baseUrl: string;
@@ -83,94 +131,22 @@ interface Options {
   name: string | null;
   compare: string | null;
   quietMs: number;
-  settleCapMs: number;
-  skipInboxProbe: boolean;
-  skipInboxGuard: boolean;
-  /** Re-render Markdown/HTML from an existing report JSON, without measuring. */
-  renderOnly: string | null;
+  window: "peak" | "offpeak";
+  selectors: SelectorModeOption;
+  issueShort: string;
+  issueLong: string;
+  issueRunning: string | null;
+  inboxItem: string | null;
+  hoverLeadMs: number;
+  only: string | null;
+  /**
+   * Visit every scenario once before measuring. Only for a `next dev` server,
+   * which compiles a route the first time it is requested; a warmup keeps that
+   * one-off cost out of the numbers. Production runs a built image, so the
+   * baselines are collected without it.
+   */
+  warmup: boolean;
 }
-
-interface ApiCall {
-  method: string;
-  /** Query removed and ID-like segments replaced with `:id`. */
-  path: string;
-  status: number | null;
-  durationMs: number;
-  encodedBytes: number;
-  decodedBytes: number;
-  transferBytes: number;
-  /** Raw header value; null until the API ships `Server-Timing`. */
-  serverTiming: string | null;
-}
-
-type GuardLabel = "inbox-guard" | "inbox-guard-click";
-
-interface BlockedWrite {
-  round: number;
-  page: PageKey | GuardLabel;
-  method: string;
-  path: string;
-  /** How many identical attempts the page made (mutations retry while aborted). */
-  attempts: number;
-}
-
-interface PageRound {
-  round: number;
-  /** 1 means the first load of a fresh context, so it pays app-shell cold start. */
-  order: number;
-  coldShellStart: boolean;
-  url: string;
-  readyMs: number | null;
-  readyTimeout: boolean;
-  heading: string | null;
-  lcpMs: number | null;
-  domContentLoadedMs: number | null;
-  loadEventMs: number | null;
-  apiCalls: number;
-  apiEncodedBytes: number;
-  apiDecodedBytes: number;
-  apiTransferBytes: number;
-  slowestApi: ApiCall | null;
-  /** Top patterns by summed duration; `serverTiming` is the first header seen. */
-  apiTopPatterns: PatternAggregate[];
-  blockedWrites: number;
-  /** `X-Client-Version` the deployed web bundle reported on its API calls. */
-  webClientVersion: string | null;
-  /** Present only when the navigation or readiness wait failed. */
-  navigationError?: string;
-  wallClockMs?: number;
-}
-
-interface Median {
-  readyMs: number | null;
-  /** Rounds whose readiness wait hit the timeout; these do not enter the median. */
-  readyTimeouts: number;
-  lcpMs: number | null;
-  domContentLoadedMs: number | null;
-  apiCalls: number | null;
-  apiEncodedBytes: number | null;
-  apiDecodedBytes: number | null;
-  slowestApiMs: number | null;
-}
-
-interface PageSummary {
-  key: PageKey;
-  path: string;
-  url: string;
-  rounds: PageRound[];
-  median: Median;
-}
-
-interface InboxProbeResult {
-  path: string;
-  status: number | null;
-  decodedBytes: number | null;
-  encodedBytes: number | null;
-  itemCount: number | null;
-  extra: Record<string, number | string | boolean | null>;
-}
-
-// ── CLI ──────────────────────────────────────────────────────────────────────
 
 function parseArgs(argv: string[]): Options {
   const opts: Options = {
@@ -180,14 +156,19 @@ function parseArgs(argv: string[]): Options {
     name: null,
     compare: null,
     quietMs: DEFAULT_QUIET_MS,
-    settleCapMs: DEFAULT_SETTLE_CAP_MS,
-    skipInboxProbe: false,
-    skipInboxGuard: false,
-    renderOnly: null,
+    window: "offpeak",
+    selectors: "auto",
+    issueShort: "iss_1or5ray9rrj8",
+    issueLong: "iss_8vhk0frd8thl",
+    issueRunning: null,
+    inboxItem: null,
+    hoverLeadMs: DEFAULT_HOVER_LEAD_MS,
+    only: null,
+    warmup: false,
   };
   for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    const next = () => {
+    const arg = argv[i]!;
+    const next = (): string => {
       const value = argv[++i];
       if (value === undefined) throw new Error(`missing value for ${arg}`);
       return value;
@@ -211,17 +192,40 @@ function parseArgs(argv: string[]): Options {
       case "--quiet-ms":
         opts.quietMs = Number.parseInt(next(), 10);
         break;
-      case "--settle-cap-ms":
-        opts.settleCapMs = Number.parseInt(next(), 10);
+      case "--window": {
+        const value = next();
+        if (value !== "peak" && value !== "offpeak") throw new Error("--window must be peak or offpeak");
+        opts.window = value;
         break;
-      case "--skip-inbox-probe":
-        opts.skipInboxProbe = true;
+      }
+      case "--selectors": {
+        const value = next();
+        if (value !== "auto" && value !== "contract" && value !== "legacy") {
+          throw new Error("--selectors must be auto, contract or legacy");
+        }
+        opts.selectors = value;
         break;
-      case "--skip-inbox-guard":
-        opts.skipInboxGuard = true;
+      }
+      case "--issue-short":
+        opts.issueShort = next();
         break;
-      case "--render-only":
-        opts.renderOnly = next();
+      case "--issue-long":
+        opts.issueLong = next();
+        break;
+      case "--issue-running":
+        opts.issueRunning = next();
+        break;
+      case "--inbox-item":
+        opts.inboxItem = next();
+        break;
+      case "--hover-lead-ms":
+        opts.hoverLeadMs = Number.parseInt(next(), 10);
+        break;
+      case "--only":
+        opts.only = next();
+        break;
+      case "--warmup":
+        opts.warmup = true;
         break;
       case "--help":
       case "-h":
@@ -239,1435 +243,1256 @@ function parseArgs(argv: string[]): Options {
 function printUsage(): void {
   process.stdout.write(
     [
-      "Standalone read-only page-speed probe. Token is read from " + TOKEN_ENV + " only.",
+      `Read-only MUL-383 page-speed probe. Token comes from ${TOKEN_ENV} only.`,
       "",
-      "  --base-url <url>       target origin (default " + DEFAULT_BASE_URL + ")",
-      "  --rounds <n>           repetitions per page, each in a fresh context (default " + DEFAULT_ROUNDS + ")",
-      "  --out <dir>            output directory (default " + DEFAULT_OUT_DIR + ")",
-      "  --name <stem>          output file stem (default mul367-page-speed-<timestamp>)",
-      "  --compare <baseline>   also emit a before/after comparison table",
-      "  --quiet-ms <n>         keep sampling until the network is quiet this long (default " + DEFAULT_QUIET_MS + ")",
-      "  --settle-cap-ms <n>    hard cap for that quiet window (default " + DEFAULT_SETTLE_CAP_MS + ")",
-      "  --skip-inbox-probe     skip the inbox payload measurement",
-      "  --skip-inbox-guard     skip the inbox auto-read guard check",
-      "  --render-only <json>   re-render .md/.html from an existing report JSON (no network)",
+      `  --base-url <url>       target origin (default ${DEFAULT_BASE_URL})`,
+      `  --rounds <n>           repetitions per scenario, each in a fresh context (default ${DEFAULT_ROUNDS})`,
+      `  --window peak|offpeak  label recorded in the report (default offpeak)`,
+      "  --selectors auto|contract|legacy   DOM contract to use (default auto)",
+      "  --issue-short <id>     short issue for detail-short (default iss_1or5ray9rrj8)",
+      "  --issue-long <id>      long issue for detail-long (default iss_8vhk0frd8thl)",
+      "  --issue-running <id>   agent-running issue; auto-selected when omitted",
+      "  --inbox-item <id>      deep-link inbox item; auto-selected from page one when omitted",
+      `  --hover-lead-ms <n>    hover lead before an in-app click (default ${DEFAULT_HOVER_LEAD_MS})`,
+      `  --out <dir>            output directory (default ${DEFAULT_OUT_DIR})`,
+      "  --name <stem>          output file stem (default mul383-page-speed-<timestamp>)",
+      "  --compare <baseline>   also emit a before/after comparison",
+      "  --only <prefix>        run only scenarios whose key starts with this prefix",
+      "  --warmup               visit every scenario once first (for a `next dev` server; not for baselines)",
       "",
     ].join("\n"),
   );
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Scenario model ───────────────────────────────────────────────────────────
 
-/**
- * Drops the query and replaces ID-like path segments with `:id`. Identifiers we
- * already know from `/api/me` + `/api/workspaces` are masked by value, because a
- * workspace id such as `local` or a slug is not recognisable by shape.
- */
-function sanitizePath(rawUrl: string, origin: string, knownIds: string[] = []): string {
-  let pathname = rawUrl;
-  try {
-    pathname = new URL(rawUrl).pathname;
-  } catch {
-    // Already a path.
-  }
-  const segments = pathname.split("/").filter(Boolean);
-  // Structural segments are never masked even if a workspace happens to be
-  // named after one; everything else that matches a known identifier is.
-  const reserved = new Set([
-    "api",
-    "multiremi",
-    "workspaces",
-    "workspace",
-    "v1",
-    "me",
-    "health",
-    "auth",
-    "login",
-    "static",
-  ]);
-  const masked = new Set(knownIds.filter((id) => id.length >= 2 && !reserved.has(id)));
-  const cleaned = segments.map((segment) => {
-    if (masked.has(segment)) return ":id";
-    const isIdLike =
-      /^[0-9a-f]{8,}$/i.test(segment) ||
-      /^[0-9a-f-]{20,}$/i.test(segment) ||
-      /^[A-Z]{2,}-\d+$/.test(segment) ||
-      /^(att|iss|tsk|agt|cmt|mem|prj|run|sess|ses|pdoc|wsp|repo|usr|evt)_[A-Za-z0-9]+$/.test(segment) ||
-      /^[a-z]{2,}_[A-Za-z0-9]{8,}$/.test(segment) ||
-      (/^[0-9a-f-]{6,}$/i.test(segment) && segment.includes("-"));
-    return isIdLike ? ":id" : segment;
-  });
-  return "/" + cleaned.join("/");
+/** Where a warm round starts from before it clicks into the measured page. */
+type WarmEntry = "issues-list" | "inbox";
+
+interface Scenario {
+  key: string;
+  mode: "cold" | "warm";
+  shape: PageShape;
+  /** Cold-start URL path, relative to the workspace slug. */
+  path: string;
+  targetCommentId: string | null;
+  entry: WarmEntry;
+  /** Issue id for the matching list row; null for the sidebar-nav pages. */
+  clickIssueId: string | null;
+  /** Sidebar href to click for the MUL-367 pages. */
+  sidebarPath: string | null;
+  /** Inbox row index, resolved by the deep-link probe. */
+  inboxRowIndex: number | null;
+  inboxItemId: string | null;
+  target: { identifier: string; note?: string };
+  targetSelection: string | null;
 }
 
-function median(values: number[]): number | null {
-  if (values.length === 0) return null;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+interface DeepLinkTarget {
+  inboxItemId: string;
+  commentId: string;
+  sessionId: string | null;
+  issueId: string;
+  issueIdentifier: string;
+  read: boolean;
+  rowIndex: number;
+  type: string;
 }
 
-function round1(value: number | null): number | null {
-  return value === null ? null : Math.round(value * 10) / 10;
+interface RunningIssue {
+  issueId: string;
+  identifier: string;
+  taskCount: number;
 }
 
-/**
- * Rounds whose readiness wait hit the timeout. Reports written before this was
- * a stored field still carry `readyTimeout` per round, so prefer that source.
- */
-function countReadyTimeouts(page: PageSummary): number {
-  if (typeof page.median.readyTimeouts === "number") return page.median.readyTimeouts;
-  return page.rounds.filter((round) => round.readyTimeout).length;
+/** One measured round. */
+interface RoundMeasurement {
+  round: number;
+  url: string;
+  selectorMode: SelectorMode;
+  readyMs: number | null;
+  readyTimeout: boolean;
+  firstRealMs: number | null;
+  anchorVisibleMs: number | null;
+  anchorName: string | null;
+  anchorRule: string;
+  appReadyMs: number | null;
+  appReadyForced: boolean;
+  dataFreshAtReady: boolean;
+  jumpCount: number;
+  jumpPx: number;
+  jumpScrollPx: number;
+  jumps: Array<{ startMs: number; endMs: number; px: number; scrollPx: number; kind: string; frames: number }>;
+  layoutShiftCount: number;
+  cls: number;
+  serialDepth: number | null;
+  serialChain: string[];
+  apiCallsTotal: number;
+  apiFirstScreen: number;
+  chunksLoaded: number;
+  chunkBytes: number;
+  blockedWrites: number;
+  selectorEquivalence: ReturnType<typeof computeSelectorEquivalence>;
+  navStartMs: number;
+  clickT: number | null;
+  timelineRequests: number;
+  targetIndexFromLatest: number | null;
+  slowestServerTotalMs: number | null;
+  lcpMs: number | null;
+  error?: string;
 }
 
-function medianOfRounds(rounds: PageRound[]): Median {
+function roundSummary(round: RoundMeasurement): ReportRoundSummary {
   return {
-    readyMs: round1(median(rounds.map((r) => r.readyMs).filter((v): v is number => v !== null))),
-    readyTimeouts: rounds.filter((round) => round.readyTimeout).length,
-    lcpMs: round1(median(rounds.map((r) => r.lcpMs).filter((v): v is number => v !== null))),
-    domContentLoadedMs: round1(
-      median(rounds.map((r) => r.domContentLoadedMs).filter((v): v is number => v !== null)),
-    ),
-    apiCalls: median(rounds.map((r) => r.apiCalls)),
-    apiEncodedBytes: median(rounds.map((r) => r.apiEncodedBytes)),
-    apiDecodedBytes: median(rounds.map((r) => r.apiDecodedBytes)),
-    slowestApiMs: round1(
-      median(
-        rounds
-          .map((r) => r.slowestApi?.durationMs)
-          .filter((v): v is number => v !== undefined && v !== null),
-      ),
-    ),
+    round: round.round,
+    readyMs: round.readyMs,
+    readyTimeout: round.readyTimeout,
+    firstRealMs: round.firstRealMs,
+    anchorVisibleMs: round.anchorVisibleMs,
+    anchorName: round.anchorName,
+    anchorRule: round.anchorRule,
+    appReadyMs: round.appReadyMs,
+    appReadyForced: round.appReadyForced,
+    dataFreshAtReady: round.dataFreshAtReady,
+    jumpCount: round.jumpCount,
+    jumpPx: round.jumpPx,
+    layoutShiftCount: round.layoutShiftCount,
+    cls: round.cls,
+    serialDepth: round.serialDepth,
+    apiCallsTotal: round.apiCallsTotal,
+    apiFirstScreen: round.apiFirstScreen,
+    blockedWrites: round.blockedWrites,
+    heapBytes: null,
+    // Only the deep link has a target inside the timeline; every other scenario
+    // leaves both fields at zero/null so the JSON shape stays uniform.
+    targetDepth: {
+      timelineRequests: round.timelineRequests,
+      targetIndexFromLatest: round.targetIndexFromLatest,
+    },
+    selectorEquivalence: round.selectorEquivalence,
   };
 }
 
-/** Finds a Chromium in the Playwright cache the way tests/integration/e2e-frontend-ours.ts does. */
-function resolveCachedChromium(): string {
-  const root = join(process.env.HOME ?? "", ".cache", "ms-playwright");
-  if (!existsSync(root)) return "";
-  const dirs = readdirSync(root)
-    .filter((name) => name.startsWith("chromium-") && !name.includes("headless"))
-    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
-    .reverse();
-  for (const dir of dirs) {
-    const candidate = join(root, dir, "chrome-linux64", "chrome");
-    if (existsSync(candidate)) return candidate;
+function workspaceUrl(baseUrl: string, slug: string, path: string): string {
+  const suffix = path.startsWith("/") ? path : `/${path}`;
+  return `${baseUrl}/${encodeURIComponent(slug)}${suffix}`;
+}
+
+// ── Probing: deep-link target and running issue ──────────────────────────────
+
+interface InboxPageItem {
+  id?: string;
+  issue_id?: string | null;
+  type?: string;
+  read?: boolean;
+  archived?: boolean;
+  details?: { comment_id?: string | null; issue_session_id?: string | null } | null;
+}
+
+/**
+ * Picks the deep-link target from the first inbox page.
+ *
+ * A fixed item would defeat the measurement: `inbox-page.tsx` walks pages until
+ * it finds `?item=`, so an item at position ~769 turns a cold deep link into a
+ * paging test. The probe therefore uses a row that is on page one, is not an
+ * autopilot-run notification (those render a report instead of a timeline) and
+ * carries both a comment id and a session id.
+ *
+ * `--inbox-item` is an explicit override; if it is not on page one the scenario
+ * is skipped rather than measured as paging.
+ */
+async function probeDeepLinkTarget(options: {
+  baseUrl: string;
+  token: string;
+  slug: string;
+  browser: Browser;
+  pinnedItemId: string | null;
+  excludedIssueIds: Set<string>;
+  round: number;
+  knownIds: string[];
+  selectors: SelectorModeOption;
+}): Promise<{ target: DeepLinkTarget | null; skipped: string | null }> {
+  const { baseUrl, token, slug, browser, pinnedItemId, excludedIssueIds, round, knownIds, selectors } = options;
+
+  // Read the rendered rows' item ids from the DOM where possible. Each row
+  // carries `data-perf-key=<inboxItemId>` once MUL-384 is deployed; on a legacy
+  // DOM the id is learned by clicking the row, which the app reflects into
+  // `?item=`. That walk is capped at a handful of rows — clicking all of page
+  // one makes the probe slower than the measurement it prepares.
+  const context = await mktContext(browser, token, [], baseUrl);
+  const page = await context.newPage();
+  const collectors = attachCollectors(page, round, "inbox-probe", knownIds);
+  let rowItemIds: string[] = [];
+  try {
+    await page.goto(workspaceUrl(baseUrl, slug, "/inbox"), { waitUntil: "commit", timeout: ROUND_TIMEOUT_MS });
+    await page.waitForTimeout(1_500);
+    const selector = inboxRowSelector("legacy");
+    const count = await page.locator(selector).count().catch(() => 0);
+    for (let index = 0; index < Math.min(count, 3); index++) {
+      const row = page.locator(selector).nth(index);
+      await row.click({ timeout: 3_000 }).catch(() => {});
+      const match = /[?&]item=([^&]+)/.exec(page.url());
+      if (match) rowItemIds.push(decodeURIComponent(match[1]!));
+      await page.goBack({ waitUntil: "commit", timeout: 10_000 }).catch(() => {});
+      await page.waitForTimeout(200);
+    }
+    rowItemIds = rowItemIds.filter((id) => id.length > 0);
+  } catch {
+    // The API probe below still has a chance to resolve the target.
+  } finally {
+    await context.close();
   }
-  return "";
+  void selectors;
+
+  const headers = { Authorization: `Bearer ${token}` };
+  let firstPage: InboxPageItem[] = [];
+  try {
+    const res = await fetch(`${baseUrl}/api/inbox/page?limit=50`, { headers });
+    if (res.ok) {
+      const body = (await res.json()) as { items?: InboxPageItem[] };
+      firstPage = Array.isArray(body.items) ? body.items : [];
+    }
+  } catch {
+    // Reported as "no eligible item" below.
+  }
+
+  if (pinnedItemId) {
+    const index = firstPage.findIndex((item) => item.id === pinnedItemId);
+    if (index < 0) return { target: null, skipped: "inbox-item-not-on-first-page" };
+    const item = firstPage[index]!;
+    const candidate = toDeepLinkTarget(item, pinnedItemId, index, excludedIssueIds);
+    if (!candidate) return { target: null, skipped: "inbox-item-has-no-comment" };
+    return { target: candidate, skipped: null };
+  }
+
+  // Prefer a row we actually saw rendered: its index is what the warm round
+  // clicks, and a mismatch between the DOM order and the API page would
+  // otherwise silently measure a different notification.
+  const preferred: number[] = [];
+  for (const itemId of rowItemIds) {
+    const index = firstPage.findIndex((item) => item.id === itemId);
+    if (index >= 0 && !preferred.includes(index)) preferred.push(index);
+  }
+  const order = [...preferred, ...firstPage.map((_, index) => index).filter((index) => !preferred.includes(index))];
+  for (const index of order) {
+    const item = firstPage[index]!;
+    const candidate = toDeepLinkTarget(item, item.id ?? "", index, excludedIssueIds);
+    if (candidate) return { target: candidate, skipped: null };
+  }
+  return { target: null, skipped: "no-eligible-inbox-item" };
+}
+
+function toDeepLinkTarget(
+  item: InboxPageItem,
+  inboxItemId: string,
+  rowIndex: number,
+  excludedIssueIds: Set<string>,
+): DeepLinkTarget | null {
+  if (!inboxItemId) return null;
+  const type = String(item.type ?? "");
+  if (AUTOPILOT_INBOX_TYPES.some((candidate) => type === candidate || type.startsWith(`${candidate}_`))) return null;
+  const commentId = item.details?.comment_id ?? null;
+  const issueId = item.issue_id ?? null;
+  if (!commentId || !issueId) return null;
+  if (excludedIssueIds.has(issueId)) return null;
+  return {
+    inboxItemId,
+    commentId,
+    sessionId: item.details?.issue_session_id ?? null,
+    issueId,
+    issueIdentifier: issueId,
+    read: item.read === true,
+    rowIndex,
+    type,
+  };
+}
+
+/** Resolves an identifier for reporting without needing the issue detail endpoint. */
+async function resolveIdentifiers(
+  baseUrl: string,
+  token: string,
+  issueIds: string[],
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const headers = { Authorization: `Bearer ${token}` };
+  for (const issueId of issueIds) {
+    try {
+      const res = await fetch(`${baseUrl}/api/issues/${issueId}`, { headers });
+      if (!res.ok) continue;
+      const body = (await res.json()) as { identifier?: string; title?: string };
+      if (body.identifier) out.set(issueId, body.identifier);
+    } catch {
+      // Falls back to the raw id in the report.
+    }
+  }
+  return out;
+}
+
+/**
+ * Finds an issue with an agent currently running, excluding MUL-383 and all of
+ * its children. Returns null when there is none, which is not a failure: the
+ * scenario is reported as skipped.
+ */
+/**
+ * The task list speaks camelCase (`issueId`); the snake_case form only appears on
+ * some older serializers. Reading one name silently matched nothing and reported
+ * `0 running task(s)` for a task that was running, so accept both.
+ */
+interface TaskListRow {
+  issueId?: string | null;
+  issue_id?: string | null;
+}
+
+function taskIssueId(task: TaskListRow): string | null {
+  return task.issueId ?? task.issue_id ?? null;
+}
+
+async function probeRunningIssue(options: {
+  baseUrl: string;
+  token: string;
+  explicitIssueId: string | null;
+  excludedIssueIds: Set<string>;
+}): Promise<RunningIssue | null> {
+  const { baseUrl, token, explicitIssueId, excludedIssueIds } = options;
+  const headers = { Authorization: `Bearer ${token}` };
+
+  if (explicitIssueId) {
+    if (excludedIssueIds.has(explicitIssueId)) return null;
+    // The explicit target is trusted even when the task list has not caught up:
+    // a caller pinning `--issue-running` is asserting the issue is live, and a
+    // zero count here would otherwise silently drop the scenario.
+    const tasks = await fetchJson<{ tasks?: Array<TaskListRow> }>(
+      `${baseUrl}/api/multiremi/tasks?status=running&limit=200`,
+      headers,
+    ).catch(() => null);
+    const count = (tasks?.tasks ?? []).filter((task) => taskIssueId(task) === explicitIssueId).length;
+    return { issueId: explicitIssueId, identifier: explicitIssueId, taskCount: count };
+  }
+
+  const body = await fetchJson<{ tasks?: Array<TaskListRow> }>(
+    `${baseUrl}/api/multiremi/tasks?status=running&limit=200`,
+    headers,
+  ).catch(() => null);
+  const counts = new Map<string, number>();
+  for (const task of body?.tasks ?? []) {
+    const issueId = taskIssueId(task);
+    if (!issueId) continue;
+    if (excludedIssueIds.has(issueId)) continue;
+    counts.set(issueId, (counts.get(issueId) ?? 0) + 1);
+  }
+  for (const [issueId, taskCount] of counts) {
+    return { issueId, identifier: issueId, taskCount };
+  }
+  return null;
+}
+
+/** Every issue id that must stay out of the running-issue pick: MUL-383 and its children. */
+async function loadExcludedIssueIds(baseUrl: string, token: string): Promise<Set<string>> {
+  const headers = { Authorization: `Bearer ${token}` };
+  const excluded = new Set(EXCLUDED_RUNNING_ISSUES);
+  for (const parentId of EXCLUDED_RUNNING_ISSUES) {
+    try {
+      const res = await fetch(`${baseUrl}/api/issues/children?parent_ids=${encodeURIComponent(parentId)}`, {
+        headers,
+      });
+      if (!res.ok) continue;
+      const body = (await res.json()) as { issues?: Array<{ id?: string }> };
+      for (const child of body.issues ?? []) if (child.id) excluded.add(child.id);
+    } catch {
+      // The parent itself remains excluded; a failure here only widens the pick.
+    }
+  }
+  return excluded;
+}
+
+async function fetchJson<T>(url: string, headers: Record<string, string>): Promise<T | null> {
+  try {
+    const res = await fetch(url, { headers });
+    if (!res.ok) return null;
+    return (await res.json()) as T;
+  } catch {
+    return null;
+  }
 }
 
 // ── Measurement ──────────────────────────────────────────────────────────────
 
-interface ApiResponseInfo {
-  method: string;
-  url: string;
-  status: number | null;
-  serverTiming: string | null;
-  /** `X-Client-Version` the deployed web app puts on its own API calls. */
-  clientVersion: string | null;
-}
-
-interface PageCollectors {
-  apiResponses: Map<string, ApiResponseInfo>;
-  blockedWrites: BlockedWrite[];
-  requestStart: Map<unknown, number>;
-  /** Identifiers masked by value, not shape (workspace id/slug, member id). */
-  knownIds: string[];
-  /** First client version observed this page load. */
-  webClientVersion: string | null;
-}
-
-function attachCollectors(
-  page: Page,
-  round: number,
-  pageKey: PageKey | GuardLabel,
-  knownIds: string[],
-): PageCollectors {
-  const collectors: PageCollectors = {
-    apiResponses: new Map(),
-    blockedWrites: [],
-    requestStart: new Map(),
-    knownIds,
-    webClientVersion: null,
+function blankRound(round: number, url: string): RoundMeasurement {
+  return {
+    round,
+    url,
+    selectorMode: "legacy",
+    readyMs: null,
+    readyTimeout: false,
+    firstRealMs: null,
+    anchorVisibleMs: null,
+    anchorName: null,
+    anchorRule: "",
+    appReadyMs: null,
+    appReadyForced: false,
+    dataFreshAtReady: false,
+    jumpCount: 0,
+    jumpPx: 0,
+    jumpScrollPx: 0,
+    jumps: [],
+    layoutShiftCount: 0,
+    cls: 0,
+    serialDepth: null,
+    serialChain: [],
+    apiCallsTotal: 0,
+    apiFirstScreen: 0,
+    chunksLoaded: 0,
+    chunkBytes: 0,
+    blockedWrites: 0,
+    selectorEquivalence: null,
+    navStartMs: 0,
+    clickT: null,
+    timelineRequests: 0,
+    targetIndexFromLatest: null,
+    slowestServerTotalMs: null,
+    lcpMs: null,
   };
-
-  // Read-only guard: only GET/HEAD reach the server. Everything else is
-  // aborted and reported, so a page that tries to write cannot do so.
-  void page.route("**/api/**", async (route) => {
-    const method = route.request().method();
-    if (method === "GET" || method === "HEAD") {
-      await route.continue();
-      return;
-    }
-    const safePath = sanitizePath(route.request().url(), "", collectors.knownIds);
-    const existing = collectors.blockedWrites.find(
-      (write) => write.method === method && write.path === safePath,
-    );
-    if (existing) existing.attempts += 1;
-    else
-      collectors.blockedWrites.push({
-        round,
-        page: pageKey,
-        method,
-        path: safePath,
-        attempts: 1,
-      });
-    await route.abort();
-  });
-
-  page.on("request", (request) => {
-    if (request.url().includes("/api/")) collectors.requestStart.set(request, Date.now());
-  });
-
-  page.on("response", (response) => {
-    const url = response.url();
-    if (!url.includes("/api/")) return;
-    const request = response.request();
-    const started = collectors.requestStart.get(request);
-    if (started !== undefined) collectors.requestStart.delete(request);
-    const clientVersion = request.headers()["x-client-version"] ?? null;
-    if (!collectors.webClientVersion && clientVersion) {
-      collectors.webClientVersion = clientVersion;
-    }
-    const existing = collectors.apiResponses.get(url);
-    collectors.apiResponses.set(url, {
-      method: request.method(),
-      url,
-      status: response.status(),
-      serverTiming: response.headers()["server-timing"] ?? existing?.serverTiming ?? null,
-      clientVersion: clientVersion ?? existing?.clientVersion ?? null,
-    });
-  });
-
-  return collectors;
 }
 
-/**
- * Polls the readiness rule until it holds, the timeout expires, or the page
- * navigates (evaluation errors during a navigation are retried, not fatal).
- * Afterwards it keeps sampling until the network has been quiet for `quietMs`
- * (hard-capped by `settleCapMs`) so byte accounting covers the whole load. A
- * readiness timeout still gets the quiet window, so a slow page reports
- * numbers instead of nothing.
- */
-async function waitForReadyAndSettle(
-  page: Page,
-  startedAt: number,
-  quietMs: number,
-  settleCapMs: number,
-  timeoutMs: number,
-): Promise<{ readyMs: number | null; readyTimeout: boolean; heading: string | null }> {
-  let ready = false;
-  const readyDeadline = startedAt + timeoutMs;
-  while (Date.now() < readyDeadline) {
-    try {
-      if (await page.evaluate(readyPredicate, READY_SELECTOR)) {
-        ready = true;
-        break;
-      }
-    } catch {
-      // Execution context destroyed by a navigation or a client-side redirect;
-      // retry on the next tick.
-    }
-    await page.waitForTimeout(100);
-  }
-  const readyMs = ready ? Date.now() - startedAt : null;
-
-  const heading = await page
-    .evaluate((selector) => {
-      const inset = document.querySelector(selector);
-      return inset?.querySelector("h1")?.textContent?.trim() ?? null;
-    }, READY_SELECTOR)
-    .catch(() => null);
-
-  let lastActivity = Date.now();
-  const bump = () => {
-    lastActivity = Date.now();
-  };
-  page.on("request", bump);
-  page.on("response", bump);
-  const deadline = Date.now() + settleCapMs;
-  try {
-    while (Date.now() < deadline) {
-      if (Date.now() - lastActivity >= quietMs) break;
-      await page.waitForTimeout(100);
-    }
-  } finally {
-    page.off("request", bump);
-    page.off("response", bump);
-  }
-
-  return { readyMs, readyTimeout: !ready, heading };
-}
-
-type ResourceEntry = {
-  name: string;
-  duration: number;
-  encodedBodySize: number;
-  decodedBodySize: number;
-  transferSize: number;
-};
-
-/** Reads the page's own Resource Timing entries; falls back to the live map. */
-async function collectApiCalls(
-  page: Page,
-  origin: string,
-  collectors: PageCollectors,
-): Promise<ApiCall[]> {
-  const entries = await page
-    .evaluate(() =>
-      (
-        performance.getEntriesByType("resource") as PerformanceResourceTiming[]
-      )
-        .filter((entry) => entry.name.includes("/api/"))
-        .map((entry) => ({
-          name: entry.name,
-          duration: entry.duration,
-          encodedBodySize: entry.encodedBodySize,
-          decodedBodySize: entry.decodedBodySize,
-          transferSize: entry.transferSize,
-        })),
-    )
-    .catch((): ResourceEntry[] => []);
-
-  const calls: ApiCall[] = [];
-  const matchedUrls = new Set<string>();
-
-  // Resource Timing entries are per request, so repeated identical URLs each
-  // produce one row. Response headers are matched by URL (the last response
-  // wins when a URL is fetched more than once).
-  for (const entry of entries) {
-    const matched = collectors.apiResponses.get(entry.name);
-    if (matched) matchedUrls.add(entry.name);
-    calls.push({
-      method: matched?.method ?? "GET",
-      path: sanitizePath(entry.name, origin, collectors.knownIds),
-      status: matched?.status ?? null,
-      durationMs: round1(entry.duration) ?? 0,
-      encodedBytes: entry.encodedBodySize,
-      decodedBytes: entry.decodedBodySize,
-      transferBytes: entry.transferSize,
-      serverTiming: matched?.serverTiming ?? null,
-    });
-  }
-
-  // A response we saw but that never published a resource entry (aborted or
-  // blocked) still counts, so the API number never under-reports.
-  for (const [url, info] of collectors.apiResponses) {
-    if (matchedUrls.has(url)) continue;
-    calls.push({
-      method: info.method,
-      path: sanitizePath(url, origin, collectors.knownIds),
-      status: info.status,
-      durationMs: 0,
-      encodedBytes: 0,
-      decodedBytes: 0,
-      transferBytes: 0,
-      serverTiming: info.serverTiming,
-    });
-  }
-
-  calls.sort((a, b) => b.durationMs - a.durationMs);
-  return calls;
-}
-
-async function readWebVitals(page: Page): Promise<{
-  lcpMs: number | null;
-  domContentLoadedMs: number | null;
-  loadEventMs: number | null;
-}> {
+async function recorderSummary(page: Page): Promise<PerfRecorderSummary | null> {
   return page
-    .evaluate(() => {
-      const nav = performance.getEntriesByType("navigation")[0] as
-        | PerformanceNavigationTiming
-        | undefined;
-      const samples =
-        (window as unknown as { __lcpValues?: number[] }).__lcpValues ??
-        (performance.getEntriesByType("largest-contentful-paint") as PerformanceEntry[]).map(
-          (entry) => entry.startTime,
-        );
-      const lcpValue = samples.length > 0 ? samples[samples.length - 1] : null;
-      return {
-        lcpMs: lcpValue === null ? null : Math.round(lcpValue * 10) / 10,
-        domContentLoadedMs: nav ? Math.round(nav.domContentLoadedEventEnd * 10) / 10 : null,
-        loadEventMs: nav && nav.loadEventEnd > 0 ? Math.round(nav.loadEventEnd * 10) / 10 : null,
-      };
-    })
-    .catch(() => ({ lcpMs: null, domContentLoadedMs: null, loadEventMs: null }));
+    .evaluate((name) => {
+      const recorder = (window as unknown as Record<string, { summary?: () => unknown }>)[name];
+      return (recorder?.summary?.() ?? null) as never;
+    }, RECORDER_GLOBAL)
+    .catch(() => null);
+}
+
+async function freezeRecorder(page: Page): Promise<void> {
+  await page
+    .evaluate((name) => {
+      (window as unknown as Record<string, { stop?: () => void }>)[name]?.stop?.();
+    }, RECORDER_GLOBAL)
+    .catch(() => {});
+}
+
+async function readRecorderBuffer(page: Page): Promise<PerfRecorderBuffer | null> {
+  return page
+    .evaluate((name) => {
+      const recorder = (window as unknown as Record<string, { read?: () => unknown }>)[name];
+      return (recorder?.read?.() ?? null) as never;
+    }, RECORDER_GLOBAL)
+    .catch(() => null);
+}
+
+async function resetRecorderAt(page: Page, from: number | null): Promise<number | null> {
+  return page
+    .evaluate(
+      (args) => {
+        const [name, value] = args;
+        const recorder = (window as unknown as Record<string, { reset?: (t?: number) => void }>)[name];
+        recorder?.reset?.(typeof value === "number" ? value : undefined);
+        return performance.now();
+      },
+      [RECORDER_GLOBAL, from] as const,
+    )
+    .catch(() => null);
 }
 
 /**
- * Seeds the token (auth is token mode) and installs the LCP observer before any
- * app code runs. Without the observer the entry list stays empty: Chromium only
- * queues `largest-contentful-paint` entries once something observes the type.
+ * Waits for the ready window of whichever profile this page actually has.
+ *
+ * Contract is preferred; a DOM that predates MUL-384 never populates it, so the
+ * legacy profile carries the round instead. Both are polled in one loop, which
+ * keeps a legacy round from paying the contract timeout first.
  */
-async function seedContext(context: BrowserContext, token: string): Promise<void> {
-  await context.addInitScript((value: string) => {
-    try {
-      window.localStorage.setItem("multimira_token", value);
-    } catch {
-      // Sandboxed contexts can refuse storage; the probe then reports the
-      // resulting login redirect instead of hiding it.
+async function waitForReady(
+  page: Page,
+  deadlineMs: number,
+): Promise<{ summary: PerfRecorderSummary | null; profile: PerfProfileName | null }> {
+  const started = Date.now();
+  let last: PerfRecorderSummary | null = null;
+  let legacyGraceUntil = started + 6_000;
+  while (Date.now() - started < deadlineMs) {
+    const summary = await recorderSummary(page);
+    if (summary) {
+      last = summary;
+      const contract = summary.profiles.contract;
+      const legacy = summary.profiles.legacy;
+      if (contract?.ready) return { summary, profile: "contract" };
+      if (legacy?.ready && (!contract?.rootFound || Date.now() > legacyGraceUntil)) {
+        return { summary, profile: "legacy" };
+      }
+      // Once the contract table has been absent for the whole grace period, the
+      // legacy profile is the only one this DOM can satisfy: stop preferring it.
+      if (!contract?.rootFound && Date.now() > legacyGraceUntil) legacyGraceUntil = 0;
     }
-    try {
-      const store: number[] = [];
-      (window as unknown as { __lcpValues?: number[] }).__lcpValues = store;
-      const observer = new PerformanceObserver((list) => {
-        for (const entry of list.getEntries()) store.push(entry.startTime);
-      });
-      observer.observe({ type: "largest-contentful-paint", buffered: true });
-    } catch {
-      // Older engines without LCP support simply report null.
-    }
-  }, token);
+    await page.waitForTimeout(50);
+  }
+  return { summary: last, profile: last?.profiles.contract?.rootFound ? "contract" : last?.profiles.legacy?.rootFound ? "legacy" : null };
 }
 
-async function mktContext(browser: Browser, token: string): Promise<BrowserContext> {
-  const context = await browser.newContext({
-    viewport: VIEWPORT,
-    ignoreHTTPSErrors: false,
+/**
+ * Runs one measured round in a fresh context.
+ *
+ * Cold rounds `goto` the target URL. Warm rounds land on the entry page, hover
+ * the target row for `hoverLeadMs` (so `AppLink`'s route prefetch and any data
+ * prefetch can run), then click it; `navStart` is the in-page click timestamp,
+ * which avoids the CDP round-trip error a Node clock would add.
+ */
+async function measureRound(options: {
+  browser: Browser;
+  token: string;
+  baseUrl: string;
+  slug: string;
+  scenario: Scenario;
+  round: number;
+  opts: Options;
+  knownIds: string[];
+}): Promise<{ round: RoundMeasurement; blocked: BlockedWrite[]; collectors: ApiCollectors }> {
+  const { browser, baseUrl, slug, scenario, round, opts, knownIds } = options;
+  const targetUrl = workspaceUrl(baseUrl, slug, scenario.path);
+  const cold = scenario.mode === "cold";
+  const measurement = blankRound(round, targetUrl);
+
+  // Both tables are sampled, always: the contract one is the target, and the
+  // legacy one provides the equivalence evidence and the fallback for a DOM
+  // that predates MUL-384. Sampling is installed before any document exists, so
+  // a warm in-app navigation is covered without re-injecting.
+  const context = await mktContext(browser, options.token, [], baseUrl);
+  await installRecorderOnContext(context, {
+    profiles: profilesFor({ modes: ["contract", "legacy"], shape: scenario.shape, targetCommentId: scenario.targetCommentId }),
   });
-  await seedContext(context, token);
-  return context;
+  const page = await context.newPage();
+  const collectors = attachCollectors(page, round, scenario.key, knownIds);
+
+  try {
+    if (cold) {
+      await page.goto(targetUrl, { waitUntil: "commit", timeout: ROUND_TIMEOUT_MS });
+    } else {
+      const entryUrl = workspaceUrl(baseUrl, slug, scenario.entry === "inbox" ? "/inbox" : "/issues");
+      await page.goto(entryUrl, { waitUntil: "commit", timeout: ROUND_TIMEOUT_MS });
+      // Wait for the entry list to render before hunting for the row; the
+      // selectors themselves are mode-agnostic so the contract rollout does not
+      // decide whether the click works.
+      await page.waitForTimeout(1_500);
+      await clickWarmTarget(page, scenario, opts);
+      const clickT = await page
+        .evaluate((name) => {
+          const recorder = (window as unknown as Record<string, { read?: () => { clicks: Array<{ t: number }> } }>)[name];
+          const clicks = recorder?.read?.().clicks ?? [];
+          return clicks.length > 0 ? clicks[clicks.length - 1]!.t : null;
+        }, RECORDER_GLOBAL)
+        .catch(() => null);
+      measurement.clickT = clickT;
+      measurement.navStartMs = clickT ?? 0;
+      // The click has to be in the buffer before the app can navigate; resetting
+      // at its timestamp keeps the reported clock on the page's own timeline.
+      if (measurement.clickT !== null) await resetRecorderAt(page, measurement.clickT);
+    }
+  } catch (error) {
+    measurement.error = (error as Error).message;
+  }
+
+  const { summary, profile: measuredProfile } = await waitForReady(page, ROUND_TIMEOUT_MS);
+
+  await freezeRecorder(page);
+  const buffer = await readRecorderBuffer(page);
+  const vitals = await readWebVitals(page);
+  const resources = await readResourceEntries(page, baseUrl, knownIds);
+  await page.close();
+
+  return {
+    round: buildRoundMeasurement({
+      measurement,
+      scenario,
+      summary,
+      measuredProfile,
+      buffer,
+      vitals,
+      resources,
+      collectors,
+      quietMs: opts.quietMs,
+    }),
+    blocked: collectors.blockedWrites,
+    collectors,
+  };
 }
 
 /**
- * Proves the abort guard itself works: a deliberate POST to `/api/inbox/unread-count`
- * must be blocked. Without this, a silent guard failure would look identical to
- * "the page never wrote anything".
+ * How many timeline responses a round made, and where the deep-link target sits
+ * among them. Both come from the `/comments`-side bodies the collector already
+ * captured, so nothing extra is requested.
  */
-async function verifyWriteGuard(browser: Browser, token: string, baseUrl: string): Promise<{
-  blocked: boolean;
-  target: string;
-  detail: string;
-}> {
-  const target = "/api/inbox/unread-count";
-  const context = await mktContext(browser, token);
-  const page = await context.newPage();
-  let blocked = false;
-  try {
-    await page.route("**/api/**", async (route) => {
-      if (route.request().method() === "GET" || route.request().method() === "HEAD") {
-        await route.continue();
-        return;
-      }
-      blocked = true;
-      await route.abort();
+function timelineInfo(bodies: Map<string, unknown>, targetCommentId: string | null): {
+  requests: number;
+  targetIndexFromLatest: number | null;
+} {
+  const requests = bodies.size;
+  if (!targetCommentId || requests === 0) return { requests, targetIndexFromLatest: null };
+  let best: number | null = null;
+  for (const body of bodies.values()) {
+    const entries = Array.isArray(body)
+      ? body
+      : body && typeof body === "object" && Array.isArray((body as { entries?: unknown }).entries)
+        ? (body as { entries: unknown[] }).entries
+        : [];
+    const index = entries.findIndex((entry) => {
+      const id = entry && typeof entry === "object" ? (entry as { id?: unknown }).id : null;
+      return typeof id === "string" && id === targetCommentId;
     });
-    await page.goto(`${baseUrl}/login`, { waitUntil: "domcontentloaded", timeout: READY_TIMEOUT_MS });
-    await page.evaluate(async (path: string) => {
-      try {
-        await fetch(path, { method: "POST" });
-      } catch {
-        // expected: the route handler aborts it
-      }
-    }, target);
-    await page.waitForTimeout(500);
-  } catch (error) {
-    return { blocked, target, detail: `probe error: ${(error as Error).message}` };
+    if (index < 0) continue;
+    const fromLatest = entries.length - 1 - index;
+    best = best === null ? fromLatest : Math.min(best, fromLatest);
+  }
+  return { requests, targetIndexFromLatest: best };
+}
+
+/**
+ * Hovers then clicks the row that opens this scenario's page.
+ *
+ * Both selector tables are tried, because the click target lives on the *entry*
+ * page (the issues list or the inbox), whose DOM may or may not carry the
+ * MUL-384 attributes — and the entry page is not what the round measures.
+ */
+async function clickWarmTarget(page: Page, scenario: Scenario, opts: Options): Promise<void> {
+  const selectors: string[] = [];
+  if (scenario.shape === "issue-detail" && scenario.inboxItemId !== null) {
+    selectors.push(inboxRowSelector("contract"), inboxRowSelector("legacy"));
+  } else if (scenario.clickIssueId) {
+    selectors.push(issueRowSelector("contract", scenario.clickIssueId), issueRowSelector("legacy", scenario.clickIssueId));
+  } else if (scenario.sidebarPath) {
+    // Sidebar nav buttons render as anchors; the link text is localized, so the
+    // href the paths module builds is the stable hook.
+    selectors.push(`[data-slot="sidebar"] a[href$="${scenario.sidebarPath}"]`);
+    selectors.push(`a[href$="${scenario.sidebarPath}"]`);
+  }
+
+  for (const selector of selectors) {
+    const locator = page.locator(selector);
+    const count = await locator.count().catch(() => 0);
+    if (count === 0) continue;
+    const index = scenario.inboxItemId !== null && typeof scenario.inboxRowIndex === "number"
+      ? Math.min(scenario.inboxRowIndex, count - 1)
+      : 0;
+    const row = locator.nth(index);
+    try {
+      await row.scrollIntoViewIfNeeded({ timeout: 2_000 }).catch(() => {});
+      await row.hover({ timeout: 5_000 });
+      await page.waitForTimeout(opts.hoverLeadMs);
+      await row.click({ timeout: 5_000 });
+      return;
+    } catch {
+      continue;
+    }
+  }
+  throw new Error(`warm target not found for ${scenario.key}`);
+}
+
+/**
+ * Post-processes one round's raw buffer into the reported numbers.
+ *
+ * All the arithmetic lives in `lib/jump-recorder.ts`; this function's job is to
+ * pick the profile, feed the right windows and keep the report shape stable.
+ */
+function buildRoundMeasurement(input: {
+  measurement: RoundMeasurement;
+  scenario: Scenario;
+  summary: PerfRecorderSummary | null;
+  measuredProfile: PerfProfileName | null;
+  buffer: PerfRecorderBuffer | null;
+  vitals: { lcpMs: number | null };
+  resources: Awaited<ReturnType<typeof readResourceEntries>>;
+  collectors: ApiCollectors;
+  quietMs: number;
+}): RoundMeasurement {
+  const { measurement, scenario, summary, measuredProfile, buffer, vitals, resources, collectors, quietMs } = input;
+  const mode: SelectorMode = measuredProfile ?? (summary?.profiles.contract?.rootFound ? "contract" : "legacy");
+  measurement.selectorMode = mode;
+  const frames: PerfFrame[] = buffer?.frames ?? [];
+  const profile = profileForMeasurement(mode, scenario.shape, scenario.targetCommentId);
+  measurement.anchorRule = profile.anchorRule;
+
+  const profileSummary = summary?.profiles[mode] ?? null;
+  const firstRealMs = computeFirstRealMs(frames, mode);
+  const ready = computeReadyWindow(frames, { profile: profile.config, quietMs, firstRealMs });
+
+  measurement.firstRealMs = firstRealMs;
+  measurement.anchorVisibleMs = ready.anchorVisibleMs;
+  measurement.anchorName = ready.anchorName ?? profile.anchorName;
+  measurement.readyMs = ready.readyMs;
+  measurement.readyTimeout = ready.readyTimeout || !ready.readyMs && profileSummary?.ready !== true;
+
+  const jumps = computeJumps(frames, { profile: mode, fromMs: firstRealMs, toMs: ready.readyMs ?? undefined });
+  measurement.jumpCount = jumps.jumpCount;
+  measurement.jumpPx = jumps.jumpPx;
+  measurement.jumpScrollPx = jumps.jumpScrollPx;
+  measurement.jumps = jumps.jumps.map((jump) => ({
+    startMs: jump.startMs,
+    endMs: jump.endMs,
+    px: jump.px,
+    scrollPx: jump.scrollPx,
+    kind: jump.kind,
+    frames: jump.frames,
+  }));
+
+  const shifts = summarizeLayoutShifts(buffer?.shifts ?? [], { fromMs: firstRealMs, toMs: ready.readyMs ?? undefined });
+  measurement.layoutShiftCount = shifts.layoutShiftCount;
+  measurement.cls = shifts.cls;
+
+  const appReady = computeAppReadyMs(buffer?.stateTransitions ?? []);
+  measurement.appReadyMs = appReady.appReadyMs;
+  measurement.appReadyForced = appReady.forced;
+  // `data-perf-state` is the app's own verdict; comparing it with the probe's
+  // ready window is the cross-check the plan asks for.
+  measurement.dataFreshAtReady = appReady.appReadyMs !== null
+    && measurement.readyMs !== null
+    && Math.abs(appReady.appReadyMs - measurement.readyMs) < 1_000;
+
+  const readiness = ready.readyMs ?? measurement.readyMs ?? firstRealMs ?? ROUND_TIMEOUT_MS;
+  const apiEntries = resources.filter(
+    (entry) => entry.path.startsWith("/api") && entry.startMs <= readiness,
+  );
+  const waves = computeWaves(
+    apiEntries.map((entry) => ({
+      index: entry.index,
+      path: entry.path,
+      startMs: entry.startMs,
+      responseEndMs: entry.responseEndMs,
+    })),
+  );
+  measurement.serialDepth = waves.serialDepth;
+  measurement.serialChain = waves.chain.map((index) => {
+    const entry = apiEntries.find((candidate) => candidate.index === index);
+    return entry ? entry.path : String(index);
+  });
+  measurement.apiFirstScreen = apiEntries.length;
+  measurement.apiCallsTotal = resources.filter((entry) => entry.path.startsWith("/api")).length;
+
+  const chunks = resources.filter((entry) => entry.initiatorType === "script");
+  measurement.chunksLoaded = chunks.length;
+  measurement.chunkBytes = chunks.reduce((sum, entry) => sum + entry.encodedBytes, 0);
+
+  let slowest = 0;
+  for (const entry of apiEntries) {
+    const timing = parseServerTiming(entry.serverTiming);
+    if (timing.total !== null && timing.total > slowest) slowest = timing.total;
+  }
+  measurement.slowestServerTotalMs = slowest > 0 ? Math.round(slowest * 10) / 10 : null;
+  measurement.lcpMs = vitals.lcpMs;
+
+  const timeline = timelineInfo(collectors.timelineBodies, scenario.targetCommentId);
+  measurement.timelineRequests = timeline.requests;
+  measurement.targetIndexFromLatest = timeline.targetIndexFromLatest;
+
+  // Contract/legacy agreement, taken at the ready frame. Only meaningful when
+  // both profiles sampled the same DOM.
+  if (mode === "contract") {
+    const referenceT = ready.readyMs ?? measurement.anchorVisibleMs;
+    measurement.selectorEquivalence = computeSelectorEquivalence(frameAt(frames, referenceT));
+  }
+
+  if (buffer && buffer.errors.length > 0) {
+    measurement.error = [...(measurement.error ? [measurement.error] : []), ...buffer.errors].join("; ");
+  }
+  return measurement;
+}
+
+/** The readiness profile used for one measurement, in the mode that actually matched. */
+function profileForMeasurement(
+  mode: SelectorMode,
+  shape: PageShape,
+  targetCommentId: string | null,
+): { config: PerfProfileConfig; anchorName: string; anchorRule: string } {
+  const plan = anchorPlan({ mode, shape, targetCommentId });
+  return {
+    config: {
+      name: mode,
+      scrollRoot: "",
+      items: "",
+      skeleton: "",
+      anchors: plan.specs,
+      rule: plan.rule,
+    },
+    anchorName: plan.anchorName,
+    anchorRule: plan.anchorRule,
+  };
+}
+
+// ── Scenario matrix ──────────────────────────────────────────────────────────
+
+function buildScenarios(options: {
+  deepLink: DeepLinkTarget | null;
+  runningIssue: RunningIssue | null;
+  issueShort: string;
+  issueLong: string;
+  issueShortIdentifier: string;
+  issueLongIdentifier: string;
+  pinnedInboxItem: string | null;
+  deepLinkAuto: boolean;
+}): Scenario[] {
+  const scenarios: Scenario[] = [];
+  const detailScenarios = [
+    {
+      key: "detail-short",
+      issueId: options.issueShort,
+      identifier: options.issueShortIdentifier,
+      note: undefined as string | undefined,
+    },
+    {
+      key: "detail-long",
+      issueId: options.issueLong,
+      identifier: options.issueLongIdentifier,
+      note: "长（173 条）",
+    },
+  ];
+  if (options.runningIssue) {
+    detailScenarios.push({
+      key: "detail-running",
+      issueId: options.runningIssue.issueId,
+      identifier: options.runningIssue.identifier,
+      note: `运行中任务 ${options.runningIssue.taskCount}`,
+    });
+  }
+
+  for (const detail of detailScenarios) {
+    const path = `/issues/${encodeURIComponent(detail.issueId)}`;
+    scenarios.push({
+      key: detail.key,
+      mode: "cold",
+      shape: "issue-detail",
+      path,
+      targetCommentId: null,
+      entry: "issues-list",
+      clickIssueId: detail.issueId,
+      sidebarPath: null,
+      inboxRowIndex: null,
+      inboxItemId: null,
+      target: { identifier: detail.identifier, ...(detail.note ? { note: detail.note } : {}) },
+      targetSelection: null,
+    });
+    scenarios.push({
+      key: detail.key,
+      mode: "warm",
+      shape: "issue-detail",
+      path,
+      targetCommentId: null,
+      entry: "issues-list",
+      clickIssueId: detail.issueId,
+      sidebarPath: null,
+      inboxRowIndex: null,
+      inboxItemId: null,
+      target: { identifier: detail.identifier, ...(detail.note ? { note: detail.note } : {}) },
+      targetSelection: null,
+    });
+  }
+
+  if (options.deepLink) {
+    const deepLink = options.deepLink;
+    const path = `/inbox?item=${encodeURIComponent(deepLink.inboxItemId)}${
+      deepLink.sessionId ? `&session=${encodeURIComponent(deepLink.sessionId)}` : ""
+    }`;
+    const targetSelection = options.pinnedInboxItem
+      ? "pinned"
+      : options.deepLinkAuto
+        ? "auto-first-page"
+        : "pinned";
+    scenarios.push({
+      key: "deeplink",
+      mode: "cold",
+      shape: "issue-detail",
+      path,
+      targetCommentId: deepLink.commentId,
+      entry: "inbox",
+      clickIssueId: null,
+      sidebarPath: null,
+      inboxRowIndex: deepLink.rowIndex,
+      inboxItemId: deepLink.inboxItemId,
+      target: { identifier: `${deepLink.inboxItemId} → ${deepLink.issueIdentifier}` },
+      targetSelection,
+    });
+    scenarios.push({
+      key: "deeplink",
+      mode: "warm",
+      shape: "issue-detail",
+      path,
+      targetCommentId: deepLink.commentId,
+      entry: "inbox",
+      clickIssueId: null,
+      sidebarPath: null,
+      inboxRowIndex: deepLink.rowIndex,
+      inboxItemId: deepLink.inboxItemId,
+      target: { identifier: `${deepLink.inboxItemId} → ${deepLink.issueIdentifier}` },
+      targetSelection,
+    });
+  }
+
+  for (const page of PAGE_SEQUENCE) {
+    const shape: PageShape = page.key === "chat" ? "chat" : "list";
+    scenarios.push({
+      key: `page-${page.key}`,
+      mode: "cold",
+      shape,
+      path: page.path,
+      targetCommentId: null,
+      entry: "issues-list",
+      clickIssueId: null,
+      sidebarPath: null,
+      inboxRowIndex: null,
+      inboxItemId: null,
+      target: { identifier: page.key },
+      targetSelection: null,
+    });
+    scenarios.push({
+      key: `page-${page.key}`,
+      mode: "warm",
+      shape,
+      path: page.path,
+      targetCommentId: null,
+      entry: "issues-list",
+      clickIssueId: null,
+      sidebarPath: page.path,
+      inboxRowIndex: null,
+      inboxItemId: null,
+      target: { identifier: page.key },
+      targetSelection: null,
+    });
+  }
+  return scenarios;
+}
+
+/**
+ * Visits every scenario once so a `next dev` server compiles each route before
+ * the measured rounds start. Nothing here is measured or reported: dev servers
+ * compile a route on first request (17 s for the inbox in one local run), which
+ * would otherwise burn the whole 20 s round budget and hide the page's real
+ * behavior. The production baselines run against a built image and pass no
+ * `--warmup`.
+ */
+async function warmupScenarios(options: {
+  browser: Browser;
+  token: string;
+  baseUrl: string;
+  slug: string;
+  scenarios: Scenario[];
+}): Promise<void> {
+  const { browser, token, baseUrl, slug, scenarios } = options;
+  const context = await mktContext(browser, token, [], baseUrl);
+  await installRecorderOnContext(context, {
+    profiles: profilesFor({ modes: ["legacy"], shape: "issue-detail", targetCommentId: null }),
+  });
+  const page = await context.newPage();
+  // Warm the entry pages once: both the issues list and the inbox are the
+  // starting point of every warm round.
+  const entries = new Set<string>();
+  for (const scenario of scenarios) entries.add(scenario.entry);
+  try {
+    for (const entry of entries) {
+      const entryPath = entry === "inbox" ? "/inbox" : "/issues";
+      await page.goto(workspaceUrl(baseUrl, slug, entryPath), { waitUntil: "load", timeout: ROUND_TIMEOUT_MS }).catch(() => {});
+      // Let the client finish its first data fetch before moving on: a route is
+      // only compiled past the point the compiler has seen it.
+      await page.waitForTimeout(1_500);
+    }
+    for (const scenario of scenarios) {
+      await page
+        .goto(workspaceUrl(baseUrl, slug, scenario.path), { waitUntil: "load", timeout: ROUND_TIMEOUT_MS })
+        .catch(() => {});
+      await page.waitForTimeout(500);
+      process.stdout.write(`  warmup ${scenario.key.padEnd(18)} ${scenario.mode.padEnd(4)} ok\n`);
+    }
   } finally {
     await context.close();
   }
-  return {
-    blocked,
-    target,
-    detail: blocked
-      ? "POST 被 page.route 拦截并 abort，护栏生效"
-      : "POST 未被拦截，护栏失效：本次 blockedWrites 不能作为只读证据",
-  };
-}
-
-// ── Workspace discovery ──────────────────────────────────────────────────────
-
-interface Identity {
-  memberName: string | null;
-  memberId: string | null;
-  workspaceId: string | null;
-  workspaceSlug: string;
-  workspaceName: string | null;
-}
-
-/** Resolves the workspace slug from `/api/me` + `/api/workspaces` (no query is logged). */
-async function resolveIdentity(baseUrl: string, token: string): Promise<Identity> {
-  const headers = { Authorization: `Bearer ${token}` };
-  const meRes = await fetch(`${baseUrl}/api/me`, { headers });
-  if (!meRes.ok) throw new Error(`GET /api/me -> ${meRes.status}`);
-  const me = (await meRes.json()) as { name?: string; id?: string };
-  const wsRes = await fetch(`${baseUrl}/api/workspaces`, { headers });
-  if (!wsRes.ok) throw new Error(`GET /api/workspaces -> ${wsRes.status}`);
-  const workspaces = (await wsRes.json()) as Array<{ id?: string; slug?: string; name?: string }>;
-  const first = workspaces.find((workspace) => workspace.slug);
-  if (!first?.slug) throw new Error("no workspace slug available for this token");
-  return {
-    memberName: me.name ?? null,
-    memberId: me.id ?? null,
-    workspaceId: first.id ?? null,
-    workspaceSlug: first.slug,
-    workspaceName: first.name ?? null,
-  };
-}
-
-/** Reduces `ghcr.io/org/image@sha256:...` to `sha256:abcd1234` for the report. */
-function digestOf(imageRef: string | undefined): string | null {
-  if (!imageRef) return null;
-  const digest = imageRef.split("@")[1];
-  if (!digest) return null;
-  const [algorithm, value] = digest.split(":");
-  return value ? `${algorithm}:${value.slice(0, 12)}` : null;
-}
-
-/** Reads the live release so the report names the build it measured. */
-async function readDeployedVersion(
-  baseUrl: string,
-  token: string,
-): Promise<Record<string, string | null>> {
-  try {
-    const res = await fetch(`${baseUrl}/api/multiremi/platform/status`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) return { error: `HTTP ${res.status}` };
-    const body = (await res.json()) as {
-      currentRelease?: {
-        version?: string;
-        ref?: string;
-        publishedAt?: string;
-        apiImage?: string;
-        webImage?: string;
-      };
-    };
-    const current = body.currentRelease;
-    return {
-      apiVersion: current?.version ?? null,
-      apiRef: current?.ref ?? null,
-      apiPublishedAt: current?.publishedAt ?? null,
-      // Image digests identify the running containers even when the releases
-      // share a version tag.
-      apiImageDigest: digestOf(current?.apiImage),
-      webImageDigest: digestOf(current?.webImage),
-    };
-  } catch (error) {
-    return { error: (error as Error).message };
-  }
-}
-
-/**
- * Ambient latency anchor. A production baseline is only comparable to a later
- * run if the server was in a similar state, so this measures a fixed, tiny
- * endpoint before and after the rounds. `/api/config` needs no auth state and
- * touches no user data.
- */
-async function ambientProbe(baseUrl: string, samples = 7): Promise<{
-  path: string;
-  samplesMs: number[];
-  minMs: number | null;
-  medianMs: number | null;
-  maxMs: number | null;
-}> {
-  const samplesMs: number[] = [];
-  for (let i = 0; i < samples; i++) {
-    const started = performance.now();
-    try {
-      const res = await fetch(`${baseUrl}/api/config`);
-      await res.arrayBuffer();
-      if (res.ok) samplesMs.push(Math.round((performance.now() - started) * 10) / 10);
-    } catch {
-      // Unreachable target is reported by the run itself.
-    }
-  }
-  return {
-    path: "/api/config",
-    samplesMs,
-    minMs: samplesMs.length ? Math.min(...samplesMs) : null,
-    medianMs: round1(median(samplesMs)),
-    maxMs: samplesMs.length ? Math.max(...samplesMs) : null,
-  };
-}
-
-// ── Inbox guard + payload probe ──────────────────────────────────────────────
-
-/**
- * Probes the inbox write paths in throwaway contexts and aborts every write.
- *
- * Two entries are covered, because they behave differently:
- *   - plain `/inbox`: opening the page (no click) — does it auto-mark anything?
- *   - `/inbox` plus a click on the first row: the path that really marks read.
- *
- * Every non-GET/HEAD request is aborted, so the target keeps its state. The
- * page retries the aborted mutation while the row stays unread; the recorder
- * deduplicates identical method+path pairs so the report stays readable.
- */
-async function inboxWriteGuard(
-  browser: Browser,
-  token: string,
-  inboxUrl: string,
-  quietMs: number,
-  knownIds: string[],
-): Promise<BlockedWrite[]> {
-  const targets: Array<{ label: GuardLabel; clickFirstRow: boolean }> = [
-    { label: "inbox-guard", clickFirstRow: false },
-    { label: "inbox-guard-click", clickFirstRow: true },
-  ];
-
-  const blocked: BlockedWrite[] = [];
-  const byKey = new Map<string, BlockedWrite>();
-  const record = (label: GuardLabel, method: string, url: string) => {
-    const path = sanitizePath(url, "", knownIds);
-    const key = `${label} ${method} ${path}`;
-    const existing = byKey.get(key);
-    if (existing) {
-      existing.attempts += 1;
-      return;
-    }
-    const write: BlockedWrite = { round: 0, page: label, method, path, attempts: 1 };
-    byKey.set(key, write);
-    blocked.push(write);
-  };
-
-  for (const target of targets) {
-    const context = await mktContext(browser, token);
-    const page = await context.newPage();
-    void page.route("**/api/**", async (route) => {
-      const method = route.request().method();
-      if (method === "GET" || method === "HEAD") {
-        await route.continue();
-        return;
-      }
-      record(target.label, method, route.request().url());
-      await route.abort();
-    });
-    try {
-      const started = Date.now();
-      await page.goto(inboxUrl, { waitUntil: "domcontentloaded", timeout: READY_TIMEOUT_MS });
-      await waitForReadyAndSettle(page, started, quietMs, quietMs * 4, READY_TIMEOUT_MS);
-      if (target.clickFirstRow) {
-        // The inbox list rows are the role=button/tabindex=0 elements inside the
-        // content region; clicking one is what marks a notification as read.
-        const rows = page.locator(`${READY_SELECTOR} div[role="button"][tabindex="0"]`);
-        const count = await rows.count().catch(() => 0);
-        for (let i = 0; i < Math.min(count, 3); i++) {
-          await rows.nth(i).click({ timeout: 5_000 }).catch(() => {});
-          await page.waitForTimeout(quietMs * 2);
-          if (blocked.length > 0) break;
-        }
-      }
-    } catch {
-      // A guard probe failure must not fail the run; whatever was recorded is
-      // still the evidence.
-    } finally {
-      await context.close();
-    }
-  }
-  return blocked;
-}
-
-/** Measures the inbox endpoints the page actually uses. */
-async function inboxPayloadProbe(baseUrl: string, token: string): Promise<InboxProbeResult[]> {
-  const headers = { Authorization: `Bearer ${token}` };
-  const targets = [
-    { path: "/api/inbox", kind: "list" as const },
-    { path: "/api/inbox/summary", kind: "summary" as const },
-    { path: "/api/inbox/unread-count", kind: "count" as const },
-    { path: "/api/inbox/page?limit=50", kind: "page" as const },
-  ];
-  const results: InboxProbeResult[] = [];
-  for (const target of targets) {
-    try {
-      const res = await fetch(`${baseUrl}${target.path}`, { headers });
-      const buffer = await res.arrayBuffer();
-      const decodedBytes = buffer.byteLength;
-      let itemCount: number | null = null;
-      const extra: Record<string, number | string | boolean | null> = {};
-      try {
-        const body = JSON.parse(new TextDecoder().decode(buffer)) as unknown;
-        if (Array.isArray(body)) itemCount = body.length;
-        else if (body && typeof body === "object") {
-          const record = body as Record<string, unknown>;
-          if (Array.isArray(record.items)) itemCount = record.items.length;
-          if (typeof record.total === "number") extra.total = record.total;
-          if (typeof record.unread === "number") extra.unread = record.unread;
-          if (typeof record.attention === "number") extra.attention = record.attention;
-          if (typeof record.count === "number") extra.count = record.count;
-          if (typeof record.has_more === "boolean") extra.hasMore = record.has_more;
-          if (typeof record.next_cursor === "string") extra.hasNextCursor = true;
-        }
-      } catch {
-        extra.unparsable = true;
-      }
-      results.push({
-        path: sanitizePath(target.path, ""),
-        status: res.status,
-        decodedBytes,
-        encodedBytes: null,
-        itemCount,
-        extra,
-      });
-    } catch (error) {
-      results.push({
-        path: sanitizePath(target.path, ""),
-        status: null,
-        decodedBytes: null,
-        encodedBytes: null,
-        itemCount: null,
-        extra: { error: (error as Error).message },
-      });
-    }
-  }
-  return results;
-}
-
-// ── Reporting ────────────────────────────────────────────────────────────────
-
-function fmtMs(value: number | null): string {
-  return value === null ? "-" : value.toFixed(1);
-}
-
-function fmtBytes(value: number | null): string {
-  if (value === null) return "-";
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
-  return `${(value / (1024 * 1024)).toFixed(2)} MiB`;
-}
-
-interface PatternAggregate {
-  method: string;
-  path: string;
-  calls: number;
-  totalMs: number;
-  maxMs: number;
-  encodedBytes: number;
-  statuses: string;
-  serverTiming: string | null;
-}
-
-/**
- * Groups calls by `method + path pattern` so a page that fans out to
- * `/api/issues?status=...` six times reports one row with six calls instead of
- * six identical-looking rows. `serverTiming` keeps the first non-null value:
- * the probe's own header sample, taken from the page's response objects.
- */
-function aggregateByPattern(calls: ApiCall[]): PatternAggregate[] {
-  const groups = new Map<string, PatternAggregate>();
-  for (const call of calls) {
-    const key = `${call.method} ${call.path}`;
-    const existing = groups.get(key);
-    if (existing) {
-      existing.calls += 1;
-      existing.totalMs += call.durationMs;
-      existing.maxMs = Math.max(existing.maxMs, call.durationMs);
-      existing.encodedBytes += call.encodedBytes;
-      existing.statuses = existing.statuses === String(call.status)
-        ? existing.statuses
-        : `${existing.statuses}|${call.status}`;
-      if (existing.serverTiming === null && call.serverTiming !== null) {
-        existing.serverTiming = call.serverTiming;
-      }
-      continue;
-    }
-    groups.set(key, {
-      method: call.method,
-      path: call.path,
-      calls: 1,
-      totalMs: call.durationMs,
-      maxMs: call.durationMs,
-      encodedBytes: call.encodedBytes,
-      statuses: String(call.status),
-      serverTiming: call.serverTiming,
-    });
-  }
-  return [...groups.values()].sort((a, b) => b.totalMs - a.totalMs);
-}
-
-function buildMarkdown(report: {
-  meta: Record<string, unknown>;
-  pages: PageSummary[];
-  blockedWrites: BlockedWrite[];
-  inboxProbe: InboxProbeResult[];
-  inboxGuard: BlockedWrite[];
-}): string {
-  const lines: string[] = [];
-  const meta = report.meta as {
-    generatedAt?: string;
-    baseUrl?: string;
-    workspaceSlug?: string;
-    memberName?: string;
-    rounds?: number;
-    runner?: string;
-    mode?: string;
-    readingRule?: string;
-    byteAccounting?: string;
-    apiVersion?: string | null;
-    apiRef?: string | null;
-  };
-
-  lines.push("# MUL-367 页面测速基线");
-  lines.push("");
-  lines.push(`- 生成时间：${meta.generatedAt ?? "unknown"}`);
-  lines.push(`- 目标：${meta.baseUrl ?? "unknown"}（工作区 \`${meta.workspaceSlug ?? "?"}\`）`);
-  lines.push(`- 被测用户：${meta.memberName ?? "unknown"}`);
-  lines.push(`- 运行机器：${meta.runner ?? "unknown"}`);
-  lines.push(`- 运行模式：${meta.mode ?? "unknown"}`);
-  lines.push(`- 每页轮数：${meta.rounds ?? "?"}`);
-  const webVersion = (meta as { webVersion?: string | null }).webVersion;
-  const webDigest = (meta as { webImageDigest?: string | null }).webImageDigest;
-  const apiDigest = (meta as { apiImageDigest?: string | null }).apiImageDigest;
-  lines.push(
-    `- 前端版本：${webVersion ? `\`${webVersion}\`` : "未知"}（部署包上报的 \`X-Client-Version\`；镜像 ${webDigest ?? "未知"}）`,
-  );
-  lines.push(
-    `- API 版本：${meta.apiVersion ?? "未知"}（ref ${meta.apiRef ? meta.apiRef.slice(0, 12) : "未知"}；镜像 ${apiDigest ?? "未知"}）`,
-  );
-  lines.push("");
-  lines.push("## 判定口径");
-  lines.push("");
-  lines.push(`- 就绪时间：从 \`page.goto\` 导航开始计时，到 ${meta.readingRule ?? "主内容区域出现非骨架内容"}。`);
-  lines.push("- LCP / DOMContentLoaded 来自浏览器 Performance 条目，仅作参考。");
-  lines.push(`- API 字节：${meta.byteAccounting ?? "encodedBodySize / decodedBodySize"}。`);
-  lines.push("- 每轮使用一个全新的 browser context：第一页（issues）包含 app shell 冷启动成本，同轮后续页面复用该 shell。");
-  const ambient = (meta as { ambientLatency?: { before?: { medianMs?: number | null; samplesMs?: number[] }; after?: { medianMs?: number | null; samplesMs?: number[] } } }).ambientLatency;
-  if (ambient?.before || ambient?.after) {
-    lines.push(
-      `- 环境参照：\`/api/config\` 中位耗时 运行前 ${ambient.before?.medianMs ?? "-"} ms / 运行后 ${ambient.after?.medianMs ?? "-"} ms（原始样本前 ${JSON.stringify(ambient.before?.samplesMs ?? [])}，后 ${JSON.stringify(ambient.after?.samplesMs ?? [])}）。生产是共享环境，复跑对比前先核对这个参照。`,
-    );
-  }
-  lines.push("");
-  lines.push("## 每页中位数");
-  lines.push("");
-  lines.push("| 页面 | 就绪 ms | LCP ms | DOMContentLoaded ms | API 数 | API 传输字节 | 最慢 API ms |");
-  lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: |");
-  for (const page of report.pages) {
-    const pageTimeouts = countReadyTimeouts(page);
-    const timeoutNote = pageTimeouts > 0 ? ` ⚠${pageTimeouts}` : "";
-    lines.push(
-      `| ${page.key} | ${fmtMs(page.median.readyMs)}${timeoutNote} | ${fmtMs(page.median.lcpMs)} | ${fmtMs(page.median.domContentLoadedMs)} | ${page.median.apiCalls ?? "-"} | ${fmtBytes(page.median.apiEncodedBytes)} | ${fmtMs(page.median.slowestApiMs)} |`,
-    );
-  }
-  lines.push("");
-  const totalTimeouts = report.pages.reduce((sum, page) => sum + countReadyTimeouts(page), 0);
-  if (totalTimeouts > 0) {
-    lines.push(
-      `> ⚠ 有 ${totalTimeouts} 次页面加载在 ${Math.round(READY_TIMEOUT_MS / 1000)} s 就绪等待内没有满足口径（上表标 ⚠N）。这些轮次不进中位数，只保留在明细里；中位数由剩余轮次计算。`,
-    );
-    lines.push("");
-  }
-  lines.push("## 每轮明细");
-  lines.push("");
-  lines.push("| 轮 | 页面 | 就绪 ms | API 数 | 传输字节 | 解码字节 | 最慢 API | 耗时 ms | Server-Timing |");
-  lines.push("| ---: | --- | ---: | ---: | ---: | ---: | --- | ---: | --- |");
-  for (const page of report.pages) {
-    for (const round of page.rounds) {
-      const slowest = round.slowestApi;
-      lines.push(
-        `| ${round.round} | ${page.key} | ${fmtMs(round.readyMs)}${round.readyTimeout ? " (超时)" : ""} | ${round.apiCalls} | ${fmtBytes(round.apiEncodedBytes)} | ${fmtBytes(round.apiDecodedBytes)} | ${slowest ? `${slowest.method} \`${slowest.path}\`` : "-"} | ${slowest ? slowest.durationMs.toFixed(1) : "-"} | ${slowest?.serverTiming ?? "（本次发布无此头）"} |`,
-      );
-    }
-  }
-  lines.push("");
-  lines.push("## 每页 API Top 5（按 path 模式汇总，首轮）");
-  lines.push("");
-  for (const page of report.pages) {
-    const reference = page.rounds[0];
-    if (!reference?.apiTopPatterns.length) continue;
-    lines.push(`### ${page.key}`);
-    lines.push("");
-    lines.push("| Method | Path 模式 | 次数 | 最慢 ms | 合计 ms | 合计传输字节 | Server-Timing |");
-    lines.push("| --- | --- | ---: | ---: | ---: | ---: | --- |");
-    for (const pattern of reference.apiTopPatterns) {
-      lines.push(
-        `| ${pattern.method} | \`${pattern.path}\` | ${pattern.calls} | ${pattern.maxMs.toFixed(1)} | ${pattern.totalMs.toFixed(1)} | ${fmtBytes(pattern.encodedBytes)} | ${pattern.serverTiming ?? "-"} |`,
-      );
-    }
-    lines.push("");
-  }
-  lines.push("## 被拦截的写请求");
-  lines.push("");
-  if (report.blockedWrites.length === 0) {
-    lines.push("无。页面加载过程中没有任何非 GET/HEAD 的 `/api/**` 请求。");
-  } else {
-    lines.push("| 轮 | 页面 | Method | Path | 尝试次数 |");
-    lines.push("| ---: | --- | --- | --- | ---: |");
-    for (const write of report.blockedWrites) {
-      lines.push(
-        `| ${write.round} | ${write.page} | ${write.method} | \`${write.path}\` | ${write.attempts} |`,
-      );
-    }
-  }
-  lines.push("");
-  lines.push("## inbox 专项");
-  lines.push("");
-  lines.push("| 接口 | Status | 解码字节 | 条目数 | 备注 |");
-  lines.push("| --- | ---: | ---: | ---: | --- |");
-  for (const probe of report.inboxProbe) {
-    lines.push(
-      `| \`${probe.path}\` | ${probe.status ?? "-"} | ${fmtBytes(probe.decodedBytes)} | ${probe.itemCount ?? "-"} | ${JSON.stringify(probe.extra)} |`,
-    );
-  }
-  lines.push("");
-  const selfTest = (meta as { writeGuardSelfTest?: { blocked?: boolean; target?: string; detail?: string } })
-    .writeGuardSelfTest;
-  if (selfTest) {
-    lines.push(
-      `只读护栏自检：对 \`${selfTest.target}\` 发 POST —— **${selfTest.blocked ? "已被拦截" : "未被拦截"}**。${selfTest.detail}`,
-    );
-    lines.push("");
-  }
-  if (report.inboxGuard.length === 0) {
-    lines.push("inbox 页面打开时没有尝试任何写请求（自动标已读未触发）。");
-  } else {
-    lines.push(`inbox 页面打开时尝试了 ${report.inboxGuard.length} 个写请求，全部被 abort：`);
-    lines.push("");
-    for (const write of report.inboxGuard) {
-      lines.push(
-        `- \`${write.method} ${write.path}\`（${write.page}，尝试 ${write.attempts} 次，全部 abort）`,
-      );
-    }
-  }
-  lines.push("");
-  return lines.join("\n");
-}
-
-function buildComparison(
-  baseline: { pages: PageSummary[]; meta: Record<string, unknown> },
-  current: { pages: PageSummary[]; meta: Record<string, unknown> },
-): string {
-  const lines: string[] = [];
-  lines.push("## 与基线对比");
-  lines.push("");
-  lines.push(`- 基线：${String(baseline.meta.generatedAt ?? "unknown")} (${String(baseline.meta.apiVersion ?? "unknown")})`);
-  lines.push(`- 本次：${String(current.meta.generatedAt ?? "unknown")} (${String(current.meta.apiVersion ?? "unknown")})`);
-  lines.push("");
-  lines.push("| 页面 | 就绪 ms（基线 → 本次） | 差值 | 变化 | API 数 | 传输字节 | 差值 |");
-  lines.push("| --- | --- | ---: | ---: | --- | --- | ---: |");
-  for (const page of current.pages) {
-    const before = baseline.pages.find((candidate) => candidate.key === page.key);
-    const a = before?.median.readyMs ?? null;
-    const b = page.median.readyMs ?? null;
-    const delta = a !== null && b !== null ? b - a : null;
-    const pct = a !== null && b !== null && a > 0 ? `${(((b - a) / a) * 100).toFixed(1)}%` : "-";
-    const bytesA = before?.median.apiEncodedBytes ?? null;
-    const bytesB = page.median.apiEncodedBytes ?? null;
-    const bytesDelta = bytesA !== null && bytesB !== null ? bytesB - bytesA : null;
-    lines.push(
-      `| ${page.key} | ${fmtMs(a)} → ${fmtMs(b)} | ${delta === null ? "-" : delta.toFixed(1)} | ${pct} | ${before?.median.apiCalls ?? "-"} → ${page.median.apiCalls ?? "-"} | ${fmtBytes(bytesA)} → ${fmtBytes(bytesB)} | ${bytesDelta === null ? "-" : fmtBytes(bytesDelta)} |`,
-    );
-  }
-  lines.push("");
-  lines.push("> 差值只在同一台机器、同一网络位置、同一 rounds 下可比。");
-  lines.push("");
-  return lines.join("\n");
-}
-
-/**
- * Self-contained HTML rendering of one report: inline CSS, inline data, no
- * external stylesheet/script/font URL, no storage or parent-frame access. Safe
- * to attach to an issue comment (the preview iframe runs with `allow-scripts`
- * only) and safe to open from the filesystem.
- */
-function buildHtml(report: {
-  meta: Record<string, unknown>;
-  pages: PageSummary[];
-  blockedWrites: BlockedWrite[];
-  inboxProbe: InboxProbeResult[];
-  inboxGuard: BlockedWrite[];
-}): string {
-  const meta = report.meta as {
-    generatedAt?: string;
-    baseUrl?: string;
-    workspaceSlug?: string;
-    memberName?: string;
-    rounds?: number;
-    runner?: string;
-    mode?: string;
-    readingRule?: string;
-    byteAccounting?: string;
-    apiVersion?: string | null;
-    ambientLatency?: {
-      before?: { medianMs?: number | null };
-      after?: { medianMs?: number | null };
-    };
-    writeGuardSelfTest?: { blocked?: boolean; target?: string; detail?: string };
-  };
-  const esc = (value: unknown): string =>
-    String(value ?? "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
-
-  const summaryRows = report.pages
-    .map(
-      (page) => `<tr>
-    <td class="key">${esc(page.key)}</td>
-    <td class="num${(page.median.readyMs ?? 0) >= 10000 ? " bad" : ""}">${fmtMs(page.median.readyMs)}${countReadyTimeouts(page) > 0 ? ` <span class="muted">⚠${countReadyTimeouts(page)}</span>` : ""}</td>
-    <td class="num">${fmtMs(page.median.lcpMs)}</td>
-    <td class="num">${fmtMs(page.median.domContentLoadedMs)}</td>
-    <td class="num">${page.median.apiCalls ?? "-"}</td>
-    <td class="num">${fmtBytes(page.median.apiEncodedBytes)}</td>
-    <td class="num">${fmtBytes(page.median.apiDecodedBytes)}</td>
-    <td class="num">${fmtMs(page.median.slowestApiMs)}</td>
-  </tr>`,
-    )
-    .join("\n");
-
-  const humanBytes = (value: number | null): string =>
-    value === null ? "n/a" : value >= 1024 * 1024 ? `${(value / 1024 / 1024).toFixed(2)} MiB` : `${(value / 1024).toFixed(1)} KiB`;
-  const inboxBytes = report.inboxProbe.find((probe) => probe.path === "/api/inbox")?.decodedBytes ?? null;
-  const inboxItems = report.inboxProbe.find((probe) => probe.path === "/api/inbox")?.itemCount ?? null;
-
-  const roundRows = report.pages
-    .map((page) =>
-      page.rounds
-        .map((round) => {
-          const slowest = round.slowestApi;
-          return `<tr>
-      <td class="num">${round.round}</td>
-      <td class="key">${esc(page.key)}</td>
-      <td class="num">${fmtMs(round.readyMs)}${round.readyTimeout ? " ⚠" : ""}</td>
-      <td class="num">${fmtMs(round.lcpMs)}</td>
-      <td class="num">${round.apiCalls}</td>
-      <td class="num">${fmtBytes(round.apiEncodedBytes)}</td>
-      <td class="path">${slowest ? `${esc(slowest.method)} <code>${esc(slowest.path)}</code>` : "-"}</td>
-      <td class="num">${slowest ? slowest.durationMs.toFixed(1) : "-"}</td>
-      <td class="path">${slowest?.serverTiming ? esc(slowest.serverTiming) : "<span class=\"muted\">本次发布无此头</span>"}</td>
-    </tr>`;
-        })
-        .join("\n"),
-    )
-    .join("\n");
-
-  const patternBlocks = report.pages
-    .map((page) => {
-      const rows = page.rounds[0]?.apiTopPatterns ?? [];
-      if (rows.length === 0) return "";
-      return `<h3>${esc(page.key)}</h3>
-  <div class="tablewrap"><table>
-    <thead><tr><th>Method</th><th>Path 模式</th><th class="num">次数</th><th class="num">最慢 ms</th><th class="num">合计 ms</th><th class="num">合计传输</th><th>Server-Timing</th></tr></thead>
-    <tbody>${rows
-      .map(
-        (row) => `<tr>
-      <td>${esc(row.method)}</td>
-      <td class="path"><code>${esc(row.path)}</code></td>
-      <td class="num">${row.calls}</td>
-      <td class="num">${row.maxMs.toFixed(1)}</td>
-      <td class="num">${row.totalMs.toFixed(1)}</td>
-      <td class="num">${fmtBytes(row.encodedBytes)}</td>
-      <td class="path">${row.serverTiming ? esc(row.serverTiming) : "-"}</td>
-    </tr>`,
-      )
-      .join("")}</tbody>
-  </table></div>`;
-    })
-    .join("\n");
-
-  const blockedList = report.inboxGuard.length
-    ? `<ul>${report.inboxGuard
-        .map(
-          (write) =>
-            `<li><code>${esc(write.method)} ${esc(write.path)}</code> — ${esc(write.page)}，尝试 ${write.attempts} 次，全部 abort</li>`,
-        )
-        .join("")}</ul>`
-    : "<p>无。打开 inbox 页面本身没有触发任何写请求。</p>";
-  const pageLoadWrites = report.blockedWrites.length
-    ? `<ul>${report.blockedWrites
-        .map(
-          (write) =>
-            `<li><code>${esc(write.method)} ${esc(write.path)}</code> — 轮 ${write.round} / ${esc(write.page)}，尝试 ${write.attempts} 次</li>`,
-        )
-        .join("")}</ul>`
-    : "<p>无。页面加载期间没有出现非 GET/HEAD 的 <code>/api/**</code> 请求。</p>";
-
-  const inboxRows = report.inboxProbe
-    .map(
-      (probe) => `<tr>
-      <td class="path"><code>${esc(probe.path)}</code></td>
-      <td class="num">${probe.status ?? "-"}</td>
-      <td class="num">${fmtBytes(probe.decodedBytes)}</td>
-      <td class="num">${probe.itemCount ?? "-"}</td>
-      <td class="path">${esc(JSON.stringify(probe.extra))}</td>
-    </tr>`,
-    )
-    .join("\n");
-
-  const ambient = meta.ambientLatency;
-  const selfTest = meta.writeGuardSelfTest;
-  const totalTimeouts = report.pages.reduce((sum, page) => sum + countReadyTimeouts(page), 0);
-
-  return `<!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>MUL-367 页面测速基线</title>
-<style>
-*{box-sizing:border-box}
-body{margin:0;background:#fff;color:#1b2429;font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;letter-spacing:0}
-header{background:#16202a;color:#fff;padding:28px 24px}
-header h1{margin:0 0 8px;font-size:22px}
-header p{margin:0;color:#c2ccd3;max-width:900px}
-.meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
-.meta span{border:1px solid #48565f;border-radius:4px;padding:4px 8px;font-size:12px;color:#e6ecef}
-main{padding:20px 24px 40px;max-width:1280px}
-section{margin:0 0 28px;padding-bottom:22px;border-bottom:1px solid #dde3e7}
-h2{font-size:18px;margin:0 0 12px}
-h3{font-size:14px;margin:16px 0 8px}
-p{margin:0 0 10px}
-ul{margin:0;padding-left:20px}
-.tablewrap{overflow:auto;border:1px solid #dde3e7;border-radius:6px}
-table{width:100%;border-collapse:collapse;min-width:760px}
-th{position:sticky;top:0;background:#eef2f4;text-align:left;font-size:12px;color:#48565f;padding:8px 10px;border-bottom:1px solid #dde3e7}
-td{padding:8px 10px;border-bottom:1px solid #eaeef0;vertical-align:top}
-tr:last-child td{border-bottom:0}
-.num{text-align:right;font-variant-numeric:tabular-nums}
-.key{font-weight:600}
-.path{overflow-wrap:anywhere;max-width:360px}
-.path code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
-.muted{color:#79868e}
-.bad{color:#b42318;font-weight:700}
-.callout{border-left:4px solid #946200;background:#fff8db;padding:10px 12px;border-radius:0 4px 4px 0;margin:12px 0}
-.ok{color:#176b4d;font-weight:600}
-.fail{color:#b42318;font-weight:600}
-</style>
-</head>
-<body>
-<header>
-  <h1>MUL-367 · 页面测速基线</h1>
-  <p>真实生产环境上的只读页面测速：每个主页面一条整页加载记录。所有非 GET/HEAD 的 <code>/api/**</code> 请求在浏览器侧被拦截并 abort。</p>
-  <div class="meta">
-    <span>${esc(meta.generatedAt)}</span>
-    <span>${esc(meta.baseUrl)}</span>
-    <span>工作区 ${esc(meta.workspaceSlug)}</span>
-    <span>API ${esc(meta.apiVersion ?? "未知")}</span>
-    <span>${esc(meta.rounds)} 轮 / 页</span>
-    <span>${esc(meta.mode?.split(" via ")[0] ?? "")}</span>
-  </div>
-</header>
-<main>
-<section>
-  <h2>结论与口径</h2>
-  <div class="callout">
-    <b>这组数字是「劣化态基线」。</b> 采集期间生产本身很慢：运行前后各 7 次 <code>/api/config</code> 的中位耗时分别是
-    ${esc(ambient?.before?.medianMs ?? "-")} ms 与 ${esc(ambient?.after?.medianMs ?? "-")} ms。明天发布后复跑必须在<b>同一台机器</b>上，并先核对这个参照值，再谈页面数字的升降。
-  </div>
-  <p>就绪口径：${esc(meta.readingRule)}。每轮一个全新 browser context，逐页整页加载；每轮第一页（issues）含 app shell 冷启动，同轮后续页面复用该 shell。</p>
-  <p>字节口径：${esc(meta.byteAccounting)}。运行机器：${esc(meta.runner)}。被测用户：${esc(meta.memberName)}。</p>
-</section>
-<section>
-  <h2>每页中位数</h2>
-  ${totalTimeouts > 0 ? `<div class="callout">⚠ 有 ${totalTimeouts} 次页面加载在 ${Math.round(READY_TIMEOUT_MS / 1000)} s 内没有满足就绪口径（表中标 ⚠N）。这些轮次不进中位数，只保留在「每轮明细」里。</div>` : ""}
-  <div class="tablewrap"><table>
-    <thead><tr><th>页面</th><th class="num">就绪 ms</th><th class="num">LCP ms</th><th class="num">DCL ms</th><th class="num">API 数</th><th class="num">API 传输</th><th class="num">API 解码</th><th class="num">最慢 API ms</th></tr></thead>
-    <tbody>
-${summaryRows}
-    </tbody>
-  </table></div>
-</section>
-<section>
-  <h2>每轮明细</h2>
-  <div class="tablewrap"><table>
-    <thead><tr><th class="num">轮</th><th>页面</th><th class="num">就绪 ms</th><th class="num">LCP ms</th><th class="num">API 数</th><th class="num">传输字节</th><th>最慢 API</th><th class="num">耗时 ms</th><th>Server-Timing</th></tr></thead>
-    <tbody>
-${roundRows}
-    </tbody>
-  </table></div>
-</section>
-<section>
-  <h2>每页 API Top 5（按 path 模式汇总，首轮）</h2>
-  ${patternBlocks}
-</section>
-<section>
-  <h2>只读护栏</h2>
-  <p>护栏自检：对 <code>${esc(selfTest?.target)}</code> 发 POST — <span class="${selfTest?.blocked ? "ok" : "fail"}">${selfTest?.blocked ? "已被拦截" : "未被拦截"}</span>。${esc(selfTest?.detail)}</p>
-  <h3>inbox 自动标已读</h3>
-  ${blockedList}
-  <h3>页面加载期间的写请求</h3>
-  ${pageLoadWrites}
-</section>
-<section>
-  <h2>inbox 体积核实</h2>
-  <p>真实用户下 <code>/api/inbox</code> 返回 <b>${humanBytes(inboxBytes)}</b>（解码后），共 <b>${esc(inboxItems ?? "-")}</b> 条；页面实际使用的分页接口每页 50 条。</p>
-  <div class="tablewrap"><table>
-    <thead><tr><th>接口</th><th class="num">Status</th><th class="num">解码字节</th><th class="num">条目数</th><th>备注</th></tr></thead>
-    <tbody>
-${inboxRows}
-    </tbody>
-  </table></div>
-</section>
-</main>
-</body>
-</html>
-`;
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 
-/**
- * One load of one page inside a round's browser context. `order` 1 means the
- * first navigation of that context, which is the only load that pays app-shell
- * cold start; later pages in the same round reuse the shell.
- */
-async function runPageRound(
-  context: BrowserContext,
-  token: string,
-  url: string,
-  pageKey: PageKey,
-  round: number,
-  order: number,
-  opts: Options,
-  allBlocked: BlockedWrite[],
-  knownIds: string[],
-): Promise<PageRound> {
-  void token;
-  const page = await context.newPage();
-  const collectors = attachCollectors(page, round, pageKey, knownIds);
-  const started = Date.now();
-
-  let navigationError: string | null = null;
-  try {
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: READY_TIMEOUT_MS });
-  } catch (error) {
-    navigationError = (error as Error).message;
-  }
-
-  const ready = await waitForReadyAndSettle(
-    page,
-    started,
-    opts.quietMs,
-    opts.settleCapMs,
-    READY_TIMEOUT_MS,
-  );
-
-  const vitals = await readWebVitals(page);
-  const calls = await collectApiCalls(page, opts.baseUrl, collectors);
-  const totalMs = Date.now() - started;
-
-  await page.close();
-  allBlocked.push(...collectors.blockedWrites);
-
-  return {
-    round,
-    order,
-    coldShellStart: order === 1,
-    url,
-    readyMs: round1(ready.readyMs),
-    readyTimeout: ready.readyTimeout,
-    heading: ready.heading,
-    lcpMs: vitals.lcpMs,
-    domContentLoadedMs: vitals.domContentLoadedMs,
-    loadEventMs: vitals.loadEventMs,
-    apiCalls: calls.length,
-    apiEncodedBytes: calls.reduce((sum, call) => sum + call.encodedBytes, 0),
-    apiDecodedBytes: calls.reduce((sum, call) => sum + call.decodedBytes, 0),
-    apiTransferBytes: calls.reduce((sum, call) => sum + call.transferBytes, 0),
-    slowestApi: calls[0] ?? null,
-    apiTopPatterns: aggregateByPattern(calls).slice(0, 5),
-    blockedWrites: collectors.blockedWrites.length,
-    webClientVersion: collectors.webClientVersion,
-    wallClockMs: totalMs,
-    ...(navigationError ? { navigationError } : {}),
-  };
-}
-
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2));
-
-  if (opts.renderOnly) {
-    // Report iteration does not need a re-measurement: rebuild the Markdown and
-    // HTML from the JSON a previous run already wrote.
-    const source = resolve(opts.renderOnly);
-    const report = JSON.parse(readFileSync(source, "utf8")) as {
-      meta: Record<string, unknown>;
-      pages: PageSummary[];
-      blockedWrites: BlockedWrite[];
-      inboxProbe: InboxProbeResult[];
-      inboxGuard: BlockedWrite[];
-    };
-    const stem = source.replace(/\.json$/, "");
-    writeFileSync(`${stem}.md`, buildMarkdown(report), "utf8");
-    writeFileSync(`${stem}.html`, buildHtml(report), "utf8");
-    process.stdout.write(`re-rendered ${stem}.md\nre-rendered ${stem}.html\n`);
-    return;
-  }
-
   const token = process.env[TOKEN_ENV];
   if (!token) {
     throw new Error(
-      `${TOKEN_ENV} is empty. This probe reads the production token from that variable only; ` +
-        "provide it via the QA Agent Custom Env and never paste it into a command line.",
+      `${TOKEN_ENV} is empty. This probe reads the token from that variable only; ` +
+        "provide it through the QA Agent Custom Env and never paste it into a command line.",
     );
   }
 
-  const chromiumPath = resolveCachedChromium();
   const identity = await resolveIdentity(opts.baseUrl, token);
-  // Mask identifiers by value: a slug like `remi` or an id like `local` has no
-  // distinctive shape, so shape-based masking alone would leak them.
   const knownIds = [identity.workspaceId, identity.workspaceSlug, identity.memberId].filter(
     (value): value is string => typeof value === "string" && value.length > 2,
   );
   const deployed = await readDeployedVersion(opts.baseUrl, token);
   const runner = `${hostname()} (${platform()} ${osRelease()} ${arch()}, ${cpus().length} vCPU, ${Math.round(totalmem() / 1024 ** 3)} GiB RAM)`;
-
-  process.stdout.write(
-    `page-speed: ${opts.baseUrl} workspace=${identity.workspaceSlug} rounds=${opts.rounds} pages=${PAGE_SEQUENCE.length}\n`,
-  );
-
-  const browser = await chromium.launch({
-    executablePath: chromiumPath === "" ? undefined : chromiumPath,
-    headless: true,
-    args: ["--no-sandbox", "--disable-dev-shm-usage"],
-  });
-
-  const summaries = new Map<PageKey, PageSummary>();
+  const browser = await launchBrowser();
   const allBlocked: BlockedWrite[] = [];
-  let inboxGuard: BlockedWrite[] = [];
-  const ambientBefore = await ambientProbe(opts.baseUrl);
-  process.stdout.write(
-    `  ambient /api/config before: min=${fmtMs(ambientBefore.minMs)}ms median=${fmtMs(ambientBefore.medianMs)}ms max=${fmtMs(ambientBefore.maxMs)}ms\n`,
-  );
-  const guardSelfTest = opts.skipInboxGuard
-    ? null
-    : await verifyWriteGuard(browser, token, opts.baseUrl);
-  if (guardSelfTest) {
-    process.stdout.write(
-      `  guard self-test: ${guardSelfTest.blocked ? "PASS" : "FAIL"} (${guardSelfTest.detail})\n`,
-    );
-  }
 
   try {
-    for (let round = 1; round <= opts.rounds; round++) {
-      // One context per round: the first page pays the app-shell cold start and
-      // the rest reuse its HTTP cache, which is what a real session looks like.
-      const context = await mktContext(browser, token);
-      try {
-        let order = 0;
-        for (const target of PAGE_SEQUENCE) {
-          order += 1;
-          const url = `${opts.baseUrl}${target.path.replace("{slug}", identity.workspaceSlug)}`;
-          const result = await runPageRound(
-            context,
-            token,
-            url,
-            target.key,
-            round,
-            order,
-            opts,
-            allBlocked,
-            knownIds,
-          );
-          const existing = summaries.get(target.key);
-          if (existing) existing.rounds.push(result);
-          else
-            summaries.set(target.key, {
-              key: target.key,
-              path: target.path,
-              url,
-              rounds: [result],
-              median: {} as Median,
-            });
-          const slowest = result.slowestApi;
+    process.stdout.write(
+      `page-speed: ${opts.baseUrl} workspace=${identity.workspaceSlug} window=${opts.window} rounds=${opts.rounds} selectors=${opts.selectors}\n`,
+    );
+
+    const ambientBefore = await ambientProbe(opts.baseUrl);
+    const guardSelfTest = await verifyWriteGuard(browser, token, opts.baseUrl);
+    process.stdout.write(
+      `  guard self-test: ${guardSelfTest.blocked ? "blocked" : "FAILED"} (${guardSelfTest.detail})\n`,
+    );
+
+    const phase = (label: string, startedAt: number): void => {
+      process.stdout.write(`  ${label} took ${((Date.now() - startedAt) / 1000).toFixed(1)}s\n`);
+    };
+
+    let phaseStarted = Date.now();
+    const excluded = await loadExcludedIssueIds(opts.baseUrl, token);
+    phase("loadExcludedIssueIds", phaseStarted);
+
+    phaseStarted = Date.now();
+    const running = await probeRunningIssue({
+      baseUrl: opts.baseUrl,
+      token,
+      explicitIssueId: opts.issueRunning,
+      excludedIssueIds: excluded,
+    });
+    phase("probeRunningIssue", phaseStarted);
+
+    phaseStarted = Date.now();
+    const deepLinkProbe = await probeDeepLinkTarget({
+      baseUrl: opts.baseUrl,
+      token,
+      slug: identity.workspaceSlug,
+      browser,
+      pinnedItemId: opts.inboxItem,
+      excludedIssueIds: excluded,
+      round: 0,
+      knownIds,
+      selectors: opts.selectors,
+    });
+    phase("probeDeepLinkTarget", phaseStarted);
+
+    phaseStarted = Date.now();
+    const identifierIds = new Set<string>([opts.issueShort, opts.issueLong]);
+    if (running) identifierIds.add(running.issueId);
+    if (deepLinkProbe.target) identifierIds.add(deepLinkProbe.target.issueId);
+    const identifiers = await resolveIdentifiers(opts.baseUrl, token, [...identifierIds]);
+    phase("resolveIdentifiers", phaseStarted);
+    const label = (issueId: string): string => identifiers.get(issueId) ?? issueId;
+
+    const scenarios = buildScenarios({
+      deepLink: deepLinkProbe.target,
+      runningIssue: running,
+      issueShort: opts.issueShort,
+      issueLong: opts.issueLong,
+      issueShortIdentifier: label(opts.issueShort),
+      issueLongIdentifier: label(opts.issueLong),
+      pinnedInboxItem: opts.inboxItem,
+      deepLinkAuto: deepLinkProbe.target !== null,
+    });
+
+    if (running) {
+      process.stdout.write(`  detail-running: ${label(running.issueId)} (${running.taskCount} running task(s))\n`);
+    } else {
+      process.stdout.write("  detail-running: skipped (no running agent)\n");
+    }
+    if (deepLinkProbe.target) {
+      process.stdout.write(
+        `  deeplink: ${deepLinkProbe.target.inboxItemId} row=${deepLinkProbe.target.rowIndex} comment=${deepLinkProbe.target.commentId}${deepLinkProbe.target.sessionId ? " (session scoped)" : ""}\n`,
+      );
+    } else {
+      process.stdout.write(`  deeplink: skipped (${deepLinkProbe.skipped ?? "unknown"})\n`);
+    }
+
+    const selected = opts.only
+      ? scenarios.filter((scenario) => scenario.key.startsWith(opts.only!))
+      : scenarios;
+
+    if (opts.warmup) {
+      phaseStarted = Date.now();
+      await warmupScenarios({
+        browser,
+        token,
+        baseUrl: opts.baseUrl,
+        slug: identity.workspaceSlug,
+        scenarios: selected,
+      });
+      phase("warmup", phaseStarted);
+    }
+
+    const byScenario: ReportScenario[] = [];
+    for (const scenario of selected) {
+      if (scenario.key === "detail-running" && !running) {
+        byScenario.push({
+          key: scenario.key,
+          mode: scenario.mode,
+          target: scenario.target,
+          rule: READING_RULE,
+          anchorRule: anchorRulePreview(scenario),
+          selectorMode: opts.selectors === "contract" ? "contract" : "legacy",
+          skipped: "no running agent",
+          hoverLeadMs: scenario.mode === "warm" ? opts.hoverLeadMs : null,
+          rounds: [],
+          stats: computeScenarioStats([]),
+        });
+        continue;
+      }
+      if (scenario.key === "deeplink" && !deepLinkProbe.target) {
+        byScenario.push({
+          key: scenario.key,
+          mode: scenario.mode,
+          target: { identifier: opts.inboxItem ?? "(auto)" },
+          rule: READING_RULE,
+          anchorRule: anchorRulePreview(scenario),
+          selectorMode: opts.selectors === "contract" ? "contract" : "legacy",
+          skipped: deepLinkProbe.skipped ?? "no eligible inbox item",
+          hoverLeadMs: scenario.mode === "warm" ? opts.hoverLeadMs : null,
+          rounds: [],
+          stats: computeScenarioStats([]),
+        });
+        continue;
+      }
+
+      const rounds: RoundMeasurement[] = [];
+      for (let round = 1; round <= opts.rounds; round++) {
+        const { round: measured, blocked } = await measureRound({
+          browser,
+          token,
+          baseUrl: opts.baseUrl,
+          slug: identity.workspaceSlug,
+          scenario,
+          round,
+          opts,
+          knownIds,
+        });
+        allBlocked.push(...blocked);
+        rounds.push(measured);
+        process.stdout.write(
+          `  ${scenario.key.padEnd(18)} ${scenario.mode.padEnd(4)} round ${round}: ` +
+            `ready=${fmtMs(measured.readyMs)}ms firstReal=${fmtMs(measured.firstRealMs)}ms ` +
+            `jumps=${measured.jumpCount}(${fmtMs(measured.jumpPx)}px) depth=${measured.serialDepth ?? "-"} ` +
+            `api=${measured.apiFirstScreen}/${measured.apiCallsTotal} mode=${measured.selectorMode}` +
+            `${measured.readyTimeout ? " TIMEOUT" : ""}${measured.error ? ` ERROR=${measured.error.slice(0, 80)}` : ""}\n`,
+        );
+        if (measured.selectorMode === "contract" && measured.selectorEquivalence) {
           process.stdout.write(
-            `  round ${round} ${target.key.padEnd(11)} ready=${fmtMs(result.readyMs)}ms api=${result.apiCalls} bytes=${fmtBytes(result.apiEncodedBytes)} slowest=${slowest ? `${slowest.path} ${slowest.durationMs.toFixed(0)}ms` : "-"}\n`,
+            `    equivalence scrollRoot=${measured.selectorEquivalence.scrollRoot} anchor=${measured.selectorEquivalence.anchor} ` +
+              `contractOnly=${measured.selectorEquivalence.itemsContractOnly} legacyOnly=${measured.selectorEquivalence.itemsLegacyOnly}\n`,
           );
         }
-      } finally {
-        await context.close();
+      }
+
+      const mode: SelectorMode = rounds.some((round) => round.selectorMode === "contract") ? "contract" : "legacy";
+      byScenario.push({
+        key: scenario.key,
+        mode: scenario.mode,
+        target: scenario.target,
+        rule: READING_RULE,
+        anchorRule: rounds[0]?.anchorRule ?? anchorRulePreview(scenario),
+        selectorMode: mode,
+        skipped: null,
+        ...(scenario.targetSelection ? { targetSelection: scenario.targetSelection } : {}),
+        hoverLeadMs: scenario.mode === "warm" ? opts.hoverLeadMs : null,
+        rounds: rounds.map(roundSummary),
+        stats: computeScenarioStats(
+          rounds.map((round) => ({
+            readyMs: round.readyMs,
+            readyTimeout: round.readyTimeout,
+            firstRealMs: round.firstRealMs,
+            jumpCount: round.jumpCount,
+            jumpPx: round.jumpPx,
+            serialDepth: round.serialDepth,
+            apiCallsTotal: round.apiFirstScreen,
+            slowestServerTotalMs: round.slowestServerTotalMs,
+          })),
+        ),
+      });
+    }
+
+    const ambientAfter = await ambientProbe(opts.baseUrl);
+    const webVersions = [...new Set(deployed.webVersion ? [deployed.webVersion] : [])];
+    const generatedAt = new Date().toISOString();
+    const meta: Record<string, unknown> = {
+      schema: 2,
+      issue: "MUL-383",
+      task: "MUL-384",
+      generatedAt,
+      beijingTime: new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false }),
+      window: opts.window,
+      baseUrl: opts.baseUrl,
+      workspaceSlug: identity.workspaceSlug,
+      workspaceName: identity.workspaceName,
+      memberName: identity.memberName,
+      rounds: opts.rounds,
+      runner,
+      mode: "headless Chromium (no desktop session) via frontend/scripts/perf/page-speed.ts",
+      viewport: `${VIEWPORT.width}x${VIEWPORT.height}`,
+      readingRule: READING_RULE,
+      selectorMode: opts.selectors,
+      hoverLeadMs: opts.hoverLeadMs,
+      quietMs: opts.quietMs,
+      roundTimeoutMs: ROUND_TIMEOUT_MS,
+      byteAccounting:
+        "encodedBodySize=压缩后传输体积，decodedBodySize=解压后 JSON 体积，transferSize=含响应头的传输体积",
+      lcpNote: "LCP 由 PerformanceObserver 类型条目读取；无候选时为 null",
+      writeGuardSelfTest: guardSelfTest,
+      ambientLatency: { before: ambientBefore, after: ambientAfter },
+      ambientNote:
+        "生产为共享环境：同一台机器复跑时，先看 /api/config 的中位耗时是否与本次接近，再比较页面数字。",
+      apiVersion: deployed.apiVersion ?? null,
+      apiRef: deployed.apiRef ?? null,
+      ...deployed,
+    };
+    void webVersions;
+
+    const compare = opts.compare
+      ? buildCompare(
+          JSON.parse(readFileSync(resolve(opts.compare), "utf8")) as { scenarios: ReportScenario[] },
+          { scenarios: byScenario },
+        )
+      : null;
+
+    const payload = {
+      meta,
+      scenarios: byScenario,
+      blockedWrites: allBlocked,
+      ...(compare ? { compare: { rows: compare.rows, warnings: compare.warnings } } : {}),
+    };
+
+    const outDir = resolve(opts.outDir);
+    mkdirSync(outDir, { recursive: true });
+    const stem = opts.name ?? `mul383-page-speed-${generatedAt.replace(/[:.]/g, "-")}`;
+    const jsonPath = join(outDir, `${stem}.json`);
+    const mdPath = join(outDir, `${stem}.md`);
+    const htmlPath = join(outDir, `${stem}.html`);
+    writeFileSync(jsonPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    writeFileSync(
+      mdPath,
+      buildMarkdown({ meta, scenarios: byScenario, blockedWrites: allBlocked, compare: compare?.markdown ?? null }),
+      "utf8",
+    );
+    writeFileSync(
+      htmlPath,
+      buildHtml({
+        meta,
+        scenarios: byScenario,
+        blockedWrites: allBlocked,
+        compareTable: compare?.rows ?? null,
+      }),
+      "utf8",
+    );
+    process.stdout.write(`\nwrote ${jsonPath}\nwrote ${mdPath}\nwrote ${htmlPath}\n`);
+    if (compare && compare.warnings.length > 0) {
+      process.stdout.write(`  ${compare.warnings.length} compare warning(s):\n`);
+      for (const warning of compare.warnings) {
+        process.stdout.write(`    ${warning.key} (${warning.mode}): ${warning.message}\n`);
       }
     }
-
-    if (!opts.skipInboxGuard) {
-      const inboxUrl = `${opts.baseUrl}/${identity.workspaceSlug}/inbox`;
-      inboxGuard = await inboxWriteGuard(browser, token, inboxUrl, opts.quietMs, knownIds);
-    }
   } finally {
-    await browser.close();
+    await browser.close().catch(() => {});
   }
+}
 
-  const pages = PAGE_SEQUENCE.map((target) => {
-    const summary = summaries.get(target.key);
-    if (!summary) throw new Error(`no samples collected for ${target.key}`);
-    summary.median = medianOfRounds(summary.rounds);
-    return summary;
+/** Anchor rule without a measured frame: used for the skipped-scenario rows. */
+function anchorRulePreview(scenario: Scenario): string {
+  const plan = anchorPlan({
+    mode: "contract",
+    shape: scenario.shape,
+    targetCommentId: scenario.targetCommentId,
   });
-
-  const ambientAfter = await ambientProbe(opts.baseUrl);
-  process.stdout.write(
-    `  ambient /api/config after:  min=${fmtMs(ambientAfter.minMs)}ms median=${fmtMs(ambientAfter.medianMs)}ms max=${fmtMs(ambientAfter.maxMs)}ms\n`,
-  );
-
-  const inboxProbe = opts.skipInboxProbe ? [] : await inboxPayloadProbe(opts.baseUrl, token);
-
-  const generatedAt = new Date().toISOString();
-  const webVersions = pages
-    .flatMap((page) => page.rounds.map((round) => round.webClientVersion))
-    .filter((value): value is string => typeof value === "string" && value.length > 0);
-  const webVersion = webVersions.length > 0 ? webVersions[0] : null;
-
-  const meta: Record<string, unknown> = {
-    issue: "MUL-367",
-    generatedAt,
-    baseUrl: opts.baseUrl,
-    workspaceSlug: identity.workspaceSlug,
-    workspaceName: identity.workspaceName,
-    memberName: identity.memberName,
-    rounds: opts.rounds,
-    runner,
-    mode: "headless Chromium (no desktop session) via frontend/scripts/perf/page-speed.ts",
-    viewport: `${VIEWPORT.width}x${VIEWPORT.height}`,
-    readingRule: READY_RULE_SOURCE,
-    byteAccounting:
-      "encodedBodySize=压缩后传输体积，decodedBodySize=解压后 JSON 体积，transferSize=含响应头的传输体积",
-    lcpNote: "LCP 由 PerformanceObserver 类型条目读取；无候选时为 null",
-    // Only the cache revision is recorded: the absolute path embeds the
-    // runner's home directory, which does not belong in a shared report.
-    chromium:
-      chromiumPath === ""
-        ? "playwright default"
-        : `playwright cached ${chromiumPath.split("/").slice(-3)[0] ?? "chromium"}`,
-    writeGuardSelfTest: guardSelfTest,
-    ambientLatency: { before: ambientBefore, after: ambientAfter },
-    ambientNote:
-      "生产为共享环境：同一台机器复跑时，先看 /api/config 的中位耗时是否与本次接近，再比较页面数字。",
-    webVersion,
-    webVersionNote:
-      "取自部署后的 Web 包在每次 API 调用上带的 X-Client-Version。当前生产由发布流水线构建，未注入 NEXT_PUBLIC_APP_VERSION 时该值为包内默认版本，不能等同于 Release tag。",
-    ...deployed,
-  };
-
-  const payload = {
-    meta,
-    pages,
-    blockedWrites: allBlocked,
-    inboxProbe: opts.skipInboxProbe ? [] : inboxProbe,
-    inboxGuard: opts.skipInboxGuard ? [] : inboxGuard,
-  };
-
-  const outDir = resolve(opts.outDir);
-  mkdirSync(outDir, { recursive: true });
-  const stem = opts.name ?? `mul367-page-speed-${generatedAt.replace(/[:.]/g, "-")}`;
-  const jsonPath = join(outDir, `${stem}.json`);
-  const mdPath = join(outDir, `${stem}.md`);
-  const htmlPath = join(outDir, `${stem}.html`);
-  writeFileSync(jsonPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-  writeFileSync(
-    htmlPath,
-    buildHtml({ meta, pages, blockedWrites: allBlocked, inboxProbe: payload.inboxProbe, inboxGuard: payload.inboxGuard }),
-    "utf8",
-  );
-  writeFileSync(
-    mdPath,
-    `${buildMarkdown({ meta, pages, blockedWrites: allBlocked, inboxProbe: payload.inboxProbe, inboxGuard: payload.inboxGuard })}`,
-    "utf8",
-  );
-
-  process.stdout.write(`\nwrote ${jsonPath}\nwrote ${mdPath}\nwrote ${htmlPath}\n`);
-  if (opts.compare) {
-    const baseline = JSON.parse(readFileSync(resolve(opts.compare), "utf8")) as {
-      pages: PageSummary[];
-      meta: Record<string, unknown>;
-    };
-    const comparison = buildComparison(baseline, { pages, meta });
-    const comparePath = join(outDir, `${stem}-compare.md`);
-    writeFileSync(comparePath, comparison, "utf8");
-    process.stdout.write(`wrote ${comparePath}\n`);
-  }
+  return plan.anchorRule;
 }
 
 void main().catch((error: unknown) => {

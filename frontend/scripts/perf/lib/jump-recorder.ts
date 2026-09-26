@@ -510,11 +510,22 @@ export function installJumpRecorder(config: PerfRecorderConfig): void {
         state.stateTransitions.push({ t: Math.round(performance.now() * 10) / 10, value });
       }
     });
-    stateObserver.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["data-perf-state"],
-      subtree: true,
-    });
+    // `addInitScript` runs at document-start, where `documentElement` can still
+    // be null; observing a missing node throws and would silently disable the
+    // whole `data-perf-state` path.
+    const startObserving = (): void => {
+      const target = document.documentElement ?? document.body;
+      if (!target || !stateObserver) return;
+      stateObserver.observe(target, {
+        attributes: true,
+        attributeFilter: ["data-perf-state"],
+        subtree: true,
+      });
+    };
+    startObserving();
+    if (!document.documentElement) {
+      document.addEventListener("readystatechange", startObserving, { once: true });
+    }
     // A back-navigation can arrive with the attribute already set, so seed the
     // list from the current DOM as well.
     for (const el of document.querySelectorAll("[data-perf-state]")) {
@@ -631,6 +642,15 @@ export async function resetRecorder(page: Page, visibleFrom?: number): Promise<v
 }
 
 /** Stops sampling, so reading the buffer is one serialisation instead of a moving target. */
+/** Clears the buffer and returns the page's own timestamp for the new window. */
+export async function resetRecorderAt(page: Page): Promise<number> {
+  return page.evaluate((name) => {
+    const recorder = (window as unknown as Record<string, { reset?: (t?: number) => void }>)[name];
+    recorder?.reset?.();
+    return performance.now();
+  }, RECORDER_GLOBAL);
+}
+
 export async function freezeRecorder(page: Page): Promise<void> {
   await page.evaluate((name) => {
     (window as unknown as Record<string, { stop?: () => void }>)[name]?.stop?.();
