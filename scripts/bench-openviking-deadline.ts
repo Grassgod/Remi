@@ -3,7 +3,10 @@
  * MUL-388: disposable, local-only timing of `PUT /api/projects/:id/docs/:ref` against
  * a loopback fake OpenViking that can hang. Never points at a real OpenViking.
  *
- *   bun scripts/bench-openviking-deadline.ts <label> <hang: none|write|all> [timeoutMs] [maxRetries]
+ *   bun scripts/bench-openviking-deadline.ts <label> <hang: none|write|commit|all> [timeoutMs] [maxRetries]
+ *
+ * `write` hangs batch-write; `commit` hangs every snapshot commit, rollback included,
+ * after the new content has landed, which is the slowest path through the budget.
  *
  * Omitted timeout/retries leave the env unset, so the code defaults apply.
  * Prints one JSON line per run.
@@ -15,7 +18,13 @@ import { createProjectKnowledgeServiceFromEnv } from "@multiremi/project-knowled
 import { MultiremiStore } from "@multiremi/store.js";
 
 const [label = "run", hang = "none", timeoutMs, maxRetries] = process.argv.slice(2);
-if (!["none", "write", "all"].includes(hang)) throw new Error(`hang must be none|write|all, got ${hang}`);
+const hungOps: Record<string, string | null> = {
+  none: null,
+  write: "POST /api/v1/content/batch-write",
+  commit: "POST /api/v1/snapshot/commit",
+  all: "*",
+};
+if (!(hang in hungOps)) throw new Error(`hang must be ${Object.keys(hungOps).join("|")}, got ${hang}`);
 
 const files = new Map<string, string>();
 const calls: Record<string, number> = {};
@@ -34,7 +43,7 @@ const server = Bun.serve({
     const op = `${request.method} ${url.pathname}`;
     const body = request.method === "GET" || request.method === "DELETE" ? null : await request.json();
     if (hanging) calls[op] = (calls[op] ?? 0) + 1;
-    if (hanging && (hang === "all" || op === "POST /api/v1/content/batch-write")) return new Promise<Response>(() => {});
+    if (hanging && (hungOps[hang] === "*" || hungOps[hang] === op)) return new Promise<Response>(() => {});
     const uri = url.searchParams.get("uri") ?? "";
     switch (op) {
       case "POST /api/v1/fs/mkdir":
