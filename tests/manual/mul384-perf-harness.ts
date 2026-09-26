@@ -21,6 +21,11 @@
  *   MUL384_NAME          report stem (default MUL-384-local-e2e)
  *   MUL384_KEEP          keep the servers up and print the command to re-run
  *   MUL384_SELECTORS     pass through to --selectors (auto|contract|legacy)
+ *   MUL384_INBOX_MODE    `unpinned` measures auto-selection; `ineligible` pins a
+ *                        bogus id so the no-eligible-target path is exercised
+ *   MUL384_INBOX_PIN     explicit --inbox-item override
+ *   MUL384_INBOX_ELIGIBLE=0  seed the target row without comment/session details,
+ *                        so auto-selection has nothing eligible to pick
  */
 import { Database } from "bun:sqlite";
 import { mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync } from "node:fs";
@@ -235,10 +240,13 @@ try {
     );
   };
   const inboxItemId = "inb_local_deeplink";
-  insertInbox(inboxItemId, "comment_created", "Local deep-link notification", {
-    comment_id: targetComment?.id ?? null,
-    issue_session_id: deepLinkSession.id,
-  });
+  // `MUL384_INBOX_ELIGIBLE=0` drops the comment/session details so the whole first
+  // page is ineligible; that is the only way to reach `no-eligible-inbox-item`
+  // locally, because a real notification always carries them.
+  const deepLinkDetails = process.env.MUL384_INBOX_ELIGIBLE === "0"
+    ? {}
+    : { comment_id: targetComment?.id ?? null, issue_session_id: deepLinkSession.id };
+  insertInbox(inboxItemId, "comment_created", "Local deep-link notification", deepLinkDetails);
   // A second, autopilot-shaped row proves the probe filters those out.
   insertInbox("inb_local_autopilot", "autopilot_run_report", "Autopilot run", {
     comment_id: targetComment?.id ?? null,
@@ -365,7 +373,14 @@ try {
       runningIssue.id,
       ...(process.env.MUL384_ONLY ? ["--only", process.env.MUL384_ONLY] : []),
       ...(process.env.MUL384_SELECTORS ? ["--selectors", process.env.MUL384_SELECTORS] : []),
-      ...(process.env.MUL384_INBOX_MODE === "unpinned" ? [] : ["--inbox-item", inboxItem?.id ?? ""]),
+      ...(process.env.MUL384_INBOX_MODE === "unpinned"
+        ? []
+        : [
+          "--inbox-item",
+          process.env.MUL384_INBOX_MODE === "ineligible"
+            ? "inb_not_on_first_page"
+            : process.env.MUL384_INBOX_PIN ?? inboxItem?.id ?? "",
+        ]),
     ],
     cwd: REPO_ROOT,
     env: { ...process.env, MULTIREMI_QA_WEB_TOKEN: token },
