@@ -577,11 +577,12 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
       // even under `always`: a tolerant legacy reply would hand an upgraded CLI
       // an unreadable page as `body: ""` and let it merge against nothing.
       if (!query && !includeBody && !ids && repositoryWikiLegacyListEnabled(c)) {
-        const docs = await deps.repositoryWiki.list(workspaceId, repositoryId);
+        const docs = await deps.repositoryWiki.withRequestDeadline().list(workspaceId, repositoryId);
         return c.json({ docs: docs.map((doc) => repositoryWikiDocResponse(doc, true)) });
       }
       if (query) {
-        const docs = await deps.repositoryWiki.search(workspaceId, repositoryId, query, Number(c.req.query("limit") ?? 20));
+        const docs = await deps.repositoryWiki.withRequestDeadline()
+          .search(workspaceId, repositoryId, query, Number(c.req.query("limit") ?? 20));
         return c.json({ docs: docs.map((doc) => repositoryWikiDocResponse(doc, true)) });
       }
       if (includeBody) {
@@ -798,7 +799,8 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     if (requireWorkspaceRepository(store, workspaceId, repositoryId)) return c.json({ error: "repository not found" }, 404);
     try {
-      const docs = await deps.repositoryWiki.backlinks(workspaceId, repositoryId, c.req.param("ref"));
+      const docs = await deps.repositoryWiki.withRequestDeadline()
+        .backlinks(workspaceId, repositoryId, c.req.param("ref"));
       return c.json({ docs: docs.map((doc) => repositoryWikiDocResponse(doc)) });
     } catch (error) {
       return repositoryWikiError(c, error);
