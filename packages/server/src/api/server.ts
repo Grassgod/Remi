@@ -127,6 +127,7 @@ import {
   startRequestMetricsSummary,
   type RequestMetricsOptions,
 } from "../observability/request-metrics.js";
+import { withRequestReadCache } from "@multiremi/store/request-read-cache.js";
 import { ScmPollingScheduler } from "@multiremi/scm/poller.js";
 import { IssueTitleScheduler } from "@multiremi/issue-title/poller.js";
 import { retitleIssue } from "@multiremi/issue-title/service.js";
@@ -290,6 +291,11 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   // be unmeasured — and auth's own `verifyAccessToken` DB lookup is part of the
   // request cost we need in `Server-Timing`.
   app.use("*", createRequestMetricsMiddleware(requestMetricsOptions));
+  // MUL-389: one request-scoped read cache, opened before auth so the identity lookups share it
+  // with the handler. It is opt-in per row (see request-read-cache.ts) and every store write
+  // clears it, so a route may look the same Runtime / workspace / relay row up as often as it
+  // likes without paying a round trip each time. Background jobs never run inside this scope.
+  app.use("*", async (_c, next) => withRequestReadCache(() => next()));
   app.use("*", cors());
   // Server-rendered dashboard removed in D11 — the UI is now the Next.js app in frontend/.
   app.get("/", (c) => c.json({ service: "multiremi-api", ui: "frontend/apps/web" }));

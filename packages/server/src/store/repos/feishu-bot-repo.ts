@@ -22,6 +22,7 @@ import { chatAttachmentValidationError } from "@multiremi/contracts/attachments.
 import { createId, nowIso } from "@multiremi/ids.js";
 import { advancesFeishuPresentation, parseFeishuPresentation } from "@multiremi/contracts/feishu-presentation.js";
 import type { StoreContext } from "@multiremi/store/context.js";
+import { activeRequestReadCache, cacheKey } from "@multiremi/store/request-read-cache.js";
 import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import {
   decryptFeishuBotSecret,
@@ -1989,9 +1990,15 @@ export class FeishuBotRepo {
   }
 
   getRuntimeStatus(workspaceId: string, runtimeId: string): MultiremiFeishuBotRuntimeStatus | null {
+    // Read once for the runtime directive and once for the outbound claim in the same heartbeat.
+    const cache = activeRequestReadCache();
+    const key = cacheKey("multiremi_feishu_bot_runtime_states", "row", workspaceId, runtimeId);
+    const cached = cache?.get<Row | null>(key);
+    if (cached !== undefined) return cached ? mapRuntimeStatus(cached) : null;
     const row = this.ctx.db
       .query("SELECT * FROM multiremi_feishu_bot_runtime_states WHERE workspace_id = ? AND runtime_id = ?")
       .get(workspaceId, runtimeId) as Row | null;
+    cache?.set(key, row);
     return row ? mapRuntimeStatus(row) : null;
   }
 
@@ -2238,9 +2245,17 @@ export class FeishuBotRepo {
   }
 
   private rawConfigRow(workspaceId: string): Row | null {
-    return this.ctx.db
+    // A heartbeat reads this for the runtime directive and again when it claims an outbound
+    // message. Any write to the table clears the entry.
+    const cache = activeRequestReadCache();
+    const key = cacheKey("multiremi_feishu_bot_configs", "workspace", workspaceId);
+    const cached = cache?.get<Row | null>(key);
+    if (cached !== undefined) return cached;
+    const row = this.ctx.db
       .query("SELECT * FROM multiremi_feishu_bot_configs WHERE workspace_id = ?")
       .get(workspaceId) as Row | null;
+    cache?.set(key, row);
+    return row;
   }
 
   /**

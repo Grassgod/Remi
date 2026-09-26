@@ -241,6 +241,8 @@ export interface AgentPluginsSurface {
   recordAgentPluginRuntimeHeartbeat(runtimeId: string): MultiremiAgentPluginRuntimeState[];
   recordAgentPluginRuntimeHeartbeatWithinLock(
     runtimeId: string,
+    /** The Runtime row the caller already holds, so the heartbeat does not re-read it. */
+    knownRuntime?: { daemonId: string | null; metadata: Record<string, unknown>; workspaceId: string | null },
   ): { changes: MultiremiAgentPluginRuntimeState[]; revision: string };
 }
 
@@ -450,6 +452,8 @@ export interface RuntimesSurface {
   getRuntimeCodexProfile(id: string): import("@multiremi/contracts/codex-profile").RuntimeCodexProfile | null;
   getRuntimeExecutionProfile(id: string, provider: string): import("@multiremi/contracts/codex-profile").RuntimeCodexProfile | null;
   getRuntime(id: string): MultiremiRuntime | null;
+  /** The Runtime row without the derived usage / model / execution-group reads. */
+  getRuntimeLite(id: string): MultiremiRuntime | null;
   listRuntimes(): MultiremiRuntime[];
   hasCliUpdateDrainForRuntime(runtimeId: string): boolean;
   createRuntimeCommandRequest(runtimeId: string, input: import("@multiremi/contracts/types.js").CreateRuntimeCommandInput): MultiremiRuntimeCommandRequest;

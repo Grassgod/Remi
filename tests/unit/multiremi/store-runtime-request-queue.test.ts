@@ -70,16 +70,20 @@ function goldenGet(table: string): string {
  * sub-select, and `RETURNING *` replaces the read-back.
  */
 function goldenClaim(table: string): string {
-  return `UPDATE ${table}${NL}SET status = 'running', run_started_at = ?, updated_at = ?${NL}WHERE id = (`
-    + `${NL}  SELECT id FROM ${table}${NL}  WHERE runtime_id = ? AND status = 'pending'`
-    + `${NL}  ORDER BY created_at ASC${NL}  LIMIT 1${NL})${NL}RETURNING *`;
+  // `AND status = 'pending'` outside the sub-select is the concurrency guard: under PG READ
+  // COMMITTED a claim that lost the row race must re-evaluate it and drop out (MUL-389).
+  return `UPDATE ${table}${NL}SET status = 'running', run_started_at = ?, updated_at = ?`
+    + `${NL}WHERE status = 'pending'${NL}  AND id = (`
+    + `${NL}    SELECT id FROM ${table}${NL}    WHERE runtime_id = ? AND status = 'pending'`
+    + `${NL}    ORDER BY created_at ASC${NL}    LIMIT 1${NL}  )${NL}RETURNING *`;
 }
 
 /** Batch form of {@link goldenClaim}: one statement for the whole batch, `id IN (...)` instead of `id = (...)`. */
 function goldenClaimBatch(table: string): string {
-  return `UPDATE ${table}${NL}SET status = 'running', run_started_at = ?, updated_at = ?${NL}WHERE id IN (`
-    + `${NL}  SELECT id FROM ${table}${NL}  WHERE runtime_id = ? AND status = 'pending'`
-    + `${NL}  ORDER BY created_at ASC${NL}  LIMIT ?${NL})${NL}RETURNING *`;
+  return `UPDATE ${table}${NL}SET status = 'running', run_started_at = ?, updated_at = ?`
+    + `${NL}WHERE status = 'pending'${NL}  AND id IN (`
+    + `${NL}    SELECT id FROM ${table}${NL}    WHERE runtime_id = ? AND status = 'pending'`
+    + `${NL}    ORDER BY created_at ASC${NL}    LIMIT ?${NL}  )${NL}RETURNING *`;
 }
 
 /**
@@ -224,12 +228,13 @@ describe("RuntimeRequestQueue SQL", () => {
     expect(emitted).toContain(
       "UPDATE multiremi_runtime_model_list_requests\n" +
         "       SET status = 'running', run_started_at = ?, updated_at = ?\n" +
-        "       WHERE id = (\n" +
-        "         SELECT id FROM multiremi_runtime_model_list_requests\n" +
-        "         WHERE runtime_id = ? AND status = 'pending'\n" +
-        "         ORDER BY created_at ASC\n" +
-        "         LIMIT 1\n" +
-        "       )\n" +
+        "       WHERE status = 'pending'\n" +
+        "         AND id = (\n" +
+        "           SELECT id FROM multiremi_runtime_model_list_requests\n" +
+        "           WHERE runtime_id = ? AND status = 'pending'\n" +
+        "           ORDER BY created_at ASC\n" +
+        "           LIMIT 1\n" +
+        "         )\n" +
         "       RETURNING *",
     );
     expect(emitted).toContain(
@@ -266,6 +271,54 @@ describe("RuntimeRequestQueue lifecycle", () => {
     const claimed = repo.claimRuntimeLocalSkillImportRequests("rt_q", 1);
     expect(claimed.map((entry) => entry.id)).toEqual([second.id]);
     expect(repo.getRuntimeLocalSkillImportRequest("rt_q", first.id)?.status).toBe("pending");
+  });
+
+  it("re-checks the row status on the UPDATE, not only in the sub-select", () => {
+    // The race this guards against cannot be reproduced on SQLite (one writer, and the whole
+    // statement is atomic), so the predicate itself is what gets asserted. Under Postgres READ
+    // COMMITTED two concurrent claims can both pick the same id in their sub-selects; the loser
+    // blocks on the row lock and then Postgres RE-EVALUATES the outer WHERE against the committed
+    // row. If that WHERE only said `id = ?` the loser would match and return the request the
+    // winner already took — the same pending item delivered to two daemons. `AND status =
+    // 'pending'` makes it match nothing.
+    //
+    // Asserting the SHAPE is therefore the test: the guard must sit on the outer UPDATE. A guard
+    // only inside the sub-select is what the pre-MUL-389 code had, and it is not enough.
+    const repo = createRepo();
+    FAMILIES[0]!.drive(repo);
+    const claims = sqlLog.filter((sql) =>
+      sql.includes("UPDATE multiremi_runtime_model_list_requests") && sql.includes("RETURNING *"));
+    expect(claims).toHaveLength(1);
+    const [outerPredicate] = claims[0]!.split("SELECT id FROM");
+    expect(outerPredicate).toContain("WHERE status = 'pending'");
+
+    // The batch form carries the same guard: a batch can lose the race for a subset of its ids.
+    const batchRepo = createRepo();
+    const batches = (() => {
+      batchRepo.createRuntimeLocalSkillImportRequest("rt_q", { skillKey: "a" });
+      const before = sqlLog.length;
+      batchRepo.claimRuntimeLocalSkillImportRequests("rt_q", 10);
+      // Only the claim statement: the same call also sweeps deadlines on this table.
+      return sqlLog.slice(before).filter((sql) =>
+        sql.includes("UPDATE multiremi_runtime_local_skill_import_requests") && sql.includes("RETURNING *"));
+    })();
+    expect(batches).toHaveLength(1);
+    const [batchOuterPredicate] = batches[0]!.split("SELECT id FROM");
+    expect(batchOuterPredicate).toContain("WHERE status = 'pending'");
+
+    // And the behavior a caller sees: a row already taken by another claim is not handed out again.
+    const again = batchRepo.claimRuntimeLocalSkillImportRequests("rt_q", 10);
+    expect(again).toEqual([]);
+  });
+
+  it("claims nothing when the only pending row was taken by a competing claim", () => {
+    // End-to-end shape of the same guarantee: after the row moves to `running`, a second claim on
+    // the same runtime finds no pending work rather than re-returning the owned request.
+    const repo = createRepo();
+    const request = repo.createRuntimeLocalSkillImportRequest("rt_q", { skillKey: "only" });
+    expect(repo.claimRuntimeLocalSkillImportRequests("rt_q", 10).map((entry) => entry.id)).toEqual([request.id]);
+    expect(repo.claimRuntimeLocalSkillImportRequests("rt_q", 10)).toEqual([]);
+    expect(repo.getRuntimeLocalSkillImportRequest("rt_q", request.id)?.status).toBe("running");
   });
 
   it("honours the batch limit and floors it at one", () => {

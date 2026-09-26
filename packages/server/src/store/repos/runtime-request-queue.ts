@@ -62,8 +62,17 @@ export class RuntimeRequestQueue<T> {
    * Move the oldest pending request to `running` and return it, or null when the queue is empty.
    *
    * Selection and the state change are one statement: the sub-select picks the row and
-   * `RETURNING *` hands back exactly what was written, so there is no window in which a second
-   * reader could see the row between the SELECT and the UPDATE, and no second read of it.
+   * `RETURNING *` hands back exactly what was written, so there is no second read of it and no
+   * window in which the same statement could see a half-updated row.
+   *
+   * `AND status = 'pending'` on the outer UPDATE is what makes two concurrent claims safe, and it
+   * is load-bearing rather than decorative. Under Postgres READ COMMITTED, when two claims run
+   * concurrently their sub-selects can both pick the same id; the loser then blocks on the row
+   * lock, and when the winner commits, Postgres RE-EVALUATES the outer WHERE against the new row
+   * version. Without the status re-check the loser's WHERE (`id = ?`) would still match and it
+   * would return the row the winner already took — the same request handed to two daemons. With
+   * it, the loser sees `status = 'running'`, matches nothing and returns null, and the caller
+   * simply waits for the next heartbeat. SQLite serializes writers, so this is a no-op there.
    *
    * `sweep` is for callers that have already proved the deadline sweep would write nothing
    * (the heartbeat's merged probe does this); it skips the extra UPDATE, never a claim.
@@ -74,12 +83,13 @@ export class RuntimeRequestQueue<T> {
     const row = this.db.query(
       `UPDATE ${this.spec.table}
        SET status = 'running', run_started_at = ?, updated_at = ?
-       WHERE id = (
-         SELECT id FROM ${this.spec.table}
-         WHERE runtime_id = ? AND status = 'pending'
-         ORDER BY created_at ASC
-         LIMIT 1
-       )
+       WHERE status = 'pending'
+         AND id = (
+           SELECT id FROM ${this.spec.table}
+           WHERE runtime_id = ? AND status = 'pending'
+           ORDER BY created_at ASC
+           LIMIT 1
+         )
        RETURNING *`,
     ).get(now, now, runtimeId) as Row | null;
     return row ? this.spec.hydrate(row) : null;
@@ -92,6 +102,10 @@ export class RuntimeRequestQueue<T> {
    *
    * `UPDATE ... RETURNING` does not promise the order of the returned rows, so the ordering the
    * single-row path gets from `ORDER BY created_at ASC` is restored here explicitly.
+   *
+   * `AND status = 'pending'` carries the same concurrency meaning as in {@link claim}: under READ
+   * COMMITTED a claim that lost the race re-evaluates this predicate on the committed row and
+   * drops out instead of returning a row another claim already owns.
    */
   claimBatch(runtimeId: string, limit: number, sweep = true): T[] {
     if (sweep) this.expire(runtimeId);
@@ -99,12 +113,13 @@ export class RuntimeRequestQueue<T> {
     const rows = this.db.query(
       `UPDATE ${this.spec.table}
        SET status = 'running', run_started_at = ?, updated_at = ?
-       WHERE id IN (
-         SELECT id FROM ${this.spec.table}
-         WHERE runtime_id = ? AND status = 'pending'
-         ORDER BY created_at ASC
-         LIMIT ?
-       )
+       WHERE status = 'pending'
+         AND id IN (
+           SELECT id FROM ${this.spec.table}
+           WHERE runtime_id = ? AND status = 'pending'
+           ORDER BY created_at ASC
+           LIMIT ?
+         )
        RETURNING *`,
     ).all(now, now, runtimeId, Math.max(1, Math.floor(limit))) as Row[];
     return rows

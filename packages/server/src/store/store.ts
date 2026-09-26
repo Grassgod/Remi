@@ -2,6 +2,7 @@ import { getExecutionGroup, listExecutionGroups } from "@multiremi/store/executi
 import type { RuntimeConnectionProfile } from "@multiremi/contracts/runtime-connection";
 import { type SqlDatabase, openMultiremiDatabase } from "@multiremi/store/db/postgres.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
+import { invalidatingDatabase } from "@multiremi/store/request-read-cache.js";
 import { daemonRuntimeId, isTerminalStatus } from "@multiremi/store/helpers.js";
 import { agentRoleAtLeast } from "@multiremi/store/agent-role.js";
 import { FeedbackRepo } from "@multiremi/store/repos/feedback-repo.js";
@@ -511,7 +512,9 @@ export class MultiremiStore {
     agentIssueUpdateDebounceMs?: number;
     publicUrl?: string | null;
   } = {}) {
-    this.db = db ?? openMultiremiDatabase();
+    // The wrapper clears the per-request read cache on every write, so a cached row can never
+    // outlive a write that changed it. See request-read-cache.ts for the contract.
+    this.db = invalidatingDatabase(db ?? openMultiremiDatabase());
     this.ctx = new StoreContext(this.db, () => this);
     this.feedback = new FeedbackRepo(this.db);
     this.accessTokens = new AccessTokensRepo(this.db);
@@ -1044,8 +1047,9 @@ runMigrations(this.db);
   /** Internal cross-domain primitive; caller owns workspace lifecycle + Plugin locks. */
   recordAgentPluginRuntimeHeartbeatWithinLock(
     runtimeId: string,
+    knownRuntime?: { daemonId: string | null; metadata: Record<string, unknown>; workspaceId: string | null },
   ): { changes: MultiremiAgentPluginRuntimeState[]; revision: string } {
-    return this.agentPlugins.recordAgentPluginRuntimeHeartbeatWithinLock(runtimeId);
+    return this.agentPlugins.recordAgentPluginRuntimeHeartbeatWithinLock(runtimeId, knownRuntime);
   }
 
   retryAgentPluginRuntime(

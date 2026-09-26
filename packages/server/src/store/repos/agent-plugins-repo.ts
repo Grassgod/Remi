@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { parseJson, toJson } from "@multiremi/store/helpers.js";
 import type { StoreContext } from "@multiremi/store/context.js";
+import { activeRequestReadCache, cacheKey } from "@multiremi/store/request-read-cache.js";
 import {
   isRuntimeEffectivelyOnline,
   withRuntimeLiveness,
@@ -766,7 +767,7 @@ export class AgentPluginsRepo {
     const transaction = this.ctx.db.transaction(() => {
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
       this.lockAgentPluginWorkspace(workspaceId);
-      return this.recordAgentPluginRuntimeHeartbeatWithinLock(runtimeId);
+      return this.recordAgentPluginRuntimeHeartbeatWithinLock(runtimeId, runtime);
     });
     return transaction().changes;
   }
@@ -780,17 +781,33 @@ export class AgentPluginsRepo {
    */
   recordAgentPluginRuntimeHeartbeatWithinLock(
     runtimeId: string,
+    knownRuntime?: { daemonId: string | null; metadata: Record<string, unknown>; workspaceId: string | null },
   ): { changes: MultiremiAgentPluginRuntimeState[]; revision: string } {
-    // One read of the Runtime row for the whole pass. The two `requireRuntime` calls this
-    // replaces were on the heartbeat path, where the row is already in hand.
-    const runtime = this.requireRuntime(runtimeId);
+    // The heartbeat path already holds the Runtime row it just wrote; re-reading it here was one
+    // query per heartbeat. Callers that do not have it (the websocket heartbeat, tests) keep the
+    // original lookup by leaving the argument out.
+    const runtime = knownRuntime ?? this.requireRuntime(runtimeId);
     const workspaceId = runtime.workspaceId ?? "local";
-    const beforeRows = this.ctx.db.query(
-      `SELECT * FROM multiremi_agent_plugin_runtime_states
-       WHERE runtime_id = ? AND desired = 1`,
-    ).all(runtimeId) as Row[];
+    // Three reads of the same slice in one pass: the pre-reconcile snapshot, the post-reconcile
+    // snapshot and the pending-counter scan. Reconciliation is the only writer here and it
+    // invalidates this table, so the second read still observes its result.
+    const desiredRows = (): Row[] => {
+      const cache = activeRequestReadCache();
+      const key = cacheKey("multiremi_agent_plugin_runtime_states", "desired", runtimeId);
+      const cached = cache?.get<Row[]>(key);
+      if (cached !== undefined) return cached;
+      const rows = this.ctx.db.query(
+        `SELECT * FROM multiremi_agent_plugin_runtime_states
+         WHERE runtime_id = ? AND desired = 1`,
+      ).all(runtimeId) as Row[];
+      cache?.set(key, rows);
+      return rows;
+    };
+    const beforeRows = desiredRows();
     const before = new Map(beforeRows.map((row) => [String(row.id), runtimeStateFingerprint(row)]));
     this.reconcileAgentPluginDesiredStateLocked(workspaceId);
+    // Reconciliation may have inserted, removed or flipped rows, so this read must be fresh even
+    // though the reader above is memoized: any write it performed cleared the entry.
     const reconciledRows = this.ctx.db.query(
       `SELECT * FROM multiremi_agent_plugin_runtime_states
        WHERE runtime_id = ? AND desired = 1`,

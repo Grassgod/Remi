@@ -38,6 +38,7 @@ import {
   toJson,
 } from "@multiremi/store/helpers.js";
 import { type StoreContext } from "@multiremi/store/context.js";
+import { activeRequestReadCache, cacheKey, writeThroughRequestReadCache } from "@multiremi/store/request-read-cache.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { canonicalizeDaemonRoutingWithinTransaction } from "@multiremi/store/daemon-routing.js";
 import { RuntimeRequestQueue, type RuntimeRequestSpec } from "@multiremi/store/repos/runtime-request-queue.js";
@@ -501,7 +502,16 @@ export class RuntimesRepo {
    * a single request can take that lock several times.
    */
   private readRuntimeRow(id: string): Row | null {
-    return this.ctx.db.query(
+    // One request reads this row from the auth guard, the heartbeat body and the response
+    // assembly. The cache is request-scoped and cleared by every Runtime write, so a read after
+    // a write in the same request still sees the write.
+    const cache = activeRequestReadCache();
+    const key = cacheKey("multiremi_runtimes", "row", id);
+    if (cache) {
+      const cached = cache.get<Row | null>(key);
+      if (cached !== undefined) return cached;
+    }
+    const row = this.ctx.db.query(
       `SELECT runtime.*, profile.display_name AS daemon_display_name
        FROM multiremi_runtimes runtime
        LEFT JOIN multiremi_daemon_profiles profile
@@ -509,6 +519,8 @@ export class RuntimesRepo {
         AND profile.daemon_id = runtime.daemon_id
        WHERE runtime.id = ?`,
     ).get(id) as Row | null;
+    cache?.set(key, row);
+    return row;
   }
 
   listRuntimes(): MultiremiRuntime[] {
@@ -1839,8 +1851,19 @@ export class RuntimesRepo {
         // The row this transaction just wrote is the row every later branch reads, so it is
         // materialized from `metadata` instead of being selected back out.
         const updatedRuntime = withRuntimeLiveness({ ...lockedRuntime, metadata, status: "online", lastHeartbeatAt: now, updatedAt: now });
+        // The row this transaction just wrote is authoritative for the rest of the request, so
+        // publish the POST-write version to the read cache instead of leaving the write to evict
+        // the entry and force the next reader to re-select what it already knows. Only the four
+        // columns the UPDATE touched differ from `lockedRow`.
+        writeThroughRequestReadCache(cacheKey("multiremi_runtimes", "row", runtimeId), {
+          ...lockedRow,
+          status: "online",
+          metadata: toJson(metadata),
+          last_heartbeat_at: now,
+          updated_at: now,
+        });
         const { changes, revision } =
-          this.ctx.agentPlugins().recordAgentPluginRuntimeHeartbeatWithinLock(runtimeId);
+          this.ctx.agentPlugins().recordAgentPluginRuntimeHeartbeatWithinLock(runtimeId, updatedRuntime);
         return { runtime: updatedRuntime, previous, protocol, changes, revision };
       })();
       if (!result) return { runtime_id: runtimeId, status: "runtime_gone", runtime_gone: true };

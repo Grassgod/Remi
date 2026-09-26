@@ -442,14 +442,13 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     // execution-group membership and the model catalog to every heartbeat for nothing.
     const runtime = store.getRuntimeLite(runtimeId);
     const workspaceId = runtime?.workspaceId ?? "local";
-    const workspaceConfig = workspaceReposResponse(
-      store,
-      workspaceId,
-      callerCanReceiveRelay(c, store, workspaceId),
-    );
+    // The role check behind `callerCanReceiveRelay` reads the membership list; ask once and use
+    // the same answer for both the payload and whether to attach the relay secrets.
+    const canReceiveRelay = callerCanReceiveRelay(c, store, workspaceId);
+    const workspaceConfig = workspaceReposResponse(store, workspaceId, canReceiveRelay);
     if (workspaceConfig) {
       response.workspace_settings = workspaceConfig.settings ?? {};
-      if (callerCanReceiveRelay(c, store, workspaceId)) response.relay = workspaceConfig.relay;
+      if (canReceiveRelay) response.relay = workspaceConfig.relay;
     }
     if (supportsFeishuBotConfig) {
       // Carries a revision and a desired state, never a credential — the daemon
