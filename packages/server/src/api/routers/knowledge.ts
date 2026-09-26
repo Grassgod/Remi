@@ -25,6 +25,7 @@ import {
   KnowledgeWritePolicyError,
   linkSeededProjectSchema,
   knowledgePolicyErrorResponse,
+  openVikingTimeoutResponse,
   resolveKnowledgeWriteActor,
   resolveTaskSourceRevision,
 } from "../helpers/knowledge.js";
@@ -466,7 +467,7 @@ export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
       runId = runResult.run.id;
       for (const submission of submissions) store.addKnowledgeRunSubmissionSource(runId, submission.id);
       const batchRefs = new Set(outputs.flatMap(projectOutputRefs));
-      const projectDocs = await projectKnowledge.listProjectDocs(project.id);
+      const projectDocs = await projectKnowledge.withRequestDeadline().listProjectDocs(project.id);
       for (const output of outputs) {
         assertProjectLinks(projectDocs, clean(output.path) ?? "index.md", String(output.body ?? ""), batchRefs);
       }
@@ -492,9 +493,12 @@ export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
           updatedById: actor.agent!.id,
           updated_by_id: actor.agent!.id,
         };
+        // Each output gets its own budget: a batch may legitimately take longer than one
+        // request budget, but no single write may hang on OpenViking.
+        const knowledge = projectKnowledge.withRequestDeadline();
         const doc = action === "create" || action === "split"
-          ? await projectKnowledge.createProjectDoc(project.id, stamped)
-          : await projectKnowledge.updateProjectDoc(project.id, requireRef(output), stamped);
+          ? await knowledge.createProjectDoc(project.id, stamped)
+          : await knowledge.updateProjectDoc(project.id, requireRef(output), stamped);
         store.linkKnowledgeFormalVersion({
           runId,
           artifactScope: doc.kind === "memory" ? "memory" : "project_wiki",
@@ -830,7 +834,7 @@ async function preflightProjectOutputs(
       normalizeProjectWikiPath(output.path ?? `${String(output.slug ?? output.title)}.md`);
       continue;
     }
-    const current = await service.getProjectDocByRef(projectId, requireRef(output));
+    const current = await service.withRequestDeadline().getProjectDocByRef(projectId, requireRef(output));
     if (!current) throw new KnowledgeWritePolicyError(`project doc not found: ${requireRef(output)}`, 404);
     const expected = output.expectedVersion ?? output.expected_version;
     if (expected == null || Number(expected) !== current.version) {
@@ -1184,7 +1188,7 @@ function optionalInt(value: unknown): number | null {
 }
 
 function knowledgeError(c: Parameters<typeof knowledgePolicyErrorResponse>[0], error: unknown): Response {
-  const policy = knowledgePolicyErrorResponse(c, error);
+  const policy = knowledgePolicyErrorResponse(c, error) ?? openVikingTimeoutResponse(c, error);
   if (policy) return policy;
   const message = error instanceof Error ? error.message : "knowledge request failed";
   if (error instanceof RepositoryWikiUnavailableError) return c.json({ error: message }, 503);

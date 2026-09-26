@@ -72,7 +72,9 @@ bun test tests/unit/daemon/wiki-workspace.test.ts tests/unit/multiremi/multiremi
 | `shadow` | SQL 仍是读取和写入来源，写入后镜像至 OpenViking；镜像失败记录 `failed`，不会回滚已完成的 SQL 写入。 |
 | `openviking` | SQL 保留归属、ID、URI、哈希、版本和同步状态；正文及语义召回来自 OpenViking。新正文不写回 SQL，也不在依赖故障时切回 SQL 写入。 |
 
-非 SQL 模式需要服务端 API key：`MULTIREMI_OPENVIKING_API_KEY`（也接受 `OPENVIKING_API_KEY`）。URL 默认 `http://127.0.0.1:1933`，超时默认 30000 ms，最多重试默认 2，分别由 `MULTIREMI_OPENVIKING_URL`、`MULTIREMI_OPENVIKING_TIMEOUT_MS`、`MULTIREMI_OPENVIKING_MAX_RETRIES` 控制。[客户端](../packages/server/src/project-knowledge/openviking-client.ts)只运行在服务端；[URI](../packages/server/src/project-knowledge/codec.ts)由 workspace/project 生成，客户端不直接持有依赖凭据。
+非 SQL 模式需要服务端 API key：`MULTIREMI_OPENVIKING_API_KEY`（也接受 `OPENVIKING_API_KEY`）。URL 默认 `http://127.0.0.1:1933`，由 `MULTIREMI_OPENVIKING_URL` 控制。`MULTIREMI_OPENVIKING_TIMEOUT_MS` 是单次尝试超时，默认 15000 ms；`MULTIREMI_OPENVIKING_MAX_RETRIES` 默认 2，更大的值按 2 截断。[客户端](../packages/server/src/project-knowledge/openviking-client.ts)只运行在服务端；[URI](../packages/server/src/project-knowledge/codec.ts)由 workspace/project 生成，客户端不直接持有依赖凭据。
+
+项目文档 API 的一次请求内，所有 OpenViking 调用共享 25 s 总预算，在 nginx 30 s 断开前留出余量。主路径只能用前 20 s，最后 5 s 留给失败写入的回滚；否则正文已替换而 SQL 哈希未更新，文档会因校验和不符而无法读取。单次尝试超时和重试退避都不超过剩余预算，env 设得再大也越不过总预算。预算耗尽或单次超时返回 504（`code` 为 `DEADLINE_EXCEEDED` 或 `TIMEOUT`），并输出一行 `openviking_request_timeout` JSON 日志，含路由、OpenViking 操作和尝试次数。读取及幂等调用（mkdir、按 replace 模式设置标签、find、删除）在超时、网络错误或 5xx 后重试；create、replace、commit 结果未知时不重试，仅在 OpenViking 明确拒绝且未执行（429 或 `details.retryable`）时重试。知识发布按每个输出单独计预算；迁移 backfill、verify 等管理批处理不受此预算约束。
 
 读取失败行为依入口而异：单篇和严格列表返回错误；`searchProjectDocs` 及工作区正文列表以最多 16 个并发读取正文，记录并跳过单篇失败。普通项目列表不使用这个上限。因此宽松列表成功不能代替迁移完整性验证。
 
