@@ -2503,10 +2503,11 @@ export class TasksRepo {
     let transitionedTask: MultiremiTask | null = null;
     const request = this.ctx.db.transaction(() => {
       const now = nowIso();
+      const expiresAt = new Date(Date.now() + resolveHumanRequestTimeoutMs(input.timeoutMs)).toISOString();
       this.ctx.db.run(
-        `INSERT INTO multiremi_task_human_requests (id, task_id, kind, payload, status, created_at)
-         VALUES (?, ?, ?, ?, 'pending', ?)`,
-        [id, input.taskId, input.kind, JSON.stringify(input.payload ?? {}), now],
+        `INSERT INTO multiremi_task_human_requests (id, task_id, kind, payload, status, created_at, expires_at)
+         VALUES (?, ?, ?, ?, 'pending', ?, ?)`,
+        [id, input.taskId, input.kind, JSON.stringify(input.payload ?? {}), now, expiresAt],
       );
       const reason = input.kind === "permission" ? "Waiting for permission approval" : "Waiting for a human answer";
       const transition = this.ctx.db.run(
@@ -4869,6 +4870,14 @@ const TASK_MESSAGE_TOOL_MAX = 512;
 const TASK_MESSAGE_TEXT_MAX = 256 * 1024;
 const TASK_MESSAGE_OUTPUT_MAX = 64 * 1024;
 const TASK_MESSAGE_INPUT_MAX = 256 * 1024;
+
+/**
+ * A daemon that predates `timeout_ms` (MUL-407) still gets a reminder lane and
+ * a terminal card, so the server records its own hour-long deadline instead of
+ * leaving `expires_at` NULL. The executing daemon remains the only authority
+ * that may expire the request.
+ */
+const DEFAULT_HUMAN_REQUEST_TIMEOUT_MS = 60 * 60 * 1000;
 const TASK_MESSAGE_META_MAX = 64 * 1024;
 const TASK_MESSAGE_JSON_MAX_DEPTH = 8;
 const TASK_MESSAGE_JSON_MAX_ARRAY = 256;
@@ -4928,7 +4937,15 @@ function toTaskHumanRequest(row: Row): MultiremiTaskHumanRequest {
     respondedBy: nullableString(row.responded_by),
     createdAt: String(row.created_at),
     respondedAt: nullableString(row.responded_at),
+    expiresAt: nullableString(row.expires_at),
   };
+}
+
+/** Clamp a requested lifetime; a daemon may not ask for an unbounded wait. */
+export function resolveHumanRequestTimeoutMs(value: unknown): number {
+  const requested = Number(value);
+  if (!Number.isFinite(requested) || requested <= 0) return DEFAULT_HUMAN_REQUEST_TIMEOUT_MS;
+  return Math.min(Math.max(Math.floor(requested), 60_000), 24 * 60 * 60 * 1000);
 }
 
 function normalizeHumanRequestKind(value: unknown): MultiremiTaskHumanRequestKind {

@@ -13,11 +13,43 @@ import type { bootFeishuChannel, FeishuChannelHandle } from "../../../apps/remi/
 import type { MultiremiDaemon } from "@multiremi/worker/daemon.js";
 import type {
   MultiremiAgent,
+  MultiremiFeishuBotOutboundDelivery,
   MultiremiFeishuBotDaemonConfig,
 } from "@multiremi/contracts/types.js";
+import { FeishuDeliveryError } from "@shared/feishu-delivery-error.js";
+import { DECISION_RECIPIENT_SENTINEL } from "@shared/feishu-task-card.js";
 import type { MultiremiFeishuBotAssignment } from "@multiremi/worker/client.js";
 
 const APP_SECRET = "wJ4tQ7xR2nB8vC5mZ1kL0pS6dF3gH9jA";
+
+/** A delivery on one of the MUL-407 decision lanes. */
+function decisionDelivery(
+  overrides: Partial<MultiremiFeishuBotOutboundDelivery> & { kind: MultiremiFeishuBotOutboundDelivery["kind"] },
+): MultiremiFeishuBotOutboundDelivery {
+  return {
+    id: "fbo_decision",
+    claimToken: "lease",
+    chatId: "oc_decision",
+    threadId: "om_topic_root",
+    replyToMessageId: "om_topic_root",
+    body: "",
+    bodyOrigin: "issue",
+    idempotencyKey: "fbo_decision",
+    humanRequestId: "hrq_1",
+    ...overrides,
+  };
+}
+
+/** A pending card carrying the sentinel the host is expected to resolve. */
+function cardWithSentinel(): Record<string, unknown> {
+  return {
+    schema: "2.0",
+    body: { elements: [
+      { tag: "markdown", content: "**Continue?**" },
+      { tag: "markdown", content: `<at id=${DECISION_RECIPIENT_SENTINEL}></at>` },
+    ] },
+  };
+}
 
 function assignment(overrides: Partial<MultiremiFeishuBotDaemonConfig> = {}): MultiremiFeishuBotAssignment {
   return {
@@ -438,5 +470,90 @@ describe("control-plane Feishu concierge host", () => {
     expect(test.channel.stops()).toBe(1);
     expect(test.current()).toBeNull();
     expect(fake.botMenuPublishers.at(-1)).toBeNull();
+  });
+
+  it("resolves the topic owner into the decision card before sending it", async () => {
+    const test = host({ daemon: fakeDaemon().daemon });
+    await test.conciergeHost.start(assignment());
+    const cards: Array<{ chatId: string; replyToMessageId?: string; card: Record<string, unknown> }> = [];
+    test.channel.handle.resolveProactiveMention = async () => "ou_group_owner";
+    test.channel.handle.sendProactiveCard = async (input) => {
+      cards.push({ chatId: input.chatId, replyToMessageId: input.replyToMessageId, card: input.card });
+      return { messageId: "om_card" };
+    };
+    await test.conciergeHost.sendOutbound!(decisionDelivery({
+      kind: "decision_card",
+      body: JSON.stringify({ card: cardWithSentinel(), fallback_text: "问题：继续吗？" }),
+    }), { signal: new AbortController().signal, onStarted: async () => {} });
+
+    expect(cards).toHaveLength(1);
+    expect(cards[0]!.chatId).toBe("oc_decision");
+    expect(cards[0]!.replyToMessageId).toBe("om_topic_root");
+    const rendered = JSON.stringify(cards[0]!.card);
+    expect(rendered).toContain("<at id=ou_group_owner></at>");
+    expect(rendered).not.toContain("__remi_decision_recipient__");
+  });
+
+  it("degrades a rejected decision card to its text twin instead of retrying it", async () => {
+    const test = host({ daemon: fakeDaemon().daemon });
+    await test.conciergeHost.start(assignment());
+    const replies: string[] = [];
+    test.channel.handle.resolveProactiveMention = async () => null;
+    test.channel.handle.sendProactiveCard = async () => {
+      // A permanent rejection: retrying the same payload cannot succeed.
+      throw new FeishuDeliveryError("Feishu card send: Feishu code 99991672", false);
+    };
+    test.channel.handle.sendProactiveThreadReply = async (input: { body: string }) => {
+      replies.push(input.body);
+      return { messageId: "om_fallback" };
+    };
+    const sent = await test.conciergeHost.sendOutbound!(decisionDelivery({
+      kind: "decision_card",
+      body: JSON.stringify({ card: cardWithSentinel(), fallback_text: "**MUL-1 - 问题**\n\n1. 继续" }),
+    }), { signal: new AbortController().signal, onStarted: async () => {} });
+
+    expect(sent).toEqual({ messageId: "om_fallback" });
+    expect(replies).toEqual(["**MUL-1 - 问题**\n\n1. 继续"]);
+  });
+
+  it("lets a retryable card failure reach the outbox backoff", async () => {
+    const test = host({ daemon: fakeDaemon().daemon });
+    await test.conciergeHost.start(assignment());
+    test.channel.handle.resolveProactiveMention = async () => "ou_group_owner";
+    test.channel.handle.sendProactiveCard = async () => {
+      throw new FeishuDeliveryError("Feishu card send: Feishu code 99991400", true);
+    };
+    let textFallbacks = 0;
+    test.channel.handle.sendProactiveThreadReply = async () => {
+      textFallbacks += 1;
+      return { messageId: "om_fallback" };
+    };
+    await expect(test.conciergeHost.sendOutbound!(decisionDelivery({
+      kind: "decision_card",
+      body: JSON.stringify({ card: cardWithSentinel(), fallback_text: "问题" }),
+    }), { signal: new AbortController().signal, onStarted: async () => {} })).rejects.toThrow(/99991400/);
+    expect(textFallbacks).toBe(0);
+  });
+
+  it("patches a decision card in place and posts the reminder as text", async () => {
+    const test = host({ daemon: fakeDaemon().daemon });
+    await test.conciergeHost.start(assignment());
+    const patches: Array<{ messageId: string }> = [];
+    test.channel.handle.updateProactiveCard = async (messageId) => { patches.push({ messageId }); };
+    const card = { schema: "2.0", body: { elements: [{ tag: "markdown", content: "**已提交**" }] } };
+    expect(await test.conciergeHost.sendOutbound!(decisionDelivery({
+      kind: "decision_card_patch", targetMessageId: "om_card", body: JSON.stringify(card),
+    }), { signal: new AbortController().signal, onStarted: async () => {} })).toEqual({ messageId: "om_card" });
+    expect(patches).toEqual([{ messageId: "om_card" }]);
+
+    const replies: string[] = [];
+    test.channel.handle.sendProactiveThreadReply = async (input: { body: string }) => {
+      replies.push(input.body);
+      return { messageId: "om_reminder" };
+    };
+    await test.conciergeHost.sendOutbound!(decisionDelivery({
+      kind: "decision_reminder", body: "**MUL-1 - 问题**\n\n再过一会儿就会超时。",
+    }), { signal: new AbortController().signal, onStarted: async () => {} });
+    expect(replies[0]).toContain("超时");
   });
 });

@@ -43,6 +43,7 @@ import type {
 } from "@multiremi/contracts/types.js";
 import {
   FEISHU_CONCIERGE_ATTACHMENT_PROTOCOL_VERSION,
+  FEISHU_DECISION_CARD_PROTOCOL_VERSION,
   type FeishuPresentationCheckpoint,
   FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER,
   MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
@@ -343,7 +344,12 @@ export class MultiremiDaemonClient {
         // Only claimed when this process can actually host the connector, so
         // the control plane never hands the bot to a Runtime that cannot run it.
         ...(supportsFeishuConcierge
-          ? { feishu_concierge_protocol: FEISHU_CONCIERGE_ATTACHMENT_PROTOCOL_VERSION }
+          ? {
+              feishu_concierge_protocol: FEISHU_CONCIERGE_ATTACHMENT_PROTOCOL_VERSION,
+              // MUL-407: this build renders server-built decision cards. The
+              // control plane only enqueues one for a host that says so.
+              feishu_decision_card: FEISHU_DECISION_CARD_PROTOCOL_VERSION,
+            }
           : {}),
       }, undefined, signal);
     } catch (error) {
@@ -376,6 +382,21 @@ export class MultiremiDaemonClient {
           } : {}),
           ...(parseFeishuPresentation(rawOutbound.presentation) ? { presentation: parseFeishuPresentation(rawOutbound.presentation)! } : {}),
           ...(isFeishuOpenId(rawOutbound.interaction_open_id) ? { interactionOpenId: rawOutbound.interaction_open_id } : {}),
+          ...(typeof rawOutbound.kind === "string" ? {
+            kind: rawOutbound.kind as MultiremiFeishuBotOutboundDelivery["kind"],
+          } : {}),
+          ...(typeof rawOutbound.human_request_id === "string" ? {
+            humanRequestId: rawOutbound.human_request_id,
+            human_request_id: rawOutbound.human_request_id,
+          } : {}),
+          ...(typeof rawOutbound.target_message_id === "string" ? {
+            targetMessageId: rawOutbound.target_message_id,
+            target_message_id: rawOutbound.target_message_id,
+          } : {}),
+          ...(typeof rawOutbound.expires_at === "string" ? {
+            expiresAt: rawOutbound.expires_at,
+            expires_at: rawOutbound.expires_at,
+          } : {}),
           ...(typeof rawOutbound.task_id === "string" ? {
             taskId: rawOutbound.task_id,
             resumeMessageId: typeof rawOutbound.resume_message_id === "string" ? rawOutbound.resume_message_id : null,
@@ -759,8 +780,21 @@ export class MultiremiDaemonClient {
     return response.allowed === true;
   }
 
-  async createTaskHumanRequest(taskId: string, input: { kind: "permission" | "question"; payload: Record<string, unknown> }): Promise<MultiremiTaskHumanRequest> {
-    const resp = await this.post<{ request: MultiremiTaskHumanRequest }>(`/api/daemon/tasks/${taskId}/human-requests`, input);
+  async createTaskHumanRequest(taskId: string, input: {
+    kind: "permission" | "question";
+    payload: Record<string, unknown>;
+    /**
+     * MUL-407: the deadline the control plane records for this request. The
+     * daemon still decides when to expire it; the server publishes the time so
+     * the topic can remind the requester ten minutes before it elapses.
+     */
+    timeoutMs?: number;
+  }): Promise<MultiremiTaskHumanRequest> {
+    // The wire field is snake_case like every other daemon body; `timeoutMs` is
+    // only the ergonomic spelling at the call site.
+    const { timeoutMs, ...rest } = input;
+    const resp = await this.post<{ request: MultiremiTaskHumanRequest }>(`/api/daemon/tasks/${taskId}/human-requests`,
+      timeoutMs === undefined ? rest : { ...rest, timeout_ms: timeoutMs });
     return resp.request;
   }
 

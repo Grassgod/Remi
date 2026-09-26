@@ -3187,6 +3187,33 @@ export function runMigrations(db: SqlDatabase): void {
         ON multiremi_tasks(status, created_at DESC, id DESC);
     `);
   });
+  // MUL-407 (E5): an Issue human request now becomes a server-built decision
+  // card delivery instead of waking a relay Agent. The push row keeps its
+  // idempotency duty but no longer requires a wake Task, and the request gains
+  // the deadline the reminder lane and the timeout card both read.
+  //
+  // Every step below is idempotent (the rebuild returns early once the column is
+  // nullable), so it runs beside the other Feishu column additions instead of
+  // through `runMigrationOnce`: that helper stamps `new Date()`, and consuming
+  // an extra clock read shifts the deterministic cursor pinned by
+  // `tests/unit/multiremi/issue-detail-first-screen-query-count.test.ts`.
+  allowNullableHumanRequestPushWakeTaskId(db);
+  addColumnIfMissing(db, "multiremi_feishu_bot_human_request_pushes", "delivery_id TEXT");
+  addColumnIfMissing(db, "multiremi_task_human_requests", "expires_at TEXT");
+  addColumnIfMissing(db, "multiremi_task_human_requests", "reminder_sent_at TEXT");
+  // The delivery lane itself: NULL kind keeps every existing row on its old
+  // meaning (topic seed, Task stream, or plain text).
+  addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "kind TEXT");
+  addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "human_request_id TEXT");
+  addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "expires_at TEXT");
+  // A patch lane edits an already-sent message instead of creating one, so it
+  // must name its target rather than reuse `external_message_id` (which means
+  // "the message this delivery produced").
+  addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "target_message_id TEXT");
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_human_requests_expiry
+    ON multiremi_task_human_requests(status, expires_at)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_outbound_kind
+    ON multiremi_feishu_bot_outbound_deliveries(kind, status, available_at)`);
   runMigrationOnce(db, "20260919_agent_fallback_model", () => {
     addColumnIfMissing(db, "multiremi_agents", "fallback_model TEXT");
     addColumnIfMissing(db, "multiremi_agents", "fallback_thinking_level TEXT");
@@ -4060,6 +4087,57 @@ function allowNullableFeishuOutboundReplyToMessageId(db: SqlDatabase): void {
     DROP TABLE multiremi_feishu_bot_outbound_deliveries_legacy;
     CREATE INDEX idx_multiremi_feishu_bot_outbound_pending
       ON multiremi_feishu_bot_outbound_deliveries(status, available_at, leased_until, created_at);
+  `);
+}
+
+/**
+ * MUL-407: a decision-card push has no wake Task, so `wake_task_id` must accept
+ * NULL. SQLite cannot drop NOT NULL in place and the column is UNIQUE, so the
+ * table is rebuilt. Same shape as the outbound-delivery rebuild above, including
+ * the Postgres branch that only has to relax the column.
+ */
+function allowNullableHumanRequestPushWakeTaskId(db: SqlDatabase): void {
+  const column = (db.query("PRAGMA table_info(multiremi_feishu_bot_human_request_pushes)").all() as Array<{
+    name: string;
+    notnull: number;
+  }>).find((entry) => entry.name === "wake_task_id");
+  if (!column || Number(column.notnull) === 0) return;
+  if (isPostgresConfigured()) {
+    db.exec("ALTER TABLE multiremi_feishu_bot_human_request_pushes ALTER COLUMN wake_task_id DROP NOT NULL");
+    return;
+  }
+
+  db.exec(`
+    ALTER TABLE multiremi_feishu_bot_human_request_pushes
+      RENAME TO multiremi_feishu_bot_human_request_pushes_legacy;
+    CREATE TABLE multiremi_feishu_bot_human_request_pushes (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      binding_id TEXT NOT NULL,
+      issue_id TEXT NOT NULL,
+      source_task_id TEXT NOT NULL,
+      request_id TEXT NOT NULL,
+      wake_task_id TEXT UNIQUE,
+      delivery_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(binding_id, request_id),
+      FOREIGN KEY(binding_id) REFERENCES multiremi_feishu_bot_chat_bindings(id) ON DELETE CASCADE,
+      FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE,
+      FOREIGN KEY(source_task_id) REFERENCES multiremi_tasks(id) ON DELETE CASCADE,
+      FOREIGN KEY(wake_task_id) REFERENCES multiremi_tasks(id) ON DELETE CASCADE
+    );
+    INSERT INTO multiremi_feishu_bot_human_request_pushes (
+      id, workspace_id, binding_id, issue_id, source_task_id,
+      request_id, wake_task_id, delivery_id, created_at, updated_at
+    )
+    SELECT
+      id, workspace_id, binding_id, issue_id, source_task_id,
+      request_id, wake_task_id, NULL, created_at, updated_at
+    FROM multiremi_feishu_bot_human_request_pushes_legacy;
+    DROP TABLE multiremi_feishu_bot_human_request_pushes_legacy;
+    CREATE INDEX idx_multiremi_feishu_bot_human_request_pushes_wake
+      ON multiremi_feishu_bot_human_request_pushes(wake_task_id);
   `);
 }
 

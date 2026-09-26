@@ -21,6 +21,7 @@ import type {
   FeishuBotCancelCandidate,
   FeishuBotCancelResult,
   FeishuBotSessionSnapshot,
+  MultiremiFeishuBotOutboundDelivery,
 } from "@multiremi/contracts/types.js";
 import type { IncomingMessage, TaskStreamingHandler, TaskStreamEvent } from "@connectors/base.js";
 import { MultiremiCliUpdateCoordinator } from "@multiremi/worker/cli-update-coordinator.js";
@@ -34,7 +35,14 @@ import {
   type MultiremiCliConfig,
 } from "@multiremi/config.js";
 import { bootFeishuChannel, type FeishuChannelHandle } from "./agent.js";
-import { FeishuConciergeError, type FeishuConciergeHost } from "@multiremi/worker/feishu-concierge.js";
+import { feishuTransportError } from "@connectors/feishu/native-cot.js";
+import { FeishuDeliveryError } from "@shared/feishu-delivery-error.js";
+import { DECISION_RECIPIENT_SENTINEL } from "@shared/feishu-task-card.js";
+import {
+  FeishuConciergeError,
+  type FeishuConciergeHost,
+  type FeishuOutboundOptions,
+} from "@multiremi/worker/feishu-concierge.js";
 import { ensureAcpBridges, type ProvisionProvider } from "@acp/provision.js";
 import { IssueWorkspaceLifecycleLocker } from "@daemon/agent-runtime/workspace/lifecycle-lock.js";
 import {
@@ -615,6 +623,9 @@ export function controlPlaneConciergeHost(deps: {
     async sendOutbound(delivery, options) {
       const handle = deps.current();
       if (!handle) throw new Error("Feishu concierge channel is not running");
+      if (delivery.kind) {
+        return sendDecisionLane(handle, delivery, options);
+      }
       if (delivery.attachments?.length) {
         const daemon = deps.daemon();
         if (!daemon) throw new Error("Attachment transport is unavailable");
@@ -685,6 +696,97 @@ export function controlPlaneConciergeHost(deps: {
       return handle.uploadImage(image);
     },
   };
+}
+
+/**
+ * Render one decision-card lane (MUL-407). The control plane builds the card
+ * JSON and owns the request's lifecycle; the host only resolves the @, sends or
+ * patches the message, and degrades to text when the card cannot be delivered.
+ *
+ * A non-retryable send failure must not lose the question, so the card's text
+ * twin (built server-side and carried in the same body) goes out instead of
+ * letting the outbox retry a payload Feishu has already rejected.
+ */
+async function sendDecisionLane(
+  handle: FeishuChannelHandle,
+  delivery: MultiremiFeishuBotOutboundDelivery,
+  options?: FeishuOutboundOptions,
+): Promise<{ messageId: string }> {
+  const envelope = parseDecisionCardBody(delivery.body);
+  if (delivery.kind === "decision_card_patch") {
+    const target = delivery.targetMessageId ?? delivery.replyToMessageId;
+    if (!target) throw new FeishuDeliveryError("Decision card patch has no target message", false);
+    // A patch edits an existing message and produces none of its own, so the
+    // receipt id is synthesized: the outbox only needs a stable acknowledgement.
+    await handle.updateProactiveCard(target, envelope.card);
+    return { messageId: target };
+  }
+  if (delivery.kind === "decision_reminder") {
+    return handle.sendProactiveThreadReply({
+      chatId: delivery.chatId,
+      replyToMessageId: delivery.replyToMessageId ?? undefined,
+      body: delivery.body,
+      idempotencyKey: delivery.idempotencyKey,
+    });
+  }
+  // The @ target may be the request's own recipient (person mode) or the group
+  // owner, which only this process can look up with the bot's token.
+  const resolved = delivery.interactionOpenId
+    ?? await handle.resolveProactiveMention(delivery.chatId, { mode: "group_owner" }, options?.signal);
+  options?.signal?.throwIfAborted();
+  const card = withDecisionRecipient(envelope.card, resolved);
+  try {
+    return await handle.sendProactiveCard({
+      chatId: delivery.chatId,
+      replyToMessageId: delivery.replyToMessageId ?? undefined,
+      card,
+      idempotencyKey: delivery.idempotencyKey,
+    });
+  } catch (error) {
+    const failure = feishuTransportError("Decision card", error);
+    if (failure.retryable) throw failure;
+    // Terminal failure: retrying the same card cannot succeed, so deliver the
+    // question as text rather than dropping it.
+    return handle.sendProactiveThreadReply({
+      chatId: delivery.chatId,
+      replyToMessageId: delivery.replyToMessageId ?? undefined,
+      body: envelope.fallbackText || delivery.body,
+      idempotencyKey: delivery.idempotencyKey,
+    });
+  }
+}
+
+/** The server stores `{ card, fallback_text }` so the text twin is always at hand. */
+function parseDecisionCardBody(body: string): { card: Record<string, unknown>; fallbackText: string } {
+  try {
+    const parsed = JSON.parse(body) as Record<string, unknown>;
+    const card = parsed.card;
+    if (card && typeof card === "object" && !Array.isArray(card)) {
+      return { card: card as Record<string, unknown>, fallbackText: String(parsed.fallback_text ?? "") };
+    }
+  } catch {
+    // Not a decision envelope; fall through to the legacy shape.
+  }
+  return { card: {}, fallbackText: body };
+}
+
+/** Replace the unresolved @ sentinel with the resolved open_id, or drop it. */
+function withDecisionRecipient(card: Record<string, unknown>, openId: string | null): Record<string, unknown> {
+  const elements = (card.body as { elements?: unknown } | undefined)?.elements;
+  if (!Array.isArray(elements)) return card;
+  const marker = `<at id=${DECISION_RECIPIENT_SENTINEL}></at>`;
+  const resolved = openId && /^ou_[A-Za-z0-9_-]+$/.test(openId) ? `<at id=${openId}></at>` : null;
+  card.body = {
+    ...(card.body as Record<string, unknown>),
+    elements: elements.flatMap((element) => {
+      if (!element || typeof element !== "object") return [element];
+      const row = element as Record<string, unknown>;
+      if (row.tag !== "markdown" || typeof row.content !== "string") return [element];
+      if (resolved) return [{ ...row, content: row.content.replace(marker, resolved) }];
+      return row.content === marker ? [] : [row];
+    }),
+  };
+  return card;
 }
 
 export function createFeishuTaskHandler(

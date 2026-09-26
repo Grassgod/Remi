@@ -110,6 +110,10 @@ The bot host daemon may differ from the daemon executing the Task. For Tasks of
 Chats bound to the enabled bot, it may read Task status, messages and a single
 human request, and submit a response. Creating or expiring a human request and
 every execution mutation stay with the executing daemon (MUL-321, MUL-365).
+An Issue task has no Chat session, so a second predicate covers it (MUL-407):
+when the Task's Issue has a live topic binding on the bot's chat, the host may
+read that request and submit a response. The same two verbs are the whole grant —
+creating and expiring an Issue human request still belong to the executing daemon.
 
 Native CoT creation/append has no verified idempotency parameter. A durable
 write intent precedes those requests. If a crash leaves an ambiguous write, the

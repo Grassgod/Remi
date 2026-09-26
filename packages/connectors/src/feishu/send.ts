@@ -10,7 +10,7 @@ import type { MentionTarget } from "./mention.js";
 import { buildMentionedMessage, buildMentionedCardContent } from "./mention.js";
 import { resolveReceiveIdType } from "./client.js";
 import { parsePostContent } from "./receive.js";
-import { getSessionName, getNewbornName } from "@shared/session-name.js";
+import { buildCardHeader } from "@shared/feishu-task-card.js";
 
 /** Build Feishu post message payload (rich text with markdown support). */
 function buildFeishuPostMessagePayload(params: { messageText: string }): {
@@ -85,48 +85,12 @@ export async function sendMessageFeishu(
   return { messageId: response.data?.message_id ?? "unknown", chatId: receiveId };
 }
 
-export interface CardHeaderOptions {
-  /** Provider session the reply belongs to; drives the conversation label. */
-  sessionId?: string | null;
-  /** Pre-resolved title from the legacy session registry — used verbatim. */
-  displayName?: string | null;
-  /** The bot's own name, substituted into the generated session label. */
-  agentName?: string | null;
-  nameSuffix?: string;
-  subtitle?: string | null;
-}
-
 /**
- * Build a Remi branded card header.
- * - displayName string → use as-is (from DB registry)
- * - sessionId string + no displayName → deterministic name ("好奇的 Remi·Vulpes")
- * - sessionId null → newborn name ("刚醒来的 Remi")
- * - sessionId undefined → plain agent name (non-streaming and command cards)
+ * The branded header is shared with the control plane, which builds decision
+ * cards itself (MUL-407). Re-exported here because every connector caller
+ * already imports its card helpers from this module.
  */
-export function buildCardHeader(options: CardHeaderOptions = {}) {
-  const { sessionId, displayName, agentName, nameSuffix, subtitle } = options;
-  const agent = agentName?.trim() || "Remi";
-  const baseName =
-    displayName ? displayName :
-    sessionId ? getSessionName(sessionId, agent) :
-    sessionId === null ? getNewbornName(agent) :
-    agent;
-  const title = nameSuffix ? `${baseName}${nameSuffix}` : baseName;
-  const now = new Date();
-  const hh = String(((now.getUTCHours() + 8) % 24)).padStart(2, "0");
-  const mm = String(now.getUTCMinutes()).padStart(2, "0");
-  const header: Record<string, unknown> = {
-    title: { tag: "plain_text" as const, content: `${title}  ${hh}:${mm}` },
-    template: "default" as const,
-    icon: { tag: "standard_icon" as const, token: "robot_outlined", color: "grey" },
-  };
-  if (subtitle) {
-    // Feishu's native subtitle is single-line and ellipsizes overflow.
-    header.subtitle = { tag: "plain_text", content: subtitle.replace(/\s+/g, " ") };
-  }
-  return header;
-}
-
+export { buildCardHeader, type CardHeaderOptions } from "@shared/feishu-task-card.js";
 
 /** Feishu image marker pattern: ![alt](feishu-image:img_key) */
 const FEISHU_IMAGE_RE = /!\[([^\]]*)\]\(feishu-image:(img_[a-zA-Z0-9_-]+)\)/g;
