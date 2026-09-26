@@ -73,7 +73,7 @@ describe("knowledge CLI control plane", () => {
     const common = ["--server", `http://127.0.0.1:${server.port}`, "--token", "task-token", "--workspace", "local", "--output", "json"];
     try {
       await dispatch(["knowledge", "submit", "--scope", "memory", "--project", "prj_1", "--slug", "fact", "--content", "raw body", ...common]);
-      await dispatch(["knowledge", "submissions", "--scope", "memory", "--status", "pending", "--limit", "1", "--cursor", "ksub_cursor", ...common]);
+      await dispatch(["knowledge", "submissions", "--scope", "memory", "--status", "pending", "--limit", "1", "--cursor", "ksub_cursor", "--query", "needle", ...common]);
       await dispatch(["knowledge", "inspect", "ksub_1", ...common]);
       await dispatch(["knowledge", "runs", "--status", "published", "--limit", "1", "--cursor", "krun_cursor", ...common]);
       await dispatch(["knowledge", "run", "show", "krun_1", ...common]);
@@ -103,6 +103,9 @@ describe("knowledge CLI control plane", () => {
     );
     expect(submissionListUrl.searchParams.get("limit")).toBe("1");
     expect(submissionListUrl.searchParams.get("cursor")).toBe("ksub_cursor");
+    // MUL-386 C.2: `--query` is the submissions list's server-side body/path
+    // search, which is what replaced the client-side scan over downloaded bodies.
+    expect(submissionListUrl.searchParams.get("q")).toBe("needle");
     const runListUrl = new URL(
       requests.find((entry) => entry.method === "GET" && entry.path.startsWith("/api/knowledge/runs?"))!.path,
       "http://localhost",
