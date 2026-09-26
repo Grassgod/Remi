@@ -283,6 +283,22 @@ export function inboxDomRowIndex(items: InboxItem[], targetItemId: string): numb
   return index >= 0 ? index : null;
 }
 
+/**
+ * True when a warm round could not drive its entry page, which is a skip rather
+ * than a timing result.
+ *
+ * Two shapes reach here: the target row is not in the entry list at all
+ * (`warm target not found`), and the click happened but the app never selected
+ * the intended issue (`deeplink warm: url issue=...`). Both mean the measured
+ * page was never opened, so waiting out the ready budget would only report a
+ * timeout for a screen the run never reached — the failure mode QA had to
+ * re-derive from the DOM on 209.
+ */
+export function isEntryFailure(message: string | undefined): boolean {
+  if (!message) return false;
+  return message.startsWith("warm target not found") || message.startsWith("deeplink warm: url issue=");
+}
+
 /** True when the page already carries the MUL-384 DOM contract. */
 export function detectContractDom(): boolean {
   return typeof document !== "undefined" && document.querySelector(CONTRACT.scrollRoot) !== null;

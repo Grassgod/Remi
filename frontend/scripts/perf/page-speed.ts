@@ -70,6 +70,7 @@ import {
 } from "./lib/harness";
 import {
   anchorPlan,
+  isEntryFailure,
   inboxDomRowIndex,
   inboxRowSelector,
   issueRowSelector,
@@ -1110,21 +1111,6 @@ async function waitForUrlIssue(page: Page, expected: string, timeoutMs = 3_000):
     if (current === expected || Date.now() >= deadline) return current;
     await page.waitForTimeout(100);
   }
-}
-
-/**
- * True when a warm round could not drive its entry page, which is a skip rather
- * than a timing result.
- *
- * Two shapes reach here: the target row is not in the entry list at all
- * (`warm target not found`), and the click happened but the app never selected
- * the intended issue (`deeplink warm: url issue=...`). Both mean the measured
- * page was never opened, so waiting out the ready budget would only report a
- * timeout for a screen nobody asked to measure.
- */
-function isEntryFailure(message: string | undefined): boolean {
-  if (!message) return false;
-  return message.startsWith("warm target not found") || message.startsWith("deeplink warm: url issue=");
 }
 
 /**

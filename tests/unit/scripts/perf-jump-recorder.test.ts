@@ -24,6 +24,7 @@ import {
 } from "../../../frontend/scripts/perf/lib/jump-recorder";
 import {
   inboxDomRowIndex,
+  isEntryFailure,
   LEGACY,
   profileFor,
   profilesFor,
@@ -443,6 +444,22 @@ describe("inboxDomRowIndex", () => {
   it("returns null for an item that is not rendered", () => {
     const items = [inboxItem("inb_present")];
     expect(inboxDomRowIndex(items as never, "inb_absent")).toBeNull();
+  });
+});
+
+describe("isEntryFailure", () => {
+  it("treats a missing entry row and a stale URL as skips, not timeouts", () => {
+    // Both mean the measured page was never opened; waiting out the ready budget
+    // would report a 20 s timeout for a screen the run never reached.
+    expect(isEntryFailure("warm target not found for detail-short")).toBe(true);
+    expect(isEntryFailure("deeplink warm: url issue=iss_other expected iss_wanted")).toBe(true);
+  });
+
+  it("leaves real timing failures alone", () => {
+    expect(isEntryFailure(undefined)).toBe(false);
+    expect(isEntryFailure("")).toBe(false);
+    expect(isEntryFailure("goto: Timeout 20000ms exceeded.")).toBe(false);
+    expect(isEntryFailure("page.click: Timeout 5000ms exceeded.")).toBe(false);
   });
 });
 
