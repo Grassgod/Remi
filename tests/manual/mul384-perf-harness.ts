@@ -22,7 +22,7 @@
  *   MUL384_KEEP          keep the servers up and print the command to re-run
  */
 import { Database } from "bun:sqlite";
-import { mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { MultiremiStore } from "../../packages/server/src/store/store.js";
 import { startMultiremiServer } from "../../packages/server/src/api/server.js";
@@ -274,7 +274,7 @@ try {
     userId: store.getCurrentUser().id,
     expiresInDays: 1,
   });
-  const token = minted.token ?? minted.accessToken ?? minted.access_token;
+  const token = minted.token;
   if (!token) throw new Error("store did not return a token");
   const probeCheck = await fetch(`${base}/api/me`, { headers: { Authorization: `Bearer ${token}` } });
   if (!probeCheck.ok) throw new Error(`minted token rejected by /api/me: ${probeCheck.status}`);
@@ -391,9 +391,15 @@ function killStaleNextDev(appDir: string): void {
   } catch {
     // No lock: nothing to clear.
   }
-  // The lock PID is `next-server`; its parents are `next dev` and the shell.
+  // The lock PID is `next-server`; its parents are `next dev`, the `sh -c`
+  // wrapper and `bun run --filter`. Walk up only while the ancestor is one of
+  // those. An orphaned dev server is reparented to `systemd --user`: an
+  // unbounded walk SIGKILLs the user manager, which restarts every user unit,
+  // the multiremi daemon and all its tasks included.
+  const own = new Set([process.pid, ...parentPids(process.pid)]);
   for (const pid of pids) {
     for (const candidate of [pid, ...parentPids(pid)]) {
+      if (own.has(candidate) || !isCheckoutDevServer(candidate, appDir)) break;
       try {
         process.kill(candidate, "SIGKILL");
         process.stdout.write(`killed stale dev server pid=${candidate}\n`);
@@ -406,6 +412,25 @@ function killStaleNextDev(appDir: string): void {
     rmSync(lockPath, { force: true });
   } catch {
     // Next rewrites it when it starts.
+  }
+}
+
+/**
+ * True for a `next-server` / `next dev` / `sh -c next dev` / `bun run --filter
+ * @multiremi/web` process whose working directory is this checkout's frontend.
+ * `next-server` carries no path in its command line, so the directory check
+ * goes through `/proc/<pid>/cwd`.
+ */
+function isCheckoutDevServer(pid: number, appDir: string): boolean {
+  if (pid <= 1) return false;
+  try {
+    const cmd = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").join(" ");
+    const cwd = readlinkSync(`/proc/${pid}/cwd`);
+    const frontendDir = resolve(appDir, "../..");
+    const inCheckout = cwd === appDir || cwd === frontendDir;
+    return inCheckout && /next-server|next dev|@multiremi\/web/.test(cmd);
+  } catch {
+    return false;
   }
 }
 
