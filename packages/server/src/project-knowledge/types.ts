@@ -83,6 +83,7 @@ export interface OpenVikingSnapshotCommit {
 
 export interface OpenVikingClientContract {
   withSignal?(signal: AbortSignal): OpenVikingClientContract;
+  withDeadline?(deadlineAt: number): OpenVikingClientContract;
   health(): Promise<void>;
   ensureDirectory(uri: string): Promise<void>;
   read(uri: string): Promise<string>;
