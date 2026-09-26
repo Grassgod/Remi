@@ -678,7 +678,9 @@ describe("KnowledgePage", () => {
       ...detail,
       sources: detail.sources.map((source, index) => ({
         ...source,
-        submission: submission({ id: source.submission_id ?? `raw-${index}`, body: `Complete Raw input ${index + 1}` }),
+        // The single-run route still returns full nested submissions; only the
+        // list rows are excerpt-only (MUL-386 C.2).
+        submission: submissionDetail(`Complete Raw input ${index + 1}`, source.submission_id ?? `raw-${index}`),
       })),
     };
     renderPage();
