@@ -30,11 +30,12 @@
 import {
   DAEMON_PROTOCOL_CLOSE_CODES,
   DAEMON_PROTOCOL_VERSION,
+  type DaemonHeartbeatReplyPayload,
   type DaemonProtocolCap,
 } from "@multiremi/contracts/daemon-protocol.js";
 import { createId } from "@multiremi/ids.js";
 import { multiremiVersion } from "@multiremi/version.js";
-import type { MultiremiAccessToken } from "@multiremi/contracts/types.js";
+import type { MultiremiAccessToken, MultiremiDaemonHeartbeatAck } from "@multiremi/contracts/types.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import {
   startWsFrameMetricsSummary,
@@ -47,6 +48,7 @@ import {
   daemonAuthorizationCloseCode,
   setDaemonProtocolDbCounters,
   type DaemonProtocolSocket,
+  type DaemonSessionHeartbeat,
   type DaemonSessionRuntimeAuthorization,
 } from "./session.js";
 import type { DaemonParsedFrame } from "./frames.js";
@@ -226,9 +228,9 @@ export class DaemonProtocolLayer {
     return this.authorizeRuntime(identity, daemonId, runtimeId);
   }
 
-  /** The `hb` handler, exposed so its store effects can be asserted directly. */
-  handleHeartbeatForTest(heartbeat: { daemonId: string; runtimeIds: string[]; payload: Record<string, unknown> }): void {
-    this.handleHeartbeat(heartbeat);
+  /** The `hb` handler, exposed so its store effects and reply can be asserted. */
+  handleHeartbeatForTest(heartbeat: DaemonSessionHeartbeat): DaemonHeartbeatReplyPayload {
+    return this.handleHeartbeat(heartbeat);
   }
 
   /** Register an RPC handler. A-6 uses this for `trace.head`/`subscribe`/`fetch`. */
@@ -347,8 +349,11 @@ export class DaemonProtocolLayer {
    * so the heartbeat stamps all of them; the drain acknowledgement is recorded
    * per runtime because the drain gate scores runtimes, not daemons.
    */
-  private handleHeartbeat(heartbeat: { daemonId: string; runtimeIds: string[]; payload: Record<string, unknown> }): void {
-    if (this.heartbeatOwnerCheck(heartbeat)) return;
+  private handleHeartbeat(heartbeat: DaemonSessionHeartbeat): DaemonHeartbeatReplyPayload {
+    // Membership is re-checked here, not only at the handshake: a credential can
+    // outlive its owner's place in the workspace, and the terminal close code
+    // exists so the daemon stops reconnecting instead of retrying forever.
+    if (this.heartbeatOwnerCheck(heartbeat)) return { runtime_acks: [] };
     // Reading the maintenance row also enforces the drain lease TTL lazily, so a
     // crashed updater cannot leave the platform draining forever. The row itself
     // is not consumed here: `drainStatus` is the reader that scores runtimes, and
@@ -357,17 +362,27 @@ export class DaemonProtocolLayer {
 
     const ackGeneration = readNonNegativeInteger(heartbeat.payload.drain_ack_generation);
     const activeTaskCount = readNonNegativeInteger(heartbeat.payload.active_task_count);
+    const runtimeAcks: MultiremiDaemonHeartbeatAck[] = [];
     for (const runtimeId of heartbeat.runtimeIds) {
       // One live process-level socket proves every runtime it advertises is
       // reachable, so the heartbeat stamps all of them. `claimPending: false`
       // because the v2 server does not sweep the pending families on a heartbeat
       // (MUL-389's merged poll): those become pushes in A-4.
       const ack = this.store.heartbeatRuntime(runtimeId, { claimPending: false });
-      if (ack.status === "runtime_gone") continue;
+      // A runtime whose row is gone is reported, not acted on. The socket serves
+      // the whole process, so closing it over one runtime would strand the others;
+      // 4410 would stop the daemon reconnecting forever and 4001 would loop.
+      // `runtime_gone` is the daemon's existing signal to register again.
+      if (ack.status === "runtime_gone") {
+        runtimeAcks.push(ack);
+        continue;
+      }
       if (ackGeneration !== null) {
         this.store.recordRuntimeDrainAck(runtimeId, ackGeneration, activeTaskCount);
       }
+      runtimeAcks.push(ack);
     }
+    return { runtime_acks: runtimeAcks };
   }
 
   /**

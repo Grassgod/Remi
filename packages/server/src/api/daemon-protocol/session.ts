@@ -135,8 +135,15 @@ export interface DaemonSessionOptions {
   onHello?(hello: DaemonSessionHello): void;
   /** Highest known trace head per task. A-6 fills it; A-1 answers `{}`. */
   traceHeads?(): Record<string, number>;
-  /** `hb` accepted. A-1's own obligations are liveness and the drain ack. */
-  onHeartbeat?(heartbeat: DaemonSessionHeartbeat): void;
+  /**
+   * `hb` accepted. Returning a payload sends it back as `res`; returning nothing
+   * (or undefined) answers in kind with `{ ok: true }`.
+   *
+   * A best-effort frame still gets an answer because `hb` is the daemon's only
+   * way to learn per-runtime facts it must act on - `runtime_gone` above all - and
+   * "no reply" would leave a re-registration waiting on a timeout.
+   */
+  onHeartbeat?(heartbeat: DaemonSessionHeartbeat): unknown | void;
   /** A cumulative acknowledgement was observed (standalone or piggybacked). */
   onAck?(ack: number): void;
   /** A `res` frame arrived, already matched against `re`. */
@@ -524,11 +531,12 @@ export class DaemonProtocolSession {
 
   private handleBestEffort(frame: DaemonParsedFrame): string | null {
     if (frame.type === "hb") {
-      this.options.onHeartbeat?.({
+      const reply = this.options.onHeartbeat?.({
         daemonId: this.daemonId,
         runtimeIds: [...this.runtimeIdList],
         payload: frame.payload,
       });
+      this.sendReply(frame.id ?? "", reply ?? { ok: true });
       return null;
     }
     // `runtime.ready` and `concierge.status` belong to A-3/A-4. Accepting them
