@@ -20,6 +20,8 @@
  * store both need it and neither may depend on the other.
  */
 
+import { TRACE_EVENT_STATUSES } from "@multiremi/contracts/trace.js";
+
 /** Byte caps, in bytes. Not code points: the DB and the wire both count bytes. */
 export const TRACE_TOOL_MAX_BYTES = 512;
 export const TRACE_CONTENT_MAX_BYTES = 256 * 1024;
@@ -31,13 +33,16 @@ export const TRACE_META_MAX_BYTES = 64 * 1024;
 export const TRACE_JSON_MAX_DEPTH = 8;
 export const TRACE_JSON_MAX_ARRAY = 256;
 
-/** Tool statuses the write path accepts; anything else is dropped to null. */
-export const TRACE_STATUSES: ReadonlySet<string> = new Set([
-  "pending",
-  "in_progress",
-  "completed",
-  "failed",
-]);
+/**
+ * Tool statuses the write path accepts; anything else is dropped to null.
+ *
+ * Derived from `TRACE_EVENT_STATUSES` in `@multiremi/contracts/trace.js`, which is
+ * the single definition: the set is part of the wire contract, and this module is
+ * the enforcement of it. Restating the four values here would let the two drift
+ * silently — a status added to the contract would be normalized away by the
+ * sanitizer with nothing failing.
+ */
+export const TRACE_STATUSES: ReadonlySet<string> = new Set(TRACE_EVENT_STATUSES);
 
 /** A string longer than this that looks like base64 is elided, not stored. */
 const BASE64_LOOKALIKE_MIN_LENGTH = 4096;

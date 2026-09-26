@@ -4,14 +4,17 @@ import { join } from "node:path";
 import {
   isKnownTraceEventType,
   KNOWN_TRACE_EVENT_TYPES,
+  TRACE_EVENT_STATUSES,
   taskMessageToTraceEvent,
   traceEventToTaskMessage,
 } from "@multiremi/contracts/trace.js";
 import {
+  normalizeTraceStatus,
   TRACE_CONTENT_MAX_BYTES,
   TRACE_INPUT_MAX_BYTES,
   TRACE_META_MAX_BYTES,
   TRACE_OUTPUT_MAX_BYTES,
+  TRACE_STATUSES,
   TRACE_TOOL_MAX_BYTES,
 } from "@shared/trace-sanitize.js";
 
@@ -310,6 +313,21 @@ describe("trace contract drift guards", () => {
     expect(TRACE_INPUT_MAX_BYTES).toBe(read("TASK_MESSAGE_INPUT_MAX"));
     expect(TRACE_OUTPUT_MAX_BYTES).toBe(read("TASK_MESSAGE_OUTPUT_MAX"));
     expect(TRACE_META_MAX_BYTES).toBe(read("TASK_MESSAGE_META_MAX"));
+  });
+
+  it("derives the sanitizer's status set from the contract, so they cannot drift", () => {
+    // `TRACE_EVENT_STATUSES` (contracts) is the single definition; the sanitizer's
+    // lookup set is built from it rather than restating the four values. Assert the
+    // derivation is live: every contract status must be accepted by the sanitizer,
+    // and the two sets must have the same size. A status added to the contract but
+    // not picked up by the sanitizer would fail here.
+    for (const status of TRACE_EVENT_STATUSES) {
+      expect(normalizeTraceStatus(status), `sanitizer rejects contract status "${status}"`).toBe(status);
+      expect(TRACE_STATUSES.has(status), `TRACE_STATUSES is missing "${status}"`).toBe(true);
+    }
+    expect(TRACE_STATUSES.size).toBe(TRACE_EVENT_STATUSES.length);
+    // And nothing outside the contract set is accepted.
+    expect(normalizeTraceStatus("cancelled")).toBeNull();
   });
 
   it("keeps the status set in step with the write path", () => {

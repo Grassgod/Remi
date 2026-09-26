@@ -73,14 +73,24 @@ export function isKnownTraceEventType(value: unknown): value is KnownTraceEventT
 }
 
 /**
- * Tool statuses the write path accepts; anything else is dropped to null.
+ * Tool statuses the write path accepts; anything else is normalized to null.
  *
- * The byte caps and the structured guards are NOT re-declared here. They live in
- * `@shared/trace-sanitize.js`, which is the single enforcement point
- * (`TraceStore.append`) and the module the equivalence test holds against the
- * historical store behaviour. `packages/contracts` does not depend on
- * `packages/shared`, so a consumer that needs a cap imports it from there rather
- * than from two places that can drift.
+ * This is the **single source** for the status set, and it lives with the type it
+ * constrains: `TraceEvent.status` is a contract field, so the allowed values are
+ * part of the wire contract. `@shared/trace-sanitize.js` derives its lookup set
+ * from this constant rather than restating it, which makes "a status added here but
+ * silently dropped by the sanitizer" impossible by construction — the drift a test
+ * would otherwise have to catch.
+ *
+ * The direction is `shared -> contracts`. It is safe: `packages/contracts` is a
+ * runtime leaf (no imports at all after types are erased, and no dependency on
+ * `packages/shared`), so there is no cycle, and `@multiremi/contracts/*` subpath
+ * imports are explicitly allowed for every package by
+ * `tests/arch/package-boundaries.test.ts`.
+ *
+ * The byte caps and the structured guards are deliberately NOT declared here: they
+ * are enforcement policy rather than wire shape, and their single home is
+ * `@shared/trace-sanitize.js`.
  */
 export const TRACE_EVENT_STATUSES = ["pending", "in_progress", "completed", "failed"] as const;
 

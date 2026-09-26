@@ -72,9 +72,17 @@ export interface TraceStore {
   /**
    * Append events to a task's trace.
    *
-   * Assigns `seq` densely from the current head and `ts` from the store's clock,
-   * and applies the caps. Accepts `Omit<TraceEvent, "seq" | "ts">` because the
-   * caller cannot know either value: the store owns the write.
+   * Takes `TraceEventInput` (which is `TraceEvent` without `seq`, and with an
+   * **optional** `ts`) because the store owns the write:
+   *
+   *   - `seq` is always assigned here, densely from the current head;
+   *   - `ts` is taken from the event when it carries one, and otherwise stamped
+   *     from the store's clock. The live path never sets it, so the write time is
+   *     used; the backfill always sets it to the row's `created_at`, so a
+   *     reproduced turn keeps its original timestamps.
+   *
+   * The field caps and structured-field guards are applied here too, which makes
+   * this the only sanitize point in the trace path.
    *
    * Appending to a closed task is a no-op that returns the existing head and an
    * empty array: a late frame must not reopen a closed trace, because the archive

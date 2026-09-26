@@ -69,6 +69,12 @@ export interface TraceSink {
    * Mark a task's stream finished. This is what flips the subscription's `closed`
    * flag, so subscribers learn the turn is over instead of waiting forever.
    * Optional for implementations that learn completeness elsewhere.
+   *
+   * Calling this for a task that has never been appended to is **not** a no-op: it
+   * must establish the closed state so a later subscribe sees `closed: true`. The
+   * real case is a turn with zero trace events, or a cold Hub that receives the
+   * completion frame before any `trace.append` — either way a subscriber that
+   * joined afterwards would otherwise wait forever on a `closed` that never comes.
    */
   close?(taskId: string): void;
 }
@@ -91,15 +97,22 @@ interface SinkState {
 export class InMemoryTraceSink implements TraceSink {
   private readonly tasks = new Map<string, SinkState>();
 
-  append(taskId: string, events: TraceEvent[]): TraceSinkAppendResult {
-    const state = this.tasks.get(taskId) ?? {
+  private stateFor(taskId: string): SinkState {
+    const existing = this.tasks.get(taskId);
+    if (existing) return existing;
+    const created: SinkState = {
       events: [],
       head: 0,
       firstSeq: 1,
       subscribers: new Set<TraceSinkListener>(),
       closed: false,
     };
-    this.tasks.set(taskId, state);
+    this.tasks.set(taskId, created);
+    return created;
+  }
+
+  append(taskId: string, events: TraceEvent[]): TraceSinkAppendResult {
+    const state = this.stateFor(taskId);
 
     const accepted: TraceEvent[] = [];
     for (const event of events) {
@@ -123,14 +136,7 @@ export class InMemoryTraceSink implements TraceSink {
   }
 
   subscribe(taskId: string, fromSeq: number, onEvents: TraceSinkListener): TraceSinkSubscription {
-    const state = this.tasks.get(taskId) ?? {
-      events: [],
-      head: 0,
-      firstSeq: 1,
-      subscribers: new Set<TraceSinkListener>(),
-      closed: false,
-    };
-    this.tasks.set(taskId, state);
+    const state = this.stateFor(taskId);
 
     const gap = fromSeq + 1 < state.firstSeq;
     const backlog = state.events.filter((event) => event.seq > fromSeq);
@@ -152,8 +158,10 @@ export class InMemoryTraceSink implements TraceSink {
   }
 
   close(taskId: string): void {
-    const state = this.tasks.get(taskId);
-    if (state) state.closed = true;
+    // Mirrors `TraceStore.close`: a task nobody has appended to still becomes
+    // closed. A no-op here would strand a subscriber that arrives after the
+    // completion frame of a zero-event turn.
+    this.stateFor(taskId).closed = true;
   }
 
   /** Test helper: forget the oldest events while keeping the head, which creates a gap. */

@@ -7,6 +7,7 @@ import {
   sanitizeTraceJson,
   truncateUtf8,
   TRACE_CONTENT_MAX_BYTES,
+  TRACE_JSON_MAX_DEPTH,
   TRACE_TOOL_MAX_BYTES,
   TRACE_TRUNCATION_MARKER,
 } from "@shared/trace-sanitize.js";
@@ -235,6 +236,13 @@ describe("parseStoredTraceJson mirrors the historical read path", () => {
 });
 
 
+/** `{ a: { a: { ... "leaf" } } }` with exactly `depth` nested objects. */
+function nestedDepth(depth: number): Record<string, unknown> {
+  let value: unknown = "leaf";
+  for (let index = 0; index < depth; index += 1) value = { a: value };
+  return value as Record<string, unknown>;
+}
+
 /**
  * The equivalence suite proper: run one fixture set through the store's real
  * write path and through the shared module, and require identical bytes for every
@@ -261,6 +269,13 @@ describe("shared sanitize equals the store's real write path", () => {
     ["input array capped", { type: "tool_use", input: { items: Array.from({ length: 300 }, (_, i) => i) } }],
     ["unknown type survives raw", { type: "assistant", content: "legacy" }],
     ["tool_call_id kept raw", { type: "tool_use", toolCallId: "tc_1" }],
+    // Depth boundary: `sanitizeTraceJson` returns "[depth-limited]" once depth
+    // exceeds 8. 7 and 8 stay intact, 9 and 12 are capped, so the pair brackets
+    // the boundary rather than only testing one side of it.
+    ["input nested depth 7", { type: "tool_use", input: nestedDepth(7) }],
+    ["input nested depth 8", { type: "tool_use", input: nestedDepth(8) }],
+    ["input nested depth 9", { type: "tool_use", input: nestedDepth(9) }],
+    ["input nested depth 12", { type: "tool_use", input: nestedDepth(12) }],
   ];
 
   for (const [name, message] of fixtures) {
@@ -292,6 +307,16 @@ describe("shared sanitize equals the store's real write path", () => {
       expect(shared.meta).toBe(text(row.meta));
     });
   }
+
+  it("brackets the depth boundary, so the depth fixtures are not all equal", () => {
+    // Guards the fixtures themselves: if `TRACE_JSON_MAX_DEPTH` moved above 12 all
+    // four depth cases would pass trivially without exercising the cap.
+    expect(TRACE_JSON_MAX_DEPTH).toBe(8);
+    const shallow = JSON.stringify(sanitizeTraceJson(nestedDepth(8)));
+    const deep = JSON.stringify(sanitizeTraceJson(nestedDepth(9)));
+    expect(shallow).not.toContain("[depth-limited]");
+    expect(deep).toContain("[depth-limited]");
+  });
 
   it("agrees that a capped structured field reads back as null on both paths", () => {
     const message = {

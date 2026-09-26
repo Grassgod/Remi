@@ -9,6 +9,7 @@ import {
 } from "@shared/trace-derive.js";
 import type { TraceEvent } from "@multiremi/contracts/trace.js";
 import type { MultiremiTaskMessage } from "@multiremi/contracts/types.js";
+import { KNOWN_TRACE_EVENT_TYPES } from "@multiremi/contracts/trace.js";
 
 let nextSeq = 1;
 
@@ -100,9 +101,30 @@ describe("deriveFinalReply matches FeishuCotTimeline.answer", () => {
       event({ type: "steer", content: "do it differently" }),
       event({ content: "after" }),
     ]],
-    ["thinking breaks the run and is not prose", [
+    ["permission_response does NOT break the run", [
+      event({ content: "before" }),
+      event({ type: "permission_response", content: "granted", meta: { request_id: "r1" } }),
+      event({ content: "after" }),
+    ]],
+    ["question_response does NOT break the run", [
+      event({ content: "before" }),
+      event({ type: "question_response", content: "answered", meta: { request_id: "r2" } }),
+      event({ content: "after" }),
+    ]],
+    ["thinking breaks the run", [
+      event({ content: "before" }),
       event({ type: "thinking", content: "hmm" }),
-      event({ content: "answer" }),
+      event({ content: "after" }),
+    ]],
+    ["permission_request breaks the run", [
+      event({ content: "before" }),
+      event({ type: "permission_request", content: "may I?", meta: { request_id: "r1" } }),
+      event({ content: "after" }),
+    ]],
+    ["question_request breaks the run", [
+      event({ content: "before" }),
+      event({ type: "question_request", content: "which one?", meta: { request_id: "r2" } }),
+      event({ content: "after" }),
     ]],
     ["plan breaks the run", [
       event({ content: "before" }),
@@ -146,6 +168,37 @@ describe("deriveFinalReply matches FeishuCotTimeline.answer", () => {
       expect(actual === null).toBe(expected === "");
     });
   }
+
+  it("exercises every known event type, so a new type cannot arrive uncovered", () => {
+    // The gap this closes: the table used to omit `permission_request`,
+    // `question_request`, `permission_response` and `question_response`, and a
+    // mutation deleting `permission_request` from the flush list left the suite
+    // fully green while `text -> permission_request -> text` diverged from the
+    // connector 200/200. Requiring every known type to appear means the table
+    // cannot fall behind the inventory again.
+    const exercised = new Set(cases.flatMap(([, events]) => events.map((item) => item.type)));
+    for (const type of KNOWN_TRACE_EVENT_TYPES) {
+      expect(exercised, `no case exercises "${type}"`).toContain(type);
+    }
+  });
+
+  it("asserts break and no-break for both directions of each type", () => {
+    // A case only constrains the flush set if it can tell the two answers apart:
+    // text on both sides of the event. `[thinking, text]` cannot, which is why the
+    // old table pinned nothing about thinking. Every event type must appear in at
+    // least one such discriminating sequence.
+    const discriminating = new Set<string>();
+    for (const [, events] of cases) {
+      const firstText = events.findIndex((item) => item.type === "text");
+      const lastText = events.findLastIndex((item) => item.type === "text");
+      if (firstText === -1 || lastText === firstText) continue;
+      for (const item of events.slice(firstText + 1, lastText)) discriminating.add(item.type);
+    }
+    for (const type of KNOWN_TRACE_EVENT_TYPES) {
+      if (type === "text") continue;
+      expect(discriminating, `no discriminating case covers "${type}"`).toContain(type);
+    }
+  });
 });
 
 describe("trace histogram and counters", () => {
