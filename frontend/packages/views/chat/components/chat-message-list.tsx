@@ -99,6 +99,9 @@ export function ChatMessageList({
 
   const totalCount = messages.length + (hasLive || showStatusPill ? 1 : 0);
   const firstIndex = totalCount > 0 ? firstItemIndex : 0;
+  // The terminal anchor is keyed by identity so it survives the logical-index
+  // offset Virtuoso applies (see the `itemContent` comment below).
+  const latestMessageId = messages.length > 0 ? messages[messages.length - 1]!.id : null;
 
   return (
     <div
@@ -152,15 +155,19 @@ export function ChatMessageList({
             </div>
           ),
         }}
-        itemContent={(index, msg) => (
+        itemContent={(_index, msg) => (
           // MUL-384 measurement contract: `data-perf-item` marks a real message,
           // `data-perf-key` keys it, and the last one carries the terminal anchor.
           // Attributes only — nothing here changes rendering or behavior.
+          // The newest message by identity, not by index: Virtuoso hands this
+          // renderer a logical index offset by `firstItemIndex` (1_000_000 in
+          // chat-window), so `index === messages.length - 1` never matches and the
+          // terminal anchor would silently never render.
           <div
             className="mx-auto w-full max-w-4xl px-5 py-2"
             data-perf-item="message"
             data-perf-key={msg.id}
-            {...(index === messages.length - 1 ? { "data-perf-anchor": "latest-message" } : null)}
+            {...(msg.id === latestMessageId ? { "data-perf-anchor": "latest-message" } : null)}
           >
             <MessageBubble
               message={msg}
