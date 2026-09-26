@@ -33,6 +33,7 @@
 
 1. **PG 真机**：临时 PostgreSQL 18.4（`postgresql-wheel` 不可用，改用 npm 包 `@embedded-postgres/linux-x64` 的二进制，`unshare -U` 降权后 `initdb`），只监听 `127.0.0.1:55432`，数据目录 `/tmp`，跑完即停并删除。`MULTIREMI_TEST_POSTGRES_URL` 走 `$MULTIREMI`，命令行与报告里都没有连接串或口令。
    - `bun test tests/unit/multiremi/multiremi-postgres-store.test.ts` → **72 pass / 0 fail**，其中包含新 SQL 的 PG 专项：`UNION ALL` probe（各分支同为 boolean）、`UPDATE … WHERE status='pending' AND id = (SELECT … LIMIT 1) RETURNING *`、`IN (SELECT … LIMIT ?)`、按行取各自文案的 `CASE` expire。
+   - 仓库里全部 PG 门控文件（6 个）→ **106 pass / 0 fail**；把整个 `tests/unit/multiremi/` 接上真 PG 再跑一遍 → **3045 pass / 0 skip / 0 fail**（无 PG 时那 85 条 skip 全部实跑）。
 2. **并发 claim 在真 PG 上是真的**：自建两连接竞态，A 持行锁未提交、B 同时 claim。
    - 带外层 `AND status = 'pending'`：赢家 1 行、输家 **0 行**（等下一次心跳）。
    - 去掉该谓词（变异体）：输家也拿到 **同一行** —— 即两个 daemon 会拿到同一请求。
@@ -58,18 +59,20 @@
 | --- | --- |
 | `bunx tsc --noEmit` | 通过（exit 0） |
 | `bun run cli:capabilities:check` | `668 mapped / 91 exempt / 0 missing (759 routes)` |
-| `bun test tests/unit/multiremi/`（260 文件） | 2970 pass / 85 skip / **0 fail** |
+| `bun test tests/unit/multiremi/`（260 文件，无 PG） | 2970 pass / 85 skip / **0 fail** |
+| `bun test tests/unit/multiremi/`（260 文件，**接真 PG**，85 条 skip 全部实跑） | **3045 pass / 0 skip / 0 fail** |
 | `bun test tests/arch/` | 91 pass / 0 fail |
 | `bun test tests/unit/daemon/` | 519 pass / 2 fail（既有，见上） |
 | 点名的 9 个文件 | 166 pass / 0 fail |
 | `tests/unit/daemon/wiki-workspace.test.ts` + 两个 prompt 文件 | 35 pass / 0 fail |
 | 新增 4 个文件（poll-merge / hydrate-selected / byte-cap / read-cache） | 37 pass / 0 fail |
 | `multiremi-postgres-store.test.ts`（真 PG） | 72 pass / 0 fail |
+| 全部 PG 门控文件（postgres-store / task-list / request-metrics / reconnect / usage-summary / chat-issue-audit） | 106 pass / 0 fail |
 | bench（`MUL389_BENCH_TOP_N=200`） | 与报告逐场景一致 |
 
 ### 风险与遗留
 
-- 上面所有 heartbeat/claim 性能数字仍是 **SQLite 计数代理**，不是 PG 桥实测；同量纲、可同向比较，但不可与生产绝对值互比。PG 真机只用来验证 SQL 正确性与并发语义，没有取性能数字。
+- 上面所有 heartbeat/claim 性能数字仍是 **SQLite 计数代理**，不是 PG 桥实测；同量纲、可同向比较，但不可与生产绝对值互比。PG 真机只用来验证 SQL 正确性与并发语义、以及让 85 条 PG 门控用例真正执行，没有取性能数字。
 - `safe-remove` / `gc-policy` 两条既有失败与本单无关，未修。
 - 本机无 5432 的服务，209 的复核（同源 `Server-Timing` `dbq` p50 降幅 ≥ 50%）只能在发版后做，属未完成的验收环节。
 - `heartbeat.idle` 剩 3 个「同一形状读两次」的数据需求（本 daemon 的 ssh mesh 行、relay config、workspace 生命周期锁自写）；报告已注明去掉也只到 26，已达标故未继续改。这是旁路字段 revision 下发后续单的输入。
