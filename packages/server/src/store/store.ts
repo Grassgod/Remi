@@ -3221,10 +3221,6 @@ runMigrations(this.db);
     return this.issues.updateIssueWithOutcome(id, input);
   }
 
-  countChildIssues(parentIssueId: string): number {
-    return this.issues.countChildIssues(parentIssueId);
-  }
-
   countOpenChildIssues(parentIssueId: string): number {
     return this.issues.countOpenChildIssues(parentIssueId);
   }

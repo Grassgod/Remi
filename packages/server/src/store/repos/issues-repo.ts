@@ -882,14 +882,6 @@ export class IssuesRepo {
     return row ? toChildIssueProgress(row) : emptyChildIssueProgress(parentIssueId);
   }
 
-  /** MUL-400 E1: cheap COUNT for the detail response (no child bodies). */
-  countChildIssues(parentIssueId: string): number {
-    const row = this.ctx.db.query(
-      "SELECT COUNT(*) AS children FROM multiremi_issues WHERE parent_issue_id = ?",
-    ).get(parentIssueId) as { children?: unknown } | null;
-    return Number(row?.children ?? 0);
-  }
-
   /**
    * MUL-400 E1: the number of children that still count as unfinished. `done`
    * and `cancelled` are terminal; `blocked` and everything else keep the parent

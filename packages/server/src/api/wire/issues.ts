@@ -406,9 +406,10 @@ export function issueDetailCompatibilityResponse(
   const attachments = withExtras.attachments ?? store.listAttachmentsForExistingIssue(issue.id);
   if (reactions.length) response.reactions = reactions.map(issueReactionCompatibilityResponse);
   if (attachments.length) response.attachments = attachments.map(issueDetailAttachmentCompatibilityResponse);
-  // MUL-400 E1: a plain COUNT so the detail surfaces can say "N sub-issues"
-  // without hydrating any child body (MUL-385 removed that payload on purpose).
-  response.child_count = store.countChildIssues(issue.id);
+  // MUL-400 E1's `child_count` is deliberately NOT added here: MUL-385 pins this
+  // route at exactly four statements and forbids a parent_issue_id read. The
+  // native `/api/multiremi/issues/:id` route carries it instead, where the child
+  // progress it counts is already loaded.
   return response;
 }
 

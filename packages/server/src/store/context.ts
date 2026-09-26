@@ -201,8 +201,6 @@ export interface IssuesSurface {
   listIssues(input?: ListIssuesInput): MultiremiIssue[];
   listGeneratedIssues(sourceIssueId: string): MultiremiIssue[];
   updateIssue(id: string, input: UpdateIssueInput): MultiremiIssue;
-  /** MUL-400 E1: total child count for the detail response. */
-  countChildIssues(parentIssueId: string): number;
   /** MUL-400 E1: children that still count as unfinished (not done/cancelled). */
   countOpenChildIssues(parentIssueId: string): number;
   /** MUL-400 E1 guard B: hold a parent at in_progress while children are open. */
