@@ -32,7 +32,7 @@
  * The "before" numbers come from running this same file on the parent commit.
  */
 import { Database } from "bun:sqlite";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import type { SqlDatabase, SqlStatement } from "../../packages/server/src/store/db/postgres.js";
@@ -512,10 +512,107 @@ function printReport(report: ModeReport): void {
   }
 }
 
+interface ComparisonRow {
+  route: string;
+  beforeBytes: number;
+  afterBytes: number;
+  beforeStatements: number;
+  afterStatements: number;
+  beforeMiB: string;
+  afterMiB: string;
+  factor: string;
+  statements: Array<{ sql: string; beforeBytes: number; afterBytes: number; beforeCalls: number; afterCalls: number }>;
+}
+
+/**
+ * Merge a baseline and an after run into the before/after tables the Issue asks
+ * for. Statements are joined by their normalized label, so a renamed projection
+ * shows up as its own row rather than being silently dropped.
+ */
+function compareReports(before: ModeReport, after: ModeReport): { mode: string; rows: ComparisonRow[] } {
+  const rows: ComparisonRow[] = [];
+  for (const route of after.routes) {
+    const baseline = before.routes.find((candidate) => candidate.route === route.route);
+    if (!baseline) continue;
+    const labels = new Set([
+      ...baseline.statements_.map((statement) => statement.sql),
+      ...route.statements_.map((statement) => statement.sql),
+    ]);
+    const statements = [...labels].map((label) => {
+      const left = baseline.statements_.find((statement) => statement.sql === label);
+      const right = route.statements_.find((statement) => statement.sql === label);
+      return {
+        sql: label,
+        beforeBytes: left?.bytes ?? 0,
+        afterBytes: right?.bytes ?? 0,
+        beforeCalls: left?.calls ?? 0,
+        afterCalls: right?.calls ?? 0,
+      };
+    }).sort((left, right) => (right.beforeBytes - right.afterBytes) - (left.beforeBytes - left.afterBytes));
+    rows.push({
+      route: route.route,
+      beforeBytes: baseline.dbBytes,
+      afterBytes: route.dbBytes,
+      beforeStatements: baseline.statements,
+      afterStatements: route.statements,
+      beforeMiB: (baseline.dbBytes / 1_048_576).toFixed(2),
+      afterMiB: (route.dbBytes / 1_048_576).toFixed(2),
+      factor: route.dbBytes > 0 ? (baseline.dbBytes / route.dbBytes).toFixed(1) : "n/a",
+      statements,
+    });
+  }
+  return { mode: after.mode, rows };
+}
+
+function renderComparisonMarkdown(comparison: { mode: string; rows: ComparisonRow[] }, beforeCommit: string, afterCommit: string): string {
+  const lines: string[] = [
+    "# MUL-386 knowledge `db_bytes` before/after",
+    "",
+    "| | |",
+    "| --- | --- |",
+    "| baseline commit | `" + beforeCommit + "` |",
+    "| after commit | `" + afterCommit + "` |",
+    "| accounting | `db_bytes = JSON.stringify({ rows, count })` per statement, byte-for-byte what `pg-worker.ts` writes into the shared buffer |",
+    "| database | " + (comparison.rows.length ? "PostgreSQL (see JSON `reports[].database`)" : "unknown") + " |",
+    "",
+    "Acceptance is `db_bytes`, not the HTTP response size: a 12 MB reply still costs the",
+    "main thread a `JSON.stringify` into the shared buffer plus a `TextDecoder` +",
+    "`JSON.parse`, so removing fields from the response JSON without changing the list SQL",
+    "would leave this number untouched.",
+    "",
+    "## Per route",
+    "",
+    "| route | db_bytes before | db_bytes after | before (MiB) | after (MiB) | reduction | statements |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
+  ];
+  for (const row of comparison.rows) {
+    lines.push(`| ${row.route} | ${row.beforeBytes} | ${row.afterBytes} | ${row.beforeMiB} | ${row.afterMiB} | ${row.factor}x | ${row.beforeStatements} -> ${row.afterStatements} |`);
+  }
+  lines.push(
+    "",
+    "## Largest contributing statements",
+    "",
+    "Rows are joined on the normalized statement label. A `0` on the after side means that",
+    "statement is no longer issued at all (the big `SELECT *` was replaced by a projection);",
+    "a new statement therefore shows `0` on the before side.",
+    "",
+  );
+  for (const row of comparison.rows) {
+    lines.push(`### ${row.route}`, "", "| statement | before bytes | after bytes | before calls | after calls |", "| --- | --- | --- | --- | --- |");
+    for (const statement of row.statements.slice(0, 6)) {
+      lines.push(`| \`${statement.sql}\` | ${statement.beforeBytes} | ${statement.afterBytes} | ${statement.beforeCalls} | ${statement.afterCalls} |`);
+    }
+    lines.push("");
+  }
+  return `${lines.join("\n")}\n`;
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const outIndex = args.indexOf("--out");
   const outPath = outIndex >= 0 ? args[outIndex + 1]! : DEFAULT_OUT;
+  const compareIndex = args.indexOf("--compare");
+  const comparePath = compareIndex >= 0 ? args[compareIndex + 1]! : null;
   const modes: Array<"postgres" | "sqlite"> = [];
   const requested = args.find((arg) => arg.startsWith("--mode="))?.slice("--mode=".length) ?? "auto";
   if (requested === "postgres" || requested === "auto") {
@@ -532,9 +629,10 @@ async function main(): Promise<void> {
     reports.push(report);
   }
 
+  const commit = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: REPO_ROOT }).stdout.toString().trim();
   const payload = {
     generatedAt: new Date().toISOString(),
-    commit: Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: REPO_ROOT }).stdout.toString().trim(),
+    commit,
     runtime: { bun: Bun.version },
     accounting: "db_bytes = JSON.stringify({ rows, count }) per statement, matching pg-worker.ts",
     reports,
@@ -542,6 +640,34 @@ async function main(): Promise<void> {
   mkdirSync(dirname(outPath), { recursive: true });
   writeFileSync(outPath, `${JSON.stringify(payload, null, 2)}\n`);
   console.log(`\nwrote ${outPath}`);
+
+  if (comparePath) {
+    const baseline = JSON.parse(readFileSync(comparePath, "utf8")) as {
+      commit?: string;
+      reports: ModeReport[];
+    };
+    const comparisons = reports
+      .map((report) => {
+        const before = baseline.reports.find((candidate) => candidate.mode === report.mode);
+        return before ? compareReports(before, report) : null;
+      })
+      .filter((entry): entry is { mode: string; rows: ComparisonRow[] } => entry !== null);
+    const comparisonPath = outPath.replace(/\.json$/, "-comparison.json");
+    writeFileSync(comparisonPath, `${JSON.stringify({
+      generatedAt: new Date().toISOString(),
+      beforeCommit: baseline.commit ?? "unknown",
+      afterCommit: commit,
+      accounting: payload.accounting,
+      comparisons,
+    }, null, 2)}\n`);
+    const markdownPath = outPath.replace(/\.json$/, ".md");
+    writeFileSync(markdownPath, renderComparisonMarkdown(
+      comparisons[0] ?? { mode: "unknown", rows: [] },
+      baseline.commit ?? "unknown",
+      commit,
+    ));
+    console.log(`wrote ${comparisonPath}\nwrote ${markdownPath}`);
+  }
 }
 
 await main();
