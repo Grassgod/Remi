@@ -25,6 +25,12 @@ export interface SqlDatabase {
   run(sql: string, ...params: unknown[]): { changes: number; lastInsertRowid: number | bigint };
   exec(sql: string): void;
   transaction<T>(fn: (...args: any[]) => T): (...args: any[]) => T;
+  /**
+   * True while a `transaction()` callback is open. `BEGIN` cannot nest on
+   * either backend, so a helper that may run inside or outside a transaction
+   * checks this instead of guessing from its call site.
+   */
+  readonly inTransaction?: boolean;
   close(): void;
 }
 

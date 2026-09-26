@@ -137,6 +137,21 @@ export function formatActivity(
       return t(($) => $.activity.issue_status_forced, {
         status: statusLabel(details.status ?? "?", t),
       });
+    // MUL-400 E3: dependency gate and automatic start.
+    case "dependency_auto_started":
+      return t(($) => $.activity.dependency_auto_started, { key: details.satisfiedByKey ?? details.satisfied_by_key ?? "?" });
+    case "dependency_satisfied":
+      return t(($) => $.activity.dependency_satisfied, { key: details.satisfiedByKey ?? details.satisfied_by_key ?? "?" });
+    case "dependency_auto_start_skipped":
+      return t(($) => $.activity.dependency_auto_start_skipped, { key: details.satisfiedByKey ?? details.satisfied_by_key ?? "?" });
+    case "dependency_prerequisite_failed":
+      return t(($) => $.activity.dependency_prerequisite_failed, {
+        key: details.prerequisiteKey ?? details.prerequisite_key ?? "?",
+      });
+    case "dependency_waiting":
+      return t(($) => $.activity.dependency_waiting);
+    case "dependency_force_started":
+      return t(($) => $.activity.dependency_force_started);
     case "child_done_parent_skipped":
       return t(($) => $.activity.child_done_parent_skipped, {
         reason: childDoneParentReason(details.reason, t),
@@ -148,6 +163,11 @@ export function formatActivity(
     case "dispatch_skipped": {
       if (details.reason === "no_runnable_agent") {
         return t(($) => $.activity.dispatch_skipped_no_runnable_agent);
+      }
+      // MUL-400 E3: the dependency hold has its own copy instead of showing the
+      // raw reason string.
+      if (details.reason === "dependencies_unmet") {
+        return t(($) => $.activity.dependency_gate_reason_dependencies_unmet);
       }
       const error = details.error?.trim();
       return error

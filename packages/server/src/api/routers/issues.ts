@@ -170,6 +170,17 @@ function denySideSessionIssueUpdate(
 // stale cancelled task must not resurface as "dispatched"), then the newest
 // still-standing task, and with no task left the recorded dispatch_skipped
 // activity supplies the original failure reason instead of a guess.
+/**
+ * MUL-400 E3: `blocked_by` is the compatibility spelling of the unmet
+ * prerequisite keys, so a child row can explain its hold without another call.
+ */
+function withBlockedBy(store: MultiremiStore) {
+  return (child: MultiremiIssue): MultiremiIssue & { blocked_by: string[] } => ({
+    ...child,
+    blocked_by: store.listUnmetPrerequisites(child.id).map((row) => row.key),
+  });
+}
+
 function existingIssueDispatchResponse(store: MultiremiStore, issue: MultiremiIssue): Record<string, unknown> {
   const response = issueCompatibilityResponse(issue);
   const skipped = (reason: string, error?: string | null): Record<string, unknown> => ({
@@ -568,12 +579,15 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/issues/children", (c) => {
     const parentIds = splitQueryList(c.req.query("parent_ids"));
     const issues = listAccessibleChildIssues(c, parentIds)
-      .map((child) => issueCompatibilityResponse(child));
+      .map((child) => ({
+        ...issueCompatibilityResponse(child),
+        blocked_by: store.listUnmetPrerequisites(child.id).map((row) => row.key),
+      }));
     return c.json({ issues, total: issues.length });
   });
   app.get("/api/multiremi/issues/children", (c) => {
     const parentIds = splitQueryList(c.req.query("parent_ids") ?? c.req.query("parentIds"));
-    const issues = listAccessibleChildIssues(c, parentIds);
+    const issues = listAccessibleChildIssues(c, parentIds).map(withBlockedBy(store));
     return c.json({ issues, total: issues.length });
   });
   function validateBatchWorkspaceBinding(c: Context, input: BatchUpdateIssuesInput): Response | null {
@@ -664,6 +678,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (dispatchDenied) return dispatchDenied;
     const issue = store.createIssue({
       ...body,
+      blockedBy: body.blockedBy ?? body.blocked_by,
       workspaceId,
       assigneeType: null,
       assignee_type: null,
@@ -733,7 +748,12 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       let task: { id: string } | null = null;
       let dispatchSkippedReason: string | null = null;
       let dispatchError: string | null = null;
-      if (!issue.assigneeType || !issue.assigneeId) {
+      const pendingPrerequisites = store.listUnmetPrerequisites(issue.id);
+      if (pendingPrerequisites.length > 0) {
+        // MUL-400 E3 gate 3: the issue parked itself in backlog. Say why, rather
+        // than reporting the generic backlog_status.
+        dispatchSkippedReason = "dependencies_unmet";
+      } else if (!issue.assigneeType || !issue.assigneeId) {
         dispatchSkippedReason = "no_assignee";
       } else if (issue.status === "backlog") {
         dispatchSkippedReason = "backlog_status";
@@ -829,13 +849,23 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     const tasks = issue.tasks.filter((task) => canCurrentUserAccessChatTask(c, store, task)).map(taskPublicResponse);
     const comments = store.listIssueComments(issue.id);
+    const waitingOn = store.getIssueWaitingOn(issue.id);
     return c.json({
       // MUL-400 E1: `child_count` is a plain COUNT (no child bodies), so the
       // detail surfaces can show "N sub-issues" without the MUL-385 cost.
-      issue: { ...issue, tasks, child_count: issue.childProgress.total },
-      children: issue.children,
+      issue: {
+        ...issue,
+        tasks,
+        child_count: issue.childProgress.total,
+        // MUL-400 E3: unmet prerequisites stop dispatch, so the detail surface
+        // needs them in the same payload.
+        waiting_on: waitingOn.unmet.map((row) => row.key),
+      },
+      children: issue.children.map(withBlockedBy(store)),
       childProgress: issue.childProgress,
       dependencies: issue.dependencies,
+      waitingOn,
+      waiting_on: waitingOn,
       comments,
       activity: store.listIssueActivity(issue.id),
     });
@@ -1030,16 +1060,21 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const children = store.listChildIssues(issue.id);
-    return c.json({ issues: children, total: children.length });
+    return c.json({ issues: children.map(withBlockedBy(store)), total: children.length });
   });
   app.get("/api/issues/:id/children", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
+    // MUL-400 E3: every child row says what it is still waiting on, so the
+    // sidebar can render the hold without a second round trip per child.
     const children = store.listChildIssues(issue.id);
     return c.json({
-      issues: children.map((child) => issueCompatibilityResponse(child)),
+      issues: children.map((child) => ({
+        ...issueCompatibilityResponse(child),
+        blocked_by: store.listUnmetPrerequisites(child.id).map((row) => row.key),
+      })),
       total: children.length,
     });
   });
@@ -1065,7 +1100,17 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<CreateIssueDependencyInput>(c);
-    return c.json({ dependency: store.createIssueDependency(issue.id, body, issueMutationActivity(c)) }, 201);
+    try {
+      const dependency = store.createIssueDependency(issue.id, body, issueMutationActivity(c));
+      // MUL-400 E3: answer with the row as seen from this issue, so the caller
+      // can render the direction without recomputing it.
+      const view = store.listIssueDependencies(issue.id).find((row) => row.id === dependency.id);
+      return c.json({ dependency: view ?? dependency }, 201);
+    } catch (err) {
+      const response = issueDependencyErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
   });
   app.post("/api/issues/:id/dependencies", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");

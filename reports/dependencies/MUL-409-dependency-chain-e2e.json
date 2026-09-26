@@ -1,0 +1,333 @@
+{
+  "issue": "MUL-409",
+  "acceptance": "MUL-400 E3 acceptance 2 — parent + 3 serially dependent children, real PostgreSQL",
+  "database": "throwaway PG database, dropped after the run",
+  "serverCode": "real MultiremiStore over PostgresSyncDatabase + real HTTP app",
+  "testDoubles": "execution agent and worker only (no provider is run)",
+  "ranAt": "2026-09-26T23:22:15.365Z",
+  "steps": [
+    {
+      "step": "create parent",
+      "status": "ok",
+      "detail": {
+        "key": "MUL-1",
+        "status": "in_progress"
+      }
+    },
+    {
+      "step": "create chain C1 <- C2 <- C3",
+      "status": "ok",
+      "detail": {
+        "c1": "iss_32s5z2n0sfi8",
+        "c2": "iss_2h0q8o9mx6zq",
+        "c3": "iss_y4bn23bwqr17"
+      }
+    },
+    {
+      "step": "C1 created as todo",
+      "status": "ok",
+      "detail": {
+        "status": "todo"
+      }
+    },
+    {
+      "step": "C1 dispatched",
+      "status": "ok",
+      "detail": {
+        "reason": null
+      }
+    },
+    {
+      "step": "C2 parked at backlog",
+      "status": "ok",
+      "detail": {
+        "status": "backlog"
+      }
+    },
+    {
+      "step": "C2 reports dependencies_unmet",
+      "status": "ok",
+      "detail": {
+        "reason": "dependencies_unmet"
+      }
+    },
+    {
+      "step": "C3 parked at backlog",
+      "status": "ok",
+      "detail": {
+        "status": "backlog"
+      }
+    },
+    {
+      "step": "C3 reports dependencies_unmet",
+      "status": "ok",
+      "detail": {
+        "reason": "dependencies_unmet"
+      }
+    },
+    {
+      "step": "only C1 has a task",
+      "status": "ok",
+      "detail": {
+        "c1": 1,
+        "c2": 0,
+        "c3": 0
+      }
+    },
+    {
+      "step": "child-progress counts the two waiting children",
+      "status": "ok",
+      "detail": {
+        "progress": {
+          "parentIssueId": "iss_apomvcdicw0n",
+          "total": 3,
+          "done": 0,
+          "cancelled": 0,
+          "blocked": 0,
+          "waiting": 2,
+          "active": 1
+        }
+      }
+    },
+    {
+      "step": "C3 detail lists its unmet prerequisite",
+      "status": "ok",
+      "detail": {
+        "waitingOn": {
+          "unmet": [
+            {
+              "issueId": "iss_y4bn23bwqr17",
+              "dependsOnIssueId": "iss_2h0q8o9mx6zq",
+              "key": "MUL-3",
+              "title": "C2",
+              "status": "backlog",
+              "dependencyId": "dep_b2taaka9yccm"
+            }
+          ],
+          "prerequisites": [
+            {
+              "issueId": "iss_y4bn23bwqr17",
+              "dependsOnIssueId": "iss_2h0q8o9mx6zq",
+              "key": "MUL-3",
+              "title": "C2",
+              "status": "backlog",
+              "dependencyId": "dep_b2taaka9yccm"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "step": "children rows carry the prerequisite keys",
+      "status": "ok",
+      "detail": {
+        "c1": [],
+        "c2": [
+          "MUL-2"
+        ],
+        "c3": [
+          "MUL-3"
+        ]
+      }
+    },
+    {
+      "step": "parent in_review held while children are open",
+      "status": "ok",
+      "detail": {
+        "status": 409,
+        "code": "issue_status_held",
+        "reason": "children_open"
+      }
+    },
+    {
+      "step": "C1: round completed",
+      "status": "ok",
+      "detail": {
+        "taskId": "tsk_1k26uan354n2"
+      }
+    },
+    {
+      "step": "C1 reviewed to done",
+      "status": "ok",
+      "detail": {
+        "status": "done",
+        "http": 200
+      }
+    },
+    {
+      "step": "C2 auto-started after C1 finished",
+      "status": "ok",
+      "detail": {
+        "step": 2,
+        "c1": "done",
+        "c2": "todo",
+        "c3": "backlog",
+        "parent": "in_progress"
+      }
+    },
+    {
+      "step": "C2 reports dependency_auto_started",
+      "status": "ok",
+      "detail": {}
+    },
+    {
+      "step": "C3 still waiting after C1",
+      "status": "ok",
+      "detail": {
+        "step": 2,
+        "c1": "done",
+        "c2": "todo",
+        "c3": "backlog",
+        "parent": "in_progress"
+      }
+    },
+    {
+      "step": "parent still held after C1",
+      "status": "ok",
+      "detail": {
+        "step": 2,
+        "c1": "done",
+        "c2": "todo",
+        "c3": "backlog",
+        "parent": "in_progress"
+      }
+    },
+    {
+      "step": "C2: round completed",
+      "status": "ok",
+      "detail": {
+        "taskId": "tsk_eetl656zjefw"
+      }
+    },
+    {
+      "step": "C2 reviewed to done",
+      "status": "ok",
+      "detail": {
+        "status": "done",
+        "http": 200
+      }
+    },
+    {
+      "step": "C3 auto-started after C2 finished",
+      "status": "ok",
+      "detail": {
+        "step": 3,
+        "c1": "done",
+        "c2": "done",
+        "c3": "todo",
+        "parent": "in_progress"
+      }
+    },
+    {
+      "step": "C3 reports dependency_auto_started",
+      "status": "ok",
+      "detail": {}
+    },
+    {
+      "step": "parent still held after C2",
+      "status": "ok",
+      "detail": {
+        "step": 3,
+        "c1": "done",
+        "c2": "done",
+        "c3": "todo",
+        "parent": "in_progress"
+      }
+    },
+    {
+      "step": "C3: round completed",
+      "status": "ok",
+      "detail": {
+        "taskId": "tsk_s0uc24dawbas"
+      }
+    },
+    {
+      "step": "C3 reviewed to done",
+      "status": "ok",
+      "detail": {
+        "status": "done",
+        "http": 200
+      }
+    },
+    {
+      "step": "every child reached done",
+      "status": "ok",
+      "detail": {
+        "step": 4,
+        "c1": "done",
+        "c2": "done",
+        "c3": "done",
+        "parent": "in_progress"
+      }
+    },
+    {
+      "step": "parent reaches in_review only after the last child",
+      "status": "ok",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "step": "C3 detail has no unmet prerequisites after running",
+      "status": "ok",
+      "detail": {
+        "waitingOn": {
+          "unmet": [],
+          "prerequisites": [
+            {
+              "issueId": "iss_y4bn23bwqr17",
+              "dependsOnIssueId": "iss_2h0q8o9mx6zq",
+              "key": "MUL-3",
+              "title": "C2",
+              "status": "done",
+              "dependencyId": "dep_b2taaka9yccm"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "step": "children rows carry blocked_by",
+      "status": "ok",
+      "detail": {
+        "blockedBy": [
+          [],
+          [],
+          []
+        ]
+      }
+    },
+    {
+      "step": "child-progress reports the parent",
+      "status": "ok",
+      "detail": {
+        "progress": {
+          "parentIssueId": "iss_apomvcdicw0n",
+          "total": 3,
+          "done": 3,
+          "cancelled": 0,
+          "blocked": 0,
+          "waiting": 0,
+          "active": 0
+        }
+      }
+    },
+    {
+      "step": "replaying done does not create a second round",
+      "status": "ok",
+      "detail": {
+        "before": 1,
+        "after": 1
+      }
+    },
+    {
+      "step": "replaying done leaves the dependent done",
+      "status": "ok",
+      "detail": {
+        "c2": "done"
+      }
+    }
+  ],
+  "failures": [],
+  "result": "pass"
+}

@@ -11,6 +11,7 @@ import {
   hasOption,
   integerOption,
   rawStringOption,
+  stringListOption,
   stringOpt,
 } from "../options.js";
 import {
@@ -103,11 +104,19 @@ export async function issue(positional: string[], options: CliOptions): Promise<
   if (action === "status") {
     const issueId = positional[1]?.trim();
     const status = positional[2]?.trim();
-    if (!issueId || !status) throw new Error("usage: multiremi issue status <issue-id> <status> [--output json]");
+    if (!issueId || !status) throw new Error("usage: multiremi issue status <issue-id> <status> [--force] [--output json]");
     if (!VALID_ISSUE_STATUSES.includes(status)) {
       throw new Error(`invalid status ${JSON.stringify(status)}; valid values: ${VALID_ISSUE_STATUSES.join(", ")}`);
     }
-    const response = await multiremiApiRequest("PUT", `/api/issues/${encodeURIComponent(issueId)}`, { status }, options);
+    // MUL-400 E1/E3: `--force` is the member override for the parent-status and
+    // dependency guards; without it the command shows the 409 reason first.
+    const forceStatus = booleanFlag(options, "force");
+    const response = await multiremiApiRequest(
+      "PUT",
+      `/api/issues/${encodeURIComponent(issueId)}`,
+      forceStatus ? { status, force: true } : { status },
+      options,
+    );
     printJson(response);
     return;
   }
@@ -505,7 +514,7 @@ export async function issueMetadata(positional: string[], options: CliOptions): 
 
 export async function issueCreate(options: CliOptions): Promise<void> {
   const title = rawStringOption(options, "title");
-  if (!title?.trim()) throw new Error("usage: multiremi issue create --title <title> [--description <text>] [--status <status>] [--priority <priority>] [--project <id>] [--parent <id>] [--assignee <id|name|email> --assignee-type <type>] [--no-project-defaults] [--start-date <date>] [--due-date <date>] [--attachment <path>]... [--allow-duplicate]");
+  if (!title?.trim()) throw new Error("usage: multiremi issue create --title <title> [--description <text>] [--status <status>] [--priority <priority>] [--project <id>] [--parent <id>] [--blocked-by <issue>]... [--assignee <id|name|email> --assignee-type <type>] [--no-project-defaults] [--start-date <date>] [--due-date <date>] [--attachment <path>]... [--allow-duplicate]");
   const attachments = readAttachmentFiles(options);
   const body: Record<string, unknown> = { title };
   const description = await readOptionalTextBody(options, "description");
@@ -515,6 +524,10 @@ export async function issueCreate(options: CliOptions): Promise<void> {
   addStringBodyField(body, options, "project_id", "project", false, true);
   addStringBodyField(body, options, "runtime_workspace_id", "runtime-workspace", false, true);
   addStringBodyField(body, options, "parent_issue_id", "parent", false, true);
+  // MUL-400 E3: declare prerequisites at creation; the server writes them in
+  // the same transaction and parks the issue at backlog while they are unmet.
+  const blockedBy = stringListOption(options, "blocked-by", "blockedBy");
+  if (blockedBy.length) body.blocked_by = blockedBy;
   addStringBodyField(body, options, "start_date", "start-date", false, true);
   addStringBodyField(body, options, "due_date", "due-date", false, true);
   if (Boolean(options.allowDuplicate ?? options["allow-duplicate"])) body.allow_duplicate = true;
@@ -831,6 +844,9 @@ export function buildIssueListQuery(options: CliOptions): string {
   addQueryParam(params, "assignee_id", rawStringOption(options, "assignee-id", "assigneeId", "assignee"));
   addQueryParam(params, "assignee_type", rawStringOption(options, "assignee-type", "assigneeType"));
   addQueryParam(params, "project_id", rawStringOption(options, "project", "project-id"));
+  // MUL-400 E3: hierarchy filters. The server resolves a key to its id.
+  addQueryParam(params, "parent_id", rawStringOption(options, "parent", "parent-id"));
+  if (booleanFlag(options, "top-level-only", "topLevelOnly")) params.set("top_level_only", "true");
   const limit = integerOption(options, "limit");
   const offset = integerOption(options, "offset");
   if (limit !== null) params.set("limit", String(limit));
