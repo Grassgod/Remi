@@ -31,6 +31,15 @@ import {
   daemonFrameUsesSeq,
   meetsDaemonMinCliVersion,
 } from "@multiremi/contracts/daemon-protocol.js";
+import type {
+  DaemonArchiveSessionsResultPayload,
+  DaemonArchiveSubject,
+  DaemonTaskCompletionTrace,
+  DaemonTraceAppendPayload,
+  DaemonTracePushPayload,
+  DaemonTraceReadReplyPayload,
+  DaemonTraceSubscribeReplyPayload,
+} from "@multiremi/contracts/daemon-protocol.js";
 
 /** Every frame name the protocol defines, in one list, so the inventory cannot silently shrink. */
 const ALL_FRAME_NAMES = [
@@ -169,6 +178,22 @@ describe("daemon protocol frame inventory", () => {
     }
   });
 
+  it("moves session archiving onto a typed frame pair, not the shell channel", () => {
+    expect(DAEMON_DOWNLINK_EVENT_FRAMES).toContain("runtime.archive_sessions");
+    expect(DAEMON_UPLINK_EVENT_FRAMES).toContain("runtime.archive_sessions_result");
+    // The generic shell channel keeps its own frames, and archiving must not be
+    // carried by them: `runtime.command` takes `{command, args, timeout_ms}` and
+    // the daemon executes it directly, so routing a structured archive request
+    // through it would mean remote shell execution.
+    expect(DAEMON_DOWNLINK_EVENT_FRAMES).toContain("runtime.command");
+    expect(DAEMON_UPLINK_EVENT_FRAMES).toContain("runtime.command_result");
+    expect(DAEMON_DOWNLINK_EVENT_FRAMES).not.toContain("pending_command" as never);
+    // It is a reliable event on both sides, so it is replayed by entity id.
+    expect(daemonFrameIsReliable("runtime.archive_sessions")).toBe(true);
+    expect(daemonFrameIsReliable("runtime.archive_sessions_result")).toBe(true);
+    expect(daemonFrameUsesSeq("runtime.archive_sessions")).toBe(true);
+  });
+
   it("keeps the upgrade channel free of task traffic", () => {
     // The HTTP heartbeat stays alive only to carry an update instruction, so no
     // offer or report frame may be reachable through it.
@@ -251,5 +276,71 @@ describe("meetsDaemonMinCliVersion", () => {
     // Every online daemon reported v0.2.82 when MUL-401 was designed.
     expect(meetsDaemonMinCliVersion("0.2.82")).toBe(false);
     expect(meetsDaemonMinCliVersion("0.1.0")).toBe(false);
+  });
+});
+
+
+/**
+ * The payload types are compile-time contracts, but a few of their shape rules are
+ * behavioural claims that belong in a test: `closed` is always true on a completion
+ * block, the histogram carries a null tool for non-tool frames, and the archive
+ * result can express failure.
+ *
+ * These are typed literals assembled here rather than parsed, so a field rename in
+ * `daemon-protocol.ts` fails this file at `tsc`, not silently at runtime.
+ */
+describe("payload contracts", () => {
+  it("spells completion trace completeness as closed: true", () => {
+    const trace: DaemonTaskCompletionTrace = {
+      head: 42,
+      event_count: 42,
+      closed: true,
+      tool_call_count: 7,
+      type_histogram: [
+        { type: "text", tool: null, count: 20 },
+        { type: "tool_use", tool: "Bash", count: 7 },
+      ],
+    };
+    expect(trace.closed).toBe(true);
+    // A dense trace has equal head and event_count; a sparse one does not, and the
+    // type keeps both so the two can be told apart.
+    expect(trace.head).toBe(trace.event_count);
+  });
+
+  it("expresses a failure archive result with an optional error", () => {
+    const failed: DaemonArchiveSessionsResultPayload = {
+      request_id: "req_1",
+      status: "failed",
+      archive_ids: [],
+      error: "upload rejected",
+    };
+    const ok: DaemonArchiveSessionsResultPayload = {
+      request_id: "req_1",
+      status: "completed",
+      archive_ids: ["arc_1"],
+    };
+    expect(failed.error).toBe("upload rejected");
+    expect(ok.error).toBeUndefined();
+  });
+
+  it("carries closed on the trace frames so completeness is never inferred", () => {
+    const push: DaemonTracePushPayload = { task_id: "t", events: [], closed: false };
+    const append: DaemonTraceAppendPayload = { task_id: "t", events: [], closed: true };
+    const reply: DaemonTraceReadReplyPayload = {
+      ok: true, events: [], next_after_seq: 0, head: 0, eof: true, closed: true,
+    };
+    const subscribe: DaemonTraceSubscribeReplyPayload = {
+      ok: true, first_seq: 1, head: 0, closed: false, gap: false,
+    };
+    expect([push.closed, append.closed, reply.closed, subscribe.closed]).toEqual([false, true, true, false]);
+  });
+
+  it("types the archive subject kinds as the three the request table stores", () => {
+    const subjects: DaemonArchiveSubject[] = [
+      { kind: "issue", id: "i1" },
+      { kind: "chat", id: "c1" },
+      { kind: "task", id: "t1" },
+    ];
+    expect(subjects.map((subject) => subject.kind)).toEqual(["issue", "chat", "task"]);
   });
 });

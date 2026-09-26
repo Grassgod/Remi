@@ -14,8 +14,8 @@
 import type { TaskMessageInput } from "./types.js";
 
 /**
- * The event types the daemon actually produces today, read from the writers
- * rather than inferred from the viewer:
+ * The event types the daemon produces today, read from the writers rather than
+ * inferred from the viewer:
  *
  * - `execution`            daemon.ts (task start / model switch), acp-event-mapper
  * - `text`                 acp-event-mapper: `agent_message_chunk`
@@ -36,8 +36,14 @@ import type { TaskMessageInput } from "./types.js";
  * frontend display unions and on the browser socket's handshake frames — no
  * daemon writer emits either as a task message. A viewer that shows error or
  * assistant rows derives them; it must not expect them on the wire.
+ *
+ * This list is for enumeration and histogram bucketing ONLY. It is not a
+ * validator: {@link TraceEvent.type} is an open string (MUL-402 ruling 1), and an
+ * event whose type is not listed here is stored, transmitted and rendered
+ * verbatim rather than being rewritten or dropped. Consumers switch on the known
+ * values and fall back to a generic row for anything else.
  */
-export const TRACE_EVENT_TYPES = [
+export const KNOWN_TRACE_EVENT_TYPES = [
   "execution",
   "text",
   "thinking",
@@ -53,48 +59,61 @@ export const TRACE_EVENT_TYPES = [
   "steer",
 ] as const;
 
-export type TraceEventType = (typeof TRACE_EVENT_TYPES)[number];
+/**
+ * The closed union of the types listed above. Named `Known...` on purpose: it
+ * describes the known set, and is never the declared type of a field.
+ */
+export type KnownTraceEventType = (typeof KNOWN_TRACE_EVENT_TYPES)[number];
 
-const TRACE_EVENT_TYPE_SET: ReadonlySet<string> = new Set(TRACE_EVENT_TYPES);
+const KNOWN_TRACE_EVENT_TYPE_SET: ReadonlySet<string> = new Set(KNOWN_TRACE_EVENT_TYPES);
 
-export function isTraceEventType(value: unknown): value is TraceEventType {
-  return typeof value === "string" && TRACE_EVENT_TYPE_SET.has(value);
+/** Whether this is one of the types the daemon is known to produce today. */
+export function isKnownTraceEventType(value: unknown): value is KnownTraceEventType {
+  return typeof value === "string" && KNOWN_TRACE_EVENT_TYPE_SET.has(value);
 }
 
 /**
- * Server-side backstop caps for one event's fields, in bytes.
+ * Tool statuses the write path accepts; anything else is dropped to null.
  *
- * These are the values `store/repos/tasks-repo.ts` applies today
- * (`TASK_MESSAGE_TEXT_MAX`, `TASK_MESSAGE_OUTPUT_MAX`, `TASK_MESSAGE_INPUT_MAX`,
- * `TASK_MESSAGE_META_MAX`, `TASK_MESSAGE_TOOL_MAX`). A-6 deletes that duplicate
- * when the `POST /tasks/:id/messages` write path goes away; until then the two
- * must not drift, so change them in both places or not at all.
+ * The byte caps and the structured guards are NOT re-declared here. They live in
+ * `@shared/trace-sanitize.js`, which is the single enforcement point
+ * (`TraceStore.append`) and the module the equivalence test holds against the
+ * historical store behaviour. `packages/contracts` does not depend on
+ * `packages/shared`, so a consumer that needs a cap imports it from there rather
+ * than from two places that can drift.
  */
-export const TRACE_EVENT_TOOL_MAX_BYTES = 512;
-export const TRACE_EVENT_CONTENT_MAX_BYTES = 256 * 1024;
-export const TRACE_EVENT_INPUT_MAX_BYTES = 256 * 1024;
-export const TRACE_EVENT_OUTPUT_MAX_BYTES = 64 * 1024;
-export const TRACE_EVENT_META_MAX_BYTES = 64 * 1024;
-
-/** Structured-field guards, mirroring `sanitizeTaskMessageJson`. */
-export const TRACE_EVENT_JSON_MAX_DEPTH = 8;
-export const TRACE_EVENT_JSON_MAX_ARRAY = 256;
-
-/** Tool statuses the write path accepts; anything else is dropped to null. */
 export const TRACE_EVENT_STATUSES = ["pending", "in_progress", "completed", "failed"] as const;
 
 export type TraceEventStatus = (typeof TRACE_EVENT_STATUSES)[number];
 
 /**
- * One event as a producer hands it over, before the store assigns a sequence.
+ * One stored event.
  *
- * `ts` is the moment the producer observed the event, in ms since epoch — not the
- * write time. Replayed frames keep their original `ts`, so a viewer can order by
- * `seq` and still show honest timings.
+ * `seq` is dense and per task: it starts at 1 and increases by one for every
+ * appended event, so `first_seq .. head` has no holes. It is assigned at the
+ * durable write by {@link TraceStore.append} and never rewritten — a rewritten
+ * sequence would break the Hub's "drop everything at or below head" rule and the
+ * file's append-only invariant. (The legacy `TaskMessageInput.seq` fell out of
+ * `TaskMessageBatcher` coalescing, which leaves gaps; that sequence is void in
+ * v2.)
+ *
+ * `ts` is an **ISO 8601 string**, not a number: it is the moment the event was
+ * observed, and a backfilled event takes `task_messages.created_at` verbatim so
+ * the two can be compared field for field. The numeric `ts` on the frame
+ * envelope is a different thing and is unaffected.
+ *
+ * `type` is an open string. See {@link KNOWN_TRACE_EVENT_TYPES}.
+ *
+ * The event carries no `task_id`: the container that holds it does — the
+ * `trace.append` frame's payload, the trace-file header, the Hub subscription.
+ *
+ * Runtime/context completeness is carried by `{ head, closed }` rather than by a
+ * terminator event: there is no `trace.end` event type (MUL-402 ruling 3).
  */
-export interface TraceEventInput {
-  ts: number;
-  type: TraceEventType;
+export interface TraceEvent {
+  seq: number;
+  ts: string;
+  type: string;
   tool?: string | null;
   content?: string | null;
   input?: Record<string, unknown> | null;
@@ -105,22 +124,21 @@ export interface TraceEventInput {
 }
 
 /**
- * One stored event.
+ * An event as a producer hands it over: no `seq`, and normally no `ts`.
  *
- * `seq` is dense and per task: it starts at 1 and increases by one for every
- * appended event, so `first_seq .. head` has no holes. It is assigned once by
- * {@link TraceStore.append} and never rewritten — a rewritten sequence would
- * break the Hub's "drop everything at or below head" rule and the file's
- * append-only invariant. (The legacy `TaskMessageInput.seq` fell out of
- * `TaskMessageBatcher` coalescing, which leaves gaps; that sequence is void in
- * v2.)
+ * `seq` is always the store's to assign. `ts` is too in the live path, where the
+ * store stamps the write time, so a producer omits it — but the backfill must
+ * supply it, because a reproduced historical turn has to keep the row's original
+ * `created_at` rather than the moment of the migration. Hence `ts` is optional
+ * here and the store's rule is "use the event's `ts` when it has one, otherwise
+ * stamp the clock".
  *
- * The event carries no `task_id`: the container that holds it does — the
- * `trace.append` frame, the trace-file line, the Hub subscription.
+ * (MUL-402's A2 wrote the input as `Omit<TraceEvent, "seq" | "ts">` with the store
+ * assigning both. That is the live path and this type is that type plus the
+ * backfill's timestamp; without the field there is no way to express
+ * `ts = task_messages.created_at`, which ruling 1 requires.)
  */
-export interface TraceEvent extends TraceEventInput {
-  seq: number;
-}
+export type TraceEventInput = Omit<TraceEvent, "seq" | "ts"> & { ts?: string };
 
 /** `{ task_id }`-scoped container used by frames and file segments. */
 export interface TraceEventBatch {
@@ -128,11 +146,17 @@ export interface TraceEventBatch {
   events: TraceEvent[];
 }
 
-/** Lossless `TaskMessageInput` -> trace event. Used by the MUL-402 backfill. */
-export function taskMessageToTraceEvent(message: TaskMessageInput, ts: number): TraceEventInput {
+/**
+ * Lossless `TaskMessageInput` -> trace event, used by the MUL-402 backfill.
+ *
+ * Unknown type strings pass through **verbatim**; rewriting them would make the
+ * backfill lossy. `ts` is the ISO timestamp to stamp the event with — for a
+ * backfilled row that is the row's `created_at`.
+ */
+export function taskMessageToTraceEvent(message: TaskMessageInput, ts: string): TraceEventInput {
   return {
     ts,
-    type: isTraceEventType(message.type) ? message.type : "text",
+    type: message.type,
     tool: message.tool ?? null,
     content: message.content ?? null,
     input: message.input ?? null,

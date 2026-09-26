@@ -7,14 +7,25 @@
  * grow a file-only concept (paths, rotations, fsync policy) and must not leak the
  * in-memory one (object identity, shared arrays).
  *
- * Sequence contract: `append` assigns dense per-task sequences starting at 1 and
- * never rewrites one. A retry that appends the same logical event therefore gets
- * a new sequence; deduplication above this layer keys on the *event*, not on the
- * sequence. This is what lets the Hub discard everything at or below its head and
- * still have `first_seq .. head` be gapless.
+ * Two responsibilities live here rather than at the call sites, because this is
+ * the only durable write point in the trace path (MUL-402 rulings 2 and 6b):
+ *
+ *   - **Sequencing.** `append` assigns the per-task `seq`. Dense, from 1, never
+ *     rewritten; a retry that appends the same logical event gets a new sequence,
+ *     so deduplication above this layer keys on the event, not the sequence.
+ *   - **Sanitizing.** `append` applies the byte caps and structured-field guards
+ *     from `@shared/trace-sanitize.js`. The frame and the file therefore carry
+ *     identical, already-bounded events, and nothing downstream needs its own cap.
+ *
+ * `TraceEvent.ts` is assigned here too: the store is what knows the write time.
  */
 
 import type { TraceEvent, TraceEventInput } from "@multiremi/contracts/trace.js";
+import {
+  cleanTraceField,
+  parseStoredTraceJson,
+  sanitizeTraceEventFields,
+} from "@shared/trace-sanitize.js";
 
 /** Result of appending: the new head plus the stored events with sequences bound. */
 export interface TraceAppendResult {
@@ -25,30 +36,49 @@ export interface TraceAppendResult {
 /**
  * Result of a paginated read.
  *
- * `eof` means this page reached the current head, so a caller polling for more
- * can stop until it learns the head moved. `ended` means the task finished and no
- * further events will ever be written, so a caller can stop polling for good.
- * They are deliberately separate: a live task is frequently at `eof` but never
- * `ended`.
+ * `eof` means this page reached the current head, so a caller polling for more can
+ * stop until it learns the head moved. Completeness is NOT reported here: the
+ * single "no more events will be written" signal is `closed`, which lives on
+ * {@link TraceStoreHead} and on the reader's result (MUL-402 ruling 3).
  */
 export interface TraceReadResult {
   events: TraceEvent[];
   head: number;
   eof: boolean;
-  ended: boolean;
 }
 
-/** Terminal status recorded by {@link TraceStore.end}. */
+/**
+ * The head and completeness of a task's trace.
+ *
+ * `closed` is the one boolean that says the trace is final — the trailer exists.
+ * There is no terminator event and no `ended` flag anywhere in v2; a consumer that
+ * needs to know "is the turn over" reads this field and nothing else.
+ */
+export interface TraceStoreHead {
+  head: number;
+  closed: boolean;
+}
+
+/** Terminal status recorded by {@link TraceStore.close}. */
 export type TraceEndStatus = "completed" | "failed" | "cancelled";
+
+export interface TraceCloseInput {
+  status: TraceEndStatus;
+  /** ISO 8601. The moment the turn ended, as the daemon observed it. */
+  ended_at: string;
+}
 
 export interface TraceStore {
   /**
-   * Append events to a task's trace. Assigns `seq` densely from the current head
-   * and returns the events that were actually stored, in order.
+   * Append events to a task's trace.
    *
-   * Appending to a task already ended is a no-op that returns the existing head
-   * and an empty array: a late frame must not reopen a closed trace, because the
-   * archive that follows assumes the tail it saw is final.
+   * Assigns `seq` densely from the current head and `ts` from the store's clock,
+   * and applies the caps. Accepts `Omit<TraceEvent, "seq" | "ts">` because the
+   * caller cannot know either value: the store owns the write.
+   *
+   * Appending to a closed task is a no-op that returns the existing head and an
+   * empty array: a late frame must not reopen a closed trace, because the archive
+   * that follows assumes the tail it saw is final.
    */
   append(taskId: string, events: TraceEventInput[]): TraceAppendResult;
 
@@ -57,21 +87,27 @@ export interface TraceStore {
    * serialized payload, whichever comes first. A single event larger than
    * `maxBytes` is still returned alone rather than deadlocking the reader.
    *
-   * A task with no trace reads as `{ events: [], head: 0, eof: true, ended: false }`
-   * rather than throwing: an unknown task is a normal answer for a reader that
-   * raced the daemon's registration, and the caller turns it into `trace_not_hot`
-   * only when it knows the task should exist.
+   * A task with no trace reads as `{ events: [], head: 0, eof: true }` rather than
+   * throwing: an unknown task is a normal answer for a reader that raced the
+   * daemon's registration.
+   *
+   * Backfilled traces keep their original sparse sequences, so `read` must not
+   * assume a page's events are consecutive, nor that `events.length` equals
+   * `head` (A11). Only freshly written traces are dense.
    */
   read(taskId: string, afterSeq?: number, limit?: number, maxBytes?: number): TraceReadResult;
 
-  /** Current head sequence, or null when this store has never seen the task. */
-  head(taskId: string): number | null;
+  /**
+   * Current head and completeness, or null when this store has never seen the
+   * task. A null here is what makes a reader answer `trace_not_hot`.
+   */
+  head(taskId: string): TraceStoreHead | null;
 
-  /** Mark a task's trace final. Idempotent; the first status wins. */
-  end(taskId: string, status: TraceEndStatus): void;
-
-  /** Whether {@link TraceStore.end} has been called for this task. */
-  isEnded(taskId: string): boolean;
+  /**
+   * Mark a task's trace final by writing the trailer. Idempotent; the first call
+   * wins, so a retried completion cannot rewrite the recorded status.
+   */
+  close(taskId: string, end: TraceCloseInput): void;
 
   /** Drop a task's trace. Used for GC, not for task completion. */
   forget(taskId: string): void;
@@ -83,9 +119,12 @@ export const TRACE_READ_MAX_LIMIT = 500;
 interface TraceState {
   events: TraceEvent[];
   head: number;
-  ended: boolean;
-  endStatus: TraceEndStatus | null;
+  closed: boolean;
+  end: TraceCloseInput | null;
 }
+
+/** Injectable clock so tests can assert the `ts` the store assigns. */
+export type TraceClock = () => string;
 
 /**
  * In-memory {@link TraceStore}.
@@ -98,25 +137,41 @@ interface TraceState {
 export class InMemoryTraceStore implements TraceStore {
   private readonly tasks = new Map<string, TraceState>();
 
+  constructor(private readonly now: TraceClock = () => new Date().toISOString()) {}
+
+  private stateFor(taskId: string): TraceState {
+    const existing = this.tasks.get(taskId);
+    if (existing) return existing;
+    const created: TraceState = { events: [], head: 0, closed: false, end: null };
+    this.tasks.set(taskId, created);
+    return created;
+  }
+
   append(taskId: string, events: TraceEventInput[]): TraceAppendResult {
-    const state = this.tasks.get(taskId);
-    if (state?.ended) return { head: state.head, events: [] };
-    const target = state ?? { events: [], head: 0, ended: false, endStatus: null };
-    if (!state) this.tasks.set(taskId, target);
+    const existing = this.tasks.get(taskId);
+    if (existing?.closed) return { head: existing.head, events: [] };
+    const state = this.stateFor(taskId);
 
     const stored: TraceEvent[] = [];
     for (const event of events) {
-      target.head += 1;
-      const stored_event: TraceEvent = { ...event, seq: target.head };
-      target.events.push(stored_event);
-      stored.push(stored_event);
+      // The event's own `ts` wins: that is how a backfill keeps `created_at`.
+      const row = sanitizeStoredEvent(event, event.ts ?? this.now());
+      state.head += 1;
+      const sequenced: TraceEvent = { ...row, seq: state.head };
+      state.events.push(sequenced);
+      stored.push(sequenced);
     }
-    return { head: target.head, events: stored };
+    return { head: state.head, events: stored };
   }
 
-  read(taskId: string, afterSeq = 0, limit = TRACE_READ_DEFAULT_LIMIT, maxBytes = Number.MAX_SAFE_INTEGER): TraceReadResult {
+  read(
+    taskId: string,
+    afterSeq = 0,
+    limit = TRACE_READ_DEFAULT_LIMIT,
+    maxBytes = Number.MAX_SAFE_INTEGER,
+  ): TraceReadResult {
     const state = this.tasks.get(taskId);
-    if (!state) return { events: [], head: 0, eof: true, ended: false };
+    if (!state) return { events: [], head: 0, eof: true };
 
     const boundedLimit = Math.max(1, Math.min(Math.floor(limit), TRACE_READ_MAX_LIMIT));
     const events: TraceEvent[] = [];
@@ -132,33 +187,64 @@ export class InMemoryTraceStore implements TraceStore {
       bytes += size;
     }
     const head = state.head;
+    // Written traces are dense, so the last returned seq tells the truth. A
+    // backfilled trace is sparse and this stays a best-effort answer; callers that
+    // need exactness compare against `head`.
     const lastSeq = events.at(-1)?.seq ?? afterSeq;
-    return { events, head, eof: lastSeq >= head, ended: state.ended };
+    return { events, head, eof: lastSeq >= head };
   }
 
-  head(taskId: string): number | null {
+  head(taskId: string): TraceStoreHead | null {
     const state = this.tasks.get(taskId);
-    return state ? state.head : null;
+    return state ? { head: state.head, closed: state.closed } : null;
   }
 
-  end(taskId: string, status: TraceEndStatus): void {
-    const state = this.tasks.get(taskId);
-    if (!state) {
-      this.tasks.set(taskId, { events: [], head: 0, ended: true, endStatus: status });
-      return;
-    }
-    if (state.ended) return;
-    state.ended = true;
-    state.endStatus = status;
+  close(taskId: string, end: TraceCloseInput): void {
+    const state = this.stateFor(taskId);
+    if (state.closed) return;
+    state.closed = true;
+    state.end = end;
   }
 
-  isEnded(taskId: string): boolean {
-    return this.tasks.get(taskId)?.ended ?? false;
+  /** The recorded trailer, for tests and for a caller that wants the status. */
+  endInfo(taskId: string): TraceCloseInput | null {
+    return this.tasks.get(taskId)?.end ?? null;
   }
 
   forget(taskId: string): void {
     this.tasks.delete(taskId);
   }
+}
+
+/**
+ * Apply the shared caps and turn serialized structured fields back into values.
+ *
+ * The stored `input` / `meta` are JSON text, matching the historical column; a
+ * field whose cap fired cannot be parsed back and becomes null, which is what the
+ * API answers for the same row today.
+ */
+export function sanitizeStoredEvent(event: TraceEventInput, ts: string): Omit<TraceEvent, "seq"> {
+  const fields = sanitizeTraceEventFields({
+    type: typeof event.type === "string" ? event.type : "text",
+    tool: event.tool,
+    content: event.content,
+    input: event.input,
+    output: event.output,
+    tool_call_id: event.tool_call_id,
+    status: event.status,
+    meta: event.meta,
+  });
+  return {
+    ts,
+    type: fields.type,
+    tool: fields.tool,
+    content: fields.content,
+    input: parseStoredTraceJson<Record<string, unknown>>(fields.input),
+    output: fields.output,
+    tool_call_id: cleanTraceField(fields.tool_call_id),
+    status: fields.status,
+    meta: parseStoredTraceJson<Record<string, unknown>>(fields.meta),
+  };
 }
 
 /** Serialized size of one event as a frame would carry it. */

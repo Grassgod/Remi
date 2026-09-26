@@ -2,16 +2,18 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  TRACE_EVENT_CONTENT_MAX_BYTES,
-  TRACE_EVENT_INPUT_MAX_BYTES,
-  TRACE_EVENT_META_MAX_BYTES,
-  TRACE_EVENT_OUTPUT_MAX_BYTES,
-  TRACE_EVENT_TOOL_MAX_BYTES,
-  TRACE_EVENT_TYPES,
-  isTraceEventType,
+  isKnownTraceEventType,
+  KNOWN_TRACE_EVENT_TYPES,
   taskMessageToTraceEvent,
   traceEventToTaskMessage,
 } from "@multiremi/contracts/trace.js";
+import {
+  TRACE_CONTENT_MAX_BYTES,
+  TRACE_INPUT_MAX_BYTES,
+  TRACE_META_MAX_BYTES,
+  TRACE_OUTPUT_MAX_BYTES,
+  TRACE_TOOL_MAX_BYTES,
+} from "@shared/trace-sanitize.js";
 
 const REPO_ROOT = join(import.meta.dir, "../../..");
 const MAPPER = join(REPO_ROOT, "packages/server/src/worker/acp-event-mapper.ts");
@@ -75,20 +77,28 @@ describe("trace contract drift guards", () => {
     }
 
     for (const type of literalTypes) {
-      expect(isTraceEventType(type), `producer emits "${type}" but trace.ts does not list it`).toBe(true);
+      expect(isKnownTraceEventType(type), `producer emits "${type}" but KNOWN_TRACE_EVENT_TYPES does not list it`).toBe(true);
     }
     // Every claimed type except the three the mapper builds from a ternary must
     // appear literally; that keeps a typo from silently shrinking the contract.
-    for (const type of TRACE_EVENT_TYPES) {
+    for (const type of KNOWN_TRACE_EVENT_TYPES) {
       if (type === "text" || type === "thinking" || type === "compaction") continue;
-      expect(literalTypes.has(type), `trace.ts claims "${type}" but no producer emits it`).toBe(true);
+      expect(literalTypes.has(type), `KNOWN_TRACE_EVENT_TYPES claims "${type}" but no producer emits it`).toBe(true);
     }
   });
 
   it("finds all thirteen types, so the guard is not silently matching nothing", () => {
     const literalTypes = producerEventTypes();
-    expect([...literalTypes].sort()).toEqual([...TRACE_EVENT_TYPES].sort());
+    expect([...literalTypes].sort()).toEqual([...KNOWN_TRACE_EVENT_TYPES].sort());
     expect(literalTypes.size).toBe(13);
+  });
+
+  it("keeps the known-type list open: an unknown type is not a validation failure", () => {
+    // MUL-402 ruling 1: the type is an open string, so this list enumerates and
+    // buckets; it must never be used to reject a value.
+    expect(isKnownTraceEventType("text")).toBe(true);
+    expect(isKnownTraceEventType("assistant")).toBe(false);
+    expect(isKnownTraceEventType("some_future_type")).toBe(false);
   });
 
   it("keeps the field byte caps equal to the write path it mirrors", () => {
@@ -100,11 +110,11 @@ describe("trace contract drift guards", () => {
       if (!match) throw new Error(`tasks-repo.ts no longer defines ${name}`);
       return match[1]!.split("*").reduce((total, factor) => total * Number(factor.trim()), 1);
     };
-    expect(TRACE_EVENT_TOOL_MAX_BYTES).toBe(read("TASK_MESSAGE_TOOL_MAX"));
-    expect(TRACE_EVENT_CONTENT_MAX_BYTES).toBe(read("TASK_MESSAGE_TEXT_MAX"));
-    expect(TRACE_EVENT_INPUT_MAX_BYTES).toBe(read("TASK_MESSAGE_INPUT_MAX"));
-    expect(TRACE_EVENT_OUTPUT_MAX_BYTES).toBe(read("TASK_MESSAGE_OUTPUT_MAX"));
-    expect(TRACE_EVENT_META_MAX_BYTES).toBe(read("TASK_MESSAGE_META_MAX"));
+    expect(TRACE_TOOL_MAX_BYTES).toBe(read("TASK_MESSAGE_TOOL_MAX"));
+    expect(TRACE_CONTENT_MAX_BYTES).toBe(read("TASK_MESSAGE_TEXT_MAX"));
+    expect(TRACE_INPUT_MAX_BYTES).toBe(read("TASK_MESSAGE_INPUT_MAX"));
+    expect(TRACE_OUTPUT_MAX_BYTES).toBe(read("TASK_MESSAGE_OUTPUT_MAX"));
+    expect(TRACE_META_MAX_BYTES).toBe(read("TASK_MESSAGE_META_MAX"));
   });
 
   it("keeps the status set in step with the write path", () => {
@@ -128,19 +138,30 @@ describe("trace contract drift guards", () => {
       meta: { duration_ms: 42 },
     } as const;
 
-    const event = taskMessageToTraceEvent(message, 1_700_000_000_000);
+    const ts = "2026-09-27T04:05:06.789Z";
+    const event = taskMessageToTraceEvent(message, ts);
     expect(event.type).toBe("tool_result");
     expect(event.tool_call_id).toBe("tc_9");
+    expect(event.ts).toBe(ts);
 
-    const restored = traceEventToTaskMessage({ ...event, seq: message.seq });
+    const restored = traceEventToTaskMessage({ ...event, ts, seq: message.seq });
     expect(restored).toEqual(message);
   });
 
-  it("maps an unknown legacy type to text rather than dropping it", () => {
-    // The backfill must not lose rows it does not recognize; `text` keeps the
-    // content visible and is the type the viewer already renders as prose.
-    const event = taskMessageToTraceEvent({ type: "assistant", content: "legacy row" }, 1);
-    expect(event.type).toBe("text");
-    expect(event.content).toBe("legacy row");
+  it("passes an unknown legacy type through verbatim", () => {
+    // MUL-402 ruling 1: the backfill must not lose or rewrite rows it does not
+    // recognize. `assistant` is a real historical value with no current producer.
+    for (const type of ["assistant", "error", "some_future_type"]) {
+      const event = taskMessageToTraceEvent({ type, content: "legacy row" }, "2026-09-27T00:00:00.000Z");
+      expect(event.type).toBe(type);
+      expect(event.content).toBe("legacy row");
+    }
+  });
+
+  it("keeps ts as an ISO string, equal to the row it backfills from", () => {
+    const createdAt = "2026-09-27T04:05:06.789Z";
+    const event = taskMessageToTraceEvent({ type: "text", content: "x" }, createdAt);
+    expect(event.ts).toBe(createdAt);
+    expect(typeof event.ts).toBe("string");
   });
 });

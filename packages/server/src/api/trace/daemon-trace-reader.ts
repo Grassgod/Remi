@@ -7,15 +7,36 @@
  * in-flight limits, timeouts - stays behind the implementation, which A-6 writes.
  *
  * Naming note: the plan text in MUL-402 called this `HotTraceSource`; the two are
- * the same object under one name. The result shape is the merged version of both
- * proposals, and MUL-402's `cursor` is this interface's `after_seq`.
+ * the same object under one name.
+ *
+ * Endpoint ownership (MUL-402 ruling 4). This interface is the only hot-read path
+ * the daemon exposes; A owns the RPC frames and this interface, and A-6 implements
+ * it. The HTTP endpoints are NOT here:
+ *
+ *   - `GET /api/tasks/:id/trace` and `GET /api/shares/:token/tasks/:task_id/trace`
+ *     belong to MUL-402's B5, authorized with `canUserViewTaskMessages`;
+ *   - the Feishu concierge reads through the WS `trace.fetch` RPC, so there is no
+ *     `GET /api/daemon/tasks/:id/trace` route to keep or delete.
+ *
+ * B5's trace-reader depends on this interface and maps the four codes onto its own
+ * five state values; the daemon side never learns about those states.
  */
 
 import type { TraceEvent } from "@multiremi/contracts/trace.js";
 import type { DaemonProtocolErrorCode } from "@multiremi/contracts/daemon-protocol.js";
+import type { TraceStore } from "@multiremi/worker/trace-store.js";
 
 export interface DaemonTraceReadRequest {
   taskId: string;
+  /**
+   * The runtime that owns the task.
+   *
+   * Required, and deliberately not derived from the task row: the caller already
+   * holds the runtime id (B's pointer stores it), and the server routes
+   * `runtimeId -> daemonId` through its own registry, so asking for the task first
+   * would be an extra query on the hot path.
+   */
+  runtimeId: string;
   /** Exclusive cursor: the first event returned has `seq > after_seq`. */
   afterSeq?: number;
   /** Maximum events per page. Clamped to 1..500; defaults to 200. */
@@ -35,8 +56,11 @@ export interface DaemonTraceReadSuccess {
   head: number;
   /** True when this page reached the head. */
   eof: boolean;
-  /** True when the task is finished and no further events will appear. */
-  ended: boolean;
+  /**
+   * True when the trace is final. The one completeness signal on this path, taken
+   * from `TraceStore.head(taskId).closed`; there is no terminator event.
+   */
+  closed: boolean;
 }
 
 export interface DaemonTraceReadFailure {
@@ -55,8 +79,10 @@ export type DaemonTraceReadResult = DaemonTraceReadSuccess | DaemonTraceReadFail
  *
  * - `daemon_unreachable`  no live connection owns the task's runtime (page degrades)
  * - `daemon_timeout`      the daemon did not answer inside `timeoutMs`
- * - `daemon_busy`          too many concurrent reads, or the queue is full
- * - `trace_not_hot`       the daemon no longer holds this task (query the archive)
+ * - `daemon_busy`         too many concurrent reads, or the queue is full
+ * - `trace_not_hot`       the daemon does not hold this task; decided by
+ *                         `TraceStore.head(taskId) === null`, so a task whose
+ *                         trace is closed is still hot and still readable
  */
 export type DaemonTraceReadErrorCode = Extract<
   DaemonProtocolErrorCode,
@@ -65,4 +91,61 @@ export type DaemonTraceReadErrorCode = Extract<
 
 export interface DaemonTraceReader {
   read(request: DaemonTraceReadRequest): Promise<DaemonTraceReadResult>;
+}
+
+/** Clamp a caller's page request the way the real implementation must. */
+export const DAEMON_TRACE_READ_DEFAULT_LIMIT = 200;
+export const DAEMON_TRACE_READ_MAX_LIMIT = 500;
+
+/** Where a runtime's trace store comes from. Injectable so tests stay in memory. */
+export type DaemonTraceStoreLookup = (runtimeId: string) => TraceStore | null;
+
+/**
+ * In-memory {@link DaemonTraceReader}, routing `runtimeId -> TraceStore`.
+ *
+ * A-0 ships this so A-6 and B5 can wire against a working reader before the socket
+ * layer exists, and so the error contract is executable: an unknown runtime is
+ * `daemon_unreachable`, a runtime that has never seen the task is `trace_not_hot`.
+ *
+ * It is not a stand-in for the transport: there is no timeout, no concurrency
+ * limit and no `daemon_busy`, because those belong to the socket. A-6's real
+ * implementation keeps this mapping and adds those three.
+ */
+export class InMemoryDaemonTraceReader implements DaemonTraceReader {
+  constructor(
+    private readonly lookup: DaemonTraceStoreLookup,
+    /** Latest observation per runtime, used to fill `last_seen_at`. */
+    private readonly lastSeenAt: (runtimeId: string) => string | null = () => null,
+  ) {}
+
+  async read(request: DaemonTraceReadRequest): Promise<DaemonTraceReadResult> {
+    const store = this.lookup(request.runtimeId);
+    if (!store) {
+      return {
+        ok: false,
+        code: "daemon_unreachable",
+        runtime_id: request.runtimeId,
+        last_seen_at: this.lastSeenAt(request.runtimeId) ?? undefined,
+      };
+    }
+    // A closed trace is still hot and still readable; only "never seen" is not.
+    const head = store.head(request.taskId);
+    if (head === null) {
+      return { ok: false, code: "trace_not_hot", runtime_id: request.runtimeId };
+    }
+
+    const limit = Math.max(
+      1,
+      Math.min(Math.floor(request.limit ?? DAEMON_TRACE_READ_DEFAULT_LIMIT), DAEMON_TRACE_READ_MAX_LIMIT),
+    );
+    const page = store.read(request.taskId, request.afterSeq ?? 0, limit, request.maxBytes);
+    return {
+      ok: true,
+      events: page.events,
+      next_after_seq: page.events.at(-1)?.seq ?? request.afterSeq ?? 0,
+      head: page.head,
+      eof: page.eof,
+      closed: head.closed,
+    };
+  }
 }

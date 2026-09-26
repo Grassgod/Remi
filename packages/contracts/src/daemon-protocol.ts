@@ -35,6 +35,8 @@
  * so the classification lives here as data rather than in a comment.
  */
 
+import type { TraceEvent } from "./trace.js";
+
 export const DAEMON_PROTOCOL_VERSION = 2;
 
 /**
@@ -93,6 +95,7 @@ export const DAEMON_UPLINK_EVENT_FRAMES = [
   "runtime.bot_menu_result",
   "feishu.outbound_result",
   "plugin.state",
+  "runtime.archive_sessions_result",
 ] as const;
 
 /**
@@ -156,6 +159,7 @@ export const DAEMON_DOWNLINK_EVENT_FRAMES = [
   "platform.drain",
   "plugin.desired_revision",
   "workspace.settings",
+  "runtime.archive_sessions",
 ] as const;
 
 /** server -> daemon RPC requests, paired with a `res` by `id`. */
@@ -334,6 +338,156 @@ export interface DaemonRejectPayload {
   min_cli_version: string;
   /** Operator-facing sentence, safe to log verbatim. */
   hint: string;
+}
+
+// ── Payloads ────────────────────────────────────────────────────────────────
+
+/**
+ * The `trace` block on `task.complete` / `task.fail` (MUL-402 ruling 5).
+ *
+ * `closed` is always true here by construction: these frames are sent after the
+ * daemon closed the trace, so a receiver that sees this block knows the trace it
+ * names is final. It is spelled out rather than omitted so the card and the pointer
+ * both read the same field name as `TraceStoreHead.closed`.
+ *
+ * `head` and `event_count` are separate numbers on purpose. A freshly written trace
+ * is dense, so they are equal; a **backfilled** historical trace keeps its original
+ * sparse sequences and `head > event_count` (A11). Reconciliation must use
+ * `event_count` for historical members and `head` only for live ones.
+ */
+export interface DaemonTaskCompletionTrace {
+  head: number;
+  event_count: number;
+  closed: true;
+  /** Count of `tool_use` events. */
+  tool_call_count: number;
+  /** Bucketed by `(type, tool)`; `tool` is non-null only for tool frames (A11). */
+  type_histogram: DaemonTraceHistogramBucket[];
+}
+
+export interface DaemonTraceHistogramBucket {
+  type: string;
+  tool: string | null;
+  count: number;
+}
+
+/** Identifies the model that produced a turn. */
+export interface DaemonTaskCompletionModel {
+  provider: string;
+  model: string;
+}
+
+/** Fields `task.complete` and `task.fail` add to the existing report payloads. */
+export interface DaemonTaskCompletionFields {
+  trace: DaemonTaskCompletionTrace;
+  /** Markdown of the turn's final answer, or null when the turn produced none. */
+  final_reply_md: string | null;
+  /** From the last `execution` event's meta, or null when unknown. */
+  model: DaemonTaskCompletionModel | null;
+}
+
+/**
+ * `runtime.archive_sessions`, server -> daemon.
+ *
+ * Replaces the plan to reuse the heartbeat's `pending_command`: that field is a
+ * general shell channel (`{ command, args, timeout_ms }` executed directly), so
+ * archiving through it would mean remote shell execution for a structured request.
+ * The entity id (and so the dedupe key) is `request_id`, and the backing table is
+ * MUL-402's `multiremi_session_archive_requests`.
+ */
+export interface DaemonArchiveSessionsPayload {
+  request_id: string;
+  subjects: DaemonArchiveSubject[];
+}
+
+export interface DaemonArchiveSubject {
+  kind: "issue" | "chat" | "task";
+  id: string;
+}
+
+/**
+ * `runtime.archive_sessions_result`, daemon -> server, partitioned under `rt:<id>`.
+ *
+ * The upload itself still travels over HTTP; this frame only reports the outcome.
+ */
+export interface DaemonArchiveSessionsResultPayload {
+  request_id: string;
+  status: DaemonArchiveSessionsResultStatus;
+  archive_ids: string[];
+  /** Present when `status` is `failed`. */
+  error?: string;
+}
+
+export type DaemonArchiveSessionsResultStatus = "completed" | "failed";
+
+/**
+ * `trace.append`, daemon -> server.
+ *
+ * `closed` travels with the batch so the server can flip its own completeness flag
+ * without waiting for the completion frame, which is a separate uplink event and
+ * may arrive after the last append.
+ */
+export interface DaemonTraceAppendPayload {
+  task_id: string;
+  events: TraceEvent[];
+  closed: boolean;
+}
+
+/** `trace.push`, server -> daemon, for a task this daemon subscribed to. */
+export interface DaemonTracePushPayload {
+  task_id: string;
+  events: TraceEvent[];
+  closed: boolean;
+}
+
+/** `trace.read` request, server -> daemon. */
+export interface DaemonTraceReadPayload {
+  task_id: string;
+  after_seq: number;
+  limit: number;
+  max_bytes: number;
+}
+
+/** `trace.read` / `trace.fetch` reply payload, on success. */
+export interface DaemonTraceReadReplyPayload {
+  ok: true;
+  events: TraceEvent[];
+  next_after_seq: number;
+  head: number;
+  eof: boolean;
+  closed: boolean;
+}
+
+/** `trace.fetch` request, daemon -> server: fill a gap from the server's copy. */
+export interface DaemonTraceFetchPayload {
+  task_id: string;
+  after_seq: number;
+  limit: number;
+}
+
+/** `trace.subscribe` / `trace.unsubscribe` request payloads. */
+export interface DaemonTraceSubscribePayload {
+  task_id: string;
+  from_seq: number;
+}
+
+export interface DaemonTraceUnsubscribePayload {
+  task_id: string;
+}
+
+/**
+ * `trace.subscribe` / `trace.fetch` reply payloads.
+ *
+ * `first_seq` is the oldest sequence the server can serve for the task; a
+ * subscriber asking for anything older gets `gap: true` and must fill from the
+ * daemon's file.
+ */
+export interface DaemonTraceSubscribeReplyPayload {
+  ok: true;
+  first_seq: number;
+  head: number;
+  closed: boolean;
+  gap: boolean;
 }
 
 // ── Error codes ─────────────────────────────────────────────────────────────

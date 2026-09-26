@@ -43,8 +43,16 @@ derived from database state rather than from a server-side queue.
   `pending_*` item from its own table, then resends a snapshot. Duplicate arrivals
   are absorbed by entity id.
 - Trace events do not enter the outbox. The daemon's normalized trace file is both
-  the upload source and the replay buffer, and trace sequences are dense and
-  append-only per task so `first_seq .. head` is gapless.
+  the upload source and the replay buffer. Trace sequences are dense and
+  append-only per task — assigned by the trace store at the durable write, never
+  rewritten, with a duplicate treated as corruption — so `first_seq .. head` is
+  gapless for live traces. The server-side field caps move into that same write
+  point, making it the only sanitize site. Completeness is carried by a single
+  `closed` boolean rather than by a terminator event, so no consumer has to
+  recognise a special type.
+- The archival request travels as a typed frame pair rather than through the
+  heartbeat's `pending_command`: that field is a general shell channel, and using
+  it would turn a structured archive request into remote shell execution.
 - `POST /api/daemon/heartbeat` is retained as an **upgrade channel** only: a v1
   daemon's heartbeat receives `pending_update` and nothing else, every other v1
   route answers 426, and claim always returns null.
@@ -64,6 +72,10 @@ derived from database state rather than from a server-side queue.
   sequencing, but the daemon must write a normalized trace file anyway (MUL-402),
   so this is a double write, and at 4.9M rows the message volume would make one
   SQLite queue the bottleneck.
+- **A closed enum of normalized event kinds** — four of the originally proposed
+  kinds have no producer at all, so normalizing would make the historical backfill
+  lossy, and every consumer already treats the type as an open string. The known
+  set is published as a constant for enumeration, not as a validator.
 - **Reject protocol v1 outright in the heartbeat handler** — the cleanest-looking
   cut, but the heartbeat ack is the *only* upgrade path the fleet has ever used,
   and one production daemon has no reachable SSH route. Rejected v1 daemons would

@@ -17,12 +17,19 @@ const REPO_ROOT = join(import.meta.dir, "../..");
 
 /** Every module A-0 adds, and whether it may be imported by runtime code yet. */
 const A0_MODULES = [
-  // Imported by nothing outside tests until A-1/A-2/A-5/A-6.
+  // Imported by nothing outside tests until A-1/A-2/A-5/A-6 wire them up.
   { specifier: "@multiremi/contracts/daemon-protocol", wired: false },
   { specifier: "@multiremi/contracts/trace", wired: false },
   { specifier: "@multiremi/worker/trace-store", wired: false },
   { specifier: "@multiremi/api/trace/trace-sink", wired: false },
   { specifier: "@multiremi/api/trace/daemon-trace-reader", wired: false },
+  // A-0b additions: the shared sanitize point and the derived read-side values.
+  // Both are called only by tests and by other A-0 modules so far. A-6 wires
+  // `trace-sanitize` into the daemon's write path and A-5/A-8 wire
+  // `trace-derive` into completion; until then the equivalence tests are what
+  // hold them to the current behaviour.
+  { specifier: "@shared/trace-sanitize", wired: false },
+  { specifier: "@shared/trace-derive", wired: false },
 ] as const;
 
 /** The one file allowed to import a not-yet-wired module: this guard's own subject list. */
@@ -52,6 +59,14 @@ const A0_SOURCES = new Set([
   join(REPO_ROOT, "packages/server/src/worker/trace-store.ts"),
   join(REPO_ROOT, "packages/server/src/api/trace/trace-sink.ts"),
   join(REPO_ROOT, "packages/server/src/api/trace/daemon-trace-reader.ts"),
+  join(REPO_ROOT, "packages/shared/src/trace-sanitize.ts"),
+  join(REPO_ROOT, "packages/shared/src/trace-derive.ts"),
+]);
+
+/** Notes on who will consume each module once it is wired. */
+const WIRING_OWNER = new Map<string, string>([
+  ["@shared/trace-sanitize", "A-6 wires it into the daemon write path; today only tests call it"],
+  ["@shared/trace-derive", "A-5/A-8 wire it into completion and the backfill"],
 ]);
 
 const IMPORT_RE = /(?:from|import)\s*\(?\s*["']([^"']+)["']/g;
@@ -76,7 +91,11 @@ describe("A-0 modules are not yet wired into runtime code", () => {
         }
       }
       if (wired) {
-        expect(consumers.length, `${specifier} should be imported by runtime code by now`).toBeGreaterThan(0);
+        // Name the consumer so a passing case still says who depends on it.
+        expect(
+          consumers.map((file) => file.replace(`${REPO_ROOT}/`, "")).length,
+          `${specifier} should be imported by runtime code by now (${WIRING_OWNER.get(specifier) ?? "unknown consumer"})`,
+        ).toBeGreaterThan(0);
       } else {
         expect(
           consumers.map((file) => file.replace(`${REPO_ROOT}/`, "")),
