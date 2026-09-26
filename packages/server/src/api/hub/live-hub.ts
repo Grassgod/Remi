@@ -26,6 +26,7 @@
  * `tests/unit/multiremi/live-hub-contract.test.ts`.
  */
 
+import { parseHubStreamKey } from "@multiremi/contracts/live-hub.js";
 import type {
   HubFrame,
   HubFrameListener,
@@ -176,7 +177,10 @@ export class EmptyLiveHub implements LiveHub {
     // lands — and neither spelling reports a gap, because there is no retained
     // tail to fall behind. `log_version: null` means "unknown", which is exactly
     // what an empty hub knows.
-    if (keyOrTaskId.startsWith("log:") || keyOrTaskId.startsWith("trace:")) {
+    //
+    // The prefix test goes through the contract's parser rather than a local
+    // `startsWith`, so the key grammar has exactly one definition.
+    if (parseHubStreamKey(keyOrTaskId)) {
       return { first_seq: 1, head: 0, log_version: null, gap: null, unsubscribe: () => {} };
     }
     return { first_seq: 1, head: 0, gap: false, unsubscribe: () => {} };

@@ -265,6 +265,19 @@ describe("EmptyLiveHub", () => {
     expect(consumeHumanRequests(hub)).toEqual([]);
   });
 
+  it("tells the two subscription spellings apart by key shape, not by caller intent", () => {
+    const hub = createEmptyLiveHub(createLocalHubTransport());
+    // `trace:<id>` is a stream key and gets the keyed shape…
+    const keyed = hub.subscribe("trace:task_a", 0, () => {});
+    expect(keyed).toHaveProperty("log_version", null);
+    expect(keyed.gap).toBeNull();
+    // …and a bare id is A-0's spelling and gets the sink shape. The two differ on
+    // purpose: A-0's `gap` is a boolean and may not be widened.
+    const sink = hub.subscribe("task_a", 0, () => {});
+    expect(sink.gap).toBe(false);
+    expect(sink).not.toHaveProperty("log_version");
+  });
+
   it("never fabricates a sequence for a caller", () => {
     const hub = createEmptyLiveHub(createLocalHubTransport());
     // The one invariant A-0 restates: the sequence belongs to the daemon. An
