@@ -191,6 +191,39 @@ describe.each(PLATFORMS)("anchored owned directory removal (%s)", (platform) => 
     expect(existsSync(join(root, OWNED_DIRECTORY_QUARANTINE))).toBe(false);
   });
 
+  it("releases every descriptor when recovery refuses a non-private quarantine", () => {
+    const root = tempRoot(roots);
+    const quarantine = join(root, OWNED_DIRECTORY_QUARANTINE);
+    mkdirSync(quarantine);
+    chmodSync(quarantine, 0o755);
+    // Workspace GC reports this refusal and retries every round, so any
+    // descriptor left open here accumulates for the daemon's lifetime.
+    const originalOpen = fs.openSync;
+    const originalClose = fs.closeSync;
+    let opened = 0;
+    let closed = 0;
+    const open = spyOn(fs, "openSync").mockImplementation((...args: Parameters<typeof originalOpen>) => {
+      const fd = originalOpen(...args);
+      opened++;
+      return fd;
+    });
+    const close = spyOn(fs, "closeSync").mockImplementation((...args: Parameters<typeof originalClose>) => {
+      closed++;
+      return originalClose(...args);
+    });
+    try {
+      for (let attempt = 0; attempt < 10; attempt++) {
+        expect(() => recoverOwnedDirectoryQuarantineSync(root, { platform }))
+          .toThrow("must not be accessible by group or other users");
+      }
+      expect(opened).toBe(20);
+      expect(closed).toBe(opened);
+    } finally {
+      open.mockRestore();
+      close.mockRestore();
+    }
+  });
+
   it("retains a verified quarantine generation when the root fence is lost", () => {
     const root = tempRoot(roots);
     const target = join(root, "MUL-1");

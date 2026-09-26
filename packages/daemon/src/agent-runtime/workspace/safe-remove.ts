@@ -514,13 +514,19 @@ function openRecoveryQuarantine(
     }
     const fd = openOptionalRealDirectory(join(rootAlias, OWNED_DIRECTORY_QUARANTINE), "owned deletion quarantine");
     if (fd === null) return null;
-    const info = fstatSync(fd);
-    // Report the caller-facing path, not the procfs alias.
-    assertPrivateQuarantine(info, quarantinePath);
-    const alias = descriptorDirectoryPath(fd, info, platform);
-    if (!alias) {
+    let info: Stats;
+    let alias: string | null;
+    try {
+      info = fstatSync(fd);
+      // Report the caller-facing path, not the procfs alias.
+      assertPrivateQuarantine(info, quarantinePath);
+      alias = descriptorDirectoryPath(fd, info, platform);
+      if (!alias) throw new Error("directory descriptor path unavailable for owned deletion quarantine");
+    } catch (error) {
+      // GC skips a non-private quarantine every round instead of aborting, so
+      // this descriptor must not outlive the refusal.
       closeSync(fd);
-      throw new Error("directory descriptor path unavailable for owned deletion quarantine");
+      throw error;
     }
     return {
       path: alias,
