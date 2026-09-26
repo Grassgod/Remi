@@ -29,6 +29,7 @@
  */
 import { Database } from "bun:sqlite";
 import { mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { MultiremiStore } from "../../packages/server/src/store/store.js";
 import { startMultiremiServer } from "../../packages/server/src/api/server.js";
@@ -284,7 +285,10 @@ try {
   // calls, which reads exactly like a probe bug. `localhost` is the origin Next
   // serves by default, so use it for the web side; the API stays on 127.0.0.1.
   const webBase = `http://localhost:${WEB_PORT}`;
-  const webLogPath = join(REPO_ROOT, "reports", "performance", `.mul384-web-${WEB_PORT}.log`);
+  // Keep the dev server's log outside the repository: it is diagnostic output,
+  // not an artifact, and leaving it under `reports/performance/` invites an
+  // accidental commit of a file that grows with every run.
+  const webLogPath = join(tmpdir(), `mul384-web-${WEB_PORT}.log`);
   mkdirSync(join(REPO_ROOT, "reports", "performance"), { recursive: true });
   const webLog = (await import("node:fs")).openSync(webLogPath, "a");
   // `next dev` keeps a lock per app directory, so a leftover instance for this
