@@ -20,7 +20,7 @@ import { agentHasKnowledgePublishCapability } from "@multiremi/knowledge/capabil
 import { autopilotRunSourceRevision } from "@multiremi/store/repos/autopilots-repo.js";
 import { resolveTaskRepositoryWikiRepositories } from "@multiremi/repository-wiki/task-scope.js";
 import { sha256Text } from "@multiremi/project-knowledge/codec.js";
-import { OpenVikingClientError, OpenVikingDeadlineError } from "@multiremi/project-knowledge/openviking-client.js";
+import { isOpenVikingTimeout, OpenVikingDeadlineError } from "@multiremi/project-knowledge/openviking-client.js";
 import { PROJECT_KNOWLEDGE_REQUEST_BUDGET_MS } from "@multiremi/project-knowledge/service.js";
 import { resolveRoutePattern } from "../../observability/request-metrics.js";
 
@@ -258,9 +258,8 @@ export function knowledgePolicyErrorResponse(c: Context, error: unknown): Respon
  * with the same request's `api_slow_request`, which carries `total_ms`.
  */
 export function openVikingTimeoutResponse(c: Context, error: unknown): Response | null {
-  if (!(error instanceof OpenVikingClientError)) return null;
+  if (!isOpenVikingTimeout(error)) return null;
   const deadline = error instanceof OpenVikingDeadlineError ? error : null;
-  if (!deadline && error.code !== "TIMEOUT") return null;
   console.log(JSON.stringify({
     event: "openviking_request_timeout",
     ts: new Date().toISOString(),

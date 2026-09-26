@@ -119,6 +119,7 @@ import {
   createFormalWriteRun,
   createRepositoryMutationSubmission,
   knowledgePolicyErrorResponse,
+  openVikingTimeoutResponse,
   rawSubmissionResponse,
   resolveKnowledgeWriteActor,
 } from "../helpers/knowledge.js";
@@ -588,7 +589,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
         if (ids.length > REPOSITORY_WIKI_BODY_BATCH_LIMIT) {
           return c.json({ error: `include_body supports at most ${REPOSITORY_WIKI_BODY_BATCH_LIMIT} ids` }, 400);
         }
-        const docs = await deps.repositoryWiki.readBodies(workspaceId, repositoryId, ids);
+        const docs = await deps.repositoryWiki.withRequestDeadline().readBodies(workspaceId, repositoryId, ids);
         return c.json({ docs: docs.map((doc) => repositoryWikiDocResponse(doc, true)) });
       }
       const docs = deps.repositoryWiki.listMetadata(workspaceId, repositoryId, ids ?? undefined);
@@ -810,7 +811,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     if (requireWorkspaceRepository(store, workspaceId, repositoryId)) return c.json({ error: "repository not found" }, 404);
     try {
-      const doc = await deps.repositoryWiki.get(workspaceId, repositoryId, c.req.param("ref"));
+      const doc = await deps.repositoryWiki.withRequestDeadline().get(workspaceId, repositoryId, c.req.param("ref"));
       return doc ? c.json({ doc: repositoryWikiDocResponse(doc) }) : c.json({ error: "repository wiki doc not found" }, 404);
     } catch (error) {
       return repositoryWikiError(c, error);
@@ -1685,6 +1686,8 @@ function repositoryWikiRevisionResponse(revision: MultiremiRepositoryWikiDocRevi
 }
 
 function repositoryWikiError(c: Context, error: unknown): Response {
+  const timeout = openVikingTimeoutResponse(c, error);
+  if (timeout) return timeout;
   const message = error instanceof Error ? error.message : "repository wiki request failed";
   if (error instanceof RepositoryWikiUnavailableError) return c.json({ error: message }, 503);
   if (error instanceof RepositoryWikiLogHistoryError) return c.json({ error: message }, 409);

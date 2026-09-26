@@ -52,6 +52,11 @@ export class OpenVikingDeadlineError extends OpenVikingClientError {
   }
 }
 
+/** OpenViking ran out of time: the caller's deadline, or a configured attempt timeout on the last attempt. */
+export function isOpenVikingTimeout(error: unknown): error is OpenVikingClientError {
+  return error instanceof OpenVikingDeadlineError || (error instanceof OpenVikingClientError && error.code === "TIMEOUT");
+}
+
 /** A configured per-attempt timeout never outlives the caller's deadline, however large the env sets it. */
 export function clampAttemptTimeoutMs(configuredMs: number, deadlineAt: number | undefined, now = Date.now()): number {
   if (deadlineAt === undefined) return configuredMs;

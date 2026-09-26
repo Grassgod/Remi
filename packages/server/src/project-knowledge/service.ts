@@ -32,8 +32,8 @@ import {
   projectKnowledgeSlugFromUri,
   sha256Text,
 } from "./codec.js";
-import { OPENVIKING_DEFAULT_ATTEMPT_TIMEOUT_MS, OPENVIKING_MAX_RETRIES, OpenVikingClient, openVikingDeadlineSignal } from "./openviking-client.js";
-import { deadlineClient } from "@multiremi/repository-wiki/deadline.js";
+import { OPENVIKING_DEFAULT_ATTEMPT_TIMEOUT_MS, OPENVIKING_MAX_RETRIES, OpenVikingClient } from "./openviking-client.js";
+import { clientWithDeadline } from "@multiremi/repository-wiki/deadline.js";
 import type {
   OpenVikingClientContract,
   ProjectKnowledgeDoc,
@@ -720,11 +720,6 @@ export function createProjectKnowledgeServiceFromEnv(store: MultiremiStore): Pro
     maxRetries: parsePositiveInt(process.env.MULTIREMI_OPENVIKING_MAX_RETRIES, OPENVIKING_MAX_RETRIES),
   });
   return new ProjectKnowledgeService(store, client, mode);
-}
-
-function clientWithDeadline(client: OpenVikingClientContract, deadlineAt: number): OpenVikingClientContract {
-  // Clients that cannot clamp their own attempts still get their waits cut at the deadline.
-  return client.withDeadline?.(deadlineAt) ?? deadlineClient(client, openVikingDeadlineSignal(deadlineAt));
 }
 
 function prepareUpdatedDoc(current: ProjectKnowledgeDoc, input: UpdateProjectDocInput): MultiremiProjectDoc {
