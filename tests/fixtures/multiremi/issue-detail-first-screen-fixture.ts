@@ -70,7 +70,18 @@ export interface IssueDetailFixture {
 }
 
 const WORKSPACE_ID = "local";
-const NOW = Date.UTC(2026, 8, 20, 12, 0, 0);
+const FIXTURE_EPOCH_MS = Date.UTC(2026, 8, 20, 12, 0, 0);
+const NOW = FIXTURE_EPOCH_MS;
+
+/**
+ * Re-anchors the pinned clock, when one is installed.
+ *
+ * `installDeterministicIds` ticks once per clock read, so anything that reads
+ * the clock between installing the pin and seeding — store construction, schema
+ * migrations — would otherwise shift every fixture timestamp and invalidate the
+ * golden. Seeding therefore resets the clock to a fixed epoch first.
+ */
+let activeClockReset: (() => void) | null = null;
 
 /** Stable filler so the fixture body sizes do not drift between runs. */
 function filler(prefix: string, index: number, bytes: number): string {
@@ -91,6 +102,7 @@ export function seedIssueDetailFirstScreenFixture(
   store: MultiremiStore,
   options: IssueDetailFixtureOptions = {},
 ): IssueDetailFixture {
+  activeClockReset?.();
   const startedAt = performance.now();
   const rootComments = options.rootComments ?? 105;
   const replies = options.replies ?? 68;
@@ -389,6 +401,8 @@ export function fillTaskBodies(
 // ── golden comparison ────────────────────────────────────────────────────────
 
 const ISO_RE = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})/g;
+/** Same shape without the `g` flag, so `.test` keeps no `lastIndex` state. */
+const ISO_PROBE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/;
 
 /**
  * Replace wall-clock timestamps with a placeholder of the same type so the
@@ -399,7 +413,9 @@ const ISO_RE = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:
  * route produced them, which is what the shape guard has to catch.
  */
 export function normalizeIssueDetailResponse(value: unknown): unknown {
-  if (typeof value === "string") return value.replace(ISO_RE, "<timestamp>");
+  if (typeof value === "string") {
+    return normalizeCursor(value).replace(ISO_RE, "<timestamp>");
+  }
   if (Array.isArray(value)) return value.map((entry) => normalizeIssueDetailResponse(entry));
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = {};
@@ -407,6 +423,35 @@ export function normalizeIssueDetailResponse(value: unknown): unknown {
       out[key] = normalizeIssueDetailResponse(entry);
     }
     return out;
+  }
+  return value;
+}
+
+/**
+ * Scrub the timestamp half of a `base64url([createdAt, id])` page cursor.
+ *
+ * Page cursors carry a timestamp, so they are time-derived exactly like the
+ * `created_at` fields the ISO substitution already covers. Leaving them raw
+ * would make this golden depend on how many times the pinned clock was read
+ * before the fixture ran — schema migrations read it — instead of on the
+ * response shape the test exists to protect.
+ */
+function normalizeCursor(value: string): string {
+  if (!/^[A-Za-z0-9_-]{16,}$/.test(value)) return value;
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
+  } catch {
+    return value;
+  }
+  if (
+    Array.isArray(decoded)
+    && decoded.length === 2
+    && typeof decoded[0] === "string"
+    && ISO_PROBE_RE.test(decoded[0])
+    && typeof decoded[1] === "string"
+  ) {
+    return Buffer.from(JSON.stringify(["<timestamp>", decoded[1]]), "utf8").toString("base64url");
   }
   return value;
 }
@@ -425,7 +470,7 @@ export function installDeterministicIds(): () => void {
   const RealDate = globalThis.Date;
   // One tick per read, like the route snapshot harness: stable ordering with no
   // ties, and no chance of two rows sharing a timestamp.
-  let clock = Date.UTC(2026, 8, 20, 12, 0, 0);
+  let clock = FIXTURE_EPOCH_MS;
   class FixtureDate extends RealDate {
     constructor(...args: unknown[]) {
       if (args.length === 0) super(clock++);
@@ -436,6 +481,12 @@ export function installDeterministicIds(): () => void {
     }
   }
   (globalThis as { Date: unknown }).Date = FixtureDate;
+  // Seeding re-anchors the clock (see `seedIssueDetailFirstScreenFixture`), so a
+  // migration that reads the clock before the fixture runs cannot shift every
+  // timestamp the golden encodes.
+  activeClockReset = () => {
+    clock = FIXTURE_EPOCH_MS;
+  };
   let state = 0x385_9a71;
   const nextByte = (): number => {
     state ^= state << 13;
@@ -451,6 +502,7 @@ export function installDeterministicIds(): () => void {
     return array;
   };
   return () => {
+    activeClockReset = null;
     (globalThis.crypto as { getRandomValues: unknown }).getRandomValues = realGetRandomValues;
     (globalThis as { Date: unknown }).Date = RealDate;
   };
