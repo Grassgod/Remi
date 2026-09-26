@@ -533,11 +533,16 @@ function toDeepLinkTarget(
  * silently as zero.
  */
 async function probeCommentCount(baseUrl: string, token: string, issueId: string): Promise<number | null> {
-  const body = await fetchJson<{ entries?: unknown[] }>(
+  const body = await fetchJson<{ entries?: unknown[] } | unknown[]>(
     `${baseUrl}/api/issues/${encodeURIComponent(issueId)}/timeline`,
     { Authorization: `Bearer ${token}` },
   ).catch(() => null);
-  return body && Array.isArray(body.entries) ? body.entries.length : null;
+  // The no-cursor form answers with a bare array; the paged form wraps it in
+  // `entries`. Both are legitimate shapes for this endpoint.
+  if (Array.isArray(body)) return body.length;
+  return body && Array.isArray((body as { entries?: unknown[] }).entries)
+    ? (body as { entries: unknown[] }).entries.length
+    : null;
 }
 
 /** Resolves an identifier for reporting without needing the issue detail endpoint. */
@@ -764,20 +769,25 @@ async function resetRecorderAt(page: Page, from: number | null): Promise<number 
 async function waitForReady(
   page: Page,
   deadlineMs: number,
+  requested: SelectorModeOption,
 ): Promise<{ summary: PerfRecorderSummary | null; profile: PerfProfileName | null }> {
   const started = Date.now();
   let last: PerfRecorderSummary | null = null;
+  // `auto` follows the DOM generation; an explicit `--selectors` overrides it, so
+  // the same production page can be measured through either table on purpose.
+  const resolveMode = (summary: PerfRecorderSummary): PerfProfileName =>
+    requested === "auto" ? (summary.contractDom ? "contract" : "legacy") : requested;
   while (Date.now() - started < deadlineMs) {
     const summary = await recorderSummary(page);
     if (summary) {
       last = summary;
-      const mode: PerfProfileName = summary.contractDom ? "contract" : "legacy";
+      const mode = resolveMode(summary);
       if (summary.profiles[mode]?.ready) return { summary, profile: mode };
     }
     await page.waitForTimeout(50);
   }
   if (!last) return { summary: null, profile: null };
-  const mode: PerfProfileName = last.contractDom ? "contract" : "legacy";
+  const mode = resolveMode(last);
   return { summary: last, profile: last.profiles[mode]?.rootFound ? mode : null };
 }
 
@@ -843,7 +853,7 @@ async function measureRound(options: {
     measurement.error = (error as Error).message;
   }
 
-  const { summary, profile: measuredProfile } = await waitForReady(page, ROUND_TIMEOUT_MS);
+  const { summary, profile: measuredProfile } = await waitForReady(page, ROUND_TIMEOUT_MS, opts.selectors);
 
   await freezeRecorder(page);
   const buffer = await readRecorderBuffer(page);

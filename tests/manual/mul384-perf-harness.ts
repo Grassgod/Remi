@@ -121,7 +121,7 @@ try {
   // matrix exercises the tall-row rule instead of only finding it on 209.
   store.createIssueComment(longIssue.id, {
     issueSessionId: longSession.id,
-    authorType: "agent",
+    authorType: "member",
     authorId: store.getCurrentUser().id,
     body: Array.from({ length: 90 }, (_, i) => `## section ${i + 1}\n\n${"filler ".repeat(60)}`).join("\n\n"),
   });
@@ -212,6 +212,7 @@ try {
     title: string,
     details: Record<string, unknown>,
     createdAt: string = now,
+    issueId: string = deepLinkIssue.id,
   ): void => {
     database.run(
       `INSERT INTO multiremi_inbox_items (
@@ -221,7 +222,7 @@ try {
       [
         id,
         workspace.id,
-        deepLinkIssue.id,
+        issueId,
         member.id,
         member.id,
         me.id,
@@ -243,9 +244,11 @@ try {
     comment_id: targetComment?.id ?? null,
     issue_session_id: deepLinkSession.id,
   });
-  // Rows with no comment/session cannot be deep-link targets. A later timestamp
-  // keeps them ahead of the eligible row, so the probe has to reject them
-  // instead of taking whatever the API returned first.
+  // Rows with no comment/session cannot be deep-link targets. They sit ahead of
+  // the eligible row (a later timestamp) so the probe has to reject them, and
+  // they hang off a *different* issue: `?issue=` resolves to that issue's newest
+  // notification, so sharing the deeplink issue would shadow it and the deep link
+  // would never find its target comment.
   for (let i = 0; i < 3; i++) {
     insertInbox(
       `inb_local_bare_${i}`,
@@ -253,6 +256,7 @@ try {
       `Bare notification ${i}`,
       {},
       new Date(Date.now() + 60_000).toISOString(),
+      cancelledIssue.id,
     );
   }
   const inboxItem = { id: inboxItemId };
