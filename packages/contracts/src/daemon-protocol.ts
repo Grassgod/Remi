@@ -35,6 +35,8 @@
  * so the classification lives here as data rather than in a comment.
  */
 
+import type { TraceEvent } from "./trace.js";
+
 export const DAEMON_PROTOCOL_VERSION = 2;
 
 /**
@@ -93,6 +95,7 @@ export const DAEMON_UPLINK_EVENT_FRAMES = [
   "runtime.bot_menu_result",
   "feishu.outbound_result",
   "plugin.state",
+  "runtime.archive_sessions_result",
 ] as const;
 
 /**
@@ -156,6 +159,7 @@ export const DAEMON_DOWNLINK_EVENT_FRAMES = [
   "platform.drain",
   "plugin.desired_revision",
   "workspace.settings",
+  "runtime.archive_sessions",
 ] as const;
 
 /** server -> daemon RPC requests, paired with a `res` by `id`. */
@@ -336,6 +340,156 @@ export interface DaemonRejectPayload {
   hint: string;
 }
 
+// ── Payloads ────────────────────────────────────────────────────────────────
+
+/**
+ * The `trace` block on `task.complete` / `task.fail` (MUL-402 ruling 5).
+ *
+ * `closed` is always true here by construction: these frames are sent after the
+ * daemon closed the trace, so a receiver that sees this block knows the trace it
+ * names is final. It is spelled out rather than omitted so the card and the pointer
+ * both read the same field name as `TraceStoreHead.closed`.
+ *
+ * `head` and `event_count` are separate numbers on purpose. A freshly written trace
+ * is dense, so they are equal; a **backfilled** historical trace keeps its original
+ * sparse sequences and `head > event_count` (A11). Reconciliation must use
+ * `event_count` for historical members and `head` only for live ones.
+ */
+export interface DaemonTaskCompletionTrace {
+  head: number;
+  event_count: number;
+  closed: true;
+  /** Count of `tool_use` events. */
+  tool_call_count: number;
+  /** Bucketed by `(type, tool)`; `tool` is non-null only for tool frames (A11). */
+  type_histogram: DaemonTraceHistogramBucket[];
+}
+
+export interface DaemonTraceHistogramBucket {
+  type: string;
+  tool: string | null;
+  count: number;
+}
+
+/** Identifies the model that produced a turn. */
+export interface DaemonTaskCompletionModel {
+  provider: string;
+  model: string;
+}
+
+/** Fields `task.complete` and `task.fail` add to the existing report payloads. */
+export interface DaemonTaskCompletionFields {
+  trace: DaemonTaskCompletionTrace;
+  /** Markdown of the turn's final answer, or null when the turn produced none. */
+  final_reply_md: string | null;
+  /** From the last `execution` event's meta, or null when unknown. */
+  model: DaemonTaskCompletionModel | null;
+}
+
+/**
+ * `runtime.archive_sessions`, server -> daemon.
+ *
+ * Replaces the plan to reuse the heartbeat's `pending_command`: that field is a
+ * general shell channel (`{ command, args, timeout_ms }` executed directly), so
+ * archiving through it would mean remote shell execution for a structured request.
+ * The entity id (and so the dedupe key) is `request_id`, and the backing table is
+ * MUL-402's `multiremi_session_archive_requests`.
+ */
+export interface DaemonArchiveSessionsPayload {
+  request_id: string;
+  subjects: DaemonArchiveSubject[];
+}
+
+export interface DaemonArchiveSubject {
+  kind: "issue" | "chat" | "task";
+  id: string;
+}
+
+/**
+ * `runtime.archive_sessions_result`, daemon -> server, partitioned under `rt:<id>`.
+ *
+ * The upload itself still travels over HTTP; this frame only reports the outcome.
+ */
+export interface DaemonArchiveSessionsResultPayload {
+  request_id: string;
+  status: DaemonArchiveSessionsResultStatus;
+  archive_ids: string[];
+  /** Present when `status` is `failed`. */
+  error?: string;
+}
+
+export type DaemonArchiveSessionsResultStatus = "completed" | "failed";
+
+/**
+ * `trace.append`, daemon -> server.
+ *
+ * `closed` travels with the batch so the server can flip its own completeness flag
+ * without waiting for the completion frame, which is a separate uplink event and
+ * may arrive after the last append.
+ */
+export interface DaemonTraceAppendPayload {
+  task_id: string;
+  events: TraceEvent[];
+  closed: boolean;
+}
+
+/** `trace.push`, server -> daemon, for a task this daemon subscribed to. */
+export interface DaemonTracePushPayload {
+  task_id: string;
+  events: TraceEvent[];
+  closed: boolean;
+}
+
+/** `trace.read` request, server -> daemon. */
+export interface DaemonTraceReadPayload {
+  task_id: string;
+  after_seq: number;
+  limit: number;
+  max_bytes: number;
+}
+
+/** `trace.read` / `trace.fetch` reply payload, on success. */
+export interface DaemonTraceReadReplyPayload {
+  ok: true;
+  events: TraceEvent[];
+  next_after_seq: number;
+  head: number;
+  eof: boolean;
+  closed: boolean;
+}
+
+/** `trace.fetch` request, daemon -> server: fill a gap from the server's copy. */
+export interface DaemonTraceFetchPayload {
+  task_id: string;
+  after_seq: number;
+  limit: number;
+}
+
+/** `trace.subscribe` / `trace.unsubscribe` request payloads. */
+export interface DaemonTraceSubscribePayload {
+  task_id: string;
+  from_seq: number;
+}
+
+export interface DaemonTraceUnsubscribePayload {
+  task_id: string;
+}
+
+/**
+ * `trace.subscribe` / `trace.fetch` reply payloads.
+ *
+ * `first_seq` is the oldest sequence the server can serve for the task; a
+ * subscriber asking for anything older gets `gap: true` and must fill from the
+ * daemon's file.
+ */
+export interface DaemonTraceSubscribeReplyPayload {
+  ok: true;
+  first_seq: number;
+  head: number;
+  closed: boolean;
+  gap: boolean;
+}
+
 // ── Error codes ─────────────────────────────────────────────────────────────
 
 /**
@@ -390,8 +544,8 @@ export const DAEMON_TERMINAL_ERROR_CODES = [
 // ── Close codes ─────────────────────────────────────────────────────────────
 
 /**
- * WebSocket close codes the daemon must interpret rather than treat as a
- * transport blip. 4001 and 4000 are retryable; the rest are not.
+ * WebSocket close codes the daemon gives a specific meaning to. Any code NOT in
+ * this table is an ordinary connection loss and must be retried with backoff.
  */
 export const DAEMON_PROTOCOL_CLOSE_CODES = {
   /** Sender missed the 15 s acknowledgement deadline; the peer reconnects. */
@@ -411,10 +565,51 @@ export const DAEMON_PROTOCOL_CLOSE_CODES = {
 export type DaemonProtocolCloseCode =
   (typeof DAEMON_PROTOCOL_CLOSE_CODES)[keyof typeof DAEMON_PROTOCOL_CLOSE_CODES];
 
-/** Close codes worth reconnecting for, with backoff. Everything else is terminal. */
+/**
+ * The codes that stop the reconnect loop, rather than merely interrupting one
+ * connection.
+ *
+ * Deliberately an explicit deny-list rather than an allow-list of "retryable"
+ * codes. Defaulting to terminal is the dangerous direction: the close code a
+ * daemon actually observes when the network drops or the server is killed is
+ * **1006** (abnormal closure, sent by the client stack — the peer never emits it),
+ * and 1011/1012/1013 and 1000/1001 are equally ordinary. An allow-list would make
+ * every one of those "terminal", and a daemon that never reconnects is
+ * unreachable until someone SSHes in. Defaulting to retry means a code nobody
+ * anticipated costs a little reconnect churn instead.
+ *
+ * 4426 is on the list even though it is not permanent: the daemon must not retry
+ * the socket, because the server will reject it again until the binary is
+ * upgraded. It enters `upgrade_wait` and polls the HTTP upgrade channel instead —
+ * see {@link daemonCloseCodeRequiresUpgrade}.
+ */
+export const DAEMON_TERMINAL_CLOSE_CODES = [
+  DAEMON_PROTOCOL_CLOSE_CODES.authority_revoked,
+  DAEMON_PROTOCOL_CLOSE_CODES.forbidden,
+  DAEMON_PROTOCOL_CLOSE_CODES.daemon_retired,
+  DAEMON_PROTOCOL_CLOSE_CODES.protocol_upgrade_required,
+] as const;
+
+export type DaemonTerminalCloseCode = (typeof DAEMON_TERMINAL_CLOSE_CODES)[number];
+
+/**
+ * Whether the daemon should reconnect this socket after it closes.
+ *
+ * Everything is retryable except {@link DAEMON_TERMINAL_CLOSE_CODES}. That
+ * includes 1006/1011/1012/1013/1000/1001, which the WebSocket layer produces on
+ * its own, and any code this protocol has never heard of.
+ */
 export function daemonCloseCodeIsRetryable(code: number): boolean {
-  return code === DAEMON_PROTOCOL_CLOSE_CODES.ack_timeout
-    || code === DAEMON_PROTOCOL_CLOSE_CODES.server_closing;
+  return !(DAEMON_TERMINAL_CLOSE_CODES as readonly number[]).includes(code);
+}
+
+/**
+ * Whether this close means "upgrade the binary and come back", the one terminal
+ * code that has a scheduled way forward. A-2 uses this to enter `upgrade_wait`
+ * instead of merely stopping.
+ */
+export function daemonCloseCodeRequiresUpgrade(code: number): boolean {
+  return code === DAEMON_PROTOCOL_CLOSE_CODES.protocol_upgrade_required;
 }
 
 // ── Capability bits ─────────────────────────────────────────────────────────

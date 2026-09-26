@@ -1,9 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import { InMemoryTraceSink } from "@multiremi/api/trace/trace-sink.js";
+import { InMemoryTraceStore } from "@multiremi/worker/trace-store.js";
 import type { TraceEvent } from "@multiremi/contracts/trace.js";
 
 function event(seq: number, content = `event-${seq}`): TraceEvent {
-  return { seq, ts: 1_700_000_000_000 + seq, type: "text", content };
+  return { seq, ts: "2026-09-27T00:00:00.000Z", type: "text", content };
 }
 
 function batch(...seqs: number[]): TraceEvent[] {
@@ -100,14 +101,62 @@ describe("InMemoryTraceSink", () => {
     expect(seen).toEqual(["task_a"]);
   });
 
-  it("records the end of a task and keeps serving its trace", () => {
+  it("records the close of a task and keeps serving its trace", () => {
     const sink = new InMemoryTraceSink();
     sink.append("task_a", batch(1, 2));
-    sink.end("task_a");
-    expect(sink.isEnded("task_a")).toBe(true);
+    sink.close("task_a");
+    expect(sink.isClosed("task_a")).toBe(true);
     const seen: number[][] = [];
     sink.subscribe("task_a", 0, (_taskId, events) => seen.push(events.map((e) => e.seq)));
     expect(seen).toEqual([[1, 2]]);
     expect(sink.append("task_a", batch(3)).head).toBe(3);
+  });
+
+  it("reports head and closed live, so a long-lived subscription sees both move", () => {
+    const sink = new InMemoryTraceSink();
+    const sub = sink.subscribe("task_a", 0, () => {});
+    expect(sub.head).toBe(0);
+    expect(sub.closed).toBe(false);
+
+    sink.append("task_a", batch(1, 2));
+    expect(sub.head).toBe(2);
+    expect(sub.closed).toBe(false);
+
+    sink.close("task_a");
+    expect(sub.closed).toBe(true);
+    // first_seq and gap are snapshotted; head and closed are not.
+    expect(sub.first_seq).toBe(1);
+  });
+
+  it("exposes closed=false on a subscription for an unseen task", () => {
+    const sink = new InMemoryTraceSink();
+    const sub = sink.subscribe("never", 0, () => {});
+    expect(sub.closed).toBe(false);
+    expect(sub.head).toBe(0);
+  });
+
+  it("closes a task that was never appended to, instead of ignoring it", () => {
+    // The zero-event turn, and the cold Hub that sees the completion frame before
+    // any trace.append. Both must leave a later subscriber with closed: true;
+    // a no-op close would make it wait for a signal that never comes.
+    const sink = new InMemoryTraceSink();
+    sink.close("never");
+    expect(sink.isClosed("never")).toBe(true);
+    expect(sink.head("never")).toBe(0);
+
+    const sub = sink.subscribe("never", 0, () => {});
+    expect(sub.closed).toBe(true);
+    expect(sub.head).toBe(0);
+  });
+
+  it("closes a never-appended task the same way TraceStore does", () => {
+    // The two in-memory implementations must agree on this case, so assert the
+    // shapes side by side rather than trusting two separate readings.
+    const sink = new InMemoryTraceSink();
+    const store = new InMemoryTraceStore(() => "2026-09-27T00:00:00.000Z");
+    sink.close("never");
+    store.close("never", { status: "completed", ended_at: "2026-09-27T00:00:00.000Z" });
+    expect(sink.head("never")).toBe(store.head("never")!.head);
+    expect(sink.isClosed("never")).toBe(store.head("never")!.closed);
   });
 });
