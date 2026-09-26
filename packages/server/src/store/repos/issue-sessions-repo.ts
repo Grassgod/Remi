@@ -229,8 +229,20 @@ export class IssueSessionsRepo {
     };
   }
 
-  listIssueSessions(issueId: string, includeArchived = false): MultiremiIssueSession[] {
-    if (!this.ctx.issues().getIssue(issueId)) throw new Error(`Issue not found: ${issueId}`);
+  /**
+   * @param options.skipExistenceCheck Set only when this same request already
+   * proved the issue exists. The throw for an unknown issue is otherwise
+   * preserved exactly.
+   */
+  listIssueSessions(
+    issueId: string,
+    includeArchived = false,
+    options: { skipExistenceCheck?: boolean } = {},
+  ): MultiremiIssueSession[] {
+    // Existence only: the caller wants session rows, not the Issue's labels.
+    if (!options.skipExistenceCheck && !this.ctx.issues().hasIssue(issueId)) {
+      throw new Error(`Issue not found: ${issueId}`);
+    }
     const rows = includeArchived
       ? this.ctx.db.query(
         `${SESSION_SELECT} WHERE issue_id = ? ORDER BY is_default DESC, updated_at DESC`,
@@ -317,6 +329,42 @@ export class IssueSessionsRepo {
         "SELECT * FROM multiremi_session_participants WHERE session_id = ? AND status = 'active' ORDER BY joined_at ASC",
       ).all(sessionId) as Row[];
     return rows.map(toSessionParticipant);
+  }
+
+  /**
+   * Batch twin of `listSessionParticipants` for callers that already hold the
+   * sessions (e.g. `GET /api/issues/:id/sessions`): one statement for the whole
+   * set instead of 1 + N. Existing-session validation is the caller's job — the
+   * sessions were just read from `listIssueSessions`, so re-reading each row
+   * would only add round trips.
+   *
+   * Chunked at 400 ids to stay below SQLite's default bind-variable limit;
+   * PostgreSQL benefits from the same bound. The ordering contract matches the
+   * single-session form: `joined_at ASC`, and sessions keep their input order.
+   */
+  listSessionParticipantsForSessions(
+    sessionIds: string[],
+    includeLeft = false,
+  ): Map<string, MultiremiSessionParticipant[]> {
+    const grouped = new Map<string, MultiremiSessionParticipant[]>();
+    const ids = [...new Set(sessionIds.filter(Boolean))];
+    for (const id of ids) grouped.set(id, []);
+    if (!ids.length) return grouped;
+    const statusFilter = includeLeft ? "" : " AND status = 'active'";
+    for (let offset = 0; offset < ids.length; offset += 400) {
+      const chunk = ids.slice(offset, offset + 400);
+      const placeholders = chunk.map(() => "?").join(", ");
+      const rows = this.ctx.db.query(
+        `SELECT * FROM multiremi_session_participants
+         WHERE session_id IN (${placeholders})${statusFilter}
+         ORDER BY joined_at ASC`,
+      ).all(...chunk) as Row[];
+      for (const participant of rows.map(toSessionParticipant)) {
+        const list = grouped.get(participant.sessionId);
+        if (list) list.push(participant);
+      }
+    }
+    return grouped;
   }
 
   appendSessionEvent(sessionId: string, input: AppendSessionEventInput): MultiremiSessionEvent {

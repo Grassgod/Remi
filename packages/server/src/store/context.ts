@@ -190,6 +190,7 @@ export interface IssuesSurface {
     body: string,
   ): MultiremiIssueComment;
   getIssue(id: string): MultiremiIssue | null;
+  hasIssue(id: string): boolean;
   getIssueByRef(ref: string, workspaceId?: string | null): MultiremiIssue | null;
   getIssueComment(id: string): MultiremiIssueComment | null;
   getAttachment(id: string): MultiremiAttachment | null;

@@ -3054,6 +3054,10 @@ runMigrations(this.db);
     return this.issues.getIssueByRef(ref, workspaceId);
   }
 
+  hasIssue(id: string): boolean {
+    return this.issues.hasIssue(id);
+  }
+
   getIssueWithTasks(id: string): MultiremiIssueWithTasks | null {
     return this.issues.getIssueWithTasks(id);
   }
@@ -3288,6 +3292,7 @@ runMigrations(this.db);
     issueSessionId?: string | null;
     before?: IssueTimelineCursor | null;
     limit: number;
+    skipExistenceChecks?: boolean;
   }): IssueTimelinePageResult {
     return this.issues.listIssueTimelinePage(issueId, options);
   }
@@ -3339,6 +3344,11 @@ runMigrations(this.db);
 
   listLabelsForIssue(issueId: string): MultiremiLabel[] {
     return this.issues.listLabelsForIssue(issueId);
+  }
+
+  /** `listLabelsForIssue` for a caller that already proved the issue exists. */
+  listLabelsForExistingIssue(issueId: string): MultiremiLabel[] {
+    return this.issues.listLabelsForExistingIssue(issueId);
   }
 
   attachLabelToIssue(
@@ -3401,6 +3411,11 @@ runMigrations(this.db);
     return this.issues.listIssueReactions(issueId);
   }
 
+  /** `listIssueReactions` for a caller that already proved the issue exists. */
+  listIssueReactionsForExistingIssue(issueId: string): MultiremiIssueReaction[] {
+    return this.issues.listIssueReactionsForExistingIssue(issueId);
+  }
+
   addIssueReaction(issueId: string, input: { actorType?: string; actorId?: string | null; emoji: string }): MultiremiIssueReaction {
     return this.issues.addIssueReaction(issueId, input);
   }
@@ -3439,6 +3454,11 @@ runMigrations(this.db);
 
   listAttachmentsForIssue(issueId: string): MultiremiAttachment[] {
     return this.issues.listAttachmentsForIssue(issueId);
+  }
+
+  /** `listAttachmentsForIssue` for a caller that already proved the issue exists. */
+  listAttachmentsForExistingIssue(issueId: string): MultiremiAttachment[] {
+    return this.issues.listAttachmentsForExistingIssue(issueId);
   }
 
   listAttachmentsForComment(commentId: string): MultiremiAttachment[] {
@@ -3533,8 +3553,12 @@ runMigrations(this.db);
     return this.sessions.getSessionInheritedContext(sessionId);
   }
 
-  listIssueSessions(issueId: string, includeArchived = false): MultiremiIssueSession[] {
-    return this.sessions.listIssueSessions(issueId, includeArchived);
+  listIssueSessions(
+    issueId: string,
+    includeArchived = false,
+    options: { skipExistenceCheck?: boolean } = {},
+  ): MultiremiIssueSession[] {
+    return this.sessions.listIssueSessions(issueId, includeArchived, options);
   }
 
   updateIssueSession(id: string, input: UpdateIssueSessionInput): MultiremiIssueSession {
@@ -3551,6 +3575,13 @@ runMigrations(this.db);
 
   listSessionParticipants(sessionId: string, includeLeft = false): MultiremiSessionParticipant[] {
     return this.sessions.listSessionParticipants(sessionId, includeLeft);
+  }
+
+  listSessionParticipantsForSessions(
+    sessionIds: string[],
+    includeLeft = false,
+  ): Map<string, MultiremiSessionParticipant[]> {
+    return this.sessions.listSessionParticipantsForSessions(sessionIds, includeLeft);
   }
 
   appendSessionEvent(sessionId: string, input: {
