@@ -299,6 +299,69 @@ describe("Session archive random access", () => {
     expect(paged.complete).toBe(false);
   });
 
+  it("takes over a pointer held by a hot or backfilling trace regardless of head", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-archive-hot-"));
+    dirs.push(root);
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const runtime = store.registerRuntime({
+      id: "rt_hot",
+      name: "hot runtime",
+      provider: "codex",
+      daemonId: "dmn_hot",
+      workspaceId: "local",
+    });
+    const issue = store.createIssue({ title: "Hot pointer", workspaceId: "local" });
+    store.reportIssueWorkspace({
+      issueId: issue.id,
+      runtimeId: runtime.id,
+      rootPath: `/tmp/${issue.key}`,
+      branchName: `agent/${issue.key}`,
+      status: "ready",
+    });
+    const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
+
+    // A backfilled trace reaches head 50 while the task is still hot.
+    db!.run(
+      `INSERT INTO multiremi_task_traces (
+         task_id, location, head_seq, event_count, closed, updated_at
+       ) VALUES ('tsk_hot', 'daemon', 50, 50, 0, '2026-09-27T00:00:00.000Z')`,
+    );
+    expect(store.getTaskTrace("tsk_hot")).toMatchObject({ location: "daemon", headSeq: 50 });
+
+    // An archive that only reaches head 2 still takes the pointer: a hot trace
+    // has no archive bytes yet, so archive ownership is strictly better.
+    const fixture = await buildArchiveFixture({
+      subject: { kind: "issue", id: issue.id },
+      traces: { tsk_hot: traceFileBody({ events: 2, taskId: "tsk_hot" }) },
+    });
+    const initialized = service.initialize({
+      workspaceId: "local",
+      subjectKind: "issue",
+      subjectId: issue.id,
+      issueId: issue.id,
+      runtimeId: runtime.id,
+      daemonId: "dmn_hot",
+      sourceRevision: fixture.sourceRevision,
+      sha256: fixture.sha256,
+      sizeBytes: fixture.sizeBytes,
+    }).archive;
+    const claim = await service.claimUploadAttempt(runtime.id, issue.id, initialized.id);
+    await service.upload(
+      runtime.id,
+      issue.id,
+      initialized.id,
+      claim.uploadAttempt!,
+      new Response(fixture.bytes).body,
+    );
+    const ready = await service.complete(runtime.id, issue.id, initialized.id, claim.uploadAttempt!);
+    expect(store.getTaskTrace("tsk_hot")).toMatchObject({
+      location: "archive",
+      archiveId: ready.id,
+      headSeq: 2,
+    });
+  });
+
   it("refuses to read an archive that is not ready", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-archive-read-notready-"));
     dirs.push(root);
