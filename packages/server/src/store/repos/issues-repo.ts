@@ -72,6 +72,83 @@ const log = createLogger("multiremi-store");
 
 type Row = Record<string, unknown>;
 
+/**
+ * MUL-400 E1 kill switch. The parent-status guards ship enabled; flipping this
+ * to a false-y value restores the pre-MUL-400 passthrough for an emergency
+ * without redeploying an older image.
+ */
+function parentStatusGuardEnabled(): boolean {
+  const raw = (process.env.MULTIREMI_PARENT_STATUS_GUARD ?? "").trim().toLowerCase();
+  return raw !== "0" && raw !== "false" && raw !== "off" && raw !== "disabled";
+}
+
+/**
+ * MUL-400 E2: which of the four child endings reached the parent. `failed` is
+ * distinguished from a human `blocked` because the caller tells us which write
+ * path produced it (task terminal vs. a status edit).
+ */
+export type ChildTerminalOutcome = "done" | "failed" | "blocked" | "cancelled";
+
+/** `null` for statuses that are not a child ending. */
+function childTerminalOutcome(status: string): ChildTerminalOutcome | null {
+  switch (status) {
+    case "done": return "done";
+    case "cancelled": return "cancelled";
+    case "blocked": return "blocked";
+    case "failed": return "failed";
+    default: return null;
+  }
+}
+
+/** 409 for a held parent transition; the route maps it to the API error code. */
+export class ParentStatusGuardError extends Error {
+  constructor(
+    readonly code: "issue_status_held" | "final_summary_missing" | "parent_done_requires_member",
+    message: string,
+    readonly details: { openChildren?: number; lastChildClosedAt?: string | null } = {},
+  ) {
+    super(message);
+  }
+}
+
+/** Statuses a parent with unfinished children must not enter. */
+function statusNeedsChildGuard(status: string): boolean {
+  return status === "in_review" || status === "done";
+}
+
+/** A4: closing a parent with children is a member decision. */
+function statusIsMemberOnlyParentTerminal(status: string): boolean {
+  return status === "done";
+}
+
+function emptyChildIssueProgress(parentIssueId: string): MultiremiIssueChildProgress {
+  return { parentIssueId, total: 0, done: 0, cancelled: 0, blocked: 0, waiting: 0, active: 0 };
+}
+
+/**
+ * Buckets for `GET /api/issues/child-progress` (MUL-400 E1). `waiting` is a
+ * placeholder for the dependency gate (S2) and is always 0 until it lands.
+ */
+const CHILD_PROGRESS_SELECT = `SELECT parent_issue_id, COUNT(*) AS total,
+              SUM(CASE WHEN status IN ('done', 'completed', 'closed') THEN 1 ELSE 0 END) AS done,
+              SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled,
+              SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) AS blocked,
+              SUM(CASE WHEN status NOT IN ('done', 'completed', 'closed', 'cancelled', 'blocked') THEN 1 ELSE 0 END) AS active
+       FROM multiremi_issues`;
+
+/** `result` is stored JSON; "has a result" means non-empty output text. */
+function storedTaskResultHasOutput(value: unknown): boolean {
+  const raw = nullableString(value);
+  if (raw == null) return false;
+  const parsed = parseJson<unknown>(raw, null);
+  if (typeof parsed === "string") return parsed.trim().length > 0;
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    const output = (parsed as Record<string, unknown>).output;
+    return typeof output === "string" && output.trim().length > 0;
+  }
+  return false;
+}
+
 export interface IssueMutationActivityContext {
   actorType?: string;
   actorId?: string | null;
@@ -788,9 +865,7 @@ export class IssuesRepo {
 
   listChildIssueProgress(workspaceId = "local"): MultiremiIssueChildProgress[] {
     const rows = this.ctx.db.query(
-      `SELECT parent_issue_id, COUNT(*) AS total,
-              SUM(CASE WHEN status IN ('done', 'completed', 'closed', 'cancelled') THEN 1 ELSE 0 END) AS done
-       FROM multiremi_issues
+      `${CHILD_PROGRESS_SELECT}
        WHERE workspace_id = ? AND parent_issue_id IS NOT NULL
        GROUP BY parent_issue_id
        ORDER BY parent_issue_id ASC`,
@@ -800,13 +875,106 @@ export class IssuesRepo {
 
   getChildIssueProgress(parentIssueId: string): MultiremiIssueChildProgress {
     const row = this.ctx.db.query(
-      `SELECT parent_issue_id, COUNT(*) AS total,
-              SUM(CASE WHEN status IN ('done', 'completed', 'closed', 'cancelled') THEN 1 ELSE 0 END) AS done
-       FROM multiremi_issues
+      `${CHILD_PROGRESS_SELECT}
        WHERE parent_issue_id = ?
        GROUP BY parent_issue_id`,
     ).get(parentIssueId) as Row | null;
-    return row ? toChildIssueProgress(row) : { parentIssueId, total: 0, done: 0 };
+    return row ? toChildIssueProgress(row) : emptyChildIssueProgress(parentIssueId);
+  }
+
+  /**
+   * MUL-400 E1: the number of children that still count as unfinished. `done`
+   * and `cancelled` are terminal; `blocked` and everything else keep the parent
+   * open, because a parked child is exactly the case the human must rule on.
+   */
+  countOpenChildIssues(parentIssueId: string): number {
+    const row = this.ctx.db.query(
+      `SELECT COUNT(*) AS open_children FROM multiremi_issues
+       WHERE parent_issue_id = ? AND status NOT IN ('done', 'cancelled')`,
+    ).get(parentIssueId) as { open_children?: unknown } | null;
+    return Number(row?.open_children ?? 0);
+  }
+
+  /**
+   * MUL-400 E1 guard A. Runs inside {@link updateIssueWithOutcome}'s row lock so
+   * a user terminal write and a child status change cannot both derive from the
+   * same stale child set.
+   */
+  private assertParentStatusAllowed(
+    id: string,
+    current: MultiremiIssue,
+    nextStatus: string,
+    input: UpdateIssueInput,
+  ): void {
+    if (!statusNeedsChildGuard(nextStatus)) return;
+    const force = input.force === true;
+    const hasChildren = this.ctx.db.query(
+      "SELECT 1 AS present FROM multiremi_issues WHERE parent_issue_id = ? LIMIT 1",
+    ).get(id) != null;
+    if (!hasChildren) return;
+    // A4: a task identity may never close a parent issue at all, force or not.
+    if (statusIsMemberOnlyParentTerminal(nextStatus) && input.actorType === "agent") {
+      throw new ParentStatusGuardError(
+        "parent_done_requires_member",
+        `Task ${input.parentTaskId ?? "unknown"} cannot set ${current.key} to ${nextStatus}; only a member can close an issue that has children`,
+      );
+    }
+    if (force) return;
+    const openChildren = this.countOpenChildIssues(id);
+    if (openChildren > 0) {
+      throw new ParentStatusGuardError(
+        "issue_status_held",
+        `${current.key} still has ${openChildren} unfinished child issue(s); finish or cancel them, or repeat the request with force`,
+        { openChildren },
+      );
+    }
+    if (nextStatus === "done") {
+      const summary = this.finalSummaryAfterLastChild(id);
+      if (!summary.satisfied) {
+        throw new ParentStatusGuardError(
+          "final_summary_missing",
+          `${current.key} cannot be closed before its owner publishes a result after the last child finished`,
+          { lastChildClosedAt: summary.lastChildClosedAt },
+        );
+      }
+    }
+  }
+
+  /**
+   * A1: the parent owner owes a result-bearing round that finished after the last
+   * child closed. Skipped for member owners — a human closing the issue is the
+   * summary. The signal is the owner's task set on the parent: a `completed` task
+   * with a non-empty result and `completed_at` at or after the last child's
+   * terminal timestamp.
+   */
+  finalSummaryAfterLastChild(parentIssueId: string): { satisfied: boolean; lastChildClosedAt: string | null } {
+    const parent = this.getIssue(parentIssueId);
+    if (!parent) return { satisfied: false, lastChildClosedAt: null };
+    if (parent.assigneeType === "member") return { satisfied: true, lastChildClosedAt: null };
+    const lastChild = this.ctx.db.query(
+      `SELECT MAX(COALESCE(completed_at, updated_at)) AS closed_at
+       FROM multiremi_issues
+       WHERE parent_issue_id = ? AND status IN ('done', 'cancelled')`,
+    ).get(parentIssueId) as { closed_at?: unknown } | null;
+    const lastChildClosedAt = nullableString(lastChild?.closed_at);
+    const openChildren = this.countOpenChildIssues(parentIssueId);
+    if (openChildren > 0) return { satisfied: false, lastChildClosedAt };
+    const parentAgentId = parent.assigneeType && parent.assigneeId
+      ? this.ctx.resolveRunnableAgentForAssignee(parent.assigneeType, parent.assigneeId)?.id ?? null
+      : null;
+    if (!parentAgentId) return { satisfied: false, lastChildClosedAt };
+    // `result` is a JSON blob written by completeTask; "has a result" means the
+    // stored payload carries non-empty output text, so evaluate it in JS rather
+    // than pattern-matching the serialized column in SQL.
+    const rows = this.ctx.db.query(
+      `SELECT result FROM multiremi_tasks
+       WHERE issue_id = ? AND agent_id = ? AND status = 'completed'
+         AND result IS NOT NULL AND completed_at IS NOT NULL
+         ${lastChildClosedAt ? "AND completed_at >= ?" : ""}
+       ORDER BY completed_at DESC`,
+    ).all(...(lastChildClosedAt ? [parentIssueId, parentAgentId, lastChildClosedAt] : [parentIssueId, parentAgentId])) as Row[];
+    const satisfied = rows.some((row) => storedTaskResultHasOutput(row.result));
+    return { satisfied, lastChildClosedAt };
   }
 
   listIssueDependencies(issueId: string): MultiremiIssueDependency[] {
@@ -975,6 +1143,10 @@ export class IssuesRepo {
 
       updatedAt = nowIso();
       const nextStatus = hasAnyField(input, "status") ? normalizeIssueStatus(input.status) : current.status;
+      // MUL-400 E1 guard A, inside the Issue row lock: a parent with unfinished
+      // children cannot be parked in review or closed, and only a member may
+      // override. Runs before the write so a rejected request changes nothing.
+      if (parentStatusGuardEnabled()) this.assertParentStatusAllowed(id, current, nextStatus, input);
       const enteringTerminal = !isTerminalIssueStatus(current.status) && isTerminalIssueStatus(nextStatus);
       const leavingTerminal = isTerminalIssueStatus(current.status) && !isTerminalIssueStatus(nextStatus);
       const nextCompletedAt = enteringTerminal
@@ -1052,12 +1224,30 @@ export class IssuesRepo {
       body: null,
       data: input,
     });
+    // MUL-400 E1: a member override has to be auditable next to the write it
+    // allowed, including the child count it overrode at the time.
+    if (previous!.status !== updated.status && input.force === true && statusNeedsChildGuard(updated.status)) {
+      this.ctx.appendIssueActivity(id, {
+        actorType: input.actorType ?? "member",
+        actorId: input.actorId ?? null,
+        type: "issue_status_forced",
+        body: updated.status,
+        data: {
+          status: updated.status,
+          previousStatus: previous!.status,
+          previous_status: previous!.status,
+          openChildren: this.countOpenChildIssues(id),
+          open_children: this.countOpenChildIssues(id),
+          ...sourceTaskActivityData(input.parentTaskId ?? input.parent_task_id),
+        },
+      });
+    }
     if (previous!.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [updatedAt, previous!.projectId]);
     if (updated.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [updatedAt, updated.projectId]);
     if (previous!.status !== "done" && updated.status === "done") {
       this.ctx.knowledge().createIssueCompletionKnowledgeBundle(updated);
     }
-    this.notifyParentOfChildDone(
+    this.notifyChildStatusChange(
       previous!,
       updated,
       cleanOptionalString(input.parentTaskId ?? input.parent_task_id),
@@ -1136,30 +1326,240 @@ export class IssuesRepo {
       : resolveIssueArchiveSettings(null).sweepIntervalMs;
   }
 
-  private notifyParentOfChildDone(
+  /**
+   * MUL-400 E1+E2 shared post-commit hook.
+   *
+   * Both write paths funnel here after their transaction commits:
+   * {@link updateIssueWithOutcome} (member/agent PATCH, batch update) and
+   * {@link TasksRepo}'s task-terminal sync. It does two things, in order:
+   *
+   * 1. **Re-derive the parent** (E1): a child that is created, moved or changed
+   *    while its parent sits in `in_review` with unfinished children pushes the
+   *    parent back to `in_progress`. Parents already `done`/`cancelled` are user
+   *    decisions and are never touched.
+   * 2. **Notify the parent owner** (E2): every child that *enters* `done`,
+   *    `cancelled` or `blocked` reports to the parent, whatever the write path.
+   *
+   * S2 extends this hook with the dependency gate and automatic promotion; keep
+   * the two concerns separable when adding it.
+   */
+  notifyChildStatusChange(
     previous: MultiremiIssue,
     issue: MultiremiIssue,
     parentTaskId: string | null,
+    options: { taskTerminalStatus?: "completed" | "failed" | "cancelled" } = {},
   ): void {
     if (!issue.parentIssueId) return;
-    if (previous.status === "done" || issue.status !== "done") return;
     const parent = this.getIssue(issue.parentIssueId);
     if (!parent) return;
     if (parent.status === "done" || parent.status === "cancelled") return;
-    if (parent.assigneeType === "member") return;
 
-    const body = childDoneSystemCommentBody({
+    const entered = previous.status !== issue.status;
+    const reported = entered ? childTerminalOutcome(issue.status) : null;
+    const outcome = reported === "blocked" && options.taskTerminalStatus === "failed" ? "failed" : reported;
+    if (outcome) this.notifyParentOfChildOutcome(parent, issue, outcome, parentTaskId);
+
+    if (parentStatusGuardEnabled()) this.rederiveParentStatus(parent, issue);
+  }
+
+  /**
+   * MUL-400 E1 guard B. The task-terminal path derives `in_review` (a finished
+   * round) or `done` (an intake issue with generated children) for the Issue the
+   * task ran on; when that Issue is itself a parent with unfinished children it
+   * must stay `in_progress` instead. Returns the status to write, and records
+   * `parent_status_held` when it overrode the request.
+   *
+   * Deliberately not applied to `createTaskHumanRequest`: while an owner is
+   * waiting for an answer the Issue legitimately parks at `in_review`, and the
+   * resume path puts it back.
+   */
+  holdParentStatusForOpenChildren(issueId: string, requested: string): string {
+    if (!parentStatusGuardEnabled()) return requested;
+    if (!statusNeedsChildGuard(requested)) return requested;
+    if (!this.hasIssue(issueId)) return requested;
+    const openChildren = this.countOpenChildIssues(issueId);
+    if (openChildren === 0) return requested;
+    this.ctx.appendIssueActivity(issueId, {
+      actorType: "system",
+      actorId: null,
+      type: "parent_status_held",
+      body: "in_progress",
+      data: {
+        requested,
+        openChildren,
+        open_children: openChildren,
+        status: "in_progress",
+      },
+    });
+    return "in_progress";
+  }
+
+  /**
+   * MUL-400 E1 re-derivation: a parent parked at `in_review` whose children are
+   * still open goes back to `in_progress`. Deliberately narrow — `done` and
+   * `cancelled` parents never move, and any other parent status is left alone so
+   * this hook cannot fight a human editing the parent concurrently.
+   */
+  private rederiveParentStatus(parent: MultiremiIssue, child: MultiremiIssue): void {
+    if (parent.status !== "in_review") return;
+    const openChildren = this.countOpenChildIssues(parent.id);
+    if (openChildren === 0) return;
+    const now = nowIso();
+    const updated = this.ctx.db.run(
+      `UPDATE multiremi_issues
+       SET status = 'in_progress', completed_at = NULL, archived_at = NULL, updated_at = ?
+       WHERE id = ? AND status = 'in_review'`,
+      [now, parent.id],
+    );
+    if (updated.changes === 0) return;
+    this.ctx.appendIssueActivity(parent.id, {
+      actorType: "system",
+      actorId: null,
+      type: "parent_status_derived",
+      body: "in_progress",
+      data: {
+        status: "in_progress",
+        previousStatus: "in_review",
+        previous_status: "in_review",
+        openChildren,
+        open_children: openChildren,
+        childIssueId: child.id,
+        child_issue_id: child.id,
+        childStatus: child.status,
+        child_status: child.status,
+      },
+    });
+    this.ctx.autopilots().enqueueIssueStatusChangedEvent({
+      issue: this.getIssue(parent.id) ?? parent,
+      previousStatus: "in_review",
+      actorType: "system",
+      actorId: null,
+    });
+    this.ctx.emitWorkspaceEvent({
+      type: "issue:updated",
+      workspaceId: parent.workspaceId,
+      actorType: "system",
+      actorId: null,
+      payload: {
+        issue: { id: parent.id, status: "in_progress", completed_at: null, archived_at: null, updated_at: now },
+        status_changed: true,
+        prev_status: "in_review",
+      },
+    });
+  }
+
+  private notifyParentOfChildOutcome(
+    parent: MultiremiIssue,
+    child: MultiremiIssue,
+    outcome: ChildTerminalOutcome,
+    parentTaskId: string | null,
+  ): void {
+    if (parent.assigneeType === "member" && parent.assigneeId) {
+      this.notifyParentMemberOfChildOutcome(parent, child, outcome);
+      return;
+    }
+    if (!parent.assigneeType || !parent.assigneeId) {
+      this.notifyParentSubscribersOfChildOutcome(parent, child, outcome);
+      return;
+    }
+
+    const body = childStatusSystemCommentBody({
       mentionPrefix: this.parentAssigneeMentionPrefix(parent),
-      childKey: issue.key,
-      childId: issue.id,
-      childTitle: issue.title,
+      childKey: child.key,
+      childId: child.id,
+      childTitle: child.title,
+      outcome,
+      childStatus: child.status,
     });
     const comment = this.createSystemIssueComment(parent.id, body, {
-      type: "child_done_parent_notification",
-      childIssueId: issue.id,
-      child_issue_id: issue.id,
+      type: "child_status_parent_notification",
+      childIssueId: child.id,
+      child_issue_id: child.id,
+      outcome,
+      childStatus: child.status,
+      child_status: child.status,
     });
-    this.triggerParentAssigneeForChildDone(parent, comment, parentTaskId);
+    this.triggerParentAssigneeForChildDone(parent, comment, outcome, parentTaskId);
+  }
+
+  /** MUL-400 E2: a human-owned parent hears about every child terminal state. */
+  private notifyParentMemberOfChildOutcome(
+    parent: MultiremiIssue,
+    child: MultiremiIssue,
+    outcome: ChildTerminalOutcome,
+  ): void {
+    const actor = this.ctx.agents().getAgent(child.assigneeId ?? "");
+    this.ctx.createInboxItem({
+      issueId: parent.id,
+      memberId: parent.assigneeId!,
+      type: "child_issue_terminal",
+      severity: outcome === "failed" || outcome === "blocked" ? "warning" : "info",
+      title: `${parent.key}: ${child.key} ${childOutcomeLabel(outcome)}`,
+      body: childStatusInboxBody(child, outcome),
+      actorType: actor ? "agent" : "system",
+      actorId: actor?.id ?? null,
+      details: {
+        childIssueId: child.id,
+        child_issue_id: child.id,
+        childIssueKey: child.key,
+        child_issue_key: child.key,
+        childStatus: child.status,
+        child_status: child.status,
+        outcome,
+      },
+    });
+  }
+
+  /**
+   * No assignee to wake. Keep the historic system comment and skip record, and
+   * additionally reach the parent's subscribers so a child failure is not lost
+   * just because nobody owns the parent yet.
+   */
+  private notifyParentSubscribersOfChildOutcome(
+    parent: MultiremiIssue,
+    child: MultiremiIssue,
+    outcome: ChildTerminalOutcome,
+  ): void {
+    const comment = this.createSystemIssueComment(parent.id, childStatusSystemCommentBody({
+      mentionPrefix: "",
+      childKey: child.key,
+      childId: child.id,
+      childTitle: child.title,
+      outcome,
+      childStatus: child.status,
+    }), {
+      type: "child_status_parent_notification",
+      childIssueId: child.id,
+      child_issue_id: child.id,
+      outcome,
+      childStatus: child.status,
+      child_status: child.status,
+    });
+    this.recordChildDoneParentSkipped(parent, comment, "no_assignee", { outcome });
+    for (const subscriber of this.listIssueSubscribers(parent.id)) {
+      if (subscriber.userType !== "member") continue;
+      this.ctx.createInboxItem({
+        issueId: parent.id,
+        memberId: subscriber.userId,
+        type: "child_issue_terminal",
+        severity: outcome === "failed" || outcome === "blocked" ? "warning" : "info",
+        title: `${parent.key}: ${child.key} ${childOutcomeLabel(outcome)}`,
+        body: childStatusInboxBody(child, outcome),
+        actorType: "system",
+        actorId: null,
+        details: {
+          childIssueId: child.id,
+          child_issue_id: child.id,
+          childIssueKey: child.key,
+          child_issue_key: child.key,
+          childStatus: child.status,
+          child_status: child.status,
+          outcome,
+          noAssignee: true,
+          no_assignee: true,
+        },
+      });
+    }
   }
 
   private parentAssigneeMentionPrefix(parent: MultiremiIssue): string {
@@ -1253,25 +1653,26 @@ export class IssuesRepo {
   private triggerParentAssigneeForChildDone(
     parent: MultiremiIssue,
     systemComment: MultiremiIssueComment,
+    outcome: ChildTerminalOutcome,
     parentTaskId: string | null,
   ): void {
     if (!parent.assigneeType || !parent.assigneeId) {
-      this.recordChildDoneParentSkipped(parent, systemComment, "no_assignee");
+      this.recordChildDoneParentSkipped(parent, systemComment, "no_assignee", { outcome });
       return;
     }
     if (parent.assigneeType === "agent") {
       const agent = this.ctx.agents().getAgent(parent.assigneeId);
       if (!agent || agent.archivedAt || agent.workspaceId !== parent.workspaceId) {
-        this.recordChildDoneParentSkipped(parent, systemComment, "agent_unavailable");
+        this.recordChildDoneParentSkipped(parent, systemComment, "agent_unavailable", { outcome });
         return;
       }
-      this.enqueueChildDoneParentTask(parent, agent, systemComment, parent.assigneeType, parent.assigneeId, parentTaskId);
+      this.enqueueChildDoneParentTask(parent, agent, systemComment, parent.assigneeType, parent.assigneeId, parentTaskId, outcome);
       return;
     }
     if (parent.assigneeType !== "squad") return;
     const squad = this.ctx.squads().getSquad(parent.assigneeId);
     if (!squad || squad.archivedAt || squad.workspaceId !== parent.workspaceId || !squad.leaderId) {
-      this.recordChildDoneParentSkipped(parent, systemComment, "squad_leader_unavailable");
+      this.recordChildDoneParentSkipped(parent, systemComment, "squad_leader_unavailable", { outcome });
       return;
     }
     const leader = this.ctx.agents().getAgent(squad.leaderId);
@@ -1279,12 +1680,24 @@ export class IssuesRepo {
       this.recordChildDoneParentSkipped(parent, systemComment, "squad_leader_unavailable", {
         agentId: squad.leaderId,
         agent_id: squad.leaderId,
+        outcome,
       });
       return;
     }
-    this.enqueueChildDoneParentTask(parent, leader, systemComment, parent.assigneeType, parent.assigneeId, parentTaskId);
+    this.enqueueChildDoneParentTask(parent, leader, systemComment, parent.assigneeType, parent.assigneeId, parentTaskId, outcome);
   }
 
+  /**
+   * MUL-400 E2 round scheduling.
+   *
+   * The parent owner is busy in the common case, and that must not swallow the
+   * report. Instead of skipping on `active_task_exists`, the report is appended
+   * to the agent's already-queued round for this issue (found by the same
+   * query the Session picker uses), or a fresh queued round is created. The
+   * workspace lock serialises both branches, so a parent keeps at most one
+   * pending round and several child reports coalesce into it; the claim query's
+   * same-lane rule already makes that round wait for the current one to end.
+   */
   private enqueueChildDoneParentTask(
     parent: MultiremiIssue,
     agent: MultiremiAgent,
@@ -1292,46 +1705,84 @@ export class IssuesRepo {
     assigneeType: MultiremiAssigneeType,
     assigneeId: string,
     parentTaskId: string | null,
+    outcome: ChildTerminalOutcome,
   ): void {
-    if (this.hasActiveTaskForIssueAndAgent(parent.id, agent.id)) {
-      this.recordChildDoneParentSkipped(parent, systemComment, "active_task_exists", {
+    return this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(parent.workspaceId);
+      const issueSessionId = this.ctx.issueSessions().getOrCreateDefaultIssueSession(parent.id).id;
+      const queued = this.findQueuedTaskForIssueAndAgent(parent.id, agent.id, issueSessionId);
+      if (queued) {
+        const appended = appendChildStatusReport(queued.prompt, {
+          commentId: systemComment.id,
+          outcome,
+          actorId: parent.assigneeId,
+        });
+        const guarded = this.ctx.db.run(
+          `UPDATE multiremi_tasks SET prompt = ?, updated_at = ?
+           WHERE id = ? AND status = 'queued' AND continued_from_task_id IS NULL`,
+          [appended, nowIso(), queued.id],
+        );
+        if (guarded.changes > 0) {
+          this.ctx.appendIssueActivity(parent.id, {
+            actorType: "system",
+            actorId: SYSTEM_AUTHOR_ID,
+            type: "child_status_parent_coalesced",
+            body: `Coalesced into ${agent.name}'s pending round`,
+            data: {
+              commentId: systemComment.id,
+              comment_id: systemComment.id,
+              outcome,
+              assigneeType,
+              assignee_type: assigneeType,
+              assigneeId,
+              assignee_id: assigneeId,
+              agentId: agent.id,
+              agent_id: agent.id,
+              taskId: queued.id,
+              task_id: queued.id,
+            },
+          });
+          return;
+        }
+        // The round stopped being queued between the read and the write; fall
+        // through to creating a fresh one rather than dropping the report.
+      }
+      const task = this.ctx.tasks().createTask({
         agentId: agent.id,
-        agent_id: agent.id,
+        issueId: parent.id,
+        issueSessionId,
+        triggerCommentId: systemComment.id,
+        workspaceId: parent.workspaceId,
+        prompt: childDoneParentTaskPrompt(systemComment, outcome),
+        parentTaskId,
+        preserveIssueStatus: true,
       });
-      return;
-    }
-    const task = this.ctx.tasks().createTask({
-      agentId: agent.id,
-      issueId: parent.id,
-      triggerCommentId: systemComment.id,
-      workspaceId: parent.workspaceId,
-      prompt: childDoneParentTaskPrompt(systemComment),
-      parentTaskId,
-    });
-    this.ctx.appendIssueActivity(parent.id, {
-      actorType: "system",
-      actorId: SYSTEM_AUTHOR_ID,
-      type: "child_done_parent_triggered",
-      body: `Queued ${agent.name}`,
-      data: {
-        commentId: systemComment.id,
-        comment_id: systemComment.id,
-        assigneeType,
-        assignee_type: assigneeType,
-        assigneeId,
-        assignee_id: assigneeId,
-        agentId: agent.id,
-        agent_id: agent.id,
-        taskId: task.id,
-        task_id: task.id,
-      },
-    });
+      this.ctx.appendIssueActivity(parent.id, {
+        actorType: "system",
+        actorId: SYSTEM_AUTHOR_ID,
+        type: "child_done_parent_triggered",
+        body: `Queued ${agent.name}`,
+        data: {
+          commentId: systemComment.id,
+          comment_id: systemComment.id,
+          outcome,
+          assigneeType,
+          assignee_type: assigneeType,
+          assigneeId,
+          assignee_id: assigneeId,
+          agentId: agent.id,
+          agent_id: agent.id,
+          taskId: task.id,
+          task_id: task.id,
+        },
+      });
+    })();
   }
 
   private recordChildDoneParentSkipped(
     parent: MultiremiIssue,
     systemComment: MultiremiIssueComment,
-    reason: "no_assignee" | "agent_unavailable" | "squad_leader_unavailable" | "active_task_exists",
+    reason: "no_assignee" | "agent_unavailable" | "squad_leader_unavailable",
     details: Record<string, unknown> = {},
   ): void {
     this.ctx.appendIssueActivity(parent.id, {
@@ -3501,27 +3952,78 @@ function assigneeCommentPrompt(_comment: MultiremiIssueComment): string {
   return "A teammate commented on an issue assigned to you. Respond to the current triggering comment as the issue's assignee.";
 }
 
-function childDoneParentTaskPrompt(comment: MultiremiIssueComment): string {
+function childDoneParentTaskPrompt(
+  comment: MultiremiIssueComment,
+  outcome: ChildTerminalOutcome,
+): string {
   return [
-    "A sub-issue assigned under this issue was marked done.",
+    `A sub-issue under this issue reported ${childOutcomeLabel(outcome)}.`,
     "",
     "## Platform Comment",
     comment.body,
   ].join("\n");
 }
 
-function childDoneSystemCommentBody(input: {
+/**
+ * MUL-400 E2 system comment. The old body told the parent owner to read every
+ * sibling description and promote backlog items by hand; dependency-declared
+ * children start themselves (S2), so this notification only asks for a review.
+ */
+function childStatusSystemCommentBody(input: {
   mentionPrefix: string;
   childKey: string;
   childId: string;
   childTitle: string;
+  outcome: ChildTerminalOutcome;
+  childStatus: string;
 }): string {
   const title = sanitizeChildDoneTitle(input.childTitle);
+  const verb = childOutcomeSentence(input.outcome);
   return [
-    `${input.mentionPrefix}Sub-issue [${input.childKey}](mention://issue/${input.childId}) - "${title}" - is done.`,
-    "Before promoting any waiting backlog sub-issue, read each sibling's description and only promote items whose stated dependencies are already satisfied.",
-    "If a sibling's description conflicts with the parent breakdown, leave it backlog and post a comment to confirm first.",
+    `${input.mentionPrefix}Sub-issue [${input.childKey}](mention://issue/${input.childId}) - "${title}" - ${verb}.`,
+    `Its status is now ${input.childStatus}; a platform round was queued for the owner of this issue.`,
+    "Children whose dependencies are declared as `blocked_by` are promoted automatically, so this report only needs a review of the outcome.",
   ].join(" ");
+}
+
+function childOutcomeSentence(outcome: ChildTerminalOutcome): string {
+  switch (outcome) {
+    case "failed": return "failed";
+    case "blocked": return "is blocked";
+    case "cancelled": return "was cancelled";
+    default: return "is done";
+  }
+}
+
+function childOutcomeLabel(outcome: ChildTerminalOutcome): string {
+  switch (outcome) {
+    case "failed": return "failed";
+    case "blocked": return "is blocked";
+    case "cancelled": return "was cancelled";
+    default: return "is done";
+  }
+}
+
+function childStatusInboxBody(child: MultiremiIssue, outcome: ChildTerminalOutcome): string {
+  return `${child.key} ${childOutcomeLabel(outcome)}: ${sanitizeChildDoneTitle(child.title)}`;
+}
+
+/**
+ * MUL-400 E2 append shape for a coalesced round. Mirrors the delegation-return
+ * report format so one prompt can carry several child outcomes readably.
+ */
+function appendChildStatusReport(
+  prompt: string,
+  input: { commentId: string; outcome: ChildTerminalOutcome; actorId: string | null },
+): string {
+  return [
+    prompt.trimEnd(),
+    "",
+    "## Additional Sub-Issue Report",
+    `Outcome: ${input.outcome}`,
+    `Platform comment: ${input.commentId}`,
+    ...(input.actorId ? [`Parent assignee: ${input.actorId}`] : []),
+  ].join("\n");
 }
 
 function sanitizeChildDoneTitle(title: string): string {
@@ -4048,6 +4550,10 @@ function toChildIssueProgress(row: Row): MultiremiIssueChildProgress {
     parentIssueId: String(row.parent_issue_id),
     total: Number(row.total ?? 0),
     done: Number(row.done ?? 0),
+    cancelled: Number(row.cancelled ?? 0),
+    blocked: Number(row.blocked ?? 0),
+    waiting: 0,
+    active: Number(row.active ?? 0),
   };
 }
 

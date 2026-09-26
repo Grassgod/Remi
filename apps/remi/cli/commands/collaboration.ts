@@ -143,7 +143,12 @@ function issueCompatibilitySpecs(): CommandSpec[] {
     legacySpec("issue.bind-topic", ["issue", "bind-topic"], "Resume a local Feishu topic workspace migration", "write", HUMAN_TASK, [refPositional("issue")], [
       { name: "daemon-port", type: "integer", valueName: "port", description: "Local daemon helper port" },
     ], ["issue", "bind-topic"]),
-    legacySpec("issue.update", ["issue", "update"], "Update an issue", "write", HUMAN_TASK, [refPositional("issue")], ISSUE_FIELDS, ["issue", "update"]),
+    legacySpec("issue.update", ["issue", "update"], "Update an issue", "write", HUMAN_TASK, [refPositional("issue")], [
+      ...ISSUE_FIELDS,
+      // MUL-400 E1: member-only override for the parent-status guard. A run
+      // (`task` identity) sending it is rejected by the server.
+      { name: "force", type: "boolean", description: "Force in_review/done even while sub-issues are still open (members only)" },
+    ], ["issue", "update"]),
     legacySpec("issue.assign", ["issue", "assign"], "Assign or unassign an issue", "write", HUMAN_TASK, [refPositional("issue")], [
       { name: "to", type: "string", valueName: "ref", description: "Assignee reference" },
       { name: "to-type", type: "string", valueName: "type", description: "Assignee type" },
