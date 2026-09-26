@@ -770,6 +770,35 @@ describe("KnowledgePage", () => {
     expect(screen.queryByRole("link", { name: "MUL-8" })).not.toBeInTheDocument();
   });
 
+  /**
+   * While the user is still typing, the previous term's server response is stale
+   * and must not leak rows that no longer match — the pane keeps using the local
+   * predicate until the debounced term catches up.
+   */
+  it("does not show the previous term's server rows while the user keeps typing", async () => {
+    const user = userEvent.setup();
+    state.submissions = [
+      submission({ id: "ksub-alpha", source_issue_id: "issue-8", source_issue: { id: "issue-8", key: "MUL-8", title: "Alpha" }, body_excerpt: "alpha body" }),
+      // Body-only match for the first term: the local predicate cannot see it.
+      submission({ id: "ksub-stale", source_issue_id: "issue-9", source_issue: { id: "issue-9", key: "MUL-9", title: "Beta" }, body_excerpt: "server side beta" }),
+    ];
+    state.submissionsByQuery["MUL-9"] = [state.submissions[1] as never];
+
+    renderPage();
+    await user.click(screen.getByRole("tab", { name: /Raw/ }));
+    const input = screen.getByPlaceholderText("Search source, issue, agent, or proposed target...");
+
+    await user.type(input, "MUL-9");
+    await waitForServerQuery("MUL-9");
+    // The row's excerpt shows in the row and in its tooltip content.
+    expect(screen.getAllByText("server side beta").length).toBeGreaterThan(0);
+
+    // New term, debounce not yet elapsed: the MUL-9 server rows are stale.
+    fireEvent.change(input, { target: { value: "MUL-8" } });
+    expect(screen.queryByText("server side beta")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "MUL-8" })).toBeInTheDocument();
+  });
+
   it("renders a compilation run with multiple Raw inputs and multiple outputs", () => {
     const detail = runDetail({
       run: {

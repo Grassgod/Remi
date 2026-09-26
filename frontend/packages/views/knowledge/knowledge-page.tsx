@@ -1012,7 +1012,10 @@ function RawPane({
   const { getAgentName } = useActorName();
   const formatRelativeDate = useFormatRelativeDate();
   const query = search.trim().toLowerCase();
-  const serverMatches = Boolean(serverQuery.trim());
+  // Only trust the server rows once the debounced term is the one being typed:
+  // while the user is still typing, the previous term's response must not leak
+  // rows that no longer match (the local predicate below already narrowed them).
+  const serverMatches = Boolean(serverQuery.trim()) && serverQuery.trim().toLowerCase() === query;
   const localRows = query
     ? allSubmissions.filter((submission) => matchesLocalSubmissionFields(submission, query))
     : allSubmissions;
