@@ -15,7 +15,7 @@
  */
 import { afterEach, describe, expect, it } from "bun:test";
 import { Hono } from "hono";
-import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
+import { PostgresSyncDatabase, PostgresReplyTooLargeError, resetDbReplyLimitForTest } from "@multiremi/store/db/postgres.js";
 import {
   createRequestMetricsMiddleware,
   drainRequestMetricsForTest,
@@ -525,12 +525,16 @@ describe.skipIf(!pgAvailable)("MUL-367 request metrics — real Postgres bridge"
 });
 
 /**
- * MUL-386 C.1 — the PG bridge reply guardrail.
+ * MUL-386 C.1 — the PG bridge reply guardrails.
  *
- * A reply over 1 MB logs `api_large_db_reply`, with the Hono route PATTERN and
- * the byte count and nothing else. The privacy assertions are structural: the
- * emitted line is compared against the exact expected key set, so a future field
- * (SQL text, a parameter, the real path) fails the test instead of shipping.
+ * Two behaviours, both about the number that crossed the bridge:
+ *   - a reply over 1 MB logs `api_large_db_reply`, with the Hono route PATTERN
+ *     and the byte count and nothing else;
+ *   - a reply over the hard limit is refused before decode/parse.
+ *
+ * The privacy assertions are structural: the emitted line is compared against the
+ * exact expected key set, so a future field (SQL text, a parameter, the real path)
+ * fails the test instead of quietly shipping.
  */
 describe("MUL-386 bridge reply guardrails", () => {
   /** Big enough to exceed the 1 MB default warning threshold. */
@@ -551,6 +555,7 @@ describe("MUL-386 bridge reply guardrails", () => {
   }
 
   it("logs api_large_db_reply with the route pattern and byte count only", async () => {
+    resetDbReplyLimitForTest();
     const database = new PostgresSyncDatabase(PG_URL);
     const app = new Hono();
     app.use("*", createRequestMetricsMiddleware(OPTIONS));
@@ -581,6 +586,7 @@ describe("MUL-386 bridge reply guardrails", () => {
   });
 
   it("labels a query with no request context as <background>", async () => {
+    resetDbReplyLimitForTest();
     const database = new PostgresSyncDatabase(PG_URL);
     try {
       const { lines } = await capture(() => {
@@ -596,4 +602,87 @@ describe("MUL-386 bridge reply guardrails", () => {
     }
   });
 
+  it("refuses a reply over the hard limit before decoding it", async () => {
+    // 2 MB limit, 4 MB payload: refused before any decode/parse work happens.
+    process.env.MULTIREMI_PG_REPLY_MAX_BYTES = String(2 * 1_048_576);
+    resetDbReplyLimitForTest();
+    const database = new PostgresSyncDatabase(PG_URL);
+    const payload = "y".repeat(4 * 1_048_576);
+    try {
+      const first = await capture(() => database.query("SELECT ?::text AS payload").all(payload));
+      expect(first.error).toBeInstanceOf(PostgresReplyTooLargeError);
+      const rejected = first.lines
+        .map((line) => { try { return JSON.parse(line) as Record<string, unknown>; } catch { return null; } })
+        .find((line) => line?.event === "api_db_reply_rejected");
+      expect(rejected).toBeDefined();
+      // Exact key set: no SQL text, no parameters, not the payload.
+      expect(Object.keys(rejected!).sort()).toEqual(["bytes", "event", "max_bytes", "method", "route", "ts"]);
+      expect(rejected!.bytes).toBeGreaterThan(2 * 1_048_576);
+      expect(rejected!.max_bytes).toBe(2 * 1_048_576);
+      // No request context means the background label, seen from the bridge side.
+      expect(rejected!.route).toBe("<background>");
+
+      const message = (first.error as Error).message;
+      expect(message).toMatch(/postgres reply of \d+ bytes exceeds \d+ bytes bridge limit; paginate or project columns/);
+      expect(message).not.toContain("SELECT");
+      expect(message).not.toContain("y".repeat(16));
+    } finally {
+      delete process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
+      resetDbReplyLimitForTest();
+      database.close();
+    }
+  });
+
+  it("labels a rejected reply with the handler's route pattern", async () => {
+    process.env.MULTIREMI_PG_REPLY_MAX_BYTES = String(2 * 1_048_576);
+    resetDbReplyLimitForTest();
+    const database = new PostgresSyncDatabase(PG_URL);
+    const payload = "y".repeat(4 * 1_048_576);
+    const app = new Hono();
+    app.use("*", createRequestMetricsMiddleware(OPTIONS));
+    app.get("/api/leaky/:id/reply", () => {
+      database.query("SELECT ?::text AS payload").all(payload);
+      return new Response("unreachable");
+    });
+    try {
+      // Hono turns the handler's throw into a 500 response; the point here is the
+      // route label on the guardrail line, not the request's outcome.
+      const { lines } = await capture(async () => {
+        const response = await app.request("/api/leaky/hard-secret-id/reply");
+        // Hono's default error path; asserting the body keeps the case honest
+        // about the request having actually failed rather than being swallowed.
+        return { status: response.status, body: await response.text() };
+      });
+      const rejected = lines
+        .map((line) => { try { return JSON.parse(line) as Record<string, unknown>; } catch { return null; } })
+        .find((line) => line?.event === "api_db_reply_rejected");
+      expect(rejected).toBeDefined();
+      // The handler's pattern, never the wildcard middleware route and never the
+      // real path — the same contract `api_slow_request` follows.
+      expect(rejected!.route).toBe("/api/leaky/:id/reply");
+      expect(rejected!.method).toBe("GET");
+      for (const line of lines) {
+        expect(line).not.toContain("hard-secret-id");
+        expect(line).not.toContain("SELECT");
+      }
+    } finally {
+      delete process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
+      resetDbReplyLimitForTest();
+      database.close();
+    }
+  });
+
+  it("disables the hard limit when the override is 0", async () => {
+    process.env.MULTIREMI_PG_REPLY_MAX_BYTES = "0";
+    resetDbReplyLimitForTest();
+    const database = new PostgresSyncDatabase(PG_URL);
+    try {
+      const { result } = await capture(() => database.query("SELECT ?::text AS payload").all("z".repeat(9 * 1_048_576)));
+      expect((result as Array<{ payload: string }>)[0]!.payload.length).toBe(9 * 1_048_576);
+    } finally {
+      delete process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
+      resetDbReplyLimitForTest();
+      database.close();
+    }
+  });
 });

@@ -192,6 +192,21 @@ export function recordDbParse(parseMs: number): void {
 export const DB_REPLY_WARN_BYTES = 1_048_576;
 
 /**
+ * Hard limit on a single bridge reply. 0 disables the limit entirely, which is
+ * the rollback switch (`MULTIREMI_PG_REPLY_MAX_BYTES=0`).
+ */
+export const DEFAULT_DB_REPLY_MAX_BYTES = 8 * 1_048_576;
+
+/** Resolve the hard limit, honouring the env override and treating 0 as "off". */
+export function resolveDbReplyMaxBytes(env: Record<string, string | undefined> = process.env): number {
+  const raw = env.MULTIREMI_PG_REPLY_MAX_BYTES?.trim();
+  if (!raw) return DEFAULT_DB_REPLY_MAX_BYTES;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_DB_REPLY_MAX_BYTES;
+  return parsed;
+}
+
+/**
  * Where the reply that is being measured came from.
  *
  * Background work (schedulers, migrations) has no request context by
@@ -216,6 +231,19 @@ export function emitLargeDbReply(bytes: number): void {
     method,
     route,
     bytes,
+  });
+}
+
+/** The line emitted when a reply is refused before decode/parse. */
+export function emitDbReplyRejected(bytes: number, maxBytes: number): void {
+  const { method, route } = currentDbReplyOrigin();
+  emitJsonLine({
+    event: "api_db_reply_rejected",
+    ts: new Date().toISOString(),
+    method,
+    route,
+    bytes,
+    max_bytes: maxBytes,
   });
 }
 
