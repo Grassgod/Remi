@@ -41,4 +41,6 @@ remi runtime prepare --provider claude
 remi runtime prepare --provider claude --provider codex
 ```
 
+不带 `--provider` 时（安装脚本即如此调用），只准备配置或检测到的 provider 中带 ACP bundle 的 claude、codex；antigravity 等没有 bundle 的 provider 直接跳过，全部跳过时输出空的 `runtimes` 并成功退出，不阻塞 CLI 升级。显式 `--provider` 只接受 claude、codex，传入其它值直接报错。
+
 命令无服务端鉴权要求，只操作当前用户的本地 Remi 依赖。隔离验证时给 REMI_HOME 指定新临时目录；源码运行可通过 REMI_CLAUDE_AGENT_ACP_EXECUTABLE 显式选择仓库内 bin/remi-claude-agent-acp。
