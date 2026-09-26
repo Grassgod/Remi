@@ -1,0 +1,133 @@
+{
+  "generatedAt": "2026-09-26T11:22:10.868Z",
+  "label": "after-MUL-387",
+  "commit": "16119de8c22239d0a8182d44af50cd63db143b35",
+  "ref": "HEAD",
+  "sourceDigest": {
+    "files": {
+      "packages/server/src/repository-wiki/service.ts": "ff5b2d053e66d3b2a301392ded6580ce3f52f9eb086be8e289a910271bc535f4",
+      "packages/server/src/api/routers/workspaces.ts": "4493d2821543d90729648490b669c12da8dd0166d47c293a4575e90874f22071",
+      "packages/server/src/api/server.ts": "0676223f7b28a53246beb39afbf184fd0dd9f9da41de41ed6195617578576ab3"
+    },
+    "combined": "875c068ae232cd21e590882529ef250865ffb6a155f5b01c5c2123ba55415dc9"
+  },
+  "runtime": {
+    "bun": "1.3.14",
+    "database": "sqlite(:memory:)",
+    "transport": "in-process app.request()"
+  },
+  "route": "/api/workspaces/local/repos/repo_qa_bench/wiki",
+  "queryString": "(none)",
+  "mode": "openviking (RepositoryWikiService injected explicitly)",
+  "fixture": {
+    "docsReady": 146,
+    "bodyBytesPerDoc": 1500,
+    "fakeReadDelayMs": 700,
+    "warmups": 3,
+    "samples": 100,
+    "sequential": true
+  },
+  "responseShape": {
+    "status": 200,
+    "docs": 146,
+    "bodyKeyPresentOnEveryDoc": false,
+    "bodyKeyPresentOnSomeDoc": false,
+    "readCallsForThisResponse": 0
+  },
+  "bodyBatch": {
+    "requestedIds": 20,
+    "status": 200,
+    "elapsedMs": 3507.47,
+    "readCalls": 20,
+    "maxInFlightReads": 4,
+    "docsWithBody": 20
+  },
+  "contractProbes": [
+    {
+      "name": "no-params",
+      "path": "/api/workspaces/local/repos/repo_qa_bench/wiki",
+      "status": 200,
+      "docs": 146,
+      "bodyKeyPresentOnEveryDoc": false,
+      "bodyKeyPresentOnSomeDoc": false,
+      "errorField": null,
+      "readCalls": 0,
+      "maxInFlightReads": 0
+    },
+    {
+      "name": "include_body+ids(20)",
+      "path": "/api/workspaces/local/repos/repo_qa_bench/wiki?include_body=true&ids=rwdoc_q02utny85cb3,rwdoc_09z4mnfytxkw,rwdoc_kk0smhdhi54g,rwdoc_8zbw0rvzjr3p,rwdoc_i1csobc8teeb,rwdoc_p3r2753ss4fv,rwdoc_p67w3n5zns6t,rwdoc_5b93wx87fcix,rwdoc_dscx3rruxnns,rwdoc_byb15q2vhajh,rwdoc_pxaclwk8lrut,rwdoc_jtkyjo63fgvq,rwdoc_ig4i9z2s19ag,rwdoc_pl7wm1q3v52w,rwdoc_u8m195nfk428,rwdoc_pkxc3fllentn,rwdoc_8l4n61e9pmb7,rwdoc_mshwne30j1w1,rwdoc_7ev324do80t7,rwdoc_qwacahq5jfag",
+      "status": 200,
+      "docs": 20,
+      "bodyKeyPresentOnEveryDoc": true,
+      "bodyKeyPresentOnSomeDoc": true,
+      "errorField": null,
+      "readCalls": 20,
+      "maxInFlightReads": 4
+    },
+    {
+      "name": "include_body without ids",
+      "path": "/api/workspaces/local/repos/repo_qa_bench/wiki?include_body=true",
+      "status": 400,
+      "docs": 0,
+      "bodyKeyPresentOnEveryDoc": false,
+      "bodyKeyPresentOnSomeDoc": false,
+      "errorField": "include_body requires ids",
+      "readCalls": 0,
+      "maxInFlightReads": 0
+    },
+    {
+      "name": "ua Bun/1.3.14",
+      "path": "/api/workspaces/local/repos/repo_qa_bench/wiki",
+      "status": 200,
+      "docs": 146,
+      "bodyKeyPresentOnEveryDoc": true,
+      "bodyKeyPresentOnSomeDoc": true,
+      "errorField": null,
+      "readCalls": 146,
+      "maxInFlightReads": 146
+    },
+    {
+      "name": "ua remi-cli/0.2.83",
+      "path": "/api/workspaces/local/repos/repo_qa_bench/wiki",
+      "status": 200,
+      "docs": 146,
+      "bodyKeyPresentOnEveryDoc": false,
+      "bodyKeyPresentOnSomeDoc": false,
+      "errorField": null,
+      "readCalls": 0,
+      "maxInFlightReads": 0
+    }
+  ],
+  "latency": {
+    "count": 100,
+    "minMs": 0.76,
+    "p50Ms": 0.98,
+    "p90Ms": 1.37,
+    "p95Ms": 1.47,
+    "p99Ms": 2.62,
+    "maxMs": 2.94,
+    "meanMs": 1.1
+  },
+  "readsPerRequest": {
+    "first": 0,
+    "min": 0,
+    "max": 0,
+    "constant": true
+  },
+  "maxInFlightReadsPerRequest": {
+    "min": 0,
+    "max": 0
+  },
+  "responseBytes": {
+    "min": 119008,
+    "max": 119008,
+    "mean": 119008
+  },
+  "verdict": {
+    "expect": "candidate",
+    "judged": true,
+    "violations": [],
+    "passed": true
+  }
+}

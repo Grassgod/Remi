@@ -258,6 +258,11 @@ remi memory publish
 remi platform operation cancel <operation> --yes
 ```
 
+`remi wiki repository list <repo>` prints document metadata only, matching the
+API list contract from [ADR 0002](adr/0002-repository-wiki-list-without-bodies.md).
+Pass `--include-body --ids <a,b>` (at most 20 ids per request) to fetch bodies
+for specific documents.
+
 ## Current user identity
 
 `remi member get me`, `remi member update me`, and `remi member onboarding ...`

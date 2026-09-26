@@ -82,7 +82,8 @@ export interface RepositoryWikiDoc {
   slug: string;
   title: string;
   summary: string | null;
-  body: string;
+  /** Absent on list rows: bodies are fetched per document (MUL-387). */
+  body?: string;
   tags: string[];
   refs: Array<{ type: string; value: string }>;
   source_revision: string | null;

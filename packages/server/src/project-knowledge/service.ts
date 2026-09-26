@@ -32,7 +32,8 @@ import {
   projectKnowledgeSlugFromUri,
   sha256Text,
 } from "./codec.js";
-import { OpenVikingClient } from "./openviking-client.js";
+import { OPENVIKING_DEFAULT_ATTEMPT_TIMEOUT_MS, OPENVIKING_MAX_RETRIES, OpenVikingClient, openVikingDeadlineSignal } from "./openviking-client.js";
+import { deadlineClient } from "@multiremi/repository-wiki/deadline.js";
 import type {
   OpenVikingClientContract,
   ProjectKnowledgeDoc,
@@ -63,6 +64,8 @@ export interface ProjectKnowledgeServiceContract {
   backfill(workspaceId: string, input?: { dryRun?: boolean; resume?: boolean; projectId?: string | null; statuses?: string[] }): Promise<ProjectKnowledgeMigrationResult>;
   verify(workspaceId: string, projectId?: string | null): Promise<ProjectKnowledgeMigrationResult>;
   hydrateTaskKnowledge(task: MultiremiTaskWithAgent, signal?: AbortSignal): Promise<MultiremiTaskWithAgent>;
+  /** A service whose OpenViking calls all share one deadline; use one per API request. */
+  withRequestDeadline(budgetMs?: number): ProjectKnowledgeServiceContract;
 }
 
 export class ProjectKnowledgeUnavailableError extends Error {}
@@ -73,14 +76,36 @@ const log = createLogger("project-knowledge");
 // finish in under a second in production, so this bound stays effectively parallel
 // for realistic result sets while capping the worst case at 16 instead of 500.
 const HYDRATE_CONCURRENCY = 16;
+/** nginx cuts the client off at 30s; answer before that with room for routing and the response. */
+export const PROJECT_KNOWLEDGE_REQUEST_BUDGET_MS = 25_000;
+/**
+ * Tail of the budget the main path may not use, so a write that fails half-applied
+ * can still be rolled back. Without it a deadline hit after `replace` leaves content
+ * whose checksum no longer matches the metadata, and the doc stops being readable.
+ */
+const COMPENSATION_RESERVE_MS = 5_000;
 
 export class ProjectKnowledgeService implements ProjectKnowledgeServiceContract {
   constructor(
     private readonly store: MultiremiStore,
     private readonly client: OpenVikingClientContract | null,
     readonly mode: ProjectKnowledgeMode,
+    /** Compensates failed writes; shares the request deadline but not the main path's reserve. */
+    private readonly cleanupClient: OpenVikingClientContract | null = client,
   ) {
     if (mode !== "sql" && !client) throw new Error(`OpenViking client is required in ${mode} mode`);
+  }
+
+  withRequestDeadline(budgetMs = PROJECT_KNOWLEDGE_REQUEST_BUDGET_MS): ProjectKnowledgeService {
+    if (!this.client) return this;
+    const deadlineAt = Date.now() + budgetMs;
+    const reserve = Math.min(COMPENSATION_RESERVE_MS, Math.floor(budgetMs / 5));
+    return new ProjectKnowledgeService(
+      this.store,
+      clientWithDeadline(this.client, deadlineAt - reserve),
+      this.mode,
+      clientWithDeadline(this.cleanupClient ?? this.client, deadlineAt),
+    );
   }
 
   async listProjectDocs(projectId: string, input: { kind?: string | null } = {}): Promise<ProjectKnowledgeDoc[]> {
@@ -162,26 +187,36 @@ export class ProjectKnowledgeService implements ProjectKnowledgeServiceContract 
         snapshotOid,
       });
     } catch (error) {
+      const cleanup = this.requireCleanupClient();
       if (oldUri !== newUri) {
-        await client.remove(newUri).catch(() => undefined);
+        await cleanup.remove(newUri).catch(() => undefined);
       } else if (previousContent !== null) {
-        const currentContent = await client.read(oldUri).catch(() => null);
+        const currentContent = await cleanup.read(oldUri).catch(() => null);
         if (currentContent !== null && currentContent !== previousContent) {
-          await client.replace(
+          await cleanup.replace(
             oldUri,
             projectKnowledgeRootUri(prepared.workspaceId, prepared.projectId),
             previousContent,
             sha256Text(currentContent),
           ).catch(() => undefined);
-          await client.setTags(oldUri, projectKnowledgeRetrievalTags(current)).catch(() => undefined);
-          await client.commit(`project_doc:${prepared.id}:rollback:v${prepared.version}`, [oldUri]).catch(() => undefined);
+          await cleanup.setTags(oldUri, projectKnowledgeRetrievalTags(current)).catch(() => undefined);
+          await cleanup.commit(`project_doc:${prepared.id}:rollback:v${prepared.version}`, [oldUri]).catch(() => undefined);
         }
       }
       throw error;
     }
-    if (oldUri !== newUri && await client.exists(oldUri)) {
-      await client.remove(oldUri);
-      await client.commit(`project_doc:${prepared.id}:move:v${prepared.version}`, [oldUri, newUri]);
+    if (oldUri !== newUri) {
+      // The new version is already committed; failing here would report an error for a
+      // write that succeeded. The old path is unreferenced, so leaving it is only an orphan.
+      const cleanup = this.requireCleanupClient();
+      try {
+        if (await cleanup.exists(oldUri)) {
+          await cleanup.remove(oldUri);
+          await cleanup.commit(`project_doc:${prepared.id}:move:v${prepared.version}`, [oldUri, newUri]);
+        }
+      } catch (error) {
+        log.warn(`old OpenViking path left behind after moving ${prepared.id}: ${safeError(error)}`);
+      }
     }
     return { ...asKnowledgeDoc(metadata), body: prepared.body };
   }
@@ -203,7 +238,7 @@ export class ProjectKnowledgeService implements ProjectKnowledgeServiceContract 
       try {
         if (await client.exists(uri)) await client.remove(uri);
       } catch (error) {
-        const stillExists = await client.exists(uri).catch(() => true);
+        const stillExists = await this.requireCleanupClient().exists(uri).catch(() => true);
         if (stillExists) {
           this.store.setProjectDocSyncState(existing.id, {
             syncStatus: "failed",
@@ -536,7 +571,9 @@ export class ProjectKnowledgeService implements ProjectKnowledgeServiceContract 
       this.store.setProjectDocRevisionStorage(id, 1, uri, hash, snapshotOid);
       return { ...asKnowledgeDoc(stored), body: prepared.body };
     } catch (error) {
-      if (await client.exists(uri).catch(() => false)) await client.remove(uri).catch(() => undefined);
+      // An orphan left at this URI would make every later create_if_absent for the slug fail.
+      const cleanup = this.requireCleanupClient();
+      if (await cleanup.exists(uri).catch(() => false)) await cleanup.remove(uri).catch(() => undefined);
       this.store.deleteProjectDoc(projectId, id);
       throw error;
     }
@@ -569,6 +606,10 @@ export class ProjectKnowledgeService implements ProjectKnowledgeServiceContract 
   private requireClient(): OpenVikingClientContract {
     if (!this.client) throw new ProjectKnowledgeUnavailableError("OpenViking is not configured");
     return this.client;
+  }
+
+  private requireCleanupClient(): OpenVikingClientContract {
+    return this.cleanupClient ?? this.requireClient();
   }
 
   private docUri(doc: Pick<MultiremiProjectDoc, "workspaceId" | "projectId" | "kind" | "slug">): string {
@@ -675,10 +716,15 @@ export function createProjectKnowledgeServiceFromEnv(store: MultiremiStore): Pro
   const client = new OpenVikingClient({
     baseUrl: process.env.MULTIREMI_OPENVIKING_URL?.trim() || "http://127.0.0.1:1933",
     apiKey,
-    timeoutMs: parsePositiveInt(process.env.MULTIREMI_OPENVIKING_TIMEOUT_MS, 30_000),
-    maxRetries: parsePositiveInt(process.env.MULTIREMI_OPENVIKING_MAX_RETRIES, 2),
+    timeoutMs: parsePositiveInt(process.env.MULTIREMI_OPENVIKING_TIMEOUT_MS, OPENVIKING_DEFAULT_ATTEMPT_TIMEOUT_MS),
+    maxRetries: parsePositiveInt(process.env.MULTIREMI_OPENVIKING_MAX_RETRIES, OPENVIKING_MAX_RETRIES),
   });
   return new ProjectKnowledgeService(store, client, mode);
+}
+
+function clientWithDeadline(client: OpenVikingClientContract, deadlineAt: number): OpenVikingClientContract {
+  // Clients that cannot clamp their own attempts still get their waits cut at the deadline.
+  return client.withDeadline?.(deadlineAt) ?? deadlineClient(client, openVikingDeadlineSignal(deadlineAt));
 }
 
 function prepareUpdatedDoc(current: ProjectKnowledgeDoc, input: UpdateProjectDocInput): MultiremiProjectDoc {

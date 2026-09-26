@@ -83,7 +83,10 @@ export const repositoryWikiDocSchema = z.object({
   slug: z.string().catch("").default(""),
   title: z.string(),
   summary: z.string().nullable().default(null),
-  body: z.string(),
+  // The list route returns metadata only (MUL-387); bodies arrive separately
+  // from `GET .../wiki/:ref`. An absent body stays undefined so "not requested"
+  // is never confused with an empty page.
+  body: z.string().optional(),
   tags: z.array(z.string()).default([]),
   refs: z.array(z.object({ type: z.string(), value: z.string() }).loose()).default([]),
   source_revision: z.string().nullable().default(null),
