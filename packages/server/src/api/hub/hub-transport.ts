@@ -20,8 +20,12 @@ import type { HubFrame, HubStreamKey } from "@multiremi/contracts/live-hub.js";
 
 /**
  * Every transport adapter that exists today. A cross-process bus (C2's
- * LISTEN/NOTIFY) appends its own kind here, which is also what `/health` and the
- * tests read to notice that a second process became possible.
+ * LISTEN/NOTIFY) appends its own kind here, which is what `/health` and the tests
+ * read to notice that a second process became possible.
+ *
+ * `HubTransport.kind` is a plain string on purpose: an adapter added outside this
+ * package must be able to name itself without editing this list. The census is
+ * the thing that is checked, not the type.
  */
 export const HUB_TRANSPORT_KINDS = ["local"] as const;
 
@@ -37,7 +41,7 @@ export interface HubTransportPublishInput {
 
 export interface HubTransport {
   /** Stable identifier for logs, metrics and `/health`. */
-  readonly kind: HubTransportKind | string;
+  readonly kind: string;
 
   /**
    * Hand frames that just entered a local ring to every other process.
