@@ -72,6 +72,7 @@ import {
   anchorPlan,
   inboxRowSelector,
   issueRowSelector,
+  LEGACY,
   profilesFor,
   type PageShape,
   type SelectorMode,
@@ -831,10 +832,9 @@ async function measureRound(options: {
     } else {
       const entryUrl = workspaceUrl(baseUrl, slug, scenario.entry === "inbox" ? "/inbox" : "/issues");
       await page.goto(entryUrl, { waitUntil: "commit", timeout: ROUND_TIMEOUT_MS });
-      // Wait for the entry list to render before hunting for the row; the
-      // selectors themselves are mode-agnostic so the contract rollout does not
-      // decide whether the click works.
-      await page.waitForTimeout(1_500);
+      // The row poll inside `clickWarmTarget` is the entry page's readiness
+      // condition: a rendered row in a skeleton-free content region. The recorder
+      // cannot judge this page, because it samples the *target* page's shape.
       await clickWarmTarget(page, scenario, opts);
       const clickT = await page
         .evaluate((name) => {
@@ -910,9 +910,6 @@ function timelineInfo(bodies: Map<string, unknown>, targetCommentId: string | nu
 /**
  * Hovers then clicks the row that opens this scenario's page.
  *
-/**
- * Hovers then clicks the row that opens this scenario's page.
- *
  * The click target lives on the *entry* page (the issues list or the inbox),
  * whose DOM may or may not carry the MUL-384 attributes, so both tables are
  * tried. A row that is not in the first render of the list is a hard skip rather
@@ -945,11 +942,19 @@ async function clickWarmTarget(page: Page, scenario: Scenario, opts: Options): P
   const deadline = Date.now() + WARM_ENTRY_TIMEOUT_MS;
   let chosen: { selector: string; index: number; count: number } | null = null;
   while (chosen === null && Date.now() < deadline) {
-    for (const selector of selectors) {
-      const count = await page.locator(selector).count().catch(() => 0);
-      if (count === 0) continue;
-      chosen = { selector, index: warmRowIndex(scenario, count), count };
-      break;
+    // "Rows present and no skeleton": a row can mount before the entry page has
+    // finished settling, and clicking mid-load would measure the wrong screen.
+    const skeletons = await page
+      .locator(`${LEGACY.listRoot} [data-slot="skeleton"]`)
+      .count()
+      .catch(() => 0);
+    if (skeletons === 0) {
+      for (const selector of selectors) {
+        const count = await page.locator(selector).count().catch(() => 0);
+        if (count === 0) continue;
+        chosen = { selector, index: warmRowIndex(scenario, count), count };
+        break;
+      }
     }
     if (chosen === null) await page.waitForTimeout(200);
   }
