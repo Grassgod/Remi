@@ -11,6 +11,7 @@
 //   2. invalidation — a store write must clear the rows it can change. A heartbeat writes its own
 //      Runtime row, so the read that follows inside the same request has to observe that write.
 import { afterEach, describe, expect, it } from "bun:test";
+import { Database } from "bun:sqlite";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 import {
@@ -183,5 +184,79 @@ describe("request-scoped read cache", () => {
     expect(runtimeKey).not.toBe(workspaceKey);
     expect(runtimeKey.startsWith("multiremi_runtimes\u0000")).toBe(true);
     expect(workspaceKey.startsWith("multiremi_workspaces\u0000")).toBe(true);
+  });
+
+  describe("transactions", () => {
+    // A transaction is where the store takes a lock and re-reads the rows it protects; the
+    // heartbeat re-reads its Runtime row that way so a Runtime deleted by another connection is
+    // reported gone. `raw` stands in for that other connection: the wrapper never sees its writes.
+    function cachedTable() {
+      const raw = new Database(":memory:");
+      raw.run("CREATE TABLE t (id TEXT PRIMARY KEY, v TEXT)");
+      raw.run("INSERT INTO t VALUES ('a', 'before')");
+      const wrapped = invalidatingDatabase(raw);
+      let reads = 0;
+      const read = (): string | null => {
+        const cache = activeRequestReadCache();
+        const key = cacheKey("t", "row", "a");
+        const cached = cache?.get<string | null>(key);
+        if (cached !== undefined) return cached;
+        reads += 1;
+        const value = (wrapped.query("SELECT v FROM t WHERE id = ?").get("a") as { v: string } | null)?.v ?? null;
+        cache?.set(key, value);
+        return value;
+      };
+      return { raw, wrapped, read, reads: () => reads };
+    }
+
+    it("never serves a transaction a row cached before it began", () => {
+      const { raw, wrapped, read, reads } = cachedTable();
+      withRequestReadCache(() => {
+        expect(read()).toBe("before");
+        raw.run("UPDATE t SET v = 'after' WHERE id = 'a'");
+        // Outside a transaction the row is as old as the request.
+        expect(read()).toBe("before");
+        const underLock = wrapped.transaction(() => [read(), read()])();
+        expect(underLock).toEqual(["after", "after"]);
+        // What the transaction read is what the rest of the request keeps.
+        expect(read()).toBe("after");
+      });
+      // One read before the transaction, one inside it; the second read inside it and the one
+      // after it are served from the cache.
+      expect(reads()).toBe(2);
+    });
+
+    it("drops what a failed transaction read", () => {
+      const { wrapped, read } = cachedTable();
+      withRequestReadCache(() => {
+        expect(read()).toBe("before");
+        expect(() => wrapped.transaction(() => {
+          wrapped.run("UPDATE t SET v = 'rolled back' WHERE id = 'a'");
+          expect(read()).toBe("rolled back");
+          throw new Error("abort");
+        })()).toThrow("abort");
+        expect(read()).toBe("before");
+      });
+    });
+
+    it("reports a Runtime deleted by another connection as gone on the heartbeat", () => {
+      const store = createStore();
+      store.ensureLocalWorkspace();
+      store.registerRuntime({
+        id: "rt_gone",
+        name: "Gone runtime",
+        provider: "claude",
+        daemonId: "daemon-gone",
+        workspaceId: "local",
+        ownerId: "local",
+        status: "online",
+      });
+      withRequestReadCache(() => {
+        // The daemon-identity guard reads the Runtime row before the heartbeat locks anything.
+        expect(store.getRuntimeLite("rt_gone")).not.toBeNull();
+        db!.run("DELETE FROM multiremi_runtimes WHERE id = ?", ["rt_gone"]);
+        expect(store.heartbeatRuntime("rt_gone", { agentPluginProtocol: 1 }).status).toBe("runtime_gone");
+      });
+    });
   });
 });

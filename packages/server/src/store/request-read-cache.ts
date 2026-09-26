@@ -7,9 +7,11 @@ import { AsyncLocalStorage } from "node:async_hooks";
  * workspace/membership/relay rows several times over — once in the auth guard, once inside the
  * store's heartbeat, once again when the route assembles the response. Measured on the local
  * fixture, a single worst-case heartbeat issued the Runtime row query six times and the
- * workspace-scoped reads two to five times each (MUL-389). Nothing between those reads can change
- * them: the whole request is one synchronous turn over a single connection, and every writer of
- * those tables takes the same workspace row lock.
+ * workspace-scoped reads two to five times each (MUL-389).
+ *
+ * Another connection can still change those rows mid-request: the first read happens before the
+ * request takes any lock. So a transaction — where the store takes the lock that orders it against
+ * those writers — never sees a row cached before it began; see {@link invalidatingDatabase}.
  *
  * The cache is deliberately narrow rather than a general query cache:
  *
@@ -20,10 +22,15 @@ import { AsyncLocalStorage } from "node:async_hooks";
  *   straight from the database;
  * - writes performed through the store invalidate the rows of the table they wrote
  *   (`invalidateTable`), so a write inside the scope can never be followed by a stale read of the
- *   rows it changed, while unrelated cached rows survive for the rest of the request.
+ *   rows it changed, while unrelated cached rows survive for the rest of the request;
+ * - inside a transaction only rows read since that transaction began are served. They stay cached
+ *   after it commits, so the rest of the request sees the rows as they were under the lock; a
+ *   transaction that fails (including at COMMIT) clears the cache, which may hold its uncommitted
+ *   rows.
  *
- * Writes done behind the store's back (raw `db.run`, another connection) are outside the
- * contract; nothing inside a cached scope does that today, and the cache lives for one request.
+ * Outside a transaction a cached row can be as old as the start of the request. That is the same
+ * window as reading a row once and using it for the rest of the request, which is what the store
+ * did before the cache.
  */
 export interface RequestReadCache {
   get<T>(key: string): T | undefined;
@@ -35,15 +42,29 @@ export interface RequestReadCache {
   readonly size: number;
 }
 
-const storage = new AsyncLocalStorage<RequestReadCache>();
+const storage = new AsyncLocalStorage<MapReadCache>();
 
 class MapReadCache implements RequestReadCache {
-  private readonly entries = new Map<string, unknown>();
+  /** `generation` is the transaction an entry was stored in; bumped as each outermost one begins. */
+  private readonly entries = new Map<string, { value: unknown; generation: number }>();
+  private generation = 0;
+  private transactionDepth = 0;
   get<T>(key: string): T | undefined {
-    return this.entries.get(key) as T | undefined;
+    const entry = this.entries.get(key);
+    if (!entry) return undefined;
+    if (this.transactionDepth > 0 && entry.generation !== this.generation) return undefined;
+    return entry.value as T;
+  }
+  enterTransaction(): void {
+    if (this.transactionDepth === 0) this.generation += 1;
+    this.transactionDepth += 1;
+  }
+  leaveTransaction(committed: boolean): void {
+    this.transactionDepth -= 1;
+    if (!committed) this.entries.clear();
   }
   set<T>(key: string, value: T): void {
-    this.entries.set(key, value);
+    this.entries.set(key, { value, generation: this.generation });
   }
   clear(): void {
     this.entries.clear();
@@ -105,12 +126,19 @@ function writtenTable(sql: string): string | null {
 }
 
 /**
- * Wrap a `SqlDatabase` so writes invalidate exactly the cached rows they can change.
+ * Wrap a `SqlDatabase` so writes invalidate exactly the cached rows they can change, and a
+ * transaction never reads a row cached before it began.
  *
  * Each cache entry is keyed `<table>\0<rest>` by {@link cacheKey}; a write clears the entries of
  * the table it wrote and leaves every other table's entries alone. That precision is what lets a
  * heartbeat cache its SSH-Mesh configuration while writing that daemon's own state row. A write
  * whose table cannot be identified clears everything.
+ *
+ * Transactions are where the store takes its locks and re-reads rows under them (the heartbeat
+ * re-reads its Runtime row after the workspace lifecycle lock, so a Runtime deleted meanwhile is
+ * reported gone). Serving that re-read from a row cached before the lock would undo the lock.
+ * Rows the transaction itself read are served, which relies on the store's rule that a
+ * transaction takes its lock before it reads what the lock protects.
  */
 export function invalidatingDatabase<T extends object>(database: T): T {
   const interceptStatement = (statement: unknown, sql: string): unknown => {
@@ -140,9 +168,30 @@ export function invalidatingDatabase<T extends object>(database: T): T {
           return value.apply(target, [sql, ...args]);
         };
       }
+      if (key === "transaction" && typeof value === "function") {
+        return (fn: (...args: unknown[]) => unknown) => {
+          const runTransaction = value.apply(target, [fn]) as (...args: unknown[]) => unknown;
+          return (...args: unknown[]) => withinTransaction(() => runTransaction(...args));
+        };
+      }
       return typeof value === "function" ? value.bind(target) : value;
     },
   }) as T;
+}
+
+/** Run a whole transaction, BEGIN to COMMIT, as a new cache generation. */
+function withinTransaction<T>(runTransaction: () => T): T {
+  const cache = storage.getStore();
+  if (!cache) return runTransaction();
+  cache.enterTransaction();
+  let committed = false;
+  try {
+    const result = runTransaction();
+    committed = true;
+    return result;
+  } finally {
+    cache.leaveTransaction(committed);
+  }
 }
 
 function invalidateTable(table: string | null): void {
