@@ -217,9 +217,9 @@ async function hashFile(path: string, expectedSizeBytes: number): Promise<{ sha2
 /**
  * Turn verified trace members into pointer rows.
  *
- * `event_count` comes from the trace file's own line count once B3's writer is
- * in place; until then it stays null and readers derive the count from the
- * member. The byte range is what matters for random access.
+ * `head`, `event_count` and `closed` come from the archive's own index, which
+ * the writer derived while hashing each member. `head` is what the swap rule
+ * compares, so it must be the largest seq rather than the event count.
  */
 function buildTracePointers(
   archive: MultiremiSessionArchive,
@@ -233,7 +233,9 @@ function buildTracePointers(
     compressedSize: member.compressed_size,
     uncompressedSize: member.uncompressed_size,
     sha256: member.sha256,
-    eventCount: null,
+    eventCount: member.event_count ?? null,
+    headSeq: member.head ?? 0,
+    closed: member.closed ?? false,
     runtimeId: archive.runtimeId,
   })).filter((pointer) => pointer.taskId.length > 0);
 }

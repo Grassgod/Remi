@@ -21,6 +21,7 @@ import {
   writeIssueSessionArchiveReceipt,
 } from "@daemon/agent-runtime/workspace/session-archive.js";
 import { readZipCentralDirectory, readZipMemberBody } from "@shared/zip/reader.js";
+import { traceFileBody } from "../../unit/multiremi/session-archive-fixtures.js";
 import {
   SESSION_ARCHIVE_INDEX_MEMBER,
   SESSION_ARCHIVE_V2_FORMAT,
@@ -169,8 +170,15 @@ describe("Session archive v2 writer", () => {
     mkdirSync(join(sessionRoot, ".multiremi"), { recursive: true });
     writeFileSync(join(home, "projects", "history.jsonl"), "{\"message\":\"runtime\"}\n");
     writeFileSync(join(home, "settings.json"), "DO_NOT_ARCHIVE");
-    writeFileSync(join(sessionRoot, "traces", "tsk_a.jsonl"), "{\"seq\":0}\n{\"seq\":1}\n");
-    writeFileSync(join(sessionRoot, "traces", "tsk_b.jsonl"), "{\"seq\":0}\n");
+    // Ruled trace shape: header and trailer carry no seq, events start at 1.
+    writeFileSync(
+      join(sessionRoot, "traces", "tsk_a.jsonl"),
+      traceFileBody({ events: 3, taskId: "tsk_a" }),
+    );
+    writeFileSync(
+      join(sessionRoot, "traces", "tsk_b.jsonl"),
+      traceFileBody({ events: 2, taskId: "tsk_b", closed: false }),
+    );
     const claudeCredentials = join(storage, "claude-credentials.json");
     writeFileSync(claudeCredentials, "CLAUDE_CREDENTIALS_MUST_NOT_BE_ARCHIVED");
     symlinkSync(claudeCredentials, join(home, ".credentials.json"));
@@ -186,11 +194,19 @@ describe("Session archive v2 writer", () => {
     expect(archive.members.get("sessions/ises_2/agt_2/4/home/projects/history.jsonl")?.toString())
       .toContain("runtime");
     expect(archive.members.has("sessions/ises_2/traces/tsk_a.jsonl")).toBe(false);
-    expect(archive.members.get("traces/tsk_a.jsonl")?.toString()).toBe("{\"seq\":0}\n{\"seq\":1}\n");
-    expect(archive.members.get("traces/tsk_b.jsonl")?.toString()).toBe("{\"seq\":0}\n");
+    expect(archive.members.get("traces/tsk_a.jsonl")?.toString())
+      .toBe(traceFileBody({ events: 3, taskId: "tsk_a" }));
+    expect(archive.members.get("traces/tsk_b.jsonl")?.toString())
+      .toBe(traceFileBody({ events: 2, taskId: "tsk_b", closed: false }));
     const traces = archive.index.members.filter((entry) => entry.kind === "trace");
     expect(traces.map((entry) => entry.task_id).sort()).toEqual(["tsk_a", "tsk_b"]);
     expect(prepared.traceCount).toBe(2);
+    // The index records each trace's facts so readers and pointer writes need
+    // no extra inflate: three events, sealed; the unsealed one is not closed.
+    expect(traces.find((entry) => entry.task_id === "tsk_a"))
+      .toMatchObject({ head: 3, event_count: 3, closed: true });
+    expect(traces.find((entry) => entry.task_id === "tsk_b"))
+      .toMatchObject({ head: 2, event_count: 2, closed: false });
     expect([...archive.members.keys()].some((path) => /\.credentials\.json|settings\.json|gc\.json/.test(path)))
       .toBe(false);
   });

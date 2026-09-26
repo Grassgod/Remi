@@ -7,7 +7,7 @@ import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
 import { SessionArchiveService } from "@multiremi/session-archive/service.js";
 import { createStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
-import { buildArchiveFixture, fixtureSha256 } from "./session-archive-fixtures.js";
+import { buildArchiveFixture, fixtureSha256, traceFileBody } from "./session-archive-fixtures.js";
 import { SESSION_ARCHIVE_V1_FORMAT } from "@multiremi/contracts/session-archive.js";
 
 let archiveRoot: string | null = null;
@@ -79,7 +79,7 @@ async function createPhysicalReadyArchive(
   issueId: string,
   runtimeId: string,
   daemonId: string,
-  traces: Record<string, string> = { tsk_physical: "{\"seq\":0}\n" },
+  traces: Record<string, string> = { tsk_physical: traceFileBody({ events: 1 }) },
 ) {
   const fixture = await buildArchiveFixture({ subject: { kind: "issue", id: issueId }, traces });
   const initialized = sessionArchives.initialize({
@@ -135,7 +135,7 @@ async function initializeWithFixture(
 ) {
   const fixture = await buildArchiveFixture({
     subject: { kind: "issue", id: issueId },
-    traces: options.traces ?? { tsk_fixture: "{\"seq\":0}\n" },
+    traces: options.traces ?? { tsk_fixture: traceFileBody({ events: 1 }) },
   });
   return {
     fixture,
@@ -286,7 +286,7 @@ describe("Multiremi session archives", () => {
       // blob, so the payload has to be a genuine archive, not filler bytes.
       const streamFixture = await buildArchiveFixture({
         subject: { kind: "issue", id: issue.id },
-        traces: { tsk_stream: "{\"seq\":0}\n" },
+        traces: { tsk_stream: traceFileBody({ events: 1 }) },
         members: [{
           path: "sessions/ises_stream/agt_1/1/home/history.jsonl",
           body: Buffer.alloc(12 * 1024 * 1024 + 29, 0x41),
@@ -491,7 +491,7 @@ describe("Multiremi session archives", () => {
     const { store, app, issue, daemonHeaders, base } = await fixture();
     const sessionsFixture = await buildArchiveFixture({
       subject: { kind: "issue", id: issue.id },
-      traces: { tsk_sessions: "{\"seq\":0}\n" },
+      traces: { tsk_sessions: traceFileBody({ events: 1 }) },
     });
     const bytes = sessionsFixture.bytes;
     const digest = sessionsFixture.sha256;
@@ -704,7 +704,7 @@ describe("Multiremi session archives", () => {
       issue.id,
       runtime.id,
       runtime.daemonId!,
-      { tsk_physical: "{\"seq\":0}\n" });
+      { tsk_physical: traceFileBody({ events: 1 }) });
     db!.run(
       "UPDATE multiremi_session_archives SET attempt_count = 2 WHERE id = ?",
       [ready.archiveId],
@@ -774,7 +774,7 @@ describe("Multiremi session archives", () => {
     const { store, app, issue, runtime, daemonHeaders, base } = await fixture();
     const crashFixture = await buildArchiveFixture({
       subject: { kind: "issue", id: issue.id },
-      traces: { tsk_crash: "{\"seq\":0}\n" },
+      traces: { tsk_crash: traceFileBody({ events: 1 }) },
     });
     const bytes = crashFixture.bytes;
     const body = JSON.stringify({
@@ -997,7 +997,7 @@ describe("Multiremi session archives", () => {
     const { app, issue, daemonHeaders, base } = await fixture();
     const repairFixture = await buildArchiveFixture({
       subject: { kind: "issue", id: issue.id },
-      traces: { tsk_repair: "{\"seq\":0}\n" },
+      traces: { tsk_repair: traceFileBody({ events: 1 }) },
     });
     const bytes = repairFixture.bytes;
     const repairRevision = repairFixture.sourceRevision;
@@ -1087,7 +1087,7 @@ describe("Multiremi session archives", () => {
       issue.id,
       runtime.id,
       runtime.daemonId!,
-      { tsk_physical: "{\"seq\":0}\n" });
+      { tsk_physical: traceFileBody({ events: 1 }) });
     const archive = store.getSessionArchive(binding.archiveId)!;
     const storedPath = join(archiveRoot!, archive.relativePath);
     const originalPath = `${storedPath}.original`;
@@ -1145,7 +1145,7 @@ describe("Multiremi session archives", () => {
     const { store, app, issue, daemonHeaders, base } = await fixture();
     const deleteFixture = await buildArchiveFixture({
       subject: { kind: "issue", id: issue.id },
-      traces: { tsk_delete: "{\"seq\":0}\n" },
+      traces: { tsk_delete: traceFileBody({ events: 1 }) },
     });
     const bytes = deleteFixture.bytes;
     const init = await app.request(`${base}/init`, {
@@ -1218,7 +1218,7 @@ describe("Multiremi session archives", () => {
       issue.id,
       runtime.id,
       runtime.daemonId!,
-      { tsk_physical: "{\"seq\":0}\n" });
+      { tsk_physical: traceFileBody({ events: 1 }) });
     store.markIssueWorkspaceCleaned({
       issueId: issue.id,
       runtimeId: runtime.id,
@@ -1237,7 +1237,7 @@ describe("Multiremi session archives", () => {
       issue.id,
       runtime.id,
       runtime.daemonId!,
-      { tsk_physical: "{\"seq\":0}\n" });
+      { tsk_physical: traceFileBody({ events: 1 }) });
     const endpoint = `/api/daemon/issues/${issue.id}/workspace/cleaned`;
     const mismatch = await app.request(endpoint, {
       method: "POST",
@@ -1292,13 +1292,13 @@ describe("Multiremi session archives", () => {
       issue.id,
       runtime.id,
       runtime.daemonId!,
-      { tsk_physical: "{\"seq\":0}\n" });
+      { tsk_physical: traceFileBody({ events: 1 }) });
     const secondBinding = await createPhysicalReadyArchive(
       sessionArchives,
       second.id,
       runtime.id,
       runtime.daemonId!,
-      { tsk_physical: "{\"seq\":0}\n" });
+      { tsk_physical: traceFileBody({ events: 1 }) });
     store.markIssueWorkspaceCleaned({ issueId: issue.id, runtimeId: runtime.id, ...firstBinding });
     store.markIssueWorkspaceCleaned({ issueId: second.id, runtimeId: runtime.id, ...secondBinding });
     const firstPath = join(archiveRoot!, store.getSessionArchive(firstBinding.archiveId)!.relativePath);
@@ -1401,13 +1401,13 @@ describe("Multiremi session archives", () => {
       issue.id,
       runtime.id,
       runtime.daemonId!,
-      { tsk_physical: "{\"seq\":0}\n" });
+      { tsk_physical: traceFileBody({ events: 1 }) });
     const secondBinding = await createPhysicalReadyArchive(
       sessionArchives,
       second.id,
       runtime.id,
       runtime.daemonId!,
-      { tsk_physical: "{\"seq\":0}\n" });
+      { tsk_physical: traceFileBody({ events: 1 }) });
     const firstArchive = store.getSessionArchive(firstBinding.archiveId)!;
     const secondArchive = store.getSessionArchive(secondBinding.archiveId)!;
     const firstPath = join(archiveRoot!, firstArchive.relativePath);
@@ -1449,7 +1449,7 @@ describe("Multiremi session archives", () => {
       issue.id,
       runtime.id,
       runtime.daemonId!,
-      { tsk_physical: "{\"seq\":0}\n" });
+      { tsk_physical: traceFileBody({ events: 1 }) });
     const archive = store.getSessionArchive(binding.archiveId)!;
     const storedPath = join(archiveRoot!, archive.relativePath);
     store.markIssueWorkspaceCleaned({ issueId: issue.id, runtimeId: runtime.id, ...binding });
@@ -1613,7 +1613,7 @@ describe("Multiremi session archives", () => {
       issue.id,
       runtime.id,
       runtime.daemonId!,
-      { tsk_physical: "{\"seq\":0}\n" });
+      { tsk_physical: traceFileBody({ events: 1 }) });
     const stale = sessionArchives.initialize({
       workspaceId: issue.workspaceId,
       subjectKind: "issue",
@@ -1968,7 +1968,7 @@ describe("Multiremi session archives", () => {
     const { store, runtime, issue, sessionArchives } = await fixture();
     const adoptFixture = await buildArchiveFixture({
       subject: { kind: "issue", id: issue.id },
-      traces: { tsk_adopt: "{\"seq\":0}\n" },
+      traces: { tsk_adopt: traceFileBody({ events: 1 }) },
     });
     const input = {
       workspaceId: "local",
@@ -2016,7 +2016,7 @@ describe("Multiremi session archives", () => {
     const { store, runtime, issue, sessionArchives } = await fixture();
     const ownershipFixture = await buildArchiveFixture({
       subject: { kind: "issue", id: issue.id },
-      traces: { tsk_ownership: "{\"seq\":0}\n" },
+      traces: { tsk_ownership: traceFileBody({ events: 1 }) },
     });
     const input = {
       workspaceId: "local",

@@ -30,6 +30,7 @@ import type { Stats } from "node:fs";
 import { lstat, mkdir, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { readTraceMemberWindow } from "@multiremi/contracts/session-archive.js";
 import {
   SESSION_ARCHIVE_INDEX_MEMBER,
   SESSION_ARCHIVE_MANIFEST_MEMBER,
@@ -37,13 +38,13 @@ import {
   SESSION_ARCHIVE_TRACES_PREFIX,
   SESSION_ARCHIVE_TRACE_SUFFIX,
   SESSION_ARCHIVE_V2_FORMAT,
+  SESSION_ARCHIVE_V1_FORMAT,
   type SessionArchiveIndex,
   type SessionArchiveMemberIndexEntry,
   type SessionArchiveSubject,
   type SessionArchiveSubjectKind,
 } from "@multiremi/contracts/session-archive.js";
 import { ZipStreamWriter, type ZipStreamMember } from "@shared/zip/writer.js";
-import { sessionArchiveSourceRevision } from "@shared/session-archive/source-revision.js";
 import { createLogger } from "@shared/logger.js";
 
 const log = createLogger("multiremi-session-archive");
@@ -138,6 +139,10 @@ interface ScannedFile {
   ino: number;
   kind: SessionArchiveMemberIndexEntry["kind"];
   taskId?: string;
+  /** Trace members only: largest event seq, event count and whether sealed. */
+  traceHead?: number;
+  traceEventCount?: number;
+  traceClosed?: boolean;
 }
 
 interface DirectoryIdentity {
@@ -186,7 +191,7 @@ export async function prepareSessionArchive(
     subject: options.subject,
     files: files.map((file) => ({ path: file.archivePath, size: file.size, sha256: file.sha256 })),
   } as const;
-  const sourceRevision = sessionArchiveSourceRevision(manifest);
+  const sourceRevision = createHash("sha256").update(JSON.stringify(manifest), "utf8").digest("hex");
   log.debug(
     `Session archive source scanned: subject=${options.subject.kind}:${options.subject.id} files=${files.length}`,
   );
@@ -372,6 +377,9 @@ async function scanTraceDirectory(
       ino: inspected.stats.ino,
       kind: "trace",
       taskId,
+      traceHead: inspected.facts.head,
+      traceEventCount: inspected.facts.eventCount,
+      traceClosed: inspected.facts.closed,
     });
   }
   return total;
@@ -490,7 +498,7 @@ async function writeArchiveMembers(input: WriteArchiveInput): Promise<{ sha256: 
       });
     }
     const indexBytes = Buffer.from(
-      `${JSON.stringify(buildArchiveIndex(input.manifest.subject, writer.index), null, 2)}\n`,
+      `${JSON.stringify(buildArchiveIndex(input.manifest.subject, writer.index, input.files), null, 2)}\n`,
       "utf8",
     );
     await writer.addBuffer(SESSION_ARCHIVE_INDEX_MEMBER, indexBytes, digestHex(indexBytes));
@@ -510,7 +518,13 @@ async function writeArchiveMembers(input: WriteArchiveInput): Promise<{ sha256: 
 export function buildArchiveIndex(
   subject: SessionArchiveSubject,
   members: readonly ZipStreamMember[],
+  scannedFiles: readonly ScannedFile[] = [],
 ): SessionArchiveIndex {
+  const traceFactsByPath = new Map(
+    scannedFiles
+      .filter((file) => file.kind === "trace")
+      .map((file) => [file.archivePath, file] as const),
+  );
   const entries = members.map((member): SessionArchiveMemberIndexEntry => {
     const kind = member.path === SESSION_ARCHIVE_INDEX_MEMBER
       || member.path === SESSION_ARCHIVE_MANIFEST_MEMBER
@@ -521,10 +535,21 @@ export function buildArchiveIndex(
     const taskId = kind === "trace"
       ? member.path.slice(SESSION_ARCHIVE_TRACES_PREFIX.length, -SESSION_ARCHIVE_TRACE_SUFFIX.length)
       : null;
+    const scanned = traceFactsByPath.get(member.path);
     return {
       path: member.path,
       kind,
       ...(taskId ? { task_id: taskId } : {}),
+      // `head` / `event_count` / `closed` come from the scan that hashed the
+      // member, so the index never has to re-read it. Historical traces may have
+      // seq gaps, so `head` is the largest seq rather than the count.
+      ...(kind === "trace"
+        ? {
+          head: scanned?.traceHead ?? 0,
+          event_count: scanned?.traceEventCount ?? 0,
+          closed: scanned?.traceClosed ?? false,
+        }
+        : {}),
       local_header_offset: member.localHeaderOffset,
       data_offset: member.dataOffset,
       compressed_size: member.compressedSize,
@@ -553,10 +578,23 @@ async function* readMemberBytes(file: ScannedFile): AsyncGenerator<Buffer> {
   }
 }
 
+/** The per-trace facts the index records without inflating the member again. */
+interface TraceFacts {
+  head: number;
+  eventCount: number;
+  closed: boolean;
+}
+
+/** Derive `head` / `event_count` / `closed` while the member is already open. */
+function traceFacts(bytes: Uint8Array): TraceFacts {
+  const window = readTraceMemberWindow(bytes, 0, Number.MAX_SAFE_INTEGER);
+  return { head: window.head, eventCount: window.events.length, closed: window.closed };
+}
+
 async function inspectOpenRegularFile(
   path: string,
   expected?: Stats,
-): Promise<{ stats: Stats; sha256: string }> {
+): Promise<{ stats: Stats; sha256: string; bytes: Buffer; facts: TraceFacts }> {
   const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const before = await handle.stat();
@@ -564,6 +602,7 @@ async function inspectOpenRegularFile(
       throw new Error(`File changed while preparing session archive: ${path}`);
     }
     const hash = createHash("sha256");
+    const chunks: Buffer[] = [];
     let bytesRead = 0;
     if (before.size > 0) {
       const stream = handle.createReadStream({ autoClose: false, start: 0, end: before.size - 1 });
@@ -572,20 +611,23 @@ async function inspectOpenRegularFile(
         bytesRead += bytes.length;
         if (bytesRead > before.size) throw new Error(`File changed while preparing session archive: ${path}`);
         hash.update(bytes);
+        chunks.push(bytes);
       }
     }
     const after = await handle.stat();
     if (bytesRead !== before.size || !sameFileSnapshot(before, after)) {
       throw new Error(`File changed while preparing session archive: ${path}`);
     }
-    return { stats: before, sha256: hash.digest("hex") };
+    const bytes = chunks.length === 1 ? chunks[0]! : Buffer.concat(chunks, bytesRead);
+    return { stats: before, sha256: hash.digest("hex"), bytes, facts: traceFacts(bytes) };
   } finally {
     await handle.close().catch(() => {});
   }
 }
 
 async function inspectRegularFile(path: string): Promise<{ stats: Stats; sha256: string }> {
-  return await inspectOpenRegularFile(path);
+  const inspected = await inspectOpenRegularFile(path);
+  return { stats: inspected.stats, sha256: inspected.sha256 };
 }
 
 function assertSameArchiveSnapshot(expected: ScanSnapshot, actual: ScanSnapshot): void {
@@ -697,6 +739,11 @@ export async function removePreparedSessionArchive(archivePath: string): Promise
   } catch {
     // A later GC sweep can reuse or remove the spool directory.
   }
+}
+
+/** Kept for callers that only need the legacy Issue receipt path. */
+export async function removePreparedIssueSessionArchive(archivePath: string): Promise<void> {
+  await removePreparedSessionArchive(archivePath);
 }
 
 /**
@@ -857,3 +904,6 @@ function isNotFound(error: unknown): boolean {
 function isAlreadyExists(error: unknown): boolean {
   return error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "EEXIST";
 }
+
+/** Re-exported so callers can name the legacy format without importing contracts. */
+export const LEGACY_SESSION_ARCHIVE_FORMAT = SESSION_ARCHIVE_V1_FORMAT;

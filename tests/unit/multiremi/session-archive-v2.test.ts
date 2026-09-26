@@ -7,7 +7,7 @@ import { runMigrations } from "@multiremi/store/migrations.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { SessionArchiveReader } from "@multiremi/session-archive/reader.js";
 import { createStore, resetMultiremiTestEnv, db } from "./helpers.js";
-import { buildArchiveFixture } from "./session-archive-fixtures.js";
+import { buildArchiveFixture, traceFileBody } from "./session-archive-fixtures.js";
 import { SessionArchiveService } from "@multiremi/session-archive/service.js";
 
 function freshDb(): Database {
@@ -119,6 +119,8 @@ describe("Session archive v2 subject migration", () => {
       "uncompressed_size",
       "sha256",
       "event_count",
+      "head_seq",
+      "closed",
       "updated_at",
     ]);
   });
@@ -155,8 +157,8 @@ describe("Session archive random access", () => {
         },
       ],
       traces: {
-        tsk_one: Array.from({ length: 500 }, (_, index) => JSON.stringify({ seq: index, type: "execution" })).join("\n") + "\n",
-        tsk_two: "{\"seq\":0}\n",
+        tsk_one: traceFileBody({ events: 500, taskId: "tsk_one" }),
+        tsk_two: traceFileBody({ events: 1, taskId: "tsk_two" }),
       },
     });
     const service = new SessionArchiveService(store, {
@@ -195,6 +197,8 @@ describe("Session archive random access", () => {
       runtimeId: runtime.id,
     });
     expect(store.getTaskTrace("tsk_two")?.memberPath).toBe("traces/tsk_two.jsonl");
+    // The pointer carries the index's trace facts: 500 events, head 500, sealed.
+    expect(pointer).toMatchObject({ headSeq: 500, closed: true, eventCount: 500 });
 
     const reader = new SessionArchiveReader({ store, root });
     const read = await reader.readArchiveMember(ready.id, {
@@ -206,16 +210,93 @@ describe("Session archive random access", () => {
     // The read budget: compressed bytes only, no local header, no index scan.
     expect(read.bytesRead).toBe(pointer.compressedSize!);
     expect(read.bytesRead).toBeLessThanOrEqual(pointer.compressedSize! + 64 * 1024);
-    expect(read.bytes.toString("utf8").split("\n").filter(Boolean)).toHaveLength(500);
+    // Header and trailer are structural lines; only the 500 events count.
+    expect(read.bytes.toString("utf8").split("\n").filter(Boolean)).toHaveLength(502);
 
     const cursor = await reader.readTraceLines(pointer, 0, 10);
-    expect(cursor.lines).toHaveLength(10);
-    expect(JSON.parse(cursor.lines[0]!)).toMatchObject({ seq: 0, type: "execution" });
+    expect(cursor.events).toHaveLength(10);
+    expect(cursor.events[0]).toMatchObject({ seq: 1, type: "execution" });
     expect(cursor.nextCursor).toBe(10);
     expect(cursor.complete).toBe(false);
     const tail = await reader.readTraceLines(pointer, 495, 10);
-    expect(tail.lines).toHaveLength(5);
+    expect(tail.events).toHaveLength(5);
     expect(tail.complete).toBe(true);
+  });
+
+  it("applies the trace line rules: no-seq header/trailer, gaps, duplicate seq, half line", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-archive-cursor-"));
+    dirs.push(root);
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const runtime = store.registerRuntime({
+      id: "rt_cursor",
+      name: "cursor runtime",
+      provider: "codex",
+      daemonId: "dmn_cursor",
+      workspaceId: "local",
+    });
+    const issue = store.createIssue({ title: "Trace rules", workspaceId: "local" });
+    store.reportIssueWorkspace({
+      issueId: issue.id,
+      runtimeId: runtime.id,
+      rootPath: `/tmp/${issue.key}`,
+      branchName: `agent/${issue.key}`,
+      status: "ready",
+    });
+    // Header, four events with a gap where seq 3 would be, a duplicate seq 2, a
+    // trailer, then a crash-truncated half line with no newline.
+    const body = [
+      JSON.stringify({ format: "multiremi.trace.v1", task_id: "tsk_cursor" }),
+      JSON.stringify({ seq: 1, type: "execution", content: "one" }),
+      JSON.stringify({ seq: 2, type: "execution", content: "two" }),
+      JSON.stringify({ seq: 4, type: "execution", content: "four" }),
+      JSON.stringify({ seq: 2, type: "execution", content: "duplicate two" }),
+      JSON.stringify({ status: "completed", event_count: 3 }),
+    ].join("\n") + "\n" + JSON.stringify({ seq: 5, type: "execution" });
+    const fixture = await buildArchiveFixture({
+      subject: { kind: "issue", id: issue.id },
+      traces: { tsk_cursor: body },
+    });
+    const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
+    const initialized = service.initialize({
+      workspaceId: "local",
+      subjectKind: "issue",
+      subjectId: issue.id,
+      issueId: issue.id,
+      runtimeId: runtime.id,
+      daemonId: "dmn_cursor",
+      sourceRevision: fixture.sourceRevision,
+      sha256: fixture.sha256,
+      sizeBytes: fixture.sizeBytes,
+    }).archive;
+    const claim = await service.claimUploadAttempt(runtime.id, issue.id, initialized.id);
+    await service.upload(
+      runtime.id,
+      issue.id,
+      initialized.id,
+      claim.uploadAttempt!,
+      new Response(fixture.bytes).body,
+    );
+    const ready = await service.complete(runtime.id, issue.id, initialized.id, claim.uploadAttempt!);
+
+    // `head` is the largest seq, not the count: seq 3 is missing and the half
+    // line (seq 5) never made it into the file.
+    const pointer = store.getTaskTrace("tsk_cursor")!;
+    expect(pointer).toMatchObject({ headSeq: 4, eventCount: 3, closed: true, archiveId: ready.id });
+
+    const reader = new SessionArchiveReader({ store, root });
+    const window = await reader.readTraceLines(pointer, 0, 50);
+    expect(window.events.map((event) => event.seq)).toEqual([1, 2, 4]);
+    expect(window.events[1]?.content).toBe("two");
+    expect(window.duplicateSeqSkipped).toBe(1);
+    expect(window.head).toBe(4);
+    expect(window.closed).toBe(true);
+    expect(window.complete).toBe(true);
+
+    const paged = await reader.readTraceLines(pointer, 1, 1);
+    expect(paged.events.map((event) => event.seq)).toEqual([2]);
+    expect(paged.nextCursor).toBe(2);
+    expect(paged.complete).toBe(false);
   });
 
   it("refuses to read an archive that is not ready", async () => {
@@ -240,7 +321,7 @@ describe("Session archive random access", () => {
     });
     const fixture = await buildArchiveFixture({
       subject: { kind: "issue", id: issue.id },
-      traces: { tsk_x: "{\"seq\":0}\n" },
+      traces: { tsk_x: traceFileBody({ events: 1 }) },
     });
     const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
     const initialized = service.initialize({
@@ -286,7 +367,7 @@ describe("Session archive ingest validation", () => {
     // Offsets in the index no longer match where the member actually sits.
     const fixture = await buildArchiveFixture({
       subject: { kind: "issue", id: issue.id },
-      traces: { tsk_tampered: "{\"seq\":0}\n" },
+      traces: { tsk_tampered: traceFileBody({ events: 1 }) },
       tamperIndex(index) {
         index.members[0]!.data_offset += 7;
       },
@@ -345,7 +426,7 @@ describe("Session archive ingest validation", () => {
     });
     const fixture = await buildArchiveFixture({
       subject: { kind: "issue", id: issue.id },
-      traces: { tsk_tx: "{\"seq\":0}\n" },
+      traces: { tsk_tx: traceFileBody({ events: 1 }) },
     });
     const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
     const initialized = service.initialize({
@@ -380,7 +461,7 @@ describe("Session archive ingest validation", () => {
     });
   });
 
-  it("lets a newer ready archive overwrite an older trace pointer", async () => {
+  it("only replaces an archive pointer when the newer member reaches at least as far", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-archive-overwrite-"));
     dirs.push(root);
     const store = createStore();
@@ -402,10 +483,12 @@ describe("Session archive ingest validation", () => {
     });
     const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
     const archiveIds: string[] = [];
-    for (const revision of ["first", "second"] as const) {
+    // First archive reaches head 5; the second only head 2. The ruling says a
+    // pointer may only move forward, so the shorter trace must not win.
+    for (const events of [5, 2]) {
       const fixture = await buildArchiveFixture({
         subject: { kind: "issue", id: issue.id },
-        traces: { tsk_overwrite: revision === "first" ? "{\"seq\":0}\n" : "{\"seq\":0}\n{\"seq\":1}\n" },
+        traces: { tsk_overwrite: traceFileBody({ events, taskId: "tsk_overwrite" }) },
       });
       const initialized = service.initialize({
         workspaceId: "local",
@@ -428,11 +511,41 @@ describe("Session archive ingest validation", () => {
       );
       const ready = await service.complete(runtime.id, issue.id, initialized.id, claim.uploadAttempt!);
       archiveIds.push(ready.id);
-      const pointer = store.getTaskTrace("tsk_overwrite")!;
-      expect(pointer.archiveId).toBe(ready.id);
+      // Both archives are ready; only the pointer obeys the swap rule.
+      expect(ready.status).toBe("ready");
+      expect(store.getTaskTrace("tsk_overwrite")?.archiveId).toBe(archiveIds[0]);
+      expect(store.getTaskTrace("tsk_overwrite")?.headSeq).toBe(5);
     }
-    expect(archiveIds[0]).not.toBe(archiveIds[1]);
-    expect(store.getTaskTrace("tsk_overwrite")?.archiveId).toBe(archiveIds[1]!);
+
+    // A longer member from a later archive does take the pointer over.
+    const longer = await buildArchiveFixture({
+      subject: { kind: "issue", id: issue.id },
+      traces: { tsk_overwrite: traceFileBody({ events: 9, taskId: "tsk_overwrite" }) },
+    });
+    const initialized = service.initialize({
+      workspaceId: "local",
+      subjectKind: "issue",
+      subjectId: issue.id,
+      issueId: issue.id,
+      runtimeId: runtime.id,
+      daemonId: "dmn_overwrite",
+      sourceRevision: longer.sourceRevision,
+      sha256: longer.sha256,
+      sizeBytes: longer.sizeBytes,
+    }).archive;
+    const claim = await service.claimUploadAttempt(runtime.id, issue.id, initialized.id);
+    await service.upload(
+      runtime.id,
+      issue.id,
+      initialized.id,
+      claim.uploadAttempt!,
+      new Response(longer.bytes).body,
+    );
+    const ready = await service.complete(runtime.id, issue.id, initialized.id, claim.uploadAttempt!);
+    expect(store.getTaskTrace("tsk_overwrite")).toMatchObject({
+      archiveId: ready.id,
+      headSeq: 9,
+    });
   });
 });
 
@@ -479,7 +592,7 @@ describe("Session archive v1 upload rejection", () => {
     // The upgrade path still works afterwards, from a clean budget.
     const fixture = await buildArchiveFixture({
       subject: { kind: "issue", id: issue.id },
-      traces: { tsk_v1: "{\"seq\":0}\n" },
+      traces: { tsk_v1: traceFileBody({ events: 1 }) },
     });
     const initialized = service.initialize({
       workspaceId: "local",
@@ -530,7 +643,7 @@ describe("Session archive subject write permissions", () => {
     const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
     const fixture = await buildArchiveFixture({
       subject: { kind: "chat", id: chat.id },
-      traces: { tsk_chat: "{\"seq\":0}\n" },
+      traces: { tsk_chat: traceFileBody({ events: 1 }) },
     });
     // The owning Runtime may initialize the subject.
     const initialized = service.initialize({
@@ -582,7 +695,7 @@ describe("Session archive subject write permissions", () => {
     const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
     const fixture = await buildArchiveFixture({
       subject: { kind: "task", id: task.id },
-      traces: { [task.id]: "{\"seq\":0}\n" },
+      traces: { [task.id]: traceFileBody({ events: 1 }) },
     });
     const initialized = service.initialize({
       workspaceId: "local",

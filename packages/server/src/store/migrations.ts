@@ -5241,6 +5241,8 @@ function createTaskTracePointers(db: SqlDatabase): void {
       uncompressed_size INTEGER,
       sha256 TEXT,
       event_count INTEGER,
+      head_seq INTEGER,
+      closed INTEGER,
       updated_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_multiremi_task_traces_location

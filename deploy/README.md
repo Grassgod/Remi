@@ -140,7 +140,12 @@ one inflate, instead of unpacking the whole archive. Zip64 covers members above
 
 Members are `manifest.json`, `traces/<task_id>.jsonl`, `sessions/<session_id>/…`
 (provider-native history, minus the credential/config exclusion list) and the
-trailing `index.json`. `manifest.json` digests the content, so
+trailing `index.json`. A trace member's entry also records `head` (the largest
+event seq), `event_count` and `closed`, so a pointer write needs no extra
+inflate. A trace file's first and last lines are structural — they carry no
+`seq`; events start at seq 1, a repeated seq is corruption and the first
+occurrence wins, and a final line without a newline is a crash-truncated append
+that readers drop. `manifest.json` digests the content, so
 `source_revision` is unchanged by the compression; the archive `sha256` stays
 the digest of the whole blob. The GC barrier and the hard-delete barrier key on
 those two values and did not change.
@@ -149,6 +154,12 @@ An archive belongs to one subject: an `issue`, a `chat` session, or a one-shot
 `task`. Issue subjects keep the historical `issue_id`; chat and task subjects
 have none, so the ack binding for those is the Runtime that owns the subject's
 provider session.
+
+An archive's trace pointers are only moved forward: a pointer that already reads
+from an archive is replaced only when the incoming member's `head` is at least
+the old `head_seq`. A partial or stale archive still becomes `ready`, but it
+never takes a pointer away from a longer trace. The pointer table records
+`head_seq` and `closed` alongside the byte range.
 
 The server refuses new non-v2 uploads before any attempt is claimed and answers
 `session_archive_format_unsupported`. Existing v1 rows and their files are left

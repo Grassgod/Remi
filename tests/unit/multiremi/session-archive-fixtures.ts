@@ -18,6 +18,7 @@ import {
   type SessionArchiveMemberIndexEntry,
   type SessionArchiveSubject,
 } from "@multiremi/contracts/session-archive.js";
+import { readTraceMemberWindow } from "@multiremi/contracts/session-archive.js";
 import { sessionArchiveSourceRevision } from "@shared/session-archive/source-revision.js";
 import { ZipStreamWriter } from "@shared/zip/writer.js";
 
@@ -57,6 +58,52 @@ export interface ArchiveFixtureOptions {
   tamperIndex?: (index: SessionArchiveIndex) => void;
   /** Mutate a member body after the manifest digest was taken. */
   tamperMemberBody?: (path: string, body: Buffer) => Buffer;
+}
+
+/**
+ * Build a trace file body in the ruled shape.
+ *
+ * The header line and the trailer line carry no `seq` (they are structural, not
+ * events); every event carries an integer `seq` starting at 1. Passing
+ * `closed: false` omits the trailer, which is what a task still running looks
+ * like. `gapAfter` drops one seq so tests can prove `head` is the largest seq
+ * rather than the event count.
+ */
+export function traceFileBody(options: {
+  events: number;
+  taskId?: string;
+  closed?: boolean;
+  /** Drop this seq (1-based) to simulate a historical gap. */
+  gapAfter?: number;
+}): string {
+  const lines: string[] = [];
+  lines.push(JSON.stringify({
+    format: "multiremi.trace.v1",
+    task_id: options.taskId ?? "tsk_fixture",
+    started_at: "2026-09-27T00:00:00.000Z",
+  }));
+  for (let seq = 1; seq <= options.events; seq++) {
+    if (options.gapAfter !== undefined && seq === options.gapAfter) continue;
+    lines.push(JSON.stringify({
+      seq,
+      ts: new Date(Date.UTC(2026, 8, 27, 0, 0, seq)).toISOString(),
+      type: "execution",
+      content: `event ${seq}`,
+    }));
+  }
+  if (options.closed !== false) {
+    lines.push(JSON.stringify({ status: "completed", event_count: options.events }));
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+/**
+ * `head` / `event_count` / `closed` for a trace body, using the same reader the
+ * server uses so the fixture cannot disagree with ingest.
+ */
+function traceIndexFacts(bytes: Uint8Array): { head: number; event_count: number; closed: boolean } {
+  const window = readTraceMemberWindow(bytes, 0, Number.MAX_SAFE_INTEGER);
+  return { head: window.head, event_count: window.events.length, closed: window.closed };
 }
 
 export function fixtureSha256(bytes: Uint8Array): string {
@@ -113,12 +160,15 @@ export async function buildArchiveFixture(options: ArchiveFixtureOptions): Promi
             -SESSION_ARCHIVE_TRACE_SUFFIX.length,
           )
           : null);
+      const isTrace = Boolean(source?.taskId || taskId);
       return {
         path: member.path,
-        kind: source?.taskId || taskId
+        kind: isTrace
           ? "trace"
           : member.path === SESSION_ARCHIVE_MANIFEST_MEMBER ? "meta" : "provider",
         ...(taskId ? { task_id: taskId } : {}),
+        // Mirrors what the daemon writer records for a trace member.
+        ...(isTrace ? traceIndexFacts(contents.get(member.path) ?? Buffer.alloc(0)) : {}),
         local_header_offset: member.localHeaderOffset,
         data_offset: member.dataOffset,
         compressed_size: member.compressedSize,

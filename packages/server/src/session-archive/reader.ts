@@ -16,6 +16,10 @@ import { lstat, open } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { MultiremiTaskTrace } from "@multiremi/contracts/session-archive.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
+import {
+  readTraceMemberWindow,
+  type TraceMemberWindow,
+} from "@multiremi/contracts/session-archive.js";
 import { readZipMemberBody, sha256Hex } from "@shared/zip/reader.js";
 
 export class SessionArchiveReadError extends Error {
@@ -44,14 +48,9 @@ export interface ArchiveMemberBytes {
   bytesRead: number;
 }
 
-export interface TraceLineCursor {
-  /** Events from this offset onward, up to `limit` lines. */
-  cursor: number;
-  lines: string[];
+export interface TraceLineCursor extends TraceMemberWindow {
   /** Cursor to pass to the next call; equal to `cursor` when at end of member. */
   nextCursor: number;
-  /** True when the member has been fully drained. */
-  complete: boolean;
 }
 
 export interface SessionArchiveReaderOptions {
@@ -98,11 +97,12 @@ export class SessionArchiveReader {
   }
 
   /**
-   * Read a window of JSONL lines from a trace member.
+   * Read a window of events from a trace member.
    *
-   * Traces are line-oriented and append-only, so a cursor is a line index; the
-   * member is inflated once per call, which is the same single `pread` as
-   * {@link readArchiveMember} and keeps the read budget identical.
+   * Line rules come from the trace contract, not from this reader: the header
+   * and trailer carry no `seq` and are skipped, only integer seq >= 1 lines are
+   * events, a repeated seq keeps the first occurrence, and a final line without
+   * a newline is a crash-truncated append that is dropped.
    */
   async readTraceLines(
     pointer: Pick<
@@ -130,16 +130,8 @@ export class SessionArchiveReader {
       uncompressedSize: pointer.uncompressedSize ?? undefined,
       sha256: pointer.sha256 ?? undefined,
     });
-    const lines = splitLines(member.bytes);
-    const start = Math.min(cursor, lines.length);
-    const window = lines.slice(start, start + limit);
-    const nextCursor = start + window.length;
-    return {
-      cursor: start,
-      lines: window,
-      nextCursor,
-      complete: nextCursor >= lines.length,
-    };
+    const window = readTraceMemberWindow(member.bytes, cursor, limit);
+    return { ...window, nextCursor: cursor + window.events.length };
   }
 
   private async resolveArchivePath(archiveId: string): Promise<string> {
