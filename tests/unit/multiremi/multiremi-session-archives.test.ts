@@ -7,6 +7,8 @@ import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
 import { SessionArchiveService } from "@multiremi/session-archive/service.js";
 import { createStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
+import { buildArchiveFixture, fixtureSha256, traceFileBody } from "./session-archive-fixtures.js";
+import { SESSION_ARCHIVE_V1_FORMAT } from "@multiremi/contracts/session-archive.js";
 
 let archiveRoot: string | null = null;
 
@@ -71,21 +73,25 @@ async function fixture(daemonDirectBaseUrl?: string | null, maxBytes = 1024 * 10
   return { store, app, issue, runtime, token, daemonHeaders, base, sessionArchives };
 }
 
+/** Upload a real v2 archive for one Issue and return its Control-plane values. */
 async function createPhysicalReadyArchive(
   sessionArchives: SessionArchiveService,
   issueId: string,
   runtimeId: string,
   daemonId: string,
-  bytes: Uint8Array,
+  traces: Record<string, string> = { tsk_physical: traceFileBody({ events: 1 }) },
 ) {
+  const fixture = await buildArchiveFixture({ subject: { kind: "issue", id: issueId }, traces });
   const initialized = sessionArchives.initialize({
     workspaceId: "local",
+    subjectKind: "issue",
+    subjectId: issueId,
     issueId,
     runtimeId,
     daemonId,
-    sourceRevision: `physical-${sha256(bytes)}`,
-    sha256: sha256(bytes),
-    sizeBytes: bytes.byteLength,
+    sourceRevision: fixture.sourceRevision,
+    sha256: fixture.sha256,
+    sizeBytes: fixture.sizeBytes,
   }).archive;
   const claimed = await sessionArchives.claimUploadAttempt(runtimeId, issueId, initialized.id);
   await sessionArchives.upload(
@@ -94,7 +100,10 @@ async function createPhysicalReadyArchive(
     initialized.id,
     claimed.uploadAttempt!,
     new Response(
-      bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
+      fixture.bytes.buffer.slice(
+        fixture.bytes.byteOffset,
+        fixture.bytes.byteOffset + fixture.bytes.byteLength,
+      ) as ArrayBuffer,
     ).body,
   );
   const ready = await sessionArchives.complete(
@@ -103,7 +112,68 @@ async function createPhysicalReadyArchive(
     initialized.id,
     claimed.uploadAttempt!,
   );
-  return { archiveId: ready.id, sourceRevision: ready.sourceRevision, sha256: ready.sha256 };
+  return {
+    archiveId: ready.id,
+    sourceRevision: ready.sourceRevision,
+    sha256: ready.sha256,
+    fixture,
+  };
+}
+
+/**
+ * Initialize an Issue archive whose declared digest matches a real v2 blob.
+ *
+ * Tests that only care about lifecycle state still have to upload a container
+ * ingest accepts, so the fixture builder is the single source of those bytes.
+ */
+async function initializeWithFixture(
+  sessionArchives: SessionArchiveService,
+  issueId: string,
+  runtimeId: string,
+  daemonId: string,
+  options: { revision?: string; traces?: Record<string, string> } = {},
+) {
+  const fixture = await buildArchiveFixture({
+    subject: { kind: "issue", id: issueId },
+    traces: options.traces ?? { tsk_fixture: traceFileBody({ events: 1 }) },
+  });
+  return {
+    fixture,
+    initialized: sessionArchives.initialize({
+      workspaceId: "local",
+      subjectKind: "issue",
+      subjectId: issueId,
+      issueId,
+      runtimeId,
+      daemonId,
+      sourceRevision: options.revision ?? fixture.sourceRevision,
+      sha256: fixture.sha256,
+      sizeBytes: fixture.sizeBytes,
+    }),
+  };
+}
+
+/** Upload a fixture blob for an already initialized archive. */
+async function uploadFixture(
+  sessionArchives: SessionArchiveService,
+  runtimeId: string,
+  issueId: string,
+  archiveId: string,
+  fixture: { bytes: Uint8Array<ArrayBuffer> },
+  attemptCount: number,
+): Promise<void> {
+  await sessionArchives.upload(
+    runtimeId,
+    issueId,
+    archiveId,
+    attemptCount,
+    new Response(
+      fixture.bytes.buffer.slice(
+        fixture.bytes.byteOffset,
+        fixture.bytes.byteOffset + fixture.bytes.byteLength,
+      ) as ArrayBuffer,
+    ).body,
+  );
 }
 
 function pendingPurgeReceipts(): string[] {
@@ -212,18 +282,28 @@ describe("Multiremi session archives", () => {
       const fixtureData = await fixture(origin, 64 * 1024 * 1024);
       const { store, app, issue, runtime, token } = fixtureData;
       directApp = app;
-      const archivePath = join(archiveRoot!, "daemon-source.tar.gz");
-      const bytes = Buffer.alloc(12 * 1024 * 1024 + 29, 0x41);
-      const digest = sha256(bytes);
+      // A real v2 container above the 8 MiB proxy limit: ingest validates the
+      // blob, so the payload has to be a genuine archive, not filler bytes.
+      const streamFixture = await buildArchiveFixture({
+        subject: { kind: "issue", id: issue.id },
+        traces: { tsk_stream: traceFileBody({ events: 1 }) },
+        members: [{
+          path: "sessions/ises_stream/agt_1/1/home/history.jsonl",
+          body: Buffer.alloc(12 * 1024 * 1024 + 29, 0x41),
+        }],
+      });
+      const archivePath = join(archiveRoot!, "daemon-source.zip");
+      const bytes = streamFixture.bytes;
+      const digest = streamFixture.sha256;
       writeFileSync(archivePath, bytes);
       const client = new MultiremiDaemonClient(origin, token.token, {
         sessionArchiveProxyMaxBytes: 8 * 1024 * 1024,
       });
       const initialized = await client.initIssueSessionArchive(runtime.id, issue.id, {
-        sourceRevision: "api-stream-v1",
+        sourceRevision: streamFixture.sourceRevision,
         sha256: digest,
         sizeBytes: bytes.byteLength,
-        fileCount: 1,
+        fileCount: 2,
       });
       const uploaded = await client.uploadIssueSessionArchive(
         runtime.id,
@@ -296,10 +376,11 @@ describe("Multiremi session archives", () => {
       next_retry_at: expect.any(String),
       retry_exhausted_at: null,
       retry_state: "backoff",
+      relative_path: expect.stringContaining("failures/"),
       metadata: {
         kind: "preparation_failure",
         stage: "prepare",
-        source: ".multiremi/sessions",
+        source: expect.any(String),
       },
     });
     expect(store.getSessionArchiveStatus(issue.id)).toMatchObject({
@@ -408,16 +489,21 @@ describe("Multiremi session archives", () => {
 
   it("uploads, durably completes, verifies, and exposes an exact GC barrier", async () => {
     const { store, app, issue, daemonHeaders, base } = await fixture();
-    const bytes = Buffer.from("provider-native-session-history\n", "utf8");
-    const digest = sha256(bytes);
+    const sessionsFixture = await buildArchiveFixture({
+      subject: { kind: "issue", id: issue.id },
+      traces: { tsk_sessions: traceFileBody({ events: 1 }) },
+    });
+    const bytes = sessionsFixture.bytes;
+    const digest = sessionsFixture.sha256;
+    const revision = sessionsFixture.sourceRevision;
     const init = await app.request(`${base}/init`, {
       method: "POST",
       headers: daemonHeaders,
       body: JSON.stringify({
-        source_revision: "sessions-v1",
+        source_revision: revision,
         sha256: digest,
         size_bytes: bytes.byteLength,
-        file_count: 3,
+        file_count: 1,
         metadata: { providers: ["claude", "codex"] },
       }),
     });
@@ -425,7 +511,10 @@ describe("Multiremi session archives", () => {
     const initialized = await init.json() as any;
     expect(initialized.archive).toMatchObject({
       issue_id: issue.id,
-      source_revision: "sessions-v1",
+      subject_kind: "issue",
+      subject_id: issue.id,
+      format: "multiremi.session-archive.v2",
+      source_revision: revision,
       status: "pending",
       relative_path: expect.not.stringContaining(".."),
     });
@@ -445,7 +534,7 @@ describe("Multiremi session archives", () => {
       method: "POST",
       headers: daemonHeaders,
       body: JSON.stringify({
-        source_revision: "sessions-v1",
+        source_revision: revision,
         sha256: digest,
         size_bytes: bytes.byteLength,
       }),
@@ -460,7 +549,7 @@ describe("Multiremi session archives", () => {
       method: "POST",
       headers: daemonHeaders,
       body: JSON.stringify({
-        source_revision: "sessions-v1",
+        source_revision: revision,
         sha256: digest,
         size_bytes: bytes.byteLength,
       }),
@@ -502,18 +591,21 @@ describe("Multiremi session archives", () => {
     const ready = (await completed.json() as any).archive;
     expect(ready.status).toBe("ready");
     const storedPath = join(archiveRoot!, ready.relative_path);
-    expect(readFileSync(storedPath)).toEqual(bytes);
+    expect(new Uint8Array(readFileSync(storedPath))).toEqual(bytes);
     expect(existsSync(`${storedPath}.1.partial`)).toBe(false);
     expect(existsSync(`${storedPath}.2.partial`)).toBe(false);
+    // The control-plane manifest stays a separate sidecar file next to the
+    // archive; the member index lives inside the ZIP itself.
     expect(JSON.parse(readFileSync(join(storedPath, "..", "manifest.json"), "utf8"))).toMatchObject({
       schema_version: 1,
       archive_id: ready.id,
       sha256: digest,
       size_bytes: bytes.byteLength,
+      format: "multiremi.session-archive.v2",
     });
 
     const status = await app.request(
-      `${base}/status?source_revision=sessions-v1&sha256=${digest}`,
+      `${base}/status?source_revision=${revision}&sha256=${digest}`,
       { headers: { Authorization: daemonHeaders.Authorization } },
     );
     expect(status.status).toBe(200);
@@ -524,7 +616,7 @@ describe("Multiremi session archives", () => {
 
     rmSync(storedPath);
     const lightweightStatus = await app.request(
-      `${base}/status?source_revision=sessions-v1&sha256=${digest}`,
+      `${base}/status?source_revision=${revision}&sha256=${digest}`,
       { headers: { Authorization: daemonHeaders.Authorization } },
     );
     expect(await lightweightStatus.json()).toMatchObject({
@@ -533,7 +625,7 @@ describe("Multiremi session archives", () => {
     });
 
     const verifiedStatus = await app.request(
-      `${base}/status?source_revision=sessions-v1&sha256=${digest}&verify_ready=1`,
+      `${base}/status?source_revision=${revision}&sha256=${digest}&verify_ready=1`,
       { headers: { Authorization: daemonHeaders.Authorization } },
     );
     expect(verifiedStatus.status).toBe(200);
@@ -551,16 +643,14 @@ describe("Multiremi session archives", () => {
     const startedAt = new Date("2026-08-26T00:00:00.000Z");
     setSystemTime(startedAt);
     const { store, issue, runtime, sessionArchives } = await fixture();
-    const bytes = new Uint8Array([1, 2, 3]);
-    const initialized = sessionArchives.initialize({
-      workspaceId: issue.workspaceId,
-      issueId: issue.id,
-      runtimeId: runtime.id,
-      daemonId: runtime.daemonId!,
-      sourceRevision: "slow-upload-v1",
-      sha256: sha256(bytes),
-      sizeBytes: bytes.byteLength,
-    }).archive;
+    const { initialized: initializedResult, fixture: slowFixture } = await initializeWithFixture(
+      sessionArchives,
+      issue.id,
+      runtime.id,
+      runtime.daemonId!,
+    );
+    const initialized = initializedResult.archive;
+    const bytes = slowFixture.bytes;
     const claimed = await sessionArchives.claimUploadAttempt(runtime.id, issue.id, initialized.id);
     let controller!: ReadableStreamDefaultController<Uint8Array>;
     const body = new ReadableStream<Uint8Array>({
@@ -614,8 +704,7 @@ describe("Multiremi session archives", () => {
       issue.id,
       runtime.id,
       runtime.daemonId!,
-      Buffer.from("ready-over-budget"),
-    );
+      { tsk_physical: traceFileBody({ events: 1 }) });
     db!.run(
       "UPDATE multiremi_session_archives SET attempt_count = 2 WHERE id = ?",
       [ready.archiveId],
@@ -682,11 +771,15 @@ describe("Multiremi session archives", () => {
   });
 
   it("reclaims a crashed same-Runtime upload with a fenced attempt and removes its partial", async () => {
-    const { store, app, runtime, daemonHeaders, base } = await fixture();
-    const bytes = Buffer.from("crash-safe-provider-history\n", "utf8");
+    const { store, app, issue, runtime, daemonHeaders, base } = await fixture();
+    const crashFixture = await buildArchiveFixture({
+      subject: { kind: "issue", id: issue.id },
+      traces: { tsk_crash: traceFileBody({ events: 1 }) },
+    });
+    const bytes = crashFixture.bytes;
     const body = JSON.stringify({
-      source_revision: "crash-v1",
-      sha256: sha256(bytes),
+      source_revision: crashFixture.sourceRevision,
+      sha256: crashFixture.sha256,
       size_bytes: bytes.byteLength,
     });
     const firstResponse = await app.request(`${base}/init`, {
@@ -902,13 +995,18 @@ describe("Multiremi session archives", () => {
 
   it("repairs a corrupt ready object through verify and a fenced reupload", async () => {
     const { app, issue, daemonHeaders, base } = await fixture();
-    const bytes = Buffer.from("repairable-provider-history");
+    const repairFixture = await buildArchiveFixture({
+      subject: { kind: "issue", id: issue.id },
+      traces: { tsk_repair: traceFileBody({ events: 1 }) },
+    });
+    const bytes = repairFixture.bytes;
+    const repairRevision = repairFixture.sourceRevision;
     const init = await app.request(`${base}/init`, {
       method: "POST",
       headers: daemonHeaders,
       body: JSON.stringify({
-        source_revision: "repair-v1",
-        sha256: sha256(bytes),
+        source_revision: repairRevision,
+        sha256: repairFixture.sha256,
         size_bytes: bytes.byteLength,
       }),
     });
@@ -929,7 +1027,7 @@ describe("Multiremi session archives", () => {
     writeFileSync(storedPath, Buffer.alloc(bytes.byteLength, 0x78));
 
     const failed = await app.request(
-      `${base}/status?source_revision=repair-v1&sha256=${sha256(bytes)}&verify_ready=1`,
+      `${base}/status?source_revision=${repairRevision}&sha256=${repairFixture.sha256}&verify_ready=1`,
       { headers: { Authorization: daemonHeaders.Authorization } },
     );
     expect(await failed.json()).toMatchObject({ gc_ready: false, latest: { status: "failed" } });
@@ -954,8 +1052,8 @@ describe("Multiremi session archives", () => {
       method: "POST",
       headers: daemonHeaders,
       body: JSON.stringify({
-        source_revision: "repair-v1",
-        sha256: sha256(bytes),
+        source_revision: repairRevision,
+        sha256: repairFixture.sha256,
         size_bytes: bytes.byteLength,
       }),
     });
@@ -973,10 +1071,10 @@ describe("Multiremi session archives", () => {
       `${base}/${retry.archive.id}/complete?attempt=${retry.upload_attempt}`,
       { method: "POST", headers: daemonHeaders },
     )).status).toBe(200);
-    expect(readFileSync(storedPath)).toEqual(bytes);
+    expect(new Uint8Array(readFileSync(storedPath))).toEqual(bytes);
 
     const ready = await app.request(
-      `${base}/status?source_revision=repair-v1&sha256=${sha256(bytes)}&verify_ready=1`,
+      `${base}/status?source_revision=${repairRevision}&sha256=${repairFixture.sha256}&verify_ready=1`,
       { headers: { Authorization: daemonHeaders.Authorization } },
     );
     expect(await ready.json()).toMatchObject({ gc_ready: true, requested_ready: { status: "ready" } });
@@ -984,18 +1082,17 @@ describe("Multiremi session archives", () => {
 
   it("rejects a ready archive replaced by a symlink without following it", async () => {
     const { store, issue, runtime, sessionArchives } = await fixture();
-    const bytes = Buffer.from("ready archive before replacement");
     const binding = await createPhysicalReadyArchive(
       sessionArchives,
       issue.id,
       runtime.id,
       runtime.daemonId!,
-      bytes,
-    );
+      { tsk_physical: traceFileBody({ events: 1 }) });
     const archive = store.getSessionArchive(binding.archiveId)!;
     const storedPath = join(archiveRoot!, archive.relativePath);
     const originalPath = `${storedPath}.original`;
     const outsidePath = join(archiveRoot!, "outside-ready-archive");
+    const bytes = readFileSync(storedPath);
     renameSync(storedPath, originalPath);
     writeFileSync(outsidePath, bytes);
     symlinkSync(outsidePath, storedPath, "file");
@@ -1011,23 +1108,21 @@ describe("Multiremi session archives", () => {
 
   it("finishes idempotently when another Server process already promoted the partial", async () => {
     const { store, issue, runtime, sessionArchives } = await fixture();
-    const bytes = Buffer.from("cross-process completion");
-    const initialized = sessionArchives.initialize({
-      workspaceId: issue.workspaceId,
-      issueId: issue.id,
-      runtimeId: runtime.id,
-      daemonId: runtime.daemonId!,
-      sourceRevision: "multi-server-v1",
-      sha256: sha256(bytes),
-      sizeBytes: bytes.byteLength,
-    });
+    const { initialized, fixture: crossProcessFixture } = await initializeWithFixture(
+      sessionArchives,
+      issue.id,
+      runtime.id,
+      runtime.daemonId!,
+    );
+    const bytes = crossProcessFixture.bytes;
     const claim = await sessionArchives.claimUploadAttempt(runtime.id, issue.id, initialized.archive.id);
-    await sessionArchives.upload(
+    await uploadFixture(
+      sessionArchives,
       runtime.id,
       issue.id,
       initialized.archive.id,
+      crossProcessFixture,
       claim.uploadAttempt!,
-      new Response(bytes).body,
     );
     const finalPath = join(archiveRoot!, initialized.archive.relativePath);
     renameSync(`${finalPath}.${claim.uploadAttempt}.partial`, finalPath);
@@ -1043,18 +1138,22 @@ describe("Multiremi session archives", () => {
       initialized.archive.id,
       claim.uploadAttempt!,
     )).resolves.toMatchObject({ status: "ready", attemptCount: claim.uploadAttempt });
-    expect(readFileSync(finalPath)).toEqual(bytes);
+    expect(new Uint8Array(readFileSync(finalPath))).toEqual(bytes);
   });
 
   it("purges archive bytes and metadata on an explicit Issue hard delete", async () => {
     const { store, app, issue, daemonHeaders, base } = await fixture();
-    const bytes = Buffer.from("delete-me-after-explicit-hard-delete");
+    const deleteFixture = await buildArchiveFixture({
+      subject: { kind: "issue", id: issue.id },
+      traces: { tsk_delete: traceFileBody({ events: 1 }) },
+    });
+    const bytes = deleteFixture.bytes;
     const init = await app.request(`${base}/init`, {
       method: "POST",
       headers: daemonHeaders,
       body: JSON.stringify({
-        source_revision: "delete-v1",
-        sha256: sha256(bytes),
+        source_revision: deleteFixture.sourceRevision,
+        sha256: deleteFixture.sha256,
         size_bytes: bytes.byteLength,
       }),
     });
@@ -1119,8 +1218,7 @@ describe("Multiremi session archives", () => {
       issue.id,
       runtime.id,
       runtime.daemonId!,
-      Buffer.from("delete barrier"),
-    );
+      { tsk_physical: traceFileBody({ events: 1 }) });
     store.markIssueWorkspaceCleaned({
       issueId: issue.id,
       runtimeId: runtime.id,
@@ -1139,8 +1237,7 @@ describe("Multiremi session archives", () => {
       issue.id,
       runtime.id,
       runtime.daemonId!,
-      Buffer.from("exact cleaned acknowledgement"),
-    );
+      { tsk_physical: traceFileBody({ events: 1 }) });
     const endpoint = `/api/daemon/issues/${issue.id}/workspace/cleaned`;
     const mismatch = await app.request(endpoint, {
       method: "POST",
@@ -1195,15 +1292,13 @@ describe("Multiremi session archives", () => {
       issue.id,
       runtime.id,
       runtime.daemonId!,
-      Buffer.from("first intact archive"),
-    );
+      { tsk_physical: traceFileBody({ events: 1 }) });
     const secondBinding = await createPhysicalReadyArchive(
       sessionArchives,
       second.id,
       runtime.id,
       runtime.daemonId!,
-      Buffer.from("second archive to corrupt"),
-    );
+      { tsk_physical: traceFileBody({ events: 1 }) });
     store.markIssueWorkspaceCleaned({ issueId: issue.id, runtimeId: runtime.id, ...firstBinding });
     store.markIssueWorkspaceCleaned({ issueId: second.id, runtimeId: runtime.id, ...secondBinding });
     const firstPath = join(archiveRoot!, store.getSessionArchive(firstBinding.archiveId)!.relativePath);
@@ -1248,23 +1343,20 @@ describe("Multiremi session archives", () => {
   it("keeps archive bytes until the Issue delete commits and recovers committed purge receipts", async () => {
     const { store, issue, runtime, sessionArchives } = await fixture();
     sessionArchives.stopIssueArchivePurgeRecovery();
-    const bytes = Buffer.from("durable purge outbox");
-    const initialized = sessionArchives.initialize({
-      workspaceId: issue.workspaceId,
-      issueId: issue.id,
-      runtimeId: runtime.id,
-      daemonId: runtime.daemonId!,
-      sourceRevision: "purge-v1",
-      sha256: sha256(bytes),
-      sizeBytes: bytes.byteLength,
-    });
+    const { initialized, fixture: purgeFixture } = await initializeWithFixture(
+      sessionArchives,
+      issue.id,
+      runtime.id,
+      runtime.daemonId!,
+    );
     const claim = await sessionArchives.claimUploadAttempt(runtime.id, issue.id, initialized.archive.id);
-    await sessionArchives.upload(
+    await uploadFixture(
+      sessionArchives,
       runtime.id,
       issue.id,
       initialized.archive.id,
+      purgeFixture,
       claim.uploadAttempt!,
-      new Response(bytes).body,
     );
     await sessionArchives.complete(runtime.id, issue.id, initialized.archive.id, claim.uploadAttempt!);
     const storedPath = join(archiveRoot!, initialized.archive.relativePath);
@@ -1309,15 +1401,13 @@ describe("Multiremi session archives", () => {
       issue.id,
       runtime.id,
       runtime.daemonId!,
-      Buffer.from("first periodic purge"),
-    );
+      { tsk_physical: traceFileBody({ events: 1 }) });
     const secondBinding = await createPhysicalReadyArchive(
       sessionArchives,
       second.id,
       runtime.id,
       runtime.daemonId!,
-      Buffer.from("second isolated purge"),
-    );
+      { tsk_physical: traceFileBody({ events: 1 }) });
     const firstArchive = store.getSessionArchive(firstBinding.archiveId)!;
     const secondArchive = store.getSessionArchive(secondBinding.archiveId)!;
     const firstPath = join(archiveRoot!, firstArchive.relativePath);
@@ -1359,8 +1449,7 @@ describe("Multiremi session archives", () => {
       issue.id,
       runtime.id,
       runtime.daemonId!,
-      Buffer.from("cross-server periodic purge"),
-    );
+      { tsk_physical: traceFileBody({ events: 1 }) });
     const archive = store.getSessionArchive(binding.archiveId)!;
     const storedPath = join(archiveRoot!, archive.relativePath);
     store.markIssueWorkspaceCleaned({ issueId: issue.id, runtimeId: runtime.id, ...binding });
@@ -1412,6 +1501,8 @@ describe("Multiremi session archives", () => {
     });
     sessionArchives.initialize({
       workspaceId: "local",
+      subjectKind: "issue",
+      subjectId: archiveIssue.id,
       issueId: archiveIssue.id,
       runtimeId: runtime.id,
       daemonId: runtime.daemonId!,
@@ -1522,10 +1613,11 @@ describe("Multiremi session archives", () => {
       issue.id,
       runtime.id,
       runtime.daemonId!,
-      Buffer.from("durable cleanup barrier"),
-    );
+      { tsk_physical: traceFileBody({ events: 1 }) });
     const stale = sessionArchives.initialize({
       workspaceId: issue.workspaceId,
+      subjectKind: "issue",
+      subjectId: issue.id,
       issueId: issue.id,
       runtimeId: runtime.id,
       daemonId: runtime.daemonId!,
@@ -1561,6 +1653,8 @@ describe("Multiremi session archives", () => {
     const { store, issue, runtime, sessionArchives } = await fixture();
     const first = sessionArchives.initialize({
       workspaceId: issue.workspaceId,
+      subjectKind: "issue",
+      subjectId: issue.id,
       issueId: issue.id,
       runtimeId: runtime.id,
       daemonId: runtime.daemonId!,
@@ -1573,6 +1667,8 @@ describe("Multiremi session archives", () => {
 
     const current = sessionArchives.initialize({
       workspaceId: issue.workspaceId,
+      subjectKind: "issue",
+      subjectId: issue.id,
       issueId: issue.id,
       runtimeId: runtime.id,
       daemonId: runtime.daemonId!,
@@ -1590,6 +1686,8 @@ describe("Multiremi session archives", () => {
     const { store, app, issue, runtime, daemonHeaders, base } = await fixture();
     const old = store.initSessionArchive({
       workspaceId: issue.workspaceId,
+      subjectKind: "issue",
+      subjectId: issue.id,
       issueId: issue.id,
       runtimeId: runtime.id,
       daemonId: runtime.daemonId!,
@@ -1607,6 +1705,8 @@ describe("Multiremi session archives", () => {
 
     const current = store.initSessionArchive({
       workspaceId: issue.workspaceId,
+      subjectKind: "issue",
+      subjectId: issue.id,
       issueId: issue.id,
       runtimeId: runtime.id,
       daemonId: runtime.daemonId!,
@@ -1850,16 +1950,12 @@ describe("Multiremi session archives", () => {
 
   it("retains Runtime provenance without blocking Runtime deletion", async () => {
     const { store, runtime, issue, sessionArchives } = await fixture();
-    const bytes = Buffer.from("historical provenance");
-    const initialized = sessionArchives.initialize({
-      workspaceId: "local",
-      issueId: issue.id,
-      runtimeId: runtime.id,
-      daemonId: runtime.daemonId!,
-      sourceRevision: "provenance-v1",
-      sha256: sha256(bytes),
-      sizeBytes: bytes.byteLength,
-    });
+    const { initialized } = await initializeWithFixture(
+      sessionArchives,
+      issue.id,
+      runtime.id,
+      runtime.daemonId!,
+    );
     db!.exec("PRAGMA foreign_keys = ON");
     expect(db!.run("DELETE FROM multiremi_runtimes WHERE id = ?", [runtime.id]).changes).toBeGreaterThanOrEqual(1);
     expect(store.getSessionArchive(initialized.archive.id)).toMatchObject({
@@ -1870,15 +1966,20 @@ describe("Multiremi session archives", () => {
 
   it("lets a replacement Runtime adopt an incomplete idempotent upload", async () => {
     const { store, runtime, issue, sessionArchives } = await fixture();
-    const bytes = Buffer.from("adopt after runtime loss");
+    const adoptFixture = await buildArchiveFixture({
+      subject: { kind: "issue", id: issue.id },
+      traces: { tsk_adopt: traceFileBody({ events: 1 }) },
+    });
     const input = {
       workspaceId: "local",
+      subjectKind: "issue" as const,
+      subjectId: issue.id,
       issueId: issue.id,
       runtimeId: runtime.id,
       daemonId: runtime.daemonId!,
-      sourceRevision: "adopt-v1",
-      sha256: sha256(bytes),
-      sizeBytes: bytes.byteLength,
+      sourceRevision: adoptFixture.sourceRevision,
+      sha256: adoptFixture.sha256,
+      sizeBytes: adoptFixture.sizeBytes,
     };
     const first = sessionArchives.initialize(input).archive;
     store.markSessionArchiveFailed(first.id, "runtime offline");
@@ -1913,15 +2014,20 @@ describe("Multiremi session archives", () => {
 
   it("prevents a superseded Runtime attempt from downgrading the replacement result", async () => {
     const { store, runtime, issue, sessionArchives } = await fixture();
-    const bytes = Buffer.from("attempt ownership");
+    const ownershipFixture = await buildArchiveFixture({
+      subject: { kind: "issue", id: issue.id },
+      traces: { tsk_ownership: traceFileBody({ events: 1 }) },
+    });
     const input = {
       workspaceId: "local",
+      subjectKind: "issue" as const,
+      subjectId: issue.id,
       issueId: issue.id,
       runtimeId: runtime.id,
       daemonId: runtime.daemonId!,
-      sourceRevision: "attempt-v1",
-      sha256: sha256(bytes),
-      sizeBytes: bytes.byteLength,
+      sourceRevision: ownershipFixture.sourceRevision,
+      sha256: ownershipFixture.sha256,
+      sizeBytes: ownershipFixture.sizeBytes,
     };
     const archive = sessionArchives.initialize(input).archive;
     const oldClaim = store.claimSessionArchiveUploadAttempt(archive.id, runtime.id)!;
@@ -1974,13 +2080,13 @@ describe("Multiremi session archives", () => {
       archive.id,
       replacement.id,
       newAttempt.attemptCount,
-      bytes.byteLength,
+      ownershipFixture.sizeBytes,
     )).not.toBeNull();
     expect(store.markSessionArchiveReadyAttempt(
       archive.id,
       replacement.id,
       newAttempt.attemptCount,
-      bytes.byteLength,
+      ownershipFixture.sizeBytes,
     )).toMatchObject({ status: "ready", runtimeId: replacement.id });
 
     expect(store.markSessionArchiveFailedAttempt(

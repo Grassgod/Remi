@@ -45,3 +45,16 @@ POST /api/issues/:issueId/session-archives/:archiveId/retry
 
 Manual retry resets the attempt count, error, next retry timestamp, and exhaustion
 timestamp. It does not bypass the normal upload integrity checks.
+
+## v1 uploads during the upgrade window
+
+New uploads must be the v2 ZIP container. The server answers a v1 `init` with
+`session_archive_format_unsupported` (409) before claiming an attempt, so a
+daemon that has not upgraded yet cannot spend the retry budget on a container
+this server no longer indexes. Because the refusal happens at `init`, the row
+keeps its attempt count and the next claim after the daemon upgrade starts from
+a clean budget.
+
+Rows and files written by the v1 writer are never rewritten or deleted by this
+rule: they keep their `ready` state because the hard-delete barrier binds the
+cleaned workspace to one exact archive row.

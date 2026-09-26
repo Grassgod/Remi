@@ -16,6 +16,8 @@ import { cleanOptionalString, nullableString, parseJson, toJson } from "@multire
 import { createLogger } from "@shared/logger.js";
 import { INBOX_ROUTING, inboxRouteFor } from "@multiremi/store/inbox-routing.js";
 import { markRequestReadCacheLockTaken } from "@multiremi/store/request-read-cache.js";
+import type { MultiremiTaskTrace } from "@multiremi/contracts/session-archive.js";
+import type { TaskTraceArchivePointer } from "@multiremi/store/repos/task-traces-repo.js";
 import type {
   AddSessionParticipantInput,
   CreateChatSessionInput,
@@ -528,7 +530,15 @@ export interface KnowledgeSurface {
   } | null;
 }
 
-export interface StoreContextHost extends AgentsSurface, AgentPluginsSurface, IssuesSurface, WorkspacesSurface, NotificationChannelsSurface, SquadsSurface, ProjectsSurface, TasksSurface, RuntimesSurface, ChatSurface, IssueSessionsSurface, AutopilotsSurface, AccessTokensSurface, FeishuBotSurface, KnowledgeSurface {}
+/** Trace pointer reads and writes, exposed by the store facade. */
+export interface TaskTracesSurface {
+  getTaskTrace(taskId: string): MultiremiTaskTrace | null;
+  /** Must be called inside the caller's transaction. */
+  writeTaskTraceArchivePointers(pointers: readonly TaskTraceArchivePointer[]): number;
+  clearTaskTraceArchivePointers(archiveId: string): number;
+}
+
+export interface StoreContextHost extends TaskTracesSurface, AgentsSurface, AgentPluginsSurface, IssuesSurface, WorkspacesSurface, NotificationChannelsSurface, SquadsSurface, ProjectsSurface, TasksSurface, RuntimesSurface, ChatSurface, IssueSessionsSurface, AutopilotsSurface, AccessTokensSurface, FeishuBotSurface, KnowledgeSurface {}
 
 export class StoreContext {
   readonly taskEnqueuedListeners = new Set<TaskEnqueuedListener>();
@@ -660,6 +670,14 @@ export class StoreContext {
   }
 
   chat(): ChatSurface {
+    return this.resolveHost();
+  }
+
+  /**
+   * Task trace pointers. Resolved through `resolveHost` like the other carved
+   * repos, since the archive repo needs them inside its own transaction.
+   */
+  taskTraces(): TaskTracesSurface {
     return this.resolveHost();
   }
 

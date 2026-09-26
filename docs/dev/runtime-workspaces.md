@@ -76,6 +76,10 @@ Skill 索引包含名称、触发描述和绝对 `SKILL.md` 路径，支持文�
 
 原目录不写入 `.multiremi` 任务元数据。Issue 的 provider / archive 状态保存在 daemon 管理的目录；旧 Issue workspace 上报只指向该状态目录，不把注册目录交给 Issue GC。
 
+Session Archive v2 的容器与遍历策略：包体是标准 ZIP（`multiremi.session-archive.v2`），每个成员单独 deflate（level 6）+ data descriptor，末尾 `index.json` 记录每个成员的 `local_header_offset`、`data_offset`、压缩/原始大小和 sha256，所以读单个 task 的 trace 只解压一个成员。成员布局为 `manifest.json`、`traces/<task_id>.jsonl`、`sessions/<session_id>/...` 与末尾 `index.json`；主体可以是 issue、chat 或一次性 task。`source_revision` 仍是内容清单的 sha256（与压缩方式无关），归档 `sha256` 仍是整包哈希，GC 屏障与硬删屏障不变。
+
+归档遍历不再依赖 `/proc/self/fd`：写入器逐级 `lstat`，拒绝符号链接，并在扫描前后比对 dev/ino/size/mtime，成员读取用 `O_NOFOLLOW` 打开。这样 macOS daemon 也能归档（Linux 上过去只有描述符路径可用）。Windows 仍被拒绝，因为 `lstat` 不把 junction 报告为符号链接，无法保证「不逃出会话根」。
+
 [GC 安全删除实现](../../packages/daemon/src/agent-runtime/workspace/safe-remove.ts) 有两种寻址策略：Linux 用 `/proc/self/fd` 描述符锚定，macOS 用逐级 `lstat` 校验 + 隔离区重命名（`rename` 前后比对 dev/ino，校验通过才改名 `.deleting` 并递归删除）。两种策略都先移入 root 下 0700 的 `.multiremi-delete-quarantine`，不跟随符号链接，也不删除 owned root 之外的内容。Windows 没有可用策略，`ownedDirectoryRemovalSupport()` 仍报 blocked 并拒绝删除，daemon 管理的旧状态清理可能保留目录；Runtime 工作区注册、执行和归档均不依赖删除用户目录。
 
 ## 实现和验证

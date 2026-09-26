@@ -97,6 +97,11 @@ import {
   type SessionArchiveWorkspaceUsage,
 } from "@multiremi/store/repos/session-archives-repo.js";
 import {
+  TaskTracesRepo,
+  type TaskTraceArchivePointer,
+} from "@multiremi/store/repos/task-traces-repo.js";
+import type { MultiremiTaskTrace } from "@multiremi/contracts/session-archive.js";
+import {
   RuntimesRepo,
   type ArchiveAgentsAndDeleteRuntimeResult,
   type StrictRuntimeDeleteResult,
@@ -271,6 +276,7 @@ import type {
   MultiremiIssueShare,
   MultiremiIssueSession,
   MultiremiSessionArchive,
+  MultiremiSessionArchiveSubjectKind,
   MultiremiIssueAssigneeGroup,
   MultiremiIssueSearchResult,
   MultiremiFeedback,
@@ -493,6 +499,7 @@ export class MultiremiStore {
   private issues: IssuesRepo;
   private issueWorkspaces: IssueWorkspacesRepo;
   private sessionArchives: SessionArchivesRepo;
+  private taskTraces: TaskTracesRepo;
   readonly runtimeWorkspaces: RuntimeWorkspacesRepo;
   private runtimes: RuntimesRepo;
   private daemonProfiles: DaemonProfilesRepo;
@@ -559,6 +566,7 @@ export class MultiremiStore {
     this.issues = new IssuesRepo(this.ctx);
     this.issueWorkspaces = new IssueWorkspacesRepo(this.ctx);
     this.sessionArchives = new SessionArchivesRepo(this.ctx);
+    this.taskTraces = new TaskTracesRepo(this.ctx);
     this.runtimes = new RuntimesRepo(this.ctx);
     this.runtimeWorkspaces = new RuntimeWorkspacesRepo(this.ctx);
     this.daemonProfiles = new DaemonProfilesRepo(this.ctx);
@@ -714,6 +722,13 @@ runMigrations(this.db);
     return this.sessionArchives.list(issueId);
   }
 
+  listSessionArchivesForSubject(
+    kind: MultiremiSessionArchiveSubjectKind,
+    subjectId: string,
+  ): MultiremiSessionArchive[] {
+    return this.sessionArchives.listSubject(kind, subjectId);
+  }
+
   getSessionArchiveWorkspaceUsage(workspaceId: string): SessionArchiveWorkspaceUsage {
     return this.sessionArchives.workspaceUsage(workspaceId);
   }
@@ -731,12 +746,7 @@ runMigrations(this.db);
     created: boolean;
   } {
     const initialized = this.sessionArchives.init(input, id, relativePath);
-    if (!initialized) {
-      throw Object.assign(
-        new Error("Issue is deleting or its workspace has already been cleaned"),
-        { code: "issue_archive_lifecycle_closed" },
-      );
-    }
+    if (!initialized) throw this.sessionArchiveNotWritable(input.subjectKind);
     return initialized;
   }
 
@@ -746,13 +756,30 @@ runMigrations(this.db);
     relativePath: string,
   ): { archive: MultiremiSessionArchive; created: boolean } {
     const reported = this.sessionArchives.reportFailure(input, id, relativePath);
-    if (!reported) {
-      throw Object.assign(
+    if (!reported) throw this.sessionArchiveNotWritable(input.subjectKind);
+    return reported;
+  }
+
+  /**
+   * The refusal a subject write gets when its lifecycle fence rejects it.
+   *
+   * Issue subjects keep the historical code and message because the daemon and
+   * the delete path both branch on it; Chat and Task subjects name their own
+   * owner instead, since there is no Issue workspace involved.
+   */
+  private sessionArchiveNotWritable(subjectKind: MultiremiSessionArchiveSubjectKind): Error {
+    if (subjectKind === "issue") {
+      return Object.assign(
         new Error("Issue is deleting or its workspace has already been cleaned"),
         { code: "issue_archive_lifecycle_closed" },
       );
     }
-    return reported;
+    return Object.assign(
+      new Error(
+        `${subjectKind} session archive is not writable: the Runtime no longer owns this subject`,
+      ),
+      { code: "session_archive_subject_not_writable" },
+    );
   }
 
   touchWritableSessionArchive(id: string, runtimeId: string): MultiremiSessionArchive | null {
@@ -789,6 +816,22 @@ runMigrations(this.db);
     return this.sessionArchives.markReadyAttempt(id, runtimeId, attemptCount, uploadedSizeBytes);
   }
 
+  completeSessionArchiveWithTracePointers(
+    id: string,
+    runtimeId: string,
+    attemptCount: number,
+    uploadedSizeBytes: number,
+    pointers: readonly TaskTraceArchivePointer[],
+  ): { archive: MultiremiSessionArchive; pointerCount: number } | null {
+    return this.sessionArchives.completeWithTracePointers(
+      id,
+      runtimeId,
+      attemptCount,
+      uploadedSizeBytes,
+      pointers,
+    );
+  }
+
   markSessionArchiveFailedAttempt(
     id: string,
     runtimeId: string,
@@ -812,6 +855,22 @@ runMigrations(this.db);
 
   retrySessionArchive(id: string): MultiremiSessionArchive | null {
     return this.sessionArchives.retry(id);
+  }
+
+  getTaskTrace(taskId: string): MultiremiTaskTrace | null {
+    return this.taskTraces.get(taskId);
+  }
+
+  listTaskTracesForArchive(archiveId: string): MultiremiTaskTrace[] {
+    return this.taskTraces.listForArchive(archiveId);
+  }
+
+  writeTaskTraceArchivePointers(pointers: readonly TaskTraceArchivePointer[]): number {
+    return this.taskTraces.writeArchivePointers(pointers);
+  }
+
+  clearTaskTraceArchivePointers(archiveId: string): number {
+    return this.taskTraces.clearArchivePointers(archiveId);
   }
 
   listExecutionGroups(workspaceId: string) { return listExecutionGroups(this.db, workspaceId); }

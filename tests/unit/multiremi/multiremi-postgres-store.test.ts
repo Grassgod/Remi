@@ -2073,6 +2073,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     });
     const input = {
       workspaceId: ws,
+      subjectKind: "issue" as const,
+      subjectId: issue.id,
       issueId: issue.id,
       runtimeId: runtime.id,
       daemonId: runtime.daemonId!,
@@ -2083,7 +2085,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const first = store.reportSessionArchiveFailure(
       input,
       `sar_failure_${wsCounter}`,
-      `failures/sar_failure_${wsCounter}/sessions.tar.gz`,
+      `failures/sar_failure_${wsCounter}/sessions.zip`,
     );
     expect(first).toMatchObject({
       created: true,
@@ -2094,7 +2096,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const repeated = store.reportSessionArchiveFailure(
       { ...input, error: "second pack failure" },
       `sar_failure_replacement_${wsCounter}`,
-      `failures/sar_failure_replacement_${wsCounter}/sessions.tar.gz`,
+      `failures/sar_failure_replacement_${wsCounter}/sessions.zip`,
     );
     expect(repeated).toMatchObject({
       created: false,
@@ -2108,6 +2110,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
 
     const actualInput = {
       workspaceId: ws,
+      subjectKind: "issue" as const,
+      subjectId: issue.id,
       issueId: issue.id,
       runtimeId: runtime.id,
       daemonId: runtime.daemonId!,
@@ -2118,7 +2122,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const actual = store.initSessionArchive(
       actualInput,
       `sar_actual_${wsCounter}`,
-      `archives/sar_actual_${wsCounter}/sessions.tar.gz`,
+      `archives/sar_actual_${wsCounter}/sessions.zip`,
     );
     expect(actual.created).toBe(true);
     expect(store.getSessionArchive(first.archive.id)).toBeNull();
@@ -2126,14 +2130,14 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const newFailure = store.reportSessionArchiveFailure(
       { ...input, error: "third pack failure" },
       `sar_failure_third_${wsCounter}`,
-      `failures/sar_failure_third_${wsCounter}/sessions.tar.gz`,
+      `failures/sar_failure_third_${wsCounter}/sessions.zip`,
     );
     expect(newFailure.created).toBe(true);
     expect(store.listSessionArchives(issue.id)).toHaveLength(2);
     expect(store.initSessionArchive(
       actualInput,
       `sar_actual_duplicate_${wsCounter}`,
-      `archives/sar_actual_duplicate_${wsCounter}/sessions.tar.gz`,
+      `archives/sar_actual_duplicate_${wsCounter}/sessions.zip`,
     )).toMatchObject({ created: false, archive: { id: actual.archive.id } });
     expect(store.getSessionArchive(newFailure.archive.id)).toBeNull();
     expect(store.listSessionArchives(issue.id)).toHaveLength(1);

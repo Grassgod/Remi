@@ -190,7 +190,7 @@ import { ownedDirectoryRemovalSupport } from "@daemon/agent-runtime/workspace/sa
 import {
   prepareIssueSessionArchive,
   readIssueSessionArchiveReceipt,
-  removePreparedIssueSessionArchive,
+  removePreparedSessionArchive,
   writeIssueSessionArchiveReceipt,
 } from "@daemon/agent-runtime/workspace/session-archive.js";
 import { SshMeshManager } from "@daemon/ssh-mesh.js";
@@ -2850,6 +2850,7 @@ export class MultiremiDaemon {
     try {
       this.assertWorkspaceRootOwner();
       prepared = await prepareIssueSessionArchive(workspaceDir, {
+        issueId,
         maxSourceBytes: this.options.sessionArchiveMaxSourceBytes,
         ...(runtimeStorageRoot
           ? {
@@ -2968,7 +2969,7 @@ export class MultiremiDaemon {
         sha256: prepared.sha256,
       };
     } finally {
-      await removePreparedIssueSessionArchive(prepared.archivePath);
+      await removePreparedSessionArchive(prepared.archivePath);
     }
   }
 

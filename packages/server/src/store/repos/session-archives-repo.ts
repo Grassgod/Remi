@@ -2,9 +2,11 @@ import type {
   InitSessionArchiveInput,
   MultiremiSessionArchive,
   MultiremiSessionArchiveStatus,
+  MultiremiSessionArchiveSubjectKind,
   ReportSessionArchiveFailureInput,
 } from "@multiremi/contracts/types.js";
 import { MULTIREMI_SESSION_ARCHIVE_PREPARATION_FAILURE_REVISION } from "@multiremi/contracts/types.js";
+import { SESSION_ARCHIVE_V2_FORMAT } from "@multiremi/contracts/session-archive.js";
 import { nowIso } from "@multiremi/ids.js";
 import {
   isSessionArchiveRetryExhausted,
@@ -14,6 +16,7 @@ import {
   type SessionArchiveRetryPolicy,
 } from "@multiremi/session-archive/retry-policy.js";
 import type { StoreContext } from "@multiremi/store/context.js";
+import type { TaskTraceArchivePointer } from "@multiremi/store/repos/task-traces-repo.js";
 
 type Row = Record<string, unknown>;
 
@@ -31,10 +34,18 @@ function parseMetadata(value: unknown): Record<string, unknown> {
 }
 
 function hydrate(row: Row): MultiremiSessionArchive {
+  const issueId = row.issue_id == null ? null : String(row.issue_id);
   return {
     id: String(row.id),
     workspaceId: String(row.workspace_id),
-    issueId: String(row.issue_id),
+    // Rows migrated from v1 have no subject columns until the backfill runs;
+    // an Issue archive is the only thing they could have been.
+    subjectKind: (row.subject_kind == null
+      ? "issue"
+      : String(row.subject_kind)) as MultiremiSessionArchiveSubjectKind,
+    subjectId: row.subject_id == null ? String(issueId ?? "") : String(row.subject_id),
+    format: row.format == null ? SESSION_ARCHIVE_V2_FORMAT : String(row.format),
+    issueId,
     runtimeId: String(row.runtime_id),
     daemonId: String(row.daemon_id),
     sourceRevision: String(row.source_revision),
@@ -88,11 +99,15 @@ export class SessionArchivesRepo {
   }
 
   list(issueId: string): MultiremiSessionArchive[] {
+    return this.listSubject("issue", issueId);
+  }
+
+  listSubject(kind: MultiremiSessionArchiveSubjectKind, subjectId: string): MultiremiSessionArchive[] {
     return (this.ctx.db.query(
       `SELECT * FROM multiremi_session_archives
-       WHERE issue_id = ?
+       WHERE subject_kind = ? AND subject_id = ?
        ORDER BY updated_at DESC, id DESC`,
-    ).all(issueId) as Row[]).map(hydrate);
+    ).all(kind, subjectId) as Row[]).map(hydrate);
   }
 
   reportFailure(
@@ -100,23 +115,24 @@ export class SessionArchivesRepo {
     id: string,
     relativePath: string,
   ): { archive: MultiremiSessionArchive; created: boolean } | null {
-    return this.withWritableIssueArchive(input.workspaceId, input.issueId, input.runtimeId, () => {
+    return this.withWritableSubjectArchive(input, () => {
       const now = nowIso();
       const policy = resolveSessionArchiveRetryPolicy();
+      const issueId = input.subjectKind === "issue" ? input.subjectId : null;
       const metadata = JSON.stringify({
         kind: "preparation_failure",
         stage: input.stage,
-        source: ".multiremi/sessions",
+        source: input.subjectKind === "issue" ? ".runtime" : ".runtime",
       });
       this.ctx.db.run(
         `INSERT INTO multiremi_session_archives (
-           id, workspace_id, issue_id, runtime_id, daemon_id,
-           source_revision, sha256, size_bytes, uploaded_size_bytes,
-           file_count, status, relative_path, metadata, attempt_count,
-           last_error, next_retry_at, retry_exhausted_at,
+           id, workspace_id, issue_id, subject_kind, subject_id, format,
+           runtime_id, daemon_id, source_revision, sha256, size_bytes,
+           uploaded_size_bytes, file_count, status, relative_path, metadata,
+           attempt_count, last_error, next_retry_at, retry_exhausted_at,
            created_at, updated_at, completed_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, NULL, 'failed', ?, ?, 1, ?, NULL, NULL, ?, ?, NULL)
-         ON CONFLICT(issue_id, source_revision, sha256) DO UPDATE SET
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, NULL, 'failed', ?, ?, 1, ?, NULL, NULL, ?, ?, NULL)
+         ON CONFLICT(subject_kind, subject_id, source_revision, sha256) DO UPDATE SET
            workspace_id = excluded.workspace_id,
            runtime_id = excluded.runtime_id,
            daemon_id = excluded.daemon_id,
@@ -132,7 +148,10 @@ export class SessionArchivesRepo {
         [
           id,
           input.workspaceId,
-          input.issueId,
+          issueId,
+          input.subjectKind,
+          input.subjectId,
+          SESSION_ARCHIVE_V2_FORMAT,
           input.runtimeId,
           input.daemonId,
           MULTIREMI_SESSION_ARCHIVE_PREPARATION_FAILURE_REVISION,
@@ -146,9 +165,10 @@ export class SessionArchivesRepo {
       );
       const row = this.ctx.db.query(
         `SELECT * FROM multiremi_session_archives
-         WHERE issue_id = ? AND source_revision = ? AND sha256 = ?`,
+         WHERE subject_kind = ? AND subject_id = ? AND source_revision = ? AND sha256 = ?`,
       ).get(
-        input.issueId,
+        input.subjectKind,
+        input.subjectId,
         MULTIREMI_SESSION_ARCHIVE_PREPARATION_FAILURE_REVISION,
         PREPARATION_FAILURE_SHA256,
       ) as Row | null;
@@ -216,7 +236,16 @@ export class SessionArchivesRepo {
     sourceRevision?: string | null,
     sha256?: string | null,
   ): SessionArchiveStatusSnapshot {
-    const archives = this.list(issueId);
+    return this.subjectStatus("issue", issueId, sourceRevision, sha256);
+  }
+
+  subjectStatus(
+    kind: MultiremiSessionArchiveSubjectKind,
+    subjectId: string,
+    sourceRevision?: string | null,
+    sha256?: string | null,
+  ): SessionArchiveStatusSnapshot {
+    const archives = this.listSubject(kind, subjectId);
     const latest = archives[0] ?? null;
     const latestReady = archives.find((item) => item.status === "ready") ?? null;
     const requestedReady = sourceRevision && sha256
@@ -240,25 +269,20 @@ export class SessionArchivesRepo {
     archive: MultiremiSessionArchive;
     created: boolean;
   } | null {
-    return this.withWritableIssueArchive(input.workspaceId, input.issueId, input.runtimeId, () => {
+    return this.withWritableSubjectArchive(input, () => {
+      const issueId = input.subjectKind === "issue" ? input.subjectId : null;
+      const format = input.format ?? SESSION_ARCHIVE_V2_FORMAT;
       const existing = this.ctx.db.query(
         `SELECT * FROM multiremi_session_archives
-         WHERE issue_id = ? AND source_revision = ? AND sha256 = ?`,
-      ).get(input.issueId, input.sourceRevision, input.sha256) as Row | null;
+         WHERE subject_kind = ? AND subject_id = ? AND source_revision = ? AND sha256 = ?`,
+      ).get(input.subjectKind, input.subjectId, input.sourceRevision, input.sha256) as Row | null;
       if (existing) {
         const archive = hydrate(existing);
-        this.ctx.db.run(
-          `DELETE FROM multiremi_session_archives
-           WHERE issue_id = ? AND source_revision = ? AND sha256 = ?`,
-          [
-            input.issueId,
-            MULTIREMI_SESSION_ARCHIVE_PREPARATION_FAILURE_REVISION,
-            PREPARATION_FAILURE_SHA256,
-          ],
-        );
-        // A ready immutable object is global to the Issue and can satisfy GC on
-        // any later Runtime. An incomplete upload, however, must be adoptable
-        // when an Issue moves to another Runtime after a machine failure.
+        this.deletePreparationFailure(input.subjectKind, input.subjectId);
+        // A ready immutable object is global to the subject and can satisfy GC
+        // on any later Runtime. An incomplete upload, however, must be
+        // adoptable when the subject moves to another Runtime after a machine
+        // failure.
         if (
           archive.status !== "ready"
           && archive.status !== "superseded"
@@ -278,49 +302,37 @@ export class SessionArchivesRepo {
       }
 
       const now = nowIso();
-      this.ctx.db.run(
-        `DELETE FROM multiremi_session_archives
-         WHERE issue_id = ? AND source_revision = ? AND sha256 = ?`,
-        [
-          input.issueId,
-          MULTIREMI_SESSION_ARCHIVE_PREPARATION_FAILURE_REVISION,
-          PREPARATION_FAILURE_SHA256,
-        ],
-      );
-      // Only one incomplete snapshot is actionable for an Issue. A user may
-      // click Retry and the native session history can change before the next
-      // daemon sweep; supersede that stale request when the current digest is
-      // initialized instead of leaving it pending forever.
+      this.deletePreparationFailure(input.subjectKind, input.subjectId);
+      // Only one incomplete snapshot is actionable for a subject. A user may
+      // click Retry and the source can change before the next daemon sweep;
+      // supersede that stale request when the current digest is initialized
+      // instead of leaving it pending forever.
       this.ctx.db.run(
         `UPDATE multiremi_session_archives
          SET status = 'superseded', next_retry_at = NULL,
              retry_exhausted_at = NULL, updated_at = ?
-         WHERE issue_id = ? AND (source_revision <> ? OR sha256 <> ?)
+         WHERE subject_kind = ? AND subject_id = ?
            AND status IN ('pending', 'uploading', 'failed')`,
-        [now, input.issueId, input.sourceRevision, input.sha256],
+        [now, input.subjectKind, input.subjectId],
       );
-      // A changed digest for the same source revision represents a replacement,
-      // not a second valid GC barrier.
-      this.ctx.db.run(
-        `UPDATE multiremi_session_archives
-         SET status = 'superseded', next_retry_at = NULL,
-             retry_exhausted_at = NULL, updated_at = ?
-         WHERE issue_id = ? AND source_revision = ?
-           AND sha256 <> ? AND status IN ('pending', 'uploading', 'ready', 'failed')`,
-        [now, input.issueId, input.sourceRevision, input.sha256],
-      );
+      // A digest that is no longer current still stays `ready`: it is a
+      // complete snapshot and can satisfy the GC barrier for the exact content
+      // it captured. Future snapshots simply add another ready row.
       this.ctx.db.run(
         `INSERT INTO multiremi_session_archives (
-           id, workspace_id, issue_id, runtime_id, daemon_id,
-           source_revision, sha256, size_bytes, uploaded_size_bytes,
-           file_count, status, relative_path, metadata, attempt_count,
-           last_error, created_at, updated_at, completed_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'pending', ?, ?, 0, NULL, ?, ?, NULL)
-         ON CONFLICT(issue_id, source_revision, sha256) DO NOTHING`,
+           id, workspace_id, issue_id, subject_kind, subject_id, format,
+           runtime_id, daemon_id, source_revision, sha256, size_bytes,
+           uploaded_size_bytes, file_count, status, relative_path, metadata,
+           attempt_count, last_error, created_at, updated_at, completed_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'pending', ?, ?, 0, NULL, ?, ?, NULL)
+         ON CONFLICT(subject_kind, subject_id, source_revision, sha256) DO NOTHING`,
         [
           id,
           input.workspaceId,
-          input.issueId,
+          issueId,
+          input.subjectKind,
+          input.subjectId,
+          format,
           input.runtimeId,
           input.daemonId,
           input.sourceRevision,
@@ -335,11 +347,20 @@ export class SessionArchivesRepo {
       );
       const archive = this.ctx.db.query(
         `SELECT * FROM multiremi_session_archives
-         WHERE issue_id = ? AND source_revision = ? AND sha256 = ?`,
-      ).get(input.issueId, input.sourceRevision, input.sha256) as Row | null;
+         WHERE subject_kind = ? AND subject_id = ? AND source_revision = ? AND sha256 = ?`,
+      ).get(input.subjectKind, input.subjectId, input.sourceRevision, input.sha256) as Row | null;
       if (!archive) throw new Error("session archive initialization failed");
       return { archive: hydrate(archive), created: String(archive.id) === id };
     });
+  }
+
+  /** Remove the placeholder row that records a failed preparation attempt. */
+  private deletePreparationFailure(subjectKind: MultiremiSessionArchiveSubjectKind, subjectId: string): void {
+    this.ctx.db.run(
+      `DELETE FROM multiremi_session_archives
+       WHERE subject_kind = ? AND subject_id = ? AND source_revision = ? AND sha256 = ?`,
+      [subjectKind, subjectId, MULTIREMI_SESSION_ARCHIVE_PREPARATION_FAILURE_REVISION, PREPARATION_FAILURE_SHA256],
+    );
   }
 
   claimUploadAttempt(id: string, runtimeId: string): MultiremiSessionArchive | null {
@@ -459,6 +480,44 @@ export class SessionArchivesRepo {
         && archive.status === "ready"
         ? archive
         : null;
+    });
+  }
+
+  /**
+   * Mark the archive `ready` and write its task trace pointers atomically.
+   *
+   * Both statements share one transaction on purpose: a reader must never find
+   * a `ready` archive whose pointer table is missing, and a pointer must never
+   * outlive the archive that backs it. The archive row is the transaction's
+   * guard, so a superseded attempt writes neither half.
+   */
+  completeWithTracePointers(
+    id: string,
+    runtimeId: string,
+    attemptCount: number,
+    uploadedSizeBytes: number,
+    pointers: readonly TaskTraceArchivePointer[],
+  ): { archive: MultiremiSessionArchive; pointerCount: number } | null {
+    return this.withWritableArchive(id, runtimeId, () => {
+      const now = nowIso();
+      const result = this.ctx.db.run(
+        `UPDATE multiremi_session_archives
+         SET status = 'ready', uploaded_size_bytes = ?, last_error = NULL,
+             next_retry_at = NULL, retry_exhausted_at = NULL,
+             updated_at = ?, completed_at = ?
+         WHERE id = ? AND runtime_id = ? AND attempt_count = ? AND status = 'uploading'`,
+        [uploadedSizeBytes, now, now, id, runtimeId, attemptCount],
+      );
+      if (result.changes !== 1) return null;
+      const archive = this.get(id);
+      if (
+        !archive
+        || archive.runtimeId !== runtimeId
+        || archive.attemptCount !== attemptCount
+        || archive.status !== "ready"
+      ) return null;
+      const pointerCount = this.ctx.taskTraces().writeTaskTraceArchivePointers(pointers);
+      return { archive, pointerCount };
     });
   }
 
@@ -608,36 +667,84 @@ export class SessionArchivesRepo {
   ): T | null {
     const initial = this.get(id);
     if (!initial || initial.runtimeId !== runtimeId) return null;
-    return this.withWritableIssueArchive(initial.workspaceId, initial.issueId, runtimeId, () => {
-      const current = this.get(id);
-      return current?.runtimeId === runtimeId ? action(current) : null;
-    });
+    return this.withWritableSubjectArchive(
+      {
+        workspaceId: initial.workspaceId,
+        subjectKind: initial.subjectKind,
+        subjectId: initial.subjectId,
+        issueId: initial.issueId,
+        runtimeId,
+      },
+      () => {
+        const current = this.get(id);
+        return current?.runtimeId === runtimeId ? action(current) : null;
+      },
+    );
   }
 
-  private withWritableIssueArchive<T>(
-    workspaceId: string,
-    issueId: string,
-    runtimeId: string,
+  /**
+   * Serialize one write against the subject's lifecycle fence.
+   *
+   * Issue subjects keep the historical fenced path: the Runtime must still own
+   * the Issue workspace and the workspace must not be cleaned. Chat and
+   * one-shot Task subjects have no Issue to fence on, so the Runtime that
+   * currently owns the subject's provider session must match instead.
+   */
+  private withWritableSubjectArchive<T>(
+    input: {
+      workspaceId: string;
+      subjectKind: MultiremiSessionArchiveSubjectKind;
+      subjectId: string;
+      issueId?: string | null;
+      runtimeId: string;
+    },
     action: () => T,
   ): T | null {
     return this.ctx.db.transaction(() => {
-      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
-      this.ctx.lockIssueArchiveLifecycle(issueId);
-      const row = this.ctx.db.query(
-        `SELECT i.workspace_id, i.lifecycle_state,
-                iw.status AS workspace_status, iw.runtime_id AS workspace_runtime_id
-         FROM multiremi_issues i
-         LEFT JOIN multiremi_issue_workspaces iw ON iw.issue_id = i.id
-         WHERE i.id = ?`,
-      ).get(issueId) as Row | null;
-      if (
-        !row
-        || String(row.workspace_id ?? "local") !== workspaceId
-        || String(row.lifecycle_state ?? "active") !== "active"
-        || String(row.workspace_runtime_id ?? "") !== runtimeId
-        || String(row.workspace_status ?? "") === "cleaned"
-      ) return null;
-      return action();
+      this.ctx.lockWorkspaceRuntimeLifecycle(input.workspaceId);
+      if (input.subjectKind === "issue") {
+        const issueId = input.issueId ?? input.subjectId;
+        this.ctx.lockIssueArchiveLifecycle(issueId);
+        const row = this.ctx.db.query(
+          `SELECT i.workspace_id, i.lifecycle_state,
+                  iw.status AS workspace_status, iw.runtime_id AS workspace_runtime_id
+           FROM multiremi_issues i
+           LEFT JOIN multiremi_issue_workspaces iw ON iw.issue_id = i.id
+           WHERE i.id = ?`,
+        ).get(issueId) as Row | null;
+        if (
+          !row
+          || String(row.workspace_id ?? "local") !== input.workspaceId
+          || String(row.lifecycle_state ?? "active") !== "active"
+          || String(row.workspace_runtime_id ?? "") !== input.runtimeId
+          || String(row.workspace_status ?? "") === "cleaned"
+        ) return null;
+        return action();
+      }
+      return this.ownsSubjectRuntime(input) ? action() : null;
     })();
+  }
+
+  /** True when `runtimeId` currently owns the Chat Session or Task. */
+  private ownsSubjectRuntime(input: {
+    workspaceId: string;
+    subjectKind: MultiremiSessionArchiveSubjectKind;
+    subjectId: string;
+    runtimeId: string;
+  }): boolean {
+    if (input.subjectKind === "chat") {
+      const session = this.ctx.db.query(
+        "SELECT workspace_id, session_runtime_id FROM multiremi_chat_sessions WHERE id = ?",
+      ).get(input.subjectId) as Row | null;
+      if (!session) return false;
+      return String(session.workspace_id ?? "local") === input.workspaceId
+        && String(session.session_runtime_id ?? "") === input.runtimeId;
+    }
+    const task = this.ctx.db.query(
+      "SELECT workspace_id, runtime_id FROM multiremi_tasks WHERE id = ?",
+    ).get(input.subjectId) as Row | null;
+    if (!task) return false;
+    return String(task.workspace_id ?? "local") === input.workspaceId
+      && String(task.runtime_id ?? "") === input.runtimeId;
   }
 }
