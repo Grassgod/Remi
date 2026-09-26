@@ -239,6 +239,40 @@ describe("merged heartbeat poll", () => {
     // The redacted pair is the audit copy and must survive the scrub.
     expect(store.getRuntimeCommandRequest(runtime.id, request.id)?.redactedCommand).toBe("printf secret");
   });
+
+  // The rows below are read straight from the table: the per-request getters sweep before they
+  // read, which would hide whether the heartbeat itself did the sweep.
+  it("times out a stuck running update on the heartbeat even when nothing is pending", () => {
+    const { store, runtime } = fixture();
+    const update = store.createRuntimeUpdateRequest(runtime.id, { targetVersion: "9.9.9" });
+    expect(store.heartbeatRuntime(runtime.id, FULL).pending_update?.id).toBe(update.id);
+    // The daemon died mid-update: the row is `running` and past the 20-minute deadline.
+    db!.run("UPDATE multiremi_runtime_update_requests SET run_started_at = ? WHERE id = ?", [
+      new Date(Date.now() - 21 * 60 * 1_000).toISOString(),
+      update.id,
+    ]);
+
+    store.heartbeatRuntime(runtime.id, FULL);
+    const row = db!.query("SELECT status, error FROM multiremi_runtime_update_requests WHERE id = ?").get(update.id) as { status: string; error: string };
+    expect(row).toEqual({ status: "timeout", error: "update did not complete within 20 minutes" });
+    // `createRuntimeUpdateRequest` checks for an in-flight row without sweeping first, so a row
+    // the heartbeat left `running` would refuse every later update.
+    expect(() => store.createRuntimeUpdateRequest(runtime.id, { targetVersion: "9.9.10" })).not.toThrow();
+  });
+
+  it("times out an overdue pending row on the heartbeat even when nothing is claimable", () => {
+    const { store, runtime } = fixture();
+    const request = store.createRuntimeModelListRequest(runtime.id);
+    db!.run("UPDATE multiremi_runtime_model_list_requests SET created_at = ? WHERE id = ?", [
+      new Date(Date.now() - 60_000).toISOString(),
+      request.id,
+    ]);
+
+    const ack = store.heartbeatRuntime(runtime.id, FULL);
+    expect(ack.pending_model_list).toBeUndefined();
+    const row = db!.query("SELECT status, error FROM multiremi_runtime_model_list_requests WHERE id = ?").get(request.id) as { status: string; error: string };
+    expect(row).toEqual({ status: "timeout", error: "daemon did not respond within 30 seconds" });
+  });
 });
 
 // ── structural assertion: an idle heartbeat touches the seven pending tables once ──────────────

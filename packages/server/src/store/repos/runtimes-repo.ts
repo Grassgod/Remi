@@ -1945,7 +1945,9 @@ export class RuntimesRepo {
     // Families the probe does not report stay out of their claim path, so ordering, payload
     // shape and error text are untouched. A family is also left out of the *sweep* when the
     // probe proves the sweep would write nothing — that is the same predicate `expire`
-    // matches, so a family with no expired pending row and no running row can skip it.
+    // matches, so a family with no expired pending row and no overdue running row can skip it.
+    // A family with only overdue rows is still reported, so its sweep runs on this heartbeat
+    // exactly as it did when every family was polled.
     const pendingFamilies = this.probePendingRequestFamilies(runtimeId, {
       supportsBotMenu: options.supportsBotMenu,
       supportsDirectoryScan: options.supportsDirectoryScan,
@@ -2105,7 +2107,14 @@ export class RuntimesRepo {
       const family = String(row.family);
       if (!isPendingRequestFamily(family)) continue;
       if (Number(row.claimable ?? 0) === 1) claimable.add(family);
-      if (Number(row.sweep ?? 0) === 1) sweep.add(family);
+      // An overdue row has to be timed out on this heartbeat even when nothing is claimable, so
+      // the family still enters its claim path (which sweeps first). Readers such as
+      // `createRuntimeUpdateRequest` look for `pending`/`running` rows without sweeping, so a dead
+      // update left `running` here would refuse every later update for the runtime.
+      if (Number(row.sweep ?? 0) === 1) {
+        sweep.add(family);
+        claimable.add(family);
+      }
       if (Number(row.housekeeping ?? 0) === 1) claimable.add(family);
     }
     return { claimable, sweep };
