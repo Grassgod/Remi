@@ -645,7 +645,7 @@ describe("report write-counter columns", () => {
 
   it("reports aborted and stubbed writes in separate columns in MD", () => {
     const md = buildMarkdown({ meta: {}, scenarios: [scenario] as never, blockedWrites: [], stubbedWrites: stubs as never, compare: null });
-    expect(md).toContain("| 拦截写请求 | 桩写请求 | URL 提交 ms | 目标前置 | 前置前 inbox 请求 | error |");
+    expect(md).toContain("| 拦截写请求 | 桩写请求 | URL 提交 ms | 目标前置 | 前置前 inbox 请求 | 点击行文本 | error |");
     expect(md).toContain("被允许表接管的写请求");
     // The round row carries both counters and the URL commit.
     expect(md).toMatch(/\| deeplink \| warm \| 1 \|.*\| 2 \| 1 \| 880\.0 \| 注入 \| 1 \|/);
