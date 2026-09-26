@@ -24,21 +24,36 @@ class FakeOpenVikingHttp {
   /** Reads answered with a retryable 503 before the next one succeeds. */
   failReads = 0;
   private commits = 0;
+  private activeReads = 0;
+  maxActiveReads = 0;
 
   readonly fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
     const op = `${init?.method ?? "GET"} ${url.pathname}`;
     const body = init?.body ? JSON.parse(String(init.body)) : null;
     this.calls.push(op);
-    if (this.hang({ op })) {
-      const signal = init!.signal!;
-      return new Promise<Response>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    const reading = op === "GET /api/v1/content/read";
+    if (reading) {
+      this.activeReads += 1;
+      this.maxActiveReads = Math.max(this.maxActiveReads, this.activeReads);
     }
-    return this.handle(op, url.searchParams.get("uri") ?? "", body);
+    try {
+      if (this.hang({ op })) {
+        const signal = init!.signal!;
+        return await new Promise<Response>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+      }
+      return this.handle(op, url.searchParams.get("uri") ?? "", body);
+    } finally {
+      if (reading) this.activeReads -= 1;
+    }
   }) as typeof fetch;
 
   reads(): number {
     return this.calls.filter((op) => op === "GET /api/v1/content/read").length;
+  }
+
+  finds(): number {
+    return this.calls.filter((op) => op === "POST /api/v1/search/find").length;
   }
 
   private handle(op: string, uri: string, body: any): Response {
@@ -59,6 +74,17 @@ class FakeOpenVikingHttp {
         return ok({});
       case "POST /api/v1/snapshot/commit":
         return ok({ oid: `oid_${++this.commits}` });
+      case "POST /api/v1/search/find": {
+        // Substring match over the stored documents: enough to rank a hit list without
+        // reproducing OpenViking's semantic scoring.
+        const root = typeof body.target_uri === "string" ? body.target_uri : "";
+        const limit = typeof body.limit === "number" ? body.limit : 20;
+        const resources = [...this.files.entries()]
+          .filter(([uri, content]) => uri.startsWith(`${root}/`) && content.includes(String(body.query)))
+          .slice(0, limit)
+          .map(([uri]) => ({ uri, score: 1, tags: [] }));
+        return ok({ resources });
+      }
       case "POST /api/v1/content/batch-write":
         for (const write of body.operations) {
           const current = this.files.get(write.uri);
@@ -88,7 +114,14 @@ function sha256(value: string): string {
 }
 
 /** Production's env (180s per attempt, 5 retries) by default: the request budget has to win over it. */
-async function setup(options: { pages?: number; timeoutMs?: number; maxRetries?: number; budgetMs?: number } = {}) {
+async function setup(options: {
+  pages?: number;
+  timeoutMs?: number;
+  maxRetries?: number;
+  budgetMs?: number;
+  /** Bodies for the fixture pages; the default is `Body <index>`. */
+  body?: (index: number) => string;
+} = {}) {
   const store = createStore();
   store.ensureLocalWorkspace();
   store.updateWorkspaceRepositories("local", [{
@@ -109,7 +142,11 @@ async function setup(options: { pages?: number; timeoutMs?: number; maxRetries?:
   const repositoryWiki = new RepositoryWikiService(store, client, "openviking");
   const docs = (await repositoryWiki.applyBatch("local", "repo_deadline", Array.from({ length: options.pages ?? 20 }, (_, index) => ({
     kind: "create" as const,
-    input: { path: `page-${index}.md`, title: `Page ${index}`, body: `Body ${index}` },
+    input: {
+      path: `page-${index}.md`,
+      title: `Page ${index}`,
+      body: options.body?.(index) ?? `Body ${index}`,
+    },
   })))).map((result) => result.doc);
   await repositoryWiki.runStorageJobs();
   const budgets: Array<number | undefined> = [];
@@ -119,8 +156,13 @@ async function setup(options: { pages?: number; timeoutMs?: number; maxRetries?:
     return scope(options.budgetMs ?? TEST_BUDGET_MS);
   };
   const app = createMultiremiApp({ store, repositoryWiki, authToken: "root-secret" });
+  // Publishing the fixture reads every page; measure only the request under test.
   openviking.calls.length = 0;
-  const request = (path: string) => app.request(path, { headers: AUTHORIZATION });
+  openviking.maxActiveReads = 0;
+  const request = (path: string, init: RequestInit = {}) => app.request(path, {
+    ...init,
+    headers: { ...AUTHORIZATION, ...(init.headers as Record<string, string> | undefined) },
+  });
   return { store, openviking, docs, app, request, budgets };
 }
 
@@ -187,7 +229,100 @@ describe("repository wiki reads under an OpenViking request deadline", () => {
     expect(budgets).toEqual([undefined]);
   });
 
+  it("answers a hung ?q= search with 504 inside the budget and one timeout line", async () => {
+    const { openviking, docs, request, budgets } = await setup({ pages: 4 });
+    openviking.hang = ({ op }) => op === "GET /api/v1/content/read";
+    const started = Date.now();
+    const { result: response, lines } = await captureTimeoutLogs(() => request(`${WIKI_ROOT}?q=Body%203`));
+    expect(Date.now() - started).toBeLessThan(TEST_BUDGET_MS + 500);
+    expect(response.status).toBe(504);
+    expect(await response.json()).toEqual({ error: "OpenViking did not respond in time", code: "DEADLINE_EXCEEDED" });
+    // The semantic find succeeded; the first hydrated hit spent the budget and was not replayed.
+    expect(openviking.finds()).toBe(1);
+    expect(openviking.reads()).toBe(1);
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]!)).toMatchObject({
+      event: "openviking_request_timeout",
+      method: "GET",
+      route: "/api/workspaces/:id/repos/:repositoryId/wiki",
+      code: "DEADLINE_EXCEEDED",
+      operation: "GET /api/v1/content/read",
+    });
+    expect(budgets).toEqual([undefined]);
+
+    openviking.hang = () => false;
+    const healthy = await request(`${WIKI_ROOT}?q=Body%203`);
+    expect(healthy.status).toBe(200);
+    expect((await healthy.json() as any).docs).toMatchObject([{ id: docs[3]!.id, body: "Body 3" }]);
+    expect(openviking.finds()).toBe(2);
+  });
+
+  it("answers hung backlinks with 504 inside the budget, hydrating at most four pages at once", async () => {
+    const { openviking, docs, request, budgets, store } = await setup({
+      pages: 6,
+      body: (index) => index === 0 ? "Body 0" : `See [[page-0]].\nBody ${index}`,
+    });
+    openviking.hang = ({ op }) => op === "GET /api/v1/content/read";
+    const started = Date.now();
+    const { result: response, lines } = await captureTimeoutLogs(() => request(`${WIKI_ROOT}/${docs[0]!.id}/backlinks`));
+    expect(Date.now() - started).toBeLessThan(TEST_BUDGET_MS + 500);
+    expect(response.status).toBe(504);
+    expect(await response.json()).toEqual({ error: "OpenViking did not respond in time", code: "DEADLINE_EXCEEDED" });
+    // Six pages to hydrate, four in flight, none retried after the deadline.
+    expect(openviking.reads()).toBe(4);
+    expect(openviking.maxActiveReads).toBe(4);
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]!)).toMatchObject({
+      event: "openviking_request_timeout",
+      method: "GET",
+      route: "/api/workspaces/:id/repos/:repositoryId/wiki/:ref/backlinks",
+      code: "DEADLINE_EXCEEDED",
+      operation: "GET /api/v1/content/read",
+    });
+    expect(budgets).toEqual([undefined]);
+
+    openviking.hang = () => false;
+    const healthy = await request(`${WIKI_ROOT}/${docs[0]!.id}/backlinks`);
+    expect(healthy.status).toBe(200);
+    expect((await healthy.json() as any).docs.map((doc: any) => doc.id)).toEqual(docs.slice(1).map((doc) => doc.id));
+
+    // A single unreadable source still degrades to a skipped page instead of failing the request.
+    const metadata = store.listRepositoryWikiDocs("local", "repo_deadline");
+    openviking.files.delete(metadata[1]!.contentUri!);
+    const tolerated = await request(`${WIKI_ROOT}/${docs[0]!.id}/backlinks`);
+    expect(tolerated.status).toBe(200);
+    expect((await tolerated.json() as any).docs.map((doc: any) => doc.id)).toEqual(docs.slice(2).map((doc) => doc.id));
+  });
+
+  it("answers a hung legacy list shim with 504 inside the budget and one timeout line", async () => {
+    const { openviking, docs, request, budgets } = await setup({ pages: 3 });
+    openviking.hang = ({ op }) => op === "GET /api/v1/content/read";
+    const started = Date.now();
+    const { result: response, lines } = await captureTimeoutLogs(() => request(WIKI_ROOT, {
+      headers: { "User-Agent": "Bun/1.3.14" },
+    }));
+    expect(Date.now() - started).toBeLessThan(TEST_BUDGET_MS + 500);
+    expect(response.status).toBe(504);
+    expect(await response.json()).toEqual({ error: "OpenViking did not respond in time", code: "DEADLINE_EXCEEDED" });
+    expect(openviking.reads()).toBe(3);
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]!)).toMatchObject({
+      event: "openviking_request_timeout",
+      method: "GET",
+      route: "/api/workspaces/:id/repos/:repositoryId/wiki",
+      code: "DEADLINE_EXCEEDED",
+      operation: "GET /api/v1/content/read",
+    });
+    expect(budgets).toEqual([undefined]);
+
+    openviking.hang = () => false;
+    const healthy = await request(WIKI_ROOT, { headers: { "User-Agent": "Bun/1.3.14" } });
+    expect(healthy.status).toBe(200);
+    expect((await healthy.json() as any).docs.map((doc: any) => doc.body)).toEqual(docs.map((_, index) => `Body ${index}`));
+  });
+
   it("stops a configured attempt timeout shorter than the budget at the deadline", async () => {
+
     // The default env's shape (attempt timeout below the budget), scaled: 1s attempts inside a 1.5s budget.
     const { openviking, docs, request } = await setup({ pages: 1, timeoutMs: 1_000, maxRetries: 2, budgetMs: 1_500 });
     openviking.hang = ({ op }) => op === "GET /api/v1/content/read";

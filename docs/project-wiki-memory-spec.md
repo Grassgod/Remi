@@ -76,6 +76,8 @@ bun test tests/unit/daemon/wiki-workspace.test.ts tests/unit/multiremi/multiremi
 
 项目文档 API 的一次请求内，所有 OpenViking 调用共享 25 s 总预算，在 nginx 30 s 断开前留出余量。主路径只能用前 20 s，最后 5 s 留给失败写入的回滚；否则正文已替换而 SQL 哈希未更新，文档会因校验和不符而无法读取。单次尝试超时和重试退避都不超过剩余预算，env 设得再大也越不过总预算。预算耗尽或单次超时返回 504（`code` 为 `DEADLINE_EXCEEDED` 或 `TIMEOUT`），并输出一行 `openviking_request_timeout` JSON 日志，含路由、OpenViking 操作和尝试次数。读取及幂等调用（mkdir、按 replace 模式设置标签、find、删除）在超时、网络错误或 5xx 后重试；create、replace、commit 结果未知时不重试，仅在 OpenViking 明确拒绝且未执行（429 或 `details.retryable`）时重试。知识发布按每个输出单独计预算；迁移 backfill、verify 等管理批处理不受此预算约束。
 
+仓库 Wiki 的读入口（单篇、`include_body` 批量、`?q=` 搜索、backlinks，以及兼容 shim 的无参数 `list`）同样在一次请求内共享 25 s 总预算：预算耗尽或单次超时按同一口径返回 504，只打一行 `openviking_request_timeout`。backlinks 与 `include_body` 一样把正文读取的并发限制为 4，并在 deadline 时把超时原样抛出，而不是把该页降级为空正文；其余单篇失败仍按原有容错语义跳过。
+
 读取失败行为依入口而异：单篇和严格列表返回错误；`searchProjectDocs` 及工作区正文列表以最多 16 个并发读取正文，记录并跳过单篇失败。普通项目列表不使用这个上限。因此宽松列表成功不能代替迁移完整性验证。
 
 迁移使用[服务方法](../packages/server/src/project-knowledge/service.ts)和[迁移 API](../packages/server/src/api/routers/projects.ts)。先备份 SQL 与 OpenViking 数据并记录应用版本，再检查：

@@ -132,7 +132,8 @@ export interface RepositoryWikiServiceContract {
 }
 
 /** Read-only on purpose: writes must stay on the service that owns the per-repository write lane. */
-export type RepositoryWikiRequestReader = Pick<RepositoryWikiServiceContract, "get" | "readBodies">;
+export type RepositoryWikiRequestReader =
+  Pick<RepositoryWikiServiceContract, "get" | "readBodies" | "list" | "search" | "backlinks">;
 
 export class RepositoryWikiUnavailableError extends Error {}
 export const REPOSITORY_WIKI_BATCH_LIMIT = 256;
@@ -140,6 +141,8 @@ export const REPOSITORY_WIKI_BATCH_LIMIT = 256;
  *  many documents. See docs/adr/0002-repository-wiki-list-without-bodies.md. */
 export const REPOSITORY_WIKI_BODY_BATCH_LIMIT = 20;
 export const REPOSITORY_WIKI_BODY_READ_CONCURRENCY = 4;
+/** Backlinks hydrate every page of a repository: bound that fan-out like the explicit body batch. */
+export const REPOSITORY_WIKI_BACKLINK_HYDRATE_CONCURRENCY = 4;
 const STORAGE_WRITE_CONCURRENCY = 4;
 const PROMOTION_CHECKPOINT_SIZE = 8;
 
@@ -307,6 +310,9 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
       return await this.hydrate(doc);
     } catch (error) {
       this.operationSignal?.throwIfAborted();
+      // A request that ran out of OpenViking time is not an unreadable page:
+      // handing back an empty body would answer 200 with nothing in it.
+      if (isOpenVikingTimeout(error)) throw error;
       const message = repositoryWikiHydrationError(doc, error);
       log.warn(message);
       return {
@@ -654,7 +660,12 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
   async backlinks(workspaceId: string, repositoryId: string, ref: string): Promise<MultiremiRepositoryWikiDoc[]> {
     const target = this.store.getRepositoryWikiDocByRef(workspaceId, repositoryId, ref);
     if (!target) throw new Error("repository wiki doc not found");
-    const documents = await this.list(workspaceId, repositoryId);
+    const metadata = this.store.listRepositoryWikiDocs(workspaceId, repositoryId);
+    const documents = this.mode === "sql" ? metadata : await mapWithConcurrency(
+      metadata,
+      REPOSITORY_WIKI_BACKLINK_HYDRATE_CONCURRENCY,
+      (doc) => this.hydrateTolerant(doc),
+    );
     return repositoryWikiBacklinks(target, documents);
   }
 
