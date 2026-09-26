@@ -1,0 +1,1361 @@
+{
+  "generatedAt": "2026-09-26T10:45:00.212Z",
+  "runtime": "Bun 1.3.14",
+  "engine": "sqlite counting proxy; db_bytes = JSON.stringify({rows,count}) size (PG bridge stand-in)",
+  "samples": 3,
+  "heartbeat": [
+    {
+      "scenario": "heartbeat.idle",
+      "samples": 3,
+      "queries": 48,
+      "bytes": 9114,
+      "wallMs": 27.8,
+      "top": [
+        {
+          "sql": "SELECT * FROM multiremi_workspace_ssh_mesh WHERE workspace_id = ?",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 4,
+          "bytes": 2537
+        },
+        {
+          "sql": "SELECT * FROM multiremi_daemon_ssh_mesh_states WHERE workspace_id = ? AND daemon_id = ?",
+          "count": 3,
+          "bytes": 643
+        },
+        {
+          "sql": "SELECT state.* FROM multiremi_daemon_ssh_mesh_states state WHERE state.workspace_id = ? AND ( COALESCE(state.node_kind, 'runtime') = 'control_plane' OR ( COALESCE(state.node_kind, 'runtime') = 'runtime' AND EXISTS ( SELECT 1 FROM multiremi_runtimes runtime WHERE COALESCE(runtime.workspace_id, 'local') = state.workspace_id AND runtime.daemon_id = state.daemon_id ) AND NOT EXISTS ( SELECT 1 FROM multiremi_daemon_retirements retired WHERE retired.workspace_id = state.workspace_id AND retired.daemon_id = state.daemon_id ) ) ) ORDER BY state.daemon_id ASC",
+          "count": 2,
+          "bytes": 1202
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspace_members WHERE workspace_id = ? AND archived_at IS NULL ORDER BY name ASC",
+          "count": 2,
+          "bytes": 504
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspaces WHERE id = ?",
+          "count": 2,
+          "bytes": 500
+        },
+        {
+          "sql": "SELECT COALESCE(workspace_id, 'local') AS workspace_id, daemon_id FROM multiremi_runtimes WHERE id = ?",
+          "count": 2,
+          "bytes": 144
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "SELECT fragment, auth_token, revision FROM multiremi_relay_config WHERE workspace_id = ? AND engine = ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+          "count": 2,
+          "bytes": 42
+        }
+      ],
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "scenario": "heartbeat.store_only.idle",
+      "samples": 3,
+      "queries": 15,
+      "bytes": 3136,
+      "wallMs": 1.1,
+      "top": [
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 2,
+          "bytes": 1250
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?",
+          "count": 1,
+          "bytes": 598
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE id = ?",
+          "count": 1,
+          "bytes": 598
+        },
+        {
+          "sql": "SELECT 'update' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_update_requests WHERE runtime_id = ? AND status = 'pending' AND updated_at >= '2026-09-26T10:42:50.234Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_update_requests WHERE runtime_id = ? AND ((status = 'pending' AND updated_at < '2026-09-26T10:42:50.234Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:24:50.234Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'model_list' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_model_list_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:44:20.234Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_model_list_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:44:20.234Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:50.234Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'command' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:50.234Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:50.234Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:24:50.234Z'))) AS sweep, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND status IN ('completed', 'failed', 'timeout') AND (command <> '' OR args <> '[]')) AS housekeeping UNION ALL SELECT 'local_skills' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_list_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:50.234Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_list_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:50.234Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:50.234Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'local_skill_import' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_import_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:50.234Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_import_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:50.234Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:50.234Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'bot_menu' AS family, EXISTS (SELECT 1 FROM multiremi_bot_menu_publish_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:50.234Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_bot_menu_publish_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:50.234Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:39:50.234Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'directory_scan' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_directory_scan_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:50.234Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_directory_scan_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:50.234Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:50.234Z'))) AS sweep, 0 AS housekeeping",
+          "count": 1,
+          "bytes": 480
+        },
+        {
+          "sql": "INSERT INTO multiremi_agent_plugin_workspace_locks (workspace_id, updated_at) VALUES (?, ?) ON CONFLICT(workspace_id) DO NOTHING",
+          "count": 1,
+          "bytes": 21
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE workspace_id = ?",
+          "count": 1,
+          "bytes": 21
+        },
+        {
+          "sql": "SELECT DISTINCT snapshot.plugin_id, snapshot.version_id, snapshot.provider FROM multiremi_task_plugin_snapshots snapshot JOIN multiremi_tasks task ON task.id = snapshot.task_id WHERE task.workspace_id = ? AND task.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory', 'awaiting_human')",
+          "count": 1,
+          "bytes": 21
+        },
+        {
+          "sql": "SELECT id, pending_heartbeat_count FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1 AND status = 'pending' AND last_attempt_at IS NULL",
+          "count": 1,
+          "bytes": 21
+        },
+        {
+          "sql": "SELECT p.id AS plugin_id, p.active_version_id, p.candidate_version_id, p.provider, b.version_policy, b.version_id FROM multiremi_agent_plugin_bindings b JOIN multiremi_agents a ON a.id = b.agent_id JOIN multiremi_agent_plugins p ON p.id = b.plugin_id WHERE a.workspace_id = ? AND p.workspace_id = a.workspace_id AND a.archived_at IS NULL AND p.archived_at IS NULL AND b.enabled = 1",
+          "count": 1,
+          "bytes": 21
+        }
+      ],
+      "detail": {}
+    },
+    {
+      "scenario": "heartbeat.store_only.pending.every_family",
+      "samples": 3,
+      "queries": 29,
+      "bytes": 6869,
+      "wallMs": 2.4,
+      "top": [
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 4,
+          "bytes": 2500
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?",
+          "count": 1,
+          "bytes": 598
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE id = ?",
+          "count": 1,
+          "bytes": 598
+        },
+        {
+          "sql": "SELECT 'update' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_update_requests WHERE runtime_id = ? AND status = 'pending' AND updated_at >= '2026-09-26T10:42:50.680Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_update_requests WHERE runtime_id = ? AND ((status = 'pending' AND updated_at < '2026-09-26T10:42:50.680Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:24:50.680Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'model_list' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_model_list_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:44:20.680Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_model_list_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:44:20.680Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:50.680Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'command' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:50.680Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:50.680Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:24:50.680Z'))) AS sweep, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND status IN ('completed', 'failed', 'timeout') AND (command <> '' OR args <> '[]')) AS housekeeping UNION ALL SELECT 'local_skills' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_list_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:50.680Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_list_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:50.680Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:50.680Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'local_skill_import' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_import_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:50.680Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_import_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:50.680Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:50.680Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'bot_menu' AS family, EXISTS (SELECT 1 FROM multiremi_bot_menu_publish_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:50.680Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_bot_menu_publish_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:50.680Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:39:50.680Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'directory_scan' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_directory_scan_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:50.680Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_directory_scan_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:50.680Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:50.680Z'))) AS sweep, 0 AS housekeeping",
+          "count": 1,
+          "bytes": 480
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_command_requests SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ( SELECT id FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND status = 'pending' ORDER BY created_at ASC LIMIT 1 ) RETURNING *",
+          "count": 1,
+          "bytes": 442
+        },
+        {
+          "sql": "UPDATE multiremi_bot_menu_publish_requests SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ( SELECT id FROM multiremi_bot_menu_publish_requests WHERE runtime_id = ? AND status = 'pending' ORDER BY created_at ASC LIMIT 1 ) RETURNING *",
+          "count": 1,
+          "bytes": 386
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_local_skill_import_requests SET status = 'running', run_started_at = ?, updated_at = ? WHERE id IN ( SELECT id FROM multiremi_runtime_local_skill_import_requests WHERE runtime_id = ? AND status = 'pending' ORDER BY created_at ASC LIMIT ? ) RETURNING *",
+          "count": 1,
+          "bytes": 355
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_directory_scan_requests SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ( SELECT id FROM multiremi_runtime_directory_scan_requests WHERE runtime_id = ? AND status = 'pending' ORDER BY created_at ASC LIMIT 1 ) RETURNING *",
+          "count": 1,
+          "bytes": 322
+        }
+      ],
+      "detail": {}
+    },
+    {
+      "scenario": "heartbeat.pending.update",
+      "samples": 3,
+      "queries": 55,
+      "bytes": 10859,
+      "wallMs": 10.9,
+      "top": [
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 6,
+          "bytes": 3861
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspace_ssh_mesh WHERE workspace_id = ?",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT * FROM multiremi_daemon_ssh_mesh_states WHERE workspace_id = ? AND daemon_id = ?",
+          "count": 3,
+          "bytes": 643
+        },
+        {
+          "sql": "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+          "count": 3,
+          "bytes": 63
+        },
+        {
+          "sql": "SELECT state.* FROM multiremi_daemon_ssh_mesh_states state WHERE state.workspace_id = ? AND ( COALESCE(state.node_kind, 'runtime') = 'control_plane' OR ( COALESCE(state.node_kind, 'runtime') = 'runtime' AND EXISTS ( SELECT 1 FROM multiremi_runtimes runtime WHERE COALESCE(runtime.workspace_id, 'local') = state.workspace_id AND runtime.daemon_id = state.daemon_id ) AND NOT EXISTS ( SELECT 1 FROM multiremi_daemon_retirements retired WHERE retired.workspace_id = state.workspace_id AND retired.daemon_id = state.daemon_id ) ) ) ORDER BY state.daemon_id ASC",
+          "count": 2,
+          "bytes": 1202
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspace_members WHERE workspace_id = ? AND archived_at IS NULL ORDER BY name ASC",
+          "count": 2,
+          "bytes": 504
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspaces WHERE id = ?",
+          "count": 2,
+          "bytes": 500
+        },
+        {
+          "sql": "SELECT COALESCE(workspace_id, 'local') AS workspace_id, daemon_id FROM multiremi_runtimes WHERE id = ?",
+          "count": 2,
+          "bytes": 144
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "SELECT fragment, auth_token, revision FROM multiremi_relay_config WHERE workspace_id = ? AND engine = ?",
+          "count": 2,
+          "bytes": 42
+        }
+      ],
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "scenario": "heartbeat.store_only.pending.update",
+      "samples": 3,
+      "queries": 22,
+      "bytes": 4807,
+      "wallMs": 1.7,
+      "top": [
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 4,
+          "bytes": 2500
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?",
+          "count": 1,
+          "bytes": 598
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE id = ?",
+          "count": 1,
+          "bytes": 598
+        },
+        {
+          "sql": "SELECT 'update' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_update_requests WHERE runtime_id = ? AND status = 'pending' AND updated_at >= '2026-09-26T10:42:51.595Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_update_requests WHERE runtime_id = ? AND ((status = 'pending' AND updated_at < '2026-09-26T10:42:51.595Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:24:51.595Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'model_list' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_model_list_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:44:21.595Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_model_list_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:44:21.595Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:51.595Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'command' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:51.595Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:51.595Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:24:51.595Z'))) AS sweep, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND status IN ('completed', 'failed', 'timeout') AND (command <> '' OR args <> '[]')) AS housekeeping UNION ALL SELECT 'local_skills' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_list_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:51.595Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_list_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:51.595Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:51.595Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'local_skill_import' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_import_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:51.595Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_import_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:51.595Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:51.595Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'bot_menu' AS family, EXISTS (SELECT 1 FROM multiremi_bot_menu_publish_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:51.595Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_bot_menu_publish_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:51.595Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:39:51.595Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'directory_scan' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_directory_scan_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:51.595Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_directory_scan_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:51.595Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:51.595Z'))) AS sweep, 0 AS housekeeping",
+          "count": 1,
+          "bytes": 480
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_update_requests SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ( SELECT id FROM multiremi_runtime_update_requests WHERE runtime_id = ? AND status = 'pending' ORDER BY created_at ASC LIMIT 1 ) RETURNING *",
+          "count": 1,
+          "bytes": 281
+        },
+        {
+          "sql": "SELECT id, scope FROM multiremi_runtime_update_requests WHERE runtime_id = ? AND status = 'pending' ORDER BY created_at ASC LIMIT 1",
+          "count": 1,
+          "bytes": 60
+        },
+        {
+          "sql": "SELECT id FROM multiremi_runtimes WHERE id IN (?, ?) OR daemon_id IN (?, ?) OR legacy_daemon_id IN (?, ?)",
+          "count": 1,
+          "bytes": 38
+        },
+        {
+          "sql": "INSERT INTO multiremi_agent_plugin_workspace_locks (workspace_id, updated_at) VALUES (?, ?) ON CONFLICT(workspace_id) DO NOTHING",
+          "count": 1,
+          "bytes": 21
+        }
+      ],
+      "detail": {}
+    },
+    {
+      "scenario": "heartbeat.pending.model_list",
+      "samples": 3,
+      "queries": 49,
+      "bytes": 9368,
+      "wallMs": 10.6,
+      "top": [
+        {
+          "sql": "SELECT * FROM multiremi_workspace_ssh_mesh WHERE workspace_id = ?",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 4,
+          "bytes": 2537
+        },
+        {
+          "sql": "SELECT * FROM multiremi_daemon_ssh_mesh_states WHERE workspace_id = ? AND daemon_id = ?",
+          "count": 3,
+          "bytes": 643
+        },
+        {
+          "sql": "SELECT state.* FROM multiremi_daemon_ssh_mesh_states state WHERE state.workspace_id = ? AND ( COALESCE(state.node_kind, 'runtime') = 'control_plane' OR ( COALESCE(state.node_kind, 'runtime') = 'runtime' AND EXISTS ( SELECT 1 FROM multiremi_runtimes runtime WHERE COALESCE(runtime.workspace_id, 'local') = state.workspace_id AND runtime.daemon_id = state.daemon_id ) AND NOT EXISTS ( SELECT 1 FROM multiremi_daemon_retirements retired WHERE retired.workspace_id = state.workspace_id AND retired.daemon_id = state.daemon_id ) ) ) ORDER BY state.daemon_id ASC",
+          "count": 2,
+          "bytes": 1202
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspace_members WHERE workspace_id = ? AND archived_at IS NULL ORDER BY name ASC",
+          "count": 2,
+          "bytes": 504
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspaces WHERE id = ?",
+          "count": 2,
+          "bytes": 500
+        },
+        {
+          "sql": "SELECT COALESCE(workspace_id, 'local') AS workspace_id, daemon_id FROM multiremi_runtimes WHERE id = ?",
+          "count": 2,
+          "bytes": 144
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "SELECT fragment, auth_token, revision FROM multiremi_relay_config WHERE workspace_id = ? AND engine = ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+          "count": 2,
+          "bytes": 42
+        }
+      ],
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "scenario": "heartbeat.store_only.pending.model_list",
+      "samples": 3,
+      "queries": 16,
+      "bytes": 3390,
+      "wallMs": 1.5,
+      "top": [
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 2,
+          "bytes": 1250
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?",
+          "count": 1,
+          "bytes": 598
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE id = ?",
+          "count": 1,
+          "bytes": 598
+        },
+        {
+          "sql": "SELECT 'update' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_update_requests WHERE runtime_id = ? AND status = 'pending' AND updated_at >= '2026-09-26T10:42:52.518Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_update_requests WHERE runtime_id = ? AND ((status = 'pending' AND updated_at < '2026-09-26T10:42:52.518Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:24:52.518Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'model_list' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_model_list_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:44:22.518Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_model_list_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:44:22.518Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:52.518Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'command' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:52.518Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:52.518Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:24:52.518Z'))) AS sweep, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND status IN ('completed', 'failed', 'timeout') AND (command <> '' OR args <> '[]')) AS housekeeping UNION ALL SELECT 'local_skills' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_list_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:52.518Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_list_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:52.518Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:52.518Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'local_skill_import' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_import_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:52.518Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_import_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:52.518Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:52.518Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'bot_menu' AS family, EXISTS (SELECT 1 FROM multiremi_bot_menu_publish_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:52.518Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_bot_menu_publish_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:52.518Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:39:52.518Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'directory_scan' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_directory_scan_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:52.518Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_directory_scan_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:52.518Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:52.518Z'))) AS sweep, 0 AS housekeeping",
+          "count": 1,
+          "bytes": 480
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_model_list_requests SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ( SELECT id FROM multiremi_runtime_model_list_requests WHERE runtime_id = ? AND status = 'pending' ORDER BY created_at ASC LIMIT 1 ) RETURNING *",
+          "count": 1,
+          "bytes": 254
+        },
+        {
+          "sql": "INSERT INTO multiremi_agent_plugin_workspace_locks (workspace_id, updated_at) VALUES (?, ?) ON CONFLICT(workspace_id) DO NOTHING",
+          "count": 1,
+          "bytes": 21
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE workspace_id = ?",
+          "count": 1,
+          "bytes": 21
+        },
+        {
+          "sql": "SELECT DISTINCT snapshot.plugin_id, snapshot.version_id, snapshot.provider FROM multiremi_task_plugin_snapshots snapshot JOIN multiremi_tasks task ON task.id = snapshot.task_id WHERE task.workspace_id = ? AND task.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory', 'awaiting_human')",
+          "count": 1,
+          "bytes": 21
+        },
+        {
+          "sql": "SELECT id, pending_heartbeat_count FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1 AND status = 'pending' AND last_attempt_at IS NULL",
+          "count": 1,
+          "bytes": 21
+        }
+      ],
+      "detail": {}
+    },
+    {
+      "scenario": "heartbeat.pending.command",
+      "samples": 3,
+      "queries": 50,
+      "bytes": 9577,
+      "wallMs": 13.4,
+      "top": [
+        {
+          "sql": "SELECT * FROM multiremi_workspace_ssh_mesh WHERE workspace_id = ?",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 4,
+          "bytes": 2537
+        },
+        {
+          "sql": "SELECT * FROM multiremi_daemon_ssh_mesh_states WHERE workspace_id = ? AND daemon_id = ?",
+          "count": 3,
+          "bytes": 643
+        },
+        {
+          "sql": "SELECT state.* FROM multiremi_daemon_ssh_mesh_states state WHERE state.workspace_id = ? AND ( COALESCE(state.node_kind, 'runtime') = 'control_plane' OR ( COALESCE(state.node_kind, 'runtime') = 'runtime' AND EXISTS ( SELECT 1 FROM multiremi_runtimes runtime WHERE COALESCE(runtime.workspace_id, 'local') = state.workspace_id AND runtime.daemon_id = state.daemon_id ) AND NOT EXISTS ( SELECT 1 FROM multiremi_daemon_retirements retired WHERE retired.workspace_id = state.workspace_id AND retired.daemon_id = state.daemon_id ) ) ) ORDER BY state.daemon_id ASC",
+          "count": 2,
+          "bytes": 1202
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspace_members WHERE workspace_id = ? AND archived_at IS NULL ORDER BY name ASC",
+          "count": 2,
+          "bytes": 504
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspaces WHERE id = ?",
+          "count": 2,
+          "bytes": 500
+        },
+        {
+          "sql": "SELECT COALESCE(workspace_id, 'local') AS workspace_id, daemon_id FROM multiremi_runtimes WHERE id = ?",
+          "count": 2,
+          "bytes": 144
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "SELECT fragment, auth_token, revision FROM multiremi_relay_config WHERE workspace_id = ? AND engine = ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+          "count": 2,
+          "bytes": 42
+        }
+      ],
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "scenario": "heartbeat.store_only.pending.command",
+      "samples": 3,
+      "queries": 17,
+      "bytes": 3599,
+      "wallMs": 1,
+      "top": [
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 2,
+          "bytes": 1250
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?",
+          "count": 1,
+          "bytes": 598
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE id = ?",
+          "count": 1,
+          "bytes": 598
+        },
+        {
+          "sql": "SELECT 'update' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_update_requests WHERE runtime_id = ? AND status = 'pending' AND updated_at >= '2026-09-26T10:42:53.431Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_update_requests WHERE runtime_id = ? AND ((status = 'pending' AND updated_at < '2026-09-26T10:42:53.431Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:24:53.431Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'model_list' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_model_list_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:44:23.431Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_model_list_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:44:23.431Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:53.431Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'command' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:53.431Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:53.431Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:24:53.431Z'))) AS sweep, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND status IN ('completed', 'failed', 'timeout') AND (command <> '' OR args <> '[]')) AS housekeeping UNION ALL SELECT 'local_skills' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_list_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:53.431Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_list_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:53.431Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:53.431Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'local_skill_import' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_import_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:53.431Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_import_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:53.431Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:53.431Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'bot_menu' AS family, EXISTS (SELECT 1 FROM multiremi_bot_menu_publish_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:53.431Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_bot_menu_publish_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:53.431Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:39:53.431Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'directory_scan' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_directory_scan_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:53.431Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_directory_scan_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:53.431Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:53.431Z'))) AS sweep, 0 AS housekeeping",
+          "count": 1,
+          "bytes": 480
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_command_requests SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ( SELECT id FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND status = 'pending' ORDER BY created_at ASC LIMIT 1 ) RETURNING *",
+          "count": 1,
+          "bytes": 442
+        },
+        {
+          "sql": "INSERT INTO multiremi_agent_plugin_workspace_locks (workspace_id, updated_at) VALUES (?, ?) ON CONFLICT(workspace_id) DO NOTHING",
+          "count": 1,
+          "bytes": 21
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE workspace_id = ?",
+          "count": 1,
+          "bytes": 21
+        },
+        {
+          "sql": "SELECT DISTINCT snapshot.plugin_id, snapshot.version_id, snapshot.provider FROM multiremi_task_plugin_snapshots snapshot JOIN multiremi_tasks task ON task.id = snapshot.task_id WHERE task.workspace_id = ? AND task.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory', 'awaiting_human')",
+          "count": 1,
+          "bytes": 21
+        },
+        {
+          "sql": "SELECT id, pending_heartbeat_count FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1 AND status = 'pending' AND last_attempt_at IS NULL",
+          "count": 1,
+          "bytes": 21
+        }
+      ],
+      "detail": {}
+    },
+    {
+      "scenario": "heartbeat.pending.bot_menu",
+      "samples": 3,
+      "queries": 49,
+      "bytes": 9500,
+      "wallMs": 9.7,
+      "top": [
+        {
+          "sql": "SELECT * FROM multiremi_workspace_ssh_mesh WHERE workspace_id = ?",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 4,
+          "bytes": 2537
+        },
+        {
+          "sql": "SELECT * FROM multiremi_daemon_ssh_mesh_states WHERE workspace_id = ? AND daemon_id = ?",
+          "count": 3,
+          "bytes": 643
+        },
+        {
+          "sql": "SELECT state.* FROM multiremi_daemon_ssh_mesh_states state WHERE state.workspace_id = ? AND ( COALESCE(state.node_kind, 'runtime') = 'control_plane' OR ( COALESCE(state.node_kind, 'runtime') = 'runtime' AND EXISTS ( SELECT 1 FROM multiremi_runtimes runtime WHERE COALESCE(runtime.workspace_id, 'local') = state.workspace_id AND runtime.daemon_id = state.daemon_id ) AND NOT EXISTS ( SELECT 1 FROM multiremi_daemon_retirements retired WHERE retired.workspace_id = state.workspace_id AND retired.daemon_id = state.daemon_id ) ) ) ORDER BY state.daemon_id ASC",
+          "count": 2,
+          "bytes": 1202
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspace_members WHERE workspace_id = ? AND archived_at IS NULL ORDER BY name ASC",
+          "count": 2,
+          "bytes": 504
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspaces WHERE id = ?",
+          "count": 2,
+          "bytes": 500
+        },
+        {
+          "sql": "SELECT COALESCE(workspace_id, 'local') AS workspace_id, daemon_id FROM multiremi_runtimes WHERE id = ?",
+          "count": 2,
+          "bytes": 144
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "SELECT fragment, auth_token, revision FROM multiremi_relay_config WHERE workspace_id = ? AND engine = ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+          "count": 2,
+          "bytes": 42
+        }
+      ],
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "scenario": "heartbeat.store_only.pending.bot_menu",
+      "samples": 3,
+      "queries": 16,
+      "bytes": 3522,
+      "wallMs": 0.9,
+      "top": [
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 2,
+          "bytes": 1250
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?",
+          "count": 1,
+          "bytes": 598
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE id = ?",
+          "count": 1,
+          "bytes": 598
+        },
+        {
+          "sql": "SELECT 'update' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_update_requests WHERE runtime_id = ? AND status = 'pending' AND updated_at >= '2026-09-26T10:42:54.340Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_update_requests WHERE runtime_id = ? AND ((status = 'pending' AND updated_at < '2026-09-26T10:42:54.340Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:24:54.340Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'model_list' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_model_list_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:44:24.340Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_model_list_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:44:24.340Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:54.340Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'command' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:54.340Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:54.340Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:24:54.340Z'))) AS sweep, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND status IN ('completed', 'failed', 'timeout') AND (command <> '' OR args <> '[]')) AS housekeeping UNION ALL SELECT 'local_skills' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_list_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:54.340Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_list_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:54.340Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:54.340Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'local_skill_import' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_import_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:54.340Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_import_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:54.340Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:54.340Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'bot_menu' AS family, EXISTS (SELECT 1 FROM multiremi_bot_menu_publish_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:54.340Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_bot_menu_publish_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:54.340Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:39:54.340Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'directory_scan' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_directory_scan_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:54.340Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_directory_scan_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:54.340Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:54.340Z'))) AS sweep, 0 AS housekeeping",
+          "count": 1,
+          "bytes": 480
+        },
+        {
+          "sql": "UPDATE multiremi_bot_menu_publish_requests SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ( SELECT id FROM multiremi_bot_menu_publish_requests WHERE runtime_id = ? AND status = 'pending' ORDER BY created_at ASC LIMIT 1 ) RETURNING *",
+          "count": 1,
+          "bytes": 386
+        },
+        {
+          "sql": "INSERT INTO multiremi_agent_plugin_workspace_locks (workspace_id, updated_at) VALUES (?, ?) ON CONFLICT(workspace_id) DO NOTHING",
+          "count": 1,
+          "bytes": 21
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE workspace_id = ?",
+          "count": 1,
+          "bytes": 21
+        },
+        {
+          "sql": "SELECT DISTINCT snapshot.plugin_id, snapshot.version_id, snapshot.provider FROM multiremi_task_plugin_snapshots snapshot JOIN multiremi_tasks task ON task.id = snapshot.task_id WHERE task.workspace_id = ? AND task.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory', 'awaiting_human')",
+          "count": 1,
+          "bytes": 21
+        },
+        {
+          "sql": "SELECT id, pending_heartbeat_count FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1 AND status = 'pending' AND last_attempt_at IS NULL",
+          "count": 1,
+          "bytes": 21
+        }
+      ],
+      "detail": {}
+    },
+    {
+      "scenario": "heartbeat.pending.local_skills",
+      "samples": 3,
+      "queries": 49,
+      "bytes": 9396,
+      "wallMs": 10.2,
+      "top": [
+        {
+          "sql": "SELECT * FROM multiremi_workspace_ssh_mesh WHERE workspace_id = ?",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 4,
+          "bytes": 2537
+        },
+        {
+          "sql": "SELECT * FROM multiremi_daemon_ssh_mesh_states WHERE workspace_id = ? AND daemon_id = ?",
+          "count": 3,
+          "bytes": 643
+        },
+        {
+          "sql": "SELECT state.* FROM multiremi_daemon_ssh_mesh_states state WHERE state.workspace_id = ? AND ( COALESCE(state.node_kind, 'runtime') = 'control_plane' OR ( COALESCE(state.node_kind, 'runtime') = 'runtime' AND EXISTS ( SELECT 1 FROM multiremi_runtimes runtime WHERE COALESCE(runtime.workspace_id, 'local') = state.workspace_id AND runtime.daemon_id = state.daemon_id ) AND NOT EXISTS ( SELECT 1 FROM multiremi_daemon_retirements retired WHERE retired.workspace_id = state.workspace_id AND retired.daemon_id = state.daemon_id ) ) ) ORDER BY state.daemon_id ASC",
+          "count": 2,
+          "bytes": 1202
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspace_members WHERE workspace_id = ? AND archived_at IS NULL ORDER BY name ASC",
+          "count": 2,
+          "bytes": 504
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspaces WHERE id = ?",
+          "count": 2,
+          "bytes": 500
+        },
+        {
+          "sql": "SELECT COALESCE(workspace_id, 'local') AS workspace_id, daemon_id FROM multiremi_runtimes WHERE id = ?",
+          "count": 2,
+          "bytes": 144
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "SELECT fragment, auth_token, revision FROM multiremi_relay_config WHERE workspace_id = ? AND engine = ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+          "count": 2,
+          "bytes": 42
+        }
+      ],
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "scenario": "heartbeat.store_only.pending.local_skills",
+      "samples": 3,
+      "queries": 16,
+      "bytes": 3418,
+      "wallMs": 1,
+      "top": [
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 2,
+          "bytes": 1250
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?",
+          "count": 1,
+          "bytes": 598
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE id = ?",
+          "count": 1,
+          "bytes": 598
+        },
+        {
+          "sql": "SELECT 'update' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_update_requests WHERE runtime_id = ? AND status = 'pending' AND updated_at >= '2026-09-26T10:42:55.258Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_update_requests WHERE runtime_id = ? AND ((status = 'pending' AND updated_at < '2026-09-26T10:42:55.258Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:24:55.258Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'model_list' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_model_list_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:44:25.258Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_model_list_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:44:25.258Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:55.258Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'command' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:55.258Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:55.258Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:24:55.258Z'))) AS sweep, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND status IN ('completed', 'failed', 'timeout') AND (command <> '' OR args <> '[]')) AS housekeeping UNION ALL SELECT 'local_skills' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_list_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:55.258Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_list_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:55.258Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:55.258Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'local_skill_import' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_import_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:55.258Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_import_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:55.258Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:55.258Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'bot_menu' AS family, EXISTS (SELECT 1 FROM multiremi_bot_menu_publish_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:55.258Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_bot_menu_publish_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:55.258Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:39:55.258Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'directory_scan' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_directory_scan_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:55.258Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_directory_scan_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:55.258Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:55.258Z'))) AS sweep, 0 AS housekeeping",
+          "count": 1,
+          "bytes": 480
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_local_skill_list_requests SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ( SELECT id FROM multiremi_runtime_local_skill_list_requests WHERE runtime_id = ? AND status = 'pending' ORDER BY created_at ASC LIMIT 1 ) RETURNING *",
+          "count": 1,
+          "bytes": 282
+        },
+        {
+          "sql": "INSERT INTO multiremi_agent_plugin_workspace_locks (workspace_id, updated_at) VALUES (?, ?) ON CONFLICT(workspace_id) DO NOTHING",
+          "count": 1,
+          "bytes": 21
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE workspace_id = ?",
+          "count": 1,
+          "bytes": 21
+        },
+        {
+          "sql": "SELECT DISTINCT snapshot.plugin_id, snapshot.version_id, snapshot.provider FROM multiremi_task_plugin_snapshots snapshot JOIN multiremi_tasks task ON task.id = snapshot.task_id WHERE task.workspace_id = ? AND task.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory', 'awaiting_human')",
+          "count": 1,
+          "bytes": 21
+        },
+        {
+          "sql": "SELECT id, pending_heartbeat_count FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1 AND status = 'pending' AND last_attempt_at IS NULL",
+          "count": 1,
+          "bytes": 21
+        }
+      ],
+      "detail": {}
+    },
+    {
+      "scenario": "heartbeat.pending.directory_scan",
+      "samples": 3,
+      "queries": 49,
+      "bytes": 9436,
+      "wallMs": 10,
+      "top": [
+        {
+          "sql": "SELECT * FROM multiremi_workspace_ssh_mesh WHERE workspace_id = ?",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 4,
+          "bytes": 2537
+        },
+        {
+          "sql": "SELECT * FROM multiremi_daemon_ssh_mesh_states WHERE workspace_id = ? AND daemon_id = ?",
+          "count": 3,
+          "bytes": 643
+        },
+        {
+          "sql": "SELECT state.* FROM multiremi_daemon_ssh_mesh_states state WHERE state.workspace_id = ? AND ( COALESCE(state.node_kind, 'runtime') = 'control_plane' OR ( COALESCE(state.node_kind, 'runtime') = 'runtime' AND EXISTS ( SELECT 1 FROM multiremi_runtimes runtime WHERE COALESCE(runtime.workspace_id, 'local') = state.workspace_id AND runtime.daemon_id = state.daemon_id ) AND NOT EXISTS ( SELECT 1 FROM multiremi_daemon_retirements retired WHERE retired.workspace_id = state.workspace_id AND retired.daemon_id = state.daemon_id ) ) ) ORDER BY state.daemon_id ASC",
+          "count": 2,
+          "bytes": 1202
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspace_members WHERE workspace_id = ? AND archived_at IS NULL ORDER BY name ASC",
+          "count": 2,
+          "bytes": 504
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspaces WHERE id = ?",
+          "count": 2,
+          "bytes": 500
+        },
+        {
+          "sql": "SELECT COALESCE(workspace_id, 'local') AS workspace_id, daemon_id FROM multiremi_runtimes WHERE id = ?",
+          "count": 2,
+          "bytes": 144
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "SELECT fragment, auth_token, revision FROM multiremi_relay_config WHERE workspace_id = ? AND engine = ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+          "count": 2,
+          "bytes": 42
+        }
+      ],
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "scenario": "heartbeat.store_only.pending.directory_scan",
+      "samples": 3,
+      "queries": 16,
+      "bytes": 3458,
+      "wallMs": 1.1,
+      "top": [
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 2,
+          "bytes": 1250
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?",
+          "count": 1,
+          "bytes": 598
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE id = ?",
+          "count": 1,
+          "bytes": 598
+        },
+        {
+          "sql": "SELECT 'update' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_update_requests WHERE runtime_id = ? AND status = 'pending' AND updated_at >= '2026-09-26T10:42:56.170Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_update_requests WHERE runtime_id = ? AND ((status = 'pending' AND updated_at < '2026-09-26T10:42:56.170Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:24:56.170Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'model_list' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_model_list_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:44:26.170Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_model_list_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:44:26.170Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:56.170Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'command' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:56.170Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:56.170Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:24:56.170Z'))) AS sweep, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND status IN ('completed', 'failed', 'timeout') AND (command <> '' OR args <> '[]')) AS housekeeping UNION ALL SELECT 'local_skills' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_list_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:56.170Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_list_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:56.170Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:56.170Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'local_skill_import' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_import_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:56.170Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_import_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:56.170Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:56.170Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'bot_menu' AS family, EXISTS (SELECT 1 FROM multiremi_bot_menu_publish_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:56.170Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_bot_menu_publish_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:56.170Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:39:56.170Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'directory_scan' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_directory_scan_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:56.170Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_directory_scan_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:56.170Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:56.170Z'))) AS sweep, 0 AS housekeeping",
+          "count": 1,
+          "bytes": 480
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_directory_scan_requests SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ( SELECT id FROM multiremi_runtime_directory_scan_requests WHERE runtime_id = ? AND status = 'pending' ORDER BY created_at ASC LIMIT 1 ) RETURNING *",
+          "count": 1,
+          "bytes": 322
+        },
+        {
+          "sql": "INSERT INTO multiremi_agent_plugin_workspace_locks (workspace_id, updated_at) VALUES (?, ?) ON CONFLICT(workspace_id) DO NOTHING",
+          "count": 1,
+          "bytes": 21
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE workspace_id = ?",
+          "count": 1,
+          "bytes": 21
+        },
+        {
+          "sql": "SELECT DISTINCT snapshot.plugin_id, snapshot.version_id, snapshot.provider FROM multiremi_task_plugin_snapshots snapshot JOIN multiremi_tasks task ON task.id = snapshot.task_id WHERE task.workspace_id = ? AND task.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory', 'awaiting_human')",
+          "count": 1,
+          "bytes": 21
+        },
+        {
+          "sql": "SELECT id, pending_heartbeat_count FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1 AND status = 'pending' AND last_attempt_at IS NULL",
+          "count": 1,
+          "bytes": 21
+        }
+      ],
+      "detail": {}
+    },
+    {
+      "scenario": "heartbeat.pending.local_skill_import",
+      "samples": 3,
+      "queries": 49,
+      "bytes": 9469,
+      "wallMs": 10,
+      "top": [
+        {
+          "sql": "SELECT * FROM multiremi_workspace_ssh_mesh WHERE workspace_id = ?",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 4,
+          "bytes": 2537
+        },
+        {
+          "sql": "SELECT * FROM multiremi_daemon_ssh_mesh_states WHERE workspace_id = ? AND daemon_id = ?",
+          "count": 3,
+          "bytes": 643
+        },
+        {
+          "sql": "SELECT state.* FROM multiremi_daemon_ssh_mesh_states state WHERE state.workspace_id = ? AND ( COALESCE(state.node_kind, 'runtime') = 'control_plane' OR ( COALESCE(state.node_kind, 'runtime') = 'runtime' AND EXISTS ( SELECT 1 FROM multiremi_runtimes runtime WHERE COALESCE(runtime.workspace_id, 'local') = state.workspace_id AND runtime.daemon_id = state.daemon_id ) AND NOT EXISTS ( SELECT 1 FROM multiremi_daemon_retirements retired WHERE retired.workspace_id = state.workspace_id AND retired.daemon_id = state.daemon_id ) ) ) ORDER BY state.daemon_id ASC",
+          "count": 2,
+          "bytes": 1202
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspace_members WHERE workspace_id = ? AND archived_at IS NULL ORDER BY name ASC",
+          "count": 2,
+          "bytes": 504
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspaces WHERE id = ?",
+          "count": 2,
+          "bytes": 500
+        },
+        {
+          "sql": "SELECT COALESCE(workspace_id, 'local') AS workspace_id, daemon_id FROM multiremi_runtimes WHERE id = ?",
+          "count": 2,
+          "bytes": 144
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "SELECT fragment, auth_token, revision FROM multiremi_relay_config WHERE workspace_id = ? AND engine = ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+          "count": 2,
+          "bytes": 42
+        }
+      ],
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "scenario": "heartbeat.store_only.pending.local_skill_import",
+      "samples": 3,
+      "queries": 16,
+      "bytes": 3491,
+      "wallMs": 1.1,
+      "top": [
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 2,
+          "bytes": 1250
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?",
+          "count": 1,
+          "bytes": 598
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE id = ?",
+          "count": 1,
+          "bytes": 598
+        },
+        {
+          "sql": "SELECT 'update' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_update_requests WHERE runtime_id = ? AND status = 'pending' AND updated_at >= '2026-09-26T10:42:57.097Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_update_requests WHERE runtime_id = ? AND ((status = 'pending' AND updated_at < '2026-09-26T10:42:57.097Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:24:57.097Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'model_list' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_model_list_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:44:27.097Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_model_list_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:44:27.097Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:57.097Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'command' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:57.097Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:57.097Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:24:57.097Z'))) AS sweep, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND status IN ('completed', 'failed', 'timeout') AND (command <> '' OR args <> '[]')) AS housekeeping UNION ALL SELECT 'local_skills' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_list_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:57.097Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_list_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:57.097Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:57.097Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'local_skill_import' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_import_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:57.097Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_import_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:57.097Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:57.097Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'bot_menu' AS family, EXISTS (SELECT 1 FROM multiremi_bot_menu_publish_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:57.097Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_bot_menu_publish_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:57.097Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:39:57.097Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'directory_scan' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_directory_scan_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:57.097Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_directory_scan_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:57.097Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:57.097Z'))) AS sweep, 0 AS housekeeping",
+          "count": 1,
+          "bytes": 480
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_local_skill_import_requests SET status = 'running', run_started_at = ?, updated_at = ? WHERE id IN ( SELECT id FROM multiremi_runtime_local_skill_import_requests WHERE runtime_id = ? AND status = 'pending' ORDER BY created_at ASC LIMIT ? ) RETURNING *",
+          "count": 1,
+          "bytes": 355
+        },
+        {
+          "sql": "INSERT INTO multiremi_agent_plugin_workspace_locks (workspace_id, updated_at) VALUES (?, ?) ON CONFLICT(workspace_id) DO NOTHING",
+          "count": 1,
+          "bytes": 21
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE workspace_id = ?",
+          "count": 1,
+          "bytes": 21
+        },
+        {
+          "sql": "SELECT DISTINCT snapshot.plugin_id, snapshot.version_id, snapshot.provider FROM multiremi_task_plugin_snapshots snapshot JOIN multiremi_tasks task ON task.id = snapshot.task_id WHERE task.workspace_id = ? AND task.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory', 'awaiting_human')",
+          "count": 1,
+          "bytes": 21
+        },
+        {
+          "sql": "SELECT id, pending_heartbeat_count FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1 AND status = 'pending' AND last_attempt_at IS NULL",
+          "count": 1,
+          "bytes": 21
+        }
+      ],
+      "detail": {}
+    },
+    {
+      "scenario": "heartbeat.store_only.worst_case",
+      "samples": 3,
+      "queries": 30,
+      "bytes": 16775,
+      "wallMs": 2.6,
+      "top": [
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 4,
+          "bytes": 2672
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+          "count": 2,
+          "bytes": 3864
+        },
+        {
+          "sql": "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_local_skill_import_requests SET status = 'running', run_started_at = ?, updated_at = ? WHERE id IN ( SELECT id FROM multiremi_runtime_local_skill_import_requests WHERE runtime_id = ? AND status = 'pending' ORDER BY created_at ASC LIMIT ? ) RETURNING *",
+          "count": 1,
+          "bytes": 3371
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE workspace_id = ?",
+          "count": 1,
+          "bytes": 1932
+        },
+        {
+          "sql": "SELECT p.id AS plugin_id, p.active_version_id, p.candidate_version_id, p.provider, b.version_policy, b.version_id FROM multiremi_agent_plugin_bindings b JOIN multiremi_agents a ON a.id = b.agent_id JOIN multiremi_agent_plugins p ON p.id = b.plugin_id WHERE a.workspace_id = ? AND p.workspace_id = a.workspace_id AND a.archived_at IS NULL AND p.archived_at IS NULL AND b.enabled = 1",
+          "count": 1,
+          "bytes": 684
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?",
+          "count": 1,
+          "bytes": 641
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE id = ?",
+          "count": 1,
+          "bytes": 641
+        },
+        {
+          "sql": "SELECT 'update' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_update_requests WHERE runtime_id = ? AND status = 'pending' AND updated_at >= '2026-09-26T10:42:57.555Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_update_requests WHERE runtime_id = ? AND ((status = 'pending' AND updated_at < '2026-09-26T10:42:57.555Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:24:57.555Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'model_list' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_model_list_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:44:27.555Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_model_list_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:44:27.555Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:57.555Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'command' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:57.555Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:57.555Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:24:57.555Z'))) AS sweep, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND status IN ('completed', 'failed', 'timeout') AND (command <> '' OR args <> '[]')) AS housekeeping UNION ALL SELECT 'local_skills' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_list_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:57.555Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_list_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:57.555Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:57.555Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'local_skill_import' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_import_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:57.555Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_import_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:57.555Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:57.555Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'bot_menu' AS family, EXISTS (SELECT 1 FROM multiremi_bot_menu_publish_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:57.555Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_bot_menu_publish_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:57.555Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:39:57.555Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'directory_scan' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_directory_scan_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:57.555Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_directory_scan_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:57.555Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:57.555Z'))) AS sweep, 0 AS housekeeping",
+          "count": 1,
+          "bytes": 480
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_command_requests SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ( SELECT id FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND status = 'pending' ORDER BY created_at ASC LIMIT 1 ) RETURNING *",
+          "count": 1,
+          "bytes": 442
+        }
+      ],
+      "detail": {}
+    },
+    {
+      "scenario": "heartbeat.store_only.worst_case_with_side_channels",
+      "samples": 3,
+      "queries": 30,
+      "bytes": 16775,
+      "wallMs": 2.4,
+      "top": [
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 4,
+          "bytes": 2672
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+          "count": 2,
+          "bytes": 3864
+        },
+        {
+          "sql": "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_local_skill_import_requests SET status = 'running', run_started_at = ?, updated_at = ? WHERE id IN ( SELECT id FROM multiremi_runtime_local_skill_import_requests WHERE runtime_id = ? AND status = 'pending' ORDER BY created_at ASC LIMIT ? ) RETURNING *",
+          "count": 1,
+          "bytes": 3371
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE workspace_id = ?",
+          "count": 1,
+          "bytes": 1932
+        },
+        {
+          "sql": "SELECT p.id AS plugin_id, p.active_version_id, p.candidate_version_id, p.provider, b.version_policy, b.version_id FROM multiremi_agent_plugin_bindings b JOIN multiremi_agents a ON a.id = b.agent_id JOIN multiremi_agent_plugins p ON p.id = b.plugin_id WHERE a.workspace_id = ? AND p.workspace_id = a.workspace_id AND a.archived_at IS NULL AND p.archived_at IS NULL AND b.enabled = 1",
+          "count": 1,
+          "bytes": 684
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?",
+          "count": 1,
+          "bytes": 641
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE id = ?",
+          "count": 1,
+          "bytes": 641
+        },
+        {
+          "sql": "SELECT 'update' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_update_requests WHERE runtime_id = ? AND status = 'pending' AND updated_at >= '2026-09-26T10:42:58.037Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_update_requests WHERE runtime_id = ? AND ((status = 'pending' AND updated_at < '2026-09-26T10:42:58.037Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:24:58.037Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'model_list' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_model_list_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:44:28.037Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_model_list_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:44:28.037Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:58.037Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'command' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:58.037Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:58.037Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:24:58.037Z'))) AS sweep, EXISTS (SELECT 1 FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND status IN ('completed', 'failed', 'timeout') AND (command <> '' OR args <> '[]')) AS housekeeping UNION ALL SELECT 'local_skills' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_list_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:58.037Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_list_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:58.037Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:58.037Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'local_skill_import' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_import_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:58.037Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_local_skill_import_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:58.037Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:58.037Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'bot_menu' AS family, EXISTS (SELECT 1 FROM multiremi_bot_menu_publish_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:58.037Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_bot_menu_publish_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:58.037Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:39:58.037Z'))) AS sweep, 0 AS housekeeping UNION ALL SELECT 'directory_scan' AS family, EXISTS (SELECT 1 FROM multiremi_runtime_directory_scan_requests WHERE runtime_id = ? AND status = 'pending' AND created_at >= '2026-09-26T10:41:58.037Z') AS claimable, EXISTS (SELECT 1 FROM multiremi_runtime_directory_scan_requests WHERE runtime_id = ? AND ((status = 'pending' AND created_at < '2026-09-26T10:41:58.037Z') OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < '2026-09-26T10:43:58.037Z'))) AS sweep, 0 AS housekeeping",
+          "count": 1,
+          "bytes": 480
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_command_requests SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ( SELECT id FROM multiremi_runtime_command_requests WHERE runtime_id = ? AND status = 'pending' ORDER BY created_at ASC LIMIT 1 ) RETURNING *",
+          "count": 1,
+          "bytes": 442
+        }
+      ],
+      "detail": {}
+    },
+    {
+      "scenario": "heartbeat.worst_case",
+      "samples": 3,
+      "queries": 63,
+      "bytes": 23469,
+      "wallMs": 13.5,
+      "top": [
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 6,
+          "bytes": 4563
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspace_ssh_mesh WHERE workspace_id = ?",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT * FROM multiremi_daemon_ssh_mesh_states WHERE workspace_id = ? AND daemon_id = ?",
+          "count": 3,
+          "bytes": 643
+        },
+        {
+          "sql": "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+          "count": 3,
+          "bytes": 63
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+          "count": 2,
+          "bytes": 3864
+        },
+        {
+          "sql": "SELECT state.* FROM multiremi_daemon_ssh_mesh_states state WHERE state.workspace_id = ? AND ( COALESCE(state.node_kind, 'runtime') = 'control_plane' OR ( COALESCE(state.node_kind, 'runtime') = 'runtime' AND EXISTS ( SELECT 1 FROM multiremi_runtimes runtime WHERE COALESCE(runtime.workspace_id, 'local') = state.workspace_id AND runtime.daemon_id = state.daemon_id ) AND NOT EXISTS ( SELECT 1 FROM multiremi_daemon_retirements retired WHERE retired.workspace_id = state.workspace_id AND retired.daemon_id = state.daemon_id ) ) ) ORDER BY state.daemon_id ASC",
+          "count": 2,
+          "bytes": 1202
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspace_members WHERE workspace_id = ? AND archived_at IS NULL ORDER BY name ASC",
+          "count": 2,
+          "bytes": 504
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspaces WHERE id = ?",
+          "count": 2,
+          "bytes": 500
+        },
+        {
+          "sql": "SELECT COALESCE(workspace_id, 'local') AS workspace_id, daemon_id FROM multiremi_runtimes WHERE id = ?",
+          "count": 2,
+          "bytes": 144
+        },
+        {
+          "sql": "SELECT fragment, auth_token, revision FROM multiremi_relay_config WHERE workspace_id = ? AND engine = ?",
+          "count": 2,
+          "bytes": 42
+        }
+      ],
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "scenario": "heartbeat.worst_case_with_side_channels",
+      "samples": 3,
+      "queries": 68,
+      "bytes": 23585,
+      "wallMs": 12.5,
+      "top": [
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 6,
+          "bytes": 4576
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspace_ssh_mesh WHERE workspace_id = ?",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT * FROM multiremi_daemon_ssh_mesh_states WHERE workspace_id = ? AND daemon_id = ?",
+          "count": 3,
+          "bytes": 643
+        },
+        {
+          "sql": "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+          "count": 3,
+          "bytes": 63
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+          "count": 2,
+          "bytes": 3864
+        },
+        {
+          "sql": "SELECT state.* FROM multiremi_daemon_ssh_mesh_states state WHERE state.workspace_id = ? AND ( COALESCE(state.node_kind, 'runtime') = 'control_plane' OR ( COALESCE(state.node_kind, 'runtime') = 'runtime' AND EXISTS ( SELECT 1 FROM multiremi_runtimes runtime WHERE COALESCE(runtime.workspace_id, 'local') = state.workspace_id AND runtime.daemon_id = state.daemon_id ) AND NOT EXISTS ( SELECT 1 FROM multiremi_daemon_retirements retired WHERE retired.workspace_id = state.workspace_id AND retired.daemon_id = state.daemon_id ) ) ) ORDER BY state.daemon_id ASC",
+          "count": 2,
+          "bytes": 1202
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspace_members WHERE workspace_id = ? AND archived_at IS NULL ORDER BY name ASC",
+          "count": 2,
+          "bytes": 504
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspaces WHERE id = ?",
+          "count": 2,
+          "bytes": 500
+        },
+        {
+          "sql": "SELECT COALESCE(workspace_id, 'local') AS workspace_id, daemon_id FROM multiremi_runtimes WHERE id = ?",
+          "count": 2,
+          "bytes": 144
+        },
+        {
+          "sql": "SELECT * FROM multiremi_feishu_bot_configs WHERE workspace_id = ?",
+          "count": 2,
+          "bytes": 42
+        }
+      ],
+      "detail": {
+        "status": 200
+      }
+    }
+  ],
+  "claim": [
+    {
+      "scenario": "claim.mixed_workspace",
+      "samples": 3,
+      "queries": 326,
+      "bytes": 447778,
+      "wallMs": 50.4,
+      "top": [
+        {
+          "sql": "SELECT p.*, COUNT(i.id) AS issue_count, COALESCE(SUM(CASE WHEN i.status IN ('done', 'completed', 'closed') THEN 1 ELSE 0 END), 0) AS done_count, ( SELECT COUNT(*) FROM multiremi_project_resources pr WHERE pr.project_id = p.id ) AS resource_count FROM multiremi_projects p LEFT JOIN multiremi_issues i ON i.project_id = p.id WHERE p.id = ? GROUP BY p.id",
+          "count": 55,
+          "bytes": 28875
+        },
+        {
+          "sql": "SELECT issue_id FROM multiremi_feishu_bot_chat_bindings WHERE chat_session_id = ? AND issue_id IS NOT NULL ORDER BY created_at ASC, id ASC LIMIT 1",
+          "count": 28,
+          "bytes": 588
+        },
+        {
+          "sql": "SELECT * FROM multiremi_project_resources WHERE project_id = ? ORDER BY position ASC, created_at ASC, id ASC",
+          "count": 25,
+          "bytes": 6925
+        },
+        {
+          "sql": "SELECT execution_fingerprint, work_dir, runtime_id FROM multiremi_tasks WHERE chat_session_id = ? AND issue_id IS NULL AND execution_fingerprint IS NOT NULL ORDER BY created_at DESC, id DESC LIMIT 1",
+          "count": 24,
+          "bytes": 504
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agents WHERE id = ? AND archived_at IS NULL",
+          "count": 18,
+          "bytes": 12114
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agents WHERE id = ?",
+          "count": 16,
+          "bytes": 10824
+        },
+        {
+          "sql": "SELECT * FROM multiremi_tasks WHERE id = ?",
+          "count": 11,
+          "bytes": 20860
+        },
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 11,
+          "bytes": 7139
+        },
+        {
+          "sql": "SELECT id FROM multiremi_autopilot_runs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
+          "count": 11,
+          "bytes": 231
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "count": 10,
+          "bytes": 5338
+        }
+      ],
+      "detail": {
+        "status": 200,
+        "claimed_task_id": "tsk_ulvqo3izfrv0",
+        "claimed_agent_id": "agt_bench_0",
+        "response_bytes": 610131,
+        "skill_file_bytes": 309355,
+        "project_wiki_docs": 9,
+        "project_wiki_bytes": 148764,
+        "repository_wiki_docs": 8,
+        "repository_wiki_bytes": 145735,
+        "knowledge_warnings": 0
+      }
+    }
+  ]
+}

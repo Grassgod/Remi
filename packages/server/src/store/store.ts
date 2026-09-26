@@ -1083,6 +1083,15 @@ runMigrations(this.db);
     return this.agents.getAgent(id);
   }
 
+  /** The Agent row without its Skills or Skill files — for eligibility decisions only. */
+  getAgentLite(id: string): MultiremiAgent | null {
+    return this.agents.getAgentLite(id);
+  }
+
+  listAgentsLite(options: { includeArchived?: boolean } = {}): MultiremiAgent[] {
+    return this.agents.listAgentsLite(options);
+  }
+
   getAgentByWorkspaceAndName(workspaceId: string, name: string): MultiremiAgent | null {
     return this.agents.getAgentByWorkspaceAndName(workspaceId, name);
   }
@@ -2234,12 +2243,21 @@ runMigrations(this.db);
     task: Pick<MultiremiTask, "id" | "agentId" | "workspaceId">,
     userId: string,
   ): Promise<MultiremiCreatedAccessToken> {
-    const agent = this.getAgent(task.agentId);
+    // Scope decisions read role/workspace/provider; the token payload never carries Skills.
+    const agent = this.getAgentLite(task.agentId);
     const scopes: string[] = [];
     if (agent && agentRoleAtLeast(agent.role, "supervisor")) scopes.push("organizer:supervisor");
     const storedTask = this.getTask(task.id);
     const run = storedTask?.autopilotRunId ? this.getAutopilotRun(storedTask.autopilotRunId) : null;
-    const repositoryWikiAutomation = resolveRepositoryWikiAutomation(this, task.workspaceId);
+    // Capability resolution reads roles and plugin bindings; hydrating every Agent's
+    // Skills to answer it is what made a claim cross megabytes it never used.
+    const repositoryWikiAutomation = resolveRepositoryWikiAutomation({
+      listAgents: () => this.listAgentsLite(),
+      listAutopilots: (workspaceId) => this.listAutopilots(workspaceId),
+      listAgentPlugins: (workspaceId, options) => this.listAgentPlugins(workspaceId, options),
+      listAgentPluginBindings: (agentId) => this.listAgentPluginBindings(agentId),
+      listAutopilotTriggers: (autopilotId) => this.listAutopilotTriggers(autopilotId),
+    }, task.workspaceId);
     if (
       agent
       && agentRoleAtLeast(agent.role, "maintainer")
@@ -2656,6 +2674,11 @@ runMigrations(this.db);
 
   getRuntime(id: string): MultiremiRuntime | null {
     return this.runtimes.getRuntime(id);
+  }
+
+  /** The Runtime row without the derived usage/model/group reads. */
+  getRuntimeLite(id: string): MultiremiRuntime | null {
+    return this.runtimes.getRuntimeLite(id);
   }
 
   getRuntimeCodexProfile(id: string) {

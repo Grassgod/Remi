@@ -1273,6 +1273,18 @@ export class TasksRepo {
     return "topic";
   }
 
+  /**
+   * Hydrate a task that was produced by `claimNextTaskForRuntime`.
+   *
+   * `getTaskWithAgent` re-reads the task row; the caller already holds the row the claim just
+   * wrote, so this only re-runs the parts that read other tables.
+   */
+  private withHydratedAgent(task: MultiremiTask): MultiremiTaskWithAgent {
+    const existing = this.getTaskWithAgent(task.id);
+    if (!existing) throw new Error(`Task vanished during claim: ${task.id}`);
+    return existing;
+  }
+
   getTaskWithAgent(id: string): MultiremiTaskWithAgent | null {
     let task = this.getTask(id);
     if (!task) return null;
@@ -1670,8 +1682,11 @@ export class TasksRepo {
       ).all(lockedRuntime.workspaceId ?? "local") as Array<{
         agent_id: string; model: string | null; thinking_level: string | null;
       }>;
+      // Only the Agent's decision fields are read here — the target Agent is chosen later, and
+      // hydrating Skills for every candidate would cross the whole Skill-file body over the
+      // bridge for Agents that never run. `getAgentLite` reads the row alone, once per Agent.
       for (const row of capabilityTargetRows) {
-        const agent = this.ctx.agents().getAgent(row.agent_id);
+        const agent = this.ctx.agents().getAgentLite(row.agent_id);
         const target = {
           model: cleanOptionalString(row.model),
           thinkingLevel: cleanOptionalString(row.thinking_level),
@@ -1691,7 +1706,7 @@ export class TasksRepo {
       const excludedTaskIds: string[] = [];
       for (const row of profileTaskRows) {
         const task = this.getTask(row.id);
-        const agent = task && this.ctx.agents().getAgent(task.agentId);
+        const agent = task && this.ctx.agents().getAgentLite(task.agentId);
         if (task && agent && !this.runtimeCanRunTaskAgent(lockedRuntime, agent, task)) excludedTaskIds.push(task.id);
       }
       if (!stale) this.refreshQueuedChatAffinity(lockedRuntime.workspaceId ?? "local");
@@ -1703,7 +1718,12 @@ export class TasksRepo {
           excludedTaskIds,
         );
       if (!candidate) return null;
-      const task = this.snapshotTaskExecution(candidate, lockedRuntime);
+      // One hydration for the selected task. `snapshotTaskExecution` re-reads the Agent row
+      // itself (it must observe an Agent update that committed after the selection), but the
+      // expensive parts — Skills, Skill files, Project context and the Wiki indexes — are read
+      // once here and carried through the snapshot into the response.
+      const hydrated = this.withHydratedAgent(candidate);
+      const task = this.snapshotTaskExecution(hydrated, lockedRuntime);
       // Check the actual hydrated payload, including both linked and legacy
       // inline skills. Older daemons ignore encoding and would write base64
       // as text. Unknown encodings also require the newer daemon's validator.
@@ -1764,7 +1784,7 @@ export class TasksRepo {
       "UPDATE multiremi_agents SET updated_at = updated_at WHERE id = ?",
       [task.agentId],
     );
-    const currentAgent = this.ctx.agents().getAgent(task.agentId);
+    const currentAgent = this.ctx.agents().getAgentLite(task.agentId);
     // A fallback-switched task is judged on the model it will really run: the
     // Agent's primary selection may be exactly the model this Runtime cannot
     // serve (that is why the chain switched).
@@ -1800,7 +1820,7 @@ export class TasksRepo {
         provider === "codex" && runtimeProfile ? toJson(runtimeProfile) : null,
         provider === "claude" && runtimeProfile ? toJson(runtimeProfile) : null,
         provider, task.id]);
-      return this.getTaskWithAgent(task.id)!;
+      return this.rehydrateSnapshot(task);
     }
     // A stale dispatch and an automatic infrastructure retry already own an
     // immutable snapshot. Never resolve mutable Agent bindings again.
@@ -1817,7 +1837,7 @@ export class TasksRepo {
            WHERE id = ?`,
           [provider, legacyGeneration, nowIso(), task.id],
         );
-        return this.getTaskWithAgent(task.id)!;
+        return this.rehydrateSnapshot(task);
       }
       return task;
     }
@@ -1911,7 +1931,39 @@ export class TasksRepo {
       ],
     );
     this.replaceTaskPluginSnapshotIndex(task.id, pluginSnapshot);
-    return this.getTaskWithAgent(task.id)!;
+    return this.rehydrateSnapshot(task);
+  }
+
+  /**
+   * Merge the task row this snapshot just wrote into the already-hydrated task.
+   *
+   * The snapshot changes only columns on `multiremi_tasks`; the Agent the task carries — its
+   * Skills and Skill files — was hydrated once by the caller and cannot change here, because
+   * the claim holds the workspace lifecycle lock that every Skill mutation takes. Re-running
+   * `getTaskWithAgent` instead read the whole Skill body again for a task that was already
+   * hydrated, which is exactly the duplication the claim is supposed to avoid.
+   */
+  private rehydrateSnapshot(task: MultiremiTaskWithAgent): MultiremiTaskWithAgent {
+    const current = this.getTask(task.id);
+    if (!current) throw new Error(`Task vanished during claim: ${task.id}`);
+    // Only the columns this snapshot writes are merged back. Spreading the whole row would
+    // undo the hydration-time normalization `getTaskWithAgent` applies (an ordinary Chat
+    // turn's detached Issue and session, a redeemed runtime workspace), which the caller
+    // already received in `task`.
+    const updated: MultiremiTaskWithAgent = {
+      ...task,
+      provider: current.provider,
+      pluginSnapshot: current.pluginSnapshot,
+      executionFingerprint: current.executionFingerprint,
+      codexProfile: current.codexProfile,
+      claudeProfile: current.claudeProfile,
+      sessionId: current.sessionId,
+      workDir: current.workDir,
+      issueSessionGeneration: current.issueSessionGeneration,
+      updatedAt: current.updatedAt,
+    };
+    const agent = this.ctx.agents().getAgentLite(task.agentId);
+    return { ...updated, agent: agent ? { ...agent, skills: task.agent?.skills ?? [] } : null };
   }
 
   private replaceTaskPluginSnapshotIndex(
@@ -2145,7 +2197,9 @@ export class TasksRepo {
     for (const row of rows) {
       const task = this.getTask(String(row.id))!;
       const chat = this.ctx.chat().getChatSession(task.chatSessionId!);
-      const agent = this.ctx.agents().getAgent(task.agentId);
+      // Affinity is decided from identity/model/ownership; the Agent's Skills cannot change
+      // which machine can resume the session, so the Skills are not read on this path.
+      const agent = this.ctx.agents().getAgentLite(task.agentId);
       if (!chat || !agent || chat.status === "archived" || agent.archivedAt) continue;
       const plugins = this.ctx.agentPlugins().resolveAgentPluginSnapshot(agent.id);
       const fingerprint = this.ctx.agentPlugins().getAgentPluginCapabilityRevision(agent.id);
@@ -2179,7 +2233,7 @@ export class TasksRepo {
     excludedAgentIds: string[] = [],
     excludedTargets: ExecutionTargetExclusion[] = [],
     excludedTaskIds: string[] = [],
-  ): MultiremiTaskWithAgent | null {
+  ): MultiremiTask | null {
     const now = nowIso();
     const deviceRouting = this.runtimeDeviceRoutingContext(runtime);
     // Always constrain by workspace, COALESCE(...,'local') so a runtime with
@@ -2376,7 +2430,10 @@ export class TasksRepo {
     ).get(...params) as Row | null;
     if (!row) return null;
 
-    return this.getTaskWithAgent(String(row.id));
+    // The caller hydrates the selected task exactly once and threads that object through the
+    // snapshot and the response. Hydrating here as well would read the Agent's Skills, files,
+    // project and wiki context a second time for the same task.
+    return this.getTask(String(row.id));
   }
 
   startTask(taskId: string): MultiremiTask {

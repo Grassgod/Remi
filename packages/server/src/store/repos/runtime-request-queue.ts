@@ -58,48 +58,68 @@ export class RuntimeRequestQueue<T> {
     return row ? this.spec.hydrate(row) : null;
   }
 
-  /** Move the oldest pending request to `running` and return it, or null when the queue is empty. */
-  claim(runtimeId: string): T | null {
-    this.expire(runtimeId);
-    const row = this.db.query(
-      `SELECT * FROM ${this.spec.table}
-       WHERE runtime_id = ? AND status = 'pending'
-       ORDER BY created_at ASC
-       LIMIT 1`,
-    ).get(runtimeId) as Row | null;
-    if (!row) return null;
+  /**
+   * Move the oldest pending request to `running` and return it, or null when the queue is empty.
+   *
+   * Selection and the state change are one statement: the sub-select picks the row and
+   * `RETURNING *` hands back exactly what was written, so there is no window in which a second
+   * reader could see the row between the SELECT and the UPDATE, and no second read of it.
+   *
+   * `sweep` is for callers that have already proved the deadline sweep would write nothing
+   * (the heartbeat's merged probe does this); it skips the extra UPDATE, never a claim.
+   */
+  claim(runtimeId: string, sweep = true): T | null {
+    if (sweep) this.expire(runtimeId);
     const now = nowIso();
-    this.db.run(
-      `UPDATE ${this.spec.table} SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ?`,
-      [now, now, String(row.id)],
-    );
-    return this.get(runtimeId, String(row.id));
+    const row = this.db.query(
+      `UPDATE ${this.spec.table}
+       SET status = 'running', run_started_at = ?, updated_at = ?
+       WHERE id = (
+         SELECT id FROM ${this.spec.table}
+         WHERE runtime_id = ? AND status = 'pending'
+         ORDER BY created_at ASC
+         LIMIT 1
+       )
+       RETURNING *`,
+    ).get(now, now, runtimeId) as Row | null;
+    return row ? this.spec.hydrate(row) : null;
   }
 
   /**
    * Batch variant of {@link claim}: moves up to `limit` pending requests to `running` and returns
-   * their ids. Callers re-read the rows themselves so families with extra hydration keep it.
+   * the written rows, oldest first. One statement for the whole batch — the previous per-row
+   * UPDATE loop made a ten-item import cost ten writes plus ten re-reads.
+   *
+   * `UPDATE ... RETURNING` does not promise the order of the returned rows, so the ordering the
+   * single-row path gets from `ORDER BY created_at ASC` is restored here explicitly.
    */
-  claimBatchIds(runtimeId: string, limit: number): string[] {
-    this.expire(runtimeId);
-    const rows = this.db.query(
-      `SELECT * FROM ${this.spec.table}
-       WHERE runtime_id = ? AND status = 'pending'
-       ORDER BY created_at ASC
-       LIMIT ?`,
-    ).all(runtimeId, Math.max(1, Math.floor(limit))) as Row[];
-    if (!rows.length) return [];
+  claimBatch(runtimeId: string, limit: number, sweep = true): T[] {
+    if (sweep) this.expire(runtimeId);
     const now = nowIso();
-    for (const row of rows) {
-      this.db.run(
-        `UPDATE ${this.spec.table} SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ?`,
-        [now, now, String(row.id)],
-      );
-    }
-    return rows.map((row) => String(row.id));
+    const rows = this.db.query(
+      `UPDATE ${this.spec.table}
+       SET status = 'running', run_started_at = ?, updated_at = ?
+       WHERE id IN (
+         SELECT id FROM ${this.spec.table}
+         WHERE runtime_id = ? AND status = 'pending'
+         ORDER BY created_at ASC
+         LIMIT ?
+       )
+       RETURNING *`,
+    ).all(now, now, runtimeId, Math.max(1, Math.floor(limit))) as Row[];
+    return rows
+      .sort((left, right) => String(left.created_at).localeCompare(String(right.created_at))
+        || String(left.id).localeCompare(String(right.id)))
+      .map((row) => this.spec.hydrate(row));
   }
 
-  /** Time out rows that blew either deadline. Runs before every read so reads never see zombies. */
+  /**
+   * Time out rows that blew either deadline, in one statement.
+   *
+   * `CASE` reads the pre-update `status`, so each row still gets its own family text; a single
+   * statement replaces the two per-deadline UPDATEs, which halves the sweep on every read. Running
+   * before every read means reads never see zombies.
+   */
   expire(runtimeId: string): void {
     const now = nowIso();
     const pendingCutoff = new Date(Date.now() - this.spec.pendingTimeoutMs).toISOString();
@@ -107,15 +127,15 @@ export class RuntimeRequestQueue<T> {
     const pendingDeadlineColumn = this.spec.pendingDeadlineColumn ?? "created_at";
     this.db.run(
       `UPDATE ${this.spec.table}
-       SET status = 'timeout', error = '${this.spec.pendingTimeoutError}', updated_at = ?
-       WHERE runtime_id = ? AND status = 'pending' AND ${pendingDeadlineColumn} < ?`,
-      [now, runtimeId, pendingCutoff],
-    );
-    this.db.run(
-      `UPDATE ${this.spec.table}
-       SET status = 'timeout', error = '${this.spec.runningTimeoutError}', updated_at = ?
-       WHERE runtime_id = ? AND status = 'running' AND run_started_at IS NOT NULL AND run_started_at < ?`,
-      [now, runtimeId, runningCutoff],
+       SET status = 'timeout',
+           error = CASE WHEN status = 'running' THEN ? ELSE ? END,
+           updated_at = ?
+       WHERE runtime_id = ?
+         AND (
+           (status = 'pending' AND ${pendingDeadlineColumn} < ?)
+           OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < ?)
+         )`,
+      [this.spec.runningTimeoutError, this.spec.pendingTimeoutError, now, runtimeId, pendingCutoff, runningCutoff],
     );
   }
 }

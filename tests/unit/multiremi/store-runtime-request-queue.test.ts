@@ -55,23 +55,51 @@ afterEach(() => {
 });
 
 // ── golden SQL ────────────────────────────────────────────────────────────────
-// Continuation lines in the original template literals were indented seven columns.
+// Continuation lines in the queue's template literals are indented seven columns.
 const NL = "\n       ";
 
 function goldenGet(table: string): string {
   return `SELECT * FROM ${table} WHERE id = ? AND runtime_id = ?`;
 }
-function goldenClaimSelect(table: string, limit: "1" | "?"): string {
-  return `SELECT * FROM ${table}${NL}WHERE runtime_id = ? AND status = 'pending'${NL}ORDER BY created_at ASC${NL}LIMIT ${limit}`;
+
+/**
+ * MUL-389: selection and the state change became one statement. Before the change this was a
+ * `SELECT ... LIMIT 1` followed by `UPDATE ... WHERE id = ?`; the pair is now folded into
+ * `UPDATE ... WHERE id = (SELECT ...) RETURNING *`, so the queue emits the UPDATE and no
+ * separate claim SELECT. The ordering guarantee (`ORDER BY created_at ASC`) moves inside the
+ * sub-select, and `RETURNING *` replaces the read-back.
+ */
+function goldenClaim(table: string): string {
+  return `UPDATE ${table}${NL}SET status = 'running', run_started_at = ?, updated_at = ?${NL}WHERE id = (`
+    + `${NL}  SELECT id FROM ${table}${NL}  WHERE runtime_id = ? AND status = 'pending'`
+    + `${NL}  ORDER BY created_at ASC${NL}  LIMIT 1${NL})${NL}RETURNING *`;
 }
-function goldenClaimUpdate(table: string): string {
-  return `UPDATE ${table} SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ?`;
+
+/** Batch form of {@link goldenClaim}: one statement for the whole batch, `id IN (...)` instead of `id = (...)`. */
+function goldenClaimBatch(table: string): string {
+  return `UPDATE ${table}${NL}SET status = 'running', run_started_at = ?, updated_at = ?${NL}WHERE id IN (`
+    + `${NL}  SELECT id FROM ${table}${NL}  WHERE runtime_id = ? AND status = 'pending'`
+    + `${NL}  ORDER BY created_at ASC${NL}  LIMIT ?${NL})${NL}RETURNING *`;
 }
-function goldenExpirePending(table: string, message: string, column = "created_at"): string {
-  return `UPDATE ${table}${NL}SET status = 'timeout', error = '${message}', updated_at = ?${NL}WHERE runtime_id = ? AND status = 'pending' AND ${column} < ?`;
+
+/**
+ * MUL-389: both deadlines are swept by one `CASE`-guarded UPDATE instead of two per-deadline
+ * UPDATEs. The family texts are still bound as parameters and still selected per row by the
+ * pre-update `status`, so each row keeps the message it had before.
+ */
+function goldenExpire(table: string): string {
+  return `UPDATE ${table}${NL}SET status = 'timeout',`
+    + `${NL}    error = CASE WHEN status = 'running' THEN ? ELSE ? END,`
+    + `${NL}    updated_at = ?`
+    + `${NL}WHERE runtime_id = ?`
+    + `${NL}  AND (`
+    + `${NL}    (status = 'pending' AND PLACEHOLDER < ?)`
+    + `${NL}    OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < ?)`
+    + `${NL}  )`;
 }
-function goldenExpireRunning(table: string, message: string): string {
-  return `UPDATE ${table}${NL}SET status = 'timeout', error = '${message}', updated_at = ?${NL}WHERE runtime_id = ? AND status = 'running' AND run_started_at IS NOT NULL AND run_started_at < ?`;
+
+function goldenExpireFor(table: string, pendingDeadlineColumn = "created_at"): string {
+  return goldenExpire(table).replace("PLACEHOLDER", pendingDeadlineColumn);
 }
 
 const DID_NOT_FINISH_60 = "daemon did not finish within 60 seconds";
@@ -161,19 +189,22 @@ const FAMILIES: Family[] = [
 
 describe("RuntimeRequestQueue SQL", () => {
   for (const family of FAMILIES) {
-    it(`emits the pre-refactor statements for the ${family.name} family`, () => {
+    it(`emits the merged claim and single-sweep statements for the ${family.name} family`, () => {
       const repo = createRepo();
       family.drive(repo);
 
       const emitted = new Set(sqlLog.filter((sql) => sql.includes(family.table)));
       for (const expected of [
         goldenGet(family.table),
-        goldenClaimSelect(family.table, family.batchClaim ? "?" : "1"),
-        goldenClaimUpdate(family.table),
-        goldenExpirePending(family.table, family.pendingTimeoutError, family.pendingDeadlineColumn),
-        goldenExpireRunning(family.table, family.runningTimeoutError),
+        family.batchClaim ? goldenClaimBatch(family.table) : goldenClaim(family.table),
+        goldenExpireFor(family.table, family.pendingDeadlineColumn),
       ]) {
         expect(emitted).toContain(expected);
+      }
+      // The two-deadline sweep and the separate claim SELECT/UPDATE pair are gone; nothing may
+      // reintroduce a per-deadline UPDATE or a row-by-row claim write.
+      for (const sql of emitted) {
+        expect(sql).not.toContain("status = 'running', run_started_at = ?, updated_at = ? WHERE id = ?");
       }
       // No other family's table may be touched — the specs must not have been crossed over.
       const otherTables = FAMILIES.filter((entry) => entry.table !== family.table).map((entry) => entry.table);
@@ -188,27 +219,36 @@ describe("RuntimeRequestQueue SQL", () => {
     FAMILIES[0]!.drive(repo);
     const emitted = new Set(sqlLog);
 
-    // Copied verbatim out of the five hand-written families this template replaced.
+    // MUL-389 folded the claim into one statement and the two deadline sweeps into one.
     expect(emitted).toContain("SELECT * FROM multiremi_runtime_model_list_requests WHERE id = ? AND runtime_id = ?");
     expect(emitted).toContain(
-      "UPDATE multiremi_runtime_model_list_requests SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ?",
-    );
-    expect(emitted).toContain(
-      "SELECT * FROM multiremi_runtime_model_list_requests\n" +
-        "       WHERE runtime_id = ? AND status = 'pending'\n" +
-        "       ORDER BY created_at ASC\n" +
-        "       LIMIT 1",
+      "UPDATE multiremi_runtime_model_list_requests\n" +
+        "       SET status = 'running', run_started_at = ?, updated_at = ?\n" +
+        "       WHERE id = (\n" +
+        "         SELECT id FROM multiremi_runtime_model_list_requests\n" +
+        "         WHERE runtime_id = ? AND status = 'pending'\n" +
+        "         ORDER BY created_at ASC\n" +
+        "         LIMIT 1\n" +
+        "       )\n" +
+        "       RETURNING *",
     );
     expect(emitted).toContain(
       "UPDATE multiremi_runtime_model_list_requests\n" +
-        "       SET status = 'timeout', error = 'daemon did not respond within 30 seconds', updated_at = ?\n" +
-        "       WHERE runtime_id = ? AND status = 'pending' AND created_at < ?",
+        "       SET status = 'timeout',\n" +
+        "           error = CASE WHEN status = 'running' THEN ? ELSE ? END,\n" +
+        "           updated_at = ?\n" +
+        "       WHERE runtime_id = ?\n" +
+        "         AND (\n" +
+        "           (status = 'pending' AND created_at < ?)\n" +
+        "           OR (status = 'running' AND run_started_at IS NOT NULL AND run_started_at < ?)\n" +
+        "         )",
     );
-    expect(emitted).toContain(
-      "UPDATE multiremi_runtime_model_list_requests\n" +
-        "       SET status = 'timeout', error = 'daemon did not finish within 60 seconds', updated_at = ?\n" +
-        "       WHERE runtime_id = ? AND status = 'running' AND run_started_at IS NOT NULL AND run_started_at < ?",
-    );
+    // The per-deadline sweeps must not come back: they were the two writes an idle heartbeat
+    // paid for every family, and their error text now rides in the CASE parameters.
+    expect([...emitted].some((sql) =>
+      sql.includes("SET status = 'timeout', error = 'daemon did not respond within 30 seconds'"))).toBe(false);
+    expect([...emitted].some((sql) =>
+      sql.includes("SET status = 'timeout', error = 'daemon did not finish within 60 seconds'"))).toBe(false);
   });
 });
 

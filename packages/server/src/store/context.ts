@@ -213,7 +213,11 @@ export interface IssuesSurface {
 
 export interface AgentsSurface {
   getAgent(id: string): MultiremiAgent | null;
+  /** The Agent row without Skills or Skill files — eligibility decisions only. */
+  getAgentLite(id: string): MultiremiAgent | null;
   listAgents(options?: { includeArchived?: boolean }): MultiremiAgent[];
+  /** Every Agent row without Skills — capability decisions only. */
+  listAgentsLite(options?: { includeArchived?: boolean }): MultiremiAgent[];
   getAgentByRef(ref: string, workspaceId?: string | null): MultiremiAgent | null;
   listActiveAgentsByRuntime(runtimeId: string): MultiremiAgent[];
   createSkill(input: CreateSkillInput): MultiremiSkill;

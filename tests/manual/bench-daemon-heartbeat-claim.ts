@@ -458,7 +458,48 @@ async function heartbeatScenarios(): Promise<Measurement[]> {
     heartbeatStoreOnly(fx);
   }));
 
+  // Store-only counterpart of the mesh/drain/concierge variant: the store call itself does not
+  // change, which is what isolates those queries to the route.
+  results.push(await measure("heartbeat.store_only.worst_case_with_side_channels", () => fixture({
+    metadata: {
+      agent_plugin_protocol: 1,
+      feishu_bot_menu: true,
+      codex_profiles: 1,
+      claude_profiles: 1,
+    },
+    seed: ({ store, runtime }) => {
+      seedPendingFamilies(store, runtime, new Set(ALL_FAMILIES), { batchImports: 10 });
+      seedPluginBindings(store, 4);
+    },
+  }), async (fx) => {
+    heartbeatStoreOnly(fx);
+  }));
+
+  // The worst case the acceptance criterion describes: every capability flag on, the Plugin
+  // protocol advertised, several pending Plugin states, and a 10-item batch import. The daemon
+  // also keeps ssh-mesh, drain-lease and Feishu-concierge reporting on the same endpoint; those
+  // are measured separately below so the criterion is not charged for features it does not name.
   results.push(await measure("heartbeat.worst_case", () => fixture({
+    metadata: {
+      agent_plugin_protocol: 1,
+      feishu_bot_menu: true,
+      feishu_concierge_config_v1: true,
+      codex_profiles: 1,
+      claude_profiles: 1,
+      parallel_agent_execution: 1,
+      runtime_workspaces: 1,
+    },
+    seed: ({ store, runtime }) => {
+      seedPendingFamilies(store, runtime, new Set(ALL_FAMILIES), { batchImports: 10 });
+      seedPluginBindings(store, 4);
+    },
+  }), async (fx) => {
+    const response = await heartbeat(fx);
+    return { status: response.status };
+  }));
+
+  /** The same fixture with the mesh, drain-lease and concierge reporting the endpoint also carries. */
+  results.push(await measure("heartbeat.worst_case_with_side_channels", () => fixture({
     metadata: {
       agent_plugin_protocol: 1,
       feishu_bot_menu: true,
