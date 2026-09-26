@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
   DAEMON_ACK_TIMEOUT_MS,
+  DAEMON_TERMINAL_CLOSE_CODES,
   DAEMON_DOWNLINK_EVENT_FRAMES,
   DAEMON_DOWNLINK_RPC_FRAMES,
   DAEMON_DOWNLINK_TRACE_FRAMES,
@@ -25,6 +26,7 @@ import {
   DAEMON_WS_MAX_PAYLOAD_BYTES,
   compareDaemonCliVersion,
   daemonCloseCodeIsRetryable,
+  daemonCloseCodeRequiresUpgrade,
   daemonFrameCategory,
   daemonFrameIsReliable,
   daemonFrameUsesOutboxWindow,
@@ -212,13 +214,40 @@ describe("daemon protocol codes", () => {
     }
   });
 
-  it("retries only the two transient close codes", () => {
+  it("defaults to reconnecting, and stops only on the four terminal codes", () => {
+    // The deny-list direction is the load-bearing part: a daemon that treats an
+    // unexpected code as terminal is unreachable until someone SSHes in.
+    for (const code of DAEMON_TERMINAL_CLOSE_CODES) {
+      expect(daemonCloseCodeIsRetryable(code), `${code} must be terminal`).toBe(false);
+    }
+    expect([...DAEMON_TERMINAL_CLOSE_CODES].sort((a, b) => a - b)).toEqual([4401, 4403, 4410, 4426]);
+
+    // The two protocol-defined non-terminal codes.
     expect(daemonCloseCodeIsRetryable(DAEMON_PROTOCOL_CLOSE_CODES.ack_timeout)).toBe(true);
     expect(daemonCloseCodeIsRetryable(DAEMON_PROTOCOL_CLOSE_CODES.server_closing)).toBe(true);
-    expect(daemonCloseCodeIsRetryable(DAEMON_PROTOCOL_CLOSE_CODES.protocol_upgrade_required)).toBe(false);
-    expect(daemonCloseCodeIsRetryable(DAEMON_PROTOCOL_CLOSE_CODES.authority_revoked)).toBe(false);
-    expect(daemonCloseCodeIsRetryable(DAEMON_PROTOCOL_CLOSE_CODES.daemon_retired)).toBe(false);
-    expect(daemonCloseCodeIsRetryable(DAEMON_PROTOCOL_CLOSE_CODES.forbidden)).toBe(false);
+  });
+
+  it("retries the codes the WebSocket layer produces on its own", () => {
+    // These are the codes a daemon actually observes for a dropped network, a
+    // killed server, or a restart. An allow-list would have made every one of them
+    // terminal, which is the defect this replaced.
+    for (const code of [1000, 1001, 1005, 1006, 1011, 1012, 1013]) {
+      expect(daemonCloseCodeIsRetryable(code), `${code} must be retryable`).toBe(true);
+    }
+    // An unassigned / future code is retryable too, by the same rule.
+    expect(daemonCloseCodeIsRetryable(4999)).toBe(true);
+    expect(daemonCloseCodeIsRetryable(0)).toBe(true);
+  });
+
+  it("distinguishes the one terminal code that has a scheduled way forward", () => {
+    // 4426 stops the reconnect loop but is not a dead end: the daemon enters
+    // `upgrade_wait` and polls the upgrade channel.
+    expect(daemonCloseCodeRequiresUpgrade(DAEMON_PROTOCOL_CLOSE_CODES.protocol_upgrade_required)).toBe(true);
+    for (const code of [4401, 4403, 4410]) {
+      expect(daemonCloseCodeRequiresUpgrade(code)).toBe(false);
+    }
+    expect(daemonCloseCodeRequiresUpgrade(1006)).toBe(false);
+    expect(daemonCloseCodeRequiresUpgrade(4001)).toBe(false);
   });
 
   it("keeps error codes unique and the retryable/terminal sets disjoint", () => {

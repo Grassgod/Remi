@@ -43,14 +43,40 @@ function listTsFiles(dir: string): string[] {
   return out;
 }
 
-const RUNTIME_ROOTS = [
-  join(REPO_ROOT, "packages/server/src"),
-  join(REPO_ROOT, "packages/daemon/src"),
-  join(REPO_ROOT, "packages/contracts/src"),
-  join(REPO_ROOT, "apps"),
-  join(REPO_ROOT, "frontend/packages"),
-  join(REPO_ROOT, "frontend/apps"),
-];
+/**
+ * Every root a wiring import could hide in.
+ *
+ * `packages/*` is enumerated rather than listed: an earlier version named
+ * `server`, `daemon` and `contracts` only, and three real runtime packages were
+ * therefore invisible — a wiring import in `shared`, `connectors` or
+ * `plugin-sdk` left the guard green at 10 pass / 0 fail. All three are genuinely
+ * reachable: `worker/daemon.ts` already imports `@connectors/feishu/...`, and
+ * `@shared/*` is imported across server and connectors.
+ *
+ * Enumerating the directory means a package added later is covered without
+ * anyone remembering to edit this list.
+ */
+function runtimeRoots(): string[] {
+  const packagesDir = join(REPO_ROOT, "packages");
+  const packages = readdirSync(packagesDir)
+    .filter((name) => {
+      try {
+        return statSync(join(packagesDir, name, "src")).isDirectory();
+      } catch {
+        return false;
+      }
+    })
+    .map((name) => join(packagesDir, name, "src"));
+
+  return [
+    ...packages,
+    join(REPO_ROOT, "apps"),
+    join(REPO_ROOT, "frontend/packages"),
+    join(REPO_ROOT, "frontend/apps"),
+  ];
+}
+
+const RUNTIME_ROOTS = runtimeRoots();
 
 /** Where the new modules themselves live - their own definitions are not imports. */
 const A0_SOURCES = new Set([
@@ -114,6 +140,47 @@ describe("A-0 modules are not yet wired into runtime code", () => {
     expect(contracts.length).toBeGreaterThan(8);
     expect(server).toContain(join(REPO_ROOT, "packages/server/src/worker/daemon.ts"));
     expect(contracts).toContain(join(REPO_ROOT, "packages/contracts/src/types.ts"));
+  });
+
+  it("covers every package that holds runtime code, including the three it used to miss", () => {
+    // The blind spot was structural, not incidental: `shared`, `connectors` and
+    // `plugin-sdk` are real runtime packages, and a wiring import in any of them
+    // was invisible. The expected set is read from the directory rather than
+    // restated, so neither a narrowed enumeration nor a package added later can
+    // drift from this assertion.
+    const expected = readdirSync(join(REPO_ROOT, "packages"))
+      .filter((name) => {
+        try {
+          return statSync(join(REPO_ROOT, "packages", name, "src")).isDirectory();
+        } catch {
+          return false;
+        }
+      })
+      .map((name) => join(REPO_ROOT, "packages", name, "src"));
+
+    expect(expected.length).toBeGreaterThanOrEqual(10);
+    for (const root of expected) {
+      expect(RUNTIME_ROOTS, `${root} is not scanned`).toContain(root);
+      expect(listTsFiles(root).length, `${root} yielded no files`).toBeGreaterThan(0);
+    }
+    // The three the earlier version missed, named explicitly so the regression is
+    // pinned even if the enumeration above is edited.
+    for (const pkg of ["shared", "connectors", "plugin-sdk"]) {
+      expect(RUNTIME_ROOTS).toContain(join(REPO_ROOT, "packages", pkg, "src"));
+    }
+  });
+
+  it("finds the consumers of a shared-package wiring import", () => {
+    // Positive control for the widened scan: the three packages that were missing
+    // are now genuinely searched, so a real import placed in one of them is seen.
+    // This test asserts the scan *reaches* them; the probe in the PR description
+    // shows the wiring assertions themselves go red.
+    const shared = listTsFiles(join(REPO_ROOT, "packages/shared/src"));
+    const connectors = listTsFiles(join(REPO_ROOT, "packages/connectors/src"));
+    const pluginSdk = listTsFiles(join(REPO_ROOT, "packages/plugin-sdk/src"));
+    expect(shared.length).toBeGreaterThan(10);
+    expect(connectors.length).toBeGreaterThan(10);
+    expect(pluginSdk.length).toBeGreaterThan(0);
   });
 
   it("would notice a wiring import, proved against the batch this PR adds", () => {
