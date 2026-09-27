@@ -63,7 +63,9 @@ import {
   IssueTimelineRequestError,
   issueTimelineResponse,
   issueUpdateCompatibilityInput,
+  stripServerOwnedAssignFields,
   stripServerOwnedIssueUpdateFields,
+  stripServerOwnedSessionTaskFields,
   issueUsageResponse,
   labelCompatibilityErrorResponse,
   labelCompatibilityResponse,
@@ -1274,8 +1276,10 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       body.assigneeType ?? body.assignee_type, body.assigneeId ?? body.assignee_id);
     if (dispatchDenied) return dispatchDenied;
     const { actorType, actorId } = issueMutationActivity(c);
+    // MUL-448: strip both lineage spellings before stamping, so a member body
+    // cannot supply the parent task that the credential did not.
     const result = safeAssignIssue(store, issue.id, {
-      ...body,
+      ...stripServerOwnedAssignFields(body),
       actorType,
       actorId,
       parentTaskId: currentTaskParentId(c),
@@ -1476,7 +1480,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const creator = issueSubscriberCaller(c);
     try {
       const task = store.createSessionTask(session.id, {
-        ...body,
+        ...stripServerOwnedSessionTaskFields(body),
         // Non-null past the `if (!agent) return 404` guard above; cleanString's
         // null just has to become the `agentId?: string` field's undefined.
         agentId: agentId ?? undefined,

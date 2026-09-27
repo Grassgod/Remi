@@ -102,13 +102,30 @@ export function issueCommentCreateInput(
       taskId: taskToken.taskId ?? null,
     };
   }
+  // MUL-448: no credential path below may name the run a comment belongs to.
+  // `comment.taskId` is read back as trusted lineage — the mention dispatcher
+  // uses it as the `sourceTask` for delegation returns and `createTask` inherits
+  // it as `parentTaskId` — so a member (or an anonymous caller) could otherwise
+  // borrow another run's lane by putting `task_id` in the body. Only the task
+  // token branch above sets it, and it takes it from the token.
+  const publicInput = stripCommentTaskLink(input);
   const userId = authenticatedRequestUserId(c);
-  if (userId) return { ...input, authorType: "member", authorId: userId };
-  if (cleanString(input.authorType) || cleanString(input.authorId)) return input;
+  if (userId) return { ...publicInput, authorType: "member", authorId: userId };
+  if (cleanString(publicInput.authorType) || cleanString(publicInput.authorId)) return publicInput;
   const agentId = cleanString(c.req.header("X-Agent-ID"));
-  if (agentId) return { ...input, authorType: "agent", authorId: agentId };
-  if (!currentAccessToken(c) && !currentJwtUserId(c)) return input;
-  return { ...input, authorType: "member", authorId: currentRequestUserId(c) };
+  if (agentId) return { ...publicInput, authorType: "agent", authorId: agentId };
+  if (!currentAccessToken(c) && !currentJwtUserId(c)) return publicInput;
+  return { ...publicInput, authorType: "member", authorId: currentRequestUserId(c) };
+}
+
+/** Drop both spellings of the run link from a comment body. */
+export function stripCommentTaskLink<T extends { taskId?: string | null; task_id?: string | null }>(
+  input: T,
+): Omit<T, "taskId" | "task_id"> {
+  const out = { ...input };
+  delete out.taskId;
+  delete out.task_id;
+  return out;
 }
 
 export function issueSubscriberTarget(

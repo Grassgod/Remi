@@ -2,6 +2,7 @@
 // Go-compat (`*Compatibility*`) and native shapers sit side by side on purpose:
 // the two route prefixes are intentionally divergent and must stay diffable.
 import type {
+  AssignIssueInput,
   BatchDeleteIssuesInput,
   BatchUpdateIssuesInput,
   MultiremiAttachment,
@@ -18,6 +19,7 @@ import type {
   MultiremiSessionResult,
   MultiremiTimelineEntry,
   MultiremiTimelinePage,
+  CreateSessionTaskInput,
   QuickCreateIssueInput,
   UpdateIssueInput,
 } from "@multiremi/contracts/types.js";
@@ -343,9 +345,45 @@ const SERVER_OWNED_ISSUE_UPDATE_FIELDS = [
 ] as const;
 
 export function stripServerOwnedIssueUpdateFields(input: UpdateIssueInput = {}): UpdateIssueInput {
-  const out: Record<string, unknown> = { ...input };
-  for (const field of SERVER_OWNED_ISSUE_UPDATE_FIELDS) delete out[field];
-  return out as UpdateIssueInput;
+  return stripRequestFields(input, SERVER_OWNED_ISSUE_UPDATE_FIELDS);
+}
+
+/**
+ * MUL-448: lineage the assignment route stamps from the authenticated request.
+ *
+ * Same `??` hazard as above: the route overwrites `parentTaskId`, but a body
+ * that also sends `parent_task_id` leaves the alias to win when the credential
+ * carries no lineage (a member PAT has no source task, so the camelCase stamp
+ * is null and `null ?? body.parent_task_id` picks the forged value up).
+ */
+const SERVER_OWNED_ASSIGN_FIELDS = ["parentTaskId", "parent_task_id"] as const;
+
+export function stripServerOwnedAssignFields(input: AssignIssueInput = {}): AssignIssueInput {
+  return stripRequestFields(input, SERVER_OWNED_ASSIGN_FIELDS);
+}
+
+/**
+ * MUL-448: what the Session task route derives for itself.
+ *
+ * `parentTaskId` comes from the caller's task credential and `sourceEventId`
+ * names the SCM event that authorizes repository scope; neither is a
+ * caller-selectable input on this surface.
+ */
+const SERVER_OWNED_SESSION_TASK_FIELDS = [
+  "parentTaskId",
+  "parent_task_id",
+  "sourceEventId",
+  "source_event_id",
+] as const;
+
+export function stripServerOwnedSessionTaskFields(input: CreateSessionTaskInput): CreateSessionTaskInput {
+  return stripRequestFields(input, SERVER_OWNED_SESSION_TASK_FIELDS);
+}
+
+function stripRequestFields<T extends object>(input: T, fields: readonly string[]): T {
+  const out: Record<string, unknown> = { ...(input as Record<string, unknown>) };
+  for (const field of fields) delete out[field];
+  return out as T;
 }
 
 export function issueUpdateCompatibilityInput(input: UpdateIssueInput = {}): UpdateIssueInput {
