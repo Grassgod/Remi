@@ -777,7 +777,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
       | "chat" | "issue-no-workspace" | "issue-workspace-on-M" | "issue-holds-zero"
       | "with-code-on-M" | "frozen-retry-on-M" | "runtime-workspace-on-M" | "runtime-workspace-on-U"
       | "workspace-runtime-gone";
-    type Pin = "none" | "agent-bound-M-legacy" | "task-pinned-M-legacy";
+    type Pin = "none" | "agent-bound-M-legacy" | "agent-bound-M-legacy-unpinned" | "task-pinned-M-legacy";
     type Devices = "unbound" | "bound-M" | "bound-M-legacy" | "bound-M-and-M-legacy";
 
     const SHAPES: Shape[] = [
@@ -785,7 +785,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
       "with-code-on-M", "frozen-retry-on-M", "runtime-workspace-on-M", "runtime-workspace-on-U",
       "workspace-runtime-gone",
     ];
-    const PINS: Pin[] = ["none", "agent-bound-M-legacy", "task-pinned-M-legacy"];
+    const PINS: Pin[] = ["none", "agent-bound-M-legacy", "agent-bound-M-legacy-unpinned", "task-pinned-M-legacy"];
     const DEVICES: Devices[] = ["unbound", "bound-M", "bound-M-legacy", "bound-M-and-M-legacy"];
 
     interface Fixture {
@@ -841,7 +841,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
         ? "claude" : "codex";
       const agent = store.createAgent({
         name: `matrix ${shape}`, provider, workspaceId: "local",
-        ...(pin === "agent-bound-M-legacy" ? { runtimeId: legacy.id } : {}),
+        ...(pin.startsWith("agent-bound-M-legacy") ? { runtimeId: legacy.id } : {}),
       });
 
       const hasProject = shape !== "chat";
@@ -920,6 +920,10 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
       }
       if (pin === "task-pinned-M-legacy") {
         db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [legacy.id, taskId]);
+      } else if (pin === "agent-bound-M-legacy-unpinned") {
+        // Isolate the Agent constraint from the task pin. With U's workspace,
+        // removing agentBinding must now change (c) into the daemon fallback.
+        db!.run("UPDATE multiremi_tasks SET runtime_id = NULL WHERE id = ?", [taskId]);
       }
       return {
         store, codexId: codex.id, claudeId: claude.id, legacyId: legacy.id,
@@ -1098,7 +1102,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
         }
       }
       // Chat and explicit U workspaces use only the unbound device column.
-      expect(cells).toBe(9 * 3 * 4 * 2 - 2 * 3 * 3 * 2);
+      expect(cells).toBe(9 * 4 * 4 * 2 - 2 * 4 * 3 * 2);
       expect(failures).toEqual([]);
     },
     { timeout: 120_000 });
