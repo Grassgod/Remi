@@ -397,8 +397,8 @@ describe("Issue Session provider home", () => {
     const nativeConfig = parseToml(readFileSync(join(native.home, "config.toml"), "utf8")) as Record<string, any>;
     expect(nativeConfig.features.default_mode_request_user_input).toBe(true);
 
-    // Side conversation lane on an already-prepared Plugin home, which takes
-    // the reconcile path rather than the one-time seed.
+    // Side conversation lane: reconcile also appends its developer_instructions,
+    // which must not displace the features table.
     const side = resolveIssueSessionProviderHome(task("codex"), join(root, "MUL-2"), join(root, "workspaces"))!;
     await prepareIssueSessionProviderHome(side, {
       baseCodexHome: baseHome,
