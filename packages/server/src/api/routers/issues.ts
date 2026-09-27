@@ -48,6 +48,7 @@ import {
   issueCompatibilityResponse,
   issueDependencyCompatibilityResponse,
   issueDependencyErrorResponse,
+  denyTaskIdentityIssueForce,
   issueDetailCompatibilityResponse,
   issueErrorResponse,
   issueQuickCreateCompatibilityInput,
@@ -62,6 +63,7 @@ import {
   IssueTimelineRequestError,
   issueTimelineResponse,
   issueUpdateCompatibilityInput,
+  stripServerOwnedIssueUpdateFields,
   issueUsageResponse,
   labelCompatibilityErrorResponse,
   labelCompatibilityResponse,
@@ -592,22 +594,46 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
 
   app.post("/api/multiremi/issues/batch-update", async (c) => {
     const body = await readJson<BatchUpdateIssuesInput>(c);
+    // MUL-400 E1: batch update is the third status writer, so it takes the same
+    // member-only rule for `force` as the two PATCH routes.
+    const forceDenied = denyTaskIdentityIssueForce(c, body.updates ?? {});
+    if (forceDenied) return forceDenied;
     const denied = issueBatchUpdateAccess(c, body) ?? validateBatchWorkspaceBinding(c, body);
     if (denied) return denied;
+    // The batch writer needs the same attribution the PATCH routes stamp, or
+    // guards that branch on `actorType` (A4) silently do not apply.
+    const { actorType, actorId } = issueMutationActor(c);
     return c.json(store.batchUpdateIssues({
       ...body,
-      updates: body.updates ? { ...body.updates, parentTaskId: currentTaskParentId(c) } : body.updates,
+      updates: body.updates
+        ? {
+          ...stripServerOwnedIssueUpdateFields(body.updates),
+          actorType,
+          actorId,
+          parentTaskId: currentTaskParentId(c),
+        }
+        : body.updates,
     }));
   });
   app.post("/api/issues/batch-update", async (c) => {
     const body = await readJson<BatchUpdateIssuesInput>(c);
     try {
       const input = issueBatchUpdateCompatibilityInput(body);
+      const forceDenied = denyTaskIdentityIssueForce(c, body.updates ?? {});
+      if (forceDenied) return forceDenied;
       const denied = issueBatchUpdateAccess(c, input) ?? validateBatchWorkspaceBinding(c, input);
       if (denied) return denied;
+      const { actorType, actorId } = issueMutationActor(c);
       const result = store.batchUpdateIssues({
         ...input,
-        updates: input.updates ? { ...input.updates, parentTaskId: currentTaskParentId(c) } : input.updates,
+        updates: input.updates
+          ? {
+            ...stripServerOwnedIssueUpdateFields(input.updates),
+            actorType,
+            actorId,
+            parentTaskId: currentTaskParentId(c),
+          }
+          : input.updates,
       });
       return c.json({ updated: result.updated });
     } catch (err) {
@@ -823,7 +849,9 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const tasks = issue.tasks.filter((task) => canCurrentUserAccessChatTask(c, store, task)).map(taskPublicResponse);
     const comments = store.listIssueComments(issue.id);
     return c.json({
-      issue: { ...issue, tasks },
+      // MUL-400 E1: `child_count` is a plain COUNT (no child bodies), so the
+      // detail surfaces can show "N sub-issues" without the MUL-385 cost.
+      issue: { ...issue, tasks, child_count: issue.childProgress.total },
       children: issue.children,
       childProgress: issue.childProgress,
       dependencies: issue.dependencies,
@@ -1105,8 +1133,19 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<UpdateIssueInput>(c);
+    // MUL-400 E1: `force` is member-only; a run that sends it is rejected before
+    // any other validation so the guard cannot be bypassed by an agent.
+    const forceDenied = denyTaskIdentityIssueForce(c, body);
+    if (forceDenied) return forceDenied;
     const { actorType, actorId } = issueMutationActivity(c);
-    const input = { ...body, actorType, actorId, parentTaskId: currentTaskParentId(c) };
+    // S1: drop both spellings of the fields the server owns before stamping, so
+    // a body cannot smuggle `parent_task_id` / `actor_type` past the `??` reads.
+    const input = {
+      ...stripServerOwnedIssueUpdateFields(body),
+      actorType,
+      actorId,
+      parentTaskId: currentTaskParentId(c),
+    };
     assertRuntimeWorkspaceAccess(c, store, body.runtimeWorkspaceId ?? body.runtime_workspace_id, issue.workspaceId);
     const dispatchDenied = denySideSessionIssueUpdate(c, store, issue, input);
     if (dispatchDenied) return dispatchDenied;
@@ -1122,9 +1161,11 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     const body = await readJsonStrict<UpdateIssueInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const forceDenied = denyTaskIdentityIssueForce(c, body);
+    if (forceDenied) return forceDenied;
     const { actorType, actorId } = issueMutationActivity(c);
     const input = {
-      ...issueUpdateCompatibilityInput(body),
+      ...stripServerOwnedIssueUpdateFields(issueUpdateCompatibilityInput(body)),
       actorType,
       actorId,
       parentTaskId: currentTaskParentId(c),

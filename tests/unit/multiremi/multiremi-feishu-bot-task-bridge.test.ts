@@ -572,7 +572,7 @@ describe("Feishu bot standard Task bridge", () => {
     });
     const taskCount = store.listTasks().length;
 
-    const created = store.prepareFeishuIssueRoundPushesWithinTransaction({ issue, leaderTask });
+    const created = store.prepareFeishuIssueRoundPushes({ issue, leaderTask });
 
     expect(created).toHaveLength(0);
     expect(store.listTasks()).toHaveLength(taskCount);
@@ -616,7 +616,7 @@ describe("Feishu bot standard Task bridge", () => {
     const issue = store.createIssue({ title: "New Issue binding", workspaceId: "local" });
     bindFeishuTopicFixture(store, db!, inbound.chatSessionId, issue.id);
     const leader = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Issue work" });
-    const wakes = store.prepareFeishuIssueRoundPushesWithinTransaction({ issue, leaderTask: leader });
+    const wakes = store.prepareFeishuIssueRoundPushes({ issue, leaderTask: leader });
     expect(wakes).toHaveLength(1);
     expect(wakes[0]).toMatchObject({ issueId: issue.id, chatSessionId: inbound.chatSessionId });
     expect(store.listPendingTaskSteerMessages(inbound.taskId)).toEqual([]);
