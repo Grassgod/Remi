@@ -55,6 +55,38 @@ export interface KnowledgeSubmission {
   source_task: KnowledgeTaskSummary | null;
 }
 
+/**
+ * Submission as returned by the list route (MUL-386 C.2).
+ *
+ * The list deliberately omits `body` and `patch` — 100 raw bodies plus patches
+ * were 11.8–14 MB per request — and carries a truncated `body_excerpt` so a row
+ * can still show a one-line preview. The full text comes from the by-id detail
+ * request (`knowledgeSubmissionOptions`) when a row is opened.
+ */
+export interface KnowledgeSubmissionListItem {
+  id: string;
+  workspace_id: string;
+  project_id: string | null;
+  repository_id: string | null;
+  scope: string;
+  source_type: string;
+  proposed_path: string | null;
+  proposed_slug: string | null;
+  body_excerpt: string;
+  base_revision: string | null;
+  source_task_id: string | null;
+  source_issue_id: string | null;
+  source_revision: string | null;
+  author_agent_id: string | null;
+  content_sha256: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  source_issue: KnowledgeIssueSummary | null;
+  author_agent: KnowledgeAgentSummary | null;
+  source_task: KnowledgeTaskSummary | null;
+}
+
 export interface KnowledgeCompilationRun {
   id: string;
   workspace_id: string;
@@ -79,7 +111,12 @@ export interface KnowledgeCompilationSource {
   submission_id: string | null;
   source_type: string;
   source_ref: string | null;
-  metadata: Record<string, unknown>;
+  /**
+   * Arbitrary JSON. Only the single-run route returns it: the runs list omits
+   * `metadata` because 100 runs of SCM payloads were 13.8 MB per request
+   * (MUL-386 C.2). Read it exclusively from a detail query.
+   */
+  metadata?: Record<string, unknown>;
   created_at: string;
   submission: KnowledgeSubmission | null;
 }
@@ -110,7 +147,7 @@ export interface KnowledgeRunDetail {
 }
 
 export interface ListKnowledgeSubmissionsResponse {
-  submissions: KnowledgeSubmission[];
+  submissions: KnowledgeSubmissionListItem[];
 }
 
 export interface GetKnowledgeSubmissionResponse {

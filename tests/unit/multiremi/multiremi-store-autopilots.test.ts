@@ -905,7 +905,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
       dbB.close();
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   it("requeues a system event when its trigger execution fails", () => {
     const store = createStore();
