@@ -245,6 +245,11 @@ export interface MultiremiApiOptions {
    * `MULTIREMI_PEER_URL`; null explicitly disables it.
    */
   peerChannel?: PeerChannel | null;
+  /**
+   * Shared secret both halves of the peer channel must present. Undefined reads
+   * `MULTIREMI_PEER_SECRET` (falling back to `MULTIREMI_TOKEN`).
+   */
+  peerSecret?: string | null;
 }
 
 export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
@@ -337,6 +342,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
         path === "/favicon.ico" ||
         path === "/api/config" ||
         path === "/readyz" ||
+        path.startsWith("/internal/") ||
         path.startsWith("/auth/") ||
         path.startsWith("/health") ||
         path.startsWith("/api/remi/releases/") ||
@@ -404,6 +410,13 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     // locally hosted daemon unable to report its own state. Missing or unknown
     // credentials retain the historical anonymous-admin behavior.
     app.use("*", async (c, next) => {
+      // MUL-462: `/internal/*` never carried dashboard semantics. The peer
+      // routes authenticate themselves; without this a peer secret that happens
+      // to collide with a task token could be rejected as a denied write.
+      if (c.req.path.startsWith("/internal/")) {
+        await next();
+        return;
+      }
       const header = c.req.header("Authorization") ?? "";
       const rawToken = header.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
       const accessToken = rawToken ? await store.verifyAccessToken(rawToken) : null;
@@ -511,9 +524,13 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     // False when no peer is configured: "no channel" must not read as unhealthy.
     peer_healthy: options.peerChannel ? options.peerChannel.healthy() : false,
   }));
+  // `/internal/*` is deliberately outside the dashboard auth middleware (see
+  // the `authToken` branch above): the peer authenticates with its own shared
+  // secret, and a deployment that sets `MULTIREMI_PEER_SECRET` to something
+  // other than `MULTIREMI_TOKEN` must still be able to reach these routes.
   registerPeerRoutes(app, {
     peer: options.peerChannel ?? null,
-    secret: resolvePeerSecret(),
+    secret: options.peerSecret === undefined ? resolvePeerSecret() : (options.peerSecret ?? ""),
   });
   registerWebhookRoutes(app, deps);
   registerScmWebhookRoutes(app, deps);
@@ -757,8 +774,11 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   // no sender, no subscriber, and the routes answer 503 instead of pretending to
   // accept an event nobody can receive.
   const peerUrl = resolvePeerUrl();
+  const peerSecret = options.peerSecret === undefined
+    ? resolvePeerSecret()
+    : (options.peerSecret ?? "");
   const peer = options.peerChannel === undefined
-    ? (peerUrl ? createPeerChannel({ url: peerUrl, secret: resolvePeerSecret() }) : null)
+    ? (peerUrl ? createPeerChannel({ url: peerUrl, secret: peerSecret }) : null)
     : options.peerChannel;
   const app = createMultiremiApp({
     ...options,

@@ -27,6 +27,11 @@ import {
   recordDbQuery,
   resolveDbReplyMaxBytes,
   resolveRequestMetricsOptions,
+  drainPeerWindowMetrics,
+  peerMetricsSnapshot,
+  recordPeerBatch,
+  recordPeerDropped,
+  recordPeerFailure,
   resetRequestMetricsForTest,
   startRequestMetricsSummary,
   summarizeWindow,
@@ -507,7 +512,7 @@ describe("MUL-367 request metrics — minute summary timer", () => {
     const summary = JSON.parse(summaryLines[0]!) as Record<string, unknown>;
     expect(Object.keys(summary).sort()).toEqual([
       "db_busy_pct", "db_queries", "dropped", "event", "event_loop_lag_max_ms",
-      "requests", "routes", "slow", "status_5xx", "ts", "window_ms",
+      "peer", "requests", "routes", "slow", "status_5xx", "ts", "window_ms",
     ]);
     expect(summary.requests).toBe(1);
     expect(summary.db_queries).toBe(1);
@@ -516,6 +521,22 @@ describe("MUL-367 request metrics — minute summary timer", () => {
     ]);
 
     runtime!.stop();
+  });
+
+  it("reports this window's peer counters and resets them for the next one", () => {
+    // MUL-462: the peer block is per-window, not a running total, so a burst of
+    // cross-process forwarding in one minute is not smeared across the next.
+    recordPeerBatch({ events: 3, rttMs: 4 });
+    recordPeerBatch({ events: 5, rttMs: 8 });
+    recordPeerDropped(2);
+    recordPeerFailure();
+
+    const first = drainPeerWindowMetrics();
+    expect(first).toEqual({ sent: 8, batches: 2, dropped: 2, failed: 1, rtt_p95_ms: 8 });
+    expect(drainPeerWindowMetrics()).toEqual({ sent: 0, batches: 0, dropped: 0, failed: 0, rtt_p95_ms: 0 });
+
+    // The lifetime view keeps the totals the health endpoint reports.
+    expect(peerMetricsSnapshot()).toMatchObject({ sent: 8, batches: 2, dropped: 2, failed: 1 });
   });
 
   it("creates no timer when metrics are disabled", () => {
