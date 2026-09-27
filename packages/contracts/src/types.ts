@@ -1260,6 +1260,126 @@ export interface MultiremiTaskHumanRequest {
   respondedBy: string | null;
   createdAt: string;
   respondedAt: string | null;
+  /**
+   * Deadline the executing daemon asked for (MUL-407). The server defaults it
+   * to an hour when an older daemon omits `timeout_ms`; the reminder lane and
+   * the terminal card both read it. The daemon still owns the actual timeout
+   * decision, so this is a scheduling hint rather than a second authority.
+   */
+  expiresAt?: string | null;
+}
+
+/**
+ * MUL-400 E4: one "waiting for your decision" item recorded on a parent Issue.
+ *
+ * A child run raises it instead of blocking: the parent owner either answers it
+ * itself (`answered`) or hands it to a human (`escalated`). Only escalated rows
+ * enter the human "waiting for you" list. This is deliberately a light row, not
+ * a scoped grant object: there is no scope, expiry or revocation.
+ */
+export type MultiremiIssueDecisionKind = "merge" | "production_change" | "criteria" | "question" | "permission" | "other";
+
+export type MultiremiIssueDecisionStatus = "pending" | "escalated" | "answered" | "withdrawn";
+
+/** Who answered: a human (`member`) or the parent's owner agent (`agent`). */
+export type MultiremiIssueDecisionAnswererType = "member" | "agent";
+
+export interface MultiremiIssueDecisionAnswer {
+  answererType: MultiremiIssueDecisionAnswererType;
+  answererId: string;
+  /** The answer itself: the chosen option(s) or free text. */
+  answer: string;
+  /** Why this is the right call. Required for an agent answer. */
+  reason: string;
+  /** How to overturn it. Required when the parent's owner agent answers. */
+  overturn: string | null;
+  answeredAt: string;
+}
+
+export interface MultiremiIssueDecision {
+  id: string;
+  workspaceId: string;
+  /** The Issue the row hangs on: the source Issue's parent, or the source itself. */
+  issueId: string;
+  /** The child Issue (or the run's own Issue) that raised it. */
+  sourceIssueId: string;
+  sourceTaskId: string | null;
+  kind: MultiremiIssueDecisionKind;
+  title: string;
+  body: string;
+  options: string[] | null;
+  status: MultiremiIssueDecisionStatus;
+  /** Latest answer; earlier answers stay in {@link history}. */
+  answer: MultiremiIssueDecisionAnswer | null;
+  answeredByMemberId: string | null;
+  answeredAt: string | null;
+  /** Every answer in order, so a human re-answer keeps the previous record. */
+  history: MultiremiIssueDecisionAnswer[];
+  /** The parent owner agent expected to answer a `pending` row, when one exists. */
+  ownerAgentId: string | null;
+  createdByAgentId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type MultiremiIssueDecisionBucket = "waiting_on_human" | "pending_owner" | "answered";
+
+/**
+ * MUL-400 E4 read model: the two groups the parent page renders. The waiting
+ * group mixes escalated decisions with the subtree's pending human requests, so
+ * it is a union view rather than a mirror table.
+ */
+export interface MultiremiIssueDecisionEntry {
+  id: string;
+  bucket: MultiremiIssueDecisionBucket;
+  type: "decision" | "human_request";
+  kind: MultiremiIssueDecisionKind;
+  title: string;
+  body: string | null;
+  status: string;
+  issueId: string;
+  sourceIssueId: string | null;
+  sourceTaskId: string | null;
+  options: string[] | null;
+  /** Original payload for the existing human-request cards. */
+  payload?: Record<string, unknown>;
+  answer: MultiremiIssueDecisionAnswer | null;
+  /**
+   * Every answer in chronological order, oldest first. Present on `decision`
+   * entries (and `[]` when never answered) so a member revision does not hide
+   * the owner's original call; human-request entries omit the key.
+   */
+  history?: MultiremiIssueDecisionAnswer[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MultiremiIssueDecisionList {
+  waiting_on_human: MultiremiIssueDecisionEntry[];
+  owner_and_answered: {
+    pending: MultiremiIssueDecisionEntry[];
+    answered: MultiremiIssueDecisionEntry[];
+  };
+  count: number;
+}
+
+export interface IssueDecisionActor {
+  type: "member" | "agent";
+  id: string;
+  taskId: string | null;
+}
+
+export interface CreateIssueDecisionInput {
+  kind: string;
+  title: string;
+  body?: string | null;
+  options?: string[] | null;
+}
+
+export interface AnswerIssueDecisionInput {
+  answer: string;
+  reason: string;
+  overturn?: string | null;
 }
 
 export type MultiremiTaskPromptMode = "bootstrap" | "delta";
@@ -1283,6 +1403,8 @@ export interface CreateTaskHumanRequestInput {
   taskId: string;
   kind: MultiremiTaskHumanRequestKind;
   payload: Record<string, unknown>;
+  /** Requested lifetime in milliseconds; omitted by daemons that predate it. */
+  timeoutMs?: number;
 }
 
 export type MultiremiTaskSteerKind = "steer" | "force_answer";
@@ -4123,6 +4245,17 @@ export interface ReportBotMenuPublishInput {
 /** Capability a Runtime must advertise before it can be selected to host the bot. */
 export const FEISHU_CONCIERGE_CONFIG_CAPABILITY = "feishu_concierge_config_v1";
 
+/**
+ * Metadata flag a bot host sets when it can render server-built decision cards
+ * (MUL-407). The control plane only writes a `decision_card` delivery for a host
+ * that reports it, so an older daemon keeps the previous "wake a relay Agent"
+ * behavior until it is upgraded.
+ */
+export const FEISHU_DECISION_CARD_CAPABILITY = "feishu_decision_card";
+
+/** Heartbeat field carrying {@link FEISHU_DECISION_CARD_CAPABILITY}. */
+export const FEISHU_DECISION_CARD_PROTOCOL_VERSION = 1;
+
 /** Protocol version a daemon reports in register/heartbeat when it can host the bot. */
 export const FEISHU_CONCIERGE_PROTOCOL_VERSION = 1;
 
@@ -4159,6 +4292,47 @@ export interface FeishuBotOutboundMention {
   /** Omitted until prepared; null means a deliberate no-mention outcome. */
   resolvedOpenId?: string | null;
 }
+
+/**
+ * Feishu outbound lanes (MUL-407 / E5). The human-request lifecycle feeds only
+ * these; MUL-403 replaces the event source (Live Hub subscription) without
+ * changing the kinds or the checkpoint fields.
+ */
+export type FeishuBotOutboundDeliveryKind =
+  | "decision_card"
+  | "decision_card_patch"
+  | "decision_reminder";
+
+/**
+ * Lifecycle events a decision-card pipeline consumes, keyed by request id.
+ * Today the source is the request write plus bot-host polling; MUL-403 swaps in
+ * a subscription. Names are part of the interface with MUL-403.
+ */
+export type FeishuHumanRequestLifecycleEvent =
+  | "created"
+  | "reminder_due"
+  | "responded"
+  | "expired"
+  | "cancelled";
+
+/**
+ * Why a decision lane fell back to plain text (MUL-407). The first three mean
+ * "nobody could be identified as the person to ask", so the reminder must not
+ * @ anyone; `send_failed` keeps whatever recipient was already resolved.
+ */
+export type FeishuDecisionDegradeReason =
+  | "notify_none"
+  | "invalid_recipient"
+  | "unresolved_recipient"
+  | "send_failed";
+
+/** Reasons where no one was addressable, so a reminder must not @ anyone. */
+export const FEISHU_DECISION_NO_RECIPIENT_REASONS: readonly FeishuDecisionDegradeReason[] =
+  ["notify_none", "invalid_recipient", "unresolved_recipient"];
+
+/** Every reason a decision lane may report, accepted at the daemon boundary. */
+export const FEISHU_DECISION_DEGRADE_REASONS: readonly FeishuDecisionDegradeReason[] =
+  [...FEISHU_DECISION_NO_RECIPIENT_REASONS, "send_failed"];
 
 /** What the control plane wants the selected Runtime to do with the connector. */
 export type FeishuBotDesiredState = "running" | "stopped";
@@ -4216,6 +4390,38 @@ export interface MultiremiFeishuBotOutboundDelivery {
   presentation?: FeishuPresentationCheckpoint;
   /** The requester, including in private chats where the final card needs no @. */
   interactionOpenId?: string;
+  /**
+   * What the host should do with this delivery (MUL-407). Absent means the
+   * legacy behavior: text for a topic seed, a Task stream when `taskId` is set.
+   * `decision_card` carries a server-built card in `body` and posts it as a
+   * proactive thread reply; `decision_card_patch` edits the message named by
+   * `previousDeliveryId`; `decision_reminder` is a plain text nudge.
+   */
+  kind?: FeishuBotOutboundDeliveryKind;
+  /** Set on every decision-card lane so the host can poll the request. */
+  humanRequestId?: string;
+  human_request_id?: string;
+  /**
+   * The Task that asked. The host needs it to read and answer the request over
+   * the existing task-scoped routes, including after it restarts and has to
+   * re-register a card it no longer remembers sending.
+   */
+  humanRequestTaskId?: string;
+  human_request_task_id?: string;
+  /** `decision_card_patch` only: the message this lane rewrites in place. */
+  targetMessageId?: string;
+  target_message_id?: string;
+  /**
+   * Set when a decision lane could not address the person who was asked
+   * (MUL-407). The host then sends `body` as plain text instead of rendering a
+   * card, and the control plane skips both the terminal patch and the reminder
+   * mention for this request.
+   */
+  degraded?: FeishuDecisionDegradeReason;
+  degradeReason?: FeishuDecisionDegradeReason;
+  /** Reminder deadline for `decision_card` / `decision_reminder`. */
+  expiresAt?: string | null;
+  expires_at?: string | null;
 }
 
 /**

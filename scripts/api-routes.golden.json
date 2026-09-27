@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 759,
+    "routeCount": 765,
     "routeCountByPrefix": {
       "native": 210,
-      "compat": 535,
+      "compat": 541,
       "root": 14
     },
-    "getRoutes": 324,
-    "getRoutesWithBody": 321,
+    "getRoutes": 326,
+    "getRoutesWithBody": 323,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 435,
+    "mutationRoutes": 439,
     "mutationRoutesCovered": 282,
     "flows": [
       "agents-compat",
@@ -183,6 +183,7 @@
     "GET /api/daemon/runtimes/:id/codex-profile-key",
     "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired",
     "GET /api/daemon/runtimes/:runtimeId/feishu-bot",
+    "GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards",
     "GET /api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/attachments/:attachmentId",
     "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
     "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status",
@@ -214,6 +215,7 @@
     "GET /api/issues/:id/change-requests",
     "GET /api/issues/:id/children",
     "GET /api/issues/:id/comments",
+    "GET /api/issues/:id/decisions",
     "GET /api/issues/:id/dependencies",
     "GET /api/issues/:id/generated-issues",
     "GET /api/issues/:id/labels",
@@ -584,6 +586,10 @@
     "POST /api/invitations/:id/decline",
     "POST /api/issues",
     "POST /api/issues/:id/comments",
+    "POST /api/issues/:id/decisions",
+    "POST /api/issues/:id/decisions/:decisionId/answer",
+    "POST /api/issues/:id/decisions/:decisionId/escalate",
+    "POST /api/issues/:id/decisions/:decisionId/withdraw",
     "POST /api/issues/:id/dependencies",
     "POST /api/issues/:id/labels",
     "POST /api/issues/:id/reactions",
@@ -927,6 +933,7 @@
     "GET /api/daemon/runtimes/:id/codex-profile-key",
     "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired",
     "GET /api/daemon/runtimes/:runtimeId/feishu-bot",
+    "GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards",
     "GET /api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/attachments/:attachmentId",
     "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
     "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status",
@@ -958,6 +965,7 @@
     "GET /api/issues/:id/change-requests",
     "GET /api/issues/:id/children",
     "GET /api/issues/:id/comments",
+    "GET /api/issues/:id/decisions",
     "GET /api/issues/:id/dependencies",
     "GET /api/issues/:id/generated-issues",
     "GET /api/issues/:id/labels",
@@ -4964,7 +4972,8 @@
           "response": null,
           "respondedBy": null,
           "createdAt": "<timestamp>",
-          "respondedAt": null
+          "respondedAt": null,
+          "expiresAt": "<timestamp>"
         }
       }
     },
@@ -4985,7 +4994,8 @@
           "response": {},
           "respondedBy": "local",
           "createdAt": "<timestamp>",
-          "respondedAt": "<timestamp>"
+          "respondedAt": "<timestamp>",
+          "expiresAt": "<timestamp>"
         }
       }
     },
@@ -5006,7 +5016,8 @@
           "response": null,
           "respondedBy": null,
           "createdAt": "<timestamp>",
-          "respondedAt": null
+          "respondedAt": null,
+          "expiresAt": "<timestamp>"
         }
       }
     },
@@ -5027,7 +5038,8 @@
           "response": {},
           "respondedBy": "local",
           "createdAt": "<timestamp>",
-          "respondedAt": "<timestamp>"
+          "respondedAt": "<timestamp>",
+          "expiresAt": "<timestamp>"
         }
       }
     },
@@ -5048,7 +5060,8 @@
           "response": null,
           "respondedBy": null,
           "createdAt": "<timestamp>",
-          "respondedAt": null
+          "respondedAt": null,
+          "expiresAt": "<timestamp>"
         }
       }
     },
@@ -5069,7 +5082,8 @@
           "response": null,
           "respondedBy": null,
           "createdAt": "<timestamp>",
-          "respondedAt": "<timestamp>"
+          "respondedAt": "<timestamp>",
+          "expiresAt": "<timestamp>"
         }
       }
     },
@@ -9556,6 +9570,61 @@
             "allowed": true
           },
           {
+            "id": "issue.decision.answer",
+            "command": "remi issue decision answer",
+            "capability": "issue.decision.answer",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.decision.escalate",
+            "command": "remi issue decision escalate",
+            "capability": "issue.decision.escalate",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.decision.list",
+            "command": "remi issue decision list",
+            "capability": "issue.decision.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.decision.request",
+            "command": "remi issue decision request",
+            "capability": "issue.decision.request",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.decision.withdraw",
+            "command": "remi issue decision withdraw",
+            "capability": "issue.decision.withdraw",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "issue.delete",
             "command": "remi issue delete",
             "capability": "issue.delete",
@@ -13908,6 +13977,16 @@
       }
     },
     {
+      "key": "get-sweep GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards",
+      "route": "GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards",
+      "path": "/api/daemon/runtimes/rt_snapshot/feishu-bot/decision-cards",
+      "status": 403,
+      "body": {
+        "error": "daemon token required",
+        "code": "daemon_token_required"
+      }
+    },
+    {
       "key": "get-sweep GET /api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/attachments/:attachmentId",
       "route": "GET /api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/attachments/:attachmentId",
       "path": "/api/daemon/runtimes/rt_snapshot/feishu-bot/outbound/whd_8rcx9z88woyu/attachments/att_snapshot",
@@ -14079,7 +14158,8 @@
           "response": null,
           "respondedBy": null,
           "createdAt": "<timestamp>",
-          "respondedAt": null
+          "respondedAt": null,
+          "expiresAt": "<timestamp>"
         }
       }
     },
@@ -14673,7 +14753,8 @@
             "emoji": "+1",
             "created_at": "<timestamp>"
           }
-        ]
+        ],
+        "pending_decision_count": 1
       }
     },
     {
@@ -14912,6 +14993,83 @@
           ]
         }
       ]
+    },
+    {
+      "key": "get-sweep GET /api/issues/:id/decisions",
+      "route": "GET /api/issues/:id/decisions",
+      "path": "/api/issues/iss_snapshot/decisions",
+      "status": 200,
+      "body": {
+        "waiting_on_human": [
+          {
+            "id": "hrq_snapshot",
+            "bucket": "waiting_on_human",
+            "type": "human_request",
+            "kind": "permission",
+            "title": "Permission request",
+            "body": null,
+            "status": "pending",
+            "issueId": "iss_snapshot",
+            "sourceIssueId": "iss_snapshot",
+            "sourceTaskId": "tsk_snapshot",
+            "options": null,
+            "payload": {
+              "tool": "Bash",
+              "command": "ls"
+            },
+            "answer": null,
+            "createdAt": "<timestamp>",
+            "updatedAt": "<timestamp>"
+          }
+        ],
+        "owner_and_answered": {
+          "pending": [],
+          "answered": [
+            {
+              "id": "dcs_snapshot",
+              "bucket": "answered",
+              "type": "decision",
+              "kind": "merge",
+              "title": "Snapshot merge decision",
+              "body": "Snapshot decision body",
+              "status": "answered",
+              "issueId": "iss_snapshot",
+              "sourceIssueId": "iss_snapshot",
+              "sourceTaskId": "tsk_snapshot",
+              "options": null,
+              "answer": {
+                "answererType": "member",
+                "answererId": "mem_snapshot_one",
+                "answer": "Hold for QA",
+                "reason": "Human review",
+                "overturn": null,
+                "answeredAt": "<timestamp>"
+              },
+              "history": [
+                {
+                  "answererType": "agent",
+                  "answererId": "agt_snapshot",
+                  "answer": "Merge after CI",
+                  "reason": "Checks passed",
+                  "overturn": "A member can reverse this if QA fails",
+                  "answeredAt": "<timestamp>"
+                },
+                {
+                  "answererType": "member",
+                  "answererId": "mem_snapshot_one",
+                  "answer": "Hold for QA",
+                  "reason": "Human review",
+                  "overturn": null,
+                  "answeredAt": "<timestamp>"
+                }
+              ],
+              "createdAt": "<timestamp>",
+              "updatedAt": "<timestamp>"
+            }
+          ]
+        },
+        "count": 1
+      }
     },
     {
       "key": "get-sweep GET /api/issues/:id/dependencies",
@@ -19441,7 +19599,8 @@
               "createdAt": "<timestamp>"
             }
           ],
-          "child_count": 1
+          "child_count": 1,
+          "pending_decision_count": 1
         },
         "children": [
           {
@@ -22206,7 +22365,8 @@
             "response": null,
             "respondedBy": null,
             "createdAt": "<timestamp>",
-            "respondedAt": null
+            "respondedAt": null,
+            "expiresAt": "<timestamp>"
           }
         ]
       }
@@ -23466,7 +23626,8 @@
             "response": null,
             "respondedBy": null,
             "createdAt": "<timestamp>",
-            "respondedAt": null
+            "respondedAt": null,
+            "expiresAt": "<timestamp>"
           }
         ]
       }

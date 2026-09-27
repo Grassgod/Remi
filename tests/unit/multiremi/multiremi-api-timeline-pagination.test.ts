@@ -12,7 +12,7 @@ afterEach(() => {
 });
 
 function createStore(): { store: MultiremiStore; db: Database } {
-  const db = new Database(":memory:");
+  const db = Object.assign(new Database(":memory:"), { dialect: "sqlite" as const });
   databases.push(db);
   return { store: new MultiremiStore(db), db };
 }
@@ -215,6 +215,10 @@ describe("issue timeline hydration query count", () => {
     databases.push(db);
     let queryCount = 0;
     const countingDb: SqlDatabase = {
+      // Forward the backend: the store migrates on construction, so an
+      // inherited MULTIREMI_DATABASE_URL must not send this SQLite fixture down
+      // the Postgres branch (MUL-407).
+      dialect: "sqlite" as const,
       query(sql) {
         queryCount += 1;
         return db.query(sql);

@@ -1,5 +1,17 @@
 # CLI command migration
 
+`remi issue decision request <source-issue> --kind <kind> --title <title>
+[--body-stdin] [--option <choice>...]` records a non-blocking decision on the
+source issue's parent (or on the source issue itself when it has no parent).
+The requesting task can end its current round after the command returns. The
+parent owner agent answers with `remi issue decision answer <parent> <decision>
+--text <answer> --reason <why> --overturn <how>`, or hands it to a member with
+`remi issue decision escalate <parent> <decision>`. Members can answer or revise
+any decision. `remi issue decision list <parent>` shows the waiting-on-human and
+owner/answered groups; `remi issue decision withdraw <parent> <decision>` removes
+an unanswered request. The answer record ID must be cited as `decision:<id>` in
+subsequent work.
+
 This document is the user-facing migration contract for the Registry-based Remi CLI.
 The machine-readable source of truth remains `cli-capabilities.json`; CI checks this
 table against that manifest.
