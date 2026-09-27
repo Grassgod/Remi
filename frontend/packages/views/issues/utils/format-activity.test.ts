@@ -176,9 +176,6 @@ describe("formatActivity", () => {
       );
     }
     expect(
-      formatActivity(activity("child_done_parent_skipped", { details: { reason: "active_task_exists" } }), t),
-    ).toBe('activity.child_done_parent_skipped {"reason":"active_task_exists"}');
-    expect(
       formatActivity(
         activity("child_done_parent_skipped", { details: { reason: "future_reason" } }),
         t,

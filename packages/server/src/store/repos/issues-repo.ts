@@ -324,6 +324,13 @@ export class IssuesRepo {
       body: input.title,
       data: { projectId, parentIssueId, issueKind, sourceIssueId, priority, startDate, dueDate },
     });
+    // MUL-400 E1 re-derivation: a child created under an in_review parent puts
+    // that parent back to in_progress. `createIssue` is the third entry point
+    // the plan names alongside status change and re-parenting.
+    if (parentIssueId && parentStatusGuardEnabled()) {
+      const parent = this.getIssue(parentIssueId);
+      if (parent) this.rederiveParentStatus(parent, this.getIssue(id)!);
+    }
     if (sourceIssueId) {
       this.ctx.db.run("UPDATE multiremi_issues SET updated_at = ? WHERE id = ?", [now, sourceIssueId]);
       this.ctx.appendIssueActivity(sourceIssueId, {
@@ -567,7 +574,11 @@ export class IssuesRepo {
     for (const issueId of issueIds) {
       try {
         issues.push(this.updateIssue(issueId, updates));
-      } catch {
+      } catch (err) {
+        // Batch tolerates invalid or inaccessible rows by skipping them, but a
+        // parent-status refusal is a decision the caller must see: swallowing it
+        // would answer 200 for a write that was rejected (MUL-400 E1, A4).
+        if (err instanceof ParentStatusGuardError) throw err;
         // Match Multiremi's batch behavior: skip invalid or inaccessible rows.
       }
     }
@@ -899,6 +910,11 @@ export class IssuesRepo {
    * MUL-400 E1 guard A. Runs inside {@link updateIssueWithOutcome}'s row lock so
    * a user terminal write and a child status change cannot both derive from the
    * same stale child set.
+   *
+   * Only a status edit that actually CHANGES the Issue is guarded. The callers
+   * that touch other fields — the auto-retitle service, the merge-completion
+   * effect and every title/description/priority edit in the UI — are not status
+   * decisions and must keep working on parents that already have children.
    */
   private assertParentStatusAllowed(
     id: string,
@@ -946,6 +962,11 @@ export class IssuesRepo {
    * summary. The signal is the owner's task set on the parent: a `completed` task
    * with a non-empty result and `completed_at` at or after the last child's
    * terminal timestamp.
+   *
+   * System paths that close an Issue on an external authority's behalf (the SCM
+   * merge effect) skip this and guard A4 entirely: the merge already required
+   * 贺华杰's authorization, so the Issue's terminal state carries the same human
+   * decision the guard exists to protect.
    */
   finalSummaryAfterLastChild(parentIssueId: string): { satisfied: boolean; lastChildClosedAt: string | null } {
     const parent = this.getIssue(parentIssueId);
@@ -1146,7 +1167,14 @@ export class IssuesRepo {
       // MUL-400 E1 guard A, inside the Issue row lock: a parent with unfinished
       // children cannot be parked in review or closed, and only a member may
       // override. Runs before the write so a rejected request changes nothing.
-      if (parentStatusGuardEnabled()) this.assertParentStatusAllowed(id, current, nextStatus, input);
+      // Field-only edits are never status decisions, so the guard stays out of
+      // their way even for a task identity.
+      const statusChanged = nextStatus !== current.status;
+      const bypassParentStatusGuard = input.bypassParentStatusGuard === true
+        || input.bypass_parent_status_guard === true;
+      if (parentStatusGuardEnabled() && statusChanged && !bypassParentStatusGuard) {
+        this.assertParentStatusAllowed(id, current, nextStatus, input);
+      }
       const enteringTerminal = !isTerminalIssueStatus(current.status) && isTerminalIssueStatus(nextStatus);
       const leavingTerminal = isTerminalIssueStatus(current.status) && !isTerminalIssueStatus(nextStatus);
       const nextCompletedAt = enteringTerminal
@@ -1252,6 +1280,13 @@ export class IssuesRepo {
       updated,
       cleanOptionalString(input.parentTaskId ?? input.parent_task_id),
     );
+    // MUL-400 E1 re-derivation for re-parenting: moving a child away is a child
+    // event for the family it LEFT, so the old parent re-derives as well. The
+    // new parent is covered by the hook above.
+    if (parentStatusGuardEnabled() && previous!.parentIssueId && previous!.parentIssueId !== updated.parentIssueId) {
+      const oldParent = this.getIssue(previous!.parentIssueId);
+      if (oldParent) this.rederiveParentStatus(oldParent, updated);
+    }
     return { issue: updated, cancelledTasks };
   }
 
@@ -1373,10 +1408,20 @@ export class IssuesRepo {
    * waiting for an answer the Issue legitimately parks at `in_review`, and the
    * resume path puts it back.
    */
-  holdParentStatusForOpenChildren(issueId: string, requested: string): string {
+  holdParentStatusForOpenChildren(
+    issueId: string,
+    requested: string,
+    options: { exempt?: boolean } = {},
+  ): string {
+    if (options.exempt) return requested;
     if (!parentStatusGuardEnabled()) return requested;
     if (!statusNeedsChildGuard(requested)) return requested;
-    if (!this.hasIssue(issueId)) return requested;
+    const issue = this.getIssue(issueId);
+    if (!issue) return requested;
+    // A settled Issue is a human decision that the task path must not reopen.
+    // Bailing out before the audit write also keeps `done`/`cancelled` parents
+    // free of `parent_status_held` noise for a transition that never happened.
+    if (issue.status === "done" || issue.status === "cancelled") return requested;
     const openChildren = this.countOpenChildIssues(issueId);
     if (openChildren === 0) return requested;
     this.ctx.appendIssueActivity(issueId, {
@@ -1691,7 +1736,7 @@ export class IssuesRepo {
    * MUL-400 E2 round scheduling.
    *
    * The parent owner is busy in the common case, and that must not swallow the
-   * report. Instead of skipping on `active_task_exists`, the report is appended
+   * report. Instead of skipping a busy owner, the report is appended
    * to the agent's already-queued round for this issue (found by the same
    * query the Session picker uses), or a fresh queued round is created. The
    * workspace lock serialises both branches, so a parent keeps at most one
@@ -3921,15 +3966,6 @@ export class IssuesRepo {
        LIMIT 1`,
     ).get(...params) as { id: string } | null;
     return row ? this.ctx.tasks().getTask(row.id) : null;
-  }
-
-  private hasActiveTaskForIssueAndAgent(issueId: string, agentId: string): boolean {
-    const row = this.ctx.db.query(
-      `SELECT 1 AS present FROM multiremi_tasks
-       WHERE issue_id = ? AND agent_id = ? AND status NOT IN ('completed', 'failed', 'cancelled')
-       LIMIT 1`,
-    ).get(issueId, agentId) as { present: number } | null;
-    return Boolean(row);
   }
 
   private nextIssueNumber(workspaceId: string): number {

@@ -3225,8 +3225,12 @@ runMigrations(this.db);
     return this.issues.countOpenChildIssues(parentIssueId);
   }
 
-  holdParentStatusForOpenChildren(issueId: string, requested: string): string {
-    return this.issues.holdParentStatusForOpenChildren(issueId, requested);
+  holdParentStatusForOpenChildren(
+    issueId: string,
+    requested: string,
+    options: { exempt?: boolean } = {},
+  ): string {
+    return this.issues.holdParentStatusForOpenChildren(issueId, requested, options);
   }
 
   notifyChildStatusChange(
@@ -4574,6 +4578,7 @@ runMigrations(this.db);
     audit: MultiremiOrganizerAction;
     comment: MultiremiIssueComment;
   } {
+    const childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChange[] = [];
     let redispatchResult: ReturnType<TasksRepo["redispatchTaskWithinTransaction"]> | null = null;
     const result = this.db.transaction(() => {
       const supervisorTask = this.getTask(input.supervisorTaskId);
@@ -4623,7 +4628,7 @@ runMigrations(this.db);
       if (input.action === "cancel") {
         task = this.tasks.cancelTask(target.id);
       } else if (input.action === "redispatch") {
-        redispatchResult = this.tasks.redispatchTaskWithinTransaction(target.id);
+        redispatchResult = this.tasks.redispatchTaskWithinTransaction(target.id, childStatusChanges);
         task = redispatchResult.cancelled;
         replacementTask = redispatchResult.replacement;
       } else {
@@ -4671,6 +4676,9 @@ runMigrations(this.db);
       });
       return { task, replacementTask, message, audit, comment };
     })();
+    // The organizer transaction collected the cancelled task's Issue transitions;
+    // replay them now that it has committed (MUL-400 E1/E2).
+    this.tasks.runCollectedChildStatusChanges(childStatusChanges);
     if (redispatchResult) this.tasks.notifyRedispatchedTask(redispatchResult);
     this.issues.dispatchDeferredAgentCommentMentions(result.comment.id);
     return result;
@@ -4719,8 +4727,11 @@ runMigrations(this.db);
     return this.tasks.failTask(taskId, input);
   }
 
-  cancelTaskWithinTransaction(taskId: string): import("./repos/tasks-repo.js").CancelTaskResult {
-    return this.tasks.cancelTaskWithinTransaction(taskId);
+  cancelTaskWithinTransaction(
+    taskId: string,
+    childStatusChanges?: import("./repos/tasks-repo.js").ChildStatusChange[] | null,
+  ): import("./repos/tasks-repo.js").CancelTaskResult {
+    return this.tasks.cancelTaskWithinTransaction(taskId, childStatusChanges);
   }
 
   notifyCancelledTask(result: import("./repos/tasks-repo.js").CancelTaskResult): void {

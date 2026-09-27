@@ -292,6 +292,19 @@ interface DelegationReturnDrainResult {
   taskBySourceId: Map<string, MultiremiTask>;
 }
 
+/**
+ * One Issue transition produced by the task-terminal sync. The E1/E2 hook that
+ * consumes it writes comments, session events and follow-up tasks, so it runs
+ * after the terminal transaction commits (see {@link TasksRepo.runChildStatusChanges}).
+ */
+export interface ChildStatusChange {
+  previous: MultiremiIssue;
+  issue: MultiremiIssue;
+  taskId: string;
+  /** Terminal status of the task that produced the transition, when it was terminal. */
+  taskTerminalStatus?: "completed" | "failed" | "cancelled";
+}
+
 interface TaskTerminalFollowUps {
   retry: MultiremiTask | null;
   delegationReturns: MultiremiTask[];
@@ -2521,7 +2534,15 @@ export class TasksRepo {
       );
       if (transition.changes > 0) {
         transitionedTask = this.getTask(input.taskId);
-        if (transitionedTask) this.syncIssueStatusFromTaskWithinTransaction(transitionedTask, "in_review", { rederive: true });
+        // Guard B is deliberately exempt here: while an owner waits for an
+        // answer the Issue legitimately parks at `in_review`, and the resume
+        // path (`resumeTaskFromAwaitingHumanWithinTransaction`) puts it back.
+        if (transitionedTask) {
+          this.syncIssueStatusFromTaskWithinTransaction(transitionedTask, "in_review", {
+            rederive: true,
+            exemptFromParentStatusGuard: true,
+          });
+        }
       }
       return this.getTaskHumanRequest(id)!;
     })();
@@ -2898,6 +2919,7 @@ export class TasksRepo {
   }): MultiremiTask {
     const initial = this.getTask(taskId);
     if (!initial || !isActiveTaskStatus(initial.status)) throw new Error(`Task not found or terminal: ${taskId}`);
+    const childStatusChanges: ChildStatusChange[] = [];
     const terminal = this.ctx.db.transaction(() => {
       this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
       const current = this.getTask(taskId);
@@ -2933,10 +2955,11 @@ export class TasksRepo {
       );
       if (result.changes === 0) throw new Error(`Task not found or terminal: ${taskId}`);
       const completed = this.getTask(taskId)!;
-      const followUps = this.afterTaskTerminal(completed, "completed", input.output, true);
+      const followUps = this.afterTaskTerminal(completed, "completed", input.output, true, false, childStatusChanges);
       return { task: completed, followUps };
     })();
     const task = terminal.task;
+    this.runChildStatusChanges(childStatusChanges);
     this.postAgentReplyComment(task, input.output);
     for (const delegationReturn of terminal.followUps.delegationReturns) {
       this.ctx.notifyTaskEnqueued(delegationReturn);
@@ -2955,6 +2978,7 @@ export class TasksRepo {
   }): MultiremiTask {
     const initial = this.getTask(taskId);
     if (!initial || !isActiveTaskStatus(initial.status)) throw new Error(`Task not found or terminal: ${taskId}`);
+    const childStatusChanges: ChildStatusChange[] = [];
     const terminal = this.ctx.db.transaction(() => {
       this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
       const current = this.getTask(taskId);
@@ -2980,9 +3004,10 @@ export class TasksRepo {
       );
       if (result.changes === 0) throw new Error(`Task not found or terminal: ${taskId}`);
       const failed = this.getTask(taskId)!;
-      const followUps = this.afterTaskTerminal(failed, "failed", input.error, true);
+      const followUps = this.afterTaskTerminal(failed, "failed", input.error, true, false, childStatusChanges);
       return { task: failed, followUps };
     })();
+    this.runChildStatusChanges(childStatusChanges);
     if (
       !terminal.followUps.retry
       && terminal.task.issueId
@@ -3000,24 +3025,32 @@ export class TasksRepo {
   }
 
   cancelTask(taskId: string): MultiremiTask {
-    const terminal = this.ctx.db.transaction(() => this.cancelTaskWithinTransaction(taskId))();
+    const childStatusChanges: ChildStatusChange[] = [];
+    const terminal = this.ctx.db.transaction(() => this.cancelTaskWithinTransaction(taskId, childStatusChanges))();
+    this.runChildStatusChanges(childStatusChanges);
     this.notifyCancelledTask(terminal);
     return terminal.task;
   }
 
-  /** Caller commits before invoking notifyCancelledTask. */
-  cancelTaskWithinTransaction(taskId: string): CancelTaskResult {
+  /** Caller commits before invoking {@link runChildStatusChanges} / {@link notifyCancelledTask}. */
+  cancelTaskWithinTransaction(
+    taskId: string,
+    childStatusChanges: ChildStatusChange[] | null = null,
+  ): CancelTaskResult {
     const initial = this.getTask(taskId);
     if (!initial) throw new Error(`Task not found or terminal: ${taskId}`);
     this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
     const current = this.getTask(taskId);
     if (!current || current.workspaceId !== initial.workspaceId) throw new Error(`Task not found or terminal: ${taskId}`);
     this.lockTaskIssueSessionsWithinWorkspaceLock([current]);
-    return this.cancelTaskWithinWorkspaceLock(current);
+    return this.cancelTaskWithinWorkspaceLock(current, false, childStatusChanges);
   }
 
   /** Caller owns the outer transaction; notifications are deferred until it commits. */
-  redispatchTaskWithinTransaction(taskId: string): RedispatchTaskResult {
+  redispatchTaskWithinTransaction(
+    taskId: string,
+    childStatusChanges: ChildStatusChange[] | null = null,
+  ): RedispatchTaskResult {
     const initial = this.getTask(taskId);
     if (!initial) throw new Error(`Task not found or terminal: ${taskId}`);
     this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
@@ -3026,7 +3059,7 @@ export class TasksRepo {
       throw new Error(`Task not found or terminal: ${taskId}`);
     }
     this.lockTaskIssueSessionsWithinWorkspaceLock([current]);
-    const terminal = this.cancelTaskWithinWorkspaceLock(current, true);
+    const terminal = this.cancelTaskWithinWorkspaceLock(current, true, childStatusChanges);
     const nextAttempt = current.attempt + 1;
     const detachedChatIssue = !!current.chatSessionId && !!current.issueId
       && this.ctx.feishuBot().getFeishuIssueIdForChatSession(current.chatSessionId) !== current.issueId;
@@ -3070,6 +3103,7 @@ export class TasksRepo {
   cancelTasksByTriggerComments(workspaceId: string, commentIds: string[]): number {
     const uniqueCommentIds = [...new Set(commentIds.map(cleanOptionalString).filter((id): id is string => Boolean(id)))];
     if (!uniqueCommentIds.length) return 0;
+    const childStatusChanges: ChildStatusChange[] = [];
     const terminals = this.ctx.db.transaction(() => {
       // Terminal delegation handling uses this same lock to detach an explicit
       // @Leader return from its source comment. Re-read only after acquiring
@@ -3089,8 +3123,9 @@ export class TasksRepo {
       ).all(workspaceId, ...uniqueCommentIds) as Row[];
       const tasks = rows.map(toTask);
       this.lockTaskIssueSessionsWithinWorkspaceLock(tasks);
-      return tasks.map((task) => this.cancelTaskWithinWorkspaceLock(task));
+      return tasks.map((task) => this.cancelTaskWithinWorkspaceLock(task, false, childStatusChanges));
     })();
+    this.runChildStatusChanges(childStatusChanges);
     for (const terminal of terminals) this.notifyCancelledTask(terminal);
     return terminals.length;
   }
@@ -3136,6 +3171,7 @@ export class TasksRepo {
           failedTasks: [] as MultiremiTask[],
           retries: [] as MultiremiTask[],
           delegationReturns: [] as MultiremiTask[],
+          childStatusChanges: [] as ChildStatusChange[],
         };
       }
 
@@ -3159,14 +3195,16 @@ export class TasksRepo {
       const failedTasks = this.withTaskAutopilotRuns(failedRows.map(toTask));
       const retries: MultiremiTask[] = [];
       const delegationReturns: MultiremiTask[] = [];
+      const childStatusChanges: ChildStatusChange[] = [];
       for (const task of failedTasks) {
-        const followUps = this.afterTaskTerminal(task, "failed", task.error, true);
+        const followUps = this.afterTaskTerminal(task, "failed", task.error, true, false, childStatusChanges);
         if (followUps.retry) retries.push(followUps.retry);
         delegationReturns.push(...followUps.delegationReturns);
       }
-      return { failedTasks, retries, delegationReturns };
+      return { failedTasks, retries, delegationReturns, childStatusChanges };
     })();
 
+    this.runChildStatusChanges(recovered.childStatusChanges);
     for (const retry of recovered.retries) this.ctx.notifyTaskEnqueued(retry);
     for (const delegationReturn of recovered.delegationReturns) this.ctx.notifyTaskEnqueued(delegationReturn);
     for (const task of recovered.failedTasks) this.ctx.notifyTaskEvent("task:failed", task);
@@ -3811,6 +3849,7 @@ export class TasksRepo {
     body: string | null,
     workspaceLockHeld = false,
     replacementPlanned = false,
+    childStatusChanges: ChildStatusChange[] | null = null,
   ): TaskTerminalFollowUps {
     const now = nowIso();
     // Runtime recovery also invokes this hook directly. Reject stale transport
@@ -4021,8 +4060,15 @@ export class TasksRepo {
         ? null
         : this.nextIssueStatusAfterTaskTerminal(task, status, retry != null || replacementPlanned);
       if (issueStatus) {
-        if (workspaceLockHeld) this.syncIssueStatusFromTaskWithinTransaction(task, issueStatus);
-        else this.syncIssueStatusFromTask(task, issueStatus);
+        // In-transaction callers pass a collector so the E1/E2 hook runs only
+        // after their transaction commits (MUL-400 round 2).
+        if (workspaceLockHeld) {
+          this.syncIssueStatusFromTaskWithinTransaction(task, issueStatus, {
+            collectChildStatusChanges: childStatusChanges,
+          });
+        } else {
+          this.syncIssueStatusFromTask(task, issueStatus);
+        }
       }
       if (issue?.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, issue.projectId]);
       const lead = issue?.assigneeType && issue.assigneeId
@@ -4181,8 +4227,17 @@ export class TasksRepo {
     return { retry, delegationReturns, roundPushTasks };
   }
 
-  /** Caller holds the task workspace lifecycle lock. */
-  private cancelTaskWithinWorkspaceLock(current: MultiremiTask, replacementPlanned = false): {
+  /**
+   * Caller holds the task workspace lifecycle lock. `childStatusChanges` is the
+   * caller's collector for the post-commit E1/E2 hook; the same lock is held by
+   * several writers (cancel, redispatch, comment-triggered cancellation), so the
+   * hook always waits for the caller's own commit.
+   */
+  private cancelTaskWithinWorkspaceLock(
+    current: MultiremiTask,
+    replacementPlanned = false,
+    childStatusChanges: ChildStatusChange[] | null = null,
+  ): {
     task: MultiremiTask;
     followUps: TaskTerminalFollowUps;
   } {
@@ -4205,7 +4260,9 @@ export class TasksRepo {
     const cancelled = this.getTask(current.id)!;
     return {
       task: cancelled,
-      followUps: this.afterTaskTerminal(cancelled, "cancelled", null, true, replacementPlanned),
+      followUps: this.afterTaskTerminal(
+        cancelled, "cancelled", null, true, replacementPlanned, childStatusChanges,
+      ),
     };
   }
 
@@ -4404,17 +4461,66 @@ export class TasksRepo {
     return null;
   }
 
-  private syncIssueStatusFromTask(task: MultiremiTask, status: string): void {
-    this.ctx.db.transaction(() => this.syncIssueStatusFromTaskWithinTransaction(task, status))();
+  private syncIssueStatusFromTask(
+    task: MultiremiTask,
+    status: string,
+    options: { exemptFromParentStatusGuard?: boolean } = {},
+  ): void {
+    const childStatusChanges: ChildStatusChange[] = [];
+    this.ctx.db.transaction(() => this.syncIssueStatusFromTaskWithinTransaction(task, status, {
+      ...options,
+      collectChildStatusChanges: childStatusChanges,
+    }))();
+    this.runChildStatusChanges(childStatusChanges);
+  }
+
+  /**
+   * Post-commit E1/E2 hook for the task-terminal path (MUL-400). Failure is
+   * logged, never rethrown: the task and Issue transitions are already committed
+   * and must not be rolled back by a notification problem.
+   */
+  /**
+   * Public replay for callers that own their own transaction (the organizer
+   * action path builds one in the store facade). Failure is logged, never
+   * rethrown, so a notification problem cannot fail the committed transition.
+   */
+  runCollectedChildStatusChanges(changes: ChildStatusChange[]): void {
+    this.runChildStatusChanges(changes);
+  }
+
+  private runChildStatusChanges(changes: ChildStatusChange[]): void {
+    for (const change of changes) {
+      try {
+        this.ctx.issues().notifyChildStatusChange(change.previous, change.issue, change.taskId, {
+          taskTerminalStatus: change.taskTerminalStatus,
+        });
+      } catch (err) {
+        log.warn(
+          `child status hook skipped for ${change.issue.id}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
   }
 
   /** Caller owns the task/Issue/outbox transaction. */
   private syncIssueStatusFromTaskWithinTransaction(
     task: MultiremiTask,
     status: string,
-    options: { rederive?: boolean } = {},
+    options: {
+      rederive?: boolean;
+      /**
+       * Caller-owned collector: the E1/E2 hook must run after the caller's
+       * transaction commits, so the transition is recorded here and replayed by
+       * {@link runChildStatusChanges}. Pass `null` to run it inline (either the
+       * caller already holds no transaction, or it accepts the nesting).
+       */
+      collectChildStatusChanges?: ChildStatusChange[] | null;
+      /** Skip guard B for a transition the guard deliberately exempts. */
+      exemptFromParentStatusGuard?: boolean;
+    } = {},
   ): void {
     if (!task.issueId || task.chatSessionId) return;
+    const childStatusChanges = options.collectChildStatusChanges ?? null;
     // Serialize against direct Issue mutations before checking terminal state.
     // The no-op write acquires a row lock on Postgres and the writer lock on
     // SQLite, so a late worker can never reopen a concurrently accepted or
@@ -4428,7 +4534,9 @@ export class TasksRepo {
     // MUL-400 E1 guard B: a task finishing on a parent that still has unfinished
     // children must keep the parent in_progress instead of parking it in review
     // (or closing an intake parent whose generated children are still open).
-    status = this.ctx.issues().holdParentStatusForOpenChildren(task.issueId, status);
+    status = this.ctx.issues().holdParentStatusForOpenChildren(task.issueId, status, {
+      exempt: options.exemptFromParentStatusGuard === true,
+    });
     const issue = this.ctx.issues().getIssue(task.issueId);
     // Explicit issue terminal states are user decisions. A late worker event
     // (or a cancellation racing with it) must not reopen accepted/cancelled
@@ -4453,12 +4561,31 @@ export class TasksRepo {
       });
       // MUL-400 E1/E2: the task path is the second writer that must re-derive
       // the parent and report child endings, so it enters the same hook as the
-      // direct Issue update path.
-      this.ctx.issues().notifyChildStatusChange(issue, updatedIssue, task.id, {
-        taskTerminalStatus: task.status === "completed" || task.status === "failed" || task.status === "cancelled"
-          ? task.status
-          : undefined,
-      });
+      // direct Issue update path — but only AFTER this transaction commits. The
+      // hook writes comments, session events and tasks of its own, and
+      // PostgresSyncDatabase has no savepoints, so running it in here would both
+      // roll the status back on failure and emit a nested BEGIN on Postgres.
+      if (childStatusChanges) {
+        childStatusChanges.push({
+          previous: issue,
+          issue: updatedIssue,
+          taskId: task.id,
+          taskTerminalStatus: task.status === "completed" || task.status === "failed" || task.status === "cancelled"
+            ? task.status
+            : undefined,
+        });
+      } else {
+        // No collector: the caller is outside the workspace lock and has already
+        // committed, so the hook runs here. Failures stay non-fatal.
+        this.runChildStatusChanges([{
+          previous: issue,
+          issue: updatedIssue,
+          taskId: task.id,
+          taskTerminalStatus: task.status === "completed" || task.status === "failed" || task.status === "cancelled"
+            ? task.status
+            : undefined,
+        }]);
+      }
     }
     // Task lifecycle writes bypass the HTTP layer, so publish the same partial
     // patch that issue pages and boards already consume from realtime updates.

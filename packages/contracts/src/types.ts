@@ -1691,6 +1691,13 @@ export interface CreateTaskInput {
    */
   preserveIssueStatus?: boolean;
   preserve_issue_status?: boolean;
+  /**
+   * Server-internal: exempt this task's Issue transition from guard B.
+   * `createTaskHumanRequest` parks the Issue at `in_review` while its owner waits
+   * for an answer; that transient is deliberately outside the guard.
+   */
+  exemptFromParentStatusGuard?: boolean;
+  exempt_from_parent_status_guard?: boolean;
   chatSessionId?: string | null;
   triggerCommentId?: string | null;
   trigger_comment_id?: string | null;
@@ -2204,6 +2211,14 @@ export interface UpdateIssueInput {
    * 403 so a run can never bypass the guard on its own.
    */
   force?: boolean;
+  /**
+   * Server-internal, and never accepted from a request body: the SCM merge
+   * effect closes an Issue on the strength of a human-authorized merge, so the
+   * parent-status guard (including A4) does not apply. The merge itself is the
+   * confirmation the guard exists to obtain.
+   */
+  bypassParentStatusGuard?: boolean;
+  bypass_parent_status_guard?: boolean;
 }
 
 export interface BatchUpdateIssuesInput {

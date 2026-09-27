@@ -90,6 +90,99 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     expect(store.updateIssue(parent.id, { status: "in_review" }).status).toBe("in_review");
   });
 
+  it("lets field-only edits through on parents with children, for both identities", () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const agent = store.createAgent({ name: "Field editor owner", provider: "codex" });
+    const member = store.createWorkspaceMember({ name: "Field editor", role: "member" });
+
+    for (const [label, status] of [["in_review", "in_review"], ["done", "done"]] as const) {
+      // The QA probe used the stored shape directly: a parent already sitting in
+      // the target status with an open child. Build the child first, then put
+      // the parent there, so the create-time re-derivation does not fight the
+      // arrangement under test.
+      const parent = store.createIssue({
+        title: `${label} parent`,
+        status: "in_progress",
+        assigneeType: "agent",
+        assigneeId: agent.id,
+      });
+      const child = store.createIssue({
+        title: `${label} child`,
+        parentIssueId: parent.id,
+        status: "in_progress",
+      });
+      store.updateIssue(parent.id, { status, force: true });
+      expect(store.getIssue(parent.id)?.status, label).toBe(status);
+
+      // Member identity: title, description and priority are not status writes.
+      const renamed = store.updateIssue(parent.id, {
+        title: `${label} parent renamed`,
+        description: "edited",
+        priority: "urgent",
+        actorType: "member",
+        actorId: "local",
+      });
+      expect(renamed.title, label).toBe(`${label} parent renamed`);
+      expect(renamed.priority, label).toBe("urgent");
+      expect(renamed.status, label).toBe(status);
+
+      // Task identity: the same edits must not trip A4, which is about `done`.
+      const task = store.createTask({ agentId: agent.id, prompt: `edit ${label}` });
+      const taskEdited = store.updateIssue(parent.id, {
+        title: `${label} parent renamed by task`,
+        priority: "low",
+        actorType: "agent",
+        actorId: agent.id,
+        parentTaskId: task.id,
+      });
+      expect(taskEdited.title, label).toBe(`${label} parent renamed by task`);
+      expect(taskEdited.priority, label).toBe("low");
+      expect(taskEdited.status, label).toBe(status);
+      expect(child.id).toBeTruthy();
+    }
+  });
+
+  it("keeps the auto-retitle and merge-completion paths working on a parent", () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const agent = store.createAgent({ name: "System writer owner", provider: "codex" });
+    const inReviewParent = store.createIssue({
+      title: "Auto retitle parent",
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    store.createIssue({ title: "Open child", parentIssueId: inReviewParent.id, status: "in_progress" });
+    store.updateIssue(inReviewParent.id, { status: "in_review", force: true });
+    expect(store.getIssue(inReviewParent.id)?.status).toBe("in_review");
+
+    // issue-title/service.ts: a bare title write, exactly like the retitler.
+    const retitled = store.updateIssue(inReviewParent.id, { title: "Luna generated title" });
+    expect(retitled.title).toBe("Luna generated title");
+    expect(retitled.status).toBe("in_review");
+
+    // scm-repo.ts: the merge effect closes a parent regardless of its children
+    // and of A1/A4, because the merge is the authorization.
+    const mergeParent = store.createIssue({
+      title: "Merge parent",
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    store.createIssue({ title: "Unfinished child", parentIssueId: mergeParent.id, status: "in_progress" });
+    store.updateIssue(mergeParent.id, { status: "in_review", force: true });
+    const merged = store.updateIssue(mergeParent.id, {
+      status: "done",
+      bypassParentStatusGuard: true,
+      bypass_parent_status_guard: true,
+    });
+    expect(merged.status).toBe("done");
+    // The arrangement above reached in_review through a member force, which is
+    // itself audited; the merge write must not add a second one.
+    expect(activityOf(store, mergeParent.id, "issue_status_forced")).toHaveLength(1);
+  });
+
   it("derives an in_review parent back to in_progress when a child changes, and never moves done/cancelled", () => {
     const store = createStore();
     store.ensureLocalWorkspace();
@@ -176,6 +269,19 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     expect(plainDone.status).toBe(403);
     expect((await plainDone.json()).code).toBe("parent_done_requires_member");
 
+    // A4 through BOTH batch routes: the batch writer now carries the caller's
+    // identity, so a task cannot close a parent by taking the long way round.
+    for (const path of ["/api/multiremi/issues/batch-update", "/api/issues/batch-update"]) {
+      const response = await app.request(path, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${credential.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ issue_ids: [otherParent.id], updates: { status: "done" } }),
+      });
+      expect(response.status, path).toBe(403);
+      expect((await response.json()).code, path).toBe("parent_done_requires_member");
+      expect(store.getIssue(otherParent.id)?.status, path).toBe("in_progress");
+    }
+
     // A member using the same route gets the 409 reason plus the override.
     const memberCredential = await store.createAccessToken({
       name: "Owner PAT",
@@ -201,6 +307,48 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     });
     expect(memberForced.status).toBe(200);
     expect(store.getIssue(otherParent.id)?.status).toBe("in_review");
+
+    // The override reached through HTTP is audited like the store-level one.
+    const apiForced = activityOf(store, otherParent.id, "issue_status_forced");
+    expect(apiForced).toHaveLength(1);
+    expect(apiForced[0]?.data).toMatchObject({
+      status: "in_review",
+      previousStatus: "in_progress",
+      openChildren: 1,
+    });
+
+    // A member may force through batch update as well, with the same audit.
+    const batchForced = await app.request("/api/issues/batch-update", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${memberCredential.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ issue_ids: [otherParent.id], updates: { status: "done", force: true } }),
+    });
+    expect(batchForced.status).toBe(200);
+    expect(store.getIssue(otherParent.id)?.status).toBe("done");
+    expect(activityOf(store, otherParent.id, "issue_status_forced")).toHaveLength(2);
+  });
+
+  it("does not apply A4 to an agent closing an issue without children", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const agent = store.createAgent({ name: "Plain closer", provider: "codex" });
+    const plain = store.createIssue({
+      title: "Childless issue",
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    const callerTask = store.createTask({ agentId: agent.id, prompt: "caller" });
+    const credential = await store.createTaskAccessToken(callerTask, "local");
+    const app = createMultiremiApp({ store });
+
+    const response = await app.request(`/api/issues/${plain.id}`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${credential.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "done" }),
+    });
+    expect(response.status).toBe(200);
+    expect(store.getIssue(plain.id)?.status).toBe("done");
   });
 
   it("applies the A1 final-summary rule to agent owners but not to member owners", () => {
@@ -245,6 +393,95 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     expect(store.updateIssue(memberParent.id, { status: "done" }).status).toBe("done");
   });
 
+  it("does not touch done/cancelled parents and writes no held noise on them", () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const runtime = store.registerRuntime({ id: "rt_done_parent", name: "Worker", provider: "claude" });
+    const agent = store.createAgent({ name: "Done parent owner", provider: "claude", runtimeId: runtime.id });
+    const parent = store.createIssue({
+      title: "Done parent",
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    store.createIssue({ title: "Open child", parentIssueId: parent.id, status: "in_progress" });
+    store.updateIssue(parent.id, { status: "done", force: true });
+
+    // A task finishing on that Issue derives in_review; the Issue is a settled
+    // human decision, so nothing may move AND no misleading held row appears.
+    const task = store.createTask({ agentId: agent.id, issueId: parent.id, prompt: "round" });
+    runTask(store, runtime.id, task.id);
+    store.completeTask(task.id, { output: "done anyway" });
+
+    expect(store.getIssue(parent.id)?.status).toBe("done");
+    expect(activityOf(store, parent.id, "parent_status_held")).toHaveLength(0);
+  });
+
+  it("keeps the human-request in_review transient out of guard B", () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const runtime = store.registerRuntime({ id: "rt_ask", name: "Worker", provider: "claude" });
+    const agent = store.createAgent({ name: "Asking owner", provider: "claude", runtimeId: runtime.id });
+    const parent = store.createIssue({
+      title: "Asking parent",
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    store.createIssue({ title: "Open child", parentIssueId: parent.id, status: "in_progress" });
+
+    const task = store.createTask({ agentId: agent.id, issueId: parent.id, prompt: "ask the human" });
+    runTask(store, runtime.id, task.id);
+    const request = store.createTaskHumanRequest({
+      taskId: task.id,
+      kind: "question",
+      payload: { question: "Which one?" },
+    });
+
+    // ADR 0003: waiting for an answer legitimately parks the Issue in review.
+    expect(request.status).toBe("pending");
+    expect(store.getIssue(parent.id)?.status).toBe("in_review");
+    expect(activityOf(store, parent.id, "parent_status_held")).toHaveLength(0);
+
+    // Answering puts it back to in_progress, as the resume path always did.
+    store.respondTaskHumanRequest(request.id, { response: { answer: "that one" } });
+    expect(store.getIssue(parent.id)?.status).toBe("in_progress");
+  });
+
+  it("derives an in_review parent when a child is created under it, and when a child is moved away", () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const parent = store.createIssue({ title: "Creation parent", status: "in_review" });
+
+    // createIssue is the third entry point the plan names.
+    const child = store.createIssue({
+      title: "New child",
+      parentIssueId: parent.id,
+      status: "backlog",
+    });
+    expect(store.getIssue(parent.id)?.status).toBe("in_progress");
+    expect(activityOf(store, parent.id, "parent_status_derived")).toHaveLength(1);
+
+    // Moving a child away is a child event for the family it LEFT. Park the old
+    // parent back at in_review with another open child, then move one child out:
+    // the old parent re-derives, and so does the new parent that just gained a
+    // child while sitting at in_review.
+    store.createIssue({ title: "Sibling that stays", parentIssueId: parent.id, status: "in_progress" });
+    store.updateIssue(parent.id, { status: "in_review", force: true });
+    expect(store.getIssue(parent.id)?.status).toBe("in_review");
+
+    const otherParent = store.createIssue({ title: "Other parent", status: "in_progress" });
+    store.updateIssue(otherParent.id, { status: "in_review" });
+    expect(store.getIssue(otherParent.id)?.status).toBe("in_review");
+
+    store.updateIssue(child.id, { parentIssueId: otherParent.id });
+    expect(store.getIssue(parent.id)?.status).toBe("in_progress");
+    expect(store.getIssue(otherParent.id)?.status).toBe("in_progress");
+    // One from the create under the old parent, one from this move.
+    expect(activityOf(store, parent.id, "parent_status_derived")).toHaveLength(2);
+    expect(activityOf(store, otherParent.id, "parent_status_derived")).toHaveLength(1);
+  });
+
   it("does not park a parent at todo when a member closes a child by hand", () => {
     const store = createStore();
     store.ensureLocalWorkspace();
@@ -268,6 +505,96 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     expect(tasks[0]?.status).toBe("queued");
     expect(store.getIssue(parent.id)?.status).not.toBe("todo");
     expect(store.getIssue(parent.id)?.status).toBe("in_progress");
+  });
+});
+
+describe("MUL-400 hook ordering — the notification cannot roll back a status change", () => {
+  it("commits the task terminal state and the child status even when the hook throws", () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const runtime = store.registerRuntime({ id: "rt_hook_fail", name: "Worker", provider: "claude" });
+    const agent = store.createAgent({ name: "Hook victim", provider: "claude", runtimeId: runtime.id });
+    const parent = store.createIssue({
+      title: "Hook parent",
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    const child = store.createIssue({
+      title: "Hook child",
+      parentIssueId: parent.id,
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+
+    // Break the notification hook the way a DB/comment failure would.
+    const original = store.notifyChildStatusChange.bind(store);
+    let calls = 0;
+    store.notifyChildStatusChange = ((...args: Parameters<typeof original>) => {
+      calls += 1;
+      throw new Error("notification exploded");
+    }) as typeof original;
+
+    const task = store.createTask({ agentId: agent.id, issueId: child.id, prompt: "finish" });
+    runTask(store, runtime.id, task.id);
+    store.completeTask(task.id, { output: "child round finished" });
+    expect(calls).toBeGreaterThan(0);
+
+    // The task and the child's own status are committed regardless.
+    expect(store.getTask(task.id)?.status).toBe("completed");
+    expect(store.getIssue(child.id)?.status).toBe("in_review");
+
+    // And the same holds for the failure path.
+    const failing = store.createIssue({
+      title: "Hook failure child",
+      parentIssueId: parent.id,
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    const failingTask = store.createTask({ agentId: agent.id, issueId: failing.id, prompt: "explode" });
+    runTask(store, runtime.id, failingTask.id);
+    store.failTask(failingTask.id, { error: "boom" });
+    expect(store.getTask(failingTask.id)?.status).toBe("failed");
+    expect(store.getIssue(failing.id)?.status).toBe("blocked");
+
+    store.notifyChildStatusChange = original as typeof store.notifyChildStatusChange;
+  });
+
+  it("still notifies after a terminal transition commits", () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const runtime = store.registerRuntime({ id: "rt_hook_ok", name: "Worker", provider: "claude" });
+    const agent = store.createAgent({ name: "Hook owner", provider: "claude", runtimeId: runtime.id });
+    const parent = store.createIssue({
+      title: "Ordered parent",
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    const child = store.createIssue({
+      title: "Ordered child",
+      parentIssueId: parent.id,
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+
+    // A task failure is the ending the task path itself produces (the child
+    // Issue lands on `blocked`), so it exercises the moved hook end to end.
+    const task = store.createTask({ agentId: agent.id, issueId: child.id, prompt: "explode" });
+    runTask(store, runtime.id, task.id);
+    store.failTask(task.id, { error: "boom" });
+
+    expect(store.getIssue(child.id)?.status).toBe("blocked");
+    // Post-commit: the parent's comment and its queued round both exist.
+    const comments = store.listIssueComments(parent.id).filter((comment) => comment.authorType === "system");
+    expect(comments).toHaveLength(1);
+    expect(comments[0]?.body).toContain("failed");
+    const rounds = store.listTasksForIssue(parent.id);
+    expect(rounds).toHaveLength(1);
+    expect(rounds[0]?.prompt).toContain("reported failed");
   });
 });
 
@@ -371,6 +698,102 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
     // A human owner never gets a wakeup round or a parent system comment.
     expect(store.listTasksForIssue(parent.id)).toHaveLength(0);
     expect(store.listIssueComments(parent.id).filter((comment) => comment.authorType === "system")).toHaveLength(0);
+  });
+
+  it("reports a failed child to a member owner as a warning", () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const runtime = store.registerRuntime({ id: "rt_member_failed", name: "Worker", provider: "claude" });
+    const agent = store.createAgent({ name: "Failing child owner", provider: "claude", runtimeId: runtime.id });
+    const member = store.createWorkspaceMember({ name: "Human parent", role: "member" });
+    const parent = store.createIssue({
+      title: "Human failure parent",
+      status: "in_progress",
+      assigneeType: "member",
+      assigneeId: member.id,
+    });
+    const child = store.createIssue({
+      title: "Child that fails",
+      parentIssueId: parent.id,
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+
+    const task = store.createTask({ agentId: agent.id, issueId: child.id, prompt: "explode" });
+    runTask(store, runtime.id, task.id);
+    store.failTask(task.id, { error: "boom" });
+
+    // The failure blocks the child; the human owner must see it as a warning.
+    expect(store.getIssue(child.id)?.status).toBe("blocked");
+    const items = store.listInboxItems(member.id).filter((item) => item.type === "child_issue_terminal");
+    expect(items).toHaveLength(1);
+    expect(items[0]?.severity).toBe("warning");
+    expect(items[0]?.details).toMatchObject({ outcome: "failed", childIssueId: child.id });
+  });
+
+  it("reports done, failed and cancelled children of an unowned parent to subscribers", () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const runtime = store.registerRuntime({ id: "rt_no_owner", name: "Worker", provider: "claude" });
+    const agent = store.createAgent({ name: "Unowned child owner", provider: "claude", runtimeId: runtime.id });
+    const watcher = store.createWorkspaceMember({ name: "Watcher", role: "member" });
+
+    const outcomes: Array<{ outcome: string; severity: string; run: (parentId: string) => string }> = [
+      {
+        outcome: "done",
+        severity: "info",
+        run: (parentId) => {
+          const child = store.createIssue({ title: "Unowned done", parentIssueId: parentId, status: "in_progress" });
+          store.updateIssue(child.id, { status: "done" });
+          return child.id;
+        },
+      },
+      {
+        outcome: "failed",
+        severity: "warning",
+        run: (parentId) => {
+          const child = store.createIssue({
+            title: "Unowned failed",
+            parentIssueId: parentId,
+            status: "in_progress",
+            assigneeType: "agent",
+            assigneeId: agent.id,
+          });
+          const task = store.createTask({ agentId: agent.id, issueId: child.id, prompt: "explode" });
+          runTask(store, runtime.id, task.id);
+          store.failTask(task.id, { error: "boom" });
+          return child.id;
+        },
+      },
+      {
+        outcome: "cancelled",
+        severity: "info",
+        run: (parentId) => {
+          const child = store.createIssue({ title: "Unowned cancelled", parentIssueId: parentId, status: "in_progress" });
+          store.updateIssue(child.id, { status: "cancelled" });
+          return child.id;
+        },
+      },
+    ];
+
+    for (const testCase of outcomes) {
+      const parent = store.createIssue({ title: `Unowned ${testCase.outcome} parent`, status: "in_progress" });
+      store.addIssueSubscriber(parent.id, watcher.id, "manual");
+      const childId = testCase.run(parent.id);
+
+      // A system comment plus a skip record, and the subscriber hears about it.
+      const comments = store.listIssueComments(parent.id).filter((comment) => comment.authorType === "system");
+      expect(comments, testCase.outcome).toHaveLength(1);
+      expect(activityOf(store, parent.id, "child_done_parent_skipped")[0]?.data, testCase.outcome)
+        .toMatchObject({ reason: "no_assignee", outcome: testCase.outcome });
+      const item = store.listInboxItems(watcher.id)
+        .filter((entry) => entry.type === "child_issue_terminal")
+        .find((entry) => (entry.details as Record<string, unknown> | null)?.childIssueId === childId);
+      expect(item, testCase.outcome).toBeDefined();
+      expect(item?.severity, testCase.outcome).toBe(testCase.severity);
+      expect(item?.details, testCase.outcome).toMatchObject({ noAssignee: true });
+    }
   });
 
   it("coalesces several child endings into one queued round while the owner is busy", () => {

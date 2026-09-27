@@ -1728,8 +1728,18 @@ export class ScmRepo {
            WHERE cr.connection_id = ? AND cr.repository_id = ? AND cr.external_id = ?`,
         ).get(issueId, event.connectionId, event.repositoryId, event.subjectId) as Row | null;
         if (!changeRequestRow) throw new Error("SCM change request for merge completion could not be found");
+        // MUL-400 E1: the merge effect closes the Issue on the strength of a
+        // merge that already required 贺华杰's authorization, so it carries the
+        // same human decision the parent-status guard exists to protect and is
+        // exempt from it (A1 and A4 included). Falling back to `parent_status_held`
+        // here would stall the merge sync on a status a system writer must not
+        // decide; guard B does that part on the task path instead.
         const updated = current && current.status !== "done"
-          ? this.ctx.issues().updateIssue(issueId, { status: "done" })
+          ? this.ctx.issues().updateIssue(issueId, {
+            status: "done",
+            bypassParentStatusGuard: true,
+            bypass_parent_status_guard: true,
+          })
           : null;
         if (updated) {
           this.ctx.appendIssueActivity(issueId, {
