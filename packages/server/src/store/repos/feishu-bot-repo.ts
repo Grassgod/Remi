@@ -1281,7 +1281,7 @@ export class FeishuBotRepo {
           type: "decision_card_skipped",
           body: request.id,
           data: { request_id: request.id, source_task_id: sourceTask.id, reason: "no_topic" },
-        });
+        }, deferredEvents);
         return null;
       }
       // A host that can render a server-built card gets one; every other host
@@ -1292,7 +1292,7 @@ export class FeishuBotRepo {
       if (cardCapable || recipient.kind === "degraded") {
         const deliveryId = this.enqueueDecisionDeliveryWithinTransaction({
           issue, sourceTask, request, topics, binding, bindingId, payload, recipient,
-          cardCapable,
+          cardCapable, deferredEvents,
         });
         const now = nowIso();
         this.ctx.db.run(
@@ -1398,8 +1398,10 @@ export class FeishuBotRepo {
     payload: Record<string, unknown>;
     recipient: DecisionRecipientResolution;
     cardCapable: boolean;
+    /** Caller-owned queue: the activities below are written before COMMIT. */
+    deferredEvents: import("@multiremi/store/context.js").CommitEventQueue;
   }): string {
-    const { issue, sourceTask, request, topics, binding, bindingId, recipient } = input;
+    const { issue, sourceTask, request, topics, binding, bindingId, recipient, deferredEvents } = input;
     const replyToMessageId = cleanOptionalString(binding.reply_to_message_id);
     const deliveryId = createId("fbo");
     const now = nowIso();
@@ -1465,7 +1467,7 @@ export class FeishuBotRepo {
         sourceTaskId: sourceTask.id,
         deliveryId,
         reason: degraded,
-      });
+      }, deferredEvents);
     } else {
       this.ctx.appendIssueActivity(issue.id, {
         actorType: "system",
@@ -1478,7 +1480,7 @@ export class FeishuBotRepo {
           kind: "decision_card",
           notify_mode: topics.notifyMode ?? "group_owner",
         },
-      });
+      }, deferredEvents);
     }
     return deliveryId;
   }
@@ -1551,7 +1553,11 @@ export class FeishuBotRepo {
    * The window is [expires_at - lead, expires_at], so a host that was offline for
    * the whole window still delivers exactly one reminder when it comes back.
    */
-  private materializeDecisionRemindersWithinTransaction(workspaceId: string, now: Date): void {
+  private materializeDecisionRemindersWithinTransaction(
+    workspaceId: string,
+    now: Date,
+    deferredEvents: import("@multiremi/store/context.js").CommitEventQueue,
+  ): void {
     const due = this.ctx.db.query(
       `SELECT request.id, request.task_id, request.expires_at, request.created_at
        FROM multiremi_task_human_requests request
@@ -1650,12 +1656,12 @@ export class FeishuBotRepo {
           request.expiresAt ?? null,
         ],
       );
-    this.ctx.appendIssueActivity(issue.id, {
-      actorType: "system",
-      type: "decision_card_reminder",
-      body: request.id,
-      data: { request_id: request.id, expires_at: request.expiresAt ?? null },
-    });
+      this.ctx.appendIssueActivity(issue.id, {
+        actorType: "system",
+        type: "decision_card_reminder",
+        body: request.id,
+        data: { request_id: request.id, expires_at: request.expiresAt ?? null },
+      }, deferredEvents);
     }
   }
 
@@ -1751,7 +1757,7 @@ export class FeishuBotRepo {
     sourceTaskId: string | null;
     deliveryId: string;
     reason: string;
-  }): void {
+  }, deferredEvents: import("@multiremi/store/context.js").CommitEventQueue): void {
     // The row's own `degraded` column is the first guard: `degraded =
     // COALESCE(?, degraded)` already committed inside this transaction, so a
     // repeat report cannot reach this method. This second check makes the
@@ -1775,7 +1781,7 @@ export class FeishuBotRepo {
       type: "decision_card_degraded",
       body: input.requestId,
       data,
-    });
+    }, deferredEvents);
   }
 
   /** The Agent's name is the card's conversation label for a server-built card. */
@@ -1984,13 +1990,16 @@ export class FeishuBotRepo {
       || runtimeStatus?.state !== "online"
       || runtimeStatus.appliedRevision !== config.revision
     ) return null;
-    return this.ctx.db.transaction(() => {
+    // This claim owns its own transaction, so it owns the queue too: the
+    // reminder activity below is written before COMMIT and published after it.
+    const deferredEvents = createCommitEventQueue();
+    const claimed = this.ctx.db.transaction(() => {
       const nowIsoValue = now.toISOString();
       // The reminder lane is materialized here rather than at request creation:
       // a request answered before its window closes must never produce one, and
       // `reminder_sent_at` is the single dedupe record. Doing it inside the claim
       // transaction means a host that polls continuously still queues one nudge.
-      this.materializeDecisionRemindersWithinTransaction(workspaceId, now);
+      this.materializeDecisionRemindersWithinTransaction(workspaceId, now, deferredEvents);
       // A decision lane only exists for a host that advertised the capability.
       // The filter belongs in SQL, not after the pick: skipping in JavaScript
       // would return null and strand every later delivery behind one row this
@@ -2036,11 +2045,12 @@ export class FeishuBotRepo {
       let mention = parseOutboundMention(parseJson(row.mention_snapshot, null));
       if (supportsTaskStream && row.task_id && !row.mention_snapshot) {
         // An old relay row derives its @ here, and that read is the one place a
-        // stored config could still abort the whole heartbeat: the claim runs
-        // before any delivery in the same batch, so throwing here would strand
-        // every row behind it — including the text degradation of a request
-        // this workspace already accepted. Only an invalid config is tolerated;
-        // an unknown failure still propagates (MUL-407).
+        // stored config could still abort the heartbeat that claims this row:
+        // one claim returns one row, so a throw here would strand this delivery
+        // and, on this host, the rows behind it — including the text
+        // degradation of a request this workspace already accepted. Only an
+        // invalid config is tolerated; an unknown failure still propagates
+        // (MUL-407).
         let topics: IssueTopicConfig | null = null;
         try {
           topics = readWorkspaceIssueTopics(this.ctx.workspaces().getWorkspace(workspaceId)?.settings ?? {});
@@ -2098,6 +2108,8 @@ export class FeishuBotRepo {
         } : {}),
       };
     })();
+    this.ctx.emitCommitEvents(deferredEvents);
+    return claimed;
   }
 
   /** Checkpoint before the first send, under the existing delivery lease. */
@@ -2207,8 +2219,11 @@ export class FeishuBotRepo {
           deliveryId, workspaceId, input.claimToken, now.toISOString(), config.appId],
       ).changes === 1;
     }
+    // This report owns its own transaction, so it owns the queue: the degrade
+    // activity is written before COMMIT and published after it.
+    const deferredEvents = createCommitEventQueue();
     if (input.status === "sent") {
-      return this.ctx.db.transaction(() => {
+      const sent = this.ctx.db.transaction(() => {
         const row = this.ctx.db.query(
           `SELECT binding_id, chat_id, reply_to_message_id, task_id, attachments,
                   kind, human_request_id, human_request_task_id, degraded
@@ -2249,7 +2264,7 @@ export class FeishuBotRepo {
             sourceTaskId: cleanOptionalString(row.human_request_task_id),
             deliveryId,
             reason: reportedDegrade,
-          });
+          }, deferredEvents);
         }
         if (seedsTopic) {
           this.ctx.db.run(
@@ -2268,6 +2283,8 @@ export class FeishuBotRepo {
         }
         return true;
       })();
+      this.ctx.emitCommitEvents(deferredEvents);
+      return sent;
     }
     return this.ctx.db.transaction(() => {
       const row = this.ctx.db.query(

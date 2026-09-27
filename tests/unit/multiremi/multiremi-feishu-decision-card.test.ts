@@ -1074,12 +1074,14 @@ describe("Feishu decision card heartbeat delivery", () => {
     expect(store.claimFeishuBotOutbound("local", "rt_bot")).toBeNull();
   });
 
-  it("delivers the older relay row and then the degradation when both are queued", async () => {
-    // QA's fifth-round repro, both shapes in one batch: a relay row from before
+  it("delivers the older relay row on one heartbeat and the degradation on the next", async () => {
+    // QA's fifth-round repro, both shapes in one queue: a relay row from before
     // MUL-407 (a Task id, no mention snapshot) sits at the head of the same
     // host's queue, and the illegal `person` degradation is queued behind it.
-    // The claim no longer aborts on the stored config, so neither the old text
-    // nor the card that promises to degrade is stranded.
+    // Both rows are present before the first heartbeat, but a claim returns one
+    // row per poll, so the first heartbeat is the old text and the second is the
+    // degradation. The claim no longer aborts on the stored config, so neither
+    // the old text nor the card that promises to degrade is stranded.
     const { store, agentId, app } = scaffold();
     const issue = issueWithTopic(store, agentId);
     const legacy = queueLegacyRelayDelivery(store, agentId, issue.id);
@@ -1509,6 +1511,90 @@ describe("Feishu decision card heartbeat delivery", () => {
     void issue;
   });
 
+  it("step 5: a card Feishu rejects non-retryably becomes one sent text, once", async () => {
+    // The acceptance story's step 5 used to ask a human to point the topic at a
+    // chat where the bot cannot speak. That precondition cannot produce the
+    // expected result: the text twin goes to the same chat, so a bot without
+    // speaking rights loses both. This is the automated replacement QA asked
+    // for, and it has to hold four things at once — the card is rejected as
+    // non-retryable, the text really goes out, the Issue records exactly one
+    // `send_failed` activity, and the request is never retried as a bad card.
+    //
+    // Nothing between the lane and Feishu is replaced: the real `sendDecisionLane`
+    // runs over the real `FeishuConnector`, and the only interception is the
+    // SDK's own HTTP layer, which answers the card reply with a rejection code
+    // and the text reply with success.
+    const { store, agentId } = scaffold();
+    const issue = issueWithTopic(store, agentId);
+    const request = askQuestion(store, sourceTask(store, agentId, issue.id));
+    const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
+    expect(card.kind).toBe("decision_card");
+    expect(card.degraded).toBeUndefined();
+
+    const receipts: Array<{ messageId: string; interactionOpenId?: string | null; degraded?: string | null }> = [];
+    const { requests } = await withScriptedFeishuTransport(({ method, path, body }) => {
+      // Only the interactive card is refused. 230001 is a real Feishu
+      // rejection that retrying the same payload cannot fix; the text twin
+      // (msg_type `text`) is still allowed, which is what a chat where the bot
+      // may speak but the card is refused looks like.
+      if (method === "POST" && path.endsWith("/reply") && body.includes("interactive")) {
+        return { code: 230001, msg: "permission denied" };
+      }
+      return null;
+    }, async () => {
+      const handle = decisionLaneHandle();
+      handle.resolve = "ou_the_person";
+      // Only the transport is scripted; these pass through to the real connector.
+      handle.sendProactiveCard = input => new FeishuConnector({
+        appId: "cli_decision_card", appSecret: APP_SECRET, domain: "feishu",
+      } as never).sendProactiveCard(input);
+      handle.sendProactiveThreadReply = input => new FeishuConnector({
+        appId: "cli_decision_card", appSecret: APP_SECRET, domain: "feishu",
+      } as never).sendProactiveThreadReply(input);
+      const sent = await sendDecisionLaneForTest(handle, card, {
+        signal: new AbortController().signal,
+        onStarted: async () => {},
+        onDecisionSent: async receipt => { receipts.push(receipt); },
+      });
+      expect(sent.messageId).toBe("om_text_sent");
+    });
+
+    // The card really was rejected over the wire and the text really crossed it:
+    // one reply attempt answered with the rejection code, then one that succeeded.
+    const replyRequests = requests.filter((r) => r.path.endsWith("/reply"));
+    expect(replyRequests).toHaveLength(2);
+    // The host reported one degradation, carrying the recipient it had resolved.
+    expect(receipts).toEqual([{ messageId: "om_text_sent", interactionOpenId: "ou_the_person", degraded: "send_failed" }]);
+
+    // The daemon reports that send the way it does in production.
+    expect(store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
+      claimToken: card.claimToken, status: "sent", externalMessageId: "om_text_sent",
+      interactionOpenId: "ou_the_person", degraded: "send_failed",
+    })).toBe(true);
+
+    // Exactly one activity, and exactly one delivery for the request: the row is
+    // `sent`, so the outbox never offers it again as a card to retry.
+    const degraded = store.listIssueActivity(issue.id).filter((a) => a.type === "decision_card_degraded");
+    expect(degraded).toHaveLength(1);
+    expect(degraded[0]!.body).toBe(request.id);
+    expect(degraded[0]!.data).toMatchObject({
+      reason: "send_failed", delivery_id: card.id, source_task_id: request.taskId,
+    });
+    expect(db!.query(
+      `SELECT status, degraded, external_message_id, attempt_count
+       FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?`,
+    ).get(card.id)).toEqual({
+      status: "sent", degraded: "send_failed", external_message_id: "om_text_sent", attempt_count: 1,
+    });
+    expect(store.claimFeishuBotOutbound("local", "rt_bot")).toBeNull();
+    // No terminal patch either: there is no card on screen left to rewrite.
+    expect(db!.query(
+      "SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch'",
+    ).get()).toEqual({ n: 0 });
+    expect(store.getTaskHumanRequest(request.id)!.status).toBe("pending");
+    void issue;
+  });
+
 /** The two daemon calls the click handler makes, backed by the test store. */
 function decisionDaemon(store: MultiremiStore): MultiremiDaemon {
   return {
@@ -1618,6 +1704,61 @@ async function withRecordedFeishuTransport<T>(
     } as never);
     const result = await fn(connector);
     return { result, requests };
+  } finally {
+    sdk.defaultHttpInstance.defaults.adapter = previousAdapter;
+    globalThis.fetch = realFetch;
+  }
+}
+
+/**
+ * Point the Lark SDK's HTTP layer at a scripted recorder (QA step 5).
+ *
+ * Same seam as {@link withRecordedFeishuTransport}, but the response for one
+ * request is chosen by the script instead of a fixed table. That keeps the
+ * `send_failed` story honest: the rejection comes from Feishu's own response
+ * code over the transport the host uses, and nothing between the lane and the
+ * wire is replaced.
+ */
+async function withScriptedFeishuTransport<T>(
+  script: (request: { method: string; path: string; body: string }) => { code: number; msg?: string } | null,
+  fn: () => Promise<T>,
+): Promise<{ result: T; requests: Array<{ method: string; path: string }> }> {
+  const sdk = await import("@larksuiteoapi/node-sdk/lib/index.js" as string) as {
+    defaultHttpInstance: { defaults: { adapter?: unknown } };
+  };
+  const requests: Array<{ method: string; path: string }> = [];
+  const previousAdapter = sdk.defaultHttpInstance.defaults.adapter;
+  const realFetch = globalThis.fetch;
+  sdk.defaultHttpInstance.defaults.adapter = async (config: Record<string, unknown>) => {
+    const path = String(config.url ?? "").replace(/^https?:\/\/[^/]+/u, "");
+    // The body is what separates the card reply from the text reply: both are
+    // `POST .../reply`, and only `msg_type` tells them apart.
+    const body = typeof config.data === "string" ? config.data : JSON.stringify(config.data ?? {});
+    const request = { method: String(config.method ?? "get").toUpperCase(), path, body };
+    requests.push({ method: request.method, path });
+    const scripted = script(request);
+    if (scripted) {
+      // Failures surface the way the SDK does: a 200 with a non-zero `code`.
+      return { data: { code: scripted.code, msg: scripted.msg ?? "scripted" }, status: 200, statusText: "OK", headers: {}, config };
+    }
+    const data = path.includes("tenant_access_token")
+      ? { code: 0, tenant_access_token: "t_scripted", expire: 7200 }
+      : { code: 0, data: { message_id: request.method === "POST" ? "om_text_sent" : "om_card" } };
+    return { data, status: 200, statusText: "OK", headers: {}, config };
+  };
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const path = url.replace(/^https?:\/\/[^/]+/u, "");
+    const request = { method: String(init?.method ?? "GET").toUpperCase(), path,
+      body: typeof init?.body === "string" ? init.body : "" };
+    requests.push({ method: request.method, path });
+    const scripted = script(request);
+    return Response.json(scripted
+      ? { code: scripted.code, msg: scripted.msg ?? "scripted" }
+      : { code: 0, data: { message_id: "om_text_sent" } });
+  }) as typeof fetch;
+  try {
+    return { result: await fn(), requests };
   } finally {
     sdk.defaultHttpInstance.defaults.adapter = previousAdapter;
     globalThis.fetch = realFetch;
