@@ -393,16 +393,23 @@ const ISO_RE = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:
 /** Timeline page cursors are `base64url([createdAt, id])` — see `encodeTimelineCursor`. */
 const CURSOR_KEY_RE = /^(?:next|prev)_cursor$/;
 
+/** A whole ISO timestamp (`^…$`): a cursor id that merely looks like one is not scrubbed. */
+const ISO_WHOLE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/;
+
 /**
- * Scrub the wall clock out of a base64url page cursor.
+ * Scrub the wall clock out of a `[createdAt, id]` page cursor.
  *
  * The cursor payload embeds `createdAt`, so the ISO rewrite below cannot see it:
  * any change in how many times the pinned clock is read (a new migration calling
  * `runMigrationOnce`, for instance) shifts the embedded millisecond and fails
  * this golden for a reason that has nothing to do with the response shape.
- * Decode, replace the timestamp, keep the id, and re-encode so the field stays a
- * cursor-shaped string. Anything that is not a `[timestamp, id]` payload is
- * returned untouched.
+ *
+ * Only that exact shape is rewritten: the payload must be a two-element array
+ * whose first element is a whole ISO timestamp and whose second element is a
+ * string. The first element becomes `<timestamp>` and the id is kept verbatim, so
+ * an id change still fails the golden. Every other payload — different arity, a
+ * non-string id, a timestamp that is only part of a string, or an undecodable
+ * base64/JSON body — is returned untouched.
  */
 function normalizeCursor(cursor: string): string {
   let payload: unknown;
@@ -411,15 +418,11 @@ function normalizeCursor(cursor: string): string {
   } catch {
     return cursor;
   }
-  if (!Array.isArray(payload)) return cursor;
-  let changed = false;
-  const scrubbed = payload.map((entry) => {
-    if (typeof entry !== "string") return entry;
-    const replaced = entry.replace(ISO_RE, "<timestamp>");
-    if (replaced !== entry) changed = true;
-    return replaced;
-  });
-  return changed ? Buffer.from(JSON.stringify(scrubbed), "utf8").toString("base64url") : cursor;
+  if (!Array.isArray(payload) || payload.length !== 2) return cursor;
+  const [createdAt, id] = payload;
+  if (typeof createdAt !== "string" || !ISO_WHOLE_RE.test(createdAt)) return cursor;
+  if (typeof id !== "string") return cursor;
+  return Buffer.from(JSON.stringify(["<timestamp>", id]), "utf8").toString("base64url");
 }
 
 /**
