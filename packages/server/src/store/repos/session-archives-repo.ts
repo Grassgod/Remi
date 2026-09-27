@@ -6,7 +6,7 @@ import type {
   ReportSessionArchiveFailureInput,
 } from "@multiremi/contracts/types.js";
 import { MULTIREMI_SESSION_ARCHIVE_PREPARATION_FAILURE_REVISION } from "@multiremi/contracts/types.js";
-import { SESSION_ARCHIVE_V2_FORMAT } from "@multiremi/contracts/session-archive.js";
+import { SESSION_ARCHIVE_FORMAT_V2 } from "@multiremi/contracts/session-archive.js";
 import { nowIso } from "@multiremi/ids.js";
 import {
   isSessionArchiveRetryExhausted,
@@ -44,7 +44,7 @@ function hydrate(row: Row): MultiremiSessionArchive {
       ? "issue"
       : String(row.subject_kind)) as MultiremiSessionArchiveSubjectKind,
     subjectId: row.subject_id == null ? String(issueId ?? "") : String(row.subject_id),
-    format: row.format == null ? SESSION_ARCHIVE_V2_FORMAT : String(row.format),
+    format: row.format == null ? SESSION_ARCHIVE_FORMAT_V2 : String(row.format),
     issueId,
     runtimeId: String(row.runtime_id),
     daemonId: String(row.daemon_id),
@@ -151,7 +151,7 @@ export class SessionArchivesRepo {
           issueId,
           input.subjectKind,
           input.subjectId,
-          SESSION_ARCHIVE_V2_FORMAT,
+          SESSION_ARCHIVE_FORMAT_V2,
           input.runtimeId,
           input.daemonId,
           MULTIREMI_SESSION_ARCHIVE_PREPARATION_FAILURE_REVISION,
@@ -271,7 +271,7 @@ export class SessionArchivesRepo {
   } | null {
     return this.withWritableSubjectArchive(input, () => {
       const issueId = input.subjectKind === "issue" ? input.subjectId : null;
-      const format = input.format ?? SESSION_ARCHIVE_V2_FORMAT;
+      const format = input.format ?? SESSION_ARCHIVE_FORMAT_V2;
       const existing = this.ctx.db.query(
         `SELECT * FROM multiremi_session_archives
          WHERE subject_kind = ? AND subject_id = ? AND source_revision = ? AND sha256 = ?`,

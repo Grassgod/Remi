@@ -37,8 +37,8 @@ import {
   SESSION_ARCHIVE_SESSIONS_PREFIX,
   SESSION_ARCHIVE_TRACES_PREFIX,
   SESSION_ARCHIVE_TRACE_SUFFIX,
-  SESSION_ARCHIVE_V2_FORMAT,
-  SESSION_ARCHIVE_V1_FORMAT,
+  SESSION_ARCHIVE_FORMAT_V2,
+  SESSION_ARCHIVE_FORMAT_V1,
   type SessionArchiveIndex,
   type SessionArchiveMemberIndexEntry,
   type SessionArchiveSubject,
@@ -51,7 +51,7 @@ const log = createLogger("multiremi-session-archive");
 
 const DEFAULT_MAX_SOURCE_BYTES = 512 * 1024 * 1024;
 export const ISSUE_SESSION_ARCHIVE_RECEIPT_FILE = "session-archive-receipt.json";
-export const SESSION_ARCHIVE_FORMAT = SESSION_ARCHIVE_V2_FORMAT;
+export const SESSION_ARCHIVE_FORMAT = SESSION_ARCHIVE_FORMAT_V2;
 /** Directories whose contents never enter an archive. */
 const EXCLUDED_FILE_NAMES = new Set([
   ".credentials.json",
@@ -103,7 +103,7 @@ export interface PreparedSessionArchive {
   traceCount: number;
   subject: SessionArchiveSubject;
   metadata: {
-    format: typeof SESSION_ARCHIVE_V2_FORMAT;
+    format: typeof SESSION_ARCHIVE_FORMAT_V2;
     subject: SessionArchiveSubject;
     files: Array<{ path: string; size: number; sha256: string }>;
   };
@@ -187,7 +187,7 @@ export async function prepareSessionArchive(
   const sourceSnapshot = await scanArchiveEntries(sources, maxSourceBytes);
   const files = sourceSnapshot.files;
   const manifest = {
-    format: SESSION_ARCHIVE_V2_FORMAT,
+    format: SESSION_ARCHIVE_FORMAT_V2,
     subject: options.subject,
     files: files.map((file) => ({ path: file.archivePath, size: file.size, sha256: file.sha256 })),
   } as const;
@@ -227,7 +227,7 @@ export async function prepareSessionArchive(
       fileCount: files.length,
       traceCount: files.filter((file) => file.kind === "trace").length,
       subject: options.subject,
-      metadata: { format: SESSION_ARCHIVE_V2_FORMAT, subject: options.subject, files: [...manifest.files] },
+      metadata: { format: SESSION_ARCHIVE_FORMAT_V2, subject: options.subject, files: [...manifest.files] },
     };
   } catch (error) {
     await rm(partialPath, { force: true }).catch(() => {});
@@ -464,7 +464,7 @@ async function walkArchiveDirectory(
 interface WriteArchiveInput {
   partialPath: string;
   manifest: {
-    format: typeof SESSION_ARCHIVE_V2_FORMAT;
+    format: typeof SESSION_ARCHIVE_FORMAT_V2;
     subject: SessionArchiveSubject;
     files: Array<{ path: string; size: number; sha256: string }>;
   };
@@ -557,7 +557,7 @@ export function buildArchiveIndex(
       sha256: member.sha256,
     };
   });
-  return { format: SESSION_ARCHIVE_V2_FORMAT, subject, members: entries };
+  return { format: SESSION_ARCHIVE_FORMAT_V2, subject, members: entries };
 }
 
 async function* readMemberBytes(file: ScannedFile): AsyncGenerator<Buffer> {
@@ -906,4 +906,4 @@ function isAlreadyExists(error: unknown): boolean {
 }
 
 /** Re-exported so callers can name the legacy format without importing contracts. */
-export const LEGACY_SESSION_ARCHIVE_FORMAT = SESSION_ARCHIVE_V1_FORMAT;
+export const LEGACY_SESSION_ARCHIVE_FORMAT = SESSION_ARCHIVE_FORMAT_V1;

@@ -48,10 +48,8 @@ export interface ArchiveMemberBytes {
   bytesRead: number;
 }
 
-export interface TraceLineCursor extends TraceMemberWindow {
-  /** Cursor to pass to the next call; equal to `cursor` when at end of member. */
-  nextCursor: number;
-}
+/** A trace window plus the seq cursor to pass to the next call. */
+export type TraceLineCursor = TraceMemberWindow;
 
 export interface SessionArchiveReaderOptions {
   store: MultiremiStore;
@@ -99,10 +97,12 @@ export class SessionArchiveReader {
   /**
    * Read a window of events from a trace member.
    *
-   * Line rules come from the trace contract, not from this reader: the header
-   * and trailer carry no `seq` and are skipped, only integer seq >= 1 lines are
-   * events, a repeated seq keeps the first occurrence, and a final line without
-   * a newline is a crash-truncated append that is dropped.
+   * `cursor` is a seq, matching A-0's `TraceStore.read(afterSeq)`: the window
+   * holds every event with `seq > cursor` up to `limit`, and `nextCursor` is the
+   * last returned seq. Line rules come from the trace contract, not from this
+   * reader: the header and trailer carry no `seq`, only integer seq >= 1 lines
+   * are events, a repeated seq keeps the first occurrence, and a final line
+   * without a newline is a crash-truncated append that is dropped.
    */
   async readTraceLines(
     pointer: Pick<
@@ -130,8 +130,7 @@ export class SessionArchiveReader {
       uncompressedSize: pointer.uncompressedSize ?? undefined,
       sha256: pointer.sha256 ?? undefined,
     });
-    const window = readTraceMemberWindow(member.bytes, cursor, limit);
-    return { ...window, nextCursor: cursor + window.events.length };
+    return readTraceMemberWindow(member.bytes, cursor, limit);
   }
 
   private async resolveArchivePath(archiveId: string): Promise<string> {

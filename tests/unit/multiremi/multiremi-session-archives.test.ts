@@ -8,7 +8,10 @@ import { MultiremiDaemonClient } from "@multiremi/client.js";
 import { SessionArchiveService } from "@multiremi/session-archive/service.js";
 import { createStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
 import { buildArchiveFixture, fixtureSha256, traceFileBody } from "./session-archive-fixtures.js";
-import { SESSION_ARCHIVE_V1_FORMAT } from "@multiremi/contracts/session-archive.js";
+import {
+  SESSION_ARCHIVE_FORMAT_V1,
+  SESSION_ARCHIVE_FORMAT_V2,
+} from "@multiremi/contracts/session-archive.js";
 
 let archiveRoot: string | null = null;
 
@@ -213,6 +216,7 @@ describe("Multiremi session archives", () => {
         source_revision: "direct-origin-v1",
         sha256: sha256(Buffer.from("direct")),
         size_bytes: 6,
+        metadata: { format: SESSION_ARCHIVE_FORMAT_V2 },
       }),
     });
 
@@ -442,7 +446,7 @@ describe("Multiremi session archives", () => {
         source_revision: "empty-sessions-v1",
         sha256: emptyDigest,
         size_bytes: 0,
-        file_count: 0,
+        metadata: { format: SESSION_ARCHIVE_FORMAT_V2 },
       }),
     });
     expect(resolved.status).toBe(201);
@@ -537,6 +541,7 @@ describe("Multiremi session archives", () => {
         source_revision: revision,
         sha256: digest,
         size_bytes: bytes.byteLength,
+        metadata: { format: SESSION_ARCHIVE_FORMAT_V2 },
       }),
     });
     expect(deferred.status).toBe(429);
@@ -552,6 +557,7 @@ describe("Multiremi session archives", () => {
         source_revision: revision,
         sha256: digest,
         size_bytes: bytes.byteLength,
+        metadata: { format: SESSION_ARCHIVE_FORMAT_V2 },
       }),
     });
     expect(resumedResponse.status).toBe(200);
@@ -728,6 +734,7 @@ describe("Multiremi session archives", () => {
         source_revision: "proxy-limit-v1",
         sha256: sha256(Buffer.from("proxy-limit")),
         size_bytes: 11,
+        metadata: { format: SESSION_ARCHIVE_FORMAT_V2 },
       }),
     });
     const initialized = await init.json() as any;
@@ -759,6 +766,7 @@ describe("Multiremi session archives", () => {
         source_revision: "proxy-limit-v1",
         sha256: sha256(Buffer.from("proxy-limit")),
         size_bytes: 11,
+        metadata: { format: SESSION_ARCHIVE_FORMAT_V2 },
       }),
     });
     expect((await resumed.json() as any).upload_attempt).toBe(initialized.upload_attempt + 1);
@@ -780,8 +788,8 @@ describe("Multiremi session archives", () => {
     const body = JSON.stringify({
       source_revision: crashFixture.sourceRevision,
       sha256: crashFixture.sha256,
-      size_bytes: bytes.byteLength,
-    });
+          metadata: { format: SESSION_ARCHIVE_FORMAT_V2 },
+      });
     const firstResponse = await app.request(`${base}/init`, {
       method: "POST",
       headers: daemonHeaders,
@@ -890,8 +898,8 @@ describe("Multiremi session archives", () => {
     const body = JSON.stringify({
       source_revision: "stalled-budget-v1",
       sha256: sha256(bytes),
-      size_bytes: bytes.byteLength,
-    });
+          metadata: { format: SESSION_ARCHIVE_FORMAT_V2 },
+      });
     const firstResponse = await app.request(`${base}/init`, {
       method: "POST",
       headers: daemonHeaders,
@@ -1008,6 +1016,7 @@ describe("Multiremi session archives", () => {
         source_revision: repairRevision,
         sha256: repairFixture.sha256,
         size_bytes: bytes.byteLength,
+        metadata: { format: SESSION_ARCHIVE_FORMAT_V2 },
       }),
     });
     const first = await init.json() as any;
@@ -1055,6 +1064,7 @@ describe("Multiremi session archives", () => {
         source_revision: repairRevision,
         sha256: repairFixture.sha256,
         size_bytes: bytes.byteLength,
+        metadata: { format: SESSION_ARCHIVE_FORMAT_V2 },
       }),
     });
     const retry = await retryInit.json() as any;
@@ -1155,6 +1165,7 @@ describe("Multiremi session archives", () => {
         source_revision: deleteFixture.sourceRevision,
         sha256: deleteFixture.sha256,
         size_bytes: bytes.byteLength,
+        metadata: { format: SESSION_ARCHIVE_FORMAT_V2 },
       }),
     });
     const initialized = await init.json() as any;
@@ -1533,6 +1544,7 @@ describe("Multiremi session archives", () => {
         source_revision: "fence-v1",
         sha256: sha256(bytes),
         size_bytes: bytes.byteLength,
+        metadata: { format: SESSION_ARCHIVE_FORMAT_V2 },
       }),
     });
     expect(initializedResponse.status).toBe(201);
@@ -1576,6 +1588,7 @@ describe("Multiremi session archives", () => {
         source_revision: "fence-v2",
         sha256: sha256(Buffer.from("new")),
         size_bytes: 3,
+        metadata: { format: SESSION_ARCHIVE_FORMAT_V2 },
       }),
     });
     expect(blockedInit.status).toBe(409);
@@ -1598,6 +1611,7 @@ describe("Multiremi session archives", () => {
         source_revision: "deleting-v1",
         sha256: sha256(Buffer.from("blocked")),
         size_bytes: 7,
+        metadata: { format: SESSION_ARCHIVE_FORMAT_V2 },
       }),
     });
     expect(deletingInit.status).toBe(409);
@@ -1773,7 +1787,8 @@ describe("Multiremi session archives", () => {
         sha256: sha256(bytes),
         size_bytes: 1,
         path: "../../outside",
-    });
+        metadata: { format: SESSION_ARCHIVE_FORMAT_V2 },
+      });
     const forbiddenRequests: Array<[string, RequestInit]> = [
       [`${base}/status?source_revision=v1&sha256=${sha256(bytes)}`, { headers: otherHeaders }],
       [`${base}/init`, { method: "POST", headers: otherHeaders, body: initBody }],
@@ -1832,6 +1847,7 @@ describe("Multiremi session archives", () => {
         source_revision: "bad-v1",
         sha256: sha256(declared),
         size_bytes: uploaded.byteLength,
+        metadata: { format: SESSION_ARCHIVE_FORMAT_V2 },
       }),
     });
     const initialized = await init.json() as any;
@@ -1883,6 +1899,7 @@ describe("Multiremi session archives", () => {
         source_revision: "symlink-v1",
         sha256: sha256(bytes),
         size_bytes: bytes.byteLength,
+        metadata: { format: SESSION_ARCHIVE_FORMAT_V2 },
       }),
     });
     expect(init.status).toBe(409);
@@ -2135,7 +2152,7 @@ describe("Multiremi session archives", () => {
       [`${base}/init`, "POST", JSON.stringify({
         source_revision: "missing-workspace",
         sha256: "0".repeat(64),
-        size_bytes: 0,
+        metadata: { format: SESSION_ARCHIVE_FORMAT_V2 },
       })],
       [`${base}/failure`, "POST", JSON.stringify({ stage: "prepare", error: "missing" })],
     ] as const) {

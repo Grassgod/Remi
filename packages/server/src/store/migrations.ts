@@ -12,7 +12,7 @@ import {
 import { createLogger } from "@shared/logger.js";
 import { canonicalizeDaemonRoutingWithinTransaction } from "@multiremi/store/daemon-routing.js";
 import { isPostgresConfigured } from "@multiremi/store/db/postgres.js";
-import { SESSION_ARCHIVE_V1_FORMAT } from "@multiremi/contracts/session-archive.js";
+import { SESSION_ARCHIVE_FORMAT_V1 } from "@multiremi/contracts/session-archive.js";
 
 const log = createLogger("multiremi-store");
 const SCM_CONNECTION_ORIGIN_MIGRATION = "20260822_scm_connection_origins";
@@ -5109,7 +5109,7 @@ function migrateSessionArchiveSubjectsV2(db: SqlDatabase): void {
             subject_id = COALESCE(subject_id, issue_id),
             format = COALESCE(format, ?)
       WHERE subject_kind IS NULL OR subject_id IS NULL OR format IS NULL`,
-    [SESSION_ARCHIVE_V1_FORMAT],
+    [SESSION_ARCHIVE_FORMAT_V1],
   );
 
   const after = db.query(

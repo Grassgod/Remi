@@ -10,3 +10,5 @@ export * from "./wiki-links.js";
 export * from "./model-thinking.js";
 export * from "./codex-model-catalog.js";
 export * from "./session-archive.js";
+export * from "./conversation-log.js";
+export * from "./trace-file.js";

@@ -741,6 +741,16 @@ runMigrations(this.db);
     return this.sessionArchives.status(issueId, sourceRevision, sha256);
   }
 
+  /** Same snapshot as {@link getSessionArchiveStatus}, for any archive subject. */
+  getSessionArchiveSubjectStatus(
+    kind: MultiremiSessionArchiveSubjectKind,
+    subjectId: string,
+    sourceRevision?: string | null,
+    sha256?: string | null,
+  ): SessionArchiveStatusSnapshot {
+    return this.sessionArchives.subjectStatus(kind, subjectId, sourceRevision, sha256);
+  }
+
   initSessionArchive(input: InitSessionArchiveInput, id: string, relativePath: string): {
     archive: MultiremiSessionArchive;
     created: boolean;

@@ -13,7 +13,7 @@ import {
   SESSION_ARCHIVE_MANIFEST_MEMBER,
   SESSION_ARCHIVE_TRACES_PREFIX,
   SESSION_ARCHIVE_TRACE_SUFFIX,
-  SESSION_ARCHIVE_V2_FORMAT,
+  SESSION_ARCHIVE_FORMAT_V2,
   type SessionArchiveIndex,
   type SessionArchiveMemberIndexEntry,
   type SessionArchiveSubject,
@@ -123,7 +123,7 @@ export async function buildArchiveFixture(options: ArchiveFixtureOptions): Promi
   // The manifest is the content manifest: it digests the *original* bytes, so a
   // tampered body no longer matches it.
   const manifest = {
-    format: SESSION_ARCHIVE_V2_FORMAT,
+    format: SESSION_ARCHIVE_FORMAT_V2,
     subject: options.subject,
     files: members.map((member) => ({
       path: member.path,
@@ -149,7 +149,7 @@ export async function buildArchiveFixture(options: ArchiveFixtureOptions): Promi
   }
 
   const index: SessionArchiveIndex = {
-    format: SESSION_ARCHIVE_V2_FORMAT,
+    format: SESSION_ARCHIVE_FORMAT_V2,
     subject: options.subject,
     members: writer.index.map((member): SessionArchiveMemberIndexEntry => {
       const source = members.find((candidate) => candidate.path === member.path);

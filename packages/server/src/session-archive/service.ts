@@ -32,8 +32,8 @@ import type {
   MultiremiSessionArchiveSubjectKind,
 } from "@multiremi/contracts/types.js";
 import {
-  SESSION_ARCHIVE_V2_FORMAT,
-  SESSION_ARCHIVE_V1_FORMAT,
+  SESSION_ARCHIVE_FORMAT_V2,
+  SESSION_ARCHIVE_FORMAT_V1,
 } from "@multiremi/contracts/session-archive.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import { createId } from "@multiremi/ids.js";
@@ -130,9 +130,6 @@ function archiveRelativePath(input: Pick<
  * `ready` — the hard-delete barrier binds to them — so a request that names one
  * of those is served as before instead of being rejected.
  */
-const SESSION_ARCHIVE_FORMAT_V1 = SESSION_ARCHIVE_V1_FORMAT;
-const SESSION_ARCHIVE_FORMAT_V2 = SESSION_ARCHIVE_V2_FORMAT;
-
 function nonEmptyString(value: unknown): value is string {
   return typeof value === "string" && Boolean(value.trim());
 }
@@ -141,29 +138,43 @@ function isV2Format(format: string | undefined | null): boolean {
   return format === SESSION_ARCHIVE_FORMAT_V2;
 }
 
+/**
+ * Which subject one upload request is about.
+ *
+ * A bare string is accepted as an Issue id so the long-standing Issue callers
+ * (the daemon GC path and its tests) stay readable; every other subject passes
+ * its kind explicitly.
+ */
+export type SessionArchiveScope = SessionArchiveSubjectScope | string;
+
+export interface SessionArchiveSubjectScope {
+  kind: MultiremiSessionArchiveSubjectKind;
+  id: string;
+}
+
+/** Normalize the two accepted scope spellings into a subject. */
+export function resolveSessionArchiveScope(scope: SessionArchiveScope): SessionArchiveSubjectScope {
+  return typeof scope === "string" ? { kind: "issue", id: scope } : scope;
+}
+
+/**
+ * Resolve an archive by subject and refuse a Runtime that does not own it.
+ *
+ * The subject check is what keeps a Chat or Task archive from being driven
+ * through another subject's route: the id alone is not enough, since the same
+ * text could name different things in different subject kinds.
+ */
 function assertArchiveScope(
   archive: MultiremiSessionArchive | null,
   runtimeId: string,
-  issueId: string,
+  scope: SessionArchiveScope,
 ): MultiremiSessionArchive {
-  if (!archive || archive.runtimeId !== runtimeId || archive.issueId !== issueId) {
-    throw new SessionArchiveError("session archive not found", 404, "session_archive_not_found");
-  }
-  return archive;
-}
-
-/** Resolve an archive by subject and refuse a Runtime that does not own it. */
-function assertSubjectArchiveScope(
-  archive: MultiremiSessionArchive | null,
-  runtimeId: string,
-  subjectKind: MultiremiSessionArchiveSubjectKind,
-  subjectId: string,
-): MultiremiSessionArchive {
+  const subject = resolveSessionArchiveScope(scope);
   if (
     !archive
     || archive.runtimeId !== runtimeId
-    || archive.subjectKind !== subjectKind
-    || archive.subjectId !== subjectId
+    || archive.subjectKind !== subject.kind
+    || archive.subjectId !== subject.id
   ) {
     throw new SessionArchiveError("session archive not found", 404, "session_archive_not_found");
   }
@@ -327,10 +338,10 @@ export class SessionArchiveService {
    */
   async claimUploadAttempt(
     runtimeId: string,
-    issueId: string,
+    scope: SessionArchiveScope,
     archiveId: string,
   ): Promise<{ archive: MultiremiSessionArchive; uploadAttempt: number | null }> {
-    let archive = assertArchiveScope(this.store.getSessionArchive(archiveId), runtimeId, issueId);
+    let archive = assertArchiveScope(this.store.getSessionArchive(archiveId), runtimeId, scope);
     archive = this.requireWritableArchive(archive, runtimeId);
     if (archive.status === "ready") return { archive, uploadAttempt: null };
     // Refuse before touching the retry budget: an old daemon retrying a v1
@@ -341,7 +352,7 @@ export class SessionArchiveService {
     }
     const claimed = this.store.claimSessionArchiveUploadAttempt(archive.id, runtimeId);
     if (!claimed) {
-      archive = assertArchiveScope(this.store.getSessionArchive(archiveId), runtimeId, issueId);
+      archive = assertArchiveScope(this.store.getSessionArchive(archiveId), runtimeId, scope);
       if (archive.status === "ready") return { archive, uploadAttempt: null };
       if (archive.retryExhaustedAt) {
         await this.cleanupExhaustedPartials(archive);
@@ -383,12 +394,12 @@ export class SessionArchiveService {
 
   async upload(
     runtimeId: string,
-    issueId: string,
+    scope: SessionArchiveScope,
     archiveId: string,
     attemptCount: number,
     body: ReadableStream<Uint8Array> | null,
   ): Promise<MultiremiSessionArchive> {
-    let archive = assertArchiveScope(this.store.getSessionArchive(archiveId), runtimeId, issueId);
+    let archive = assertArchiveScope(this.store.getSessionArchive(archiveId), runtimeId, scope);
     archive = this.requireWritableArchive(archive, runtimeId);
     this.assertCurrentAttempt(archive, attemptCount);
     if (archive.status === "ready") return archive;
@@ -498,11 +509,11 @@ export class SessionArchiveService {
 
   preflightUpload(
     runtimeId: string,
-    issueId: string,
+    scope: SessionArchiveScope,
     archiveId: string,
     attemptCount: number,
   ): void {
-    let archive = assertArchiveScope(this.store.getSessionArchive(archiveId), runtimeId, issueId);
+    let archive = assertArchiveScope(this.store.getSessionArchive(archiveId), runtimeId, scope);
     archive = this.requireWritableArchive(archive, runtimeId);
     this.assertCurrentAttempt(archive, attemptCount);
     if (!isV2Format(archive.format) && archive.status !== "ready") {
@@ -519,12 +530,12 @@ export class SessionArchiveService {
 
   failUpload(
     runtimeId: string,
-    issueId: string,
+    scope: SessionArchiveScope,
     archiveId: string,
     attemptCount: number,
     error: string,
   ): MultiremiSessionArchive {
-    let archive = assertArchiveScope(this.store.getSessionArchive(archiveId), runtimeId, issueId);
+    let archive = assertArchiveScope(this.store.getSessionArchive(archiveId), runtimeId, scope);
     archive = this.requireWritableArchive(archive, runtimeId);
     this.assertCurrentAttempt(archive, attemptCount);
     if (archive.status === "failed") return archive;
@@ -554,14 +565,15 @@ export class SessionArchiveService {
 
   async complete(
     runtimeId: string,
-    issueId: string,
+    scope: SessionArchiveScope,
     archiveId: string,
     attemptCount: number,
   ): Promise<MultiremiSessionArchive> {
-    const key = JSON.stringify([runtimeId, issueId, archiveId, attemptCount]);
+    const subject = resolveSessionArchiveScope(scope);
+    const key = JSON.stringify([runtimeId, subject.kind, subject.id, archiveId, attemptCount]);
     const existing = this.completionAttempts.get(key);
     if (existing) return await existing;
-    const completion = this.completeAttempt(runtimeId, issueId, archiveId, attemptCount);
+    const completion = this.completeAttempt(runtimeId, scope, archiveId, attemptCount);
     this.completionAttempts.set(key, completion);
     try {
       return await completion;
@@ -572,11 +584,11 @@ export class SessionArchiveService {
 
   private async completeAttempt(
     runtimeId: string,
-    issueId: string,
+    scope: SessionArchiveScope,
     archiveId: string,
     attemptCount: number,
   ): Promise<MultiremiSessionArchive> {
-    let archive = assertArchiveScope(this.store.getSessionArchive(archiveId), runtimeId, issueId);
+    let archive = assertArchiveScope(this.store.getSessionArchive(archiveId), runtimeId, scope);
     archive = this.requireWritableArchive(archive, runtimeId);
     this.assertCurrentAttempt(archive, attemptCount);
     if (archive.status === "ready") return archive;

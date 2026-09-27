@@ -24,7 +24,7 @@ import { readZipCentralDirectory, readZipMemberBody } from "@shared/zip/reader.j
 import { traceFileBody } from "../../unit/multiremi/session-archive-fixtures.js";
 import {
   SESSION_ARCHIVE_INDEX_MEMBER,
-  SESSION_ARCHIVE_V2_FORMAT,
+  SESSION_ARCHIVE_FORMAT_V2,
   type SessionArchiveIndex,
 } from "@multiremi/contracts/session-archive.js";
 
@@ -90,10 +90,10 @@ describe("Session archive v2 writer", () => {
     expect(first.sourceRevision).toBe(second.sourceRevision);
     expect(first.sha256).toBe(second.sha256);
     expect(first.fileCount).toBe(3);
-    expect(first.metadata.format).toBe(SESSION_ARCHIVE_V2_FORMAT);
+    expect(first.metadata.format).toBe(SESSION_ARCHIVE_FORMAT_V2);
     expect(first.metadata.subject).toEqual({ kind: "issue", id: "iss_1" });
     const archive = await readArchive(first.archivePath);
-    expect(archive.members.get("manifest.json")?.toString()).toContain(SESSION_ARCHIVE_V2_FORMAT);
+    expect(archive.members.get("manifest.json")?.toString()).toContain(SESSION_ARCHIVE_FORMAT_V2);
     expect(archive.members.get("sessions/ises_1/agt_1/1/home/projects/history.jsonl")?.toString())
       .toContain("hello");
     expect(archive.members.get("sessions/ises_1/agt_1/1/home/state_5.sqlite")).toEqual(Buffer.from([0, 1, 2, 3]));
@@ -113,7 +113,7 @@ describe("Session archive v2 writer", () => {
     const prepared = await prepareIssueSessionArchive(root, { issueId: "iss_1" });
     const archive = await readArchive(prepared.archivePath);
     const zipEntries = new Map(archive.index.members.map((entry) => [entry.path, entry]));
-    expect(archive.index.format).toBe(SESSION_ARCHIVE_V2_FORMAT);
+    expect(archive.index.format).toBe(SESSION_ARCHIVE_FORMAT_V2);
     expect(archive.index.subject).toEqual({ kind: "issue", id: "iss_1" });
     // index.json is the last member, manifest.json the first.
     expect([...archive.members.keys()].at(0)).toBe("manifest.json");
@@ -340,7 +340,7 @@ describe("Session archive v2 writer", () => {
 
     expect(prepared.fileCount).toBe(0);
     expect(prepared.traceCount).toBe(0);
-    expect(archive.members.get("manifest.json")?.toString()).toContain(SESSION_ARCHIVE_V2_FORMAT);
+    expect(archive.members.get("manifest.json")?.toString()).toContain(SESSION_ARCHIVE_FORMAT_V2);
     expect([...archive.members.keys()]).toEqual(["manifest.json", "index.json"]);
     // The index describes the manifest; it cannot describe its own bytes.
     expect(archive.index.members.map((entry) => entry.path)).toEqual(["manifest.json"]);

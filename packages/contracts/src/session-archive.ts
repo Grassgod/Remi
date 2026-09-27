@@ -13,9 +13,11 @@
  * both key on those two values, so they are unaffected by the container change.
  */
 
-export const SESSION_ARCHIVE_V2_FORMAT = "multiremi.session-archive.v2" as const;
+import type { SessionArchiveSubjectKind } from "./trace-file.js";
+
+export const SESSION_ARCHIVE_FORMAT_V2 = "multiremi.session-archive.v2" as const;
 /** v1 tar.gz container; accepted rows stay readable, new uploads are rejected. */
-export const SESSION_ARCHIVE_V1_FORMAT = "multiremi.issue-sessions.v1" as const;
+export const SESSION_ARCHIVE_FORMAT_V1 = "multiremi.issue-sessions.v1" as const;
 
 export const SESSION_ARCHIVE_MANIFEST_MEMBER = "manifest.json" as const;
 export const SESSION_ARCHIVE_INDEX_MEMBER = "index.json" as const;
@@ -23,7 +25,15 @@ export const SESSION_ARCHIVE_TRACES_PREFIX = "traces/" as const;
 export const SESSION_ARCHIVE_TRACE_SUFFIX = ".jsonl" as const;
 export const SESSION_ARCHIVE_SESSIONS_PREFIX = "sessions/" as const;
 
-export type SessionArchiveSubjectKind = "issue" | "chat" | "task";
+/**
+ * What an archive covers.
+ *
+ * The vocabulary is declared once, in `trace-file.ts`, together with the
+ * archive-request row that names a subject. This module re-exports it so archive
+ * readers keep one import path, and a re-export (rather than a second
+ * declaration) is what keeps `index.ts` free of an ambiguous star export.
+ */
+export type { SessionArchiveSubjectKind } from "./trace-file.js";
 
 export interface SessionArchiveSubject {
   kind: SessionArchiveSubjectKind;
@@ -62,7 +72,7 @@ export interface SessionArchiveMemberIndexEntry {
 
 /** `manifest.json`: the content manifest whose digest is `source_revision`. */
 export interface SessionArchiveManifest {
-  format: typeof SESSION_ARCHIVE_V2_FORMAT;
+  format: typeof SESSION_ARCHIVE_FORMAT_V2;
   subject: SessionArchiveSubject;
   /** Files in the content manifest, sorted by path. */
   files: Array<{ path: string; size: number; sha256: string }>;
@@ -76,7 +86,7 @@ export interface SessionArchiveManifest {
  * container to hold exactly `members.length + 1` entries.
  */
 export interface SessionArchiveIndex {
-  format: typeof SESSION_ARCHIVE_V2_FORMAT;
+  format: typeof SESSION_ARCHIVE_FORMAT_V2;
   subject: SessionArchiveSubject;
   members: SessionArchiveMemberIndexEntry[];
 }
@@ -115,7 +125,7 @@ export interface MultiremiTaskTrace {
 /** Parse `manifest.json` defensively; ingest rejects anything malformed. */
 export function parseSessionArchiveManifest(value: unknown): SessionArchiveManifest | null {
   if (!isRecord(value)) return null;
-  if (value.format !== SESSION_ARCHIVE_V2_FORMAT) return null;
+  if (value.format !== SESSION_ARCHIVE_FORMAT_V2) return null;
   const subject = value.subject;
   if (!isRecord(subject)) return null;
   if (subject.kind !== "issue" && subject.kind !== "chat" && subject.kind !== "task") return null;
@@ -130,7 +140,7 @@ export function parseSessionArchiveManifest(value: unknown): SessionArchiveManif
     files.push({ path: entry.path, size: Number(entry.size), sha256: entry.sha256.toLowerCase() });
   }
   return {
-    format: SESSION_ARCHIVE_V2_FORMAT,
+    format: SESSION_ARCHIVE_FORMAT_V2,
     subject: { kind: subject.kind, id: subject.id },
     files,
   };
@@ -139,7 +149,7 @@ export function parseSessionArchiveManifest(value: unknown): SessionArchiveManif
 /** Parse `index.json` defensively: ingest must reject anything malformed. */
 export function parseSessionArchiveIndex(value: unknown): SessionArchiveIndex | null {
   if (!isRecord(value)) return null;
-  if (value.format !== SESSION_ARCHIVE_V2_FORMAT) return null;
+  if (value.format !== SESSION_ARCHIVE_FORMAT_V2) return null;
   const subject = value.subject;
   if (!isRecord(subject)) return null;
   if (subject.kind !== "issue" && subject.kind !== "chat" && subject.kind !== "task") return null;
@@ -151,7 +161,7 @@ export function parseSessionArchiveIndex(value: unknown): SessionArchiveIndex | 
     if (!parsed) return null;
     members.push(parsed);
   }
-  return { format: SESSION_ARCHIVE_V2_FORMAT, subject: { kind: subject.kind, id: subject.id }, members };
+  return { format: SESSION_ARCHIVE_FORMAT_V2, subject: { kind: subject.kind, id: subject.id }, members };
 }
 
 export function parseSessionArchiveMember(value: unknown): SessionArchiveMemberIndexEntry | null {
@@ -206,18 +216,30 @@ export interface TraceLine {
   value: Record<string, unknown>;
 }
 
-/** The result of reading a trace member window. */
+/**
+ * The result of reading a trace member window.
+ *
+ * `cursor` is a **seq**, not an array index: it matches A-0's
+ * `TraceStore.read(afterSeq)`, where a reader passes the last seq it consumed
+ * and gets everything strictly after it. An index cursor would silently skip
+ * events whenever the seq axis has holes, which historical traces do have.
+ */
 export interface TraceMemberWindow {
-  events: Array<Record<string, unknown> & { seq: number }>;
+  events: TraceEventRecord[];
   /** Largest seq present in the whole member; 0 when it has no events. */
   head: number;
-  /** Whether the member ends with a trailer line. */
+  /** Whether the member ends with a valid trailer line. */
   closed: boolean;
-  /** True when the window reached the end of the member. */
+  /** True when no further event exists after the last returned one. */
   complete: boolean;
+  /** Seq to pass on the next call: the last returned event's seq. */
+  nextCursor: number;
   /** Count of events skipped because their seq repeats an earlier one. */
   duplicateSeqSkipped: number;
 }
+
+/** One decoded trace event line. */
+export type TraceEventRecord = Record<string, unknown> & { seq: number };
 
 /**
  * Split a `traces/<task_id>.jsonl` member into lines.
@@ -240,13 +262,18 @@ export function splitTraceMemberLines(bytes: Uint8Array): string[] {
 /**
  * Read a window of events out of a trace member.
  *
- * Rules fixed by the ADR and the ruling:
+ * Rules fixed by the ADR and the rulings:
+ * - `cursor` is a seq: events are returned only when `seq > cursor`, and
+ *   `nextCursor` is the last returned seq, so a caller walks the seq axis rather
+ *   than an array index and gaps cannot lose events;
  * - only lines whose `seq` is an integer >= 1 count as events, so the header and
  *   trailer are skipped whatever they contain;
  * - a repeated `seq` is corruption and the *first* occurrence wins;
  * - `head` is the largest seq in the member, not the event count, because
  *   historical traces may have gaps;
- * - `closed` is true when a trailer line is present.
+ * - `closed` is true only when the last line is a valid {@link TraceFileTrailer}
+ *   (an object with an `end` field). A file with only a header, or with a
+ *   trailing line that is not a trailer, stays open.
  */
 export function readTraceMemberWindow(
   bytes: Uint8Array,
@@ -255,19 +282,12 @@ export function readTraceMemberWindow(
 ): TraceMemberWindow {
   const lines = splitTraceMemberLines(bytes);
   const seen = new Set<number>();
-  const events: Array<Record<string, unknown> & { seq: number }> = [];
+  const events: TraceEventRecord[] = [];
   let head = 0;
   let duplicateSeqSkipped = 0;
-  let closed = false;
-  for (let index = 0; index < lines.length; index++) {
-    const parsed = parseTraceLine(lines[index]!);
-    if (!parsed) continue;
-    if (parsed.seq === null) {
-      // Header and trailer are structural, not events. Only a trailer (the last
-      // line) marks the trace closed.
-      if (index === lines.length - 1) closed = true;
-      continue;
-    }
+  for (const line of lines) {
+    const parsed = parseTraceLine(line);
+    if (!parsed || parsed.seq === null) continue;
     if (seen.has(parsed.seq)) {
       duplicateSeqSkipped++;
       continue;
@@ -276,15 +296,41 @@ export function readTraceMemberWindow(
     if (parsed.seq > head) head = parsed.seq;
     events.push({ ...parsed.value, seq: parsed.seq });
   }
-  const start = Math.min(cursor, events.length);
-  const window = events.slice(start, start + limit);
+  // A trailer is recognised by shape, not by position alone: the ruling only
+  // lets the `TraceFileTrailer` shape close a file, so a stray no-seq line at
+  // the end does not mark the trace finished.
+  const closed = lines.length > 0 && isTraceFileTrailer(lines[lines.length - 1]!);
+
+  const from = Number.isSafeInteger(cursor) && cursor > 0 ? cursor : 0;
+  const window = events.filter((event) => event.seq > from).slice(0, limit);
+  const nextCursor = window.length ? window[window.length - 1]!.seq : Math.max(from, head);
   return {
     events: window,
     head,
     closed,
-    complete: start + window.length >= events.length,
+    complete: window.length === 0 || nextCursor >= head,
+    nextCursor,
     duplicateSeqSkipped,
   };
+}
+
+/**
+ * True when `line` is a valid trace trailer.
+ *
+ * `TraceFileTrailer` is `{ end: { status, head, event_count, ended_at } }`, so a
+ * line only closes a trace when it carries an `end` object. Everything else —
+ * including a trailing event with a malformed seq, or a header-only file — is
+ * not a trailer.
+ */
+export function isTraceFileTrailer(line: string): boolean {
+  let value: unknown;
+  try {
+    value = JSON.parse(line);
+  } catch {
+    return false;
+  }
+  if (!isRecord(value)) return false;
+  return isRecord(value.end);
 }
 
 function parseTraceLine(line: string): TraceLine | null {
