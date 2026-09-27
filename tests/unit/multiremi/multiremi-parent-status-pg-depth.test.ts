@@ -15,8 +15,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHmac } from "node:crypto";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { StoreContext } from "@multiremi/store/context.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
+import { StoreContext } from "@multiremi/store/context.js";
 import { MultiremiStore, daemonRuntimeId } from "@multiremi/store.js";
 
 const PG_ADMIN_URL = process.env.MULTIREMI_TEST_POSTGRES_URL
@@ -147,6 +147,149 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       workspaceId,
     });
     return { workspaceId, agent: agent.id, runtime: runtime.id };
+  }
+
+  function staleLaneClaim() {
+    const { workspaceId, agent, runtime } = freshWorkspace();
+    const issue = store.createIssue({ title: "PG stale lane", workspaceId });
+    const session = store.getOrCreateDefaultIssueSession(issue.id);
+    const task = store.createSessionTask(session.id, { agentId: agent, prompt: "Claim stale lane" });
+    store.getOrCreateSessionAgentLane(session.id, agent);
+    db.run(
+      `UPDATE multiremi_session_agent_lanes SET provider_session_id = 'expired',
+       provider = 'claude', runtime_id = ?, cursor_seq = 1,
+       execution_fingerprint = 'expired' WHERE session_id = ? AND agent_id = ?`,
+      [runtime, session.id, agent],
+    );
+    return { issue, task, runtime };
+  }
+
+  it("publishes a stale lane reset once after claim commits on Postgres", () => {
+    const { issue, task, runtime } = staleLaneClaim();
+    const events: boolean[] = [];
+    const unsubscribe = store.onWorkspaceEvent((event) => {
+      if (event.type === "activity:created" && (event.payload.entry as { action?: string })?.action === "session_agent_lane_reset") {
+        events.push(db.inTransaction);
+      }
+    });
+    try {
+      expect(store.claimTask(runtime)?.id).toBe(task.id);
+    } finally {
+      unsubscribe();
+    }
+    expect(store.listIssueActivity(issue.id).filter((entry) => entry.type === "session_agent_lane_reset")).toHaveLength(1);
+    expect(events).toEqual([false]);
+  });
+
+  it("rolls back a stale lane reset without publishing on Postgres", () => {
+    const { issue, task, runtime } = staleLaneClaim();
+    const events: string[] = [];
+    const unsubscribe = store.onWorkspaceEvent((event) => {
+      if (event.type === "activity:created" && (event.payload.entry as { action?: string })?.action === "session_agent_lane_reset") {
+        events.push(event.type);
+      }
+    });
+    const original = StoreContext.prototype.appendIssueActivity;
+    let observedBeforeRollback = false;
+    StoreContext.prototype.appendIssueActivity = function patched(this: StoreContext, issueId, input, queue) {
+      original.call(this, issueId, input, queue);
+      if (input.type !== "session_agent_lane_reset") return;
+      const reader = new PostgresSyncDatabase(pgDatabaseUrl(TEST_DB));
+      try {
+        const rows = reader.query("SELECT id FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'session_agent_lane_reset'").all(issue.id);
+        const selected = reader.query("SELECT status FROM multiremi_tasks WHERE id = ?").get(task.id) as { status: string };
+        observedBeforeRollback = rows.length === 0 && selected.status === "queued";
+      } finally {
+        reader.close();
+      }
+      throw new Error("PG claim rollback injection");
+    };
+    try {
+      expect(() => store.claimTask(runtime)).toThrow("PG claim rollback injection");
+    } finally {
+      StoreContext.prototype.appendIssueActivity = original;
+      unsubscribe();
+    }
+    expect(observedBeforeRollback).toBe(true);
+    expect(store.listIssueActivity(issue.id).filter((entry) => entry.type === "session_agent_lane_reset")).toHaveLength(0);
+    expect(store.getTask(task.id)?.status).toBe("queued");
+    expect(events).toEqual([]);
+  });
+
+  for (const path of ["held parent", "assign unassign", "update unassign"] as const) {
+    function activityCase() {
+      const { workspaceId, agent } = freshWorkspace();
+      const issue = store.createIssue({
+        title: `PG audit ${path}`, workspaceId, status: "in_progress",
+        assigneeType: "agent", assigneeId: agent,
+      });
+      let taskId: string | null = null;
+      if (path === "held parent") {
+        store.createIssue({ title: "PG open child", workspaceId, parentIssueId: issue.id, status: "in_progress" });
+      } else {
+        taskId = store.createTask({ agentId: agent, issueId: issue.id, prompt: "PG queued work" }).id;
+      }
+      const run = () => path === "held parent"
+        ? store.updateIssue(issue.id, { status: "done" }, { holdParentStatus: true })
+        : path === "assign unassign"
+          ? store.assignIssue(issue.id, { assigneeType: null, assigneeId: null })
+          : store.updateIssue(issue.id, { assigneeType: null, assigneeId: null });
+      return { issue, taskId, run, action: path === "held parent" ? "parent_status_held" : "issue_unassigned" };
+    }
+
+    it(`${path}: publishes its activity after PG commit`, () => {
+      const { issue, run, action } = activityCase();
+      const events: Array<{ action: string; inTransaction: boolean }> = [];
+      const unsubscribe = store.onWorkspaceEvent((event) => {
+        if (event.type === "activity:created") events.push({
+          action: (event.payload.entry as { action: string }).action,
+          inTransaction: db.inTransaction,
+        });
+      });
+      try {
+        run();
+      } finally {
+        unsubscribe();
+      }
+      expect(store.listIssueActivity(issue.id).filter((entry) => entry.type === action)).toHaveLength(1);
+      expect(events.filter((event) => event.action === action)).toEqual([{ action, inTransaction: false }]);
+      expect(events.filter((event) => event.inTransaction)).toHaveLength(0);
+    });
+
+    it(`${path}: rolls back its activity with no PG broadcast`, () => {
+      const { issue, taskId, run, action } = activityCase();
+      const events: string[] = [];
+      const unsubscribe = store.onWorkspaceEvent((event) => {
+        if (event.type === "activity:created") events.push((event.payload.entry as { action: string }).action);
+      });
+      const original = StoreContext.prototype.appendIssueActivity;
+      let invisibleBeforeRollback = false;
+      StoreContext.prototype.appendIssueActivity = function patched(this: StoreContext, issueId, input, queue) {
+        original.call(this, issueId, input, queue);
+        if (input.type !== action) return;
+        const reader = new PostgresSyncDatabase(pgDatabaseUrl(TEST_DB));
+        try {
+          const rows = reader.query("SELECT id FROM multiremi_issue_activity WHERE issue_id = ? AND type = ?").all(issue.id, action);
+          const task = taskId
+            ? reader.query("SELECT status FROM multiremi_tasks WHERE id = ?").get(taskId) as { status: string }
+            : null;
+          invisibleBeforeRollback = rows.length === 0 && (!task || task.status === "queued");
+        } finally {
+          reader.close();
+        }
+        throw new Error("PG activity rollback injection");
+      };
+      try {
+        expect(run).toThrow("PG activity rollback injection");
+      } finally {
+        StoreContext.prototype.appendIssueActivity = original;
+        unsubscribe();
+      }
+      expect(invisibleBeforeRollback).toBe(true);
+      expect(store.listIssueActivity(issue.id).filter((entry) => entry.type === action)).toHaveLength(0);
+      if (taskId) expect(store.getTask(taskId)?.status).toBe("queued");
+      expect(events).toEqual([]);
+    });
   }
 
   it("keeps updateIssue(child -> done) at depth 1 on Postgres (owner busy: coalesced)", () => {

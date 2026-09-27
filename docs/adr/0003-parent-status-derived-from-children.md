@@ -171,6 +171,10 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
      `parent_status_held`, `child_done_parent_triggered`,
      `child_status_parent_coalesced`, the system-comment wrapper, and the task
      terminal activities/wakeups on a queue-carrying path.
+     `TasksRepo.resetSessionAgentLane` also requires the owner's queue. A claim
+     owns that queue through `snapshotTaskExecution`, flushes after its claim
+     transaction commits, and drops it on rollback. The store's standalone lane
+     reset wrapper owns a separate transaction and flushes after that commit.
    - `notifyChildStatusChange` opens the single transaction for a child report.
      The notification comment (with its Session event) and the parent's queued
      round are written inside it; the round is created through
@@ -227,9 +231,8 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
      every outward event published while a real `PostgresSyncDatabase` is in a
      transaction ("transaction-internal emission"). On the branch the scan of
      `tests/unit/multiremi/` reports **0** such emissions; on a clean
-     `4248ef07` archive the same scan reports **30** hits, all at call sites
-     that already existed on `main` and that have no commit-event queue on the
-     path:
+     `4248ef07` archive the same scan reports **30** hits from exercised paths
+     that already existed on `main`:
        - `TasksRepo.afterTaskTerminal`'s `chat:done` (`tasks-repo.ts`,
          `emitWorkspaceEvent`) and the `task_<status>` activity it writes through
          `StoreContext.appendIssueActivity`;
@@ -241,13 +244,30 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
          `delegation_return_triggered` activity on the non-queue entry point;
        - `afterTaskTerminal`'s cancel-path activity when reached from
          `cancelTaskWithinWorkspaceLock`.
-     The rule above ("a function that already receives the queue routes every
-     outward event through it") fixes these on the queue-carrying S1 paths, and
-     the S1-introduced emissions are gone; the remainder are the main-existing
-     sites where no queue is passed at all. They are listed for a separate
-     issue rather than fixed here, exactly as the two nesting sites are.
-     Coverage boundary: the scan only sees paths a test executes, so a clean run
-     proves nothing about a branch no case reaches. The scan must be repeated
+     A stale provider Session/cursor on an Issue lane adds one more main-existing
+     hit when claim calls `snapshotTaskExecution` and resets that lane. The
+     original full scan did not execute this branch. This forward fix queues its
+     `session_agent_lane_reset` audit event until the claim commits. It also
+     queues the `parent_status_held` audit inside `updateIssueWithOutcome` and
+     the `issue_unassigned`/`task_cancelled` audits inside its unassign path or
+     `assignIssue`'s transaction. The deletion transaction passes the same queue
+     to the shared task-cancellation writer. Autopilot, Feishu ingest, and Feishu
+     bot creation transactions call `createIssueWithinTransaction` with their
+     owner queue for `issue_created`; Feishu ingest's two owners flush after
+     commit. Messaging outcome direct creation and proposal approval do the
+     same from their own transactions. The standalone `createIssue` path still
+     emits directly. These
+     entries describe historical main behavior and the forward repairs; the
+     two nesting sites remain separate work.
+     Coverage boundary: the scan's **0** only describes branches the tests
+     executed; it is not proof for optional queue parameters. Their evidence is
+     the all-caller table in the MUL-406 fifth fix-round comment, based on
+     `rg` and transaction-owner tracing. `CreateIssueCommentOptions` already
+     requires the queue for `withinTransaction: true`; its optional arm is for
+     the standalone path. The two generic activity APIs remain optional because
+     splitting their many public, standalone call sites would broaden this
+     repair; each current transaction-owned call is classified in that table.
+     The scan must be repeated
      after adding cases that reach a new branch (that is how QA round 3's
      closed-parent and re-derivation emissions were missed).
    - S2's dependency gate lives in this same hook. Its automatic start
