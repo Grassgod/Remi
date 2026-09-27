@@ -408,7 +408,7 @@ describe("useStickToBottom", () => {
     expect(fixture.root.scrollTop).toBe(200);
   });
 
-  it("applies initialState again on each activation", () => {
+  it("applies initialState again on each activation, and only then", () => {
     const { result, rerender } = renderStick(baseProps());
     fire(() => {
       fixture.userScroll(100);
@@ -422,6 +422,14 @@ describe("useStickToBottom", () => {
     rerender(baseProps({ enabled: false }));
     rerender(baseProps({ enabled: true, initialState: "pinned" }));
     expect(result.current.state).toBe("pinned");
+
+    // A reader who scrolled away stays released while `enabled` does not move.
+    fire(() => {
+      fixture.userScroll(100);
+    });
+    expect(result.current.state).toBe("released");
+    rerender(baseProps({ enabled: true, initialState: "pinned" }));
+    expect(result.current.state).toBe("released");
   });
 
   it("stops observing and clears its timer on unmount", () => {

@@ -126,8 +126,10 @@ export function useAnchoredReveal(options: UseAnchoredRevealOptions): UseAnchore
   const stateRef = useRef<RevealState>("pending");
   /** rAF chain generation: bumping it cancels whatever the previous run queued. */
   const runRef = useRef(0);
-  /** Signature of the activation the DOM was last prepared for. */
-  const activationRef = useRef<string | null>(null);
+  /** The activation the DOM was last prepared for, by identity. */
+  const preparedRef = useRef<{ key: string; scrollEl: HTMLElement | null; contentEl: HTMLElement | null } | null>(
+    null,
+  );
   /** When gate (i) last held; gates (iv) and (v) are measured from here. */
   const dataReadyAtRef = useRef<number | null>(null);
 
@@ -170,9 +172,14 @@ export function useAnchoredReveal(options: UseAnchoredRevealOptions): UseAnchore
   // Preparing an activation is a layout effect: the frame that mounts the
   // content must never paint it at its pre-settlement position.
   useLayoutEffect(() => {
-    const signature = `${resetKey}|${enabled ? "on" : "off"}|${scrollEl ? "scroll" : "-"}|${contentEl ? "content" : "-"}`;
-    if (activationRef.current === signature) return;
-    activationRef.current = signature;
+    const key = `${resetKey}|${enabled ? "on" : "off"}`;
+    const prepared = preparedRef.current;
+    // Element identity, not just presence: a consumer that swaps its scroll root
+    // for another one gets a fresh activation.
+    if (prepared && prepared.key === key && prepared.scrollEl === scrollEl && prepared.contentEl === contentEl) {
+      return;
+    }
+    preparedRef.current = { key, scrollEl, contentEl };
     // A restart must not let the previous generation run another frame against
     // the anchor it was started for.
     runRef.current += 1;
@@ -265,7 +272,6 @@ export function useAnchoredReveal(options: UseAnchoredRevealOptions): UseAnchore
         if (!imageWaitElapsed && pendingImages(scrollEl).length > 0) unmet.push("images");
         // Aim one last time before showing.
         scrollEl.scrollTop = targetScrollTop(scrollEl, resolvedAnchor);
-        // eslint-disable-next-line no-console
         console.warn(
           `[useAnchoredReveal] budget of ${budgetMs}ms expired before the gates settled${
             unmet.length > 0 ? `: ${unmet.join(", ")}` : ""

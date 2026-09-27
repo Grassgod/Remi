@@ -25,7 +25,12 @@ export interface UseStickToBottomOptions {
 
 export interface UseStickToBottomResult {
   state: StickState;
-  /** `released → returning` (smooth, or instant under reduced motion) `→ pinned`. */
+  /**
+   * `released → returning → pinned`: scrolls back to the anchor (bottom mode:
+   * the end of the content; element mode: the target row's offset), smoothly
+   * unless `prefers-reduced-motion` asks for an instant jump. A no-op while the
+   * row or the scroll root is missing.
+   */
   returnToBottom(): void;
   /** For consumers with their own at-the-bottom signal, e.g. Virtuoso's `atBottomStateChange(true)`. */
   pin(): void;
@@ -139,23 +144,25 @@ export function useStickToBottom(options: UseStickToBottomOptions): UseStickToBo
 
   /**
    * `returning` ends when the scrolling goes quiet, not when the first scroll
-   * event arrives: a smooth scroll produces a long tail of them.
+   * event arrives: a smooth scroll produces a long tail of them. Both modes
+   * travel to the end of the content, so a glide the user interrupted halfway
+   * is reported as `released` rather than `pinned`.
    */
   const armSettleTimer = useCallback((): void => {
     clearSettleTimer();
     settleTimerRef.current = setTimeout(() => {
       settleTimerRef.current = null;
       returningRef.current = false;
-      if (modeKind === "bottom" && bottomDistance() <= pinThresholdPx) pin();
+      if (bottomDistance() <= pinThresholdPx) pin();
       else release();
     }, RETURN_SETTLE_MS);
-  }, [bottomDistance, clearSettleTimer, modeKind, pin, pinThresholdPx, release]);
+  }, [bottomDistance, clearSettleTimer, pin, pinThresholdPx, release]);
 
   const returnToBottom = useCallback((): void => {
-    if (!scrollEl || modeKind !== "bottom") return;
+    if (!scrollEl) return;
+    const top = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
     clearSettleTimer();
     transition("returning");
-    const top = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
     const reduceMotion =
       typeof window !== "undefined" &&
       typeof window.matchMedia === "function" &&
@@ -166,25 +173,28 @@ export function useStickToBottom(options: UseStickToBottomOptions): UseStickToBo
       programmaticTopRef.current = top;
       scrollEl.scrollTop = top;
     }
-    // The scroll may already be at the bottom, in which case no scroll event
+    // The scroll may already be at the anchor, in which case no scroll event
     // follows; the timer also ends the transaction for that case.
     armSettleTimer();
-  }, [armSettleTimer, clearSettleTimer, modeKind, scrollEl, transition]);
+  }, [armSettleTimer, clearSettleTimer, scrollEl, transition]);
 
-  // Activation: `enabled` gates the whole machine, and every rise applies
-  // `initialState` again — the consumer changes it between activations (a deep
-  // link mounts released, a normal open mounts pinned).
-  const assignmentRef = useRef<string | null>(null);
+  // Activation: `enabled` (the consumer passes `reveal.revealed`) gates the
+  // whole machine, and every rise applies the `initialState` of that activation
+  // — a deep link mounts released, a normal open mounts pinned. While `enabled`
+  // stays true the machine owns its state; a changed `initialState` is not a
+  // reason to yank a reader back to the bottom.
+  const activeRef = useRef<{ initialState: "pinned" | "released"; scrollEl: HTMLElement | null } | null>(null);
   useEffect(() => {
     if (!enabled) {
-      assignmentRef.current = null;
+      activeRef.current = null;
       clearSettleTimer();
       returningRef.current = false;
       return;
     }
-    const signature = `${initialState}|${scrollEl ? "scroll" : "-"}`;
-    if (assignmentRef.current === signature) return;
-    assignmentRef.current = signature;
+    const active = activeRef.current;
+    // A new scroll root is a new activation too, so its `initialState` applies.
+    if (active && active.initialState === initialState && active.scrollEl === scrollEl) return;
+    activeRef.current = { initialState, scrollEl };
     clearSettleTimer();
     programmaticTopRef.current = null;
     anchorValueRef.current = anchorValue();
