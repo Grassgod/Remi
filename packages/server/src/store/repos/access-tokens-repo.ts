@@ -31,6 +31,30 @@ export class DaemonTokenExpiryNotAllowedError extends Error {
   }
 }
 
+/**
+ * How long one token's `last_used_at` stamp is allowed to stand before the next
+ * verification rewrites it.
+ *
+ * The value is a "last seen" timestamp read by humans and by the daemon
+ * retirement inventory, both at day granularity, so minute-level precision costs
+ * a write per request and buys nothing (MUL-474). Only the UPDATE is throttled:
+ * the token lookup, the revocation check and the expiry check in
+ * {@link AccessTokensRepo.verifyAccessToken} still run on every request.
+ */
+const LAST_USED_AT_WRITE_INTERVAL_MS = 60_000;
+
+/**
+ * Ceiling on the throttle map.
+ *
+ * The map holds one entry per token seen in this process, so without a bound a
+ * long-lived API process would grow it with every token it ever authenticated.
+ * Entries older than the interval are dead weight the moment they expire, so the
+ * sweep drops those first and the cap only has to cover a burst larger than
+ * {@link LAST_USED_AT_SWEEP_THRESHOLD}.
+ */
+const LAST_USED_AT_MAP_MAX_ENTRIES = 4_096;
+const LAST_USED_AT_SWEEP_THRESHOLD = 4_096;
+
 export class AccessTokensRepo {
   constructor(private db: SqlDatabase) {}
 
@@ -247,10 +271,49 @@ export class AccessTokensRepo {
     // the only write since is this `last_used_at` stamp — which the returned value does not carry
     // a stale copy of because `lastUsedAt` is not part of the validation. Re-reading it cost one
     // query on every authenticated request.
-    const lastUsedAt = nowIso();
-    this.db.run("UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?", [lastUsedAt, accessToken.id]);
-    return { ...accessToken, lastUsedAt };
+    return { ...accessToken, lastUsedAt: this.stampLastUsedAt(accessToken.id) };
   }
+
+  /**
+   * Record `last_used_at`, at most once per {@link LAST_USED_AT_WRITE_INTERVAL_MS}
+   * per token in this process.
+   *
+   * Returns the stamp that is now authoritative: the value written, or the one
+   * already standing while this call is inside the throttle window. Two API
+   * processes each keep their own map and therefore each write once per window —
+   * that is expected, and the field only needs day granularity.
+   */
+  private stampLastUsedAt(tokenId: string): string {
+    const now = Date.now();
+    const throttled = lastUsedAtWrites.get(tokenId);
+    if (throttled && now - throttled.writtenAt < LAST_USED_AT_WRITE_INTERVAL_MS) return throttled.lastUsedAt;
+    const lastUsedAt = new Date(now).toISOString();
+    this.db.run("UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?", [lastUsedAt, tokenId]);
+    if (lastUsedAtWrites.size >= LAST_USED_AT_SWEEP_THRESHOLD) sweepLastUsedAtWrites(now);
+    lastUsedAtWrites.set(tokenId, { writtenAt: now, lastUsedAt });
+    return lastUsedAt;
+  }
+}
+
+/**
+ * Process-local throttle state for {@link AccessTokensRepo.stampLastUsedAt}.
+ *
+ * Module scope rather than an instance field: one process serves through a single
+ * store, but tests and one-off CLI paths may build several, and sharing the map
+ * is what makes "one write per token per minute" hold whichever handle answers.
+ */
+const lastUsedAtWrites = new Map<string, { writtenAt: number; lastUsedAt: string }>();
+
+/** Drop expired entries; if a live burst still exceeds the cap, drop the oldest. */
+function sweepLastUsedAtWrites(now: number): void {
+  for (const [id, entry] of lastUsedAtWrites) {
+    if (now - entry.writtenAt >= LAST_USED_AT_WRITE_INTERVAL_MS) lastUsedAtWrites.delete(id);
+  }
+  if (lastUsedAtWrites.size <= LAST_USED_AT_MAP_MAX_ENTRIES) return;
+  const oldest = [...lastUsedAtWrites.entries()]
+    .sort((left, right) => left[1].writtenAt - right[1].writtenAt)
+    .slice(0, lastUsedAtWrites.size - LAST_USED_AT_MAP_MAX_ENTRIES);
+  for (const [id] of oldest) lastUsedAtWrites.delete(id);
 }
 
 function toAccessToken(row: Row): MultiremiAccessToken {
