@@ -192,6 +192,9 @@ export function buildMarkdown(report: {
     webVersion?: string | null;
     hoverLeadMs?: number;
     selectorMode?: string;
+    entryQuietMs?: number | null;
+    entryQuietCapMs?: number;
+    entryQuietNote?: string;
     writeGuardSelfTest?: { blocked?: boolean; target?: string; detail?: string };
     ambientLatency?: { before?: { medianMs?: number | null }; after?: { medianMs?: number | null } };
   };
@@ -219,8 +222,16 @@ export function buildMarkdown(report: {
   lines.push(
     "- cold 用 `page.goto`；warm 先 hover 后真实 click，`navStartMs` 取页面内记录的 click 时间戳。**warm 的每一毫秒都从 click 起算**：帧、跳动、`Server-Timing` 与首屏集合都先减 `navStartMs`，首屏集合另有 `startMs ≥ navStartMs` 的下界，所以入口页的尾请求不计入目标页；cold 的 `navStartMs = 0`，数字与旧口径一致。",
   );
+  // The entry-page quiet rule is a measurement-contract switch, not a detail:
+  // the number it produces means something different when it is off.
+  const entryQuiet = meta.entryQuietMs ?? null;
   lines.push(
-    "- 串行深度：`wave = 1 + max(wave(p) | p.responseEnd ≤ start + 8ms)`；`Server-Timing` 由 resource timing 同源读取。",
+    entryQuiet === null
+      ? "- 入口页安静：**关闭**（`--entry-quiet-ms 0`）。warm 轮在目标行一出现就点击，量的是「从一个还在加载的页面切走」。"
+      : `- 入口页安静（MUL-383 A1，2026-09-27 定案）：warm 轮在目标行出现后再等入口页 \`${entryQuiet}\` ms 内没有新的 \`/api/**\` 请求开始，最多等 \`${meta.entryQuietCapMs ?? 5_000}\` ms；超时照点并记 \`entrySettled=false\`。点击时的在途数记 \`entryInflightAtClick\`。`,
+  );
+  lines.push(
+    "- 串行深度：`wave = 1 + max(wave(p) | p.responseEnd ≤ start + 8ms)`；`Server-Timing` 由 resource timing 同源读取。口径不变，另存 `serialChain` 与逐请求 `wave/after`。",
   );
   const ambient = meta.ambientLatency;
   if (ambient?.before || ambient?.after) {
@@ -639,6 +650,10 @@ ${body}
   <dt>选择器模式</dt><dd>${esc(meta.selectorMode ?? "?")}</dd>
   <dt>前端 / API 版本</dt><dd>${esc(meta.webVersion ?? "?")} / ${esc(meta.apiVersion ?? "?")}</dd>
   <dt>写护栏自检</dt><dd>${esc((meta.writeGuardSelfTest as { detail?: string } | undefined)?.detail ?? "未运行")}</dd>
+  <dt>warm 时基</dt><dd>页面内记录的 click（<code>navStartMs</code>）；帧、跳动与首屏集合都从它起算，cold 为文档 origin</dd>
+  <dt>入口页安静</dt><dd>${meta.entryQuietMs === null || meta.entryQuietMs === undefined
+    ? "关闭（<code>--entry-quiet-ms 0</code>）"
+    : `${esc(meta.entryQuietMs)} ms 无新 <code>/api</code> 请求才开始点击，上限 ${esc(meta.entryQuietCapMs ?? 5_000)} ms`}</dd>
 </dl>
 <h2>每场景汇总</h2>
 <div class="tablewrap"><table>
@@ -654,7 +669,7 @@ ${rows}
 ${detailRows}
 </tbody>
 </table></div>
-${apiPathTables ? `<h2>首屏 API 表（按 path 聚合）</h2>\n<p class="muted">只统计 <code>startMs ≥ navStartMs</code> 且不晚于就绪帧的请求（warm 从 click 起算）；<code>gap</code> = 客户端 duration − 服务端 <code>total</code>。红色表示超出 total p95 ≤ 200ms 或 gap p50 ≤ 80ms。</p>\n${apiPathTables}` : ""}
+${apiPathTables ? `<h2>首屏 API 表（按 path 聚合）</h2>\n<p class="muted">只统计 <code>startMs ≥ navStartMs</code> 且不晚于就绪帧的请求（warm 从 click 起算）；<code>gap</code> = 客户端 duration − 服务端 <code>total</code>。红色表示超出 total p95 ≤ 200ms 或 gap p50 ≤ 80ms。${meta.entryQuietMs === null || meta.entryQuietMs === undefined ? "本轮入口页安静规则关闭。" : `本轮入口页安静：${esc(meta.entryQuietMs)} ms / 上限 ${esc(meta.entryQuietCapMs ?? 5_000)} ms。`}</p>\n${apiPathTables}` : ""}
 ${apiEntrySections ? `<h2>逐请求明细</h2>\n<p class="muted">JSON <code>scenarios[].rounds[].apiFirstScreenEntries[]</code> 的展开视图。</p>\n${apiEntrySections}` : ""}
 ${jumpRows ? `<h2>跳动明细</h2>\n<div class="tablewrap"><table>\n<thead><tr><th>场景</th><th>模式</th><th class="num">轮</th><th class="num">start ms</th><th class="num">end ms</th><th class="num">位移 px</th><th class="num">scroll px</th><th>kind</th><th class="num">frames</th></tr></thead>\n<tbody>\n${jumpRows}\n</tbody>\n</table></div>` : ""}
 ${stubbedRows ? `<h2>被允许表接管的写请求（浏览器内 fulfill）</h2>\n<div class="tablewrap"><table>\n<thead><tr><th>页面</th><th>方法</th><th>path 模式</th><th class="num">次数</th></tr></thead>\n<tbody>\n${stubbedRows}\n</tbody>\n</table></div>` : ""}

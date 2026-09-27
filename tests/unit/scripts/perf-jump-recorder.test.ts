@@ -1449,6 +1449,32 @@ describe("report schema and per-path output", () => {
     expect(html.match(/<h3>detail-short（warm）<\/h3>/g)).toHaveLength(1);
   });
 
+  it("states the entry-quiet threshold and the off switch in both formats", () => {
+    // The threshold changes what a warm number means, so it is part of the report
+    // header rather than only the JSON meta.
+    const on = buildMarkdown({
+      meta: { entryQuietMs: 500, entryQuietCapMs: 5_000 },
+      scenarios: [scenarioFixture()] as never,
+      blockedWrites: [],
+      compare: null,
+    });
+    expect(on).toContain("入口页安静（MUL-383 A1");
+    expect(on).toContain("500");
+
+    const off = buildMarkdown({ meta: { entryQuietMs: null }, scenarios: [scenarioFixture()] as never, blockedWrites: [], compare: null });
+    expect(off).toContain("入口页安静：**关闭**");
+
+    const html = buildHtml({
+      meta: { entryQuietMs: 500, entryQuietCapMs: 5_000 },
+      scenarios: [scenarioFixture()] as never,
+      blockedWrites: [],
+    });
+    expect(html).toContain("入口页安静");
+    expect(html).toContain("500 ms 无新");
+    const htmlOff = buildHtml({ meta: { entryQuietMs: null }, scenarios: [scenarioFixture()] as never, blockedWrites: [] });
+    expect(htmlOff).toContain("入口页安静规则关闭");
+  });
+
   it("reports the round's time base and serial chain in the Markdown detail", () => {
     const md = buildMarkdown({ meta: {}, scenarios: [scenarioFixture()] as never, blockedWrites: [], compare: null });
     expect(md).toContain("## 逐轮时基与串行链");
