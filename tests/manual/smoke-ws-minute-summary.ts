@@ -104,7 +104,9 @@ const wsLines = captured.filter((line) => line.includes('"event":"ws_minute_summ
 const apiLines = captured.filter((line) => line.includes('"event":"api_minute_summary"'));
 realLog(`\n=== ws_minute_summary (${wsLines.length}) ===`);
 for (const line of wsLines) realLog(line);
-realLog(`\n=== api_minute_summary (${apiLines.length}, for the shared window) ===`);
+// Printed for the window comparison, NOT to be added to the WS line: the HTTP
+// line carries the process-wide DB total, which already includes WS work.
+realLog(`\n=== api_minute_summary (${apiLines.length}, same window; process DB total) ===`);
 for (const line of apiLines) realLog(line);
 
 if (wsLines.length === 0) {

@@ -3,10 +3,16 @@
  * (MUL-417; the HTTP half is `api_minute_summary` in `observability/request-metrics.ts`).
  *
  * WHY THIS EXISTS. Once daemon traffic moves off HTTP, its DB time stops showing
- * up in any route's `db_ms` — `db_busy_pct` would fall purely because the work
- * moved, not because it got cheaper. This module keeps the same accounting
- * visible per frame type, so "HTTP + WS daemon DB time" stays measurable across
- * the migration.
+ * up under any HTTP route, so the per-route breakdown loses the daemon's share.
+ * This line keeps that share visible per frame type.
+ *
+ * ONE PROCESS TOTAL, REPORTED ONCE. The process-wide DB counters appear only in
+ * `api_minute_summary` (`db_busy_pct` / `db_ms` / `db_queries`); that total already
+ * includes the work done while serving WebSocket frames, because it counts every
+ * statement that crosses the PG bridge. This summary therefore reports NO
+ * process-level DB field — duplicating it here would double-count the same
+ * statements and make the two lines unusable side by side. The per-frame `db_ms`
+ * below is an attribution aid for trends, not a second total.
  *
  * SAME WINDOW, SAME SHAPE, SAME SINK as `api_minute_summary`:
  *   - a fixed-capacity ring of typed arrays, interned frame types (no per-frame
@@ -14,13 +20,6 @@
  *   - the same `dropped` semantics when the ring wraps;
  *   - one `console.log(JSON.stringify(...))` line per interval, on stdout, with
  *     no query, header, payload, or credential content anywhere in it.
- *
- * The DB numbers come from the same process-wide counters the HTTP summary reads,
- * measured as a delta over the window. That is deliberate: the two lines are
- * meant to be added together, and double-counting a single query in both would
- * break exactly the comparison they exist to support. Each frame is measured as
- * the DB time spent *inside its own handler*, by diffing the process counters
- * around the dispatch, so a frame that issues no query reports zero.
  */
 
 /** One dispatched frame, as stored in the window. */
@@ -58,10 +57,13 @@ export interface WsMinuteSummary {
   window_ms: number;
   frames: number;
   dropped: number;
-  /** Process-level DB time and queries observed over this window, all sources. */
-  db_busy_pct: number;
-  db_queries: number;
-  /** Per-frame-type breakdown, ranked by `db_ms` then `count`. */
+  /**
+   * Per-frame-type breakdown, ranked by `db_ms` then `count`.
+   *
+   * This is the whole DB story for this line. See the module header for why there
+   * is no process-level total here: `api_minute_summary` already reports one and it
+   * already includes these frames.
+   */
   types: WsFrameSummary[];
 }
 
@@ -173,7 +175,6 @@ function finite(value: number, fallback = 0): number {
 }
 
 const round1 = (value: number): number => Math.round(value * 10) / 10;
-const round2 = (value: number): number => Math.round(value * 100) / 100;
 
 /** Nearest-rank percentile, matching `api_minute_summary` so the two are comparable. */
 export function wsPercentile(values: number[], fraction: number): number {
@@ -187,9 +188,6 @@ export interface WsWindowSummaryInput {
   windowMs: number;
   samples: WsFrameSample[];
   dropped: number;
-  /** Process-level DB time attributed to this window. */
-  dbMs: number;
-  dbQueries: number;
   topTypes: number;
   now?: Date;
 }
@@ -243,8 +241,6 @@ export function summarizeWsWindow(input: WsWindowSummaryInput): WsMinuteSummary 
     window_ms: Math.round(windowMs),
     frames: input.samples.length,
     dropped: Math.max(0, Math.trunc(input.dropped)),
-    db_busy_pct: windowMs > 0 ? round2((finite(input.dbMs) / windowMs) * 100) : 0,
-    db_queries: Math.max(0, Math.trunc(finite(input.dbQueries))),
     types: types.slice(0, top),
   };
 }
@@ -277,7 +273,6 @@ function wsRingFor(capacity: number): WsFrameMetricsRing {
  */
 export function startWsFrameMetricsSummary(
   options: WsFrameMetricsOptions,
-  readProcessDb: () => { dbMs: number; dbQueries: number },
 ): WsFrameMetricsRuntime | null {
   if (!options.enabled) {
     return {
@@ -287,26 +282,16 @@ export function startWsFrameMetricsSummary(
     };
   }
   const buffer = wsRingFor(options.bufferCapacity);
-
-  let lastDbMs = readProcessDb().dbMs;
-  let lastDbQueries = readProcessDb().dbQueries;
   let lastTickAt = performance.now();
 
   const emit = (): void => {
     const { samples, dropped } = buffer.drain();
     const windowMs = performance.now() - lastTickAt;
     lastTickAt = performance.now();
-    const counters = readProcessDb();
-    const dbMs = counters.dbMs - lastDbMs;
-    const dbQueries = counters.dbQueries - lastDbQueries;
-    lastDbMs = counters.dbMs;
-    lastDbQueries = counters.dbQueries;
     console.log(JSON.stringify(summarizeWsWindow({
       windowMs,
       samples,
       dropped,
-      dbMs,
-      dbQueries,
       topTypes: options.summaryTopTypes,
     })));
   };

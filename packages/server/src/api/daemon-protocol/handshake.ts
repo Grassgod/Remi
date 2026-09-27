@@ -128,25 +128,6 @@ export function daemonRejectPayload(rejection: DaemonHandshakeRejection): Daemon
   };
 }
 
-/**
- * Map a per-runtime authorization failure onto a close code.
- *
- * The three terminal codes carry the HTTP vocabulary the daemon already reacts
- * to (see `isTerminalDaemonAuthorityError`): 4401 replaced 401/403 credential
- * problems, 4403 a token that is not allowed on this socket, 4410 a retired
- * daemon. All three stop the reconnect loop, which is the point of separating
- * them from 4000/4001.
- */
-export function daemonAuthorizationCloseCode(
-  status: number,
-  code?: string | null,
-): DaemonHandshakeRejectionCode {
-  if (code === "daemon_retired") return DAEMON_PROTOCOL_CLOSE_CODES.daemon_retired;
-  if (status === 410) return DAEMON_PROTOCOL_CLOSE_CODES.daemon_retired;
-  if (status === 403) return DAEMON_PROTOCOL_CLOSE_CODES.forbidden;
-  return DAEMON_PROTOCOL_CLOSE_CODES.authority_revoked;
-}
-
 /** Negotiated facts the `welcome` frame reports back. */
 export function daemonWelcomeProtocolVersion(): number {
   return DAEMON_PROTOCOL_VERSION;

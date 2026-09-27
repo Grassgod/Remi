@@ -15,10 +15,14 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
 import { MultiremiStore } from "@multiremi/store/store.js";
-import { DAEMON_PROTOCOL_CLOSE_CODES } from "@multiremi/contracts/daemon-protocol.js";
+import {
+  DAEMON_PROTOCOL_CLOSE_CODES,
+  DAEMON_TERMINAL_CLOSE_CODES,
+} from "@multiremi/contracts/daemon-protocol.js";
 import { DaemonProtocolLayer } from "../../../packages/server/src/api/daemon-protocol/index.js";
 import {
   DaemonProtocolSession,
+  daemonAuthorizationCloseCode,
   type DaemonSessionHeartbeat,
 } from "../../../packages/server/src/api/daemon-protocol/session.js";
 import { DaemonSessionRegistry } from "../../../packages/server/src/api/daemon-protocol/session-registry.js";
@@ -167,7 +171,7 @@ describe("MUL-417 daemon protocol layer — per-runtime authorization", () => {
     expect(session.unavailableRuntimeIds).toEqual(["rt_missing"]);
   });
 
-  it("closes 4403 when the daemon advertises a runtime in another workspace", async () => {
+  it("treats a runtime in another workspace as runtime-level, not as a terminal close", async () => {
     const { store } = fixture();
     store.createWorkspace({ id: "ws_other", name: "Other", slug: "other" });
     store.registerRuntime({ id: "rt_elsewhere", name: "elsewhere", provider: "codex", daemonId: "dmn_a", workspaceId: "ws_other" });
@@ -175,11 +179,117 @@ describe("MUL-417 daemon protocol layer — per-runtime authorization", () => {
       name: "daemon a", type: "daemon", workspaceId: "local", daemonId: "dmn_a", userId: "owner-1",
     });
     const layer = new DaemonProtocolLayer({ store, serverVersion: "0.2.83" });
-    const { socket } = await runHello(layer, { daemonId: "dmn_a", runtimeIds: ["rt_elsewhere"], accessToken: token });
-    // A workspace mismatch is a daemon-level fact: the credential is scoped to a
-    // workspace this runtime is not in, so no reconnect changes the answer.
-    expect(socket.lastOfType("welcome")).toBeNull();
-    expect(socket.closed[0]!.code).toBe(DAEMON_PROTOCOL_CLOSE_CODES.forbidden);
+    const { socket, session } = await runHello(layer, { daemonId: "dmn_a", runtimeIds: ["rt_elsewhere"], accessToken: token });
+    // A daemon process has one workspace and one token, so a runtime from another
+    // workspace usually means the token moved and the local state still names the
+    // old runtime. Permanent shutdown would be wrong: it needs to re-register.
+    expect(socket.lastOfType("welcome")).not.toBeNull();
+    expect(session.isClosed).toBe(false);
+    expect(session.runtimeIds).toEqual([]);
+    expect(session.unavailableRuntimeIds).toEqual(["rt_elsewhere"]);
+  });
+
+  it("keeps only two daemon-level 4403 cases: hello identity mismatch, and a non-daemon credential", async () => {
+    const { store } = fixture();
+    store.registerRuntime({ id: "rt_own", name: "own", provider: "codex", daemonId: "dmn_a", workspaceId: "local" });
+    const token = await store.createAccessToken({
+      name: "daemon b", type: "daemon", workspaceId: "local", daemonId: "dmn_b", userId: "owner-1",
+    });
+    const layer = new DaemonProtocolLayer({ store, serverVersion: "0.2.83" });
+    // (1) The hello's daemon_id disagrees with the credential.
+    const mismatch = await runHello(layer, { daemonId: "dmn_a", runtimeIds: ["rt_own"], accessToken: token });
+    expect(mismatch.socket.closed[0]!.code).toBe(DAEMON_PROTOCOL_CLOSE_CODES.forbidden);
+    // (2) A credential that is not a daemon token never reaches authorizeRuntime -
+    // `resolveIdentity` refuses it at the upgrade - so there is no session case to
+    // assert here; the server-level test covers the HTTP answer.
+    expect(layer.registry.size).toBe(0);
+  });
+
+  it("reports someone else's runtime as gone even on the master credential", async () => {
+    const { store } = fixture();
+    // A runtime bound to daemon B, but this master-credential connection claims to
+    // be daemon A. Without the ownership check the registry's replacement rule would
+    // let it evict B's live session.
+    store.registerRuntime({ id: "rt_b", name: "B's runtime", provider: "codex", daemonId: "dmn_b", workspaceId: "local" });
+    const layer = new DaemonProtocolLayer({ store, serverVersion: "0.2.83" });
+    const { socket, session } = await runHello(layer, {
+      daemonId: "dmn_a",
+      runtimeIds: ["rt_b"],
+      accessToken: null,
+      masterToken: true,
+    });
+    expect(socket.lastOfType("welcome")).not.toBeNull();
+    expect(session.isClosed).toBe(false);
+    expect(session.runtimeIds).toEqual([]);
+    expect(session.unavailableRuntimeIds).toEqual(["rt_b"]);
+    const reply = layer.handleHeartbeatForTest(heartbeat([], {
+      unavailable: ["rt_b"],
+      payload: { active_task_count: 0 },
+    }));
+    expect(reply.runtime_acks).toEqual([{ runtime_id: "rt_b", status: "runtime_gone", runtime_gone: true }]);
+  });
+
+  it("gives a legacy unbound runtime to the first daemon and reports it gone to the second", async () => {
+    // A row with no `daemonId` passes the ownership check for any credential, so
+    // only the registry can decide who holds it. The second daemon must lose the
+    // runtime - not the first daemon's whole connection.
+    const { store } = fixture();
+    store.registerRuntime({ id: "rt_legacy", name: "legacy", provider: "codex", workspaceId: "local" });
+    const layer = new DaemonProtocolLayer({ store, serverVersion: "0.2.83" });
+
+    const first = await runHello(layer, {
+      daemonId: "dmn_first",
+      runtimeIds: ["rt_legacy"],
+      accessToken: null,
+      masterToken: true,
+    });
+    expect(first.session.runtimeIds).toEqual(["rt_legacy"]);
+    expect(layer.registry.daemonIdForRuntime("rt_legacy")).toBe("dmn_first");
+
+    const second = await runHello(layer, {
+      daemonId: "dmn_second",
+      runtimeIds: ["rt_legacy"],
+      accessToken: null,
+      masterToken: true,
+    });
+    expect(second.socket.lastOfType("welcome")).not.toBeNull();
+    expect(second.session.isClosed).toBe(false);
+    expect(second.session.runtimeIds).toEqual([]);
+    expect(second.session.unavailableRuntimeIds).toEqual(["rt_legacy"]);
+
+    // The first connection still owns the runtime and is untouched.
+    expect(first.session.isClosed).toBe(false);
+    expect(first.socket.closed).toEqual([]);
+    expect(layer.registry.daemonIdForRuntime("rt_legacy")).toBe("dmn_first");
+    expect(layer.registry.get("dmn_first")).toBe(first.session);
+
+    const reply = layer.handleHeartbeatForTest(heartbeat([], {
+      unavailable: ["rt_legacy"],
+      payload: { active_task_count: 0 },
+    }));
+    expect(reply.runtime_acks).toEqual([{
+      runtime_id: "rt_legacy",
+      status: "runtime_gone",
+      runtime_gone: true,
+    }]);
+  });
+
+  it("still lets the master credential claim a legacy runtime row with no daemon id", async () => {
+    const { store } = fixture();
+    // Historical rows predate the daemonId binding; they stay claimable by the
+    // credentials that were always allowed to claim them.
+    store.registerRuntime({ id: "rt_legacy", name: "legacy", provider: "codex", workspaceId: "local" });
+    expect(store.getRuntimeLite("rt_legacy")?.daemonId ?? null).toBeNull();
+    const layer = new DaemonProtocolLayer({ store, serverVersion: "0.2.83" });
+    const { socket, session } = await runHello(layer, {
+      daemonId: "dmn_a",
+      runtimeIds: ["rt_legacy"],
+      accessToken: null,
+      masterToken: true,
+    });
+    expect(socket.lastOfType("welcome")).not.toBeNull();
+    expect(session.runtimeIds).toEqual(["rt_legacy"]);
+    expect(session.unavailableRuntimeIds).toEqual([]);
   });
 
   it("closes 4401 when the daemon owner is not a workspace member", async () => {
@@ -252,6 +362,71 @@ describe("MUL-417 daemon protocol layer — per-runtime authorization", () => {
   });
 });
 
+describe("MUL-417 daemon protocol layer — one close-code mapping for both paths", () => {
+  /**
+   * The same daemon-level fact is observed two ways: as an HTTP status when the
+   * upgrade is refused (no socket yet) and as a session failure once `hello` lands.
+   * Both must resolve to the same close code, or A-2's client would need two
+   * different behaviours for one fact.
+   */
+  const cases: Array<{ name: string; status: number; code: string; expected: number }> = [
+    {
+      name: "owner lost membership (upgrade answers 403)",
+      status: 403,
+      code: "daemon_owner_membership_required",
+      expected: DAEMON_PROTOCOL_CLOSE_CODES.authority_revoked,
+    },
+    {
+      name: "invalid credential (upgrade answers 401)",
+      status: 401,
+      code: "unauthorized",
+      expected: DAEMON_PROTOCOL_CLOSE_CODES.authority_revoked,
+    },
+    {
+      name: "not a daemon token (upgrade answers 403)",
+      status: 403,
+      code: "daemon_token_required",
+      expected: DAEMON_PROTOCOL_CLOSE_CODES.forbidden,
+    },
+    {
+      name: "daemon identity mismatch",
+      status: 403,
+      code: "daemon_identity_forbidden",
+      expected: DAEMON_PROTOCOL_CLOSE_CODES.forbidden,
+    },
+    {
+      name: "daemon retired (upgrade answers 410)",
+      status: 410,
+      code: "daemon_retired",
+      expected: DAEMON_PROTOCOL_CLOSE_CODES.daemon_retired,
+    },
+  ];
+
+  for (const entry of cases) {
+    it(`maps ${entry.name} to ${entry.expected}`, () => {
+      expect(daemonAuthorizationCloseCode(entry.status, entry.code)).toBe(entry.expected);
+    });
+  }
+
+  it("gives membership loss 4401 whichever status carried it", () => {
+    // The upgrade answers 403 for a removed owner (same as an HTTP guard does),
+    // while an in-session refusal uses 401. One fact, one close code.
+    expect(daemonAuthorizationCloseCode(403, "daemon_owner_membership_required"))
+      .toBe(DAEMON_PROTOCOL_CLOSE_CODES.authority_revoked);
+    expect(daemonAuthorizationCloseCode(401, "daemon_owner_membership_required"))
+      .toBe(DAEMON_PROTOCOL_CLOSE_CODES.authority_revoked);
+    expect(daemonAuthorizationCloseCode(401, "authority_revoked"))
+      .toBe(DAEMON_PROTOCOL_CLOSE_CODES.authority_revoked);
+  });
+
+  it("keeps every mapped code terminal, so a refusal never becomes a retry loop", () => {
+    const mapped = cases.map((entry) => daemonAuthorizationCloseCode(entry.status, entry.code));
+    for (const code of mapped) {
+      expect(DAEMON_TERMINAL_CLOSE_CODES).toContain(code as never);
+    }
+  });
+});
+
 describe("MUL-417 daemon protocol layer — handshake excludes a runtime without closing", () => {
   /**
    * The exact scenario from the review: a daemon was disconnected while a runtime
@@ -301,8 +476,8 @@ describe("MUL-417 daemon protocol layer — handshake excludes a runtime without
     expect(layer.registry.daemonIdForRuntime("rt_missing")).toBeNull();
 
     // 2. rt_ok still receives offers and can be acknowledged.
-    const seq = session.sendEvent({ t: "task.offer", rt: "rt_ok", p: { task_id: "t1" } });
-    expect(seq).toBe(1);
+    const sent = session.sendEvent({ t: "task.offer", rt: "rt_ok", p: { task_id: "t1" } });
+    expect(sent).toEqual({ ok: true, seq: 1 });
     await session.handleMessage(JSON.stringify({ v: 2, t: "ack", ts: 2, p: { ack: 1 } }));
     expect(session.unacknowledgedFrameCount).toBe(0);
 
@@ -508,8 +683,8 @@ describe("MUL-417 daemon protocol layer — one gone runtime must not close the 
     expect(session.isClosed).toBe(false);
     expect(socket.closed).toEqual([]);
     expect(layer.registry.get("dmn_a")).toBe(session);
-    const seq = session.sendEvent({ t: "task.offer", rt: "rt_keep", p: { task_id: "t1" } });
-    expect(seq).toBe(1);
+    const sent = session.sendEvent({ t: "task.offer", rt: "rt_keep", p: { task_id: "t1" } });
+    expect(sent).toEqual({ ok: true, seq: 1 });
     await session.handleMessage(JSON.stringify({ v: 2, t: "ack", ts: 3, p: { ack: 1 } }));
     expect(session.unacknowledgedFrameCount).toBe(0);
     expect(session.isClosed).toBe(false);

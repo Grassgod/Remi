@@ -67,8 +67,6 @@ describe("MUL-417 ws_minute_summary — aggregation", () => {
     const summary = summarizeWsWindow({
       windowMs: 60_000,
       dropped: 0,
-      dbMs: 12,
-      dbQueries: 4,
       topTypes: 20,
       now: new Date("2026-09-27T00:00:00.000Z"),
       samples: [
@@ -83,9 +81,7 @@ describe("MUL-417 ws_minute_summary — aggregation", () => {
     expect(summary.ts).toBe("2026-09-27T00:00:00.000Z");
     expect(summary.window_ms).toBe(60_000);
     expect(summary.frames).toBe(4);
-    expect(summary.db_busy_pct).toBe(0.02);
-    expect(summary.db_queries).toBe(4);
-    // Ranked by db_ms first, so the frame type actually costing database time is
+     // Ranked by db_ms first, so the frame type actually costing database time is
     // the one an operator reads first. `hb` and `task.progress` tie on db cost
     // (6 ms / 2 queries), so the tiebreak is count: the frequent frame wins.
     expect(summary.types.map((entry) => entry.type)).toEqual(["hb", "task.progress", "trace.head"]);
@@ -119,24 +115,19 @@ describe("MUL-417 ws_minute_summary — aggregation", () => {
     const summary = summarizeWsWindow({
       windowMs: 5_000,
       dropped: 3,
-      dbMs: 0,
-      dbQueries: 0,
       topTypes: 20,
       samples: [sample({ totalMs: 10 })],
     });
     expect(Object.keys(summary).sort()).toEqual([
-      "db_busy_pct", "db_queries", "dropped", "event", "frames", "ts", "types", "window_ms",
+      "dropped", "event", "frames", "ts", "types", "window_ms",
     ]);
     expect(summary.dropped).toBe(3);
-    expect(summary.db_busy_pct).toBe(0);
   });
 
   it("counts protocol violations per type", () => {
     const summary = summarizeWsWindow({
       windowMs: 1_000,
       dropped: 0,
-      dbMs: 0,
-      dbQueries: 0,
       topTypes: 20,
       samples: [
         sample({ type: "oversized", protocolViolation: true, errorCode: "protocol_violation" }),
@@ -151,8 +142,6 @@ describe("MUL-417 ws_minute_summary — aggregation", () => {
     const summary = summarizeWsWindow({
       windowMs: 1_000,
       dropped: 0,
-      dbMs: 0,
-      dbQueries: 0,
       topTypes: 2,
       samples: [
         sample({ type: "a", dbMs: 1 }),
@@ -191,10 +180,7 @@ describe("MUL-417 ws_minute_summary — ring buffer", () => {
 
 describe("MUL-417 ws_minute_summary — timer", () => {
   it("emits one summary line per interval with the fixed field set", async () => {
-    const runtime = startWsFrameMetricsSummary(
-      { ...OPTIONS, bufferCapacity: 64 },
-      () => ({ dbMs: 40, dbQueries: 2 }),
-    );
+    const runtime = startWsFrameMetricsSummary({ ...OPTIONS, bufferCapacity: 64 });
     expect(runtime).not.toBeNull();
 
     runtime!.record(sample({ type: "hb", dbMs: 3, dbQueries: 1 }));
@@ -206,7 +192,7 @@ describe("MUL-417 ws_minute_summary — timer", () => {
     expect(summaryLines).toHaveLength(1);
     const summary = JSON.parse(summaryLines[0]!) as Record<string, unknown>;
     expect(Object.keys(summary).sort()).toEqual([
-      "db_busy_pct", "db_queries", "dropped", "event", "frames", "ts", "types", "window_ms",
+      "dropped", "event", "frames", "ts", "types", "window_ms",
     ]);
     expect(summary.frames).toBe(1);
     expect(summary.types).toEqual([{
@@ -224,7 +210,7 @@ describe("MUL-417 ws_minute_summary — timer", () => {
   });
 
   it("emits an idle window too, so silence is distinguishable from a dead feature", async () => {
-    const runtime = startWsFrameMetricsSummary(OPTIONS, () => ({ dbMs: 0, dbQueries: 0 }));
+    const runtime = startWsFrameMetricsSummary(OPTIONS);
     const lines = await captureConsoleLog(() => {
       runtime!.flush();
     });
@@ -233,27 +219,25 @@ describe("MUL-417 ws_minute_summary — timer", () => {
     runtime!.stop();
   });
 
-  it("reports the process DB delta for the window, not just the frames", async () => {
-    let dbMs = 100;
-    let dbQueries = 5;
-    const runtime = startWsFrameMetricsSummary(OPTIONS, () => ({ dbMs, dbQueries }));
-    // Counters advance between two flushes: the first flush measures the window
-    // that started when the summary started.
-    dbMs += 250;
-    dbQueries += 11;
-    const lines = await captureConsoleLog(() => {
-      runtime!.flush();
-      runtime!.flush();
-    });
-    const [first, second] = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
-    expect(first!.db_queries).toBe(11);
-    // Nothing accrued between the two flushes, and each window is a delta.
-    expect(second!.db_queries).toBe(0);
+  it("reports no process-level DB field, because api_minute_summary already owns that total", async () => {
+    // The process counters include the statements issued while serving WebSocket
+    // frames, so repeating them here would double-count the same work the moment
+    // anyone compared the two lines.
+    const runtime = startWsFrameMetricsSummary(OPTIONS);
+    runtime!.record(sample({ type: "hb", dbMs: 7, dbQueries: 2 }));
+    const lines = await captureConsoleLog(() => runtime!.flush());
+    const summary = JSON.parse(lines.at(-1)!) as Record<string, unknown>;
+    expect(summary).not.toHaveProperty("db_busy_pct");
+    expect(summary).not.toHaveProperty("db_queries");
+    expect(summary).not.toHaveProperty("db_ms");
+    // The per-frame attribution is what remains, and it is still exact for this
+    // sample.
+    expect(summary.types).toEqual([expect.objectContaining({ type: "hb", db_ms: 7, db_queries: 2 })]);
     runtime!.stop();
   });
 
   it("is a no-op when metrics are disabled", async () => {
-    const runtime = startWsFrameMetricsSummary({ ...OPTIONS, enabled: false }, () => ({ dbMs: 0, dbQueries: 0 }));
+    const runtime = startWsFrameMetricsSummary({ ...OPTIONS, enabled: false });
     expect(runtime).not.toBeNull();
     runtime!.record(sample({ type: "hb" }));
     const lines = await captureConsoleLog(() => runtime!.flush());
@@ -263,7 +247,7 @@ describe("MUL-417 ws_minute_summary — timer", () => {
   });
 
   it("never writes payload content, credentials, paths or frame ids into the line", async () => {
-    const runtime = startWsFrameMetricsSummary(OPTIONS, () => ({ dbMs: 0, dbQueries: 0 }));
+    const runtime = startWsFrameMetricsSummary(OPTIONS);
     runtime!.record(sample({
       type: "task.progress",
       // A frame that carried a credential, a filesystem path and an RPC id. None

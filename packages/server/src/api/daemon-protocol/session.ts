@@ -77,6 +77,20 @@ export type DaemonSessionSendOutcome =
   | { status: "dropped" }
   | { status: "closed" };
 
+/**
+ * Why a reliable downlink frame was not sent.
+ *
+ * The three refusals are separate values rather than one `null` because the
+ * caller's next move differs: `window_full` means "wait for an ack and push
+ * again from the database", `paused` means "wait for drain", and `closed` means
+ * "give up on this connection". A single null would leave an offer pump guessing.
+ */
+export type DaemonSessionSendRefusal = "closed" | "paused" | "window_full";
+
+export type DaemonSessionSendResult =
+  | { ok: true; seq: number }
+  | { ok: false; reason: DaemonSessionSendRefusal };
+
 /** The socket, narrowed to exactly what this layer uses. Fakes implement this. */
 export interface DaemonProtocolSocket {
   send(text: string): number;
@@ -191,6 +205,8 @@ export interface DaemonSessionOptions {
 interface PendingAck {
   seq: number;
   sentAt: number;
+  /** Encoded size, so the window can be enforced in bytes as well as frames. */
+  bytes: number;
 }
 
 const unknownFrameType = "unknown_frame";
@@ -330,22 +346,49 @@ export class DaemonProtocolSession {
   /**
    * Send a reliable downlink event, assigning the next sequence.
    *
-   * Returns the sequence, or null when the session is closed, the socket
-   * dropped the frame, or pausable traffic is currently paused. A paused refusal
-   * does not consume a sequence, so a retry fills the same slot.
+   * The window that `welcome` advertises is enforced here, not merely announced:
+   * a refusal consumes no sequence, so the caller can retry the same slot once an
+   * ack frees room. There is deliberately no in-memory queue behind this - the
+   * protocol's rule is that the database is the queue, and the pusher re-derives
+   * what is still owed (ADR 0005).
+   *
+   * `pausable` traffic is additionally held while the socket is behind.
    */
-  sendEvent(frame: DaemonSessionOutboundFrame, options: { pausable?: boolean } = {}): number | null {
-    if (this.closed) return null;
-    if (options.pausable && this.paused) return null;
+  sendEvent(frame: DaemonSessionOutboundFrame, options: { pausable?: boolean } = {}): DaemonSessionSendResult {
+    if (this.closed) return { ok: false, reason: "closed" };
+    if (options.pausable && this.paused) return { ok: false, reason: "paused" };
+
+    const encoded = encodeDaemonProtocolFrame({ ...frame, seq: this.downlinkSeq + 1 }, this.clock.now());
+    const bytes = Buffer.byteLength(encoded, "utf8");
+    // `frame_bytes` is the single-frame ceiling the daemon was told about; a frame
+    // over it could never be delivered, so it is refused rather than sent.
+    if (bytes > DAEMON_FRAME_MAX_BYTES) return { ok: false, reason: "window_full" };
+    const inFlight = this.windowUsage();
+    if (
+      this.pendingAcks.size + 1 > DAEMON_UPLINK_WINDOW_FRAMES
+      || inFlight.bytes + bytes > DAEMON_UPLINK_WINDOW_BYTES
+    ) {
+      return { ok: false, reason: "window_full" };
+    }
+
     const seq = this.downlinkSeq + 1;
-    const outcome = this.write({ ...frame, seq });
-    if (outcome.status === "closed" || outcome.status === "dropped") return null;
+    const outcome = this.writeEncoded(encoded);
+    if (outcome.status === "closed" || outcome.status === "dropped") {
+      return { ok: false, reason: "closed" };
+    }
     this.downlinkSeq = seq;
     // A backpressured frame is still queued in the socket, so it is genuinely
     // outstanding and belongs in the window.
-    this.pendingAcks.set(seq, { seq, sentAt: this.clock.now() });
+    this.pendingAcks.set(seq, { seq, sentAt: this.clock.now(), bytes });
     this.armAckTimer();
-    return seq;
+    return { ok: true, seq };
+  }
+
+  /** Frames and bytes currently inside the downlink window. */
+  windowUsage(): { frames: number; bytes: number } {
+    let bytes = 0;
+    for (const pending of this.pendingAcks.values()) bytes += pending.bytes;
+    return { frames: this.pendingAcks.size, bytes };
   }
 
   /** Send a frame that is never paused and never carries a sequence. */
@@ -379,9 +422,14 @@ export class DaemonProtocolSession {
 
   private write(frame: DaemonSessionOutboundFrame): DaemonSessionSendOutcome {
     if (this.closed) return { status: "closed" };
+    return this.writeEncoded(encodeDaemonProtocolFrame(frame, this.clock.now()));
+  }
+
+  private writeEncoded(encoded: string): DaemonSessionSendOutcome {
+    if (this.closed) return { status: "closed" };
     let status: number;
     try {
-      status = this.socket.send(encodeDaemonProtocolFrame(frame, this.clock.now()));
+      status = this.socket.send(encoded);
     } catch {
       this.markClosed();
       return { status: "closed" };
@@ -404,85 +452,167 @@ export class DaemonProtocolSession {
     const startedAt = performance.now();
     const dbBefore = this.options.onFrame ? readDbCounters() : { dbMs: 0, dbQueries: 0 };
 
-    // The size check runs first: an oversized frame must not be parsed, and the
-    // limit is per frame, so one bad frame costs one connection.
+    const parsed = parseDaemonProtocolFrame(text);
+
+    // ── oversized frames ─────────────────────────────────────────────────────
+    // `maxPayloadLength` is 4 MiB precisely so a frame over the 1 MiB protocol cap
+    // arrives whole and can be answered. Closing instead would be a reconnect loop:
+    // the daemon replays the same unacknowledged outbox row, sends the same
+    // oversized frame, and is disconnected again, forever.
+    //
+    // The daemon's own isolation point is the outbox row, so the answer has to name
+    // that row. A reliable event names it with `seq`, an RPC with `id`.
     if (bytes > DAEMON_FRAME_MAX_BYTES) {
+      const addressable = parsed.ok ? (parsed.frame.seq ?? null) : null;
+      const rpcId = parsed.ok ? parsed.frame.id : null;
+      if (addressable !== null || rpcId !== null) {
+        this.sendReply(String(addressable ?? rpcId), {
+          ok: false,
+          code: "protocol_violation",
+          message: `frame exceeds the ${DAEMON_FRAME_MAX_BYTES} byte protocol limit`,
+          retryable: false,
+        });
+        this.emitFrameSample(parsed.ok ? parsed.frame.type : "oversized", startedAt, dbBefore, {
+          errorCode: "protocol_violation",
+          violation: true,
+        });
+        return;
+      }
+      // Nothing to address: no reply could tell the peer which row to isolate, and
+      // the daemon side cannot reference it either (A-5 blocks it before the
+      // outbox). A retryable close is the honest answer.
       this.emitFrameSample("oversized", startedAt, dbBefore, { errorCode: "protocol_violation", violation: true });
-      this.close(DAEMON_PROTOCOL_CLOSE_CODES.server_closing, "frame exceeds the protocol size limit");
+      this.close(DAEMON_PROTOCOL_CLOSE_CODES.protocol_violation, "oversized frame that names no outbox row");
       return;
     }
 
-    const parsed = parseDaemonProtocolFrame(text);
     if (!parsed.ok) {
+      // Unparseable, so nothing can be addressed. 4002 rather than 4001: the peer
+      // is not merely unlucky, it is sending rubbish, and an operator needs to see
+      // that. Still retryable, so a transient corruption costs a reconnect.
       this.emitFrameSample("malformed", startedAt, dbBefore, { errorCode: "protocol_violation", violation: true });
-      this.close(DAEMON_PROTOCOL_CLOSE_CODES.server_closing, "malformed frame");
+      this.close(DAEMON_PROTOCOL_CLOSE_CODES.protocol_violation, "malformed frame");
       return;
     }
 
     const frame = parsed.frame;
-    if (!this.handshakeComplete) {
-      const code = await this.handleHandshakeFrame(frame);
-      this.emitFrameSample(frame.type, startedAt, dbBefore, { errorCode: code, violation: false });
-      return;
-    }
-
-    if (frame.ack !== null) this.acknowledge(frame.ack);
-
-    const category = daemonFrameCategory(frame.type);
-    if (category === null) {
-      // The spec's answer for an unrecognised frame: a reply the sender can act
-      // on, not a dead socket. `unknown_frame` is deliberately not one of
-      // DAEMON_PROTOCOL_ERROR_CODES - no retry policy should read it as a
-      // business outcome.
-      this.sendReply(frame.id ?? "", {
-        ok: false,
-        code: unknownFrameType,
-        message: `unknown frame type: ${frame.type}`,
-        retryable: false,
-      });
-      this.emitFrameSample(frame.type, startedAt, dbBefore, { errorCode: unknownFrameType, violation: false });
-      return;
-    }
-
-    let errorCode: string | null = null;
-    let direction: "uplink" | "rpc" = category === "rpc" ? "rpc" : "uplink";
-    switch (category) {
-      case "best_effort":
-        errorCode = this.handleBestEffort(frame);
-        break;
-      case "ack": {
-        // A standalone `ack` frame carries the number in its payload; the
-        // envelope field is the piggybacked form and was already consumed above.
-        const standalone = readInteger(frame.payload.ack);
-        if (standalone !== null) this.acknowledge(standalone);
-        errorCode = null;
-        break;
+    try {
+      if (!this.handshakeComplete) {
+        const code = await this.handleHandshakeFrame(frame);
+        this.emitFrameSample(frame.type, startedAt, dbBefore, { errorCode: code, violation: false });
+        return;
       }
-      case "reply":
-        errorCode = this.handleReply(frame);
-        break;
-      case "rpc":
-        errorCode = await this.handleRpc(frame);
-        break;
-      case "event":
-        errorCode = this.handleEvent(frame);
-        break;
-      case "handshake":
-        direction = "uplink";
-        errorCode = "protocol_violation";
+
+      if (frame.ack !== null) this.acknowledge(frame.ack);
+
+      const category = daemonFrameCategory(frame.type);
+      if (category === null) {
+        // The spec's answer for an unrecognised frame: a reply the sender can act
+        // on, not a dead socket. `unknown_frame` is deliberately not one of
+        // DAEMON_PROTOCOL_ERROR_CODES - no retry policy should read it as a
+        // business outcome.
         this.sendReply(frame.id ?? "", {
           ok: false,
-          code: "protocol_violation",
-          message: "handshake frame after the handshake completed",
+          code: unknownFrameType,
+          message: `unknown frame type: ${frame.type}`,
           retryable: false,
         });
-        break;
-      default:
-        direction = "uplink";
-        errorCode = unknownFrameType;
-        break;
+        this.emitFrameSample(frame.type, startedAt, dbBefore, { errorCode: unknownFrameType, violation: false });
+        return;
+      }
+
+      let errorCode: string | null = null;
+      let direction: "uplink" | "rpc" = category === "rpc" ? "rpc" : "uplink";
+      switch (category) {
+        case "best_effort":
+          errorCode = this.handleBestEffort(frame);
+          break;
+        case "ack": {
+          // A standalone `ack` frame carries the number in its payload; the
+          // envelope field is the piggybacked form and was already consumed above.
+          const standalone = readInteger(frame.payload.ack);
+          if (standalone !== null) this.acknowledge(standalone);
+          errorCode = null;
+          break;
+        }
+        case "reply":
+          errorCode = this.handleReply(frame);
+          break;
+        case "rpc":
+          errorCode = await this.handleRpc(frame);
+          break;
+        case "event":
+          errorCode = this.handleEvent(frame);
+          break;
+        case "handshake":
+          direction = "uplink";
+          errorCode = "protocol_violation";
+          this.sendReply(frame.id ?? "", {
+            ok: false,
+            code: "protocol_violation",
+            message: "handshake frame after the handshake completed",
+            retryable: false,
+          });
+          break;
+        default:
+          direction = "uplink";
+          errorCode = unknownFrameType;
+          break;
+      }
+      this.emitFrameSample(frame.type, startedAt, dbBefore, { errorCode, violation: false, direction });
+    } catch (error) {
+      this.handleFrameFailure(frame, startedAt, dbBefore, error);
     }
-    this.emitFrameSample(frame.type, startedAt, dbBefore, { errorCode, violation: false, direction });
+  }
+
+  /**
+   * A frame handler threw.
+   *
+   * The old behaviour swallowed the rejection: the serialization chain continued
+   * but the peer got no answer, so an RPC caller waited out its timeout for a
+   * request the server had already failed. Now the fault is logged, reported to
+   * the peer as a retryable `server_error`, and counted in the frame summary.
+   *
+   * A failure during the handshake has no `id`/`seq` to answer through, so it
+   * closes 4001 - retryable, and the daemon comes back with a fresh session.
+   */
+  private handleFrameFailure(
+    frame: DaemonParsedFrame,
+    startedAt: number,
+    dbBefore: { dbMs: number; dbQueries: number },
+    error: unknown,
+  ): void {
+    const message = error instanceof Error ? error.message : String(error);
+    const replyTo = frame.re ?? frame.id ?? null;
+    try {
+      console.warn(JSON.stringify({
+        event: "daemon_protocol_frame_failed",
+        session_id: this.sessionId,
+        daemon_id: this.daemonId || null,
+        frame_type: frame.type,
+        handshake_complete: this.handshakeComplete,
+        // The message only. A payload can carry task content and credentials, and
+        // this line goes to stdout where it would be persisted.
+        error: message,
+      }));
+    } catch {
+      // A hostile console is not worth failing the connection over.
+    }
+
+    if (!this.handshakeComplete) {
+      this.emitFrameSample(frame.type, startedAt, dbBefore, { errorCode: "server_error", violation: false });
+      this.close(DAEMON_PROTOCOL_CLOSE_CODES.server_closing, "handshake handler failed");
+      return;
+    }
+    if (replyTo) {
+      this.sendReply(replyTo, {
+        ok: false,
+        code: "server_error",
+        message: "the server failed while handling this frame",
+        retryable: true,
+      });
+    }
+    this.emitFrameSample(frame.type, startedAt, dbBefore, { errorCode: "server_error", violation: false });
   }
 
   private async handleHandshakeFrame(frame: DaemonParsedFrame): Promise<string | null> {
@@ -490,19 +620,27 @@ export class DaemonProtocolSession {
       // Anything else first is a protocol error: the peer cannot know the
       // negotiated limits before it greets, and guessing lets a version-skewed
       // client run with the wrong assumptions.
+      //
+      // 4002, not 4426. 4426 tells the daemon "you are the wrong version, go
+      // upgrade and wait", which parks it in `upgrade_wait` and stops it claiming
+      // work. A frame arriving out of order is a client bug or a race, and no
+      // upgrade is coming to fix it - the daemon should reconnect with backoff.
       this.close(
-        DAEMON_PROTOCOL_CLOSE_CODES.protocol_upgrade_required,
+        DAEMON_PROTOCOL_CLOSE_CODES.protocol_violation,
         "expected hello as the first frame",
       );
-      return "daemon_protocol_upgrade_required";
+      return "protocol_violation";
     }
     const parsed = parseDaemonHello(frame.payload);
     if (!parsed.ok) {
+      // Same reasoning as above: a hello missing its required fields is a client
+      // fault, not a version mismatch. A daemon that really is too old is caught
+      // by `checkHandshakeVersion` below, which is the only 4426 path.
       this.close(
-        DAEMON_PROTOCOL_CLOSE_CODES.protocol_upgrade_required,
+        DAEMON_PROTOCOL_CLOSE_CODES.protocol_violation,
         "malformed hello; protocol and cli_version are required",
       );
-      return "daemon_protocol_upgrade_required";
+      return "protocol_violation";
     }
     const versionRejection = checkHandshakeVersion(parsed.hello);
     if (versionRejection) {
@@ -545,7 +683,17 @@ export class DaemonProtocolSession {
     this.unavailableRuntimeIdList = unavailable;
     this.handshakeComplete = true;
     this.registered = true;
-    this.registry.register(this);
+    // The registry is the authority on who owns a runtime right now: it may report
+    // that another live daemon already holds one of ours. That is a runtime-level
+    // fact like any other, so it joins the unavailable list rather than evicting the
+    // other machine's connection (the pre-handshake ownership check catches the
+    // common case; this covers rows with no `daemonId`).
+    const registration = this.registry.register(this);
+    if (registration.conflictedRuntimeIds.length > 0) {
+      const conflicted = new Set(registration.conflictedRuntimeIds);
+      this.runtimeIdList = this.runtimeIdList.filter((runtimeId) => !conflicted.has(runtimeId));
+      this.unavailableRuntimeIdList = [...this.unavailableRuntimeIdList, ...registration.conflictedRuntimeIds];
+    }
     this.options.onHello?.({
       daemonId: parsed.hello.daemon_id,
       cliVersion: parsed.hello.cli_version,
@@ -608,6 +756,9 @@ export class DaemonProtocolSession {
 
   private async handleRpc(frame: DaemonParsedFrame): Promise<string | null> {
     const handler = this.options.onRpc;
+    // A handler that throws propagates to `processFrame`, which logs it and
+    // answers `server_error` (retryable). Swallowing it here is what left RPC
+    // callers waiting out a timeout for a request that had already failed.
     if (!handler) {
       this.sendReply(frame.id ?? "", {
         ok: false,
@@ -639,13 +790,19 @@ export class DaemonProtocolSession {
   }
 
   private handleEvent(frame: DaemonParsedFrame): string | null {
-    // A-1 carries no business frames: the uplink events and `trace.append`
-    // arrive here, and the transport-level exchange A-1 owns is the sequence and
-    // the reply. The honest answer today is a deterministic refusal the sender
-    // can tell apart from a transport failure (A-5 wires the outbox window, A-6
-    // the trace stream).
-    if (frame.id) {
-      this.sendReply(frame.id, {
+    // A-1 carries no business frames: the uplink events and `trace.append` arrive
+    // here, and the transport-level exchange A-1 owns is the sequence and the
+    // reply. The honest answer today is a deterministic refusal the sender can tell
+    // apart from a transport failure (A-5 wires the outbox window, A-6 the trace
+    // stream).
+    //
+    // `re` references the reliable frame's `seq`, not an RPC `id`: the daemon's
+    // outbox row is identified by its sequence, and A-5 deletes or blocks that row
+    // based on this reply. Answering with an empty `re` (or an `id` that reliable
+    // events never carry) would leave the row unretired and replaying forever.
+    const replyTo = frame.seq !== null ? String(frame.seq) : frame.id;
+    if (replyTo) {
+      this.sendReply(replyTo, {
         ok: false,
         code: "invalid_report",
         message: `${frame.type} is not wired on this server yet`,
@@ -793,21 +950,26 @@ function readDbCounters(): { dbMs: number; dbQueries: number } {
 }
 
 /**
- * Map a daemon-level authorization failure onto its terminal close code.
+ * The ONE mapping from a daemon-level refusal to the close code the daemon acts
+ * on. Both the session's own refusals and the upgrade-time HTTP answers go through
+ * it, so the same fact cannot produce two different codes depending on how far
+ * the connection got before it was noticed.
  *
- * Only daemon-level failures reach this function; a runtime-level one is handled
- * by dropping that runtime instead (see `DaemonSessionRuntimeAuthorization.scope`).
+ * `status` is the HTTP status the guard answered with (or would have answered
+ * with); `code` is the finer-grained code when the caller has one. Membership loss
+ * is checked by `code` first and is always 4401 regardless of status: 4401 is
+ * "workspace access lost", which is what an owner leaving means, while 4403 is
+ * "this credential never had the scope for this socket". The two need different
+ * operator fixes, which is the only reason they are separate terminal codes.
  */
 export function daemonAuthorizationCloseCode(
   status: number | undefined,
   code: string | null | undefined,
 ): number {
   if (code === "daemon_retired" || status === 410) return DAEMON_PROTOCOL_CLOSE_CODES.daemon_retired;
-  // Membership loss is "workspace access lost" (4401), not "the token never had
-  // the scope" (4403): the credential was right for this socket and stopped
-  // being right when its owner left. The two need different operator fixes.
-  if (status === 403 && code !== "daemon_owner_membership_required") {
-    return DAEMON_PROTOCOL_CLOSE_CODES.forbidden;
-  }
-  return DAEMON_PROTOCOL_CLOSE_CODES.authority_revoked;
+  if (code === "daemon_owner_membership_required") return DAEMON_PROTOCOL_CLOSE_CODES.authority_revoked;
+  if (status === 401) return DAEMON_PROTOCOL_CLOSE_CODES.authority_revoked;
+  // A daemon-identity problem (wrong daemon_id, wrong workspace, not a daemon
+  // token) is the "never had the scope" case, whichever status carried it.
+  return DAEMON_PROTOCOL_CLOSE_CODES.forbidden;
 }

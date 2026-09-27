@@ -37,6 +37,15 @@ export interface DaemonProtocolSessionHandle {
 export interface DaemonSessionRegistration {
   /** Sessions this registration evicted. Already closed when returned. */
   replaced: DaemonProtocolSessionHandle[];
+  /**
+   * Runtimes this session asked for that a DIFFERENT daemon is already serving.
+   *
+   * They are not indexed for this session and the other session is left alone. The
+   * registering session reports them as `runtime_gone` instead, because one socket
+   * serves a whole machine: evicting the other connection over a single runtime
+   * would take that machine's healthy runtimes down with it.
+   */
+  conflictedRuntimeIds: string[];
 }
 
 export class DaemonSessionRegistry {
@@ -58,15 +67,25 @@ export class DaemonSessionRegistry {
       existing.closeForReplacement();
     };
 
+    // A newer connection for the same daemon IS the replacement for the old one.
     evict(this.byDaemon.get(session.daemonId));
+
+    // A runtime another daemon is serving is a per-runtime fact. Index nothing for
+    // it and leave the other session running; the caller reports it as gone.
+    const conflictedRuntimeIds: string[] = [];
+    const indexed: string[] = [];
     for (const runtimeId of session.runtimeIds) {
       const owner = this.runtimeIndex.get(runtimeId);
-      if (owner && owner !== session.daemonId) evict(this.byDaemon.get(owner));
+      if (owner && owner !== session.daemonId) {
+        conflictedRuntimeIds.push(runtimeId);
+        continue;
+      }
+      indexed.push(runtimeId);
     }
 
     this.byDaemon.set(session.daemonId, session);
-    for (const runtimeId of session.runtimeIds) this.runtimeIndex.set(runtimeId, session.daemonId);
-    return { replaced };
+    for (const runtimeId of indexed) this.runtimeIndex.set(runtimeId, session.daemonId);
+    return { replaced, conflictedRuntimeIds };
   }
 
   /**

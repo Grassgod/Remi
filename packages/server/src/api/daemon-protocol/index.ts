@@ -71,7 +71,12 @@ export interface DaemonProtocolLayerOptions {
   serverVersion?: string;
   /** Metrics configuration; `startMultiremiServer` supplies the env-resolved one. */
   metrics?: WsFrameMetricsOptions;
-  /** Process DB counters used for per-frame attribution. */
+  /**
+   * Process DB counters used for per-frame attribution.
+   *
+   * Feeds the per-frame `db_ms` only. The process total is reported once, by
+   * `api_minute_summary`; see `metrics.ts` for why it is not repeated here.
+   */
   dbCounters?: () => { dbMs: number; dbQueries: number };
 }
 
@@ -87,9 +92,7 @@ export class DaemonProtocolLayer {
     this.store = options.store;
     this.serverVersion = options.serverVersion ?? multiremiVersion;
     if (options.dbCounters) setDaemonProtocolDbCounters(options.dbCounters);
-    this.metrics = options.metrics
-      ? startWsFrameMetricsSummary(options.metrics, options.dbCounters ?? defaultDbCounters)
-      : null;
+    this.metrics = options.metrics ? startWsFrameMetricsSummary(options.metrics) : null;
   }
 
   /** Emit the current frame window now. Tests and smoke runs use this. */
@@ -321,18 +324,6 @@ export class DaemonProtocolLayer {
           message: "daemon owner is no longer a workspace member",
         };
       }
-      // The credential is scoped to one workspace. A runtime in another is not
-      // this daemon's runtime, and no reconnect will change that.
-      if (runtime && (runtime.workspaceId ?? "local") !== token.workspaceId) {
-        return {
-          runtimeId,
-          ok: false,
-          scope: "daemon",
-          status: 403,
-          code: "daemon_token_required",
-          message: "forbidden for daemon token workspace",
-        };
-      }
     }
 
     // ── runtime-level facts: exclude this runtime, keep the socket ────────────
@@ -350,11 +341,37 @@ export class DaemonProtocolLayer {
       };
     }
 
-    if (token?.type === "daemon") {
-      const tokenDaemonId = token.daemonId?.trim();
-      const runtimeDaemonId = runtime.daemonId?.trim();
-      if (!tokenDaemonId || !runtimeDaemonId || tokenDaemonId !== runtimeDaemonId) {
-        // "Not allowed" is reported as "does not exist", matching the v1 upgrade's
+    // ── runtime ownership ─────────────────────────────────────────────────────
+    // One rule for every credential type, checked before the credential-type
+    // branches, because the registry's replacement rule would otherwise let a
+    // master credential (or auth-disabled open mode) claim a runtime another
+    // daemon is actively serving and evict that whole connection.
+    //
+    // A runtime row with no `daemonId` is historical data that predates the
+    // binding, so it stays claimable - but only by the credentials that were
+    // always allowed to claim it.
+    const runtimeDaemonId = runtime.daemonId?.trim() ?? "";
+    const helloDaemonId = sessionDaemonId?.trim() ?? "";
+
+    // A runtime in another workspace is the same kind of fact. A daemon process
+    // serves one workspace with one credential, so this almost always means the
+    // token moved to a new workspace while the local state still names the old
+    // runtime - which the daemon fixes by re-registering, not by stopping forever.
+    // (Credential problems of their own are covered by 4401/4403 above.)
+    if (token?.type === "daemon" && (runtime.workspaceId ?? "local") !== token.workspaceId) {
+      return {
+        runtimeId,
+        ok: false,
+        scope: "runtime",
+        status: 404,
+        code: "runtime_not_found",
+        message: `runtime ${runtimeId} is not registered`,
+      };
+    }
+
+    if (runtimeDaemonId) {
+      if (runtimeDaemonId !== helloDaemonId) {
+        // Reported as "does not exist", matching the v1 upgrade's
         // `hideForbiddenAsNotFound`. A daemon must not be able to probe which
         // runtime ids exist on other machines, and the answer it needs is the same
         // either way: this runtime is not mine, stop serving it.
@@ -367,8 +384,19 @@ export class DaemonProtocolLayer {
           message: `runtime ${runtimeId} is not registered`,
         };
       }
-      return { runtimeId, ok: true, scope: "runtime" };
+    } else if (token?.type === "daemon") {
+      // A bound daemon credential may only serve rows that name it.
+      return {
+        runtimeId,
+        ok: false,
+        scope: "runtime",
+        status: 404,
+        code: "runtime_not_found",
+        message: `runtime ${runtimeId} is not registered`,
+      };
     }
+
+    if (token?.type === "daemon") return { runtimeId, ok: true, scope: "runtime" };
 
     // Master credential or auth-disabled open mode: the historical daemon
     // credential, kept working exactly as the HTTP path keeps it.
@@ -490,11 +518,6 @@ function isOwnerStillMember(store: MultiremiStore, token: MultiremiAccessToken):
 function readNonNegativeInteger(value: unknown): number | null {
   const parsed = typeof value === "number" ? value : Number.NaN;
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
-}
-
-/** Default DB counters: nothing is attributed until the wiring installs the real one. */
-function defaultDbCounters(): { dbMs: number; dbQueries: number } {
-  return { dbMs: 0, dbQueries: 0 };
 }
 
 export { DaemonProtocolSession, DaemonSessionRegistry };

@@ -97,25 +97,30 @@ bun run tests/manual/smoke-request-metrics.ts
 
 ## WebSocket 帧汇总：`ws_minute_summary`（MUL-417）
 
-daemon 的流量从 HTTP 轮询搬到协议 v2 的 socket 之后，它的 DB 时间不再落在任何 HTTP 路由上：
-`db_busy_pct` 会单纯因为工作换了通道而下降，看起来像收益。`ws_minute_summary` 就是补上这一段的
-计数器，口径与 `api_minute_summary` 相同，两条线按同一时间窗相加即「HTTP + WS 的 daemon 归属
-db_ms」。
+daemon 的流量从 HTTP 轮询搬到协议 v2 的 socket 之后，它的 DB 时间不再落在任何 HTTP 路由上，
+逐路由的口径会看不到这一段。`ws_minute_summary` 就是把 daemon 的那份**按帧类型**补回来。
+
+**它不报进程级 DB 总量，两者也不能相加。** 进程级计数器（`db_busy_pct` / `db_ms` /
+`db_queries`）只在 `api_minute_summary` 里出现一次；它统计的是**所有**跨 PG 桥的语句，本来就
+包含 WebSocket 帧处理期间发出的那些。也就是说换通道不会让 `db_busy_pct` 下降——同一份 DB 工作
+只是换了归属。两行相加会把同一批语句算两遍，这正是这一版把 WS 侧总量字段删掉的原因。
 
 - **实现**：[api/daemon-protocol/metrics.ts](../../packages/server/src/api/daemon-protocol/metrics.ts)。
   固定容量的 typed-array 环形缓冲区，帧类型 intern 成整数 id；写满后覆盖最旧样本并记进
   `dropped`，缓冲区不随流量增长。
 - **同一个窗**：窗口参数（开关、间隔、前 N、缓冲容量）由 HTTP 那一份配置派生，不在 WS 侧再读一次
   环境变量。两者独立解析时，只要有一方被显式覆盖（`startMultiremiServer({ requestMetrics })`，
-  测试与冒烟脚本都这么做）就会错位，而「同一时间窗」是这两条线可以相加的前提。
+  测试与冒烟脚本都这么做）就会错位。两行并排读时窗口才能对齐。
 - **归因**：每条帧按**帧类型 + 方向**汇总 `count / db_ms / db_queries`，另带 `violations`
-  （超长帧、未知帧、无法解析的帧）。`db_ms` 是处理该帧期间进程级 DB 计数器的增量，所以它测的是
-  这次处理真正花在 PostgreSQL 桥上的时间，而不是把窗口内所有 DB 时间平摊到帧上。
+  （超长帧、未知帧、无法解析的帧）。`db_ms` 是处理该帧前后进程级计数器的差，所以它回答的是
+  「这段时间的 DB 时间大致归哪个帧类型」。**它只是归因参考**：进程计数器是同步的，异步帧会在两个
+  采样点之间混入并发工作，因此不要把它当成进程总量的分解，也不要和 `api_minute_summary` 相加。
+  A-8 的 DB 阻塞报告用 `api_minute_summary` 的进程级 `db_busy_pct` 做前后对比，本行只做归因。
 - **不写内容**：与 `api_minute_summary` 一样只写 stdout 的一行 JSON，不含 query、header、payload、
   原始 path、user 或 token；帧类型是唯一的字符串来源。
 
 ```json
-{"event":"ws_minute_summary","ts":"2026-09-26T23:00:31.679Z","window_ms":2001,"frames":4,"dropped":0,"db_busy_pct":0,"db_queries":0,"types":[{"type":"hb","direction":"uplink","count":3,"violations":0,"db_ms":0,"db_queries":0,"p50_ms":0.4,"p95_ms":2},{"type":"hello","direction":"uplink","count":1,"violations":0,"db_ms":0,"db_queries":0,"p50_ms":1.5,"p95_ms":1.5}]}
+{"event":"ws_minute_summary","ts":"2026-09-27T13:02:11.482Z","window_ms":2001,"frames":4,"dropped":0,"types":[{"type":"hb","direction":"uplink","count":3,"violations":0,"db_ms":0,"db_queries":0,"p50_ms":0.3,"p95_ms":2},{"type":"hello","direction":"uplink","count":1,"violations":0,"db_ms":0,"db_queries":0,"p50_ms":1.5,"p95_ms":1.5}]}
 ```
 
 `types` 按 `db_ms`、`db_queries`、`count` 排序，取前 N（默认 20，且不低于 HTTP 侧的 N）；分位数用
@@ -131,7 +136,7 @@ docker logs multiremi-platform-app-api-1 | grep -E 'api_minute_summary|ws_minute
 # 单元测试：汇总口径、环形缓冲、计时器、脱敏
 bun test tests/unit/daemon/daemon-protocol-metrics.test.ts
 
-# 真实 socket 冒烟：起一个本地实例，握手 + 3 个 hb，读两条汇总线
+# 真实 socket 冒烟：起一个本地实例，握手 + 3 个 hb，读两条汇总线（两者各自一条，不可相加）
 bun run tests/manual/smoke-ws-minute-summary.ts
 ```
 

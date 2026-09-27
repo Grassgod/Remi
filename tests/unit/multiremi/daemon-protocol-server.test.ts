@@ -148,11 +148,16 @@ describe("MUL-417 daemon protocol v2 — server wiring", () => {
     try {
       await waitWebSocketOpen(socket);
       // v1 still receives `ready`, not `welcome`: A-2 deletes this branch.
-      expect(await nextWebSocketMessage(socket)).toMatchObject({
+      //
+      // Asserted field for field (not with `toMatchObject`) so an accidental extra
+      // key or a changed value in the v1 frame fails here instead of reaching the
+      // fleet. This is the only place the v1 shape is pinned by content.
+      expect(await nextWebSocketMessage(socket)).toEqual({
         type: "ready",
         transport: "websocket",
         runtime_id: "rt_v2",
         runtime_ids: ["rt_v2"],
+        connected_at: expect.any(String),
       });
     } finally {
       socket.close();
@@ -247,6 +252,77 @@ describe("MUL-417 daemon protocol v2 — server wiring", () => {
       expect(store.getRuntime("rt_v2")?.lastHeartbeatAt).not.toBeNull();
     } finally {
       socket.close();
+      server.stop(true);
+    }
+  });
+
+  it("does not evict the first master-credential connection when a second claims the same runtime", async () => {
+    // Two daemons, both on the deployment master credential, both naming `rt_v2`.
+    // The earlier connection must keep serving it; the later one is told
+    // `runtime_gone` on its first heartbeat. Evicting the first would take every
+    // OTHER runtime on that machine down with it.
+    const { store } = await daemonFixture();
+    const server = startMultiremiServer({ store, scheduler: null, port: 0, hostname: "127.0.0.1", authToken: "root-secret" });
+    const connect = () => new WebSocket(
+      `ws://127.0.0.1:${server.port}/api/daemon/ws?protocol=2`,
+      { headers: { Authorization: "Bearer root-secret" } } as never,
+    );
+    const hello = (daemonId: string) => JSON.stringify({
+      v: DAEMON_PROTOCOL_VERSION,
+      t: "hello",
+      ts: Date.now(),
+      p: {
+        protocol: DAEMON_PROTOCOL_VERSION,
+        daemon_id: daemonId,
+        cli_version: "0.2.83",
+        launched_by: null,
+        runtimes: [{ runtime_id: "rt_v2", provider: "codex", max_concurrency: 1, active_task_ids: [] }],
+        caps: [],
+      },
+    });
+    const first = connect();
+    const second = connect();
+    try {
+      await waitWebSocketOpen(first);
+      first.send(hello("dmn_v2"));
+      expect(await nextWebSocketMessage(first)).toMatchObject({ t: "welcome" });
+
+      await waitWebSocketOpen(second);
+      second.send(hello("dmn_other"));
+      expect(await nextWebSocketMessage(second)).toMatchObject({ t: "welcome" });
+      expect(first.readyState).toBe(WebSocket.OPEN);
+
+      second.send(JSON.stringify({
+        v: DAEMON_PROTOCOL_VERSION,
+        t: "hb",
+        id: "hb-second",
+        ts: Date.now(),
+        p: { active_task_count: 0 },
+      }));
+      expect(await nextWebSocketMessage(second)).toMatchObject({
+        t: "res",
+        re: "hb-second",
+        p: { runtime_acks: [{ runtime_id: "rt_v2", status: "runtime_gone", runtime_gone: true }] },
+      });
+
+      // The first connection is still alive and still owns the runtime.
+      first.send(JSON.stringify({
+        v: DAEMON_PROTOCOL_VERSION,
+        t: "hb",
+        id: "hb-first",
+        ts: Date.now(),
+        p: { active_task_count: 0 },
+      }));
+      expect(await nextWebSocketMessage(first)).toMatchObject({
+        t: "res",
+        re: "hb-first",
+        p: { runtime_acks: [{ runtime_id: "rt_v2", status: "ok" }] },
+      });
+      expect(first.readyState).toBe(WebSocket.OPEN);
+      expect(second.readyState).toBe(WebSocket.OPEN);
+    } finally {
+      first.close();
+      second.close();
       server.stop(true);
     }
   });

@@ -20,7 +20,9 @@
 import { describe, expect, it } from "bun:test";
 import {
   DAEMON_ACK_TIMEOUT_MS,
+  DAEMON_FRAME_MAX_BYTES,
   DAEMON_PROTOCOL_CLOSE_CODES,
+  DAEMON_UPLINK_WINDOW_FRAMES,
 } from "@multiremi/contracts/daemon-protocol.js";
 import { DaemonSessionRegistry } from "../../../packages/server/src/api/daemon-protocol/session-registry.js";
 import { ManualDaemonProtocolClock } from "../../../packages/server/src/api/daemon-protocol/clock.js";
@@ -112,6 +114,21 @@ function harness(options: {
   return { session, socket, registry, clock, frames, rpcCalls };
 }
 
+/** Capture `console.warn` output for the duration of `body`. */
+async function captureWarnings(body: () => Promise<unknown>): Promise<string[]> {
+  const lines: string[] = [];
+  const realWarn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    lines.push(args.map((arg) => String(arg)).join(" "));
+  };
+  try {
+    await body();
+  } finally {
+    console.warn = realWarn;
+  }
+  return lines;
+}
+
 /** Send a hello and assert it was accepted, so a case can start from a live session. */
 async function handshake(h: Harness, patch: Record<string, unknown> = {}): Promise<void> {
   await h.session.handleMessage(JSON.stringify({ v: 2, t: "hello", ts: 1, p: helloPayload(patch) }));
@@ -201,11 +218,21 @@ describe("MUL-417 daemon protocol session — handshake", () => {
     expect(h.socket.closed[0]!.code).toBe(DAEMON_PROTOCOL_CLOSE_CODES.protocol_upgrade_required);
   });
 
-  it("refuses a frame that precedes the handshake", async () => {
+  it("refuses a frame that precedes the handshake with 4002, not 4426", async () => {
     const h = harness();
     await h.session.handleMessage(JSON.stringify({ v: 2, t: "hb", ts: 1, p: {} }));
     expect(h.socket.lastOfType("welcome")).toBeNull();
-    expect(h.socket.closed[0]!.code).toBe(DAEMON_PROTOCOL_CLOSE_CODES.protocol_upgrade_required);
+    // 4426 would park the daemon in `upgrade_wait` waiting for an upgrade that is
+    // not coming; an out-of-order frame is a client fault, so it retries instead.
+    expect(h.socket.closed[0]!.code).toBe(DAEMON_PROTOCOL_CLOSE_CODES.protocol_violation);
+    expect(h.socket.closed[0]!.code).not.toBe(DAEMON_PROTOCOL_CLOSE_CODES.protocol_upgrade_required);
+  });
+
+  it("refuses a malformed hello with 4002, not 4426", async () => {
+    const h = harness();
+    await h.session.handleMessage(JSON.stringify({ v: 2, t: "hello", ts: 1, p: { daemon_id: "dmn_test" } }));
+    expect(h.socket.closed[0]!.code).toBe(DAEMON_PROTOCOL_CLOSE_CODES.protocol_violation);
+    expect(h.registry.size).toBe(0);
   });
 
   it("refuses a hello with no runtimes rather than registering an empty session", async () => {
@@ -283,8 +310,8 @@ describe("MUL-417 daemon protocol session — downlink seq and ack", () => {
     const h = harness();
     await handshake(h);
 
-    expect(h.session.sendEvent({ t: "task.offer", rt: "rt_one", p: { task_id: "t1" } })).toBe(1);
-    expect(h.session.sendEvent({ t: "task.offer", rt: "rt_one", p: { task_id: "t2" } })).toBe(2);
+    expect(h.session.sendEvent({ t: "task.offer", rt: "rt_one", p: { task_id: "t1" } })).toEqual({ ok: true, seq: 1 });
+    expect(h.session.sendEvent({ t: "task.offer", rt: "rt_one", p: { task_id: "t2" } })).toEqual({ ok: true, seq: 2 });
     expect(h.socket.sent.filter((frame) => frame.t === "task.offer").map((frame) => frame.seq)).toEqual([1, 2]);
     expect(h.session.unacknowledgedFrameCount).toBe(2);
 
@@ -345,7 +372,7 @@ describe("MUL-417 daemon protocol session — downlink seq and ack", () => {
     const h = harness();
     await handshake(h);
     h.socket.fixedStatus = 0;
-    expect(h.session.sendEvent({ t: "task.offer", p: {} })).toBeNull();
+    expect(h.session.sendEvent({ t: "task.offer", p: {} })).toEqual({ ok: false, reason: "closed" });
     // The dropped socket closes the session; a retry must not consume sequence 1.
     expect(h.session.isClosed).toBe(true);
     expect(h.socket.lastOfType("task.offer")).not.toBeNull();
@@ -360,18 +387,18 @@ describe("MUL-417 daemon protocol session — backpressure", () => {
     h.socket.fixedStatus = -1;
     // `-1` means "queued, but the socket is behind": the frame did leave, so it
     // keeps its sequence, and the *next* pausable frame is what gets held back.
-    expect(h.session.sendEvent({ t: "task.offer", p: {} }, { pausable: true })).toBe(1);
+    expect(h.session.sendEvent({ t: "task.offer", p: {} }, { pausable: true })).toEqual({ ok: true, seq: 1 });
     expect(h.session.isPaused).toBe(true);
     expect(h.socket.sent.filter((frame) => frame.t === "task.offer")).toHaveLength(1);
 
     // Still paused: no new pausable frame leaves.
-    expect(h.session.sendEvent({ t: "task.offer", p: {} }, { pausable: true })).toBeNull();
+    expect(h.session.sendEvent({ t: "task.offer", p: {} }, { pausable: true })).toEqual({ ok: false, reason: "paused" });
     expect(h.socket.sent.filter((frame) => frame.t === "task.offer")).toHaveLength(1);
 
     h.socket.fixedStatus = null;
     h.session.handleDrain();
     expect(h.session.isPaused).toBe(false);
-    expect(h.session.sendEvent({ t: "task.offer", p: {} }, { pausable: true })).toBe(2);
+    expect(h.session.sendEvent({ t: "task.offer", p: {} }, { pausable: true })).toEqual({ ok: true, seq: 2 });
   });
 
   it("keeps res and ack flowing while paused", async () => {
@@ -393,7 +420,7 @@ describe("MUL-417 daemon protocol session — backpressure", () => {
     expect(h.registry.size).toBe(1);
 
     h.socket.fixedStatus = 0;
-    expect(h.session.sendEvent({ t: "task.offer", p: {} })).toBeNull();
+    expect(h.session.sendEvent({ t: "task.offer", p: {} })).toEqual({ ok: false, reason: "closed" });
     expect(h.session.isClosed).toBe(true);
     expect(h.registry.size).toBe(0);
     expect(h.socket.closed[0]!.code).toBe(DAEMON_PROTOCOL_CLOSE_CODES.server_closing);
@@ -416,6 +443,83 @@ describe("MUL-417 daemon protocol session — backpressure", () => {
     await handshake(h);
     h.socket.bufferedAmount = 2 * 1024 * 1024;
     expect((h.socket as DaemonProtocolSocket).bufferedAmount).toBe(2 * 1024 * 1024);
+  });
+});
+
+describe("MUL-417 daemon protocol session — the downlink window is enforced", () => {
+  it("refuses the frame past the 64-frame window and sends it once an ack frees room", async () => {
+    const h = harness();
+    await handshake(h);
+
+    for (let index = 1; index <= DAEMON_UPLINK_WINDOW_FRAMES; index += 1) {
+      expect(h.session.sendEvent({ t: "task.offer", p: { index } })).toEqual({ ok: true, seq: index });
+    }
+    expect(h.session.windowUsage().frames).toBe(DAEMON_UPLINK_WINDOW_FRAMES);
+    // The 65th is refused, and the refusal consumes no sequence.
+    expect(h.session.sendEvent({ t: "task.offer", p: { index: 65 } })).toEqual({ ok: false, reason: "window_full" });
+    expect(h.session.lastSentSeq).toBe(DAEMON_UPLINK_WINDOW_FRAMES);
+
+    // An ack for the whole window frees it, and the retry fills the next slot: the
+    // refused frame must not have burned a number.
+    await h.session.handleMessage(JSON.stringify({ v: 2, t: "ack", ts: 2, p: { ack: DAEMON_UPLINK_WINDOW_FRAMES } }));
+    expect(h.session.windowUsage().frames).toBe(0);
+    expect(h.session.sendEvent({ t: "task.offer", p: { index: 65 } })).toEqual({
+      ok: true,
+      seq: DAEMON_UPLINK_WINDOW_FRAMES + 1,
+    });
+  });
+
+  it("refuses a frame that would push the window past 1 MiB", async () => {
+    const h = harness();
+    await handshake(h);
+    // ~600 KiB each: the second fits in bytes (1.2 MB > 1 MiB, so it is refused).
+    const padding = "x".repeat(600 * 1024);
+    expect(h.session.sendEvent({ t: "task.offer", p: { padding } })).toEqual({ ok: true, seq: 1 });
+    expect(h.session.sendEvent({ t: "task.offer", p: { padding } })).toEqual({ ok: false, reason: "window_full" });
+    expect(h.session.windowUsage().bytes).toBeGreaterThan(600 * 1024);
+    expect(h.session.lastSentSeq).toBe(1);
+
+    // Draining the window lets it through, again without consuming a sequence.
+    await h.session.handleMessage(JSON.stringify({ v: 2, t: "ack", ts: 2, p: { ack: 1 } }));
+    expect(h.session.sendEvent({ t: "task.offer", p: { padding } })).toEqual({ ok: true, seq: 2 });
+  });
+
+  it("refuses a single frame larger than the protocol frame cap", async () => {
+    const h = harness();
+    await handshake(h);
+    // The socket would accept it (maxPayloadLength is 4 MiB) but the daemon was
+    // told `frame_bytes: 1 MiB`, so sending it would violate what was negotiated.
+    expect(h.session.sendEvent({
+      t: "task.offer",
+      p: { padding: "x".repeat(DAEMON_FRAME_MAX_BYTES + 128) },
+    })).toEqual({ ok: false, reason: "window_full" });
+    expect(h.session.lastSentSeq).toBe(0);
+  });
+
+  it("keeps res, ack and heartbeat replies outside the window", async () => {
+    const h = harness();
+    await handshake(h);
+    for (let index = 1; index <= DAEMON_UPLINK_WINDOW_FRAMES; index += 1) {
+      h.session.sendEvent({ t: "task.offer", p: { index } });
+    }
+    expect(h.session.sendEvent({ t: "task.offer", p: {} })).toEqual({ ok: false, reason: "window_full" });
+
+    // These release the peer's own window or keep it alive; gating them behind the
+    // downlink window would deadlock both sides.
+    expect(h.session.sendDirect({ t: "ack", ack: DAEMON_UPLINK_WINDOW_FRAMES })).toBe(true);
+    expect(h.session.sendReply("q1", { ok: true })).toBe(true);
+    await h.session.handleMessage(JSON.stringify({ v: 2, t: "hb", id: "hb-1", ts: 2, p: {} }));
+    expect(h.socket.lastOfType("res")).toMatchObject({ re: "hb-1" });
+  });
+
+  it("reports the window usage the caller needs to decide when to retry", async () => {
+    const h = harness();
+    await handshake(h);
+    expect(h.session.windowUsage()).toEqual({ frames: 0, bytes: 0 });
+    h.session.sendEvent({ t: "task.offer", p: {} });
+    const after = h.session.windowUsage();
+    expect(after.frames).toBe(1);
+    expect(after.bytes).toBeGreaterThan(0);
   });
 });
 
@@ -471,21 +575,60 @@ describe("MUL-417 daemon protocol session — rpc dispatch and unknown frames", 
     });
   });
 
-  it("closes on a malformed frame", async () => {
+  it("closes a malformed frame with 4002", async () => {
     const h = harness();
     await handshake(h);
     await h.session.handleMessage("{not json");
     expect(h.session.isClosed).toBe(true);
-    expect(h.socket.closed[0]!.code).toBe(DAEMON_PROTOCOL_CLOSE_CODES.server_closing);
+    // Nothing in an unparseable frame can address an outbox row, so there is no
+    // reply to give; 4002 says "you sent rubbish", and it stays retryable.
+    expect(h.socket.closed[0]!.code).toBe(DAEMON_PROTOCOL_CLOSE_CODES.protocol_violation);
+    expect(h.session.isClosed).toBe(true);
   });
 
-  it("closes when a frame exceeds the protocol size limit", async () => {
+  it("answers an oversized reliable event with res{re: seq} and keeps the connection", async () => {
     const h = harness();
     await handshake(h);
-    const oversized = JSON.stringify({ v: 2, t: "hb", ts: 1, p: { pad: "x".repeat(1024 * 1024 + 64) } });
+    // A reliable event the daemon has in its outbox: `seq` names the row, so the
+    // server can tell it exactly which row not to retry. Closing instead would
+    // loop forever, because the daemon replays unacknowledged rows.
+    const oversized = `{"v":2,"t":"task.progress","seq":17,"rt":"rt_one","ts":1,"p":{"pad":"${"x".repeat(1024 * 1024 + 64)}"}}`;
+    await h.session.handleMessage(oversized);
+    expect(h.socket.lastOfType("res")).toMatchObject({
+      re: "17",
+      p: { ok: false, code: "protocol_violation", retryable: false },
+    });
+    expect(h.session.isClosed).toBe(false);
+    expect(h.socket.closed).toEqual([]);
+
+    // The same frame again (a reconnect replaying the row) gets the same answer.
+    await h.session.handleMessage(oversized);
+    expect(h.socket.sent.filter((frame) => frame.t === "res")).toHaveLength(2);
+    expect(h.socket.sent.filter((frame) => frame.t === "res").every((frame) => frame.re === "17")).toBe(true);
+    expect(h.session.isClosed).toBe(false);
+  });
+
+  it("answers an oversized RPC with res{re: id} and keeps the connection", async () => {
+    const h = harness();
+    await handshake(h);
+    const oversized = `{"v":2,"t":"trace.head","id":"q-oversize","ts":1,"p":{"pad":"${"x".repeat(1024 * 1024 + 64)}"}}`;
+    await h.session.handleMessage(oversized);
+    expect(h.socket.lastOfType("res")).toMatchObject({
+      re: "q-oversize",
+      p: { ok: false, code: "protocol_violation", retryable: false },
+    });
+    expect(h.session.isClosed).toBe(false);
+  });
+
+  it("closes an oversized frame that names no outbox row with 4002", async () => {
+    const h = harness();
+    await handshake(h);
+    // Neither `seq` nor `id`: there is nothing to address, so no reply can tell
+    // the daemon which row to isolate.
+    const oversized = `{"v":2,"t":"hb","ts":1,"p":{"pad":"${"x".repeat(1024 * 1024 + 64)}"}}`;
     await h.session.handleMessage(oversized);
     expect(h.session.isClosed).toBe(true);
-    expect(h.socket.closed[0]!.code).toBe(DAEMON_PROTOCOL_CLOSE_CODES.server_closing);
+    expect(h.socket.closed[0]!.code).toBe(DAEMON_PROTOCOL_CLOSE_CODES.protocol_violation);
   });
 });
 
@@ -513,7 +656,7 @@ describe("MUL-417 daemon protocol session — registry replacement", () => {
     expect(first.registry.size).toBe(1);
   });
 
-  it("closes the previous daemon when a different one claims the same runtime", async () => {
+  it("does not evict another daemon's connection when it claims the same runtime", async () => {
     const first = harness();
     await handshake(first);
 
@@ -533,9 +676,15 @@ describe("MUL-417 daemon protocol session — registry replacement", () => {
       p: helloPayload({ daemon_id: "dmn_other" }),
     }));
 
-    expect(first.session.isClosed).toBe(true);
-    expect(first.socket.closed[0]!.code).toBe(DAEMON_PROTOCOL_CLOSE_CODES.server_closing);
-    expect(first.registry.daemonIdForRuntime("rt_one")).toBe("dmn_other");
+    // The later connection keeps only what nobody else holds; the earlier one is
+    // untouched, because a socket serves a whole machine and evicting it over one
+    // runtime would strand that machine's other runtimes.
+    expect(first.session.isClosed).toBe(false);
+    expect(first.socket.closed).toEqual([]);
+    expect(first.registry.daemonIdForRuntime("rt_one")).toBe("dmn_test");
+    expect(session2.runtimeIds).toEqual([]);
+    expect(session2.unavailableRuntimeIds).toEqual(["rt_one"]);
+    expect(session2.isClosed).toBe(false);
   });
 
   it("leaves the successor's runtime index alone when the replaced session is disposed", async () => {
@@ -640,7 +789,7 @@ describe("MUL-417 daemon protocol session — heartbeat and serialization", () =
     expect(order).toEqual(["trace.head", "trace.fetch"]);
   });
 
-  it("keeps processing after a frame handler throws", async () => {
+  it("answers server_error when an rpc handler throws, and keeps the connection", async () => {
     const h = harness({
       rpc: (type) => {
         if (type === "trace.head") throw new Error("handler exploded");
@@ -648,10 +797,55 @@ describe("MUL-417 daemon protocol session — heartbeat and serialization", () =
       },
     });
     await handshake(h);
-    await h.session.handleMessage(JSON.stringify({ v: 2, t: "trace.head", id: "a", ts: 2, p: {} }));
+    const lines = await captureWarnings(() =>
+      h.session.handleMessage(JSON.stringify({ v: 2, t: "trace.head", id: "a", ts: 2, p: {} })),
+    );
+
+    // The caller gets a retryable answer instead of waiting out its own timeout
+    // for a request the server already failed.
+    expect(h.socket.lastOfType("res")).toMatchObject({
+      re: "a",
+      p: { ok: false, code: "server_error", retryable: true },
+    });
+    // The frame summary records the fault under the server's error code.
+    expect(h.frames.at(-1)).toMatchObject({ type: "trace.head", errorCode: "server_error" });
+    // The warning names the frame and the session but carries no payload content.
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]!)).toMatchObject({
+      event: "daemon_protocol_frame_failed",
+      session_id: "dws_test",
+      frame_type: "trace.head",
+      error: "handler exploded",
+    });
+
+    // And processing continues: the next frame is served normally.
     await h.session.handleMessage(JSON.stringify({ v: 2, t: "trace.fetch", id: "b", ts: 2, p: {} }));
     expect(h.rpcCalls).toEqual(["trace.head", "trace.fetch"]);
     expect(h.session.isClosed).toBe(false);
+    expect(h.socket.lastOfType("res")).toMatchObject({ re: "b", p: { ok: true } });
+  });
+
+  it("closes 4001 when the handshake itself throws, since there is no id to answer through", async () => {
+    const socket = new FakeDaemonSocket();
+    const registry = new DaemonSessionRegistry();
+    const clock = new ManualDaemonProtocolClock();
+    const session = new DaemonProtocolSession({
+      sessionId: "dws_throw",
+      socket,
+      registry,
+      serverVersion: "0.2.83",
+      clock,
+      authorizeRuntime: async () => {
+        throw new Error("store unavailable");
+      },
+    });
+    await captureWarnings(() => session.handleMessage(JSON.stringify({
+      v: 2, t: "hello", ts: 1,
+      p: helloPayload(),
+    })));
+    expect(session.isClosed).toBe(true);
+    expect(socket.closed[0]!.code).toBe(DAEMON_PROTOCOL_CLOSE_CODES.server_closing);
+    expect(socket.lastOfType("welcome")).toBeNull();
   });
 
   it("records one frame sample per dispatched frame with its type and direction", async () => {

@@ -579,6 +579,8 @@ export const DAEMON_PROTOCOL_ERROR_CODES = [
   // transport
   "ack_timeout",
   "protocol_violation",
+  // server fault
+  "server_error",
 ] as const;
 
 export type DaemonProtocolErrorCode = (typeof DAEMON_PROTOCOL_ERROR_CODES)[number];
@@ -587,6 +589,7 @@ export type DaemonProtocolErrorCode = (typeof DAEMON_PROTOCOL_ERROR_CODES)[numbe
 export const DAEMON_RETRYABLE_ERROR_CODES = [
   "daemon_busy",
   "daemon_timeout",
+  "server_error",
 ] as const satisfies readonly DaemonProtocolErrorCode[];
 
 /** Codes that end a partition permanently on the daemon (mirrors today's terminal HTTP statuses). */
@@ -607,6 +610,18 @@ export const DAEMON_PROTOCOL_CLOSE_CODES = {
   ack_timeout: 4000,
   /** Routine server shutdown (deploy, restart). Reconnect with backoff. */
   server_closing: 4001,
+  /**
+   * The peer broke the protocol in a way no reply can address: a frame before the
+   * handshake, a malformed `hello`, unparseable JSON, or an oversized frame that
+   * carries neither `seq` nor `id` to answer.
+   *
+   * Deliberately NOT 4426. 4426 means "you are the wrong version, go and upgrade",
+   * which parks the daemon in `upgrade_wait` and stops it claiming work - wrong for
+   * a client bug or a race where no upgrade is coming. Deliberately not 4001
+   * either, so an operator can tell an ordinary deploy apart from a peer that is
+   * sending rubbish; both are retryable, so the difference is diagnostics only.
+   */
+  protocol_violation: 4002,
   /** Credential revoked or workspace access lost. Stop reconnecting. */
   authority_revoked: 4401,
   /** Token lacks the scope for the daemon socket. Stop reconnecting. */
