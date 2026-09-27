@@ -77,6 +77,7 @@ function archiveWire(archive: MultiremiSessionArchive | null): Record<string, un
     relative_path: archive.relativePath,
     metadata: archive.metadata,
     attempt_count: archive.attemptCount,
+    retry_budget_base_attempt: archive.retryBudgetBaseAttempt,
     last_error: archive.lastError,
     next_retry_at: archive.nextRetryAt,
     retry_exhausted_at: archive.retryExhaustedAt,

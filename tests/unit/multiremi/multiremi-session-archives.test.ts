@@ -987,7 +987,8 @@ describe("Multiremi session archives", () => {
     expect(existsSync(legacyHighAttemptPartial)).toBe(false);
     expect((await retried.json() as any).archive).toMatchObject({
       status: "pending",
-      attempt_count: 0,
+      attempt_count: 2,
+      retry_budget_base_attempt: 2,
       last_error: null,
       next_retry_at: null,
       retry_exhausted_at: null,
@@ -1001,9 +1002,21 @@ describe("Multiremi session archives", () => {
     });
     expect(recovered.status).toBe(200);
     expect((await recovered.json() as any)).toMatchObject({
-      upload_attempt: 1,
-      archive: { attempt_count: 1, retry_state: "backoff" },
+      upload_attempt: 3,
+      archive: { attempt_count: 3, retry_budget_base_attempt: 2, retry_state: "backoff" },
     });
+    expect(store.markSessionArchiveFailedAttempt(first.archive.id, runtime.id, 3, "third failed"))
+      .toMatchObject({ retryExhaustedAt: null });
+    db!.run("UPDATE multiremi_session_archives SET next_retry_at = ? WHERE id = ?",
+      ["2000-01-01T00:00:00.000Z", first.archive.id]);
+    const previousPartial = `${finalPath}.2.partial`;
+    writeFileSync(previousPartial, "old attempt partial");
+    const fourth = await app.request(`${base}/init`, { method: "POST", headers: daemonHeaders, body });
+    expect((await fourth.json() as any).upload_attempt).toBe(4);
+    expect(existsSync(previousPartial)).toBe(false);
+    expect(store.markSessionArchiveFailedAttempt(first.archive.id, runtime.id, 4, "fourth failed"))
+      .toMatchObject({ retryExhaustedAt: expect.any(String), retryBudgetBaseAttempt: 2 });
+    expect((await app.request(`${base}/init`, { method: "POST", headers: daemonHeaders, body })).status).toBe(409);
   });
 
   it("repairs a corrupt ready object through verify and a fenced reupload", async () => {
@@ -1057,7 +1070,8 @@ describe("Multiremi session archives", () => {
     expect(manualRetry.status).toBe(200);
     expect((await manualRetry.json() as any).archive).toMatchObject({
       status: "pending",
-      attempt_count: 0,
+      attempt_count: 1,
+      retry_budget_base_attempt: 1,
       next_retry_at: null,
       retry_exhausted_at: null,
     });
@@ -1073,7 +1087,7 @@ describe("Multiremi session archives", () => {
       }),
     });
     const retry = await retryInit.json() as any;
-    expect(retry.upload_attempt).toBe(1);
+    expect(retry.upload_attempt).toBe(2);
     expect((await app.request(retry.upload_url, {
       method: "PUT",
       headers: {

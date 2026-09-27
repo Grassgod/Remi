@@ -532,6 +532,176 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     }
   });
 
+  async function pgArchiveFenceFixture(label: string) {
+    const root = mkdtempSync(join(tmpdir(), `multiremi-pg-${label}-`));
+    const runtime = store.registerRuntime({ id: `rt_pg_${label}`, name: label, provider: "codex",
+      daemonId: `dmn_pg_${label}`, workspaceId: "local" });
+    const issue = store.createIssue({ title: label, workspaceId: "local" });
+    store.reportIssueWorkspace({ issueId: issue.id, runtimeId: runtime.id,
+      rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
+    const fixture = await buildArchiveFixture({ subject: { kind: "issue", id: issue.id }, traces: {} });
+    const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
+    const archive = service.initialize({ workspaceId: "local", subjectKind: "issue", subjectId: issue.id,
+      issueId: issue.id, runtimeId: runtime.id, daemonId: runtime.daemonId!, sourceRevision: fixture.sourceRevision,
+      sha256: fixture.sha256, sizeBytes: fixture.sizeBytes }).archive;
+    const a = await service.claimUploadAttempt(runtime.id, issue.id, archive.id);
+    await service.upload(runtime.id, issue.id, archive.id, a.uploadAttempt!, new Response(fixture.bytes).body);
+    const finalPath = join(root, archive.relativePath);
+    const manifestPath = join(root, archive.relativePath, "..", "manifest.json");
+    return { root, runtime, issue, fixture, service, archive, a: a.uploadAttempt!, finalPath, manifestPath };
+  }
+
+  for (const readyBeforeOldCleanup of [false, true]) {
+    it(`keeps Postgres attempt B files after manual retry (B ready=${readyBeforeOldCleanup})`, async () => {
+      const f = await pgArchiveFenceFixture(`aba_${readyBeforeOldCleanup}`);
+      const originalComplete = store.completeSessionArchiveWithTracePointers.bind(store);
+      const internal = f.service as unknown as { cleanupFailedPromotion: (...args: unknown[]) => Promise<void>;
+        syncDirectory: (path: string) => Promise<void> };
+      const cleanup = internal.cleanupFailedPromotion.bind(f.service);
+      let releaseA!: () => void;
+      const aGate = new Promise<void>((resolve) => { releaseA = resolve; });
+      let reachedA!: () => void;
+      const aPaused = new Promise<void>((resolve) => { reachedA = resolve; });
+      let rejectA = true;
+      store.completeSessionArchiveWithTracePointers = (...args) => {
+        if (rejectA) { rejectA = false; throw new Error("A ready failed"); }
+        return originalComplete(...args);
+      };
+      internal.cleanupFailedPromotion = async (...args) => { reachedA(); await aGate; return cleanup(...args); };
+      try {
+        const oldCompletion = f.service.complete(f.runtime.id, f.issue.id, f.archive.id, f.a);
+        await aPaused;
+        expect(store.getSessionArchive(f.archive.id)?.status).toBe("failed");
+        expect((await f.service.retry(f.archive.id)).retryBudgetBaseAttempt).toBe(f.a);
+        const b = await f.service.claimUploadAttempt(f.runtime.id, f.issue.id, f.archive.id);
+        expect(b.uploadAttempt).toBe(f.a + 1);
+        await f.service.upload(f.runtime.id, f.issue.id, f.archive.id, b.uploadAttempt!,
+          new Response(f.fixture.bytes).body);
+        // Force B's promotion through rename rather than identical-ZIP reuse.
+        writeFileSync(f.finalPath, Buffer.alloc(f.fixture.bytes.length));
+        let releaseB = () => {};
+        let bPaused: Promise<void> | null = null;
+        if (!readyBeforeOldCleanup) {
+          const sync = internal.syncDirectory.bind(f.service);
+          let reachedB!: () => void;
+          bPaused = new Promise<void>((resolve) => { reachedB = resolve; });
+          const bGate = new Promise<void>((resolve) => { releaseB = resolve; });
+          internal.syncDirectory = async (path) => { reachedB(); await bGate; return sync(path); };
+        }
+        const bCompletion = f.service.complete(f.runtime.id, f.issue.id, f.archive.id, b.uploadAttempt!);
+        if (bPaused) await bPaused;
+        else await bCompletion;
+        const bPartial = `${f.finalPath}.${b.uploadAttempt}.partial`;
+        writeFileSync(bPartial, "B partial");
+        releaseA();
+        await expect(oldCompletion).rejects.toThrow("A ready failed");
+        expect(readFileSync(f.finalPath)).toEqual(Buffer.from(f.fixture.bytes));
+        expect(JSON.parse(readFileSync(f.manifestPath, "utf8"))).toMatchObject({ attempt_count: b.uploadAttempt });
+        expect(readFileSync(bPartial, "utf8")).toBe("B partial");
+        releaseB();
+        expect((await bCompletion).status).toBe("ready");
+      } finally {
+        store.completeSessionArchiveWithTracePointers = originalComplete;
+        releaseA();
+        rmSync(f.root, { recursive: true, force: true });
+      }
+    }, 20_000);
+  }
+
+  it("holds a Postgres row lock across cleanup ownership check and unlink", async () => {
+    const f = await pgArchiveFenceFixture("cleanup_lock");
+    const otherDb = new PostgresSyncDatabase(pgDatabaseUrl(TEST_DB));
+    const other = new MultiremiStore(otherDb);
+    otherDb.run("SET lock_timeout = '100ms'");
+    const originalComplete = store.completeSessionArchiveWithTracePointers.bind(store);
+    const internal = f.service as unknown as { onCleanupLocked: () => void };
+    let checked = false;
+    let lockError: unknown;
+    internal.onCleanupLocked = () => {
+      checked = true;
+      try { other.retrySessionArchive(f.archive.id); } catch (error) { lockError = error; }
+    };
+    store.completeSessionArchiveWithTracePointers = () => { throw new Error("ready failed"); };
+    try {
+      await expect(f.service.complete(f.runtime.id, f.issue.id, f.archive.id, f.a))
+        .rejects.toThrow("ready failed");
+      expect(checked).toBe(true);
+      expect(String(lockError)).toMatch(/lock timeout|canceling statement|55P03/i);
+      store.completeSessionArchiveWithTracePointers = originalComplete;
+      await f.service.retry(f.archive.id);
+      const b = await f.service.claimUploadAttempt(f.runtime.id, f.issue.id, f.archive.id);
+      await f.service.upload(f.runtime.id, f.issue.id, f.archive.id, b.uploadAttempt!,
+        new Response(f.fixture.bytes).body);
+      expect((await f.service.complete(f.runtime.id, f.issue.id, f.archive.id, b.uploadAttempt!)).status).toBe("ready");
+      expect(readFileSync(f.finalPath)).toEqual(Buffer.from(f.fixture.bytes));
+      expect(JSON.parse(readFileSync(f.manifestPath, "utf8"))).toMatchObject({ attempt_count: b.uploadAttempt });
+    } finally {
+      store.completeSessionArchiveWithTracePointers = originalComplete;
+      otherDb.close();
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("rejects a stale Postgres attempt before it promotes a shared ZIP", async () => {
+    const f = await pgArchiveFenceFixture("stale_promote");
+    const internal = f.service as unknown as { writeManifest: (...args: unknown[]) => Promise<string> };
+    const write = internal.writeManifest.bind(f.service);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let reached!: () => void;
+    const paused = new Promise<void>((resolve) => { reached = resolve; });
+    let first = true;
+    internal.writeManifest = async (...args) => {
+      const path = await write(...args);
+      if (first) { first = false; reached(); await gate; }
+      return path;
+    };
+    try {
+      const stale = f.service.complete(f.runtime.id, f.issue.id, f.archive.id, f.a);
+      await paused;
+      store.markSessionArchiveFailedAttempt(f.archive.id, f.runtime.id, f.a, "retry");
+      await f.service.retry(f.archive.id);
+      const b = await f.service.claimUploadAttempt(f.runtime.id, f.issue.id, f.archive.id);
+      await f.service.upload(f.runtime.id, f.issue.id, f.archive.id, b.uploadAttempt!,
+        new Response(f.fixture.bytes).body);
+      expect((await f.service.complete(f.runtime.id, f.issue.id, f.archive.id, b.uploadAttempt!)).status).toBe("ready");
+      release();
+      await expect(stale).rejects.toMatchObject({ code: "session_archive_attempt_conflict" });
+      expect(readFileSync(f.finalPath)).toEqual(Buffer.from(f.fixture.bytes));
+      expect(JSON.parse(readFileSync(f.manifestPath, "utf8"))).toMatchObject({ attempt_count: b.uploadAttempt });
+    } finally { release(); rmSync(f.root, { recursive: true, force: true }); }
+  }, 20_000);
+
+  it("resets the Postgres retry budget without reusing an attempt number", async () => {
+    const previousMaxAttempts = process.env.MULTIREMI_SESSION_ARCHIVE_RETRY_MAX_ATTEMPTS;
+    process.env.MULTIREMI_SESSION_ARCHIVE_RETRY_MAX_ATTEMPTS = "2";
+    const f = await pgArchiveFenceFixture("retry_budget");
+    try {
+      expect(f.a).toBe(1);
+      expect(store.getSessionArchive(f.archive.id)?.retryBudgetBaseAttempt).toBe(0);
+      store.markSessionArchiveFailedAttempt(f.archive.id, f.runtime.id, f.a, "first failure");
+      const reset = await f.service.retry(f.archive.id);
+      expect(reset).toMatchObject({ attemptCount: 1, retryBudgetBaseAttempt: 1 });
+      const b = await f.service.claimUploadAttempt(f.runtime.id, f.issue.id, f.archive.id);
+      expect(b).toMatchObject({ uploadAttempt: 2 });
+      expect(store.getSessionArchive(f.archive.id)).toMatchObject({ attemptCount: 2, retryBudgetBaseAttempt: 1 });
+      expect(store.markSessionArchiveFailedAttempt(f.archive.id, f.runtime.id, 2, "second failure"))
+        .toMatchObject({ retryExhaustedAt: null });
+      db.run("UPDATE multiremi_session_archives SET next_retry_at = ? WHERE id = ?",
+        ["2000-01-01T00:00:00.000Z", f.archive.id]);
+      const c = await f.service.claimUploadAttempt(f.runtime.id, f.issue.id, f.archive.id);
+      expect(c.uploadAttempt).toBe(3);
+      expect(store.markSessionArchiveFailedAttempt(f.archive.id, f.runtime.id, 3, "third failure"))
+        .toMatchObject({ retryExhaustedAt: expect.any(String), retryBudgetBaseAttempt: 1 });
+      await expect(f.service.claimUploadAttempt(f.runtime.id, f.issue.id, f.archive.id))
+        .rejects.toMatchObject({ code: "session_archive_retry_exhausted" });
+    } finally {
+      if (previousMaxAttempts === undefined) delete process.env.MULTIREMI_SESSION_ARCHIVE_RETRY_MAX_ATTEMPTS;
+      else process.env.MULTIREMI_SESSION_ARCHIVE_RETRY_MAX_ATTEMPTS = previousMaxAttempts;
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  });
+
   it("cleans the promoted ZIP and manifest after a late membership or manifest failure on Postgres", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-pg-late-archive-fail-"));
     try {
@@ -1126,13 +1296,25 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     runMigrations(db);
 
     expect(db.query(
-      `SELECT status, next_retry_at, retry_exhausted_at
+      `SELECT status, next_retry_at, retry_exhausted_at, retry_budget_base_attempt
        FROM multiremi_session_archives WHERE id = ?`,
     ).get(archiveId)).toEqual({
       status: "failed",
       next_retry_at: expect.any(String),
       retry_exhausted_at: expect.any(String),
+      retry_budget_base_attempt: 0,
     });
+
+    db.run(`UPDATE multiremi_session_archives
+      SET attempt_count = 7, retry_budget_base_attempt = 6,
+          next_retry_at = NULL, retry_exhausted_at = NULL
+      WHERE id = ?`, [archiveId]);
+    db.run("DELETE FROM multiremi_schema_migrations WHERE id = ?",
+      ["20260826_session_archive_retry_budget"]);
+    runMigrations(db);
+    expect(db.query(
+      "SELECT retry_exhausted_at, retry_budget_base_attempt FROM multiremi_session_archives WHERE id = ?",
+    ).get(archiveId)).toEqual({ retry_exhausted_at: null, retry_budget_base_attempt: 6 });
   });
 
   it("normalizes legacy SCM base URL paths and keeps one default per origin on Postgres", () => {

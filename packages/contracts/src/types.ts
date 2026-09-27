@@ -1922,6 +1922,8 @@ export interface MultiremiSessionArchive {
   relativePath: string;
   metadata: Record<string, unknown>;
   attemptCount: number;
+  /** Attempt number at the last manual retry; budget and display use the difference. */
+  retryBudgetBaseAttempt: number;
   lastError: string | null;
   nextRetryAt: string | null;
   retryExhaustedAt: string | null;

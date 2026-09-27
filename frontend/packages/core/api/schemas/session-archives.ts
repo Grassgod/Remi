@@ -15,6 +15,7 @@ export const SessionArchiveSchema = z.object({
   relative_path: z.string().nullable().default(null),
   metadata: z.record(z.string(), z.unknown()).default({}),
   attempt_count: z.number().default(0),
+  retry_budget_base_attempt: z.number().default(0),
   last_error: z.string().nullable().default(null),
   next_retry_at: z.string().nullable().default(null),
   retry_exhausted_at: z.string().nullable().default(null),

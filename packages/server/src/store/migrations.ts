@@ -2786,6 +2786,7 @@ export function runMigrations(db: SqlDatabase): void {
   runMigrationOnce(db, SESSION_ARCHIVE_SUBJECT_V2_MIGRATION, () => {
     migrateSessionArchiveSubjectsV2(db);
   });
+  addColumnIfMissing(db, "multiremi_session_archives", "retry_budget_base_attempt INTEGER NOT NULL DEFAULT 0");
   runMigrationOnce(db, TASK_TRACE_POINTERS_MIGRATION, () => {
     createTaskTracePointers(db);
   });
@@ -5064,8 +5065,11 @@ function backfillSessionArchiveRetryBudget(db: SqlDatabase): void {
   const nowIso = now.toISOString();
   const stallBefore = new Date(now.getTime() - resolveSessionArchiveUploadStallMs()).toISOString();
   const policy = resolveSessionArchiveRetryPolicy();
+  const hasBudgetBase = (db.query("PRAGMA table_info(multiremi_session_archives)").all() as Array<{ name: string }>)
+    .some((column) => column.name === "retry_budget_base_attempt");
   const rows = db.query(
-    `SELECT id, status, attempt_count, updated_at
+    `SELECT id, status, attempt_count, updated_at,
+            ${hasBudgetBase ? "retry_budget_base_attempt" : "0 AS retry_budget_base_attempt"}
      FROM multiremi_session_archives
      WHERE status = 'failed'
         OR (status = 'uploading' AND updated_at <= ?)`,
@@ -5074,11 +5078,13 @@ function backfillSessionArchiveRetryBudget(db: SqlDatabase): void {
     status: string;
     attempt_count: number;
     updated_at: string;
+    retry_budget_base_attempt: number;
   }>;
   for (const row of rows) {
     const attemptCount = Number(row.attempt_count ?? 0);
-    const exhausted = isSessionArchiveRetryExhausted(attemptCount, policy);
-    const nextRetryAt = nextSessionArchiveRetryAt(row.id, attemptCount, policy, now);
+    const base = Number(row.retry_budget_base_attempt ?? 0);
+    const exhausted = isSessionArchiveRetryExhausted(attemptCount, policy, base);
+    const nextRetryAt = nextSessionArchiveRetryAt(row.id, attemptCount, policy, now, base);
     db.run(
       `UPDATE multiremi_session_archives
        SET status = 'failed',

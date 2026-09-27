@@ -43,8 +43,16 @@ uses the Retry action in the Issue's Session Archives section or calls:
 POST /api/issues/:issueId/session-archives/:archiveId/retry
 ```
 
-Manual retry resets the attempt count, error, next retry timestamp, and exhaustion
-timestamp. It does not bypass the normal upload integrity checks.
+Manual retry records the current `attempt_count` as `retry_budget_base_attempt`
+and clears the error, next retry timestamp, and exhaustion timestamp. The
+attempt number never decreases; budget, backoff, and the displayed attempt count
+use `attempt_count - retry_budget_base_attempt`. Existing rows start with base 0.
+It does not bypass the normal upload integrity checks.
+
+The final ZIP and `manifest.json` are shared paths. Only the current attempt
+may rename or remove them, after checking ownership inside the archive row's
+database lock. ZIP hashing, member validation, and manifest temp-file writing
+stay outside that lock; the file mutations use synchronous operations inside it.
 
 ## v1 uploads during the upgrade window
 

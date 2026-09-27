@@ -9,6 +9,7 @@ import { SessionArchiveReader } from "@multiremi/session-archive/reader.js";
 import { createStore, resetMultiremiTestEnv, db } from "./helpers.js";
 import { buildArchiveFixture, traceFileBody } from "./session-archive-fixtures.js";
 import { SessionArchiveService } from "@multiremi/session-archive/service.js";
+import { MultiremiStore } from "@multiremi/store.js";
 import { TRACE_FILE_FORMAT } from "@multiremi/contracts/trace-file.js";
 
 function freshDb(): Database {
@@ -68,8 +69,13 @@ describe("Session archive v2 subject migration", () => {
     }>;
     expect(Number(columns.find((column) => column.name === "issue_id")?.notnull)).toBe(0);
     expect(columns.map((column) => column.name)).toEqual(expect.arrayContaining([
-      "subject_kind", "subject_id", "format",
+      "subject_kind", "subject_id", "format", "retry_budget_base_attempt",
     ]));
+    expect(database.query("SELECT id, retry_budget_base_attempt FROM multiremi_session_archives ORDER BY id").all())
+      .toEqual([
+        { id: "sar_failed", retry_budget_base_attempt: 0 },
+        { id: "sar_ready", retry_budget_base_attempt: 0 },
+      ]);
     const rows = database.query(
       "SELECT id, issue_id, subject_kind, subject_id, format, status FROM multiremi_session_archives ORDER BY id",
     ).all();
@@ -101,6 +107,17 @@ describe("Session archive v2 subject migration", () => {
     expect(database.query(
       "SELECT COUNT(*) AS count FROM multiremi_session_archives WHERE subject_kind <> 'issue'",
     ).get()).toEqual({ count: 0 });
+
+    database.run(`UPDATE multiremi_session_archives
+      SET attempt_count = 3, retry_budget_base_attempt = 2,
+          next_retry_at = NULL, retry_exhausted_at = NULL
+      WHERE id = 'sar_failed'`);
+    database.run("DELETE FROM multiremi_schema_migrations WHERE id = ?",
+      ["20260826_session_archive_retry_budget"]);
+    migrate(database);
+    expect(database.query(
+      "SELECT retry_exhausted_at, retry_budget_base_attempt FROM multiremi_session_archives WHERE id = 'sar_failed'",
+    ).get()).toEqual({ retry_exhausted_at: null, retry_budget_base_attempt: 2 });
   });
 
   it("creates the task trace pointer table with the documented shape", () => {
@@ -1163,6 +1180,137 @@ describe("Session archive QA round 1", () => {
 });
 
 describe("Session archive trace member authorization", () => {
+  async function fencingFixture(label: string, fileDatabase = false) {
+    const root = mkdtempSync(join(tmpdir(), `multiremi-archive-${label}-`));
+    dirs.push(root);
+    const database = fileDatabase ? new Database(join(root, "archive.sqlite")) : null;
+    const store = database ? new MultiremiStore(database) : createStore();
+    store.ensureLocalWorkspace();
+    const runtime = store.registerRuntime({ id: `rt_${label}`, name: label, provider: "codex",
+      daemonId: `dmn_${label}`, workspaceId: "local" });
+    const issue = store.createIssue({ title: label, workspaceId: "local" });
+    store.reportIssueWorkspace({ issueId: issue.id, runtimeId: runtime.id,
+      rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
+    const fixture = await buildArchiveFixture({ subject: { kind: "issue", id: issue.id }, traces: {} });
+    const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
+    const archive = service.initialize({ workspaceId: "local", subjectKind: "issue", subjectId: issue.id,
+      issueId: issue.id, runtimeId: runtime.id, daemonId: runtime.daemonId!, sourceRevision: fixture.sourceRevision,
+      sha256: fixture.sha256, sizeBytes: fixture.sizeBytes }).archive;
+    const claim = await service.claimUploadAttempt(runtime.id, issue.id, archive.id);
+    await service.upload(runtime.id, issue.id, archive.id, claim.uploadAttempt!, new Response(fixture.bytes).body);
+    return { root, database, store, runtime, issue, fixture, service, archive, firstAttempt: claim.uploadAttempt!,
+      finalPath: join(root, archive.relativePath) };
+  }
+
+  for (const readyBeforeOldCleanup of [false, true]) {
+    it(`keeps attempt B's ZIP, manifest and partial after manual retry (B ready=${readyBeforeOldCleanup})`, async () => {
+      const f = await fencingFixture(`aba_${readyBeforeOldCleanup}`);
+      const originalComplete = f.store.completeSessionArchiveWithTracePointers.bind(f.store);
+      let rejectA = true;
+      f.store.completeSessionArchiveWithTracePointers = (...args) => {
+        if (rejectA) { rejectA = false; throw new Error("A ready transaction failed"); }
+        return originalComplete(...args);
+      };
+      const internal = f.service as unknown as { cleanupFailedPromotion: (...args: unknown[]) => Promise<void>;
+        syncDirectory: (path: string) => Promise<void> };
+      const cleanup = internal.cleanupFailedPromotion.bind(f.service);
+      let reachedA!: () => void;
+      let releaseA!: () => void;
+      const aPaused = new Promise<void>((resolve) => { reachedA = resolve; });
+      const aGate = new Promise<void>((resolve) => { releaseA = resolve; });
+      internal.cleanupFailedPromotion = async (...args) => { reachedA(); await aGate; return cleanup(...args); };
+      const oldCompletion = f.service.complete(f.runtime.id, f.issue.id, f.archive.id, f.firstAttempt);
+      await aPaused;
+      expect(f.store.getSessionArchive(f.archive.id)?.status).toBe("failed");
+      expect((await f.service.retry(f.archive.id)).retryBudgetBaseAttempt).toBe(f.firstAttempt);
+      const b = await f.service.claimUploadAttempt(f.runtime.id, f.issue.id, f.archive.id);
+      expect(b.uploadAttempt).toBe(f.firstAttempt + 1);
+      await f.service.upload(f.runtime.id, f.issue.id, f.archive.id, b.uploadAttempt!,
+        new Response(f.fixture.bytes).body);
+      // Make A's published ZIP unusable so B must rename its own partial into the shared path.
+      writeFileSync(f.finalPath, Buffer.alloc(f.fixture.bytes.length));
+      let releaseB = () => {};
+      let bPaused: Promise<void> | null = null;
+      if (!readyBeforeOldCleanup) {
+        const sync = internal.syncDirectory.bind(f.service);
+        let reachedB!: () => void;
+        bPaused = new Promise<void>((resolve) => { reachedB = resolve; });
+        const bGate = new Promise<void>((resolve) => { releaseB = resolve; });
+        internal.syncDirectory = async (path) => { reachedB(); await bGate; return sync(path); };
+      }
+      const bCompletion = f.service.complete(f.runtime.id, f.issue.id, f.archive.id, b.uploadAttempt!);
+      if (bPaused) await bPaused;
+      else await bCompletion;
+      const manifestPath = join(f.root, f.archive.relativePath, "..", "manifest.json");
+      const bPartial = `${f.finalPath}.${b.uploadAttempt}.partial`;
+      writeFileSync(bPartial, "B partial remains attempt-owned");
+      releaseA();
+      await expect(oldCompletion).rejects.toThrow("A ready transaction failed");
+      expect(readFileSync(f.finalPath)).toEqual(Buffer.from(f.fixture.bytes));
+      expect(JSON.parse(readFileSync(manifestPath, "utf8"))).toMatchObject({ attempt_count: b.uploadAttempt });
+      expect(readFileSync(bPartial, "utf8")).toBe("B partial remains attempt-owned");
+      releaseB();
+      expect((await bCompletion).status).toBe("ready");
+    });
+  }
+
+  it("holds the SQLite archive fence from ownership check through unlink", async () => {
+    const f = await fencingFixture("sqlite_lock", true);
+    const secondaryDb = new Database(join(f.root, "archive.sqlite"));
+    secondaryDb.exec("PRAGMA busy_timeout = 0");
+    const secondary = new MultiremiStore(secondaryDb);
+    const originalComplete = f.store.completeSessionArchiveWithTracePointers.bind(f.store);
+    f.store.completeSessionArchiveWithTracePointers = () => { throw new Error("ready failed"); };
+    const internal = f.service as unknown as { onCleanupLocked: () => void };
+    let checked = false;
+    let lockError: unknown;
+    internal.onCleanupLocked = () => {
+      checked = true;
+      try { secondary.retrySessionArchive(f.archive.id); } catch (error) { lockError = error; }
+    };
+    try {
+      await expect(f.service.complete(f.runtime.id, f.issue.id, f.archive.id, f.firstAttempt))
+        .rejects.toThrow("ready failed");
+      expect(checked).toBe(true);
+      expect(String(lockError)).toMatch(/busy|locked/i);
+      f.store.completeSessionArchiveWithTracePointers = originalComplete;
+      await f.service.retry(f.archive.id);
+      const b = await f.service.claimUploadAttempt(f.runtime.id, f.issue.id, f.archive.id);
+      await f.service.upload(f.runtime.id, f.issue.id, f.archive.id, b.uploadAttempt!, new Response(f.fixture.bytes).body);
+      expect((await f.service.complete(f.runtime.id, f.issue.id, f.archive.id, b.uploadAttempt!)).status).toBe("ready");
+      expect(readFileSync(f.finalPath)).toEqual(Buffer.from(f.fixture.bytes));
+      expect(JSON.parse(readFileSync(join(f.root, f.archive.relativePath, "..", "manifest.json"), "utf8")))
+        .toMatchObject({ attempt_count: b.uploadAttempt });
+    } finally { secondaryDb.close(); f.database?.close(); }
+  });
+
+  it("rejects a stale lower attempt before it can promote over B", async () => {
+    const f = await fencingFixture("stale_promotion");
+    const internal = f.service as unknown as { writeManifest: (...args: unknown[]) => Promise<string> };
+    const write = internal.writeManifest.bind(f.service);
+    let reached!: () => void;
+    let release!: () => void;
+    const paused = new Promise<void>((resolve) => { reached = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let first = true;
+    internal.writeManifest = async (...args) => {
+      const path = await write(...args);
+      if (first) { first = false; reached(); await gate; }
+      return path;
+    };
+    const stale = f.service.complete(f.runtime.id, f.issue.id, f.archive.id, f.firstAttempt);
+    await paused;
+    f.store.markSessionArchiveFailedAttempt(f.archive.id, f.runtime.id, f.firstAttempt, "retry");
+    await f.service.retry(f.archive.id);
+    const b = await f.service.claimUploadAttempt(f.runtime.id, f.issue.id, f.archive.id);
+    await f.service.upload(f.runtime.id, f.issue.id, f.archive.id, b.uploadAttempt!, new Response(f.fixture.bytes).body);
+    expect((await f.service.complete(f.runtime.id, f.issue.id, f.archive.id, b.uploadAttempt!)).status).toBe("ready");
+    release();
+    await expect(stale).rejects.toMatchObject({ code: "session_archive_attempt_conflict" });
+    expect(readFileSync(f.finalPath)).toEqual(Buffer.from(f.fixture.bytes));
+    expect(JSON.parse(readFileSync(join(f.root, f.archive.relativePath, "..", "manifest.json"), "utf8")))
+      .toMatchObject({ attempt_count: b.uploadAttempt });
+  });
   it("accepts one Issue package with multiple sessions, retry, delegation, and another provider Runtime on the same daemon", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-archive-issue-members-"));
     dirs.push(root);
