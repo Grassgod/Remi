@@ -44,6 +44,7 @@ import type {
 import {
   FEISHU_CONCIERGE_ATTACHMENT_PROTOCOL_VERSION,
   FEISHU_DECISION_CARD_PROTOCOL_VERSION,
+  type FeishuDecisionDegradeReason,
   type FeishuPresentationCheckpoint,
   FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER,
   MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
@@ -495,6 +496,8 @@ export class MultiremiDaemonClient {
       error?: string | null;
       presentation?: FeishuPresentationCheckpoint;
       retryable?: boolean;
+      interactionOpenId?: string | null;
+      degraded?: FeishuDecisionDegradeReason | null;
     },
   ): Promise<void> {
     await this.post(
@@ -504,10 +507,38 @@ export class MultiremiDaemonClient {
         status: input.status,
         external_message_id: input.externalMessageId ?? undefined,
         error: input.error ?? undefined,
+        ...(input.interactionOpenId !== undefined ? { interaction_open_id: input.interactionOpenId } : {}),
+        ...(input.degraded !== undefined ? { degraded: input.degraded } : {}),
         presentation: input.presentation,
         retryable: input.retryable,
       },
     );
+  }
+
+  /**
+   * Cards this Runtime must keep answering clicks for (MUL-407). The host calls
+   * this on every start to rebuild the click map it lost with the process.
+   */
+  async listFeishuBotDecisionCards(runtimeId: string): Promise<Array<{
+    requestId: string;
+    taskId: string;
+    chatId: string;
+    messageId: string;
+    recipientOpenId: string;
+  }>> {
+    const resp = await this.get<{ cards?: Array<Record<string, unknown>> }>(
+      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/feishu-bot/decision-cards`,
+    );
+    return (resp.cards ?? []).flatMap((card) => {
+      const requestId = typeof card.request_id === "string" ? card.request_id : null;
+      const taskId = typeof card.task_id === "string" ? card.task_id : null;
+      const chatId = typeof card.chat_id === "string" ? card.chat_id : null;
+      const messageId = typeof card.message_id === "string" ? card.message_id : null;
+      const recipientOpenId = typeof card.recipient_open_id === "string" ? card.recipient_open_id : null;
+      return requestId && taskId && chatId && messageId && recipientOpenId
+        ? [{ requestId, taskId, chatId, messageId, recipientOpenId }]
+        : [];
+    });
   }
 
   async prepareFeishuBotOutboundMention(

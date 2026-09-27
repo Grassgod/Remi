@@ -175,6 +175,47 @@ export interface TaskInteractionCardOptions {
 }
 
 /**
+ * Wire shape of every decision-card delivery body (MUL-407).
+ *
+ * The control plane writes it and the host parses it, so the two used to drift
+ * the moment one side changed: a terminal patch was written as a bare card while
+ * the host only understood the envelope, and the host then PATCHed an empty card
+ * over the live one. Both directions now go through the helpers below, so a
+ * shape change is a compile error on the writing side.
+ */
+export interface DecisionCardBody {
+  /** The rendered card for `decision_card` and the terminal card for a patch. */
+  card: Record<string, unknown>;
+  /** Plain-text twin used when a card cannot be delivered at all. */
+  fallback_text?: string;
+}
+
+export function encodeDecisionCardBody(body: DecisionCardBody): string {
+  return JSON.stringify(body);
+}
+
+/**
+ * Decode a delivery body. Returns `null` for anything that is not an envelope,
+ * so a caller cannot mistake "unparseable" for "a card with no elements" and
+ * send an empty PATCH. Legacy plain-text bodies (a reminder, a topic seed) are
+ * the caller's business, not this function's.
+ */
+export function decodeDecisionCardBody(raw: string): DecisionCardBody | null {
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const card = parsed?.card;
+    if (!card || typeof card !== "object" || Array.isArray(card)) return null;
+    if (Object.keys(card).length === 0) return null;
+    return {
+      card: card as Record<string, unknown>,
+      ...(typeof parsed.fallback_text === "string" ? { fallback_text: parsed.fallback_text } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Build the interaction card body. `header` comes from the caller because the
  * session label is connector-owned; everything else is a pure JSON shape.
  */
@@ -205,6 +246,15 @@ export function buildTaskInteractionCard(
       if (request.response.feedback) {
         elements.push({ tag: "markdown", content: escapeCardText(String(request.response.feedback)) });
       }
+    } else if (request.kind === "question" && questions) {
+      // Unanswered: the card must still say what was asked, otherwise the
+      // terminal state is unreadable next to a thread of many requests.
+      for (const question of questions.questions) {
+        elements.push({ tag: "markdown", content: `**${escapeCardText(question.question)}**` });
+      }
+    } else {
+      const title = String(tool.title ?? tool.name ?? "操作审批");
+      elements.push({ tag: "markdown", content: `**${escapeCardText(title)}**` });
     }
     const receipt = interactionReceiptLine(request);
     if (receipt) elements.push({ tag: "markdown", content: receipt });

@@ -51,6 +51,8 @@ import {
 import {
   FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION,
   FEISHU_DECISION_CARD_PROTOCOL_VERSION,
+  FEISHU_DECISION_DEGRADE_REASONS,
+  type FeishuDecisionDegradeReason,
   FEISHU_CONCIERGE_TASK_STREAM_PROTOCOL_VERSION,
   FEISHU_CONCIERGE_NATIVE_COT_PROTOCOL_VERSION,
   FEISHU_CONCIERGE_ATTACHMENT_PROTOCOL_VERSION,
@@ -536,6 +538,25 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
 
+  /**
+   * Cards this Runtime must keep answering clicks for (MUL-407). The host's
+   * click map is process-local, so it re-registers from here on every start;
+   * unlike a Task-stream card there is no presentation checkpoint to replay.
+   */
+  app.get("/api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards", (c) => {
+    const runtimeId = c.req.param("runtimeId");
+    if (currentAccessToken(c)?.type !== "daemon") {
+      return c.json({ error: "daemon token required", code: "daemon_token_required" }, 403);
+    }
+    const denied = denyDaemonTokenRuntimeIdentity(c, store, runtimeId);
+    if (denied) return denied;
+    const runtime = store.getRuntimeLite(runtimeId);
+    if (!runtime) return c.json({ error: "runtime not found", code: "runtime_not_found" }, 404);
+    const cards = store.listFeishuBotLiveDecisionCards(runtime.workspaceId ?? "local", runtimeId);
+    c.header("Cache-Control", "no-store");
+    return c.json({ cards });
+  });
+
   app.post("/api/daemon/runtimes/:runtimeId/feishu-bot/status", async (c) => {
     const runtimeId = c.req.param("runtimeId");
     const denied = denyDaemonTokenRuntimeIdentity(c, store, runtimeId);
@@ -589,6 +610,8 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       mention_open_id?: unknown;
       presentation?: unknown;
       retryable?: unknown;
+      interaction_open_id?: unknown;
+      degraded?: unknown;
     }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const claimToken = cleanString(typeof body.claim_token === "string" ? body.claim_token : null);
@@ -617,6 +640,9 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
         error: body.error ? redactFeishuBotError(String(body.error)) : null,
         presentation,
         retryable: typeof body.retryable === "boolean" ? body.retryable : undefined,
+        interactionOpenId: body.interaction_open_id === null ? null
+          : cleanString(typeof body.interaction_open_id === "string" ? body.interaction_open_id : null),
+        degraded: normalizeDecisionDegradeReason(body.degraded),
       },
     );
     if (!accepted) return c.json({ error: "outbound delivery lease is stale", code: "stale_lease" }, 409);
@@ -1409,4 +1435,11 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
 function normalizeDaemonProtocolVersion(value: unknown): number {
   const protocol = Number(value);
   return Number.isSafeInteger(protocol) && protocol >= 0 ? protocol : 0;
+}
+
+/** Decision lanes only; anything else is treated as "not reported". */
+function normalizeDecisionDegradeReason(value: unknown): FeishuDecisionDegradeReason | undefined {
+  return typeof value === "string" && FEISHU_DECISION_DEGRADE_REASONS.includes(value as FeishuDecisionDegradeReason)
+    ? value as FeishuDecisionDegradeReason
+    : undefined;
 }

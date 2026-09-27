@@ -94,43 +94,65 @@ remain retryable. Settled human requests are not reopened during replay.
 
 An Issue task that asks a human for input no longer wakes a relay Agent to ask in
 prose. The control plane builds the card itself and queues it as a
-`decision_card` outbound delivery; the bot host only resolves the @, sends it,
-and later rewrites it. `buildTaskInteractionCard` lives in
-`packages/shared/src/feishu-task-card.ts` so both sides render the same JSON.
+`decision_card` outbound delivery; the bot host resolves the @, sends it,
+registers the click, and later rewrites it. `buildTaskInteractionCard` and the
+`encodeDecisionCardBody`/`decodeDecisionCardBody` pair live in
+`packages/shared/src/feishu-task-card.ts`, so the writer and the reader cannot
+disagree about the body shape.
 
 The lane is gated on the host's own declaration: a daemon that reports
 `feishu_decision_card: 1` on its heartbeat gets cards, and one that does not keeps
 the previous relay-wake behavior. Silence is an answer, so a downgraded build
-stops receiving cards on its next heartbeat.
+stops receiving cards on its next heartbeat. A host that lacks the flag skips only
+card rows; the claim filter is part of the query, so ordinary deliveries queueing
+behind a card still go out.
 
 Who may press the button comes from the topic's `notifyMode`. `person` names the
 open ID in `interaction_open_id` before the delivery is queued; `group_owner` is
-resolved by the host with the bot token and filled into the card's @ slot; `none`
-queues no card at all. A click is accepted only when the callback's chat matches
-and the operator's open ID equals the checkpointed recipient — anyone else gets a
-toast. `multiremi_task_human_requests.expires_at` carries the deadline (the
-server defaults to one hour when an older daemon sends no `timeout_ms`).
+resolved by the host with the bot token, and the recipient it used is
+checkpointed when it reports the send; `none` never produces a card. A click is
+accepted only when the callback's chat matches and the operator's open ID equals
+the checkpointed recipient — anyone else gets the 「请由卡片中指定的处理人提交」
+toast.
 
-The lifecycle feeds three delivery kinds, keyed by request id:
-`decision_card` (send), `decision_card_patch` (rewrite in place after a response,
-timeout, or cancellation) and `decision_reminder` (one text nudge mentioning the
-requester, materialized at claim time inside
-`[expires_at - 10min, expires_at]` and deduplicated by `reminder_sent_at`).
-MUL-403 replaces the event source — the request write plus host polling today,
-a Live Hub subscription later — without changing these kinds or the checkpoint
-fields.
+The click handler lives in the bot host process. Since this lane has no Task
+stream, there is no presentation checkpoint to replay: the host rebuilds its
+registrations from `GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards`,
+which lists the pending requests whose cards it sent. That is what keeps a button
+on screen working across a host restart.
 
-Two degradations keep the question from being lost. A send that fails with a
-non-retryable Feishu error falls back to the text twin the delivery already
-carries: the question, its numbered options, and the parent Issue's workbench
-link. A retryable failure stays on the outbox backoff. An Issue whose topic has
-no seed message gets no card and records the `decision_card_skipped` activity,
-so the request is visible on the web workbench only.
+`multiremi_task_human_requests.expires_at` carries the deadline (the server
+defaults to one hour when an older daemon sends no `timeout_ms`). The lifecycle
+feeds three delivery kinds, keyed by request id: `decision_card` (send),
+`decision_card_patch` (rewrite in place after a response, timeout, or
+cancellation) and `decision_reminder` (one text nudge that @s the person who was
+asked). MUL-403 replaces the event source — the request write plus host polling
+today, a Live Hub subscription later — without changing these kinds or the
+checkpoint fields.
+
+A reminder is due at `expires_at - min(10min, half the request's lifetime)`, so a
+five-minute unattended request is not already due the moment its card is sent. It
+is materialized inside the claim transaction and deduplicated by
+`reminder_sent_at`; a request whose card has not gone out yet does not consume
+that one slot, so a host that was offline across the window still delivers exactly
+one nudge after it returns (as long as at least a minute of the deadline remains).
+
+Degradations all end in the same place — plain text carrying the question, its
+numbered options and the parent Issue's workbench link, with no internal ids and
+no @. Three cases reach it: `notifyMode = none`, an unusable `person` target, and
+a `group_owner` the host cannot resolve. Those rows are written as `decision_card`
+with a `degraded` reason, so the host posts text and the control plane skips both
+the terminal patch and the reminder's @. A fourth case is decided at send time: a
+non-retryable Feishu rejection replaces the card with the same text twin and
+reports `send_failed`. Retryable failures stay on the outbox backoff. An Issue
+whose topic has no seed message gets no delivery at all and records the
+`decision_card_skipped` activity, so the request is visible on the web workbench
+only.
 
 An expired request is never an approval: the terminal card reads
-「已超时，未回答」and the task takes the existing cancel path. Receipts and
-reaction updates are best-effort; their failure is logged and never moves a
-delivery's state.
+「已超时，未回答」and the task takes the existing cancel path. The decision lanes
+carry no receipt or reaction target (`task_id` is NULL), so their failure modes do
+not exist here.
 
 An additive nullable `mention_snapshot` column on outbound deliveries stores
 recipient policy/resolution. Existing settings default to `group_owner`, with no

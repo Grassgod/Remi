@@ -3205,11 +3205,15 @@ export function runMigrations(db: SqlDatabase): void {
   // meaning (topic seed, Task stream, or plain text).
   addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "kind TEXT");
   addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "human_request_id TEXT");
+  addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "human_request_task_id TEXT");
   addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "expires_at TEXT");
   // A patch lane edits an already-sent message instead of creating one, so it
   // must name its target rather than reuse `external_message_id` (which means
   // "the message this delivery produced").
   addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "target_message_id TEXT");
+  // Why a decision lane carried plain text instead of a card. NULL means the
+  // delivery is a normal card (or not a decision lane at all).
+  addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "degraded TEXT");
   db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_human_requests_expiry
     ON multiremi_task_human_requests(status, expires_at)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_outbound_kind

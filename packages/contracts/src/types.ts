@@ -4119,6 +4119,25 @@ export type FeishuHumanRequestLifecycleEvent =
   | "expired"
   | "cancelled";
 
+/**
+ * Why a decision lane fell back to plain text (MUL-407). The first three mean
+ * "nobody could be identified as the person to ask", so the reminder must not
+ * @ anyone; `send_failed` keeps whatever recipient was already resolved.
+ */
+export type FeishuDecisionDegradeReason =
+  | "notify_none"
+  | "invalid_recipient"
+  | "unresolved_recipient"
+  | "send_failed";
+
+/** Reasons where no one was addressable, so a reminder must not @ anyone. */
+export const FEISHU_DECISION_NO_RECIPIENT_REASONS: readonly FeishuDecisionDegradeReason[] =
+  ["notify_none", "invalid_recipient", "unresolved_recipient"];
+
+/** Every reason a decision lane may report, accepted at the daemon boundary. */
+export const FEISHU_DECISION_DEGRADE_REASONS: readonly FeishuDecisionDegradeReason[] =
+  [...FEISHU_DECISION_NO_RECIPIENT_REASONS, "send_failed"];
+
 /** What the control plane wants the selected Runtime to do with the connector. */
 export type FeishuBotDesiredState = "running" | "stopped";
 
@@ -4186,9 +4205,24 @@ export interface MultiremiFeishuBotOutboundDelivery {
   /** Set on every decision-card lane so the host can poll the request. */
   humanRequestId?: string;
   human_request_id?: string;
+  /**
+   * The Task that asked. The host needs it to read and answer the request over
+   * the existing task-scoped routes, including after it restarts and has to
+   * re-register a card it no longer remembers sending.
+   */
+  humanRequestTaskId?: string;
+  human_request_task_id?: string;
   /** `decision_card_patch` only: the message this lane rewrites in place. */
   targetMessageId?: string;
   target_message_id?: string;
+  /**
+   * Set when a decision lane could not address the person who was asked
+   * (MUL-407). The host then sends `body` as plain text instead of rendering a
+   * card, and the control plane skips both the terminal patch and the reminder
+   * mention for this request.
+   */
+  degraded?: FeishuDecisionDegradeReason;
+  degradeReason?: FeishuDecisionDegradeReason;
   /** Reminder deadline for `decision_card` / `decision_reminder`. */
   expiresAt?: string | null;
   expires_at?: string | null;

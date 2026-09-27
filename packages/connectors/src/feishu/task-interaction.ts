@@ -65,7 +65,13 @@ export function parseQuestionAnswers(questions: AskUserQuestion[], form: Record<
 
 interface PendingInteraction {
   appId: string; chatId: string; messageId: string; recipientOpenId?: string;
-  request: MultiremiTaskHumanRequest; agentName?: string | null; sessionId?: string | null;
+  /** Present for a Task-stream card; a decision card resolves it on demand. */
+  request?: MultiremiTaskHumanRequest; agentName?: string | null; sessionId?: string | null;
+  /**
+   * Decision cards resolve their request on demand (MUL-407); a Task-stream
+   * card already holds the request it was rendered from.
+   */
+  getRequest?: () => Promise<MultiremiTaskHumanRequest | null>;
   submit: (response: Record<string, unknown>) => Promise<MultiremiTaskHumanRequest>;
   settled?: MultiremiTaskHumanRequest;
   submitting?: Promise<MultiremiTaskHumanRequest>;
@@ -79,6 +85,60 @@ export function registerTaskInteraction(entry: PendingInteraction): { current: (
   return { current: () => entry.settled, dispose: () => { if (pending.get(key) === entry) pending.delete(key); } };
 }
 
+/** What a decision card needs from its owner to answer a click (MUL-407). */
+export interface DecisionCardInteraction {
+  appId: string;
+  chatId: string;
+  messageId: string;
+  recipientOpenId: string;
+  /**
+   * Re-read the request on every click. Capturing it would freeze the payload
+   * and status the host happened to hold when it registered, which is wrong
+   * for a restarted host re-registering a card it did not send in this process.
+   */
+  getRequest: () => Promise<MultiremiTaskHumanRequest | null>;
+  submit: (response: Record<string, unknown>) => Promise<MultiremiTaskHumanRequest>;
+  agentName?: string | null;
+  sessionId?: string | null;
+}
+
+/**
+ * Register a click handler for a decision card (MUL-407).
+ *
+ * The Task-stream presentation registers its own cards from the checkpoint it
+ * owns; a decision card has no stream, so the host registers here instead. The
+ * request is resolved on demand, which is what lets a restarted host rebuild
+ * the same registration from the persisted delivery row.
+ */
+export function registerDecisionCardInteraction(
+  entry: DecisionCardInteraction,
+): { dispose: () => void } {
+  const key = `${entry.appId}:${entry.messageId}`;
+  pending.set(key, {
+    appId: entry.appId,
+    chatId: entry.chatId,
+    messageId: entry.messageId,
+    recipientOpenId: entry.recipientOpenId,
+    agentName: entry.agentName ?? null,
+    sessionId: entry.sessionId ?? null,
+    getRequest: entry.getRequest,
+    submit: async response => {
+      const request = await entry.getRequest();
+      if (request && request.status !== "pending") return request;
+      try {
+        return await entry.submit(response);
+      } catch (error) {
+        // A concurrent answer (the web workbench, or a second device) wins;
+        // report its result rather than failing a request already settled.
+        const latest = await entry.getRequest();
+        if (latest && latest.status !== "pending") return latest;
+        throw error;
+      }
+    },
+  });
+  return { dispose: () => { if (pending.get(key)) pending.delete(key); } };
+}
+
 /** Native-task actions are never passed to the legacy in-memory permission map. */
 export async function handleTaskInteractionEvent(appId: string, raw: unknown): Promise<Card | null> {
   const event = object(raw), action = object(event.action), context = object(event.context);
@@ -88,17 +148,26 @@ export async function handleTaskInteractionEvent(appId: string, raw: unknown): P
   if (!entry) return toast("请求已处理，或正在恢复，请稍后重试", "info");
   if (context.open_chat_id !== entry.chatId || !entry.recipientOpenId
     || object(event.operator).open_id !== entry.recipientOpenId) return toast("请由卡片中指定的处理人提交");
-  const marker = interactionMarker(entry.request.taskId, entry.request.id);
+  // A decision card re-reads the request so an answer given on the web while
+  // the card was on screen is reflected instead of being overwritten.
+  const request = entry.getRequest ? await entry.getRequest() : entry.request ?? null;
+  if (!request) return toast("请求已处理，或正在恢复，请稍后重试", "info");
+  if (request.status !== "pending") {
+    return { ...toast("请求已结束", "info"),
+      card: { type: "raw", data: buildTaskInteractionCard(request,
+        { agentName: entry.agentName, sessionId: entry.sessionId, receipt: true }) } };
+  }
+  const marker = interactionMarker(request.taskId, request.id);
   try {
     let response: Record<string, unknown>;
     const form = object(action.form_value);
-    if (entry.request.kind === "question") {
+    if (request.kind === "question") {
       if (action.name !== marker) return toast("操作与当前问题不匹配");
-      const data = normalizeQuestions(entry.request.payload.questions);
+      const data = normalizeQuestions(request.payload.questions);
       if (!data) return toast("问题格式无效，请在工作台处理");
       response = { answers: parseQuestionAnswers(data.questions, form) };
     } else {
-      const options = normalizePermissionOptions(entry.request.payload.options);
+      const options = normalizePermissionOptions(request.payload.options);
       const index = options.findIndex((_, i) => action.name === `${marker}_o${i}`);
       if (index < 0) return toast("审批选项无效");
       response = { option_id: options[index]!.optionId };

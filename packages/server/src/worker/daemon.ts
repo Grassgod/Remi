@@ -1096,6 +1096,17 @@ export class MultiremiDaemon {
     return (await this.client.getTaskHumanRequest(taskId, requestId))?.status === "pending";
   }
 
+  /** Cards this Runtime still owes click handlers for (MUL-407 restart recovery). */
+  listFeishuBotDecisionCards(): Promise<Array<{
+    requestId: string;
+    taskId: string;
+    chatId: string;
+    messageId: string;
+    recipientOpenId: string;
+  }>> {
+    return this.client.listFeishuBotDecisionCards(this.options.runtimeId!);
+  }
+
   getFeishuBotHumanRequest(taskId: string, requestId: string): Promise<MultiremiTaskHumanRequest | null> {
     return this.client.getTaskHumanRequest(taskId, requestId);
   }
