@@ -10,6 +10,16 @@
  * `MULTIREMI_TOKEN` — so a peer does not need a user or daemon credential, and
  * an unauthenticated caller gets 401 rather than the app's anonymous-admin path.
  *
+ * The two paths are also the *only* ones exempted from the dashboard auth
+ * middleware, by exact match: a future `/internal/*` route added without its own
+ * guard must still meet dashboard auth rather than inherit an exemption from a
+ * broader prefix rule.
+ *
+ * A process with no `MULTIREMI_PEER_URL` refuses every POST with the same 401 as
+ * a wrong credential, including one that presents the configured secret. Whether
+ * this process is half of a split is configuration, and configuration is not
+ * something a caller should be able to probe.
+ *
  * Inbound events are handed to the local fanout, which delivers them to this
  * process's WebSocket registries and never forwards them again.
  *
@@ -57,9 +67,11 @@ export function registerPeerRoutes(app: Hono, deps: PeerRouteDeps): void {
   });
 
   app.post("/internal/peer/events", async (c) => {
-    if (!secretMatches(bearerToken(c), deps.secret)) return unauthorized(c);
     const peer = deps.peer;
-    if (!peer) return c.json({ error: "peer channel disabled" }, 503);
+    // Credential first, then configuration: a caller that does not hold the
+    // secret learns nothing about how this process is deployed.
+    if (!secretMatches(bearerToken(c), deps.secret)) return unauthorized(c);
+    if (!peer) return unauthorized(c);
     let body: unknown;
     try {
       body = await c.req.json();
@@ -68,7 +80,15 @@ export function registerPeerRoutes(app: Hono, deps: PeerRouteDeps): void {
     }
     const batch = parsePeerEventBatch(body);
     if (!batch) return c.json({ error: "invalid batch" }, 400);
-    const result = peer.receive(batch.topic, batch.events);
-    return c.json({ ok: true, accepted: result.accepted, rejected: result.rejected });
+    const result = peer.receive(batch.topic, batch.events, {
+      epoch: batch.epoch,
+      batchSeq: batch.batch_seq,
+    });
+    return c.json({
+      ok: true,
+      accepted: result.accepted,
+      rejected: result.rejected,
+      ...(result.duplicate ? { duplicate: true as const } : {}),
+    });
   });
 }

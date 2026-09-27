@@ -25,6 +25,16 @@ import type {
 
 export const PEER_EVENT_PROTOCOL_VERSION = 1 as const;
 
+/**
+ * Largest single event envelope the peer channel will carry, in bytes.
+ *
+ * The batch body has to fit one POST, and the receiving process has to parse it
+ * without stalling its event loop, so a single event may never approach that
+ * size. Callers that can split or degrade do so before publishing; the channel
+ * drops and counts anything still over the line.
+ */
+export const PEER_MAX_EVENT_BYTES = 1_048_576 as const;
+
 export const PEER_EVENT_KINDS = [
   "task_enqueued",
   "task_event",
@@ -49,17 +59,38 @@ export interface PeerWorkspaceEvent {
   actorId?: string | null;
 }
 
+/**
+ * A task reference used when the full task would not fit one event (MUL-462).
+ *
+ * `MultiremiTask.prompt` is capped at 2 MiB, so a queued task can exceed the
+ * 1 MiB event budget without any client misbehaving. The receiver shares the
+ * database with the sender, so it rebuilds the frame from `task_id` and gets the
+ * same row. `task_messages` never needs this: it is split per message instead.
+ */
+export interface PeerTaskReference {
+  task_id: string;
+  /** True when the sender dropped the task body and the receiver must re-read it. */
+  degraded: true;
+}
+
 export interface PeerTaskEnqueuedPayload {
-  task: MultiremiTask;
+  /** Absent on a degraded event; use `task_id` then. */
+  task?: MultiremiTask;
+  task_id: string;
+  degraded?: true;
 }
 
 export interface PeerTaskEventPayload {
   type: string;
-  task: MultiremiTask;
+  /** Absent on a degraded event; use `task_id` then. */
+  task?: MultiremiTask;
+  task_id: string;
+  degraded?: true;
 }
 
 export interface PeerTaskMessagesPayload {
   task: MultiremiTask;
+  /** One message per event: the sender splits a batch of appends before queueing. */
   messages: MultiremiTaskMessage[];
 }
 
@@ -105,6 +136,18 @@ export type PeerEventEnvelope = {
 export interface PeerEventBatch {
   topic: string;
   /**
+   * Sender identity for this process lifetime. A receiver keeps one high-water
+   * mark per epoch, so a retry that the sender never saw the response for is
+   * recognized instead of delivered twice.
+   */
+  epoch: string;
+  /**
+   * Monotonic per-epoch batch number. A batch keeps its number across retries,
+   * and the sender only ever has one batch in flight, so "at or below the high
+   * water mark" is exactly "already handled".
+   */
+  batch_seq: number;
+  /**
    * Envelopes are validated one at a time by the receiver, not here: rejecting
    * the whole body over one bad frame would make the sender retry that batch
    * forever and wedge its queue behind it.
@@ -118,6 +161,11 @@ export interface PeerEventAck {
   accepted: number;
   /** Envelopes refused: malformed, wrong version, or this process's own origin. */
   rejected: number;
+  /**
+   * The batch was already handled under this epoch and `batch_seq`, so nothing
+   * was delivered again. The sender treats it exactly like a fresh success.
+   */
+  duplicate?: true;
 }
 
 /**
@@ -139,10 +187,18 @@ export interface PeerHealth {
   received?: number;
   /** Inbound envelopes refused (malformed, or our own origin echoed back). */
   rejected?: number;
+  /** Batches recognized as retries and answered without re-delivering. */
+  duplicates?: number;
+  /** Inbound events the sender had to slim down to a task reference. */
+  degraded?: number;
   sent?: number;
   batches?: number;
   dropped?: number;
+  /** Events discarded because one event alone exceeded the 1 MiB budget. */
+  oversize_dropped?: number;
   failed?: number;
+  /** Bytes currently held by the send queue. */
+  queued_bytes?: number;
   rtt_p95_ms?: number;
 }
 
@@ -162,15 +218,23 @@ export function parsePeerEventEnvelope(value: unknown): PeerEventEnvelope | null
 /**
  * Narrow an unknown JSON body to a batch, or null when it is not one.
  *
- * Shape only: `topic` plus an `events` array. Individual envelopes are the
- * receiver's business (see `PeerEventBatch.events`), and a body with no topic
- * is rejected rather than guessed at, so a caller cannot silently post a stream
- * nobody subscribed to.
+ * Shape only: `topic`, the dedupe pair (`epoch`, `batch_seq`), and an `events`
+ * array. Individual envelopes are the receiver's business (see
+ * `PeerEventBatch.events`), and a body missing its topic or its dedupe pair is
+ * rejected rather than guessed at: without them the receiver could neither
+ * route nor deduplicate.
  */
 export function parsePeerEventBatch(value: unknown): PeerEventBatch | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
   if (!Array.isArray(record.events)) return null;
   if (typeof record.topic !== "string" || !record.topic.trim()) return null;
-  return { topic: record.topic.trim(), events: record.events };
+  if (typeof record.epoch !== "string" || !record.epoch.trim()) return null;
+  if (!Number.isInteger(record.batch_seq) || (record.batch_seq as number) < 1) return null;
+  return {
+    topic: record.topic.trim(),
+    epoch: record.epoch.trim(),
+    batch_seq: record.batch_seq as number,
+    events: record.events,
+  };
 }

@@ -86,6 +86,12 @@ export interface PeerSummary {
   dropped: number;
   failed: number;
   rtt_p95_ms: number;
+  /** Events dropped because one event alone exceeded the per-event budget. */
+  oversize_dropped: number;
+  /** Outbound events the sender slimmed down to a task reference. */
+  degraded: number;
+  /** Inbound batches recognized as retries and answered without re-delivering. */
+  duplicates: number;
 }
 
 export interface MinuteSummary {
@@ -150,9 +156,15 @@ const processDbCounters = { dbMs: 0, dbQueries: 0, dbBytes: 0 };
  * across the next one. `rttSamples` is bounded so a long-lived process cannot
  * accumulate one number per batch forever.
  */
-const lifetimePeerCounters = { sent: 0, batches: 0, dropped: 0, failed: 0 };
+const lifetimePeerCounters = {
+  sent: 0, batches: 0, dropped: 0, failed: 0,
+  oversizeDropped: 0, degraded: 0, duplicates: 0,
+};
 const lifetimePeerRttSamples: number[] = [];
-const windowPeerCounters = { sent: 0, batches: 0, dropped: 0, failed: 0 };
+const windowPeerCounters = {
+  sent: 0, batches: 0, dropped: 0, failed: 0,
+  oversizeDropped: 0, degraded: 0, duplicates: 0,
+};
 let windowPeerRttSamples: number[] = [];
 const PEER_RTT_SAMPLE_CAPACITY = 1024;
 
@@ -163,6 +175,34 @@ export function recordPeerDropped(count = 1): void {
   if (value === 0) return;
   lifetimePeerCounters.dropped += value;
   windowPeerCounters.dropped += value;
+}
+
+/**
+ * One event was discarded because it alone exceeded the per-event byte budget
+ * and its kind could not be degraded to a task reference.
+ *
+ * Counted separately from plain `dropped` (queue overflow) because the two need
+ * different responses: overflow is a slow peer, oversize is an event the
+ * contract says cannot happen.
+ */
+export function recordPeerOversizeDropped(): void {
+  if (!requestMetricsEnabled) return;
+  lifetimePeerCounters.oversizeDropped += 1;
+  windowPeerCounters.oversizeDropped += 1;
+}
+
+/** One outbound event was slimmed down to a task reference before sending. */
+export function recordPeerDegraded(): void {
+  if (!requestMetricsEnabled) return;
+  lifetimePeerCounters.degraded += 1;
+  windowPeerCounters.degraded += 1;
+}
+
+/** One inbound batch was recognized as a retry and not delivered again. */
+export function recordPeerDuplicate(): void {
+  if (!requestMetricsEnabled) return;
+  lifetimePeerCounters.duplicates += 1;
+  windowPeerCounters.duplicates += 1;
 }
 
 /** One POST failed; the sender retries that batch with backoff. */
@@ -203,11 +243,17 @@ export function drainPeerWindowMetrics(): PeerSummary {
     dropped: windowPeerCounters.dropped,
     failed: windowPeerCounters.failed,
     rtt_p95_ms: round1(percentile(windowPeerRttSamples, 0.95)),
+    oversize_dropped: windowPeerCounters.oversizeDropped,
+    degraded: windowPeerCounters.degraded,
+    duplicates: windowPeerCounters.duplicates,
   };
   windowPeerCounters.sent = 0;
   windowPeerCounters.batches = 0;
   windowPeerCounters.dropped = 0;
   windowPeerCounters.failed = 0;
+  windowPeerCounters.oversizeDropped = 0;
+  windowPeerCounters.degraded = 0;
+  windowPeerCounters.duplicates = 0;
   windowPeerRttSamples = [];
   return summary;
 }
@@ -220,6 +266,9 @@ export function peerMetricsSnapshot(): PeerSummary {
     dropped: lifetimePeerCounters.dropped,
     failed: lifetimePeerCounters.failed,
     rtt_p95_ms: round1(percentile(lifetimePeerRttSamples, 0.95)),
+    oversize_dropped: lifetimePeerCounters.oversizeDropped,
+    degraded: lifetimePeerCounters.degraded,
+    duplicates: lifetimePeerCounters.duplicates,
   };
 }
 
@@ -562,7 +611,10 @@ export function summarizeWindow(input: WindowSummaryInput): MinuteSummary {
     db_queries: Math.max(0, Math.trunc(finite(input.dbQueries))),
     event_loop_lag_max_ms: round1(finite(input.eventLoopLagMaxMs)),
     routes: routes.slice(0, top),
-    peer: input.peer ?? { sent: 0, batches: 0, dropped: 0, failed: 0, rtt_p95_ms: 0 },
+    peer: input.peer ?? {
+      sent: 0, batches: 0, dropped: 0, failed: 0, rtt_p95_ms: 0,
+      oversize_dropped: 0, degraded: 0, duplicates: 0,
+    },
   };
 }
 
@@ -866,11 +918,17 @@ export function resetRequestMetricsForTest(): void {
   lifetimePeerCounters.batches = 0;
   lifetimePeerCounters.dropped = 0;
   lifetimePeerCounters.failed = 0;
+  lifetimePeerCounters.oversizeDropped = 0;
+  lifetimePeerCounters.degraded = 0;
+  lifetimePeerCounters.duplicates = 0;
   lifetimePeerRttSamples.length = 0;
   windowPeerCounters.sent = 0;
   windowPeerCounters.batches = 0;
   windowPeerCounters.dropped = 0;
   windowPeerCounters.failed = 0;
+  windowPeerCounters.oversizeDropped = 0;
+  windowPeerCounters.degraded = 0;
+  windowPeerCounters.duplicates = 0;
   windowPeerRttSamples = [];
   requestMetricsEnabled = true;
   warnEmitted = false;

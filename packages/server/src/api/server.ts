@@ -170,7 +170,7 @@ import type {
   MultiremiWebSocketData,
   WebhookRateLimitConfig,
 } from "./helpers.js";
-import { createRealtimeFanout } from "./realtime-fanout.js";
+import { createRealtimeFanout, resolveLocalRealtimeRole } from "./realtime-fanout.js";
 import {
   createPeerChannel,
   resolvePeerSecret,
@@ -252,6 +252,14 @@ export interface MultiremiApiOptions {
   peerSecret?: string | null;
 }
 
+/**
+ * The only two `/internal/` routes that exist, and so the only two the dashboard
+ * auth middleware may skip. A prefix rule would silently exempt whatever route
+ * someone adds under `/internal/` next; an exact match makes an unguarded new
+ * route meet dashboard auth instead.
+ */
+const PEER_INTERNAL_PATHS = new Set(["/internal/peer/events", "/internal/peer/health"]);
+
 export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   const store = options.store ?? new MultiremiStore();
   const scheduler = options.scheduler ?? null;
@@ -272,6 +280,9 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   const sessionArchives = options.sessionArchives ?? new SessionArchiveService(store);
   const messagingProviders = options.messagingProviders ?? createMessageProviderRegistry();
   const requestMetricsOptions = options.requestMetrics ?? resolveRequestMetricsOptions();
+  // A configured peer URL is the split switch: it is what turns this process
+  // into one half of a two-process deployment.
+  const splitConfigured = Boolean(resolvePeerUrl()) || Boolean(options.peerChannel);
   const daemonDirectBaseUrl = normalizeDaemonDirectBaseUrl(
     options.daemonDirectBaseUrl === undefined
       ? process.env.MULTIREMI_DAEMON_DIRECT_BASE_URL
@@ -342,7 +353,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
         path === "/favicon.ico" ||
         path === "/api/config" ||
         path === "/readyz" ||
-        path.startsWith("/internal/") ||
+        PEER_INTERNAL_PATHS.has(path) ||
         path.startsWith("/auth/") ||
         path.startsWith("/health") ||
         path.startsWith("/api/remi/releases/") ||
@@ -410,10 +421,11 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     // locally hosted daemon unable to report its own state. Missing or unknown
     // credentials retain the historical anonymous-admin behavior.
     app.use("*", async (c, next) => {
-      // MUL-462: `/internal/*` never carried dashboard semantics. The peer
-      // routes authenticate themselves; without this a peer secret that happens
-      // to collide with a task token could be rejected as a denied write.
-      if (c.req.path.startsWith("/internal/")) {
+      // MUL-462: the peer routes authenticate themselves with a shared secret.
+      // Without this a peer secret that happens to collide with a task token
+      // would be rejected as a denied write. Exact paths only — see
+      // PEER_INTERNAL_PATHS.
+      if (PEER_INTERNAL_PATHS.has(c.req.path)) {
         await next();
         return;
       }
@@ -518,11 +530,16 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     connections: realtimeState.connections,
     enabled: realtimeState.enabled,
     transport: "websocket",
-    // MUL-462: `role` arrives with S10-A (MUL-461); until then this process is
-    // always `all`, which is what the pre-split server was.
-    role: "all" as const,
-    // False when no peer is configured: "no channel" must not read as unhealthy.
-    peer_healthy: options.peerChannel ? options.peerChannel.healthy() : false,
+    // MUL-462: the two split-only fields are additive, not unconditional. On a
+    // process with no role guard and no peer this body stays byte-for-byte what
+    // it was before the split, so existing consumers (CLI `platform realtime`,
+    // updaters comparing health payloads) see no change at all.
+    ...(splitConfigured
+      ? {
+        role: resolveLocalRealtimeRole(),
+        peer_healthy: options.peerChannel ? options.peerChannel.healthy() : false,
+      }
+      : {}),
   }));
   // `/internal/*` is deliberately outside the dashboard auth middleware (see
   // the `authToken` branch above): the peer authenticates with its own shared
@@ -780,6 +797,8 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   const peer = options.peerChannel === undefined
     ? (peerUrl ? createPeerChannel({ url: peerUrl, secret: peerSecret }) : null)
     : options.peerChannel;
+  // One place decides this process's role (see resolveLocalRealtimeRole).
+  const realtimeRole = resolveLocalRealtimeRole();
   const app = createMultiremiApp({
     ...options,
     store,
@@ -801,10 +820,11 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   const browserUserWebSockets: BrowserUserWebSocketRegistry = new Map();
   const browserScopeWebSockets: BrowserScopeWebSocketRegistry = new Map();
   // MUL-462: one fanout owns the four store subscriptions. It delivers locally
-  // by role and forwards to the peer; today's single process is `all`, which is
-  // exactly the two deliveries that used to live inline here.
+  // by this process's role and forwards to the peer. Until the role guard lands
+  // that role is `all`, which is exactly the two deliveries that used to live
+  // inline here.
   const realtimeFanout = createRealtimeFanout({
-    role: "all",
+    role: realtimeRole,
     store,
     peer,
     registries: {

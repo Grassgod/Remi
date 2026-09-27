@@ -16,6 +16,8 @@ import { join } from "node:path";
 import { MultiremiStore } from "@multiremi/store.js";
 import { startMultiremiServer } from "@multiremi/api.js";
 import { createPeerChannel, PEER_REALTIME_TOPIC, type PeerChannel, type PeerFetch } from "../../../packages/server/src/api/peer/peer-channel.js";
+import type { PeerEventEnvelope } from "@multiremi/contracts/peer-events.js";
+import { peerMetricsSnapshot, resetRequestMetricsForTest } from "@multiremi/observability/request-metrics.js";
 import {
   notifyBrowserTaskEvent,
   notifyBrowserTaskMessages,
@@ -27,10 +29,14 @@ import {
   createRealtimeFanout,
   type LocalRealtimeRole,
 } from "../../../packages/server/src/api/realtime-fanout.js";
+import { createMultiremiApp } from "@multiremi/api.js";
 import type { DaemonWebSocketRegistry } from "../../../packages/server/src/api/helpers/realtime-types.js";
 import { authenticateBrowserWebSocket, createStore, nextWebSocketMessage, resetMultiremiTestEnv, waitWebSocketOpen } from "./helpers.js";
 
-afterEach(resetMultiremiTestEnv);
+afterEach(() => {
+  resetMultiremiTestEnv();
+  resetRequestMetricsForTest();
+});
 
 /** A browser-registry client that records the frames it is handed. */
 function fakeBrowserClient(frames: string[], options: { workspaceId?: string; userId?: string | null } = {}) {
@@ -139,7 +145,7 @@ describe("realtime fanout — role routing", () => {
         v: 1,
         origin: "process-ui",
         kind: "task_enqueued",
-        payload: { task },
+        payload: { task, task_id: task.id },
       });
       expect(browserFrames).toHaveLength(0);
       expect(JSON.parse(daemonFrames[0]!)).toMatchObject({
@@ -458,17 +464,18 @@ describe("realtime fanout — two servers over one database", () => {
       expect(await (await fetch(`http://127.0.0.1:${serverB.port}/internal/peer/health`)).json())
         .toMatchObject({ ok: true, enabled: true });
 
+      const emptyBatch = JSON.stringify({ topic: "realtime", epoch: "process-b", batch_seq: 1, events: [] });
       const noSecret = await fetch(`http://127.0.0.1:${serverA.port}/internal/peer/events`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ topic: "realtime", events: [] }),
+        body: emptyBatch,
       });
       expect(noSecret.status).toBe(401);
 
       const wrongSecret = await fetch(`http://127.0.0.1:${serverA.port}/internal/peer/events`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: "Bearer not-the-secret" },
-        body: JSON.stringify({ topic: "realtime", events: [] }),
+        body: emptyBatch,
       });
       expect(wrongSecret.status).toBe(401);
 
@@ -477,6 +484,8 @@ describe("realtime fanout — two servers over one database", () => {
         headers: { "Content-Type": "application/json", Authorization: "Bearer peer-secret-under-test" },
         body: JSON.stringify({
           topic: "realtime",
+          epoch: "process-b",
+          batch_seq: 1,
           events: [{ v: 1, origin: "process-b", kind: "workspace_event", payload: { event: { type: "x", workspaceId: "local", payload: {} } } }],
         }),
       });
@@ -530,20 +539,32 @@ describe("realtime fanout — two servers over one database", () => {
     store.ensureLocalWorkspace();
     const server = startMultiremiServer({ store, scheduler: null, port: 0, hostname: "127.0.0.1" });
     try {
+      // QA item 2: with nothing configured this body must be exactly what main
+      // returned, key set included — no `role`, no `peer_healthy`.
       const health = (await (await fetch(`http://127.0.0.1:${server.port}/health/realtime`)).json()) as any;
-      // No peer configured must not read as an unhealthy peer.
-      expect(health).toMatchObject({ enabled: true, transport: "websocket", role: "all", peer_healthy: false });
+      expect(Object.keys(health).sort()).toEqual(["connections", "enabled", "transport"]);
+      expect(health).toEqual({ connections: 0, enabled: true, transport: "websocket" });
 
       const peerHealth = (await (await fetch(`http://127.0.0.1:${server.port}/internal/peer/health`)).json()) as any;
       expect(peerHealth).toMatchObject({ ok: true, enabled: false, peer_healthy: false });
 
-      const post = await fetch(`http://127.0.0.1:${server.port}/internal/peer/events`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: "Bearer multi" },
-        body: JSON.stringify({ topic: "realtime", events: [] }),
-      });
-      // The channel is closed: authenticating successfully still cannot inject.
-      expect(post.status).toBe(401);
+      // QA item 1: with no peer, every credential shape gets the same 401. A
+      // caller must not be able to read this process's configuration off the
+      // status code.
+      const bodies = new Set<string>();
+      for (const authorization of [undefined, "Bearer ", "Bearer multi", "Bearer wrong-secret"]) {
+        const post = await fetch(`http://127.0.0.1:${server.port}/internal/peer/events`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(authorization ? { Authorization: authorization } : {}),
+          },
+          body: JSON.stringify({ topic: "realtime", epoch: "e", batch_seq: 1, events: [] }),
+        });
+        expect(post.status).toBe(401);
+        bodies.add(await post.text());
+      }
+      expect(bodies.size).toBe(1);
 
       const agent = store.createAgent({ name: "Peer off agent", provider: "codex" });
       const runtime = store.registerRuntime({ id: "rt_peer_off", name: "Peer off runtime", provider: "codex" });
@@ -611,7 +632,8 @@ describe("realtime fanout — two servers over one database", () => {
         expect(received).toHaveLength(0);
 
         const healthRealtime = (await (await fetch(`http://127.0.0.1:${two.serverB.port}/health/realtime`)).json()) as any;
-        expect(healthRealtime.peer_healthy).toBe(false);
+        // A configured split does report the two additive fields.
+        expect(healthRealtime).toMatchObject({ role: "all", peer_healthy: false });
 
         // Bring the peer back: the surviving queue drains and delivery resumes.
         two.setLink("b", true);
@@ -626,5 +648,115 @@ describe("realtime fanout — two servers over one database", () => {
     } finally {
       two.cleanup();
     }
+  });
+});
+
+describe("realtime fanout — dedupe and guards", () => {
+  /**
+   * QA item 6: the receiver handles a batch, the response is lost, the sender
+   * retries. Before dedupe the browser got `[1, 1]` for one message; the raw WS
+   * frames are what the browser sees, so the assertion is on those, not on the
+   * client cache (which dedupes by seq and would hide the protocol bug).
+   */
+  it("does not re-deliver a batch whose ACK was lost", async () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Dedupe agent", provider: "codex" });
+    const task = store.createTask({ agentId: agent.id, prompt: "dedupe" });
+    // Persisted before the fanout subscribes, so this message reaches the browser
+    // through the peer path only: a local append here would deliver one frame by
+    // itself and hide whether the retry was deduplicated.
+    const [persisted] = store.appendTaskMessages(task.id, [{ type: "assistant", content: "once" }]);
+    const { registries, browserFrames } = registriesFor();
+
+    let posts = 0;
+    // First POST is delivered and then reported as failed: exactly an ACK lost on
+    // the way back. The second POST is the sender's retry.
+    const fetchImpl: PeerFetch = async (_url, init) => {
+      posts += 1;
+      await receiverPeer.receive(...bodyParts(init));
+      if (posts === 1) throw new Error("response lost");
+      return new Response(JSON.stringify({ ok: true, accepted: 1, rejected: 0 }), { status: 200 });
+    };
+
+    const receiverPeer = createPeerChannel({
+      url: "http://peer:6120",
+      secret: "s",
+      origin: "process-a",
+      fetchImpl: async () => new Response("{}", { status: 200 }),
+    });
+    // The fanout owns the peer subscription itself; nothing here subscribes a
+    // second time, or every inbound event would be delivered twice and the frame
+    // count could not distinguish that from a failed dedupe.
+    const fanout = createRealtimeFanout({ role: "ui", store, registries, peer: receiverPeer });
+
+    const sender = createPeerChannel({
+      url: "http://peer:6120",
+      secret: "s",
+      origin: "process-b",
+      minBackoffMs: 10,
+      maxBackoffMs: 20,
+      fetchImpl,
+    });
+
+    function bodyParts(init: RequestInit): [string, unknown[], { epoch: string; batchSeq: number }] {
+      const parsed = JSON.parse(String(init.body)) as { topic: string; epoch: string; batch_seq: number; events: unknown[] };
+      return [parsed.topic, parsed.events, { epoch: parsed.epoch, batchSeq: parsed.batch_seq }];
+    }
+
+    try {
+      sender.forwardRealtime("task_messages", {
+        task,
+        task_id: task.id,
+        messages: [persisted!],
+      });
+
+      const deadline = Date.now() + 5_000;
+      while (sender.stats().batches < 1 && Date.now() < deadline) await Bun.sleep(10);
+      // Wait for the retry to be answered, then let a late duplicate land if any.
+      await Bun.sleep(150);
+
+      const frames = browserFrames.map((frame) => JSON.parse(frame)).filter((frame) => frame.type === "task:message");
+      expect(frames.map((frame) => frame.payload.seq)).toEqual([1]);
+      expect(posts).toBeGreaterThanOrEqual(2);
+      expect(receiverPeer.stats().duplicates).toBe(1);
+      expect(receiverPeer.stats().received).toBe(1);
+      expect(peerMetricsSnapshot().duplicates).toBeGreaterThanOrEqual(1);
+      // The sender's own accounting agrees: one delivery, one duplicate answer.
+      expect(sender.stats().sent).toBe(1);
+    } finally {
+      sender.close();
+      fanout.close();
+    }
+  });
+
+  it("keeps the dashboard auth boundary for an /internal route that is not the peer pair", async () => {
+    // QA item 3: the exemption is two exact paths, so a future `/internal/...`
+    // route without its own guard must still meet dashboard auth.
+    const store = createStore();
+    const token = "dashboard-token";
+    store.ensureLocalWorkspace();
+    const app = createMultiremiApp({ store, authToken: token });
+    app.get("/internal/other", (c) => c.json({ ok: true }));
+
+    const denied = await app.request("/internal/other");
+    expect(denied.status).toBe(401);
+
+    const deniedForPeerCredential = await app.request("/internal/other", {
+      headers: { Authorization: "Bearer peer-secret" },
+    });
+    expect(deniedForPeerCredential.status).toBe(401);
+
+    const allowed = await app.request("/internal/other", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(allowed.status).toBe(200);
+
+    // And the two peer paths themselves are reachable without dashboard auth:
+    // they answer on their own terms (401 for a missing peer secret, 200 for
+    // health), not 401-from-the-middleware.
+    const peerHealth = await app.request("/internal/peer/health");
+    expect(peerHealth.status).toBe(200);
+    const peerEvents = await app.request("/internal/peer/events", { method: "POST", body: "{}" });
+    expect(peerEvents.status).toBe(401);
   });
 });

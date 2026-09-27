@@ -30,8 +30,11 @@ import {
   drainPeerWindowMetrics,
   peerMetricsSnapshot,
   recordPeerBatch,
+  recordPeerDegraded,
   recordPeerDropped,
+  recordPeerDuplicate,
   recordPeerFailure,
+  recordPeerOversizeDropped,
   resetRequestMetricsForTest,
   startRequestMetricsSummary,
   summarizeWindow,
@@ -473,7 +476,10 @@ describe("MUL-367 request metrics — window aggregation", () => {
       routes: [],
       // MUL-462: the peer block is always present; with no peer channel it is
       // the zeroed heartbeat, so the summary shape does not depend on env.
-      peer: { sent: 0, batches: 0, dropped: 0, failed: 0, rtt_p95_ms: 0 },
+      peer: {
+        sent: 0, batches: 0, dropped: 0, failed: 0, rtt_p95_ms: 0,
+        oversize_dropped: 0, degraded: 0, duplicates: 0,
+      },
     });
   });
 
@@ -492,8 +498,12 @@ describe("MUL-367 request metrics — window aggregation", () => {
     });
 
     await app.request("/api/issues/iss_1");
-    expect(peerMetricsSnapshot()).toEqual({ sent: 0, batches: 0, dropped: 0, failed: 0, rtt_p95_ms: 0 });
-    expect(drainPeerWindowMetrics()).toEqual({ sent: 0, batches: 0, dropped: 0, failed: 0, rtt_p95_ms: 0 });
+    const zeroedPeer = {
+      sent: 0, batches: 0, dropped: 0, failed: 0, rtt_p95_ms: 0,
+      oversize_dropped: 0, degraded: 0, duplicates: 0,
+    };
+    expect(peerMetricsSnapshot()).toEqual(zeroedPeer);
+    expect(drainPeerWindowMetrics()).toEqual(zeroedPeer);
     expect(drainRequestMetricsForTest()).toEqual({ samples: [], dropped: 0 });
   });
 
@@ -550,13 +560,25 @@ describe("MUL-367 request metrics — minute summary timer", () => {
     recordPeerBatch({ events: 5, rttMs: 8 });
     recordPeerDropped(2);
     recordPeerFailure();
+    recordPeerOversizeDropped();
+    recordPeerDegraded();
+    recordPeerDuplicate();
 
     const first = drainPeerWindowMetrics();
-    expect(first).toEqual({ sent: 8, batches: 2, dropped: 2, failed: 1, rtt_p95_ms: 8 });
-    expect(drainPeerWindowMetrics()).toEqual({ sent: 0, batches: 0, dropped: 0, failed: 0, rtt_p95_ms: 0 });
+    expect(first).toEqual({
+      sent: 8, batches: 2, dropped: 2, failed: 1, rtt_p95_ms: 8,
+      oversize_dropped: 1, degraded: 1, duplicates: 1,
+    });
+    expect(drainPeerWindowMetrics()).toEqual({
+      sent: 0, batches: 0, dropped: 0, failed: 0, rtt_p95_ms: 0,
+      oversize_dropped: 0, degraded: 0, duplicates: 0,
+    });
 
     // The lifetime view keeps the totals the health endpoint reports.
-    expect(peerMetricsSnapshot()).toMatchObject({ sent: 8, batches: 2, dropped: 2, failed: 1 });
+    expect(peerMetricsSnapshot()).toMatchObject({
+      sent: 8, batches: 2, dropped: 2, failed: 1,
+      oversize_dropped: 1, degraded: 1, duplicates: 1,
+    });
   });
 
   it("creates no timer when metrics are disabled", () => {
