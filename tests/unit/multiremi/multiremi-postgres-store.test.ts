@@ -1440,6 +1440,25 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(store.listIssues({ workspaceId: ws, limit: 2, offset: 2 }).length).toBe(1);
   });
 
+  it("keeps backlog out of active child progress and projects parent inbox fields (PG)", () => {
+    const ws = freshWorkspace();
+    const member = store.createWorkspaceMember({ name: "Parent owner", workspaceId: ws, role: "member" });
+    const parent = store.createIssue({ title: "Parent", workspaceId: ws, status: "in_progress", assigneeType: "member", assigneeId: member.id });
+    store.createIssue({ title: "Unscheduled", workspaceId: ws, parentIssueId: parent.id, status: "backlog" });
+    store.createIssue({ title: "Active", workspaceId: ws, parentIssueId: parent.id, status: "todo" });
+    const terminal = store.createIssue({ title: "Terminal", workspaceId: ws, parentIssueId: parent.id, status: "in_progress" });
+    store.updateIssue(terminal.id, { status: "done" });
+
+    expect(store.getChildIssueProgress(parent.id)).toMatchObject({ total: 3, active: 1, done: 1, waiting: 0 });
+    const notification = store.listInboxItems(member.id, ws).find((item) => item.type === "child_issue_terminal");
+    expect(notification).toMatchObject({
+      issueId: parent.id,
+      issue_parent_id: parent.id,
+      issue_parent_key: parent.key,
+      issue_parent_title: parent.title,
+    });
+  });
+
   it("filters issues by assignee via the IN (…) pushdown", () => {
     const ws = freshWorkspace();
     const member = store.createWorkspaceMember({ name: "Assignee", workspaceId: ws, role: "member" });

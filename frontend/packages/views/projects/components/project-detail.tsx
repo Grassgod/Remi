@@ -334,8 +334,13 @@ function ProjectIssuesSurface({
   const includeNoAssignee = useViewStore((s) => s.includeNoAssignee);
   const creatorFilters = useViewStore((s) => s.creatorFilters);
   const labelFilters = useViewStore((s) => s.labelFilters);
+  const showSubIssues = useViewStore((s) => s.showSubIssues);
   const usesAssigneeBoard = viewMode === "board" && grouping === "assignee";
   const usesGantt = viewMode === "gantt";
+  const visibleFilter = useMemo<MyIssuesFilter>(
+    () => ({ ...filter, top_level_only: !showSubIssues }),
+    [filter, showSubIssues],
+  );
 
   const sort = useMemo(
     () => ({
@@ -347,7 +352,7 @@ function ProjectIssuesSurface({
 
   const assigneeGroupFilter = useMemo<AssigneeGroupedIssuesFilter>(
     () => ({
-      ...filter,
+      ...visibleFilter,
       statuses: statusFilters.length > 0 ? statusFilters : [...BOARD_STATUSES],
       priorities: priorityFilters,
       assignee_filters: assigneeFilters,
@@ -355,7 +360,7 @@ function ProjectIssuesSurface({
       creator_filters: creatorFilters,
       label_ids: labelFilters,
     }),
-    [assigneeFilters, creatorFilters, filter, includeNoAssignee, labelFilters, priorityFilters, statusFilters],
+    [assigneeFilters, creatorFilters, visibleFilter, includeNoAssignee, labelFilters, priorityFilters, statusFilters],
   );
   const assigneeGroupsOptions = myIssueAssigneeGroupsOptions(
     wsId,
@@ -370,7 +375,7 @@ function ProjectIssuesSurface({
   // the current view so switching to Gantt doesn't re-trigger the full
   // per-status fetch in the background.
   const statusIssuesQuery = useQuery({
-    ...myIssueListOptions(wsId, scope, filter, undefined, sort),
+    ...myIssueListOptions(wsId, scope, visibleFilter, undefined, sort),
     enabled: !usesAssigneeBoard && !usesGantt,
   });
   const assigneeGroupsQuery = useQuery({
@@ -414,7 +419,7 @@ function ProjectIssuesSurface({
         assigneeGroupQueryKey={usesAssigneeBoard ? assigneeGroupsOptions.queryKey : undefined}
         assigneeGroupFilter={usesAssigneeBoard ? assigneeGroupFilter : undefined}
         scope={scope}
-        filter={filter}
+        filter={visibleFilter}
         sort={sort}
         ganttIssues={ganttIssues}
         isPending={activeQuery.isLoading}

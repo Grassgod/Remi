@@ -2724,6 +2724,9 @@ export interface MultiremiInboxItem {
   workspace_id?: string;
   issueId: string | null;
   issue_id?: string | null;
+  issue_parent_id?: string | null;
+  issue_parent_key?: string | null;
+  issue_parent_title?: string | null;
   memberId: string;
   member_id?: string;
   recipientType: string;

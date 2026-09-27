@@ -127,6 +127,9 @@ Display transformations apply to the loaded pages:
 - R3 ledger events retain one stored row and selection identity per event. Successful
   runs of the same autopilot within a date group collapse into one display entry;
   failures remain separate. R1/R2 action notifications retain the latest row per issue;
+- notifications for children of the same parent collapse after deduplication within a date
+  group. The server supplies the parent id, key, and title; failed or blocked child terminal
+  events and `decision_requested` rank ahead of ordinary entries in that date group;
 - every row shows a one-line self-contained summary from `details`, so a sweep down the
   list is enough to know what happened.
 

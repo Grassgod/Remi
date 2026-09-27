@@ -47,7 +47,11 @@ export function InboxListItem({
   const merged = groupedItems.length > 1;
   const read = groupedItems.every((entry) => entry.read);
   const inboxTitle = useInboxTitle();
-  const displayTitle = inboxTitle(item, "row", groupedItems.length);
+  const parent = groupedItems.find((entry) => entry.issue_parent_key);
+  const parentGroup = merged && Boolean(parent);
+  const displayTitle = parentGroup
+    ? `${parent!.issue_parent_key} · ${parent!.issue_parent_title}`
+    : inboxTitle(item, "row", groupedItems.length);
 
   const handleRowKeyDown = (event: React.KeyboardEvent) => {
     if (event.key === "Enter" || event.key === " ") {
@@ -91,8 +95,8 @@ export function InboxListItem({
               {merged && (
                 <button
                   type="button"
-                  aria-label={t(($) => expanded ? $.autopilot.collapse_runs : $.autopilot.expand_runs)}
-                  title={t(($) => expanded ? $.autopilot.collapse_runs : $.autopilot.expand_runs)}
+                  aria-label={parentGroup ? t(($) => expanded ? $.list.collapse_group : $.list.expand_group) : t(($) => expanded ? $.autopilot.collapse_runs : $.autopilot.expand_runs)}
+                  title={parentGroup ? t(($) => expanded ? $.list.collapse_group : $.list.expand_group) : t(($) => expanded ? $.autopilot.collapse_runs : $.autopilot.expand_runs)}
                   onClick={(event) => {
                     event.stopPropagation();
                     setExpanded((value) => !value);

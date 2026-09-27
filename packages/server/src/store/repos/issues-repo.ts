@@ -199,16 +199,7 @@ const CHILD_PROGRESS_SELECT = `SELECT parent_issue_id, COUNT(*) AS total,
                     END
                     WHERE d.type IN ('blocked_by', 'blocks') AND prereq.status <> 'done'
                   ) THEN 1 ELSE 0 END) AS waiting,
-              SUM(CASE WHEN status NOT IN ('done', 'completed', 'closed', 'cancelled', 'blocked')
-                        AND NOT (status = 'backlog' AND id IN (
-                          SELECT CASE WHEN d.type = 'blocks' THEN d.depends_on_issue_id ELSE d.issue_id END
-                          FROM multiremi_issue_dependencies d
-                          JOIN multiremi_issues prereq ON prereq.id = CASE
-                            WHEN d.type = 'blocks' THEN d.issue_id
-                            ELSE d.depends_on_issue_id
-                          END
-                          WHERE d.type IN ('blocked_by', 'blocks') AND prereq.status <> 'done'
-                        )) THEN 1 ELSE 0 END) AS active
+              SUM(CASE WHEN status IN ('todo', 'in_progress', 'in_review') THEN 1 ELSE 0 END) AS active
        FROM multiremi_issues`;
 
 /** `result` is stored JSON; "has a result" means non-empty output text. */
@@ -4380,8 +4371,7 @@ export class IssuesRepo {
   getInboxItem(id: string): MultiremiInboxItem | null {
     const row = this.ctx.db.query("SELECT * FROM multiremi_inbox_items WHERE id = ?").get(id) as Row | null;
     if (!row) return null;
-    const issueId = nullableString(row.issue_id);
-    return toInboxItem(row, issueId ? this.getIssue(issueId) : null);
+    return this.hydrateInboxRows([row])[0] ?? null;
   }
 
   listInboxItems(memberId?: string | null, workspaceId?: string): MultiremiInboxItem[] {
@@ -4508,8 +4498,7 @@ export class IssuesRepo {
     if (!existing) throw new Error(`Inbox item not found: ${id}`);
     this.ctx.db.run("UPDATE multiremi_inbox_items SET read = 1 WHERE id = ?", [id]);
     const row = this.ctx.db.query("SELECT * FROM multiremi_inbox_items WHERE id = ?").get(id) as Row | null;
-    const issueId = nullableString(row!.issue_id);
-    return toInboxItem(row!, issueId ? this.getIssue(issueId) : null);
+    return this.hydrateInboxRows([row!])[0]!;
   }
 
   archiveInboxItem(id: string): MultiremiInboxItem {
@@ -4517,8 +4506,7 @@ export class IssuesRepo {
     if (!rowBefore) throw new Error(`Inbox item not found: ${id}`);
     this.ctx.db.run("UPDATE multiremi_inbox_items SET archived = 1, read = 1 WHERE id = ?", [id]);
     const row = this.ctx.db.query("SELECT * FROM multiremi_inbox_items WHERE id = ?").get(id) as Row | null;
-    const issueId = nullableString(row!.issue_id);
-    return toInboxItem(row!, issueId ? this.getIssue(issueId) : null);
+    return this.hydrateInboxRows([row!])[0]!;
   }
 
   countUnreadInboxItems(memberId?: string | null, workspaceId?: string): number {
@@ -5045,9 +5033,25 @@ export class IssuesRepo {
         issuesById.set(issue.id, issue);
       }
     }
+    const parentIds = [...new Set([...issuesById.values()].map((issue) => issue.parentIssueId).filter((id): id is string => Boolean(id)))];
+    const parentsById = new Map<string, Pick<MultiremiIssue, "id" | "key" | "title">>();
+    for (let offset = 0; offset < parentIds.length; offset += 400) {
+      const chunk = parentIds.slice(offset, offset + 400);
+      const placeholders = chunk.map(() => "?").join(", ");
+      const parentRows = this.ctx.db.query(
+        `SELECT id, issue_key, title FROM multiremi_issues WHERE id IN (${placeholders})`,
+      ).all(...chunk) as Row[];
+      for (const row of parentRows) {
+        parentsById.set(String(row.id), { id: String(row.id), key: String(row.issue_key), title: String(row.title) });
+      }
+    }
     return rows.map((row) => {
       const issueId = nullableString(row.issue_id);
-      return toInboxItem(row, issueId ? issuesById.get(issueId) ?? null : null);
+      const issue = issueId ? issuesById.get(issueId) ?? null : null;
+      const parent = issue?.parentIssueId
+        ? parentsById.get(issue.parentIssueId) ?? null
+        : (row.type === "child_issue_terminal" || row.type === "decision_requested") ? issue : null;
+      return toInboxItem(row, issue, parent);
     });
   }
 
