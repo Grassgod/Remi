@@ -483,6 +483,66 @@ describe("useStickToBottom", () => {
     expect(result.current.state).toBe("released");
   });
 
+  it("released stays released when initialState changes while enabled", () => {
+    // A live machine owns its state. Consumers re-render this prop for their own
+    // reasons (MUL-390 recomputes whether the page is a deep link), and that must
+    // never pull a reader who scrolled away back to the bottom.
+    const props = baseProps({ initialState: "pinned" });
+    const { result, rerender } = renderStick(props);
+
+    fire(() => {
+      fixture.userScroll(100);
+    });
+    expect(result.current.state).toBe("released");
+
+    rerender({ ...props, initialState: "released" });
+    expect(result.current.state).toBe("released");
+
+    rerender({ ...props, initialState: "pinned" });
+    expect(result.current.state).toBe("released");
+    expect(fixture.root.scrollTop).toBe(100);
+  });
+
+  it("keeps a live pinned state when initialState says otherwise", () => {
+    // The mirror image: a reader sitting at the bottom is not moved because the
+    // prop flipped to "released" either.
+    const props = baseProps({ initialState: "released" });
+    const { result, rerender } = renderStick(props);
+    expect(result.current.state).toBe("released");
+
+    // The user scrolled to the bottom, which is a normal re-pin.
+    fire(() => {
+      fixture.userScroll(600);
+    });
+    expect(result.current.state).toBe("pinned");
+
+    rerender({ ...props, initialState: "released" });
+    expect(result.current.state).toBe("pinned");
+    expect(fixture.root.scrollTop).toBe(600);
+  });
+
+  it("applies a changed initialState on the next activation", () => {
+    const props = baseProps({ initialState: "pinned" });
+    const { result, rerender } = renderStick(props);
+
+    // `enabled` rising is a new activation, and the prop current at that moment
+    // is the one that applies — here the reader starts released, as a deep link.
+    rerender({ ...props, enabled: false });
+    rerender({ ...props, enabled: true, initialState: "released" });
+    expect(result.current.state).toBe("released");
+
+    // The next activation reads the prop again, so it starts pinned instead.
+    rerender({ ...props, enabled: false });
+    rerender({ ...props, enabled: true, initialState: "pinned" });
+    expect(result.current.state).toBe("pinned");
+
+    // A replaced scroll root is a new activation as well.
+    const replacement = createScrollFixture();
+    rerender({ ...props, enabled: true, initialState: "released", scrollEl: replacement.root });
+    expect(result.current.state).toBe("released");
+    replacement.cleanup();
+  });
+
   it("stops observing and clears its timer on unmount", () => {
     const { result, unmount } = renderStick(baseProps());
     fire(() => {
