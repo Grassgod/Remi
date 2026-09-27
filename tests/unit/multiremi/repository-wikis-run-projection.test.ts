@@ -321,3 +321,167 @@ describe("repository-wikis run projection surface", () => {
     expect(summary.builds_since_publish).toBe(1);
   });
 });
+
+describe("repository-wikis A2: the remaining per-repository reads", () => {
+  /**
+   * Statements the summary route issues, normalized to one line. A2 asserts on
+   * SQL shape because the point of the change is which columns cross the PG
+   * bridge; results alone cannot show that.
+   */
+  function summaryStatements(sql: string[]): string[] {
+    return sql.map((statement) => statement.replace(/\s+/g, " ").trim());
+  }
+
+  it("decides publication from a narrow projection instead of the whole run row", async () => {
+    const { store, sql, raw } = createRecordingStore();
+    store.ensureLocalWorkspace();
+    store.updateWorkspaceRepositories("local", [
+      { id: REPOSITORY_ID, name: "Projection", url: "https://github.com/acme/projection.git", source: "github" },
+    ]);
+    const { autopilot } = configureRepositoryWikiAutomation(store);
+    insertRun({
+      id: "run_a2_published", autopilotId: autopilot.id,
+      dedupeKey: `${REPOSITORY_ID}:incremental_update:sha-a2`,
+      payload: { data: { merge_sha: "sha-a2" } },
+      createdAt: "2026-09-20T00:00:00.000Z",
+    }, raw);
+    const doc = store.createRepositoryWikiDoc("local", REPOSITORY_ID, {
+      path: "index.md", title: "Index", body: "page", sourceRevision: "sha-a2",
+    });
+    raw.run("UPDATE multiremi_repository_wiki_docs SET updated_at = ? WHERE id = ?", ["2026-09-19T00:00:00.000Z", doc.id]);
+
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const response = await app.request("/api/workspaces/local/repository-wikis", { headers: rootHeaders });
+    expect(response.status).toBe(200);
+    const summary = (await response.json() as any).repositories
+      .find((entry: any) => entry.repository_id === REPOSITORY_ID);
+    expect(summary.build.published).toBe(true);
+
+    const statements = summaryStatements(sql);
+    // The regression this guards: the publication decision used to load the run
+    // through `getAutopilotRun`, whose `SELECT *` ships `payload` + `result` for
+    // every repository. That must not appear on the summary path any more.
+    const wholeRowRunReads = statements.filter((statement) => /^SELECT \* FROM multiremi_autopilot_runs WHERE id = \?$/.test(statement));
+    expect(wholeRowRunReads).toEqual([]);
+
+    const probe = statements.find((statement) => /^SELECT r\.repository_id, r\.schedule_target, r\.task_id, r\.dedupe_key,/.test(statement));
+    expect(probe, `no narrow publication probe in: ${statements.join(" | ")}`).toBeDefined();
+    expect(probe).toMatch(/CASE WHEN r\.dedupe_key IS NULL/);
+    expect(probe).not.toMatch(/\br\.result\b/);
+    expect(probe).not.toMatch(/r\.\*/);
+  });
+
+  it("keeps the publication answer identical to the whole-row implementation", async () => {
+    const { store, autopilot } = fixture();
+    const insert = (input: { id: string; dedupeKey: string | null; payload: unknown; repositoryId?: string }) =>
+      insertRun({
+        id: input.id, autopilotId: autopilot.id, dedupeKey: input.dedupeKey, payload: input.payload,
+        createdAt: "2026-09-20T00:00:00.000Z", repositoryId: input.repositoryId,
+      });
+
+    // A task-attributed publication, a revision-attributed one, and a miss.
+    const taskRun = store.runAutopilot(autopilot.id, {
+      source: "api", repositoryId: REPOSITORY_ID, dedupeKey: `${REPOSITORY_ID}:bootstrap_repository:head`,
+    });
+    store.createRepositoryWikiDoc("local", REPOSITORY_ID, {
+      path: "task.md", title: "Task publication", sourceTaskId: taskRun.taskId,
+    });
+    expect(store.isRepositoryWikiRunPublished(taskRun.id)).toBe(true);
+
+    insert({ id: "run_a2_revision", dedupeKey: "repo_a2_rev:incremental_update:abc123", payload: { data: { merge_sha: "abc123" } }, repositoryId: "repo_a2_rev" });
+    expect(store.isRepositoryWikiRunPublished("run_a2_revision")).toBe(false);
+    store.createRepositoryWikiDoc("local", "repo_a2_rev", {
+      path: "rev.md", title: "Revision publication", sourceRevision: "abc123",
+    });
+    expect(store.isRepositoryWikiRunPublished("run_a2_revision")).toBe(true);
+
+    // A legacy run with no dedupe key: the revision can only come from payload,
+    // so the narrow probe has to keep reading that column for these rows.
+    const legacy = store.runAutopilot(autopilot.id, {
+      source: "scm_event", repositoryId: "repo_a2_legacy",
+      dedupeKey: "repo_a2_legacy:incremental_update:head",
+      payload: { data: { merge_sha: "sha-legacy-head" } },
+    });
+    expect(store.isRepositoryWikiRunPublished(legacy.id)).toBe(false);
+    store.createRepositoryWikiDoc("local", "repo_a2_legacy", {
+      path: "legacy.md", title: "Legacy publication", sourceRevision: "sha-legacy-head",
+    });
+    expect(store.isRepositoryWikiRunPublished(legacy.id)).toBe(true);
+  });
+
+  it("never reads a run row that resolves publication by schedule target alone", async () => {
+    const { store, autopilot } = fixture();
+    // A run scoped only by its schedule target still has to answer, which the old
+    // code handled via `getAutopilotRun` + the scheduleTarget fallback.
+    const run = store.runAutopilot(autopilot.id, { source: "manual" });
+    store.createRepositoryWikiDoc("local", REPOSITORY_ID, {
+      path: "schedule.md", title: "Schedule publication", sourceTaskId: run.taskId,
+    });
+    // No repository scope anywhere: false, and no throw.
+    expect(store.isRepositoryWikiRunPublished(run.id)).toBe(false);
+    expect(store.isRepositoryWikiRunPublished("run_does_not_exist")).toBe(false);
+  });
+
+  it("lists workspace docs without selecting the body column", async () => {
+    const { store, sql, raw } = createRecordingStore();
+    store.ensureLocalWorkspace();
+    store.updateWorkspaceRepositories("local", [
+      { id: REPOSITORY_ID, name: "Projection", url: "https://github.com/acme/projection.git", source: "github" },
+    ]);
+    configureRepositoryWikiAutomation(store);
+    const doc = store.createRepositoryWikiDoc("local", REPOSITORY_ID, {
+      path: "index.md", title: "Index", body: "content that must not cross the bridge",
+    });
+    raw.run("UPDATE multiremi_repository_wiki_docs SET updated_at = ? WHERE id = ?", ["2026-09-20T00:00:00.000Z", doc.id]);
+    sql.length = 0;
+
+    const docs = store.listWorkspaceRepositoryWikiDocs("local");
+    expect(docs).toHaveLength(1);
+    expect(docs[0]).toMatchObject({ id: doc.id, path: "index.md", title: "Index", body: "" });
+
+    const docsStatement = sql.map((statement) => statement.replace(/\s+/g, " ").trim())
+      .find((statement) => /FROM multiremi_repository_wiki_docs/.test(statement) && /ORDER BY updated_at DESC/.test(statement));
+    expect(docsStatement, `no workspace docs statement in: ${sql.join(" | ")}`).toBeDefined();
+    expect(docsStatement).not.toMatch(/\bbody\b/);
+    expect(docsStatement).not.toMatch(/SELECT \*/);
+  });
+
+  it("ranks runs in SQL so only the latest row per repository crosses the bridge", async () => {
+    const { store, autopilot } = fixture();
+    // Two runs for one repository: only the newer one may come back, and the
+    // statement must not return both for TypeScript to discard.
+    insertRun({
+      id: "run_a2_newer", autopilotId: autopilot.id,
+      dedupeKey: `${REPOSITORY_ID}:incremental_update:newer`,
+      payload: { data: { merge_sha: "newer" } }, createdAt: "2026-09-21T00:00:00.000Z",
+    });
+    insertRun({
+      id: "run_a2_older", autopilotId: autopilot.id,
+      dedupeKey: `${REPOSITORY_ID}:incremental_update:older`,
+      payload: { data: { merge_sha: "older" } }, createdAt: "2026-09-20T00:00:00.000Z",
+    });
+
+    const runs = store.listLatestRepositoryAutopilotRuns("local");
+    expect(runs.map((run) => run.id)).toEqual(["run_a2_newer"]);
+  });
+
+  it("prefers a still-active run when a completed run shares its created_at", async () => {
+    const { store, autopilot } = fixture();
+    const createdAt = "2026-09-22T00:00:00.000Z";
+    insertRun({ id: "run_a2_completed", autopilotId: autopilot.id,
+      dedupeKey: `${REPOSITORY_ID}:incremental_update:done`, payload: { data: { merge_sha: "done" } }, createdAt });
+    db!.run(
+      `INSERT INTO multiremi_autopilot_runs (
+         id, autopilot_id, source, status, repository_id, dedupe_key, triggered_at, completed_at, payload, result, created_at
+       ) VALUES (?, ?, 'scm_event', 'running', ?, ?, ?, NULL, ?, NULL, ?)`,
+      "run_a2_active", autopilot.id, REPOSITORY_ID,
+      `${REPOSITORY_ID}:incremental_update:active`, createdAt, JSON.stringify({ data: { merge_sha: "active" } }), createdAt,
+    );
+
+    const runs = store.listLatestRepositoryAutopilotRuns("local");
+    // The route's existing rule: on a created_at tie a still-active run wins, so
+    // the summary keeps reporting the queued/building build instead of flipping
+    // to the finished one. The SQL ranking has to preserve that.
+    expect(runs.map((run) => run.id)).toEqual(["run_a2_active"]);
+  });
+});
