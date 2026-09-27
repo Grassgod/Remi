@@ -577,7 +577,8 @@ Measured in a local sandbox on nginx 1.22.1, with the snippets assembled as step
 5 describes and the archive `location` in its own include file (the layout the
 previous version of this runbook restored incompletely): the three restores plus
 `nginx -t` plus reload take about 0.015 s, and both the daemon path and the
-archive path are served by `api` again within 0.07-0.14 s across five runs.
+archive path are served by `api` again within 0.15 s across ten runs (0.03-0.14 s
+of wall time, the spread being nginx's reload window).
 Restoring only the site file, by contrast, leaves the archive path on
 `api-runtime` while the daemon path is already back on `api` - which is exactly
 the half-rolled-back state the per-file table above prevents. The one-minute
