@@ -579,9 +579,11 @@ describe("queued task model capability waits", () => {
 
     // The suggested remedy really resolves it: the replacement has no frozen
     // pin, so the workspace machine can take it.
-    const redispatch = (store as unknown as {
-      tasks: { redispatchTaskWithinTransaction(id: string): { replacement: { id: string } } };
-    }).tasks.redispatchTaskWithinTransaction(task.id);
+    const redispatch = db!.transaction(() => (store as unknown as {
+      tasks: { redispatchTaskWithinTransaction(
+        id: string, childStatusChanges: unknown[], deferredEvents: { workspace: unknown[]; enqueuedTasks: unknown[] },
+      ): { replacement: { id: string } } };
+    }).tasks.redispatchTaskWithinTransaction(task.id, [], { workspace: [], enqueuedTasks: [] }))();
     expect(store.claimTask(b.id)?.id).toBe(redispatch.replacement.id);
   });
 
