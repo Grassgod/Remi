@@ -39,16 +39,24 @@ import { performance } from "node:perf_hooks";
 import type { SqlDatabase, SqlStatement } from "../../packages/server/src/store/db/postgres.js";
 import { MultiremiStore } from "../../packages/server/src/store/store.js";
 import { createMultiremiApp } from "../../packages/server/src/api/server.js";
-import { createId } from "../../packages/server/src/ids.js";
+import {
+  DAEMON_TASK_POLL_PROMPT_BYTES,
+  seedDaemonTaskPollFixture,
+  type DaemonTaskPollFixture,
+} from "../fixtures/multiremi/daemon-task-poll-fixture.js";
 
 const REPO_ROOT = resolve(import.meta.dir, "../..");
 const DEFAULT_OUT = join(REPO_ROOT, "reports", "performance", "MUL-474-daemon-task-poll.json");
 const ADMIN_URL = process.env.MULTIREMI_TEST_POSTGRES_URL?.trim() ?? "";
 const WARMUPS = Number(process.env.MUL474_WARMUPS ?? 2);
 const SAMPLES = Number(process.env.MUL474_SAMPLES ?? 5);
-const PROMPT_BYTES = Number(process.env.MUL474_PROMPT_BYTES ?? 131_072);
+const PROMPT_BYTES = Number(process.env.MUL474_PROMPT_BYTES ?? DAEMON_TASK_POLL_PROMPT_BYTES);
 const RESULT_BYTES = Number(process.env.MUL474_RESULT_BYTES ?? 4_096);
 const AUTH_TOKEN = "root-secret";
+/** The fixture needs a key for the encrypted Feishu app secret in its config row. */
+process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 13).toString("base64");
+/** Pinned so the `status` body the harness records is comparable across runs. */
+const PINNED_STARTED_AT = "2026-09-27T00:00:00.000Z";
 
 interface StatementSample {
   sql: string;
@@ -151,82 +159,6 @@ async function postgresReachable(url: string): Promise<string | null> {
   }
 }
 
-interface Fixture {
-  runtimeId: string;
-  taskId: string;
-  daemonToken: string;
-  foreignRuntimeId: string;
-  foreignDaemonToken: string;
-  agentId: string;
-}
-
-/**
- * One claimed-and-running task on its own Runtime, with a prompt at least
- * `promptBytes` long, plus a second Runtime/token that owns nothing.
- *
- * The second identity is what the authority matrix exercises: it must stay 403
- * on `steer`, and 403 on `status` unless the Feishu host exception applies.
- */
-async function seedFixture(store: MultiremiStore, promptBytes: number): Promise<Fixture> {
-  const workspaceId = "local";
-  const agent = store.createAgent({
-    id: createId("agt"),
-    name: "MUL-474 poll agent",
-    provider: "codex",
-    workspaceId,
-  });
-  store.registerRuntime({
-    id: "rt_mul474_owner",
-    name: "MUL-474 owner",
-    provider: "codex",
-    workspaceId,
-    daemonId: "daemon-mul474-owner",
-    ownerId: "local",
-  });
-  store.registerRuntime({
-    id: "rt_mul474_foreign",
-    name: "MUL-474 foreign",
-    provider: "codex",
-    workspaceId,
-    daemonId: "daemon-mul474-foreign",
-    ownerId: "local",
-  });
-  const prompt = `MUL-474 prompt: ${"x".repeat(Math.max(0, promptBytes - 32))}`;
-  const task = store.createTask({
-    id: createId("tsk"),
-    agentId: agent.id,
-    workspaceId,
-    prompt,
-  });
-  const claimed = store.claimTask("rt_mul474_owner");
-  if (!claimed || claimed.id !== task.id) throw new Error("fixture failed to claim its task on the owner Runtime");
-  store.startTask(task.id);
-  store.reportTaskUsage(task.id, [{ provider: "codex", model: "gpt-5", inputTokens: 1_000, outputTokens: 500 }]);
-  store.appendTaskMessages(task.id, [
-    { seq: 1, type: "text", content: "seed message" },
-  ]);
-  const daemon = await store.createAccessToken({
-    name: "MUL-474 owner daemon",
-    type: "daemon",
-    workspaceId,
-    daemonId: "daemon-mul474-owner",
-  });
-  const foreign = await store.createAccessToken({
-    name: "MUL-474 foreign daemon",
-    type: "daemon",
-    workspaceId,
-    daemonId: "daemon-mul474-foreign",
-  });
-  return {
-    runtimeId: "rt_mul474_owner",
-    taskId: task.id,
-    daemonToken: daemon.token,
-    foreignRuntimeId: "rt_mul474_foreign",
-    foreignDaemonToken: foreign.token,
-    agentId: agent.id,
-  };
-}
-
 function daemonHeaders(token: string): Record<string, string> {
   return { Authorization: `Bearer ${token}`, "content-type": "application/json" };
 }
@@ -234,8 +166,8 @@ function daemonHeaders(token: string): Record<string, string> {
 interface RouteCase {
   label: string;
   method: "GET" | "POST";
-  path: (fixture: Fixture) => string;
-  body?: (fixture: Fixture) => unknown;
+  path: (fixture: DaemonTaskPollFixture) => string;
+  body?: (fixture: DaemonTaskPollFixture) => unknown;
 }
 
 function routeCases(): RouteCase[] {
@@ -284,10 +216,16 @@ async function main(): Promise<void> {
   const raw = new PostgresSyncDatabase(url.toString());
   const metered = new MeteredDb(raw);
   const store = new MultiremiStore(metered);
-  const fixture = await seedFixture(store, PROMPT_BYTES);
+  store.ensureLocalWorkspace();
+  const fixture = await seedDaemonTaskPollFixture(store, {
+    promptBytes: PROMPT_BYTES,
+    run: (sql, params) => { metered.run(sql, ...params); },
+  });
   const storedPromptBytes = (metered.query(
     "SELECT LENGTH(prompt) AS prompt_bytes, LENGTH(result) AS result_bytes FROM multiremi_tasks WHERE id = ?",
   ).get(fixture.taskId) as { prompt_bytes: number | bigint; result_bytes: number | bigint | null } | null);
+
+  metered.run("UPDATE multiremi_tasks SET started_at = ? WHERE id = ?", PINNED_STARTED_AT, fixture.taskId);
 
   const app = createMultiremiApp({
     store,
