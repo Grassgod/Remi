@@ -72,7 +72,7 @@ describe("MUL-400 E3 — fix round 4: dependency errors never surface as 500", (
       { label: "native create ancestor", path: "/api/multiremi/issues", method: "POST", body: { title: "child", parent_issue_id: dependent.id, blocked_by: [dependent.id] } },
       { label: "compat create ancestor", path: "/api/issues", method: "POST", body: { title: "child", parent_issue_id: dependent.id, blocked_by: [dependent.id] } },
       { label: "compat create unknown prereq", path: "/api/issues", method: "POST", body: { title: "child2", blocked_by: ["iss_does_not_exist"] } },
-    ].filter((call): call is Call => call != null);
+    ] as Call[];
 
     const rows: Array<{ label: string; status: number; code: string }> = [];
     for (const call of calls) {

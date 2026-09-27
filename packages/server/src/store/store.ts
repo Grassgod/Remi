@@ -167,6 +167,7 @@ export type {
 } from "@multiremi/store/repos/workspaces-repo.js";
 import {
   StoreContext,
+  createCommitEventQueue,
   type TaskEnqueuedListener,
   type TaskEventListener,
   type TaskMessagesListener,
@@ -1934,6 +1935,8 @@ runMigrations(this.db);
   prepareFeishuIssueRoundPushesWithinTransaction(input: {
     issue: MultiremiIssue;
     leaderTask: MultiremiTask;
+    childStatusChanges?: import("./repos/tasks-repo.js").ChildStatusChangeCollector;
+    deferredEvents?: import("./context.js").CommitEventQueue;
   }): MultiremiTask[] {
     return this.feishuBot.prepareIssueRoundPushesWithinTransaction(input);
   }
@@ -3274,8 +3277,8 @@ runMigrations(this.db);
     previous: MultiremiIssue,
     issue: MultiremiIssue,
     parentTaskId: string | null,
-    options: { taskTerminalStatus?: "completed" | "failed" | "cancelled" } = {},
-  ): void {
+    options: { taskTerminalStatus?: "completed" | "failed" | "cancelled"; seen?: Set<string> } = {},
+  ): import("./repos/tasks-repo.js").ChildStatusChange[] {
     return this.issues.notifyChildStatusChange(previous, issue, parentTaskId, options);
   }
 
@@ -4439,8 +4442,13 @@ runMigrations(this.db);
     return this.tasks.createTask(input);
   }
 
-  createTaskWithinTransaction(input: CreateTaskInput): MultiremiTask {
-    return this.tasks.createTaskWithinTransaction(input);
+  /** Caller owns the transaction and replays the collector after it commits. */
+  createTaskWithinTransaction(
+    input: CreateTaskInput,
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector = [],
+    deferredEvents: import("./context.js").CommitEventQueue = createCommitEventQueue(),
+  ): MultiremiTask {
+    return this.tasks.createTaskWithinTransaction(input, childStatusChanges, deferredEvents);
   }
 
   ensureDelegationWakeup(input: {
@@ -4616,6 +4624,10 @@ runMigrations(this.db);
     comment: MultiremiIssueComment;
   } {
     const childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChange[] = [];
+    // MUL-400 S1 (QA round 3): the audit comment is written inside this
+    // transaction, so its realtime push waits for the COMMIT. On rollback the
+    // queue is dropped and no client ever sees a comment that does not exist.
+    const deferredEvents = createCommitEventQueue();
     let redispatchResult: ReturnType<TasksRepo["redispatchTaskWithinTransaction"]> | null = null;
     let cancelledResult: ReturnType<TasksRepo["cancelTaskWithinTransaction"]> | null = null;
     const result = this.db.transaction(() => {
@@ -4666,10 +4678,10 @@ runMigrations(this.db);
       if (input.action === "cancel") {
         // Caller-owned transaction: `cancelTask` would open a second BEGIN and
         // its COMMIT would end this one early on Postgres (no savepoints).
-        cancelledResult = this.tasks.cancelTaskWithinTransaction(target.id, childStatusChanges);
+        cancelledResult = this.tasks.cancelTaskWithinTransaction(target.id, childStatusChanges, deferredEvents);
         task = cancelledResult.task;
       } else if (input.action === "redispatch") {
-        redispatchResult = this.tasks.redispatchTaskWithinTransaction(target.id, childStatusChanges);
+        redispatchResult = this.tasks.redispatchTaskWithinTransaction(target.id, childStatusChanges, deferredEvents);
         task = redispatchResult.cancelled;
         replacementTask = redispatchResult.replacement;
       } else {
@@ -4706,7 +4718,7 @@ runMigrations(this.db);
           `Criterion: ${reason}`,
           `Audit record: ${audit.id}`,
         ].join("\n"),
-      }, { deferAgentMentionDispatch: true, withinTransaction: true });
+      }, { deferAgentMentionDispatch: true, withinTransaction: true, deferredEvents });
       this.issues.notifyOrganizerAction(reportIssue, comment.body, "agent", supervisorAgent.id, {
         organizer_action_id: audit.id,
         action: input.action,
@@ -4722,6 +4734,8 @@ runMigrations(this.db);
     this.tasks.runCollectedChildStatusChanges(childStatusChanges);
     if (cancelledResult) this.tasks.notifyCancelledTask(cancelledResult);
     if (redispatchResult) this.tasks.notifyRedispatchedTask(redispatchResult);
+    // The transaction committed: publish everything it deferred.
+    this.ctx.emitCommitEvents(deferredEvents);
     this.issues.dispatchDeferredAgentCommentMentions(result.comment.id);
     return result;
   }
@@ -4771,9 +4785,17 @@ runMigrations(this.db);
 
   cancelTaskWithinTransaction(
     taskId: string,
-    childStatusChanges?: import("./repos/tasks-repo.js").ChildStatusChange[] | null,
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector = [],
+    deferredEvents: import("./context.js").CommitEventQueue = createCommitEventQueue(),
   ): import("./repos/tasks-repo.js").CancelTaskResult {
-    return this.tasks.cancelTaskWithinTransaction(taskId, childStatusChanges);
+    return this.tasks.cancelTaskWithinTransaction(taskId, childStatusChanges, deferredEvents);
+  }
+
+  runCollectedChildStatusChanges(
+    changes: import("./repos/tasks-repo.js").ChildStatusChange[],
+    seen?: Set<string>,
+  ): void {
+    this.tasks.runCollectedChildStatusChanges(changes, seen);
   }
 
   notifyCancelledTask(result: import("./repos/tasks-repo.js").CancelTaskResult): void {

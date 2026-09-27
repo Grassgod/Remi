@@ -110,6 +110,31 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
    store therefore keeps its `...WithinTransaction` convention: the outermost
    caller owns the only transaction, and everything under it calls the variant
    that assumes an open transaction.
+   - **The collector is a required parameter, not an option.** Every
+     `...WithinTransaction` variant that can move an Issue (the Issue-status
+     sync reached from `createTaskWithinTransaction`, `createTaskHumanRequest`,
+     `startTask`, `respondTaskHumanRequest`, the terminal writers, `cancelTask`/
+     `redispatch`/`cancelTasksByTriggerComments`/`recoverOrphans`, and the
+     `chat`/`feishu-bot`/`autopilot` wrappers) takes a
+     `ChildStatusChangeCollector` with no default and no `null` form. The
+     compiler therefore forces each call site to answer one question: which
+     transaction owns these writes? There is no way left to "run the hook here
+     because nobody passed a collector".
+   - **The outermost owner replays after it commits.** A transition collected
+     inside a transaction is handed back to whoever committed it, and the E1/E2
+     hook runs only then. The hook can itself produce a further transition — the
+     round it queues for a parent moves that parent's status, which is a child
+     event for ITS parent — and those come back as the hook's return value, so
+     the replay is a drain loop that never nests a transaction. The loop is
+     bounded by a `seen` set keyed on (issue, previous status, next status,
+     task), so a parent/child status ping-pong terminates.
+   - **Events publish only after the COMMIT.** The same rule covers what the
+     writes push outward: `comment:created`, `issue:updated`, and task-enqueue
+     wakeups. A caller-owned transaction collects them in a commit-event queue
+     and flushes it once it has committed; on rollback the queue is dropped and
+     nothing was ever sent. Postgres is synchronous here, so an event emitted
+     mid-transaction would reach clients before the row was durable and, worse,
+     would announce a row a later ROLLBACK erases.
    - `notifyChildStatusChange` opens the single transaction for a child report.
      The notification comment (with its Session event) and the parent's queued
      round are written inside it; the round is created through
@@ -124,21 +149,43 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
    - The task-terminal paths (`completeTask`, `failTask`, `cancelTask`,
      `redispatchTaskWithinTransaction`, `cancelTasksByTriggerComments`,
      `recoverOrphans`) and the organizer action facade collect their Issue
-     transitions and replay the hook after their own commit.
+     transitions and replay the hook after their own commit. The same holds for
+     the writers that derive an Issue status while creating or moving a task
+     (`createTask`, `startTask`, `createTaskHumanRequest` and its respond/expire
+     twins) and for the Chat / Feishu / Autopilot wrappers that create tasks
+     inside their own transactions; each one owns a collector and replays it
+     after it commits.
    - **A hook failure does not roll back the child's status.** By the time the
      hook runs, the child's transition is committed — that is the whole point of
      running post-commit. The hook's own writes are atomic: a failure inside it
      leaves no half-written round, comment or activity. The failure is visible at
      the call site when the caller owns the write (the direct Issue path
-     rethrows) and is always logged with `log.warn` by
-     `TasksRepo.runChildStatusChanges` for the terminal paths, which must not
-     fail a completed run; `journalctl`/the `remi` log file carries the line
-     `child status hook skipped for <issue id>: <message>`.
+     rethrows, and the HTTP client sees 500) and is always logged with
+     `log.warn` by `TasksRepo.runChildStatusChanges` for the terminal paths,
+     which must not fail a completed run; `journalctl`/the `remi` log file
+     carries the line `child status hook skipped for <issue id>: <message>`.
+   - **Known compensation risk (accepted for now).** Because the status is
+     committed before the hook runs, a hook failure on the direct write path
+     answers 500 while the child's transition stays applied. A client that
+     simply repeats the request will not re-enter the terminal transition, so
+     that one parent report can be lost. There is no reliable retry in this
+     issue: the fix needs a durable outbox for the hook's own writes (record the
+     intended report in the same transaction, deliver it afterwards, retry on
+     failure) rather than a synchronous best-effort call. Tracked as a
+     follow-up candidate; the current behaviour is what the round-2/3 QA rounds
+     measured, and it is unchanged from the previous commit.
    - `PostgresSyncDatabase.transaction()` is deliberately left alone. Teaching it
      savepoints is a platform-level change with its own blast radius (every
      caller, the worker bridge, and the SQLite backend's differing semantics),
      well outside this issue. The constraint is instead held by the call-site
      convention above and by the depth-counter regression tests.
+   - Two nesting sites remain, both pre-existing on `main` and out of this
+     issue's scope: `FeishuBotRepo.submitMessage`'s steer path
+     (`feishu-bot-repo.ts`) and `MultiremiStore.updateAgent`'s role-change token
+     revoke (`store.ts`). They are recorded here rather than fixed, and are
+     tracked for a separate issue; the nesting scan in
+     `tests/unit/multiremi/pg-nesting-preload.ts` reproduces them on a clean
+     `origin/main` tree.
    - S2's dependency gate lives in this same hook. Its automatic start
      (`assignIssue`) opens its own transaction, so it must stay *outside* the
      report transaction — before it, committing separately — and only its

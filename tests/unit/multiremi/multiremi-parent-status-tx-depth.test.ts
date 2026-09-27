@@ -221,6 +221,103 @@ describe("MUL-400 S1 transaction depth — task terminal paths", () => {
     expect(counter.max, "cancelTask").toBe(1);
   });
 
+  it("keeps the WHOLE task lifecycle at depth 1, counter armed before createTask", () => {
+    const { store, runtime, agent } = setupDepthStore();
+    const parent = store.createIssue({
+      title: "Lifecycle parent",
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    const child = store.createIssue({
+      title: "Lifecycle child",
+      parentIssueId: parent.id,
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    const counter = wrapStore(store);
+
+    // QA round 3: arm the counter BEFORE createTask. createTask derives the
+    // child's Issue to `todo` and startTask derives it back to `in_progress`;
+    // both used to run the E1/E2 hook inline inside their own transaction.
+    counter.reset();
+    const task = store.createTask({ agentId: agent.id, issueId: child.id, prompt: "lifecycle" });
+    expect(counter.max, "createTask").toBe(1);
+    expect(store.getIssue(child.id)?.status).toBe("todo");
+
+    let claimed = store.claimTask(runtime.id);
+    while (claimed && claimed.id !== task.id) claimed = store.claimTask(runtime.id);
+    counter.reset();
+    store.startTask(task.id);
+    expect(counter.max, "startTask").toBe(1);
+    expect(store.getIssue(child.id)?.status).toBe("in_progress");
+
+    counter.reset();
+    store.completeTask(task.id, { output: "lifecycle done" });
+    expect(counter.max, "completeTask").toBe(1);
+  });
+
+  it("keeps the remaining task-lifecycle writers at depth 1", () => {
+    const { store, runtime, agent } = setupDepthStore();
+    const counter = wrapStore(store);
+
+    // createTaskHumanRequest parks the Issue at in_review (guard B exempt).
+    const askParent = store.createIssue({
+      title: "Ask parent",
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    const askChild = store.createIssue({
+      title: "Ask child",
+      parentIssueId: askParent.id,
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    const askTask = store.createTask({ agentId: agent.id, issueId: askChild.id, prompt: "ask" });
+    runTask(store, runtime.id, askTask.id);
+    counter.reset();
+    const request = store.createTaskHumanRequest({
+      taskId: askTask.id,
+      kind: "question",
+      payload: { question: "which one?" },
+    });
+    expect(counter.max, "createTaskHumanRequest").toBe(1);
+    expect(store.getIssue(askChild.id)?.status).toBe("in_review");
+
+    counter.reset();
+    store.respondTaskHumanRequest(request.id, { response: { answer: "that one" } });
+    expect(counter.max, "respondTaskHumanRequest").toBe(1);
+
+    counter.reset();
+    store.expireTaskHumanRequest(request.id, "timeout");
+    expect(counter.max, "expireTaskHumanRequest").toBeLessThanOrEqual(1);
+
+    // A comment mention dispatches through the same creation entry point.
+    const dispatchParent = store.createIssue({
+      title: "Dispatch parent",
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    const dispatchChild = store.createIssue({
+      title: "Dispatch child",
+      parentIssueId: dispatchParent.id,
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    counter.reset();
+    store.createIssueComment(dispatchChild.id, {
+      authorType: "member",
+      authorId: "local",
+      body: `[@${agent.id}](mention://agent/${agent.id}) please continue`,
+    });
+    expect(counter.max, "comment dispatch").toBe(1);
+  });
+
   it("keeps cancelTasksByTriggerComments and recoverOrphans at depth 1", () => {
     const { store, runtime, agent } = setupDepthStore();
     const parent = store.createIssue({
@@ -444,6 +541,131 @@ describe("MUL-400 S1 transaction depth — SCM merge completion", () => {
     expect(store.getIssue(parent.id)?.status).toBe("done");
     expect(store.listIssueActivity(parent.id).filter((entry) => entry.type === "issue_status_forced"))
       .toHaveLength(0);
+  });
+});
+
+describe("MUL-400 S1 events never fire inside a transaction", () => {
+  it("publishes the E1/E2 pushes only after the write transaction commits", () => {
+    const { store, agent } = setupDepthStore();
+    const parent = store.createIssue({
+      title: "Emission parent",
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    const child = store.createIssue({
+      title: "Emission child",
+      parentIssueId: parent.id,
+      status: "in_progress",
+    });
+
+    // `db.inTransaction` is the real signal: any event delivered while it is
+    // true reached clients before the row was durable, and a ROLLBACK would
+    // have made it a lie.
+    const events: Array<{ type: string; action: string; inTransaction: boolean }> = [];
+    const unsubscribe = store.onWorkspaceEvent((event) => {
+      const entry = (event.payload as { entry?: { action?: string } } | undefined)?.entry;
+      events.push({ type: event.type, action: entry?.action ?? "", inTransaction: db!.inTransaction });
+    });
+    try {
+      // E2: child done -> notification comment + fresh parent round.
+      store.updateIssue(child.id, { status: "done" });
+      // E1 re-derivation: an in_review parent with an open child goes back.
+      store.updateIssue(parent.id, { status: "in_review", force: true });
+      const second = store.createIssue({
+        title: "Emission child two",
+        parentIssueId: parent.id,
+        status: "in_progress",
+      });
+      store.updateIssue(second.id, { status: "blocked" });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.filter((event) => event.inTransaction)).toHaveLength(0);
+    // The pushes the S1 hook owes the UI are all present, post-commit.
+    expect(events.some((event) => event.type === "comment:created")).toBe(true);
+    expect(events.some((event) => event.type === "issue:updated")).toBe(true);
+    // The audit activities the hook writes are also published post-commit.
+    expect(events.some((event) => event.action === "child_done_parent_triggered")).toBe(true);
+    expect(events.some((event) => event.action === "parent_status_derived")).toBe(true);
+  });
+
+  it("drops the deferred events when the organizer transaction rolls back", () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const owner = store.createWorkspaceMember({
+      id: "mem_emitter",
+      workspaceId: "local",
+      userId: "owner",
+      name: "Owner",
+      role: "owner",
+    });
+    const runtime = store.registerRuntime({
+      id: "rt_emitter",
+      name: "Emitter runtime",
+      provider: "codex",
+      workspaceId: "local",
+    });
+    const supervisor = store.createAgent({
+      name: "Emitter supervisor",
+      provider: "codex",
+      workspaceId: "local",
+      ownerId: owner.userId ?? owner.id,
+      role: "supervisor",
+    });
+    const worker = store.createAgent({
+      name: "Emitter worker",
+      provider: "codex",
+      workspaceId: "local",
+      ownerId: owner.userId ?? owner.id,
+    });
+    store.updateWorkspace("local", { settings: { organizer: { mode: "act" } } });
+    const patrol = store.createIssue({ title: "Emitter patrol", workspaceId: "local" });
+    const supervisorTask = store.createTask({
+      agentId: supervisor.id,
+      issueId: patrol.id,
+      workspaceId: "local",
+      prompt: "patrol",
+    });
+    const target = store.createTask({
+      agentId: worker.id,
+      runtimeId: runtime.id,
+      workspaceId: "local",
+      prompt: "target",
+    });
+
+    const events: string[] = [];
+    const unsubscribe = store.onWorkspaceEvent((event) => events.push(event.type));
+    // Fail after the audit comment is written, before the organizer commits.
+    const issues = (store as unknown as {
+      issues: { notifyOrganizerAction: (...args: unknown[]) => void };
+    }).issues;
+    const originalNotify = issues.notifyOrganizerAction.bind(issues);
+    issues.notifyOrganizerAction = (...args: unknown[]) => {
+      originalNotify(...args);
+      throw new Error("emitter rollback");
+    };
+    try {
+      expect(() => store.performOrganizerAction({
+        supervisorTaskId: supervisorTask.id,
+        supervisorAgentId: supervisor.id,
+        targetTaskId: target.id,
+        action: "cancel",
+        reason: "emitter rollback probe",
+      })).toThrow("emitter rollback");
+    } finally {
+      issues.notifyOrganizerAction = originalNotify;
+      unsubscribe();
+    }
+
+    // Rolled back → the audit comment never existed → nothing may be pushed.
+    expect(store.getTask(target.id)?.status).toBe("queued");
+    expect(events.filter((type) => type === "comment:created")).toHaveLength(0);
+    // The organizer's own activity/audit pushes are deferred too; the trailing
+    // issue:updated from the terminal sync is main-existing and out of scope.
+    expect(events.filter((type) => type === "activity:created")).toHaveLength(0);
   });
 });
 
