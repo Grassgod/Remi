@@ -448,35 +448,89 @@ describe("peer channel — sending", () => {
 
 describe("peer channel — size limits (QA item 7)", () => {
   /**
-   * QA's first counterexample: 64 events of ~16 KB each. Their combined event
-   * bytes sit just under 1 MiB, so a batch loop that estimates from event sizes
-   * ships a body over it once the wrapper, topic and separators are counted.
+   * QA's first counterexample, in two shapes.
+   *
+   * QA reported 64 events of 16 360 bytes of content shipping a 1 048 598-byte
+   * body: the events summed to 1 048 503 and the wrapper pushed the body over
+   * the line. That number is a property of QA's envelope, not of the byte count
+   * alone — this implementation adds `task_id` to every event, so the same class
+   * of counterexample sits at a slightly smaller content size here. The test
+   * therefore checks the literal 16 360-byte shape *and* the exact boundary
+   * computed from this envelope, so a batch loop that forgets the wrapper is
+   * caught even if the envelope changes again.
    */
   it("keeps every POST body at or under 1 MiB for 64 large-but-legal events", async () => {
-    const peer = fakePeer();
-    channel = createPeerChannel({ url: "http://peer:6120", secret: "s", fetchImpl: peer.fetchImpl, maxBatchEvents: 64 });
-    peer.setDelay(5);
+    const contentSizes = [16_360, largestContentKeeping64EventsAtTheCap()];
+    expect(contentSizes[1]!, "the boundary case must be smaller than the reported shape").toBeLessThan(16_360);
 
-    const content = "x".repeat(16_360);
-    for (let seq = 1; seq <= 64; seq += 1) {
-      channel.forwardRealtime("task_messages", {
-        task: TASK,
-        task_id: TASK.id,
-        messages: [message(seq, 16_360)],
-      });
-    }
-    await waitFor(() => channel!.stats().sent === 64, "every event to land", 8_000);
+    for (const contentBytes of contentSizes) {
+      const peer = fakePeer();
+      channel?.close();
+      channel = createPeerChannel({ url: "http://peer:6120", secret: "s", fetchImpl: peer.fetchImpl, maxBatchEvents: 64 });
+      peer.setDelay(5);
 
-    expect(peer.posts.length).toBeGreaterThan(1);
-    for (const post of peer.posts) {
-      expect(Buffer.byteLength(post.body, "utf8")).toBeLessThanOrEqual(PEER_MAX_BATCH_BYTES);
+      for (let seq = 1; seq <= 64; seq += 1) {
+        channel.forwardRealtime("task_messages", {
+          task: TASK,
+          task_id: TASK.id,
+          messages: [message(seq, contentBytes)],
+        });
+      }
+      await waitFor(() => channel!.stats().sent === 64, "every event to land", 20_000);
+
+      // The whole point: no body may exceed one MiB, wrapper included. Before the
+      // fix this failed at exactly the reported shape.
+      expect(peer.posts.length, `content=${contentBytes}`).toBeGreaterThan(1);
+      // Every batch in the run is full: the split is driven by the size cap, not
+      // by the event count, which is what makes the boundary meaningful.
+      expect(peer.posts.length, `content=${contentBytes}`).toBe(2);
+      for (const post of peer.posts) {
+        expect(Buffer.byteLength(post.body, "utf8"), `content=${contentBytes}`)
+          .toBeLessThanOrEqual(PEER_MAX_BATCH_BYTES);
+      }
+      // Nothing was dropped or degraded: the events are legal, just large.
+      expect(channel.stats(), `content=${contentBytes}`)
+        .toMatchObject({ sent: 64, dropped: 0, oversize_dropped: 0, degraded: 0 });
+      expect(peer.payloads(), `content=${contentBytes}`).toHaveLength(64);
     }
-    // Nothing was dropped or degraded: the events are legal, just large.
-    expect(channel.stats()).toMatchObject({ sent: 64, dropped: 0, oversize_dropped: 0, degraded: 0 });
-    expect(peer.payloads()).toHaveLength(64);
-    // And the payload really is the size the counterexample describes.
-    expect(content.length).toBe(16_360);
   });
+
+  /**
+   * The largest message content whose 64 events still sum to the batch cap.
+   *
+   * Bisected against the envelope this channel really builds, over the same
+   * 1..64 sequence the test sends — the ids and seq digits differ per event, so a
+   * probe on one representative event would land beside the real boundary. At
+   * exactly this content size the events fill the cap and only the wrapper can
+   * push the body over, which is precisely the bug QA found.
+   */
+  function largestContentKeeping64EventsAtTheCap(): number {
+    const probe = createPeerChannel({ url: "http://peer:6120", secret: "s", fetchImpl: fakePeer().fetchImpl });
+    try {
+      const totalEventBytes = (contentBytes: number) => {
+        let total = 0;
+        for (let seq = 1; seq <= 64; seq += 1) {
+          total += Buffer.byteLength(JSON.stringify({
+            v: 1,
+            origin: probe.origin,
+            kind: "task_messages",
+            payload: { task: TASK, task_id: TASK.id, messages: [message(seq, contentBytes)] },
+          }), "utf8");
+        }
+        return total;
+      };
+      let low = 1;
+      let high = 32_768;
+      while (low < high) {
+        const mid = (low + high + 1) >> 1;
+        if (totalEventBytes(mid) <= PEER_MAX_BATCH_BYTES) low = mid;
+        else high = mid - 1;
+      }
+      return low;
+    } finally {
+      probe.close();
+    }
+  }
 
   /**
    * QA's second counterexample: the daemon's documented maximum report, 256
@@ -504,7 +558,15 @@ describe("peer channel — size limits (QA item 7)", () => {
     channel.forwardRealtime("task_messages", { task: TASK, task_id: TASK.id, messages });
     const publishTotalMs = performance.now() - publishStartedAt;
 
-    await waitFor(() => channel!.stats().sent === 256, "all 256 messages", 60_000);
+    // Wait for delivery to finish *or* for the report to be refused: without the
+    // split the whole 64 MiB event is oversize, and this case must fail quickly
+    // and say why rather than sit on a timeout.
+    await waitFor(
+      () => channel!.stats().sent === 256 || channel!.stats().oversize_dropped > 0,
+      "all 256 messages (or an oversize refusal)",
+      60_000,
+    );
+    expect(channel!.stats().oversize_dropped, "a legal report must never be oversize").toBe(0);
 
     // Every body fits, every message arrived exactly once, and order is intact.
     for (const post of peer.posts) {
