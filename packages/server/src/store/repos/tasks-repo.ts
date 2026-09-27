@@ -1001,6 +1001,8 @@ export class TasksRepo {
           frozenTask: probe.frozenRetry,
           chatSessionId: row.chat_session_id,
           agentId: row.agent_id,
+          taskId: row.id,
+          ...probe.recovery,
         });
         if (reason === row.wait_reason) continue;
         if (this.writeObservedWaitReason(row, reason, now)) result.updated++;
@@ -1021,6 +1023,8 @@ export class TasksRepo {
           frozenTask: probe.frozenRetry,
           chatSessionId: row.chat_session_id,
           agentId: row.agent_id,
+          taskId: row.id,
+          ...probe.recovery,
         });
         if (reason === row.wait_reason) continue;
         if (this.writeObservedWaitReason(row, reason, now)) result.updated++;
@@ -1039,6 +1043,7 @@ export class TasksRepo {
         agentId: row.agent_id,
         redispatchTaskId: row.id,
         chatSessionId: row.chat_session_id,
+        ...probe.recovery,
       });
       if (reason === row.wait_reason) continue;
       if (this.writeObservedWaitReason(row, reason, now)) result.updated++;
@@ -2779,6 +2784,12 @@ ${routing.sql}
     localDirectory: boolean;
     agentBindingTarget: string | null;
     agentBindingRuntimeId: string | null;
+    recovery: {
+      anchorName: string | null; anchorRuntimeId: string | null;
+      anchorRoutingAllowed: boolean; agentNeedsRebind: boolean;
+      conflictingDataConstraints: string[];
+      routingTargetRuntimeId: string | null;
+    };
   } {
     let agent = cache?.agents.get(row.agent_id);
     if (agent === undefined) {
@@ -2796,6 +2807,24 @@ ${routing.sql}
     const frozenRetry = cleanOptionalString(row.execution_fingerprint) != null;
     const agentBound = Boolean(agent?.runtimeId);
     const described = describeTaskPlacementConstraints(this.ctx, row, agent?.runtimeId, agent?.provider, aliasIndex, cache);
+    const dataConstraints = described.filter((constraint) =>
+      ["runtimeWorkspace", "codeSnapshot", "issueWorkspace", "localDirectory"].includes(constraint.kind));
+    const dataCommon = commonConstraintMachineAliases(dataConstraints);
+    const dataConflict = dataConstraints.length > 1 && dataCommon.length === 0
+      && dataConstraints.every((constraint) => constraint.machineAliases.length > 0);
+    const anchorAlias = dataCommon[0] ?? null;
+    const anchorRuntime = anchorAlias ? cache?.runtimes.find((runtime) => runtime.provider === agent?.provider
+      && runtimeDaemonAliases(runtime).some((alias) => dataCommon.includes(alias))) : null;
+    const anchorVerdicts = anchorAlias ? verdicts.filter((verdict) => {
+      const runtime = cache?.runtimes.find((candidate) => candidate.id === verdict.runtimeId);
+      return runtime && runtimeDaemonAliases(runtime).some((alias) => dataCommon.includes(alias));
+    }) : [];
+    const boundRuntime = agent?.runtimeId ? cache?.runtimes.find((runtime) => runtime.id === agent.runtimeId) : null;
+    const boundAliases = boundRuntime ? runtimeDaemonAliases(boundRuntime) : agent?.runtimeId ? [agent.runtimeId] : [];
+    const agentNeedsRebind = Boolean(anchorAlias && agent?.runtimeId
+      && !boundAliases.some((alias) => dataCommon.includes(alias)));
+    const routingTarget = !anchorAlias ? cache?.runtimes.find((runtime) => runtime.provider === agent?.provider
+      && verdicts.some((verdict) => verdict.runtimeId === runtime.id && verdict.routingOk)) : null;
     const common = commonConstraintMachineAliases(described);
     // The daemon fallback applies only when every constraint points to the
     // same unregistered machine, including registered Agent and task pins.
@@ -2824,6 +2853,14 @@ ${routing.sql}
       localDirectory: described.some((constraint) => constraint.kind === "localDirectory"),
       agentBindingTarget: targetRuntime ? this.daemonDisplayName(targetAlias!, cache) : null,
       agentBindingRuntimeId: targetRuntime?.id ?? null,
+      recovery: {
+        anchorName: anchorAlias ? this.daemonDisplayName(anchorRuntime?.daemonId ?? anchorAlias, cache) : null,
+        anchorRuntimeId: anchorRuntime?.id ?? null,
+        anchorRoutingAllowed: anchorVerdicts.some((verdict) => verdict.routingOk),
+        agentNeedsRebind,
+        conflictingDataConstraints: dataConflict ? dataConstraints.map((constraint) => constraint.label) : [],
+        routingTargetRuntimeId: routingTarget?.id ?? null,
+      },
     };
   }
 

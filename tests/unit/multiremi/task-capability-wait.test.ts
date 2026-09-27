@@ -424,10 +424,7 @@ describe("queued task model capability waits", () => {
     const now = Date.now();
     ageTask(task.id, GRACE_MS, now);
     expect(store.refreshQueuedCapabilityWaitReasons(now).updated).toBe(1);
-    expect(store.getTask(task.id)?.waitReason).toBe(
-      "等待项目设备：任务钉在 devbox-a（Issue 工作区），该机器不在项目的设备绑定里或为独享设备；"
-      + "请把该机器加回项目的设备绑定，或取消它的独享设置",
-    );
+    expect(store.getTask(task.id)?.waitReason).toContain("把 devbox-a 加回项目的设备绑定，或取消它的独享设置");
     // The workspace data only exists on the devbox: keep waiting, don't move it.
     expect(store.claimTask(other.id)).toBeNull();
     expect(store.getTask(task.id)).toMatchObject({ runtimeId: devbox.id, status: "queued" });
@@ -703,8 +700,12 @@ describe("queued task model capability waits", () => {
       { resourceType: "local_directory", resourceRef: { local_path: "/abs/chat-frozen", daemon_id: "chat-frozen-a" } },
     ] });
     const chat = store.createChatSession({ agentId: agent.id, projectId: project.id, creatorId: "alice" });
-    const original = store.sendChatMessage(chat.id, { body: "keep this exact request\nwith its second line" });
+    const original = store.sendChatMessage(chat.id, { body: "I can't retry\n\n  keep inner spaces  \nwith its last line" });
     const task = original.task;
+    for (let index = 0; index < 65; index++) {
+      const later = store.sendChatMessage(chat.id, { body: `later message ${index}` });
+      store.cancelTask(later.task.id);
+    }
     db!.run("UPDATE multiremi_tasks SET execution_fingerprint = 'chat-frozen-fp' WHERE id = ?", [task.id]);
     const now = Date.now();
     ageTask(task.id, GRACE_MS, now);
@@ -712,12 +713,13 @@ describe("queued task model capability waits", () => {
     const reason = store.getTask(task.id)?.waitReason ?? "";
     expect(reason).toContain("直接改绑会取消这条已冻结的任务");
     expect(reason).not.toContain("remi task redispatch");
-    const command = reason.match(/remi agent update ([a-zA-Z0-9_-]+) --runtime ([a-zA-Z0-9_-]+)[\s\S]*?remi chat message list ([a-zA-Z0-9_-]+)[\s\S]*?remi chat message create ([a-zA-Z0-9_-]+) --content/);
+    const command = reason.match(/remi agent update ([a-zA-Z0-9_-]+) --runtime ([a-zA-Z0-9_-]+)[\s\S]*?remi chat message list ([a-zA-Z0-9_-]+) --output json[\s\S]*?remi chat message create ([a-zA-Z0-9_-]+) --content-file/);
     expect(command).not.toBeNull();
     expect(command![1]).toBe(agent.id);
     expect(command![2]).toBe(a.id);
     expect(command![3]).toBe(chat.id);
     expect(command![4]).toBe(chat.id);
+    expect(reason).not.toContain("--content '");
 
     const workspace = store.getWorkspace("local")!;
     store.updateWorkspace("local", { settings: { ...workspace.settings, organizer: { mode: "act" } } });
@@ -739,10 +741,21 @@ describe("queued task model capability waits", () => {
     });
     expect(rebound.status).toBe(200);
     expect(store.getTask(task.id)?.status).toBe("cancelled");
-    const listed = await app.request(`/api/chat/sessions/${command![3]}/messages`, { headers });
-    expect(listed.status).toBe(200);
-    const messages = await listed.json() as Array<{ role: string; task_id: string; content: string }>;
-    const originalMessage = messages.find((message) => message.role === "user" && message.task_id === task.id);
+    let cursor: { created_at: string; id: string } | null = null;
+    let originalMessage: { role: string; task_id: string; content: string } | undefined;
+    let pages = 0;
+    do {
+      const query = new URLSearchParams();
+      if (cursor) { query.set("before_created_at", cursor.created_at); query.set("before_id", cursor.id); }
+      const listed = await app.request(`/api/chat/sessions/${command![3]}/messages/page?${query}`, { headers });
+      expect(listed.status).toBe(200);
+      const page = await listed.json() as { messages: Array<{ role: string; task_id: string; content: string }>;
+        next_cursor: { created_at: string; id: string } | null };
+      pages++;
+      originalMessage = page.messages.find((message) => message.role === "user" && message.task_id === task.id);
+      cursor = page.next_cursor;
+    } while (!originalMessage && cursor);
+    expect(pages).toBeGreaterThan(1);
     expect(originalMessage?.content).toBe(original.message.body);
     const resent = await app.request(`/api/chat/sessions/${command![4]}/messages`, {
       method: "POST", headers, body: JSON.stringify({ content: originalMessage!.content }),
@@ -797,7 +810,7 @@ describe("queued task model capability waits", () => {
     expect(store.getTask(task.id)?.status).toBe("cancelled");
   });
 
-  it("never recommends rebinding an Agent to a Project-refused machine", () => {
+  it("orders device restoration before rebinding an Agent to its data machine", () => {
     const store = createLocalStore();
     const a = store.registerRuntime({ id: "rt_rebind_rejected_a", name: "A", provider: "codex", daemonId: "rebind-rejected-a" });
     const b = store.registerRuntime({ id: "rt_rebind_rejected_b", name: "B", provider: "codex", daemonId: "rebind-rejected-b" });
@@ -815,8 +828,9 @@ describe("queued task model capability waits", () => {
     ageTask(task.id, GRACE_MS, now);
     store.refreshQueuedCapabilityWaitReasons(now);
     const reason = store.getTask(task.id)?.waitReason ?? "";
-    expect(reason).not.toContain("把该 Agent 的 Runtime 绑定改到 A");
-    expect(reason).toContain("让这些约束指向同一台机器");
+    expect(reason).toContain("把 A 加回项目的设备绑定");
+    expect(reason).toContain(`remi agent update ${agent.id} --runtime ${a.id}`);
+    expect(reason.indexOf("加回项目的设备绑定")).toBeLessThan(reason.indexOf("remi agent update"));
     void seed;
   });
 
@@ -835,6 +849,141 @@ describe("queued task model capability waits", () => {
     expect(store.getTask(task.id)?.status).toBe("queued");
     expect(store.claimTask(a.id)?.id).toBe(task.id);
   });
+
+  it("executes placement remedies across Chat and Issue binding combinations", () => {
+    const counts = new Map<string, number>();
+    const noMechanical: string[] = [];
+    let cells = 0;
+    for (const kind of ["chat", "issue"] as const)
+      for (const frozen of [false, true])
+        for (const binding of ["A", "B", "none"] as const)
+          for (const dataOnA of [false, true])
+            for (const devices of ["A", "B", "AB"] as const) {
+              const coordinate = `${kind}/${frozen ? "frozen" : "plain"}/${binding}/${dataOnA ? "data-A" : "no-data"}/${devices}`;
+              cells++;
+              const store = createLocalStore();
+              const a = store.registerRuntime({ id: `rt_matrix_a_${cells}`, name: "A", provider: "codex", daemonId: `matrix-a-${cells}` });
+              const b = store.registerRuntime({ id: `rt_matrix_b_${cells}`, name: "B", provider: "codex", daemonId: `matrix-b-${cells}` });
+              const agent = store.createAgent({ name: "Matrix", provider: "codex" });
+              const project = store.createProject({ title: "Matrix", resources: kind === "chat" && dataOnA
+                ? [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/matrix", daemon_id: a.daemonId } }] : [] });
+              store.createProjectDevice(project.id, { daemonId: a.daemonId! });
+              let issue: ReturnType<typeof store.createIssue> | null = null;
+              let issueSessionId: string | null = null;
+              if (kind === "issue") {
+                issue = store.createIssue({ title: "Matrix issue", projectId: project.id });
+                if (dataOnA) {
+                  const parent = store.createIssueSession(issue.id, { title: "Parent", holdsWorkspace: true });
+                  const seed = store.createTask({ agentId: agent.id, issueId: issue.id, issueSessionId: parent.id, prompt: "seed" });
+                  expect(store.claimTask(a.id)?.id, coordinate).toBe(seed.id);
+                  store.startTask(seed.id);
+                  store.completeTask(seed.id, { output: "ok", sessionId: `matrix-session-${cells}` });
+                  issueSessionId = store.createIssueSession(issue.id, {
+                    title: "Code", parentSessionId: parent.id, withCode: true, holdsWorkspace: false,
+                  }).id;
+                } else {
+                  issueSessionId = store.createIssueSession(issue.id, { title: "Discussion", holdsWorkspace: false }).id;
+                }
+              }
+              if (devices === "B") store.deleteProjectDevice(project.id, a.daemonId!);
+              if (devices !== "A") store.createProjectDevice(project.id, { daemonId: b.daemonId! });
+              if (binding !== "none") store.updateAgent(agent.id, { runtimeId: binding === "A" ? a.id : b.id });
+              const prompt = `original ${coordinate}`;
+              const chat = kind === "chat" ? store.createChatSession({ agentId: agent.id, projectId: project.id }) : null;
+              const task = chat ? store.sendChatMessage(chat.id, { body: prompt }).task
+                : store.createTask({ agentId: agent.id, issueId: issue!.id, issueSessionId: issueSessionId!, prompt });
+              if (frozen) db!.run("UPDATE multiremi_tasks SET execution_fingerprint = ? WHERE id = ?", [`fp-${cells}`, task.id]);
+              const now = Date.now();
+              ageTask(task.id, GRACE_MS, now);
+              store.refreshQueuedCapabilityWaitReasons(now);
+              const reason = store.getTask(task.id)?.waitReason ?? "";
+              const initiallyClaimable = store.describeTaskPlacement(task.id).some((verdict) => verdict.placementOk && verdict.routingOk);
+              if (initiallyClaimable) {
+                expect(reason, coordinate).not.toStartWith("等待任务落点：");
+                expect(reason, coordinate).not.toStartWith("等待项目设备：");
+                counts.set("already claimable", (counts.get("already claimable") ?? 0) + 1);
+              } else if (reason.includes("让这些约束指向同一台机器") && !reason.includes("remi agent update")) {
+                noMechanical.push(`${coordinate}: ${reason}`);
+                counts.set("no mechanical remedy", (counts.get("no mechanical remedy") ?? 0) + 1);
+                continue;
+              } else {
+                const addA = reason.includes("把 A 加回项目的设备绑定");
+                const rebind = reason.match(/remi agent update [a-zA-Z0-9_-]+ --runtime ([a-zA-Z0-9_-]+)/);
+                const redispatch = reason.match(/remi task redispatch ([a-zA-Z0-9_-]+)/);
+                const resend = reason.includes("remi chat message create");
+                if (addA) store.createProjectDevice(project.id, { daemonId: a.daemonId! });
+                let replacement = task;
+                if (redispatch) {
+                  expect(redispatch[1], coordinate).toBe(task.id);
+                  const workspace = store.getWorkspace("local")!;
+                  store.updateWorkspace("local", { settings: { ...workspace.settings, organizer: { mode: "act" } } });
+                  const supervisor = store.createAgent({ name: "Supervisor", provider: "claude", role: "supervisor" });
+                  store.setAgentSupervisor(supervisor.id, true);
+                  const patrol = store.createIssue({ title: "Patrol" });
+                  const supervisorTask = store.createTask({ agentId: supervisor.id, issueId: patrol.id, prompt: "patrol" });
+                  replacement = store.performOrganizerAction({ supervisorTaskId: supervisorTask.id,
+                    supervisorAgentId: supervisor.id, targetTaskId: task.id, action: "redispatch", reason: "recover" }).replacementTask!;
+                }
+                if (rebind) store.updateAgent(agent.id, { runtimeId: rebind[1]! });
+                if (resend) {
+                  expect(chat, coordinate).not.toBeNull();
+                  const original = store.listChatMessages(chat!.id).find((message) => message.taskId === task.id && message.role === "user");
+                  expect(original, coordinate).toBeDefined();
+                  replacement = store.sendChatMessage(chat!.id, { body: original!.body }).task;
+                }
+                const sequence = [addA && "add device", redispatch && "redispatch", rebind && "rebind", resend && "resend"].filter(Boolean).join(" + ");
+                if (coordinate === "chat/frozen/B/data-A/B") expect(sequence).toBe("add device + rebind + resend");
+                if (coordinate === "issue/frozen/B/data-A/B") expect(sequence).toBe("add device + redispatch + rebind");
+                if (coordinate === "chat/frozen/A/data-A/B") {
+                  expect(sequence).toBe("add device");
+                  expect(store.getTask(task.id)?.status).toBe("queued");
+                }
+                counts.set(sequence, (counts.get(sequence) ?? 0) + 1);
+                expect(replacement.prompt, coordinate).toBe(prompt);
+                if (dataOnA) {
+                  expect(store.claimTask(b.id), coordinate).toBeNull();
+                  expect(store.claimTask(a.id)?.id, coordinate).toBe(replacement.id);
+                } else {
+                  const claimed = store.claimTask(a.id) ?? store.claimTask(b.id);
+                  expect(claimed?.id, coordinate).toBe(replacement.id);
+                }
+                continue;
+              }
+              const claimed = store.claimTask(a.id) ?? store.claimTask(b.id);
+              expect(claimed?.id, coordinate).toBe(task.id);
+              expect(claimed?.prompt, coordinate).toBe(prompt);
+            }
+    expect(cells).toBe(72);
+    expect(cells).toBe([...counts.values()].reduce((sum, count) => sum + count, 0));
+    expect(noMechanical, noMechanical.join("\n")).toEqual([]);
+    console.log(`remedy matrix: ${cells} cells, ${JSON.stringify(Object.fromEntries(counts))}, no mechanical: ${JSON.stringify(noMechanical)}`);
+  }, 120_000);
+
+  it("names conflicting data constraints as a fourth-tier remedy", () => {
+    const store = createLocalStore();
+    const a = store.registerRuntime({ id: "rt_data_conflict_a", name: "A", provider: "codex", daemonId: "data-conflict-a" });
+    store.registerRuntime({ id: "rt_data_conflict_b", name: "B", provider: "codex", daemonId: "data-conflict-b" });
+    const agent = store.createAgent({ name: "Data conflict", provider: "codex" });
+    const project = store.createProject({ title: "Data conflict", resources: [
+      { resourceType: "local_directory", resourceRef: { local_path: "/abs/on-b", daemon_id: "data-conflict-b" } },
+    ] });
+    const issue = store.createIssue({ title: "Data conflict", projectId: project.id });
+    const workspace = (store as unknown as {
+      runtimeWorkspaces: { create(runtimeId: string, input: { name: string; root_path: string }): { id: string } };
+    }).runtimeWorkspaces.create(a.id, { name: "Workspace on A", root_path: "/abs/on-a" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "data conflict" });
+    db!.run("UPDATE multiremi_tasks SET runtime_workspace_id = ? WHERE id = ?", [workspace.id, task.id]);
+    const now = Date.now();
+    ageTask(task.id, GRACE_MS, now);
+    store.refreshQueuedCapabilityWaitReasons(now);
+    const reason = store.getTask(task.id)?.waitReason ?? "";
+    expect(reason).toStartWith("等待任务落点：");
+    expect(reason).toContain("显式 Runtime 工作区在 data-conflict-a");
+    expect(reason).toContain("本机目录在 data-conflict-b");
+    expect(reason).toContain("互相冲突；让这些约束指向同一台机器");
+    expect(reason).not.toContain("remi agent update");
+  });
+
 
   it("explains an unfingerprinted retry pin that claim-time refresh cannot repool", () => {
     const store = createLocalStore();
