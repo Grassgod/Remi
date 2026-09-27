@@ -272,17 +272,25 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   const repositoryWiki = options.repositoryWiki ?? createRepositoryWikiServiceFromEnv(store);
   const sessionArchives = options.sessionArchives ?? new SessionArchiveService(store);
   const messagingProviders = options.messagingProviders ?? createMessageProviderRegistry();
-  const apiRole = options.apiRole ?? resolveApiRole();
+  // MUL-461: the process's ONE effective role. The guard middleware, the health
+  // payloads and the metrics lines all read this value, so nothing downstream can
+  // disagree with it.
+  const effectiveApiRole = options.apiRole ?? resolveApiRole();
   // With the knob unset (and no injected role) the process IS main: one role, no
   // routing decision to report. The health payloads only grow `role` once a role was
   // actually configured, which is what keeps `snapshot-api-routes.ts --check`
   // byte-identical to main for the default deployment (MUL-461 acceptance ①) while
   // still answering `role:"runtime"` in a split container.
   const apiRoleConfigured = options.apiRole !== undefined || isApiRoleConfigured();
-  // The role on the metrics lines is the app's effective role, not a second read of
-  // the env: an injected `apiRole` must show up in `api_minute_summary` too.
-  const requestMetricsOptions = options.requestMetrics
-    ?? { ...resolveRequestMetricsOptions(), role: apiRole };
+  // The metrics role is stamped LAST, and from `effectiveApiRole`: an injected
+  // `requestMetrics` object is a transport/tuning override, never a statement about
+  // which process this is. Without the trailing spread a caller that passed
+  // `requestMetrics: { ...opts, role: "all" }` to a runtime process made
+  // `api_slow_request.role` report a role the process does not run as (MUL-461 QA).
+  const requestMetricsOptions = {
+    ...(options.requestMetrics ?? resolveRequestMetricsOptions()),
+    role: effectiveApiRole,
+  };
   const daemonDirectBaseUrl = normalizeDaemonDirectBaseUrl(
     options.daemonDirectBaseUrl === undefined
       ? process.env.MULTIREMI_DAEMON_DIRECT_BASE_URL
@@ -322,9 +330,9 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   // protocol and `runtime` refuses everything but the daemon protocol, the health
   // probes and the peer channel; both answer 421 rather than 404 so a misrouted
   // request is distinguishable from a genuinely missing route.
-  if (apiRole !== "all") {
+  if (effectiveApiRole !== "all") {
     app.use("*", async (c, next) => {
-      if (isMisdirectedPath(apiRole, c.req.path)) return misdirectedResponse(apiRole);
+      if (isMisdirectedPath(effectiveApiRole, c.req.path)) return misdirectedResponse(effectiveApiRole);
       await next();
     });
   }
@@ -518,7 +526,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   // tell the two containers apart with one curl (runbook §6.2 step 3).
   const healthBody = (extra: Record<string, unknown> = {}) => ({
     ok: true,
-    ...(apiRoleConfigured ? { role: apiRole } : {}),
+    ...(apiRoleConfigured ? { role: effectiveApiRole } : {}),
     ...extra,
   });
   app.get("/health", (c) => c.json(healthBody()));
@@ -540,7 +548,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     connections: realtimeState.connections,
     enabled: realtimeState.enabled,
     transport: "websocket",
-    ...(apiRoleConfigured ? { role: apiRole } : {}),
+    ...(apiRoleConfigured ? { role: effectiveApiRole } : {}),
   }));
   registerWebhookRoutes(app, deps);
   registerScmWebhookRoutes(app, deps);
@@ -726,7 +734,10 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     log.error(`[startup-env] ${message}`);
     throw new Error(message);
   }
-  const startupApiRole = startupConfig.effective.apiRole;
+  // MUL-461: this process's ONE effective role, resolved once. The pre-Hono upgrade
+  // guard, the middleware chain and the metrics lines all read it, so a request
+  // cannot be refused by one layer and accepted by another.
+  const effectiveApiRole = startupConfig.effective.apiRole;
   // MUL-461: `apiRole` rides the effective config so a typo is visible next to the
   // setting that produced it (the resolver falls back to `all`).
   log.info(`[effective-config] ${JSON.stringify(startupConfig.effective)}`);
@@ -746,7 +757,12 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
       : options.scmPolling)
     : null;
   const messagingProviders = options.messagingProviders ?? createMessageProviderRegistry();
-  const requestMetricsOptions = options.requestMetrics ?? resolveRequestMetricsOptions();
+  // Same trailing stamp as `createMultiremiApp`: an injected `requestMetrics`
+  // tunes transport and thresholds, and never decides which role this process is.
+  const requestMetricsOptions = {
+    ...(options.requestMetrics ?? resolveRequestMetricsOptions()),
+    role: effectiveApiRole,
+  };
   const messaging = backgroundJobs
     ? (options.messaging === undefined
       ? new MessagingScheduler({
@@ -824,12 +840,26 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
       const socketAddress = server.requestIP(req)?.address;
       setWebhookClientIpAddress(req, resolveWebhookClientIpAddress(req, socketAddress));
       const url = new URL(req.url);
-      // MUL-461: `server.upgrade` short-circuits before Hono, so an upgrade never
-      // reaches the guard middleware above and the decision has to be repeated once
-      // here — it covers both upgrade sites below. A misdirected upgrade is 421, not
-      // 426: the client asked for the right protocol at the wrong process.
-      if (startupApiRole !== "all" && isMisdirectedPath(startupApiRole, url.pathname)) {
-        return misdirectedResponse(startupApiRole);
+      // MUL-461: the role decision for a WebSocket upgrade.
+      //
+      // Upgrades are the ONLY case this handler pre-empts. `server.upgrade`
+      // short-circuits before Hono, so a misdirected upgrade would otherwise be
+      // upgraded by the wrong process; plain HTTP is left entirely alone because
+      // answering it here bypasses `request-metrics`, which is exactly how the
+      // split dashboard ended up blind to 421s (MUL-461 QA).
+      //
+      // The refusal is delegated to `app.fetch` rather than built here: Hono's own
+      // role-guard middleware produces the same `{error:"misdirected", role}` body
+      // and `X-Remi-Api-Role` header, and the request-metrics middleware — which
+      // wraps that guard — records the 421 with the same route pattern, status and
+      // `role` field plain HTTP gets. The upgrade itself never happens: the guard
+      // answers before any handler, so no socket is handed to `server.upgrade`.
+      if (
+        isWebSocketUpgrade(req)
+        && effectiveApiRole !== "all"
+        && isMisdirectedPath(effectiveApiRole, url.pathname)
+      ) {
+        return app.fetch(req);
       }
       if (url.pathname === "/api/daemon/ws") {
         const runtimeIds = parseDaemonWebSocketRuntimeIds(url);

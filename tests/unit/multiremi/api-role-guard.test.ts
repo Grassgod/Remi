@@ -30,7 +30,10 @@ import {
   resolveApiRole,
   type ApiRole,
 } from "@multiremi/config/api-role.js";
-import { startRequestMetricsSummary } from "@multiremi/observability/request-metrics.js";
+import {
+  startRequestMetricsSummary,
+  type RequestMetricsOptions,
+} from "@multiremi/observability/request-metrics.js";
 
 /**
  * Collect `console.log` lines for the duration of `run`.
@@ -54,6 +57,29 @@ function captureConsoleLog<T>(run: () => Promise<T> | T): Promise<{ lines: strin
 
 const GOLDEN_PATH = join(import.meta.dir, "../../../scripts/api-routes.golden.json");
 const GOLDEN = JSON.parse(readFileSync(GOLDEN_PATH, "utf8")) as { routes: string[] };
+
+/**
+ * What the plan's guard table says, written out literally.
+ *
+ * Deliberately NOT imported from `api-role.ts`: expectations that call the same
+ * predicate the guard calls agree with the guard even when the guard is wrong.
+ * These are transcriptions of MUL-455 §3.2, so a bug in `isMisdirectedPath` /
+ * `isRuntimeAllowedPath` fails this suite instead of defining the answer.
+ *
+ * `ui` = the page process: it refuses the daemon protocol prefix and serves
+ * everything else. `runtime` = the daemon process: an allowlist of prefixes and
+ * exact paths; everything else is refused.
+ */
+const RUNTIME_ALLOWED_PREFIXES = ["/api/daemon/", "/health/", "/internal/"] as const;
+const RUNTIME_ALLOWED_EXACT = ["/health", "/healthz", "/readyz", "/api/multiremi/health"] as const;
+
+/** Independent re-implementation of §3.2, used as the oracle. */
+function expectedRefusal(role: ApiRole, pathname: string): boolean {
+  if (role === "all") return false;
+  if (role === "ui") return pathname.startsWith("/api/daemon/");
+  if (RUNTIME_ALLOWED_EXACT.includes(pathname as (typeof RUNTIME_ALLOWED_EXACT)[number])) return false;
+  return !RUNTIME_ALLOWED_PREFIXES.some((prefix) => pathname.startsWith(prefix));
+}
 
 /**
  * The golden file records route PATTERNS; turn each into a path the app will
@@ -95,6 +121,85 @@ async function sweep(role: ApiRole): Promise<Map<string, number>> {
     db.close();
   }
   return statuses;
+}
+
+
+
+/**
+ * A real `Bun.serve` instance plus the metrics lines it produced.
+ *
+ * The two QA blockers both live in `Bun.serve`'s fetch handler — a plain-HTTP 421
+ * that never reached Hono, and a metrics `role` that could disagree with the
+ * process's effective role — so neither is observable through `app.request`.
+ * `slowRequestMs: 0` makes every request emit a slow line, which is what lets a
+ * single call assert on both log events.
+ */
+async function withServedMetrics(
+  options: {
+    apiRole: ApiRole;
+    /** Deliberately WRONG role for the metrics options, to catch a diverge. */
+    injectedMetricsRole?: ApiRole;
+    requests: Array<{ path: string; upgrade?: boolean }>;
+  },
+): Promise<{ summaries: Array<Record<string, any>>; slow: Array<Record<string, any>> }> {
+  const { store, db } = memoryStore();
+  // The summary timer is the SERVER's own (`startMultiremiServer` starts it from the
+  // options it stamps), never one this helper starts: starting a second timer from
+  // the raw options would make the test assert its own scaffolding instead of the
+  // wiring under test. A short cadence keeps the wait bounded.
+  const metricsOptions: RequestMetricsOptions = {
+    enabled: true,
+    slowRequestMs: 0,
+    summaryIntervalMs: 120,
+    summaryTopRoutes: 10,
+    bufferCapacity: 64,
+    role: options.injectedMetricsRole ?? options.apiRole,
+  };
+  const server = startMultiremiServer({
+    store,
+    scheduler: null,
+    port: 0,
+    hostname: "127.0.0.1",
+    authToken: null,
+    apiRole: options.apiRole,
+    requestMetrics: metricsOptions,
+  });
+  // Captured here rather than through `captureConsoleLog`: the minute summary only
+  // appears on a timer, so the wait below has to read the lines while they are still
+  // being written, and that helper only hands its array back once `run` resolves.
+  const lines: string[] = [];
+  const realLog = console.log;
+  console.log = (...args: unknown[]) => {
+    lines.push(args.map((arg) => String(arg)).join(" "));
+  };
+  try {
+    for (const request of options.requests) {
+      const response = await fetch(`http://127.0.0.1:${server.port}${request.path}`, {
+        headers: request.upgrade
+          ? {
+            Upgrade: "websocket",
+            Connection: "Upgrade",
+            "Sec-WebSocket-Version": "13",
+            "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+          }
+          : undefined,
+      });
+      await response.text().catch(() => "");
+    }
+    // Wait for the server's own timer to emit the window covering these requests.
+    const deadline = Date.now() + 4_000;
+    while (Date.now() < deadline && !lines.some((line) => line.includes("api_minute_summary"))) {
+      await Bun.sleep(40);
+    }
+    return {
+      summaries: lines.filter((line) => line.includes("api_minute_summary")).map((line) => JSON.parse(line)),
+      slow: lines.filter((line) => line.includes("api_slow_request")).map((line) => JSON.parse(line)),
+    };
+  } finally {
+    console.log = realLog;
+    server.stop(true);
+    db.close();
+  }
 }
 
 afterEach(() => {
@@ -146,6 +251,7 @@ describe("MUL-461 api role — env resolution", () => {
       "/internal/peer/health",
     ]) {
       expect(isRuntimeAllowedPath(allowed), allowed).toBe(true);
+      expect(expectedRefusal("runtime", allowed), `oracle ${allowed}`).toBe(false);
     }
     for (const refused of [
       "/",
@@ -158,6 +264,7 @@ describe("MUL-461 api role — env resolution", () => {
       "/api/cloud-runtime/readyz",
     ]) {
       expect(isRuntimeAllowedPath(refused), refused).toBe(false);
+      expect(expectedRefusal("runtime", refused), `oracle ${refused}`).toBe(true);
     }
   });
 
@@ -167,6 +274,29 @@ describe("MUL-461 api role — env resolution", () => {
       expect(isMisdirectedPath("all", path), pattern).toBe(false);
     }
   });
+
+  it("agrees with the literal rule on the boundaries that decide the split", () => {
+    // Each pair brackets a rule that is easy to get backwards: the plural browser
+    // route next to the daemon prefix, a health-looking browser route next to the
+    // real probes, and the peer channel that only the runtime process serves.
+    const cases: Array<{ path: string; ui: boolean; runtime: boolean }> = [
+      { path: "/api/daemons/x", ui: false, runtime: true },
+      { path: "/api/cloud-runtime/healthz", ui: false, runtime: true },
+      { path: "/internal/peer/events", ui: false, runtime: false },
+      { path: "/internal/peer/health", ui: false, runtime: false },
+    ];
+    for (const entry of cases) {
+      expect(isMisdirectedPath("ui", entry.path), `ui ${entry.path}`).toBe(entry.ui);
+      expect(isMisdirectedPath("runtime", entry.path), `runtime ${entry.path}`).toBe(entry.runtime);
+      // …and the hand-written oracle the matrix uses agrees, so the two cannot drift.
+      expect(expectedRefusal("ui", entry.path), `oracle ui ${entry.path}`).toBe(entry.ui);
+      expect(expectedRefusal("runtime", entry.path), `oracle runtime ${entry.path}`).toBe(entry.runtime);
+    }
+    // `isDaemonPath` is the primitive behind the `ui` column: pin it too, because a
+    // dropped trailing slash is exactly the regression QA mutated.
+    expect(isDaemonPath("/api/daemons/x")).toBe(false);
+    expect(isDaemonPath("/api/daemon/heartbeat")).toBe(true);
+  });
 });
 
 describe("MUL-461 api role — guard over the full golden route inventory", () => {
@@ -174,7 +304,8 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
     const statuses = await sweep("all");
     expect(statuses.size).toBe(GOLDEN.routes.length - 3);
     for (const [pattern, status] of statuses) {
-      expect(status, `${pattern} answered ${status} as all`).not.toBe(421);
+      const { path } = concreteRequest(pattern);
+      expect(status === 421, `${pattern} answered ${status} as all`).toBe(expectedRefusal("all", path));
     }
     // Unlike the split roles, `all` runs every handler, so this sweep costs the
     // whole inventory rather than a guard short-circuit. The default 5 s budget is
@@ -182,29 +313,36 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
   }, 60_000);
 
   it("refuses /api/daemon/* and nothing else as ui", async () => {
-    const daemon = await sweep("ui");
+    const statuses = await sweep("ui");
     const misdirected: string[] = [];
-    for (const [pattern, status] of daemon) {
+    for (const [pattern, status] of statuses) {
       const { path } = concreteRequest(pattern);
+      // The guard is the ONLY source of 421, so the set of 421s must be exactly the
+      // paths the plan refuses: this catches a missing refusal and an over-broad one.
+      expect(status === 421, `${pattern} -> ${status}`).toBe(expectedRefusal("ui", path));
       if (status === 421) misdirected.push(pattern);
-      // The guard is the ONLY source of 421, so the set of 421s must be exactly
-      // the daemon paths: this catches both a missing refusal and an over-broad one.
-      expect(isDaemonPath(path), `${pattern} -> ${status}`).toBe(status === 421);
     }
-    // 70 of the 759 patterns live under `/api/daemon/`; a zero here would mean the
-    // guard silently stopped registering.
-    expect(misdirected.length).toBeGreaterThan(0);
-    expect(misdirected.every((pattern) => isDaemonPath(concreteRequest(pattern).path))).toBe(true);
+    // The inventory is fixed, so the counts are literals. 69 of the 756 swept
+    // patterns are refused here, plus `GET /api/daemon/ws` — the upgrade-only route
+    // this sweep cannot drive and the websocket block below asserts instead — makes
+    // the 70 the QA measured independently. Pinning both halves means the guard
+    // cannot drift by reclassifying a route without a number moving.
+    expect(misdirected).toHaveLength(69);
+    expect(misdirected.length + 1).toBe(70);
   });
 
   it("refuses everything but the daemon protocol, health and /internal as runtime", async () => {
     const statuses = await sweep("runtime");
+    let refused = 0;
     for (const [pattern, status] of statuses) {
       const { path } = concreteRequest(pattern);
-      expect(isRuntimeAllowedPath(path), `${pattern} -> ${status}`).toBe(status !== 421);
+      expect(status === 421, `${pattern} -> ${status}`).toBe(expectedRefusal("runtime", path));
+      if (status === 421) refused += 1;
     }
-    const refused = [...statuses.values()].filter((status) => status === 421).length;
-    expect(refused).toBeGreaterThan(0);
+    // 682 of the 756 swept patterns are refused, plus the two browser upgrade routes
+    // (`GET /ws`, `GET /api/realtime/ws`) makes the 684 the QA measured.
+    expect(refused).toBe(682);
+    expect(refused + 2).toBe(684);
   });
 
   it("answers 421 with the misdirected body, the role header, and a real route still reachable", async () => {
@@ -381,6 +519,168 @@ describe("MUL-461 api role — health and effective config", () => {
       expect(lines.some((line) => line.includes("[configuration-degradation]") && line.includes("SQLite")))
         .toBe(true);
     } finally {
+      db.close();
+    }
+  });
+});
+
+/**
+ * QA blocker: the pre-Hono guard answered plain HTTP outside the measured region,
+ * so `api_minute_summary` and `api_slow_request` never saw a 421 at all — the
+ * post-split dashboard would have read as if the refused traffic had vanished.
+ */
+describe("MUL-461 api role — misdirected 421s reach the metrics", () => {
+  it("counts a plain-HTTP 421 served by the runtime role", async () => {
+    const { summaries, slow } = await withServedMetrics({
+      apiRole: "runtime",
+      requests: [{ path: "/api/issues" }],
+    });
+
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]!.requests).toBe(1);
+    expect(summaries[0]!.role).toBe("runtime");
+    // A plain-HTTP refusal is now produced by the guard INSIDE Hono, so the sample
+    // carries the resolved route pattern rather than a raw path.
+    expect(summaries[0]!.routes).toMatchObject([{ method: "GET", route: "/api/issues", count: 1 }]);
+
+    expect(slow).toHaveLength(1);
+    expect(slow[0]).toMatchObject({ event: "api_slow_request", status: 421, role: "runtime", route: "/api/issues" });
+  });
+
+  it("counts a misdirected websocket upgrade refused by the ui role", async () => {
+    const { summaries, slow } = await withServedMetrics({
+      apiRole: "ui",
+      requests: [{ path: "/api/daemon/ws?runtime_ids=rt_x", upgrade: true }],
+    });
+
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]!.requests).toBe(1);
+    expect(summaries[0]!.role).toBe("ui");
+    // The upgrade is refused through the same guard middleware, so it reports the
+    // registered pattern — and never the `runtime_ids` query it carried.
+    expect(summaries[0]!.routes).toMatchObject([{ method: "GET", route: "/api/daemon/ws", count: 1 }]);
+    expect(JSON.stringify(summaries[0])).not.toContain("rt_x");
+
+    expect(slow).toHaveLength(1);
+    expect(slow[0]).toMatchObject({ status: 421, role: "ui", route: "/api/daemon/ws" });
+  });
+
+  it("still upgrades for the role that owns the endpoint", async () => {
+    // The guard must not swallow a legitimate upgrade: runtime owns the daemon
+    // socket, so `server.upgrade` has to run and the request must NOT be recorded as
+    // a refusal. An unauthenticated upgrade on a real socket stays open, so only the
+    // metrics are asserted here (the handshake itself is covered elsewhere).
+    const { store, db } = memoryStore();
+    const metricsOptions: RequestMetricsOptions = {
+      enabled: true,
+      slowRequestMs: 0,
+      summaryIntervalMs: 60_000,
+      summaryTopRoutes: 10,
+      bufferCapacity: 64,
+      role: "runtime",
+    };
+    const server = startMultiremiServer({
+      store,
+      scheduler: null,
+      port: 0,
+      hostname: "127.0.0.1",
+      authToken: null,
+      apiRole: "runtime",
+      requestMetrics: metricsOptions,
+    });
+    const summary = startRequestMetricsSummary(metricsOptions);
+    try {
+      const response = await fetch(`http://127.0.0.1:${server.port}/api/daemon/ws?runtime_ids=rt_missing`, {
+        headers: {
+          Upgrade: "websocket",
+          Connection: "Upgrade",
+          "Sec-WebSocket-Version": "13",
+          "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+        },
+      });
+      // `rt_missing` does not exist, so the daemon handler answers 404 — the point is
+      // that it is NOT a 421 from the guard.
+      expect(response.status).not.toBe(421);
+      await response.text().catch(() => "");
+      const { lines } = await captureConsoleLog(async () => {
+        summary?.flush();
+      });
+      const summaries = lines.filter((line) => line.includes("api_minute_summary")).map((line) => JSON.parse(line));
+      expect(summaries[0]!.role).toBe("runtime");
+    } finally {
+      summary?.stop();
+      server.stop(true);
+      db.close();
+    }
+  });
+});
+
+/**
+ * QA blocker: `options.requestMetrics ?? {...}` let an injected metrics object
+ * decide the role, so a runtime process could report `role:"all"` while its guard
+ * refused runtime traffic. The effective role is now stamped last, and the
+ * pre-Hono upgrade guard reads the same value the middleware does.
+ */
+describe("MUL-461 api role — one effective role per process", () => {
+  it("lets the effective role win over an injected metrics role", async () => {
+    const { summaries, slow } = await withServedMetrics({
+      apiRole: "runtime",
+      // A caller that passes stale options must not be able to relabel the process.
+      injectedMetricsRole: "all",
+      requests: [{ path: "/api/issues" }],
+    });
+
+    expect(summaries[0]!.role).toBe("runtime");
+    expect(slow[0]!.role).toBe("runtime");
+  });
+
+  it("applies an injected apiRole without touching the env", async () => {
+    // No MULTIREMI_API_ROLE in the environment at all: the injected option is the
+    // only source, so a pre-Hono guard that read the env would disagree with Hono.
+    delete process.env.MULTIREMI_API_ROLE;
+    const { summaries } = await withServedMetrics({
+      apiRole: "runtime",
+      requests: [
+        { path: "/api/issues" },
+        { path: "/ws?workspace_id=local", upgrade: true },
+      ],
+    });
+
+    // Both the plain-HTTP guard and the upgrade guard refused, and both are counted.
+    expect(summaries[0]!.role).toBe("runtime");
+    expect(summaries[0]!.requests).toBe(2);
+  });
+
+  it("keeps the guard and the upgrade guard in agreement on the same role", async () => {
+    const { store, db } = memoryStore();
+    const server = startMultiremiServer({
+      store,
+      scheduler: null,
+      port: 0,
+      hostname: "127.0.0.1",
+      authToken: null,
+      apiRole: "runtime",
+    });
+    try {
+      const baseUrl = `http://127.0.0.1:${server.port}`;
+      const upgradeHeaders = {
+        Upgrade: "websocket",
+        Connection: "Upgrade",
+        "Sec-WebSocket-Version": "13",
+        "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+      };
+      // Hono-guard path (plain HTTP) vs fetch pre-guard path (upgrade): same role,
+      // same status, same header.
+      const http = await fetch(`${baseUrl}/api/issues`);
+      const upgrade = await fetch(`${baseUrl}/ws?workspace_id=local`, { headers: upgradeHeaders });
+      await http.text();
+      await upgrade.text().catch(() => "");
+      expect(http.status).toBe(421);
+      expect(upgrade.status).toBe(421);
+      expect(http.headers.get(API_ROLE_HEADER)).toBe("runtime");
+      expect(upgrade.headers.get(API_ROLE_HEADER)).toBe("runtime");
+    } finally {
+      server.stop(true);
       db.close();
     }
   });
