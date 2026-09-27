@@ -2,12 +2,13 @@
 
 | | |
 | --- | --- |
-| 分支 / head | `agent/MUL-398`（PR #298，Draft） |
+| 分支 / head | `agent/MUL-398` @ `188153cf`（PR #298，Draft） |
 | before 基线 | `d905961b`（A / PR #273 的合入提交） |
 | 数据库 | 真实 PostgreSQL 17.5，`PostgresSyncDatabase`（Worker + SharedArrayBuffer + `Atomics.wait`），每个场景新建一次性库；连接串只作为环境变量传入（`postgres://…`） |
 | 采集脚本 | `tests/manual/bench-repository-wikis-a2-scale.ts`（209 规模模型）、`tests/manual/bench-repository-wikis-db-bytes.ts`（本地 fixture 同口径前后）、`tests/manual/bench-repository-wikis-a2-cli.ts`（CLI 逐字节） |
 | 采样 | warmup 1 + n=5；before/after 用同一脚本、同一 fixture |
 | after 结果 | `reports/performance/MUL-398-repository-wikis-a2-db-bytes.json` |
+| CI | PR #298 build / check(ubuntu,windows) / frontend-zero-jump / session-archive-platform(ubuntu,macos) 6/6 通过 |
 
 ## 1. 口径
 

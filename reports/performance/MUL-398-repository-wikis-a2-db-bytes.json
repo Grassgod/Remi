@@ -5,7 +5,7 @@
   "database": "postgres://… (temporary PostgreSQL 17.5; one throwaway database per scenario; the connection string is only ever an environment variable)",
   "accounting": "Server-Timing dbb (production request-metrics db_bytes) + per-statement JSON.stringify({rows,count}) attribution; an unreachable MULTIREMI_TEST_POSTGRES_URL exits non-zero instead of falling back to SQLite",
   "baseCommit": "d905961b (merge of the A PR #273)",
-  "headCommit": "b1033de6",
+  "headCommit": "188153cf",
   "pr": "https://github.com/Grassgod/Remi/pull/298",
   "warmups": 1,
   "samples": 5,
@@ -536,6 +536,7 @@
     "arch": "tests/arch/ — 92 pass / 0 fail",
     "docsCheck": "passed",
     "cliCapabilities": "668 mapped / 91 exempt / 0 missing",
-    "apiRoutesSnapshot": "matches"
+    "apiRoutesSnapshot": "matches",
+    "prCi": "6/6 pass: build, check (ubuntu, windows), frontend-zero-jump, session-archive-platform (ubuntu, macos)"
   }
 }
