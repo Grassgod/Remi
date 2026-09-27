@@ -268,10 +268,27 @@ export function IssueActivitySection({
   // Shared row renderer for both timeline render modes (flat / virtualized).
   // The wrapper `id="comment-..."` is the deep-link target — equivalent to
   // a native `<a href="#comment-...">` anchor.
+  //
+  // `data-perf-*` is the measurement contract for the MUL-384 page-speed probe:
+  // `data-perf-item` marks a row holding real data (skeletons never carry it),
+  // `data-perf-key` keys it for frame-to-frame comparison, and the anchors let
+  // the probe find the terminal elements. Attributes only — no behavior here.
+  // The newest row by identity, not by index: Virtuoso hands this renderer a
+  // logical index offset by `firstItemIndex`, so `_i === items.length - 1` never
+  // matches and the terminal anchor would silently never render.
+  const latestItemId = items.length > 0 ? items[items.length - 1]!.id : null;
   const renderItem = (_i: number, item: TimelineItem): React.ReactElement => {
+    const perfItem = {
+      "data-perf-item": item.kind === "activity-group" ? "activity" : item.kind,
+      "data-perf-key": item.id,
+    } as const;
+    const perfAnchor = item.id === highlightCommentId ? { "data-perf-anchor": "target-comment" } : null;
+    // The last row of the list is where the reading position settles; the probe
+    // treats it as the terminal element when no agent stream row is rendered.
+    const perfLatest = item.id === latestItemId ? { "data-perf-anchor": "latest-comment" } : null;
     if (item.kind === "resolved-bar") {
       return (
-        <div className="pb-3" id={`comment-${item.id}`}>
+        <div className="pb-3" id={`comment-${item.id}`} {...perfItem} {...perfLatest} {...perfAnchor}>
           <ResolvedThreadBar
             entry={item.entry}
             onExpand={() => resolvedThreads.toggle(item.id, true)}
@@ -282,7 +299,7 @@ export function IssueActivitySection({
     if (item.kind === "comment") {
       const isResolved = !!item.entry.resolved_at;
       return (
-        <div className="pb-3" id={`comment-${item.id}`}>
+        <div className="pb-3" id={`comment-${item.id}`} {...perfItem} {...perfLatest} {...perfAnchor}>
           <CommentCard
             issueId={issueId}
             entry={item.entry}
@@ -306,17 +323,19 @@ export function IssueActivitySection({
     const expanded = activityExpansion.isExpanded(item.id, item.id === lastActivityId);
     const truncateOlder = item.id === lastActivityId;
     return (
-      <ActivityBlock
-        entries={item.entries}
-        expanded={expanded}
-        onToggle={() => activityExpansion.toggle(item.id, expanded)}
-        truncateOlder={truncateOlder}
-        showOlder={activityExpansion.isShowingOlder(item.id)}
-        onToggleShowOlder={() => activityExpansion.showOlder(item.id)}
-        getActorName={getActorName}
-        t={t}
-        timeAgo={timeAgo}
-      />
+      <div {...perfItem} {...perfLatest}>
+        <ActivityBlock
+          entries={item.entries}
+          expanded={expanded}
+          onToggle={() => activityExpansion.toggle(item.id, expanded)}
+          truncateOlder={truncateOlder}
+          showOlder={activityExpansion.isShowingOlder(item.id)}
+          onToggleShowOlder={() => activityExpansion.showOlder(item.id)}
+          getActorName={getActorName}
+          t={t}
+          timeAgo={timeAgo}
+        />
+      </div>
     );
   };
 

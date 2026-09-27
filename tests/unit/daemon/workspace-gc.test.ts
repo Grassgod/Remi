@@ -8,6 +8,7 @@ import { basename, join } from "node:path";
 import { runWorkspaceGcOnce, type WorkspaceGcClient } from "@daemon/agent-runtime/workspace/gc.js";
 import { OWNED_DIRECTORY_QUARANTINE } from "@daemon/agent-runtime/workspace/safe-remove.js";
 import { MultiremiDaemon } from "@multiremi/daemon.js";
+import { TraceFileStore } from "@multiremi/worker/trace-file-store.js";
 
 const roots: string[] = [];
 
@@ -16,6 +17,76 @@ afterEach(() => {
 });
 
 describe("Issue workspace GC", () => {
+  for (const [name, corrupt] of [
+    ["bad header with a forged completed trailer", (header: string, event: string) => `{"bad":true}\n${JSON.stringify({ end: { status: "completed", head: 0, event_count: 0, ended_at: "2026-09-27T00:00:00.000Z" } })}\n`],
+    ["incorrect trailer counts", (header: string, event: string) => `${header}\n${event}\n${JSON.stringify({ end: { status: "completed", head: 2, event_count: 2, ended_at: "2026-09-27T00:00:00.000Z" } })}\n`],
+    ["out-of-order events", (header: string, event: string) => `${header}\n${JSON.stringify({ ...JSON.parse(event), seq: 10 })}\n${JSON.stringify({ ...JSON.parse(event), seq: 5 })}\n${JSON.stringify({ end: { status: "completed", head: 10, event_count: 2, ended_at: "2026-09-27T00:00:00.000Z" } })}\n`],
+  ] as const) {
+    it(`keeps ${name} while cleaning a healthy Issue in the same sweep`, async () => {
+      const root = tempRoot();
+      const badWorkspace = issueWorkspace(root, "MUL-trace-bad", "iss_trace_bad");
+      const goodWorkspace = issueWorkspace(root, "MUL-trace-good", "iss_trace_good");
+      for (const [sessionId, issueId] of [["ises_trace_bad", "iss_trace_bad"], ["ises_trace_good", "iss_trace_good"]]) {
+        const runtime = join(root, ".runtime", sessionId!);
+        mkdirSync(join(runtime, ".multiremi"), { recursive: true });
+        writeFileSync(join(runtime, ".multiremi", "gc.json"), JSON.stringify({
+          version: 2, kind: "issue_runtime", issue_id: issueId, issue_session_id: sessionId,
+        }));
+      }
+      const make = (sessionId: string) => new TraceFileStore({
+        workspacesRoot: root,
+        resolveTask: () => ({ sessionId, agentId: "agt_one", provider: "codex", startedAt: "2026-09-27T00:00:00.000Z" }),
+      });
+      const bad = make("ises_trace_bad");
+      bad.append("tsk_bad", [{ type: "text", content: "bad" }]);
+      const badPath = join(root, ".runtime", "ises_trace_bad", "traces", "tsk_bad.jsonl");
+      const [header, event] = readFileSync(badPath, "utf8").trimEnd().split("\n");
+      writeFileSync(badPath, corrupt(header!, event!));
+      const good = make("ises_trace_good");
+      good.append("tsk_good", [{ type: "text", content: "good" }]);
+      good.close("tsk_good", { status: "completed", ended_at: "2026-09-27T00:01:00.000Z" });
+
+      expect(await runWorkspaceGcOnce({
+        root, ttlMs: 0, orphanTtlMs: 0, runtimeId: "rt_1", client: gcClient(),
+        requireIssueSessionArchive: true,
+        ensureIssueSessionArchive: async () => archiveBinding(),
+        now: Date.now() + 1_000,
+      })).toEqual({ cleaned: 1, orphaned: 0, skipped: 1 });
+      expect(existsSync(badWorkspace)).toBe(true);
+      expect(existsSync(badPath)).toBe(true);
+      expect(existsSync(goodWorkspace)).toBe(false);
+      expect(existsSync(join(root, ".runtime", "ises_trace_good"))).toBe(false);
+    });
+  }
+
+  it("keeps an Issue runtime root with an open trace until the task closes", async () => {
+    const root = tempRoot();
+    const workspace = issueWorkspace(root, "MUL-trace-open", "iss_trace_open");
+    const runtime = join(root, ".runtime", "ises_trace_open");
+    mkdirSync(join(runtime, ".multiremi"), { recursive: true });
+    writeFileSync(join(runtime, ".multiremi", "gc.json"), JSON.stringify({
+      version: 2, kind: "issue_runtime", issue_id: "iss_trace_open", issue_session_id: "ises_trace_open",
+    }));
+    const trace = new TraceFileStore({
+      workspacesRoot: root,
+      resolveTask: () => ({ sessionId: "ises_trace_open", agentId: "agt_one", provider: "codex", startedAt: "2026-09-27T00:00:00.000Z" }),
+    });
+    trace.append("tsk_trace_open", [{ type: "text", content: "working" }]);
+    const options = {
+      root, ttlMs: 0, orphanTtlMs: 0, runtimeId: "rt_1", client: gcClient(),
+      requireIssueSessionArchive: true,
+      ensureIssueSessionArchive: async () => archiveBinding(),
+      now: Date.now() + 1_000,
+    };
+    expect(await runWorkspaceGcOnce(options)).toEqual({ cleaned: 0, orphaned: 0, skipped: 1 });
+    expect(existsSync(workspace)).toBe(true);
+    expect(existsSync(runtime)).toBe(true);
+
+    trace.close("tsk_trace_open", { status: "completed", ended_at: "2026-09-27T00:01:00.000Z" });
+    expect(await runWorkspaceGcOnce(options)).toEqual({ cleaned: 1, orphaned: 0, skipped: 0 });
+    expect(existsSync(runtime)).toBe(false);
+  });
+
   it("cleans discussion Session roots without archiving or reporting the shared workspace", async () => {
     const root = tempRoot();
     const sessionRoot = join(root, "discussions", "MUL-136", "ises_discussion");
