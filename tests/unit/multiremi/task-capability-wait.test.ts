@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import type { MultiremiRuntimeModel } from "@multiremi/contracts/types.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { placementWaitReason } from "@multiremi/store/task-wait-reason.js";
+import { deviceRoutingRepair, placementWaitReason } from "@multiremi/store/task-wait-reason.js";
 import { canRepoolQueuedTaskPin, REPOOLABLE_QUEUED_TASK_SQL } from "@multiremi/store/repos/tasks-repo.js";
 import { createLocalStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
 
@@ -424,7 +424,8 @@ describe("queued task model capability waits", () => {
     const now = Date.now();
     ageTask(task.id, GRACE_MS, now);
     expect(store.refreshQueuedCapabilityWaitReasons(now).updated).toBe(1);
-    expect(store.getTask(task.id)?.waitReason).toContain("把 devbox-a 加回项目的设备绑定，或取消它的独享设置");
+    expect(store.getTask(task.id)?.waitReason).toContain("把 devbox-a 加回项目的设备绑定");
+    expect(store.getTask(task.id)?.waitReason).not.toContain("取消");
     // The workspace data only exists on the devbox: keep waiting, don't move it.
     expect(store.claimTask(other.id)).toBeNull();
     expect(store.getTask(task.id)).toMatchObject({ runtimeId: devbox.id, status: "queued" });
@@ -789,7 +790,7 @@ describe("queued task model capability waits", () => {
     expect(store.getTask(task.id)?.status).toBe("cancelled");
   });
 
-  it("warns on a frozen Chat Agent binding rejected by Project device routing", () => {
+  it("restores a frozen Chat Agent's refused Project binding without cancelling its task", () => {
     const store = createLocalStore();
     const a = store.registerRuntime({ id: "rt_chat_route_a", name: "A", provider: "codex", daemonId: "chat-route-a" });
     const b = store.registerRuntime({ id: "rt_chat_route_b", name: "B", provider: "codex", daemonId: "chat-route-b" });
@@ -805,9 +806,12 @@ describe("queued task model capability waits", () => {
     expect(store.claimTask(b.id)).toBeNull();
     store.refreshQueuedCapabilityWaitReasons(now);
     expect(store.getTask(task.id)?.waitReason).toStartWith("等待项目设备：");
-    expect(store.getTask(task.id)?.waitReason).toContain("直接改绑会取消这条已冻结的任务");
-    store.updateAgent(agent.id, { runtimeId: b.id });
-    expect(store.getTask(task.id)?.status).toBe("cancelled");
+    expect(store.getTask(task.id)?.waitReason).toContain("把 A 加回项目的设备绑定");
+    expect(store.getTask(task.id)?.waitReason).not.toContain("取消");
+    store.createProjectDevice(project.id, { daemonId: "chat-route-a" });
+    expect(store.getTask(task.id)?.status).toBe("queued");
+    expect(store.claimTask(b.id)).toBeNull();
+    expect(store.claimTask(a.id)?.id).toBe(task.id);
   });
 
   it("orders device restoration before rebinding an Agent to its data machine", () => {
@@ -850,28 +854,107 @@ describe("queued task model capability waits", () => {
     expect(store.claimTask(a.id)?.id).toBe(task.id);
   });
 
+  it("lists exactly the single actions that clear each device-routing refusal", () => {
+    let combinations = 0;
+    let impossible = 0;
+    const qaCases: Record<string, string[]> = {};
+    for (const hasProject of [false, true])
+      for (const hasBindings of [false, true])
+        for (const boundToA of [false, true])
+          for (const dedicated of [false, true]) {
+            combinations++;
+            const coordinate = JSON.stringify({ hasProject, hasBindings, boundToA, dedicated });
+            if (hasProject && !hasBindings && boundToA) {
+              // A binding to A itself makes "project has no bindings" impossible.
+              impossible++;
+              continue;
+            }
+            const build = () => {
+              const store = createLocalStore();
+              const a = store.registerRuntime({ name: "A", provider: "codex", daemonId: "table-a" });
+              const b = store.registerRuntime({ name: "B", provider: "codex", daemonId: "table-b" });
+              const agent = store.createAgent({ name: "Route table", provider: "codex" });
+              const project = hasProject ? store.createProject({ title: "Target" }) : null;
+              if (project && hasBindings) store.createProjectDevice(project.id, { daemonId: boundToA ? "table-a" : "table-b" });
+              if (dedicated) {
+                const foreign = store.createProject({ title: "Foreign" });
+                store.createProjectDevice(foreign.id, { daemonId: "table-a" });
+                store.updateDaemonDedicated("local", "table-a", true, "local");
+              }
+              const chat = store.createChatSession({ agentId: agent.id, ...(project ? { projectId: project.id } : {}) });
+              const task = store.sendChatMessage(chat.id, { body: "routing table request" }).task;
+              db!.run("UPDATE multiremi_tasks SET runtime_id = ?, execution_fingerprint = 'routing-table-fp' WHERE id = ?", [a.id, task.id]);
+              const now = Date.now();
+              ageTask(task.id, GRACE_MS, now);
+              store.refreshQueuedCapabilityWaitReasons(now);
+              return { store, a, b, project, task, reason: store.getTask(task.id)?.waitReason ?? "" };
+            };
+            const baseline = build();
+            const before = baseline.store.describeTaskPlacement(baseline.task.id).find((v) => v.runtimeId === baseline.a.id)!;
+            const state = { projectId: baseline.project?.id ?? null, projectHasDevices: hasProject && hasBindings,
+              machineBound: hasProject && hasBindings && boundToA, dedicated };
+            const repair = deviceRoutingRepair(state, "A");
+            expect(before.routingOk, coordinate).toBe(repair === null);
+            if (repair) expect(baseline.reason, coordinate).toStartWith("等待项目设备：");
+            else expect(baseline.reason, coordinate).not.toStartWith("等待项目设备：");
+            const qaName = hasProject
+              ? hasBindings && !boundToA ? dedicated ? "bound-B-dedicated" : "bound-B-shared"
+                : !hasBindings && dedicated ? "unbound-dedicated" : null
+              : dedicated && !hasBindings && !boundToA ? "projectless-dedicated" : null;
+            if (qaName) qaCases[qaName] = repair?.actions.map((action) =>
+              action.includes("加回") ? "add binding" : "remove dedicated") ?? [];
+            for (const action of ["add", "remove"] as const) {
+              const { store, a, b, project, task, reason } = build();
+              if (action === "add" && project) {
+                if (!hasBindings || !boundToA) store.createProjectDevice(project.id, { daemonId: "table-a" });
+              }
+              if (action === "remove") store.updateDaemonDedicated("local", "table-a", false, "local");
+              const after = store.describeTaskPlacement(task.id).find((v) => v.runtimeId === a.id)!;
+              const works = !before.routingOk && after.routingOk && store.claimTask(a.id)?.id === task.id;
+              expect(works, `${coordinate}/${action}: ${reason}`).toBe(action === "add"
+                ? reason.includes("加回项目的设备绑定")
+                : /取消 .* 的独享设置/.test(reason));
+              if (works) expect(store.claimTask(b.id)).toBeNull();
+            }
+          }
+    expect(combinations).toBe(16);
+    expect(impossible).toBe(2);
+    expect(qaCases).toEqual({
+      "bound-B-shared": ["add binding"],
+      "bound-B-dedicated": ["add binding"],
+      "unbound-dedicated": ["add binding", "remove dedicated"],
+      "projectless-dedicated": ["remove dedicated"],
+    });
+  }, 120_000);
+
   it("executes placement remedies across Chat and Issue binding combinations", () => {
     const counts = new Map<string, number>();
+    const alternatives = new Map<string, number>();
     const noMechanical: string[] = [];
     let cells = 0;
-    for (const kind of ["chat", "issue"] as const)
+    for (const kind of ["chat", "issue", "chat-no-project"] as const)
       for (const frozen of [false, true])
         for (const binding of ["A", "B", "none"] as const)
           for (const dataOnA of [false, true])
-            for (const devices of ["A", "B", "AB"] as const) {
-              const coordinate = `${kind}/${frozen ? "frozen" : "plain"}/${binding}/${dataOnA ? "data-A" : "no-data"}/${devices}`;
-              cells++;
+            for (const devices of ["none", "A", "B", "AB"] as const)
+              for (const dedicated of [false, true]) {
+              if (kind === "chat-no-project" && (dataOnA || devices !== "none")) continue;
+              for (const option of ["primary", "remove-dedicated"] as const) {
+              if (option === "remove-dedicated" && (!dedicated || devices !== "none" || kind === "chat-no-project")) continue;
+              const coordinate = `${kind}/${frozen ? "frozen" : "plain"}/${binding}/${dataOnA ? "data-A" : "no-data"}/${devices}/${dedicated ? "dedicated" : "shared"}`;
+              if (option === "primary") cells++;
               const store = createLocalStore();
-              const a = store.registerRuntime({ id: `rt_matrix_a_${cells}`, name: "A", provider: "codex", daemonId: `matrix-a-${cells}` });
-              const b = store.registerRuntime({ id: `rt_matrix_b_${cells}`, name: "B", provider: "codex", daemonId: `matrix-b-${cells}` });
+              const key = `${cells}_${option}`.replace(/-/g, "_");
+              const a = store.registerRuntime({ id: `rt_matrix_a_${key}`, name: "A", provider: "codex", daemonId: `matrix-a-${key}` });
+              const b = store.registerRuntime({ id: `rt_matrix_b_${key}`, name: "B", provider: "codex", daemonId: `matrix-b-${key}` });
               const agent = store.createAgent({ name: "Matrix", provider: "codex" });
-              const project = store.createProject({ title: "Matrix", resources: kind === "chat" && dataOnA
+              const project = kind === "chat-no-project" ? null : store.createProject({ title: "Matrix", resources: kind === "chat" && dataOnA
                 ? [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/matrix", daemon_id: a.daemonId } }] : [] });
-              store.createProjectDevice(project.id, { daemonId: a.daemonId! });
+              if (project) store.createProjectDevice(project.id, { daemonId: a.daemonId! });
               let issue: ReturnType<typeof store.createIssue> | null = null;
               let issueSessionId: string | null = null;
               if (kind === "issue") {
-                issue = store.createIssue({ title: "Matrix issue", projectId: project.id });
+                issue = store.createIssue({ title: "Matrix issue", projectId: project!.id });
                 if (dataOnA) {
                   const parent = store.createIssueSession(issue.id, { title: "Parent", holdsWorkspace: true });
                   const seed = store.createTask({ agentId: agent.id, issueId: issue.id, issueSessionId: parent.id, prompt: "seed" });
@@ -885,11 +968,17 @@ describe("queued task model capability waits", () => {
                   issueSessionId = store.createIssueSession(issue.id, { title: "Discussion", holdsWorkspace: false }).id;
                 }
               }
-              if (devices === "B") store.deleteProjectDevice(project.id, a.daemonId!);
-              if (devices !== "A") store.createProjectDevice(project.id, { daemonId: b.daemonId! });
+              if (project && (devices === "B" || devices === "none")) store.deleteProjectDevice(project.id, a.daemonId!);
+              if (project && (devices === "B" || devices === "AB")) store.createProjectDevice(project.id, { daemonId: b.daemonId! });
+              if (dedicated) {
+                const foreign = store.createProject({ title: "Other Project" });
+                store.createProjectDevice(foreign.id, { daemonId: a.daemonId! });
+                store.updateDaemonDedicated("local", a.daemonId!, true, "local");
+              }
               if (binding !== "none") store.updateAgent(agent.id, { runtimeId: binding === "A" ? a.id : b.id });
               const prompt = `original ${coordinate}`;
-              const chat = kind === "chat" ? store.createChatSession({ agentId: agent.id, projectId: project.id }) : null;
+              const chat = kind !== "issue" ? store.createChatSession({ agentId: agent.id,
+                ...(project ? { projectId: project.id } : {}) }) : null;
               const task = chat ? store.sendChatMessage(chat.id, { body: prompt }).task
                 : store.createTask({ agentId: agent.id, issueId: issue!.id, issueSessionId: issueSessionId!, prompt });
               if (frozen) db!.run("UPDATE multiremi_tasks SET execution_fingerprint = ? WHERE id = ?", [`fp-${cells}`, task.id]);
@@ -897,21 +986,33 @@ describe("queued task model capability waits", () => {
               ageTask(task.id, GRACE_MS, now);
               store.refreshQueuedCapabilityWaitReasons(now);
               const reason = store.getTask(task.id)?.waitReason ?? "";
+              const offersBoth = reason.includes("加回项目的设备绑定") && reason.includes("取消")
+                && reason.includes("独享设置");
+              if (offersBoth) expect(dedicated && devices === "none" && project !== null, coordinate).toBe(true);
+              if (option === "remove-dedicated" && !offersBoth) continue;
               const initiallyClaimable = store.describeTaskPlacement(task.id).some((verdict) => verdict.placementOk && verdict.routingOk);
               if (initiallyClaimable) {
                 expect(reason, coordinate).not.toStartWith("等待任务落点：");
                 expect(reason, coordinate).not.toStartWith("等待项目设备：");
-                counts.set("already claimable", (counts.get("already claimable") ?? 0) + 1);
+                if (option === "primary") counts.set("already claimable", (counts.get("already claimable") ?? 0) + 1);
               } else if (reason.includes("让这些约束指向同一台机器") && !reason.includes("remi agent update")) {
-                noMechanical.push(`${coordinate}: ${reason}`);
-                counts.set("no mechanical remedy", (counts.get("no mechanical remedy") ?? 0) + 1);
+                if (option === "primary") {
+                  noMechanical.push(`${coordinate}: ${reason}`);
+                  counts.set("no mechanical remedy", (counts.get("no mechanical remedy") ?? 0) + 1);
+                }
                 continue;
               } else {
-                const addA = reason.includes("把 A 加回项目的设备绑定");
+                const addTarget = /把 ([^；，]+) 加回项目的设备绑定/.exec(reason)?.[1];
+                const addDevice = Boolean(addTarget) && option === "primary";
+                const removeDedicated = reason.includes("取消") && reason.includes("独享设置")
+                  && (option === "remove-dedicated" || !addDevice);
                 const rebind = reason.match(/remi agent update [a-zA-Z0-9_-]+ --runtime ([a-zA-Z0-9_-]+)/);
                 const redispatch = reason.match(/remi task redispatch ([a-zA-Z0-9_-]+)/);
                 const resend = reason.includes("remi chat message create");
-                if (addA) store.createProjectDevice(project.id, { daemonId: a.daemonId! });
+                if (addDevice) store.createProjectDevice(project!.id, {
+                  daemonId: addTarget === "B" || addTarget === b.daemonId ? b.daemonId! : a.daemonId!,
+                });
+                if (removeDedicated) store.updateDaemonDedicated("local", a.daemonId!, false, "local");
                 let replacement = task;
                 if (redispatch) {
                   expect(redispatch[1], coordinate).toBe(task.id);
@@ -931,14 +1032,16 @@ describe("queued task model capability waits", () => {
                   expect(original, coordinate).toBeDefined();
                   replacement = store.sendChatMessage(chat!.id, { body: original!.body }).task;
                 }
-                const sequence = [addA && "add device", redispatch && "redispatch", rebind && "rebind", resend && "resend"].filter(Boolean).join(" + ");
-                if (coordinate === "chat/frozen/B/data-A/B") expect(sequence).toBe("add device + rebind + resend");
-                if (coordinate === "issue/frozen/B/data-A/B") expect(sequence).toBe("add device + redispatch + rebind");
-                if (coordinate === "chat/frozen/A/data-A/B") {
+                const sequence = [addDevice && "add device", removeDedicated && "remove dedicated",
+                  redispatch && "redispatch", rebind && "rebind", resend && "resend"].filter(Boolean).join(" + ");
+                if (coordinate === "chat/frozen/B/data-A/B/shared") expect(sequence).toBe("add device + rebind + resend");
+                if (coordinate === "issue/frozen/B/data-A/B/shared") expect(sequence).toBe("add device + redispatch + rebind");
+                if (coordinate === "chat/frozen/A/data-A/B/shared") {
                   expect(sequence).toBe("add device");
                   expect(store.getTask(task.id)?.status).toBe("queued");
                 }
-                counts.set(sequence, (counts.get(sequence) ?? 0) + 1);
+                const tally = option === "primary" ? counts : alternatives;
+                tally.set(sequence, (tally.get(sequence) ?? 0) + 1);
                 expect(replacement.prompt, coordinate).toBe(prompt);
                 if (dataOnA) {
                   expect(store.claimTask(b.id), coordinate).toBeNull();
@@ -952,11 +1055,13 @@ describe("queued task model capability waits", () => {
               const claimed = store.claimTask(a.id) ?? store.claimTask(b.id);
               expect(claimed?.id, coordinate).toBe(task.id);
               expect(claimed?.prompt, coordinate).toBe(prompt);
+              }
             }
-    expect(cells).toBe(72);
+    expect(cells).toBe(204);
     expect(cells).toBe([...counts.values()].reduce((sum, count) => sum + count, 0));
     expect(noMechanical, noMechanical.join("\n")).toEqual([]);
-    console.log(`remedy matrix: ${cells} cells, ${JSON.stringify(Object.fromEntries(counts))}, no mechanical: ${JSON.stringify(noMechanical)}`);
+    expect([...alternatives.values()].reduce((sum, count) => sum + count, 0)).toBeGreaterThan(0);
+    console.log(`remedy matrix: ${cells} cells, primary=${JSON.stringify(Object.fromEntries(counts))}, alternatives=${JSON.stringify(Object.fromEntries(alternatives))}, no mechanical=${JSON.stringify(noMechanical)}`);
   }, 120_000);
 
   it("names conflicting data constraints as a fourth-tier remedy", () => {
