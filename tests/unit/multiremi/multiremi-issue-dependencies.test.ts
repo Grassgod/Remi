@@ -669,6 +669,40 @@ describe("MUL-400 E3 — surfaces", () => {
     expect(await held.json()).toMatchObject({ code: "dependencies_unmet" });
   });
 
+  /**
+   * MUL-409 fix round, QA suggestion 1: `AssignIssueInput.force` reaches the
+   * gate through the dedicated assign route, so a member can start a parked
+   * issue by assigning it. A task identity is refused, same as the PATCH routes.
+   */
+  it("lets the assign route force a parked issue into a round", async () => {
+    const { store, agent } = storeWithAgent();
+    const app = createMultiremiApp({ store });
+    const prereq = store.createIssue({ title: "Prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({ title: "Dependent", status: "backlog", blockedBy: [prereq.id] });
+    const assign = (body: unknown) => app.request(`/api/multiremi/issues/${dependent.id}/assign`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    // Without force the gate holds: the owner is recorded, no round appears.
+    const held = await assign({ assigneeType: "agent", assigneeId: agent.id });
+    expect(held.status).toBe(200);
+    const heldBody = await held.json() as { issue: { status: string }; task: unknown };
+    expect(heldBody.issue.status).toBe("backlog");
+    expect(heldBody.task).toBeNull();
+    expect(store.listTasksForIssue(dependent.id)).toHaveLength(0);
+
+    const forced = await assign({ assigneeType: "agent", assigneeId: agent.id, force: true });
+    expect(forced.status).toBe(200);
+    const forcedBody = await forced.json() as { issue: { status: string }; task: { id: string } | null };
+    expect(forcedBody.issue.status).toBe("todo");
+    expect(forcedBody.task?.id).toBeDefined();
+    expect(store.listTasksForIssue(dependent.id).filter((task) => task.status !== "cancelled")).toHaveLength(1);
+    // The rows stay, so the page still explains why this one started early.
+    expect(store.listUnmetPrerequisites(dependent.id)).toHaveLength(1);
+  });
+
   it("reports dependencies_unmet on create instead of backlog_status", async () => {
     const { store, agent } = storeWithAgent();
     const app = createMultiremiApp({ store });
