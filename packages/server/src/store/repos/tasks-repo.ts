@@ -999,6 +999,8 @@ export class TasksRepo {
           runtimeName: names.join(" / "),
           affinity: probe.explanation,
           frozenTask: probe.frozenRetry,
+          chatSessionId: row.chat_session_id,
+          agentId: row.agent_id,
         });
         if (reason === row.wait_reason) continue;
         if (this.writeObservedWaitReason(row, reason, now)) result.updated++;
@@ -1017,6 +1019,8 @@ export class TasksRepo {
           runtimeName: this.daemonDisplayName(pendingDaemon, placementCache),
           affinity: probe.explanation,
           frozenTask: probe.frozenRetry,
+          chatSessionId: row.chat_session_id,
+          agentId: row.agent_id,
         });
         if (reason === row.wait_reason) continue;
         if (this.writeObservedWaitReason(row, reason, now)) result.updated++;
@@ -1034,6 +1038,7 @@ export class TasksRepo {
         frozenTask: probe.frozenRetry,
         agentId: row.agent_id,
         redispatchTaskId: row.id,
+        chatSessionId: row.chat_session_id,
       });
       if (reason === row.wait_reason) continue;
       if (this.writeObservedWaitReason(row, reason, now)) result.updated++;

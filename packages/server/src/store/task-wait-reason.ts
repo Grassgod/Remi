@@ -58,9 +58,13 @@ export function deviceRoutingWaitReason(input: {
   /** `"会话"` is the generic label when no single hard affinity dominates. */
   affinity: DeviceRoutingAffinity | "会话";
   frozenTask?: boolean;
+  chatSessionId?: string | null;
+  agentId?: string | null;
 }): string {
   const remedy = input.affinity === "Agent 绑定"
-    ? `请调整该 Agent 的 Runtime 绑定${input.frozenTask ? "；直接改绑会取消这条已冻结的任务" : ""}`
+    ? input.frozenTask && input.chatSessionId && input.agentId
+      ? `直接改绑会取消这条已冻结的任务；由 Agent 所有者或工作区 owner/admin 运行 remi agent update ${input.agentId} --runtime <项目允许的 Runtime ID>；由能查看该 Chat 的用户运行 remi chat message list ${input.chatSessionId} 找到原任务对应的用户消息，再运行 remi chat message create ${input.chatSessionId} --content '<原用户消息正文>' 原样重发（两步可以由不同的人执行；附件需重新上传）`
+      : `请调整该 Agent 的 Runtime 绑定${input.frozenTask ? "；直接改绑会取消这条已冻结的任务" : ""}`
     : "请把该机器加回项目的设备绑定，或取消它的独享设置";
   return `${DEVICE_ROUTING_WAIT_PREFIX}任务钉在 ${input.runtimeName}（${input.affinity}），`
     + `该机器不在项目的设备绑定里或为独享设备；${remedy}`;
@@ -86,6 +90,7 @@ export function placementWaitReason(input: {
   frozenTask?: boolean;
   agentId?: string | null;
   redispatchTaskId?: string;
+  chatSessionId?: string | null;
 }): string {
   const listed = input.constraints.join("；");
   let remedy: string;
@@ -95,11 +100,13 @@ export function placementWaitReason(input: {
   if (input.workspaceRuntimeMissing) {
     remedy = "该 Issue 的工作区记录失去了所属 Runtime（状态 runtime_offline）；"
       + "重新注册原机器后可在其上重新接管，否则需要人工处理";
-  } else if (input.frozenRetry && !input.codeSnapshot && !input.localDirectory && redispatch) {
+  } else if (input.frozenRetry && !input.chatSessionId && !input.codeSnapshot && !input.localDirectory && redispatch) {
     remedy = `运行 ${redispatch} 冷启动，落点会按当前工作区重新计算`;
   } else if (input.agentBound && input.agentBindingTarget && input.agentBindingRuntimeId && input.agentId) {
     const rebind = `remi agent update ${input.agentId} --runtime ${input.agentBindingRuntimeId}`;
-    if (input.frozenTask && redispatch) {
+    if (input.frozenTask && input.chatSessionId) {
+      remedy = `直接改绑会取消这条已冻结的任务；由 Agent 所有者或工作区 owner/admin 先运行 ${rebind}，再由能查看该 Chat 的用户运行 remi chat message list ${input.chatSessionId} 找到原任务对应的用户消息，运行 remi chat message create ${input.chatSessionId} --content '<原用户消息正文>' 原样重发（两步可以由不同的人执行；原消息的附件不会随重发带过去，需重新上传）；由 ${input.agentBindingTarget} 领取新任务`;
+    } else if (input.frozenTask && redispatch) {
       remedy = `直接改绑会取消这条已冻结的任务；先运行 ${redispatch}，再运行 ${rebind}，由 ${input.agentBindingTarget} 领取替代任务`;
     } else {
       remedy = `把该 Agent 的 Runtime 绑定改到 ${input.agentBindingTarget}（${rebind}）`;
