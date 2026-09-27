@@ -4,6 +4,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createStore, createLocalStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
 import { prepareFeishuIssueTopic } from "../../fixtures/multiremi-feishu-topic.js";
+import { MUL449_CLAIM_SQL_GOLDEN } from "../../fixtures/mul449-claim-sql-golden.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -660,6 +661,103 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     expect(store.getTask(second.id)?.waitReason).toBeNull();
     expect(store.claimTask(a.id)).toBeNull();
     expect(store.claimTask(b.id)?.id).toBe(second.id);
+  });
+
+  // MUL-449 ruling 2: the claim predicate and the wait-reason observer must be
+  // one body of SQL. This asserts the refactor moved strings without editing
+  // them, which is what makes the shared placement probe trustworthy.
+  it("keeps the claim SELECT byte-identical to the pre-refactor SQL", () => {
+    const store = createLocalStore();
+    const runtime = store.registerRuntime({
+      id: "rt_golden", name: "golden", provider: "codex", workspaceId: "local", daemonId: "dev-golden",
+    });
+    const agent = store.createAgent({ name: "golden", provider: "codex", workspaceId: "local" });
+    store.createTask({ agentId: agent.id, prompt: "golden" });
+    const queries: string[] = [];
+    const db = (store as unknown as { ctx: { db: { query: (sql: string) => unknown } } }).ctx.db;
+    const original = db.query.bind(db);
+    (db as unknown as { query: (sql: string) => unknown }).query = (sql: string) => {
+      queries.push(sql);
+      return original(sql);
+    };
+    try {
+      store.claimTask(runtime.id);
+    } finally {
+      (db as unknown as { query: (sql: string) => unknown }).query = original;
+    }
+    const claim = queries.find((sql) => sql.includes("SET status = 'dispatched'"));
+    expect(claim).toBeDefined();
+    expect(claim).toBe(MUL449_CLAIM_SQL_GOLDEN);
+  });
+
+  // The invariant: the observer's verdict per Runtime is the claim's own
+  // structural predicate, so no combination of hard constraints can produce a
+  // silent queue or a wait for a task some machine can take.
+  function placementFixture() {
+    const store = createLocalStore();
+    const machine = store.registerRuntime({
+      id: "rt_inv_codex", name: "machine codex", provider: "codex", workspaceId: "local", daemonId: "dev-inv",
+    });
+    const sibling = store.registerRuntime({
+      id: "rt_inv_claude", name: "machine claude", provider: "claude", workspaceId: "local", daemonId: "dev-inv",
+    });
+    const legacy = store.registerRuntime({
+      id: "rt_inv_legacy", name: "legacy host", provider: "codex", workspaceId: "local", daemonId: "dev-inv-legacy",
+    });
+    const agent = store.createAgent({ name: "invariant", provider: "codex", workspaceId: "local" });
+    return { store, machine, sibling, legacy, agent };
+  }
+
+  it("agrees with the claim predicate whenever an Agent binding and a workspace disagree", () => {
+    const { store, machine, legacy, agent } = placementFixture();
+    const project = store.createProject({ title: "Invariant project", workspaceId: "local" });
+    store.createProjectDevice(project.id, { daemonId: "dev-inv" });
+    store.createProjectDevice(project.id, { daemonId: "dev-inv-legacy" });
+    const issue = store.createIssue({ title: "Invariant issue", projectId: project.id, workspaceId: "local" });
+    // The workspace lives on the codex machine; bind the Agent to the OTHER
+    // machine so the two hard constraints cannot both hold.
+    store.reportIssueWorkspace({
+      issueId: issue.id, runtimeId: machine.id, rootPath: "/tmp/MUL-1", branchName: "agent/MUL-1", status: "ready", repos: [],
+    });
+    const bound = store.createAgent({ name: "bound elsewhere", provider: "codex", workspaceId: "local", runtimeId: legacy.id });
+    const task = store.createTask({ agentId: bound.id, issueId: issue.id, prompt: "conflict" });
+
+    const verdicts = store.describeTaskPlacement(task.id);
+    const claimable = verdicts.filter((verdict) => verdict.placementOk && verdict.routingOk);
+    // No machine satisfies both, so nothing may claim and the observer must say so.
+    expect(claimable).toEqual([]);
+    for (const verdict of verdicts) expect(store.claimTask(verdict.runtimeId)).toBeNull();
+    const now = Date.now();
+    db!.run("UPDATE multiremi_tasks SET created_at = ? WHERE id = ?", [new Date(now - 200_000).toISOString(), task.id]);
+    expect(store.refreshQueuedCapabilityWaitReasons(now).updated).toBe(1);
+    const reason = store.getTask(task.id)!.waitReason!;
+    expect(reason).toContain("等待任务落点：");
+    expect(reason).toContain("Agent 绑定");
+    expect(reason).toContain("remi agent update --runtime");
+    void agent;
+  });
+
+  it("stays silent whenever some registered Runtime can take the task", () => {
+    const { store, machine, sibling } = placementFixture();
+    const project = store.createProject({ title: "Reachable project", workspaceId: "local" });
+    store.createProjectDevice(project.id, { daemonId: "dev-inv" });
+    const issue = store.createIssue({ title: "Reachable issue", projectId: project.id, workspaceId: "local" });
+    store.reportIssueWorkspace({
+      issueId: issue.id, runtimeId: machine.id, rootPath: "/tmp/MUL-1", branchName: "agent/MUL-1", status: "ready", repos: [],
+    });
+    // The sibling Runtime sits on the SAME machine as the workspace, so it can
+    // take the turn even though its Runtime id differs.
+    const siblingAgent = store.createAgent({ name: "sibling", provider: "claude", workspaceId: "local" });
+    const task = store.createTask({ agentId: siblingAgent.id, issueId: issue.id, prompt: "reachable" });
+    const verdicts = store.describeTaskPlacement(task.id);
+    expect(verdicts.filter((verdict) => verdict.placementOk && verdict.routingOk)
+      .map((verdict) => verdict.runtimeId)).toContain(sibling.id);
+
+    const now = Date.now();
+    db!.run("UPDATE multiremi_tasks SET created_at = ? WHERE id = ?", [new Date(now - 200_000).toISOString(), task.id]);
+    expect(store.refreshQueuedCapabilityWaitReasons(now)).toEqual({ updated: 0, alerted: 0 });
+    expect(store.getTask(task.id)?.waitReason).toBeNull();
+    expect(store.claimTask(sibling.id)?.id).toBe(task.id);
   });
 
   it("resets an Issue lane whose device the Project no longer allows", () => {

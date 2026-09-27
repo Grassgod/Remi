@@ -33,6 +33,8 @@ import {
   type DeviceRoutingAffinity,
   DEVICE_ROUTING_WAIT_PREFIX,
   deviceRoutingWaitReason,
+  PLACEMENT_WAIT_PREFIX,
+  placementWaitReason,
   isQueuedCapabilityAlert,
   isQueuedObserverWaitReason,
   queuedCapabilityWait,
@@ -280,9 +282,135 @@ const PROJECT_DEVICE_ROUTING_ELIGIBILITY_SQL = projectDeviceRoutingEligibilitySq
  * embedding the eligibility template must join both — including the
  * daemon-scoped variant used when a hard affinity outlives its Runtime row.
  */
-const TASK_DEVICE_ROUTING_FROM_SQL = `FROM multiremi_tasks t
-       LEFT JOIN multiremi_issues project_issue ON project_issue.id = t.issue_id
-       LEFT JOIN multiremi_chat_sessions project_chat ON project_chat.id = t.chat_session_id`;
+/**
+ * The row shape every claim/placement probe reads. Both the claim SELECT and
+ * the read-only placement probe pull their structural predicates from the
+ * fragment builders below, so "can this Runtime take this Task?" is decided by
+ * exactly one body of SQL instead of a JS re-implementation (MUL-449).
+ */
+const TASK_CLAIM_FROM_SQL = `FROM multiremi_tasks t
+         JOIN multiremi_agents a ON a.id = t.agent_id
+         LEFT JOIN multiremi_chat_sessions project_chat ON project_chat.id = t.chat_session_id
+         LEFT JOIN multiremi_issues project_issue ON project_issue.id = t.issue_id
+         LEFT JOIN multiremi_issue_sessions code_session ON code_session.id = t.issue_session_id
+         LEFT JOIN multiremi_runtimes code_runtime ON code_runtime.id = code_session.code_runtime_id`;
+
+interface SqlFragment { sql: string; params: unknown[] }
+
+/** Version bits and the explicit Runtime workspace an Issue task may carry. */
+function placementIssueSupportSql(runtime: MultiremiRuntime): SqlFragment {
+  return {
+    sql: `           AND (t.issue_id IS NULL OR t.holds_workspace = 0 OR ? = 1)
+           AND (t.issue_id IS NULL OR ? = 1)`,
+    params: [runtimeSupportsIssueWorkspaces(runtime) ? 1 : 0, runtimeSupportsParallelExecution(runtime) ? 1 : 0],
+  };
+}
+
+/** An explicit Runtime workspace pins the task to that daemon. */
+function placementRuntimeWorkspaceSql(runtime: MultiremiRuntime): SqlFragment {
+  return {
+    sql: `           AND (t.runtime_workspace_id IS NULL OR (? = 1 AND EXISTS (
+             SELECT 1 FROM multiremi_runtime_workspaces rw
+             WHERE rw.id = t.runtime_workspace_id AND rw.workspace_id = t.workspace_id
+               AND rw.daemon_id = ? AND rw.archived_at IS NULL
+           )))`,
+    params: [runtime.metadata.runtime_workspaces === 1 ? 1 : 0, runtime.daemonId ?? ""],
+  };
+}
+
+/** A live Issue workspace admits only the machines that hold it. */
+function placementIssueWorkspaceSql(runtime: MultiremiRuntime): SqlFragment {
+  const daemonAliasPlaceholders = runtimeDaemonAliases(runtime).map(() => "?").join(", ");
+  return {
+    sql: `           AND (
+             t.runtime_workspace_id IS NOT NULL OR t.issue_id IS NULL
+             OR t.holds_workspace = 0
+             OR NOT EXISTS (
+               SELECT 1 FROM multiremi_issue_workspaces issue_workspace
+               WHERE issue_workspace.issue_id = t.issue_id
+                 AND issue_workspace.status <> 'cleaned'
+             )
+             OR EXISTS (
+               SELECT 1 FROM multiremi_issue_workspaces issue_workspace
+               LEFT JOIN multiremi_runtimes issue_workspace_runtime
+                 ON issue_workspace_runtime.id = issue_workspace.runtime_id
+               WHERE issue_workspace.issue_id = t.issue_id
+                 AND issue_workspace.status <> 'cleaned'
+                 AND (
+                   issue_workspace.runtime_id IN (${daemonAliasPlaceholders})
+                   OR issue_workspace_runtime.daemon_id IN (${daemonAliasPlaceholders})
+                   OR issue_workspace_runtime.legacy_daemon_id IN (${daemonAliasPlaceholders})
+                 )
+             )
+           )`,
+    params: (() => { const aliases = runtimeDaemonAliases(runtime); return [...aliases, ...aliases, ...aliases]; })(),
+  };
+}
+
+/** Everything that must hold BEFORE the Project device-routing predicate. */
+function placementBeforeRoutingSql(runtime: MultiremiRuntime): SqlFragment {
+  const issueSupport = placementIssueSupportSql(runtime);
+  const runtimeWorkspace = placementRuntimeWorkspaceSql(runtime);
+  const issueWorkspace = placementIssueWorkspaceSql(runtime);
+  return {
+    sql: `           AND COALESCE(t.workspace_id, 'local') = ?
+${issueSupport.sql}
+${runtimeWorkspace.sql}
+${issueWorkspace.sql}`,
+    params: [runtime.workspaceId ?? "local", ...issueSupport.params, ...runtimeWorkspace.params, ...issueWorkspace.params],
+  };
+}
+
+/** The Project device-binding / dedicated-device predicate. */
+function deviceRoutingSql(ctx: StoreContext, runtime: MultiremiRuntime): SqlFragment {
+  return { sql: `           AND ${PROJECT_DEVICE_ROUTING_ELIGIBILITY_SQL}`, params: runtimeDeviceRoutingParams(ctx, runtime) };
+}
+
+/**
+ * `(daemonId, dedicated, daemonId)` for the routing predicate. Pure — reads a
+ * profile row through the context but never writes — so the read-only
+ * placement probe can reuse it.
+ */
+function runtimeDeviceRoutingParams(ctx: StoreContext, runtime: MultiremiRuntime): unknown[] {
+  const daemonId = runtime.daemonId?.trim() ?? "";
+  const profile = daemonId
+    ? ctx.db.query(
+      `SELECT dedicated FROM multiremi_daemon_profiles
+       WHERE workspace_id = ? AND daemon_id = ?`,
+    ).get(runtime.workspaceId ?? "local", daemonId) as { dedicated?: unknown } | null
+    : null;
+  return [daemonId, Number(profile?.dedicated ?? 0) === 1 ? 1 : 0, daemonId];
+}
+
+/** Everything that must hold AFTER the device-routing predicate. */
+function placementAfterRoutingSql(runtime: MultiremiRuntime): SqlFragment {
+  const aliases = runtimeDaemonAliases(runtime);
+  const daemonAliasPlaceholders = aliases.map(() => "?").join(", ");
+  return {
+    sql: `           AND (
+             COALESCE(code_session.with_code, 0) = 0
+             OR code_session.code_runtime_id IN (${daemonAliasPlaceholders})
+             OR code_runtime.daemon_id IN (${daemonAliasPlaceholders})
+             OR code_runtime.legacy_daemon_id IN (${daemonAliasPlaceholders})
+           )
+           AND (t.runtime_id IS NULL OR t.runtime_id = ?)
+           AND (a.runtime_id IS NULL OR a.runtime_id = ?)
+           AND (a.execution_group_id IS NULL OR EXISTS (
+             SELECT 1 FROM multiremi_execution_group_members gm
+             WHERE gm.runtime_id = ? AND gm.provider = a.provider
+               AND gm.workspace_id = a.workspace_id AND gm.group_id = a.execution_group_id
+           ))
+           AND (? = 'any' OR a.provider = ?)
+           AND (? = 'public' OR COALESCE(CAST(? AS TEXT), 'local') = COALESCE(a.owner_id, 'local'))`,
+    params: [...aliases, ...aliases, ...aliases, runtime.id, runtime.id, runtime.id,
+      runtime.provider, runtime.provider, runtime.visibility, runtime.ownerId],
+  };
+}
+
+/** Shared cleanup predicate: both observer-owned wait prefixes. */
+const OBSERVER_WAIT_REASON_CLEAR_SQL =
+  `wait_reason = CASE WHEN wait_reason LIKE ? OR wait_reason LIKE ? THEN NULL ELSE wait_reason END`;
+
 
 interface DelegationWakeupInput {
   sourceTaskId: string;
@@ -428,6 +556,46 @@ function runtimeSupportsIssueWorkspaces(runtime: MultiremiRuntime): boolean {
  * a real workspace row — a plain Chat task defaults to `holds_workspace = 1`
  * but has no Issue workspace, and an Issue task may have no lease either.
  */
+/**
+ * Human-readable "constraint → machine" list for the placement wait text.
+ * Purely descriptive: a wrong label here cannot change what can be claimed.
+ */
+function describeTaskPlacementConstraints(
+  ctx: StoreContext,
+  row: {
+    id: string; runtime_id: string | null; issue_id: string | null;
+    issue_session_id: string | null; chat_session_id: string | null;
+    runtime_workspace_id: string | null; holds_workspace: unknown;
+  },
+  agentRuntimeId: string | null | undefined,
+): string[] {
+  const constraints: string[] = [];
+  if (row.runtime_id) constraints.push(`任务钉在 ${row.runtime_id}`);
+  if (agentRuntimeId) constraints.push(`Agent 绑定在 ${agentRuntimeId}`);
+  if (row.runtime_workspace_id) {
+    const workspace = ctx.db.query(
+      "SELECT daemon_id FROM multiremi_runtime_workspaces WHERE id = ?",
+    ).get(row.runtime_workspace_id) as { daemon_id?: unknown } | null;
+    constraints.push(`显式 Runtime 工作区在 ${nullableString(workspace?.daemon_id) ?? "未知机器"}`);
+  }
+  const session = row.issue_session_id ? ctx.issueSessions().getIssueSession(row.issue_session_id) : null;
+  if (session?.withCode && session.codeRuntimeId) {
+    constraints.push(`代码快照在 ${session.codeRuntimeId}`);
+  }
+  const issueId = nullableString(row.issue_id);
+  if (issueId && Number(row.holds_workspace ?? 1) === 1) {
+    const machines = liveIssueWorkspaceMachines(ctx, issueId);
+    if (machines.count > 0) {
+      constraints.push(machines.aliases.length > 0
+        ? `Issue 工作区在 ${machines.aliases.join(" / ")}`
+        : "Issue 工作区记录失去了所属 Runtime");
+    }
+  }
+  const directoryDaemonId = ctx.localDirectoryDaemonForTask(row);
+  if (directoryDaemonId) constraints.push(`本机目录在 ${directoryDaemonId}`);
+  return constraints.length > 0 ? constraints : ["该任务的约束"];
+}
+
 export interface HardTaskAffinity {
   kind: DeviceRoutingAffinity;
   /** The machine the affinity resolves to, when it is known without a claim. */
@@ -597,114 +765,147 @@ export class TasksRepo {
       // This observer owns only its own reasons. Human and directory waits, and
       // any future queued reason, retain their independent lifecycle.
       if (row.wait_reason && !isQueuedObserverWaitReason(row.wait_reason)) continue;
-      // A hard-affinity task pinned behind a Project device binding explains
-      // that first: model capability is irrelevant while placement is refused.
-      // Restoring the binding clears the reason on the next sweep (MUL-449).
-      // Only hard affinities explain themselves; soft affinity belongs to the
-      // claim-time refresh, which re-pools the turn instead.
       const routingAgent = this.ctx.agents().getAgentLite(row.agent_id);
-      const affinity = hardTaskAffinity(this.ctx, row, routingAgent?.runtimeId);
-      // A live Issue workspace is judged on its own machines: the task's
-      // `runtime_id` may be a stale soft pin that the claim path ignores, and
-      // naming it would point the user at the wrong machine (MUL-449).
-      const workspaceAliases = affinity?.workspaceAliases ?? [];
-      // A live workspace row whose Runtime is gone admits no machine, so the
-      // judgement stays in "workspace mode" with an empty candidate set.
-      const workspaceBound = (affinity?.workspaceCount ?? 0) > 0;
-      const pinnedRuntime = row.runtime_id ? runtimesRepo.getRuntime(row.runtime_id) : null;
-      const pinnedDaemonId = pinnedRuntime ? null : affinity?.daemonId ?? null;
-      const routingRefused = affinity !== null && (workspaceBound
-        ? !workspaceAliases.some((alias) => {
-          const candidate = runtimesRepo.getRuntime(alias);
-          return candidate
-            ? this.runtimePassesProjectDeviceRouting(candidate, row.id)
-            : this.deviceRoutingAllowsDaemon(alias, row);
-        })
-        : pinnedRuntime != null
-          ? !this.runtimePassesProjectDeviceRouting(pinnedRuntime, row.id)
-          : pinnedDaemonId != null && !this.deviceRoutingAllowsDaemon(pinnedDaemonId, row));
-      if (routingRefused) {
-        const declaredAlias = workspaceAliases[0] ?? null;
-        const declaredRuntime = declaredAlias ? runtimesRepo.getRuntime(declaredAlias) : null;
-        const runtimeName = workspaceBound
-          ? declaredRuntime?.daemonDisplayName ?? declaredRuntime?.name
-            ?? (declaredAlias ? this.daemonDisplayName(declaredAlias) : "未知机器")
-          : pinnedRuntime
-            ? pinnedRuntime.daemonDisplayName ?? pinnedRuntime.name
-            : this.daemonDisplayName(pinnedDaemonId!);
-        const reason = deviceRoutingWaitReason({ runtimeName, affinity: affinity.kind });
-        if (reason === row.wait_reason) continue;
-        const updatedRow = this.ctx.db.query(
-          `UPDATE multiremi_tasks SET wait_reason = ?, updated_at = ?
-           WHERE id = ? AND status = 'queued'
-             AND ${row.wait_reason === null ? "wait_reason IS NULL" : "wait_reason = ?"}
-           RETURNING *`,
-        ).get(reason, new Date(now).toISOString(), row.id, ...(row.wait_reason === null ? [] : [row.wait_reason])) as Row | null;
-        if (!updatedRow) continue;
-        result.updated++;
-        this.ctx.notifyTaskEvent("task:queued", toTask(updatedRow));
+      // (a)(b)(c) invariant: ask the claim's OWN structural predicate which
+      // machines can take this Task. Decision comes from that SQL; the affinity
+      // classification below only explains it (MUL-449).
+      const probe = this.taskPlacementProbe(row);
+      // Placement is only a WAIT when a hard affinity pins the task. A purely
+      // soft pin (provider lineage) is abandoned and re-pooled by the
+      // claim-time refresh, so the observer must not label it — it may not even
+      // survive the next claim (MUL-449).
+      const placementCandidates = probe.hardAffinity
+        ? probe.verdicts.filter((verdict) => verdict.placementOk)
+        : [];
+      const claimable = placementCandidates.filter((verdict) => verdict.routingOk);
+      if (!probe.hardAffinity) {
+        // Legacy capability path: candidates are the machines this Task may
+        // actually run on, and refusal there is a capability wait, not a
+        // placement conflict.
+        const decisionKey = JSON.stringify([
+          row.agent_id, row.runtime_id ?? "", row.execution_model ?? "", row.execution_thinking_level ?? "",
+        ]);
+        let decision = decisions.get(decisionKey);
+        if (!decision) {
+          const agent = this.ctx.agents().getAgent(row.agent_id);
+          const target = agent ? taskExecutionTarget(agent, {
+            executionModel: row.execution_model,
+            executionThinkingLevel: row.execution_thinking_level,
+          }) : { model: null, thinkingLevel: null };
+          const executionAgent = agent ? { ...agent, ...target } : null;
+          decision = {
+            agent: executionAgent,
+            candidateSupportsModel: executionAgent && !executionAgent.archivedAt
+              ? runtimes.filter((runtime) => (row.runtime_id === null || runtime.id === row.runtime_id)
+                && runtimesRepo.runtimeCanRouteAgent(runtime, agent!))
+                .map((runtime) => runtimesRepo.runtimeSupportsAgentModel(runtime, executionAgent))
+              : [],
+          };
+          decisions.set(decisionKey, decision);
+        }
+        const capabilityWait = this.queuedCapabilityReasonFor(row, decision, now);
+        const capabilityReason = capabilityWait?.reason ?? null;
+        if (capabilityReason !== row.wait_reason
+          && this.writeObservedWaitReason(row, capabilityReason, now)) result.updated++;
+        if (!capabilityWait?.alerted) continue;
+        const { agent, candidateSupportsModel } = decision;
+        if (!isQueuedCapabilityAlert(row.wait_reason)) {
+          result.alerted++;
+          log.warn(`queued task ${row.id} has no model-capable runtime after the waiting threshold`);
+          this.ctx.recordAnalyticsEvent(EVENT_TASK_QUEUED_CAPABILITY_TIMEOUT, agent!.ownerId ?? row.workspace_id ?? "local", row.workspace_id, {
+            task_id: row.id,
+            agent_id: row.agent_id,
+            provider: agent!.provider,
+            candidate_count: candidateSupportsModel.length,
+            task_age_ms: now - Date.parse(row.created_at),
+          });
+        }
         continue;
       }
-      // Tasks for the same agent can have different runtime pins; match the
-      // claim predicate and cache only tasks with the same routing constraints.
-      // Cache per (agent, runtime pin, effective execution target): a
-      // fallback-switched task waits on the FALLBACK model's availability, not
-      // on the Agent's primary model that just ran out of gateway capacity.
-      const decisionKey = JSON.stringify([row.agent_id, row.runtime_id ?? "", row.execution_model ?? "", row.execution_thinking_level ?? ""]);
-      let decision = decisions.get(decisionKey);
-      if (!decision) {
-        const agent = this.ctx.agents().getAgent(row.agent_id);
-        const target = agent ? taskExecutionTarget(agent, {
-          executionModel: row.execution_model,
-          executionThinkingLevel: row.execution_thinking_level,
-        }) : { model: null, thinkingLevel: null };
-        const executionAgent = agent ? { ...agent, ...target } : null;
-        decision = {
-          agent: executionAgent,
-          candidateSupportsModel: executionAgent && !executionAgent.archivedAt
-            ? runtimes.filter(runtime => (row.runtime_id === null || runtime.id === row.runtime_id)
-                && runtimesRepo.runtimeCanRouteAgent(runtime, agent!))
-              .map(runtime => runtimesRepo.runtimeSupportsAgentModel(runtime, executionAgent))
-            : [],
-        };
-        decisions.set(decisionKey, decision);
+      if (claimable.length > 0) {
+        // Model capability is only meaningful for machines that could claim it.
+        const decisionKey = JSON.stringify([
+          row.agent_id,
+          claimable.map((verdict) => verdict.runtimeId).sort(),
+          row.execution_model ?? "", row.execution_thinking_level ?? "",
+        ]);
+        let decision = decisions.get(decisionKey);
+        if (!decision) {
+          const agent = this.ctx.agents().getAgent(row.agent_id);
+          const target = agent ? taskExecutionTarget(agent, {
+            executionModel: row.execution_model,
+            executionThinkingLevel: row.execution_thinking_level,
+          }) : { model: null, thinkingLevel: null };
+          const executionAgent = agent ? { ...agent, ...target } : null;
+          decision = {
+            agent: executionAgent,
+            candidateSupportsModel: executionAgent && !executionAgent.archivedAt
+              ? claimable
+                .map((verdict) => runtimesRepo.getRuntime(verdict.runtimeId))
+                .filter((runtime): runtime is MultiremiRuntime => runtime != null
+                  && runtimesRepo.runtimeCanRouteAgent(runtime, agent!))
+                .map((runtime) => runtimesRepo.runtimeSupportsAgentModel(runtime, executionAgent))
+              : [],
+          };
+          decisions.set(decisionKey, decision);
+        }
+        const capabilityWait = this.queuedCapabilityReasonFor(row, decision, now);
+        const capabilityReason = capabilityWait?.reason ?? null;
+        if (capabilityReason !== row.wait_reason
+          && this.writeObservedWaitReason(row, capabilityReason, now)) result.updated++;
+        if (!capabilityWait?.alerted) continue;
+        const { agent, candidateSupportsModel } = decision;
+        if (!isQueuedCapabilityAlert(row.wait_reason)) {
+          result.alerted++;
+          log.warn(`queued task ${row.id} has no model-capable runtime after the waiting threshold`);
+          this.ctx.recordAnalyticsEvent(EVENT_TASK_QUEUED_CAPABILITY_TIMEOUT, agent!.ownerId ?? row.workspace_id ?? "local", row.workspace_id, {
+            task_id: row.id,
+            agent_id: row.agent_id,
+            provider: agent!.provider,
+            candidate_count: candidateSupportsModel.length,
+            task_age_ms: now - Date.parse(row.created_at),
+          });
+        }
+        continue;
       }
-      const { agent, candidateSupportsModel } = decision;
-      // `agent` already carries the task's effective model/effort, so the wait
-      // text and the capability check describe the same execution.
-      const wait = agent && (agent.workspaceId ?? "local") === (row.workspace_id ?? "local")
-        ? queuedCapabilityWait({
-          candidateSupportsModel,
-          model: agent.model,
-          thinkingLevel: agent.thinkingLevel,
-          createdAt: row.created_at,
-          now,
-        }) : null;
-      const reason = wait?.reason ?? null;
-      if (reason === row.wait_reason) continue;
-      // Compare the observed reason as well as status: another server's sweep
-      // or a concurrent claim must win without duplicate events or alerts.
-      const updatedRow = this.ctx.db.query(
-        `UPDATE multiremi_tasks SET wait_reason = ?, updated_at = ?
-         WHERE id = ? AND status = 'queued'
-           AND ${row.wait_reason === null ? "wait_reason IS NULL" : "wait_reason = ?"}
-         RETURNING *`,
-      ).get(reason, new Date(now).toISOString(), row.id, ...(row.wait_reason === null ? [] : [row.wait_reason])) as Row | null;
-      if (!updatedRow) continue;
-      result.updated++;
-      const task = toTask(updatedRow);
-      this.ctx.notifyTaskEvent("task:queued", task);
-      if (wait?.alerted && !isQueuedCapabilityAlert(row.wait_reason)) {
-        result.alerted++;
-        log.warn(`queued task ${task.id} has no model-capable runtime after the waiting threshold`);
-        this.ctx.recordAnalyticsEvent(EVENT_TASK_QUEUED_CAPABILITY_TIMEOUT, agent!.ownerId ?? task.workspaceId ?? "local", task.workspaceId, {
-          task_id: task.id,
-          agent_id: task.agentId,
-          provider: agent!.provider,
-          candidate_count: candidateSupportsModel.length,
-          task_age_ms: now - Date.parse(task.createdAt),
+      // (b) Some machine satisfies placement but every one is refused by the
+      // Project device routing: name THOSE machines, never the stale pin.
+      if (placementCandidates.length > 0) {
+        const names = [...new Set(placementCandidates.map((verdict) => this.daemonDisplayName(verdict.daemonId)))];
+        const reason = deviceRoutingWaitReason({
+          runtimeName: names.join(" / "),
+          affinity: probe.explanation,
         });
+        if (reason === row.wait_reason) continue;
+        if (this.writeObservedWaitReason(row, reason, now)) result.updated++;
+        continue;
       }
+      // (c) Nothing satisfies placement. If every constraint names one
+      // unregistered machine, fall back to the daemon-level device check;
+      // otherwise the constraints themselves disagree.
+      const pendingDaemon = probe.singlePendingDaemon;
+      if (pendingDaemon) {
+        if (this.deviceRoutingAllowsDaemon(pendingDaemon, row)) {
+          if (this.writeObservedWaitReason(row, null, now)) result.updated++;
+          continue;
+        }
+        const reason = deviceRoutingWaitReason({
+          runtimeName: this.daemonDisplayName(pendingDaemon),
+          affinity: probe.explanation,
+        });
+        if (reason === row.wait_reason) continue;
+        if (this.writeObservedWaitReason(row, reason, now)) result.updated++;
+        continue;
+      }
+      const reason = placementWaitReason({
+        constraints: probe.constraints,
+        workspaceRuntimeMissing: probe.workspaceRuntimeMissing,
+        frozenRetry: probe.frozenRetry,
+        agentBound: probe.agentBound,
+        redispatchTaskId: row.id,
+      });
+      if (reason === row.wait_reason) continue;
+      if (this.writeObservedWaitReason(row, reason, now)) result.updated++;
     }
     return result;
   }
@@ -2345,10 +2546,16 @@ export class TasksRepo {
     const dedicated = Number(profile?.dedicated ?? 0) === 1;
     const rowQuery = this.ctx.db.query(
       `SELECT CASE WHEN ${PROJECT_DEVICE_ROUTING_ELIGIBILITY_SQL} THEN 1 ELSE 0 END AS eligible
-       ${TASK_DEVICE_ROUTING_FROM_SQL}
+       ${TASK_CLAIM_FROM_SQL}
        WHERE t.id = ?`,
     ).get(daemonId, dedicated ? 1 : 0, daemonId, String(row.id)) as { eligible?: unknown } | null;
     return Number(rowQuery?.eligible ?? 0) === 1;
+  }
+
+  /** Is this alias backed by any registered Runtime? */
+  private daemonIsRegistered(alias: string): boolean {
+    return this.ctx.runtimes().listRuntimes()
+      .some((runtime) => runtimeDaemonAliases(runtime).includes(alias));
   }
 
   /** Human-readable machine name for a daemon, registered or not. */
@@ -2365,11 +2572,180 @@ export class TasksRepo {
     return runtime?.daemonDisplayName ?? runtime?.name ?? daemonId;
   }
 
+  /**
+   * Does this Runtime satisfy the claim's STRUCTURAL placement predicate for
+   * this Task? Composed from the same fragments the claim uses, so the answer
+   * cannot drift from `claimNextTaskForRuntime`. Device routing is reported
+   * separately so the observer can tell "no machine at all" from "every
+   * machine is refused by the Project".
+   */
+  private runtimePlacementForTask(
+    runtime: MultiremiRuntime,
+    taskId: string,
+  ): { placementOk: boolean; routingOk: boolean } {
+    const before = placementBeforeRoutingSql(runtime);
+    const routing = deviceRoutingSql(this.ctx, runtime);
+    const after = placementAfterRoutingSql(runtime);
+    const row = this.ctx.db.query(
+      `SELECT CASE WHEN (1 = 1
+${before.sql}
+${after.sql}
+       ) THEN 1 ELSE 0 END AS placement_ok,
+       CASE WHEN (1 = 1
+${routing.sql}
+       ) THEN 1 ELSE 0 END AS routing_ok
+       ${TASK_CLAIM_FROM_SQL}
+       WHERE t.id = ?`,
+    ).get(...before.params, ...after.params, ...routing.params, taskId) as
+      { placement_ok?: unknown; routing_ok?: unknown } | null;
+    return {
+      placementOk: Number(row?.placement_ok ?? 0) === 1,
+      routingOk: Number(row?.routing_ok ?? 0) === 1,
+    };
+  }
+
+  /**
+   * One sweep-time placement probe plus the explanation metadata the wait text
+   * needs. `verdicts` is the decision (built from the claim's own SQL);
+   * everything else is descriptive.
+   */
+  private taskPlacementProbe(row: {
+    id: string; agent_id: string; runtime_id: string | null; issue_id: string | null;
+    issue_session_id: string | null; chat_session_id: string | null;
+    runtime_workspace_id: string | null; holds_workspace: unknown;
+    workspace_id: string | null; execution_fingerprint: string | null;
+  }): {
+    verdicts: Array<{ runtimeId: string; daemonId: string; placementOk: boolean; routingOk: boolean }>;
+    explanation: DeviceRoutingAffinity | "会话";
+    /** False when only provider lineage pins this Task (re-poolable). */
+    hardAffinity: boolean;
+    constraints: string[];
+    singlePendingDaemon: string | null;
+    workspaceRuntimeMissing: boolean;
+    frozenRetry: boolean;
+    agentBound: boolean;
+  } {
+    const task = this.getTask(row.id);
+    const workspaceId = row.workspace_id ?? "local";
+    const verdicts = task
+      ? this.ctx.runtimes().listRuntimes()
+        .filter((runtime) => (runtime.workspaceId ?? "local") === workspaceId)
+        .map((runtime) => ({
+          runtimeId: runtime.id,
+          daemonId: runtime.daemonId ?? runtime.id,
+          ...this.runtimePlacementForTask(runtime, row.id),
+        }))
+      : [];
+    const agent = this.ctx.agents().getAgentLite(row.agent_id);
+    const affinity = hardTaskAffinity(this.ctx, row, agent?.runtimeId);
+    // A live workspace row whose Runtime row is gone admits no machine: the
+    // task is pinned to data nothing can serve until that machine returns.
+    const workspaceRuntimeMissing = (affinity?.workspaceCount ?? 0) > 0
+      && (affinity?.workspaceAliases ?? []).length === 0;
+    // Only a frozen execution fingerprint (not `attempt`) makes a retry
+    // unrecoverable; a redispatch replacement carries attempt 2 but no
+    // fingerprint, so it must not be labelled frozen (MUL-449).
+    const frozenRetry = cleanOptionalString(row.execution_fingerprint) != null;
+    const agentBound = Boolean(agent?.runtimeId && agent.runtimeId === row.runtime_id);
+    const constraints = describeTaskPlacementConstraints(this.ctx, row, agent?.runtimeId);
+    // (c) needs a machine to point the reader at. Only a HARD affinity that
+    // names an unregistered machine qualifies: soft lineage whose Runtime went
+    // away is re-pooled by the claim path, which must stay unlabelled here.
+    const pending = new Set<string>();
+    if (affinity) {
+      if (row.runtime_workspace_id) {
+        const workspace = this.ctx.db.query(
+          "SELECT daemon_id FROM multiremi_runtime_workspaces WHERE id = ?",
+        ).get(row.runtime_workspace_id) as { daemon_id?: unknown } | null;
+        const daemonId = nullableString(workspace?.daemon_id);
+        if (daemonId && !this.daemonIsRegistered(daemonId)) pending.add(daemonId);
+      }
+      if (agentBound && agent?.runtimeId && !this.ctx.runtimes().getRuntime(agent.runtimeId)) {
+        pending.add(agent.runtimeId);
+      }
+      const directoryDaemonId = this.ctx.localDirectoryDaemonForTask(row);
+      if (directoryDaemonId && !this.daemonIsRegistered(directoryDaemonId)) pending.add(directoryDaemonId);
+      if (frozenRetry && row.runtime_id && !this.ctx.runtimes().getRuntime(row.runtime_id)) {
+        pending.add(row.runtime_id);
+      }
+      if (workspaceRuntimeMissing) {
+        const workspace = this.ctx.db.query(
+          "SELECT runtime_id FROM multiremi_issue_workspaces WHERE issue_id = ? AND status <> 'cleaned'",
+        ).get(row.issue_id) as { runtime_id?: unknown } | null;
+        const workspaceRuntimeId = nullableString(workspace?.runtime_id);
+        if (workspaceRuntimeId) pending.add(workspaceRuntimeId);
+      }
+    }
+    const unresolved = [...pending];
+    return {
+      verdicts,
+      explanation: affinity?.kind ?? "会话",
+      hardAffinity: affinity !== null,
+      constraints,
+      singlePendingDaemon: unresolved.length === 1 ? unresolved[0]! : null,
+      workspaceRuntimeMissing,
+      frozenRetry,
+      agentBound,
+    };
+  }
+
+  /** Write (or clear) an observer-owned wait reason, guarded against races. */
+  private writeObservedWaitReason(
+    row: { id: string; wait_reason: string | null },
+    reason: string | null,
+    now: number,
+  ): boolean {
+    const updatedRow = this.ctx.db.query(
+      `UPDATE multiremi_tasks SET wait_reason = ?, updated_at = ?
+       WHERE id = ? AND status = 'queued'
+         AND ${row.wait_reason === null ? "wait_reason IS NULL" : "wait_reason = ?"}
+       RETURNING *`,
+    ).get(reason, new Date(now).toISOString(), row.id, ...(row.wait_reason === null ? [] : [row.wait_reason])) as Row | null;
+    if (!updatedRow) return false;
+    this.ctx.notifyTaskEvent("task:queued", toTask(updatedRow));
+    return true;
+  }
+
+  /** The capability reason for a Task, given its claimable Runtime set. */
+  private queuedCapabilityReasonFor(
+    row: { agent_id: string; execution_model: string | null; execution_thinking_level: string | null; created_at: string },
+    decision: { agent: MultiremiAgent | null; candidateSupportsModel: boolean[] },
+    now: number,
+  ): { reason: string; alerted: boolean } | null {
+    const { agent, candidateSupportsModel } = decision;
+    if (!agent || (agent.workspaceId ?? "local") !== (agent.workspaceId ?? "local")) return null;
+    return queuedCapabilityWait({
+      candidateSupportsModel,
+      model: agent.model,
+      thinkingLevel: agent.thinkingLevel,
+      createdAt: row.created_at,
+      now,
+    });
+  }
+
+  /** Read-only placement verdict per registered Runtime. */
+  describeTaskPlacement(taskId: string): Array<{
+    runtimeId: string; provider: string; daemonId: string | null;
+    placementOk: boolean; routingOk: boolean;
+  }> {
+    const task = this.getTask(taskId);
+    if (!task) return [];
+    const workspaceId = task.workspaceId ?? "local";
+    return this.ctx.runtimes().listRuntimes()
+      .filter((runtime) => (runtime.workspaceId ?? "local") === workspaceId)
+      .map((runtime) => ({
+        runtimeId: runtime.id,
+        provider: runtime.provider,
+        daemonId: runtime.daemonId ?? null,
+        ...this.runtimePlacementForTask(runtime, taskId),
+      }));
+  }
+
   private runtimePassesProjectDeviceRouting(runtime: MultiremiRuntime, taskId: string): boolean {
     const routing = this.runtimeDeviceRoutingContext(runtime);
     const row = this.ctx.db.query(
       `SELECT CASE WHEN ${PROJECT_DEVICE_ROUTING_ELIGIBILITY_SQL} THEN 1 ELSE 0 END AS eligible
-       ${TASK_DEVICE_ROUTING_FROM_SQL}
+       ${TASK_CLAIM_FROM_SQL}
        WHERE t.id = ?`,
     ).get(...routing.params, taskId) as { eligible?: unknown } | null;
     return Number(row?.eligible ?? 0) === 1;
@@ -2557,10 +2933,11 @@ export class TasksRepo {
       const updated = this.ctx.db.run(
         `UPDATE multiremi_tasks
          SET runtime_id = ?, session_id = NULL, work_dir = NULL,
-             wait_reason = CASE WHEN wait_reason LIKE ? THEN NULL ELSE wait_reason END,
+             ${OBSERVER_WAIT_REASON_CLEAR_SQL},
              updated_at = ?
          WHERE id = ? AND status = 'queued' AND execution_fingerprint IS NULL`,
-        [agent.runtimeId ?? null, `${DEVICE_ROUTING_WAIT_PREFIX}%`, nowIso(), task.id],
+        [agent.runtimeId ?? null, `${DEVICE_ROUTING_WAIT_PREFIX}%`, `${PLACEMENT_WAIT_PREFIX}%`,
+          nowIso(), task.id],
       );
       if (updated.changes === 0) continue;
       const lane = this.ctx.issueSessions().getSessionAgentLane(
@@ -2622,10 +2999,10 @@ export class TasksRepo {
       // observer had written about the old pin is stale immediately rather
       // than only after the next sweep (MUL-449).
       this.ctx.db.run(`UPDATE multiremi_tasks SET runtime_id = ?, session_id = ?, work_dir = ?,
-          wait_reason = CASE WHEN wait_reason LIKE ? THEN NULL ELSE wait_reason END
+          ${OBSERVER_WAIT_REASON_CLEAR_SQL}
         WHERE id = ? AND status = 'queued' AND execution_fingerprint IS NULL`,
         [runtimeId, inherit ? chat.sessionId : null, inherit ? chat.workDir : null,
-          `${DEVICE_ROUTING_WAIT_PREFIX}%`, task.id]);
+          `${DEVICE_ROUTING_WAIT_PREFIX}%`, `${PLACEMENT_WAIT_PREFIX}%`, task.id]);
     }
   }
 
@@ -2636,14 +3013,13 @@ export class TasksRepo {
     excludedTaskIds: string[] = [],
   ): MultiremiTask | null {
     const now = nowIso();
-    const deviceRouting = this.runtimeDeviceRoutingContext(runtime);
-    // Always constrain by workspace, COALESCE(...,'local') so a runtime with
-    // NULL workspace only claims local-workspace tasks instead of every
-    // workspace's (the old `runtime.workspaceId ? ... : ""` dropped the filter
-    // entirely for NULL-workspace runtimes, letting one claim across tenants).
-    const workspaceFilter = "AND COALESCE(t.workspace_id, 'local') = ?";
     const daemonAliases = runtimeDaemonAliases(runtime);
     const daemonAliasPlaceholders = daemonAliases.map(() => "?").join(", ");
+    // Structural placement: the SAME fragments the read-only placement probe
+    // uses, so "which Runtime can take this Task" cannot drift from the claim.
+    const placementBefore = placementBeforeRoutingSql(runtime);
+    const deviceRouting = deviceRoutingSql(this.ctx, runtime);
+    const placementAfter = placementAfterRoutingSql(runtime);
     const params = [
       runtime.id,
       now,
@@ -2653,25 +3029,9 @@ export class TasksRepo {
       now,
       runtime.id,
       runtime.maxConcurrency,
-      runtime.workspaceId ?? "local",
-      runtimeSupportsIssueWorkspaces(runtime) ? 1 : 0,
-      runtimeSupportsParallelExecution(runtime) ? 1 : 0,
-      runtime.metadata.runtime_workspaces === 1 ? 1 : 0,
-      runtime.daemonId ?? "",
-      ...daemonAliases,
-      ...daemonAliases,
-      ...daemonAliases,
+      ...placementBefore.params,
       ...deviceRouting.params,
-      ...daemonAliases,
-      ...daemonAliases,
-      ...daemonAliases,
-      runtime.id,
-      runtime.id,
-      runtime.id,
-      runtime.provider,
-      runtime.provider,
-      runtime.visibility,
-      runtime.ownerId,
+      ...placementAfter.params,
       runtime.id,
       runtime.id,
       ...excludedAgentIds,
@@ -2692,12 +3052,7 @@ export class TasksRepo {
        SET status = 'dispatched', runtime_id = ?, dispatched_at = ?, wait_reason = NULL, updated_at = ?
        WHERE id = (
          SELECT t.id
-         FROM multiremi_tasks t
-         JOIN multiremi_agents a ON a.id = t.agent_id
-         LEFT JOIN multiremi_chat_sessions project_chat ON project_chat.id = t.chat_session_id
-         LEFT JOIN multiremi_issues project_issue ON project_issue.id = t.issue_id
-         LEFT JOIN multiremi_issue_sessions code_session ON code_session.id = t.issue_session_id
-         LEFT JOIN multiremi_runtimes code_runtime ON code_runtime.id = code_session.code_runtime_id
+         ${TASK_CLAIM_FROM_SQL}
          WHERE t.status = 'queued'
            AND (t.next_retry_at IS NULL OR t.next_retry_at <= ?)
            AND a.archived_at IS NULL
@@ -2718,51 +3073,9 @@ export class TasksRepo {
              WHERE runtime_active.runtime_id = ?
                AND runtime_active.status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')
            ) < ?
-           ${workspaceFilter}
-           AND (t.issue_id IS NULL OR t.holds_workspace = 0 OR ? = 1)
-           AND (t.issue_id IS NULL OR ? = 1)
-           AND (t.runtime_workspace_id IS NULL OR (? = 1 AND EXISTS (
-             SELECT 1 FROM multiremi_runtime_workspaces rw
-             WHERE rw.id = t.runtime_workspace_id AND rw.workspace_id = t.workspace_id
-               AND rw.daemon_id = ? AND rw.archived_at IS NULL
-           )))
-           AND (
-             t.runtime_workspace_id IS NOT NULL OR t.issue_id IS NULL
-             OR t.holds_workspace = 0
-             OR NOT EXISTS (
-               SELECT 1 FROM multiremi_issue_workspaces issue_workspace
-               WHERE issue_workspace.issue_id = t.issue_id
-                 AND issue_workspace.status <> 'cleaned'
-             )
-             OR EXISTS (
-               SELECT 1 FROM multiremi_issue_workspaces issue_workspace
-               LEFT JOIN multiremi_runtimes issue_workspace_runtime
-                 ON issue_workspace_runtime.id = issue_workspace.runtime_id
-               WHERE issue_workspace.issue_id = t.issue_id
-                 AND issue_workspace.status <> 'cleaned'
-                 AND (
-                   issue_workspace.runtime_id IN (${daemonAliasPlaceholders})
-                   OR issue_workspace_runtime.daemon_id IN (${daemonAliasPlaceholders})
-                   OR issue_workspace_runtime.legacy_daemon_id IN (${daemonAliasPlaceholders})
-                 )
-             )
-           )
-           AND ${PROJECT_DEVICE_ROUTING_ELIGIBILITY_SQL}
-           AND (
-             COALESCE(code_session.with_code, 0) = 0
-             OR code_session.code_runtime_id IN (${daemonAliasPlaceholders})
-             OR code_runtime.daemon_id IN (${daemonAliasPlaceholders})
-             OR code_runtime.legacy_daemon_id IN (${daemonAliasPlaceholders})
-           )
-           AND (t.runtime_id IS NULL OR t.runtime_id = ?)
-           AND (a.runtime_id IS NULL OR a.runtime_id = ?)
-           AND (a.execution_group_id IS NULL OR EXISTS (
-             SELECT 1 FROM multiremi_execution_group_members gm
-             WHERE gm.runtime_id = ? AND gm.provider = a.provider
-               AND gm.workspace_id = a.workspace_id AND gm.group_id = a.execution_group_id
-           ))
-           AND (? = 'any' OR a.provider = ?)
-           AND (? = 'public' OR COALESCE(CAST(? AS TEXT), 'local') = COALESCE(a.owner_id, 'local'))
+${placementBefore.sql}
+${deviceRouting.sql}
+${placementAfter.sql}
            AND NOT EXISTS (
              SELECT 1
              FROM multiremi_task_plugin_snapshots task_plugin

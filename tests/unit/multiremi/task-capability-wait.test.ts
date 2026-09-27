@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import type { MultiremiRuntimeModel } from "@multiremi/contracts/types.js";
 import { MultiremiStore } from "@multiremi/store.js";
-import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -536,6 +536,165 @@ describe("queued task model capability waits", () => {
     // Re-pooling clears any text the observer owned before the pin moved.
     expect(store.getTask(second.id)).toMatchObject({ runtimeId: null, sessionId: null, waitReason: null });
     expect(store.claimTask(b.id)?.id).toBe(second.id);
+  });
+
+  // MUL-449 ruling 2: the observer decides from the claim's own placement
+  // predicate, so a conflict between two hard constraints is visible instead
+  // of silently queuing forever.
+  function conflictFixture(providers: { codex: string; other: string }) {
+    const store = createLocalStore();
+    const a = store.registerRuntime({
+      id: "rt_cf_a", name: "A", provider: "codex", workspaceId: "local", daemonId: providers.codex,
+    });
+    const b = store.registerRuntime({
+      id: "rt_cf_b", name: "B", provider: "codex", workspaceId: "local", daemonId: providers.other,
+    });
+    const agent = store.createAgent({ name: "Conflict agent", provider: "codex", workspaceId: "local" });
+    const project = store.createProject({ title: "Conflict project", workspaceId: "local" });
+    store.createProjectDevice(project.id, { daemonId: providers.codex });
+    store.createProjectDevice(project.id, { daemonId: providers.other });
+    const issue = store.createIssue({ title: "Conflict issue", projectId: project.id, workspaceId: "local" });
+    return { store, a, b, agent, project, issue };
+  }
+
+  it("explains a frozen retry that conflicts with the live Issue workspace", () => {
+    const { store, a, b, agent, issue } = conflictFixture({ codex: "dev-cf-a", other: "dev-cf-b" });
+    store.reportIssueWorkspace({
+      issueId: issue.id, runtimeId: b.id, rootPath: "/tmp/MUL-1", branchName: "agent/MUL-1", status: "ready", repos: [],
+    });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "frozen" });
+    db!.run(
+      `UPDATE multiremi_tasks SET runtime_id = ?, attempt = 2, execution_fingerprint = 'frozen-fp' WHERE id = ?`,
+      [a.id, task.id],
+    );
+    const now = Date.now();
+    ageTask(task.id, GRACE_MS, now);
+    expect(store.refreshQueuedCapabilityWaitReasons(now).updated).toBe(1);
+    const reason = store.getTask(task.id)!.waitReason!;
+    expect(reason).toContain("等待任务落点：");
+    expect(reason).toContain("redispatch");
+    // The frozen pin survives — the remedy is redispatch, not an automatic move.
+    expect(store.getTask(task.id)).toMatchObject({ runtimeId: a.id, attempt: 2 });
+    expect(store.claimTask(a.id)).toBeNull();
+    expect(store.claimTask(b.id)).toBeNull();
+
+    // The suggested remedy really resolves it: the replacement has no frozen
+    // pin, so the workspace machine can take it.
+    const redispatch = (store as unknown as {
+      tasks: { redispatchTaskWithinTransaction(id: string): { replacement: { id: string } } };
+    }).tasks.redispatchTaskWithinTransaction(task.id);
+    expect(store.claimTask(b.id)?.id).toBe(redispatch.replacement.id);
+  });
+
+  it("explains an Agent-bound Runtime that conflicts with the live Issue workspace", () => {
+    const { store, a, b, project, issue } = conflictFixture({ codex: "dev-cf-a", other: "dev-cf-b" });
+    // Bind the Agent to the machine that does NOT hold the workspace.
+    const bound = store.createAgent({
+      name: "Bound elsewhere", provider: "codex", workspaceId: "local", runtimeId: a.id,
+    });
+    store.reportIssueWorkspace({
+      issueId: issue.id, runtimeId: b.id, rootPath: "/tmp/MUL-1", branchName: "agent/MUL-1", status: "ready", repos: [],
+    });
+    const task = store.createTask({ agentId: bound.id, issueId: issue.id, prompt: "agent conflict" });
+    const now = Date.now();
+    ageTask(task.id, GRACE_MS, now);
+    expect(store.refreshQueuedCapabilityWaitReasons(now).updated).toBe(1);
+    const reason = store.getTask(task.id)!.waitReason!;
+    expect(reason).toContain("等待任务落点：");
+    expect(reason).toContain("Agent 绑定");
+    expect(reason).toContain("remi agent update --runtime");
+    // An Agent binding is configuration: it is never re-pooled automatically.
+    expect(store.claimTask(a.id)).toBeNull();
+    expect(store.claimTask(b.id)).toBeNull();
+    void project;
+  });
+
+  it("explains a workspace whose Runtime is gone without blaming the device binding", () => {
+    const { store, a, b, agent, issue } = conflictFixture({ codex: "dev-cf-a", other: "dev-cf-b" });
+    store.reportIssueWorkspace({
+      issueId: issue.id, runtimeId: b.id, rootPath: "/tmp/MUL-1", branchName: "agent/MUL-1", status: "ready", repos: [],
+    });
+    // ON DELETE SET NULL: the Runtime row is gone but the workspace row remains.
+    db!.run("UPDATE multiremi_issue_workspaces SET runtime_id = NULL WHERE issue_id = ?", [issue.id]);
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "orphan" });
+    const now = Date.now();
+    ageTask(task.id, GRACE_MS, now);
+    expect(store.refreshQueuedCapabilityWaitReasons(now).updated).toBe(1);
+    const reason = store.getTask(task.id)!.waitReason!;
+    expect(reason).toContain("等待任务落点：");
+    expect(reason).toContain("失去了所属 Runtime");
+    // Pointing the reader at the Project binding would be wrong: no binding can
+    // satisfy a workspace that names no machine.
+    expect(reason).not.toContain("设备绑定");
+    expect(store.claimTask(a.id)).toBeNull();
+    expect(store.claimTask(b.id)).toBeNull();
+  });
+
+  it("stays silent for a legacy daemon alias that can still claim the task", () => {
+    const store = createLocalStore();
+    const old = store.registerRuntime({
+      id: "rt_lg_old", name: "Old codex", provider: "codex", workspaceId: "local", daemonId: "daemon-old",
+    });
+    const claude = store.registerRuntime({
+      id: "rt_lg_claude", name: "Claude", provider: "claude", workspaceId: "local", daemonId: "daemon-new",
+    });
+    db!.run("UPDATE multiremi_runtimes SET legacy_daemon_id = 'daemon-old' WHERE id = ?", [claude.id]);
+    const agent = store.createAgent({ name: "Legacy alias", provider: "claude", workspaceId: "local" });
+    const project = store.createProject({ title: "Legacy project", workspaceId: "local" });
+    // The Project only knows the NEW daemon name, but the sibling Runtime
+    // carries the workspace's old daemon as a legacy alias, so it can claim.
+    store.createProjectDevice(project.id, { daemonId: "daemon-new" });
+    const issue = store.createIssue({ title: "Legacy issue", projectId: project.id, workspaceId: "local" });
+    store.reportIssueWorkspace({
+      issueId: issue.id, runtimeId: old.id, rootPath: "/tmp/MUL-1", branchName: "agent/MUL-1", status: "ready", repos: [],
+    });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "legacy" });
+    db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [claude.id, task.id]);
+
+    const now = Date.now();
+    ageTask(task.id, GRACE_MS, now);
+    // A claimable machine exists, so the observer must write nothing at all.
+    expect(store.refreshQueuedCapabilityWaitReasons(now)).toEqual({ updated: 0, alerted: 0 });
+    expect(store.getTask(task.id)?.waitReason).toBeNull();
+    expect(store.claimTask(claude.id)?.id).toBe(task.id);
+  });
+
+  it("explains a code-snapshot conflict without offering redispatch", () => {
+    const { store, a, b, agent, issue } = conflictFixture({ codex: "dev-cf-a", other: "dev-cf-b" });
+    const parent = store.createIssueSession(issue.id, { title: "Main", holdsWorkspace: true });
+    // The parent lane must exist on a Runtime before a with_code side session
+    // can snapshot from it.
+    const seed = store.createTask({ agentId: agent.id, issueId: issue.id, issueSessionId: parent.id, prompt: "seed" });
+    store.reportIssueWorkspace({
+      issueId: issue.id, runtimeId: a.id, rootPath: "/tmp/MUL-1", branchName: "agent/MUL-1", status: "ready", repos: [],
+    });
+    expect(store.claimTask(a.id)?.id).toBe(seed.id);
+    store.startTask(seed.id);
+    store.completeTask(seed.id, { output: "ok", sessionId: "sess_snap" });
+
+    // The snapshot is taken on A; the Issue workspace then moves to B.
+    const side = store.createIssueSession(issue.id, {
+      title: "Side", parentSessionId: parent.id, withCode: true, holdsWorkspace: false,
+    });
+    store.markIssueWorkspaceCleaned({
+      issueId: issue.id, runtimeId: a.id, ...readyArchiveBinding(store, issue.id, a.id),
+    });
+    store.reportIssueWorkspace({
+      issueId: issue.id, runtimeId: b.id, rootPath: "/tmp/MUL-1", branchName: "agent/MUL-1", status: "ready", repos: [],
+    });
+    const task = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: side.id, prompt: "snapshot",
+    });
+    expect(store.getTask(task.id)?.runtimeId).toBe(a.id);
+
+    const now = Date.now();
+    ageTask(task.id, GRACE_MS, now);
+    store.refreshQueuedCapabilityWaitReasons(now);
+    const reason = store.getTask(task.id)?.waitReason ?? "";
+    // `redispatch` re-derives the same snapshot pin, so it may only be offered
+    // for frozen retries.
+    expect(reason).not.toContain("redispatch");
+    void seed;
   });
 
   it("does not overwrite unrelated reasons or nonqueued task state", () => {
