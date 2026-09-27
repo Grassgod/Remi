@@ -67,6 +67,7 @@ import {
 } from "@multiremi/ui/components/ui/dropdown-menu";
 import { useIsMobile } from "@multiremi/ui/hooks/use-mobile";
 import { PageHeader } from "../../layout/page-header";
+import { useListPerfMarker } from "../../common/use-list-perf-marker";
 import { InboxListItem, useTimeAgo } from "./inbox-list-item";
 import { useInboxTitle, useTypeLabels } from "./inbox-detail-label";
 import { getAutopilotRunOutcome } from "./inbox-display";
@@ -137,7 +138,17 @@ export function InboxPage() {
     hasNextPage,
     isFetchingNextPage,
     isFetchNextPageError,
+    status: inboxStatus,
+    isPlaceholderData: inboxIsPlaceholderData,
   } = useInfiniteQuery(inboxPageOptions(wsId));
+  // MUL-472 item 5: the list column is this page's measured viewport; the rows
+  // count as new only once this round's own first-page response resolved.
+  // `useInfiniteQuery`'s `isPlaceholderData` is always false here (the inbox has
+  // no placeholder), but the helper keeps the marker's contract uniform.
+  const perfMarker = useListPerfMarker({
+    status: inboxStatus,
+    isPlaceholderData: inboxIsPlaceholderData,
+  });
   const rawItems = useMemo(
     () => inboxPages?.pages.flatMap((page) => page.items) ?? [],
     [inboxPages],
@@ -739,7 +750,7 @@ export function InboxPage() {
 
     // Mobile: full-screen list
     return (
-      <div className="flex flex-1 flex-col min-h-0">
+      <div className="flex flex-1 flex-col min-h-0" {...perfMarker}>
         {listHeader}
         <div className="flex-1 min-h-0 overflow-y-auto">
           {listBody}
@@ -785,7 +796,7 @@ export function InboxPage() {
   return (
     <ResizablePanelGroup orientation="horizontal" className="flex-1 min-h-0" defaultLayout={defaultLayout} onLayoutChanged={onLayoutChanged}>
       <ResizablePanel id="list" defaultSize={320} minSize={240} maxSize={480} groupResizeBehavior="preserve-pixel-size">
-      <div className="flex flex-col border-r h-full">
+      <div className="flex flex-col border-r h-full" {...perfMarker}>
         {listHeader}
         <div className="flex-1 min-h-0 overflow-y-auto">
           {listBody}

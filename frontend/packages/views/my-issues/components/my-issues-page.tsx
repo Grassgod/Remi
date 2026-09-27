@@ -23,6 +23,7 @@ import { agentTaskSnapshotOptions } from "@multiremi/core/agents";
 import { useUpdateIssue } from "@multiremi/core/issues/mutations";
 import { myIssuesViewStore } from "@multiremi/core/issues/stores/my-issues-view-store";
 import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-screen";
+import { useListPerfMarker } from "../../common/use-list-perf-marker";
 import { PageHeader } from "../../layout/page-header";
 import { useT } from "../../i18n";
 import { MyIssuesHeader } from "./my-issues-header";
@@ -130,6 +131,13 @@ export function MyIssuesPage() {
   const loading = usesAssigneeBoard
     ? assigneeGroupsQuery.isLoading
     : statusIssuesQuery.isLoading;
+  // MUL-472 item 5: see issues-page.tsx — same marker, same meaning.
+  const perfMarker = useListPerfMarker({
+    status: usesAssigneeBoard ? assigneeGroupsQuery.status : statusIssuesQuery.status,
+    isPlaceholderData: usesAssigneeBoard
+      ? assigneeGroupsQuery.isPlaceholderData
+      : statusIssuesQuery.isPlaceholderData,
+  });
 
   // Apply status/priority/agent-running filters from view store
   const issues = useMemo(
@@ -202,7 +210,7 @@ export function MyIssuesPage() {
 
   if (loading) {
     return (
-      <div className="flex flex-1 min-h-0 flex-col">
+      <div className="flex flex-1 min-h-0 flex-col" {...perfMarker}>
         <div className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
           <Skeleton className="h-5 w-5 rounded" />
           <Skeleton className="h-4 w-32" />
@@ -241,7 +249,7 @@ export function MyIssuesPage() {
   }
 
   return (
-    <div className="flex flex-1 min-h-0 flex-col">
+    <div className="flex flex-1 min-h-0 flex-col" {...perfMarker}>
       <PageHeader className="gap-2">
         <ListTodo className="h-4 w-4 text-muted-foreground" />
         <h1 className="text-sm font-medium">{t(($) => $.page.breadcrumb)}</h1>

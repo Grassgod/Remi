@@ -25,7 +25,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   if (originalIdle) (window as IdleWindow).requestIdleCallback = originalIdle;
-  else delete (window as IdleWindow).requestIdleCallback;
+  else Reflect.deleteProperty(window, "requestIdleCallback");
 });
 
 describe("useAfterFirstScreen (MUL-472 b)", () => {

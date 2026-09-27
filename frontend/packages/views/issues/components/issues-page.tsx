@@ -23,6 +23,7 @@ import { agentTaskSnapshotOptions } from "@multiremi/core/agents";
 import { useUpdateIssue } from "@multiremi/core/issues/mutations";
 import { useIssueSelectionStore } from "@multiremi/core/issues/stores/selection-store";
 import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-screen";
+import { useListPerfMarker } from "../../common/use-list-perf-marker";
 import { PageHeader } from "../../layout/page-header";
 import { IssuesHeader } from "./issues-header";
 import { BoardView } from "./board-view";
@@ -122,6 +123,14 @@ export function IssuesPage() {
   const loading = usesAssigneeBoard
     ? assigneeGroupsQuery.isLoading
     : statusIssuesQuery.isLoading;
+  // MUL-472 item 5: prove this list is showing the rows the page's own request
+  // returned (`status === "success"` and not `keepPreviousData` leftovers).
+  const perfMarker = useListPerfMarker({
+    status: usesAssigneeBoard ? assigneeGroupsQuery.status : statusIssuesQuery.status,
+    isPlaceholderData: usesAssigneeBoard
+      ? assigneeGroupsQuery.isPlaceholderData
+      : statusIssuesQuery.isPlaceholderData,
+  });
 
   // Clear filter state when switching between workspaces (URL-driven).
   useClearFiltersOnWorkspaceChange(useIssueViewStore, wsId);
@@ -212,7 +221,7 @@ export function IssuesPage() {
   );
 
   return (
-    <div className="flex flex-1 min-h-0 flex-col">
+    <div className="flex flex-1 min-h-0 flex-col" {...perfMarker}>
       <PageHeader className="gap-2">
         <ListTodo className="h-4 w-4 text-muted-foreground" />
         <h1 className="text-sm font-medium">{t(($) => $.page.breadcrumb_title)}</h1>

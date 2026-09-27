@@ -472,6 +472,34 @@ describe("InboxPage", () => {
     expect(markItemsRead).toHaveBeenCalledTimes(callsAfterFailure);
   });
 
+  it("marks the list column with data-perf-scroll only after this request resolved (MUL-472 item 5)", async () => {
+    const now = new Date().toISOString();
+    let release: (() => void) | null = null;
+    listInbox.mockImplementation(
+      async () => {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return [
+          { id: "marker-1", type: "comment_mention", issue_id: null, title: "One", read: true, archived: false, created_at: now },
+        ];
+      },
+    );
+    const { container } = renderInbox();
+
+    // In flight: the marker the probe keys `--selectors auto` on is absent, so a
+    // fast round cannot claim a skeleton-free list as "ready with new data".
+    await waitFor(() => expect(release).not.toBeNull());
+    expect(container.querySelector('[data-perf-scroll="list"]')).toBeNull();
+
+    release?.();
+    // The mocked row renders its id; the marker must follow the resolved rows.
+    await screen.findByRole("button", { name: "marker-1" });
+    await waitFor(() =>
+      expect(container.querySelector('[data-perf-scroll="list"]')).not.toBeNull(),
+    );
+  });
+
   it("marks the unread rows in a date group as read", async () => {
     const now = new Date().toISOString();
     listInbox.mockResolvedValue([

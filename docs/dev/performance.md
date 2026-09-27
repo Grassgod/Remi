@@ -196,7 +196,7 @@ MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内
 
 | 属性 | 宿主 | 取值 | 写入方 |
 | --- | --- | --- | --- |
-| `data-perf-scroll` | 被测量的滚动根：issue 详情、chat | `issue-detail` \| `chat` | S1 打标 |
+| `data-perf-scroll` | 被测量的滚动根：issue 详情、chat；列表页的就绪标记（MUL-472 第 5 项） | `issue-detail` \| `chat` \| `list` | S1 打标；`list` 由 [use-list-perf-marker.ts](../../frontend/packages/views/common/use-list-perf-marker.ts) 在该页自己的列表请求返回后写上 |
 | `data-perf-item` | 真实数据行（timeline 行、chat 消息、issue 行、board card、inbox 行、子单行） | `comment` \| `activity` \| `resolved-bar` \| `message` \| `issue` \| `inbox` \| `sub-issue` | S1 打标 |
 | `data-perf-key` | 同一行 | 行自身的稳定 id | S1 打标 |
 | `data-perf-anchor` | 该页面口径的终点元素 | `latest-comment` \| `agent-stream` \| `target-comment` \| `latest-message` | S1 打标 |
@@ -216,7 +216,8 @@ MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内
 | --- | --- |
 | 终点 | 详情/深链：anchor（agent-stream 优先，否则最新一条评论；深链为 target-comment）可见 + 骨架 0 + 之后 500 ms 无移动帧。列表：区域内无骨架且至少 1 个真实行可见 + 500 ms 安静。chat：最新一条消息可见 + 500 ms 安静 |
 | 超高行 | 行高 > 根高时，`covers`（top ≤ 1 且 bottom ≥ 根高 − 1）或 `bottomVisible`（0 ≤ bottom ≤ 根高 + 1）任一成立即算可见；`target-comment` 为 `topVisible \| (tall && covers)`，因为 `scrollIntoView({ block: "center" })` 会把超高目标的顶边推出视口。每轮在就绪帧记原始 `anchorRectAtReady: { top, bottom, height, rootHeight }`（根相对坐标，只记数不下结论） |
-| 列表页滚动根 | 11 个列表页既没有 `[data-tab-scroll-root]` 也没有自己 `data-perf-scroll`，两种模式都以 `[data-slot="sidebar-inset"]`（MUL-367 的 `READY_SELECTOR`）为根；空 chat 的 legacy heading 规则也用这个回退根（它渲染 `EmptyState`，没有 chat 滚动根） |
+| 列表页滚动根 | 11 个列表页没有自己的滚动根，两种模式都以 `[data-slot="sidebar-inset"]`（MUL-367 的 `READY_SELECTOR`）为根；空 chat 的 legacy heading 规则也用这个回退根（它渲染 `EmptyState`，没有 chat 滚动根）。列表 *根* 不在两种表之间分开，`selectorEquivalence.scrollRoot` 才能继续读 `same` |
+| 列表页就绪标记（MUL-472 第 5 项） | issues / my-issues / inbox / projects / agents / runtimes / skills / autopilots / workbench 的列表容器由 [use-list-perf-marker.ts](../../frontend/packages/views/common/use-list-perf-marker.ts) 在自己那条列表请求 `status === "success"` 且不是 `keepPreviousData` 占位数据时才写 `data-perf-scroll="list"`。`--selectors auto` 从 `[data-perf-scroll]` 判定，所以带标记的列表轮从此记 `contract`（此前 09-28 两轮 32/32 行都是 `legacy`）；标记出现即代表「屏幕上的行是本轮自己那次请求的答案」，事件量是 `mounted && listPerfFresh(query)`，脚本无需再加时钟 |
 | 跳动 | 首次出现真实内容之后，相邻帧中同一 `data-perf-key` 的可见行位移 > 1 px（或 scrollTop 位移 > 1 px）即移动帧；连续移动帧合并为**一次**跳动。`jumps = 0` 才合格 |
 | readyMs | 取 500 ms 安静窗口的**起点**，不是终点 |
 | 超时 | 单轮 20 s；超时轮记 `readyTimeout`，**不进任何分位数** |
@@ -250,7 +251,7 @@ MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内
 
 ### 选择器回退：contract / legacy
 
-生产在本单合入并发布之前没有 `data-perf-*`，所以 [frontend/scripts/perf/lib/selectors.ts](../../frontend/scripts/perf/lib/selectors.ts) 维护两套选择器，`--selectors auto|contract|legacy`（默认 `auto`：页面存在 `[data-perf-scroll]` 即用 contract，否则 legacy）。**所有选择器都集中在这个模块里**，不散落在脚本各处。每一轮都记 `selectorMode`。
+生产在本单合入并发布之前没有 `data-perf-*`，所以 [frontend/scripts/perf/lib/selectors.ts](../../frontend/scripts/perf/lib/selectors.ts) 维护两套选择器，`--selectors auto|contract|legacy`（默认 `auto`：页面存在 `[data-perf-scroll]` 即用 contract，否则 legacy；列表页的标记见上表，`CONTRACT.listMarker` 就是它）。**所有选择器都集中在这个模块里**，不散落在脚本各处。每一轮都记 `selectorMode`。
 
 | 用途 | legacy 选择器 / 规则 |
 | --- | --- |

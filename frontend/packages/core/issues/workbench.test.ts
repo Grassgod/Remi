@@ -155,7 +155,7 @@ describe("useWorkbenchPendingCount (MUL-472 c)", () => {
     // their `total`s. Serve the same two totals through the new single request
     // and assert both the request shape and the number.
     const perStatusTotals: Record<string, number> = { in_review: 2, blocked: 3 };
-    const mergedTwoRequestResult = perStatusTotals.in_review + perStatusTotals.blocked;
+    const mergedTwoRequestResult = (perStatusTotals.in_review ?? 0) + (perStatusTotals.blocked ?? 0);
     listIssues.mockImplementation(
       ({ statuses }: { statuses: string[] }) =>
         Promise.resolve({
