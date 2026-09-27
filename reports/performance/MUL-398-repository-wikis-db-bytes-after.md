@@ -118,7 +118,22 @@ B/行常数的来源：把 fixture 规模放大到 1,842 / 1,443 行、`payload`
 
 按 3.4 的模型，三项合计可再降约 0.7–1.3 MB，209 规模有望落到 0.4–0.7 MB。
 
-## 4. 复现
+## 4. CLI 输出逐字节比对
+
+摘要路由的响应被 `remi wiki repository list` 直接渲染，因此「CLI 输出不变」也需要证据，而不只是 HTTP 体不变。
+
+用真实 CLI 子进程打真实 API 进程（真实 PG、同一 fixture），在**投影前**与**投影后**两套源码上各跑一次，把 stdout / stderr 落盘后 `cmp`：
+
+| 命令 | stdout | stderr | sha256（前后一致） |
+| --- | --- | --- | --- |
+| `remi wiki repository list --output json` | 1,482 B | 0 B | `ff0e13b1b7740046d5a52ab54cbc4bf7424dc5e238b0d5f08c1bc90bf0848060` |
+| `remi wiki repository list` | 68 B | 0 B | `5960a08c77a7d66caa31ced2318d4945b0e7b1122ac1132669408b53d44e41b9` |
+
+两个命令的 stdout 与 stderr 在前后版本之间**逐字节相同**。投影前那一次同时输出了 Explorer 描述的两条 `api_large_db_reply`（12,306,475 / 10,872,505 B），投影后没有大包日志，确认两次跑的是同一份数据、不同实现。
+
+> 做法说明：CLI 读的是 `MULTIREMI_SERVER_URL` / `MULTIREMI_TOKEN`（`apps/remi/cli/multiremi.ts:315-360`）。比对脚本只在本机 loopback 起临时 API，不接触任何远端。
+
+## 5. 复现
 
 ```bash
 # 需要一次性可建库的真实 PG
