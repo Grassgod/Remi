@@ -21,7 +21,7 @@ describe("application compose stack", () => {
     // The sidecar is retired. Anything left behind here — a service, a profile
     // to enable it, an endpoint name to point at it — would be config that
     // nothing reads, which is how an operator ends up debugging a dead process.
-    expect(Object.keys(compose.services).sort()).toEqual(["api", "ssh-mesh-control-plane", "web"]);
+    expect(Object.keys(compose.services).sort()).toEqual(["api", "api-runtime", "ssh-mesh-control-plane", "web"]);
     expect(compose.volumes).toBeUndefined();
     expect(envExample).not.toMatch(/^COMPOSE_PROFILES=/mu);
     expect(envExample).not.toMatch(/^REMI_FEISHU_SIDECAR/mu);
@@ -31,6 +31,30 @@ describe("application compose stack", () => {
         expect(key, `${name} env ${key}`).not.toContain("SIDECAR");
       }
     }
+  });
+
+  test("keeps the split API role container behind a profile", () => {
+    // MUL-464. `api-runtime` is the daemon surface of the same image. It must
+    // stay opt-in: no profile means no second API container, and the browser
+    // process keeps its name because the Web image bakes REMOTE_API_URL to
+    // http://api:6120. A default installation therefore starts the same three
+    // services it started before this change.
+    const runtime = compose.services["api-runtime"]!;
+    expect(runtime.profiles).toEqual(["split"]);
+    expect(runtime.environment.MULTIREMI_API_ROLE).toBe("runtime");
+    expect(runtime.environment.MULTIREMI_BACKGROUND_JOBS).toBe("0");
+    expect(runtime.environment.MULTIREMI_SSH_MESH_CONTROL_PLANE).toBe("0");
+    expect(runtime.environment.MULTIREMI_PEER_URL).toBe("http://api:6120");
+    // Same image, env file, and mounts as `api`: it is the same server with a
+    // different role, and it must read the same database and credentials.
+    expect(runtime.image).toBe(compose.services.api!.image);
+    expect(runtime.env_file).toEqual(compose.services.api!.env_file);
+    expect(runtime.volumes).toEqual(compose.services.api!.volumes);
+    expect(runtime.ports).toEqual(["127.0.0.1:${REMI_API_RUNTIME_BIND_PORT:-16121}:6120"]);
+    // The role env on `api` is a pass-through with an `all` default, so an
+    // unconfigured installation behaves exactly as it did before.
+    expect(compose.services.api!.environment.MULTIREMI_API_ROLE).toBe("${REMI_API_ROLE:-all}");
+    expect(compose.services.api!.environment.MULTIREMI_PEER_URL).toBe("${REMI_API_PEER_URL:-}");
   });
 
   test("bakes a pinned, checksum-verified lark-cli into the API image", () => {
