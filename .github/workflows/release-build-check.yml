@@ -212,19 +212,23 @@ jobs:
           HEAD_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          # Paths that change what this check measures. Two rules for what
-          # belongs here:
-          #   - the check drives a production build of `frontend/`, so frontend
-          #     changes are in;
-          #   - it starts `packages/server`'s API in-process, so every workspace
-          #     package that package imports is in too. Those were derived from
-          #     the imports, not guessed: `packages/contracts`, `packages/daemon`,
-          #     `packages/shared`, `packages/connectors`, `packages/acp`.
-          #     `packages/auth` is deliberately absent — `packages/server`
-          #     imports nothing from it (verified by scanning `packages/server/src`).
-          # Plus this workflow, the lockfile and the root manifest: a Next or
-          # Playwright bump changes the result without touching frontend sources.
-          relevant='^(\.github/workflows/release-build-check\.yml|frontend/|packages/server/|packages/contracts/|packages/daemon/|packages/shared/|packages/connectors/|packages/acp/|tests/integration/zero-jump|tests/fixtures/multiremi/|reports/performance/MUL-394-zero-jump|bun\.lock|package\.json)'
+          # Paths that change what this check measures:
+          #   - `frontend/` — the check drives a production Next build of it;
+          #   - `packages/server/` — it starts that API in-process;
+          #   - every workspace package reachable from `packages/server`, which is
+          #     what a change there can alter without touching either of the two
+          #     above. Computed by following the import graph, not guessed:
+          #     `packages/contracts`, `packages/daemon`, `packages/shared`,
+          #     `packages/connectors`, `packages/acp` are imported directly, and
+          #     `packages/plugin-sdk` arrives through `packages/daemon`
+          #     (`agent-runtime/plugins/registry.ts`). `packages/auth` is
+          #     reachable from nothing here — only `packages/remi` and
+          #     `apps/remi` import it — so it stays out;
+          #   - this workflow, `bun.lock` and the root `package.json`: a Next or
+          #     Playwright bump changes the result without touching frontend
+          #     sources. Scoped to this workflow on purpose — a change to some
+          #     other workflow cannot alter what this job measures.
+          relevant='^(\.github/workflows/release-build-check\.yml|frontend/|packages/server/|packages/contracts/|packages/daemon/|packages/shared/|packages/connectors/|packages/acp/|packages/plugin-sdk/|tests/integration/zero-jump|tests/fixtures/multiremi/|reports/performance/MUL-394-zero-jump|bun\.lock|package\.json)'
           if [ "$EVENT_NAME" != "pull_request" ] && [ "$EVENT_NAME" != "push" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
