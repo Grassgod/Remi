@@ -274,24 +274,35 @@ interface ReactionInput {
   emoji: string;
 }
 
-interface CreateIssueCommentOptions {
-  deferAgentMentionDispatch?: boolean;
-  /**
-   * MUL-400 S1: the caller already owns a database transaction (the organizer
-   * action facade). Every write inside must use the `WithinTransaction`
-   * flavour, because PostgresSyncDatabase has no savepoints and a nested BEGIN
-   * would end the caller's transaction at its COMMIT.
-   */
-  withinTransaction?: boolean;
-  /**
-   * MUL-400 S1 (QA round 3): where a caller-owned transaction puts the events
-   * this write would otherwise publish immediately. `comment:created` is a
-   * realtime push to open Issue pages, so sending it before the COMMIT shows a
-   * comment that a later ROLLBACK erases. The owner flushes the queue after it
-   * commits.
-   */
-  deferredEvents?: CommitEventQueue;
-}
+/**
+ * MUL-400 S1 (QA round 4): the union makes the queue mandatory exactly when the
+ * write happens inside a caller-owned transaction. A caller that only sets
+ * `withinTransaction: true` no longer compiles, so no comment push can escape
+ * before COMMIT and no `?? createCommitEventQueue()` fallback can swallow it.
+ */
+type CreateIssueCommentOptions =
+  | {
+    deferAgentMentionDispatch?: boolean;
+    withinTransaction?: false;
+    deferredEvents?: CommitEventQueue;
+  }
+  | {
+    deferAgentMentionDispatch?: boolean;
+    /**
+     * The caller already owns a database transaction (the organizer action
+     * facade). Every write inside must use the `WithinTransaction` flavour,
+     * because PostgresSyncDatabase has no savepoints and a nested BEGIN would
+     * end the caller's transaction at its COMMIT.
+     */
+    withinTransaction: true;
+    /**
+     * Where a caller-owned transaction puts the events this write would
+     * otherwise publish immediately. `comment:created` is a realtime push to
+     * open Issue pages, so sending it before the COMMIT shows a comment that a
+     * later ROLLBACK erases. The owner flushes the queue after it commits.
+     */
+    deferredEvents: CommitEventQueue;
+  };
 
 /**
  * `table` and `parentColumn` are interpolated into SQL text. Both instances are module-level
@@ -449,10 +460,22 @@ export class IssuesRepo {
     }, deferredEvents);
     // MUL-400 E1 re-derivation: a child created under an in_review parent puts
     // that parent back to in_progress. `createIssue` is the third entry point
-    // the plan names alongside status change and re-parenting.
+    // the plan names alongside status change and re-parenting. This method owns
+    // no transaction of its own, so its derived transition and queue are
+    // replayed right away, once the insert above is committed.
     if (parentIssueId && parentStatusGuardEnabled()) {
       const parent = this.getIssue(parentIssueId);
-      if (parent) this.rederiveParentStatus(parent, this.getIssue(id)!, deferredEvents);
+      if (parent) {
+        // This method owns no transaction of its own; the caller's queue is the
+        // one that is (or will be) drained after the insert commits.
+        const collector: ChildStatusChangeCollector = [];
+        const parentEvents = deferredEvents ?? createCommitEventQueue();
+        this.rederiveParentStatus(parent, this.getIssue(id)!, collector, parentEvents);
+        if (!deferredEvents) {
+          this.ctx.emitCommitEvents(parentEvents);
+          this.ctx.tasks().runCollectedChildStatusChanges(collector);
+        }
+      }
     }
     if (sourceIssueId) {
       this.ctx.db.run("UPDATE multiremi_issues SET updated_at = ? WHERE id = ?", [now, sourceIssueId]);
@@ -1771,25 +1794,38 @@ export class IssuesRepo {
     // The write above is committed; the hook runs after it on purpose (ADR
     // 0003). A failure here therefore cannot undo the Issue's own transition —
     // it is logged and rethrown so the caller learns the report did not land.
+    //
+    // Every transition the hook itself produces — the parent's re-derivation
+    // and the round it queues — is pushed into `collector` (never returned and
+    // never dropped) so the replay walks all the way to the grandparent. The
+    // deferred queue covers the hook's own realtime pushes; it is flushed only
+    // after the hook returned and its transaction committed.
+    const collector: ChildStatusChangeCollector = [];
+    const deferredEvents = createCommitEventQueue();
     try {
       this.notifyChildStatusChange(
         previous!,
         updated,
         cleanOptionalString(input.parentTaskId ?? input.parent_task_id),
+        collector,
       );
+      // MUL-400 E1 re-derivation for re-parenting: moving a child away is a child
+      // event for the family it LEFT, so the old parent re-derives as well. The
+      // new parent is covered by the hook above.
+      if (parentStatusGuardEnabled() && previous!.parentIssueId && previous!.parentIssueId !== updated.parentIssueId) {
+        const oldParent = this.getIssue(previous!.parentIssueId);
+        if (oldParent) this.rederiveParentStatus(oldParent, updated, collector, deferredEvents);
+      }
     } catch (err) {
+      // The hook's own transaction rolled back, so its transitions and events
+      // went with it: nothing may be replayed or published.
       log.warn(
         `child status hook failed for ${updated.id}: ${err instanceof Error ? err.message : String(err)}`,
       );
       throw err;
     }
-    // MUL-400 E1 re-derivation for re-parenting: moving a child away is a child
-    // event for the family it LEFT, so the old parent re-derives as well. The
-    // new parent is covered by the hook above.
-    if (parentStatusGuardEnabled() && previous!.parentIssueId && previous!.parentIssueId !== updated.parentIssueId) {
-      const oldParent = this.getIssue(previous!.parentIssueId);
-      if (oldParent) this.rederiveParentStatus(oldParent, updated);
-    }
+    this.ctx.tasks().runCollectedChildStatusChanges(collector);
+    this.ctx.emitCommitEvents(deferredEvents);
     return { issue: updated, cancelledTasks, handledForcedStart: forcedStart, previous: previous! };
   }
 
@@ -1935,6 +1971,7 @@ export class IssuesRepo {
     previous: MultiremiIssue,
     issue: MultiremiIssue,
     parentTaskId: string | null,
+    collector: ChildStatusChangeCollector,
     options: {
       taskTerminalStatus?: "completed" | "failed" | "cancelled";
       /**
@@ -1944,24 +1981,26 @@ export class IssuesRepo {
        */
       seen?: Set<string>;
     } = {},
-  ): ChildStatusChange[] {
+  ): void {
     // MUL-400 E3: the dependency side of the same hook. It runs before the
     // parent notification so the report the parent owner reads already carries
     // the "your prerequisite failed" lines, and it is independent of whether
-    // this issue has a parent at all. It also returns the readiness lines for
-    // dependents that share this issue's parent, which join the same report
-    // instead of queuing a round of their own.
-    //
+    // this issue has a parent at all. The automatic start opens a transaction of
+    // its own (see `autoStartDependent`) and runs to completion here, at depth
+    // 0 — before the report transaction below opens, because Postgres has no
+    // savepoints on this bridge.
+    const readinessLines: string[] = [];
+    const dependencyNested: ChildStatusChangeCollector = [];
+    const dependencyEvents = createCommitEventQueue();
+    this.reactToIssueDependencyOutcome(previous, issue, parentTaskId, dependencyNested, dependencyEvents, readinessLines);
     if (!issue.parentIssueId) {
-      // No parent report to fold into: the dependency side still runs, and it
-      // owns its own commit-time queue.
-      const standaloneQueue = createCommitEventQueue();
-      this.reactToIssueDependencyOutcome(previous, issue, parentTaskId, [], standaloneQueue);
-      this.ctx.emitCommitEvents(standaloneQueue);
-      return [];
+      // No parent report to fold into: the dependency side stands alone.
+      this.ctx.emitCommitEvents(dependencyEvents);
+      this.ctx.tasks().runCollectedChildStatusChanges(dependencyNested);
+      return;
     }
     const parent = this.getIssue(issue.parentIssueId);
-    if (!parent) return [];
+    if (!parent) return;
 
     const entered = previous.status !== issue.status;
     const reported = entered ? childTerminalOutcome(issue.status) : null;
@@ -1972,9 +2011,11 @@ export class IssuesRepo {
     // but it stays a single activity: no comment, no round, no status change.
     if (parent.status === "done" || parent.status === "cancelled") {
       if (outcome) {
-        this.ctx.db.transaction(() => this.recordChildStatusAfterParentClosed(parent, issue, outcome))();
+        const closedQueue = createCommitEventQueue();
+        this.ctx.db.transaction(() => this.recordChildStatusAfterParentClosed(parent, issue, outcome, closedQueue))();
+        this.ctx.emitCommitEvents(closedQueue);
       }
-      return [];
+      return;
     }
 
     // One transaction for the whole report: the comment + its Session event, the
@@ -1991,32 +2032,25 @@ export class IssuesRepo {
     const comments: MultiremiIssueComment[] = [];
     // The round this report queues is created through the one task-creation
     // entry point, and that write can move the parent's own status — which is a
-    // child event for the GRANDPARENT. Those transitions are collected here and
-    // returned to the transaction owner for post-commit replay, never run
-    // inline: an inner transaction would commit this one early on Postgres.
-    const nested: ChildStatusChangeCollector = [];
-    const deferredEvents: CommitEventQueue = { workspace: [], enqueuedTasks: [] };
-    // MUL-400 E3: the dependency side runs BEFORE the report transaction below.
-    // The automatic start opens a transaction of its own (see
-    // `autoStartDependent`), and Postgres has no savepoints on this bridge, so a
-    // step that needs its own transaction must never run inside that one. Its
-    // commit-time events join this hook's queue so they are published with the
-    // rest, after the COMMIT.
-    const readinessLines = this.reactToIssueDependencyOutcome(previous, issue, parentTaskId, nested, deferredEvents);
+    // child event for the GRANDPARENT. Those transitions are staged here and
+    // handed to the caller's collector only once this transaction committed, so
+    // a rollback cannot leave a transition behind for the replay to chase.
+    const staged: ChildStatusChangeCollector = [];
+    const deferredEvents = createCommitEventQueue();
     this.ctx.db.transaction(() => {
       if (outcome) {
-        // Readiness lines for dependents that share this parent ride along in
-        // this one report so the parent owner reads a single round.
-        const reported = this.notifyParentOfChildOutcome(parent, issue, outcome, parentTaskId, readinessLines, nested, deferredEvents);
+        // MUL-400 E3 readiness lines for dependents that share this parent ride
+        // along in this one report so the parent owner reads a single round.
+        const reported = this.notifyParentOfChildOutcome(parent, issue, outcome, parentTaskId, readinessLines, staged, deferredEvents);
         enqueued.push(...reported.tasks);
         if (reported.comment) comments.push(reported.comment);
       }
-      if (parentStatusGuardEnabled()) this.rederiveParentStatus(parent, issue, deferredEvents);
+      if (parentStatusGuardEnabled()) this.rederiveParentStatus(parent, issue, staged, deferredEvents);
     })();
+    collector.push(...staged);
     for (const task of enqueued) this.ctx.notifyTaskEnqueued(task);
     for (const comment of comments) this.broadcastSystemComment(parent.id, comment);
-    for (const event of deferredEvents.workspace) this.ctx.emitWorkspaceEvent(event);
-    return nested;
+    this.ctx.emitCommitEvents(deferredEvents);
   }
 
   /** Best-effort live update for a system comment that is already committed. */
@@ -2045,6 +2079,7 @@ export class IssuesRepo {
     parent: MultiremiIssue,
     child: MultiremiIssue,
     outcome: ChildTerminalOutcome,
+    deferredEvents: CommitEventQueue,
   ): void {
     this.ctx.appendIssueActivity(parent.id, {
       actorType: "system",
@@ -2062,7 +2097,7 @@ export class IssuesRepo {
         parentStatus: parent.status,
         parent_status: parent.status,
       },
-    });
+    }, deferredEvents);
   }
 
   /**
@@ -2084,6 +2119,7 @@ export class IssuesRepo {
     parentTaskId: string | null,
     nested: ChildStatusChangeCollector,
     deferredEvents: CommitEventQueue,
+    mergedLines: string[] = [],
   ): string[] {
     if (!dependencyGateEnabled()) return [];
     if (previous.status === issue.status) return [];
@@ -2095,8 +2131,8 @@ export class IssuesRepo {
     const satisfied = issue.status === "done";
     // Readiness lines for dependents that share this issue's parent: they belong
     // in the E2 report for this issue rather than in a report of their own, so
-    // the parent owner reads one round instead of two.
-    const mergedLines: string[] = [];
+    // the parent owner reads one round instead of two. The caller passes the
+    // array it will hand to the report builder.
     for (const dependent of dependents) {
       if (dependent.status !== "backlog") continue;
       const unmet = this.listUnmetPrerequisites(dependent.id);
@@ -2683,7 +2719,7 @@ export class IssuesRepo {
   holdParentStatusForOpenChildren(
     issueId: string,
     requested: string,
-    options: { exempt?: boolean; deferredEvents?: CommitEventQueue } = {},
+    options: { exempt?: boolean; deferredEvents: CommitEventQueue },
   ): string {
     if (options.exempt) return requested;
     if (!parentStatusGuardEnabled()) return requested;
@@ -2720,7 +2756,8 @@ export class IssuesRepo {
   private rederiveParentStatus(
     parent: MultiremiIssue,
     child: MultiremiIssue,
-    deferredEvents?: CommitEventQueue,
+    collector: ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
   ): void {
     if (parent.status !== "in_review") return;
     const openChildren = this.countOpenChildIssues(parent.id);
@@ -2757,9 +2794,9 @@ export class IssuesRepo {
       actorId: null,
     });
     // Same rule as the comment push: this runs inside a caller-owned
-    // transaction, so the realtime patch is deferred until it commits. Without
-    // the queue (a read-only caller) it is emitted directly.
-    const derivedEvent: WorkspaceEvent = {
+    // transaction, so the realtime patch goes on the owner's queue and is only
+    // published once that transaction commits.
+    deferredEvents.workspace.push({
       type: "issue:updated",
       workspaceId: parent.workspaceId,
       actorType: "system",
@@ -2769,9 +2806,15 @@ export class IssuesRepo {
         status_changed: true,
         prev_status: "in_review",
       },
-    };
-    if (deferredEvents) deferredEvents.workspace.push(derivedEvent);
-    else this.ctx.emitWorkspaceEvent(derivedEvent);
+    } satisfies WorkspaceEvent);
+    // MUL-400 QA round 4: the parent moved, so the GRANDparent must hear about
+    // it too. This transition joins the same collector the hook's caller drains
+    // after the commit; the replayed hop then walks one more level up.
+    collector.push({
+      previous: { ...parent, status: "in_review" },
+      issue: this.getIssue(parent.id) ?? { ...parent, status: "in_progress", completedAt: null, archivedAt: null },
+      taskId: `rederive:${child.id}:${parent.id}`,
+    });
   }
 
   /**
@@ -2811,7 +2854,7 @@ export class IssuesRepo {
       outcome,
       childStatus: child.status,
       child_status: child.status,
-    }, null, null, deferredEvents);
+    }, deferredEvents);
     return { tasks: this.triggerParentAssigneeForChildDone(parent, comment, outcome, parentTaskId, nested, deferredEvents), comment };
   }
 
@@ -2869,8 +2912,8 @@ export class IssuesRepo {
       outcome,
       childStatus: child.status,
       child_status: child.status,
-    }, null, null, deferredEvents);
-    this.recordChildDoneParentSkipped(parent, comment, "no_assignee", { outcome });
+    }, deferredEvents);
+    this.recordChildDoneParentSkipped(parent, comment, "no_assignee", { outcome }, deferredEvents);
     for (const subscriber of this.listIssueSubscribers(parent.id)) {
       if (subscriber.userType !== "member") continue;
       this.ctx.createInboxItem({
@@ -2940,11 +2983,16 @@ export class IssuesRepo {
     taskId: string | null = null,
     issueSessionId: string | null = null,
   ): MultiremiIssueComment {
+    // The wrapper owns the only transaction here, so it must also own the
+    // queue: the `comment_created` activity and the `comment:created` push are
+    // published after this transaction commits (MUL-400 S1, QA round 4).
+    const deferredEvents = createCommitEventQueue();
     const comment = this.ctx.db.transaction(() =>
-      this.createSystemIssueCommentWithinTransaction(issueId, body, data, taskId, issueSessionId))();
+      this.createSystemIssueCommentWithinTransaction(issueId, body, data, deferredEvents, taskId, issueSessionId))();
     // Same live-update contract as createIssueComment — system comments are
     // store-internal and never pass through the HTTP layer. Best-effort, and
     // only after the row is committed.
+    this.ctx.emitCommitEvents(deferredEvents);
     this.broadcastSystemComment(issueId, comment);
     return comment;
   }
@@ -2959,9 +3007,9 @@ export class IssuesRepo {
     issueId: string,
     body: string,
     data: Record<string, unknown>,
+    deferredEvents: CommitEventQueue,
     taskId: string | null = null,
     issueSessionId: string | null = null,
-    deferredEvents?: CommitEventQueue,
   ): MultiremiIssueComment {
     const id = createId("cmt");
     const now = nowIso();
@@ -3113,7 +3161,7 @@ export class IssuesRepo {
         prompt: childDoneParentTaskPrompt(systemComment, outcome),
         parentTaskId,
         preserveIssueStatus: true,
-      }, nested);
+      }, nested, deferredEvents);
       this.ctx.appendIssueActivity(parent.id, {
         actorType: "system",
         actorId: SYSTEM_AUTHOR_ID,
@@ -3141,8 +3189,8 @@ export class IssuesRepo {
     parent: MultiremiIssue,
     systemComment: MultiremiIssueComment,
     reason: "no_assignee" | "agent_unavailable" | "squad_leader_unavailable",
-    details: Record<string, unknown> = {},
-    deferredEvents?: CommitEventQueue,
+    details: Record<string, unknown>,
+    deferredEvents: CommitEventQueue,
   ): void {
     this.ctx.appendIssueActivity(parent.id, {
       actorType: "system",

@@ -376,6 +376,146 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     }
   });
 
+  it("walks child -> parent -> grandparent at depth 1 on Postgres", () => {
+    const { workspaceId, agent } = freshWorkspace();
+    const grandparent = store.createIssue({
+      title: "PG grandparent",
+      workspaceId,
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: agent,
+    });
+    const parent = store.createIssue({
+      title: "PG parent",
+      workspaceId,
+      status: "in_progress",
+      parentIssueId: grandparent.id,
+      assigneeType: "agent",
+      assigneeId: agent,
+    });
+    const child = store.createIssue({
+      title: "PG child",
+      workspaceId,
+      parentIssueId: parent.id,
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: agent,
+    });
+    store.createIssue({ title: "PG sibling gp", workspaceId, parentIssueId: grandparent.id, status: "in_progress" });
+    store.createIssue({ title: "PG sibling p", workspaceId, parentIssueId: parent.id, status: "in_progress" });
+    store.updateIssue(parent.id, { status: "in_review", force: true });
+    store.updateIssue(grandparent.id, { status: "in_review", force: true });
+
+    const events: Array<{ type: string; action: string; inTransaction: boolean }> = [];
+    const unsubscribe = store.onWorkspaceEvent((event) => {
+      const entry = (event.payload as { entry?: { action?: string } } | undefined)?.entry;
+      events.push({ type: event.type, action: entry?.action ?? "", inTransaction: db.inTransaction });
+    });
+    counter.reset();
+    try {
+      store.updateIssue(child.id, { status: "done" });
+    } finally {
+      unsubscribe();
+    }
+    expect(counter.max, "PG chain depth").toBe(1);
+    expect(store.getIssue(parent.id)?.status).toBe("in_progress");
+    expect(store.getIssue(grandparent.id)?.status).toBe("in_progress");
+    expect(store.listIssueActivity(parent.id).filter((e) => e.type === "parent_status_derived"))
+      .toHaveLength(1);
+    expect(store.listIssueActivity(grandparent.id).filter((e) => e.type === "parent_status_derived"))
+      .toHaveLength(1);
+    expect(events.filter((event) => event.inTransaction)).toHaveLength(0);
+  });
+
+  for (const parentStatus of ["done", "cancelled"] as const) {
+    it(`delivers the ${parentStatus}-parent activity after COMMIT on Postgres`, () => {
+      const { workspaceId } = freshWorkspace();
+      const parent = store.createIssue({
+        title: `PG closed parent ${parentStatus}`,
+        workspaceId,
+        status: "in_progress",
+      });
+      const child = store.createIssue({
+        title: `PG late child ${parentStatus}`,
+        workspaceId,
+        parentIssueId: parent.id,
+        status: "in_progress",
+      });
+      store.updateIssue(parent.id, { status: parentStatus, force: true });
+
+      const events: Array<{ action: string; inTransaction: boolean }> = [];
+      const unsubscribe = store.onWorkspaceEvent((event) => {
+        const entry = (event.payload as { entry?: { action?: string } } | undefined)?.entry;
+        if (event.type === "activity:created") {
+          events.push({ action: entry?.action ?? "", inTransaction: db.inTransaction });
+        }
+      });
+      try {
+        store.updateIssue(child.id, { status: "done" });
+      } finally {
+        unsubscribe();
+      }
+      expect(store.listIssueActivity(parent.id).filter((e) => e.type === "child_status_after_parent_closed"))
+        .toHaveLength(1);
+      const closed = events.filter((event) => event.action === "child_status_after_parent_closed");
+      expect(closed).toHaveLength(1);
+      expect(closed[0]?.inTransaction).toBe(false);
+      expect(events.filter((event) => event.inTransaction)).toHaveLength(0);
+    });
+  }
+
+  it("publishes no cancel activity when the organizer transaction rolls back (Postgres)", () => {
+    const { workspaceId, agent } = freshWorkspace();
+    const supervisorAgent = store.createAgent({
+      name: "PG organizer",
+      provider: "claude",
+      runtimeId: undefined,
+      workspaceId,
+      role: "supervisor",
+    });
+    const workerAgent = store.createAgent({ name: "PG worker", provider: "claude", workspaceId });
+    const patrol = store.createIssue({ title: "PG patrol", workspaceId });
+    const targetIssue = store.createIssue({ title: "PG target", workspaceId, status: "in_progress" });
+    const supervisorTask = store.createTask({ agentId: supervisorAgent.id, issueId: patrol.id, prompt: "patrol" });
+    const targetTask = store.createTask({ agentId: workerAgent.id, issueId: targetIssue.id, prompt: "work" });
+    store.updateWorkspace(workspaceId, { settings: { organizer: { mode: "act" } } });
+
+    const events: Array<{ type: string; action: string }> = [];
+    const unsubscribe = store.onWorkspaceEvent((event) => {
+      const entry = (event.payload as { entry?: { action?: string } } | undefined)?.entry;
+      if (["comment:created", "activity:created", "issue:updated"].includes(event.type)) {
+        events.push({ type: event.type, action: entry?.action ?? "" });
+      }
+    });
+    const issues = (store as unknown as {
+      issues: { notifyOrganizerAction: (...args: unknown[]) => void };
+    }).issues;
+    const originalNotify = issues.notifyOrganizerAction.bind(issues);
+    issues.notifyOrganizerAction = (...args: unknown[]) => {
+      originalNotify(...args);
+      throw new Error("PG organizer rollback injection");
+    };
+    let threw = false;
+    try {
+      store.performOrganizerAction({
+        supervisorTaskId: supervisorTask.id,
+        supervisorAgentId: supervisorAgent.id,
+        targetTaskId: targetTask.id,
+        action: "cancel",
+        reason: "PG rollback probe",
+      });
+    } catch (err) {
+      threw = true;
+      expect((err as Error).message).toBe("PG organizer rollback injection");
+    } finally {
+      issues.notifyOrganizerAction = originalNotify;
+      unsubscribe();
+    }
+    expect(threw).toBe(true);
+    expect(store.getTask(targetTask.id)?.status).toBe("queued");
+    expect(events).toHaveLength(0);
+  });
+
   it("coalesces two children ending concurrently into one queued round (Postgres)", async () => {
     const { workspaceId, agent } = freshWorkspace();
     const parent = store.createIssue({

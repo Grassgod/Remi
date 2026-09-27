@@ -15,6 +15,7 @@
  * PG suite imports this file's helpers, see `multiremi-postgres-tx-depth`).
  */
 import { afterEach, describe, expect, it } from "bun:test";
+import { StoreContext } from "@multiremi/store/context.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -541,6 +542,415 @@ describe("MUL-400 S1 transaction depth — SCM merge completion", () => {
     expect(store.getIssue(parent.id)?.status).toBe("done");
     expect(store.listIssueActivity(parent.id).filter((entry) => entry.type === "issue_status_forced"))
       .toHaveLength(0);
+  });
+});
+
+describe("MUL-400 S1 — the replay walks the whole ancestor chain", () => {
+  /**
+   * QA round 4: the hook used to return the parent's own re-derivation and the
+   * direct write path dropped it, so only one level moved. The chain below is
+   * grandparent <- parent <- child, all agent-owned with a still-open sibling,
+   * and each entry point that ends the child must walk both hops.
+   */
+  function threeLayerChain(store: Store, agentId: string) {
+    const grandparent = store.createIssue({
+      title: "Grandparent",
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: agentId,
+    });
+    const parent = store.createIssue({
+      title: "Parent",
+      status: "in_progress",
+      parentIssueId: grandparent.id,
+      assigneeType: "agent",
+      assigneeId: agentId,
+    });
+    const child = store.createIssue({
+      title: "Child",
+      parentIssueId: parent.id,
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: agentId,
+    });
+    // Each level keeps an open sibling, so the derived in_progress is the only
+    // legal move and no parent can fall through to a terminal status. The
+    // siblings must exist BEFORE the parents are parked at in_review: creating a
+    // child under an in_review parent re-derives that parent immediately (that
+    // is E1 working), which would collapse the chain before the probe starts.
+    store.createIssue({ title: "Sibling gp", parentIssueId: grandparent.id, status: "in_progress" });
+    store.createIssue({ title: "Sibling p", parentIssueId: parent.id, status: "in_progress" });
+    store.updateIssue(parent.id, { status: "in_review", force: true });
+    store.updateIssue(grandparent.id, { status: "in_review", force: true });
+    expect(store.getIssue(parent.id)?.status).toBe("in_review");
+    expect(store.getIssue(grandparent.id)?.status).toBe("in_review");
+    return { grandparent, parent, child };
+  }
+
+  function assertChainWalked(store: Store, chain: ReturnType<typeof threeLayerChain>) {
+    expect(store.getIssue(chain.parent.id)?.status).toBe("in_progress");
+    expect(store.getIssue(chain.grandparent.id)?.status).toBe("in_progress");
+    expect(store.listIssueActivity(chain.parent.id).filter((e) => e.type === "parent_status_derived"))
+      .toHaveLength(1);
+    expect(store.listIssueActivity(chain.grandparent.id).filter((e) => e.type === "parent_status_derived"))
+      .toHaveLength(1);
+  }
+
+  it("walks child -> parent -> grandparent on updateIssue", () => {
+    const { store, agent } = setupDepthStore();
+    const chain = threeLayerChain(store, agent.id);
+    const counter = wrapStore(store);
+    counter.reset();
+    store.updateIssue(chain.child.id, { status: "done" });
+    expect(counter.max, "updateIssue chain depth").toBe(1);
+    assertChainWalked(store, chain);
+  });
+
+  it("walks child -> parent -> grandparent on completeTask", () => {
+    const { store, runtime, agent } = setupDepthStore();
+    const chain = threeLayerChain(store, agent.id);
+    const task = store.createTask({ agentId: agent.id, issueId: chain.child.id, prompt: "finish the child" });
+    runTask(store, runtime.id, task.id);
+    const counter = wrapStore(store);
+    counter.reset();
+    store.completeTask(task.id, { output: "child slice finished" });
+    expect(counter.max, "completeTask chain depth").toBe(1);
+    assertChainWalked(store, chain);
+  });
+
+  it("walks child -> parent -> grandparent on an SCM merge", () => {
+    const { store, agent } = setupDepthStore();
+    process.env.MULTIREMI_SCM_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
+    store.updateWorkspace("local", {
+      repos: [{
+        id: "repo_widgets",
+        name: "widgets",
+        url: "git@github.com:acme/widgets.git",
+        source: "github",
+        default_branch: "main",
+      }],
+      settings: { scm_auto_link_enabled: true, scm_complete_issue_on_merge_enabled: true },
+    });
+    const connection = store.createScmConnection({
+      workspaceId: "local",
+      name: "GitHub chain",
+      provider: "github",
+      mode: "hybrid",
+      accessToken: "ghp_chain_token",
+      webhookSecret: "chain-webhook-secret",
+      repositoryIds: ["repo_widgets"],
+    });
+    const chain = threeLayerChain(store, agent.id);
+    store.advanceScmEntitySnapshot({
+      connectionId: connection.id,
+      repositoryId: "repo_widgets",
+      entityType: "change_request",
+      externalId: "77",
+      revisionAt: "2026-08-21T10:00:00.000Z",
+      revision: "v-77",
+      contentHash: "change-77",
+      payload: {
+        number: 77,
+        title: `${chain.child.key}: deliver one slice`,
+        state: "merged",
+        source_branch: "agent/chain",
+        url: "https://github.com/acme/widgets/pull/77",
+      },
+    });
+    const counter = wrapStore(store);
+    counter.reset();
+    store.recordScmCanonicalEvent({
+      workspaceId: "local",
+      connectionId: connection.id,
+      repositoryId: "repo_widgets",
+      type: "change.merged",
+      subjectType: "change_request",
+      subjectId: "77",
+      logicalKey: "change.merged:77:chain",
+      fidelity: "inferred",
+      payload: { id: "provider-change-77", number: 77, branch: "main", mergeSha: "def" },
+      evidence: { source: "poll", dedupeKey: "poll:change.merged:77", providerEventId: null },
+    });
+    expect(counter.max, "scm merge chain depth").toBe(1);
+    expect(store.getIssue(chain.child.id)?.status).toBe("done");
+    assertChainWalked(store, chain);
+  });
+
+  it("walks four levels, so the replay is not capped at one extra hop", () => {
+    const { store, agent } = setupDepthStore();
+    // The whole point of the case: a chain deeper than the QA repro must walk
+    // past the first hop, so every level keeps an open child of its own.
+    const top = store.createIssue({
+      title: "Top",
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    const mid = store.createIssue({
+      title: "Mid",
+      status: "in_progress",
+      parentIssueId: top.id,
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    const low = store.createIssue({
+      title: "Low",
+      status: "in_progress",
+      parentIssueId: mid.id,
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    const leaf = store.createIssue({
+      title: "Leaf",
+      parentIssueId: low.id,
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    for (const holder of [top, mid, low]) {
+      store.createIssue({ title: `Sibling ${holder.id}`, parentIssueId: holder.id, status: "in_progress" });
+    }
+    for (const holder of [low, mid, top]) {
+      store.updateIssue(holder.id, { status: "in_review", force: true });
+      expect(store.getIssue(holder.id)?.status).toBe("in_review");
+    }
+
+    const events: string[] = [];
+    const unsubscribe = store.onWorkspaceEvent((event) => {
+      const entry = (event.payload as { entry?: { action?: string } } | undefined)?.entry;
+      if (entry?.action) events.push(entry.action);
+    });
+    const counter = wrapStore(store);
+    counter.reset();
+    try {
+      store.updateIssue(leaf.id, { status: "done" });
+    } finally {
+      unsubscribe();
+    }
+    expect(counter.max, "four-level chain depth").toBe(1);
+    // Each of the three ancestors derived, so the replay is not capped at one
+    // extra hop. Only the leaf's own ending is an E2 report; the intermediate
+    // hops moved in_review -> in_progress, which is a derivation, not a child
+    // terminal outcome, so they must NOT file a notification round.
+    expect(events.filter((action) => action === "parent_status_derived")).toHaveLength(3);
+    expect(events.filter((action) => action === "child_done_parent_triggered")).toHaveLength(1);
+    for (const holder of [low, mid, top]) {
+      expect(store.getIssue(holder.id)?.status).toBe("in_progress");
+      expect(store.listIssueActivity(holder.id).filter((e) => e.type === "parent_status_derived"))
+        .toHaveLength(1);
+    }
+  });
+
+  it("emits every chain event after the commit, and reports one line per level", () => {
+    const { store, agent } = setupDepthStore();
+    const chain = threeLayerChain(store, agent.id);
+    const events: Array<{ type: string; action: string; inTransaction: boolean }> = [];
+    const unsubscribe = store.onWorkspaceEvent((event) => {
+      const entry = (event.payload as { entry?: { action?: string } } | undefined)?.entry;
+      events.push({ type: event.type, action: entry?.action ?? "", inTransaction: db!.inTransaction });
+    });
+    try {
+      store.updateIssue(chain.child.id, { status: "done" });
+    } finally {
+      unsubscribe();
+    }
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.filter((event) => event.inTransaction)).toHaveLength(0);
+    // Each level reports its own derivation; the round is queued once per level
+    // that had a report to deliver.
+    expect(events.filter((event) => event.action === "parent_status_derived")).toHaveLength(2);
+    expect(events.filter((event) => event.action === "child_done_parent_triggered")).toHaveLength(1);
+    // One `issue:updated` realtime patch per derived level, plus the child's own
+    // PATCH audit line.
+    expect(events.filter((event) => event.type === "issue:updated")).toHaveLength(2);
+    expect(events.filter((event) => event.action === "issue_updated")).toHaveLength(1);
+  });
+});
+
+describe("MUL-400 S1 — no activity is broadcast before its transaction commits", () => {
+  /**
+   * QA round 4, blocker 2: the closed-parent activity and the re-derivation
+   * activity were written on the transaction but pushed immediately. The probe
+   * is `db.inTransaction` at delivery time plus a rollback that must leave both
+   * the row and the client-side event at zero.
+   */
+  function closedParentCase(store: Store, status: "done" | "cancelled") {
+    const parent = store.createIssue({ title: `Closed parent ${status}`, status: "in_progress" });
+    const child = store.createIssue({
+      title: `Late child ${status}`,
+      parentIssueId: parent.id,
+      status: "in_progress",
+    });
+    store.updateIssue(parent.id, { status, force: true });
+    return { parent, child };
+  }
+
+  for (const parentStatus of ["done", "cancelled"] as const) {
+    it(`delivers the ${parentStatus}-parent activity only after COMMIT`, () => {
+      const store = createStore();
+      store.ensureLocalWorkspace();
+      const { parent, child } = closedParentCase(store, parentStatus);
+
+      const events: Array<{ action: string; inTransaction: boolean }> = [];
+      const unsubscribe = store.onWorkspaceEvent((event) => {
+        const entry = (event.payload as { entry?: { action?: string } } | undefined)?.entry;
+        if (event.type === "activity:created") {
+          events.push({ action: entry?.action ?? "", inTransaction: db!.inTransaction });
+        }
+      });
+      try {
+        store.updateIssue(child.id, { status: "done" });
+      } finally {
+        unsubscribe();
+      }
+
+      expect(store.listIssueActivity(parent.id).filter((e) => e.type === "child_status_after_parent_closed"))
+        .toHaveLength(1);
+      const closedEvents = events.filter((event) => event.action === "child_status_after_parent_closed");
+      expect(closedEvents).toHaveLength(1);
+      expect(closedEvents[0]?.inTransaction).toBe(false);
+      // Every activity on the way is post-commit, not just the one under test.
+      expect(events.filter((event) => event.inTransaction)).toHaveLength(0);
+    });
+
+    it(`leaves zero rows and zero events when the ${parentStatus}-parent write rolls back`, () => {
+      const store = createStore();
+      store.ensureLocalWorkspace();
+      const { parent, child } = closedParentCase(store, parentStatus);
+
+      const events: string[] = [];
+      const unsubscribe = store.onWorkspaceEvent((event) => {
+        const entry = (event.payload as { entry?: { action?: string } } | undefined)?.entry;
+        if (event.type === "activity:created") events.push(entry?.action ?? "");
+      });
+      // Inject the failure AFTER the closed-parent activity row is written.
+      // The repo writes through `StoreContext`, so the prototype is the seam.
+      const original = StoreContext.prototype.appendIssueActivity;
+      let injected = false;
+      StoreContext.prototype.appendIssueActivity = function patched(
+        this: StoreContext,
+        issueId: string,
+        input: { type: string },
+        ...rest: unknown[]
+      ) {
+        const result = original.call(this, issueId, input as never, ...rest as [never]);
+        if (input.type === "child_status_after_parent_closed") {
+          injected = true;
+          throw new Error("closed-parent rollback injection");
+        }
+        return result;
+      } as typeof StoreContext.prototype.appendIssueActivity;
+      let threw = false;
+      try {
+        store.updateIssue(child.id, { status: "done" });
+      } catch (err) {
+        threw = true;
+        expect((err as Error).message).toBe("closed-parent rollback injection");
+      } finally {
+        StoreContext.prototype.appendIssueActivity = original;
+        unsubscribe();
+      }
+
+      // The child's own status change is committed (ADR 0003), but the hook's
+      // activity rolled back and the listener never heard about it.
+      expect(injected).toBe(true);
+      expect(threw).toBe(true);
+      expect(store.listIssueActivity(parent.id).filter((e) => e.type === "child_status_after_parent_closed"))
+        .toHaveLength(0);
+      // The child's own committed `issue_updated` activity may still appear; the
+      // rolled-back hook event must not.
+      expect(events.filter((action) => action === "child_status_after_parent_closed")).toHaveLength(0);
+    });
+  }
+
+  it("delivers `parent_status_derived` only after COMMIT", () => {
+    const { store, agent } = setupDepthStore();
+    const chain = (() => {
+      const parent = store.createIssue({
+        title: "Derive parent",
+        status: "in_progress",
+        assigneeType: "agent",
+        assigneeId: agent.id,
+      });
+      const child = store.createIssue({
+        title: "Derive child",
+        parentIssueId: parent.id,
+        status: "in_progress",
+      });
+      store.createIssue({ title: "Open sibling", parentIssueId: parent.id, status: "in_progress" });
+      store.updateIssue(parent.id, { status: "in_review", force: true });
+      return { parent, child };
+    })();
+
+    const events: Array<{ action: string; inTransaction: boolean }> = [];
+    const unsubscribe = store.onWorkspaceEvent((event) => {
+      const entry = (event.payload as { entry?: { action?: string } } | undefined)?.entry;
+      if (event.type === "activity:created") {
+        events.push({ action: entry?.action ?? "", inTransaction: db!.inTransaction });
+      }
+    });
+    try {
+      store.updateIssue(chain.child.id, { status: "cancelled" });
+    } finally {
+      unsubscribe();
+    }
+    expect(store.getIssue(chain.parent.id)?.status).toBe("in_progress");
+    expect(events.filter((event) => event.action === "parent_status_derived")).toHaveLength(1);
+    expect(events.filter((event) => event.action === "parent_status_derived")[0]?.inTransaction).toBe(false);
+  });
+
+  it("keeps the self-transactional system-comment wrapper's activity inside its own COMMIT", () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const issue = store.createIssue({ title: "Wrapper issue", status: "in_progress" });
+
+    const events: Array<{ action: string; inTransaction: boolean }> = [];
+    const unsubscribe = store.onWorkspaceEvent((event) => {
+      const entry = (event.payload as { entry?: { action?: string } } | undefined)?.entry;
+      if (event.type === "activity:created") {
+        events.push({ action: entry?.action ?? "", inTransaction: db!.inTransaction });
+      }
+    });
+    try {
+      store.createTaskFailureSystemComment(issue.id, null, "tsk_wrapper", "wrapper body");
+    } finally {
+      unsubscribe();
+    }
+    expect(events.filter((event) => event.action === "comment_created")).toHaveLength(1);
+    expect(events.filter((event) => event.action === "comment_created")[0]?.inTransaction).toBe(false);
+
+    // And on rollback: no row, no event.
+    const eventsDuringRollback: string[] = [];
+    const unsubscribeRollback = store.onWorkspaceEvent((event) => {
+      const entry = (event.payload as { entry?: { action?: string } } | undefined)?.entry;
+      if (event.type === "activity:created") eventsDuringRollback.push(entry?.action ?? "");
+    });
+    const original = StoreContext.prototype.appendIssueActivity;
+    StoreContext.prototype.appendIssueActivity = function patched(
+      this: StoreContext,
+      issueId: string,
+      input: { type: string },
+      ...rest: unknown[]
+    ) {
+      const result = original.call(this, issueId, input as never, ...rest as [never]);
+      if (input.type === "comment_created") throw new Error("wrapper rollback injection");
+      return result;
+    } as typeof StoreContext.prototype.appendIssueActivity;
+    let threw = false;
+    try {
+      store.createTaskFailureSystemComment(issue.id, null, "tsk_wrapper_2", "wrapper body 2");
+    } catch (err) {
+      threw = true;
+      expect((err as Error).message).toBe("wrapper rollback injection");
+    } finally {
+      StoreContext.prototype.appendIssueActivity = original;
+      unsubscribeRollback();
+    }
+    expect(threw).toBe(true);
+    expect(eventsDuringRollback).toHaveLength(0);
+    const wrapperComments = store.listIssueComments(issue.id)
+      .filter((comment) => comment.type === "system" && comment.body === "wrapper body 2");
+    expect(wrapperComments).toHaveLength(0);
   });
 });
 

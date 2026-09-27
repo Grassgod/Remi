@@ -1932,11 +1932,18 @@ runMigrations(this.db);
     return this.feishuBot.prepareHumanRequestPush(request);
   }
 
+  prepareFeishuIssueRoundPushes(input: {
+    issue: MultiremiIssue;
+    leaderTask: MultiremiTask;
+  }): MultiremiTask[] {
+    return this.feishuBot.prepareIssueRoundPushes(input);
+  }
+
   prepareFeishuIssueRoundPushesWithinTransaction(input: {
     issue: MultiremiIssue;
     leaderTask: MultiremiTask;
-    childStatusChanges?: import("./repos/tasks-repo.js").ChildStatusChangeCollector;
-    deferredEvents?: import("./context.js").CommitEventQueue;
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector;
+    deferredEvents: import("./context.js").CommitEventQueue;
   }): MultiremiTask[] {
     return this.feishuBot.prepareIssueRoundPushesWithinTransaction(input);
   }
@@ -3268,7 +3275,7 @@ runMigrations(this.db);
   holdParentStatusForOpenChildren(
     issueId: string,
     requested: string,
-    options: { exempt?: boolean } = {},
+    options: { exempt?: boolean; deferredEvents: import("./context.js").CommitEventQueue },
   ): string {
     return this.issues.holdParentStatusForOpenChildren(issueId, requested, options);
   }
@@ -3277,9 +3284,10 @@ runMigrations(this.db);
     previous: MultiremiIssue,
     issue: MultiremiIssue,
     parentTaskId: string | null,
+    collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
     options: { taskTerminalStatus?: "completed" | "failed" | "cancelled"; seen?: Set<string> } = {},
-  ): import("./repos/tasks-repo.js").ChildStatusChange[] {
-    return this.issues.notifyChildStatusChange(previous, issue, parentTaskId, options);
+  ): void {
+    this.issues.notifyChildStatusChange(previous, issue, parentTaskId, collector, options);
   }
 
   restoreIssue(id: string): MultiremiIssue {
@@ -4445,8 +4453,8 @@ runMigrations(this.db);
   /** Caller owns the transaction and replays the collector after it commits. */
   createTaskWithinTransaction(
     input: CreateTaskInput,
-    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector = [],
-    deferredEvents: import("./context.js").CommitEventQueue = createCommitEventQueue(),
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: import("./context.js").CommitEventQueue,
   ): MultiremiTask {
     return this.tasks.createTaskWithinTransaction(input, childStatusChanges, deferredEvents);
   }
@@ -4785,8 +4793,8 @@ runMigrations(this.db);
 
   cancelTaskWithinTransaction(
     taskId: string,
-    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector = [],
-    deferredEvents: import("./context.js").CommitEventQueue = createCommitEventQueue(),
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: import("./context.js").CommitEventQueue,
   ): import("./repos/tasks-repo.js").CancelTaskResult {
     return this.tasks.cancelTaskWithinTransaction(taskId, childStatusChanges, deferredEvents);
   }

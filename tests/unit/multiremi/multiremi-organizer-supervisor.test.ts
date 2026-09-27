@@ -530,6 +530,87 @@ describe("Organizer supervisor privilege layer", () => {
     expect(events.filter((event) => event.type === "comment:created")).toHaveLength(0);
   });
 
+  it("publishes no activity or issue patch when the organizer cancel rolls back", async () => {
+    const fixture = await setup();
+    await grantSupervisor(fixture);
+    await setMode(fixture, "act");
+
+    // QA round 4: the audit comment push was already deferred, but
+    // `afterTaskTerminal` still emitted the cancel activity mid-transaction.
+    const events: Array<{ type: string; action: string; inTransaction: boolean }> = [];
+    const unsubscribe = fixture.store.onWorkspaceEvent((event) => {
+      const entry = (event.payload as { entry?: { action?: string } } | undefined)?.entry;
+      if (["comment:created", "activity:created", "issue:updated"].includes(event.type)) {
+        events.push({ type: event.type, action: entry?.action ?? "", inTransaction: db!.inTransaction });
+      }
+    });
+    const issues = (fixture.store as unknown as {
+      issues: { notifyOrganizerAction: (...args: unknown[]) => void };
+    }).issues;
+    const originalNotify = issues.notifyOrganizerAction.bind(issues);
+    issues.notifyOrganizerAction = (...args: unknown[]) => {
+      originalNotify(...args);
+      throw new Error("organizer activity rollback injection");
+    };
+
+    try {
+      fixture.store.performOrganizerAction({
+        supervisorTaskId: fixture.supervisorTask.id,
+        supervisorAgentId: fixture.supervisorAgent.id,
+        targetTaskId: fixture.targetTask.id,
+        action: "cancel",
+        reason: "activity rollback probe",
+      });
+    } catch (err) {
+      expect((err as Error).message).toBe("organizer activity rollback injection");
+    } finally {
+      issues.notifyOrganizerAction = originalNotify;
+      unsubscribe();
+    }
+
+    // Rolled back: the target task is still queued and every outbound event is
+    // zero — no phantom comment, activity or status patch.
+    expect(fixture.store.getTask(fixture.targetTask.id)?.status).toBe("queued");
+    expect(events.filter((event) => event.type === "comment:created")).toHaveLength(0);
+    expect(events.filter((event) => event.type === "activity:created")).toHaveLength(0);
+    expect(events.filter((event) => event.type === "issue:updated")).toHaveLength(0);
+  });
+
+  it("publishes the organizer cancel activity, comment and patch once, after COMMIT", async () => {
+    const fixture = await setup();
+    await grantSupervisor(fixture);
+    await setMode(fixture, "act");
+
+    // The cancel moves the Issue in_progress -> todo, so the status patch is a
+    // real change and its post-commit emission is observable.
+    fixture.store.updateIssue(fixture.targetIssue.id, { status: "in_progress" });
+    const events: Array<{ type: string; action: string; inTransaction: boolean }> = [];
+    const unsubscribe = fixture.store.onWorkspaceEvent((event) => {
+      const entry = (event.payload as { entry?: { action?: string } } | undefined)?.entry;
+      if (["comment:created", "activity:created", "issue:updated"].includes(event.type)) {
+        events.push({ type: event.type, action: entry?.action ?? "", inTransaction: db!.inTransaction });
+      }
+    });
+    try {
+      fixture.store.performOrganizerAction({
+        supervisorTaskId: fixture.supervisorTask.id,
+        supervisorAgentId: fixture.supervisorAgent.id,
+        targetTaskId: fixture.targetTask.id,
+        action: "cancel",
+        reason: "commit probe",
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(fixture.store.getTask(fixture.targetTask.id)?.status).toBe("cancelled");
+    expect(events.filter((event) => event.type === "comment:created")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "activity:created" && event.action === "task_cancelled"))
+      .toHaveLength(1);
+    expect(events.filter((event) => event.type === "issue:updated")).toHaveLength(1);
+    expect(events.filter((event) => event.inTransaction)).toHaveLength(0);
+  });
+
   it("broadcasts the organizer audit comment exactly once after the commit", async () => {
     const fixture = await setup();
     const supervisorToken = await grantSupervisor(fixture);

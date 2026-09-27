@@ -110,31 +110,52 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
    store therefore keeps its `...WithinTransaction` convention: the outermost
    caller owns the only transaction, and everything under it calls the variant
    that assumes an open transaction.
-   - **The collector is a required parameter, not an option.** Every
-     `...WithinTransaction` variant that can move an Issue (the Issue-status
-     sync reached from `createTaskWithinTransaction`, `createTaskHumanRequest`,
-     `startTask`, `respondTaskHumanRequest`, the terminal writers, `cancelTask`/
-     `redispatch`/`cancelTasksByTriggerComments`/`recoverOrphans`, and the
+   - **The collector and the commit-event queue are required parameters, not
+     options.** Every `...WithinTransaction` variant that can move an Issue (the
+     Issue-status sync reached from `createTaskWithinTransaction`,
+     `createTaskHumanRequest`, `startTask`, `respondTaskHumanRequest`, the
+     terminal writers, `cancelTask`/`redispatch`/`cancelTasksByTriggerComments`/
+     `recoverOrphans`, the organizer action facade, and the
      `chat`/`feishu-bot`/`autopilot` wrappers) takes a
-     `ChildStatusChangeCollector` with no default and no `null` form. The
-     compiler therefore forces each call site to answer one question: which
-     transaction owns these writes? There is no way left to "run the hook here
-     because nobody passed a collector".
-   - **The outermost owner replays after it commits.** A transition collected
-     inside a transaction is handed back to whoever committed it, and the E1/E2
-     hook runs only then. The hook can itself produce a further transition — the
-     round it queues for a parent moves that parent's status, which is a child
-     event for ITS parent — and those come back as the hook's return value, so
-     the replay is a drain loop that never nests a transaction. The loop is
-     bounded by a `seen` set keyed on (issue, previous status, next status,
-     task), so a parent/child status ping-pong terminates.
-   - **Events publish only after the COMMIT.** The same rule covers what the
-     writes push outward: `comment:created`, `issue:updated`, and task-enqueue
-     wakeups. A caller-owned transaction collects them in a commit-event queue
-     and flushes it once it has committed; on rollback the queue is dropped and
-     nothing was ever sent. Postgres is synchronous here, so an event emitted
-     mid-transaction would reach clients before the row was durable and, worse,
-     would announce a row a later ROLLBACK erases.
+     `ChildStatusChangeCollector` **and** a `CommitEventQueue` with no default,
+     no `?`, and no `?? createCommitEventQueue()` fallback. The compiler
+     therefore forces each call site to answer one question: which transaction
+     owns these writes and their events? A caller that is not inside a
+     transaction calls the outer, self-transactional variant instead
+     (`TasksRepo.createTask`, `FeishuBotRepo.prepareIssueRoundPushes`, the
+     plain `createIssueComment`). The signatures that changed for this are
+     listed in the MUL-406 fix-round comment; S2 must adopt them.
+   - **Every state change the S1 hook produces goes into the collector; the
+     caller cannot drop it.** `notifyChildStatusChange` no longer *returns* a
+     list of further transitions — it takes the collector and pushes into it,
+     so "the call site forgot the return value" is not expressible. That covers
+     the re-derivation of the parent (`rederiveParentStatus`), the parent's own
+     status moves caused by the round it queues, and the in_review -> in_progress
+     write on the direct Issue path; the re-parenting path and `createIssue`'s
+     parent re-derivation use the collector the same way.
+   - **The outermost owner replays after it commits, all the way up.** A
+     transition collected inside a transaction is handed to whoever committed
+     it, and the E1/E2 hook runs only then. The hook's own writes can produce a
+     further transition — the round it queues moves that parent's status, which
+     is a child event for ITS parent — and those go into the same collector, so
+     the replay is a drain loop that walks grandparent, great-grandparent, and
+     so on with no depth cap. It is bounded by a `seen` set keyed on (issue,
+     previous status, next status, task), so a parent/child status ping-pong
+     terminates; the API's `validateIssueParent` independently refuses to build
+     a cycle.
+   - **Events publish only after the COMMIT; a function that receives the queue
+     sends every outward event through it.** The rule covers
+     `comment:created`, `activity:created`, `issue:updated`, `chat:done`, the
+     task-enqueue wakeups, and delegation wakeup/return events. A caller-owned
+     transaction collects them in the commit-event queue and flushes it once it
+     has committed; on rollback the queue is dropped and nothing was ever sent.
+     Postgres is synchronous here, so an event emitted mid-transaction would
+     reach clients before the row was durable and, worse, would announce a row
+     a later ROLLBACK erases. The S1-introduced writes that follow this are
+     `child_status_after_parent_closed`, `parent_status_derived`,
+     `parent_status_held`, `child_done_parent_triggered`,
+     `child_status_parent_coalesced`, the system-comment wrapper, and the task
+     terminal activities/wakeups on a queue-carrying path.
    - `notifyChildStatusChange` opens the single transaction for a child report.
      The notification comment (with its Session event) and the parent's queued
      round are written inside it; the round is created through
@@ -186,6 +207,34 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
      tracked for a separate issue; the nesting scan in
      `tests/unit/multiremi/pg-nesting-preload.ts` reproduces them on a clean
      `origin/main` tree.
+   - **Main-existing in-transaction events, now recorded by the scan.** QA
+     round 4 extended `tests/unit/multiremi/pg-nesting-preload.ts` to also flag
+     every outward event published while a real `PostgresSyncDatabase` is in a
+     transaction ("transaction-internal emission"). On the branch the scan of
+     `tests/unit/multiremi/` reports **0** such emissions; on a clean
+     `4248ef07` archive the same scan reports **30** hits, all at call sites
+     that already existed on `main` and that have no commit-event queue on the
+     path:
+       - `TasksRepo.afterTaskTerminal`'s `chat:done` (`tasks-repo.ts`,
+         `emitWorkspaceEvent`) and the `task_<status>` activity it writes through
+         `StoreContext.appendIssueActivity`;
+       - `syncIssueStatusFromTaskWithinTransaction`'s `issue:updated` patch
+         where that function is reached without a queue (`startTask`'s sync,
+         `createTaskWithinTransaction`'s `todo` sync);
+       - `ensureDelegationWakeupWithinWorkspaceLock` /
+         `drainDelegationReturnsWithinWorkspaceLock`'s
+         `delegation_return_triggered` activity on the non-queue entry point;
+       - `afterTaskTerminal`'s cancel-path activity when reached from
+         `cancelTaskWithinWorkspaceLock`.
+     The rule above ("a function that already receives the queue routes every
+     outward event through it") fixes these on the queue-carrying S1 paths, and
+     the S1-introduced emissions are gone; the remainder are the main-existing
+     sites where no queue is passed at all. They are listed for a separate
+     issue rather than fixed here, exactly as the two nesting sites are.
+     Coverage boundary: the scan only sees paths a test executes, so a clean run
+     proves nothing about a branch no case reaches. The scan must be repeated
+     after adding cases that reach a new branch (that is how QA round 3's
+     closed-parent and re-derivation emissions were missed).
    - S2's dependency gate lives in this same hook. Its automatic start
      (`assignIssue`) opens its own transaction, so it must stay *outside* the
      report transaction — before it, committing separately — and only its
