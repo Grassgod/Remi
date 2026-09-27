@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { dispatch } from "../../../apps/remi/cli/index.js";
+import { knowledgeCommandSpecs } from "../../../apps/remi/cli/commands/knowledge.js";
 
 const previousProjectId = process.env.MULTIREMI_PROJECT_ID;
 const previousToken = process.env.MULTIREMI_TOKEN;
@@ -73,7 +74,7 @@ describe("knowledge CLI control plane", () => {
     const common = ["--server", `http://127.0.0.1:${server.port}`, "--token", "task-token", "--workspace", "local", "--output", "json"];
     try {
       await dispatch(["knowledge", "submit", "--scope", "memory", "--project", "prj_1", "--slug", "fact", "--content", "raw body", ...common]);
-      await dispatch(["knowledge", "submissions", "--scope", "memory", "--status", "pending", "--limit", "1", "--cursor", "ksub_cursor", ...common]);
+      await dispatch(["knowledge", "submissions", "--scope", "memory", "--status", "pending", "--limit", "1", "--cursor", "ksub_cursor", "--query", "needle", ...common]);
       await dispatch(["knowledge", "inspect", "ksub_1", ...common]);
       await dispatch(["knowledge", "runs", "--status", "published", "--limit", "1", "--cursor", "krun_cursor", ...common]);
       await dispatch(["knowledge", "run", "show", "krun_1", ...common]);
@@ -103,6 +104,9 @@ describe("knowledge CLI control plane", () => {
     );
     expect(submissionListUrl.searchParams.get("limit")).toBe("1");
     expect(submissionListUrl.searchParams.get("cursor")).toBe("ksub_cursor");
+    // MUL-386 C.2: `--query` is the submissions list's server-side body/path
+    // search, which is what replaced the client-side scan over downloaded bodies.
+    expect(submissionListUrl.searchParams.get("q")).toBe("needle");
     const runListUrl = new URL(
       requests.find((entry) => entry.method === "GET" && entry.path.startsWith("/api/knowledge/runs?"))!.path,
       "http://localhost",
@@ -122,5 +126,21 @@ describe("knowledge CLI control plane", () => {
       output: { action: "create", kind: "wiki", path: "overview.md", body: "curated" },
     });
     expect(logs).toHaveLength(8);
+  });
+
+  /**
+   * MUL-386: the Knowledge page keeps matching issue key and agent name locally
+   * because the server predicate does not join those tables. The CLI help has to
+   * say exactly that, or `--query` reads as a full-text search it is not.
+   */
+  it("documents the exact server-side scope of the submissions --query option", () => {
+    const submissions = knowledgeCommandSpecs().find((command) => command.id === "knowledge.submissions");
+    expect(submissions).toBeDefined();
+    const query = (submissions!.options ?? []).find((option) => option.name === "query");
+    expect(query?.description).toBe(
+      "Server-side search over body, id, proposed_path, proposed_slug, source_type, scope "
+        + "(case-insensitive). Does not match issue key or agent name",
+    );
+    expect(submissions!.description).toContain("not issue key or agent name");
   });
 });

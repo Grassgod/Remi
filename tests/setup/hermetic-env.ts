@@ -26,9 +26,16 @@
  *
  * Guarded by `tests/arch/hermetic-test-env.test.ts`.
  */
-import { HERMETIC_ENV_SENTINEL, scrubInheritedEnv } from "./hermetic-env-policy.js";
+import { HERMETIC_ENV_DEFAULTS, HERMETIC_ENV_SENTINEL, scrubInheritedEnv } from "./hermetic-env-policy.js";
 
 const removed = scrubInheritedEnv();
+
+// Deliberate defaults the suite runs with, applied only after the host values are
+// gone, so they cannot be influenced from outside. See HERMETIC_ENV_DEFAULTS.
+for (const [name, value] of Object.entries(HERMETIC_ENV_DEFAULTS)) {
+  process.env[name] = value;
+}
+
 (globalThis as Record<symbol, unknown>)[HERMETIC_ENV_SENTINEL] = { removed };
 
 if (removed.length > 0 && process.env.CI !== "true") {
