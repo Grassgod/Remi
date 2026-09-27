@@ -377,6 +377,7 @@ import type {
   UpdateAutopilotTriggerInput,
   UpdateChatSessionInput,
   UpdateIssueInput,
+  UpdateIssueOptions,
   UpdateIssueCommentInput,
   UpdateIssueSessionInput,
   UpdateLabelInput,
@@ -3213,12 +3214,16 @@ runMigrations(this.db);
     return this.issues.deleteIssueDependency(issueId, dependencyId, activity);
   }
 
-  updateIssue(id: string, input: UpdateIssueInput): MultiremiIssue {
-    return this.updateIssueWithOutcome(id, input).issue;
+  updateIssue(id: string, input: UpdateIssueInput, options: UpdateIssueOptions = {}): MultiremiIssue {
+    return this.updateIssueWithOutcome(id, input, options).issue;
   }
 
-  updateIssueWithOutcome(id: string, input: UpdateIssueInput): { issue: MultiremiIssue; cancelledTasks: number } {
-    return this.issues.updateIssueWithOutcome(id, input);
+  updateIssueWithOutcome(
+    id: string,
+    input: UpdateIssueInput,
+    options: UpdateIssueOptions = {},
+  ): { issue: MultiremiIssue; cancelledTasks: number } {
+    return this.issues.updateIssueWithOutcome(id, input, options);
   }
 
   countOpenChildIssues(parentIssueId: string): number {

@@ -1728,20 +1728,41 @@ export class ScmRepo {
            WHERE cr.connection_id = ? AND cr.repository_id = ? AND cr.external_id = ?`,
         ).get(issueId, event.connectionId, event.repositoryId, event.subjectId) as Row | null;
         if (!changeRequestRow) throw new Error("SCM change request for merge completion could not be found");
-        // MUL-400 E1: the merge effect closes the Issue on the strength of a
-        // merge that already required 贺华杰's authorization, so it carries the
-        // same human decision the parent-status guard exists to protect and is
-        // exempt from it (A1 and A4 included). Falling back to `parent_status_held`
-        // here would stall the merge sync on a status a system writer must not
-        // decide; guard B does that part on the task path instead.
+        // MUL-400 E1: a merge authorizes the MERGE, not the parent's closure.
+        // The governing rule is the child count:
+        //
+        // - No children, or every child finished: close the Issue. A1 and A4 do
+        //   not apply — the human-authorized merge is the confirmation.
+        // - A child is still running: the parent's status must NOT move. The
+        //   effect is marked applied (a hold is a settled outcome, not a retry)
+        //   and leaves a `parent_status_held` row naming the change request. It
+        //   never re-closes the parent later; when the last child finishes, `done`
+        //   is the human's call under E1.
+        //
+        // Child PRs routinely carry the parent key in their title (`MUL-400 S1: …`),
+        // and auto-link matches keys by word boundary, so closing on merge alone
+        // would shut a parent that still has running children.
+        const openChildren = this.ctx.issues().countOpenChildIssues(issueId);
+        const holdForOpenChildren = openChildren > 0;
         const updated = current && current.status !== "done"
-          ? this.ctx.issues().updateIssue(issueId, {
-            status: "done",
-            bypassParentStatusGuard: true,
-            bypass_parent_status_guard: true,
+          ? this.ctx.issues().updateIssue(issueId, { status: "done" }, {
+            allowParentStatusGuardBypass: !holdForOpenChildren,
+            holdParentStatus: holdForOpenChildren,
+            holdParentStatusData: holdForOpenChildren
+              ? {
+                source: "scm_merge",
+                changeRequestNumber: changeRequestRow.number == null ? null : Number(changeRequestRow.number),
+                change_request_number: changeRequestRow.number == null ? null : Number(changeRequestRow.number),
+                changeRequestUrl: nullableString(changeRequestRow.url),
+                change_request_url: nullableString(changeRequestRow.url),
+              }
+              : null,
           })
           : null;
-        if (updated) {
+        // A held write returns the untouched Issue, so gate the completion
+        // records on the status actually having moved.
+        const closed = updated?.status === "done" ? updated : null;
+        if (closed) {
           this.ctx.appendIssueActivity(issueId, {
             actorType: "system",
             actorId: null,
@@ -1753,7 +1774,7 @@ export class ScmRepo {
               source_branch: nullableString(changeRequestRow.source_branch),
               event_id: event.id,
               attribution: scmIssueOwnershipAttribution({
-                issueKey: updated.key,
+                issueKey: closed.key,
                 linkSource: String(changeRequestRow.link_source ?? ""),
                 title: String(changeRequestRow.title ?? ""),
                 body: nullableString(changeRequestRow.body),
@@ -1766,13 +1787,13 @@ export class ScmRepo {
           "UPDATE multiremi_scm_effects SET status = 'applied', applied_at = ?, last_error = NULL WHERE id = ? AND status = 'pending'",
           [nowIso(), effectId],
         );
-        if (updated) {
+        if (closed) {
           this.ctx.emitWorkspaceEvent({
             type: "issue:updated",
-            workspaceId: updated.workspaceId,
+            workspaceId: closed.workspaceId,
             actorType: "system",
             actorId: null,
-            payload: { issue: updated },
+            payload: { issue: closed },
           });
         }
       } catch (error) {

@@ -2211,14 +2211,26 @@ export interface UpdateIssueInput {
    * 403 so a run can never bypass the guard on its own.
    */
   force?: boolean;
+}
+
+/**
+ * Server-internal options for {@link UpdateIssueInput} writes. These deliberately
+ * live OUTSIDE the input object: the wire layer builds `UpdateIssueInput` straight
+ * from the request body, so anything on that shape is client-reachable. The SCM
+ * merge effect is the only caller and passes this positionally on the server.
+ */
+export interface UpdateIssueOptions {
   /**
-   * Server-internal, and never accepted from a request body: the SCM merge
-   * effect closes an Issue on the strength of a human-authorized merge, so the
-   * parent-status guard (including A4) does not apply. The merge itself is the
-   * confirmation the guard exists to obtain.
+   * Skip guard A (A1 and A4 included). Only the merge effect uses it: closing an
+   * Issue after a merge that already required a human authorization carries the
+   * same decision the guard exists to protect. A parent with unfinished children
+   * is still held — the effect handles that itself, with `parent_status_held`.
    */
-  bypassParentStatusGuard?: boolean;
-  bypass_parent_status_guard?: boolean;
+  allowParentStatusGuardBypass?: boolean;
+  /** Record `parent_status_held` instead of applying the requested status. */
+  holdParentStatus?: boolean;
+  /** Extra fields for the `parent_status_held` activity, e.g. the merge source. */
+  holdParentStatusData?: Record<string, unknown> | null;
 }
 
 export interface BatchUpdateIssuesInput {

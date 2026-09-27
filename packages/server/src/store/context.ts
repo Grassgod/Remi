@@ -29,6 +29,7 @@ import type {
   ListIssuesInput,
   UpdateChatSessionInput,
   UpdateIssueInput,
+  UpdateIssueOptions,
   MultiremiAgent,
   MultiremiAgentPlugin,
   MultiremiAgentPluginBinding,
@@ -200,7 +201,7 @@ export interface IssuesSurface {
   linkAttachmentsToChatMessage(chatSessionId: string, chatMessageId: string, attachmentIds: string[]): void;
   listIssues(input?: ListIssuesInput): MultiremiIssue[];
   listGeneratedIssues(sourceIssueId: string): MultiremiIssue[];
-  updateIssue(id: string, input: UpdateIssueInput): MultiremiIssue;
+  updateIssue(id: string, input: UpdateIssueInput, options?: UpdateIssueOptions): MultiremiIssue;
   /** MUL-400 E1: children that still count as unfinished (not done/cancelled). */
   countOpenChildIssues(parentIssueId: string): number;
   /**

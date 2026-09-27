@@ -162,21 +162,22 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     expect(retitled.title).toBe("Luna generated title");
     expect(retitled.status).toBe("in_review");
 
-    // scm-repo.ts: the merge effect closes a parent regardless of its children
-    // and of A1/A4, because the merge is the authorization.
+    // scm-repo.ts: the merge effect closes an Issue with no open children
+    // regardless of A1/A4, because the merge is the authorization. The bypass is
+    // a server-only option (never an input field), which is what makes it
+    // unreachable from a request body.
     const mergeParent = store.createIssue({
       title: "Merge parent",
       status: "in_progress",
       assigneeType: "agent",
       assigneeId: agent.id,
     });
-    store.createIssue({ title: "Unfinished child", parentIssueId: mergeParent.id, status: "in_progress" });
     store.updateIssue(mergeParent.id, { status: "in_review", force: true });
-    const merged = store.updateIssue(mergeParent.id, {
-      status: "done",
-      bypassParentStatusGuard: true,
-      bypass_parent_status_guard: true,
-    });
+    const merged = store.updateIssue(
+      mergeParent.id,
+      { status: "done" },
+      { allowParentStatusGuardBypass: true },
+    );
     expect(merged.status).toBe("done");
     // The arrangement above reached in_review through a member force, which is
     // itself audited; the merge write must not add a second one.
@@ -326,6 +327,69 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     expect(batchForced.status).toBe(200);
     expect(store.getIssue(otherParent.id)?.status).toBe("done");
     expect(activityOf(store, otherParent.id, "issue_status_forced")).toHaveLength(2);
+  });
+
+  it("ignores an injected parent-status bypass flag on every write route", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const agent = store.createAgent({ name: "Injection caller", provider: "codex" });
+    const member = store.createWorkspaceMember({ name: "Injection owner", role: "member" });
+    const callerTask = store.createTask({ agentId: agent.id, prompt: "caller" });
+    const credential = await store.createTaskAccessToken(callerTask, "local");
+    const app = createMultiremiApp({ store });
+
+    const injectedFields = [
+      { bypass_parent_status_guard: true },
+      { bypassParentStatusGuard: true },
+      { allowParentStatusGuardBypass: true },
+      { holdParentStatus: true },
+      { hold_parent_status: true },
+    ];
+
+    let index = 0;
+    for (const injected of injectedFields) {
+      // Fresh parent per attempt so a prior partial write cannot mask the next.
+      const parent = store.createIssue({
+        title: `Injection parent ${index++}`,
+        status: "in_progress",
+        assigneeType: "member",
+        assigneeId: member.id,
+      });
+      store.createIssue({ title: "Injection child", parentIssueId: parent.id, status: "in_progress" });
+
+      // Two PATCH routes, task identity.
+      for (const path of [`/api/multiremi/issues/${parent.id}`, `/api/issues/${parent.id}`]) {
+        const response = await app.request(path, {
+          method: "PATCH",
+          headers: { Authorization: `Bearer ${credential.token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "done", ...injected }),
+        });
+        expect(response.status, `${path} ${JSON.stringify(injected)}`).toBe(403);
+        expect(store.getIssue(parent.id)?.status).toBe("in_progress");
+      }
+
+      // Two batch routes, task identity.
+      for (const path of ["/api/multiremi/issues/batch-update", "/api/issues/batch-update"]) {
+        const response = await app.request(path, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${credential.token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ issue_ids: [parent.id], updates: { status: "done", ...injected } }),
+        });
+        expect(response.status, `${path} ${JSON.stringify(injected)}`).toBe(403);
+        expect(store.getIssue(parent.id)?.status).toBe("in_progress");
+      }
+
+      // A member cannot bypass through the body either: the guard is the guard.
+      const memberAttempt = await app.request(`/api/multiremi/issues/${parent.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "done", actorType: "member", actorId: "local", ...injected }),
+      });
+      expect(memberAttempt.status, JSON.stringify(injected)).toBe(409);
+      expect(store.getIssue(parent.id)?.status).toBe("in_progress");
+      expect(activityOf(store, parent.id, "parent_status_held")).toHaveLength(0);
+      expect(activityOf(store, parent.id, "issue_status_forced")).toHaveLength(0);
+    }
   });
 
   it("does not apply A4 to an agent closing an issue without children", async () => {

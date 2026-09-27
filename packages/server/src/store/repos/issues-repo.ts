@@ -65,6 +65,7 @@ import type {
   QuickCreateIssueResult,
   UpdateIssueCommentInput,
   UpdateIssueInput,
+  UpdateIssueOptions,
   UpdateLabelInput,
 } from "@multiremi/contracts/types.js";
 
@@ -119,6 +120,15 @@ function statusNeedsChildGuard(status: string): boolean {
 /** A4: closing a parent with children is a member decision. */
 function statusIsMemberOnlyParentTerminal(status: string): boolean {
   return status === "done";
+}
+
+/**
+ * The status a held write was asked for. `status` is optional on the input, so a
+ * caller that only wants to hold reads the normalized request; the target status
+ * is the fallback when the input carried no status at all.
+ */
+function requestedStatusForHold(input: UpdateIssueInput, fallback: string): string {
+  return hasAnyField(input, "status") ? normalizeIssueStatus(input.status) : fallback;
 }
 
 function emptyChildIssueProgress(parentIssueId: string): MultiremiIssueChildProgress {
@@ -1080,11 +1090,15 @@ export class IssuesRepo {
     });
   }
 
-  updateIssue(id: string, input: UpdateIssueInput): MultiremiIssue {
-    return this.updateIssueWithOutcome(id, input).issue;
+  updateIssue(id: string, input: UpdateIssueInput, options: UpdateIssueOptions = {}): MultiremiIssue {
+    return this.updateIssueWithOutcome(id, input, options).issue;
   }
 
-  updateIssueWithOutcome(id: string, input: UpdateIssueInput): { issue: MultiremiIssue; cancelledTasks: number } {
+  updateIssueWithOutcome(
+    id: string,
+    input: UpdateIssueInput,
+    options: UpdateIssueOptions = {},
+  ): { issue: MultiremiIssue; cancelledTasks: number } {
     let previous: MultiremiIssue | null = null;
     let updatedAt = "";
     let cancelledTasks = 0;
@@ -1170,9 +1184,15 @@ export class IssuesRepo {
       // Field-only edits are never status decisions, so the guard stays out of
       // their way even for a task identity.
       const statusChanged = nextStatus !== current.status;
-      const bypassParentStatusGuard = input.bypassParentStatusGuard === true
-        || input.bypass_parent_status_guard === true;
-      if (parentStatusGuardEnabled() && statusChanged && !bypassParentStatusGuard) {
+      // MUL-400 E1 `holdParentStatus`: a system writer (the SCM merge effect) must
+      // not decide a guarded parent transition, and must not fail either — it
+      // records why the request was held and leaves the status to the human. The
+      // hold replaces the guard rather than tripping it, and the write below is
+      // skipped entirely, so nothing about the Issue moves.
+      const holdParentStatus = options.holdParentStatus === true;
+      if (holdParentStatus) {
+        this.recordHeldParentStatus(id, requestedStatusForHold(input, nextStatus), options.holdParentStatusData ?? null);
+      } else if (parentStatusGuardEnabled() && statusChanged && !options.allowParentStatusGuardBypass) {
         this.assertParentStatusAllowed(id, current, nextStatus, input);
       }
       const enteringTerminal = !isTerminalIssueStatus(current.status) && isTerminalIssueStatus(nextStatus);
@@ -1183,6 +1203,9 @@ export class IssuesRepo {
           ? null
           : current.completedAt;
       const nextArchivedAt = leavingTerminal ? null : current.archivedAt;
+      // A held transition writes nothing at all: the request is audited as held
+      // and the Issue keeps its current status.
+      if (holdParentStatus) return current;
       this.ctx.db.run(
         `UPDATE multiremi_issues SET
         title = ?,
@@ -1245,6 +1268,7 @@ export class IssuesRepo {
       });
       return next;
     })();
+    if (updated === previous) return { issue: updated, cancelledTasks };
     this.ctx.appendIssueActivity(id, {
       actorType: "system",
       actorId: null,
@@ -1395,6 +1419,33 @@ export class IssuesRepo {
     if (outcome) this.notifyParentOfChildOutcome(parent, issue, outcome, parentTaskId);
 
     if (parentStatusGuardEnabled()) this.rederiveParentStatus(parent, issue);
+  }
+
+  /**
+   * MUL-400 E1: a guarded system writer asked to move a parent but will not
+   * decide the transition itself. Record why and leave the status untouched.
+   * `holdParentStatus` callers mark their own effect processed afterwards, so a
+   * held merge is a settled outcome rather than something to retry.
+   */
+  private recordHeldParentStatus(
+    issueId: string,
+    requested: string,
+    extra: Record<string, unknown> | null,
+  ): void {
+    const openChildren = this.countOpenChildIssues(issueId);
+    this.ctx.appendIssueActivity(issueId, {
+      actorType: "system",
+      actorId: null,
+      type: "parent_status_held",
+      body: "in_progress",
+      data: {
+        requested,
+        openChildren,
+        open_children: openChildren,
+        status: "in_progress",
+        ...(extra ?? {}),
+      },
+    });
   }
 
   /**
