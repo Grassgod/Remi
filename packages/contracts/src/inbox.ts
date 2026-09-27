@@ -18,6 +18,7 @@ export const INBOX_ROUTE_BY_TYPE = {
   // is owned by a human, so the parent owner hears about it directly instead
   // of only through the parent's activity feed.
   child_issue_terminal: "inbox_action",
+  decision_requested: "inbox_action",
 } as const satisfies Record<string, RegisteredInboxRoute>;
 
 export type RegisteredInboxType = keyof typeof INBOX_ROUTE_BY_TYPE;

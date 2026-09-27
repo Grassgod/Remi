@@ -113,7 +113,11 @@ export function sanitizePath(rawUrl: string, origin: string, knownIds: string[] 
   try {
     pathname = new URL(rawUrl).pathname;
   } catch {
-    // Already a path.
+    // A relative URL never reaches the `URL` constructor above, so its query and
+    // fragment have to be dropped here. Both can carry a token or a cursor, and
+    // this function is the only thing standing between a request and the report
+    // (S9-0 QA `cmt_stwldfuv91ry` §5).
+    pathname = rawUrl.split("#")[0]!.split("?")[0]!;
   }
   const segments = pathname.split("/").filter(Boolean);
   const reserved = new Set([
@@ -451,15 +455,7 @@ export async function readResourceEntries(page: Page, origin: string, knownIds: 
 
   return entries.map((entry, index) => {
     const timing = (entry.serverTiming ?? []) as Array<{ name: string; duration?: number; description?: string }>;
-    const fromEntry = timing.length > 0
-      ? timing
-          .map((metric) =>
-            metric.duration !== undefined
-              ? `${metric.name};dur=${metric.duration.toFixed(1)}`
-              : `${metric.name};desc="${metric.description ?? ""}"`,
-          )
-          .join(", ")
-      : null;
+    const fromEntry = timing.length > 0 ? formatCollectedServerTiming(timing) : null;
     const name = String(entry.name);
     return {
       index,
@@ -477,6 +473,43 @@ export async function readResourceEntries(page: Page, origin: string, knownIds: 
       initiatorType: String(entry.initiatorType ?? ""),
     };
   });
+}
+
+/**
+ * Rebuilds a `Server-Timing` header string from the browser's parsed entries.
+ *
+ * The browser hands back one `{name, duration, description}` object per metric and
+ * *always* populates `duration`, including for metrics the server sent with `desc`
+ * only (`dbq;desc="84"`): a metric with no `dur` parameter is reported as
+ * `duration: 0`. Emitting only `dur` therefore turned the counts into
+ * `dbq;dur=0.0` and dropped the query count entirely — the S9-2 acceptance reads
+ * exactly that number (MUL-395 S9-0.1).
+ *
+ * A `desc`-only metric is emitted as `desc` alone: the browser's `duration: 0` is
+ * synthetic and writing it back would assert a duration the server never sent,
+ * while hiding the count that is the metric's actual value. A metric keeping both
+ * parameters is one the browser reported a real duration for alongside a
+ * description; that pair is passed through unchanged.
+ */
+export function formatCollectedServerTiming(
+  timing: Array<{ name: string; duration?: number; description?: string }>,
+): string {
+  return timing
+    .map((metric) => {
+      const hasDesc = metric.description !== undefined && metric.description !== "";
+      const descIsNumeric = hasDesc && Number.isFinite(Number.parseFloat(metric.description!));
+      const parts = [metric.name];
+      // An empty description is what the browser reports for a metric that carried
+      // neither parameter; emitting `desc=""` would invent one. A `0` alongside a
+      // numeric description is the synthesised value and is dropped, so the count
+      // is not shadowed by a duration the server never sent.
+      if (metric.duration !== undefined && !(descIsNumeric && metric.duration === 0)) {
+        parts.push(`dur=${metric.duration.toFixed(1)}`);
+      }
+      if (hasDesc) parts.push(`desc="${metric.description}"`);
+      return parts.join(";");
+    })
+    .join(", ");
 }
 
 /** Parses a `Server-Timing` header into the API's `{total, db, dbp, dbq, dbb}` shape. */
@@ -499,12 +532,22 @@ export function parseServerTiming(raw: string | null): {
     const [name, ...params] = part.trim().split(";");
     const key = (name ?? "").trim();
     if (!(key in out)) continue;
+    // `dur` is the duration when the server sent one; `desc` carries the counts
+    // (`dbq`/`dbb` are "not a duration" by design). A zero `dur` next to a numeric
+    // `desc` is the browser's synthesised value, so the description wins there.
+    // Without this the counts read back as 0 — the S9-2 acceptance number.
+    let dur: number | undefined;
+    let desc: number | undefined;
     for (const param of params) {
       const [rawKey, rawValue] = param.split("=");
-      if ((rawKey ?? "").trim() !== "dur") continue;
       const value = Number.parseFloat((rawValue ?? "").replace(/"/g, ""));
-      if (Number.isFinite(value)) out[key as keyof typeof out] = value;
+      if (!Number.isFinite(value)) continue;
+      const paramKey = (rawKey ?? "").trim();
+      if (paramKey === "dur") dur = value;
+      else if (paramKey === "desc") desc = value;
     }
+    const value = dur !== undefined && dur !== 0 ? dur : desc ?? dur;
+    if (value !== undefined) out[key as keyof typeof out] = value;
   }
   return out;
 }

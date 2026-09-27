@@ -14,7 +14,9 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHmac } from "node:crypto";
+import { createMultiremiApp } from "@multiremi/api.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
+import { StoreContext } from "@multiremi/store/context.js";
 import { MultiremiStore, daemonRuntimeId } from "@multiremi/store.js";
 
 const PG_ADMIN_URL = process.env.MULTIREMI_TEST_POSTGRES_URL
@@ -147,6 +149,149 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     return { workspaceId, agent: agent.id, runtime: runtime.id };
   }
 
+  function staleLaneClaim() {
+    const { workspaceId, agent, runtime } = freshWorkspace();
+    const issue = store.createIssue({ title: "PG stale lane", workspaceId });
+    const session = store.getOrCreateDefaultIssueSession(issue.id);
+    const task = store.createSessionTask(session.id, { agentId: agent, prompt: "Claim stale lane" });
+    store.getOrCreateSessionAgentLane(session.id, agent);
+    db.run(
+      `UPDATE multiremi_session_agent_lanes SET provider_session_id = 'expired',
+       provider = 'claude', runtime_id = ?, cursor_seq = 1,
+       execution_fingerprint = 'expired' WHERE session_id = ? AND agent_id = ?`,
+      [runtime, session.id, agent],
+    );
+    return { issue, task, runtime };
+  }
+
+  it("publishes a stale lane reset once after claim commits on Postgres", () => {
+    const { issue, task, runtime } = staleLaneClaim();
+    const events: boolean[] = [];
+    const unsubscribe = store.onWorkspaceEvent((event) => {
+      if (event.type === "activity:created" && (event.payload.entry as { action?: string })?.action === "session_agent_lane_reset") {
+        events.push(db.inTransaction);
+      }
+    });
+    try {
+      expect(store.claimTask(runtime)?.id).toBe(task.id);
+    } finally {
+      unsubscribe();
+    }
+    expect(store.listIssueActivity(issue.id).filter((entry) => entry.type === "session_agent_lane_reset")).toHaveLength(1);
+    expect(events).toEqual([false]);
+  });
+
+  it("rolls back a stale lane reset without publishing on Postgres", () => {
+    const { issue, task, runtime } = staleLaneClaim();
+    const events: string[] = [];
+    const unsubscribe = store.onWorkspaceEvent((event) => {
+      if (event.type === "activity:created" && (event.payload.entry as { action?: string })?.action === "session_agent_lane_reset") {
+        events.push(event.type);
+      }
+    });
+    const original = StoreContext.prototype.appendIssueActivity;
+    let observedBeforeRollback = false;
+    StoreContext.prototype.appendIssueActivity = function patched(this: StoreContext, issueId, input, queue) {
+      original.call(this, issueId, input, queue);
+      if (input.type !== "session_agent_lane_reset") return;
+      const reader = new PostgresSyncDatabase(pgDatabaseUrl(TEST_DB));
+      try {
+        const rows = reader.query("SELECT id FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'session_agent_lane_reset'").all(issue.id);
+        const selected = reader.query("SELECT status FROM multiremi_tasks WHERE id = ?").get(task.id) as { status: string };
+        observedBeforeRollback = rows.length === 0 && selected.status === "queued";
+      } finally {
+        reader.close();
+      }
+      throw new Error("PG claim rollback injection");
+    };
+    try {
+      expect(() => store.claimTask(runtime)).toThrow("PG claim rollback injection");
+    } finally {
+      StoreContext.prototype.appendIssueActivity = original;
+      unsubscribe();
+    }
+    expect(observedBeforeRollback).toBe(true);
+    expect(store.listIssueActivity(issue.id).filter((entry) => entry.type === "session_agent_lane_reset")).toHaveLength(0);
+    expect(store.getTask(task.id)?.status).toBe("queued");
+    expect(events).toEqual([]);
+  });
+
+  for (const path of ["held parent", "assign unassign", "update unassign"] as const) {
+    function activityCase() {
+      const { workspaceId, agent } = freshWorkspace();
+      const issue = store.createIssue({
+        title: `PG audit ${path}`, workspaceId, status: "in_progress",
+        assigneeType: "agent", assigneeId: agent,
+      });
+      let taskId: string | null = null;
+      if (path === "held parent") {
+        store.createIssue({ title: "PG open child", workspaceId, parentIssueId: issue.id, status: "in_progress" });
+      } else {
+        taskId = store.createTask({ agentId: agent, issueId: issue.id, prompt: "PG queued work" }).id;
+      }
+      const run = () => path === "held parent"
+        ? store.updateIssue(issue.id, { status: "done" }, { holdParentStatus: true })
+        : path === "assign unassign"
+          ? store.assignIssue(issue.id, { assigneeType: null, assigneeId: null })
+          : store.updateIssue(issue.id, { assigneeType: null, assigneeId: null });
+      return { issue, taskId, run, action: path === "held parent" ? "parent_status_held" : "issue_unassigned" };
+    }
+
+    it(`${path}: publishes its activity after PG commit`, () => {
+      const { issue, run, action } = activityCase();
+      const events: Array<{ action: string; inTransaction: boolean }> = [];
+      const unsubscribe = store.onWorkspaceEvent((event) => {
+        if (event.type === "activity:created") events.push({
+          action: (event.payload.entry as { action: string }).action,
+          inTransaction: db.inTransaction,
+        });
+      });
+      try {
+        run();
+      } finally {
+        unsubscribe();
+      }
+      expect(store.listIssueActivity(issue.id).filter((entry) => entry.type === action)).toHaveLength(1);
+      expect(events.filter((event) => event.action === action)).toEqual([{ action, inTransaction: false }]);
+      expect(events.filter((event) => event.inTransaction)).toHaveLength(0);
+    });
+
+    it(`${path}: rolls back its activity with no PG broadcast`, () => {
+      const { issue, taskId, run, action } = activityCase();
+      const events: string[] = [];
+      const unsubscribe = store.onWorkspaceEvent((event) => {
+        if (event.type === "activity:created") events.push((event.payload.entry as { action: string }).action);
+      });
+      const original = StoreContext.prototype.appendIssueActivity;
+      let invisibleBeforeRollback = false;
+      StoreContext.prototype.appendIssueActivity = function patched(this: StoreContext, issueId, input, queue) {
+        original.call(this, issueId, input, queue);
+        if (input.type !== action) return;
+        const reader = new PostgresSyncDatabase(pgDatabaseUrl(TEST_DB));
+        try {
+          const rows = reader.query("SELECT id FROM multiremi_issue_activity WHERE issue_id = ? AND type = ?").all(issue.id, action);
+          const task = taskId
+            ? reader.query("SELECT status FROM multiremi_tasks WHERE id = ?").get(taskId) as { status: string }
+            : null;
+          invisibleBeforeRollback = rows.length === 0 && (!task || task.status === "queued");
+        } finally {
+          reader.close();
+        }
+        throw new Error("PG activity rollback injection");
+      };
+      try {
+        expect(run).toThrow("PG activity rollback injection");
+      } finally {
+        StoreContext.prototype.appendIssueActivity = original;
+        unsubscribe();
+      }
+      expect(invisibleBeforeRollback).toBe(true);
+      expect(store.listIssueActivity(issue.id).filter((entry) => entry.type === action)).toHaveLength(0);
+      if (taskId) expect(store.getTask(taskId)?.status).toBe("queued");
+      expect(events).toEqual([]);
+    });
+  }
+
   it("keeps updateIssue(child -> done) at depth 1 on Postgres (owner busy: coalesced)", () => {
     const { workspaceId, agent } = freshWorkspace();
     const parent = store.createIssue({
@@ -193,6 +338,253 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     store.updateIssue(child.id, { status: "done" });
     expect(counter.max).toBe(1);
     expect(store.listTasksForIssue(parent.id).filter((task) => task.status === "queued")).toHaveLength(1);
+  });
+
+  /**
+   * MUL-457 QA round 1, blocker 1: on real Postgres the status write and its
+   * audit rows were three separate transactions, so an injected failure after
+   * the grant-used INSERT still left the parent `done` and the listeners
+   * notified. Both writers must now roll the whole thing back, and the SCM
+   * effect must stay retryable.
+   */
+  it("rolls the API status and audit rows back on a grant-used failure (Postgres)", () => {
+    const { workspaceId, agent } = freshWorkspace();
+    const parent = store.createIssue({
+      title: "PG grant parent", workspaceId, status: "in_progress",
+      assigneeType: "agent", assigneeId: agent,
+    });
+    store.updateIssue(store.createIssue({
+      title: "PG grant child", workspaceId, parentIssueId: parent.id, status: "in_progress",
+    }).id, { status: "done" });
+    store.grantParentDone(parent.id, workspaceId);
+    store.createIssueComment(parent.id, { body: "PG summary", authorType: "agent", authorId: agent });
+
+    const events: string[] = [];
+    const unsubscribe = store.onWorkspaceEvent((event) => {
+      const entry = (event.payload as { entry?: { action?: string } } | undefined)?.entry;
+      if (event.type === "activity:created") events.push(entry?.action ?? "");
+    });
+    const original = StoreContext.prototype.appendIssueActivity;
+    let injected = false;
+    StoreContext.prototype.appendIssueActivity = function patched(
+      this: StoreContext,
+      issueId: string,
+      input: { type: string },
+      ...rest: unknown[]
+    ) {
+      original.call(this, issueId, input as never, ...rest as [never]);
+      if (input.type === "parent_done_grant_used") {
+        injected = true;
+        throw new Error("pg grant-used injection");
+      }
+    } as typeof StoreContext.prototype.appendIssueActivity;
+    let thrown: Error | null = null;
+    try {
+      store.updateIssue(parent.id, { status: "done", actorType: "agent", actorId: agent });
+    } catch (err) {
+      thrown = err as Error;
+    } finally {
+      StoreContext.prototype.appendIssueActivity = original;
+      unsubscribe();
+    }
+    expect(injected).toBe(true);
+    expect(thrown?.message).toBe("pg grant-used injection");
+    expect(store.getIssue(parent.id)?.status).toBe("in_progress");
+    const types = store.listIssueActivity(parent.id).map((entry) => entry.type);
+    expect(types).not.toContain("issue_updated");
+    expect(types).not.toContain("parent_done_grant_used");
+    expect(events).toHaveLength(0);
+
+    // The retry settles exactly once.
+    store.updateIssue(parent.id, { status: "done", actorType: "agent", actorId: agent });
+    expect(store.getIssue(parent.id)?.status).toBe("done");
+    expect(store.listIssueActivity(parent.id).filter((e) => e.type === "parent_done_grant_used")).toHaveLength(1);
+  });
+
+  it("returns 409 details under data on Postgres (both prefixes)", async () => {
+    // HTTP routes resolve the compatibility prefix against `local`, so this
+    // case seeds its own agent there instead of a throwaway workspace.
+    const agent = store.createAgent({
+      name: `PG 409 owner ${workspaceCounter += 1}`,
+      provider: "claude",
+      workspaceId: "local",
+    }).id;
+    const workspaceId = "local";
+    const parent = store.createIssue({
+      title: "PG 409 parent", workspaceId, status: "in_progress",
+      assigneeType: "agent", assigneeId: agent,
+    });
+    store.updateIssue(store.createIssue({
+      title: "PG 409 child", workspaceId, parentIssueId: parent.id, status: "in_progress",
+    }).id, { status: "done" });
+    store.grantParentDone(parent.id, workspaceId);
+    const task = store.createTask({ agentId: agent, issueId: parent.id, prompt: "PG 409 round" });
+    const taskToken = await store.createTaskAccessToken(task, workspaceId);
+    const app = createMultiremiApp({ store });
+    for (const base of ["/api/issues", "/api/multiremi/issues"]) {
+      const response = await app.request(`${base}/${parent.id}`, {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${taskToken.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "done" }),
+      });
+      expect(response.status, base).toBe(409);
+      const body = await response.json();
+      expect(body, base).toMatchObject({
+        code: "final_summary_missing",
+        data: { lastChildClosedAt: expect.any(String) },
+      });
+      expect(body.last_child_closed_at, base).toBeUndefined();
+    }
+  });
+
+  it("rolls the SCM status, audit rows and effect mark back on a grant-used failure (Postgres)", () => {
+    const { workspaceId, agent } = freshWorkspace();
+    process.env.MULTIREMI_SCM_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
+    const repoId = `repo_pg_mul457_${workspaceCounter}`;
+    store.updateWorkspace(workspaceId, {
+      repos: [{
+        id: repoId,
+        name: "pg-mul457",
+        url: "git@github.com:acme/pg-mul457.git",
+        source: "github",
+        default_branch: "main",
+      }],
+      settings: { scm_auto_link_enabled: true, scm_complete_issue_on_merge_enabled: true },
+    });
+    const connection = store.createScmConnection({
+      workspaceId, name: "PG SCM atomic", provider: "github", mode: "hybrid",
+      accessToken: "test-only-token", webhookSecret: "pg-webhook-secret", repositoryIds: [repoId],
+    });
+    const parent = store.createIssue({
+      title: "PG SCM atomic parent", workspaceId, status: "in_progress",
+      assigneeType: "agent", assigneeId: agent,
+    });
+    store.updateIssue(store.createIssue({
+      title: "PG SCM atomic child", workspaceId, parentIssueId: parent.id, status: "in_progress",
+    }).id, { status: "done" });
+    store.grantParentDone(parent.id, workspaceId);
+    store.createIssueComment(parent.id, { body: "PG SCM summary", authorType: "agent", authorId: agent });
+    const externalId = `77${workspaceCounter}`;
+    store.advanceScmEntitySnapshot({
+      connectionId: connection.id, repositoryId: repoId, entityType: "change_request",
+      externalId, revisionAt: new Date().toISOString(), revision: `v-${externalId}`,
+      contentHash: `pg-${externalId}`,
+      payload: {
+        number: Number(externalId), title: `${parent.key} pg atomic`, state: "merged",
+        source_branch: `agent/${parent.key}`, url: "https://github.com/acme/pg-mul457/pull/77",
+      },
+    });
+    const recordMerge = (logicalKey: string) => store.recordScmCanonicalEvent({
+      workspaceId, connectionId: connection.id, repositoryId: repoId,
+      type: "change.merged", subjectType: "change_request", subjectId: externalId,
+      logicalKey, fidelity: "inferred",
+      payload: { number: Number(externalId), branch: "main", mergeSha: "pgsha" },
+      evidence: { source: "poll", dedupeKey: `poll:${logicalKey}`, providerEventId: null },
+    });
+
+    const original = StoreContext.prototype.appendIssueActivity;
+    let injected = false;
+    StoreContext.prototype.appendIssueActivity = function patched(
+      this: StoreContext,
+      issueId: string,
+      input: { type: string },
+      ...rest: unknown[]
+    ) {
+      original.call(this, issueId, input as never, ...rest as [never]);
+      if (input.type === "parent_done_grant_used") {
+        injected = true;
+        throw new Error("pg scm grant-used injection");
+      }
+    } as typeof StoreContext.prototype.appendIssueActivity;
+    try {
+      recordMerge(`change.merged:${externalId}:pg-atomic`);
+    } finally {
+      StoreContext.prototype.appendIssueActivity = original;
+    }
+    expect(injected).toBe(true);
+    expect(store.getIssue(parent.id)?.status).toBe("in_progress");
+    const types = store.listIssueActivity(parent.id).map((entry) => entry.type);
+    expect(types).not.toContain("parent_done_grant_used");
+    expect(types).not.toContain("scm_merge_completed");
+    const pending = db.query(
+      "SELECT status, last_error FROM multiremi_scm_effects WHERE issue_id = ? ORDER BY created_at DESC LIMIT 1",
+    ).get(parent.id) as { status?: string; last_error?: string | null } | null;
+    expect(pending?.status).toBe("pending");
+    expect(String(pending?.last_error ?? "")).toContain("pg scm grant-used injection");
+
+    recordMerge(`change.merged:${externalId}:pg-atomic`);
+    expect(store.getIssue(parent.id)?.status).toBe("done");
+    expect(store.listIssueActivity(parent.id).filter((e) => e.type === "parent_done_grant_used")).toHaveLength(1);
+    expect(store.listIssueActivity(parent.id).filter((e) => e.type === "scm_merge_completed")).toHaveLength(1);
+    const settled = db.query(
+      "SELECT status FROM multiremi_scm_effects WHERE issue_id = ? ORDER BY created_at DESC LIMIT 1",
+    ).get(parent.id) as { status?: string } | null;
+    expect(settled?.status).toBe("applied");
+  });
+
+  it("keeps a forged comment from satisfying A1 for the authorized agent (Postgres)", async () => {
+    const workspaceId = "local";
+    const agent = store.createAgent({
+      name: `PG forgery owner ${workspaceCounter += 1}`,
+      provider: "claude",
+      workspaceId,
+    }).id;
+    const other = store.createAgent({ name: "PG other agent", provider: "claude", workspaceId });
+    const parent = store.createIssue({
+      title: "PG forgery parent", workspaceId, status: "in_progress",
+      assigneeType: "agent", assigneeId: agent,
+    });
+    store.updateIssue(store.createIssue({
+      title: "PG forgery child", workspaceId, parentIssueId: parent.id, status: "in_progress",
+    }).id, { status: "done" });
+    store.grantParentDone(parent.id, workspaceId);
+    const app = createMultiremiApp({ store });
+    const ownerTask = store.createTask({ agentId: agent, issueId: parent.id, prompt: "PG owner round" });
+    const ownerToken = (await store.createTaskAccessToken(ownerTask, workspaceId)).token;
+    const otherTask = store.createTask({ agentId: other.id, issueId: parent.id, prompt: "PG other round" });
+    const otherToken = (await store.createTaskAccessToken(otherTask, workspaceId)).token;
+    const memberToken = (await store.createAccessToken({
+      name: "PG member", type: "pat", workspaceId, userId: "local",
+    })).token;
+
+    const forgedByAgent = await app.request(`/api/issues/${parent.id}/comments`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${otherToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        body: "PG forged summary", author_type: "agent", author_id: agent,
+        authorType: "agent", authorId: agent,
+      }),
+    });
+    expect(forgedByAgent.status).toBe(201);
+    const agentComment = await forgedByAgent.json();
+    expect(store.getIssueComment(agentComment.id)?.authorId).toBe(other.id);
+
+    const done = () => app.request(`/api/issues/${parent.id}`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${ownerToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "done" }),
+    });
+    expect((await done()).status).toBe(409);
+    // A member PAT forging the same identity stores a member comment instead.
+    const forgedByMember = await app.request(`/api/issues/${parent.id}/comments`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${memberToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        body: "PG member forged summary", author_type: "agent", author_id: agent,
+        authorType: "agent", authorId: agent,
+      }),
+    });
+    expect(forgedByMember.status).toBe(201);
+    const memberComment = await forgedByMember.json();
+    expect(store.getIssueComment(memberComment.id)).toMatchObject({ authorType: "member" });
+    expect((await done()).status).toBe(409);
+    // The authorized agent's own comment satisfies (b).
+    await app.request(`/api/issues/${parent.id}/comments`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${ownerToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ body: "PG owner summary" }),
+    });
+    expect((await done()).status).toBe(200);
   });
 
   it("keeps the WHOLE task lifecycle at depth 1, counter armed before createTask (Postgres)", () => {
