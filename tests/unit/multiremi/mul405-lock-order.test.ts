@@ -211,6 +211,14 @@ function recordAutopilotOrder(): LockName[] {
   return [...recorder.locks];
 }
 
+/** The plain API / quick-create path: `createIssue` with no outer transaction. */
+function recordCreateIssueOrder(): LockName[] {
+  const { store, recorder } = freshStore();
+  recorder.locks.length = 0;
+  store.createIssue({ title: "Plain create", workspaceId: "local" });
+  return [...recorder.locks];
+}
+
 // ────────────────────────── replaying on real PostgreSQL ──────────────────────────
 
 async function probePostgres(): Promise<boolean> {
@@ -375,6 +383,12 @@ describe.skipIf(!pgAvailable)("MUL-405 lock order", () => {
   }
 
   it("takes the workspace row lock before the issue number lock on both paths", () => {
+    // Each path is derived from the store separately: QA's round-2 mutation
+    // (deleting the workspace lock from createIssueWithinTransaction) must go
+    // red here, and it only does if the plain createIssue path is recorded.
+    // The exhaustive per-path assertions live in
+    // `mul405-lock-order-paths.test.ts`; this file keeps the end-to-end replay.
+    expect(firstTouchOrder(recordCreateIssueOrder())).toEqual(["workspace", "number"]);
     expect(firstTouchOrder(recordFeishuOrder())).toEqual(["workspace", "number"]);
     expect(firstTouchOrder(recordAutopilotOrder())).toEqual(["workspace", "number"]);
   });
@@ -406,5 +420,22 @@ describe.skipIf(!pgAvailable)("MUL-405 lock order", () => {
     expect(numbers.length).toBeGreaterThanOrEqual(2);
     expect(new Set(numbers).size).toBe(numbers.length);
     expect(numbers).toEqual([...numbers].sort((left, right) => left - right));
+  });
+
+  it("commits the plain createIssue and Feishu bot interleaving without a deadlock", async () => {
+    // QA's round-2 requirement: the pure `createIssue` (quick-create) path must
+    // also be part of the pinned interleave. It is the path whose workspace lock
+    // was silently deleted in their mutation and nothing went red.
+    const plainOrder = firstTouchOrder(recordCreateIssueOrder());
+    const feishuOrder = firstTouchOrder(recordFeishuOrder());
+
+    const outcomes = await runInterleave(plainOrder, feishuOrder, 1_500);
+    for (const [label, outcome] of [["createIssue", outcomes.first], ["feishu", outcomes.second]] as const) {
+      expect(
+        outcome.phase,
+        `${label} [${outcome.phase}] ${outcome.error ?? "ok"} — derived orders: ` +
+          `createIssue ${plainOrder.join(" -> ")}, feishu ${feishuOrder.join(" -> ")}`,
+      ).toBe("committed");
+    }
   });
 });
