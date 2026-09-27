@@ -1467,6 +1467,15 @@ export interface MultiremiTask {
   /** Return task that has claimed this delegated task's terminal report. */
   delegationReturnTaskId: string | null;
   delegation_return_task_id?: string | null;
+  /** MUL-400 E2b: the Issue Session the delegator was in when it dispatched
+   *  this task. The terminal report returns there, not to the task's own
+   *  Session, so a cross-issue delegation calls the leader back home. */
+  delegatedFromIssueSessionId: string | null;
+  delegated_from_issue_session_id?: string | null;
+  /** MUL-400 E2b: why a task-token dispatch was NOT recorded as a delegation.
+   *  Read at terminal time to explain the silence instead of dropping it. */
+  delegationSkipReason: string | null;
+  delegation_skip_reason?: string | null;
   assignmentEventId: string | null;
   assignment_event_id?: string | null;
   /** System event that caused the automation-owned task to be assigned. This
@@ -1733,6 +1742,12 @@ export interface CreateTaskInput {
   delegation_id?: string | null;
   delegatedByAgentId?: string | null;
   delegated_by_agent_id?: string | null;
+  /** MUL-400 E2b server-internal return landing point and skip audit. Public
+   *  task creation strips both; only the task-token route sets them. */
+  delegatedFromIssueSessionId?: string | null;
+  delegated_from_issue_session_id?: string | null;
+  delegationSkipReason?: string | null;
+  delegation_skip_reason?: string | null;
   /** Public dispatch hint. The API validates the referenced delegated task and
    * derives its lineage; callers cannot provide a delegation ID directly. */
   continueTaskId?: string | null;

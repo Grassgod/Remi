@@ -176,6 +176,10 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
       delegation_id: _delegationIdSnake,
       delegatedByAgentId: _delegatedByAgentId,
       delegated_by_agent_id: _delegatedByAgentIdSnake,
+      delegatedFromIssueSessionId: _delegatedFromIssueSessionId,
+      delegated_from_issue_session_id: _delegatedFromIssueSessionIdSnake,
+      delegationSkipReason: _delegationSkipReason,
+      delegation_skip_reason: _delegationSkipReasonSnake,
       continueTaskId: _continueTaskId,
       continue_task_id: _continueTaskIdSnake,
       assignmentSourceEventId: _assignmentSourceEventId,
@@ -202,7 +206,9 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     const issueId = cleanString(publicInput.issueId);
     const issue = issueId ? store.getIssue(issueId) : null;
     const requestedIssueSessionId = cleanString(publicInput.issueSessionId ?? publicInput.issue_session_id);
-    const inheritedIssueSessionId = requestedIssueSessionId ?? sourceTask?.issueSessionId ?? null;
+    const inheritedIssueSessionId = requestedIssueSessionId
+      ?? (issue?.id === sourceTask?.issueId ? sourceTask?.issueSessionId : null)
+      ?? null;
     if (continuedTask) {
       if (!continuedTask.delegationId || !continuedTask.delegatedByAgentId
         || continuedTask.agentId === continuedTask.delegatedByAgentId) {
@@ -227,19 +233,15 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
         return c.json({ error: "requested Issue Session does not match the continued task" }, 400);
       }
     }
-    const leaderDelegation = Boolean(
-      !continuedTask
-      && taskToken
-      && sourceTask
-      && issue
-      && store.isSquadLeaderDelegation({
+    const leaderDelegation = !continuedTask && taskToken && sourceTask && issue
+      ? store.isSquadLeaderDelegation({
         issue,
         sourceTask,
         authorAgentId: taskToken.agentId,
         targetAgentId: agent.id,
         issueSessionId: inheritedIssueSessionId,
       })
-    );
+      : null;
     // Keep continuation ancestry on the current Leader turn. A same-agent,
     // same-delegation successor of the previous child is reserved for retry /
     // self-continuation and intentionally suppresses that child's return in
@@ -255,14 +257,19 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
           continuedFromTaskId: continuedTask.id,
           delegationId: continuedTask.delegationId,
           delegatedByAgentId: continuedTask.delegatedByAgentId,
+          delegatedFromIssueSessionId: continuedTask.delegatedFromIssueSessionId,
+          delegationSkipReason: continuedTask.delegationSkipReason,
         }
-        : leaderDelegation
+        : leaderDelegation?.ok
         ? {
-          issueSessionId: inheritedIssueSessionId,
+          ...(inheritedIssueSessionId ? { issueSessionId: inheritedIssueSessionId } : {}),
           delegationId: createId("dlg"),
           delegatedByAgentId: sourceTask!.agentId,
+          delegatedFromIssueSessionId: leaderDelegation.delegatedFromIssueSessionId,
         }
-        : {}),
+        : leaderDelegation?.reason
+          ? { delegationSkipReason: leaderDelegation.reason }
+          : {}),
     };
     assertRuntimeWorkspaceAccess(c, store, createInput.runtimeWorkspaceId ?? createInput.runtime_workspace_id, agent.workspaceId);
     try {

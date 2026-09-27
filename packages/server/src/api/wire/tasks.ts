@@ -22,6 +22,10 @@ type InternalTaskField =
   | "delegated_by_agent_id"
   | "delegationReturnTaskId"
   | "delegation_return_task_id"
+  | "delegatedFromIssueSessionId"
+  | "delegated_from_issue_session_id"
+  | "delegationSkipReason"
+  | "delegation_skip_reason"
   | "issueCreationRestricted"
   | "issue_creation_restricted";
 
@@ -51,6 +55,10 @@ export function taskPublicResponse<T extends MultiremiTask>(task: T): Omit<T, In
     delegated_by_agent_id: _delegatedByAgentIdSnake,
     delegationReturnTaskId: _delegationReturnTaskId,
     delegation_return_task_id: _delegationReturnTaskIdSnake,
+    delegatedFromIssueSessionId: _delegatedFromIssueSessionId,
+    delegated_from_issue_session_id: _delegatedFromIssueSessionIdSnake,
+    delegationSkipReason: _delegationSkipReason,
+    delegation_skip_reason: _delegationSkipReasonSnake,
     issueCreationRestricted: _issueCreationRestricted,
     issue_creation_restricted: _issueCreationRestrictedSnake,
     ...publicTask
@@ -872,4 +880,3 @@ function daemonBasename(path: string): string {
   const index = trimmed.lastIndexOf("/");
   return index >= 0 ? trimmed.slice(index + 1) : trimmed;
 }
-

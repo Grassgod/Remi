@@ -122,6 +122,9 @@ describe("store migrations", () => {
     ]));
     expect(columnNames(database, "multiremi_tasks")).toContain("task_kind");
     expect(columnNames(database, "multiremi_tasks")).toContain("delegation_return_task_id");
+    expect(columnNames(database, "multiremi_tasks")).toEqual(expect.arrayContaining([
+      "delegated_from_issue_session_id", "delegation_skip_reason", "wake_source",
+    ]));
     expect(columnNames(database, "multiremi_tasks")).toContain("continued_from_task_id");
     expect(columnNames(database, "multiremi_chat_sessions")).not.toContain("issue_id");
     expect(columnNames(database, "multiremi_feishu_bot_chat_bindings")).toContain("issue_id");

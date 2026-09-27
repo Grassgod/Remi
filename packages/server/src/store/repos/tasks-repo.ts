@@ -293,10 +293,19 @@ interface DelegationWakeupResult {
 interface DelegationTerminalReport {
   source: MultiremiTask;
   sourceAgentName: string;
+  sourceIssueKey: string | null;
+  resultCommentId: string | null;
   terminalStatus: "completed" | "failed" | "cancelled";
   terminalBody: string | null;
   requiredEventSeq: number;
 }
+
+type DelegationSkipReason =
+  | "no_lineage" | "delegator_unavailable" | "already_covered"
+  | "coalesced_into_pending_return" | "covered_by_queued_task" | "deferred_lane_busy"
+  | "source_not_issue_task" | "source_side_session" | "source_not_squad_leader"
+  | "target_not_squad_member" | "cross_issue_no_lineage" | "self_dispatch"
+  | "covered_by_delegate_wakeup" | "delegator_issue_closed" | "delegator_session_missing";
 
 interface DelegationReturnDrainResult {
   createdTasks: MultiremiTask[];
@@ -947,8 +956,19 @@ export class TasksRepo {
     const maxAttempts = Math.max(attempt, normalizePositiveInt(input.maxAttempts ?? input.max_attempts, 3));
     const delegationId = cleanOptionalString(input.delegationId ?? input.delegation_id);
     const delegatedByAgentId = cleanOptionalString(input.delegatedByAgentId ?? input.delegated_by_agent_id);
+    const delegatedFromIssueSessionId = cleanOptionalString(
+      input.delegatedFromIssueSessionId ?? input.delegated_from_issue_session_id,
+    );
+    const delegationSkipReason = cleanOptionalString(input.delegationSkipReason ?? input.delegation_skip_reason);
     if (Boolean(delegationId) !== Boolean(delegatedByAgentId)) {
       throw new Error("delegation_id and delegated_by_agent_id must be set together");
+    }
+    if (delegatedFromIssueSessionId) {
+      const returnSession = this.ctx.issueSessions().getIssueSession(delegatedFromIssueSessionId);
+      if (!delegationId || !returnSession || returnSession.workspaceId !== agent.workspaceId
+        || returnSession.inheritMode !== "none") {
+        throw new Error("Delegation return session must be a main Session in the task workspace");
+      }
     }
     if (delegatedByAgentId) {
       if (issueSession && issueSession.inheritMode !== "none") {
@@ -975,13 +995,14 @@ export class TasksRepo {
         trigger_comment_id, trigger_summary, requesting_user_name,
         requesting_user_profile_description, workspace_id, status, priority, prompt,
         attempt, max_attempts, parent_task_id, continued_from_task_id, issue_creation_restricted, delegation_id, delegated_by_agent_id,
+        delegated_from_issue_session_id, delegation_skip_reason,
         assignment_event_id, assignment_source_event_id, projection_degrade_level,
         provider, plugin_snapshot, execution_fingerprint, codex_profile, claude_profile,
         session_id, work_dir, created_at, updated_at,
         execution_model, execution_thinking_level, fallback_switched, switch_reason, next_retry_at
       ) VALUES (
         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?,
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?
       )`,
       [
@@ -1015,6 +1036,8 @@ export class TasksRepo {
         issueCreationRestricted ? 1 : 0,
         delegationId,
         delegatedByAgentId,
+        delegatedFromIssueSessionId,
+        delegationSkipReason,
         cleanOptionalString(input.assignmentEventId ?? input.assignment_event_id),
         cleanOptionalString(input.assignmentSourceEventId ?? input.assignment_source_event_id),
         projectionDegradeLevel,
@@ -3302,6 +3325,8 @@ export class TasksRepo {
       continuedFromTaskId: current.continuedFromTaskId,
       delegationId: current.delegationId,
       delegatedByAgentId: current.delegatedByAgentId,
+      delegatedFromIssueSessionId: current.delegatedFromIssueSessionId,
+      delegationSkipReason: current.delegationSkipReason,
       assignmentSourceEventId: current.assignmentSourceEventId,
     }, childStatusChanges, deferredEvents);
     if (replacement.chatSessionId) {
@@ -3591,6 +3616,8 @@ export class TasksRepo {
       continuedFromTaskId: parent.continuedFromTaskId,
       delegationId: parent.delegationId,
       delegatedByAgentId: parent.delegatedByAgentId,
+      delegatedFromIssueSessionId: parent.delegatedFromIssueSessionId,
+      delegationSkipReason: parent.delegationSkipReason,
       assignmentSourceEventId: parent.assignmentSourceEventId,
     };
     const retry = workspaceLockHeld
@@ -3656,7 +3683,7 @@ export class TasksRepo {
     deferredEvents: CommitEventQueue,
   ): DelegationWakeupResult {
     const rawRequiredEventSeq = Number(input.requiredEventSeq);
-    const requiredEventSeq = Number.isFinite(rawRequiredEventSeq)
+    let requiredEventSeq = Number.isFinite(rawRequiredEventSeq)
       ? Math.max(1, Math.floor(rawRequiredEventSeq))
       : 1;
     const delegationId = source.delegationId;
@@ -3664,11 +3691,55 @@ export class TasksRepo {
     const hasDelegationId = Boolean(delegationId);
     const hasDelegator = Boolean(delegatedByAgentId);
     const terminalStatus = input.terminalStatus ?? null;
-    const drainTerminalReturns = (): DelegationWakeupResult => {
-      if (!source.issueSessionId || !terminalStatus) {
+    if (terminalStatus && source.delegationSkipReason) {
+      this.recordDelegationReturnSkipped(source, input, requiredEventSeq,
+        source.delegationSkipReason as DelegationSkipReason, {}, deferredEvents);
+      return { task: null, created: false, covered: false };
+    }
+    const returnSessionId = source.delegatedFromIssueSessionId ?? source.issueSessionId;
+    if (terminalStatus && hasDelegationId && hasDelegator && source.agentId !== delegatedByAgentId
+      && source.delegatedFromIssueSessionId && source.delegatedFromIssueSessionId !== source.issueSessionId) {
+      const returnSession = this.ctx.issueSessions().getIssueSession(source.delegatedFromIssueSessionId);
+      if (!returnSession) {
+        this.recordDelegationReturnSkipped(source, input, requiredEventSeq,
+          "delegator_session_missing", {}, deferredEvents);
         return { task: null, created: false, covered: false };
       }
-      const drained = this.drainDelegationReturnsWithinWorkspaceLock(source.issueSessionId, {
+      const returnIssue = this.ctx.issues().getIssue(returnSession.issueId);
+      if (!returnIssue || returnIssue.status === "done" || returnIssue.status === "cancelled") {
+        this.recordDelegationReturnSkipped(source, input, requiredEventSeq,
+          "delegator_issue_closed", {}, deferredEvents);
+        return { task: null, created: false, covered: false };
+      }
+      const existing = this.ctx.db.query(
+        `SELECT seq FROM multiremi_session_events
+         WHERE session_id = ? AND task_id = ? AND kind = 'delegation_report'
+         ORDER BY seq DESC LIMIT 1`,
+      ).get(returnSession.id, source.id) as { seq: number } | null;
+      const sourceIssue = source.issueId ? this.ctx.issues().getIssue(source.issueId) : null;
+      const resultCommentId = this.lastDelegationResultCommentId(source);
+      const bridge = existing ?? this.ctx.issueSessions().appendSessionEventWithinTransaction(returnSession.id, {
+        authorType: "system",
+        kind: "delegation_report",
+        body: `${this.ctx.agents().getAgent(source.agentId)?.name ?? source.agentId} finished ${source.id} on ${sourceIssue?.key ?? source.issueId}: ${terminalStatus}`,
+        taskId: source.id,
+        metadata: {
+          source_issue_id: source.issueId,
+          source_issue_key: sourceIssue?.key ?? null,
+          source_task_id: source.id,
+          delegate_agent_id: source.agentId,
+          terminal_status: terminalStatus,
+          result_comment_id: resultCommentId,
+          delegation_id: delegationId,
+        },
+      });
+      requiredEventSeq = bridge.seq;
+    }
+    const drainTerminalReturns = (): DelegationWakeupResult => {
+      if (!returnSessionId || !terminalStatus) {
+        return { task: null, created: false, covered: false };
+      }
+      const drained = this.drainDelegationReturnsWithinWorkspaceLock(returnSessionId, {
         source,
         terminalStatus,
         terminalBody: input.terminalBody ?? null,
@@ -3719,11 +3790,11 @@ export class TasksRepo {
     // only covers events through projection_to_seq and needs a later Delta task.
     this.ctx.db.run(
       "UPDATE multiremi_issue_sessions SET updated_at = updated_at WHERE id = ?",
-      [source.issueSessionId],
+      [returnSessionId],
     );
     if (terminalStatus) return drainTerminalReturns();
 
-    const lane = this.ctx.issueSessions().getOrCreateSessionAgentLane(source.issueSessionId, delegator.id);
+    const lane = this.ctx.issueSessions().getOrCreateSessionAgentLane(returnSessionId!, delegator.id);
     if (lane.cursorSeq >= requiredEventSeq) {
       this.recordDelegationReturnSkipped(source, input, requiredEventSeq, "already_covered", {
         laneCursorSeq: lane.cursorSeq,
@@ -3735,7 +3806,7 @@ export class TasksRepo {
       `SELECT * FROM multiremi_tasks
        WHERE delegation_id = ? AND agent_id = ? AND issue_session_id = ?
        ORDER BY created_at DESC`,
-    ).all(source.delegationId, delegator.id, source.issueSessionId) as Row[];
+    ).all(source.delegationId, delegator.id, returnSessionId) as Row[];
     for (const row of rows) {
       const candidate = toTask(row);
       const projectedThrough = candidate.projectionToSeq;
@@ -3758,10 +3829,12 @@ export class TasksRepo {
     }
 
     const sourceAgent = this.ctx.agents().getAgent(source.agentId);
+    const returnIssueId = this.ctx.issueSessions().getIssueSession(returnSessionId!)!.issueId;
+    const sourceIssue = this.ctx.issues().getIssue(source.issueId);
     const task = this.createTaskWithinWorkspaceLock({
       agentId: delegator.id,
-      issueId: source.issueId,
-      issueSessionId: source.issueSessionId,
+      issueId: returnIssueId,
+      issueSessionId: returnSessionId,
       triggerCommentId: cleanOptionalString(input.triggerCommentId),
       workspaceId: source.workspaceId,
       priority: source.priority,
@@ -3777,14 +3850,17 @@ export class TasksRepo {
       assignmentAuthorType: "system",
       assignmentAuthorId: null,
     }, childStatusChanges, deferredEvents);
-    this.ctx.appendIssueActivity(source.issueId, {
+    this.ctx.appendIssueActivity(returnIssueId, {
       actorType: "system",
       actorId: null,
       type: "delegation_return_triggered",
-      body: `Queued ${delegator.name} to review ${sourceAgent?.name ?? "a delegated teammate"}`,
+      body: `Queued ${delegator.name} to review ${sourceAgent?.name ?? "a delegated teammate"}${returnIssueId !== source.issueId ? ` (${sourceIssue?.key ?? source.issueId})` : ""}`,
       data: {
         delegationId: source.delegationId,
         sourceTaskId: source.id,
+        sourceIssueId: source.issueId,
+        sourceIssueKey: sourceIssue?.key ?? null,
+        returnIssueId,
         returnTaskId: task.id,
         delegatorAgentId: delegator.id,
         delegateAgentId: source.agentId,
@@ -3809,6 +3885,8 @@ export class TasksRepo {
     childStatusChanges: ChildStatusChangeCollector,
     deferredEvents: CommitEventQueue,
   ): DelegationReturnDrainResult {
+    const returnIssueId = this.ctx.issueSessions().getIssueSession(issueSessionId)?.issueId;
+    if (!returnIssueId) return { createdTasks: [], taskBySourceId: new Map() };
     this.ctx.db.run(
       "UPDATE multiremi_issue_sessions SET updated_at = updated_at WHERE id = ?",
       [issueSessionId],
@@ -3817,11 +3895,11 @@ export class TasksRepo {
       `SELECT task.*,
               (SELECT MAX(event.seq)
                FROM multiremi_session_events event
-               WHERE event.session_id = task.issue_session_id
+               WHERE event.session_id = COALESCE(task.delegated_from_issue_session_id, task.issue_session_id)
                  AND event.task_id = task.id
-                 AND event.kind IN ('task_completed', 'task_failed', 'task_cancelled')) AS terminal_event_seq
+                 AND event.kind IN ('task_completed', 'task_failed', 'task_cancelled', 'delegation_report')) AS terminal_event_seq
        FROM multiremi_tasks task
-       WHERE task.issue_session_id = ?
+       WHERE COALESCE(task.delegated_from_issue_session_id, task.issue_session_id) = ?
          AND task.status IN ('completed', 'failed', 'cancelled')
          AND task.delegation_id IS NOT NULL
          AND task.delegated_by_agent_id IS NOT NULL
@@ -3829,9 +3907,9 @@ export class TasksRepo {
          AND task.delegation_return_task_id IS NULL
          AND EXISTS (
            SELECT 1 FROM multiremi_session_events terminal_event
-           WHERE terminal_event.session_id = task.issue_session_id
+           WHERE terminal_event.session_id = COALESCE(task.delegated_from_issue_session_id, task.issue_session_id)
              AND terminal_event.task_id = task.id
-             AND terminal_event.kind IN ('task_completed', 'task_failed', 'task_cancelled')
+             AND terminal_event.kind IN ('task_completed', 'task_failed', 'task_cancelled', 'delegation_report')
          )
          AND NOT EXISTS (
            SELECT 1 FROM multiremi_tasks successor
@@ -3850,6 +3928,8 @@ export class TasksRepo {
       return {
         source,
         sourceAgentName: this.ctx.agents().getAgent(source.agentId)?.name ?? source.agentId,
+        sourceIssueKey: source.issueId ? this.ctx.issues().getIssue(source.issueId)?.key ?? null : null,
+        resultCommentId: this.lastDelegationResultCommentId(source),
         terminalStatus,
         terminalBody: isTrigger
           ? trigger.terminalBody
@@ -3982,7 +4062,7 @@ export class TasksRepo {
       const first = unresolved[0]!;
       const task = this.createTaskWithinWorkspaceLock({
         agentId: delegator.id,
-        issueId: first.source.issueId,
+        issueId: returnIssueId,
         issueSessionId,
         workspaceId: first.source.workspaceId,
         priority: Math.max(...unresolved.map((report) => report.source.priority)),
@@ -3997,14 +4077,17 @@ export class TasksRepo {
       const coveredSourceTaskIds = unresolved.map((report) => report.source.id);
       for (const report of unresolved) taskBySourceId.set(report.source.id, task);
       createdTasks.push(task);
-      this.ctx.appendIssueActivity(first.source.issueId!, {
+      this.ctx.appendIssueActivity(returnIssueId, {
         actorType: "system",
         actorId: null,
         type: "delegation_return_triggered",
-        body: `Queued ${delegator.name} to review delegated teammate reports`,
+        body: `Queued ${delegator.name} to review delegated teammate reports${returnIssueId !== first.source.issueId ? ` (${first.sourceIssueKey ?? first.source.issueId})` : ""}`,
         data: {
           delegationId: first.source.delegationId,
           sourceTaskId: first.source.id,
+          sourceIssueId: first.source.issueId,
+          sourceIssueKey: first.sourceIssueKey,
+          returnIssueId,
           returnTaskId: task.id,
           delegatorAgentId: delegator.id,
           delegateAgentId: first.source.agentId,
@@ -4049,18 +4132,17 @@ export class TasksRepo {
     source: MultiremiTask,
     input: DelegationWakeupInput,
     requiredEventSeq: number,
-    reason:
-      | "no_lineage"
-      | "delegator_unavailable"
-      | "already_covered"
-      | "coalesced_into_pending_return"
-      | "covered_by_queued_task"
-      | "deferred_lane_busy",
+    reason: DelegationSkipReason,
     details: Record<string, unknown>,
     deferredEvents: CommitEventQueue,
   ): void {
     if (!source.issueId) return;
-    this.ctx.appendIssueActivity(source.issueId, {
+    const parentIssueId = source.parentTaskId ? this.getTask(source.parentTaskId)?.issueId : null;
+    const targetIds = parentIssueId && parentIssueId !== source.issueId
+      && (Boolean(source.delegationSkipReason) || reason === "delegator_unavailable"
+        || reason === "delegator_issue_closed" || reason === "delegator_session_missing")
+      ? [source.issueId, parentIssueId] : [source.issueId];
+    for (const issueId of targetIds) this.ctx.appendIssueActivity(issueId, {
       actorType: "system",
       actorId: null,
       type: "delegation_return_skipped",
@@ -4077,6 +4159,15 @@ export class TasksRepo {
         ...details,
       },
     }, deferredEvents);
+  }
+
+  private lastDelegationResultCommentId(source: MultiremiTask): string | null {
+    if (!source.issueId) return null;
+    const row = this.ctx.db.query(
+      `SELECT id FROM multiremi_issue_comments
+       WHERE issue_id = ? AND task_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`,
+    ).get(source.issueId, source.id) as { id: string } | null;
+    return row?.id ?? null;
   }
 
   private afterTaskTerminal(
@@ -4528,7 +4619,7 @@ export class TasksRepo {
    */
   private lockTaskIssueSessionsWithinWorkspaceLock(tasks: MultiremiTask[]): void {
     const sessionIds = [...new Set(tasks
-      .map((task) => cleanOptionalString(task.issueSessionId))
+      .flatMap((task) => [cleanOptionalString(task.issueSessionId), cleanOptionalString(task.delegatedFromIssueSessionId)])
       .filter((id): id is string => Boolean(id)))]
       .sort();
     for (const sessionId of sessionIds) {
@@ -5030,6 +5121,14 @@ function delegationTerminalReportSection(report: DelegationTerminalReport): stri
     `Source task: ${report.source.id}`,
     `Status: ${report.terminalStatus}`,
   ];
+  if (report.source.delegatedFromIssueSessionId
+    && report.source.delegatedFromIssueSessionId !== report.source.issueSessionId) {
+    lines.push(`Issue: ${report.sourceIssueKey ?? "unknown"} (${report.source.issueId})`);
+  }
+  lines.push(report.resultCommentId
+    ? `Result comment: ${report.resultCommentId}`
+    : "Result comment: none at completion (the final reply is posted as a comment after this report; result text follows)");
+  lines.push(`Delegation: ${report.source.delegationId ?? "none"}`);
   if (!body) return lines.join("\n");
   const chars = Array.from(body);
   const truncated = chars.length > DELEGATION_RETURN_BODY_MAX_LENGTH;
@@ -5164,6 +5263,10 @@ function toTask(row: Row): MultiremiTask {
     delegated_by_agent_id: nullableString(row.delegated_by_agent_id),
     delegationReturnTaskId: nullableString(row.delegation_return_task_id),
     delegation_return_task_id: nullableString(row.delegation_return_task_id),
+    delegatedFromIssueSessionId: nullableString(row.delegated_from_issue_session_id),
+    delegated_from_issue_session_id: nullableString(row.delegated_from_issue_session_id),
+    delegationSkipReason: nullableString(row.delegation_skip_reason),
+    delegation_skip_reason: nullableString(row.delegation_skip_reason),
     assignmentEventId: nullableString(row.assignment_event_id),
     assignment_event_id: nullableString(row.assignment_event_id),
     assignmentSourceEventId: nullableString(row.assignment_source_event_id),
