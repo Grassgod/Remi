@@ -4,7 +4,7 @@
   "database": "throwaway PG database, dropped after the run",
   "serverCode": "real MultiremiStore over PostgresSyncDatabase + real HTTP app",
   "testDoubles": "execution agent and worker only (no provider is run)",
-  "ranAt": "2026-09-27T13:21:51.227Z",
+  "ranAt": "2026-09-27T20:55:14.304Z",
   "steps": [
     {
       "step": "create parent",
@@ -18,9 +18,9 @@
       "step": "create chain C1 <- C2 <- C3",
       "status": "ok",
       "detail": {
-        "c1": "iss_m8cta5v5na1x",
-        "c2": "iss_m8627vziife2",
-        "c3": "iss_v1ozhm1v8p4l"
+        "c1": "iss_kyp5r0q8fvwg",
+        "c2": "iss_kw3k95vbnkyo",
+        "c3": "iss_lbgwknswxosn"
       }
     },
     {
@@ -79,7 +79,7 @@
       "status": "ok",
       "detail": {
         "progress": {
-          "parentIssueId": "iss_u6c44gy172qo",
+          "parentIssueId": "iss_m9ah24kzny72",
           "total": 3,
           "done": 0,
           "cancelled": 0,
@@ -96,22 +96,22 @@
         "waitingOn": {
           "unmet": [
             {
-              "issueId": "iss_v1ozhm1v8p4l",
-              "dependsOnIssueId": "iss_m8627vziife2",
+              "issueId": "iss_lbgwknswxosn",
+              "dependsOnIssueId": "iss_kw3k95vbnkyo",
               "key": "MUL-3",
               "title": "C2",
               "status": "backlog",
-              "dependencyId": "dep_ttbjb2ueyrg7"
+              "dependencyId": "dep_of1hkj8dxxqv"
             }
           ],
           "prerequisites": [
             {
-              "issueId": "iss_v1ozhm1v8p4l",
-              "dependsOnIssueId": "iss_m8627vziife2",
+              "issueId": "iss_lbgwknswxosn",
+              "dependsOnIssueId": "iss_kw3k95vbnkyo",
               "key": "MUL-3",
               "title": "C2",
               "status": "backlog",
-              "dependencyId": "dep_ttbjb2ueyrg7"
+              "dependencyId": "dep_of1hkj8dxxqv"
             }
           ]
         }
@@ -143,7 +143,7 @@
       "step": "C1: round completed",
       "status": "ok",
       "detail": {
-        "taskId": "tsk_tiyezcyd30tm"
+        "taskId": "tsk_k8ojh4rt9aj0"
       }
     },
     {
@@ -176,7 +176,7 @@
       "detail": {
         "events": [
           {
-            "issueId": "iss_m8627vziife2",
+            "issueId": "iss_kw3k95vbnkyo",
             "status": "todo",
             "prevStatus": "backlog"
           }
@@ -209,7 +209,7 @@
       "step": "C2: round completed",
       "status": "ok",
       "detail": {
-        "taskId": "tsk_5vflxnhq38ug"
+        "taskId": "tsk_imtfnufyc6bs"
       }
     },
     {
@@ -242,7 +242,7 @@
       "detail": {
         "events": [
           {
-            "issueId": "iss_v1ozhm1v8p4l",
+            "issueId": "iss_lbgwknswxosn",
             "status": "todo",
             "prevStatus": "backlog"
           }
@@ -264,7 +264,7 @@
       "step": "C3: round completed",
       "status": "ok",
       "detail": {
-        "taskId": "tsk_tg1p4ashjbj8"
+        "taskId": "tsk_5byu3lcloulb"
       }
     },
     {
@@ -301,12 +301,12 @@
           "unmet": [],
           "prerequisites": [
             {
-              "issueId": "iss_v1ozhm1v8p4l",
-              "dependsOnIssueId": "iss_m8627vziife2",
+              "issueId": "iss_lbgwknswxosn",
+              "dependsOnIssueId": "iss_kw3k95vbnkyo",
               "key": "MUL-3",
               "title": "C2",
               "status": "done",
-              "dependencyId": "dep_ttbjb2ueyrg7"
+              "dependencyId": "dep_of1hkj8dxxqv"
             }
           ]
         }
@@ -328,7 +328,7 @@
       "status": "ok",
       "detail": {
         "progress": {
-          "parentIssueId": "iss_u6c44gy172qo",
+          "parentIssueId": "iss_m9ah24kzny72",
           "total": 3,
           "done": 3,
           "cancelled": 0,
@@ -395,8 +395,8 @@
       "step": "the forced round is claimable",
       "status": "ok",
       "detail": {
-        "claimed": "tsk_bdxmpyor1i4x",
-        "expected": "tsk_bdxmpyor1i4x"
+        "claimed": "tsk_ibsvtib2maal",
+        "expected": "tsk_ibsvtib2maal"
       }
     },
     {
@@ -466,7 +466,7 @@
       "status": "ok",
       "detail": {
         "bodies": [
-          "[@E2E executor](mention://agent/agt_e2e) Sub-issue [MUL-10](mention://issue/iss_d9o6gt6dyib5) - \"Sibling prerequisite\" -"
+          "[@E2E executor](mention://agent/agt_e2e) Sub-issue [MUL-10](mention://issue/iss_73zbqih92wh7) - \"Sibling prerequisite\" -"
         ]
       }
     },
