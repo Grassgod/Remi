@@ -277,7 +277,7 @@ Neither stage writes to the database.
 They are read by `docker compose` itself to render `compose.application.yml`, so
 they belong in the Compose env file (the file passed as `--env-file`, next to
 `REMI_API_IMAGE`, or the `.env` in the Compose project directory) or in the
-calling environment — **not** in the API `env_file`:
+calling environment, **not** in the API `env_file`:
 
 - The API `env_file` (for example `/etc/multiremi/api.env`) is passed to the
   container as-is and holds secrets such as `MULTIREMI_TOKEN`. Values set there
@@ -289,7 +289,7 @@ calling environment — **not** in the API `env_file`:
   API `env_file` therefore has no effect at all: the container still receives
   the value Compose interpolated.
 
-Confirm the rendered result before moving on — this prints what the containers
+Confirm the rendered result before moving on. This prints what the containers
 will actually get:
 
 ```bash
@@ -422,12 +422,12 @@ being served by the wrong process.
 
 ### Rollback
 
-Each stage has one order, and the stage boundary is what makes stage A cheap.
+The stage boundary is what makes the first rollback cheap, and the order inside
+stage B is not interchangeable: rolling the routing back before the role would
+leave `api` as `ui`, answering `421` to the daemon traffic Nginx just returned
+to it.
 
-**Stage A rollback** — Nginx only, three commands, no Compose or container
-change. The `api-runtime` container and the updater list stay as they are, which
-is harmless: with daemon traffic back on `api`, the runtime container simply
-keeps its peer channel open and reports no drops.
+**Stage A rollback**: Nginx only, **3 commands, no container recreated.**
 
 ```bash
 cp <compose-dir>/backups/<date>/nginx-remi.conf.orig /etc/nginx/sites-enabled/remi
@@ -435,33 +435,43 @@ nginx -t
 systemctl reload nginx
 ```
 
-**Stage B rollback** — put the role back first, then roll back stage A if
-desired:
+The `api-runtime` container and the updater list stay as they are, which is
+harmless: with daemon traffic back on `api`, the runtime container keeps its peer
+channel open and simply reports no traffic.
+
+Measured in a local sandbox on nginx 1.22.1, with the snippets assembled as step
+5 describes and the route difference verified end to end (daemon paths served by
+`api-runtime` before, by `api` after): the three commands take about 0.02 s and
+the change is visible in about 0.15 s across five runs. The one-minute budget is
+therefore dominated by the operator, not by `nginx -t` or the reload. The full
+host-level rehearsal and the formal timing are MUL-463 stage 2.
+
+**Stage B rollback: 1 edit + 2 commands**, in this order.
 
 ```bash
-# 1. Remove REMI_API_ROLE from the Compose env file (put it back to unset).
-# 2. Recreate `api` so it drops the guard:
+# 1. Remove REMI_API_ROLE from the Compose env file (back to unset).
+# 2. Recreate `api` so it drops the guard (~30 s outage, like a release):
 docker compose -f <compose-dir>/compose.application.yml up -d --no-deps api
-# 3. Then, if you also want to undo the routing, run the stage A rollback above.
+# 3. Health check, then optionally run the stage A rollback above:
+curl -s 127.0.0.1:6120/readyz
 ```
 
-The full return to a single process adds the container and updater-list steps on
-top of the two rollbacks above:
+**Full return to a single process**, on top of the two rollbacks above:
+**3 edits + 3 commands**, plus health checks.
 
 ```bash
+# 1. In the updater env file, remove api-runtime from
+#    MULTIREMI_PLATFORM_CORE_SERVICES, remove
+#    MULTIREMI_PLATFORM_EXTRA_HEALTH_URLS, and remove COMPOSE_PROFILES=split.
 docker compose --profile split stop api-runtime
-# remove api-runtime from MULTIREMI_PLATFORM_CORE_SERVICES and
-# MULTIREMI_PLATFORM_EXTRA_HEALTH_URLS in the updater env, then:
 systemctl --user restart remi-platform-updater
+curl -s 127.0.0.1:6120/readyz && curl -s 127.0.0.1:3000/login
 ```
 
-Order summary: **stage A rollback is Nginx only**; **stage B rollback is role
-first, then (optionally) the stage A rollback**; stopping the runtime container
-and trimming the updater list come last, and by then the platform is already
-single-process again. L4 in the sense of "restore the previous updater binary"
-is only needed if the updater itself misbehaves: restore the file from
-`bin/pre-<tag>.<rand>/` and restart the service. No database change is involved
-at any layer, so no data layer needs rolling back.
+To restore the previous updater binary instead (only if the updater itself
+misbehaves), copy the file back from `bin/pre-<tag>.<rand>/` and restart
+`remi-platform-updater`; that is 2 commands and no edit. No database change is
+involved at any layer, so no data layer needs rolling back.
 
 ## Drain-protected updates (MUL-74)
 
