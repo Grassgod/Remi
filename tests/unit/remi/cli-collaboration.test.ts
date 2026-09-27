@@ -522,6 +522,73 @@ describe("native collaboration CLI contracts", () => {
     expect(viaRegistry).toEqual(direct);
   });
 
+  it("keeps the dependency CLI aligned with the legacy issue handler", async () => {
+    useCliEnv();
+    interface Call { method: string; path: string; query: string; body?: unknown }
+    const calls: Call[] = [];
+    globalThis.fetch = (async (input, init) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      const url = new URL(request.url);
+      if (url.pathname === "/api/cli/capabilities") {
+        return Response.json({ commands: ["issue.list", "issue.create", "issue.dependency.add"].map((id) => ({ id, allowed: true })) });
+      }
+      calls.push({
+        method: request.method,
+        path: url.pathname,
+        query: url.searchParams.toString(),
+        ...(request.body ? { body: await request.json() } : {}),
+      });
+      if (url.pathname === "/api/issues" && request.method === "POST") {
+        return Response.json({ id: "iss_new", key: "MUL-500" }, { status: 201 });
+      }
+      if (url.pathname === "/api/issues" && request.method === "GET") {
+        return Response.json({ issues: [], total: 0 });
+      }
+      if (url.pathname.endsWith("/dependencies") && request.method === "POST") {
+        return Response.json({ dependency: { id: "dep_1", type: "blocked_by" } }, { status: 201 });
+      }
+      throw new Error(`unexpected request ${request.method} ${url.pathname}`);
+    }) as typeof fetch;
+
+    // `issue create --blocked-by` is repeatable and reaches the body under the
+    // server's `blocked_by` key; the Registry adapter and the legacy passthrough
+    // entry must send the same request.
+    const createArgs = ["issue", "create", "--title", "Blocked", "--blocked-by", "MUL-2", "--blocked-by", "iss_3", "--output", "json"];
+    await capture(() => registryFor([specById("issue.create")]).execute(createArgs));
+    await capture(() => runMultiremi(createArgs, { programName: "remi multiremi" }));
+    expect(calls[0]).toEqual(calls[1]);
+    expect(calls[0]).toMatchObject({
+      method: "POST",
+      path: "/api/issues",
+      body: { title: "Blocked", blocked_by: ["MUL-2", "iss_3"] },
+    });
+
+    // `issue list --parent` sends `parent_id` and `--top-level-only` sends
+    // `top_level_only`; both entry points build the same query.
+    const listArgs = ["issue", "list", "--parent", "MUL-9", "--top-level-only", "--output", "json"];
+    await capture(() => registryFor([specById("issue.list")]).execute(listArgs));
+    await capture(() => runMultiremi(listArgs, { programName: "remi multiremi" }));
+    expect(calls[2]).toEqual(calls[3]);
+    expect(calls[2]).toMatchObject({ method: "GET", path: "/api/issues" });
+    expect(new URLSearchParams(calls[2]!.query).get("parent_id")).toBe("MUL-9");
+    expect(new URLSearchParams(calls[2]!.query).get("top_level_only")).toBe("true");
+
+    // `issue dependency add` posts the new request body and defaults the type.
+    const addSpec = specById("issue.dependency.add");
+    await capture(() => registryFor([addSpec]).execute(["issue", "dependency", "add", "MUL-1", "MUL-2", "--output", "json"]));
+    await capture(() => registryFor([addSpec]).execute(["issue", "dependency", "add", "iss_1", "iss_2", "--type", "related", "--output", "json"]));
+    expect(calls[4]).toMatchObject({
+      method: "POST",
+      path: "/api/issues/MUL-1/dependencies",
+      body: { depends_on_issue_id: "MUL-2", type: "blocked_by" },
+    });
+    expect(calls[5]).toMatchObject({
+      method: "POST",
+      path: "/api/issues/iss_1/dependencies",
+      body: { depends_on_issue_id: "iss_2", type: "related" },
+    });
+  });
+
   it("supports table, JSON, and JSONL on a native collaboration read command", async () => {
     useCliEnv();
     const spec = specById("label.list");
