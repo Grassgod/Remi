@@ -1,4 +1,4 @@
-import { forwardRef, useRef, useState, useImperativeHandle } from "react";
+import { forwardRef, useEffect, useRef, useState, useImperativeHandle } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -371,17 +371,30 @@ const virtuosoLatestProps = vi.hoisted(() => ({ current: null as Record<string, 
 
 vi.mock("react-virtuoso", () => ({
   Virtuoso: forwardRef(function MockVirtuoso(
-    props: { data: unknown[]; itemContent: (i: number, item: unknown) => unknown },
+    props: {
+      data: unknown[];
+      itemContent: (i: number, item: unknown) => unknown;
+      totalListHeightChanged?: (height: number) => void;
+      rangeChanged?: (range: { startIndex: number; endIndex: number }) => void;
+    },
     ref: any,
   ) {
-    const { data, itemContent } = props;
+    const { data, itemContent, totalListHeightChanged, rangeChanged } = props;
     virtuosoLatestProps.current = props as Record<string, unknown>;
     useImperativeHandle(ref, () => ({
-      // scrollIntoView is unexercised here — the deep-link cold-path uses
-      // native scrollIntoView on the DOM node instead of the ref.
+      // scrollIntoView is unexercised here — the reveal hook positions the
+      // deep-link target by setting scrollTop on the scroll root.
       scrollIntoView: vi.fn(),
       scrollToIndex: virtuosoScrollToIndexSpy,
     }));
+    // The real component reports its measured height and rendered range once it
+    // has laid out. jsdom gives every element a zero rect, so the real
+    // `Virtuoso` never gets that far and the reveal's layout gate would never
+    // open — this stands in for the measurement the browser actually performs.
+    useEffect(() => {
+      totalListHeightChanged?.(data.length * 40);
+      rangeChanged?.({ startIndex: 0, endIndex: Math.max(0, data.length - 1) });
+    });
     return (
       <div data-testid="virtuoso-mock">
         {data.map((item, i) => (
@@ -570,6 +583,23 @@ function renderIssueDetailWithHighlight(
     </I18nProvider>,
   );
   return { ...result, queryClient };
+}
+
+/**
+ * Waits for the reveal hook to publish a terminal state on the scroll root.
+ *
+ * MUL-390 hides the whole detail document until its gates hold, so anything
+ * queried by role — or asserted to be visible — has to wait for this first.
+ * `visibility: hidden` is exactly what the recorder reads, so the tests reuse
+ * the same signal rather than a timer.
+ */
+async function waitForReveal() {
+  await waitFor(() => {
+    const state = document
+      .querySelector("[data-tab-scroll-root]")
+      ?.getAttribute("data-perf-state");
+    expect(state === "ready" || state === "ready-forced").toBe(true);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1452,9 +1482,13 @@ describe("IssueDetail (shared)", () => {
       expect.objectContaining({ issueSessionId: "@default", limit: 40 }),
     );
     expect(mockApiObj.listTimeline).not.toHaveBeenCalled();
-    expect(
-      screen.getAllByRole("generic").some((el) => el.getAttribute("data-slot") === "skeleton"),
-    ).toBe(true);
+    // Two skeletons are up at once now: the activity section's own placeholder
+    // and the reveal overlay that covers the whole document until the gates
+    // hold. Both carry `data-slot="skeleton"`, which is what the probe counts.
+    expect(document.querySelectorAll('[data-slot="skeleton"]').length).toBeGreaterThan(0);
+    // Nothing is painted yet: the reveal only publishes `pending`/`ready*`.
+    expect(document.querySelector("[data-tab-scroll-root]")?.getAttribute("data-perf-state"))
+      .toBe("pending");
     expect(
       screen.queryByText("Couldn't load this issue's sessions"),
     ).not.toBeInTheDocument();
@@ -1464,6 +1498,7 @@ describe("IssueDetail (shared)", () => {
     mockApiObj.listIssueSessions.mockRejectedValue(new Error("boom"));
     renderIssueDetail();
 
+    await waitForReveal();
     expect(
       await screen.findByText("Couldn't load this issue's sessions"),
     ).toBeInTheDocument();
@@ -1818,6 +1853,9 @@ describe("IssueDetail (shared)", () => {
       renderIssueDetail();
 
       await screen.findByText("Answering the first one");
+      // Role queries honour CSS visibility, and the reveal keeps the whole
+      // document `visibility: hidden` until its gates hold.
+      await waitForReveal();
 
       // One editor for the description, one for the composer — and nothing
       // per message. A per-message input is what made the stream a stack of
@@ -1836,6 +1874,7 @@ describe("IssueDetail (shared)", () => {
       renderIssueDetail();
 
       await screen.findByText("Started working on this");
+      await waitForReveal();
 
       // jsdom can't evaluate :hover, so the class list is the contract: a
       // keyboard user has to be able to reach these controls, which means
@@ -1912,6 +1951,7 @@ describe("IssueDetail (shared)", () => {
       renderIssueDetail();
 
       await screen.findByText("Started working on this");
+      await waitForReveal();
       const editor = await screen.findByPlaceholderText("Comment in Main…");
       // reply-1 already quotes comment-1 in the stream, so the chip has to be
       // read inside the composer to tell the two apart.
@@ -1954,6 +1994,7 @@ describe("IssueDetail (shared)", () => {
       renderIssueDetail();
 
       await screen.findByText("Started working on this");
+      await waitForReveal();
       const editor = await screen.findByPlaceholderText("Comment in Main…");
       const composer = within(editor.parentElement!.parentElement!);
       fireEvent.click(screen.getAllByRole("button", { name: "Reply" })[0]!);
@@ -2211,9 +2252,12 @@ describe("IssueDetail (shared)", () => {
         );
         expect(document.getElementById("comment-historical-comment")).not.toBeNull();
       });
-      expect(scrollIntoViewSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ block: "center" }),
-      );
+      await waitForReveal();
+      // The target is placed by the reveal hook, not by `scrollIntoView`; see
+      // the assertion in the sibling test for the anchor it publishes.
+      expect(
+        document.querySelector('[data-perf-anchor="target-comment"]')?.id,
+      ).toBe("comment-historical-comment");
     });
 
     it("scrolls to the highlighted comment after both issue and timeline finish loading", async () => {
@@ -2229,14 +2273,16 @@ describe("IssueDetail (shared)", () => {
         ).not.toBeNull();
       });
 
-      // The deep-link useLayoutEffect calls native scrollIntoView on the
-      // target node ({block: 'center'}).
-      await waitFor(() => {
-        expect(scrollIntoViewSpy).toHaveBeenCalled();
-      });
-      expect(scrollIntoViewSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ block: "center" }),
-      );
+      // The reveal hook positions the target itself and then publishes
+      // `ready`; there is no second scroll after the content is visible, which
+      // is what the issue forbids. `scrollIntoView` is no longer part of the
+      // deep-link path at all.
+      await waitForReveal();
+      expect(scrollIntoViewSpy).not.toHaveBeenCalled();
+      const target = document.querySelector('[data-perf-anchor="target-comment"]');
+      expect(target?.id).toBe("comment-comment-2");
+      expect(document.querySelector("[data-tab-scroll-root]")?.getAttribute("data-perf-fresh"))
+        .toBeNull();
     });
 
     it("still scrolls when the timeline is ready before the issue (regression for inbox click)", async () => {
@@ -2265,11 +2311,11 @@ describe("IssueDetail (shared)", () => {
           document.getElementById("comment-comment-2"),
         ).not.toBeNull();
       });
-      await waitFor(() => {
-        expect(scrollIntoViewSpy).toHaveBeenCalledWith(
-          expect.objectContaining({ block: "center" }),
-        );
-      });
+      await waitForReveal();
+      expect(scrollIntoViewSpy).not.toHaveBeenCalled();
+      expect(
+        document.querySelector('[data-perf-anchor="target-comment"]')?.id,
+      ).toBe("comment-comment-2");
     });
 
     it("lands directly on a reply whose parent is folded away as resolved", async () => {
@@ -2319,11 +2365,10 @@ describe("IssueDetail (shared)", () => {
           document.getElementById("comment-reply-1"),
         ).not.toBeNull();
       });
-      await waitFor(() => {
-        expect(scrollIntoViewSpy).toHaveBeenCalledWith(
-          expect.objectContaining({ block: "center" }),
-        );
-      });
+      await waitForReveal();
+      expect(
+        document.querySelector('[data-perf-anchor="target-comment"]')?.id,
+      ).toBe("comment-reply-1");
       // The parent stayed folded — the reply is readable without it.
       expect(screen.getByText("Reply inside resolved thread")).toBeInTheDocument();
       expect(screen.queryByText("Resolved root")).not.toBeInTheDocument();

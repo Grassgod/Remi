@@ -681,7 +681,23 @@ export function installJumpRecorder(config: PerfRecorderConfig): void {
       state.frames = [];
       state.shifts = [];
       state.clicks = [];
-      state.stateTransitions = [];
+      // `data-perf-state` is the *app's* signal, and the app can publish it
+      // inside the same task as the click: on a warm deep link the inbox
+      // already points at the issue, so `IssueDetail` mounts, reveals, and
+      // writes `ready` before this reset arrives over CDP. Dropping those
+      // transitions discarded the only evidence that the page had become
+      // ready and reported `appReadyMs: null` for a round that was in fact
+      // clean (MUL-390). A warm round is timed from the click, so the rule is
+      // "keep what happened at or after the start of the measurement": the
+      // ones before it belong to the entry page and are not this round's.
+      //
+      // The filter is inlined rather than calling a helper because Playwright
+      // serialises this function into the page, where no module scope exists;
+      // `tests/unit/scripts/perf-jump-recorder.test.ts` pins both that and the
+      // comparison itself.
+      state.stateTransitions = typeof visibleFrom === "number"
+        ? state.stateTransitions.filter((transition) => transition.t >= visibleFrom)
+        : [];
       state.errors = [];
       state.stopped = false;
       state.startedAt = typeof visibleFrom === "number" ? visibleFrom : performance.now();

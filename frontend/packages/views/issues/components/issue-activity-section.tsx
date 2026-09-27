@@ -4,11 +4,15 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { ArrowDown } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
+import { api } from "@multiremi/core/api";
 import { toast } from "sonner";
 import type { Agent, IssueSession, MemberWithUser } from "@multiremi/core/types";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useActorName } from "@multiremi/core/workspace/hooks";
-import { issueSessionResultsOptions } from "@multiremi/core/issues/queries";
+import {
+  issueKeys,
+  issueSessionResultsOptions,
+} from "@multiremi/core/issues/queries";
 import { LocalDirectoryHint } from "../../projects/components/local-directory-hint";
 import { useT, useTimeAgo } from "../../i18n";
 import { useIssueTimeline } from "../hooks/use-issue-timeline";
@@ -49,9 +53,16 @@ interface IssueActivitySectionProps {
   onRetrySessions: () => void;
   /** Scroll parent handed to Virtuoso; null until the callback ref populates. */
   scrollContainerEl: HTMLDivElement | null;
-  /** When set, the timeline renders flat and scrolls to this comment. */
+  /** When set, the timeline renders flat and the reveal hook lands on this comment. */
   highlightCommentId?: string;
   onShowKeyResults: () => void;
+  /**
+   * Gate (i) and gate (ii) for `useAnchoredReveal`, reported upward because the
+   * scroll root and the content wrapper live in `IssueDetailMain`.
+   */
+  onRevealGatesChange: (gates: { dataReady: boolean; layoutSettled: boolean }) => void;
+  /** Virtuoso's own "we are at the end" signal, forwarded to the stick hook. */
+  onPinToBottom: () => void;
 }
 
 const ISSUE_TIMELINE_INITIAL_FIRST_ITEM_INDEX = 1_000_000;
@@ -75,6 +86,8 @@ export function IssueActivitySection({
   scrollContainerEl,
   highlightCommentId,
   onShowKeyResults,
+  onRevealGatesChange,
+  onPinToBottom,
 }: IssueActivitySectionProps) {
   const { t } = useT("issues");
   const timeAgo = useTimeAgo();
@@ -188,6 +201,16 @@ export function IssueActivitySection({
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const [atBottom, setAtBottom] = useState(true);
 
+  // Gate (ii): Virtuoso measures row heights asynchronously, so the container's
+  // height is still converging after the data arrives. The reveal hook must not
+  // position against a height that is about to change. Both callbacks firing
+  // once is the cheapest honest signal that the measurement has settled; the
+  // flat deep-link path mounts every row synchronously and is settled by
+  // construction, which `highlightCommentId` expresses below.
+  const [measuredTotalHeight, setMeasuredTotalHeight] = useState(false);
+  const [measuredRange, setMeasuredRange] = useState(false);
+  const virtuosoLayoutSettled = measuredTotalHeight && measuredRange;
+
   const jumpToLatest = useCallback(() => {
     virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end", behavior: "smooth" });
   }, []);
@@ -197,31 +220,70 @@ export function IssueActivitySection({
     [timelineView.groups],
   );
 
-  // Deep-link landing. Semantically equivalent to navigating to
-  // `#comment-${id}`: find the element with that id, scrollIntoView it.
-  // When `highlightCommentId` is set the timeline below renders flat (no
-  // virtualization), so every comment id is in the DOM by the time this
-  // effect runs after commit. Every comment — reply included — is its own
-  // timeline item now, so there is no enclosing thread to unfold first.
+  // Gate (i): everything above the timeline that can push it down has to have
+  // settled before the reveal positions the page.
   //
-  // `scrollContainerEl` is in deps because the surrounding panel renders a
-  // loading skeleton while the issue query is pending. The scroll-container
-  // ref populates only on the post-loading render, so it's the signal that
-  // the timeline (and the deep-link target id) has actually rendered.
+  //   - the owning session resolved, or the session list came back empty and
+  //     `TimelineUnavailable` is the terminal state;
+  //   - the timeline itself finished its first load;
+  //   - `issueKeys.tasks(issueId)` settled, because `SessionAgentStreamRow`
+  //     sits at the foot of the list and pops in once it resolves;
+  //   - on a deep link, the target comment is part of the loaded window.
+  //
+  // The description, sub-issues, published results and the live agent card are
+  // deliberately *not* gated: all four sit above the timeline, and the stick
+  // hook compensates for them arriving late without moving the viewport. Gate
+  // on them too and a slow sub-issue query would hold the whole page behind the
+  // skeleton instead.
+  const sessionResolved = Boolean(activeIssueSessionId) || !sessionsPending;
+  // Same cache entry as `SessionAgentStreamRow` below — this observer exists so
+  // the gate can wait for it on screens where the row itself never mounts.
+  const { isPending: tasksPending } = useQuery({
+    queryKey: issueKeys.tasks(issueId),
+    queryFn: () => api.listTasksByIssue(issueId),
+    staleTime: 30_000,
+    enabled: sessionResolved,
+  });
+  const dataReady = sessionResolved
+    && !timelineLoading
+    && !tasksPending
+    && (!highlightCommentId || highlightLoaded);
+
+  // The gate only applies where something is going to be measured. Virtuoso is
+  // not mounted in three cases — the deep link renders flat, the session list
+  // came back empty (so `TimelineUnavailable` is the terminal state), or every
+  // loaded session is still empty — and in all three the document is settled by
+  // construction. Leaving the gate false there would hold the page behind the
+  // skeleton until the reveal budget expired.
+  const virtuosoMounted = !highlightCommentId
+    && Boolean(activeIssueSessionId)
+    && scrollContainerEl !== null
+    && items.length > 0;
+  const layoutSettled = virtuosoMounted ? virtuosoLayoutSettled : true;
+
+  useEffect(() => {
+    onRevealGatesChange({ dataReady, layoutSettled });
+  }, [dataReady, layoutSettled, onRevealGatesChange]);
+
+  // Deep-link landing: the scroll position itself is owned by
+  // `useAnchoredReveal` in `IssueDetailMain`, which places the target before
+  // anything is visible. Doing it here as well would move the viewport a second
+  // time, after the reveal, which is exactly the jump this issue removes — the
+  // effect that used to call `scrollIntoView` is gone on purpose.
+  //
+  // What remains is the 2.5 s highlight. It has to start once the timeline has
+  // actually rendered the target, so it keys off the flat path's item list
+  // rather than off the position.
   useEffect(() => {
     if (!highlightCommentId || items.length === 0) return;
     if (didHighlightRef.current === highlightCommentId) return;
-
-    const el = document.getElementById(`comment-${highlightCommentId}`);
-    if (!el) return;
+    if (!document.getElementById(`comment-${highlightCommentId}`)) return;
 
     didHighlightRef.current = highlightCommentId;
-    el.scrollIntoView({ block: "center" });
-
     setHighlightedId(highlightCommentId);
     const fade = window.setTimeout(() => setHighlightedId(null), 2500);
     return () => clearTimeout(fade);
-  }, [highlightCommentId, items, scrollContainerEl]);
+  }, [highlightCommentId, items]);
 
   // Reference-chip navigation: jump to the comment a reply answers and flash
   // it. Same contract as the deep-link above, minus the one-shot guard — the
@@ -442,7 +504,15 @@ export function IssueActivitySection({
                 computeItemKey={(_i, item) => `${item.kind}:${item.id}`}
                 skipAnimationFrameInResizeObserver
                 atBottomThreshold={120}
-                atBottomStateChange={setAtBottom}
+                atBottomStateChange={(bottom) => {
+                  setAtBottom(bottom);
+                  // Gate (ii) source of truth for the reveal, and the stick
+                  // hook's own "back at the end" signal: Virtuoso knows
+                  // whether the last row is on screen, the hook cannot.
+                  if (bottom) onPinToBottom();
+                }}
+                totalListHeightChanged={() => setMeasuredTotalHeight(true)}
+                rangeChanged={() => setMeasuredRange(true)}
                 followOutput={() => (
                   !isFetchingOlderTimeline && atBottom ? "smooth" : false
                 )}

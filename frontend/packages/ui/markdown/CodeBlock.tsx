@@ -153,8 +153,11 @@ export function CodeBlock({
   // Minimal mode: just syntax highlighting, no chrome
   if (mode === 'minimal') {
     if (isLoading || !highlighted) {
+      // The highlighted branch below forces `break-all` onto the rendered
+      // `<pre>`; the placeholder has to wrap identically or a long line
+      // re-flows the whole block the moment Shiki resolves, which is a jump.
       return (
-        <pre className={cn('font-mono text-sm whitespace-pre-wrap', CODE_LIGATURE_CLASS, className)}>
+        <pre className={cn('font-mono text-sm whitespace-pre-wrap break-all', CODE_LIGATURE_CLASS, className)}>
           <code className={cn('font-mono', CODE_LIGATURE_CLASS)}>{code}</code>
         </pre>
       )

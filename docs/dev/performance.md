@@ -160,7 +160,7 @@ MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内
 
 ### DOM 契约：五个属性
 
-应用侧只加属性、不改行为。前四个由本单打标，第五个由 S2 的 `useAnchoredReveal` 写入：
+应用侧只加属性、不改行为。前四个由 S1 打标，后两个由共享 hook `useAnchoredReveal` 写入：
 
 | 属性 | 宿主 | 取值 | 写入方 |
 | --- | --- | --- | --- |
@@ -168,12 +168,12 @@ MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内
 | `data-perf-item` | 真实数据行（timeline 行、chat 消息、issue 行、board card、inbox 行、子单行） | `comment` \| `activity` \| `resolved-bar` \| `message` \| `issue` \| `inbox` \| `sub-issue` | S1 打标 |
 | `data-perf-key` | 同一行 | 行自身的稳定 id | S1 打标 |
 | `data-perf-anchor` | 该页面口径的终点元素 | `latest-comment` \| `agent-stream` \| `target-comment` \| `latest-message` | S1 打标 |
-| `data-perf-state` | `data-tab-scroll-root` | `pending` \| `ready` \| `ready-forced` | **S2 的 `useAnchoredReveal`**，S1 不写 |
-| `data-perf-fresh` | 同上 | `0` \| `1` | **MUL-443（MUL-403 C8）**，尚未上线 |
+| `data-perf-state` | `data-tab-scroll-root` | `pending` \| `ready` \| `ready-forced` | `useAnchoredReveal`（[frontend/packages/views/common/use-anchored-reveal.ts](../../frontend/packages/views/common/use-anchored-reveal.ts)），S1 与 `useStickToBottom` 不写 |
+| `data-perf-fresh` | 同上 | `0` \| `1` | 同上；消费方传 `fresh`（`undefined` 时不写并移除该属性） |
 
-`data-perf-state` 是**只读**契约：S1 应用侧不写它（没有 hook 就写死 `ready` 是假数据，会让 S7 的断言空过）。记录器在浏览器内用 `MutationObserver` 抓它的变化时间戳，不从 Node 侧轮询；属性不存在时 `appReadyMs` 为 `null`，且**永远不作为终点**。S2 无权改名、改宿主或改取值。
+`data-perf-state` 是**只读**契约：S1 应用侧不写它（没有 hook 就写死 `ready` 是假数据，会让 S7 的断言空过）。记录器在浏览器内用 `MutationObserver` 抓它的变化时间戳，不从 Node 侧轮询；属性不存在时 `appReadyMs` 为 `null`，且**永远不作为终点**。写入方无权改名、改宿主或改取值。
 
-`data-perf-fresh` 是 MUL-443 新增的**新鲜度**位，本仓库今天还没有任何代码写它。记录器按「属性在不在」分两套口径：
+`data-perf-fresh` 是**新鲜度**位，只有 `useAnchoredReveal` 写它，消费方传 `fresh`；`undefined` 时不写并移除该属性（今天 main 上还没有任何消费方传它）。记录器按「属性在不在」分两套口径：
 
 - **属性存在**时，只有 `data-perf-state = ready` **且** `data-perf-fresh = 1` 的帧才算加载完成；`ready` 但 `fresh = 0` 不算，`ready-forced` 也不算通过，但会在报告里**单独列出**（`appReadyForced`）。
 - **属性不存在**时，维持原逻辑（只看 `data-perf-state`），所以 MUL-443 上线前后同一份清单都可用。
@@ -271,7 +271,7 @@ JSON 用 `schema: 2`，同时输出同名 `.md`（表格）与 `.html`（**自�
 
 ### 已知失败清单与判定规则
 
-main 上现在必然失败的行写在 [tests/integration/zero-jump-known-failures.json](../../tests/integration/zero-jump-known-failures.json)：**行 = `<场景 key>::<cold|warm>`**（沿用 `report.ts` 里 `--compare` 的配对键），每行显式列出它还被允许出现的违例类型（`jumps` / `anchor` / `skeleton` / `perf-state`）。判定是纯函数（[lib/zero-jump-verdict.ts](../../frontend/scripts/perf/lib/zero-jump-verdict.ts)），四条规则：
+曾经必然失败的行写在 [tests/integration/zero-jump-known-failures.json](../../tests/integration/zero-jump-known-failures.json)：**行 = `<场景 key>::<cold|warm>`**（沿用 `report.ts` 里 `--compare` 的配对键），每行显式列出它还被允许出现的违例类型（`jumps` / `anchor` / `skeleton` / `perf-state`）。判定是纯函数（[lib/zero-jump-verdict.ts](../../frontend/scripts/perf/lib/zero-jump-verdict.ts)），四条规则：
 
 1. 行不在清单，出现任何违例 → 失败。
 2. 行在清单，出现该行没列出的类型 → 失败（「已经过的部分」由此立刻受保护）。
@@ -284,6 +284,8 @@ main 上现在必然失败的行写在 [tests/integration/zero-jump-known-failur
 - 要**新增**行或类型，必须在同批提交里附上新的 strict 报告（`reports/performance/MUL-394-zero-jump-strict-main-<日期>.json`），并更新 `tests/unit/scripts/zero-jump-verdict.test.ts` 里引用的基线路径。否则棘轮会拦住它。
 
 「与当轮运行是否一致」由检查本体在每次 CI 运行时判定（规则 a–c，`judgeZeroJumpRun`）；单测只防清单超出基线，不重复前者。规则 3 只在默认模式生效——它就是「MUL-443 / MUL-393 修好之后顺手清掉自己那几行」的机制。
+
+**清单现在是空的**（MUL-390，2026-09-27）。`useAnchoredReveal` 接入详情页后，9 行在 strict 下全部 0 违例，于是按规则 3 删掉整份清单，删空的记录留在 `tests/integration/zero-jump-known-failures.json` 的 `empty` 字段里。此后任何一行出现任何违例都会按规则 1 直接让 job 变红；新增行必须同批附新的 strict 基线报告。`rows` 为空是清单的终态，`tests/unit/scripts/zero-jump-verdict.test.ts` 里对应两处「行数必须为正」的断言因此删除（MUL-390 执行方案 2/3 的 R1）。
 
 「localStorage 里有非默认侧栏布局」那一轮刻意用**独立的 `detail-long-sidebar::cold`**，不与 `detail-long` 共键：它触发的是另一条机制（[sidebar.tsx](../../frontend/packages/ui/components/ui/sidebar.tsx) 在 `useEffect` 里恢复宽度，首帧之后才改正文宽度），共键会让清单表达不了「长 issue 已修、侧栏轮还没修」。
 
@@ -299,7 +301,9 @@ bun run tests/integration/zero-jump-check.ts --only detail-long --rounds 1   # �
 
 `--skip-build` 复用已有 `.next`；`--api-port` / `--web-port` 固定端口（注意上面的构建期烘焙）；`--out` 指定报告路径。报告是记录器 JSON，含每轮 `jumps` / `anchorRectAtReady` / `skeleton` 数与清单判定结论。
 
-**当前 main 的 strict 实测**（`4248ef07`，3 次/行）存于 [reports/performance/MUL-394-zero-jump-strict-main-2026-09-26.json](../../reports/performance/MUL-394-zero-jump-strict-main-2026-09-26.json)：9 个 `key::mode` 行全部失败，其中 8 行只有 `perf-state`，`detail-deeplink::cold` 另有 `jumps`（每次 1 跳、内容位移 8359.8 px、滚动 2450 px）。该 JSON 同时是 MUL-443 / MUL-444 / MUL-393 前后对比的「前」基线。
+**当前 strict 实测**（MUL-390 分支，基线 `43d75571` 加本单改动，3 次/行）存于 [reports/performance/MUL-390-zero-jump-strict-2026-09-27.json](../../reports/performance/MUL-390-zero-jump-strict-2026-09-27.json)：9 个 `key::mode` 行、27 轮全部 `jumps=0`、anchor 完整可见、骨架 0、`data-perf-state=ready`，没有任何 `ready-forced`。该 JSON 同时是 MUL-443 / MUL-444 / MUL-393 前后对比的「后」基线；本单合入 main 后它即 main 的 strict 基线。（报告里的 `commit` 记的是分支基线，改动随 MUL-390 一起入库。）
+
+**前基线**（`4248ef07`）仍存于 [reports/performance/MUL-394-zero-jump-strict-main-2026-09-26.json](../../reports/performance/MUL-394-zero-jump-strict-main-2026-09-26.json)：9 行全部失败，其中 8 行只有 `perf-state`，`detail-deeplink::cold` 另有 `jumps`（每次 1 跳、内容位移 8359.8 px、滚动 2450 px）。
 
 ## 优化不能破坏的约束
 
