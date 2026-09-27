@@ -177,6 +177,13 @@ export class IssuesRepo {
     const parentIssueId = input.parentIssueId ?? input.parent_issue_id ?? null;
     const explicitWorkspaceId = input.workspaceId ?? input.workspace_id ?? null;
     const workspaceId = explicitWorkspaceId ?? "local";
+    // Global lock order (MUL-405, see store/advisory-locks.ts): the workspace
+    // lifecycle row lock always precedes a number-allocation lock. Callers that
+    // already hold it (Feishu ingest, messaging outcomes, Autopilot create_issue)
+    // re-lock the same row in the same transaction, which is free; callers that
+    // do not (the plain API path) get the lock here instead of leaving the
+    // number lock first in the chain.
+    this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
     // Taken before any read this method depends on, so the maximum the INSERT
     // uses cannot have been read by a peer that then inserts over it.
     advisoryXactLock(this.ctx.db, numberAllocationLockKey(`issue:${workspaceId}`));

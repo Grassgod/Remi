@@ -2065,6 +2065,10 @@ export class FeishuBotRepo {
     action: FeishuBotAuditAction,
     input: { actorType?: string; actorId?: string | null; details?: Record<string, unknown> },
   ): MultiremiFeishuBotAuditEntry {
+    // Global lock order (MUL-405, see store/advisory-locks.ts): the workspace
+    // lifecycle row lock precedes the number lock. Callers that already hold it
+    // (sender allow/revoke, the disable paths) re-lock the same row for free.
+    this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
     advisoryXactLock(this.ctx.db, numberAllocationLockKey(`feishu-bot-audit:${workspaceId}`));
     const id = createId("fba");
     const createdAt = nowIso();

@@ -347,6 +347,10 @@ export class ProjectsRepo {
     const workspaceId = input.workspaceId ?? input.workspace_id ?? "local";
     const userId = input.userId ?? input.user_id ?? "local";
     return this.ctx.db.transaction(() => {
+      // Global lock order (MUL-405, see store/advisory-locks.ts): the workspace
+      // lifecycle row lock precedes the number lock on every path that needs
+      // both, so no transaction can take them in opposite orders.
+      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
       advisoryXactLock(this.ctx.db, numberAllocationLockKey(`pinned-item:${workspaceId}:${userId}`));
       this.validatePinnedItemTarget(workspaceId, itemType, itemId);
       const existing = this.ctx.db.query(
