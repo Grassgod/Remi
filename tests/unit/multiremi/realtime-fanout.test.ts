@@ -8,7 +8,7 @@
  * second OS process would add variance without changing what can break here.
  * PR-C (MUL-464) scales the same topology out to real child processes.
  */
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -31,7 +31,7 @@ import {
 } from "../../../packages/server/src/api/realtime-fanout.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { DaemonWebSocketRegistry } from "../../../packages/server/src/api/helpers/realtime-types.js";
-import { authenticateBrowserWebSocket, createStore, nextWebSocketMessage, resetMultiremiTestEnv, waitWebSocketOpen } from "./helpers.js";
+import { createStore, nextWebSocketMessage, resetMultiremiTestEnv, waitWebSocketOpen } from "./helpers.js";
 
 afterEach(() => {
   resetMultiremiTestEnv();
@@ -342,16 +342,53 @@ describe("realtime fanout — two servers over one database", () => {
     };
   }
 
+  /**
+   * One server pair for the whole block.
+   *
+   * Each pair is two full `startMultiremiServer` instances with their own SQLite
+   * handle and migration run, and CI's runner is loaded enough that starting a
+   * dozen of them pushed individual cases past their own timeouts. Cases that
+   * need different limits (queue caps, an unconfigured process) still start their
+   * own; everything else shares this one. Each case uses fresh agents, issues and
+   * tasks, so nothing leaks between cases.
+   */
+  let shared: TwoServers | null = null;
+  beforeAll(async () => {
+    shared = await startTwoServers();
+  }, 120_000);
+  afterAll(() => {
+    shared?.cleanup();
+    shared = null;
+  });
+
+  /**
+   * CI's runner is loaded enough that the WebSocket helpers' 2s default (shared
+   * with the rest of the suite) is not always enough for a fresh pair to answer
+   * an upgrade. Raising it here keeps the assertion about the fanout, not about
+   * how busy the runner was.
+   */
+  const WS_TIMEOUT_MS = 15_000;
+  function openBrowserSocket(port: number | undefined, token: string): WebSocket {
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/ws?workspace_slug=local`);
+    socket.addEventListener("error", () => {});
+    return socket;
+  }
+  async function authenticateBrowserSocket(socket: WebSocket, token: string): Promise<void> {
+    await waitWebSocketOpen(socket, WS_TIMEOUT_MS);
+    socket.send(JSON.stringify({ type: "auth", payload: { token } }));
+    expect(await nextWebSocketMessage(socket, WS_TIMEOUT_MS)).toMatchObject({ type: "auth_ack" });
+  }
+
   it("delivers a comment created on B to a browser socket on A, 20/20", async () => {
-    const two = await startTwoServers();
-    try {
+    const two = shared!;
+    {
       const { storeA, storeB, serverA, serverB } = two;
       const agent = storeA.createAgent({ name: "Peer comment agent", provider: "codex" });
       const issue = storeA.createIssue({ title: "Peer comment issue", createdBy: "local" });
       const token = await storeA.createAccessToken({ name: "Peer browser", type: "pat", workspaceId: "local" });
 
-      const socket = new WebSocket(`ws://127.0.0.1:${serverA.port}/ws?workspace_slug=local`);
-      await authenticateBrowserWebSocket(socket, token.token);
+      const socket = openBrowserSocket(serverA.port, token.token);
+      await authenticateBrowserSocket(socket, token.token);
 
       try {
         const received = new Set<string>();
@@ -391,14 +428,12 @@ describe("realtime fanout — two servers over one database", () => {
         socket.close();
       }
 
-    } finally {
-      two.cleanup();
     }
   });
 
   it("wakes a daemon socket on B for a task created on A", async () => {
-    const two = await startTwoServers();
-    try {
+    const two = shared!;
+    {
       const { storeA, storeB, serverA, serverB } = two;
       const runtime = storeA.registerRuntime({ id: "rt_peer_wakeup", name: "Peer runtime", provider: "codex" });
       const agent = storeA.createAgent({ name: "Peer wakeup agent", provider: "codex", runtimeId: runtime.id });
@@ -418,21 +453,19 @@ describe("realtime fanout — two servers over one database", () => {
       } finally {
         daemonSocket.close();
       }
-    } finally {
-      two.cleanup();
     }
   });
 
   it("delivers task messages appended on B to A's task-scope subscription", async () => {
-    const two = await startTwoServers();
-    try {
+    const two = shared!;
+    {
       const { storeA, storeB, serverA } = two;
       const agent = storeA.createAgent({ name: "Peer messages agent", provider: "codex" });
       const task = storeA.createTask({ agentId: agent.id, prompt: "peer messages" });
       const token = await storeA.createAccessToken({ name: "Peer scope", type: "pat", workspaceId: "local" });
 
-      const socket = new WebSocket(`ws://127.0.0.1:${serverA.port}/ws?workspace_slug=local`);
-      await authenticateBrowserWebSocket(socket, token.token);
+      const socket = openBrowserSocket(serverA.port, token.token);
+      await authenticateBrowserSocket(socket, token.token);
       try {
         socket.send(JSON.stringify({ type: "subscribe", payload: { scope: "task", id: task.id } }));
         expect(await nextWebSocketMessage(socket)).toEqual({
@@ -449,14 +482,12 @@ describe("realtime fanout — two servers over one database", () => {
       } finally {
         socket.close();
       }
-    } finally {
-      two.cleanup();
     }
   });
 
   it("answers /internal/peer/health on both sides and 401s a bad secret", async () => {
-    const two = await startTwoServers();
-    try {
+    const two = shared!;
+    {
       const { serverA, serverB } = two;
       const healthA = await fetch(`http://127.0.0.1:${serverA.port}/internal/peer/health`);
       const bodyA = (await healthA.json()) as any;
@@ -479,33 +510,34 @@ describe("realtime fanout — two servers over one database", () => {
       });
       expect(wrongSecret.status).toBe(401);
 
+      // A fresh epoch, because this block shares one server pair: reusing an
+      // epoch/batch number an earlier case already delivered is answered
+      // `duplicate` by design, which is not what this case is testing.
       const rightSecret = await fetch(`http://127.0.0.1:${serverA.port}/internal/peer/events`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: "Bearer peer-secret-under-test" },
         body: JSON.stringify({
           topic: "realtime",
-          epoch: "process-b",
+          epoch: "health-check-probe",
           batch_seq: 1,
-          events: [{ v: 1, origin: "process-b", kind: "workspace_event", payload: { event: { type: "x", workspaceId: "local", payload: {} } } }],
+          events: [{ v: 1, origin: "health-check-probe", kind: "workspace_event", payload: { event: { type: "x", workspaceId: "local", payload: {} } } }],
         }),
       });
       expect(rightSecret.status).toBe(200);
       expect(await rightSecret.json()).toMatchObject({ ok: true, accepted: 1, rejected: 0 });
-    } finally {
-      two.cleanup();
     }
   });
 
   it("delivers one task's 100 messages in seq order across the channel", async () => {
-    const two = await startTwoServers();
-    try {
+    const two = shared!;
+    {
       const { storeA, storeB, serverA } = two;
       const agent = storeA.createAgent({ name: "Peer order agent", provider: "codex" });
       const task = storeA.createTask({ agentId: agent.id, prompt: "peer order" });
       const token = await storeA.createAccessToken({ name: "Peer order scope", type: "pat", workspaceId: "local" });
 
-      const socket = new WebSocket(`ws://127.0.0.1:${serverA.port}/ws?workspace_slug=local`);
-      await authenticateBrowserWebSocket(socket, token.token);
+      const socket = openBrowserSocket(serverA.port, token.token);
+      await authenticateBrowserSocket(socket, token.token);
       try {
         const seqs: number[] = [];
         socket.addEventListener("message", (event) => {
@@ -525,8 +557,6 @@ describe("realtime fanout — two servers over one database", () => {
       } finally {
         socket.close();
       }
-    } finally {
-      two.cleanup();
     }
   });
 
@@ -569,10 +599,10 @@ describe("realtime fanout — two servers over one database", () => {
       const agent = store.createAgent({ name: "Peer off agent", provider: "codex" });
       const runtime = store.registerRuntime({ id: "rt_peer_off", name: "Peer off runtime", provider: "codex" });
       const token = await store.createAccessToken({ name: "Peer off browser", type: "pat", workspaceId: "local" });
-      const socket = new WebSocket(`ws://127.0.0.1:${server.port}/ws?workspace_slug=local`);
-      await authenticateBrowserWebSocket(socket, token.token);
+      const socket = openBrowserSocket(server.port, token.token);
+      await authenticateBrowserSocket(socket, token.token);
       try {
-        const frame = nextWebSocketMessage(socket);
+        const frame = nextWebSocketMessage(socket, WS_TIMEOUT_MS);
         const task = store.createTask({ agentId: agent.id, prompt: "still local", runtimeId: runtime.id });
         expect(await frame).toMatchObject({ type: "task:queued", payload: { task_id: task.id } });
       } finally {
@@ -595,8 +625,8 @@ describe("realtime fanout — two servers over one database", () => {
       const task = storeA.createTask({ agentId: agent.id, prompt: "peer down" });
       const token = await storeA.createAccessToken({ name: "Peer down scope", type: "pat", workspaceId: "local" });
 
-      const socket = new WebSocket(`ws://127.0.0.1:${serverA.port}/ws?workspace_slug=local`);
-      await authenticateBrowserWebSocket(socket, token.token);
+      const socket = openBrowserSocket(serverA.port, token.token);
+      await authenticateBrowserSocket(socket, token.token);
       try {
         const received: number[] = [];
         socket.addEventListener("message", (event) => {
