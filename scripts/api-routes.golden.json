@@ -1,11 +1,11 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 761,
+    "routeCount": 760,
     "routeCountByPrefix": {
       "native": 210,
-      "compat": 535,
-      "root": 16
+      "compat": 536,
+      "root": 14
     },
     "getRoutes": 325,
     "getRoutesWithBody": 322,
@@ -14,7 +14,7 @@
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 436,
+    "mutationRoutes": 435,
     "mutationRoutesCovered": 282,
     "flows": [
       "agents-compat",
@@ -183,6 +183,7 @@
     "GET /api/daemon/runtimes/:id/codex-profile-key",
     "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired",
     "GET /api/daemon/runtimes/:runtimeId/feishu-bot",
+    "GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards",
     "GET /api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/attachments/:attachmentId",
     "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
     "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status",
@@ -456,7 +457,6 @@
     "GET /health",
     "GET /health/realtime",
     "GET /healthz",
-    "GET /internal/peer/health",
     "GET /readyz",
     "GET /ws",
     "PATCH /api/autopilots/:id",
@@ -774,7 +774,6 @@
     "POST /auth/password",
     "POST /auth/send-code",
     "POST /auth/verify-code",
-    "POST /internal/peer/events",
     "PUT /api/agents/:id",
     "PUT /api/agents/:id/env",
     "PUT /api/agents/:id/role",
@@ -929,6 +928,7 @@
     "GET /api/daemon/runtimes/:id/codex-profile-key",
     "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired",
     "GET /api/daemon/runtimes/:runtimeId/feishu-bot",
+    "GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards",
     "GET /api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/attachments/:attachmentId",
     "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
     "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status",
@@ -1202,7 +1202,6 @@
     "GET /health",
     "GET /health/realtime",
     "GET /healthz",
-    "GET /internal/peer/health",
     "GET /readyz",
     "GET /ws",
     "PATCH /api/autopilots/:id",
@@ -4967,7 +4966,8 @@
           "response": null,
           "respondedBy": null,
           "createdAt": "<timestamp>",
-          "respondedAt": null
+          "respondedAt": null,
+          "expiresAt": "<timestamp>"
         }
       }
     },
@@ -4988,7 +4988,8 @@
           "response": {},
           "respondedBy": "local",
           "createdAt": "<timestamp>",
-          "respondedAt": "<timestamp>"
+          "respondedAt": "<timestamp>",
+          "expiresAt": "<timestamp>"
         }
       }
     },
@@ -5009,7 +5010,8 @@
           "response": null,
           "respondedBy": null,
           "createdAt": "<timestamp>",
-          "respondedAt": null
+          "respondedAt": null,
+          "expiresAt": "<timestamp>"
         }
       }
     },
@@ -5030,7 +5032,8 @@
           "response": {},
           "respondedBy": "local",
           "createdAt": "<timestamp>",
-          "respondedAt": "<timestamp>"
+          "respondedAt": "<timestamp>",
+          "expiresAt": "<timestamp>"
         }
       }
     },
@@ -5051,7 +5054,8 @@
           "response": null,
           "respondedBy": null,
           "createdAt": "<timestamp>",
-          "respondedAt": null
+          "respondedAt": null,
+          "expiresAt": "<timestamp>"
         }
       }
     },
@@ -5072,7 +5076,8 @@
           "response": null,
           "respondedBy": null,
           "createdAt": "<timestamp>",
-          "respondedAt": "<timestamp>"
+          "respondedAt": "<timestamp>",
+          "expiresAt": "<timestamp>"
         }
       }
     },
@@ -13911,6 +13916,16 @@
       }
     },
     {
+      "key": "get-sweep GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards",
+      "route": "GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards",
+      "path": "/api/daemon/runtimes/rt_snapshot/feishu-bot/decision-cards",
+      "status": 403,
+      "body": {
+        "error": "daemon token required",
+        "code": "daemon_token_required"
+      }
+    },
+    {
       "key": "get-sweep GET /api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/attachments/:attachmentId",
       "route": "GET /api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/attachments/:attachmentId",
       "path": "/api/daemon/runtimes/rt_snapshot/feishu-bot/outbound/whd_8rcx9z88woyu/attachments/att_snapshot",
@@ -14082,7 +14097,8 @@
           "response": null,
           "respondedBy": null,
           "createdAt": "<timestamp>",
-          "respondedAt": null
+          "respondedAt": null,
+          "expiresAt": "<timestamp>"
         }
       }
     },
@@ -22209,7 +22225,8 @@
             "response": null,
             "respondedBy": null,
             "createdAt": "<timestamp>",
-            "respondedAt": null
+            "respondedAt": null,
+            "expiresAt": "<timestamp>"
           }
         ]
       }
@@ -23469,7 +23486,8 @@
             "response": null,
             "respondedBy": null,
             "createdAt": "<timestamp>",
-            "respondedAt": null
+            "respondedAt": null,
+            "expiresAt": "<timestamp>"
           }
         ]
       }
@@ -24697,17 +24715,6 @@
       "status": 200,
       "body": {
         "ok": true
-      }
-    },
-    {
-      "key": "get-sweep GET /internal/peer/health",
-      "route": "GET /internal/peer/health",
-      "path": "/internal/peer/health",
-      "status": 200,
-      "body": {
-        "ok": true,
-        "enabled": false,
-        "peer_healthy": false
       }
     },
     {

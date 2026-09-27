@@ -1,4 +1,8 @@
-import type { MultiremiFeishuBotOutboundDelivery, FeishuPresentationCheckpoint } from "@multiremi/contracts/types.js";
+import type {
+  FeishuDecisionDegradeReason,
+  FeishuPresentationCheckpoint,
+  MultiremiFeishuBotOutboundDelivery,
+} from "@multiremi/contracts/types.js";
 import type { FeishuOutboundOptions } from "./feishu-concierge.js";
 
 /** The lease timer is independent of Task consumption (including human waits). */
@@ -9,7 +13,9 @@ export async function deliverFeishuOutbound(
     prepareMention?: (openId: string | null) => Promise<string | null>;
     send: (options: FeishuOutboundOptions) => Promise<{ messageId: string }>;
     report: (input: { claimToken: string; status: "streaming" | "sent" | "failed";
-      externalMessageId?: string; error?: string; presentation?: FeishuPresentationCheckpoint }) => Promise<void>;
+      externalMessageId?: string; error?: string; presentation?: FeishuPresentationCheckpoint;
+      interactionOpenId?: string | null; degraded?: FeishuDecisionDegradeReason | null;
+    }) => Promise<void>;
     renewMs?: number;
   },
 ): Promise<void> {
@@ -17,6 +23,9 @@ export async function deliverFeishuOutbound(
   const signal = AbortSignal.any([options.signal, abort.signal]);
   let timer: ReturnType<typeof setTimeout> | undefined;
   let renewal: Promise<void> = Promise.resolve();
+  // A decision lane reports its own terminal state (it knows the recipient and
+  // any degradation); the loop's generic acknowledgement must not overwrite it.
+  let acknowledged = false;
   const scheduleRenewal = () => {
     if (signal.aborted) return;
     timer = setTimeout(() => {
@@ -38,12 +47,24 @@ export async function deliverFeishuOutbound(
         signal.throwIfAborted();
         await options.report({ claimToken: delivery.claimToken, status: "streaming", presentation });
       },
+      onDecisionSent: async receipt => {
+        signal.throwIfAborted();
+        // Decision lanes acknowledge in one step: what matters is the message
+        // id plus the recipient/degradation the host actually used.
+        await options.report({
+          claimToken: delivery.claimToken, status: "sent", externalMessageId: receipt.messageId,
+          interactionOpenId: receipt.interactionOpenId, degraded: receipt.degraded ?? null,
+        });
+        acknowledged = true;
+      },
     });
     signal.throwIfAborted();
     clearTimeout(timer);
     abort.abort();
     await renewal;
-    await options.report({ claimToken: delivery.claimToken, status: "sent", externalMessageId: sent.messageId });
+    if (!acknowledged) {
+      await options.report({ claimToken: delivery.claimToken, status: "sent", externalMessageId: sent.messageId });
+    }
   } finally {
     abort.abort();
     clearTimeout(timer);
