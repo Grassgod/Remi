@@ -241,6 +241,90 @@ the daemon will claim and upload the recovered attempt on its next archive run.
 Do not expose the API container port directly to the network and do not place
 daemon tokens in Nginx configuration or logs.
 
+## Split API roles
+
+A deployment can run the browser surface and the daemon surface in two API
+containers instead of one. The daemon surface carries 94% of the request volume
+and is a separate process so its load cannot queue behind the browser surface.
+`compose.application.yml` and `compose.platform.yml` ship the second service as
+`api-runtime`, behind the `split` profile, so **the default stack is unchanged**:
+without `--profile split` those files declare exactly the services they always
+did, and without `REMI_API_ROLE` the `api` container still answers both surfaces.
+
+The switch is an operator action, not a release action. The Compose file, the
+Nginx configuration, and the updater binary are host files: the daily release
+only replaces images, so merging the templates does not move a running
+installation. Apply them deliberately, in this order.
+
+### Prerequisites
+
+- A release whose API image understands `MULTIREMI_API_ROLE`, `MULTIREMI_PEER_URL`
+  and `MULTIREMI_PEER_SECRET` is already deployed.
+- `api_minute_summary` in the API logs carries a `pid` and a `role`, so the two
+  processes are distinguishable after the switch.
+- Back up the Compose file, the Nginx configuration, and the updater env file
+  before changing them.
+
+### Switch
+
+1. **Updater binary first.** This is the one step that cannot be undone by a
+   reload. Build `apps/platform-updater/main.ts` from the release tag on a build
+   host (Bun 1.3.14), replace `bin/multiremi-platform-updater` on the host, keep
+   the previous file as `bin/pre-<tag>.<rand>/`, and restart
+   `remi-platform-updater`. Leave `MULTIREMI_PLATFORM_CORE_SERVICES` unset at
+   this point: unset is today's behaviour, including the pull list.
+2. **Compose.** Merge the `api-runtime` service and the two `api` env lines into
+   the host Compose file, keeping host-specific differences such as ports. Add
+   `REMI_API_RUNTIME_BIND_PORT` and `REMI_API_PEER_URL=http://api-runtime:6120`
+   to the Compose env file. Leave `REMI_API_ROLE` unset so `api` stays `all`.
+   Check the result with `docker compose config`.
+3. **Start the runtime container.**
+   `docker compose --profile split up -d --no-deps api-runtime`, then wait for
+   healthy and confirm `curl 127.0.0.1:<runtime port>/readyz` reports
+   `role: runtime`. Its logs must show background jobs disabled and no migration
+   errors.
+4. **Let `api` reach its peer.** Recreate `api` once
+   (`docker compose up -d --no-deps api`, the same short outage as a normal
+   release) and confirm `/internal/peer/health` answers on both containers.
+5. **Nginx.** Add the upstream and locations from
+   [`nginx/api-runtime-split.conf`](nginx/api-runtime-split.conf) to the public
+   server block, next to
+   [`nginx/session-archive-direct.conf`](nginx/session-archive-direct.conf), and
+   point that file's archive location at the runtime upstream too. Both files
+   explain why the daemon location must be an ordinary prefix and must keep its
+   trailing slash. Run `nginx -t`, then reload. Daemon WebSockets that are already
+   established stay on `api`; that is expected during the transition.
+6. **Observe for 30 minutes.** The runtime container's route counters must show
+   the heartbeat, claim and message traffic; the `api` container's
+   `/api/daemon/*` counters must fall to near zero; `peer.dropped` must stay 0
+   on both. Exercise one realtime comment delivery and one agent wake-up.
+7. **Updater list last.** Set
+   `MULTIREMI_PLATFORM_CORE_SERVICES=api,web,ssh-mesh-control-plane,api-runtime`
+   and `MULTIREMI_PLATFORM_EXTRA_HEALTH_URLS=http://127.0.0.1:<runtime port>/readyz`
+   in the updater env file, and restart the updater. Skipping this leaves
+   `api-runtime` untouched by the next release, so the two processes drift a
+   release apart.
+   If the updater cannot see profile services, also set `COMPOSE_PROFILES=split`
+   for the updater process so its `pull` and `up` can address them.
+8. **Optional second step, later:** set `REMI_API_ROLE=ui` in the API env file so
+   a misrouted request is answered with `421 misdirected` instead of being
+   served. Confirm the `api` container's `/api/daemon/*` counters have reached
+   zero first, since daemons reconnect within 1-30 s.
+
+### Rollback
+
+Every layer is independent, and the first three need no image change.
+
+| Layer | Action | Time |
+|---|---|---|
+| L1 — routing only | Remove the two daemon locations from Nginx (or point `multica_api_runtime` back at the `api` port) and reload. | < 1 min |
+| L2 — role only | Delete `REMI_API_ROLE` (back to `all`) and `docker compose up -d --no-deps api`. Do this before L1 if `api` already runs as `ui`, or the daemon surface will answer `421`. | ~30 s outage |
+| L3 — stop the runtime | `docker compose --profile split stop api-runtime`, drop `api-runtime` from `MULTIREMI_PLATFORM_CORE_SERVICES`, restart the updater. The peer channel reports drops and the platform keeps working. | < 1 min |
+| L4 — updater binary | Restore the previous file from `bin/pre-<tag>.<rand>/` and restart the service. Only needed if the updater itself misbehaves. | < 1 min |
+
+Order is L1 then L2 then L3, with L4 only if required. No database change is
+involved, so no data layer needs rolling back.
+
 ## Drain-protected updates (MUL-74)
 
 Update and rollback operations drain the platform before touching containers

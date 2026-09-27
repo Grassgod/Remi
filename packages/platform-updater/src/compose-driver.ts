@@ -15,12 +15,29 @@ interface ComposeConfig {
   stateDir: string;
   apiHealthUrl: string;
   webHealthUrl: string;
+  /**
+   * Overrides `MULTIREMI_PLATFORM_CORE_SERVICES` for tests and embedders.
+   * `null`/absent means the environment decides.
+   */
+  coreServices?: readonly string[] | null;
+  /**
+   * Overrides `MULTIREMI_PLATFORM_EXTRA_HEALTH_URLS` for tests and embedders.
+   */
+  extraHealthUrls?: readonly string[] | null;
   postgresContainer?: string | null;
   openvikingContainer?: string | null;
 }
 
 /** Services this stack owns outright and switches as one batch. */
-const CORE_SERVICES = ["api", "web", "ssh-mesh-control-plane"] as const;
+const DEFAULT_CORE_SERVICES = ["api", "web", "ssh-mesh-control-plane"] as const;
+/**
+ * Services whose images the release pipeline replaces. Deliberately narrower
+ * than the switch list: the control plane shares the API image, so it is
+ * already pulled by `pull api` and naming it here would only add a registry
+ * round trip. Once an operator names their own service list, that list wins, so
+ * a service added to the topology is never left on a stale image.
+ */
+const DEFAULT_PULL_SERVICES = ["api", "web"] as const;
 /**
  * The service that used to run Feishu ingestion. It is gone from the Compose
  * file, but an installation upgrading across that change still has its
@@ -43,7 +60,22 @@ interface ComposeManifest {
 export class DockerComposeDriver implements PlatformDeploymentDriver {
   readonly kind = "docker_compose" as const;
 
-  constructor(private readonly config: ComposeConfig, private readonly runner: CommandRunner) {}
+  private readonly coreServices: readonly string[];
+  private readonly pullServices: readonly string[];
+  private readonly extraHealthUrls: readonly string[];
+
+  constructor(private readonly config: ComposeConfig, private readonly runner: CommandRunner) {
+    // Unset is not "use the default list": it means this installation was never
+    // told about a split topology, so it must pull, switch and report exactly
+    // what it did before these knobs existed. Only an explicit list changes the
+    // topology, and once given it drives every one of those three.
+    const configured = config.coreServices ?? parseServiceList(process.env.MULTIREMI_PLATFORM_CORE_SERVICES);
+    this.coreServices = configured ?? DEFAULT_CORE_SERVICES;
+    this.pullServices = configured ?? DEFAULT_PULL_SERVICES;
+    this.extraHealthUrls = config.extraHealthUrls
+      ?? parseServiceList(process.env.MULTIREMI_PLATFORM_EXTRA_HEALTH_URLS)
+      ?? [];
+  }
 
   async inspect(): Promise<PlatformInspection> {
     const [currentRelease, recentReleases, services] = await Promise.all([
@@ -60,7 +92,7 @@ export class DockerComposeDriver implements PlatformDeploymentDriver {
     if (operation.kind === "check_updates") return (await this.inspect()).currentRelease;
     if (operation.kind === "restart") {
       await report({ status: "restarting", progress: { message: "Restarting platform services" } });
-      await this.mustCompose(["restart", ...CORE_SERVICES]);
+      await this.mustCompose(["restart", ...this.coreServices]);
       await this.verify();
       return (await this.inspect()).currentRelease;
     }
@@ -84,14 +116,14 @@ export class DockerComposeDriver implements PlatformDeploymentDriver {
     await report({ status: rollback ? "rolling_back" : "pulling", previousRelease: previous, progress: { message: rollback ? `Restoring ${manifest.version}` : `Pulling ${manifest.version}` } });
     try {
       await this.writeImageEnv(originalEnv, manifest.apiImage, manifest.webImage);
-      await this.mustCompose(["pull", "api", "web"]);
+      await this.mustCompose(["pull", ...this.pullServices]);
       // Images are staged; only the container switch needs a drained platform.
       // waitUntilDrained throws (with the drain already released) on timeout or
       // operator cancel, so the switch below never runs in those cases.
       if (drain) await drain.waitUntilDrained(report);
       await report({ status: "switching", previousRelease: previous, progress: { message: "Applying image digests" } });
       await this.removeRetiredSidecar();
-      await this.mustCompose(["up", "-d", "--no-deps", ...CORE_SERVICES]);
+      await this.mustCompose(["up", "-d", "--no-deps", ...this.coreServices]);
       // Do not call the control API between switching containers and verifying
       // them. A broken API image must not be able to block the local rollback.
       await this.verify();
@@ -110,7 +142,7 @@ export class DockerComposeDriver implements PlatformDeploymentDriver {
         // Restore the host first. Reporting through the newly switched API can
         // fail for the same reason that triggered this rollback.
         await this.writeImageEnv(originalEnv, previous.apiImage, previous.webImage);
-        await this.mustCompose(["up", "-d", "--no-deps", ...CORE_SERVICES]);
+        await this.mustCompose(["up", "-d", "--no-deps", ...this.coreServices]);
         await this.verify();
         await report({ status: "rolling_back", previousRelease: previous, error: errorMessage(error) });
       }
@@ -187,8 +219,13 @@ export class DockerComposeDriver implements PlatformDeploymentDriver {
     const rows = result.stdout.split("\n").filter(Boolean).flatMap((line) => {
       try { return [JSON.parse(line) as Record<string, unknown>]; } catch { return []; }
     });
+    // Deliberately the default list, not the configured one: the panel's id is a
+    // closed union in the contracts package (`MultiremiPlatformServiceId`), so a
+    // service the panel cannot name would be a type error and a contract change.
+    // The switch, pull and restart lists above are what decides which containers
+    // move; the panel keeps describing the three it has always described.
     const ids = [
-      ...CORE_SERVICES,
+      ...DEFAULT_CORE_SERVICES,
       "postgres", "openviking",
     ] as const satisfies readonly MultiremiPlatformService["id"][];
     return Promise.all(ids.map(async (id) => {
@@ -222,7 +259,8 @@ export class DockerComposeDriver implements PlatformDeploymentDriver {
   }
 
   private async verify(): Promise<void> {
-    await Promise.all([verifyUrl(this.config.apiHealthUrl), verifyUrl(this.config.webHealthUrl)]);
+    const urls = [this.config.apiHealthUrl, this.config.webHealthUrl, ...this.extraHealthUrls];
+    await Promise.all(urls.map((url) => verifyUrl(url)));
   }
 
   private async compose(args: string[]) {
@@ -233,6 +271,17 @@ export class DockerComposeDriver implements PlatformDeploymentDriver {
     const result = await this.compose(args);
     if (result.exitCode !== 0) throw new Error(`docker compose ${args[0]} failed: ${result.stderr.trim() || result.stdout.trim()}`);
   }
+}
+
+/**
+ * Parse a comma-separated env list. Blank entries are dropped so a trailing
+ * comma in an env file cannot name an empty service, and an empty string means
+ * "unset" rather than "no services" — switching nothing would silently stop
+ * updating the host.
+ */
+function parseServiceList(value: string | undefined): readonly string[] | null {
+  const entries = (value ?? "").split(",").map((entry) => entry.trim()).filter(Boolean);
+  return entries.length > 0 ? entries : null;
 }
 
 function parseComposeManifest(value: Record<string, unknown>): ComposeManifest {
