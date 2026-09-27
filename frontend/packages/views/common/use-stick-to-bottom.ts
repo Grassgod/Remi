@@ -183,30 +183,36 @@ export function useStickToBottom(options: UseStickToBottomOptions): UseStickToBo
     armSettleTimer();
   }, [armSettleTimer, clearSettleTimer, scrollEl, transition]);
 
-  // Activation: `enabled` (the consumer passes `reveal.revealed`) gates the
-  // whole machine, and every rise applies the `initialState` of that activation
-  // — a deep link mounts released, a normal open mounts pinned. While `enabled`
-  // stays true the machine owns its state; a changed `initialState` is not a
-  // reason to yank a reader back to the bottom.
-  const activeRef = useRef<{ initialState: "pinned" | "released"; scrollEl: HTMLElement | null } | null>(null);
+  // Latest `initialState` prop. It is read through a ref at activation time and
+  // deliberately kept out of the activation identity below: a consumer that
+  // re-renders with a different `initialState` while the machine is live must
+  // not be able to yank a reader who scrolled away back to the bottom.
+  const initialStateRef = useRef(initialState);
+  initialStateRef.current = initialState;
+
+  // Activation: `enabled` (the consumer passes `reveal.revealed`) gates the whole
+  // machine, and every new activation applies the `initialState` current at that
+  // moment — a deep link mounts released, a normal open mounts pinned. Only two
+  // things start one: `enabled` rising from false, and the scroll root being
+  // replaced. While the machine is live it owns its state.
+  const activeScrollRef = useRef<HTMLElement | null | undefined>(undefined);
   useEffect(() => {
     if (!enabled) {
-      activeRef.current = null;
+      activeScrollRef.current = undefined;
       clearSettleTimer();
       returningRef.current = false;
       return;
     }
-    const active = activeRef.current;
-    // A new scroll root is a new activation too, so its `initialState` applies.
-    if (active && active.initialState === initialState && active.scrollEl === scrollEl) return;
-    activeRef.current = { initialState, scrollEl };
+    if (activeScrollRef.current === scrollEl) return;
+    activeScrollRef.current = scrollEl;
+    const activationState = initialStateRef.current;
     clearSettleTimer();
     programmaticTopRef.current = null;
     anchorValueRef.current = anchorValue();
-    stateRef.current = initialState;
+    stateRef.current = activationState;
     returningRef.current = false;
-    setState(initialState);
-  }, [anchorValue, clearSettleTimer, enabled, initialState, scrollEl]);
+    setState(activationState);
+  }, [anchorValue, clearSettleTimer, enabled, scrollEl]);
 
   // User intent. A wheel down, a scrollbar drag downwards or a page-down key are
   // not "take over" signals: the machine stays pinned and the position decides.
