@@ -336,7 +336,7 @@ export class IssuesRepo {
 
   private createIssueWithEvents(
     input: CreateIssueInput,
-    deferredEvents?: CommitEventQueue,
+    deferredEvents: CommitEventQueue,
     childStatusChanges: ChildStatusChangeCollector | null = null,
   ): MultiremiIssue {
     const parentIssueId = input.parentIssueId ?? input.parent_issue_id ?? null;
