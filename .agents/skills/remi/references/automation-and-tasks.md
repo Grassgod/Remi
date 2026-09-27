@@ -51,19 +51,37 @@ remi autopilot get <autopilot-id> --json
 remi autopilot run list <autopilot-id> --json
 ```
 
-`schedule_targets` 的更新替换整个目标选择，`null` 清除；修改其中一个项目或仓库时先保留其余目标。Webhook 的 token / secret 不出现在报告中；重放投递与 `autopilot run` 都会实际执行，只有用户要求时才触发，不拿来当保存成功的探针。
+`schedule_targets` 的更新替换整个目标选择，`null` 清除；修改其中一个项目或仓库时先保留其余目标。Webhook 的 token / secret 不出现在报告中；重放投递与 `autopilot run-now` 都会实际执行，只有用户要求时才触发，不拿来当保存成功的探针。
 
 ## 运行与 Webhook
 
+查看运行记录（只读）：
+
 ```sh
-remi autopilot run --help
 remi autopilot run list <autopilot-id> --json
+remi autopilot run list <autopilot-id> --limit 100 --offset 0 --json
+remi autopilot run get <autopilot-id> <run-id> --json
+```
+
+立即运行一次（写操作，等同界面「Run now」）：
+
+```sh
+remi autopilot run-now --help
+remi autopilot run-now <autopilot-id> --json
+remi autopilot run-now <autopilot-id> --data '{"trigger_id":"<schedule-trigger>"}' --json
+```
+
+`remi autopilot run <autopilot>` 不再是执行入口，会直接报错并提示上述三条命令。查看记录一律用 `run list` / `run get`，不要用 `run` 试。
+
+其余自动化维护入口：
+
+```sh
 remi autopilot trigger update --help
 remi autopilot delivery list --help
 remi autopilot delivery get --help
 remi autopilot delivery replay --help
 ```
 
-用户要求立即执行时，按 run 帮助触发一次，记录 run ID 与关联 Issue/Task，沿 [Task 查询](chats-and-tasks.md) 检查执行终态。仅要求设置定时任务时，读回定义、trigger 和 scheduler 即可，不额外跑一轮。
+用户要求立即执行时，按 `run-now` 帮助触发一次，记录 run ID 与关联 Issue/Task，沿 [Task 查询](chats-and-tasks.md) 检查执行终态。仅要求设置定时任务时，读回定义、trigger 和 scheduler 即可，不额外跑一轮。
 
 Webhook 使用 trigger 配置，密钥维护入口为 trigger rotate-token/set-secret，投递查询与重放使用 delivery 命令。保留 trigger ID 和 delivery ID。投递被接收、通过鉴权与派发成功是不同状态；先查投递及对应 run，再判断是否重放。调整或撤销 Webhook 时保留用户尚需使用的其他触发器。

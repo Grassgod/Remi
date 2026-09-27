@@ -6864,6 +6864,23 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "autopilot.run.group": {
+      "command": "remi autopilot run",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": null,
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "autopilot.run.list": {
       "command": "remi autopilot run list",
       "aliases": [],
@@ -6898,14 +6915,14 @@
       "hidden": false,
       "migration_status": "native"
     },
-    "autopilot.run": {
-      "command": "remi autopilot run",
+    "autopilot.run-now": {
+      "command": "remi autopilot run-now",
       "aliases": [],
       "auth": [
         "human",
         "task"
       ],
-      "capability": "autopilot.run",
+      "capability": "autopilot.run-now",
       "mutation": "write",
       "output": [
         "table",
@@ -11186,7 +11203,7 @@
       "command": "autopilot.delivery.replay"
     },
     "POST /api/autopilots/:id/trigger": {
-      "command": "autopilot.run"
+      "command": "autopilot.run-now"
     },
     "POST /api/autopilots/:id/triggers": {
       "command": "autopilot.trigger.create"
@@ -11658,15 +11675,15 @@
       "command": "autopilot.delivery.replay"
     },
     "POST /api/multiremi/autopilots/:id/run": {
-      "command": "autopilot.run"
+      "command": "autopilot.run-now"
     },
     "POST /api/multiremi/autopilots/:id/run-scheduled": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
-      "reason": "Scheduler execution is machine-to-server traffic; users trigger an autopilot with remi autopilot run."
+      "reason": "Scheduler execution is machine-to-server traffic; users trigger an autopilot with remi autopilot run-now."
     },
     "POST /api/multiremi/autopilots/:id/trigger": {
-      "command": "autopilot.run"
+      "command": "autopilot.run-now"
     },
     "POST /api/multiremi/autopilots/:id/webhook": {
       "cli_exempt": true,
