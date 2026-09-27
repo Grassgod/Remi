@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 760,
+    "routeCount": 762,
     "routeCountByPrefix": {
       "native": 210,
       "compat": 536,
-      "root": 14
+      "root": 16
     },
-    "getRoutes": 325,
-    "getRoutesWithBody": 322,
+    "getRoutes": 326,
+    "getRoutesWithBody": 323,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 435,
+    "mutationRoutes": 436,
     "mutationRoutesCovered": 282,
     "flows": [
       "agents-compat",
@@ -457,6 +457,7 @@
     "GET /health",
     "GET /health/realtime",
     "GET /healthz",
+    "GET /internal/peer/health",
     "GET /readyz",
     "GET /ws",
     "PATCH /api/autopilots/:id",
@@ -774,6 +775,7 @@
     "POST /auth/password",
     "POST /auth/send-code",
     "POST /auth/verify-code",
+    "POST /internal/peer/events",
     "PUT /api/agents/:id",
     "PUT /api/agents/:id/env",
     "PUT /api/agents/:id/role",
@@ -1202,6 +1204,7 @@
     "GET /health",
     "GET /health/realtime",
     "GET /healthz",
+    "GET /internal/peer/health",
     "GET /readyz",
     "GET /ws",
     "PATCH /api/autopilots/:id",
@@ -24715,6 +24718,17 @@
       "status": 200,
       "body": {
         "ok": true
+      }
+    },
+    {
+      "key": "get-sweep GET /internal/peer/health",
+      "route": "GET /internal/peer/health",
+      "path": "/internal/peer/health",
+      "status": 200,
+      "body": {
+        "ok": true,
+        "enabled": false,
+        "peer_healthy": false
       }
     },
     {
