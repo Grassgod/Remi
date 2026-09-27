@@ -12,7 +12,7 @@ import {
 import { createLogger } from "@shared/logger.js";
 import { canonicalizeDaemonRoutingWithinTransaction } from "@multiremi/store/daemon-routing.js";
 import { advisoryLock, isPostgresConfigured } from "@multiremi/store/db/postgres.js";
-import { MIGRATION_ADVISORY_LOCK_KEY, numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
+import { MIGRATION_ADVISORY_LOCK_KEY } from "@multiremi/store/advisory-locks.js";
 
 const log = createLogger("multiremi-store");
 const SCM_CONNECTION_ORIGIN_MIGRATION = "20260822_scm_connection_origins";
