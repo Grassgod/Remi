@@ -503,11 +503,14 @@ describe("useStickToBottom", () => {
     expect(fixture.root.scrollTop).toBe(100);
   });
 
-  it("keeps a live pinned state when initialState says otherwise", () => {
-    // The mirror image: a reader sitting at the bottom is not moved because the
-    // prop flipped to "released" either.
-    const props = baseProps({ initialState: "released" });
-    const { result, rerender } = renderStick(props);
+  it("keeps a live pinned state when initialState changes in both directions", () => {
+    // The mirror image of the case above: once the reader is at the bottom, a
+    // consumer re-rendering this prop must not be able to release or re-pin the
+    // live machine either. The prop has to actually move in both directions —
+    // re-passing the mount value would leave this case green even against the
+    // old activation identity, which is exactly what it has to catch.
+    const mounted = baseProps({ initialState: "released" });
+    const { result, rerender } = renderStick(mounted);
     expect(result.current.state).toBe("released");
 
     // The user scrolled to the bottom, which is a normal re-pin.
@@ -516,7 +519,11 @@ describe("useStickToBottom", () => {
     });
     expect(result.current.state).toBe("pinned");
 
-    rerender({ ...props, initialState: "released" });
+    rerender({ ...mounted, initialState: "pinned" });
+    expect(result.current.state).toBe("pinned");
+    expect(fixture.root.scrollTop).toBe(600);
+
+    rerender({ ...mounted, initialState: "released" });
     expect(result.current.state).toBe("pinned");
     expect(fixture.root.scrollTop).toBe(600);
   });
