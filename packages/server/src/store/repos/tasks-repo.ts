@@ -93,6 +93,7 @@ import { RuntimeWorkspacesRepo, RuntimeWorkspaceError } from "./runtime-workspac
 import {
   dependencyGateEnabled,
   IssueDependencyError,
+  type IssueDependencyUnmetRef,
 } from "@multiremi/store/repos/issue-dependencies.js";
 
 const log = createLogger("multiremi-store");
@@ -700,21 +701,22 @@ export class TasksRepo {
    * `dependency_force_started`); by the time it dispatches, the issue is no
    * longer waiting and this gate has nothing to hold.
    */
-  private assertIssueDispatchable(issue: MultiremiIssue, input: CreateTaskInput): void {
-    if (!dependencyGateEnabled()) return;
-    if (issue.status !== "backlog") return;
-    // Retries keep `attempt > 1`; continuations name the task they continue.
-    if (normalizePositiveInt(input.attempt, 1) > 1) return;
-    if (cleanOptionalString(input.continuedFromTaskId ?? input.continued_from_task_id)) return;
-    // The E2 parent wake-up carries `preserveIssueStatus` so the parent keeps
-    // its derived status; it is a notification round, not a new start.
-    if (input.preserveIssueStatus === true || input.preserve_issue_status === true) return;
-    // A delegation return belongs to the delegator's existing conversation.
+  private assertIssueDispatchable(issue: MultiremiIssue, input: CreateTaskInput, parentTask: MultiremiTask | null):
+    { source: string; unmet: IssueDependencyUnmetRef[]; previousTaskId: string | null } | null {
+    if (!dependencyGateEnabled() || issue.status !== "backlog") return null;
+    const unmet = this.ctx.issues().listUnmetPrerequisites(issue.id);
+    if (unmet.length === 0) return null;
+    const previousTaskId = parentTask?.id ?? cleanOptionalString(input.continuedFromTaskId ?? input.continued_from_task_id);
     const delegationId = cleanOptionalString(input.delegationId ?? input.delegation_id);
     const delegatedByAgentId = cleanOptionalString(input.delegatedByAgentId ?? input.delegated_by_agent_id);
-    if (delegationId && delegatedByAgentId === input.agentId) return;
-    const unmet = this.ctx.issues().listUnmetPrerequisites(issue.id);
-    if (unmet.length === 0) return;
+    let source: string | null = null;
+    if (delegationId && delegatedByAgentId === input.agentId) source = "delegation_return";
+    else if (input.preserveIssueStatus === true || input.preserve_issue_status === true) source = "parent_wakeup";
+    else if (normalizePositiveInt(input.attempt, 1) > 1 && parentTask?.status === "cancelled") source = "redispatch";
+    else if (normalizePositiveInt(input.attempt, 1) > 1 && parentTask?.status === "failed") source = "retry";
+    else if (cleanOptionalString(input.continuedFromTaskId ?? input.continued_from_task_id)) source = "continuation";
+    else if (normalizePositiveInt(input.attempt, 1) > 1) source = "retry";
+    if (source) return { source, unmet, previousTaskId };
     throw new IssueDependencyError(
       "dependencies_unmet",
       `${issue.key} is waiting on ${unmet.length} unfinished prerequisite issue(s): ${unmet.map((row) => row.key).join(", ")}; start it explicitly with force, or finish the prerequisites first`,
@@ -726,6 +728,7 @@ export class TasksRepo {
     input: CreateTaskInput,
     childStatusChanges: ChildStatusChangeCollector,
     deferredEvents: CommitEventQueue,
+    gateIssueBeforeReplacement?: MultiremiIssue | null,
   ): MultiremiTask {
     const agent = this.ctx.agents().getAgent(input.agentId);
     if (!agent) throw new Error(`Agent not found: ${input.agentId}`);
@@ -805,7 +808,8 @@ export class TasksRepo {
     // task is born in, so a waiting issue cannot acquire a first round through
     // any path — CLI task create, rerun, autopilot, comments, mention dispatch.
     // The check is structural, never identity-based, and runs before any write.
-    if (issue) this.assertIssueDispatchable(issue, input);
+    const gateIssue = gateIssueBeforeReplacement ?? issue;
+    const gateExemption = gateIssue ? this.assertIssueDispatchable(gateIssue, input, parentTask) : null;
     if (chatSession && issueId
       && this.ctx.feishuBot().getFeishuIssueIdForChatSession(chatSession.id) !== issueId) {
       throw new ChatIssueTaskConflictError("Only Feishu Issue topics can create Chat transport tasks with an Issue");
@@ -1127,6 +1131,29 @@ export class TasksRepo {
       }
     }
     const task = this.getTask(id)!;
+    if (gateExemption && task.issueId) {
+      const unmet = gateExemption.unmet.map((row) => ({
+        ...row,
+        issue_id: row.issueId,
+        depends_on_issue_id: row.dependsOnIssueId,
+        dependency_id: row.dependencyId,
+      }));
+      deferredEvents.issueActivities.push({
+        issueId: task.issueId,
+        type: "dependency_gate_exempted",
+        body: gateExemption.source,
+        data: {
+          source: gateExemption.source,
+          taskId: task.id,
+          task_id: task.id,
+          previousTaskId: gateExemption.previousTaskId,
+          previous_task_id: gateExemption.previousTaskId,
+          unmet,
+          unmetPrerequisites: unmet,
+          unmet_prerequisites: unmet,
+        },
+      });
+    }
     // MUL-400 E2: the child-status wakeup carries `preserveIssueStatus` so a
     // manual child edit cannot knock an in-review parent back to `todo` while
     // that round is waiting to be claimed.
@@ -3302,6 +3329,7 @@ export class TasksRepo {
       throw new Error(`Task not found or terminal: ${taskId}`);
     }
     this.lockTaskIssueSessionsWithinWorkspaceLock([current]);
+    const issueBeforeReplacement = current.issueId ? this.ctx.issues().getIssue(current.issueId) : null;
     const terminal = this.cancelTaskWithinWorkspaceLock(current, true, childStatusChanges, deferredEvents);
     const nextAttempt = current.attempt + 1;
     const detachedChatIssue = !!current.chatSessionId && !!current.issueId
@@ -3331,7 +3359,7 @@ export class TasksRepo {
       delegationSkipReason: current.delegationSkipReason,
       wakeSource: current.wakeSource,
       assignmentSourceEventId: current.assignmentSourceEventId,
-    }, childStatusChanges, deferredEvents);
+    }, childStatusChanges, deferredEvents, issueBeforeReplacement);
     if (replacement.chatSessionId) {
       this.ctx.db.run(
         "UPDATE multiremi_chat_sessions SET latest_task_id = ?, updated_at = ? WHERE id = ?",

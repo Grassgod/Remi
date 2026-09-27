@@ -182,10 +182,11 @@ const KNOWN_AUTOPILOT_TRIGGERS = new Set(["schedule", "webhook", "system_event",
 export interface CommitEventQueue {
   workspace: WorkspaceEvent[];
   enqueuedTasks: MultiremiTask[];
+  issueActivities: Array<{ issueId: string; type: string; body: string; data: unknown }>;
 }
 
 export function createCommitEventQueue(): CommitEventQueue {
-  return { workspace: [], enqueuedTasks: [] };
+  return { workspace: [], enqueuedTasks: [], issueActivities: [] };
 }
 
 /**
@@ -217,7 +218,10 @@ export type WorkspaceEvent = Parameters<WorkspaceEventListener>[0];
 // not-yet-carved domain owes the rest; when that domain is carved the accessor below is repointed
 // at its repo and nothing else changes.
 export interface IssuesSurface {
-  createIssue(input: CreateIssueInput): MultiremiIssue;
+  createIssue(input: CreateIssueInput, transaction?: {
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector;
+    deferredEvents: CommitEventQueue;
+  }): MultiremiIssue;
   createIssueComment(
     issueId: string,
     input: CreateIssueCommentInput,
@@ -260,7 +264,8 @@ export interface IssuesSurface {
   createIssueDependencyWithinTransaction(
     issueId: string,
     input: CreateIssueDependencyInput,
-    activity?: import("./repos/issues-repo.js").IssueMutationActivityContext,
+    activity: import("./repos/issues-repo.js").IssueMutationActivityContext,
+    deferredEvents: CommitEventQueue,
   ): MultiremiIssueDependencyView;
   /** MUL-400 E1/E2 post-commit hook shared by both Issue write paths. */
   /**
@@ -796,6 +801,19 @@ export class StoreContext {
    * Callers drain this after their COMMIT; on rollback they drop the queue.
    */
   emitCommitEvents(queue: CommitEventQueue): void {
+    for (const activity of queue.issueActivities) {
+      try {
+        this.appendIssueActivity(activity.issueId, {
+          actorType: "system",
+          actorId: null,
+          type: activity.type,
+          body: activity.body,
+          data: activity.data,
+        });
+      } catch (error) {
+        log.warn(`post-commit issue activity failed for ${activity.issueId}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
     for (const event of queue.workspace) this.emitWorkspaceEvent(event);
     for (const task of queue.enqueuedTasks) this.notifyTaskEnqueued(task);
   }

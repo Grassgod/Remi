@@ -42,9 +42,35 @@ function parked() {
 interface Call { label: string; path: string; method: string; body?: unknown }
 
 describe("MUL-400 E3 — fix round 4: dependency errors never surface as 500", () => {
+  it("returns the same 409 code and unmet prerequisites for session tasks and other gate entries", async () => {
+    const { store, agent, dependent, prereq } = parked();
+    const app = createMultiremiApp({ store });
+    const session = store.getOrCreateDefaultIssueSession(dependent.id);
+    for (const call of [
+      { path: `/api/issues/${dependent.id}/sessions/${session.id}/tasks`, body: { agent_id: agent.id, prompt: "start" } },
+      { path: "/api/multiremi/tasks", body: { agentId: agent.id, issueId: dependent.id, prompt: "start" } },
+      { path: `/api/issues/${dependent.id}/rerun`, body: { agent_id: agent.id } },
+    ]) {
+      const response = await app.request(call.path, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(call.body),
+      });
+      expect(response.status).toBe(409);
+      const payload = await response.json() as { code: string; unmet: Array<{ key: string }> };
+      expect(payload.code).toBe("dependencies_unmet");
+      expect(payload.unmet).toMatchObject([{ key: prereq.key }]);
+    }
+    const response = await app.request(`/api/issues/${dependent.id}`, {
+      method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ status: "todo" }),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: "dependencies_unmet", unmet: [{ key: prereq.key }] });
+    expect(store.getIssue(dependent.id)!.status).toBe("backlog");
+    expect(store.listTasksForIssue(dependent.id)).toEqual([]);
+  });
   it("maps every waiting-issue entry point to 4xx with a code", async () => {
     const { store, agent, prereq, dependent, other } = parked();
     const app = createMultiremiApp({ store });
+    const session = store.getOrCreateDefaultIssueSession(dependent.id);
 
     const calls: Call[] = [
       // The blocker: both PATCH routes on a waiting issue.
@@ -55,6 +81,7 @@ describe("MUL-400 E3 — fix round 4: dependency errors never surface as 500", (
       { label: "native assign", path: `/api/multiremi/issues/${dependent.id}/assign`, method: "POST", body: { assigneeType: "agent", assigneeId: agent.id } },
       // Task creation funnels.
       { label: "task create", path: "/api/multiremi/tasks", method: "POST", body: { agentId: agent.id, issueId: dependent.id, prompt: "start" } },
+      { label: "session task create", path: `/api/issues/${dependent.id}/sessions/${session.id}/tasks`, method: "POST", body: { agent_id: agent.id, prompt: "start" } },
       { label: "rerun", path: `/api/issues/${dependent.id}/rerun`, method: "POST", body: { agent_id: agent.id } },
       // Batch reports per-row skips rather than failing the whole request.
       { label: "native batch", path: "/api/multiremi/issues/batch-update", method: "POST", body: { issueIds: [dependent.id], updates: { status: "todo" } } },
@@ -106,6 +133,7 @@ describe("MUL-400 E3 — fix round 4: dependency errors never surface as 500", (
       ["native dependency cycle", 409, "dependency_cycle"],
       ["native dependency unknown target", 400, ""],
       ["rerun", 409, "dependencies_unmet"],
+      ["session task create", 409, "dependencies_unmet"],
       ["task create", 409, "dependencies_unmet"],
     ].sort());
     // And the ones this round fixed specifically name the dependency hold.

@@ -5,7 +5,7 @@
 // the failure path has to reach a human. These tests drive the real store and
 // the real HTTP routes against an in-memory database; the Postgres end-to-end
 // run lives in `reports/`.
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
@@ -950,6 +950,7 @@ describe("MUL-400 E3 — task-creation gate", () => {
     const body = await response.json() as { code?: string };
     expect(body.code).toBe("dependencies_unmet");
     expect(store.listTasksForIssue(dependent.id)).toHaveLength(0);
+    expect(allActivityRows(store, dependent.id, "dependency_gate_exempted")).toEqual([]);
   });
 
   it("does not block a continuation that names continuedFromTaskId", () => {
@@ -1357,8 +1358,8 @@ describe("MUL-400 E3 — fix round 4: atomic automatic start", () => {
     expect(thrown).toBeNull();
   });
 
-  it("never leaves a backlog issue with an active round", () => {
-    const { store, agent, prereq, dependent } = parkedChain("boundary");
+  it("does not claim a backlog issue that already has an active round", () => {
+    const { store, runtime, agent, prereq, dependent } = parkedChain("boundary");
     // A structurally exempt round already holds the issue while it is parked:
     // the exemption is what lets a round exist on a `backlog` issue at all.
     const task = store.createTask({
@@ -1373,19 +1374,157 @@ describe("MUL-400 E3 — fix round 4: atomic automatic start", () => {
 
     store.updateIssue(prereq.id, { status: "done" });
 
-    // The invariant: no `backlog` + active round. The status moved, and the
-    // auto-start reused the existing round instead of queueing a second one.
-    expect(store.getIssue(dependent.id)!.status).toBe("todo");
+    expect(store.getIssue(dependent.id)!.status).toBe("backlog");
     const active = allTaskRows(store, dependent.id)
       .filter((row) => !["completed", "failed", "cancelled"].includes(row.status));
     expect(active).toHaveLength(1);
     expect(active[0]!.id).toBe(task.id);
-    const auto = allActivityRows(store, dependent.id, "dependency_auto_started");
-    expect(auto).toHaveLength(1);
-    expect((auto[0]!.data ?? {}) as Record<string, unknown>).toMatchObject({
-      autoStarted: false,
-      existingTaskId: task.id,
+    expect(allActivityRows(store, dependent.id, "dependency_auto_started")).toEqual([]);
+    expect(allActivityRows(store, dependent.id, "dependency_auto_start_skipped")).toEqual([]);
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    expect(store.getIssue(dependent.id)!.status).toBe("in_progress");
+  });
+
+  it("keeps prerequisite completion successful when recording a skipped auto-start fails", async () => {
+    const { store, prereq, dependent } = parkedChain("skip_write");
+    const app = createMultiremiApp({ store });
+    const target = seams(store);
+    const restoreRound = injectOnce(target.tasks, "createTaskWithinTransaction", () => true);
+    const restoreSkip = injectOnce(target.ctx, "appendIssueActivity", (args) =>
+      (args[1] as { type?: string })?.type === "dependency_auto_start_skipped");
+    const warnings = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const response = await app.request(`/api/issues/${prereq.id}`, {
+        method: "PATCH", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ status: "done" }),
+      });
+      expect(response.status).toBe(200);
+      expect(store.getIssue(prereq.id)!.status).toBe("done");
+      expect(store.getIssue(dependent.id)!.status).toBe("backlog");
+      expect(allTaskRows(store, dependent.id)).toEqual([]);
+      expect(allActivityRows(store, dependent.id, "dependency_auto_start_skipped")).toEqual([]);
+      expect(warnings.mock.calls).toHaveLength(1);
+      expect(warnings.mock.calls.some((call) => String(call).includes("skip record failed"))).toBe(true);
+    } finally {
+      restoreRound();
+      restoreSkip();
+      warnings.mockRestore();
+    }
+  });
+
+  it("lets a member move a satisfied backlog issue to todo without force and queues its agent", async () => {
+    const { store, agent } = storeWithAgent("satisfied_patch");
+    const prereq = store.createIssue({ title: "Done prerequisite", status: "done" });
+    const dependent = store.createIssue({
+      title: "Recoverable dependent", status: "backlog", blockedBy: [prereq.id],
+      assigneeType: "agent", assigneeId: agent.id,
     });
+    const app = createMultiremiApp({ store });
+    const response = await app.request(`/api/issues/${dependent.id}`, {
+      method: "PATCH", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status: "todo" }),
+    });
+    expect(response.status).toBe(200);
+    expect(store.getIssue(dependent.id)!.status).toBe("todo");
+    expect(allTaskRows(store, dependent.id).map((row) => row.status)).toEqual(["queued"]);
+    expect(allActivityRows(store, dependent.id, "dependency_force_started")).toEqual([]);
+  });
+
+  it.each(["redispatch", "retry", "continuation", "delegation_return", "parent_wakeup"] as const)(
+    "records one post-commit gate exemption for %s",
+    (source) => {
+      const { store, runtime, agent } = storeWithAgent(`exemption_${source}`);
+      const prerequisite = store.createIssue({ title: "Open prerequisite", status: "in_progress" });
+      const issue = store.createIssue({ title: "Earlier work", status: "in_progress" });
+      const previous = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "earlier round" });
+      if (source === "redispatch") store.cancelTask(previous.id);
+      if (source === "retry") {
+        expect(store.claimTask(runtime.id)?.id).toBe(previous.id);
+        store.startTask(previous.id);
+        store.failTask(previous.id, { error: "failed", failureReason: "unknown" });
+      }
+      store.createIssueDependency(issue.id, { dependsOnIssueId: prerequisite.id, type: "blocked_by" });
+      store.updateIssue(issue.id, { status: "backlog" });
+
+      const events: Array<{ type: string; persisted: number }> = [];
+      const stop = store.onWorkspaceEvent((event) => {
+        if (event.type === "activity:created"
+          && (event.payload.entry as { action?: string })?.action === "dependency_gate_exempted") {
+          events.push({ type: event.type, persisted: allActivityRows(store, issue.id, "dependency_gate_exempted").length });
+        }
+      });
+      const task = store.createTask({
+        agentId: agent.id, issueId: issue.id, prompt: `continue ${source}`,
+        ...(source === "redispatch" || source === "retry" ? { attempt: 2, parentTaskId: previous.id } : {}),
+        ...(source === "continuation" ? { continuedFromTaskId: previous.id } : {}),
+        ...(source === "delegation_return" ? {
+          delegationId: "dlg_exemption", delegatedByAgentId: agent.id, parentTaskId: previous.id,
+        } : {}),
+        ...(source === "parent_wakeup" ? { preserveIssueStatus: true, parentTaskId: previous.id } : {}),
+      });
+      stop();
+      expect(store.getTask(task.id)?.status).toBe("queued");
+      expect(allTaskRows(store, issue.id).some((row) => row.id === task.id)).toBe(true);
+      const activities = allActivityRows(store, issue.id, "dependency_gate_exempted");
+      expect(activities).toHaveLength(1);
+      expect(activities[0]!.data).toMatchObject({
+        source, taskId: task.id, task_id: task.id,
+        previousTaskId: previous.id, previous_task_id: previous.id,
+        unmet: [{ key: prerequisite.key }],
+        unmetPrerequisites: [{ key: prerequisite.key }],
+        unmet_prerequisites: [{ key: prerequisite.key }],
+      });
+      expect(events).toEqual([{ type: "activity:created", persisted: 1 }]);
+    },
+  );
+
+  it("keeps a committed exempt task when its post-commit activity write fails", () => {
+    const { store, agent, dependent } = parkedChain("exemption_write_failure");
+    const restore = injectOnce(seams(store).ctx, "appendIssueActivity", (args) =>
+      (args[1] as { type?: string })?.type === "dependency_gate_exempted");
+    const warnings = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const task = store.createTask({
+        agentId: agent.id, issueId: dependent.id, prompt: "continue", attempt: 2,
+      });
+      expect(task.status).toBe("queued");
+      expect(allTaskRows(store, dependent.id)).toHaveLength(1);
+      expect(allActivityRows(store, dependent.id, "dependency_gate_exempted")).toEqual([]);
+      expect(warnings.mock.calls.some((call) => String(call).includes("post-commit issue activity failed"))).toBe(true);
+    } finally {
+      restore();
+      warnings.mockRestore();
+    }
+  });
+
+  it("records an actual automatic retry of a waiting issue", () => {
+    const { store, runtime, agent } = storeWithAgent("actual_retry");
+    const prerequisite = store.createIssue({ title: "Unfinished", status: "in_progress" });
+    const issue = store.createIssue({ title: "Running work", status: "in_progress" });
+    const first = store.createTask({
+      agentId: agent.id, issueId: issue.id, prompt: "first attempt", maxAttempts: 2,
+    });
+    expect(store.claimTask(runtime.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.createIssueDependency(issue.id, { dependsOnIssueId: prerequisite.id, type: "blocked_by" });
+    store.updateIssue(issue.id, { status: "backlog" });
+    store.failTask(first.id, { error: "runtime dropped", failureReason: "runtime_offline" });
+    const retry = store.listTasksForIssue(issue.id).find((task) => task.id !== first.id)!;
+    expect(retry.status).toBe("queued");
+    const exempted = allActivityRows(store, issue.id, "dependency_gate_exempted");
+    expect(exempted).toHaveLength(1);
+    expect(exempted[0]!.data).toMatchObject({
+      source: "retry", taskId: retry.id, previousTaskId: first.id,
+      unmet: [{ key: prerequisite.key }],
+    });
+  });
+
+  it("records no exemption for an issue outside waiting state", () => {
+    const { store, agent } = storeWithAgent("not_waiting");
+    const issue = store.createIssue({ title: "Ready", status: "todo" });
+    store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "retry", attempt: 2 });
+    expect(allActivityRows(store, issue.id, "dependency_gate_exempted")).toEqual([]);
   });
 
   it("emits issue:updated for the dependent with the new status", () => {

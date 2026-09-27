@@ -3077,8 +3077,11 @@ runMigrations(this.db);
     return this.runtimes.heartbeatRuntime(runtimeId, options);
   }
 
-  createIssue(input: CreateIssueInput): MultiremiIssue {
-    return this.issues.createIssue(input);
+  createIssue(input: CreateIssueInput, transaction?: {
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector;
+    deferredEvents: import("./context.js").CommitEventQueue;
+  }): MultiremiIssue {
+    return this.issues.createIssue(input, transaction);
   }
 
   getIssue(id: string): MultiremiIssue | null {
@@ -3268,9 +3271,10 @@ runMigrations(this.db);
   createIssueDependencyWithinTransaction(
     issueId: string,
     input: import("@multiremi/contracts/types.js").CreateIssueDependencyInput,
-    activity: import("@multiremi/store/repos/issues-repo.js").IssueMutationActivityContext = {},
+    activity: import("@multiremi/store/repos/issues-repo.js").IssueMutationActivityContext,
+    deferredEvents: import("@multiremi/store/context.js").CommitEventQueue,
   ): import("@multiremi/contracts/types.js").MultiremiIssueDependencyView {
-    return this.issues.createIssueDependencyWithinTransaction(issueId, input, activity);
+    return this.issues.createIssueDependencyWithinTransaction(issueId, input, activity, deferredEvents);
   }
 
   countOpenChildIssues(parentIssueId: string): number {

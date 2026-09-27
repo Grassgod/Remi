@@ -92,7 +92,14 @@ export function repositoryWikiObservability(ctx: StoreContext, workspaceId: stri
       metric.last_published_at = row.publication_at;
     }
   }
-  const runs = ctx.db.query(`SELECT r.* FROM multiremi_autopilot_runs r
+  // Projected, not `SELECT r.*` (MUL-398 A): the run row carries `payload` and
+  // `result`, and on 209 those made this one statement ship 12.2 MB across the
+  // PG bridge for a request that only reads the six columns below. `status` is
+  // filtered in the WHERE clause and never read back, so it stays out of the
+  // projection too.
+  const runs = ctx.db.query(`SELECT r.id, r.repository_id, r.schedule_target, r.task_id,
+      r.completed_at, r.created_at
+    FROM multiremi_autopilot_runs r
     JOIN multiremi_autopilots a ON a.id = r.autopilot_id
     WHERE a.workspace_id = ? AND (r.repository_id IS NOT NULL OR r.schedule_target IS NOT NULL)
       AND r.status IN ('completed', 'failed')

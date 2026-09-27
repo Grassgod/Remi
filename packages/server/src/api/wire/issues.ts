@@ -321,7 +321,7 @@ export function issueDependencyErrorResponse(c: Context, err: unknown): Response
     if (err.code === "dependency_cycle" || err.code === "dependency_on_ancestor") {
       return c.json({ error: err.message, code: err.code, path: err.details.path ?? [] }, 409);
     }
-    return c.json({ error: err.message, code: err.code }, 409);
+    return c.json({ error: err.message, code: err.code, unmet: err.details.unmet ?? [] }, 409);
   }
   if (err.message.startsWith("Issue not found:")) return c.json({ error: "issue not found" }, 404);
   if (err.message.startsWith("Dependent issue not found:")) return c.json({ error: "dependent issue not found" }, 400);

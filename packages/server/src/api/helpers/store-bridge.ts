@@ -570,7 +570,7 @@ export function safeRerunIssue(
   store: MultiremiStore,
   issueId: string,
   body: { agent_id?: string; agentId?: string; prompt?: string; parentTaskId?: string | null },
-): { task: MultiremiTask } | { error: string; status: 400 | 404 | 409; code?: string } {
+): { task: MultiremiTask } | { error: string; status: 400 | 404 | 409; code?: string; unmet?: IssueDependencyError["details"]["unmet"] } {
   const issue = store.getIssue(issueId);
   if (!issue) return { error: "issue not found", status: 404 };
   const agentId = body.agent_id ?? body.agentId ?? issue.assigneeId;
@@ -594,7 +594,7 @@ export function safeRerunIssue(
     // MUL-400 E3 gate 3: a rerun is a *new* round, so a waiting issue cannot
     // start one. The route answers 409 with the same code the status gate uses.
     if (error instanceof IssueDependencyError) {
-      return { error: error.message, status: 409, code: error.code };
+      return { error: error.message, status: 409, code: error.code, unmet: error.details.unmet ?? [] };
     }
     throw error;
   }

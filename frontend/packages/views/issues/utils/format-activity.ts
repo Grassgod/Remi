@@ -185,6 +185,18 @@ export function formatActivity(
     // MUL-400 E3: dependency gate and automatic start.
     case "dependency_auto_started":
       return t(($) => $.activity.dependency_auto_started, { key: details.satisfiedByKey ?? details.satisfied_by_key ?? "?" });
+    case "dependency_gate_exempted": {
+      const sourceLabels: Record<string, string> = {
+        redispatch: t(($) => $.activity.dependency_gate_exempted_redispatch),
+        retry: t(($) => $.activity.dependency_gate_exempted_retry),
+        continuation: t(($) => $.activity.dependency_gate_exempted_continuation),
+        delegation_return: t(($) => $.activity.dependency_gate_exempted_delegation_return),
+        parent_wakeup: t(($) => $.activity.dependency_gate_exempted_parent_wakeup),
+      };
+      return t(($) => $.activity.dependency_gate_exempted, {
+        source: sourceLabels[String(details.source)] ?? String(details.source ?? "?"),
+      });
+    }
     case "dependency_satisfied":
       return t(($) => $.activity.dependency_satisfied, { key: details.satisfiedByKey ?? details.satisfied_by_key ?? "?" });
     case "dependency_auto_start_skipped":
