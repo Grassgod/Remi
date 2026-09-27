@@ -490,8 +490,13 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
           ...(outbound.receiptMessageIds ? { receipt_message_ids: outbound.receiptMessageIds } : {}),
           ...(outbound.kind ? { kind: outbound.kind } : {}),
           ...(outbound.humanRequestId ? { human_request_id: outbound.humanRequestId } : {}),
+          // The host needs the asking Task to register a click the moment it
+          // sends the card, and needs to know a row is already plain text so it
+          // does not retry it as a malformed card (MUL-407).
+          ...(outbound.humanRequestTaskId ? { human_request_task_id: outbound.humanRequestTaskId } : {}),
           ...(outbound.targetMessageId ? { target_message_id: outbound.targetMessageId } : {}),
           ...(outbound.expiresAt ? { expires_at: outbound.expiresAt } : {}),
+          ...(outbound.degraded ? { degraded: outbound.degraded } : {}),
         };
       }
     }

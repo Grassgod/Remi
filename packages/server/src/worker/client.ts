@@ -390,6 +390,10 @@ export class MultiremiDaemonClient {
             humanRequestId: rawOutbound.human_request_id,
             human_request_id: rawOutbound.human_request_id,
           } : {}),
+          ...(typeof rawOutbound.human_request_task_id === "string" ? {
+            humanRequestTaskId: rawOutbound.human_request_task_id,
+            human_request_task_id: rawOutbound.human_request_task_id,
+          } : {}),
           ...(typeof rawOutbound.target_message_id === "string" ? {
             targetMessageId: rawOutbound.target_message_id,
             target_message_id: rawOutbound.target_message_id,
@@ -397,6 +401,10 @@ export class MultiremiDaemonClient {
           ...(typeof rawOutbound.expires_at === "string" ? {
             expiresAt: rawOutbound.expires_at,
             expires_at: rawOutbound.expires_at,
+          } : {}),
+          ...(typeof rawOutbound.degraded === "string" ? {
+            degraded: rawOutbound.degraded as MultiremiFeishuBotOutboundDelivery["degraded"],
+            degradeReason: rawOutbound.degraded as MultiremiFeishuBotOutboundDelivery["degraded"],
           } : {}),
           ...(typeof rawOutbound.task_id === "string" ? {
             taskId: rawOutbound.task_id,

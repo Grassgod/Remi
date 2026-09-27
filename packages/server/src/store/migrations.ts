@@ -2,7 +2,7 @@ import { CHAT_ISSUE_DECOUPLED_FINGERPRINT, chatTaskRetryParentSql } from "@multi
 import { syncRuntimeExecutionGroups } from "@multiremi/store/execution-groups.js";
 import { createHash } from "node:crypto";
 import { attachmentIdsFromText } from "@multiremi/contracts/attachments.js";
-import { type SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { type SqlDatabase, type SqlDatabaseDialect } from "@multiremi/store/db/postgres.js";
 import {
   isSessionArchiveRetryExhausted,
   nextSessionArchiveRetryAt,
@@ -47,7 +47,16 @@ const TASK_LIST_PAGINATION_INDEXES_MIGRATION = "20260921_task_list_pagination_in
 // instead of creating a duplicate. Overridable via MULTIREMI_OWNER_OPEN_ID.
 const DEFAULT_OWNER_OPEN_ID = "ou_e6b7ffc662b392317275b817295c0b44";
 
-export function runMigrations(db: SqlDatabase): void {
+export function runMigrations(db: SqlDatabase, options: { dialect?: SqlDatabaseDialect } = {}): void {
+  runMigrationsForDialect(db, resolveSqlDialect(db, options.dialect));
+}
+
+/**
+ * The migration body. The dialect is resolved once, up front, from declared
+ * facts, and passed down to the few steps that differ per backend — rather than
+ * rediscovered per step by probing (MUL-407).
+ */
+function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): void {
   renameLegacyMulticaObjects(db);
   const legacyGithubTables = existingTableNames(db);
   db.exec(`
@@ -3197,7 +3206,7 @@ export function runMigrations(db: SqlDatabase): void {
   // through `runMigrationOnce`: that helper stamps `new Date()`, and consuming
   // an extra clock read shifts the deterministic cursor pinned by
   // `tests/unit/multiremi/issue-detail-first-screen-query-count.test.ts`.
-  allowNullableHumanRequestPushWakeTaskId(db);
+  allowNullableHumanRequestPushWakeTaskId(db, dialect);
   addColumnIfMissing(db, "multiremi_feishu_bot_human_request_pushes", "delivery_id TEXT");
   addColumnIfMissing(db, "multiremi_task_human_requests", "expires_at TEXT");
   addColumnIfMissing(db, "multiremi_task_human_requests", "reminder_sent_at TEXT");
@@ -4121,8 +4130,8 @@ const HUMAN_REQUEST_PUSH_LEGACY_TABLE = `${HUMAN_REQUEST_PUSH_TABLE}_legacy`;
  * anywhere in the schema), so the surrounding code only has to turn them off
  * for the rebuild's duration to keep the RENAME from rewriting its own FKs.
  */
-function allowNullableHumanRequestPushWakeTaskId(db: SqlDatabase): void {
-  if (isPostgresDialect(db)) {
+function allowNullableHumanRequestPushWakeTaskId(db: SqlDatabase, dialect: SqlDatabaseDialect): void {
+  if (isPostgresDialect(db, dialect)) {
     // Postgres can relax the column in place, and the PRAGMA below is SQLite
     // only — asking for `is_nullable` through `PRAGMA table_info` would be
     // translated into a query Postgres cannot answer. `DROP NOT NULL` is itself
@@ -4164,27 +4173,28 @@ function ensureHumanRequestPushWakeIndex(db: SqlDatabase): void {
 }
 
 /**
- * Which dialect this handle speaks. `isPostgresConfigured()` reads the process
- * environment, which is right for a real deployment but wrong for the Postgres
- * test harness — it drives `PostgresSyncDatabase` over an explicit admin URL and
- * never sets `MULTIREMI_DATABASE_URL`. The handle itself is the reliable signal:
- * `PostgresSyncDatabase` translates SQLite SQL, so a statement reaching its
- * `sqlite_master` probe would fail on the server.
+ * Which SQL this handle speaks.
+ *
+ * Resolved from declared facts only — never by running a statement that one
+ * backend cannot answer. The previous probe (`SELECT … FROM sqlite_master`)
+ * logged an ERROR on Postgres at every startup, aborted the surrounding
+ * transaction if one was ever open, and read SQLite as Postgres whenever that
+ * query failed for an unrelated reason such as a lock.
+ *
+ * Order: an explicit argument (how a caller that already knows says so) beats
+ * the handle's own `dialect` marker, which beats `MULTIREMI_DATABASE_URL`. A
+ * thin test double with no marker falls through to the configured backend,
+ * which is what its SQL is written against anyway.
  */
-function isPostgresDialect(db: SqlDatabase): boolean {
-  // Ask the database rather than an environment variable or a method name.
-  // Bun's SQLite handle also exposes `inTransaction`, so probing for that made
-  // SQLite look like Postgres and silently skipped the rebuild; and the Postgres
-  // test harnesses reach `runMigrations` through thin wrappers, so a marker on
-  // one class is not enough either. `sqlite_master` is the one signal that is
-  // true no matter how the handle was wrapped: only SQLite can answer it.
-  try {
-    db.query("SELECT name FROM sqlite_master WHERE type = 'table' LIMIT 1").get();
-    return false;
-  } catch {
-    // No SQLite catalogue, so this handle speaks to something else.
-    return true;
-  }
+export function resolveSqlDialect(db: SqlDatabase, explicit?: SqlDatabaseDialect): SqlDatabaseDialect {
+  if (explicit) return explicit;
+  const marker = (db as { dialect?: unknown }).dialect;
+  if (marker === "postgres" || marker === "sqlite") return marker;
+  return isPostgresConfigured() ? "postgres" : "sqlite";
+}
+
+function isPostgresDialect(db: SqlDatabase, explicit?: SqlDatabaseDialect): boolean {
+  return resolveSqlDialect(db, explicit) === "postgres";
 }
 
 /**
@@ -4193,43 +4203,151 @@ function isPostgresDialect(db: SqlDatabase): boolean {
  * dropped so the next run finds nothing to do.
  */
 function healStrandedHumanRequestPushRows(db: SqlDatabase): void {
-  const legacy = db.query(
+  // A stranded copy is only ever left by an early version of this migration;
+  // `origin/main` has never created this table (the name does not appear in that
+  // revision). Both sides are therefore ours to reconcile, and a key collision
+  // means the two versions genuinely disagree rather than that something
+  // expected happened. The merge is the same operation as the ordinary rebuild,
+  // so there is one code path to reason about.
+  mergeHumanRequestPushTables(db);
+}
+
+function tableExists(db: SqlDatabase, table: string): boolean {
+  return Boolean(db.query(
     "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
-  ).get(HUMAN_REQUEST_PUSH_LEGACY_TABLE) as { name?: string } | null;
-  if (!legacy?.name) return;
-  const live = db.query(
-    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
-  ).get(HUMAN_REQUEST_PUSH_TABLE) as { name?: string } | null;
-  // Even the heal is one transaction, so a crash during recovery leaves the
-  // same recoverable state rather than a half-copied table.
-  db.transaction(() => {
-    // The live table must accept a NULL wake Task before anything is copied into
-    // it. A crash can also have left the *original* DDL back in place beside the
-    // renamed copy (an older binary recreated it after the rename); copying into
-    // that shape would still work, but the migration would then be "done" with a
-    // NOT NULL column, so rebuild instead.
-    const liveColumns = live?.name
-      ? db.query(`PRAGMA table_info(${HUMAN_REQUEST_PUSH_TABLE})`).all() as Array<{ name: string; notnull: number }>
-      : [];
-    const liveWake = liveColumns.find((column) => column.name === "wake_task_id");
-    const liveIsCurrent = Boolean(liveWake) && Number(liveWake!.notnull) === 0;
-    if (!live?.name || !liveIsCurrent) {
-      // The crash happened between RENAME and CREATE. Recreate the new shape and
-      // move the stranded rows back into it.
-      if (live?.name) db.exec(`DROP TABLE ${HUMAN_REQUEST_PUSH_TABLE}`);
-      createHumanRequestPushTable(db);
-      copyHumanRequestPushRows(db);
-      db.exec(`DROP TABLE ${HUMAN_REQUEST_PUSH_LEGACY_TABLE}`);
-      ensureHumanRequestPushWakeIndex(db);
-      return;
+  ).get(table));
+}
+
+/** One push row, with the pre-MUL-407 shape normalized (`delivery_id` -> NULL). */
+interface HumanRequestPushRow {
+  id: string;
+  workspace_id: string;
+  binding_id: string;
+  issue_id: string;
+  source_task_id: string;
+  request_id: string;
+  wake_task_id: string | null;
+  delivery_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+const humanRequestPushFingerprint = (row: HumanRequestPushRow): string => JSON.stringify([
+  row.id, row.workspace_id, row.binding_id, row.issue_id, row.source_task_id,
+  row.request_id, row.wake_task_id, row.delivery_id, row.created_at, row.updated_at,
+]);
+
+function readHumanRequestPushRows(db: SqlDatabase, table: string): HumanRequestPushRow[] {
+  if (!tableExists(db, table)) return [];
+  const columns = (db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>)
+    .map((column) => column.name);
+  // The old shape has no `delivery_id`; read it as NULL so both sides compare
+  // over the same field list.
+  const delivery = columns.includes("delivery_id") ? "delivery_id" : "NULL AS delivery_id";
+  return (db.query(`SELECT id, workspace_id, binding_id, issue_id, source_task_id,
+      request_id, wake_task_id, ${delivery}, created_at, updated_at FROM ${table}`)
+    .all() as Array<Record<string, unknown>>).map((row) => ({
+    id: String(row.id),
+    workspace_id: String(row.workspace_id),
+    binding_id: String(row.binding_id),
+    issue_id: String(row.issue_id),
+    source_task_id: String(row.source_task_id),
+    request_id: String(row.request_id),
+    wake_task_id: row.wake_task_id == null ? null : String(row.wake_task_id),
+    delivery_id: row.delivery_id == null ? null : String(row.delivery_id),
+    created_at: String(row.created_at),
+    updated_at: String(row.updated_at),
+  }));
+}
+
+/**
+ * Union the live table's rows with a stranded copy's.
+ *
+ * Identical rows (every column equal) collapse: a partly finished copy has the
+ * rows that already landed present on both sides, and those are the same row.
+ * A collision on any key where the contents differ is a real ambiguity — the two
+ * versions disagree about what happened, and choosing one silently would either
+ * drop a real push or resurrect a superseded one. That throws, which rolls the
+ * surrounding transaction back and leaves both tables exactly as they were.
+ */
+function mergeHumanRequestPushRows(
+  live: HumanRequestPushRow[],
+  legacy: HumanRequestPushRow[],
+): HumanRequestPushRow[] {
+  const merged: HumanRequestPushRow[] = [];
+  const seen = new Set<string>();
+  const byId = new Map<string, HumanRequestPushRow>();
+  const byRequest = new Map<string, HumanRequestPushRow>();
+  const byWakeTask = new Map<string, HumanRequestPushRow>();
+  const add = (row: HumanRequestPushRow): void => {
+    const fingerprint = humanRequestPushFingerprint(row);
+    if (seen.has(fingerprint)) return;
+    const clashes: string[] = [];
+    if (byId.has(row.id)) clashes.push(`id=${row.id}`);
+    const requestKey = `${row.binding_id}\u0000${row.request_id}`;
+    if (byRequest.has(requestKey)) {
+      clashes.push(`(binding_id=${row.binding_id}, request_id=${row.request_id})`);
     }
-    // Both tables exist in the current shape: the live one may be empty or
-    // partially copied. An `INSERT OR IGNORE` keyed on the primary key is safe
-    // to repeat, so copy whatever is missing and only then drop the leftover.
-    copyHumanRequestPushRows(db);
-    db.exec(`DROP TABLE ${HUMAN_REQUEST_PUSH_LEGACY_TABLE}`);
-    ensureHumanRequestPushWakeIndex(db);
-  })();
+    if (row.wake_task_id && byWakeTask.has(row.wake_task_id)) {
+      clashes.push(`wake_task_id=${row.wake_task_id}`);
+    }
+    if (clashes.length) {
+      throw new Error(
+        `multiremi_feishu_bot_human_request_pushes rebuild conflict: the live table and its `
+        + `stranded copy hold different rows for ${clashes.join(", ")}. The correct row cannot be `
+        + `chosen automatically; reconcile the two tables and retry.`,
+      );
+    }
+    seen.add(fingerprint);
+    byId.set(row.id, row);
+    byRequest.set(requestKey, row);
+    if (row.wake_task_id) byWakeTask.set(row.wake_task_id, row);
+    merged.push(row);
+  };
+  for (const row of live) add(row);
+  for (const row of legacy) add(row);
+  return merged;
+}
+
+/**
+ * Rebuild the push table in one transaction, keeping every distinct row from the
+ * live table and any stranded copy. With no stranded copy this is the ordinary
+ * first-time rebuild, so both the normal path and the recovery path share it.
+ */
+function mergeHumanRequestPushTables(db: SqlDatabase): void {
+  // `foreign_keys` cannot be toggled inside a transaction, so it is switched
+  // around the whole transaction and restored on every path — including the
+  // throw a merge conflict raises.
+  const foreignKeysEnabled =
+    Number((db.query("PRAGMA foreign_keys").get() as { foreign_keys?: number } | null)?.foreign_keys) === 1;
+  if (foreignKeysEnabled) db.exec("PRAGMA foreign_keys = OFF");
+  try {
+    db.transaction(() => {
+      // Read both sides inside the transaction: the snapshot the merge decides
+      // on and the tables it replaces must be the same one, or a concurrent
+      // write could land between the read and the drop.
+      const merged = mergeHumanRequestPushRows(
+        readHumanRequestPushRows(db, HUMAN_REQUEST_PUSH_TABLE),
+        readHumanRequestPushRows(db, HUMAN_REQUEST_PUSH_LEGACY_TABLE),
+      );
+      db.exec(`DROP TABLE IF EXISTS ${HUMAN_REQUEST_PUSH_TABLE}`);
+      db.exec(`DROP TABLE IF EXISTS ${HUMAN_REQUEST_PUSH_LEGACY_TABLE}`);
+      createHumanRequestPushTable(db);
+      for (const row of merged) {
+        db.run(
+          `INSERT INTO ${HUMAN_REQUEST_PUSH_TABLE} (
+             id, workspace_id, binding_id, issue_id, source_task_id,
+             request_id, wake_task_id, delivery_id, created_at, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [row.id, row.workspace_id, row.binding_id, row.issue_id, row.source_task_id,
+            row.request_id, row.wake_task_id, row.delivery_id, row.created_at, row.updated_at],
+        );
+      }
+      ensureHumanRequestPushWakeIndex(db);
+    })();
+  } finally {
+    if (foreignKeysEnabled) db.exec("PRAGMA foreign_keys = ON");
+  }
 }
 
 function createHumanRequestPushTable(db: SqlDatabase): void {
@@ -4253,41 +4371,10 @@ function createHumanRequestPushTable(db: SqlDatabase): void {
     )`);
 }
 
-/**
- * Copy every stranded row, skipping ids the live table already holds. The
- * legacy table predates `delivery_id`, so that column becomes NULL — the
- * decision-card lanes never had a wake Task to record there.
- */
-function copyHumanRequestPushRows(db: SqlDatabase): void {
-  db.exec(`
-    INSERT OR IGNORE INTO ${HUMAN_REQUEST_PUSH_TABLE} (
-      id, workspace_id, binding_id, issue_id, source_task_id,
-      request_id, wake_task_id, delivery_id, created_at, updated_at
-    )
-    SELECT
-      id, workspace_id, binding_id, issue_id, source_task_id,
-      request_id, wake_task_id, NULL, created_at, updated_at
-    FROM ${HUMAN_REQUEST_PUSH_LEGACY_TABLE}`);
-}
-
 function rebuildHumanRequestPushTableForNullableWakeTaskId(db: SqlDatabase): void {
-  // `foreign_keys` is a no-op inside a transaction, so it is toggled around the
-  // whole transaction the way the chat-session rebuild does.
-  const foreignKeysEnabled =
-    Number((db.query("PRAGMA foreign_keys").get() as { foreign_keys?: number } | null)?.foreign_keys) === 1;
-  if (foreignKeysEnabled) db.exec("PRAGMA foreign_keys = OFF");
-  try {
-    db.transaction(() => {
-      db.exec(`DROP TABLE IF EXISTS ${HUMAN_REQUEST_PUSH_LEGACY_TABLE}`);
-      db.exec(`ALTER TABLE ${HUMAN_REQUEST_PUSH_TABLE} RENAME TO ${HUMAN_REQUEST_PUSH_LEGACY_TABLE}`);
-      createHumanRequestPushTable(db);
-      copyHumanRequestPushRows(db);
-      db.exec(`DROP TABLE ${HUMAN_REQUEST_PUSH_LEGACY_TABLE}`);
-      ensureHumanRequestPushWakeIndex(db);
-    })();
-  } finally {
-    if (foreignKeysEnabled) db.exec("PRAGMA foreign_keys = ON");
-  }
+  // Same merge as the recovery path; with no stranded copy this is just the
+  // ordinary single-table rebuild, and it inherits the conflict detection too.
+  mergeHumanRequestPushTables(db);
 }
 
 function backfillCanonicalDaemonRouting(db: SqlDatabase): void {

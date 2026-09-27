@@ -19,7 +19,25 @@ export interface SqlStatement {
   values(...params: unknown[]): any[][];
 }
 
+/** The two SQL dialects the store bridges between. */
+export type SqlDatabaseDialect = "sqlite" | "postgres";
+
 export interface SqlDatabase {
+  /**
+   * Which SQL this handle actually speaks (MUL-407).
+   *
+   * Migrations must not infer the backend by running a statement that only one
+   * of them can answer: a failing probe leaves an ERROR in the Postgres log on
+   * every startup, aborts the surrounding transaction if one is ever open, and
+   * misreads SQLite as Postgres whenever that probe fails for an unrelated
+   * reason (a lock, a busy database). Every wrapper that implements this
+   * interface forwards the marker of the handle it wraps.
+   *
+   * `undefined` means "unknown" — a thin test double that has not declared it.
+   * Callers must then fall back to an explicit argument or the configured
+   * backend rather than probing.
+   */
+  readonly dialect?: SqlDatabaseDialect;
   query(sql: string): SqlStatement;
   prepare(sql: string): SqlStatement;
   run(sql: string, ...params: unknown[]): { changes: number; lastInsertRowid: number | bigint };
@@ -305,5 +323,8 @@ export function isPostgresConfigured(): boolean {
 export function openMultiremiDatabase(): SqlDatabase {
   const url = process.env.MULTIREMI_DATABASE_URL?.trim();
   if (url && isPostgresConfigured()) return new PostgresSyncDatabase(url);
-  return getDb() as unknown as SqlDatabase;
+  // Bun's SQLite handle satisfies the interface structurally, so the marker is
+  // attached here rather than by wrapping every statement.
+  const sqlite = getDb() as unknown as SqlDatabase;
+  return Object.assign(sqlite, { dialect: "sqlite" as const });
 }

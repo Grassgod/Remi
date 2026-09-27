@@ -723,7 +723,7 @@ export function controlPlaneConciergeHost(deps: {
  * In the latter two the host reports the reason with the send, so the control
  * plane skips both the terminal patch and the reminder's @.
  */
-async function sendDecisionLane(
+export async function sendDecisionLane(
   handle: FeishuChannelHandle,
   delivery: MultiremiFeishuBotOutboundDelivery,
   options?: FeishuOutboundOptions,
@@ -811,7 +811,7 @@ function cleanMentionOpenId(value: unknown): string | null {
  * delivery row the control plane kept — the request identity the callback name
  * is derived from, plus the recipient the card was addressed to.
  */
-async function restoreDecisionCardClicks(daemon: MultiremiDaemon, handle: FeishuChannelHandle): Promise<void> {
+export async function restoreDecisionCardClicks(daemon: MultiremiDaemon, handle: FeishuChannelHandle): Promise<void> {
   const cards = await daemon.listFeishuBotDecisionCards();
   for (const card of cards) {
     registerDecisionCardClick({

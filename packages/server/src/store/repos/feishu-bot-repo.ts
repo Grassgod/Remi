@@ -1580,7 +1580,10 @@ export class FeishuBotRepo {
       const request = this.ctx.tasks().getTaskHumanRequest(String(row.id));
       const task = this.ctx.tasks().getTask(String(row.task_id));
       const issue = task?.issueId ? this.ctx.issues().getIssue(task.issueId) : null;
-      if (!request || !issue) continue;
+      // The due query already scopes the Task to this workspace; re-check the
+      // Issue so an inconsistent `issue_id` cannot aim the reminder (and its
+      // activity) at another workspace's Issue.
+      if (!request || !issue || issue.workspaceId !== workspaceId) continue;
       const card = this.ctx.db.query(
         `SELECT o.binding_id, o.chat_id, o.thread_id, o.reply_to_message_id, o.interaction_open_id
          FROM multiremi_feishu_bot_outbound_deliveries o
@@ -1679,9 +1682,15 @@ export class FeishuBotRepo {
       `SELECT issue_id FROM multiremi_feishu_bot_chat_bindings WHERE id = ? AND workspace_id = ?`,
     ).get(String(row.binding_id), workspaceId) as Row | null;
     if (direct?.issue_id) return String(direct.issue_id);
+    // Falling back to the asking Task is only safe when both the Task and its
+    // Issue belong to this delivery's workspace. A stale or hand-written task id
+    // would otherwise let one workspace write its activity onto another
+    // workspace's Issue (MUL-407).
     const taskId = cleanOptionalString(row.human_request_task_id);
     const task = taskId ? this.ctx.tasks().getTask(taskId) : null;
-    return task?.issueId ?? null;
+    if (!task || task.workspaceId !== workspaceId || !task.issueId) return null;
+    const issue = this.ctx.issues().getIssue(task.issueId);
+    return issue && issue.workspaceId === workspaceId ? issue.id : null;
   }
 
   /**

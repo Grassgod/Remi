@@ -20,6 +20,10 @@ import {
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
 import { decodeDecisionCardBody } from "@shared/feishu-task-card.js";
 import { MultiremiDaemonClient } from "@multiremi/worker/client.js";
+import type { MultiremiDaemon } from "@multiremi/worker/daemon.js";
+import { sendDecisionLane as sendDecisionLaneForTest } from "../../../apps/remi/cli/multiremi.js";
+import type { FeishuChannelHandle } from "../../../apps/remi/cli/agent.js";
+import { handleTaskInteractionEvent, interactionMarker } from "@connectors/feishu/task-interaction.js";
 
 const APP_SECRET = "wJ4tQ7xR2nB8vC5mZ1kL0pS6dF3gH9jA";
 let previousEncryptionKey: string | undefined;
@@ -855,6 +859,258 @@ describe("Feishu decision cards for Issue human requests", () => {
     expect((degraded?.data as Record<string, unknown>).reason).toBe("invalid_recipient");
   });
 });
+
+/**
+ * Heartbeat delivery of a decision lane, end to end (MUL-407).
+ *
+ * The heartbeat is the path a host actually receives work on, and it is a
+ * different serializer from the recovery route — which is exactly how the
+ * `human_request_task_id` / `degraded` fields went missing and left a degraded
+ * text row looking like a malformed card, and a normal card unclickable until a
+ * restart. These drive the real route and the real `MultiremiDaemonClient`.
+ */
+describe("Feishu decision card heartbeat delivery", () => {
+  /** Route the real client's fetch at the in-process app, with a real token. */
+  async function withRealClient<T>(
+    app: ReturnType<typeof createMultiremiApp>,
+    store: MultiremiStore,
+    fn: (client: MultiremiDaemonClient) => Promise<T>,
+  ): Promise<T> {
+    const token = await store.createAccessToken({
+      name: "bot-host", type: "daemon", workspaceId: "local", daemonId: "bot-host",
+    });
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const parsed = new URL(url, "http://local");
+      return app.request(parsed.pathname + parsed.search, init);
+    }) as typeof fetch;
+    try { return await fn(new MultiremiDaemonClient("http://local", token.token)); }
+    finally { globalThis.fetch = realFetch; }
+  }
+
+  it("carries every decision field through heartbeat and the real client", async () => {
+    const { store, agentId, app } = scaffold();
+    // `issueWithTopic` seeds and acknowledges the topic root, so the next
+    // outbound row is the one this test is about.
+    const issue = issueWithTopic(store, agentId);
+
+    // Ask, then re-read the row through the heartbeat — the delivery the
+    // host actually receives.
+    const taskId = sourceTask(store, agentId, issue.id);
+    const request = askQuestion(store, taskId);
+    const delivered = (await withRealClient(app, store, async (client) =>
+      (await client.heartbeatRuntime("rt_bot", undefined, undefined, false, true)).pending_feishu_outbound))!;
+    expect(delivered).toBeTruthy();
+    expect(delivered.kind).toBe("decision_card");
+    // The fields the host needs to register a click immediately...
+    expect(delivered.humanRequestId).toBe(request.id);
+    expect(delivered.humanRequestTaskId).toBe(taskId);
+    expect(delivered.chatId).toBe("oc_decision_card");
+    expect(decodeDecisionCardBody(delivered.body)).toBeTruthy();
+    expect(delivered.degraded).toBeUndefined();
+
+    // A degraded row — `notifyMode = none` — reaches the host as plain text with
+    // its reason intact, which is what stops the host retrying it as a card.
+    const settingsRow = db!.query("SELECT settings FROM multiremi_workspaces WHERE id = 'local'").get() as { settings: string };
+    const settings = JSON.parse(settingsRow.settings) as Record<string, unknown>;
+    settings.issueTopics = { enabled: true, chatId: "oc_decision_card", notifyMode: "none" };
+    db!.run("UPDATE multiremi_workspaces SET settings = ? WHERE id = 'local'", [JSON.stringify(settings)]);
+    const degradedTaskId = sourceTask(store, agentId, issue.id);
+    const degradedRequest = askQuestion(store, degradedTaskId);
+    const degraded = (await withRealClient(app, store, async (client) =>
+      (await client.heartbeatRuntime("rt_bot", undefined, undefined, false, true)).pending_feishu_outbound))!;
+    expect(degraded.degraded).toBe("notify_none");
+    expect(degraded.humanRequestTaskId).toBe(degradedTaskId);
+    expect(degraded.humanRequestId).toBe(degradedRequest.id);
+    // A degraded body is plain text, not a card envelope.
+    expect(decodeDecisionCardBody(degraded.body)).toBeNull();
+    expect(degraded.body).toContain("Continue?");
+  });
+
+  it("sends a heartbeat-delivered card as text, not as a retried card", async () => {
+    const { store, agentId, app } = scaffold({ notifyMode: "none" });
+    const issue = issueWithTopic(store, agentId);
+    const request = askQuestion(store, sourceTask(store, agentId, issue.id));
+    const delivered = (await withRealClient(app, store, async (client) =>
+      (await client.heartbeatRuntime("rt_bot", undefined, undefined, false, true)).pending_feishu_outbound))!;
+    expect(delivered.id).toBeTruthy();
+    expect(delivered.degraded).toBe("notify_none");
+
+    // The host's own branch: a degraded row goes out as text and never as a card.
+    const handle = decisionLaneHandle();
+    const result = await sendDecisionLaneForTest(handle, delivered);
+    expect(result.messageId).toBe("om_text");
+    expect(handle.sentCards).toHaveLength(0);
+    expect(handle.sentText).toHaveLength(1);
+    expect(handle.sentText[0]).toContain("Continue?");
+    expect(handle.sentText[0]).not.toContain("<at id=");
+    void request;
+  });
+
+  it("registers a heartbeat-delivered card immediately, without a restart", async () => {
+    const { store, agentId, app } = scaffold();
+    const issue = issueWithTopic(store, agentId);
+    const taskId = sourceTask(store, agentId, issue.id);
+    const request = askQuestion(store, taskId);
+    const delivered = (await withRealClient(app, store, async (client) =>
+      (await client.heartbeatRuntime("rt_bot", undefined, undefined, false, true)).pending_feishu_outbound))!;
+    expect(delivered.humanRequestTaskId).toBe(taskId);
+
+    const handle = decisionLaneHandle();
+    handle.resolve = "ou_the_person";
+    const result = await sendDecisionLaneForTest(handle, delivered, undefined, decisionDaemon(store));
+    expect(result.messageId).toBe("om_card");
+    expect(handle.sentCards).toHaveLength(1);
+
+    // No restart: the registration made during the send answers the click.
+    const response = await handleTaskInteractionEvent("cli_decision_card", {
+      operator: { open_id: "ou_the_person" },
+      context: { open_chat_id: "oc_decision_card", open_message_id: "om_card" },
+      action: {
+        tag: "button",
+        name: interactionMarker(taskId, request.id),
+        form_value: { q0_option0: "true" },
+      },
+    });
+    expect(response).toMatchObject({ toast: { type: "success", content: "已提交" } });
+    expect(store.getTaskHumanRequest(request.id)!.status).toBe("responded");
+  });
+});
+
+  it("does not record a degradation on another workspace's Issue", () => {
+    // QA's case: the delivery row has no binding of its own and its
+    // `human_request_task_id` points at a Task in a different workspace. The
+    // fallback used to follow that pointer and write the activity there.
+    const { store, agentId } = scaffold();
+    const issue = issueWithTopic(store, agentId);
+    const request = askQuestion(store, sourceTask(store, agentId, issue.id));
+    const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
+
+    const other = store.createWorkspace({ name: "Other", slug: "other" });
+    const otherAgent = store.createAgent({ name: "Other agent", provider: "codex", workspaceId: other.id });
+    const otherIssue = store.createIssue({
+      title: "Other workspace issue", workspaceId: other.id,
+      assigneeType: "agent", assigneeId: otherAgent.id,
+    });
+    const otherTask = store.createTask({
+      agentId: otherAgent.id, issueId: otherIssue.id, workspaceId: other.id, prompt: "Other",
+    });
+
+    // Point this real delivery at the foreign Task and drop its binding, which
+    // is exactly the shape the fallback resolves.
+    db!.run("UPDATE multiremi_feishu_bot_outbound_deliveries SET binding_id = 'fcb_missing', human_request_task_id = ? WHERE id = ?",
+      [otherTask.id, card.id]);
+    expect(store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
+      claimToken: card.claimToken, status: "sent", externalMessageId: "om_text",
+      interactionOpenId: "ou_the_person", degraded: "send_failed",
+    })).toBe(true);
+
+    // The delivery itself records the outcome...
+    expect(db!.query("SELECT degraded FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(card.id))
+      .toEqual({ degraded: "send_failed" });
+    // ...but no activity lands on the other workspace's Issue.
+    expect(store.listIssueActivity(otherIssue.id).filter((a) => a.type === "decision_card_degraded"))
+      .toHaveLength(0);
+
+    // The in-workspace path still records one, so the guard is a scope check and
+    // not a blanket refusal.
+    const localRequest = askQuestion(store, sourceTask(store, agentId, issue.id));
+    const localCard = store.claimFeishuBotOutbound("local", "rt_bot")!;
+    expect(store.reportFeishuBotOutbound("local", "rt_bot", localCard.id, {
+      claimToken: localCard.claimToken, status: "sent", externalMessageId: "om_text_local",
+      interactionOpenId: "ou_the_person", degraded: "send_failed",
+    })).toBe(true);
+    const written = store.listIssueActivity(issue.id).filter((a) => a.type === "decision_card_degraded");
+    expect(written).toHaveLength(1);
+    expect(written[0]!.body).toBe(localRequest.id);
+    void request;
+  });
+
+  it("S3: the decision lane issues no receipt or reaction request", async () => {
+    // The store-level assertion (no receipt target on the row) is only a proxy.
+    // This records the calls the lane actually makes on the Feishu client
+    // surface and requires that none of them touch reactions.
+    const { store, agentId } = scaffold();
+    const issue = issueWithTopic(store, agentId);
+    const request = askQuestion(store, sourceTask(store, agentId, issue.id));
+    const calls: string[] = [];
+    const handle = decisionLaneHandle(calls);
+
+    // Send the card, then answer it, then take the terminal patch.
+    const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
+    await sendDecisionLaneForTest(handle, card, undefined, decisionDaemon(store));
+    store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
+      claimToken: card.claimToken, status: "sent", externalMessageId: "om_card",
+      interactionOpenId: "ou_the_person",
+    });
+    store.respondTaskHumanRequest(request.id, { response: { answers: { "Continue?": "Yes" } } });
+    const patch = store.claimFeishuBotOutbound("local", "rt_bot")!;
+    await sendDecisionLaneForTest(handle, patch, undefined, decisionDaemon(store));
+
+    // The lane did its two jobs...
+    expect(calls).toContain("card:send");
+    expect(calls).toContain("card:patch");
+    // ...and never reached for a reaction or a receipt. Both go through
+    // `/open-apis/im/v1/messages/.../reactions` or `im.messageReaction`, so an
+    // attempt would show up here.
+    expect(calls.filter((call) => call.includes("/reactions") || call.startsWith("reaction:"))).toEqual([]);
+    void issue;
+  });
+
+/** The two daemon calls the click handler makes, backed by the test store. */
+function decisionDaemon(store: MultiremiStore): MultiremiDaemon {
+  return {
+    getFeishuBotHumanRequest: async (taskId: string, requestId: string) => {
+      const request = store.getTaskHumanRequest(requestId);
+      return request && request.taskId === taskId ? request : null;
+    },
+    respondFeishuBotHumanRequest: async (taskId: string, requestId: string, response: Record<string, unknown>) => {
+      const request = store.getTaskHumanRequest(requestId);
+      if (!request || request.taskId !== taskId) throw new Error("request not found");
+      const settled = store.respondTaskHumanRequest(requestId, { response, respondedBy: "feishu" });
+      if (!settled) throw new Error("request is no longer pending");
+      return settled;
+    },
+  } as unknown as MultiremiDaemon;
+}
+
+/** A fake channel handle that records what the decision lane actually sends. */
+interface DecisionLaneHandle extends FeishuChannelHandle {
+  calls: string[];
+  resolve: string | null;
+  sentCards: Array<Record<string, unknown>>;
+  sentText: string[];
+}
+
+function decisionLaneHandle(calls: string[] = []): DecisionLaneHandle {
+  const handle = {
+    appId: "cli_decision_card",
+    calls,
+    resolve: "ou_the_person" as string | null,
+    sentCards: [] as Array<Record<string, unknown>>,
+    sentText: [] as string[],
+    sendProactiveCard: async (input: { card: Record<string, unknown> }) => {
+      calls.push("card:send");
+      handle.sentCards.push(input.card);
+      return { messageId: "om_card" };
+    },
+    sendProactiveThreadReply: async (input: { body: string }) => {
+      calls.push("text:send");
+      handle.sentText.push(input.body);
+      return { messageId: "om_text" };
+    },
+    updateProactiveCard: async () => { calls.push("card:patch"); },
+    resolveProactiveMention: async () => handle.resolve,
+    streamProactiveTask: async () => ({ messageId: "om_stream" }),
+    start: Promise.resolve(),
+    stop: async () => {},
+    publishBotMenu: async () => ({ dryRun: true, defaultPublished: false, userMenuCount: 0 }),
+    uploadImage: async () => ({ imageKey: "img" }),
+    sendProactiveAttachment: async () => ({ messageId: "om_att" }),
+  };
+  return handle as unknown as DecisionLaneHandle;
+}
 
 /** A normal proactive delivery queued behind the decision lane (B3). */
 function queueOrdinaryDelivery(store: MultiremiStore, issueId: string): string {

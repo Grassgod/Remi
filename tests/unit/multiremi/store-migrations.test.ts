@@ -5,7 +5,7 @@
 // breaks old-database upgrades).
 import { afterEach, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
-import { runMigrations } from "@multiremi/store/migrations.js";
+import { resolveSqlDialect, runMigrations } from "@multiremi/store/migrations.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 
 import {
@@ -2735,5 +2735,172 @@ describe("MUL-407 human-request push table rebuild", () => {
     ]);
     expect(database.query(`SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name=?`).get(LEGACY))
       .toEqual({ n: 0 });
+  });
+
+  it("keeps rows the live table alone holds when a stranded copy exists", () => {
+    // QA's case: live had already received a row the renamed copy never saw.
+    // The old heal dropped the live table outright and lost it.
+    const database = freshDb();
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS multiremi_schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS ${LIVE} (
+        id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, binding_id TEXT NOT NULL,
+        issue_id TEXT NOT NULL, source_task_id TEXT NOT NULL, request_id TEXT NOT NULL,
+        wake_task_id TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        UNIQUE(binding_id, request_id));
+      INSERT INTO ${LIVE} (id, workspace_id, binding_id, issue_id, source_task_id, request_id, wake_task_id, created_at, updated_at)
+      VALUES ('old1','w','fb1','fi1','ft1','fr1','fw1','c1','u1'),
+             ('old2','w','fb2','fi2','ft2','fr2','fw2','c2','u2');
+      ALTER TABLE ${LIVE} RENAME TO ${LEGACY};
+      CREATE TABLE ${LIVE} (
+        id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, binding_id TEXT NOT NULL,
+        issue_id TEXT NOT NULL, source_task_id TEXT NOT NULL, request_id TEXT NOT NULL,
+        wake_task_id TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        UNIQUE(binding_id, request_id));
+      INSERT INTO ${LIVE} (id, workspace_id, binding_id, issue_id, source_task_id, request_id, wake_task_id, created_at, updated_at)
+      VALUES ('live3','w','fb3','fi3','ft3','fr3','fw3','c3','u3');
+    `);
+    migrate(database);
+    expect((database.query(`SELECT id FROM ${LIVE} ORDER BY id`).all() as Array<{ id: string }>).map((row) => row.id))
+      .toEqual(["live3", "old1", "old2"]);
+    expect(database.query(`SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name=?`).get(LEGACY))
+      .toEqual({ n: 0 });
+    // The merged rows keep their values, not just their ids. Order is whatever
+    // the merge visited, which is not part of the contract.
+    expect((rows(database) as Array<{ id: string; wake_task_id: string | null }>)
+      .map((row) => [row.id, row.wake_task_id]).sort()).toEqual([
+      ["live3", "fw3"], ["old1", "fw1"], ["old2", "fw2"],
+    ]);
+  });
+
+  it("collapses identical rows that appear on both sides of a half-finished copy", () => {
+    const database = freshDb();
+    seedOldPushTable(database);
+    database.exec(`
+      ALTER TABLE ${LIVE} RENAME TO ${LEGACY};
+      CREATE TABLE ${LIVE} (
+        id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, binding_id TEXT NOT NULL,
+        issue_id TEXT NOT NULL, source_task_id TEXT NOT NULL, request_id TEXT NOT NULL,
+        wake_task_id TEXT UNIQUE, delivery_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        UNIQUE(binding_id, request_id));
+      INSERT INTO ${LIVE} (id, workspace_id, binding_id, issue_id, source_task_id, request_id, wake_task_id, delivery_id, created_at, updated_at)
+      SELECT id, workspace_id, binding_id, issue_id, source_task_id, request_id, wake_task_id, NULL, created_at, updated_at
+      FROM ${LEGACY} WHERE id = 'fhrp_1';
+    `);
+    migrate(database);
+    // fhrp_1 was on both sides and is stored once; fhrp_2 comes from the copy.
+    expect(rows(database)).toEqual([
+      { id: "fhrp_1", wake_task_id: "wake_1", delivery_id: null, created_at: "2026-09-01T00:00:00.000Z" },
+      { id: "fhrp_2", wake_task_id: "wake_2", delivery_id: null, created_at: "2026-09-02T00:00:00.000Z" },
+    ]);
+  });
+
+  it("refuses to guess when the two sides disagree on a unique key", () => {
+    // Different contents under the same key is genuine ambiguity: silently
+    // keeping either row would drop a real push or resurrect a superseded one.
+    const database = freshDb();
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS multiremi_schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS ${LIVE} (
+        id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, binding_id TEXT NOT NULL,
+        issue_id TEXT NOT NULL, source_task_id TEXT NOT NULL, request_id TEXT NOT NULL,
+        wake_task_id TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        UNIQUE(binding_id, request_id));
+      INSERT INTO ${LIVE} (id, workspace_id, binding_id, issue_id, source_task_id, request_id, wake_task_id, created_at, updated_at)
+      VALUES ('same','w','fbX','fi1','ft1','fr1','fw1','c1','u1');
+      ALTER TABLE ${LIVE} RENAME TO ${LEGACY};
+      CREATE TABLE ${LIVE} (
+        id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, binding_id TEXT NOT NULL,
+        issue_id TEXT NOT NULL, source_task_id TEXT NOT NULL, request_id TEXT NOT NULL,
+        wake_task_id TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        UNIQUE(binding_id, request_id));
+      INSERT INTO ${LIVE} (id, workspace_id, binding_id, issue_id, source_task_id, request_id, wake_task_id, created_at, updated_at)
+      VALUES ('same','w','fbX','fiX','ftX','frX','fwX','cX','uX');
+    `);
+    const beforeLive = database.query(`SELECT * FROM ${LIVE} ORDER BY id`).all();
+    const beforeLegacy = database.query(`SELECT * FROM ${LEGACY} ORDER BY id`).all();
+    expect(() => migrate(database)).toThrow(/rebuild conflict/);
+    // The message names the keys that clash, and both tables survive untouched.
+    expect(() => migrate(database)).toThrow(/id=same/);
+    expect(database.query(`SELECT * FROM ${LIVE} ORDER BY id`).all()).toEqual(beforeLive);
+    expect(database.query(`SELECT * FROM ${LEGACY} ORDER BY id`).all()).toEqual(beforeLegacy);
+  });
+
+  it("restores foreign_keys after a refused merge", () => {
+    const database = freshDb();
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS multiremi_schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS ${LIVE} (
+        id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, binding_id TEXT NOT NULL,
+        issue_id TEXT NOT NULL, source_task_id TEXT NOT NULL, request_id TEXT NOT NULL,
+        wake_task_id TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        UNIQUE(binding_id, request_id));
+      INSERT INTO ${LIVE} (id, workspace_id, binding_id, issue_id, source_task_id, request_id, wake_task_id, created_at, updated_at)
+      VALUES ('same','w','fbX','fi1','ft1','fr1','fw1','c1','u1');
+      ALTER TABLE ${LIVE} RENAME TO ${LEGACY};
+      CREATE TABLE ${LIVE} (
+        id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, binding_id TEXT NOT NULL,
+        issue_id TEXT NOT NULL, source_task_id TEXT NOT NULL, request_id TEXT NOT NULL,
+        wake_task_id TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        UNIQUE(binding_id, request_id));
+      INSERT INTO ${LIVE} (id, workspace_id, binding_id, issue_id, source_task_id, request_id, wake_task_id, created_at, updated_at)
+      VALUES ('same','w','fbX','fiX','ftX','frX','fwX','cX','uX');
+    `);
+    database.exec("PRAGMA foreign_keys = ON");
+    expect(() => migrate(database)).toThrow(/rebuild conflict/);
+    // The conflict must not leave enforcement switched off.
+    expect((database.query("PRAGMA foreign_keys").get() as { foreign_keys: number }).foreign_keys).toBe(1);
+  });
+
+  it("resolves the dialect without touching the database at all", () => {
+    // The old probe ran `SELECT … FROM sqlite_master` and read a failure as "this
+    // is Postgres". On Postgres that logs an ERROR every startup and aborts the
+    // surrounding transaction if one is open; on SQLite it misfires whenever the
+    // query fails for an unrelated reason. The resolver now consults only
+    // declared facts, so it issues no statement — this counts them.
+    const statements: string[] = [];
+    const handle = new Proxy(new Database(":memory:"), {
+      get(target, key) {
+        const value = Reflect.get(target, key, target);
+        if ((key === "query" || key === "prepare" || key === "run" || key === "exec") && typeof value === "function") {
+          return (...args: unknown[]) => { statements.push(String(args[0])); return value.apply(target, args); };
+        }
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as unknown as SqlDatabase & { dialect: "sqlite" };
+    Object.assign(handle, { dialect: "sqlite" as const });
+
+    expect(resolveSqlDialect(handle)).toBe("sqlite");
+    expect(resolveSqlDialect(handle, "postgres")).toBe("postgres");
+    expect(resolveSqlDialect(handle, "sqlite")).toBe("sqlite");
+    // A wrapper that forgot to forward its marker, with no explicit dialect, is
+    // resolved from configuration — never by asking the database.
+    const anonymous = new Proxy(new Database(":memory:"), {
+      get(target, key) {
+        const value = Reflect.get(target, key, target);
+        if ((key === "query" || key === "prepare" || key === "run" || key === "exec") && typeof value === "function") {
+          return (...args: unknown[]) => { statements.push(String(args[0])); return value.apply(target, args); };
+        }
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as unknown as SqlDatabase;
+    expect(resolveSqlDialect(anonymous)).toBe("sqlite");
+    // No SQL ran, on any path.
+    expect(statements).toEqual([]);
+  });
+
+  it("treats an explicit dialect as authoritative over the handle marker", () => {
+    // `runMigrations(db, { dialect })` is how a caller that already knows says
+    // so — the seam the Postgres wrappers use, and why a wrapper that forgets to
+    // forward `dialect` is no longer a correctness problem.
+    const sqlite = new Database(":memory:");
+    runMigrations(sqlite as unknown as SqlDatabase, { dialect: "sqlite" });
+    // A SQLite handle asked to migrate as Postgres would try `ALTER COLUMN … DROP
+    // NOT NULL`; the explicit value must win and keep it on the SQLite path.
+    const columns = sqlite.query(
+      "PRAGMA table_info(multiremi_feishu_bot_human_request_pushes)",
+    ).all() as Array<{ name: string; notnull: number }>;
+    expect(columns.find((column) => column.name === "wake_task_id")?.notnull).toBe(0);
+    expect(columns.find((column) => column.name === "delivery_id")).toBeTruthy();
   });
 });

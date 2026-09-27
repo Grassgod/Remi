@@ -116,12 +116,19 @@ the checkpointed recipient — anyone else gets the 「请由卡片中指定的�
 toast.
 
 The click handler lives in the bot host process. Since this lane has no Task
-stream, there is no presentation checkpoint to replay: the host rebuilds its
-registrations from `GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards`,
-which lists the pending requests whose cards it sent. The route answers in the
-daemon protocol's snake_case shape (`request_id`, `task_id`, `chat_id`,
-`message_id`, `recipient_open_id`) and is readable only by that Runtime's own
-daemon token; that is what keeps a button on screen working across a host restart.
+stream, there is no presentation checkpoint to replay: the host registers a card
+as it sends it, and rebuilds its registrations after a restart from
+`GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards`, which lists the
+pending requests whose cards it sent. The route answers in the daemon protocol's
+snake_case shape (`request_id`, `task_id`, `chat_id`, `message_id`,
+`recipient_open_id`) and is readable only by that Runtime's own daemon token.
+
+The heartbeat's `pending_feishu_outbound` carries the same decision fields as the
+recovery route — `kind`, `human_request_id`, `human_request_task_id`,
+`target_message_id`, `expires_at` and `degraded` — because it is the path a host
+actually receives work on. A missing `human_request_task_id` left a freshly sent
+card unclickable until the next restart, and a missing `degraded` made an
+already-plain-text row look like a malformed card worth retrying.
 
 `multiremi_task_human_requests.expires_at` carries the deadline (the server
 defaults to one hour when an older daemon sends no `timeout_ms`). The lifecycle
@@ -144,6 +151,15 @@ time to act. With less than a minute of lifetime left the nudge is suppressed
 entirely — the same predicate gates the normal window and the catch-up, and it is
 evaluated inside the claim transaction so SQLite and Postgres agree.
 
+Whichever side decides it, the degradation lands on the Issue as one
+`decision_card_degraded` activity with the same fields (`request_id`,
+`source_task_id`, `delivery_id`, `kind`, `reason`), written once per delivery. The
+control plane writes it when it already knows there is nobody to ask; the host
+writes it when its own lookup or the send fails. That lookup resolves the Issue
+from the delivery's own binding, or from the asking Task only when the Task *and*
+its Issue belong to the delivery's workspace, so one workspace cannot record an
+outcome on another's Issue.
+
 Degradations all end in the same place — plain text carrying the question, its
 numbered options and the parent Issue's workbench link, with no internal ids and
 no @. Three cases reach it: `notifyMode = none`, an unusable `person` target, and
@@ -153,13 +169,9 @@ the terminal patch and the reminder's @. A fourth case is decided at send time: 
 non-retryable Feishu rejection replaces the card with the same text twin and
 reports `send_failed`. Retryable failures stay on the outbox backoff.
 
-Whichever side decides it, the degradation lands on the Issue as one
-`decision_card_degraded` activity carrying the same fields (`request_id`,
-`source_task_id`, `delivery_id`, `kind`, `reason`), written once per delivery.
-The control plane writes it when it already knows there is nobody to ask; the host
-writes it when its own lookup or the send fails. An Issue whose topic has no seed
-message gets no delivery at all and records the `decision_card_skipped` activity,
-so the request is visible on the web workbench only.
+An Issue whose topic has no seed message gets no delivery at all and records the
+`decision_card_skipped` activity, so the request is visible on the web workbench
+only.
 
 A stored topic config that the current validation would reject — most often a
 `person` mode whose `notify_open_id` is missing or malformed, which a database

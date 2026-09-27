@@ -51,7 +51,11 @@ if (!pgAvailable) {
  */
 class RecordingDb implements SqlDatabase {
   readonly statements: string[] = [];
-  constructor(private readonly inner: SqlDatabase) {}
+  /** Forwarded so migrations resolve the backend from the handle (MUL-407). */
+  readonly dialect: SqlDatabase["dialect"];
+  constructor(private readonly inner: SqlDatabase) {
+    this.dialect = inner.dialect;
+  }
   query(sql: string): SqlStatement {
     this.statements.push(sql);
     return this.inner.query(sql);
