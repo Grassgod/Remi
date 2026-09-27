@@ -56,6 +56,17 @@ so the mechanism cannot be owned by the issue timeline component.
    keys, dragging the scrollbar — releases the pin. Returning to within the pin
    threshold, `pin()`, or the existing "back to latest" control re-engages it.
 
+   The state machine is also the single authority for following new content.
+   The list is rendered by a virtualizer with its own, much wider notion of
+   "at the bottom" (Virtuoso's default band is 120 px, roughly the composer
+   below the timeline, against this hook's 24 px), so a reader parked between
+   the two thresholds is released by the hook while the virtualizer still
+   considers itself at the end. Letting the virtualizer follow on its own
+   signal therefore drags that reader back on the next comment — the exact
+   behaviour this issue removes. Follow only while the hook reports `pinned`,
+   and re-pin on the virtualizer's at-bottom signal only together with a
+   downward scroll since the release, so the band alone can never re-engage it.
+
 3. **The hooks are pure DOM modules with no data knowledge.** They live in
    `frontend/packages/views/common/` (the `views` package has the jsdom test
    runner; `packages/ui` has none) and receive the scroll element, the content
@@ -102,6 +113,11 @@ so the mechanism cannot be owned by the issue timeline component.
   tight shows up as a defect instead of a latency win.
 - **Two budgets exist until MUL-393** replaces the deep-link flat path with a
   windowed one; the 1500 ms exception then goes away.
+- **The virtualizer's own at-bottom signal is not authoritative.** It is wider
+  than the hook's threshold by design (a composer sits below the list), so
+  consumers must gate both following and re-pinning on the hook's state; the
+  signal alone only says "the last row is near", not "the reader wants to be
+  at the end".
 - **`CodeBlock.tsx`'s minimal loading placeholder must wrap the same way as
   its highlighted output** (`break-all`); otherwise a long line re-flows the
   block when Shiki resolves.
