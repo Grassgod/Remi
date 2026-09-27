@@ -24,6 +24,7 @@ import { useUpdateIssue } from "@multiremi/core/issues/mutations";
 import { myIssuesViewStore } from "@multiremi/core/issues/stores/my-issues-view-store";
 import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-screen";
 import { useListPerfMarker } from "../../common/use-list-perf-marker";
+import { useNavigation } from "../../navigation";
 import { PageHeader } from "../../layout/page-header";
 import { useT } from "../../i18n";
 import { MyIssuesHeader } from "./my-issues-header";
@@ -32,6 +33,7 @@ export function MyIssuesPage() {
   const { t } = useT("my-issues");
   const user = useAuthStore((s) => s.user);
   const wsId = useWorkspaceId();
+  const { pathname } = useNavigation();
   const viewMode = useStore(myIssuesViewStore, (s) => s.viewMode);
   const statusFilters = useStore(myIssuesViewStore, (s) => s.statusFilters);
   const priorityFilters = useStore(myIssuesViewStore, (s) => s.priorityFilters);
@@ -53,11 +55,16 @@ export function MyIssuesPage() {
   // See issues-page.tsx for the rationale — derive a workspace-wide set
   // of issue ids with at least one running task, drive the "agents
   // working" quick-filter from it.
-  // MUL-472 b: see issues-page.tsx — workspace roll-ups wait for the first screen.
-  const afterFirstScreen = useAfterFirstScreen();
-  const { data: snapshot = [] } = useQuery(
-    agentTaskSnapshotOptions(wsId, { enabled: afterFirstScreen }),
+  //
+  // MUL-472 b: same two-class rule as issues-page.tsx — the roll-up waits with
+  // the page-level queries, except when the running-agent filter makes the
+  // snapshot the row set itself.
+  const afterFirstScreen = useAfterFirstScreen({ routeKey: pathname });
+  const snapshotIsLoadBearing = agentRunningFilter;
+  const snapshotQuery = useQuery(
+    agentTaskSnapshotOptions(wsId, { enabled: afterFirstScreen || snapshotIsLoadBearing }),
   );
+  const snapshot = snapshotQuery.data ?? [];
   const runningIssueIds = useMemo(() => {
     const ids = new Set<string>();
     for (const t of snapshot) {
@@ -128,9 +135,12 @@ export function MyIssuesPage() {
         : (statusIssuesQuery.data ?? []),
     [assigneeGroupsQuery.data, statusIssuesQuery.data, usesAssigneeBoard],
   );
-  const loading = usesAssigneeBoard
+  // The running-agent filter reads the snapshot for its row set, so the list is
+  // not renderable until that arrives (see issues-page.tsx).
+  const snapshotPending = snapshotIsLoadBearing && snapshotQuery.isPending;
+  const loading = (usesAssigneeBoard
     ? assigneeGroupsQuery.isLoading
-    : statusIssuesQuery.isLoading;
+    : statusIssuesQuery.isLoading) || snapshotPending;
   // MUL-472 item 5: see issues-page.tsx — same marker, same meaning.
   const perfMarker = useListPerfMarker({
     status: usesAssigneeBoard ? assigneeGroupsQuery.status : statusIssuesQuery.status,

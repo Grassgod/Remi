@@ -29,8 +29,11 @@ export function ChatFab() {
   // route's first screen, so a page that never opens chat pays nothing for
   // them up front. `pendingChatTasksOptions` keeps polling only while a task is
   // actually in flight, so an idle workspace still costs zero requests.
+  //
+  // Shell scope: this button is mounted by the dashboard layout for the whole
+  // session, so it must not re-close (and re-issue) on every navigation.
   const { pathname } = useNavigation();
-  const afterFirstScreen = useAfterFirstScreen({ routeKey: pathname });
+  const afterFirstScreen = useAfterFirstScreen({ scope: "shell", routeKey: pathname });
   const { data: sessions = [] } = useQuery(
     chatSessionsOptions(wsId, "all", { enabled: afterFirstScreen }),
   );

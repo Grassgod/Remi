@@ -28,6 +28,7 @@ import { memberListOptions } from "@multiremi/core/workspace/queries";
 import { agentTaskSnapshotOptions } from "@multiremi/core/agents";
 import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-screen";
 import { useWorkspaceId } from "@multiremi/core/hooks";
+import { useNavigation } from "../../navigation";
 import { useRecentContextStore } from "@multiremi/core/chat";
 import { useWorkspacePaths } from "@multiremi/core/paths";
 import { useActorName } from "@multiremi/core/workspace/hooks";
@@ -134,10 +135,14 @@ function ProjectIssuesContent({
   const creatorFilters = useViewStore((s) => s.creatorFilters);
   const labelFilters = useViewStore((s) => s.labelFilters);
   const agentRunningFilter = useViewStore((s) => s.agentRunningFilter);
+  const { pathname } = useNavigation();
 
-  const afterFirstScreen = useAfterFirstScreen();
+  // MUL-472 b: page scope — this page's own snapshot waits for this page. It is
+  // also the row set when the running-agent filter is on, so it stays ungated
+  // in that state (see issues-page.tsx).
+  const afterFirstScreen = useAfterFirstScreen({ routeKey: pathname });
   const { data: snapshot = [] } = useQuery(
-    agentTaskSnapshotOptions(wsId, { enabled: afterFirstScreen }),
+    agentTaskSnapshotOptions(wsId, { enabled: afterFirstScreen || agentRunningFilter }),
   );
   const runningIssueIds = useMemo(() => {
     const ids = new Set<string>();

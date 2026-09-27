@@ -1,34 +1,117 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { useNavigationStore } from "../navigation";
 
 /**
- * Wait before the deferred app-shell work runs (MUL-472 b, MUL-383 A5).
+ * The app-shell / page request gate (MUL-472 b, MUL-383 A5).
  *
- * The point is not to hide data: it is to keep the shell's own requests out of
- * the route's first wave. Every page paid for them (MUL-383 §6 S9-1), so they
- * move behind one idle callback once the new route's first content commit has
- * happened. Pins, invitations, the CLI update hint and the sidebar badges
- * therefore appear up to a second later — accepted in A5.
+ * ## Why this exists
+ *
+ * Every page used to pay for the shell's own requests (pins, invitations, the
+ * CLI update hint, the sidebar badges, agent presence roll-ups) in its first
+ * wave. A5 accepted moving them behind the route's first screen.
+ *
+ * ## When the gate opens (QA rework `cmt_r0euas6zfxff`)
+ *
+ * The first version opened the gate on the first idle slot after *its own*
+ * mount. That is not the same thing as "the page has content": while the list
+ * request is still in flight the browser is idle, so the gate opened before
+ * the main content existed — measured 660 ms early for
+ * `/api/agent-task-snapshot`, 102 ms for `/api/pins`.
+ *
+ * The gate now waits for two things, in order:
+ *
+ *  1. **this route's main content is ready** — published by the page itself
+ *     through {@link useRouteContentReady}. The list pages publish the same
+ *     condition that drives their `data-perf-scroll="list"` marker (query
+ *     settled, not `keepPreviousData`); the issue detail publishes its own
+ *     body readiness. Success, empty and failure all count: a failed list must
+ *     not keep the deferred shell content away forever.
+ *  2. **the first idle callback after that** (`requestIdleCallback` with a 1 s
+ *     `timeout`, per A5).
+ *
+ * A route that never publishes readiness falls back to a
+ * {@link AFTER_FIRST_SCREEN_CONTENT_FALLBACK_MS} timer measured from the moment
+ * the route was first observed, and then takes the same idle step.
+ *
+ * ## Two classes of consumer
+ *
+ * The ruling splits the gated queries in two, because they behave differently
+ * across a client-side navigation:
+ *
+ *  - **`scope: "page"`** — queries owned by a page that mounts and unmounts
+ *    (`agent-task-snapshot`, `agents?include_archived`, `child-progress`,
+ *    `squads`, …). They wait for the gate on *every* route change, and the new
+ *    page's first render must already be `false`. That is why the state is kept
+ *    as "which route key passed" rather than a single boolean: a stale `true`
+ *    would leak into the new route's first render.
+ *  - **`scope: "shell"`** — queries owned by a component that stays mounted
+ *    across routes (the sidebar's pins, invitations, CLI hint and badges, the
+ *    chat FAB). They wait only for the **first** page of the session; after
+ *    that they never close again. Closing and reopening them on every
+ *    navigation would re-issue expired requests and make hot navigation cost
+ *    *more* than the pre-MUL-472 baseline.
+ *
+ * Both are safe against the other failure mode QA found: nothing here closes a
+ * gate that a page's own content has already satisfied, and a page-level gate
+ * is keyed by the route visit, so returning to an earlier path starts closed.
  */
-export const AFTER_FIRST_SCREEN_TIMEOUT_MS = 1000;
+
+/** Idle-callback deadline once the route's content is ready (A5 contract). */
+export const AFTER_FIRST_SCREEN_IDLE_TIMEOUT_MS = 1000;
+/**
+ * Fallback for routes with no readiness publisher: how long after the route is
+ * first observed the gate stops waiting for content and takes the idle step.
+ * Long enough to cover a normal first content commit, short enough that a
+ * deferred badge cannot lag the page by more than ~3 s in total.
+ */
+export const AFTER_FIRST_SCREEN_CONTENT_FALLBACK_MS = 2000;
+
+export type AfterFirstScreenScope = "page" | "shell";
+
+interface RouteGate {
+  /** The route published (or the fallback decided) that its content settled. */
+  contentReady: boolean;
+  passed: boolean;
+  cancelIdle: (() => void) | null;
+  fallbackHandle: ReturnType<typeof setTimeout> | null;
+}
+
+const gates = new Map<string, RouteGate>();
+const listeners = new Set<() => void>();
+
+/** Session-wide: the shell class never closes again after its first opening. */
+let shellPassed = false;
+/** The route key the registry currently describes; see {@link observeRoute}. */
+let currentRouteKey: string | null = null;
+
+let idleTimeoutMs = AFTER_FIRST_SCREEN_IDLE_TIMEOUT_MS;
+let contentFallbackMs = AFTER_FIRST_SCREEN_CONTENT_FALLBACK_MS;
+
+function notify(): void {
+  for (const listener of [...listeners]) listener();
+}
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
 
 /**
- * Schedules `callback` for the first idle slot after the current commit, or at
- * `timeoutMs` at the latest.
+ * Schedules `callback` for the first idle slot, or at `timeoutMs` at the
+ * latest.
  *
  * `requestIdleCallback` with a timeout is the definition A5 agreed on. Engines
  * without it (older WebKit, jsdom) fall back to a macrotask, which keeps the
  * ordering property that matters here — the page's own effects have already
  * run — without inventing a different dwell time.
- *
- * Returns a cancel function; the caller must run it on unmount, otherwise a
- * route change leaves the previous route's timer armed.
  */
 export function scheduleAfterFirstIdle(
   callback: () => void,
-  timeoutMs: number = AFTER_FIRST_SCREEN_TIMEOUT_MS,
+  timeoutMs: number = AFTER_FIRST_SCREEN_IDLE_TIMEOUT_MS,
 ): () => void {
   if (typeof window === "undefined") return () => {};
   const idleWindow = window as Window & {
@@ -48,44 +131,169 @@ export function scheduleAfterFirstIdle(
   return () => window.clearTimeout(handle);
 }
 
-export interface UseAfterFirstScreenOptions {
-  /**
-   * Identity of the route being waited for. Changing it restarts the wait, so a
-   * client-side navigation defers the shell again instead of inheriting the
-   * previous route's "already past the first screen".
-   *
-   * Defaults to the navigation store's last path, which the dashboard guard
-   * writes on every route change. Callers that already have `pathname` (the
-   * sidebar) should pass it: the store update lands one commit later.
-   */
-  routeKey?: string;
-  /** Overridable for tests; production always uses the A5 contract of 1 s. */
-  timeoutMs?: number;
+function scheduleGateIdle(routeKey: string): void {
+  const gate = gates.get(routeKey);
+  if (!gate || gate.passed || gate.cancelIdle) return;
+  gate.cancelIdle = scheduleAfterFirstIdle(() => {
+    const current = gates.get(routeKey);
+    if (!current) return;
+    current.cancelIdle = null;
+    if (current.fallbackHandle) {
+      clearTimeout(current.fallbackHandle);
+      current.fallbackHandle = null;
+    }
+    current.passed = true;
+    // The shell class rides the first page of the session, so the first route
+    // to pass opens it permanently.
+    if (!shellPassed) shellPassed = true;
+    notify();
+  }, idleTimeoutMs);
+}
+
+function ensureGate(routeKey: string): RouteGate {
+  const existing = gates.get(routeKey);
+  if (existing) return existing;
+  const gate: RouteGate = {
+    contentReady: false,
+    passed: false,
+    cancelIdle: null,
+    fallbackHandle: null,
+  };
+  gates.set(routeKey, gate);
+  // Fallback: a route with no readiness publisher still has to open, or the
+  // deferred shell content would never appear on it.
+  gate.fallbackHandle = setTimeout(() => {
+    const current = gates.get(routeKey);
+    if (!current || current.passed || current.contentReady) return;
+    current.contentReady = true;
+    scheduleGateIdle(routeKey);
+  }, contentFallbackMs);
+  return gate;
 }
 
 /**
- * `false` while the current route is still inside its first content commit and
- * the idle callback that follows it; `true` afterwards.
+ * Marks a route visit as current, dropping every other visit's gate.
+ *
+ * Identity is the route key *plus* the visit: revisiting a path after a
+ * navigation is a new visit and starts closed, because its query cache may be
+ * gone and its data has to be fetched again. Dropping the other gates also
+ * releases their timers.
+ */
+function observeRoute(routeKey: string): void {
+  if (currentRouteKey === routeKey) return;
+  currentRouteKey = routeKey;
+  for (const [key, gate] of [...gates]) {
+    if (key === routeKey) continue;
+    if (gate.fallbackHandle) clearTimeout(gate.fallbackHandle);
+    gate.cancelIdle?.();
+    gates.delete(key);
+  }
+  ensureGate(routeKey);
+}
+
+/**
+ * Publishes "the main content of `routeKey` has settled" for pages that render
+ * their own terminal state. Safe to call repeatedly; only the first call for a
+ * visit has an effect.
+ */
+export function markRouteContentReady(routeKey: string): void {
+  if (!routeKey) return;
+  observeRoute(routeKey);
+  const gate = gates.get(routeKey);
+  if (!gate || gate.passed || gate.contentReady) return;
+  gate.contentReady = true;
+  if (gate.fallbackHandle) {
+    clearTimeout(gate.fallbackHandle);
+    gate.fallbackHandle = null;
+  }
+  scheduleGateIdle(routeKey);
+}
+
+/**
+ * Publisher half: a page reports whether its own main content has settled.
+ *
+ * `ready` must be true for success, empty and failure alike — the ruling is
+ * explicit that a failed list still opens the gate — and false while the page
+ * is still loading or showing `keepPreviousData` rows from another filter.
+ */
+export function useRouteContentReady(routeKey: string, ready: boolean): void {
+  useEffect(() => {
+    if (!routeKey) return;
+    if (ready) markRouteContentReady(routeKey);
+    else observeRoute(routeKey);
+  }, [routeKey, ready]);
+}
+
+export interface UseAfterFirstScreenOptions {
+  /**
+   * Identity of the route being waited for. Views pass their navigation
+   * `pathname`; the navigation store's `lastPath` is only a fallback, because
+   * the guard writes it an effect later than the page renders.
+   */
+  routeKey?: string;
+  /**
+   * `"page"` (default) re-waits on every route change; `"shell"` waits once per
+   * session. See the module comment for which queries belong to which class.
+   */
+  scope?: AfterFirstScreenScope;
+}
+
+/**
+ * `true` once this route's main content settled and the following idle callback
+ * fired (or the fallback timer elapsed).
  *
  * Consumers gate their queries on the return value:
  *
- *   const afterFirstScreen = useAfterFirstScreen();
+ *   const afterFirstScreen = useAfterFirstScreen({ routeKey: pathname });
  *   useQuery({ ...somethingOptions(), enabled: afterFirstScreen });
  *
  * Gated queries keep cached data; only the network request moves.
  */
-export function useAfterFirstScreen(options: UseAfterFirstScreenOptions = {}): boolean {
+export function useAfterFirstScreen(
+  options: UseAfterFirstScreenOptions = {},
+): boolean {
   const storedPath = useNavigationStore((state) => state.lastPath);
   const routeKey = options.routeKey ?? storedPath ?? "";
-  const timeoutMs = options.timeoutMs ?? AFTER_FIRST_SCREEN_TIMEOUT_MS;
-  const [passed, setPassed] = useState(false);
+  const scope = options.scope ?? "page";
 
   useEffect(() => {
-    // A new route starts hidden again: this effect is what defines "the first
-    // content commit of the current route".
-    setPassed(false);
-    return scheduleAfterFirstIdle(() => setPassed(true), timeoutMs);
-  }, [routeKey, timeoutMs]);
+    if (routeKey) observeRoute(routeKey);
+  }, [routeKey]);
 
-  return passed;
+  const getSnapshot = useCallback((): boolean => {
+    if (scope === "shell") return shellPassed;
+    if (!routeKey) return false;
+    // Not "has any route passed": an unvisited route has no gate yet, which is
+    // exactly the `false` the new page's first render must observe.
+    return gates.get(routeKey)?.passed === true;
+  }, [routeKey, scope]);
+
+  return useSyncExternalStore(subscribe, getSnapshot, () => false);
+}
+
+/** Test-only: shorten the two timers so a suite does not wait seconds. */
+export function configureAfterFirstScreenForTest(options: {
+  idleTimeoutMs?: number;
+  contentFallbackMs?: number;
+}): void {
+  if (options.idleTimeoutMs !== undefined) idleTimeoutMs = options.idleTimeoutMs;
+  if (options.contentFallbackMs !== undefined) contentFallbackMs = options.contentFallbackMs;
+}
+
+/** Test-only: drop every route gate, listener and timer. */
+export function resetAfterFirstScreenForTest(): void {
+  for (const gate of gates.values()) {
+    if (gate.fallbackHandle) clearTimeout(gate.fallbackHandle);
+    gate.cancelIdle?.();
+  }
+  gates.clear();
+  shellPassed = false;
+  currentRouteKey = null;
+  idleTimeoutMs = AFTER_FIRST_SCREEN_IDLE_TIMEOUT_MS;
+  contentFallbackMs = AFTER_FIRST_SCREEN_CONTENT_FALLBACK_MS;
+}
+
+/** Test-only: read the shell flag without mounting a consumer. */
+export function isShellGatePassedForTest(): boolean {
+  return shellPassed;
 }

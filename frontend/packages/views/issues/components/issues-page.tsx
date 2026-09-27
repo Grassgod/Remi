@@ -31,6 +31,7 @@ import { ListView } from "./list-view";
 import { SwimLaneView } from "./swimlane-view";
 import { BatchActionToolbar } from "./batch-action-toolbar";
 import type { ChildProgress } from "./list-row";
+import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n";
 
 const EMPTY_CHILD_PROGRESS = new Map<string, ChildProgress>();
@@ -38,6 +39,7 @@ const EMPTY_CHILD_PROGRESS = new Map<string, ChildProgress>();
 export function IssuesPage() {
   const { t } = useT("issues");
   const wsId = useWorkspaceId();
+  const { pathname } = useNavigation();
 
   const scope = useIssuesScopeStore((s) => s.scope);
   const viewMode = useIssueViewStore((s) => s.viewMode);
@@ -69,14 +71,20 @@ export function IssuesPage() {
   // filter pure and lets the snapshot stay cached at one workspace-
   // scoped place — every issue card already subscribes for its own
   // indicator, so this is a no-op extra fetch.
-  // MUL-472 b: both of these are roll-ups over the workspace, not the page's
-  // own list request. They wait for the route's first content commit, so the
-  // first screen goes out without them; the board still renders, just without
-  // the running-agent dots and sub-issue rings for that first moment.
-  const afterFirstScreen = useAfterFirstScreen();
-  const { data: snapshot = [] } = useQuery(
-    agentTaskSnapshotOptions(wsId, { enabled: afterFirstScreen }),
+  //
+  // MUL-472 b: the snapshot is a workspace roll-up, not this page's own list
+  // request, so it normally waits with the rest of the page-level queries.
+  // The exception is the "agents working" quick filter: with it on, the
+  // snapshot *is* the row set (filterIssues keeps only issues in
+  // `runningIssueIds`), and an empty initial value would render a confident
+  // "nothing here" while the real answer is still in flight. In that state the
+  // query is not gated — the page shows a loading row instead of an empty one.
+  const afterFirstScreen = useAfterFirstScreen({ routeKey: pathname });
+  const snapshotIsLoadBearing = agentRunningFilter;
+  const snapshotQuery = useQuery(
+    agentTaskSnapshotOptions(wsId, { enabled: afterFirstScreen || snapshotIsLoadBearing }),
   );
+  const snapshot = snapshotQuery.data ?? [];
   const runningIssueIds = useMemo(() => {
     const ids = new Set<string>();
     for (const t of snapshot) {
@@ -120,9 +128,13 @@ export function IssuesPage() {
     () => assigneeGroupsQuery.data?.groups.flatMap((group) => group.issues) ?? [],
     [assigneeGroupsQuery.data],
   );
-  const loading = usesAssigneeBoard
+  // When the running-agent filter is on, the list is not renderable until the
+  // snapshot is here: showing the unfiltered rows would be wrong, and showing
+  // "no issues" would be worse. Hold the loading state until both land.
+  const snapshotPending = snapshotIsLoadBearing && snapshotQuery.isPending;
+  const loading = (usesAssigneeBoard
     ? assigneeGroupsQuery.isLoading
-    : statusIssuesQuery.isLoading;
+    : statusIssuesQuery.isLoading) || snapshotPending;
   // MUL-472 item 5: prove this list is showing the rows the page's own request
   // returned (`status === "success"` and not `keepPreviousData` leftovers).
   const perfMarker = useListPerfMarker({

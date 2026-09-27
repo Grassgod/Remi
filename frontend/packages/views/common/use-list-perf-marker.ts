@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useNavigation } from "../navigation";
+import { useRouteContentReady } from "@multiremi/core/platform/use-after-first-screen";
 
 /**
  * List-page readiness marker (MUL-472 item 5).
@@ -51,12 +53,22 @@ export type ListPerfMarkerProps = Record<typeof LIST_PERF_MARKER_ATTRIBUTE, "lis
  * warm query-cache cannot produce a hydration mismatch against the server's
  * HTML; the marker appears one commit later, still in the same paint as the
  * rows it describes.
+ *
+ * This predicate is also the app's own "this list page's main content settled"
+ * signal, so it publishes to the request gate (MUL-472 b rework): the deferred
+ * shell queries must not leave before the rows the user is waiting for have
+ * arrived. `pending` and `keepPreviousData` do not publish; success (including
+ * an empty list) and failure both do — a broken request must not hold the
+ * deferred content back forever.
  */
 export function useListPerfMarker(source: ListPerfMarkerSource): ListPerfMarkerProps {
   const [mounted, setMounted] = useState(false);
+  const { pathname } = useNavigation();
   useEffect(() => {
     setMounted(true);
   }, []);
+  const settled = source.status !== "pending" && !source.isPlaceholderData;
+  useRouteContentReady(pathname, settled);
   return mounted && listPerfFresh(source)
     ? { [LIST_PERF_MARKER_ATTRIBUTE]: LIST_PERF_MARKER_VALUE }
     : null;

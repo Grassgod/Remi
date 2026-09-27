@@ -12,9 +12,12 @@ import { useNavigation } from "../navigation";
 export function WorkspacePresencePrefetch() {
   const wsId = useWorkspaceId();
   const { pathname } = useNavigation();
-  // MUL-472 b: agents/squads/snapshot are shell warm-ups, not page data, so
-  // they wait for the current route's first content commit + idle window.
-  const afterFirstScreen = useAfterFirstScreen({ routeKey: pathname });
+  // MUL-472 b: agents/squads/snapshot are page-level warm-ups — each page that
+  // reads them subscribes itself, so the subscription count is what decides
+  // whether a navigation needs them again. (This component's own prefetch is
+  // page scope: the dashboard layout keeps it mounted, but the queries it warms
+  // belong to whatever page is on screen.)
+  const afterFirstScreen = useAfterFirstScreen({ routeKey: pathname, scope: "page" });
   useWorkspacePresencePrefetch(wsId, afterFirstScreen);
   return null;
 }
