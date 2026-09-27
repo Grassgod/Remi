@@ -18,11 +18,13 @@ import type {
   MultiremiKnowledgeCompilationRunListInput,
   MultiremiKnowledgeCompilationRun,
   MultiremiKnowledgeCompilationRunSource,
+  MultiremiKnowledgeCompilationRunSourceListItem,
   MultiremiKnowledgeCompilationStatus,
   MultiremiKnowledgeCursorPage,
   MultiremiKnowledgeScope,
   MultiremiKnowledgeSubmission,
   MultiremiKnowledgeSubmissionListInput,
+  MultiremiKnowledgeSubmissionListItem,
   MultiremiKnowledgeSubmissionStatus,
 } from "@multiremi/contracts/types.js";
 
@@ -156,12 +158,29 @@ export class KnowledgeRepo {
     return row ? toSubmission(row) : null;
   }
 
+  /**
+   * Full-content submission listing. Store-level callers (bundle assembly,
+   * tests) need `body`; the HTTP list route must use `listSubmissionsPage`
+   * instead, which never reads the large columns.
+   */
   listSubmissions(input: KnowledgeListInput): MultiremiKnowledgeSubmission[] {
-    return this.listSubmissionsPage(input).items;
+    return this.listSubmissionsFull(input).items;
   }
 
-  listSubmissionsPage(input: KnowledgeListInput): MultiremiKnowledgeCursorPage<MultiremiKnowledgeSubmission> {
+  private listSubmissionsFull(input: KnowledgeListInput): MultiremiKnowledgeCursorPage<MultiremiKnowledgeSubmission> {
     return this.listPage("multiremi_knowledge_submissions", "submission", input, toSubmission);
+  }
+
+  /**
+   * List page for `GET /api/knowledge/submissions` (MUL-386 C.2).
+   *
+   * Selects an explicit column projection so `body` and `patch` never cross the
+   * PG bridge: 100 rows of raw bodies plus patches were 11.8–14 MB of
+   * `db_bytes` per request. The SQL-side `substr(body, 1, 240)` excerpt keeps the
+   * one-line list preview without shipping the full text.
+   */
+  listSubmissionsPage(input: KnowledgeListInput): MultiremiKnowledgeCursorPage<MultiremiKnowledgeSubmissionListItem> {
+    return this.listPage("multiremi_knowledge_submissions", "submission", input, toSubmissionListItem, SUBMISSION_LIST_COLUMNS);
   }
 
   updateSubmissionStatus(id: string, status: MultiremiKnowledgeSubmissionStatus): MultiremiKnowledgeSubmission {
@@ -281,6 +300,21 @@ export class KnowledgeRepo {
       `SELECT * FROM multiremi_knowledge_compilation_run_sources
        WHERE run_id = ? ORDER BY created_at, id`,
     ).all(runId) as Row[]).map(toRunSource);
+  }
+
+  /**
+   * Run sources without `metadata` (MUL-386 C.2).
+   *
+   * `metadata` is arbitrary JSON — SCM payloads with file lists — and the runs
+   * list shipped up to 13.8 MB of it for 100 runs. The list route uses this
+   * projection; the single-run route keeps the full `listRunSources`.
+   */
+  listRunSourceSummaries(runId: string): MultiremiKnowledgeCompilationRunSourceListItem[] {
+    return (this.ctx.db.query(
+      `SELECT id, run_id, submission_id, source_type, source_ref, created_at
+       FROM multiremi_knowledge_compilation_run_sources
+       WHERE run_id = ? ORDER BY created_at, id`,
+    ).all(runId) as Row[]).map(toRunSourceSummary);
   }
 
   recordOutput(input: RecordKnowledgeOutputInput): MultiremiKnowledgeCompilationOutput {
@@ -441,6 +475,7 @@ export class KnowledgeRepo {
     kind: "submission" | "compilation run",
     input: KnowledgeListInput | KnowledgeRunListInput,
     convert: (row: Row) => T,
+    columns = "*",
   ): MultiremiKnowledgeCursorPage<T> {
     const { sql, params } = knowledgeScopeWhere(input);
     const limit = normalizeLimit(input.limit, 100);
@@ -458,7 +493,7 @@ export class KnowledgeRepo {
       pageParams.push(String(cursorRow.created_at), String(cursorRow.created_at), String(cursorRow.id));
     }
     const rows = this.ctx.db.query(
-      `SELECT * FROM ${table} WHERE ${pageSql}
+      `SELECT ${columns} FROM ${table} WHERE ${pageSql}
        ORDER BY created_at DESC, id DESC LIMIT ?`,
     ).all(...pageParams, limit + 1) as Row[];
     const pageRows = rows.length > limit ? rows.slice(0, limit) : rows;
@@ -517,6 +552,22 @@ function knowledgeScopeWhere(input: KnowledgeListInput | KnowledgeRunListInput):
 } {
   const conditions = ["workspace_id = ?"];
   const params: unknown[] = [input.workspaceId];
+  const term = cleanOptionalString("q" in input ? input.q : null);
+  if (term) {
+    // Literal substring, case-insensitive on both dialects: Postgres `LIKE` is
+    // case-sensitive, so `LOWER()` on both sides is the portable form (same
+    // approach as `ProjectsRepo.searchProjectDocs`). `%`, `_` and the escape
+    // character itself must match themselves, which needs an explicit `ESCAPE`.
+    const pattern = `%${term.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
+    conditions.push(
+      "(LOWER(body) LIKE LOWER(?) ESCAPE '\\' OR LOWER(id) LIKE LOWER(?) ESCAPE '\\'"
+      + " OR LOWER(proposed_path) LIKE LOWER(?) ESCAPE '\\'"
+      + " OR LOWER(proposed_slug) LIKE LOWER(?) ESCAPE '\\'"
+      + " OR LOWER(source_type) LIKE LOWER(?) ESCAPE '\\'"
+      + " OR LOWER(scope) LIKE LOWER(?) ESCAPE '\\')",
+    );
+    params.push(pattern, pattern, pattern, pattern, pattern, pattern);
+  }
   if (cleanOptionalString(input.projectId)) {
     conditions.push("project_id = ?");
     params.push(cleanOptionalString(input.projectId));
@@ -603,6 +654,12 @@ function normalizeLimit(value: number | null | undefined, fallback: number): num
   return Number.isFinite(parsed) ? Math.max(1, Math.min(500, Math.floor(parsed))) : fallback;
 }
 
+/** Columns the submissions list needs; `body` is truncated instead of shipped. */
+const SUBMISSION_LIST_COLUMNS =
+  "id, workspace_id, project_id, repository_id, scope, source_type, proposed_path, proposed_slug, "
+  + "substr(body, 1, 240) AS body_excerpt, base_revision, source_task_id, source_issue_id, "
+  + "source_revision, author_agent_id, content_sha256, status, created_at, updated_at";
+
 function toSubmission(row: Row): MultiremiKnowledgeSubmission {
   return {
     id: String(row.id),
@@ -615,6 +672,29 @@ function toSubmission(row: Row): MultiremiKnowledgeSubmission {
     proposedSlug: cleanOptionalString(row.proposed_slug),
     body: String(row.body ?? ""),
     patch: cleanOptionalString(row.patch),
+    baseRevision: cleanOptionalString(row.base_revision),
+    sourceTaskId: cleanOptionalString(row.source_task_id),
+    sourceIssueId: cleanOptionalString(row.source_issue_id),
+    sourceRevision: cleanOptionalString(row.source_revision),
+    authorAgentId: cleanOptionalString(row.author_agent_id),
+    contentSha256: String(row.content_sha256),
+    status: normalizeSubmissionStatus(row.status),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function toSubmissionListItem(row: Row): MultiremiKnowledgeSubmissionListItem {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id),
+    projectId: cleanOptionalString(row.project_id),
+    repositoryId: cleanOptionalString(row.repository_id),
+    scope: normalizeScope(row.scope),
+    sourceType: normalizeSourceType(row.source_type),
+    proposedPath: cleanOptionalString(row.proposed_path),
+    proposedSlug: cleanOptionalString(row.proposed_slug),
+    bodyExcerpt: String(row.body_excerpt ?? ""),
     baseRevision: cleanOptionalString(row.base_revision),
     sourceTaskId: cleanOptionalString(row.source_task_id),
     sourceIssueId: cleanOptionalString(row.source_issue_id),
@@ -642,6 +722,17 @@ function toRun(row: Row): MultiremiKnowledgeCompilationRun {
     dedupeKey: cleanOptionalString(row.dedupe_key),
     createdAt: String(row.created_at),
     completedAt: cleanOptionalString(row.completed_at),
+  };
+}
+
+function toRunSourceSummary(row: Row): MultiremiKnowledgeCompilationRunSourceListItem {
+  return {
+    id: String(row.id),
+    runId: String(row.run_id),
+    submissionId: cleanOptionalString(row.submission_id),
+    sourceType: row.source_type === "scm_event" ? "scm_event" : "submission",
+    sourceRef: cleanOptionalString(row.source_ref),
+    createdAt: String(row.created_at),
   };
 }
 
