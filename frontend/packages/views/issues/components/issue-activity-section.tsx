@@ -33,6 +33,7 @@ import { IssueResultActivityLines } from "./issue-key-results-section";
 import { IssueSubscribersControl } from "./issue-subscribers-control";
 import { ResolvedThreadBar } from "./resolved-thread-bar";
 import { SessionAgentStreamRow } from "./session-agent-stream-row";
+import type { StickState } from "../../common/use-stick-to-bottom";
 import { SessionEmptyState, TimelineSkeleton, TimelineUnavailable } from "./timeline-states";
 
 interface IssueActivitySectionProps {
@@ -63,6 +64,14 @@ interface IssueActivitySectionProps {
   onRevealGatesChange: (gates: { dataReady: boolean; layoutSettled: boolean }) => void;
   /** Virtuoso's own "we are at the end" signal, forwarded to the stick hook. */
   onPinToBottom: () => void;
+  /**
+   * `useStickToBottom`'s state. Follow-the-latest is driven by this alone:
+   * Virtuoso's own `atBottom` uses a much wider band (120 px) than the hook's
+   * re-pin threshold (24 px), so a small scroll up leaves Virtuoso still
+   * "at the bottom" while the hook has already released. Trusting Virtuoso
+   * there yanked the reader back to the end on the next comment.
+   */
+  stickState: StickState;
 }
 
 const ISSUE_TIMELINE_INITIAL_FIRST_ITEM_INDEX = 1_000_000;
@@ -88,6 +97,7 @@ export function IssueActivitySection({
   onShowKeyResults,
   onRevealGatesChange,
   onPinToBottom,
+  stickState,
 }: IssueActivitySectionProps) {
   const { t } = useT("issues");
   const timeAgo = useTimeAgo();
@@ -211,7 +221,52 @@ export function IssueActivitySection({
   const [measuredRange, setMeasuredRange] = useState(false);
   const virtuosoLayoutSettled = measuredTotalHeight && measuredRange;
 
+  // `followOutput` and `atBottomStateChange` are handed to Virtuoso once and
+  // called from its own scroll handling, so they must read the *current* stick
+  // state rather than the one captured when the prop was created.
+  const stickStateRef = useRef<StickState>(stickState);
+  stickStateRef.current = stickState;
+
+  /**
+   * Whether the reader has driven the page back towards the end since the last
+   * release. Virtuoso's at-bottom band is 120 px wide, which is roughly the
+   * composer below the list, while the stick hook releases on any upward wheel
+   * and re-pins only within 24 px. The band alone therefore cannot tell "the
+   * reader is heading back to the end" from "the reader is parked 30–119 px up
+   * and never moved down"; only the second is what must not re-pin
+   * (MUL-390 `cmt_i1xic8rs050s`).
+   */
+  const sawDownwardScrollRef = useRef(false);
+
+  // A downward scroll while the hook is not pinned is the reader driving, not
+  // the hook: its own ResizeObserver compensation only runs while pinned, and
+  // `followOutput` no longer scrolls unless pinned either. That covers wheel,
+  // keys, touch drags and scrollbar drags without re-deriving each gesture.
+  useEffect(() => {
+    const el = scrollContainerEl;
+    if (!el) return;
+    let lastTop = el.scrollTop;
+    const onScroll = () => {
+      const top = el.scrollTop;
+      if (top > lastTop + 1 && stickStateRef.current !== "pinned") {
+        sawDownwardScrollRef.current = true;
+      }
+      lastTop = top;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [scrollContainerEl]);
+
+  // Once the hook is pinned again the intent has been honoured; a later release
+  // has to earn its own.
+  useEffect(() => {
+    if (stickState === "pinned") sawDownwardScrollRef.current = false;
+  }, [stickState]);
+
   const jumpToLatest = useCallback(() => {
+    // The control is itself the reader's intent to go back to the end, so the
+    // re-pin does not have to wait for the scroll events to prove it.
+    sawDownwardScrollRef.current = true;
     virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end", behavior: "smooth" });
   }, []);
 
@@ -506,15 +561,27 @@ export function IssueActivitySection({
                 atBottomThreshold={120}
                 atBottomStateChange={(bottom) => {
                   setAtBottom(bottom);
-                  // Gate (ii) source of truth for the reveal, and the stick
-                  // hook's own "back at the end" signal: Virtuoso knows
-                  // whether the last row is on screen, the hook cannot.
-                  if (bottom) onPinToBottom();
+                  // Virtuoso's band is 120 px wide while the hook re-pins at
+                  // 24 px, so this signal alone must not re-pin: a reader who
+                  // scrolled up by 30 px is inside Virtuoso's band but outside
+                  // the hook's, and pinning there is the same yank by another
+                  // route. Re-pin only once the reader has actually come back
+                  // to the end of the stream — the hook's own state has to say
+                  // so, and a downward-intent flag says the user drove it.
+                  if (bottom && sawDownwardScrollRef.current) onPinToBottom();
                 }}
                 totalListHeightChanged={() => setMeasuredTotalHeight(true)}
                 rangeChanged={() => setMeasuredRange(true)}
+                // Follow-the-latest is the stick hook's decision, not
+                // Virtuoso's: `atBottom` here means "within 120 px", so using
+                // it let a 25–119 px scroll up still chase the newest comment
+                // (QA, MUL-390 cmt_i1xic8rs050s). `pinned` is the hook's own
+                // 24 px contract; `released` and `returning` deliberately do
+                // not follow.
                 followOutput={() => (
-                  !isFetchingOlderTimeline && atBottom ? "smooth" : false
+                  !isFetchingOlderTimeline && stickStateRef.current === "pinned"
+                    ? "smooth"
+                    : false
                 )}
                 startReached={() => {
                   if (hasOlderTimeline && !isFetchingOlderTimeline) {

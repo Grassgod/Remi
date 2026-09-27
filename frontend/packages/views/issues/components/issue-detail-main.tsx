@@ -263,6 +263,7 @@ export function IssueDetailMain({
               onShowKeyResults={onShowKeyResults}
               onRevealGatesChange={handleRevealGatesChange}
               onPinToBottom={stick.pin}
+              stickState={stick.state}
             />
           </div>
         </div>

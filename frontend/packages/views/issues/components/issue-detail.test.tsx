@@ -920,6 +920,82 @@ describe("IssueDetail (shared)", () => {
     });
   });
 
+  it("decides follow-the-latest from the stick hook, not Virtuoso's 120px band", async () => {
+    renderIssueDetail();
+    await waitFor(() => {
+      expect(screen.getByTestId("virtuoso-mock")).toBeInTheDocument();
+    });
+    await waitForReveal();
+
+    const followOutput = virtuosoLatestProps.current?.followOutput as
+      | (() => "smooth" | false)
+      | undefined;
+    expect(followOutput).toBeTypeOf("function");
+    // A freshly opened page is pinned, so the newest entry is followed.
+    expect(followOutput!()).toBe("smooth");
+
+    const atBottomStateChange = virtuosoLatestProps.current?.atBottomStateChange as
+      | ((atBottom: boolean) => void)
+      | undefined;
+    const scrollRoot = document.querySelector<HTMLElement>("[data-tab-scroll-root]")!;
+
+    // A real upward wheel from the reader releases the stick hook. Virtuoso's
+    // own `atBottom` stays true for another ~120px, which is exactly the band
+    // that used to chase the newest comment after a 30–119px scroll up
+    // (MUL-390 `cmt_i1xic8rs050s`).
+    scrollRoot.scrollTop = 600;
+    await act(async () => {
+      fireEvent.wheel(scrollRoot, { deltaY: -30 });
+    });
+    expect(followOutput!()).toBe(false);
+
+    // Virtuoso still reports "at the bottom" inside its wide band, but that
+    // alone must not re-pin a reader who has not scrolled back down. Asserted
+    // synchronously: a `waitFor` here would pass before the state update from
+    // `pin()` had flushed, which is exactly how a broken pin gate slips past.
+    await act(async () => {
+      atBottomStateChange!(true);
+    });
+    expect(followOutput!()).toBe(false);
+  });
+
+  it("returns to following once the reader scrolls back to the end", async () => {
+    renderIssueDetail();
+    await waitFor(() => {
+      expect(screen.getByTestId("virtuoso-mock")).toBeInTheDocument();
+    });
+    await waitForReveal();
+
+    const followOutput = virtuosoLatestProps.current?.followOutput as () => "smooth" | false;
+    const atBottomStateChange = virtuosoLatestProps.current?.atBottomStateChange as
+      | ((atBottom: boolean) => void)
+      | undefined;
+    const scrollRoot = document.querySelector<HTMLElement>("[data-tab-scroll-root]")!;
+
+    scrollRoot.scrollTop = 600;
+    await act(async () => {
+      fireEvent.wheel(scrollRoot, { deltaY: -30 });
+    });
+    expect(followOutput()).toBe(false);
+
+    // The reader drives back towards the end: a downward scroll, then
+    // Virtuoso's at-bottom signal. Both are required — the scroll proves the
+    // intent, the signal proves the position. The signal alone must not be
+    // enough, or a reader parked inside Virtuoso's wide band would be dragged
+    // back without ever moving down.
+    await act(async () => {
+      atBottomStateChange!(true);
+    });
+    expect(followOutput()).toBe(false);
+
+    scrollRoot.scrollTop = 640;
+    await act(async () => {
+      fireEvent.scroll(scrollRoot);
+      atBottomStateChange!(true);
+    });
+    expect(followOutput()).toBe("smooth");
+  });
+
   it("offers a jump-to-latest chip when scrolled away from the newest entry", async () => {
     renderIssueDetail();
     await waitFor(() => {
