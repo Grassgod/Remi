@@ -319,6 +319,48 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     expect(store.claimTask(allowed.id)?.id).toBe(second.id);
   });
 
+  it("clears a queued chat pin when the Project moves to another device before the claim", () => {
+    const store = createLocalStore();
+    const personal = store.registerRuntime({
+      id: "rt_requeue_personal",
+      name: "personal",
+      provider: "codex",
+      workspaceId: "local",
+      daemonId: "device-requeue-personal",
+    });
+    const devbox = store.registerRuntime({
+      id: "rt_requeue_devbox",
+      name: "devbox",
+      provider: "codex",
+      workspaceId: "local",
+      daemonId: "device-requeue-devbox",
+    });
+    const agent = store.createAgent({ name: "Queued chat", provider: "codex", workspaceId: "local" });
+    const project = store.createProject({ title: "Moves before the claim", workspaceId: "local" });
+    store.createProjectDevice(project.id, { daemonId: "device-requeue-personal" });
+    const chat = store.createChatSession({ agentId: agent.id, projectId: project.id, workspaceId: "local" });
+
+    const first = store.sendChatMessage(chat.id, { body: "first" }).task;
+    expect(store.claimTask(personal.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "sess_requeued_chat" });
+
+    // The follow-up is queued while the personal device is still allowed, so it
+    // inherits that pin. The Project then moves away before any claim happens.
+    const second = store.sendChatMessage(chat.id, { body: "second" }).task;
+    expect(second).toMatchObject({ runtimeId: personal.id, sessionId: "sess_requeued_chat" });
+    store.deleteProjectDevice(project.id, "device-requeue-personal");
+    store.createProjectDevice(project.id, { daemonId: "device-requeue-devbox" });
+    store.updateDaemonDedicated("local", "device-requeue-personal", true, "local");
+
+    // The queued-affinity refresh must drop the now-rejected pin; otherwise the
+    // turn stays parked on a device that can never claim it. The provider
+    // session belongs to that machine, so it is abandoned with the pin.
+    expect(store.claimTask(personal.id)).toBeNull();
+    expect(store.getTask(second.id)).toMatchObject({ runtimeId: null, sessionId: null });
+    expect(store.claimTask(devbox.id)?.id).toBe(second.id);
+  });
+
   it("re-pools a chat turn instead of pinning it to a device the Project rejects", () => {
     const store = createLocalStore();
     const personal = store.registerRuntime({
