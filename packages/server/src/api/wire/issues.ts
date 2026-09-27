@@ -390,13 +390,13 @@ export function stripServerOwnedSessionTaskFields(input: CreateSessionTaskInput)
 }
 
 /**
- * MUL-448: the issue creator is the credentialed caller on both create routes.
+ * MUL-448 B4: caller-supplied creator/requester identities are not accepted.
  *
- * `/api/issues` (compat) already rewrites it through
- * `withIssueCreateRequestContext`; the native route and the native quick-create
- * passed the body straight to the store, so a member could file an issue (and
- * become its subscriber / the default session's creator) under someone else's
- * id. Strip both spellings and let the route stamp the authenticated user.
+ * The native create route strips `createdBy` / `created_by`, and both
+ * quick-create routes strip `requesterId` / `requester_id`. These routes do not
+ * stamp a credentialed identity, so their result stays aligned with main. The
+ * compatibility `POST /api/issues` route still stamps the credentialed caller
+ * through `withIssueCreateRequestContext`.
  */
 const SERVER_OWNED_ISSUE_CREATE_FIELDS = ["createdBy", "created_by"] as const;
 
