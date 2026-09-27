@@ -26,10 +26,15 @@
  *     bun run tests/manual/mul405-multiprocess-safety.ts --part all \
  *       --out reports/performance/MUL-405-multiprocess.json
  *
- * Options: --part migrations|issues|all (default all), --rounds N (default 20),
- * --per-process N (default 200), --out <path>, --label <name>.
+ * `lock` — three processes holding one lock (and, as the control, the identical
+ * critical section with no lock at all), reporting whether their intervals
+ * overlapped. This isolates the mechanism the other two scenarios depend on.
+ *
+ * Options: --part migrations|issues|lock|all (default all), --rounds N
+ * (default 20), --per-process N (default 200), --hold-ms N (default 400),
+ * --out <path>, --label <name>.
  */
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 const REPO_ROOT = resolve(import.meta.dir, "../..");
@@ -48,6 +53,8 @@ const PART = argValue("--part") ?? "all";
 const ROUNDS = Number(argValue("--rounds") ?? 20);
 const PER_PROCESS = Number(argValue("--per-process") ?? 200);
 const LABEL = argValue("--label") ?? null;
+/** How long each of the three lock-probe processes holds the critical section. */
+const HOLD_MS = Number(argValue("--hold-ms") ?? 400);
 const OUT = argValue("--out")
   ? resolve(argValue("--out")!)
   : join(REPO_ROOT, "reports", "performance", "MUL-405-multiprocess.json");
@@ -79,6 +86,29 @@ async function runChild(): Promise<void> {
         ok: true,
         ms: performance.now() - started,
       }));
+      return;
+    }
+    if (role === "lock") {
+      const { PostgresSyncDatabase } = await import("../../packages/server/src/store/db/postgres.js");
+      // `MUL405_NO_LOCK=1` runs the identical critical section without the lock,
+      // which is the pre-MUL-405 shape and the control for this measurement.
+      const noLock = process.env.MUL405_NO_LOCK === "1";
+      const roleName = process.env.MUL405_LOCK_ROLE ?? "?";
+      const log = process.env.MUL405_LOCK_LOG!;
+      const db = new PostgresSyncDatabase(url);
+      const critical = () => {
+        appendFileSync(log, `${JSON.stringify({ role: roleName, kind: "enter", ts: Date.now() })}\n`);
+        const until = Date.now() + HOLD_MS;
+        while (Date.now() < until) {
+          // Busy-wait: this models a process holding a critical section, and it
+          // must not yield to anything else in this child.
+        }
+        appendFileSync(log, `${JSON.stringify({ role: roleName, kind: "exit", ts: Date.now() })}\n`);
+      };
+      if (noLock) critical();
+      else db.advisoryLock("multiremi:number:probe", critical);
+      db.close();
+      await Bun.write(process.env.MUL405_RESULT!, JSON.stringify({ ok: true }));
       return;
     }
     if (role === "issues") {
@@ -328,6 +358,80 @@ async function runIssueAllocation(): Promise<ScenarioResult> {
   };
 }
 
+/**
+ * Direct measurement of the lock itself, with the pre-MUL-405 shape as control.
+ *
+ * Three processes hold the same critical section (400 ms of busy-wait) at the
+ * same instant. With the lock their intervals must not overlap at all; without
+ * it they all overlap, which is what makes the migration and numbering races
+ * possible in the first place.
+ */
+async function runLockProbe(): Promise<Record<string, unknown>> {
+  const measure = async (noLock: boolean): Promise<{ pairs: number; intervals: Array<{ role: string; start: number; end: number }> }> => {
+    const log = join(WORK_DIR, `lock-${noLock ? "none" : "held"}.log`);
+    writeFileSync(log, "");
+    const roles = ["A", "B", "C"];
+    const results = await Promise.all(roles.map((role) => (
+      (async () => {
+        const child = Bun.spawn([process.execPath, import.meta.path], {
+          cwd: REPO_ROOT,
+          env: {
+            ...process.env,
+            MUL405_ROLE: "lock",
+            MUL405_DATABASE_URL: ADMIN_URL,
+            MUL405_RESULT: join(WORK_DIR, `lock-${noLock ? "none" : "held"}-${role}.json`),
+            MULTIREMI_DATABASE_URL: ADMIN_URL,
+            MUL405_LOCK_ROLE: role,
+            MUL405_LOCK_LOG: log,
+            ...(noLock ? { MUL405_NO_LOCK: "1" } : {}),
+          },
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        return child.exited;
+      })()
+    )));
+    if (results.some((code) => code !== 0)) throw new Error("lock probe child failed");
+    const events = readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((line) => (
+      JSON.parse(line) as { role: string; kind: "enter" | "exit"; ts: number }
+    ));
+    // `role: "lock"` writes `ok:false` and still exits 0 when the database has no
+    // `advisoryLock` (pre-MUL-405 code). Reporting "0 overlapping pairs" from an
+    // empty log would look like the lock working, so the absence of events is an
+    // error, not a pass.
+    const entered = new Set(events.filter((event) => event.kind === "enter").map((event) => event.role));
+    if (entered.size !== roles.length) {
+      throw new Error(
+        `lock probe did not run in every child (entered: ${[...entered].join(",") || "none"} of ${roles.join(",")}); ` +
+          "the target tree may not implement SqlDatabase.advisoryLock",
+      );
+    }
+    const open = new Map<string, number>();
+    const intervals: Array<{ role: string; start: number; end: number }> = [];
+    for (const event of events) {
+      if (event.kind === "enter") open.set(event.role, event.ts);
+      else intervals.push({ role: event.role, start: open.get(event.role)!, end: event.ts });
+    }
+    intervals.sort((left, right) => left.start - right.start);
+    let pairs = 0;
+    for (let index = 1; index < intervals.length; index += 1) {
+      if (intervals[index]!.start < intervals[index - 1]!.end) pairs += 1;
+    }
+    return { pairs, intervals };
+  };
+
+  const held = await measure(false);
+  const none = await measure(true);
+  return {
+    name: "3 processes holding one advisory lock (and the same section without it)",
+    holdMs: HOLD_MS,
+    withLockOverlappingPairs: held.pairs,
+    withoutLockOverlappingPairs: none.pairs,
+    withLockIntervals: held.intervals,
+    withoutLockIntervals: none.intervals,
+  };
+}
+
 // ────────────────────────────── main ──────────────────────────────
 
 mkdirSync(WORK_DIR, { recursive: true });
@@ -366,6 +470,9 @@ if (PART === "migrations" || PART === "all") {
 if (PART === "issues" || PART === "all") {
   report.issueAllocation = await runIssueAllocation();
 }
+if (PART === "lock" || PART === "all") {
+  report.lockProbe = await runLockProbe();
+}
 
 rmSync(WORK_DIR, { recursive: true, force: true });
 writeFileSync(OUT, `${JSON.stringify(report, null, 2)}\n`);
@@ -378,4 +485,8 @@ console.log(JSON.stringify({
   out: OUT,
   migrations: summarize(report.migrations as ScenarioResult | undefined),
   issueAllocation: summarize(report.issueAllocation as ScenarioResult | undefined),
+  lockProbe: report.lockProbe
+    ? `${(report.lockProbe as { withLockOverlappingPairs: number }).withLockOverlappingPairs} overlapping pairs with lock, ` +
+      `${(report.lockProbe as { withoutLockOverlappingPairs: number }).withoutLockOverlappingPairs} without`
+    : "not run",
 }, null, 2));
