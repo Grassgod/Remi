@@ -128,6 +128,14 @@ import {
   startRequestMetricsSummary,
   type RequestMetricsOptions,
 } from "../observability/request-metrics.js";
+import {
+  API_ROLE_HEADER,
+  isApiRoleConfigured,
+  isMisdirectedPath,
+  misdirectedResponse,
+  resolveApiRole,
+  type ApiRole,
+} from "../config/api-role.js";
 import { withRequestReadCache } from "@multiremi/store/request-read-cache.js";
 import { ScmPollingScheduler } from "@multiremi/scm/poller.js";
 import { IssueTitleScheduler } from "@multiremi/issue-title/poller.js";
@@ -237,6 +245,12 @@ export interface MultiremiApiOptions {
   verifyScmConnection?: ScmConnectionVerifier;
   /** Per-request performance metrics (MUL-367). Undefined reads the env config. */
   requestMetrics?: RequestMetricsOptions;
+  /**
+   * MUL-461: the API role this process serves. Undefined reads `MULTIREMI_API_ROLE`;
+   * unset or unrecognized resolves to `all`, which is main's behavior. The option
+   * exists so a test (and `startMultiremiServer`) can pin the role without env.
+   */
+  apiRole?: ApiRole;
 }
 
 export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
@@ -258,7 +272,17 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   const repositoryWiki = options.repositoryWiki ?? createRepositoryWikiServiceFromEnv(store);
   const sessionArchives = options.sessionArchives ?? new SessionArchiveService(store);
   const messagingProviders = options.messagingProviders ?? createMessageProviderRegistry();
-  const requestMetricsOptions = options.requestMetrics ?? resolveRequestMetricsOptions();
+  const apiRole = options.apiRole ?? resolveApiRole();
+  // With the knob unset (and no injected role) the process IS main: one role, no
+  // routing decision to report. The health payloads only grow `role` once a role was
+  // actually configured, which is what keeps `snapshot-api-routes.ts --check`
+  // byte-identical to main for the default deployment (MUL-461 acceptance ①) while
+  // still answering `role:"runtime"` in a split container.
+  const apiRoleConfigured = options.apiRole !== undefined || isApiRoleConfigured();
+  // The role on the metrics lines is the app's effective role, not a second read of
+  // the env: an injected `apiRole` must show up in `api_minute_summary` too.
+  const requestMetricsOptions = options.requestMetrics
+    ?? { ...resolveRequestMetricsOptions(), role: apiRole };
   const daemonDirectBaseUrl = normalizeDaemonDirectBaseUrl(
     options.daemonDirectBaseUrl === undefined
       ? process.env.MULTIREMI_DAEMON_DIRECT_BASE_URL
@@ -292,6 +316,18 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   // be unmeasured — and auth's own `verifyAccessToken` DB lookup is part of the
   // request cost we need in `Server-Timing`.
   app.use("*", createRequestMetricsMiddleware(requestMetricsOptions));
+  // MUL-461: the role guard. `all` (the default, and the only value main ever runs
+  // as) registers nothing, so the middleware chain, the handler order and every
+  // response body stay exactly as they are on main. `ui` refuses the daemon
+  // protocol and `runtime` refuses everything but the daemon protocol, the health
+  // probes and the peer channel; both answer 421 rather than 404 so a misrouted
+  // request is distinguishable from a genuinely missing route.
+  if (apiRole !== "all") {
+    app.use("*", async (c, next) => {
+      if (isMisdirectedPath(apiRole, c.req.path)) return misdirectedResponse(apiRole);
+      await next();
+    });
+  }
   // MUL-389: one request-scoped read cache, opened before auth so the identity lookups share it
   // with the handler. It is opt-in per row (see request-read-cache.ts) and every store write
   // clears it, so a route may look the same Runtime / workspace / relay row up as often as it
@@ -478,9 +514,16 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     return c.json({ error: err.message }, 500);
   });
 
-  app.get("/health", (c) => c.json({ ok: true }));
-  app.get("/readyz", (c) => c.json({ ok: true }));
-  app.get("/healthz", (c) => c.json({ ok: true }));
+  // MUL-461: `role` rides the health trio plus `/health/realtime` so an operator can
+  // tell the two containers apart with one curl (runbook §6.2 step 3).
+  const healthBody = (extra: Record<string, unknown> = {}) => ({
+    ok: true,
+    ...(apiRoleConfigured ? { role: apiRole } : {}),
+    ...extra,
+  });
+  app.get("/health", (c) => c.json(healthBody()));
+  app.get("/readyz", (c) => c.json(healthBody()));
+  app.get("/healthz", (c) => c.json(healthBody()));
   app.get("/api/config", (c) => c.json({
     ...(daemonDirectBaseUrl ? { daemon_server_url: daemonDirectBaseUrl } : {}),
     cdn_domain: "",
@@ -497,10 +540,11 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     connections: realtimeState.connections,
     enabled: realtimeState.enabled,
     transport: "websocket",
+    ...(apiRoleConfigured ? { role: apiRole } : {}),
   }));
   registerWebhookRoutes(app, deps);
   registerScmWebhookRoutes(app, deps);
-  app.get("/api/multiremi/health", (c) => c.json({ ok: true }));
+  app.get("/api/multiremi/health", (c) => c.json(healthBody()));
   registerRemiReleaseRoutes(app, deps);
   // The `/api/daemon/*` prefix guards stay in the skeleton and MUST stay above
   // registerDaemonRoutes: Hono only wraps handlers registered after a
@@ -671,6 +715,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     ...(options.authToken !== undefined
       ? { MULTIREMI_TOKEN: options.authToken ?? undefined }
       : {}),
+    ...(options.apiRole !== undefined ? { MULTIREMI_API_ROLE: options.apiRole } : {}),
     ...(options.daemonDirectBaseUrl !== undefined
       ? { MULTIREMI_DAEMON_DIRECT_BASE_URL: options.daemonDirectBaseUrl ?? undefined }
       : {}),
@@ -681,6 +726,9 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     log.error(`[startup-env] ${message}`);
     throw new Error(message);
   }
+  const startupApiRole = startupConfig.effective.apiRole;
+  // MUL-461: `apiRole` rides the effective config so a typo is visible next to the
+  // setting that produced it (the resolver falls back to `all`).
   log.info(`[effective-config] ${JSON.stringify(startupConfig.effective)}`);
   for (const degradation of startupConfig.degradations) {
     log.warn(`[configuration-degradation] ${degradation.message}`);
@@ -776,6 +824,13 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
       const socketAddress = server.requestIP(req)?.address;
       setWebhookClientIpAddress(req, resolveWebhookClientIpAddress(req, socketAddress));
       const url = new URL(req.url);
+      // MUL-461: an upgrade is answered here, not by the Hono guard — the middleware
+      // chain never sees it — so the role check has to be repeated at both upgrade
+      // sites. A misdirected upgrade is 421, not 426: the client asked for the right
+      // protocol at the wrong process.
+      if (startupApiRole !== "all" && isMisdirectedPath(startupApiRole, url.pathname)) {
+        return misdirectedResponse(startupApiRole);
+      }
       if (url.pathname === "/api/daemon/ws") {
         const runtimeIds = parseDaemonWebSocketRuntimeIds(url);
         if (isWebSocketUpgrade(req)) {
