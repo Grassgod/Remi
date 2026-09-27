@@ -41,10 +41,9 @@ export function isQueuedCapabilityWaitReason(reason: string | null | undefined):
  */
 export type DeviceRoutingAffinity =
   | "Agent 绑定" | "代码快照" | "显式 Runtime 工作区" | "Issue 工作区" | "本机目录"
-  // A retry whose frozen execution must resume where it was frozen. The
-  // claim-time refreshes exclude it (see their `execution_fingerprint IS NULL
-  // AND attempt = 1` filters), so its pin is visible rather than re-pooled.
-  | "冻结重试";
+  // A frozen fingerprint or an unfingerprinted later attempt is excluded by
+  // the claim-time refresh. Only the former is a frozen retry.
+  | "冻结重试" | "重试钉机";
 
 /**
  * A task pinned to a machine that cannot reach it explains why instead of
@@ -83,6 +82,10 @@ export function placementWaitReason(input: {
   codeSnapshot?: boolean;
   localDirectory?: boolean;
   agentBindingTarget?: string | null;
+  frozenTask?: boolean;
+  issueId?: string | null;
+  issueSessionId?: string | null;
+  agentId?: string | null;
   redispatchTaskId?: string;
 }): string {
   const listed = input.constraints.join("；");
@@ -94,6 +97,9 @@ export function placementWaitReason(input: {
     remedy = `运行 remi task redispatch ${input.redispatchTaskId} 冷启动，落点会按当前工作区重新计算`;
   } else if (input.agentBound && input.agentBindingTarget) {
     remedy = `把该 Agent 的 Runtime 绑定改到 ${input.agentBindingTarget}（remi agent update --runtime）`;
+    if (input.frozenTask && input.issueId && input.issueSessionId && input.agentId) {
+      remedy += `；改绑会取消这条已冻结的任务，改绑后需重新触发：运行 remi task create --agent ${input.agentId} --issue ${input.issueId} --prompt '重新执行当前侧会话任务' --data '{"issueSessionId":"${input.issueSessionId}"}'`;
+    }
   } else {
     remedy = "让这些约束指向同一台机器";
   }

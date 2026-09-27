@@ -411,6 +411,12 @@ function placementAfterRoutingSql(runtime: MultiremiRuntime): SqlFragment {
 const OBSERVER_WAIT_REASON_CLEAR_SQL =
   `wait_reason = CASE WHEN wait_reason LIKE ? OR wait_reason LIKE ? THEN NULL ELSE wait_reason END`;
 
+export const REPOOLABLE_QUEUED_TASK_SQL = "t.execution_fingerprint IS NULL AND t.attempt = 1";
+
+export function canRepoolQueuedTaskPin(row: { execution_fingerprint?: unknown; attempt?: unknown }): boolean {
+  return nullableString(row.execution_fingerprint) === null && Number(row.attempt ?? 1) === 1;
+}
+
 
 interface DelegationWakeupInput {
   sourceTaskId: string;
@@ -555,7 +561,47 @@ interface TaskPlacementConstraint {
   machineAliases: string[];
 }
 
-function constraintMachineAliases(ctx: StoreContext, machineId: string): string[] {
+interface MachineAliasIndex {
+  byAlias: Map<string, string[]>;
+  registered: Set<string>;
+}
+
+interface PlacementSweepCache {
+  agents: Map<string, MultiremiAgent | null>;
+  directories: Map<string, string | null>;
+  issueWorkspaces: Map<string, { count: number; aliases: string[] }>;
+  daemonNames: Map<string, string>;
+  runtimes: MultiremiRuntime[];
+}
+
+function taskDirectoryDaemon(ctx: StoreContext, row: Row, cache?: PlacementSweepCache): string | null {
+  if (!cache) return ctx.localDirectoryDaemonForTask(row);
+  const key = JSON.stringify([
+    row.issue_session_id, row.issue_id, row.chat_session_id, row.holds_workspace,
+    row.execution_fingerprint, row.work_dir, row.runtime_id, row.workspace_id,
+  ]);
+  if (!cache.directories.has(key)) cache.directories.set(key, ctx.localDirectoryDaemonForTask(row));
+  return cache.directories.get(key) ?? null;
+}
+
+function machineAliasIndex(runtimes: MultiremiRuntime[]): MachineAliasIndex {
+  const byAlias = new Map<string, Set<string>>();
+  for (const runtime of runtimes) {
+    const aliases = runtimeDaemonAliases(runtime);
+    for (const alias of aliases) {
+      const connected = byAlias.get(alias) ?? new Set<string>();
+      for (const member of aliases) connected.add(member);
+      byAlias.set(alias, connected);
+    }
+  }
+  return {
+    byAlias: new Map([...byAlias].map(([alias, connected]) => [alias, [...connected]])),
+    registered: new Set(byAlias.keys()),
+  };
+}
+
+function constraintMachineAliases(ctx: StoreContext, machineId: string, index?: MachineAliasIndex): string[] {
+  if (index) return [machineId, ...(index.byAlias.get(machineId) ?? []).filter((alias) => alias !== machineId)];
   const aliases = new Set([machineId]);
   for (const runtime of ctx.runtimes().listRuntimes()) {
     const runtimeAliases = runtimeDaemonAliases(runtime);
@@ -570,24 +616,28 @@ function describeTaskPlacementConstraints(
     id: string; runtime_id: string | null; issue_id: string | null;
     issue_session_id: string | null; chat_session_id: string | null;
     runtime_workspace_id: string | null; holds_workspace: unknown;
+    attempt: unknown; execution_fingerprint: string | null;
   },
   agentRuntimeId: string | null | undefined,
   agentProvider: string | undefined,
+  index?: MachineAliasIndex,
+  cache?: PlacementSweepCache,
 ): TaskPlacementConstraint[] {
   const constraints: TaskPlacementConstraint[] = [];
-  const directoryDaemonId = ctx.localDirectoryDaemonForTask(row);
+  const directoryDaemonId = taskDirectoryDaemon(ctx, row, cache);
   if (row.runtime_id) constraints.push({
-    kind: "taskPin", label: `任务钉在 ${row.runtime_id}`,
+    kind: "taskPin",
+    label: `${!canRepoolQueuedTaskPin(row) && !row.execution_fingerprint ? "重试任务" : "任务"}钉在 ${row.runtime_id}`,
     // A directory on a not-yet-registered daemon uses its deterministic
     // future Runtime id. That id and the directory daemon are one machine.
     machineAliases: directoryDaemonId && agentProvider
       && row.runtime_id === daemonRuntimeId(directoryDaemonId, agentProvider)
-      ? constraintMachineAliases(ctx, directoryDaemonId)
-      : constraintMachineAliases(ctx, row.runtime_id),
+      ? constraintMachineAliases(ctx, directoryDaemonId, index)
+      : constraintMachineAliases(ctx, row.runtime_id, index),
   });
   if (agentRuntimeId) constraints.push({
     kind: "agentBinding", label: `Agent 绑定在 ${agentRuntimeId}`,
-    machineAliases: constraintMachineAliases(ctx, agentRuntimeId),
+    machineAliases: constraintMachineAliases(ctx, agentRuntimeId, index),
   });
   if (row.runtime_workspace_id) {
     const workspace = ctx.db.query(
@@ -596,19 +646,19 @@ function describeTaskPlacementConstraints(
     const daemonId = nullableString(workspace?.daemon_id);
     constraints.push({
       kind: "runtimeWorkspace", label: `显式 Runtime 工作区在 ${daemonId ?? "未知机器"}`,
-      machineAliases: daemonId ? constraintMachineAliases(ctx, daemonId) : [],
+      machineAliases: daemonId ? constraintMachineAliases(ctx, daemonId, index) : [],
     });
   }
   const session = row.issue_session_id ? ctx.issueSessions().getIssueSession(row.issue_session_id) : null;
   if (session?.withCode && session.codeRuntimeId) {
     constraints.push({
       kind: "codeSnapshot", label: `代码快照在 ${session.codeRuntimeId}`,
-      machineAliases: constraintMachineAliases(ctx, session.codeRuntimeId),
+      machineAliases: constraintMachineAliases(ctx, session.codeRuntimeId, index),
     });
   }
   const issueId = nullableString(row.issue_id);
   if (issueId && Number(row.holds_workspace ?? 1) === 1) {
-    const machines = liveIssueWorkspaceMachines(ctx, issueId);
+    const machines = liveIssueWorkspaceMachines(ctx, issueId, cache);
     if (machines.count > 0) {
       constraints.push({
         kind: "issueWorkspace",
@@ -621,7 +671,7 @@ function describeTaskPlacementConstraints(
   }
   if (directoryDaemonId) constraints.push({
     kind: "localDirectory", label: `本机目录在 ${directoryDaemonId}`,
-    machineAliases: constraintMachineAliases(ctx, directoryDaemonId),
+    machineAliases: constraintMachineAliases(ctx, directoryDaemonId, index),
   });
   return constraints;
 }
@@ -667,7 +717,10 @@ export interface HardTaskAffinity {
 function liveIssueWorkspaceMachines(
   ctx: StoreContext,
   issueId: string,
+  cache?: PlacementSweepCache,
 ): { count: number; aliases: string[] } {
+  const cached = cache?.issueWorkspaces.get(issueId);
+  if (cached) return cached;
   const rows = ctx.db.query(
     `SELECT runtime_id FROM multiremi_issue_workspaces
       WHERE issue_id = ? AND status <> 'cleaned'`,
@@ -680,7 +733,9 @@ function liveIssueWorkspaceMachines(
     const runtime = ctx.runtimes().getRuntime(runtimeId);
     if (runtime) for (const alias of runtimeDaemonAliases(runtime)) aliases.add(alias);
   }
-  return { count: rows.length, aliases: [...aliases] };
+  const result = { count: rows.length, aliases: [...aliases] };
+  cache?.issueWorkspaces.set(issueId, result);
+  return result;
 }
 
 /**
@@ -721,14 +776,15 @@ function hardTaskAffinity(
   ctx: StoreContext,
   row: Row,
   agentRuntimeId: string | null | undefined,
+  cache?: PlacementSweepCache,
 ): HardTaskAffinity | null {
   const pinnedRuntimeId = nullableString(row.runtime_id ?? row.runtimeId);
-  if (pinnedRuntimeId && agentRuntimeId && pinnedRuntimeId === agentRuntimeId) {
+  if (agentRuntimeId) {
     return { kind: "Agent 绑定", daemonId: null };
   }
   const sessionId = nullableString(row.issue_session_id ?? row.issueSessionId);
   const session = sessionId ? ctx.issueSessions().getIssueSession(sessionId) : null;
-  const directoryDaemonId = ctx.localDirectoryDaemonForTask(row);
+  const directoryDaemonId = taskDirectoryDaemon(ctx, row, cache);
   if (session?.withCode) return { kind: "代码快照", daemonId: directoryDaemonId };
   if (nullableString(row.runtime_workspace_id ?? row.runtimeWorkspaceId)) {
     return { kind: "显式 Runtime 工作区", daemonId: null };
@@ -738,7 +794,7 @@ function hardTaskAffinity(
   if (issueId && holdsWorkspace) {
     // The claim SQL pins these through the workspace row, not `runtime_id`, so
     // resolve the machine set here or the wait would stay invisible.
-    const machines = liveIssueWorkspaceMachines(ctx, issueId);
+    const machines = liveIssueWorkspaceMachines(ctx, issueId, cache);
     if (machines.count > 0) {
       return {
         kind: "Issue 工作区",
@@ -753,6 +809,7 @@ function hardTaskAffinity(
   // claim-time refreshes skip frozen retries, so it must explain itself here.
   const frozen = nullableString(row.execution_fingerprint ?? row.executionFingerprint) !== null;
   if (frozen) return { kind: "冻结重试", daemonId: null };
+  if (pinnedRuntimeId && !canRepoolQueuedTaskPin(row)) return { kind: "重试钉机", daemonId: null };
   return null;
 }
 
@@ -789,7 +846,7 @@ export class TasksRepo {
   refreshQueuedCapabilityWaitReasons(now = Date.now()): { updated: number; alerted: number } {
     const rows = this.ctx.db.query(
       `SELECT id, agent_id, runtime_id, issue_id, issue_session_id, chat_session_id,
-              runtime_workspace_id, holds_workspace, workspace_id, created_at, wait_reason,
+              runtime_workspace_id, holds_workspace, workspace_id, work_dir, created_at, wait_reason,
               attempt, execution_fingerprint,
               execution_model, execution_thinking_level
          FROM multiremi_tasks
@@ -798,7 +855,7 @@ export class TasksRepo {
       id: string; agent_id: string; runtime_id: string | null; issue_id: string | null;
       issue_session_id: string | null; chat_session_id: string | null;
       runtime_workspace_id: string | null; holds_workspace: unknown;
-      workspace_id: string | null;
+      workspace_id: string | null; work_dir: string | null;
       created_at: string; wait_reason: string | null;
       attempt: unknown; execution_fingerprint: string | null;
       execution_model: string | null; execution_thinking_level: string | null;
@@ -807,16 +864,37 @@ export class TasksRepo {
     if (!rows.length) return result;
     const runtimesRepo = this.ctx.runtimes();
     const runtimes = runtimesRepo.listRuntimes();
+    const aliasIndex = machineAliasIndex(runtimes);
+    const placementCache: PlacementSweepCache = {
+      agents: new Map(), directories: new Map(), issueWorkspaces: new Map(),
+      daemonNames: new Map(), runtimes,
+    };
+    const probeVerdicts = new Map<string, Array<{
+      runtimeId: string; daemonId: string; placementOk: boolean; routingOk: boolean;
+    }>>();
+    const observable = rows.filter((row) => !row.wait_reason || isQueuedObserverWaitReason(row.wait_reason));
+    for (const runtime of runtimes) {
+      const taskIds = observable.filter((row) => (row.workspace_id ?? "local") === (runtime.workspaceId ?? "local"))
+        .map((row) => row.id);
+      if (!taskIds.length) continue;
+      const verdicts = this.runtimePlacementForTasks(runtime, taskIds);
+      for (const taskId of taskIds) {
+        const verdict = verdicts.get(taskId);
+        if (!verdict) continue;
+        const taskVerdicts = probeVerdicts.get(taskId) ?? [];
+        taskVerdicts.push({ runtimeId: runtime.id, daemonId: runtime.daemonId ?? runtime.id, ...verdict });
+        probeVerdicts.set(taskId, taskVerdicts);
+      }
+    }
     const decisions = new Map<string, { agent: MultiremiAgent | null; candidateSupportsModel: boolean[] }>();
     for (const row of rows) {
       // This observer owns only its own reasons. Human and directory waits, and
       // any future queued reason, retain their independent lifecycle.
       if (row.wait_reason && !isQueuedObserverWaitReason(row.wait_reason)) continue;
-      const routingAgent = this.ctx.agents().getAgentLite(row.agent_id);
       // (a)(b)(c) invariant: ask the claim's OWN structural predicate which
       // machines can take this Task. Decision comes from that SQL; the affinity
       // classification below only explains it (MUL-449).
-      const probe = this.taskPlacementProbe(row);
+      const probe = this.taskPlacementProbe(row, probeVerdicts.get(row.id) ?? [], aliasIndex, placementCache);
       // Placement is only a WAIT when a hard affinity pins the task. A purely
       // soft pin (provider lineage) is abandoned and re-pooled by the
       // claim-time refresh, so the observer must not label it — it may not even
@@ -918,7 +996,7 @@ export class TasksRepo {
       // (b) Some machine satisfies placement but every one is refused by the
       // Project device routing: name THOSE machines, never the stale pin.
       if (placementCandidates.length > 0) {
-        const names = [...new Set(placementCandidates.map((verdict) => this.daemonDisplayName(verdict.daemonId)))];
+        const names = [...new Set(placementCandidates.map((verdict) => this.daemonDisplayName(verdict.daemonId, placementCache)))];
         const reason = deviceRoutingWaitReason({
           runtimeName: names.join(" / "),
           affinity: probe.explanation,
@@ -937,7 +1015,7 @@ export class TasksRepo {
           continue;
         }
         const reason = deviceRoutingWaitReason({
-          runtimeName: this.daemonDisplayName(pendingDaemon),
+          runtimeName: this.daemonDisplayName(pendingDaemon, placementCache),
           affinity: probe.explanation,
         });
         if (reason === row.wait_reason) continue;
@@ -952,6 +1030,10 @@ export class TasksRepo {
         codeSnapshot: probe.codeSnapshot,
         localDirectory: probe.localDirectory,
         agentBindingTarget: probe.agentBindingTarget,
+        frozenTask: probe.frozenRetry,
+        issueId: row.issue_id,
+        issueSessionId: row.issue_session_id,
+        agentId: row.agent_id,
         redispatchTaskId: row.id,
       });
       if (reason === row.wait_reason) continue;
@@ -2602,24 +2684,25 @@ export class TasksRepo {
     return Number(rowQuery?.eligible ?? 0) === 1;
   }
 
-  /** Is this alias backed by any registered Runtime? */
-  private daemonIsRegistered(alias: string): boolean {
-    return this.ctx.runtimes().listRuntimes()
-      .some((runtime) => runtimeDaemonAliases(runtime).includes(alias));
-  }
-
   /** Human-readable machine name for a daemon, registered or not. */
-  private daemonDisplayName(daemonId: string): string {
+  private daemonDisplayName(daemonId: string, cache?: PlacementSweepCache): string {
+    const cached = cache?.daemonNames.get(daemonId);
+    if (cached) return cached;
     const row = this.ctx.db.query(
       `SELECT display_name FROM multiremi_daemon_profiles
         WHERE workspace_id = ? AND daemon_id = ?`,
     ).get("local", daemonId) as { display_name?: unknown } | null;
     const name = nullableString(row?.display_name);
-    if (name) return name;
-    const runtime = this.ctx.runtimes().listRuntimes()
+    if (name) {
+      cache?.daemonNames.set(daemonId, name);
+      return name;
+    }
+    const runtime = (cache?.runtimes ?? this.ctx.runtimes().listRuntimes())
       .find((candidate) => candidate.id === daemonId
         || candidate.daemonId === daemonId || candidate.legacyDaemonId === daemonId);
-    return runtime?.daemonDisplayName ?? runtime?.name ?? daemonId;
+    const result = runtime?.daemonDisplayName ?? runtime?.name ?? daemonId;
+    cache?.daemonNames.set(daemonId, result);
+    return result;
   }
 
   /**
@@ -2629,15 +2712,18 @@ export class TasksRepo {
    * separately so the observer can tell "no machine at all" from "every
    * machine is refused by the Project".
    */
-  private runtimePlacementForTask(
+  private runtimePlacementForTasks(
     runtime: MultiremiRuntime,
-    taskId: string,
-  ): { placementOk: boolean; routingOk: boolean } {
+    taskIds: readonly string[],
+  ): Map<string, { placementOk: boolean; routingOk: boolean }> {
+    const verdicts = new Map<string, { placementOk: boolean; routingOk: boolean }>();
+    if (!taskIds.length) return verdicts;
     const before = placementBeforeRoutingSql(runtime);
     const routing = deviceRoutingSql(this.ctx, runtime);
     const after = placementAfterRoutingSql(runtime);
-    const row = this.ctx.db.query(
-      `SELECT CASE WHEN (1 = 1
+    const placeholders = taskIds.map(() => "?").join(", ");
+    const rows = this.ctx.db.query(
+      `SELECT t.id, CASE WHEN (1 = 1
 ${before.sql}
 ${after.sql}
        ) THEN 1 ELSE 0 END AS placement_ok,
@@ -2645,13 +2731,22 @@ ${after.sql}
 ${routing.sql}
        ) THEN 1 ELSE 0 END AS routing_ok
        ${TASK_CLAIM_FROM_SQL}
-       WHERE t.id = ?`,
-    ).get(...before.params, ...after.params, ...routing.params, taskId) as
-      { placement_ok?: unknown; routing_ok?: unknown } | null;
-    return {
-      placementOk: Number(row?.placement_ok ?? 0) === 1,
-      routingOk: Number(row?.routing_ok ?? 0) === 1,
-    };
+       WHERE t.id IN (${placeholders})`,
+    ).all(...before.params, ...after.params, ...routing.params, ...taskIds) as
+      Array<{ id: string; placement_ok?: unknown; routing_ok?: unknown }>;
+    for (const row of rows) verdicts.set(row.id, {
+      placementOk: Number(row.placement_ok ?? 0) === 1,
+      routingOk: Number(row.routing_ok ?? 0) === 1,
+    });
+    return verdicts;
+  }
+
+  private runtimePlacementForTask(
+    runtime: MultiremiRuntime,
+    taskId: string,
+  ): { placementOk: boolean; routingOk: boolean } {
+    return this.runtimePlacementForTasks(runtime, [taskId]).get(taskId)
+      ?? { placementOk: false, routingOk: false };
   }
 
   /**
@@ -2663,8 +2758,10 @@ ${routing.sql}
     id: string; agent_id: string; runtime_id: string | null; issue_id: string | null;
     issue_session_id: string | null; chat_session_id: string | null;
     runtime_workspace_id: string | null; holds_workspace: unknown;
-    workspace_id: string | null; execution_fingerprint: string | null;
-  }): {
+    workspace_id: string | null; work_dir: string | null;
+    attempt: unknown; execution_fingerprint: string | null;
+  }, verdicts: Array<{ runtimeId: string; daemonId: string; placementOk: boolean; routingOk: boolean }>,
+  aliasIndex: MachineAliasIndex, cache?: PlacementSweepCache): {
     verdicts: Array<{ runtimeId: string; daemonId: string; placementOk: boolean; routingOk: boolean }>;
     explanation: DeviceRoutingAffinity | "会话";
     /** False when only provider lineage pins this Task (re-poolable). */
@@ -2678,19 +2775,12 @@ ${routing.sql}
     localDirectory: boolean;
     agentBindingTarget: string | null;
   } {
-    const task = this.getTask(row.id);
-    const workspaceId = row.workspace_id ?? "local";
-    const verdicts = task
-      ? this.ctx.runtimes().listRuntimes()
-        .filter((runtime) => (runtime.workspaceId ?? "local") === workspaceId)
-        .map((runtime) => ({
-          runtimeId: runtime.id,
-          daemonId: runtime.daemonId ?? runtime.id,
-          ...this.runtimePlacementForTask(runtime, row.id),
-        }))
-      : [];
-    const agent = this.ctx.agents().getAgentLite(row.agent_id);
-    const affinity = hardTaskAffinity(this.ctx, row, agent?.runtimeId);
+    let agent = cache?.agents.get(row.agent_id);
+    if (agent === undefined) {
+      agent = this.ctx.agents().getAgentLite(row.agent_id);
+      cache?.agents.set(row.agent_id, agent);
+    }
+    const affinity = hardTaskAffinity(this.ctx, row, agent?.runtimeId, cache);
     // A live workspace row whose Runtime row is gone admits no machine: the
     // task is pinned to data nothing can serve until that machine returns.
     const workspaceRuntimeMissing = (affinity?.workspaceCount ?? 0) > 0
@@ -2699,13 +2789,16 @@ ${routing.sql}
     // unrecoverable; a redispatch replacement carries attempt 2 but no
     // fingerprint, so it must not be labelled frozen (MUL-449).
     const frozenRetry = cleanOptionalString(row.execution_fingerprint) != null;
-    const agentBound = Boolean(agent?.runtimeId && agent.runtimeId === row.runtime_id);
-    const described = describeTaskPlacementConstraints(this.ctx, row, agent?.runtimeId, agent?.provider);
+    const agentBound = Boolean(agent?.runtimeId);
+    const described = describeTaskPlacementConstraints(this.ctx, row, agent?.runtimeId, agent?.provider, aliasIndex, cache);
     const common = commonConstraintMachineAliases(described);
     // The daemon fallback applies only when every constraint points to the
     // same unregistered machine, including registered Agent and task pins.
-    const singlePendingDaemon = affinity && common.length === 1 && !this.daemonIsRegistered(common[0]!)
-      ? common[0]! : null;
+    // A second common alias can only come from runtimeDaemonAliases of a
+    // registered Runtime; an unregistered machine has just its own id.
+    const firstCommon = common[0];
+    const singlePendingDaemon = affinity && firstCommon && !aliasIndex.registered.has(firstCommon)
+      ? firstCommon : null;
     const otherConstraints = described.filter((constraint) => constraint.kind !== "agentBinding"
       && !(constraint.kind === "taskPin" && row.runtime_id === agent?.runtimeId));
     const targetAlias = commonConstraintMachineAliases(otherConstraints)[0];
@@ -2720,7 +2813,7 @@ ${routing.sql}
       agentBound,
       codeSnapshot: described.some((constraint) => constraint.kind === "codeSnapshot"),
       localDirectory: described.some((constraint) => constraint.kind === "localDirectory"),
-      agentBindingTarget: targetAlias ? this.daemonDisplayName(targetAlias) : null,
+      agentBindingTarget: targetAlias ? this.daemonDisplayName(targetAlias, cache) : null,
     };
   }
 
@@ -2927,10 +3020,10 @@ ${routing.sql}
    */
   private refreshQueuedIssueLaneAffinity(workspaceId: string): void {
     const rows = this.ctx.db.query(
-      `SELECT id FROM multiremi_tasks
-        WHERE status = 'queued' AND workspace_id = ?
-          AND issue_session_id IS NOT NULL AND runtime_id IS NOT NULL
-          AND execution_fingerprint IS NULL AND attempt = 1`,
+      `SELECT t.id FROM multiremi_tasks t
+        WHERE t.status = 'queued' AND t.workspace_id = ?
+          AND t.issue_session_id IS NOT NULL AND t.runtime_id IS NOT NULL
+          AND ${REPOOLABLE_QUEUED_TASK_SQL}`,
     ).all(workspaceId) as Row[];
     for (const row of rows) {
       const task = this.getTask(String(row.id));
@@ -2997,7 +3090,7 @@ ${routing.sql}
         WHERE b.chat_session_id = t.chat_session_id AND b.workspace_id = t.workspace_id
           AND b.agent_id = t.agent_id) AS feishu_transport
       FROM multiremi_tasks t WHERE t.workspace_id = ?
-      AND t.chat_session_id IS NOT NULL AND t.status = 'queued' AND t.execution_fingerprint IS NULL AND t.attempt = 1
+      AND t.chat_session_id IS NOT NULL AND t.status = 'queued' AND ${REPOOLABLE_QUEUED_TASK_SQL}
       AND (EXISTS (SELECT 1 FROM multiremi_chat_messages m WHERE m.task_id = t.id AND m.role = 'user')
         OR EXISTS (SELECT 1 FROM multiremi_feishu_bot_chat_bindings b
           WHERE b.chat_session_id = t.chat_session_id AND b.workspace_id = t.workspace_id

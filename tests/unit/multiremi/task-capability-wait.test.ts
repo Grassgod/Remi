@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import type { MultiremiRuntimeModel } from "@multiremi/contracts/types.js";
 import { MultiremiStore } from "@multiremi/store.js";
+import { canRepoolQueuedTaskPin, REPOOLABLE_QUEUED_TASK_SQL } from "@multiremi/store/repos/tasks-repo.js";
 import { createLocalStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -629,18 +630,114 @@ describe("queued task model capability waits", () => {
     expect(reason).toStartWith("等待任务落点：");
     expect(reason).not.toContain("redispatch");
     expect(reason).toContain("A");
-    // Restore only the binding here. updateAgent intentionally cancels frozen
-    // queued executions when their target changes, a separate lifecycle rule.
-    db!.run(
-      `UPDATE multiremi_agents SET runtime_id = ?,
-         execution_group_id = (SELECT execution_group_id FROM multiremi_runtimes WHERE id = ?)
-       WHERE id = ?`,
-      [a.id, a.id, agent.id],
-    );
-    expect(store.getTask(task.id)).toMatchObject({ status: "queued", runtimeId: a.id });
-    expect(store.describeTaskPlacement(task.id).find((verdict) => verdict.runtimeId === a.id))
+    expect(reason).toContain("改绑会取消这条已冻结的任务，改绑后需重新触发");
+    expect(reason).toContain("remi task create --agent");
+    store.updateAgent(agent.id, { runtimeId: a.id });
+    expect(store.getTask(task.id)?.status).toBe("cancelled");
+    // task create --agent/--issue/--data issueSessionId uses this public path.
+    const retriggered = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: side.id, prompt: "frozen snapshot",
+    });
+    expect(retriggered.id).not.toBe(task.id);
+    expect(store.describeTaskPlacement(retriggered.id).find((verdict) => verdict.runtimeId === a.id))
       .toMatchObject({ placementOk: true, routingOk: true });
+    expect(store.claimTask(a.id)?.id).toBe(retriggered.id);
+  });
+
+  it("rebinds an unfrozen Agent conflict through updateAgent without cancelling the task", () => {
+    const { store, a, b, issue } = conflictFixture({ codex: "dev-unfrozen-a", other: "dev-unfrozen-b" });
+    const agent = store.createAgent({ name: "Rebind", provider: "codex", runtimeId: b.id });
+    store.reportIssueWorkspace({ issueId: issue.id, runtimeId: a.id,
+      rootPath: "/tmp/MUL-1", branchName: "agent/MUL-1", status: "ready", repos: [] });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
+    const now = Date.now();
+    ageTask(task.id, GRACE_MS, now);
+    store.refreshQueuedCapabilityWaitReasons(now);
+    expect(store.getTask(task.id)?.waitReason).toContain("remi agent update --runtime");
+    expect(store.getTask(task.id)?.waitReason).not.toContain("已冻结");
+    store.updateAgent(agent.id, { runtimeId: a.id });
+    expect(store.getTask(task.id)?.status).toBe("queued");
     expect(store.claimTask(a.id)?.id).toBe(task.id);
+  });
+
+  it("explains an unfingerprinted retry pin that claim-time refresh cannot repool", () => {
+    const store = createLocalStore();
+    const a = store.registerRuntime({ id: "rt_retry_a", name: "A", provider: "codex", daemonId: "retry-a" });
+    const b = store.registerRuntime({ id: "rt_retry_b", name: "B", provider: "codex", daemonId: "retry-b" });
+    const agent = store.createAgent({ name: "Retry", provider: "codex" });
+    const project = store.createProject({ title: "B only" });
+    store.createProjectDevice(project.id, { daemonId: "retry-b" });
+    store.updateDaemonDedicated("local", "retry-a", true, "local");
+    const chat = store.createChatSession({ agentId: agent.id, projectId: project.id });
+    const task = store.sendChatMessage(chat.id, { body: "retry" }).task;
+    db!.run("UPDATE multiremi_tasks SET runtime_id = ?, attempt = 2, execution_fingerprint = NULL WHERE id = ?", [a.id, task.id]);
+    const now = Date.now();
+    ageTask(task.id, GRACE_MS, now);
+    expect(store.claimTask(a.id)).toBeNull();
+    expect(store.claimTask(b.id)).toBeNull();
+    expect(store.refreshQueuedCapabilityWaitReasons(now).updated).toBe(1);
+    expect(store.getTask(task.id)).toMatchObject({ status: "queued", runtimeId: a.id });
+    const reason = store.getTask(task.id)?.waitReason ?? "";
+    expect(reason).toStartWith("等待项目设备：");
+    expect(reason).toContain("重试钉机");
+    expect(reason).not.toContain("冻结重试");
+  });
+
+  it("keeps registered multi-alias workspace placement out of the daemon fallback", () => {
+    const store = createLocalStore();
+    const codex = store.registerRuntime({
+      id: "rt_alias_codex", name: "registered", provider: "codex", daemonId: "alias-machine",
+    });
+    const agent = store.createAgent({ name: "Claude", provider: "claude" });
+    const project = store.createProject({ title: "Multi alias" });
+    const issue = store.createIssue({ title: "Multi alias", projectId: project.id });
+    store.reportIssueWorkspace({ issueId: issue.id, runtimeId: codex.id,
+      rootPath: "/tmp/MUL-1", branchName: "agent/MUL-1", status: "ready", repos: [] });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
+    const now = Date.now();
+    ageTask(task.id, GRACE_MS, now);
+    expect(store.refreshQueuedCapabilityWaitReasons(now).updated).toBe(1);
+    expect(store.getTask(task.id)?.waitReason).toStartWith("等待任务落点：");
+  });
+
+  it("uses the same repool predicate in SQL and the hard-pin classifier", () => {
+    const store = createLocalStore();
+    const agent = store.createAgent({ name: "Predicate", provider: "codex" });
+    const task = store.createTask({ agentId: agent.id, prompt: "predicate" });
+    for (const [attempt, fingerprint] of [[1, null], [2, null], [1, "fp"], [2, "fp"]] as const) {
+      db!.run("UPDATE multiremi_tasks SET attempt = ?, execution_fingerprint = ? WHERE id = ?",
+        [attempt, fingerprint, task.id]);
+      const sqlAllows = db!.query(
+        `SELECT 1 AS eligible FROM multiremi_tasks t WHERE t.id = ? AND ${REPOOLABLE_QUEUED_TASK_SQL}`,
+      ).get(task.id) !== null;
+      expect(canRepoolQueuedTaskPin({ attempt, execution_fingerprint: fingerprint })).toBe(sqlAllows);
+    }
+  });
+
+  it("probes a queued batch once per Runtime rather than once per task", () => {
+    const store = createLocalStore();
+    const runtimes = Array.from({ length: 4 }, (_, index) => store.registerRuntime({
+      id: `rt_batch_${index}`, name: `batch ${index}`, provider: "codex",
+      daemonId: `dev-batch-${index}`,
+    }));
+    const agent = store.createAgent({ name: "Batch", provider: "codex", runtimeId: runtimes[0]!.id });
+    const project = store.createProject({ title: "Batch" });
+    const issue = store.createIssue({ title: "Batch", projectId: project.id });
+    store.reportIssueWorkspace({ issueId: issue.id, runtimeId: runtimes[1]!.id,
+      rootPath: "/tmp/MUL-1", branchName: "agent/MUL-1", status: "ready", repos: [] });
+    const now = Date.now();
+    for (let index = 0; index < 12; index++) {
+      const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: `batch ${index}` });
+      ageTask(task.id, GRACE_MS, now);
+    }
+    const query = spyOn(db!, "query");
+    try {
+      expect(store.refreshQueuedCapabilityWaitReasons(now).updated).toBe(12);
+      const placementQueries = query.mock.calls.filter(([sql]) => String(sql).includes("AS placement_ok"));
+      expect(placementQueries).toHaveLength(runtimes.length);
+    } finally {
+      query.mockRestore();
+    }
   });
 
   it("explains an Agent-bound Runtime that conflicts with the live Issue workspace", () => {
