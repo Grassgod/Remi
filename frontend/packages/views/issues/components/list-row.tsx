@@ -72,6 +72,8 @@ function ListRowContent({
         ref={containerRef}
         style={containerStyle}
         {...containerProps}
+        data-perf-item="issue"
+        data-perf-key={issue.id}
         className={`group/row flex h-9 items-center gap-2 px-4 text-sm transition-colors hover:not-data-[popup-open]:bg-accent/60 data-[popup-open]:bg-accent ${
           selected ? "bg-accent/30" : ""
         } ${isDragging ? "opacity-30" : ""}`}
