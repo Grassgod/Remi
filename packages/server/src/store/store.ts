@@ -3667,9 +3667,64 @@ runMigrations(this.db);
   // `query(sql, params)` seam so MUL-403's read pool can be wired in without
   // touching the SQL; both default to the primary handle.
 
-  /** Allocate seq and append one row; the caller owns the transaction. */
-  appendConversationLogWithinTransaction(input: AppendConversationLogInput): ConversationLogEntry {
+  /** Allocate the next seq for a session; the caller owns the transaction. */
+  nextSeqWithinTransaction(sessionId: string): number {
+    return this.conversationLog.nextSeqWithinTransaction(sessionId);
+  }
+
+  /** Insert one row at an allocated or explicit seq; the caller owns the transaction. */
+  appendWithinTransaction(input: AppendConversationLogInput): ConversationLogEntry {
     return this.conversationLog.appendWithinTransaction(input);
+  }
+
+  /** Public append that opens its own transaction. */
+  appendConversationLogWithinTransaction(input: AppendConversationLogInput): ConversationLogEntry {
+    return this.conversationLog.append(input);
+  }
+
+  /** In-place update with `revision++`; the caller owns the transaction. */
+  updateWithinTransaction(sessionId: string, seq: number, input: UpdateConversationLogInput): ConversationLogEntry | null {
+    return this.conversationLog.updateWithinTransaction(sessionId, seq, input);
+  }
+
+  /** Bump `log_version` without touching a row, for head-only freshness. */
+  touchSessionWithinTransaction(sessionId: string, at?: string): void {
+    this.conversationLog.touchSessionWithinTransaction(sessionId, at);
+  }
+
+  /** Create the head row and counter for a session; idempotent. */
+  ensureSessionHeadWithinTransaction(
+    sessionId: string,
+    input: { bodyMd: string; title?: string | null },
+  ): ConversationLogEntry {
+    return this.conversationLog.ensureSessionHeadWithinTransaction(sessionId, input);
+  }
+
+  /** Sync the `head` row of an Issue session, one row per session. */
+  syncIssueHeadWithinTransaction(
+    sessionId: string,
+    issue: { title: string; description?: string | null },
+    createdAt?: string,
+  ): ConversationLogEntry {
+    return this.conversationLog.syncIssueHeadWithinTransaction(sessionId, issue, createdAt);
+  }
+
+  /** Sync a chat `head` row from the session title. */
+  syncChatHeadWithinTransaction(sessionId: string, title: string | null, createdAt?: string): ConversationLogEntry {
+    return this.conversationLog.syncChatHeadWithinTransaction(sessionId, title, createdAt);
+  }
+
+  /** The `turn` card of a task, if one exists. */
+  findTurnEntry(taskId: string): ConversationLogEntry | null {
+    return this.conversationLog.findTurnEntry(taskId);
+  }
+
+  /** Update a task's `turn` card in place, bumping `revision`. */
+  updateTurnCardWithinTransaction(
+    taskId: string,
+    fields: Parameters<ConversationLogRepo["updateTurnCardWithinTransaction"]>[1],
+  ): ConversationLogEntry | null {
+    return this.conversationLog.updateTurnCardWithinTransaction(taskId, fields);
   }
 
   appendConversationLog(input: AppendConversationLogInput): ConversationLogEntry {

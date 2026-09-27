@@ -993,10 +993,17 @@ export class TasksRepo {
             } : {}),
           },
         });
+        // The mirror writes the card as a `turn` at the assignment event's seq;
+        // record the lifecycle state the card starts in.
+        this.ctx.conversationLog().updateTurnCardWithinTransaction(id, { status: "queued" });
         this.ctx.db.run(
           "UPDATE multiremi_tasks SET assignment_event_id = ?, updated_at = ? WHERE id = ?",
           [assignment.id, nowIso(), id],
         );
+      } else {
+        // A caller that supplied its own assignment event still gets a card: the
+        // event exists, so the mirror has already written it.
+        this.ctx.conversationLog().updateTurnCardWithinTransaction(id, { status: "queued" });
       }
     }
     const task = this.getTask(id)!;
@@ -2529,6 +2536,9 @@ export class TasksRepo {
       );
       if (result.changes === 0) throw new Error(`Task not found or not dispatched: ${taskId}`);
       const started = this.getTask(taskId)!;
+      // The card moves queued -> running in place and bumps `revision`; no marker
+      // row, because the seq axis must keep `cursor_seq` meanings intact.
+      this.ctx.conversationLog().updateTurnCardWithinTransaction(taskId, { status: "running" });
       this.syncIssueStatusFromTaskWithinTransaction(started, "in_progress", { rederive: true });
       return started;
     })();
@@ -3959,6 +3969,13 @@ export class TasksRepo {
         elapsedMs,
         createdAt: now,
       });
+      // The assistant row mirrors as the task's `turn` card; stamp the terminal
+      // state onto it. The reply itself is already `metadata.final_reply_md`.
+      this.ctx.conversationLog().updateTurnCardWithinTransaction(task.id, {
+        status,
+        failureReason,
+        elapsedMs,
+      });
       // Promote the session ATOMICALLY as one unit — session_id together with
       // its machine (runtime) and engine (provider) — and ONLY when this task
       // actually produced a new session id. Otherwise a task that promotes but
@@ -4033,7 +4050,11 @@ export class TasksRepo {
         body,
         data: { taskId: task.id, runtimeId: task.runtimeId },
       });
-      if (status === "completed" && !workspaceLockHeld) this.postAgentReplyComment(task, body);
+      // Issue turns keep the reply as a standalone threadable `message` row and
+      // point the card at it; the card itself only carries the lifecycle state.
+      const replyComment = status === "completed" && !workspaceLockHeld
+        ? this.postAgentReplyComment(task, body)
+        : null;
       if (task.issueSessionId) {
         const event = {
           authorType: status === "completed" ? "agent" : "system",
@@ -4051,6 +4072,11 @@ export class TasksRepo {
         const terminalEvent = workspaceLockHeld
           ? this.ctx.issueSessions().appendSessionEventWithinTransaction(task.issueSessionId, event)
           : this.ctx.issueSessions().appendSessionEvent(task.issueSessionId, event);
+        this.ctx.conversationLog().updateTurnCardWithinTransaction(task.id, {
+          status,
+          finalEntryId: replyComment?.id ?? null,
+          failureReason: task.failureReason,
+        });
         // Cancelling stops the current turn; it does not corrupt the provider transcript
         // the lane points at, so keep the lane exactly as-is (chat sessions already behave
         // this way — see promoteSession above). Deliberately neither promote nor reset:
@@ -4380,10 +4406,11 @@ export class TasksRepo {
   // in the issue thread, not only inside the run transcript. Threads under the
   // triggering comment when the task came from an @mention. Legacy daemons
   // still report the "Task completed." placeholder — skip it, it says nothing.
-  private postAgentReplyComment(task: MultiremiTask, output: string | null): void {
-    if (!task.issueId || !task.agentId || task.chatSessionId) return;
+  /** Returns the reply comment it created, or null when the run posted none. */
+  private postAgentReplyComment(task: MultiremiTask, output: string | null): { id: string } | null {
+    if (!task.issueId || !task.agentId || task.chatSessionId) return null;
     const body = (output ?? "").trim();
-    if (!body || body === "Task completed.") return;
+    if (!body || body === "Task completed.") return null;
     try {
       // If the agent already posted its own comment during this run (the normal
       // path for @mention/comment-triggered tasks — it replies in-thread via a
@@ -4391,10 +4418,10 @@ export class TasksRepo {
       // and the auto-reply is the lower-quality, narration-heavy version. The
       // auto-reply stays for direct assignments where the agent doesn't comment.
       if (this.agentCommentedSince(task.issueId, task.agentId, task.dispatchedAt ?? task.startedAt ?? task.createdAt, task.id)) {
-        return;
+        return null;
       }
       const parent = task.triggerCommentId ? this.ctx.issues().getIssueComment(task.triggerCommentId) : null;
-      this.ctx.issues().createIssueComment(task.issueId, {
+      const comment = this.ctx.issues().createIssueComment(task.issueId, {
         issueSessionId: task.issueSessionId,
         authorType: "agent",
         authorId: task.agentId,
@@ -4403,9 +4430,11 @@ export class TasksRepo {
         parentId: parent && parent.issueId === task.issueId ? parent.id : null,
         body,
       });
+      return { id: comment.id };
     } catch (err) {
       // Task completion must never fail because the reply couldn't be posted.
       log.warn(`agent reply comment skipped for ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
     }
   }
 

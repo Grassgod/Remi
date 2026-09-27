@@ -70,6 +70,13 @@ export type AppendConversationLogInput = {
   createdAt?: string;
   updatedAt?: string | null;
   deletedAt?: string | null;
+  /**
+   * Place the row at this seq instead of allocating one. Issue sessions use it to
+   * keep the log on `multiremi_session_events.seq`, so lane cursors,
+   * `inherit_cutoff_seq`, `follow_frozen_seq` and stored `requiredEventSeq`
+   * values stay valid without remapping. The head counter is raised to match.
+   */
+  seq?: number;
 };
 
 export type UpdateConversationLogInput = {
@@ -195,7 +202,10 @@ export class ConversationLogRepo {
     // `head` is the row at seq 0, not an event: it takes no allocation, so the
     // first real append still gets seq 1 and `cursor_seq = 0` keeps meaning
     // "nothing read" for every lane.
-    const seq = input.kind === "head" ? 0 : this.nextSeqWithinTransaction(input.sessionId);
+    const seq = input.seq != null
+      ? Math.max(0, Math.floor(input.seq))
+      : input.kind === "head" ? 0 : this.nextSeqWithinTransaction(input.sessionId);
+    if (input.seq != null) this.raiseHeadWithinTransaction(input.sessionId, seq);
     const id = input.id ?? createId("clog");
     const now = input.createdAt ?? nowIso();
     const updatedAt = input.updatedAt ?? now;
@@ -229,6 +239,9 @@ export class ConversationLogRepo {
         input.deletedAt ?? null,
       ],
     );
+    // One `log_version` bump per log mutation: the allocator already counted
+    // this append, so only the explicit-seq path (mirror, backfill) bumps here.
+    if (input.seq != null && input.kind !== "head") this.touchSessionWithinTransaction(input.sessionId, now);
     const entry = this.getEntryWithinTransaction(input.sessionId, seq)!;
     this.emit(input.sessionId, entry);
     return entry;
@@ -253,6 +266,22 @@ export class ConversationLogRepo {
     ).get(nowIso(), sessionId) as { head_seq?: number } | null;
     if (!row) throw new Error(`Conversation head not found: ${sessionId}`);
     return Number(row.head_seq);
+  }
+
+  /**
+   * Raise the counter to at least `seq` after an explicit placement, so a later
+   * allocation cannot collide with a mirrored row. `log_version` is left alone:
+   * it counts log mutations, and the append that follows this call is the one
+   * that increments it.
+   */
+  private raiseHeadWithinTransaction(sessionId: string, seq: number): void {
+    this.ctx.db.run(
+      `INSERT INTO multiremi_conversation_heads (session_id, head_seq, log_version, updated_at)
+       VALUES (?, ?, 0, ?)
+       ON CONFLICT(session_id) DO UPDATE SET
+         head_seq = CASE WHEN head_seq < excluded.head_seq THEN excluded.head_seq ELSE head_seq END`,
+      [sessionId, seq, nowIso()],
+    );
   }
 
   /** The head row: `head_seq`, `log_version` and `updated_at`. */
@@ -367,10 +396,10 @@ export class ConversationLogRepo {
   }
 
   /** Bump `log_version` without touching a row, for head-only freshness. */
-  touchSessionWithinTransaction(sessionId: string): void {
+  touchSessionWithinTransaction(sessionId: string, at?: string): void {
     this.ctx.db.run(
       "UPDATE multiremi_conversation_heads SET log_version = log_version + 1, updated_at = ? WHERE session_id = ?",
-      [nowIso(), sessionId],
+      [at ?? nowIso(), sessionId],
     );
   }
 
@@ -453,6 +482,57 @@ export class ConversationLogRepo {
       result.before_visible_count_capped = countRows.length > CONVERSATION_LOG_BEFORE_VISIBLE_COUNT_CAP;
     }
     return result;
+  }
+
+  /**
+   * The `turn` card for a task, if one exists. A task's card is created when the
+   * task is created (Issue) or when its reply lands (chat), and is then updated
+   * in place through its lifecycle, so the lookup is by `task_id`.
+   */
+  findTurnEntry(taskId: string): ConversationLogEntry | null {
+    const row = this.ctx.db.query(
+      "SELECT * FROM multiremi_conversation_log WHERE task_id = ? AND kind = 'turn' ORDER BY seq ASC LIMIT 1",
+    ).get(taskId) as Row | null;
+    return row ? toConversationLogEntry(row) : null;
+  }
+
+  /**
+   * Update a task's `turn` card in place: status and the fields the completion
+   * report carries. `revision` bumps on every call, which is what the browser
+   * replica keys on. No card means nothing to update (a chat turn whose reply
+   * has not landed yet).
+   */
+  updateTurnCardWithinTransaction(
+    taskId: string,
+    fields: {
+      status?: string | null;
+      finalReplyMd?: string | null;
+      finalEntryId?: string | null;
+      summary?: string | null;
+      toolCallCount?: number | null;
+      eventCount?: number | null;
+      typeHistogram?: unknown[] | null;
+      usage?: unknown[] | null;
+      model?: unknown | null;
+      elapsedMs?: number | null;
+      failureReason?: string | null;
+    },
+  ): ConversationLogEntry | null {
+    const current = this.findTurnEntry(taskId);
+    if (!current) return null;
+    const metadata: Record<string, unknown> = { ...current.metadata };
+    if (fields.status !== undefined) metadata.status = fields.status;
+    if (fields.finalReplyMd !== undefined) metadata.final_reply_md = fields.finalReplyMd;
+    if (fields.finalEntryId !== undefined) metadata.final_entry_id = fields.finalEntryId;
+    if (fields.summary !== undefined) metadata.summary = fields.summary;
+    if (fields.toolCallCount !== undefined) metadata.tool_call_count = fields.toolCallCount;
+    if (fields.eventCount !== undefined) metadata.event_count = fields.eventCount;
+    if (fields.typeHistogram !== undefined) metadata.type_histogram = fields.typeHistogram;
+    if (fields.usage !== undefined) metadata.usage = fields.usage;
+    if (fields.model !== undefined) metadata.model = fields.model;
+    if (fields.elapsedMs !== undefined) metadata.elapsed_ms = fields.elapsedMs;
+    if (fields.failureReason !== undefined) metadata.failure_reason = fields.failureReason;
+    return this.updateWithinTransaction(current.session_id, current.seq, { fields: { metadata } });
   }
 
   /** Shown rows in the inclusive seq range, oldest first. */

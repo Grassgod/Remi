@@ -3,6 +3,10 @@
 import { createId, nowIso } from "@multiremi/ids.js";
 import { cleanOptionalString, nullableString } from "@multiremi/store/helpers.js";
 import { type StoreContext } from "@multiremi/store/context.js";
+import {
+  chatMessageToConversationLog,
+  type MirrorChatMessageRow,
+} from "@multiremi/store/conversation-log-mirror.js";
 import { RuntimeWorkspaceError, RuntimeWorkspacesRepo } from "./runtime-workspaces-repo.js";
 import type { CancelTaskResult } from "./tasks-repo.js";
 import { buildSessionProjection } from "@multiremi/store/session-projection.js";
@@ -95,6 +99,8 @@ export class ChatRepo {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', NULL, NULL, NULL, ?, ?)`,
       [projectId, runtimeWorkspaceId, id, workspaceId, input.creatorId ?? input.creator_id ?? "local", agentId, title, now, now],
     );
+    // The chat head is the session title at seq 0.
+    this.ctx.conversationLog().syncChatHeadWithinTransaction(id, title, now);
     const session = this.getChatSession(id)!;
     return session;
   }
@@ -171,6 +177,8 @@ export class ChatRepo {
         this.discardPendingAgentIssueUpdatesWithinTransaction(id);
       }
       const updated = this.getChatSession(id)!;
+      // A renamed Chat keeps one head row at seq 0 and bumps its `revision`.
+      this.ctx.conversationLog().syncChatHeadWithinTransaction(id, updated.title, now);
       return updated;
     })();
     for (const result of cancelled) this.ctx.tasks().notifyCancelledTask(result);
@@ -329,6 +337,8 @@ export class ChatRepo {
     pendingAgentDelivery?: boolean;
     agentDeliveryTaskId?: string | null;
     createdAt?: string;
+    /** Sender-supplied key for the optimistic message, kept in log metadata. */
+    clientId?: string | null;
   }): MultiremiChatMessage {
     const sequenceRow = this.ctx.db.query(
       `UPDATE multiremi_chat_sessions
@@ -357,7 +367,37 @@ export class ChatRepo {
         input.createdAt ?? nowIso(),
       ],
     );
+    this.mirrorChatMessageWithinTransaction(id, input.clientId ?? null);
     return this.getChatMessage(id)!;
+  }
+
+  /**
+   * Copy one freshly written `chat_messages` row into the conversation log at the
+   * same `sequence` (MUL-426 B1). Chat seq is the message sequence, so the two
+   * axes stay identical; the user-facing reads move to the log now, while the
+   * agent-issue-update delivery remains on the legacy columns until B2.
+   */
+  private mirrorChatMessageWithinTransaction(messageId: string, clientId: string | null): void {
+    const row = this.ctx.db.query(
+      "SELECT * FROM multiremi_chat_messages WHERE id = ?",
+    ).get(messageId) as Row | null;
+    if (!row) return;
+    const session = this.getChatSession(String(row.chat_session_id));
+    if (!session) return;
+    const raw = { ...row, client_id: clientId } as unknown as MirrorChatMessageRow;
+    const mapped = chatMessageToConversationLog(raw, session);
+    this.ctx.conversationLog().appendWithinTransaction({
+      sessionId: mapped.sessionId,
+      seq: mapped.seq,
+      id: mapped.id,
+      kind: mapped.kind,
+      authorType: mapped.authorType,
+      authorId: mapped.authorId,
+      taskId: mapped.taskId,
+      bodyMd: mapped.bodyMd,
+      metadata: mapped.metadata,
+      createdAt: mapped.createdAt,
+    });
   }
 
   buildTaskSessionProjection(taskId: string): MultiremiSessionProjection | null {
