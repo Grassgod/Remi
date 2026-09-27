@@ -139,7 +139,10 @@ async function main() {
         try {
           console.error(`benchmark ${target}: ${size} Chats, sample ${sample}/${repeats}`);
           if (directory) {
-            db = new Database(join(directory, "synthetic.sqlite"));
+            // Declare the backend: migrations must not fall back to
+            // `MULTIREMI_DATABASE_URL` when an unrelated PG URL happens to be
+            // exported in this shell (MUL-407).
+            db = Object.assign(new Database(join(directory, "synthetic.sqlite")), { dialect: "sqlite" as const });
             db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL");
           } else {
             await admin!.unsafe(`CREATE DATABASE ${database}`);

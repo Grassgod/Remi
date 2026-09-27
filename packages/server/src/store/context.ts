@@ -215,6 +215,7 @@ export type WorkspaceEvent = Parameters<WorkspaceEventListener>[0];
 // at its repo and nothing else changes.
 export interface IssuesSurface {
   createIssue(input: CreateIssueInput): MultiremiIssue;
+  createIssueWithinTransaction(input: CreateIssueInput, deferredEvents: CommitEventQueue): MultiremiIssue;
   createIssueComment(
     issueId: string,
     input: CreateIssueCommentInput,
@@ -461,6 +462,8 @@ export interface TasksSurface {
   /** Full rows for the ids a page kept, in the caller's order. */
   hydrateTasksByIds(ids: readonly string[]): MultiremiTask[];
   listTasksForIssue(issueId: string): MultiremiTask[];
+  /** Read one human request without going through the facade (MUL-407). */
+  getTaskHumanRequest(requestId: string): import("@multiremi/contracts/types.js").MultiremiTaskHumanRequest | null;
   cancelTask(taskId: string): MultiremiTask;
   cancelTaskWithinTransaction(
     taskId: string,
