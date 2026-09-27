@@ -12,12 +12,15 @@
  *
  * Inbound events are handed to the local fanout, which delivers them to this
  * process's WebSocket registries and never forwards them again.
+ *
+ * A batch is answered 200 with `{ accepted, rejected }` even when some frames
+ * are unusable. Only a body that is not a batch at all is 400 — anything else
+ * would leave a sender retrying the same poisoned batch forever.
  */
 import type { Context, Hono } from "hono";
 import { timingSafeEqual } from "node:crypto";
 import { parsePeerEventBatch } from "@multiremi/contracts/peer-events.js";
 import type { PeerChannel } from "./peer-channel.js";
-import { PEER_REALTIME_TOPIC } from "./peer-channel.js";
 
 export interface PeerRouteDeps {
   /** Null when `MULTIREMI_PEER_URL` is unset: the channel is closed, routes report that. */
@@ -63,9 +66,7 @@ export function registerPeerRoutes(app: Hono, deps: PeerRouteDeps): void {
     } catch {
       return c.json({ error: "invalid json" }, 400);
     }
-    // `realtime` is the default topic so a peer that only sends `{events}` is
-    // still understood; anything else must name its topic.
-    const batch = parsePeerEventBatch(body, PEER_REALTIME_TOPIC);
+    const batch = parsePeerEventBatch(body);
     if (!batch) return c.json({ error: "invalid batch" }, 400);
     const result = peer.receive(batch.topic, batch.events);
     return c.json({ ok: true, accepted: result.accepted, rejected: result.rejected });

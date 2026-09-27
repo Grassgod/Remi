@@ -247,6 +247,13 @@ class HttpPeerChannel implements PeerChannel {
     let accepted = 0;
     let rejected = 0;
     const handlers = [...(this.subscribers.get(topic) ?? [])];
+    if (handlers.length === 0) {
+      // Nobody in this process listens to that topic (a typo, or a stream this
+      // role does not hold). Count it as refused rather than silently accepted:
+      // the sender still makes progress, but the counters say what happened.
+      this.rejected += events.length;
+      return { accepted: 0, rejected: events.length };
+    }
     for (const event of events) {
       // Only the realtime topic has a contracted envelope today; other topics
       // (MUL-403's `hub`) bring their own shape and are delivered as-is.

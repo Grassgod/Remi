@@ -423,8 +423,22 @@ describe("peer channel — HTTP routes", () => {
       });
 
       expect((await post("not json")).status).toBe(400);
+      // A body that is not a batch at all is the only 400: a sender that got one
+      // would retry the same poisoned batch forever.
+      expect((await post(JSON.stringify({ events: [] }))).status).toBe(400);
       expect((await post(JSON.stringify({ topic: PEER_REALTIME_TOPIC }))).status).toBe(400);
-      expect((await post(JSON.stringify({ topic: PEER_REALTIME_TOPIC, events: [{ nope: true }] }))).status).toBe(400);
+
+      // An unusable frame inside an otherwise fine batch is counted, not fatal.
+      const mixed = await post(JSON.stringify({
+        topic: PEER_REALTIME_TOPIC,
+        events: [
+          { nope: true },
+          { v: 1, origin: "process-b", kind: "task_event", payload: { type: "task:done", task: { id: "tsk_1" } } },
+        ],
+      }));
+      expect(mixed.status).toBe(200);
+      expect(await mixed.json()).toEqual({ ok: true, accepted: 1, rejected: 1 });
+      expect(seen).toHaveLength(1);
 
       const ok = await post(JSON.stringify({
         topic: PEER_REALTIME_TOPIC,
@@ -432,7 +446,7 @@ describe("peer channel — HTTP routes", () => {
       }));
       expect(ok.status).toBe(200);
       expect(await ok.json()).toEqual({ ok: true, accepted: 1, rejected: 0 });
-      expect(seen).toHaveLength(1);
+      expect(seen).toHaveLength(2);
     } finally {
       peer.close();
     }
@@ -474,6 +488,19 @@ describe("peer channel — receiving", () => {
     expect(result).toEqual({ accepted: 1, rejected: 4 });
     expect(seen).toHaveLength(1);
     expect(channel.stats()).toMatchObject({ received: 1, rejected: 4 });
+  });
+
+  it("refuses a topic this process does not subscribe to, without stalling the sender", () => {
+    channel = createPeerChannel({ url: "http://peer:6120", secret: "s", fetchImpl: fakePeer().fetchImpl, origin: "a" });
+    const subscription = channel.subscribe(PEER_REALTIME_TOPIC, () => {});
+    try {
+      // A 200 with everything rejected is what keeps the sender's queue moving;
+      // a 4xx here would make it retry this batch forever.
+      expect(channel.receive("hub", [{ some: "frame" }])).toEqual({ accepted: 0, rejected: 1 });
+      expect(channel.stats()).toMatchObject({ received: 0, rejected: 1 });
+    } finally {
+      subscription.unsubscribe();
+    }
   });
 
   it("unsubscribes cleanly", () => {

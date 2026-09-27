@@ -104,7 +104,12 @@ export type PeerEventEnvelope = {
  */
 export interface PeerEventBatch {
   topic: string;
-  events: PeerEventEnvelope[];
+  /**
+   * Envelopes are validated one at a time by the receiver, not here: rejecting
+   * the whole body over one bad frame would make the sender retry that batch
+   * forever and wedge its queue behind it.
+   */
+  events: unknown[];
 }
 
 /** `POST /internal/peer/events` response: how much of the batch was taken. */
@@ -157,21 +162,15 @@ export function parsePeerEventEnvelope(value: unknown): PeerEventEnvelope | null
 /**
  * Narrow an unknown JSON body to a batch, or null when it is not one.
  *
- * `defaultTopic` fills in `topic` for a bare `{ events: [...] }` body, which is
- * what a peer that predates the field would send.
+ * Shape only: `topic` plus an `events` array. Individual envelopes are the
+ * receiver's business (see `PeerEventBatch.events`), and a body with no topic
+ * is rejected rather than guessed at, so a caller cannot silently post a stream
+ * nobody subscribed to.
  */
-export function parsePeerEventBatch(value: unknown, defaultTopic?: string): PeerEventBatch | null {
+export function parsePeerEventBatch(value: unknown): PeerEventBatch | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
   if (!Array.isArray(record.events)) return null;
-  const rawTopic = typeof record.topic === "string" ? record.topic.trim() : "";
-  const topic = rawTopic || defaultTopic || "";
-  if (!topic) return null;
-  const events: PeerEventEnvelope[] = [];
-  for (const event of record.events) {
-    const envelope = parsePeerEventEnvelope(event);
-    if (!envelope) return null;
-    events.push(envelope);
-  }
-  return { topic, events };
+  if (typeof record.topic !== "string" || !record.topic.trim()) return null;
+  return { topic: record.topic.trim(), events: record.events };
 }
