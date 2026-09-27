@@ -43,5 +43,28 @@ uses the Retry action in the Issue's Session Archives section or calls:
 POST /api/issues/:issueId/session-archives/:archiveId/retry
 ```
 
-Manual retry resets the attempt count, error, next retry timestamp, and exhaustion
-timestamp. It does not bypass the normal upload integrity checks.
+Manual retry records the current `attempt_count` as `retry_budget_base_attempt`
+and clears the error, next retry timestamp, and exhaustion timestamp. The
+attempt number never decreases; budget, backoff, and the displayed attempt count
+use `attempt_count - retry_budget_base_attempt`. Existing rows start with base 0.
+It does not bypass the normal upload integrity checks.
+
+The final ZIP and `manifest.json` are shared paths. Only the current attempt
+may rename or remove them, after checking ownership inside the archive row's
+database lock. ZIP hashing, member validation, and manifest temp-file writing
+stay outside that lock; the file mutations use synchronous operations inside it.
+
+## v1 uploads during the upgrade window
+
+New uploads must be the v2 ZIP container. The server identifies a v1 upload
+from the request itself: an upgraded daemon names the v2 format in
+`metadata.format`, and a request without that marker is the legacy container.
+It answers `session_archive_format_unsupported` (409) before claiming an
+attempt, so a daemon that has not upgraded yet cannot spend the retry budget on
+a container this server no longer indexes. Because the refusal happens at `init`, the row
+keeps its attempt count and the next claim after the daemon upgrade starts from
+a clean budget.
+
+Rows and files written by the v1 writer are never rewritten or deleted by this
+rule: they keep their `ready` state because the hard-delete barrier binds the
+cleaned workspace to one exact archive row.

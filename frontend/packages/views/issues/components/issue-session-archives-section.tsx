@@ -201,7 +201,7 @@ function ArchiveRow({
         </div>
         <p className="text-[10px] text-muted-foreground">
           {formatTimestamp(archive.completed_at ?? archive.updated_at)} · {t(($) => $.detail.session_archive_attempts, {
-            count: archive.attempt_count,
+            count: archive.attempt_count - archive.retry_budget_base_attempt,
           })}
         </p>
         {archive.last_error && (
