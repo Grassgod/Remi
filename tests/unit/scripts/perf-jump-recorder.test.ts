@@ -1568,18 +1568,26 @@ describe("buildCompare schema handling", () => {
     expect(warmRows.length).toBeGreaterThan(0);
     for (const row of warmRows) {
       expect(row.comparable).toBe(false);
+      // Counts are withheld as well: the schema 2 count also carried the entry
+      // page's trailing requests, so a "5 → 3" cell would put a corrected number
+      // next to an uncorrected one.
+      expect(row.beforeCount).toBeNull();
+      expect(row.afterCount).toBeNull();
+      expect(row.beforeTotalP50).toBeNull();
+      expect(row.afterTotalP50).toBeNull();
       expect(row.beforeTotalP95).toBeNull();
       expect(row.afterTotalP95).toBeNull();
       expect(row.beforeGapP50).toBeNull();
       expect(row.afterGapP50).toBeNull();
       expect(row.beforeDbqMax).toBeNull();
       expect(row.afterDbqMax).toBeNull();
+      expect(row.beforeDbbMax).toBeNull();
+      expect(row.afterDbbMax).toBeNull();
     }
-    // The counts survive: "how many times did it run" is not a time-base question,
-    // and it is what shows a request disappearing.
     const coldRows = pathRows.filter((row) => row.mode === "cold");
     expect(coldRows.every((row) => row.comparable)).toBe(true);
     expect(coldRows.some((row) => row.beforeTotalP95 !== null)).toBe(true);
+    expect(coldRows.some((row) => row.beforeCount !== null)).toBe(true);
   });
 
   it("prints no warm delta anywhere in the Markdown of a schema 2 comparison", () => {
@@ -1610,6 +1618,43 @@ describe("buildCompare schema handling", () => {
     expect(coldLine).toContain("-100.0");
     // And the warning explains why the warm row is blank.
     expect(compare.markdown).toContain("作废");
+  });
+
+  it("withholds a warm row that only exists on the new side of a schema 2 baseline", () => {
+    // `detail-xlong` is new in schema 3, so a schema 2 baseline has no counterpart
+    // for it. Its current numbers are still schema 3 warm numbers sitting in a
+    // table whose other half is an invalidated time base: printing them alone
+    // would read as "the after half of a comparison".
+    const baseline = {
+      meta: { schema: 2 },
+      scenarios: [scenario("detail-short", "warm", 2, 4000)],
+    };
+    const current = {
+      meta: { schema: 3 },
+      scenarios: [scenario("detail-short", "warm", 3, 500), scenario("detail-xlong", "warm", 3, 700)],
+    };
+    const compare = buildCompare(baseline as never, current as never);
+    const xlong = compare.rows.find((row) => row.key === "detail-xlong")!;
+    expect(xlong.comparable).toBe(false);
+    expect(xlong.afterReadyP75).toBeNull();
+    expect(xlong.beforeReadyP75).toBeNull();
+    // The paired warm row is withheld the same way, and both warnings are emitted.
+    expect(compare.rows.find((row) => row.key === "detail-short")!.comparable).toBe(false);
+    expect(compare.warnings.filter((warning) => warning.mode === "warm")).toHaveLength(2);
+    // No numbers anywhere on a warm line.
+    for (const line of compare.markdown.split("\n").filter((l) => l.includes("| warm |"))) {
+      expect(line).toContain("不可比（schema 2 warm 已作废）");
+      expect(line).not.toMatch(/[+-]\d+\.\d/);
+    }
+    // And a cold row added on one side is unaffected: cold is comparable either way.
+    const coldOnly = buildCompare(
+      { meta: { schema: 2 }, scenarios: [scenario("detail-short", "cold", 2, 1000)] } as never,
+      {
+        meta: { schema: 3 },
+        scenarios: [scenario("detail-short", "cold", 3, 900), scenario("detail-xlong", "cold", 3, 800)],
+      } as never,
+    );
+    expect(coldOnly.rows.every((row) => row.comparable)).toBe(true);
   });
 
   it("keeps both rows comparable when both sides are schema 3", () => {

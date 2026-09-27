@@ -313,9 +313,10 @@ JSON 里的 `compare` 段带 `warnings`：`selectorMode` 不同、`target.identi
 **唯一阻断数字的是 warm 时基不匹配。** 基线 `meta.schema < 3` 时，它的 warm 行从入口页文档起算，而 schema 3 从 click 起算：`readyMs`、首屏数、串行深度、逐 path 的 `total`/`gap` 全都不是同一个量。这类配对：
 
 - `compare.rows[]` 里 `comparable: false`，`notComparableReason` 写明原因，**所有数值字段为 null**——不是「渲染时藏起来」，读 JSON 的下游同样拿不到可减的数；
-- `compare.pathRows[]` 里这些 `key::mode` 的每一行同样 `comparable: false` 且数值全为 null（`n` 计数保留：跑了多少次不是时基问题，而且「请求消失了」正是要看的）；
+- `compare.pathRows[]` 里这些 `key::mode` 的每一行同样 `comparable: false`，**数值与 `n` 计数全为 null**——schema 2 的计数含入口页尾部请求（本轮下界正是把它去掉），半修正的数字不能与修正后的数字并排放；
 - MD/HTML 的表格里这类行显示 `不可比（schema 2 warm 已作废）`，**不出现任何数字或差值**；
-- 只保留一条「已作废、不可比」的警告，不再报选择器/目标之类的次级差异（无数字可解释）。
+- 只保留一条「已作废、不可比」的警告，不再报选择器/目标之类的次级差异（无数字可解释）；
+- 只出现在新一侧的 warm 行（例如 schema 3 才有的 `detail-xlong`）同样 `comparable: false`：基线那一半仍是作废的时基，单独打印新数字会被读成「对比的后一半」。该行自己的数字在场景的 `rounds[]`/`stats` 里（同一轮 schema 3 运行），不受影响；cold 行不在此列。
 
 schema 2 的 **cold** 行两边都以文档 origin 起算，照常配对；两侧都是 schema 3 时 warm 行也照常配对。这条规则由单测固定，并用「临时恢复 warm 配对」的变异验证过会失败。
 

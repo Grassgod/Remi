@@ -581,8 +581,7 @@ ${body}
         return `<tr class="withheld">
       <td class="key">${esc(row.key)}</td><td>${esc(row.mode)}</td>
       <td><code>${esc(row.path)}</code></td>
-      <td class="num">${row.beforeCount ?? "-"} → ${row.afterCount ?? "-"}</td>
-      <td class="muted" colspan="7">不可比（schema 2 warm 已作废）</td>
+      <td class="muted" colspan="8">不可比（schema 2 warm 已作废）</td>
     </tr>`;
       }
       return `<tr>
@@ -806,8 +805,10 @@ export function buildCompareByPath(
     const a = before.get(key) ?? null;
     const b = after.get(key) ?? null;
     // A withheld scenario::mode carries through to every one of its paths: the
-    // endpoints were collected under the same broken time base, so their p95s are
-    // no more subtractable than the round's readyMs.
+    // endpoints were collected under the same broken time base *and* the same
+    // unbounded first-screen set, so neither their p95s nor their counts are
+    // subtractable from a schema 3 warm path. (A schema 2 count also included the
+    // entry page's trailing requests, which is what the lower bound removed.)
     const withhold = compareIncomparability(baseline, mode) !== null;
     return {
       key: scenarioKey,
@@ -815,8 +816,8 @@ export function buildCompareByPath(
       path,
       method: a?.method ?? b?.method ?? method,
       comparable: !withhold,
-      beforeCount: a?.count ?? null,
-      afterCount: b?.count ?? null,
+      beforeCount: withhold ? null : a?.count ?? null,
+      afterCount: withhold ? null : b?.count ?? null,
       beforeTotalP50: withhold ? null : a?.totalP50 ?? null,
       afterTotalP50: withhold ? null : b?.totalP50 ?? null,
       beforeTotalP95: withhold ? null : a?.totalP95 ?? null,
@@ -886,7 +887,12 @@ export function buildCompare(
     const [scenarioKey = "", mode = ""] = key.split("::");
     const a = before.get(key) ?? null;
     const b = after.get(key) ?? null;
-    const incomparableReason = a && b ? compareIncomparability(baseline, mode) : null;
+    // Not gated on the row existing on both sides: a warm row whose counterpart is
+    // missing from the baseline still sits in a table whose baseline side is the
+    // invalidated time base, and its current numbers would read as the other half
+    // of a comparison that cannot be made. Those numbers are in the scenario's own
+    // `rounds[]`/`stats` (schema 3, same run) for anyone who wants them alone.
+    const incomparableReason = compareIncomparability(baseline, mode);
     // Withheld means *every* number is null, not "the renderer remembers to hide
     // it": a later consumer reading `batch.rows` from the JSON gets nothing to
     // subtract either.
@@ -992,8 +998,11 @@ export function buildCompare(
         ? `${row.beforeCount ?? "-"} → ${row.afterCount ?? "-"}`
         : `${row.beforeCount} → ${row.afterCount}`;
       if (withheld) {
+        // Counts are withheld too: the schema 2 count also carried the entry
+        // page's trailing requests, so "5 → 3" would put a corrected number next
+        // to an uncorrected one.
         lines.push(
-          `| ${row.key} | ${row.mode} | \`${row.path}\` | ${row.method} | ${count} | 不可比（schema 2 warm 已作废） | - | - | - | - | - |`,
+          `| ${row.key} | ${row.mode} | \`${row.path}\` | ${row.method} | 不可比（schema 2 warm 已作废） | - | - | - | - | - | - |`,
         );
         continue;
       }
