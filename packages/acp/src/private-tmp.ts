@@ -65,7 +65,12 @@ export function isolateProcessTmp(
     // at this execution's private directory and accept that the literal /tmp
     // stays shared with the host. The daemon still deletes the directory when
     // the execution ends, and every other platform keeps the Linux behavior.
-    const directory = privateTmpRealDirectory(privateTmpDirectory);
+    //
+    // The argument is used AS GIVEN: the daemon passes a short
+    // `/tmp/remi-XXXXXXXX` alias here because a unix socket path is capped at
+    // 104 bytes, and realpath-ing it would expand straight back to the long
+    // real directory that caused the problem.
+    const directory = privateTmpRealDirectory(privateTmpDirectory, false);
     return { ...launch, env: { TMPDIR: directory, TMP: directory, TEMP: directory } };
   }
   if (platform !== "linux") {
@@ -133,13 +138,30 @@ export function privateTmpVisiblePath(
   return relativePath ? join("/tmp", relativePath) : "/tmp";
 }
 
-/** Resolve the daemon-owned task temp directory, or fail closed. */
-function privateTmpRealDirectory(privateTmpDirectory: string): string {
+/**
+ * Validate the daemon-owned task temp directory, or fail closed.
+ *
+ * `followLink` is false on macOS, where the argument may be the short
+ * `/tmp/remi-XXXXXXXX` alias the daemon created; that alias must be preserved
+ * verbatim instead of being resolved to the long real path.
+ */
+export function privateTmpRealDirectory(privateTmpDirectory: string, followLink = true): string {
   try {
-    const directory = realpathSync(privateTmpDirectory);
-    const info = lstatSync(directory);
-    if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("not a real directory");
-    return directory;
+    if (followLink) {
+      const directory = realpathSync(privateTmpDirectory);
+      const info = lstatSync(directory);
+      if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("not a real directory");
+      return directory;
+    }
+    const info = lstatSync(privateTmpDirectory);
+    if (info.isSymbolicLink()) {
+      // macOS: the alias must resolve to a directory, but keeps its short name.
+      const target = lstatSync(realpathSync(privateTmpDirectory));
+      if (!target.isDirectory()) throw new Error("not a real directory");
+      return privateTmpDirectory;
+    }
+    if (!info.isDirectory()) throw new Error("not a real directory");
+    return privateTmpDirectory;
   } catch (error) {
     throw new PrivateTmpIsolationUnavailableError(
       `private directory is invalid: ${error instanceof Error ? error.message : String(error)}`,

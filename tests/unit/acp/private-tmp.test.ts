@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createServer } from "node:net";
 import { randomUUID } from "node:crypto";
@@ -10,6 +10,7 @@ import {
   privateTmpVisiblePath,
   PrivateTmpIsolationUnavailableError,
 } from "@acp/index.js";
+import { privateTmpRealDirectory } from "@acp/private-tmp.js";
 
 const roots: string[] = [];
 
@@ -170,6 +171,39 @@ rl.on("line", line => {
     const launch = isolateProcessTmp({ executable: "agent", args: [] }, directory, shared, "darwin");
     expect(launch.env).toEqual({ TMPDIR: directory, TMP: directory, TEMP: directory });
     expect(shared).toEqual({ PATH: "/usr/bin", TMPDIR: "/var/folders/host" });
+  });
+
+  // MUL-449: on macOS the daemon hands over a SHORT /tmp alias because a unix
+  // socket path is capped at 104 bytes. The darwin branch must export that alias
+  // verbatim instead of resolving it back to the long real directory.
+  it("exports the darwin alias verbatim instead of resolving it to the real path", () => {
+    const real = privateDirectory("darwin-alias-real");
+    const alias = join("/tmp", `remi-test-${randomUUID().slice(0, 8)}`);
+    symlinkSync(real, alias);
+    roots.push(alias);
+    const launch = isolateProcessTmp(
+      { executable: "/usr/local/bin/fake-agent", args: [] },
+      alias,
+      {},
+      "darwin",
+    );
+    expect(launch.env).toEqual({ TMPDIR: alias, TMP: alias, TEMP: alias });
+    expect(launch.env!.TMPDIR).not.toBe(real);
+    // Mapping stays identity on darwin, so the alias path is untouched.
+    expect(mapPrivateTmpPath(join(alias, "log.json"), alias, "darwin")).toBe(join(alias, "log.json"));
+    expect(privateTmpVisiblePath(join(alias, "run.log"), alias, "darwin")).toBe(join(alias, "run.log"));
+  });
+
+  it("resolves a linked ancestor on the default Linux directory path", () => {
+    const real = privateDirectory("linked-parent-real");
+    const alias = join("/tmp", `remi-parent-${randomUUID().slice(0, 8)}`);
+    symlinkSync(real, alias);
+    roots.push(alias);
+    const directory = join(alias, "task-tmp");
+    mkdirSync(directory);
+    expect(privateTmpRealDirectory(directory)).toBe(realpathSync(directory));
+    expect(privateTmpRealDirectory(directory)).not.toBe(directory);
+    expect(privateTmpRealDirectory(directory, false)).toBe(directory);
   });
 
   it("fails closed when the private directory is invalid", () => {

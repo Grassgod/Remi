@@ -3489,7 +3489,10 @@ export class MultiremiDaemon {
       }
       this.enqueueTaskReport(task.id, "progress", { summary: pickTaskStartupLine(task.agent?.name), step: 1, total: 3 });
       progressSummarizer = await this.createTaskProgressSummarizer(task, providerEnv, relay?.fragment);
-      summary = await this.runAgent(task, abort.signal, resolvedWorkDir, pluginRuntime, providerHome, providerEnv, progressSummarizer, taskPrivateTmp.path);
+      summary = await this.runAgent(
+        task, abort.signal, resolvedWorkDir, pluginRuntime, providerHome, providerEnv,
+        progressSummarizer, taskPrivateTmp.aliasPath ?? taskPrivateTmp.path,
+      );
       if (!summary.completed) {
         const failureReason = summary.failureReason
           ?? classifyPoisonedOutput(summary.output)
