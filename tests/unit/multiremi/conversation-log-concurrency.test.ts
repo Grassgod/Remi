@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
-import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { PostgresReplyTooLargeError, PostgresSyncDatabase, resetDbReplyLimitForTest, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 
 const worker = new URL("./fixtures/conversation-log-process.ts", import.meta.url).pathname;
 const migrationId = "20260927_conversation_log";
@@ -161,6 +161,83 @@ function verifyNestedTransactions(db: SqlDatabase): void {
   expect(db.query("SELECT n FROM nested_tx_case ORDER BY n").all().map((row: any) => Number(row.n))).toEqual([1, 3, 4, 6, 7]);
 }
 
+function verifyCaughtLocalReplyFailure(db: SqlDatabase, nested: boolean): void {
+  db.exec("CREATE TABLE local_reply_case (n INTEGER PRIMARY KEY)");
+  const previousLimit = process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
+  process.env.MULTIREMI_PG_REPLY_MAX_BYTES = "200";
+  resetDbReplyLimitForTest();
+  try {
+    db.transaction(() => {
+      db.run("INSERT INTO local_reply_case (n) VALUES (1)");
+      const caughtQuery = () => {
+        let caught = false;
+        try {
+          if (db instanceof PostgresSyncDatabase) {
+            db.query("SELECT repeat('x', 1000) AS payload").get();
+          } else {
+            db.query("SELECT 1 AS payload").get();
+            throw new PostgresReplyTooLargeError(1000, 200);
+          }
+        } catch (error) {
+          expect(error).toBeInstanceOf(PostgresReplyTooLargeError);
+          caught = true;
+        }
+        expect(caught).toBe(true);
+      };
+      if (nested) db.transaction(caughtQuery)();
+      else caughtQuery();
+      db.run("INSERT INTO local_reply_case (n) VALUES (2)");
+    })();
+    expect(db.query("SELECT n FROM local_reply_case ORDER BY n").all().map((row: any) => Number(row.n))).toEqual([1, 2]);
+  } finally {
+    if (previousLimit === undefined) delete process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
+    else process.env.MULTIREMI_PG_REPLY_MAX_BYTES = previousLimit;
+    resetDbReplyLimitForTest();
+  }
+}
+
+function verifyBestEffortQueueRollback(db: SqlDatabase): void {
+  const store = new MultiremiStore(db);
+  const issue = store.createIssue({ title: "Best effort queue", workspaceId: "local" });
+  db.exec("CREATE TABLE best_effort_queue_case (n INTEGER PRIMARY KEY)");
+  store.queueAgentIssueUpdate = () => {
+    db.run("INSERT INTO best_effort_queue_case (n) VALUES (1)");
+    db.run("INSERT INTO best_effort_queue_case (n) VALUES (1)");
+  };
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => { warnings.push(args.map(String).join(" ")); };
+  try {
+    const comment = store.createIssueComment(issue.id, { body: "comment survives queue error" });
+    expect(store.getIssueComment(comment.id)?.body).toBe("comment survives queue error");
+    expect(store.getConversationLogEntryById(comment.id)?.body_md).toBe("comment survives queue error");
+    expect(db.query("SELECT n FROM best_effort_queue_case").all()).toEqual([]);
+    expect(warnings.some((line) => line.includes("agent issue update queue skipped"))).toBe(true);
+  } finally {
+    console.warn = originalWarn;
+  }
+}
+
+function verifyBestEffortWorkspaceLookups(db: SqlDatabase): void {
+  const store = new MultiremiStore(db);
+  const issue = store.createIssue({ title: "Best effort lookups", workspaceId: "local" });
+  const session = store.getOrCreateDefaultIssueSession(issue.id);
+  const context = (store as unknown as { ctx: { issueWorkspaceId: (id: string) => string | null } }).ctx;
+  context.issueWorkspaceId = (id) => db.query("SELECT missing_workspace_column FROM multiremi_issues WHERE id = ?").get(id);
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => { warnings.push(args.map(String).join(" ")); };
+  try {
+    const comment = store.createTaskFailureSystemComment(issue.id, session.id, "tsk_lookup", "system survives query error");
+    expect(store.getIssueComment(comment.id)?.body).toBe("system survives query error");
+    expect(store.getConversationLogEntryById(comment.id)?.body_md).toBe("system survives query error");
+    expect(warnings.some((line) => line.includes("activity:created broadcast skipped"))).toBe(true);
+    expect(warnings.some((line) => line.includes("comment:created broadcast skipped"))).toBe(true);
+  } finally {
+    console.warn = originalWarn;
+  }
+}
+
 function rejectWrite(db: SqlDatabase, backend: "sqlite" | "pg", table: string, operation: "INSERT" | "UPDATE", condition: string): void {
   if (backend === "pg") {
     db.run("CREATE FUNCTION reject_conversation_write() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'write rejected'; END; $$ LANGUAGE plpgsql");
@@ -254,6 +331,19 @@ function verifyPendingDeliveryMetadata(db: SqlDatabase): void {
   expect(completed.revision).toBe(prepared.revision + 1);
   expect(db.query("SELECT pending_agent_delivery, agent_delivery_task_id FROM multiremi_chat_messages WHERE id = ?")
     .get(message.id)).toEqual({ pending_agent_delivery: 0, agent_delivery_task_id: null });
+
+  const discardedMessage = db.transaction(() => store.appendChatMessageWithinTransaction({
+    chatSessionId: chat.id, role: "system", body: "discard me", pendingAgentDelivery: true,
+  }))();
+  const beforeDiscard = store.getConversationLogEntryById(discardedMessage.id)!;
+  db.transaction(() => store.discardPendingAgentIssueUpdatesWithinTransaction(chat.id))();
+  const discarded = store.getConversationLogEntryById(discardedMessage.id)!;
+  expect(discarded.id).toBe(beforeDiscard.id);
+  expect(discarded.seq).toBe(beforeDiscard.seq);
+  expect(discarded.revision).toBe(beforeDiscard.revision + 1);
+  expect(discarded.metadata).toMatchObject({ pending_agent_delivery: false, agent_delivery_task_id: null });
+  expect(db.query("SELECT pending_agent_delivery, agent_delivery_task_id FROM multiremi_chat_messages WHERE id = ?")
+    .get(discardedMessage.id)).toEqual({ pending_agent_delivery: 0, agent_delivery_task_id: null });
 }
 
 function verifySteerTarget(db: SqlDatabase): void {
@@ -376,6 +466,50 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
   });
   it.skipIf(!pgAdminUrl)("Postgres: nested transactions roll back only failed savepoints", async () => {
     await withPostgres(async (db) => verifyNestedTransactions(db));
+  });
+  for (const nested of [false, true]) {
+    const label = nested ? "inside a savepoint" : "in the outer transaction";
+    it(`SQLite: a caught local reply failure ${label} still commits`, async () => {
+      await withSqlite(async (db) => verifyCaughtLocalReplyFailure(db, nested));
+    });
+    it.skipIf(!pgAdminUrl)(`Postgres: a caught local reply failure ${label} still commits`, async () => {
+      await withPostgres(async (db) => verifyCaughtLocalReplyFailure(db, nested));
+    });
+  }
+  it("SQLite: a best-effort queue SQL failure rolls back only its savepoint", async () => {
+    await withSqlite(async (db) => verifyBestEffortQueueRollback(db));
+  });
+  it.skipIf(!pgAdminUrl)("Postgres: a best-effort queue SQL failure rolls back only its savepoint", async () => {
+    await withPostgres(async (db) => verifyBestEffortQueueRollback(db));
+  });
+  it("SQLite: failed best-effort workspace queries keep a system comment", async () => {
+    await withSqlite(async (db) => verifyBestEffortWorkspaceLookups(db));
+  });
+  it.skipIf(!pgAdminUrl)("Postgres: failed best-effort workspace queries keep a system comment", async () => {
+    await withPostgres(async (db) => verifyBestEffortWorkspaceLookups(db));
+  });
+  it.skipIf(!pgAdminUrl)("Postgres: a worker reply exceeding its shared buffer still commits", async () => {
+    await withPostgres(async (db, url) => {
+      const limited = new PostgresSyncDatabase(url, 2048);
+      try {
+        limited.exec("CREATE TABLE worker_reply_case (n INTEGER PRIMARY KEY)");
+        limited.transaction(() => {
+          limited.run("INSERT INTO worker_reply_case (n) VALUES (1)");
+          let caught = false;
+          try {
+            limited.query("SELECT repeat('x', 4000) AS payload").get();
+          } catch (error) {
+            expect((error as Error).message).toContain("postgres bridge result too large");
+            caught = true;
+          }
+          expect(caught).toBe(true);
+          limited.run("INSERT INTO worker_reply_case (n) VALUES (2)");
+        })();
+        expect(db.query("SELECT n FROM worker_reply_case ORDER BY n").all().map((row: any) => Number(row.n))).toEqual([1, 2]);
+      } finally {
+        limited.close();
+      }
+    });
   });
   it.skipIf(!pgAdminUrl)("Postgres: a caught bare SQL failure aborts the outer transaction", async () => {
     await withPostgres(async (db) => {

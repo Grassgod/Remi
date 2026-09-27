@@ -50,7 +50,7 @@ workerSelf.onmessage = async (event: MessageEvent) => {
     let bytes = new TextEncoder().encode(payload);
     if (bytes.length > buf.length) {
       bytes = new TextEncoder().encode(
-        JSON.stringify({ error: `postgres bridge result too large (${bytes.length} > ${buf.length} bytes)` }),
+        JSON.stringify({ error: `postgres bridge result too large (${bytes.length} > ${buf.length} bytes)`, source: "reply" }),
       );
       status = STATUS_ERROR;
     }
@@ -61,6 +61,7 @@ workerSelf.onmessage = async (event: MessageEvent) => {
   };
 
   const verb = transactionVerb(query);
+  let queryCompleted = false;
   try {
     if (init) {
       sql = new Bun.SQL(init, {
@@ -83,17 +84,18 @@ workerSelf.onmessage = async (event: MessageEvent) => {
       if (verb === "ROLLBACK") {
         respond(STATUS_DONE, JSON.stringify({ rows: [], count: 0 }));
       } else {
-        respond(STATUS_ERROR, JSON.stringify({ error: TRANSACTION_CONNECTION_LOST }));
+        respond(STATUS_ERROR, JSON.stringify({ error: TRANSACTION_CONNECTION_LOST, source: "connection" }));
       }
       return;
     }
     const res = await sql.unsafe(query, params ?? []);
+    queryCompleted = true;
     if (verb === "BEGIN") {
       transactionGeneration = connectionGeneration;
     } else if (transactionGeneration !== null && transactionGeneration !== connectionGeneration) {
       // Reconnected while this statement ran: it executed outside the transaction.
       transactionConnectionLost = true;
-      respond(STATUS_ERROR, JSON.stringify({ error: TRANSACTION_CONNECTION_LOST }));
+      respond(STATUS_ERROR, JSON.stringify({ error: TRANSACTION_CONNECTION_LOST, source: "connection" }));
       return;
     }
     const rows = Array.isArray(res) ? res : Array.from(res ?? []);
@@ -101,7 +103,7 @@ workerSelf.onmessage = async (event: MessageEvent) => {
     const command = typeof (res as any)?.command === "string" ? (res as any).command : undefined;
     respond(STATUS_DONE, JSON.stringify({ rows, count, command }));
   } catch (err: any) {
-    respond(STATUS_ERROR, JSON.stringify({ error: String(err?.message ?? err) }));
+    respond(STATUS_ERROR, JSON.stringify({ error: String(err?.message ?? err), source: queryCompleted ? "reply" : "query" }));
   } finally {
     if (verb === "COMMIT" || verb === "ROLLBACK") {
       transactionGeneration = null;

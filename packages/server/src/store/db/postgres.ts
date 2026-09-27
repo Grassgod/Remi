@@ -26,6 +26,7 @@ export interface SqlStatement {
 }
 
 export interface SqlDatabase {
+  readonly inTransaction?: boolean;
   query(sql: string): SqlStatement;
   prepare(sql: string): SqlStatement;
   run(sql: string, ...params: unknown[]): { changes: number; lastInsertRowid: number | bigint };
@@ -184,6 +185,12 @@ export class PostgresReplyTooLargeError extends Error {
   }
 }
 
+class PgBridgeFailure extends Error {
+  constructor(message: string, readonly abortsTransaction: boolean) {
+    super(message);
+  }
+}
+
 /**
  * Resolved lazily and cached: the check runs on every SQL round trip, and
  * `process.env` lookups are not free on that path. Tests that change the limit
@@ -203,19 +210,25 @@ export function resetDbReplyLimitForTest(): void {
 
 class PgBridge {
   private readonly control = new SharedArrayBuffer(16);
-  private readonly data = new SharedArrayBuffer(RESULT_BUFFER_BYTES);
+  private readonly data: SharedArrayBuffer;
   private readonly ctl = new Int32Array(this.control);
-  private readonly buf = new Uint8Array(this.data);
+  private readonly buf: Uint8Array;
   private readonly worker: Worker;
 
-  constructor(url: string) {
+  constructor(url: string, resultBufferBytes = RESULT_BUFFER_BYTES) {
+    this.data = new SharedArrayBuffer(resultBufferBytes);
+    this.buf = new Uint8Array(this.data);
     this.worker = new Worker(new URL("./pg-worker.ts", import.meta.url).href);
     this.request({ init: url });
   }
 
   private request(msg: { init?: string; sql?: string; params?: unknown[] }): any {
     Atomics.store(this.ctl, 0, STATUS_PENDING);
-    this.worker.postMessage({ control: this.control, data: this.data, ...msg });
+    try {
+      this.worker.postMessage({ control: this.control, data: this.data, ...msg });
+    } catch (error) {
+      throw new PgBridgeFailure(`postgres bridge send failed: ${String(error)}`, false);
+    }
     // MUL-367: measure only real SQL. `init` opens the connection, so counting it
     // would invent one query per process and inflate the first request's numbers.
     const measured = msg.sql !== undefined;
@@ -246,8 +259,15 @@ class PgBridge {
       }
       const parseStartedAt = performance.now();
       try {
-        const obj = JSON.parse(new TextDecoder().decode(this.buf.slice(0, len)));
-        if (status === STATUS_ERROR || obj.error) throw new Error(`postgres: ${obj.error}`);
+        let obj: { error?: string; source?: string; rows?: any[]; count?: number; command?: string };
+        try {
+          obj = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(this.buf.slice(0, len)));
+        } catch (error) {
+          throw new PgBridgeFailure(`postgres bridge reply decode failed: ${String(error)}`, false);
+        }
+        if (status === STATUS_ERROR || obj.error) {
+          throw new PgBridgeFailure(`postgres: ${obj.error}`, obj.source !== "reply");
+        }
         return obj;
       } finally {
         // Main-thread decode + parse is a separate cost from waiting on Postgres;
@@ -271,6 +291,9 @@ class PgBridge {
       // `c.json({ error: message })`, so appending SQL here would leak schema
       // details into an HTTP response body.
       if (err instanceof PostgresReplyTooLargeError) throw err;
+      if (err instanceof PgBridgeFailure) {
+        throw new PgBridgeFailure(`${err.message}\n  SQL: ${sql.slice(0, 400)}`, err.abortsTransaction);
+      }
       throw new Error(`${(err as Error).message}\n  SQL: ${sql.slice(0, 400)}`);
     }
   }
@@ -303,8 +326,8 @@ export class PostgresSyncDatabase implements SqlDatabase {
   private readonly bridge: PgBridge;
   private transactionDepth = 0;
   private failedAtDepth: number | null = null;
-  constructor(url: string) {
-    this.bridge = new PgBridge(url);
+  constructor(url: string, resultBufferBytes = RESULT_BUFFER_BYTES) {
+    this.bridge = new PgBridge(url, resultBufferBytes);
   }
   /** True while a `transaction()` callback runs; its writes are not committed yet. */
   get inTransaction(): boolean {
@@ -314,7 +337,8 @@ export class PostgresSyncDatabase implements SqlDatabase {
     try {
       return this.bridge.exec(sql, params);
     } catch (error) {
-      if (this.inTransaction) {
+      if (this.inTransaction && !(error instanceof PostgresReplyTooLargeError)
+        && !(error instanceof PgBridgeFailure && !error.abortsTransaction)) {
         this.failedAtDepth = this.failedAtDepth == null
           ? this.transactionDepth
           : Math.min(this.failedAtDepth, this.transactionDepth);

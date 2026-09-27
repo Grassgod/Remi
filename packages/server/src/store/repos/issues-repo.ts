@@ -1272,7 +1272,10 @@ export class IssuesRepo {
     // Same live-update contract as createIssueComment — system comments are
     // store-internal and never pass through the HTTP layer. Best-effort.
     try {
-      const workspaceId = this.ctx.issueWorkspaceId(issueId);
+      const lookupWorkspace = () => this.ctx.issueWorkspaceId(issueId);
+      const workspaceId = this.ctx.db.inTransaction
+        ? this.ctx.db.transaction(lookupWorkspace)()
+        : lookupWorkspace();
       if (workspaceId) {
         this.ctx.emitWorkspaceEvent({
           type: "comment:created",

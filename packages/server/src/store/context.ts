@@ -939,7 +939,7 @@ export class StoreContext {
       ],
     );
     try {
-      this.host.queueAgentIssueUpdate({
+      const queueUpdate = () => this.host.queueAgentIssueUpdate({
         activityId: id,
         issueId,
         actorType: input.actorType,
@@ -949,6 +949,8 @@ export class StoreContext {
         data: input.data ?? null,
         createdAt: now,
       });
+      if (this.db.inTransaction) this.db.transaction(queueUpdate)();
+      else queueUpdate();
     } catch (err) {
       log.warn(`agent issue update queue skipped for ${issueId}: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -959,7 +961,10 @@ export class StoreContext {
     // already persisted, so a lookup/broadcast failure must not escape and
     // fail the caller's mutation after the fact.
     try {
-      const workspaceId = this.issueWorkspaceId(issueId);
+      const lookupWorkspace = () => this.issueWorkspaceId(issueId);
+      const workspaceId = this.db.inTransaction
+        ? this.db.transaction(lookupWorkspace)()
+        : lookupWorkspace();
       if (!workspaceId) return;
       this.emitWorkspaceEvent({
         type: "activity:created",
