@@ -36,7 +36,6 @@ export interface ZeroJumpFixture {
   userId: string;
   shortIssueId: string;
   parentIssueId: string;
-  waitingChildIssueId: string;
   longIssueId: string;
   longDefaultSessionId: string;
   longSessionIds: string[];
@@ -293,7 +292,6 @@ export async function seedZeroJumpFixture(store: MultiremiStore): Promise<ZeroJu
     userId: user.id,
     shortIssueId: shortIssue.id,
     parentIssueId: parentIssue.id,
-    waitingChildIssueId: waitingChild.id,
     longIssueId: longIssue.id,
     longDefaultSessionId: defaultSession.id,
     longSessionIds,
