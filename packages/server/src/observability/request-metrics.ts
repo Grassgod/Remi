@@ -141,6 +141,9 @@ const processDbCounters = { dbMs: 0, dbQueries: 0, dbBytes: 0 };
  * being forwarded were produced by a store write that has already returned, so
  * there is no request context to attribute them to.
  *
+ * Like the DB hook, these are a no-op when metrics are switched off: the
+ * counters only ever feed the summary line.
+ *
  * Two sets are kept because they answer different questions. The `lifetime`
  * totals back the health endpoint and never reset; the `window` counters are
  * drained by every `api_minute_summary` so one window's burst is not smeared
@@ -155,6 +158,7 @@ const PEER_RTT_SAMPLE_CAPACITY = 1024;
 
 /** One event could not be queued (overflow, or a payload that would not encode). */
 export function recordPeerDropped(count = 1): void {
+  if (!requestMetricsEnabled) return;
   const value = Math.max(0, Math.trunc(count));
   if (value === 0) return;
   lifetimePeerCounters.dropped += value;
@@ -163,12 +167,14 @@ export function recordPeerDropped(count = 1): void {
 
 /** One POST failed; the sender retries that batch with backoff. */
 export function recordPeerFailure(): void {
+  if (!requestMetricsEnabled) return;
   lifetimePeerCounters.failed += 1;
   windowPeerCounters.failed += 1;
 }
 
 /** One POST succeeded and carried `events` events in `rttMs` milliseconds. */
 export function recordPeerBatch(input: { events: number; rttMs: number }): void {
+  if (!requestMetricsEnabled) return;
   const events = Math.max(0, Math.trunc(input.events));
   lifetimePeerCounters.sent += events;
   lifetimePeerCounters.batches += 1;

@@ -477,6 +477,26 @@ describe("MUL-367 request metrics — window aggregation", () => {
     });
   });
 
+  it("records nothing when the switch is off, for both DB and peer counters", async () => {
+    // Both hooks are keyed off the same switch, so a deployment that turns
+    // metrics off pays nothing for either — and cannot leak counters into a
+    // later summary through a stale window.
+    const app = new Hono();
+    app.use("*", createRequestMetricsMiddleware({ ...OPTIONS, enabled: false }));
+    app.get("/api/issues/:id", (c) => {
+      recordDbQuery(5, 128);
+      recordPeerBatch({ events: 3, rttMs: 9 });
+      recordPeerDropped(2);
+      recordPeerFailure();
+      return c.json({ ok: true });
+    });
+
+    await app.request("/api/issues/iss_1");
+    expect(peerMetricsSnapshot()).toEqual({ sent: 0, batches: 0, dropped: 0, failed: 0, rtt_p95_ms: 0 });
+    expect(drainPeerWindowMetrics()).toEqual({ sent: 0, batches: 0, dropped: 0, failed: 0, rtt_p95_ms: 0 });
+    expect(drainRequestMetricsForTest()).toEqual({ samples: [], dropped: 0 });
+  });
+
   it("counts samples past the fixed capacity as dropped and keeps the newest ones", () => {
     const ring = new RequestMetricsRing(2);
     ring.record(sample({ route: "/api/first" }));
