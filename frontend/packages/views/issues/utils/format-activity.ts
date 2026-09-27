@@ -37,6 +37,22 @@ function childDoneParentReason(reason: string | undefined, t: IssuesT): string {
   }
 }
 
+/** MUL-400 E2: the four child endings, in the activity copy's vocabulary. */
+function childOutcomeLabel(outcome: string | undefined, t: IssuesT): string {
+  switch (outcome) {
+    case "done":
+      return t(($) => $.activity.child_outcome_done);
+    case "failed":
+      return t(($) => $.activity.child_outcome_failed);
+    case "blocked":
+      return t(($) => $.activity.child_outcome_blocked);
+    case "cancelled":
+      return t(($) => $.activity.child_outcome_cancelled);
+    default:
+      return outcome?.trim() || t(($) => $.activity.reason_unknown);
+  }
+}
+
 function commentMentionReason(reason: string | undefined, t: IssuesT): string {
   switch (reason) {
     case "self_mention":
@@ -133,6 +149,11 @@ export function formatActivity(
       });
     case "parent_status_derived":
       return t(($) => $.activity.parent_status_derived);
+    case "child_status_after_parent_closed":
+      return t(($) => $.activity.child_status_after_parent_closed, {
+        key: details.childIssueKey ?? details.child_issue_key ?? "?",
+        outcome: childOutcomeLabel(details.outcome, t),
+      });
     case "issue_status_forced":
       return t(($) => $.activity.issue_status_forced, {
         status: statusLabel(details.status ?? "?", t),

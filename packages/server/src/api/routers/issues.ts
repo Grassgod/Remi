@@ -63,6 +63,7 @@ import {
   IssueTimelineRequestError,
   issueTimelineResponse,
   issueUpdateCompatibilityInput,
+  stripServerOwnedIssueUpdateFields,
   issueUsageResponse,
   labelCompatibilityErrorResponse,
   labelCompatibilityResponse,
@@ -606,7 +607,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       ...body,
       updates: body.updates
         ? {
-          ...body.updates,
+          ...stripServerOwnedIssueUpdateFields(body.updates),
           actorType,
           actorId,
           parentTaskId: currentTaskParentId(c),
@@ -627,7 +628,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
         ...input,
         updates: input.updates
           ? {
-            ...input.updates,
+            ...stripServerOwnedIssueUpdateFields(input.updates),
             actorType,
             actorId,
             parentTaskId: currentTaskParentId(c),
@@ -1137,7 +1138,14 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const forceDenied = denyTaskIdentityIssueForce(c, body);
     if (forceDenied) return forceDenied;
     const { actorType, actorId } = issueMutationActivity(c);
-    const input = { ...body, actorType, actorId, parentTaskId: currentTaskParentId(c) };
+    // S1: drop both spellings of the fields the server owns before stamping, so
+    // a body cannot smuggle `parent_task_id` / `actor_type` past the `??` reads.
+    const input = {
+      ...stripServerOwnedIssueUpdateFields(body),
+      actorType,
+      actorId,
+      parentTaskId: currentTaskParentId(c),
+    };
     assertRuntimeWorkspaceAccess(c, store, body.runtimeWorkspaceId ?? body.runtime_workspace_id, issue.workspaceId);
     const dispatchDenied = denySideSessionIssueUpdate(c, store, issue, input);
     if (dispatchDenied) return dispatchDenied;
@@ -1157,7 +1165,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (forceDenied) return forceDenied;
     const { actorType, actorId } = issueMutationActivity(c);
     const input = {
-      ...issueUpdateCompatibilityInput(body),
+      ...stripServerOwnedIssueUpdateFields(issueUpdateCompatibilityInput(body)),
       actorType,
       actorId,
       parentTaskId: currentTaskParentId(c),
