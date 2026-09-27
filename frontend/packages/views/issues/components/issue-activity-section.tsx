@@ -94,7 +94,7 @@ const ISSUE_TIMELINE_INITIAL_FIRST_ITEM_INDEX = 1_000_000;
  * comment maintains that gap (MUL-390 `cmt_rblm56fti12j`). Only pin when the
  * container is genuinely inside the hook's own band.
  */
-const STICK_PIN_THRESHOLD_PX = 24;
+export const STICK_PIN_THRESHOLD_PX = 24;
 
 /**
  * The issue's conversation: subscribers header, live agent card, published

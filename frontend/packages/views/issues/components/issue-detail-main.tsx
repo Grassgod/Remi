@@ -10,7 +10,10 @@ import {
   type RevealAnchor,
 } from "../../common/use-anchored-reveal";
 import { useStickToBottom } from "../../common/use-stick-to-bottom";
-import { IssueActivitySection } from "./issue-activity-section";
+import {
+  IssueActivitySection,
+  STICK_PIN_THRESHOLD_PX,
+} from "./issue-activity-section";
 import { IssueDescriptionSection } from "./issue-description-section";
 import { IssueDetailHeader } from "./issue-detail-header";
 import { IssueSessionList } from "./issue-session-list";
@@ -131,6 +134,10 @@ export function IssueDetailMain({
     contentEl,
     mode: anchor.kind === "bottom" ? { kind: "bottom" } : { kind: "element", id: anchor.id },
     enabled: reveal.revealed,
+    // Named explicitly rather than left to the hook's default: the consumer's
+    // own at-bottom gate has to use the same number, and a silent default would
+    // let the two drift apart.
+    pinThresholdPx: STICK_PIN_THRESHOLD_PX,
     // A deep link lands on a comment, not on the end of the stream: pinning
     // there would fight the user's own scroll from the first frame.
     initialState: highlightCommentId ? "released" : "pinned",
