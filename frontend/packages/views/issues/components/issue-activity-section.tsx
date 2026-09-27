@@ -65,6 +65,15 @@ interface IssueActivitySectionProps {
   /** Virtuoso's own "we are at the end" signal, forwarded to the stick hook. */
   onPinToBottom: () => void;
   /**
+   * The stick hook's own "go to the end of the content and stay there". The
+   * virtualizer's `scrollToIndex(LAST, align: "end")` only puts the last *row*
+   * at the bottom edge; below the list sit the agent-stream row and the
+   * composer, ~120 px in the fixture, so the container stops inside the
+   * virtualizer's 120 px band but outside the hook's 24 px one and never
+   * re-pins (MUL-390 `cmt_rblm56fti12j`).
+   */
+  onReturnToBottom: () => void;
+  /**
    * `useStickToBottom`'s state. Follow-the-latest is driven by this alone:
    * Virtuoso's own `atBottom` uses a much wider band (120 px) than the hook's
    * re-pin threshold (24 px), so a small scroll up leaves Virtuoso still
@@ -97,6 +106,7 @@ export function IssueActivitySection({
   onShowKeyResults,
   onRevealGatesChange,
   onPinToBottom,
+  onReturnToBottom,
   stickState,
 }: IssueActivitySectionProps) {
   const { t } = useT("issues");
@@ -248,7 +258,10 @@ export function IssueActivitySection({
     let lastTop = el.scrollTop;
     const onScroll = () => {
       const top = el.scrollTop;
-      if (top > lastTop + 1 && stickStateRef.current !== "pinned") {
+      // Only the reader's own travel counts as intent. `returning` is the
+      // hook's own trip to the end (its `returnToBottom()`), and counting that
+      // would let Virtuoso's wider band pin the container part-way down.
+      if (top > lastTop + 1 && stickStateRef.current === "released") {
         sawDownwardScrollRef.current = true;
       }
       lastTop = top;
@@ -263,12 +276,58 @@ export function IssueActivitySection({
     if (stickState === "pinned") sawDownwardScrollRef.current = false;
   }, [stickState]);
 
+  /**
+   * "Back to latest" goes through the stick hook rather than the virtualizer.
+   *
+   * `scrollToIndex({ index: "LAST", align: "end" })` only puts the last *row* at
+   * the bottom edge of the viewport. The agent-stream row and the composer sit
+   * below the list inside the same scroll container, ~120 px of it in the
+   * 250-comment fixture, so the container came to rest inside the virtualizer's
+   * 120 px "at bottom" band but outside the hook's 24 px one: the trip never
+   * reached the end, the hook stayed `released`, and the next comment did not
+   * follow (MUL-390 `cmt_rblm56fti12j`). The hook's `returnToBottom()` travels
+   * to the end of the *content* and then pins on its own 24 px rule, which also
+   * anchors at the true bottom instead of whatever distance it stopped at.
+   *
+   * Nothing here marks downward intent: the trip is the hook's, not the
+   * reader's, and Virtuoso still reports `atBottom` from 120 px away while it
+   * glides. Letting that signal pin would anchor the machine part-way down.
+   */
   const jumpToLatest = useCallback(() => {
-    // The control is itself the reader's intent to go back to the end, so the
-    // re-pin does not have to wait for the scroll events to prove it.
-    sawDownwardScrollRef.current = true;
-    virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end", behavior: "smooth" });
-  }, []);
+    onReturnToBottom();
+  }, [onReturnToBottom]);
+
+  // A comment that lands while the return trip is still gliding makes the
+  // content taller under a trip whose destination was computed when the button
+  // was pressed. The browser then finishes at the *old* end, which is now more
+  // than the hook's 24 px threshold away, so the hook releases instead of
+  // pinning and the newest row sits below the fold.
+  //
+  // Watching `scrollHeight` on a frame loop (rather than on scroll events) also
+  // covers the narrow case where the row lands after the glide has stopped but
+  // before the hook's 100 ms settle timer fires: no scroll event accompanies
+  // that growth, so an event-driven re-aim would miss it and the timer would
+  // release. The loop is bounded by `returning`, which the hook ends as soon as
+  // the scrolling goes quiet or the reader takes over.
+  useEffect(() => {
+    if (stickState !== "returning") return;
+    const el = scrollContainerEl;
+    if (!el) return;
+    let frame = 0;
+    let height = el.scrollHeight;
+    const tick = () => {
+      const grown = el.scrollHeight;
+      if (grown !== height) {
+        height = grown;
+        const top = Math.max(0, grown - el.clientHeight);
+        if (typeof el.scrollTo === "function") el.scrollTo({ top, behavior: "smooth" });
+        else el.scrollTop = top;
+      }
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [stickState, scrollContainerEl]);
 
   const lastActivityId = useMemo(
     () => lastActivityGroupId(timelineView.groups),
@@ -568,7 +627,13 @@ export function IssueActivitySection({
                   // route. Re-pin only once the reader has actually come back
                   // to the end of the stream — the hook's own state has to say
                   // so, and a downward-intent flag says the user drove it.
-                  if (bottom && sawDownwardScrollRef.current) onPinToBottom();
+                  if (
+                    bottom
+                    && sawDownwardScrollRef.current
+                    && stickStateRef.current !== "returning"
+                  ) {
+                    onPinToBottom();
+                  }
                 }}
                 totalListHeightChanged={() => setMeasuredTotalHeight(true)}
                 rangeChanged={() => setMeasuredRange(true)}

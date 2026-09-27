@@ -1014,11 +1014,81 @@ describe("IssueDetail (shared)", () => {
       expect(screen.getByRole("button", { name: /jump to latest/i })).toBeInTheDocument();
     });
 
+    // What this test owns is the chip's *presence* — it appears from
+    // Virtuoso's own (wider) at-bottom signal and disappears once the reader is
+    // back at the end. What the click does is asserted in "sends
+    // back-to-latest through the stick hook", which drives the hook's real
+    // return trip.
+    await act(async () => {
+      atBottomStateChange!(true);
+    });
+    expect(screen.queryByRole("button", { name: /jump to latest/i })).not.toBeInTheDocument();
+  });
+
+  it("sends back-to-latest through the stick hook, not the virtualizer", async () => {
+    // QA's failing case (MUL-390 `cmt_rblm56fti12j`): the fixture's scroll root
+    // stands in for a list with the agent-stream row and composer below it.
+    // `scrollToIndex(LAST, align: "end")` stops the last *row* at the bottom
+    // edge, which leaves the container ~120px short of the real end — inside
+    // Virtuoso's 120px band but outside the hook's 24px one, so the hook stayed
+    // `released` and the next comment never followed.
+    renderIssueDetail();
+    await waitFor(() => {
+      expect(screen.getByTestId("virtuoso-mock")).toBeInTheDocument();
+    });
+    await waitForReveal();
+
+    const scrollRoot = document.querySelector<HTMLElement>("[data-tab-scroll-root]")!;
+    const followOutput = virtuosoLatestProps.current?.followOutput as () => "smooth" | false;
+    const atBottomStateChange = virtuosoLatestProps.current?.atBottomStateChange as
+      | ((atBottom: boolean) => void)
+      | undefined;
+
+    // Give the root a realistic geometry: 1200px of content where the last row
+    // ends 120px above the true bottom, and a client height of 400.
+    Object.defineProperty(scrollRoot, "scrollHeight", { configurable: true, get: () => 1200 });
+    Object.defineProperty(scrollRoot, "clientHeight", { configurable: true, get: () => 400 });
+    const scrollToSpy = vi.fn((opts?: ScrollToOptions | number) => {
+      const top = typeof opts === "number" ? opts : opts?.top ?? 0;
+      scrollRoot.scrollTop = top;
+    });
+    Object.defineProperty(scrollRoot, "scrollTo", { configurable: true, value: scrollToSpy });
+
+    // The reader is well away from the end, so the hook is released.
+    scrollRoot.scrollTop = 200;
+    await act(async () => {
+      fireEvent.wheel(scrollRoot, { deltaY: -300 });
+    });
+    expect(followOutput()).toBe(false);
+
+    // The chip appears from Virtuoso's own (wider) signal — unchanged.
+    await act(async () => {
+      atBottomStateChange!(false);
+    });
+    const chip = screen.getByRole("button", { name: /jump to latest/i });
+
     virtuosoScrollToIndexSpy.mockClear();
-    fireEvent.click(screen.getByRole("button", { name: /jump to latest/i }));
-    expect(virtuosoScrollToIndexSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ index: "LAST", align: "end" }),
-    );
+    await act(async () => {
+      fireEvent.click(chip);
+    });
+
+    // The button must travel to the end of the *content*, not just to the last
+    // row: that is what puts the container inside the hook's own threshold.
+    expect(scrollToSpy).toHaveBeenCalled();
+    expect(scrollRoot.scrollTop).toBe(800); // 1200 - 400
+    expect(
+      scrollRoot.scrollHeight - scrollRoot.scrollTop - scrollRoot.clientHeight,
+    ).toBe(0);
+    // And it does so without the virtualizer's narrower trip being the thing
+    // that moved the viewport.
+    expect(virtuosoScrollToIndexSpy).not.toHaveBeenCalled();
+
+    // The trip ends where the hook's own 24px rule can pin it, which is what
+    // makes the *next* comment follow. The hook settles on a 100ms quiet timer,
+    // so this is the outcome QA measured, not just the scroll call.
+    await waitFor(() => {
+      expect(followOutput()).toBe("smooth");
+    });
   });
 
   it("switches the visible conversation by product Session", async () => {
