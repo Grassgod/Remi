@@ -82,6 +82,34 @@ function expectedRefusal(role: ApiRole, pathname: string): boolean {
 }
 
 /**
+ * Why the fixed counts below are allowed to be literals, and what to do when one
+ * fails.
+ *
+ * These three numbers turn every PR that adds a route into a decision point: the
+ * guard table in MUL-455 §3.2 says which process serves a new path, and a route
+ * added under the wrong prefix is exactly the regression this matrix exists to
+ * catch. Failing here is not "update the number until it is green" — decide first,
+ * then record the decision.
+ */
+function routeCountHint(role: ApiRole): string {
+  return [
+    `The ${role} route count changed, which means the golden inventory gained or lost a route.`,
+    "Before touching this number:",
+    "  1. Read the new route's path and classify it against the literal rules at the top of this",
+    "     file (RUNTIME_ALLOWED_PREFIXES / RUNTIME_ALLOWED_EXACT), NOT against the implementation.",
+    "     /api/daemon/* -> the runtime process serves it and ui answers 421.",
+    "     /api/daemons/:id (plural) and everything else outside the allowlist -> ui serves it.",
+    "  2. Confirm the route really belongs where it was added. A daemon-protocol route registered",
+    "     outside /api/daemon/ (or a browser route added under it) is a routing bug, not a count to",
+    "     bump: MUL-464 sends /api/daemon/ to api-runtime in nginx, so such a route would 421 in",
+    "     production for the process that should serve it.",
+    "  3. Only then update the literal below, and update the sweep's own arithmetic (the upgrade-only",
+    "     routes cannot be driven by app.request and are asserted in the websocket block instead).",
+    "If the classification above and the observed status disagree, the guard is wrong, not the count.",
+  ].join("\n");
+}
+
+/**
  * The golden file records route PATTERNS; turn each into a path the app will
  * actually route. `:id` style params become a literal segment, which is enough
  * for the guard: it decides on the path prefix before any handler runs, so a
@@ -301,10 +329,16 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
   it("keeps main's behavior when the role is all", async () => {
     const statuses = await sweep("all");
     expect(statuses.size).toBe(GOLDEN.routes.length - 3);
+    let refused = 0;
     for (const [pattern, status] of statuses) {
       const { path } = concreteRequest(pattern);
       expect(status === 421, `${pattern} answered ${status} as all`).toBe(expectedRefusal("all", path));
+      if (status === 421) refused += 1;
     }
+    // `all` registers no guard at all, so the answer is always zero — the count is
+    // still pinned so a guard accidentally registered for the default role shows up
+    // here rather than as a mystery 421 in production.
+    expect(refused, routeCountHint("all")).toBe(0);
     // Unlike the split roles, `all` runs every handler, so this sweep costs the
     // whole inventory rather than a guard short-circuit. The default 5 s budget is
     // not enough when the full suite loads the machine in parallel.
@@ -320,13 +354,13 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
       expect(status === 421, `${pattern} -> ${status}`).toBe(expectedRefusal("ui", path));
       if (status === 421) misdirected.push(pattern);
     }
-    // The inventory is fixed, so the counts are literals. 69 of the 756 swept
-    // patterns are refused here, plus `GET /api/daemon/ws` — the upgrade-only route
-    // this sweep cannot drive and the websocket block below asserts instead — makes
-    // the 70 the QA measured independently. Pinning both halves means the guard
-    // cannot drift by reclassifying a route without a number moving.
-    expect(misdirected).toHaveLength(69);
-    expect(misdirected.length + 1).toBe(70);
+    // Fixed counts, derived from the literal rule above (not from the guard).
+    // 70 of the 757 swept patterns are refused here; `GET /api/daemon/ws` is the
+    // upgrade-only route this sweep cannot drive — the websocket block asserts it —
+    // so the full-inventory total is 71. Pinning the swept count AND the arithmetic
+    // means a route cannot be reclassified without one of the numbers moving.
+    expect(misdirected, routeCountHint("ui")).toHaveLength(70);
+    expect(misdirected.length + 1, routeCountHint("ui")).toBe(71);
   });
 
   it("refuses everything but the daemon protocol, health and /internal as runtime", async () => {
@@ -337,10 +371,12 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
       expect(status === 421, `${pattern} -> ${status}`).toBe(expectedRefusal("runtime", path));
       if (status === 421) refused += 1;
     }
-    // 682 of the 756 swept patterns are refused, plus the two browser upgrade routes
-    // (`GET /ws`, `GET /api/realtime/ws`) makes the 684 the QA measured.
-    expect(refused).toBe(682);
-    expect(refused + 2).toBe(684);
+    // 682 of the 757 swept patterns are refused; the two browser upgrade routes
+    // (`GET /ws`, `GET /api/realtime/ws`) are upgrade-only, so the full-inventory
+    // total is 684. Neither number moved when the decision-cards route was added,
+    // because that route is daemon traffic and runtime serves it.
+    expect(refused, routeCountHint("runtime")).toBe(682);
+    expect(refused + 2, routeCountHint("runtime")).toBe(684);
   });
 
   it("answers 421 with the misdirected body, the role header, and a real route still reachable", async () => {
