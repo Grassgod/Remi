@@ -133,3 +133,4 @@ MUL-386（PR #255，`fd52ff9e`）合入 main 后，按本单「观测」行给�
 - 锁顺序修复：`d4254edd`
 - 合并 `origin/main`（`d905961b`，含 `fd52ff9e`）：`2a802b67`
 - `pid` 观测字段：`d6dd448f`
+- 回归修复（createIssue 的实时推送改回提交后发布，MUL-400 S1 契约）：`3bd9d736`（当前 head）
