@@ -242,12 +242,12 @@ Only genuine Issue discussion tasks require an Issue Session lifecycle lock.
 | # | 谁来操作 | 操作 | 飞书上看到什么 | 父单活动 / `degraded` |
 |---|---|---|---|---|
 | 1 | 发起人 | 让父单任务问一个 AskUserQuestion（`notifyMode=group_owner`，话题已有 seed） | 话题里出现一张**独立卡片**：头部 Agent 名与时间、原问题、编号选项、自定义输入框、提交按钮 | `decision_card_queued`（`kind=decision_card`）；`degraded` 为 NULL |
-| 2 | 第二个人，然后被问的人 | 第二个人点提交；被问的人再点提交 | 第二个人得到 toast「请由卡片中指定的处理人提交」，卡片不变、问题仍在；被问的人点后提示「已提交」，同一张卡片**原地**变为终态（答案、答者、时间），不新增消息 | 第二个人点击不写活动；被问的人提交后请求变 `responded`，卡片走后一条 `decision_card_patch` 投递 |
-| 3 | 发起人，在被问的人之外 | 再问一次，这次在 Remi 工作台（网页）回答 | 飞书那张卡片同样**原地**变终态，并回显原问题 | 同第 2 步：`decision_card_patch`，无新增卡片 |
-| 4 | 发起人 | 再问一次，放着不答；需要快速看到结果时用较短的 `timeout_ms` | 提醒时刻为 `expires_at − min(10 分钟, 总时长的一半)`：默认 60 分钟超时即 T−10min，15 分钟超时即 T−7.5min。话题里出现**一条 @ 被问的人**的文字提醒，且只出现一次；到点后卡片变「已超时，未回答」，任务按既有 cancel 结果继续，授权类请求不会被自动批准 | `decision_card_reminder` 恰一条；卡片终态仍走 `decision_card_patch` |
+| 2 | 第二个人，然后被问的人 | 第二个人点提交；被问的人再点提交 | 第二个人得到 toast「请由卡片中指定的处理人提交」，卡片不变、问题仍在；被问的人点后提示「已提交」，同一张卡片**原地**变为终态（答案、答者、时间），不新增消息 | 第二个人点击不写活动；被问的人提交后请求变 `responded`，卡片走后一条 `decision_card_patch` 投递；`degraded=NULL` |
+| 3 | 发起人，在被问的人之外 | 再问一次，这次在 Remi 工作台（网页）回答 | 飞书那张卡片同样**原地**变终态，并回显原问题 | 同第 2 步：`decision_card_patch`，无新增卡片；`degraded=NULL` |
+| 4 | 发起人 | 再问一次，放着不答；需要快速看到结果时用较短的 `timeout_ms` | 提醒时刻为 `expires_at − min(10 分钟, 总时长的一半)`：默认 60 分钟超时即 T−10min，15 分钟超时即 T−7.5min。话题里出现**一条 @ 被问的人**的文字提醒，且只出现一次；到点后卡片变「已超时，未回答」，任务按既有 cancel 结果继续，授权类请求不会被自动批准 | `decision_card_reminder` 恰一条；卡片终态仍走 `decision_card_patch`；正常卡片与提醒行 `degraded=NULL` |
 | 5 | **不执行**（自动化覆盖） | — | — | 见下方说明 |
 | 6 | 发起人 | `remi workspace issue-topics set --enabled --chat-id <chat> --notify none`，再问一次 | **只有文字**、不出卡片、不 @ 任何人，文字含问题、编号选项与父单网页链接 | `decision_card_degraded`，`reason=notify_none`；`degraded=notify_none` |
-| 7 | 发起人 + 被问的人 | 发一张卡片后，在 bot host 机器上重启该 runtime 的 daemon（或 kill 掉让平台重拉），等它重新上线，再由被问的人点之前那张卡片的提交按钮 | 重启后旧卡片仍然可点：提交成功、卡片**原地**变终态 | 恢复来自 `GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards`；活动同第 2 步 |
+| 7 | 发起人 + 被问的人 | 发一张卡片后，在 bot host 机器上重启该 runtime 的 daemon（或 kill 掉让平台重拉），等它重新上线，再由被问的人点之前那张卡片的提交按钮 | 重启后旧卡片仍然可点：提交成功、卡片**原地**变终态 | 恢复来自 `GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards`；活动同第 2 步；`degraded=NULL` |
 
 第 4 步的提醒时刻按公式算，不要按固定 T−10min 期待。
 
@@ -262,15 +262,25 @@ chat 没有发言权限时文字同样会被拒，而 `onDecisionSent` 只在文
 因此第 5 步改为自动化覆盖，覆盖它的测试是
 `tests/unit/multiremi/multiremi-feishu-decision-card.test.ts`
 的 `step 5: a card Feishu rejects non-retryably becomes one sent text, once`。
-该用例走真实 host 发送路径（真实 `sendDecisionLane` + 真实 `FeishuConnector`），
-只在传输层拦截：卡片的 `POST .../reply` 返回不可重试错误码 `230001`，文字的
-`POST .../reply` 返回成功。它断言四件事——卡片被不可重试地拒绝、文字发送成功、
-父单活动恰好一条且 `reason=send_failed`（`degraded=send_failed`）、这条投递
-变 `sent` 后不再作为坏卡被重试（同一请求只有一条投递，也没有 `decision_card_patch`）。
-host 侧「不可重试拒绝→发文字→回报 `degraded=send_failed`」另由
-`tests/unit/multiremi/feishu-concierge-host.test.ts`
-的 `degrades a rejected decision card to its text twin instead of retrying it`
-覆盖。
+
+该用例走完整回报链，而不是在发送之后手工写一条回报：真实
+`MultiremiDaemon.handleHeartbeatAck` → 真实 `queueFeishuBotOutbound` →
+`handleFeishuBotOutbound` → 真实 `deliverFeishuOutbound` → 真实 `sendDecisionLane`
+（真实 `FeishuConnector`，只在 SDK 传输层把卡片的 `POST .../reply` 应答改为不可
+重试错误码 `230001`、文字的应答放行）→ 真实 `MultiremiDaemonClient`
+→ 真实 `POST /api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:id/result`
+回报路由 → 真实 `reportFeishuBotOutbound`。测试自己只提供两样东西：进程内
+不存在的 Feishu channel handle（本例用真实 connector、只包一层记账），以及
+HTTP 到测试内 API 的那一跳。
+
+回报链跑完后它断言四件事——卡片被不可重试地拒绝、文字发送成功、父单活动恰好
+一条且 `reason=send_failed`（`degraded=send_failed`）、这条投递变 `sent` 后不再
+作为坏卡被重试（同一请求只有一条投递，也没有 `decision_card_patch`）。
+
+`tests/unit/multiremi/feishu-concierge-host.test.ts` 的
+`degrades a rejected decision card to its text twin instead of retrying it`
+只断言 host 本地的 degrade 分支与它交给 `onDecisionSent` 的回执，不经过 daemon
+回报链，因此与第 5 步不重复——完整回报链由第 5 步覆盖。
 
 第 6 步（`notifyMode=none`）验证的是**预先降级**：控制面在建请求时就判定没人
 可问，直接把文字行排进队列。它不经过「卡片被飞书拒绝」这条路径，因此**不能替代

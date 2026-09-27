@@ -21,7 +21,8 @@ import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
 import { decodeDecisionCardBody } from "@shared/feishu-task-card.js";
 import { FeishuDeliveryError } from "@shared/feishu-delivery-error.js";
 import { MultiremiDaemonClient } from "@multiremi/worker/client.js";
-import type { MultiremiDaemon } from "@multiremi/worker/daemon.js";
+import type { FeishuConciergeHost, FeishuConciergeSupervisor } from "@multiremi/worker/feishu-concierge.js";
+import { MultiremiDaemon } from "@multiremi/daemon.js";
 import {
   controlPlaneConciergeHost,
   sendDecisionLane as sendDecisionLaneForTest,
@@ -1516,61 +1517,68 @@ describe("Feishu decision card heartbeat delivery", () => {
     // chat where the bot cannot speak. That precondition cannot produce the
     // expected result: the text twin goes to the same chat, so a bot without
     // speaking rights loses both. This is the automated replacement QA asked
-    // for, and it has to hold four things at once — the card is rejected as
-    // non-retryable, the text really goes out, the Issue records exactly one
-    // `send_failed` activity, and the request is never retried as a bad card.
+    // for, and it drives the production reporting chain end to end:
     //
-    // Nothing between the lane and Feishu is replaced: the real `sendDecisionLane`
-    // runs over the real `FeishuConnector`, and the only interception is the
-    // SDK's own HTTP layer, which answers the card reply with a rejection code
-    // and the text reply with success.
-    const { store, agentId } = scaffold();
+    //   real MultiremiDaemon.handleHeartbeatAck
+    //     -> real queueFeishuBotOutbound -> real handleFeishuBotOutbound
+    //     -> real deliverFeishuOutbound -> real sendDecisionLane over the real
+    //        FeishuConnector (only the SDK's HTTP layer is scripted)
+    //     -> real MultiremiDaemonClient.reportFeishuBotOutboundResult
+    //     -> real POST /api/daemon/.../outbound/:id/result route
+    //     -> real store.reportFeishuBotOutbound
+    //
+    // Only two things are test scaffolding: the channel handle (the process has
+    // no Feishu app) and the HTTP hop, which the real client reaches through the
+    // in-process app the way the existing heartbeat cases already do.
+    const { store, agentId, app } = scaffold();
     const issue = issueWithTopic(store, agentId);
     const request = askQuestion(store, sourceTask(store, agentId, issue.id));
-    const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
-    expect(card.kind).toBe("decision_card");
-    expect(card.degraded).toBeUndefined();
 
-    const receipts: Array<{ messageId: string; interactionOpenId?: string | null; degraded?: string | null }> = [];
-    const { requests } = await withScriptedFeishuTransport(({ method, path, body }) => {
-      // Only the interactive card is refused. 230001 is a real Feishu
-      // rejection that retrying the same payload cannot fix; the text twin
-      // (msg_type `text`) is still allowed, which is what a chat where the bot
-      // may speak but the card is refused looks like.
+    const handle = refusingCardChannelHandle();
+    const { result: { ack, delivered } } = await withScriptedFeishuTransport(({ method, path, body }) => {
+      // Only the interactive card is refused. 230001 is a real Feishu rejection
+      // that retrying the same payload cannot fix; the text twin (msg_type
+      // `post`) is still allowed — the chat where the bot may speak but the card
+      // is refused.
       if (method === "POST" && path.endsWith("/reply") && body.includes("interactive")) {
         return { code: 230001, msg: "permission denied" };
       }
       return null;
-    }, async () => {
-      const handle = decisionLaneHandle();
-      handle.resolve = "ou_the_person";
-      // Only the transport is scripted; these pass through to the real connector.
-      handle.sendProactiveCard = input => new FeishuConnector({
-        appId: "cli_decision_card", appSecret: APP_SECRET, domain: "feishu",
-      } as never).sendProactiveCard(input);
-      handle.sendProactiveThreadReply = input => new FeishuConnector({
-        appId: "cli_decision_card", appSecret: APP_SECRET, domain: "feishu",
-      } as never).sendProactiveThreadReply(input);
-      const sent = await sendDecisionLaneForTest(handle, card, {
-        signal: new AbortController().signal,
-        onStarted: async () => {},
-        onDecisionSent: async receipt => { receipts.push(receipt); },
-      });
-      expect(sent.messageId).toBe("om_text_sent");
-    });
+    }, async () => withRealBotHostClient(app, store, async (client) => {
+      // A real daemon over a real daemon token, with the real concierge host
+      // attached: the delivery below runs through production code, not a stub.
+      const daemon = outboundDaemon(store, client);
+      daemon.setFeishuConciergeHost(outboundHost(handle, daemon));
+      const supervisor = (daemon as unknown as { feishuConcierge: FeishuConciergeSupervisor })
+        .feishuConcierge;
+      // Production wiring: the real supervisor fetches the assignment over the
+      // real route and starts the host. Only `host.start` is stubbed (booting a
+      // connector needs a Feishu app); the supervisor still owns the state it
+      // gates delivery on, so the delivery below runs only because a real start
+      // reported this runtime online.
+      await supervisor.apply({ revision: 1, desired_state: "running", config_available: true });
+      const beat = await client.heartbeatRuntime("rt_bot", undefined, undefined, false, true);
+      const outbound = beat.pending_feishu_outbound!;
+      expect(outbound).toBeTruthy();
+      // The real ack path: queueFeishuBotOutbound -> handleFeishuBotOutbound ->
+      // deliverFeishuOutbound -> host.sendOutbound -> real client report.
+      await (daemon as unknown as {
+        handleHeartbeatAck(runtimeId: string, ack: unknown): Promise<boolean>;
+      }).handleHeartbeatAck("rt_bot", beat);
+      const runs = (daemon as unknown as {
+        feishuOutboundRuns: Map<string, { done: Promise<void> }>;
+      }).feishuOutboundRuns;
+      const deadline = Date.now() + 10_000;
+      while (runs.has(outbound.id) && Date.now() < deadline) await Bun.sleep(5);
+      return { ack: beat, delivered: outbound };
+    }));
 
-    // The card really was rejected over the wire and the text really crossed it:
-    // one reply attempt answered with the rejection code, then one that succeeded.
-    const replyRequests = requests.filter((r) => r.path.endsWith("/reply"));
-    expect(replyRequests).toHaveLength(2);
-    // The host reported one degradation, carrying the recipient it had resolved.
-    expect(receipts).toEqual([{ messageId: "om_text_sent", interactionOpenId: "ou_the_person", degraded: "send_failed" }]);
-
-    // The daemon reports that send the way it does in production.
-    expect(store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
-      claimToken: card.claimToken, status: "sent", externalMessageId: "om_text_sent",
-      interactionOpenId: "ou_the_person", degraded: "send_failed",
-    })).toBe(true);
+    expect(delivered.kind).toBe("decision_card");
+    expect(ack.status).toBe("ok");
+    // The card was refused, the text went out, and the transport carried both.
+    expect(handle.calls).toEqual(["card:send", "text:send"]);
+    expect(handle.sentText).toHaveLength(1);
+    expect(handle.sentText[0]).toContain("Continue?");
 
     // Exactly one activity, and exactly one delivery for the request: the row is
     // `sent`, so the outbox never offers it again as a card to retry.
@@ -1578,12 +1586,12 @@ describe("Feishu decision card heartbeat delivery", () => {
     expect(degraded).toHaveLength(1);
     expect(degraded[0]!.body).toBe(request.id);
     expect(degraded[0]!.data).toMatchObject({
-      reason: "send_failed", delivery_id: card.id, source_task_id: request.taskId,
+      reason: "send_failed", delivery_id: delivered.id, source_task_id: request.taskId,
     });
     expect(db!.query(
       `SELECT status, degraded, external_message_id, attempt_count
        FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?`,
-    ).get(card.id)).toEqual({
+    ).get(delivered.id)).toEqual({
       status: "sent", degraded: "send_failed", external_message_id: "om_text_sent", attempt_count: 1,
     });
     expect(store.claimFeishuBotOutbound("local", "rt_bot")).toBeNull();
@@ -1610,6 +1618,110 @@ function decisionDaemon(store: MultiremiStore): MultiremiDaemon {
       return settled;
     },
   } as unknown as MultiremiDaemon;
+}
+
+/**
+ * A ChannelHandle whose card reply is refused by Feishu itself: only the SDK's
+ * HTTP layer is scripted, so the refusal comes from the transport the real host
+ * uses. The handle is the one thing the test must stand in for — the process has
+ * no Feishu app — and it delegates every send to the real `FeishuConnector`.
+ */
+function refusingCardChannelHandle(): DecisionLaneHandle {
+  const handle = decisionLaneHandle();
+  handle.resolve = "ou_the_person";
+  const connector = () => new FeishuConnector({
+    appId: "cli_decision_card", appSecret: APP_SECRET, domain: "feishu",
+  } as never);
+  // The connector is real; the bookkeeping on top of it is the same the fake
+  // handle does, so a test can still see which lane ran.
+  handle.sendProactiveCard = async input => {
+    handle.calls.push("card:send");
+    return connector().sendProactiveCard(input);
+  };
+  handle.sendProactiveThreadReply = async input => {
+    handle.calls.push("text:send");
+    handle.sentText.push(input.body);
+    return connector().sendProactiveThreadReply(input);
+  };
+  handle.updateProactiveCard = (messageId, card) => connector().updateProactiveCard(messageId, card);
+  return handle;
+}
+
+/**
+ * The real host, wired to a real daemon: `sendOutbound` is production
+ * `controlPlaneConciergeHost`, and it comes back online the way the supervisor
+ * drives it.
+ */
+function outboundHost(handle: FeishuChannelHandle, daemon: MultiremiDaemon) {
+  const host = controlPlaneConciergeHost({
+    daemon: () => daemon,
+    workspacesRoot: () => "/tmp/workspaces",
+    current: () => handle,
+    attach: () => {},
+  });
+  return {
+    start: async () => ({ botName: "Concierge" }),
+    stop: async () => {},
+    setNoMentionChatIds: (_chatIds: readonly string[]) => {},
+    sendOutbound: (delivery: Parameters<NonNullable<FeishuConciergeHost["sendOutbound"]>>[0],
+      options?: Parameters<NonNullable<FeishuConciergeHost["sendOutbound"]>>[1]) =>
+      host.sendOutbound!(delivery, options),
+    uploadImage: (image: Buffer) => host.uploadImage!(image),
+  };
+}
+
+/**
+ * A real `MultiremiDaemon` that talks to the in-process API with a real daemon
+ * token. Nothing else is mocked: the heartbeat, the outbound queue, the
+ * delivery loop and the result report are production code.
+ */
+function outboundDaemon(store: MultiremiStore, client?: MultiremiDaemonClient): MultiremiDaemon {
+  const daemon = new MultiremiDaemon({
+    serverUrl: "http://local",
+    token: "shared-by-fixture",
+    provider: "codex",
+    runtimeId: "rt_bot",
+    daemonId: "bot-host",
+    workspaceId: "local",
+    daemonPort: 0,
+    pollIntervalMs: 20,
+    gcEnabled: false,
+    workspacesRoot: "/tmp/workspaces",
+    repoCacheRoot: "/tmp/workspaces/.repos",
+    inProcessRuntimeModelDiscoveryEnabled: true,
+    providerFactory: () => ({ async *sendStream() {} }),
+  } as never);
+  if (client) (daemon as unknown as { client: MultiremiDaemonClient }).client = client;
+  return daemon;
+}
+
+/**
+ * Route one real daemon's HTTP at the in-process app, and everything else at
+ * the scripted Feishu transport.
+ *
+ * The outbound case needs both at once: the daemon client must reach the real
+ * API (heartbeat, result report), while the connector's own calls must reach the
+ * scripted Feishu seam. The API hop is the same one the heartbeat cases use.
+ */
+async function withRealBotHostClient<T>(
+  app: ReturnType<typeof createMultiremiApp>,
+  store: MultiremiStore,
+  fn: (client: MultiremiDaemonClient) => Promise<T>,
+): Promise<T> {
+  const token = await store.createAccessToken({
+    name: "bot-host", type: "daemon", workspaceId: "local", daemonId: "bot-host",
+  });
+  const scripted = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.startsWith("http://local")) {
+      const parsed = new URL(url, "http://local");
+      return app.request(parsed.pathname + parsed.search, init);
+    }
+    return scripted(input, init);
+  }) as typeof fetch;
+  try { return await fn(new MultiremiDaemonClient("http://local", token.token)); }
+  finally { globalThis.fetch = scripted; }
 }
 
 /** A fake channel handle that records what the decision lane actually sends. */
