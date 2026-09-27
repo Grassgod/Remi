@@ -26,10 +26,10 @@ export interface UseStickToBottomOptions {
 export interface UseStickToBottomResult {
   state: StickState;
   /**
-   * `released → returning → pinned`: scrolls back to the anchor (bottom mode:
-   * the end of the content; element mode: the target row's offset), smoothly
-   * unless `prefers-reduced-motion` asks for an instant jump. A no-op while the
-   * row or the scroll root is missing.
+   * `released → returning → pinned`: scrolls back to the end of the content,
+   * smoothly unless `prefers-reduced-motion` asks for an instant jump. The
+   * transaction ends when the scrolling goes quiet, so an interrupted glide
+   * falls back to `released`. A no-op while the scroll root is missing.
    */
   returnToBottom(): void;
   /** For consumers with their own at-the-bottom signal, e.g. Virtuoso's `atBottomStateChange(true)`. */
