@@ -4,7 +4,7 @@
   "database": "throwaway PG database, dropped after the run",
   "serverCode": "real MultiremiStore over PostgresSyncDatabase + real HTTP app",
   "testDoubles": "execution agent and worker only (no provider is run)",
-  "ranAt": "2026-09-27T06:54:53.638Z",
+  "ranAt": "2026-09-27T08:01:09.867Z",
   "steps": [
     {
       "step": "create parent",
@@ -18,9 +18,9 @@
       "step": "create chain C1 <- C2 <- C3",
       "status": "ok",
       "detail": {
-        "c1": "iss_ww28kr9a55m1",
-        "c2": "iss_j07szhlw5x4n",
-        "c3": "iss_nry711293meq"
+        "c1": "iss_oj60o1zep759",
+        "c2": "iss_xi5a26me35zt",
+        "c3": "iss_09v4z4nsejtn"
       }
     },
     {
@@ -79,7 +79,7 @@
       "status": "ok",
       "detail": {
         "progress": {
-          "parentIssueId": "iss_6g2bn4gfvxhg",
+          "parentIssueId": "iss_p0q72t7kftxv",
           "total": 3,
           "done": 0,
           "cancelled": 0,
@@ -96,22 +96,22 @@
         "waitingOn": {
           "unmet": [
             {
-              "issueId": "iss_nry711293meq",
-              "dependsOnIssueId": "iss_j07szhlw5x4n",
+              "issueId": "iss_09v4z4nsejtn",
+              "dependsOnIssueId": "iss_xi5a26me35zt",
               "key": "MUL-3",
               "title": "C2",
               "status": "backlog",
-              "dependencyId": "dep_sug5wm99j3jd"
+              "dependencyId": "dep_2bcsjfptrds5"
             }
           ],
           "prerequisites": [
             {
-              "issueId": "iss_nry711293meq",
-              "dependsOnIssueId": "iss_j07szhlw5x4n",
+              "issueId": "iss_09v4z4nsejtn",
+              "dependsOnIssueId": "iss_xi5a26me35zt",
               "key": "MUL-3",
               "title": "C2",
               "status": "backlog",
-              "dependencyId": "dep_sug5wm99j3jd"
+              "dependencyId": "dep_2bcsjfptrds5"
             }
           ]
         }
@@ -143,7 +143,7 @@
       "step": "C1: round completed",
       "status": "ok",
       "detail": {
-        "taskId": "tsk_rwk1xshz3d4j"
+        "taskId": "tsk_bugbgfmzdv9u"
       }
     },
     {
@@ -196,7 +196,7 @@
       "step": "C2: round completed",
       "status": "ok",
       "detail": {
-        "taskId": "tsk_wzotftt00nsc"
+        "taskId": "tsk_6rf211ky59kh"
       }
     },
     {
@@ -238,7 +238,7 @@
       "step": "C3: round completed",
       "status": "ok",
       "detail": {
-        "taskId": "tsk_palj3akbbs9c"
+        "taskId": "tsk_wfu0135k10nl"
       }
     },
     {
@@ -275,12 +275,12 @@
           "unmet": [],
           "prerequisites": [
             {
-              "issueId": "iss_nry711293meq",
-              "dependsOnIssueId": "iss_j07szhlw5x4n",
+              "issueId": "iss_09v4z4nsejtn",
+              "dependsOnIssueId": "iss_xi5a26me35zt",
               "key": "MUL-3",
               "title": "C2",
               "status": "done",
-              "dependencyId": "dep_sug5wm99j3jd"
+              "dependencyId": "dep_2bcsjfptrds5"
             }
           ]
         }
@@ -302,7 +302,7 @@
       "status": "ok",
       "detail": {
         "progress": {
-          "parentIssueId": "iss_6g2bn4gfvxhg",
+          "parentIssueId": "iss_p0q72t7kftxv",
           "total": 3,
           "done": 3,
           "cancelled": 0,
@@ -369,8 +369,8 @@
       "step": "the forced round is claimable",
       "status": "ok",
       "detail": {
-        "claimed": "tsk_rzkd569bsjue",
-        "expected": "tsk_rzkd569bsjue"
+        "claimed": "tsk_p08ns08hojt0",
+        "expected": "tsk_p08ns08hojt0"
       }
     },
     {
@@ -440,7 +440,7 @@
       "status": "ok",
       "detail": {
         "bodies": [
-          "[@E2E executor](mention://agent/agt_e2e) Sub-issue [MUL-10](mention://issue/iss_n03z0ik9p2if) - \"Sibling prerequisite\" -"
+          "[@E2E executor](mention://agent/agt_e2e) Sub-issue [MUL-10](mention://issue/iss_fxg1xuxij9al) - \"Sibling prerequisite\" -"
         ]
       }
     },
