@@ -256,6 +256,26 @@ async function main(): Promise<void> {
       privatePrimaryAgent: false,
       run: (sql, params) => { (db.run as (sql: string, ...params: unknown[]) => unknown)(sql, ...params); },
     });
+    // QA's counterexample: a legal Agent whose name looks like a user id. The
+    // untyped search must reach the Agent tier for this ref, so the case below
+    // exercises the fallback rather than a prefix-locked single-kind read.
+    store.createAgent({
+      id: "agt_mul473_lookalike",
+      name: "usr_mul473_lookalike",
+      provider: "codex",
+      workspaceId: fixture.workspaceId,
+      ownerId: fixture.ownerUserId,
+      visibility: "workspace",
+    });
+    store.createIssue({
+      id: "iss_mul473_lookalike",
+      workspaceId: fixture.workspaceId,
+      title: "MUL-473 assignee-ref lookalike",
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: "agt_mul473_lookalike",
+      createdBy: fixture.readerUserId,
+    });
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const credential = await store.createAccessToken({
       name: "MUL-473 bench",
@@ -275,8 +295,23 @@ async function main(): Promise<void> {
         entries: (body: unknown) => (body as { tasks: unknown[] }).tasks.length,
       },
       {
-        label: "GET /api/issues (assignee_id=usr_)",
+        // The untyped fallback (MUL-473 rework): a `usr_` reference is not
+        // prefix-locked, so it is read against all three kinds.
+        label: "GET /api/issues (assignee_id=usr_ user id, 3 tiers)",
         path: `/api/issues?assignee_id=${fixture.readerUserId}&limit=50`,
+        entries: (body: unknown) => (body as { issues: unknown[] }).issues.length,
+      },
+      {
+        // QA's counterexample: an Agent *named* like a user id must reach the
+        // Agent tier instead of erroring as a missing member.
+        label: "GET /api/issues (assignee_id=usr_ agent name, 3 tiers)",
+        path: "/api/issues?assignee_id=usr_mul473_lookalike&limit=50",
+        entries: (body: unknown) => (body as { issues: unknown[] }).issues.length,
+      },
+      {
+        // Prefix-locked for contrast: one candidate list, not three.
+        label: "GET /api/issues (assignee_id=mem_ row id)",
+        path: `/api/issues?assignee_id=${fixture.readerMemberId}&limit=50`,
         entries: (body: unknown) => (body as { issues: unknown[] }).issues.length,
       },
       {

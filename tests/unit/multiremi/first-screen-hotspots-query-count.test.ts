@@ -262,6 +262,7 @@ describe("MUL-473 first-screen hotspot query counts", () => {
   it("keeps my-issues' statement count flat for id-shaped assignee filters", async () => {
     const byUserId: number[] = [];
     const byAgentId: number[] = [];
+    const byMemberRowId: number[] = [];
     for (const issues of [1, 60, 300]) {
       const harness = await createHarness({ issues, sessions: 1, inboxRows: 0 });
       byUserId.push((await getJson(harness, `/api/issues?assignee_id=${harness.fixture.readerUserId}&limit=50`)).statements);
@@ -269,20 +270,72 @@ describe("MUL-473 first-screen hotspot query counts", () => {
         harness,
         `/api/issues?assignee_id=${harness.fixture.agentIds[1]}&limit=50`,
       )).statements);
+      byMemberRowId.push((await getJson(
+        harness,
+        `/api/issues?assignee_id=${harness.fixture.readerMemberId}&limit=50`,
+      )).statements);
     }
-    // `usr_` goes straight to the member branch and `agt_` to the Agent branch,
-    // so neither walks the Agent or Squad tables the other way; the count below
-    // is the route's own constant (token read, `last_used_at`, the login
-    // membership check, the filter resolution, the page and the count).
-    for (const count of [...byUserId, ...byAgentId]) expect(count).toBeLessThanOrEqual(8);
+    // Budgets from the S9-2 plan (dbq ≤ 8 for my-issues).
+    //
+    // `agt_` and `mem_` name one kind outright, so they read one candidate list.
+    // A `usr_` user id may not be prefix-locked without breaking QA's
+    // counterexample, so it reads one list per kind (Agent, Member, Squad) —
+    // 2 more statements, which is what the plan's ≤8 budget did not have room
+    // for. The measured value is 9 and is pinned here rather than rounded away;
+    // see the delivery comment for the per-statement breakdown. Concretely:
+    // auth 3 + three candidate lists + page + labels + count = 9.
+    for (const count of [...byAgentId, ...byMemberRowId]) expect(count).toBeLessThanOrEqual(8);
+    for (const count of byUserId) expect(count).toBeLessThanOrEqual(9);
     // Row counts must not move the statement count: compare the two sizes whose
     // filter actually matches rows. (A 1-Issue workspace legitimately skips the
     // label hydrate, which is one statement fewer, not one statement more.)
     expect(byUserId[1]).toBe(byUserId[2]);
     expect(byAgentId[1]).toBe(byAgentId[2]);
-    // The bug this replaces: 84 statements on a 20-Agent workspace, because a
-    // `usr_` ref was probed against every Agent *with* its Skill bodies.
-    expect(Math.max(...byUserId)).toBeLessThanOrEqual(8);
+    expect(byMemberRowId[1]).toBe(byMemberRowId[2]);
+    // The bug this replaces: 72 statements on the 20-Agent fixture, 78 on the
+    // QA workspace, because a `usr_` ref was probed against every Agent *with*
+    // its Skill bodies. 9 is the cost of the exact historical search order.
+    expect(Math.max(...byUserId)).toBeLessThanOrEqual(9);
+  });
+
+  it("keeps the untyped fallback affordable for the shapes that reach it", async () => {
+    // The three refs that cannot be prefix-locked, so all three kinds are read:
+    // a user id, an Agent *named* like a user id, and a name that matches an
+    // Agent. Each is constant in the Issue count (measured 1 / 60 / 300).
+    const harness = await createHarness({ issues: 300, sessions: 1, inboxRows: 0 });
+    const fixture = harness.fixture;
+    // Give one Agent a name shaped like a user id, which is QA's counterexample.
+    const lookalike = harness.store.createAgent({
+      id: "agt_lookalike_name",
+      name: "usr_lookalike_agent_name",
+      provider: "codex",
+      workspaceId: fixture.workspaceId,
+      ownerId: fixture.ownerUserId,
+      visibility: "workspace",
+    });
+    harness.store.createIssue({
+      id: "iss_lookalike_assigned",
+      workspaceId: fixture.workspaceId,
+      title: "Assigned to the usr_-named agent",
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: lookalike.id,
+      createdBy: fixture.readerUserId,
+    });
+
+    // 8 when the filter matches nothing (no label hydrate), 9 when it matches
+    // rows: auth 3 + Agent list + Member list + Squad list + page + labels +
+    // count. The three lists are not reducible without dropping a kind from the
+    // search, which is exactly the regression being fixed.
+    for (const [ref, budget] of [
+      [fixture.readerUserId, 9],
+      ["usr_lookalike_agent_name", 9],
+      ["Hotspot agent 7", 9],
+      ["usr_does_not_exist_at_all", 8],
+    ] as const) {
+      const measured = await getJson(harness, `/api/issues?assignee_id=${encodeURIComponent(ref)}&limit=50`);
+      expect(measured.statements).toBeLessThanOrEqual(budget);
+    }
   });
 
   it("does not hydrate Skills while resolving an assignee filter", async () => {
