@@ -201,3 +201,108 @@ MUL-386（PR #255，`fd52ff9e`）合入 main 后，按本单「观测」行给�
 - 五条路径锁序 + 最外层提交后推送：`fa8ac817`
 - 逐路径锁序断言 + 纯 `createIssue` 交错回放：`f84f9e5a`
 - 嵌套推送测试 + messaging 外层失败用例：`6af0a289`
+
+## 全仓锁序（第三轮 QA 后）
+
+第三轮 QA 用全仓检索找到两条逐路径测试没覆盖的反序，并指出「逐路径断言只有单调性、没有必需锁存在断言」，删掉 `recordAudit` 的 W 后 11 条用例仍全绿。本轮把这两件事一起解决：修反序、补必需锁断言、再加一个覆盖全量测试套件的哨兵。
+
+### 一、合入的 main
+
+`git merge origin/main`，合入提交 `01ceef3b`（main = `bda58bd9`，MUL-457），无冲突。
+
+### 二、本轮修复的两条反序
+
+| 入口 | 修复前 | 修复后 |
+|---|---|---|
+| `agents-skills-repo.ts` `archiveAgent`（经 `disableConfigsReferencingAgent` → `recordAuditWithinTransaction`） | W → agents UPDATE(D) → N(audit) | **W → N(audit) → agents UPDATE(D)** |
+| `runtimes-repo.ts` Runtime 级联删除（`deleteRuntime` / `deleteRuntimeWithArchivedAgentCleanup` / `archiveAgentsAndDeleteRuntime` / `mergeRuntimeInto` → `disableWhere` → audit） | W → config UPDATE(D) → N(audit) | **W → N(audit) → config UPDATE(D)** |
+
+两条都选**无条件**先取 N：这是低频管理操作；有条件写法需要一次「有没有配置引用这个 X」的读，而该读无法证明无竞态——`upsertConfig` 与 `replaceRoutes` 同样取 W，所以「读之后到取锁之前」可能被并发创建插入。
+
+### 三、哨兵发现的新路径（本轮新增）
+
+哨兵启用后立刻报出第三条反序，逐路径清单里原本没有：
+
+| 入口 | 修复前 | 修复后 | 处理 |
+|---|---|---|---|
+| `daemon-retirement-repo.ts` `lockLifecycle`（`registerRuntime`、`registerDaemonRuntimeBatch`、`retire`、以及 3 条 access-token 路径共 7 个调用点） | D(daemon_lifecycle_locks) → W | **W → D** | 已修：把 W 提到 `lockLifecycle` 开头，一处覆盖全部调用点 |
+
+另修一条哨兵在 MUL-400 父状态钩子里报出的 W/D 反序：
+
+| 入口 | 修复前 | 修复后 | 处理 |
+|---|---|---|---|
+| `issues-repo.ts` 父状态钩子（`notifyChildStatusChange` 的两个分支） | 通知评论 INSERT(D) → W | **W → 通知评论 INSERT(D)** | 已修（只涉及 W/D，改动小） |
+
+### 四、逐路径表（16 条）
+
+`tests/unit/multiremi/mul405-lock-order-paths.test.ts`：每条路径声明**必需锁集合**并断言其全部出现，同时断言首次取得顺序单调。D 的判定与哨兵一致——事务内任何非读语句都算 D。
+
+| # | 入口 | 必需锁 | 实际顺序 |
+|---|---|---|---|
+| 1 | 直接 `createIssue` | W, N | W → N → D |
+| 2 | quick-create | W, N | W → N → D |
+| 3 | Feishu bot `submitMessage` | W, N, D | W → N → D |
+| 4 | `runAutopilot(create_issue)` | W, N, D | W → N → D |
+| 5 | `setSenderAllowed` | W, N, D | W → N → D |
+| 6 | `recordAudit` 独立调用 | W, N, D | W → N → D |
+| 7 | `createPinnedItem` | W, N, D | W → N → D |
+| 8 | messaging outcomes `createIssue` | W, N, D | W → N → D |
+| 9 | messaging outcomes `approveProposal` | W, N, D | W → N → D |
+| 10 | Feishu ingest `createIssueOutcome` | W, N, D | W → N → D |
+| 11 | Feishu ingest `approveIssueProposal` | W, N, D | W → N → D |
+| 12 | `archiveAgent`（本轮新增） | W, N, D | W → N → D |
+| 13 | Runtime 级联删除（本轮新增） | W, N, D | W → N → D |
+| 14 | `updateIssueWithinTransaction`（MUL-457，本轮新增） | W, D（**N 不出现**） | W → D |
+| 15 | `grantParentDone`（MUL-457，本轮新增） | D（**N/W 不出现**） | D |
+| 16 | `revokeParentDone`（MUL-457，本轮新增） | D（**N/W 不出现**） | D |
+
+第 14~16 条先核对了是否间接取 N：`updateIssueWithinTransaction` 只锁 Issue 行、不建子单、不写 audit；`grantParentDone` / `revokeParentDone` 只有 `UPDATE multiremi_issues SET id = id` 的行锁加一次状态写，同样不取 N。所以按「不取 N 的断言 W→D，且 N 不出现」处理。
+
+### 五、全仓哨兵
+
+实现：`packages/server/src/store/lock-order-sentinel.ts`。两个数据库包装层分别喂给它：
+
+- `store/request-read-cache.ts`（`invalidatingDatabase`，SQLite 走这里）：在每个语句**执行**时分类（不是 prepare 时——预编译的语句可能在之后的事务里执行）；
+- `store/db/postgres.ts`（`PostgresSyncDatabase`）：`run`/`exec`/`SentinelPgStatement`/`advisoryXactLock` 各点喂入。
+
+规则：只对每个事务**首次**取得每类锁排序（同事务重复取已持有的锁在 PG 是免费的，store 也确实依赖这一点），首次取得的类低于已取过的最高类即抛错，错误信息带 trace 与调用栈。W = `UPDATE multiremi_workspaces SET updated_at = updated_at`；N = 任意 `advisoryXactLock`；D = 事务内任意非读语句。事务外不检查。
+
+开关：`MULTIREMI_TEST_LOCK_ORDER_SENTINEL=1`，由 `bun test` preload 默认打开（`tests/setup/hermetic-env-policy.ts`），`NODE_ENV=production` 下无论变量如何都拒绝启用；关闭时是一个缓存的布尔判断。`MULTIREMI_TEST_*` 不参与环境清洗，所以开发者可以用 `=0` 关掉。
+
+全量结果：
+
+| 运行 | 结果 | 违例 | 耗时 |
+|---|---|---|---|
+| `bun test tests/unit/multiremi/ --timeout 20000`（SQLite，哨兵开） | 3257 pass / 137 skip / 0 fail | **0** | **497s** |
+| 同上（哨兵关） | 3257 pass / 137 skip / 0 fail | — | **498s** |
+| 同上（真实 PG 17.9，哨兵开） | 3382 pass / 1 fail（见下） | **0** | 639s |
+
+开销在噪声范围内（497s vs 498s），所以 CI 默认开启：`release-build-check.yml` 的 backend 步骤显式声明 `MULTIREMI_TEST_LOCK_ORDER_SENTINEL: "1"`。
+
+唯一失败是既有 flaky，与本轮无关：`MUL-301 PostgreSQL executable audit runbook` 在 15s 上限附近超时。单文件跑：本分支 15.4s 失败、哨兵关闭 16.0s 失败、**纯 main `bda58bd9` 16.2s 同样失败**，属该测试自身贴近超时上限。
+
+哨兵变异（全量运行中验证）：
+
+- 把 `archiveAgent` 改回旧顺序（去掉 N）→ **4 fail**，报 `MUL-405 lock order violated: first N acquisition comes after a higher class`，报出该问题的测试是：
+  - `Feishu bot Agent route API > replaces routes idempotently, validates Agents, and leaves revision unchanged`
+  - `Feishu bot Agent route repository > falls through archived route Agents without stopping the bot`
+  - `workspace Feishu bot config API > stops the bot when its Agent is archived`
+  - `MUL-405 per-path lock order > archiveAgent`
+- 还原后 0 违例。
+
+逐路径变异（QA 指定）：
+
+- 删掉 `recordAuditWithinTransaction` 的 W（第三轮 QA 的变异，旧测试没抓住）→ **1 fail / 15 pass**，报 `recordFeishuBotAudit is missing required lock(s) W; recorded: N, D`；
+- 删掉 Runtime 级联的 N → **1 fail / 15 pass**，报 `Runtime cascade delete` 用例失败。
+
+### 六、回归与手册
+
+- 定向：`mul405-lock-order-paths` 16 pass、`mul405-lock-order` 3 pass、`mul405-nested-rollback` 18 pass，合计 37 pass / 0 fail（真实 PG）。
+- `bun test tests/arch/` 92 pass / 0 fail；`bunx tsc --noEmit` 0 error；`npm run docs:check` 通过；`bun run scripts/snapshot-api-routes.ts --check` 通过。
+- 多进程手册：`--part all --rounds 20 --per-process 200` → 并发迁移 0/20 失败、双进程建单 400/400、编号唯一且失败 0、加锁区间重叠 0（不加锁对照 2）。
+
+### 七、第三轮 head
+
+- 合入 main（`bda58bd9`）：`01ceef3b`
+- 两条反序 + lockLifecycle + 哨兵 + 逐路径断言：`75d32b73`
+- `afterCommit` 语义注释 + CI 默认开启哨兵：`7f76c07a`
