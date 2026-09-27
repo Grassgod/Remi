@@ -51,7 +51,31 @@ export interface PlacementRecovery {
   anchorRoutingAllowed?: boolean;
   agentNeedsRebind?: boolean;
   conflictingDataConstraints?: string[];
-  routingTargetRuntimeId?: string | null;
+  anchorRoutingState?: DeviceRoutingState | null;
+}
+
+export interface DeviceRoutingState {
+  projectId: string | null;
+  projectHasDevices: boolean;
+  machineBound: boolean;
+  dedicated: boolean;
+}
+
+/** Only offer an action that, by itself, satisfies the claim's two routing clauses. */
+export function deviceRoutingRepair(state: DeviceRoutingState, machineName: string): {
+  cause: string; actions: string[];
+} | null {
+  const bindingAllowed = !state.projectId || !state.projectHasDevices || state.machineBound;
+  const dedicatedAllowed = !state.dedicated || (Boolean(state.projectId) && state.machineBound);
+  if (bindingAllowed && dedicatedAllowed) return null;
+  const actions: string[] = [];
+  if (state.projectId) actions.push(`把 ${machineName} 加回项目的设备绑定`);
+  if (state.dedicated && bindingAllowed) actions.push(`取消 ${machineName} 的独享设置`);
+  if (!actions.length) throw new Error(`No effective device-routing remedy for ${machineName}`);
+  const cause = !bindingAllowed
+    ? `该机器不在项目的设备绑定里${state.dedicated ? "，且是独享设备" : ""}`
+    : `该机器是独享设备，${state.projectId ? "而项目没有设备绑定" : "而任务没有项目"}`;
+  return { cause, actions };
 }
 
 function chatResendSteps(chatId: string, taskId: string): string {
@@ -83,7 +107,12 @@ function anchoredRemedy(input: PlacementRecovery & {
   }
   if (!input.anchorName) return null;
   const actions: string[] = [];
-  if (!input.anchorRoutingAllowed) actions.push(`把 ${input.anchorName} 加回项目的设备绑定，或取消它的独享设置`);
+  if (!input.anchorRoutingAllowed) {
+    if (!input.anchorRoutingState) return "让这些约束指向同一台机器";
+    const repair = deviceRoutingRepair(input.anchorRoutingState, input.anchorName);
+    if (!repair) throw new Error("Anchor routing verdict disagrees with its routing state");
+    actions.push(`${repair.cause}；${repair.actions.join("，或")}`);
+  }
   if (input.agentNeedsRebind) {
     if (!input.agentId || !input.anchorRuntimeId) return "让这些约束指向同一台机器";
     actions.push(rebindRemedy({
@@ -110,17 +139,14 @@ export function deviceRoutingWaitReason(input: {
   chatSessionId?: string | null;
   agentId?: string | null;
   taskId?: string | null;
+  routingState: DeviceRoutingState;
 } & PlacementRecovery): string {
-  const remedy = anchoredRemedy(input) ?? (input.affinity === "Agent 绑定"
-    && input.agentId && input.routingTargetRuntimeId
-      ? rebindRemedy({ agentId: input.agentId, runtimeId: input.routingTargetRuntimeId,
-        targetName: "项目允许的机器", frozenTask: input.frozenTask,
-        chatSessionId: input.chatSessionId, taskId: input.taskId })
-      : input.affinity === "Agent 绑定"
-        ? "让这些约束指向同一台机器"
-        : "把该机器加回项目的设备绑定，或取消它的独享设置");
+  const repair = deviceRoutingRepair(input.routingState, input.runtimeName);
+  if (!repair) throw new Error("Device wait reason requires rejected routing");
+  const anchor = anchoredRemedy(input);
+  const remedy = anchor ?? repair.actions.join("，或");
   return `${DEVICE_ROUTING_WAIT_PREFIX}任务钉在 ${input.runtimeName}（${input.affinity}），`
-    + `该机器不在项目的设备绑定里或为独享设备；${remedy}`;
+    + `${anchor ? "" : `${repair.cause}；`}${remedy}`;
 }
 
 /**

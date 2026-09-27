@@ -37,6 +37,7 @@ import {
 } from "@multiremi/store/context.js";
 import {
   type DeviceRoutingAffinity,
+  type DeviceRoutingState,
   DEVICE_ROUTING_WAIT_PREFIX,
   deviceRoutingWaitReason,
   PLACEMENT_WAIT_PREFIX,
@@ -281,6 +282,24 @@ const projectDeviceRoutingEligibilitySql = (projectExpression: string) => `(
 )`;
 
 const PROJECT_DEVICE_ROUTING_ELIGIBILITY_SQL = projectDeviceRoutingEligibilitySql(TASK_ROUTING_PROJECT_SQL);
+
+const DEVICE_ROUTING_STATE_SQL = `${TASK_ROUTING_PROJECT_SQL} AS routing_project_id,
+       EXISTS (SELECT 1 FROM multiremi_project_devices device
+               WHERE device.project_id = ${TASK_ROUTING_PROJECT_SQL}) AS project_has_devices,
+       EXISTS (SELECT 1 FROM multiremi_project_devices device
+               WHERE device.project_id = ${TASK_ROUTING_PROJECT_SQL}
+                 AND device.daemon_id = ?) AS machine_bound`;
+
+function deviceRoutingStateFromRow(row: {
+  routing_project_id?: unknown; project_has_devices?: unknown; machine_bound?: unknown;
+}, dedicated: boolean): DeviceRoutingState {
+  return {
+    projectId: nullableString(row.routing_project_id),
+    projectHasDevices: Number(row.project_has_devices ?? 0) === 1,
+    machineBound: Number(row.machine_bound ?? 0) === 1,
+    dedicated,
+  };
+}
 
 /**
  * The row shape every device-routing probe reads. `TASK_ROUTING_PROJECT_SQL`
@@ -614,6 +633,17 @@ interface PlacementSweepCache {
   runtimes: MultiremiRuntime[];
 }
 
+interface PlacementRoutingVerdict {
+  placementOk: boolean;
+  routingOk: boolean;
+  routingState: DeviceRoutingState;
+}
+
+interface RuntimePlacementVerdict extends PlacementRoutingVerdict {
+  runtimeId: string;
+  daemonId: string;
+}
+
 function taskDirectoryDaemon(ctx: StoreContext, row: Row, cache?: PlacementSweepCache): string | null {
   if (!cache) return ctx.localDirectoryDaemonForTask(row);
   const key = JSON.stringify([
@@ -907,9 +937,7 @@ export class TasksRepo {
       agents: new Map(), directories: new Map(), issueWorkspaces: new Map(),
       daemonNames: new Map(), runtimes,
     };
-    const probeVerdicts = new Map<string, Array<{
-      runtimeId: string; daemonId: string; placementOk: boolean; routingOk: boolean;
-    }>>();
+    const probeVerdicts = new Map<string, RuntimePlacementVerdict[]>();
     const observable = rows.filter((row) => !row.wait_reason || isQueuedObserverWaitReason(row.wait_reason));
     for (const runtime of runtimes) {
       const taskIds = observable.filter((row) => (row.workspace_id ?? "local") === (runtime.workspaceId ?? "local"))
@@ -1035,8 +1063,10 @@ export class TasksRepo {
       // Project device routing: name THOSE machines, never the stale pin.
       if (placementCandidates.length > 0) {
         const names = [...new Set(placementCandidates.map((verdict) => this.daemonDisplayName(verdict.daemonId, placementCache)))];
+        const routingState = placementCandidates[0]!.routingState;
         const reason = deviceRoutingWaitReason({
           runtimeName: names.join(" / "),
+          routingState,
           affinity: probe.explanation,
           frozenTask: probe.frozenRetry,
           chatSessionId: row.chat_session_id,
@@ -1053,18 +1083,21 @@ export class TasksRepo {
       // otherwise the constraints themselves disagree.
       const pendingDaemon = probe.singlePendingDaemon;
       if (pendingDaemon) {
-        if (this.deviceRoutingAllowsDaemon(pendingDaemon, row)) {
+        const daemonRouting = this.deviceRoutingForDaemon(pendingDaemon, row);
+        if (daemonRouting.routingOk) {
           if (this.writeObservedWaitReason(row, null, now)) result.updated++;
           continue;
         }
         const reason = deviceRoutingWaitReason({
           runtimeName: this.daemonDisplayName(pendingDaemon, placementCache),
+          routingState: daemonRouting.routingState,
           affinity: probe.explanation,
           frozenTask: probe.frozenRetry,
           chatSessionId: row.chat_session_id,
           agentId: row.agent_id,
           taskId: row.id,
           ...probe.recovery,
+          anchorRoutingState: probe.recovery.anchorRoutingState ?? daemonRouting.routingState,
         });
         if (reason === row.wait_reason) continue;
         if (this.writeObservedWaitReason(row, reason, now)) result.updated++;
@@ -2826,7 +2859,7 @@ export class TasksRepo {
    * (`daemonRuntimeId` names a machine that has not registered yet), so the
    * observer must still be able to tell that the binding refuses it.
    */
-  private deviceRoutingAllowsDaemon(daemonId: string, row: Row): boolean {
+  private deviceRoutingForDaemon(daemonId: string, row: Row): PlacementRoutingVerdict {
     const workspaceId = nullableString(row.workspace_id) ?? "local";
     const profile = this.ctx.db.query(
       `SELECT dedicated FROM multiremi_daemon_profiles
@@ -2834,11 +2867,17 @@ export class TasksRepo {
     ).get(workspaceId, daemonId) as { dedicated?: unknown } | null;
     const dedicated = Number(profile?.dedicated ?? 0) === 1;
     const rowQuery = this.ctx.db.query(
-      `SELECT CASE WHEN ${PROJECT_DEVICE_ROUTING_ELIGIBILITY_SQL} THEN 1 ELSE 0 END AS eligible
+      `SELECT CASE WHEN ${PROJECT_DEVICE_ROUTING_ELIGIBILITY_SQL} THEN 1 ELSE 0 END AS eligible,
+              ${DEVICE_ROUTING_STATE_SQL}
        ${TASK_CLAIM_FROM_SQL}
        WHERE t.id = ?`,
-    ).get(daemonId, dedicated ? 1 : 0, daemonId, String(row.id)) as { eligible?: unknown } | null;
-    return Number(rowQuery?.eligible ?? 0) === 1;
+    ).get(daemonId, dedicated ? 1 : 0, daemonId, daemonId, String(row.id)) as
+      ({ eligible?: unknown; routing_project_id?: unknown; project_has_devices?: unknown; machine_bound?: unknown }) | null;
+    return {
+      placementOk: false,
+      routingOk: Number(rowQuery?.eligible ?? 0) === 1,
+      routingState: deviceRoutingStateFromRow(rowQuery ?? {}, dedicated),
+    };
   }
 
   /** Human-readable machine name for a daemon, registered or not. */
@@ -2872,8 +2911,8 @@ export class TasksRepo {
   private runtimePlacementForTasks(
     runtime: MultiremiRuntime,
     taskIds: readonly string[],
-  ): Map<string, { placementOk: boolean; routingOk: boolean }> {
-    const verdicts = new Map<string, { placementOk: boolean; routingOk: boolean }>();
+  ): Map<string, PlacementRoutingVerdict> {
+    const verdicts = new Map<string, PlacementRoutingVerdict>();
     if (!taskIds.length) return verdicts;
     const before = placementBeforeRoutingSql(runtime);
     const routing = deviceRoutingSql(this.ctx, runtime);
@@ -2886,14 +2925,17 @@ ${after.sql}
        ) THEN 1 ELSE 0 END AS placement_ok,
        CASE WHEN (1 = 1
 ${routing.sql}
-       ) THEN 1 ELSE 0 END AS routing_ok
+       ) THEN 1 ELSE 0 END AS routing_ok,
+       ${DEVICE_ROUTING_STATE_SQL}
        ${TASK_CLAIM_FROM_SQL}
        WHERE t.id IN (${placeholders})`,
-    ).all(...before.params, ...after.params, ...routing.params, ...taskIds) as
-      Array<{ id: string; placement_ok?: unknown; routing_ok?: unknown }>;
+    ).all(...before.params, ...after.params, ...routing.params, runtime.daemonId?.trim() ?? "", ...taskIds) as
+      Array<{ id: string; placement_ok?: unknown; routing_ok?: unknown;
+        routing_project_id?: unknown; project_has_devices?: unknown; machine_bound?: unknown }>;
     for (const row of rows) verdicts.set(row.id, {
       placementOk: Number(row.placement_ok ?? 0) === 1,
       routingOk: Number(row.routing_ok ?? 0) === 1,
+      routingState: deviceRoutingStateFromRow(row, Number(routing.params[1] ?? 0) === 1),
     });
     return verdicts;
   }
@@ -2901,9 +2943,9 @@ ${routing.sql}
   private runtimePlacementForTask(
     runtime: MultiremiRuntime,
     taskId: string,
-  ): { placementOk: boolean; routingOk: boolean } {
+  ): PlacementRoutingVerdict | null {
     return this.runtimePlacementForTasks(runtime, [taskId]).get(taskId)
-      ?? { placementOk: false, routingOk: false };
+      ?? null;
   }
 
   /**
@@ -2917,9 +2959,9 @@ ${routing.sql}
     runtime_workspace_id: string | null; holds_workspace: unknown;
     workspace_id: string | null; work_dir: string | null;
     attempt: unknown; execution_fingerprint: string | null;
-  }, verdicts: Array<{ runtimeId: string; daemonId: string; placementOk: boolean; routingOk: boolean }>,
+  }, verdicts: RuntimePlacementVerdict[],
   aliasIndex: MachineAliasIndex, cache?: PlacementSweepCache): {
-    verdicts: Array<{ runtimeId: string; daemonId: string; placementOk: boolean; routingOk: boolean }>;
+    verdicts: RuntimePlacementVerdict[];
     explanation: DeviceRoutingAffinity | "会话";
     /** False when only provider lineage pins this Task (re-poolable). */
     hardAffinity: boolean;
@@ -2936,7 +2978,7 @@ ${routing.sql}
       anchorName: string | null; anchorRuntimeId: string | null;
       anchorRoutingAllowed: boolean; agentNeedsRebind: boolean;
       conflictingDataConstraints: string[];
-      routingTargetRuntimeId: string | null;
+      anchorRoutingState: DeviceRoutingState | null;
     };
   } {
     let agent = cache?.agents.get(row.agent_id);
@@ -2971,8 +3013,6 @@ ${routing.sql}
     const boundAliases = boundRuntime ? runtimeDaemonAliases(boundRuntime) : agent?.runtimeId ? [agent.runtimeId] : [];
     const agentNeedsRebind = Boolean(anchorAlias && agent?.runtimeId
       && !boundAliases.some((alias) => dataCommon.includes(alias)));
-    const routingTarget = !anchorAlias ? cache?.runtimes.find((runtime) => runtime.provider === agent?.provider
-      && verdicts.some((verdict) => verdict.runtimeId === runtime.id && verdict.routingOk)) : null;
     const common = commonConstraintMachineAliases(described);
     // The daemon fallback applies only when every constraint points to the
     // same unregistered machine, including registered Agent and task pins.
@@ -3007,7 +3047,7 @@ ${routing.sql}
         anchorRoutingAllowed: anchorVerdicts.some((verdict) => verdict.routingOk),
         agentNeedsRebind,
         conflictingDataConstraints: dataConflict ? dataConstraints.map((constraint) => constraint.label) : [],
-        routingTargetRuntimeId: routingTarget?.id ?? null,
+        anchorRoutingState: anchorVerdicts[0]?.routingState ?? null,
       },
     };
   }
@@ -3056,12 +3096,16 @@ ${routing.sql}
     const workspaceId = task.workspaceId ?? "local";
     return this.ctx.runtimes().listRuntimes()
       .filter((runtime) => (runtime.workspaceId ?? "local") === workspaceId)
-      .map((runtime) => ({
-        runtimeId: runtime.id,
-        provider: runtime.provider,
-        daemonId: runtime.daemonId ?? null,
-        ...this.runtimePlacementForTask(runtime, taskId),
-      }));
+      .map((runtime) => {
+        const verdict = this.runtimePlacementForTask(runtime, taskId);
+        return {
+          runtimeId: runtime.id,
+          provider: runtime.provider,
+          daemonId: runtime.daemonId ?? null,
+          placementOk: verdict?.placementOk ?? false,
+          routingOk: verdict?.routingOk ?? false,
+        };
+      });
   }
 
   private runtimePassesProjectDeviceRouting(runtime: MultiremiRuntime, taskId: string): boolean {
