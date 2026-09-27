@@ -312,6 +312,50 @@ describe("useStickToBottom", () => {
     expect(result.current.state).toBe("pinned");
   });
 
+  it("releases immediately when the user takes over a returning glide", () => {
+    const { result } = renderStick(baseProps());
+    fire(() => {
+      fixture.userScroll(200);
+    });
+
+    vi.useFakeTimers();
+    Object.defineProperty(fixture.root, "scrollTo", { configurable: true, value: vi.fn() });
+    act(() => {
+      result.current.returnToBottom();
+    });
+    expect(result.current.state).toBe("returning");
+
+    // A wheel up mid-glide is the user, not the animation: no settle wait.
+    fire(() => {
+      wheelUp();
+    });
+    expect(result.current.state).toBe("released");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not re-aim while returning, as content keeps arriving", () => {
+    const { result } = renderStick(baseProps());
+    fire(() => {
+      fixture.userScroll(200);
+    });
+
+    vi.useFakeTimers();
+    Object.defineProperty(fixture.root, "scrollTo", { configurable: true, value: vi.fn() });
+    act(() => {
+      result.current.returnToBottom();
+    });
+    expect(result.current.state).toBe("returning");
+
+    // Growth during the glide must not turn into a second compensation: the
+    // transaction only ends on its own quiet period.
+    fixture.setScrollHeight(1300);
+    fire(() => {
+      resize.trigger();
+    });
+    expect(fixture.root.scrollTop).toBe(200);
+    expect(result.current.state).toBe("returning");
+  });
+
   it("returns to released when the glide never reaches the bottom", () => {
     const { result } = renderStick(baseProps());
     fire(() => {

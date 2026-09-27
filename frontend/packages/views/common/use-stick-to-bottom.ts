@@ -78,7 +78,12 @@ export function useStickToBottom(options: UseStickToBottomOptions): UseStickToBo
 
   /** Distance to the bottom (bottom mode) or target offset (element mode) to preserve. */
   const anchorValueRef = useRef(0);
-  /** Scroll position this hook wrote last, matched against the next scroll event. */
+  /**
+   * Scroll position this hook wrote last. A scroll event at exactly that
+   * position is the echo of the hook's own write, not the user; the marker is
+   * matched by position rather than consumed, so a coalesced or missing event
+   * cannot leave it primed to swallow the next real scroll.
+   */
   const programmaticTopRef = useRef<number | null>(null);
   /** Set while a `returnToBottom()` scroll is still in flight. */
   const returningRef = useRef(false);
@@ -258,9 +263,9 @@ export function useStickToBottom(options: UseStickToBottomOptions): UseStickToBo
       }
 
       // This hook's own compensation must not read as a user scroll.
-      const expected = programmaticTopRef.current;
+      const written = programmaticTopRef.current;
+      if (written !== null && Math.abs(scrollEl.scrollTop - written) <= PROGRAMMATIC_SLACK_PX) return;
       programmaticTopRef.current = null;
-      if (expected !== null && Math.abs(scrollEl.scrollTop - expected) <= PROGRAMMATIC_SLACK_PX) return;
 
       if (modeKind === "bottom") {
         if (bottomDistance() <= pinThresholdPx) pin();
