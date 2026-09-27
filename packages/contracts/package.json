@@ -8,6 +8,8 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./trace": "./src/trace.ts",
+    "./daemon-protocol": "./src/daemon-protocol.ts",
     "./inbox": "./src/inbox.ts",
     "./attachments": "./src/attachments.ts",
     "./runtime-health": "./src/runtime-health.ts",
