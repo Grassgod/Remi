@@ -1203,8 +1203,15 @@ export class FeishuBotRepo {
    */
   prepareHumanRequestPush(request: MultiremiTaskHumanRequest): MultiremiTask | null {
     const sourceTask = this.ctx.tasks().getTask(request.taskId);
-    if (!sourceTask?.issueId) return null;
-    const issue = this.ctx.issues().getIssue(sourceTask.issueId);
+    if (!sourceTask) return null;
+    // The asking Task and the Issue it names must agree before anything is
+    // written: a Task whose `issue_id` aims at another workspace would
+    // otherwise queue this workspace's delivery, and later its activity, onto
+    // that workspace's Issue (MUL-407). The delivery's workspace is the Issue's,
+    // so resolving through the Task's own workspace is the whole check.
+    const issueId = this.issueIdInWorkspace(sourceTask.workspaceId, sourceTask.issueId);
+    if (!issueId) return null;
+    const issue = this.ctx.issues().getIssue(issueId);
     if (!issue) return null;
     const workspace = this.ctx.workspaces().getWorkspace(issue.workspaceId);
     if (!workspace) return null;
@@ -1559,6 +1566,17 @@ export class FeishuBotRepo {
       const leadMs = decisionReminderLeadMs(String(row.expires_at), String(row.created_at));
       const dueAt = Date.parse(String(row.expires_at)) - leadMs;
       if (now.getTime() < dueAt) continue;
+      // Resolve and validate the whole target before touching `reminder_sent_at`.
+      // The CAS is the one-shot slot, so it must not be spent on a row this
+      // workspace will not remind for. The due query already scopes the Task to
+      // this workspace; the Issue is re-checked so an inconsistent `issue_id`
+      // cannot aim the reminder (and its activity) at another workspace.
+      const request = this.ctx.tasks().getTaskHumanRequest(String(row.id));
+      const task = this.ctx.tasks().getTask(String(row.task_id));
+      if (!request || !task || task.workspaceId !== workspaceId) continue;
+      const issueId = this.issueIdInWorkspace(workspaceId, task.issueId);
+      if (!issueId) continue;
+      const issue = this.ctx.issues().getIssue(issueId)!;
       // A card that has not gone out yet must not consume the one reminder: the
       // push is usually still inside its first attempt when a short request
       // enters the window. The claim for the send materializes it instead.
@@ -1569,21 +1587,6 @@ export class FeishuBotRepo {
          LIMIT 1`,
       ).get(String(row.id)) as Row | null;
       if (!sent) continue;
-      const claimed = this.ctx.db.run(
-        `UPDATE multiremi_task_human_requests SET reminder_sent_at = ?
-         WHERE id = ? AND status = 'pending' AND reminder_sent_at IS NULL
-           AND expires_at IS NOT NULL AND expires_at >= ?`,
-        [now.toISOString(), String(row.id),
-          new Date(now.getTime() + ISSUE_DECISION_REMINDER_MIN_REMAINING_MS).toISOString()],
-      );
-      if (claimed.changes !== 1) continue;
-      const request = this.ctx.tasks().getTaskHumanRequest(String(row.id));
-      const task = this.ctx.tasks().getTask(String(row.task_id));
-      const issue = task?.issueId ? this.ctx.issues().getIssue(task.issueId) : null;
-      // The due query already scopes the Task to this workspace; re-check the
-      // Issue so an inconsistent `issue_id` cannot aim the reminder (and its
-      // activity) at another workspace's Issue.
-      if (!request || !issue || issue.workspaceId !== workspaceId) continue;
       const card = this.ctx.db.query(
         `SELECT o.binding_id, o.chat_id, o.thread_id, o.reply_to_message_id, o.interaction_open_id
          FROM multiremi_feishu_bot_outbound_deliveries o
@@ -1592,6 +1595,17 @@ export class FeishuBotRepo {
          ORDER BY o.created_at DESC, o.id DESC LIMIT 1`,
       ).get(request.id) as Row | null;
       if (!card) continue;
+      // Every check that can reject the reminder has passed, so now spend the
+      // one-shot slot. Running the CAS before them would burn it on a row that
+      // is skipped: a cross-workspace Task would lose its reminder forever.
+      const claimed = this.ctx.db.run(
+        `UPDATE multiremi_task_human_requests SET reminder_sent_at = ?
+         WHERE id = ? AND status = 'pending' AND reminder_sent_at IS NULL
+           AND expires_at IS NOT NULL AND expires_at >= ?`,
+        [now.toISOString(), String(row.id),
+          new Date(now.getTime() + ISSUE_DECISION_REMINDER_MIN_REMAINING_MS).toISOString()],
+      );
+      if (claimed.changes !== 1) continue;
       // @ the person who was asked. The checkpoint on the card is what the
       // host actually used, so a `group_owner` lookup that succeeded once is
       // reused instead of being re-resolved (and possibly failing) here.
@@ -1677,20 +1691,38 @@ export class FeishuBotRepo {
    * on the same timeline the queue entry was. Returns null when the row is not
    * an Issue lane (a Chat reply has no Issue to write to).
    */
+  /**
+   * Resolve an Issue id to one this workspace may write to (MUL-407).
+   *
+   * Binding rows, Tasks and requests all carry a plain `issue_id` pointer that
+   * can be stale, hand-edited or left behind by a move. Every reverse lookup in
+   * this file funnels through here so the workspace check is applied once: one
+   * workspace must never record an outcome on another workspace's Issue.
+   */
+  private issueIdInWorkspace(workspaceId: string, issueId: unknown): string | null {
+    const id = cleanOptionalString(issueId);
+    if (!id) return null;
+    const issue = this.ctx.issues().getIssue(id);
+    return issue && issue.workspaceId === workspaceId ? issue.id : null;
+  }
+
   private issueIdForDeliveryRow(workspaceId: string, row: Row): string | null {
     const direct = this.ctx.db.query(
       `SELECT issue_id FROM multiremi_feishu_bot_chat_bindings WHERE id = ? AND workspace_id = ?`,
     ).get(String(row.binding_id), workspaceId) as Row | null;
-    if (direct?.issue_id) return String(direct.issue_id);
+    // The binding row belongs to this workspace, but its `issue_id` is what
+    // actually selects the timeline the activity is written to, so the Issue
+    // itself has to be checked too.
+    const directIssueId = this.issueIdInWorkspace(workspaceId, direct?.issue_id);
+    if (directIssueId) return directIssueId;
     // Falling back to the asking Task is only safe when both the Task and its
     // Issue belong to this delivery's workspace. A stale or hand-written task id
     // would otherwise let one workspace write its activity onto another
     // workspace's Issue (MUL-407).
     const taskId = cleanOptionalString(row.human_request_task_id);
     const task = taskId ? this.ctx.tasks().getTask(taskId) : null;
-    if (!task || task.workspaceId !== workspaceId || !task.issueId) return null;
-    const issue = this.ctx.issues().getIssue(task.issueId);
-    return issue && issue.workspaceId === workspaceId ? issue.id : null;
+    if (!task || task.workspaceId !== workspaceId) return null;
+    return this.issueIdInWorkspace(workspaceId, task.issueId);
   }
 
   /**
@@ -2529,7 +2561,13 @@ export class FeishuBotRepo {
       // Hold the new host at `stopped` until the previous one lets go.
       return { revision, desired_state: "stopped", config_available: false };
     }
-    const topics = readWorkspaceIssueTopics(this.ctx.workspaces().getWorkspace(workspaceId)?.settings ?? {});
+    // The directive only needs `enabled` and `chatId`, and it runs on every
+    // heartbeat, before the outbound claim. A stored config the save-time
+    // validation would reject — most often a `person` target written before
+    // that validation existed — must not 500 the heartbeat: that is the same
+    // request the delivery path below has already degraded to text (MUL-407).
+    const topics = readWorkspaceIssueTopicsForDelivery(
+      this.ctx.workspaces().getWorkspace(workspaceId)?.settings ?? {});
     return { revision, desired_state: "running", config_available: true,
       no_mention_chat_ids: topics.enabled && topics.chatId ? [topics.chatId] : [],
     };

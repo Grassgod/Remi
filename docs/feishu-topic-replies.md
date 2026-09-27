@@ -155,10 +155,14 @@ Whichever side decides it, the degradation lands on the Issue as one
 `decision_card_degraded` activity with the same fields (`request_id`,
 `source_task_id`, `delivery_id`, `kind`, `reason`), written once per delivery. The
 control plane writes it when it already knows there is nobody to ask; the host
-writes it when its own lookup or the send fails. That lookup resolves the Issue
-from the delivery's own binding, or from the asking Task only when the Task *and*
-its Issue belong to the delivery's workspace, so one workspace cannot record an
-outcome on another's Issue.
+writes it when its own lookup or the send fails. Every reverse lookup of an Issue
+from a binding, Task or request goes through one workspace check, so the pointer
+being stale or wrong cannot aim the activity at another workspace: the delivery's
+own binding counts only when the Issue it names is in the delivery's workspace,
+the fallback to the asking Task requires the Task and its Issue to agree, the
+push itself refuses a Task whose `issue_id` belongs elsewhere, and the reminder
+resolves its Issue the same way before it spends `reminder_sent_at` — a CAS that
+ran first would burn the one reminder on a row it then skipped.
 
 Degradations all end in the same place — plain text carrying the question, its
 numbered options and the parent Issue's workbench link, with no internal ids and
@@ -175,15 +179,35 @@ only.
 
 A stored topic config that the current validation would reject — most often a
 `person` mode whose `notify_open_id` is missing or malformed, which a database
-written before that validation existed can still hold — is read leniently on the
-delivery paths rather than throwing. Save-time validation is unchanged, and such a
-config degrades to the text delivery above instead of producing a request that
-reaches nobody.
+written before that validation existed can still hold — is read leniently rather
+than throwing. Save-time validation is unchanged, and such a config degrades to
+the text delivery above instead of producing a request that reaches nobody.
+
+That leniency has to cover the runtime directive, not only the delivery writes.
+The directive is read on every heartbeat, before the outbound claim, so a strict
+read there answered 500 and the text delivery the same request had already queued
+never reached the host. The directive uses only `enabled` and `chatId`, so it
+reads the config the same forgiving way: a rejected `person` target, a missing
+field, a wrong type or a settings blob that is not JSON all leave the host running
+with an empty `no_mention_chat_ids` rather than failing the heartbeat. Two other
+readers stay strict on purpose and are outside this change: the inbound-message
+path (`submitMessage`) and the mention resolution inside the outbound claim. Both
+are `origin/main` behavior, and a config that reaches them has already been
+rejected at save time; the queue is where the outage actually showed up.
 
 An expired request is never an approval: the terminal card reads
 「已超时，未回答」and the task takes the existing cancel path. The decision lanes
 carry no receipt or reaction target (`task_id` is NULL), so their failure modes do
-not exist here.
+not exist here. The tests hold that down at the transport rather than the handler
+surface: the lane is driven through a real `FeishuConnector` with the Lark SDK's
+own HTTP layer pointed at a recorder, and the assertion is over the requests that
+crossed the wire. Recording only the mocked card/text/patch methods missed a
+request inserted straight into the transport.
+
+A retryable send failure stays on the outbox: the row returns to `pending`, its
+`attempt_count` is not reset, `last_error` records the Feishu code, and
+`available_at` moves out by the exponential backoff, so the next claim after that
+moment picks up the same delivery instead of a second card.
 
 An additive nullable `mention_snapshot` column on outbound deliveries stores
 recipient policy/resolution. Existing settings default to `group_owner`, with no

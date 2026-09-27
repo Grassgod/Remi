@@ -19,11 +19,13 @@ import {
 } from "@multiremi/store/repos/feishu-bot-repo.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
 import { decodeDecisionCardBody } from "@shared/feishu-task-card.js";
+import { FeishuDeliveryError } from "@shared/feishu-delivery-error.js";
 import { MultiremiDaemonClient } from "@multiremi/worker/client.js";
 import type { MultiremiDaemon } from "@multiremi/worker/daemon.js";
 import { sendDecisionLane as sendDecisionLaneForTest } from "../../../apps/remi/cli/multiremi.js";
 import type { FeishuChannelHandle } from "../../../apps/remi/cli/agent.js";
 import { handleTaskInteractionEvent, interactionMarker } from "@connectors/feishu/task-interaction.js";
+import { FeishuConnector } from "@connectors/feishu/index.js";
 
 const APP_SECRET = "wJ4tQ7xR2nB8vC5mZ1kL0pS6dF3gH9jA";
 let previousEncryptionKey: string | undefined;
@@ -834,17 +836,14 @@ describe("Feishu decision cards for Issue human requests", () => {
     expect(store.getTaskHumanRequest(request.id)!.status).toBe("pending");
   });
 
-  it("degrades to text when a stored person config is invalid, without throwing", () => {
-    // Bypass the save-time validation to reproduce a database written before it
-    // existed. The push path must degrade, not throw: a request with no delivery
-    // leaves the person who was asked with no way to hear about it.
+  it("degrades a stored invalid person config without throwing", () => {
+    // The store-level half: this asserts the row the push path writes. The
+    // heartbeat suite below drives the same config through the real route,
+    // which is where it used to 500 before anyone could hear about the request.
     const { store, agentId } = scaffold();
     const issue = issueWithTopic(store, agentId);
     const taskId = sourceTask(store, agentId, issue.id);
-    const workspaceRow = db!.query("SELECT settings FROM multiremi_workspaces WHERE id = 'local'").get() as { settings: string };
-    const settings = JSON.parse(workspaceRow.settings) as Record<string, unknown>;
-    settings.issueTopics = { enabled: true, chatId: "oc_decision_card", notifyMode: "person", notifyOpenId: "not-an-open-id" };
-    db!.run("UPDATE multiremi_workspaces SET settings = ? WHERE id = 'local'", [JSON.stringify(settings)]);
+    writeInvalidPersonTopicConfig();
 
     let request: ReturnType<typeof askQuestion> | null = null;
     expect(() => { request = askQuestion(store, taskId); }).not.toThrow();
@@ -859,6 +858,18 @@ describe("Feishu decision cards for Issue human requests", () => {
     expect((degraded?.data as Record<string, unknown>).reason).toBe("invalid_recipient");
   });
 });
+
+/**
+ * Write a `person` topic config the save-time validation rejects straight into
+ * the database, exactly as a database written before that validation existed
+ * would look. QA's repro for the heartbeat 500 starts here.
+ */
+function writeInvalidPersonTopicConfig(): void {
+  const workspaceRow = db!.query("SELECT settings FROM multiremi_workspaces WHERE id = 'local'").get() as { settings: string };
+  const settings = JSON.parse(workspaceRow.settings) as Record<string, unknown>;
+  settings.issueTopics = { enabled: true, chatId: "oc_decision_card", notifyMode: "person", notifyOpenId: "not-an-open-id" };
+  db!.run("UPDATE multiremi_workspaces SET settings = ? WHERE id = 'local'", [JSON.stringify(settings)]);
+}
 
 /**
  * Heartbeat delivery of a decision lane, end to end (MUL-407).
@@ -948,6 +959,142 @@ describe("Feishu decision card heartbeat delivery", () => {
     void request;
   });
 
+  it("delivers the invalid-person text degradation through the real heartbeat", async () => {
+    // QA's repro, end to end: seed the topic, hand-write an illegal `person`
+    // config, ask, then heartbeat with the real client. Before the fix the
+    // directive read the same config strictly and answered 500, so the text
+    // delivery this request already had queued could never reach the host.
+    const { store, agentId, app } = scaffold();
+    const issue = issueWithTopic(store, agentId);
+    // QA's order: the topic is seeded first, the illegal config is written
+    // straight into the database, and only then does the task ask.
+    writeInvalidPersonTopicConfig();
+    const request = askQuestion(store, sourceTask(store, agentId, issue.id));
+
+    const delivered = (await withRealClient(app, store, async (client) =>
+      (await client.heartbeatRuntime("rt_bot", undefined, undefined, false, true)).pending_feishu_outbound))!;
+    expect(delivered.kind).toBe("decision_card");
+    expect(delivered.degraded).toBe("invalid_recipient");
+    expect(delivered.humanRequestId).toBe(request.id);
+    // A degraded row is plain text: it carries the question and no @.
+    expect(decodeDecisionCardBody(delivered.body)).toBeNull();
+    expect(delivered.body).toContain("Continue?");
+    expect(delivered.body).not.toContain("<at id=");
+
+    // The host treats it as text, not as a malformed card to retry.
+    const handle = decisionLaneHandle();
+    let cardsSent = 0;
+    handle.sendProactiveCard = async (input) => { cardsSent += 1; handle.sentCards.push(input.card); return { messageId: "om_card" }; };
+    const result = await sendDecisionLaneForTest(handle, delivered);
+    expect(result.messageId).toBe("om_text");
+    expect(cardsSent).toBe(0);
+    expect(handle.sentText).toHaveLength(1);
+    expect(handle.sentText[0]).toContain("Continue?");
+    expect(handle.sentText[0]).not.toContain("<at id=");
+    expect(handle.calls).toEqual(["text:send"]);
+
+    // The outcome is reported as sent, and the Issue records exactly one
+    // degradation.
+    expect(store.reportFeishuBotOutbound("local", "rt_bot", delivered.id, {
+      claimToken: delivered.claimToken, status: "sent", externalMessageId: "om_text",
+    })).toBe(true);
+    expect(store.listIssueActivity(issue.id).filter((a) => a.type === "decision_card_degraded")).toHaveLength(1);
+    expect(store.claimFeishuBotOutbound("local", "rt_bot")).toBeNull();
+  });
+
+  it("does not 500 the heartbeat for a damaged topic config", async () => {
+    // Every shape the lenient reader has to survive: a missing field, a wrong
+    // type, and a settings blob that is not JSON at all.
+    const cases: Array<[string, string]> = [
+      ["missing chatId", JSON.stringify({ issueTopics: { enabled: true, notifyMode: "person" } })],
+      ["wrong types", JSON.stringify({ issueTopics: { enabled: "yes", chatId: 17, notifyMode: 5, notifyOpenId: {} } })],
+      ["damaged json", '{"issueTopics": '],
+    ];
+    for (const [label, settings] of cases) {
+      const { store, agentId, app } = scaffold();
+      const issue = issueWithTopic(store, agentId);
+      db!.run("UPDATE multiremi_workspaces SET settings = ? WHERE id = 'local'", [settings]);
+      askQuestion(store, sourceTask(store, agentId, issue.id));
+      const result = await withRealClient(app, store, async (client) =>
+        client.heartbeatRuntime("rt_bot", undefined, undefined, false, true));
+      expect(`${label}: ${result.status}`).toBe(`${label}: ok`);
+      // The directive still tells the host to run; only the mention list is
+      // empty, because there is no usable chat to suppress mentions in.
+      expect(result.feishu_bot?.desired_state).toBe("running");
+      expect(result.feishu_bot?.no_mention_chat_ids ?? []).toEqual([]);
+    }
+  });
+
+  it("backs a retryable card failure off and claims the same row again when due", async () => {
+    // The seven-step acceptance story hands step 5 (a retryable send failure)
+    // to automation. A thrown error alone does not show that: this drives the
+    // real delivery loop into the store's outbox and then claims again, so the
+    // backoff, the attempt counter and the retry are all observed.
+    const { store, agentId, app } = scaffold();
+    const issue = issueWithTopic(store, agentId);
+    const request = askQuestion(store, sourceTask(store, agentId, issue.id));
+    const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
+    expect(card.kind).toBe("decision_card");
+    expect(db!.query("SELECT attempt_count FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?")
+      .get(card.id)).toEqual({ attempt_count: 1 });
+
+    const handle = decisionLaneHandle();
+    handle.resolveProactiveMention = async () => "ou_the_person";
+    handle.sendProactiveCard = async () => {
+      // A Feishu error the transport classifies as retryable: the same payload
+      // may succeed later, so it must stay on the outbox.
+      throw new FeishuDeliveryError("Feishu card send: Feishu code 99991400", true);
+    };
+    let textFallbacks = 0;
+    handle.sendProactiveThreadReply = async (input) => {
+      textFallbacks += 1;
+      handle.sentText.push(input.body);
+      return { messageId: "om_fallback" };
+    };
+
+    const daemon = decisionDaemon(store);
+    const failedAt = new Date();
+    await expect(sendDecisionLaneForTest(handle, card, undefined, daemon)).rejects.toThrow(/99991400/);
+
+    // The failure is reported exactly the way the daemon reports it: retryable,
+    // so the row goes back to `pending` with a later `available_at`.
+    expect(store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
+      claimToken: card.claimToken, status: "failed", error: "Feishu card send: Feishu code 99991400",
+      retryable: true,
+    }, failedAt)).toBe(true);
+
+    const backedOff = db!.query(
+      `SELECT status, attempt_count, available_at, last_error, claim_token
+       FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?`,
+    ).get(card.id) as { status: string; attempt_count: number; available_at: string; last_error: string; claim_token: string | null };
+    expect(backedOff.status).toBe("pending");
+    expect(backedOff.attempt_count).toBe(1);
+    expect(backedOff.claim_token).toBeNull();
+    expect(backedOff.last_error).toContain("99991400");
+    // First retry: the base delay, and strictly later than the failure.
+    expect(Date.parse(backedOff.available_at) - failedAt.getTime()).toBe(5_000);
+    // No text twin: a retryable failure keeps its card, it does not degrade.
+    expect(textFallbacks).toBe(0);
+    expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch'").get())
+      .toEqual({ n: 0 });
+
+    // Before the backoff elapses the row is invisible to the claim...
+    expect(store.claimFeishuBotOutbound("local", "rt_bot", failedAt)).toBeNull();
+    // ...and once it is due the same delivery comes back, with its counter
+    // advanced rather than a second card being queued.
+    const retried = store.claimFeishuBotOutbound("local", "rt_bot",
+      new Date(failedAt.getTime() + 5_000))!;
+    expect(retried.id).toBe(card.id);
+    expect(retried.kind).toBe("decision_card");
+    expect(db!.query("SELECT attempt_count FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?")
+      .get(card.id)).toEqual({ attempt_count: 2 });
+    expect(db!.query(
+      "SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card' AND human_request_id = ?",
+    ).get(request.id)).toEqual({ n: 1 });
+    expect(store.getTaskHumanRequest(request.id)!.status).toBe("pending");
+    void app; void issue;
+  });
+
   it("registers a heartbeat-delivered card immediately, without a restart", async () => {
     const { store, agentId, app } = scaffold();
     const issue = issueWithTopic(store, agentId);
@@ -1027,34 +1174,171 @@ describe("Feishu decision card heartbeat delivery", () => {
     void request;
   });
 
-  it("S3: the decision lane issues no receipt or reaction request", async () => {
-    // The store-level assertion (no receipt target on the row) is only a proxy.
-    // This records the calls the lane actually makes on the Feishu client
-    // surface and requires that none of them touch reactions.
+  it("does not record a degradation through a binding that points at another workspace", () => {
+    // QA's repro: keep the real binding, repoint its `issue_id` at another
+    // workspace's Issue, then report this workspace's delivery as degraded. The
+    // direct-binding branch used to trust the pointer and write there.
     const { store, agentId } = scaffold();
     const issue = issueWithTopic(store, agentId);
-    const request = askQuestion(store, sourceTask(store, agentId, issue.id));
-    const calls: string[] = [];
-    const handle = decisionLaneHandle(calls);
-
-    // Send the card, then answer it, then take the terminal patch.
+    askQuestion(store, sourceTask(store, agentId, issue.id));
     const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
-    await sendDecisionLaneForTest(handle, card, undefined, decisionDaemon(store));
+
+    const other = store.createWorkspace({ name: "Other", slug: "other" });
+    const otherAgent = store.createAgent({ name: "Other agent", provider: "codex", workspaceId: other.id });
+    const otherIssue = store.createIssue({
+      title: "Other workspace issue", workspaceId: other.id,
+      assigneeType: "agent", assigneeId: otherAgent.id,
+    });
+    const otherTask = store.createTask({
+      agentId: otherAgent.id, issueId: otherIssue.id, workspaceId: other.id, prompt: "Other",
+    });
+    db!.run("UPDATE multiremi_feishu_bot_chat_bindings SET issue_id = ? WHERE issue_id = ?",
+      [otherIssue.id, issue.id]);
+    db!.run("UPDATE multiremi_feishu_bot_outbound_deliveries SET human_request_task_id = ? WHERE id = ?",
+      [otherTask.id, card.id]);
+
+    expect(store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
+      claimToken: card.claimToken, status: "sent", externalMessageId: "om_text",
+      interactionOpenId: "ou_the_person", degraded: "send_failed",
+    })).toBe(true);
+    // The delivery records its own outcome...
+    expect(db!.query("SELECT degraded FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(card.id))
+      .toEqual({ degraded: "send_failed" });
+    // ...and neither Issue gets an activity for it: the binding's Issue is not
+    // in this workspace, and the fallback Task is not either.
+    const degradedType = (id: string) =>
+      store.listIssueActivity(id).filter((a) => a.type === "decision_card_degraded");
+    expect(degradedType(otherIssue.id)).toHaveLength(0);
+    expect(degradedType(issue.id)).toHaveLength(0);
+
+    // The same-workspace path still writes exactly one. The binding is put
+    // back first, since it is what points the push at the Issue at all.
+    db!.run("UPDATE multiremi_feishu_bot_chat_bindings SET issue_id = ? WHERE chat_id = ?",
+      [issue.id, "oc_decision_card"]);
+    const localRequest = askQuestion(store, sourceTask(store, agentId, issue.id));
+    const localCard = store.claimFeishuBotOutbound("local", "rt_bot")!;
+    expect(store.reportFeishuBotOutbound("local", "rt_bot", localCard.id, {
+      claimToken: localCard.claimToken, status: "sent", externalMessageId: "om_text_local",
+      interactionOpenId: "ou_the_person", degraded: "send_failed",
+    })).toBe(true);
+    const written = degradedType(issue.id);
+    expect(written).toHaveLength(1);
+    expect(written[0]!.body).toBe(localRequest.id);
+  });
+
+  it("does not push a human request whose Task points at another workspace's Issue", () => {
+    // `prepareHumanRequestPush` reads the Issue through the asking Task. If the
+    // two disagree about the workspace, the delivery (and the activity that
+    // follows it) would belong to the other workspace's Issue.
+    const { store, agentId } = scaffold();
+    const issue = issueWithTopic(store, agentId);
+    const taskId = sourceTask(store, agentId, issue.id);
+
+    const other = store.createWorkspace({ name: "Other", slug: "other" });
+    const otherAgent = store.createAgent({ name: "Other agent", provider: "codex", workspaceId: other.id });
+    const otherIssue = store.createIssue({
+      title: "Other workspace issue", workspaceId: other.id,
+      assigneeType: "agent", assigneeId: otherAgent.id,
+    });
+    // The Task stays in `local`; only its Issue pointer moves.
+    db!.run("UPDATE multiremi_tasks SET issue_id = ? WHERE id = ?", [otherIssue.id, taskId]);
+    const request = askQuestion(store, taskId);
+
+    expect(db!.query(
+      "SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE human_request_id = ?",
+    ).get(request.id)).toEqual({ n: 0 });
+    expect(db!.query(
+      "SELECT COUNT(*) AS n FROM multiremi_feishu_bot_human_request_pushes WHERE request_id = ?",
+    ).get(request.id)).toEqual({ n: 0 });
+    expect(store.listIssueActivity(otherIssue.id).filter((a) => a.type === "decision_card_degraded")).toHaveLength(0);
+    // Same-workspace requests are unaffected.
+    const okRequest = askQuestion(store, sourceTask(store, agentId, issue.id));
+    expect(store.claimFeishuBotOutbound("local", "rt_bot")!.humanRequestId).toBe(okRequest.id);
+  });
+
+  it("does not spend a reminder slot on a Task that points at another workspace's Issue", () => {
+    // The reminder path used to CAS `reminder_sent_at` before validating the
+    // workspace, so a cross-workspace row lost its one reminder for good.
+    const { store, agentId } = scaffold();
+    const issue = issueWithTopic(store, agentId);
+    const request = askQuestion(store, sourceTask(store, agentId, issue.id), 60 * 60 * 1000);
+    const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
     store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
       claimToken: card.claimToken, status: "sent", externalMessageId: "om_card",
       interactionOpenId: "ou_the_person",
     });
-    store.respondTaskHumanRequest(request.id, { response: { answers: { "Continue?": "Yes" } } });
-    const patch = store.claimFeishuBotOutbound("local", "rt_bot")!;
-    await sendDecisionLaneForTest(handle, patch, undefined, decisionDaemon(store));
+    const other = store.createWorkspace({ name: "Other", slug: "other" });
+    const otherAgent = store.createAgent({ name: "Other agent", provider: "codex", workspaceId: other.id });
+    const otherIssue = store.createIssue({
+      title: "Other workspace issue", workspaceId: other.id,
+      assigneeType: "agent", assigneeId: otherAgent.id,
+    });
+    db!.run("UPDATE multiremi_tasks SET issue_id = ? WHERE id = ?", [otherIssue.id, request.taskId]);
 
-    // The lane did its two jobs...
-    expect(calls).toContain("card:send");
-    expect(calls).toContain("card:patch");
-    // ...and never reached for a reaction or a receipt. Both go through
-    // `/open-apis/im/v1/messages/.../reactions` or `im.messageReaction`, so an
-    // attempt would show up here.
-    expect(calls.filter((call) => call.includes("/reactions") || call.startsWith("reaction:"))).toEqual([]);
+    const expiresAt = Date.parse(request.expiresAt!);
+    expect(store.claimFeishuBotOutbound("local", "rt_bot", new Date(expiresAt - 61_000))).toBeNull();
+    // Nothing was sent, nothing was written, and the one slot is still free.
+    expect(db!.query("SELECT reminder_sent_at FROM multiremi_task_human_requests WHERE id = ?").get(request.id))
+      .toEqual({ reminder_sent_at: null });
+    expect(store.listIssueActivity(otherIssue.id).filter((a) => a.type.startsWith("decision_card"))).toHaveLength(0);
+
+    // Point the Task back and the same request still gets its reminder.
+    db!.run("UPDATE multiremi_tasks SET issue_id = ? WHERE id = ?", [issue.id, request.taskId]);
+    const reminder = store.claimFeishuBotOutbound("local", "rt_bot", new Date(expiresAt - 61_000))!;
+    expect(reminder.kind).toBe("decision_reminder");
+    expect(reminder.humanRequestId).toBe(request.id);
+  });
+
+  it("S3: the decision lane issues no receipt or reaction request", async () => {
+    // A store-level assertion (no receipt target on the row) is only a proxy,
+    // and recording the mock handle's methods misses a request made straight
+    // through the transport. This drives the real `sendDecisionLane` → real
+    // `FeishuConnector` → SDK, with the SDK's own HTTP layer pointed at a local
+    // recorder, so every request the lane makes is observed.
+    const { store, agentId } = scaffold();
+    const issue = issueWithTopic(store, agentId);
+    const request = askQuestion(store, sourceTask(store, agentId, issue.id));
+    const recorder = await withRecordedFeishuTransport(async (connector) => {
+      const handle = decisionLaneHandle();
+      // Route the lane's transport through the real connector, keeping the
+      // recorder's own bookkeeping so the two halves are checked together.
+      handle.sendProactiveCard = async input => {
+        handle.calls.push("card:send");
+        return connector.sendProactiveCard(input);
+      };
+      handle.updateProactiveCard = async (messageId, card) => {
+        handle.calls.push("card:patch");
+        await connector.updateProactiveCard(messageId, card);
+      };
+
+      // Send the card, then answer it, then take the terminal patch.
+      const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
+      await sendDecisionLaneForTest(handle, card, undefined, decisionDaemon(store));
+      store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
+        claimToken: card.claimToken, status: "sent", externalMessageId: "om_card",
+        interactionOpenId: "ou_the_person",
+      });
+      store.respondTaskHumanRequest(request.id, { response: { answers: { "Continue?": "Yes" } } });
+      const patch = store.claimFeishuBotOutbound("local", "rt_bot")!;
+      await sendDecisionLaneForTest(handle, patch, undefined, decisionDaemon(store));
+      expect(handle.calls).toEqual(["card:send", "card:patch"]);
+    });
+
+    // The two requests the lane is supposed to make really crossed the wire...
+    expect(recorder.requests.filter((r) => r.method === "POST"
+      && r.path === `/open-apis/im/v1/messages/om_root_${issue.id}/reply`)).toHaveLength(1);
+    expect(recorder.requests.filter((r) => r.method === "PATCH"
+      && r.path === "/open-apis/im/v1/messages/om_card")).toHaveLength(1);
+    // ...and nothing touched a reaction or a receipt. Both are addressed as
+    // `/open-apis/im/v1/messages/:message_id/reactions`, on either transport.
+    expect(recorder.requests.filter((r) => /reaction/i.test(r.path))).toEqual([]);
+    expect(recorder.requests.filter((r) => /receipt/i.test(r.path))).toEqual([]);
+    // Every request that did cross the wire belongs to the two jobs above.
+    expect(recorder.requests.map((r) => `${r.method} ${r.path}`).sort()).toEqual([
+      "PATCH /open-apis/im/v1/messages/om_card",
+      "POST /open-apis/auth/v3/tenant_access_token/internal",
+      `POST /open-apis/im/v1/messages/om_root_${issue.id}/reply`,
+    ]);
     void issue;
   });
 
@@ -1110,6 +1394,67 @@ function decisionLaneHandle(calls: string[] = []): DecisionLaneHandle {
     sendProactiveAttachment: async () => ({ messageId: "om_att" }),
   };
   return handle as unknown as DecisionLaneHandle;
+}
+
+/**
+ * Point the Lark SDK's own HTTP layer at a local recorder.
+ *
+ * `createFeishuConnector` (below) builds a real `FeishuConnector` whose calls go
+ * through `@larksuiteoapi/node-sdk`; the SDK keeps one process-wide axios
+ * instance. Swapping its adapter is what makes the recorder sit at the same
+ * layer the host actually uses, so a request inserted anywhere between the lane
+ * and Feishu shows up — which is exactly what the previous mock-surface test
+ * could not see.
+ */
+async function withRecordedFeishuTransport<T>(
+  fn: (connector: FeishuConnector) => Promise<T>,
+): Promise<{ result: T; requests: Array<{ method: string; path: string }> }> {
+  const sdk = await import("@larksuiteoapi/node-sdk/lib/index.js" as string) as {
+    defaultHttpInstance: { defaults: { adapter?: unknown } };
+  };
+  const requests: Array<{ method: string; path: string }> = [];
+  const record = (method: unknown, url: unknown): void => {
+    requests.push({ method: String(method ?? "get").toUpperCase(),
+      path: String(url ?? "").replace(/^https?:\/\/[^/]+/u, "") });
+  };
+  const previousAdapter = sdk.defaultHttpInstance.defaults.adapter;
+  const realFetch = globalThis.fetch;
+  // Two layers, because the lane and a stray call need not use the same one:
+  // the SDK's calls go through its own axios instance, while anything reached
+  // through the global `fetch` (an inserted reaction call, say) would not.
+  sdk.defaultHttpInstance.defaults.adapter = async (config: Record<string, unknown>) => {
+    const path = String(config.url ?? "");
+    record(config.method, path);
+    const data = path.includes("/reactions")
+      ? { code: 0, data: { reaction_id: "rx_1", items: [], has_more: false } }
+      : path.includes("tenant_access_token")
+        ? { code: 0, tenant_access_token: "t_recorder", expire: 7200 }
+        : path.endsWith("/reply") || path.endsWith("/messages")
+          ? { code: 0, data: { message_id: "om_card" } }
+          : { code: 0, data: {} };
+    return { data, status: 200, statusText: "OK", headers: {}, config };
+  };
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    record(init?.method ?? "GET", url);
+    const path = url.replace(/^https?:\/\/[^/]+/u, "");
+    const data = path.includes("/reactions")
+      ? { code: 0, data: { reaction_id: "rx_1", items: [], has_more: false } }
+      : path.endsWith("/reply") || path.endsWith("/messages")
+        ? { code: 0, data: { message_id: "om_card" } }
+        : { code: 0, data: {} };
+    return Response.json(data);
+  }) as typeof fetch;
+  try {
+    const connector = new FeishuConnector({
+      appId: "cli_decision_card", appSecret: APP_SECRET, domain: "feishu",
+    } as never);
+    const result = await fn(connector);
+    return { result, requests };
+  } finally {
+    sdk.defaultHttpInstance.defaults.adapter = previousAdapter;
+    globalThis.fetch = realFetch;
+  }
 }
 
 /** A normal proactive delivery queued behind the decision lane (B3). */

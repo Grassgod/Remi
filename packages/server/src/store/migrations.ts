@@ -4145,25 +4145,34 @@ function allowNullableHumanRequestPushWakeTaskId(db: SqlDatabase, dialect: SqlDa
     return;
   }
 
-  // A previous crash may have left the copy behind. Finish that work first,
-  // whether or not the live table still needs rebuilding: the live table may
-  // have been recreated empty while the only real rows sit in `_legacy`.
-  healStrandedHumanRequestPushRows(db);
-
   const columns = db.query(`PRAGMA table_info(${HUMAN_REQUEST_PUSH_TABLE})`).all() as Array<{
     name: string;
     notnull: number;
   }>;
   const wakeTask = columns.find((entry) => entry.name === "wake_task_id");
-  if (!wakeTask || Number(wakeTask.notnull) === 0) {
-    // Already the new shape. The rebuild is done, but a crash between the DROP
-    // and the index creation in the version that shipped this would have left
-    // the table without its index, so assert it either way — the statement is
-    // idempotent.
+  const hasDeliveryId = columns.some((entry) => entry.name === "delivery_id");
+  const alreadyRebuilt = hasDeliveryId && wakeTask !== undefined && Number(wakeTask.notnull) === 0;
+
+  // The steady state: the live table is already the new shape and no crashed
+  // copy is waiting beside it. Nothing to merge and nothing to rebuild, so this
+  // must not run the full-table copy — it costs a `SELECT` plus an `INSERT` per
+  // row on every startup (measured ~122ms at 10k rows).
+  //
+  // Both halves matter. A `_legacy` table means the previous run died mid-heal,
+  // and the copy it holds may be the only copy. A missing `delivery_id` means
+  // the live table predates the rebuild and the nullable column has to be
+  // produced by one.
+  if (alreadyRebuilt && !tableExists(db, HUMAN_REQUEST_PUSH_LEGACY_TABLE)) {
+    // The rebuild is done, but a crash between the DROP and the index creation
+    // in the version that shipped this would have left the table without its
+    // index, so assert it either way — the statement is idempotent.
     ensureHumanRequestPushWakeIndex(db);
     return;
   }
 
+  // Every other state needs the merge: a stranded copy to fold back in, an old
+  // shape to rebuild into the new one, or both. `mergeHumanRequestPushRows`
+  // reads both tables, so it covers the plain old-shape rebuild too.
   rebuildHumanRequestPushTableForNullableWakeTaskId(db);
 }
 
@@ -4197,20 +4206,12 @@ function isPostgresDialect(db: SqlDatabase, explicit?: SqlDatabaseDialect): bool
   return resolveSqlDialect(db, explicit) === "postgres";
 }
 
-/**
- * Repair a database a crashed rebuild left behind. Idempotent: with no
- * `_legacy` table it does nothing, and once the rows are copied the leftover is
- * dropped so the next run finds nothing to do.
- */
-function healStrandedHumanRequestPushRows(db: SqlDatabase): void {
-  // A stranded copy is only ever left by an early version of this migration;
-  // `origin/main` has never created this table (the name does not appear in that
-  // revision). Both sides are therefore ours to reconcile, and a key collision
-  // means the two versions genuinely disagree rather than that something
-  // expected happened. The merge is the same operation as the ordinary rebuild,
-  // so there is one code path to reason about.
-  mergeHumanRequestPushTables(db);
-}
+// A stranded copy is only ever left by an early version of this migration;
+// `origin/main` has never created this table (the name does not appear in that
+// revision). Both sides are therefore ours to reconcile, and a key collision
+// means the two versions genuinely disagree rather than that something expected
+// happened. The caller routes both the ordinary rebuild and the recovery through
+// `mergeHumanRequestPushTables`, so there is one code path to reason about.
 
 function tableExists(db: SqlDatabase, table: string): boolean {
   return Boolean(db.query(

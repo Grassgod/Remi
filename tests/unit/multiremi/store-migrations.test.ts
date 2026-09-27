@@ -2701,6 +2701,64 @@ describe("MUL-407 human-request push table rebuild", () => {
       .find((c) => c.name === "wake_task_id")?.notnull).toBe(0);
   });
 
+  it("does not rebuild an already-migrated table on the next startup", () => {
+    // The steady state must be a no-op: rebuilding costs a read plus an insert
+    // per row on every startup (QA measured ~122ms at 10k rows). The check is
+    // that no statement touches the rows at all, which is stricter than
+    // comparing contents — rowids would move even if the data came back equal.
+    const database = freshDb();
+    seedOldPushTable(database);
+    migrate(database);
+    const rowids = database.query(`SELECT id, rowid FROM ${LIVE} ORDER BY id`).all();
+
+    const statements: string[] = [];
+    const counted = new Proxy(database, {
+      get(target, key) {
+        const value = Reflect.get(target, key, target);
+        if ((key === "query" || key === "prepare" || key === "run" || key === "exec") && typeof value === "function") {
+          return (...args: unknown[]) => { statements.push(String(args[0])); return value.apply(target, args); };
+        }
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as unknown as SqlDatabase & { dialect: "sqlite" };
+    Object.assign(counted, { dialect: "sqlite" as const });
+
+    // `runMigrations` takes the `SqlDatabase` surface, which is exactly what the
+    // proxy above pretends to be (`migrate()` is the `Database`-typed helper).
+    runMigrations(counted);
+
+    // The bootstrap schema block is one big `CREATE TABLE IF NOT EXISTS`
+    // statement that names every table, so the interesting statements are the
+    // ones that touch this table on their own.
+    const touching = statements.filter((sql) => sql.includes(LIVE) && !/^\s*CREATE TABLE IF NOT EXISTS multiremi_schema_migrations/u.test(sql));
+    expect(touching.filter((sql) => /drop table|create table|insert into/i.test(sql))).toEqual([]);
+    expect(touching.filter((sql) => sql.trim().startsWith("CREATE TABLE"))).toEqual([]);
+    expect(touching.filter((sql) => sql.trim().startsWith("DROP TABLE"))).toEqual([]);
+    expect(touching.filter((sql) => /INSERT INTO/iu.test(sql))).toEqual([]);
+    // What remains is the one idempotent index assertion.
+    expect(touching.filter((sql) => sql.includes("CREATE INDEX")).length).toBeGreaterThan(0);
+    expect(touching.every((sql) => sql.includes("CREATE INDEX") || sql.includes("PRAGMA table_info"))).toBe(true);
+    // And the rows did not move.
+    expect(database.query(`SELECT id, rowid FROM ${LIVE} ORDER BY id`).all()).toEqual(rowids);
+  });
+
+  it("still rebuilds when a stranded copy exists beside an already-migrated table", () => {
+    // The early return must not swallow a crashed heal: an old-shape live table
+    // and a `_legacy` copy both have to keep working.
+    const database = freshDb();
+    seedOldPushTable(database);
+    migrate(database);
+    database.exec(`ALTER TABLE ${LIVE} RENAME TO ${LEGACY}; CREATE TABLE ${LIVE} (`
+      + "id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, binding_id TEXT NOT NULL, "
+      + "issue_id TEXT NOT NULL, source_task_id TEXT NOT NULL, request_id TEXT NOT NULL, "
+      + "wake_task_id TEXT UNIQUE, delivery_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, "
+      + "UNIQUE(binding_id, request_id))");
+    migrate(database);
+    expect((rows(database) as Array<{ id: string }>).map((row) => row.id)).toEqual(["fhrp_1", "fhrp_2"]);
+    expect(database.query(`SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name=?`).get(LEGACY))
+      .toEqual({ n: 0 });
+  });
+
   it("restores the wake index when a crash dropped the table but not the index", () => {
     const database = freshDb();
     seedOldPushTable(database);
