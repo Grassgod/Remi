@@ -47,11 +47,30 @@ workerSelf.onmessage = async (event: MessageEvent) => {
   const buf = new Uint8Array(data);
 
   const respond = (status: number, payload: string): void => {
-    let bytes = new TextEncoder().encode(payload);
+    const encoder = new TextEncoder();
+    let bytes = encoder.encode(payload);
     if (bytes.length > buf.length) {
-      bytes = new TextEncoder().encode(
-        JSON.stringify({ error: `postgres bridge result too large (${bytes.length} > ${buf.length} bytes)`, source: "reply" }),
-      );
+      if (status === STATUS_ERROR) {
+        let original: { error?: unknown; source?: unknown } = {};
+        try { original = JSON.parse(payload); } catch { /* Unknown error replies fail closed. */ }
+        const error = typeof original.error === "string" ? original.error : "postgres bridge error result too large";
+        const source = typeof original.source === "string" ? original.source : "unknown";
+        const suffix = `…(truncated, ${encoder.encode(error).length} bytes)`;
+        let low = 0;
+        let high = error.length;
+        while (low < high) {
+          const mid = Math.ceil((low + high) / 2);
+          const candidate = encoder.encode(JSON.stringify({ error: error.slice(0, mid) + suffix, source }));
+          if (candidate.length <= buf.length) low = mid;
+          else high = mid - 1;
+        }
+        bytes = encoder.encode(JSON.stringify({ error: error.slice(0, low) + suffix, source }));
+        if (bytes.length > buf.length) bytes = encoder.encode(JSON.stringify({ error: "postgres bridge error too large", source }));
+      } else {
+        bytes = encoder.encode(
+          JSON.stringify({ error: `postgres bridge result too large (${bytes.length} > ${buf.length} bytes)`, source: "reply" }),
+        );
+      }
       status = STATUS_ERROR;
     }
     buf.set(bytes, 0);

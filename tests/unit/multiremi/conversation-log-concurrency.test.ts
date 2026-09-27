@@ -500,6 +500,7 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
             limited.query("SELECT repeat('x', 4000) AS payload").get();
           } catch (error) {
             expect((error as Error).message).toContain("postgres bridge result too large");
+            expect((limited as any).failedAtDepth).toBeNull();
             caught = true;
           }
           expect(caught).toBe(true);
@@ -511,6 +512,43 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
       }
     });
   });
+  for (const nested of [false, true]) {
+    it.skipIf(!pgAdminUrl)(`Postgres: an oversized server error caught ${nested ? "inside a savepoint" : "in the outer transaction"} rolls back`, async () => {
+      await withPostgres(async (db, url) => {
+        const limited = new PostgresSyncDatabase(url, 2048);
+        try {
+          limited.exec("CREATE TABLE worker_error_case (n INTEGER PRIMARY KEY)");
+          const observed: { message: string | null; depth: number | null } = { message: null, depth: null };
+          let transactionError: unknown = null;
+          try {
+            limited.transaction(() => {
+              limited.run("INSERT INTO worker_error_case (n) VALUES (1)");
+              limited.run("INSERT INTO worker_error_case (n) VALUES (2)");
+              const caughtQuery = () => {
+                try {
+                  limited.query("DO $$ BEGIN RAISE EXCEPTION '%', repeat('x', 4000); END $$").run();
+                } catch (error) {
+                  observed.message = (error as Error).message;
+                  observed.depth = (limited as any).failedAtDepth;
+                }
+              };
+              if (nested) limited.transaction(caughtQuery)();
+              else caughtQuery();
+            })();
+          } catch (error) {
+            transactionError = error;
+          }
+          expect(observed.message).toContain("postgres: " + "x".repeat(128));
+          expect(observed.message).toMatch(/…\(truncated, \d+ bytes\)/);
+          expect(observed.depth).toBe(nested ? 2 : 1);
+          expect(transactionError).toBeInstanceOf(Error);
+          expect(db.query("SELECT n FROM worker_error_case").all()).toEqual([]);
+        } finally {
+          limited.close();
+        }
+      });
+    });
+  }
   it.skipIf(!pgAdminUrl)("Postgres: a caught bare SQL failure aborts the outer transaction", async () => {
     await withPostgres(async (db) => {
       db.exec("CREATE TABLE bare_failure_case (n INTEGER PRIMARY KEY)");
