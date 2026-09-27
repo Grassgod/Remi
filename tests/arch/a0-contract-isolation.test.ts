@@ -8,7 +8,8 @@ const REPO_ROOT = join(import.meta.dir, "../..");
  * A-0 ships types, interfaces and in-memory implementations only. Each module
  * remains guarded here until a follow-up imports it from runtime code; that PR
  * removes the corresponding entry. B5 now consumes the trace contract and
- * DaemonTraceReader interface.
+ * DaemonTraceReader interface, and its HTTP completion routes use the protocol
+ * contract. The protocol entry stays as a positive wiring guard.
  *
  * A failing test here is not a bug to work around; it means the module left the
  * "types only" phase, which is exactly what the follow-up sub-issues do.
@@ -16,8 +17,8 @@ const REPO_ROOT = join(import.meta.dir, "../..");
 
 /** Every module A-0 adds, and whether it may be imported by runtime code yet. */
 const A0_MODULES = [
+  { specifier: "@multiremi/contracts/daemon-protocol", wired: true },
   // Imported by nothing outside tests until their follow-ups wire them up.
-  { specifier: "@multiremi/contracts/daemon-protocol", wired: false },
   { specifier: "@multiremi/worker/trace-store", wired: false },
   { specifier: "@multiremi/api/trace/trace-sink", wired: false },
   // A-0b additions: the shared sanitize point and the derived read-side values.
@@ -88,6 +89,7 @@ const A0_SOURCES = new Set([
 
 /** Notes on who will consume each module once it is wired. */
 const WIRING_OWNER = new Map<string, string>([
+  ["@multiremi/contracts/daemon-protocol", "B5 daemon HTTP completion routes consume the A-0 trace block"],
   ["@shared/trace-sanitize", "A-6 wires it into the daemon write path; today only tests call it"],
   ["@shared/trace-derive", "A-5/A-8 wire it into completion and the backfill"],
 ]);

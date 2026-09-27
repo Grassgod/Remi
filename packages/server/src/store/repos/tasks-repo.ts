@@ -3076,12 +3076,8 @@ export class TasksRepo {
   }
 
   private markEmptyTraceAtTerminal(taskId: string, reportedEventCount?: number): void {
-    // Legacy completion has no trace count; until A-5 sends it, its persisted
-    // process rows are the only available evidence of an empty run.
-    const hasEvents = reportedEventCount === undefined
-      ? this.ctx.db.query("SELECT 1 FROM multiremi_task_messages WHERE task_id = ? LIMIT 1").get(taskId)
-      : reportedEventCount > 0;
-    if (!hasEvents) this.ctx.taskTraces().markTaskTraceNone(taskId);
+    // Missing counts cannot prove emptiness once the daemon stops dual-writing.
+    if (reportedEventCount === 0) this.ctx.taskTraces().markTaskTraceNone(taskId);
   }
 
   completeTask(taskId: string, input: {
