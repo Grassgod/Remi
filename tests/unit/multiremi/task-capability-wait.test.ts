@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import type { MultiremiRuntimeModel } from "@multiremi/contracts/types.js";
 import { MultiremiStore } from "@multiremi/store.js";
+import { createMultiremiApp } from "@multiremi/api.js";
+import { placementWaitReason } from "@multiremi/store/task-wait-reason.js";
 import { canRepoolQueuedTaskPin, REPOOLABLE_QUEUED_TASK_SQL } from "@multiremi/store/repos/tasks-repo.js";
 import { createLocalStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
 
@@ -55,23 +57,44 @@ function ageTask(taskId: string, ageMs: number, now: number) {
   db!.run("UPDATE multiremi_tasks SET created_at = ? WHERE id = ?", [new Date(now - ageMs).toISOString(), taskId]);
 }
 
-function redispatchAsSupervisor(store: MultiremiStore, taskId: string, reason: string) {
+async function redispatchAsSupervisor(store: MultiremiStore, taskId: string, reason: string) {
+  store.createWorkspaceMember({ workspaceId: "local", userId: "owner", name: "Owner", role: "owner" });
   const workspace = store.getWorkspace("local")!;
   store.updateWorkspace("local", { settings: {
     ...workspace.settings, organizer: { mode: "act" },
   } });
   const supervisor = store.createAgent({ name: "Organizer", provider: "claude", role: "supervisor" });
+  store.setAgentSupervisor(supervisor.id, true);
   const patrol = store.createIssue({ title: "Organizer patrol" });
   const supervisorTask = store.createTask({ agentId: supervisor.id, issueId: patrol.id, prompt: "organize" });
-  const result = store.performOrganizerAction({
-    supervisorTaskId: supervisorTask.id, supervisorAgentId: supervisor.id,
-    targetTaskId: taskId, action: "redispatch", reason,
+  const token = await store.createTaskAccessToken(supervisorTask, "owner");
+  const app = createMultiremiApp({ store, authToken: "root-secret" });
+  const response = await app.request(`/api/tasks/${taskId}/redispatch`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token.token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
   });
-  expect(result.replacementTask).not.toBeNull();
-  return result.replacementTask!;
+  return { response, replacement: response.status === 202
+    ? store.getTask((await response.json()).replacement_task.id) : null };
 }
 
 describe("queued task model capability waits", () => {
+  it("never offers redispatch for a frozen Chat even when it also has an Issue", () => {
+    const reason = placementWaitReason({
+      constraints: ["Agent 绑定 B", "任务钉住 A"],
+      frozenRetry: true,
+      frozenTask: true,
+      agentBound: true,
+      agentId: "agt_chat",
+      agentBindingTarget: "A",
+      agentBindingRuntimeId: "rt_a",
+      chatSessionId: "cht_chat",
+      redispatchTaskId: "tsk_chat",
+    });
+    expect(reason).not.toContain("redispatch");
+    expect(reason).toContain("remi agent update agt_chat --runtime rt_a");
+    expect(reason).toContain("remi chat message create cht_chat --content");
+  });
   it("keeps the grace period silent, then explains all rejected candidates without changing the task or model", () => {
     const { store, runtime, agent, task, now, fail } = fixture();
     const second = store.registerRuntime({ name: "Second", provider: "codex", workspaceId: "local", models: models(false) });
@@ -626,7 +649,7 @@ describe("queued task model capability waits", () => {
     expect(store.getTask(task.id)?.waitReason).toStartWith("等待任务落点：");
   });
 
-  it("does not recommend redispatch when a frozen code snapshot conflicts with an Agent binding", () => {
+  it("redispatches a frozen Issue through HTTP before rebinding its Agent", async () => {
     const { store, a, b, agent, issue } = conflictFixture({ codex: "dev-frozen-code-a", other: "dev-frozen-code-b" });
     const parent = store.createIssueSession(issue.id, { title: "Main", holdsWorkspace: true });
     const seed = store.createTask({ agentId: agent.id, issueId: issue.id, issueSessionId: parent.id, prompt: "seed" });
@@ -651,49 +674,87 @@ describe("queued task model capability waits", () => {
     expect(command![1]).toBe(task.id);
     expect(command![3]).toBe(agent.id);
     expect(command![4]).toBe(a.id);
-    const replacement = redispatchAsSupervisor(store, task.id, command![2]!);
-    expect(replacement).toMatchObject({
+    const { response, replacement } = await redispatchAsSupervisor(store, task.id, command![2]!);
+    expect(response.status).toBe(202);
+    expect(replacement).not.toBeNull();
+    expect(replacement!).toMatchObject({
       prompt: task.prompt, parentTaskId: task.id, issueSessionId: side.id,
       executionFingerprint: null,
     });
     store.updateAgent(agent.id, { runtimeId: a.id });
-    expect(store.getTask(replacement.id)?.status).not.toBe("cancelled");
-    expect(store.describeTaskPlacement(replacement.id).find((verdict) => verdict.runtimeId === a.id))
+    expect(store.getTask(replacement!.id)?.status).not.toBe("cancelled");
+    expect(store.describeTaskPlacement(replacement!.id).find((verdict) => verdict.runtimeId === a.id))
       .toMatchObject({ placementOk: true, routingOk: true });
     expect(store.claimTask(b.id)).toBeNull();
-    expect(store.claimTask(a.id)?.id).toBe(replacement.id);
+    expect(store.claimTask(a.id)?.id).toBe(replacement!.id);
   });
 
-  it("warns and preserves a frozen Chat request through redispatch then rebinding", () => {
+  it("rebinds and resends a frozen Chat request through the creator's HTTP routes", async () => {
     const store = createLocalStore();
-    const a = store.registerRuntime({ id: "rt_chat_frozen_a", name: "A", provider: "codex", daemonId: "chat-frozen-a" });
-    const b = store.registerRuntime({ id: "rt_chat_frozen_b", name: "B", provider: "codex", daemonId: "chat-frozen-b" });
-    const agent = store.createAgent({ name: "Chat frozen", provider: "codex", runtimeId: b.id });
+    store.createWorkspaceMember({ workspaceId: "local", userId: "alice", name: "Alice", role: "member" });
+    store.createWorkspaceMember({ workspaceId: "local", userId: "owner", name: "Owner", role: "owner" });
+    const pat = await store.createAccessToken({ name: "Alice", type: "pat", workspaceId: "local", userId: "alice" });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const headers = { Authorization: `Bearer ${pat.token}`, "Content-Type": "application/json" };
+    const a = store.registerRuntime({ id: "rt_chat_frozen_a", name: "A", provider: "codex", daemonId: "chat-frozen-a", ownerId: "alice" });
+    const b = store.registerRuntime({ id: "rt_chat_frozen_b", name: "B", provider: "codex", daemonId: "chat-frozen-b", ownerId: "alice" });
+    const agent = store.createAgent({ name: "Chat frozen", provider: "codex", runtimeId: b.id, ownerId: "alice" });
     const project = store.createProject({ title: "Chat directory", resources: [
       { resourceType: "local_directory", resourceRef: { local_path: "/abs/chat-frozen", daemon_id: "chat-frozen-a" } },
     ] });
-    const chat = store.createChatSession({ agentId: agent.id, projectId: project.id });
-    const task = store.sendChatMessage(chat.id, { body: "keep this exact request" }).task;
+    const chat = store.createChatSession({ agentId: agent.id, projectId: project.id, creatorId: "alice" });
+    const original = store.sendChatMessage(chat.id, { body: "keep this exact request\nwith its second line" });
+    const task = original.task;
     db!.run("UPDATE multiremi_tasks SET execution_fingerprint = 'chat-frozen-fp' WHERE id = ?", [task.id]);
     const now = Date.now();
     ageTask(task.id, GRACE_MS, now);
     store.refreshQueuedCapabilityWaitReasons(now);
     const reason = store.getTask(task.id)?.waitReason ?? "";
     expect(reason).toContain("直接改绑会取消这条已冻结的任务");
-    const command = reason.match(/remi task redispatch ([a-zA-Z0-9_-]+) --reason '([^']+)' --yes[\s\S]*?remi agent update ([a-zA-Z0-9_-]+) --runtime ([a-zA-Z0-9_-]+)/);
+    expect(reason).not.toContain("remi task redispatch");
+    const command = reason.match(/remi agent update ([a-zA-Z0-9_-]+) --runtime ([a-zA-Z0-9_-]+)[\s\S]*?remi chat message list ([a-zA-Z0-9_-]+)[\s\S]*?remi chat message create ([a-zA-Z0-9_-]+) --content/);
     expect(command).not.toBeNull();
-    expect(command![1]).toBe(task.id);
-    expect(command![3]).toBe(agent.id);
-    expect(command![4]).toBe(a.id);
-    const replacement = redispatchAsSupervisor(store, task.id, command![2]!);
-    expect(replacement).toMatchObject({
-      prompt: task.prompt, parentTaskId: task.id, chatSessionId: chat.id,
-      executionFingerprint: null,
+    expect(command![1]).toBe(agent.id);
+    expect(command![2]).toBe(a.id);
+    expect(command![3]).toBe(chat.id);
+    expect(command![4]).toBe(chat.id);
+
+    const workspace = store.getWorkspace("local")!;
+    store.updateWorkspace("local", { settings: { ...workspace.settings, organizer: { mode: "act" } } });
+    const supervisor = store.createAgent({ name: "Organizer", provider: "claude", role: "supervisor" });
+    store.setAgentSupervisor(supervisor.id, true);
+    const patrol = store.createIssue({ title: "Organizer patrol" });
+    const supervisorTask = store.createTask({ agentId: supervisor.id, issueId: patrol.id, prompt: "organize" });
+    const supervisorToken = await store.createTaskAccessToken(supervisorTask, "owner");
+    const denied = await app.request(`/api/tasks/${task.id}/redispatch`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${supervisorToken.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: "recover Chat" }),
     });
-    store.updateAgent(agent.id, { runtimeId: a.id });
-    expect(store.getTask(replacement.id)?.status).not.toBe("cancelled");
+    expect(denied.status).toBe(403);
+    expect((await denied.json()).error).toBe("forbidden");
+
+    const rebound = await app.request(`/api/multiremi/agents/${command![1]}`, {
+      method: "PATCH", headers, body: JSON.stringify({ runtime_id: command![2] }),
+    });
+    expect(rebound.status).toBe(200);
+    expect(store.getTask(task.id)?.status).toBe("cancelled");
+    const listed = await app.request(`/api/chat/sessions/${command![3]}/messages`, { headers });
+    expect(listed.status).toBe(200);
+    const messages = await listed.json() as Array<{ role: string; task_id: string; content: string }>;
+    const originalMessage = messages.find((message) => message.role === "user" && message.task_id === task.id);
+    expect(originalMessage?.content).toBe(original.message.body);
+    const resent = await app.request(`/api/chat/sessions/${command![4]}/messages`, {
+      method: "POST", headers, body: JSON.stringify({ content: originalMessage!.content }),
+    });
+    expect(resent.status).toBe(201);
+    const resentBody = await resent.json() as { task_id: string; message_id: string };
+    const replayed = store.getTask(resentBody.task_id)!;
+    expect(store.getChatMessage(resentBody.message_id)?.body).toBe(originalMessage!.content);
+    expect(replayed.chatSessionId).toBe(task.chatSessionId);
+    expect(replayed.prompt).toBe(task.prompt);
     expect(store.claimTask(b.id)).toBeNull();
-    expect(store.claimTask(a.id)?.id).toBe(replacement.id);
+    expect(store.claimTask(a.id)?.id).toBe(replayed.id);
   });
 
   it("warns that directly rebinding a frozen Chat Agent cancels its queued task", () => {
