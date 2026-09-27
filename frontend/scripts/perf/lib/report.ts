@@ -10,10 +10,31 @@
  * renders both from disk and inside an issue comment's sandboxed iframe.
  */
 
-import type { PerfScenarioStats, PerfSelectorEquivalence } from "./jump-recorder";
+import type { PerfApiEntry, PerfApiPathStats, PerfScenarioStats, PerfSelectorEquivalence } from "./jump-recorder";
+
+/**
+ * The artifact schema version.
+ *
+ * 2 → 3 (MUL-395 S9-0): warm rounds are re-based on the click, the first-screen
+ * set is bounded below by that click, and every round now persists `navStartMs`,
+ * `clickT`, the entry-page state, `serialChain` and the per-request
+ * `apiFirstScreenEntries`. Schema 2 warm rows measured from the entry page's
+ * document origin, so their `readyMs`/`apiFirstScreen`/`serialDepth` are not
+ * comparable with a schema 3 warm row; the cold rows are unchanged.
+ */
+export const REPORT_SCHEMA = 3;
 
 export interface ReportRoundSummary {
   round: number;
+  /**
+   * Time origin this round's numbers are relative to: 0 for cold rounds, the
+   * in-page click timestamp for warm ones. Persisted so a reader can re-base a
+   * round after the fact — the 09-27 baseline could not, because the driver
+   * never wrote it down (MUL-395 §4.3).
+   */
+  navStartMs: number;
+  /** The raw click timestamp (`performance.now()` of the entry page), null for cold. */
+  clickT: number | null;
   readyMs: number | null;
   readyTimeout: boolean;
   firstRealMs: number | null;
@@ -30,8 +51,17 @@ export interface ReportRoundSummary {
   layoutShiftCount: number;
   cls: number;
   serialDepth: number | null;
+  /** Paths along the chain that produced `serialDepth`, deepest last. */
+  serialChain: string[];
   apiCallsTotal: number;
   apiFirstScreen: number;
+  /**
+   * The first-screen requests themselves: one row per request with its wave, the
+   * predecessor it waited on, its `Server-Timing` and the client/server gap.
+   * This is the per-request evidence QA asked for; `apiFirstScreen` stays as the
+   * count so the two can be cross-checked.
+   */
+  apiFirstScreenEntries: PerfApiEntry[];
   /** Script/JS chunk accounting for the round. */
   chunksLoaded: number;
   chunkBytes: number;
@@ -45,6 +75,12 @@ export interface ReportRoundSummary {
   stubbedWrites: number;
   /** Milliseconds from the click to the `?issue=` commit; a correctness check. */
   urlCommitMs: number | null;
+  /** Milliseconds from landing on the entry page to finding the target row. */
+  entryReadyMs: number | null;
+  /** API requests in flight when the warm click happened; null for cold rounds. */
+  entryInflightAtClick: number | null;
+  /** Whether the entry page was quiet before the click; null when the rule was off. */
+  entrySettled: boolean | null;
   /** True when the browser's first inbox page had the target injected. */
   inboxInjected: boolean;
   /** GET `/api/inbox/page` responses served before the first stubbed write. */
@@ -109,7 +145,17 @@ export interface ReportScenario {
   inboxApiPage?: number | null;
   hoverLeadMs: number | null;
   rounds: ReportRoundSummary[];
-  stats: PerfScenarioStats;
+  stats: ReportScenarioStats;
+}
+
+/** `stats` plus the per-path aggregate that only the report needs to carry. */
+export interface ReportScenarioStats extends PerfScenarioStats {
+  /**
+   * Per-path aggregate over the scenario's rounds. The acceptance rule is stated
+   * per path ("每个 path 的 total p95 ≤ 200ms; gap p50 ≤ 80ms" — plan §9), so a
+   * round-level "slowest API" cannot express it.
+   */
+  apiByPath: PerfApiPathStats[];
 }
 
 export function fmtMs(value: number | null | undefined): string {
@@ -150,7 +196,7 @@ export function buildMarkdown(report: {
     ambientLatency?: { before?: { medianMs?: number | null }; after?: { medianMs?: number | null } };
   };
   const lines: string[] = [];
-  lines.push("# MUL-383 页面测速基线（schema 2）");
+  lines.push(`# MUL-383 页面测速基线（schema ${REPORT_SCHEMA}）`);
   lines.push("");
   lines.push(`- 生成时间：${meta.generatedAt ?? "unknown"}（北京时间 ${meta.beijingTime ?? "?"}）`);
   lines.push(`- 目标：${meta.baseUrl ?? "?"}（工作区 \`${meta.workspaceSlug ?? "?"}\`）`);
@@ -170,7 +216,9 @@ export function buildMarkdown(report: {
   lines.push(
     "- readyMs：anchor 完整可见、骨架为 0、之后 500ms 无移动帧；取该安静窗口的起点。单轮超时 20s，超时轮不进分位数。",
   );
-  lines.push("- 冷启动用 `page.goto`；应用内切页先 hover 后真实 click，navStart 取页面内记录的 click 时间戳。");
+  lines.push(
+    "- cold 用 `page.goto`；warm 先 hover 后真实 click，`navStartMs` 取页面内记录的 click 时间戳。**warm 的每一毫秒都从 click 起算**：帧、跳动、`Server-Timing` 与首屏集合都先减 `navStartMs`，首屏集合另有 `startMs ≥ navStartMs` 的下界，所以入口页的尾请求不计入目标页；cold 的 `navStartMs = 0`，数字与旧口径一致。",
+  );
   lines.push(
     "- 串行深度：`wave = 1 + max(wave(p) | p.responseEnd ≤ start + 8ms)`；`Server-Timing` 由 resource timing 同源读取。",
   );
@@ -232,6 +280,54 @@ export function buildMarkdown(report: {
     }
   }
   lines.push("");
+  lines.push("## 首屏 API 表（按 path 聚合，跨本场景各轮）");
+  lines.push("");
+  lines.push(
+    "口径：只统计 `startMs ≥ navStartMs` 且不晚于就绪帧的请求（warm 从 click 起算）；"
+      + "`total` 是服务端 `Server-Timing`，`gap` 是客户端 duration 减服务端 total（排队与连接）。"
+      + "分位数用最近秩法，`n` 是本场景各轮的请求总数，`轮` 是出现过该 path 的轮数。",
+  );
+  lines.push("");
+  const pathRows = report.scenarios.filter((scenario) => (scenario.stats.apiByPath ?? []).length > 0);
+  if (pathRows.length === 0) {
+    lines.push("_没有可聚合的首屏请求（场景全部跳过或基线早于 schema 3）。_");
+    lines.push("");
+  }
+  for (const scenario of pathRows) {
+    lines.push(`### ${scenario.key}（${scenario.mode}）`);
+    lines.push("");
+    lines.push(
+      "| path | 方法 | n | 轮 | total p50 | total p95 | db p95 | dbq max | dbb max | gap p50 |",
+    );
+    lines.push("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+    for (const row of scenario.stats.apiByPath ?? []) {
+      lines.push(
+        `| \`${row.path}\` | ${row.method} | ${row.count} | ${row.rounds} | ${fmtMs(row.totalP50)} | ${fmtMs(row.totalP95)} | ${fmtMs(row.dbP95)} | ${row.dbqMax ?? "-"} | ${fmtBytes(row.dbbMax)} | ${fmtMs(row.gapP50)} |`,
+      );
+    }
+    lines.push("");
+  }
+  lines.push("## 逐轮时基与串行链");
+  lines.push("");
+  lines.push(
+    "_逐请求明细（`path`/`wave`/`after`/`startMs`/`Server-Timing`/`gapMs`）在 JSON 的 "
+      + "`scenarios[].rounds[].apiFirstScreenEntries[]`，HTML 里按场景折叠显示。_",
+  );
+  lines.push("");
+  lines.push("| 场景 | 模式 | 轮 | navStart ms | clickT ms | 入口就绪 ms | 点击时在途 API | 入口安静 | 串行链 |");
+  lines.push("| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |");
+  for (const scenario of report.scenarios) {
+    for (const round of scenario.rounds) {
+      const entrySettled = round.entrySettled === null || round.entrySettled === undefined
+        ? "-"
+        : round.entrySettled ? "是" : "超时";
+      const chain = (round.serialChain ?? []).join(" → ") || "-";
+      lines.push(
+        `| ${scenario.key} | ${scenario.mode} | ${round.round} | ${fmtMs(round.navStartMs)} | ${fmtMs(round.clickT)} | ${fmtMs(round.entryReadyMs)} | ${round.entryInflightAtClick ?? "-"} | ${entrySettled} | \`${chain}\` |`,
+      );
+    }
+  }
+  lines.push("");
   // Jump detail: the acceptance criterion is "every detail page shows its jumps",
   // so the per-jump geometry belongs in the artifact.
   const jumpRows = report.scenarios.flatMap((scenario) => scenario.rounds.flatMap((round) =>
@@ -288,6 +384,8 @@ export function buildHtml(report: {
   blockedWrites: Array<{ page: string; method: string; path: string; attempts: number }>;
   stubbedWrites?: Array<{ page: string; method: string; path: string; attempts: number }>;
   compareTable?: CompareRow[] | null;
+  /** Per-path comparison; pairs on `key::mode::path` (see `buildCompare`). */
+  comparePathTable?: ComparePathRow[] | null;
 }): string {
   const esc = (value: unknown): string =>
     String(value ?? "")
@@ -323,6 +421,75 @@ export function buildHtml(report: {
       <td class="num">${fmtMs(stats.apiFirstScreenP50)}</td>
     </tr>`;
     })
+    .join("\n");
+
+  // Per-path first-screen table, one `<section>` per scenario: this is the view
+  // the acceptance rule is written against ("每个 path 的 total p95 ≤ 200ms;
+  // gap p50 ≤ 80ms"), so a reader must not have to aggregate the round table.
+  const apiPathTables = report.scenarios
+    .filter((scenario) => (scenario.stats.apiByPath ?? []).length > 0)
+    .map((scenario) => {
+      const body = (scenario.stats.apiByPath ?? [])
+        .map((row) => {
+          const overBudget = (row.totalP95 ?? 0) > 200 || (row.gapP50 ?? 0) > 80;
+          return `<tr>
+      <td><code>${esc(row.path)}</code></td>
+      <td class="muted">${esc(row.method)}</td>
+      <td class="num">${row.count}</td>
+      <td class="num">${row.rounds}</td>
+      <td class="num">${fmtMs(row.totalP50)}</td>
+      <td class="num${overBudget ? " bad" : " good"}">${fmtMs(row.totalP95)}</td>
+      <td class="num">${fmtMs(row.dbP95)}</td>
+      <td class="num">${row.dbqMax ?? "-"}</td>
+      <td class="num">${fmtBytes(row.dbbMax)}</td>
+      <td class="num${(row.gapP50 ?? 0) > 80 ? " bad" : " good"}">${fmtMs(row.gapP50)}</td>
+    </tr>`;
+        })
+        .join("\n");
+      return `<h3>${esc(scenario.key)}（${esc(scenario.mode)}）</h3>
+<div class="tablewrap"><table>
+<thead><tr><th>path</th><th>方法</th><th class="num">n</th><th class="num">轮</th><th class="num">total p50</th><th class="num">total p95</th><th class="num">db p95</th><th class="num">dbq max</th><th class="num">dbb max</th><th class="num">gap p50</th></tr></thead>
+<tbody>
+${body}
+</tbody>
+</table></div>`;
+    })
+    .join("\n");
+
+  // Per-request rows, wrapped in a `<details>` per scenario so a 5-round baseline
+  // does not open with ~5000 rows of table.
+  const apiEntrySections = report.scenarios
+    .map((scenario) => {
+      const rounds = scenario.rounds.filter((round) => (round.apiFirstScreenEntries ?? []).length > 0);
+      if (rounds.length === 0) return "";
+      const body = rounds
+        .flatMap((round) =>
+          (round.apiFirstScreenEntries ?? []).map((entry) => `<tr>
+      <td class="num">${round.round}</td>
+      <td><code>${esc(entry.path)}</code></td>
+      <td class="muted">${esc(entry.method)}</td>
+      <td class="num">${entry.wave}</td>
+      <td class="num">${entry.after ?? "-"}</td>
+      <td class="num">${fmtMs(entry.startMs)}</td>
+      <td class="num">${fmtMs(entry.responseEndMs)}</td>
+      <td class="num">${fmtMs(entry.durationMs)}</td>
+      <td class="num">${fmtMs(entry.serverTiming.total)}</td>
+      <td class="num">${fmtMs(entry.serverTiming.db)}</td>
+      <td class="num">${entry.serverTiming.dbq ?? "-"}</td>
+      <td class="num">${fmtBytes(entry.encodedBytes)}</td>
+      <td class="num">${fmtMs(entry.gapMs)}</td>
+    </tr>`),
+        )
+        .join("\n");
+      return `<details><summary>${esc(scenario.key)}（${esc(scenario.mode)}）：${rounds.length} 轮</summary>
+<div class="tablewrap"><table>
+<thead><tr><th class="num">轮</th><th>path</th><th>方法</th><th class="num">wave</th><th class="num">after</th><th class="num">start ms</th><th class="num">end ms</th><th class="num">duration ms</th><th class="num">total ms</th><th class="num">db ms</th><th class="num">dbq</th><th class="num">bytes</th><th class="num">gap ms</th></tr></thead>
+<tbody>
+${body}
+</tbody>
+</table></div></details>`;
+    })
+    .filter(Boolean)
     .join("\n");
 
   const detailRows = report.scenarios
@@ -390,6 +557,25 @@ export function buildHtml(report: {
     )
     .join("\n");
 
+  const comparePathRows = (report.comparePathTable ?? [])
+    .map((row) => {
+      const delta = (before: number | null, after: number | null): string => {
+        if (before === null || after === null) return '<span class="muted">-</span>';
+        const diff = after - before;
+        const cls = diff > 0 ? "bad" : diff < 0 ? "good" : "muted";
+        return `<span class="${cls}">${diff > 0 ? "+" : ""}${diff.toFixed(1)}</span>`;
+      };
+      return `<tr>
+      <td class="key">${esc(row.key)}</td><td>${esc(row.mode)}</td>
+      <td><code>${esc(row.path)}</code></td>
+      <td class="num">${row.beforeCount ?? "-"} → ${row.afterCount ?? "-"}</td>
+      <td class="num">${fmtMs(row.beforeTotalP95)} → ${fmtMs(row.afterTotalP95)}</td><td class="num">${delta(row.beforeTotalP95, row.afterTotalP95)}</td>
+      <td class="num">${fmtMs(row.beforeGapP50)} → ${fmtMs(row.afterGapP50)}</td><td class="num">${delta(row.beforeGapP50, row.afterGapP50)}</td>
+      <td class="num">${row.beforeDbqMax ?? "-"} → ${row.afterDbqMax ?? "-"}</td>
+    </tr>`;
+    })
+    .join("\n");
+
   const compareRows = (report.compareTable ?? [])
     .map((row) => {
       const delta = (before: number | null, after: number | null): string => {
@@ -415,7 +601,7 @@ export function buildHtml(report: {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MUL-383 页面测速基线（schema 2）</title>
+<title>MUL-383 页面测速基线（schema ${REPORT_SCHEMA}）</title>
 <style>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
@@ -442,7 +628,7 @@ export function buildHtml(report: {
 </head>
 <body>
 <main>
-<h1>MUL-383 页面测速基线（schema 2）</h1>
+<h1>MUL-383 页面测速基线（schema ${REPORT_SCHEMA}）</h1>
 <p class="muted">每轮 20s 超时；超时轮不进分位数。生成于 ${esc(meta.generatedAt ?? "?")}。</p>
 <dl class="meta">
   <dt>窗口</dt><dd>${esc(meta.window ?? "?")}</dd>
@@ -468,9 +654,12 @@ ${rows}
 ${detailRows}
 </tbody>
 </table></div>
+${apiPathTables ? `<h2>首屏 API 表（按 path 聚合）</h2>\n<p class="muted">只统计 <code>startMs ≥ navStartMs</code> 且不晚于就绪帧的请求（warm 从 click 起算）；<code>gap</code> = 客户端 duration − 服务端 <code>total</code>。红色表示超出 total p95 ≤ 200ms 或 gap p50 ≤ 80ms。</p>\n${apiPathTables}` : ""}
+${apiEntrySections ? `<h2>逐请求明细</h2>\n<p class="muted">JSON <code>scenarios[].rounds[].apiFirstScreenEntries[]</code> 的展开视图。</p>\n${apiEntrySections}` : ""}
 ${jumpRows ? `<h2>跳动明细</h2>\n<div class="tablewrap"><table>\n<thead><tr><th>场景</th><th>模式</th><th class="num">轮</th><th class="num">start ms</th><th class="num">end ms</th><th class="num">位移 px</th><th class="num">scroll px</th><th>kind</th><th class="num">frames</th></tr></thead>\n<tbody>\n${jumpRows}\n</tbody>\n</table></div>` : ""}
 ${stubbedRows ? `<h2>被允许表接管的写请求（浏览器内 fulfill）</h2>\n<div class="tablewrap"><table>\n<thead><tr><th>页面</th><th>方法</th><th>path 模式</th><th class="num">次数</th></tr></thead>\n<tbody>\n${stubbedRows}\n</tbody>\n</table></div>` : ""}
 ${blockedRows ? `<h2>被拦截的写请求（全部为 abort）</h2>\n<div class="tablewrap"><table>\n<thead><tr><th>页面</th><th>方法</th><th>path 模式</th><th class="num">尝试</th></tr></thead>\n<tbody>\n${blockedRows}\n</tbody>\n</table></div>` : ""}
+${comparePathRows ? `<h2>与基线对比：按 path</h2>\n<div class="tablewrap"><table>\n<thead><tr><th>场景</th><th>模式</th><th>path</th><th class="num">n</th><th class="num">total p95</th><th class="num">Δ</th><th class="num">gap p50</th><th class="num">Δ</th><th class="num">dbq max</th></tr></thead>\n<tbody>\n${comparePathRows}\n</tbody>\n</table></div>` : ""}
 ${compareRows ? `<h2>与基线对比</h2>\n<div class="tablewrap"><table>\n<thead><tr><th>场景</th><th>模式</th><th>选择器</th><th class="num">ready p75</th><th class="num">Δ</th><th class="num">ready p95</th><th class="num">Δ</th><th class="num">jumps max</th><th class="num">串行深度</th><th class="num">首屏 API p50</th></tr></thead>\n<tbody>\n${compareRows}\n</tbody>\n</table></div>` : ""}
 <footer>由 frontend/scripts/perf/page-speed.ts 生成。自包含 HTML：无外链资源、无存储、无父窗口访问。</footer>
 </main>
@@ -516,15 +705,92 @@ export interface CompareWarning {
   message: string;
 }
 
+/** One `key::mode::path` pairing in the per-path comparison table. */
+export interface ComparePathRow {
+  key: string;
+  mode: string;
+  path: string;
+  method: string;
+  beforeCount: number | null;
+  afterCount: number | null;
+  beforeTotalP50: number | null;
+  afterTotalP50: number | null;
+  beforeTotalP95: number | null;
+  afterTotalP95: number | null;
+  beforeGapP50: number | null;
+  afterGapP50: number | null;
+  beforeDbqMax: number | null;
+  afterDbqMax: number | null;
+  beforeDbbMax: number | null;
+  afterDbbMax: number | null;
+}
+
+/**
+ * `--compare` pairing for the per-path table: `key::mode::path`.
+ *
+ * The scenario table answers "did this page get faster"; this one answers "which
+ * endpoint did it", which is the question every later S9 item is graded on (plan
+ * §9). Paths only present on one side are still emitted, with the other column
+ * blank: a path that disappeared *is* the result for an optimization that removes
+ * a request.
+ */
+export function buildCompareByPath(
+  baseline: { scenarios: ReportScenario[] },
+  current: { scenarios: ReportScenario[] },
+): ComparePathRow[] {
+  const bucket = (scenarios: ReportScenario[]): Map<string, PerfApiPathStats> => {
+    const out = new Map<string, PerfApiPathStats>();
+    for (const scenario of scenarios) {
+      for (const stat of scenario.stats.apiByPath ?? []) {
+        out.set(`${scenario.key}::${scenario.mode}::${stat.path}::${stat.method}`, stat);
+      }
+    }
+    return out;
+  };
+  const before = bucket(baseline.scenarios);
+  const after = bucket(current.scenarios);
+  const keys: string[] = [];
+  for (const key of before.keys()) keys.push(key);
+  for (const key of after.keys()) if (!keys.includes(key)) keys.push(key);
+  const rows = keys.map((key) => {
+    const [scenarioKey = "", mode = "", path = "", method = ""] = key.split("::");
+    const a = before.get(key) ?? null;
+    const b = after.get(key) ?? null;
+    return {
+      key: scenarioKey,
+      mode,
+      path,
+      method: a?.method ?? b?.method ?? method,
+      beforeCount: a?.count ?? null,
+      afterCount: b?.count ?? null,
+      beforeTotalP50: a?.totalP50 ?? null,
+      afterTotalP50: b?.totalP50 ?? null,
+      beforeTotalP95: a?.totalP95 ?? null,
+      afterTotalP95: b?.totalP95 ?? null,
+      beforeGapP50: a?.gapP50 ?? null,
+      afterGapP50: b?.gapP50 ?? null,
+      beforeDbqMax: a?.dbqMax ?? null,
+      afterDbqMax: b?.dbqMax ?? null,
+      beforeDbbMax: a?.dbbMax ?? null,
+      afterDbbMax: b?.dbbMax ?? null,
+    };
+  });
+  return rows.sort((left, right) =>
+    left.key.localeCompare(right.key)
+    || left.mode.localeCompare(right.mode)
+    || left.path.localeCompare(right.path)
+    || left.method.localeCompare(right.method));
+}
+
 /**
  * `--compare` pairing and its warnings. Pairing is by `key + mode`; a differing
  * `selectorMode` or inbox target is reported but never blocks the comparison,
  * because the two runs legitimately differ while the contract rolls out.
  */
 export function buildCompare(
-  baseline: { scenarios: ReportScenario[] },
-  current: { scenarios: ReportScenario[] },
-): { rows: CompareRow[]; warnings: CompareWarning[]; markdown: string } {
+  baseline: { scenarios: ReportScenario[]; meta?: { schema?: number } },
+  current: { scenarios: ReportScenario[]; meta?: { schema?: number } },
+): { rows: CompareRow[]; pathRows: ComparePathRow[]; warnings: CompareWarning[]; markdown: string } {
   const pairKey = (scenario: { key: string; mode: string }): string => `${scenario.key}::${scenario.mode}`;
   const before = new Map(baseline.scenarios.map((scenario) => [pairKey(scenario), scenario]));
   const after = new Map(current.scenarios.map((scenario) => [pairKey(scenario), scenario]));
@@ -555,6 +821,17 @@ export function buildCompare(
       beforeTimelineRequests: deepestTargetDepth(a)?.timelineRequests ?? null,
       afterTimelineRequests: deepestTargetDepth(b)?.timelineRequests ?? null,
     });
+    // A schema 2 warm row measured from the entry page's document origin: its
+    // readyMs, first-screen count and serial depth are not the same quantity as a
+    // schema 3 warm row. Cold rows are unaffected (both use the document origin),
+    // so only the warm side warns and nothing is withheld.
+    if (a && b && baseline.meta?.schema !== undefined && baseline.meta.schema < 3 && mode === "warm") {
+      warnings.push({
+        key: scenarioKey,
+        mode,
+        message: "时基不同：基线的 warm 行从入口页文档起算（schema 2），本轮的 warm 行从 click 起算；readyMs/首屏数/串行深度不可直接比较，只有 cold 行可配对",
+      });
+    }
     if (a && b && a.selectorMode !== b.selectorMode) {
       warnings.push({
         key: scenarioKey,
@@ -605,7 +882,30 @@ export function buildCompare(
       lines.push(`- \`${warning.key}\` (${warning.mode})：${warning.message}`);
     }
   }
+  const pathRows = buildCompareByPath(baseline, current);
+  if (pathRows.length > 0) {
+    lines.push("");
+    lines.push("### 按 path 对比（`key::mode::path` 配对）");
+    lines.push("");
+    lines.push(
+      "| 场景 | 模式 | path | 方法 | n | total p50 | total p95 | 差值 | gap p50 | 差值 | dbq max |",
+    );
+    lines.push("| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |");
+    for (const row of pathRows) {
+      const delta = (before: number | null, after: number | null): string =>
+        before === null || after === null ? "-" : `${after - before > 0 ? "+" : ""}${(after - before).toFixed(1)}`;
+      const count = row.beforeCount === null || row.afterCount === null
+        ? `${row.beforeCount ?? "-"} → ${row.afterCount ?? "-"}`
+        : `${row.beforeCount} → ${row.afterCount}`;
+      lines.push(
+        `| ${row.key} | ${row.mode} | \`${row.path}\` | ${row.method} | ${count} | ${fmtMs(row.beforeTotalP50)} → ${fmtMs(row.afterTotalP50)} | ${fmtMs(row.beforeTotalP95)} → ${fmtMs(row.afterTotalP95)} | ${delta(row.beforeTotalP95, row.afterTotalP95)} | ${fmtMs(row.beforeGapP50)} → ${fmtMs(row.afterGapP50)} | ${delta(row.beforeGapP50, row.afterGapP50)} | ${row.beforeDbqMax ?? "-"} → ${row.afterDbqMax ?? "-"} |`,
+      );
+    }
+  }
   lines.push("");
-  lines.push("> 差值只在同一台机器、同一网络位置、同一 rounds 下可比；schema 1（MUL-367）与新口径不可比。");
-  return { rows, warnings, markdown: lines.join("\n") };
+  lines.push(
+    "> 差值只在同一台机器、同一网络位置、同一 rounds 下可比；schema 1（MUL-367）与新口径不可比。"
+      + "schema 2 的 warm 行与 schema 3 不可比（时基不同）：读取时把 baseline meta.schema 一并记录。",
+  );
+  return { rows, pathRows, warnings, markdown: lines.join("\n") };
 }

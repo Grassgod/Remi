@@ -34,7 +34,28 @@ import {
   scrollRootFallbackSelector,
   scrollRootSelector,
 } from "../../../frontend/scripts/perf/lib/selectors";
-import { buildHtml, buildMarkdown } from "../../../frontend/scripts/perf/lib/report";
+import {
+  buildCompare,
+  buildCompareByPath,
+  buildHtml,
+  buildMarkdown,
+  REPORT_SCHEMA,
+} from "../../../frontend/scripts/perf/lib/report";
+import {
+  computeRoundMeasurement,
+  entryQuietVerdict,
+  roundSummary,
+  type RoundMeasurement,
+} from "../../../frontend/scripts/perf/lib/round-measurement";
+import type { ResourceEntry } from "../../../frontend/scripts/perf/lib/harness";
+import { computeApiPathStats } from "../../../frontend/scripts/perf/lib/jump-recorder";
+import {
+  collectExcludedRunningIssueIds,
+  DEFAULT_ENTRY_QUIET_MS,
+  ENTRY_QUIET_CAP_MS,
+  parseArgs,
+  usageLines,
+} from "../../../frontend/scripts/perf/lib/options";
 import {
   injectInboxTarget,
   isInboxReadStateEndpoint,
@@ -935,5 +956,732 @@ describe("selectors", () => {
     const legacy = profiles[1]!;
     expect(contract.anchors.map((anchor) => anchor.name)).toEqual(["agent-stream", "latest-comment"]);
     expect(legacy.anchors.map((anchor) => anchor.name)).toEqual(["latest-comment"]);
+  });
+});
+
+// ── MUL-395 S9-0: the warm time base, the first-screen lower bound, and the
+//    per-request persistence every later S9 item is graded on.
+
+/** One Resource Timing row, as `readResourceEntries` returns it. */
+function api(
+  index: number,
+  path: string,
+  startMs: number,
+  responseEndMs: number,
+  options: { serverTiming?: string | null; initiatorType?: string; encodedBytes?: number; method?: string } = {},
+): ResourceEntry {
+  return {
+    index,
+    name: `http://host${path}`,
+    path,
+    startMs,
+    responseEndMs,
+    durationMs: Math.round((responseEndMs - startMs) * 10) / 10,
+    encodedBytes: options.encodedBytes ?? 512,
+    decodedBytes: options.encodedBytes ?? 512,
+    transferBytes: options.encodedBytes ?? 512,
+    serverTiming: options.serverTiming ?? null,
+    method: options.method ?? "GET",
+    status: 200,
+    initiatorType: options.initiatorType ?? "fetch",
+  };
+}
+
+/**
+ * A warm-shaped recorder buffer: every timestamp is an absolute
+ * `performance.now()` on the entry page's document, i.e. it includes the time
+ * spent on the entry page before the click.
+ */
+function warmBuffer(clickT: number): {
+  frames: PerfFrame[];
+  shifts: Array<{ t: number; value: number; hadRecentInput: boolean; sources: string[] }>;
+  stateTransitions: PerfStateTransition[];
+} {
+  return {
+    frames: [
+      // Entry page content, before the click. It must not leak into any number.
+      frame(clickT - 800, view(0, { key: "entry" })),
+      // Target page: first content at click + 200, settled from click + 900.
+      frame(clickT + 200, view(0, { key: "target" })),
+      frame(clickT + 400, view(300, { key: "target" })),
+      frame(clickT + 900, view(300, { key: "target" })),
+      frame(clickT + 1_600, view(300, { key: "target" })),
+    ],
+    shifts: [
+      { t: clickT - 500, value: 0.5, hadRecentInput: false, sources: ["entry"] },
+      { t: clickT + 300, value: 0.1, hadRecentInput: false, sources: ["target"] },
+    ],
+    stateTransitions: [
+      { t: clickT - 400, value: "ready" },
+      { t: clickT + 950, value: "ready" },
+    ],
+  };
+}
+
+describe("computeRoundMeasurement — warm time base", () => {
+  const clickT = 1_800;
+
+  it("re-bases frames, jumps, shifts and app-ready on the click", () => {
+    const buffer = warmBuffer(clickT);
+    const result = computeRoundMeasurement({
+      mode: "contract",
+      shape: "issue-detail",
+      targetCommentId: null,
+      navStartMs: clickT,
+      frames: buffer.frames,
+      shifts: buffer.shifts,
+      stateTransitions: buffer.stateTransitions,
+      resources: [],
+      quietMs: READY_QUIET_MS,
+      profileReady: true,
+    });
+    // Entry-page frames sat at absolute 1000..; after rebasing the target page's
+    // first content is 200 and its settled window starts at 400.
+    expect(result.firstRealMs).toBe(200);
+    expect(result.readyMs).toBe(400);
+    expect(result.anchorVisibleMs).toBe(200);
+    // The jump at absolute click+400 is reported relative to the click.
+    expect(result.jumps).toHaveLength(1);
+    expect(result.jumps[0]!.startMs).toBe(400);
+    // The pre-click layout shift is filtered out by `fromMs` after rebasing; only
+    // the target page's own shift counts.
+    expect(result.layoutShiftCount).toBe(1);
+    expect(result.appReadyMs).toBe(950);
+    expect(result.dataFreshAtReady).toBe(true);
+  });
+
+  it("keeps a cold round (navStartMs = 0) numerically identical", () => {
+    // A cold round's document *is* the measured page, so its frames already start
+    // at the document origin and subtracting zero must change nothing.
+    const frames = [
+      frame(200, view(0, { key: "target" })),
+      frame(400, view(300, { key: "target" })),
+      frame(900, view(300, { key: "target" })),
+      frame(1_600, view(300, { key: "target" })),
+    ];
+    const cold = computeRoundMeasurement({
+      mode: "contract",
+      shape: "issue-detail",
+      targetCommentId: null,
+      navStartMs: 0,
+      frames,
+      shifts: [{ t: 300, value: 0.1, hadRecentInput: false, sources: ["target"] }],
+      stateTransitions: [{ t: 950, value: "ready" }],
+      resources: [api(0, "/api/issues/:id", 210, 260)],
+      quietMs: READY_QUIET_MS,
+      profileReady: true,
+    });
+    expect(cold.firstRealMs).toBe(200);
+    expect(cold.readyMs).toBe(400);
+    expect(cold.appReadyMs).toBe(950);
+    expect(cold.layoutShiftCount).toBe(1);
+    expect(cold.apiFirstScreen).toBe(1);
+    expect(cold.apiFirstScreenEntries[0]!.startMs).toBe(210);
+  });
+
+  it("ignores the entry page's trailing requests in the first-screen set", () => {
+    const buffer = warmBuffer(clickT);
+    const resources = [
+      // Started before the click, finished after it: entry-page work.
+      api(0, "/api/inbox/summary", clickT - 300, clickT + 50),
+      api(1, "/api/issues", clickT - 100, clickT + 20),
+      // Started after the click: target-page work.
+      api(2, "/api/issues/:id", clickT + 30, clickT + 80),
+      api(3, "/api/issues/:id/comments", clickT + 90, clickT + 300),
+      // Settled after the ready frame: not first screen.
+      api(4, "/api/late", clickT + 500, clickT + 600),
+    ];
+    const result = computeRoundMeasurement({
+      mode: "contract",
+      shape: "issue-detail",
+      targetCommentId: null,
+      navStartMs: clickT,
+      frames: buffer.frames,
+      shifts: [],
+      stateTransitions: [],
+      resources,
+      quietMs: READY_QUIET_MS,
+      profileReady: true,
+    });
+    expect(result.apiFirstScreenEntries.map((entry) => entry.path)).toEqual([
+      "/api/issues/:id",
+      "/api/issues/:id/comments",
+    ]);
+    expect(result.apiFirstScreen).toBe(2);
+    // `apiCallsTotal` shares the lower bound but keeps its old upper one: it is
+    // every call from the click onwards, so the late request counts here while
+    // the two entry-page ones (started before the click) do not.
+    expect(result.apiCallsTotal).toBe(3);
+  });
+
+  it("bounds chunks below by the click as well", () => {
+    const buffer = warmBuffer(clickT);
+    const result = computeRoundMeasurement({
+      mode: "contract",
+      shape: "issue-detail",
+      targetCommentId: null,
+      navStartMs: clickT,
+      frames: buffer.frames,
+      shifts: [],
+      stateTransitions: [],
+      resources: [
+        api(0, "/_next/static/entry.js", clickT - 500, clickT - 400, { initiatorType: "script", encodedBytes: 9_000 }),
+        api(1, "/_next/static/target.js", clickT + 100, clickT + 150, { initiatorType: "script", encodedBytes: 1_000 }),
+      ],
+      quietMs: READY_QUIET_MS,
+      profileReady: true,
+    });
+    expect(result.chunksLoaded).toBe(1);
+    expect(result.chunkBytes).toBe(1_000);
+  });
+
+  it("persists wave, after, Server-Timing and gap for every first-screen request", () => {
+    const buffer = warmBuffer(clickT);
+    const result = computeRoundMeasurement({
+      mode: "contract",
+      shape: "issue-detail",
+      targetCommentId: null,
+      navStartMs: clickT,
+      frames: buffer.frames,
+      shifts: [],
+      stateTransitions: [],
+      resources: [
+        api(0, "/api/issues/:id", clickT + 10, clickT + 60, {
+          serverTiming: "total;dur=20.5, db;dur=3, dbp;dur=1, dbq;dur=4, dbb;dur=2048",
+        }),
+        api(1, "/api/issues/:id/comments", clickT + 90, clickT + 300, {
+          serverTiming: "total;dur=180, db;dur=40, dbq;dur=9, dbb;dur=900",
+        }),
+      ],
+      quietMs: READY_QUIET_MS,
+      profileReady: true,
+    });
+    const [first, second] = result.apiFirstScreenEntries;
+    // `startMs`/`responseEndMs` stay on the page's absolute clock; `navStartMs` is
+    // persisted next to them, so `startMs - navStartMs` is the round-relative
+    // value a reader compares against `readyMs`.
+    expect(first).toMatchObject({
+      path: "/api/issues/:id",
+      method: "GET",
+      wave: 1,
+      after: null,
+      startMs: clickT + 10,
+      responseEndMs: clickT + 60,
+      durationMs: 50,
+      encodedBytes: 512,
+      serverTiming: { total: 20.5, db: 3, dbp: 1, dbq: 4, dbb: 2048 },
+      gapMs: 29.5,
+    });
+    expect(first!.startMs - clickT).toBe(10);
+    // The second request starts after the first ended, so it is wave 2 and names
+    // its predecessor by position in this same table.
+    expect(second).toMatchObject({ wave: 2, after: 0, gapMs: 30 });
+    expect(result.serialChain).toEqual(["/api/issues/:id", "/api/issues/:id/comments"]);
+    expect(result.serialDepth).toBe(2);
+  });
+
+  it("leaves gapMs null when the response carried no Server-Timing", () => {
+    const buffer = warmBuffer(clickT);
+    const result = computeRoundMeasurement({
+      mode: "contract",
+      shape: "issue-detail",
+      targetCommentId: null,
+      navStartMs: clickT,
+      frames: buffer.frames,
+      shifts: [],
+      stateTransitions: [],
+      resources: [api(0, "/api/issues", clickT + 10, clickT + 60)],
+      quietMs: READY_QUIET_MS,
+      profileReady: true,
+    });
+    expect(result.apiFirstScreenEntries[0]!.gapMs).toBeNull();
+    expect(result.apiFirstScreenEntries[0]!.serverTiming).toEqual({
+      total: null, db: null, dbp: null, dbq: null, dbb: null,
+    });
+  });
+});
+
+describe("computeApiPathStats", () => {
+  const timing = (total: number | null, extra: { db?: number; dbq?: number; dbb?: number } = {}): ResourceEntry["serverTiming"] =>
+    `total;dur=${total ?? 0}${extra.db !== undefined ? `, db;dur=${extra.db}` : ""}${extra.dbq !== undefined ? `, dbq;dur=${extra.dbq}` : ""}${extra.dbb !== undefined ? `, dbb;dur=${extra.dbb}` : ""}`;
+
+  it("aggregates per path across rounds, not per round", () => {
+    const rounds = [
+      { apiFirstScreenEntries: [
+        entry("/api/inbox/summary", 120, { total: 300, db: 20, dbq: 6, dbb: 5_200_000 }),
+        entry("/api/issues", 40, { total: 60, db: 10, dbq: 80, dbb: 100 }),
+      ] },
+      { apiFirstScreenEntries: [
+        entry("/api/inbox/summary", 90, { total: 200, db: 15, dbq: 4, dbb: 4_900_000 }),
+      ] },
+    ];
+    const stats = computeApiPathStats(rounds);
+    const summary = stats.find((row) => row.path === "/api/inbox/summary")!;
+    expect(summary.count).toBe(2);
+    expect(summary.rounds).toBe(2);
+    expect(summary.totalP50).toBe(200);
+    expect(summary.totalP95).toBe(300);
+    expect(summary.dbP95).toBe(20);
+    expect(summary.dbqMax).toBe(6);
+    expect(summary.dbbMax).toBe(5_200_000);
+    const issues = stats.find((row) => row.path === "/api/issues")!;
+    expect(issues.count).toBe(1);
+    expect(issues.rounds).toBe(1);
+    expect(issues.dbqMax).toBe(80);
+    // Sorted by total p95 descending, so the worst path leads the table.
+    expect(stats[0]!.path).toBe("/api/inbox/summary");
+  });
+
+  it("keeps distinct methods apart and tolerates rounds without entries", () => {
+    const stats = computeApiPathStats([
+      { apiFirstScreenEntries: [entry("/api/issues", 10, { total: 5 }, "POST")] },
+      { apiFirstScreenEntries: [entry("/api/issues", 20, { total: 7 }, "GET")] },
+      { apiFirstScreenEntries: null },
+      {},
+    ]);
+    expect(stats).toHaveLength(2);
+    expect(stats.map((row) => row.method).sort()).toEqual(["GET", "POST"]);
+    const get = stats.find((row) => row.method === "GET")!;
+    expect(get.count).toBe(1);
+    expect(get.rounds).toBe(1);
+    expect(get.totalP50).toBe(7);
+  });
+
+  it("returns no rows for a scenario with nothing measured", () => {
+    expect(computeApiPathStats([])).toEqual([]);
+    expect(computeApiPathStats([{ apiFirstScreenEntries: [] }])).toEqual([]);
+  });
+});
+
+/** One persisted first-screen entry, with sensible defaults per test. */
+function entry(
+  path: string,
+  startMs: number,
+  timing: { total?: number | null; db?: number; dbq?: number; dbb?: number },
+  method = "GET",
+): {
+  path: string;
+  method: string;
+  wave: number;
+  after: number | null;
+  startMs: number;
+  responseEndMs: number;
+  durationMs: number;
+  encodedBytes: number;
+  serverTiming: { total: number | null; db: number | null; dbp: number | null; dbq: number | null; dbb: number | null };
+  gapMs: number | null;
+} {
+  const total = timing.total === undefined ? 10 : timing.total;
+  const db = timing.db ?? null;
+  const dbq = timing.dbq ?? null;
+  const dbb = timing.dbb ?? null;
+  return {
+    path,
+    method,
+    wave: 1,
+    after: null,
+    startMs,
+    responseEndMs: startMs + 50,
+    durationMs: 50,
+    encodedBytes: 100,
+    serverTiming: { total, db, dbp: null, dbq, dbb },
+    gapMs: total === null ? null : 50 - total,
+  };
+}
+
+describe("entryQuietVerdict", () => {
+  it("settles only after a full quiet window with no new API request", () => {
+    expect(entryQuietVerdict({ sinceLastApiMs: 499, quietMs: 500, waitedMs: 600, capMs: 5_000 })).toBe("waiting");
+    expect(entryQuietVerdict({ sinceLastApiMs: 500, quietMs: 500, waitedMs: 600, capMs: 5_000 })).toBe("settled");
+  });
+
+  it("does not settle before the entry page has made any API call", () => {
+    // "Idle because nothing has started yet" is not quiet: the first load's
+    // requests are exactly what the rule waits for.
+    expect(entryQuietVerdict({ sinceLastApiMs: null, quietMs: 500, waitedMs: 1_000, capMs: 5_000 })).toBe("waiting");
+  });
+
+  it("caps the wait and then clicks anyway", () => {
+    expect(entryQuietVerdict({ sinceLastApiMs: 10, quietMs: 500, waitedMs: 5_000, capMs: 5_000 })).toBe("timeout");
+    // A page that went quiet exactly as the cap expired did satisfy the rule.
+    expect(entryQuietVerdict({ sinceLastApiMs: 500, quietMs: 500, waitedMs: 5_000, capMs: 5_000 })).toBe("settled");
+  });
+});
+
+describe("roundSummary persistence", () => {
+  const measurement = (): RoundMeasurement => {
+    const computed = computeRoundMeasurement({
+      mode: "contract",
+      shape: "issue-detail",
+      targetCommentId: null,
+      navStartMs: 1_800,
+      frames: warmBuffer(1_800).frames,
+      shifts: [],
+      stateTransitions: warmBuffer(1_800).stateTransitions,
+      resources: [
+        api(0, "/api/issues/:id", 1_810, 1_860, { serverTiming: "total;dur=20, db;dur=3, dbq;dur=4, dbb;dur=2" }),
+      ],
+      quietMs: READY_QUIET_MS,
+      profileReady: true,
+    });
+    return {
+      ...computed,
+      round: 1,
+      url: "http://host/local/issues/iss_x",
+      navStartMs: 1_800,
+      clickT: 1_800,
+      entryReadyMs: 1_200,
+      entryInflightAtClick: 2,
+      entrySettled: false,
+      blockedWrites: 0,
+      stubbedWrites: 0,
+      urlCommitMs: 150,
+      clickedRowText: "row",
+      inboxInjected: false,
+      inboxPageRequestsBeforeStub: null,
+      timelineRequests: 1,
+      targetIndexFromLatest: 3,
+      entryFailed: false,
+      lcpMs: 900,
+    };
+  };
+
+  it("carries the time base, entry state, serial chain and per-request table", () => {
+    const summary = roundSummary(measurement());
+    expect(summary.navStartMs).toBe(1_800);
+    expect(summary.clickT).toBe(1_800);
+    expect(summary.entryReadyMs).toBe(1_200);
+    expect(summary.entryInflightAtClick).toBe(2);
+    expect(summary.entrySettled).toBe(false);
+    expect(summary.serialChain).toEqual(["/api/issues/:id"]);
+    expect(summary.apiFirstScreenEntries).toHaveLength(1);
+    expect(summary.apiFirstScreenEntries[0]).toMatchObject({ path: "/api/issues/:id", wave: 1, gapMs: 30 });
+    // The count field is kept next to the table so the two can be cross-checked.
+    expect(summary.apiFirstScreen).toBe(1);
+    expect(JSON.parse(JSON.stringify(summary)).navStartMs).toBe(1_800);
+  });
+});
+
+describe("report schema and per-path output", () => {
+  const roundSummaryFixture = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+    round: 1,
+    navStartMs: 1_800,
+    clickT: 1_800,
+    readyMs: 400,
+    readyTimeout: false,
+    firstRealMs: 200,
+    anchorVisibleMs: 200,
+    anchorName: "latest-comment",
+    anchorRule: "legacy-latest-comment",
+    appReadyMs: 950,
+    appReadyForced: false,
+    dataFreshAtReady: true,
+    jumpCount: 0,
+    jumpPx: 0,
+    jumps: [],
+    layoutShiftCount: 0,
+    cls: 0,
+    serialDepth: 2,
+    serialChain: ["/api/issues/:id", "/api/issues/:id/comments"],
+    apiCallsTotal: 3,
+    apiFirstScreen: 2,
+    apiFirstScreenEntries: [
+      entry("/api/issues/:id", 1_810, { total: 20, dbq: 4 }),
+      entry("/api/issues/:id/comments", 1_890, { total: 120, dbq: 9 }),
+    ],
+    chunksLoaded: 1,
+    chunkBytes: 2_048,
+    lcpMs: 900,
+    slowestServerTotalMs: 120,
+    blockedWrites: 0,
+    stubbedWrites: 0,
+    urlCommitMs: 150,
+    entryReadyMs: 1_200,
+    entryInflightAtClick: 2,
+    entrySettled: false,
+    inboxInjected: false,
+    inboxPageRequestsBeforeStub: null,
+    clickedRowText: "row",
+    heapBytes: null,
+    anchorRectAtReady: null,
+    targetDepth: { timelineRequests: 1, targetIndexFromLatest: 3 },
+    selectorEquivalence: null,
+    ...overrides,
+  });
+
+  const scenarioFixture = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+    key: "detail-short",
+    mode: "warm",
+    target: { identifier: "MUL-67" },
+    rule: "rule",
+    anchorRule: "legacy-latest-comment",
+    selectorMode: "legacy",
+    skipped: false,
+    skipReason: null,
+    hoverLeadMs: 150,
+    rounds: [roundSummaryFixture()],
+    stats: {
+      n: 1, timeouts: 0, readyP50: 400, readyP75: 400, readyP95: 400, readyMax: 400,
+      firstRealP50: 200, jumpsMax: 0, jumpPxMax: 0, serialDepthMax: 2,
+      apiFirstScreenP50: 2, slowestServerTotalP50: 120,
+      apiByPath: computeApiPathStats([{ apiFirstScreenEntries: [entry("/api/issues/:id", 1_810, { total: 20, dbq: 4 })] }]),
+    },
+    ...overrides,
+  });
+
+  it("declares schema 3 in the artifact header", () => {
+    expect(REPORT_SCHEMA).toBe(3);
+    const md = buildMarkdown({ meta: {}, scenarios: [scenarioFixture()] as never, blockedWrites: [], compare: null });
+    expect(md).toContain("schema 3");
+    const html = buildHtml({ meta: {}, scenarios: [scenarioFixture()] as never, blockedWrites: [] });
+    expect(html).toContain("schema 3");
+  });
+
+  it("renders one first-screen API table per scenario in both formats", () => {
+    const scenarios = [scenarioFixture(), scenarioFixture({ key: "page-issues", mode: "cold" })];
+    const md = buildMarkdown({ meta: {}, scenarios: scenarios as never, blockedWrites: [], compare: null });
+    expect(md).toContain("## 首屏 API 表（按 path 聚合，跨本场景各轮）");
+    expect(md).toContain("### detail-short（warm）");
+    expect(md).toContain("### page-issues（cold）");
+    expect(md).toMatch(/total p95/);
+    const html = buildHtml({ meta: {}, scenarios: scenarios as never, blockedWrites: [] });
+    expect(html).toContain("首屏 API 表（按 path 聚合）");
+    expect(html.match(/<h3>detail-short（warm）<\/h3>/g)).toHaveLength(1);
+  });
+
+  it("reports the round's time base and serial chain in the Markdown detail", () => {
+    const md = buildMarkdown({ meta: {}, scenarios: [scenarioFixture()] as never, blockedWrites: [], compare: null });
+    expect(md).toContain("## 逐轮时基与串行链");
+    expect(md).toMatch(/\| detail-short \| warm \| 1 \| 1800\.0 \| 1800\.0 \| 1200\.0 \| 2 \| 超时 \|/);
+    expect(md).toContain("/api/issues/:id → /api/issues/:id/comments");
+  });
+});
+
+describe("buildCompare schema handling", () => {
+  const scenario = (key: string, mode: "cold" | "warm", schema: number): Record<string, unknown> => ({
+    key,
+    mode,
+    target: { identifier: "MUL-67" },
+    selectorMode: "legacy",
+    skipped: false,
+    skipReason: null,
+    hoverLeadMs: mode === "warm" ? 150 : null,
+    rounds: [],
+    stats: {
+      n: 1, timeouts: 0, readyP50: 100, readyP75: 100, readyP95: 100, readyMax: 100,
+      firstRealP50: 90, jumpsMax: 0, jumpPxMax: 0, serialDepthMax: 3,
+      apiFirstScreenP50: 5, slowestServerTotalP50: 12,
+      apiByPath: computeApiPathStats([{ apiFirstScreenEntries: [entry("/api/inbox/summary", 10, { total: 300, dbq: 6, dbb: 5_200_000 })] }]),
+    },
+    meta: { schema },
+  });
+
+  it("warns only on the warm rows of a schema 2 baseline", () => {
+    const baseline = {
+      meta: { schema: 2 },
+      scenarios: [scenario("detail-short", "cold", 2), scenario("detail-short", "warm", 2)],
+    };
+    const current = {
+      meta: { schema: 3 },
+      scenarios: [scenario("detail-short", "cold", 3), scenario("detail-short", "warm", 3)],
+    };
+    const compare = buildCompare(baseline as never, current as never);
+    // Both rows still pair — the warning is advisory, never a refusal.
+    expect(compare.rows.map((row) => row.mode)).toEqual(["cold", "warm"]);
+    const timeBaseWarnings = compare.warnings.filter((warning) => warning.message.includes("时基不同"));
+    expect(timeBaseWarnings).toHaveLength(1);
+    expect(timeBaseWarnings[0]!.mode).toBe("warm");
+    expect(timeBaseWarnings[0]!.message).toContain("只有 cold 行可配对");
+    expect(compare.markdown).toContain("时基不同");
+  });
+
+  it("stays silent for a schema 3 baseline and for schema 2 cold rows alone", () => {
+    const sameSchema = buildCompare(
+      { meta: { schema: 3 }, scenarios: [scenario("detail-short", "warm", 3)] } as never,
+      { meta: { schema: 3 }, scenarios: [scenario("detail-short", "warm", 3)] } as never,
+    );
+    expect(sameSchema.warnings.filter((warning) => warning.message.includes("时基不同"))).toHaveLength(0);
+
+    const coldOnly = buildCompare(
+      { meta: { schema: 2 }, scenarios: [scenario("detail-short", "cold", 2)] } as never,
+      { meta: { schema: 3 }, scenarios: [scenario("detail-short", "cold", 3)] } as never,
+    );
+    expect(coldOnly.warnings.filter((warning) => warning.message.includes("时基不同"))).toHaveLength(0);
+    expect(coldOnly.rows).toHaveLength(1);
+  });
+
+  it("pairs per-path deltas on key::mode::path and reports vanished paths", () => {
+    const baseline = {
+      meta: { schema: 3 },
+      scenarios: [
+        {
+          ...scenario("detail-short", "warm", 3),
+          stats: {
+            ...(scenario("detail-short", "warm", 3).stats as Record<string, unknown>),
+            apiByPath: computeApiPathStats([{ apiFirstScreenEntries: [
+              entry("/api/inbox/summary", 10, { total: 300, dbq: 6 }),
+              entry("/api/issues", 20, { total: 40 }),
+            ] }]),
+          },
+        },
+      ],
+    };
+    const current = {
+      meta: { schema: 3 },
+      scenarios: [
+        {
+          ...scenario("detail-short", "warm", 3),
+          stats: {
+            ...(scenario("detail-short", "warm", 3).stats as Record<string, unknown>),
+            apiByPath: computeApiPathStats([{ apiFirstScreenEntries: [entry("/api/inbox/summary", 10, { total: 30, dbq: 2 })] }]),
+          },
+        },
+      ],
+    };
+    const compare = buildCompare(baseline as never, current as never);
+    const summary = compare.pathRows.find((row) => row.path === "/api/inbox/summary")!;
+    expect(summary.beforeTotalP95).toBe(300);
+    expect(summary.afterTotalP95).toBe(30);
+    expect(summary.beforeDbqMax).toBe(6);
+    expect(summary.afterDbqMax).toBe(2);
+    // A path that the change removed still shows up, with a blank right column:
+    // "the request is gone" is exactly the result S9-1 is graded on.
+    const issues = compare.pathRows.find((row) => row.path === "/api/issues")!;
+    expect(issues.beforeCount).toBe(1);
+    expect(issues.afterCount).toBeNull();
+    expect(compare.markdown).toContain("### 按 path 对比");
+    // The helper is also exported on its own, for readers that only want the paths.
+    expect(buildCompareByPath(baseline as never, current as never)).toHaveLength(2);
+  });
+
+  it("renders the per-path comparison in HTML", () => {
+    const html = buildHtml({
+      meta: {},
+      scenarios: [scenarioFixtureForCompare()] as never,
+      blockedWrites: [],
+      compareTable: [],
+      comparePathTable: [{
+        key: "detail-short",
+        mode: "warm",
+        path: "/api/inbox/summary",
+        method: "GET",
+        beforeCount: 5,
+        afterCount: 1,
+        beforeTotalP50: 120,
+        afterTotalP50: 40,
+        beforeTotalP95: 300,
+        afterTotalP95: 30,
+        beforeGapP50: 90,
+        afterGapP50: 20,
+        beforeDbqMax: 6,
+        afterDbqMax: 2,
+        beforeDbbMax: 5_200_000,
+        afterDbbMax: 90_000,
+      }],
+    });
+    expect(html).toContain("与基线对比：按 path");
+    expect(html).toContain("/api/inbox/summary");
+    expect(html).toContain("-270.0");
+  });
+
+  function scenarioFixtureForCompare(): Record<string, unknown> {
+    return {
+      key: "detail-short",
+      mode: "warm",
+      target: { identifier: "MUL-67" },
+      rule: "rule",
+      anchorRule: "legacy-latest-comment",
+      selectorMode: "legacy",
+      skipped: false,
+      skipReason: null,
+      hoverLeadMs: 150,
+      rounds: [],
+      stats: {
+        n: 1, timeouts: 0, readyP50: 100, readyP75: 100, readyP95: 100, readyMax: 100,
+        firstRealP50: 90, jumpsMax: 0, jumpPxMax: 0, serialDepthMax: 3,
+        apiFirstScreenP50: 5, slowestServerTotalP50: 12, apiByPath: [],
+      },
+    };
+  }
+});
+
+// ── MUL-395 S9-0 follow-up: the A1 default (entry-quiet on) and A3's new
+//    fixture/scenario wiring.
+
+describe("probe options", () => {
+  it("turns the entry quiet rule on by default at 500ms with a 5s cap", () => {
+    const opts = parseArgs([]);
+    expect(opts.entryQuietMs).toBe(DEFAULT_ENTRY_QUIET_MS);
+    expect(opts.entryQuietMs).toBe(500);
+    expect(ENTRY_QUIET_CAP_MS).toBe(5_000);
+  });
+
+  it("keeps the entry quiet rule overridable and treats 0 as off", () => {
+    expect(parseArgs(["--entry-quiet-ms", "250"]).entryQuietMs).toBe(250);
+    // 0 is the documented off switch; keeping it as a 0ms window would still pay
+    // a poll per round and report `entrySettled`.
+    expect(parseArgs(["--entry-quiet-ms", "0"]).entryQuietMs).toBeNull();
+    expect(() => parseArgs(["--entry-quiet-ms", "-1"])).toThrow();
+  });
+
+  it("pins detail-long to MUL-70 and detail-xlong to MUL-454 by default", () => {
+    const opts = parseArgs([]);
+    expect(opts.issueLong).toBe("iss_enbrunyg86jc");
+    expect(opts.issueXlong).toBe("iss_o2skonppbq2u");
+    expect(opts.issueShort).toBe("iss_in41j1x1dq66");
+  });
+
+  it("lets --issue-xlong drop the scenario without touching the other keys", () => {
+    expect(parseArgs(["--issue-xlong", ""]).issueXlong).toBeNull();
+    expect(parseArgs(["--issue-xlong", "none"]).issueXlong).toBeNull();
+    expect(parseArgs(["--issue-xlong", "iss_other"]).issueXlong).toBe("iss_other");
+    // `--issue-long` is unaffected: MUL-395's comparison fixture stays pinned.
+    expect(parseArgs(["--issue-xlong", ""]).issueLong).toBe("iss_enbrunyg86jc");
+  });
+
+  it("rejects unknown flags and keeps the documented defaults", () => {
+    expect(() => parseArgs(["--nope"])).toThrow(/unknown argument/);
+    const opts = parseArgs([]);
+    expect(opts.rounds).toBe(3);
+    expect(opts.selectors).toBe("auto");
+    expect(opts.hoverLeadMs).toBe(150);
+    expect(opts.inboxProbePages).toBe(10);
+    expect(opts.window).toBe("offpeak");
+  });
+
+  it("returns from --help instead of parsing the rest of the line", () => {
+    const opts = parseArgs(["--help", "--nonsense"]);
+    expect(opts.help).toBe(true);
+    expect(usageLines().join("\n")).toContain("--entry-quiet-ms");
+  });
+
+  it("documents every flag it accepts", () => {
+    const usage = usageLines().join("\n");
+    for (const flag of [
+      "--base-url", "--rounds", "--window", "--selectors", "--issue-short", "--issue-long",
+      "--issue-xlong", "--issue-running", "--inbox-item", "--inbox-probe-pages",
+      "--hover-lead-ms", "--entry-quiet-ms", "--out", "--name", "--compare", "--only", "--warmup",
+    ]) {
+      expect(usage).toContain(flag);
+    }
+  });
+});
+
+describe("running-issue exclusions", () => {
+  it("always excludes MUL-454, so the long fixture cannot become detail-running", () => {
+    // MUL-454 stays in progress and unassigned by design; without this the probe
+    // would pick it up as "some running task's issue" and measure it twice.
+    const excluded = collectExcludedRunningIssueIds();
+    expect(excluded.has("iss_o2skonppbq2u")).toBe(true);
+    // MUL-383 itself stays excluded too.
+    expect(excluded.has("iss_j67lb0r8djw4")).toBe(true);
+  });
+
+  it("adds the MUL-383 children the API reports on top of the constants", () => {
+    const excluded = collectExcludedRunningIssueIds(["iss_child_a", "iss_child_b"]);
+    expect(excluded.has("iss_o2skonppbq2u")).toBe(true);
+    expect(excluded.has("iss_child_a")).toBe(true);
+    expect(excluded.has("iss_child_b")).toBe(true);
+    expect(excluded.size).toBe(4);
   });
 });
