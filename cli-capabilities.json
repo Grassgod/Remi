@@ -3651,6 +3651,40 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "issue.done-grant.add": {
+      "command": "remi issue done-grant add",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.done-grant.add",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.done-grant.remove": {
+      "command": "remi issue done-grant remove",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.done-grant.remove",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "issue.reaction.list": {
       "command": "remi issue reaction list",
       "aliases": [],
@@ -9917,6 +9951,9 @@
     "DELETE /api/issues/:id/metadata/:key": {
       "command": "issue.metadata.delete"
     },
+    "DELETE /api/issues/:id/parent-done-grant": {
+      "command": "issue.done-grant.remove"
+    },
     "DELETE /api/issues/:id/reactions": {
       "command": "issue.reaction.remove"
     },
@@ -9964,6 +10001,9 @@
     },
     "DELETE /api/multiremi/issues/:id/metadata/:key": {
       "command": "issue.metadata.delete"
+    },
+    "DELETE /api/multiremi/issues/:id/parent-done-grant": {
+      "command": "issue.done-grant.remove"
     },
     "DELETE /api/multiremi/issues/:id/reactions": {
       "command": "issue.reaction.remove"
@@ -11608,6 +11648,9 @@
     "POST /api/issues/:id/labels": {
       "command": "issue.label.add"
     },
+    "POST /api/issues/:id/parent-done-grant": {
+      "command": "issue.done-grant.add"
+    },
     "POST /api/issues/:id/reactions": {
       "command": "issue.reaction.add"
     },
@@ -11796,6 +11839,9 @@
     },
     "POST /api/multiremi/issues/:id/labels": {
       "command": "issue.label.add"
+    },
+    "POST /api/multiremi/issues/:id/parent-done-grant": {
+      "command": "issue.done-grant.add"
     },
     "POST /api/multiremi/issues/:id/reactions": {
       "command": "issue.reaction.add"

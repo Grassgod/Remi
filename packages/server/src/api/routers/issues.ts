@@ -38,8 +38,9 @@ import {
   attachmentCompatibilityResponse,
   cleanString,
   commentCompatibilityResponse,
-  currentRequestUserId,
   currentTaskAccessToken,
+  authenticatedRequestUserId,
+  currentRequestUserId,
   currentAccessToken,
   currentWorkspaceMember,
   hasRequestField,
@@ -83,6 +84,7 @@ import {
   taskPublicResponse,
 } from "../wire/index.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
+import { ParentDoneGrantOwnerError } from "@multiremi/store/repos/issues-repo.js";
 import type {
   AddSessionParticipantInput,
   AssignIssueInput,
@@ -893,6 +895,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       // MUL-400 E1: `child_count` is a plain COUNT (no child bodies), so the
       // detail surfaces can show "N sub-issues" without the MUL-385 cost.
       issue: { ...issue, tasks, child_count: issue.childProgress.total,
+        parent_done_grant: store.issueParentDoneGrantView(issue),
         pending_decision_count: store.countPendingIssueDecisions(issue.id) },
       children: issue.children,
       childProgress: issue.childProgress,
@@ -1253,6 +1256,35 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       throw err;
     }
   });
+  for (const prefix of ["/api/issues/:id", "/api/multiremi/issues/:id"]) {
+    app.post(`${prefix}/parent-done-grant`, (c) => {
+      const issue = issueFromParam(store, c, "id", prefix.startsWith("/api/multiremi") ? undefined : "compat");
+      if (!issue) return c.json({ error: "issue not found" }, 404);
+      const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+      if (denied) return denied;
+      if (issueMutationActivity(c).actorType !== "member" || currentTaskAccessToken(c)) {
+        return c.json({ error: "Only a member can authorize parent closure", code: "parent_done_grant_requires_member" }, 403);
+      }
+      try {
+        const updated = store.grantParentDone(issue.id, authenticatedRequestUserId(c) ?? currentRequestUserId(c));
+        return c.json({ issue: updated, parent_done_grant: store.issueParentDoneGrantView(updated) });
+      } catch (error) {
+        if (error instanceof ParentDoneGrantOwnerError) return c.json({ error: error.message, code: error.code }, 409);
+        throw error;
+      }
+    });
+    app.delete(`${prefix}/parent-done-grant`, (c) => {
+      const issue = issueFromParam(store, c, "id", prefix.startsWith("/api/multiremi") ? undefined : "compat");
+      if (!issue) return c.json({ error: "issue not found" }, 404);
+      const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+      if (denied) return denied;
+      if (issueMutationActivity(c).actorType !== "member" || currentTaskAccessToken(c)) {
+        return c.json({ error: "Only a member can revoke parent closure", code: "parent_done_grant_requires_member" }, 403);
+      }
+      const updated = store.revokeParentDone(issue.id, authenticatedRequestUserId(c) ?? currentRequestUserId(c));
+      return c.json({ issue: updated, parent_done_grant: store.issueParentDoneGrantView(updated) });
+    });
+  }
   app.patch("/api/multiremi/issues/:id", async (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
