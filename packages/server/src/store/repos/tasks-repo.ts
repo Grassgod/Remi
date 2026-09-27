@@ -683,10 +683,8 @@ function commonConstraintMachineAliases(constraints: TaskPlacementConstraint[]):
 }
 
 /**
- * The single hard-affinity classifier (MUL-449). It answers both "may this
- * queued turn be re-pooled?" and "what do we tell the user?", so the skip set
- * and the label can never disagree. `null` means soft affinity: the pin is a
- * provider session lineage, which is abandoned and re-pooled instead of shown.
+ * Classify pins that the queued Issue lane refresh must preserve. `null` means
+ * the pin is soft provider-session lineage and may be re-pooled.
  *
  * Order matters. `Agent 绑定` is configuration, not lineage: clearing the
  * session would not let another machine take the task. `Issue 工作区` requires
@@ -779,7 +777,7 @@ function hardTaskAffinity(
   cache?: PlacementSweepCache,
 ): HardTaskAffinity | null {
   const pinnedRuntimeId = nullableString(row.runtime_id ?? row.runtimeId);
-  if (agentRuntimeId) {
+  if (pinnedRuntimeId && agentRuntimeId && pinnedRuntimeId === agentRuntimeId) {
     return { kind: "Agent 绑定", daemonId: null };
   }
   const sessionId = nullableString(row.issue_session_id ?? row.issueSessionId);

@@ -1228,6 +1228,28 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     expect(store.claimTask(b.id)?.id).toBe(second.id);
   });
 
+  it("re-pools a stale Issue lane on B when its Agent is bound to allowed A", () => {
+    const store = createLocalStore();
+    const a = store.registerRuntime({ id: "rt_stale_a", name: "A", provider: "codex", daemonId: "dev-stale-a" });
+    const b = store.registerRuntime({ id: "rt_stale_b", name: "B", provider: "codex", daemonId: "dev-stale-b" });
+    const agent = store.createAgent({ name: "Bound A", provider: "codex", runtimeId: a.id });
+    const project = store.createProject({ title: "A only" });
+    store.createProjectDevice(project.id, { daemonId: "dev-stale-a" });
+    const issue = store.createIssue({ title: "Stale lane", projectId: project.id });
+    const session = store.createIssueSession(issue.id, { title: "Discussion", holdsWorkspace: false });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "resume" });
+    // Simulate a historical lane and queued task left on B after the binding moved.
+    db!.run("UPDATE multiremi_tasks SET runtime_id = ?, session_id = ? WHERE id = ?", [b.id, "sess_stale", task.id]);
+    db!.run(
+      `UPDATE multiremi_session_agent_lanes SET runtime_id = ?, provider_session_id = ?
+       WHERE session_id = ? AND agent_id = ?`,
+      [b.id, "sess_stale", session.id, agent.id],
+    );
+    expect(store.claimTask(b.id)).toBeNull();
+    expect(store.claimTask(a.id)?.id).toBe(task.id);
+    expect(store.getTask(task.id)).toMatchObject({ runtimeId: a.id, status: "dispatched" });
+  });
+
   it("leaves a queued Issue turn alone while its Project still allows the device", () => {
     const store = createLocalStore();
     const allowed = store.registerRuntime({
