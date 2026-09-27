@@ -895,7 +895,7 @@ export class TasksRepo {
     const id = input.id ?? createId("tsk");
     const now = nowIso();
     const attempt = normalizePositiveInt(input.attempt, 1);
-    const maxAttempts = Math.max(attempt, normalizePositiveInt(input.maxAttempts, 3));
+    const maxAttempts = Math.max(attempt, normalizePositiveInt(input.maxAttempts ?? input.max_attempts, 3));
     const delegationId = cleanOptionalString(input.delegationId ?? input.delegation_id);
     const delegatedByAgentId = cleanOptionalString(input.delegatedByAgentId ?? input.delegated_by_agent_id);
     if (Boolean(delegationId) !== Boolean(delegatedByAgentId)) {

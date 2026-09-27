@@ -421,7 +421,7 @@
     "issue_status_forced": "由成员强制把状态改为 {{status}}",
     "dependency_auto_started": "{{key}} 完成后自动开工",
     "dependency_satisfied": "{{key}} 已完成，等待人工启动本 issue",
-    "dependency_auto_start_skipped": "{{key}} 完成后未能自动开工",
+    "dependency_auto_start_skipped": "{{key}} 完成后未能自动开工：请先修复负责人，再重新指派本单即可开工，不需要强制开工",
     "dependency_prerequisite_failed": "前置单 {{key}} 不会完成，本 issue 留在 backlog",
     "dependency_waiting": "因前置单未完成建单时停在 backlog",
     "dependency_force_started": "前置单未完成时强制开工（member 覆盖）",

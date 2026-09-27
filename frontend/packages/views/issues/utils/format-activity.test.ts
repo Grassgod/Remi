@@ -302,6 +302,23 @@ describe("formatActivity — dependency activities", () => {
     ).toBe('activity.dependency_auto_start_skipped {"key":"MUL-9"}');
   });
 
+  /**
+   * MUL-409 fix round 4 (QA round 3, suggestion 4): the record an operator sees
+   * after a failed automatic start has to say what to DO. Fixing the owner and
+   * assigning the issue again is the whole recovery — no forced start — and the
+   * copy has to name that.
+   */
+  it("tells the operator how to recover from a skipped automatic start", async () => {
+    const bundle = (await import("../../locales/zh-Hans/issues.json")).default as {
+      activity: Record<string, string>;
+    };
+    const copy = bundle.activity.dependency_auto_start_skipped ?? "";
+    expect(copy.startsWith("{{key}}")).toBe(true);
+    expect(copy).toContain("负责人");
+    expect(copy).toContain("指派");
+    expect(copy).toContain("不需要强制开工");
+  });
+
   it("renders a failed prerequisite with the dead prerequisite's key", () => {
     expect(
       formatActivity(activity("dependency_prerequisite_failed", { details: { prerequisite_key: "MUL-10" } }), t),

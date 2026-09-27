@@ -1222,15 +1222,35 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     assertRuntimeWorkspaceAccess(c, store, body.runtimeWorkspaceId ?? body.runtime_workspace_id, issue.workspaceId);
     const dispatchDenied = denySideSessionIssueUpdate(c, store, issue, input);
     if (dispatchDenied) return dispatchDenied;
-    const { issue: updated, cancelledTasks, handledForcedStart } = store.updateIssueWithOutcome(issue.id, input);
-    lockAutoTitleAfterHumanEdit(c, updated, input);
-    // MUL-400 E3 (QA round 2, blocker 2): a forced start already dispatched
-    // inside the store. Dispatch here as well would cancel that fresh round and
-    // queue a second one, so the route defers to the store in that case.
-    const dispatched = handledForcedStart
-      ? { issue: updated, task: null, cancelledTasks: 0 }
-      : maybeDispatchOnIssueUpdate(store, issue, updated, input);
-    return c.json({ issue: dispatched.issue, cancelled_tasks: cancelledTasks + dispatched.cancelledTasks });
+    try {
+      const outcome = store.updateIssueWithOutcome(issue.id, input);
+      const { issue: updated, cancelledTasks, handledForcedStart } = outcome;
+      lockAutoTitleAfterHumanEdit(c, updated, input);
+      // MUL-400 E3 (QA round 2, blocker 2): a forced start already dispatched
+      // inside the store. Dispatch here as well would cancel that fresh round and
+      // queue a second one, so the route defers to the store in that case.
+      const dispatched = handledForcedStart
+        ? { issue: updated, task: null, cancelledTasks: 0 }
+        // QA round 4: the decision uses the PRE-WRITE snapshot the store took
+        // inside its row lock, never the route's earlier read. A concurrent
+        // automatic start can commit between the route's read and this call, and
+        // the stale `backlog -> todo` answer made this path dispatch a second
+        // round, cancelling the one the automatic start had just queued.
+        : maybeDispatchOnIssueUpdate(store, outcome.previous, updated, input);
+      return c.json({ issue: dispatched.issue, cancelled_tasks: cancelledTasks + dispatched.cancelledTasks });
+    } catch (err) {
+      // MUL-400 E3 (QA round 3, blocker 3): the store refuses a transition that
+      // leaves `backlog` with unmet prerequisites by throwing
+      // `IssueDependencyError`. The compatibility PATCH already answers 409
+      // `dependencies_unmet`; the native route used to let it escape and become
+      // a bare 500 with no code, so a client could not tell a hold from a fault.
+      // Nothing was written: the store throws before its UPDATE.
+      const dependencyResponse = issueDependencyErrorResponse(c, err);
+      if (dependencyResponse) return dependencyResponse;
+      const response = issueErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
   });
   const updateIssueCompatibilityRoute = async (c: Context) => {
     const issue = issueFromParam(store, c, "id", "compat");
@@ -1252,12 +1272,14 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (dispatchDenied) return dispatchDenied;
     try {
       assertRuntimeWorkspaceAccess(c, store, input.runtimeWorkspaceId ?? input.runtime_workspace_id, issue.workspaceId);
-      const { issue: updated, cancelledTasks, handledForcedStart } = store.updateIssueWithOutcome(issue.id, input);
+      const outcome = store.updateIssueWithOutcome(issue.id, input);
+      const { issue: updated, cancelledTasks, handledForcedStart } = outcome;
       lockAutoTitleAfterHumanEdit(c, updated, input);
-      // See the native PATCH route: the store already dispatched a forced start.
+      // See the native PATCH route: the store already dispatched a forced start,
+      // and the pre-write snapshot only the store can see decides the rest.
       const dispatched = handledForcedStart
         ? { issue: updated, task: null, cancelledTasks: 0 }
-        : maybeDispatchOnIssueUpdate(store, issue, updated, input);
+        : maybeDispatchOnIssueUpdate(store, outcome.previous, updated, input);
       const response = {
         ...issueCompatibilityResponse(dispatched.issue),
         task_id: dispatched.task?.id ?? null,

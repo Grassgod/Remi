@@ -575,6 +575,8 @@ export class StoreContext {
   readonly metricCounters = new Map<string, MultiremiMetricCounter>();
 
   private analyticsRepo: AnalyticsSurface | null = null;
+  /** Non-null while a deferred-event transaction is open; see its accessor. */
+  private deferredWorkspaceEvents: Array<Parameters<WorkspaceEventListener>[0]> | null = null;
 
   constructor(readonly db: SqlDatabase, private readonly resolveHost: () => StoreContextHost) {}
 
@@ -708,12 +710,47 @@ export class StoreContext {
   }
 
   emitWorkspaceEvent(event: Parameters<WorkspaceEventListener>[0]): void {
+    // Inside `transactionWithDeferredEvents` nothing may reach a listener until
+    // the COMMIT lands; see that method for why.
+    if (this.deferredWorkspaceEvents) {
+      this.deferredWorkspaceEvents.push(event);
+      return;
+    }
     for (const listener of [...this.workspaceEventListeners]) {
       try {
         listener(event);
       } catch {
         // Realtime listeners are best-effort and must not roll back mutations.
       }
+    }
+  }
+
+  /**
+   * Run `fn` inside a database transaction, holding every workspace event it
+   * emits until the COMMIT succeeds.
+   *
+   * The dependency auto-start writes its status, its round and its audit rows
+   * in one transaction. PostgresSyncDatabase has no savepoints, so the writes
+   * must not open a nested transaction, and realtime listeners must not see a
+   * state that a later ROLLBACK erases — a client would then keep a `todo` card
+   * for an issue that is still `backlog`. Events emitted after the commit are
+   * the committed state; a throw drops them with the rest of the transaction.
+   */
+  transactionWithDeferredEvents<T>(db: SqlDatabase, fn: () => T): T {
+    // Nested calls join the outermost buffer; only its owner flushes.
+    const owned = this.deferredWorkspaceEvents == null;
+    if (owned) this.deferredWorkspaceEvents = [];
+    try {
+      const result = db.transaction(() => fn())();
+      if (owned) {
+        const pending = this.deferredWorkspaceEvents ?? [];
+        this.deferredWorkspaceEvents = null;
+        for (const event of pending) this.emitWorkspaceEvent(event);
+      }
+      return result;
+    } catch (err) {
+      if (owned) this.deferredWorkspaceEvents = null;
+      throw err;
     }
   }
 

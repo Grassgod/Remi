@@ -188,6 +188,13 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
       // HTTP caller sends them.
       attempt: _attempt,
       maxAttempts: _maxAttempts,
+      // MUL-409 fix round 4 (QA round 3, suggestion 1): the ADR claims both
+      // spellings of every exemption field are stripped, and the gate reads the
+      // camelCase form. `max_attempts` is not an exemption the gate consults
+      // today, but leaving it in the body hands a public caller a field the
+      // server owns — the next gate that reads it would inherit a hole. Strip it
+      // with its camelCase twin.
+      max_attempts: _maxAttemptsSnake,
       preserveIssueStatus: _preserveIssueStatus,
       preserve_issue_status: _preserveIssueStatusSnake,
       ...publicInput

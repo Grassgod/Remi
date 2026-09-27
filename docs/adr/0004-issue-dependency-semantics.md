@@ -84,9 +84,9 @@ squad rule about ordering was prose. The observable failures were:
    `delegatedByAgentId === agentId`). Identity is deliberately not consulted —
    the funnel would otherwise have to trust the request body about who is
    calling — so the fields these exemptions read are stripped from every public
-   task-creation request: the route removes `attempt`, `maxAttempts`,
-   `preserveIssueStatus`, `continuedFromTaskId`, `delegationId` and
-   `delegatedByAgentId` in both spellings, and only server paths (retry,
+   task-creation request: the route removes `attempt`, `maxAttempts` /
+   `max_attempts`, `preserveIssueStatus`, `continuedFromTaskId`, `delegationId`
+   and `delegatedByAgentId` in both spellings, and only server paths (retry,
    continuation, the E2 wake-up, the delegation return) set them. A caller that
    supplies any of them gets the ordinary gate behaviour: 409
    `dependencies_unmet` and no round. The dispatch behaviour around these
@@ -127,19 +127,46 @@ squad rule about ordering was prose. The observable failures were:
 4. **Waiting state is `backlog` + unmet prerequisite.** No new status is added,
    so every surface that already understands `backlog` shows waiting issues
    correctly, and `GET /api/issues/child-progress` reports them as `waiting`.
-5. **Automatic start is a post-commit hook on the prerequisite's own terminal
-   write, and it claims the start atomically.** When B enters `done`, each
-   dependent still in `backlog` whose own prerequisites are all satisfied is
-   dispatched by the server (`dependency_auto_started`) if its owner is an agent
-   or a squad. Because two prerequisites can finish concurrently on separate
-   connections, reading the dependent is not enough: the start is claimed with a
-   conditional `UPDATE ... WHERE status = 'backlog'`, and only the transaction
-   whose update reports one changed row dispatches. The losers do nothing — no
-   task, no second `dependency_auto_started` — and the claim is a single
-   transaction on its own, so the dispatch still happens after the prerequisite's
-   transaction committed and the nesting depth stays 1. A member's forced start
-   moves the row off `backlog` first, so it wins the same race for the same
-   reason.
+5. **Automatic start is one transaction: the claim, the status write and the
+   round commit together.** When B enters `done`, each dependent still in
+   `backlog` whose own prerequisites are all satisfied is dispatched by the
+   server (`dependency_auto_started`) if its owner is an agent or a squad.
+   Because two prerequisites can finish concurrently on separate connections
+   (and a member can force the issue at the same moment), reading the dependent is
+   not enough: the start is claimed with a conditional
+   `UPDATE ... WHERE status = 'backlog'`, and only the transaction whose update
+   reports one changed row dispatches. The losers do nothing — no task, no second
+   `dependency_auto_started`. A member's forced start moves the row off `backlog`
+   first, so it wins the same race for the same reason.
+
+   The claim, the status write, the round and both audit rows (`issue_assigned`,
+   `dependency_auto_started`) are a **single transaction**, taken after
+   `lockWorkspaceRuntimeLifecycle(workspaceId)` so the lock order matches
+   `createTaskWithinTransaction` (`workspaces` row, then the Issue row). Round 3
+   shipped two separate steps here, and both were reachable:
+
+   - `backlog -> todo` committed first and the round was created afterwards, so a
+     process that died in between stranded the issue at `todo` with no round, no
+     activity and no automatic path back (only a manual assign recovered it);
+   - a failure *after* the round was inserted ran an unconditional
+     `todo -> backlog` "release", producing `backlog` + a queued round — a
+     waiting issue with work running.
+
+   Both are gone. On any failure inside the transaction the whole attempt rolls
+   back — `backlog`, no task rows, no half-written activity — and a single
+   `dependency_auto_start_skipped` (`reason: dispatch_failed`, in its own
+   transaction, so it survives) tells a human what to do: fix the owner and
+   assign the issue again; a forced start is not needed. The prerequisite's own
+   `done` is not part of the attempt and stays committed. A `backlog` issue that
+   somehow already owns an active round is not given a second one: the status
+   moves and the activity records `autoStarted: false` with `existingTaskId`.
+
+   Sequencing after the COMMIT: the task wakeup and the `issue:updated` event
+   (with `status_changed: true`, `prev_status: "backlog"`) are emitted only once
+   the transaction has committed, because a client must never be told about a
+   state a rollback could erase. A crash in that window therefore loses only the
+   live notification; a refresh reads the correct `todo` with its queued round.
+
    A dependent with no agent owner is **only reported**, never started, and the
    report must not cost the parent owner an extra round:
    - same parent as the prerequisite — the readiness line is folded into the
@@ -152,6 +179,16 @@ squad rule about ordering was prose. The observable failures were:
      when no round is waiting, because the plan says the owner's *next* round;
    - no parent at all — the dependent's own member owner, or its subscribers,
      get an inbox item.
+   **Known crash window (not recovered automatically in this round).** The
+   prerequisite's `done` commits before the dependent's auto-start transaction
+   opens. A process that dies exactly in between leaves the dependent at
+   `backlog` with every prerequisite satisfied and no round. Nothing scans for
+   that state, so a human sees a waiting issue whose prerequisites are all done
+   and no automatic retry for it; the ways out are the public
+   `POST /api/multiremi/issues/:id/assign` (or the assignee picker) — which starts
+   it without `force`, because the gate is satisfied — or a member
+   `PATCH {status: todo}`. Adding a recovery sweep for this window is a separate
+   decision.
 6. **A failing prerequisite is a report, not an automatic cancel.** When B
    enters `cancelled` or `blocked`, each **waiting** dependent (the same
    `backlog` + unmet definition the gate uses) records

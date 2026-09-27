@@ -1503,7 +1503,19 @@ export class IssuesRepo {
     id: string,
     input: UpdateIssueInput,
     options: UpdateIssueOptions = {},
-  ): { issue: MultiremiIssue; cancelledTasks: number; handledForcedStart: boolean } {
+  ): {
+    issue: MultiremiIssue;
+    cancelledTasks: number;
+    handledForcedStart: boolean;
+    /**
+     * The Issue as it was observed INSIDE the write transaction, after the row
+     * lock. Callers that decide "did this request move the issue?" from a
+     * pre-read can be stale — a concurrent writer (the automatic start, another
+     * PATCH) may have committed in between — and acting on that stale answer
+     * dispatches a second round. This snapshot is the one the write itself used.
+     */
+    previous: MultiremiIssue;
+  } {
     let previous: MultiremiIssue | null = null;
     let updatedAt = "";
     let cancelledTasks = 0;
@@ -1690,7 +1702,7 @@ export class IssuesRepo {
       });
       return next;
     })();
-    if (updated === previous) return { issue: updated, cancelledTasks, handledForcedStart: false };
+    if (updated === previous) return { issue: updated, cancelledTasks, handledForcedStart: false, previous: updated };
     this.ctx.appendIssueActivity(id, {
       actorType: "system",
       actorId: null,
@@ -1752,7 +1764,7 @@ export class IssuesRepo {
       const oldParent = this.getIssue(previous!.parentIssueId);
       if (oldParent) this.rederiveParentStatus(oldParent, updated);
     }
-    return { issue: updated, cancelledTasks, handledForcedStart: forcedStart };
+    return { issue: updated, cancelledTasks, handledForcedStart: forcedStart, previous: previous! };
   }
 
   /**
@@ -2263,83 +2275,222 @@ export class IssuesRepo {
       });
       return this.reportDependencyReady(dependent, satisfiedBy);
     }
-    // MUL-400 E3 (QA round 2, blocker 3): claim the start atomically before
-    // dispatching. Two prerequisites can reach `done` concurrently on separate
-    // connections, and both would otherwise read this issue as `backlog` and
-    // each queue a round. The conditional UPDATE is the whole arbitration: only
-    // the transaction that flips `backlog -> todo` wins, and the loser sees
-    // `changes === 0` and does nothing at all.
-    const claimed = this.ctx.db.transaction(() => {
-      const current = this.getIssue(dependent.id);
-      if (!current || current.status !== "backlog") return false;
-      if (this.listUnmetPrerequisites(dependent.id).length > 0) return false;
-      const flipped = this.ctx.db.run(
-        `UPDATE multiremi_issues
-         SET status = 'todo', completed_at = NULL, archived_at = NULL, updated_at = ?
-         WHERE id = ? AND status = 'backlog'`,
-        [nowIso(), dependent.id],
-      );
-      return flipped.changes === 1;
-    })();
-    if (!claimed) return null;
+    // MUL-400 E3 (QA round 3, blockers 1+2): the claim, the status write and the
+    // round are ONE transaction. The previous shape committed
+    // `backlog -> todo` first and only then called `assignIssue`, which left two
+    // durable holes: a process that died in between stranded the issue at `todo`
+    // with no round and no path back, and a failure *after* the round was
+    // inserted "released" it into `backlog` while the round was still queued.
+    //
+    // Lock order — this is the order the rest of the codebase uses, and it is
+    // required to avoid deadlocking a writer that holds the workspace lock and
+    // is waiting for this Issue row:
+    //   1. `multiremi_workspaces` row (`lockWorkspaceRuntimeLifecycle`), the same
+    //      lock `createTaskWithinTransaction` takes for task creation;
+    //   2. `multiremi_issues` row for the dependent, through the conditional
+    //      UPDATE below.
+    // `createTaskWithinTransaction` is called while both are held, and it takes
+    // the workspace lock itself — re-entrant here because we already own it and
+    // no other writer can be between them.
+    //
+    // Arbitration stays the conditional UPDATE: only the transaction that flips
+    // `backlog -> todo` runs the dispatch, so a second prerequisite completing
+    // concurrently, or a member's forced start, cannot queue a second round.
+    // Captured after the member/no-owner guard above: the closure cannot rely on
+    // property narrowing, and this id is what every write in it uses.
+    const ownerId = dependent.assigneeId;
+    let outcome: { task: MultiremiTask | null; dispatched: boolean } | null = null;
     try {
-      // The status is already `todo`, so this only attaches the round: the gate
-      // is satisfied and the task-creation layer sees a non-waiting issue.
-      const assigned = this.assignIssue(dependent.id, {
-        assigneeType: ownerType,
-        assigneeId: dependent.assigneeId,
-        actorType: "system",
-        actorId: null,
-        parentTaskId,
-      });
-      this.ctx.appendIssueActivity(dependent.id, {
-        actorType: "system",
-        actorId: SYSTEM_AUTHOR_ID,
-        type: "dependency_auto_started",
-        body: satisfiedBy.key,
-        data: {
-          satisfiedBy: satisfiedBy.id,
-          satisfied_by: satisfiedBy.id,
-          satisfiedByKey: satisfiedBy.key,
-          satisfied_by_key: satisfiedBy.key,
-          autoStarted: Boolean(assigned.task),
-          auto_started: Boolean(assigned.task),
-          taskId: assigned.task?.id ?? null,
-          task_id: assigned.task?.id ?? null,
-          ...sourceTaskActivityData(parentTaskId),
-        },
+      outcome = this.ctx.transactionWithDeferredEvents(this.ctx.db, () => {
+        this.ctx.lockWorkspaceRuntimeLifecycle(dependent.workspaceId);
+        const current = this.getIssue(dependent.id);
+        if (!current || current.status !== "backlog") return null;
+        if (this.listUnmetPrerequisites(dependent.id).length > 0) return null;
+        // Boundary (QA round 3, blocker 1): a `backlog` issue that already owns an
+        // active round — a structurally exempt round that survived — must not get
+        // a second one. The exemption means the round is legitimate, so the
+        // auto-start only moves the status and records that it did not dispatch.
+        const existingRound = this.ctx.tasks().listTasksForIssue(dependent.id)
+          .find((task) => task.chatSessionId === null
+            && task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled");
+        if (existingRound) {
+          const flipped = this.ctx.db.run(
+            `UPDATE multiremi_issues
+             SET status = 'todo', completed_at = NULL, archived_at = NULL, updated_at = ?
+             WHERE id = ? AND status = 'backlog'`,
+            [nowIso(), dependent.id],
+          );
+          if (flipped.changes !== 1) return null;
+          this.ctx.appendIssueActivity(dependent.id, {
+            actorType: "system",
+            actorId: SYSTEM_AUTHOR_ID,
+            type: "dependency_auto_started",
+            body: satisfiedBy.key,
+            data: {
+              satisfiedBy: satisfiedBy.id,
+              satisfied_by: satisfiedBy.id,
+              satisfiedByKey: satisfiedBy.key,
+              satisfied_by_key: satisfiedBy.key,
+              autoStarted: false,
+              auto_started: false,
+              taskId: null,
+              task_id: null,
+              existingTaskId: existingRound.id,
+              existing_task_id: existingRound.id,
+              ...sourceTaskActivityData(parentTaskId),
+            },
+          });
+          return { task: null, dispatched: false };
+        }
+        // Owner resolution and validation happen INSIDE the transaction and
+        // before the round, mirroring `assignIssue`'s agent/squad branch, so a
+        // failure here rolls the status write back with everything else.
+        this.validateIssueAssignee(ownerType, ownerId);
+        const taskAgent = this.ctx.resolveRunnableAgentForAssignee(ownerType, ownerId);
+        if (!taskAgent) throw new Error(`No runnable agent for ${ownerType}: ${ownerId}`);
+        const flipped = this.ctx.db.run(
+          `UPDATE multiremi_issues
+           SET status = 'todo', completed_at = NULL, archived_at = NULL, updated_at = ?
+           WHERE id = ? AND status = 'backlog'`,
+          [nowIso(), dependent.id],
+        );
+        if (flipped.changes !== 1) return null;
+        const task = this.ctx.tasks().createTaskWithinTransaction({
+          agentId: taskAgent.id,
+          issueId: dependent.id,
+          workspaceId: current.workspaceId,
+          prompt: current.title,
+          parentTaskId,
+        });
+        this.ctx.appendIssueActivity(dependent.id, {
+          actorType: "system",
+          actorId: SYSTEM_AUTHOR_ID,
+          type: "issue_assigned",
+          body: `Queued ${taskAgent.name}`,
+          data: {
+            assigneeType: ownerType,
+            assignee_type: ownerType,
+            assigneeId: ownerId,
+            assignee_id: ownerId,
+            toType: ownerType,
+            to_type: ownerType,
+            toId: ownerId,
+            to_id: ownerId,
+            taskId: task.id,
+            task_id: task.id,
+            ...sourceTaskActivityData(parentTaskId),
+            cancelled: 0,
+          },
+        });
+        this.ctx.appendIssueActivity(dependent.id, {
+          actorType: "system",
+          actorId: SYSTEM_AUTHOR_ID,
+          type: "dependency_auto_started",
+          body: satisfiedBy.key,
+          data: {
+            satisfiedBy: satisfiedBy.id,
+            satisfied_by: satisfiedBy.id,
+            satisfiedByKey: satisfiedBy.key,
+            satisfied_by_key: satisfiedBy.key,
+            autoStarted: true,
+            auto_started: true,
+            taskId: task.id,
+            task_id: task.id,
+            ...sourceTaskActivityData(parentTaskId),
+          },
+        });
+        if (current.projectId) {
+          this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [nowIso(), current.projectId]);
+        }
+        return { task, dispatched: true };
       });
     } catch (err) {
-      // A dependent that cannot start (owner archived, dispatch refused) must
-      // not take the prerequisite's own transition down with it. The claim is
-      // released so the dependent goes back to the retryable waiting state
-      // (`backlog` + unmet prerequisite) instead of being stranded in `todo`
-      // with no round — the same shape the pre-claim code produced, and what the
-      // `dependency_auto_start_skipped` activity tells a human to fix.
-      const released = this.ctx.db.transaction(() => this.ctx.db.run(
-        `UPDATE multiremi_issues
-         SET status = 'backlog', completed_at = NULL, archived_at = NULL, updated_at = ?
-         WHERE id = ? AND status = 'todo'`,
-        [nowIso(), dependent.id],
-      ))();
+      // The whole attempt rolled back: the dependent is still `backlog` with no
+      // round, and none of this attempt's activity survived. The prerequisite's
+      // own `done` transition is untouched. The skip is recorded in its OWN
+      // transaction afterwards, so the operator can see why the start did not
+      // happen and how to fix it.
+      this.recordAutoStartSkipped(dependent, satisfiedBy, err);
+      return null;
+    }
+    if (!outcome) return null;
+    // Post-commit only: the wakeup listener and the realtime status event both
+    // describe committed state. A crash between COMMIT and here therefore loses
+    // only the live notification — a client that refreshes reads `todo` with its
+    // queued round, and the claim is already durable.
+    if (outcome.task) this.ctx.notifyTaskEnqueued(outcome.task);
+    const started = this.getIssue(dependent.id);
+    if (started) {
+      this.ctx.autopilots().enqueueIssueStatusChangedEvent({
+        issue: started,
+        previousStatus: "backlog",
+        actorType: "system",
+        actorId: null,
+        automationSourceTaskId: outcome.task?.id ?? null,
+      });
+      // Blocker 4: the frontend only re-buckets an issue from `issue:updated`
+      // (frontend/packages/core/realtime/sync/issues.ts). Without it an open
+      // list/detail keeps rendering the pre-start status.
+      this.ctx.emitWorkspaceEvent({
+        type: "issue:updated",
+        workspaceId: started.workspaceId,
+        actorType: "system",
+        actorId: null,
+        payload: {
+          issue: {
+            id: started.id,
+            status: started.status,
+            completed_at: null,
+            archived_at: null,
+            updated_at: started.updatedAt,
+          },
+          status_changed: true,
+          prev_status: "backlog",
+        },
+      });
+    }
+    return null;
+  }
+
+  /**
+   * MUL-400 E3 (QA round 3, blockers 1+2): one `dependency_auto_start_skipped`
+   * for an auto-start whose transaction rolled back.
+   *
+   * This is deliberately a separate transaction from the failed attempt: the
+   * attempt must leave nothing behind (no round, no half activity, the issue
+   * still `backlog`), while the skip has to survive as the operator's signal.
+   * The dependent keeps its `backlog` row, so the visible state is honest —
+   * "waiting, and the automatic start did not work" — instead of a `todo` with
+   * nothing running.
+   */
+  private recordAutoStartSkipped(
+    dependent: MultiremiIssue,
+    satisfiedBy: MultiremiIssue,
+    err: unknown,
+  ): void {
+    const message = err instanceof Error ? err.message : String(err);
+    try {
       this.ctx.appendIssueActivity(dependent.id, {
         actorType: "system",
         actorId: SYSTEM_AUTHOR_ID,
         type: "dependency_auto_start_skipped",
-        body: err instanceof Error ? err.message : String(err),
+        body: message,
         data: {
           satisfiedBy: satisfiedBy.id,
           satisfied_by: satisfiedBy.id,
           satisfiedByKey: satisfiedBy.key,
           satisfied_by_key: satisfiedBy.key,
           reason: "dispatch_failed",
-          claimReleased: released.changes === 1,
-          claim_released: released.changes === 1,
+          error: message,
         },
       });
-      log.warn(`dependency auto-start skipped for ${dependent.id}: ${err instanceof Error ? err.message : String(err)}`);
+    } catch (recordError) {
+      log.warn(
+        `dependency auto-start skip record failed for ${dependent.id}: `
+        + `${recordError instanceof Error ? recordError.message : String(recordError)}`,
+      );
     }
-    return null;
+    log.warn(`dependency auto-start skipped for ${dependent.id}: ${message}`);
   }
 
   /**

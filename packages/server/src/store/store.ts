@@ -3229,7 +3229,13 @@ runMigrations(this.db);
     id: string,
     input: UpdateIssueInput,
     options: UpdateIssueOptions = {},
-  ): { issue: MultiremiIssue; cancelledTasks: number; handledForcedStart: boolean } {
+  ): {
+    issue: MultiremiIssue;
+    cancelledTasks: number;
+    handledForcedStart: boolean;
+    /** The Issue the write itself saw, after its row lock (see the repo). */
+    previous: MultiremiIssue;
+  } {
     return this.issues.updateIssueWithOutcome(id, input, options);
   }
 

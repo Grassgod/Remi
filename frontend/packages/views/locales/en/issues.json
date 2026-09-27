@@ -423,7 +423,7 @@
     "issue_status_forced": "forced the status to {{status}} as a member",
     "dependency_auto_started": "started automatically after {{key}} finished",
     "dependency_satisfied": "{{key}} finished; waiting for a human to start this issue",
-    "dependency_auto_start_skipped": "could not start automatically after {{key}} finished",
+    "dependency_auto_start_skipped": "could not start automatically after {{key}} finished: fix the owner, then assign this issue again — a forced start is not needed",
     "dependency_prerequisite_failed": "prerequisite {{key}} will not finish; this issue stays in backlog",
     "dependency_waiting": "created in backlog because prerequisites are not done yet",
     "dependency_force_started": "started with unmet prerequisites (member override)",

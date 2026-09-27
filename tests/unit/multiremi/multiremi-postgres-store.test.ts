@@ -20,6 +20,9 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { MultiremiRuntimeModel } from "@multiremi/contracts/types.js";
@@ -2671,10 +2674,14 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(store.listTasksForIssue(dependent.id)).toHaveLength(0);
     const skipped = store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_start_skipped");
     expect(skipped).toHaveLength(1);
-    expect(String(skipped[0]?.body ?? "")).toContain("Agent not found");
-    // The atomic claim is released on failure, so the dependent is genuinely
-    // retryable rather than stranded in `todo` with no round.
-    expect(skipped[0]?.data).toMatchObject({ reason: "dispatch_failed", claimReleased: true });
+    // Owner validation runs inside the transaction, before the round is built,
+    // so the recorded reason is the validator's own message.
+    expect(String(skipped[0]?.body ?? "")).toContain("Agent is archived");
+    // Fix round 4: there is no "release" step any more — the whole attempt
+    // (claim included) rolls back, so the dependent never left `backlog` and has
+    // nothing to release. The skip is the only durable trace.
+    expect(skipped[0]?.data).toMatchObject({ reason: "dispatch_failed" });
+    expect(skipped[0]?.data ?? {}).not.toHaveProperty("claimReleased");
     // And the retry really works once the owner is fixed.
     db.run("UPDATE multiremi_agents SET archived_at = NULL WHERE id = ?", [owner.id]);
     const restored = store.createAgent({ name: "Replacement owner", provider: "claude", runtimeId: runtime.id });
@@ -2884,4 +2891,391 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(terminalReturn.status).toBe("queued");
     expect(terminalReturn.prompt).toContain("Final PG QA result after the explicit report was withdrawn.");
   });
+
+  /**
+   * MUL-409 fix round 4 (QA round 3, blocker 3) on Postgres: the native PATCH
+   * route must answer the dependency hold with 409 + `dependencies_unmet`
+   * instead of letting `IssueDependencyError` become a bare 500.
+   */
+  it("answers 409 dependencies_unmet from both PATCH routes on a waiting issue (PG)", async () => {
+    const app = createMultiremiApp({ store });
+    const runtime = store.registerRuntime({ id: "rt_patch_pg", name: "Patch worker", provider: "claude", maxConcurrency: 4 });
+    const owner = store.createAgent({ name: "Patch owner", provider: "claude", runtimeId: runtime.id });
+    const prereq = store.createIssue({ title: "Patch prerequisite", status: "in_progress" });
+    const waiting = store.createIssue({
+      title: "Patch waiting",
+      status: "backlog",
+      blockedBy: [prereq.id],
+      assigneeType: "agent",
+      assigneeId: owner.id,
+    });
+
+    // QA's four spellings, on both routes.
+    const forms: Array<Record<string, unknown>> = [
+      { status: "todo" },
+      { status: "todo", parentStatusForce: true },
+      { status: "todo", parent_status_force: true },
+      { status: "todo", options: { parentStatusForce: true } },
+    ];
+    for (const path of ["/api/multiremi/issues", "/api/issues"]) {
+      for (const body of forms) {
+        const response = await app.request(`${path}/${waiting.id}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const payload = await response.json() as { code?: string; error?: string };
+        expect({ path, body: JSON.stringify(body), status: response.status })
+          .toEqual({ path, body: JSON.stringify(body), status: 409 });
+        expect(payload.code).toBe("dependencies_unmet");
+        expect(String(payload.error ?? "")).toContain(waiting.key);
+      }
+    }
+
+    // Nothing half-written on any of the eight attempts.
+    expect(store.getIssue(waiting.id)?.status).toBe("backlog");
+    const taskRows = db.query(
+      "SELECT status FROM multiremi_tasks WHERE issue_id = ? ORDER BY created_at ASC",
+    ).all(waiting.id) as Array<{ status: string }>;
+    expect(taskRows).toEqual([]);
+    const forced = db.query(
+      "SELECT id FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'dependency_force_started'",
+    ).all(waiting.id) as Array<{ id: string }>;
+    expect(forced).toEqual([]);
+  });
+
+  /**
+   * MUL-409 fix round 4 (QA round 3, blockers 1+2) on Postgres.
+   *
+   * The automatic start is one transaction: the claim, the status write, the
+   * round and both activities commit together or not at all. These cases assert
+   * that on the real bridge, where a nested BEGIN would silently end the outer
+   * transaction early.
+   */
+  it("rolls the whole automatic start back when a step fails (PG)", () => {
+    const runtime = store.registerRuntime({ id: "rt_atomic_pg", name: "Atomic worker", provider: "claude", maxConcurrency: 4 });
+    const owner = store.createAgent({ name: "Atomic owner", provider: "claude", runtimeId: runtime.id });
+    const prereq = store.createIssue({ title: "Atomic prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({
+      title: "Atomic dependent",
+      status: "backlog",
+      blockedBy: [prereq.id],
+      assigneeType: "agent",
+      assigneeId: owner.id,
+    });
+
+    // QA's injection point: the activity write that happens AFTER the round was
+    // inserted. Pre-fix this left `backlog` + a queued round.
+    type Ctx = { appendIssueActivity(issueId: string, input: { type: string }): void };
+    const ctx = (store as unknown as { ctx: Ctx }).ctx;
+    const original = ctx.appendIssueActivity.bind(ctx);
+    let fired = false;
+    ctx.appendIssueActivity = (issueId: string, input: { type: string }) => {
+      if (!fired && input.type === "issue_assigned") {
+        fired = true;
+        throw new Error("injected activity failure");
+      }
+      original(issueId, input);
+    };
+
+    db.resetTransactionDepthStats();
+    store.updateIssue(prereq.id, { status: "done" });
+    ctx.appendIssueActivity = original;
+
+    // Whole row sets, not counts of a filtered subset.
+    const taskRows = db.query(
+      "SELECT status FROM multiremi_tasks WHERE issue_id = ? ORDER BY created_at ASC",
+    ).all(dependent.id) as Array<{ status: string }>;
+    expect(taskRows).toEqual([]);
+    expect(store.getIssue(dependent.id)?.status).toBe("backlog");
+    // The prerequisite's `done` is what committed; the dependent's own attempt is
+    // what rolled back. So the surviving state is "backlog, prerequisites now
+    // satisfied, no round" — the shape a public assign can pick up (asserted
+    // below), not the pre-fix "backlog with a queued round".
+    expect(store.listUnmetPrerequisites(dependent.id)).toHaveLength(0);
+    const auto = db.query(
+      "SELECT id FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'dependency_auto_started'",
+    ).all(dependent.id) as Array<{ id: string }>;
+    expect(auto).toEqual([]);
+    const skipped = db.query(
+      "SELECT data FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'dependency_auto_start_skipped'",
+    ).all(dependent.id) as Array<{ data: string }>;
+    expect(skipped).toHaveLength(1);
+    expect(JSON.parse(skipped[0]!.data)).toMatchObject({ reason: "dispatch_failed" });
+    // The prerequisite's own transition is untouched, and the depth stayed 1.
+    expect(store.getIssue(prereq.id)?.status).toBe("done");
+    expect(db.maxTransactionDepth).toBe(1);
+
+    // And the retry after a fixed owner really starts it, through public assign.
+    db.run("UPDATE multiremi_agents SET archived_at = NULL WHERE id = ?", [owner.id]);
+    const assigned = store.assignIssue(dependent.id, { assigneeType: "agent", assigneeId: owner.id });
+    expect(assigned.task?.id).toBeDefined();
+    expect(db.query(
+      "SELECT status FROM multiremi_tasks WHERE issue_id = ? ORDER BY created_at ASC",
+    ).all(dependent.id)).toEqual([{ status: "queued" }]);
+  });
+
+  it("leaves no todo-without-round and no backlog-with-round when the process dies at the claim (PG)", async () => {
+    const runtime = store.registerRuntime({ id: "rt_crash_pg", name: "Crash worker", provider: "claude", maxConcurrency: 4 });
+    const owner = store.createAgent({ name: "Crash owner", provider: "claude", runtimeId: runtime.id });
+    const prereq = store.createIssue({ title: "Crash prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({
+      title: "Crash dependent",
+      status: "backlog",
+      blockedBy: [prereq.id],
+      assigneeType: "agent",
+      assigneeId: owner.id,
+    });
+
+    // QA's seam, run as a real OS process: it exits the first time the dependent
+    // is visible as `todo`. Pre-fix that was the standalone claim commit, so the
+    // process died with `todo` and no round — the permanent hole in the report.
+    const probe = Bun.spawn([
+      "bun", "run", new URL("./fixtures/postgres-autostart-crash-probe.ts", import.meta.url).pathname,
+      pgDatabaseUrl(TEST_DB), prereq.id, dependent.id, "after-claim-commit",
+    ], { stdout: "pipe", stderr: "pipe", env: { ...process.env, HOME: process.env.HOME } });
+    const stdout = await killProbeOnPhase(probe, "after-claim-commit");
+    expect(stdout).toContain("after-claim-commit");
+
+    // Whole row sets, as the plan requires.
+    const taskRows = db.query(
+      "SELECT status FROM multiremi_tasks WHERE issue_id = ? ORDER BY created_at ASC",
+    ).all(dependent.id) as Array<{ status: string }>;
+    const status = store.getIssue(dependent.id)?.status;
+    const activeRows = taskRows.filter((row) => !["completed", "failed", "cancelled"].includes(row.status));
+    const activities = db.query(
+      "SELECT type FROM multiremi_issue_activity WHERE issue_id = ? ORDER BY created_at ASC",
+    ).all(dependent.id) as Array<{ type: string }>;
+    const autoStarted = activities.filter((row) => row.type === "dependency_auto_started").length;
+
+    // The two invariants the fix exists for, asserted as a pair so exactly one
+    // shape is accepted: the durable state is either the untouched waiting row or
+    // the complete start. The pre-fix "todo with no round" fails both.
+    expect({ status: status === "todo" && activeRows.length === 0 }).toEqual({ status: false });
+    expect({ status: status === "backlog" && activeRows.length > 0 }).toEqual({ status: false });
+    if (status === "todo") {
+      // Committed start: the round and the activity are there with it.
+      expect(activeRows).toHaveLength(1);
+      expect(autoStarted).toBe(1);
+    } else {
+      // Rolled back: still waiting, nothing of the attempt survived.
+      expect(status).toBe("backlog");
+      expect(taskRows).toEqual([]);
+      expect(autoStarted).toBe(0);
+    }
+    // The prerequisite's own `done` is not part of the attempt: it is the trigger
+    // and stays committed either way.
+    expect(store.getIssue(prereq.id)?.status).toBe("done");
+
+    // Whatever the crash left, the issue is startable through a public path —
+    // this is the recovery the ADR documents for the crash window.
+    if (status === "backlog") {
+      const assigned = store.assignIssue(dependent.id, { assigneeType: "agent", assigneeId: owner.id });
+      expect(assigned.task?.id).toBeDefined();
+      expect(store.getIssue(dependent.id)?.status).toBe("todo");
+    }
+    expect(db.query(
+      "SELECT status FROM multiremi_tasks WHERE issue_id = ? ORDER BY created_at ASC",
+    ).all(dependent.id)).toEqual([{ status: "queued" }]);
+  }, 60_000);
+
+  it("keeps todo plus its round when the process dies after COMMIT (PG)", async () => {
+    const runtime = store.registerRuntime({ id: "rt_after_commit", name: "After commit worker", provider: "claude", maxConcurrency: 4 });
+    const owner = store.createAgent({ name: "After commit owner", provider: "claude", runtimeId: runtime.id });
+    const prereq = store.createIssue({ title: "After commit prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({
+      title: "After commit dependent",
+      status: "backlog",
+      blockedBy: [prereq.id],
+      assigneeType: "agent",
+      assigneeId: owner.id,
+    });
+
+    const probe = Bun.spawn([
+      "bun", "run", new URL("./fixtures/postgres-autostart-crash-probe.ts", import.meta.url).pathname,
+      pgDatabaseUrl(TEST_DB), prereq.id, dependent.id, "after-commit",
+    ], { stdout: "pipe", stderr: "pipe", env: { ...process.env, HOME: process.env.HOME } });
+    const stdout = await killProbeOnPhase(probe, "after-commit");
+    expect(stdout).toContain("after-commit");
+
+    // The COMMIT is durable: the dependent is `todo` with exactly one queued
+    // round and both activities. Only the live notification was lost, which a
+    // client recovers by refreshing.
+    expect(store.getIssue(dependent.id)?.status).toBe("todo");
+    const taskRows = db.query(
+      "SELECT status FROM multiremi_tasks WHERE issue_id = ? ORDER BY created_at ASC",
+    ).all(dependent.id) as Array<{ status: string }>;
+    expect(taskRows).toEqual([{ status: "queued" }]);
+    const activities = db.query(
+      "SELECT type FROM multiremi_issue_activity WHERE issue_id = ? ORDER BY created_at ASC",
+    ).all(dependent.id) as Array<{ type: string }>;
+    const types = activities.map((row) => row.type);
+    expect(types).toContain("issue_assigned");
+    expect(types).toContain("dependency_auto_started");
+    expect(types).not.toContain("dependency_auto_start_skipped");
+  }, 60_000);
+
+  it("runs an automatic start of a second owner in the reverse order of a forced start (PG)", async () => {
+    const app = createMultiremiApp({ store });
+    const runtime = store.registerRuntime({ id: "rt_order_pg", name: "Order worker", provider: "claude", maxConcurrency: 4 });
+    const owner = store.createAgent({ name: "Order owner", provider: "claude", runtimeId: runtime.id });
+    const prereq = store.createIssue({ title: "Order prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({
+      title: "Order dependent",
+      status: "backlog",
+      blockedBy: [prereq.id],
+      assigneeType: "agent",
+      assigneeId: owner.id,
+    });
+
+    // Reverse of the covered order: the automatic start wins first, then a member
+    // still sends a forced start. It answers 200 (the status write is an
+    // ordinary no-op move) and queues nothing more.
+    store.updateIssue(prereq.id, { status: "done" });
+    const response = await app.request(`/api/issues/${dependent.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status: "todo", force: true }),
+    });
+    expect(response.status).toBe(200);
+
+    const taskRows = db.query(
+      "SELECT status FROM multiremi_tasks WHERE issue_id = ? ORDER BY created_at ASC",
+    ).all(dependent.id) as Array<{ status: string }>;
+    expect(taskRows).toEqual([{ status: "queued" }]);
+    const auto = db.query(
+      "SELECT id FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'dependency_auto_started'",
+    ).all(dependent.id) as Array<{ id: string }>;
+    expect(auto).toHaveLength(1);
+    const forced = db.query(
+      "SELECT id FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'dependency_force_started'",
+    ).all(dependent.id) as Array<{ id: string }>;
+    expect(forced).toEqual([]);
+  }, 60_000);
+
+  /**
+   * Await the probe's phase line on its stdout, then kill it. The probe holds
+   * the transaction open until killed, so the phase line is the signal that the
+   * process is parked exactly where the test wants it.
+   */
+  async function killProbeOnPhase(probe: Bun.Subprocess<"ignore", "pipe", "pipe">, phase: string): Promise<string> {
+    const reader = probe.stdout.getReader();
+    const decoder = new TextDecoder();
+    let seen = "";
+    try {
+      while (!seen.includes(phase)) {
+        const { value, done } = await reader.read();
+        if (done) throw new Error(`probe exited before announcing ${phase}; stdout=${seen}`);
+        seen += decoder.decode(value, { stream: true });
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    probe.kill("SIGKILL");
+    await probe.exited;
+    return seen;
+  }
+
+  /**
+   * Await one named phase from a Worker; rejects on its error phase.
+   *
+   * The listener is attached BEFORE the caller posts the init message: a worker
+   * that reports `ready` quickly would otherwise post into the void, and the test
+   * would hang instead of running.
+   */
+  function armWorkerPhase(worker: Worker, phase: string, timeoutMs = 60_000): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error(`two-connection race worker did not reach ${phase} within ${timeoutMs}ms`));
+      }, timeoutMs);
+      const onMessage = (event: MessageEvent<{ phase?: string; error?: string }>) => {
+        if (event.data.phase === "error") {
+          cleanup();
+          reject(new Error(event.data.error ?? "two-connection race worker failed"));
+        } else if (event.data.phase === phase) {
+          cleanup();
+          resolve();
+        }
+      };
+      const onError = (event: ErrorEvent) => {
+        cleanup();
+        reject(event.error ?? new Error(event.message));
+      };
+      const cleanup = () => {
+        clearTimeout(timer);
+        worker.removeEventListener("message", onMessage);
+        worker.removeEventListener("error", onError);
+      };
+      worker.addEventListener("message", onMessage);
+      worker.addEventListener("error", onError);
+    });
+  }
+
+  it("keeps one round when a forced and an automatic start race on two connections (PG)", async () => {
+    const runtime = store.registerRuntime({ id: "rt_two_conn", name: "Two connection worker", provider: "claude", maxConcurrency: 8 });
+    const owner = store.createAgent({ name: "Two connection owner", provider: "claude", runtimeId: runtime.id });
+    const ROUNDS = Number(process.env.MUL409_TWO_CONN_ROUNDS ?? 30);
+    const workerUrl = new URL("./fixtures/postgres-two-connection-race-worker.ts", import.meta.url);
+    let doubleDispatched = 0;
+    let doubleStarted = 0;
+    const winners: string[] = [];
+    const mismatches: Array<Record<string, unknown>> = [];
+    for (let round = 0; round < ROUNDS; round++) {
+      const prereq = store.createIssue({ title: `Two conn prereq ${round}`, status: "in_progress" });
+      const dependent = store.createIssue({
+        title: `Two conn dependent ${round}`,
+        status: "backlog",
+        blockedBy: [prereq.id],
+        assigneeType: "agent",
+        assigneeId: owner.id,
+      });
+      const barrierDir = mkdtempSync(join(tmpdir(), "mul409-two-conn-"));
+      const barrier = join(barrierDir, "go");
+      const databaseUrl = pgDatabaseUrl(TEST_DB);
+      const workers: Array<{ worker: Worker; ready: Promise<void>; done: Promise<void> }> = ["force", "auto"].map((role) => {
+        const worker = new Worker(workerUrl, { type: "module" });
+        // Arm both phases before the init message, so a fast reply is never lost.
+        const ready = armWorkerPhase(worker, "ready");
+        const done = armWorkerPhase(worker, "done");
+        worker.postMessage({ databaseUrl, issueId: dependent.id, prerequisiteId: prereq.id, barrierPath: barrier, role });
+        return { worker, ready, done };
+      });
+      await Promise.all(workers.map((entry) => entry.ready));
+      writeFileSync(barrier, "go");
+      await Promise.all(workers.map((entry) => entry.done));
+      workers.forEach((entry) => entry.worker.terminate());
+      rmSync(barrierDir, { recursive: true, force: true });
+
+      const rows = db.query("SELECT id, status FROM multiremi_tasks WHERE issue_id = ?").all(dependent.id) as Array<{ status: string }>;
+      const activities = db.query(
+        "SELECT type FROM multiremi_issue_activity WHERE issue_id = ? AND type IN ('dependency_force_started', 'dependency_auto_started') ORDER BY created_at ASC",
+      ).all(dependent.id) as Array<{ type: string }>;
+      // The durable invariant: one round, and never both start records. The sum
+      // can legitimately be 0: when the forced PATCH reads the dependent after
+      // the prerequisite's `done` already committed, it is an ordinary status
+      // write rather than an override, so no `dependency_force_started` exists —
+      // and the automatic start lost the claim, so no auto record either.
+      if (rows.length !== 1) doubleDispatched++;
+      if (activities.length > 1) doubleStarted++;
+      if (rows.length !== 1 || activities.length > 1) {
+        mismatches.push({
+          round,
+          status: store.getIssue(dependent.id)?.status,
+          rows: rows.map((row) => row.status),
+          activities: activities.map((row) => row.type),
+        });
+      }
+      winners.push(activities.map((row) => row.type).join("+") || "none");
+    }
+    // A failure here has to name the shape it saw, not just the count: the two
+    // distinct bugs (a second round, both start records) need different fixes.
+    console.log(`[mul409-two-conn] winners=${JSON.stringify(winners)} mismatches=${JSON.stringify(mismatches)}`);
+    expect({ doubleDispatched, doubleStarted, mismatches }).toEqual({ doubleDispatched: 0, doubleStarted: 0, mismatches: [] });
+    // The contention really happened: at least one start record means a claim was
+    // won under the barrier, rather than every round degenerating to the same
+    // trivial interleaving.
+    expect(winners.some((winner) => winner !== "none")).toBe(true);
+  }, 180_000);
+
 });

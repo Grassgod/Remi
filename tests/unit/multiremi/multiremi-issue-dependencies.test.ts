@@ -1039,6 +1039,42 @@ describe("MUL-400 E3 — fix round 3: gate integrity", () => {
     expect(store.listUnmetPrerequisites(dependent.id)).toHaveLength(1);
   });
 
+  // Suggestion 1 (QA round 3): the ADR says both spellings of every
+  // server-owned exemption field are stripped from a public request. The route
+  // stripped `maxAttempts` but forwarded `max_attempts` untouched — the store
+  // happens not to read it today, so the hole was invisible, but the next gate
+  // that does would inherit it.
+  it.each([
+    ["camelCase", { maxAttempts: 9 }, "maxAttempts"],
+    ["snake_case", { max_attempts: 9 }, "max_attempts"],
+  ])("strips max attempts from a public task request (%s)", async (_label, extra, key) => {
+    const { store, agent, prereq } = parkedWithOwner();
+    const app = createMultiremiApp({ store });
+
+    // Observe what the route hands the store: the field must not be in it. The
+    // stored row cannot show this, because the store's own default is what wins
+    // either way.
+    type CreateInput = Record<string, unknown>;
+    const seen: CreateInput[] = [];
+    const target = store as unknown as { createTask(input: CreateInput): unknown };
+    const original = target.createTask.bind(target);
+    target.createTask = (input: CreateInput) => { seen.push(input); return original(input); };
+
+    const response = await app.request("/api/multiremi/tasks", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      // Use a non-waiting issue so the request reaches the store at all: on a
+      // waiting issue the gate refuses before the body matters.
+      body: JSON.stringify({ agentId: agent.id, issueId: prereq.id, prompt: "strip check", ...extra }),
+    });
+    target.createTask = original;
+    expect(response.status).toBe(201);
+    expect(seen).toHaveLength(1);
+    expect(key in seen[0]!).toBe(false);
+    expect(seen[0]).not.toHaveProperty("maxAttempts");
+    expect(seen[0]).not.toHaveProperty("max_attempts");
+  });
+
   it("still lets the internal retry path through", () => {
     // Structural exemption for a real retry: the server sets attempt itself.
     const { store, runtime, agent } = storeWithAgent();
@@ -1224,5 +1260,229 @@ describe("MUL-400 E3 — fix round 3: gate integrity", () => {
     expect(response.status).toBe(200);
     expect(store.getIssue(parent.id)!.status).toBe("in_review");
     expect(allActivityRows(store, parent.id, "issue_status_forced")).toHaveLength(1);
+  });
+});
+
+describe("MUL-400 E3 — fix round 4: atomic automatic start", () => {
+  /** A parked dependent plus its in-progress prerequisite and one agent. */
+  function parkedChain(name = "Round4") {
+    const { store, runtime, agent } = storeWithAgent(name);
+    const prereq = store.createIssue({ title: "Prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({
+      title: "Waiting",
+      status: "backlog",
+      blockedBy: [prereq.id],
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    return { store, runtime, agent, prereq, dependent };
+  }
+
+  /**
+   * The two internal seams an auto-start can fail at, expressed as the store
+   * objects they live on. QA injected at "the activity write after the round was
+   * built"; these cover that step plus the round creation and both activity
+   * writes around it.
+   */
+  type Seams = {
+    ctx: { appendIssueActivity(issueId: string, input: { type: string }): void };
+    tasks: { createTaskWithinTransaction(input: unknown): unknown };
+  };
+
+  function seams(store: Store): Seams {
+    return store as unknown as Seams;
+  }
+
+  /** Fail the first call matching `matches`; every later call goes through. */
+  function injectOnce<T extends object>(
+    target: T,
+    method: keyof T,
+    matches: (args: unknown[]) => boolean,
+  ): () => void {
+    const original = target[method] as unknown as (...args: unknown[]) => unknown;
+    let fired = false;
+    (target as Record<string, unknown>)[method as string] = (...args: unknown[]) => {
+      if (!fired && matches(args)) {
+        fired = true;
+        throw new Error(`injected failure at ${String(method)}`);
+      }
+      return original.apply(target, args);
+    };
+    return () => { (target as Record<string, unknown>)[method as string] = original; };
+  }
+
+  it("starts a parked dependent and leaves exactly one queued round", () => {
+    const { store, prereq, dependent } = parkedChain("happy");
+    store.updateIssue(prereq.id, { status: "done" });
+
+    // The plain path works, so the failure cases below are not trivially failing.
+    expect(store.getIssue(dependent.id)!.status).toBe("todo");
+    expect(allTaskRows(store, dependent.id).map((row) => row.status)).toEqual(["queued"]);
+    expect(allActivityRows(store, dependent.id, "dependency_auto_started")).toHaveLength(1);
+  });
+
+  it.each([
+    ["while creating the round", "task", null],
+    ["while writing issue_assigned", "activity", "issue_assigned"],
+    ["while writing dependency_auto_started", "activity", "dependency_auto_started"],
+  ] as const)("rolls the whole attempt back when a step fails %s", (_label, kind, type) => {
+    const { store, prereq, dependent } = parkedChain(`inj_${type ?? kind}`);
+    const target = seams(store);
+    const restore = kind === "task"
+      ? injectOnce(target.tasks, "createTaskWithinTransaction", () => true)
+      : injectOnce(target.ctx, "appendIssueActivity", (args) => (args[1] as { type?: string })?.type === type);
+
+    let thrown: Error | null = null;
+    try {
+      store.updateIssue(prereq.id, { status: "done" });
+    } catch (err) {
+      thrown = err as Error;
+    }
+    restore();
+
+    // The attempt left nothing: the dependent is still waiting, it owns no task
+    // row of ANY status, and the skip is recorded exactly once.
+    expect(store.getIssue(dependent.id)!.status).toBe("backlog");
+    expect(allTaskRows(store, dependent.id)).toEqual([]);
+    const skipped = allActivityRows(store, dependent.id, "dependency_auto_start_skipped");
+    expect(skipped).toHaveLength(1);
+    expect((skipped[0]!.data ?? {}) as Record<string, unknown>).toMatchObject({ reason: "dispatch_failed" });
+    // No half-written activity from the failed attempt survived ...
+    expect(allActivityRows(store, dependent.id, "dependency_auto_started")).toEqual([]);
+    // ... the prerequisite's own transition is untouched ...
+    expect(store.getIssue(prereq.id)!.status).toBe("done");
+    // ... and the failure never reaches the caller as an exception: the
+    // prerequisite's `done` must not be taken down by a dependent that cannot
+    // start.
+    expect(thrown).toBeNull();
+  });
+
+  it("never leaves a backlog issue with an active round", () => {
+    const { store, agent, prereq, dependent } = parkedChain("boundary");
+    // A structurally exempt round already holds the issue while it is parked:
+    // the exemption is what lets a round exist on a `backlog` issue at all.
+    const task = store.createTask({
+      agentId: agent.id,
+      issueId: dependent.id,
+      prompt: "exempt round",
+      attempt: 2,
+      preserveIssueStatus: true,
+    });
+    expect(task.status).toBe("queued");
+    expect(store.getIssue(dependent.id)!.status).toBe("backlog");
+
+    store.updateIssue(prereq.id, { status: "done" });
+
+    // The invariant: no `backlog` + active round. The status moved, and the
+    // auto-start reused the existing round instead of queueing a second one.
+    expect(store.getIssue(dependent.id)!.status).toBe("todo");
+    const active = allTaskRows(store, dependent.id)
+      .filter((row) => !["completed", "failed", "cancelled"].includes(row.status));
+    expect(active).toHaveLength(1);
+    expect(active[0]!.id).toBe(task.id);
+    const auto = allActivityRows(store, dependent.id, "dependency_auto_started");
+    expect(auto).toHaveLength(1);
+    expect((auto[0]!.data ?? {}) as Record<string, unknown>).toMatchObject({
+      autoStarted: false,
+      existingTaskId: task.id,
+    });
+  });
+
+  it("emits issue:updated for the dependent with the new status", () => {
+    const { store, prereq, dependent } = parkedChain("events");
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    store.onWorkspaceEvent((event) => { events.push({ type: event.type, payload: event.payload }); });
+
+    store.updateIssue(prereq.id, { status: "done" });
+
+    const updated = events.filter((entry) => entry.type === "issue:updated"
+      && (entry.payload as { issue?: { id?: string } }).issue?.id === dependent.id);
+    expect(updated).toHaveLength(1);
+    const payload = updated[0]!.payload as { issue: { status: string }; status_changed: boolean; prev_status: string };
+    expect(payload.issue.status).toBe("todo");
+    expect(payload.status_changed).toBe(true);
+    expect(payload.prev_status).toBe("backlog");
+    // The activity event is there too, and it is not a substitute for the
+    // status event the frontend re-buckets from.
+    expect(events.some((entry) => entry.type === "activity:created")).toBe(true);
+  });
+
+  it("emits no status event when the attempt rolls back", () => {
+    const { store, prereq, dependent } = parkedChain("rollback_events");
+    const restore = injectOnce(seams(store).ctx, "appendIssueActivity",
+      (args) => (args[1] as { type?: string })?.type === "issue_assigned");
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    store.onWorkspaceEvent((event) => { events.push({ type: event.type, payload: event.payload }); });
+
+    store.updateIssue(prereq.id, { status: "done" });
+    restore();
+
+    expect(events.filter((entry) => entry.type === "issue:updated"
+      && (entry.payload as { issue?: { id?: string } }).issue?.id === dependent.id)).toEqual([]);
+    expect(store.getIssue(dependent.id)!.status).toBe("backlog");
+  });
+
+  it("dispatches again through a public assign once an archived owner is restored", () => {
+    const { store, prereq, dependent, agent } = parkedChain("archived_owner");
+    db!.run("UPDATE multiremi_agents SET archived_at = ? WHERE id = ?", [new Date().toISOString(), agent.id]);
+
+    store.updateIssue(prereq.id, { status: "done" });
+
+    // The failure left the retryable waiting state, with the skip recorded.
+    expect(store.getIssue(dependent.id)!.status).toBe("backlog");
+    expect(allTaskRows(store, dependent.id)).toEqual([]);
+    expect(allActivityRows(store, dependent.id, "dependency_auto_start_skipped")).toHaveLength(1);
+
+    // Fixing the owner makes the public assign route work — no force needed.
+    db!.run("UPDATE multiremi_agents SET archived_at = NULL WHERE id = ?", [agent.id]);
+    const assigned = store.assignIssue(dependent.id, { assigneeType: "agent", assigneeId: agent.id });
+    expect(assigned.task?.id).toBeDefined();
+    expect(store.getIssue(dependent.id)!.status).toBe("todo");
+    expect(allTaskRows(store, dependent.id).map((row) => row.status)).toEqual(["queued"]);
+  });
+});
+
+describe("MUL-400 E3 — fix round 4: native PATCH dependency errors", () => {
+  function parked() {
+    const { store, agent } = storeWithAgent("Patch4");
+    const prereq = store.createIssue({ title: "Prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({
+      title: "Waiting",
+      status: "backlog",
+      blockedBy: [prereq.id],
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    return { store, prereq, dependent };
+  }
+
+  // QA's four spellings from the round-3 report: the plain status write and the
+  // three request-body attempts to smuggle a parent-status override.
+  const FORMS = [
+    ["plain", { status: "todo" }],
+    ["parentStatusForce", { status: "todo", parentStatusForce: true }],
+    ["parent_status_force", { status: "todo", parent_status_force: true }],
+    ["options.parentStatusForce", { status: "todo", options: { parentStatusForce: true } }],
+  ] as const;
+
+  it.each(FORMS)("answers 409 dependencies_unmet on both PATCH routes (%s)", async (_label, body) => {
+    for (const path of ["/api/multiremi/issues", "/api/issues"]) {
+      const { store, dependent } = parked();
+      const app = createMultiremiApp({ store });
+      const response = await app.request(`${path}/${dependent.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const payload = await response.json() as { error?: string; code?: string };
+      expect({ path, status: response.status }).toEqual({ path, status: 409 });
+      expect({ path, code: payload.code }).toEqual({ path, code: "dependencies_unmet" });
+      expect(String(payload.error ?? "")).toContain(dependent.key);
+      // Nothing half-written: still waiting, no round, no force record.
+      expect(store.getIssue(dependent.id)!.status).toBe("backlog");
+      expect(allTaskRows(store, dependent.id)).toEqual([]);
+      expect(allActivityRows(store, dependent.id, "dependency_force_started")).toEqual([]);
+      expect(store.listUnmetPrerequisites(dependent.id)).toHaveLength(1);
+    }
   });
 });

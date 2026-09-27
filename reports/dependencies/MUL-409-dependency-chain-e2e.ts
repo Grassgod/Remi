@@ -76,6 +76,21 @@ async function main(): Promise<void> {
     if (!ok) failures.push(label);
   };
 
+  // MUL-409 fix round 4 (QA round 3, blocker 4): the automatic start has to
+  // publish `issue:updated`, or an open issue page keeps rendering the stale
+  // `backlog` status. Capture the real realtime events the store emits.
+  const issueUpdatedEvents: Array<{ issueId: string; status: string; prevStatus: string }> = [];
+  store.onWorkspaceEvent((event) => {
+    if (event.type !== "issue:updated") return;
+    const issue = event.payload.issue as { id?: string; status?: string } | undefined;
+    if (!issue?.id || !issue.status) return;
+    issueUpdatedEvents.push({
+      issueId: issue.id,
+      status: issue.status,
+      prevStatus: String(event.payload.prev_status ?? ""),
+    });
+  });
+
   try {
     store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ id: "rt_e2e", name: "E2E worker", provider: "claude", maxConcurrency: 4 });
@@ -219,6 +234,12 @@ async function main(): Promise<void> {
     check("C2 auto-started after C1 finished", store.getIssue(secondId)?.status === "todo", snapshot(2));
     check("C2 reports dependency_auto_started",
       store.listIssueActivity(secondId).some((entry) => entry.type === "dependency_auto_started"), {});
+    // Blocker 4: every automatic start must be visible as a status event on the
+    // dependent, with the new status and the status it moved from.
+    const c2Events = issueUpdatedEvents.filter((event) => event.issueId === secondId);
+    check("C2 published issue:updated as todo",
+      c2Events.some((event) => event.status === "todo" && event.prevStatus === "backlog"),
+      { events: c2Events });
     check("C3 still waiting after C1", store.getIssue(thirdId)?.status === "backlog", snapshot(2));
     check("parent still held after C1", store.getIssue(parentId)?.status !== "in_review", snapshot(2));
 
@@ -226,6 +247,10 @@ async function main(): Promise<void> {
     check("C3 auto-started after C2 finished", store.getIssue(thirdId)?.status === "todo", snapshot(3));
     check("C3 reports dependency_auto_started",
       store.listIssueActivity(thirdId).some((entry) => entry.type === "dependency_auto_started"), {});
+    const c3Events = issueUpdatedEvents.filter((event) => event.issueId === thirdId);
+    check("C3 published issue:updated as todo",
+      c3Events.some((event) => event.status === "todo" && event.prevStatus === "backlog"),
+      { events: c3Events });
     check("parent still held after C2", store.getIssue(parentId)?.status !== "in_review", snapshot(3));
 
     await runChildRound(thirdId, "C3");

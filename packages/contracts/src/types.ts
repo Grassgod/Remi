@@ -1714,6 +1714,7 @@ export interface CreateTaskInput {
   sessionId?: string | null;
   attempt?: number | null;
   maxAttempts?: number | null;
+  max_attempts?: number | null;
   /** Server-internal retry level used to shrink Session projection budgets. */
   projectionDegradeLevel?: number | null;
   projection_degrade_level?: number | null;
