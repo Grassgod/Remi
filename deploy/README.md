@@ -161,8 +161,16 @@ the old `head_seq`. A partial or stale archive still becomes `ready`, but it
 never takes a pointer away from a longer trace. The pointer table records
 `head_seq` and `closed` alongside the byte range.
 
+Uploads are served per subject: `/api/daemon/runtimes/:runtimeId/issues/:issueId/…`,
+`…/chats/:sessionId/…` and `…/tasks/:taskId/…` speak the same protocol over that
+subject's ownership rule (the Issue workspace row, `chat_sessions.session_runtime_id`
+or `tasks.runtime_id`). A daemon uploads a Chat or one-shot Task archive to its own
+route; a Runtime that does not own the subject is refused.
+
 The server refuses new non-v2 uploads before any attempt is claimed and answers
-`session_archive_format_unsupported`. Existing v1 rows and their files are left
+`session_archive_format_unsupported`. The check reads the request the client
+actually sends: an upgraded daemon names the v2 format in `metadata.format`, and
+anything else is treated as the legacy container. Existing v1 rows and their files are left
 untouched, so an installation upgrading from v1 keeps its bound archives
 readable and its hard-delete barrier intact; only a v1 daemon that still has not
 upgraded sees the rejection.

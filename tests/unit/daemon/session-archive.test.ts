@@ -385,6 +385,117 @@ describe("Session archive v2 writer", () => {
     await expect(prepareIssueSessionArchive(fileRoot, { issueId: "iss_1" }))
       .rejects.toThrow("non-directories");
   });
+
+  it("only a valid trailer closes a trace; an unsealed or header-only file stays open", async () => {
+    const storage = mkdtempSync(join(tmpdir(), "multiremi-trace-closed-"));
+    roots.push(storage);
+    const issueRoot = join(storage, "issues", "MUL-12");
+    const sessionRoot = join(storage, ".runtime", "ises_12");
+    mkdirSync(issueRoot, { recursive: true });
+    mkdirSync(join(sessionRoot, "traces"), { recursive: true });
+    // Still running: events but no trailer.
+    writeFileSync(
+      join(sessionRoot, "traces", "tsk_open.jsonl"),
+      traceFileBody({ events: 3, taskId: "tsk_open", closed: false }),
+    );
+    // Started but never wrote an event, so only the header exists.
+    writeFileSync(
+      join(sessionRoot, "traces", "tsk_header.jsonl"),
+      traceFileBody({ events: 0, taskId: "tsk_header", headerOnly: true }),
+    );
+    // A trailing line that is not a trailer shape must not close the trace.
+    writeFileSync(
+      join(sessionRoot, "traces", "tsk_bogus.jsonl"),
+      `${traceFileBody({ events: 1, taskId: "tsk_bogus", closed: false })}{"status":"completed"}\n`,
+    );
+    writeFileSync(
+      join(sessionRoot, "traces", "tsk_closed.jsonl"),
+      traceFileBody({ events: 2, taskId: "tsk_closed" }),
+    );
+
+    const prepared = await prepareIssueSessionArchive(issueRoot, {
+      issueId: "iss_12",
+      sessionRoots: [{ sessionId: "ises_12", root: sessionRoot }],
+      sessionRootBoundary: storage,
+    });
+    const archive = await readArchive(prepared.archivePath);
+    const byTask = new Map(
+      archive.index.members
+        .filter((entry) => entry.kind === "trace")
+        .map((entry) => [entry.task_id, entry] as const),
+    );
+
+    expect(byTask.get("tsk_open")).toMatchObject({ head: 3, event_count: 3, closed: false });
+    expect(byTask.get("tsk_header")).toMatchObject({ head: 0, event_count: 0, closed: false });
+    expect(byTask.get("tsk_bogus")).toMatchObject({ head: 1, event_count: 1, closed: false });
+    expect(byTask.get("tsk_closed")).toMatchObject({ head: 2, event_count: 2, closed: true });
+  });
+
+  it("refuses a symlink inside traces/ instead of skipping it", async () => {
+    const storage = mkdtempSync(join(tmpdir(), "multiremi-trace-symlink-"));
+    roots.push(storage);
+    const outside = mkdtempSync(join(tmpdir(), "multiremi-trace-symlink-outside-"));
+    roots.push(outside);
+    const issueRoot = join(storage, "issues", "MUL-9");
+    const sessionRoot = join(storage, ".runtime", "ises_9");
+    mkdirSync(issueRoot, { recursive: true });
+    mkdirSync(join(sessionRoot, "traces"), { recursive: true });
+    const target = join(outside, "tsk_escape.jsonl");
+    writeFileSync(target, traceFileBody({ events: 1, taskId: "tsk_escape" }));
+    symlinkSync(target, join(sessionRoot, "traces", "tsk_escape.jsonl"));
+
+    await expect(prepareIssueSessionArchive(issueRoot, {
+      issueId: "iss_9",
+      sessionRoots: [{ sessionId: "ises_9", root: sessionRoot }],
+      sessionRootBoundary: storage,
+    })).rejects.toThrow("Refusing to archive symlink");
+  });
+
+  it("refuses a non-trace file in traces/ rather than dropping it silently", async () => {
+    const storage = mkdtempSync(join(tmpdir(), "multiremi-trace-stray-"));
+    roots.push(storage);
+    const issueRoot = join(storage, "issues", "MUL-10");
+    const sessionRoot = join(storage, ".runtime", "ises_10");
+    mkdirSync(issueRoot, { recursive: true });
+    mkdirSync(join(sessionRoot, "traces"), { recursive: true });
+    writeFileSync(join(sessionRoot, "traces", "notes.txt"), "not a trace");
+
+    await expect(prepareIssueSessionArchive(issueRoot, {
+      issueId: "iss_10",
+      sessionRoots: [{ sessionId: "ises_10", root: sessionRoot }],
+      sessionRootBoundary: storage,
+    })).rejects.toThrow("Unexpected file in the trace directory");
+  });
+
+  it("detects a trace file added to traces/ while the archive is being written", async () => {
+    const storage = mkdtempSync(join(tmpdir(), "multiremi-trace-late-"));
+    roots.push(storage);
+    const issueRoot = join(storage, "issues", "MUL-11");
+    const sessionRoot = join(storage, ".runtime", "ises_11");
+    mkdirSync(issueRoot, { recursive: true });
+    mkdirSync(join(sessionRoot, "traces"), { recursive: true });
+    writeFileSync(
+      join(sessionRoot, "traces", "tsk_slow.jsonl"),
+      traceFileBody({ events: 4000, taskId: "tsk_slow" }),
+    );
+    // A large provider member keeps the compression phase long enough for the
+    // trace directory to change underneath it.
+    mkdirSync(join(sessionRoot, "home"), { recursive: true });
+    writeFileSync(join(sessionRoot, "home", "big.bin"), Buffer.alloc(64 * 1024 * 1024, 0x61));
+
+    const pending = prepareIssueSessionArchive(issueRoot, {
+      issueId: "iss_11",
+      sessionRoots: [{ sessionId: "ises_11", root: sessionRoot }],
+      sessionRootBoundary: storage,
+    });
+    await waitForArchivePartial(join(issueRoot, ".multiremi", "archive-spool"));
+    writeFileSync(
+      join(sessionRoot, "traces", "tsk_late.jsonl"),
+      traceFileBody({ events: 1, taskId: "tsk_late" }),
+    );
+
+    await expect(pending).rejects.toThrow("changed while");
+  });
 });
 
 async function waitForArchivePartial(spool: string): Promise<void> {

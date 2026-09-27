@@ -48,10 +48,12 @@ timestamp. It does not bypass the normal upload integrity checks.
 
 ## v1 uploads during the upgrade window
 
-New uploads must be the v2 ZIP container. The server answers a v1 `init` with
-`session_archive_format_unsupported` (409) before claiming an attempt, so a
-daemon that has not upgraded yet cannot spend the retry budget on a container
-this server no longer indexes. Because the refusal happens at `init`, the row
+New uploads must be the v2 ZIP container. The server identifies a v1 upload
+from the request itself: an upgraded daemon names the v2 format in
+`metadata.format`, and a request without that marker is the legacy container.
+It answers `session_archive_format_unsupported` (409) before claiming an
+attempt, so a daemon that has not upgraded yet cannot spend the retry budget on
+a container this server no longer indexes. Because the refusal happens at `init`, the row
 keeps its attempt count and the next claim after the daemon upgrade starts from
 a clean budget.
 

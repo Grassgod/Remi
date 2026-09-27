@@ -2175,4 +2175,140 @@ describe("Multiremi session archives", () => {
     db!.run("UPDATE multiremi_issue_workspaces SET runtime_id = NULL WHERE issue_id = ?", [issue.id]);
     expect((await app.request(`${base}/status`, { headers: daemonHeaders })).status).toBe(404);
   });
+
+  it("refuses the v1 request body an un-upgraded daemon sends, before claiming an attempt", async () => {
+    const { store, app, issue, daemonHeaders, base } = await fixture();
+    // The old daemon's real init body: no `metadata.format` at all
+    // (`worker/client.ts` only sends what the caller passes, and the v1 writer
+    // never set a format marker).
+    const legacyBody = JSON.stringify({
+      source_revision: "legacy-revision",
+      sha256: "f".repeat(64),
+      size_bytes: 4096,
+      file_count: 3,
+      metadata: { source: ".runtime" },
+    });
+    const refused = await app.request(`${base}/init`, {
+      method: "POST",
+      headers: daemonHeaders,
+      body: legacyBody,
+    });
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({
+      code: "session_archive_format_unsupported",
+    });
+
+    // Nothing was persisted and nothing was claimed, so the retry budget is
+    // untouched and the upgraded daemon starts from attempt 1.
+    expect(store.listSessionArchives(issue.id)).toHaveLength(0);
+    expect(store.getSessionArchiveWorkspaceUsage("local")).toMatchObject({
+      totalArchives: 0,
+      pendingArchives: 0,
+      failedArchives: 0,
+      exhaustedArchives: 0,
+    });
+
+    const fixtureData = await buildArchiveFixture({
+      subject: { kind: "issue", id: issue.id },
+      traces: { tsk_after_v1: traceFileBody({ events: 1, taskId: "tsk_after_v1" }) },
+    });
+    const upgraded = await app.request(`${base}/init`, {
+      method: "POST",
+      headers: daemonHeaders,
+      body: JSON.stringify({
+        source_revision: fixtureData.sourceRevision,
+        sha256: fixtureData.sha256,
+        size_bytes: fixtureData.sizeBytes,
+        file_count: 1,
+        metadata: { format: SESSION_ARCHIVE_FORMAT_V2 },
+      }),
+    });
+    expect(upgraded.status).toBe(201);
+    expect((await upgraded.json() as any).upload_attempt).toBe(1);
+    expect(store.listSessionArchives(issue.id)).toHaveLength(1);
+  });
+
+  it("serves the chat and task upload routes only to the owning Runtime", async () => {
+    const { store, app, runtime, daemonHeaders } = await fixture();
+    const agent = store.createAgent({ name: "Subject agent", provider: "codex", workspaceId: "local" });
+    const chat = store.createChatSession({
+      agentId: agent.id,
+      title: "Archived chat",
+      workspaceId: "local",
+    });
+    db!.run(
+      "UPDATE multiremi_chat_sessions SET session_runtime_id = ? WHERE id = ?",
+      [runtime.id, chat.id],
+    );
+    const task = store.createTask({ agentId: agent.id, workspaceId: "local", prompt: "one shot" });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+
+    const chatBase = `/api/daemon/runtimes/${runtime.id}/chats/${chat.id}/session-archives`;
+    const taskBase = `/api/daemon/runtimes/${runtime.id}/tasks/${task.id}/session-archives`;
+
+    for (const [subject, routeBase] of [
+      [{ kind: "chat" as const, id: chat.id }, chatBase],
+      [{ kind: "task" as const, id: task.id }, taskBase],
+    ] as const) {
+      const fixtureData = await buildArchiveFixture({
+        subject,
+        traces: { tsk_subject: traceFileBody({ events: 1, taskId: "tsk_subject" }) },
+      });
+      const initialized = await app.request(`${routeBase}/init`, {
+        method: "POST",
+        headers: daemonHeaders,
+        body: JSON.stringify({
+          source_revision: fixtureData.sourceRevision,
+          sha256: fixtureData.sha256,
+          size_bytes: fixtureData.sizeBytes,
+          file_count: 1,
+          metadata: { format: SESSION_ARCHIVE_FORMAT_V2 },
+        }),
+      });
+      expect(initialized.status).toBe(201);
+      const body = await initialized.json() as any;
+      expect(body.archive).toMatchObject({
+        subject_kind: subject.kind,
+        subject_id: subject.id,
+        issue_id: null,
+      });
+      expect(body.upload_url).toContain(
+        `/runtimes/${runtime.id}/${subject.kind === "chat" ? "chats" : "tasks"}/${subject.id}/`,
+      );
+
+      const uploaded = await app.request(body.upload_url, {
+        method: "PUT",
+        headers: {
+          Authorization: daemonHeaders.Authorization,
+          "Content-Type": "application/octet-stream",
+        },
+        body: fixtureData.bytes,
+      });
+      expect(uploaded.status).toBe(200);
+      const completed = await app.request(
+        `${routeBase}/${body.archive.id}/complete?attempt=${body.upload_attempt}`,
+        { method: "POST", headers: daemonHeaders },
+      );
+      expect(completed.status).toBe(200);
+      expect((await completed.json() as any).archive).toMatchObject({ status: "ready" });
+    }
+
+    // A sibling Runtime on the same daemon may not drive either subject: the
+    // ownership rule is per subject, not merely per daemon.
+    const sibling = store.registerRuntime({
+      id: "rt_subject_sibling",
+      name: "sibling runtime",
+      provider: "codex",
+      daemonId: runtime.daemonId,
+      workspaceId: "local",
+    });
+    for (const routeBase of [
+      `/api/daemon/runtimes/${sibling.id}/chats/${chat.id}/session-archives`,
+      `/api/daemon/runtimes/${sibling.id}/tasks/${task.id}/session-archives`,
+    ]) {
+      const denied = await app.request(`${routeBase}/status`, { headers: daemonHeaders });
+      expect(denied.status).toBe(409);
+      expect(await denied.json()).toMatchObject({ code: "session_archive_subject_not_writable" });
+    }
+  });
 });
