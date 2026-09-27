@@ -57,7 +57,7 @@ import { downloadMessageResourceFeishu, FeishuAttachmentTooLargeError } from "./
 import { extractMentionTargets, extractMessageBody } from "./mention.js";
 import { getMessageFeishu, sendMarkdownCardFeishu } from "./send.js";
 import { handleFormSubmission, handleButtonClick, hasPendingAction } from "./card-actions.js";
-import { handleTaskInteractionEvent } from "./task-interaction.js";
+import { handleIssueDecisionInteractionEvent, handleTaskInteractionEvent } from "./task-interaction.js";
 
 // ── Dedup (persisted across restarts) ────────────────────────
 const DEDUP_TTL_MS = 30 * 60 * 1000;
@@ -844,6 +844,10 @@ export function startWebSocketListener(
       try {
         const taskResponse = await handleTaskInteractionEvent(creds.appId, data);
         if (taskResponse) return taskResponse;
+        // E4 decision cards (MUL-412) carry their own callback prefix and a
+        // different identity (Issue + decision), so they get their own handler.
+        const issueDecisionResponse = await handleIssueDecisionInteractionEvent(creds.appId, data);
+        if (issueDecisionResponse) return issueDecisionResponse;
         const event = data as unknown as {
           operator?: { open_id?: string };
           action?: {

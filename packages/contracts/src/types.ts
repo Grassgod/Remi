@@ -4256,6 +4256,19 @@ export const FEISHU_DECISION_CARD_CAPABILITY = "feishu_decision_card";
 /** Heartbeat field carrying {@link FEISHU_DECISION_CARD_CAPABILITY}. */
 export const FEISHU_DECISION_CARD_PROTOCOL_VERSION = 1;
 
+/**
+ * Metadata flag an Issue topic's bot host sets when it can render and answer
+ * decision cards (MUL-412). Human requests and decisions share the card
+ * pipeline but not this flag: a host that predates decisions keeps sending
+ * human-request cards while the control plane writes no decision delivery for
+ * it, so an escalation stays on the web workbench instead of becoming a card
+ * nobody can answer.
+ */
+export const FEISHU_ISSUE_DECISION_CARD_CAPABILITY = "feishu_issue_decision_card";
+
+/** Heartbeat field carrying {@link FEISHU_ISSUE_DECISION_CARD_CAPABILITY}. */
+export const FEISHU_ISSUE_DECISION_CARD_PROTOCOL_VERSION = 1;
+
 /** Protocol version a daemon reports in register/heartbeat when it can host the bot. */
 export const FEISHU_CONCIERGE_PROTOCOL_VERSION = 1;
 
@@ -4422,6 +4435,16 @@ export interface MultiremiFeishuBotOutboundDelivery {
   /** Reminder deadline for `decision_card` / `decision_reminder`. */
   expiresAt?: string | null;
   expires_at?: string | null;
+  /**
+   * Set on every delivery of an E4 issue decision's card lane (MUL-412). A
+   * decision has no deadline, so `expires_at` stays null for these rows; the
+   * one reminder is scheduled off the decision row's own `reminder_at`.
+   */
+  decisionId?: string;
+  decision_id?: string;
+  /** The Issue the decision hangs on — the one whose topic carries the card. */
+  decisionIssueId?: string;
+  decision_issue_id?: string;
 }
 
 /**

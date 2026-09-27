@@ -1,9 +1,12 @@
-import type { MultiremiTaskHumanRequest } from "@multiremi/contracts/types.js";
+import type { MultiremiIssueDecision, MultiremiTaskHumanRequest } from "@multiremi/contracts/types.js";
 import {
+  buildIssueDecisionCard as buildSharedIssueDecisionCard,
   buildTaskInteractionCard as buildSharedTaskInteractionCard,
+  decisionInteractionMarker,
   interactionMarker,
   normalizePermissionOptions,
   normalizeQuestions,
+  type IssueDecisionCardOptions,
   type TaskInteractionCardOptions,
 } from "@shared/feishu-task-card.js";
 import { buildCardHeader } from "./send.js";
@@ -13,6 +16,7 @@ type Card = Record<string, unknown>;
 const object = (v: unknown): Record<string, unknown> => v && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : {};
 export {
   buildQuestionElements,
+  decisionInteractionMarker,
   escapeCardText,
   interactionMarker,
   normalizePermissionOptions,
@@ -29,6 +33,21 @@ export function buildTaskInteractionCard(
   options: Omit<TaskInteractionCardOptions, "header">,
 ): Card {
   return buildSharedTaskInteractionCard(request, {
+    ...options,
+    header: buildCardHeader({ sessionId: options.sessionId, agentName: options.agentName }),
+  });
+}
+
+/**
+ * The connector's header for an Issue decision card (MUL-412). Only the header
+ * differs from the control plane's copy: the conversation label is
+ * connector-owned, exactly as it is for a human-request card.
+ */
+export function buildIssueDecisionCard(
+  decision: MultiremiIssueDecision,
+  options: Omit<IssueDecisionCardOptions, "header"> & { agentName?: string | null; sessionId?: string | null },
+): Card {
+  return buildSharedIssueDecisionCard(decision, {
     ...options,
     header: buildCardHeader({ sessionId: options.sessionId, agentName: options.agentName }),
   });
@@ -61,6 +80,47 @@ export function parseQuestionAnswers(questions: AskUserQuestion[], form: Record<
     answers[q.question] = [selected.join("、"), custom ? `自定义回答：${custom}` : ""].filter(Boolean).join("\n");
   });
   return answers;
+}
+
+/**
+ * What a registered Issue decision card needs to answer a click (MUL-412).
+ *
+ * The decision is re-read on every click for the same reason a human request
+ * is: the card may have been settled in the web workbench while it was on
+ * screen, and a restarted host re-registers cards it did not send.
+ */
+export interface IssueDecisionCardInteraction {
+  appId: string;
+  chatId: string;
+  messageId: string;
+  recipientOpenId: string;
+  getDecision: () => Promise<MultiremiIssueDecision | null>;
+  /**
+   * Answer with what the person submitted plus the operator the callback named.
+   * The server maps that open_id to a workspace member itself; no member id or
+   * answerer field ever travels from here.
+   */
+  submit: (answer: string, operatorOpenId: string) => Promise<MultiremiIssueDecision>;
+  agentName?: string | null;
+  sessionId?: string | null;
+}
+
+const pendingDecisions = new Map<string, IssueDecisionCardInteraction>();
+
+/**
+ * Register the click handler for one Issue decision card (MUL-412).
+ *
+ * The callback name is derived from the Issue and the decision, so answering
+ * needs only those two ids plus the recipient — which is exactly what the
+ * delivery row persists, and therefore all a restarted host needs to rebuild
+ * the registration.
+ */
+export function registerIssueDecisionCardInteraction(
+  entry: IssueDecisionCardInteraction,
+): { dispose: () => void } {
+  const key = `${entry.appId}:${entry.messageId}`;
+  pendingDecisions.set(key, entry);
+  return { dispose: () => { if (pendingDecisions.get(key) === entry) pendingDecisions.delete(key); } };
 }
 
 interface PendingInteraction {
@@ -137,6 +197,67 @@ export function registerDecisionCardInteraction(
     },
   });
   return { dispose: () => { if (pending.get(key)) pending.delete(key); } };
+}
+
+/**
+ * Handle a click on an Issue decision card (MUL-412).
+ *
+ * Same gate as a human-request card — the person named on the card, in the chat
+ * it was sent to — and the same protocol: the canonical write happens on the
+ * server before the toast acknowledges success. The only field that leaves this
+ * process is the answer text; the answerer is derived server-side from the
+ * callback's operator, so a forged body cannot attribute an answer to somebody
+ * else.
+ */
+export async function handleIssueDecisionInteractionEvent(appId: string, raw: unknown): Promise<Card | null> {
+  const event = object(raw), action = object(event.action), context = object(event.context);
+  if (typeof action.name !== "string" || !action.name.startsWith("fd_")) return null;
+  const entry = pendingDecisions.get(`${appId}:${String(context.open_message_id ?? "")}`);
+  const toast = (content: string, type = "error") => ({ toast: { type, content } });
+  if (!entry) return toast("请求已处理，或正在恢复，请稍后重试", "info");
+  if (context.open_chat_id !== entry.chatId || !entry.recipientOpenId
+    || object(event.operator).open_id !== entry.recipientOpenId) return toast("请由卡片中指定的处理人提交");
+  let decision: MultiremiIssueDecision | null = null;
+  try {
+    decision = await entry.getDecision();
+  } catch {
+    return toast("提交未确认，请稍后重试");
+  }
+  if (!decision) return toast("请求已处理，或正在恢复，请稍后重试", "info");
+  if (decision.status !== "escalated") {
+    return { ...toast("请求已结束", "info"),
+      card: { type: "raw", data: buildIssueDecisionCard(decision,
+        { agentName: entry.agentName, sessionId: entry.sessionId, receipt: true }) } };
+  }
+  const marker = decisionInteractionMarker(decision.issueId, decision.id);
+  const form = object(action.form_value);
+  // The form submits as one button whose name is the marker; individual option
+  // buttons append `_o<index>`. Both carry the free-text field, so either may be
+  // combined with a custom answer.
+  if (action.name !== marker && !action.name.startsWith(`${marker}_o`)) return toast("操作与当前问题不匹配");
+  let custom = "";
+  try {
+    custom = answerText(form[`${marker}_answer`]);
+  } catch {
+    return toast("自定义回答格式无效");
+  }
+  const choices = Array.isArray(decision.options) ? decision.options : [];
+  const optionIndex = action.name === marker ? -1 : Number(action.name.slice(marker.length + 2));
+  const option = Number.isSafeInteger(optionIndex) && optionIndex >= 0 && optionIndex < choices.length
+    ? String(choices[optionIndex])
+    : null;
+  if (!option && !custom) return toast(choices.length ? "请选择一项，或填写自定义回答" : "请填写回答");
+  const answer = option && custom ? `${option}\n自定义回答：${custom}` : option ?? custom;
+  try {
+    const settled = await entry.submit(answer, String(object(event.operator).open_id ?? ""));
+    return { ...toast(settled.status === "answered" ? "已提交" : "请求已结束", settled.status === "answered" ? "success" : "info"),
+      card: { type: "raw", data: buildIssueDecisionCard(settled,
+        { agentName: entry.agentName, sessionId: entry.sessionId, receipt: true }) } };
+  } catch (error) {
+    return toast(error instanceof Error && !/HTTP|fetch|token/i.test(error.message)
+      ? error.message.slice(0, 100)
+      : "提交未确认，请稍后重试");
+  }
 }
 
 /** Native-task actions are never passed to the legacy in-memory permission map. */

@@ -279,6 +279,10 @@ export interface IssuesSurface {
     targetAgentId: string;
     issueSessionId: string | null;
   }): boolean;
+  /** MUL-412: one decision by its own id (the Feishu card lane keys on it). */
+  getIssueDecisionAnywhere(decisionId: string): import("@multiremi/contracts/types.js").MultiremiIssueDecision | null;
+  /** One decision scoped to the Issue it hangs on. */
+  getIssueDecision(issueId: string, decisionId: string): import("@multiremi/contracts/types.js").MultiremiIssueDecision | null;
 }
 
 export interface AgentsSurface {
@@ -333,6 +337,8 @@ export interface AnalyticsSurface {
 export interface WorkspacesSurface {
   getUser(id: string): MultiremiUser | null;
   getUserByFeishuUnionId(unionId: string | null | undefined): MultiremiUser | null;
+  /** MUL-412: the users-table row a Feishu open_id belongs to, if any. */
+  getUserByExternalId(externalId: string | null | undefined): MultiremiUser | null;
   listWorkspaces(): MultiremiWorkspace[];
   getWorkspace(id: string): MultiremiWorkspace | null;
   findWorkspaceMemberForUser(userId: string | null | undefined, workspaceId: string): MultiremiWorkspaceMember | null;
@@ -582,6 +588,49 @@ export interface FeishuBotSurface {
   disableFeishuBotConfigsReferencingAgent(agentId: string, actor?: string | null): string[];
   disableFeishuBotConfigsReferencingRuntime(runtimeId: string, actor?: string | null): string[];
   prepareFeishuIssueTopicWithinTransaction(issue: MultiremiIssue): boolean;
+  /**
+   * MUL-412: queue (or deliberately skip) the card for an escalated decision.
+   * Runs inside the caller's transaction and writes every event on its queue.
+   */
+  prepareIssueDecisionCardWithinTransaction(
+    issue: MultiremiIssue,
+    decision: import("@multiremi/contracts/types.js").MultiremiIssueDecision,
+    deferredEvents: CommitEventQueue,
+  ): void;
+  /** MUL-412: queue the in-place terminal rewrite for a settled decision. */
+  enqueueIssueDecisionCardPatchWithinTransaction(
+    decision: import("@multiremi/contracts/types.js").MultiremiIssueDecision,
+    deferredEvents: CommitEventQueue,
+  ): void;
+  /**
+   * MUL-412: may this bot host read and answer decisions on this Issue? The
+   * same active-topic-binding predicate the human-request lane uses.
+   */
+  canFeishuBotDaemonAccessIssueDecision(workspaceId: string, daemonId: string, issueId: string): boolean;
+  /** MUL-412: the operator behind a card click, as a live non-agent member. */
+  resolveFeishuDecisionOperatorMember(
+    workspaceId: string,
+    openId: string | null | undefined,
+  ): import("@multiremi/contracts/types.js").MultiremiWorkspaceMember | null;
+  /** MUL-412: decision cards a restarting host must re-register. */
+  listFeishuIssueDecisionCards(
+    workspaceId: string,
+    runtimeId: string,
+  ): Array<{
+    decision_id: string;
+    issue_id: string;
+    chat_id: string;
+    message_id: string;
+    recipient_open_id: string;
+  }>;
+  /** MUL-412: the lane a card click answers on. */
+  getFeishuIssueDecisionCardContext(workspaceId: string, decisionId: string): {
+    decision: import("@multiremi/contracts/types.js").MultiremiIssueDecision;
+    issue: MultiremiIssue;
+    chatId: string;
+    messageId: string | null;
+    recipientOpenId: string;
+  } | null;
   prepareFeishuIssueRoundPushesWithinTransaction(input: {
     issue: MultiremiIssue;
     leaderTask: MultiremiTask;

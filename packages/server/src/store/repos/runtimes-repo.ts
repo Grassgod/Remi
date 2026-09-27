@@ -102,6 +102,7 @@ import type {
 import {
   FEISHU_CONCIERGE_CONFIG_CAPABILITY,
   FEISHU_DECISION_CARD_CAPABILITY,
+  FEISHU_ISSUE_DECISION_CARD_CAPABILITY,
   MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
 } from "@multiremi/contracts/types.js";
 
@@ -1808,6 +1809,7 @@ export class RuntimesRepo {
     supportsBotMenu?: boolean;
     supportsFeishuBotConfig?: boolean;
     supportsDecisionCard?: boolean;
+    supportsIssueDecisionCard?: boolean;
   } = {}): MultiremiDaemonHeartbeatAck {
     // The heartbeat reads the Runtime row and its own columns; `getRuntime` would also run
     // the usage scan, execution-group membership and model catalog, which this method never
@@ -1828,6 +1830,10 @@ export class RuntimesRepo {
     // must lose it, or the control plane would keep writing cards it cannot render.
     if (options.supportsDecisionCard !== undefined) {
       metadataPatch[FEISHU_DECISION_CARD_CAPABILITY] = options.supportsDecisionCard ? 1 : 0;
+    }
+    // MUL-412: same "silence is an answer" rule for the decision-card flag.
+    if (options.supportsIssueDecisionCard !== undefined) {
+      metadataPatch[FEISHU_ISSUE_DECISION_CARD_CAPABILITY] = options.supportsIssueDecisionCard ? 1 : 0;
     }
     const hasMetadataPatch = Object.keys(metadataPatch).length > 0;
     let previousAgentPluginProtocol = readAgentPluginProtocol(runtime.metadata);
