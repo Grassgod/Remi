@@ -177,7 +177,10 @@ export function recordPeerBatch(input: { events: number; rttMs: number }): void 
   if (Number.isFinite(input.rttMs) && input.rttMs >= 0) {
     lifetimePeerRttSamples.push(input.rttMs);
     if (lifetimePeerRttSamples.length > PEER_RTT_SAMPLE_CAPACITY) lifetimePeerRttSamples.shift();
+    // Also capped: a busy minute can POST thousands of batches, and p95 of the
+    // most recent 1024 is the same answer without unbounded growth.
     windowPeerRttSamples.push(input.rttMs);
+    if (windowPeerRttSamples.length > PEER_RTT_SAMPLE_CAPACITY) windowPeerRttSamples.shift();
   }
 }
 

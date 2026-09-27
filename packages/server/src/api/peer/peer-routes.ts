@@ -15,6 +15,7 @@
  */
 import type { Context, Hono } from "hono";
 import { timingSafeEqual } from "node:crypto";
+import { parsePeerEventBatch } from "@multiremi/contracts/peer-events.js";
 import type { PeerChannel } from "./peer-channel.js";
 import { PEER_REALTIME_TOPIC } from "./peer-channel.js";
 
@@ -62,14 +63,11 @@ export function registerPeerRoutes(app: Hono, deps: PeerRouteDeps): void {
     } catch {
       return c.json({ error: "invalid json" }, 400);
     }
-    if (typeof body !== "object" || body === null || Array.isArray(body)) {
-      return c.json({ error: "invalid body" }, 400);
-    }
-    const record = body as Record<string, unknown>;
-    const topic = typeof record.topic === "string" && record.topic ? record.topic : PEER_REALTIME_TOPIC;
-    const events = record.events;
-    if (!Array.isArray(events)) return c.json({ error: "invalid events" }, 400);
-    const result = peer.receive(topic, events);
+    // `realtime` is the default topic so a peer that only sends `{events}` is
+    // still understood; anything else must name its topic.
+    const batch = parsePeerEventBatch(body, PEER_REALTIME_TOPIC);
+    if (!batch) return c.json({ error: "invalid batch" }, 400);
+    const result = peer.receive(batch.topic, batch.events);
     return c.json({ ok: true, accepted: result.accepted, rejected: result.rejected });
   });
 }

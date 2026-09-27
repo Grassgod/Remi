@@ -95,25 +95,50 @@ export type PeerEventEnvelope = {
   [K in PeerEventKind]: PeerEventEnvelopeOf<K>;
 }[PeerEventKind];
 
-/** The body of `POST /internal/peer/events`: one flush, in order. */
+/**
+ * The body of `POST /internal/peer/events`: one flush, in order.
+ *
+ * `topic` names the stream the frames belong to. `realtime` is the four store
+ * events; MUL-403 adds `hub` for Live Hub frames. A batch never mixes topics,
+ * which is what lets the receiver dispatch without inspecting each frame.
+ */
 export interface PeerEventBatch {
+  topic: string;
   events: PeerEventEnvelope[];
 }
 
-/** `/internal/peer/health` response shape. */
+/** `POST /internal/peer/events` response: how much of the batch was taken. */
+export interface PeerEventAck {
+  ok: true;
+  accepted: number;
+  /** Envelopes refused: malformed, wrong version, or this process's own origin. */
+  rejected: number;
+}
+
+/**
+ * `GET /internal/peer/health` response.
+ *
+ * The counter fields are absent when this process has no peer configured — an
+ * unconfigured channel has nothing to report rather than zeroes, so a runbook
+ * can tell "off" from "idle".
+ */
 export interface PeerHealth {
-  ok: boolean;
-  origin: string;
+  ok: true;
   /** Whether this process has a peer URL configured at all. */
   enabled: boolean;
-  /** False while the send queue is over its cap or the last flush failed. */
+  /** False when the channel is disabled, or the last flush failed. */
   peer_healthy: boolean;
-  queued: number;
-  dropped: number;
-  failed: number;
-  sent: number;
-  batches: number;
-  rtt_p95_ms: number;
+  origin?: string;
+  queued?: number;
+  /** Events accepted from the peer and delivered locally. */
+  received?: number;
+  /** Inbound envelopes refused (malformed, or our own origin echoed back). */
+  rejected?: number;
+  sent?: number;
+  batches?: number;
+  dropped?: number;
+  failed?: number;
+  rtt_p95_ms?: number;
 }
 
 /** Narrow an unknown JSON value to an envelope, or null when it is not one. */
@@ -129,16 +154,24 @@ export function parsePeerEventEnvelope(value: unknown): PeerEventEnvelope | null
   return record as unknown as PeerEventEnvelope;
 }
 
-/** Narrow an unknown JSON value to a batch of envelopes. */
-export function parsePeerEventBatch(value: unknown): PeerEventEnvelope[] | null {
+/**
+ * Narrow an unknown JSON body to a batch, or null when it is not one.
+ *
+ * `defaultTopic` fills in `topic` for a bare `{ events: [...] }` body, which is
+ * what a peer that predates the field would send.
+ */
+export function parsePeerEventBatch(value: unknown, defaultTopic?: string): PeerEventBatch | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
-  const events = (value as Record<string, unknown>).events;
-  if (!Array.isArray(events)) return null;
-  const parsed: PeerEventEnvelope[] = [];
-  for (const event of events) {
+  const record = value as Record<string, unknown>;
+  if (!Array.isArray(record.events)) return null;
+  const rawTopic = typeof record.topic === "string" ? record.topic.trim() : "";
+  const topic = rawTopic || defaultTopic || "";
+  if (!topic) return null;
+  const events: PeerEventEnvelope[] = [];
+  for (const event of record.events) {
     const envelope = parsePeerEventEnvelope(event);
     if (!envelope) return null;
-    parsed.push(envelope);
+    events.push(envelope);
   }
-  return parsed;
+  return { topic, events };
 }

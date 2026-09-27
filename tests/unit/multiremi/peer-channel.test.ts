@@ -1,6 +1,8 @@
 // MUL-462: the sending half of the peer channel — batching, ordering, backoff,
 // the queue cap, and the fact that `MULTIREMI_PEER_URL` unset means "inert".
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { Hono } from "hono";
+import { registerPeerRoutes } from "../../../packages/server/src/api/peer/peer-routes.js";
 import {
   PEER_REALTIME_TOPIC,
   createPeerChannel,
@@ -346,6 +348,94 @@ describe("peer channel — sending", () => {
     expect(peer.posts.length).toBe(postsAtClose);
     expect(channelToClose.enabled).toBe(false);
     expect(channelToClose.healthy()).toBe(false);
+  });
+});
+
+describe("peer channel — HTTP routes", () => {
+  /** Mount the peer routes the way the API does, without a whole app. */
+  function peerApp(options: { peer: PeerChannel | null; secret: string }) {
+    const app = new Hono();
+    registerPeerRoutes(app, options);
+    return app;
+  }
+
+  it("refuses every unauthenticated request and accepts the configured secret", async () => {
+    const peer = createPeerChannel({ url: "http://peer:6120", secret: "shared", origin: "process-a", fetchImpl: fakePeer().fetchImpl });
+    const app = peerApp({ peer, secret: "shared" });
+    try {
+      const body = JSON.stringify({ topic: PEER_REALTIME_TOPIC, events: [] });
+
+      expect((await app.request("/internal/peer/events", { method: "POST", body })).status).toBe(401);
+      expect((await app.request("/internal/peer/events", {
+        method: "POST",
+        headers: { Authorization: "Bearer wrong" },
+        body,
+      })).status).toBe(401);
+      // A token of a different length must not be compared byte-wise either.
+      expect((await app.request("/internal/peer/events", {
+        method: "POST",
+        headers: { Authorization: "Bearer shared-but-longer" },
+        body,
+      })).status).toBe(401);
+      expect((await app.request("/internal/peer/events", {
+        method: "POST",
+        headers: { Authorization: "Bearer shared" },
+        body,
+      })).status).toBe(200);
+
+      // An empty expectation must refuse everything rather than wave callers in.
+      const closed = peerApp({ peer, secret: "" });
+      expect((await closed.request("/internal/peer/events", {
+        method: "POST",
+        headers: { Authorization: "Bearer " },
+        body,
+      })).status).toBe(401);
+    } finally {
+      peer.close();
+    }
+  });
+
+  it("reports a disabled channel instead of pretending to accept events", async () => {
+    const app = peerApp({ peer: null, secret: "shared" });
+
+    const health = await app.request("/internal/peer/health");
+    expect(health.status).toBe(200);
+    expect(await health.json()).toMatchObject({ ok: true, enabled: false, peer_healthy: false });
+
+    const post = await app.request("/internal/peer/events", {
+      method: "POST",
+      headers: { Authorization: "Bearer shared" },
+      body: JSON.stringify({ topic: PEER_REALTIME_TOPIC, events: [] }),
+    });
+    expect(post.status).toBe(503);
+  });
+
+  it("rejects a malformed batch and counts a well-formed one", async () => {
+    const peer = createPeerChannel({ url: "http://peer:6120", secret: "shared", origin: "process-a", fetchImpl: fakePeer().fetchImpl });
+    const app = peerApp({ peer, secret: "shared" });
+    const seen: unknown[] = [];
+    peer.subscribe(PEER_REALTIME_TOPIC, (payload) => seen.push(payload));
+    try {
+      const post = (body: string) => app.request("/internal/peer/events", {
+        method: "POST",
+        headers: { Authorization: "Bearer shared" },
+        body,
+      });
+
+      expect((await post("not json")).status).toBe(400);
+      expect((await post(JSON.stringify({ topic: PEER_REALTIME_TOPIC }))).status).toBe(400);
+      expect((await post(JSON.stringify({ topic: PEER_REALTIME_TOPIC, events: [{ nope: true }] }))).status).toBe(400);
+
+      const ok = await post(JSON.stringify({
+        topic: PEER_REALTIME_TOPIC,
+        events: [{ v: 1, origin: "process-b", kind: "task_event", payload: { type: "task:done", task: { id: "tsk_1" } } }],
+      }));
+      expect(ok.status).toBe(200);
+      expect(await ok.json()).toEqual({ ok: true, accepted: 1, rejected: 0 });
+      expect(seen).toHaveLength(1);
+    } finally {
+      peer.close();
+    }
   });
 });
 
