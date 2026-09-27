@@ -417,6 +417,7 @@
     "dependency_prerequisite_failed": "前提の {{key}} は完了しません。この issue は backlog のままです",
     "dependency_waiting": "前提が未完了のため backlog で作成されました",
     "dependency_force_started": "前提が未完了のまま開始しました（member による強制）",
+    "dependency_satisfied_coalesced": "準備完了レポートを担当者の待機中のラウンドに追加しました",
     "dependency_gate_reason_dependencies_unmet": "未完了の前提 issue を待っています",
     "child_done_parent_reason_no_assignee": "親イシューに担当者がいません",
     "child_done_parent_reason_agent_unavailable": "親イシューの agent を利用できません",

@@ -346,8 +346,10 @@ export function issueUpdateCompatibilityInput(input: UpdateIssueInput = {}): Upd
   if (hasRequestField(input, "due_date")) out.due_date = input.due_date ?? null;
   if (hasRequestField(input, "acceptance_criteria")) out.acceptance_criteria = input.acceptance_criteria ?? [];
   if (hasRequestField(input, "context_refs")) out.context_refs = input.context_refs ?? [];
-  // MUL-400 E1: `force` survives the compatibility projection. The routes strip
-  // it for task identities, so reaching the store with it means a member asked.
+  // MUL-400 E1/E3: `force` survives the compatibility projection because the
+  // batch route needs it to select the parent-status override (the store moves
+  // it into a server-internal option that the dependency gate ignores). The
+  // routes strip it for task identities, so reaching the store means a member.
   if (hasRequestField(input, "force")) out.force = input.force === true;
   return out;
 }

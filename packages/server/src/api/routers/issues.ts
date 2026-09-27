@@ -616,7 +616,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     // The batch writer needs the same attribution the PATCH routes stamp, or
     // guards that branch on `actorType` (A4) silently do not apply.
     const { actorType, actorId } = issueMutationActor(c);
-    return c.json(store.batchUpdateIssues({
+    const result = store.batchUpdateIssues({
       ...body,
       updates: body.updates
         ? {
@@ -626,7 +626,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
           parentTaskId: currentTaskParentId(c),
         }
         : body.updates,
-    }));
+    });
+    return c.json(result);
   });
   app.post("/api/issues/batch-update", async (c) => {
     const body = await readJson<BatchUpdateIssuesInput>(c);
@@ -648,7 +649,11 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
           }
           : input.updates,
       });
-      return c.json({ updated: result.updated });
+      // The compat body stays `{ updated }` unless a row was actually held, so
+      // existing callers that assert the exact shape keep working.
+      return result.skipped.length
+        ? c.json({ updated: result.updated, skipped: result.skipped })
+        : c.json({ updated: result.updated });
     } catch (err) {
       if (err instanceof Error && err.message === "issue_ids is required") return c.json({ error: err.message }, 400);
       throw err;
@@ -694,15 +699,25 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const assigneeId = body.assigneeId ?? body.assignee_id ?? body.agentId ?? null;
     const dispatchDenied = denySideSessionAssigneeDispatch(c, store, workspaceId, assigneeType, assigneeId);
     if (dispatchDenied) return dispatchDenied;
-    const issue = store.createIssue({
-      ...body,
-      blockedBy: body.blockedBy ?? body.blocked_by,
-      workspaceId,
-      assigneeType: null,
-      assignee_type: null,
-      assigneeId: null,
-      assignee_id: null,
-    });
+    let issue: MultiremiIssue;
+    try {
+      issue = store.createIssue({
+        ...body,
+        blockedBy: body.blockedBy ?? body.blocked_by,
+        workspaceId,
+        assigneeType: null,
+        assignee_type: null,
+        assigneeId: null,
+        assignee_id: null,
+      });
+    } catch (err) {
+      // MUL-400 E3 (QA round 2, blocker 4): the three `blocked_by` rejections
+      // answer with the dependency error contract, matching the dependency
+      // routes. Without this the native route surfaced them as 500.
+      const dependencyResponse = issueDependencyErrorResponse(c, err);
+      if (dependencyResponse) return dependencyResponse;
+      throw err;
+    }
     let task = null;
     if (assigneeId) {
       const assigned = store.assignIssue(issue.id, {
@@ -807,6 +822,13 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       if (dispatchError) response.dispatch_error = dispatchError;
       return c.json(response, 201);
     } catch (err) {
+      // MUL-400 E3 (QA round 2, blocker 4): a rejected `blocked_by` is a
+      // dependency error, not an issue error — "prerequisite not found" and
+      // "prerequisite in another workspace" have no issue-shaped mapping and
+      // used to fall through as 500. Try the dependency mapping first so the
+      // three rejections answer the same codes the dependency routes use.
+      const dependencyResponse = issueDependencyErrorResponse(c, err);
+      if (dependencyResponse) return dependencyResponse;
       const response = issueErrorResponse(c, err);
       if (response) return response;
       throw err;
@@ -1192,9 +1214,14 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     assertRuntimeWorkspaceAccess(c, store, body.runtimeWorkspaceId ?? body.runtime_workspace_id, issue.workspaceId);
     const dispatchDenied = denySideSessionIssueUpdate(c, store, issue, input);
     if (dispatchDenied) return dispatchDenied;
-    const { issue: updated, cancelledTasks } = store.updateIssueWithOutcome(issue.id, input);
+    const { issue: updated, cancelledTasks, handledForcedStart } = store.updateIssueWithOutcome(issue.id, input);
     lockAutoTitleAfterHumanEdit(c, updated, input);
-    const dispatched = maybeDispatchOnIssueUpdate(store, issue, updated, input);
+    // MUL-400 E3 (QA round 2, blocker 2): a forced start already dispatched
+    // inside the store. Dispatch here as well would cancel that fresh round and
+    // queue a second one, so the route defers to the store in that case.
+    const dispatched = handledForcedStart
+      ? { issue: updated, task: null, cancelledTasks: 0 }
+      : maybeDispatchOnIssueUpdate(store, issue, updated, input);
     return c.json({ issue: dispatched.issue, cancelled_tasks: cancelledTasks + dispatched.cancelledTasks });
   });
   const updateIssueCompatibilityRoute = async (c: Context) => {
@@ -1217,9 +1244,12 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (dispatchDenied) return dispatchDenied;
     try {
       assertRuntimeWorkspaceAccess(c, store, input.runtimeWorkspaceId ?? input.runtime_workspace_id, issue.workspaceId);
-      const { issue: updated, cancelledTasks } = store.updateIssueWithOutcome(issue.id, input);
+      const { issue: updated, cancelledTasks, handledForcedStart } = store.updateIssueWithOutcome(issue.id, input);
       lockAutoTitleAfterHumanEdit(c, updated, input);
-      const dispatched = maybeDispatchOnIssueUpdate(store, issue, updated, input);
+      // See the native PATCH route: the store already dispatched a forced start.
+      const dispatched = handledForcedStart
+        ? { issue: updated, task: null, cancelledTasks: 0 }
+        : maybeDispatchOnIssueUpdate(store, issue, updated, input);
       const response = {
         ...issueCompatibilityResponse(dispatched.issue),
         task_id: dispatched.task?.id ?? null,

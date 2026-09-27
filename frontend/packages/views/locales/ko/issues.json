@@ -422,6 +422,7 @@
     "dependency_prerequisite_failed": "선행 {{key}} 이(가) 완료되지 않습니다. 이 issue 는 backlog 에 남습니다",
     "dependency_waiting": "선행 이슈가 끝나지 않아 backlog 로 생성되었습니다",
     "dependency_force_started": "선행 이슈가 미완료인 상태에서 강제로 시작했습니다(member 재정의)",
+    "dependency_satisfied_coalesced": "준비 완료 보고를 담당자의 대기 중인 라운드에 추가했습니다",
     "dependency_gate_reason_dependencies_unmet": "끝나지 않은 선행 issue 를 기다리는 중",
     "child_done_parent_reason_no_assignee": "상위 이슈에 담당자가 없습니다",
     "child_done_parent_reason_agent_unavailable": "상위 이슈의 agent를 사용할 수 없습니다",

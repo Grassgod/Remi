@@ -2287,6 +2287,15 @@ export interface UpdateIssueOptions {
   holdParentStatus?: boolean;
   /** Extra fields for the `parent_status_held` activity, e.g. the merge source. */
   holdParentStatusData?: Record<string, unknown> | null;
+  /**
+   * MUL-400 E3 (QA round 2, blocker 5): batch update keeps S1's member override
+   * for the *parent-status* guard, but it must not become a second way to cross
+   * the dependency gate - the plan allows exactly one (the member PATCH status
+   * write) so an override always leaves `dependency_force_started`. The batch
+   * route moves the request's `force` here, where only the parent-status guard
+   * reads it.
+   */
+  parentStatusForce?: boolean;
 }
 
 /**

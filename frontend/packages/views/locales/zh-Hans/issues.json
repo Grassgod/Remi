@@ -420,6 +420,7 @@
     "dependency_prerequisite_failed": "前置单 {{key}} 不会完成，本 issue 留在 backlog",
     "dependency_waiting": "因前置单未完成建单时停在 backlog",
     "dependency_force_started": "前置单未完成时强制开工（member 覆盖）",
+    "dependency_satisfied_coalesced": "把就绪报告追加进负责人已有的排队轮",
     "dependency_gate_reason_dependencies_unmet": "等待未完成的前置单",
     "child_done_parent_reason_no_assignee": "父 issue 没有负责人",
     "child_done_parent_reason_agent_unavailable": "父 issue 的 agent 当前不可用",

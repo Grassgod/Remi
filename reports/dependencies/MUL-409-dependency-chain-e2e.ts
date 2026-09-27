@@ -493,6 +493,50 @@ async function main(): Promise<void> {
     check("the override is audited exactly once",
       store.listIssueActivity(gatedId).filter((entry) => entry.type === "dependency_force_started").length === 1, {});
 
+    // (d2) A forged structural exemption must not open the gate either. This
+    // needs an issue that is still waiting, so build a fresh one: the issue
+    // above was already force-started.
+    const forgedPrereq = await post("/api/issues", { title: "Forged prerequisite", status: "in_progress" });
+    const forgedTarget = await post("/api/issues", {
+      title: "Forged target",
+      status: "todo",
+      parent_issue_id: parentId,
+      assignee_type: "agent",
+      assignee_id: agent.id,
+      blocked_by: [forgedPrereq.body.id],
+    });
+    const forgedId = forgedTarget.body.id as string;
+    check("forged target starts parked", forgedTarget.body.status === "backlog", { status: forgedTarget.body.status });
+
+    for (const forged of [{ attempt: 2 }, { preserveIssueStatus: true }, { preserve_issue_status: true }]) {
+      const attempt = await post("/api/multiremi/tasks", {
+        agentId: agent.id,
+        issueId: forgedId,
+        prompt: "forged exemption",
+        ...forged,
+      });
+      check(`task create with ${Object.keys(forged)[0]} is refused`,
+        attempt.status === 409 && attempt.body.code === "dependencies_unmet", {
+        status: attempt.status, code: attempt.body.code,
+      });
+    }
+    check("no forged exemption created a round", tasksOf(forgedId).length === 0, {
+      tasks: tasksOf(forgedId).length,
+    });
+
+    // Batch force must not cross the gate either; the member PATCH still does.
+    const batchedForce = await post("/api/issues/batch-update", {
+      issue_ids: [forgedId],
+      updates: { status: "todo", force: true },
+    });
+    check("batch force leaves a waiting issue parked",
+      batchedForce.status === 200 && store.getIssue(forgedId)?.status === "backlog", {
+      http: batchedForce.status, status: store.getIssue(forgedId)?.status,
+    });
+    check("batch force creates no round", tasksOf(forgedId).length === 0, { tasks: tasksOf(forgedId).length });
+    check("batch force records no override",
+      !store.listIssueActivity(forgedId).some((entry) => entry.type === "dependency_force_started"), {});
+
     // (e) A comment on a waiting issue lands, but the round it would have
     // queued is held and reported.
     const commentResponse = await post(`/api/issues/${gatedPrereq.body.id}/comments`, {

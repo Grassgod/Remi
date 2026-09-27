@@ -422,6 +422,7 @@
     "dependency_prerequisite_failed": "prerequisite {{key}} will not finish; this issue stays in backlog",
     "dependency_waiting": "created in backlog because prerequisites are not done yet",
     "dependency_force_started": "started with unmet prerequisites (member override)",
+    "dependency_satisfied_coalesced": "added a readiness report to the assignee's queued round",
     "dependency_gate_reason_dependencies_unmet": "waiting for unfinished prerequisite issues",
     "child_done_parent_reason_no_assignee": "the parent issue has no assignee",
     "child_done_parent_reason_agent_unavailable": "the parent agent is unavailable",

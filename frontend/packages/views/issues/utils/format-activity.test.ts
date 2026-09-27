@@ -305,6 +305,19 @@ describe("formatActivity — dependency activities", () => {
     ).toBe("activity.dependency_gate_reason_dependencies_unmet");
   });
 
+  it("renders a readiness report folded into an already-queued round", () => {
+    expect(formatActivity(activity("dependency_satisfied_coalesced"), t))
+      .toBe("activity.dependency_satisfied_coalesced");
+  });
+
+  it("renders the dependency hold for a mention that could not dispatch", () => {
+    // The outer copy names the skip; the reason resolves to the dependency hold
+    // rather than leaking the raw "dependencies_unmet" string.
+    expect(
+      formatActivity(activity("comment_mention_skipped", { details: { reason: "dependencies_unmet" } }), t),
+    ).toBe('activity.comment_mention_skipped {"reason":"activity.dependency_gate_reason_dependencies_unmet"}');
+  });
+
   it("falls back to ? when the satisfying key is missing", () => {
     expect(formatActivity(activity("dependency_auto_started"), t)).toBe('activity.dependency_auto_started {"key":"?"}');
   });

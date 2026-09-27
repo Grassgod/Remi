@@ -155,6 +155,8 @@ export function formatActivity(
       return t(($) => $.activity.dependency_waiting);
     case "dependency_force_started":
       return t(($) => $.activity.dependency_force_started);
+    case "dependency_satisfied_coalesced":
+      return t(($) => $.activity.dependency_satisfied_coalesced);
     case "child_done_parent_skipped":
       return t(($) => $.activity.child_done_parent_skipped, {
         reason: childDoneParentReason(details.reason, t),

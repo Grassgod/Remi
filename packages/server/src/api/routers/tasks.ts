@@ -180,6 +180,16 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
       continue_task_id: _continueTaskIdSnake,
       assignmentSourceEventId: _assignmentSourceEventId,
       assignment_source_event_id: _assignmentSourceEventIdSnake,
+      // MUL-400 E3 (QA round 2, blocker 1): the dependency gate treats these as
+      // structural exemptions, so they must never come from a request body — a
+      // caller that sets `attempt: 2` or `preserveIssueStatus: true` would
+      // otherwise start a waiting issue without the audited force. Both are set
+      // only by server paths (retry/redispatch and the E2 parent wake-up), and no
+      // HTTP caller sends them.
+      attempt: _attempt,
+      maxAttempts: _maxAttempts,
+      preserveIssueStatus: _preserveIssueStatus,
+      preserve_issue_status: _preserveIssueStatusSnake,
       ...publicInput
     } = body;
     const issueId = cleanString(publicInput.issueId);

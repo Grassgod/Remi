@@ -41,6 +41,8 @@ MULTIREMI_TEST_POSTGRES_URL=postgres://<user>@127.0.0.1:5432/postgres \
 | Forced start (MUL-409 fix) | A member `PATCH {status: todo, force: true}` on a parked child leaves exactly one round, keeps the dependency row, and records `dependency_force_started`; the prerequisite finishing later adds no second round |
 | Creation rollback (MUL-409 fix) | Depending on an ancestor answers 409 `dependency_on_ancestor` with no orphan issue, no child row and no consumed issue number; a successful creation with a prerequisite stays a single transaction (`maxTransactionDepth === 1`) |
 | Readiness report (MUL-409 fix) | A shared-parent dependent becoming ready adds no extra round; the line is merged into the prerequisite's report, which names both issues, and the dependent records the merge flag |
+| Forged exemptions (MUL-409 fix round 3) | `attempt`, `preserveIssueStatus` and `preserve_issue_status` supplied in a task-create body are all refused with 409 `dependencies_unmet` and create no round |
+| Batch force (MUL-409 fix round 3) | A batch update carrying `force` leaves a waiting issue parked, creates no round and writes no override record |
 | Task-creation gate (MUL-409 fix round 2) | Rerun and task create on a waiting issue both answer 409 `dependencies_unmet` and leave no round; an assign carrying a body `force` still parks the issue and writes no override record; the member `PATCH {status: todo, force: true}` dispatches exactly one round and records `dependency_force_started` exactly once; a comment still lands; the prerequisite finishing later adds no second round |
 
 ## Result
@@ -62,3 +64,13 @@ Defects this run has found and driven to a fix:
 4. A rejected `blocked_by` left an orphan issue behind, because creation ran
    outside a transaction. Creation is now one transaction on both backends, and
    the Postgres bridge reports the nesting depth so the assertion is explicit.
+5. Two prerequisites finishing concurrently on separate Postgres connections
+   each queued a round, because both readers saw the dependent as `backlog`. The
+   automatic start now claims the transition with a conditional
+   `UPDATE ... WHERE status = 'backlog'`, so exactly one contender dispatches;
+   the same claim arbitrates a forced start racing the automatic one.
+6. A task-create body could forge a structural exemption (`attempt: 2`,
+   `preserveIssueStatus: true`), and the batch routes could carry `force` across
+   the dependency gate. The public task route now strips those fields, and the
+   batch routes move `force` into a server-internal option that only the
+   parent-status guard reads.

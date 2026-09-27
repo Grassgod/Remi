@@ -26210,7 +26210,8 @@
       "status": 200,
       "body": {
         "updated": 0,
-        "issues": []
+        "issues": [],
+        "skipped": []
       }
     },
     {

@@ -28,6 +28,24 @@ function catchError(fn: () => unknown): Error & { code?: string; details?: Recor
   throw new Error("expected the call to throw");
 }
 
+/**
+ * Every task row of an issue, terminal ones included. The QA round-2 blockers
+ * hid behind `filter(status !== "cancelled")` counts, so the fix-round tests
+ * assert the whole table instead.
+ */
+function allTaskRows(store: Store, issueId: string): Array<{ id: string; status: string; agentId: string }> {
+  return store.listTasksForIssue(issueId).map((task) => ({
+    id: task.id,
+    status: task.status,
+    agentId: task.agentId,
+  }));
+}
+
+/** Every activity row of one type, in timeline order. */
+function allActivityRows(store: Store, issueId: string, type: string) {
+  return store.listIssueActivity(issueId).filter((entry) => entry.type === type);
+}
+
 /** A store with a runtime and one agent that can own work. */
 function storeWithAgent(name = "Owner") {
   const store = createStore();
@@ -974,5 +992,237 @@ describe("MUL-400 E3 — task-creation gate", () => {
     expect(wakeup.id).toBeDefined();
     expect(store.getIssue(parkedParent.id)!.status).toBe("backlog");
     expect(store.getIssue(parent.id)!.status).toBe("in_progress");
+  });
+});
+
+/**
+ * MUL-409 fix round 3, QA round-2 blockers. Each test reproduces the reported
+ * request and then asserts the whole row set — task rows including cancelled
+ * ones, every activity row, and the HTTP status plus error code.
+ */
+describe("MUL-400 E3 — fix round 3: gate integrity", () => {
+  function parkedWithOwner() {
+    const { store, runtime, agent } = storeWithAgent();
+    const prereq = store.createIssue({ title: "Prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({
+      title: "Waiting",
+      status: "backlog",
+      blockedBy: [prereq.id],
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    return { store, runtime, agent, prereq, dependent };
+  }
+
+  // ── blocker 1: a request body cannot forge a structural exemption ─────────
+  it.each([
+    ["camelCase attempt", { attempt: 2 }],
+    ["camelCase attempt with maxAttempts", { attempt: 2, maxAttempts: 3 }],
+    ["snake_case attempt", { attempt: 2, max_attempts: 3 }],
+    ["camelCase preserveIssueStatus", { preserveIssueStatus: true }],
+    ["snake_case preserve_issue_status", { preserve_issue_status: true }],
+  ])("ignores a body-supplied exemption on the task route (%s)", async (_label, extra) => {
+    const { store, agent, dependent } = parkedWithOwner();
+    const app = createMultiremiApp({ store });
+
+    const response = await app.request("/api/multiremi/tasks", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agentId: agent.id, issueId: dependent.id, prompt: "start early", ...extra }),
+    });
+    expect(response.status).toBe(409);
+    expect((await response.json() as { code?: string }).code).toBe("dependencies_unmet");
+    // The whole row set: nothing at all was created.
+    expect(allTaskRows(store, dependent.id)).toEqual([]);
+    expect(store.getIssue(dependent.id)!.status).toBe("backlog");
+    expect(allActivityRows(store, dependent.id, "dependency_force_started")).toEqual([]);
+    expect(store.listUnmetPrerequisites(dependent.id)).toHaveLength(1);
+  });
+
+  it("still lets the internal retry path through", () => {
+    // Structural exemption for a real retry: the server sets attempt itself.
+    const { store, runtime, agent } = storeWithAgent();
+    const prereq = store.createIssue({ title: "Prerequisite", status: "in_progress" });
+    const issue = store.createIssue({ title: "Existing", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+    const first = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "run" });
+    let claimed = store.claimTask(runtime.id);
+    while (claimed && claimed.id !== first.id) claimed = store.claimTask(runtime.id);
+    store.startTask(first.id);
+    store.failTask(first.id, { error: "boom" });
+
+    store.createIssueDependency(issue.id, { dependsOnIssueId: prereq.id, type: "blocked_by" });
+    store.updateIssue(issue.id, { status: "backlog" });
+    const retry = store.createTask({
+      agentId: agent.id,
+      issueId: issue.id,
+      prompt: "retry",
+      attempt: 2,
+      continuedFromTaskId: first.id,
+    });
+    expect(retry.attempt).toBe(2);
+  });
+
+  // ── blocker 2: one forced start queues exactly one row ────────────────────
+  it.each([
+    ["/api/multiremi/issues", true],
+    ["/api/issues", false],
+  ])("queues exactly one task row for a member force through %s", async (path, camel) => {
+    const { store, dependent } = parkedWithOwner();
+    const app = createMultiremiApp({ store });
+    const response = await app.request(`${path}/${dependent.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status: "todo", force: true }),
+    });
+    expect(response.status).toBe(200);
+
+    const rows = allTaskRows(store, dependent.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.status).toBe("queued");
+    expect(allActivityRows(store, dependent.id, "dependency_force_started")).toHaveLength(1);
+    expect(store.getIssue(dependent.id)!.status).toBe("todo");
+    expect(store.listUnmetPrerequisites(dependent.id)).toHaveLength(1);
+  });
+
+  it("keeps a single task row when the same issue is forced twice", async () => {
+    const { store, dependent } = parkedWithOwner();
+    const app = createMultiremiApp({ store });
+    for (let i = 0; i < 2; i++) {
+      const response = await app.request(`/api/issues/${dependent.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ status: "todo", force: true }),
+      });
+      expect(response.status).toBe(200);
+    }
+    expect(allTaskRows(store, dependent.id)).toHaveLength(1);
+  });
+
+  // ── blocker 4: create-issue dependency errors keep their contract ──────────
+  it.each([
+    { kind: "ancestor", expected: 409, expectedCode: "dependency_on_ancestor" },
+    { kind: "not_found", expected: 400, expectedCode: "none" },
+    { kind: "cross_workspace", expected: 400, expectedCode: "none" },
+  ])("maps the $kind creation rejection to the right HTTP status on both routes", async ({ kind, expected, expectedCode }) => {
+    const { store } = storeWithAgent();
+    const app = createMultiremiApp({ store });
+    const parent = store.createIssue({ title: "Parent" });
+    // Build the cross-workspace target once, outside the route loop: creating it
+    // per iteration would itself change the issue count the rollback assertion
+    // compares against.
+    const remote = kind === "cross_workspace" ? store.createIssue({ title: "Remote", workspaceId: "remote" }) : null;
+    const blockedBy = kind === "ancestor"
+      ? [parent.id]
+      : kind === "not_found"
+        ? ["iss_does_not_exist"]
+        : [remote!.id];
+
+    for (const path of ["/api/issues", "/api/multiremi/issues"]) {
+      const before = (db!.query("SELECT COUNT(*) AS n FROM multiremi_issues").get() as { n: number }).n;
+      const beforeChildren = store.listChildIssues(parent.id).length;
+      const beforeDeps = (db!.query("SELECT COUNT(*) AS n FROM multiremi_issue_dependencies").get() as { n: number }).n;
+
+      const response = await app.request(path, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ title: `Rejected-${kind}`, parent_issue_id: parent.id, blocked_by: blockedBy }),
+      });
+      expect(response.status).toBe(expected);
+      const body = await response.json() as { code?: string };
+      // Only the cycle/ancestor rejection carries a machine-readable code;
+      // the other two are plain 400s from the dependency mapper.
+      expect(body.code ?? "none").toBe(expectedCode);
+
+      // Rollback is unchanged: no orphan row, no child, no dependency.
+      expect((db!.query("SELECT COUNT(*) AS n FROM multiremi_issues").get() as { n: number }).n).toBe(before);
+      expect(store.listChildIssues(parent.id).length).toBe(beforeChildren);
+      expect((db!.query("SELECT COUNT(*) AS n FROM multiremi_issue_dependencies").get() as { n: number }).n).toBe(beforeDeps);
+    }
+  });
+
+  it("records a real mention-skip event with the dependencies_unmet reason", () => {
+    // The unit above renders the copy; this one proves the activity the UI reads
+    // is actually produced by the mention path on a waiting issue.
+    const { store, agent, dependent } = parkedWithOwner();
+    const comment = store.createIssueComment(dependent.id, {
+      body: `[@${agent.name}](mention://agent/${agent.id}) please start`,
+      authorType: "member",
+      authorId: "local",
+    });
+
+    expect(store.getIssueComment(comment.id)).not.toBeNull();
+    const skipped = allActivityRows(store, dependent.id, "comment_mention_skipped");
+    expect(skipped).toHaveLength(1);
+    expect((skipped[0]!.data ?? {}) as Record<string, unknown>).toMatchObject({
+      reason: "dependencies_unmet",
+      commentId: comment.id,
+      agentId: agent.id,
+    });
+    expect(allTaskRows(store, dependent.id)).toEqual([]);
+  });
+
+  it("records a real coalesced-readiness event", () => {
+    // dependency_satisfied_coalesced is written when a readiness line joins an
+    // already-queued parent round; the frontend case above renders it.
+    const { store, agent } = storeWithAgent();
+    const member = store.listWorkspaceMembers("local")[0]!;
+    const prerequisiteParent = store.createIssue({ title: "Prereq parent", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+    const dependentParent = store.createIssue({ title: "Dependent parent", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+    store.createTask({ agentId: agent.id, issueId: dependentParent.id, prompt: "queued round" });
+    const prerequisite = store.createIssue({ title: "Prerequisite", status: "in_progress", parentIssueId: prerequisiteParent.id });
+    store.createIssue({
+      title: "Ready sibling",
+      status: "backlog",
+      parentIssueId: dependentParent.id,
+      blockedBy: [prerequisite.id],
+      assigneeType: "member",
+      assigneeId: member.id,
+    });
+
+    store.updateIssue(prerequisite.id, { status: "done" });
+
+    const coalesced = allActivityRows(store, dependentParent.id, "dependency_satisfied_coalesced");
+    expect(coalesced).toHaveLength(1);
+    expect((coalesced[0]!.data ?? {}) as Record<string, unknown>).toMatchObject({ agentId: agent.id });
+    // The line joined the existing round instead of creating a second one.
+    expect(store.listTasksForIssue(dependentParent.id).filter((task) => task.status !== "cancelled")).toHaveLength(1);
+  });
+
+  // ── blocker 5: batch is not a dependency override ─────────────────────────
+  it.each([
+    ["/api/multiremi/issues/batch-update", { issueIds: [] }, false],
+    ["/api/issues/batch-update", { issue_ids: [] }, true],
+  ])("keeps a waiting issue parked when %s carries force", async (path, _shape, snake) => {
+    const { store, dependent } = parkedWithOwner();
+    const app = createMultiremiApp({ store });
+    const response = await app.request(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(snake
+        ? { issue_ids: [dependent.id], updates: { status: "todo", force: true } }
+        : { issueIds: [dependent.id], updates: { status: "todo", force: true } }),
+    });
+    expect(response.status).toBe(200);
+
+    expect(store.getIssue(dependent.id)!.status).toBe("backlog");
+    expect(allTaskRows(store, dependent.id)).toEqual([]);
+    expect(allActivityRows(store, dependent.id, "dependency_force_started")).toEqual([]);
+    expect(store.listUnmetPrerequisites(dependent.id)).toHaveLength(1);
+  });
+
+  it("still lets batch force close a parent past the parent-status guard (S1)", async () => {
+    const { store, agent } = storeWithAgent();
+    const app = createMultiremiApp({ store });
+    const parent = store.createIssue({ title: "Parent", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+    store.createIssue({ title: "Open child", parentIssueId: parent.id, status: "in_progress" });
+
+    const response = await app.request("/api/issues/batch-update", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ issue_ids: [parent.id], updates: { status: "in_review", force: true } }),
+    });
+    expect(response.status).toBe(200);
+    expect(store.getIssue(parent.id)!.status).toBe("in_review");
+    expect(allActivityRows(store, parent.id, "issue_status_forced")).toHaveLength(1);
   });
 });

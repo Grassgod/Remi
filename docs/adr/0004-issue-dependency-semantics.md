@@ -76,13 +76,20 @@ squad rule about ordering was prose. The observable failures were:
    after the issue is resolved and before any `INSERT`, so a refusal leaves no
    partial row.
 
-   *Structural exemptions (never identity-based).* A round that continues an
-   existing conversation is not the issue's first execution, so the funnel lets
-   it through: a retry (`attempt > 1`), a continuation naming
-   `continuedFromTaskId`, the E2 parent wake-up (`preserveIssueStatus`), and a
-   delegation return (`delegationId` with `delegatedByAgentId === agentId`).
-   Identity is deliberately not consulted: the funnel sees the request body,
-   which a caller can claim anything about. The dispatch behaviour around these
+   *Structural exemptions (never identity-based, and never request-supplied).* A
+   round that continues an existing conversation is not the issue's first
+   execution, so the funnel lets it through: a retry (`attempt > 1`), a
+   continuation naming `continuedFromTaskId`, the E2 parent wake-up
+   (`preserveIssueStatus`), and a delegation return (`delegationId` with
+   `delegatedByAgentId === agentId`). Identity is deliberately not consulted —
+   the funnel would otherwise have to trust the request body about who is
+   calling — so the fields these exemptions read are stripped from every public
+   task-creation request: the route removes `attempt`, `maxAttempts`,
+   `preserveIssueStatus`, `continuedFromTaskId`, `delegationId` and
+   `delegatedByAgentId` in both spellings, and only server paths (retry,
+   continuation, the E2 wake-up, the delegation return) set them. A caller that
+   supplies any of them gets the ordinary gate behaviour: 409
+   `dependencies_unmet` and no round. The dispatch behaviour around these
    exemptions is:
    - a comment-driven dispatch on a waiting issue records the hold and does not
      create a task — `dispatch_skipped` with `dependencies_unmet` for the
@@ -98,25 +105,47 @@ squad rule about ordering was prose. The observable failures were:
    `remi issue update <A> --status todo --force`, or the web "强制开工" button —
    which moves the issue out of `backlog` and records `dependency_force_started`.
    Once the issue is no longer waiting, both layers treat it as an ordinary
-   running issue. There is no second override, and in particular the assign
-   route does **not** accept one: `force` is a server-internal parameter
-   (`AssignIssueOptions`, mirroring `UpdateIssueOptions`), never a field of the
-   request-bound `AssignIssueInput`, and a request body that supplies it is
-   ignored so an override can never happen without its audit record.
+   running issue. There is no second override:
+   - the **assign route** does not accept one: `force` is a server-internal
+     parameter (`AssignIssueOptions`, mirroring `UpdateIssueOptions`), never a
+     field of the request-bound `AssignIssueInput`, so a request body that
+     supplies it is ignored;
+   - the **two batch routes** are not an override for this gate either. They
+     still honour `force` for the *parent-status* guard (S1's member override,
+     `issue_status_forced`), but the store moves that value into a
+     server-internal option the dependency gate never reads, so a waiting issue
+     targeted by a batch keeps its status, gets no round, and is reported
+     per-row as skipped with `dependencies_unmet`. Choosing this over dropping
+     batch `force` entirely keeps S1's documented behaviour intact while
+     satisfying the ruling's "exactly one entrance";
+   - a single forced start dispatches exactly once: the status write commits,
+     the store's `dispatchForcedStart` queues the round, and the route's
+     assign-on-update step is skipped for that request, so no round is created
+     and immediately cancelled.
+   An override therefore always leaves exactly one `dependency_force_started`
+   and exactly one task row.
 4. **Waiting state is `backlog` + unmet prerequisite.** No new status is added,
    so every surface that already understands `backlog` shows waiting issues
    correctly, and `GET /api/issues/child-progress` reports them as `waiting`.
 5. **Automatic start is a post-commit hook on the prerequisite's own terminal
-   write.** When B enters `done`, each dependent still in `backlog` whose own
-   prerequisites are all satisfied is dispatched by the server
-   (`dependency_auto_started`) if its owner is an agent or a squad. The hook is
-   idempotent: the second `done` finds no `backlog` dependent, and the gate
-   inside `assignIssue` refuses a start that is not actually unblocked.
+   write, and it claims the start atomically.** When B enters `done`, each
+   dependent still in `backlog` whose own prerequisites are all satisfied is
+   dispatched by the server (`dependency_auto_started`) if its owner is an agent
+   or a squad. Because two prerequisites can finish concurrently on separate
+   connections, reading the dependent is not enough: the start is claimed with a
+   conditional `UPDATE ... WHERE status = 'backlog'`, and only the transaction
+   whose update reports one changed row dispatches. The losers do nothing — no
+   task, no second `dependency_auto_started` — and the claim is a single
+   transaction on its own, so the dispatch still happens after the prerequisite's
+   transaction committed and the nesting depth stays 1. A member's forced start
+   moves the row off `backlog` first, so it wins the same race for the same
+   reason.
    A dependent with no agent owner is **only reported**, never started, and the
    report must not cost the parent owner an extra round:
    - same parent as the prerequisite — the readiness line is folded into the
-     prerequisite's E2 report (`dependency_satisfied_reported` on the
-     dependent), so the owner reads one round instead of two;
+     prerequisite's E2 report (`dependency_satisfied` on the dependent carrying
+     `mergedIntoPrerequisiteReport: true`), so the owner reads one round instead
+     of two;
    - a different parent, or a prerequisite with no parent — the activity
      `dependency_satisfied` is written on that parent, and the line is appended
      to its owner's **already-queued** round when one exists. Nothing is created

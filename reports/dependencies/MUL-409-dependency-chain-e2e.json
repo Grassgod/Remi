@@ -4,7 +4,7 @@
   "database": "throwaway PG database, dropped after the run",
   "serverCode": "real MultiremiStore over PostgresSyncDatabase + real HTTP app",
   "testDoubles": "execution agent and worker only (no provider is run)",
-  "ranAt": "2026-09-27T04:43:13.701Z",
+  "ranAt": "2026-09-27T06:54:53.638Z",
   "steps": [
     {
       "step": "create parent",
@@ -18,9 +18,9 @@
       "step": "create chain C1 <- C2 <- C3",
       "status": "ok",
       "detail": {
-        "c1": "iss_geg8ih88ndqv",
-        "c2": "iss_maiiw1uheqx8",
-        "c3": "iss_q75s9i5cq28v"
+        "c1": "iss_ww28kr9a55m1",
+        "c2": "iss_j07szhlw5x4n",
+        "c3": "iss_nry711293meq"
       }
     },
     {
@@ -79,7 +79,7 @@
       "status": "ok",
       "detail": {
         "progress": {
-          "parentIssueId": "iss_x2myb2mjgj9g",
+          "parentIssueId": "iss_6g2bn4gfvxhg",
           "total": 3,
           "done": 0,
           "cancelled": 0,
@@ -96,22 +96,22 @@
         "waitingOn": {
           "unmet": [
             {
-              "issueId": "iss_q75s9i5cq28v",
-              "dependsOnIssueId": "iss_maiiw1uheqx8",
+              "issueId": "iss_nry711293meq",
+              "dependsOnIssueId": "iss_j07szhlw5x4n",
               "key": "MUL-3",
               "title": "C2",
               "status": "backlog",
-              "dependencyId": "dep_zl3tceona3ed"
+              "dependencyId": "dep_sug5wm99j3jd"
             }
           ],
           "prerequisites": [
             {
-              "issueId": "iss_q75s9i5cq28v",
-              "dependsOnIssueId": "iss_maiiw1uheqx8",
+              "issueId": "iss_nry711293meq",
+              "dependsOnIssueId": "iss_j07szhlw5x4n",
               "key": "MUL-3",
               "title": "C2",
               "status": "backlog",
-              "dependencyId": "dep_zl3tceona3ed"
+              "dependencyId": "dep_sug5wm99j3jd"
             }
           ]
         }
@@ -143,7 +143,7 @@
       "step": "C1: round completed",
       "status": "ok",
       "detail": {
-        "taskId": "tsk_qz0r81k1fu3r"
+        "taskId": "tsk_rwk1xshz3d4j"
       }
     },
     {
@@ -196,7 +196,7 @@
       "step": "C2: round completed",
       "status": "ok",
       "detail": {
-        "taskId": "tsk_c1mvtqislqt4"
+        "taskId": "tsk_wzotftt00nsc"
       }
     },
     {
@@ -238,7 +238,7 @@
       "step": "C3: round completed",
       "status": "ok",
       "detail": {
-        "taskId": "tsk_bcq1irdiblan"
+        "taskId": "tsk_palj3akbbs9c"
       }
     },
     {
@@ -275,12 +275,12 @@
           "unmet": [],
           "prerequisites": [
             {
-              "issueId": "iss_q75s9i5cq28v",
-              "dependsOnIssueId": "iss_maiiw1uheqx8",
+              "issueId": "iss_nry711293meq",
+              "dependsOnIssueId": "iss_j07szhlw5x4n",
               "key": "MUL-3",
               "title": "C2",
               "status": "done",
-              "dependencyId": "dep_zl3tceona3ed"
+              "dependencyId": "dep_sug5wm99j3jd"
             }
           ]
         }
@@ -302,7 +302,7 @@
       "status": "ok",
       "detail": {
         "progress": {
-          "parentIssueId": "iss_x2myb2mjgj9g",
+          "parentIssueId": "iss_6g2bn4gfvxhg",
           "total": 3,
           "done": 3,
           "cancelled": 0,
@@ -369,8 +369,8 @@
       "step": "the forced round is claimable",
       "status": "ok",
       "detail": {
-        "claimed": "tsk_pyyhf69aj620",
-        "expected": "tsk_pyyhf69aj620"
+        "claimed": "tsk_rzkd569bsjue",
+        "expected": "tsk_rzkd569bsjue"
       }
     },
     {
@@ -440,7 +440,7 @@
       "status": "ok",
       "detail": {
         "bodies": [
-          "[@E2E executor](mention://agent/agt_e2e) Sub-issue [MUL-10](mention://issue/iss_ri8kiuyscs3w) - \"Sibling prerequisite\" -"
+          "[@E2E executor](mention://agent/agt_e2e) Sub-issue [MUL-10](mention://issue/iss_n03z0ik9p2if) - \"Sibling prerequisite\" -"
         ]
       }
     },
@@ -526,6 +526,64 @@
     },
     {
       "step": "the override is audited exactly once",
+      "status": "ok",
+      "detail": {}
+    },
+    {
+      "step": "forged target starts parked",
+      "status": "ok",
+      "detail": {
+        "status": "backlog"
+      }
+    },
+    {
+      "step": "task create with attempt is refused",
+      "status": "ok",
+      "detail": {
+        "status": 409,
+        "code": "dependencies_unmet"
+      }
+    },
+    {
+      "step": "task create with preserveIssueStatus is refused",
+      "status": "ok",
+      "detail": {
+        "status": 409,
+        "code": "dependencies_unmet"
+      }
+    },
+    {
+      "step": "task create with preserve_issue_status is refused",
+      "status": "ok",
+      "detail": {
+        "status": 409,
+        "code": "dependencies_unmet"
+      }
+    },
+    {
+      "step": "no forged exemption created a round",
+      "status": "ok",
+      "detail": {
+        "tasks": 0
+      }
+    },
+    {
+      "step": "batch force leaves a waiting issue parked",
+      "status": "ok",
+      "detail": {
+        "http": 200,
+        "status": "backlog"
+      }
+    },
+    {
+      "step": "batch force creates no round",
+      "status": "ok",
+      "detail": {
+        "tasks": 0
+      }
+    },
+    {
+      "step": "batch force records no override",
       "status": "ok",
       "detail": {}
     },

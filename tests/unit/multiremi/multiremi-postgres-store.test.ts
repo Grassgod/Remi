@@ -21,6 +21,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
+import { createMultiremiApp } from "@multiremi/api.js";
 import type { MultiremiRuntimeModel } from "@multiremi/contracts/types.js";
 import { PostgresSyncDatabase, translateSqliteToPg } from "@multiremi/store/db/postgres.js";
 import { daemonRuntimeId, MultiremiStore } from "@multiremi/store.js";
@@ -2671,7 +2672,200 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const skipped = store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_start_skipped");
     expect(skipped).toHaveLength(1);
     expect(String(skipped[0]?.body ?? "")).toContain("Agent not found");
+    // The atomic claim is released on failure, so the dependent is genuinely
+    // retryable rather than stranded in `todo` with no round.
+    expect(skipped[0]?.data).toMatchObject({ reason: "dispatch_failed", claimReleased: true });
+    // And the retry really works once the owner is fixed.
+    db.run("UPDATE multiremi_agents SET archived_at = NULL WHERE id = ?", [owner.id]);
+    const restored = store.createAgent({ name: "Replacement owner", provider: "claude", runtimeId: runtime.id });
+    const assigned = store.assignIssue(dependent.id, { assigneeType: "agent", assigneeId: restored.id });
+    expect(assigned.task?.id).toBeDefined();
+    expect(store.listTasksForIssue(dependent.id).filter((task) => task.status !== "cancelled")).toHaveLength(1);
   });
+
+  /**
+   * MUL-409 fix round 3 (QA round-2 blockers) on Postgres: the gate refuses a
+   * forged structural exemption, a member override queues exactly one row, a
+   * rejected `blocked_by` keeps its HTTP contract, and batch is not a second
+   * override.
+   */
+  it("holds the dependency gate against forged exemptions and batch force (PG)", async () => {
+    const app = createMultiremiApp({ store });
+    const runtime = store.registerRuntime({ id: "rt_gate_pg", name: "Gate worker", provider: "claude", maxConcurrency: 4 });
+    const owner = store.createAgent({ name: "Gate owner", provider: "claude", runtimeId: runtime.id });
+    const prereq = store.createIssue({ title: "Gate prerequisite", status: "in_progress" });
+    const waiting = store.createIssue({
+      title: "Gate waiting",
+      status: "backlog",
+      blockedBy: [prereq.id],
+      assigneeType: "agent",
+      assigneeId: owner.id,
+    });
+    const taskRows = () => db.query("SELECT id, status FROM multiremi_tasks WHERE issue_id = ?").all(waiting.id) as Array<{ id: string; status: string }>;
+    const forceActivities = () => db.query(
+      "SELECT id FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'dependency_force_started'",
+    ).all(waiting.id) as Array<{ id: string }>;
+    const post = (path: string, body: unknown) => app.request(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    // (a) forged exemptions are ignored on the public task route
+    for (const extra of [{ attempt: 2 }, { preserve_issue_status: true }]) {
+      const response = await post("/api/multiremi/tasks", {
+        agentId: owner.id,
+        issueId: waiting.id,
+        prompt: "forged",
+        ...extra,
+      });
+      expect(response.status).toBe(409);
+      expect((await response.json() as { code?: string }).code).toBe("dependencies_unmet");
+    }
+    expect(taskRows()).toHaveLength(0);
+    expect(store.getIssue(waiting.id)?.status).toBe("backlog");
+
+    // (b) batch force is ignored by the dependency gate
+    const batched = await post("/api/issues/batch-update", {
+      issue_ids: [waiting.id],
+      updates: { status: "todo", force: true },
+    });
+    expect(batched.status).toBe(200);
+    expect(store.getIssue(waiting.id)?.status).toBe("backlog");
+    expect(taskRows()).toHaveLength(0);
+    expect(forceActivities()).toHaveLength(0);
+
+    // (c) the member PATCH override queues exactly one row
+    const forced = await app.request(`/api/issues/${waiting.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status: "todo", force: true }),
+    });
+    expect(forced.status).toBe(200);
+    expect(store.getIssue(waiting.id)?.status).toBe("todo");
+    expect(taskRows().map((row) => row.status)).toEqual(["queued"]);
+    expect(forceActivities()).toHaveLength(1);
+
+    // (d) a rejected blocked_by keeps its HTTP contract and rolls back
+    const parent = store.createIssue({ title: "PG parent" });
+    const issuesBefore = (db.query("SELECT COUNT(*) AS n FROM multiremi_issues").get() as { n: number }).n;
+    for (const [blockedBy, expected] of [
+      [[parent.id], 409],
+      [["iss_missing_pg"], 400],
+    ] as const) {
+      const response = await post("/api/issues", { title: "PG rejected", parent_issue_id: parent.id, blocked_by: blockedBy });
+      expect(response.status).toBe(expected);
+      expect((db.query("SELECT COUNT(*) AS n FROM multiremi_issues").get() as { n: number }).n).toBe(issuesBefore);
+      expect(store.listChildIssues(parent.id)).toHaveLength(0);
+    }
+  });
+
+  /**
+   * MUL-409 fix round 3, blocker 3 on Postgres. Two prerequisites reaching
+   * `done` concurrently on independent connections used to leave two queued
+   * rounds and two `dependency_auto_started` rows, because both readers saw the
+   * dependent as `backlog`. The atomic claim fixes it; this test spawns two
+   * workers so the race is real, and repeats to catch flakiness. Sequential
+   * calls cannot prove this property.
+   */
+  it("lets only one of two concurrent prerequisites auto-start the dependent (PG)", async () => {
+    const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const runtime = store.registerRuntime({ id: "rt_conc_pg", name: "Conc worker", provider: "claude", maxConcurrency: 8 });
+    const owner = store.createAgent({ name: "Conc owner", provider: "claude", runtimeId: runtime.id });
+    const workerUrl = new URL("./fixtures/postgres-complete-issue-worker.ts", import.meta.url).href;
+    const waitFor = (worker: Worker, phase: string) => new Promise<void>((resolve, reject) => {
+      const onMessage = (event: MessageEvent<{ phase?: string; error?: string }>) => {
+        if (event.data.phase === "error") { cleanup(); reject(new Error(event.data.error ?? "worker failed")); }
+        else if (event.data.phase === phase) { cleanup(); resolve(); }
+      };
+      const onError = (event: ErrorEvent) => { cleanup(); reject(event.error ?? new Error(event.message)); };
+      const cleanup = () => { worker.removeEventListener("message", onMessage as never); worker.removeEventListener("error", onError as never); };
+      worker.addEventListener("message", onMessage as never);
+      worker.addEventListener("error", onError as never);
+    });
+
+    const ROUNDS = Number(process.env.MUL409_CONCURRENCY_ROUNDS ?? 12);
+    let doubleDispatched = 0;
+    for (let round = 0; round < ROUNDS; round++) {
+      const first = store.createIssue({ title: `Conc first ${round}`, status: "in_progress" });
+      const second = store.createIssue({ title: `Conc second ${round}`, status: "in_progress" });
+      const dependent = store.createIssue({
+        title: `Conc dependent ${round}`,
+        status: "backlog",
+        blockedBy: [first.id, second.id],
+        assigneeType: "agent",
+        assigneeId: owner.id,
+      });
+      // The workers need the live database URL; the store holds the bridge.
+      const databaseUrl = pgDatabaseUrl(TEST_DB);
+      const barrierDir = mkdtempSync(join(tmpdir(), "mul409-conc-"));
+      const barrier = join(barrierDir, "go");
+      const workers = [first, second].map((issue) => {
+        const worker = new Worker(workerUrl, { type: "module" });
+        worker.postMessage({ type: "init", databaseUrl, issueId: issue.id, barrierPath: barrier });
+        return worker;
+      });
+      await Promise.all(workers.map((worker) => waitFor(worker, "ready")));
+      writeFileSync(barrier, "go");
+      await Promise.all(workers.map((worker) => waitFor(worker, "done")));
+      workers.forEach((worker) => worker.terminate());
+      rmSync(barrierDir, { recursive: true, force: true });
+
+      const rows = db.query("SELECT id, status FROM multiremi_tasks WHERE issue_id = ?").all(dependent.id) as Array<{ status: string }>;
+      const autoStarted = db.query(
+        "SELECT id FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'dependency_auto_started'",
+      ).all(dependent.id) as Array<{ id: string }>;
+      if (rows.length !== 1 || autoStarted.length !== 1) doubleDispatched++;
+    }
+    expect(doubleDispatched).toBe(0);
+  }, 120_000);
+
+  /**
+   * MUL-409 fix round 3, blocker 3 (second half): a member's forced start and the
+   * automatic start that the last prerequisite triggers must not both queue a
+   * round either. Both paths arbitrate on the same conditional
+   * `backlog -> todo` claim, so exactly one wins.
+   */
+  it("lets only one of a forced start and an automatic start dispatch (PG)", async () => {
+    const runtime = store.registerRuntime({ id: "rt_force_race", name: "Race worker", provider: "claude", maxConcurrency: 8 });
+    const owner = store.createAgent({ name: "Race owner", provider: "claude", runtimeId: runtime.id });
+    const ROUNDS = Number(process.env.MUL409_FORCE_RACE_ROUNDS ?? 8);
+    let doubleDispatched = 0;
+    for (let round = 0; round < ROUNDS; round++) {
+      const prereq = store.createIssue({ title: `Race prereq ${round}`, status: "in_progress" });
+      const dependent = store.createIssue({
+        title: `Race dependent ${round}`,
+        status: "backlog",
+        blockedBy: [prereq.id],
+        assigneeType: "agent",
+        assigneeId: owner.id,
+      });
+      // Kick off both contenders in the same tick. They run on one connection
+      // here, so this exercises the claim ordering rather than true network
+      // concurrency; the two-process test above covers the cross-connection
+      // race.
+      const forced = Promise.resolve().then(() => {
+        try {
+          store.updateIssue(dependent.id, { status: "todo", force: true, actorType: "member", actorId: "local" });
+        } catch { /* the losing contender may legitimately refuse */ }
+      });
+      const automatic = Promise.resolve().then(() => {
+        try {
+          store.updateIssue(prereq.id, { status: "done" });
+        } catch { /* the losing contender may legitimately refuse */ }
+      });
+      await Promise.all([forced, automatic]);
+
+      const rows = db.query("SELECT id, status FROM multiremi_tasks WHERE issue_id = ?").all(dependent.id) as Array<{ status: string }>;
+      const started = db.query(
+        "SELECT id FROM multiremi_issue_activity WHERE issue_id = ? AND type IN ('dependency_force_started', 'dependency_auto_started')",
+      ).all(dependent.id) as Array<{ id: string }>;
+      if (rows.length !== 1 || started.length !== 1) doubleDispatched++;
+    }
+    expect(doubleDispatched).toBe(0);
+  }, 60_000);
 
   it("creates a fresh terminal return when comment editing cancels the explicit return first (PG)", () => {
     const fixture = createDelegationFixture();

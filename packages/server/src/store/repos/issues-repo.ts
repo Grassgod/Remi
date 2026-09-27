@@ -681,24 +681,42 @@ export class IssuesRepo {
       .sort((left, right) => right.frequency - left.frequency || left.assigneeType.localeCompare(right.assigneeType) || left.assigneeId.localeCompare(right.assigneeId));
   }
 
-  batchUpdateIssues(input: BatchUpdateIssuesInput): { updated: number; issues: MultiremiIssue[] } {
+  batchUpdateIssues(input: BatchUpdateIssuesInput): {
+    updated: number;
+    issues: MultiremiIssue[];
+    skipped: Array<{ issueId: string; error: string; code: string | null }>;
+  } {
     const issueIds = input.issueIds ?? input.issue_ids ?? [];
     const updates = input.updates ?? {};
     if (issueIds.length === 0) throw new Error("issue_ids is required");
-    if (!hasIssueMutation(updates)) return { updated: 0, issues: [] };
+    if (!hasIssueMutation(updates)) return { updated: 0, issues: [], skipped: [] };
     const issues: MultiremiIssue[] = [];
+    const skipped: Array<{ issueId: string; error: string; code: string | null }> = [];
+    // MUL-400 E3 (QA round 2, blocker 5): batch is not a second way across the
+    // dependency gate. The request's `force` is moved to a server-internal
+    // option that only the parent-status guard reads, so a waiting issue in a
+    // batch stays parked and no `dependency_force_started` is written. S1's
+    // member override for a parent with open children keeps working.
+    const batchOptions: UpdateIssueOptions = updates.force === true ? { parentStatusForce: true } : {};
+    const rowUpdates: UpdateIssueInput = updates.force === true ? { ...updates, force: undefined } : updates;
     for (const issueId of issueIds) {
       try {
-        issues.push(this.updateIssue(issueId, updates));
+        issues.push(this.updateIssue(issueId, rowUpdates, batchOptions));
       } catch (err) {
         // Batch tolerates invalid or inaccessible rows by skipping them, but a
         // parent-status refusal is a decision the caller must see: swallowing it
         // would answer 200 for a write that was rejected (MUL-400 E1, A4).
         if (err instanceof ParentStatusGuardError) throw err;
+        // A dependency refusal is reported per row instead of failing the whole
+        // batch, matching the "skip invalid rows" shape callers already handle.
+        if (err instanceof IssueDependencyError) {
+          skipped.push({ issueId, error: err.message, code: err.code });
+          continue;
+        }
         // Match Multiremi's batch behavior: skip invalid or inaccessible rows.
       }
     }
-    return { updated: issues.length, issues };
+    return { updated: issues.length, issues, skipped };
   }
 
   deleteIssue(id: string): boolean {
@@ -1431,7 +1449,7 @@ export class IssuesRepo {
     id: string,
     input: UpdateIssueInput,
     options: UpdateIssueOptions = {},
-  ): { issue: MultiremiIssue; cancelledTasks: number } {
+  ): { issue: MultiremiIssue; cancelledTasks: number; handledForcedStart: boolean } {
     let previous: MultiremiIssue | null = null;
     let updatedAt = "";
     let cancelledTasks = 0;
@@ -1539,7 +1557,11 @@ export class IssuesRepo {
       if (holdParentStatus) {
         this.recordHeldParentStatus(id, requestedStatusForHold(input, nextStatus), options.holdParentStatusData ?? null);
       } else if (parentStatusGuardEnabled() && statusChanged && !options.allowParentStatusGuardBypass) {
-        this.assertParentStatusAllowed(id, current, nextStatus, input);
+        this.assertParentStatusAllowed(id, current, nextStatus, {
+          ...input,
+          // Batch carries its member override in the internal option (blocker 5).
+          force: input.force === true || options.parentStatusForce === true,
+        });
       }
       const enteringTerminal = !isTerminalIssueStatus(current.status) && isTerminalIssueStatus(nextStatus);
       const leavingTerminal = isTerminalIssueStatus(current.status) && !isTerminalIssueStatus(nextStatus);
@@ -1614,7 +1636,7 @@ export class IssuesRepo {
       });
       return next;
     })();
-    if (updated === previous) return { issue: updated, cancelledTasks };
+    if (updated === previous) return { issue: updated, cancelledTasks, handledForcedStart: false };
     this.ctx.appendIssueActivity(id, {
       actorType: "system",
       actorId: null,
@@ -1624,7 +1646,11 @@ export class IssuesRepo {
     });
     // MUL-400 E1: a member override has to be auditable next to the write it
     // allowed, including the child count it overrode at the time.
-    if (previous!.status !== updated.status && input.force === true && statusNeedsChildGuard(updated.status)) {
+    if (
+      previous!.status !== updated.status
+      && (input.force === true || options.parentStatusForce === true)
+      && statusNeedsChildGuard(updated.status)
+    ) {
       this.ctx.appendIssueActivity(id, {
         actorType: input.actorType ?? "member",
         actorId: input.actorId ?? null,
@@ -1645,6 +1671,10 @@ export class IssuesRepo {
     if (previous!.status !== "done" && updated.status === "done") {
       this.ctx.knowledge().createIssueCompletionKnowledgeBundle(updated);
     }
+    // MUL-400 E3 (QA round 2, blocker 2): the forced start dispatches here, so
+    // the route's assign-on-update must not dispatch a second time — that path
+    // cancelled the round this one had just queued. `handledForcedStart` tells
+    // the caller the store already owns the dispatch.
     if (forcedStart) this.dispatchForcedStart(updated, input);
     this.notifyChildStatusChange(
       previous!,
@@ -1658,7 +1688,7 @@ export class IssuesRepo {
       const oldParent = this.getIssue(previous!.parentIssueId);
       if (oldParent) this.rederiveParentStatus(oldParent, updated);
     }
-    return { issue: updated, cancelledTasks };
+    return { issue: updated, cancelledTasks, handledForcedStart: forcedStart };
   }
 
   /**
@@ -1676,6 +1706,11 @@ export class IssuesRepo {
    */
   private dispatchForcedStart(issue: MultiremiIssue, input: UpdateIssueInput): void {
     if (!issue.assigneeType || !issue.assigneeId || issue.assigneeType === "member") return;
+    // The status write above already moved the issue off `backlog`, so the
+    // auto-start claim cannot also win: whoever flips the row first owns the
+    // dispatch. This re-read is what keeps a forced start and a concurrent
+    // automatic start from both queueing a round.
+    if (this.getIssue(issue.id)?.status !== "todo" && this.getIssue(issue.id)?.status !== "in_progress") return;
     try {
       this.assignIssue(issue.id, {
         assigneeType: issue.assigneeType,
@@ -2087,7 +2122,28 @@ export class IssuesRepo {
       });
       return this.reportDependencyReady(dependent, satisfiedBy);
     }
+    // MUL-400 E3 (QA round 2, blocker 3): claim the start atomically before
+    // dispatching. Two prerequisites can reach `done` concurrently on separate
+    // connections, and both would otherwise read this issue as `backlog` and
+    // each queue a round. The conditional UPDATE is the whole arbitration: only
+    // the transaction that flips `backlog -> todo` wins, and the loser sees
+    // `changes === 0` and does nothing at all.
+    const claimed = this.ctx.db.transaction(() => {
+      const current = this.getIssue(dependent.id);
+      if (!current || current.status !== "backlog") return false;
+      if (this.listUnmetPrerequisites(dependent.id).length > 0) return false;
+      const flipped = this.ctx.db.run(
+        `UPDATE multiremi_issues
+         SET status = 'todo', completed_at = NULL, archived_at = NULL, updated_at = ?
+         WHERE id = ? AND status = 'backlog'`,
+        [nowIso(), dependent.id],
+      );
+      return flipped.changes === 1;
+    })();
+    if (!claimed) return null;
     try {
+      // The status is already `todo`, so this only attaches the round: the gate
+      // is satisfied and the task-creation layer sees a non-waiting issue.
       const assigned = this.assignIssue(dependent.id, {
         assigneeType: ownerType,
         assigneeId: dependent.assigneeId,
@@ -2114,7 +2170,17 @@ export class IssuesRepo {
       });
     } catch (err) {
       // A dependent that cannot start (owner archived, dispatch refused) must
-      // not take the prerequisite's own transition down with it.
+      // not take the prerequisite's own transition down with it. The claim is
+      // released so the dependent goes back to the retryable waiting state
+      // (`backlog` + unmet prerequisite) instead of being stranded in `todo`
+      // with no round — the same shape the pre-claim code produced, and what the
+      // `dependency_auto_start_skipped` activity tells a human to fix.
+      const released = this.ctx.db.transaction(() => this.ctx.db.run(
+        `UPDATE multiremi_issues
+         SET status = 'backlog', completed_at = NULL, archived_at = NULL, updated_at = ?
+         WHERE id = ? AND status = 'todo'`,
+        [nowIso(), dependent.id],
+      ))();
       this.ctx.appendIssueActivity(dependent.id, {
         actorType: "system",
         actorId: SYSTEM_AUTHOR_ID,
@@ -2126,6 +2192,8 @@ export class IssuesRepo {
           satisfiedByKey: satisfiedBy.key,
           satisfied_by_key: satisfiedBy.key,
           reason: "dispatch_failed",
+          claimReleased: released.changes === 1,
+          claim_released: released.changes === 1,
         },
       });
       log.warn(`dependency auto-start skipped for ${dependent.id}: ${err instanceof Error ? err.message : String(err)}`);

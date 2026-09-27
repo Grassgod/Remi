@@ -3142,7 +3142,11 @@ runMigrations(this.db);
     return this.issues.listAssigneeFrequency(input);
   }
 
-  batchUpdateIssues(input: BatchUpdateIssuesInput): { updated: number; issues: MultiremiIssue[] } {
+  batchUpdateIssues(input: BatchUpdateIssuesInput): {
+    updated: number;
+    issues: MultiremiIssue[];
+    skipped: Array<{ issueId: string; error: string; code: string | null }>;
+  } {
     return this.issues.batchUpdateIssues(input);
   }
 
@@ -3225,7 +3229,7 @@ runMigrations(this.db);
     id: string,
     input: UpdateIssueInput,
     options: UpdateIssueOptions = {},
-  ): { issue: MultiremiIssue; cancelledTasks: number } {
+  ): { issue: MultiremiIssue; cancelledTasks: number; handledForcedStart: boolean } {
     return this.issues.updateIssueWithOutcome(id, input, options);
   }
 
