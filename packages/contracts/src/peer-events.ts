@@ -2,10 +2,10 @@
  * Wire contract for the cross-process realtime peer channel (MUL-462, MUL-455 §1.4).
  *
  * When the API is split into a browser-facing process and a daemon-facing one,
- * the store's in-process listeners only see the writes of their own process. The
- * peer channel carries those events to the other process over a loopback HTTP
- * POST; the receiving process only delivers them locally and never forwards them
- * again, so the two processes cannot ping-pong an event forever.
+ * the store's in-process listeners only see the writes of their own runtime.
+ * The peer channel carries those events to the other side over a loopback HTTP
+ * POST; the receiver only delivers them locally and never forwards them
+ * again, so the two sides cannot ping-pong an event forever.
  *
  * The envelope is deliberately small and versioned: `v` is the only field a
  * receiver may branch on before it trusts the rest, and `origin` exists so a

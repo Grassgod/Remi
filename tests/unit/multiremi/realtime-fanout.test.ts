@@ -521,6 +521,49 @@ describe("realtime fanout — two servers over one database", () => {
     }
   });
 
+  it("keeps single-process behaviour when MULTIREMI_PEER_URL is unset", async () => {
+    // Acceptance item 1: with no peer URL there is no sender and no subscriber,
+    // the health route says so, and a local write still reaches a local socket.
+    const directory = mkdtempSync(join(tmpdir(), "multiremi-peer-off-"));
+    const database = new Database(join(directory, "single.sqlite"), { create: true });
+    const store = new MultiremiStore(database);
+    store.ensureLocalWorkspace();
+    const server = startMultiremiServer({ store, scheduler: null, port: 0, hostname: "127.0.0.1" });
+    try {
+      const health = (await (await fetch(`http://127.0.0.1:${server.port}/health/realtime`)).json()) as any;
+      // No peer configured must not read as an unhealthy peer.
+      expect(health).toMatchObject({ enabled: true, transport: "websocket", role: "all", peer_healthy: false });
+
+      const peerHealth = (await (await fetch(`http://127.0.0.1:${server.port}/internal/peer/health`)).json()) as any;
+      expect(peerHealth).toMatchObject({ ok: true, enabled: false, peer_healthy: false });
+
+      const post = await fetch(`http://127.0.0.1:${server.port}/internal/peer/events`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer multi" },
+        body: JSON.stringify({ topic: "realtime", events: [] }),
+      });
+      // The channel is closed: authenticating successfully still cannot inject.
+      expect(post.status).toBe(401);
+
+      const agent = store.createAgent({ name: "Peer off agent", provider: "codex" });
+      const runtime = store.registerRuntime({ id: "rt_peer_off", name: "Peer off runtime", provider: "codex" });
+      const token = await store.createAccessToken({ name: "Peer off browser", type: "pat", workspaceId: "local" });
+      const socket = new WebSocket(`ws://127.0.0.1:${server.port}/ws?workspace_slug=local`);
+      await authenticateBrowserWebSocket(socket, token.token);
+      try {
+        const frame = nextWebSocketMessage(socket);
+        const task = store.createTask({ agentId: agent.id, prompt: "still local", runtimeId: runtime.id });
+        expect(await frame).toMatchObject({ type: "task:queued", payload: { task_id: task.id } });
+      } finally {
+        socket.close();
+      }
+    } finally {
+      server.stop(true);
+      database.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("keeps the main flow moving while the peer is unreachable, drops the oldest, and catches up", async () => {
     // A tiny queue so overflow is reachable here; the accounting is the same one
     // the peer-channel unit cases pin at the real 10 000 cap.
