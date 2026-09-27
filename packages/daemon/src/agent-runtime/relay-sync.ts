@@ -174,6 +174,34 @@ export function mergeCodexConfig(currentToml: string, fragment: string): string 
 }
 
 /**
+ * Codex 0.157.1 gates the synchronous `request_user_input` tool behind the
+ * `default_mode_request_user_input` feature, which is "under development" and
+ * therefore off by default. Remi runs Codex sessions in Default mode, so the
+ * tool would otherwise answer "unavailable in Default mode". Codex reads this
+ * switch from `[features]` in config.toml rather than from a CODEX_CONFIG
+ * environment override: the per-thread environment value is applied last and
+ * would defeat a user explicitly writing `false`.
+ */
+const DEFAULT_MODE_REQUEST_USER_INPUT = "default_mode_request_user_input";
+
+/**
+ * Enable `request_user_input` for Default mode while preserving every explicit
+ * choice: an existing `[features]` table keeps its entries, a user value for
+ * this key (including `false`) wins, and a non-table `features` value is left
+ * untouched.
+ */
+function enableDefaultModeRequestUserInput(config: Record<string, unknown>): void {
+  const features = config.features;
+  if (features === undefined) {
+    config.features = { [DEFAULT_MODE_REQUEST_USER_INPUT]: true };
+    return;
+  }
+  if (!isPlainObject(features)) return;
+  if (DEFAULT_MODE_REQUEST_USER_INPUT in features) return;
+  features[DEFAULT_MODE_REQUEST_USER_INPUT] = true;
+}
+
+/**
  * Merge Relay routing into an Issue Session CODEX_HOME. Relay credentials are
  * supplied to the child process through OPENAI_API_KEY, so the active provider
  * must explicitly read that environment variable instead of requiring Codex's
@@ -207,6 +235,7 @@ export function mergeCodexSessionConfig(
   for (const provider of Object.values(providers ?? {})) {
     if (isPlainObject(provider)) delete provider.experimental_bearer_token;
   }
+  enableDefaultModeRequestUserInput(merged);
   if (!relayUsesEnvApiKey) return stringifyToml(merged);
 
   const active = activeProvider && providers && isPlainObject(providers[activeProvider])

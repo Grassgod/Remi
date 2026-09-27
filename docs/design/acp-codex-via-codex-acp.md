@@ -17,6 +17,7 @@ summary: 说明任务到 Codex ACP 的当前执行链、配置来源、会话隔
 
 ## 协议与隔离
 
+同步提问工具 `request_user_input` 在 Codex 0.157.1 里默认只在 Plan 模式可用，Remi 在 `mergeCodexSessionConfig` 中为每个会话 Home 补齐 `[features] default_mode_request_user_input = true` 后才在 Default 模式下暴露；该开关仍标为 "under development"，升级检查见[配套升级说明](../daemon-runtime-upgrades.md)。表单经 ACP 的 `elicitation/create`（form）到 Remi 问题卡，字段映射与版本判定见 [acp-elicitation.ts](../../packages/contracts/src/acp-elicitation.ts)。
 [CodexAdapter](../../packages/acp/src/adapters/codex/index.ts)已经实现工具名、输入、结果预览及权限模式映射。[AcpProvider](../../packages/acp/src/provider.ts)根据 ACP 返回的能力协商 model/effort/mode；不能用未被桥接器读取的会话 `_meta` 代替协商。适配器对不支持的 `allowedTools` 和会话 `systemPrompt` 发出警告，不保证这些字段生效。
 
 [Session Home](../../packages/daemon/src/agent-runtime/workspace/session-home.ts)负责会话目录与凭据路由，[Codex Home](../../packages/daemon/src/agent-runtime/agent-plugins/codex-home.ts)负责配置/插件物化及认证文件连接。[能力装配](../../packages/daemon/src/agent-runtime/capabilities/agent-plugins.ts)将隔离目录传为 `CODEX_HOME`；插件集合及执行指纹参与会话复用判定，不能让不同执行身份共用插件配置。
