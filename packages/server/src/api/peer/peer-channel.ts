@@ -78,19 +78,23 @@ export const PEER_MIN_BACKOFF_MS = 1_000;
 export const PEER_MAX_BACKOFF_MS = 10_000;
 export const PEER_QUEUE_LIMIT = 10_000;
 /**
- * Steady-state byte budget for the send queue.
+ * Byte budget for the send queue, measured over the *backlog*.
  *
- * Enforced against the *backlog* — events that were already waiting when the
- * current flush cycle began — not against the burst a single store write just
- * produced. That distinction is load-bearing: the daemon may append 256 messages
- * of 256 KiB in one call, which is ~64 MiB of events, and the contract says a
- * legal report must arrive complete and in `seq` order. Dropping part of that
- * burst would break the very ordering the channel exists to preserve.
+ * The distinction is load-bearing. One legal store write can be larger than the
+ * budget by itself: the daemon may append 256 messages of 256 KiB in a single
+ * call, which is ~64 MiB of events, and the contract says a legal report arrives
+ * complete and in `seq` order. Cutting that burst apart would break the very
+ * ordering the channel exists to preserve.
  *
- * So each flush cycle admits its own burst in full and trims only what was
- * waiting before it. The bound that matters still holds: a peer that is down
- * cannot accumulate backlog without limit, because the next cycle evicts from
- * the oldest end down to the budget. The peak is `budget + one store write`.
+ * So both caps are enforced per produce call, against everything queued *before*
+ * that call: the backlog is evicted oldest-first until it fits, and the call that
+ * triggered the eviction is then admitted whole. The invariants are:
+ *
+ *   - any single legal produce call is delivered complete, in order;
+ *   - a peer that stays down cannot accumulate backlog — each new call first
+ *     evicts the backlog down to the caps;
+ *   - the queue never exceeds `cap + one produce burst`, rather than growing with
+ *     however many writes happen to land in the same tick.
  */
 export const PEER_MAX_QUEUE_BYTES = 32 * 1_048_576;
 
@@ -342,7 +346,7 @@ class HttpPeerChannel implements PeerChannel {
       this.dropOversize(topic, null, bytes);
       return;
     }
-    this.enqueue(topic, json, bytes);
+    this.enqueueBurst(topic, [{ json, bytes }]);
   }
 
   forwardRealtime(kind: PeerEventKind, payload: Record<string, unknown>): void {
@@ -350,10 +354,12 @@ class HttpPeerChannel implements PeerChannel {
     // Split before serializing: a `task_messages` append can carry a quarter
     // megabyte per message and 256 of them at once, and stringify of the whole
     // thing would block this process for tens of milliseconds.
+    const events: Array<{ json: string; bytes: number }> = [];
     for (const part of splitRealtimePayload(kind, payload)) {
       const event = this.buildRealtimeEvent(kind, part);
-      if (event) this.enqueue(PEER_REALTIME_TOPIC, event.json, event.bytes);
+      if (event) events.push(event);
     }
+    this.enqueueBurst(PEER_REALTIME_TOPIC, events);
   }
 
   /**
@@ -402,10 +408,22 @@ class HttpPeerChannel implements PeerChannel {
     }
   }
 
-  private enqueue(topic: string, json: string, bytes: number): void {
-    this.queue.push({ topic, json, bytes });
-    this.queuedBytes += bytes;
-    // No trim here: see PEER_MAX_QUEUE_BYTES. The caps are enforced in flush().
+  /**
+   * Admit one produce call's events as a unit.
+   *
+   * The backlog is trimmed before the burst is added and the burst itself is
+   * never trimmed, which is what keeps a legal multi-message report whole while
+   * still bounding what a slow peer can accumulate. See PEER_MAX_QUEUE_BYTES.
+   */
+  private enqueueBurst(topic: string, parts: ReadonlyArray<{ json: string; bytes: number }>): void {
+    if (parts.length === 0) return;
+    this.trimOverflow();
+    for (const part of parts) {
+      this.queue.push({ topic, json: part.json, bytes: part.bytes });
+      this.queuedBytes += part.bytes;
+    }
+    // Everything now queued is backlog for the next produce call.
+    this.droppableCount = this.queue.length;
     this.schedule();
   }
 
@@ -599,11 +617,6 @@ class HttpPeerChannel implements PeerChannel {
     this.flushing = true;
     try {
       while (!this.closed && this.queue.length > 0) {
-        // Caps are enforced here, at a flush boundary, rather than per enqueue:
-        // one store write can legally exceed the byte budget on its own (see
-        // PEER_MAX_QUEUE_BYTES) and must not be cut apart mid-run.
-        this.trimOverflow();
-        if (this.queue.length === 0) break;
         // Retries keep the number the first attempt used; only a batch taken for
         // the first time advances the counter.
         const batchSeq = this.inflightBatchSeq ?? this.nextBatchSeq;
@@ -614,12 +627,14 @@ class HttpPeerChannel implements PeerChannel {
         try {
           await this.post(body);
         } catch {
-          // Put the batch back at the head so ordering survives the retry, then
-          // enforce the caps again (the burst may have grown while we waited).
+          // Put the batch back at the head so ordering survives the retry. It is
+          // already backlog — the caps were applied when it was enqueued — so no
+          // re-trim here; that would let a failing peer eat the very events it is
+          // retrying.
           this.inflightBatchSeq = batchSeq;
           this.queue.unshift(...batch);
           this.queuedBytes += batch.reduce((total, event) => total + event.bytes, 0);
-          this.trimOverflow();
+          this.droppableCount += batch.length;
           this.failed += 1;
           this.consecutiveFailures += 1;
           recordPeerFailure();
@@ -638,19 +653,16 @@ class HttpPeerChannel implements PeerChannel {
       }
     } finally {
       this.flushing = false;
-      // Whatever is still queued when a cycle ends is backlog: from the next
-      // cycle on it is evictable, oldest first.
-      this.droppableCount = this.queue.length;
     }
   }
 
   /**
    * Enforce both caps, oldest first, over the droppable backlog only.
    *
-   * Whichever limit is reached first wins; the byte budget is what keeps a queue
-   * of maximum-size events from holding gigabytes across flush cycles. The burst
-   * this cycle is delivering is never cut: it is admitted whole and becomes
-   * droppable once the cycle ends (see PEER_MAX_QUEUE_BYTES).
+   * Whichever limit is reached first wins. The burst a produce call is adding
+   * right now is not droppable, so a legal multi-message report is never cut
+   * apart; it becomes droppable as soon as the next produce call arrives (see
+   * PEER_MAX_QUEUE_BYTES).
    */
   private trimOverflow(): void {
     while (this.droppableCount > 0

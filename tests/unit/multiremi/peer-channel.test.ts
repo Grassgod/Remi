@@ -7,6 +7,7 @@ import { registerPeerRoutes } from "../../../packages/server/src/api/peer/peer-r
 import {
   PEER_MAX_BATCH_BYTES,
   PEER_MAX_EVENT_BYTES,
+  PEER_MAX_QUEUE_BYTES,
   PEER_REALTIME_TOPIC,
   createPeerChannel,
   createPeerChannelFromEnv,
@@ -301,10 +302,15 @@ describe("peer channel — sending", () => {
     for (let seq = 1; seq <= 20; seq += 1) {
       channel.forwardRealtime("task_event", { type: `seq:${seq}`, task: TASK, task_id: TASK.id });
     }
-    await waitFor(() => channel!.stats().dropped >= 15, "overflow to be counted");
+    await waitFor(() => channel!.stats().dropped >= 14, "overflow to be counted");
 
-    expect(channel.stats().queued).toBe(5);
-    expect(peerMetricsSnapshot().dropped).toBe(channel.stats().dropped);
+    // The cap bounds the *backlog*: each produce call trims what was already
+    // queued down to the cap and then admits its own burst whole, so the queue
+    // may sit one burst above the cap and never grows past that.
+    const stats = channel.stats();
+    expect(stats.queued).toBeLessThanOrEqual(5 + 1);
+    expect(stats.dropped).toBe(20 - stats.queued);
+    expect(peerMetricsSnapshot().dropped).toBe(stats.dropped);
   });
 
   it("drops the oldest events once the queue byte budget is spent, even under the count cap", async () => {
@@ -333,13 +339,37 @@ describe("peer channel — sending", () => {
     }
     await waitFor(() => channel!.stats().dropped > 0, "the byte budget to evict", 2_000);
 
-    expect(channel.stats().queued_bytes).toBeLessThanOrEqual(2 * 1024 + 4 * 1024);
+    // Same invariant as the count cap: backlog <= budget, plus the burst in hand.
+    expect(channel.stats().queued_bytes).toBeLessThanOrEqual(4 * 1024 + 2 * 1024);
     expect(channel.stats().queued).toBeLessThan(30);
-    // The survivors are the newest ones: the queue drops from the oldest end.
-    const lastBatch = peer.payloads().at(-1) as any;
     expect(channel.stats().dropped).toBe(30 - channel.stats().queued);
-    expect(lastBatch).toBeUndefined();
   });
+
+  it("bounds the queue across a burst of maximum-size reports instead of growing with the tick", async () => {
+    // 12 maximum legal reports (~64 MiB each) produced in one tick against a peer
+    // that never answers. A budget enforced only at flush boundaries let this
+    // queue 769 MiB; the invariant is `budget + one burst`.
+    const peer = fakePeer();
+    channel = createPeerChannel({ url: "http://peer:6120", secret: "s", fetchImpl: peer.fetchImpl });
+    peer.goOffline();
+    peer.setDelay(1);
+
+    let peakBytes = 0;
+    for (let round = 0; round < 12; round += 1) {
+      channel.forwardRealtime("task_messages", {
+        task: TASK,
+        task_id: TASK.id,
+        messages: Array.from({ length: 256 }, (_, index) => message(index + 1, 256 * 1024)),
+      });
+      peakBytes = Math.max(peakBytes, channel!.stats().queued_bytes);
+    }
+
+    const burstBytes = 256 * 256 * 1024;
+    // One in-flight batch may already be out of the queue, so allow that slack.
+    expect(peakBytes).toBeLessThanOrEqual(PEER_MAX_QUEUE_BYTES + burstBytes + PEER_MAX_BATCH_BYTES);
+    // And the eviction really happened: without it this would hold ~12 bursts.
+    expect(channel.stats().dropped).toBeGreaterThan(0);
+  }, 60_000);
 
   it("does not block the caller and reports the failure once the peer is back", async () => {
     const peer = fakePeer();
