@@ -47,7 +47,14 @@ MULTIREMI_TEST_POSTGRES_URL=postgres://<user>@127.0.0.1:5432/postgres \
 
 ## Result
 
-`PASS` — 33 steps, 0 failures, on PostgreSQL 18.4 (2026-09-27).
+`PASS` — 74 steps, 0 failures, on PostgreSQL 18.4 (2026-09-27).
+
+Fix round 4 added two assertions to the chain: each automatic start must publish
+`issue:updated` for the dependent with `status: todo` and `prev_status: backlog`
+(the frontend only re-buckets an issue from that event, so without it an open
+page keeps rendering `backlog`). Everything else in the table above is
+unchanged; the atomicity of the automatic start itself is covered by the
+PostgreSQL suite, including a real process-exit probe at the claim.
 
 Defects this run has found and driven to a fix:
 

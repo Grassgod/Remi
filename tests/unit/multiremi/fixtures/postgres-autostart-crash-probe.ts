@@ -100,15 +100,22 @@ if (mode === "before-commit") {
     };
   };
 } else {
-  const original = internals.ctx.notifyTaskEnqueued.bind(internals.ctx);
+  // Park on the first commit-time event for the dependent: at that instant the
+  // auto-start transaction has committed and `emitCommitEvents` is draining its
+  // queue, so the durable state must already be complete.
+  const ctx = internals.ctx as unknown as {
+    emitCommitEvents(queue: { workspace: Array<{ payload?: { issue?: { id?: string } } }>; enqueuedTasks: unknown[] }): void;
+  };
+  const original = ctx.emitCommitEvents.bind(ctx);
   let armed = true;
-  internals.ctx.notifyTaskEnqueued = (task: unknown) => {
-    if (armed) {
+  ctx.emitCommitEvents = (queue) => {
+    const target = queue.workspace.find((event) => event.payload?.issue?.id === dependentId);
+    if (armed && target) {
       armed = false;
       announce("after-commit");
       holdUntilKilled();
     }
-    original(task);
+    original(queue);
   };
 }
 
