@@ -83,13 +83,28 @@ export interface TraceFileHeader {
  */
 export interface TraceFileTrailer {
   end: {
-    status: string;
+    status: TraceEndStatus;
     /** Highest allocated event seq. */
     head: number;
     event_count: number;
     ended_at: string;
   };
 }
+
+/**
+ * The status a trailer records: how the turn that owns the trace ended.
+ *
+ * This is deliberately NOT `TraceEventStatus`. Event status is the ACP tool
+ * lifecycle (`TRACE_EVENT_STATUSES` in `./trace.js`) and stays the sole source
+ * for an event's `status` field; a turn's outcome is a different vocabulary
+ * (`completed` / `failed` / `cancelled`, where `cancelled` has no event
+ * counterpart). A-0's `TraceStore.close` already narrows to these three values,
+ * and the contract tests assert both sides stay assignable in both directions,
+ * so neither can drift.
+ */
+export const TRACE_END_STATUSES = ["completed", "failed", "cancelled"] as const;
+
+export type TraceEndStatus = (typeof TRACE_END_STATUSES)[number];
 
 /**
  * Wire shape of one `multiremi_session_archive_requests` row (ADR 0006 Decision 8).

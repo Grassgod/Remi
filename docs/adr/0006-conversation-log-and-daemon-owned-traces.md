@@ -32,10 +32,17 @@ and a different answer changes only the named sub-deliverable:
 
 Conversation state is spread over three tables: `multiremi_chat_messages`,
 `multiremi_issue_comments` and the append-only `multiremi_session_events`
-(24K rows, 62 MB in production on 2026-09-26). Every issue comment is mirrored
-into a `message` event with `source_comment_id`, and `backfillDefaultIssueSessions`
-re-establishes that mirror on every startup, so the event `seq` is already a
-strict per-session order. Agent read progress (`multiremi_session_agent_lanes.cursor_seq`),
+(24K rows, 62 MB in production on 2026-09-26). Every issue comment that has a
+session is mirrored into a `message` event with `source_comment_id`, and
+`backfillDefaultIssueSessions` re-establishes that mirror on every startup, so the
+event `seq` is already a strict per-session order. Six agent comments from
+2026-07-11/12 are the exception: they predate the mirroring mechanism, carry
+`issue_session_id = NULL`, and therefore have neither a mirror event nor a session
+to belong to, so the backfill cannot be driven by `session_events` alone. B7 takes
+them from `issue_comments` instead and reports them as a separate
+`orphan_comments` figure; its dry-run decides whether any of them can be attached
+to a session after all, and "Consequences" records the expected outcome. Agent
+read progress (`multiremi_session_agent_lanes.cursor_seq`),
 side-session cutoffs, projection windows and delegation-return coverage checks all
 store event `seq` values. Chat uses a separate `sequence` counter and never writes
 session events.
@@ -154,6 +161,18 @@ not enforced on either backend, and Postgres transactions have no savepoints.
    per-subject progress and per-task digests, and never writes back to a daemon.
    Both steps have read-only reconciliation scripts (count, order, content hash
    per session and per task).
+
+   Both sides of every comparison run the **same** canonical digest function.
+   String columns (`content`, `output`, `tool`, `tool_call_id`, `status`, `type`)
+   hash their raw bytes. JSON columns (`input`, `meta`) hash
+   `canonical(JSON.parse(text))` — key-sorted, whitespace-free `JSON.stringify` —
+   because the trace carries those fields as objects, and a byte comparison would
+   depend on key order and escaping. Parsing happens in Bun; the backfill must not
+   cast these columns in SQL (`::jsonb` rejects the `\u0000` escapes that are legal
+   JSON and present in production). The dry run also checks that each JSON column
+   round-trips (`JSON.stringify(JSON.parse(text)) === text`) and reports every
+   mismatch as `json_nonroundtrip`, expected to be zero. Already-truncated members
+   reconcile against the stored value, not against a re-truncated copy.
 
 ## Alternatives considered
 

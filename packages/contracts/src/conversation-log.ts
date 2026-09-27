@@ -161,6 +161,15 @@ export interface ConversationLogEntry {
   body_html: string | null;
   render_version: string | null;
   parent_id: string | null;
+  /**
+   * Comment resolution, mirroring the three fields of the comment contract in
+   * `./types.js`. Resolving updates them in place and bumps `revision`;
+   * unresolving clears all three. Every non-comment kind is null, and resolve
+   * never appends a marker row, because production writes no such kind.
+   */
+  resolved_at: string | null;
+  resolved_by_type: string | null;
+  resolved_by_id: string | null;
   metadata: ConversationLogEntryMetadata;
   /** Increments on every in-place update of a shown row. */
   revision: number;
