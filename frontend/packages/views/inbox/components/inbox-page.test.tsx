@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
@@ -60,9 +60,11 @@ vi.mock("@multiremi/core/inbox/queries", async (importOriginal) => ({
   useInboxUnreadCount: () => 0,
 }));
 
-vi.mock("@multiremi/core/inbox/mutations", () => {
+vi.mock("@multiremi/core/inbox/mutations", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@multiremi/core/inbox/mutations")>();
   const noopMutation = () => ({ mutate: vi.fn(), isPending: false });
   return {
+    ...original,
     useMarkInboxRead: noopMutation,
     useArchiveInbox: noopMutation,
     useArchiveInboxItems: () => ({ mutate: archiveItems, isPending: false }),
@@ -150,7 +152,8 @@ vi.mock("./autopilot-run-report", () => ({
   ),
 }));
 
-vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+const toastError = vi.hoisted(() => vi.fn());
+vi.mock("sonner", () => ({ toast: { error: toastError, success: vi.fn() } }));
 
 vi.mock("@multiremi/ui/hooks/use-mobile", () => ({ useIsMobile: () => false }));
 
@@ -392,6 +395,81 @@ describe("InboxPage", () => {
     expect(
       replace.mock.calls.some(([path]) => String(path).startsWith("/test/issues/")),
     ).toBe(false);
+  });
+
+  it("re-enters the auto mark-read effect for a new selection but not for a parked id", async () => {
+    const now = new Date().toISOString();
+    listInbox.mockResolvedValue([
+      { id: "unread-1", type: "comment_mention", issue_id: null, title: "One", read: false, archived: false, created_at: now },
+      { id: "unread-2", type: "comment_mention", issue_id: null, title: "Two", read: false, archived: false, created_at: now },
+    ]);
+    renderInbox();
+
+    // Selecting an unread row fires the auto mark-read once with that row ...
+    fireEvent.click(await screen.findByRole("button", { name: "unread-1" }));
+    expect(markItemsRead).toHaveBeenCalledTimes(1);
+    expect(markItemsRead).toHaveBeenLastCalledWith(["unread-1"], expect.anything());
+
+    // ... its failure parks the id, so re-selecting the same row does not fire
+    // again even though the cache still reports it unread.
+    const onError = markItemsRead.mock.calls[0]?.[1]?.onError as (error: unknown) => void;
+    act(() => {
+      onError(new Error("mark read failed for unread-1"));
+    });
+    fireEvent.click(screen.getByRole("button", { name: "unread-2" }));
+    fireEvent.click(screen.getByRole("button", { name: "unread-1" }));
+    expect(markItemsRead).toHaveBeenCalledTimes(2);
+    expect(markItemsRead).toHaveBeenLastCalledWith(["unread-2"], expect.anything());
+  });
+
+  it("shows the mark-read failure toast only once per episode", async () => {
+    const now = new Date().toISOString();
+    listInbox.mockResolvedValue([
+      { id: "unread-1", type: "comment_mention", issue_id: null, title: "One", read: false, archived: false, created_at: now },
+      { id: "unread-2", type: "comment_mention", issue_id: null, title: "Two", read: false, archived: false, created_at: now },
+    ]);
+    renderInbox();
+
+    fireEvent.click(await screen.findByRole("button", { name: "unread-1" }));
+    const firstError = markItemsRead.mock.calls[0]?.[1]?.onError as (error: unknown) => void;
+    act(() => {
+      firstError(new Error("mark read failed for unread-1"));
+    });
+    fireEvent.click(screen.getByRole("button", { name: "unread-2" }));
+    const secondError = markItemsRead.mock.calls[1]?.[1]?.onError as (error: unknown) => void;
+    act(() => {
+      secondError(new Error("mark read failed for unread-2"));
+    });
+
+    expect(toastError).toHaveBeenCalledTimes(1);
+  });
+
+  it("parks the rows a failed group mark gave up on, so the auto effect cannot restart them", async () => {
+    const now = new Date().toISOString();
+    listInbox.mockResolvedValue([
+      { id: "group-1", type: "comment_mention", issue_id: null, title: "One", read: false, archived: false, created_at: now },
+      { id: "group-2", type: "issue_assigned", issue_id: null, title: "Two", read: false, archived: false, created_at: now },
+    ]);
+    const { MarkInboxItemsReadError: RealError } = await import("@multiremi/core/inbox/mutations");
+    renderInbox();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Mark group as read" }));
+    const onError = markItemsRead.mock.calls.at(-1)?.[1]?.onError as (error: unknown) => void;
+    act(() => {
+      onError(new RealError({
+        marked: [],
+        failed: [
+          { id: "group-1", error: new Error("500"), attempts: 3, retryable: true },
+          { id: "group-2", error: new Error("500"), attempts: 3, retryable: true },
+        ],
+      }));
+    });
+    const callsAfterFailure = markItemsRead.mock.calls.length;
+
+    // Both rows are parked: selecting either of them must not fire again.
+    fireEvent.click(screen.getByRole("button", { name: "group-1" }));
+    fireEvent.click(screen.getByRole("button", { name: "group-2" }));
+    expect(markItemsRead).toHaveBeenCalledTimes(callsAfterFailure);
   });
 
   it("marks the unread rows in a date group as read", async () => {

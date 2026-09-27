@@ -29,6 +29,7 @@ import {
   useArchiveAllReadInbox,
   useArchiveCompletedInbox,
   useMarkInboxItemsRead,
+  MarkInboxItemsReadError,
 } from "@multiremi/core/inbox/mutations";
 
 import { FeishuInboxActions } from "./feishu-inbox-actions";
@@ -261,10 +262,19 @@ export function InboxPage() {
 
   // Auto-mark the selected display entry as read. A collapsed entry covers
   // every successful run represented by the row, including URL selection.
-  // The mutation flips `read: true` optimistically, so this effect settles
-  // in one pass and can't loop. Kept in a `useEffect` rather than inlined
-  // in handleSelect so URL-driven selection triggers it too.
+  // The mutation flips `read: true` optimistically and retries a bounded number
+  // of times (see `useMarkInboxItemsRead`), so this effect settles in one pass
+  // per row and can't loop. Kept in a `useEffect` rather than inlined in
+  // handleSelect so URL-driven selection triggers it too.
+  //
+  // MUL-472 (d): rows whose budget is used up (or that 404'd) are parked here.
+  // The optimistic rollback + `invalidateInbox` on settle used to make the
+  // effect re-enter with the same unread id, which is the loop that produced
+  // 992 retries in the MUL-367 baseline. The set lives in a ref so parking a
+  // row does not itself re-render.
   const markReadMutate = markGroupReadMutation.mutate;
+  const markReadParkedRef = useRef<Set<string>>(new Set());
+  const markReadToastShownRef = useRef(false);
   const selectedUnreadIds = selectedEntry
     ? selectedEntry.items.filter((item) => !item.read).map((item) => item.id)
     : selected && !selected.read
@@ -273,13 +283,30 @@ export function InboxPage() {
   const selectedUnreadKey = selectedUnreadIds.join(",");
   useEffect(() => {
     if (!selectedUnreadKey) return;
-    markReadMutate(selectedUnreadKey.split(","), {
-      onError: (err) =>
+    const pendingIds = selectedUnreadKey
+      .split(",")
+      .filter((id) => !markReadParkedRef.current.has(id));
+    if (pendingIds.length === 0) return;
+    markReadMutate(pendingIds, {
+      onError: (err) => {
+        // Park every row the bounded retry gave up on, so a refetch that still
+        // reports `read: false` cannot re-enter through this effect.
+        if (err instanceof MarkInboxItemsReadError) {
+          for (const failure of err.failed) markReadParkedRef.current.add(failure.id);
+        } else {
+          for (const id of pendingIds) markReadParkedRef.current.add(id);
+        }
+        // One toast for the whole episode: retries and multiple rows share it.
+        if (markReadToastShownRef.current) return;
+        markReadToastShownRef.current = true;
         toast.error(
-          err instanceof Error && err.message
-            ? err.message
-            : t(($) => $.errors.mark_read_failed),
-        ),
+          err instanceof MarkInboxItemsReadError
+            ? t(($) => $.errors.mark_read_failed)
+            : err instanceof Error && err.message
+              ? err.message
+              : t(($) => $.errors.mark_read_failed),
+        );
+      },
     });
   }, [selectedUnreadKey, markReadMutate, t]);
 
@@ -334,12 +361,20 @@ export function InboxPage() {
     const unreadIds = groupItems.filter((item) => !item.read).map((item) => item.id);
     if (!unreadIds.length) return;
     markGroupReadMutation.mutate(unreadIds, {
-      onError: (err) =>
+      onError: (err) => {
+        if (err instanceof MarkInboxItemsReadError) {
+          // The bounded retry already gave up on these rows; park them so the
+          // auto-mark effect does not start a second round for the same ids.
+          for (const failure of err.failed) markReadParkedRef.current.add(failure.id);
+        }
         toast.error(
-          err instanceof Error && err.message
-            ? err.message
-            : t(($) => $.errors.mark_group_read_failed),
-        ),
+          err instanceof MarkInboxItemsReadError
+            ? t(($) => $.errors.mark_group_read_failed)
+            : err instanceof Error && err.message
+              ? err.message
+              : t(($) => $.errors.mark_group_read_failed),
+        );
+      },
     });
   };
 
