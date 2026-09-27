@@ -8217,9 +8217,9 @@
             "allowed": true
           },
           {
-            "id": "autopilot.run",
-            "command": "remi autopilot run",
-            "capability": "autopilot.run",
+            "id": "autopilot.run-now",
+            "command": "remi autopilot run-now",
+            "capability": "autopilot.run-now",
             "outputs": [
               "table",
               "json",

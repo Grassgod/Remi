@@ -1317,6 +1317,116 @@ export function computeScenarioStats(rounds: PerfScenarioRound[]): PerfScenarioS
   };
 }
 
+/**
+ * One request in the first-screen set of a round, as persisted to the report.
+ *
+ * This is the per-request evidence the 09-27 baseline lacked: with only
+ * `apiFirstScreen` as a count, a later comparison could not say which endpoint
+ * got faster (MUL-395 `cmt_3zf9gx474mh8` §4.3). Timestamps are relative to
+ * `navStartMs`: cold rounds use the document origin, warm rounds the click.
+ */
+export interface PerfApiEntry {
+  /** Normalized route with id-ish segments replaced by `:id`; no query string. */
+  path: string;
+  method: string;
+  /** Wave from {@link computeWaves}, 1-based. */
+  wave: number;
+  /** Position in this table of the predecessor that set `wave`, or null for wave 1. */
+  after: number | null;
+  /**
+   * Absolute page clock, i.e. the same origin as `navStartMs`. Subtract
+   * `navStartMs` to compare with the round's `readyMs`/`jumps[].startMs`, which
+   * are already relative to it.
+   */
+  startMs: number;
+  responseEndMs: number;
+  durationMs: number;
+  encodedBytes: number;
+  serverTiming: {
+    total: number | null;
+    db: number | null;
+    dbp: number | null;
+    dbq: number | null;
+    dbb: number | null;
+  };
+  /** `responseEndMs` of the last request that finished before this one started. */
+  gapMs: number | null;
+}
+
+/** Per-path aggregate over one scenario's rounds. */
+export interface PerfApiPathStats {
+  path: string;
+  method: string;
+  /** Total requests of this path across every round of the scenario. */
+  count: number;
+  /** Rounds in which the path appeared at least once. */
+  rounds: number;
+  totalP50: number | null;
+  totalP95: number | null;
+  dbP95: number | null;
+  dbqMax: number | null;
+  dbbMax: number | null;
+  gapP50: number | null;
+}
+
+/**
+ * Aggregates the per-request first-screen entries of a scenario by path.
+ *
+ * The acceptance rule is per path, not per round ("每个 path 的 total p95 ≤
+ * 200ms; gap p50 ≤ 80ms" — plan §9), so a round-level "slowest API" cannot
+ * express it. Percentiles use the same nearest-rank rule as every other number
+ * in the report, and `n` is the number of requests across all rounds, which is
+ * the denominator the plan's phrasing implies.
+ */
+export function computeApiPathStats(
+  rounds: Array<{ apiFirstScreenEntries?: PerfApiEntry[] | null }>,
+): PerfApiPathStats[] {
+  const byPath = new Map<string, { path: string; method: string; entries: PerfApiEntry[]; rounds: Set<number> }>();
+  rounds.forEach((round, roundIndex) => {
+    for (const entry of round.apiFirstScreenEntries ?? []) {
+      const key = `${entry.method} ${entry.path}`;
+      let bucket = byPath.get(key);
+      if (!bucket) {
+        bucket = { path: entry.path, method: entry.method, entries: [], rounds: new Set() };
+        byPath.set(key, bucket);
+      }
+      bucket.entries.push(entry);
+      bucket.rounds.add(roundIndex);
+    }
+  });
+  return [...byPath.values()]
+    .map((bucket) => {
+      const totals = bucket.entries
+        .map((entry) => entry.serverTiming.total)
+        .filter((value): value is number => value !== null);
+      const dbs = bucket.entries
+        .map((entry) => entry.serverTiming.db)
+        .filter((value): value is number => value !== null);
+      const dbqs = bucket.entries
+        .map((entry) => entry.serverTiming.dbq)
+        .filter((value): value is number => value !== null);
+      const dbbs = bucket.entries
+        .map((entry) => entry.serverTiming.dbb)
+        .filter((value): value is number => value !== null);
+      const gaps = bucket.entries
+        .map((entry) => entry.gapMs)
+        .filter((value): value is number => value !== null);
+      return {
+        path: bucket.path,
+        method: bucket.method,
+        count: bucket.entries.length,
+        rounds: bucket.rounds.size,
+        totalP50: round1(nearestRankPercentile(totals, 0.5)),
+        totalP95: round1(nearestRankPercentile(totals, 0.95)),
+        dbP95: round1(nearestRankPercentile(dbs, 0.95)),
+        dbqMax: dbqs.length > 0 ? Math.max(...dbqs) : null,
+        dbbMax: dbbs.length > 0 ? Math.max(...dbbs) : null,
+        gapP50: round1(nearestRankPercentile(gaps, 0.5)),
+      };
+    })
+    .sort((left, right) => (right.totalP95 ?? 0) - (left.totalP95 ?? 0) || left.path.localeCompare(right.path));
+}
+
 export interface PerfComparePair<TRound> {
   key: string;
   mode: string;
