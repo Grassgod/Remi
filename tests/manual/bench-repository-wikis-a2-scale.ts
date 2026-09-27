@@ -390,7 +390,16 @@ async function runScenario(
     store,
     authToken: AUTH_TOKEN,
     backgroundJobs: false,
-    requestMetrics: { enabled: true, slowRequestMs: 500, summaryIntervalMs: 60_000, summaryTopRoutes: 10, bufferCapacity: 64 },
+    requestMetrics: {
+      enabled: true,
+      slowRequestMs: 500,
+      summaryIntervalMs: 60_000,
+      summaryTopRoutes: 10,
+      bufferCapacity: 64,
+      // MUL-461: `role` is required on RequestMetricsOptions. This bench runs the
+      // whole stack in one process, so it is the `all` role.
+      role: "all",
+    },
   });
   const path = "/api/workspaces/local/repository-wikis";
   const headers = { Authorization: `Bearer ${AUTH_TOKEN}` };
