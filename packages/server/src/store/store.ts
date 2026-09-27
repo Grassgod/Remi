@@ -81,7 +81,7 @@ import {
 } from "@multiremi/store/repos/knowledge-repo.js";
 import { resolveRepositoryWikiAutomation } from "@multiremi/repository-wiki/automation.js";
 import { IssueSessionsRepo } from "@multiremi/store/repos/issue-sessions-repo.js";
-import { ChatRepo } from "@multiremi/store/repos/chat-repo.js";
+import { ChatRepo, type PendingChatTaskCandidate } from "@multiremi/store/repos/chat-repo.js";
 import {
   IssuesRepo,
   ParentStatusGuardError,
@@ -1110,6 +1110,16 @@ runMigrations(this.db);
 
   getAgentByRef(ref: string, workspaceId?: string | null): MultiremiAgent | null {
     return this.agents.getAgentByRef(ref, workspaceId);
+  }
+
+  /** Reference resolution from Agent rows only — no Skills, no Skill files. */
+  getAgentLiteByRef(ref: string, workspaceId?: string | null): MultiremiAgent | null {
+    return this.agents.getAgentLiteByRef(ref, workspaceId);
+  }
+
+  /** Live Agent rows by id, without Skills or Skill files. */
+  listAgentsLiteByIds(ids: readonly string[]): MultiremiAgent[] {
+    return this.agents.listAgentsLiteByIds(ids);
   }
 
   listAgents(options?: { includeArchived?: boolean }): MultiremiAgent[] {
@@ -4397,6 +4407,14 @@ runMigrations(this.db);
 
   listPendingChatTasks(workspaceId?: string | null, options: { creatorId?: string | null } = {}): MultiremiTask[] {
     return this.chat.listPendingChatTasks(workspaceId, options);
+  }
+
+  /** MUL-473: the batched form of {@link getPendingChatTask} for a whole list. */
+  listPendingChatTaskCandidates(
+    workspaceId?: string | null,
+    options: { creatorId?: string | null; excludeTransportSessions?: boolean } = {},
+  ): PendingChatTaskCandidate[] {
+    return this.chat.listPendingChatTaskCandidates(workspaceId, options);
   }
 
   listChatMessages(chatSessionId: string): MultiremiChatMessage[] {

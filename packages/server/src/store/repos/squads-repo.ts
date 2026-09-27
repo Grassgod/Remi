@@ -82,6 +82,15 @@ export class SquadsRepo {
     return rows.map(toSquad);
   }
 
+  /**
+   * Resolve an assignee reference (id, user id, or name) to a typed assignee.
+   *
+   * Only the matched row's id leaves this method, so every branch reads the
+   * narrowest projection that can answer "which row is this?": the id-shaped
+   * refs go straight to their own branch instead of probing all three tables,
+   * and the Agent branch never loads Skills or Skill files (MUL-473). A ref
+   * whose shape says nothing still tries all three, in the historical order.
+   */
   resolveAssigneeRef(
     assigneeType: MultiremiAssigneeType | null | undefined,
     assigneeId: string | null | undefined,
@@ -95,7 +104,7 @@ export class SquadsRepo {
     const matches: Array<{ assigneeType: MultiremiAssigneeType; assigneeId: string }> = [];
     for (const type of types) {
       const entity = type === "agent"
-        ? this.ctx.agents().getAgentByRef(ref, workspaceId)
+        ? this.ctx.agents().getAgentLiteByRef(ref, workspaceId)
         : type === "member"
           ? this.ctx.workspaces().getWorkspaceMemberByRef(ref, workspaceId)
           : this.getSquadByRef(ref, workspaceId);
@@ -294,9 +303,17 @@ export class SquadsRepo {
   }
 }
 
+/**
+ * The id prefixes this deployment mints per assignee kind. `usr_` is a *user*
+ * id, and members are the only assignee kind that carries one — the member
+ * branch matches members by `user_id` as well as by row id — so a `usr_` ref
+ * resolves there. Naming a kind here is what keeps an untyped assignee filter
+ * (`GET /api/issues?assignee_id=…`) from probing the Agent and Squad tables
+ * first, which used to hydrate every Agent with its Skill bodies (MUL-473).
+ */
 function inferAssigneeTypeFromRef(ref: string): MultiremiAssigneeType | null {
   if (/^agt_/i.test(ref)) return "agent";
-  if (/^mem_/i.test(ref)) return "member";
+  if (/^mem_/i.test(ref) || /^usr_/i.test(ref)) return "member";
   if (/^sqd_/i.test(ref)) return "squad";
   return null;
 }
