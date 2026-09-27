@@ -998,6 +998,7 @@ export class TasksRepo {
         const reason = deviceRoutingWaitReason({
           runtimeName: names.join(" / "),
           affinity: probe.explanation,
+          frozenTask: probe.frozenRetry,
         });
         if (reason === row.wait_reason) continue;
         if (this.writeObservedWaitReason(row, reason, now)) result.updated++;
@@ -1015,6 +1016,7 @@ export class TasksRepo {
         const reason = deviceRoutingWaitReason({
           runtimeName: this.daemonDisplayName(pendingDaemon, placementCache),
           affinity: probe.explanation,
+          frozenTask: probe.frozenRetry,
         });
         if (reason === row.wait_reason) continue;
         if (this.writeObservedWaitReason(row, reason, now)) result.updated++;
@@ -1028,9 +1030,8 @@ export class TasksRepo {
         codeSnapshot: probe.codeSnapshot,
         localDirectory: probe.localDirectory,
         agentBindingTarget: probe.agentBindingTarget,
+        agentBindingRuntimeId: probe.agentBindingRuntimeId,
         frozenTask: probe.frozenRetry,
-        issueId: row.issue_id,
-        issueSessionId: row.issue_session_id,
         agentId: row.agent_id,
         redispatchTaskId: row.id,
       });
@@ -2772,6 +2773,7 @@ ${routing.sql}
     codeSnapshot: boolean;
     localDirectory: boolean;
     agentBindingTarget: string | null;
+    agentBindingRuntimeId: string | null;
   } {
     let agent = cache?.agents.get(row.agent_id);
     if (agent === undefined) {
@@ -2800,10 +2802,14 @@ ${routing.sql}
     const otherConstraints = described.filter((constraint) => constraint.kind !== "agentBinding"
       && !(constraint.kind === "taskPin" && row.runtime_id === agent?.runtimeId));
     const targetAlias = commonConstraintMachineAliases(otherConstraints)[0];
+    const targetAliases = targetAlias ? constraintMachineAliases(this.ctx, targetAlias, aliasIndex) : [];
+    const targetRuntime = targetAlias ? cache?.runtimes.find((runtime) => runtime.provider === agent?.provider
+      && runtimeDaemonAliases(runtime).some((alias) => targetAliases.includes(alias))
+      && verdicts.some((verdict) => verdict.runtimeId === runtime.id && verdict.routingOk)) : null;
     return {
       verdicts,
-      explanation: affinity?.kind ?? "会话",
-      hardAffinity: affinity !== null,
+      explanation: affinity?.kind ?? (agentBound ? "Agent 绑定" : "会话"),
+      hardAffinity: affinity !== null || agentBound,
       constraints: described.length > 0 ? described.map((constraint) => constraint.label) : ["该任务的约束"],
       singlePendingDaemon,
       workspaceRuntimeMissing,
@@ -2811,7 +2817,8 @@ ${routing.sql}
       agentBound,
       codeSnapshot: described.some((constraint) => constraint.kind === "codeSnapshot"),
       localDirectory: described.some((constraint) => constraint.kind === "localDirectory"),
-      agentBindingTarget: targetAlias ? this.daemonDisplayName(targetAlias, cache) : null,
+      agentBindingTarget: targetRuntime ? this.daemonDisplayName(targetAlias!, cache) : null,
+      agentBindingRuntimeId: targetRuntime?.id ?? null,
     };
   }
 

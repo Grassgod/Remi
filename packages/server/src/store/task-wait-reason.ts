@@ -50,17 +50,17 @@ export type DeviceRoutingAffinity =
  * rendering as an unexplained queue. Only hard affinities use this: soft
  * affinities re-pool instead.
  *
- * The remedy must actually clear the pin. `remi task redispatch` is NOT one:
- * it replaces the task with another one that re-derives the same hard
- * affinity, so it would produce an equally stuck task.
+ * Redispatch alone does not resolve data pins: its replacement re-derives
+ * the same hard affinity. An Agent binding conflict needs rebinding as well.
  */
 export function deviceRoutingWaitReason(input: {
   runtimeName: string;
   /** `"会话"` is the generic label when no single hard affinity dominates. */
   affinity: DeviceRoutingAffinity | "会话";
+  frozenTask?: boolean;
 }): string {
   const remedy = input.affinity === "Agent 绑定"
-    ? "请调整该 Agent 的 Runtime 绑定"
+    ? `请调整该 Agent 的 Runtime 绑定${input.frozenTask ? "；直接改绑会取消这条已冻结的任务" : ""}`
     : "请把该机器加回项目的设备绑定，或取消它的独享设置";
   return `${DEVICE_ROUTING_WAIT_PREFIX}任务钉在 ${input.runtimeName}（${input.affinity}），`
     + `该机器不在项目的设备绑定里或为独享设备；${remedy}`;
@@ -70,7 +70,7 @@ export function deviceRoutingWaitReason(input: {
  * Why no machine can take this Task. The remedy is chosen by priority so the
  * text always names ONE action that actually resolves the conflict:
  *   1. a workspace whose Runtime is gone   → re-register that machine
- *   2. a frozen retry without data pins    → redispatch (drops the frozen pin)
+ *   2. a frozen retry without data pins    → redispatch (preserves the request)
  *   3. an Agent-bound Runtime              → re-bind to the other constraints' machine
  *   4. anything else                       → make the constraints agree
  */
@@ -82,23 +82,27 @@ export function placementWaitReason(input: {
   codeSnapshot?: boolean;
   localDirectory?: boolean;
   agentBindingTarget?: string | null;
+  agentBindingRuntimeId?: string | null;
   frozenTask?: boolean;
-  issueId?: string | null;
-  issueSessionId?: string | null;
   agentId?: string | null;
   redispatchTaskId?: string;
 }): string {
   const listed = input.constraints.join("；");
   let remedy: string;
+  const redispatch = input.redispatchTaskId
+    ? `remi task redispatch ${input.redispatchTaskId} --reason '恢复已冻结任务并保留原请求' --yes`
+    : null;
   if (input.workspaceRuntimeMissing) {
     remedy = "该 Issue 的工作区记录失去了所属 Runtime（状态 runtime_offline）；"
       + "重新注册原机器后可在其上重新接管，否则需要人工处理";
-  } else if (input.frozenRetry && !input.codeSnapshot && !input.localDirectory && input.redispatchTaskId) {
-    remedy = `运行 remi task redispatch ${input.redispatchTaskId} 冷启动，落点会按当前工作区重新计算`;
-  } else if (input.agentBound && input.agentBindingTarget) {
-    remedy = `把该 Agent 的 Runtime 绑定改到 ${input.agentBindingTarget}（remi agent update --runtime）`;
-    if (input.frozenTask && input.issueId && input.issueSessionId && input.agentId) {
-      remedy += `；改绑会取消这条已冻结的任务，改绑后需重新触发：运行 remi task create --agent ${input.agentId} --issue ${input.issueId} --prompt '重新执行当前侧会话任务' --data '{"issueSessionId":"${input.issueSessionId}"}'`;
+  } else if (input.frozenRetry && !input.codeSnapshot && !input.localDirectory && redispatch) {
+    remedy = `运行 ${redispatch} 冷启动，落点会按当前工作区重新计算`;
+  } else if (input.agentBound && input.agentBindingTarget && input.agentBindingRuntimeId && input.agentId) {
+    const rebind = `remi agent update ${input.agentId} --runtime ${input.agentBindingRuntimeId}`;
+    if (input.frozenTask && redispatch) {
+      remedy = `直接改绑会取消这条已冻结的任务；先运行 ${redispatch}，再运行 ${rebind}，由 ${input.agentBindingTarget} 领取替代任务`;
+    } else {
+      remedy = `把该 Agent 的 Runtime 绑定改到 ${input.agentBindingTarget}（${rebind}）`;
     }
   } else {
     remedy = "让这些约束指向同一台机器";

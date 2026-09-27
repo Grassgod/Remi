@@ -55,6 +55,22 @@ function ageTask(taskId: string, ageMs: number, now: number) {
   db!.run("UPDATE multiremi_tasks SET created_at = ? WHERE id = ?", [new Date(now - ageMs).toISOString(), taskId]);
 }
 
+function redispatchAsSupervisor(store: MultiremiStore, taskId: string, reason: string) {
+  const workspace = store.getWorkspace("local")!;
+  store.updateWorkspace("local", { settings: {
+    ...workspace.settings, organizer: { mode: "act" },
+  } });
+  const supervisor = store.createAgent({ name: "Organizer", provider: "claude", role: "supervisor" });
+  const patrol = store.createIssue({ title: "Organizer patrol" });
+  const supervisorTask = store.createTask({ agentId: supervisor.id, issueId: patrol.id, prompt: "organize" });
+  const result = store.performOrganizerAction({
+    supervisorTaskId: supervisorTask.id, supervisorAgentId: supervisor.id,
+    targetTaskId: taskId, action: "redispatch", reason,
+  });
+  expect(result.replacementTask).not.toBeNull();
+  return result.replacementTask!;
+}
+
 describe("queued task model capability waits", () => {
   it("keeps the grace period silent, then explains all rejected candidates without changing the task or model", () => {
     const { store, runtime, agent, task, now, fail } = fixture();
@@ -628,20 +644,119 @@ describe("queued task model capability waits", () => {
     store.refreshQueuedCapabilityWaitReasons(now);
     const reason = store.getTask(task.id)?.waitReason ?? "";
     expect(reason).toStartWith("等待任务落点：");
-    expect(reason).not.toContain("redispatch");
     expect(reason).toContain("A");
-    expect(reason).toContain("改绑会取消这条已冻结的任务，改绑后需重新触发");
-    expect(reason).toContain("remi task create --agent");
+    expect(reason).toContain("直接改绑会取消这条已冻结的任务");
+    const command = reason.match(/remi task redispatch ([a-zA-Z0-9_-]+) --reason '([^']+)' --yes[\s\S]*?remi agent update ([a-zA-Z0-9_-]+) --runtime ([a-zA-Z0-9_-]+)/);
+    expect(command).not.toBeNull();
+    expect(command![1]).toBe(task.id);
+    expect(command![3]).toBe(agent.id);
+    expect(command![4]).toBe(a.id);
+    const replacement = redispatchAsSupervisor(store, task.id, command![2]!);
+    expect(replacement).toMatchObject({
+      prompt: task.prompt, parentTaskId: task.id, issueSessionId: side.id,
+      executionFingerprint: null,
+    });
+    store.updateAgent(agent.id, { runtimeId: a.id });
+    expect(store.getTask(replacement.id)?.status).not.toBe("cancelled");
+    expect(store.describeTaskPlacement(replacement.id).find((verdict) => verdict.runtimeId === a.id))
+      .toMatchObject({ placementOk: true, routingOk: true });
+    expect(store.claimTask(b.id)).toBeNull();
+    expect(store.claimTask(a.id)?.id).toBe(replacement.id);
+  });
+
+  it("warns and preserves a frozen Chat request through redispatch then rebinding", () => {
+    const store = createLocalStore();
+    const a = store.registerRuntime({ id: "rt_chat_frozen_a", name: "A", provider: "codex", daemonId: "chat-frozen-a" });
+    const b = store.registerRuntime({ id: "rt_chat_frozen_b", name: "B", provider: "codex", daemonId: "chat-frozen-b" });
+    const agent = store.createAgent({ name: "Chat frozen", provider: "codex", runtimeId: b.id });
+    const project = store.createProject({ title: "Chat directory", resources: [
+      { resourceType: "local_directory", resourceRef: { local_path: "/abs/chat-frozen", daemon_id: "chat-frozen-a" } },
+    ] });
+    const chat = store.createChatSession({ agentId: agent.id, projectId: project.id });
+    const task = store.sendChatMessage(chat.id, { body: "keep this exact request" }).task;
+    db!.run("UPDATE multiremi_tasks SET execution_fingerprint = 'chat-frozen-fp' WHERE id = ?", [task.id]);
+    const now = Date.now();
+    ageTask(task.id, GRACE_MS, now);
+    store.refreshQueuedCapabilityWaitReasons(now);
+    const reason = store.getTask(task.id)?.waitReason ?? "";
+    expect(reason).toContain("直接改绑会取消这条已冻结的任务");
+    const command = reason.match(/remi task redispatch ([a-zA-Z0-9_-]+) --reason '([^']+)' --yes[\s\S]*?remi agent update ([a-zA-Z0-9_-]+) --runtime ([a-zA-Z0-9_-]+)/);
+    expect(command).not.toBeNull();
+    expect(command![1]).toBe(task.id);
+    expect(command![3]).toBe(agent.id);
+    expect(command![4]).toBe(a.id);
+    const replacement = redispatchAsSupervisor(store, task.id, command![2]!);
+    expect(replacement).toMatchObject({
+      prompt: task.prompt, parentTaskId: task.id, chatSessionId: chat.id,
+      executionFingerprint: null,
+    });
+    store.updateAgent(agent.id, { runtimeId: a.id });
+    expect(store.getTask(replacement.id)?.status).not.toBe("cancelled");
+    expect(store.claimTask(b.id)).toBeNull();
+    expect(store.claimTask(a.id)?.id).toBe(replacement.id);
+  });
+
+  it("warns that directly rebinding a frozen Chat Agent cancels its queued task", () => {
+    const store = createLocalStore();
+    const a = store.registerRuntime({ id: "rt_chat_cancel_a", name: "A", provider: "codex", daemonId: "chat-cancel-a" });
+    const b = store.registerRuntime({ id: "rt_chat_cancel_b", name: "B", provider: "codex", daemonId: "chat-cancel-b" });
+    const agent = store.createAgent({ name: "Chat direct rebind", provider: "codex", runtimeId: b.id });
+    const project = store.createProject({ title: "Chat directory", resources: [
+      { resourceType: "local_directory", resourceRef: { local_path: "/abs/chat-cancel", daemon_id: "chat-cancel-a" } },
+    ] });
+    const chat = store.createChatSession({ agentId: agent.id, projectId: project.id });
+    const task = store.sendChatMessage(chat.id, { body: "original Chat work" }).task;
+    db!.run("UPDATE multiremi_tasks SET execution_fingerprint = 'chat-cancel-fp' WHERE id = ?", [task.id]);
+    const now = Date.now();
+    ageTask(task.id, GRACE_MS, now);
+    store.refreshQueuedCapabilityWaitReasons(now);
+    expect(store.getTask(task.id)?.waitReason).toContain("直接改绑会取消这条已冻结的任务");
     store.updateAgent(agent.id, { runtimeId: a.id });
     expect(store.getTask(task.id)?.status).toBe("cancelled");
-    // task create --agent/--issue/--data issueSessionId uses this public path.
-    const retriggered = store.createTask({
-      agentId: agent.id, issueId: issue.id, issueSessionId: side.id, prompt: "frozen snapshot",
-    });
-    expect(retriggered.id).not.toBe(task.id);
-    expect(store.describeTaskPlacement(retriggered.id).find((verdict) => verdict.runtimeId === a.id))
-      .toMatchObject({ placementOk: true, routingOk: true });
-    expect(store.claimTask(a.id)?.id).toBe(retriggered.id);
+  });
+
+  it("warns on a frozen Chat Agent binding rejected by Project device routing", () => {
+    const store = createLocalStore();
+    const a = store.registerRuntime({ id: "rt_chat_route_a", name: "A", provider: "codex", daemonId: "chat-route-a" });
+    const b = store.registerRuntime({ id: "rt_chat_route_b", name: "B", provider: "codex", daemonId: "chat-route-b" });
+    const agent = store.createAgent({ name: "Chat route", provider: "codex", runtimeId: a.id });
+    const project = store.createProject({ title: "B only" });
+    store.createProjectDevice(project.id, { daemonId: "chat-route-b" });
+    const chat = store.createChatSession({ agentId: agent.id, projectId: project.id });
+    const task = store.sendChatMessage(chat.id, { body: "original work" }).task;
+    db!.run("UPDATE multiremi_tasks SET execution_fingerprint = 'chat-route-fp' WHERE id = ?", [task.id]);
+    const now = Date.now();
+    ageTask(task.id, GRACE_MS, now);
+    expect(store.claimTask(a.id)).toBeNull();
+    expect(store.claimTask(b.id)).toBeNull();
+    store.refreshQueuedCapabilityWaitReasons(now);
+    expect(store.getTask(task.id)?.waitReason).toStartWith("等待项目设备：");
+    expect(store.getTask(task.id)?.waitReason).toContain("直接改绑会取消这条已冻结的任务");
+    store.updateAgent(agent.id, { runtimeId: b.id });
+    expect(store.getTask(task.id)?.status).toBe("cancelled");
+  });
+
+  it("never recommends rebinding an Agent to a Project-refused machine", () => {
+    const store = createLocalStore();
+    const a = store.registerRuntime({ id: "rt_rebind_rejected_a", name: "A", provider: "codex", daemonId: "rebind-rejected-a" });
+    const b = store.registerRuntime({ id: "rt_rebind_rejected_b", name: "B", provider: "codex", daemonId: "rebind-rejected-b" });
+    const agent = store.createAgent({ name: "Bound B", provider: "codex", runtimeId: b.id });
+    const project = store.createProject({ title: "B only" });
+    store.createProjectDevice(project.id, { daemonId: "rebind-rejected-b" });
+    const issue = store.createIssue({ title: "Snapshot A", projectId: project.id });
+    const parent = store.createIssueSession(issue.id, { title: "Parent", holdsWorkspace: true });
+    const seed = store.createTask({ agentId: agent.id, issueId: issue.id, issueSessionId: parent.id, prompt: "seed" });
+    // A historical parent lane supplies the snapshot while Project routing now refuses A.
+    db!.run("UPDATE multiremi_session_agent_lanes SET runtime_id = ?, provider_session_id = 'seed-session' WHERE session_id = ? AND agent_id = ?", [a.id, parent.id, agent.id]);
+    const side = store.createIssueSession(issue.id, { title: "Side", parentSessionId: parent.id, withCode: true, holdsWorkspace: false });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, issueSessionId: side.id, prompt: "work" });
+    const now = Date.now();
+    ageTask(task.id, GRACE_MS, now);
+    store.refreshQueuedCapabilityWaitReasons(now);
+    const reason = store.getTask(task.id)?.waitReason ?? "";
+    expect(reason).not.toContain("把该 Agent 的 Runtime 绑定改到 A");
+    expect(reason).toContain("让这些约束指向同一台机器");
+    void seed;
   });
 
   it("rebinds an unfrozen Agent conflict through updateAgent without cancelling the task", () => {
@@ -653,7 +768,7 @@ describe("queued task model capability waits", () => {
     const now = Date.now();
     ageTask(task.id, GRACE_MS, now);
     store.refreshQueuedCapabilityWaitReasons(now);
-    expect(store.getTask(task.id)?.waitReason).toContain("remi agent update --runtime");
+    expect(store.getTask(task.id)?.waitReason).toContain(`remi agent update ${agent.id} --runtime ${a.id}`);
     expect(store.getTask(task.id)?.waitReason).not.toContain("已冻结");
     store.updateAgent(agent.id, { runtimeId: a.id });
     expect(store.getTask(task.id)?.status).toBe("queued");
@@ -756,7 +871,7 @@ describe("queued task model capability waits", () => {
     const reason = store.getTask(task.id)!.waitReason!;
     expect(reason).toContain("等待任务落点：");
     expect(reason).toContain("Agent 绑定");
-    expect(reason).toContain("remi agent update --runtime");
+    expect(reason).toContain(`remi agent update ${bound.id} --runtime ${b.id}`);
     // An Agent binding is configuration: it is never re-pooled automatically.
     expect(store.claimTask(a.id)).toBeNull();
     expect(store.claimTask(b.id)).toBeNull();

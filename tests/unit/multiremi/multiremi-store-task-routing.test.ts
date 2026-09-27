@@ -733,7 +733,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     const reason = store.getTask(task.id)!.waitReason!;
     expect(reason).toContain("等待任务落点：");
     expect(reason).toContain("Agent 绑定");
-    expect(reason).toContain("remi agent update --runtime");
+    expect(reason).toContain(`remi agent update ${bound.id} --runtime ${machine.id}`);
     void agent;
   });
 
