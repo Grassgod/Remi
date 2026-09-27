@@ -361,6 +361,151 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     expect(store.claimTask(devbox.id)?.id).toBe(second.id);
   });
 
+  // MUL-449 QA follow-up: device routing must gate Issue lane inheritance too.
+  // A lane pinned to a machine the Project no longer allows used to be resumed
+  // there, while the claim predicate rejected that machine: neither machine
+  // could claim the turn, so it queued forever.
+  it("resets an Issue lane whose device the Project no longer allows", () => {
+    const store = createLocalStore();
+    const a = store.registerRuntime({
+      id: "rt_lane_reset_a", name: "A", provider: "codex", workspaceId: "local", daemonId: "dev-lane-reset-a",
+    });
+    const b = store.registerRuntime({
+      id: "rt_lane_reset_b", name: "B", provider: "codex", workspaceId: "local", daemonId: "dev-lane-reset-b",
+    });
+    const agent = store.createAgent({ name: "Lane reset", provider: "codex", workspaceId: "local" });
+    const project = store.createProject({ title: "Moves A to B", workspaceId: "local" });
+    store.createProjectDevice(project.id, { daemonId: "dev-lane-reset-a" });
+    const issue = store.createIssue({ title: "Lane issue", projectId: project.id, workspaceId: "local" });
+    const session = store.createIssueSession(issue.id, { title: "Discussion", holdsWorkspace: false });
+
+    const first = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "first",
+    });
+    expect(store.claimTask(a.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "sess_lane_reset" });
+    expect(store.getSessionAgentLane(session.id, agent.id)).toMatchObject({
+      runtimeId: a.id, providerSessionId: "sess_lane_reset",
+    });
+
+    // The Project moves to B. The lane may not be resumed on A any more.
+    store.deleteProjectDevice(project.id, "dev-lane-reset-a");
+    store.createProjectDevice(project.id, { daemonId: "dev-lane-reset-b" });
+    const second = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "second",
+    });
+    expect(store.getTask(second.id)).toMatchObject({ runtimeId: null, sessionId: null, status: "queued" });
+    expect(store.getSessionAgentLane(session.id, agent.id)).toMatchObject({
+      runtimeId: null, providerSessionId: null,
+    });
+    expect(store.claimTask(a.id)).toBeNull();
+    expect(store.claimTask(b.id)?.id).toBe(second.id);
+  });
+
+  it("resets a lane a previously-claiming dedicated device no longer qualifies for", () => {
+    const store = createLocalStore();
+    const personal = store.registerRuntime({
+      id: "rt_lane_personal", name: "personal", provider: "codex", workspaceId: "local", daemonId: "dev-lane-personal",
+    });
+    const pooled = store.registerRuntime({
+      id: "rt_lane_pooled", name: "pooled", provider: "codex", workspaceId: "local", daemonId: "dev-lane-pooled",
+    });
+    const agent = store.createAgent({ name: "Polluted lane", provider: "codex", workspaceId: "local" });
+    // Project P1 legitimately binds the personal device.
+    const p1 = store.createProject({ title: "P1 owns personal", workspaceId: "local" });
+    store.createProjectDevice(p1.id, { daemonId: "dev-lane-personal" });
+    const p1Issue = store.createIssue({ title: "P1 issue", projectId: p1.id, workspaceId: "local" });
+    const p1Session = store.createIssueSession(p1Issue.id, { title: "Discussion", holdsWorkspace: false });
+    const seeded = store.createTask({
+      agentId: agent.id, issueId: p1Issue.id, issueSessionId: p1Session.id, prompt: "first",
+    });
+    expect(store.claimTask(personal.id)?.id).toBe(seeded.id);
+    store.startTask(seeded.id);
+    store.completeTask(seeded.id, { output: "ok", sessionId: "sess_polluted" });
+
+    // The bug being fixed: P2's lane records the personal device (the MBP
+    // really did claim other Projects' topic turns while the exemption was in
+    // place). Once the device is dedicated, P2's next turn must not inherit it.
+    const p2 = store.createProject({ title: "P2 must not use personal", workspaceId: "local" });
+    const p2Issue = store.createIssue({ title: "P2 issue", projectId: p2.id, workspaceId: "local" });
+    const p2Session = store.createIssueSession(p2Issue.id, { title: "Discussion", holdsWorkspace: false });
+    db!.run(
+      `INSERT INTO multiremi_session_agent_lanes
+         (session_id, agent_id, execution_scope, provider_session_id, runtime_id, provider, generation, status, created_at, updated_at)
+       VALUES (?, ?, '', 'sess_from_mbp', ?, 'codex', 1, 'active', ?, ?)`,
+      [p2Session.id, agent.id, personal.id, "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z"],
+    );
+    store.updateDaemonDedicated("local", "dev-lane-personal", true, "local");
+
+    const next = store.createTask({
+      agentId: agent.id, issueId: p2Issue.id, issueSessionId: p2Session.id, prompt: "next",
+    });
+    expect(store.getTask(next.id)).toMatchObject({ runtimeId: null, sessionId: null, status: "queued" });
+    expect(store.claimTask(personal.id)).toBeNull();
+    expect(store.claimTask(pooled.id)?.id).toBe(next.id);
+  });
+
+  it("keeps resuming an Issue lane while the Project still allows its device", () => {
+    const store = createLocalStore();
+    const personal = store.registerRuntime({
+      id: "rt_lane_kept_personal", name: "personal", provider: "codex", workspaceId: "local", daemonId: "dev-lane-kept",
+    });
+    const other = store.registerRuntime({
+      id: "rt_lane_kept_other", name: "other", provider: "codex", workspaceId: "local", daemonId: "dev-lane-kept-other",
+    });
+    const agent = store.createAgent({ name: "Kept lane", provider: "codex", workspaceId: "local" });
+    const project = store.createProject({ title: "Stays on personal", workspaceId: "local" });
+    store.createProjectDevice(project.id, { daemonId: "dev-lane-kept" });
+    store.updateDaemonDedicated("local", "dev-lane-kept", true, "local");
+    const issue = store.createIssue({ title: "Kept issue", projectId: project.id, workspaceId: "local" });
+    const session = store.createIssueSession(issue.id, { title: "Discussion", holdsWorkspace: false });
+
+    const first = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "first",
+    });
+    expect(store.claimTask(personal.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "sess_lane_kept" });
+
+    const second = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "second",
+    });
+    // The routing check must not over-reject: the device is still bound.
+    expect(store.getTask(second.id)).toMatchObject({
+      runtimeId: personal.id, sessionId: "sess_lane_kept",
+    });
+    expect(store.claimTask(other.id)).toBeNull();
+    expect(store.claimTask(personal.id)?.id).toBe(second.id);
+  });
+
+  it("does not inherit a lane from a Project-less session on a dedicated device", () => {
+    const store = createLocalStore();
+    const personal = store.registerRuntime({
+      id: "rt_lane_none_personal", name: "personal", provider: "codex", workspaceId: "local", daemonId: "dev-lane-none",
+    });
+    const pooled = store.registerRuntime({
+      id: "rt_lane_none_pooled", name: "pooled", provider: "codex", workspaceId: "local", daemonId: "dev-lane-none-pooled",
+    });
+    const agent = store.createAgent({ name: "Project-less lane", provider: "codex", workspaceId: "local" });
+    const issue = store.createIssue({ title: "No project", workspaceId: "local" });
+    const session = store.createIssueSession(issue.id, { title: "Discussion", holdsWorkspace: false });
+    db!.run(
+      `INSERT INTO multiremi_session_agent_lanes
+         (session_id, agent_id, execution_scope, provider_session_id, runtime_id, provider, generation, status, created_at, updated_at)
+       VALUES (?, ?, '', 'sess_projectless', ?, 'codex', 1, 'active', ?, ?)`,
+      [session.id, agent.id, personal.id, "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z"],
+    );
+    store.updateDaemonDedicated("local", "dev-lane-none", true, "local");
+
+    const task = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "project-less",
+    });
+    expect(store.getTask(task.id)).toMatchObject({ runtimeId: null, sessionId: null, status: "queued" });
+    expect(store.claimTask(personal.id)).toBeNull();
+    expect(store.claimTask(pooled.id)?.id).toBe(task.id);
+  });
+
   it("re-pools a chat turn instead of pinning it to a device the Project rejects", () => {
     const store = createLocalStore();
     const personal = store.registerRuntime({

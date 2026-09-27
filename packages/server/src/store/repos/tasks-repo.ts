@@ -412,6 +412,8 @@ function sessionLaneResetReason(input: {
   runtimeCompatible: boolean;
   runtimeConflict: boolean;
   resetRequested: boolean;
+  /** Optional: omitted callers keep the pre-MUL-449 reason set. */
+  deviceRoutingAllowed?: boolean;
 }): string {
   if (input.resetRequested) return "provider_session_reset_requested";
   if (!input.lane.providerSessionId) return "provider_session_missing";
@@ -419,6 +421,7 @@ function sessionLaneResetReason(input: {
   if (!input.fingerprintResumable) return "execution_fingerprint_changed";
   if (!input.runtimeAvailable) return "runtime_unavailable";
   if (input.runtimeConflict) return "runtime_affinity_changed";
+  if (input.deviceRoutingAllowed === false) return "device_routing_rejected";
   if (!input.runtimeCompatible) return "runtime_incompatible";
   return "provider_session_unavailable";
 }
@@ -809,6 +812,17 @@ export class TasksRepo {
         expectedLaneFingerprint,
         currentPluginSnapshot.length > 0 || Boolean(laneProfile),
       );
+      // Device routing gates lane inheritance too (MUL-449). A lane pinned to a
+      // machine the Project no longer allows would otherwise queue forever: the
+      // claim predicate rejects that machine and no other machine matches the
+      // pin. `with_code` side sessions stay exempt here — their code snapshot is
+      // a hard machine constraint handled separately.
+      const routingProjectId = this.deviceRoutingProject(
+        agent, issue?.projectId, chatSession?.projectId, runtimeWorkspaceId,
+      );
+      const laneRoutingAllowed = Boolean(issueSession?.withCode)
+        || laneRuntime == null
+        || this.projectPassesProjectDeviceRouting(laneRuntime, routingProjectId);
       const laneRuntimeCompatible = laneRuntime != null
         && (!runtimeWorkspace || laneRuntime.daemonId === runtimeWorkspace.daemonId)
         && this.ctx.runtimes().runtimeCanRunAgent(laneRuntime, agent);
@@ -817,7 +831,8 @@ export class TasksRepo {
         && !!issueLane.providerSessionId
         && issueLane.provider === agent.provider
         && laneFingerprintResumable
-        && laneRuntimeCompatible;
+        && laneRuntimeCompatible
+        && laneRoutingAllowed;
       const runtimeConflict = Boolean(affinity.runtimeId && issueLane.runtimeId && affinity.runtimeId !== issueLane.runtimeId);
       if (laneResumable && !runtimeConflict) {
         runtimeId = issueLane.runtimeId;
@@ -832,6 +847,7 @@ export class TasksRepo {
             runtimeCompatible: laneRuntimeCompatible,
             runtimeConflict,
             resetRequested: Boolean(input.resetProviderSession),
+            deviceRoutingAllowed: laneRoutingAllowed,
           }),
         });
         issueLane = this.ctx.issueSessions().getOrCreateSessionAgentLane(issueSession.id, agent.id, executionScope);
@@ -1134,10 +1150,10 @@ export class TasksRepo {
     const availableChatProjectId = boundChatProject?.workspaceId === agent.workspaceId && !boundChatProject.archivedAt
       ? boundChatProject.id : null;
     const chatWorkspace = resolveChatWorkspace(this.ctx, chatSession);
-    // Mirrors TASK_ROUTING_PROJECT_SQL: a Runtime workspace is not a Project,
-    // and an Issue Project outranks the Chat binding. Archived/foreign Chat
-    // Projects already resolved to null above and no longer route.
-    const deviceRoutingProjectId = runtimeWorkspaceId ? null : issue?.projectId ?? availableChatProjectId;
+    // Mirrors TASK_ROUTING_PROJECT_SQL; see `deviceRoutingProject`.
+    const deviceRoutingProjectId = this.deviceRoutingProject(
+      agent, issue?.projectId, boundChatProjectId, runtimeWorkspaceId,
+    );
     const directoryProjectId = runtimeWorkspaceId ? null : issue?.projectId ?? (chatWorkspace?.mode === "managed" ? null : availableChatProjectId);
     const assignment = holdsWorkspace && directoryProjectId && issue?.issueKind !== "intake"
       ? (chatWorkspace && !issue ? chatWorkspace.assignment
@@ -2071,6 +2087,29 @@ export class TasksRepo {
        FROM (SELECT CAST(? AS TEXT) AS project_id) project_scope`,
     ).get(...routing.params, projectId) as { eligible?: unknown } | null;
     return Number(row?.eligible ?? 0) === 1;
+  }
+
+  /**
+   * The Project whose device routing governs a task. Mirrors
+   * `TASK_ROUTING_PROJECT_SQL`: an explicit Runtime workspace is not a Project,
+   * an Issue Project outranks the Chat binding (even when archived or foreign,
+   * exactly as the SQL COALESCE does), and a Chat Project only routes while it
+   * belongs to the agent's workspace and is not archived.
+   */
+  private deviceRoutingProject(
+    agent: MultiremiAgent,
+    issueProjectId: string | null | undefined,
+    chatProjectId: string | null | undefined,
+    runtimeWorkspaceId?: string | null,
+  ): string | null {
+    // An Issue Project keeps routing even when archived or foreign, matching
+    // the SQL COALESCE; only the Chat binding is availability-filtered.
+    if (runtimeWorkspaceId) return null;
+    if (issueProjectId) return issueProjectId;
+    if (!chatProjectId) return null;
+    const chatProject = this.ctx.projects().getProject(chatProjectId);
+    return chatProject && chatProject.workspaceId === agent.workspaceId && !chatProject.archivedAt
+      ? chatProject.id : null;
   }
 
   private runtimePassesProjectDeviceRouting(runtime: MultiremiRuntime, taskId: string): boolean {
