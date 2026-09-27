@@ -33,7 +33,8 @@ and a different answer changes only the named sub-deliverable:
 Conversation state is spread over three tables: `multiremi_chat_messages`,
 `multiremi_issue_comments` and the append-only `multiremi_session_events`
 (24K rows, 62 MB in production on 2026-09-26). Every issue comment that has a
-session is mirrored into a `message` event with `source_comment_id`, and
+session is mirrored into a `message` event (a `system` event for `type='system'`
+comments) with `source_comment_id`, and
 `backfillDefaultIssueSessions` re-establishes that mirror on every startup, so the
 event `seq` is already a strict per-session order. Six agent comments from
 2026-07-11/12 are the exception: they predate the mirroring mechanism, carry
@@ -76,7 +77,7 @@ not enforced on either backend, and Postgres transactions have no savepoints.
 1. **One log table per session.** `multiremi_conversation_log(session_id, seq)`
    holds every display unit for both Issue sessions (`ises_*`) and chats
    (`chat_*`): `head` at seq 0 (Issue title and description, or chat title),
-   `message` (human, agent and system comments; chat user and system messages),
+   `message` (human and agent comments; chat user and system messages),
    `system` (the `type='system'` comments the mirror writes) and `turn` (one card
    per agent turn), plus `result_published` for published results. Row ids are
    the source ids (`cmt_*`, chat message ids, `sevt_*`), so threads, reactions,
@@ -157,7 +158,8 @@ not enforced on either backend, and Postgres transactions have no savepoints.
    are paused only for the deploy restart. The task_messages backfill is a
    resumable operator script run inside the API container after the deploy; it
    groups rows by subject, writes a v2 archive per subject, verifies each member
-   byte-for-byte against the stored row, which may already be truncated, records
+   row by row against the stored row (which may already be truncated) with the
+   canonical digest below, records
    per-subject progress and per-task digests, and never writes back to a daemon.
    Both steps have read-only reconciliation scripts (count, order, content hash
    per session and per task).
