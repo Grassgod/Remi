@@ -1481,6 +1481,94 @@ describe("MUL-400 E3 — fix round 4: atomic automatic start", () => {
     },
   );
 
+  /**
+   * MUL-409 QA round 4, blocker 3 — QA's own probe, as a case.
+   *
+   * A leader-token continuation (`POST /api/multiremi/tasks` with
+   * `continueTaskId=<delegated>`) sets BOTH `parentTaskId` (the leader's turn)
+   * and `continuedFromTaskId` (the task actually being continued). The audit
+   * read `parentTask` first, so `previousTaskId` named the leader instead of the
+   * delegated round the continuation really extends.
+   */
+  it("prefers the continued round over the parent when both are set", async () => {
+    const { store, agent } = storeWithAgent("continuation_ids");
+    const prerequisite = store.createIssue({ title: "Open prerequisite", status: "in_progress" });
+    const issue = store.createIssue({ title: "Delegated work", status: "in_progress" });
+    // Two distinct rounds: the leader's turn is the parent, the delegated task is
+    // the one being continued. Their ids must not be interchangeable.
+    const leader = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "leader turn" });
+    const delegated = store.createTask({
+      agentId: agent.id, issueId: issue.id, prompt: "delegated work", parentTaskId: leader.id,
+    });
+    expect(delegated.id).not.toBe(leader.id);
+
+    store.createIssueDependency(issue.id, { dependsOnIssueId: prerequisite.id, type: "blocked_by" });
+    store.updateIssue(issue.id, { status: "backlog" });
+
+    const continued = store.createTask({
+      agentId: agent.id,
+      issueId: issue.id,
+      prompt: "continue the delegated round",
+      parentTaskId: leader.id,
+      continuedFromTaskId: delegated.id,
+    });
+
+    const exempted = allActivityRows(store, issue.id, "dependency_gate_exempted");
+    expect(exempted).toHaveLength(1);
+    const data = exempted[0]!.data as Record<string, unknown>;
+    expect(data.source).toBe("continuation");
+    // Both spellings name the continued round, never the leader's.
+    expect(data.previousTaskId).toBe(delegated.id);
+    expect(data.previous_task_id).toBe(delegated.id);
+    expect(data.previousTaskId).not.toBe(leader.id);
+    expect(store.getTask(continued.id)!.continuedFromTaskId).toBe(delegated.id);
+  });
+
+  it("keeps every other exemption source pointing at its own previous round", () => {
+    // The four sources QA verified as correct must stay that way: each records
+    // the task its own path carries, not whatever `parentTaskId` happens to be.
+    for (const source of ["redispatch", "retry", "delegation_return", "parent_wakeup"] as const) {
+      const { store, runtime, agent } = storeWithAgent(`ids_${source}`);
+      const prerequisite = store.createIssue({ title: "Open prerequisite", status: "in_progress" });
+      const issue = store.createIssue({ title: "Earlier work", status: "in_progress" });
+      const previous = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "earlier round" });
+      if (source === "redispatch") store.cancelTask(previous.id);
+      if (source === "retry") {
+        expect(store.claimTask(runtime.id)?.id).toBe(previous.id);
+        store.startTask(previous.id);
+        store.failTask(previous.id, { error: "failed", failureReason: "unknown" });
+      }
+      store.createIssueDependency(issue.id, { dependsOnIssueId: prerequisite.id, type: "blocked_by" });
+      store.updateIssue(issue.id, { status: "backlog" });
+
+      store.createTask({
+        agentId: agent.id, issueId: issue.id, prompt: `continue ${source}`,
+        ...(source === "redispatch" || source === "retry"
+          ? { attempt: 2, parentTaskId: previous.id }
+          : {}),
+        ...(source === "delegation_return"
+          ? { delegationId: `dlg_${source}`, delegatedByAgentId: agent.id, parentTaskId: previous.id }
+          : {}),
+        ...(source === "parent_wakeup" ? { preserveIssueStatus: true, parentTaskId: previous.id } : {}),
+      });
+
+      const exempted = allActivityRows(store, issue.id, "dependency_gate_exempted");
+      expect(exempted).toHaveLength(1);
+      const data = exempted[0]!.data as Record<string, unknown>;
+      expect({
+        source,
+        reported: data.source,
+        previousCamel: data.previousTaskId,
+        previousSnake: data.previous_task_id,
+      }).toEqual({
+        source,
+        reported: source,
+        previousCamel: previous.id,
+        previousSnake: previous.id,
+      });
+    }
+  });
+
   it("keeps a committed exempt task when its post-commit activity write fails", () => {
     const { store, agent, dependent } = parkedChain("exemption_write_failure");
     const restore = injectOnce(seams(store).ctx, "appendIssueActivity", (args) =>

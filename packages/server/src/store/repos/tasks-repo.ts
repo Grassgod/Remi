@@ -697,7 +697,16 @@ export class TasksRepo {
     if (!dependencyGateEnabled() || issue.status !== "backlog") return null;
     const unmet = this.ctx.issues().listUnmetPrerequisites(issue.id);
     if (unmet.length === 0) return null;
-    const previousTaskId = parentTask?.id ?? cleanOptionalString(input.continuedFromTaskId ?? input.continued_from_task_id);
+    // MUL-409 (QA round 4, blocker 3): `continuedFromTaskId` names the round this
+    // one continues, and it must win over `parentTaskId`. A leader-token
+    // continuation (`continueTaskId` on POST /api/multiremi/tasks) carries BOTH:
+    // the delegating leader's task as the parent, and the delegated task being
+    // continued. Reading `parentTask` first recorded the leader's id as the
+    // previous round, so the audit pointed at the wrong task.
+    const continuedFromTaskId = cleanOptionalString(
+      input.continuedFromTaskId ?? input.continued_from_task_id,
+    );
+    const previousTaskId = continuedFromTaskId ?? parentTask?.id ?? null;
     const delegationId = cleanOptionalString(input.delegationId ?? input.delegation_id);
     const delegatedByAgentId = cleanOptionalString(input.delegatedByAgentId ?? input.delegated_by_agent_id);
     let source: string | null = null;
@@ -705,7 +714,7 @@ export class TasksRepo {
     else if (input.preserveIssueStatus === true || input.preserve_issue_status === true) source = "parent_wakeup";
     else if (normalizePositiveInt(input.attempt, 1) > 1 && parentTask?.status === "cancelled") source = "redispatch";
     else if (normalizePositiveInt(input.attempt, 1) > 1 && parentTask?.status === "failed") source = "retry";
-    else if (cleanOptionalString(input.continuedFromTaskId ?? input.continued_from_task_id)) source = "continuation";
+    else if (continuedFromTaskId) source = "continuation";
     else if (normalizePositiveInt(input.attempt, 1) > 1) source = "retry";
     if (source) return { source, unmet, previousTaskId };
     throw new IssueDependencyError(
