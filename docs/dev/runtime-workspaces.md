@@ -64,12 +64,12 @@ Agent 创建模式把工作目录绑定到 intake Issue / Task，并在生成提
 
 ## 亲和与设备路由
 
-Project 设备绑定（含独享设备）是放置约束，任何亲和都不能绕过它。以下规则由同一个硬亲和分类函数驱动，`refreshQueuedIssueLaneAffinity` 的跳过集合与 `wait_reason` 的文案不会分叉。亲和分两类，规则不同（MUL-449）：
+Project 设备绑定（含独享设备）是放置约束，任何亲和都不能绕过它。Issue lane 刷新仅在任务钉机与 Agent 绑定相同时保留该绑定；等待原因观察者独立判断 Agent 是否绑定，避免旧 lane 钉机失去自愈能力。亲和分两类，规则不同（MUL-449）：
 
 - **软亲和**＝ provider 会话血统：Chat 的 `chat_sessions.session_id / session_runtime_id`，Issue 的 `session_agent_lanes.provider_session_id / runtime_id`。钉住的机器过不了设备路由、或与真实 Issue 工作区所在机器冲突时，放弃血统、任务回池冷启动（`inheritChatSession=false`，Issue lane 走 `resetSessionAgentLane`，重置原因分别记为 `device_routing_rejected` / `issue_workspace_elsewhere`）。硬亲和优先于软亲和：真实工作区在 B 而旧会话在 A 时丢掉会话（`issue_workspace_elsewhere`），由工作区把任务约束到 B。工作区只约束**持有它**的任务（`holds_workspace=1`），讨论/侧会话轮次不因此丢会话；没有未 cleaned 工作区时不构成约束，lane 照常继承。判定按**机器**而非 Runtime id：同一台机器上的另一个 provider（例如 B 上的 codex 与 claude）算作同一台，不会互相判成冲突，只有 Runtime 已删除时才退化为按 id 比较。建单时（`createTaskWithinWorkspaceLock`）和领取前（`refreshQueuedIssueLaneAffinity` / `refreshQueuedChatAffinity`）都重算，所以改绑后已排队和存量的这类任务会自愈，不需要数据迁移。
 - **落点** ＝ 同时满足任务全部硬亲和、能被抢单放行的机器。抢单 SQL 的结构谓词（`placementBeforeRoutingSql` / `placementAfterRoutingSql` + 共享的 `TASK_CLAIM_FROM_SQL`）与观察者共用同源只读探针；扫描排队任务时，每台 Runtime 批量计算候选任务，`store.describeTaskPlacement(taskId)` 仍可只读地看单条任务在每台 Runtime 的 `placementOk` / `routingOk`。观察者按一条不变式判定：有机器同时满足落点与路由 → 不写原因；有落点但全被设备路由拒绝 → 写「等待项目设备：」并列出这些机器；没有任何机器满足落点 → 全部约束指向同一台未注册机器时退回 daemon 级判断，否则写「等待任务落点：」。优先级为落点 > 设备 > 模型能力；可回池的 provider 血统不写落点原因。
 - **硬亲和与硬钉**：代码快照、真实 Issue 工作区、项目本机目录、显式 Runtime 工作区和 Agent Runtime 绑定是数据或配置亲和，不能回池。除此之外，`runtime_id` 钉机只有在 `execution_fingerprint IS NULL AND attempt = 1` 时才由领取前刷新回池；取反为硬钉。带指纹的任务称为「冻结重试」，`attempt>1` 但无指纹的任务称为「重试钉机」，不能误报为冻结。工作区按机器别名集合判断，与抢单 SQL 的 `EXISTS` 一致。硬亲和或硬钉冲突时，60 秒观察者写 `wait_reason`，由设备绑定拒绝写「等待项目设备：」，约束相互冲突写「等待任务落点：」。
-- **补救**：先恢复原机器的项目设备绑定或取消独享设置；落点冲突时，工作区 Runtime 已删除则重新注册原机器或人工处理。只有带指纹且没有代码快照、本机目录的任务才提示 `remi task redispatch`：替代任务无指纹、无 Runtime 钉机，故无指纹的「重试钉机」也能通过该动作恢复，前提仍是不含代码快照和本机目录。Agent 绑定冲突时提示改绑到其余约束指向的机器；无指纹任务改绑后可被目标机器领取。带指纹任务改绑会被取消，文案同时给出在原 Issue 侧会话用 `remi task create` 重新触发的命令，不能把已取消任务交给 `redispatch`。设备路由恢复后等待原因自动清空。
+- **补救**：先恢复原机器的项目设备绑定或取消独享设置；落点冲突时，工作区 Runtime 已删除则重新注册原机器或人工处理。带指纹且没有代码快照、本机目录的任务可先运行 `remi task redispatch <原任务 ID> --reason '恢复已冻结任务并保留原请求' --yes`：替代任务保留原请求和会话、没有执行指纹。无指纹的「重试钉机」不会收到这条建议。Agent 绑定冲突时，仅在目标机器通过项目设备路由时建议改绑；否则提示让约束指向同一台机器。带指纹的任务直接改绑会取消原任务；需要先 redispatch，再运行 `remi agent update <Agent ID> --runtime <目标 Runtime ID>`，由目标机器领取替代任务。`remi task redispatch` 需要 supervisor 角色的任务凭证，工作区 organizer 模式须为 act。人类用户直接改绑后若原任务被取消，需在原会话重新发起请求。设备路由恢复后等待原因自动清空。
 
 ## 任务私有 /tmp
 
