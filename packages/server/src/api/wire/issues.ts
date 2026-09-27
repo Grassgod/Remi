@@ -395,6 +395,32 @@ export function stripServerOwnedIssueCreateFields<T extends object>(input: T): T
   return stripRequestFields(input, SERVER_OWNED_ISSUE_CREATE_FIELDS);
 }
 
+/**
+ * MUL-448 B3: provenance a credentialed create must not take from the body.
+ *
+ * `sourceIssueId` + `issueKind` are what the compatibility create route matches
+ * on (`findGeneratedIssueByTitle`) to hand back an existing issue instead of
+ * creating one, and `issueKind` alone flips the intake/execution semantics the
+ * generated-issue cache keys on. A member could therefore file an "execution"
+ * naming someone else's intake with the title a real run would use, and the
+ * run's own create would then return that forged issue with no task dispatched.
+ *
+ * The credentialed paths derive both fields from the credential: the compat
+ * route through `withIssueCreateRequestContext` (intake task token only), and
+ * the native route by simply not accepting them. The anonymous compatibility
+ * mode (master token / auth disabled) keeps passing the body through.
+ */
+const SERVER_OWNED_ISSUE_SOURCE_FIELDS = [
+  "sourceIssueId",
+  "source_issue_id",
+  "issueKind",
+  "issue_kind",
+] as const;
+
+export function stripServerOwnedIssueSourceFields<T extends object>(input: T): T {
+  return stripRequestFields(input, SERVER_OWNED_ISSUE_SOURCE_FIELDS);
+}
+
 /** The quick-create equivalent: `requester_id` is who asked, not who is asked. */
 const SERVER_OWNED_QUICK_CREATE_FIELDS = ["requesterId", "requester_id"] as const;
 

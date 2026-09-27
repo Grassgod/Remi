@@ -70,9 +70,21 @@ export function denyRestrictedTaskIssueCreation(c: Context, store: MultiremiStor
   }, 403);
 }
 
+/**
+ * MUL-448 B1: who the request is acting as, in credential order.
+ *
+ * A task token speaks for its agent; a verified member identity speaks for that
+ * member; only the anonymous compatibility mode (master token or auth-disabled)
+ * may name an agent through `X-Agent-ID`. The route-level callers below turn
+ * this into subscriber rows, session-task `task_assigned` authors, session
+ * creators and published results, so reading the header first let any member
+ * PAT write another agent's id into those durable records.
+ */
 export function issueSubscriberCaller(c: Context): { actorType: "member" | "agent"; actorId: string } {
   const taskToken = currentTaskAccessToken(c);
   if (taskToken?.agentId) return { actorType: "agent", actorId: taskToken.agentId };
+  const userId = authenticatedRequestUserId(c);
+  if (userId) return { actorType: "member", actorId: userId };
   const agentId = cleanString(c.req.header("X-Agent-ID"));
   if (agentId) return { actorType: "agent", actorId: agentId };
   return { actorType: "member", actorId: currentRequestUserId(c) };
@@ -111,6 +123,9 @@ export function issueCommentCreateInput(
   const publicInput = stripCommentTaskLink(input);
   const userId = authenticatedRequestUserId(c);
   if (userId) return { ...publicInput, authorType: "member", authorId: userId };
+  // MUL-448 B1: everything below runs only for the anonymous compatibility mode
+  // (master token / auth disabled), which keeps its historical behaviour; a
+  // request with a credential never reaches the header or the body identity.
   if (cleanString(publicInput.authorType) || cleanString(publicInput.authorId)) return publicInput;
   const agentId = cleanString(c.req.header("X-Agent-ID"));
   if (agentId) return { ...publicInput, authorType: "agent", authorId: agentId };
