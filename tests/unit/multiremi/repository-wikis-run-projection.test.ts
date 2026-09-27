@@ -538,6 +538,33 @@ describe("repository-wikis A2: the remaining per-repository reads", () => {
     expect(runs.map((run) => run.id)).toEqual(["run_a2_newer"]);
   });
 
+  it("picks the newest run when a repository spans repository_id and schedule_target rows", async () => {
+    const { store, autopilot } = fixture();
+    // A renamed repository leaves older runs scoped by `schedule_target` while
+    // newer ones carry `repository_id`. The SQL ranking partitions on those two
+    // shapes separately, so both candidates come back and the loop has to settle
+    // them — this is the case that made the ranking safe to push into SQL.
+    db!.run(
+      `INSERT INTO multiremi_autopilot_runs (
+         id, autopilot_id, source, status, repository_id, schedule_target, dedupe_key,
+         triggered_at, completed_at, payload, result, created_at
+       ) VALUES (?, ?, 'scm_event', 'completed', NULL, ?, NULL, ?, ?, NULL, NULL, ?)`,
+      [
+        "run_a2_old_scope", autopilot.id, JSON.stringify({ kind: "repository", id: REPOSITORY_ID }),
+        "2026-09-18T00:00:00.000Z", "2026-09-18T00:00:00.000Z", "2026-09-18T00:00:00.000Z",
+      ],
+    );
+    insertRun({
+      id: "run_a2_new_scope", autopilotId: autopilot.id,
+      dedupeKey: `${REPOSITORY_ID}:incremental_update:new`, payload: { data: { merge_sha: "new" } },
+      createdAt: "2026-09-21T00:00:00.000Z",
+    });
+
+    const runs = store.listLatestRepositoryAutopilotRuns("local");
+    expect(runs.map((run) => run.id)).toEqual(["run_a2_new_scope"]);
+    expect(runs[0]!.repositoryId).toBe(REPOSITORY_ID);
+  });
+
   it("prefers a still-active run when a completed run shares its created_at", async () => {
     const { store, autopilot } = fixture();
     const createdAt = "2026-09-22T00:00:00.000Z";
