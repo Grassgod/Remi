@@ -3284,17 +3284,19 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
         } as typeof TasksRepo.prototype.createTaskWithinTransaction;
         restore.push(() => { TasksRepo.prototype.createTaskWithinTransaction = original; });
       } else {
-        const original = StoreContext.prototype.appendIssueActivity;
-        StoreContext.prototype.appendIssueActivity = function patched(
-          this: StoreContext,
-          issueId: string,
-          input: { actorType: string; type: string },
-          queue?: CommitEventQueue,
-        ) {
-          if (!injected && input.type === step) fail();
-          return original.call(this, issueId, input, queue);
+        // Patch the INSTANCE, not the prototype: an earlier case in this file
+        // already replaced `ctx.appendIssueActivity` on the shared store, so a
+        // prototype patch would sit underneath it and never see the call.
+        const ctx = (store as unknown as {
+          ctx: { appendIssueActivity: (...args: unknown[]) => unknown };
+        }).ctx;
+        const original = ctx.appendIssueActivity;
+        ctx.appendIssueActivity = (...args: unknown[]) => {
+          const input = args[1] as { type?: string } | undefined;
+          if (!injected && input?.type === step) fail();
+          return original.apply(ctx, args);
         };
-        restore.push(() => { StoreContext.prototype.appendIssueActivity = original; });
+        restore.push(() => { ctx.appendIssueActivity = original; });
       }
 
       try {
